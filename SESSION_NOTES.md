@@ -213,6 +213,35 @@ The problem **WAS**:
 
 ---
 
+## 🎨 UI Updates (2025-11-19)
+
+### Premium Redesign & Responsiveness Fixes
+1. **Fixed Responsiveness Bug:**
+   - Audio settings container now uses `flex-wrap: wrap` instead of rigid grid columns.
+   - Prevents settings from overflowing/exiting the container on smaller screens.
+   - Added `min-width` to items to ensure they remain usable.
+
+2. **Aesthetics Upgrade:**
+   - **Font:** Switched to `Inter` (Google Fonts) for a cleaner, modern look.
+   - **Color Palette:** Updated to a Slate/Zinc dark mode theme with vibrant Blue primary accents.
+   - **Glassmorphism:** Added subtle transparency and glow effects.
+   - **Layout:** Improved spacing, padding, and border radius for a "premium" feel.
+   - **Components:** Redesigned buttons, inputs, and cards to match the new design system.
+
+3. **Bug Fixes:**
+   - **Transcription Error:** Fixed `ValueError: Unsupported language` by updating `transcriber.py` to use `argparse` for robust CLI argument handling. Added `--json` flag for reliable Electron integration.
+   - **UI Overflow:** Fixed text overflow in progress log and transcript output by adding `white-space: pre-wrap` and `word-break: break-word`.
+   - **Scrollability:** Ensured proper scrolling in log and transcript areas with `max-height` and `overflow-y: auto`.
+   - **Layout Polish:** Restored missing `.btn-small` class for secondary buttons (Refresh, Copy, Save). Adjusted `.btn-large` sizing and reduced vertical margins to improve layout density and prevent footer overlap.
+   - **Responsive Layout:** Switched from fixed `100vh` height to `min-height: 100vh` to allow natural scrolling on smaller screens, preventing UI elements from being cut off or overlapping.
+   - **Recorder CLI:** Updated `audio_recorder.py` to use `argparse` for robust argument parsing and removed Unicode characters (✓) from output to prevent `UnicodeEncodeError` on Windows systems. This ensures the Electron app can successfully capture recording output.
+   - **Path Resolution:** Updated `main.js` to correctly resolve relative audio file paths (like `../recordings/temp.wav`) to absolute paths before passing them to the Python transcriber. This fixes the `FileNotFoundError`.
+   - **Race Condition:** Fixed a race condition where transcription started before the recording file was fully saved. Updated `stop-recording` handler in `main.js` to wait for the Python process to exit (confirming file save) before resolving.
+   - **Windows Graceful Stop:** Fixed issue where `pythonProcess.kill('SIGTERM')` on Windows forcefully terminated the recorder before it could save the file. Implemented a `stdin` listener in `audio_recorder.py` and updated `main.js` to send a "stop" command, ensuring the file is properly saved.
+   - **Logging Polish:** Updated `main.js` to label Python stderr output as "Python status:" instead of "Python error:", as the backend script uses stderr for normal status messages (standard CLI practice).
+
+---
+
 ## 📊 Todo List Status
 
 - [x] Project structure
