@@ -191,6 +191,7 @@ For production distribution, you should code-sign the installer:
 
 1. Obtain a code signing certificate
 2. Add to electron-builder config in package.json:
+
    ```json
    "win": {
      "certificateFile": "path/to/cert.pfx",
@@ -203,6 +204,7 @@ This removes "Unknown Publisher" warnings.
 ## Next Steps
 
 After building the installer:
+
 1. Test thoroughly on a clean Windows machine
 2. Consider adding auto-update functionality
 3. Set up CI/CD for automated builds
