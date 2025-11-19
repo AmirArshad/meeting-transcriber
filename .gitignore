@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Electron
+out/
+dist-electron/
+release/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Application Data
+*.mkv
+*.wav
+*.mp3
+recordings/
+*.db
+*.sqlite
+
+# Models Cache
+models/
+.cache/
+
+# Logs
+*.log
+logs/
+
+# Environment
+.env
+.env.local
+nul

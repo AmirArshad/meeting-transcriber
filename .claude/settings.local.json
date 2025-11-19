@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python test_recording.py:*)",
+      "Bash(python test_fix.py:*)",
+      "Bash(python device_manager.py:*)",
+      "Bash(nul)",
+      "Bash(python:*)",
+      "Bash(pip install:*)",
+      "Bash(dir:*)",
+      "Bash(findstr:*)",
+      "Bash(timeout:*)",
+      "Bash(ping:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
