@@ -34,6 +34,11 @@ jobs:
     - name: Create placeholder icon (if missing)
       shell: pwsh
       run: |
+        # Ensure build directory exists
+        if (-not (Test-Path "build")) {
+          New-Item -ItemType Directory -Path "build" | Out-Null
+        }
+
         if (-not (Test-Path "build/icon.ico")) {
           Write-Host "Creating placeholder icon..."
           # Download a placeholder microphone icon

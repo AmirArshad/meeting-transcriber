@@ -16,6 +16,12 @@ console.log('========================================');
 console.log('Meeting Transcriber - Build Preparation');
 console.log('========================================\n');
 
+// Ensure build directories exist
+if (!fs.existsSync(BUILD_DIR)) {
+  fs.mkdirSync(BUILD_DIR, { recursive: true });
+  console.log('Created build/resources/ directory\n');
+}
+
 // Helper function to download files
 async function downloadFile(url, destination) {
   return new Promise((resolve, reject) => {
@@ -26,13 +32,17 @@ async function downloadFile(url, destination) {
       // Handle redirects
       if (response.statusCode === 302 || response.statusCode === 301) {
         file.close();
-        fs.unlinkSync(destination);
+        if (fs.existsSync(destination)) {
+          fs.unlinkSync(destination);
+        }
         return downloadFile(response.headers.location, destination).then(resolve).catch(reject);
       }
 
       if (response.statusCode !== 200) {
         file.close();
-        fs.unlinkSync(destination);
+        if (fs.existsSync(destination)) {
+          fs.unlinkSync(destination);
+        }
         return reject(new Error(`Failed to download: ${response.statusCode}`));
       }
 
@@ -58,7 +68,9 @@ async function downloadFile(url, destination) {
       });
     }).on('error', (err) => {
       file.close();
-      fs.unlinkSync(destination);
+      if (fs.existsSync(destination)) {
+        fs.unlinkSync(destination);
+      }
       reject(err);
     });
   });
