@@ -1,0 +1,18 @@
+Icon Required for Build
+========================
+
+To complete the installer build, you need to provide an icon file:
+
+Location: build/icon.ico
+Format: Windows ICO format
+Recommended sizes: 16x16, 32x32, 48x48, 256x256
+
+You can create an .ico file from a PNG using online tools like:
+- https://convertio.co/png-ico/
+- https://www.icoconverter.com/
+
+Alternatively, use a professional design tool or hire a designer.
+
+For now, you can use a placeholder icon generator or download a free icon.
+
+The build will fail without this file!
