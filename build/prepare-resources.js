@@ -29,8 +29,8 @@ async function downloadFile(url, destination) {
     const file = fs.createWriteStream(destination);
 
     https.get(url, { timeout: 30000 }, (response) => {
-      // Handle redirects
-      if (response.statusCode === 302 || response.statusCode === 301) {
+      // Handle redirects (301, 302, 303, 307, 308)
+      if (response.statusCode >= 300 && response.statusCode < 400) {
         file.close();
         if (fs.existsSync(destination)) {
           fs.unlinkSync(destination);
