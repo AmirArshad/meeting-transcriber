@@ -12,7 +12,11 @@
       "Bash(timeout:*)",
       "Bash(ping:*)",
       "Bash(node --version)",
-      "Bash(npm install)"
+      "Bash(npm install)",
+      "Bash(ffmpeg:*)",
+      "Bash(del /q d:Projectsmeeting-transcriberrecordingstest_compression.* 2)",
+      "Bash(del /q d:Projectsmeeting-transcriberrecordingstest_noise*.* 2)",
+      "Bash(del /q test_improved_mic.* 2)"
     ],
     "deny": [],
     "ask": []
