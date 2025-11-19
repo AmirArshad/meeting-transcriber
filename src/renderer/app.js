@@ -469,6 +469,189 @@ function setupTabs() {
   });
 }
 
+// ============================================================================
+// Settings Tab - GPU Acceleration
+// ============================================================================
+
+async function initSettingsTab() {
+  // Get system info
+  try {
+    const systemInfo = await window.electronAPI.getSystemInfo();
+    document.getElementById('electron-version').textContent = systemInfo.electron;
+    document.getElementById('python-version').textContent = systemInfo.python;
+  } catch (error) {
+    console.error('Failed to get system info:', error);
+  }
+
+  // Check GPU status
+  await checkGPUStatus();
+
+  // Set up event listeners
+  document.getElementById('install-gpu-btn').addEventListener('click', installGPUAcceleration);
+  document.getElementById('uninstall-gpu-btn').addEventListener('click', uninstallGPUAcceleration);
+
+  // Listen for installation progress
+  window.electronAPI.onGPUInstallProgress((data) => {
+    appendGPULog(data);
+  });
+}
+
+async function checkGPUStatus() {
+  const statusBadge = document.getElementById('gpu-status-badge');
+  const gpuDetected = document.getElementById('gpu-detected');
+  const cudaStatus = document.getElementById('cuda-status');
+  const installBtn = document.getElementById('install-gpu-btn');
+  const uninstallBtn = document.getElementById('uninstall-gpu-btn');
+
+  statusBadge.textContent = 'Checking...';
+  statusBadge.className = 'setting-badge';
+
+  try {
+    // Check if GPU exists
+    const gpuInfo = await window.electronAPI.checkGPU();
+
+    if (gpuInfo.hasGPU) {
+      gpuDetected.textContent = gpuInfo.gpuName;
+      gpuDetected.classList.add('success');
+    } else {
+      gpuDetected.textContent = 'No NVIDIA GPU detected';
+      gpuDetected.classList.add('error');
+      statusBadge.textContent = 'Not Available';
+      statusBadge.classList.add('disabled');
+      installBtn.disabled = true;
+      return;
+    }
+
+    // Check CUDA installation
+    const cudaInfo = await window.electronAPI.checkCUDA();
+
+    if (cudaInfo.installed) {
+      cudaStatus.textContent = `Installed (CUDA ${cudaInfo.version})`;
+      cudaStatus.classList.add('success');
+      statusBadge.textContent = 'Enabled';
+      statusBadge.classList.add('enabled');
+      installBtn.style.display = 'none';
+      uninstallBtn.style.display = 'block';
+    } else {
+      cudaStatus.textContent = 'Not installed';
+      cudaStatus.classList.add('warning');
+      statusBadge.textContent = 'Available';
+      statusBadge.classList.add('disabled');
+      installBtn.disabled = false;
+      installBtn.style.display = 'block';
+      uninstallBtn.style.display = 'none';
+    }
+  } catch (error) {
+    console.error('Failed to check GPU status:', error);
+    statusBadge.textContent = 'Error';
+    statusBadge.classList.add('disabled');
+  }
+}
+
+async function installGPUAcceleration() {
+  const installBtn = document.getElementById('install-gpu-btn');
+  const statusBadge = document.getElementById('gpu-status-badge');
+  const progressDiv = document.getElementById('gpu-progress');
+  const progressBar = document.getElementById('gpu-progress-bar');
+  const progressText = document.getElementById('gpu-progress-text');
+  const logDiv = document.getElementById('gpu-log');
+  const logOutput = document.getElementById('gpu-log-output');
+
+  // Show confirmation
+  const confirmed = confirm(
+    'This will download and install ~2-3GB of GPU acceleration libraries.\n\n' +
+    'The download may take 10-30 minutes depending on your internet speed.\n\n' +
+    'Continue?'
+  );
+
+  if (!confirmed) return;
+
+  // UI setup
+  installBtn.disabled = true;
+  statusBadge.textContent = 'Installing...';
+  statusBadge.className = 'setting-badge installing';
+  progressDiv.style.display = 'block';
+  logDiv.style.display = 'block';
+  logOutput.textContent = '';
+  progressBar.style.width = '0%';
+  progressText.textContent = 'Starting installation...';
+
+  try {
+    // Simulate progress (pip doesn't give us real progress)
+    let progress = 0;
+    const progressInterval = setInterval(() => {
+      if (progress < 90) {
+        progress += Math.random() * 5;
+        progressBar.style.width = `${Math.min(progress, 90)}%`;
+      }
+    }, 2000);
+
+    progressText.textContent = 'Downloading PyTorch with CUDA support...';
+
+    // Install GPU packages
+    await window.electronAPI.installGPU();
+
+    // Complete progress
+    clearInterval(progressInterval);
+    progressBar.style.width = '100%';
+    progressText.textContent = 'Installation complete!';
+
+    // Update status
+    statusBadge.textContent = 'Enabled';
+    statusBadge.className = 'setting-badge enabled';
+
+    // Hide progress after delay
+    setTimeout(() => {
+      progressDiv.style.display = 'none';
+      logDiv.style.display = 'none';
+    }, 3000);
+
+    // Refresh status
+    await checkGPUStatus();
+
+    alert('GPU acceleration installed successfully!\n\nFaster transcription is now available.');
+  } catch (error) {
+    console.error('GPU installation failed:', error);
+    appendGPULog(`\nERROR: ${error.message}`);
+    progressText.textContent = 'Installation failed!';
+    statusBadge.textContent = 'Failed';
+    statusBadge.className = 'setting-badge disabled';
+    installBtn.disabled = false;
+
+    alert('GPU installation failed. Check the log for details.');
+  }
+}
+
+async function uninstallGPUAcceleration() {
+  const confirmed = confirm(
+    'This will remove all GPU acceleration libraries.\n\n' +
+    'Transcription will fall back to CPU mode.\n\n' +
+    'Continue?'
+  );
+
+  if (!confirmed) return;
+
+  const statusBadge = document.getElementById('gpu-status-badge');
+  statusBadge.textContent = 'Uninstalling...';
+  statusBadge.className = 'setting-badge';
+
+  try {
+    await window.electronAPI.uninstallGPU();
+    await checkGPUStatus();
+    alert('GPU acceleration uninstalled successfully.');
+  } catch (error) {
+    console.error('Uninstall failed:', error);
+    alert('Failed to uninstall GPU acceleration.');
+  }
+}
+
+function appendGPULog(text) {
+  const logOutput = document.getElementById('gpu-log-output');
+  logOutput.textContent += text;
+  logOutput.scrollTop = logOutput.scrollHeight;
+}
+
 // Start the app
 init();
 setupTabs();
+initSettingsTab();

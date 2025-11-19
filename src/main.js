@@ -23,6 +23,49 @@ app.setPath('userData', userDataPath);
 let mainWindow;
 let pythonProcess;
 
+// ============================================================================
+// Python Runtime Configuration
+// ============================================================================
+
+/**
+ * Determine the correct Python executable and backend path based on environment
+ * In production (packaged app), use embedded Python
+ * In development, use system Python
+ */
+function getPythonConfig() {
+  const isDev = !app.isPackaged;
+
+  if (isDev) {
+    // Development mode - use system Python
+    return {
+      pythonExe: 'python',
+      backendPath: path.join(__dirname, '../backend'),
+      ffmpegPath: 'ffmpeg' // Assume in PATH
+    };
+  } else {
+    // Production mode - use embedded Python from resources
+    const resourcesPath = process.resourcesPath;
+    return {
+      pythonExe: path.join(resourcesPath, 'python', 'python.exe'),
+      backendPath: path.join(resourcesPath, 'backend'),
+      ffmpegPath: path.join(resourcesPath, 'ffmpeg', 'ffmpeg.exe')
+    };
+  }
+}
+
+const pythonConfig = getPythonConfig();
+
+// Add ffmpeg to PATH so Python scripts can find it
+if (!app.isPackaged) {
+  // In dev mode, ffmpeg should already be in PATH
+} else {
+  // In production, add the bundled ffmpeg directory to PATH
+  const ffmpegDir = path.dirname(pythonConfig.ffmpegPath);
+  process.env.PATH = `${ffmpegDir};${process.env.PATH}`;
+}
+
+console.log('Python Configuration:', pythonConfig);
+
 // Create the main application window
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -84,8 +127,8 @@ app.on('before-quit', () => {
  */
 ipcMain.handle('get-audio-devices', async () => {
   return new Promise((resolve, reject) => {
-    const python = spawn('python', [
-      path.join(__dirname, '../backend/device_manager.py')
+    const python = spawn(pythonConfig.pythonExe, [
+      path.join(pythonConfig.backendPath, 'device_manager.py')
     ]);
 
     let output = '';
@@ -131,8 +174,8 @@ ipcMain.handle('start-recording', async (event, options) => {
     const outputPath = path.join(__dirname, '../recordings/temp.wav');
 
     // Start Python recording process
-    pythonProcess = spawn('python', [
-      path.join(__dirname, '../backend/audio_recorder.py'),
+    pythonProcess = spawn(pythonConfig.pythonExe, [
+      path.join(pythonConfig.backendPath, 'audio_recorder.py'),
       '--mic', micId.toString(),
       '--loopback', loopbackId.toString(),
       '--output', outputPath
@@ -197,8 +240,8 @@ ipcMain.handle('transcribe-audio', async (event, options) => {
       audioFile = audioFile.replace('temp.wav', 'temp.opus');
     }
 
-    const python = spawn('python', [
-      path.join(__dirname, '../backend/transcriber.py'),
+    const python = spawn(pythonConfig.pythonExe, [
+      path.join(pythonConfig.backendPath, 'transcriber.py'),
       '--file', audioFile,
       '--language', language || 'en',
       '--model', modelSize || 'small',
@@ -238,8 +281,8 @@ ipcMain.handle('transcribe-audio', async (event, options) => {
  */
 ipcMain.handle('list-meetings', async () => {
   return new Promise((resolve, reject) => {
-    const python = spawn('python', [
-      path.join(__dirname, '../backend/meeting_manager.py'),
+    const python = spawn(pythonConfig.pythonExe, [
+      path.join(pythonConfig.backendPath, 'meeting_manager.py'),
       'list'
     ]);
 
@@ -269,8 +312,8 @@ ipcMain.handle('list-meetings', async () => {
  */
 ipcMain.handle('get-meeting', async (event, meetingId) => {
   return new Promise((resolve, reject) => {
-    const python = spawn('python', [
-      path.join(__dirname, '../backend/meeting_manager.py'),
+    const python = spawn(pythonConfig.pythonExe, [
+      path.join(pythonConfig.backendPath, 'meeting_manager.py'),
       'get',
       meetingId
     ]);
@@ -301,8 +344,8 @@ ipcMain.handle('get-meeting', async (event, meetingId) => {
  */
 ipcMain.handle('delete-meeting', async (event, meetingId) => {
   return new Promise((resolve, reject) => {
-    const python = spawn('python', [
-      path.join(__dirname, '../backend/meeting_manager.py'),
+    const python = spawn(pythonConfig.pythonExe, [
+      path.join(pythonConfig.backendPath, 'meeting_manager.py'),
       'delete',
       meetingId
     ]);
@@ -325,7 +368,7 @@ ipcMain.handle('add-meeting', async (event, meetingData) => {
     const { audioPath, transcriptPath, duration, language, model, title } = meetingData;
 
     const args = [
-      path.join(__dirname, '../backend/meeting_manager.py'),
+      path.join(pythonConfig.backendPath, 'meeting_manager.py'),
       'add',
       '--audio', audioPath,
       '--transcript', transcriptPath,
@@ -338,7 +381,7 @@ ipcMain.handle('add-meeting', async (event, meetingData) => {
       args.push('--title', title);
     }
 
-    const python = spawn('python', args);
+    const python = spawn(pythonConfig.pythonExe, args);
 
     let output = '';
 
@@ -357,6 +400,182 @@ ipcMain.handle('add-meeting', async (event, meetingData) => {
       } else {
         reject(new Error('Failed to add meeting'));
       }
+    });
+  });
+});
+
+/**
+ * Check GPU availability (detect NVIDIA GPU)
+ */
+ipcMain.handle('check-gpu', async () => {
+  return new Promise((resolve) => {
+    const python = spawn(pythonConfig.pythonExe, [
+      '-c',
+      'import subprocess; result = subprocess.run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"], capture_output=True, text=True); print(result.stdout.strip() if result.returncode == 0 else "None")'
+    ]);
+
+    let output = '';
+
+    python.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    python.on('close', () => {
+      const gpuName = output.trim();
+      resolve({
+        hasGPU: gpuName !== 'None' && gpuName !== '',
+        gpuName: gpuName !== 'None' ? gpuName : null
+      });
+    });
+  });
+});
+
+/**
+ * Check CUDA installation status
+ */
+ipcMain.handle('check-cuda', async () => {
+  return new Promise((resolve) => {
+    const python = spawn(pythonConfig.pythonExe, [
+      '-c',
+      'try:\n    import torch\n    print("cuda_available:" + str(torch.cuda.is_available()))\n    if torch.cuda.is_available():\n        print("cuda_version:" + torch.version.cuda)\nexcept ImportError:\n    print("cuda_available:False")'
+    ]);
+
+    let output = '';
+
+    python.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    python.on('close', () => {
+      const cudaAvailable = output.includes('cuda_available:True');
+      const versionMatch = output.match(/cuda_version:([\d.]+)/);
+      resolve({
+        installed: cudaAvailable,
+        version: versionMatch ? versionMatch[1] : null
+      });
+    });
+  });
+});
+
+/**
+ * Install GPU acceleration packages
+ */
+ipcMain.handle('install-gpu', async () => {
+  return new Promise((resolve, reject) => {
+    const packages = [
+      'torch',
+      'torchvision',
+      'torchaudio',
+      '--index-url',
+      'https://download.pytorch.org/whl/cu121'
+    ];
+
+    const python = spawn(pythonConfig.pythonExe, [
+      '-m',
+      'pip',
+      'install',
+      ...packages,
+      '--no-warn-script-location'
+    ]);
+
+    let output = '';
+    let errorOutput = '';
+
+    python.stdout.on('data', (data) => {
+      const text = data.toString();
+      output += text;
+      // Send progress to renderer
+      mainWindow.webContents.send('gpu-install-progress', text);
+    });
+
+    python.stderr.on('data', (data) => {
+      const text = data.toString();
+      errorOutput += text;
+      mainWindow.webContents.send('gpu-install-progress', text);
+    });
+
+    python.on('close', (code) => {
+      if (code === 0) {
+        // Install CUDA libraries
+        const cudaPackages = ['nvidia-cublas-cu12', 'nvidia-cudnn-cu12'];
+
+        const cudaProcess = spawn(pythonConfig.pythonExe, [
+          '-m',
+          'pip',
+          'install',
+          ...cudaPackages,
+          '--no-warn-script-location'
+        ]);
+
+        cudaProcess.stdout.on('data', (data) => {
+          mainWindow.webContents.send('gpu-install-progress', data.toString());
+        });
+
+        cudaProcess.stderr.on('data', (data) => {
+          mainWindow.webContents.send('gpu-install-progress', data.toString());
+        });
+
+        cudaProcess.on('close', (cudaCode) => {
+          if (cudaCode === 0) {
+            resolve({ success: true, message: 'GPU acceleration installed successfully' });
+          } else {
+            reject(new Error('Failed to install CUDA libraries'));
+          }
+        });
+      } else {
+        reject(new Error(`Failed to install PyTorch: ${errorOutput}`));
+      }
+    });
+  });
+});
+
+/**
+ * Uninstall GPU packages
+ */
+ipcMain.handle('uninstall-gpu', async () => {
+  return new Promise((resolve, reject) => {
+    const packages = ['torch', 'torchvision', 'torchaudio', 'nvidia-cublas-cu12', 'nvidia-cudnn-cu12'];
+
+    const python = spawn(pythonConfig.pythonExe, [
+      '-m',
+      'pip',
+      'uninstall',
+      '-y',
+      ...packages
+    ]);
+
+    python.on('close', (code) => {
+      if (code === 0) {
+        resolve({ success: true });
+      } else {
+        reject(new Error('Failed to uninstall GPU packages'));
+      }
+    });
+  });
+});
+
+/**
+ * Get system info (versions)
+ */
+ipcMain.handle('get-system-info', async () => {
+  return new Promise((resolve) => {
+    const python = spawn(pythonConfig.pythonExe, ['--version']);
+
+    let pythonVersion = '';
+
+    python.stdout.on('data', (data) => {
+      pythonVersion += data.toString();
+    });
+
+    python.stderr.on('data', (data) => {
+      pythonVersion += data.toString();
+    });
+
+    python.on('close', () => {
+      resolve({
+        electron: process.versions.electron,
+        python: pythonVersion.replace('Python ', '').trim()
+      });
     });
   });
 });

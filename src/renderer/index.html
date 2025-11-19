@@ -70,6 +70,7 @@
       <div class="tabs">
         <button class="tab-btn active" data-tab="record">Record</button>
         <button class="tab-btn" data-tab="history">History</button>
+        <button class="tab-btn" data-tab="settings">Settings</button>
       </div>
 
       <!-- Tab Content -->
@@ -160,6 +161,80 @@
               </div>
             </main>
           </div>
+        </div>
+
+        <!-- Settings Tab -->
+        <div class="tab-pane" id="settings-tab">
+          <section class="card settings-section">
+            <h2>Settings</h2>
+
+            <!-- GPU Acceleration -->
+            <div class="settings-group">
+              <div class="setting-header">
+                <h3>GPU Acceleration</h3>
+                <span class="setting-badge" id="gpu-status-badge">Checking...</span>
+              </div>
+
+              <p class="setting-description">
+                Enable GPU acceleration for 4-5x faster transcription. Requires NVIDIA GPU with CUDA support.
+              </p>
+
+              <div class="gpu-info" id="gpu-info">
+                <div class="info-row">
+                  <span class="info-label">GPU Detected:</span>
+                  <span class="info-value" id="gpu-detected">Checking...</span>
+                </div>
+                <div class="info-row">
+                  <span class="info-label">CUDA Libraries:</span>
+                  <span class="info-value" id="cuda-status">Not installed</span>
+                </div>
+                <div class="info-row">
+                  <span class="info-label">Download Size:</span>
+                  <span class="info-value">~2-3 GB</span>
+                </div>
+              </div>
+
+              <div class="gpu-actions">
+                <button id="install-gpu-btn" class="btn btn-primary" disabled>
+                  Install GPU Acceleration
+                </button>
+                <button id="uninstall-gpu-btn" class="btn btn-secondary" style="display:none;">
+                  Uninstall GPU Libraries
+                </button>
+              </div>
+
+              <!-- Progress indicator -->
+              <div class="gpu-progress" id="gpu-progress" style="display:none;">
+                <div class="progress-bar-container">
+                  <div class="progress-bar" id="gpu-progress-bar"></div>
+                </div>
+                <p class="progress-text" id="gpu-progress-text">Initializing...</p>
+              </div>
+
+              <!-- Logs -->
+              <div class="gpu-log" id="gpu-log" style="display:none;">
+                <h4>Installation Log</h4>
+                <div class="log-output" id="gpu-log-output"></div>
+              </div>
+            </div>
+
+            <!-- App Info -->
+            <div class="settings-group">
+              <h3>About</h3>
+              <div class="info-row">
+                <span class="info-label">Version:</span>
+                <span class="info-value">1.0.0</span>
+              </div>
+              <div class="info-row">
+                <span class="info-label">Electron:</span>
+                <span class="info-value" id="electron-version">Loading...</span>
+              </div>
+              <div class="info-row">
+                <span class="info-label">Python:</span>
+                <span class="info-value" id="python-version">Loading...</span>
+              </div>
+            </div>
+          </section>
         </div>
       </div>
     </main>

@@ -5,7 +5,10 @@
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
-    "dev": "electron . --dev"
+    "dev": "electron . --dev",
+    "prebuild": "node build/prepare-resources.js",
+    "build": "electron-builder build --win --publish never",
+    "build:dir": "electron-builder build --win --dir"
   },
   "keywords": [
     "transcription",
@@ -13,9 +16,61 @@
     "meeting",
     "audio"
   ],
-  "author": "",
+  "author": "Meeting Transcriber Team",
   "license": "MIT",
   "devDependencies": {
-    "electron": "^28.0.0"
+    "electron": "^28.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.meetingtranscriber.app",
+    "productName": "Meeting Transcriber",
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Meeting Transcriber",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico",
+      "license": "LICENSE.txt"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build/resources/python",
+        "to": "python",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "build/resources/ffmpeg",
+        "to": "ffmpeg",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "backend",
+        "to": "backend",
+        "filter": ["**/*.py"]
+      }
+    ],
+    "directories": {
+      "buildResources": "build",
+      "output": "dist"
+    }
   }
 }

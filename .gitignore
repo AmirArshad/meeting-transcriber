@@ -22,6 +22,10 @@ yarn-error.log*
 out/
 dist-electron/
 release/
+dist/
+
+# Build resources (downloaded during build)
+build/resources/
 
 # IDEs
 .vscode/
