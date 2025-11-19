@@ -10,6 +10,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional
 import sys
+import shutil
 
 
 class MeetingManager:
@@ -68,11 +69,38 @@ class MeetingManager:
         seconds = int(duration % 60)
         duration_str = f"{minutes}:{seconds:02d}"
 
+        # Generate unique filenames to persist data
+        # This prevents overwriting when temp files are reused
+        source_audio = Path(audio_path)
+        source_transcript = Path(transcript_path)
+        
+        new_audio_filename = f"meeting_{meeting_id}{source_audio.suffix}"
+        new_transcript_filename = f"meeting_{meeting_id}.md"
+        
+        new_audio_path = self.recordings_dir / new_audio_filename
+        new_transcript_path = self.recordings_dir / new_transcript_filename
+
+        # Copy files to persistent storage
+        try:
+            if source_audio.exists():
+                shutil.copy2(source_audio, new_audio_path)
+                print(f"Persisted audio to: {new_audio_path}", file=sys.stderr)
+            
+            if source_transcript.exists():
+                shutil.copy2(source_transcript, new_transcript_path)
+                print(f"Persisted transcript to: {new_transcript_path}", file=sys.stderr)
+        except Exception as e:
+            print(f"Error persisting files: {e}", file=sys.stderr)
+            # Fallback to original paths if copy fails
+            if not new_audio_path.exists():
+                new_audio_path = source_audio
+            if not new_transcript_path.exists():
+                new_transcript_path = source_transcript
+
         # Read transcript text
         transcript_text = ""
-        transcript_file = Path(transcript_path)
-        if transcript_file.exists():
-            transcript_text = transcript_file.read_text(encoding='utf-8')
+        if new_transcript_path.exists():
+            transcript_text = new_transcript_path.read_text(encoding='utf-8')
 
         meeting = {
             "id": meeting_id,
@@ -80,8 +108,8 @@ class MeetingManager:
             "date": now.isoformat(),
             "duration": duration_str,
             "durationSeconds": duration,
-            "audioPath": str(audio_path),
-            "transcriptPath": str(transcript_path),
+            "audioPath": str(new_audio_path.absolute()),
+            "transcriptPath": str(new_transcript_path.absolute()),
             "transcript": transcript_text,
             "language": language,
             "model": model

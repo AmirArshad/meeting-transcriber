@@ -97,12 +97,32 @@ function renderMeetingList() {
     item.dataset.id = meeting.id;
 
     item.innerHTML = `
-      <div class="meeting-item-title">${meeting.title}</div>
-      <div class="meeting-item-date">${formatDate(meeting.date)}</div>
-      <div class="meeting-item-duration">${meeting.duration}</div>
+      <div class="meeting-info">
+        <div class="meeting-item-title">${meeting.title}</div>
+        <div class="meeting-meta-row">
+          <span class="meeting-item-date">${formatDate(meeting.date)}</span>
+          <span class="meeting-item-duration">${meeting.duration}</span>
+        </div>
+      </div>
+      <button class="delete-btn-list" title="Delete">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+      </button>
     `;
 
-    item.addEventListener('click', () => selectMeeting(meeting.id));
+    // Click on item to select
+    item.addEventListener('click', (e) => {
+      // Don't select if clicking delete button
+      if (e.target.closest('.delete-btn-list')) return;
+      selectMeeting(meeting.id);
+    });
+
+    // Delete button click
+    const deleteBtn = item.querySelector('.delete-btn-list');
+    deleteBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      deleteMeetingHandler(meeting.id);
+    });
+
     meetingList.appendChild(item);
   });
 }
@@ -153,7 +173,7 @@ function setupEventListeners() {
   stopBtn.addEventListener('click', stopRecording);
   copyBtn.addEventListener('click', copyTranscript);
   saveBtn.addEventListener('click', saveTranscript);
-  deleteMeeting.addEventListener('click', deleteMeetingHandler);
+  // deleteMeeting.addEventListener('click', deleteMeetingHandler); // Removed old handler
 
   // Copy transcript from meeting details
   const copyTranscriptBtn = document.getElementById('copy-transcript-btn');
@@ -330,21 +350,24 @@ function saveTranscript() {
 }
 
 // Delete meeting
-async function deleteMeetingHandler() {
-  if (!currentMeetingId) return;
+async function deleteMeetingHandler(meetingId) {
+  const idToDelete = meetingId || currentMeetingId;
+  if (!idToDelete) return;
 
-  const meeting = meetings.find(m => m.id === currentMeetingId);
+  const meeting = meetings.find(m => m.id === idToDelete);
   if (!meeting) return;
 
   if (confirm(`Are you sure you want to delete "${meeting.title}"?`)) {
     try {
       addLog(`Deleting meeting: ${meeting.title}...`);
-      await window.electronAPI.deleteMeeting(currentMeetingId);
+      await window.electronAPI.deleteMeeting(idToDelete);
 
-      // Hide details panel, show empty state
-      meetingDetails.style.display = 'none';
-      document.getElementById('meeting-details-empty').style.display = 'flex';
-      currentMeetingId = null;
+      // If we deleted the currently selected meeting, clear the view
+      if (currentMeetingId === idToDelete) {
+        meetingDetails.style.display = 'none';
+        document.getElementById('meeting-details-empty').style.display = 'flex';
+        currentMeetingId = null;
+      }
 
       // Reload list
       await loadMeetingHistory();

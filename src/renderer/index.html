@@ -13,8 +13,10 @@
   <div class="container">
     <!-- Header -->
     <header>
-      <h1>Meeting Transcriber</h1>
-      <p class="subtitle">AI-powered transcription with desktop audio capture</p>
+      <div class="header-content">
+        <h1>Meeting Transcriber</h1>
+        <p class="subtitle">AI-powered transcription</p>
+      </div>
     </header>
 
     <!-- Main Content -->
@@ -36,7 +38,7 @@
             </select>
           </div>
 
-          <div class="setup-item">
+          <div class="setup-item small-select">
             <label for="language-select">Language</label>
             <select id="language-select" class="device-select">
               <option value="en">English</option>
@@ -48,7 +50,7 @@
             </select>
           </div>
 
-          <div class="setup-item">
+          <div class="setup-item small-select">
             <label for="model-select">Model</label>
             <select id="model-select" class="device-select">
               <option value="tiny">Tiny</option>
@@ -59,19 +61,15 @@
           </div>
 
           <button id="refresh-devices" class="btn btn-icon-only" title="Refresh Devices">
-            <span class="btn-icon">🔄</span>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/></svg>
           </button>
         </div>
       </section>
 
       <!-- Tab Navigation -->
       <div class="tabs">
-        <button class="tab-btn active" data-tab="record">
-          <span class="tab-icon">⏺</span> Record
-        </button>
-        <button class="tab-btn" data-tab="history">
-          <span class="tab-icon">📚</span> History
-        </button>
+        <button class="tab-btn active" data-tab="record">Record</button>
+        <button class="tab-btn" data-tab="history">History</button>
       </div>
 
       <!-- Tab Content -->
@@ -79,25 +77,18 @@
         <!-- Record Tab -->
         <div class="tab-pane active" id="record-tab">
           <section class="card recording-section">
-            <h2>Current Meeting</h2>
+            <div class="recording-header">
+              <h2>Current Meeting</h2>
+              <div class="recording-status">
+                <div class="status-indicator" id="status-indicator"></div>
+                <span id="status-text">Ready</span>
+              </div>
+            </div>
 
             <div class="recording-controls-row">
-              <div class="controls">
-                <button id="start-btn" class="btn btn-primary">
-                  <span class="btn-icon">⏺</span>
-                  Start Recording
-                </button>
-                <button id="stop-btn" class="btn btn-danger" disabled>
-                  <span class="btn-icon">⏹</span>
-                  Stop & Transcribe
-                </button>
-              </div>
-
-              <div class="recording-info">
-                <div class="recording-status">
-                  <div class="status-indicator" id="status-indicator"></div>
-                  <span id="status-text">Ready</span>
-                </div>
+              <div class="controls-group">
+                <button id="start-btn" class="btn btn-primary">Start Recording</button>
+                <button id="stop-btn" class="btn btn-danger" disabled>Stop & Transcribe</button>
                 <div class="timer" id="timer">00:00</div>
               </div>
             </div>
@@ -128,7 +119,7 @@
               <div class="sidebar-header">
                 <h3>Meetings</h3>
                 <button id="refresh-history" class="btn btn-icon-only" title="Refresh">
-                  <span class="btn-icon">🔄</span>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/></svg>
                 </button>
               </div>
 
@@ -140,22 +131,17 @@
             <!-- Main Content: Meeting Details -->
             <main class="history-content">
               <div id="meeting-details-empty" class="empty-state">
-                <p class="placeholder">Select a meeting from the list to view details</p>
+                <p class="placeholder">Select a meeting to view details</p>
               </div>
 
-              <div class="card meeting-details" id="meeting-details" style="display:none;">
+              <div class="meeting-details" id="meeting-details" style="display:none;">
                 <div class="meeting-header">
-                  <div class="meeting-title-section">
-                    <h2 id="meeting-title">Meeting Details</h2>
-                    <div class="meeting-meta">
-                      <span id="meeting-date"></span>
-                      <span class="meta-separator">•</span>
-                      <span id="meeting-duration"></span>
-                    </div>
+                  <h2 id="meeting-title">Meeting Details</h2>
+                  <div class="meeting-meta">
+                    <span id="meeting-date"></span>
+                    <span class="meta-separator">•</span>
+                    <span id="meeting-duration"></span>
                   </div>
-                  <button id="delete-meeting" class="btn btn-danger btn-icon-only" title="Delete">
-                    <span class="btn-icon">🗑</span>
-                  </button>
                 </div>
 
                 <div class="audio-player-section">
@@ -167,9 +153,7 @@
                 <div class="transcript-section">
                   <div class="transcript-header-row">
                     <h3>Transcript</h3>
-                    <button id="copy-transcript-btn" class="btn btn-small">
-                      <span class="btn-icon">📋</span> Copy
-                    </button>
+                    <button id="copy-transcript-btn" class="btn btn-small">Copy</button>
                   </div>
                   <div class="meeting-transcript" id="meeting-transcript"></div>
                 </div>

@@ -10,6 +10,15 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
+const fs = require('fs');
+
+// Set a custom userData path to avoid permission errors with system cache
+// This keeps all cache/config in the project folder instead of AppData
+const userDataPath = path.join(__dirname, '../userData');
+if (!fs.existsSync(userDataPath)) {
+  fs.mkdirSync(userDataPath);
+}
+app.setPath('userData', userDataPath);
 
 let mainWindow;
 let pythonProcess;
