@@ -71,6 +71,7 @@ pythonExe: process.resourcesPath + '/python/python.exe'
 - System information display
 
 **Settings Tab Includes:**
+
 - GPU detection status
 - CUDA installation status
 - Install/Uninstall buttons
@@ -102,11 +103,13 @@ pythonExe: process.resourcesPath + '/python/python.exe'
 ### Runtime Behavior
 
 **First Launch (Base Install):**
+
 - App starts with CPU-only transcription
 - User can record and transcribe immediately
 - Whisper models download on first transcription (~150-1500MB depending on model)
 
 **GPU Acceleration (Optional):**
+
 - User navigates to Settings tab
 - App detects NVIDIA GPU automatically
 - If GPU detected, user can click "Install GPU Acceleration"
@@ -118,7 +121,7 @@ pythonExe: process.resourcesPath + '/python/python.exe'
 
 ### Directory Structure (Production)
 
-```
+```text
 Meeting Transcriber/
 ├── Meeting Transcriber.exe          # Electron app
 └── resources/
@@ -143,7 +146,7 @@ Meeting Transcriber/
 
 ### User Data Directory
 
-```
+```text
 %USERPROFILE%/.cache/
 └── huggingface/
     └── hub/                          # Whisper models (downloaded on first use)
@@ -173,12 +176,14 @@ Meeting Transcriber/
 ## Build Commands
 
 ### Development
+
 ```bash
 npm start          # Run app in dev mode
 npm run dev        # Run app with DevTools
 ```
 
 ### Production Build
+
 ```bash
 npm install        # Install Node dependencies
 npm run prebuild   # Download and prepare resources (5-15 min)
@@ -189,6 +194,7 @@ build-installer.bat
 ```
 
 ### Testing
+
 ```bash
 npm run build:dir  # Build unpacked app for testing (faster)
 ```
