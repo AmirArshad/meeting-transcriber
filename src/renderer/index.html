@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Meeting Transcriber</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <!-- Header -->
+    <header>
+      <h1>Meeting Transcriber</h1>
+      <p class="subtitle">AI-powered transcription with desktop audio capture</p>
+    </header>
+
+    <!-- Main Content -->
+    <main>
+      <!-- Compact Audio Setup -->
+      <section class="card setup-section compact">
+        <div class="setup-row">
+          <div class="setup-item">
+            <label for="mic-select">Microphone</label>
+            <select id="mic-select" class="device-select">
+              <option value="">Loading...</option>
+            </select>
+          </div>
+
+          <div class="setup-item">
+            <label for="desktop-select">Desktop Audio</label>
+            <select id="desktop-select" class="device-select">
+              <option value="">Loading...</option>
+            </select>
+          </div>
+
+          <div class="setup-item">
+            <label for="language-select">Language</label>
+            <select id="language-select" class="device-select">
+              <option value="en">English</option>
+              <option value="es">Spanish</option>
+              <option value="fr">French</option>
+              <option value="de">German</option>
+              <option value="zh">Chinese</option>
+              <option value="ja">Japanese</option>
+            </select>
+          </div>
+
+          <div class="setup-item">
+            <label for="model-select">Model</label>
+            <select id="model-select" class="device-select">
+              <option value="tiny">Tiny</option>
+              <option value="base">Base</option>
+              <option value="small" selected>Small</option>
+              <option value="medium">Medium</option>
+            </select>
+          </div>
+
+          <button id="refresh-devices" class="btn btn-icon-only" title="Refresh Devices">
+            <span class="btn-icon">🔄</span>
+          </button>
+        </div>
+      </section>
+
+      <div class="two-column-layout">
+        <!-- Left Column: Recording & Transcription -->
+        <div class="left-column">
+          <!-- Recording Section -->
+          <section class="card recording-section">
+            <h2>Current Meeting</h2>
+
+            <div class="recording-status">
+              <div class="status-indicator" id="status-indicator"></div>
+              <span id="status-text">Ready to record</span>
+            </div>
+
+            <div class="timer" id="timer">00:00</div>
+
+            <div class="controls">
+              <button id="start-btn" class="btn btn-primary btn-large">
+                <span class="btn-icon">⏺</span>
+                Start Recording
+              </button>
+              <button id="stop-btn" class="btn btn-danger btn-large" disabled>
+                <span class="btn-icon">⏹</span>
+                Stop & Transcribe
+              </button>
+            </div>
+
+            <!-- Current Transcript -->
+            <div class="current-transcript" id="current-transcript">
+              <div class="transcript-header">
+                <h3>Transcript</h3>
+                <div class="transcript-actions" id="transcript-actions" style="display:none;">
+                  <button id="copy-btn" class="btn btn-small">Copy</button>
+                  <button id="save-btn" class="btn btn-small">Save</button>
+                </div>
+              </div>
+              <div class="transcript-output" id="transcript-output">
+                <p class="placeholder">Transcript will appear here after recording...</p>
+              </div>
+            </div>
+
+            <div class="progress-log" id="progress-log"></div>
+          </section>
+        </div>
+
+        <!-- Right Column: Meeting History -->
+        <div class="right-column">
+          <section class="card history-section">
+            <div class="history-header">
+              <h2>Meeting History</h2>
+              <button id="refresh-history" class="btn btn-small">Refresh</button>
+            </div>
+
+            <div class="meeting-list" id="meeting-list">
+              <p class="placeholder">No meetings recorded yet</p>
+            </div>
+          </section>
+
+          <!-- Selected Meeting Details -->
+          <section class="card meeting-details" id="meeting-details" style="display:none;">
+            <h3 id="meeting-title">Meeting Details</h3>
+
+            <div class="meeting-meta">
+              <p id="meeting-date"></p>
+              <p id="meeting-duration"></p>
+            </div>
+
+            <div class="audio-player">
+              <audio id="audio-player" controls style="width: 100%">
+                <source id="audio-source" type="audio/wav">
+                Your browser does not support audio playback.
+              </audio>
+            </div>
+
+            <div class="meeting-transcript" id="meeting-transcript"></div>
+
+            <div class="meeting-actions">
+              <button id="delete-meeting" class="btn btn-danger btn-small">Delete</button>
+            </div>
+          </section>
+        </div>
+      </div>
+    </main>
+
+    <!-- Footer -->
+    <footer>
+      <p>Powered by Whisper AI</p>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

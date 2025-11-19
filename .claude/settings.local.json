@@ -10,7 +10,9 @@
       "Bash(dir:*)",
       "Bash(findstr:*)",
       "Bash(timeout:*)",
-      "Bash(ping:*)"
+      "Bash(ping:*)",
+      "Bash(node --version)",
+      "Bash(npm install)"
     ],
     "deny": [],
     "ask": []
