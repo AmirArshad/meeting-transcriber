@@ -137,7 +137,7 @@ class AudioRecorder:
         if self.desktop_stream:
             self.desktop_stream.start_stream()
 
-        print("✓ Recording started!", file=sys.stderr)
+        print("Recording started!", file=sys.stderr)
 
     def stop_recording(self):
         """Stop recording and mix the audio."""
@@ -155,7 +155,7 @@ class AudioRecorder:
             self.desktop_stream.close()
             self.desktop_stream = None
 
-        print(f"✓ Streams stopped", file=sys.stderr)
+        print(f"Streams stopped", file=sys.stderr)
         print(f"  Mic frames: {len(self.mic_frames)}", file=sys.stderr)
         print(f"  Desktop frames: {len(self.desktop_frames)}", file=sys.stderr)
 
@@ -166,7 +166,7 @@ class AudioRecorder:
         self.mic_frames = []
         self.desktop_frames = []
 
-        print("✓ Recording stopped!", file=sys.stderr)
+        print("Recording stopped!", file=sys.stderr)
 
     def _mix_and_save(self):
         """Mix the two audio sources and save to file."""
@@ -225,7 +225,7 @@ class AudioRecorder:
         file_size = Path(self.output_path).stat().st_size
         duration = len(final_audio) / (self.target_sample_rate * self.channels)
 
-        print(f"✓ Audio saved!", file=sys.stderr)
+        print(f"Audio saved!", file=sys.stderr)
         print(f"  File size: {file_size / 1024 / 1024:.2f} MB", file=sys.stderr)
         print(f"  Duration: {duration:.2f} seconds", file=sys.stderr)
         print(f"  Sample rate: {self.target_sample_rate} Hz", file=sys.stderr)
@@ -248,42 +248,86 @@ class AudioRecorder:
             self.pa = None
 
 
-# Test
-if __name__ == "__main__":
+# CLI interface
+def main():
+    """
+    CLI for the audio recorder.
+    """
+    import argparse
     import time
+    import signal
 
-    mic_id = 39
-    loopback_id = 41
-    duration = 10
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_file = f"test_v2_{timestamp}.wav"
-
-    print("Testing AudioRecorder (post-processing mix)")
-    print(f"Duration: {duration} seconds")
-    print()
+    parser = argparse.ArgumentParser(description="Audio Recorder CLI")
+    parser.add_argument("--mic", type=int, required=True, help="Microphone device ID")
+    parser.add_argument("--loopback", type=int, required=True, help="Loopback device ID")
+    parser.add_argument("--output", required=True, help="Output file path")
+    parser.add_argument("--duration", type=int, default=0, help="Duration in seconds (0 for manual stop)")
+    
+    args = parser.parse_args()
+    
+    # Ensure output directory exists
+    output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
     recorder = AudioRecorder(
-        mic_device_id=mic_id,
-        loopback_device_id=loopback_id,
-        output_path=output_file,
-        sample_rate=48000,
-        mic_volume=1.0,
-        desktop_volume=1.0
+        mic_device_id=args.mic,
+        loopback_device_id=args.loopback,
+        output_path=str(output_path),
+        sample_rate=48000
     )
+
+    # Handle interrupt signals for manual stop
+    def signal_handler(sig, frame):
+        print("\nStopping recording...", file=sys.stderr)
+        recorder.stop_recording()
+        recorder.cleanup()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, signal_handler)
+    # signal.signal(signal.SIGTERM, signal_handler) # SIGTERM not supported gracefully on Windows
+
+    # Start a thread to listen for stop command from stdin (for Electron)
+    stop_event = threading.Event()
+    
+    def input_listener():
+        try:
+            # Read lines from stdin
+            for line in sys.stdin:
+                if "stop" in line.lower():
+                    stop_event.set()
+                    break
+        except:
+            pass
+
+    input_thread = threading.Thread(target=input_listener, daemon=True)
+    input_thread.start()
 
     try:
         recorder.start_recording()
+        
+        if args.duration > 0:
+            # Record for fixed duration
+            for i in range(args.duration):
+                if not recorder.is_recording or stop_event.is_set():
+                    break
+                time.sleep(1)
+            recorder.stop_recording()
+        else:
+            # Record until interrupted
+            print("Recording... Send 'stop' to stdin or Press Ctrl+C to stop", file=sys.stderr)
+            while not stop_event.is_set():
+                time.sleep(0.1)
+            
+            print("\nStopping recording...", file=sys.stderr)
+            recorder.stop_recording()
 
-        for i in range(duration):
-            print(f"  {duration - i} seconds...", end='\r')
-            time.sleep(1)
-
-        print()
-        recorder.stop_recording()
-
-        print()
-        print(f"✓ Test complete: {output_file}")
-
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        recorder.cleanup()
+        sys.exit(1)
     finally:
         recorder.cleanup()
+
+
+if __name__ == "__main__":
+    main()

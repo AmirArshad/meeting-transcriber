@@ -206,7 +206,7 @@ class TranscriberService:
                 device=device,
                 compute_type=compute_type
             )
-            print(f"✓ Model loaded successfully!", file=sys.stderr)
+            print(f"Model loaded successfully!", file=sys.stderr)
             print(f"  Device: {device.upper()}", file=sys.stderr)
             print(f"  Compute type: {compute_type}", file=sys.stderr)
             if device == "cuda":
@@ -248,7 +248,7 @@ class TranscriberService:
                     device=device,
                     compute_type=compute_type
                 )
-                print(f"✓ Model loaded successfully on CPU!", file=sys.stderr)
+                print(f"Model loaded successfully on CPU!", file=sys.stderr)
                 print(f"  Note: CPU is 4-5x slower than GPU. Consider setting up CUDA for faster transcription.", file=sys.stderr)
             else:
                 raise
@@ -399,64 +399,67 @@ class TranscriberService:
             print("Transcriber cleaned up", file=sys.stderr)
 
 
-# CLI interface for testing
+# CLI interface
 def main():
     """
-    Simple CLI for testing the transcriber.
-
-    Usage:
-        python transcriber.py <audio_file> [language_code] [model_size]
-
-    Examples:
-        python transcriber.py test_recording.wav
-        python transcriber.py test_recording.wav es
-        python transcriber.py test_recording.wav en small
+    CLI for the transcriber service.
     """
+    import argparse
+    import json
     import sys
 
-    if len(sys.argv) < 2:
-        print("Usage: python transcriber.py <audio_file> [language_code] [model_size]")
-        print("\nExamples:")
-        print("  python transcriber.py test_recording.wav")
-        print("  python transcriber.py test_recording.wav es")
-        print("  python transcriber.py test_recording.wav en small")
-        print("\nSupported languages:")
-        for code, name in sorted(TranscriberService.SUPPORTED_LANGUAGES.items()):
-            print(f"  {code}: {name}")
-        print("\nModel sizes: tiny, base, small, medium, large")
+    parser = argparse.ArgumentParser(description="Meeting Transcriber CLI")
+    parser.add_argument("audio_file", nargs="?", help="Path to audio file")
+    parser.add_argument("--file", dest="file_arg", help="Path to audio file (alternative)")
+    parser.add_argument("--language", default="en", help="Language code (default: en)")
+    parser.add_argument("--model", default="base", help="Model size (default: base)")
+    parser.add_argument("--json", action="store_true", help="Output results as JSON")
+    
+    args = parser.parse_args()
+    
+    # Handle file argument (positional or flag)
+    audio_file = args.audio_file or args.file_arg
+    
+    if not audio_file:
+        parser.print_help()
         sys.exit(1)
 
-    audio_file = sys.argv[1]
-    language = sys.argv[2] if len(sys.argv) > 2 else "en"
-    model_size = sys.argv[3] if len(sys.argv) > 3 else "base"
-
     # Create transcriber
-    transcriber = TranscriberService(
-        model_size=model_size,
-        language=language,
-        device="auto"
-    )
-
     try:
+        transcriber = TranscriberService(
+            model_size=args.model,
+            language=args.language,
+            device="auto"
+        )
+        
         # Load model
         transcriber.load_model()
 
         # Transcribe
         results = transcriber.transcribe_file(audio_file)
 
-        print("\n" + "=" * 60)
-        print("TRANSCRIPTION COMPLETE")
-        print("=" * 60)
-        print(f"\nFull text:\n{results['text']}")
-        print(f"\nMarkdown saved to: {results['output_file']}")
+        if args.json:
+            # Output JSON to stdout for integration
+            print(json.dumps(results, indent=2))
+        else:
+            # Human-readable output
+            print("\n" + "=" * 60)
+            print("TRANSCRIPTION COMPLETE")
+            print("=" * 60)
+            print(f"\nFull text:\n{results['text']}")
+            print(f"\nMarkdown saved to: {results['output_file']}")
 
     except Exception as e:
+        # Print error to stderr so it doesn't corrupt JSON output
         print(f"\nERROR: {e}", file=sys.stderr)
-        import traceback
-        traceback.print_exc()
+        # Only print traceback if not in JSON mode or if it's a critical error
+        if not args.json:
+            import traceback
+            traceback.print_exc()
         sys.exit(1)
     finally:
-        transcriber.cleanup()
+        if 'transcriber' in locals():
+            transcriber.cleanup()
 
 
 if __name__ == "__main__":

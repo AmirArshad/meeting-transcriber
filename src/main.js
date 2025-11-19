@@ -131,7 +131,7 @@ ipcMain.handle('start-recording', async (event, options) => {
     });
 
     pythonProcess.stderr.on('data', (data) => {
-      console.error(`Python error: ${data}`);
+      console.log(`Python status: ${data}`);
     });
 
     pythonProcess.on('close', (code) => {
@@ -153,10 +153,17 @@ ipcMain.handle('start-recording', async (event, options) => {
 ipcMain.handle('stop-recording', async () => {
   return new Promise((resolve) => {
     if (pythonProcess) {
-      pythonProcess.kill('SIGTERM');
-      pythonProcess = null;
+      // Wait for process to close (which happens after it saves the file)
+      pythonProcess.on('close', () => {
+        pythonProcess = null;
+        resolve({ success: true });
+      });
+
+      // Send signal to stop via stdin (SIGTERM kills instantly on Windows)
+      pythonProcess.stdin.write('stop\n');
+    } else {
+      resolve({ success: true });
     }
-    resolve({ success: true });
   });
 });
 
@@ -165,7 +172,12 @@ ipcMain.handle('stop-recording', async () => {
  */
 ipcMain.handle('transcribe-audio', async (event, options) => {
   return new Promise((resolve, reject) => {
-    const { audioFile, language, modelSize } = options;
+    let { audioFile, language, modelSize } = options;
+
+    // Resolve relative paths
+    if (!path.isAbsolute(audioFile)) {
+      audioFile = path.join(__dirname, audioFile);
+    }
 
     const python = spawn('python', [
       path.join(__dirname, '../backend/transcriber.py'),
