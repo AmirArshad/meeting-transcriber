@@ -1,133 +1,211 @@
-# Meeting Transcriber
+# 🎙️ Meeting Transcriber
 
-A Windows desktop application for recording and transcribing meetings using OpenAI's Whisper model with local GPU acceleration.
+> AI-powered desktop application for recording and transcribing meetings with pristine audio quality
 
-## Project Status
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Windows](https://img.shields.io/badge/Platform-Windows%2010%2F11-blue.svg)](https://www.microsoft.com/windows)
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
+[![Electron](https://img.shields.io/badge/Electron-28.0-47848F.svg)](https://www.electronjs.org/)
 
-🚧 **In Development** - Currently implementing core components
+## What is this?
 
-### Completed
-- ✅ Project structure
-- ✅ Audio device enumeration (`device_manager.py`)
-- ✅ Audio recording with WASAPI loopback (`audio_recorder.py`)
-  - Microphone recording
-  - Desktop audio (loopback) recording
-  - Mixed recording (mic + desktop)
-  - High-quality audio mixing with resampling
-- ✅ Whisper transcription integration (`transcriber.py`)
-  - CPU and GPU support (CUDA)
-  - 99 language support
-  - Markdown output with timestamps
-  - Auto-fallback to CPU if GPU unavailable
-- ✅ Electron UI (Functional - Recording & Transcription working)
+Meeting Transcriber is a **privacy-first desktop application** that captures and transcribes your meetings with exceptional audio quality. Unlike cloud-based solutions that record only your microphone, this app captures **both your voice AND desktop audio** (speakers/system audio) - perfect for recording online meetings, interviews, podcasts, or any computer-based conversation.
 
-### In Progress
-- 🔄 Application packaging/installer
+### Why I Built This
 
-### Planned
-- ⏳ Speaker diarization (see [FEATURE_SPEAKER_DIARIZATION.md](FEATURE_SPEAKER_DIARIZATION.md))
-- ⏳ Setup wizard (see [FEATURE_SETUP_WIZARD.md](FEATURE_SETUP_WIZARD.md))
+During remote work, I found myself in countless Zoom/Teams meetings where I wished I could:
+- 📝 **Have accurate transcripts** for later reference
+- 🔊 **Capture both sides** of the conversation (my voice + remote participants)
+- 🔒 **Keep recordings private** - all processing happens locally on my machine
+- 🚀 **Get fast transcriptions** with GPU acceleration
 
-## Quick Start (Development)
+No existing solution offered all of this in one package, so I built it.
 
-### Prerequisites
-- Python 3.10+
-- Node.js 18+ (for Electron UI)
-- Windows 10/11 (64-bit)
-- NVIDIA GPU with CUDA support (optional, for GPU transcription)
+## ✨ Key Features
 
-### Installation
+### 🎯 Core Capabilities
+- **Dual Audio Capture** - Records both microphone and desktop audio (WASAPI loopback)
+- **AI Transcription** - Powered by OpenAI's Whisper model with 99 language support
+- **100% Local Processing** - No data sent to cloud, complete privacy
+- **Professional Audio Quality** - Advanced DSP processing, noise reduction, auto-mixing
+- **GPU Acceleration** - Optional CUDA support for 4-5x faster transcription
 
-1. **Install Python dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
+### 🛠️ Technical Features
+- **Intelligent Audio Enhancement** - Automatic noise gate, compression, and EQ for microphone
+- **Opus Compression** - 95% file size reduction (450MB → 23MB for 40-min recording)
+- **Meeting History** - Searchable archive with audio playback and full transcripts
+- **One-Click Installer** - Professional NSIS installer with embedded Python runtime
+- **Cross-Device Support** - Works with any microphone and audio interface
 
-2. **(Optional) Setup GPU Acceleration:**
+## 🚀 Quick Start
 
-   For 4-5x faster transcription with CUDA:
+### For End Users (Installer)
 
-   **Automatic setup (Windows):**
-   ```bash
-   setup_gpu.bat
-   ```
+1. **Download** the latest installer from [Releases](https://github.com/AmirArshad/meeting-transcriber/releases)
+2. **Run** `Meeting Transcriber Setup.exe`
+3. **Launch** the app from Start Menu
+4. **Select** your microphone and desktop audio device
+5. **Click** "Start Recording" and transcribe!
 
-   **Manual setup:**
-   ```bash
-   # Install PyTorch with CUDA
-   pip install torch --index-url https://download.pytorch.org/whl/cu121
+**First run:** Whisper model (~500MB) downloads automatically on first transcription.
 
-   # Install CUDA libraries
-   pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
-   ```
+### For Developers
 
-   See [SETUP_GPU.md](SETUP_GPU.md) for detailed instructions and troubleshooting.
+```bash
+# Clone repository
+git clone https://github.com/AmirArshad/meeting-transcriber.git
+cd meeting-transcriber
 
-### Testing
+# Install Python dependencies
+pip install -r requirements.txt
 
-1. **List audio devices:**
-   ```bash
-   cd backend
-   python device_manager.py
-   ```
+# Install Node.js dependencies
+npm install
 
-2. **Record audio:**
-   ```bash
-   python test_recording.py
-   # Follow the prompts to select devices
-   ```
-
-3. **Transcribe audio:**
-   ```bash
-   python test_transcribe.py
-   # Follow the prompts to select a recording
-   ```
-
-4. **Run the Electron UI:**
-   ```bash
-   npm install  # First time only
-   npm start    # Launch the app
-   ```
-
-   Or with DevTools for debugging:
-   ```bash
-   npm run dev
-   ```
-
-## Architecture
-
-```
-meeting-transcriber/
-├── backend/              # Python backend
-│   ├── device_manager.py # Audio device enumeration
-│   ├── audio_recorder.py # Post-processing mix recorder (V2)
-│   ├── transcriber.py    # Whisper transcription
-│   ├── find_active_audio.py # Auto-detect desktop audio
-│   └── test_*.py         # Test scripts
-├── src/                  # Electron app
-│   ├── main.js           # Main process
-│   ├── preload.js        # Security bridge
-│   └── renderer/         # UI
-│       ├── index.html
-│       ├── styles.css
-│       └── app.js
-├── package.json          # Node dependencies
-└── requirements.txt      # Python dependencies
+# Run the app
+npm start
 ```
 
-## Technology Stack
+See [docs/development/BUILD_INSTRUCTIONS.md](docs/development/BUILD_INSTRUCTIONS.md) for detailed setup.
 
-- **Frontend:** Electron (HTML/CSS/JavaScript)
-- **Backend:** Python
-  - Audio Recording: pyaudiowpatch (WASAPI loopback)
-  - Transcription: faster-whisper
-  - Audio Processing: numpy, scipy
-- **GPU:** CUDA (NVIDIA) - Optional, 4-5x faster transcription
+## 📸 How It Works
 
-## Documentation
+1. **Select Audio Sources**
+   - Choose your microphone (for your voice)
+   - Choose desktop audio/loopback device (for system audio)
+   - Select transcription language and model size
 
-See `backend/README.md` for Python backend documentation.
+2. **Record Your Meeting**
+   - App captures both audio streams simultaneously
+   - Real-time audio enhancement and mixing
+   - Automatic Opus compression on save
 
-## License
+3. **Get Your Transcript**
+   - Click "Stop & Transcribe"
+   - Whisper AI processes audio locally
+   - View timestamped transcript with audio playback
 
-Personal use project - no license specified yet.
+4. **Access History**
+   - Browse all past meetings
+   - Search transcripts
+   - Re-listen with synchronized audio
+
+## 🎛️ Audio Quality
+
+This app uses professional-grade audio processing:
+
+- **Microphone Enhancement:**
+  - High-pass filter (removes rumble)
+  - Noise gate (reduces background noise)
+  - Gentle compression (balances volume)
+  - Makeup gain (+9.5 dB total boost)
+
+- **Desktop Audio:**
+  - Pristine capture with no processing
+  - Maintains original quality
+
+- **Final Mix:**
+  - Intelligent resampling to 48kHz
+  - Stereo output
+  - Compressed to Opus format (96 kbps VBR)
+
+## 🌍 Supported Languages
+
+Whisper supports **99 languages** including:
+- English, Spanish, French, German, Italian
+- Chinese (Mandarin), Japanese, Korean
+- Arabic, Hindi, Portuguese, Russian
+- And 87 more...
+
+See [docs/TRANSCRIPTION_GUIDE.md](docs/TRANSCRIPTION_GUIDE.md) for full list and tips.
+
+## 💻 System Requirements
+
+### Minimum
+- **OS:** Windows 10/11 (64-bit)
+- **RAM:** 4 GB
+- **Storage:** 2 GB free space
+- **Audio:** Any microphone + audio interface
+
+### Recommended
+- **OS:** Windows 11 (64-bit)
+- **RAM:** 8 GB
+- **Storage:** 10 GB free space (for models + recordings)
+- **GPU:** NVIDIA GPU with 4GB+ VRAM (for GPU acceleration)
+- **Audio:** USB microphone or audio interface
+
+## ⚙️ Technology Stack
+
+- **Frontend:** Electron 28, HTML/CSS/JavaScript
+- **Backend:** Python 3.11
+- **AI Model:** faster-whisper (OpenAI Whisper)
+- **Audio Engine:** PyAudioWPatch (WASAPI loopback support)
+- **Audio Processing:** NumPy, SciPy
+- **Compression:** ffmpeg (Opus codec)
+- **GPU:** PyTorch + CUDA 12.1 (optional)
+
+## 📚 Documentation
+
+- **User Guides:**
+  - [Transcription Tips](docs/TRANSCRIPTION_GUIDE.md) - Get the best results
+  - [Meeting Features](docs/MEETING_TRANSCRIPTION.md) - Using the history viewer
+
+- **Development:**
+  - [Build Instructions](docs/development/BUILD_INSTRUCTIONS.md) - Create installer
+  - [GPU Setup](docs/development/SETUP_GPU.md) - Enable CUDA acceleration
+  - [Implementation Details](docs/development/INSTALLER_IMPLEMENTATION.md) - Technical overview
+
+- **Future Features:**
+  - [Speaker Diarization](docs/features/FEATURE_SPEAKER_DIARIZATION.md) - Who said what
+  - [Setup Wizard](docs/features/FEATURE_SETUP_WIZARD.md) - Guided first-time setup
+
+## 🔒 Privacy & Security
+
+- ✅ **100% Local Processing** - No cloud uploads, no API calls
+- ✅ **No Telemetry** - Zero usage tracking or analytics
+- ✅ **No Account Required** - No login, no email, no registration
+- ✅ **Open Source** - Full transparency, audit the code yourself
+- ✅ **GDPR Compliant** - No personal data collected
+
+See [docs/internal/SECURITY_AUDIT.md](docs/internal/SECURITY_AUDIT.md) for full security analysis.
+
+## 🤝 Contributing
+
+Contributions are welcome! This is a solo project but I'm open to:
+- 🐛 Bug reports and fixes
+- ✨ Feature suggestions
+- 📝 Documentation improvements
+- 🌍 Translations
+
+## 📝 License
+
+This project is licensed under the MIT License - see [LICENSE.txt](LICENSE.txt) for details.
+
+## 🙏 Acknowledgments
+
+- **OpenAI** - For the incredible Whisper model
+- **faster-whisper** - For the efficient implementation
+- **PyAudioWPatch** - For WASAPI loopback support on Windows
+- **Electron** - For making desktop apps accessible
+
+## 📞 Contact & Support
+
+- **Issues:** [GitHub Issues](https://github.com/AmirArshad/meeting-transcriber/issues)
+- **Discussions:** [GitHub Discussions](https://github.com/AmirArshad/meeting-transcriber/discussions)
+
+## 🗺️ Roadmap
+
+- [x] Core recording and transcription
+- [x] Meeting history with playback
+- [x] GPU acceleration support
+- [x] Professional installer
+- [ ] Speaker diarization (identify who's speaking)
+- [ ] Real-time transcription
+- [ ] Export to various formats (SRT, VTT, DOCX)
+- [ ] macOS/Linux support
+
+---
+
+**Made with ❤️ for remote workers, podcasters, and anyone who values accurate meeting notes.**
+
+*Star ⭐ this repo if you find it useful!*
