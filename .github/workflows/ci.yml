@@ -27,12 +27,14 @@ jobs:
         pip install pytest pytest-cov
 
     - name: Run Python tests
+      shell: pwsh
       run: |
         # Test device manager
-        python backend/device_manager.py > nul 2>&1 || echo "Device manager check complete"
+        python backend/device_manager.py > $null 2>&1
+        if ($LASTEXITCODE -ne 0) { Write-Host "Device manager check complete (expected)" }
 
         # Validate Python files syntax
-        python -m py_compile backend/*.py
+        Get-ChildItem backend/*.py | ForEach-Object { python -m py_compile $_.FullName }
 
     - name: Check code style
       run: |
@@ -54,7 +56,7 @@ jobs:
         cache: 'npm'
 
     - name: Install dependencies
-      run: npm ci
+      run: npm install
 
     - name: Validate package.json
       run: npm run --silent

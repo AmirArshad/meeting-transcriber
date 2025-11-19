@@ -16,12 +16,14 @@ npm install
 ```
 
 This installs:
+
 - Electron
 - electron-builder (packaging tool)
 
 ## Step 2: Prepare Build Resources
 
 This step downloads and prepares:
+
 - Embedded Python 3.11.9 (~30MB)
 - Python dependencies from requirements.txt (~100MB)
 - ffmpeg binary (~100MB)
@@ -33,6 +35,7 @@ npm run prebuild
 **Note:** This may take 5-15 minutes depending on your internet speed.
 
 The script will:
+
 1. Download Python embeddable distribution
 2. Extract Python
 3. Install pip
@@ -50,8 +53,9 @@ You need to provide an application icon:
 **Sizes:** 16x16, 32x32, 48x48, 256x256
 
 Quick options:
-- Use an online converter: https://convertio.co/png-ico/
-- Find a free icon: https://www.flaticon.com/
+
+- Use an online converter: <https://convertio.co/png-ico/>
+- Find a free icon: <https://www.flaticon.com/>
 - Create with design tools (Photoshop, GIMP, etc.)
 
 **The build will fail without this file!**
@@ -81,6 +85,7 @@ Output: `dist/win-unpacked/` - can run directly for testing
 ## What Gets Bundled
 
 The installer includes:
+
 - ✅ Electron application (UI)
 - ✅ Embedded Python 3.11.9 runtime
 - ✅ All Python dependencies (faster-whisper, numpy, scipy, etc.)
@@ -88,6 +93,7 @@ The installer includes:
 - ✅ Backend Python scripts
 
 **NOT included (downloaded on first use):**
+
 - ❌ Whisper AI models (~150-1500MB depending on model size)
 - ❌ CUDA/GPU libraries (optional, user opt-in)
 
@@ -95,7 +101,7 @@ The installer includes:
 
 After building, you'll have:
 
-```
+```text
 dist/
 ├── Meeting Transcriber Setup 1.0.0.exe  # Main installer
 ├── win-unpacked/                         # Unpacked app (if using build:dir)
@@ -105,6 +111,7 @@ dist/
 ## Testing the Installer
 
 1. **Test the unpacked version first:**
+
    ```bash
    npm run build:dir
    cd dist/win-unpacked

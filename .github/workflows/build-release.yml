@@ -26,7 +26,7 @@ jobs:
         cache: 'npm'
 
     - name: Install Node dependencies
-      run: npm ci
+      run: npm install
 
     - name: Install electron-builder
       run: npm install electron-builder --save-dev
