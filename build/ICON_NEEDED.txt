@@ -1,18 +1,23 @@
-Icon Required for Build
-========================
+# Icon File Needed
 
-To complete the installer build, you need to provide an icon file:
+This directory needs an `icon.ico` file for the installer.
 
-Location: build/icon.ico
-Format: Windows ICO format
-Recommended sizes: 16x16, 32x32, 48x48, 256x256
+## Current Status
+Using placeholder icon (GitHub Actions workflow creates one automatically)
 
-You can create an .ico file from a PNG using online tools like:
-- https://convertio.co/png-ico/
-- https://www.icoconverter.com/
+## To Add Your Own Icon
 
-Alternatively, use a professional design tool or hire a designer.
+1. Create or obtain a 256x256 PNG icon of a microphone
+2. Convert to ICO format using:
+   - Online: https://convertio.co/png-ico/
+   - Windows: Use IcoFX or similar tool
+   - PowerShell: See build-release.yml workflow for conversion script
 
-For now, you can use a placeholder icon generator or download a free icon.
+3. Save as `build/icon.ico`
+4. Commit to git: `git add -f build/icon.ico`
 
-The build will fail without this file!
+## Recommended Design
+- **Theme:** Microphone or waveform
+- **Size:** 256x256 (multi-resolution ICO)
+- **Style:** Modern, clean, professional
+- **Colors:** Blues/teals to match UI theme

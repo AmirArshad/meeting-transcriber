@@ -10,6 +10,8 @@ ENV/
 *.egg-info/
 dist/
 build/
+!build/icon.ico
+!build/ICON_NEEDED.txt
 
 # Node
 node_modules/
