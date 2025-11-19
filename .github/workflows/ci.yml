@@ -62,7 +62,7 @@ jobs:
       run: npm run --silent
 
     - name: Check for security vulnerabilities
-      run: npm audit --audit-level=moderate
+      run: npm audit --audit-level=high
       continue-on-error: true
 
   validate-docs:

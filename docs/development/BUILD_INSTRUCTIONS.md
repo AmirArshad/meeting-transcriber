@@ -127,6 +127,7 @@ dist/
 ## Installer Features
 
 The NSIS installer provides:
+
 - ✅ Custom installation directory selection
 - ✅ Desktop shortcut creation
 - ✅ Start Menu shortcut
@@ -137,20 +138,24 @@ The NSIS installer provides:
 ## Troubleshooting
 
 ### Build fails: "Icon not found"
+
 - Make sure `build/icon.ico` exists
 - Verify it's a valid ICO file
 
 ### Build fails: Python download errors
+
 - Check internet connection
 - Try running `npm run prebuild` again
 - May need to manually download and place in `build/resources/python/`
 
 ### Installer is too large (>1GB)
+
 - Normal size is 600-800MB
 - Check if Whisper models accidentally got bundled
 - Ensure recordings/ folder is gitignored
 
 ### App doesn't launch after install
+
 - Check Windows Event Viewer for errors
 - Try running from command line to see error messages
 - Verify Python dependencies installed correctly
@@ -172,6 +177,7 @@ npm run build
 ## Distribution
 
 Once built, you can distribute the installer:
+
 - Upload to file sharing service
 - Host on GitHub releases
 - Share direct download link
