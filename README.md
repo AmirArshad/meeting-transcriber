@@ -21,9 +21,12 @@ A Windows desktop application for recording and transcribing meetings using Open
   - Auto-fallback to CPU if GPU unavailable
 
 ### In Progress
-- 🔄 Electron UI
-- 🔄 Real-time transcription display
+- 🔄 Electron UI (interface created, testing in progress)
 - 🔄 Application packaging/installer
+
+### Planned
+- ⏳ Speaker diarization (see [FEATURE_SPEAKER_DIARIZATION.md](FEATURE_SPEAKER_DIARIZATION.md))
+- ⏳ Setup wizard (see [FEATURE_SETUP_WIZARD.md](FEATURE_SETUP_WIZARD.md))
 
 ## Quick Start (Development)
 
@@ -80,25 +83,46 @@ A Windows desktop application for recording and transcribing meetings using Open
    # Follow the prompts to select a recording
    ```
 
+4. **Run the Electron UI:**
+   ```bash
+   npm install  # First time only
+   npm start    # Launch the app
+   ```
+
+   Or with DevTools for debugging:
+   ```bash
+   npm run dev
+   ```
+
 ## Architecture
 
 ```
 meeting-transcriber/
-├── backend/              # Python audio services
+├── backend/              # Python backend
 │   ├── device_manager.py # Audio device enumeration
-│   ├── audio_recorder.py # WASAPI recording (TODO)
-│   └── transcriber.py    # Whisper transcription (TODO)
-├── electron/            # Electron app (TODO)
-└── requirements.txt     # Python dependencies
+│   ├── audio_recorder.py # Post-processing mix recorder (V2)
+│   ├── transcriber.py    # Whisper transcription
+│   ├── find_active_audio.py # Auto-detect desktop audio
+│   └── test_*.py         # Test scripts
+├── src/                  # Electron app
+│   ├── main.js           # Main process
+│   ├── preload.js        # Security bridge
+│   └── renderer/         # UI
+│       ├── index.html
+│       ├── styles.css
+│       └── app.js
+├── package.json          # Node dependencies
+└── requirements.txt      # Python dependencies
 ```
 
 ## Technology Stack
 
-- **Frontend:** Electron + React + TypeScript
-- **Backend:** Python with WASAPI (audio) and faster-whisper (transcription)
-- **Database:** SQLite
-- **Audio:** pyaudiowpatch (WASAPI loopback support)
-- **GPU:** CUDA (NVIDIA)
+- **Frontend:** Electron (HTML/CSS/JavaScript)
+- **Backend:** Python
+  - Audio Recording: pyaudiowpatch (WASAPI loopback)
+  - Transcription: faster-whisper
+  - Audio Processing: numpy, scipy
+- **GPU:** CUDA (NVIDIA) - Optional, 4-5x faster transcription
 
 ## Documentation
 
