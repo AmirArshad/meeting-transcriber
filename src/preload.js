@@ -18,6 +18,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Transcription
   transcribeAudio: (options) => ipcRenderer.invoke('transcribe-audio', options),
 
+  // Meeting history
+  listMeetings: () => ipcRenderer.invoke('list-meetings'),
+  getMeeting: (meetingId) => ipcRenderer.invoke('get-meeting', meetingId),
+  deleteMeeting: (meetingId) => ipcRenderer.invoke('delete-meeting', meetingId),
+  addMeeting: (meetingData) => ipcRenderer.invoke('add-meeting', meetingData),
+
   // Event listeners
   onRecordingProgress: (callback) => {
     ipcRenderer.on('recording-progress', (event, data) => callback(data));

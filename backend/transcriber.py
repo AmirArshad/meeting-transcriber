@@ -333,6 +333,9 @@ class TranscriberService:
             self._save_markdown(results, audio_path, output_path)
             results['output_file'] = output_path
 
+        # Add audio path to results for meeting manager
+        results['audioPath'] = str(audio_path)
+
         return results
 
     def _save_markdown(

@@ -20,6 +20,10 @@ import numpy as np
 from scipy import signal
 import pyaudiowpatch as pyaudio
 
+# Store final output path for meeting manager
+_final_output_path = None
+_recording_duration = 0.0
+
 
 class AudioRecorder:
     """
@@ -183,6 +187,10 @@ class AudioRecorder:
                 print(f"  Resampling mic: {self.mic_sample_rate} Hz → {self.target_sample_rate} Hz", file=sys.stderr)
                 mic_audio = self._resample(mic_audio, self.mic_sample_rate, self.target_sample_rate)
 
+            # Apply noise reduction to microphone audio only
+            print(f"  Applying noise reduction to mic...", file=sys.stderr)
+            mic_audio = self._enhance_microphone(mic_audio, self.target_sample_rate)
+
             if self.loopback_sample_rate != self.target_sample_rate:
                 print(f"  Resampling desktop: {self.loopback_sample_rate} Hz → {self.target_sample_rate} Hz", file=sys.stderr)
                 desktop_audio = self._resample(desktop_audio, self.loopback_sample_rate, self.target_sample_rate)
@@ -194,7 +202,8 @@ class AudioRecorder:
 
             # Mix
             print("  Mixing mic + desktop...", file=sys.stderr)
-            mic_float = mic_audio.astype(np.float32) / 32768.0 * self.mic_volume
+            # Boost mic by 2x (6 dB) to make voice more prominent
+            mic_float = mic_audio.astype(np.float32) / 32768.0 * self.mic_volume * 2.0
             desktop_float = desktop_audio.astype(np.float32) / 32768.0 * self.desktop_volume
 
             mixed = mic_float + desktop_float
@@ -212,23 +221,160 @@ class AudioRecorder:
                 print(f"  Resampling mic: {self.mic_sample_rate} Hz → {self.target_sample_rate} Hz", file=sys.stderr)
                 mic_audio = self._resample(mic_audio, self.mic_sample_rate, self.target_sample_rate)
 
+            # Apply noise reduction to microphone audio
+            print(f"  Applying noise reduction to mic...", file=sys.stderr)
+            mic_audio = self._enhance_microphone(mic_audio, self.target_sample_rate)
+
             final_audio = mic_audio
 
-        # Save to WAV
-        print(f"Saving to {self.output_path}...", file=sys.stderr)
-        with wave.open(self.output_path, 'wb') as wf:
+        duration = len(final_audio) / (self.target_sample_rate * self.channels)
+
+        # Save to temporary WAV first
+        temp_wav = str(Path(self.output_path).with_suffix('.temp.wav'))
+        print(f"Saving temporary WAV...", file=sys.stderr)
+        with wave.open(temp_wav, 'wb') as wf:
             wf.setnchannels(self.channels)
             wf.setsampwidth(self.pa.get_sample_size(pyaudio.paInt16))
             wf.setframerate(self.target_sample_rate)
             wf.writeframes(final_audio.tobytes())
 
-        file_size = Path(self.output_path).stat().st_size
-        duration = len(final_audio) / (self.target_sample_rate * self.channels)
+        temp_size = Path(temp_wav).stat().st_size
+
+        # Compress with ffmpeg
+        print(f"Compressing with ffmpeg (96 kbps Opus)...", file=sys.stderr)
+        final_path = self._compress_audio(temp_wav, self.output_path)
+
+        # Clean up temp file
+        Path(temp_wav).unlink()
+
+        file_size = Path(final_path).stat().st_size
+        compression_ratio = (1 - file_size / temp_size) * 100
 
         print(f"Audio saved!", file=sys.stderr)
-        print(f"  File size: {file_size / 1024 / 1024:.2f} MB", file=sys.stderr)
+        print(f"  File: {Path(final_path).name}", file=sys.stderr)
+        print(f"  Size: {file_size / 1024 / 1024:.2f} MB (was {temp_size / 1024 / 1024:.2f} MB, {compression_ratio:.1f}% smaller)", file=sys.stderr)
         print(f"  Duration: {duration:.2f} seconds", file=sys.stderr)
         print(f"  Sample rate: {self.target_sample_rate} Hz", file=sys.stderr)
+
+        # Update output path for caller and store globally for main()
+        self.output_path = final_path
+        global _final_output_path, _recording_duration
+        _final_output_path = final_path
+        _recording_duration = duration
+
+    def _compress_audio(self, input_path, output_path):
+        """Compress audio using ffmpeg to Opus format."""
+        import subprocess
+
+        # Change extension to .opus
+        opus_path = str(Path(output_path).with_suffix('.opus'))
+
+        # Use Opus codec at 96 kbps (excellent quality for speech, ~12x smaller than WAV)
+        # Opus is better than MP3 for speech and produces smaller files
+        cmd = [
+            'ffmpeg',
+            '-i', input_path,
+            '-c:a', 'libopus',
+            '-b:a', '96k',
+            '-vbr', 'on',  # Variable bitrate for better quality
+            '-application', 'voip',  # Optimized for speech
+            '-y',  # Overwrite output
+            '-loglevel', 'error',  # Only show errors
+            opus_path
+        ]
+
+        try:
+            result = subprocess.run(cmd, check=True, capture_output=True)
+            return opus_path
+        except subprocess.CalledProcessError as e:
+            print(f"Warning: ffmpeg compression failed: {e.stderr.decode()}", file=sys.stderr)
+            print(f"Falling back to WAV format...", file=sys.stderr)
+            # If ffmpeg fails, just copy the temp WAV to output
+            import shutil
+            shutil.copy(input_path, output_path)
+            return output_path
+
+    def _enhance_microphone(self, audio_data, sample_rate):
+        """
+        Apply noise reduction and enhancement to microphone audio.
+
+        Techniques:
+        1. High-pass filter (80 Hz) - Remove low-frequency rumble
+        2. Noise gate - Reduce background noise between speech
+        3. Gentle compression - Even out volume levels
+        """
+        # Convert to float for processing
+        audio_float = audio_data.astype(np.float32) / 32768.0
+
+        # Handle stereo by processing each channel
+        if len(audio_float) % 2 == 0 and self.channels == 2:
+            # Reshape to stereo
+            audio_stereo = audio_float.reshape(-1, 2)
+            left = audio_stereo[:, 0]
+            right = audio_stereo[:, 1]
+
+            # Process each channel
+            left_processed = self._process_channel(left, sample_rate)
+            right_processed = self._process_channel(right, sample_rate)
+
+            # Recombine
+            audio_processed = np.column_stack((left_processed, right_processed)).flatten()
+        else:
+            # Mono
+            audio_processed = self._process_channel(audio_float, sample_rate)
+
+        # Convert back to int16
+        return (audio_processed * 32767.0).astype(np.int16)
+
+    def _process_channel(self, channel_data, sample_rate):
+        """Process a single audio channel with noise reduction."""
+
+        # 1. High-pass filter to remove rumble (< 80 Hz)
+        # Using a 4th order Butterworth filter
+        from scipy.signal import butter, filtfilt
+
+        nyquist = sample_rate / 2
+        cutoff = 80 / nyquist  # 80 Hz cutoff
+
+        if cutoff < 1.0:  # Valid filter range
+            b, a = butter(4, cutoff, btype='high')
+            channel_data = filtfilt(b, a, channel_data)
+
+        # 2. Noise gate - Reduce quiet background noise (GENTLE)
+        # Calculate threshold based on signal statistics
+        rms = np.sqrt(np.mean(channel_data ** 2))
+        threshold = rms * 0.08  # Gate opens at 8% of average RMS (was 10% - more lenient now)
+
+        # Apply soft gate (gradual attenuation instead of hard cut)
+        gate_ratio = 2.0  # Reduce by 2x below threshold (was 3x - less aggressive)
+        mask = np.abs(channel_data) < threshold
+        channel_data[mask] = channel_data[mask] / gate_ratio
+
+        # 3. Very gentle compression - Even out volume levels
+        # Compress signals above -12 dB with ratio 1.5:1 (was 2:1 - more natural now)
+        compression_threshold = 0.25  # -12 dB
+        compression_ratio = 1.5  # Gentler compression
+
+        abs_data = np.abs(channel_data)
+        above_threshold = abs_data > compression_threshold
+
+        # Apply compression
+        compressed = channel_data.copy()
+        compressed[above_threshold] = np.sign(channel_data[above_threshold]) * (
+            compression_threshold +
+            (abs_data[above_threshold] - compression_threshold) / compression_ratio
+        )
+
+        # 4. Apply makeup gain to boost overall volume
+        # Boost by 1.5x (3.5 dB) to compensate for processing losses
+        compressed = compressed * 1.5
+
+        # 5. Normalize to prevent clipping
+        max_val = np.max(np.abs(compressed))
+        if max_val > 0.95:
+            compressed = compressed * (0.95 / max_val)
+
+        return compressed
 
     def _resample(self, audio_data, original_rate, target_rate):
         """Resample audio using scipy."""
@@ -327,6 +473,14 @@ def main():
         sys.exit(1)
     finally:
         recorder.cleanup()
+
+        # Output recording info as JSON for Electron to capture
+        if _final_output_path:
+            recording_info = {
+                "audioPath": str(_final_output_path),
+                "duration": _recording_duration
+            }
+            print(json.dumps(recording_info))  # To stdout for Electron
 
 
 if __name__ == "__main__":
