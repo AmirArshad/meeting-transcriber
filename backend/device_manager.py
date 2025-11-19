@@ -28,6 +28,7 @@ class DeviceManager:
     def list_all_devices(self) -> Dict[str, List[Dict[str, Any]]]:
         """
         Enumerate all audio devices and categorize them.
+        Filters duplicates and system virtual devices.
 
         Returns:
             Dictionary with 'input_devices', 'output_devices', and 'loopback_devices'
@@ -35,16 +36,32 @@ class DeviceManager:
         input_devices = []
         output_devices = []
         loopback_devices = []
+        
+        # Track seen devices to remove duplicates
+        # Map name -> device_data
+        seen_inputs = {}
+        seen_outputs = {}
+        seen_loopbacks = {}
 
         device_count = self.pa.get_device_count()
 
         for i in range(device_count):
             try:
                 device_info = self.pa.get_device_info_by_index(i)
+                name = device_info.get("name", "Unknown")
+                
+                # Filter out system mappers/drivers which are usually duplicates
+                # Check if name contains blocked terms (handles "[Loopback]" suffix)
+                if any(blocked in name for blocked in [
+                    "Microsoft Sound Mapper", 
+                    "Primary Sound Capture Driver", 
+                    "Primary Sound Driver"
+                ]):
+                    continue
 
                 device_data = {
                     "id": i,
-                    "name": device_info.get("name", "Unknown"),
+                    "name": name,
                     "channels": device_info.get("maxInputChannels", 0),
                     "sample_rate": int(device_info.get("defaultSampleRate", 44100)),
                     "host_api": self.pa.get_host_api_info_by_index(
@@ -56,16 +73,44 @@ class DeviceManager:
                 is_loopback = device_info.get("isLoopbackDevice", False)
 
                 if is_loopback:
-                    loopback_devices.append(device_data)
+                    # For loopback, we want unique names
+                    if name not in seen_loopbacks:
+                        seen_loopbacks[name] = device_data
+                    else:
+                        # If duplicate, keep the one with higher sample rate
+                        if device_data["sample_rate"] > seen_loopbacks[name]["sample_rate"]:
+                            seen_loopbacks[name] = device_data
+                            
                 elif device_info.get("maxInputChannels", 0) > 0:
-                    input_devices.append(device_data)
+                    # For inputs, we want unique names
+                    # MME is usually the most compatible host API on Windows, but WASAPI is better quality
+                    # For now, we'll just deduplicate by name and prefer higher sample rate
+                    if name not in seen_inputs:
+                        seen_inputs[name] = device_data
+                    else:
+                        if device_data["sample_rate"] > seen_inputs[name]["sample_rate"]:
+                            seen_inputs[name] = device_data
+                            
                 elif device_info.get("maxOutputChannels", 0) > 0:
-                    # Store output devices for reference
-                    output_devices.append(device_data)
+                    if name not in seen_outputs:
+                        seen_outputs[name] = device_data
+                    else:
+                        if device_data["sample_rate"] > seen_outputs[name]["sample_rate"]:
+                            seen_outputs[name] = device_data
 
             except Exception as e:
                 print(f"Warning: Could not read device {i}: {e}", file=sys.stderr)
                 continue
+        
+        # Convert dict values back to lists
+        input_devices = list(seen_inputs.values())
+        output_devices = list(seen_outputs.values())
+        loopback_devices = list(seen_loopbacks.values())
+        
+        # Sort by name for cleaner UI
+        input_devices.sort(key=lambda x: x['name'])
+        output_devices.sort(key=lambda x: x['name'])
+        loopback_devices.sort(key=lambda x: x['name'])
 
         return {
             "input_devices": input_devices,
