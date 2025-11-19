@@ -117,12 +117,16 @@ ipcMain.handle('start-recording', async (event, options) => {
   return new Promise((resolve, reject) => {
     const { micId, loopbackId } = options;
 
+    // Note: audio_recorder.py will compress and save as .opus, not .wav
+    // But we pass .wav as the base path - the recorder will change extension
+    const outputPath = path.join(__dirname, '../recordings/temp.wav');
+
     // Start Python recording process
     pythonProcess = spawn('python', [
       path.join(__dirname, '../backend/audio_recorder.py'),
       '--mic', micId.toString(),
       '--loopback', loopbackId.toString(),
-      '--output', path.join(__dirname, '../recordings/temp.wav')
+      '--output', outputPath
     ]);
 
     pythonProcess.stdout.on('data', (data) => {
@@ -131,7 +135,7 @@ ipcMain.handle('start-recording', async (event, options) => {
     });
 
     pythonProcess.stderr.on('data', (data) => {
-      console.error(`Python error: ${data}`);
+      console.log(`Python status: ${data}`);
     });
 
     pythonProcess.on('close', (code) => {
@@ -153,10 +157,17 @@ ipcMain.handle('start-recording', async (event, options) => {
 ipcMain.handle('stop-recording', async () => {
   return new Promise((resolve) => {
     if (pythonProcess) {
-      pythonProcess.kill('SIGTERM');
-      pythonProcess = null;
+      // Wait for process to close (which happens after it saves the file)
+      pythonProcess.on('close', () => {
+        pythonProcess = null;
+        resolve({ success: true });
+      });
+
+      // Send signal to stop via stdin (SIGTERM kills instantly on Windows)
+      pythonProcess.stdin.write('stop\n');
+    } else {
+      resolve({ success: true });
     }
-    resolve({ success: true });
   });
 });
 
@@ -165,7 +176,17 @@ ipcMain.handle('stop-recording', async () => {
  */
 ipcMain.handle('transcribe-audio', async (event, options) => {
   return new Promise((resolve, reject) => {
-    const { audioFile, language, modelSize } = options;
+    let { audioFile, language, modelSize } = options;
+
+    // Resolve relative paths and handle .opus extension
+    if (!path.isAbsolute(audioFile)) {
+      audioFile = path.join(__dirname, audioFile);
+    }
+
+    // The recorder saves as .opus, so if we get temp.wav, use temp.opus instead
+    if (audioFile.endsWith('temp.wav')) {
+      audioFile = audioFile.replace('temp.wav', 'temp.opus');
+    }
 
     const python = spawn('python', [
       path.join(__dirname, '../backend/transcriber.py'),
@@ -198,6 +219,134 @@ ipcMain.handle('transcribe-audio', async (event, options) => {
         }
       } else {
         reject(new Error(`Transcription failed: ${errorOutput}`));
+      }
+    });
+  });
+});
+
+/**
+ * List all meetings
+ */
+ipcMain.handle('list-meetings', async () => {
+  return new Promise((resolve, reject) => {
+    const python = spawn('python', [
+      path.join(__dirname, '../backend/meeting_manager.py'),
+      'list'
+    ]);
+
+    let output = '';
+
+    python.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    python.on('close', (code) => {
+      if (code === 0) {
+        try {
+          const meetings = JSON.parse(output);
+          resolve(meetings);
+        } catch (e) {
+          reject(new Error(`Failed to parse meetings: ${e.message}`));
+        }
+      } else {
+        reject(new Error('Failed to list meetings'));
+      }
+    });
+  });
+});
+
+/**
+ * Get a single meeting
+ */
+ipcMain.handle('get-meeting', async (event, meetingId) => {
+  return new Promise((resolve, reject) => {
+    const python = spawn('python', [
+      path.join(__dirname, '../backend/meeting_manager.py'),
+      'get',
+      meetingId
+    ]);
+
+    let output = '';
+
+    python.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    python.on('close', (code) => {
+      if (code === 0) {
+        try {
+          const meeting = JSON.parse(output);
+          resolve(meeting);
+        } catch (e) {
+          reject(new Error(`Failed to parse meeting: ${e.message}`));
+        }
+      } else {
+        reject(new Error('Meeting not found'));
+      }
+    });
+  });
+});
+
+/**
+ * Delete a meeting
+ */
+ipcMain.handle('delete-meeting', async (event, meetingId) => {
+  return new Promise((resolve, reject) => {
+    const python = spawn('python', [
+      path.join(__dirname, '../backend/meeting_manager.py'),
+      'delete',
+      meetingId
+    ]);
+
+    python.on('close', (code) => {
+      if (code === 0) {
+        resolve({ success: true });
+      } else {
+        reject(new Error('Failed to delete meeting'));
+      }
+    });
+  });
+});
+
+/**
+ * Add a meeting (called after transcription)
+ */
+ipcMain.handle('add-meeting', async (event, meetingData) => {
+  return new Promise((resolve, reject) => {
+    const { audioPath, transcriptPath, duration, language, model, title } = meetingData;
+
+    const args = [
+      path.join(__dirname, '../backend/meeting_manager.py'),
+      'add',
+      '--audio', audioPath,
+      '--transcript', transcriptPath,
+      '--duration', duration.toString(),
+      '--language', language,
+      '--model', model
+    ];
+
+    if (title) {
+      args.push('--title', title);
+    }
+
+    const python = spawn('python', args);
+
+    let output = '';
+
+    python.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    python.on('close', (code) => {
+      if (code === 0) {
+        try {
+          const meeting = JSON.parse(output);
+          resolve(meeting);
+        } catch (e) {
+          reject(new Error(`Failed to parse meeting: ${e.message}`));
+        }
+      } else {
+        reject(new Error('Failed to add meeting'));
       }
     });
   });

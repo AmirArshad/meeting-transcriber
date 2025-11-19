@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Meeting Transcriber</title>
   <link rel="stylesheet" href="styles.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 </head>
 <body>
   <div class="container">
@@ -61,29 +64,42 @@
         </div>
       </section>
 
-      <div class="two-column-layout">
-        <!-- Left Column: Recording & Transcription -->
-        <div class="left-column">
-          <!-- Recording Section -->
+      <!-- Tab Navigation -->
+      <div class="tabs">
+        <button class="tab-btn active" data-tab="record">
+          <span class="tab-icon">⏺</span> Record
+        </button>
+        <button class="tab-btn" data-tab="history">
+          <span class="tab-icon">📚</span> History
+        </button>
+      </div>
+
+      <!-- Tab Content -->
+      <div class="tab-content">
+        <!-- Record Tab -->
+        <div class="tab-pane active" id="record-tab">
           <section class="card recording-section">
             <h2>Current Meeting</h2>
 
-            <div class="recording-status">
-              <div class="status-indicator" id="status-indicator"></div>
-              <span id="status-text">Ready to record</span>
-            </div>
+            <div class="recording-controls-row">
+              <div class="controls">
+                <button id="start-btn" class="btn btn-primary">
+                  <span class="btn-icon">⏺</span>
+                  Start Recording
+                </button>
+                <button id="stop-btn" class="btn btn-danger" disabled>
+                  <span class="btn-icon">⏹</span>
+                  Stop & Transcribe
+                </button>
+              </div>
 
-            <div class="timer" id="timer">00:00</div>
-
-            <div class="controls">
-              <button id="start-btn" class="btn btn-primary btn-large">
-                <span class="btn-icon">⏺</span>
-                Start Recording
-              </button>
-              <button id="stop-btn" class="btn btn-danger btn-large" disabled>
-                <span class="btn-icon">⏹</span>
-                Stop & Transcribe
-              </button>
+              <div class="recording-info">
+                <div class="recording-status">
+                  <div class="status-indicator" id="status-indicator"></div>
+                  <span id="status-text">Ready</span>
+                </div>
+                <div class="timer" id="timer">00:00</div>
+              </div>
             </div>
 
             <!-- Current Transcript -->
@@ -104,41 +120,62 @@
           </section>
         </div>
 
-        <!-- Right Column: Meeting History -->
-        <div class="right-column">
-          <section class="card history-section">
-            <div class="history-header">
-              <h2>Meeting History</h2>
-              <button id="refresh-history" class="btn btn-small">Refresh</button>
-            </div>
+        <!-- History Tab -->
+        <div class="tab-pane" id="history-tab">
+          <div class="history-layout">
+            <!-- Sidebar: Meeting List -->
+            <aside class="history-sidebar">
+              <div class="sidebar-header">
+                <h3>Meetings</h3>
+                <button id="refresh-history" class="btn btn-icon-only" title="Refresh">
+                  <span class="btn-icon">🔄</span>
+                </button>
+              </div>
 
-            <div class="meeting-list" id="meeting-list">
-              <p class="placeholder">No meetings recorded yet</p>
-            </div>
-          </section>
+              <div class="meeting-list" id="meeting-list">
+                <p class="placeholder">No meetings recorded yet</p>
+              </div>
+            </aside>
 
-          <!-- Selected Meeting Details -->
-          <section class="card meeting-details" id="meeting-details" style="display:none;">
-            <h3 id="meeting-title">Meeting Details</h3>
+            <!-- Main Content: Meeting Details -->
+            <main class="history-content">
+              <div id="meeting-details-empty" class="empty-state">
+                <p class="placeholder">Select a meeting from the list to view details</p>
+              </div>
 
-            <div class="meeting-meta">
-              <p id="meeting-date"></p>
-              <p id="meeting-duration"></p>
-            </div>
+              <div class="card meeting-details" id="meeting-details" style="display:none;">
+                <div class="meeting-header">
+                  <div class="meeting-title-section">
+                    <h2 id="meeting-title">Meeting Details</h2>
+                    <div class="meeting-meta">
+                      <span id="meeting-date"></span>
+                      <span class="meta-separator">•</span>
+                      <span id="meeting-duration"></span>
+                    </div>
+                  </div>
+                  <button id="delete-meeting" class="btn btn-danger btn-icon-only" title="Delete">
+                    <span class="btn-icon">🗑</span>
+                  </button>
+                </div>
 
-            <div class="audio-player">
-              <audio id="audio-player" controls style="width: 100%">
-                <source id="audio-source" type="audio/wav">
-                Your browser does not support audio playback.
-              </audio>
-            </div>
+                <div class="audio-player-section">
+                  <audio id="audio-player" controls style="width: 100%">
+                    Your browser does not support audio playback.
+                  </audio>
+                </div>
 
-            <div class="meeting-transcript" id="meeting-transcript"></div>
-
-            <div class="meeting-actions">
-              <button id="delete-meeting" class="btn btn-danger btn-small">Delete</button>
-            </div>
-          </section>
+                <div class="transcript-section">
+                  <div class="transcript-header-row">
+                    <h3>Transcript</h3>
+                    <button id="copy-transcript-btn" class="btn btn-small">
+                      <span class="btn-icon">📋</span> Copy
+                    </button>
+                  </div>
+                  <div class="meeting-transcript" id="meeting-transcript"></div>
+                </div>
+              </div>
+            </main>
+          </div>
         </div>
       </div>
     </main>

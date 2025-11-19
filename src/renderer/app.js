@@ -73,12 +73,13 @@ async function loadAudioDevices() {
 // Load meeting history
 async function loadMeetingHistory() {
   try {
-    // TODO: Implement this with IPC call to main process
-    // For now, show placeholder
-    meetings = [];
+    meetings = await window.electronAPI.listMeetings();
     renderMeetingList();
+    console.log(`Loaded ${meetings.length} meetings`);
   } catch (error) {
     console.error('Failed to load meeting history:', error);
+    meetings = [];
+    renderMeetingList();
   }
 }
 
@@ -120,19 +121,28 @@ function selectMeeting(meetingId) {
 
   // Show meeting details
   document.getElementById('meeting-title').textContent = meeting.title;
-  document.getElementById('meeting-date').textContent = `Date: ${formatDate(meeting.date)}`;
-  document.getElementById('meeting-duration').textContent = `Duration: ${meeting.duration}`;
+  document.getElementById('meeting-date').textContent = formatDate(meeting.date);
+  document.getElementById('meeting-duration').textContent = meeting.duration;
 
-  // Load audio
-  const audioSource = document.getElementById('audio-source');
-  audioSource.src = meeting.audioPath;
-  document.getElementById('audio-player').load();
+  // Load audio - Convert path to file:// URL for Electron
+  const audioPlayer = document.getElementById('audio-player');
+  const audioPath = meeting.audioPath.replace(/\\/g, '/'); // Normalize path separators
+
+  // For Opus files, we need to use the file:// protocol
+  if (audioPath.startsWith('/') || audioPath.startsWith('C:') || audioPath.startsWith('D:')) {
+    audioPlayer.src = 'file:///' + audioPath.replace(/^\//, '');
+  } else {
+    audioPlayer.src = audioPath;
+  }
+
+  audioPlayer.load();
 
   // Load transcript
   document.getElementById('meeting-transcript').textContent = meeting.transcript || 'No transcript available';
 
-  // Show details panel
-  meetingDetails.style.display = 'block';
+  // Show details panel, hide empty state
+  document.getElementById('meeting-details-empty').style.display = 'none';
+  meetingDetails.style.display = 'flex';
 }
 
 // Setup event listeners
@@ -144,6 +154,12 @@ function setupEventListeners() {
   copyBtn.addEventListener('click', copyTranscript);
   saveBtn.addEventListener('click', saveTranscript);
   deleteMeeting.addEventListener('click', deleteMeetingHandler);
+
+  // Copy transcript from meeting details
+  const copyTranscriptBtn = document.getElementById('copy-transcript-btn');
+  if (copyTranscriptBtn) {
+    copyTranscriptBtn.addEventListener('click', copyMeetingTranscript);
+  }
 
   // Listen for progress updates
   window.electronAPI.onRecordingProgress((data) => {
@@ -251,6 +267,22 @@ async function transcribeAudio() {
     addLog('Transcription complete!');
     addLog(`Word count: ${result.text.split(' ').length}`);
 
+    // Save meeting to history
+    try {
+      addLog('Saving meeting to history...');
+      await window.electronAPI.addMeeting({
+        audioPath: result.audioPath || currentAudioFile,
+        transcriptPath: result.output_file,
+        duration: result.duration || 0,
+        language: language,
+        model: modelSize
+      });
+      addLog('Meeting saved!');
+    } catch (saveError) {
+      console.error('Failed to save meeting:', saveError);
+      addLog(`Warning: Could not save to history: ${saveError.message}`, 'warning');
+    }
+
     // Reload meeting history
     await loadMeetingHistory();
 
@@ -262,11 +294,33 @@ async function transcribeAudio() {
   }
 }
 
-// Copy transcript to clipboard
+// Copy transcript to clipboard (current recording)
 function copyTranscript() {
   const text = transcriptOutput.textContent;
   navigator.clipboard.writeText(text);
   addLog('Transcript copied to clipboard!');
+}
+
+// Copy meeting transcript to clipboard
+function copyMeetingTranscript() {
+  const transcriptEl = document.getElementById('meeting-transcript');
+  const text = transcriptEl.textContent;
+
+  navigator.clipboard.writeText(text).then(() => {
+    // Visual feedback
+    const btn = document.getElementById('copy-transcript-btn');
+    const originalHTML = btn.innerHTML;
+    btn.innerHTML = '<span class="btn-icon">✓</span> Copied!';
+    btn.disabled = true;
+
+    setTimeout(() => {
+      btn.innerHTML = originalHTML;
+      btn.disabled = false;
+    }, 2000);
+  }).catch(err => {
+    console.error('Failed to copy:', err);
+    alert('Failed to copy transcript to clipboard');
+  });
 }
 
 // Save transcript
@@ -276,12 +330,31 @@ function saveTranscript() {
 }
 
 // Delete meeting
-function deleteMeetingHandler() {
+async function deleteMeetingHandler() {
   if (!currentMeetingId) return;
 
-  if (confirm('Are you sure you want to delete this meeting?')) {
-    // TODO: Implement via IPC
-    addLog('Delete feature coming soon!');
+  const meeting = meetings.find(m => m.id === currentMeetingId);
+  if (!meeting) return;
+
+  if (confirm(`Are you sure you want to delete "${meeting.title}"?`)) {
+    try {
+      addLog(`Deleting meeting: ${meeting.title}...`);
+      await window.electronAPI.deleteMeeting(currentMeetingId);
+
+      // Hide details panel, show empty state
+      meetingDetails.style.display = 'none';
+      document.getElementById('meeting-details-empty').style.display = 'flex';
+      currentMeetingId = null;
+
+      // Reload list
+      await loadMeetingHistory();
+
+      addLog('Meeting deleted successfully!');
+    } catch (error) {
+      console.error('Failed to delete meeting:', error);
+      addLog(`Error: Failed to delete meeting`, 'error');
+      alert('Failed to delete meeting: ' + error.message);
+    }
   }
 }
 
@@ -348,5 +421,31 @@ function formatDate(dateString) {
   });
 }
 
+// Tab switching
+function setupTabs() {
+  const tabButtons = document.querySelectorAll('.tab-btn');
+  const tabPanes = document.querySelectorAll('.tab-pane');
+
+  tabButtons.forEach(button => {
+    button.addEventListener('click', () => {
+      const targetTab = button.dataset.tab;
+
+      // Update active button
+      tabButtons.forEach(btn => btn.classList.remove('active'));
+      button.classList.add('active');
+
+      // Update active pane
+      tabPanes.forEach(pane => {
+        if (pane.id === `${targetTab}-tab`) {
+          pane.classList.add('active');
+        } else {
+          pane.classList.remove('active');
+        }
+      });
+    });
+  });
+}
+
 // Start the app
 init();
+setupTabs();
