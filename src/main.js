@@ -12,22 +12,35 @@ const path = require('path');
 const { spawn } = require('child_process');
 const fs = require('fs');
 
-// Set a custom userData path to avoid permission errors with system cache
-// This keeps all cache/config in the project folder instead of AppData
-// Set a custom userData path
-// In production, we must store outside app.asar (in resources)
-// In development, we store in project root
-const userDataPath = app.isPackaged
-  ? path.join(process.resourcesPath, 'userData')
-  : path.join(__dirname, '../userData');
-
-if (!fs.existsSync(userDataPath)) {
-  fs.mkdirSync(userDataPath);
-}
-app.setPath('userData', userDataPath);
+// Use Electron's default userData path, which handles packaging correctly
+// This is typically: C:\Users\<username>\AppData\Roaming\Meeting Transcriber
+// No need to set a custom path - Electron manages this properly
 
 let mainWindow;
 let pythonProcess;
+let activeProcesses = []; // Track all spawned Python processes for cleanup
+
+// ============================================================================
+// Python Process Management
+// ============================================================================
+
+/**
+ * Helper to spawn and track Python processes for cleanup
+ */
+function spawnTrackedPython(args, options = {}) {
+  const proc = spawn(pythonConfig.pythonExe, args, options);
+  activeProcesses.push(proc);
+
+  // Auto-remove from tracking when process exits
+  proc.on('close', () => {
+    const index = activeProcesses.indexOf(proc);
+    if (index > -1) {
+      activeProcesses.splice(index, 1);
+    }
+  });
+
+  return proc;
+}
 
 // ============================================================================
 // Python Runtime Configuration
@@ -119,9 +132,23 @@ app.on('window-all-closed', () => {
 
 // Clean up on quit
 app.on('before-quit', () => {
+  // Kill the main recording process
   if (pythonProcess) {
     pythonProcess.kill();
   }
+
+  // Kill all other spawned Python processes
+  activeProcesses.forEach(proc => {
+    try {
+      if (!proc.killed) {
+        proc.kill();
+      }
+    } catch (e) {
+      // Process might already be dead, ignore
+    }
+  });
+
+  activeProcesses = [];
 });
 
 // ============================================================================
@@ -133,7 +160,7 @@ app.on('before-quit', () => {
  */
 ipcMain.handle('get-audio-devices', async () => {
   return new Promise((resolve, reject) => {
-    const python = spawn(pythonConfig.pythonExe, [
+    const python = spawnTrackedPython([
       path.join(pythonConfig.backendPath, 'device_manager.py')
     ]);
 
@@ -177,10 +204,15 @@ ipcMain.handle('start-recording', async (event, options) => {
 
     // Note: audio_recorder.py will compress and save as .opus, not .wav
     // But we pass .wav as the base path - the recorder will change extension
-    const outputPath = path.join(__dirname, '../recordings/temp.wav');
+    // Use userData path which is always writable (in AppData/Roaming)
+    const recordingsDir = path.join(app.getPath('userData'), 'recordings');
+    if (!fs.existsSync(recordingsDir)) {
+      fs.mkdirSync(recordingsDir, { recursive: true });
+    }
+    const outputPath = path.join(recordingsDir, 'temp.wav');
 
     // Start Python recording process
-    pythonProcess = spawn(pythonConfig.pythonExe, [
+    pythonProcess = spawnTrackedPython([
       path.join(pythonConfig.backendPath, 'audio_recorder.py'),
       '--mic', micId.toString(),
       '--loopback', loopbackId.toString(),
@@ -215,14 +247,17 @@ ipcMain.handle('start-recording', async (event, options) => {
 ipcMain.handle('stop-recording', async () => {
   return new Promise((resolve) => {
     if (pythonProcess) {
-      // Wait for process to close (which happens after it saves the file)
+      // Clean up when process closes
       pythonProcess.on('close', () => {
         pythonProcess = null;
-        resolve({ success: true });
       });
 
       // Send signal to stop via stdin (SIGTERM kills instantly on Windows)
       pythonProcess.stdin.write('stop\n');
+
+      // Resolve immediately so UI can stop the timer
+      // The file saving happens in the background
+      resolve({ success: true });
     } else {
       resolve({ success: true });
     }
@@ -238,7 +273,9 @@ ipcMain.handle('transcribe-audio', async (event, options) => {
 
     // Resolve relative paths and handle .opus extension
     if (!path.isAbsolute(audioFile)) {
-      audioFile = path.join(__dirname, audioFile);
+      // Use userData recordings directory
+      const recordingsDir = path.join(app.getPath('userData'), 'recordings');
+      audioFile = path.join(recordingsDir, path.basename(audioFile));
     }
 
     // The recorder saves as .opus, so if we get temp.wav, use temp.opus instead
@@ -246,7 +283,7 @@ ipcMain.handle('transcribe-audio', async (event, options) => {
       audioFile = audioFile.replace('temp.wav', 'temp.opus');
     }
 
-    const python = spawn(pythonConfig.pythonExe, [
+    const python = spawnTrackedPython([
       path.join(pythonConfig.backendPath, 'transcriber.py'),
       '--file', audioFile,
       '--language', language || 'en',
@@ -287,7 +324,7 @@ ipcMain.handle('transcribe-audio', async (event, options) => {
  */
 ipcMain.handle('list-meetings', async () => {
   return new Promise((resolve, reject) => {
-    const python = spawn(pythonConfig.pythonExe, [
+    const python = spawnTrackedPython([
       path.join(pythonConfig.backendPath, 'meeting_manager.py'),
       'list'
     ]);
@@ -318,7 +355,7 @@ ipcMain.handle('list-meetings', async () => {
  */
 ipcMain.handle('get-meeting', async (event, meetingId) => {
   return new Promise((resolve, reject) => {
-    const python = spawn(pythonConfig.pythonExe, [
+    const python = spawnTrackedPython([
       path.join(pythonConfig.backendPath, 'meeting_manager.py'),
       'get',
       meetingId
@@ -350,7 +387,7 @@ ipcMain.handle('get-meeting', async (event, meetingId) => {
  */
 ipcMain.handle('delete-meeting', async (event, meetingId) => {
   return new Promise((resolve, reject) => {
-    const python = spawn(pythonConfig.pythonExe, [
+    const python = spawnTrackedPython([
       path.join(pythonConfig.backendPath, 'meeting_manager.py'),
       'delete',
       meetingId
@@ -387,7 +424,7 @@ ipcMain.handle('add-meeting', async (event, meetingData) => {
       args.push('--title', title);
     }
 
-    const python = spawn(pythonConfig.pythonExe, args);
+    const python = spawnTrackedPython(args);
 
     let output = '';
 
@@ -415,7 +452,7 @@ ipcMain.handle('add-meeting', async (event, meetingData) => {
  */
 ipcMain.handle('check-gpu', async () => {
   return new Promise((resolve) => {
-    const python = spawn(pythonConfig.pythonExe, [
+    const python = spawnTrackedPython([
       '-c',
       'import subprocess; result = subprocess.run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"], capture_output=True, text=True); print(result.stdout.strip() if result.returncode == 0 else "None")'
     ]);
@@ -441,7 +478,7 @@ ipcMain.handle('check-gpu', async () => {
  */
 ipcMain.handle('check-cuda', async () => {
   return new Promise((resolve) => {
-    const python = spawn(pythonConfig.pythonExe, [
+    const python = spawnTrackedPython([
       '-c',
       'try:\n    import torch\n    print("cuda_available:" + str(torch.cuda.is_available()))\n    if torch.cuda.is_available():\n        print("cuda_version:" + torch.version.cuda)\nexcept ImportError:\n    print("cuda_available:False")'
     ]);
@@ -476,7 +513,7 @@ ipcMain.handle('install-gpu', async () => {
       'https://download.pytorch.org/whl/cu121'
     ];
 
-    const python = spawn(pythonConfig.pythonExe, [
+    const python = spawnTrackedPython([
       '-m',
       'pip',
       'install',
@@ -505,7 +542,7 @@ ipcMain.handle('install-gpu', async () => {
         // Install CUDA libraries
         const cudaPackages = ['nvidia-cublas-cu12', 'nvidia-cudnn-cu12'];
 
-        const cudaProcess = spawn(pythonConfig.pythonExe, [
+        const cudaProcess = spawnTrackedPython([
           '-m',
           'pip',
           'install',
@@ -542,7 +579,7 @@ ipcMain.handle('uninstall-gpu', async () => {
   return new Promise((resolve, reject) => {
     const packages = ['torch', 'torchvision', 'torchaudio', 'nvidia-cublas-cu12', 'nvidia-cudnn-cu12'];
 
-    const python = spawn(pythonConfig.pythonExe, [
+    const python = spawnTrackedPython([
       '-m',
       'pip',
       'uninstall',
@@ -565,7 +602,7 @@ ipcMain.handle('uninstall-gpu', async () => {
  */
 ipcMain.handle('get-system-info', async () => {
   return new Promise((resolve) => {
-    const python = spawn(pythonConfig.pythonExe, ['--version']);
+    const python = spawnTrackedPython(['--version']);
 
     let pythonVersion = '';
 

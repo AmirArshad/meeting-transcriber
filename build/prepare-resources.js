@@ -3,6 +3,7 @@ const path = require('path');
 const https = require('https');
 const { execSync } = require('child_process');
 const { pipeline } = require('stream/promises');
+const AdmZip = require('adm-zip');
 
 const PYTHON_VERSION = '3.11.9';
 const PYTHON_EMBED_URL = `https://www.python.org/ftp/python/${PYTHON_VERSION}/python-${PYTHON_VERSION}-embed-amd64.zip`;
@@ -81,11 +82,14 @@ function extractZip(zipPath, targetDir) {
   console.log(`Extracting: ${path.basename(zipPath)}`);
 
   try {
-    // Use PowerShell's Expand-Archive on Windows
-    execSync(
-      `powershell -command "Expand-Archive -Path '${zipPath}' -DestinationPath '${targetDir}' -Force"`,
-      { stdio: 'inherit' }
-    );
+    // Ensure target directory exists
+    if (!fs.existsSync(targetDir)) {
+      fs.mkdirSync(targetDir, { recursive: true });
+    }
+
+    // Use adm-zip for cross-platform extraction
+    const zip = new AdmZip(zipPath);
+    zip.extractAllTo(targetDir, true);
     console.log('  Extraction complete!\n');
   } catch (error) {
     throw new Error(`Failed to extract ${zipPath}: ${error.message}`);
