@@ -7,7 +7,7 @@
  * - Handles application lifecycle
  */
 
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, dialog } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -19,6 +19,8 @@ const fs = require('fs');
 let mainWindow;
 let pythonProcess;
 let activeProcesses = []; // Track all spawned Python processes for cleanup
+let tray = null;
+let isQuitting = false;
 
 // ============================================================================
 // Python Process Management
@@ -85,6 +87,54 @@ if (!app.isPackaged) {
 
 console.log('Python Configuration:', pythonConfig);
 
+// Create the system tray
+function createTray() {
+  // In production, icon is at the root of resources
+  // In development, icon is in build folder
+  const iconPath = app.isPackaged
+    ? path.join(process.resourcesPath, 'icon.ico')
+    : path.join(__dirname, '../build/icon.ico');
+
+  tray = new Tray(iconPath);
+
+  const contextMenu = Menu.buildFromTemplate([
+    {
+      label: 'Show/Hide Window',
+      click: () => {
+        if (mainWindow.isVisible()) {
+          mainWindow.hide();
+        } else {
+          mainWindow.show();
+          mainWindow.focus();
+        }
+      }
+    },
+    {
+      type: 'separator'
+    },
+    {
+      label: 'Quit',
+      click: () => {
+        isQuitting = true;
+        app.quit();
+      }
+    }
+  ]);
+
+  tray.setToolTip('Meeting Transcriber');
+  tray.setContextMenu(contextMenu);
+
+  // Show/hide window on tray icon click
+  tray.on('click', () => {
+    if (mainWindow.isVisible()) {
+      mainWindow.hide();
+    } else {
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  });
+}
+
 // Create the main application window
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -107,6 +157,34 @@ function createWindow() {
     mainWindow.webContents.openDevTools();
   }
 
+  // Prevent window from closing, minimize to tray instead
+  mainWindow.on('close', (event) => {
+    if (!isQuitting) {
+      event.preventDefault();
+
+      // Show dialog to ask user what they want to do
+      dialog.showMessageBox(mainWindow, {
+        type: 'question',
+        title: 'Minimize to Tray',
+        message: 'Would you like to close the app or minimize it to the system tray?',
+        detail: 'Minimizing to tray keeps the app running in the background.',
+        buttons: ['Minimize to Tray', 'Close App', 'Cancel'],
+        defaultId: 0,
+        cancelId: 2
+      }).then(result => {
+        if (result.response === 0) {
+          // Minimize to tray
+          mainWindow.hide();
+        } else if (result.response === 1) {
+          // Close app
+          isQuitting = true;
+          app.quit();
+        }
+        // Cancel does nothing
+      });
+    }
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
@@ -114,6 +192,7 @@ function createWindow() {
 
 // Initialize app
 app.whenReady().then(() => {
+  createTray();
   createWindow();
 
   app.on('activate', () => {
@@ -123,15 +202,16 @@ app.whenReady().then(() => {
   });
 });
 
-// Quit when all windows are closed
+// Don't quit when all windows are closed (allow running in tray)
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
+  // Keep app running in tray even when window is closed
+  // User must explicitly quit from tray menu
 });
 
 // Clean up on quit
 app.on('before-quit', () => {
+  isQuitting = true;
+
   // Kill the main recording process
   if (pythonProcess) {
     pythonProcess.kill();
@@ -149,6 +229,11 @@ app.on('before-quit', () => {
   });
 
   activeProcesses = [];
+
+  // Clean up tray
+  if (tray) {
+    tray.destroy();
+  }
 });
 
 // ============================================================================
