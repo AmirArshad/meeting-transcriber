@@ -190,10 +190,40 @@ function createWindow() {
   });
 }
 
+/**
+ * Preload Whisper model in background to improve first-time experience
+ * Uses 'small' model by default as it balances quality and speed
+ */
+function preloadWhisperModel() {
+  const modelSize = 'small'; // Default model size
+  console.log(`Preloading Whisper model (${modelSize})...`);
+
+  const preloadProcess = spawnTrackedPython([
+    path.join(pythonConfig.backendPath, 'transcriber.py'),
+    '--preload',
+    '--model', modelSize
+  ]);
+
+  preloadProcess.stderr.on('data', (data) => {
+    console.log(`[Model Preload] ${data.toString().trim()}`);
+  });
+
+  preloadProcess.on('close', (code) => {
+    if (code === 0) {
+      console.log('Whisper model preloaded successfully');
+    } else {
+      console.warn(`Model preload failed with code ${code} (non-critical)`);
+    }
+  });
+}
+
 // Initialize app
 app.whenReady().then(() => {
   createTray();
   createWindow();
+
+  // Preload Whisper model in background to improve first transcription experience
+  preloadWhisperModel();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -310,25 +340,40 @@ ipcMain.handle('start-recording', async (event, options) => {
       '--output', outputPath
     ]);
 
+    let recordingStarted = false;
+
     pythonProcess.stdout.on('data', (data) => {
       // Send progress updates to renderer
       mainWindow.webContents.send('recording-progress', data.toString());
     });
 
     pythonProcess.stderr.on('data', (data) => {
-      console.log(`Python status: ${data}`);
-    });
+      const output = data.toString();
+      console.log(`Python status: ${output}`);
 
-    pythonProcess.on('close', (code) => {
-      if (code === 0) {
-        resolve({ success: true });
-      } else {
-        reject(new Error(`Recording failed with code ${code}`));
+      // Wait for confirmation that recording actually started
+      if (!recordingStarted && output.includes('Recording started!')) {
+        recordingStarted = true;
+        resolve({ success: true, message: 'Recording started' });
       }
     });
 
-    // Immediately resolve to indicate recording started
-    resolve({ success: true, message: 'Recording started' });
+    pythonProcess.on('close', (code) => {
+      if (!recordingStarted) {
+        // Process closed before recording started - this is an error
+        reject(new Error(`Recording failed to start. Process exited with code ${code}`));
+      }
+    });
+
+    // Set a timeout in case Python process hangs
+    setTimeout(() => {
+      if (!recordingStarted) {
+        reject(new Error('Recording failed to start within 5 seconds. Check audio device settings.'));
+        if (pythonProcess && !pythonProcess.killed) {
+          pythonProcess.kill();
+        }
+      }
+    }, 5000);
   });
 });
 

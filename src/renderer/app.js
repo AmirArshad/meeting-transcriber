@@ -303,10 +303,14 @@ async function stopRecording() {
   try {
     addLog('Stopping recording...');
 
+    // Immediately update UI to show we're stopping
+    statusText.textContent = 'Stopping...';
+    stopBtn.disabled = true; // Prevent double-click
+    stopTimer(); // Stop timer immediately
+
     const result = await window.electronAPI.stopRecording();
 
     isRecording = false;
-    stopTimer();
 
     // Update UI
     updateRecordingUI(false);

@@ -153,9 +153,13 @@ See [docs/TRANSCRIPTION_GUIDE.md](docs/TRANSCRIPTION_GUIDE.md) for full list and
   - [GPU Setup](docs/development/SETUP_GPU.md) - Enable CUDA acceleration
   - [Implementation Details](docs/development/INSTALLER_IMPLEMENTATION.md) - Technical overview
 
-- **Future Features:**
+- **Roadmap & Features:**
+  - [Product Roadmap](docs/ROADMAP.md) - Full development roadmap
   - [Speaker Diarization](docs/features/FEATURE_SPEAKER_DIARIZATION.md) - Who said what
   - [Setup Wizard](docs/features/FEATURE_SETUP_WIZARD.md) - Guided first-time setup
+  - [Combined Button](docs/features/FEATURE_COMBINED_BUTTON.md) - Unified recording control
+  - [Audio Visualizer](docs/features/FEATURE_AUDIO_VISUALIZER.md) - Real-time level meters
+  - [Auto-Updater](docs/features/FEATURE_AUTO_UPDATER.md) - Automatic updates from GitHub
 
 ## 🔒 Privacy & Security
 
@@ -185,13 +189,23 @@ This project is licensed under the MIT License - see [LICENSE.txt](LICENSE.txt) 
 
 ## 🗺️ Roadmap
 
+### Completed ✅
 - [x] Core recording and transcription
 - [x] Meeting history with playback
 - [x] GPU acceleration support
 - [x] Professional installer
+- [x] Opus audio compression
+- [x] Model preloading for improved first-time experience
+
+### In Progress 🚧
+- [ ] Combined Start/Stop/Transcribe button (single action UX)
+- [ ] Audio visualizer (real-time waveform during recording)
+- [ ] Auto-updater (GitHub release detection and installation)
+
+### Planned 📋
 - [ ] Speaker diarization (identify who's speaking)
+- [ ] macOS support
 - [ ] Real-time transcription
 - [ ] Export to various formats (SRT, VTT, DOCX)
-- [ ] macOS/Linux support
 
 ---

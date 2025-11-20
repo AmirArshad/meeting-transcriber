@@ -172,6 +172,26 @@ class TranscriberService:
 
         print(f"Loading Whisper model '{self.model_size}'...", file=sys.stderr)
 
+        # Use file locking to prevent race conditions when multiple processes
+        # try to download the model simultaneously (e.g., preload + transcription)
+        import tempfile
+        import filelock
+
+        lock_file = Path(tempfile.gettempdir()) / f"whisper_model_{self.model_size}.lock"
+        lock = filelock.FileLock(lock_file, timeout=300)  # 5 minute timeout
+
+        try:
+            with lock:
+                print(f"Acquired model download lock...", file=sys.stderr)
+                self._load_model_internal()
+        except filelock.Timeout:
+            print(f"Warning: Timeout waiting for model download lock. Proceeding anyway...", file=sys.stderr)
+            self._load_model_internal()
+
+    def _load_model_internal(self):
+        """Internal method to load the model (called with lock held)."""
+        from faster_whisper import WhisperModel
+
         # Determine device and compute type
         device = self.device
         compute_type = self.compute_type
@@ -417,12 +437,30 @@ def main():
     parser.add_argument("--language", default="en", help="Language code (default: en)")
     parser.add_argument("--model", default="base", help="Model size (default: base)")
     parser.add_argument("--json", action="store_true", help="Output results as JSON")
-    
+    parser.add_argument("--preload", action="store_true", help="Preload model and exit (for warming up)")
+
     args = parser.parse_args()
-    
+
+    # Handle preload mode - just load model and exit
+    if args.preload:
+        try:
+            print(f"Preloading {args.model} model...", file=sys.stderr)
+            transcriber = TranscriberService(
+                model_size=args.model,
+                language=args.language,
+                device="auto"
+            )
+            transcriber.load_model()
+            print(f"Model preloaded successfully!", file=sys.stderr)
+            transcriber.cleanup()
+            sys.exit(0)
+        except Exception as e:
+            print(f"Failed to preload model: {e}", file=sys.stderr)
+            sys.exit(1)
+
     # Handle file argument (positional or flag)
     audio_file = args.audio_file or args.file_arg
-    
+
     if not audio_file:
         parser.print_help()
         sys.exit(1)
