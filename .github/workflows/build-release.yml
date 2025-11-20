@@ -1,5 +1,6 @@
 name: Build & Release Installer
 
+# Updated to re-register workflow triggers with GitHub
 on:
   push:
     tags:
