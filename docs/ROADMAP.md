@@ -26,6 +26,7 @@ This document outlines the development roadmap for Meeting Transcriber, organize
 - **Meeting Management** - Browse, search, and replay past meetings
 - **Combined Record Button** - Single action button for seamless recording flow
 - **Audio Visualizer** - Real-time waveform visualization for mic and desktop audio
+- **Auto-Updater** - Automatic update notifications with GitHub integration
 
 ---
 
@@ -33,49 +34,7 @@ This document outlines the development roadmap for Meeting Transcriber, organize
 
 ### User Experience Improvements
 
-#### 1. Auto-Updater
-
-**Status:** Planned
-**Priority:** Medium
-**Description:** Automatic detection and installation of new releases from GitHub
-
-**User Flow:**
-
-1. App checks GitHub releases API on startup
-2. If new version available → Show notification
-3. User clicks "Update" → Downloads in background
-4. Prompt to restart and install on next launch
-
-**Implementation:**
-
-- Use `electron-updater` package (official Electron solution)
-- Integrates with GitHub Releases
-- Supports silent background downloads
-- Code signing required for Windows SmartScreen
-
-**Technical Notes:**
-
-```js
-const { autoUpdater } = require("electron-updater");
-
-autoUpdater.checkForUpdatesAndNotify();
-
-autoUpdater.on("update-available", (info) => {
-  // Show notification to user
-});
-
-autoUpdater.on("update-downloaded", (info) => {
-  // Prompt to restart
-});
-```
-
-**Security Considerations:**
-
-- Verify signature of downloaded updates
-- HTTPS-only downloads
-- Show changelog before installing
-
-**Reference:** [FEATURE_AUTO_UPDATER.md](features/FEATURE_AUTO_UPDATER.md)
+No features currently in development.
 
 ---
 
@@ -83,7 +42,7 @@ autoUpdater.on("update-downloaded", (info) => {
 
 ### Advanced Functionality
 
-#### 4. Speaker Diarization
+#### 1. Speaker Diarization
 
 **Status:** Planned
 **Priority:** Medium
@@ -107,7 +66,7 @@ autoUpdater.on("update-downloaded", (info) => {
 
 ---
 
-#### 5. macOS Support
+#### 2. macOS Support
 
 **Status:** Planned
 **Priority:** Medium
@@ -131,7 +90,7 @@ autoUpdater.on("update-downloaded", (info) => {
 
 ---
 
-#### 6. Real-Time Transcription
+#### 3. Real-Time Transcription
 
 **Status:** Planned
 **Priority:** Low
@@ -152,7 +111,7 @@ autoUpdater.on("update-downloaded", (info) => {
 
 ---
 
-#### 7. Export Formats
+#### 4. Export Formats
 
 **Status:** Planned
 **Priority:** Low
@@ -198,8 +157,8 @@ Have an idea for a new feature?
 
 ## Release Schedule
 
-**Current Version:** 1.2.4
-**Next Release:** 1.3.0 (Q1 2025)
+**Current Version:** 1.3.0
+**Next Release:** 1.4.0 (Q1 2025)
 
 **Versioning:**
 
