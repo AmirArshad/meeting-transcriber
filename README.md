@@ -9,13 +9,12 @@
 
 ## What is this?
 
-Meeting Transcriber is a **privacy-first desktop application** that captures and transcribes your meetings with exceptional audio quality. Unlike cloud-based solutions that record only your microphone, this app captures **both your voice AND desktop audio** (speakers/system audio) - perfect for recording online meetings, interviews, podcasts, or any computer-based conversation.
+Meeting Transcriber is a **privacy-first desktop application** that captures and transcribes your meetings with exceptional audio quality. This app captures **both your voice AND desktop audio** (speakers/system audio) - perfect for recording online meetings (with attendee permission, interviews, podcasts, or any computer-based conversation.
 
 ### Why I Built This
 
-During remote work, I found myself in countless Zoom/Teams meetings where I wished I could:
+During remote work, I found myself in countless meetings where I wished I could:
 - 📝 **Have accurate transcripts** for later reference
-- 🔊 **Capture both sides** of the conversation (my voice + remote participants)
 - 🔒 **Keep recordings private** - all processing happens locally on my machine
 - 🚀 **Get fast transcriptions** with GPU acceleration
 
@@ -27,7 +26,6 @@ No existing solution offered all of this in one package, so I built it.
 - **Dual Audio Capture** - Records both microphone and desktop audio (WASAPI loopback)
 - **AI Transcription** - Powered by OpenAI's Whisper model with 99 language support
 - **100% Local Processing** - No data sent to cloud, complete privacy
-- **Professional Audio Quality** - Advanced DSP processing, noise reduction, auto-mixing
 - **GPU Acceleration** - Optional CUDA support for 4-5x faster transcription
 
 ### 🛠️ Technical Features
@@ -169,14 +167,6 @@ See [docs/TRANSCRIPTION_GUIDE.md](docs/TRANSCRIPTION_GUIDE.md) for full list and
 
 See [docs/internal/SECURITY_AUDIT.md](docs/internal/SECURITY_AUDIT.md) for full security analysis.
 
-## 🤝 Contributing
-
-Contributions are welcome! This is a solo project but I'm open to:
-- 🐛 Bug reports and fixes
-- ✨ Feature suggestions
-- 📝 Documentation improvements
-- 🌍 Translations
-
 ## 📝 License
 
 This project is licensed under the MIT License - see [LICENSE.txt](LICENSE.txt) for details.
@@ -205,7 +195,3 @@ This project is licensed under the MIT License - see [LICENSE.txt](LICENSE.txt) 
 - [ ] macOS/Linux support
 
 ---
-
-**Made with ❤️ for remote workers, podcasters, and anyone who values accurate meeting notes.**
-
-*Star ⭐ this repo if you find it useful!*
