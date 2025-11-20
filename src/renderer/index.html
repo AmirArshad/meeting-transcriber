@@ -1,250 +1,333 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Meeting Transcriber</title>
-  <link rel="stylesheet" href="styles.css">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-</head>
-<body>
-  <div class="container">
-    <!-- Header -->
-    <header>
-      <div class="header-content">
-        <h1>Meeting Transcriber</h1>
-        <p class="subtitle">AI-powered transcription</p>
-      </div>
-    </header>
-
-    <!-- Main Content -->
-    <main>
-      <!-- Compact Audio Setup -->
-      <section class="card setup-section compact">
-        <div class="setup-row">
-          <div class="setup-item">
-            <label for="mic-select">Microphone</label>
-            <select id="mic-select" class="device-select">
-              <option value="">Loading...</option>
-            </select>
-          </div>
-
-          <div class="setup-item">
-            <label for="desktop-select">Desktop Audio</label>
-            <select id="desktop-select" class="device-select">
-              <option value="">Loading...</option>
-            </select>
-          </div>
-
-          <div class="setup-item small-select">
-            <label for="language-select">Language</label>
-            <select id="language-select" class="device-select">
-              <option value="en">English</option>
-              <option value="es">Spanish</option>
-              <option value="fr">French</option>
-              <option value="de">German</option>
-              <option value="zh">Chinese</option>
-              <option value="ja">Japanese</option>
-            </select>
-          </div>
-
-          <div class="setup-item small-select">
-            <label for="model-select">Model</label>
-            <select id="model-select" class="device-select">
-              <option value="tiny">Tiny</option>
-              <option value="base">Base</option>
-              <option value="small" selected>Small</option>
-              <option value="medium">Medium</option>
-            </select>
-          </div>
-
-          <button id="refresh-devices" class="btn btn-icon-only" title="Refresh Devices">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/></svg>
-          </button>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Meeting Transcriber</title>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div class="container">
+      <!-- Header -->
+      <header>
+        <div class="header-content">
+          <h1>Meeting Transcriber</h1>
+          <p class="subtitle">AI-powered transcription</p>
         </div>
-      </section>
+      </header>
 
-      <!-- Tab Navigation -->
-      <div class="tabs">
-        <button class="tab-btn active" data-tab="record">Record</button>
-        <button class="tab-btn" data-tab="history">History</button>
-        <button class="tab-btn" data-tab="settings">Settings</button>
-      </div>
-
-      <!-- Tab Content -->
-      <div class="tab-content">
-        <!-- Record Tab -->
-        <div class="tab-pane active" id="record-tab">
-          <section class="card recording-section">
-            <div class="recording-header">
-              <h2>Current Meeting</h2>
-              <div class="recording-status">
-                <div class="status-indicator" id="status-indicator"></div>
-                <span id="status-text">Ready</span>
-              </div>
+      <!-- Main Content -->
+      <main>
+        <!-- Compact Audio Setup -->
+        <section class="card setup-section compact">
+          <div class="setup-row">
+            <div class="setup-item">
+              <label for="mic-select">Microphone</label>
+              <select id="mic-select" class="device-select">
+                <option value="">Loading...</option>
+              </select>
             </div>
 
-            <div class="recording-controls-row">
-              <div class="controls-group">
-                <button id="start-btn" class="btn btn-primary">Start Recording</button>
-                <button id="stop-btn" class="btn btn-danger" disabled>Stop & Transcribe</button>
-                <div class="timer" id="timer">00:00</div>
-              </div>
+            <div class="setup-item">
+              <label for="desktop-select">Desktop Audio</label>
+              <select id="desktop-select" class="device-select">
+                <option value="">Loading...</option>
+              </select>
             </div>
 
-            <!-- Current Transcript -->
-            <div class="current-transcript" id="current-transcript">
-              <div class="transcript-header">
-                <h3>Transcript</h3>
-                <div class="transcript-actions" id="transcript-actions" style="display:none;">
-                  <button id="copy-btn" class="btn btn-small">Copy</button>
-                  <button id="save-btn" class="btn btn-small">Save</button>
+            <div class="setup-item small-select">
+              <label for="language-select">Language</label>
+              <select id="language-select" class="device-select">
+                <option value="en">English</option>
+                <option value="es">Spanish</option>
+                <option value="fr">French</option>
+                <option value="de">German</option>
+                <option value="zh">Chinese</option>
+                <option value="ja">Japanese</option>
+              </select>
+            </div>
+
+            <div class="setup-item small-select">
+              <label for="model-select">Model</label>
+              <select id="model-select" class="device-select">
+                <option value="tiny">Tiny</option>
+                <option value="base">Base</option>
+                <option value="small" selected>Small</option>
+                <option value="medium">Medium</option>
+              </select>
+            </div>
+
+            <button
+              id="refresh-devices"
+              class="btn btn-icon-only"
+              title="Refresh Devices"
+            >
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path
+                  d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"
+                />
+              </svg>
+            </button>
+          </div>
+        </section>
+
+        <!-- Tab Navigation -->
+        <div class="tabs">
+          <button class="tab-btn active" data-tab="record">Record</button>
+          <button class="tab-btn" data-tab="history">History</button>
+          <button class="tab-btn" data-tab="settings">Settings</button>
+        </div>
+
+        <!-- Tab Content -->
+        <div class="tab-content">
+          <!-- Record Tab -->
+          <div class="tab-pane active" id="record-tab">
+            <section class="card recording-section">
+              <div class="recording-header">
+                <h2>Current Meeting</h2>
+                <div class="recording-status">
+                  <div class="status-indicator" id="status-indicator"></div>
+                  <span id="status-text">Ready</span>
                 </div>
               </div>
-              <div class="transcript-output" id="transcript-output">
-                <p class="placeholder">Transcript will appear here after recording...</p>
+
+              <div class="recording-controls-row">
+                <div class="controls-group">
+                  <button id="start-btn" class="btn btn-primary">
+                    Start Recording
+                  </button>
+                  <button id="stop-btn" class="btn btn-danger" disabled>
+                    Stop & Transcribe
+                  </button>
+                  <div class="timer" id="timer">00:00</div>
+                </div>
               </div>
+
+              <!-- Current Transcript -->
+              <div class="current-transcript" id="current-transcript">
+                <div class="transcript-header">
+                  <h3>Transcript</h3>
+                  <div
+                    class="transcript-actions"
+                    id="transcript-actions"
+                    style="display: none"
+                  >
+                    <button id="copy-btn" class="btn btn-small">Copy</button>
+                    <button id="save-btn" class="btn btn-small">Save</button>
+                  </div>
+                </div>
+                <div class="transcript-output" id="transcript-output">
+                  <p class="placeholder">
+                    Transcript will appear here after recording...
+                  </p>
+                </div>
+              </div>
+
+              <div class="progress-log" id="progress-log"></div>
+            </section>
+          </div>
+
+          <!-- History Tab -->
+          <div class="tab-pane" id="history-tab">
+            <div class="history-layout">
+              <!-- Sidebar: Meeting List -->
+              <aside class="history-sidebar">
+                <div class="sidebar-header">
+                  <h3>Meetings</h3>
+                  <button
+                    id="refresh-history"
+                    class="btn btn-icon-only"
+                    title="Refresh"
+                  >
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <path
+                        d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"
+                      />
+                    </svg>
+                  </button>
+                </div>
+
+                <div class="meeting-list" id="meeting-list">
+                  <p class="placeholder">No meetings recorded yet</p>
+                </div>
+              </aside>
+
+              <!-- Main Content: Meeting Details -->
+              <main class="history-content">
+                <div id="meeting-details-empty" class="empty-state">
+                  <p class="placeholder">Select a meeting to view details</p>
+                </div>
+
+                <div
+                  class="meeting-details"
+                  id="meeting-details"
+                  style="display: none"
+                >
+                  <div class="meeting-header">
+                    <h2 id="meeting-title">Meeting Details</h2>
+                    <div class="meeting-meta">
+                      <span id="meeting-date"></span>
+                      <span class="meta-separator">•</span>
+                      <span id="meeting-duration"></span>
+                    </div>
+                  </div>
+
+                  <div class="audio-player-section">
+                    <audio id="audio-player" controls style="width: 100%">
+                      Your browser does not support audio playback.
+                    </audio>
+                  </div>
+
+                  <div class="transcript-section">
+                    <div class="transcript-header-row">
+                      <h3>Transcript</h3>
+                      <button id="copy-transcript-btn" class="btn btn-small">
+                        Copy
+                      </button>
+                    </div>
+                    <div
+                      class="meeting-transcript"
+                      id="meeting-transcript"
+                    ></div>
+                  </div>
+                </div>
+              </main>
             </div>
+          </div>
 
-            <div class="progress-log" id="progress-log"></div>
-          </section>
-        </div>
+          <!-- Settings Tab -->
+          <div class="tab-pane" id="settings-tab">
+            <section class="card settings-section">
+              <h2>Settings</h2>
 
-        <!-- History Tab -->
-        <div class="tab-pane" id="history-tab">
-          <div class="history-layout">
-            <!-- Sidebar: Meeting List -->
-            <aside class="history-sidebar">
-              <div class="sidebar-header">
-                <h3>Meetings</h3>
-                <button id="refresh-history" class="btn btn-icon-only" title="Refresh">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/></svg>
-                </button>
-              </div>
+              <div class="settings-content">
+                <!-- GPU Acceleration -->
+                <div class="settings-group">
+                  <div class="setting-header">
+                    <h3>GPU Acceleration</h3>
+                    <span class="setting-badge" id="gpu-status-badge"
+                      >Checking...</span
+                    >
+                  </div>
 
-              <div class="meeting-list" id="meeting-list">
-                <p class="placeholder">No meetings recorded yet</p>
-              </div>
-            </aside>
+                  <p class="setting-description">
+                    Enable GPU acceleration for 4-5x faster transcription.
+                    Requires NVIDIA GPU with CUDA support.
+                  </p>
 
-            <!-- Main Content: Meeting Details -->
-            <main class="history-content">
-              <div id="meeting-details-empty" class="empty-state">
-                <p class="placeholder">Select a meeting to view details</p>
-              </div>
+                  <div class="gpu-info" id="gpu-info">
+                    <div class="info-row">
+                      <span class="info-label">GPU Detected:</span>
+                      <span class="info-value" id="gpu-detected"
+                        >Checking...</span
+                      >
+                    </div>
+                    <div class="info-row">
+                      <span class="info-label">CUDA Libraries:</span>
+                      <span class="info-value" id="cuda-status"
+                        >Not installed</span
+                      >
+                    </div>
+                    <div class="info-row">
+                      <span class="info-label">Download Size:</span>
+                      <span class="info-value">~2-3 GB</span>
+                    </div>
+                  </div>
 
-              <div class="meeting-details" id="meeting-details" style="display:none;">
-                <div class="meeting-header">
-                  <h2 id="meeting-title">Meeting Details</h2>
-                  <div class="meeting-meta">
-                    <span id="meeting-date"></span>
-                    <span class="meta-separator">•</span>
-                    <span id="meeting-duration"></span>
+                  <div class="gpu-actions">
+                    <button
+                      id="install-gpu-btn"
+                      class="btn btn-primary"
+                      disabled
+                    >
+                      Install GPU Acceleration
+                    </button>
+                    <button
+                      id="uninstall-gpu-btn"
+                      class="btn btn-secondary"
+                      style="display: none"
+                    >
+                      Uninstall GPU Libraries
+                    </button>
+                  </div>
+
+                  <!-- Progress indicator -->
+                  <div
+                    class="gpu-progress"
+                    id="gpu-progress"
+                    style="display: none"
+                  >
+                    <div class="progress-bar-container">
+                      <div class="progress-bar" id="gpu-progress-bar"></div>
+                    </div>
+                    <p class="progress-text" id="gpu-progress-text">
+                      Initializing...
+                    </p>
+                  </div>
+
+                  <!-- Logs -->
+                  <div class="gpu-log" id="gpu-log" style="display: none">
+                    <h4>Installation Log</h4>
+                    <div class="log-output" id="gpu-log-output"></div>
                   </div>
                 </div>
 
-                <div class="audio-player-section">
-                  <audio id="audio-player" controls style="width: 100%">
-                    Your browser does not support audio playback.
-                  </audio>
-                </div>
-
-                <div class="transcript-section">
-                  <div class="transcript-header-row">
-                    <h3>Transcript</h3>
-                    <button id="copy-transcript-btn" class="btn btn-small">Copy</button>
+                <!-- App Info -->
+                <div class="settings-group">
+                  <h3>About</h3>
+                  <div class="info-row">
+                    <span class="info-label">Version:</span>
+                    <span class="info-value">1.0.0</span>
                   </div>
-                  <div class="meeting-transcript" id="meeting-transcript"></div>
+                  <div class="info-row">
+                    <span class="info-label">Electron:</span>
+                    <span class="info-value" id="electron-version"
+                      >Loading...</span
+                    >
+                  </div>
+                  <div class="info-row">
+                    <span class="info-label">Python:</span>
+                    <span class="info-value" id="python-version"
+                      >Loading...</span
+                    >
+                  </div>
                 </div>
               </div>
-            </main>
+            </section>
           </div>
         </div>
+      </main>
 
-        <!-- Settings Tab -->
-        <div class="tab-pane" id="settings-tab">
-          <section class="card settings-section">
-            <h2>Settings</h2>
+      <!-- Footer -->
+      <footer>
+        <p>Powered by Whisper AI</p>
+      </footer>
+    </div>
 
-            <!-- GPU Acceleration -->
-            <div class="settings-group">
-              <div class="setting-header">
-                <h3>GPU Acceleration</h3>
-                <span class="setting-badge" id="gpu-status-badge">Checking...</span>
-              </div>
-
-              <p class="setting-description">
-                Enable GPU acceleration for 4-5x faster transcription. Requires NVIDIA GPU with CUDA support.
-              </p>
-
-              <div class="gpu-info" id="gpu-info">
-                <div class="info-row">
-                  <span class="info-label">GPU Detected:</span>
-                  <span class="info-value" id="gpu-detected">Checking...</span>
-                </div>
-                <div class="info-row">
-                  <span class="info-label">CUDA Libraries:</span>
-                  <span class="info-value" id="cuda-status">Not installed</span>
-                </div>
-                <div class="info-row">
-                  <span class="info-label">Download Size:</span>
-                  <span class="info-value">~2-3 GB</span>
-                </div>
-              </div>
-
-              <div class="gpu-actions">
-                <button id="install-gpu-btn" class="btn btn-primary" disabled>
-                  Install GPU Acceleration
-                </button>
-                <button id="uninstall-gpu-btn" class="btn btn-secondary" style="display:none;">
-                  Uninstall GPU Libraries
-                </button>
-              </div>
-
-              <!-- Progress indicator -->
-              <div class="gpu-progress" id="gpu-progress" style="display:none;">
-                <div class="progress-bar-container">
-                  <div class="progress-bar" id="gpu-progress-bar"></div>
-                </div>
-                <p class="progress-text" id="gpu-progress-text">Initializing...</p>
-              </div>
-
-              <!-- Logs -->
-              <div class="gpu-log" id="gpu-log" style="display:none;">
-                <h4>Installation Log</h4>
-                <div class="log-output" id="gpu-log-output"></div>
-              </div>
-            </div>
-
-            <!-- App Info -->
-            <div class="settings-group">
-              <h3>About</h3>
-              <div class="info-row">
-                <span class="info-label">Version:</span>
-                <span class="info-value">1.0.0</span>
-              </div>
-              <div class="info-row">
-                <span class="info-label">Electron:</span>
-                <span class="info-value" id="electron-version">Loading...</span>
-              </div>
-              <div class="info-row">
-                <span class="info-label">Python:</span>
-                <span class="info-value" id="python-version">Loading...</span>
-              </div>
-            </div>
-          </section>
-        </div>
-      </div>
-    </main>
-
-    <!-- Footer -->
-    <footer>
-      <p>Powered by Whisper AI</p>
-    </footer>
-  </div>
-
-  <script src="app.js"></script>
-</body>
+    <script src="app.js"></script>
+  </body>
 </html>
