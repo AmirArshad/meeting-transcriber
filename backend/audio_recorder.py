@@ -90,6 +90,10 @@ class AudioRecorder:
         self.mic_frame_count = 0
         self.desktop_frame_count = 0
 
+        # Audio levels (0.0 to 1.0)
+        self.mic_level = 0.0
+        self.desktop_level = 0.0
+
         # Streams
         self.mic_stream = None
         self.desktop_stream = None
@@ -105,6 +109,19 @@ class AudioRecorder:
                 # Skip pre-roll frames (first ~1.5 seconds) to avoid device warm-up artifacts
                 if self.mic_frame_count > self.preroll_frames:
                     self.mic_frames.append(in_data)
+                
+                # Calculate level for visualization
+                try:
+                    # Fast RMS calculation
+                    # Use numpy for speed, but handle potential errors safely
+                    data = np.frombuffer(in_data, dtype=np.int16)
+                    # Simple peak-ish metric is faster than full RMS and good enough for visualizer
+                    # Take max absolute value of a subsample to be fast
+                    peak = np.max(np.abs(data[::4])) 
+                    # Normalize (int16 max is 32768)
+                    self.mic_level = float(peak) / 32768.0
+                except:
+                    self.mic_level = 0.0
 
         return (in_data, pyaudio.paContinue)
 
@@ -119,6 +136,14 @@ class AudioRecorder:
                 # Skip pre-roll frames (first ~1.5 seconds) to avoid device warm-up artifacts
                 if self.desktop_frame_count > self.preroll_frames:
                     self.desktop_frames.append(in_data)
+
+                # Calculate level for visualization
+                try:
+                    data = np.frombuffer(in_data, dtype=np.int16)
+                    peak = np.max(np.abs(data[::4]))
+                    self.desktop_level = float(peak) / 32768.0
+                except:
+                    self.desktop_level = 0.0
 
         return (in_data, pyaudio.paContinue)
 
@@ -548,8 +573,18 @@ def main():
         else:
             # Record until interrupted
             print("Recording... Send 'stop' to stdin or Press Ctrl+C to stop", file=sys.stderr)
+            
+            # Main loop - print audio levels for visualization
             while not stop_event.is_set():
-                time.sleep(0.1)
+                # Print levels as JSON to stdout (buffered)
+                # Electron will parse this
+                levels = {
+                    "type": "levels",
+                    "mic": round(recorder.mic_level, 3),
+                    "desktop": round(recorder.desktop_level, 3)
+                }
+                print(json.dumps(levels), flush=True)
+                time.sleep(0.05) # 20 FPS updates
             
             print("\nStopping recording...", file=sys.stderr)
             recorder.stop_recording()

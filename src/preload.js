@@ -40,6 +40,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   onGPUInstallProgress: (callback) => {
     ipcRenderer.on('gpu-install-progress', (event, data) => callback(data));
+  },
+  onAudioLevels: (callback) => {
+    ipcRenderer.on('audio-levels', (event, data) => callback(data));
   }
 });
 

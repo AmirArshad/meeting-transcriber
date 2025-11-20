@@ -114,6 +114,22 @@
                   </button>
                   <div class="timer" id="timer">00:00</div>
                 </div>
+                
+                <!-- Audio Visualizer -->
+                <div class="audio-visualizer" id="audio-visualizer" style="display: none;">
+                  <div class="visualizer-track">
+                    <span class="track-icon" title="Microphone">🎤</span>
+                    <div class="waveform-container">
+                      <canvas id="mic-waveform" width="200" height="30"></canvas>
+                    </div>
+                  </div>
+                  <div class="visualizer-track">
+                    <span class="track-icon" title="Desktop Audio">🔊</span>
+                    <div class="waveform-container">
+                      <canvas id="desktop-waveform" width="200" height="30"></canvas>
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <!-- Current Transcript -->

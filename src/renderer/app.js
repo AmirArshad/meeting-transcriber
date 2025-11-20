@@ -29,6 +29,7 @@ let timerInterval = null;
 let currentAudioFile = null;
 let currentMeetingId = null;
 let meetings = [];
+let audioVisualizer = null;
 
 // Settings persistence
 const SETTINGS_KEY = 'meeting-transcriber-settings';
@@ -80,6 +81,10 @@ function applySavedSettings() {
 async function init() {
   await loadAudioDevices();
   await loadMeetingHistory();
+  
+  // Initialize visualizer
+  audioVisualizer = new AudioVisualizer();
+  
   setupEventListeners();
   console.log('App initialized');
 }
@@ -253,6 +258,13 @@ function setupEventListeners() {
   window.electronAPI.onTranscriptionProgress((data) => {
     addLog(data);
   });
+
+  // Listen for audio levels
+  window.electronAPI.onAudioLevels((levels) => {
+    if (audioVisualizer && recordingState === 'recording') {
+      audioVisualizer.updateLevels(levels);
+    }
+  });
 }
 
 // Handle record button click
@@ -358,6 +370,7 @@ async function startRecording() {
 
     // Update UI
     startTimer();
+    audioVisualizer.start();
 
     // Clear previous transcript
     transcriptOutput.innerHTML = '<p class="placeholder">Recording in progress...</p>';
@@ -379,6 +392,7 @@ async function stopRecording() {
     // Immediately update UI to show we're stopping
     setRecordingState('stopping');
     stopTimer(); // Stop timer immediately
+    audioVisualizer.stop();
 
     const result = await window.electronAPI.stopRecording();
 
@@ -402,6 +416,7 @@ async function stopRecording() {
     transcriptOutput.innerHTML = `<p class="placeholder error">Recording failed: ${error.message}</p>`;
     
     stopTimer();
+    audioVisualizer.stop();
     setRecordingState('idle');
   }
 }
@@ -789,6 +804,107 @@ function appendGPULog(text) {
   const logOutput = document.getElementById('gpu-log-output');
   logOutput.textContent += text;
   logOutput.scrollTop = logOutput.scrollHeight;
+}
+
+// ============================================================================
+// Audio Visualizer Class
+// ============================================================================
+
+class AudioVisualizer {
+  constructor() {
+    this.container = document.getElementById('audio-visualizer');
+    this.micCanvas = document.getElementById('mic-waveform');
+    this.desktopCanvas = document.getElementById('desktop-waveform');
+    
+    this.micCtx = this.micCanvas.getContext('2d');
+    this.desktopCtx = this.desktopCanvas.getContext('2d');
+    
+    // History buffers for waveform effect
+    this.bufferSize = 50;
+    this.micBuffer = new Array(this.bufferSize).fill(0);
+    this.desktopBuffer = new Array(this.bufferSize).fill(0);
+    
+    this.animationId = null;
+    this.isRunning = false;
+  }
+
+  start() {
+    this.isRunning = true;
+    this.container.style.display = 'flex';
+    this.micBuffer.fill(0);
+    this.desktopBuffer.fill(0);
+    this.draw();
+  }
+
+  stop() {
+    this.isRunning = false;
+    if (this.animationId) {
+      cancelAnimationFrame(this.animationId);
+      this.animationId = null;
+    }
+    // Keep visible for a moment or hide immediately?
+    // Let's hide it to keep UI clean when not recording
+    this.container.style.display = 'none';
+  }
+
+  updateLevels(levels) {
+    // Shift buffer and add new level
+    this.micBuffer.shift();
+    this.micBuffer.push(levels.mic);
+    
+    this.desktopBuffer.shift();
+    this.desktopBuffer.push(levels.desktop);
+  }
+
+  draw() {
+    if (!this.isRunning) return;
+
+    this.drawWaveform(this.micCtx, this.micBuffer, '#10b981'); // Emerald 500
+    this.drawWaveform(this.desktopCtx, this.desktopBuffer, '#3b82f6'); // Blue 500
+
+    this.animationId = requestAnimationFrame(() => this.draw());
+  }
+
+  drawWaveform(ctx, buffer, color) {
+    const width = ctx.canvas.width;
+    const height = ctx.canvas.height;
+    const barWidth = width / this.bufferSize;
+
+    // Clear canvas
+    ctx.clearRect(0, 0, width, height);
+
+    // Draw bars
+    ctx.fillStyle = color;
+    
+    for (let i = 0; i < this.bufferSize; i++) {
+      const level = buffer[i];
+      // Non-linear scaling for better visual feedback on low volumes
+      const scaledLevel = Math.pow(level, 0.5); 
+      
+      const barHeight = Math.max(2, scaledLevel * height);
+      const x = i * barWidth;
+      const y = (height - barHeight) / 2; // Center vertically
+
+      // Draw rounded bar
+      this.roundRect(ctx, x, y, barWidth - 1, barHeight, 1);
+      ctx.fill();
+    }
+  }
+
+  // Helper for rounded rectangles
+  roundRect(ctx, x, y, width, height, radius) {
+    ctx.beginPath();
+    ctx.moveTo(x + radius, y);
+    ctx.lineTo(x + width - radius, y);
+    ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+    ctx.lineTo(x + width, y + height - radius);
+    ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+    ctx.lineTo(x + radius, y + height);
+    ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+    ctx.lineTo(x, y + radius);
+    ctx.quadraticCurveTo(x, y, x + radius, y);
+    ctx.closePath();
+  }
 }
 
 // Start the app

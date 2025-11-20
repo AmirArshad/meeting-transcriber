@@ -343,8 +343,26 @@ ipcMain.handle('start-recording', async (event, options) => {
     let recordingStarted = false;
 
     pythonProcess.stdout.on('data', (data) => {
-      // Send progress updates to renderer
-      mainWindow.webContents.send('recording-progress', data.toString());
+      const output = data.toString();
+      
+      // Check if this is a JSON level update
+      if (output.trim().startsWith('{"type": "levels"')) {
+        try {
+          // There might be multiple JSON objects in one chunk, or mixed with newlines
+          const lines = output.trim().split('\n');
+          for (const line of lines) {
+            if (line.startsWith('{"type": "levels"')) {
+              const levels = JSON.parse(line);
+              mainWindow.webContents.send('audio-levels', levels);
+            }
+          }
+        } catch (e) {
+          // Ignore parse errors for levels
+        }
+      } else {
+        // Send progress updates to renderer
+        mainWindow.webContents.send('recording-progress', output);
+      }
     });
 
     pythonProcess.stderr.on('data', (data) => {
