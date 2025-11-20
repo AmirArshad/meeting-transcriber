@@ -84,6 +84,11 @@ class AudioRecorder:
         self.is_recording = False
         self.lock = threading.Lock()
 
+        # Pre-roll tracking (discard first second for device warm-up)
+        self.preroll_frames = int(self.mic_sample_rate / self.chunk_size)  # ~1 second
+        self.mic_frame_count = 0
+        self.desktop_frame_count = 0
+
         # Streams
         self.mic_stream = None
         self.desktop_stream = None
@@ -95,7 +100,10 @@ class AudioRecorder:
 
         if self.is_recording:
             with self.lock:
-                self.mic_frames.append(in_data)
+                self.mic_frame_count += 1
+                # Skip pre-roll frames (first ~1 second) to avoid device warm-up artifacts
+                if self.mic_frame_count > self.preroll_frames:
+                    self.mic_frames.append(in_data)
 
         return (in_data, pyaudio.paContinue)
 
@@ -106,7 +114,10 @@ class AudioRecorder:
 
         if self.is_recording:
             with self.lock:
-                self.desktop_frames.append(in_data)
+                self.desktop_frame_count += 1
+                # Skip pre-roll frames (first ~1 second) to avoid device warm-up artifacts
+                if self.desktop_frame_count > self.preroll_frames:
+                    self.desktop_frames.append(in_data)
 
         return (in_data, pyaudio.paContinue)
 
@@ -114,6 +125,11 @@ class AudioRecorder:
         """Start recording from both sources."""
         print("Starting recording...", file=sys.stderr)
 
+        # Reset buffers and counters
+        self.mic_frames = []
+        self.desktop_frames = []
+        self.mic_frame_count = 0
+        self.desktop_frame_count = 0
         self.is_recording = True
 
         # Open mic stream with error handling
