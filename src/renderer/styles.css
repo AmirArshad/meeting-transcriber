@@ -1005,3 +1005,106 @@ footer {
   white-space: pre-wrap;
   word-break: break-all;
 }
+
+/* ============================================================================
+   Update Banner
+   ============================================================================ */
+
+.update-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 9999;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  padding: 1rem 1.5rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  animation: slideDown 0.3s ease-out;
+}
+
+@keyframes slideDown {
+  from {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.update-content {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.update-icon {
+  font-size: 2rem;
+  flex-shrink: 0;
+}
+
+.update-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.update-text strong {
+  display: block;
+  font-size: 1rem;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+
+.update-text p {
+  margin: 0;
+  font-size: 0.875rem;
+  opacity: 0.9;
+  line-height: 1.4;
+}
+
+.update-actions {
+  display: flex;
+  gap: 0.75rem;
+  flex-shrink: 0;
+}
+
+.update-actions button {
+  padding: 0.5rem 1rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: none;
+  white-space: nowrap;
+}
+
+.update-actions .btn-secondary {
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.update-actions .btn-secondary:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.update-actions .btn-primary {
+  background: white;
+  color: #667eea;
+  font-weight: 600;
+}
+
+.update-actions .btn-primary:hover {
+  transform: scale(1.05);
+  box-shadow: 0 4px 12px rgba(255, 255, 255, 0.3);
+}
+
+/* Adjust main content when banner is shown */
+body:has(.update-banner:not([style*="display: none"])) .container {
+  margin-top: 4.5rem;
+}

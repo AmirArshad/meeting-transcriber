@@ -266,6 +266,11 @@ function setupEventListeners() {
       audioVisualizer.updateLevels(levels);
     }
   });
+
+  // Listen for updates
+  window.electronAPI.onUpdateAvailable((updateInfo) => {
+    showUpdateNotification(updateInfo);
+  });
 }
 
 // Handle record button click
@@ -838,6 +843,56 @@ function appendGPULog(text) {
   const logOutput = document.getElementById('gpu-log-output');
   logOutput.textContent += text;
   logOutput.scrollTop = logOutput.scrollHeight;
+}
+
+// ============================================================================
+// Update Notification
+// ============================================================================
+
+let currentUpdateInfo = null;
+
+function showUpdateNotification(updateInfo) {
+  currentUpdateInfo = updateInfo;
+
+  const banner = document.getElementById('update-banner');
+  const title = document.getElementById('update-title');
+  const description = document.getElementById('update-description');
+  const downloadBtn = document.getElementById('download-update');
+  const dismissBtn = document.getElementById('dismiss-update');
+
+  // Update content
+  title.textContent = `Update Available: v${updateInfo.version}`;
+  description.textContent = `A new version of Meeting Transcriber is ready to download.`;
+
+  // Show banner
+  banner.style.display = 'block';
+
+  // Set up button handlers
+  downloadBtn.onclick = handleDownloadUpdate;
+  dismissBtn.onclick = handleDismissUpdate;
+
+  addLog(`✨ Update available: v${updateInfo.version}`);
+}
+
+async function handleDownloadUpdate() {
+  if (!currentUpdateInfo) return;
+
+  try {
+    addLog('Opening download page...');
+    await window.electronAPI.downloadUpdate(currentUpdateInfo.downloadUrl);
+    addLog('Download started in your browser. Install when ready!');
+
+    // Keep banner visible so user remembers to install
+  } catch (error) {
+    console.error('Failed to open download:', error);
+    addLog('Failed to open download page', 'error');
+  }
+}
+
+function handleDismissUpdate() {
+  const banner = document.getElementById('update-banner');
+  banner.style.display = 'none';
+  addLog('Update reminder dismissed');
 }
 
 // ============================================================================

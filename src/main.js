@@ -11,6 +11,7 @@ const { app, BrowserWindow, ipcMain, Tray, Menu, dialog } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const fs = require('fs');
+const { checkForUpdates, openDownloadPage } = require('./updater');
 
 // Use Electron's default userData path, which handles packaging correctly
 // This is typically: C:\Users\<username>\AppData\Roaming\Meeting Transcriber
@@ -188,6 +189,86 @@ function createWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+
+  // Set up application menu
+  createApplicationMenu();
+}
+
+/**
+ * Create application menu with Help > Check for Updates
+ */
+function createApplicationMenu() {
+  const template = [
+    {
+      label: 'File',
+      submenu: [
+        { role: 'quit' }
+      ]
+    },
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' }
+      ]
+    },
+    {
+      label: 'View',
+      submenu: [
+        { role: 'reload' },
+        { role: 'forceReload' },
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' }
+      ]
+    },
+    {
+      label: 'Help',
+      submenu: [
+        {
+          label: 'Check for Updates...',
+          click: async () => {
+            const updateInfo = await checkForUpdates();
+            if (updateInfo && mainWindow) {
+              mainWindow.webContents.send('update-available', updateInfo);
+            } else if (mainWindow) {
+              dialog.showMessageBox(mainWindow, {
+                type: 'info',
+                title: 'No Updates Available',
+                message: 'You\'re up to date!',
+                detail: `Meeting Transcriber v${app.getVersion()} is the latest version.`,
+                buttons: ['OK']
+              });
+            }
+          }
+        },
+        { type: 'separator' },
+        {
+          label: 'View on GitHub',
+          click: () => {
+            require('electron').shell.openExternal('https://github.com/AmirArshad/meeting-transcriber');
+          }
+        },
+        {
+          label: 'Report Issue',
+          click: () => {
+            require('electron').shell.openExternal('https://github.com/AmirArshad/meeting-transcriber/issues');
+          }
+        }
+      ]
+    }
+  ];
+
+  const menu = Menu.buildFromTemplate(template);
+  Menu.setApplicationMenu(menu);
 }
 
 /**
@@ -224,6 +305,14 @@ app.whenReady().then(() => {
 
   // Preload Whisper model in background to improve first transcription experience
   preloadWhisperModel();
+
+  // Check for updates after app loads (5 second delay to not slow startup)
+  setTimeout(async () => {
+    const updateInfo = await checkForUpdates();
+    if (updateInfo && mainWindow) {
+      mainWindow.webContents.send('update-available', updateInfo);
+    }
+  }, 5000);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -825,6 +914,14 @@ ipcMain.handle('get-system-info', async () => {
       });
     });
   });
+});
+
+/**
+ * Open update download page in browser
+ */
+ipcMain.handle('download-update', async (event, downloadUrl) => {
+  openDownloadPage(downloadUrl);
+  return { success: true };
 });
 
 console.log('Meeting Transcriber - Main process started');

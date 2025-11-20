@@ -31,6 +31,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   uninstallGPU: () => ipcRenderer.invoke('uninstall-gpu'),
   getSystemInfo: () => ipcRenderer.invoke('get-system-info'),
 
+  // Updates
+  downloadUpdate: (downloadUrl) => ipcRenderer.invoke('download-update', downloadUrl),
+
   // Event listeners
   onRecordingProgress: (callback) => {
     ipcRenderer.on('recording-progress', (event, data) => callback(data));
@@ -43,6 +46,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   onAudioLevels: (callback) => {
     ipcRenderer.on('audio-levels', (event, data) => callback(data));
+  },
+  onUpdateAvailable: (callback) => {
+    ipcRenderer.on('update-available', (event, data) => callback(data));
   }
 });
 
