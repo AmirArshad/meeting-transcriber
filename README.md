@@ -14,6 +14,7 @@ Meeting Transcriber is a **privacy-first desktop application** that captures and
 ### Why I Built This
 
 During remote work, I found myself in countless meetings where I wished I could:
+
 - 📝 **Have accurate transcripts** for later reference
 - 🔒 **Keep recordings private** - all processing happens locally on my machine
 - 🚀 **Get fast transcriptions** with GPU acceleration
@@ -23,12 +24,14 @@ No existing solution offered all of this in one package, so I built it.
 ## ✨ Key Features
 
 ### 🎯 Core Capabilities
+
 - **Dual Audio Capture** - Records both microphone and desktop audio (WASAPI loopback)
 - **AI Transcription** - Powered by OpenAI's Whisper model with 99 language support
 - **100% Local Processing** - No data sent to cloud, complete privacy
 - **GPU Acceleration** - Optional CUDA support for 4-5x faster transcription
 
 ### 🛠️ Technical Features
+
 - **Intelligent Audio Enhancement** - Automatic noise gate, compression, and EQ for microphone
 - **Opus Compression** - 95% file size reduction (450MB → 23MB for 40-min recording)
 - **Meeting History** - Searchable archive with audio playback and full transcripts
@@ -69,16 +72,19 @@ See [docs/development/BUILD_INSTRUCTIONS.md](docs/development/BUILD_INSTRUCTIONS
 ## 📸 How It Works
 
 1. **Select Audio Sources**
+
    - Choose your microphone (for your voice)
    - Choose desktop audio/loopback device (for system audio)
    - Select transcription language and model size
 
 2. **Record Your Meeting**
+
    - App captures both audio streams simultaneously
    - Real-time audio enhancement and mixing
    - Automatic Opus compression on save
 
 3. **Get Your Transcript**
+
    - Click "Stop & Transcribe"
    - Whisper AI processes audio locally
    - View timestamped transcript with audio playback
@@ -93,12 +99,14 @@ See [docs/development/BUILD_INSTRUCTIONS.md](docs/development/BUILD_INSTRUCTIONS
 This app uses professional-grade audio processing:
 
 - **Microphone Enhancement:**
+
   - High-pass filter (removes rumble)
   - Noise gate (reduces background noise)
   - Gentle compression (balances volume)
   - Makeup gain (+9.5 dB total boost)
 
 - **Desktop Audio:**
+
   - Pristine capture with no processing
   - Maintains original quality
 
@@ -110,6 +118,7 @@ This app uses professional-grade audio processing:
 ## 🌍 Supported Languages
 
 Whisper supports **99 languages** including:
+
 - English, Spanish, French, German, Italian
 - Chinese (Mandarin), Japanese, Korean
 - Arabic, Hindi, Portuguese, Russian
@@ -120,12 +129,14 @@ See [docs/TRANSCRIPTION_GUIDE.md](docs/TRANSCRIPTION_GUIDE.md) for full list and
 ## 💻 System Requirements
 
 ### Minimum
+
 - **OS:** Windows 10/11 (64-bit)
 - **RAM:** 4 GB
 - **Storage:** 2 GB free space
 - **Audio:** Any microphone + audio interface
 
 ### Recommended
+
 - **OS:** Windows 11 (64-bit)
 - **RAM:** 8 GB
 - **Storage:** 10 GB free space (for models + recordings)
@@ -145,10 +156,12 @@ See [docs/TRANSCRIPTION_GUIDE.md](docs/TRANSCRIPTION_GUIDE.md) for full list and
 ## 📚 Documentation
 
 - **User Guides:**
+
   - [Transcription Tips](docs/TRANSCRIPTION_GUIDE.md) - Get the best results
   - [Meeting Features](docs/MEETING_TRANSCRIPTION.md) - Using the history viewer
 
 - **Development:**
+
   - [Build Instructions](docs/development/BUILD_INSTRUCTIONS.md) - Create installer
   - [GPU Setup](docs/development/SETUP_GPU.md) - Enable CUDA acceleration
   - [Implementation Details](docs/development/INSTALLER_IMPLEMENTATION.md) - Technical overview
@@ -190,19 +203,22 @@ This project is licensed under the MIT License - see [LICENSE.txt](LICENSE.txt) 
 ## 🗺️ Roadmap
 
 ### Completed ✅
+
 - [x] Core recording and transcription
 - [x] Meeting history with playback
 - [x] GPU acceleration support
 - [x] Professional installer
 - [x] Opus audio compression
 - [x] Model preloading for improved first-time experience
+- [x] Combined Start/Stop/Transcribe button (single action UX)
+- [x] Audio visualizer (real-time waveform during recording)
 
 ### In Progress 🚧
-- [ ] Combined Start/Stop/Transcribe button (single action UX)
-- [ ] Audio visualizer (real-time waveform during recording)
+
 - [ ] Auto-updater (GitHub release detection and installation)
 
 ### Planned 📋
+
 - [ ] Speaker diarization (identify who's speaking)
 - [ ] macOS support
 - [ ] Real-time transcription

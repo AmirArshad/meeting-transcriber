@@ -23,7 +23,8 @@ const refreshHistory = document.getElementById('refresh-history');
 const deleteMeeting = document.getElementById('delete-meeting');
 
 // State
-let recordingState = 'idle'; // idle, recording, stopping, transcribing
+let recordingState = 'idle'; // idle, recording, stopping, transcribing, countdown
+let countdownValue = 3;
 let recordingStartTime = null;
 let timerInterval = null;
 let currentAudioFile = null;
@@ -274,6 +275,7 @@ function handleRecordButtonClick() {
   } else if (recordingState === 'recording') {
     stopRecording();
   }
+  // Do nothing if processing or counting down
 }
 
 // Set recording state and update UI
@@ -328,6 +330,15 @@ function updateButtonUI() {
       statusIndicator.classList.remove('recording');
       statusText.textContent = 'Transcribing...';
       break;
+
+    case 'countdown':
+      button.classList.add('processing'); // Use processing style (grey)
+      button.disabled = true;
+      icon.textContent = '⏳';
+      text.textContent = `Starting in ${countdownValue}...`;
+      statusIndicator.classList.remove('recording');
+      statusText.textContent = 'Preparing...';
+      break;
   }
 }
 
@@ -365,6 +376,10 @@ async function startRecording() {
       loopbackId: parseInt(desktopId)
     });
 
+    // Start Countdown
+    setRecordingState('countdown');
+    await startCountdown();
+
     setRecordingState('recording');
     recordingStartTime = Date.now();
 
@@ -382,6 +397,25 @@ async function startRecording() {
     addLog(`Error: ${error.message}`, 'error');
     setRecordingState('idle');
   }
+}
+
+// Countdown function
+function startCountdown() {
+  return new Promise((resolve) => {
+    countdownValue = 3;
+    updateButtonUI(); // Show initial "Starting in 3..."
+    
+    const interval = setInterval(() => {
+      countdownValue--;
+      
+      if (countdownValue > 0) {
+        updateButtonUI();
+      } else {
+        clearInterval(interval);
+        resolve();
+      }
+    }, 1000);
+  });
 }
 
 // Stop recording and auto-transcribe

@@ -5,6 +5,7 @@ This document outlines the development roadmap for Meeting Transcriber, organize
 ## Completed Features ✅
 
 ### Core Functionality
+
 - **Recording & Transcription** - Dual audio capture (mic + desktop) with Whisper AI transcription
 - **Meeting History** - Searchable archive with audio playback and full transcripts
 - **GPU Acceleration** - CUDA support for 4-5x faster transcription
@@ -13,14 +14,18 @@ This document outlines the development roadmap for Meeting Transcriber, organize
 - **Model Preloading** - Improved first-time user experience with background model loading
 
 ### Audio Quality
+
 - **Intelligent Enhancement** - Automatic noise gate, compression, and EQ for microphone
 - **WASAPI Loopback** - Direct desktop audio capture without virtual cables
 - **Stereo Mixing** - Professional audio processing and resampling
 
 ### User Interface
+
 - **Settings Persistence** - Audio and model settings saved between sessions
 - **Progress Logging** - Real-time feedback during recording and transcription
 - **Meeting Management** - Browse, search, and replay past meetings
+- **Combined Record Button** - Single action button for seamless recording flow
+- **Audio Visualizer** - Real-time waveform visualization for mic and desktop audio
 
 ---
 
@@ -28,92 +33,44 @@ This document outlines the development roadmap for Meeting Transcriber, organize
 
 ### User Experience Improvements
 
-#### 1. Combined Start/Stop/Transcribe Button
-**Status:** Planned
-**Priority:** High
-**Description:** Single action button that changes based on state for cleaner UX
+#### 1. Auto-Updater
 
-**Current State:**
-- Separate "Start Recording" and "Stop Recording" buttons
-- Requires two clicks to complete recording → transcription flow
-
-**Proposed State:**
-- Single button: "Start Recording" → "Stop & Transcribe" → "Transcribing..." (disabled)
-- Reduces cognitive load and UI clutter
-- More intuitive for first-time users
-
-**Technical Notes:**
-- Update `app.js` button state management
-- Consolidate `startRecording()` and `stopRecording()` UI flow
-- Add visual state transitions (color changes, icons)
-
-**Reference:** [FEATURE_COMBINED_BUTTON.md](features/FEATURE_COMBINED_BUTTON.md)
-
----
-
-#### 2. Audio Visualizer
-**Status:** Planned
-**Priority:** Medium
-**Description:** Real-time waveform visualization during recording
-
-**Benefits:**
-- Confirms microphone is capturing audio
-- Shows relative volume levels
-- Helps diagnose audio issues (clipping, silence, etc.)
-
-**Implementation Options:**
-1. **Simple Amplitude Bars** (easier)
-   - Vertical bars showing mic and desktop audio levels
-   - Updates every 100ms
-   - Minimal CPU usage
-
-2. **Waveform Display** (more advanced)
-   - Scrolling waveform visualization
-   - Web Audio API integration
-   - May require additional audio stream
-
-**Technical Notes:**
-- Use Web Audio API with `navigator.mediaDevices.getUserMedia()`
-- Canvas element for rendering
-- Real-time audio analysis with `AnalyserNode`
-
-**Reference:** [FEATURE_AUDIO_VISUALIZER.md](features/FEATURE_AUDIO_VISUALIZER.md)
-
----
-
-#### 3. Auto-Updater
 **Status:** Planned
 **Priority:** Medium
 **Description:** Automatic detection and installation of new releases from GitHub
 
 **User Flow:**
+
 1. App checks GitHub releases API on startup
 2. If new version available → Show notification
 3. User clicks "Update" → Downloads in background
 4. Prompt to restart and install on next launch
 
 **Implementation:**
+
 - Use `electron-updater` package (official Electron solution)
 - Integrates with GitHub Releases
 - Supports silent background downloads
 - Code signing required for Windows SmartScreen
 
 **Technical Notes:**
+
 ```js
-const { autoUpdater } = require('electron-updater');
+const { autoUpdater } = require("electron-updater");
 
 autoUpdater.checkForUpdatesAndNotify();
 
-autoUpdater.on('update-available', (info) => {
+autoUpdater.on("update-available", (info) => {
   // Show notification to user
 });
 
-autoUpdater.on('update-downloaded', (info) => {
+autoUpdater.on("update-downloaded", (info) => {
   // Prompt to restart
 });
 ```
 
 **Security Considerations:**
+
 - Verify signature of downloaded updates
 - HTTPS-only downloads
 - Show changelog before installing
@@ -127,17 +84,20 @@ autoUpdater.on('update-downloaded', (info) => {
 ### Advanced Functionality
 
 #### 4. Speaker Diarization
+
 **Status:** Planned
 **Priority:** Medium
 **Description:** Identify who is speaking in multi-person meetings
 
 **Challenge:** This is technically complex
+
 - Requires `pyannote-audio` library
 - Adds ~500MB model download
 - 2-3x slower processing time
 - GPU strongly recommended
 
 **Output Example:**
+
 ```markdown
 [00:00:00 - 00:00:05] **Speaker 1:** Hello everyone.
 [00:00:05 - 00:00:10] **Speaker 2:** Thanks for having me.
@@ -148,11 +108,13 @@ autoUpdater.on('update-downloaded', (info) => {
 ---
 
 #### 5. macOS Support
+
 **Status:** Planned
 **Priority:** Medium
 **Description:** Cross-platform support for macOS
 
 **Required Changes:**
+
 - Replace PyAudio with cross-platform audio library (or add macOS-specific handling)
 - Bundle Python runtime for macOS
 - Create DMG installer with code signing
@@ -160,6 +122,7 @@ autoUpdater.on('update-downloaded', (info) => {
 - Update loopback audio capture (CoreAudio vs WASAPI)
 
 **Challenges:**
+
 - Audio device APIs differ between Windows and macOS
 - Code signing requires Apple Developer account ($99/year)
 - Distribution through Apple notarization
@@ -169,17 +132,20 @@ autoUpdater.on('update-downloaded', (info) => {
 ---
 
 #### 6. Real-Time Transcription
+
 **Status:** Planned
 **Priority:** Low
 **Description:** Show transcription while recording (live captions)
 
 **Challenges:**
+
 - Requires streaming Whisper implementation
 - Higher CPU/GPU usage during recording
 - May impact recording quality
 - Accuracy lower than post-processing
 
 **Use Cases:**
+
 - Live captions for accessibility
 - Quick reference during long meetings
 - Detect important keywords in real-time
@@ -187,11 +153,13 @@ autoUpdater.on('update-downloaded', (info) => {
 ---
 
 #### 7. Export Formats
+
 **Status:** Planned
 **Priority:** Low
 **Description:** Export transcripts to various formats
 
 **Supported Formats:**
+
 - **SRT** - Subtitle format for video editors
 - **VTT** - WebVTT for web players
 - **DOCX** - Microsoft Word document
@@ -205,6 +173,7 @@ autoUpdater.on('update-downloaded', (info) => {
 ## Future Enhancements (Long-term) 🔮
 
 ### Nice-to-Have Features
+
 - **Linux Support** - Expand to Linux desktop
 - **Setup Wizard** - Guided first-time configuration (see [FEATURE_SETUP_WIZARD.md](features/FEATURE_SETUP_WIZARD.md))
 - **Cloud Sync** - Optional backup to personal cloud storage
@@ -233,11 +202,12 @@ Have an idea for a new feature?
 **Next Release:** 1.3.0 (Q1 2025)
 
 **Versioning:**
+
 - **Major (X.0.0)** - Breaking changes, major new features
 - **Minor (1.X.0)** - New features, backwards compatible
 - **Patch (1.2.X)** - Bug fixes, minor improvements
 
 ---
 
-**Last Updated:** November 20, 2024
+**Last Updated:** November 20, 2025
 **Maintained By:** [@AmirArshad](https://github.com/AmirArshad)
