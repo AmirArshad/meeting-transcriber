@@ -31,6 +31,52 @@ let currentAudioFile = null;
 let currentMeetingId = null;
 let meetings = [];
 
+// Settings persistence
+const SETTINGS_KEY = 'meeting-transcriber-settings';
+
+// Load settings from localStorage
+function loadSettings() {
+  try {
+    const saved = localStorage.getItem(SETTINGS_KEY);
+    return saved ? JSON.parse(saved) : {};
+  } catch (error) {
+    console.error('Failed to load settings:', error);
+    return {};
+  }
+}
+
+// Save settings to localStorage
+function saveSettings(settings) {
+  try {
+    const current = loadSettings();
+    const updated = { ...current, ...settings };
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(updated));
+  } catch (error) {
+    console.error('Failed to save settings:', error);
+  }
+}
+
+// Apply saved settings to UI controls
+function applySavedSettings() {
+  const settings = loadSettings();
+
+  if (settings.micId && micSelect.querySelector(`option[value="${settings.micId}"]`)) {
+    micSelect.value = settings.micId;
+  }
+
+  if (settings.desktopId && desktopSelect.querySelector(`option[value="${settings.desktopId}"]`)) {
+    desktopSelect.value = settings.desktopId;
+  }
+
+  if (settings.language) {
+    languageSelect.value = settings.language;
+  }
+
+  if (settings.modelSize) {
+    modelSelect.value = settings.modelSize;
+  }
+}
+
 // Initialize app
 async function init() {
   await loadAudioDevices();
@@ -64,6 +110,9 @@ async function loadAudioDevices() {
     });
 
     addLog(`Found ${devices.inputs.length} microphones and ${devices.loopbacks.length} loopback devices`);
+
+    // Apply saved settings after devices are loaded
+    applySavedSettings();
   } catch (error) {
     console.error('Failed to load devices:', error);
     addLog(`Error: ${error.message}`, 'error');
@@ -180,6 +229,23 @@ function setupEventListeners() {
   if (copyTranscriptBtn) {
     copyTranscriptBtn.addEventListener('click', copyMeetingTranscript);
   }
+
+  // Save settings when selections change
+  micSelect.addEventListener('change', () => {
+    saveSettings({ micId: micSelect.value });
+  });
+
+  desktopSelect.addEventListener('change', () => {
+    saveSettings({ desktopId: desktopSelect.value });
+  });
+
+  languageSelect.addEventListener('change', () => {
+    saveSettings({ language: languageSelect.value });
+  });
+
+  modelSelect.addEventListener('change', () => {
+    saveSettings({ modelSize: modelSelect.value });
+  });
 
   // Listen for progress updates
   window.electronAPI.onRecordingProgress((data) => {
