@@ -9,7 +9,7 @@
 
 ## What is this?
 
-Meeting Transcriber is a **privacy-first desktop application** that captures and transcribes your meetings with exceptional audio quality. This app captures **both your voice AND desktop audio** (speakers/system audio) - perfect for recording online meetings (with attendee permission, interviews, podcasts, or any computer-based conversation.
+Meeting Transcriber is a **privacy-first desktop application** that captures and transcribes your meetings with exceptional audio quality. This app captures **both your voice AND desktop audio** (speakers/system audio) - perfect for recording online meetings (with attendee permission), interviews, podcasts, or any computer-based conversation.
 
 ### Why I Built This
 
