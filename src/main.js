@@ -287,6 +287,12 @@ ipcMain.handle('start-recording', async (event, options) => {
   return new Promise((resolve, reject) => {
     const { micId, loopbackId } = options;
 
+    // Generate unique filename with timestamp
+    const timestamp = new Date().toISOString()
+      .replace(/:/g, '-')  // Replace : with - for Windows compatibility
+      .replace(/\..+/, ''); // Remove milliseconds
+    const filename = `recording_${timestamp}.wav`;
+
     // Note: audio_recorder.py will compress and save as .opus, not .wav
     // But we pass .wav as the base path - the recorder will change extension
     // Use userData path which is always writable (in AppData/Roaming)
@@ -294,7 +300,7 @@ ipcMain.handle('start-recording', async (event, options) => {
     if (!fs.existsSync(recordingsDir)) {
       fs.mkdirSync(recordingsDir, { recursive: true });
     }
-    const outputPath = path.join(recordingsDir, 'temp.wav');
+    const outputPath = path.join(recordingsDir, filename);
 
     // Start Python recording process
     pythonProcess = spawnTrackedPython([
@@ -330,19 +336,69 @@ ipcMain.handle('start-recording', async (event, options) => {
  * Stop recording
  */
 ipcMain.handle('stop-recording', async () => {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     if (pythonProcess) {
-      // Clean up when process closes
-      pythonProcess.on('close', () => {
-        pythonProcess = null;
+      let stdoutData = '';
+      let stderrData = '';
+
+      // Collect stdout (contains JSON with file path)
+      pythonProcess.stdout.on('data', (data) => {
+        stdoutData += data.toString();
       });
 
-      // Send signal to stop via stdin (SIGTERM kills instantly on Windows)
+      // Collect stderr (for debugging)
+      pythonProcess.stderr.on('data', (data) => {
+        stderrData += data.toString();
+      });
+
+      // Wait for process to actually complete
+      pythonProcess.on('close', (code) => {
+        pythonProcess = null;
+
+        if (code === 0) {
+          // Parse JSON output to get file path
+          try {
+            const lines = stdoutData.trim().split('\n');
+            const jsonLine = lines[lines.length - 1]; // Last line should be JSON
+            const recordingInfo = JSON.parse(jsonLine);
+
+            // Verify file exists before resolving
+            if (fs.existsSync(recordingInfo.audioPath)) {
+              resolve({
+                success: true,
+                audioPath: recordingInfo.audioPath,
+                duration: recordingInfo.duration
+              });
+            } else {
+              reject(new Error(`Recording file not found: ${recordingInfo.audioPath}`));
+            }
+          } catch (e) {
+            // If JSON parsing fails, file might still exist at default location
+            const recordingsDir = path.join(app.getPath('userData'), 'recordings');
+            const opusPath = path.join(recordingsDir, 'temp.opus');
+
+            if (fs.existsSync(opusPath)) {
+              resolve({ success: true, audioPath: opusPath });
+            } else {
+              reject(new Error(`Recording completed but output file not found. Error: ${e.message}`));
+            }
+          }
+        } else {
+          reject(new Error(`Recording stopped with exit code ${code}: ${stderrData}`));
+        }
+      });
+
+      // Send signal to stop via stdin
       pythonProcess.stdin.write('stop\n');
 
-      // Resolve immediately so UI can stop the timer
-      // The file saving happens in the background
-      resolve({ success: true });
+      // Safety timeout (10 seconds)
+      setTimeout(() => {
+        if (pythonProcess) {
+          pythonProcess.kill();
+          pythonProcess = null;
+          reject(new Error('Recording stop timeout - process took too long to finish'));
+        }
+      }, 10000);
     } else {
       resolve({ success: true });
     }
@@ -363,9 +419,9 @@ ipcMain.handle('transcribe-audio', async (event, options) => {
       audioFile = path.join(recordingsDir, path.basename(audioFile));
     }
 
-    // The recorder saves as .opus, so if we get temp.wav, use temp.opus instead
-    if (audioFile.endsWith('temp.wav')) {
-      audioFile = audioFile.replace('temp.wav', 'temp.opus');
+    // The recorder saves as .opus, so if we get .wav, use .opus instead
+    if (audioFile.endsWith('.wav')) {
+      audioFile = audioFile.replace('.wav', '.opus');
     }
 
     const python = spawnTrackedPython([

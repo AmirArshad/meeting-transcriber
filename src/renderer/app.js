@@ -303,7 +303,7 @@ async function stopRecording() {
   try {
     addLog('Stopping recording...');
 
-    await window.electronAPI.stopRecording();
+    const result = await window.electronAPI.stopRecording();
 
     isRecording = false;
     stopTimer();
@@ -311,14 +311,29 @@ async function stopRecording() {
     // Update UI
     updateRecordingUI(false);
 
-    addLog('Recording stopped! Starting transcription...');
+    // Store the audio file path for transcription
+    if (result.audioPath) {
+      currentAudioFile = result.audioPath;
+      addLog(`Recording saved: ${currentAudioFile}`);
 
-    // Auto-transcribe
-    await transcribeAudio();
+      // Auto-transcribe
+      addLog('Starting transcription...');
+      await transcribeAudio();
+    } else {
+      addLog('Warning: Recording stopped but no audio file path returned', 'warning');
+      transcriptOutput.innerHTML = '<p class="placeholder error">Recording completed but file not found. The recording may have failed.</p>';
+      statusText.textContent = 'Recording failed';
+    }
 
   } catch (error) {
     console.error('Failed to stop recording:', error);
     addLog(`Error: ${error.message}`, 'error');
+    transcriptOutput.innerHTML = `<p class="placeholder error">Recording failed: ${error.message}</p>`;
+    statusText.textContent = 'Recording failed';
+
+    isRecording = false;
+    stopTimer();
+    updateRecordingUI(false);
   }
 }
 
@@ -327,15 +342,23 @@ async function transcribeAudio() {
   const language = languageSelect.value;
   const modelSize = modelSelect.value;
 
+  // Validate we have an audio file
+  if (!currentAudioFile) {
+    addLog('Error: No audio file to transcribe', 'error');
+    transcriptOutput.innerHTML = '<p class="placeholder error">No audio file available for transcription.</p>';
+    statusText.textContent = 'No file to transcribe';
+    return;
+  }
+
   try {
     statusText.textContent = 'Transcribing...';
     transcriptOutput.innerHTML = '<p class="placeholder">Transcribing... This may take a moment.</p>';
 
-    addLog('Starting transcription...');
     addLog(`Language: ${language}, Model: ${modelSize}`);
+    addLog(`File: ${currentAudioFile}`);
 
     const result = await window.electronAPI.transcribeAudio({
-      audioFile: currentAudioFile || '../recordings/temp.wav',
+      audioFile: currentAudioFile,
       language,
       modelSize
     });
