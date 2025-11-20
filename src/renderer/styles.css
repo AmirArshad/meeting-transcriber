@@ -245,6 +245,68 @@ select.device-select:focus {
   color: var(--text-main);
 }
 
+/* Combined Record Button */
+.record-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1.5rem;
+  font-size: 1rem;
+  font-weight: 600;
+  border-radius: var(--radius-md);
+  border: none;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  min-width: 220px;
+  font-family: inherit;
+  box-shadow: var(--shadow-md);
+}
+
+.record-button .button-icon {
+  font-size: 1.2em;
+}
+
+.record-button.idle {
+  background-color: var(--success);
+  color: white;
+}
+
+.record-button.idle:hover {
+  background-color: #059669; /* Emerald 600 */
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-lg);
+}
+
+.record-button.recording {
+  background-color: var(--danger);
+  color: white;
+  animation: button-pulse 2s infinite;
+}
+
+.record-button.recording:hover {
+  background-color: #dc2626; /* Red 600 */
+}
+
+.record-button.processing {
+  background-color: var(--bg-element);
+  color: var(--text-muted);
+  cursor: not-allowed;
+  border: 1px solid var(--border);
+}
+
+@keyframes button-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(239, 68, 68, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+  }
+}
+
 /* Tabs */
 .tabs {
   display: flex;

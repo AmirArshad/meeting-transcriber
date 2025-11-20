@@ -8,8 +8,7 @@ const desktopSelect = document.getElementById('desktop-select');
 const languageSelect = document.getElementById('language-select');
 const modelSelect = document.getElementById('model-select');
 const refreshBtn = document.getElementById('refresh-devices');
-const startBtn = document.getElementById('start-btn');
-const stopBtn = document.getElementById('stop-btn');
+const recordBtn = document.getElementById('record-btn');
 const copyBtn = document.getElementById('copy-btn');
 const saveBtn = document.getElementById('save-btn');
 const statusIndicator = document.getElementById('status-indicator');
@@ -24,7 +23,7 @@ const refreshHistory = document.getElementById('refresh-history');
 const deleteMeeting = document.getElementById('delete-meeting');
 
 // State
-let isRecording = false;
+let recordingState = 'idle'; // idle, recording, stopping, transcribing
 let recordingStartTime = null;
 let timerInterval = null;
 let currentAudioFile = null;
@@ -218,8 +217,7 @@ function selectMeeting(meetingId) {
 function setupEventListeners() {
   refreshBtn.addEventListener('click', loadAudioDevices);
   refreshHistory.addEventListener('click', loadMeetingHistory);
-  startBtn.addEventListener('click', startRecording);
-  stopBtn.addEventListener('click', stopRecording);
+  recordBtn.addEventListener('click', handleRecordButtonClick);
   copyBtn.addEventListener('click', copyTranscript);
   saveBtn.addEventListener('click', saveTranscript);
   // deleteMeeting.addEventListener('click', deleteMeetingHandler); // Removed old handler
@@ -257,6 +255,81 @@ function setupEventListeners() {
   });
 }
 
+// Handle record button click
+function handleRecordButtonClick() {
+  if (recordingState === 'idle') {
+    startRecording();
+  } else if (recordingState === 'recording') {
+    stopRecording();
+  }
+}
+
+// Set recording state and update UI
+function setRecordingState(state) {
+  recordingState = state;
+  updateButtonUI();
+  updateControlsState();
+}
+
+// Update button appearance based on state
+function updateButtonUI() {
+  const button = recordBtn;
+  const icon = button.querySelector('.button-icon');
+  const text = button.querySelector('.button-text');
+
+  // Remove all state classes
+  button.className = 'record-button';
+
+  switch (recordingState) {
+    case 'idle':
+      button.classList.add('idle');
+      button.disabled = false;
+      icon.textContent = '▶';
+      text.textContent = 'Start Recording';
+      statusIndicator.classList.remove('recording');
+      statusText.textContent = 'Ready';
+      break;
+
+    case 'recording':
+      button.classList.add('recording');
+      button.disabled = false;
+      icon.textContent = '■';
+      text.textContent = 'Stop & Transcribe';
+      statusIndicator.classList.add('recording');
+      statusText.textContent = 'Recording...';
+      break;
+
+    case 'stopping':
+      button.classList.add('processing');
+      button.disabled = true;
+      icon.textContent = '⏳';
+      text.textContent = 'Stopping...';
+      statusIndicator.classList.remove('recording');
+      statusText.textContent = 'Stopping...';
+      break;
+
+    case 'transcribing':
+      button.classList.add('processing');
+      button.disabled = true;
+      icon.textContent = '⏳';
+      text.textContent = 'Transcribing...';
+      statusIndicator.classList.remove('recording');
+      statusText.textContent = 'Transcribing...';
+      break;
+  }
+}
+
+// Update other controls based on state
+function updateControlsState() {
+  const isBusy = recordingState !== 'idle';
+  
+  micSelect.disabled = isBusy;
+  desktopSelect.disabled = isBusy;
+  languageSelect.disabled = isBusy;
+  modelSelect.disabled = isBusy;
+  refreshBtn.disabled = isBusy;
+}
+
 // Start recording
 async function startRecording() {
   const micId = micSelect.value;
@@ -280,11 +353,10 @@ async function startRecording() {
       loopbackId: parseInt(desktopId)
     });
 
-    isRecording = true;
+    setRecordingState('recording');
     recordingStartTime = Date.now();
 
     // Update UI
-    updateRecordingUI(true);
     startTimer();
 
     // Clear previous transcript
@@ -295,6 +367,7 @@ async function startRecording() {
   } catch (error) {
     console.error('Failed to start recording:', error);
     addLog(`Error: ${error.message}`, 'error');
+    setRecordingState('idle');
   }
 }
 
@@ -304,16 +377,10 @@ async function stopRecording() {
     addLog('Stopping recording...');
 
     // Immediately update UI to show we're stopping
-    statusText.textContent = 'Stopping...';
-    stopBtn.disabled = true; // Prevent double-click
+    setRecordingState('stopping');
     stopTimer(); // Stop timer immediately
 
     const result = await window.electronAPI.stopRecording();
-
-    isRecording = false;
-
-    // Update UI
-    updateRecordingUI(false);
 
     // Store the audio file path for transcription
     if (result.audioPath) {
@@ -326,18 +393,16 @@ async function stopRecording() {
     } else {
       addLog('Warning: Recording stopped but no audio file path returned', 'warning');
       transcriptOutput.innerHTML = '<p class="placeholder error">Recording completed but file not found. The recording may have failed.</p>';
-      statusText.textContent = 'Recording failed';
+      setRecordingState('idle');
     }
 
   } catch (error) {
     console.error('Failed to stop recording:', error);
     addLog(`Error: ${error.message}`, 'error');
     transcriptOutput.innerHTML = `<p class="placeholder error">Recording failed: ${error.message}</p>`;
-    statusText.textContent = 'Recording failed';
-
-    isRecording = false;
+    
     stopTimer();
-    updateRecordingUI(false);
+    setRecordingState('idle');
   }
 }
 
@@ -350,12 +415,12 @@ async function transcribeAudio() {
   if (!currentAudioFile) {
     addLog('Error: No audio file to transcribe', 'error');
     transcriptOutput.innerHTML = '<p class="placeholder error">No audio file available for transcription.</p>';
-    statusText.textContent = 'No file to transcribe';
+    setRecordingState('idle');
     return;
   }
 
   try {
-    statusText.textContent = 'Transcribing...';
+    setRecordingState('transcribing');
     transcriptOutput.innerHTML = '<p class="placeholder">Transcribing... This may take a moment.</p>';
 
     addLog(`Language: ${language}, Model: ${modelSize}`);
@@ -376,7 +441,6 @@ async function transcribeAudio() {
     // Enable actions
     transcriptActions.style.display = 'flex';
 
-    statusText.textContent = 'Transcription complete!';
     addLog('Transcription complete!');
     addLog(`Word count: ${result.text.split(' ').length}`);
 
@@ -398,12 +462,14 @@ async function transcribeAudio() {
 
     // Reload meeting history
     await loadMeetingHistory();
+    
+    setRecordingState('idle');
 
   } catch (error) {
     console.error('Failed to transcribe:', error);
     addLog(`Error: ${error.message}`, 'error');
     transcriptOutput.innerHTML = `<p class="placeholder error">Transcription failed: ${error.message}</p>`;
-    statusText.textContent = 'Transcription failed';
+    setRecordingState('idle');
   }
 }
 
@@ -474,29 +540,10 @@ async function deleteMeetingHandler(meetingId) {
   }
 }
 
-// Update recording UI state
+// Update recording UI state - DEPRECATED, using setRecordingState instead
+// Kept empty to prevent errors if called elsewhere
 function updateRecordingUI(recording) {
-  if (recording) {
-    statusIndicator.classList.add('recording');
-    statusText.textContent = 'Recording...';
-    startBtn.disabled = true;
-    stopBtn.disabled = false;
-    micSelect.disabled = true;
-    desktopSelect.disabled = true;
-    languageSelect.disabled = true;
-    modelSelect.disabled = true;
-    refreshBtn.disabled = true;
-  } else {
-    statusIndicator.classList.remove('recording');
-    statusText.textContent = 'Processing...';
-    startBtn.disabled = false;
-    stopBtn.disabled = true;
-    micSelect.disabled = false;
-    desktopSelect.disabled = false;
-    languageSelect.disabled = false;
-    modelSelect.disabled = false;
-    refreshBtn.disabled = false;
-  }
+  // No-op
 }
 
 // Timer functions
