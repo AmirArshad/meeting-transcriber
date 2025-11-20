@@ -1,6 +1,6 @@
 {
   "name": "meeting-transcriber",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "AI-powered meeting transcription with desktop audio capture",
   "main": "src/main.js",
   "scripts": {
@@ -55,17 +55,23 @@
       {
         "from": "build/resources/python",
         "to": "python",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       },
       {
         "from": "build/resources/ffmpeg",
         "to": "ffmpeg",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       },
       {
         "from": "backend",
         "to": "backend",
-        "filter": ["**/*.py"]
+        "filter": [
+          "**/*.py"
+        ]
       }
     ],
     "directories": {

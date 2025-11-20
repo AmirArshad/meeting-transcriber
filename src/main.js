@@ -14,7 +14,13 @@ const fs = require('fs');
 
 // Set a custom userData path to avoid permission errors with system cache
 // This keeps all cache/config in the project folder instead of AppData
-const userDataPath = path.join(__dirname, '../userData');
+// Set a custom userData path
+// In production, we must store outside app.asar (in resources)
+// In development, we store in project root
+const userDataPath = app.isPackaged
+  ? path.join(process.resourcesPath, 'userData')
+  : path.join(__dirname, '../userData');
+
 if (!fs.existsSync(userDataPath)) {
   fs.mkdirSync(userDataPath);
 }
