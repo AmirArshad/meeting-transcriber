@@ -617,8 +617,10 @@ ipcMain.handle('transcribe-audio', async (event, options) => {
  */
 ipcMain.handle('list-meetings', async () => {
   return new Promise((resolve, reject) => {
+    const recordingsDir = path.join(app.getPath('userData'), 'recordings');
     const python = spawnTrackedPython([
       path.join(pythonConfig.backendPath, 'meeting_manager.py'),
+      '--recordings-dir', recordingsDir,
       'list'
     ]);
 
@@ -648,8 +650,10 @@ ipcMain.handle('list-meetings', async () => {
  */
 ipcMain.handle('get-meeting', async (event, meetingId) => {
   return new Promise((resolve, reject) => {
+    const recordingsDir = path.join(app.getPath('userData'), 'recordings');
     const python = spawnTrackedPython([
       path.join(pythonConfig.backendPath, 'meeting_manager.py'),
+      '--recordings-dir', recordingsDir,
       'get',
       meetingId
     ]);
@@ -680,8 +684,10 @@ ipcMain.handle('get-meeting', async (event, meetingId) => {
  */
 ipcMain.handle('delete-meeting', async (event, meetingId) => {
   return new Promise((resolve, reject) => {
+    const recordingsDir = path.join(app.getPath('userData'), 'recordings');
     const python = spawnTrackedPython([
       path.join(pythonConfig.backendPath, 'meeting_manager.py'),
+      '--recordings-dir', recordingsDir,
       'delete',
       meetingId
     ]);
@@ -703,8 +709,10 @@ ipcMain.handle('add-meeting', async (event, meetingData) => {
   return new Promise((resolve, reject) => {
     const { audioPath, transcriptPath, duration, language, model, title } = meetingData;
 
+    const recordingsDir = path.join(app.getPath('userData'), 'recordings');
     const args = [
       path.join(pythonConfig.backendPath, 'meeting_manager.py'),
+      '--recordings-dir', recordingsDir,
       'add',
       '--audio', audioPath,
       '--transcript', transcriptPath,

@@ -204,6 +204,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Meeting Manager CLI")
+    parser.add_argument('--recordings-dir', default='recordings', help='Recordings directory path')
     subparsers = parser.add_subparsers(dest='command', help='Command to execute')
 
     # List meetings
@@ -228,7 +229,7 @@ def main():
 
     args = parser.parse_args()
 
-    manager = MeetingManager()
+    manager = MeetingManager(recordings_dir=args.recordings_dir)
 
     if args.command == 'list':
         meetings = manager.list_meetings()
