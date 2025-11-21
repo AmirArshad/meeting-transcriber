@@ -701,6 +701,13 @@ async function stopRecording() {
   }
 }
 
+// Helper function to format seconds into MM:SS
+function formatTimestamp(seconds) {
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
+
 // Transcribe audio (auto-called after stop)
 async function transcribeAudio() {
   const language = languageSelect.value;
@@ -727,11 +734,39 @@ async function transcribeAudio() {
       modelSize
     });
 
-    // Display transcript
+    // Display transcript with timestamps
     transcriptOutput.innerHTML = '';
-    const transcriptText = document.createElement('div');
-    transcriptText.textContent = result.text || 'No transcription available';
-    transcriptOutput.appendChild(transcriptText);
+
+    if (result.segments && result.segments.length > 0) {
+      // Display each segment with timestamp
+      result.segments.forEach(segment => {
+        const segmentDiv = document.createElement('div');
+        segmentDiv.style.marginBottom = '12px';
+
+        // Timestamp
+        const timestamp = document.createElement('div');
+        timestamp.style.fontSize = '11px';
+        timestamp.style.color = '#888';
+        timestamp.style.marginBottom = '4px';
+        const startTime = formatTimestamp(segment.start);
+        const endTime = formatTimestamp(segment.end);
+        timestamp.textContent = `[${startTime} - ${endTime}]`;
+
+        // Text
+        const text = document.createElement('div');
+        text.textContent = segment.text;
+        text.style.lineHeight = '1.5';
+
+        segmentDiv.appendChild(timestamp);
+        segmentDiv.appendChild(text);
+        transcriptOutput.appendChild(segmentDiv);
+      });
+    } else {
+      // Fallback to plain text if no segments
+      const transcriptText = document.createElement('div');
+      transcriptText.textContent = result.text || 'No transcription available';
+      transcriptOutput.appendChild(transcriptText);
+    }
 
     // Enable actions
     transcriptActions.style.display = 'flex';

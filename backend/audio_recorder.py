@@ -289,19 +289,31 @@ class AudioRecorder:
                 print(f"  Converting desktop audio from mono to stereo...", file=sys.stderr)
                 desktop_audio = np.repeat(desktop_audio, 2)
 
-            # Align to same length
-            min_length = min(len(mic_audio), len(desktop_audio))
+            # Align to same length by padding shorter stream with silence
+            # This preserves timing - truncating would cause misalignment
+            mic_len = len(mic_audio)
+            desktop_len = len(desktop_audio)
+            max_length = max(mic_len, desktop_len)
 
             # Safety check: ensure we have valid audio data
-            if min_length == 0:
+            if max_length == 0:
                 raise RuntimeError(
-                    "Audio alignment failed - one or both audio tracks are empty after resampling. "
+                    "Audio alignment failed - both audio tracks are empty after resampling. "
                     "This may be due to audio buffer corruption or device issues."
                 )
 
-            print(f"  Aligning audio: mic={len(mic_audio)} samples, desktop={len(desktop_audio)} samples, using={min_length}", file=sys.stderr)
-            mic_audio = mic_audio[:min_length]
-            desktop_audio = desktop_audio[:min_length]
+            print(f"  Aligning audio: mic={mic_len} samples, desktop={desktop_len} samples, padding to={max_length}", file=sys.stderr)
+
+            # Pad shorter stream with silence at the end
+            if mic_len < max_length:
+                padding = np.zeros(max_length - mic_len, dtype=np.int16)
+                mic_audio = np.concatenate([mic_audio, padding])
+                print(f"  Padded mic with {max_length - mic_len} samples of silence", file=sys.stderr)
+
+            if desktop_len < max_length:
+                padding = np.zeros(max_length - desktop_len, dtype=np.int16)
+                desktop_audio = np.concatenate([desktop_audio, padding])
+                print(f"  Padded desktop with {max_length - desktop_len} samples of silence", file=sys.stderr)
 
             # Mix
             print("  Mixing mic + desktop...", file=sys.stderr)

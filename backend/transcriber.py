@@ -329,6 +329,11 @@ class TranscriberService:
             })
             full_text.append(segment.text.strip())
 
+        # Merge segments into larger chunks for better readability
+        # Target: ~20 seconds per chunk (good for long meetings)
+        print(f"Merging {len(segments_list)} segments into larger chunks...", file=sys.stderr)
+        segments_list = self._merge_segments(segments_list, target_duration=20.0)
+
         # Prepare results
         results = {
             'text': ' '.join(full_text),
@@ -357,6 +362,58 @@ class TranscriberService:
         results['audioPath'] = str(audio_path)
 
         return results
+
+    def _merge_segments(
+        self,
+        segments: List[Dict[str, Any]],
+        target_duration: float = 20.0
+    ) -> List[Dict[str, Any]]:
+        """
+        Merge consecutive segments into larger chunks for better readability.
+
+        Args:
+            segments: List of segment dicts with 'start', 'end', 'text'
+            target_duration: Target duration in seconds for each merged chunk (default: 20s)
+
+        Returns:
+            List of merged segments
+        """
+        if not segments:
+            return []
+
+        merged = []
+        current_chunk = None
+
+        for segment in segments:
+            if current_chunk is None:
+                # Start new chunk
+                current_chunk = {
+                    'start': segment['start'],
+                    'end': segment['end'],
+                    'text': segment['text']
+                }
+            else:
+                chunk_duration = current_chunk['end'] - current_chunk['start']
+
+                # If adding this segment would exceed target duration, save current chunk
+                if chunk_duration >= target_duration:
+                    merged.append(current_chunk)
+                    current_chunk = {
+                        'start': segment['start'],
+                        'end': segment['end'],
+                        'text': segment['text']
+                    }
+                else:
+                    # Merge into current chunk
+                    current_chunk['end'] = segment['end']
+                    current_chunk['text'] += ' ' + segment['text']
+
+        # Don't forget the last chunk
+        if current_chunk is not None:
+            merged.append(current_chunk)
+
+        print(f"  Merged into {len(merged)} chunks (target: {target_duration}s each)", file=sys.stderr)
+        return merged
 
     def _save_markdown(
         self,
@@ -481,7 +538,17 @@ def main():
 
         if args.json:
             # Output JSON to stdout for integration
-            print(json.dumps(results, indent=2))
+            # Keep ensure_ascii=True (default) to avoid encoding issues on Windows
+            # Unicode will be escaped as \uXXXX which JSON.parse handles correctly
+            try:
+                json_output = json.dumps(results, indent=2)
+                print(json_output)
+                sys.stdout.flush()  # Ensure output is sent immediately
+            except Exception as json_error:
+                print(f"\nERROR serializing JSON: {json_error}", file=sys.stderr)
+                print(f"Results type: {type(results)}", file=sys.stderr)
+                print(f"Results keys: {results.keys()}", file=sys.stderr)
+                raise
         else:
             # Human-readable output
             print("\n" + "=" * 60)
@@ -493,10 +560,9 @@ def main():
     except Exception as e:
         # Print error to stderr so it doesn't corrupt JSON output
         print(f"\nERROR: {e}", file=sys.stderr)
-        # Only print traceback if not in JSON mode or if it's a critical error
-        if not args.json:
-            import traceback
-            traceback.print_exc()
+        # Always print traceback to stderr for debugging
+        import traceback
+        traceback.print_exc(file=sys.stderr)
         sys.exit(1)
     finally:
         if 'transcriber' in locals():
