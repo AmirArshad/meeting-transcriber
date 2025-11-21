@@ -48,7 +48,6 @@
       "installerHeaderIcon": "build/icon.ico",
       "license": "LICENSE.txt",
       "differentialPackage": true,
-      "include": "build/installer.nsh",
       "warningsAsErrors": false,
       "displayLanguageSelector": false
     },
