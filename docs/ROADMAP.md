@@ -157,8 +157,8 @@ Have an idea for a new feature?
 
 ## Release Schedule
 
-**Current Version:** 1.3.0
-**Next Release:** 1.4.0 (Q1 2025)
+**Current Version:** 1.4.0
+**Next Release:** 1.5.0 (Q2 2025)
 
 **Versioning:**
 

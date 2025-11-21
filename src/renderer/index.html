@@ -13,6 +13,15 @@
     />
   </head>
   <body>
+    <!-- Loading Screen -->
+    <div id="loading-screen" class="loading-screen">
+      <div class="loading-content">
+        <div class="loading-spinner"></div>
+        <h2 class="loading-title">Meeting Transcriber</h2>
+        <p class="loading-message" id="loading-message">Initializing...</p>
+      </div>
+    </div>
+
     <div class="container">
       <!-- Header -->
       <header>
@@ -330,7 +339,9 @@
                   <h3>About</h3>
                   <div class="info-row">
                     <span class="info-label">Version:</span>
-                    <span class="info-value">1.2.4</span>
+                    <span class="info-value" id="app-version"
+                      >Loading...</span
+                    >
                   </div>
                   <div class="info-row">
                     <span class="info-label">Electron:</span>

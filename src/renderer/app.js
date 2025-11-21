@@ -31,6 +31,8 @@ let currentAudioFile = null;
 let currentMeetingId = null;
 let meetings = [];
 let audioVisualizer = null;
+let isFirstRecording = true; // Track if this is first recording (for longer timeout)
+let isInitializing = true; // Track if app is still initializing
 
 // Settings persistence
 const SETTINGS_KEY = 'meeting-transcriber-settings';
@@ -78,16 +80,198 @@ function applySavedSettings() {
   }
 }
 
-// Initialize app
+// Initialize app with first-time setup
 async function init() {
-  await loadAudioDevices();
-  await loadMeetingHistory();
-  
-  // Initialize visualizer
-  audioVisualizer = new AudioVisualizer();
-  
-  setupEventListeners();
-  console.log('App initialized');
+  const loadingScreen = document.getElementById('loading-screen');
+  const loadingMessage = document.getElementById('loading-message');
+
+  // Helper to update loading message
+  const updateLoading = (message) => {
+    if (loadingMessage) {
+      loadingMessage.textContent = message;
+    }
+  };
+
+  // Show initializing state
+  setRecordingState('initializing');
+  statusText.textContent = 'Initializing...';
+
+  try {
+    // Step 1: Check if model is downloaded
+    updateLoading('Checking system setup...');
+    const settings = loadSettings();
+    const modelSize = settings.modelSize || 'small';
+
+    addLog('Checking system setup...');
+    const modelCheck = await window.electronAPI.checkModelDownloaded(modelSize);
+
+    if (!modelCheck.downloaded) {
+      // Hide loading screen before showing first-time setup
+      if (loadingScreen) {
+        loadingScreen.classList.add('hidden');
+        setTimeout(() => loadingScreen.remove(), 300);
+      }
+
+      // First-time setup: Download model
+      await showFirstTimeSetup(modelSize);
+    }
+
+    // Step 2: Warm up audio system
+    updateLoading('Initializing audio system...');
+    addLog('Initializing audio system...');
+    await window.electronAPI.warmUpAudioSystem();
+
+    // Step 3: Load audio devices
+    updateLoading('Loading audio devices...');
+    await loadAudioDevices();
+
+    // Step 4: Load meeting history
+    updateLoading('Loading history...');
+    await loadMeetingHistory();
+
+    // Initialize visualizer
+    audioVisualizer = new AudioVisualizer();
+
+    setupEventListeners();
+
+    // Mark initialization complete
+    isInitializing = false;
+    setRecordingState('idle');
+    addLog('Ready to record!');
+    console.log('App initialized');
+
+    // Hide loading screen with fade out
+    if (loadingScreen && !loadingScreen.classList.contains('hidden')) {
+      updateLoading('Ready!');
+      await new Promise(resolve => setTimeout(resolve, 300));
+      loadingScreen.classList.add('hidden');
+      setTimeout(() => loadingScreen.remove(), 300);
+    }
+  } catch (error) {
+    console.error('Initialization error:', error);
+    addLog(`Initialization error: ${error.message}`, 'error');
+    isInitializing = false;
+    setRecordingState('idle');
+
+    // Hide loading screen on error
+    if (loadingScreen) {
+      updateLoading('Error during initialization');
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      loadingScreen.classList.add('hidden');
+      setTimeout(() => loadingScreen.remove(), 300);
+    }
+  }
+}
+
+// First-time setup: Download model with progress UI
+async function showFirstTimeSetup(modelSize) {
+  addLog(`First-time setup: Downloading AI model (${modelSize})...`);
+
+  // Show setup overlay (similar to GPU installation)
+  const setupOverlay = createSetupOverlay();
+  document.body.appendChild(setupOverlay);
+
+  const progressBar = setupOverlay.querySelector('.setup-progress-bar');
+  const progressText = setupOverlay.querySelector('.setup-progress-text');
+  const logOutput = setupOverlay.querySelector('.setup-log-output');
+
+  progressText.textContent = 'Downloading Whisper AI model...';
+
+  // Listen for progress updates
+  window.electronAPI.onModelDownloadProgress((data) => {
+    logOutput.textContent += data;
+    logOutput.scrollTop = logOutput.scrollHeight;
+
+    // Update progress text with meaningful messages
+    if (data.includes('Loading')) {
+      progressText.textContent = 'Loading model configuration...';
+    } else if (data.includes('Downloading')) {
+      progressText.textContent = 'Downloading model files (this may take a few minutes)...';
+    } else if (data.includes('Model loaded') || data.includes('successfully')) {
+      progressText.textContent = 'Model ready!';
+    }
+  });
+
+  // Simulate progress (we don't get real download progress)
+  let progress = 0;
+  const progressInterval = setInterval(() => {
+    if (progress < 90) {
+      progress += Math.random() * 3;
+      progressBar.style.width = `${Math.min(progress, 90)}%`;
+    }
+  }, 1000);
+
+  try {
+    // Download model
+    await window.electronAPI.downloadModel(modelSize);
+
+    // Complete
+    clearInterval(progressInterval);
+    progressBar.style.width = '100%';
+    progressText.textContent = 'Setup complete!';
+
+    addLog('AI model downloaded successfully!');
+
+    // Wait a moment then remove overlay
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    document.body.removeChild(setupOverlay);
+  } catch (error) {
+    clearInterval(progressInterval);
+    progressText.textContent = 'Setup failed!';
+    logOutput.textContent += `\nERROR: ${error.message}`;
+
+    addLog('Model download failed. You can try again from Settings.', 'error');
+
+    // Wait for user to see error, then continue anyway
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    document.body.removeChild(setupOverlay);
+  }
+}
+
+// Create setup overlay UI (similar to GPU installation)
+function createSetupOverlay() {
+  const overlay = document.createElement('div');
+  overlay.style.cssText = `
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.8);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+  `;
+
+  const panel = document.createElement('div');
+  panel.style.cssText = `
+    background: white;
+    border-radius: 8px;
+    padding: 32px;
+    max-width: 600px;
+    width: 90%;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+  `;
+
+  panel.innerHTML = `
+    <h2 style="margin: 0 0 16px 0; font-size: 24px; color: #1f2937;">First-Time Setup</h2>
+    <p style="margin: 0 0 24px 0; color: #6b7280;">Downloading AI transcription model. This only happens once and takes 2-5 minutes.</p>
+
+    <div style="margin-bottom: 16px;">
+      <div style="background: #e5e7eb; height: 8px; border-radius: 4px; overflow: hidden;">
+        <div class="setup-progress-bar" style="background: linear-gradient(90deg, #3b82f6, #2563eb); height: 100%; width: 0%; transition: width 0.3s;"></div>
+      </div>
+      <div class="setup-progress-text" style="margin-top: 8px; font-size: 14px; color: #6b7280;">Initializing...</div>
+    </div>
+
+    <div style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 4px; padding: 12px; max-height: 200px; overflow-y: auto; font-family: monospace; font-size: 12px; color: #374151;">
+      <div class="setup-log-output"></div>
+    </div>
+  `;
+
+  overlay.appendChild(panel);
+  return overlay;
 }
 
 // Load audio devices
@@ -256,6 +440,12 @@ function setupEventListeners() {
     addLog(data);
   });
 
+  window.electronAPI.onRecordingInitProgress((progress) => {
+    // Show detailed progress during recording initialization
+    addLog(progress.message);
+    statusText.textContent = progress.message;
+  });
+
   window.electronAPI.onTranscriptionProgress((data) => {
     addLog(data);
   });
@@ -271,6 +461,12 @@ function setupEventListeners() {
   window.electronAPI.onUpdateAvailable((updateInfo) => {
     showUpdateNotification(updateInfo);
   });
+
+  // Check if user has recorded before (for timeout settings)
+  const settings = loadSettings();
+  if (settings.hasRecordedBefore) {
+    isFirstRecording = false;
+  }
 }
 
 // Handle record button click
@@ -300,6 +496,15 @@ function updateButtonUI() {
   button.className = 'record-button';
 
   switch (recordingState) {
+    case 'initializing':
+      button.classList.add('processing');
+      button.disabled = true;
+      icon.textContent = '⏳';
+      text.textContent = 'Initializing...';
+      statusIndicator.classList.remove('recording');
+      statusText.textContent = 'Initializing...';
+      break;
+
     case 'idle':
       button.classList.add('idle');
       button.disabled = false;
@@ -349,16 +554,16 @@ function updateButtonUI() {
 
 // Update other controls based on state
 function updateControlsState() {
-  const isBusy = recordingState !== 'idle';
-  
-  micSelect.disabled = isBusy;
-  desktopSelect.disabled = isBusy;
-  languageSelect.disabled = isBusy;
-  modelSelect.disabled = isBusy;
-  refreshBtn.disabled = isBusy;
+  const isBusy = recordingState !== 'idle' && recordingState !== 'initializing';
+
+  micSelect.disabled = isBusy || isInitializing;
+  desktopSelect.disabled = isBusy || isInitializing;
+  languageSelect.disabled = isBusy || isInitializing;
+  modelSelect.disabled = isBusy || isInitializing;
+  refreshBtn.disabled = isBusy || isInitializing;
 }
 
-// Start recording
+// Start recording with retry logic
 async function startRecording() {
   const micId = micSelect.value;
   const desktopId = desktopSelect.value;
@@ -373,34 +578,97 @@ async function startRecording() {
     return;
   }
 
-  try {
-    addLog('Starting recording...');
+  // Try up to 2 times with exponential backoff
+  const maxAttempts = 2;
+  let attempt = 0;
 
-    await window.electronAPI.startRecording({
-      micId: parseInt(micId),
-      loopbackId: parseInt(desktopId)
-    });
+  while (attempt < maxAttempts) {
+    attempt++;
 
-    // Start Countdown
-    setRecordingState('countdown');
-    await startCountdown();
+    try {
+      if (attempt > 1) {
+        addLog(`Retrying recording (attempt ${attempt}/${maxAttempts})...`);
+        // Wait a moment before retrying
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      } else {
+        addLog('Starting recording...');
+      }
 
-    setRecordingState('recording');
-    recordingStartTime = Date.now();
+      // Start countdown IMMEDIATELY (don't wait for backend)
+      setRecordingState('countdown');
 
-    // Update UI
-    startTimer();
-    audioVisualizer.start();
+      // Start backend initialization in parallel with countdown
+      const recordingPromise = window.electronAPI.startRecording({
+        micId: parseInt(micId),
+        loopbackId: parseInt(desktopId),
+        isFirstRecording: isFirstRecording && attempt === 1 // Only use first-recording timeout on first attempt
+      });
 
-    // Clear previous transcript
-    transcriptOutput.innerHTML = '<p class="placeholder">Recording in progress...</p>';
-    transcriptActions.style.display = 'none';
+      // Countdown runs in parallel (3 seconds)
+      const countdownPromise = startCountdown();
 
-    addLog('Recording started!');
-  } catch (error) {
-    console.error('Failed to start recording:', error);
-    addLog(`Error: ${error.message}`, 'error');
-    setRecordingState('idle');
+      // Wait for both to complete
+      // In most cases, countdown will finish first and backend will be ready by then
+      await Promise.all([recordingPromise, countdownPromise]);
+
+      // After first successful recording, set flag to false
+      if (isFirstRecording) {
+        isFirstRecording = false;
+        saveSettings({ hasRecordedBefore: true });
+      }
+
+      setRecordingState('recording');
+      recordingStartTime = Date.now();
+
+      // Update UI
+      startTimer();
+      audioVisualizer.start();
+
+      // Clear previous transcript
+      transcriptOutput.innerHTML = '<p class="placeholder">Recording in progress...</p>';
+      transcriptActions.style.display = 'none';
+
+      addLog('Recording started!');
+      return; // Success! Exit the retry loop
+
+    } catch (error) {
+      console.error(`Failed to start recording (attempt ${attempt}):`, error);
+
+      if (attempt >= maxAttempts) {
+        // All attempts failed
+        const errorMsg = error.message || 'Unknown error';
+        addLog(`Recording failed after ${maxAttempts} attempts: ${errorMsg}`, 'error');
+
+        // Show helpful error dialog
+        const shouldCheckPermissions = errorMsg.toLowerCase().includes('permission') ||
+                                        errorMsg.toLowerCase().includes('access') ||
+                                        errorMsg.toLowerCase().includes('device');
+
+        if (shouldCheckPermissions) {
+          alert(
+            'Recording failed. Please check:\n\n' +
+            '1. Microphone permissions are granted to this app\n' +
+            '2. Selected devices are not in use by another application\n' +
+            '3. Devices are properly connected\n\n' +
+            'You may need to:\n' +
+            '• Grant microphone permissions in Windows Settings\n' +
+            '• Restart the application\n' +
+            '• Try different audio devices'
+          );
+        } else {
+          alert(
+            `Recording failed: ${errorMsg}\n\n` +
+            'Try refreshing your audio devices or restarting the app.'
+          );
+        }
+
+        setRecordingState('idle');
+        return; // Give up
+      } else {
+        // Try again
+        addLog(`Attempt ${attempt} failed. Retrying...`, 'warning');
+      }
+    }
   }
 }
 
@@ -671,6 +939,7 @@ async function initSettingsTab() {
   // Get system info
   try {
     const systemInfo = await window.electronAPI.getSystemInfo();
+    document.getElementById('app-version').textContent = systemInfo.app;
     document.getElementById('electron-version').textContent = systemInfo.electron;
     document.getElementById('python-version').textContent = systemInfo.python;
   } catch (error) {

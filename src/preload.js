@@ -11,6 +11,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Get audio devices
   getAudioDevices: () => ipcRenderer.invoke('get-audio-devices'),
 
+  // Audio system initialization
+  warmUpAudioSystem: () => ipcRenderer.invoke('warm-up-audio-system'),
+  checkModelDownloaded: (modelSize) => ipcRenderer.invoke('check-model-downloaded', modelSize),
+  downloadModel: (modelSize) => ipcRenderer.invoke('download-model', modelSize),
+
   // Recording controls
   startRecording: (options) => ipcRenderer.invoke('start-recording', options),
   stopRecording: () => ipcRenderer.invoke('stop-recording'),
@@ -38,11 +43,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onRecordingProgress: (callback) => {
     ipcRenderer.on('recording-progress', (event, data) => callback(data));
   },
+  onRecordingInitProgress: (callback) => {
+    ipcRenderer.on('recording-init-progress', (event, data) => callback(data));
+  },
   onTranscriptionProgress: (callback) => {
     ipcRenderer.on('transcription-progress', (event, data) => callback(data));
   },
   onGPUInstallProgress: (callback) => {
     ipcRenderer.on('gpu-install-progress', (event, data) => callback(data));
+  },
+  onModelDownloadProgress: (callback) => {
+    ipcRenderer.on('model-download-progress', (event, data) => callback(data));
   },
   onAudioLevels: (callback) => {
     ipcRenderer.on('audio-levels', (event, data) => callback(data));

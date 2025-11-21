@@ -86,6 +86,9 @@ if (!app.isPackaged) {
   process.env.PATH = `${ffmpegDir};${process.env.PATH}`;
 }
 
+// Suppress Python warnings to reduce console noise
+process.env.PYTHONWARNINGS = 'ignore::DeprecationWarning,ignore::UserWarning';
+
 console.log('Python Configuration:', pythonConfig);
 
 // Create the system tray
@@ -300,11 +303,16 @@ function preloadWhisperModel() {
 
 // Initialize app
 app.whenReady().then(() => {
+  // Set cache paths to userData to avoid permission issues
+  const cacheDir = path.join(app.getPath('userData'), 'Cache');
+  app.setPath('cache', cacheDir);
+
   createTray();
   createWindow();
 
-  // Preload Whisper model in background to improve first transcription experience
-  preloadWhisperModel();
+  // Don't preload model in background anymore - the renderer will handle it during init
+  // This prevents double-downloading and gives better UX with progress feedback
+  // preloadWhisperModel(); // REMOVED
 
   // Check for updates after app loads (5 second delay to not slow startup)
   setTimeout(async () => {
@@ -400,11 +408,128 @@ ipcMain.handle('get-audio-devices', async () => {
 });
 
 /**
- * Start recording
+ * Warm up audio system (enumerate devices and test streams)
+ * This should be called on app startup to initialize audio drivers
+ */
+ipcMain.handle('warm-up-audio-system', async () => {
+  return new Promise((resolve) => {
+    // Step 1: Enumerate devices (forces driver initialization)
+    const python = spawnTrackedPython([
+      path.join(pythonConfig.backendPath, 'device_manager.py')
+    ]);
+
+    let output = '';
+
+    python.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    python.on('close', (code) => {
+      if (code === 0) {
+        try {
+          const data = JSON.parse(output);
+          console.log('Audio system warmed up successfully');
+          console.log(`  Found ${data.input_devices.length} input devices`);
+          console.log(`  Found ${data.loopback_devices.length} loopback devices`);
+          resolve({ success: true, deviceCount: data.input_devices.length + data.loopback_devices.length });
+        } catch (e) {
+          // Even if parsing fails, enumeration happened so drivers are warm
+          console.log('Audio system enumeration completed (with parsing error)');
+          resolve({ success: true, deviceCount: 0 });
+        }
+      } else {
+        // Even if it failed, we tried to initialize
+        console.log('Audio system warm-up completed (with error)');
+        resolve({ success: true, deviceCount: 0 });
+      }
+    });
+  });
+});
+
+/**
+ * Check if Whisper model is downloaded
+ */
+ipcMain.handle('check-model-downloaded', async (event, modelSize) => {
+  return new Promise((resolve) => {
+    // Check if model exists in cache
+    // faster-whisper downloads to ~/.cache/huggingface/hub
+    const homeDir = require('os').homedir();
+    const cacheDir = path.join(homeDir, '.cache', 'huggingface', 'hub');
+
+    // Model naming pattern: models--guillaumekln--faster-whisper-{size}
+    const modelPattern = `models--guillaumekln--faster-whisper-${modelSize || 'small'}`;
+
+    try {
+      if (fs.existsSync(cacheDir)) {
+        const items = fs.readdirSync(cacheDir);
+        const modelExists = items.some(item => item.includes(modelPattern));
+        resolve({ downloaded: modelExists, modelSize: modelSize || 'small' });
+      } else {
+        resolve({ downloaded: false, modelSize: modelSize || 'small' });
+      }
+    } catch (e) {
+      // If we can't check, assume not downloaded
+      resolve({ downloaded: false, modelSize: modelSize || 'small' });
+    }
+  });
+});
+
+/**
+ * Download Whisper model (preload)
+ */
+ipcMain.handle('download-model', async (event, modelSize) => {
+  return new Promise((resolve, reject) => {
+    const model = modelSize || 'small';
+    console.log(`Downloading Whisper model: ${model}`);
+
+    const python = spawnTrackedPython([
+      path.join(pythonConfig.backendPath, 'transcriber.py'),
+      '--preload',
+      '--model', model
+    ]);
+
+    let hasError = false;
+
+    python.stdout.on('data', (data) => {
+      const output = data.toString();
+      // Send progress updates to renderer
+      mainWindow.webContents.send('model-download-progress', output);
+    });
+
+    python.stderr.on('data', (data) => {
+      const output = data.toString();
+      console.log(`[Model Download] ${output}`);
+
+      // Send progress to renderer
+      mainWindow.webContents.send('model-download-progress', output);
+
+      // Check for errors
+      if (output.toLowerCase().includes('error') && !output.includes('non-critical')) {
+        hasError = true;
+      }
+    });
+
+    python.on('close', (code) => {
+      if (code === 0) {
+        console.log('Model downloaded successfully');
+        resolve({ success: true });
+      } else if (!hasError) {
+        // Non-zero exit but no explicit error - might be OK
+        console.log('Model download completed with warnings');
+        resolve({ success: true });
+      } else {
+        reject(new Error('Failed to download model'));
+      }
+    });
+  });
+});
+
+/**
+ * Start recording with improved timeout and progress feedback
  */
 ipcMain.handle('start-recording', async (event, options) => {
   return new Promise((resolve, reject) => {
-    const { micId, loopbackId } = options;
+    const { micId, loopbackId, isFirstRecording } = options;
 
     // Generate unique filename with timestamp
     const timestamp = new Date().toISOString()
@@ -430,10 +555,11 @@ ipcMain.handle('start-recording', async (event, options) => {
     ]);
 
     let recordingStarted = false;
+    let progressStage = 'initializing';
 
     pythonProcess.stdout.on('data', (data) => {
       const output = data.toString();
-      
+
       // Check if this is a JSON level update
       if (output.trim().startsWith('{"type": "levels"')) {
         try {
@@ -458,9 +584,22 @@ ipcMain.handle('start-recording', async (event, options) => {
       const output = data.toString();
       console.log(`Python status: ${output}`);
 
+      // Send detailed progress updates
+      if (output.includes('Device configuration')) {
+        progressStage = 'configuring';
+        mainWindow.webContents.send('recording-init-progress', { stage: 'configuring', message: 'Configuring audio devices...' });
+      } else if (output.includes('Microphone stream opened')) {
+        progressStage = 'mic_opened';
+        mainWindow.webContents.send('recording-init-progress', { stage: 'mic_opened', message: 'Microphone ready...' });
+      } else if (output.includes('Desktop audio stream opened')) {
+        progressStage = 'desktop_opened';
+        mainWindow.webContents.send('recording-init-progress', { stage: 'desktop_opened', message: 'Desktop audio ready...' });
+      }
+
       // Wait for confirmation that recording actually started
       if (!recordingStarted && output.includes('Recording started!')) {
         recordingStarted = true;
+        mainWindow.webContents.send('recording-init-progress', { stage: 'started', message: 'Recording started!' });
         resolve({ success: true, message: 'Recording started' });
       }
     });
@@ -468,19 +607,48 @@ ipcMain.handle('start-recording', async (event, options) => {
     pythonProcess.on('close', (code) => {
       if (!recordingStarted) {
         // Process closed before recording started - this is an error
-        reject(new Error(`Recording failed to start. Process exited with code ${code}`));
+        let errorMessage = `Recording failed to start. Process exited with code ${code}.`;
+
+        // Provide helpful hints based on progress stage
+        if (progressStage === 'initializing') {
+          errorMessage += '\n\nTip: Try refreshing your audio devices or restarting the app.';
+        } else if (progressStage === 'configuring') {
+          errorMessage += '\n\nTip: Check that your selected audio devices are not in use by another application.';
+        }
+
+        reject(new Error(errorMessage));
       }
     });
 
-    // Set a timeout in case Python process hangs
-    setTimeout(() => {
+    // Longer timeout for first recording (15s), shorter for subsequent (10s)
+    const timeout = isFirstRecording ? 15000 : 10000;
+    const timeoutHandle = setTimeout(() => {
       if (!recordingStarted) {
-        reject(new Error('Recording failed to start within 5 seconds. Check audio device settings.'));
+        let errorMessage = `Recording failed to start within ${timeout / 1000} seconds.`;
+
+        // Provide specific guidance based on what stage failed
+        if (progressStage === 'initializing') {
+          errorMessage += '\n\nThe audio system is taking longer than expected to initialize.';
+          errorMessage += '\nThis can happen on first launch. Please try again.';
+        } else if (progressStage === 'configuring') {
+          errorMessage += '\n\nAudio device configuration is taking too long.';
+          errorMessage += '\nCheck that your devices are properly connected and not in use.';
+        } else if (progressStage === 'mic_opened' || progressStage === 'desktop_opened') {
+          errorMessage += '\n\nAudio streams are opening but not fully ready.';
+          errorMessage += '\nTry selecting different audio devices or restarting the app.';
+        }
+
+        reject(new Error(errorMessage));
         if (pythonProcess && !pythonProcess.killed) {
           pythonProcess.kill();
         }
       }
-    }, 5000);
+    }, timeout);
+
+    // Clean up timeout if recording starts successfully
+    pythonProcess.on('close', () => {
+      clearTimeout(timeoutHandle);
+    });
   });
 });
 
@@ -917,6 +1085,7 @@ ipcMain.handle('get-system-info', async () => {
 
     python.on('close', () => {
       resolve({
+        app: app.getVersion(),
         electron: process.versions.electron,
         python: pythonVersion.replace('Python ', '').trim()
       });
