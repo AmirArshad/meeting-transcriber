@@ -19,6 +19,7 @@ const { checkForUpdates, openDownloadPage } = require('./updater');
 
 let mainWindow;
 let pythonProcess;
+let recordingStartTime = null;
 let activeProcesses = []; // Track all spawned Python processes for cleanup
 let tray = null;
 let isQuitting = false;
@@ -599,6 +600,7 @@ ipcMain.handle('start-recording', async (event, options) => {
       // Wait for confirmation that recording actually started
       if (!recordingStarted && output.includes('Recording started!')) {
         recordingStarted = true;
+        recordingStartTime = Date.now(); // Track when recording actually started
         mainWindow.webContents.send('recording-init-progress', { stage: 'started', message: 'Recording started!' });
         resolve({ success: true, message: 'Recording started' });
       }
@@ -666,14 +668,20 @@ ipcMain.handle('stop-recording', async () => {
         stdoutData += data.toString();
       });
 
-      // Collect stderr (for debugging)
+      // Collect stderr and send progress updates
       pythonProcess.stderr.on('data', (data) => {
-        stderrData += data.toString();
+        const output = data.toString();
+        stderrData += output;
+
+        // Send progress updates to renderer so user sees post-processing status
+        console.log(`Python status: ${output}`);
+        mainWindow.webContents.send('recording-progress', output.trim());
       });
 
       // Wait for process to actually complete
       pythonProcess.on('close', (code) => {
         pythonProcess = null;
+        recordingStartTime = null; // Reset recording start time
 
         if (code === 0) {
           // Parse JSON output to get file path
@@ -711,14 +719,23 @@ ipcMain.handle('stop-recording', async () => {
       // Send signal to stop via stdin
       pythonProcess.stdin.write('stop\n');
 
-      // Safety timeout (10 seconds)
+      // Calculate proportional timeout based on recording duration
+      // Post-processing time scales with recording length
+      // Formula: base 30s + (recording_minutes * 10s per minute)
+      // Examples: 5min = 80s, 30min = 330s (5.5min), 60min = 630s (10.5min)
+      const recordingDuration = recordingStartTime ? (Date.now() - recordingStartTime) / 1000 : 0;
+      const recordingMinutes = Math.ceil(recordingDuration / 60);
+      const processingTimeout = Math.max(30000, 30000 + (recordingMinutes * 10000)); // Minimum 30s
+
+      console.log(`Recording duration: ${recordingMinutes} minutes, using ${processingTimeout / 1000}s timeout`);
+
       setTimeout(() => {
         if (pythonProcess) {
           pythonProcess.kill();
           pythonProcess = null;
           reject(new Error('Recording stop timeout - process took too long to finish'));
         }
-      }, 10000);
+      }, processingTimeout);
     } else {
       resolve({ success: true });
     }

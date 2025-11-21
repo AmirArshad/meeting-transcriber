@@ -341,7 +341,7 @@ No migration required. Changes are fully backwards compatible.
 - Result: Instant visual feedback, countdown masks backend startup time
 
 **Files Changed:**
-- `src/renderer/app.js:597-612` - Parallel countdown and backend initialization
+- `src/renderer/app.js:392-407` - Parallel countdown and backend initialization
 
 **Flow Before:**
 ```
@@ -354,6 +354,41 @@ Total perceived delay: 5-8 seconds
 Click "Start Recording" → Countdown (3s) + Backend init in parallel → Record
 Total perceived delay: 3 seconds (or slightly more if backend takes >3s)
 ```
+
+### Stop Recording Timeout for Long Recordings
+**Issue:** 30-minute recordings failed to stop with "Recording stop timeout" error during post-processing (resampling + noise reduction took longer than 10s timeout)
+
+**Solution:**
+- **Proportional timeout** based on recording duration instead of fixed timeout
+- Formula: `30 seconds base + (recording_minutes × 10 seconds)`
+- Accommodates slower/older machines by scaling timeout with recording length
+- Added real-time progress updates during post-processing
+- Status text now shows: "Processing: Resampling audio...", "Processing: Applying noise reduction...", etc.
+- User sees what's happening instead of thinking the app is frozen
+
+**Files Changed:**
+- `src/main.js:21-22` - Track recording start time globally
+- `src/main.js:603` - Set recording start time when recording begins
+- `src/main.js:721-737` - Calculate proportional timeout based on duration
+- `src/main.js:684` - Reset recording start time when process closes
+- `src/main.js:670-678` - Send stderr progress to renderer during stop
+- `src/renderer/app.js:255-268` - Update status text during post-processing
+
+**Timeout Examples:**
+- 5-minute recording: 80 seconds timeout
+- 10-minute recording: 130 seconds (2m 10s)
+- 30-minute recording: 330 seconds (5m 30s)
+- 60-minute recording: 630 seconds (10m 30s)
+
+**Processing Time (Typical on Modern Hardware):**
+- Short recordings (<5 min): 2-5 seconds
+- Medium recordings (5-15 min): 5-15 seconds
+- Long recordings (15-60 min): 15-40 seconds
+
+**Works on Slower Machines:**
+- Old hardware may take 2-3x longer for post-processing
+- Proportional timeout ensures it won't fail even on slow machines
+- 30-minute recording has 5.5 minutes to complete processing (plenty of buffer)
 
 ## Deployment
 

@@ -438,6 +438,17 @@ function setupEventListeners() {
   // Listen for progress updates
   window.electronAPI.onRecordingProgress((data) => {
     addLog(data);
+
+    // Update status text during post-processing (stopping state)
+    if (recordingState === 'stopping') {
+      if (data.includes('Resampling')) {
+        statusText.textContent = 'Processing: Resampling audio...';
+      } else if (data.includes('noise reduction')) {
+        statusText.textContent = 'Processing: Applying noise reduction...';
+      } else if (data.includes('Mixing')) {
+        statusText.textContent = 'Processing: Mixing audio tracks...';
+      }
+    }
   });
 
   window.electronAPI.onRecordingInitProgress((progress) => {
