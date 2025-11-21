@@ -101,13 +101,6 @@
       {
         "from": "build/icon.ico",
         "to": "icon.ico"
-      },
-      {
-        "from": "build/resources/whisper-models",
-        "to": "whisper-models",
-        "filter": [
-          "**/*"
-        ]
       }
     ],
     "directories": {

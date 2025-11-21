@@ -74,6 +74,8 @@ jobs:
     - name: Prepare build resources
       run: npm run prebuild
       timeout-minutes: 30
+      env:
+        DOWNLOAD_MODELS: 'false'  # Skip model download - users download on-demand
 
     - name: Build installer
       run: npm run build
