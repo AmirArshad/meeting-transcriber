@@ -81,6 +81,7 @@ function applySavedSettings() {
 }
 
 // Initialize app with first-time setup
+// Initialize app with first-time setup
 async function init() {
   const loadingScreen = document.getElementById('loading-screen');
   const loadingMessage = document.getElementById('loading-message');
@@ -97,6 +98,10 @@ async function init() {
   statusText.textContent = 'Initializing...';
 
   try {
+    // Start audio warm-up in background immediately
+    const warmUpPromise = window.electronAPI.warmUpAudioSystem()
+      .catch(err => console.error('Audio warm-up failed:', err));
+
     // Step 1: Check if model is downloaded
     updateLoading('Checking system setup...');
     const settings = loadSettings();
@@ -116,17 +121,24 @@ async function init() {
       await showFirstTimeSetup(modelSize);
     }
 
-    // Step 2: Warm up audio system
-    updateLoading('Initializing audio system...');
+    // Hide loading screen immediately to show UI
+    if (loadingScreen && !loadingScreen.classList.contains('hidden')) {
+      updateLoading('Ready!');
+      loadingScreen.classList.add('hidden');
+      setTimeout(() => loadingScreen.remove(), 300);
+    }
+
+    // Step 2: Wait for audio system warm-up (while UI is visible)
     addLog('Initializing audio system...');
-    await window.electronAPI.warmUpAudioSystem();
+    statusText.textContent = 'Initializing audio...';
+    
+    await warmUpPromise;
 
     // Step 3: Load audio devices
-    updateLoading('Loading audio devices...');
+    addLog('Loading audio devices...');
     await loadAudioDevices();
 
     // Step 4: Load meeting history
-    updateLoading('Loading history...');
     await loadMeetingHistory();
 
     // Initialize visualizer
@@ -138,15 +150,9 @@ async function init() {
     isInitializing = false;
     setRecordingState('idle');
     addLog('Ready to record!');
+    statusText.textContent = 'Ready';
     console.log('App initialized');
 
-    // Hide loading screen with fade out
-    if (loadingScreen && !loadingScreen.classList.contains('hidden')) {
-      updateLoading('Ready!');
-      await new Promise(resolve => setTimeout(resolve, 300));
-      loadingScreen.classList.add('hidden');
-      setTimeout(() => loadingScreen.remove(), 300);
-    }
   } catch (error) {
     console.error('Initialization error:', error);
     addLog(`Initialization error: ${error.message}`, 'error');
@@ -155,8 +161,6 @@ async function init() {
 
     // Hide loading screen on error
     if (loadingScreen) {
-      updateLoading('Error during initialization');
-      await new Promise(resolve => setTimeout(resolve, 1000));
       loadingScreen.classList.add('hidden');
       setTimeout(() => loadingScreen.remove(), 300);
     }
@@ -164,17 +168,18 @@ async function init() {
 }
 
 // First-time setup: Download model with progress UI
+// First-time setup: Download model with progress UI
 async function showFirstTimeSetup(modelSize) {
   addLog(`First-time setup: Downloading AI model (${modelSize})...`);
 
-  // Show setup overlay (similar to GPU installation)
-  const setupOverlay = createSetupOverlay();
-  document.body.appendChild(setupOverlay);
+  const modal = document.getElementById('ftue-modal');
+  const progressBar = document.getElementById('ftue-progress-bar');
+  const progressText = document.getElementById('ftue-progress-text');
+  const logOutput = document.getElementById('ftue-log-output');
 
-  const progressBar = setupOverlay.querySelector('.setup-progress-bar');
-  const progressText = setupOverlay.querySelector('.setup-progress-text');
-  const logOutput = setupOverlay.querySelector('.setup-log-output');
+  if (!modal) return;
 
+  modal.classList.remove('hidden');
   progressText.textContent = 'Downloading Whisper AI model...';
 
   // Listen for progress updates
@@ -214,7 +219,7 @@ async function showFirstTimeSetup(modelSize) {
 
     // Wait a moment then remove overlay
     await new Promise(resolve => setTimeout(resolve, 1500));
-    document.body.removeChild(setupOverlay);
+    modal.classList.add('hidden');
   } catch (error) {
     clearInterval(progressInterval);
     progressText.textContent = 'Setup failed!';
@@ -224,55 +229,12 @@ async function showFirstTimeSetup(modelSize) {
 
     // Wait for user to see error, then continue anyway
     await new Promise(resolve => setTimeout(resolve, 3000));
-    document.body.removeChild(setupOverlay);
+    modal.classList.add('hidden');
   }
 }
 
 // Create setup overlay UI (similar to GPU installation)
-function createSetupOverlay() {
-  const overlay = document.createElement('div');
-  overlay.style.cssText = `
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0, 0, 0, 0.8);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 10000;
-  `;
 
-  const panel = document.createElement('div');
-  panel.style.cssText = `
-    background: white;
-    border-radius: 8px;
-    padding: 32px;
-    max-width: 600px;
-    width: 90%;
-    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
-  `;
-
-  panel.innerHTML = `
-    <h2 style="margin: 0 0 16px 0; font-size: 24px; color: #1f2937;">First-Time Setup</h2>
-    <p style="margin: 0 0 24px 0; color: #6b7280;">Downloading AI transcription model. This only happens once and takes 2-5 minutes.</p>
-
-    <div style="margin-bottom: 16px;">
-      <div style="background: #e5e7eb; height: 8px; border-radius: 4px; overflow: hidden;">
-        <div class="setup-progress-bar" style="background: linear-gradient(90deg, #3b82f6, #2563eb); height: 100%; width: 0%; transition: width 0.3s;"></div>
-      </div>
-      <div class="setup-progress-text" style="margin-top: 8px; font-size: 14px; color: #6b7280;">Initializing...</div>
-    </div>
-
-    <div style="background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 4px; padding: 12px; max-height: 200px; overflow-y: auto; font-family: monospace; font-size: 12px; color: #374151;">
-      <div class="setup-log-output"></div>
-    </div>
-  `;
-
-  overlay.appendChild(panel);
-  return overlay;
-}
 
 // Load audio devices
 async function loadAudioDevices() {

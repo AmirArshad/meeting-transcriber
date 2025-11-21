@@ -22,6 +22,32 @@
       </div>
     </div>
 
+    <!-- First Time Setup Modal -->
+    <div id="ftue-modal" class="modal-overlay hidden">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>First-Time Setup</h2>
+        </div>
+        <div class="modal-body">
+          <p class="setting-description">
+            Downloading AI transcription model. This only happens once and takes 2-5 minutes.
+          </p>
+          
+          <div class="gpu-progress" style="margin-top: 0; display: block;">
+            <div class="progress-bar-container">
+              <div class="progress-bar" id="ftue-progress-bar"></div>
+            </div>
+            <p class="progress-text" id="ftue-progress-text">Initializing...</p>
+          </div>
+
+          <div class="gpu-log" style="display: block;">
+            <h4>Installation Log</h4>
+            <div class="log-output" id="ftue-log-output"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="container">
       <!-- Header -->
       <header>
