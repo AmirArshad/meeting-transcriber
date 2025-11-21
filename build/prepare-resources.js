@@ -12,6 +12,7 @@ const FFMPEG_URL = 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials
 const BUILD_DIR = path.join(__dirname, 'resources');
 const PYTHON_DIR = path.join(BUILD_DIR, 'python');
 const FFMPEG_DIR = path.join(BUILD_DIR, 'ffmpeg');
+const MODELS_DIR = path.join(BUILD_DIR, 'whisper-models');
 
 console.log('========================================');
 console.log('Meeting Transcriber - Build Preparation');
@@ -100,8 +101,62 @@ function extractZip(zipPath, targetDir) {
 function checkExistingResources() {
   const pythonExists = fs.existsSync(path.join(PYTHON_DIR, 'python.exe'));
   const ffmpegExists = fs.existsSync(path.join(FFMPEG_DIR, 'ffmpeg.exe'));
+  const modelsExist = fs.existsSync(MODELS_DIR) && fs.readdirSync(MODELS_DIR).length > 0;
 
-  return { pythonExists, ffmpegExists };
+  return { pythonExists, ffmpegExists, modelsExist };
+}
+
+// Download Whisper models
+async function downloadWhisperModels() {
+  console.log('[1/3] Downloading Whisper models (optional components)...');
+
+  if (!fs.existsSync(MODELS_DIR)) {
+    fs.mkdirSync(MODELS_DIR, { recursive: true });
+  }
+
+  const pythonExe = path.join(PYTHON_DIR, 'python.exe');
+
+  // Create a Python script to download models using faster-whisper
+  const downloadScript = `
+import sys
+import os
+from faster_whisper import WhisperModel
+
+models = ['tiny', 'small', 'medium']
+cache_dir = r'${MODELS_DIR.replace(/\\/g, '\\\\')}'
+
+for model_size in models:
+    print(f'\\nDownloading {model_size} model...', file=sys.stderr)
+    try:
+        # This will download the model to the cache directory
+        model = WhisperModel(
+            model_size,
+            device='cpu',
+            compute_type='int8',
+            download_root=cache_dir
+        )
+        print(f'✓ {model_size} model downloaded successfully', file=sys.stderr)
+    except Exception as e:
+        print(f'⚠️ Warning: Failed to download {model_size} model: {e}', file=sys.stderr)
+        continue
+
+print('\\nModel download complete!', file=sys.stderr)
+`;
+
+  const scriptPath = path.join(BUILD_DIR, 'download_models.py');
+  fs.writeFileSync(scriptPath, downloadScript);
+
+  try {
+    console.log('  This may take 5-10 minutes depending on your connection...');
+    execSync(`"${pythonExe}" "${scriptPath}"`, { stdio: 'inherit' });
+    fs.unlinkSync(scriptPath);
+    console.log('✓ Whisper models downloaded!\n');
+  } catch (error) {
+    console.log('⚠️ Warning: Model download failed. Models will be downloaded on first use.\n');
+    if (fs.existsSync(scriptPath)) {
+      fs.unlinkSync(scriptPath);
+    }
+  }
 }
 
 // Main preparation function
@@ -178,6 +233,22 @@ async function prepareResources() {
     fs.rmSync(tempDir, { recursive: true, force: true });
 
     console.log('✓ ffmpeg setup complete!\n');
+  }
+
+  // Download Whisper models (optional)
+  if (existing.modelsExist) {
+    console.log('✓ Whisper models already prepared\n');
+  } else {
+    const shouldDownloadModels = process.env.DOWNLOAD_MODELS !== 'false';
+
+    if (shouldDownloadModels) {
+      console.log('Preparing Whisper models for installation...');
+      console.log('(Set DOWNLOAD_MODELS=false to skip this step)\n');
+      await downloadWhisperModels();
+    } else {
+      console.log('⚠️ Skipping model download (DOWNLOAD_MODELS=false)\n');
+      console.log('Models will be downloaded on first use by end users.\n');
+    }
   }
 
   console.log('========================================');

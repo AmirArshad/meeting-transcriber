@@ -1,0 +1,7 @@
+Defaulting to user installation because normal site-packages is not writeable
+Collecting soxr
+  Downloading soxr-1.0.0-cp312-abi3-win_amd64.whl.metadata (5.6 kB)
+Requirement already satisfied: numpy in c:\users\amirs\appdata\roaming\python\python313\site-packages (from soxr) (2.3.1)
+Downloading soxr-1.0.0-cp312-abi3-win_amd64.whl (172 kB)
+Installing collected packages: soxr
+Successfully installed soxr-1.0.0

@@ -17,7 +17,7 @@ import threading
 from datetime import datetime
 from pathlib import Path
 import numpy as np
-from scipy import signal
+import soxr
 import pyaudiowpatch as pyaudio
 
 # Store final output path for meeting manager
@@ -225,8 +225,15 @@ class AudioRecorder:
         print(f"  Mic frames: {len(self.mic_frames)}", file=sys.stderr)
         print(f"  Desktop frames: {len(self.desktop_frames)}", file=sys.stderr)
 
-        # Mix and save
-        self._mix_and_save()
+        # Mix and save with detailed error handling
+        try:
+            self._mix_and_save()
+        except Exception as e:
+            print(f"ERROR in audio processing: {e}", file=sys.stderr)
+            import traceback
+            traceback.print_exc(file=sys.stderr)
+            # Re-raise so caller knows it failed
+            raise
 
         # Clear buffers
         self.mic_frames = []
@@ -284,6 +291,15 @@ class AudioRecorder:
 
             # Align to same length
             min_length = min(len(mic_audio), len(desktop_audio))
+
+            # Safety check: ensure we have valid audio data
+            if min_length == 0:
+                raise RuntimeError(
+                    "Audio alignment failed - one or both audio tracks are empty after resampling. "
+                    "This may be due to audio buffer corruption or device issues."
+                )
+
+            print(f"  Aligning audio: mic={len(mic_audio)} samples, desktop={len(desktop_audio)} samples, using={min_length}", file=sys.stderr)
             mic_audio = mic_audio[:min_length]
             desktop_audio = desktop_audio[:min_length]
 
@@ -319,7 +335,15 @@ class AudioRecorder:
 
             final_audio = mic_audio
 
+        # Validate final audio is not empty
+        if len(final_audio) == 0:
+            raise RuntimeError(
+                "Audio processing resulted in empty output. "
+                "This may be due to audio buffer corruption or processing errors."
+            )
+
         duration = len(final_audio) / (self.target_sample_rate * self.target_channels)
+        print(f"  Final audio length: {len(final_audio)} samples ({duration:.2f} seconds)", file=sys.stderr)
 
         # Save to temporary WAV first
         temp_wav = str(Path(self.output_path).with_suffix('.temp.wav'))
@@ -425,35 +449,37 @@ class AudioRecorder:
         Process a single audio channel for natural, broadcast-quality sound.
 
         Goal: Warm, clear, natural voice - not robotic or tinny.
+
+        Note: Uses simple rolling average filters instead of scipy to minimize dependencies.
         """
-        from scipy.signal import butter, filtfilt
 
-        nyquist = sample_rate / 2
+        # Simple high-pass filter using rolling average (removes DC offset and low rumble)
+        # This is a basic implementation that removes very low frequencies
+        window_size = int(sample_rate * 0.02)  # 20ms window
+        if len(channel_data) > window_size:
+            # Create low-frequency component by averaging
+            kernel = np.ones(window_size) / window_size
+            low_freq = np.convolve(channel_data, kernel, mode='same')
+            # Subtract to get high-pass effect (remove rumble)
+            channel_data = channel_data - low_freq * 0.5  # Gentle removal
 
-        # 1. GENTLE High-pass filter - Remove only deep rumble (50 Hz)
-        # Lower cutoff = preserve more warmth in voice
-        cutoff_hp = 50 / nyquist
-        if cutoff_hp < 1.0:
-            b, a = butter(2, cutoff_hp, btype='high')  # 2nd order = gentler roll-off
-            channel_data = filtfilt(b, a, channel_data)
+        # Voice frequency boost (1-3 kHz) - simple implementation
+        # Create a bandpass effect by combining high-pass and low-pass
+        # This enhances speech clarity
+        voice_window = int(sample_rate * 0.001)  # 1ms window for mid-frequencies
+        if len(channel_data) > voice_window and voice_window > 0:
+            kernel = np.ones(voice_window) / voice_window
+            smoothed = np.convolve(channel_data, kernel, mode='same')
+            # Boost the difference (enhances mid-range detail)
+            detail = channel_data - smoothed
+            channel_data = channel_data + detail * 0.2  # 20% boost
 
-        # 2. VOICE CLARITY BOOST - Enhance 1-3 kHz (speech intelligibility range)
-        # This makes voice sound clearer without harshness
-        voice_low = 1000 / nyquist
-        voice_high = 3000 / nyquist
-        if voice_low < 1.0 and voice_high < 1.0:
-            # Bandpass filter for voice frequencies
-            b, a = butter(2, [voice_low, voice_high], btype='band')
-            voice_band = filtfilt(b, a, channel_data)
-            # Boost voice frequencies by 20% (subtle enhancement)
-            channel_data = channel_data + (voice_band * 0.2)
-
-        # 3. GENTLE Low-pass filter - Remove harsh high frequencies (8 kHz)
-        # This eliminates the "tinny" sound
-        cutoff_lp = 8000 / nyquist
-        if cutoff_lp < 1.0:
-            b, a = butter(2, cutoff_lp, btype='low')  # 2nd order = smooth
-            channel_data = filtfilt(b, a, channel_data)
+        # Simple low-pass filter to remove harsh high frequencies
+        # Uses a small rolling average to smooth out tinny artifacts
+        smooth_window = int(sample_rate * 0.0001)  # 0.1ms window
+        if len(channel_data) > smooth_window and smooth_window > 0:
+            kernel = np.ones(smooth_window) / smooth_window
+            channel_data = np.convolve(channel_data, kernel, mode='same')
 
         # 4. VERY LIGHT Noise gate - Preserve natural ambience
         rms = np.sqrt(np.mean(channel_data ** 2))
@@ -489,15 +515,20 @@ class AudioRecorder:
         return compressed
 
     def _resample(self, audio_data, original_rate, target_rate):
-        """Resample audio using scipy."""
-        from math import gcd
+        """Resample audio using soxr (high-quality, fast resampling)."""
+        # Convert int16 to float32 for soxr processing
+        audio_float = audio_data.astype(np.float32) / 32768.0
 
-        divisor = gcd(target_rate, original_rate)
-        up = target_rate // divisor
-        down = original_rate // divisor
+        # Resample with soxr (VHQ quality setting)
+        resampled = soxr.resample(
+            audio_float,
+            original_rate,
+            target_rate,
+            quality='VHQ'  # Very High Quality - best for voice
+        )
 
-        resampled = signal.resample_poly(audio_data, up, down, window=('kaiser', 5.0))
-        return resampled.astype(np.int16)
+        # Convert back to int16
+        return (resampled * 32767.0).astype(np.int16)
 
     def cleanup(self):
         """Clean up resources."""

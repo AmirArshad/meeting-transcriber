@@ -1164,13 +1164,15 @@ class AudioVisualizer {
     this.container.style.display = 'flex';
     this.micBuffer.fill(0);
     this.desktopBuffer.fill(0);
-    this.draw();
+    // Use setInterval instead of requestAnimationFrame
+    // This ensures visualization continues even when window is backgrounded
+    this.animationId = setInterval(() => this.draw(), 50); // 20 FPS
   }
 
   stop() {
     this.isRunning = false;
     if (this.animationId) {
-      cancelAnimationFrame(this.animationId);
+      clearInterval(this.animationId);
       this.animationId = null;
     }
     // Keep visible for a moment or hide immediately?
@@ -1193,7 +1195,7 @@ class AudioVisualizer {
     this.drawWaveform(this.micCtx, this.micBuffer, '#10b981'); // Emerald 500
     this.drawWaveform(this.desktopCtx, this.desktopBuffer, '#3b82f6'); // Blue 500
 
-    this.animationId = requestAnimationFrame(() => this.draw());
+    // No longer using requestAnimationFrame - we use setInterval in start()
   }
 
   drawWaveform(ctx, buffer, color) {
@@ -1237,6 +1239,15 @@ class AudioVisualizer {
     ctx.closePath();
   }
 }
+
+// Handle page visibility changes (for debugging backgrounded recording)
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    console.log('App backgrounded - recording should continue');
+  } else {
+    console.log('App foregrounded - resuming visualization');
+  }
+});
 
 // Start the app
 init();

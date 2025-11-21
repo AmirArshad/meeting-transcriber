@@ -1,6 +1,6 @@
 {
   "name": "meeting-transcriber",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "AI-powered meeting transcription with desktop audio capture",
   "main": "src/main.js",
   "scripts": {
@@ -46,11 +46,35 @@
       "installerIcon": "build/icon.ico",
       "uninstallerIcon": "build/icon.ico",
       "installerHeaderIcon": "build/icon.ico",
-      "license": "LICENSE.txt"
+      "license": "LICENSE.txt",
+      "differentialPackage": true,
+      "include": "build/installer.nsh",
+      "warningsAsErrors": false,
+      "displayLanguageSelector": false
     },
+    "compression": "store",
+    "artifactName": "${productName}-Setup-${version}.${ext}",
+    "electronLanguages": [
+      "en-US",
+      "en",
+      "es",
+      "fr",
+      "de",
+      "zh-CN",
+      "ja"
+    ],
     "files": [
       "src/**/*",
-      "package.json"
+      "package.json",
+      "!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}",
+      "!**/node_modules/.bin",
+      "!**/*.{iml,o,hprof,orig,pyc,pyo,rbc,swp,csproj,sln,xproj}",
+      "!.editorconfig",
+      "!**/._*",
+      "!**/{.DS_Store,.git,.hg,.svn,CVS,RCS,SCCS,.gitignore,.gitattributes}",
+      "!**/{__pycache__,thumbs.db,.flowconfig,.idea,.vs,.nyc_output}",
+      "!**/{appveyor.yml,.travis.yml,circle.yml}",
+      "!**/{npm-debug.log,yarn.lock,.yarn-integrity,.yarn-metadata.json}"
     ],
     "extraResources": [
       {
@@ -77,6 +101,13 @@
       {
         "from": "build/icon.ico",
         "to": "icon.ico"
+      },
+      {
+        "from": "build/resources/whisper-models",
+        "to": "whisper-models",
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "directories": {
