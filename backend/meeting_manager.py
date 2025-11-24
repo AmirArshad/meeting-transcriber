@@ -167,23 +167,52 @@ class MeetingManager:
         Returns:
             True if deleted, False if not found
         """
+        import time
+
         meetings = self.list_meetings()
         meeting = self.get_meeting(meeting_id)
 
         if not meeting:
             return False
 
-        # Delete audio file
+        # FIX: Windows retry logic for file locks
+        # Files may be locked by antivirus, file explorer, audio player, etc.
+        max_retries = 3
+        retry_delay = 0.5  # 500ms
+
+        # Delete audio file with retry
         audio_path = Path(meeting['audioPath'])
         if audio_path.exists():
-            audio_path.unlink()
-            print(f"Deleted audio: {audio_path}", file=sys.stderr)
+            for attempt in range(max_retries):
+                try:
+                    audio_path.unlink()
+                    print(f"Deleted audio: {audio_path}", file=sys.stderr)
+                    break
+                except PermissionError as e:
+                    if attempt < max_retries - 1:
+                        print(f"File locked (attempt {attempt + 1}/{max_retries}), retrying... ({e})", file=sys.stderr)
+                        time.sleep(retry_delay)
+                    else:
+                        raise RuntimeError(f"Failed to delete audio file after {max_retries} attempts: {e}")
+                except Exception as e:
+                    raise RuntimeError(f"Failed to delete audio file: {e}")
 
-        # Delete transcript file
+        # Delete transcript file with retry
         transcript_path = Path(meeting['transcriptPath'])
         if transcript_path.exists():
-            transcript_path.unlink()
-            print(f"Deleted transcript: {transcript_path}", file=sys.stderr)
+            for attempt in range(max_retries):
+                try:
+                    transcript_path.unlink()
+                    print(f"Deleted transcript: {transcript_path}", file=sys.stderr)
+                    break
+                except PermissionError as e:
+                    if attempt < max_retries - 1:
+                        print(f"File locked (attempt {attempt + 1}/{max_retries}), retrying... ({e})", file=sys.stderr)
+                        time.sleep(retry_delay)
+                    else:
+                        raise RuntimeError(f"Failed to delete transcript file after {max_retries} attempts: {e}")
+                except Exception as e:
+                    raise RuntimeError(f"Failed to delete transcript file: {e}")
 
         # Remove from list
         meetings = [m for m in meetings if m['id'] != meeting_id]

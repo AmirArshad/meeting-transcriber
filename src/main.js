@@ -911,9 +911,14 @@ ipcMain.handle('list-meetings', async () => {
     ]);
 
     let output = '';
+    let errorOutput = '';
 
     python.stdout.on('data', (data) => {
       output += data.toString();
+    });
+
+    python.stderr.on('data', (data) => {
+      errorOutput += data.toString();
     });
 
     python.on('close', (code) => {
@@ -925,7 +930,8 @@ ipcMain.handle('list-meetings', async () => {
           reject(new Error(`Failed to parse meetings: ${e.message}`));
         }
       } else {
-        reject(new Error('Failed to list meetings'));
+        const errorMsg = errorOutput.trim() || 'Unknown error';
+        reject(new Error(`Failed to list meetings: ${errorMsg}`));
       }
     });
   });
@@ -945,9 +951,14 @@ ipcMain.handle('get-meeting', async (event, meetingId) => {
     ]);
 
     let output = '';
+    let errorOutput = '';
 
     python.stdout.on('data', (data) => {
       output += data.toString();
+    });
+
+    python.stderr.on('data', (data) => {
+      errorOutput += data.toString();
     });
 
     python.on('close', (code) => {
@@ -959,7 +970,8 @@ ipcMain.handle('get-meeting', async (event, meetingId) => {
           reject(new Error(`Failed to parse meeting: ${e.message}`));
         }
       } else {
-        reject(new Error('Meeting not found'));
+        const errorMsg = errorOutput.trim() || 'Meeting not found';
+        reject(new Error(errorMsg));
       }
     });
   });
@@ -978,11 +990,20 @@ ipcMain.handle('delete-meeting', async (event, meetingId) => {
       meetingId
     ]);
 
+    // FIX: Capture error output for better diagnostics
+    let errorOutput = '';
+
+    python.stderr.on('data', (data) => {
+      errorOutput += data.toString();
+    });
+
     python.on('close', (code) => {
       if (code === 0) {
         resolve({ success: true });
       } else {
-        reject(new Error('Failed to delete meeting'));
+        // Include actual error details from Python
+        const errorMsg = errorOutput.trim() || 'Unknown error';
+        reject(new Error(`Failed to delete meeting: ${errorMsg}`));
       }
     });
   });
@@ -1014,9 +1035,14 @@ ipcMain.handle('add-meeting', async (event, meetingData) => {
     const python = spawnTrackedPython(args);
 
     let output = '';
+    let errorOutput = '';
 
     python.stdout.on('data', (data) => {
       output += data.toString();
+    });
+
+    python.stderr.on('data', (data) => {
+      errorOutput += data.toString();
     });
 
     python.on('close', (code) => {
@@ -1028,7 +1054,8 @@ ipcMain.handle('add-meeting', async (event, meetingData) => {
           reject(new Error(`Failed to parse meeting: ${e.message}`));
         }
       } else {
-        reject(new Error('Failed to add meeting'));
+        const errorMsg = errorOutput.trim() || 'Unknown error';
+        reject(new Error(`Failed to add meeting: ${errorMsg}`));
       }
     });
   });
@@ -1137,19 +1164,24 @@ ipcMain.handle('install-gpu', async () => {
           '--no-warn-script-location'
         ]);
 
+        let cudaErrorOutput = '';
+
         cudaProcess.stdout.on('data', (data) => {
           mainWindow.webContents.send('gpu-install-progress', data.toString());
         });
 
         cudaProcess.stderr.on('data', (data) => {
-          mainWindow.webContents.send('gpu-install-progress', data.toString());
+          const text = data.toString();
+          cudaErrorOutput += text;
+          mainWindow.webContents.send('gpu-install-progress', text);
         });
 
         cudaProcess.on('close', (cudaCode) => {
           if (cudaCode === 0) {
             resolve({ success: true, message: 'GPU acceleration installed successfully' });
           } else {
-            reject(new Error('Failed to install CUDA libraries'));
+            const errorMsg = cudaErrorOutput.trim() || 'Unknown error';
+            reject(new Error(`Failed to install CUDA libraries: ${errorMsg}`));
           }
         });
       } else {
@@ -1174,11 +1206,18 @@ ipcMain.handle('uninstall-gpu', async () => {
       ...packages
     ]);
 
+    let errorOutput = '';
+
+    python.stderr.on('data', (data) => {
+      errorOutput += data.toString();
+    });
+
     python.on('close', (code) => {
       if (code === 0) {
         resolve({ success: true });
       } else {
-        reject(new Error('Failed to uninstall GPU packages'));
+        const errorMsg = errorOutput.trim() || 'Unknown error';
+        reject(new Error(`Failed to uninstall GPU packages: ${errorMsg}`));
       }
     });
   });
