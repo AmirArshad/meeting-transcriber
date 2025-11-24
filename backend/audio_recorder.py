@@ -14,6 +14,7 @@ import sys
 import wave
 import json
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 import numpy as np
@@ -59,7 +60,22 @@ class AudioRecorder:
 
         # Get device info and auto-detect channel counts
         mic_info = self.pa.get_device_info_by_index(mic_device_id)
-        self.mic_sample_rate = int(mic_info['defaultSampleRate'])
+
+        # AUDIO QUALITY FIX: Try to use high-quality mode instead of default
+        # Many modern USB mics support 48kHz even if default is 16kHz
+        # This avoids quality-degrading resampling
+        default_rate = int(mic_info['defaultSampleRate'])
+
+        # Try to use 48kHz if device supports it, otherwise use native rate
+        # This matches Google Meet's approach
+        if default_rate < 48000 and sample_rate == 48000:
+            print(f"Mic default rate is {default_rate} Hz, will attempt to use {sample_rate} Hz", file=sys.stderr)
+            self.mic_sample_rate = sample_rate  # Try requested rate
+            self.mic_requested_higher_rate = True
+        else:
+            self.mic_sample_rate = default_rate
+            self.mic_requested_higher_rate = False
+
         self.mic_channels = int(mic_info['maxInputChannels'])
 
         if loopback_device_id >= 0:
@@ -98,8 +114,24 @@ class AudioRecorder:
         self.mic_stream = None
         self.desktop_stream = None
 
+        # FIX 6: Callback watchdog to detect audio stream stalls
+        self.last_callback_time = 0
+        self.callback_watchdog = None
+        self.watchdog_running = False
+        self.watchdog_warning_shown = False  # Track if we've already warned
+
+        # FIX 5: Check platform once instead of repeatedly
+        import platform
+        self.is_windows = platform.system() == 'Windows'
+
+        # Store original chunk size before any modifications
+        self.original_chunk_size = chunk_size
+
     def _mic_callback(self, in_data, frame_count, time_info, status):
         """Callback for microphone."""
+        # FIX 6: Update watchdog timestamp
+        self.last_callback_time = time.time()
+
         if status:
             print(f"Mic status: {status}", file=sys.stderr)
 
@@ -111,13 +143,13 @@ class AudioRecorder:
                     self.mic_frames.append(in_data)
                 
                 # Calculate level for visualization
+                # PERFORMANCE: Optimized to avoid array allocation in hot path
                 try:
-                    # Fast RMS calculation
-                    # Use numpy for speed, but handle potential errors safely
+                    # Convert to numpy view (no copy)
                     data = np.frombuffer(in_data, dtype=np.int16)
-                    # Simple peak-ish metric is faster than full RMS and good enough for visualizer
-                    # Take max absolute value of a subsample to be fast
-                    peak = np.max(np.abs(data[::4])) 
+                    # Use numpy's abs with subsample (::8 instead of ::4 for 2x speedup)
+                    # Even with less samples, still accurate enough for visualization
+                    peak = np.abs(data[::8]).max() if len(data) > 0 else 0
                     # Normalize (int16 max is 32768)
                     self.mic_level = float(peak) / 32768.0
                 except:
@@ -127,6 +159,9 @@ class AudioRecorder:
 
     def _desktop_callback(self, in_data, frame_count, time_info, status):
         """Callback for desktop audio."""
+        # FIX 6 (CRITICAL): Update watchdog timestamp for desktop too!
+        self.last_callback_time = time.time()
+
         if status:
             print(f"Desktop status: {status}", file=sys.stderr)
 
@@ -138,9 +173,10 @@ class AudioRecorder:
                     self.desktop_frames.append(in_data)
 
                 # Calculate level for visualization
+                # PERFORMANCE: Optimized to avoid array allocation in hot path
                 try:
                     data = np.frombuffer(in_data, dtype=np.int16)
-                    peak = np.max(np.abs(data[::4]))
+                    peak = np.abs(data[::8]).max() if len(data) > 0 else 0
                     self.desktop_level = float(peak) / 32768.0
                 except:
                     self.desktop_level = 0.0
@@ -157,21 +193,56 @@ class AudioRecorder:
         self.mic_frame_count = 0
         self.desktop_frame_count = 0
         self.is_recording = True
+        self.watchdog_warning_shown = False  # Reset warning flag
+
+        # FIX 5 (REFINED): Increase chunk size on Windows for better resilience to backgrounding
+        # Larger buffers = more tolerance for process scheduling delays
+        # Since we do post-processing, latency doesn't matter
+        if self.is_windows:
+            self.chunk_size = self.original_chunk_size * 4  # 4x larger buffer
+            print(f"Windows detected: Using larger audio buffer ({self.chunk_size} frames) for background resilience", file=sys.stderr)
+
+            # CRITICAL FIX: Recalculate preroll_frames with new chunk size
+            self.preroll_frames = int(1.5 * self.mic_sample_rate / self.chunk_size)
+            print(f"  Adjusted preroll to {self.preroll_frames} frames", file=sys.stderr)
+
+        # NOTE: Thread priority boost removed - it only affects main thread, not audio callbacks
+        # PyAudio's internal callback threads cannot be easily accessed from Python
 
         # Open mic stream with error handling
+        # AUDIO QUALITY FIX: Try requested sample rate first, fall back to default if unsupported
         try:
             self.mic_stream = self.pa.open(
                 format=pyaudio.paInt16,
-                channels=self.mic_channels,  # Use detected channel count
-                rate=self.mic_sample_rate,
+                channels=self.mic_channels,
+                rate=self.mic_sample_rate,  # Try higher quality rate
                 input=True,
                 input_device_index=self.mic_device_id,
                 frames_per_buffer=self.chunk_size,
                 stream_callback=self._mic_callback
             )
-            print(f"✓ Microphone stream opened successfully", file=sys.stderr)
+            print(f"✓ Microphone stream opened at {self.mic_sample_rate} Hz", file=sys.stderr)
         except Exception as e:
-            raise RuntimeError(f"Failed to open microphone stream (device {self.mic_device_id}): {e}")
+            # If higher rate failed, try falling back to device default
+            if self.mic_requested_higher_rate:
+                print(f"  Warning: {self.mic_sample_rate} Hz not supported, trying device default...", file=sys.stderr)
+                mic_info = self.pa.get_device_info_by_index(self.mic_device_id)
+                self.mic_sample_rate = int(mic_info['defaultSampleRate'])
+                try:
+                    self.mic_stream = self.pa.open(
+                        format=pyaudio.paInt16,
+                        channels=self.mic_channels,
+                        rate=self.mic_sample_rate,
+                        input=True,
+                        input_device_index=self.mic_device_id,
+                        frames_per_buffer=self.chunk_size,
+                        stream_callback=self._mic_callback
+                    )
+                    print(f"✓ Microphone stream opened at {self.mic_sample_rate} Hz (fallback)", file=sys.stderr)
+                except Exception as e2:
+                    raise RuntimeError(f"Failed to open microphone stream: {e2}")
+            else:
+                raise RuntimeError(f"Failed to open microphone stream (device {self.mic_device_id}): {e}")
 
         if self.mixing_mode:
             # Open desktop stream with error handling
@@ -203,12 +274,49 @@ class AudioRecorder:
             self.cleanup()
             raise RuntimeError(f"Failed to start audio streams: {e}")
 
+        # FIX 6 (REFINED): Start watchdog thread to detect callback stalls
+        def watchdog():
+            """Monitor audio callback health and warn if stalled."""
+            self.watchdog_running = True
+            self.last_callback_time = time.time()  # Initialize
+
+            while self.is_recording and self.watchdog_running:
+                time.sleep(5)  # Check every 5 seconds
+
+                if self.is_recording:
+                    elapsed = time.time() - self.last_callback_time
+
+                    # If no callback for 10 seconds, something is very wrong
+                    # CRITICAL FIX: Only warn ONCE to avoid console spam
+                    if elapsed > 10 and not self.watchdog_warning_shown:
+                        print(f"", file=sys.stderr)
+                        print(f"=" * 70, file=sys.stderr)
+                        print(f"ERROR: Audio callback stalled!", file=sys.stderr)
+                        print(f"  No audio callback received for {elapsed:.1f} seconds", file=sys.stderr)
+                        print(f"  This may indicate the process was suspended by Windows", file=sys.stderr)
+                        print(f"  when the app was sent to the background.", file=sys.stderr)
+                        print(f"", file=sys.stderr)
+                        print(f"  Recording may have failed. Audio data might be incomplete.", file=sys.stderr)
+                        print(f"=" * 70, file=sys.stderr)
+                        print(f"", file=sys.stderr)
+                        self.watchdog_warning_shown = True  # Only warn once
+                        # Don't stop recording - let user decide
+
+        self.callback_watchdog = threading.Thread(target=watchdog, daemon=True)
+        self.callback_watchdog.start()
+
         print("Recording started!", file=sys.stderr)
 
     def stop_recording(self):
         """Stop recording and mix the audio."""
         print("Stopping recording...", file=sys.stderr)
         self.is_recording = False
+
+        # FIX 6: Stop watchdog thread
+        self.watchdog_running = False
+        if self.callback_watchdog:
+            # Give it a moment to finish
+            self.callback_watchdog.join(timeout=1.0)
 
         # Stop streams
         if self.mic_stream:
@@ -369,7 +477,7 @@ class AudioRecorder:
         temp_size = Path(temp_wav).stat().st_size
 
         # Compress with ffmpeg
-        print(f"Compressing with ffmpeg (96 kbps Opus)...", file=sys.stderr)
+        print(f"Compressing with ffmpeg (128 kbps Opus)...", file=sys.stderr)
         final_path = self._compress_audio(temp_wav, self.output_path)
 
         # Clean up temp file
@@ -397,15 +505,20 @@ class AudioRecorder:
         # Change extension to .opus
         opus_path = str(Path(output_path).with_suffix('.opus'))
 
-        # Use Opus codec at 96 kbps (excellent quality for speech, ~12x smaller than WAV)
-        # Opus is better than MP3 for speech and produces smaller files
+        # AUDIO QUALITY FIX: Use higher bitrate and better settings
+        # - 128 kbps for archival/transcription quality (was 96k)
+        # - 'audio' mode instead of 'voip' for better quality
+        # - Explicit sample rate to prevent downsampling
+        # Still ~8-10x smaller than WAV, but much better quality
         cmd = [
             'ffmpeg',
             '-i', input_path,
             '-c:a', 'libopus',
-            '-b:a', '96k',
+            '-b:a', '128k',  # Higher bitrate for better quality (was 96k)
             '-vbr', 'on',  # Variable bitrate for better quality
-            '-application', 'voip',  # Optimized for speech
+            '-compression_level', '10',  # Maximum quality (0-10, higher = better)
+            '-application', 'audio',  # Audio mode (better quality than 'voip')
+            '-ar', str(self.target_sample_rate),  # Preserve sample rate
             '-y',  # Overwrite output
             '-loglevel', 'error',  # Only show errors
             opus_path
@@ -424,14 +537,14 @@ class AudioRecorder:
 
     def _enhance_microphone(self, audio_data, sample_rate):
         """
-        Apply natural-sounding enhancement to microphone audio.
+        Apply MINIMAL enhancement to microphone audio.
 
-        Optimized for listening quality (not just transcription):
-        1. Gentle high-pass filter (50 Hz) - Remove only deep rumble, preserve warmth
-        2. Voice frequency boost (1-3 kHz) - Enhance speech clarity naturally
-        3. Gentle low-pass filter (8 kHz) - Reduce tinny high-frequency harshness
-        4. Very light noise gate - Preserve natural sound
-        5. Gentle compression - Even out volume without artifacts
+        AUDIO QUALITY FIX: Reduced processing to preserve natural quality
+        - Only basic DC offset removal and very gentle normalization
+        - Removed aggressive filtering that was degrading quality
+        - Google Meet-style: minimal processing, let the codec handle it
+
+        Goal: Natural, unprocessed sound - like Google Meet
         """
         # Convert to float for processing
         audio_float = audio_data.astype(np.float32) / 32768.0
@@ -458,73 +571,34 @@ class AudioRecorder:
 
     def _process_channel(self, channel_data, sample_rate):
         """
-        Process a single audio channel for natural, broadcast-quality sound.
+        MINIMAL processing for natural sound quality.
 
-        Goal: Warm, clear, natural voice - not robotic or tinny.
-
-        Note: Uses simple rolling average filters instead of scipy to minimize dependencies.
+        AUDIO QUALITY FIX: Simplified to match Google Meet's approach
+        - Only DC offset removal (essential)
+        - Light normalization (preserve dynamics)
+        - NO aggressive filtering, gating, or compression
         """
 
-        # Simple high-pass filter using rolling average (removes DC offset and low rumble)
-        # This is a basic implementation that removes very low frequencies
-        window_size = int(sample_rate * 0.02)  # 20ms window
-        if len(channel_data) > window_size:
-            # Create low-frequency component by averaging
-            kernel = np.ones(window_size) / window_size
-            low_freq = np.convolve(channel_data, kernel, mode='same')
-            # Subtract to get high-pass effect (remove rumble)
-            channel_data = channel_data - low_freq * 0.5  # Gentle removal
+        # 1. Remove DC offset (essential - prevents pops/clicks)
+        channel_data = channel_data - np.mean(channel_data)
 
-        # Voice frequency boost (1-3 kHz) - simple implementation
-        # Create a bandpass effect by combining high-pass and low-pass
-        # This enhances speech clarity
-        voice_window = int(sample_rate * 0.001)  # 1ms window for mid-frequencies
-        if len(channel_data) > voice_window and voice_window > 0:
-            kernel = np.ones(voice_window) / voice_window
-            smoothed = np.convolve(channel_data, kernel, mode='same')
-            # Boost the difference (enhances mid-range detail)
-            detail = channel_data - smoothed
-            channel_data = channel_data + detail * 0.2  # 20% boost
+        # 2. Very gentle normalization to -3dB peak
+        # This preserves dynamics while ensuring good levels
+        peak = np.max(np.abs(channel_data))
+        if peak > 0.7:  # Only normalize if too loud
+            # Target -3dB (0.7) to leave headroom
+            channel_data = channel_data * (0.7 / peak)
+        elif peak < 0.1:  # Boost very quiet audio
+            # Gentle boost for quiet mics
+            channel_data = channel_data * (0.3 / peak)
 
-        # Simple low-pass filter to remove harsh high frequencies
-        # Uses a small rolling average to smooth out tinny artifacts
-        smooth_window = int(sample_rate * 0.0001)  # 0.1ms window
-        if len(channel_data) > smooth_window and smooth_window > 0:
-            kernel = np.ones(smooth_window) / smooth_window
-            channel_data = np.convolve(channel_data, kernel, mode='same')
+        # 3. Very soft limiting ONLY if clipping would occur
+        # Uses tanh for smooth clipping prevention
+        abs_max = np.max(np.abs(channel_data))
+        if abs_max > 0.95:
+            channel_data = np.tanh(channel_data * 0.9) * 0.85
 
-        # 4. VERY LIGHT Noise gate - Preserve natural ambience
-        rms = np.sqrt(np.mean(channel_data ** 2))
-        threshold = rms * 0.05  # Only gate very quiet noise (5% of RMS)
-        gate_ratio = 1.5  # Minimal reduction (was 2.0)
-
-        mask = np.abs(channel_data) < threshold
-        channel_data[mask] = channel_data[mask] / gate_ratio
-
-        # 5. GENTLE Compression - Even out levels naturally
-        # Broadcast-style compression: gentle ratio, high threshold
-        compression_threshold = 0.3  # -10.5 dB (higher = less compression)
-        compression_ratio = 1.3  # Very gentle (was 1.5)
-
-        abs_data = np.abs(channel_data)
-        above_threshold = abs_data > compression_threshold
-
-        compressed = channel_data.copy()
-        compressed[above_threshold] = np.sign(channel_data[above_threshold]) * (
-            compression_threshold +
-            (abs_data[above_threshold] - compression_threshold) / compression_ratio
-        )
-
-        # 6. Moderate makeup gain - Boost to comfortable listening level
-        compressed = compressed * 1.4  # Slightly less aggressive (was 1.5)
-
-        # 7. Soft limiting - Prevent clipping without harshness
-        max_val = np.max(np.abs(compressed))
-        if max_val > 0.9:
-            # Soft knee limiting
-            compressed = np.tanh(compressed * 1.1) * 0.85
-
-        return compressed
+        return channel_data
 
     def _resample(self, audio_data, original_rate, target_rate):
         """Resample audio using soxr (high-quality, fast resampling)."""
@@ -618,6 +692,8 @@ def main():
             print("Recording... Send 'stop' to stdin or Press Ctrl+C to stop", file=sys.stderr)
             
             # Main loop - print audio levels for visualization
+            # PERFORMANCE: Reduced from 20 FPS to 5 FPS to minimize CPU/IPC overhead
+            # Visualization still looks smooth, but uses 75% less resources
             while not stop_event.is_set():
                 # Print levels as JSON to stdout (buffered)
                 # Electron will parse this
@@ -627,7 +703,7 @@ def main():
                     "desktop": round(recorder.desktop_level, 3)
                 }
                 print(json.dumps(levels), flush=True)
-                time.sleep(0.05) # 20 FPS updates
+                time.sleep(0.2) # 5 FPS updates (was 0.05 = 20 FPS)
             
             print("\nStopping recording...", file=sys.stderr)
             recorder.stop_recording()

@@ -58,6 +58,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onAudioLevels: (callback) => {
     ipcRenderer.on('audio-levels', (event, data) => callback(data));
   },
+  onRecordingWarning: (callback) => {
+    ipcRenderer.on('recording-warning', (event, data) => callback(data));
+  },
   onUpdateAvailable: (callback) => {
     ipcRenderer.on('update-available', (event, data) => callback(data));
   }

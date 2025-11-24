@@ -7,7 +7,7 @@
  * - Handles application lifecycle
  */
 
-const { app, BrowserWindow, ipcMain, Tray, Menu, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, dialog, powerSaveBlocker } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -23,6 +23,9 @@ let recordingStartTime = null;
 let activeProcesses = []; // Track all spawned Python processes for cleanup
 let tray = null;
 let isQuitting = false;
+let powerSaveId = null; // Power save blocker ID for preventing system suspension during recording
+let recordingHeartbeat = null; // Heartbeat monitor to detect recording failures
+let lastLevelUpdate = null; // Timestamp of last audio level update
 
 // ============================================================================
 // Python Process Management
@@ -547,6 +550,14 @@ ipcMain.handle('start-recording', async (event, options) => {
     }
     const outputPath = path.join(recordingsDir, filename);
 
+    // FIX 1 (REFINED): Enable power save blocker to keep process running
+    // Use 'prevent-display-sleep' instead of 'prevent-app-suspension' for better battery life
+    // This prevents display from sleeping but allows system to enter low-power states
+    if (powerSaveId === null) {
+      powerSaveId = powerSaveBlocker.start('prevent-display-sleep');
+      console.log('Power save blocker enabled - preventing display sleep during recording');
+    }
+
     // Start Python recording process
     pythonProcess = spawnTrackedPython([
       path.join(pythonConfig.backendPath, 'audio_recorder.py'),
@@ -555,26 +566,62 @@ ipcMain.handle('start-recording', async (event, options) => {
       '--output', outputPath
     ]);
 
+    // FIX 2 (REFINED): Set high priority for Python recording process on Windows
+    // Use small delay to ensure process is fully initialized before setting priority
+    if (process.platform === 'win32' && pythonProcess.pid) {
+      setTimeout(() => {
+        try {
+          const { exec } = require('child_process');
+          exec(`wmic process where processid="${pythonProcess.pid}" CALL setpriority "high priority"`, (error) => {
+            if (error) {
+              console.warn('Failed to set high priority:', error.message);
+            } else {
+              console.log('Recording process set to HIGH priority');
+            }
+          });
+        } catch (e) {
+          console.warn('Could not set process priority:', e.message);
+        }
+      }, 100); // 100ms delay to ensure process initialization
+    }
+
     let recordingStarted = false;
     let progressStage = 'initializing';
+
+    // PERFORMANCE FIX: Throttle audio level updates to reduce IPC overhead
+    // Only send updates if window is visible AND we haven't sent one recently
+    let lastLevelSentTime = 0;
+    const LEVEL_UPDATE_THROTTLE_MS = 100; // Max 10 updates/sec instead of 20
 
     pythonProcess.stdout.on('data', (data) => {
       const output = data.toString();
 
       // Check if this is a JSON level update
       if (output.trim().startsWith('{"type": "levels"')) {
-        try {
-          // There might be multiple JSON objects in one chunk, or mixed with newlines
-          const lines = output.trim().split('\n');
-          for (const line of lines) {
-            if (line.startsWith('{"type": "levels"')) {
-              const levels = JSON.parse(line);
-              mainWindow.webContents.send('audio-levels', levels);
+        // FIX 3: Update heartbeat timestamp when we receive audio levels
+        lastLevelUpdate = Date.now();
+
+        // PERFORMANCE: Only parse and send if window visible and throttled
+        const now = Date.now();
+        const shouldSendUpdate = (now - lastLevelSentTime) >= LEVEL_UPDATE_THROTTLE_MS;
+
+        if (shouldSendUpdate && mainWindow && !mainWindow.isMinimized() && mainWindow.isVisible()) {
+          try {
+            // There might be multiple JSON objects in one chunk, or mixed with newlines
+            const lines = output.trim().split('\n');
+            for (const line of lines) {
+              if (line.startsWith('{"type": "levels"')) {
+                const levels = JSON.parse(line);
+                mainWindow.webContents.send('audio-levels', levels);
+                lastLevelSentTime = now;
+                break; // Only send first valid level to reduce overhead
+              }
             }
+          } catch (e) {
+            // Ignore parse errors for levels
           }
-        } catch (e) {
-          // Ignore parse errors for levels
         }
+        // Note: We still update heartbeat even if we don't send to UI
       } else {
         // Send progress updates to renderer
         mainWindow.webContents.send('recording-progress', output);
@@ -601,12 +648,41 @@ ipcMain.handle('start-recording', async (event, options) => {
       if (!recordingStarted && output.includes('Recording started!')) {
         recordingStarted = true;
         recordingStartTime = Date.now(); // Track when recording actually started
+
+        // FIX 3: Start heartbeat monitor to detect recording failures
+        lastLevelUpdate = Date.now();
+        recordingHeartbeat = setInterval(() => {
+          const timeSinceUpdate = Date.now() - lastLevelUpdate;
+
+          // If no audio level updates for 10 seconds, something is wrong
+          if (timeSinceUpdate > 10000 && pythonProcess && !pythonProcess.killed) {
+            console.error(`Recording heartbeat lost - no audio levels for ${timeSinceUpdate / 1000}s`);
+            mainWindow.webContents.send('recording-warning', {
+              type: 'heartbeat_lost',
+              message: 'Recording may have stopped unexpectedly. No audio data received for 10+ seconds.'
+            });
+
+            // Continue monitoring - don't auto-kill, let user decide
+          }
+        }, 5000); // Check every 5 seconds
+
         mainWindow.webContents.send('recording-init-progress', { stage: 'started', message: 'Recording started!' });
         resolve({ success: true, message: 'Recording started' });
       }
     });
 
     pythonProcess.on('close', (code) => {
+      // CRITICAL FIX: Clean up resources on error
+      if (recordingHeartbeat) {
+        clearInterval(recordingHeartbeat);
+        recordingHeartbeat = null;
+      }
+      if (powerSaveId !== null) {
+        powerSaveBlocker.stop(powerSaveId);
+        powerSaveId = null;
+        console.log('Power save blocker disabled (recording failed)');
+      }
+
       if (!recordingStarted) {
         // Process closed before recording started - this is an error
         let errorMessage = `Recording failed to start. Process exited with code ${code}.`;
@@ -626,6 +702,17 @@ ipcMain.handle('start-recording', async (event, options) => {
     const timeout = isFirstRecording ? 15000 : 10000;
     const timeoutHandle = setTimeout(() => {
       if (!recordingStarted) {
+        // CRITICAL FIX: Clean up resources on timeout
+        if (recordingHeartbeat) {
+          clearInterval(recordingHeartbeat);
+          recordingHeartbeat = null;
+        }
+        if (powerSaveId !== null) {
+          powerSaveBlocker.stop(powerSaveId);
+          powerSaveId = null;
+          console.log('Power save blocker disabled (timeout)');
+        }
+
         let errorMessage = `Recording failed to start within ${timeout / 1000} seconds.`;
 
         // Provide specific guidance based on what stage failed
@@ -659,6 +746,13 @@ ipcMain.handle('start-recording', async (event, options) => {
  */
 ipcMain.handle('stop-recording', async () => {
   return new Promise((resolve, reject) => {
+    // FIX 3: Clear heartbeat monitor
+    if (recordingHeartbeat) {
+      clearInterval(recordingHeartbeat);
+      recordingHeartbeat = null;
+      console.log('Recording heartbeat monitor stopped');
+    }
+
     if (pythonProcess) {
       let stdoutData = '';
       let stderrData = '';
@@ -682,6 +776,13 @@ ipcMain.handle('stop-recording', async () => {
       pythonProcess.on('close', (code) => {
         pythonProcess = null;
         recordingStartTime = null; // Reset recording start time
+
+        // FIX 1: Disable power save blocker after recording completes
+        if (powerSaveId !== null) {
+          powerSaveBlocker.stop(powerSaveId);
+          powerSaveId = null;
+          console.log('Power save blocker disabled');
+        }
 
         if (code === 0) {
           // Parse JSON output to get file path

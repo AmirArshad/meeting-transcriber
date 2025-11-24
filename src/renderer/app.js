@@ -430,6 +430,16 @@ function setupEventListeners() {
     }
   });
 
+  // FIX 3 & 4: Listen for recording warnings (heartbeat lost)
+  window.electronAPI.onRecordingWarning((warning) => {
+    console.error('Recording warning:', warning);
+    addLog(`⚠️ ${warning.message}`, 'error');
+
+    // Show visual indicator in UI
+    statusText.textContent = 'Warning: Recording may be paused';
+    statusIndicator.style.backgroundColor = '#f59e0b'; // Amber warning color
+  });
+
   // Listen for updates
   window.electronAPI.onUpdateAvailable((updateInfo) => {
     showUpdateNotification(updateInfo);
@@ -1181,17 +1191,21 @@ class AudioVisualizer {
     this.container = document.getElementById('audio-visualizer');
     this.micCanvas = document.getElementById('mic-waveform');
     this.desktopCanvas = document.getElementById('desktop-waveform');
-    
+
     this.micCtx = this.micCanvas.getContext('2d');
     this.desktopCtx = this.desktopCanvas.getContext('2d');
-    
+
     // History buffers for waveform effect
     this.bufferSize = 50;
     this.micBuffer = new Array(this.bufferSize).fill(0);
     this.desktopBuffer = new Array(this.bufferSize).fill(0);
-    
+
     this.animationId = null;
     this.isRunning = false;
+
+    // FIX 4: Track when we last received updates
+    this.lastUpdateTime = 0;
+    this.warningShown = false;
   }
 
   start() {
@@ -1199,6 +1213,8 @@ class AudioVisualizer {
     this.container.style.display = 'flex';
     this.micBuffer.fill(0);
     this.desktopBuffer.fill(0);
+    this.lastUpdateTime = Date.now(); // Initialize update time
+    this.warningShown = false;
     // Use setInterval instead of requestAnimationFrame
     // This ensures visualization continues even when window is backgrounded
     this.animationId = setInterval(() => this.draw(), 50); // 20 FPS
@@ -1213,19 +1229,49 @@ class AudioVisualizer {
     // Keep visible for a moment or hide immediately?
     // Let's hide it to keep UI clean when not recording
     this.container.style.display = 'none';
+    this.warningShown = false;
   }
 
   updateLevels(levels) {
+    // FIX 4: Update timestamp when we receive levels
+    this.lastUpdateTime = Date.now();
+    this.warningShown = false; // Reset warning when we get updates
+
     // Shift buffer and add new level
     this.micBuffer.shift();
     this.micBuffer.push(levels.mic);
-    
+
     this.desktopBuffer.shift();
     this.desktopBuffer.push(levels.desktop);
   }
 
   draw() {
     if (!this.isRunning) return;
+
+    // PERFORMANCE: Skip rendering if document is hidden (minimized/backgrounded)
+    // Saves CPU/GPU when user can't see the visualization
+    if (document.hidden) {
+      return; // Don't render, but keep interval running for quick resume
+    }
+
+    // FIX 4: Check if we've received updates recently
+    const timeSinceUpdate = Date.now() - this.lastUpdateTime;
+
+    // If no updates for 5 seconds, fade out visualization to indicate problem
+    if (timeSinceUpdate > 5000) {
+      // PERFORMANCE: In-place mutation instead of creating new array
+      for (let i = 0; i < this.micBuffer.length; i++) {
+        this.micBuffer[i] *= 0.9;
+        this.desktopBuffer[i] *= 0.9;
+      }
+
+      // Show warning once
+      if (!this.warningShown && recordingState === 'recording') {
+        console.warn('Visualizer: No audio levels for 5s - recording may be paused');
+        addLog('⚠️ Warning: Audio visualization paused (no data from recorder)', 'warning');
+        this.warningShown = true;
+      }
+    }
 
     this.drawWaveform(this.micCtx, this.micBuffer, '#10b981'); // Emerald 500
     this.drawWaveform(this.desktopCtx, this.desktopBuffer, '#3b82f6'); // Blue 500
