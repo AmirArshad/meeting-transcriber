@@ -100,10 +100,10 @@ This app uses professional-grade audio processing:
 
 - **Microphone Enhancement:**
 
-  - High-pass filter (removes rumble)
-  - Noise gate (reduces background noise)
-  - Gentle compression (balances volume)
-  - Makeup gain (+9.5 dB total boost)
+  - Native 48kHz capture (automatic quality detection)
+  - DC offset removal (prevents pops/clicks)
+  - Minimal processing (Google Meet-style natural sound)
+  - Gentle normalization (preserves dynamics)
 
 - **Desktop Audio:**
 
@@ -111,9 +111,9 @@ This app uses professional-grade audio processing:
   - Maintains original quality
 
 - **Final Mix:**
-  - Intelligent resampling to 48kHz
+  - Intelligent resampling to 48kHz (when needed)
   - Stereo output
-  - Compressed to Opus format (96 kbps VBR)
+  - Compressed to Opus format (128 kbps, maximum quality)
 
 ## 🌍 Supported Languages
 
@@ -212,6 +212,9 @@ This project is licensed under the MIT License - see [LICENSE.txt](LICENSE.txt) 
 - [x] Model preloading for improved first-time experience
 - [x] Combined Start/Stop/Transcribe button (single action UX)
 - [x] Audio visualizer (real-time waveform during recording)
+- [x] **v1.6.0:** Background recording stability (60+ min recordings)
+- [x] **v1.6.0:** Performance optimizations (75% less CPU when minimized)
+- [x] **v1.6.0:** Audio quality improvements (Google Meet-quality)
 
 ### In Progress 🚧
 
