@@ -273,6 +273,18 @@ async function loadAudioDevices() {
 // Load meeting history
 async function loadMeetingHistory() {
   try {
+    // First scan the filesystem for any new recordings that aren't in the database
+    try {
+      const scanResult = await window.electronAPI.scanRecordings();
+      if (scanResult.added > 0) {
+        console.log(`Scanned recordings directory: ${scanResult.added} new meetings added, ${scanResult.skipped} already in database`);
+      }
+    } catch (scanError) {
+      console.warn('Failed to scan recordings directory:', scanError);
+      // Continue anyway - scanning is optional
+    }
+
+    // Then load the meeting list
     meetings = await window.electronAPI.listMeetings();
     renderMeetingList();
     console.log(`Loaded ${meetings.length} meetings`);

@@ -94,6 +94,8 @@ if (!app.isPackaged) {
 process.env.PYTHONWARNINGS = 'ignore::DeprecationWarning,ignore::UserWarning';
 
 console.log('Python Configuration:', pythonConfig);
+console.log('userData path:', app.getPath('userData'));
+console.log('Recordings will be saved to:', path.join(app.getPath('userData'), 'recordings'));
 
 // Create the system tray
 function createTray() {
@@ -307,6 +309,16 @@ function preloadWhisperModel() {
 
 // Initialize app
 app.whenReady().then(() => {
+  // IMPORTANT: Log all app paths for debugging
+  console.log('=== App Path Configuration ===');
+  console.log('app.getPath("userData"):', app.getPath('userData'));
+  console.log('app.getPath("appData"):', app.getPath('appData'));
+  console.log('app.getPath("cache"):', app.getPath('cache'));
+  console.log('app.getName():', app.getName());
+  console.log('app.isPackaged:', app.isPackaged);
+  console.log('process.resourcesPath:', process.resourcesPath);
+  console.log('==============================');
+
   // Set cache paths to userData to avoid permission issues
   const cacheDir = path.join(app.getPath('userData'), 'Cache');
   app.setPath('cache', cacheDir);
@@ -884,15 +896,26 @@ ipcMain.handle('transcribe-audio', async (event, options) => {
     });
 
     python.on('close', (code) => {
-      if (code === 0) {
+      // Try to parse JSON output first, even if exit code is non-zero
+      // This handles cases where transcription succeeds but cleanup fails
+      if (output.trim()) {
         try {
           const result = JSON.parse(output);
-          resolve(result);
+          // If we successfully parsed JSON with the expected structure, consider it success
+          if (result.text !== undefined || result.segments !== undefined) {
+            resolve(result);
+            return;
+          }
         } catch (e) {
-          reject(new Error(`Failed to parse transcription: ${e.message}`));
+          // JSON parsing failed, continue to error handling
         }
+      }
+
+      // If we get here, either no output or parsing failed
+      if (code === 0) {
+        reject(new Error(`Transcription produced no valid output`));
       } else {
-        reject(new Error(`Transcription failed: ${errorOutput}`));
+        reject(new Error(`Transcription failed: ${errorOutput || 'Unknown error'}`));
       }
     });
   });
@@ -1004,6 +1027,45 @@ ipcMain.handle('delete-meeting', async (event, meetingId) => {
         // Include actual error details from Python
         const errorMsg = errorOutput.trim() || 'Unknown error';
         reject(new Error(`Failed to delete meeting: ${errorMsg}`));
+      }
+    });
+  });
+});
+
+/**
+ * Scan recordings directory and sync with database
+ */
+ipcMain.handle('scan-recordings', async () => {
+  return new Promise((resolve, reject) => {
+    const recordingsDir = path.join(app.getPath('userData'), 'recordings');
+    const python = spawnTrackedPython([
+      path.join(pythonConfig.backendPath, 'meeting_manager.py'),
+      '--recordings-dir', recordingsDir,
+      'scan'
+    ]);
+
+    let output = '';
+    let errorOutput = '';
+
+    python.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    python.stderr.on('data', (data) => {
+      errorOutput += data.toString();
+    });
+
+    python.on('close', (code) => {
+      if (code === 0) {
+        try {
+          const result = JSON.parse(output);
+          resolve(result);
+        } catch (e) {
+          reject(new Error(`Failed to parse scan result: ${e.message}`));
+        }
+      } else {
+        const errorMsg = errorOutput.trim() || 'Unknown error';
+        reject(new Error(`Failed to scan recordings: ${errorMsg}`));
       }
     });
   });

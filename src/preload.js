@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getMeeting: (meetingId) => ipcRenderer.invoke('get-meeting', meetingId),
   deleteMeeting: (meetingId) => ipcRenderer.invoke('delete-meeting', meetingId),
   addMeeting: (meetingData) => ipcRenderer.invoke('add-meeting', meetingData),
+  scanRecordings: () => ipcRenderer.invoke('scan-recordings'),
 
   // GPU acceleration
   checkGPU: () => ipcRenderer.invoke('check-gpu'),

@@ -141,6 +141,99 @@ class MeetingManager:
         except (FileNotFoundError, json.JSONDecodeError):
             return []
 
+    def scan_and_sync_recordings(self) -> Dict[str, int]:
+        """
+        Scan the recordings directory for audio/transcript files and add any
+        missing meetings to the database.
+
+        This is useful for recovering from situations where transcriptions
+        completed but weren't added to the database, or for importing
+        recordings from other sources.
+
+        Returns:
+            Dictionary with counts: {'scanned': N, 'added': M, 'skipped': K}
+        """
+        existing_meetings = self.list_meetings()
+        existing_audio_paths = {Path(m['audioPath']).name for m in existing_meetings}
+
+        scanned = 0
+        added = 0
+        skipped = 0
+
+        # Find all .opus and .wav audio files
+        audio_files = list(self.recordings_dir.glob('*.opus')) + list(self.recordings_dir.glob('*.wav'))
+
+        for audio_file in audio_files:
+            scanned += 1
+
+            # Skip if already in database
+            if audio_file.name in existing_audio_paths:
+                skipped += 1
+                continue
+
+            # Look for corresponding transcript
+            transcript_file = audio_file.with_suffix('.md')
+            if not transcript_file.exists():
+                print(f"Warning: No transcript found for {audio_file.name}", file=sys.stderr)
+                skipped += 1
+                continue
+
+            # Try to extract duration from transcript
+            duration = 0.0
+            try:
+                content = transcript_file.read_text(encoding='utf-8')
+                # Look for "Duration: HH:MM:SS" or "Duration: MM:SS"
+                import re
+                duration_match = re.search(r'\*\*Duration:\*\*\s*(\d+):(\d+):(\d+)', content)
+                if duration_match:
+                    hours, mins, secs = map(int, duration_match.groups())
+                    duration = hours * 3600 + mins * 60 + secs
+                else:
+                    duration_match = re.search(r'\*\*Duration:\*\*\s*(\d+):(\d+)', content)
+                    if duration_match:
+                        mins, secs = map(int, duration_match.groups())
+                        duration = mins * 60 + secs
+            except Exception as e:
+                print(f"Warning: Could not extract duration from {transcript_file.name}: {e}", file=sys.stderr)
+                duration = 0.0
+
+            # Extract timestamp from filename (e.g., recording_2025-12-01T13-31-43.opus)
+            try:
+                filename_base = audio_file.stem
+                # Try to parse timestamp from filename
+                timestamp_match = re.search(r'(\d{4}-\d{2}-\d{2})T(\d{2}-\d{2}-\d{2})', filename_base)
+                if timestamp_match:
+                    date_str, time_str = timestamp_match.groups()
+                    # Convert to datetime
+                    dt_str = f"{date_str} {time_str.replace('-', ':')}"
+                    title = f"Meeting {dt_str}"
+                else:
+                    title = f"Meeting {audio_file.stem}"
+            except Exception:
+                title = f"Meeting {audio_file.stem}"
+
+            # Add meeting to database
+            try:
+                meeting = self.add_meeting(
+                    audio_path=str(audio_file.absolute()),
+                    transcript_path=str(transcript_file.absolute()),
+                    duration=duration,
+                    language="en",  # Default to English
+                    model="unknown",  # We don't know which model was used
+                    title=title
+                )
+                added += 1
+                print(f"Added meeting from filesystem: {audio_file.name}", file=sys.stderr)
+            except Exception as e:
+                print(f"Error adding meeting {audio_file.name}: {e}", file=sys.stderr)
+                skipped += 1
+
+        return {
+            'scanned': scanned,
+            'added': added,
+            'skipped': skipped
+        }
+
     def get_meeting(self, meeting_id: str) -> Optional[Dict]:
         """
         Get a single meeting by ID.
@@ -239,6 +332,9 @@ def main():
     # List meetings
     subparsers.add_parser('list', help='List all meetings')
 
+    # Scan and sync recordings
+    subparsers.add_parser('scan', help='Scan recordings directory and add missing meetings to database')
+
     # Get meeting
     get_parser = subparsers.add_parser('get', help='Get meeting details')
     get_parser.add_argument('id', help='Meeting ID')
@@ -263,6 +359,10 @@ def main():
     if args.command == 'list':
         meetings = manager.list_meetings()
         print(json.dumps(meetings, indent=2))
+
+    elif args.command == 'scan':
+        result = manager.scan_and_sync_recordings()
+        print(json.dumps(result, indent=2))
 
     elif args.command == 'get':
         meeting = manager.get_meeting(args.id)

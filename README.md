@@ -117,14 +117,13 @@ This app uses professional-grade audio processing:
 
 ## 🌍 Supported Languages
 
-Whisper supports **99 languages** including:
+The UI provides quick access to 12 commonly used languages:
 
-- English, Spanish, French, German, Italian
-- Chinese (Mandarin), Japanese, Korean
-- Arabic, Hindi, Portuguese, Russian
-- And 87 more...
+- **English**, Spanish, French, German, Italian, Portuguese
+- **Chinese** (Mandarin/Cantonese), Japanese, Korean
+- **Farsi/Persian**, Panjabi, Hindi
 
-See [docs/TRANSCRIPTION_GUIDE.md](docs/TRANSCRIPTION_GUIDE.md) for full list and tips.
+Whisper itself supports **99 languages total** - the full list can be customized in the code if needed. See [docs/TRANSCRIPTION_GUIDE.md](docs/TRANSCRIPTION_GUIDE.md) for transcription tips.
 
 ## 💻 System Requirements
 
@@ -149,7 +148,7 @@ See [docs/TRANSCRIPTION_GUIDE.md](docs/TRANSCRIPTION_GUIDE.md) for full list and
 - **Backend:** Python 3.11
 - **AI Model:** faster-whisper (OpenAI Whisper)
 - **Audio Engine:** PyAudioWPatch (WASAPI loopback support)
-- **Audio Processing:** NumPy, SciPy
+- **Audio Processing:** NumPy, soxr (high-quality resampling)
 - **Compression:** ffmpeg (Opus codec)
 - **GPU:** PyTorch + CUDA 12.1 (optional)
 
@@ -215,6 +214,9 @@ This project is licensed under the MIT License - see [LICENSE.txt](LICENSE.txt) 
 - [x] **v1.6.0:** Background recording stability (60+ min recordings)
 - [x] **v1.6.0:** Performance optimizations (75% less CPU when minimized)
 - [x] **v1.6.0:** Audio quality improvements (Google Meet-quality)
+- [x] **v1.6.1:** Transcription reliability fixes (handle edge cases gracefully)
+- [x] **v1.6.1:** Automatic meeting recovery (scan filesystem on refresh)
+- [x] **v1.6.1:** Cantonese language support added to UI
 
 ### In Progress 🚧
 

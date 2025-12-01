@@ -544,6 +544,7 @@ def main():
                 json_output = json.dumps(results, indent=2)
                 print(json_output)
                 sys.stdout.flush()  # Ensure output is sent immediately
+                sys.exit(0)  # Explicitly exit with success code
             except Exception as json_error:
                 print(f"\nERROR serializing JSON: {json_error}", file=sys.stderr)
                 print(f"Results type: {type(results)}", file=sys.stderr)
@@ -556,6 +557,7 @@ def main():
             print("=" * 60)
             print(f"\nFull text:\n{results['text']}")
             print(f"\nMarkdown saved to: {results['output_file']}")
+            sys.exit(0)  # Explicitly exit with success code
 
     except Exception as e:
         # Print error to stderr so it doesn't corrupt JSON output
@@ -566,7 +568,11 @@ def main():
         sys.exit(1)
     finally:
         if 'transcriber' in locals():
-            transcriber.cleanup()
+            try:
+                transcriber.cleanup()
+            except Exception as cleanup_error:
+                # Don't fail the whole script if cleanup fails
+                print(f"Warning: Cleanup error (non-fatal): {cleanup_error}", file=sys.stderr)
 
 
 if __name__ == "__main__":
