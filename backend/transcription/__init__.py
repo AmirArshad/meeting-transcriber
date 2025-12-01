@@ -15,10 +15,9 @@ def get_transcriber(*args, **kwargs):
     system = platform.system()
 
     if system == 'Darwin':
-        # macOS: Use MLX-based transcription (when implemented)
-        # For now, fall back to faster-whisper until MLX is implemented
-        from .faster_whisper_transcriber import TranscriberService
-        return TranscriberService(*args, **kwargs)
+        # macOS: Use MLX-based transcription for Apple Silicon GPU acceleration
+        from .mlx_whisper_transcriber import MLXWhisperTranscriber
+        return MLXWhisperTranscriber(*args, **kwargs)
     else:
         # Windows and others: Use faster-whisper
         from .faster_whisper_transcriber import TranscriberService
@@ -28,4 +27,4 @@ def get_transcriber(*args, **kwargs):
 # For backwards compatibility, import TranscriberService class
 from .faster_whisper_transcriber import TranscriberService
 
-__all__ = ['get_transcriber', 'TranscriberService']
+__all__ = ['get_transcriber', 'TranscriberService', 'MLXWhisperTranscriber']

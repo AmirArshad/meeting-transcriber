@@ -81,6 +81,18 @@ function getPythonConfig() {
 
 const pythonConfig = getPythonConfig();
 
+/**
+ * Get the platform-specific transcriber script path.
+ * Returns the appropriate transcriber based on the operating system:
+ * - macOS: MLX Whisper (Metal GPU acceleration for Apple Silicon)
+ * - Windows/others: faster-whisper (CUDA GPU acceleration)
+ */
+function getTranscriberScript() {
+  const isMac = process.platform === 'darwin';
+  const scriptName = isMac ? 'mlx_whisper_transcriber.py' : 'faster_whisper_transcriber.py';
+  return path.join(pythonConfig.backendPath, 'transcription', scriptName);
+}
+
 // Add ffmpeg to PATH so Python scripts can find it
 if (!app.isPackaged) {
   // In dev mode, ffmpeg should already be in PATH
@@ -96,6 +108,7 @@ process.env.PYTHONWARNINGS = 'ignore::DeprecationWarning,ignore::UserWarning';
 console.log('Python Configuration:', pythonConfig);
 console.log('userData path:', app.getPath('userData'));
 console.log('Recordings will be saved to:', path.join(app.getPath('userData'), 'recordings'));
+console.log('Transcriber:', getTranscriberScript());
 
 // Create the system tray
 function createTray() {
@@ -289,7 +302,7 @@ function preloadWhisperModel() {
   console.log(`Preloading Whisper model (${modelSize})...`);
 
   const preloadProcess = spawnTrackedPython([
-    path.join(pythonConfig.backendPath, 'transcription', 'faster_whisper_transcriber.py'),
+    getTranscriberScript(),
     '--preload',
     '--model', modelSize
   ]);
@@ -499,7 +512,7 @@ ipcMain.handle('download-model', async (event, modelSize) => {
     console.log(`Downloading Whisper model: ${model}`);
 
     const python = spawnTrackedPython([
-      path.join(pythonConfig.backendPath, 'transcription', 'faster_whisper_transcriber.py'),
+      getTranscriberScript(),
       '--preload',
       '--model', model
     ]);
@@ -875,7 +888,7 @@ ipcMain.handle('transcribe-audio', async (event, options) => {
     }
 
     const python = spawnTrackedPython([
-      path.join(pythonConfig.backendPath, 'transcription', 'faster_whisper_transcriber.py'),
+      getTranscriberScript(),
       '--file', audioFile,
       '--language', language || 'en',
       '--model', modelSize || 'small',
