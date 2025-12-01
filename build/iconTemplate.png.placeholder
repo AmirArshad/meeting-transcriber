@@ -1,0 +1,17 @@
+PLACEHOLDER: macOS Tray Icon (16x16)
+
+This file needs to be replaced with an actual PNG image.
+
+Instructions:
+1. Create a 16x16 pixel PNG image
+2. Use only BLACK (#000000) and TRANSPARENT pixels
+3. Design a simple microphone or audio waveform icon
+4. Save as "iconTemplate.png" (remove the .placeholder extension)
+5. Place in this directory (build/)
+
+Quick options:
+- Use any image editor to create the icon
+- Convert the existing icon.ico to PNG and make it black/transparent
+- Use online tools mentioned in MACOS_ICONS_README.md
+
+The icon will automatically adapt to macOS light/dark mode when named correctly.

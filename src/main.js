@@ -112,13 +112,29 @@ console.log('Transcriber:', getTranscriberScript());
 
 // Create the system tray
 function createTray() {
-  // In production, icon is at the root of resources
-  // In development, icon is in build folder
-  const iconPath = app.isPackaged
-    ? path.join(process.resourcesPath, 'icon.ico')
-    : path.join(__dirname, '../build/icon.ico');
+  // Platform-specific icon paths
+  // macOS: Uses template PNG images that adapt to light/dark mode
+  // Windows: Uses ICO file
+  let iconPath;
+
+  if (process.platform === 'darwin') {
+    // macOS: Use template image for menu bar
+    iconPath = app.isPackaged
+      ? path.join(process.resourcesPath, 'iconTemplate.png')
+      : path.join(__dirname, '../build/iconTemplate.png');
+  } else {
+    // Windows/Linux: Use ICO file
+    iconPath = app.isPackaged
+      ? path.join(process.resourcesPath, 'icon.ico')
+      : path.join(__dirname, '../build/icon.ico');
+  }
 
   tray = new Tray(iconPath);
+
+  // macOS: Mark as template image for automatic dark mode support
+  if (process.platform === 'darwin') {
+    tray.setImage(iconPath);  // Ensure template image is used
+  }
 
   const contextMenu = Menu.buildFromTemplate([
     {

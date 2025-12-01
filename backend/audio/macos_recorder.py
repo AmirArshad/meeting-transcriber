@@ -519,19 +519,26 @@ def main():
         # Manual stop (wait for stdin command from Electron)
         print(f"Recording... (send 'stop' to stdin to stop)", file=sys.stderr)
 
-        def wait_for_stop():
+        def wait_for_commands():
+            """Listen for commands from Electron via stdin."""
             try:
                 for line in sys.stdin:
-                    if line.strip().lower() == 'stop':
+                    command = line.strip().lower()
+                    if command == 'stop':
                         print(f"Stop command received", file=sys.stderr)
                         recorder.stop_recording()
                         break
-            except:
-                pass
+                    elif command == 'get_levels':
+                        # Send audio levels as JSON to stdout
+                        levels = recorder.get_audio_levels()
+                        print(json.dumps(levels))
+                        sys.stdout.flush()
+            except Exception as e:
+                print(f"Error in command listener: {e}", file=sys.stderr)
 
-        stop_thread = threading.Thread(target=wait_for_stop)
-        stop_thread.daemon = True
-        stop_thread.start()
+        command_thread = threading.Thread(target=wait_for_commands)
+        command_thread.daemon = True
+        command_thread.start()
 
         # Also support Ctrl+C
         try:

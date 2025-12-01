@@ -1,0 +1,13 @@
+PLACEHOLDER: macOS Tray Icon Retina (32x32)
+
+This file needs to be replaced with an actual PNG image.
+
+Instructions:
+1. Create a 32x32 pixel PNG image (same design as 16x16, just 2x resolution)
+2. Use only BLACK (#000000) and TRANSPARENT pixels
+3. Design should match iconTemplate.png (just higher resolution)
+4. Save as "iconTemplate@2x.png" (remove the .placeholder extension)
+5. Place in this directory (build/)
+
+This is the Retina display version of iconTemplate.png.
+macOS will automatically choose this on high-DPI displays.
