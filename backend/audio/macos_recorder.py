@@ -21,6 +21,16 @@ except ImportError:
     print("ERROR: sounddevice not installed. Install with: pip install sounddevice", file=sys.stderr)
     sys.exit(1)
 
+# Import ScreenCaptureKit helper (optional - graceful fallback if not available)
+try:
+    from .screencapture_helper import ScreenCaptureAudioRecorder, check_screen_recording_permission
+    SCREENCAPTURE_AVAILABLE = True
+except ImportError:
+    print("WARNING: ScreenCaptureKit not available (PyObjC not installed)", file=sys.stderr)
+    print("  Desktop audio capture will be disabled", file=sys.stderr)
+    print("  Install with: pip install pyobjc-framework-ScreenCaptureKit", file=sys.stderr)
+    SCREENCAPTURE_AVAILABLE = False
+
 # Store final output path for meeting manager
 _final_output_path = None
 _recording_duration = 0.0
@@ -75,6 +85,19 @@ class MacOSAudioRecorder:
         self.mic_info = None
         self.desktop_info = None
 
+        # ScreenCaptureKit recorder (for desktop audio)
+        self.screencapture_recorder = None
+        if SCREENCAPTURE_AVAILABLE:
+            try:
+                self.screencapture_recorder = ScreenCaptureAudioRecorder(
+                    sample_rate=sample_rate,
+                    channels=channels
+                )
+                print(f"  ScreenCaptureKit initialized for desktop audio", file=sys.stderr)
+            except Exception as e:
+                print(f"  WARNING: Could not initialize ScreenCaptureKit: {e}", file=sys.stderr)
+                self.screencapture_recorder = None
+
         # Pre-roll: discard first ~1.5 seconds (device warm-up)
         self.preroll_frames = int(1.5 * sample_rate / chunk_size)
 
@@ -117,10 +140,13 @@ class MacOSAudioRecorder:
         self.mic_thread.daemon = True
         self.mic_thread.start()
 
-        # TODO: Start desktop recording thread when ScreenCaptureKit is implemented
-        # self.desktop_thread = threading.Thread(target=self._record_desktop)
-        # self.desktop_thread.daemon = True
-        # self.desktop_thread.start()
+        # Start desktop recording if ScreenCaptureKit is available
+        if self.screencapture_recorder:
+            self.desktop_thread = threading.Thread(target=self._record_desktop)
+            self.desktop_thread.daemon = True
+            self.desktop_thread.start()
+        else:
+            print(f"WARNING: Desktop audio capture disabled (ScreenCaptureKit not available)", file=sys.stderr)
 
         print(f"Recording started...", file=sys.stderr)
 
@@ -181,23 +207,46 @@ class MacOSAudioRecorder:
         """
         Record desktop audio using ScreenCaptureKit.
 
-        TODO: Implement ScreenCaptureKit integration via PyObjC.
-        This requires:
-        1. Request Screen Recording permission
-        2. Create SCStream with audio capture configuration
-        3. Handle audio samples from ScreenCaptureKit
-        4. Convert to numpy arrays and store in self.desktop_frames
+        Uses the ScreenCaptureAudioRecorder helper to capture system audio output.
 
         References:
         - https://developer.apple.com/documentation/screencapturekit
         - https://github.com/Mnpn/Azayaka (example implementation)
         """
-        print(f"Desktop audio recording not yet implemented", file=sys.stderr)
-        print(f"TODO: Implement ScreenCaptureKit integration", file=sys.stderr)
+        if not self.screencapture_recorder:
+            print(f"ScreenCaptureKit not available, skipping desktop audio", file=sys.stderr)
+            return
 
-        # For now, just sleep to avoid thread termination
-        while self.is_running:
-            time.sleep(0.1)
+        try:
+            print(f"Starting ScreenCaptureKit desktop audio capture...", file=sys.stderr)
+
+            # Start ScreenCaptureKit recording
+            if not self.screencapture_recorder.start_recording():
+                print(f"Failed to start ScreenCaptureKit recording", file=sys.stderr)
+                return
+
+            # Monitor audio levels while recording
+            while self.is_running:
+                # Update desktop audio level from ScreenCaptureKit buffer
+                if self.screencapture_recorder.audio_buffer:
+                    try:
+                        # Get the latest buffer
+                        latest_buffer = self.screencapture_recorder.audio_buffer[-1]
+                        level = np.max(np.abs(latest_buffer[::8]))  # Subsample for performance
+
+                        with self.level_lock:
+                            self.desktop_level = float(level)
+                    except Exception:
+                        pass  # Ignore errors in level calculation
+
+                time.sleep(0.1)
+
+            print(f"Desktop recording thread stopped", file=sys.stderr)
+
+        except Exception as e:
+            print(f"ERROR in desktop recording: {e}", file=sys.stderr)
+            import traceback
+            traceback.print_exc(file=sys.stderr)
 
     def stop_recording(self):
         """Stop recording and process audio."""
@@ -213,6 +262,14 @@ class MacOSAudioRecorder:
             self.mic_thread.join(timeout=2.0)
         if self.desktop_thread:
             self.desktop_thread.join(timeout=2.0)
+
+        # Stop ScreenCaptureKit and get desktop audio
+        if self.screencapture_recorder:
+            desktop_audio = self.screencapture_recorder.stop_recording()
+            if desktop_audio is not None:
+                # Convert to list of frames for consistency
+                self.desktop_frames = [desktop_audio]
+                print(f"Retrieved {len(desktop_audio)} desktop audio samples from ScreenCaptureKit", file=sys.stderr)
 
         # Process and save audio
         print(f"Processing audio...", file=sys.stderr)
@@ -234,16 +291,47 @@ class MacOSAudioRecorder:
 
         print(f"Mic audio: {len(mic_audio)} samples, {mic_channels} channel(s)", file=sys.stderr)
 
-        # For now, since desktop audio is not implemented, use mic-only
-        # TODO: When desktop audio is implemented, mix with mic
-        final_audio = mic_audio
+        # Mix desktop audio if available
+        if self.desktop_frames:
+            desktop_audio = np.concatenate(self.desktop_frames, axis=0)
+            desktop_channels = desktop_audio.shape[1] if len(desktop_audio.shape) > 1 else 1
 
-        # Convert to stereo if mono
-        if mic_channels == 1:
-            final_audio = np.column_stack([mic_audio, mic_audio])
+            print(f"Desktop audio: {len(desktop_audio)} samples, {desktop_channels} channel(s)", file=sys.stderr)
 
-        # Apply mic volume
-        final_audio = final_audio * self.mic_volume
+            # Convert both to stereo if needed
+            if mic_channels == 1:
+                mic_audio = np.column_stack([mic_audio, mic_audio])
+            if desktop_channels == 1:
+                desktop_audio = np.column_stack([desktop_audio, desktop_audio])
+
+            # Resample to match lengths if needed
+            if len(mic_audio) != len(desktop_audio):
+                print(f"Resampling to match lengths: mic={len(mic_audio)}, desktop={len(desktop_audio)}", file=sys.stderr)
+
+                target_length = max(len(mic_audio), len(desktop_audio))
+
+                # Pad shorter audio with zeros
+                if len(mic_audio) < target_length:
+                    mic_audio = np.pad(mic_audio, ((0, target_length - len(mic_audio)), (0, 0)), mode='constant')
+                elif len(desktop_audio) < target_length:
+                    desktop_audio = np.pad(desktop_audio, ((0, target_length - len(desktop_audio)), (0, 0)), mode='constant')
+
+            # Mix: apply volumes and add
+            final_audio = (mic_audio * self.mic_volume) + (desktop_audio * self.desktop_volume)
+            print(f"Mixed audio: {len(final_audio)} samples", file=sys.stderr)
+
+        else:
+            # Mic-only mode
+            print(f"No desktop audio captured, using mic-only", file=sys.stderr)
+
+            # Convert to stereo if mono
+            if mic_channels == 1:
+                final_audio = np.column_stack([mic_audio, mic_audio])
+            else:
+                final_audio = mic_audio
+
+            # Apply mic volume
+            final_audio = final_audio * self.mic_volume
 
         # Enhance microphone audio (same as Windows)
         final_audio = self._enhance_microphone(final_audio)
@@ -390,6 +478,19 @@ def main():
     parser.add_argument("--duration", type=int, default=0, help="Duration in seconds (0 for manual stop)")
 
     args = parser.parse_args()
+
+    # Check Screen Recording permission if ScreenCaptureKit is available
+    if SCREENCAPTURE_AVAILABLE:
+        print(f"\nChecking Screen Recording permission...", file=sys.stderr)
+        if check_screen_recording_permission():
+            print(f"  ✓ Screen Recording permission granted", file=sys.stderr)
+        else:
+            print(f"  ✗ WARNING: Screen Recording permission not granted", file=sys.stderr)
+            print(f"  Desktop audio capture will not work", file=sys.stderr)
+            print(f"  Grant permission in: System Settings > Privacy & Security > Screen Recording", file=sys.stderr)
+    else:
+        print(f"\n✗ ScreenCaptureKit not available (PyObjC not installed)", file=sys.stderr)
+        print(f"  Desktop audio capture disabled", file=sys.stderr)
 
     # List available devices for reference
     print(f"\nAvailable audio devices:", file=sys.stderr)
