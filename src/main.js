@@ -289,7 +289,7 @@ function preloadWhisperModel() {
   console.log(`Preloading Whisper model (${modelSize})...`);
 
   const preloadProcess = spawnTrackedPython([
-    path.join(pythonConfig.backendPath, 'transcriber.py'),
+    path.join(pythonConfig.backendPath, 'transcription', 'faster_whisper_transcriber.py'),
     '--preload',
     '--model', modelSize
   ]);
@@ -499,7 +499,7 @@ ipcMain.handle('download-model', async (event, modelSize) => {
     console.log(`Downloading Whisper model: ${model}`);
 
     const python = spawnTrackedPython([
-      path.join(pythonConfig.backendPath, 'transcriber.py'),
+      path.join(pythonConfig.backendPath, 'transcription', 'faster_whisper_transcriber.py'),
       '--preload',
       '--model', model
     ]);
@@ -572,7 +572,7 @@ ipcMain.handle('start-recording', async (event, options) => {
 
     // Start Python recording process
     pythonProcess = spawnTrackedPython([
-      path.join(pythonConfig.backendPath, 'audio_recorder.py'),
+      path.join(pythonConfig.backendPath, 'audio', 'windows_recorder.py'),
       '--mic', micId.toString(),
       '--loopback', loopbackId.toString(),
       '--output', outputPath
@@ -875,7 +875,7 @@ ipcMain.handle('transcribe-audio', async (event, options) => {
     }
 
     const python = spawnTrackedPython([
-      path.join(pythonConfig.backendPath, 'transcriber.py'),
+      path.join(pythonConfig.backendPath, 'transcription', 'faster_whisper_transcriber.py'),
       '--file', audioFile,
       '--language', language || 'en',
       '--model', modelSize || 'small',
