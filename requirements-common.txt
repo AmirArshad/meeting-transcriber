@@ -1,0 +1,8 @@
+# Common dependencies shared by both Windows and macOS
+
+# Audio processing
+numpy>=1.24.0            # For audio processing and mixing
+soxr>=0.3.0              # For high-quality audio resampling
+
+# Transcription
+filelock>=3.12.0         # Prevent race conditions during model downloads

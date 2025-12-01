@@ -1,0 +1,18 @@
+# Windows-specific dependencies
+-r requirements-common.txt
+
+# Audio Recording (Windows WASAPI loopback)
+pyaudiowpatch>=0.2.12.4  # PyAudio fork with WASAPI loopback support
+
+# Transcription (Windows with CUDA support)
+faster-whisper>=1.0.0    # Fast, accurate Whisper implementation (CPU + GPU)
+
+# GPU Acceleration (Optional but recommended for faster transcription)
+# For NVIDIA GPU users with CUDA installed:
+# 1. Install PyTorch with CUDA support first:
+#    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+#
+# 2. Then install CuBLAS and cuDNN for faster-whisper:
+#    pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
+#
+# Note: These are large downloads (~2-4GB total) but provide 4-5x speedup

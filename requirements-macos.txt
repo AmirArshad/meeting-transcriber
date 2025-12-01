@@ -1,0 +1,15 @@
+# macOS-specific dependencies
+-r requirements-common.txt
+
+# Audio Recording
+sounddevice>=0.5.0                                 # Cross-platform audio I/O (microphone)
+pyobjc-framework-ScreenCaptureKit>=10.0           # ScreenCaptureKit for desktop audio (macOS 13+)
+pyobjc-framework-CoreAudio>=10.0                  # CoreAudio framework bindings
+pyobjc-framework-AVFoundation>=10.0               # AVFoundation for audio handling
+
+# Transcription (Apple Silicon with MLX Metal acceleration)
+lightning-whisper-mlx>=0.1.0                      # Whisper optimized for Apple Silicon
+mlx>=0.0.9                                        # Apple's ML framework with Metal support
+
+# Note: MLX provides GPU acceleration via Metal on Apple Silicon (M1/M2/M3/M4)
+# Expected performance: 2-4x realtime for medium model on M-series chips
