@@ -991,53 +991,126 @@ async function initSettingsTab() {
 
 async function checkGPUStatus() {
   const statusBadge = document.getElementById('gpu-status-badge');
-  const gpuDetected = document.getElementById('gpu-detected');
-  const cudaStatus = document.getElementById('cuda-status');
+  const gpuDescription = document.getElementById('gpu-description');
+  const gpuLabel1 = document.getElementById('gpu-label-1');
+  const gpuValue1 = document.getElementById('gpu-value-1');
+  const gpuLabel2 = document.getElementById('gpu-label-2');
+  const gpuValue2 = document.getElementById('gpu-value-2');
+  const gpuLabel3 = document.getElementById('gpu-label-3');
+  const gpuValue3 = document.getElementById('gpu-value-3');
+  const gpuRow3 = document.getElementById('gpu-row-3');
   const installBtn = document.getElementById('install-gpu-btn');
   const uninstallBtn = document.getElementById('uninstall-gpu-btn');
+  const gpuActions = document.getElementById('gpu-actions');
 
   statusBadge.textContent = 'Checking...';
   statusBadge.className = 'setting-badge';
 
   try {
-    // Check if GPU exists
-    const gpuInfo = await window.electronAPI.checkGPU();
+    // Get platform info
+    const platform = await window.electronAPI.getPlatform();
+    const isMac = platform === 'darwin';
 
-    if (gpuInfo.hasGPU) {
-      gpuDetected.textContent = gpuInfo.gpuName;
-      gpuDetected.classList.add('success');
+    if (isMac) {
+      // ============ macOS: Show Metal/MLX Status ============
+      gpuDescription.textContent = 'GPU acceleration using Apple\'s Metal framework for Apple Silicon Macs. Provides 3-5x faster transcription.';
+      
+      // Check if Apple Silicon
+      const arch = await window.electronAPI.getArch();
+      const isAppleSilicon = arch === 'arm64';
+
+      if (isAppleSilicon) {
+        // Apple Silicon - Metal always available
+        gpuLabel1.textContent = 'GPU:';
+        gpuValue1.textContent = 'Apple Silicon (Metal GPU)';
+        gpuValue1.className = 'info-value success';
+
+        gpuLabel2.textContent = 'Framework:';
+        gpuValue2.textContent = 'MLX (Metal acceleration)';
+        gpuValue2.className = 'info-value success';
+
+        gpuLabel3.textContent = 'Status:';
+        gpuValue3.textContent = 'Enabled by default';
+        gpuValue3.className = 'info-value success';
+
+        statusBadge.textContent = 'Enabled (Metal)';
+        statusBadge.classList.add('enabled');
+      } else {
+        // Intel Mac - CPU only
+        gpuLabel1.textContent = 'Chip:';
+        gpuValue1.textContent = 'Intel (x64)';
+        gpuValue1.className = 'info-value';
+
+        gpuLabel2.textContent = 'Acceleration:';
+        gpuValue2.textContent = 'CPU only (no Metal GPU)';
+        gpuValue2.className = 'info-value warning';
+
+        gpuLabel3.textContent = 'Framework:';
+        gpuValue3.textContent = 'faster-whisper (CPU)';
+        gpuValue3.className = 'info-value';
+
+        statusBadge.textContent = 'CPU Fallback';
+        statusBadge.classList.add('disabled');
+      }
+
+      // Hide install/uninstall buttons on macOS (MLX is bundled)
+      gpuActions.style.display = 'none';
+
     } else {
-      gpuDetected.textContent = 'No NVIDIA GPU detected';
-      gpuDetected.classList.add('error');
-      statusBadge.textContent = 'Not Available';
-      statusBadge.classList.add('disabled');
-      installBtn.disabled = true;
-      return;
-    }
+      // ============ Windows: Show CUDA Status ============
+      gpuDescription.textContent = 'Enable GPU acceleration for 4-5x faster transcription. Requires NVIDIA GPU with CUDA support.';
+      
+      // Update labels for Windows
+      gpuLabel1.textContent = 'GPU Detected:';
+      gpuLabel2.textContent = 'CUDA Libraries:';
+      gpuLabel3.textContent = 'Download Size:';
 
-    // Check CUDA installation
-    const cudaInfo = await window.electronAPI.checkCUDA();
+      // Check if GPU exists
+      const gpuInfo = await window.electronAPI.checkGPU();
 
-    if (cudaInfo.installed) {
-      cudaStatus.textContent = `Installed (CUDA ${cudaInfo.version})`;
-      cudaStatus.classList.add('success');
-      statusBadge.textContent = 'Enabled';
-      statusBadge.classList.add('enabled');
-      installBtn.style.display = 'none';
-      uninstallBtn.style.display = 'block';
-    } else {
-      cudaStatus.textContent = 'Not installed';
-      cudaStatus.classList.add('warning');
-      statusBadge.textContent = 'Available';
-      statusBadge.classList.add('disabled');
-      installBtn.disabled = false;
-      installBtn.style.display = 'block';
-      uninstallBtn.style.display = 'none';
+      if (gpuInfo.hasGPU) {
+        gpuValue1.textContent = gpuInfo.gpuName;
+        gpuValue1.classList.add('success');
+      } else {
+        gpuValue1.textContent = 'No NVIDIA GPU detected';
+        gpuValue1.classList.add('error');
+        gpuValue2.textContent = 'N/A';
+        gpuValue3.textContent = 'N/A';
+        statusBadge.textContent = 'Not Available';
+        statusBadge.classList.add('disabled');
+        installBtn.disabled = true;
+        return;
+      }
+
+      // Check CUDA installation
+      const cudaInfo = await window.electronAPI.checkCUDA();
+
+      if (cudaInfo.installed) {
+        gpuValue2.textContent = `Installed (CUDA ${cudaInfo.version})`;
+        gpuValue2.classList.add('success');
+        gpuValue3.textContent = 'Already installed';
+        statusBadge.textContent = 'Enabled';
+        statusBadge.classList.add('enabled');
+        installBtn.style.display = 'none';
+        uninstallBtn.style.display = 'block';
+      } else {
+        gpuValue2.textContent = 'Not installed';
+        gpuValue2.classList.add('warning');
+        gpuValue3.textContent = '~2-3 GB';
+        statusBadge.textContent = 'Available';
+        statusBadge.classList.add('disabled');
+        installBtn.disabled = false;
+        installBtn.style.display = 'block';
+        uninstallBtn.style.display = 'none';
+      }
+
+      gpuActions.style.display = 'block';
     }
   } catch (error) {
     console.error('Failed to check GPU status:', error);
     statusBadge.textContent = 'Error';
     statusBadge.classList.add('disabled');
+    gpuDescription.textContent = 'Failed to detect system configuration.';
   }
 }
 

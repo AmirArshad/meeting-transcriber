@@ -36,6 +36,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   installGPU: () => ipcRenderer.invoke('install-gpu'),
   uninstallGPU: () => ipcRenderer.invoke('uninstall-gpu'),
   getSystemInfo: () => ipcRenderer.invoke('get-system-info'),
+  
+  // Platform detection
+  getPlatform: () => ipcRenderer.invoke('get-platform'),
+  getArch: () => ipcRenderer.invoke('get-arch'),
 
   // Updates
   downloadUpdate: (downloadUrl) => ipcRenderer.invoke('download-update', downloadUrl),

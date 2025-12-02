@@ -551,34 +551,38 @@ def main():
         # Manual stop (wait for stdin command from Electron)
         print(f"Recording... (send 'stop' to stdin to stop)", file=sys.stderr)
 
-        def wait_for_commands():
-            """Listen for commands from Electron via stdin."""
+        # Thread to listen for stop command from stdin
+        stop_event = threading.Event()
+        
+        def input_listener():
+            """Listen for stop command from Electron via stdin."""
             try:
                 for line in sys.stdin:
-                    command = line.strip().lower()
-                    if command == 'stop':
-                        print(f"Stop command received", file=sys.stderr)
-                        recorder.stop_recording()
+                    if "stop" in line.strip().lower():
+                        stop_event.set()
                         break
-                    elif command == 'get_levels':
-                        # Send audio levels as JSON to stdout
-                        levels = recorder.get_audio_levels()
-                        print(json.dumps(levels))
-                        sys.stdout.flush()
             except Exception as e:
                 print(f"Error in command listener: {e}", file=sys.stderr)
 
-        command_thread = threading.Thread(target=wait_for_commands)
-        command_thread.daemon = True
-        command_thread.start()
+        input_thread = threading.Thread(target=input_listener, daemon=True)
+        input_thread.start()
 
-        # Also support Ctrl+C
+        # Main loop - continuously send audio levels for visualization
+        # PERFORMANCE: 5 FPS updates to minimize CPU/IPC overhead (matches Windows)
         try:
-            while recorder.is_running:
-                # Print levels every second for debugging
+            while not stop_event.is_set() and recorder.is_running:
+                # Send audio levels as JSON to stdout (Electron will parse this)
                 mic, desktop = recorder.get_audio_levels()
-                print(f"Levels - Mic: {mic:.3f}, Desktop: {desktop:.3f}", file=sys.stderr)
-                time.sleep(1.0)
+                levels = {
+                    "type": "levels",
+                    "mic": round(mic, 3),
+                    "desktop": round(desktop, 3)
+                }
+                print(json.dumps(levels), flush=True)
+                time.sleep(0.2)  # 5 FPS updates (200ms interval)
+            
+            print(f"\nStopping recording...", file=sys.stderr)
+            recorder.stop_recording()
         except KeyboardInterrupt:
             print(f"\nCtrl+C received", file=sys.stderr)
             recorder.stop_recording()

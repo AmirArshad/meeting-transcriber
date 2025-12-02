@@ -651,13 +651,18 @@ ipcMain.handle("start-recording", async (event, options) => {
     }
     const outputPath = path.join(recordingsDir, filename);
 
-    // FIX 1 (REFINED): Enable power save blocker to keep process running
-    // Use 'prevent-display-sleep' instead of 'prevent-app-suspension' for better battery life
-    // This prevents display from sleeping but allows system to enter low-power states
+    // FIX 1 (REFINED): Enable power save blocker to keep recording running
+    // Platform-specific approach:
+    // - macOS: Use 'prevent-app-suspension' to prevent App Nap from pausing recording
+    // - Windows: Use 'prevent-display-sleep' for better battery life (recording runs in separate process)
     if (powerSaveId === null) {
-      powerSaveId = powerSaveBlocker.start("prevent-display-sleep");
+      const blockerType = process.platform === 'darwin' 
+        ? 'prevent-app-suspension'  // macOS: Prevent App Nap (critical for background recording)
+        : 'prevent-display-sleep';   // Windows: Lighter approach (Python process is separate)
+      
+      powerSaveId = powerSaveBlocker.start(blockerType);
       console.log(
-        "Power save blocker enabled - preventing display sleep during recording"
+        `Power save blocker enabled (${blockerType}) - recording will continue in background`
       );
     }
 
@@ -1500,6 +1505,21 @@ ipcMain.handle("get-system-info", async () => {
     });
   });
 });
+
+/**
+ * Get platform information
+ */
+ipcMain.handle("get-platform", async () => {
+  return process.platform;
+});
+
+/**
+ * Get architecture information
+ */
+ipcMain.handle("get-arch", async () => {
+  return process.arch;
+});
+
 
 /**
  * Open update download page in browser
