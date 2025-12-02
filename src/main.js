@@ -55,7 +55,7 @@ function spawnTrackedPython(args, options = {}) {
 
 /**
  * Determine the correct Python executable and backend path based on environment
- * In production (packaged app), use embedded Python (Windows) or system Python (macOS)
+ * In production (packaged app), use bundled Python
  * In development, use system Python
  */
 function getPythonConfig() {
@@ -70,18 +70,18 @@ function getPythonConfig() {
       ffmpegPath: 'ffmpeg' // Assume in PATH
     };
   } else {
-    // Production mode
+    // Production mode - use bundled Python
     const resourcesPath = process.resourcesPath;
 
     if (isMac) {
-      // macOS: Use system Python (installed via Homebrew)
+      // macOS: Use bundled Python from resources/python/bin/
       return {
-        pythonExe: 'python3',
+        pythonExe: path.join(resourcesPath, 'python', 'bin', 'python3'),
         backendPath: path.join(resourcesPath, 'backend'),
         ffmpegPath: path.join(resourcesPath, 'ffmpeg', 'ffmpeg')
       };
     } else {
-      // Windows: Use embedded Python from resources
+      // Windows: Use bundled Python from resources/python/
       return {
         pythonExe: path.join(resourcesPath, 'python', 'python.exe'),
         backendPath: path.join(resourcesPath, 'backend'),

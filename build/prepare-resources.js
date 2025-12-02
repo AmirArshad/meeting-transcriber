@@ -6,7 +6,10 @@ const { pipeline } = require('stream/promises');
 const AdmZip = require('adm-zip');
 
 const PYTHON_VERSION = '3.11.9';
-const PYTHON_EMBED_URL = `https://www.python.org/ftp/python/${PYTHON_VERSION}/python-${PYTHON_VERSION}-embed-amd64.zip`;
+const PYTHON_WIN_URL = `https://www.python.org/ftp/python/${PYTHON_VERSION}/python-${PYTHON_VERSION}-embed-amd64.zip`;
+// For macOS, we'll use python-build-standalone by indygreg (used by PyOxidizer)
+// These are relocatable Python builds specifically designed for bundling
+const PYTHON_MAC_URL = `https://github.com/indygreg/python-build-standalone/releases/download/20240107/cpython-3.11.7+20240107-aarch64-apple-darwin-install_only.tar.gz`;
 const FFMPEG_WIN_URL = 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip';
 const FFMPEG_MAC_URL = 'https://evermeet.cx/ffmpeg/getrelease/ffmpeg/zip';
 
@@ -102,30 +105,39 @@ function extractZip(zipPath, targetDir) {
   }
 }
 
+// Helper to extract tar.gz files (for macOS Python)
+function extractTarGz(tarPath, targetDir) {
+  console.log(`Extracting: ${path.basename(tarPath)}`);
+
+  try {
+    // Ensure target directory exists
+    if (!fs.existsSync(targetDir)) {
+      fs.mkdirSync(targetDir, { recursive: true });
+    }
+
+    // Use tar command (available on both macOS and Windows with Git Bash)
+    execSync(`tar -xzf "${tarPath}" -C "${targetDir}"`, { stdio: 'inherit' });
+    console.log('  Extraction complete!\n');
+  } catch (error) {
+    throw new Error(`Failed to extract ${tarPath}: ${error.message}`);
+  }
+}
+
 // Check if resources already exist
 function checkExistingResources() {
   const pythonExe = IS_WINDOWS ? 'python.exe' : 'python3';
   const ffmpegExe = IS_WINDOWS ? 'ffmpeg.exe' : 'ffmpeg';
 
-  const pythonExists = IS_MAC ? checkSystemPython() : fs.existsSync(path.join(PYTHON_DIR, pythonExe));
+  // For macOS, check for python3 in PYTHON_DIR/bin/
+  const pythonPath = IS_MAC
+    ? path.join(PYTHON_DIR, 'bin', pythonExe)
+    : path.join(PYTHON_DIR, pythonExe);
+
+  const pythonExists = fs.existsSync(pythonPath);
   const ffmpegExists = fs.existsSync(path.join(FFMPEG_DIR, ffmpegExe));
   const modelsExist = fs.existsSync(MODELS_DIR) && fs.readdirSync(MODELS_DIR).length > 0;
 
   return { pythonExists, ffmpegExists, modelsExist };
-}
-
-// Check if system Python is available on macOS
-function checkSystemPython() {
-  if (!IS_MAC) return false;
-
-  try {
-    const version = execSync('python3 --version', { encoding: 'utf8' });
-    console.log(`✓ Found system Python: ${version.trim()}`);
-    return true;
-  } catch (error) {
-    console.log('⚠️ System Python not found. Please install Python 3.11+');
-    return false;
-  }
 }
 
 // Download Whisper models
@@ -190,37 +202,63 @@ async function prepareResources() {
     console.log('✓ Python runtime already prepared\n');
   } else {
     if (IS_MAC) {
-      // macOS: Use system Python
-      console.log('macOS detected - using system Python');
-      console.log('Please ensure Python 3.11+ is installed via Homebrew:');
-      console.log('  brew install python@3.11\n');
+      // macOS: Download standalone Python build
+      console.log('[1/4] Downloading standalone Python for macOS (arm64)...');
+      const pythonTar = path.join(BUILD_DIR, 'python-macos.tar.gz');
+      await downloadFile(PYTHON_MAC_URL, pythonTar);
 
-      // Verify Python installation
-      try {
-        const version = execSync('python3 --version', { encoding: 'utf8' });
-        console.log(`Using: ${version.trim()}`);
+      console.log('[2/4] Extracting Python...');
+      // Extract to temp dir first
+      const tempDir = path.join(BUILD_DIR, 'python-temp');
+      extractTarGz(pythonTar, tempDir);
 
-        // Check for pip
-        execSync('python3 -m pip --version', { encoding: 'utf8' });
-        console.log('✓ pip is available\n');
-
-        // Install dependencies to user site-packages
-        console.log('Installing Python dependencies...');
-        const requirementsPath = path.join(__dirname, '..', 'requirements.txt');
-        execSync(`python3 -m pip install -r "${requirementsPath}" --user`, {
-          stdio: 'inherit'
-        });
-        console.log('✓ Python setup complete!\n');
-      } catch (error) {
-        console.error('ERROR: Python 3.11+ is required for macOS builds');
-        console.error('Install it with: brew install python@3.11');
-        process.exit(1);
+      // Move the python directory to PYTHON_DIR
+      const extractedPythonDir = path.join(tempDir, 'python');
+      if (fs.existsSync(extractedPythonDir)) {
+        // Move contents to PYTHON_DIR
+        if (fs.existsSync(PYTHON_DIR)) {
+          fs.rmSync(PYTHON_DIR, { recursive: true, force: true });
+        }
+        fs.renameSync(extractedPythonDir, PYTHON_DIR);
       }
+
+      // Cleanup
+      fs.unlinkSync(pythonTar);
+      fs.rmSync(tempDir, { recursive: true, force: true });
+
+      console.log('[3/4] Setting up pip...');
+
+      // python-build-standalone includes pip, just verify it works
+      const pythonExe = path.join(PYTHON_DIR, 'bin', 'python3');
+
+      // Make python executable
+      execSync(`chmod +x "${pythonExe}"`, { stdio: 'inherit' });
+
+      // Verify pip
+      try {
+        execSync(`"${pythonExe}" -m pip --version`, { stdio: 'inherit' });
+      } catch (error) {
+        console.log('Installing pip...');
+        const getPipPath = path.join(PYTHON_DIR, 'get-pip.py');
+        await downloadFile('https://bootstrap.pypa.io/get-pip.py', getPipPath);
+        execSync(`"${pythonExe}" "${getPipPath}"`, { stdio: 'inherit' });
+        fs.unlinkSync(getPipPath);
+      }
+
+      console.log('[4/4] Installing Python dependencies...');
+
+      // Install requirements
+      const requirementsPath = path.join(__dirname, '..', 'requirements.txt');
+      execSync(`"${pythonExe}" -m pip install -r "${requirementsPath}"`, {
+        stdio: 'inherit'
+      });
+
+      console.log('✓ Python setup complete!\n');
     } else {
       // Windows: Download embedded Python
       console.log('[1/4] Downloading embedded Python...');
       const pythonZip = path.join(BUILD_DIR, 'python-embed.zip');
-      await downloadFile(PYTHON_EMBED_URL, pythonZip);
+      await downloadFile(PYTHON_WIN_URL, pythonZip);
 
       console.log('[2/4] Extracting Python...');
       extractZip(pythonZip, PYTHON_DIR);
