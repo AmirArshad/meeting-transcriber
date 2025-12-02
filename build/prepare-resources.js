@@ -45,7 +45,16 @@ async function downloadFile(url, destination) {
         if (fs.existsSync(destination)) {
           fs.unlinkSync(destination);
         }
-        return downloadFile(response.headers.location, destination).then(resolve).catch(reject);
+
+        // Handle both absolute and relative redirect URLs
+        let redirectUrl = response.headers.location;
+        if (redirectUrl.startsWith('/')) {
+          // Relative URL - construct absolute URL from original request
+          const parsedUrl = new URL(url);
+          redirectUrl = `${parsedUrl.protocol}//${parsedUrl.host}${redirectUrl}`;
+        }
+
+        return downloadFile(redirectUrl, destination).then(resolve).catch(reject);
       }
 
       if (response.statusCode !== 200) {
