@@ -3,7 +3,8 @@
 > AI-powered desktop application for recording and transcribing meetings with pristine audio quality
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Windows](https://img.shields.io/badge/Platform-Windows%2010%2F11-blue.svg)](https://www.microsoft.com/windows)
+[![Windows](https://img.shields.io/badge/Platform-Windows%2010%2F11-0078D6.svg)](https://www.microsoft.com/windows)
+[![macOS](https://img.shields.io/badge/Platform-macOS%2013%2B-000000.svg)](https://www.apple.com/macos)
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
 [![Electron](https://img.shields.io/badge/Electron-28.0-47848F.svg)](https://www.electronjs.org/)
 
@@ -25,10 +26,10 @@ No existing solution offered all of this in one package, so I built it.
 
 ### 🎯 Core Capabilities
 
-- **Dual Audio Capture** - Records both microphone and desktop audio (WASAPI loopback)
+- **Dual Audio Capture** - Records both microphone and desktop audio (WASAPI on Windows, ScreenCaptureKit on macOS)
 - **AI Transcription** - Powered by OpenAI's Whisper model with 99 language support
 - **100% Local Processing** - No data sent to cloud, complete privacy
-- **GPU Acceleration** - Optional CUDA support for 4-5x faster transcription
+- **GPU Acceleration** - CUDA support on Windows (NVIDIA), Metal support on macOS (Apple Silicon)
 
 ### 🛠️ Technical Features
 
@@ -42,11 +43,19 @@ No existing solution offered all of this in one package, so I built it.
 
 ### For End Users (Installer)
 
-1. **Download** the latest installer from [Releases](https://github.com/AmirArshad/meeting-transcriber/releases)
-2. **Run** `Meeting Transcriber Setup.exe`
+**Windows:**
+1. **Download** the latest `.exe` installer from [Releases](https://github.com/AmirArshad/meeting-transcriber/releases)
+2. **Run** `Meeting Transcriber Setup.exe` (may show SmartScreen warning - click "More info" → "Run anyway")
 3. **Launch** the app from Start Menu
 4. **Select** your microphone and desktop audio device
 5. **Click** "Start Recording" and transcribe!
+
+**macOS:**
+1. **Download** the latest `.dmg` file from [Releases](https://github.com/AmirArshad/meeting-transcriber/releases)
+2. **Open** the DMG and drag Meeting Transcriber to Applications
+3. **Right-click** the app and select "Open" (first launch only, due to unsigned binary)
+4. **Grant** microphone permissions when prompted
+5. **Select** your audio devices and start recording!
 
 **First run:** Whisper model (~500MB) downloads automatically on first transcription.
 
@@ -127,30 +136,52 @@ Whisper itself supports **99 languages total** - the full list can be customized
 
 ## 💻 System Requirements
 
-### Minimum
+### Windows
 
+**Minimum:**
 - **OS:** Windows 10/11 (64-bit)
 - **RAM:** 4 GB
 - **Storage:** 2 GB free space
 - **Audio:** Any microphone + audio interface
 
-### Recommended
-
+**Recommended:**
 - **OS:** Windows 11 (64-bit)
 - **RAM:** 8 GB
 - **Storage:** 10 GB free space (for models + recordings)
-- **GPU:** NVIDIA GPU with 4GB+ VRAM (for GPU acceleration)
+- **GPU:** NVIDIA GPU with 4GB+ VRAM (for CUDA acceleration)
+- **Audio:** USB microphone or audio interface
+
+### macOS
+
+**Minimum:**
+- **OS:** macOS 13 (Ventura) or later
+- **Chip:** Apple Silicon (M1/M2/M3/M4)
+- **RAM:** 4 GB
+- **Storage:** 2 GB free space
+- **Audio:** Any microphone
+
+**Recommended:**
+- **OS:** macOS 14 (Sonoma) or later
+- **Chip:** M3/M4 (better Metal GPU performance)
+- **RAM:** 8 GB
+- **Storage:** 10 GB free space (for models + recordings)
 - **Audio:** USB microphone or audio interface
 
 ## ⚙️ Technology Stack
 
 - **Frontend:** Electron 28, HTML/CSS/JavaScript
-- **Backend:** Python 3.11
-- **AI Model:** faster-whisper (OpenAI Whisper)
-- **Audio Engine:** PyAudioWPatch (WASAPI loopback support)
-- **Audio Processing:** NumPy, soxr (high-quality resampling)
+- **Backend:** Python 3.11 (bundled)
+- **AI Models:**
+  - Windows: faster-whisper (OpenAI Whisper with CUDA)
+  - macOS: Lightning-Whisper-MLX (Metal GPU acceleration)
+- **Audio Capture:**
+  - Windows: PyAudioWPatch (WASAPI loopback)
+  - macOS: sounddevice + ScreenCaptureKit
+- **Audio Processing:** NumPy, SciPy, soxr (high-quality resampling)
 - **Compression:** ffmpeg (Opus codec)
-- **GPU:** PyTorch + CUDA 12.1 (optional)
+- **GPU Acceleration:**
+  - Windows: PyTorch + CUDA 12.1
+  - macOS: MLX framework (Metal)
 
 ## 📚 Documentation
 

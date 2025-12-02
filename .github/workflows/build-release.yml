@@ -12,8 +12,21 @@ permissions:
 
 jobs:
   build-installer:
-    name: Build Windows Installer
-    runs-on: windows-latest
+    name: Build ${{ matrix.os }} Installer
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - os: Windows
+            runner: windows-latest
+            build-script: npm run build
+            artifact-pattern: "*.exe"
+            artifact-name: meeting-transcriber-installer-windows
+          - os: macOS
+            runner: macos-14  # macOS 14 (Sonoma) with M1/M2/M3 runners
+            build-script: npm run build:mac
+            artifact-pattern: "*.dmg"
+            artifact-name: meeting-transcriber-installer-macos
 
     steps:
     - uses: actions/checkout@v4
@@ -21,7 +34,7 @@ jobs:
     - name: Set up Python 3.11
       uses: actions/setup-python@v5
       with:
-        python-version: '3.11.9'
+        python-version: '3.11'
 
     - name: Set up Node.js
       uses: actions/setup-node@v4
@@ -35,7 +48,8 @@ jobs:
     - name: Install electron-builder
       run: npm install electron-builder --save-dev
 
-    - name: Create placeholder icon (if missing)
+    - name: Create placeholder icon (if missing - Windows only)
+      if: matrix.os == 'Windows'
       shell: pwsh
       run: |
         # Ensure build directory exists
@@ -78,8 +92,8 @@ jobs:
         DOWNLOAD_MODELS: 'false'  # Skip model download - users download on-demand
 
     - name: Build installer
-      run: npm run build
-      timeout-minutes: 20
+      run: ${{ matrix.build-script }}
+      timeout-minutes: 30
 
     - name: Get version from tag
       id: get_version
@@ -93,20 +107,21 @@ jobs:
 
     - name: Find installer file
       id: find_installer
-      shell: pwsh
+      shell: bash
       run: |
-        $installer = Get-ChildItem -Path "dist" -Filter "*.exe" | Select-Object -First 1
-        if ($installer) {
-          echo "installer_path=$($installer.FullName)" >> $env:GITHUB_OUTPUT
-          echo "installer_name=$($installer.Name)" >> $env:GITHUB_OUTPUT
-          $size = [math]::Round($installer.Length / 1MB, 2)
-          echo "installer_size=$size MB" >> $env:GITHUB_OUTPUT
-        }
+        pattern="${{ matrix.artifact-pattern }}"
+        installer=$(find dist -name "$pattern" -type f | head -n 1)
+        if [ -n "$installer" ]; then
+          echo "installer_path=$installer" >> $GITHUB_OUTPUT
+          echo "installer_name=$(basename $installer)" >> $GITHUB_OUTPUT
+          size=$(du -h "$installer" | cut -f1)
+          echo "installer_size=$size" >> $GITHUB_OUTPUT
+        fi
 
     - name: Upload installer artifact
       uses: actions/upload-artifact@v4
       with:
-        name: meeting-transcriber-installer
+        name: ${{ matrix.artifact-name }}
         path: ${{ steps.find_installer.outputs.installer_path }}
         retention-days: 30
 
@@ -118,36 +133,87 @@ jobs:
         body: |
           ## Meeting Transcriber v${{ steps.get_version.outputs.version }}
 
-          ### 📦 Installation
+          ### 📦 Downloads
 
-          1. Download `${{ steps.find_installer.outputs.installer_name }}`
-          2. Run the installer
+          **${{ matrix.os }}:**
+          - Download: `${{ steps.find_installer.outputs.installer_name }}`
+          - Size: ${{ steps.find_installer.outputs.installer_size }}
+
+          ### 💻 Platform Support
+
+          - **Windows:** Windows 10/11 (64-bit, x64)
+          - **macOS:** macOS 13+ (Apple Silicon: M1/M2/M3/M4)
+
+          ### 📋 Installation Instructions
+
+          **Windows:**
+          1. Download the `.exe` installer
+          2. Run the installer (may show SmartScreen warning - click "More info" → "Run anyway")
           3. Launch from Start Menu
 
-          ### 📊 Build Info
+          **macOS:**
+          1. Download the `.dmg` file
+          2. Open the DMG and drag Meeting Transcriber to Applications
+          3. Right-click the app and select "Open" (first launch only, due to unsigned binary)
+          4. Grant microphone permissions when prompted
 
-          - **Installer Size:** ${{ steps.find_installer.outputs.installer_size }}
-          - **Platform:** Windows 10/11 (64-bit)
-          - **Python:** 3.11.9 (embedded)
+          ### 📊 Technical Details
+
+          - **Bundled Python:** 3.11.7 (relocatable build)
           - **Electron:** 28.0
+          - **Transcription:**
+            - Windows: faster-whisper (CUDA GPU support)
+            - macOS: Lightning-Whisper-MLX (Metal GPU for Apple Silicon)
+          - **Audio Capture:**
+            - Windows: sounddevice + WASAPI loopback
+            - macOS: sounddevice + ScreenCaptureKit
 
           ### ✨ Features
 
-          - Dual audio capture (mic + desktop)
-          - AI transcription (99 languages)
-          - GPU acceleration support
+          - Dual audio capture (microphone + desktop audio)
+          - AI transcription (99 languages via OpenAI Whisper)
+          - GPU acceleration (CUDA on Windows, Metal on macOS)
+          - Real-time audio visualizer
           - Meeting history with playback
-          - 100% local processing
+          - 100% local processing (no cloud/internet required)
+          - Auto-update support
+          - Dark mode support (macOS menu bar adapts automatically)
 
-          ### 🔒 Security
+          ### 🔒 Privacy & Security
 
-          - No telemetry or tracking
-          - All processing happens locally
-          - See [Security Audit](https://github.com/${{ github.repository }}/blob/master/docs/internal/SECURITY_AUDIT.md)
+          - **Zero telemetry** - No tracking, analytics, or data collection
+          - **100% local** - All audio and transcription stays on your device
+          - **No account required** - Works completely offline after model download
+          - See [Security Audit](https://github.com/${{ github.repository }}/blob/master/docs/internal/SECURITY_AUDIT.md) for details
+
+          ### ⚙️ System Requirements
+
+          **Windows:**
+          - Windows 10 or 11 (64-bit)
+          - 4GB RAM minimum, 8GB recommended
+          - 2GB disk space (for app + Whisper model)
+          - Optional: NVIDIA GPU with CUDA for faster transcription
+
+          **macOS:**
+          - macOS 13 (Ventura) or later
+          - Apple Silicon (M1/M2/M3/M4)
+          - 4GB RAM minimum, 8GB recommended
+          - 2GB disk space (for app + Whisper model)
+
+          ### 📝 First Run Notes
+
+          - **Model Download:** On first transcription, the app will download the Whisper model (~500MB). This happens automatically and only once.
+          - **Permissions (macOS):** You'll be prompted to grant microphone access. This is required for recording.
+          - **GPU Acceleration:** Automatically detected and used if available (CUDA on Windows, Metal on macOS).
+
+          ### 🐛 Known Issues
+
+          - **macOS Gatekeeper Warning:** Since the app isn't code-signed with an Apple Developer certificate, you'll need to right-click and select "Open" on first launch.
+          - **Windows SmartScreen:** May show warning for unsigned installer - click "More info" then "Run anyway"
 
           ---
 
-          **First run:** Whisper model (~500MB) downloads automatically on first transcription.
+          **Questions or issues?** Open an issue on GitHub or check the [documentation](https://github.com/${{ github.repository }}/blob/master/README.md).
         draft: false
         prerelease: false
       env:
