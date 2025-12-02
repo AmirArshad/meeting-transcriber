@@ -247,8 +247,8 @@ async function prepareResources() {
 
       console.log('[4/4] Installing Python dependencies...');
 
-      // Install requirements
-      const requirementsPath = path.join(__dirname, '..', 'requirements.txt');
+      // Install requirements (macOS-specific)
+      const requirementsPath = path.join(__dirname, '..', 'requirements-macos.txt');
       execSync(`"${pythonExe}" -m pip install -r "${requirementsPath}"`, {
         stdio: 'inherit'
       });
@@ -282,8 +282,8 @@ async function prepareResources() {
 
       console.log('[4/4] Installing Python dependencies...');
 
-      // Install requirements
-      const requirementsPath = path.join(__dirname, '..', 'requirements.txt');
+      // Install requirements (Windows-specific)
+      const requirementsPath = path.join(__dirname, '..', 'requirements-windows.txt');
       execSync(`"${pythonExe}" -m pip install -r "${requirementsPath}" --no-warn-script-location`, {
         stdio: 'inherit'
       });
