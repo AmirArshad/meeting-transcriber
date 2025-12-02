@@ -30,14 +30,16 @@ No existing solution offered all of this in one package, so I built it.
 - **AI Transcription** - Powered by OpenAI's Whisper model with 99 language support
 - **100% Local Processing** - No data sent to cloud, complete privacy
 - **GPU Acceleration** - CUDA support on Windows (NVIDIA), Metal support on macOS (Apple Silicon)
+- **Cross-Platform** - 100% feature parity between Windows and macOS
 
 ### 🛠️ Technical Features
 
-- **Intelligent Audio Enhancement** - Automatic noise gate, compression, and EQ for microphone
+- **Professional Audio Quality** - 48kHz sampling with soxr VHQ resampling on both platforms
+- **Intelligent Audio Enhancement** - Per-channel processing for natural, broadcast-quality sound
 - **Opus Compression** - 95% file size reduction (450MB → 23MB for 40-min recording)
 - **Meeting History** - Searchable archive with audio playback and full transcripts
-- **One-Click Installer** - Professional NSIS installer with embedded Python runtime
-- **Cross-Device Support** - Works with any microphone and audio interface
+- **One-Click Installer** - Professional installers with embedded Python runtime (no dependencies)
+- **CPU Fallback** - Automatic fallback to CPU transcription when GPU unavailable
 
 ## 🚀 Quick Start
 
@@ -105,11 +107,12 @@ See [docs/development/BUILD_INSTRUCTIONS.md](docs/development/BUILD_INSTRUCTIONS
 
 ## 🎛️ Audio Quality
 
-This app uses professional-grade audio processing:
+This app uses **professional-grade audio processing with 100% parity across Windows and macOS**:
 
 - **Microphone Enhancement:**
 
-  - Native 48kHz capture (automatic quality detection)
+  - 48kHz sample rate (professional broadcast standard)
+  - Per-channel processing for stereo sources
   - DC offset removal (prevents pops/clicks)
   - Minimal processing (Google Meet-style natural sound)
   - Gentle normalization (preserves dynamics)
@@ -118,10 +121,12 @@ This app uses professional-grade audio processing:
 
   - Pristine capture with no processing
   - Maintains original quality
+  - 48kHz sample rate on both platforms
 
 - **Final Mix:**
-  - Intelligent resampling to 48kHz (when needed)
-  - Stereo output
+  - soxr VHQ resampling (Very High Quality - maximum available quality)
+  - Cross-platform quality matching (identical processing on Windows and macOS)
+  - Stereo output with per-channel enhancement
   - Compressed to Opus format (128 kbps, maximum quality)
 
 ## 🌍 Supported Languages
@@ -221,8 +226,10 @@ This project is licensed under the MIT License - see [LICENSE.txt](LICENSE.txt) 
 ## 🙏 Acknowledgments
 
 - **OpenAI** - For the incredible Whisper model
-- **faster-whisper** - For the efficient implementation
+- **faster-whisper** - For the efficient CPU/CUDA implementation
+- **Lightning-Whisper-MLX** - For blazing-fast Metal GPU acceleration on macOS
 - **PyAudioWPatch** - For WASAPI loopback support on Windows
+- **ScreenCaptureKit** - For pristine desktop audio capture on macOS
 - **Electron** - For making desktop apps accessible
 
 ## 📞 Contact & Support
@@ -248,6 +255,10 @@ This project is licensed under the MIT License - see [LICENSE.txt](LICENSE.txt) 
 - [x] **v1.6.1:** Transcription reliability fixes (handle edge cases gracefully)
 - [x] **v1.6.1:** Automatic meeting recovery (scan filesystem on refresh)
 - [x] **v1.6.1:** Cantonese language support added to UI
+- [x] **v1.7.0:** macOS support with Metal GPU acceleration
+- [x] **v1.7.0:** Cross-platform audio quality parity (48kHz + soxr VHQ resampling)
+- [x] **v1.7.0:** CPU fallback for Intel Macs (faster-whisper with int8 optimization)
+- [x] **v1.7.0:** 100% feature parity across Windows and macOS
 
 ### In Progress 🚧
 
@@ -256,7 +267,6 @@ This project is licensed under the MIT License - see [LICENSE.txt](LICENSE.txt) 
 ### Planned 📋
 
 - [ ] Speaker diarization (identify who's speaking)
-- [ ] macOS support
 - [ ] Real-time transcription
 - [ ] Export to various formats (SRT, VTT, DOCX)
 
