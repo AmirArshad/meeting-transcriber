@@ -279,6 +279,7 @@ This project is licensed under the MIT License - see [LICENSE.txt](LICENSE.txt) 
 
 ### Planned 📋
 
+- [ ] **JSON-Based Event System:** Refactor string-based event detection to robust JSON events (see [docs/features/json-based-events.md](docs/features/json-based-events.md))
 - [ ] Speaker diarization (identify who's speaking)
 - [ ] **macOS Advanced Audio:** Real-time streaming (low RAM), App-specific capture, Real-time mixing
 - [ ] Real-time transcription

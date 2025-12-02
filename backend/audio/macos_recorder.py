@@ -147,7 +147,7 @@ class MacOSAudioRecorder:
         else:
             print(f"WARNING: Desktop audio capture disabled (ScreenCaptureKit not available)", file=sys.stderr)
 
-        print(f"Recording started...", file=sys.stderr)
+        print(f"Recording started!", file=sys.stderr)
 
     def _record_microphone(self):
         """Record from microphone using sounddevice."""
