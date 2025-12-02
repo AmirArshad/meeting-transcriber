@@ -160,7 +160,20 @@ class DeviceManager:
             "host_api": "ScreenCaptureKit"
         }]
 
-        devices = sd.query_devices()
+        try:
+            devices = sd.query_devices()
+        except Exception as e:
+            # If we can't query devices, it's likely a permission issue
+            print(f"ERROR: Could not enumerate audio devices: {e}", file=sys.stderr)
+            print(f"Microphone permission may not be granted.", file=sys.stderr)
+            print(f"Grant permission in: System Settings > Privacy & Security > Microphone", file=sys.stderr)
+
+            # Return empty lists so the app can still launch and show the permission error
+            return {
+                "input_devices": [],
+                "output_devices": [],
+                "loopback_devices": loopback_devices
+            }
 
         for i, device in enumerate(devices):
             # Skip devices with no channels

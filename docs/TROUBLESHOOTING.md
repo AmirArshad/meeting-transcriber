@@ -57,10 +57,25 @@ xattr -d com.apple.quarantine ~/Downloads/Meeting-Transcriber-*.dmg
 **Solution:** Click **"OK"** to grant permission. This is required for the app to record audio.
 
 **If you accidentally denied permission:**
-1. Go to **System Settings** → **Privacy & Security** → **Microphone**
+1. Go to **System Settings** → **Privacy & Security** → **Microphone** (NOT "Recording"!)
 2. Find "Meeting Transcriber" in the list
 3. Toggle it **ON**
 4. Restart the app
+
+**If Meeting Transcriber doesn't appear in the list:**
+1. **Important:** Apps only appear after requesting permission
+2. Launch the app
+3. The app should show a popup: **"Meeting Transcriber would like to access the microphone"**
+4. Click **"OK"** to grant permission
+5. If no popup appears:
+   - The permission may have been denied previously
+   - Try to start a recording (this triggers the permission request again)
+   - Check Console.app for errors (search for "Meeting Transcriber")
+
+**Why doesn't it appear?**
+- macOS only shows apps in permission lists **after** they request access
+- If the app crashes before requesting, it won't appear
+- If you see "No microphone devices found", the app couldn't request permission
 
 ---
 
@@ -91,6 +106,40 @@ xattr -d com.apple.quarantine ~/Downloads/Meeting-Transcriber-*.dmg
 - The app automatically detects Intel architecture and uses CPU fallback
 - Consider using a smaller model size (Settings → Model Size → "tiny" or "base")
 - Apple Silicon Macs (M1/M2/M3/M4) are 5-10x faster with Metal GPU
+
+---
+
+### 💥 "Read-only file system: 'mlx_models'" Error
+
+**Symptom:** During model loading, you see:
+```
+⚠ MLX model initialization failed: [Errno 30] Read-only file system: 'mlx_models'
+  Falling back to faster-whisper (CPU)...
+```
+
+**Cause:** The lightning-whisper-mlx library tried to create a directory inside the app bundle, which is read-only on macOS.
+
+**Impact:**
+- Transcription will still work but uses **CPU fallback** instead of Metal GPU
+- This is **significantly slower** (10-20x slower than GPU)
+
+**Solution:**
+- This was fixed in version 1.6.2+
+- Update to the latest version from [GitHub Releases](https://github.com/AmirArshad/meeting-transcriber/releases)
+- Or manually fix:
+  1. Delete the app
+  2. Download and reinstall the latest version
+  3. The fix redirects MLX cache to `~/.cache/lightning-whisper-mlx`
+
+**Verification after update:**
+Look for this in the console when loading a model:
+```
+✓ Model loaded successfully!
+  Backend: Lightning-Whisper-MLX
+  Device: Metal GPU
+```
+
+If you still see "faster-whisper (CPU fallback)", report an issue on GitHub.
 
 ---
 

@@ -196,13 +196,25 @@ class MLXWhisperTranscriber:
         try:
             import lightning_whisper_mlx
 
-            # Load model using Lightning-Whisper-MLX
-            # Model will be downloaded to ~/.cache/huggingface/hub if not present
-            self.model = lightning_whisper_mlx.LightningWhisperMLX(
-                model=self.model_size,
-                batch_size=12,  # Good balance for M-series chips
-                quant=None  # Use full precision (float16) for best quality
-            )
+            # FIX: Change to writable directory before loading MLX model
+            # lightning-whisper-mlx tries to create 'mlx_models' directory in cwd
+            # which fails when running from read-only app bundle
+            original_cwd = os.getcwd()
+            cache_dir = Path.home() / '.cache' / 'lightning-whisper-mlx'
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            os.chdir(cache_dir)
+
+            try:
+                # Load model using Lightning-Whisper-MLX
+                # Model will be downloaded to ~/.cache/huggingface/hub if not present
+                self.model = lightning_whisper_mlx.LightningWhisperMLX(
+                    model=self.model_size,
+                    batch_size=12,  # Good balance for M-series chips
+                    quant=None  # Use full precision (float16) for best quality
+                )
+            finally:
+                # Restore original working directory
+                os.chdir(original_cwd)
 
             self.backend = 'mlx'  # Track which backend we're using
             print(f"Model loaded successfully!", file=sys.stderr)

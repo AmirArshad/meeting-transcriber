@@ -529,11 +529,18 @@ def main():
 
     # List available devices for reference
     print(f"\nAvailable audio devices:", file=sys.stderr)
-    devices = sd.query_devices()
-    for i, dev in enumerate(devices):
-        if dev['max_input_channels'] > 0:
-            print(f"  [{i}] {dev['name']} ({dev['max_input_channels']} channels)", file=sys.stderr)
-    print(f"", file=sys.stderr)
+    try:
+        devices = sd.query_devices()
+        for i, dev in enumerate(devices):
+            if dev['max_input_channels'] > 0:
+                print(f"  [{i}] {dev['name']} ({dev['max_input_channels']} channels)", file=sys.stderr)
+        print(f"", file=sys.stderr)
+    except Exception as e:
+        print(f"  ERROR: Could not enumerate audio devices", file=sys.stderr)
+        print(f"  {e}", file=sys.stderr)
+        print(f"  Microphone permission may not be granted.", file=sys.stderr)
+        print(f"  Grant permission in: System Settings > Privacy & Security > Microphone", file=sys.stderr)
+        sys.exit(1)
 
     # Create recorder
     recorder = MacOSAudioRecorder(

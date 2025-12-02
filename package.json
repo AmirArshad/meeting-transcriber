@@ -1,6 +1,6 @@
 {
   "name": "meeting-transcriber",
-  "version": "1.6.1",
+  "version": "1.6.2",
   "description": "AI-powered meeting transcription with desktop audio capture",
   "main": "src/main.js",
   "scripts": {
@@ -59,7 +59,13 @@
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
-      "entitlementsInherit": "build/entitlements.mac.plist"
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Meeting Transcriber needs microphone access to record your voice during meetings.",
+        "NSAppleMusicUsageDescription": "Meeting Transcriber does not access your music library.",
+        "NSCameraUsageDescription": "Meeting Transcriber does not use your camera.",
+        "NSScreenCaptureUsageDescription": "Meeting Transcriber needs screen recording permission to capture system audio (desktop audio) using ScreenCaptureKit. No screen video is recorded, only audio."
+      }
     },
     "dmg": {
       "contents": [
