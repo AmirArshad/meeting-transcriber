@@ -25,12 +25,12 @@ class ScreenCaptureAudioRecorder:
     Requires Screen Recording permission.
     """
 
-    def __init__(self, sample_rate: int = 44100, channels: int = 2):
+    def __init__(self, sample_rate: int = 48000, channels: int = 2):
         """
         Initialize the ScreenCaptureKit audio recorder.
 
         Args:
-            sample_rate: Target sample rate (default: 44100 Hz)
+            sample_rate: Target sample rate (default: 48000 Hz - matches Windows)
             channels: Number of audio channels (default: 2 for stereo)
         """
         self.sample_rate = sample_rate

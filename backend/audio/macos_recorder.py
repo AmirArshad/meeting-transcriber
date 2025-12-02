@@ -123,12 +123,11 @@ class MacOSAudioRecorder:
             self.mic_info = devices[self.mic_device_id]
             print(f"Microphone: {self.mic_info['name']}", file=sys.stderr)
 
-            # For now, desktop audio via ScreenCaptureKit is TODO
-            # We'll record mic-only until ScreenCaptureKit is implemented
-            print(f"", file=sys.stderr)
-            print(f"Note: Desktop audio (ScreenCaptureKit) not yet implemented.", file=sys.stderr)
-            print(f"Recording microphone only for now.", file=sys.stderr)
-            print(f"", file=sys.stderr)
+            # Desktop audio status
+            if self.screencapture_recorder:
+                print(f"Desktop audio: ScreenCaptureKit enabled", file=sys.stderr)
+            else:
+                print(f"Desktop audio: disabled (PyObjC not installed)", file=sys.stderr)
 
         except Exception as e:
             print(f"Error querying devices: {e}", file=sys.stderr)
@@ -304,17 +303,33 @@ class MacOSAudioRecorder:
             if desktop_channels == 1:
                 desktop_audio = np.column_stack([desktop_audio, desktop_audio])
 
-            # Resample to match lengths if needed
+            # Resample to match lengths if needed (use high-quality soxr resampling)
             if len(mic_audio) != len(desktop_audio):
                 print(f"Resampling to match lengths: mic={len(mic_audio)}, desktop={len(desktop_audio)}", file=sys.stderr)
 
                 target_length = max(len(mic_audio), len(desktop_audio))
 
-                # Pad shorter audio with zeros
+                # Use soxr for high-quality resampling (VHQ quality - matches Windows)
                 if len(mic_audio) < target_length:
-                    mic_audio = np.pad(mic_audio, ((0, target_length - len(mic_audio)), (0, 0)), mode='constant')
+                    ratio = target_length / len(mic_audio)
+                    mic_audio = soxr.resample(
+                        mic_audio,
+                        self.sample_rate,
+                        int(self.sample_rate * ratio),
+                        quality='VHQ'  # Very High Quality - best algorithm
+                    )
+                    # Trim to exact length (resampling may overshoot slightly)
+                    mic_audio = mic_audio[:target_length]
                 elif len(desktop_audio) < target_length:
-                    desktop_audio = np.pad(desktop_audio, ((0, target_length - len(desktop_audio)), (0, 0)), mode='constant')
+                    ratio = target_length / len(desktop_audio)
+                    desktop_audio = soxr.resample(
+                        desktop_audio,
+                        self.sample_rate,
+                        int(self.sample_rate * ratio),
+                        quality='VHQ'  # Very High Quality - best algorithm
+                    )
+                    # Trim to exact length
+                    desktop_audio = desktop_audio[:target_length]
 
             # Mix: apply volumes and add
             final_audio = (mic_audio * self.mic_volume) + (desktop_audio * self.desktop_volume)
@@ -361,33 +376,50 @@ class MacOSAudioRecorder:
         """
         Apply minimal audio enhancement to microphone (Google Meet style).
 
-        Same approach as Windows:
+        MATCHES WINDOWS IMPLEMENTATION:
+        - Per-channel processing for stereo
         - Remove DC offset (prevents pops/clicks)
         - Gentle normalization (preserves dynamics)
         - Soft limiting (prevents clipping)
-        - 2x gain to make voice prominent
         """
-        # Remove DC offset
-        audio = audio - np.mean(audio, axis=0)
+        # Handle stereo by processing each channel separately
+        if len(audio.shape) > 1 and audio.shape[1] == 2:
+            # Process left and right channels independently
+            left = self._process_channel(audio[:, 0])
+            right = self._process_channel(audio[:, 1])
+            return np.column_stack((left, right))
+        else:
+            # Mono audio
+            return self._process_channel(audio.flatten()).reshape(-1, 1)
 
-        # Calculate current peak
-        current_peak = np.max(np.abs(audio))
+    def _process_channel(self, channel_data):
+        """
+        MINIMAL processing for natural sound quality (matches Windows).
 
-        if current_peak > 0:
-            # Gentle normalization (80% of max to preserve dynamics)
-            target_peak = 0.8
-            if current_peak < target_peak:
-                # Boost to target
-                gain = target_peak / current_peak
-                audio = audio * gain
+        - Only DC offset removal (essential)
+        - Light normalization (preserve dynamics)
+        - NO aggressive filtering, gating, or compression
+        """
+        # 1. Remove DC offset (essential - prevents pops/clicks)
+        channel_data = channel_data - np.mean(channel_data)
 
-        # Apply 2x microphone boost (+6dB)
-        audio = audio * 2.0
+        # 2. Very gentle normalization to -3dB peak
+        # This preserves dynamics while ensuring good levels
+        peak = np.max(np.abs(channel_data))
+        if peak > 0.7:  # Only normalize if too loud
+            # Target -3dB (0.7) to leave headroom
+            channel_data = channel_data * (0.7 / peak)
+        elif peak < 0.1 and peak > 0:  # Boost very quiet audio
+            # Gentle boost for quiet mics
+            channel_data = channel_data * (0.3 / peak)
 
-        # Soft limiting (prevent clipping)
-        audio = np.tanh(audio * 0.8) * 0.95
+        # 3. Very soft limiting ONLY if clipping would occur
+        # Uses tanh for smooth clipping prevention
+        abs_max = np.max(np.abs(channel_data))
+        if abs_max > 0.95:
+            channel_data = np.tanh(channel_data * 0.9) * 0.85
 
-        return audio
+        return channel_data
 
     def _save_wav(self, audio, path):
         """Save audio as WAV file."""
