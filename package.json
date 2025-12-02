@@ -8,7 +8,9 @@
     "dev": "electron . --dev",
     "prebuild": "node build/prepare-resources.js",
     "build": "electron-builder build --win --publish never",
-    "build:dir": "electron-builder build --win --dir"
+    "build:dir": "electron-builder build --win --dir",
+    "build:mac": "electron-builder build --mac --publish never",
+    "build:mac:dir": "electron-builder build --mac --dir"
   },
   "keywords": [
     "transcription",
@@ -36,6 +38,46 @@
         }
       ],
       "icon": "build/icon.ico"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "build/icon.icns",
+      "category": "public.app-category.productivity",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
+    },
+    "dmg": {
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ],
+      "window": {
+        "width": 540,
+        "height": 380
+      }
     },
     "nsis": {
       "oneClick": false,
@@ -100,6 +142,14 @@
       {
         "from": "build/icon.ico",
         "to": "icon.ico"
+      },
+      {
+        "from": "build/iconTemplate.png",
+        "to": "iconTemplate.png"
+      },
+      {
+        "from": "build/iconTemplate@2x.png",
+        "to": "iconTemplate@2x.png"
       }
     ],
     "directories": {

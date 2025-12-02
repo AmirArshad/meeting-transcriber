@@ -55,27 +55,39 @@ function spawnTrackedPython(args, options = {}) {
 
 /**
  * Determine the correct Python executable and backend path based on environment
- * In production (packaged app), use embedded Python
+ * In production (packaged app), use embedded Python (Windows) or system Python (macOS)
  * In development, use system Python
  */
 function getPythonConfig() {
   const isDev = !app.isPackaged;
+  const isMac = process.platform === 'darwin';
 
   if (isDev) {
     // Development mode - use system Python
     return {
-      pythonExe: 'python',
+      pythonExe: isMac ? 'python3' : 'python',
       backendPath: path.join(__dirname, '../backend'),
       ffmpegPath: 'ffmpeg' // Assume in PATH
     };
   } else {
-    // Production mode - use embedded Python from resources
+    // Production mode
     const resourcesPath = process.resourcesPath;
-    return {
-      pythonExe: path.join(resourcesPath, 'python', 'python.exe'),
-      backendPath: path.join(resourcesPath, 'backend'),
-      ffmpegPath: path.join(resourcesPath, 'ffmpeg', 'ffmpeg.exe')
-    };
+
+    if (isMac) {
+      // macOS: Use system Python (installed via Homebrew)
+      return {
+        pythonExe: 'python3',
+        backendPath: path.join(resourcesPath, 'backend'),
+        ffmpegPath: path.join(resourcesPath, 'ffmpeg', 'ffmpeg')
+      };
+    } else {
+      // Windows: Use embedded Python from resources
+      return {
+        pythonExe: path.join(resourcesPath, 'python', 'python.exe'),
+        backendPath: path.join(resourcesPath, 'backend'),
+        ffmpegPath: path.join(resourcesPath, 'ffmpeg', 'ffmpeg.exe')
+      };
+    }
   }
 }
 
@@ -99,7 +111,8 @@ if (!app.isPackaged) {
 } else {
   // In production, add the bundled ffmpeg directory to PATH
   const ffmpegDir = path.dirname(pythonConfig.ffmpegPath);
-  process.env.PATH = `${ffmpegDir};${process.env.PATH}`;
+  const pathSeparator = process.platform === 'win32' ? ';' : ':';
+  process.env.PATH = `${ffmpegDir}${pathSeparator}${process.env.PATH}`;
 }
 
 // Suppress Python warnings to reduce console noise

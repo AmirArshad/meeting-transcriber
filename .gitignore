@@ -13,6 +13,7 @@ build/
 !build/icon.ico
 !build/iconTemplate.png
 !build/iconTemplate@2x.png
+!build/entitlements.mac.plist
 !build/MACOS_ICONS_README.md
 !build/ICON_NEEDED.txt
 
