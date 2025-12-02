@@ -4,6 +4,19 @@ ScreenCaptureKit helper for macOS desktop audio capture.
 This module uses PyObjC to interface with Apple's ScreenCaptureKit framework
 to capture system audio output (desktop audio) on macOS 13+.
 
+IMPORTANT: To capture system audio, we must capture the DISPLAY, not windows.
+ScreenCaptureKit routes audio to the content being captured:
+- Capturing a display → Captures all system audio output
+- Capturing a window → Captures only that window's audio
+
+LIMITATION: ScreenCaptureKit only captures audio routed to the display.
+- ✅ Works: Audio playing through built-in speakers or external display speakers
+- ❌ May not work: Audio playing through headphones, AirPods, or Bluetooth devices
+- Workaround: Use built-in speakers or install BlackHole virtual audio device
+
+This is a macOS limitation - ScreenCaptureKit captures display audio, not system-wide audio.
+On Windows, WASAPI loopback captures all system audio regardless of output device.
+
 Requirements:
 - macOS 13 Ventura or later
 - Screen Recording permission granted
@@ -86,6 +99,11 @@ class ScreenCaptureAudioRecorder:
         class StreamDelegate(NSObject):
             """Delegate that receives audio samples from SCStream."""
 
+            def __init__(self):
+                super().__init__()
+                self.sample_count = 0
+                self.first_sample_logged = False
+
             @python_method
             def stream_didOutputSampleBuffer_ofType_(self, stream, sample_buffer, output_type):
                 """
@@ -96,11 +114,20 @@ class ScreenCaptureAudioRecorder:
                     sample_buffer: CMSampleBuffer containing audio data
                     output_type: Type of output (audio or video)
                 """
+                # DEBUG: Log that we received a callback
+                if not self.first_sample_logged:
+                    print(f"DEBUG: Delegate callback received! output_type={output_type}", file=sys.stderr)
+                    print(f"DEBUG: Expected audio type: {recorder.SCStreamOutputType.SCStreamOutputTypeAudio}", file=sys.stderr)
+                    self.first_sample_logged = True
+
                 # Only process audio samples
                 if output_type != recorder.SCStreamOutputType.SCStreamOutputTypeAudio:
+                    if not self.first_sample_logged:
+                        print(f"DEBUG: Skipping non-audio sample (type={output_type})", file=sys.stderr)
                     return
 
                 if not recorder.is_recording:
+                    print(f"DEBUG: Received sample but is_recording=False", file=sys.stderr)
                     return
 
                 try:
@@ -109,9 +136,18 @@ class ScreenCaptureAudioRecorder:
 
                     if audio_data is not None and len(audio_data) > 0:
                         recorder.audio_buffer.append(audio_data)
+                        self.sample_count += 1
+
+                        # Log first few samples
+                        if self.sample_count <= 3:
+                            print(f"DEBUG: Successfully captured audio sample #{self.sample_count}: {len(audio_data)} samples", file=sys.stderr)
+                    else:
+                        print(f"DEBUG: Audio extraction returned None or empty", file=sys.stderr)
 
                 except Exception as e:
                     print(f"Error processing audio sample: {e}", file=sys.stderr)
+                    import traceback
+                    traceback.print_exc(file=sys.stderr)
 
             @python_method
             def _extract_audio_from_sample_buffer(self, sample_buffer):
@@ -134,7 +170,12 @@ class ScreenCaptureAudioRecorder:
                     # Get the number of samples
                     num_samples = CMSampleBufferGetNumSamples(sample_buffer)
 
+                    if self.sample_count == 0:
+                        print(f"DEBUG: First sample has {num_samples} samples", file=sys.stderr)
+
                     if num_samples == 0:
+                        if self.sample_count == 0:
+                            print(f"DEBUG: First sample has 0 samples - buffer may be empty", file=sys.stderr)
                         return None
 
                     # Get the audio buffer list
@@ -144,12 +185,17 @@ class ScreenCaptureAudioRecorder:
                         )
 
                     if status != 0:
+                        if self.sample_count == 0:
+                            print(f"DEBUG: CMSampleBufferGetAudioBufferList failed with status={status}", file=sys.stderr)
                         return None
 
                     # Extract audio data from the buffer list
                     # ScreenCaptureKit typically provides float32 PCM data
                     if audio_buffer_list.mNumberBuffers > 0:
                         buffer = audio_buffer_list.mBuffers[0]
+
+                        if self.sample_count == 0:
+                            print(f"DEBUG: Buffer info - mNumberBuffers={audio_buffer_list.mNumberBuffers}, mDataByteSize={buffer.mDataByteSize}", file=sys.stderr)
 
                         # Convert to numpy array
                         # Assuming float32 format (typical for ScreenCaptureKit)
@@ -167,11 +213,16 @@ class ScreenCaptureAudioRecorder:
                             samples = samples.reshape(-1, 2)
 
                         return samples
+                    else:
+                        if self.sample_count == 0:
+                            print(f"DEBUG: audio_buffer_list has 0 buffers", file=sys.stderr)
 
                     return None
 
                 except Exception as e:
                     print(f"Error extracting audio from buffer: {e}", file=sys.stderr)
+                    import traceback
+                    traceback.print_exc(file=sys.stderr)
                     return None
 
             @python_method
@@ -229,10 +280,30 @@ class ScreenCaptureAudioRecorder:
                     return
 
                 try:
+                    print(f"DEBUG: Setting up ScreenCaptureKit stream...", file=sys.stderr)
+
                     # Create content filter for desktop audio
-                    # Use excludeDesktopWindows=True to only capture audio
-                    # (we don't need video)
-                    self.content_filter = self.SCContentFilter.alloc().initWithDesktopIndependentWindow()
+                    # CRITICAL: To capture system audio, we need to capture the display
+                    # Using desktop independent window won't capture audio from other apps
+
+                    # Get the main display
+                    displays = content.displays if content else []
+                    if not displays:
+                        print(f"ERROR: No displays found in shareable content", file=sys.stderr)
+                        setup_error[0] = "No displays available"
+                        setup_complete[0] = True
+                        return
+
+                    main_display = displays[0]  # Use first display (usually main display)
+                    print(f"DEBUG: Using display: {main_display}", file=sys.stderr)
+
+                    # Create content filter that captures the display
+                    # This will capture system audio output
+                    self.content_filter = self.SCContentFilter.alloc().initWithDisplay_excludingWindows_(
+                        main_display,
+                        []  # Don't exclude any windows
+                    )
+                    print(f"DEBUG: Content filter created for display capture", file=sys.stderr)
 
                     # Configure the stream
                     self.stream_config = self.SCStreamConfiguration.alloc().init()
@@ -245,6 +316,8 @@ class ScreenCaptureAudioRecorder:
                     self.stream_config.setSampleRate_(self.sample_rate)
                     self.stream_config.setChannelCount_(self.channels)
 
+                    print(f"DEBUG: Stream config - capturesAudio={self.stream_config.capturesAudio()}, sampleRate={self.stream_config.sampleRate()}, channels={self.stream_config.channelCount()}", file=sys.stderr)
+
                     # Disable video capture (we only want audio)
                     self.stream_config.setWidth_(1)
                     self.stream_config.setHeight_(1)
@@ -252,6 +325,7 @@ class ScreenCaptureAudioRecorder:
 
                     # Create the stream delegate
                     self.delegate = self._create_stream_delegate()
+                    print(f"DEBUG: Delegate created: {self.delegate}", file=sys.stderr)
 
                     # Create the stream
                     self.stream = self.SCStream.alloc().initWithFilter_configuration_delegate_(
@@ -259,6 +333,7 @@ class ScreenCaptureAudioRecorder:
                         self.stream_config,
                         self.delegate
                     )
+                    print(f"DEBUG: Stream created successfully", file=sys.stderr)
 
                     # Start the stream
                     def start_completion_handler(error):
@@ -303,6 +378,11 @@ class ScreenCaptureAudioRecorder:
                 return False
 
             print("ScreenCaptureKit recording started successfully!", file=sys.stderr)
+            print("", file=sys.stderr)
+            print("ℹ️  NOTE: Desktop audio capture works best with built-in speakers.", file=sys.stderr)
+            print("   If using headphones/AirPods, desktop audio may not be captured.", file=sys.stderr)
+            print("   This is a macOS limitation - ScreenCaptureKit captures display audio only.", file=sys.stderr)
+            print("", file=sys.stderr)
             return True
 
         except Exception as e:
@@ -337,6 +417,10 @@ class ScreenCaptureAudioRecorder:
         # Concatenate all audio buffers
         if not self.audio_buffer:
             print("No desktop audio captured", file=sys.stderr)
+            print("", file=sys.stderr)
+            print("⚠️  If you just granted Screen Recording permission, please restart the app.", file=sys.stderr)
+            print("   macOS requires an app restart after granting this permission.", file=sys.stderr)
+            print("", file=sys.stderr)
             return None
 
         try:

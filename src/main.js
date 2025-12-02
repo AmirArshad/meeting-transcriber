@@ -942,15 +942,18 @@ ipcMain.handle('stop-recording', async () => {
             const jsonLine = lines[lines.length - 1]; // Last line should be JSON
             const recordingInfo = JSON.parse(jsonLine);
 
+            // Support both audioPath (Windows) and outputPath (macOS) for backward compatibility
+            const filePath = recordingInfo.audioPath || recordingInfo.outputPath;
+
             // Verify file exists before resolving
-            if (fs.existsSync(recordingInfo.audioPath)) {
+            if (filePath && fs.existsSync(filePath)) {
               resolve({
                 success: true,
-                audioPath: recordingInfo.audioPath,
+                audioPath: filePath,
                 duration: recordingInfo.duration
               });
             } else {
-              reject(new Error(`Recording file not found: ${recordingInfo.audioPath}`));
+              reject(new Error(`Recording file not found: ${filePath}`));
             }
           } catch (e) {
             // If JSON parsing fails, file might still exist at default location
