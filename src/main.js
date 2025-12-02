@@ -362,8 +362,68 @@ function preloadWhisperModel() {
   });
 }
 
+/**
+ * Check macOS permissions (microphone and screen recording).
+ *
+ * This runs asynchronously in the background and shows a notification
+ * if permissions are missing. The permission prompts will be triggered
+ * when the user first tries to record.
+ */
+function checkMacOSPermissions() {
+  const checkScript = path.join(pythonConfig.backendPath, 'check_permissions.py');
+
+  console.log('Checking macOS permissions...');
+
+  const proc = spawn(pythonConfig.pythonExe, [checkScript], {
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+
+  let stdout = '';
+  let stderr = '';
+
+  proc.stdout.on('data', (data) => {
+    stdout += data.toString();
+  });
+
+  proc.stderr.on('data', (data) => {
+    stderr += data.toString();
+  });
+
+  proc.on('close', (code) => {
+    try {
+      const result = JSON.parse(stdout);
+
+      // Log permission status
+      console.log('Permission check result:', result);
+
+      // If any permission is missing, the app will still work - permissions
+      // will be requested when the user first tries to use the feature
+      if (!result.all_granted) {
+        console.warn('Some permissions are missing - will request on first use');
+
+        if (!result.microphone.granted) {
+          console.warn('Microphone permission:', result.microphone.error);
+        }
+
+        if (!result.screen_recording.granted) {
+          console.warn('Screen Recording permission:', result.screen_recording.error);
+        }
+      } else {
+        console.log('All permissions granted!');
+      }
+    } catch (error) {
+      // If we can't parse the result, it's not critical - permissions
+      // will be requested when needed
+      console.warn('Could not parse permission check result:', error);
+      if (stderr) {
+        console.warn('Permission check stderr:', stderr);
+      }
+    }
+  });
+}
+
 // Initialize app
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   // IMPORTANT: Log all app paths for debugging
   console.log('=== App Path Configuration ===');
   console.log('app.getPath("userData"):', app.getPath('userData'));
@@ -380,6 +440,11 @@ app.whenReady().then(() => {
 
   createTray();
   createWindow();
+
+  // Check macOS permissions proactively
+  if (process.platform === 'darwin') {
+    checkMacOSPermissions();
+  }
 
   // Don't preload model in background anymore - the renderer will handle it during init
   // This prevents double-downloading and gives better UX with progress feedback
@@ -830,26 +895,36 @@ ipcMain.handle('stop-recording', async () => {
     }
 
     if (pythonProcess) {
+      // Save reference to current process (in case it gets nulled)
+      const currentProcess = pythonProcess;
+
       let stdoutData = '';
       let stderrData = '';
 
-      // Collect stdout (contains JSON with file path)
-      pythonProcess.stdout.on('data', (data) => {
+      // Set up one-time handlers to collect remaining output
+      const stdoutHandler = (data) => {
         stdoutData += data.toString();
-      });
+      };
 
-      // Collect stderr and send progress updates
-      pythonProcess.stderr.on('data', (data) => {
+      const stderrHandler = (data) => {
         const output = data.toString();
         stderrData += output;
 
         // Send progress updates to renderer so user sees post-processing status
         console.log(`Python status: ${output}`);
         mainWindow.webContents.send('recording-progress', output.trim());
-      });
+      };
+
+      // Add handlers (will be cleaned up after process closes)
+      currentProcess.stdout.on('data', stdoutHandler);
+      currentProcess.stderr.on('data', stderrHandler);
 
       // Wait for process to actually complete
-      pythonProcess.on('close', (code) => {
+      const closeHandler = (code) => {
+        // Clean up event handlers to prevent memory leaks
+        currentProcess.stdout.removeListener('data', stdoutHandler);
+        currentProcess.stderr.removeListener('data', stderrHandler);
+
         pythonProcess = null;
         recordingStartTime = null; // Reset recording start time
 
@@ -891,10 +966,13 @@ ipcMain.handle('stop-recording', async () => {
         } else {
           reject(new Error(`Recording stopped with exit code ${code}: ${stderrData}`));
         }
-      });
+      };
+
+      // Register close handler
+      currentProcess.on('close', closeHandler);
 
       // Send signal to stop via stdin
-      pythonProcess.stdin.write('stop\n');
+      currentProcess.stdin.write('stop\n');
 
       // Calculate proportional timeout based on recording duration
       // Post-processing time scales with recording length

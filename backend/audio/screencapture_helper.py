@@ -198,11 +198,34 @@ class ScreenCaptureAudioRecorder:
         try:
             print("Starting ScreenCaptureKit audio capture...", file=sys.stderr)
 
+            # Use a flag to track if setup completed
+            setup_complete = [False]
+            setup_error = [None]
+
             # Get shareable content (displays and windows)
             # This is async in the ScreenCaptureKit API
             def get_content_callback(content, error):
                 if error:
-                    print(f"Error getting shareable content: {error}", file=sys.stderr)
+                    error_str = str(error)
+                    print(f"Error getting shareable content: {error_str}", file=sys.stderr)
+
+                    # Check if it's a permission error
+                    if "not authorized" in error_str.lower() or "permission" in error_str.lower():
+                        print(f"", file=sys.stderr)
+                        print(f"⚠️  SCREEN RECORDING PERMISSION REQUIRED", file=sys.stderr)
+                        print(f"", file=sys.stderr)
+                        print(f"Meeting Transcriber needs Screen Recording permission to capture", file=sys.stderr)
+                        print(f"desktop audio (system sound). No screen video is recorded.", file=sys.stderr)
+                        print(f"", file=sys.stderr)
+                        print(f"To grant permission:", file=sys.stderr)
+                        print(f"  1. Open System Settings", file=sys.stderr)
+                        print(f"  2. Go to Privacy & Security > Screen Recording", file=sys.stderr)
+                        print(f"  3. Enable 'Meeting Transcriber'", file=sys.stderr)
+                        print(f"  4. Restart the app", file=sys.stderr)
+                        print(f"", file=sys.stderr)
+
+                    setup_error[0] = error_str
+                    setup_complete[0] = True
                     return
 
                 try:
@@ -242,25 +265,45 @@ class ScreenCaptureAudioRecorder:
                         if error:
                             print(f"Error starting stream: {error}", file=sys.stderr)
                             self.is_recording = False
+                            setup_error[0] = str(error)
                         else:
                             print("ScreenCaptureKit stream started successfully", file=sys.stderr)
+                            self.is_recording = True
+                        setup_complete[0] = True
 
                     self.stream.startCaptureWithCompletionHandler_(start_completion_handler)
-                    self.is_recording = True
 
                 except Exception as e:
                     print(f"Error setting up ScreenCaptureKit stream: {e}", file=sys.stderr)
                     import traceback
                     traceback.print_exc(file=sys.stderr)
                     self.is_recording = False
+                    setup_error[0] = str(e)
+                    setup_complete[0] = True
 
             # Request shareable content asynchronously
             self.SCShareableContent.getShareableContentWithCompletionHandler_(get_content_callback)
 
-            # Wait a bit for async operations to complete
-            time.sleep(1.0)
+            # Wait for setup to complete (max 5 seconds)
+            for i in range(50):  # 50 * 0.1s = 5 seconds max
+                if setup_complete[0]:
+                    break
+                time.sleep(0.1)
 
-            return self.is_recording
+            if not setup_complete[0]:
+                print("ERROR: ScreenCaptureKit setup timeout", file=sys.stderr)
+                return False
+
+            if setup_error[0]:
+                print(f"ERROR: ScreenCaptureKit setup failed: {setup_error[0]}", file=sys.stderr)
+                return False
+
+            if not self.is_recording:
+                print("ERROR: ScreenCaptureKit failed to start recording", file=sys.stderr)
+                return False
+
+            print("ScreenCaptureKit recording started successfully!", file=sys.stderr)
+            return True
 
         except Exception as e:
             print(f"Error starting ScreenCaptureKit recording: {e}", file=sys.stderr)

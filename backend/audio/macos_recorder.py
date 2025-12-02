@@ -145,7 +145,8 @@ class MacOSAudioRecorder:
             self.desktop_thread.daemon = True
             self.desktop_thread.start()
         else:
-            print(f"WARNING: Desktop audio capture disabled (ScreenCaptureKit not available)", file=sys.stderr)
+            print(f"Desktop audio capture disabled (ScreenCaptureKit not available)", file=sys.stderr)
+            print(f"  Install PyObjC to enable: pip install pyobjc-framework-ScreenCaptureKit", file=sys.stderr)
 
         print(f"Recording started!", file=sys.stderr)
 
@@ -352,11 +353,14 @@ class MacOSAudioRecorder:
         final_audio = self._enhance_microphone(final_audio)
 
         # Save as temporary WAV file
-        temp_wav_path = self.output_path.replace('.opus', '_temp.wav')
+        temp_wav_path = self.output_path.replace('.opus', '_temp.wav').replace('.wav', '_temp.wav')
         self._save_wav(final_audio, temp_wav_path)
 
+        # Determine final output path (replace .wav with .opus)
+        final_output_path = self.output_path.replace('.wav', '.opus')
+
         # Compress with ffmpeg (same as Windows)
-        self._compress_with_ffmpeg(temp_wav_path, self.output_path)
+        self._compress_with_ffmpeg(temp_wav_path, final_output_path)
 
         # Clean up temp file
         try:
@@ -365,11 +369,11 @@ class MacOSAudioRecorder:
             pass
 
         # Set globals for meeting manager
-        _final_output_path = self.output_path
+        _final_output_path = final_output_path
         duration_seconds = len(final_audio) / self.sample_rate
         _recording_duration = duration_seconds
 
-        print(f"Final file: {self.output_path}", file=sys.stderr)
+        print(f"Final file: {final_output_path}", file=sys.stderr)
         print(f"Duration: {duration_seconds:.1f} seconds", file=sys.stderr)
 
     def _enhance_microphone(self, audio):
