@@ -154,8 +154,17 @@ jobs:
           **macOS:**
           1. Download the `.dmg` file
           2. Open the DMG and drag Meeting Transcriber to Applications
-          3. Right-click the app and select "Open" (first launch only, due to unsigned binary)
-          4. Grant microphone permissions when prompted
+          3. **IMPORTANT:** Right-click the app → select "Open" (NOT double-click)
+             - macOS will show "damaged" error if you double-click
+             - Right-click → "Open" bypasses Gatekeeper for unsigned apps
+          4. Click "Open" in the confirmation dialog
+          5. Grant microphone permissions when prompted
+
+          **Alternative method (if right-click doesn't work):**
+          ```bash
+          # Remove quarantine flag from Terminal:
+          xattr -d com.apple.quarantine /Applications/Meeting\ Transcriber.app
+          ```
 
           ### 📊 Technical Details
 
@@ -208,7 +217,11 @@ jobs:
 
           ### 🐛 Known Issues
 
-          - **macOS Gatekeeper Warning:** Since the app isn't code-signed with an Apple Developer certificate, you'll need to right-click and select "Open" on first launch.
+          - **macOS "Damaged" Error:** If you see '"Meeting Transcriber" is damaged and can't be opened':
+            - This is NOT actually damaged - it's a Gatekeeper security warning for unsigned apps
+            - **Solution:** Right-click the app → "Open" (NOT double-click)
+            - Or run: `xattr -d com.apple.quarantine /Applications/Meeting\ Transcriber.app`
+            - Only needed on first launch - subsequent launches work normally
           - **Windows SmartScreen:** May show warning for unsigned installer - click "More info" then "Run anyway"
 
           ---

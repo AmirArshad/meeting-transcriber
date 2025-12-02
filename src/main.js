@@ -7,19 +7,11 @@
  * - Handles application lifecycle
  */
 
-const {
-  app,
-  BrowserWindow,
-  ipcMain,
-  Tray,
-  Menu,
-  dialog,
-  powerSaveBlocker,
-} = require("electron");
-const path = require("path");
-const { spawn } = require("child_process");
-const fs = require("fs");
-const { checkForUpdates, openDownloadPage } = require("./updater");
+const { app, BrowserWindow, ipcMain, Tray, Menu, dialog, powerSaveBlocker } = require('electron');
+const path = require('path');
+const { spawn } = require('child_process');
+const fs = require('fs');
+const { checkForUpdates, openDownloadPage } = require('./updater');
 
 // Use Electron's default userData path, which handles packaging correctly
 // This is typically: C:\Users\<username>\AppData\Roaming\Meeting Transcriber
@@ -47,7 +39,7 @@ function spawnTrackedPython(args, options = {}) {
   activeProcesses.push(proc);
 
   // Auto-remove from tracking when process exits
-  proc.on("close", () => {
+  proc.on('close', () => {
     const index = activeProcesses.indexOf(proc);
     if (index > -1) {
       activeProcesses.splice(index, 1);
@@ -68,14 +60,14 @@ function spawnTrackedPython(args, options = {}) {
  */
 function getPythonConfig() {
   const isDev = !app.isPackaged;
-  const isMac = process.platform === "darwin";
+  const isMac = process.platform === 'darwin';
 
   if (isDev) {
     // Development mode - use system Python
     return {
-      pythonExe: isMac ? "python3" : "python",
-      backendPath: path.join(__dirname, "../backend"),
-      ffmpegPath: "ffmpeg", // Assume in PATH
+      pythonExe: isMac ? 'python3' : 'python',
+      backendPath: path.join(__dirname, '../backend'),
+      ffmpegPath: 'ffmpeg' // Assume in PATH
     };
   } else {
     // Production mode - use bundled Python
@@ -84,16 +76,16 @@ function getPythonConfig() {
     if (isMac) {
       // macOS: Use bundled Python from resources/python/bin/
       return {
-        pythonExe: path.join(resourcesPath, "python", "bin", "python3"),
-        backendPath: path.join(resourcesPath, "backend"),
-        ffmpegPath: path.join(resourcesPath, "ffmpeg", "ffmpeg"),
+        pythonExe: path.join(resourcesPath, 'python', 'bin', 'python3'),
+        backendPath: path.join(resourcesPath, 'backend'),
+        ffmpegPath: path.join(resourcesPath, 'ffmpeg', 'ffmpeg')
       };
     } else {
       // Windows: Use bundled Python from resources/python/
       return {
-        pythonExe: path.join(resourcesPath, "python", "python.exe"),
-        backendPath: path.join(resourcesPath, "backend"),
-        ffmpegPath: path.join(resourcesPath, "ffmpeg", "ffmpeg.exe"),
+        pythonExe: path.join(resourcesPath, 'python', 'python.exe'),
+        backendPath: path.join(resourcesPath, 'backend'),
+        ffmpegPath: path.join(resourcesPath, 'ffmpeg', 'ffmpeg.exe')
       };
     }
   }
@@ -109,7 +101,7 @@ const pythonConfig = getPythonConfig();
  */
 function getTranscriberScript() {
   const isMac = process.platform === 'darwin';
-  
+
   if (isMac) {
     // Check for Apple Silicon (arm64)
     // MLX requires native arm64 execution
@@ -121,7 +113,7 @@ function getTranscriberScript() {
       return path.join(pythonConfig.backendPath, 'transcription', 'faster_whisper_transcriber.py');
     }
   }
-  
+
   // Windows/Linux -> faster-whisper (CUDA/CPU)
   return path.join(pythonConfig.backendPath, 'transcription', 'faster_whisper_transcriber.py');
 }
@@ -132,20 +124,17 @@ if (!app.isPackaged) {
 } else {
   // In production, add the bundled ffmpeg directory to PATH
   const ffmpegDir = path.dirname(pythonConfig.ffmpegPath);
-  const pathSeparator = process.platform === "win32" ? ";" : ":";
+  const pathSeparator = process.platform === 'win32' ? ';' : ':';
   process.env.PATH = `${ffmpegDir}${pathSeparator}${process.env.PATH}`;
 }
 
 // Suppress Python warnings to reduce console noise
-process.env.PYTHONWARNINGS = "ignore::DeprecationWarning,ignore::UserWarning";
+process.env.PYTHONWARNINGS = 'ignore::DeprecationWarning,ignore::UserWarning';
 
-console.log("Python Configuration:", pythonConfig);
-console.log("userData path:", app.getPath("userData"));
-console.log(
-  "Recordings will be saved to:",
-  path.join(app.getPath("userData"), "recordings")
-);
-console.log("Transcriber:", getTranscriberScript());
+console.log('Python Configuration:', pythonConfig);
+console.log('userData path:', app.getPath('userData'));
+console.log('Recordings will be saved to:', path.join(app.getPath('userData'), 'recordings'));
+console.log('Transcriber:', getTranscriberScript());
 
 // Create the system tray
 function createTray() {
@@ -154,28 +143,28 @@ function createTray() {
   // Windows: Uses ICO file
   let iconPath;
 
-  if (process.platform === "darwin") {
+  if (process.platform === 'darwin') {
     // macOS: Use template image for menu bar
     iconPath = app.isPackaged
-      ? path.join(process.resourcesPath, "iconTemplate.png")
-      : path.join(__dirname, "../build/iconTemplate.png");
+      ? path.join(process.resourcesPath, 'iconTemplate.png')
+      : path.join(__dirname, '../build/iconTemplate.png');
   } else {
     // Windows/Linux: Use ICO file
     iconPath = app.isPackaged
-      ? path.join(process.resourcesPath, "icon.ico")
-      : path.join(__dirname, "../build/icon.ico");
+      ? path.join(process.resourcesPath, 'icon.ico')
+      : path.join(__dirname, '../build/icon.ico');
   }
 
   tray = new Tray(iconPath);
 
   // macOS: Mark as template image for automatic dark mode support
-  if (process.platform === "darwin") {
-    tray.setImage(iconPath); // Ensure template image is used
+  if (process.platform === 'darwin') {
+    tray.setImage(iconPath);  // Ensure template image is used
   }
 
   const contextMenu = Menu.buildFromTemplate([
     {
-      label: "Show/Hide Window",
+      label: 'Show/Hide Window',
       click: () => {
         if (mainWindow.isVisible()) {
           mainWindow.hide();
@@ -183,25 +172,25 @@ function createTray() {
           mainWindow.show();
           mainWindow.focus();
         }
-      },
+      }
     },
     {
-      type: "separator",
+      type: 'separator'
     },
     {
-      label: "Quit",
+      label: 'Quit',
       click: () => {
         isQuitting = true;
         app.quit();
-      },
-    },
+      }
+    }
   ]);
 
-  tray.setToolTip("Meeting Transcriber");
+  tray.setToolTip('Meeting Transcriber');
   tray.setContextMenu(contextMenu);
 
   // Show/hide window on tray icon click
-  tray.on("click", () => {
+  tray.on('click', () => {
     if (mainWindow.isVisible()) {
       mainWindow.hide();
     } else {
@@ -219,52 +208,49 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      preload: path.join(__dirname, "preload.js"),
+      preload: path.join(__dirname, 'preload.js')
     },
-    titleBarStyle: "default",
-    icon: path.join(__dirname, "../assets/icon.png"),
+    titleBarStyle: 'default',
+    icon: path.join(__dirname, '../assets/icon.png')
   });
 
   // Load the HTML file
-  mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
+  mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
   // Open DevTools in development mode
-  if (process.argv.includes("--dev")) {
+  if (process.argv.includes('--dev')) {
     mainWindow.webContents.openDevTools();
   }
 
   // Prevent window from closing, minimize to tray instead
-  mainWindow.on("close", (event) => {
+  mainWindow.on('close', (event) => {
     if (!isQuitting) {
       event.preventDefault();
 
       // Show dialog to ask user what they want to do
-      dialog
-        .showMessageBox(mainWindow, {
-          type: "question",
-          title: "Minimize to Tray",
-          message:
-            "Would you like to close the app or minimize it to the system tray?",
-          detail: "Minimizing to tray keeps the app running in the background.",
-          buttons: ["Minimize to Tray", "Close App", "Cancel"],
-          defaultId: 0,
-          cancelId: 2,
-        })
-        .then((result) => {
-          if (result.response === 0) {
-            // Minimize to tray
-            mainWindow.hide();
-          } else if (result.response === 1) {
-            // Close app
-            isQuitting = true;
-            app.quit();
-          }
-          // Cancel does nothing
-        });
+      dialog.showMessageBox(mainWindow, {
+        type: 'question',
+        title: 'Minimize to Tray',
+        message: 'Would you like to close the app or minimize it to the system tray?',
+        detail: 'Minimizing to tray keeps the app running in the background.',
+        buttons: ['Minimize to Tray', 'Close App', 'Cancel'],
+        defaultId: 0,
+        cancelId: 2
+      }).then(result => {
+        if (result.response === 0) {
+          // Minimize to tray
+          mainWindow.hide();
+        } else if (result.response === 1) {
+          // Close app
+          isQuitting = true;
+          app.quit();
+        }
+        // Cancel does nothing
+      });
     }
   });
 
-  mainWindow.on("closed", () => {
+  mainWindow.on('closed', () => {
     mainWindow = null;
   });
 
@@ -278,73 +264,71 @@ function createWindow() {
 function createApplicationMenu() {
   const template = [
     {
-      label: "File",
-      submenu: [{ role: "quit" }],
-    },
-    {
-      label: "Edit",
+      label: 'File',
       submenu: [
-        { role: "undo" },
-        { role: "redo" },
-        { type: "separator" },
-        { role: "cut" },
-        { role: "copy" },
-        { role: "paste" },
-      ],
+        { role: 'quit' }
+      ]
     },
     {
-      label: "View",
+      label: 'Edit',
       submenu: [
-        { role: "reload" },
-        { role: "forceReload" },
-        { role: "toggleDevTools" },
-        { type: "separator" },
-        { role: "resetZoom" },
-        { role: "zoomIn" },
-        { role: "zoomOut" },
-        { type: "separator" },
-        { role: "togglefullscreen" },
-      ],
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' }
+      ]
     },
     {
-      label: "Help",
+      label: 'View',
+      submenu: [
+        { role: 'reload' },
+        { role: 'forceReload' },
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' }
+      ]
+    },
+    {
+      label: 'Help',
       submenu: [
         {
-          label: "Check for Updates...",
+          label: 'Check for Updates...',
           click: async () => {
             const updateInfo = await checkForUpdates();
             if (updateInfo && mainWindow) {
-              mainWindow.webContents.send("update-available", updateInfo);
+              mainWindow.webContents.send('update-available', updateInfo);
             } else if (mainWindow) {
               dialog.showMessageBox(mainWindow, {
-                type: "info",
-                title: "No Updates Available",
-                message: "You're up to date!",
+                type: 'info',
+                title: 'No Updates Available',
+                message: 'You\'re up to date!',
                 detail: `Meeting Transcriber v${app.getVersion()} is the latest version.`,
-                buttons: ["OK"],
+                buttons: ['OK']
               });
             }
-          },
+          }
         },
-        { type: "separator" },
+        { type: 'separator' },
         {
-          label: "View on GitHub",
+          label: 'View on GitHub',
           click: () => {
-            require("electron").shell.openExternal(
-              "https://github.com/AmirArshad/meeting-transcriber"
-            );
-          },
+            require('electron').shell.openExternal('https://github.com/AmirArshad/meeting-transcriber');
+          }
         },
         {
-          label: "Report Issue",
+          label: 'Report Issue',
           click: () => {
-            require("electron").shell.openExternal(
-              "https://github.com/AmirArshad/meeting-transcriber/issues"
-            );
-          },
-        },
-      ],
-    },
+            require('electron').shell.openExternal('https://github.com/AmirArshad/meeting-transcriber/issues');
+          }
+        }
+      ]
+    }
   ];
 
   const menu = Menu.buildFromTemplate(template);
@@ -356,23 +340,22 @@ function createApplicationMenu() {
  * Uses 'small' model by default as it balances quality and speed
  */
 function preloadWhisperModel() {
-  const modelSize = "small"; // Default model size
+  const modelSize = 'small'; // Default model size
   console.log(`Preloading Whisper model (${modelSize})...`);
 
   const preloadProcess = spawnTrackedPython([
     getTranscriberScript(),
-    "--preload",
-    "--model",
-    modelSize,
+    '--preload',
+    '--model', modelSize
   ]);
 
-  preloadProcess.stderr.on("data", (data) => {
+  preloadProcess.stderr.on('data', (data) => {
     console.log(`[Model Preload] ${data.toString().trim()}`);
   });
 
-  preloadProcess.on("close", (code) => {
+  preloadProcess.on('close', (code) => {
     if (code === 0) {
-      console.log("Whisper model preloaded successfully");
+      console.log('Whisper model preloaded successfully');
     } else {
       console.warn(`Model preload failed with code ${code} (non-critical)`);
     }
@@ -382,18 +365,18 @@ function preloadWhisperModel() {
 // Initialize app
 app.whenReady().then(() => {
   // IMPORTANT: Log all app paths for debugging
-  console.log("=== App Path Configuration ===");
-  console.log('app.getPath("userData"):', app.getPath("userData"));
-  console.log('app.getPath("appData"):', app.getPath("appData"));
-  console.log('app.getPath("cache"):', app.getPath("cache"));
-  console.log("app.getName():", app.getName());
-  console.log("app.isPackaged:", app.isPackaged);
-  console.log("process.resourcesPath:", process.resourcesPath);
-  console.log("==============================");
+  console.log('=== App Path Configuration ===');
+  console.log('app.getPath("userData"):', app.getPath('userData'));
+  console.log('app.getPath("appData"):', app.getPath('appData'));
+  console.log('app.getPath("cache"):', app.getPath('cache'));
+  console.log('app.getName():', app.getName());
+  console.log('app.isPackaged:', app.isPackaged);
+  console.log('process.resourcesPath:', process.resourcesPath);
+  console.log('==============================');
 
   // Set cache paths to userData to avoid permission issues
-  const cacheDir = path.join(app.getPath("userData"), "Cache");
-  app.setPath("cache", cacheDir);
+  const cacheDir = path.join(app.getPath('userData'), 'Cache');
+  app.setPath('cache', cacheDir);
 
   createTray();
   createWindow();
@@ -406,11 +389,11 @@ app.whenReady().then(() => {
   setTimeout(async () => {
     const updateInfo = await checkForUpdates();
     if (updateInfo && mainWindow) {
-      mainWindow.webContents.send("update-available", updateInfo);
+      mainWindow.webContents.send('update-available', updateInfo);
     }
   }, 5000);
 
-  app.on("activate", () => {
+  app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
     }
@@ -418,13 +401,13 @@ app.whenReady().then(() => {
 });
 
 // Don't quit when all windows are closed (allow running in tray)
-app.on("window-all-closed", () => {
+app.on('window-all-closed', () => {
   // Keep app running in tray even when window is closed
   // User must explicitly quit from tray menu
 });
 
 // Clean up on quit
-app.on("before-quit", () => {
+app.on('before-quit', () => {
   isQuitting = true;
 
   // Kill the main recording process
@@ -433,7 +416,7 @@ app.on("before-quit", () => {
   }
 
   // Kill all other spawned Python processes
-  activeProcesses.forEach((proc) => {
+  activeProcesses.forEach(proc => {
     try {
       if (!proc.killed) {
         proc.kill();
@@ -458,24 +441,24 @@ app.on("before-quit", () => {
 /**
  * Get list of available audio devices
  */
-ipcMain.handle("get-audio-devices", async () => {
+ipcMain.handle('get-audio-devices', async () => {
   return new Promise((resolve, reject) => {
     const python = spawnTrackedPython([
-      path.join(pythonConfig.backendPath, "device_manager.py"),
+      path.join(pythonConfig.backendPath, 'device_manager.py')
     ]);
 
-    let output = "";
-    let errorOutput = "";
+    let output = '';
+    let errorOutput = '';
 
-    python.stdout.on("data", (data) => {
+    python.stdout.on('data', (data) => {
       output += data.toString();
     });
 
-    python.stderr.on("data", (data) => {
+    python.stderr.on('data', (data) => {
       errorOutput += data.toString();
     });
 
-    python.on("close", (code) => {
+    python.on('close', (code) => {
       if (code === 0) {
         try {
           const data = JSON.parse(output);
@@ -483,15 +466,13 @@ ipcMain.handle("get-audio-devices", async () => {
           resolve({
             inputs: data.input_devices,
             loopbacks: data.loopback_devices,
-            defaults: data.defaults,
+            defaults: data.defaults
           });
         } catch (e) {
           reject(new Error(`Failed to parse device list: ${e.message}`));
         }
       } else {
-        reject(
-          new Error(`Python process exited with code ${code}: ${errorOutput}`)
-        );
+        reject(new Error(`Python process exited with code ${code}: ${errorOutput}`));
       }
     });
   });
@@ -501,43 +482,35 @@ ipcMain.handle("get-audio-devices", async () => {
  * Warm up audio system (enumerate devices and test streams)
  * This should be called on app startup to initialize audio drivers
  */
-ipcMain.handle("warm-up-audio-system", async () => {
+ipcMain.handle('warm-up-audio-system', async () => {
   return new Promise((resolve) => {
     // Step 1: Enumerate devices (forces driver initialization)
     const python = spawnTrackedPython([
-      path.join(pythonConfig.backendPath, "device_manager.py"),
+      path.join(pythonConfig.backendPath, 'device_manager.py')
     ]);
 
-    let output = "";
+    let output = '';
 
-    python.stdout.on("data", (data) => {
+    python.stdout.on('data', (data) => {
       output += data.toString();
     });
 
-    python.on("close", (code) => {
+    python.on('close', (code) => {
       if (code === 0) {
         try {
           const data = JSON.parse(output);
-          console.log("Audio system warmed up successfully");
+          console.log('Audio system warmed up successfully');
           console.log(`  Found ${data.input_devices.length} input devices`);
-          console.log(
-            `  Found ${data.loopback_devices.length} loopback devices`
-          );
-          resolve({
-            success: true,
-            deviceCount:
-              data.input_devices.length + data.loopback_devices.length,
-          });
+          console.log(`  Found ${data.loopback_devices.length} loopback devices`);
+          resolve({ success: true, deviceCount: data.input_devices.length + data.loopback_devices.length });
         } catch (e) {
           // Even if parsing fails, enumeration happened so drivers are warm
-          console.log(
-            "Audio system enumeration completed (with parsing error)"
-          );
+          console.log('Audio system enumeration completed (with parsing error)');
           resolve({ success: true, deviceCount: 0 });
         }
       } else {
         // Even if it failed, we tried to initialize
-        console.log("Audio system warm-up completed (with error)");
+        console.log('Audio system warm-up completed (with error)');
         resolve({ success: true, deviceCount: 0 });
       }
     });
@@ -547,29 +520,27 @@ ipcMain.handle("warm-up-audio-system", async () => {
 /**
  * Check if Whisper model is downloaded
  */
-ipcMain.handle("check-model-downloaded", async (event, modelSize) => {
+ipcMain.handle('check-model-downloaded', async (event, modelSize) => {
   return new Promise((resolve) => {
     // Check if model exists in cache
     // faster-whisper downloads to ~/.cache/huggingface/hub
-    const homeDir = require("os").homedir();
-    const cacheDir = path.join(homeDir, ".cache", "huggingface", "hub");
+    const homeDir = require('os').homedir();
+    const cacheDir = path.join(homeDir, '.cache', 'huggingface', 'hub');
 
     // Model naming pattern: models--guillaumekln--faster-whisper-{size}
-    const modelPattern = `models--guillaumekln--faster-whisper-${
-      modelSize || "small"
-    }`;
+    const modelPattern = `models--guillaumekln--faster-whisper-${modelSize || 'small'}`;
 
     try {
       if (fs.existsSync(cacheDir)) {
         const items = fs.readdirSync(cacheDir);
-        const modelExists = items.some((item) => item.includes(modelPattern));
-        resolve({ downloaded: modelExists, modelSize: modelSize || "small" });
+        const modelExists = items.some(item => item.includes(modelPattern));
+        resolve({ downloaded: modelExists, modelSize: modelSize || 'small' });
       } else {
-        resolve({ downloaded: false, modelSize: modelSize || "small" });
+        resolve({ downloaded: false, modelSize: modelSize || 'small' });
       }
     } catch (e) {
       // If we can't check, assume not downloaded
-      resolve({ downloaded: false, modelSize: modelSize || "small" });
+      resolve({ downloaded: false, modelSize: modelSize || 'small' });
     }
   });
 });
@@ -577,52 +548,48 @@ ipcMain.handle("check-model-downloaded", async (event, modelSize) => {
 /**
  * Download Whisper model (preload)
  */
-ipcMain.handle("download-model", async (event, modelSize) => {
+ipcMain.handle('download-model', async (event, modelSize) => {
   return new Promise((resolve, reject) => {
-    const model = modelSize || "small";
+    const model = modelSize || 'small';
     console.log(`Downloading Whisper model: ${model}`);
 
     const python = spawnTrackedPython([
       getTranscriberScript(),
-      "--preload",
-      "--model",
-      model,
+      '--preload',
+      '--model', model
     ]);
 
     let hasError = false;
 
-    python.stdout.on("data", (data) => {
+    python.stdout.on('data', (data) => {
       const output = data.toString();
       // Send progress updates to renderer
-      mainWindow.webContents.send("model-download-progress", output);
+      mainWindow.webContents.send('model-download-progress', output);
     });
 
-    python.stderr.on("data", (data) => {
+    python.stderr.on('data', (data) => {
       const output = data.toString();
       console.log(`[Model Download] ${output}`);
 
       // Send progress to renderer
-      mainWindow.webContents.send("model-download-progress", output);
+      mainWindow.webContents.send('model-download-progress', output);
 
       // Check for errors
-      if (
-        output.toLowerCase().includes("error") &&
-        !output.includes("non-critical")
-      ) {
+      if (output.toLowerCase().includes('error') && !output.includes('non-critical')) {
         hasError = true;
       }
     });
 
-    python.on("close", (code) => {
+    python.on('close', (code) => {
       if (code === 0) {
-        console.log("Model downloaded successfully");
+        console.log('Model downloaded successfully');
         resolve({ success: true });
       } else if (!hasError) {
         // Non-zero exit but no explicit error - might be OK
-        console.log("Model download completed with warnings");
+        console.log('Model download completed with warnings');
         resolve({ success: true });
       } else {
-        reject(new Error("Failed to download model"));
+        reject(new Error('Failed to download model'));
       }
     });
   });
@@ -631,86 +598,69 @@ ipcMain.handle("download-model", async (event, modelSize) => {
 /**
  * Start recording with improved timeout and progress feedback
  */
-ipcMain.handle("start-recording", async (event, options) => {
+ipcMain.handle('start-recording', async (event, options) => {
   return new Promise((resolve, reject) => {
     const { micId, loopbackId, isFirstRecording } = options;
 
     // Generate unique filename with timestamp
-    const timestamp = new Date()
-      .toISOString()
-      .replace(/:/g, "-") // Replace : with - for Windows compatibility
-      .replace(/\..+/, ""); // Remove milliseconds
+    const timestamp = new Date().toISOString()
+      .replace(/:/g, '-')  // Replace : with - for Windows compatibility
+      .replace(/\..+/, ''); // Remove milliseconds
     const filename = `recording_${timestamp}.wav`;
 
     // Note: audio_recorder.py will compress and save as .opus, not .wav
     // But we pass .wav as the base path - the recorder will change extension
     // Use userData path which is always writable (in AppData/Roaming)
-    const recordingsDir = path.join(app.getPath("userData"), "recordings");
+    const recordingsDir = path.join(app.getPath('userData'), 'recordings');
     if (!fs.existsSync(recordingsDir)) {
       fs.mkdirSync(recordingsDir, { recursive: true });
     }
     const outputPath = path.join(recordingsDir, filename);
 
-    // FIX 1 (REFINED): Enable power save blocker to keep recording running
-    // Platform-specific approach:
-    // - macOS: Use 'prevent-app-suspension' to prevent App Nap from pausing recording
-    // - Windows: Use 'prevent-display-sleep' for better battery life (recording runs in separate process)
+    // FIX 1 (REFINED): Enable power save blocker to keep process running
+    // Use 'prevent-display-sleep' instead of 'prevent-app-suspension' for better battery life
+    // This prevents display from sleeping but allows system to enter low-power states
     if (powerSaveId === null) {
-      const blockerType = process.platform === 'darwin' 
-        ? 'prevent-app-suspension'  // macOS: Prevent App Nap (critical for background recording)
-        : 'prevent-display-sleep';   // Windows: Lighter approach (Python process is separate)
-      
-      powerSaveId = powerSaveBlocker.start(blockerType);
-      console.log(
-        `Power save blocker enabled (${blockerType}) - recording will continue in background`
-      );
+      powerSaveId = powerSaveBlocker.start('prevent-display-sleep');
+      console.log('Power save blocker enabled - preventing display sleep during recording');
     }
 
     // Start Python recording process
-    const isMac = process.platform === "darwin";
-    const recorderScript = isMac ? "macos_recorder.py" : "windows_recorder.py";
-
     pythonProcess = spawnTrackedPython([
-      path.join(pythonConfig.backendPath, "audio", recorderScript),
-      "--mic",
-      micId.toString(),
-      "--loopback",
-      loopbackId.toString(),
-      "--output",
-      outputPath,
+      path.join(pythonConfig.backendPath, 'audio', 'windows_recorder.py'),
+      '--mic', micId.toString(),
+      '--loopback', loopbackId.toString(),
+      '--output', outputPath
     ]);
 
     // FIX 2 (REFINED): Set high priority for Python recording process on Windows
     // Use small delay to ensure process is fully initialized before setting priority
-    if (process.platform === "win32" && pythonProcess.pid) {
+    if (process.platform === 'win32' && pythonProcess.pid) {
       setTimeout(() => {
         try {
-          const { exec } = require("child_process");
-          exec(
-            `wmic process where processid="${pythonProcess.pid}" CALL setpriority "high priority"`,
-            (error) => {
-              if (error) {
-                console.warn("Failed to set high priority:", error.message);
-              } else {
-                console.log("Recording process set to HIGH priority");
-              }
+          const { exec } = require('child_process');
+          exec(`wmic process where processid="${pythonProcess.pid}" CALL setpriority "high priority"`, (error) => {
+            if (error) {
+              console.warn('Failed to set high priority:', error.message);
+            } else {
+              console.log('Recording process set to HIGH priority');
             }
-          );
+          });
         } catch (e) {
-          console.warn("Could not set process priority:", e.message);
+          console.warn('Could not set process priority:', e.message);
         }
       }, 100); // 100ms delay to ensure process initialization
     }
 
     let recordingStarted = false;
-    let progressStage = "initializing";
+    let progressStage = 'initializing';
 
     // PERFORMANCE FIX: Throttle audio level updates to reduce IPC overhead
     // Only send updates if window is visible AND we haven't sent one recently
     let lastLevelSentTime = 0;
     const LEVEL_UPDATE_THROTTLE_MS = 100; // Max 10 updates/sec instead of 20
 
-    pythonProcess.stdout.on("data", (data) => {
+    pythonProcess.stdout.on('data', (data) => {
       const output = data.toString();
 
       // Check if this is a JSON level update
@@ -720,22 +670,16 @@ ipcMain.handle("start-recording", async (event, options) => {
 
         // PERFORMANCE: Only parse and send if window visible and throttled
         const now = Date.now();
-        const shouldSendUpdate =
-          now - lastLevelSentTime >= LEVEL_UPDATE_THROTTLE_MS;
+        const shouldSendUpdate = (now - lastLevelSentTime) >= LEVEL_UPDATE_THROTTLE_MS;
 
-        if (
-          shouldSendUpdate &&
-          mainWindow &&
-          !mainWindow.isMinimized() &&
-          mainWindow.isVisible()
-        ) {
+        if (shouldSendUpdate && mainWindow && !mainWindow.isMinimized() && mainWindow.isVisible()) {
           try {
             // There might be multiple JSON objects in one chunk, or mixed with newlines
-            const lines = output.trim().split("\n");
+            const lines = output.trim().split('\n');
             for (const line of lines) {
               if (line.startsWith('{"type": "levels"')) {
                 const levels = JSON.parse(line);
-                mainWindow.webContents.send("audio-levels", levels);
+                mainWindow.webContents.send('audio-levels', levels);
                 lastLevelSentTime = now;
                 break; // Only send first valid level to reduce overhead
               }
@@ -747,37 +691,28 @@ ipcMain.handle("start-recording", async (event, options) => {
         // Note: We still update heartbeat even if we don't send to UI
       } else {
         // Send progress updates to renderer
-        mainWindow.webContents.send("recording-progress", output);
+        mainWindow.webContents.send('recording-progress', output);
       }
     });
 
-    pythonProcess.stderr.on("data", (data) => {
+    pythonProcess.stderr.on('data', (data) => {
       const output = data.toString();
       console.log(`Python status: ${output}`);
 
       // Send detailed progress updates
-      if (output.includes("Device configuration")) {
-        progressStage = "configuring";
-        mainWindow.webContents.send("recording-init-progress", {
-          stage: "configuring",
-          message: "Configuring audio devices...",
-        });
-      } else if (output.includes("Microphone stream opened")) {
-        progressStage = "mic_opened";
-        mainWindow.webContents.send("recording-init-progress", {
-          stage: "mic_opened",
-          message: "Microphone ready...",
-        });
-      } else if (output.includes("Desktop audio stream opened")) {
-        progressStage = "desktop_opened";
-        mainWindow.webContents.send("recording-init-progress", {
-          stage: "desktop_opened",
-          message: "Desktop audio ready...",
-        });
+      if (output.includes('Device configuration')) {
+        progressStage = 'configuring';
+        mainWindow.webContents.send('recording-init-progress', { stage: 'configuring', message: 'Configuring audio devices...' });
+      } else if (output.includes('Microphone stream opened')) {
+        progressStage = 'mic_opened';
+        mainWindow.webContents.send('recording-init-progress', { stage: 'mic_opened', message: 'Microphone ready...' });
+      } else if (output.includes('Desktop audio stream opened')) {
+        progressStage = 'desktop_opened';
+        mainWindow.webContents.send('recording-init-progress', { stage: 'desktop_opened', message: 'Desktop audio ready...' });
       }
 
       // Wait for confirmation that recording actually started
-      if (!recordingStarted && output.includes("Recording started!")) {
+      if (!recordingStarted && output.includes('Recording started!')) {
         recordingStarted = true;
         recordingStartTime = Date.now(); // Track when recording actually started
 
@@ -787,35 +722,23 @@ ipcMain.handle("start-recording", async (event, options) => {
           const timeSinceUpdate = Date.now() - lastLevelUpdate;
 
           // If no audio level updates for 10 seconds, something is wrong
-          if (
-            timeSinceUpdate > 10000 &&
-            pythonProcess &&
-            !pythonProcess.killed
-          ) {
-            console.error(
-              `Recording heartbeat lost - no audio levels for ${
-                timeSinceUpdate / 1000
-              }s`
-            );
-            mainWindow.webContents.send("recording-warning", {
-              type: "heartbeat_lost",
-              message:
-                "Recording may have stopped unexpectedly. No audio data received for 10+ seconds.",
+          if (timeSinceUpdate > 10000 && pythonProcess && !pythonProcess.killed) {
+            console.error(`Recording heartbeat lost - no audio levels for ${timeSinceUpdate / 1000}s`);
+            mainWindow.webContents.send('recording-warning', {
+              type: 'heartbeat_lost',
+              message: 'Recording may have stopped unexpectedly. No audio data received for 10+ seconds.'
             });
 
             // Continue monitoring - don't auto-kill, let user decide
           }
         }, 5000); // Check every 5 seconds
 
-        mainWindow.webContents.send("recording-init-progress", {
-          stage: "started",
-          message: "Recording started!",
-        });
-        resolve({ success: true, message: "Recording started" });
+        mainWindow.webContents.send('recording-init-progress', { stage: 'started', message: 'Recording started!' });
+        resolve({ success: true, message: 'Recording started' });
       }
     });
 
-    pythonProcess.on("close", (code) => {
+    pythonProcess.on('close', (code) => {
       // CRITICAL FIX: Clean up resources on error
       if (recordingHeartbeat) {
         clearInterval(recordingHeartbeat);
@@ -824,7 +747,7 @@ ipcMain.handle("start-recording", async (event, options) => {
       if (powerSaveId !== null) {
         powerSaveBlocker.stop(powerSaveId);
         powerSaveId = null;
-        console.log("Power save blocker disabled (recording failed)");
+        console.log('Power save blocker disabled (recording failed)');
       }
 
       if (!recordingStarted) {
@@ -832,12 +755,10 @@ ipcMain.handle("start-recording", async (event, options) => {
         let errorMessage = `Recording failed to start. Process exited with code ${code}.`;
 
         // Provide helpful hints based on progress stage
-        if (progressStage === "initializing") {
-          errorMessage +=
-            "\n\nTip: Try refreshing your audio devices or restarting the app.";
-        } else if (progressStage === "configuring") {
-          errorMessage +=
-            "\n\nTip: Check that your selected audio devices are not in use by another application.";
+        if (progressStage === 'initializing') {
+          errorMessage += '\n\nTip: Try refreshing your audio devices or restarting the app.';
+        } else if (progressStage === 'configuring') {
+          errorMessage += '\n\nTip: Check that your selected audio devices are not in use by another application.';
         }
 
         reject(new Error(errorMessage));
@@ -856,30 +777,21 @@ ipcMain.handle("start-recording", async (event, options) => {
         if (powerSaveId !== null) {
           powerSaveBlocker.stop(powerSaveId);
           powerSaveId = null;
-          console.log("Power save blocker disabled (timeout)");
+          console.log('Power save blocker disabled (timeout)');
         }
 
-        let errorMessage = `Recording failed to start within ${
-          timeout / 1000
-        } seconds.`;
+        let errorMessage = `Recording failed to start within ${timeout / 1000} seconds.`;
 
         // Provide specific guidance based on what stage failed
-        if (progressStage === "initializing") {
-          errorMessage +=
-            "\n\nThe audio system is taking longer than expected to initialize.";
-          errorMessage +=
-            "\nThis can happen on first launch. Please try again.";
-        } else if (progressStage === "configuring") {
-          errorMessage += "\n\nAudio device configuration is taking too long.";
-          errorMessage +=
-            "\nCheck that your devices are properly connected and not in use.";
-        } else if (
-          progressStage === "mic_opened" ||
-          progressStage === "desktop_opened"
-        ) {
-          errorMessage += "\n\nAudio streams are opening but not fully ready.";
-          errorMessage +=
-            "\nTry selecting different audio devices or restarting the app.";
+        if (progressStage === 'initializing') {
+          errorMessage += '\n\nThe audio system is taking longer than expected to initialize.';
+          errorMessage += '\nThis can happen on first launch. Please try again.';
+        } else if (progressStage === 'configuring') {
+          errorMessage += '\n\nAudio device configuration is taking too long.';
+          errorMessage += '\nCheck that your devices are properly connected and not in use.';
+        } else if (progressStage === 'mic_opened' || progressStage === 'desktop_opened') {
+          errorMessage += '\n\nAudio streams are opening but not fully ready.';
+          errorMessage += '\nTry selecting different audio devices or restarting the app.';
         }
 
         reject(new Error(errorMessage));
@@ -890,7 +802,7 @@ ipcMain.handle("start-recording", async (event, options) => {
     }, timeout);
 
     // Clean up timeout if recording starts successfully
-    pythonProcess.on("close", () => {
+    pythonProcess.on('close', () => {
       clearTimeout(timeoutHandle);
     });
   });
@@ -899,36 +811,36 @@ ipcMain.handle("start-recording", async (event, options) => {
 /**
  * Stop recording
  */
-ipcMain.handle("stop-recording", async () => {
+ipcMain.handle('stop-recording', async () => {
   return new Promise((resolve, reject) => {
     // FIX 3: Clear heartbeat monitor
     if (recordingHeartbeat) {
       clearInterval(recordingHeartbeat);
       recordingHeartbeat = null;
-      console.log("Recording heartbeat monitor stopped");
+      console.log('Recording heartbeat monitor stopped');
     }
 
     if (pythonProcess) {
-      let stdoutData = "";
-      let stderrData = "";
+      let stdoutData = '';
+      let stderrData = '';
 
       // Collect stdout (contains JSON with file path)
-      pythonProcess.stdout.on("data", (data) => {
+      pythonProcess.stdout.on('data', (data) => {
         stdoutData += data.toString();
       });
 
       // Collect stderr and send progress updates
-      pythonProcess.stderr.on("data", (data) => {
+      pythonProcess.stderr.on('data', (data) => {
         const output = data.toString();
         stderrData += output;
 
         // Send progress updates to renderer so user sees post-processing status
         console.log(`Python status: ${output}`);
-        mainWindow.webContents.send("recording-progress", output.trim());
+        mainWindow.webContents.send('recording-progress', output.trim());
       });
 
       // Wait for process to actually complete
-      pythonProcess.on("close", (code) => {
+      pythonProcess.on('close', (code) => {
         pythonProcess = null;
         recordingStartTime = null; // Reset recording start time
 
@@ -936,13 +848,13 @@ ipcMain.handle("stop-recording", async () => {
         if (powerSaveId !== null) {
           powerSaveBlocker.stop(powerSaveId);
           powerSaveId = null;
-          console.log("Power save blocker disabled");
+          console.log('Power save blocker disabled');
         }
 
         if (code === 0) {
           // Parse JSON output to get file path
           try {
-            const lines = stdoutData.trim().split("\n");
+            const lines = stdoutData.trim().split('\n');
             const jsonLine = lines[lines.length - 1]; // Last line should be JSON
             const recordingInfo = JSON.parse(jsonLine);
 
@@ -951,71 +863,45 @@ ipcMain.handle("stop-recording", async () => {
               resolve({
                 success: true,
                 audioPath: recordingInfo.audioPath,
-                duration: recordingInfo.duration,
+                duration: recordingInfo.duration
               });
             } else {
-              reject(
-                new Error(
-                  `Recording file not found: ${recordingInfo.audioPath}`
-                )
-              );
+              reject(new Error(`Recording file not found: ${recordingInfo.audioPath}`));
             }
           } catch (e) {
             // If JSON parsing fails, file might still exist at default location
-            const recordingsDir = path.join(
-              app.getPath("userData"),
-              "recordings"
-            );
-            const opusPath = path.join(recordingsDir, "temp.opus");
+            const recordingsDir = path.join(app.getPath('userData'), 'recordings');
+            const opusPath = path.join(recordingsDir, 'temp.opus');
 
             if (fs.existsSync(opusPath)) {
               resolve({ success: true, audioPath: opusPath });
             } else {
-              reject(
-                new Error(
-                  `Recording completed but output file not found. Error: ${e.message}`
-                )
-              );
+              reject(new Error(`Recording completed but output file not found. Error: ${e.message}`));
             }
           }
         } else {
-          reject(
-            new Error(`Recording stopped with exit code ${code}: ${stderrData}`)
-          );
+          reject(new Error(`Recording stopped with exit code ${code}: ${stderrData}`));
         }
       });
 
       // Send signal to stop via stdin
-      pythonProcess.stdin.write("stop\n");
+      pythonProcess.stdin.write('stop\n');
 
       // Calculate proportional timeout based on recording duration
       // Post-processing time scales with recording length
       // Formula: base 30s + (recording_minutes * 10s per minute)
       // Examples: 5min = 80s, 30min = 330s (5.5min), 60min = 630s (10.5min)
-      const recordingDuration = recordingStartTime
-        ? (Date.now() - recordingStartTime) / 1000
-        : 0;
+      const recordingDuration = recordingStartTime ? (Date.now() - recordingStartTime) / 1000 : 0;
       const recordingMinutes = Math.ceil(recordingDuration / 60);
-      const processingTimeout = Math.max(
-        30000,
-        30000 + recordingMinutes * 10000
-      ); // Minimum 30s
+      const processingTimeout = Math.max(30000, 30000 + (recordingMinutes * 10000)); // Minimum 30s
 
-      console.log(
-        `Recording duration: ${recordingMinutes} minutes, using ${
-          processingTimeout / 1000
-        }s timeout`
-      );
+      console.log(`Recording duration: ${recordingMinutes} minutes, using ${processingTimeout / 1000}s timeout`);
 
       setTimeout(() => {
         if (pythonProcess) {
           pythonProcess.kill();
           pythonProcess = null;
-          reject(
-            new Error(
-              "Recording stop timeout - process took too long to finish"
-            )
-          );
+          reject(new Error('Recording stop timeout - process took too long to finish'));
         }
       }, processingTimeout);
     } else {
@@ -1027,47 +913,44 @@ ipcMain.handle("stop-recording", async () => {
 /**
  * Transcribe audio file
  */
-ipcMain.handle("transcribe-audio", async (event, options) => {
+ipcMain.handle('transcribe-audio', async (event, options) => {
   return new Promise((resolve, reject) => {
     let { audioFile, language, modelSize } = options;
 
     // Resolve relative paths and handle .opus extension
     if (!path.isAbsolute(audioFile)) {
       // Use userData recordings directory
-      const recordingsDir = path.join(app.getPath("userData"), "recordings");
+      const recordingsDir = path.join(app.getPath('userData'), 'recordings');
       audioFile = path.join(recordingsDir, path.basename(audioFile));
     }
 
     // The recorder saves as .opus, so if we get .wav, use .opus instead
-    if (audioFile.endsWith(".wav")) {
-      audioFile = audioFile.replace(".wav", ".opus");
+    if (audioFile.endsWith('.wav')) {
+      audioFile = audioFile.replace('.wav', '.opus');
     }
 
     const python = spawnTrackedPython([
       getTranscriberScript(),
-      "--file",
-      audioFile,
-      "--language",
-      language || "en",
-      "--model",
-      modelSize || "small",
-      "--json",
+      '--file', audioFile,
+      '--language', language || 'en',
+      '--model', modelSize || 'small',
+      '--json'
     ]);
 
-    let output = "";
-    let errorOutput = "";
+    let output = '';
+    let errorOutput = '';
 
-    python.stdout.on("data", (data) => {
+    python.stdout.on('data', (data) => {
       output += data.toString();
       // Send progress to renderer
-      mainWindow.webContents.send("transcription-progress", data.toString());
+      mainWindow.webContents.send('transcription-progress', data.toString());
     });
 
-    python.stderr.on("data", (data) => {
+    python.stderr.on('data', (data) => {
       errorOutput += data.toString();
     });
 
-    python.on("close", (code) => {
+    python.on('close', (code) => {
       // Try to parse JSON output first, even if exit code is non-zero
       // This handles cases where transcription succeeds but cleanup fails
       if (output.trim()) {
@@ -1087,9 +970,7 @@ ipcMain.handle("transcribe-audio", async (event, options) => {
       if (code === 0) {
         reject(new Error(`Transcription produced no valid output`));
       } else {
-        reject(
-          new Error(`Transcription failed: ${errorOutput || "Unknown error"}`)
-        );
+        reject(new Error(`Transcription failed: ${errorOutput || 'Unknown error'}`));
       }
     });
   });
@@ -1098,28 +979,27 @@ ipcMain.handle("transcribe-audio", async (event, options) => {
 /**
  * List all meetings
  */
-ipcMain.handle("list-meetings", async () => {
+ipcMain.handle('list-meetings', async () => {
   return new Promise((resolve, reject) => {
-    const recordingsDir = path.join(app.getPath("userData"), "recordings");
+    const recordingsDir = path.join(app.getPath('userData'), 'recordings');
     const python = spawnTrackedPython([
-      path.join(pythonConfig.backendPath, "meeting_manager.py"),
-      "--recordings-dir",
-      recordingsDir,
-      "list",
+      path.join(pythonConfig.backendPath, 'meeting_manager.py'),
+      '--recordings-dir', recordingsDir,
+      'list'
     ]);
 
-    let output = "";
-    let errorOutput = "";
+    let output = '';
+    let errorOutput = '';
 
-    python.stdout.on("data", (data) => {
+    python.stdout.on('data', (data) => {
       output += data.toString();
     });
 
-    python.stderr.on("data", (data) => {
+    python.stderr.on('data', (data) => {
       errorOutput += data.toString();
     });
 
-    python.on("close", (code) => {
+    python.on('close', (code) => {
       if (code === 0) {
         try {
           const meetings = JSON.parse(output);
@@ -1128,7 +1008,7 @@ ipcMain.handle("list-meetings", async () => {
           reject(new Error(`Failed to parse meetings: ${e.message}`));
         }
       } else {
-        const errorMsg = errorOutput.trim() || "Unknown error";
+        const errorMsg = errorOutput.trim() || 'Unknown error';
         reject(new Error(`Failed to list meetings: ${errorMsg}`));
       }
     });
@@ -1138,29 +1018,28 @@ ipcMain.handle("list-meetings", async () => {
 /**
  * Get a single meeting
  */
-ipcMain.handle("get-meeting", async (event, meetingId) => {
+ipcMain.handle('get-meeting', async (event, meetingId) => {
   return new Promise((resolve, reject) => {
-    const recordingsDir = path.join(app.getPath("userData"), "recordings");
+    const recordingsDir = path.join(app.getPath('userData'), 'recordings');
     const python = spawnTrackedPython([
-      path.join(pythonConfig.backendPath, "meeting_manager.py"),
-      "--recordings-dir",
-      recordingsDir,
-      "get",
-      meetingId,
+      path.join(pythonConfig.backendPath, 'meeting_manager.py'),
+      '--recordings-dir', recordingsDir,
+      'get',
+      meetingId
     ]);
 
-    let output = "";
-    let errorOutput = "";
+    let output = '';
+    let errorOutput = '';
 
-    python.stdout.on("data", (data) => {
+    python.stdout.on('data', (data) => {
       output += data.toString();
     });
 
-    python.stderr.on("data", (data) => {
+    python.stderr.on('data', (data) => {
       errorOutput += data.toString();
     });
 
-    python.on("close", (code) => {
+    python.on('close', (code) => {
       if (code === 0) {
         try {
           const meeting = JSON.parse(output);
@@ -1169,7 +1048,7 @@ ipcMain.handle("get-meeting", async (event, meetingId) => {
           reject(new Error(`Failed to parse meeting: ${e.message}`));
         }
       } else {
-        const errorMsg = errorOutput.trim() || "Meeting not found";
+        const errorMsg = errorOutput.trim() || 'Meeting not found';
         reject(new Error(errorMsg));
       }
     });
@@ -1179,30 +1058,29 @@ ipcMain.handle("get-meeting", async (event, meetingId) => {
 /**
  * Delete a meeting
  */
-ipcMain.handle("delete-meeting", async (event, meetingId) => {
+ipcMain.handle('delete-meeting', async (event, meetingId) => {
   return new Promise((resolve, reject) => {
-    const recordingsDir = path.join(app.getPath("userData"), "recordings");
+    const recordingsDir = path.join(app.getPath('userData'), 'recordings');
     const python = spawnTrackedPython([
-      path.join(pythonConfig.backendPath, "meeting_manager.py"),
-      "--recordings-dir",
-      recordingsDir,
-      "delete",
-      meetingId,
+      path.join(pythonConfig.backendPath, 'meeting_manager.py'),
+      '--recordings-dir', recordingsDir,
+      'delete',
+      meetingId
     ]);
 
     // FIX: Capture error output for better diagnostics
-    let errorOutput = "";
+    let errorOutput = '';
 
-    python.stderr.on("data", (data) => {
+    python.stderr.on('data', (data) => {
       errorOutput += data.toString();
     });
 
-    python.on("close", (code) => {
+    python.on('close', (code) => {
       if (code === 0) {
         resolve({ success: true });
       } else {
         // Include actual error details from Python
-        const errorMsg = errorOutput.trim() || "Unknown error";
+        const errorMsg = errorOutput.trim() || 'Unknown error';
         reject(new Error(`Failed to delete meeting: ${errorMsg}`));
       }
     });
@@ -1212,28 +1090,27 @@ ipcMain.handle("delete-meeting", async (event, meetingId) => {
 /**
  * Scan recordings directory and sync with database
  */
-ipcMain.handle("scan-recordings", async () => {
+ipcMain.handle('scan-recordings', async () => {
   return new Promise((resolve, reject) => {
-    const recordingsDir = path.join(app.getPath("userData"), "recordings");
+    const recordingsDir = path.join(app.getPath('userData'), 'recordings');
     const python = spawnTrackedPython([
-      path.join(pythonConfig.backendPath, "meeting_manager.py"),
-      "--recordings-dir",
-      recordingsDir,
-      "scan",
+      path.join(pythonConfig.backendPath, 'meeting_manager.py'),
+      '--recordings-dir', recordingsDir,
+      'scan'
     ]);
 
-    let output = "";
-    let errorOutput = "";
+    let output = '';
+    let errorOutput = '';
 
-    python.stdout.on("data", (data) => {
+    python.stdout.on('data', (data) => {
       output += data.toString();
     });
 
-    python.stderr.on("data", (data) => {
+    python.stderr.on('data', (data) => {
       errorOutput += data.toString();
     });
 
-    python.on("close", (code) => {
+    python.on('close', (code) => {
       if (code === 0) {
         try {
           const result = JSON.parse(output);
@@ -1242,7 +1119,7 @@ ipcMain.handle("scan-recordings", async () => {
           reject(new Error(`Failed to parse scan result: ${e.message}`));
         }
       } else {
-        const errorMsg = errorOutput.trim() || "Unknown error";
+        const errorMsg = errorOutput.trim() || 'Unknown error';
         reject(new Error(`Failed to scan recordings: ${errorMsg}`));
       }
     });
@@ -1252,47 +1129,40 @@ ipcMain.handle("scan-recordings", async () => {
 /**
  * Add a meeting (called after transcription)
  */
-ipcMain.handle("add-meeting", async (event, meetingData) => {
+ipcMain.handle('add-meeting', async (event, meetingData) => {
   return new Promise((resolve, reject) => {
-    const { audioPath, transcriptPath, duration, language, model, title } =
-      meetingData;
+    const { audioPath, transcriptPath, duration, language, model, title } = meetingData;
 
-    const recordingsDir = path.join(app.getPath("userData"), "recordings");
+    const recordingsDir = path.join(app.getPath('userData'), 'recordings');
     const args = [
-      path.join(pythonConfig.backendPath, "meeting_manager.py"),
-      "--recordings-dir",
-      recordingsDir,
-      "add",
-      "--audio",
-      audioPath,
-      "--transcript",
-      transcriptPath,
-      "--duration",
-      duration.toString(),
-      "--language",
-      language,
-      "--model",
-      model,
+      path.join(pythonConfig.backendPath, 'meeting_manager.py'),
+      '--recordings-dir', recordingsDir,
+      'add',
+      '--audio', audioPath,
+      '--transcript', transcriptPath,
+      '--duration', duration.toString(),
+      '--language', language,
+      '--model', model
     ];
 
     if (title) {
-      args.push("--title", title);
+      args.push('--title', title);
     }
 
     const python = spawnTrackedPython(args);
 
-    let output = "";
-    let errorOutput = "";
+    let output = '';
+    let errorOutput = '';
 
-    python.stdout.on("data", (data) => {
+    python.stdout.on('data', (data) => {
       output += data.toString();
     });
 
-    python.stderr.on("data", (data) => {
+    python.stderr.on('data', (data) => {
       errorOutput += data.toString();
     });
 
-    python.on("close", (code) => {
+    python.on('close', (code) => {
       if (code === 0) {
         try {
           const meeting = JSON.parse(output);
@@ -1301,7 +1171,7 @@ ipcMain.handle("add-meeting", async (event, meetingData) => {
           reject(new Error(`Failed to parse meeting: ${e.message}`));
         }
       } else {
-        const errorMsg = errorOutput.trim() || "Unknown error";
+        const errorMsg = errorOutput.trim() || 'Unknown error';
         reject(new Error(`Failed to add meeting: ${errorMsg}`));
       }
     });
@@ -1311,24 +1181,24 @@ ipcMain.handle("add-meeting", async (event, meetingData) => {
 /**
  * Check GPU availability (detect NVIDIA GPU)
  */
-ipcMain.handle("check-gpu", async () => {
+ipcMain.handle('check-gpu', async () => {
   return new Promise((resolve) => {
     const python = spawnTrackedPython([
-      "-c",
-      'import subprocess; result = subprocess.run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"], capture_output=True, text=True); print(result.stdout.strip() if result.returncode == 0 else "None")',
+      '-c',
+      'import subprocess; result = subprocess.run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"], capture_output=True, text=True); print(result.stdout.strip() if result.returncode == 0 else "None")'
     ]);
 
-    let output = "";
+    let output = '';
 
-    python.stdout.on("data", (data) => {
+    python.stdout.on('data', (data) => {
       output += data.toString();
     });
 
-    python.on("close", () => {
+    python.on('close', () => {
       const gpuName = output.trim();
       resolve({
-        hasGPU: gpuName !== "None" && gpuName !== "",
-        gpuName: gpuName !== "None" ? gpuName : null,
+        hasGPU: gpuName !== 'None' && gpuName !== '',
+        gpuName: gpuName !== 'None' ? gpuName : null
       });
     });
   });
@@ -1337,25 +1207,25 @@ ipcMain.handle("check-gpu", async () => {
 /**
  * Check CUDA installation status
  */
-ipcMain.handle("check-cuda", async () => {
+ipcMain.handle('check-cuda', async () => {
   return new Promise((resolve) => {
     const python = spawnTrackedPython([
-      "-c",
-      'try:\n    import torch\n    print("cuda_available:" + str(torch.cuda.is_available()))\n    if torch.cuda.is_available():\n        print("cuda_version:" + torch.version.cuda)\nexcept ImportError:\n    print("cuda_available:False")',
+      '-c',
+      'try:\n    import torch\n    print("cuda_available:" + str(torch.cuda.is_available()))\n    if torch.cuda.is_available():\n        print("cuda_version:" + torch.version.cuda)\nexcept ImportError:\n    print("cuda_available:False")'
     ]);
 
-    let output = "";
+    let output = '';
 
-    python.stdout.on("data", (data) => {
+    python.stdout.on('data', (data) => {
       output += data.toString();
     });
 
-    python.on("close", () => {
-      const cudaAvailable = output.includes("cuda_available:True");
+    python.on('close', () => {
+      const cudaAvailable = output.includes('cuda_available:True');
       const versionMatch = output.match(/cuda_version:([\d.]+)/);
       resolve({
         installed: cudaAvailable,
-        version: versionMatch ? versionMatch[1] : null,
+        version: versionMatch ? versionMatch[1] : null
       });
     });
   });
@@ -1364,73 +1234,70 @@ ipcMain.handle("check-cuda", async () => {
 /**
  * Install GPU acceleration packages
  */
-ipcMain.handle("install-gpu", async () => {
+ipcMain.handle('install-gpu', async () => {
   return new Promise((resolve, reject) => {
     const packages = [
-      "torch",
-      "torchvision",
-      "torchaudio",
-      "--index-url",
-      "https://download.pytorch.org/whl/cu121",
+      'torch',
+      'torchvision',
+      'torchaudio',
+      '--index-url',
+      'https://download.pytorch.org/whl/cu121'
     ];
 
     const python = spawnTrackedPython([
-      "-m",
-      "pip",
-      "install",
+      '-m',
+      'pip',
+      'install',
       ...packages,
-      "--no-warn-script-location",
+      '--no-warn-script-location'
     ]);
 
-    let output = "";
-    let errorOutput = "";
+    let output = '';
+    let errorOutput = '';
 
-    python.stdout.on("data", (data) => {
+    python.stdout.on('data', (data) => {
       const text = data.toString();
       output += text;
       // Send progress to renderer
-      mainWindow.webContents.send("gpu-install-progress", text);
+      mainWindow.webContents.send('gpu-install-progress', text);
     });
 
-    python.stderr.on("data", (data) => {
+    python.stderr.on('data', (data) => {
       const text = data.toString();
       errorOutput += text;
-      mainWindow.webContents.send("gpu-install-progress", text);
+      mainWindow.webContents.send('gpu-install-progress', text);
     });
 
-    python.on("close", (code) => {
+    python.on('close', (code) => {
       if (code === 0) {
         // Install CUDA libraries
-        const cudaPackages = ["nvidia-cublas-cu12", "nvidia-cudnn-cu12"];
+        const cudaPackages = ['nvidia-cublas-cu12', 'nvidia-cudnn-cu12'];
 
         const cudaProcess = spawnTrackedPython([
-          "-m",
-          "pip",
-          "install",
+          '-m',
+          'pip',
+          'install',
           ...cudaPackages,
-          "--no-warn-script-location",
+          '--no-warn-script-location'
         ]);
 
-        let cudaErrorOutput = "";
+        let cudaErrorOutput = '';
 
-        cudaProcess.stdout.on("data", (data) => {
-          mainWindow.webContents.send("gpu-install-progress", data.toString());
+        cudaProcess.stdout.on('data', (data) => {
+          mainWindow.webContents.send('gpu-install-progress', data.toString());
         });
 
-        cudaProcess.stderr.on("data", (data) => {
+        cudaProcess.stderr.on('data', (data) => {
           const text = data.toString();
           cudaErrorOutput += text;
-          mainWindow.webContents.send("gpu-install-progress", text);
+          mainWindow.webContents.send('gpu-install-progress', text);
         });
 
-        cudaProcess.on("close", (cudaCode) => {
+        cudaProcess.on('close', (cudaCode) => {
           if (cudaCode === 0) {
-            resolve({
-              success: true,
-              message: "GPU acceleration installed successfully",
-            });
+            resolve({ success: true, message: 'GPU acceleration installed successfully' });
           } else {
-            const errorMsg = cudaErrorOutput.trim() || "Unknown error";
+            const errorMsg = cudaErrorOutput.trim() || 'Unknown error';
             reject(new Error(`Failed to install CUDA libraries: ${errorMsg}`));
           }
         });
@@ -1444,35 +1311,29 @@ ipcMain.handle("install-gpu", async () => {
 /**
  * Uninstall GPU packages
  */
-ipcMain.handle("uninstall-gpu", async () => {
+ipcMain.handle('uninstall-gpu', async () => {
   return new Promise((resolve, reject) => {
-    const packages = [
-      "torch",
-      "torchvision",
-      "torchaudio",
-      "nvidia-cublas-cu12",
-      "nvidia-cudnn-cu12",
-    ];
+    const packages = ['torch', 'torchvision', 'torchaudio', 'nvidia-cublas-cu12', 'nvidia-cudnn-cu12'];
 
     const python = spawnTrackedPython([
-      "-m",
-      "pip",
-      "uninstall",
-      "-y",
-      ...packages,
+      '-m',
+      'pip',
+      'uninstall',
+      '-y',
+      ...packages
     ]);
 
-    let errorOutput = "";
+    let errorOutput = '';
 
-    python.stderr.on("data", (data) => {
+    python.stderr.on('data', (data) => {
       errorOutput += data.toString();
     });
 
-    python.on("close", (code) => {
+    python.on('close', (code) => {
       if (code === 0) {
         resolve({ success: true });
       } else {
-        const errorMsg = errorOutput.trim() || "Unknown error";
+        const errorMsg = errorOutput.trim() || 'Unknown error';
         reject(new Error(`Failed to uninstall GPU packages: ${errorMsg}`));
       }
     });
@@ -1480,53 +1341,49 @@ ipcMain.handle("uninstall-gpu", async () => {
 });
 
 /**
+ * Get platform information (for UI platform detection)
+ */
+ipcMain.handle('get-platform', async () => {
+  return process.platform;
+});
+
+ipcMain.handle('get-arch', async () => {
+  return process.arch;
+});
+
+/**
  * Get system info (versions)
  */
-ipcMain.handle("get-system-info", async () => {
+ipcMain.handle('get-system-info', async () => {
   return new Promise((resolve) => {
-    const python = spawnTrackedPython(["--version"]);
+    const python = spawnTrackedPython(['--version']);
 
-    let pythonVersion = "";
+    let pythonVersion = '';
 
-    python.stdout.on("data", (data) => {
+    python.stdout.on('data', (data) => {
       pythonVersion += data.toString();
     });
 
-    python.stderr.on("data", (data) => {
+    python.stderr.on('data', (data) => {
       pythonVersion += data.toString();
     });
 
-    python.on("close", () => {
+    python.on('close', () => {
       resolve({
         app: app.getVersion(),
         electron: process.versions.electron,
-        python: pythonVersion.replace("Python ", "").trim(),
+        python: pythonVersion.replace('Python ', '').trim()
       });
     });
   });
 });
 
 /**
- * Get platform information
- */
-ipcMain.handle("get-platform", async () => {
-  return process.platform;
-});
-
-/**
- * Get architecture information
- */
-ipcMain.handle("get-arch", async () => {
-  return process.arch;
-});
-
-
-/**
  * Open update download page in browser
  */
-ipcMain.handle("download-update", async (event, downloadUrl) => {
+ipcMain.handle('download-update', async (event, downloadUrl) => {
   openDownloadPage(downloadUrl);
   return { success: true };
 });
 
-console.log("Meeting Transcriber - Main process started");
+console.log('Meeting Transcriber - Main process started');

@@ -491,7 +491,10 @@ class MacOSAudioRecorder:
     def get_audio_levels(self):
         """Get current audio levels for visualization."""
         with self.level_lock:
-            return (self.mic_level, self.desktop_level)
+            # Ensure values are valid floats between 0.0 and 1.0
+            mic = max(0.0, min(1.0, float(self.mic_level) if self.mic_level is not None else 0.0))
+            desktop = max(0.0, min(1.0, float(self.desktop_level) if self.desktop_level is not None else 0.0))
+            return (mic, desktop)
 
     def is_recording(self):
         """Check if currently recording."""
@@ -571,16 +574,21 @@ def main():
         # PERFORMANCE: 5 FPS updates to minimize CPU/IPC overhead (matches Windows)
         try:
             while not stop_event.is_set() and recorder.is_running:
-                # Send audio levels as JSON to stdout (Electron will parse this)
-                mic, desktop = recorder.get_audio_levels()
-                levels = {
-                    "type": "levels",
-                    "mic": round(mic, 3),
-                    "desktop": round(desktop, 3)
-                }
-                print(json.dumps(levels), flush=True)
+                try:
+                    # Send audio levels as JSON to stdout (Electron will parse this)
+                    mic, desktop = recorder.get_audio_levels()
+                    levels = {
+                        "type": "levels",
+                        "mic": round(mic, 3),
+                        "desktop": round(desktop, 3)
+                    }
+                    print(json.dumps(levels), flush=True)
+                except Exception as e:
+                    # Don't crash recording if visualization fails
+                    print(f"Warning: Failed to send audio levels: {e}", file=sys.stderr)
+
                 time.sleep(0.2)  # 5 FPS updates (200ms interval)
-            
+
             print(f"\nStopping recording...", file=sys.stderr)
             recorder.stop_recording()
         except KeyboardInterrupt:

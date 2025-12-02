@@ -57,9 +57,15 @@ No existing solution offered all of this in one package, so I built it.
 
 1. **Download** the latest `.dmg` file from [Releases](https://github.com/AmirArshad/meeting-transcriber/releases)
 2. **Open** the DMG and drag Meeting Transcriber to Applications
-3. **Right-click** the app and select "Open" (first launch only, due to unsigned binary)
-4. **Grant** microphone permissions when prompted
-5. **Select** your audio devices and start recording!
+3. **⚠️ IMPORTANT:** Right-click the app → select "Open" (NOT double-click)
+   - If you double-click, macOS will show '"Meeting Transcriber" is damaged'
+   - This is a security warning for unsigned apps, NOT actual damage
+   - Right-click → "Open" bypasses this Gatekeeper check
+4. **Click** "Open" in the confirmation dialog
+5. **Grant** microphone permissions when prompted
+6. **Select** your audio devices and start recording!
+
+> **Alternative (if right-click doesn't work):** Run in Terminal: `xattr -d com.apple.quarantine /Applications/Meeting\ Transcriber.app`
 
 **First run:** Whisper model (~500MB) downloads automatically on first transcription.
 
@@ -198,6 +204,7 @@ Whisper itself supports **99 languages total** - the full list can be customized
 
 - **User Guides:**
 
+  - [🔧 Troubleshooting](docs/TROUBLESHOOTING.md) - **Common issues & solutions**
   - [Transcription Tips](docs/TRANSCRIPTION_GUIDE.md) - Get the best results
   - [Meeting Features](docs/MEETING_TRANSCRIPTION.md) - Using the history viewer
 
