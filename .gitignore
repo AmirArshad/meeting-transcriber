@@ -11,6 +11,7 @@ ENV/
 dist/
 build/
 !build/icon.ico
+!build/icon.icns
 !build/iconTemplate.png
 !build/iconTemplate@2x.png
 !build/entitlements.mac.plist
