@@ -151,7 +151,14 @@ class DeviceManager:
         """macOS-specific device enumeration using sounddevice."""
         input_devices = []
         output_devices = []
-        loopback_devices = []  # macOS doesn't have native loopback, will be empty for now
+        # macOS doesn't have native loopback, so we provide a virtual one for ScreenCaptureKit
+        loopback_devices = [{
+            "id": -1,
+            "name": "System Audio (ScreenCaptureKit)",
+            "channels": 2,
+            "sample_rate": 48000,
+            "host_api": "ScreenCaptureKit"
+        }]
 
         devices = sd.query_devices()
 

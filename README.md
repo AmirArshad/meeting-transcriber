@@ -46,6 +46,7 @@ No existing solution offered all of this in one package, so I built it.
 ### For End Users (Installer)
 
 **Windows:**
+
 1. **Download** the latest `.exe` installer from [Releases](https://github.com/AmirArshad/meeting-transcriber/releases)
 2. **Run** `Meeting Transcriber Setup.exe` (may show SmartScreen warning - click "More info" → "Run anyway")
 3. **Launch** the app from Start Menu
@@ -53,6 +54,7 @@ No existing solution offered all of this in one package, so I built it.
 5. **Click** "Start Recording" and transcribe!
 
 **macOS:**
+
 1. **Download** the latest `.dmg` file from [Releases](https://github.com/AmirArshad/meeting-transcriber/releases)
 2. **Open** the DMG and drag Meeting Transcriber to Applications
 3. **Right-click** the app and select "Open" (first launch only, due to unsigned binary)
@@ -144,12 +146,14 @@ Whisper itself supports **99 languages total** - the full list can be customized
 ### Windows
 
 **Minimum:**
+
 - **OS:** Windows 10/11 (64-bit)
 - **RAM:** 4 GB
 - **Storage:** 2 GB free space
 - **Audio:** Any microphone + audio interface
 
 **Recommended:**
+
 - **OS:** Windows 11 (64-bit)
 - **RAM:** 8 GB
 - **Storage:** 10 GB free space (for models + recordings)
@@ -159,6 +163,7 @@ Whisper itself supports **99 languages total** - the full list can be customized
 ### macOS
 
 **Minimum:**
+
 - **OS:** macOS 13 (Ventura) or later
 - **Chip:** Apple Silicon (M1/M2/M3/M4)
 - **RAM:** 4 GB
@@ -166,6 +171,7 @@ Whisper itself supports **99 languages total** - the full list can be customized
 - **Audio:** Any microphone
 
 **Recommended:**
+
 - **OS:** macOS 14 (Sonoma) or later
 - **Chip:** M3/M4 (better Metal GPU performance)
 - **RAM:** 8 GB
@@ -267,6 +273,7 @@ This project is licensed under the MIT License - see [LICENSE.txt](LICENSE.txt) 
 ### Planned 📋
 
 - [ ] Speaker diarization (identify who's speaking)
+- [ ] **macOS Advanced Audio:** Real-time streaming (low RAM), App-specific capture, Real-time mixing
 - [ ] Real-time transcription
 - [ ] Export to various formats (SRT, VTT, DOCX)
 

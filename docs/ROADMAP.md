@@ -90,6 +90,22 @@ No features currently in development.
 
 ---
 
+#### 2. macOS Audio Architecture (Advanced)
+
+**Status:** Planned
+**Priority:** High
+**Description:** Advanced audio features for macOS using ScreenCaptureKit
+
+**Features:**
+
+1.  **Real-Time Streaming:** Write audio to disk during recording to keep RAM usage low (flat ~50MB).
+2.  **App-Specific Capture:** Capture audio only from specific apps (e.g., Zoom, Chrome) to exclude system notifications.
+3.  **Real-Time Mixing:** Mix mic and desktop audio on-the-fly to eliminate post-processing wait times.
+
+**Reference:** [MACOS_AUDIO_ARCHITECTURE.md](features/MACOS_AUDIO_ARCHITECTURE.md)
+
+---
+
 #### 3. Real-Time Transcription
 
 **Status:** Planned
