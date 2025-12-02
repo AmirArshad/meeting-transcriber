@@ -617,17 +617,26 @@ ipcMain.handle('start-recording', async (event, options) => {
     }
     const outputPath = path.join(recordingsDir, filename);
 
-    // FIX 1 (REFINED): Enable power save blocker to keep process running
-    // Use 'prevent-display-sleep' instead of 'prevent-app-suspension' for better battery life
-    // This prevents display from sleeping but allows system to enter low-power states
+    // FIX 1: Enable power save blocker to keep recording running
+    // Platform-specific approach:
+    // - macOS: Use 'prevent-app-suspension' to prevent App Nap from pausing recording
+    // - Windows: Use 'prevent-display-sleep' for better battery life (Python process is separate)
     if (powerSaveId === null) {
-      powerSaveId = powerSaveBlocker.start('prevent-display-sleep');
-      console.log('Power save blocker enabled - preventing display sleep during recording');
+      const isMacForPower = process.platform === 'darwin';
+      const blockerType = isMacForPower ? 'prevent-app-suspension' : 'prevent-display-sleep';
+
+      powerSaveId = powerSaveBlocker.start(blockerType);
+      console.log(
+        `Power save blocker enabled (${blockerType}) - recording will continue in background`
+      );
     }
 
-    // Start Python recording process
+    // Start Python recording process (platform-specific recorder)
+    const isMac = process.platform === 'darwin';
+    const recorderScript = isMac ? 'macos_recorder.py' : 'windows_recorder.py';
+
     pythonProcess = spawnTrackedPython([
-      path.join(pythonConfig.backendPath, 'audio', 'windows_recorder.py'),
+      path.join(pythonConfig.backendPath, 'audio', recorderScript),
       '--mic', micId.toString(),
       '--loopback', loopbackId.toString(),
       '--output', outputPath
