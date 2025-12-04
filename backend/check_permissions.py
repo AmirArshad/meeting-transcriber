@@ -22,6 +22,49 @@ if platform.system() != 'Darwin':
     sys.exit(0)
 
 
+def get_macos_version() -> tuple:
+    """
+    Get macOS version as tuple (major, minor).
+
+    Returns:
+        Tuple of (major, minor) version numbers, e.g., (14, 0) for Sonoma
+    """
+    try:
+        version_str = platform.mac_ver()[0]
+        parts = version_str.split('.')
+        major = int(parts[0]) if len(parts) > 0 else 0
+        minor = int(parts[1]) if len(parts) > 1 else 0
+        return (major, minor)
+    except Exception:
+        return (0, 0)
+
+
+def check_macos_version_compatibility() -> tuple:
+    """
+    Check if macOS version supports ScreenCaptureKit.
+
+    ScreenCaptureKit requires macOS 13 (Ventura) or later.
+
+    Returns:
+        Tuple of (is_compatible, version_string, warning_message)
+    """
+    version = get_macos_version()
+    version_str = f"{version[0]}.{version[1]}"
+
+    if version[0] >= 13:
+        return True, version_str, None
+    elif version[0] >= 12:
+        return False, version_str, (
+            f"macOS {version_str} detected. ScreenCaptureKit requires macOS 13 (Ventura) or later. "
+            "Desktop audio capture will not be available. Only microphone recording will work."
+        )
+    else:
+        return False, version_str, (
+            f"macOS {version_str} detected. This version is not supported. "
+            "Please upgrade to macOS 13 (Ventura) or later for full functionality."
+        )
+
+
 def check_microphone_permission() -> tuple[bool, str]:
     """
     Check if the app has microphone permission.
@@ -97,15 +140,27 @@ def main():
     """
     Check all permissions and output JSON result.
     """
+    # Check macOS version compatibility first
+    version_compatible, version_str, version_warning = check_macos_version_compatibility()
+
     # Check microphone permission
     mic_granted, mic_error = check_microphone_permission()
 
-    # Check screen recording permission
-    screen_granted, screen_error = check_screen_recording_permission()
+    # Check screen recording permission (only if macOS version supports it)
+    if version_compatible:
+        screen_granted, screen_error = check_screen_recording_permission()
+    else:
+        screen_granted = False
+        screen_error = version_warning
 
     # Prepare result
     result = {
         "platform": "darwin",
+        "macos_version": {
+            "version": version_str,
+            "compatible": version_compatible,
+            "warning": version_warning
+        },
         "microphone": {
             "granted": mic_granted,
             "error": mic_error if not mic_granted else None
@@ -124,10 +179,14 @@ def main():
             "System Settings > Privacy & Security > Microphone"
         )
 
-    if not screen_granted:
+    if not screen_granted and version_compatible:
         result["screen_recording"]["help"] = (
             "Grant Screen Recording permission in: "
             "System Settings > Privacy & Security > Screen Recording"
+        )
+    elif not version_compatible:
+        result["screen_recording"]["help"] = (
+            "Upgrade to macOS 13 (Ventura) or later to enable desktop audio capture."
         )
 
     # Output JSON

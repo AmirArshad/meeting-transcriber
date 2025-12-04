@@ -147,6 +147,15 @@ class MacOSAudioRecorder:
         else:
             print(f"Desktop audio capture disabled (ScreenCaptureKit not available)", file=sys.stderr)
             print(f"  Install PyObjC to enable: pip install pyobjc-framework-ScreenCaptureKit", file=sys.stderr)
+            # Send JSON warning to Electron for UI display
+            warning = {
+                "type": "warning",
+                "code": "NO_DESKTOP_AUDIO",
+                "message": "Desktop audio capture is disabled. Only microphone will be recorded.",
+                "help": "Install PyObjC framework to enable desktop audio capture.",
+                "install_cmd": "pip install pyobjc-framework-ScreenCaptureKit"
+            }
+            print(json.dumps(warning), flush=True)
 
         print(f"Recording started!", file=sys.stderr)
 
@@ -486,11 +495,90 @@ class MacOSAudioRecorder:
                 print(f"  Original: {input_size / 1024 / 1024:.1f} MB", file=sys.stderr)
                 print(f"  Compressed: {output_size / 1024 / 1024:.1f} MB", file=sys.stderr)
                 print(f"  Savings: {ratio:.1f}%", file=sys.stderr)
+
+                # Verify the output file integrity
+                if not self._verify_recording_integrity(output_path):
+                    print(f"WARNING: Recording integrity check failed", file=sys.stderr)
             else:
                 print(f"ERROR: ffmpeg failed: {result.stderr}", file=sys.stderr)
 
         except Exception as e:
             print(f"ERROR during compression: {e}", file=sys.stderr)
+
+    def _verify_recording_integrity(self, file_path):
+        """
+        Verify the recording file is valid and playable.
+
+        Uses ffprobe to check file integrity.
+
+        Returns:
+            True if file is valid, False otherwise.
+        """
+        import subprocess
+        import shutil
+
+        # Check if ffprobe is available
+        ffprobe_path = shutil.which('ffprobe')
+        if not ffprobe_path:
+            print(f"  Skipping integrity check (ffprobe not found)", file=sys.stderr)
+            return True  # Assume OK if we can't check
+
+        try:
+            cmd = [
+                ffprobe_path,
+                '-v', 'error',
+                '-show_format',
+                '-show_streams',
+                '-of', 'json',
+                file_path
+            ]
+
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=30
+            )
+
+            if result.returncode != 0:
+                print(f"  Integrity check FAILED: {result.stderr}", file=sys.stderr)
+                return False
+
+            # Parse ffprobe output
+            probe_data = json.loads(result.stdout)
+
+            # Check for valid format
+            if 'format' not in probe_data:
+                print(f"  Integrity check FAILED: No format info", file=sys.stderr)
+                return False
+
+            # Check for audio stream
+            streams = probe_data.get('streams', [])
+            audio_streams = [s for s in streams if s.get('codec_type') == 'audio']
+
+            if not audio_streams:
+                print(f"  Integrity check FAILED: No audio streams", file=sys.stderr)
+                return False
+
+            # Check duration is positive
+            duration = float(probe_data['format'].get('duration', 0))
+            if duration <= 0:
+                print(f"  Integrity check FAILED: Invalid duration ({duration}s)", file=sys.stderr)
+                return False
+
+            print(f"  Integrity check: OK ({duration:.1f}s, {audio_streams[0].get('codec_name', 'unknown')})", file=sys.stderr)
+            return True
+
+        except subprocess.TimeoutExpired:
+            print(f"  Integrity check TIMEOUT", file=sys.stderr)
+            return False
+        except json.JSONDecodeError as e:
+            print(f"  Integrity check ERROR: Invalid ffprobe output: {e}", file=sys.stderr)
+            return False
+        except Exception as e:
+            print(f"  Integrity check ERROR: {e}", file=sys.stderr)
+            return False
 
     def get_audio_levels(self):
         """Get current audio levels for visualization."""

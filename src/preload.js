@@ -16,6 +16,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   checkModelDownloaded: (modelSize) => ipcRenderer.invoke('check-model-downloaded', modelSize),
   downloadModel: (modelSize) => ipcRenderer.invoke('download-model', modelSize),
 
+  // Pre-recording safety checks
+  validateDevices: (options) => ipcRenderer.invoke('validate-devices', options),
+  checkDiskSpace: () => ipcRenderer.invoke('check-disk-space'),
+  checkAudioOutput: () => ipcRenderer.invoke('check-audio-output'),
+
   // Recording controls
   startRecording: (options) => ipcRenderer.invoke('start-recording', options),
   stopRecording: () => ipcRenderer.invoke('stop-recording'),
@@ -36,7 +41,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   installGPU: () => ipcRenderer.invoke('install-gpu'),
   uninstallGPU: () => ipcRenderer.invoke('uninstall-gpu'),
   getSystemInfo: () => ipcRenderer.invoke('get-system-info'),
-  
+
   // Platform detection
   getPlatform: () => ipcRenderer.invoke('get-platform'),
   getArch: () => ipcRenderer.invoke('get-arch'),
