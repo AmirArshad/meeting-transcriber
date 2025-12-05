@@ -44,7 +44,8 @@ class AudioRecorder:
         channels: int = 2,
         chunk_size: int = 4096,
         mic_volume: float = 1.0,
-        desktop_volume: float = 1.0
+        desktop_volume: float = 1.0,
+        preroll_seconds: float = None  # None = use default 1.5s, 0 = no preroll (for production with countdown)
     ):
         """Initialize the recorder."""
         self.mic_device_id = mic_device_id
@@ -80,8 +81,27 @@ class AudioRecorder:
 
         if loopback_device_id >= 0:
             loopback_info = self.pa.get_device_info_by_index(loopback_device_id)
-            self.loopback_sample_rate = int(loopback_info['defaultSampleRate'])
-            self.loopback_channels = int(loopback_info['maxInputChannels'])
+
+            # COMPATIBILITY FIX: Probe actual working sample rate instead of trusting default
+            # This prevents distorted audio on Bluetooth headsets and other devices
+            # where reported rate doesn't match actual operating rate
+            print(f"", file=sys.stderr)
+            print(f"Initializing loopback device...", file=sys.stderr)
+            try:
+                self.loopback_sample_rate, self.loopback_channels = self._probe_loopback_sample_rate(
+                    loopback_device_id,
+                    loopback_info
+                )
+            except RuntimeError as e:
+                # If probing fails completely, fall back to default but warn user
+                print(f"", file=sys.stderr)
+                print(f"⚠️  WARNING: Sample rate probing failed!", file=sys.stderr)
+                print(f"⚠️  Using default rate - audio may be distorted", file=sys.stderr)
+                print(f"⚠️  Error: {e}", file=sys.stderr)
+                print(f"", file=sys.stderr)
+                self.loopback_sample_rate = int(loopback_info['defaultSampleRate'])
+                self.loopback_channels = int(loopback_info['maxInputChannels'])
+
             self.mixing_mode = True
         else:
             self.loopback_sample_rate = None
@@ -101,10 +121,31 @@ class AudioRecorder:
         self.lock = threading.Lock()
 
         # Pre-roll tracking (discard first ~1.5 seconds for device warm-up)
-        # First recordings need extra time for device initialization
-        self.preroll_frames = int(1.5 * self.mic_sample_rate / self.chunk_size)
+        # PRODUCTION FIX: In the real app, the 3-second countdown handles warm-up
+        # so we can skip preroll entirely. For direct API usage (tests), we still need it.
+        self.preroll_seconds = 1.5 if preroll_seconds is None else preroll_seconds
+
+        if self.preroll_seconds > 0:
+            self.preroll_frames_mic = int(self.preroll_seconds * self.mic_sample_rate / self.chunk_size)
+            # SYNCHRONIZATION FIX: Both streams must skip the SAME amount of TIME
+            # Even though multi-channel devices have delayed first callbacks,
+            # we can't skip less frames or they'll be out of sync
+            # Instead, we accept that we might trim a bit of the start
+            if self.mixing_mode and self.loopback_sample_rate > 0:
+                # Calculate desktop preroll to match SAME time duration as mic
+                self.preroll_frames_desktop = int(self.preroll_seconds * self.loopback_sample_rate / self.chunk_size)
+            else:
+                self.preroll_frames_desktop = 0
+        else:
+            # No preroll - countdown in production app handles this (RECOMMENDED)
+            self.preroll_frames_mic = 0
+            self.preroll_frames_desktop = 0
+
         self.mic_frame_count = 0
         self.desktop_frame_count = 0
+
+        # Time-based synchronization (more reliable than frame counts)
+        self.recording_start_time = None  # Set when recording actually starts
 
         # Audio levels (0.0 to 1.0)
         self.mic_level = 0.0
@@ -127,6 +168,81 @@ class AudioRecorder:
         # Store original chunk size before any modifications
         self.original_chunk_size = chunk_size
 
+    def _probe_loopback_sample_rate(self, device_id, device_info):
+        """
+        Probe loopback device to find actual working sample rate.
+
+        COMPATIBILITY FIX: Bluetooth headsets and some other devices may report
+        a default sample rate that doesn't match their actual operating rate.
+        This causes severe pitch distortion (slow, bassy "monster movie" sound).
+
+        This method tries common sample rates in priority order to find one that works:
+        1. Reported default rate
+        2. Common high-quality rates (48000, 44100)
+        3. Common Bluetooth headset rates (32000, 16000, 8000)
+
+        Args:
+            device_id: PyAudio device index
+            device_info: Device info dict from PyAudio
+
+        Returns:
+            (working_rate, channels) tuple
+
+        Raises:
+            RuntimeError: If no working sample rate is found
+        """
+        default_rate = int(device_info['defaultSampleRate'])
+        channels = int(device_info['maxInputChannels'])
+
+        # Priority order: default first, then high quality, then Bluetooth rates
+        rates_to_try = [default_rate]
+
+        # Add standard rates if not already in list
+        for rate in [48000, 44100, 32000, 16000, 8000]:
+            if rate != default_rate and rate not in rates_to_try:
+                rates_to_try.append(rate)
+
+        print(f"Probing loopback device sample rates...", file=sys.stderr)
+        print(f"  Device: {device_info.get('name', 'Unknown')}", file=sys.stderr)
+        if channels > 2:
+            print(f"  Device has {channels} channels (surround sound), will downmix to stereo after recording", file=sys.stderr)
+        print(f"  Trying rates: {rates_to_try}", file=sys.stderr)
+
+        for rate in rates_to_try:
+            try:
+                # Attempt to open stream with this rate
+                print(f"  Testing {rate} Hz...", end=' ', file=sys.stderr)
+                test_stream = self.pa.open(
+                    format=pyaudio.paInt16,
+                    channels=channels,
+                    rate=rate,
+                    input=True,
+                    input_device_index=device_id,
+                    frames_per_buffer=1024
+                )
+
+                # If successful, close and return this rate
+                test_stream.close()
+                print(f"✓ Success!", file=sys.stderr)
+                print(f"✓ Loopback device will use {rate} Hz, {channels} channel(s)", file=sys.stderr)
+                return (rate, channels)
+
+            except Exception as e:
+                print(f"✗ Failed: {str(e)[:50]}", file=sys.stderr)
+                continue
+
+        # All rates failed
+        raise RuntimeError(
+            f"Could not find working sample rate for loopback device {device_id}.\n"
+            f"Tried rates: {rates_to_try}\n"
+            f"Device: {device_info.get('name', 'Unknown')}\n\n"
+            f"Suggestions:\n"
+            f"  1. Try selecting a different desktop audio device\n"
+            f"  2. Check that the device is not in use by another application\n"
+            f"  3. If using Bluetooth, ensure headset is in stereo mode (not headset/hands-free mode)\n"
+            f"  4. Restart the audio device or reconnect Bluetooth"
+        )
+
     def _mic_callback(self, in_data, frame_count, time_info, status):
         """Callback for microphone."""
         # FIX 6: Update watchdog timestamp
@@ -138,8 +254,16 @@ class AudioRecorder:
         if self.is_recording:
             with self.lock:
                 self.mic_frame_count += 1
-                # Skip pre-roll frames (first ~1.5 seconds) to avoid device warm-up artifacts
-                if self.mic_frame_count > self.preroll_frames:
+
+                # TIME-BASED SYNCHRONIZATION: Use wall-clock time instead of frame counts
+                # This ensures both streams skip the same real-world time duration
+                if self.recording_start_time is None:
+                    self.recording_start_time = time.time()
+
+                elapsed = time.time() - self.recording_start_time
+
+                # Skip pre-roll based on TIME, not frame counts
+                if elapsed >= self.preroll_seconds:
                     self.mic_frames.append(in_data)
                 
                 # Calculate level for visualization
@@ -168,8 +292,16 @@ class AudioRecorder:
         if self.is_recording:
             with self.lock:
                 self.desktop_frame_count += 1
-                # Skip pre-roll frames (first ~1.5 seconds) to avoid device warm-up artifacts
-                if self.desktop_frame_count > self.preroll_frames:
+
+                # TIME-BASED SYNCHRONIZATION: Use wall-clock time instead of frame counts
+                # This ensures both streams skip the same real-world time duration
+                if self.recording_start_time is None:
+                    self.recording_start_time = time.time()
+
+                elapsed = time.time() - self.recording_start_time
+
+                # Skip pre-roll based on TIME, not frame counts
+                if elapsed >= self.preroll_seconds:
                     self.desktop_frames.append(in_data)
 
                 # Calculate level for visualization
@@ -203,8 +335,14 @@ class AudioRecorder:
             print(f"Windows detected: Using larger audio buffer ({self.chunk_size} frames) for background resilience", file=sys.stderr)
 
             # CRITICAL FIX: Recalculate preroll_frames with new chunk size
-            self.preroll_frames = int(1.5 * self.mic_sample_rate / self.chunk_size)
-            print(f"  Adjusted preroll to {self.preroll_frames} frames", file=sys.stderr)
+            if self.preroll_seconds > 0:
+                self.preroll_frames_mic = int(self.preroll_seconds * self.mic_sample_rate / self.chunk_size)
+                if self.mixing_mode and self.loopback_sample_rate > 0:
+                    # Recalculate desktop preroll - MUST match same time duration for sync
+                    self.preroll_frames_desktop = int(self.preroll_seconds * self.loopback_sample_rate / self.chunk_size)
+                print(f"  Adjusted preroll: mic={self.preroll_frames_mic} frames, desktop={self.preroll_frames_desktop} frames", file=sys.stderr)
+            else:
+                print(f"  Preroll disabled (using countdown)", file=sys.stderr)
 
         # NOTE: Thread priority boost removed - it only affects main thread, not audio callbacks
         # PyAudio's internal callback threads cannot be easily accessed from Python
@@ -245,7 +383,9 @@ class AudioRecorder:
                 raise RuntimeError(f"Failed to open microphone stream (device {self.mic_device_id}): {e}")
 
         if self.mixing_mode:
-            # Open desktop stream with error handling
+            # COMPATIBILITY FIX: Open desktop stream with robust fallback
+            # If the probed rate doesn't work at recording time (device state changed),
+            # try re-probing to find current working rate
             try:
                 self.desktop_stream = self.pa.open(
                     format=pyaudio.paInt16,
@@ -256,14 +396,70 @@ class AudioRecorder:
                     frames_per_buffer=self.chunk_size,
                     stream_callback=self._desktop_callback
                 )
-                print(f"✓ Desktop audio stream opened successfully", file=sys.stderr)
+                print(f"✓ Desktop audio stream opened at {self.loopback_sample_rate} Hz", file=sys.stderr)
+
             except Exception as e:
-                # Close mic stream if desktop fails
-                if self.mic_stream:
-                    self.mic_stream.stop_stream()
-                    self.mic_stream.close()
-                    self.mic_stream = None
-                raise RuntimeError(f"Failed to open desktop audio stream (device {self.loopback_device_id}): {e}")
+                print(f"", file=sys.stderr)
+                print(f"⚠️  Failed to open loopback at {self.loopback_sample_rate} Hz", file=sys.stderr)
+                print(f"⚠️  Error: {e}", file=sys.stderr)
+                print(f"", file=sys.stderr)
+
+                # Try re-probing in case device changed state since initialization
+                # (e.g., Bluetooth switched profiles, device sample rate changed)
+                print(f"Attempting to re-probe loopback device...", file=sys.stderr)
+                try:
+                    loopback_info = self.pa.get_device_info_by_index(self.loopback_device_id)
+                    new_rate, new_channels = self._probe_loopback_sample_rate(
+                        self.loopback_device_id,
+                        loopback_info
+                    )
+
+                    # Update to new detected rate
+                    if new_rate != self.loopback_sample_rate or new_channels != self.loopback_channels:
+                        print(f"", file=sys.stderr)
+                        print(f"📢 Device configuration changed:", file=sys.stderr)
+                        print(f"   Old: {self.loopback_sample_rate} Hz, {self.loopback_channels} ch", file=sys.stderr)
+                        print(f"   New: {new_rate} Hz, {new_channels} ch", file=sys.stderr)
+                        print(f"", file=sys.stderr)
+                        self.loopback_sample_rate = new_rate
+                        self.loopback_channels = new_channels
+
+                    # Try again with new rate
+                    self.desktop_stream = self.pa.open(
+                        format=pyaudio.paInt16,
+                        channels=self.loopback_channels,
+                        rate=self.loopback_sample_rate,
+                        input=True,
+                        input_device_index=self.loopback_device_id,
+                        frames_per_buffer=self.chunk_size,
+                        stream_callback=self._desktop_callback
+                    )
+                    print(f"✓ Desktop audio stream opened at {self.loopback_sample_rate} Hz (after re-probe)", file=sys.stderr)
+
+                except Exception as e2:
+                    # Close mic stream if desktop fails completely
+                    if self.mic_stream:
+                        self.mic_stream.stop_stream()
+                        self.mic_stream.close()
+                        self.mic_stream = None
+
+                    # Provide detailed error with troubleshooting steps
+                    raise RuntimeError(
+                        f"Failed to open desktop audio stream after multiple attempts:\n\n"
+                        f"First attempt error:\n"
+                        f"  {str(e)}\n\n"
+                        f"Re-probe attempt error:\n"
+                        f"  {str(e2)}\n\n"
+                        f"Troubleshooting suggestions:\n"
+                        f"  1. Try selecting a different desktop audio device\n"
+                        f"  2. Check that the device is not in use by another application\n"
+                        f"  3. If using Bluetooth headset:\n"
+                        f"     - Ensure it's in 'Stereo' mode, not 'Headset/Hands-free' mode\n"
+                        f"     - Try disconnecting and reconnecting the Bluetooth device\n"
+                        f"     - In Windows Sound settings, set the Bluetooth device as default\n"
+                        f"  4. Restart the application and try again\n"
+                        f"  5. As a workaround, you can record microphone-only (disable desktop audio)"
+                    )
 
         # Start streams
         try:
@@ -370,9 +566,11 @@ class AudioRecorder:
 
         # Convert to numpy arrays
         mic_audio = np.frombuffer(b''.join(self.mic_frames), dtype=np.int16)
+        print(f"  Raw mic audio: {len(mic_audio)} samples ({len(mic_audio) / self.mic_sample_rate / self.mic_channels:.2f} seconds at {self.mic_sample_rate} Hz, {self.mic_channels} ch)", file=sys.stderr)
 
         if self.mixing_mode and self.desktop_frames:
             desktop_audio = np.frombuffer(b''.join(self.desktop_frames), dtype=np.int16)
+            print(f"  Raw desktop audio: {len(desktop_audio)} samples ({len(desktop_audio) / self.loopback_sample_rate / self.loopback_channels:.2f} seconds at {self.loopback_sample_rate} Hz, {self.loopback_channels} ch)", file=sys.stderr)
 
             # Resample both to target rate
             if self.mic_sample_rate != self.target_sample_rate:
@@ -392,8 +590,28 @@ class AudioRecorder:
                 print(f"  Resampling desktop: {self.loopback_sample_rate} Hz → {self.target_sample_rate} Hz", file=sys.stderr)
                 desktop_audio = self._resample(desktop_audio, self.loopback_sample_rate, self.target_sample_rate)
 
+            # CHANNEL FIX: Downmix multi-channel audio to stereo
+            if self.loopback_channels > 2:
+                print(f"  Downmixing desktop audio from {self.loopback_channels} channels to stereo...", file=sys.stderr)
+                # Reshape to (samples, channels)
+                desktop_multichannel = desktop_audio.reshape(-1, self.loopback_channels)
+
+                # Simple downmix: average all channels to create stereo
+                # For proper 5.1/7.1 downmix, would need channel routing, but this works for most cases
+                # Take first 2 channels if available (usually FL/FR), or average all
+                if self.loopback_channels >= 2:
+                    # Use first two channels (Front Left, Front Right)
+                    desktop_stereo = desktop_multichannel[:, :2]
+                else:
+                    # Fallback: average all channels to mono, then duplicate to stereo
+                    desktop_mono = np.mean(desktop_multichannel, axis=1, dtype=np.float32)
+                    desktop_stereo = np.column_stack((desktop_mono, desktop_mono))
+
+                # Flatten back to 1D array
+                desktop_audio = desktop_stereo.flatten().astype(np.int16)
+
             # Convert mono loopback to stereo if needed (rare but possible)
-            if self.loopback_channels == 1 and self.target_channels == 2:
+            elif self.loopback_channels == 1 and self.target_channels == 2:
                 print(f"  Converting desktop audio from mono to stereo...", file=sys.stderr)
                 desktop_audio = np.repeat(desktop_audio, 2)
 
@@ -527,6 +745,13 @@ class AudioRecorder:
         try:
             result = subprocess.run(cmd, check=True, capture_output=True)
             return opus_path
+        except FileNotFoundError:
+            print(f"Warning: ffmpeg not found in PATH", file=sys.stderr)
+            print(f"Falling back to WAV format (audio will be larger)...", file=sys.stderr)
+            # If ffmpeg is not installed, just copy the temp WAV to output
+            import shutil
+            shutil.copy(input_path, output_path)
+            return output_path
         except subprocess.CalledProcessError as e:
             print(f"Warning: ffmpeg compression failed: {e.stderr.decode()}", file=sys.stderr)
             print(f"Falling back to WAV format...", file=sys.stderr)
@@ -648,7 +873,8 @@ def main():
         mic_device_id=args.mic,
         loopback_device_id=args.loopback,
         output_path=str(output_path),
-        sample_rate=48000
+        sample_rate=48000,
+        preroll_seconds=0  # Production mode: no preroll, countdown in Electron app handles device warm-up
     )
 
     # Handle interrupt signals for manual stop
