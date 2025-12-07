@@ -284,5 +284,6 @@ This project is licensed under the MIT License - see [LICENSE.txt](LICENSE.txt) 
 - [ ] **macOS Advanced Audio:** Real-time streaming (low RAM), App-specific capture, Real-time mixing
 - [ ] Real-time transcription
 - [ ] Export to various formats (SRT, VTT, DOCX)
+- [ ] **Echo Cancellation:** Remove echo when desktop audio is picked up by mic (see [docs/features/FEATURE_ECHO_CANCELLATION.md](docs/features/FEATURE_ECHO_CANCELLATION.md))
 
 ---

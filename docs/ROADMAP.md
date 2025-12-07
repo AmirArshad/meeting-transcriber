@@ -145,6 +145,32 @@ Currently, the app uses fragile string matching to detect recording state (e.g.,
 
 ---
 
+#### 6. Acoustic Echo Cancellation (AEC)
+
+**Status:** Future Enhancement
+**Priority:** Medium
+**Description:** Remove echo when desktop audio is picked up by microphone
+
+When desktop audio plays through speakers, the microphone picks it up, creating an echo effect. AEC algorithms remove this echo by subtracting the known "reference" signal (desktop audio) from the microphone input.
+
+**Technical Challenge:**
+
+Current architecture uses post-processing (mixing after recording stops). True AEC requires:
+- Real-time, frame-synchronized processing
+- Both audio streams processed simultaneously during capture
+- Significant architectural changes to recording pipeline
+
+**Available Libraries:**
+
+- **speexdsp-python** - Mature, requires real-time processing
+- **pyaec** - Newer Rust-based library with cross-platform binaries
+
+**Workaround:** Use headphones during recording to eliminate echo at source.
+
+**Reference:** [FEATURE_ECHO_CANCELLATION.md](features/FEATURE_ECHO_CANCELLATION.md)
+
+---
+
 ## Future Enhancements (Long-term) 🔮
 
 ### Nice-to-Have Features
