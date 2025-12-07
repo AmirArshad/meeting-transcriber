@@ -1,6 +1,6 @@
 {
   "name": "meeting-transcriber",
-  "version": "1.6.2",
+  "version": "1.7.0",
   "description": "AI-powered meeting transcription with desktop audio capture",
   "main": "src/main.js",
   "scripts": {

@@ -199,8 +199,8 @@ Have an idea for a new feature?
 
 ## Release Schedule
 
-**Current Version:** 1.6.2
-**Next Release:** 1.7.0 (Q1 2025)
+**Current Version:** 1.7.0
+**Next Release:** 1.8.0 (Q1 2025)
 
 **Versioning:**
 
@@ -210,5 +210,5 @@ Have an idea for a new feature?
 
 ---
 
-**Last Updated:** December 2, 2025
+**Last Updated:** December 7, 2025
 **Maintained By:** [@AmirArshad](https://github.com/AmirArshad)
