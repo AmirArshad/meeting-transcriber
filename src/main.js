@@ -9,8 +9,9 @@
 
 const { app, BrowserWindow, ipcMain, Tray, Menu, dialog, powerSaveBlocker } = require('electron');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 const fs = require('fs');
+const os = require('os');
 const { checkForUpdates, openDownloadPage } = require('./updater');
 
 // Use Electron's default userData path, which handles packaging correctly
@@ -55,31 +56,68 @@ function spawnTrackedPython(args, options = {}) {
 
 /**
  * Determine the correct Python executable and backend path based on environment
- * In production (packaged app), use embedded Python
+ * In production (packaged app), use bundled Python
  * In development, use system Python
  */
 function getPythonConfig() {
   const isDev = !app.isPackaged;
+  const isMac = process.platform === 'darwin';
 
   if (isDev) {
     // Development mode - use system Python
     return {
-      pythonExe: 'python',
+      pythonExe: isMac ? 'python3' : 'python',
       backendPath: path.join(__dirname, '../backend'),
       ffmpegPath: 'ffmpeg' // Assume in PATH
     };
   } else {
-    // Production mode - use embedded Python from resources
+    // Production mode - use bundled Python
     const resourcesPath = process.resourcesPath;
-    return {
-      pythonExe: path.join(resourcesPath, 'python', 'python.exe'),
-      backendPath: path.join(resourcesPath, 'backend'),
-      ffmpegPath: path.join(resourcesPath, 'ffmpeg', 'ffmpeg.exe')
-    };
+
+    if (isMac) {
+      // macOS: Use bundled Python from resources/python/bin/
+      return {
+        pythonExe: path.join(resourcesPath, 'python', 'bin', 'python3'),
+        backendPath: path.join(resourcesPath, 'backend'),
+        ffmpegPath: path.join(resourcesPath, 'ffmpeg', 'ffmpeg')
+      };
+    } else {
+      // Windows: Use bundled Python from resources/python/
+      return {
+        pythonExe: path.join(resourcesPath, 'python', 'python.exe'),
+        backendPath: path.join(resourcesPath, 'backend'),
+        ffmpegPath: path.join(resourcesPath, 'ffmpeg', 'ffmpeg.exe')
+      };
+    }
   }
 }
 
 const pythonConfig = getPythonConfig();
+
+/**
+ * Get the platform-specific transcriber script path.
+ * Returns the appropriate transcriber based on the operating system:
+ * - macOS: MLX Whisper (Metal GPU acceleration for Apple Silicon)
+ * - Windows/others: faster-whisper (CUDA GPU acceleration)
+ */
+function getTranscriberScript() {
+  const isMac = process.platform === 'darwin';
+
+  if (isMac) {
+    // Check for Apple Silicon (arm64)
+    // MLX requires native arm64 execution
+    if (process.arch === 'arm64') {
+      return path.join(pythonConfig.backendPath, 'transcription', 'mlx_whisper_transcriber.py');
+    } else {
+      // Intel Mac (x64) -> Use faster-whisper (CPU fallback)
+      console.log('Intel Mac detected: Using faster-whisper fallback (CPU)');
+      return path.join(pythonConfig.backendPath, 'transcription', 'faster_whisper_transcriber.py');
+    }
+  }
+
+  // Windows/Linux -> faster-whisper (CUDA/CPU)
+  return path.join(pythonConfig.backendPath, 'transcription', 'faster_whisper_transcriber.py');
+}
 
 // Add ffmpeg to PATH so Python scripts can find it
 if (!app.isPackaged) {
@@ -87,7 +125,8 @@ if (!app.isPackaged) {
 } else {
   // In production, add the bundled ffmpeg directory to PATH
   const ffmpegDir = path.dirname(pythonConfig.ffmpegPath);
-  process.env.PATH = `${ffmpegDir};${process.env.PATH}`;
+  const pathSeparator = process.platform === 'win32' ? ';' : ':';
+  process.env.PATH = `${ffmpegDir}${pathSeparator}${process.env.PATH}`;
 }
 
 // Suppress Python warnings to reduce console noise
@@ -96,16 +135,323 @@ process.env.PYTHONWARNINGS = 'ignore::DeprecationWarning,ignore::UserWarning';
 console.log('Python Configuration:', pythonConfig);
 console.log('userData path:', app.getPath('userData'));
 console.log('Recordings will be saved to:', path.join(app.getPath('userData'), 'recordings'));
+console.log('Transcriber:', getTranscriberScript());
+
+// ============================================================================
+// Safety Checks and Verification Functions
+// ============================================================================
+
+/**
+ * Helper to run a process with timeout.
+ * Returns a promise that resolves with { stdout, stderr, code } or rejects on timeout/error.
+ */
+function runProcessWithTimeout(command, args, timeoutMs = 10000) {
+  return new Promise((resolve) => {
+    let stdout = '';
+    let stderr = '';
+    let resolved = false;
+
+    const cleanup = () => {
+      if (!resolved) {
+        resolved = true;
+        try { proc.kill(); } catch (e) { /* ignore */ }
+      }
+    };
+
+    // Set timeout
+    const timeout = setTimeout(() => {
+      cleanup();
+      resolve({ stdout, stderr, code: -1, timedOut: true });
+    }, timeoutMs);
+
+    let proc;
+    try {
+      proc = spawn(command, args);
+    } catch (e) {
+      clearTimeout(timeout);
+      resolve({ stdout: '', stderr: e.message, code: -1, error: e });
+      return;
+    }
+
+    proc.stdout.on('data', (data) => { stdout += data.toString(); });
+    proc.stderr.on('data', (data) => { stderr += data.toString(); });
+
+    proc.on('close', (code) => {
+      if (!resolved) {
+        resolved = true;
+        clearTimeout(timeout);
+        resolve({ stdout, stderr, code: code ?? 0 });
+      }
+    });
+
+    proc.on('error', (err) => {
+      if (!resolved) {
+        resolved = true;
+        clearTimeout(timeout);
+        resolve({ stdout, stderr, code: -1, error: err });
+      }
+    });
+  });
+}
+
+/**
+ * Verify Python executable exists and runs correctly.
+ * Returns object with success status and version info.
+ * GRACEFUL: Always returns, never throws. Failure is non-fatal in dev mode.
+ */
+async function verifyPythonInstallation() {
+  try {
+    const pythonPath = pythonConfig.pythonExe;
+
+    // Check if file exists (only for packaged app)
+    if (app.isPackaged && !fs.existsSync(pythonPath)) {
+      return {
+        success: false,
+        error: `Python runtime not found at: ${pythonPath}`,
+        help: 'Please reinstall the application.'
+      };
+    }
+
+    const result = await runProcessWithTimeout(pythonPath, ['--version'], 10000);
+
+    if (result.timedOut) {
+      return {
+        success: false,
+        error: 'Python check timed out',
+        help: 'The Python runtime is not responding. Try restarting the application.'
+      };
+    }
+
+    if (result.error) {
+      return {
+        success: false,
+        error: `Python failed to start: ${result.error.message}`,
+        help: 'The Python runtime may be missing or corrupted.'
+      };
+    }
+
+    if (result.code === 0) {
+      const version = (result.stdout + result.stderr).replace('Python ', '').trim();
+      return { success: true, version };
+    } else {
+      return {
+        success: false,
+        error: `Python failed to start (exit code ${result.code})`,
+        help: 'The Python runtime may be corrupted. Please reinstall the application.'
+      };
+    }
+  } catch (e) {
+    // Catch any unexpected errors - fail gracefully
+    console.error('Unexpected error in verifyPythonInstallation:', e);
+    return {
+      success: false,
+      error: `Unexpected error: ${e.message}`,
+      help: 'An unexpected error occurred during startup checks.'
+    };
+  }
+}
+
+/**
+ * Verify FFmpeg is available for audio compression.
+ * Returns object with success status.
+ * GRACEFUL: Always returns, never throws. Failure is non-fatal.
+ */
+async function verifyFFmpegInstallation() {
+  try {
+    const ffmpegPath = pythonConfig.ffmpegPath;
+
+    // Check if file exists (only for packaged app)
+    if (app.isPackaged && !fs.existsSync(ffmpegPath)) {
+      return {
+        success: false,
+        error: `FFmpeg not found at: ${ffmpegPath}`,
+        help: 'Audio compression will not work. Please reinstall the application.'
+      };
+    }
+
+    const result = await runProcessWithTimeout(ffmpegPath, ['-version'], 10000);
+
+    if (result.timedOut || result.error) {
+      return {
+        success: false,
+        error: result.timedOut ? 'FFmpeg check timed out' : `FFmpeg error: ${result.error?.message}`,
+        help: 'Audio compression may not work correctly.'
+      };
+    }
+
+    if (result.code === 0) {
+      const versionMatch = result.stdout.match(/ffmpeg version ([^\s]+)/);
+      return {
+        success: true,
+        version: versionMatch ? versionMatch[1] : 'unknown'
+      };
+    } else {
+      return {
+        success: false,
+        error: 'FFmpeg failed to run',
+        help: 'Audio compression may not work correctly.'
+      };
+    }
+  } catch (e) {
+    console.error('Unexpected error in verifyFFmpegInstallation:', e);
+    return { success: false, error: `Unexpected error: ${e.message}` };
+  }
+}
+
+/**
+ * Check available disk space in recordings directory.
+ * Returns object with available space in bytes and warnings.
+ * GRACEFUL: Always returns success (with unknown space) if check fails.
+ */
+async function checkDiskSpace() {
+  try {
+    const recordingsDir = path.join(app.getPath('userData'), 'recordings');
+
+    // Ensure directory exists
+    if (!fs.existsSync(recordingsDir)) {
+      try {
+        fs.mkdirSync(recordingsDir, { recursive: true });
+      } catch (e) {
+        // Non-fatal - directory will be created later when needed
+        console.warn('Could not create recordings directory:', e.message);
+        return { success: true, availableBytes: -1, warning: null };
+      }
+    }
+
+    if (process.platform === 'win32') {
+      // Windows: Use wmic to get free space
+      const drive = recordingsDir.split(':')[0] + ':';
+      const result = await runProcessWithTimeout(
+        'wmic',
+        ['logicaldisk', 'where', `DeviceID="${drive}"`, 'get', 'FreeSpace', '/value'],
+        5000
+      );
+
+      if (result.code === 0 && !result.timedOut) {
+        const match = result.stdout.match(/FreeSpace=(\d+)/);
+        if (match) {
+          const freeBytes = parseInt(match[1], 10);
+          const freeGB = freeBytes / (1024 * 1024 * 1024);
+          return {
+            success: true,
+            availableBytes: freeBytes,
+            availableGB: freeGB.toFixed(2),
+            warning: freeBytes < 500 * 1024 * 1024 ? 'Low disk space (< 500MB)' : null
+          };
+        }
+      }
+      // Fall through to return unknown
+    } else {
+      // macOS/Linux: Use df command
+      const result = await runProcessWithTimeout('df', ['-k', recordingsDir], 5000);
+
+      if (result.code === 0 && !result.timedOut) {
+        const lines = result.stdout.trim().split('\n');
+        if (lines.length >= 2) {
+          const parts = lines[1].split(/\s+/);
+          if (parts.length >= 4) {
+            const freeKB = parseInt(parts[3], 10);
+            const freeBytes = freeKB * 1024;
+            const freeGB = freeBytes / (1024 * 1024 * 1024);
+            return {
+              success: true,
+              availableBytes: freeBytes,
+              availableGB: freeGB.toFixed(2),
+              warning: freeBytes < 500 * 1024 * 1024 ? 'Low disk space (< 500MB)' : null
+            };
+          }
+        }
+      }
+    }
+
+    // Unknown disk space - assume OK
+    return { success: true, availableBytes: -1, warning: null };
+  } catch (e) {
+    console.error('Unexpected error in checkDiskSpace:', e);
+    return { success: true, availableBytes: -1, warning: null };
+  }
+}
+
+/**
+ * Run all startup verification checks.
+ * Shows dialog if critical checks fail in packaged app.
+ * GRACEFUL: In dev mode, failures are warnings only. Never crashes the app.
+ */
+async function runStartupChecks() {
+  console.log('=== Running Startup Safety Checks ===');
+
+  try {
+    // Check Python
+    const pythonCheck = await verifyPythonInstallation();
+    if (pythonCheck.success) {
+      console.log(`✓ Python verified: ${pythonCheck.version}`);
+    } else {
+      console.error(`✗ Python check failed: ${pythonCheck.error}`);
+
+      // Only fatal in packaged app - in dev mode, system Python might work
+      if (app.isPackaged) {
+        dialog.showErrorBox('Installation Error', `${pythonCheck.error}\n\n${pythonCheck.help}`);
+        app.quit();
+        return false;
+      } else {
+        console.warn('⚠ Continuing in dev mode despite Python check failure');
+      }
+    }
+
+    // Check FFmpeg (non-fatal)
+    const ffmpegCheck = await verifyFFmpegInstallation();
+    if (ffmpegCheck.success) {
+      console.log(`✓ FFmpeg verified: ${ffmpegCheck.version}`);
+    } else {
+      console.warn(`⚠ FFmpeg check failed: ${ffmpegCheck.error}`);
+    }
+
+    // Check disk space (non-fatal)
+    const diskCheck = await checkDiskSpace();
+    if (diskCheck.success) {
+      if (diskCheck.availableGB && diskCheck.availableBytes > 0) {
+        console.log(`✓ Disk space: ${diskCheck.availableGB} GB available`);
+      }
+      if (diskCheck.warning) {
+        console.warn(`⚠ ${diskCheck.warning}`);
+      }
+    }
+
+    console.log('=== Startup Checks Complete ===');
+    return true;
+  } catch (e) {
+    // Catch any unexpected errors - don't crash the app
+    console.error('Unexpected error during startup checks:', e);
+    console.warn('⚠ Continuing despite startup check errors');
+    return true; // Continue anyway
+  }
+}
 
 // Create the system tray
 function createTray() {
-  // In production, icon is at the root of resources
-  // In development, icon is in build folder
-  const iconPath = app.isPackaged
-    ? path.join(process.resourcesPath, 'icon.ico')
-    : path.join(__dirname, '../build/icon.ico');
+  // Platform-specific icon paths
+  // macOS: Uses template PNG images that adapt to light/dark mode
+  // Windows: Uses ICO file
+  let iconPath;
+
+  if (process.platform === 'darwin') {
+    // macOS: Use template image for menu bar
+    iconPath = app.isPackaged
+      ? path.join(process.resourcesPath, 'iconTemplate.png')
+      : path.join(__dirname, '../build/iconTemplate.png');
+  } else {
+    // Windows/Linux: Use ICO file
+    iconPath = app.isPackaged
+      ? path.join(process.resourcesPath, 'icon.ico')
+      : path.join(__dirname, '../build/icon.ico');
+  }
 
   tray = new Tray(iconPath);
+
+  // macOS: Mark as template image for automatic dark mode support
+  if (process.platform === 'darwin') {
+    tray.setImage(iconPath);  // Ensure template image is used
+  }
 
   const contextMenu = Menu.buildFromTemplate([
     {
@@ -289,7 +635,7 @@ function preloadWhisperModel() {
   console.log(`Preloading Whisper model (${modelSize})...`);
 
   const preloadProcess = spawnTrackedPython([
-    path.join(pythonConfig.backendPath, 'transcriber.py'),
+    getTranscriberScript(),
     '--preload',
     '--model', modelSize
   ]);
@@ -307,8 +653,68 @@ function preloadWhisperModel() {
   });
 }
 
+/**
+ * Check macOS permissions (microphone and screen recording).
+ *
+ * This runs asynchronously in the background and shows a notification
+ * if permissions are missing. The permission prompts will be triggered
+ * when the user first tries to record.
+ */
+function checkMacOSPermissions() {
+  const checkScript = path.join(pythonConfig.backendPath, 'check_permissions.py');
+
+  console.log('Checking macOS permissions...');
+
+  const proc = spawn(pythonConfig.pythonExe, [checkScript], {
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+
+  let stdout = '';
+  let stderr = '';
+
+  proc.stdout.on('data', (data) => {
+    stdout += data.toString();
+  });
+
+  proc.stderr.on('data', (data) => {
+    stderr += data.toString();
+  });
+
+  proc.on('close', (code) => {
+    try {
+      const result = JSON.parse(stdout);
+
+      // Log permission status
+      console.log('Permission check result:', result);
+
+      // If any permission is missing, the app will still work - permissions
+      // will be requested when the user first tries to use the feature
+      if (!result.all_granted) {
+        console.warn('Some permissions are missing - will request on first use');
+
+        if (!result.microphone.granted) {
+          console.warn('Microphone permission:', result.microphone.error);
+        }
+
+        if (!result.screen_recording.granted) {
+          console.warn('Screen Recording permission:', result.screen_recording.error);
+        }
+      } else {
+        console.log('All permissions granted!');
+      }
+    } catch (error) {
+      // If we can't parse the result, it's not critical - permissions
+      // will be requested when needed
+      console.warn('Could not parse permission check result:', error);
+      if (stderr) {
+        console.warn('Permission check stderr:', stderr);
+      }
+    }
+  });
+}
+
 // Initialize app
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   // IMPORTANT: Log all app paths for debugging
   console.log('=== App Path Configuration ===');
   console.log('app.getPath("userData"):', app.getPath('userData'));
@@ -323,8 +729,19 @@ app.whenReady().then(() => {
   const cacheDir = path.join(app.getPath('userData'), 'Cache');
   app.setPath('cache', cacheDir);
 
+  // Run startup safety checks (Python, FFmpeg, disk space)
+  const checksOk = await runStartupChecks();
+  if (!checksOk) {
+    return; // App will quit if critical checks fail
+  }
+
   createTray();
   createWindow();
+
+  // Check macOS permissions proactively
+  if (process.platform === 'darwin') {
+    checkMacOSPermissions();
+  }
 
   // Don't preload model in background anymore - the renderer will handle it during init
   // This prevents double-downloading and gives better UX with progress feedback
@@ -382,6 +799,243 @@ app.on('before-quit', () => {
 // ============================================================================
 // IPC Handlers - Communication between UI and Python backend
 // ============================================================================
+
+/**
+ * Validate audio devices before recording.
+ * Checks that selected devices exist and are accessible.
+ * GRACEFUL: Returns valid=true with warning if check fails, allowing recording to proceed.
+ */
+ipcMain.handle('validate-devices', async (event, { micId, loopbackId }) => {
+  const TIMEOUT_MS = 10000; // 10 second timeout
+
+  return new Promise((resolve) => {
+    let resolved = false;
+    let output = '';
+    let errorOutput = '';
+
+    // Timeout handler
+    const timeout = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        try { python.kill(); } catch (e) { /* ignore */ }
+        console.warn('validate-devices timed out - allowing recording to proceed');
+        resolve({
+          valid: true, // Allow recording to proceed
+          warnings: ['Device validation timed out - proceeding anyway'],
+          errors: []
+        });
+      }
+    }, TIMEOUT_MS);
+
+    let python;
+    try {
+      python = spawnTrackedPython([
+        path.join(pythonConfig.backendPath, 'device_manager.py')
+      ]);
+    } catch (e) {
+      clearTimeout(timeout);
+      console.error('Failed to spawn device_manager.py:', e);
+      resolve({
+        valid: true, // Allow recording to proceed
+        warnings: ['Could not validate devices - proceeding anyway'],
+        errors: []
+      });
+      return;
+    }
+
+    python.stdout.on('data', (data) => { output += data.toString(); });
+    python.stderr.on('data', (data) => { errorOutput += data.toString(); });
+
+    python.on('close', (code) => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timeout);
+
+      if (code !== 0) {
+        console.warn('validate-devices failed with code', code);
+        resolve({
+          valid: true, // Allow recording to proceed
+          warnings: ['Device enumeration failed - proceeding anyway'],
+          errors: []
+        });
+        return;
+      }
+
+      try {
+        const data = JSON.parse(output);
+        const errors = [];
+        const warnings = [];
+
+        // Check microphone device
+        const micDevice = data.input_devices.find(d => d.id === micId);
+        if (!micDevice) {
+          errors.push(`Microphone device (ID: ${micId}) not found. It may have been disconnected.`);
+        }
+
+        // Check loopback device (platform-specific)
+        if (process.platform === 'darwin') {
+          // macOS: loopbackId -1 means ScreenCaptureKit (virtual)
+          if (loopbackId !== -1) {
+            warnings.push('Non-standard loopback device selected on macOS.');
+          }
+        } else {
+          // Windows: Check loopback device exists
+          const loopbackDevice = data.loopback_devices.find(d => d.id === loopbackId);
+          if (loopbackId >= 0 && !loopbackDevice) {
+            errors.push(`Desktop audio device (ID: ${loopbackId}) not found. It may have been disconnected.`);
+          }
+        }
+
+        resolve({
+          valid: errors.length === 0,
+          errors,
+          warnings,
+          devices: {
+            mic: micDevice || null,
+            loopback: loopbackId === -1 ? { name: 'System Audio (ScreenCaptureKit)', id: -1 } :
+                      data.loopback_devices.find(d => d.id === loopbackId) || null
+          }
+        });
+      } catch (e) {
+        console.warn('Failed to parse device list:', e);
+        resolve({
+          valid: true, // Allow recording to proceed
+          warnings: ['Could not parse device list - proceeding anyway'],
+          errors: []
+        });
+      }
+    });
+
+    python.on('error', (err) => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timeout);
+      console.error('validate-devices error:', err);
+      resolve({
+        valid: true, // Allow recording to proceed
+        warnings: ['Device validation error - proceeding anyway'],
+        errors: []
+      });
+    });
+  });
+});
+
+/**
+ * Check disk space before recording.
+ * Returns available space and warnings.
+ */
+ipcMain.handle('check-disk-space', async () => {
+  return await checkDiskSpace();
+});
+
+/**
+ * Check macOS audio output device for Bluetooth/headphone warning.
+ * ScreenCaptureKit may not capture audio from these devices.
+ * GRACEFUL: Returns supported=true if check fails, allowing recording to proceed.
+ */
+ipcMain.handle('check-audio-output', async () => {
+  if (process.platform !== 'darwin') {
+    // Windows WASAPI loopback works with all devices
+    return { supported: true, warning: null };
+  }
+
+  const TIMEOUT_MS = 5000; // 5 second timeout
+
+  return new Promise((resolve) => {
+    let resolved = false;
+    let output = '';
+
+    // Timeout handler
+    const timeout = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        try { proc.kill(); } catch (e) { /* ignore */ }
+        console.warn('check-audio-output timed out');
+        resolve({ supported: true, warning: null }); // Assume OK
+      }
+    }, TIMEOUT_MS);
+
+    let proc;
+    try {
+      // Use system_profiler to get audio output info
+      proc = spawn('system_profiler', ['SPAudioDataType', '-json']);
+    } catch (e) {
+      clearTimeout(timeout);
+      console.error('Failed to spawn system_profiler:', e);
+      resolve({ supported: true, warning: null }); // Assume OK
+      return;
+    }
+
+    proc.stdout.on('data', (data) => { output += data.toString(); });
+
+    proc.on('close', (code) => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timeout);
+
+      if (code !== 0) {
+        resolve({ supported: true, warning: null }); // Unknown, assume OK
+        return;
+      }
+
+      try {
+        const data = JSON.parse(output);
+        const audioData = data.SPAudioDataType || [];
+
+        // Look for Bluetooth or USB audio devices as default output
+        let isBluetoothOrUSB = false;
+        let deviceName = null;
+
+        for (const section of audioData) {
+          const items = section._items || [];
+          for (const item of items) {
+            // Check for default output device
+            if (item.coreaudio_default_audio_output_device === 'spaudio_yes') {
+              deviceName = item._name;
+
+              // Check transport type or name for Bluetooth/USB indicators
+              const transport = (item.coreaudio_device_transport || '').toLowerCase();
+              const name = (item._name || '').toLowerCase();
+
+              if (transport.includes('bluetooth') ||
+                  transport.includes('usb') ||
+                  name.includes('airpods') ||
+                  name.includes('bluetooth') ||
+                  name.includes('beats') ||
+                  name.includes('headphone') ||
+                  name.includes('usb')) {
+                isBluetoothOrUSB = true;
+              }
+            }
+          }
+        }
+
+        if (isBluetoothOrUSB) {
+          resolve({
+            supported: false,
+            warning: `Desktop audio may not be captured when using "${deviceName}". ` +
+                     `ScreenCaptureKit works best with built-in speakers. ` +
+                     `Consider switching to built-in output or installing BlackHole for full desktop audio capture.`,
+            deviceName,
+            suggestion: 'Switch to built-in speakers or use BlackHole virtual audio device'
+          });
+        } else {
+          resolve({ supported: true, warning: null, deviceName });
+        }
+      } catch (e) {
+        resolve({ supported: true, warning: null }); // Parse error, assume OK
+      }
+    });
+
+    proc.on('error', (err) => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timeout);
+      console.error('check-audio-output error:', err);
+      resolve({ supported: true, warning: null });
+    });
+  });
+});
 
 /**
  * Get list of available audio devices
@@ -499,7 +1153,7 @@ ipcMain.handle('download-model', async (event, modelSize) => {
     console.log(`Downloading Whisper model: ${model}`);
 
     const python = spawnTrackedPython([
-      path.join(pythonConfig.backendPath, 'transcriber.py'),
+      getTranscriberScript(),
       '--preload',
       '--model', model
     ]);
@@ -562,17 +1216,26 @@ ipcMain.handle('start-recording', async (event, options) => {
     }
     const outputPath = path.join(recordingsDir, filename);
 
-    // FIX 1 (REFINED): Enable power save blocker to keep process running
-    // Use 'prevent-display-sleep' instead of 'prevent-app-suspension' for better battery life
-    // This prevents display from sleeping but allows system to enter low-power states
+    // FIX 1: Enable power save blocker to keep recording running
+    // Platform-specific approach:
+    // - macOS: Use 'prevent-app-suspension' to prevent App Nap from pausing recording
+    // - Windows: Use 'prevent-display-sleep' for better battery life (Python process is separate)
     if (powerSaveId === null) {
-      powerSaveId = powerSaveBlocker.start('prevent-display-sleep');
-      console.log('Power save blocker enabled - preventing display sleep during recording');
+      const isMacForPower = process.platform === 'darwin';
+      const blockerType = isMacForPower ? 'prevent-app-suspension' : 'prevent-display-sleep';
+
+      powerSaveId = powerSaveBlocker.start(blockerType);
+      console.log(
+        `Power save blocker enabled (${blockerType}) - recording will continue in background`
+      );
     }
 
-    // Start Python recording process
+    // Start Python recording process (platform-specific recorder)
+    const isMac = process.platform === 'darwin';
+    const recorderScript = isMac ? 'macos_recorder.py' : 'windows_recorder.py';
+
     pythonProcess = spawnTrackedPython([
-      path.join(pythonConfig.backendPath, 'audio_recorder.py'),
+      path.join(pythonConfig.backendPath, 'audio', recorderScript),
       '--mic', micId.toString(),
       '--loopback', loopbackId.toString(),
       '--output', outputPath
@@ -766,26 +1429,36 @@ ipcMain.handle('stop-recording', async () => {
     }
 
     if (pythonProcess) {
+      // Save reference to current process (in case it gets nulled)
+      const currentProcess = pythonProcess;
+
       let stdoutData = '';
       let stderrData = '';
 
-      // Collect stdout (contains JSON with file path)
-      pythonProcess.stdout.on('data', (data) => {
+      // Set up one-time handlers to collect remaining output
+      const stdoutHandler = (data) => {
         stdoutData += data.toString();
-      });
+      };
 
-      // Collect stderr and send progress updates
-      pythonProcess.stderr.on('data', (data) => {
+      const stderrHandler = (data) => {
         const output = data.toString();
         stderrData += output;
 
         // Send progress updates to renderer so user sees post-processing status
         console.log(`Python status: ${output}`);
         mainWindow.webContents.send('recording-progress', output.trim());
-      });
+      };
+
+      // Add handlers (will be cleaned up after process closes)
+      currentProcess.stdout.on('data', stdoutHandler);
+      currentProcess.stderr.on('data', stderrHandler);
 
       // Wait for process to actually complete
-      pythonProcess.on('close', (code) => {
+      const closeHandler = (code) => {
+        // Clean up event handlers to prevent memory leaks
+        currentProcess.stdout.removeListener('data', stdoutHandler);
+        currentProcess.stderr.removeListener('data', stderrHandler);
+
         pythonProcess = null;
         recordingStartTime = null; // Reset recording start time
 
@@ -803,15 +1476,18 @@ ipcMain.handle('stop-recording', async () => {
             const jsonLine = lines[lines.length - 1]; // Last line should be JSON
             const recordingInfo = JSON.parse(jsonLine);
 
+            // Support both audioPath (Windows) and outputPath (macOS) for backward compatibility
+            const filePath = recordingInfo.audioPath || recordingInfo.outputPath;
+
             // Verify file exists before resolving
-            if (fs.existsSync(recordingInfo.audioPath)) {
+            if (filePath && fs.existsSync(filePath)) {
               resolve({
                 success: true,
-                audioPath: recordingInfo.audioPath,
+                audioPath: filePath,
                 duration: recordingInfo.duration
               });
             } else {
-              reject(new Error(`Recording file not found: ${recordingInfo.audioPath}`));
+              reject(new Error(`Recording file not found: ${filePath}`));
             }
           } catch (e) {
             // If JSON parsing fails, file might still exist at default location
@@ -827,10 +1503,13 @@ ipcMain.handle('stop-recording', async () => {
         } else {
           reject(new Error(`Recording stopped with exit code ${code}: ${stderrData}`));
         }
-      });
+      };
+
+      // Register close handler
+      currentProcess.on('close', closeHandler);
 
       // Send signal to stop via stdin
-      pythonProcess.stdin.write('stop\n');
+      currentProcess.stdin.write('stop\n');
 
       // Calculate proportional timeout based on recording duration
       // Post-processing time scales with recording length
@@ -875,7 +1554,7 @@ ipcMain.handle('transcribe-audio', async (event, options) => {
     }
 
     const python = spawnTrackedPython([
-      path.join(pythonConfig.backendPath, 'transcriber.py'),
+      getTranscriberScript(),
       '--file', audioFile,
       '--language', language || 'en',
       '--model', modelSize || 'small',
@@ -1283,6 +1962,17 @@ ipcMain.handle('uninstall-gpu', async () => {
       }
     });
   });
+});
+
+/**
+ * Get platform information (for UI platform detection)
+ */
+ipcMain.handle('get-platform', async () => {
+  return process.platform;
+});
+
+ipcMain.handle('get-arch', async () => {
+  return process.arch;
 });
 
 /**

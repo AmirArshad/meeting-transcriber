@@ -30,17 +30,18 @@
         </div>
         <div class="modal-body">
           <p class="setting-description">
-            Downloading AI transcription model. This only happens once and takes 2-5 minutes.
+            Downloading AI transcription model. This only happens once and takes
+            2-5 minutes.
           </p>
-          
-          <div class="gpu-progress" style="margin-top: 0; display: block;">
+
+          <div class="gpu-progress" style="margin-top: 0; display: block">
             <div class="progress-bar-container">
               <div class="progress-bar" id="ftue-progress-bar"></div>
             </div>
             <p class="progress-text" id="ftue-progress-text">Initializing...</p>
           </div>
 
-          <div class="gpu-log" style="display: block;">
+          <div class="gpu-log" style="display: block">
             <h4>Installation Log</h4>
             <div class="log-output" id="ftue-log-output"></div>
           </div>
@@ -58,7 +59,7 @@
       </header>
 
       <!-- Update Notification Banner -->
-      <div id="update-banner" class="update-banner" style="display: none;">
+      <div id="update-banner" class="update-banner" style="display: none">
         <div class="update-content">
           <span class="update-icon">📦</span>
           <div class="update-text">
@@ -67,7 +68,9 @@
           </div>
           <div class="update-actions">
             <button id="dismiss-update" class="btn-secondary">Later</button>
-            <button id="download-update" class="btn-primary">Download Update</button>
+            <button id="download-update" class="btn-primary">
+              Download Update
+            </button>
           </div>
         </div>
       </div>
@@ -147,7 +150,7 @@
           <button class="tab-btn active" data-tab="record">Record</button>
           <button class="tab-btn" data-tab="history">History</button>
           <button class="tab-btn" data-tab="settings">Settings</button>
-              </div>
+        </div>
 
         <!-- Tab Content -->
         <div class="tab-content">
@@ -170,19 +173,31 @@
                   </button>
                   <div class="timer" id="timer">00:00</div>
                 </div>
-                
+
                 <!-- Audio Visualizer -->
-                <div class="audio-visualizer" id="audio-visualizer" style="display: none;">
+                <div
+                  class="audio-visualizer"
+                  id="audio-visualizer"
+                  style="display: none"
+                >
                   <div class="visualizer-track">
                     <span class="track-icon" title="Microphone">🎤</span>
                     <div class="waveform-container">
-                      <canvas id="mic-waveform" width="200" height="30"></canvas>
+                      <canvas
+                        id="mic-waveform"
+                        width="200"
+                        height="30"
+                      ></canvas>
                     </div>
                   </div>
                   <div class="visualizer-track">
                     <span class="track-icon" title="Desktop Audio">🔊</span>
                     <div class="waveform-container">
-                      <canvas id="desktop-waveform" width="200" height="30"></canvas>
+                      <canvas
+                        id="desktop-waveform"
+                        width="200"
+                        height="30"
+                      ></canvas>
                     </div>
                   </div>
                 </div>
@@ -304,35 +319,37 @@
                     >
                   </div>
 
-                  <p class="setting-description">
-                    Enable GPU acceleration for 4-5x faster transcription.
-                    Requires NVIDIA GPU with CUDA support.
+                  <p class="setting-description" id="gpu-description">
+                    Checking system configuration...
                   </p>
 
                   <div class="gpu-info" id="gpu-info">
                     <div class="info-row">
-                      <span class="info-label">GPU Detected:</span>
-                      <span class="info-value" id="gpu-detected"
+                      <span class="info-label" id="gpu-label-1">GPU:</span>
+                      <span class="info-value" id="gpu-value-1"
                         >Checking...</span
                       >
                     </div>
                     <div class="info-row">
-                      <span class="info-label">CUDA Libraries:</span>
-                      <span class="info-value" id="cuda-status"
-                        >Not installed</span
+                      <span class="info-label" id="gpu-label-2">Status:</span>
+                      <span class="info-value" id="gpu-value-2"
+                        >Checking...</span
                       >
                     </div>
-                    <div class="info-row">
-                      <span class="info-label">Download Size:</span>
-                      <span class="info-value">~2-3 GB</span>
+                    <div class="info-row" id="gpu-row-3">
+                      <span class="info-label" id="gpu-label-3"
+                        >Framework:</span
+                      >
+                      <span class="info-value" id="gpu-value-3"></span>
                     </div>
                   </div>
 
-                  <div class="gpu-actions">
+                  <div class="gpu-actions" id="gpu-actions">
                     <button
                       id="install-gpu-btn"
                       class="btn btn-primary"
                       disabled
+                      style="display: none"
                     >
                       Install GPU Acceleration
                     </button>
@@ -371,9 +388,7 @@
                   <h3>About</h3>
                   <div class="info-row">
                     <span class="info-label">Version:</span>
-                    <span class="info-value" id="app-version"
-                      >Loading...</span
-                    >
+                    <span class="info-value" id="app-version">Loading...</span>
                   </div>
                   <div class="info-row">
                     <span class="info-label">Electron:</span>

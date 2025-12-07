@@ -8,15 +8,17 @@ This document outlines the development roadmap for Meeting Transcriber, organize
 
 - **Recording & Transcription** - Dual audio capture (mic + desktop) with Whisper AI transcription
 - **Meeting History** - Searchable archive with audio playback and full transcripts
-- **GPU Acceleration** - CUDA support for 4-5x faster transcription
-- **Professional Installer** - One-click NSIS installer with embedded Python runtime
+- **GPU Acceleration** - CUDA support for 4-5x faster transcription (Windows), Metal GPU for Apple Silicon (macOS)
+- **Professional Installer** - One-click NSIS installer (Windows) and DMG installer (macOS) with embedded Python runtime
 - **Opus Compression** - 95% file size reduction (450MB → 23MB for 40-min recording)
 - **Model Preloading** - Improved first-time user experience with background model loading
+- **macOS Support** - Full macOS support with ScreenCaptureKit for desktop audio and MLX Whisper for Apple Silicon
 
 ### Audio Quality
 
 - **Intelligent Enhancement** - Automatic noise gate, compression, and EQ for microphone
-- **WASAPI Loopback** - Direct desktop audio capture without virtual cables
+- **WASAPI Loopback** - Direct desktop audio capture without virtual cables (Windows)
+- **ScreenCaptureKit** - System audio capture for macOS
 - **Stereo Mixing** - Professional audio processing and resampling
 
 ### User Interface
@@ -40,9 +42,31 @@ No features currently in development.
 
 ## Planned Features 📋
 
+### Code Quality Improvements
+
+#### 1. JSON-Based Event System
+
+**Status:** Planned
+**Priority:** Low
+**Description:** Refactor from string-based event detection to JSON-based event system
+
+Currently, the app uses fragile string matching to detect recording state (e.g., \`output.includes('Recording started!')\`). This should be refactored to a robust JSON-based event system for better reliability and cross-platform consistency.
+
+**Benefits:**
+- Type-safe event detection
+- Extensible without breaking changes
+- Better cross-platform consistency
+- Easier to debug and maintain
+
+**Reference:** [json-based-events.md](features/json-based-events.md)
+
+**Estimated Effort:** 4-6 hours
+
+---
+
 ### Advanced Functionality
 
-#### 1. Speaker Diarization
+#### 2. Speaker Diarization
 
 **Status:** Planned
 **Priority:** Medium
@@ -50,47 +74,39 @@ No features currently in development.
 
 **Challenge:** This is technically complex
 
-- Requires `pyannote-audio` library
+- Requires \`pyannote-audio\` library
 - Adds ~500MB model download
 - 2-3x slower processing time
 - GPU strongly recommended
 
 **Output Example:**
 
-```markdown
+\`\`\`markdown
 [00:00:00 - 00:00:05] **Speaker 1:** Hello everyone.
 [00:00:05 - 00:00:10] **Speaker 2:** Thanks for having me.
-```
+\`\`\`
 
 **Reference:** [FEATURE_SPEAKER_DIARIZATION.md](features/FEATURE_SPEAKER_DIARIZATION.md)
 
 ---
 
-#### 2. macOS Support
+#### 3. macOS Audio Architecture (Advanced)
 
-**Status:** Planned
+**Status:** Future Enhancement
 **Priority:** Medium
-**Description:** Cross-platform support for macOS
+**Description:** Advanced audio features for macOS using ScreenCaptureKit
 
-**Required Changes:**
+**Features:**
 
-- Replace PyAudio with cross-platform audio library (or add macOS-specific handling)
-- Bundle Python runtime for macOS
-- Create DMG installer with code signing
-- Test audio device enumeration on macOS
-- Update loopback audio capture (CoreAudio vs WASAPI)
+1.  **Real-Time Streaming:** Write audio to disk during recording to keep RAM usage low (flat ~50MB).
+2.  **App-Specific Capture:** Capture audio only from specific apps (e.g., Zoom, Chrome) to exclude system notifications.
+3.  **Real-Time Mixing:** Mix mic and desktop audio on-the-fly to eliminate post-processing wait times.
 
-**Challenges:**
-
-- Audio device APIs differ between Windows and macOS
-- Code signing requires Apple Developer account ($99/year)
-- Distribution through Apple notarization
-
-**Estimated Effort:** 1-2 weeks
+**Reference:** [MACOS_AUDIO_ARCHITECTURE.md](features/MACOS_AUDIO_ARCHITECTURE.md)
 
 ---
 
-#### 3. Real-Time Transcription
+#### 4. Real-Time Transcription
 
 **Status:** Planned
 **Priority:** Low
@@ -111,7 +127,7 @@ No features currently in development.
 
 ---
 
-#### 4. Export Formats
+#### 5. Export Formats
 
 **Status:** Planned
 **Priority:** Low
@@ -126,6 +142,32 @@ No features currently in development.
 - **JSON** - Raw data for programmatic access
 
 **Current Format:** Markdown only
+
+---
+
+#### 6. Acoustic Echo Cancellation (AEC)
+
+**Status:** Future Enhancement
+**Priority:** Medium
+**Description:** Remove echo when desktop audio is picked up by microphone
+
+When desktop audio plays through speakers, the microphone picks it up, creating an echo effect. AEC algorithms remove this echo by subtracting the known "reference" signal (desktop audio) from the microphone input.
+
+**Technical Challenge:**
+
+Current architecture uses post-processing (mixing after recording stops). True AEC requires:
+- Real-time, frame-synchronized processing
+- Both audio streams processed simultaneously during capture
+- Significant architectural changes to recording pipeline
+
+**Available Libraries:**
+
+- **speexdsp-python** - Mature, requires real-time processing
+- **pyaec** - Newer Rust-based library with cross-platform binaries
+
+**Workaround:** Use headphones during recording to eliminate echo at source.
+
+**Reference:** [FEATURE_ECHO_CANCELLATION.md](features/FEATURE_ECHO_CANCELLATION.md)
 
 ---
 
@@ -157,8 +199,8 @@ Have an idea for a new feature?
 
 ## Release Schedule
 
-**Current Version:** 1.4.0
-**Next Release:** 1.5.0 (Q2 2025)
+**Current Version:** 1.6.2
+**Next Release:** 1.7.0 (Q1 2025)
 
 **Versioning:**
 
@@ -168,5 +210,5 @@ Have an idea for a new feature?
 
 ---
 
-**Last Updated:** November 20, 2025
+**Last Updated:** December 2, 2025
 **Maintained By:** [@AmirArshad](https://github.com/AmirArshad)

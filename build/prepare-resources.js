@@ -6,16 +6,24 @@ const { pipeline } = require('stream/promises');
 const AdmZip = require('adm-zip');
 
 const PYTHON_VERSION = '3.11.9';
-const PYTHON_EMBED_URL = `https://www.python.org/ftp/python/${PYTHON_VERSION}/python-${PYTHON_VERSION}-embed-amd64.zip`;
-const FFMPEG_URL = 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip';
+const PYTHON_WIN_URL = `https://www.python.org/ftp/python/${PYTHON_VERSION}/python-${PYTHON_VERSION}-embed-amd64.zip`;
+// For macOS, we'll use python-build-standalone by indygreg (used by PyOxidizer)
+// These are relocatable Python builds specifically designed for bundling
+const PYTHON_MAC_URL = `https://github.com/indygreg/python-build-standalone/releases/download/20240107/cpython-3.11.7+20240107-aarch64-apple-darwin-install_only.tar.gz`;
+const FFMPEG_WIN_URL = 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip';
+const FFMPEG_MAC_URL = 'https://evermeet.cx/ffmpeg/getrelease/ffmpeg/zip';
 
 const BUILD_DIR = path.join(__dirname, 'resources');
 const PYTHON_DIR = path.join(BUILD_DIR, 'python');
 const FFMPEG_DIR = path.join(BUILD_DIR, 'ffmpeg');
 const MODELS_DIR = path.join(BUILD_DIR, 'whisper-models');
 
+const IS_MAC = process.platform === 'darwin';
+const IS_WINDOWS = process.platform === 'win32';
+
 console.log('========================================');
 console.log('Meeting Transcriber - Build Preparation');
+console.log(`Platform: ${process.platform}`);
 console.log('========================================\n');
 
 // Ensure build directories exist
@@ -37,7 +45,16 @@ async function downloadFile(url, destination) {
         if (fs.existsSync(destination)) {
           fs.unlinkSync(destination);
         }
-        return downloadFile(response.headers.location, destination).then(resolve).catch(reject);
+
+        // Handle both absolute and relative redirect URLs
+        let redirectUrl = response.headers.location;
+        if (redirectUrl.startsWith('/')) {
+          // Relative URL - construct absolute URL from original request
+          const parsedUrl = new URL(url);
+          redirectUrl = `${parsedUrl.protocol}//${parsedUrl.host}${redirectUrl}`;
+        }
+
+        return downloadFile(redirectUrl, destination).then(resolve).catch(reject);
       }
 
       if (response.statusCode !== 200) {
@@ -97,10 +114,36 @@ function extractZip(zipPath, targetDir) {
   }
 }
 
+// Helper to extract tar.gz files (for macOS Python)
+function extractTarGz(tarPath, targetDir) {
+  console.log(`Extracting: ${path.basename(tarPath)}`);
+
+  try {
+    // Ensure target directory exists
+    if (!fs.existsSync(targetDir)) {
+      fs.mkdirSync(targetDir, { recursive: true });
+    }
+
+    // Use tar command (available on both macOS and Windows with Git Bash)
+    execSync(`tar -xzf "${tarPath}" -C "${targetDir}"`, { stdio: 'inherit' });
+    console.log('  Extraction complete!\n');
+  } catch (error) {
+    throw new Error(`Failed to extract ${tarPath}: ${error.message}`);
+  }
+}
+
 // Check if resources already exist
 function checkExistingResources() {
-  const pythonExists = fs.existsSync(path.join(PYTHON_DIR, 'python.exe'));
-  const ffmpegExists = fs.existsSync(path.join(FFMPEG_DIR, 'ffmpeg.exe'));
+  const pythonExe = IS_WINDOWS ? 'python.exe' : 'python3';
+  const ffmpegExe = IS_WINDOWS ? 'ffmpeg.exe' : 'ffmpeg';
+
+  // For macOS, check for python3 in PYTHON_DIR/bin/
+  const pythonPath = IS_MAC
+    ? path.join(PYTHON_DIR, 'bin', pythonExe)
+    : path.join(PYTHON_DIR, pythonExe);
+
+  const pythonExists = fs.existsSync(pythonPath);
+  const ffmpegExists = fs.existsSync(path.join(FFMPEG_DIR, ffmpegExe));
   const modelsExist = fs.existsSync(MODELS_DIR) && fs.readdirSync(MODELS_DIR).length > 0;
 
   return { pythonExists, ffmpegExists, modelsExist };
@@ -167,72 +210,153 @@ async function prepareResources() {
   if (existing.pythonExists) {
     console.log('✓ Python runtime already prepared\n');
   } else {
-    console.log('[1/4] Downloading embedded Python...');
-    const pythonZip = path.join(BUILD_DIR, 'python-embed.zip');
-    await downloadFile(PYTHON_EMBED_URL, pythonZip);
+    if (IS_MAC) {
+      // macOS: Download standalone Python build
+      console.log('[1/4] Downloading standalone Python for macOS (arm64)...');
+      const pythonTar = path.join(BUILD_DIR, 'python-macos.tar.gz');
+      await downloadFile(PYTHON_MAC_URL, pythonTar);
 
-    console.log('[2/4] Extracting Python...');
-    extractZip(pythonZip, PYTHON_DIR);
-    fs.unlinkSync(pythonZip);
+      console.log('[2/4] Extracting Python...');
+      // Extract to temp dir first
+      const tempDir = path.join(BUILD_DIR, 'python-temp');
+      extractTarGz(pythonTar, tempDir);
 
-    console.log('[3/4] Setting up pip...');
+      // Move the python directory to PYTHON_DIR
+      const extractedPythonDir = path.join(tempDir, 'python');
+      if (fs.existsSync(extractedPythonDir)) {
+        // Move contents to PYTHON_DIR
+        if (fs.existsSync(PYTHON_DIR)) {
+          fs.rmSync(PYTHON_DIR, { recursive: true, force: true });
+        }
+        fs.renameSync(extractedPythonDir, PYTHON_DIR);
+      }
 
-    // Download get-pip.py
-    const getPipPath = path.join(PYTHON_DIR, 'get-pip.py');
-    await downloadFile('https://bootstrap.pypa.io/get-pip.py', getPipPath);
+      // Cleanup
+      fs.unlinkSync(pythonTar);
+      fs.rmSync(tempDir, { recursive: true, force: true });
 
-    // Uncomment python311._pth to allow pip
-    const pthFile = path.join(PYTHON_DIR, 'python311._pth');
-    let pthContent = fs.readFileSync(pthFile, 'utf8');
-    pthContent = pthContent.replace('#import site', 'import site');
-    fs.writeFileSync(pthFile, pthContent);
+      console.log('[3/4] Setting up pip...');
 
-    // Install pip
-    const pythonExe = path.join(PYTHON_DIR, 'python.exe');
-    execSync(`"${pythonExe}" "${getPipPath}"`, { stdio: 'inherit' });
+      // python-build-standalone includes pip, just verify it works
+      const pythonExe = path.join(PYTHON_DIR, 'bin', 'python3');
 
-    console.log('[4/4] Installing Python dependencies...');
+      // Make python executable
+      execSync(`chmod +x "${pythonExe}"`, { stdio: 'inherit' });
 
-    // Install requirements
-    const requirementsPath = path.join(__dirname, '..', 'requirements.txt');
-    execSync(`"${pythonExe}" -m pip install -r "${requirementsPath}" --no-warn-script-location`, {
-      stdio: 'inherit'
-    });
+      // Verify pip
+      try {
+        execSync(`"${pythonExe}" -m pip --version`, { stdio: 'inherit' });
+      } catch (error) {
+        console.log('Installing pip...');
+        const getPipPath = path.join(PYTHON_DIR, 'get-pip.py');
+        await downloadFile('https://bootstrap.pypa.io/get-pip.py', getPipPath);
+        execSync(`"${pythonExe}" "${getPipPath}"`, { stdio: 'inherit' });
+        fs.unlinkSync(getPipPath);
+      }
 
-    console.log('✓ Python setup complete!\n');
+      console.log('[4/4] Installing Python dependencies...');
+
+      // Install requirements (macOS-specific)
+      const requirementsPath = path.join(__dirname, '..', 'requirements-macos.txt');
+      execSync(`"${pythonExe}" -m pip install -r "${requirementsPath}"`, {
+        stdio: 'inherit'
+      });
+
+      console.log('✓ Python setup complete!\n');
+    } else {
+      // Windows: Download embedded Python
+      console.log('[1/4] Downloading embedded Python...');
+      const pythonZip = path.join(BUILD_DIR, 'python-embed.zip');
+      await downloadFile(PYTHON_WIN_URL, pythonZip);
+
+      console.log('[2/4] Extracting Python...');
+      extractZip(pythonZip, PYTHON_DIR);
+      fs.unlinkSync(pythonZip);
+
+      console.log('[3/4] Setting up pip...');
+
+      // Download get-pip.py
+      const getPipPath = path.join(PYTHON_DIR, 'get-pip.py');
+      await downloadFile('https://bootstrap.pypa.io/get-pip.py', getPipPath);
+
+      // Uncomment python311._pth to allow pip
+      const pthFile = path.join(PYTHON_DIR, 'python311._pth');
+      let pthContent = fs.readFileSync(pthFile, 'utf8');
+      pthContent = pthContent.replace('#import site', 'import site');
+      fs.writeFileSync(pthFile, pthContent);
+
+      // Install pip
+      const pythonExe = path.join(PYTHON_DIR, 'python.exe');
+      execSync(`"${pythonExe}" "${getPipPath}"`, { stdio: 'inherit' });
+
+      console.log('[4/4] Installing Python dependencies...');
+
+      // Install requirements (Windows-specific)
+      const requirementsPath = path.join(__dirname, '..', 'requirements-windows.txt');
+      execSync(`"${pythonExe}" -m pip install -r "${requirementsPath}" --no-warn-script-location`, {
+        stdio: 'inherit'
+      });
+
+      console.log('✓ Python setup complete!\n');
+    }
   }
 
   // Prepare ffmpeg
   if (existing.ffmpegExists) {
     console.log('✓ ffmpeg already prepared\n');
   } else {
-    console.log('[1/2] Downloading ffmpeg...');
-    const ffmpegZip = path.join(BUILD_DIR, 'ffmpeg.zip');
-    await downloadFile(FFMPEG_URL, ffmpegZip);
+    if (IS_MAC) {
+      // macOS: Download ffmpeg binary
+      console.log('[1/2] Downloading ffmpeg for macOS...');
+      const ffmpegZip = path.join(BUILD_DIR, 'ffmpeg.zip');
+      await downloadFile(FFMPEG_MAC_URL, ffmpegZip);
 
-    console.log('[2/2] Extracting ffmpeg...');
-    const tempDir = path.join(BUILD_DIR, 'ffmpeg-temp');
-    extractZip(ffmpegZip, tempDir);
+      console.log('[2/2] Extracting ffmpeg...');
+      if (!fs.existsSync(FFMPEG_DIR)) {
+        fs.mkdirSync(FFMPEG_DIR, { recursive: true });
+      }
 
-    // Find the bin directory (ffmpeg extracts to a versioned folder)
-    const extractedDirs = fs.readdirSync(tempDir);
-    const ffmpegBinDir = path.join(tempDir, extractedDirs[0], 'bin');
+      // Extract zip directly to ffmpeg dir
+      extractZip(ffmpegZip, FFMPEG_DIR);
 
-    // Copy binaries to ffmpeg dir
-    if (!fs.existsSync(FFMPEG_DIR)) {
-      fs.mkdirSync(FFMPEG_DIR, { recursive: true });
+      // Make executable
+      const ffmpegPath = path.join(FFMPEG_DIR, 'ffmpeg');
+      execSync(`chmod +x "${ffmpegPath}"`, { stdio: 'inherit' });
+
+      // Cleanup
+      fs.unlinkSync(ffmpegZip);
+
+      console.log('✓ ffmpeg setup complete!\n');
+    } else {
+      // Windows: Download ffmpeg
+      console.log('[1/2] Downloading ffmpeg...');
+      const ffmpegZip = path.join(BUILD_DIR, 'ffmpeg.zip');
+      await downloadFile(FFMPEG_WIN_URL, ffmpegZip);
+
+      console.log('[2/2] Extracting ffmpeg...');
+      const tempDir = path.join(BUILD_DIR, 'ffmpeg-temp');
+      extractZip(ffmpegZip, tempDir);
+
+      // Find the bin directory (ffmpeg extracts to a versioned folder)
+      const extractedDirs = fs.readdirSync(tempDir);
+      const ffmpegBinDir = path.join(tempDir, extractedDirs[0], 'bin');
+
+      // Copy binaries to ffmpeg dir
+      if (!fs.existsSync(FFMPEG_DIR)) {
+        fs.mkdirSync(FFMPEG_DIR, { recursive: true });
+      }
+
+      fs.copyFileSync(
+        path.join(ffmpegBinDir, 'ffmpeg.exe'),
+        path.join(FFMPEG_DIR, 'ffmpeg.exe')
+      );
+
+      // Cleanup
+      fs.unlinkSync(ffmpegZip);
+      fs.rmSync(tempDir, { recursive: true, force: true });
+
+      console.log('✓ ffmpeg setup complete!\n');
     }
-
-    fs.copyFileSync(
-      path.join(ffmpegBinDir, 'ffmpeg.exe'),
-      path.join(FFMPEG_DIR, 'ffmpeg.exe')
-    );
-
-    // Cleanup
-    fs.unlinkSync(ffmpegZip);
-    fs.rmSync(tempDir, { recursive: true, force: true });
-
-    console.log('✓ ffmpeg setup complete!\n');
   }
 
   // Download Whisper models (optional)
