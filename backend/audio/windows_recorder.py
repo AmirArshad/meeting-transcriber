@@ -1,13 +1,22 @@
 """
-Alternative audio recorder implementation (v2).
+Windows Audio Recorder (v2).
 
-Key difference: Uses separate sequential recordings instead of real-time mixing.
-This avoids the buffer synchronization issues that cause choppy audio.
+Records microphone and desktop audio to separate buffers, then mixes them
+after recording completes (post-processing). This avoids real-time buffer
+synchronization issues that cause choppy audio.
 
-Approach:
-- Record mic and desktop to SEPARATE in-memory buffers simultaneously
-- Mix them AFTER recording completes (post-processing)
-- Results in smooth, artifact-free audio
+Key features:
+- Separate mic and desktop audio capture using WASAPI
+- Timestamp-based gap preservation for desktop audio (WASAPI loopback only
+  sends callbacks when audio is playing)
+- Post-processing mix with minimal enhancement for natural sound quality
+- High-quality Opus compression via ffmpeg
+
+Module structure:
+- constants.py: Configuration values
+- processor.py: Audio processing (resampling, enhancement, mixing)
+- compressor.py: ffmpeg compression wrapper
+- timeline.py: WASAPI gap reconstruction
 """
 
 import sys
@@ -15,13 +24,37 @@ import wave
 import json
 import threading
 import time
-from datetime import datetime
+import platform
 from pathlib import Path
 import numpy as np
-import soxr
 import pyaudiowpatch as pyaudio
 
-# Store final output path for meeting manager
+# Import from our modular components
+from .constants import (
+    DEFAULT_SAMPLE_RATE,
+    DEFAULT_CHANNELS,
+    DEFAULT_CHUNK_SIZE,
+    WINDOWS_CHUNK_MULTIPLIER,
+    DEFAULT_PREROLL_SECONDS,
+    COMMON_SAMPLE_RATES,
+    WATCHDOG_CHECK_INTERVAL,
+    WATCHDOG_STALL_THRESHOLD,
+    LEVEL_SUBSAMPLE_FACTOR,
+    LEVEL_UPDATE_FPS,
+    MIC_BOOST_LINEAR,
+)
+from .processor import (
+    resample,
+    enhance_microphone,
+    downmix_to_stereo,
+    mono_to_stereo,
+    mix_audio,
+    align_audio_lengths,
+)
+from .compressor import compress_to_opus
+from .timeline import reconstruct_desktop_timeline
+
+# Store final output path for meeting manager (legacy interface)
 _final_output_path = None
 _recording_duration = 0.0
 
@@ -40,13 +73,28 @@ class AudioRecorder:
         mic_device_id: int,
         loopback_device_id: int,
         output_path: str,
-        sample_rate: int = 48000,
-        channels: int = 2,
-        chunk_size: int = 4096,
+        sample_rate: int = DEFAULT_SAMPLE_RATE,
+        channels: int = DEFAULT_CHANNELS,
+        chunk_size: int = DEFAULT_CHUNK_SIZE,
         mic_volume: float = 1.0,
-        desktop_volume: float = 1.0
+        desktop_volume: float = 1.0,
+        preroll_seconds: float = None  # None = use default, 0 = no preroll (for production with countdown)
     ):
-        """Initialize the recorder."""
+        """
+        Initialize the Windows audio recorder.
+
+        Args:
+            mic_device_id: PyAudio device index for microphone
+            loopback_device_id: PyAudio device index for desktop audio (-1 to disable)
+            output_path: Path for output audio file
+            sample_rate: Target output sample rate (default: 48000)
+            channels: Target output channels (default: 2 for stereo)
+            chunk_size: Audio buffer size in frames (default: 4096)
+            mic_volume: Microphone volume multiplier (0.0-1.0)
+            desktop_volume: Desktop audio volume multiplier (0.0-1.0)
+            preroll_seconds: Seconds to discard at start for device warm-up
+                            (None = default 1.5s, 0 = disabled for production)
+        """
         self.mic_device_id = mic_device_id
         self.loopback_device_id = loopback_device_id
         self.output_path = output_path
@@ -80,8 +128,27 @@ class AudioRecorder:
 
         if loopback_device_id >= 0:
             loopback_info = self.pa.get_device_info_by_index(loopback_device_id)
-            self.loopback_sample_rate = int(loopback_info['defaultSampleRate'])
-            self.loopback_channels = int(loopback_info['maxInputChannels'])
+
+            # COMPATIBILITY FIX: Probe actual working sample rate instead of trusting default
+            # This prevents distorted audio on Bluetooth headsets and other devices
+            # where reported rate doesn't match actual operating rate
+            print(f"", file=sys.stderr)
+            print(f"Initializing loopback device...", file=sys.stderr)
+            try:
+                self.loopback_sample_rate, self.loopback_channels = self._probe_loopback_sample_rate(
+                    loopback_device_id,
+                    loopback_info
+                )
+            except RuntimeError as e:
+                # If probing fails completely, fall back to default but warn user
+                print(f"", file=sys.stderr)
+                print(f"WARNING: Sample rate probing failed!", file=sys.stderr)
+                print(f"WARNING: Using default rate - audio may be distorted", file=sys.stderr)
+                print(f"WARNING: Error: {e}", file=sys.stderr)
+                print(f"", file=sys.stderr)
+                self.loopback_sample_rate = int(loopback_info['defaultSampleRate'])
+                self.loopback_channels = int(loopback_info['maxInputChannels'])
+
             self.mixing_mode = True
         else:
             self.loopback_sample_rate = None
@@ -95,16 +162,26 @@ class AudioRecorder:
         print(f"  Target output: {self.target_sample_rate} Hz, {self.target_channels} channel(s) (stereo)", file=sys.stderr)
 
         # Separate frame buffers
+        # Mic frames: just audio data (continuous callbacks even during silence)
+        # Desktop frames: (timestamp, audio_data) tuples to preserve gaps
+        # WASAPI loopback only sends callbacks when audio is playing, so we need
+        # timestamps to reconstruct the timeline with proper silence gaps
         self.mic_frames = []
-        self.desktop_frames = []
+        self.desktop_frames = []  # List of (timestamp, audio_data) tuples
         self.is_recording = False
         self.lock = threading.Lock()
 
-        # Pre-roll tracking (discard first ~1.5 seconds for device warm-up)
-        # First recordings need extra time for device initialization
-        self.preroll_frames = int(1.5 * self.mic_sample_rate / self.chunk_size)
+        # Pre-roll: discard first N seconds for device warm-up
+        # In production, the 3-second countdown handles warm-up, so preroll can be 0
+        # NOTE: Preroll is time-based (checked in callbacks), not frame-count based
+        self.preroll_seconds = DEFAULT_PREROLL_SECONDS if preroll_seconds is None else preroll_seconds
+
         self.mic_frame_count = 0
         self.desktop_frame_count = 0
+
+        # Time-based synchronization - SINGLE reference point set at recording start
+        # Both streams use the same reference to ensure they stay in sync
+        self.recording_start_time = None
 
         # Audio levels (0.0 to 1.0)
         self.mic_level = 0.0
@@ -114,18 +191,97 @@ class AudioRecorder:
         self.mic_stream = None
         self.desktop_stream = None
 
-        # FIX 6: Callback watchdog to detect audio stream stalls
+        # Callback watchdog to detect audio stream stalls
         self.last_callback_time = 0
         self.callback_watchdog = None
         self.watchdog_running = False
-        self.watchdog_warning_shown = False  # Track if we've already warned
+        self.watchdog_warning_shown = False
 
-        # FIX 5: Check platform once instead of repeatedly
-        import platform
+        # Platform detection (already imported at module level)
         self.is_windows = platform.system() == 'Windows'
 
         # Store original chunk size before any modifications
         self.original_chunk_size = chunk_size
+
+    def _probe_loopback_sample_rate(self, device_id, device_info):
+        """
+        Probe loopback device to find actual working sample rate.
+
+        COMPATIBILITY FIX: Bluetooth headsets and some other devices may report
+        a default sample rate that doesn't match their actual operating rate.
+        This causes severe pitch distortion (slow, bassy "monster movie" sound).
+
+        This method tries common sample rates in priority order to find one that works:
+        1. Reported default rate
+        2. Common high-quality rates (48000, 44100)
+        3. Common Bluetooth headset rates (32000, 16000, 8000)
+
+        Args:
+            device_id: PyAudio device index
+            device_info: Device info dict from PyAudio
+
+        Returns:
+            (working_rate, channels) tuple
+
+        Raises:
+            RuntimeError: If no working sample rate is found
+        """
+        default_rate = int(device_info['defaultSampleRate'])
+        channels = int(device_info['maxInputChannels'])
+
+        # Priority order: default first, then common rates from constants
+        rates_to_try = [default_rate]
+        for rate in COMMON_SAMPLE_RATES:
+            if rate != default_rate and rate not in rates_to_try:
+                rates_to_try.append(rate)
+
+        print(f"Probing loopback device sample rates...", file=sys.stderr)
+        print(f"  Device: {device_info.get('name', 'Unknown')}", file=sys.stderr)
+        if channels > 2:
+            print(f"  Device has {channels} channels (surround sound), will downmix to stereo after recording", file=sys.stderr)
+        print(f"  Trying rates: {rates_to_try}", file=sys.stderr)
+
+        for rate in rates_to_try:
+            test_stream = None
+            try:
+                # Attempt to open stream with this rate
+                print(f"  Testing {rate} Hz...", end=' ', file=sys.stderr)
+                test_stream = self.pa.open(
+                    format=pyaudio.paInt16,
+                    channels=channels,
+                    rate=rate,
+                    input=True,
+                    input_device_index=device_id,
+                    frames_per_buffer=1024
+                )
+
+                # If successful, close and return this rate
+                print(f"Success!", file=sys.stderr)
+                print(f"  Loopback device will use {rate} Hz, {channels} channel(s)", file=sys.stderr)
+                return (rate, channels)
+
+            except Exception as e:
+                print(f"Failed: {str(e)[:50]}", file=sys.stderr)
+                continue
+            finally:
+                # Always close the stream if it was opened (prevents resource leak)
+                if test_stream is not None:
+                    try:
+                        test_stream.close()
+                    except Exception:
+                        pass  # Ignore errors during cleanup
+
+        # All rates failed
+        raise RuntimeError(
+            f"Could not find working sample rate for loopback device {device_id}.\n"
+            f"Tried rates: {rates_to_try}\n"
+            f"Device: {device_info.get('name', 'Unknown')}\n\n"
+            f"Suggestions:\n"
+            f"  1. Try selecting a different desktop audio device\n"
+            f"  2. Check that the device is not in use by another application\n"
+            f"  3. If using Bluetooth, ensure headset is in stereo mode (not headset/hands-free mode)\n"
+            f"  4. Restart the audio device or reconnect Bluetooth"
+        )
 
     def _mic_callback(self, in_data, frame_count, time_info, status):
         """Callback for microphone."""
@@ -138,28 +294,39 @@ class AudioRecorder:
         if self.is_recording:
             with self.lock:
                 self.mic_frame_count += 1
-                # Skip pre-roll frames (first ~1.5 seconds) to avoid device warm-up artifacts
-                if self.mic_frame_count > self.preroll_frames:
+                current_time = time.time()
+
+                # DEBUG: Track first callback time
+                if self.mic_first_callback_time is None:
+                    self.mic_first_callback_time = current_time
+                    print(f"DEBUG MIC: First callback at {current_time - self.recording_start_time:.4f}s after recording start", file=sys.stderr)
+
+                # TIME-BASED SYNCHRONIZATION: Use shared reference set at recording start
+                # Both streams use the same recording_start_time (set in start_recording)
+                # This ensures they skip the same wall-clock period and stay in sync
+                elapsed = current_time - self.recording_start_time
+
+                # Skip pre-roll based on TIME, not frame counts
+                if elapsed >= self.preroll_seconds:
+                    # DEBUG: Track first capture time
+                    if self.mic_first_capture_time is None:
+                        self.mic_first_capture_time = current_time
+                        print(f"DEBUG MIC: First CAPTURE at {elapsed:.4f}s elapsed (preroll={self.preroll_seconds}s)", file=sys.stderr)
                     self.mic_frames.append(in_data)
-                
-                # Calculate level for visualization
-                # PERFORMANCE: Optimized to avoid array allocation in hot path
+
+                # Calculate level for visualization (subsampled for performance)
                 try:
-                    # Convert to numpy view (no copy)
                     data = np.frombuffer(in_data, dtype=np.int16)
-                    # Use numpy's abs with subsample (::8 instead of ::4 for 2x speedup)
-                    # Even with less samples, still accurate enough for visualization
-                    peak = np.abs(data[::8]).max() if len(data) > 0 else 0
-                    # Normalize (int16 max is 32768)
+                    peak = np.abs(data[::LEVEL_SUBSAMPLE_FACTOR]).max() if len(data) > 0 else 0
                     self.mic_level = float(peak) / 32768.0
-                except:
+                except Exception:
                     self.mic_level = 0.0
 
         return (in_data, pyaudio.paContinue)
 
     def _desktop_callback(self, in_data, frame_count, time_info, status):
         """Callback for desktop audio."""
-        # FIX 6 (CRITICAL): Update watchdog timestamp for desktop too!
+        # Update watchdog timestamp
         self.last_callback_time = time.time()
 
         if status:
@@ -168,17 +335,35 @@ class AudioRecorder:
         if self.is_recording:
             with self.lock:
                 self.desktop_frame_count += 1
-                # Skip pre-roll frames (first ~1.5 seconds) to avoid device warm-up artifacts
-                if self.desktop_frame_count > self.preroll_frames:
-                    self.desktop_frames.append(in_data)
+                current_time = time.time()
 
-                # Calculate level for visualization
-                # PERFORMANCE: Optimized to avoid array allocation in hot path
+                # DEBUG: Track first callback time
+                if self.desktop_first_callback_time is None:
+                    self.desktop_first_callback_time = current_time
+                    print(f"DEBUG DESKTOP: First callback at {current_time - self.recording_start_time:.4f}s after recording start", file=sys.stderr)
+
+                # TIME-BASED SYNCHRONIZATION: Use shared reference set at recording start
+                # Both streams use the same recording_start_time (set in start_recording)
+                # This ensures they skip the same wall-clock period and stay in sync
+                elapsed = current_time - self.recording_start_time
+
+                # Skip pre-roll based on TIME, not frame counts
+                if elapsed >= self.preroll_seconds:
+                    # DEBUG: Track first capture time
+                    if self.desktop_first_capture_time is None:
+                        self.desktop_first_capture_time = current_time
+                        print(f"DEBUG DESKTOP: First CAPTURE at {elapsed:.4f}s elapsed (preroll={self.preroll_seconds}s)", file=sys.stderr)
+                    # Store timestamp with audio data to preserve gaps
+                    # WASAPI loopback only sends callbacks when audio is playing
+                    # We need timestamps to reconstruct timeline with proper silence
+                    self.desktop_frames.append((current_time, in_data))
+
+                # Calculate level for visualization (subsampled for performance)
                 try:
                     data = np.frombuffer(in_data, dtype=np.int16)
-                    peak = np.abs(data[::8]).max() if len(data) > 0 else 0
+                    peak = np.abs(data[::LEVEL_SUBSAMPLE_FACTOR]).max() if len(data) > 0 else 0
                     self.desktop_level = float(peak) / 32768.0
-                except:
+                except Exception:
                     self.desktop_level = 0.0
 
         return (in_data, pyaudio.paContinue)
@@ -195,16 +380,26 @@ class AudioRecorder:
         self.is_recording = True
         self.watchdog_warning_shown = False  # Reset warning flag
 
-        # FIX 5 (REFINED): Increase chunk size on Windows for better resilience to backgrounding
+        # Increase chunk size on Windows for better resilience to backgrounding
         # Larger buffers = more tolerance for process scheduling delays
-        # Since we do post-processing, latency doesn't matter
         if self.is_windows:
-            self.chunk_size = self.original_chunk_size * 4  # 4x larger buffer
-            print(f"Windows detected: Using larger audio buffer ({self.chunk_size} frames) for background resilience", file=sys.stderr)
+            self.chunk_size = self.original_chunk_size * WINDOWS_CHUNK_MULTIPLIER
+            print(f"Windows: Using {self.chunk_size} frame buffer for background resilience", file=sys.stderr)
+            if self.preroll_seconds > 0:
+                print(f"  Preroll: {self.preroll_seconds}s (time-based)", file=sys.stderr)
+            else:
+                print(f"  Preroll disabled (production mode)", file=sys.stderr)
 
-            # CRITICAL FIX: Recalculate preroll_frames with new chunk size
-            self.preroll_frames = int(1.5 * self.mic_sample_rate / self.chunk_size)
-            print(f"  Adjusted preroll to {self.preroll_frames} frames", file=sys.stderr)
+        # Set recording start time BEFORE starting streams
+        # This is the single reference point for both streams' preroll timing
+        # Setting it here (not in callbacks) ensures both streams use the SAME reference
+        self.recording_start_time = time.time()
+
+        # DEBUG: Track first capture times to verify synchronization
+        self.mic_first_capture_time = None
+        self.desktop_first_capture_time = None
+        self.mic_first_callback_time = None
+        self.desktop_first_callback_time = None
 
         # NOTE: Thread priority boost removed - it only affects main thread, not audio callbacks
         # PyAudio's internal callback threads cannot be easily accessed from Python
@@ -274,21 +469,20 @@ class AudioRecorder:
             self.cleanup()
             raise RuntimeError(f"Failed to start audio streams: {e}")
 
-        # FIX 6 (REFINED): Start watchdog thread to detect callback stalls
+        # Start watchdog thread to detect callback stalls
         def watchdog():
             """Monitor audio callback health and warn if stalled."""
             self.watchdog_running = True
-            self.last_callback_time = time.time()  # Initialize
+            self.last_callback_time = time.time()
 
             while self.is_recording and self.watchdog_running:
-                time.sleep(5)  # Check every 5 seconds
+                time.sleep(WATCHDOG_CHECK_INTERVAL)
 
                 if self.is_recording:
                     elapsed = time.time() - self.last_callback_time
 
-                    # If no callback for 10 seconds, something is very wrong
-                    # CRITICAL FIX: Only warn ONCE to avoid console spam
-                    if elapsed > 10 and not self.watchdog_warning_shown:
+                    # Warn if no callback for too long (only once to avoid spam)
+                    if elapsed > WATCHDOG_STALL_THRESHOLD and not self.watchdog_warning_shown:
                         print(f"", file=sys.stderr)
                         print(f"=" * 70, file=sys.stderr)
                         print(f"ERROR: Audio callback stalled!", file=sys.stderr)
@@ -333,6 +527,54 @@ class AudioRecorder:
         print(f"  Mic frames: {len(self.mic_frames)}", file=sys.stderr)
         print(f"  Desktop frames: {len(self.desktop_frames)}", file=sys.stderr)
 
+        # DEBUG: Print timing diagnostics
+        print(f"", file=sys.stderr)
+        print(f"=" * 60, file=sys.stderr)
+        print(f"DEBUG: TIMING DIAGNOSTICS", file=sys.stderr)
+        print(f"=" * 60, file=sys.stderr)
+        print(f"  Recording start time: {self.recording_start_time}", file=sys.stderr)
+        print(f"  Preroll seconds: {self.preroll_seconds}", file=sys.stderr)
+        print(f"", file=sys.stderr)
+
+        if self.mic_first_callback_time is not None:
+            mic_cb_offset = self.mic_first_callback_time - self.recording_start_time
+            print(f"  MIC first callback: {mic_cb_offset:.4f}s after recording start", file=sys.stderr)
+        else:
+            print(f"  MIC first callback: NEVER (no callbacks received!)", file=sys.stderr)
+
+        if self.mic_first_capture_time is not None:
+            mic_cap_offset = self.mic_first_capture_time - self.recording_start_time
+            print(f"  MIC first capture:  {mic_cap_offset:.4f}s after recording start", file=sys.stderr)
+        else:
+            print(f"  MIC first capture: NEVER (preroll never elapsed or no callbacks)", file=sys.stderr)
+
+        print(f"", file=sys.stderr)
+
+        if self.desktop_first_callback_time is not None:
+            desk_cb_offset = self.desktop_first_callback_time - self.recording_start_time
+            print(f"  DESKTOP first callback: {desk_cb_offset:.4f}s after recording start", file=sys.stderr)
+        else:
+            print(f"  DESKTOP first callback: NEVER (no callbacks received!)", file=sys.stderr)
+
+        if self.desktop_first_capture_time is not None:
+            desk_cap_offset = self.desktop_first_capture_time - self.recording_start_time
+            print(f"  DESKTOP first capture:  {desk_cap_offset:.4f}s after recording start", file=sys.stderr)
+        else:
+            print(f"  DESKTOP first capture: NEVER (preroll never elapsed or no callbacks)", file=sys.stderr)
+
+        # KEY DIAGNOSTIC: Check if captures started at same time
+        if self.mic_first_capture_time is not None and self.desktop_first_capture_time is not None:
+            capture_delta = self.desktop_first_capture_time - self.mic_first_capture_time
+            print(f"", file=sys.stderr)
+            print(f"  CAPTURE TIME DELTA: {capture_delta:.4f}s", file=sys.stderr)
+            if abs(capture_delta) > 0.1:
+                print(f"  *** WARNING: Captures started {abs(capture_delta):.4f}s apart! This will cause overlap! ***", file=sys.stderr)
+            else:
+                print(f"  (Captures started within 100ms - timing looks OK)", file=sys.stderr)
+
+        print(f"=" * 60, file=sys.stderr)
+        print(f"", file=sys.stderr)
+
         # Mix and save with detailed error handling
         try:
             self._mix_and_save()
@@ -348,6 +590,23 @@ class AudioRecorder:
         self.desktop_frames = []
 
         print("Recording stopped!", file=sys.stderr)
+
+    def _reconstruct_desktop_timeline(self):
+        """
+        Reconstruct desktop audio timeline from timestamped frames.
+
+        Delegates to the timeline module for the actual reconstruction.
+        See timeline.py for implementation details.
+        """
+        return reconstruct_desktop_timeline(
+            desktop_frames=self.desktop_frames,
+            mic_frames=self.mic_frames,
+            mic_first_capture_time=self.mic_first_capture_time,
+            mic_sample_rate=self.mic_sample_rate,
+            mic_channels=self.mic_channels,
+            loopback_sample_rate=self.loopback_sample_rate,
+            loopback_channels=self.loopback_channels
+        )
 
     def _mix_and_save(self):
         """Mix the two audio sources and save to file."""
@@ -370,88 +629,88 @@ class AudioRecorder:
 
         # Convert to numpy arrays
         mic_audio = np.frombuffer(b''.join(self.mic_frames), dtype=np.int16)
+        mic_duration = len(mic_audio) / self.mic_sample_rate / self.mic_channels
+        print(f"  Raw mic audio: {len(mic_audio)} samples ({mic_duration:.2f} seconds at {self.mic_sample_rate} Hz, {self.mic_channels} ch)", file=sys.stderr)
 
         if self.mixing_mode and self.desktop_frames:
-            desktop_audio = np.frombuffer(b''.join(self.desktop_frames), dtype=np.int16)
+            # TIMELINE RECONSTRUCTION: Desktop frames have timestamps to preserve gaps
+            # WASAPI loopback only sends callbacks when audio is playing, so we need
+            # to reconstruct the full timeline with silence where there was no audio
+            desktop_audio = self._reconstruct_desktop_timeline()
+            desktop_duration = len(desktop_audio) / self.loopback_sample_rate / self.loopback_channels
+            print(f"  Reconstructed desktop audio: {len(desktop_audio)} samples ({desktop_duration:.2f} seconds at {self.loopback_sample_rate} Hz, {self.loopback_channels} ch)", file=sys.stderr)
 
-            # Resample both to target rate
+            # Resample both to target rate (using processor module)
             if self.mic_sample_rate != self.target_sample_rate:
                 print(f"  Resampling mic: {self.mic_sample_rate} Hz → {self.target_sample_rate} Hz", file=sys.stderr)
-                mic_audio = self._resample(mic_audio, self.mic_sample_rate, self.target_sample_rate)
+                mic_audio = resample(mic_audio, self.mic_sample_rate, self.target_sample_rate)
 
-            # Convert mono mic to stereo if needed
-            if self.mic_channels == 1 and self.target_channels == 2:
+            # CHANNEL FIX: Handle multi-channel mic (some USB mics have 4+ channels)
+            if self.mic_channels > 2:
+                mic_audio = downmix_to_stereo(mic_audio, self.mic_channels)
+            elif self.mic_channels == 1 and self.target_channels == 2:
                 print(f"  Converting mic from mono to stereo...", file=sys.stderr)
-                mic_audio = np.repeat(mic_audio, 2)  # Duplicate mono to both channels
+                mic_audio = mono_to_stereo(mic_audio)
 
-            # Apply noise reduction to microphone audio only
+            # Apply noise reduction to microphone audio only (using processor module)
             print(f"  Applying noise reduction to mic...", file=sys.stderr)
-            mic_audio = self._enhance_microphone(mic_audio, self.target_sample_rate)
+            mic_audio = enhance_microphone(mic_audio, self.target_sample_rate, self.target_channels)
 
             if self.loopback_sample_rate != self.target_sample_rate:
                 print(f"  Resampling desktop: {self.loopback_sample_rate} Hz → {self.target_sample_rate} Hz", file=sys.stderr)
-                desktop_audio = self._resample(desktop_audio, self.loopback_sample_rate, self.target_sample_rate)
+                desktop_audio = resample(desktop_audio, self.loopback_sample_rate, self.target_sample_rate)
 
-            # Convert mono loopback to stereo if needed (rare but possible)
-            if self.loopback_channels == 1 and self.target_channels == 2:
+            # CHANNEL FIX: Downmix multi-channel audio to stereo (using processor module)
+            if self.loopback_channels > 2:
+                desktop_audio = downmix_to_stereo(desktop_audio, self.loopback_channels)
+            elif self.loopback_channels == 1 and self.target_channels == 2:
                 print(f"  Converting desktop audio from mono to stereo...", file=sys.stderr)
-                desktop_audio = np.repeat(desktop_audio, 2)
+                desktop_audio = mono_to_stereo(desktop_audio)
 
-            # Align to same length by padding shorter stream with silence
-            # This preserves timing - truncating would cause misalignment
+            # Align audio lengths (using processor module)
             mic_len = len(mic_audio)
             desktop_len = len(desktop_audio)
-            max_length = max(mic_len, desktop_len)
 
             # Safety check: ensure we have valid audio data
-            if max_length == 0:
+            if max(mic_len, desktop_len) == 0:
                 raise RuntimeError(
                     "Audio alignment failed - both audio tracks are empty after resampling. "
                     "This may be due to audio buffer corruption or device issues."
                 )
 
-            print(f"  Aligning audio: mic={mic_len} samples, desktop={desktop_len} samples, padding to={max_length}", file=sys.stderr)
+            print(f"  Aligning audio lengths: mic={mic_len} samples, desktop={desktop_len} samples", file=sys.stderr)
+            mic_audio, desktop_audio = align_audio_lengths(mic_audio, desktop_audio)
 
-            # Pad shorter stream with silence at the end
-            if mic_len < max_length:
-                padding = np.zeros(max_length - mic_len, dtype=np.int16)
-                mic_audio = np.concatenate([mic_audio, padding])
-                print(f"  Padded mic with {max_length - mic_len} samples of silence", file=sys.stderr)
+            if len(mic_audio) != mic_len:
+                print(f"  Padded mic END with {len(mic_audio) - mic_len} samples of silence", file=sys.stderr)
+            if len(desktop_audio) != desktop_len:
+                print(f"  Padded desktop END with {len(desktop_audio) - desktop_len} samples of silence", file=sys.stderr)
 
-            if desktop_len < max_length:
-                padding = np.zeros(max_length - desktop_len, dtype=np.int16)
-                desktop_audio = np.concatenate([desktop_audio, padding])
-                print(f"  Padded desktop with {max_length - desktop_len} samples of silence", file=sys.stderr)
-
-            # Mix
+            # Mix (using processor module)
             print("  Mixing mic + desktop...", file=sys.stderr)
-            # Boost mic by 2x (6 dB) to make voice more prominent
-            mic_float = mic_audio.astype(np.float32) / 32768.0 * self.mic_volume * 2.0
-            desktop_float = desktop_audio.astype(np.float32) / 32768.0 * self.desktop_volume
-
-            mixed = mic_float + desktop_float
-
-            # Soft limiting
-            max_val = np.max(np.abs(mixed))
-            if max_val > 1.0:
-                mixed = np.tanh(mixed * 0.85)
-
-            final_audio = (mixed * 32767.0).astype(np.int16)
+            final_audio = mix_audio(
+                mic_audio, desktop_audio,
+                mic_volume=self.mic_volume,
+                desktop_volume=self.desktop_volume,
+                mic_boost=MIC_BOOST_LINEAR
+            )
 
         else:
             # Mic-only
             if self.mic_sample_rate != self.target_sample_rate:
                 print(f"  Resampling mic: {self.mic_sample_rate} Hz → {self.target_sample_rate} Hz", file=sys.stderr)
-                mic_audio = self._resample(mic_audio, self.mic_sample_rate, self.target_sample_rate)
+                mic_audio = resample(mic_audio, self.mic_sample_rate, self.target_sample_rate)
 
-            # Convert mono mic to stereo if needed
-            if self.mic_channels == 1 and self.target_channels == 2:
+            # CHANNEL FIX: Handle multi-channel mic (some USB mics have 4+ channels)
+            if self.mic_channels > 2:
+                mic_audio = downmix_to_stereo(mic_audio, self.mic_channels)
+            elif self.mic_channels == 1 and self.target_channels == 2:
                 print(f"  Converting mic from mono to stereo...", file=sys.stderr)
-                mic_audio = np.repeat(mic_audio, 2)
+                mic_audio = mono_to_stereo(mic_audio)
 
-            # Apply noise reduction to microphone audio
+            # Apply noise reduction to microphone audio (using processor module)
             print(f"  Applying noise reduction to mic...", file=sys.stderr)
-            mic_audio = self._enhance_microphone(mic_audio, self.target_sample_rate)
+            mic_audio = enhance_microphone(mic_audio, self.target_sample_rate, self.target_channels)
 
             final_audio = mic_audio
 
@@ -476,9 +735,9 @@ class AudioRecorder:
 
         temp_size = Path(temp_wav).stat().st_size
 
-        # Compress with ffmpeg
+        # Compress with ffmpeg (using compressor module)
         print(f"Compressing with ffmpeg (128 kbps Opus)...", file=sys.stderr)
-        final_path = self._compress_audio(temp_wav, self.output_path)
+        final_path = compress_to_opus(temp_wav, self.output_path, self.target_sample_rate)
 
         # Clean up temp file
         Path(temp_wav).unlink()
@@ -497,202 +756,6 @@ class AudioRecorder:
         global _final_output_path, _recording_duration
         _final_output_path = final_path
         _recording_duration = duration
-
-    def _compress_audio(self, input_path, output_path):
-        """Compress audio using ffmpeg to Opus format."""
-        import subprocess
-
-        # Change extension to .opus
-        opus_path = str(Path(output_path).with_suffix('.opus'))
-
-        # AUDIO QUALITY FIX: Use higher bitrate and better settings
-        # - 128 kbps for archival/transcription quality (was 96k)
-        # - 'audio' mode instead of 'voip' for better quality
-        # - Explicit sample rate to prevent downsampling
-        # Still ~8-10x smaller than WAV, but much better quality
-        cmd = [
-            'ffmpeg',
-            '-i', input_path,
-            '-c:a', 'libopus',
-            '-b:a', '128k',  # Higher bitrate for better quality (was 96k)
-            '-vbr', 'on',  # Variable bitrate for better quality
-            '-compression_level', '10',  # Maximum quality (0-10, higher = better)
-            '-application', 'audio',  # Audio mode (better quality than 'voip')
-            '-ar', str(self.target_sample_rate),  # Preserve sample rate
-            '-y',  # Overwrite output
-            '-loglevel', 'error',  # Only show errors
-            opus_path
-        ]
-
-        try:
-            result = subprocess.run(cmd, check=True, capture_output=True)
-
-            # Verify recording integrity
-            if not self._verify_recording_integrity(opus_path):
-                print(f"WARNING: Recording integrity check failed", file=sys.stderr)
-
-            return opus_path
-        except subprocess.CalledProcessError as e:
-            print(f"Warning: ffmpeg compression failed: {e.stderr.decode()}", file=sys.stderr)
-            print(f"Falling back to WAV format...", file=sys.stderr)
-            # If ffmpeg fails, just copy the temp WAV to output
-            import shutil
-            shutil.copy(input_path, output_path)
-            return output_path
-
-    def _verify_recording_integrity(self, file_path):
-        """
-        Verify the recording file is valid and playable.
-
-        Uses ffprobe to check file integrity.
-
-        Returns:
-            True if file is valid, False otherwise.
-        """
-        import subprocess
-        import shutil
-
-        # Check if ffprobe is available
-        ffprobe_path = shutil.which('ffprobe')
-        if not ffprobe_path:
-            print(f"  Skipping integrity check (ffprobe not found)", file=sys.stderr)
-            return True  # Assume OK if we can't check
-
-        try:
-            cmd = [
-                ffprobe_path,
-                '-v', 'error',
-                '-show_format',
-                '-show_streams',
-                '-of', 'json',
-                file_path
-            ]
-
-            result = subprocess.run(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=30
-            )
-
-            if result.returncode != 0:
-                print(f"  Integrity check FAILED: {result.stderr}", file=sys.stderr)
-                return False
-
-            # Parse ffprobe output
-            import json
-            probe_data = json.loads(result.stdout)
-
-            # Check for valid format
-            if 'format' not in probe_data:
-                print(f"  Integrity check FAILED: No format info", file=sys.stderr)
-                return False
-
-            # Check for audio stream
-            streams = probe_data.get('streams', [])
-            audio_streams = [s for s in streams if s.get('codec_type') == 'audio']
-
-            if not audio_streams:
-                print(f"  Integrity check FAILED: No audio streams", file=sys.stderr)
-                return False
-
-            # Check duration is positive
-            duration = float(probe_data['format'].get('duration', 0))
-            if duration <= 0:
-                print(f"  Integrity check FAILED: Invalid duration ({duration}s)", file=sys.stderr)
-                return False
-
-            print(f"  Integrity check: OK ({duration:.1f}s, {audio_streams[0].get('codec_name', 'unknown')})", file=sys.stderr)
-            return True
-
-        except subprocess.TimeoutExpired:
-            print(f"  Integrity check TIMEOUT", file=sys.stderr)
-            return False
-        except Exception as e:
-            print(f"  Integrity check ERROR: {e}", file=sys.stderr)
-            return False
-
-    def _enhance_microphone(self, audio_data, sample_rate):
-        """
-        Apply MINIMAL enhancement to microphone audio.
-
-        AUDIO QUALITY FIX: Reduced processing to preserve natural quality
-        - Only basic DC offset removal and very gentle normalization
-        - Removed aggressive filtering that was degrading quality
-        - Google Meet-style: minimal processing, let the codec handle it
-
-        Goal: Natural, unprocessed sound - like Google Meet
-        """
-        # Convert to float for processing
-        audio_float = audio_data.astype(np.float32) / 32768.0
-
-        # Handle stereo by processing each channel
-        if len(audio_float) % 2 == 0 and self.target_channels == 2:
-            # Reshape to stereo
-            audio_stereo = audio_float.reshape(-1, 2)
-            left = audio_stereo[:, 0]
-            right = audio_stereo[:, 1]
-
-            # Process each channel
-            left_processed = self._process_channel(left, sample_rate)
-            right_processed = self._process_channel(right, sample_rate)
-
-            # Recombine
-            audio_processed = np.column_stack((left_processed, right_processed)).flatten()
-        else:
-            # Mono
-            audio_processed = self._process_channel(audio_float, sample_rate)
-
-        # Convert back to int16
-        return (audio_processed * 32767.0).astype(np.int16)
-
-    def _process_channel(self, channel_data, sample_rate):
-        """
-        MINIMAL processing for natural sound quality.
-
-        AUDIO QUALITY FIX: Simplified to match Google Meet's approach
-        - Only DC offset removal (essential)
-        - Light normalization (preserve dynamics)
-        - NO aggressive filtering, gating, or compression
-        """
-
-        # 1. Remove DC offset (essential - prevents pops/clicks)
-        channel_data = channel_data - np.mean(channel_data)
-
-        # 2. Very gentle normalization to -3dB peak
-        # This preserves dynamics while ensuring good levels
-        peak = np.max(np.abs(channel_data))
-        if peak > 0.7:  # Only normalize if too loud
-            # Target -3dB (0.7) to leave headroom
-            channel_data = channel_data * (0.7 / peak)
-        elif peak < 0.1:  # Boost very quiet audio
-            # Gentle boost for quiet mics
-            channel_data = channel_data * (0.3 / peak)
-
-        # 3. Very soft limiting ONLY if clipping would occur
-        # Uses tanh for smooth clipping prevention
-        abs_max = np.max(np.abs(channel_data))
-        if abs_max > 0.95:
-            channel_data = np.tanh(channel_data * 0.9) * 0.85
-
-        return channel_data
-
-    def _resample(self, audio_data, original_rate, target_rate):
-        """Resample audio using soxr (high-quality, fast resampling)."""
-        # Convert int16 to float32 for soxr processing
-        audio_float = audio_data.astype(np.float32) / 32768.0
-
-        # Resample with soxr (VHQ quality setting)
-        resampled = soxr.resample(
-            audio_float,
-            original_rate,
-            target_rate,
-            quality='VHQ'  # Very High Quality - best for voice
-        )
-
-        # Convert back to int16
-        return (resampled * 32767.0).astype(np.int16)
 
     def cleanup(self):
         """Clean up resources."""
@@ -726,7 +789,8 @@ def main():
         mic_device_id=args.mic,
         loopback_device_id=args.loopback,
         output_path=str(output_path),
-        sample_rate=48000
+        sample_rate=48000,
+        preroll_seconds=0  # Production mode: no preroll, countdown in Electron app handles device warm-up
     )
 
     # Handle interrupt signals for manual stop

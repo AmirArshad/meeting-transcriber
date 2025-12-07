@@ -55,7 +55,8 @@ class MacOSAudioRecorder:
         channels: int = 2,
         chunk_size: int = 4096,
         mic_volume: float = 1.0,
-        desktop_volume: float = 1.0
+        desktop_volume: float = 1.0,
+        preroll_seconds: float = None  # None = use default 1.5s, 0 = no preroll (for production with countdown)
     ):
         """Initialize the macOS recorder."""
         self.mic_device_id = mic_device_id
@@ -99,7 +100,14 @@ class MacOSAudioRecorder:
                 self.screencapture_recorder = None
 
         # Pre-roll: discard first ~1.5 seconds (device warm-up)
-        self.preroll_frames = int(1.5 * sample_rate / chunk_size)
+        # PRODUCTION FIX: In the real app, the 3-second countdown handles warm-up
+        # so we can skip preroll entirely. For direct API usage (tests), we still need it.
+        self.preroll_seconds = 1.5 if preroll_seconds is None else preroll_seconds
+        self.preroll_frames = int(self.preroll_seconds * sample_rate / chunk_size)
+
+        # Time-based synchronization - SINGLE reference point set at recording start
+        # Both streams use the same reference to ensure they stay in sync
+        self.recording_start_time = None
 
         print(f"Initialized macOS audio recorder", file=sys.stderr)
         print(f"  Mic device: {mic_device_id}", file=sys.stderr)
@@ -116,6 +124,10 @@ class MacOSAudioRecorder:
         self.is_running = True
         self.mic_frames = []
         self.desktop_frames = []
+
+        # Set recording start time BEFORE anything else
+        # This is the single reference point for preroll timing
+        self.recording_start_time = time.time()
 
         # Get device info
         try:
@@ -176,8 +188,13 @@ class MacOSAudioRecorder:
                 if status:
                     print(f"Mic status: {status}", file=sys.stderr)
 
-                # Skip pre-roll frames (device warm-up)
-                if frame_count < self.preroll_frames:
+                # TIME-BASED SYNCHRONIZATION: Use shared reference set at recording start
+                # Both streams use the same recording_start_time (set in start_recording)
+                # This ensures they skip the same wall-clock period and stay in sync
+                elapsed = time.time() - self.recording_start_time
+
+                # Skip pre-roll based on TIME, not frame counts
+                if elapsed < self.preroll_seconds:
                     frame_count += 1
                     return
 
@@ -307,10 +324,20 @@ class MacOSAudioRecorder:
 
             print(f"Desktop audio: {len(desktop_audio)} samples, {desktop_channels} channel(s)", file=sys.stderr)
 
-            # Convert both to stereo if needed
-            if mic_channels == 1:
+            # CHANNEL FIX: Handle multi-channel audio (mic)
+            if mic_channels > 2:
+                print(f"  Downmixing mic audio from {mic_channels} channels to stereo...", file=sys.stderr)
+                # Use first two channels (Front Left, Front Right)
+                mic_audio = mic_audio[:, :2]
+            elif mic_channels == 1:
                 mic_audio = np.column_stack([mic_audio, mic_audio])
-            if desktop_channels == 1:
+
+            # CHANNEL FIX: Handle multi-channel audio (desktop)
+            if desktop_channels > 2:
+                print(f"  Downmixing desktop audio from {desktop_channels} channels to stereo...", file=sys.stderr)
+                # Use first two channels (Front Left, Front Right)
+                desktop_audio = desktop_audio[:, :2]
+            elif desktop_channels == 1:
                 desktop_audio = np.column_stack([desktop_audio, desktop_audio])
 
             # Resample to match lengths if needed (use high-quality soxr resampling)
@@ -349,8 +376,12 @@ class MacOSAudioRecorder:
             # Mic-only mode
             print(f"No desktop audio captured, using mic-only", file=sys.stderr)
 
-            # Convert to stereo if mono
-            if mic_channels == 1:
+            # CHANNEL FIX: Handle multi-channel audio
+            if mic_channels > 2:
+                print(f"  Downmixing mic audio from {mic_channels} channels to stereo...", file=sys.stderr)
+                # Use first two channels (Front Left, Front Right)
+                final_audio = mic_audio[:, :2]
+            elif mic_channels == 1:
                 final_audio = np.column_stack([mic_audio, mic_audio])
             else:
                 final_audio = mic_audio
@@ -638,7 +669,8 @@ def main():
     recorder = MacOSAudioRecorder(
         mic_device_id=args.mic,
         desktop_device_id=args.loopback,
-        output_path=args.output
+        output_path=args.output,
+        preroll_seconds=0  # Production mode: no preroll, countdown in Electron app handles device warm-up
     )
 
     # Start recording
