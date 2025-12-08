@@ -1563,6 +1563,19 @@ ipcMain.handle('transcribe-audio', async (event, options) => {
 
     let output = '';
     let errorOutput = '';
+    let hasCompleted = false;
+
+    // Timeout: generous limits for slow CPUs and long recordings
+    // These are safety nets to catch stalled processes, not performance limits
+    const modelTimeouts = { tiny: 30, base: 45, small: 60, medium: 90, large: 120 };
+    const timeoutMinutes = modelTimeouts[modelSize] || 60;
+    const transcriptionTimeout = setTimeout(() => {
+      if (!hasCompleted) {
+        hasCompleted = true;
+        python.kill();
+        reject(new Error(`Transcription timeout after ${timeoutMinutes} minutes. The process may have stalled.`));
+      }
+    }, timeoutMinutes * 60 * 1000);
 
     python.stdout.on('data', (data) => {
       output += data.toString();
@@ -1575,6 +1588,10 @@ ipcMain.handle('transcribe-audio', async (event, options) => {
     });
 
     python.on('close', (code) => {
+      if (hasCompleted) return; // Already timed out
+      hasCompleted = true;
+      clearTimeout(transcriptionTimeout);
+
       // Try to parse JSON output first, even if exit code is non-zero
       // This handles cases where transcription succeeds but cleanup fails
       if (output.trim()) {

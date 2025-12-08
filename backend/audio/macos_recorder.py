@@ -405,8 +405,8 @@ class MacOSAudioRecorder:
         # Clean up temp file
         try:
             Path(temp_wav_path).unlink()
-        except:
-            pass
+        except OSError:
+            pass  # File may already be deleted or locked
 
         # Set globals for meeting manager
         _final_output_path = final_output_path

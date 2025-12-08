@@ -921,12 +921,6 @@ async function deleteMeetingHandler(meetingId) {
   }
 }
 
-// Update recording UI state - DEPRECATED, using setRecordingState instead
-// Kept empty to prevent errors if called elsewhere
-function updateRecordingUI(recording) {
-  // No-op
-}
-
 // Timer functions
 function startTimer() {
   timerInterval = setInterval(() => {
