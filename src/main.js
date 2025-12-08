@@ -34,9 +34,28 @@ let lastLevelUpdate = null; // Timestamp of last audio level update
 
 /**
  * Helper to spawn and track Python processes for cleanup
+ * 
+ * NOTE: Sets PYTHONPATH environment variable for development mode where system
+ * Python is used. For production builds with embedded Python, the .pth file is
+ * modified in build/prepare-resources.js to include the backend path, as embedded
+ * Python ignores the PYTHONPATH environment variable.
  */
 function spawnTrackedPython(args, options = {}) {
-  const proc = spawn(pythonConfig.pythonExe, args, options);
+  // Merge PYTHONPATH with existing environment
+  // This ensures Python can find our backend modules (audio, transcription, etc.)
+  const pythonEnv = {
+    ...process.env,
+    PYTHONPATH: pythonConfig.backendPath + (process.env.PYTHONPATH ? 
+      (process.platform === 'win32' ? ';' : ':') + process.env.PYTHONPATH : '')
+  };
+  
+  // Merge our environment with any options.env provided by caller
+  const mergedOptions = {
+    ...options,
+    env: { ...pythonEnv, ...(options.env || {}) }
+  };
+  
+  const proc = spawn(pythonConfig.pythonExe, args, mergedOptions);
   activeProcesses.push(proc);
 
   // Auto-remove from tracking when process exits

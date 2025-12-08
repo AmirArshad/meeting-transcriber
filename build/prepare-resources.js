@@ -208,7 +208,24 @@ async function prepareResources() {
 
   // Prepare Python
   if (existing.pythonExists) {
-    console.log('✓ Python runtime already prepared\n');
+    console.log('✓ Python runtime already prepared');
+    
+    // CRITICAL FIX (v1.7.4): Always ensure .pth file has backend path
+    // This applies the fix even if Python was downloaded in a previous build
+    if (IS_WINDOWS) {
+      const pthFile = path.join(PYTHON_DIR, 'python311._pth');
+      if (fs.existsSync(pthFile)) {
+        let pthContent = fs.readFileSync(pthFile, 'utf8');
+        if (!pthContent.includes('../backend')) {
+          console.log('  → Updating .pth file to include backend path...');
+          pthContent = '../backend\n' + pthContent;
+          fs.writeFileSync(pthFile, pthContent);
+          console.log('  → .pth file updated!\n');
+        } else {
+          console.log('  → .pth file already configured\n');
+        }
+      }
+    }
   } else {
     if (IS_MAC) {
       // macOS: Download standalone Python build
@@ -279,10 +296,19 @@ async function prepareResources() {
       const getPipPath = path.join(PYTHON_DIR, 'get-pip.py');
       await downloadFile('https://bootstrap.pypa.io/get-pip.py', getPipPath);
 
-      // Uncomment python311._pth to allow pip
+      // Modify python311._pth to:
+      // 1. Enable site packages (uncomment 'import site')
+      // 2. Add backend folder path so -m flag can find our modules (audio, transcription)
+      //    CRITICAL FIX (v1.7.3): Embedded Python ignores PYTHONPATH env var, so we MUST
+      //    add paths directly to the .pth file for module resolution to work.
       const pthFile = path.join(PYTHON_DIR, 'python311._pth');
       let pthContent = fs.readFileSync(pthFile, 'utf8');
       pthContent = pthContent.replace('#import site', 'import site');
+      // Add relative path to backend folder (installed at ../backend relative to python/)
+      // This enables: python -m audio.windows_recorder
+      if (!pthContent.includes('../backend')) {
+        pthContent = '../backend\n' + pthContent;
+      }
       fs.writeFileSync(pthFile, pthContent);
 
       // Install pip
