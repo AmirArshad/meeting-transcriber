@@ -296,21 +296,12 @@ async function loadAudioDevices() {
 // Load meeting history
 async function loadMeetingHistory() {
   try {
-    // First scan the filesystem for any new recordings that aren't in the database
-    try {
-      const scanResult = await window.electronAPI.scanRecordings();
-      if (scanResult.added > 0) {
-        console.log(`Scanned recordings directory: ${scanResult.added} new meetings added, ${scanResult.skipped} already in database`);
-      }
-    } catch (scanError) {
-      console.warn('Failed to scan recordings directory:', scanError);
-      // Continue anyway - scanning is optional
-    }
+    // Note: Scan disabled - it has bugs with duplicate IDs
+    // TODO: Fix scan to extract ID from filename instead of generating new ones
 
-    // Then load the meeting list
+    // Load the meeting list
     meetings = await window.electronAPI.listMeetings();
     renderMeetingList();
-    console.log(`Loaded ${meetings.length} meetings`);
   } catch (error) {
     console.error('Failed to load meeting history:', error);
     meetings = [];
@@ -326,7 +317,7 @@ function renderMeetingList() {
   }
 
   meetingList.innerHTML = '';
-  meetings.forEach(meeting => {
+  meetings.forEach((meeting, index) => {
     const item = document.createElement('div');
     item.className = 'meeting-item';
     item.dataset.id = meeting.id;
@@ -346,7 +337,6 @@ function renderMeetingList() {
 
     // Click on item to select
     item.addEventListener('click', (e) => {
-      // Don't select if clicking delete button
       if (e.target.closest('.delete-btn-list')) return;
       selectMeeting(meeting.id);
     });
@@ -365,11 +355,15 @@ function renderMeetingList() {
 // Select meeting from history
 function selectMeeting(meetingId) {
   const meeting = meetings.find(m => m.id === meetingId);
-  if (!meeting) return;
+  if (!meeting) {
+    console.error(`Meeting not found: ${meetingId}`);
+    return;
+  }
 
-  // Update selection
+  // Update selection - convert both to strings for reliable comparison
+  const targetId = String(meetingId);
   document.querySelectorAll('.meeting-item').forEach(item => {
-    item.classList.toggle('selected', item.dataset.id === meetingId);
+    item.classList.toggle('selected', item.dataset.id === targetId);
   });
 
   currentMeetingId = meetingId;
@@ -381,11 +375,15 @@ function selectMeeting(meetingId) {
 
   // Load audio - Convert path to file:// URL for Electron
   const audioPlayer = document.getElementById('audio-player');
-  const audioPath = meeting.audioPath.replace(/\\/g, '/'); // Normalize path separators
+  const audioPath = meeting.audioPath.replace(/\\/g, '/');
 
-  // For Opus files, we need to use the file:// protocol
-  if (audioPath.startsWith('/') || audioPath.startsWith('C:') || audioPath.startsWith('D:')) {
-    audioPlayer.src = 'file:///' + audioPath.replace(/^\//, '');
+  // Convert absolute path to file:// URL
+  if (audioPath.match(/^[a-zA-Z]:/)) {
+    // Windows path: D:/path -> file:///D:/path
+    audioPlayer.src = 'file:///' + audioPath;
+  } else if (audioPath.startsWith('/')) {
+    // Unix path: /path -> file:///path
+    audioPlayer.src = 'file://' + audioPath;
   } else {
     audioPlayer.src = audioPath;
   }
@@ -407,7 +405,9 @@ function setupEventListeners() {
   recordBtn.addEventListener('click', handleRecordButtonClick);
   copyBtn.addEventListener('click', copyTranscript);
   saveBtn.addEventListener('click', saveTranscript);
-  // deleteMeeting.addEventListener('click', deleteMeetingHandler); // Removed old handler
+  if (deleteMeeting) {
+    deleteMeeting.addEventListener('click', () => deleteMeetingHandler(currentMeetingId));
+  }
 
   // Copy transcript from meeting details
   const copyTranscriptBtn = document.getElementById('copy-transcript-btn');
@@ -892,30 +892,49 @@ function saveTranscript() {
 // Delete meeting
 async function deleteMeetingHandler(meetingId) {
   const idToDelete = meetingId || currentMeetingId;
-  if (!idToDelete) return;
+  if (!idToDelete) {
+    console.error('No meeting ID to delete');
+    return;
+  }
 
   const meeting = meetings.find(m => m.id === idToDelete);
-  if (!meeting) return;
+  if (!meeting) {
+    console.error('Meeting not found:', idToDelete);
+    return;
+  }
 
   if (confirm(`Are you sure you want to delete "${meeting.title}"?`)) {
     try {
+      // Release audio player file lock before deleting (Windows issue)
+      const audioPlayer = document.getElementById('audio-player');
+      if (audioPlayer.src) {
+        audioPlayer.pause();
+        audioPlayer.removeAttribute('src');
+        audioPlayer.load();
+      }
+
       addLog(`Deleting meeting: ${meeting.title}...`);
+
+      // Small delay to ensure OS releases the file handle
+      await new Promise(resolve => setTimeout(resolve, 300));
+
       await window.electronAPI.deleteMeeting(idToDelete);
 
-      // If we deleted the currently selected meeting, clear the view
+      // Clear the view immediately
       if (currentMeetingId === idToDelete) {
         meetingDetails.style.display = 'none';
         document.getElementById('meeting-details-empty').style.display = 'flex';
         currentMeetingId = null;
       }
 
-      // Reload list
-      await loadMeetingHistory();
+      // Remove from local list immediately
+      meetings = meetings.filter(m => m.id !== idToDelete);
+      renderMeetingList();
 
       addLog('Meeting deleted successfully!');
     } catch (error) {
-      console.error('Failed to delete meeting:', error);
-      addLog(`Error: Failed to delete meeting`, 'error');
+      console.error('Delete failed:', error);
+      addLog(`Error: ${error.message}`, 'error');
       alert('Failed to delete meeting: ' + error.message);
     }
   }

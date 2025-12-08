@@ -1720,8 +1720,9 @@ ipcMain.handle('get-meeting', async (event, meetingId) => {
  * Delete a meeting
  */
 ipcMain.handle('delete-meeting', async (event, meetingId) => {
+  const recordingsDir = path.join(app.getPath('userData'), 'recordings');
+
   return new Promise((resolve, reject) => {
-    const recordingsDir = path.join(app.getPath('userData'), 'recordings');
     const python = spawnTrackedPython([
       path.join(pythonConfig.backendPath, 'meeting_manager.py'),
       '--recordings-dir', recordingsDir,
@@ -1729,7 +1730,6 @@ ipcMain.handle('delete-meeting', async (event, meetingId) => {
       meetingId
     ]);
 
-    // FIX: Capture error output for better diagnostics
     let errorOutput = '';
 
     python.stderr.on('data', (data) => {
@@ -1740,10 +1740,13 @@ ipcMain.handle('delete-meeting', async (event, meetingId) => {
       if (code === 0) {
         resolve({ success: true });
       } else {
-        // Include actual error details from Python
         const errorMsg = errorOutput.trim() || 'Unknown error';
         reject(new Error(`Failed to delete meeting: ${errorMsg}`));
       }
+    });
+
+    python.on('error', (err) => {
+      reject(err);
     });
   });
 });

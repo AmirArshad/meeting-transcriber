@@ -80,15 +80,27 @@ class MeetingManager:
         new_audio_path = self.recordings_dir / new_audio_filename
         new_transcript_path = self.recordings_dir / new_transcript_filename
 
-        # Copy files to persistent storage
+        # Copy files to persistent storage (then remove originals to prevent duplicates)
         try:
             if source_audio.exists():
                 shutil.copy2(source_audio, new_audio_path)
                 print(f"Persisted audio to: {new_audio_path}", file=sys.stderr)
-            
+                # Remove original to prevent scan from re-adding it
+                try:
+                    source_audio.unlink()
+                    print(f"Removed original audio: {source_audio}", file=sys.stderr)
+                except Exception as del_err:
+                    print(f"Warning: Could not remove original audio: {del_err}", file=sys.stderr)
+
             if source_transcript.exists():
                 shutil.copy2(source_transcript, new_transcript_path)
                 print(f"Persisted transcript to: {new_transcript_path}", file=sys.stderr)
+                # Remove original transcript too
+                try:
+                    source_transcript.unlink()
+                    print(f"Removed original transcript: {source_transcript}", file=sys.stderr)
+                except Exception as del_err:
+                    print(f"Warning: Could not remove original transcript: {del_err}", file=sys.stderr)
         except Exception as e:
             print(f"Error persisting files: {e}", file=sys.stderr)
             # Fallback to original paths if copy fails

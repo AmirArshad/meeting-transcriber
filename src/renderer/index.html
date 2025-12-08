@@ -273,11 +273,29 @@
                   style="display: none"
                 >
                   <div class="meeting-header">
-                    <h2 id="meeting-title">Meeting Details</h2>
-                    <div class="meeting-meta">
-                      <span id="meeting-date"></span>
-                      <span class="meta-separator">•</span>
-                      <span id="meeting-duration"></span>
+                    <div
+                      style="
+                        display: flex;
+                        justify-content: space-between;
+                        align-items: flex-start;
+                        width: 100%;
+                      "
+                    >
+                      <div>
+                        <h2 id="meeting-title">Meeting Details</h2>
+                        <div class="meeting-meta">
+                          <span id="meeting-date"></span>
+                          <span class="meta-separator">•</span>
+                          <span id="meeting-duration"></span>
+                        </div>
+                      </div>
+                      <button
+                        id="delete-meeting"
+                        class="btn btn-danger btn-small"
+                        title="Delete Meeting"
+                      >
+                        Delete
+                      </button>
                     </div>
                   </div>
 
