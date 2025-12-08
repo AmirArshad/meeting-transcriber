@@ -28,6 +28,11 @@ def get_audio_recorder(*args, **kwargs):
 
 
 # For backwards compatibility, import AudioRecorder class
-from .windows_recorder import AudioRecorder
+if platform.system() == 'Windows':
+    from .windows_recorder import AudioRecorder
+elif platform.system() == 'Darwin':
+    from .macos_recorder import MacOSAudioRecorder as AudioRecorder
+else:
+    AudioRecorder = None
 
 __all__ = ['get_audio_recorder', 'AudioRecorder']

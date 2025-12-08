@@ -335,6 +335,24 @@ class ScreenCaptureAudioRecorder:
                     )
                     print(f"DEBUG: Stream created successfully", file=sys.stderr)
 
+                    import ctypes
+                    # Get global dispatch queue to ensure callbacks run in background
+                    # This avoids deadlock with the main thread loop
+                    _lib = ctypes.CDLL("/usr/lib/libSystem.dylib")
+                    _lib.dispatch_get_global_queue.restype = ctypes.c_void_p
+                    # DISPATCH_QUEUE_PRIORITY_DEFAULT = 0, flags = 0
+                    queue = _lib.dispatch_get_global_queue(0, 0)
+
+                    # Add the delegate as a stream output
+                    # CRITICAL: This is required to receive sample buffers
+                    self.stream.addStreamOutput_type_sampleHandlerQueue_error_(
+                        self.delegate,
+                        self.SCStreamOutputType.SCStreamOutputTypeAudio,
+                        queue,
+                        None
+                    )
+                    print(f"DEBUG: Added stream output with background queue", file=sys.stderr)
+
                     # Start the stream
                     def start_completion_handler(error):
                         if error:
