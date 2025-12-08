@@ -136,6 +136,61 @@ class MeetingManager:
         print(f"Meeting saved: {meeting_id}", file=sys.stderr)
         return meeting
 
+    def _add_meeting_direct(
+        self,
+        meeting_id: str,
+        audio_path: str,
+        transcript_path: str,
+        duration: float,
+        language: str,
+        model: str,
+        title: str
+    ) -> Dict:
+        """
+        Add a meeting directly without copying files (used by scan).
+        Files are assumed to already be in the correct location.
+        """
+        # Format duration
+        minutes = int(duration // 60)
+        seconds = int(duration % 60)
+        duration_str = f"{minutes}:{seconds:02d}"
+
+        # Parse meeting_id to get date
+        try:
+            dt = datetime.strptime(meeting_id, "%Y%m%d_%H%M%S")
+            date_iso = dt.isoformat()
+        except ValueError:
+            date_iso = datetime.now().isoformat()
+
+        # Read transcript text
+        transcript_text = ""
+        transcript_file = Path(transcript_path)
+        if transcript_file.exists():
+            try:
+                transcript_text = transcript_file.read_text(encoding='utf-8')
+            except Exception as e:
+                print(f"Warning: Could not read transcript: {e}", file=sys.stderr)
+
+        meeting = {
+            'id': meeting_id,
+            'title': title,
+            'date': date_iso,
+            'duration': duration_str,
+            'durationSeconds': duration,
+            'audioPath': audio_path,
+            'transcriptPath': transcript_path,
+            'transcript': transcript_text,
+            'language': language,
+            'model': model
+        }
+
+        # Load existing meetings and append
+        meetings = self.list_meetings()
+        meetings.insert(0, meeting)
+
+        self._save_meetings(meetings)
+        return meeting
+
     def list_meetings(self) -> List[Dict]:
         """
         Get all meetings sorted by date (newest first).
@@ -209,33 +264,55 @@ class MeetingManager:
                 print(f"Warning: Could not extract duration from {transcript_file.name}: {e}", file=sys.stderr)
                 duration = 0.0
 
-            # Extract timestamp from filename (e.g., recording_2025-12-01T13-31-43.opus)
-            try:
-                filename_base = audio_file.stem
-                # Try to parse timestamp from filename
-                timestamp_match = re.search(r'(\d{4}-\d{2}-\d{2})T(\d{2}-\d{2}-\d{2})', filename_base)
-                if timestamp_match:
-                    date_str, time_str = timestamp_match.groups()
-                    # Convert to datetime
-                    dt_str = f"{date_str} {time_str.replace('-', ':')}"
-                    title = f"Meeting {dt_str}"
-                else:
-                    title = f"Meeting {audio_file.stem}"
-            except Exception:
-                title = f"Meeting {audio_file.stem}"
+            # Extract ID and title from filename
+            # Files can be: meeting_YYYYMMDD_HHMMSS.opus or recording_YYYY-MM-DDTHH-MM-SS.opus
+            filename_base = audio_file.stem
+            meeting_id = None
+            title = None
 
-            # Add meeting to database
+            # Check if it's already a meeting_* file (extract existing ID)
+            meeting_match = re.match(r'meeting_(\d{8}_\d{6})', filename_base)
+            if meeting_match:
+                meeting_id = meeting_match.group(1)
+                # Parse ID to create title: 20251208_170225 -> 2025-12-08 17:02
+                try:
+                    dt = datetime.strptime(meeting_id, "%Y%m%d_%H%M%S")
+                    title = f"Meeting {dt.strftime('%Y-%m-%d %H:%M')}"
+                except ValueError:
+                    title = f"Meeting {meeting_id}"
+            else:
+                # Try recording_* format: recording_2025-12-01T13-31-43.opus
+                recording_match = re.search(r'(\d{4}-\d{2}-\d{2})T(\d{2}-\d{2}-\d{2})', filename_base)
+                if recording_match:
+                    date_str, time_str = recording_match.groups()
+                    # Generate ID from the timestamp
+                    meeting_id = date_str.replace('-', '') + '_' + time_str.replace('-', '')
+                    title = f"Meeting {date_str} {time_str.replace('-', ':')}"
+                else:
+                    # Fallback: generate new ID
+                    meeting_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    title = f"Meeting {audio_file.stem}"
+
+            # Check if this ID already exists in database
+            existing_ids = {m['id'] for m in existing_meetings}
+            if meeting_id in existing_ids:
+                print(f"Skipping {audio_file.name}: ID {meeting_id} already exists", file=sys.stderr)
+                skipped += 1
+                continue
+
+            # Add meeting to database directly (don't copy files - they're already in place)
             try:
-                meeting = self.add_meeting(
+                meeting = self._add_meeting_direct(
+                    meeting_id=meeting_id,
                     audio_path=str(audio_file.absolute()),
                     transcript_path=str(transcript_file.absolute()),
                     duration=duration,
-                    language="en",  # Default to English
-                    model="unknown",  # We don't know which model was used
+                    language="en",
+                    model="unknown",
                     title=title
                 )
                 added += 1
-                print(f"Added meeting from filesystem: {audio_file.name}", file=sys.stderr)
+                print(f"Added meeting from filesystem: {audio_file.name} (ID: {meeting_id})", file=sys.stderr)
             except Exception as e:
                 print(f"Error adding meeting {audio_file.name}: {e}", file=sys.stderr)
                 skipped += 1

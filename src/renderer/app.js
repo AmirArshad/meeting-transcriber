@@ -296,8 +296,15 @@ async function loadAudioDevices() {
 // Load meeting history
 async function loadMeetingHistory() {
   try {
-    // Note: Scan disabled - it has bugs with duplicate IDs
-    // TODO: Fix scan to extract ID from filename instead of generating new ones
+    // Scan the filesystem for any orphaned recordings not in the database
+    try {
+      const scanResult = await window.electronAPI.scanRecordings();
+      if (scanResult.added > 0) {
+        addLog(`Found ${scanResult.added} recording(s) not in database`);
+      }
+    } catch (scanError) {
+      console.warn('Scan failed:', scanError);
+    }
 
     // Load the meeting list
     meetings = await window.electronAPI.listMeetings();
