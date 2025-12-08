@@ -38,10 +38,8 @@ async function checkForUpdates() {
     if (isNewerVersion(latestVersion, currentVersion)) {
       console.log('✨ New version available!');
 
-      // Find the Windows installer asset
-      const installerAsset = releaseInfo.assets.find(asset =>
-        asset.name.endsWith('.exe') && asset.name.includes('Setup')
-      );
+      // Find the appropriate installer asset based on platform
+      const installerAsset = findInstallerAsset(releaseInfo.assets);
 
       return {
         version: latestVersion,
@@ -104,6 +102,43 @@ function fetchLatestRelease() {
       reject(err);
     });
   });
+}
+
+/**
+ * Find the appropriate installer asset for the current platform
+ *
+ * @param {Array} assets - Release assets from GitHub API
+ * @returns {Object|null} Matching asset or null
+ */
+function findInstallerAsset(assets) {
+  const platform = process.platform;
+
+  if (platform === 'darwin') {
+    // macOS: prefer .dmg, fall back to .zip
+    const dmgAsset = assets.find(asset => asset.name.endsWith('.dmg'));
+    if (dmgAsset) return dmgAsset;
+
+    const zipAsset = assets.find(asset =>
+      asset.name.endsWith('.zip') && asset.name.toLowerCase().includes('mac')
+    );
+    return zipAsset || null;
+  }
+
+  if (platform === 'win32') {
+    // Windows: .exe installer
+    const exeAsset = assets.find(asset =>
+      asset.name.endsWith('.exe') && asset.name.includes('Setup')
+    );
+    return exeAsset || null;
+  }
+
+  // Linux or other: try .AppImage, .deb, or .tar.gz
+  const linuxAsset = assets.find(asset =>
+    asset.name.endsWith('.AppImage') ||
+    asset.name.endsWith('.deb') ||
+    asset.name.endsWith('.tar.gz')
+  );
+  return linuxAsset || null;
 }
 
 /**
