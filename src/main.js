@@ -1231,15 +1231,16 @@ ipcMain.handle('start-recording', async (event, options) => {
     }
 
     // Start Python recording process (platform-specific recorder)
+    // Run as module (-m) to support relative imports within the audio package
     const isMac = process.platform === 'darwin';
-    const recorderScript = isMac ? 'macos_recorder.py' : 'windows_recorder.py';
+    const recorderModule = isMac ? 'audio.macos_recorder' : 'audio.windows_recorder';
 
     pythonProcess = spawnTrackedPython([
-      path.join(pythonConfig.backendPath, 'audio', recorderScript),
+      '-m', recorderModule,
       '--mic', micId.toString(),
       '--loopback', loopbackId.toString(),
       '--output', outputPath
-    ]);
+    ], { cwd: pythonConfig.backendPath });
 
     // FIX 2 (REFINED): Set high priority for Python recording process on Windows
     // Use small delay to ensure process is fully initialized before setting priority
