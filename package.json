@@ -1,16 +1,17 @@
 {
   "name": "meeting-transcriber",
-  "version": "1.7.2",
+  "version": "1.7.3",
   "description": "AI-powered meeting transcription with desktop audio capture",
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "prebuild": "node build/prepare-resources.js",
-    "build": "electron-builder build --win --publish never",
-    "build:dir": "electron-builder build --win --dir",
-    "build:mac": "electron-builder build --mac --publish never",
-    "build:mac:dir": "electron-builder build --mac --dir"
+    "clean": "node -e \"const fs = require('fs'); if(fs.existsSync('dist')) { fs.rmSync('dist', {recursive:true,force:true}); console.log('Cleaned dist/'); }\"",
+    "prepare-build": "npm run clean && node build/prepare-resources.js",
+    "build": "npm run prepare-build && electron-builder build --win --publish never",
+    "build:dir": "npm run prepare-build && electron-builder build --win --dir",
+    "build:mac": "npm run prepare-build && electron-builder build --mac --publish never",
+    "build:mac:dir": "npm run prepare-build && electron-builder build --mac --dir"
   },
   "keywords": [
     "transcription",

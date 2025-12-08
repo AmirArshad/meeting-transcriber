@@ -4,11 +4,11 @@ name: Build & Release Installer
 on:
   push:
     tags:
-      - 'v*.*.*'  # Triggers on version tags like v1.0.0
-  workflow_dispatch:  # Allows manual trigger from GitHub UI
+      - "v*.*.*" # Triggers on version tags like v1.0.0
+  workflow_dispatch: # Allows manual trigger from GitHub UI
 
 permissions:
-  contents: write  # Required to create releases
+  contents: write # Required to create releases
 
 jobs:
   build-installer:
@@ -23,211 +23,210 @@ jobs:
             artifact-pattern: "*.exe"
             artifact-name: meeting-transcriber-installer-windows
           - os: macOS
-            runner: macos-14  # macOS 14 (Sonoma) with M1/M2/M3 runners
+            runner: macos-14 # macOS 14 (Sonoma) with M1/M2/M3 runners
             build-script: npm run build:mac
             artifact-pattern: "*.dmg"
             artifact-name: meeting-transcriber-installer-macos
 
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Set up Python 3.11
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-    - name: Set up Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '18'
-        cache: 'npm'
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
 
-    - name: Install Node dependencies
-      run: npm install
+      - name: Install Node dependencies
+        run: npm install
 
-    - name: Install electron-builder
-      run: npm install electron-builder --save-dev
+      - name: Install electron-builder
+        run: npm install electron-builder --save-dev
 
-    - name: Create placeholder icon (if missing - Windows only)
-      if: matrix.os == 'Windows'
-      shell: pwsh
-      run: |
-        # Ensure build directory exists
-        if (-not (Test-Path "build")) {
-          New-Item -ItemType Directory -Path "build" | Out-Null
-        }
-
-        if (-not (Test-Path "build/icon.ico")) {
-          Write-Host "Creating placeholder icon..."
-          # Download a placeholder microphone icon
-          $url = "https://raw.githubusercontent.com/icons8/flat-color-icons/master/png/256/microphone.png"
-          $png = "build/temp.png"
-
-          try {
-            Invoke-WebRequest -Uri $url -OutFile $png -ErrorAction Stop
-
-            # Convert PNG to ICO using PowerShell
-            Add-Type -AssemblyName System.Drawing
-            $img = [System.Drawing.Image]::FromFile((Resolve-Path $png))
-            $icon = [System.Drawing.Icon]::FromHandle($img.GetHicon())
-            $stream = [System.IO.File]::Create("build/icon.ico")
-            $icon.Save($stream)
-            $stream.Close()
-            $img.Dispose()
-
-            Remove-Item $png
-            Write-Host "Placeholder icon created!"
-          } catch {
-            Write-Host "Could not create icon, using fallback..."
-            # Create a minimal 1x1 ICO as absolute fallback
-            $bytes = @(0,0,1,0,1,0,16,16,0,0,1,0,32,0,104,4,0,0,22,0,0,0)
-            [System.IO.File]::WriteAllBytes("build/icon.ico", $bytes)
+      - name: Create placeholder icon (if missing - Windows only)
+        if: matrix.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Ensure build directory exists
+          if (-not (Test-Path "build")) {
+            New-Item -ItemType Directory -Path "build" | Out-Null
           }
-        }
 
-    - name: Prepare build resources
-      run: npm run prebuild
-      timeout-minutes: 30
-      env:
-        DOWNLOAD_MODELS: 'false'  # Skip model download - users download on-demand
+          if (-not (Test-Path "build/icon.ico")) {
+            Write-Host "Creating placeholder icon..."
+            # Download a placeholder microphone icon
+            $url = "https://raw.githubusercontent.com/icons8/flat-color-icons/master/png/256/microphone.png"
+            $png = "build/temp.png"
 
-    - name: Build installer
-      run: ${{ matrix.build-script }}
-      timeout-minutes: 30
+            try {
+              Invoke-WebRequest -Uri $url -OutFile $png -ErrorAction Stop
 
-    - name: Get version from tag
-      id: get_version
-      shell: bash
-      run: |
-        if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-          echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
-        else
-          echo "version=dev-build" >> $GITHUB_OUTPUT
-        fi
+              # Convert PNG to ICO using PowerShell
+              Add-Type -AssemblyName System.Drawing
+              $img = [System.Drawing.Image]::FromFile((Resolve-Path $png))
+              $icon = [System.Drawing.Icon]::FromHandle($img.GetHicon())
+              $stream = [System.IO.File]::Create("build/icon.ico")
+              $icon.Save($stream)
+              $stream.Close()
+              $img.Dispose()
 
-    - name: Find installer file
-      id: find_installer
-      shell: bash
-      run: |
-        pattern="${{ matrix.artifact-pattern }}"
-        installer=$(find dist -name "$pattern" -type f | head -n 1)
-        if [ -n "$installer" ]; then
-          echo "installer_path=$installer" >> $GITHUB_OUTPUT
-          echo "installer_name=$(basename $installer)" >> $GITHUB_OUTPUT
-          size=$(du -h "$installer" | cut -f1)
-          echo "installer_size=$size" >> $GITHUB_OUTPUT
-        fi
+              Remove-Item $png
+              Write-Host "Placeholder icon created!"
+            } catch {
+              Write-Host "Could not create icon, using fallback..."
+              # Create a minimal 1x1 ICO as absolute fallback
+              $bytes = @(0,0,1,0,1,0,16,16,0,0,1,0,32,0,104,4,0,0,22,0,0,0)
+              [System.IO.File]::WriteAllBytes("build/icon.ico", $bytes)
+            }
+          }
 
-    - name: Upload installer artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: ${{ matrix.artifact-name }}
-        path: ${{ steps.find_installer.outputs.installer_path }}
-        retention-days: 30
+      # Note: npm run build/build:mac includes prepare-build which:
+      # 1. Cleans dist/ folder (prevents stale files from previous builds)
+      # 2. Downloads Python runtime, ffmpeg, and prepares dependencies
+      - name: Build installer
+        run: ${{ matrix.build-script }}
+        timeout-minutes: 45
+        env:
+          DOWNLOAD_MODELS: "false" # Skip model download - users download on-demand
 
-    - name: Create GitHub Release
-      if: startsWith(github.ref, 'refs/tags/')
-      uses: softprops/action-gh-release@v2
-      with:
-        files: ${{ steps.find_installer.outputs.installer_path }}
-        body: |
-          ## Meeting Transcriber v${{ steps.get_version.outputs.version }}
+      - name: Get version from tag
+        id: get_version
+        shell: bash
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          else
+            echo "version=dev-build" >> $GITHUB_OUTPUT
+          fi
 
-          ### 📦 Downloads
+      - name: Find installer file
+        id: find_installer
+        shell: bash
+        run: |
+          pattern="${{ matrix.artifact-pattern }}"
+          installer=$(find dist -name "$pattern" -type f | head -n 1)
+          if [ -n "$installer" ]; then
+            echo "installer_path=$installer" >> $GITHUB_OUTPUT
+            echo "installer_name=$(basename $installer)" >> $GITHUB_OUTPUT
+            size=$(du -h "$installer" | cut -f1)
+            echo "installer_size=$size" >> $GITHUB_OUTPUT
+          fi
 
-          **${{ matrix.os }}:**
-          - Download: `${{ steps.find_installer.outputs.installer_name }}`
-          - Size: ${{ steps.find_installer.outputs.installer_size }}
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact-name }}
+          path: ${{ steps.find_installer.outputs.installer_path }}
+          retention-days: 30
 
-          ### 💻 Platform Support
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.find_installer.outputs.installer_path }}
+          body: |
+            ## Meeting Transcriber v${{ steps.get_version.outputs.version }}
 
-          - **Windows:** Windows 10/11 (64-bit, x64)
-          - **macOS:** macOS 13+ (Apple Silicon: M1/M2/M3/M4)
+            ### 📦 Downloads
 
-          ### 📋 Installation Instructions
+            **${{ matrix.os }}:**
+            - Download: `${{ steps.find_installer.outputs.installer_name }}`
+            - Size: ${{ steps.find_installer.outputs.installer_size }}
 
-          **Windows:**
-          1. Download the `.exe` installer
-          2. Run the installer (may show SmartScreen warning - click "More info" → "Run anyway")
-          3. Launch from Start Menu
+            ### 💻 Platform Support
 
-          **macOS:**
-          1. Download the `.dmg` file
-          2. Open the DMG and drag Meeting Transcriber to Applications
-          3. **IMPORTANT:** Right-click the app → select "Open" (NOT double-click)
-             - macOS will show "damaged" error if you double-click
-             - Right-click → "Open" bypasses Gatekeeper for unsigned apps
-          4. Click "Open" in the confirmation dialog
-          5. Grant microphone permissions when prompted
+            - **Windows:** Windows 10/11 (64-bit, x64)
+            - **macOS:** macOS 13+ (Apple Silicon: M1/M2/M3/M4)
 
-          **Alternative method (if right-click doesn't work):**
-          ```bash
-          # Remove quarantine flag from Terminal:
-          xattr -d com.apple.quarantine /Applications/Meeting\ Transcriber.app
-          ```
+            ### 📋 Installation Instructions
 
-          ### 📊 Technical Details
+            **Windows:**
+            1. Download the `.exe` installer
+            2. Run the installer (may show SmartScreen warning - click "More info" → "Run anyway")
+            3. Launch from Start Menu
 
-          - **Bundled Python:** 3.11.7 (relocatable build)
-          - **Electron:** 28.0
-          - **Transcription:**
-            - Windows: faster-whisper (CUDA GPU support)
-            - macOS: Lightning-Whisper-MLX (Metal GPU for Apple Silicon)
-          - **Audio Capture:**
-            - Windows: sounddevice + WASAPI loopback
-            - macOS: sounddevice + ScreenCaptureKit
+            **macOS:**
+            1. Download the `.dmg` file
+            2. Open the DMG and drag Meeting Transcriber to Applications
+            3. **IMPORTANT:** Right-click the app → select "Open" (NOT double-click)
+               - macOS will show "damaged" error if you double-click
+               - Right-click → "Open" bypasses Gatekeeper for unsigned apps
+            4. Click "Open" in the confirmation dialog
+            5. Grant microphone permissions when prompted
 
-          ### ✨ Features
+            **Alternative method (if right-click doesn't work):**
+            ```bash
+            # Remove quarantine flag from Terminal:
+            xattr -d com.apple.quarantine /Applications/Meeting\ Transcriber.app
+            ```
 
-          - Dual audio capture (microphone + desktop audio)
-          - AI transcription (99 languages via OpenAI Whisper)
-          - GPU acceleration (CUDA on Windows, Metal on macOS)
-          - Real-time audio visualizer
-          - Meeting history with playback
-          - 100% local processing (no cloud/internet required)
-          - Auto-update support
-          - Dark mode support (macOS menu bar adapts automatically)
+            ### 📊 Technical Details
 
-          ### 🔒 Privacy & Security
+            - **Bundled Python:** 3.11.7 (relocatable build)
+            - **Electron:** 28.0
+            - **Transcription:**
+              - Windows: faster-whisper (CUDA GPU support)
+              - macOS: Lightning-Whisper-MLX (Metal GPU for Apple Silicon)
+            - **Audio Capture:**
+              - Windows: sounddevice + WASAPI loopback
+              - macOS: sounddevice + ScreenCaptureKit
 
-          - **Zero telemetry** - No tracking, analytics, or data collection
-          - **100% local** - All audio and transcription stays on your device
-          - **No account required** - Works completely offline after model download
-          - See [Security Audit](https://github.com/${{ github.repository }}/blob/master/docs/internal/SECURITY_AUDIT.md) for details
+            ### ✨ Features
 
-          ### ⚙️ System Requirements
+            - Dual audio capture (microphone + desktop audio)
+            - AI transcription (99 languages via OpenAI Whisper)
+            - GPU acceleration (CUDA on Windows, Metal on macOS)
+            - Real-time audio visualizer
+            - Meeting history with playback
+            - 100% local processing (no cloud/internet required)
+            - Auto-update support
+            - Dark mode support (macOS menu bar adapts automatically)
 
-          **Windows:**
-          - Windows 10 or 11 (64-bit)
-          - 4GB RAM minimum, 8GB recommended
-          - 2GB disk space (for app + Whisper model)
-          - Optional: NVIDIA GPU with CUDA for faster transcription
+            ### 🔒 Privacy & Security
 
-          **macOS:**
-          - macOS 13 (Ventura) or later
-          - Apple Silicon (M1/M2/M3/M4)
-          - 4GB RAM minimum, 8GB recommended
-          - 2GB disk space (for app + Whisper model)
+            - **Zero telemetry** - No tracking, analytics, or data collection
+            - **100% local** - All audio and transcription stays on your device
+            - **No account required** - Works completely offline after model download
+            - See [Security Audit](https://github.com/${{ github.repository }}/blob/master/docs/internal/SECURITY_AUDIT.md) for details
 
-          ### 📝 First Run Notes
+            ### ⚙️ System Requirements
 
-          - **Model Download:** On first transcription, the app will download the Whisper model (~500MB). This happens automatically and only once.
-          - **Permissions (macOS):** You'll be prompted to grant microphone access. This is required for recording.
-          - **GPU Acceleration:** Automatically detected and used if available (CUDA on Windows, Metal on macOS).
+            **Windows:**
+            - Windows 10 or 11 (64-bit)
+            - 4GB RAM minimum, 8GB recommended
+            - 2GB disk space (for app + Whisper model)
+            - Optional: NVIDIA GPU with CUDA for faster transcription
 
-          ### 🐛 Known Issues
+            **macOS:**
+            - macOS 13 (Ventura) or later
+            - Apple Silicon (M1/M2/M3/M4)
+            - 4GB RAM minimum, 8GB recommended
+            - 2GB disk space (for app + Whisper model)
 
-          - **macOS "Damaged" Error:** If you see '"Meeting Transcriber" is damaged and can't be opened':
-            - This is NOT actually damaged - it's a Gatekeeper security warning for unsigned apps
-            - **Solution:** Right-click the app → "Open" (NOT double-click)
-            - Or run: `xattr -d com.apple.quarantine /Applications/Meeting\ Transcriber.app`
-            - Only needed on first launch - subsequent launches work normally
-          - **Windows SmartScreen:** May show warning for unsigned installer - click "More info" then "Run anyway"
+            ### 📝 First Run Notes
 
-          ---
+            - **Model Download:** On first transcription, the app will download the Whisper model (~500MB). This happens automatically and only once.
+            - **Permissions (macOS):** You'll be prompted to grant microphone access. This is required for recording.
+            - **GPU Acceleration:** Automatically detected and used if available (CUDA on Windows, Metal on macOS).
 
-          **Questions or issues?** Open an issue on GitHub or check the [documentation](https://github.com/${{ github.repository }}/blob/master/README.md).
-        draft: false
-        prerelease: false
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            ### 🐛 Known Issues
+
+            - **macOS "Damaged" Error:** If you see '"Meeting Transcriber" is damaged and can't be opened':
+              - This is NOT actually damaged - it's a Gatekeeper security warning for unsigned apps
+              - **Solution:** Right-click the app → "Open" (NOT double-click)
+              - Or run: `xattr -d com.apple.quarantine /Applications/Meeting\ Transcriber.app`
+              - Only needed on first launch - subsequent launches work normally
+            - **Windows SmartScreen:** May show warning for unsigned installer - click "More info" then "Run anyway"
+
+            ---
+
+            **Questions or issues?** Open an issue on GitHub or check the [documentation](https://github.com/${{ github.repository }}/blob/master/README.md).
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

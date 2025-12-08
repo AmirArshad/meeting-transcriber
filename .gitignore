@@ -8,15 +8,6 @@ venv/
 env/
 ENV/
 *.egg-info/
-dist/
-build/
-!build/icon.ico
-!build/icon.icns
-!build/iconTemplate.png
-!build/iconTemplate@2x.png
-!build/entitlements.mac.plist
-!build/MACOS_ICONS_README.md
-!build/ICON_NEEDED.txt
 
 # Node
 node_modules/
@@ -31,7 +22,7 @@ dist-electron/
 release/
 dist/
 
-# Build resources (downloaded during build)
+# Build - ignore all except specific files
 build/resources/
 
 # IDEs
@@ -71,3 +62,6 @@ nul
 # Claude Code
 .claude/
 claude.md
+
+# Agent
+.agent/
