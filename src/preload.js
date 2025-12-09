@@ -45,6 +45,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Platform detection
   getPlatform: () => ipcRenderer.invoke('get-platform'),
   getArch: () => ipcRenderer.invoke('get-arch'),
+  openSystemSettings: (type) => ipcRenderer.invoke('open-system-settings', type),
 
   // Updates
   downloadUpdate: (downloadUrl) => ipcRenderer.invoke('download-update', downloadUrl),

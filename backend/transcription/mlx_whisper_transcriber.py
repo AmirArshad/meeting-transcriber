@@ -195,30 +195,28 @@ class MLXWhisperTranscriber:
         # Try MLX first (Apple Silicon GPU acceleration)
         try:
             import lightning_whisper_mlx
+            from huggingface_hub import snapshot_download
 
-            # FIX: Change to writable directory before loading MLX model
-            # lightning-whisper-mlx tries to create 'mlx_models' directory in cwd
-            # which fails when running from read-only app bundle
-            original_cwd = os.getcwd()
-            cache_dir = Path.home() / '.cache' / 'lightning-whisper-mlx'
-            cache_dir.mkdir(parents=True, exist_ok=True)
-            os.chdir(cache_dir)
+            # Map model size to mlx-community repo ID
+            repo_map = {
+                "tiny": "mlx-community/whisper-tiny-mlx",
+                "base": "mlx-community/whisper-base-mlx",
+                "small": "mlx-community/whisper-small-mlx",
+                "medium": "mlx-community/whisper-medium-mlx",
+                "large": "mlx-community/whisper-large-v3-mlx",
+                "large-v3": "mlx-community/whisper-large-v3-mlx"
+            }
+            repo_id = repo_map.get(self.model_size, f"mlx-community/whisper-{self.model_size}-mlx")
 
-            try:
-                # Load model using Lightning-Whisper-MLX
-                # Model will be downloaded to ~/.cache/huggingface/hub if not present
-                self.model = lightning_whisper_mlx.LightningWhisperMLX(
-                    model=self.model_size,
-                    batch_size=12,  # Good balance for M-series chips
-                    quant=None  # Use full precision (float16) for best quality
-                )
-            finally:
-                # Restore original working directory
-                os.chdir(original_cwd)
+            print(f"Verifying/Downloading model: {repo_id}...", file=sys.stderr)
+            # Pre-download the model to ensure it's in cache
+            snapshot_download(repo_id=repo_id)
 
             self.backend = 'mlx'  # Track which backend we're using
-            print(f"Model loaded successfully!", file=sys.stderr)
-            print(f"  Backend: Lightning-Whisper-MLX", file=sys.stderr)
+            self.model = True # specialized flag to indicate loaded
+            
+            print(f"Model ready!", file=sys.stderr)
+            print(f"  Backend: Lightning-Whisper-MLX (Functional API)", file=sys.stderr)
             print(f"  Device: Metal GPU", file=sys.stderr)
             print(f"  Compute type: float16", file=sys.stderr)
             print(f"  Using Apple Silicon GPU acceleration - optimized for M-series chips!", file=sys.stderr)
@@ -295,10 +293,29 @@ class MLXWhisperTranscriber:
 
         # Transcribe using the appropriate backend
         if self.backend == 'mlx':
-            # Lightning-Whisper-MLX
-            result = self.model.transcribe(
+            # Use functional API directly to avoid path issues in LightningWhisperMLX class
+            from lightning_whisper_mlx import transcribe_audio
+
+            # Map model size to mlx-community repo ID
+            # These are the official quantized models for MLX
+            repo_map = {
+                "tiny": "mlx-community/whisper-tiny-mlx",
+                "base": "mlx-community/whisper-base-mlx",
+                "small": "mlx-community/whisper-small-mlx",
+                "medium": "mlx-community/whisper-medium-mlx",
+                "large": "mlx-community/whisper-large-v3-mlx",
+                "large-v3": "mlx-community/whisper-large-v3-mlx"
+            }
+            
+            repo_id = repo_map.get(self.model_size, f"mlx-community/whisper-{self.model_size}-mlx")
+            
+            print(f"Transcribing with model: {repo_id}", file=sys.stderr)
+            
+            result = transcribe_audio(
                 audio_path,
-                language=self.language
+                path_or_hf_repo=repo_id,
+                language=self.language,
+                batch_size=12
             )
 
             # Extract segments and metadata
@@ -307,7 +324,7 @@ class MLXWhisperTranscriber:
 
             print(f"Processing segments...", file=sys.stderr)
 
-            # Lightning-Whisper-MLX returns a dict with 'segments' key
+            # result is a dict with 'text' and 'segments'
             if 'segments' in result:
                 for segment in result['segments']:
                     segments_list.append({

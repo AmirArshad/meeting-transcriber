@@ -249,17 +249,18 @@ async function loadAudioDevices() {
       if (isMac) {
         addLog('⚠️ No microphone devices found - permission may not be granted', 'error');
 
-        alert(
+        const shouldOpenSettings = confirm(
           'No microphone devices found!\n\n' +
           'This usually means microphone permission is not granted.\n\n' +
-          'To fix this:\n' +
-          '1. Open System Settings\n' +
-          '2. Go to Privacy & Security → Microphone\n' +
-          '3. Grant permission to Meeting Transcriber\n' +
-          '4. Restart the app\n\n' +
-          'Note: The app must request permission first before it appears in the list.\n' +
-          'If it doesn\'t appear, try recording once to trigger the permission request.'
+          'Would you like to open System Settings to grant permission?\n\n' +
+          '1. Go to Privacy & Security → Microphone\n' +
+          '2. Grant permission to Meeting Transcriber\n' +
+          '3. Restart the app'
         );
+
+        if (shouldOpenSettings) {
+          window.electronAPI.openSystemSettings('microphone');
+        }
       } else {
         addLog('⚠️ No microphone devices found', 'error');
       }
@@ -669,24 +670,33 @@ async function startRecording() {
                                         errorMsg.toLowerCase().includes('access') ||
                                         errorMsg.toLowerCase().includes('device');
 
-        if (shouldCheckPermissions) {
-          // Platform-specific permission instructions
-          const isMac = navigator.platform.includes('Mac');
-          const permissionHelp = isMac
-            ? '• Grant microphone permissions in System Settings → Privacy & Security → Microphone'
-            : '• Grant microphone permissions in Windows Settings';
-
-          alert(
-            'Recording failed. Please check:\n\n' +
-            '1. Microphone permissions are granted to this app\n' +
-            '2. Selected devices are not in use by another application\n' +
-            '3. Devices are properly connected\n\n' +
-            'You may need to:\n' +
-            permissionHelp + '\n' +
-            '• Restart the application\n' +
-            '• Try different audio devices'
-          );
-        } else {
+          if (shouldCheckPermissions) {
+            // Platform-specific permission instructions
+            const isMac = navigator.platform.includes('Mac');
+            
+            if (isMac) {
+              const shouldOpenSettings = confirm(
+                'Recording failed. Permission might be missing.\n\n' +
+                'Would you like to open System Settings to check permissions?\n\n' +
+                'Check both Microphone and Screen Recording permissions.'
+              );
+              
+              if (shouldOpenSettings) {
+                // Open Screen Recording by default as it's the more common "silent fail"
+                window.electronAPI.openSystemSettings('screen');
+              }
+            } else {
+              alert(
+                'Recording failed. Please check:\n\n' +
+                '1. Microphone permissions are granted to this app\n' +
+                '2. Selected devices are not in use by another application\n' +
+                '3. Devices are properly connected\n\n' +
+                '• Grant microphone permissions in Windows Settings\n' +
+                '• Restart the application\n' +
+                '• Try different audio devices'
+              );
+            }
+          } else {
           alert(
             `Recording failed: ${errorMsg}\n\n` +
             'Try refreshing your audio devices or restarting the app.'
