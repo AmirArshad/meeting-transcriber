@@ -2025,6 +2025,23 @@ ipcMain.handle('get-arch', async () => {
 });
 
 /**
+ * Open system settings (macOS only)
+ * @param {string} type - 'microphone' or 'screen'
+ */
+ipcMain.handle('open-system-settings', async (event, type) => {
+  if (process.platform === 'darwin') {
+    const { shell } = require('electron');
+    const urls = {
+      'microphone': 'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone',
+      'screen': 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'
+    };
+    await shell.openExternal(urls[type] || urls.microphone);
+    return { success: true };
+  }
+  return { success: false, error: 'Only supported on macOS' };
+});
+
+/**
  * Get system info (versions)
  */
 ipcMain.handle('get-system-info', async () => {

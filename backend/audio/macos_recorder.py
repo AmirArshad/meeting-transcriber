@@ -13,7 +13,6 @@ import time
 from datetime import datetime
 from pathlib import Path
 import numpy as np
-import soxr
 
 try:
     import sounddevice as sd
@@ -30,10 +29,6 @@ except ImportError:
     print("  Desktop audio capture will be disabled", file=sys.stderr)
     print("  Install with: pip install pyobjc-framework-ScreenCaptureKit", file=sys.stderr)
     SCREENCAPTURE_AVAILABLE = False
-
-# Store final output path for meeting manager
-_final_output_path = None
-_recording_duration = 0.0
 
 
 class MacOSAudioRecorder:
@@ -108,6 +103,10 @@ class MacOSAudioRecorder:
         # Time-based synchronization - SINGLE reference point set at recording start
         # Both streams use the same reference to ensure they stay in sync
         self.recording_start_time = None
+
+        # Output tracking (instance variables instead of globals)
+        self.final_output_path = None
+        self.recording_duration = 0.0
 
         print(f"Initialized macOS audio recorder", file=sys.stderr)
         print(f"  Mic device: {mic_device_id}", file=sys.stderr)
@@ -253,17 +252,22 @@ class MacOSAudioRecorder:
 
             # Monitor audio levels while recording
             while self.is_running:
-                # Update desktop audio level from ScreenCaptureKit buffer
-                if self.screencapture_recorder.audio_buffer:
-                    try:
-                        # Get the latest buffer
-                        latest_buffer = self.screencapture_recorder.audio_buffer[-1]
-                        level = np.max(np.abs(latest_buffer[::8]))  # Subsample for performance
+                # Update desktop audio level from ScreenCaptureKit buffer (thread-safe)
+                # Avoid nested locks by copying data first, then updating level
+                try:
+                    level = None
+                    with self.screencapture_recorder.buffer_lock:
+                        if self.screencapture_recorder.audio_buffer:
+                            # Get the latest buffer and calculate level while holding lock
+                            latest_buffer = self.screencapture_recorder.audio_buffer[-1]
+                            level = float(np.max(np.abs(latest_buffer[::8])))  # Subsample for performance
 
+                    # Update level outside of buffer_lock to avoid nested locks
+                    if level is not None:
                         with self.level_lock:
-                            self.desktop_level = float(level)
-                    except Exception:
-                        pass  # Ignore errors in level calculation
+                            self.desktop_level = level
+                except Exception:
+                    pass  # Ignore errors in level calculation
 
                 time.sleep(0.1)
 
@@ -305,8 +309,6 @@ class MacOSAudioRecorder:
 
     def _process_and_save(self):
         """Process recorded audio and save to file."""
-        global _final_output_path, _recording_duration
-
         if not self.mic_frames:
             print(f"ERROR: No audio recorded from microphone!", file=sys.stderr)
             return
@@ -340,37 +342,36 @@ class MacOSAudioRecorder:
             elif desktop_channels == 1:
                 desktop_audio = np.column_stack([desktop_audio, desktop_audio])
 
-            # Resample to match lengths if needed (use high-quality soxr resampling)
+            # Match lengths by padding shorter stream with silence (NOT resampling)
+            # Resampling would change pitch/speed - we just need to align the streams
             if len(mic_audio) != len(desktop_audio):
-                print(f"Resampling to match lengths: mic={len(mic_audio)}, desktop={len(desktop_audio)}", file=sys.stderr)
+                print(f"Aligning stream lengths: mic={len(mic_audio)}, desktop={len(desktop_audio)}", file=sys.stderr)
 
                 target_length = max(len(mic_audio), len(desktop_audio))
 
-                # Use soxr for high-quality resampling (VHQ quality - matches Windows)
+                # Pad shorter stream with silence (zeros)
                 if len(mic_audio) < target_length:
-                    ratio = target_length / len(mic_audio)
-                    mic_audio = soxr.resample(
-                        mic_audio,
-                        self.sample_rate,
-                        int(self.sample_rate * ratio),
-                        quality='VHQ'  # Very High Quality - best algorithm
-                    )
-                    # Trim to exact length (resampling may overshoot slightly)
-                    mic_audio = mic_audio[:target_length]
+                    padding_length = target_length - len(mic_audio)
+                    padding = np.zeros((padding_length, mic_audio.shape[1]), dtype=mic_audio.dtype)
+                    mic_audio = np.concatenate([mic_audio, padding], axis=0)
+                    print(f"  Padded mic audio with {padding_length} samples of silence", file=sys.stderr)
                 elif len(desktop_audio) < target_length:
-                    ratio = target_length / len(desktop_audio)
-                    desktop_audio = soxr.resample(
-                        desktop_audio,
-                        self.sample_rate,
-                        int(self.sample_rate * ratio),
-                        quality='VHQ'  # Very High Quality - best algorithm
-                    )
-                    # Trim to exact length
-                    desktop_audio = desktop_audio[:target_length]
+                    padding_length = target_length - len(desktop_audio)
+                    padding = np.zeros((padding_length, desktop_audio.shape[1]), dtype=desktop_audio.dtype)
+                    desktop_audio = np.concatenate([desktop_audio, padding], axis=0)
+                    print(f"  Padded desktop audio with {padding_length} samples of silence", file=sys.stderr)
 
-            # Mix: apply volumes and add
-            final_audio = (mic_audio * self.mic_volume) + (desktop_audio * self.desktop_volume)
-            print(f"Mixed audio: {len(final_audio)} samples", file=sys.stderr)
+            # Mix: apply volumes with mic boost (match Windows behavior)
+            # Mic boost of 2.0 (6dB) makes voice prominent over desktop audio
+            MIC_BOOST = 2.0
+            final_audio = (mic_audio * self.mic_volume * MIC_BOOST) + (desktop_audio * self.desktop_volume)
+
+            # Soft limiting if clipping would occur (match Windows behavior)
+            max_val = np.max(np.abs(final_audio))
+            if max_val > 1.0:
+                final_audio = np.tanh(final_audio * 0.85)
+
+            print(f"Mixed audio: {len(final_audio)} samples (mic boost: {MIC_BOOST}x)", file=sys.stderr)
 
         else:
             # Mic-only mode
@@ -408,10 +409,10 @@ class MacOSAudioRecorder:
         except OSError:
             pass  # File may already be deleted or locked
 
-        # Set globals for meeting manager
-        _final_output_path = final_output_path
+        # Set instance variables for meeting manager
+        self.final_output_path = final_output_path
         duration_seconds = len(final_audio) / self.sample_rate
-        _recording_duration = duration_seconds
+        self.recording_duration = duration_seconds
 
         print(f"Final file: {final_output_path}", file=sys.stderr)
         print(f"Duration: {duration_seconds:.1f} seconds", file=sys.stderr)
@@ -729,8 +730,8 @@ def main():
     # Output result as JSON for Electron
     result = {
         'success': True,
-        'outputPath': _final_output_path or args.output,
-        'duration': _recording_duration
+        'outputPath': recorder.final_output_path or args.output,
+        'duration': recorder.recording_duration
     }
 
     print(json.dumps(result))

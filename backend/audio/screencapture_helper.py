@@ -50,6 +50,7 @@ class ScreenCaptureAudioRecorder:
         self.channels = channels
         self.is_recording = False
         self.audio_buffer = []
+        self.buffer_lock = threading.Lock()  # Protects audio_buffer access
         self.stream = None
         self.content_filter = None
         self.stream_config = None
@@ -90,24 +91,42 @@ class ScreenCaptureAudioRecorder:
 
         The delegate receives audio buffers from the capture stream and
         converts them to numpy arrays for processing.
+
+        IMPORTANT: PyObjC delegate methods must NOT use @python_method decorator.
+        Methods without the decorator are exposed as Objective-C selectors that
+        ScreenCaptureKit can call. The @python_method decorator marks methods as
+        Python-only, which would prevent callbacks from working.
         """
+        import objc
         from Foundation import NSObject
-        from objc import python_method
 
         recorder = self  # Capture reference for delegate
 
+        # Define the delegate class that implements SCStreamOutput protocol
+        # The protocol methods must be proper Objective-C selectors (no @python_method)
         class StreamDelegate(NSObject):
-            """Delegate that receives audio samples from SCStream."""
+            """
+            Delegate that receives audio samples from SCStream.
 
-            def __init__(self):
-                super().__init__()
+            Implements the SCStreamOutput protocol methods as Objective-C selectors.
+            """
+
+            def init(self):
+                """Initialize the delegate using proper PyObjC pattern."""
+                self = objc.super(StreamDelegate, self).init()
+                if self is None:
+                    return None
                 self.sample_count = 0
                 self.first_sample_logged = False
+                return self
 
-            @python_method
+            # SCStreamOutput protocol method - receives sample buffers
+            # NO @python_method - this must be an Objective-C selector!
             def stream_didOutputSampleBuffer_ofType_(self, stream, sample_buffer, output_type):
                 """
                 Called when the stream outputs a new sample buffer.
+
+                This is an Objective-C selector that ScreenCaptureKit calls directly.
 
                 Args:
                     stream: The SCStream instance
@@ -122,35 +141,33 @@ class ScreenCaptureAudioRecorder:
 
                 # Only process audio samples
                 if output_type != recorder.SCStreamOutputType.SCStreamOutputTypeAudio:
-                    if not self.first_sample_logged:
-                        print(f"DEBUG: Skipping non-audio sample (type={output_type})", file=sys.stderr)
                     return
 
                 if not recorder.is_recording:
-                    print(f"DEBUG: Received sample but is_recording=False", file=sys.stderr)
                     return
 
                 try:
                     # Extract audio data from CMSampleBuffer
-                    audio_data = self._extract_audio_from_sample_buffer(sample_buffer)
+                    audio_data = self._extract_audio_from_sample_buffer_(sample_buffer)
 
                     if audio_data is not None and len(audio_data) > 0:
-                        recorder.audio_buffer.append(audio_data)
+                        # Thread-safe append to audio buffer
+                        with recorder.buffer_lock:
+                            recorder.audio_buffer.append(audio_data)
                         self.sample_count += 1
 
                         # Log first few samples
                         if self.sample_count <= 3:
                             print(f"DEBUG: Successfully captured audio sample #{self.sample_count}: {len(audio_data)} samples", file=sys.stderr)
-                    else:
-                        print(f"DEBUG: Audio extraction returned None or empty", file=sys.stderr)
 
                 except Exception as e:
                     print(f"Error processing audio sample: {e}", file=sys.stderr)
                     import traceback
                     traceback.print_exc(file=sys.stderr)
 
-            @python_method
-            def _extract_audio_from_sample_buffer(self, sample_buffer):
+            # Helper method - can use @python_method since it's not a protocol method
+            @objc.python_method
+            def _extract_audio_from_sample_buffer_(self, sample_buffer):
                 """
                 Extract audio data from CMSampleBuffer and convert to numpy array.
 
@@ -165,7 +182,6 @@ class ScreenCaptureAudioRecorder:
                         CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer,
                         CMSampleBufferGetNumSamples
                     )
-                    from CoreAudio import AudioBufferList
 
                     # Get the number of samples
                     num_samples = CMSampleBufferGetNumSamples(sample_buffer)
@@ -174,8 +190,6 @@ class ScreenCaptureAudioRecorder:
                         print(f"DEBUG: First sample has {num_samples} samples", file=sys.stderr)
 
                     if num_samples == 0:
-                        if self.sample_count == 0:
-                            print(f"DEBUG: First sample has 0 samples - buffer may be empty", file=sys.stderr)
                         return None
 
                     # Get the audio buffer list
@@ -213,9 +227,6 @@ class ScreenCaptureAudioRecorder:
                             samples = samples.reshape(-1, 2)
 
                         return samples
-                    else:
-                        if self.sample_count == 0:
-                            print(f"DEBUG: audio_buffer_list has 0 buffers", file=sys.stderr)
 
                     return None
 
@@ -225,7 +236,8 @@ class ScreenCaptureAudioRecorder:
                     traceback.print_exc(file=sys.stderr)
                     return None
 
-            @python_method
+            # SCStreamOutput protocol method - called when stream stops
+            # NO @python_method - this must be an Objective-C selector!
             def stream_didStopWithError_(self, stream, error):
                 """Called when the stream stops, possibly with an error."""
                 if error:
@@ -335,22 +347,35 @@ class ScreenCaptureAudioRecorder:
                     )
                     print(f"DEBUG: Stream created successfully", file=sys.stderr)
 
-                    import ctypes
-                    # Get global dispatch queue to ensure callbacks run in background
-                    # This avoids deadlock with the main thread loop
-                    _lib = ctypes.CDLL("/usr/lib/libSystem.dylib")
-                    _lib.dispatch_get_global_queue.restype = ctypes.c_void_p
-                    # DISPATCH_QUEUE_PRIORITY_DEFAULT = 0, flags = 0
-                    queue = _lib.dispatch_get_global_queue(0, 0)
-
                     # Add the delegate as a stream output
                     # CRITICAL: This is required to receive sample buffers
-                    self.stream.addStreamOutput_type_sampleHandlerQueue_error_(
-                        self.delegate,
-                        self.SCStreamOutputType.SCStreamOutputTypeAudio,
-                        queue,
-                        None
-                    )
+                    #
+                    # For the sampleHandlerQueue parameter:
+                    # - Pass None to use the default serial queue (recommended by Apple docs)
+                    # - This ensures callbacks are serialized and don't cause threading issues
+                    # - The delegate methods will be called on a background queue managed by ScreenCaptureKit
+                    #
+                    # Note: PyObjC error out-parameters return (result, error) tuple
+                    try:
+                        result = self.stream.addStreamOutput_type_sampleHandlerQueue_error_(
+                            self.delegate,
+                            self.SCStreamOutputType.SCStreamOutputTypeAudio,
+                            None,  # Use default queue - safer than raw ctypes pointer
+                            None
+                        )
+                        # PyObjC returns (success, error) tuple for methods with error: parameter
+                        if isinstance(result, tuple):
+                            success, add_output_error = result
+                            if add_output_error:
+                                print(f"ERROR: Failed to add stream output: {add_output_error}", file=sys.stderr)
+                                setup_error[0] = str(add_output_error)
+                                setup_complete[0] = True
+                                return
+                    except Exception as add_error:
+                        print(f"ERROR: Exception adding stream output: {add_error}", file=sys.stderr)
+                        setup_error[0] = str(add_error)
+                        setup_complete[0] = True
+                        return
                     print(f"DEBUG: Added stream output with background queue", file=sys.stderr)
 
                     # Start the stream
@@ -423,36 +448,50 @@ class ScreenCaptureAudioRecorder:
         print("Stopping ScreenCaptureKit audio capture...", file=sys.stderr)
         self.is_recording = False
 
-        # Stop the stream
+        # Stop the stream with proper completion verification
         if self.stream:
+            stop_complete = [False]
+            stop_error = [None]
+
             def stop_completion_handler(error):
                 if error:
                     print(f"Error stopping stream: {error}", file=sys.stderr)
+                    stop_error[0] = error
+                stop_complete[0] = True
 
             self.stream.stopCaptureWithCompletionHandler_(stop_completion_handler)
-            time.sleep(0.5)  # Wait for stream to stop
 
-        # Concatenate all audio buffers
-        if not self.audio_buffer:
-            print("No desktop audio captured", file=sys.stderr)
-            print("", file=sys.stderr)
-            print("⚠️  If you just granted Screen Recording permission, please restart the app.", file=sys.stderr)
-            print("   macOS requires an app restart after granting this permission.", file=sys.stderr)
-            print("", file=sys.stderr)
-            return None
+            # Wait for stop to complete (max 2 seconds)
+            for _ in range(20):
+                if stop_complete[0]:
+                    break
+                time.sleep(0.1)
 
-        try:
-            audio_data = np.concatenate(self.audio_buffer, axis=0)
-            print(f"Captured {len(audio_data)} desktop audio samples", file=sys.stderr)
+            if not stop_complete[0]:
+                print("WARNING: Stream stop timeout - proceeding anyway", file=sys.stderr)
 
-            # Clear buffer
-            self.audio_buffer = []
+        # Concatenate all audio buffers (thread-safe)
+        with self.buffer_lock:
+            if not self.audio_buffer:
+                print("No desktop audio captured", file=sys.stderr)
+                print("", file=sys.stderr)
+                print("⚠️  If you just granted Screen Recording permission, please restart the app.", file=sys.stderr)
+                print("   macOS requires an app restart after granting this permission.", file=sys.stderr)
+                print("", file=sys.stderr)
+                return None
 
-            return audio_data
+            try:
+                audio_data = np.concatenate(self.audio_buffer, axis=0)
+                print(f"Captured {len(audio_data)} desktop audio samples", file=sys.stderr)
 
-        except Exception as e:
-            print(f"Error concatenating audio buffers: {e}", file=sys.stderr)
-            return None
+                # Clear buffer
+                self.audio_buffer = []
+
+                return audio_data
+
+            except Exception as e:
+                print(f"Error concatenating audio buffers: {e}", file=sys.stderr)
+                return None
 
     def cleanup(self):
         """Clean up resources."""

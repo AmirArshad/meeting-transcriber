@@ -24,6 +24,16 @@ class MLXWhisperTranscriber:
     - Optimized for Apple M1/M2/M3/M4 chips
     """
 
+    # MLX model repository mappings (mlx-community on Hugging Face)
+    MLX_MODEL_REPOS = {
+        "tiny": "mlx-community/whisper-tiny-mlx",
+        "base": "mlx-community/whisper-base-mlx",
+        "small": "mlx-community/whisper-small-mlx",
+        "medium": "mlx-community/whisper-medium-mlx",
+        "large": "mlx-community/whisper-large-v3-mlx",
+        "large-v3": "mlx-community/whisper-large-v3-mlx"
+    }
+
     # Supported Whisper languages (same as faster-whisper for consistency)
     SUPPORTED_LANGUAGES = {
         'en': 'English',
@@ -148,7 +158,8 @@ class MLXWhisperTranscriber:
         self.language = language
         self.device = "metal"  # MLX uses Metal GPU (or CPU for fallback)
         self.compute_type = "float16"  # MLX uses float16 (or int8 for CPU fallback)
-        self.model = None
+        self.model = None  # Holds model object for faster-whisper backend
+        self.model_ready = False  # Flag indicating model is ready for transcription
         self.backend = None  # Will be set to 'mlx' or 'faster-whisper' when model loads
 
         # Validate language
@@ -197,24 +208,18 @@ class MLXWhisperTranscriber:
             import lightning_whisper_mlx
             from huggingface_hub import snapshot_download
 
-            # Map model size to mlx-community repo ID
-            repo_map = {
-                "tiny": "mlx-community/whisper-tiny-mlx",
-                "base": "mlx-community/whisper-base-mlx",
-                "small": "mlx-community/whisper-small-mlx",
-                "medium": "mlx-community/whisper-medium-mlx",
-                "large": "mlx-community/whisper-large-v3-mlx",
-                "large-v3": "mlx-community/whisper-large-v3-mlx"
-            }
-            repo_id = repo_map.get(self.model_size, f"mlx-community/whisper-{self.model_size}-mlx")
+            repo_id = self.MLX_MODEL_REPOS.get(
+                self.model_size,
+                f"mlx-community/whisper-{self.model_size}-mlx"
+            )
 
             print(f"Verifying/Downloading model: {repo_id}...", file=sys.stderr)
             # Pre-download the model to ensure it's in cache
             snapshot_download(repo_id=repo_id)
 
             self.backend = 'mlx'  # Track which backend we're using
-            self.model = True # specialized flag to indicate loaded
-            
+            self.model_ready = True
+
             print(f"Model ready!", file=sys.stderr)
             print(f"  Backend: Lightning-Whisper-MLX (Functional API)", file=sys.stderr)
             print(f"  Device: Metal GPU", file=sys.stderr)
@@ -241,6 +246,7 @@ class MLXWhisperTranscriber:
             )
 
             self.backend = 'faster-whisper'  # Track which backend we're using
+            self.model_ready = True
             print(f"Model loaded successfully!", file=sys.stderr)
             print(f"  Backend: faster-whisper (CPU fallback)", file=sys.stderr)
             print(f"  Device: CPU", file=sys.stderr)
@@ -282,7 +288,7 @@ class MLXWhisperTranscriber:
                 'output_file': path to saved markdown file (if saved)
             }
         """
-        if self.model is None:
+        if not self.model_ready:
             raise RuntimeError("Model not loaded. Call load_model() first.")
 
         if not os.path.exists(audio_path):
@@ -292,35 +298,28 @@ class MLXWhisperTranscriber:
         print(f"Language: {self.SUPPORTED_LANGUAGES[self.language]} ({self.language})", file=sys.stderr)
 
         # Transcribe using the appropriate backend
+        # Initialize variables that differ by backend
+        detected_language = self.language  # Default fallback
+        segments_list = []
+        full_text = []
+
         if self.backend == 'mlx':
             # Use functional API directly to avoid path issues in LightningWhisperMLX class
             from lightning_whisper_mlx import transcribe_audio
 
-            # Map model size to mlx-community repo ID
-            # These are the official quantized models for MLX
-            repo_map = {
-                "tiny": "mlx-community/whisper-tiny-mlx",
-                "base": "mlx-community/whisper-base-mlx",
-                "small": "mlx-community/whisper-small-mlx",
-                "medium": "mlx-community/whisper-medium-mlx",
-                "large": "mlx-community/whisper-large-v3-mlx",
-                "large-v3": "mlx-community/whisper-large-v3-mlx"
-            }
-            
-            repo_id = repo_map.get(self.model_size, f"mlx-community/whisper-{self.model_size}-mlx")
-            
+            repo_id = self.MLX_MODEL_REPOS.get(
+                self.model_size,
+                f"mlx-community/whisper-{self.model_size}-mlx"
+            )
+
             print(f"Transcribing with model: {repo_id}", file=sys.stderr)
-            
+
             result = transcribe_audio(
                 audio_path,
                 path_or_hf_repo=repo_id,
                 language=self.language,
                 batch_size=12
             )
-
-            # Extract segments and metadata
-            segments_list = []
-            full_text = []
 
             print(f"Processing segments...", file=sys.stderr)
 
@@ -334,16 +333,15 @@ class MLXWhisperTranscriber:
                     })
                     full_text.append(segment['text'].strip())
 
+            # Get detected language from MLX result
+            detected_language = result.get('language', self.language)
+
         else:  # faster-whisper backend
-            # faster-whisper returns an iterator
+            # faster-whisper returns an iterator and info object
             segments_iter, info = self.model.transcribe(
                 audio_path,
                 language=self.language
             )
-
-            # Extract segments and metadata
-            segments_list = []
-            full_text = []
 
             print(f"Processing segments...", file=sys.stderr)
 
@@ -355,6 +353,9 @@ class MLXWhisperTranscriber:
                 })
                 full_text.append(segment.text.strip())
 
+            # Get detected language from faster-whisper info
+            detected_language = info.language
+
         # Get audio duration (calculate from last segment if available)
         duration = segments_list[-1]['end'] if segments_list else 0.0
 
@@ -362,12 +363,6 @@ class MLXWhisperTranscriber:
         # Target: ~20 seconds per chunk (good for long meetings)
         print(f"Merging {len(segments_list)} segments into larger chunks...", file=sys.stderr)
         segments_list = self._merge_segments(segments_list, target_duration=20.0)
-
-        # Get detected language (depends on backend)
-        if self.backend == 'mlx':
-            detected_language = result.get('language', self.language)
-        else:  # faster-whisper
-            detected_language = info.language if 'info' in locals() else self.language
 
         # Prepare results
         results = {
@@ -509,9 +504,10 @@ class MLXWhisperTranscriber:
 
     def cleanup(self):
         """Clean up resources."""
-        if self.model is not None:
-            # MLX handles cleanup automatically
+        if self.model_ready:
+            # MLX handles cleanup automatically, faster-whisper model can be released
             self.model = None
+            self.model_ready = False
             print("MLX Transcriber cleaned up", file=sys.stderr)
 
 

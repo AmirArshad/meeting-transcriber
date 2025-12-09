@@ -670,33 +670,33 @@ async function startRecording() {
                                         errorMsg.toLowerCase().includes('access') ||
                                         errorMsg.toLowerCase().includes('device');
 
-          if (shouldCheckPermissions) {
-            // Platform-specific permission instructions
-            const isMac = navigator.platform.includes('Mac');
-            
-            if (isMac) {
-              const shouldOpenSettings = confirm(
-                'Recording failed. Permission might be missing.\n\n' +
-                'Would you like to open System Settings to check permissions?\n\n' +
-                'Check both Microphone and Screen Recording permissions.'
-              );
-              
-              if (shouldOpenSettings) {
-                // Open Screen Recording by default as it's the more common "silent fail"
-                window.electronAPI.openSystemSettings('screen');
-              }
-            } else {
-              alert(
-                'Recording failed. Please check:\n\n' +
-                '1. Microphone permissions are granted to this app\n' +
-                '2. Selected devices are not in use by another application\n' +
-                '3. Devices are properly connected\n\n' +
-                '• Grant microphone permissions in Windows Settings\n' +
-                '• Restart the application\n' +
-                '• Try different audio devices'
-              );
+        if (shouldCheckPermissions) {
+          // Platform-specific permission instructions
+          const isMac = navigator.platform.includes('Mac');
+
+          if (isMac) {
+            const shouldOpenSettings = confirm(
+              'Recording failed. Permission might be missing.\n\n' +
+              'Would you like to open System Settings to check permissions?\n\n' +
+              'Check both Microphone and Screen Recording permissions.'
+            );
+
+            if (shouldOpenSettings) {
+              // Open Screen Recording by default as it's the more common "silent fail"
+              window.electronAPI.openSystemSettings('screen');
             }
           } else {
+            alert(
+              'Recording failed. Please check:\n\n' +
+              '1. Microphone permissions are granted to this app\n' +
+              '2. Selected devices are not in use by another application\n' +
+              '3. Devices are properly connected\n\n' +
+              '• Grant microphone permissions in Windows Settings\n' +
+              '• Restart the application\n' +
+              '• Try different audio devices'
+            );
+          }
+        } else {
           alert(
             `Recording failed: ${errorMsg}\n\n` +
             'Try refreshing your audio devices or restarting the app.'
