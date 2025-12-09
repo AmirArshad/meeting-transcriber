@@ -1145,8 +1145,17 @@ ipcMain.handle('check-model-downloaded', async (event, modelSize) => {
     const homeDir = require('os').homedir();
     const cacheDir = path.join(homeDir, '.cache', 'huggingface', 'hub');
 
-    // Model naming pattern: models--guillaumekln--faster-whisper-{size}
-    const modelPattern = `models--guillaumekln--faster-whisper-${modelSize || 'small'}`;
+    // Determine correct model pattern based on architecture
+    let modelPattern;
+    const isMacArm = process.platform === 'darwin' && process.arch === 'arm64';
+
+    if (isMacArm) {
+      // MLX models: models--mlx-community--whisper-{size}-mlx
+      modelPattern = `models--mlx-community--whisper-${modelSize || 'small'}-mlx`;
+    } else {
+      // Faster-whisper models: models--guillaumekln--faster-whisper-{size}
+      modelPattern = `models--guillaumekln--faster-whisper-${modelSize || 'small'}`;
+    }
 
     try {
       if (fs.existsSync(cacheDir)) {
