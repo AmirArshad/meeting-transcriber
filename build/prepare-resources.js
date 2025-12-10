@@ -16,7 +16,12 @@ const FFMPEG_MAC_URL = 'https://evermeet.cx/ffmpeg/getrelease/ffmpeg/zip';
 const BUILD_DIR = path.join(__dirname, 'resources');
 const PYTHON_DIR = path.join(BUILD_DIR, 'python');
 const FFMPEG_DIR = path.join(BUILD_DIR, 'ffmpeg');
+const BIN_DIR = path.join(BUILD_DIR, 'bin');
 const MODELS_DIR = path.join(BUILD_DIR, 'whisper-models');
+
+// Swift AudioCaptureHelper paths
+const SWIFT_HELPER_DIR = path.join(__dirname, '..', 'swift', 'AudioCaptureHelper');
+const SWIFT_HELPER_BINARY = 'audiocapture-helper';
 
 const IS_MAC = process.platform === 'darwin';
 const IS_WINDOWS = process.platform === 'win32';
@@ -146,7 +151,79 @@ function checkExistingResources() {
   const ffmpegExists = fs.existsSync(path.join(FFMPEG_DIR, ffmpegExe));
   const modelsExist = fs.existsSync(MODELS_DIR) && fs.readdirSync(MODELS_DIR).length > 0;
 
-  return { pythonExists, ffmpegExists, modelsExist };
+  // Check for Swift helper binary (macOS only)
+  const swiftHelperExists = IS_MAC
+    ? fs.existsSync(path.join(BIN_DIR, SWIFT_HELPER_BINARY))
+    : true; // Not needed on Windows
+
+  return { pythonExists, ffmpegExists, modelsExist, swiftHelperExists };
+}
+
+// Build Swift AudioCaptureHelper (macOS only)
+function buildSwiftHelper() {
+  console.log('[Swift] Building AudioCaptureHelper...');
+
+  // Check if Swift is available
+  try {
+    execSync('swift --version', { stdio: 'pipe' });
+  } catch (error) {
+    console.error('ERROR: Swift not found. Please install Xcode or Swift toolchain.');
+    throw new Error('Swift toolchain not available');
+  }
+
+  // Check if Package.swift exists
+  if (!fs.existsSync(path.join(SWIFT_HELPER_DIR, 'Package.swift'))) {
+    console.error(`ERROR: Package.swift not found at ${SWIFT_HELPER_DIR}`);
+    throw new Error('Swift package not found');
+  }
+
+  // Build in release mode
+  console.log('  Building release configuration...');
+  try {
+    execSync('swift build -c release', {
+      cwd: SWIFT_HELPER_DIR,
+      stdio: 'inherit'
+    });
+  } catch (error) {
+    console.error('ERROR: Swift build failed');
+    throw error;
+  }
+
+  // Create bin directory if needed
+  if (!fs.existsSync(BIN_DIR)) {
+    fs.mkdirSync(BIN_DIR, { recursive: true });
+  }
+
+  // Find the built binary
+  // Swift Package Manager builds to .build/release/ or .build/arm64-apple-macosx/release/
+  const possibleBinaryPaths = [
+    path.join(SWIFT_HELPER_DIR, '.build', 'release', SWIFT_HELPER_BINARY),
+    path.join(SWIFT_HELPER_DIR, '.build', 'arm64-apple-macosx', 'release', SWIFT_HELPER_BINARY)
+  ];
+
+  let sourceBinary = null;
+  for (const binaryPath of possibleBinaryPaths) {
+    if (fs.existsSync(binaryPath)) {
+      sourceBinary = binaryPath;
+      break;
+    }
+  }
+
+  if (!sourceBinary) {
+    console.error('ERROR: Built binary not found at expected locations:');
+    possibleBinaryPaths.forEach(p => console.error(`  - ${p}`));
+    throw new Error('Swift binary not found after build');
+  }
+
+  // Copy to resources/bin
+  const destBinary = path.join(BIN_DIR, SWIFT_HELPER_BINARY);
+  fs.copyFileSync(sourceBinary, destBinary);
+
+  // Ensure executable
+  execSync(`chmod +x "${destBinary}"`, { stdio: 'inherit' });
+
+  console.log(`  ✓ Built and copied to ${destBinary}`);
+  console.log('✓ Swift AudioCaptureHelper ready!\n');
 }
 
 // Download Whisper models
@@ -382,6 +459,21 @@ async function prepareResources() {
       fs.rmSync(tempDir, { recursive: true, force: true });
 
       console.log('✓ ffmpeg setup complete!\n');
+    }
+  }
+
+  // Build Swift AudioCaptureHelper (macOS only)
+  if (IS_MAC) {
+    if (existing.swiftHelperExists) {
+      console.log('✓ Swift AudioCaptureHelper already built\n');
+    } else {
+      try {
+        buildSwiftHelper();
+      } catch (error) {
+        console.error('⚠️ Warning: Swift helper build failed:', error.message);
+        console.log('  Desktop audio capture may not work without the Swift helper.\n');
+        // Don't fail the build - PyObjC fallback may still work
+      }
     }
   }
 

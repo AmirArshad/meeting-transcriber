@@ -147,6 +147,13 @@
         ]
       },
       {
+        "from": "build/resources/bin",
+        "to": "bin",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
         "from": "build/icon.ico",
         "to": "icon.ico"
       },

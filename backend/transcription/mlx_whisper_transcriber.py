@@ -205,23 +205,31 @@ class MLXWhisperTranscriber:
         """Internal method to load the model (called with lock held)."""
         # Try MLX first (Apple Silicon GPU acceleration)
         try:
-            import lightning_whisper_mlx
-            from huggingface_hub import snapshot_download
+            from lightning_whisper_mlx import LightningWhisperMLX
 
-            repo_id = self.MLX_MODEL_REPOS.get(
-                self.model_size,
-                f"mlx-community/whisper-{self.model_size}-mlx"
+            # Map our model size to lightning-whisper-mlx model names
+            # lightning-whisper-mlx uses different naming than huggingface repos
+            model_name = self.model_size
+            if model_name == "large-v3":
+                model_name = "large-v3"
+            elif model_name == "large":
+                model_name = "large-v3"  # Default large to v3
+
+            print(f"Verifying/Downloading model: {model_name}...", file=sys.stderr)
+
+            # Create the LightningWhisperMLX instance
+            # This will download the model if not cached
+            self.model = LightningWhisperMLX(
+                model=model_name,
+                batch_size=12,
+                quant=None  # Use full precision for best quality
             )
-
-            print(f"Verifying/Downloading model: {repo_id}...", file=sys.stderr)
-            # Pre-download the model to ensure it's in cache
-            snapshot_download(repo_id=repo_id)
 
             self.backend = 'mlx'  # Track which backend we're using
             self.model_ready = True
 
             print(f"Model ready!", file=sys.stderr)
-            print(f"  Backend: Lightning-Whisper-MLX (Functional API)", file=sys.stderr)
+            print(f"  Backend: Lightning-Whisper-MLX", file=sys.stderr)
             print(f"  Device: Metal GPU", file=sys.stderr)
             print(f"  Compute type: float16", file=sys.stderr)
             print(f"  Using Apple Silicon GPU acceleration - optimized for M-series chips!", file=sys.stderr)
@@ -304,37 +312,43 @@ class MLXWhisperTranscriber:
         full_text = []
 
         if self.backend == 'mlx':
-            # Use functional API directly to avoid path issues in LightningWhisperMLX class
-            from lightning_whisper_mlx import transcribe_audio
+            # Use LightningWhisperMLX class instance (created in _load_model_internal)
+            print(f"Transcribing with Lightning-Whisper-MLX...", file=sys.stderr)
 
-            repo_id = self.MLX_MODEL_REPOS.get(
-                self.model_size,
-                f"mlx-community/whisper-{self.model_size}-mlx"
-            )
+            # LightningWhisperMLX.transcribe() returns a dict with 'text' key
+            # Note: It may also have 'segments' depending on the version
+            result = self.model.transcribe(audio_path=audio_path)
 
-            print(f"Transcribing with model: {repo_id}", file=sys.stderr)
+            print(f"Processing result...", file=sys.stderr)
 
-            result = transcribe_audio(
-                audio_path,
-                path_or_hf_repo=repo_id,
-                language=self.language,
-                batch_size=12
-            )
-
-            print(f"Processing segments...", file=sys.stderr)
-
-            # result is a dict with 'text' and 'segments'
-            if 'segments' in result:
-                for segment in result['segments']:
+            # Handle the result - lightning-whisper-mlx returns dict with 'text'
+            # and optionally 'segments'
+            if isinstance(result, dict):
+                if 'segments' in result and result['segments']:
+                    for segment in result['segments']:
+                        segments_list.append({
+                            'start': segment.get('start', 0),
+                            'end': segment.get('end', 0),
+                            'text': segment.get('text', '').strip()
+                        })
+                        full_text.append(segment.get('text', '').strip())
+                elif 'text' in result:
+                    # No segments, just full text - create a single segment
+                    text = result['text'].strip()
+                    full_text.append(text)
                     segments_list.append({
-                        'start': segment['start'],
-                        'end': segment['end'],
-                        'text': segment['text'].strip()
+                        'start': 0,
+                        'end': 0,  # Duration unknown without segments
+                        'text': text
                     })
-                    full_text.append(segment['text'].strip())
 
-            # Get detected language from MLX result
-            detected_language = result.get('language', self.language)
+                # Get detected language from result if available
+                detected_language = result.get('language', self.language)
+            else:
+                # Unexpected result format
+                print(f"WARNING: Unexpected result format: {type(result)}", file=sys.stderr)
+                full_text.append(str(result))
+                segments_list.append({'start': 0, 'end': 0, 'text': str(result)})
 
         else:  # faster-whisper backend
             # faster-whisper returns an iterator and info object

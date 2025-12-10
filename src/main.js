@@ -1146,28 +1146,42 @@ ipcMain.handle('check-model-downloaded', async (event, modelSize) => {
     const cacheDir = path.join(homeDir, '.cache', 'huggingface', 'hub');
 
     // Determine correct model pattern based on architecture
-    let modelPattern;
+    let modelPatterns = [];
     const isMacArm = process.platform === 'darwin' && process.arch === 'arm64';
+    const size = modelSize || 'small';
 
     if (isMacArm) {
-      // MLX models: models--mlx-community--whisper-{size}-mlx
-      modelPattern = `models--mlx-community--whisper-${modelSize || 'small'}-mlx`;
+      // Lightning-Whisper-MLX downloads models from multiple repos:
+      // - distil models: distil-whisper/distil-{size}
+      // - standard models: mlx-community/whisper-{size}-mlx
+      // Check for both patterns in HuggingFace cache
+      modelPatterns = [
+        `models--mlx-community--whisper-${size}-mlx`,
+        `models--mlx-community--whisper-${size}`,
+        `models--distil-whisper--distil-${size}`,
+        // Also check for the model name without organization prefix
+        `whisper-${size}-mlx`,
+        `distil-${size}`
+      ];
     } else {
       // Faster-whisper models: models--guillaumekln--faster-whisper-{size}
-      modelPattern = `models--guillaumekln--faster-whisper-${modelSize || 'small'}`;
+      modelPatterns = [`models--guillaumekln--faster-whisper-${size}`];
     }
 
     try {
       if (fs.existsSync(cacheDir)) {
         const items = fs.readdirSync(cacheDir);
-        const modelExists = items.some(item => item.includes(modelPattern));
-        resolve({ downloaded: modelExists, modelSize: modelSize || 'small' });
+        // Check if any of the model patterns exist
+        const modelExists = modelPatterns.some(pattern =>
+          items.some(item => item.includes(pattern))
+        );
+        resolve({ downloaded: modelExists, modelSize: size });
       } else {
-        resolve({ downloaded: false, modelSize: modelSize || 'small' });
+        resolve({ downloaded: false, modelSize: size });
       }
     } catch (e) {
       // If we can't check, assume not downloaded
-      resolve({ downloaded: false, modelSize: modelSize || 'small' });
+      resolve({ downloaded: false, modelSize: size });
     }
   });
 });

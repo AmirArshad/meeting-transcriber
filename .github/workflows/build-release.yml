@@ -36,6 +36,12 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Verify Swift version (macOS)
+        if: matrix.os == 'macOS'
+        run: |
+          swift --version
+          echo "Swift toolchain ready for AudioCaptureHelper build"
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -174,7 +180,7 @@ jobs:
               - macOS: Lightning-Whisper-MLX (Metal GPU for Apple Silicon)
             - **Audio Capture:**
               - Windows: sounddevice + WASAPI loopback
-              - macOS: sounddevice + ScreenCaptureKit
+              - macOS: sounddevice + ScreenCaptureKit (native Swift helper)
 
             ### ✨ Features
 

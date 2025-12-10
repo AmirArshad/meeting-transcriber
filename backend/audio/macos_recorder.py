@@ -20,15 +20,33 @@ except ImportError:
     print("ERROR: sounddevice not installed. Install with: pip install sounddevice", file=sys.stderr)
     sys.exit(1)
 
-# Import ScreenCaptureKit helper (optional - graceful fallback if not available)
+# Import Swift audio capture helper (preferred for macOS 13+)
+# Falls back to PyObjC ScreenCaptureKit if Swift helper not available
+SWIFT_CAPTURE_AVAILABLE = False
+SCREENCAPTURE_AVAILABLE = False
+
 try:
-    from .screencapture_helper import ScreenCaptureAudioRecorder, check_screen_recording_permission
-    SCREENCAPTURE_AVAILABLE = True
-except ImportError:
-    print("WARNING: ScreenCaptureKit not available (PyObjC not installed)", file=sys.stderr)
-    print("  Desktop audio capture will be disabled", file=sys.stderr)
-    print("  Install with: pip install pyobjc-framework-ScreenCaptureKit", file=sys.stderr)
-    SCREENCAPTURE_AVAILABLE = False
+    from .swift_audio_capture import SwiftAudioCapture, is_swift_capture_available, check_screen_recording_permission
+    if is_swift_capture_available():
+        SWIFT_CAPTURE_AVAILABLE = True
+        print("Using Swift audiocapture-helper for desktop audio", file=sys.stderr)
+    else:
+        print("Swift audiocapture-helper not found, trying PyObjC fallback...", file=sys.stderr)
+except ImportError as e:
+    print(f"Swift audio capture import failed: {e}", file=sys.stderr)
+
+# Fallback to PyObjC ScreenCaptureKit (may not work on macOS 15+)
+if not SWIFT_CAPTURE_AVAILABLE:
+    try:
+        from .screencapture_helper import ScreenCaptureAudioRecorder, check_screen_recording_permission
+        SCREENCAPTURE_AVAILABLE = True
+        print("Using PyObjC ScreenCaptureKit for desktop audio (fallback)", file=sys.stderr)
+    except ImportError:
+        print("WARNING: No desktop audio capture available", file=sys.stderr)
+        print("  Desktop audio capture will be disabled", file=sys.stderr)
+        # Define fallback function
+        def check_screen_recording_permission():
+            return False
 
 
 class MacOSAudioRecorder:
@@ -81,18 +99,37 @@ class MacOSAudioRecorder:
         self.mic_info = None
         self.desktop_info = None
 
-        # ScreenCaptureKit recorder (for desktop audio)
-        self.screencapture_recorder = None
-        if SCREENCAPTURE_AVAILABLE:
+        # Desktop audio recorder (Swift helper preferred, PyObjC fallback)
+        self.desktop_capture = None
+        self.desktop_capture_type = None  # 'swift' or 'pyobjc'
+
+        if SWIFT_CAPTURE_AVAILABLE:
             try:
-                self.screencapture_recorder = ScreenCaptureAudioRecorder(
+                self.desktop_capture = SwiftAudioCapture(
                     sample_rate=sample_rate,
                     channels=channels
                 )
-                print(f"  ScreenCaptureKit initialized for desktop audio", file=sys.stderr)
+                self.desktop_capture_type = 'swift'
+                print(f"  Swift AudioCaptureHelper initialized for desktop audio", file=sys.stderr)
             except Exception as e:
-                print(f"  WARNING: Could not initialize ScreenCaptureKit: {e}", file=sys.stderr)
-                self.screencapture_recorder = None
+                print(f"  WARNING: Could not initialize Swift capture: {e}", file=sys.stderr)
+                self.desktop_capture = None
+
+        # Fallback to PyObjC ScreenCaptureKit
+        if self.desktop_capture is None and SCREENCAPTURE_AVAILABLE:
+            try:
+                self.desktop_capture = ScreenCaptureAudioRecorder(
+                    sample_rate=sample_rate,
+                    channels=channels
+                )
+                self.desktop_capture_type = 'pyobjc'
+                print(f"  PyObjC ScreenCaptureKit initialized for desktop audio (fallback)", file=sys.stderr)
+            except Exception as e:
+                print(f"  WARNING: Could not initialize PyObjC capture: {e}", file=sys.stderr)
+                self.desktop_capture = None
+
+        # Legacy alias for compatibility
+        self.screencapture_recorder = self.desktop_capture
 
         # Pre-roll: discard first ~1.5 seconds (device warm-up)
         # PRODUCTION FIX: In the real app, the 3-second countdown handles warm-up
@@ -135,10 +172,11 @@ class MacOSAudioRecorder:
             print(f"Microphone: {self.mic_info['name']}", file=sys.stderr)
 
             # Desktop audio status
-            if self.screencapture_recorder:
-                print(f"Desktop audio: ScreenCaptureKit enabled", file=sys.stderr)
+            if self.desktop_capture:
+                capture_type = self.desktop_capture_type or 'unknown'
+                print(f"Desktop audio: {capture_type} capture enabled", file=sys.stderr)
             else:
-                print(f"Desktop audio: disabled (PyObjC not installed)", file=sys.stderr)
+                print(f"Desktop audio: disabled (no capture method available)", file=sys.stderr)
 
         except Exception as e:
             print(f"Error querying devices: {e}", file=sys.stderr)
@@ -150,21 +188,20 @@ class MacOSAudioRecorder:
         self.mic_thread.daemon = True
         self.mic_thread.start()
 
-        # Start desktop recording if ScreenCaptureKit is available
-        if self.screencapture_recorder:
+        # Start desktop recording if capture method is available
+        if self.desktop_capture:
             self.desktop_thread = threading.Thread(target=self._record_desktop)
             self.desktop_thread.daemon = True
             self.desktop_thread.start()
         else:
-            print(f"Desktop audio capture disabled (ScreenCaptureKit not available)", file=sys.stderr)
-            print(f"  Install PyObjC to enable: pip install pyobjc-framework-ScreenCaptureKit", file=sys.stderr)
+            print(f"Desktop audio capture disabled (no capture method available)", file=sys.stderr)
+            print(f"  Swift helper or PyObjC ScreenCaptureKit required", file=sys.stderr)
             # Send JSON warning to Electron for UI display
             warning = {
                 "type": "warning",
                 "code": "NO_DESKTOP_AUDIO",
                 "message": "Desktop audio capture is disabled. Only microphone will be recorded.",
-                "help": "Install PyObjC framework to enable desktop audio capture.",
-                "install_cmd": "pip install pyobjc-framework-ScreenCaptureKit"
+                "help": "Ensure audiocapture-helper is bundled or install PyObjC as fallback."
             }
             print(json.dumps(warning), flush=True)
 
@@ -230,36 +267,38 @@ class MacOSAudioRecorder:
 
     def _record_desktop(self):
         """
-        Record desktop audio using ScreenCaptureKit.
+        Record desktop audio using Swift helper or ScreenCaptureKit fallback.
 
-        Uses the ScreenCaptureAudioRecorder helper to capture system audio output.
+        Uses the native Swift audiocapture-helper (preferred) or PyObjC
+        ScreenCaptureKit to capture system audio output.
 
         References:
         - https://developer.apple.com/documentation/screencapturekit
         - https://github.com/Mnpn/Azayaka (example implementation)
         """
-        if not self.screencapture_recorder:
-            print(f"ScreenCaptureKit not available, skipping desktop audio", file=sys.stderr)
+        if not self.desktop_capture:
+            print(f"Desktop audio capture not available, skipping", file=sys.stderr)
             return
 
         try:
-            print(f"Starting ScreenCaptureKit desktop audio capture...", file=sys.stderr)
+            capture_type = self.desktop_capture_type or 'unknown'
+            print(f"Starting desktop audio capture ({capture_type})...", file=sys.stderr)
 
-            # Start ScreenCaptureKit recording
-            if not self.screencapture_recorder.start_recording():
-                print(f"Failed to start ScreenCaptureKit recording", file=sys.stderr)
+            # Start recording
+            if not self.desktop_capture.start_recording():
+                print(f"Failed to start {capture_type} desktop recording", file=sys.stderr)
                 return
 
             # Monitor audio levels while recording
             while self.is_running:
-                # Update desktop audio level from ScreenCaptureKit buffer (thread-safe)
+                # Update desktop audio level from capture buffer (thread-safe)
                 # Avoid nested locks by copying data first, then updating level
                 try:
                     level = None
-                    with self.screencapture_recorder.buffer_lock:
-                        if self.screencapture_recorder.audio_buffer:
+                    with self.desktop_capture.buffer_lock:
+                        if self.desktop_capture.audio_buffer:
                             # Get the latest buffer and calculate level while holding lock
-                            latest_buffer = self.screencapture_recorder.audio_buffer[-1]
+                            latest_buffer = self.desktop_capture.audio_buffer[-1]
                             level = float(np.max(np.abs(latest_buffer[::8])))  # Subsample for performance
 
                     # Update level outside of buffer_lock to avoid nested locks
@@ -293,13 +332,17 @@ class MacOSAudioRecorder:
         if self.desktop_thread:
             self.desktop_thread.join(timeout=2.0)
 
-        # Stop ScreenCaptureKit and get desktop audio
-        if self.screencapture_recorder:
-            desktop_audio = self.screencapture_recorder.stop_recording()
+        # Stop desktop capture and get desktop audio
+        if self.desktop_capture:
+            capture_type = self.desktop_capture_type or 'unknown'
+            print(f"Stopping {capture_type} desktop capture...", file=sys.stderr)
+            desktop_audio = self.desktop_capture.stop_recording()
             if desktop_audio is not None:
                 # Convert to list of frames for consistency
                 self.desktop_frames = [desktop_audio]
-                print(f"Retrieved {len(desktop_audio)} desktop audio samples from ScreenCaptureKit", file=sys.stderr)
+                print(f"Retrieved {len(desktop_audio)} desktop audio samples from {capture_type}", file=sys.stderr)
+            else:
+                print(f"No desktop audio captured from {capture_type}", file=sys.stderr)
 
         # Process and save audio
         print(f"Processing audio...", file=sys.stderr)
@@ -638,18 +681,23 @@ def main():
 
     args = parser.parse_args()
 
-    # Check Screen Recording permission if ScreenCaptureKit is available
-    if SCREENCAPTURE_AVAILABLE:
+    # Check Screen Recording permission if desktop capture is available
+    if SWIFT_CAPTURE_AVAILABLE or SCREENCAPTURE_AVAILABLE:
         print(f"\nChecking Screen Recording permission...", file=sys.stderr)
         if check_screen_recording_permission():
             print(f"  ✓ Screen Recording permission granted", file=sys.stderr)
         else:
-            print(f"  ✗ WARNING: Screen Recording permission not granted", file=sys.stderr)
-            print(f"  Desktop audio capture will not work", file=sys.stderr)
+            print(f"  ✗ WARNING: Screen Recording permission may not be granted", file=sys.stderr)
+            print(f"  Desktop audio capture may not work", file=sys.stderr)
             print(f"  Grant permission in: System Settings > Privacy & Security > Screen Recording", file=sys.stderr)
+
+        if SWIFT_CAPTURE_AVAILABLE:
+            print(f"  Using: Swift audiocapture-helper (native)", file=sys.stderr)
+        else:
+            print(f"  Using: PyObjC ScreenCaptureKit (fallback)", file=sys.stderr)
     else:
-        print(f"\n✗ ScreenCaptureKit not available (PyObjC not installed)", file=sys.stderr)
-        print(f"  Desktop audio capture disabled", file=sys.stderr)
+        print(f"\n✗ Desktop audio capture not available", file=sys.stderr)
+        print(f"  Neither Swift helper nor PyObjC found", file=sys.stderr)
 
     # List available devices for reference
     print(f"\nAvailable audio devices:", file=sys.stderr)

@@ -193,7 +193,7 @@ Whisper itself supports **99 languages total** - the full list can be customized
   - macOS: Lightning-Whisper-MLX (Metal GPU acceleration)
 - **Audio Capture:**
   - Windows: PyAudioWPatch (WASAPI loopback)
-  - macOS: sounddevice + ScreenCaptureKit
+  - macOS: sounddevice + ScreenCaptureKit (native Swift helper)
 - **Audio Processing:** NumPy, SciPy, soxr (high-quality resampling)
 - **Compression:** ffmpeg (Opus codec)
 - **GPU Acceleration:**
