@@ -132,7 +132,7 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
             return nil
         }
 
-        let audioFormat = AVAudioFormat(streamDescription: streamBasicDescription.pointee)
+        let audioFormat = AVAudioFormat(streamDescription: streamBasicDescription)
         guard let audioFormat = audioFormat else { return nil }
 
         let numSamples = CMSampleBufferGetNumSamples(sampleBuffer)
@@ -334,14 +334,6 @@ func main() async {
         "channels": config.channels
     ])
 
-    // Check macOS version
-    if #available(macOS 13.0, *) {
-        // OK
-    } else {
-        sendError("macOS 13.0 or later required for ScreenCaptureKit audio capture")
-        exit(1)
-    }
-
     let capture = AudioCapture(config: config)
 
     // Set up signal handlers for graceful shutdown
@@ -388,17 +380,17 @@ func main() async {
     }
     stdinSource.resume()
 
-    // Keep running
-    RunLoop.main.run()
+    // Note: dispatchMain() in the entry point keeps the process alive
+    // This function returns but the process continues running
 }
 
 // Run main
 if #available(macOS 13.0, *) {
-    // Start main async task - RunLoop.main.run() inside main() keeps it alive
+    // Start main async task
     Task {
         await main()
     }
-    // Keep the main thread alive to process events
+    // Keep the main thread alive to process events (never returns)
     dispatchMain()
 } else {
     sendError("macOS 13.0 or later required")
