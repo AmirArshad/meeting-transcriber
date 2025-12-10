@@ -7,8 +7,8 @@ on:
     branches: [ master ]
 
 jobs:
-  test-backend:
-    name: Test Python Backend
+  test-backend-windows:
+    name: Test Python Backend (Windows)
     runs-on: windows-latest
 
     steps:
@@ -23,7 +23,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
+        pip install -r requirements-windows.txt
         pip install pytest pytest-cov
 
     - name: Run Python tests
@@ -35,6 +35,101 @@ jobs:
 
         # Validate Python files syntax
         Get-ChildItem backend/*.py | ForEach-Object { python -m py_compile $_.FullName }
+        Get-ChildItem backend/audio/*.py | ForEach-Object { python -m py_compile $_.FullName }
+        Get-ChildItem backend/transcription/*.py | ForEach-Object { python -m py_compile $_.FullName }
+
+    - name: Check code style
+      run: |
+        pip install flake8
+        flake8 backend --count --select=E9,F63,F7,F82 --show-source --statistics
+      continue-on-error: true
+
+  test-backend-macos:
+    name: Test Python Backend (macOS)
+    runs-on: macos-14  # Apple Silicon runner
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements-macos.txt
+        pip install pytest pytest-cov
+
+    - name: Validate Python syntax (all backend files)
+      run: |
+        echo "Validating Python syntax..."
+        python -m py_compile backend/*.py
+        python -m py_compile backend/audio/*.py
+        python -m py_compile backend/transcription/*.py
+        echo "✓ All Python files have valid syntax"
+
+    - name: Test PyObjC imports
+      run: |
+        echo "Testing PyObjC framework imports..."
+        python -c "
+        import sys
+        try:
+            from ScreenCaptureKit import SCShareableContent, SCContentFilter, SCStreamConfiguration, SCStream
+            print('✓ ScreenCaptureKit imports OK')
+        except ImportError as e:
+            print(f'⚠ ScreenCaptureKit import failed: {e}')
+            # Don't fail - PyObjC may have issues on CI runners
+
+        try:
+            from AVFoundation import AVAudioFormat
+            print('✓ AVFoundation imports OK')
+        except ImportError as e:
+            print(f'⚠ AVFoundation import failed: {e}')
+
+        try:
+            import sounddevice as sd
+            print('✓ sounddevice imports OK')
+        except ImportError as e:
+            print(f'✗ sounddevice import failed: {e}')
+            sys.exit(1)
+
+        try:
+            import numpy as np
+            print('✓ numpy imports OK')
+        except ImportError as e:
+            print(f'✗ numpy import failed: {e}')
+            sys.exit(1)
+        "
+
+    - name: Build Swift AudioCaptureHelper
+      run: |
+        echo "Building Swift AudioCaptureHelper..."
+        cd swift/AudioCaptureHelper
+        swift build -c release --arch arm64
+        echo "✓ Swift helper built successfully"
+
+        # Find and verify binary
+        BINARY=""
+        if [ -f .build/release/audiocapture-helper ]; then
+          BINARY=".build/release/audiocapture-helper"
+        elif [ -f .build/arm64-apple-macosx/release/audiocapture-helper ]; then
+          BINARY=".build/arm64-apple-macosx/release/audiocapture-helper"
+        fi
+
+        if [ -n "$BINARY" ]; then
+          echo "✓ Binary found at $BINARY"
+          BEFORE=$(stat -f%z "$BINARY")
+          strip "$BINARY"
+          AFTER=$(stat -f%z "$BINARY")
+          echo "✓ Stripped: ${BEFORE} → ${AFTER} bytes"
+        else
+          echo "✗ Binary not found at expected locations"
+          ls -la .build/ || true
+          exit 1
+        fi
 
     - name: Check code style
       run: |

@@ -83,6 +83,7 @@ class MacOSAudioRecorder:
 
         # Recording state
         self.is_running = False
+        self._running_lock = threading.Lock()  # Protects is_running access
         self.mic_frames = []
         self.desktop_frames = []
 
@@ -153,11 +154,11 @@ class MacOSAudioRecorder:
 
     def start_recording(self):
         """Start recording from microphone and desktop (if available)."""
-        if self.is_running:
+        if self._get_running():
             print("Already recording!", file=sys.stderr)
             return
 
-        self.is_running = True
+        self._set_running(True)
         self.mic_frames = []
         self.desktop_frames = []
 
@@ -180,7 +181,7 @@ class MacOSAudioRecorder:
 
         except Exception as e:
             print(f"Error querying devices: {e}", file=sys.stderr)
-            self.is_running = False
+            self._set_running(False)
             return
 
         # Start microphone recording thread
@@ -254,7 +255,7 @@ class MacOSAudioRecorder:
                 blocksize=self.chunk_size,
                 callback=audio_callback
             ):
-                while self.is_running:
+                while self._get_running():
                     time.sleep(0.1)
 
             print(f"Mic recording stopped. Frames captured: {len(self.mic_frames)}", file=sys.stderr)
@@ -263,7 +264,14 @@ class MacOSAudioRecorder:
             print(f"ERROR in mic recording: {e}", file=sys.stderr)
             import traceback
             traceback.print_exc(file=sys.stderr)
-            self.is_running = False
+            self._set_running(False)
+            # Send error to Electron UI
+            error_msg = {
+                "type": "error",
+                "code": "MIC_RECORDING_FAILED",
+                "message": f"Microphone recording failed: {str(e)}"
+            }
+            print(json.dumps(error_msg), flush=True)
 
     def _record_desktop(self):
         """
@@ -290,7 +298,7 @@ class MacOSAudioRecorder:
                 return
 
             # Monitor audio levels while recording
-            while self.is_running:
+            while self._get_running():
                 # Update desktop audio level from capture buffer (thread-safe)
                 # Avoid nested locks by copying data first, then updating level
                 try:
@@ -316,15 +324,22 @@ class MacOSAudioRecorder:
             print(f"ERROR in desktop recording: {e}", file=sys.stderr)
             import traceback
             traceback.print_exc(file=sys.stderr)
+            # Send error to Electron UI
+            error_msg = {
+                "type": "error",
+                "code": "DESKTOP_RECORDING_FAILED",
+                "message": f"Desktop audio recording failed: {str(e)}"
+            }
+            print(json.dumps(error_msg), flush=True)
 
     def stop_recording(self):
         """Stop recording and process audio."""
-        if not self.is_running:
+        if not self._get_running():
             print("Not recording!", file=sys.stderr)
             return
 
         print(f"\nStopping recording...", file=sys.stderr)
-        self.is_running = False
+        self._set_running(False)
 
         # Wait for threads to finish
         if self.mic_thread:
@@ -372,16 +387,48 @@ class MacOSAudioRecorder:
             # CHANNEL FIX: Handle multi-channel audio (mic)
             if mic_channels > 2:
                 print(f"  Downmixing mic audio from {mic_channels} channels to stereo...", file=sys.stderr)
-                # Use first two channels (Front Left, Front Right)
-                mic_audio = mic_audio[:, :2]
+                # Proper downmixing: L = L + 0.707*C + 0.707*SL, R = R + 0.707*C + 0.707*SR
+                # Simplified: Mix all extra channels into L and R equally at -3dB
+                left = mic_audio[:, 0]
+                right = mic_audio[:, 1]
+                
+                # Add Center (channel 2) if available
+                if mic_channels >= 3:
+                    center = mic_audio[:, 2] * 0.707
+                    left = left + center
+                    right = right + center
+                    
+                # Add others if available (naive mix)
+                if mic_channels > 3:
+                     # Mix remaining equally
+                     for i in range(3, mic_channels):
+                         ch = mic_audio[:, i] * 0.5
+                         left = left + ch
+                         right = right + ch
+                
+                mic_audio = np.column_stack([left, right])
             elif mic_channels == 1:
                 mic_audio = np.column_stack([mic_audio, mic_audio])
 
             # CHANNEL FIX: Handle multi-channel audio (desktop)
             if desktop_channels > 2:
                 print(f"  Downmixing desktop audio from {desktop_channels} channels to stereo...", file=sys.stderr)
-                # Use first two channels (Front Left, Front Right)
-                desktop_audio = desktop_audio[:, :2]
+                # Proper downmixing: L = L + 0.707*C + 0.707*SL, R = R + 0.707*C + 0.707*SR
+                left = desktop_audio[:, 0]
+                right = desktop_audio[:, 1]
+                
+                if desktop_channels >= 3:
+                    center = desktop_audio[:, 2] * 0.707
+                    left = left + center
+                    right = right + center
+                
+                if desktop_channels > 3:
+                     for i in range(3, desktop_channels):
+                         ch = desktop_audio[:, i] * 0.5
+                         left = left + ch
+                         right = right + ch
+                
+                desktop_audio = np.column_stack([left, right])
             elif desktop_channels == 1:
                 desktop_audio = np.column_stack([desktop_audio, desktop_audio])
 
@@ -423,8 +470,21 @@ class MacOSAudioRecorder:
             # CHANNEL FIX: Handle multi-channel audio
             if mic_channels > 2:
                 print(f"  Downmixing mic audio from {mic_channels} channels to stereo...", file=sys.stderr)
-                # Use first two channels (Front Left, Front Right)
-                final_audio = mic_audio[:, :2]
+                left = mic_audio[:, 0]
+                right = mic_audio[:, 1]
+                
+                if mic_channels >= 3:
+                    center = mic_audio[:, 2] * 0.707
+                    left = left + center
+                    right = right + center
+                    
+                if mic_channels > 3:
+                     for i in range(3, mic_channels):
+                         ch = mic_audio[:, i] * 0.5
+                         left = left + ch
+                         right = right + ch
+                
+                final_audio = np.column_stack([left, right])
             elif mic_channels == 1:
                 final_audio = np.column_stack([mic_audio, mic_audio])
             else:
@@ -664,8 +724,19 @@ class MacOSAudioRecorder:
             return (mic, desktop)
 
     def is_recording(self):
-        """Check if currently recording."""
-        return self.is_running
+        """Check if currently recording (thread-safe)."""
+        with self._running_lock:
+            return self.is_running
+
+    def _set_running(self, value: bool):
+        """Set the running state (thread-safe)."""
+        with self._running_lock:
+            self.is_running = value
+
+    def _get_running(self) -> bool:
+        """Get the running state (thread-safe)."""
+        with self._running_lock:
+            return self.is_running
 
 
 # CLI interface (same as Windows for consistency)
@@ -753,7 +824,21 @@ def main():
         # Main loop - continuously send audio levels for visualization
         # PERFORMANCE: 5 FPS updates to minimize CPU/IPC overhead (matches Windows)
         try:
-            while not stop_event.is_set() and recorder.is_running:
+            while not stop_event.is_set() and recorder.is_recording():
+                # CHECK FOR ASYNC ERRORS from Swift helper
+                if recorder.desktop_capture and hasattr(recorder.desktop_capture, 'error_event'):
+                    if recorder.desktop_capture.error_event.is_set():
+                        error_msg = recorder.desktop_capture.last_error or "Unknown desktop capture error"
+                        print(f"CRITICAL: Swift capture failed: {error_msg}", file=sys.stderr)
+                        # Send error to Electron
+                        print(json.dumps({
+                            "type": "error", 
+                            "code": "DESKTOP_AUDIO_FAILED",
+                            "message": f"Desktop audio capture failed: {error_msg}"
+                        }), flush=True)
+                        recorder.stop_recording()
+                        break
+
                 try:
                     # Send audio levels as JSON to stdout (Electron will parse this)
                     mic, desktop = recorder.get_audio_levels()

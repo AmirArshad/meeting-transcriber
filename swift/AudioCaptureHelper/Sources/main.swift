@@ -234,8 +234,8 @@ class AudioCapture {
         sendStatus("starting", message: "Starting audio capture...")
 
         // Start capture
-        try await stream.startCapture()
         delegate.startCapturing()
+        try await stream.startCapture()
         isRunning = true
 
         sendReady()

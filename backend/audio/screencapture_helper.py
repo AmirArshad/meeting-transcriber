@@ -9,13 +9,9 @@ ScreenCaptureKit routes audio to the content being captured:
 - Capturing a display → Captures all system audio output
 - Capturing a window → Captures only that window's audio
 
-LIMITATION: ScreenCaptureKit only captures audio routed to the display.
-- ✅ Works: Audio playing through built-in speakers or external display speakers
-- ❌ May not work: Audio playing through headphones, AirPods, or Bluetooth devices
-- Workaround: Use built-in speakers or install BlackHole virtual audio device
-
-This is a macOS limitation - ScreenCaptureKit captures display audio, not system-wide audio.
-On Windows, WASAPI loopback captures all system audio regardless of output device.
+NOTE: ScreenCaptureKit captures the system audio mix BEFORE it's routed to output devices.
+This means headphones, AirPods, and Bluetooth devices should all work correctly.
+The audio is captured at the system level, independent of the output device.
 
 Requirements:
 - macOS 13 Ventura or later
@@ -421,11 +417,6 @@ class ScreenCaptureAudioRecorder:
                 return False
 
             print("ScreenCaptureKit recording started successfully!", file=sys.stderr)
-            print("", file=sys.stderr)
-            print("ℹ️  NOTE: Desktop audio capture works best with built-in speakers.", file=sys.stderr)
-            print("   If using headphones/AirPods, desktop audio may not be captured.", file=sys.stderr)
-            print("   This is a macOS limitation - ScreenCaptureKit captures display audio only.", file=sys.stderr)
-            print("", file=sys.stderr)
             return True
 
         except Exception as e:

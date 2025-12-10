@@ -5,6 +5,8 @@
 	<!-- Allow microphone access for recording -->
 	<key>com.apple.security.device.audio-input</key>
 	<true/>
+	<key>com.apple.security.device.microphone</key>
+	<true/>
 
 	<!-- Disable camera (we don't need it) -->
 	<key>com.apple.security.device.camera</key>

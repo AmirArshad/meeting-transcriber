@@ -100,7 +100,12 @@ class SwiftAudioCapture:
         self.is_ready = False
 
         self._stdout_thread: Optional[threading.Thread] = None
+
         self._stderr_thread: Optional[threading.Thread] = None
+        
+        # Error signaling
+        self.error_event = threading.Event()
+        self.last_error = None
 
     def is_available(self) -> bool:
         """Check if the Swift helper is available."""
@@ -127,9 +132,11 @@ class SwiftAudioCapture:
         print(f"  Channels: {self.channels}", file=sys.stderr)
 
         try:
-            # Clear buffer
+            # Clear buffer and error state
             with self.buffer_lock:
                 self.audio_buffer = []
+            self.error_event.clear()
+            self.last_error = None
 
             # Start the Swift helper process
             self.process = subprocess.Popen(
@@ -212,7 +219,10 @@ class SwiftAudioCapture:
 
         except Exception as e:
             if self.is_recording:
-                print(f"Error reading audio data: {e}", file=sys.stderr)
+                msg = f"Error reading audio data: {e}"
+                print(msg, file=sys.stderr)
+                self.last_error = msg
+                self.error_event.set()
 
     def _read_status_messages(self):
         """Read JSON status messages from stderr."""
@@ -253,6 +263,8 @@ class SwiftAudioCapture:
         except Exception as e:
             if self.is_recording:
                 print(f"Error reading status messages: {e}", file=sys.stderr)
+                # Don't fail completely on status error, but log it
+
 
     def stop_recording(self) -> Optional[np.ndarray]:
         """

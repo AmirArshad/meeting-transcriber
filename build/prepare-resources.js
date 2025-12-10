@@ -180,7 +180,7 @@ function buildSwiftHelper() {
   // Build in release mode
   console.log('  Building release configuration...');
   try {
-    execSync('swift build -c release', {
+    execSync('swift build -c release --arch arm64', {
       cwd: SWIFT_HELPER_DIR,
       stdio: 'inherit'
     });
@@ -221,6 +221,18 @@ function buildSwiftHelper() {
 
   // Ensure executable
   execSync(`chmod +x "${destBinary}"`, { stdio: 'inherit' });
+
+  // Strip debug symbols to reduce binary size (typically 50-70% reduction)
+  console.log('  Stripping debug symbols...');
+  try {
+    const beforeSize = fs.statSync(destBinary).size;
+    execSync(`strip "${destBinary}"`, { stdio: 'inherit' });
+    const afterSize = fs.statSync(destBinary).size;
+    const reduction = ((beforeSize - afterSize) / beforeSize * 100).toFixed(1);
+    console.log(`  → Stripped: ${(beforeSize / 1024).toFixed(0)}KB → ${(afterSize / 1024).toFixed(0)}KB (${reduction}% reduction)`);
+  } catch (stripError) {
+    console.log('  → Strip failed (non-critical):', stripError.message);
+  }
 
   console.log(`  ✓ Built and copied to ${destBinary}`);
   console.log('✓ Swift AudioCaptureHelper ready!\n');
