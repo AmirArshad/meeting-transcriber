@@ -100,9 +100,11 @@ class SwiftAudioCapture:
         self.is_ready = False
 
         self._stdout_thread: Optional[threading.Thread] = None
-
         self._stderr_thread: Optional[threading.Thread] = None
-        
+
+        # Partial frame buffer for handling chunk boundaries
+        self._partial_frame_data: bytes = b''
+
         # Error signaling
         self.error_event = threading.Event()
         self.last_error = None
@@ -135,6 +137,7 @@ class SwiftAudioCapture:
             # Clear buffer and error state
             with self.buffer_lock:
                 self.audio_buffer = []
+            self._partial_frame_data = b''  # Clear partial frame buffer
             self.error_event.clear()
             self.last_error = None
 
@@ -214,7 +217,24 @@ class SwiftAudioCapture:
 
                 # Use os.read() which returns immediately with available data
                 # Unlike file.read(n) which blocks until n bytes are available
-                data = os.read(stdout_fd, chunk_bytes)
+                new_data = os.read(stdout_fd, chunk_bytes)
+                if not new_data:
+                    continue
+
+                # Prepend any leftover bytes from previous read
+                if self._partial_frame_data:
+                    data = self._partial_frame_data + new_data
+                    self._partial_frame_data = b''
+                else:
+                    data = new_data
+
+                # Check for incomplete bytes at the end (not aligned to float32 boundary)
+                # float32 = 4 bytes, so we need data length to be multiple of 4
+                leftover_bytes = len(data) % 4
+                if leftover_bytes:
+                    self._partial_frame_data = data[-leftover_bytes:]
+                    data = data[:-leftover_bytes]
+
                 if not data:
                     continue
 
@@ -224,9 +244,13 @@ class SwiftAudioCapture:
                 # Reshape to (frames, channels) for interleaved stereo data
                 # Swift sends interleaved: [L0, R0, L1, R1, ...]
                 if self.channels > 1 and len(audio_data) >= self.channels:
-                    # Ensure we have complete frames
+                    # Ensure we have complete frames (all channels present)
                     complete_frames = len(audio_data) // self.channels
-                    audio_data = audio_data[:complete_frames * self.channels]
+                    leftover_samples = len(audio_data) % self.channels
+                    if leftover_samples:
+                        # Save incomplete frame samples as bytes for next iteration
+                        self._partial_frame_data = audio_data[-leftover_samples:].tobytes() + self._partial_frame_data
+                        audio_data = audio_data[:complete_frames * self.channels]
                     audio_data = audio_data.reshape(-1, self.channels)
 
                 # Convert to float64 for consistency with sounddevice mic input
@@ -254,19 +278,40 @@ class SwiftAudioCapture:
                         ready, _, _ = select.select([self.process.stdout], [], [], 0.1)
                         if not ready:
                             break
-                        remaining = os.read(stdout_fd, chunk_bytes)
-                        if not remaining:
+                        new_data = os.read(stdout_fd, chunk_bytes)
+                        if not new_data:
                             break
+
+                        # Handle partial frame data from main loop
+                        if self._partial_frame_data:
+                            remaining = self._partial_frame_data + new_data
+                            self._partial_frame_data = b''
+                        else:
+                            remaining = new_data
+
+                        # Handle incomplete bytes
+                        leftover_bytes = len(remaining) % 4
+                        if leftover_bytes:
+                            self._partial_frame_data = remaining[-leftover_bytes:]
+                            remaining = remaining[:-leftover_bytes]
+
+                        if not remaining:
+                            drained_total += len(new_data)
+                            continue
+
                         audio_data = np.frombuffer(remaining, dtype=np.float32)
                         if self.channels > 1 and len(audio_data) >= self.channels:
                             complete_frames = len(audio_data) // self.channels
-                            audio_data = audio_data[:complete_frames * self.channels]
+                            leftover_samples = len(audio_data) % self.channels
+                            if leftover_samples:
+                                self._partial_frame_data = audio_data[-leftover_samples:].tobytes() + self._partial_frame_data
+                                audio_data = audio_data[:complete_frames * self.channels]
                             audio_data = audio_data.reshape(-1, self.channels)
                         audio_data = audio_data.astype(np.float64)
                         with self.buffer_lock:
                             self.audio_buffer.append(audio_data)
                         total_samples += len(audio_data)
-                        drained_total += len(remaining)
+                        drained_total += len(new_data)
                     if drained_total > 0:
                         print(f"  Drained {drained_total} bytes of remaining data", file=sys.stderr)
                 except Exception:
