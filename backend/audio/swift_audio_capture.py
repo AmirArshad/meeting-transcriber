@@ -186,6 +186,9 @@ class SwiftAudioCapture:
 
     def _read_audio_data(self):
         """Read raw PCM float32 audio data from stdout."""
+        import os
+        import select
+
         # Buffer size: ~100ms of audio at a time
         # float32 = 4 bytes per sample, stereo = 2 channels
         # Swift sends interleaved samples: L R L R L R ...
@@ -197,10 +200,10 @@ class SwiftAudioCapture:
         total_samples = 0
         chunk_count = 0
 
-        try:
-            # Use select/poll for non-blocking reads on Unix
-            import select
+        # Get file descriptor for non-blocking reads
+        stdout_fd = self.process.stdout.fileno()
 
+        try:
             while self.is_recording and self.process and self.process.poll() is None:
                 # Use select to check if data is available (100ms timeout)
                 # This prevents blocking forever and allows clean shutdown
@@ -209,7 +212,9 @@ class SwiftAudioCapture:
                 if not ready:
                     continue
 
-                data = self.process.stdout.read(chunk_bytes)
+                # Use os.read() which returns immediately with available data
+                # Unlike file.read(n) which blocks until n bytes are available
+                data = os.read(stdout_fd, chunk_bytes)
                 if not data:
                     continue
 
@@ -238,12 +243,20 @@ class SwiftAudioCapture:
                 if chunk_count == 1:
                     print(f"  First audio chunk received: {len(audio_data)} samples", file=sys.stderr)
 
-            # Drain any remaining data after stop signal
+            # Drain any remaining data after stop signal (with size limit to prevent blocking)
             # This ensures we capture audio right up to the stop point
             if self.process and self.process.stdout:
                 try:
-                    remaining = self.process.stdout.read()
-                    if remaining:
+                    # Drain up to 1MB of remaining data (enough for ~5 seconds of audio)
+                    max_drain = 1024 * 1024
+                    drained_total = 0
+                    while drained_total < max_drain:
+                        ready, _, _ = select.select([self.process.stdout], [], [], 0.1)
+                        if not ready:
+                            break
+                        remaining = os.read(stdout_fd, chunk_bytes)
+                        if not remaining:
+                            break
                         audio_data = np.frombuffer(remaining, dtype=np.float32)
                         if self.channels > 1 and len(audio_data) >= self.channels:
                             complete_frames = len(audio_data) // self.channels
@@ -253,7 +266,9 @@ class SwiftAudioCapture:
                         with self.buffer_lock:
                             self.audio_buffer.append(audio_data)
                         total_samples += len(audio_data)
-                        print(f"  Drained {len(audio_data)} remaining samples", file=sys.stderr)
+                        drained_total += len(remaining)
+                    if drained_total > 0:
+                        print(f"  Drained {drained_total} bytes of remaining data", file=sys.stderr)
                 except Exception:
                     pass
 
@@ -268,8 +283,15 @@ class SwiftAudioCapture:
 
     def _read_status_messages(self):
         """Read JSON status messages from stderr."""
+        import select
+
         try:
             while self.is_recording and self.process and self.process.poll() is None:
+                # Use select to avoid blocking forever on readline
+                ready, _, _ = select.select([self.process.stderr], [], [], 0.1)
+                if not ready:
+                    continue
+
                 line = self.process.stderr.readline()
                 if not line:
                     continue
