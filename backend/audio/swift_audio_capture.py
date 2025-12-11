@@ -193,8 +193,22 @@ class SwiftAudioCapture:
         chunk_frames = int(self.sample_rate * 0.1)  # 100ms worth of frames
         chunk_bytes = chunk_frames * bytes_per_frame
 
+        # Track samples for debugging
+        total_samples = 0
+        chunk_count = 0
+
         try:
+            # Use select/poll for non-blocking reads on Unix
+            import select
+
             while self.is_recording and self.process and self.process.poll() is None:
+                # Use select to check if data is available (100ms timeout)
+                # This prevents blocking forever and allows clean shutdown
+                ready, _, _ = select.select([self.process.stdout], [], [], 0.1)
+
+                if not ready:
+                    continue
+
                 data = self.process.stdout.read(chunk_bytes)
                 if not data:
                     continue
@@ -216,6 +230,34 @@ class SwiftAudioCapture:
                 # Add to buffer (thread-safe)
                 with self.buffer_lock:
                     self.audio_buffer.append(audio_data)
+
+                total_samples += len(audio_data)
+                chunk_count += 1
+
+                # Log first chunk to confirm data is flowing
+                if chunk_count == 1:
+                    print(f"  First audio chunk received: {len(audio_data)} samples", file=sys.stderr)
+
+            # Drain any remaining data after stop signal
+            # This ensures we capture audio right up to the stop point
+            if self.process and self.process.stdout:
+                try:
+                    remaining = self.process.stdout.read()
+                    if remaining:
+                        audio_data = np.frombuffer(remaining, dtype=np.float32)
+                        if self.channels > 1 and len(audio_data) >= self.channels:
+                            complete_frames = len(audio_data) // self.channels
+                            audio_data = audio_data[:complete_frames * self.channels]
+                            audio_data = audio_data.reshape(-1, self.channels)
+                        audio_data = audio_data.astype(np.float64)
+                        with self.buffer_lock:
+                            self.audio_buffer.append(audio_data)
+                        total_samples += len(audio_data)
+                        print(f"  Drained {len(audio_data)} remaining samples", file=sys.stderr)
+                except Exception:
+                    pass
+
+            print(f"  Audio reader stopped: {total_samples} total samples in {chunk_count} chunks", file=sys.stderr)
 
         except Exception as e:
             if self.is_recording:
@@ -278,39 +320,50 @@ class SwiftAudioCapture:
 
         print("Stopping Swift audio capture...", file=sys.stderr)
 
+        # Log buffer state before stopping
+        with self.buffer_lock:
+            buffer_chunks = len(self.audio_buffer)
+            print(f"  Buffer state before stop: {buffer_chunks} chunks", file=sys.stderr)
+
         # Send stop command to the helper BEFORE setting is_recording = False
         # This allows reader threads to drain remaining data
         if self.process and self.process.poll() is None:
             try:
                 self.process.stdin.write(b"stop\n")
                 self.process.stdin.flush()
+                print("  Sent stop command to Swift helper", file=sys.stderr)
             except (BrokenPipeError, OSError) as e:
                 # Process may have already exited
-                print(f"Could not send stop command (process may have exited): {e}", file=sys.stderr)
+                print(f"  Could not send stop command (process may have exited): {e}", file=sys.stderr)
+
+        # Give the reader thread a moment to drain remaining data
+        import time
+        time.sleep(0.3)
 
         # Now signal threads to stop
         self.is_recording = False
 
-        # Wait for process to exit (max 2 seconds)
+        # Wait for reader threads to finish FIRST (they need to drain the pipe)
+        if self._stdout_thread and self._stdout_thread.is_alive():
+            self._stdout_thread.join(timeout=2.0)
+            if self._stdout_thread.is_alive():
+                print("  WARNING: Audio reader thread did not exit cleanly", file=sys.stderr)
+        if self._stderr_thread and self._stderr_thread.is_alive():
+            self._stderr_thread.join(timeout=1.0)
+
+        # Now wait for process to exit
         if self.process and self.process.poll() is None:
             try:
                 self.process.wait(timeout=2.0)
             except subprocess.TimeoutExpired:
-                print("Swift helper did not exit gracefully, terminating...", file=sys.stderr)
+                print("  Swift helper did not exit gracefully, terminating...", file=sys.stderr)
                 self.process.terminate()
                 try:
                     self.process.wait(timeout=1.0)
                 except subprocess.TimeoutExpired:
-                    print("Swift helper did not respond to terminate, killing...", file=sys.stderr)
+                    print("  Swift helper did not respond to terminate, killing...", file=sys.stderr)
                     self.process.kill()
                     self.process.wait(timeout=1.0)
-
-        # Wait for threads to finish - they should exit now that is_recording=False
-        # and process has exited (stdout/stderr will be closed)
-        if self._stdout_thread and self._stdout_thread.is_alive():
-            self._stdout_thread.join(timeout=2.0)
-        if self._stderr_thread and self._stderr_thread.is_alive():
-            self._stderr_thread.join(timeout=2.0)
 
         # Concatenate all audio buffers
         with self.buffer_lock:
