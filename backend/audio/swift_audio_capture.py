@@ -96,18 +96,49 @@ class SwiftAudioCapture:
         self.process: Optional[subprocess.Popen] = None
         self.audio_buffer: list = []
         self.buffer_lock = threading.Lock()
-        self.is_recording = False
-        self.is_ready = False
+
+        # Thread-safe state signaling using Events
+        self._recording_event = threading.Event()  # Set when recording is active
+        self._ready_event = threading.Event()  # Set when Swift helper is ready
 
         self._stdout_thread: Optional[threading.Thread] = None
         self._stderr_thread: Optional[threading.Thread] = None
 
-        # Partial frame buffer for handling chunk boundaries
-        self._partial_frame_data: bytes = b''
+        # Separate buffers for handling chunk boundaries at different alignment stages
+        # _partial_bytes: leftover bytes not aligned to float32 (4-byte) boundary
+        # _partial_samples: leftover samples not aligned to frame (channel count) boundary
+        self._partial_bytes: bytes = b''
+        self._partial_samples: Optional[np.ndarray] = None
 
         # Error signaling
         self.error_event = threading.Event()
         self.last_error = None
+
+    @property
+    def is_recording(self) -> bool:
+        """Check if recording is active (for backwards compatibility)."""
+        return self._recording_event.is_set()
+
+    @is_recording.setter
+    def is_recording(self, value: bool):
+        """Set recording state (for backwards compatibility)."""
+        if value:
+            self._recording_event.set()
+        else:
+            self._recording_event.clear()
+
+    @property
+    def is_ready(self) -> bool:
+        """Check if Swift helper is ready (for backwards compatibility)."""
+        return self._ready_event.is_set()
+
+    @is_ready.setter
+    def is_ready(self, value: bool):
+        """Set ready state (for backwards compatibility)."""
+        if value:
+            self._ready_event.set()
+        else:
+            self._ready_event.clear()
 
     def is_available(self) -> bool:
         """Check if the Swift helper is available."""
@@ -124,7 +155,7 @@ class SwiftAudioCapture:
             print("ERROR: audiocapture-helper not available", file=sys.stderr)
             return False
 
-        if self.is_recording:
+        if self._recording_event.is_set():
             print("Already recording", file=sys.stderr)
             return True
 
@@ -137,8 +168,10 @@ class SwiftAudioCapture:
             # Clear buffer and error state
             with self.buffer_lock:
                 self.audio_buffer = []
-            self._partial_frame_data = b''  # Clear partial frame buffer
+            self._partial_bytes = b''  # Clear byte alignment buffer
+            self._partial_samples = None  # Clear sample alignment buffer
             self.error_event.clear()
+            self._ready_event.clear()
             self.last_error = None
 
             # Start the Swift helper process
@@ -154,8 +187,7 @@ class SwiftAudioCapture:
                 bufsize=0  # Unbuffered for real-time audio
             )
 
-            self.is_recording = True
-            self.is_ready = False
+            self._recording_event.set()
 
             # Start threads to read stdout (audio) and stderr (status)
             self._stdout_thread = threading.Thread(target=self._read_audio_data, daemon=True)
@@ -164,18 +196,16 @@ class SwiftAudioCapture:
             self._stderr_thread = threading.Thread(target=self._read_status_messages, daemon=True)
             self._stderr_thread.start()
 
-            # Wait for ready signal (max 5 seconds)
-            for _ in range(50):
-                if self.is_ready:
-                    print("Swift audio capture ready!", file=sys.stderr)
-                    return True
-                if self.process.poll() is not None:
-                    # Process exited
-                    print("ERROR: Swift helper exited unexpectedly", file=sys.stderr)
-                    self.is_recording = False
-                    return False
-                import time
-                time.sleep(0.1)
+            # Wait for ready signal (max 5 seconds) using Event.wait()
+            if self._ready_event.wait(timeout=5.0):
+                print("Swift audio capture ready!", file=sys.stderr)
+                return True
+
+            # Check if process exited during wait
+            if self.process.poll() is not None:
+                print("ERROR: Swift helper exited unexpectedly", file=sys.stderr)
+                self.cleanup()
+                return False
 
             print("WARNING: Swift helper did not send ready signal, but continuing...", file=sys.stderr)
             return True
@@ -184,7 +214,8 @@ class SwiftAudioCapture:
             print(f"ERROR starting Swift audio capture: {e}", file=sys.stderr)
             import traceback
             traceback.print_exc(file=sys.stderr)
-            self.is_recording = False
+            # Clean up any resources that may have been allocated
+            self.cleanup()
             return False
 
     def _read_audio_data(self):
@@ -195,9 +226,9 @@ class SwiftAudioCapture:
         # Buffer size: ~100ms of audio at a time
         # float32 = 4 bytes per sample, stereo = 2 channels
         # Swift sends interleaved samples: L R L R L R ...
-        bytes_per_frame = 4 * self.channels  # bytes for one frame (all channels)
+        bytes_per_sample = 4  # float32
         chunk_frames = int(self.sample_rate * 0.1)  # 100ms worth of frames
-        chunk_bytes = chunk_frames * bytes_per_frame
+        chunk_bytes = chunk_frames * bytes_per_sample * self.channels
 
         # Track samples for debugging
         total_samples = 0
@@ -206,8 +237,74 @@ class SwiftAudioCapture:
         # Get file descriptor for non-blocking reads
         stdout_fd = self.process.stdout.fileno()
 
+        def bytes_to_samples(data: bytes) -> Optional[np.ndarray]:
+            """
+            Convert raw bytes to float32 samples, handling byte alignment.
+
+            Stage 1: Byte alignment (4 bytes per float32 sample)
+            Leftover bytes are stored in self._partial_bytes
+            """
+            # Prepend any leftover bytes from previous read
+            if self._partial_bytes:
+                data = self._partial_bytes + data
+                self._partial_bytes = b''
+
+            if not data:
+                return None
+
+            # Ensure byte alignment to float32 (4 bytes per sample)
+            leftover_bytes = len(data) % bytes_per_sample
+            if leftover_bytes:
+                self._partial_bytes = data[-leftover_bytes:]
+                data = data[:-leftover_bytes]
+
+            if not data:
+                return None
+
+            # Convert bytes to float32 numpy array
+            return np.frombuffer(data, dtype=np.float32)
+
+        def samples_to_frames(samples: np.ndarray) -> Optional[np.ndarray]:
+            """
+            Reshape samples into frames, handling frame alignment.
+
+            Stage 2: Frame alignment (channels samples per frame)
+            Leftover samples are stored in self._partial_samples
+            """
+            # Prepend any leftover samples from previous read
+            if self._partial_samples is not None:
+                samples = np.concatenate([self._partial_samples, samples])
+                self._partial_samples = None
+
+            if len(samples) == 0:
+                return None
+
+            # For mono, no frame alignment needed
+            if self.channels == 1:
+                return samples.reshape(-1, 1).astype(np.float64)
+
+            # Ensure frame alignment (all channels present for each frame)
+            leftover_samples = len(samples) % self.channels
+            if leftover_samples:
+                self._partial_samples = samples[-leftover_samples:].copy()
+                samples = samples[:-leftover_samples]
+
+            if len(samples) == 0:
+                return None
+
+            # Reshape to (frames, channels) for interleaved stereo data
+            # Convert to float64 for consistency with sounddevice mic input
+            return samples.reshape(-1, self.channels).astype(np.float64)
+
+        def process_audio_bytes(data: bytes) -> Optional[np.ndarray]:
+            """Process raw bytes into audio frames through both alignment stages."""
+            samples = bytes_to_samples(data)
+            if samples is None:
+                return None
+            return samples_to_frames(samples)
+
         try:
-            while self.is_recording and self.process and self.process.poll() is None:
+            while self._recording_event.is_set() and self.process and self.process.poll() is None:
                 # Use select to check if data is available (100ms timeout)
                 # This prevents blocking forever and allows clean shutdown
                 ready, _, _ = select.select([self.process.stdout], [], [], 0.1)
@@ -221,40 +318,9 @@ class SwiftAudioCapture:
                 if not new_data:
                     continue
 
-                # Prepend any leftover bytes from previous read
-                if self._partial_frame_data:
-                    data = self._partial_frame_data + new_data
-                    self._partial_frame_data = b''
-                else:
-                    data = new_data
-
-                # Check for incomplete bytes at the end (not aligned to float32 boundary)
-                # float32 = 4 bytes, so we need data length to be multiple of 4
-                leftover_bytes = len(data) % 4
-                if leftover_bytes:
-                    self._partial_frame_data = data[-leftover_bytes:]
-                    data = data[:-leftover_bytes]
-
-                if not data:
+                audio_data = process_audio_bytes(new_data)
+                if audio_data is None:
                     continue
-
-                # Convert bytes to float32 numpy array
-                audio_data = np.frombuffer(data, dtype=np.float32)
-
-                # Reshape to (frames, channels) for interleaved stereo data
-                # Swift sends interleaved: [L0, R0, L1, R1, ...]
-                if self.channels > 1 and len(audio_data) >= self.channels:
-                    # Ensure we have complete frames (all channels present)
-                    complete_frames = len(audio_data) // self.channels
-                    leftover_samples = len(audio_data) % self.channels
-                    if leftover_samples:
-                        # Save incomplete frame samples as bytes for next iteration
-                        self._partial_frame_data = audio_data[-leftover_samples:].tobytes() + self._partial_frame_data
-                        audio_data = audio_data[:complete_frames * self.channels]
-                    audio_data = audio_data.reshape(-1, self.channels)
-
-                # Convert to float64 for consistency with sounddevice mic input
-                audio_data = audio_data.astype(np.float64)
 
                 # Add to buffer (thread-safe)
                 with self.buffer_lock:
@@ -282,45 +348,25 @@ class SwiftAudioCapture:
                         if not new_data:
                             break
 
-                        # Handle partial frame data from main loop
-                        if self._partial_frame_data:
-                            remaining = self._partial_frame_data + new_data
-                            self._partial_frame_data = b''
-                        else:
-                            remaining = new_data
+                        audio_data = process_audio_bytes(new_data)
+                        drained_total += len(new_data)
 
-                        # Handle incomplete bytes
-                        leftover_bytes = len(remaining) % 4
-                        if leftover_bytes:
-                            self._partial_frame_data = remaining[-leftover_bytes:]
-                            remaining = remaining[:-leftover_bytes]
-
-                        if not remaining:
-                            drained_total += len(new_data)
+                        if audio_data is None:
                             continue
 
-                        audio_data = np.frombuffer(remaining, dtype=np.float32)
-                        if self.channels > 1 and len(audio_data) >= self.channels:
-                            complete_frames = len(audio_data) // self.channels
-                            leftover_samples = len(audio_data) % self.channels
-                            if leftover_samples:
-                                self._partial_frame_data = audio_data[-leftover_samples:].tobytes() + self._partial_frame_data
-                                audio_data = audio_data[:complete_frames * self.channels]
-                            audio_data = audio_data.reshape(-1, self.channels)
-                        audio_data = audio_data.astype(np.float64)
                         with self.buffer_lock:
                             self.audio_buffer.append(audio_data)
                         total_samples += len(audio_data)
-                        drained_total += len(new_data)
+
                     if drained_total > 0:
                         print(f"  Drained {drained_total} bytes of remaining data", file=sys.stderr)
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"  Warning: Error draining remaining data: {e}", file=sys.stderr)
 
             print(f"  Audio reader stopped: {total_samples} total samples in {chunk_count} chunks", file=sys.stderr)
 
         except Exception as e:
-            if self.is_recording:
+            if self._recording_event.is_set():
                 msg = f"Error reading audio data: {e}"
                 print(msg, file=sys.stderr)
                 self.last_error = msg
@@ -331,7 +377,7 @@ class SwiftAudioCapture:
         import select
 
         try:
-            while self.is_recording and self.process and self.process.poll() is None:
+            while self._recording_event.is_set() and self.process and self.process.poll() is None:
                 # Use select to avoid blocking forever on readline
                 ready, _, _ = select.select([self.process.stderr], [], [], 0.1)
                 if not ready:
@@ -350,7 +396,7 @@ class SwiftAudioCapture:
                     msg_type = msg.get('type', '')
 
                     if msg_type == 'ready':
-                        self.is_ready = True
+                        self._ready_event.set()
                         print("Swift helper: READY", file=sys.stderr)
 
                     elif msg_type == 'status':
@@ -370,7 +416,7 @@ class SwiftAudioCapture:
                     print(f"Swift helper: {line}", file=sys.stderr)
 
         except Exception as e:
-            if self.is_recording:
+            if self._recording_event.is_set():
                 print(f"Error reading status messages: {e}", file=sys.stderr)
                 # Don't fail completely on status error, but log it
 
@@ -382,7 +428,7 @@ class SwiftAudioCapture:
         Returns:
             numpy array with audio samples, or None if no audio captured
         """
-        if not self.is_recording:
+        if not self._recording_event.is_set():
             return None
 
         print("Stopping Swift audio capture...", file=sys.stderr)
@@ -392,7 +438,7 @@ class SwiftAudioCapture:
             buffer_chunks = len(self.audio_buffer)
             print(f"  Buffer state before stop: {buffer_chunks} chunks", file=sys.stderr)
 
-        # Send stop command to the helper BEFORE setting is_recording = False
+        # Send stop command to the helper BEFORE clearing recording event
         # This allows reader threads to drain remaining data
         if self.process and self.process.poll() is None:
             try:
@@ -408,7 +454,7 @@ class SwiftAudioCapture:
         time.sleep(0.3)
 
         # Now signal threads to stop
-        self.is_recording = False
+        self._recording_event.clear()
 
         # Wait for reader threads to finish FIRST (they need to drain the pipe)
         if self._stdout_thread and self._stdout_thread.is_alive():
@@ -418,19 +464,28 @@ class SwiftAudioCapture:
         if self._stderr_thread and self._stderr_thread.is_alive():
             self._stderr_thread.join(timeout=1.0)
 
-        # Now wait for process to exit
+        # Now wait for process to exit and check exit code
+        exit_code = None
         if self.process and self.process.poll() is None:
             try:
-                self.process.wait(timeout=2.0)
+                exit_code = self.process.wait(timeout=2.0)
             except subprocess.TimeoutExpired:
                 print("  Swift helper did not exit gracefully, terminating...", file=sys.stderr)
                 self.process.terminate()
                 try:
-                    self.process.wait(timeout=1.0)
+                    exit_code = self.process.wait(timeout=1.0)
                 except subprocess.TimeoutExpired:
                     print("  Swift helper did not respond to terminate, killing...", file=sys.stderr)
                     self.process.kill()
-                    self.process.wait(timeout=1.0)
+                    exit_code = self.process.wait(timeout=1.0)
+        elif self.process:
+            exit_code = self.process.poll()
+
+        if exit_code is not None and exit_code != 0:
+            print(f"  Swift helper exited with code {exit_code}", file=sys.stderr)
+
+        # Clear process reference
+        self.process = None
 
         # Concatenate all audio buffers
         with self.buffer_lock:
@@ -455,16 +510,23 @@ class SwiftAudioCapture:
 
     def cleanup(self):
         """Clean up resources."""
-        self.is_recording = False
+        self._recording_event.clear()
+        self._ready_event.clear()
 
         if self.process and self.process.poll() is None:
             try:
                 self.process.terminate()
                 self.process.wait(timeout=1.0)
-            except:
-                self.process.kill()
+            except (subprocess.TimeoutExpired, OSError):
+                try:
+                    self.process.kill()
+                    self.process.wait(timeout=0.5)
+                except OSError:
+                    pass  # Process already dead
 
         self.process = None
+        self._stdout_thread = None
+        self._stderr_thread = None
 
 
 def check_screen_recording_permission() -> bool:

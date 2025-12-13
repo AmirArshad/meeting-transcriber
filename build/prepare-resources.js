@@ -368,6 +368,28 @@ async function prepareResources() {
         stdio: 'inherit'
       });
 
+      // Clean up bloated transitive dependencies to reduce bundle size
+      console.log('[5/5] Cleaning up unused dependencies...');
+      const sitePackages = path.join(PYTHON_DIR, 'lib', 'python3.11', 'site-packages');
+      const packagesToRemove = [
+        'scipy', 'scipy.libs',           // ~143 MB - not used (soxr handles resampling)
+        'sympy',                          // ~79 MB - transitive dep, not used
+        'av.libs',                        // ~83 MB - duplicate FFmpeg libs (we bundle ffmpeg separately)
+        'pip', 'setuptools',              // ~22 MB - not needed at runtime
+        'onnxruntime',                    // ~43 MB - transitive dep from faster-whisper
+        'faster_whisper',                 // ~1.5 MB - not used on macOS (MLX only)
+        'ctranslate2', 'ctranslate2.libs', // ~60 MB - faster-whisper inference engine, not needed
+      ];
+
+      for (const pkg of packagesToRemove) {
+        const pkgPath = path.join(sitePackages, pkg);
+        if (fs.existsSync(pkgPath)) {
+          const sizeMB = execSync(`du -sm "${pkgPath}" | cut -f1`, { encoding: 'utf8' }).trim();
+          fs.rmSync(pkgPath, { recursive: true, force: true });
+          console.log(`  → Removed ${pkg} (${sizeMB} MB)`);
+        }
+      }
+
       console.log('✓ Python setup complete!\n');
     } else {
       // Windows: Download embedded Python
@@ -493,15 +515,15 @@ async function prepareResources() {
   if (existing.modelsExist) {
     console.log('✓ Whisper models already prepared\n');
   } else {
-    const shouldDownloadModels = process.env.DOWNLOAD_MODELS !== 'false';
+    const shouldDownloadModels = process.env.DOWNLOAD_MODELS === 'true';
 
     if (shouldDownloadModels) {
       console.log('Preparing Whisper models for installation...');
-      console.log('(Set DOWNLOAD_MODELS=false to skip this step)\n');
+      console.log('(Set DOWNLOAD_MODELS=true was specified)\n');
       await downloadWhisperModels();
     } else {
-      console.log('⚠️ Skipping model download (DOWNLOAD_MODELS=false)\n');
-      console.log('Models will be downloaded on first use by end users.\n');
+      console.log('ℹ️ Skipping model bundling (models download on first use)\n');
+      console.log('  Set DOWNLOAD_MODELS=true to pre-bundle models in the installer.\n');
     }
   }
 

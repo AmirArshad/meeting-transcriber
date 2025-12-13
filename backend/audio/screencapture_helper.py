@@ -573,13 +573,17 @@ if __name__ == "__main__":
         print("No audio captured")
         sys.exit(1)
 
-    # Save to WAV
+    # Save to WAV using wave module (no scipy dependency)
     print(f"Saving to {args.output}...")
-    import scipy.io.wavfile as wavfile
+    import wave
 
     # Convert float32 to int16 for WAV
     audio_int16 = (audio_data * 32767).astype(np.int16)
-    wavfile.write(args.output, 44100, audio_int16)
+    with wave.open(args.output, 'wb') as wf:
+        wf.setnchannels(2)
+        wf.setsampwidth(2)  # 16-bit = 2 bytes
+        wf.setframerate(44100)
+        wf.writeframes(audio_int16.tobytes())
 
     print(f"Saved {len(audio_data)} samples")
     print("Done!")

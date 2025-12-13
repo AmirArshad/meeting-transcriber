@@ -61,17 +61,35 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
     private var isCapturing = false
     private let outputLock = NSLock()
     private var sampleCount: Int = 0
+    private var droppedFrames: Int = 0
+
+    // Backpressure handling: write queue with bounded size
+    private let writeQueue = DispatchQueue(label: "audio.write.queue")
+    private var pendingWrites: Int = 0
+    private let pendingWritesLock = NSLock()
+    private let maxPendingWrites = 50  // ~5 seconds of audio at 100ms chunks
 
     func startCapturing() {
         outputLock.lock()
         isCapturing = true
+        sampleCount = 0
+        droppedFrames = 0
         outputLock.unlock()
+
+        pendingWritesLock.lock()
+        pendingWrites = 0
+        pendingWritesLock.unlock()
     }
 
     func stopCapturing() {
         outputLock.lock()
         isCapturing = false
         outputLock.unlock()
+
+        // Log if frames were dropped due to backpressure
+        if droppedFrames > 0 {
+            sendStatus("warning", message: "Dropped \(droppedFrames) frames due to backpressure")
+        }
     }
 
     // SCStreamOutput protocol - receives audio samples
@@ -83,6 +101,19 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
         outputLock.unlock()
 
         guard capturing else { return }
+
+        // Check backpressure - if too many writes pending, drop this frame
+        pendingWritesLock.lock()
+        let currentPending = pendingWrites
+        pendingWritesLock.unlock()
+
+        if currentPending >= maxPendingWrites {
+            droppedFrames += 1
+            if droppedFrames == 1 || droppedFrames % 100 == 0 {
+                sendStatus("backpressure", message: "Dropping frames (\(droppedFrames) total) - reader too slow")
+            }
+            return
+        }
 
         // Extract audio data from the sample buffer
         guard let audioBuffer = extractAudioBuffer(from: sampleBuffer) else {
@@ -97,12 +128,14 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
         let bytesPerFrame = channelCount * MemoryLayout<Float>.size
         let totalBytes = frameCount * bytesPerFrame
 
+        // Prepare data for writing
+        var dataToWrite: Data?
+
         // Get interleaved data directly from the audio buffer
         if audioBuffer.format.isInterleaved {
             // Interleaved format - data is already in the correct format
             if let channelData = audioBuffer.floatChannelData?[0] {
-                let data = Data(bytes: channelData, count: totalBytes)
-                FileHandle.standardOutput.write(data)
+                dataToWrite = Data(bytes: channelData, count: totalBytes)
             }
         } else {
             // Non-interleaved (planar) format - need to interleave manually
@@ -115,9 +148,26 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
                 }
             }
 
-            interleavedData.withUnsafeBytes { ptr in
-                FileHandle.standardOutput.write(Data(ptr))
+            dataToWrite = interleavedData.withUnsafeBytes { ptr in
+                Data(ptr)
             }
+        }
+
+        guard let data = dataToWrite else { return }
+
+        // Increment pending writes counter
+        pendingWritesLock.lock()
+        pendingWrites += 1
+        pendingWritesLock.unlock()
+
+        // Write asynchronously to avoid blocking audio callback
+        writeQueue.async { [weak self] in
+            FileHandle.standardOutput.write(data)
+
+            // Decrement pending writes counter
+            self?.pendingWritesLock.lock()
+            self?.pendingWrites -= 1
+            self?.pendingWritesLock.unlock()
         }
 
         sampleCount += 1

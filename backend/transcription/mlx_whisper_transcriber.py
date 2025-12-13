@@ -34,7 +34,7 @@ class MLXWhisperTranscriber:
         "large-v3": "mlx-community/whisper-large-v3-mlx"
     }
 
-    # Supported Whisper languages (same as faster-whisper for consistency)
+    # Supported Whisper languages
     SUPPORTED_LANGUAGES = {
         'en': 'English',
         'zh': 'Chinese',
@@ -156,11 +156,10 @@ class MLXWhisperTranscriber:
         """
         self.model_size = model_size
         self.language = language
-        self.device = "metal"  # MLX uses Metal GPU (or CPU for fallback)
-        self.compute_type = "float16"  # MLX uses float16 (or int8 for CPU fallback)
-        self.model = None  # Holds model object for faster-whisper backend
+        self.device = "metal"  # MLX uses Metal GPU
+        self.compute_type = "float16"  # MLX uses float16
+        self.model = None  # Holds LightningWhisperMLX model object
         self.model_ready = False  # Flag indicating model is ready for transcription
-        self.backend = None  # Will be set to 'mlx' or 'faster-whisper' when model loads
 
         # Validate language
         if language not in self.SUPPORTED_LANGUAGES:
@@ -203,7 +202,6 @@ class MLXWhisperTranscriber:
 
     def _load_model_internal(self):
         """Internal method to load the model (called with lock held)."""
-        # Try MLX first (Apple Silicon GPU acceleration)
         try:
             from lightning_whisper_mlx import LightningWhisperMLX
 
@@ -225,7 +223,6 @@ class MLXWhisperTranscriber:
                 quant=None  # Use full precision for best quality
             )
 
-            self.backend = 'mlx'  # Track which backend we're using
             self.model_ready = True
 
             print(f"Model ready!", file=sys.stderr)
@@ -233,43 +230,18 @@ class MLXWhisperTranscriber:
             print(f"  Device: Metal GPU", file=sys.stderr)
             print(f"  Compute type: float16", file=sys.stderr)
             print(f"  Using Apple Silicon GPU acceleration - optimized for M-series chips!", file=sys.stderr)
-            return
 
         except Exception as mlx_error:
-            print(f"\n⚠ MLX model initialization failed: {mlx_error}", file=sys.stderr)
-            print(f"  Falling back to faster-whisper (CPU)...", file=sys.stderr)
-
-        # Fallback to faster-whisper (CPU)
-        try:
-            from faster_whisper import WhisperModel
-
-            print(f"Loading faster-whisper model (CPU fallback)...", file=sys.stderr)
-
-            # Load model using faster-whisper with CPU optimizations
-            self.model = WhisperModel(
-                self.model_size,
-                device="cpu",
-                compute_type="int8",  # int8 quantization for efficiency on CPU
-                download_root=None  # Use default cache directory
-            )
-
-            self.backend = 'faster-whisper'  # Track which backend we're using
-            self.model_ready = True
-            print(f"Model loaded successfully!", file=sys.stderr)
-            print(f"  Backend: faster-whisper (CPU fallback)", file=sys.stderr)
-            print(f"  Device: CPU", file=sys.stderr)
-            print(f"  Compute type: int8", file=sys.stderr)
-            print(f"  Note: CPU transcription will be slower than Metal GPU", file=sys.stderr)
-
-        except Exception as fw_error:
-            print(f"\n⚠ CPU fallback also failed!", file=sys.stderr)
-            print(f"  MLX error: {mlx_error}", file=sys.stderr)
-            print(f"  faster-whisper error: {fw_error}", file=sys.stderr)
+            print(f"\n❌ MLX model initialization failed: {mlx_error}", file=sys.stderr)
             print(f"", file=sys.stderr)
-            print(f"  Make sure you have installed:", file=sys.stderr)
-            print(f"    pip install lightning-whisper-mlx mlx   # For Apple Silicon", file=sys.stderr)
-            print(f"    pip install faster-whisper              # For CPU fallback", file=sys.stderr)
-            raise RuntimeError(f"Failed to load any transcription backend")
+            print(f"This app requires Apple Silicon (M1/M2/M3/M4) for transcription.", file=sys.stderr)
+            print(f"", file=sys.stderr)
+            print(f"Troubleshooting:", file=sys.stderr)
+            print(f"  1. Make sure you're running on an Apple Silicon Mac", file=sys.stderr)
+            print(f"  2. Try reinstalling: pip install lightning-whisper-mlx mlx", file=sys.stderr)
+            print(f"  3. Check that MLX is working: python -c 'import mlx'", file=sys.stderr)
+            print(f"", file=sys.stderr)
+            raise RuntimeError(f"Failed to load MLX transcription model: {mlx_error}")
 
     def transcribe_file(
         self,
@@ -305,70 +277,47 @@ class MLXWhisperTranscriber:
         print(f"\nTranscribing: {audio_path}", file=sys.stderr)
         print(f"Language: {self.SUPPORTED_LANGUAGES[self.language]} ({self.language})", file=sys.stderr)
 
-        # Transcribe using the appropriate backend
-        # Initialize variables that differ by backend
+        # Transcribe using Lightning-Whisper-MLX
         detected_language = self.language  # Default fallback
         segments_list = []
         full_text = []
 
-        if self.backend == 'mlx':
-            # Use LightningWhisperMLX class instance (created in _load_model_internal)
-            print(f"Transcribing with Lightning-Whisper-MLX...", file=sys.stderr)
+        print(f"Transcribing with Lightning-Whisper-MLX...", file=sys.stderr)
 
-            # LightningWhisperMLX.transcribe() returns a dict with 'text' key
-            # Note: It may also have 'segments' depending on the version
-            result = self.model.transcribe(audio_path=audio_path)
+        # LightningWhisperMLX.transcribe() returns a dict with 'text' key
+        # Note: It may also have 'segments' depending on the version
+        result = self.model.transcribe(audio_path=audio_path)
 
-            print(f"Processing result...", file=sys.stderr)
+        print(f"Processing result...", file=sys.stderr)
 
-            # Handle the result - lightning-whisper-mlx returns dict with 'text'
-            # and optionally 'segments'
-            if isinstance(result, dict):
-                if 'segments' in result and result['segments']:
-                    for segment in result['segments']:
-                        segments_list.append({
-                            'start': segment.get('start', 0),
-                            'end': segment.get('end', 0),
-                            'text': segment.get('text', '').strip()
-                        })
-                        full_text.append(segment.get('text', '').strip())
-                elif 'text' in result:
-                    # No segments, just full text - create a single segment
-                    text = result['text'].strip()
-                    full_text.append(text)
+        # Handle the result - lightning-whisper-mlx returns dict with 'text'
+        # and optionally 'segments'
+        if isinstance(result, dict):
+            if 'segments' in result and result['segments']:
+                for segment in result['segments']:
                     segments_list.append({
-                        'start': 0,
-                        'end': 0,  # Duration unknown without segments
-                        'text': text
+                        'start': segment.get('start', 0),
+                        'end': segment.get('end', 0),
+                        'text': segment.get('text', '').strip()
                     })
-
-                # Get detected language from result if available
-                detected_language = result.get('language', self.language)
-            else:
-                # Unexpected result format
-                print(f"WARNING: Unexpected result format: {type(result)}", file=sys.stderr)
-                full_text.append(str(result))
-                segments_list.append({'start': 0, 'end': 0, 'text': str(result)})
-
-        else:  # faster-whisper backend
-            # faster-whisper returns an iterator and info object
-            segments_iter, info = self.model.transcribe(
-                audio_path,
-                language=self.language
-            )
-
-            print(f"Processing segments...", file=sys.stderr)
-
-            for segment in segments_iter:
+                    full_text.append(segment.get('text', '').strip())
+            elif 'text' in result:
+                # No segments, just full text - create a single segment
+                text = result['text'].strip()
+                full_text.append(text)
                 segments_list.append({
-                    'start': segment.start,
-                    'end': segment.end,
-                    'text': segment.text.strip()
+                    'start': 0,
+                    'end': 0,  # Duration unknown without segments
+                    'text': text
                 })
-                full_text.append(segment.text.strip())
 
-            # Get detected language from faster-whisper info
-            detected_language = info.language
+            # Get detected language from result if available
+            detected_language = result.get('language', self.language)
+        else:
+            # Unexpected result format
+            print(f"WARNING: Unexpected result format: {type(result)}", file=sys.stderr)
+            full_text.append(str(result))
+            segments_list.append({'start': 0, 'end': 0, 'text': str(result)})
 
         # Get audio duration (calculate from last segment if available)
         duration = segments_list[-1]['end'] if segments_list else 0.0
@@ -519,7 +468,7 @@ class MLXWhisperTranscriber:
     def cleanup(self):
         """Clean up resources."""
         if self.model_ready:
-            # MLX handles cleanup automatically, faster-whisper model can be released
+            # MLX handles cleanup automatically
             self.model = None
             self.model_ready = False
             print("MLX Transcriber cleaned up", file=sys.stderr)
