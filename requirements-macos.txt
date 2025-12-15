@@ -8,6 +8,7 @@ pyobjc-framework-AVFoundation>=10.0      # macOS AVFoundation for audio
 
 # Transcription Dependencies (macOS with Metal GPU)
 lightning-whisper-mlx>=0.0.10  # MLX-based Whisper for Apple Silicon Metal GPU
+scipy>=1.11.0                  # Required by lightning-whisper-mlx for timing/alignment
 filelock>=3.12.0               # Prevent race conditions during model downloads
 
 # Note: lightning-whisper-mlx uses Apple's MLX framework for Metal GPU acceleration

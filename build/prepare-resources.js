@@ -234,6 +234,20 @@ function buildSwiftHelper() {
     console.log('  → Strip failed (non-critical):', stripError.message);
   }
 
+  // Sign the helper binary with inherit entitlements
+  // This allows it to inherit Screen Recording permission from the parent app
+  console.log('  Signing helper binary with inherit entitlements...');
+  const inheritEntitlements = path.join(__dirname, 'entitlements.mac.inherit.plist');
+  try {
+    // Use ad-hoc signing (-) for development, electron-builder will re-sign for distribution
+    execSync(`codesign --force --options runtime --entitlements "${inheritEntitlements}" --sign - "${destBinary}"`, {
+      stdio: 'inherit'
+    });
+    console.log('  → Helper binary signed with inherit entitlements');
+  } catch (signError) {
+    console.log('  → Signing failed (may still work if electron-builder signs it):', signError.message);
+  }
+
   console.log(`  ✓ Built and copied to ${destBinary}`);
   console.log('✓ Swift AudioCaptureHelper ready!\n');
 }
@@ -369,10 +383,11 @@ async function prepareResources() {
       });
 
       // Clean up bloated transitive dependencies to reduce bundle size
+      // NOTE: scipy is REQUIRED by lightning-whisper-mlx for word timing/alignment
       console.log('[5/5] Cleaning up unused dependencies...');
       const sitePackages = path.join(PYTHON_DIR, 'lib', 'python3.11', 'site-packages');
       const packagesToRemove = [
-        'scipy', 'scipy.libs',           // ~143 MB - not used (soxr handles resampling)
+        // 'scipy', 'scipy.libs',         // KEEP: Required by lightning-whisper-mlx for timing
         'sympy',                          // ~79 MB - transitive dep, not used
         'av.libs',                        // ~83 MB - duplicate FFmpeg libs (we bundle ffmpeg separately)
         'pip', 'setuptools',              // ~22 MB - not needed at runtime
@@ -511,8 +526,13 @@ async function prepareResources() {
     }
   }
 
-  // Download Whisper models (optional)
-  if (existing.modelsExist) {
+  // Download Whisper models (optional, Windows only)
+  // macOS uses MLX-format models from mlx-community/* which are incompatible with
+  // the CTranslate2 models downloaded by faster-whisper. The macOS app downloads
+  // MLX models on first use to ~/.cache/huggingface/hub, so bundling is skipped.
+  if (IS_MAC) {
+    console.log('ℹ️ Skipping model bundling on macOS (uses MLX models from HuggingFace cache)\n');
+  } else if (existing.modelsExist) {
     console.log('✓ Whisper models already prepared\n');
   } else {
     const shouldDownloadModels = process.env.DOWNLOAD_MODELS === 'true';

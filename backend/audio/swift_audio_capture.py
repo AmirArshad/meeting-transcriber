@@ -303,6 +303,11 @@ class SwiftAudioCapture:
                 return None
             return samples_to_frames(samples)
 
+        # Track time for "no audio" warning
+        import time
+        start_time = time.time()
+        no_audio_warning_sent = False
+
         try:
             while self._recording_event.is_set() and self.process and self.process.poll() is None:
                 # Use select to check if data is available (100ms timeout)
@@ -310,6 +315,12 @@ class SwiftAudioCapture:
                 ready, _, _ = select.select([self.process.stdout], [], [], 0.1)
 
                 if not ready:
+                    # Warn if no audio received after 3 seconds (and helper is still running)
+                    if not no_audio_warning_sent and chunk_count == 0 and time.time() - start_time > 3.0:
+                        print("  WARNING: No audio data received after 3 seconds", file=sys.stderr)
+                        print("    - Check that system audio is playing", file=sys.stderr)
+                        print("    - Check Screen Recording permission in System Settings", file=sys.stderr)
+                        no_audio_warning_sent = True
                     continue
 
                 # Use os.read() which returns immediately with available data
@@ -406,7 +417,18 @@ class SwiftAudioCapture:
 
                     elif msg_type == 'error':
                         error = msg.get('error', '')
-                        print(f"Swift helper ERROR: {error}", file=sys.stderr)
+                        code = msg.get('code', 'unknown')
+                        help_text = msg.get('help', '')
+
+                        print(f"Swift helper ERROR [{code}]: {error}", file=sys.stderr)
+                        if help_text:
+                            print(f"  Help: {help_text}", file=sys.stderr)
+
+                        # Store error for main thread to access
+                        self.last_error = error
+                        if code == 'permission_denied':
+                            self.last_error = f"PERMISSION_DENIED: {error}"
+                        self.error_event.set()
 
                     elif msg_type == 'config':
                         print(f"Swift helper config: {msg}", file=sys.stderr)

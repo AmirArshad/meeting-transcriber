@@ -61,35 +61,18 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
     private var isCapturing = false
     private let outputLock = NSLock()
     private var sampleCount: Int = 0
-    private var droppedFrames: Int = 0
-
-    // Backpressure handling: write queue with bounded size
-    private let writeQueue = DispatchQueue(label: "audio.write.queue")
-    private var pendingWrites: Int = 0
-    private let pendingWritesLock = NSLock()
-    private let maxPendingWrites = 50  // ~5 seconds of audio at 100ms chunks
 
     func startCapturing() {
         outputLock.lock()
         isCapturing = true
         sampleCount = 0
-        droppedFrames = 0
         outputLock.unlock()
-
-        pendingWritesLock.lock()
-        pendingWrites = 0
-        pendingWritesLock.unlock()
     }
 
     func stopCapturing() {
         outputLock.lock()
         isCapturing = false
         outputLock.unlock()
-
-        // Log if frames were dropped due to backpressure
-        if droppedFrames > 0 {
-            sendStatus("warning", message: "Dropped \(droppedFrames) frames due to backpressure")
-        }
     }
 
     // SCStreamOutput protocol - receives audio samples
@@ -101,19 +84,6 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
         outputLock.unlock()
 
         guard capturing else { return }
-
-        // Check backpressure - if too many writes pending, drop this frame
-        pendingWritesLock.lock()
-        let currentPending = pendingWrites
-        pendingWritesLock.unlock()
-
-        if currentPending >= maxPendingWrites {
-            droppedFrames += 1
-            if droppedFrames == 1 || droppedFrames % 100 == 0 {
-                sendStatus("backpressure", message: "Dropping frames (\(droppedFrames) total) - reader too slow")
-            }
-            return
-        }
 
         // Extract audio data from the sample buffer
         guard let audioBuffer = extractAudioBuffer(from: sampleBuffer) else {
@@ -128,14 +98,12 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
         let bytesPerFrame = channelCount * MemoryLayout<Float>.size
         let totalBytes = frameCount * bytesPerFrame
 
-        // Prepare data for writing
-        var dataToWrite: Data?
-
         // Get interleaved data directly from the audio buffer
         if audioBuffer.format.isInterleaved {
             // Interleaved format - data is already in the correct format
             if let channelData = audioBuffer.floatChannelData?[0] {
-                dataToWrite = Data(bytes: channelData, count: totalBytes)
+                let data = Data(bytes: channelData, count: totalBytes)
+                FileHandle.standardOutput.write(data)
             }
         } else {
             // Non-interleaved (planar) format - need to interleave manually
@@ -148,26 +116,9 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
                 }
             }
 
-            dataToWrite = interleavedData.withUnsafeBytes { ptr in
-                Data(ptr)
+            interleavedData.withUnsafeBytes { ptr in
+                FileHandle.standardOutput.write(Data(ptr))
             }
-        }
-
-        guard let data = dataToWrite else { return }
-
-        // Increment pending writes counter
-        pendingWritesLock.lock()
-        pendingWrites += 1
-        pendingWritesLock.unlock()
-
-        // Write asynchronously to avoid blocking audio callback
-        writeQueue.async { [weak self] in
-            FileHandle.standardOutput.write(data)
-
-            // Decrement pending writes counter
-            self?.pendingWritesLock.lock()
-            self?.pendingWrites -= 1
-            self?.pendingWritesLock.unlock()
         }
 
         sampleCount += 1
@@ -243,9 +194,45 @@ class AudioCapture {
         sendStatus("initializing", message: "Getting shareable content...")
 
         // Get available content to capture
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+        // This call will fail if Screen Recording permission is not granted
+        let content: SCShareableContent
+        do {
+            content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+        } catch {
+            // Check for specific permission-related errors
+            let nsError = error as NSError
+
+            // SCStreamError codes: userDeclined = -3801, failedToStart = -3802, etc.
+            // Also check for common permission denial patterns
+            if nsError.code == -3801 ||
+               nsError.domain == "com.apple.ScreenCaptureKit.SCStreamErrorDomain" ||
+               nsError.localizedDescription.lowercased().contains("permission") ||
+               nsError.localizedDescription.lowercased().contains("denied") ||
+               nsError.localizedDescription.lowercased().contains("not authorized") {
+                sendJSON([
+                    "type": "error",
+                    "code": "permission_denied",
+                    "error": "Screen Recording permission not granted",
+                    "help": "Open System Settings > Privacy & Security > Screen Recording and enable this app"
+                ])
+            } else {
+                sendJSON([
+                    "type": "error",
+                    "code": "screencapture_failed",
+                    "error": "Failed to access screen capture: \(error.localizedDescription)",
+                    "nsErrorCode": nsError.code,
+                    "nsErrorDomain": nsError.domain
+                ])
+            }
+            throw error
+        }
 
         guard let display = content.displays.first else {
+            sendJSON([
+                "type": "error",
+                "code": "no_display",
+                "error": "No display found for screen capture"
+            ])
             throw NSError(domain: "AudioCapture", code: 1, userInfo: [NSLocalizedDescriptionKey: "No display found"])
         }
 
@@ -275,19 +262,57 @@ class AudioCapture {
         stream = SCStream(filter: filter, configuration: streamConfig, delegate: delegate)
 
         guard let stream = stream, let delegate = delegate else {
+            sendJSON([
+                "type": "error",
+                "code": "stream_creation_failed",
+                "error": "Failed to create SCStream"
+            ])
             throw NSError(domain: "AudioCapture", code: 2, userInfo: [NSLocalizedDescriptionKey: "Failed to create stream"])
         }
 
         // Add stream output for audio
-        try stream.addStreamOutput(delegate, type: .audio, sampleHandlerQueue: DispatchQueue(label: "audio.capture.queue"))
+        do {
+            try stream.addStreamOutput(delegate, type: .audio, sampleHandlerQueue: DispatchQueue(label: "audio.capture.queue"))
+        } catch {
+            sendJSON([
+                "type": "error",
+                "code": "stream_output_failed",
+                "error": "Failed to add audio output: \(error.localizedDescription)"
+            ])
+            throw error
+        }
 
         sendStatus("starting", message: "Starting audio capture...")
 
-        // Start capture
+        // Start capture - this can also fail due to permission issues
         delegate.startCapturing()
-        try await stream.startCapture()
-        isRunning = true
+        do {
+            try await stream.startCapture()
+        } catch {
+            delegate.stopCapturing()
+            let nsError = error as NSError
 
+            if nsError.code == -3801 ||
+               nsError.localizedDescription.lowercased().contains("permission") {
+                sendJSON([
+                    "type": "error",
+                    "code": "permission_denied",
+                    "error": "Screen Recording permission not granted",
+                    "help": "Open System Settings > Privacy & Security > Screen Recording and enable this app"
+                ])
+            } else {
+                sendJSON([
+                    "type": "error",
+                    "code": "capture_start_failed",
+                    "error": "Failed to start capture: \(error.localizedDescription)",
+                    "nsErrorCode": nsError.code,
+                    "nsErrorDomain": nsError.domain
+                ])
+            }
+            throw error
+        }
+
+        isRunning = true
         sendReady()
         sendStatus("recording", message: "Desktop audio capture active")
     }
