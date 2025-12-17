@@ -187,6 +187,8 @@ class SwiftAudioCapture:
                 bufsize=0  # Unbuffered for real-time audio
             )
 
+            print(f"  Swift helper process started (PID: {self.process.pid})", file=sys.stderr)
+
             self._recording_event.set()
 
             # Start threads to read stdout (audio) and stderr (status)
@@ -387,6 +389,7 @@ class SwiftAudioCapture:
         """Read JSON status messages from stderr."""
         import select
 
+        message_count = 0
         try:
             while self._recording_event.is_set() and self.process and self.process.poll() is None:
                 # Use select to avoid blocking forever on readline
@@ -402,6 +405,7 @@ class SwiftAudioCapture:
                 if not line:
                     continue
 
+                message_count += 1
                 try:
                     msg = json.loads(line)
                     msg_type = msg.get('type', '')
@@ -436,6 +440,16 @@ class SwiftAudioCapture:
                 except json.JSONDecodeError:
                     # Not JSON, print as-is
                     print(f"Swift helper: {line}", file=sys.stderr)
+
+            # Log when loop exits
+            exit_reason = "unknown"
+            if not self._recording_event.is_set():
+                exit_reason = "recording stopped"
+            elif not self.process:
+                exit_reason = "process is None"
+            elif self.process.poll() is not None:
+                exit_reason = f"process exited with code {self.process.poll()}"
+            print(f"  Status reader stopped ({exit_reason}), received {message_count} messages", file=sys.stderr)
 
         except Exception as e:
             if self._recording_event.is_set():

@@ -202,6 +202,21 @@ class MLXWhisperTranscriber:
 
     def _load_model_internal(self):
         """Internal method to load the model (called with lock held)."""
+        # lightning-whisper-mlx downloads models to ./mlx_models/ (relative path)
+        # This fails when running from a read-only .app bundle on macOS
+        # Solution: Change to a writable directory before loading
+        original_cwd = os.getcwd()
+
+        # Use ~/Library/Caches for macOS, ~/.cache for Linux
+        if sys.platform == 'darwin':
+            cache_dir = Path.home() / "Library" / "Caches" / "meeting-transcriber"
+        else:
+            cache_dir = Path.home() / ".cache" / "meeting-transcriber"
+
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        os.chdir(cache_dir)
+        print(f"Using model cache directory: {cache_dir}", file=sys.stderr)
+
         try:
             from lightning_whisper_mlx import LightningWhisperMLX
 
@@ -242,6 +257,9 @@ class MLXWhisperTranscriber:
             print(f"  3. Check that MLX is working: python -c 'import mlx'", file=sys.stderr)
             print(f"", file=sys.stderr)
             raise RuntimeError(f"Failed to load MLX transcription model: {mlx_error}")
+        finally:
+            # Always restore original working directory
+            os.chdir(original_cwd)
 
     def transcribe_file(
         self,
