@@ -190,15 +190,18 @@ class MLXWhisperTranscriber:
         import filelock
 
         lock_file = Path(tempfile.gettempdir()) / f"whisper_mlx_model_{self.model_size}.lock"
-        lock = filelock.FileLock(lock_file, timeout=300)  # 5 minute timeout
+        lock = filelock.FileLock(lock_file, timeout=1200)  # 20 minute timeout for large model downloads
 
         try:
             with lock:
                 print(f"Acquired model download lock...", file=sys.stderr)
                 self._load_model_internal()
         except filelock.Timeout:
-            print(f"Warning: Timeout waiting for model download lock. Proceeding anyway...", file=sys.stderr)
-            self._load_model_internal()
+            raise RuntimeError(
+                f"Timeout waiting for model download lock after 20 minutes. "
+                f"Another process may be downloading the model, or a previous download may have failed. "
+                f"Try deleting the lock file: {lock_file}"
+            )
 
     def _load_model_internal(self):
         """Internal method to load the model (called with lock held)."""
