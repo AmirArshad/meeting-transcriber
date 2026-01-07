@@ -58,7 +58,17 @@ class MeetingManager:
             Meeting object with metadata
         """
         now = datetime.now()
-        meeting_id = now.strftime("%Y%m%d_%H%M%S")
+        base_id = now.strftime("%Y%m%d_%H%M%S")
+
+        # Ensure unique ID (handle rare case of multiple adds in same second)
+        existing_ids = {m['id'] for m in self.list_meetings()}
+        meeting_id = base_id
+        counter = 1
+        while meeting_id in existing_ids:
+            meeting_id = f"{base_id}_{counter}"
+            counter += 1
+            if counter > 100:  # Safety limit
+                raise RuntimeError(f"Failed to generate unique meeting ID after {counter} attempts")
 
         # Auto-generate title if not provided
         if not title:
@@ -145,11 +155,20 @@ class MeetingManager:
         language: str,
         model: str,
         title: str
-    ) -> Dict:
+    ) -> Optional[Dict]:
         """
         Add a meeting directly without copying files (used by scan).
         Files are assumed to already be in the correct location.
+
+        Returns:
+            Meeting object if added, None if ID already exists (duplicate prevention)
         """
+        # Check for duplicate ID (defense-in-depth)
+        existing_ids = {m['id'] for m in self.list_meetings()}
+        if meeting_id in existing_ids:
+            print(f"Warning: Skipping duplicate meeting ID: {meeting_id}", file=sys.stderr)
+            return None
+
         # Format duration
         minutes = int(duration // 60)
         seconds = int(duration % 60)
@@ -195,6 +214,9 @@ class MeetingManager:
         """
         Get all meetings sorted by date (newest first).
 
+        Automatically deduplicates entries by ID and saves cleaned data
+        if duplicates are found.
+
         Returns:
             List of meeting objects
         """
@@ -202,9 +224,27 @@ class MeetingManager:
             with open(self.metadata_file, 'r', encoding='utf-8') as f:
                 meetings = json.load(f)
 
+            # Deduplicate by ID (keep first occurrence, which is newest after sort)
+            seen_ids = set()
+            unique_meetings = []
+            duplicates_found = 0
+
+            for meeting in meetings:
+                meeting_id = meeting.get('id')
+                if meeting_id not in seen_ids:
+                    seen_ids.add(meeting_id)
+                    unique_meetings.append(meeting)
+                else:
+                    duplicates_found += 1
+
+            # If duplicates were found, save the cleaned list
+            if duplicates_found > 0:
+                print(f"Warning: Found and removed {duplicates_found} duplicate meeting(s) from database", file=sys.stderr)
+                self._save_meetings(unique_meetings)
+
             # Sort by date (newest first)
-            meetings.sort(key=lambda m: m.get('date', ''), reverse=True)
-            return meetings
+            unique_meetings.sort(key=lambda m: m.get('date', ''), reverse=True)
+            return unique_meetings
         except (FileNotFoundError, json.JSONDecodeError):
             return []
 
@@ -311,8 +351,12 @@ class MeetingManager:
                     model="unknown",
                     title=title
                 )
-                added += 1
-                print(f"Added meeting from filesystem: {audio_file.name} (ID: {meeting_id})", file=sys.stderr)
+                if meeting is not None:
+                    added += 1
+                    print(f"Added meeting from filesystem: {audio_file.name} (ID: {meeting_id})", file=sys.stderr)
+                else:
+                    # Duplicate detected by _add_meeting_direct
+                    skipped += 1
             except Exception as e:
                 print(f"Error adding meeting {audio_file.name}: {e}", file=sys.stderr)
                 skipped += 1

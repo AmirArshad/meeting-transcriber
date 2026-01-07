@@ -325,7 +325,18 @@ function renderMeetingList() {
   }
 
   meetingList.innerHTML = '';
+
+  // Defense-in-depth: Track rendered IDs to skip duplicates from backend
+  const renderedIds = new Set();
+
   meetings.forEach((meeting, index) => {
+    // Skip duplicate IDs (shouldn't happen after backend fix, but safety first)
+    if (renderedIds.has(meeting.id)) {
+      console.warn(`Skipping duplicate meeting ID in render: ${meeting.id}`);
+      return;
+    }
+    renderedIds.add(meeting.id);
+
     const item = document.createElement('div');
     item.className = 'meeting-item';
     item.dataset.id = meeting.id;
