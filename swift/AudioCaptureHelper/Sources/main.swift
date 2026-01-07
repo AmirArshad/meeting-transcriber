@@ -66,6 +66,11 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
     private var silencePeriodLogged = false
     private let silenceThreshold: TimeInterval = 5.0  // Log when silence exceeds 5 seconds
 
+    // Audio format logging state (protected by outputLock)
+    private var hasLoggedAudioFormat = false
+    private var extractionErrorCount = 0
+    private let maxExtractionErrors = 5  // Only log first N errors to avoid spam
+
     func startCapturing() {
         outputLock.lock()
         isCapturing = true
@@ -73,6 +78,8 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
         totalBytesWritten = 0
         lastAudioTime = nil
         silencePeriodLogged = false
+        hasLoggedAudioFormat = false
+        extractionErrorCount = 0
         outputLock.unlock()
     }
 
@@ -108,23 +115,29 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
 
         // Check for audio resuming after silence (important for meetings where audio starts late)
         let now = Date()
+        var shouldLogAudioResumed = false
+        var silenceDuration: TimeInterval = 0
+
+        // Single lock region for state updates
         outputLock.lock()
         if let lastTime = lastAudioTime {
-            let silenceDuration = now.timeIntervalSince(lastTime)
+            silenceDuration = now.timeIntervalSince(lastTime)
             if silenceDuration > silenceThreshold && silencePeriodLogged {
-                // Audio resumed after a period of silence
-                outputLock.unlock()
-                sendJSON([
-                    "type": "audio_resumed",
-                    "silenceDuration": silenceDuration,
-                    "message": "Audio resumed after \(String(format: "%.1f", silenceDuration)) seconds of silence"
-                ])
-                outputLock.lock()
+                shouldLogAudioResumed = true
                 silencePeriodLogged = false
             }
         }
         lastAudioTime = now
         outputLock.unlock()
+
+        // Log outside of lock to avoid holding lock during I/O
+        if shouldLogAudioResumed {
+            sendJSON([
+                "type": "audio_resumed",
+                "silenceDuration": silenceDuration,
+                "message": "Audio resumed after \(String(format: "%.1f", silenceDuration)) seconds of silence"
+            ])
+        }
 
         // Write raw float32 PCM data to stdout (interleaved stereo)
         // ScreenCaptureKit provides interleaved audio in mBuffers.mData
@@ -134,16 +147,16 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
         let bytesPerFrame = channelCount * MemoryLayout<Float>.size
         let totalBytes = frameCount * bytesPerFrame
 
+        // Track bytes written for this sample
+        var bytesWrittenThisSample = 0
+
         // Get interleaved data directly from the audio buffer
         if audioBuffer.format.isInterleaved {
             // Interleaved format - data is already in the correct format
             if let channelData = audioBuffer.floatChannelData?[0] {
                 let data = Data(bytes: channelData, count: totalBytes)
                 FileHandle.standardOutput.write(data)
-
-                outputLock.lock()
-                totalBytesWritten += totalBytes
-                outputLock.unlock()
+                bytesWrittenThisSample = totalBytes
             }
         } else {
             // Non-interleaved (planar) format - need to interleave manually
@@ -159,15 +172,15 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
             interleavedData.withUnsafeBytes { ptr in
                 FileHandle.standardOutput.write(Data(ptr))
             }
-
-            outputLock.lock()
-            totalBytesWritten += frameCount * channelCount * MemoryLayout<Float>.size
-            outputLock.unlock()
+            bytesWrittenThisSample = frameCount * channelCount * MemoryLayout<Float>.size
         }
 
+        // Single lock region for counter updates
         outputLock.lock()
+        totalBytesWritten += bytesWrittenThisSample
         sampleCount += 1
         let currentSampleCount = sampleCount
+        let currentBytesWritten = totalBytesWritten
         outputLock.unlock()
 
         if currentSampleCount == 1 {
@@ -176,13 +189,10 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
 
         // Log periodic status every ~10 seconds (assuming ~100 samples/sec)
         if currentSampleCount % 1000 == 0 {
-            outputLock.lock()
-            let bytesWritten = totalBytesWritten
-            outputLock.unlock()
             sendJSON([
                 "type": "progress",
                 "samples": currentSampleCount,
-                "bytesWritten": bytesWritten
+                "bytesWritten": currentBytesWritten
             ])
         }
     }
@@ -209,10 +219,6 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
         }
     }
 
-    private var hasLoggedAudioFormat = false
-    private var extractionErrorCount = 0
-    private let maxExtractionErrors = 5  // Only log first N errors to avoid spam
-
     private func extractAudioBuffer(from sampleBuffer: CMSampleBuffer) -> AVAudioPCMBuffer? {
         // Get format description
         guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer) else {
@@ -225,8 +231,15 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
             return nil
         }
 
-        // Log audio format on first successful extraction
-        if !hasLoggedAudioFormat {
+        // Log audio format on first successful extraction (thread-safe check)
+        outputLock.lock()
+        let shouldLogFormat = !hasLoggedAudioFormat
+        if shouldLogFormat {
+            hasLoggedAudioFormat = true
+        }
+        outputLock.unlock()
+
+        if shouldLogFormat {
             let desc = streamBasicDescription.pointee
             sendJSON([
                 "type": "audio_format",
@@ -236,7 +249,6 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
                 "bytesPerFrame": desc.mBytesPerFrame,
                 "formatFlags": desc.mFormatFlags
             ])
-            hasLoggedAudioFormat = true
         }
 
         let audioFormat = AVAudioFormat(streamDescription: streamBasicDescription)
@@ -293,22 +305,29 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
         let availableBytes = Int(srcBuffer.mDataByteSize)
 
         if availableBytes < expectedBytes {
-            logExtractionError("Buffer size mismatch: have \(availableBytes) bytes, need \(expectedBytes)")
-            // Copy what we can safely
-            memcpy(dstData, srcData, min(availableBytes, expectedBytes))
-        } else {
-            memcpy(dstData, srcData, expectedBytes)
+            // Buffer size mismatch - return nil to avoid corrupted audio
+            // Copying partial data would leave frameLength incorrect
+            logExtractionError("Buffer size mismatch: have \(availableBytes) bytes, need \(expectedBytes) - skipping frame")
+            return nil
         }
 
+        memcpy(dstData, srcData, expectedBytes)
         return pcmBuffer
     }
 
     private func logExtractionError(_ message: String) {
+        // Thread-safe error counting
+        outputLock.lock()
         extractionErrorCount += 1
-        if extractionErrorCount <= maxExtractionErrors {
-            sendJSON(["type": "extraction_error", "error": message, "count": extractionErrorCount])
-        } else if extractionErrorCount == maxExtractionErrors + 1 {
-            sendJSON(["type": "extraction_error", "error": "Too many extraction errors, suppressing further logs", "count": extractionErrorCount])
+        let currentCount = extractionErrorCount
+        let maxErrors = maxExtractionErrors
+        outputLock.unlock()
+
+        // Log outside of lock to avoid holding lock during I/O
+        if currentCount <= maxErrors {
+            sendJSON(["type": "extraction_error", "error": message, "count": currentCount])
+        } else if currentCount == maxErrors + 1 {
+            sendJSON(["type": "extraction_error", "error": "Too many extraction errors, suppressing further logs", "count": currentCount])
         }
     }
 

@@ -60,8 +60,11 @@ class MeetingManager:
         now = datetime.now()
         base_id = now.strftime("%Y%m%d_%H%M%S")
 
+        # Load meetings once for both ID check and later insertion
+        meetings = self.list_meetings()
+        existing_ids = {m['id'] for m in meetings}
+
         # Ensure unique ID (handle rare case of multiple adds in same second)
-        existing_ids = {m['id'] for m in self.list_meetings()}
         meeting_id = base_id
         counter = 1
         while meeting_id in existing_ids:
@@ -137,9 +140,8 @@ class MeetingManager:
             "model": model
         }
 
-        # Load existing meetings and append
-        meetings = self.list_meetings()
-        meetings.insert(0, meeting)  # Add to beginning (most recent first)
+        # Add to beginning of existing meetings (most recent first)
+        meetings.insert(0, meeting)
 
         self._save_meetings(meetings)
 
@@ -163,8 +165,11 @@ class MeetingManager:
         Returns:
             Meeting object if added, None if ID already exists (duplicate prevention)
         """
+        # Load meetings once for both ID check and later insertion
+        meetings = self.list_meetings()
+
         # Check for duplicate ID (defense-in-depth)
-        existing_ids = {m['id'] for m in self.list_meetings()}
+        existing_ids = {m['id'] for m in meetings}
         if meeting_id in existing_ids:
             print(f"Warning: Skipping duplicate meeting ID: {meeting_id}", file=sys.stderr)
             return None
@@ -175,10 +180,16 @@ class MeetingManager:
         duration_str = f"{minutes}:{seconds:02d}"
 
         # Parse meeting_id to get date
+        # Handle suffixed IDs like "20260107_104555_1" by extracting base ID
         try:
-            dt = datetime.strptime(meeting_id, "%Y%m%d_%H%M%S")
+            parts = meeting_id.split('_')
+            if len(parts) >= 2:
+                base_id = f"{parts[0]}_{parts[1]}"
+                dt = datetime.strptime(base_id, "%Y%m%d_%H%M%S")
+            else:
+                dt = datetime.strptime(meeting_id, "%Y%m%d_%H%M%S")
             date_iso = dt.isoformat()
-        except ValueError:
+        except (ValueError, IndexError):
             date_iso = datetime.now().isoformat()
 
         # Read transcript text
@@ -203,8 +214,7 @@ class MeetingManager:
             'model': model
         }
 
-        # Load existing meetings and append
-        meetings = self.list_meetings()
+        # Add to beginning of existing meetings (most recent first)
         meetings.insert(0, meeting)
 
         self._save_meetings(meetings)
@@ -224,7 +234,7 @@ class MeetingManager:
             with open(self.metadata_file, 'r', encoding='utf-8') as f:
                 meetings = json.load(f)
 
-            # Deduplicate by ID (keep first occurrence, which is newest after sort)
+            # Deduplicate by ID (keep first occurrence in file order)
             seen_ids = set()
             unique_meetings = []
             duplicates_found = 0
