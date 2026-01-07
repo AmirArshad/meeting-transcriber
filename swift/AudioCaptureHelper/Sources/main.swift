@@ -61,18 +61,34 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
     private var isCapturing = false
     private let outputLock = NSLock()
     private var sampleCount: Int = 0
+    private var totalBytesWritten: Int = 0
+    private var lastAudioTime: Date?
+    private var silencePeriodLogged = false
+    private let silenceThreshold: TimeInterval = 5.0  // Log when silence exceeds 5 seconds
 
     func startCapturing() {
         outputLock.lock()
         isCapturing = true
         sampleCount = 0
+        totalBytesWritten = 0
+        lastAudioTime = nil
+        silencePeriodLogged = false
         outputLock.unlock()
     }
 
     func stopCapturing() {
         outputLock.lock()
+        let finalSampleCount = sampleCount
+        let finalBytes = totalBytesWritten
         isCapturing = false
         outputLock.unlock()
+
+        // Log final stats
+        sendJSON([
+            "type": "capture_stats",
+            "totalSamples": finalSampleCount,
+            "totalBytes": finalBytes
+        ])
     }
 
     // SCStreamOutput protocol - receives audio samples
@@ -90,6 +106,26 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
             return
         }
 
+        // Check for audio resuming after silence (important for meetings where audio starts late)
+        let now = Date()
+        outputLock.lock()
+        if let lastTime = lastAudioTime {
+            let silenceDuration = now.timeIntervalSince(lastTime)
+            if silenceDuration > silenceThreshold && silencePeriodLogged {
+                // Audio resumed after a period of silence
+                outputLock.unlock()
+                sendJSON([
+                    "type": "audio_resumed",
+                    "silenceDuration": silenceDuration,
+                    "message": "Audio resumed after \(String(format: "%.1f", silenceDuration)) seconds of silence"
+                ])
+                outputLock.lock()
+                silencePeriodLogged = false
+            }
+        }
+        lastAudioTime = now
+        outputLock.unlock()
+
         // Write raw float32 PCM data to stdout (interleaved stereo)
         // ScreenCaptureKit provides interleaved audio in mBuffers.mData
         // We need to write all channels, not just floatChannelData[0]
@@ -104,6 +140,10 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
             if let channelData = audioBuffer.floatChannelData?[0] {
                 let data = Data(bytes: channelData, count: totalBytes)
                 FileHandle.standardOutput.write(data)
+
+                outputLock.lock()
+                totalBytesWritten += totalBytes
+                outputLock.unlock()
             }
         } else {
             // Non-interleaved (planar) format - need to interleave manually
@@ -119,27 +159,98 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
             interleavedData.withUnsafeBytes { ptr in
                 FileHandle.standardOutput.write(Data(ptr))
             }
+
+            outputLock.lock()
+            totalBytesWritten += frameCount * channelCount * MemoryLayout<Float>.size
+            outputLock.unlock()
         }
 
+        outputLock.lock()
         sampleCount += 1
-        if sampleCount == 1 {
-            sendStatus("first_sample", message: "Received first audio sample")
+        let currentSampleCount = sampleCount
+        outputLock.unlock()
+
+        if currentSampleCount == 1 {
+            sendStatus("first_sample", message: "Received first audio sample (\(totalBytes) bytes)")
+        }
+
+        // Log periodic status every ~10 seconds (assuming ~100 samples/sec)
+        if currentSampleCount % 1000 == 0 {
+            outputLock.lock()
+            let bytesWritten = totalBytesWritten
+            outputLock.unlock()
+            sendJSON([
+                "type": "progress",
+                "samples": currentSampleCount,
+                "bytesWritten": bytesWritten
+            ])
         }
     }
 
+    // Called periodically to check for silence (call from a timer if needed)
+    func checkForSilence() {
+        outputLock.lock()
+        guard isCapturing, let lastTime = lastAudioTime else {
+            outputLock.unlock()
+            return
+        }
+        let silenceDuration = Date().timeIntervalSince(lastTime)
+        let alreadyLogged = silencePeriodLogged
+        if silenceDuration > silenceThreshold && !alreadyLogged {
+            silencePeriodLogged = true
+            outputLock.unlock()
+            sendJSON([
+                "type": "silence_detected",
+                "duration": silenceDuration,
+                "message": "No audio received for \(String(format: "%.1f", silenceDuration)) seconds (this is normal if no audio is playing)"
+            ])
+        } else {
+            outputLock.unlock()
+        }
+    }
+
+    private var hasLoggedAudioFormat = false
+    private var extractionErrorCount = 0
+    private let maxExtractionErrors = 5  // Only log first N errors to avoid spam
+
     private func extractAudioBuffer(from sampleBuffer: CMSampleBuffer) -> AVAudioPCMBuffer? {
-        guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer),
-              let streamBasicDescription = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription) else {
+        // Get format description
+        guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer) else {
+            logExtractionError("No format description in sample buffer")
             return nil
         }
 
+        guard let streamBasicDescription = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription) else {
+            logExtractionError("Could not get stream basic description from format")
+            return nil
+        }
+
+        // Log audio format on first successful extraction
+        if !hasLoggedAudioFormat {
+            let desc = streamBasicDescription.pointee
+            sendJSON([
+                "type": "audio_format",
+                "sampleRate": desc.mSampleRate,
+                "channels": desc.mChannelsPerFrame,
+                "bitsPerChannel": desc.mBitsPerChannel,
+                "bytesPerFrame": desc.mBytesPerFrame,
+                "formatFlags": desc.mFormatFlags
+            ])
+            hasLoggedAudioFormat = true
+        }
+
         let audioFormat = AVAudioFormat(streamDescription: streamBasicDescription)
-        guard let audioFormat = audioFormat else { return nil }
+        guard let audioFormat = audioFormat else {
+            logExtractionError("Could not create AVAudioFormat from stream description")
+            return nil
+        }
 
         let numSamples = CMSampleBufferGetNumSamples(sampleBuffer)
+        // Empty buffers are normal during silence - don't log as errors
         guard numSamples > 0 else { return nil }
 
         guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: audioFormat, frameCapacity: AVAudioFrameCount(numSamples)) else {
+            logExtractionError("Could not create PCM buffer with capacity \(numSamples)")
             return nil
         }
         pcmBuffer.frameLength = AVAudioFrameCount(numSamples)
@@ -147,7 +258,7 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
         // Get the audio buffer list
         var blockBuffer: CMBlockBuffer?
         var audioBufferList = AudioBufferList()
-        var audioBufferListSize = MemoryLayout<AudioBufferList>.size
+        let audioBufferListSize = MemoryLayout<AudioBufferList>.size
 
         let status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
             sampleBuffer,
@@ -160,15 +271,45 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
             blockBufferOut: &blockBuffer
         )
 
-        guard status == noErr else { return nil }
+        guard status == noErr else {
+            logExtractionError("CMSampleBufferGetAudioBufferList failed with status: \(status)")
+            return nil
+        }
 
         // Copy audio data to PCM buffer
         let srcBuffer = audioBufferList.mBuffers
-        if let srcData = srcBuffer.mData, let dstData = pcmBuffer.floatChannelData?[0] {
-            memcpy(dstData, srcData, Int(srcBuffer.mDataByteSize))
+        guard let srcData = srcBuffer.mData else {
+            logExtractionError("Audio buffer mData is nil")
+            return nil
+        }
+
+        guard let dstData = pcmBuffer.floatChannelData?[0] else {
+            logExtractionError("PCM buffer floatChannelData is nil")
+            return nil
+        }
+
+        // Validate buffer sizes before copy
+        let expectedBytes = Int(pcmBuffer.frameLength) * Int(audioFormat.channelCount) * MemoryLayout<Float>.size
+        let availableBytes = Int(srcBuffer.mDataByteSize)
+
+        if availableBytes < expectedBytes {
+            logExtractionError("Buffer size mismatch: have \(availableBytes) bytes, need \(expectedBytes)")
+            // Copy what we can safely
+            memcpy(dstData, srcData, min(availableBytes, expectedBytes))
+        } else {
+            memcpy(dstData, srcData, expectedBytes)
         }
 
         return pcmBuffer
+    }
+
+    private func logExtractionError(_ message: String) {
+        extractionErrorCount += 1
+        if extractionErrorCount <= maxExtractionErrors {
+            sendJSON(["type": "extraction_error", "error": message, "count": extractionErrorCount])
+        } else if extractionErrorCount == maxExtractionErrors + 1 {
+            sendJSON(["type": "extraction_error", "error": "Too many extraction errors, suppressing further logs", "count": extractionErrorCount])
+        }
     }
 
     // SCStreamDelegate protocol
@@ -185,9 +326,25 @@ class AudioCapture {
     private var delegate: AudioCaptureDelegate?
     private var config: Config
     private var isRunning = false
+    private var silenceCheckTimer: DispatchSourceTimer?
 
     init(config: Config) {
         self.config = config
+    }
+
+    private func startSilenceCheckTimer() {
+        let timer = DispatchSource.makeTimerSource(queue: .global())
+        timer.schedule(deadline: .now() + 5.0, repeating: 5.0)
+        timer.setEventHandler { [weak self] in
+            self?.delegate?.checkForSilence()
+        }
+        timer.resume()
+        silenceCheckTimer = timer
+    }
+
+    private func stopSilenceCheckTimer() {
+        silenceCheckTimer?.cancel()
+        silenceCheckTimer = nil
     }
 
     func start() async throws {
@@ -236,10 +393,12 @@ class AudioCapture {
             throw NSError(domain: "AudioCapture", code: 1, userInfo: [NSLocalizedDescriptionKey: "No display found"])
         }
 
-        sendStatus("configuring", message: "Setting up audio capture...")
+        sendStatus("configuring", message: "Setting up audio capture for display: \(display.displayID)")
 
-        // Create content filter - capture entire display but only audio
-        let filter = SCContentFilter(display: display, excludingWindows: [])
+        // Create content filter - capture entire display audio
+        // Use excludingApplications API (preferred for audio capture) instead of excludingWindows
+        // Empty array = capture audio from ALL applications (browsers, Zoom, Spotify, etc.)
+        let filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
 
         // Configure stream for audio only
         let streamConfig = SCStreamConfiguration()
@@ -313,6 +472,10 @@ class AudioCapture {
         }
 
         isRunning = true
+
+        // Start timer to periodically check for silence
+        startSilenceCheckTimer()
+
         sendReady()
         sendStatus("recording", message: "Desktop audio capture active")
     }
@@ -320,6 +483,9 @@ class AudioCapture {
     func stop() async {
         guard isRunning else { return }
         isRunning = false
+
+        // Stop the silence check timer
+        stopSilenceCheckTimer()
 
         delegate?.stopCapturing()
 

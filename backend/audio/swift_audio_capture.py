@@ -437,6 +437,40 @@ class SwiftAudioCapture:
                     elif msg_type == 'config':
                         print(f"Swift helper config: {msg}", file=sys.stderr)
 
+                    elif msg_type == 'audio_format':
+                        # Log audio format details for debugging
+                        rate = msg.get('sampleRate', 'unknown')
+                        channels = msg.get('channels', 'unknown')
+                        print(f"Swift helper: Audio format - {rate}Hz, {channels} channels", file=sys.stderr)
+
+                    elif msg_type == 'extraction_error':
+                        # Log audio extraction errors (indicates something wrong with audio pipeline)
+                        error = msg.get('error', 'unknown')
+                        count = msg.get('count', 0)
+                        print(f"Swift helper: Audio extraction error #{count}: {error}", file=sys.stderr)
+
+                    elif msg_type == 'silence_detected':
+                        # Normal during meetings - just log at debug level
+                        message = msg.get('message', 'Silence detected')
+                        print(f"Swift helper: {message}", file=sys.stderr)
+
+                    elif msg_type == 'audio_resumed':
+                        # Audio started after silence - useful for debugging late audio
+                        message = msg.get('message', 'Audio resumed')
+                        print(f"Swift helper: {message}", file=sys.stderr)
+
+                    elif msg_type == 'progress':
+                        # Periodic progress update - log at debug level
+                        samples = msg.get('samples', 0)
+                        bytes_written = msg.get('bytesWritten', 0)
+                        print(f"Swift helper: Progress - {samples} samples, {bytes_written / 1024:.1f} KB", file=sys.stderr)
+
+                    elif msg_type == 'capture_stats':
+                        # Final capture statistics
+                        total_samples = msg.get('totalSamples', 0)
+                        total_bytes = msg.get('totalBytes', 0)
+                        print(f"Swift helper: Final stats - {total_samples} samples, {total_bytes / 1024:.1f} KB", file=sys.stderr)
+
                 except json.JSONDecodeError:
                     # Not JSON, print as-is
                     print(f"Swift helper: {line}", file=sys.stderr)
