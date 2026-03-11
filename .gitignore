@@ -25,6 +25,10 @@ dist/
 # Build - ignore all except specific files
 build/resources/
 
+# Swift build artifacts
+swift/**/.build/
+swift/**/Package.resolved
+
 # IDEs
 .vscode/
 .idea/
