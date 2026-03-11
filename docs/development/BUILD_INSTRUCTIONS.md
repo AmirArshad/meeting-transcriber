@@ -15,10 +15,26 @@ This document explains how to build the Meeting Transcriber installer from sourc
 npm install
 ```
 
+Install Python dependencies for your platform:
+
+### Windows
+
+```bash
+py -3.11 -m pip install -r requirements-windows.txt -r requirements-dev.txt
+```
+
+### macOS
+
+```bash
+python3 -m pip install -r requirements-macos.txt -r requirements-dev.txt
+```
+
 This installs:
 
 - Electron
 - electron-builder (packaging tool)
+- Python runtime dependencies for local development
+- Python test dependencies
 
 ## Step 2: Prepare Build Resources
 
@@ -29,7 +45,7 @@ This step downloads and prepares:
 - ffmpeg binary (~100MB)
 
 ```bash
-npm run prebuild
+npm run prepare-build
 ```
 
 **Note:** This may take 5-15 minutes depending on your internet speed.
@@ -146,6 +162,7 @@ The NSIS installer provides:
 
 - Check internet connection
 - Try running `npm run prebuild` again
+- Try running `npm run prepare-build` again
 - May need to manually download and place in `build/resources/python/`
 
 ### Installer is too large (>1GB)
@@ -170,9 +187,19 @@ rmdir /s /q dist
 rmdir /s /q build\resources
 
 # Rebuild everything
-npm run prebuild
+npm run prepare-build
 npm run build
 ```
+
+## Test Before Building
+
+Before creating installers, run the regression suite:
+
+```bash
+npm run test:all
+```
+
+See [TESTING.md](TESTING.md) for the full test setup and platform-specific commands.
 
 ## Distribution
 

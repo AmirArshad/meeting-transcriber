@@ -146,7 +146,7 @@ If you change artifact naming in `package.json` or `.github/workflows/build-rele
 ## Important Repo Facts
 
 - There are no `AGENTS.md` or `CLAUDE.md` predecessors in this repo before this file.
-- CI is mostly syntax/build/doc validation, not deep product test coverage.
+- CI now includes a small regression suite for pure Python logic and main-process JS helper logic, but it is still not full end-to-end product coverage.
 - Root `README.md` is broadly useful, but some docs are stale.
 - `docs/development/BUILD_INSTRUCTIONS.md` currently references `npm run prebuild`, but the real script is `npm run prepare-build`.
 - `src/renderer/app.js` still has a TODO for saving transcripts through a file dialog.
@@ -163,10 +163,10 @@ Use platform-specific Python requirements for local development:
 
 ```bash
 # Windows
-py -3.11 -m pip install -r requirements-windows.txt
+py -3.11 -m pip install -r requirements-windows.txt -r requirements-dev.txt
 
 # macOS
-python3 -m pip install -r requirements-macos.txt
+python3 -m pip install -r requirements-macos.txt -r requirements-dev.txt
 ```
 
 ### Run
@@ -194,9 +194,25 @@ swift build -c release --arch arm64
 
 Run that inside `swift/AudioCaptureHelper`.
 
+### Test suite
+
+```bash
+npm test
+npm run test:python
+npm run test:all
+```
+
+- `npm test`: JS regression tests plus syntax checks
+- `npm run test:python`: Python unit tests under `tests/python`
+- `npm run test:all`: runs both JS and Python suites
+- Manual recorder validation checklist lives in `tests/manual/recording-smoke-checklist.md`
+- Setup instructions for new machines live in `docs/development/TESTING.md`
+
 ### CI-style validation
 
 ```bash
+npm test
+python3 -m pytest tests/python
 python -m py_compile backend/*.py backend/audio/*.py backend/transcription/*.py
 python backend/device_manager.py
 ```
@@ -216,6 +232,8 @@ swift build -c release --arch arm64
 - audio level updates still reach the renderer
 - stop flow still returns a valid output path
 - meeting history still saves usable audio/transcript files
+- relevant automated tests still pass
+- manual smoke checklist still passes on the affected platform
 
 ### Transcription changes
 
@@ -223,18 +241,21 @@ swift build -c release --arch arm64
 - transcript JSON shape still matches renderer expectations
 - markdown transcript output still saves correctly
 - CPU/GPU fallback behavior still makes sense for the platform
+- relevant automated tests still pass
 
 ### Meeting history changes
 
 - duplicate IDs are still prevented
 - scan/import still avoids re-adding persisted files
 - delete still handles Windows file locking gracefully
+- meeting manager tests still pass
 
 ### Build/release changes
 
 - `npm run prepare-build` still stages Python/ffmpeg correctly
 - macOS helper still lands in bundled resources
 - updater can still detect release assets by filename
+- CI still runs the regression suite successfully
 
 ## Common Change Patterns
 

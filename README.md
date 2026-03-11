@@ -76,17 +76,34 @@ No existing solution offered all of this in one package, so I built it.
 git clone https://github.com/AmirArshad/meeting-transcriber.git
 cd meeting-transcriber
 
-# Install Python dependencies
-pip install -r requirements.txt
-
 # Install Node.js dependencies
 npm install
+
+# Install Python dependencies
+# Windows: py -3.11 -m pip install -r requirements-windows.txt -r requirements-dev.txt
+# macOS:   python3 -m pip install -r requirements-macos.txt -r requirements-dev.txt
 
 # Run the app
 npm start
 ```
 
 See [docs/development/BUILD_INSTRUCTIONS.md](docs/development/BUILD_INSTRUCTIONS.md) for detailed setup.
+See [docs/development/TESTING.md](docs/development/TESTING.md) for test setup on a new machine.
+
+### Running Tests
+
+```bash
+# JavaScript regression tests + syntax checks
+npm test
+
+# Python regression tests
+python3 -m pytest tests/python
+
+# Or run both
+npm run test:all
+```
+
+On Windows, prefer `py -3.11` instead of `python3` for Python commands.
 
 ## 📸 How It Works
 
@@ -211,6 +228,7 @@ Whisper itself supports **99 languages total** - the full list can be customized
 - **Development:**
 
   - [Build Instructions](docs/development/BUILD_INSTRUCTIONS.md) - Create installer
+  - [Testing Guide](docs/development/TESTING.md) - Set up and run the regression suite
   - [GPU Setup](docs/development/SETUP_GPU.md) - Enable CUDA acceleration
   - [Implementation Details](docs/development/INSTALLER_IMPLEMENTATION.md) - Technical overview
 

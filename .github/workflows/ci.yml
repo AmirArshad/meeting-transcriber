@@ -24,11 +24,13 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements-windows.txt
-        pip install pytest pytest-cov
+        pip install -r requirements-dev.txt
 
     - name: Run Python tests
       shell: pwsh
       run: |
+        python -m pytest tests/python
+
         # Test device manager
         python backend/device_manager.py > $null 2>&1
         if ($LASTEXITCODE -ne 0) { Write-Host "Device manager check complete (expected)" }
@@ -61,7 +63,10 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements-macos.txt
-        pip install pytest pytest-cov
+        pip install -r requirements-dev.txt
+
+    - name: Run Python unit tests
+      run: python -m pytest tests/python
 
     - name: Validate Python syntax (all backend files)
       run: |
@@ -153,8 +158,8 @@ jobs:
     - name: Install dependencies
       run: npm install
 
-    - name: Validate package.json
-      run: npm run --silent
+    - name: Run frontend test suite
+      run: npm test
 
     - name: Check for security vulnerabilities
       run: npm audit --audit-level=high

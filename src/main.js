@@ -12,6 +12,12 @@ const path = require('path');
 const { spawn, execFile } = require('child_process');
 const fs = require('fs');
 const os = require('os');
+const {
+  buildModelDownloadCheck,
+  cacheContainsModel,
+  classifyRecorderStdoutChunk,
+  isModelDownloadErrorOutput,
+} = require('./main-process-helpers');
 const { checkForUpdates, openDownloadPage } = require('./updater');
 
 // Use Electron's default userData path, which handles packaging correctly
@@ -1140,41 +1146,17 @@ ipcMain.handle('warm-up-audio-system', async () => {
  */
 ipcMain.handle('check-model-downloaded', async (event, modelSize) => {
   return new Promise((resolve) => {
-    // Check if model exists in cache
-    // faster-whisper downloads to ~/.cache/huggingface/hub
-    const homeDir = require('os').homedir();
-    const cacheDir = path.join(homeDir, '.cache', 'huggingface', 'hub');
-
-    // Determine correct model pattern based on architecture
-    let modelPatterns = [];
-    const isMacArm = process.platform === 'darwin' && process.arch === 'arm64';
-    const size = modelSize || 'small';
-
-    if (isMacArm) {
-      // Lightning-Whisper-MLX downloads models from multiple repos:
-      // - distil models: distil-whisper/distil-{size}
-      // - standard models: mlx-community/whisper-{size}-mlx
-      // Check for both patterns in HuggingFace cache
-      modelPatterns = [
-        `models--mlx-community--whisper-${size}-mlx`,
-        `models--mlx-community--whisper-${size}`,
-        `models--distil-whisper--distil-${size}`,
-        // Also check for the model name without organization prefix
-        `whisper-${size}-mlx`,
-        `distil-${size}`
-      ];
-    } else {
-      // Faster-whisper models: models--guillaumekln--faster-whisper-{size}
-      modelPatterns = [`models--guillaumekln--faster-whisper-${size}`];
-    }
+    const { cacheDir, modelPatterns, modelSize: size } = buildModelDownloadCheck({
+      platform: process.platform,
+      arch: process.arch,
+      homeDir: os.homedir(),
+      modelSize,
+    });
 
     try {
       if (fs.existsSync(cacheDir)) {
         const items = fs.readdirSync(cacheDir);
-        // Check if any of the model patterns exist
-        const modelExists = modelPatterns.some(pattern =>
-          items.some(item => item.includes(pattern))
-        );
+        const modelExists = cacheContainsModel(items, modelPatterns);
         resolve({ downloaded: modelExists, modelSize: size });
       } else {
         resolve({ downloaded: false, modelSize: size });
@@ -1216,7 +1198,7 @@ ipcMain.handle('download-model', async (event, modelSize) => {
       mainWindow.webContents.send('model-download-progress', output);
 
       // Check for errors
-      if (output.toLowerCase().includes('error') && !output.includes('non-critical')) {
+      if (isModelDownloadErrorOutput(output)) {
         hasError = true;
       }
     });
@@ -1313,9 +1295,9 @@ ipcMain.handle('start-recording', async (event, options) => {
 
     pythonProcess.stdout.on('data', (data) => {
       const output = data.toString();
+      const stdoutChunk = classifyRecorderStdoutChunk(output);
 
-      // Check if this is a JSON level update
-      if (output.trim().startsWith('{"type": "levels"')) {
+      if (stdoutChunk.type === 'levels') {
         // FIX 3: Update heartbeat timestamp when we receive audio levels
         lastLevelUpdate = Date.now();
 
@@ -1324,25 +1306,15 @@ ipcMain.handle('start-recording', async (event, options) => {
         const shouldSendUpdate = (now - lastLevelSentTime) >= LEVEL_UPDATE_THROTTLE_MS;
 
         if (shouldSendUpdate && mainWindow && !mainWindow.isMinimized() && mainWindow.isVisible()) {
-          try {
-            // There might be multiple JSON objects in one chunk, or mixed with newlines
-            const lines = output.trim().split('\n');
-            for (const line of lines) {
-              if (line.startsWith('{"type": "levels"')) {
-                const levels = JSON.parse(line);
-                mainWindow.webContents.send('audio-levels', levels);
-                lastLevelSentTime = now;
-                break; // Only send first valid level to reduce overhead
-              }
-            }
-          } catch (e) {
-            // Ignore parse errors for levels
+          if (stdoutChunk.levels) {
+            mainWindow.webContents.send('audio-levels', stdoutChunk.levels);
+            lastLevelSentTime = now;
           }
         }
         // Note: We still update heartbeat even if we don't send to UI
       } else {
         // Send progress updates to renderer
-        mainWindow.webContents.send('recording-progress', output);
+        mainWindow.webContents.send('recording-progress', stdoutChunk.output);
       }
     });
 

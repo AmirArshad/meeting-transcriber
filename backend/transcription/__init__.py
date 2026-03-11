@@ -1,8 +1,20 @@
-"""
-Transcription module with platform-specific implementations.
-"""
+"""Transcription module with platform-specific implementations."""
 
 import platform
+
+
+def _get_transcriber_class():
+    """Resolve the platform-specific transcriber class lazily."""
+    system = platform.system()
+
+    if system == 'Darwin':
+        from .mlx_whisper_transcriber import MLXWhisperTranscriber
+
+        return MLXWhisperTranscriber
+
+    from .faster_whisper_transcriber import TranscriberService
+
+    return TranscriberService
 
 
 def get_transcriber(*args, **kwargs):
@@ -12,19 +24,22 @@ def get_transcriber(*args, **kwargs):
     Returns:
         BaseTranscriber: Platform-specific transcriber instance
     """
-    system = platform.system()
+    return _get_transcriber_class()(*args, **kwargs)
 
-    if system == 'Darwin':
-        # macOS: Use MLX-based transcription for Apple Silicon GPU acceleration
-        from .mlx_whisper_transcriber import MLXWhisperTranscriber
-        return MLXWhisperTranscriber(*args, **kwargs)
-    else:
-        # Windows and others: Use faster-whisper
+
+def __getattr__(name):
+    """Provide lazy access to legacy transcriber exports."""
+    if name == 'TranscriberService':
         from .faster_whisper_transcriber import TranscriberService
-        return TranscriberService(*args, **kwargs)
 
+        return TranscriberService
 
-# For backwards compatibility, import TranscriberService class
-from .faster_whisper_transcriber import TranscriberService
+    if name == 'MLXWhisperTranscriber':
+        from .mlx_whisper_transcriber import MLXWhisperTranscriber
+
+        return MLXWhisperTranscriber
+
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = ['get_transcriber', 'TranscriberService', 'MLXWhisperTranscriber']

@@ -1,8 +1,26 @@
-"""
-Audio recording module with platform-specific implementations.
-"""
+"""Audio recording module with platform-specific implementations."""
 
 import platform
+
+
+def _get_audio_recorder_class():
+    """Resolve the platform-specific recorder class lazily."""
+    system = platform.system()
+
+    if system == 'Windows':
+        from .windows_recorder import AudioRecorder
+
+        return AudioRecorder
+
+    if system == 'Darwin':
+        from .macos_recorder import MacOSAudioRecorder
+
+        return MacOSAudioRecorder
+
+    raise NotImplementedError(
+        f"Audio recording not supported on {system}. "
+        "Supported platforms: Windows, macOS"
+    )
 
 
 def get_audio_recorder(*args, **kwargs):
@@ -12,27 +30,14 @@ def get_audio_recorder(*args, **kwargs):
     Returns:
         BaseAudioRecorder: Platform-specific audio recorder instance
     """
-    system = platform.system()
-
-    if system == 'Windows':
-        from .windows_recorder import AudioRecorder
-        return AudioRecorder(*args, **kwargs)
-    elif system == 'Darwin':
-        from .macos_recorder import MacOSAudioRecorder
-        return MacOSAudioRecorder(*args, **kwargs)
-    else:
-        raise NotImplementedError(
-            f"Audio recording not supported on {system}. "
-            "Supported platforms: Windows, macOS"
-        )
+    return _get_audio_recorder_class()(*args, **kwargs)
 
 
-# For backwards compatibility, import AudioRecorder class
-if platform.system() == 'Windows':
-    from .windows_recorder import AudioRecorder
-elif platform.system() == 'Darwin':
-    from .macos_recorder import MacOSAudioRecorder as AudioRecorder
-else:
-    AudioRecorder = None
+def __getattr__(name):
+    """Provide lazy access to the legacy AudioRecorder export."""
+    if name == 'AudioRecorder':
+        return _get_audio_recorder_class()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = ['get_audio_recorder', 'AudioRecorder']

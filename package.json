@@ -6,6 +6,11 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
+    "test": "npm run test:syntax && npm run test:js",
+    "test:js": "node --test tests/js/main-process-helpers.test.js",
+    "test:python": "python3 -m pytest tests/python",
+    "test:all": "npm test && npm run test:python",
+    "test:syntax": "node --check src/main.js && node --check src/preload.js && node --check src/renderer/app.js",
     "clean": "node -e \"const fs = require('fs'); if(fs.existsSync('dist')) { fs.rmSync('dist', {recursive:true,force:true}); console.log('Cleaned dist/'); }\"",
     "prepare-build": "npm run clean && node build/prepare-resources.js",
     "build": "npm run prepare-build && electron-builder build --win --publish never",
