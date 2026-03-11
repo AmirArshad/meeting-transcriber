@@ -61,7 +61,6 @@ nul
 
 # Claude Code
 .claude/
-claude.md
 
 # Agent
 .agent/
