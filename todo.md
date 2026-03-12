@@ -72,6 +72,8 @@ Status: active. Batches 0-4 are complete. Follow-on Batches 5-12 cover the remai
 - Completed Batch 7 Task 1 lazy-load transcript storage instead of inlining full transcript bodies in meetings.json.
 - Completed Batch 7 Task 2 renderer/detail-view updates for on-demand transcript loading.
 - Completed Batch 8 Task 1 reduce long-recording RAM usage without changing the post-processing mix architecture.
+- Completed Batch 8 Task 2 reduce Windows callback contention and separate per-stream health tracking.
+- Completed Batch 8 Task 3 preserve timeline reconstruction wins while optimizing memory/perf hotspots.
 - Latest automated validation status at time of update:
   - `npm test` passing
   - `npm run test:all` passing
@@ -542,9 +544,9 @@ Files:
 
 ### 28. Reduce Windows callback contention
 
-- [ ] Move expensive level calculations out of shared callback locks.
-- [ ] Consider per-stream queues/locks for mic vs loopback.
-- [ ] Track mic and desktop callback health separately so one stream does not mask failure of the other.
+- [x] Move expensive level calculations out of shared callback locks.
+- [x] Consider per-stream queues/locks for mic vs loopback.
+- [x] Track mic and desktop callback health separately so one stream does not mask failure of the other.
 
 Files:
 
@@ -552,8 +554,8 @@ Files:
 
 ### 29. Keep current timeline reconstruction strengths while optimizing
 
-- [ ] Preserve the incremental/chunked silence reconstruction approach in `timeline.py`.
-- [ ] Ensure any refactor does not regress the memory win already present there.
+- [x] Preserve the incremental/chunked silence reconstruction approach in `timeline.py`.
+- [x] Ensure any refactor does not regress the memory win already present there.
 
 Files:
 
@@ -750,8 +752,8 @@ Files:
 ### Batch 8 - performance and memory hardening
 
 - [x] reduce long-recording RAM usage without changing the post-processing mix architecture
-- [ ] reduce Windows callback contention and separate per-stream health tracking
-- [ ] preserve timeline reconstruction wins while optimizing memory/perf hotspots
+- [x] reduce Windows callback contention and separate per-stream health tracking
+- [x] preserve timeline reconstruction wins while optimizing memory/perf hotspots
 
 ### Batch 9 - build resource and packaging hardening
 

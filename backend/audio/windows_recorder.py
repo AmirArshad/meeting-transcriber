@@ -92,6 +92,7 @@ from .processor import (
 )
 from .compressor import compress_to_opus
 from .timeline import reconstruct_desktop_timeline
+from .windows_callback_health import evaluate_callback_stalls
 
 # Store final output path for meeting manager (legacy interface)
 _final_output_path = None
@@ -217,6 +218,7 @@ class AudioRecorder:
 
         self.mic_frame_count = 0
         self.desktop_frame_count = 0
+        self.mic_total_bytes = 0
 
         # Time-based synchronization - SINGLE reference point set at recording start
         # Both streams use the same reference to ensure they stay in sync
@@ -231,10 +233,12 @@ class AudioRecorder:
         self.desktop_stream = None
 
         # Callback watchdog to detect audio stream stalls
-        self.last_callback_time = 0
+        self.last_mic_callback_time = None
+        self.last_desktop_callback_time = None
         self.callback_watchdog = None
         self.watchdog_running = False
-        self.watchdog_warning_shown = False
+        self.mic_watchdog_warning_shown = False
+        self.desktop_watchdog_warning_shown = False
 
         # Platform detection (already imported at module level)
         self.is_windows = platform.system() == 'Windows'
@@ -324,86 +328,85 @@ class AudioRecorder:
 
     def _mic_callback(self, in_data, frame_count, time_info, status):
         """Callback for microphone."""
-        # FIX 6: Update watchdog timestamp
-        self.last_callback_time = time.time()
+        current_time = time.time()
+        self.last_mic_callback_time = current_time
 
         if status:
             print(f"Mic status: {status}", file=sys.stderr)
 
         if self.is_recording:
-            with self.lock:
-                self.mic_frame_count += 1
-                current_time = time.time()
+            self.mic_frame_count += 1
 
-                # DEBUG: Track first callback time
-                if self.mic_first_callback_time is None:
-                    self.mic_first_callback_time = current_time
-                    print(f"DEBUG MIC: First callback at {current_time - self.recording_start_time:.4f}s after recording start", file=sys.stderr)
+            # DEBUG: Track first callback time
+            if self.mic_first_callback_time is None:
+                self.mic_first_callback_time = current_time
+                print(f"DEBUG MIC: First callback at {current_time - self.recording_start_time:.4f}s after recording start", file=sys.stderr)
 
-                # TIME-BASED SYNCHRONIZATION: Use shared reference set at recording start
-                # Both streams use the same recording_start_time (set in start_recording)
-                # This ensures they skip the same wall-clock period and stay in sync
-                elapsed = current_time - self.recording_start_time
+            # TIME-BASED SYNCHRONIZATION: Use shared reference set at recording start
+            # Both streams use the same recording_start_time (set in start_recording)
+            # This ensures they skip the same wall-clock period and stay in sync
+            elapsed = current_time - self.recording_start_time
 
-                # Skip pre-roll based on TIME, not frame counts
-                if elapsed >= self.preroll_seconds:
-                    # DEBUG: Track first capture time
-                    if self.mic_first_capture_time is None:
-                        self.mic_first_capture_time = current_time
-                        print(f"DEBUG MIC: First CAPTURE at {elapsed:.4f}s elapsed (preroll={self.preroll_seconds}s)", file=sys.stderr)
+            # Calculate level for visualization (subsampled for performance)
+            try:
+                data = np.frombuffer(in_data, dtype=np.int16)
+                peak = np.abs(data[::LEVEL_SUBSAMPLE_FACTOR]).max() if len(data) > 0 else 0
+                self.mic_level = float(peak) / 32768.0
+            except Exception:
+                self.mic_level = 0.0
+
+            if elapsed >= self.preroll_seconds:
+                # DEBUG: Track first capture time
+                if self.mic_first_capture_time is None:
+                    self.mic_first_capture_time = current_time
+                    print(f"DEBUG MIC: First CAPTURE at {elapsed:.4f}s elapsed (preroll={self.preroll_seconds}s)", file=sys.stderr)
+
+                with self.lock:
                     self.mic_frames.append(in_data)
-
-                # Calculate level for visualization (subsampled for performance)
-                try:
-                    data = np.frombuffer(in_data, dtype=np.int16)
-                    peak = np.abs(data[::LEVEL_SUBSAMPLE_FACTOR]).max() if len(data) > 0 else 0
-                    self.mic_level = float(peak) / 32768.0
-                except Exception:
-                    self.mic_level = 0.0
+                    self.mic_total_bytes += len(in_data)
 
         return (in_data, pyaudio.paContinue)
 
     def _desktop_callback(self, in_data, frame_count, time_info, status):
         """Callback for desktop audio."""
-        # Update watchdog timestamp
-        self.last_callback_time = time.time()
+        current_time = time.time()
+        self.last_desktop_callback_time = current_time
 
         if status:
             print(f"Desktop status: {status}", file=sys.stderr)
 
         if self.is_recording:
-            with self.lock:
-                self.desktop_frame_count += 1
-                current_time = time.time()
+            self.desktop_frame_count += 1
 
-                # DEBUG: Track first callback time
-                if self.desktop_first_callback_time is None:
-                    self.desktop_first_callback_time = current_time
-                    print(f"DEBUG DESKTOP: First callback at {current_time - self.recording_start_time:.4f}s after recording start", file=sys.stderr)
+            # DEBUG: Track first callback time
+            if self.desktop_first_callback_time is None:
+                self.desktop_first_callback_time = current_time
+                print(f"DEBUG DESKTOP: First callback at {current_time - self.recording_start_time:.4f}s after recording start", file=sys.stderr)
 
-                # TIME-BASED SYNCHRONIZATION: Use shared reference set at recording start
-                # Both streams use the same recording_start_time (set in start_recording)
-                # This ensures they skip the same wall-clock period and stay in sync
-                elapsed = current_time - self.recording_start_time
+            # TIME-BASED SYNCHRONIZATION: Use shared reference set at recording start
+            # Both streams use the same recording_start_time (set in start_recording)
+            # This ensures they skip the same wall-clock period and stay in sync
+            elapsed = current_time - self.recording_start_time
 
-                # Skip pre-roll based on TIME, not frame counts
-                if elapsed >= self.preroll_seconds:
-                    # DEBUG: Track first capture time
-                    if self.desktop_first_capture_time is None:
-                        self.desktop_first_capture_time = current_time
-                        print(f"DEBUG DESKTOP: First CAPTURE at {elapsed:.4f}s elapsed (preroll={self.preroll_seconds}s)", file=sys.stderr)
+            # Calculate level for visualization (subsampled for performance)
+            try:
+                data = np.frombuffer(in_data, dtype=np.int16)
+                peak = np.abs(data[::LEVEL_SUBSAMPLE_FACTOR]).max() if len(data) > 0 else 0
+                self.desktop_level = float(peak) / 32768.0
+            except Exception:
+                self.desktop_level = 0.0
+
+            if elapsed >= self.preroll_seconds:
+                # DEBUG: Track first capture time
+                if self.desktop_first_capture_time is None:
+                    self.desktop_first_capture_time = current_time
+                    print(f"DEBUG DESKTOP: First CAPTURE at {elapsed:.4f}s elapsed (preroll={self.preroll_seconds}s)", file=sys.stderr)
+
+                with self.lock:
                     # Store timestamp with audio data to preserve gaps
                     # WASAPI loopback only sends callbacks when audio is playing
                     # We need timestamps to reconstruct timeline with proper silence
                     self.desktop_frames.append((current_time, in_data))
-
-                # Calculate level for visualization (subsampled for performance)
-                try:
-                    data = np.frombuffer(in_data, dtype=np.int16)
-                    peak = np.abs(data[::LEVEL_SUBSAMPLE_FACTOR]).max() if len(data) > 0 else 0
-                    self.desktop_level = float(peak) / 32768.0
-                except Exception:
-                    self.desktop_level = 0.0
 
         return (in_data, pyaudio.paContinue)
 
@@ -417,8 +420,12 @@ class AudioRecorder:
         self.desktop_frames = []
         self.mic_frame_count = 0
         self.desktop_frame_count = 0
+        self.mic_total_bytes = 0
         self.is_recording = True
-        self.watchdog_warning_shown = False  # Reset warning flag
+        self.mic_watchdog_warning_shown = False
+        self.desktop_watchdog_warning_shown = False
+        self.last_mic_callback_time = None
+        self.last_desktop_callback_time = None
 
         # Increase chunk size on Windows for better resilience to backgrounding
         # Larger buffers = more tolerance for process scheduling delays
@@ -516,33 +523,58 @@ class AudioRecorder:
         def watchdog():
             """Monitor audio callback health and warn if stalled."""
             self.watchdog_running = True
-            self.last_callback_time = time.time()
 
             while self.is_recording and self.watchdog_running:
                 time.sleep(WATCHDOG_CHECK_INTERVAL)
 
                 if self.is_recording:
-                    elapsed = time.time() - self.last_callback_time
+                    stall_state = evaluate_callback_stalls(
+                        now=time.time(),
+                        threshold_seconds=WATCHDOG_STALL_THRESHOLD,
+                        mixing_mode=self.mixing_mode,
+                        last_mic_callback_time=self.last_mic_callback_time,
+                        last_desktop_callback_time=self.last_desktop_callback_time,
+                        mic_warning_shown=self.mic_watchdog_warning_shown,
+                        desktop_warning_shown=self.desktop_watchdog_warning_shown,
+                    )
 
-                    # Warn if no callback for too long (only once to avoid spam)
-                    if elapsed > WATCHDOG_STALL_THRESHOLD and not self.watchdog_warning_shown:
+                    if stall_state['warn_mic']:
+                        elapsed = stall_state['mic_elapsed']
                         print(f"", file=sys.stderr)
                         print(f"=" * 70, file=sys.stderr)
-                        print(f"ERROR: Audio callback stalled!", file=sys.stderr)
-                        print(f"  No audio callback received for {elapsed:.1f} seconds", file=sys.stderr)
+                        print(f"ERROR: Microphone callback stalled!", file=sys.stderr)
+                        print(f"  No microphone callback received for {elapsed:.1f} seconds", file=sys.stderr)
                         print(f"  This may indicate the process was suspended by Windows", file=sys.stderr)
                         print(f"  when the app was sent to the background.", file=sys.stderr)
                         print(f"", file=sys.stderr)
-                        print(f"  Recording may have failed. Audio data might be incomplete.", file=sys.stderr)
+                        print(f"  Microphone audio may be incomplete.", file=sys.stderr)
                         print(f"=" * 70, file=sys.stderr)
                         print(f"", file=sys.stderr)
                         _send_warning_message(
-                            "AUDIO_CALLBACK_STALLED",
-                            f"No audio callback received for {elapsed:.1f} seconds. Recording may be incomplete.",
-                            help="Keep the app in the foreground and confirm the selected audio devices are still active.",
+                            "MIC_CALLBACK_STALLED",
+                            f"No microphone callback received for {elapsed:.1f} seconds. Microphone audio may be incomplete.",
+                            help="Keep the app in the foreground and confirm the selected microphone is still active.",
                         )
-                        self.watchdog_warning_shown = True  # Only warn once
-                        # Don't stop recording - let user decide
+                        self.mic_watchdog_warning_shown = True
+
+                    if stall_state['warn_desktop']:
+                        elapsed = stall_state['desktop_elapsed']
+                        print(f"", file=sys.stderr)
+                        print(f"=" * 70, file=sys.stderr)
+                        print(f"ERROR: Desktop audio callback stalled!", file=sys.stderr)
+                        print(f"  No desktop callback received for {elapsed:.1f} seconds", file=sys.stderr)
+                        print(f"  This may indicate the process was suspended by Windows", file=sys.stderr)
+                        print(f"  when the app was sent to the background.", file=sys.stderr)
+                        print(f"", file=sys.stderr)
+                        print(f"  Desktop audio may be incomplete.", file=sys.stderr)
+                        print(f"=" * 70, file=sys.stderr)
+                        print(f"", file=sys.stderr)
+                        _send_warning_message(
+                            "DESKTOP_CALLBACK_STALLED",
+                            f"No desktop callback received for {elapsed:.1f} seconds. Desktop audio may be incomplete.",
+                            help="Keep the app in the foreground and confirm system audio is still playing to the selected desktop device.",
+                        )
+                        self.desktop_watchdog_warning_shown = True
 
         self.callback_watchdog = threading.Thread(target=watchdog, daemon=True)
         self.callback_watchdog.start()
@@ -654,7 +686,8 @@ class AudioRecorder:
             mic_sample_rate=self.mic_sample_rate,
             mic_channels=self.mic_channels,
             loopback_sample_rate=self.loopback_sample_rate,
-            loopback_channels=self.loopback_channels
+            loopback_channels=self.loopback_channels,
+            mic_total_bytes=self.mic_total_bytes,
         )
 
     def _mix_and_save(self):

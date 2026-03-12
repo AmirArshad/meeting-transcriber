@@ -19,7 +19,8 @@ def reconstruct_desktop_timeline(
     mic_sample_rate: int,
     mic_channels: int,
     loopback_sample_rate: int,
-    loopback_channels: int
+    loopback_channels: int,
+    mic_total_bytes: int | None = None,
 ) -> np.ndarray:
     """
     Reconstruct desktop audio timeline from timestamped frames.
@@ -42,6 +43,8 @@ def reconstruct_desktop_timeline(
         mic_channels: Number of microphone channels
         loopback_sample_rate: Desktop audio sample rate in Hz
         loopback_channels: Number of desktop audio channels
+        mic_total_bytes: Optional precomputed microphone byte count to avoid
+            rescanning the full mic frame list during long recordings
 
     Returns:
         numpy array of int16 audio samples with gaps filled with silence
@@ -58,7 +61,9 @@ def reconstruct_desktop_timeline(
 
     # Calculate actual mic duration from real byte count, not assumed chunk size
     # PyAudio callbacks can deliver varying frame counts under CPU pressure
-    mic_total_bytes = sum(len(frame) for frame in mic_frames)
+    if mic_total_bytes is None:
+        mic_total_bytes = sum(len(frame) for frame in mic_frames)
+
     mic_total_samples = mic_total_bytes // 2  # int16 = 2 bytes per sample
     mic_duration_seconds = mic_total_samples / mic_sample_rate / mic_channels
 
