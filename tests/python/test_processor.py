@@ -18,6 +18,46 @@ def test_resample_returns_original_array_when_sample_rates_match():
     assert result is audio
 
 
+def test_resample_rejects_invalid_channel_layout():
+    audio = np.array([1, 2, 3], dtype=np.int16)
+
+    try:
+        resample(audio, 48000, 16000, num_channels=2)
+    except ValueError as exc:
+        assert 'not divisible' in str(exc)
+    else:
+        raise AssertionError('Expected ValueError for invalid interleaved channel layout')
+
+
+def test_resample_preserves_channel_separation_for_interleaved_stereo():
+    audio = np.array(
+        [
+            32767, 0,
+            32767, 0,
+            32767, 0,
+            32767, 0,
+        ],
+        dtype=np.int16,
+    )
+
+    result = resample(audio, 48000, 24000, num_channels=2)
+    stereo = result.reshape(-1, 2)
+
+    assert stereo.shape[1] == 2
+    assert np.max(np.abs(stereo[:, 1])) <= 1
+    assert np.min(stereo[:, 0]) > 1000
+
+
+def test_resample_clips_to_int16_range_after_processing():
+    audio = np.array([32767, -32768, 32767, -32768], dtype=np.int16)
+
+    result = resample(audio, 48000, 44100)
+
+    assert result.dtype == np.int16
+    assert np.max(result.astype(np.int32)) <= 32767
+    assert np.min(result.astype(np.int32)) >= -32767
+
+
 def test_mono_to_stereo_duplicates_each_sample():
     audio = np.array([100, -200, 300], dtype=np.int16)
 

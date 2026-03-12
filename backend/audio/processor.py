@@ -17,7 +17,12 @@ from .constants import (
 )
 
 
-def resample(audio_data: np.ndarray, original_rate: int, target_rate: int) -> np.ndarray:
+def resample(
+    audio_data: np.ndarray,
+    original_rate: int,
+    target_rate: int,
+    num_channels: int = 1,
+) -> np.ndarray:
     """
     Resample audio using soxr (high-quality, fast resampling).
 
@@ -25,6 +30,7 @@ def resample(audio_data: np.ndarray, original_rate: int, target_rate: int) -> np
         audio_data: Input audio as int16 numpy array
         original_rate: Original sample rate in Hz
         target_rate: Target sample rate in Hz
+        num_channels: Number of interleaved channels in the audio data
 
     Returns:
         Resampled audio as int16 numpy array
@@ -32,18 +38,38 @@ def resample(audio_data: np.ndarray, original_rate: int, target_rate: int) -> np
     if original_rate == target_rate:
         return audio_data
 
+    if len(audio_data) == 0:
+        return audio_data
+
+    if num_channels < 1:
+        raise ValueError("num_channels must be at least 1")
+
+    if len(audio_data) % num_channels != 0:
+        raise ValueError(
+            f"Audio length {len(audio_data)} is not divisible by num_channels={num_channels}"
+        )
+
     # Convert int16 to float32 for soxr processing
     audio_float = audio_data.astype(np.float32) / 32768.0
 
+    if num_channels == 1:
+        audio_frames = audio_float
+    else:
+        audio_frames = audio_float.reshape(-1, num_channels)
+
     # Resample with soxr (VHQ quality setting - best for voice)
     resampled = soxr.resample(
-        audio_float,
+        audio_frames,
         original_rate,
         target_rate,
         quality='VHQ'
     )
 
+    if num_channels > 1:
+        resampled = resampled.reshape(-1)
+
     # Convert back to int16
+    resampled = np.clip(resampled, -1.0, 1.0)
     return (resampled * 32767.0).astype(np.int16)
 
 

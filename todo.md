@@ -25,6 +25,7 @@ Status: active. Phase 00 is complete. Batch 1 is in progress.
 - Implemented macOS stream alignment using observed first-audio timestamps so startup lag becomes leading silence instead of dropped beginning audio.
 - Tightened macOS stop/drain handling so the helper reader stays alive through process exit and preserves more tail audio during shutdown.
 - Improved preroll/start-offset consistency by aligning both streams against the same post-preroll reference point.
+- Started Batch 2 and fixed channel-safe resampling so interleaved multi-channel audio is resampled per channel instead of as one flat stream.
 - Latest automated validation status at time of update:
   - `npm run test:all` passing
   - `swift build -c release --arch arm64` passing
@@ -282,10 +283,10 @@ Files:
 
 ### 10. Fix resampling for multichannel/interleaved audio
 
-- [ ] Update `backend/audio/processor.py::resample()` to reshape by channel and resample along the frame axis.
-- [ ] Preserve channel separation for stereo/multichannel audio.
-- [ ] Clip float output before casting back to `int16`.
-- [ ] Review all call sites to ensure channel count assumptions remain correct.
+- [x] Update `backend/audio/processor.py::resample()` to reshape by channel and resample along the frame axis.
+- [x] Preserve channel separation for stereo/multichannel audio.
+- [x] Clip float output before casting back to `int16`.
+- [x] Review all call sites to ensure channel count assumptions remain correct.
 
 Files:
 
@@ -658,7 +659,7 @@ Files:
 
 ### Batch 2 - integrity-critical backend fixes
 
-- [ ] channel-safe resampling
+- [x] channel-safe resampling
 - [ ] safe Opus fallback
 - [ ] atomic + locked meeting metadata writes
 - [ ] transactional meeting persistence

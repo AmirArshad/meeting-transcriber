@@ -643,7 +643,12 @@ class AudioRecorder:
             # Resample both to target rate (using processor module)
             if self.mic_sample_rate != self.target_sample_rate:
                 print(f"  Resampling mic: {self.mic_sample_rate} Hz → {self.target_sample_rate} Hz", file=sys.stderr)
-                mic_audio = resample(mic_audio, self.mic_sample_rate, self.target_sample_rate)
+                mic_audio = resample(
+                    mic_audio,
+                    self.mic_sample_rate,
+                    self.target_sample_rate,
+                    num_channels=self.mic_channels,
+                )
 
             # CHANNEL FIX: Handle multi-channel mic (some USB mics have 4+ channels)
             if self.mic_channels > 2:
@@ -658,7 +663,12 @@ class AudioRecorder:
 
             if self.loopback_sample_rate != self.target_sample_rate:
                 print(f"  Resampling desktop: {self.loopback_sample_rate} Hz → {self.target_sample_rate} Hz", file=sys.stderr)
-                desktop_audio = resample(desktop_audio, self.loopback_sample_rate, self.target_sample_rate)
+                desktop_audio = resample(
+                    desktop_audio,
+                    self.loopback_sample_rate,
+                    self.target_sample_rate,
+                    num_channels=self.loopback_channels,
+                )
 
             # CHANNEL FIX: Downmix multi-channel audio to stereo (using processor module)
             if self.loopback_channels > 2:
@@ -699,7 +709,12 @@ class AudioRecorder:
             # Mic-only
             if self.mic_sample_rate != self.target_sample_rate:
                 print(f"  Resampling mic: {self.mic_sample_rate} Hz → {self.target_sample_rate} Hz", file=sys.stderr)
-                mic_audio = resample(mic_audio, self.mic_sample_rate, self.target_sample_rate)
+                mic_audio = resample(
+                    mic_audio,
+                    self.mic_sample_rate,
+                    self.target_sample_rate,
+                    num_channels=self.mic_channels,
+                )
 
             # CHANNEL FIX: Handle multi-channel mic (some USB mics have 4+ channels)
             if self.mic_channels > 2:
