@@ -113,6 +113,8 @@ class SwiftAudioCapture:
         # Error signaling
         self.error_event = threading.Event()
         self.last_error = None
+        self.first_audio_time: Optional[float] = None
+        self.last_audio_time: Optional[float] = None
 
     @property
     def is_recording(self) -> bool:
@@ -173,6 +175,8 @@ class SwiftAudioCapture:
             self.error_event.clear()
             self._ready_event.clear()
             self.last_error = None
+            self.first_audio_time = None
+            self.last_audio_time = None
 
             # Start the Swift helper process
             self.process = subprocess.Popen(
@@ -320,14 +324,21 @@ class SwiftAudioCapture:
         no_audio_warning_sent = False
 
         try:
-            while self._recording_event.is_set() and self.process and self.process.poll() is None:
+            while self.process:
+                process = self.process
+                if process.poll() is not None and not self._recording_event.is_set():
+                    break
+
                 # Use select to check if data is available (100ms timeout)
                 # This prevents blocking forever and allows clean shutdown
-                ready, _, _ = select.select([self.process.stdout], [], [], 0.1)
+                ready, _, _ = select.select([process.stdout], [], [], 0.1)
 
                 if not ready:
+                    if process.poll() is not None:
+                        break
+
                     # Warn if no audio received after 3 seconds (and helper is still running)
-                    if not no_audio_warning_sent and chunk_count == 0 and time.time() - start_time > 3.0:
+                    if not no_audio_warning_sent and chunk_count == 0 and self._recording_event.is_set() and time.time() - start_time > 3.0:
                         print("  WARNING: No audio data received after 3 seconds", file=sys.stderr)
                         print("    - Check that system audio is playing", file=sys.stderr)
                         print("    - Check Screen Recording permission in System Settings", file=sys.stderr)
@@ -338,6 +349,8 @@ class SwiftAudioCapture:
                 # Unlike file.read(n) which blocks until n bytes are available
                 new_data = os.read(stdout_fd, chunk_bytes)
                 if not new_data:
+                    if process.poll() is not None:
+                        break
                     continue
 
                 audio_data = process_audio_bytes(new_data)
@@ -346,6 +359,10 @@ class SwiftAudioCapture:
 
                 # Add to buffer (thread-safe)
                 with self.buffer_lock:
+                    now = time.time()
+                    if self.first_audio_time is None:
+                        self.first_audio_time = now
+                    self.last_audio_time = now
                     self.audio_buffer.append(audio_data)
 
                 total_samples += len(audio_data)
@@ -359,12 +376,14 @@ class SwiftAudioCapture:
             # This ensures we capture audio right up to the stop point
             if self.process and self.process.stdout:
                 try:
-                    # Drain up to 1MB of remaining data (enough for ~5 seconds of audio)
-                    max_drain = 1024 * 1024
+                    # Drain up to 4MB of remaining data to preserve tail audio
+                    max_drain = 4 * 1024 * 1024
                     drained_total = 0
                     while drained_total < max_drain:
-                        ready, _, _ = select.select([self.process.stdout], [], [], 0.1)
+                        ready, _, _ = select.select([self.process.stdout], [], [], 0.2)
                         if not ready:
+                            if self.process.poll() is not None:
+                                break
                             break
                         new_data = os.read(stdout_fd, chunk_bytes)
                         if not new_data:
@@ -377,6 +396,10 @@ class SwiftAudioCapture:
                             continue
 
                         with self.buffer_lock:
+                            now = time.time()
+                            if self.first_audio_time is None:
+                                self.first_audio_time = now
+                            self.last_audio_time = now
                             self.audio_buffer.append(audio_data)
                         total_samples += len(audio_data)
 
@@ -549,7 +572,7 @@ class SwiftAudioCapture:
         self._recording_event.clear()
 
         if self._stdout_thread and self._stdout_thread.is_alive():
-            self._stdout_thread.join(timeout=2.0)
+            self._stdout_thread.join(timeout=4.0)
             if self._stdout_thread.is_alive():
                 print("  WARNING: Audio reader thread did not exit cleanly", file=sys.stderr)
         if self._stderr_thread and self._stderr_thread.is_alive():

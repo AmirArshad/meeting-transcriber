@@ -22,6 +22,9 @@ Status: active. Phase 00 is complete. Batch 1 is in progress.
   - stricter Swift helper readiness handling
   - Swift helper audio extraction rewrite for full `AudioBufferList` handling
 - Completed the Swift helper write-queue/backpressure fix to decouple ScreenCaptureKit callbacks from blocking stdout writes.
+- Implemented macOS stream alignment using observed first-audio timestamps so startup lag becomes leading silence instead of dropped beginning audio.
+- Tightened macOS stop/drain handling so the helper reader stays alive through process exit and preserves more tail audio during shutdown.
+- Improved preroll/start-offset consistency by aligning both streams against the same post-preroll reference point.
 - Latest automated validation status at time of update:
   - `npm run test:all` passing
   - `swift build -c release --arch arm64` passing
@@ -219,10 +222,10 @@ Files:
 
 ### 5. Fix macOS stream alignment
 
-- [ ] Stop relying on tail padding alone in `backend/audio/macos_recorder.py`.
-- [ ] Capture first-sample timestamps/sample counters for mic and desktop streams.
-- [ ] Insert leading silence based on actual startup offset so desktop audio is aligned from the beginning.
-- [ ] Ensure preroll handling is consistent across both streams.
+- [x] Stop relying on tail padding alone in `backend/audio/macos_recorder.py`.
+- [x] Capture first-sample timestamps/sample counters for mic and desktop streams.
+- [x] Insert leading silence based on actual startup offset so desktop audio is aligned from the beginning.
+- [x] Ensure preroll handling is consistent across both streams.
 
 Files:
 
@@ -232,8 +235,8 @@ Files:
 ### 6. Improve macOS stop/drain behavior
 
 - [x] After sending `stop`, keep draining helper stdout until EOF/process exit rather than sleeping a fixed 300 ms and stopping readers early.
-- [ ] Make helper shutdown semantics explicit and deterministic.
-- [ ] Ensure tail audio is preserved at stop time.
+- [x] Make helper shutdown semantics explicit and deterministic.
+- [x] Ensure tail audio is preserved at stop time.
 
 Files:
 
@@ -650,8 +653,8 @@ Files:
 - [x] helper write-queue/backpressure fix
 - [x] truthful startup/ready contract
 - [x] Electron structured stdout parsing
-- [ ] macOS stream alignment fix
-- [ ] macOS stop/drain fix
+- [x] macOS stream alignment fix
+- [x] macOS stop/drain fix
 
 ### Batch 2 - integrity-critical backend fixes
 

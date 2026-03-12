@@ -233,6 +233,9 @@ class MacOSAudioRecorder:
         # Time-based synchronization - SINGLE reference point set at recording start
         # Both streams use the same reference to ensure they stay in sync
         self.recording_start_time = None
+        self.mic_capture_start_time = None
+        self.desktop_capture_start_time = None
+        self.desktop_capture_end_time = None
 
         # Output tracking (instance variables instead of globals)
         self.final_output_path = None
@@ -263,6 +266,9 @@ class MacOSAudioRecorder:
         self._desktop_started_event.clear()
         self._mic_start_error = None
         self._desktop_start_error = None
+        self.mic_capture_start_time = None
+        self.desktop_capture_start_time = None
+        self.desktop_capture_end_time = None
 
         # Set recording start time BEFORE anything else
         # This is the single reference point for preroll timing
@@ -387,6 +393,9 @@ class MacOSAudioRecorder:
                 if elapsed < self.preroll_seconds:
                     frame_count += 1
                     return
+
+                if self.mic_capture_start_time is None:
+                    self.mic_capture_start_time = time.time()
 
                 # Store audio data
                 self.mic_frames.append(indata.copy())
@@ -549,6 +558,10 @@ class MacOSAudioRecorder:
             if desktop_audio is not None:
                 # Convert to list of frames for consistency
                 self.desktop_frames = [desktop_audio]
+                self.desktop_capture_start_time = getattr(self.desktop_capture, 'first_audio_time', None)
+                self.desktop_capture_end_time = getattr(self.desktop_capture, 'last_audio_time', None)
+                if self.desktop_capture_start_time is None and self.recording_start_time is not None:
+                    self.desktop_capture_start_time = self.recording_start_time + self.preroll_seconds
                 print(f"Retrieved {len(desktop_audio)} desktop audio samples from {capture_type}", file=sys.stderr)
             else:
                 print(f"No desktop audio captured from {capture_type}", file=sys.stderr)
@@ -586,6 +599,8 @@ class MacOSAudioRecorder:
             if desktop_channels != 2:
                 print(f"  Downmixing desktop audio from {desktop_channels} channel(s) to stereo...", file=sys.stderr)
                 desktop_audio = _downmix_to_stereo(desktop_audio, desktop_channels)
+
+            mic_audio, desktop_audio = self._align_streams_by_start_time(mic_audio, desktop_audio)
 
             # Match lengths by padding shorter stream with silence (NOT resampling)
             # Resampling would change pitch/speed - we just need to align the streams
@@ -658,6 +673,42 @@ class MacOSAudioRecorder:
 
         print(f"Final file: {final_output_path}", file=sys.stderr)
         print(f"Duration: {duration_seconds:.1f} seconds", file=sys.stderr)
+
+    def _align_streams_by_start_time(self, mic_audio: np.ndarray, desktop_audio: np.ndarray):
+        """Align mic and desktop streams by observed first-audio timestamps."""
+        if self.mic_capture_start_time is None or self.desktop_capture_start_time is None:
+            print("Stream alignment: missing first-audio timestamp, falling back to length padding only", file=sys.stderr)
+            return mic_audio, desktop_audio
+
+        reference_start = self.recording_start_time + self.preroll_seconds
+        mic_reference = max(self.mic_capture_start_time, reference_start)
+        desktop_reference = max(self.desktop_capture_start_time, reference_start)
+
+        offset_seconds = desktop_reference - mic_reference
+        offset_samples = int(round(offset_seconds * self.sample_rate))
+
+        if offset_samples == 0:
+            return mic_audio, desktop_audio
+
+        if offset_samples > 0:
+            padding = np.zeros((offset_samples, desktop_audio.shape[1]), dtype=desktop_audio.dtype)
+            desktop_audio = np.concatenate([padding, desktop_audio], axis=0)
+            print(
+                f"Aligned desktop stream with {offset_samples} leading silence samples "
+                f"({offset_seconds:.3f}s startup lag)",
+                file=sys.stderr,
+            )
+        else:
+            mic_padding = abs(offset_samples)
+            padding = np.zeros((mic_padding, mic_audio.shape[1]), dtype=mic_audio.dtype)
+            mic_audio = np.concatenate([padding, mic_audio], axis=0)
+            print(
+                f"Aligned mic stream with {mic_padding} leading silence samples "
+                f"({abs(offset_seconds):.3f}s startup lag)",
+                file=sys.stderr,
+            )
+
+        return mic_audio, desktop_audio
 
     def _enhance_microphone(self, audio):
         """
