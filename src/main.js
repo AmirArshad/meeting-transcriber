@@ -970,6 +970,64 @@ function checkMacOSPermissions() {
   });
 }
 
+function getMacOSPermissionStatus() {
+  if (process.platform !== 'darwin') {
+    return Promise.resolve({
+      platform: process.platform,
+      all_granted: true,
+      microphone: { granted: true },
+      screen_recording: { granted: true },
+    });
+  }
+
+  return new Promise((resolve) => {
+    const checkScript = path.join(pythonConfig.backendPath, 'check_permissions.py');
+    const proc = spawn(pythonConfig.pythonExe, [checkScript], {
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    proc.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    proc.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    proc.on('close', () => {
+      try {
+        resolve(JSON.parse(stdout));
+      } catch (error) {
+        console.warn('Failed to parse permission status:', error.message);
+        if (stderr.trim()) {
+          console.warn('Permission status stderr:', stderr.trim());
+        }
+        resolve({
+          platform: 'darwin',
+          all_granted: true,
+          warning: 'Could not verify macOS permissions before recording. Proceeding with device checks only.',
+          microphone: { granted: true },
+          screen_recording: { granted: true },
+        });
+      }
+    });
+
+    proc.on('error', (error) => {
+      console.warn('Permission status check failed:', error.message);
+      resolve({
+        platform: 'darwin',
+        all_granted: true,
+        warning: 'Could not verify macOS permissions before recording. Proceeding with device checks only.',
+        microphone: { granted: true },
+        screen_recording: { granted: true },
+      });
+    });
+  });
+}
+
 // Initialize app
 app.whenReady().then(async () => {
   // IMPORTANT: Log all app paths for debugging
@@ -1325,10 +1383,11 @@ ipcMain.handle('check-audio-output', async () => {
 });
 
 ipcMain.handle('run-recording-preflight', async (event, { micId, loopbackId }) => {
-  const [deviceCheck, diskCheck, audioOutputCheck] = await Promise.all([
+  const [deviceCheck, diskCheck, audioOutputCheck, permissionCheck] = await Promise.all([
     validateSelectedDevices({ micId, loopbackId }),
     checkDiskSpace(),
     checkAudioOutputSupport(),
+    getMacOSPermissionStatus(),
   ]);
 
   return buildRecordingPreflightReport({
@@ -1336,7 +1395,12 @@ ipcMain.handle('run-recording-preflight', async (event, { micId, loopbackId }) =
     deviceCheck,
     diskCheck,
     audioOutputCheck,
+    permissionCheck,
   });
+});
+
+ipcMain.handle('get-macos-permission-status', async () => {
+  return getMacOSPermissionStatus();
 });
 
 /**
@@ -2255,6 +2319,7 @@ ipcMain.handle('open-system-settings', async (event, type) => {
   if (process.platform === 'darwin') {
     const { shell } = require('electron');
     const urls = {
+      'privacy': 'x-apple.systempreferences:com.apple.preference.security?Privacy',
       'microphone': 'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone',
       'screen': 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'
     };

@@ -332,14 +332,30 @@ function dedupeMessages(messages = []) {
   return unique;
 }
 
+function buildPermissionErrorMessage(label, permissionCheck = {}) {
+  const parts = [`${label} permission is not granted.`];
+
+  if (permissionCheck.error) {
+    parts.push(String(permissionCheck.error).trim());
+  }
+
+  if (permissionCheck.help) {
+    parts.push(String(permissionCheck.help).trim());
+  }
+
+  return parts.join(' ');
+}
+
 function buildRecordingPreflightReport({
   platform,
   deviceCheck = {},
   diskCheck = {},
   audioOutputCheck = {},
+  permissionCheck = null,
 }) {
   const errors = Array.isArray(deviceCheck.errors) ? [...deviceCheck.errors] : [];
   const warnings = Array.isArray(deviceCheck.warnings) ? [...deviceCheck.warnings] : [];
+  let permissionStatus = null;
 
   if (deviceCheck.valid === false && errors.length === 0) {
     errors.push('Selected audio devices failed validation.');
@@ -359,6 +375,31 @@ function buildRecordingPreflightReport({
 
   if (audioOutputCheck.suggestion) {
     warnings.push(`Suggestion: ${audioOutputCheck.suggestion}`);
+  }
+
+  if (platform === 'darwin' && permissionCheck) {
+    const missingMicrophone = permissionCheck.microphone?.granted === false;
+    const missingScreenRecording = permissionCheck.screen_recording?.granted === false;
+
+    if (missingMicrophone) {
+      errors.push(buildPermissionErrorMessage('Microphone', permissionCheck.microphone));
+    }
+
+    if (missingScreenRecording) {
+      errors.push(buildPermissionErrorMessage('Screen Recording', permissionCheck.screen_recording));
+    }
+
+    if (permissionCheck.warning) {
+      warnings.push(permissionCheck.warning);
+    }
+
+    permissionStatus = {
+      missingMicrophone,
+      missingScreenRecording,
+      settingsTarget: missingMicrophone && missingScreenRecording
+        ? 'privacy'
+        : (missingMicrophone ? 'microphone' : (missingScreenRecording ? 'screen' : null)),
+    };
   }
 
   const normalizedErrors = dedupeMessages(errors);
@@ -399,12 +440,14 @@ function buildRecordingPreflightReport({
     errors: normalizedErrors,
     warnings: normalizedWarnings,
     errorMessage,
+    permissionStatus,
     warningMessage,
   };
 }
 
 module.exports = {
   buildFileUrl,
+  buildPermissionErrorMessage,
   buildRecordingPreflightReport,
   buildQuitRecordingDialogOptions,
   buildModelDownloadCheck,

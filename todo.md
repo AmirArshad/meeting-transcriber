@@ -66,6 +66,7 @@ Status: active. Batches 0-4 are complete. Follow-on Batches 5-12 cover the remai
 - Completed Batch 5 Task 1 isolated recorder lifecycle state tests.
 - Completed Batch 5 Task 2 regression checklist plus representative failure fixtures/logs.
 - Completed Batch 5 Task 3 recorder stdout/stderr contract cleanup.
+- Completed Batch 6 Task 1 real permission probing with actionable guidance.
 - Latest automated validation status at time of update:
   - `npm test` passing
   - `npm run test:all` passing
@@ -288,9 +289,9 @@ Files:
 
 ### 7. Real permission detection
 
-- [ ] Add a helper-level permission probe mode, e.g. `--check-permission`, instead of returning unconditional `True` from Python.
-- [ ] Surface actionable macOS permission status to Electron before recording begins.
-- [ ] Make UI guidance precise for Screen Recording vs Microphone permission failures.
+- [x] Add a helper-level permission probe mode, e.g. `--check-permission`, instead of returning unconditional `True` from Python.
+- [x] Surface actionable macOS permission status to Electron before recording begins.
+- [x] Make UI guidance precise for Screen Recording vs Microphone permission failures.
 
 Files:
 
@@ -732,7 +733,7 @@ Files:
 
 ### Batch 6 - macOS permissions, fallback, and messaging
 
-- [ ] real permission probing with actionable Electron/UI guidance
+- [x] real permission probing with actionable Electron/UI guidance
 - [ ] PyObjC fallback path correctness and contract alignment
 - [ ] output-device behavior validation plus macOS warning/doc alignment
 

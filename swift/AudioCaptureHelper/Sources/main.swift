@@ -811,6 +811,47 @@ func parseArguments() -> Config {
             }
         case "--include-self":
             config.excludeCurrentApp = false
+        case "--check-permission":
+            sendJSON(["type": "permission_check", "granted": false])
+            if #available(macOS 13.0, *) {
+                Task {
+                    do {
+                        _ = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+                        sendJSON(["type": "permission_check", "granted": true])
+                        exit(0)
+                    } catch {
+                        let nsError = error as NSError
+                        let permissionDenied = nsError.code == -3801 ||
+                            nsError.domain == "com.apple.ScreenCaptureKit.SCStreamErrorDomain" ||
+                            nsError.localizedDescription.lowercased().contains("permission") ||
+                            nsError.localizedDescription.lowercased().contains("denied") ||
+                            nsError.localizedDescription.lowercased().contains("not authorized")
+                        if permissionDenied {
+                            sendJSON([
+                                "type": "permission_check",
+                                "granted": false,
+                                "error": "Screen Recording permission not granted",
+                                "help": "Open System Settings > Privacy & Security > Screen Recording and enable this app"
+                            ])
+                        } else {
+                            sendJSON([
+                                "type": "permission_check",
+                                "granted": false,
+                                "error": "Failed to check Screen Recording permission: \(error.localizedDescription)"
+                            ])
+                        }
+                        exit(1)
+                    }
+                }
+                dispatchMain()
+            } else {
+                sendJSON([
+                    "type": "permission_check",
+                    "granted": false,
+                    "error": "macOS 13.0 or later required"
+                ])
+                exit(1)
+            }
         case "--help", "-h":
             printUsage()
             exit(0)

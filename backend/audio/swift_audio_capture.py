@@ -630,15 +630,40 @@ def check_screen_recording_permission() -> bool:
     """
     Check if Screen Recording permission is granted.
 
-    Note: On macOS, there's no direct API to check this.
-    The Swift helper will fail to capture if permission is not granted.
-
     Returns:
-        True (we assume permission is granted, helper will fail if not)
+        True if permission is granted, False otherwise
     """
-    # We can't easily check this from Python
-    # The Swift helper will report an error if permission is denied
-    return True
+    helper_path = get_audiocapture_helper_path()
+
+    if helper_path is None:
+        return False
+
+    try:
+        result = subprocess.run(
+            [str(helper_path), "--check-permission"],
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+            check=False,
+        )
+
+        stderr_output = result.stderr.strip()
+        if stderr_output:
+            for line in stderr_output.splitlines():
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                if payload.get("type") == "permission_check":
+                    return bool(payload.get("granted"))
+                if payload.get("type") == "error" and payload.get("code") == "permission_denied":
+                    return False
+
+        return result.returncode == 0
+    except Exception as error:
+        print(f"Error checking Screen Recording permission via Swift helper: {error}", file=sys.stderr)
+        return False
 
 
 # For backwards compatibility with existing code

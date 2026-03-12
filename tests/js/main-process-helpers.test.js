@@ -4,6 +4,7 @@ const path = require('node:path');
 
 const {
   buildFileUrl,
+  buildPermissionErrorMessage,
   buildRecordingPreflightReport,
   buildQuitRecordingDialogOptions,
   buildModelDownloadCheck,
@@ -330,6 +331,17 @@ test('buildQuitRecordingDialogOptions warns clearly about recording data loss', 
 });
 
 
+test('buildPermissionErrorMessage includes error and help details', () => {
+  assert.equal(
+    buildPermissionErrorMessage('Screen Recording', {
+      error: 'Screen Recording permission not granted',
+      help: 'Open System Settings > Privacy & Security > Screen Recording',
+    }),
+    'Screen Recording permission is not granted. Screen Recording permission not granted Open System Settings > Privacy & Security > Screen Recording',
+  );
+});
+
+
 test('buildRecordingPreflightReport blocks start when device validation returns errors', () => {
   const result = buildRecordingPreflightReport({
     platform: 'darwin',
@@ -376,4 +388,34 @@ test('buildRecordingPreflightReport combines disk and audio output warnings', ()
   assert.match(result.warningMessage, /Only 0.42 GB free/);
   assert.match(result.warningMessage, /AirPods Pro/);
   assert.match(result.warningMessage, /Continue anyway\?/);
+});
+
+
+test('buildRecordingPreflightReport blocks start with actionable macOS permission guidance', () => {
+  const result = buildRecordingPreflightReport({
+    platform: 'darwin',
+    deviceCheck: { valid: true, errors: [], warnings: [] },
+    diskCheck: { success: true, warning: null },
+    audioOutputCheck: { supported: true, warning: null },
+    permissionCheck: {
+      all_granted: false,
+      microphone: {
+        granted: false,
+        error: 'No input devices found (permission may be denied)',
+        help: 'Grant microphone permission in: System Settings > Privacy & Security > Microphone',
+      },
+      screen_recording: {
+        granted: false,
+        error: 'Screen Recording permission not granted',
+        help: 'Grant Screen Recording permission in: System Settings > Privacy & Security > Screen Recording',
+      },
+    },
+  });
+
+  assert.equal(result.canStart, false);
+  assert.equal(result.permissionStatus.missingMicrophone, true);
+  assert.equal(result.permissionStatus.missingScreenRecording, true);
+  assert.equal(result.permissionStatus.settingsTarget, 'privacy');
+  assert.match(result.errorMessage, /Microphone permission is not granted/);
+  assert.match(result.errorMessage, /Screen Recording permission is not granted/);
 });

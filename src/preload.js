@@ -53,6 +53,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Platform detection
   getPlatform: () => ipcRenderer.invoke('get-platform'),
   getArch: () => ipcRenderer.invoke('get-arch'),
+  getMacOSPermissionStatus: () => ipcRenderer.invoke('get-macos-permission-status'),
   openSystemSettings: (type) => ipcRenderer.invoke('open-system-settings', type),
   buildFileUrl,
 

@@ -197,6 +197,34 @@ function setMeetingAudioSource(audioPath) {
   audioPlayer.load();
 }
 
+function handleMacOSPermissionFailure(permissionStatus) {
+  const missingMicrophone = permissionStatus?.missingMicrophone;
+  const missingScreenRecording = permissionStatus?.missingScreenRecording;
+
+  if (!missingMicrophone && !missingScreenRecording) {
+    return false;
+  }
+
+  let message = 'Recording cannot start until macOS permissions are granted.\n\n';
+
+  if (missingMicrophone) {
+    message += '- Grant Microphone access in System Settings > Privacy & Security > Microphone\n';
+  }
+
+  if (missingScreenRecording) {
+    message += '- Grant Screen Recording access in System Settings > Privacy & Security > Screen Recording\n';
+  }
+
+  message += '\nOpen System Settings now?';
+
+  const shouldOpenSettings = confirm(message);
+  if (shouldOpenSettings && permissionStatus.settingsTarget) {
+    window.electronAPI.openSystemSettings(permissionStatus.settingsTarget);
+  }
+
+  return true;
+}
+
 function setCopyButtonState(button, label, disabled) {
   clearElement(button);
 
@@ -745,6 +773,10 @@ async function runRecordingPreflightChecks({ micId, desktopId }) {
   report.warnings.forEach((message) => addLog(`Preflight warning: ${message}`, 'warning'));
 
   if (!report.canStart) {
+    if (handleMacOSPermissionFailure(report.permissionStatus)) {
+      return false;
+    }
+
     alert(report.errorMessage || 'Recording checks failed.');
     return false;
   }
