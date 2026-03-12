@@ -18,6 +18,7 @@ const {
   buildModelDownloadCheck,
   cacheContainsModel,
   getQuitInterceptState,
+  getRecorderEventAction,
   getRecordingStopTimeout,
   isModelDownloadErrorOutput,
   parseRecorderStdoutChunk,
@@ -1638,25 +1639,20 @@ ipcMain.handle('start-recording', async (event, options) => {
           }
 
           case 'event': {
-            const eventName = message.payload.event;
-            const eventMessage = message.payload.message;
+            const eventAction = getRecorderEventAction(message.payload);
 
-            if (eventName === 'mic_stream_opened') {
-              sendInitProgress('mic_opened', eventMessage || 'Microphone ready...');
-            } else if (eventName === 'desktop_stream_opened') {
-              sendInitProgress('desktop_opened', eventMessage || 'Desktop audio ready...');
-            } else if (eventName === 'desktop_capture_disabled') {
-              sendInitProgress('desktop_disabled', eventMessage || 'Desktop audio capture unavailable');
-              sendStructuredWarning({
-                code: message.payload.code || 'NO_DESKTOP_AUDIO',
-                message: eventMessage || 'Desktop audio capture is disabled.',
-                help: message.payload.help,
-                type: 'desktop_capture_disabled',
-              });
-            } else if (eventName === 'recording_started') {
-              markRecordingStarted(eventMessage || 'Recording started!');
-            } else if (eventMessage) {
-              mainWindow.webContents.send('recording-progress', eventMessage);
+            if (eventAction.initProgress) {
+              sendInitProgress(eventAction.initProgress.stage, eventAction.initProgress.message);
+            }
+
+            if (eventAction.warning) {
+              sendStructuredWarning(eventAction.warning);
+            }
+
+            if (eventAction.recordingStartedMessage) {
+              markRecordingStarted(eventAction.recordingStartedMessage);
+            } else if (eventAction.progressMessage) {
+              mainWindow.webContents.send('recording-progress', eventAction.progressMessage);
             }
             break;
           }
@@ -1708,23 +1704,6 @@ ipcMain.handle('start-recording', async (event, options) => {
     pythonProcess.stderr.on('data', (data) => {
       const output = data.toString();
       console.log(`Python status: ${output}`);
-
-      // Send detailed progress updates
-      if (output.includes('Device configuration')) {
-        progressStage = 'configuring';
-        mainWindow.webContents.send('recording-init-progress', { stage: 'configuring', message: 'Configuring audio devices...' });
-      } else if (output.includes('Microphone stream opened')) {
-        progressStage = 'mic_opened';
-        mainWindow.webContents.send('recording-init-progress', { stage: 'mic_opened', message: 'Microphone ready...' });
-      } else if (output.includes('Desktop audio stream opened')) {
-        progressStage = 'desktop_opened';
-        mainWindow.webContents.send('recording-init-progress', { stage: 'desktop_opened', message: 'Desktop audio ready...' });
-      }
-
-      // Wait for confirmation that recording actually started
-      if (!recordingStarted && output.includes('Recording started!')) {
-        markRecordingStarted('Recording started!');
-      }
     });
 
     pythonProcess.on('close', (code) => {

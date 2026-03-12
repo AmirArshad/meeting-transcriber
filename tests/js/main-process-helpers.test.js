@@ -10,6 +10,7 @@ const {
   cacheContainsModel,
   classifyRecorderStdoutChunk,
   getQuitInterceptState,
+  getRecorderEventAction,
   getMacMLXCacheDir,
   getMacMLXModelStorageDirs,
   getModelDownloadPatterns,
@@ -188,6 +189,75 @@ test('parseRecorderStdoutChunk keeps incomplete trailing chunks for the next rea
   assert.equal(secondChunk.messages.length, 1);
   assert.equal(secondChunk.messages[0].kind, 'event');
   assert.equal(secondChunk.messages[0].payload.event, 'recording_started');
+});
+
+
+test('parseRecorderStdoutChunk parses recorder config events without stderr fallbacks', () => {
+  const chunk = [
+    '{"type":"event","event":"configuring_devices","message":"Configuring audio devices..."}',
+    '{"type":"event","event":"mic_stream_opened","message":"Microphone stream opened"}',
+    '{"type":"event","event":"desktop_stream_opened","message":"Desktop audio stream opened"}',
+    '{"type":"event","event":"recording_started","message":"Recording started!"}',
+    '',
+  ].join('\n');
+
+  const result = parseRecorderStdoutChunk(chunk);
+
+  assert.deepEqual(result.messages.map((message) => message.payload.event), [
+    'configuring_devices',
+    'mic_stream_opened',
+    'desktop_stream_opened',
+    'recording_started',
+  ]);
+});
+
+
+test('getRecorderEventAction maps structured recorder events to renderer actions', () => {
+  assert.deepEqual(
+    getRecorderEventAction({ event: 'configuring_devices', message: 'Configuring audio devices...' }),
+    {
+      initProgress: {
+        stage: 'configuring',
+        message: 'Configuring audio devices...',
+      },
+      warning: null,
+      recordingStartedMessage: null,
+      progressMessage: null,
+    },
+  );
+
+  assert.deepEqual(
+    getRecorderEventAction({
+      event: 'desktop_capture_disabled',
+      message: 'Desktop audio capture is disabled. Recording microphone only.',
+      code: 'NO_DESKTOP_AUDIO',
+      help: 'Ensure audiocapture-helper is bundled or install PyObjC as fallback.',
+    }),
+    {
+      initProgress: {
+        stage: 'desktop_disabled',
+        message: 'Desktop audio capture is disabled. Recording microphone only.',
+      },
+      warning: {
+        code: 'NO_DESKTOP_AUDIO',
+        message: 'Desktop audio capture is disabled. Recording microphone only.',
+        help: 'Ensure audiocapture-helper is bundled or install PyObjC as fallback.',
+        type: 'desktop_capture_disabled',
+      },
+      recordingStartedMessage: null,
+      progressMessage: null,
+    },
+  );
+
+  assert.deepEqual(
+    getRecorderEventAction({ event: 'recording_started', message: 'Recording started!' }),
+    {
+      initProgress: null,
+      warning: null,
+      recordingStartedMessage: 'Recording started!',
+      progressMessage: null,
+    },
+  );
 });
 
 

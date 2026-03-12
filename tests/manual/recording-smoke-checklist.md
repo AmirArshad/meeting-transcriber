@@ -22,3 +22,9 @@ Use this checklist before and after high-risk recorder changes.
 - [ ] Verify model preload/download state is reported correctly in the UI.
 - [ ] Verify meeting history save/delete/scan still behaves correctly.
 - [ ] Verify the app can be launched, record, stop, transcribe, and save a meeting end to end.
+
+## Related guardrails
+
+- Compare recorder failure-mode output with `tests/manual/fixtures/macos-no-desktop-audio.log` when desktop capture degrades to mic-only.
+- Compare recorder failure-mode output with `tests/manual/fixtures/macos-screen-recording-warning.log` when Screen Recording permission is missing.
+- Use `tests/manual/recording-transcription-regression-checklist.md` for the minimum pre/post-change validation pass.

@@ -116,6 +116,7 @@ The automated suite does not replace hardware validation.
 Before and after recorder changes, run the manual smoke checklist:
 
 - `tests/manual/recording-smoke-checklist.md`
+- `tests/manual/recording-transcription-regression-checklist.md`
 
 This is especially important for:
 
@@ -164,3 +165,4 @@ py -3.11 -m pytest tests/python
 ### Recorder behavior passes tests but fails on real hardware
 
 That can still happen. Run the manual smoke checklist in `tests/manual/recording-smoke-checklist.md`.
+If the change touches recorder failure handling or process messaging, also compare output against the representative fixtures in `tests/manual/fixtures/`.

@@ -40,6 +40,10 @@ def _send_event_message(event: str, message: str, **extra):
     _send_json_message(payload)
 
 
+def _send_configuring_devices_event():
+    _send_event_message("configuring_devices", "Configuring audio devices...")
+
+
 def _send_warning_message(code: str, message: str, **extra):
     """Send a structured warning to stdout."""
     payload = {"type": "warning", "code": code, "message": message}
@@ -278,6 +282,7 @@ class MacOSAudioRecorder:
 
         # Get device info
         try:
+            _send_configuring_devices_event()
             devices = sd.query_devices()
             self.mic_info = devices[self.mic_device_id]
             print(f"Microphone: {self.mic_info['name']}", file=sys.stderr)

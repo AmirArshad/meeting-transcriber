@@ -63,6 +63,9 @@ Status: active. Batches 0-4 are complete. Follow-on Batches 5-12 cover the remai
   - build preparation now fails before extraction or execution when a downloaded artifact checksum does not match
   - JS regression coverage now includes the build download manifest helpers
 - Rebatched the remaining unchecked work into follow-on Batches 5-12 so the rest of the audit backlog can be executed in order.
+- Completed Batch 5 Task 1 isolated recorder lifecycle state tests.
+- Completed Batch 5 Task 2 regression checklist plus representative failure fixtures/logs.
+- Completed Batch 5 Task 3 recorder stdout/stderr contract cleanup.
 - Latest automated validation status at time of update:
   - `npm test` passing
   - `npm run test:all` passing
@@ -154,7 +157,7 @@ Files:
   - `error`
   - mixed/chunked line delivery
 - [x] Add tests for model-cache detection logic, especially macOS MLX cache behavior.
-- [ ] Add tests for start/stop/quit state transitions where logic can be isolated without Electron UI automation.
+- [x] Add tests for start/stop/quit state transitions where logic can be isolated without Electron UI automation.
 
 Files:
 
@@ -170,7 +173,7 @@ Files:
   - quit during active recording
   - long recording stop/drain
   - Windows mic + loopback mixed recording
-- [ ] Store representative fixtures/logs from current failure scenarios where useful.
+- [x] Store representative fixtures/logs from current failure scenarios where useful.
 
 Files:
 
@@ -195,8 +198,8 @@ Files:
   - quit during active recording
   - long recording stop/post-processing
   - Windows mixed mic + loopback capture
-- [ ] Add a lightweight regression checklist file for all future recording/transcription changes.
-- [ ] Capture and save example logs from current macOS failure scenarios before changing behavior.
+- [x] Add a lightweight regression checklist file for all future recording/transcription changes.
+- [x] Capture and save example logs from current macOS failure scenarios before changing behavior.
 
 ## Phase 1 - Fix macOS Desktop Audio Capture Reliability
 
@@ -252,7 +255,7 @@ Files:
   - `error`
   - future `event`/`progress` messages
 - [x] Surface macOS desktop capture warnings/errors to the renderer instead of treating them as generic progress text.
-- [ ] Keep stderr for human-readable logs only.
+- [x] Keep stderr for human-readable logs only.
 
 Files:
 
@@ -471,9 +474,9 @@ Files:
 ### 23. Improve progress/event contracts
 
 - [x] Move transcription progress to stderr or structured status events only.
-- [ ] Reserve stdout for final machine-readable JSON payloads.
-- [ ] Standardize recording startup/progress events across macOS and Windows.
-- [ ] Remove remaining brittle stderr string dependencies where practical.
+- [x] Reserve stdout for final machine-readable JSON payloads.
+- [x] Standardize recording startup/progress events across macOS and Windows.
+- [x] Remove remaining brittle stderr string dependencies where practical.
 
 Files:
 
@@ -723,9 +726,9 @@ Files:
 
 ### Batch 5 - recorder contract completion and guardrails
 
-- [ ] isolated start/stop/quit state tests
-- [ ] regression checklist plus representative failure fixtures/logs
-- [ ] finalize stdout/stderr recorder contract cleanup across Electron, macOS, and Windows
+- [x] isolated start/stop/quit state tests
+- [x] regression checklist plus representative failure fixtures/logs
+- [x] finalize stdout/stderr recorder contract cleanup across Electron, macOS, and Windows
 
 ### Batch 6 - macOS permissions, fallback, and messaging
 

@@ -4,6 +4,7 @@
 
 const COPY_SUCCESS_TIMEOUT_MS = 2000;
 const SVG_NS = 'http://www.w3.org/2000/svg';
+const { getRecordButtonAction } = window.recordingStateHelpers;
 
 // UI Elements
 const micSelect = document.getElementById('mic-select');
@@ -638,12 +639,16 @@ function setupEventListeners() {
 
 // Handle record button click
 function handleRecordButtonClick() {
-  if (recordingState === 'idle') {
-    startRecording();
-  } else if (recordingState === 'recording') {
-    stopRecording();
+  switch (getRecordButtonAction(recordingState)) {
+    case 'start':
+      startRecording();
+      break;
+    case 'stop':
+      stopRecording();
+      break;
+    default:
+      break;
   }
-  // Do nothing if processing or counting down
 }
 
 // Set recording state and update UI

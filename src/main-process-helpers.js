@@ -146,6 +146,78 @@ function parseRecorderStdoutChunk(output, pendingBuffer = '') {
   return { messages, remainder };
 }
 
+function getRecorderEventAction(eventPayload = {}) {
+  const eventName = eventPayload.event;
+  const eventMessage = eventPayload.message;
+
+  switch (eventName) {
+    case 'configuring_devices':
+      return {
+        initProgress: {
+          stage: 'configuring',
+          message: eventMessage || 'Configuring audio devices...',
+        },
+        warning: null,
+        recordingStartedMessage: null,
+        progressMessage: null,
+      };
+
+    case 'mic_stream_opened':
+      return {
+        initProgress: {
+          stage: 'mic_opened',
+          message: eventMessage || 'Microphone ready...',
+        },
+        warning: null,
+        recordingStartedMessage: null,
+        progressMessage: null,
+      };
+
+    case 'desktop_stream_opened':
+      return {
+        initProgress: {
+          stage: 'desktop_opened',
+          message: eventMessage || 'Desktop audio ready...',
+        },
+        warning: null,
+        recordingStartedMessage: null,
+        progressMessage: null,
+      };
+
+    case 'desktop_capture_disabled':
+      return {
+        initProgress: {
+          stage: 'desktop_disabled',
+          message: eventMessage || 'Desktop audio capture unavailable',
+        },
+        warning: {
+          code: eventPayload.code || 'NO_DESKTOP_AUDIO',
+          message: eventMessage || 'Desktop audio capture is disabled.',
+          help: eventPayload.help,
+          type: 'desktop_capture_disabled',
+        },
+        recordingStartedMessage: null,
+        progressMessage: null,
+      };
+
+    case 'recording_started':
+      return {
+        initProgress: null,
+        warning: null,
+        recordingStartedMessage: eventMessage || 'Recording started!',
+        progressMessage: null,
+      };
+
+    default:
+      return {
+        initProgress: null,
+        warning: null,
+        recordingStartedMessage: null,
+        progressMessage: eventMessage || null,
+      };
+  }
+}
+
 function classifyRecorderStdoutChunk(output) {
   const { messages } = parseRecorderStdoutChunk(`${output}\n`);
   const firstMessage = messages[0];
@@ -340,6 +412,7 @@ module.exports = {
   classifyRecorderStdoutChunk,
   dedupeMessages,
   getQuitInterceptState,
+  getRecorderEventAction,
   getMacMLXModelStorageDirs,
   getModelDownloadCacheDir,
   getMacMLXCacheDir,
