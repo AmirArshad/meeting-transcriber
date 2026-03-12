@@ -1,199 +1,80 @@
-# Meeting Transcription Guide
+# Meeting History And Transcript Storage
 
-## Understanding the Use Case
+This document describes what gets saved after a recording and how Meeting Transcriber recovers existing meeting data.
 
-For a **meeting transcription tool**, you need to transcribe:
-- ✅ **Your voice** (microphone)
-- ✅ **Other participants' voices** (desktop audio from Zoom/Teams/etc)
-- ✅ **Full conversation** for complete meeting notes
+## What Gets Saved
 
-## Current Status & Challenges
+After a successful recording/transcription flow, the app stores:
 
-### What's Working:
-- ✅ Recording mic + desktop audio together
-- ✅ Audio mixing at 48kHz (high quality)
-- ✅ Whisper transcription (CPU/GPU)
+- an audio file for the meeting (`.opus` when compression succeeds, `.wav` fallback otherwise)
+- a markdown transcript (`.md`)
+- metadata in `meetings.json`
 
-### Current Challenge:
-**Mixed audio with multiple speakers is harder to transcribe accurately**
+Meeting data lives in Electron's `userData` recordings directory, not in the repository.
 
-When you have:
-- Your voice (mic)
-- Other people talking (desktop audio from meeting)
-- People talking over each other
-- Background noise
+## History View Behavior
 
-→ Whisper struggles more than with single-speaker audio
+The renderer keeps the history list responsive by separating metadata display from transcript loading:
 
-## Solutions to Improve Transcription Quality
+- selecting a meeting shows the details panel immediately
+- transcript text loads asynchronously in the background
+- a race guard prevents a late transcript load from overwriting a newer selection
 
-### 1. Use a Larger Whisper Model
+## Transcript Loading Rules
 
-**Problem:** `base` model isn't good enough for noisy/multi-speaker audio
+When loading a meeting by ID, the backend now prefers:
 
-**Solution:** Use `small` or `medium` model
+1. the transcript markdown file on disk
+2. legacy inline transcript text stored in older metadata records
+3. an empty transcript if neither exists
 
-| Model  | Speed       | Quality | Best For |
-|--------|-------------|---------|----------|
-| tiny   | Very fast   | Poor    | Testing only |
-| base   | Fast        | Good    | Single speaker, clean audio |
-| small  | Medium      | Better  | **Meeting audio (RECOMMENDED)** |
-| medium | Slow        | Best    | **Noisy meetings with overlap** |
-| large  | Very slow   | Best    | Maximum accuracy |
+That preserves transcript access for older meetings whose `.md` file is missing but whose metadata still contains inline transcript text.
 
-**How to use:**
-```bash
-python test_meeting_transcription.py
-# Select option 2 (small) or 3 (medium)
-```
+## Scan / Import Recovery
 
-### 2. Improve Recording Quality
+Refreshing history triggers a filesystem scan for orphaned recordings that are not yet in `meetings.json`.
 
-**Current Issues:**
-- ~~Sample rate bug (recording at 16kHz instead of 48kHz)~~ - Being investigated
-- Mixing algorithm may be too aggressive
-- Volume normalization might be reducing clarity
+The recovery scan now:
 
-**Recommendations:**
-- ✅ Use good quality microphone
-- ✅ Ensure desktop audio is clear (good speaker setup)
-- ✅ Record in quiet environment
-- ✅ Adjust volumes if one source is too quiet
+- prefers one audio candidate per filename stem
+- skips duplicates already represented in metadata
+- preserves suffixed meeting IDs like `meeting_20260107_104555_1`
+- prefers the healthy `.wav` fallback if both `.opus` and `.wav` exist for the same recording stem
 
-### 3. Separate Track Recording (Alternative Approach)
+That last rule matters when Opus compression failed but left behind a bad `.opus` file before the recorder fell back to `.wav`.
 
-If mixed transcription quality is still poor, record tracks separately:
+## Metadata Safety
 
-**Option A: Dual Recording**
-```python
-# Record to two files
-mic_file = "meeting_mic.wav"     # Your voice
-desktop_file = "meeting_desktop.wav"  # Other participants
+`backend/meeting_manager.py` protects `meetings.json` with:
 
-# Transcribe both separately
-mic_transcript = transcribe(mic_file)
-desktop_transcript = transcribe(desktop_file)
+- `FileLock`-based cross-process locking
+- atomic temp-file writes plus `os.replace()`
+- duplicate-ID cleanup on load
+- corrupt-file backups named `meetings.corrupt.*.json`
 
-# Merge transcripts with timestamps
-```
+## Delete Behavior
 
-**Option B: Post-Meeting Processing**
-```python
-# Record mixed audio (for playback)
-mixed_file = "meeting.wav"
+Deleting a meeting removes:
 
-# Extract tracks using audio separation (future feature)
-your_voice = separate_voice(mixed_file, profile="your_voice")
-others_voice = separate_voice(mixed_file, profile="others")
+- the persisted audio file
+- the persisted transcript file
+- the metadata entry
 
-# Transcribe separately with speaker labels
-```
+The renderer also clears the audio player first to reduce Windows file-lock issues.
 
-### 4. Use Speaker Diarization (Future Feature)
+## Current Limitations
 
-Identify who said what:
-```
-[Speaker 1] Hello everyone, let's start the meeting
-[Speaker 2] Great, I have the quarterly numbers ready
-[Speaker 1] Perfect, please go ahead
-```
+- The renderer still has a TODO for saving/exporting transcripts through a file dialog.
+- Search/filter tooling in the history view is still minimal.
+- Manual filesystem edits inside the recordings directory can still confuse recovery if files are renamed arbitrarily.
 
-**Not yet implemented** - coming in future version
+## If You Need To Recover Meetings Manually
 
-## Testing Workflow
+Keep matching audio and transcript files together in the recordings directory.
 
-### Test 1: Quick Test (Current)
-```bash
-cd backend
-python test_meeting_transcription.py
-```
+The scan/import flow expects:
 
-This will:
-1. Record mic + desktop (10 seconds)
-2. Transcribe with model of your choice
-3. Show results and diagnostics
+- `meeting_<id>.<opus|wav>`
+- `meeting_<id>.md`
 
-### Test 2: Real Meeting
-```bash
-# For a full meeting:
-python test_recording.py
-# Select mic ID: 39
-# Select desktop ID: 43
-# Duration: 1800 (30 minutes)
-
-# Then transcribe:
-python test_transcribe.py
-# Select the file
-# Choose model: small or medium
-```
-
-## Expected Results
-
-### Good Scenario:
-- Clear audio from both sources
-- Minimal overlap (people take turns)
-- Quiet environment
-- Using `small` or `medium` model
-
-→ Should get **70-90% accuracy**
-
-### Challenging Scenario:
-- Noisy background
-- Multiple people talking over each other
-- Poor audio quality
-- Using `base` model
-
-→ May get **30-50% accuracy** or worse
-
-## Debugging Poor Transcription
-
-If transcription is very poor:
-
-1. **Check audio file**
-   - Play it back - can YOU understand the words?
-   - If you can't understand it clearly, neither can Whisper
-
-2. **Check sample rate**
-   - Should be 48000 Hz for mixed audio
-   - If it's 16000 Hz, there's a bug
-
-3. **Try larger model**
-   - Switch from `base` → `small` → `medium`
-   - Bigger models handle noise better
-
-4. **Check volumes**
-   - Is one source too quiet compared to the other?
-   - Adjust `mic_volume` / `desktop_volume` in recorder
-
-5. **Check for overlap**
-   - Are multiple people talking at same time?
-   - This is inherently hard for Whisper to handle
-
-## Next Steps
-
-1. **Test the new script:**
-   ```bash
-   python test_meeting_transcription.py
-   ```
-
-2. **Use larger model** - Try `small` or `medium` instead of `base`
-
-3. **Report results** - Let us know what accuracy you get
-
-4. **Future features:**
-   - Real-time transcription
-   - Speaker diarization
-   - Voice separation
-   - Better noise reduction
-
-## GPU Acceleration (Important!)
-
-For `medium` or `large` models, GPU is highly recommended:
-
-**Without GPU:**
-- 10-minute meeting → 50-100 minutes to transcribe
-
-**With GPU:**
-- 10-minute meeting → 10-20 minutes to transcribe
-
-See [SETUP_GPU.md](SETUP_GPU.md) for setup (requires Python 3.12 or 3.11)
+Then use the history refresh action so the app can re-scan the recordings directory.

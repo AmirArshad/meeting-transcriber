@@ -15,7 +15,8 @@ const {
 test('BUILD_DOWNLOADS uses pinned direct download URLs', () => {
   assert.equal(BUILD_DOWNLOADS.ffmpegWin.url, 'https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-8.0.1-essentials_build.zip');
   assert.equal(BUILD_DOWNLOADS.ffmpegMac.url, 'https://evermeet.cx/ffmpeg/ffmpeg-8.0.1.zip');
-  assert.equal(BUILD_DOWNLOADS.getPip.url, 'https://bootstrap.pypa.io/pip/get-pip.py');
+  assert.equal(BUILD_DOWNLOADS.pipWheel.url, 'https://files.pythonhosted.org/packages/de/f0/c81e05b613866b76d2d1066490adf1a3dbc4ee9d9c839961c3fc8a6997af/pip-26.0.1-py3-none-any.whl');
+  assert.equal(BUILD_DOWNLOADS.pipWheel.sha256, 'bdb1b08f4274833d62c1aa29e20907365a2ceb950410df15fc9521bad440122b');
 });
 
 

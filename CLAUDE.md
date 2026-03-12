@@ -28,6 +28,7 @@ Meeting Transcriber is a privacy-first Electron desktop app for recording microp
 - `src/main-process-helpers.js`: extracted main-process parsing/model-cache helpers with JS regression coverage
 - `src/preload.js`: safe API bridge exposed as `window.electronAPI`
 - `src/renderer/app.js`: main UI state machine, settings persistence, meeting history, GPU/settings UI, update banner
+- `src/renderer/update-notification-helpers.js`: extracted update-banner helpers with JS regression coverage
 - `src/renderer/index.html`: renderer markup
 - `src/renderer/styles.css`: renderer styles
 - `src/updater.js`: GitHub Releases update checker
@@ -51,9 +52,10 @@ Meeting Transcriber is a privacy-first Electron desktop app for recording microp
 
 ### Build and release
 
-- `build/prepare-resources.js`: bundles Python, ffmpeg, and macOS Swift helper
+- `build/download-manifest.js`: pinned build-time download URLs and checksums
+- `build/prepare-resources.js`: stages Python/ffmpeg/Swift helper resources, bootstraps pip from a pinned wheel, and invalidates stale prepared resources via `resource-manifest.json`
 - `package.json`: Electron builder config and build scripts
-- `.github/workflows/ci.yml`: regression tests plus syntax/build/doc validation
+- `.github/workflows/ci.yml`: regression tests, syntax checks, packaged-build smoke coverage, and doc validation
 - `.github/workflows/build-release.yml`: tagged release builds
 
 ## End-to-End Flow
@@ -125,11 +127,14 @@ If you rename or change an IPC handler in `src/main.js`, update `src/preload.js`
 
 ### Build packaging
 
-If you change bundled runtime locations, keep these aligned:
+If you change bundled runtime locations or prepared-resource inputs, keep these aligned:
 
 - `build/prepare-resources.js`
+- `build/download-manifest.js`
 - `package.json` `extraResources`
 - `src/main.js` runtime path resolution
+
+The generated `build/resources/resource-manifest.json` should continue to invalidate stale prepared resources when those inputs change.
 
 Windows packaged Python relies on `python311._pth` containing `../backend`. Dev mode relies on `PYTHONPATH` setup in `src/main.js`.
 
@@ -163,7 +168,7 @@ If you change artifact naming in `package.json` or `.github/workflows/build-rele
 ## Important Repo Facts
 
 - There are no `AGENTS.md` or `CLAUDE.md` predecessors in this repo before this file.
-- CI now includes a small regression suite for pure Python logic and main-process JS helper logic, but it is still not full end-to-end product coverage.
+- CI now includes backend tests, build/download-manifest tests, main-process and renderer helper JS tests, plus Windows/macOS packaged-build smoke checks, but it is still not full end-to-end product coverage.
 - Root `README.md` is broadly useful, but some product docs may still lag code changes.
 - `backend/meeting_manager.py` now uses locked atomic metadata writes, transactional add behavior, and corrupt-file backups.
 - `src/renderer/app.js` still has a TODO for saving transcripts through a file dialog.

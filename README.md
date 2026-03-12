@@ -48,7 +48,7 @@ No existing solution offered all of this in one package, so I built it.
 **Windows:**
 
 1. **Download** the latest `.exe` installer from [Releases](https://github.com/AmirArshad/meeting-transcriber/releases)
-2. **Run** `Meeting Transcriber Setup.exe` (may show SmartScreen warning - click "More info" → "Run anyway")
+2. **Run** `Meeting Transcriber-Setup-<version>.exe` (may show SmartScreen warning - click "More info" → "Run anyway")
 3. **Launch** the app from Start Menu
 4. **Select** your microphone and desktop audio device
 5. **Click** "Start Recording" and transcribe!
@@ -96,8 +96,11 @@ See [docs/development/TESTING.md](docs/development/TESTING.md) for test setup on
 # JavaScript regression tests + syntax checks
 npm test
 
-# Python regression tests
+# Python regression tests (macOS)
 python3 -m pytest tests/python
+
+# Python regression tests (Windows)
+py -3.11 -m pytest tests/python
 
 # Or run both
 npm run test:all

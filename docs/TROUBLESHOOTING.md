@@ -26,7 +26,7 @@ Common issues and solutions for Meeting Transcriber.
 xattr -d com.apple.quarantine /Applications/Meeting\ Transcriber.app
 
 # Or for the DMG file before installing:
-xattr -d com.apple.quarantine ~/Downloads/Meeting-Transcriber-*.dmg
+xattr -d com.apple.quarantine ~/Downloads/Meeting\ Transcriber-Setup-*.dmg
 ```
 
 **Solution 3: System Settings (macOS Ventura+)**
@@ -95,17 +95,15 @@ xattr -d com.apple.quarantine ~/Downloads/Meeting-Transcriber-*.dmg
 
 ---
 
-### 🐌 Slow Transcription on Intel Mac
+### ⚠️ Packaged macOS build does not run on Intel Mac
 
-**Symptom:** Transcription is very slow compared to Apple Silicon Macs.
+**Symptom:** The released macOS app does not launch on an Intel Mac.
 
-**Cause:** Intel Macs don't have Metal GPU support for MLX Whisper, so the app uses CPU-based faster-whisper instead.
+**Cause:** Packaged macOS builds are Apple Silicon only (`arm64`).
 
-**Solution:**
-- This is expected behavior on Intel Macs
-- The app automatically detects Intel architecture and uses CPU fallback
-- Consider using a smaller model size (Settings → Model Size → "tiny" or "base")
-- Apple Silicon Macs (M1/M2/M3/M4) are 5-10x faster with Metal GPU
+**What to do:**
+- Use the packaged macOS release on an Apple Silicon Mac (M1/M2/M3/M4).
+- If you are developing from source, the repo still contains an Intel Mac CPU fallback path using `faster-whisper`, but that is not a supported packaged target.
 
 ---
 
@@ -129,7 +127,7 @@ xattr -d com.apple.quarantine ~/Downloads/Meeting-Transcriber-*.dmg
 - Or manually fix:
   1. Delete the app
   2. Download and reinstall the latest version
-  3. The fix redirects MLX cache to `~/.cache/lightning-whisper-mlx`
+  3. The fix redirects MLX cache to `~/Library/Caches/meeting-transcriber/mlx_models`
 
 **Verification after update:**
 Look for this in the console when loading a model:
@@ -210,16 +208,9 @@ If you still see "faster-whisper (CPU fallback)", report an issue on GitHub.
 **Solution:**
 1. Check internet connection
 2. Try again - downloads are resumable
-3. Manually download model:
-   ```bash
-   # Windows (PowerShell)
-   cd "$env:USERPROFILE\.cache\huggingface\hub"
-
-   # macOS/Linux
-   cd ~/.cache/huggingface/hub
-
-   # Then retry transcription
-   ```
+3. If a partial model cache is corrupted, remove the platform cache and retry:
+   - Windows / `faster-whisper`: `%USERPROFILE%\.cache\huggingface\hub`
+   - macOS Apple Silicon / MLX: `~/Library/Caches/meeting-transcriber`
 
 ---
 
@@ -279,10 +270,9 @@ C:\Users\<YourUsername>\AppData\Roaming\Meeting Transcriber\recordings\
 ~/Library/Application Support/Meeting Transcriber/recordings/
 ```
 
-To open in File Explorer/Finder:
-1. Go to History tab
-2. Right-click a meeting
-3. Select "Show in Folder"
+Open that path manually in File Explorer or Finder.
+
+The app does not currently expose a `Show in Folder` action in the history UI.
 
 ---
 
@@ -296,7 +286,9 @@ To open in File Explorer/Finder:
 **macOS:**
 1. Drag app to Trash from Applications
 2. Delete data: `~/Library/Application Support/Meeting Transcriber`
-3. Delete cache: `~/.cache/huggingface`
+3. Delete cache: `~/Library/Caches/meeting-transcriber`
+
+If you also ran a non-MLX development setup on macOS, you may additionally have `~/.cache/huggingface`.
 
 ---
 

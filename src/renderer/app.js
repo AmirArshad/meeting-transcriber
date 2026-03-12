@@ -5,6 +5,10 @@
 const COPY_SUCCESS_TIMEOUT_MS = 2000;
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const { getRecordButtonAction } = window.recordingStateHelpers;
+const {
+  hideUpdateNotificationBanner,
+  showUpdateNotificationBanner,
+} = window.updateNotificationHelpers;
 
 // UI Elements
 const micSelect = document.getElementById('mic-select');
@@ -33,6 +37,7 @@ let recordingStartTime = null;
 let timerInterval = null;
 let currentAudioFile = null;
 let currentMeetingId = null;
+let pendingMeetingTranscriptId = null;
 let meetings = [];
 let audioVisualizer = null;
 let isFirstRecording = true; // Track if this is first recording (for longer timeout)
@@ -553,6 +558,7 @@ async function selectMeeting(meetingId) {
   });
 
   currentMeetingId = meetingId;
+  pendingMeetingTranscriptId = meetingId;
 
   // Show meeting details
   document.getElementById('meeting-title').textContent = meeting.title;
@@ -561,27 +567,32 @@ async function selectMeeting(meetingId) {
 
   setMeetingAudioSource(meeting.audioPath);
 
+  // Show details panel immediately while transcript loads in the background
+  document.getElementById('meeting-details-empty').style.display = 'none';
+  meetingDetails.style.display = 'flex';
+
   const transcriptEl = document.getElementById('meeting-transcript');
   transcriptEl.textContent = 'Loading transcript...';
 
   try {
     const fullMeeting = await window.electronAPI.getMeeting(meetingId);
 
-    if (!fullMeeting || currentMeetingId !== meetingId) {
+    if (!fullMeeting || currentMeetingId !== meetingId || pendingMeetingTranscriptId !== meetingId) {
       return;
     }
 
     transcriptEl.textContent = fullMeeting.transcript || 'No transcript available';
   } catch (error) {
     console.error(`Failed to load meeting transcript: ${error.message}`);
-    if (currentMeetingId === meetingId) {
+    if (currentMeetingId === meetingId && pendingMeetingTranscriptId === meetingId) {
       transcriptEl.textContent = 'Failed to load transcript';
+    }
+  } finally {
+    if (pendingMeetingTranscriptId === meetingId) {
+      pendingMeetingTranscriptId = null;
     }
   }
 
-  // Show details panel, hide empty state
-  document.getElementById('meeting-details-empty').style.display = 'none';
-  meetingDetails.style.display = 'flex';
 }
 
 // Setup event listeners
@@ -668,8 +679,7 @@ function setupEventListeners() {
     }
   }));
 
-  // Listen for the first available update notification only
-  registerCleanup(window.electronAPI.onceUpdateAvailable((updateInfo) => {
+  registerCleanup(window.electronAPI.onUpdateAvailable((updateInfo) => {
     showUpdateNotification(updateInfo);
   }));
 
@@ -918,6 +928,9 @@ async function startRecording() {
             );
           }
         } else {
+          if (errorMsg.toLowerCase().includes('desktop audio failed to start')) {
+            addLog(`Desktop audio startup details: ${errorMsg}`, 'error');
+          }
           alert(
             `Recording failed: ${errorMsg}\n\n` +
             'Try refreshing your audio devices or restarting the app.'
@@ -1501,26 +1514,17 @@ function appendGPULog(text) {
 let currentUpdateInfo = null;
 
 function showUpdateNotification(updateInfo) {
-  currentUpdateInfo = updateInfo;
-
-  const banner = document.getElementById('update-banner');
-  const title = document.getElementById('update-title');
-  const description = document.getElementById('update-description');
-  const downloadBtn = document.getElementById('download-update');
-  const dismissBtn = document.getElementById('dismiss-update');
-
-  // Update content
-  title.textContent = `Update Available: v${updateInfo.version}`;
-  description.textContent = `A new version of Meeting Transcriber is ready to download.`;
-
-  // Show banner
-  banner.style.display = 'block';
-
-  // Set up button handlers
-  downloadBtn.onclick = handleDownloadUpdate;
-  dismissBtn.onclick = handleDismissUpdate;
-
-  addLog(`✨ Update available: v${updateInfo.version}`);
+  currentUpdateInfo = showUpdateNotificationBanner({
+    banner: document.getElementById('update-banner'),
+    title: document.getElementById('update-title'),
+    description: document.getElementById('update-description'),
+    downloadBtn: document.getElementById('download-update'),
+    dismissBtn: document.getElementById('dismiss-update'),
+    updateInfo,
+    onDownload: handleDownloadUpdate,
+    onDismiss: handleDismissUpdate,
+    addLog,
+  });
 }
 
 async function handleDownloadUpdate() {
@@ -1539,9 +1543,10 @@ async function handleDownloadUpdate() {
 }
 
 function handleDismissUpdate() {
-  const banner = document.getElementById('update-banner');
-  banner.style.display = 'none';
-  addLog('Update reminder dismissed');
+  hideUpdateNotificationBanner({
+    banner: document.getElementById('update-banner'),
+    addLog,
+  });
 }
 
 // ============================================================================

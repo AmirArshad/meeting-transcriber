@@ -13,7 +13,7 @@ const FFMPEG_DIR = path.join(BUILD_DIR, 'ffmpeg');
 const BIN_DIR = path.join(BUILD_DIR, 'bin');
 const MODELS_DIR = path.join(BUILD_DIR, 'whisper-models');
 const RESOURCE_MANIFEST_PATH = path.join(BUILD_DIR, 'resource-manifest.json');
-const RESOURCE_MANIFEST_VERSION = 1;
+const RESOURCE_MANIFEST_VERSION = 2;
 
 // Swift AudioCaptureHelper paths
 const SWIFT_HELPER_DIR = path.join(__dirname, '..', 'swift', 'AudioCaptureHelper');
@@ -22,19 +22,99 @@ const SWIFT_HELPER_BINARY = 'audiocapture-helper';
 const IS_MAC = process.platform === 'darwin';
 const IS_WINDOWS = process.platform === 'win32';
 
-console.log('========================================');
-console.log('Meeting Transcriber - Build Preparation');
-console.log(`Platform: ${process.platform}`);
-console.log('========================================\n');
-
-// Ensure build directories exist
-if (!fs.existsSync(BUILD_DIR)) {
-  fs.mkdirSync(BUILD_DIR, { recursive: true });
-  console.log('Created build/resources/ directory\n');
-}
-
 function readTextOrEmpty(filePath) {
   return fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : '';
+}
+
+function listFilesRecursively(dirPath) {
+  if (!fs.existsSync(dirPath)) {
+    return [];
+  }
+
+  const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+  const results = [];
+
+  for (const entry of entries) {
+    const fullPath = path.join(dirPath, entry.name);
+    if (entry.isDirectory()) {
+      results.push(...listFilesRecursively(fullPath));
+    } else if (entry.isFile()) {
+      results.push(fullPath);
+    }
+  }
+
+  return results.sort();
+}
+
+function hashFileContent(filePath) {
+  return hashString(fs.readFileSync(filePath));
+}
+
+function buildDirectoryManifest(dirPath, rootPath) {
+  const files = listFilesRecursively(dirPath);
+  return files.map((filePath) => ({
+    path: path.relative(rootPath, filePath).replace(/\\/g, '/'),
+    sha256: hashFileContent(filePath),
+  }));
+}
+
+function ensureBuildDirectory() {
+  if (!fs.existsSync(BUILD_DIR)) {
+    fs.mkdirSync(BUILD_DIR, { recursive: true });
+    console.log('Created build/resources/ directory\n');
+  }
+}
+
+function ensureWindowsEmbeddedPythonPathConfig() {
+  const pthFile = path.join(PYTHON_DIR, 'python311._pth');
+
+  if (!fs.existsSync(pthFile)) {
+    return;
+  }
+
+  const pthContent = fs.readFileSync(pthFile, 'utf8');
+  const lines = pthContent.split(/\r?\n/);
+  const cleanedLines = lines.filter((line) => line.trim() !== '');
+  const normalizedLines = [];
+  const seen = new Set();
+  let siteEnabled = false;
+
+  for (const line of cleanedLines) {
+    const trimmed = line.trim();
+
+    if (trimmed === '#import site' || trimmed === 'import site') {
+      if (!siteEnabled) {
+        normalizedLines.push('import site');
+        siteEnabled = true;
+      }
+      continue;
+    }
+
+    if (!seen.has(trimmed)) {
+      normalizedLines.push(trimmed);
+      seen.add(trimmed);
+    }
+  }
+
+  const requiredPaths = ['../backend', './Lib/site-packages'];
+  for (const requiredPath of requiredPaths.reverse()) {
+    if (!seen.has(requiredPath)) {
+      normalizedLines.unshift(requiredPath);
+      seen.add(requiredPath);
+    }
+  }
+
+  if (!siteEnabled) {
+    normalizedLines.push('import site');
+  }
+
+  const updatedContent = `${normalizedLines.join('\n')}\n`;
+  if (updatedContent !== pthContent) {
+    fs.writeFileSync(pthFile, updatedContent);
+    console.log('  → Embedded Python path configuration updated');
+  } else {
+    console.log('  → Embedded Python path configuration already current');
+  }
 }
 
 function buildResourceManifest() {
@@ -46,9 +126,44 @@ function buildResourceManifest() {
       requirementsMacos: hashString(readTextOrEmpty(path.join(__dirname, '..', 'requirements-macos.txt'))),
       requirementsWindows: hashString(readTextOrEmpty(path.join(__dirname, '..', 'requirements-windows.txt'))),
       swiftPackage: hashString(readTextOrEmpty(path.join(__dirname, '..', 'swift', 'AudioCaptureHelper', 'Package.swift'))),
+      swiftSources: buildDirectoryManifest(
+        path.join(__dirname, '..', 'swift', 'AudioCaptureHelper', 'Sources'),
+        path.join(__dirname, '..', 'swift', 'AudioCaptureHelper')
+      ),
       inheritEntitlements: hashString(readTextOrEmpty(path.join(__dirname, 'entitlements.mac.inherit.plist'))),
     },
   };
+}
+
+function ensurePipInstalled(pythonExe, pipTargetDir) {
+  try {
+    execSync(`"${pythonExe}" -m pip --version`, { stdio: 'inherit' });
+    return Promise.resolve();
+  } catch (error) {
+    console.log('  pip not found; bootstrapping from pinned wheel...');
+  }
+
+  if (!fs.existsSync(pipTargetDir)) {
+    fs.mkdirSync(pipTargetDir, { recursive: true });
+  }
+
+  const pipWheelPath = path.join(BUILD_DIR, path.basename(getBuildDownload('pipWheel').url));
+
+  return downloadFile(getBuildDownload('pipWheel'), pipWheelPath)
+    .then(() => {
+      execSync(`"${pythonExe}" -m zipfile -e "${pipWheelPath}" "${pipTargetDir}"`, { stdio: 'inherit' });
+
+      if (IS_WINDOWS) {
+        ensureWindowsEmbeddedPythonPathConfig();
+      }
+
+      execSync(`"${pythonExe}" -m pip --version`, { stdio: 'inherit' });
+    })
+    .finally(() => {
+      if (fs.existsSync(pipWheelPath)) {
+        fs.unlinkSync(pipWheelPath);
+      }
+    });
 }
 
 function loadResourceManifest() {
@@ -384,6 +499,13 @@ print('\\nModel download complete!', file=sys.stderr)
 
 // Main preparation function
 async function prepareResources() {
+  console.log('========================================');
+  console.log('Meeting Transcriber - Build Preparation');
+  console.log(`Platform: ${process.platform}`);
+  console.log('========================================\n');
+
+  ensureBuildDirectory();
+
   const resourceManifest = ensureFreshResourceManifest();
   const existing = checkExistingResources();
 
@@ -396,15 +518,8 @@ async function prepareResources() {
     if (IS_WINDOWS) {
       const pthFile = path.join(PYTHON_DIR, 'python311._pth');
       if (fs.existsSync(pthFile)) {
-        let pthContent = fs.readFileSync(pthFile, 'utf8');
-        if (!pthContent.includes('../backend')) {
-          console.log('  → Updating .pth file to include backend path...');
-          pthContent = '../backend\n' + pthContent;
-          fs.writeFileSync(pthFile, pthContent);
-          console.log('  → .pth file updated!\n');
-        } else {
-          console.log('  → .pth file already configured\n');
-        }
+        ensureWindowsEmbeddedPythonPathConfig();
+        console.log('');
       }
     }
   } else {
@@ -441,16 +556,7 @@ async function prepareResources() {
       // Make python executable
       execSync(`chmod +x "${pythonExe}"`, { stdio: 'inherit' });
 
-      // Verify pip
-      try {
-        execSync(`"${pythonExe}" -m pip --version`, { stdio: 'inherit' });
-      } catch (error) {
-        console.log('Installing pip...');
-        const getPipPath = path.join(PYTHON_DIR, 'get-pip.py');
-        await downloadFile(getBuildDownload('getPip'), getPipPath);
-        execSync(`"${pythonExe}" "${getPipPath}"`, { stdio: 'inherit' });
-        fs.unlinkSync(getPipPath);
-      }
+      await ensurePipInstalled(pythonExe, path.join(PYTHON_DIR, 'lib', 'python3.11', 'site-packages'));
 
       console.log('[4/4] Installing Python dependencies...');
 
@@ -496,28 +602,16 @@ async function prepareResources() {
 
       console.log('[3/4] Setting up pip...');
 
-      // Download get-pip.py
-      const getPipPath = path.join(PYTHON_DIR, 'get-pip.py');
-      await downloadFile(getBuildDownload('getPip'), getPipPath);
-
       // Modify python311._pth to:
       // 1. Enable site packages (uncomment 'import site')
       // 2. Add backend folder path so -m flag can find our modules (audio, transcription)
       //    CRITICAL FIX (v1.7.3): Embedded Python ignores PYTHONPATH env var, so we MUST
       //    add paths directly to the .pth file for module resolution to work.
-      const pthFile = path.join(PYTHON_DIR, 'python311._pth');
-      let pthContent = fs.readFileSync(pthFile, 'utf8');
-      pthContent = pthContent.replace('#import site', 'import site');
-      // Add relative path to backend folder (installed at ../backend relative to python/)
-      // This enables: python -m audio.windows_recorder
-      if (!pthContent.includes('../backend')) {
-        pthContent = '../backend\n' + pthContent;
-      }
-      fs.writeFileSync(pthFile, pthContent);
+      ensureWindowsEmbeddedPythonPathConfig();
 
       // Install pip
       const pythonExe = path.join(PYTHON_DIR, 'python.exe');
-      execSync(`"${pythonExe}" "${getPipPath}"`, { stdio: 'inherit' });
+      await ensurePipInstalled(pythonExe, path.join(PYTHON_DIR, 'Lib', 'site-packages'));
 
       console.log('[4/4] Installing Python dependencies...');
 
@@ -632,8 +726,18 @@ async function prepareResources() {
   writeResourceManifest(resourceManifest);
 }
 
-// Run preparation
-prepareResources().catch((error) => {
-  console.error('ERROR:', error.message);
-  process.exit(1);
-});
+if (require.main === module) {
+  prepareResources().catch((error) => {
+    console.error('ERROR:', error.message);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  buildDirectoryManifest,
+  buildResourceManifest,
+  ensureWindowsEmbeddedPythonPathConfig,
+  listFilesRecursively,
+  manifestsMatch,
+  prepareResources,
+};

@@ -16,7 +16,6 @@ import sys
 import subprocess
 import threading
 import json
-import struct
 import numpy as np
 from pathlib import Path
 from typing import Optional, Callable
@@ -115,6 +114,9 @@ class SwiftAudioCapture:
         self.last_error = None
         self.first_audio_time: Optional[float] = None
         self.last_audio_time: Optional[float] = None
+        self.warning_event = threading.Event()
+        self.warning_lock = threading.Lock()
+        self.warning_messages: list[dict] = []
 
     @property
     def is_recording(self) -> bool:
@@ -177,6 +179,9 @@ class SwiftAudioCapture:
             self.last_error = None
             self.first_audio_time = None
             self.last_audio_time = None
+            self.warning_event.clear()
+            with self.warning_lock:
+                self.warning_messages = []
 
             # Start the Swift helper process
             self.process = subprocess.Popen(
@@ -250,7 +255,11 @@ class SwiftAudioCapture:
         chunk_count = 0
 
         # Get file descriptor for non-blocking reads
-        stdout_fd = self.process.stdout.fileno()
+        process = self.process
+        if process is None or process.stdout is None:
+            return
+
+        stdout_fd = process.stdout.fileno()
 
         def bytes_to_samples(data: bytes) -> Optional[np.ndarray]:
             """
@@ -326,6 +335,8 @@ class SwiftAudioCapture:
         try:
             while self.process:
                 process = self.process
+                if process is None or process.stdout is None:
+                    break
                 if process.poll() is not None and not self._recording_event.is_set():
                     break
 
@@ -424,12 +435,16 @@ class SwiftAudioCapture:
         message_count = 0
         try:
             while self._recording_event.is_set() and self.process and self.process.poll() is None:
+                process = self.process
+                if process is None or process.stderr is None:
+                    break
+
                 # Use select to avoid blocking forever on readline
-                ready, _, _ = select.select([self.process.stderr], [], [], 0.1)
+                ready, _, _ = select.select([process.stderr], [], [], 0.1)
                 if not ready:
                     continue
 
-                line = self.process.stderr.readline()
+                line = process.stderr.readline()
                 if not line:
                     continue
 
@@ -449,7 +464,32 @@ class SwiftAudioCapture:
                     elif msg_type == 'status':
                         status = msg.get('status', '')
                         message = msg.get('message', '')
+                        timestamp = msg.get('timestamp')
+
+                        if status == 'first_sample' and isinstance(timestamp, (int, float)):
+                            helper_timestamp = float(timestamp)
+                            if self.first_audio_time is None or helper_timestamp < self.first_audio_time:
+                                self.first_audio_time = helper_timestamp
+
                         print(f"Swift helper: {status} - {message}", file=sys.stderr)
+
+                    elif msg_type == 'warning':
+                        code = msg.get('code', 'warning')
+                        message = msg.get('message', 'Swift helper warning')
+                        warning_payload = {
+                            'type': 'warning',
+                            'code': code,
+                            'message': message,
+                        }
+
+                        for key in ('help', 'droppedChunks', 'queuedBytes'):
+                            if key in msg:
+                                warning_payload[key] = msg[key]
+
+                        with self.warning_lock:
+                            self.warning_messages.append(warning_payload)
+                            self.warning_event.set()
+                        print(f"Swift helper WARNING [{code}]: {message}", file=sys.stderr)
 
                     elif msg_type == 'error':
                         error = msg.get('error', '')
@@ -501,6 +541,14 @@ class SwiftAudioCapture:
                         # Final capture statistics
                         total_samples = msg.get('totalSamples', 0)
                         total_bytes = msg.get('totalBytes', 0)
+                        first_audio_timestamp = msg.get('firstAudioTimestamp')
+                        last_audio_timestamp = msg.get('lastAudioTimestamp')
+                        if isinstance(first_audio_timestamp, (int, float)):
+                            helper_timestamp = float(first_audio_timestamp)
+                            if self.first_audio_time is None or helper_timestamp < self.first_audio_time:
+                                self.first_audio_time = helper_timestamp
+                        if isinstance(last_audio_timestamp, (int, float)):
+                            self.last_audio_time = float(last_audio_timestamp)
                         print(f"Swift helper: Final stats - {total_samples} samples, {total_bytes / 1024:.1f} KB", file=sys.stderr)
 
                 except json.JSONDecodeError:
@@ -544,6 +592,8 @@ class SwiftAudioCapture:
         # This allows reader threads to drain remaining data
         if self.process and self.process.poll() is None:
             try:
+                if self.process.stdin is None:
+                    raise OSError("Swift helper stdin is unavailable")
                 self.process.stdin.write(b"stop\n")
                 self.process.stdin.flush()
                 print("  Sent stop command to Swift helper", file=sys.stderr)
@@ -605,6 +655,14 @@ class SwiftAudioCapture:
                 traceback.print_exc(file=sys.stderr)
                 return None
 
+    def drain_warnings(self) -> list[dict]:
+        """Return and clear any queued helper warnings."""
+        with self.warning_lock:
+            warnings = list(self.warning_messages)
+            self.warning_messages = []
+            self.warning_event.clear()
+            return warnings
+
     def cleanup(self):
         """Clean up resources."""
         self._recording_event.clear()
@@ -648,6 +706,8 @@ def check_screen_recording_permission() -> bool:
         )
 
         stderr_output = result.stderr.strip()
+        permission_payload = None
+        permission_denied = False
         if stderr_output:
             for line in stderr_output.splitlines():
                 try:
@@ -656,9 +716,16 @@ def check_screen_recording_permission() -> bool:
                     continue
 
                 if payload.get("type") == "permission_check":
-                    return bool(payload.get("granted"))
+                    permission_payload = payload
+                    continue
                 if payload.get("type") == "error" and payload.get("code") == "permission_denied":
-                    return False
+                    permission_denied = True
+
+        if permission_payload is not None:
+            return bool(permission_payload.get("granted"))
+
+        if permission_denied:
+            return False
 
         return result.returncode == 0
     except Exception as error:

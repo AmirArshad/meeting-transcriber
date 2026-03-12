@@ -149,6 +149,23 @@ class MeetingManager:
             return ""
 
     @staticmethod
+    def _select_scannable_audio_files(recordings_dir: Path) -> List[Path]:
+        preferred_files = {}
+
+        for audio_file in list(recordings_dir.glob('*.opus')) + list(recordings_dir.glob('*.wav')):
+            stem = audio_file.stem
+            current = preferred_files.get(stem)
+
+            if current is None:
+                preferred_files[stem] = audio_file
+                continue
+
+            if current.suffix == '.opus' and audio_file.suffix == '.wav':
+                preferred_files[stem] = audio_file
+
+        return sorted(preferred_files.values(), key=lambda item: item.name)
+
+    @staticmethod
     def _strip_inline_transcript(meeting: Dict) -> Dict:
         stripped = dict(meeting)
         stripped.pop('transcript', None)
@@ -373,8 +390,8 @@ class MeetingManager:
         added = 0
         skipped = 0
 
-        # Find all .opus and .wav audio files
-        audio_files = list(self.recordings_dir.glob('*.opus')) + list(self.recordings_dir.glob('*.wav'))
+        # Find all .opus and .wav audio files, preferring one candidate per stem
+        audio_files = self._select_scannable_audio_files(self.recordings_dir)
 
         for audio_file in audio_files:
             scanned += 1
@@ -484,14 +501,21 @@ class MeetingManager:
         Returns:
             Meeting object or None if not found
         """
-        meetings = self.list_meetings()
-        for meeting in meetings:
-            if meeting['id'] == meeting_id:
-                hydrated = dict(meeting)
-                transcript_path = Path(meeting['transcriptPath'])
-                hydrated['transcript'] = self._read_transcript_text(transcript_path)
-                return hydrated
-        return None
+        with self._metadata_guard():
+            meetings = self._list_meetings_locked()
+            for meeting in meetings:
+                if meeting['id'] == meeting_id:
+                    hydrated = dict(meeting)
+                    transcript_path = Path(meeting['transcriptPath'])
+                    transcript_text = self._read_transcript_text(transcript_path)
+                    if transcript_text:
+                        hydrated['transcript'] = transcript_text
+                    elif meeting.get('transcript'):
+                        hydrated['transcript'] = meeting['transcript']
+                    else:
+                        hydrated['transcript'] = ""
+                    return hydrated
+            return None
 
     def delete_meeting(self, meeting_id: str) -> bool:
         """

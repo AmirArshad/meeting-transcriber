@@ -20,6 +20,7 @@ const {
   getQuitInterceptState,
   getRecorderEventAction,
   getRecordingStopTimeout,
+  resolveStopTimeoutAction,
   isModelDownloadErrorOutput,
   parseRecorderStdoutChunk,
 } = require('./main-process-helpers');
@@ -39,6 +40,7 @@ let powerSaveId = null; // Power save blocker ID for preventing system suspensio
 let recordingHeartbeat = null; // Heartbeat monitor to detect recording failures
 let lastLevelUpdate = null; // Timestamp of last audio level update
 let recordingStopPromise = null;
+let stopCommandSent = false;
 let quitWorkflowPromise = null;
 let allowImmediateQuit = false;
 
@@ -72,6 +74,11 @@ function disableRecordingPowerSaveBlocker(reason = 'recording stopped') {
     powerSaveId = null;
     console.log(`Power save blocker disabled (${reason})`);
   }
+}
+
+function resetStopWorkflowState() {
+  recordingStopPromise = null;
+  stopCommandSent = false;
 }
 
 function parseRecordingStopResult(stdoutData) {
@@ -150,7 +157,7 @@ function stopRecordingProcess() {
 
       recordingStartTime = null;
       disableRecordingPowerSaveBlocker('recording completed');
-      recordingStopPromise = null;
+      resetStopWorkflowState();
     };
 
     const closeHandler = (code) => {
@@ -179,11 +186,16 @@ function stopRecordingProcess() {
     currentProcess.once('close', closeHandler);
 
     try {
+      if (stopCommandSent) {
+        return;
+      }
+
       currentProcess.stdin.write('stop\n');
+      stopCommandSent = true;
     } catch (error) {
       settled = true;
       cleanupListeners();
-      recordingStopPromise = null;
+      resetStopWorkflowState();
       reject(new Error(`Could not send stop command to recorder: ${error.message}`));
     }
   });
@@ -207,14 +219,20 @@ async function waitForRecordingStop({ forceKillOnTimeout, timeoutMessage }) {
       }),
     ]);
   } catch (error) {
-    if (forceKillOnTimeout && pythonProcess) {
+    const timeoutAction = resolveStopTimeoutAction({
+      forceKillOnTimeout,
+      errorMessage: error.message,
+      timeoutMessage,
+      hasRecordingProcess: Boolean(pythonProcess),
+    });
+
+    if (timeoutAction.shouldKillProcess && pythonProcess) {
       try {
         pythonProcess.kill();
+        resetStopWorkflowState();
       } catch (killError) {
         console.warn('Failed to kill recorder after timeout:', killError.message);
       }
-    } else if (!forceKillOnTimeout && error.message === timeoutMessage) {
-      recordingStopPromise = null;
     }
 
     throw error;

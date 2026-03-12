@@ -51,13 +51,13 @@ npm run prepare-build
 ```
 
 **Note:** This may take 5-15 minutes depending on your internet speed.
-The build now writes a `build/resources/resource-manifest.json` file and invalidates stale runtime artifacts automatically when the pinned downloads, requirements, or helper build inputs change.
+The build now writes a `build/resources/resource-manifest.json` file and invalidates stale runtime artifacts automatically when pinned downloads, requirements, entitlements, or Swift helper sources change.
 
 The script will:
 
 1. Download the pinned Python runtime for the current platform
-2. Verify the downloaded artifact checksum
-3. Extract Python and install platform-specific dependencies
+2. Verify checksums for runtime downloads and the pinned pip bootstrap wheel
+3. Extract Python, bootstrap pip from the pinned wheel, and install platform-specific dependencies
 4. Download and verify ffmpeg
 5. Build and stage the Swift helper on macOS
 
@@ -73,7 +73,7 @@ Creates a complete NSIS installer (.exe):
 npm run build
 ```
 
-Output: `dist/Meeting Transcriber Setup 1.0.0.exe` (~600-800MB)
+Output: `dist/Meeting Transcriber-Setup-<version>.exe` (~600-800MB)
 
 ### Windows unpacked build (for testing)
 
@@ -122,7 +122,7 @@ After building, you'll have:
 
 ```text
 dist/
-├── Meeting Transcriber Setup 1.0.0.exe  # Main installer
+├── Meeting Transcriber-Setup-<version>.exe  # Main installer
 ├── win-unpacked/                         # Unpacked app (if using build:dir)
 └── builder-*.yaml                        # Build metadata
 ```
@@ -131,14 +131,13 @@ dist/
 
 1. **Test the unpacked version first:**
 
-   ```bash
+   ```powershell
    npm run build:dir
-   cd dist/win-unpacked
-   "Meeting Transcriber.exe"
+   .\dist\win-unpacked\Meeting Transcriber.exe
    ```
 
 2. **Then test the full installer:**
-   - Run `Meeting Transcriber Setup 1.0.0.exe`
+   - Run `Meeting Transcriber-Setup-<version>.exe`
    - Install to a test location
    - Verify the app launches
    - Test recording and transcription
@@ -179,13 +178,16 @@ The NSIS installer provides:
 To start fresh:
 
 ```bash
-# Remove build artifacts
-rmdir /s /q dist
-rmdir /s /q build\resources
-
-# Rebuild everything
+npm run clean
+rm -rf build/resources
 npm run prepare-build
 npm run build
+```
+
+On Windows PowerShell, replace `rm -rf build/resources` with:
+
+```powershell
+Remove-Item -Recurse -Force build/resources
 ```
 
 ## Test Before Building

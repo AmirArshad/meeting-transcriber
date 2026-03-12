@@ -24,10 +24,19 @@ Verify versions:
 
 ```bash
 node --version
+```
+
+macOS:
+
+```bash
 python3 --version
 ```
 
-On Windows, use `py -3.11` if available.
+Windows:
+
+```powershell
+py -3.11 --version
+```
 
 ## Install Test Dependencies
 
@@ -38,6 +47,14 @@ npm install
 ```
 
 ### Python test dependencies only
+
+#### Windows
+
+```powershell
+py -3.11 -m pip install -r requirements-dev.txt
+```
+
+#### macOS
 
 ```bash
 python3 -m pip install -r requirements-dev.txt
@@ -74,11 +91,19 @@ This runs:
 
 ### Python regression tests
 
+macOS:
+
 ```bash
 python3 -m pytest tests/python
 ```
 
-Or use:
+Windows:
+
+```powershell
+py -3.11 -m pytest tests/python
+```
+
+Or use the cross-platform npm script:
 
 ```bash
 npm run test:python
@@ -135,6 +160,9 @@ CI currently runs:
 - JavaScript tests
 - JavaScript syntax checks
 - Swift helper build check on macOS
+- packaged Windows build smoke test
+- packaged macOS build smoke test
+- packaged macOS resource verification for helper, Python, and ffmpeg
 
 ## Troubleshooting
 

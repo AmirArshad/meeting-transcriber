@@ -16,6 +16,7 @@ const {
   getMacMLXModelStorageDirs,
   getModelDownloadPatterns,
   getRecordingStopTimeout,
+  resolveStopTimeoutAction,
   isModelDownloadErrorOutput,
   parseRecorderMessageLine,
   parseRecorderStdoutChunk,
@@ -275,6 +276,34 @@ test('getRecordingStopTimeout uses a minimum timeout when recording has not star
 
 test('getRecordingStopTimeout scales with recording duration', () => {
   assert.equal(getRecordingStopTimeout(0, 61000), 50000);
+});
+
+
+test('resolveStopTimeoutAction keeps the in-flight stop promise during graceful quit timeout', () => {
+  assert.deepEqual(resolveStopTimeoutAction({
+    forceKillOnTimeout: false,
+    errorMessage: 'Recorder stop is taking longer than expected.',
+    timeoutMessage: 'Recorder stop is taking longer than expected.',
+    hasRecordingProcess: true,
+  }), {
+    timedOut: true,
+    shouldKillProcess: false,
+    shouldKeepStopPromise: true,
+  });
+});
+
+
+test('resolveStopTimeoutAction kills the recorder on stop timeout when forced', () => {
+  assert.deepEqual(resolveStopTimeoutAction({
+    forceKillOnTimeout: true,
+    errorMessage: 'Recording stop timeout - process took too long to finish',
+    timeoutMessage: 'Recording stop timeout - process took too long to finish',
+    hasRecordingProcess: true,
+  }), {
+    timedOut: true,
+    shouldKillProcess: true,
+    shouldKeepStopPromise: true,
+  });
 });
 
 

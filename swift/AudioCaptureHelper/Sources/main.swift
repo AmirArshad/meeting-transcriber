@@ -38,10 +38,13 @@ func sendJSON(_ dict: [String: Any]) {
     }
 }
 
-func sendStatus(_ status: String, message: String? = nil) {
+func sendStatus(_ status: String, message: String? = nil, extra: [String: Any] = [:]) {
     var dict: [String: Any] = ["type": "status", "status": status]
     if let msg = message {
         dict["message"] = msg
+    }
+    for (key, value) in extra {
+        dict[key] = value
     }
     sendJSON(dict)
 }
@@ -64,6 +67,7 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
     private let queueLock = NSLock()
     private var sampleCount: Int = 0
     private var totalBytesWritten: Int = 0
+    private var firstAudioTime: Date?
     private var lastAudioTime: Date?
     private var silencePeriodLogged = false
     private let silenceThreshold: TimeInterval = 5.0  // Log when silence exceeds 5 seconds
@@ -99,6 +103,7 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
         isCapturing = true
         sampleCount = 0
         totalBytesWritten = 0
+        firstAudioTime = nil
         lastAudioTime = nil
         silencePeriodLogged = false
         hasLoggedAudioFormat = false
@@ -126,6 +131,8 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
         outputLock.lock()
         let finalSampleCount = sampleCount
         let finalBytes = totalBytesWritten
+        let finalFirstAudioTimestamp = firstAudioTime?.timeIntervalSince1970
+        let finalLastAudioTimestamp = lastAudioTime?.timeIntervalSince1970
         outputLock.unlock()
 
         queueLock.lock()
@@ -140,6 +147,8 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
             "totalBytes": finalBytes,
             "droppedChunks": finalDroppedChunks,
             "queuedBytesRemaining": finalQueuedBytes,
+            "firstAudioTimestamp": finalFirstAudioTimestamp as Any,
+            "lastAudioTimestamp": finalLastAudioTimestamp as Any,
         ])
     }
 
@@ -167,6 +176,9 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
 
         // Single lock region for state updates
         outputLock.lock()
+        if firstAudioTime == nil {
+            firstAudioTime = now
+        }
         if let lastTime = lastAudioTime {
             silenceDuration = now.timeIntervalSince(lastTime)
             if silenceDuration > silenceThreshold && silencePeriodLogged {
@@ -207,7 +219,11 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
         }
 
         if currentSampleCount == 1 {
-            sendStatus("first_sample", message: "Received first audio sample (\(audioData.count) bytes)")
+            sendStatus(
+                "first_sample",
+                message: "Received first audio sample (\(audioData.count) bytes)",
+                extra: ["timestamp": now.timeIntervalSince1970]
+            )
         }
 
         // Log periodic status every ~10 seconds (assuming ~100 samples/sec)
@@ -812,7 +828,6 @@ func parseArguments() -> Config {
         case "--include-self":
             config.excludeCurrentApp = false
         case "--check-permission":
-            sendJSON(["type": "permission_check", "granted": false])
             if #available(macOS 13.0, *) {
                 Task {
                     do {

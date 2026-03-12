@@ -10,18 +10,20 @@ import wave
 import json
 import threading
 import time
+from types import SimpleNamespace
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Optional
 import numpy as np
 
 from .compressor import compress_to_opus, verify_recording_integrity
 from .chunked_audio_buffer import ChunkedAudioBuffer
 
 try:
+    # pyright: ignore[reportMissingImports]
     import sounddevice as sd
 except ImportError:
-    print("ERROR: sounddevice not installed. Install with: pip install sounddevice", file=sys.stderr)
-    sys.exit(1)
+    sd = SimpleNamespace(InputStream=None, query_devices=None)
 
 
 # Lock for thread-safe JSON output to stdout
@@ -112,6 +114,9 @@ def _downmix_to_stereo(audio: np.ndarray, num_channels: int) -> np.ndarray:
 # Falls back to PyObjC ScreenCaptureKit if Swift helper not available
 SWIFT_CAPTURE_AVAILABLE = False
 SCREENCAPTURE_AVAILABLE = False
+SwiftAudioCapture = None
+ScreenCaptureAudioRecorder = None
+check_screen_recording_permission = lambda: False
 
 try:
     from .swift_audio_capture import SwiftAudioCapture, is_swift_capture_available, check_screen_recording_permission
@@ -132,9 +137,6 @@ if not SWIFT_CAPTURE_AVAILABLE:
     except ImportError:
         print("WARNING: No desktop audio capture available", file=sys.stderr)
         print("  Desktop audio capture will be disabled", file=sys.stderr)
-        # Define fallback function
-        def check_screen_recording_permission():
-            return False
 
 
 class MacOSAudioRecorder:
@@ -157,7 +159,7 @@ class MacOSAudioRecorder:
         chunk_size: int = 4096,
         mic_volume: float = 1.0,
         desktop_volume: float = 1.0,
-        preroll_seconds: float = None  # None = use default 1.5s, 0 = no preroll (for production with countdown)
+        preroll_seconds: Optional[float] = None  # None = use default 1.5s, 0 = no preroll (for production with countdown)
     ):
         """Initialize the macOS recorder."""
         self.mic_device_id = mic_device_id
@@ -190,21 +192,24 @@ class MacOSAudioRecorder:
         self._desktop_started_event = threading.Event()
         self._mic_start_error = None
         self._desktop_start_error = None
+        self._desktop_start_details = None
 
         # Threads
         self.mic_thread = None
         self.desktop_thread = None
 
         # Device info
-        self.mic_info = None
+        self.mic_info: Optional[dict[str, Any]] = None
         self.desktop_info = None
 
         # Desktop audio recorder (Swift helper preferred, PyObjC fallback)
-        self.desktop_capture = None
+        self.desktop_capture: Optional[Any] = None
         self.desktop_capture_type = None  # 'swift' or 'pyobjc'
 
         if SWIFT_CAPTURE_AVAILABLE:
             try:
+                if SwiftAudioCapture is None:
+                    raise RuntimeError("SwiftAudioCapture unavailable")
                 self.desktop_capture = SwiftAudioCapture(
                     sample_rate=sample_rate,
                     channels=channels
@@ -218,6 +223,8 @@ class MacOSAudioRecorder:
         # Fallback to PyObjC ScreenCaptureKit
         if self.desktop_capture is None and SCREENCAPTURE_AVAILABLE:
             try:
+                if ScreenCaptureAudioRecorder is None:
+                    raise RuntimeError("ScreenCaptureAudioRecorder unavailable")
                 self.desktop_capture = ScreenCaptureAudioRecorder(
                     sample_rate=sample_rate,
                     channels=channels
@@ -278,6 +285,7 @@ class MacOSAudioRecorder:
         self._desktop_started_event.clear()
         self._mic_start_error = None
         self._desktop_start_error = None
+        self._desktop_start_details = None
         self.mic_capture_start_time = None
         self.desktop_capture_start_time = None
         self.desktop_capture_end_time = None
@@ -288,10 +296,12 @@ class MacOSAudioRecorder:
 
         # Get device info
         try:
+            if sd.query_devices is None:
+                raise RuntimeError("sounddevice is not available")
             _send_configuring_devices_event()
             devices = sd.query_devices()
             self.mic_info = devices[self.mic_device_id]
-            print(f"Microphone: {self.mic_info['name']}", file=sys.stderr)
+            print(f"Microphone: {(self.mic_info or {}).get('name', 'unknown')}", file=sys.stderr)
 
             # Desktop audio status
             if self.desktop_capture:
@@ -384,7 +394,8 @@ class MacOSAudioRecorder:
         stream_opened = False
         try:
             # Determine mic channels (mono or stereo)
-            mic_channels = min(self.mic_info.get('max_input_channels', 1), 2)
+            mic_info = self.mic_info or {}
+            mic_channels = min(mic_info.get('max_input_channels', 1), 2)
 
             print(f"Starting mic capture ({mic_channels} channel(s))...", file=sys.stderr)
 
@@ -400,7 +411,8 @@ class MacOSAudioRecorder:
                 # TIME-BASED SYNCHRONIZATION: Use shared reference set at recording start
                 # Both streams use the same recording_start_time (set in start_recording)
                 # This ensures they skip the same wall-clock period and stay in sync
-                elapsed = time.time() - self.recording_start_time
+                reference_start = self.recording_start_time or time.time()
+                elapsed = time.time() - reference_start
 
                 # Skip pre-roll based on TIME, not frame counts
                 if elapsed < self.preroll_seconds:
@@ -423,6 +435,8 @@ class MacOSAudioRecorder:
                 frame_count += 1
 
             # Open stream and start recording
+            if sd.InputStream is None:
+                raise RuntimeError("sounddevice InputStream is not available")
             with sd.InputStream(
                 device=self.mic_device_id,
                 channels=mic_channels,
@@ -486,9 +500,18 @@ class MacOSAudioRecorder:
 
             # Start recording
             if not self.desktop_capture.start_recording():
-                message = f"{capture_type} desktop audio failed to start."
+                detailed_message = self.desktop_capture.last_error or f"{capture_type} desktop audio failed to start."
+                message = detailed_message
+                if detailed_message.startswith('PERMISSION_DENIED:'):
+                    message = detailed_message
+                elif 'failed to start' not in detailed_message.lower():
+                    message = f"{capture_type} desktop audio failed to start: {detailed_message}"
                 print(message, file=sys.stderr)
                 self._desktop_start_error = message
+                self._desktop_start_details = {
+                    'captureType': capture_type,
+                    'rawMessage': detailed_message,
+                }
                 self._desktop_started_event.set()
                 _send_error_message("DESKTOP_START_FAILED", message)
                 self._set_running(False)
@@ -509,6 +532,17 @@ class MacOSAudioRecorder:
             level_error_logged = False
 
             while self._get_running():
+                if hasattr(self.desktop_capture, 'drain_warnings'):
+                    for warning in self.desktop_capture.drain_warnings():
+                        _send_warning_message(
+                            warning.get('code', 'SWIFT_HELPER_WARNING'),
+                            warning.get('message', 'Desktop audio helper warning'),
+                            help=warning.get('help'),
+                            droppedChunks=warning.get('droppedChunks'),
+                            queuedBytes=warning.get('queuedBytes'),
+                            captureType=capture_type,
+                        )
+
                 # Update desktop audio level from capture buffer (thread-safe)
                 # Avoid nested locks by copying data first, then updating level
                 try:
@@ -572,10 +606,20 @@ class MacOSAudioRecorder:
             capture_type = self.desktop_capture_type or 'unknown'
             print(f"Stopping {capture_type} desktop capture...", file=sys.stderr)
             desktop_audio = self.desktop_capture.stop_recording()
+            if hasattr(self.desktop_capture, 'drain_warnings'):
+                for warning in self.desktop_capture.drain_warnings():
+                    _send_warning_message(
+                        warning.get('code', 'SWIFT_HELPER_WARNING'),
+                        warning.get('message', 'Desktop audio helper warning'),
+                        help=warning.get('help'),
+                        droppedChunks=warning.get('droppedChunks'),
+                        queuedBytes=warning.get('queuedBytes'),
+                        captureType=capture_type,
+                    )
             if desktop_audio is not None:
                 # Convert to list of frames for consistency
                 self.desktop_frames = [desktop_audio]
-                self.desktop_capture_start_time = getattr(self.desktop_capture, 'first_audio_time', None)
+                self.desktop_capture_start_time = self._resolve_desktop_capture_start_time()
                 self.desktop_capture_end_time = getattr(self.desktop_capture, 'last_audio_time', None)
                 if self.desktop_capture_start_time is None and self.recording_start_time is not None:
                     self.desktop_capture_start_time = self.recording_start_time + self.preroll_seconds
@@ -691,9 +735,24 @@ class MacOSAudioRecorder:
         print(f"Final file: {final_output_path}", file=sys.stderr)
         print(f"Duration: {duration_seconds:.1f} seconds", file=sys.stderr)
 
+    def _resolve_desktop_capture_start_time(self):
+        """Prefer helper-provided capture timestamps over Python receive times."""
+        if self.desktop_capture is None:
+            return None
+
+        first_audio_time = getattr(self.desktop_capture, 'first_audio_time', None)
+        if first_audio_time is not None:
+            return first_audio_time
+
+        return getattr(self.desktop_capture, 'last_audio_time', None)
+
     def _align_streams_by_start_time(self, mic_audio: np.ndarray, desktop_audio: np.ndarray):
         """Align mic and desktop streams by observed first-audio timestamps."""
-        if self.mic_capture_start_time is None or self.desktop_capture_start_time is None:
+        if (
+            self.recording_start_time is None
+            or self.mic_capture_start_time is None
+            or self.desktop_capture_start_time is None
+        ):
             print("Stream alignment: missing first-audio timestamp, falling back to length padding only", file=sys.stderr)
             return mic_audio, desktop_audio
 

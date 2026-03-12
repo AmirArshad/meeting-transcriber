@@ -79,7 +79,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onAudioLevels: (callback) => addListener('audio-levels', callback),
   onRecordingWarning: (callback) => addListener('recording-warning', callback),
   onUpdateAvailable: (callback) => addListener('update-available', callback),
-  onceUpdateAvailable: (callback) => addOnceListener('update-available', callback),
   offUpdateAvailable: () => removeAllListeners('update-available')
 });
 

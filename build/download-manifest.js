@@ -22,10 +22,10 @@ const BUILD_DOWNLOADS = Object.freeze({
     url: 'https://evermeet.cx/ffmpeg/ffmpeg-8.0.1.zip',
     sha256: '470e482f6e290eac92984ac12b2d67bad425b1e5269fd75fb6a3536c16e824e4',
   }),
-  getPip: Object.freeze({
-    label: 'get-pip bootstrap script',
-    url: 'https://bootstrap.pypa.io/pip/get-pip.py',
-    sha256: 'feba1c697df45be1b539b40d93c102c9ee9dde1d966303323b830b06f3fbca3c',
+  pipWheel: Object.freeze({
+    label: 'pip 26.0.1 wheel',
+    url: 'https://files.pythonhosted.org/packages/de/f0/c81e05b613866b76d2d1066490adf1a3dbc4ee9d9c839961c3fc8a6997af/pip-26.0.1-py3-none-any.whl',
+    sha256: 'bdb1b08f4274833d62c1aa29e20907365a2ceb950410df15fc9521bad440122b',
   }),
 });
 

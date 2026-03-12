@@ -56,6 +56,7 @@ jobs:
   test-backend-macos:
     name: Test Python Backend (macOS)
     runs-on: macos-14  # Apple Silicon runner
+    timeout-minutes: 75
 
     steps:
     - uses: actions/checkout@v4
@@ -148,6 +149,35 @@ jobs:
         pip install flake8
         flake8 backend --count --select=E9,F63,F7,F82 --show-source --statistics
       continue-on-error: true
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+
+    - name: Install Node dependencies
+      run: npm ci
+
+    - name: Build packaged macOS app smoke test
+      run: npm run build:mac:dir
+      env:
+        DOWNLOAD_MODELS: "false"
+
+    - name: Verify packaged macOS helper and resources
+      run: |
+        APP_PATH="dist/mac-arm64/Meeting Transcriber.app"
+        HELPER_PATH="$APP_PATH/Contents/Resources/bin/audiocapture-helper"
+        PYTHON_PATH="$APP_PATH/Contents/Resources/python/bin/python3"
+        FFMPEG_PATH="$APP_PATH/Contents/Resources/ffmpeg/ffmpeg"
+
+        test -d "$APP_PATH"
+        test -f "$HELPER_PATH"
+        test -x "$HELPER_PATH"
+        test -f "$PYTHON_PATH"
+        test -f "$FFMPEG_PATH"
+
+        echo "✓ Packaged macOS app contains helper, Python, and ffmpeg"
 
   test-frontend:
     name: Test Electron Frontend & Build Smoke

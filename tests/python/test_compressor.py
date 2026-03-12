@@ -54,6 +54,7 @@ def test_compress_to_opus_falls_back_to_wav_when_integrity_check_fails(tmp_path,
 
     assert result == str(output_path.with_suffix('.wav'))
     assert output_path.with_suffix('.wav').read_bytes() == b'fake wav data'
+    assert not output_path.exists()
 
 
 def test_verify_recording_integrity_returns_true_when_ffprobe_is_unavailable(monkeypatch):

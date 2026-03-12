@@ -288,6 +288,69 @@ def test_get_meeting_hydrates_transcript_from_transcript_path(tmp_path):
     assert meeting['transcript'] == 'hydrated transcript body'
 
 
+def test_get_meeting_falls_back_to_inline_transcript_when_file_is_missing(tmp_path):
+    recordings_dir = tmp_path / 'recordings'
+    manager = MeetingManager(recordings_dir=str(recordings_dir))
+
+    audio_path = recordings_dir / 'meeting_20260107_104555.opus'
+    transcript_path = recordings_dir / 'meeting_20260107_104555.md'
+    audio_path.write_bytes(b'audio')
+
+    manager._save_meetings(
+        [
+            {
+                'id': '20260107_104555',
+                'title': 'Meeting',
+                'date': '2026-01-07T10:45:55',
+                'duration': '0:05',
+                'durationSeconds': 5.0,
+                'audioPath': str(audio_path),
+                'transcriptPath': str(transcript_path),
+                'transcript': 'legacy inline transcript',
+                'language': 'en',
+                'model': 'small',
+            }
+        ]
+    )
+
+    meeting = manager.get_meeting('20260107_104555')
+
+    assert meeting is not None
+    assert meeting['transcript'] == 'legacy inline transcript'
+
+
+def test_scan_and_sync_recordings_prefers_single_audio_candidate_per_stem(tmp_path):
+    recordings_dir = tmp_path / 'recordings'
+    manager = MeetingManager(recordings_dir=str(recordings_dir))
+
+    opus_path = recordings_dir / 'meeting_20250101_120000.opus'
+    wav_path = recordings_dir / 'meeting_20250101_120000.wav'
+    transcript_path = recordings_dir / 'meeting_20250101_120000.md'
+    opus_path.write_bytes(b'broken opus placeholder')
+    wav_path.write_bytes(b'healthy wav fallback')
+    transcript_path.write_text('**Duration:** 0:10\n\nTranscript text', encoding='utf-8')
+
+    result = manager.scan_and_sync_recordings()
+    meeting = manager.get_meeting('20250101_120000')
+
+    assert result == {'scanned': 1, 'added': 1, 'skipped': 0}
+    assert meeting is not None
+    assert meeting['audioPath'].endswith('meeting_20250101_120000.wav')
+
+
+def test_select_scannable_audio_files_prefers_wav_fallback_when_both_exist(tmp_path):
+    recordings_dir = tmp_path / 'recordings'
+    recordings_dir.mkdir()
+
+    (recordings_dir / 'meeting_a.opus').write_bytes(b'opus')
+    (recordings_dir / 'meeting_a.wav').write_bytes(b'wav')
+    (recordings_dir / 'meeting_b.wav').write_bytes(b'wav')
+
+    selected = MeetingManager._select_scannable_audio_files(recordings_dir)  # type: ignore[attr-defined]
+
+    assert [path.name for path in selected] == ['meeting_a.wav', 'meeting_b.wav']
+
+
 def test_save_meetings_writes_metadata_atomically(tmp_path, monkeypatch):
     recordings_dir = tmp_path / 'recordings'
     manager = MeetingManager(recordings_dir=str(recordings_dir))

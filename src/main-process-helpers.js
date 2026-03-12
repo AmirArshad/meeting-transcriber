@@ -251,6 +251,16 @@ function getRecordingStopTimeout(recordingStartTime, now = Date.now()) {
   return Math.max(30000, 30000 + (recordingMinutes * 10000));
 }
 
+function resolveStopTimeoutAction({ forceKillOnTimeout, errorMessage, timeoutMessage, hasRecordingProcess }) {
+  const timedOut = errorMessage === timeoutMessage;
+
+  return {
+    timedOut,
+    shouldKillProcess: Boolean(timedOut && forceKillOnTimeout && hasRecordingProcess),
+    shouldKeepStopPromise: timedOut,
+  };
+}
+
 function getQuitInterceptState({ hasRecordingProcess, recordingStartTime, stopInProgress = false }) {
   if (!hasRecordingProcess) {
     return {
@@ -461,6 +471,7 @@ module.exports = {
   getMacMLXCacheDir,
   getModelDownloadPatterns,
   getRecordingStopTimeout,
+  resolveStopTimeoutAction,
   isModelDownloadErrorOutput,
   normalizeRecorderLevels,
   parseRecorderMessageLine,
