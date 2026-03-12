@@ -61,6 +61,7 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
     private let expectedChannels: Int
     private var isCapturing = false
     private let outputLock = NSLock()
+    private let queueLock = NSLock()
     private var sampleCount: Int = 0
     private var totalBytesWritten: Int = 0
     private var lastAudioTime: Date?
@@ -71,6 +72,22 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
     private var hasLoggedAudioFormat = false
     private var extractionErrorCount = 0
     private let maxExtractionErrors = 5  // Only log first N errors to avoid spam
+    private var pendingAudioChunks: [Data] = []
+    private var pendingChunkStartIndex = 0
+    private var pendingChunkBytes = 0
+    private var droppedChunkCount = 0
+    private let maxQueuedBytes = 4 * 1024 * 1024
+    private let queueDropWarningInterval = 25
+    private let writerSignal = DispatchSemaphore(value: 0)
+    private let writerCompletionGroup = DispatchGroup()
+    private let writerQueue = DispatchQueue(label: "audio.capture.writer.queue", qos: .userInitiated)
+    private var writerIsRunning = false
+
+    private struct EnqueueResult {
+        let queuedBytes: Int
+        let droppedChunkCount: Int
+        let droppedDuringEnqueue: Bool
+    }
 
     init(expectedChannels: Int) {
         self.expectedChannels = expectedChannels
@@ -87,20 +104,42 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
         hasLoggedAudioFormat = false
         extractionErrorCount = 0
         outputLock.unlock()
+
+        queueLock.lock()
+        pendingAudioChunks.removeAll(keepingCapacity: true)
+        pendingChunkStartIndex = 0
+        pendingChunkBytes = 0
+        droppedChunkCount = 0
+        queueLock.unlock()
+
+        ensureWriterLoopStarted()
     }
 
     func stopCapturing() {
         outputLock.lock()
-        let finalSampleCount = sampleCount
-        let finalBytes = totalBytesWritten
         isCapturing = false
         outputLock.unlock()
+
+        writerSignal.signal()
+        waitForWriterDrain(timeout: 2.0)
+
+        outputLock.lock()
+        let finalSampleCount = sampleCount
+        let finalBytes = totalBytesWritten
+        outputLock.unlock()
+
+        queueLock.lock()
+        let finalDroppedChunks = droppedChunkCount
+        let finalQueuedBytes = pendingChunkBytes
+        queueLock.unlock()
 
         // Log final stats
         sendJSON([
             "type": "capture_stats",
             "totalSamples": finalSampleCount,
-            "totalBytes": finalBytes
+            "totalBytes": finalBytes,
+            "droppedChunks": finalDroppedChunks,
+            "queuedBytesRemaining": finalQueuedBytes,
         ])
     }
 
@@ -147,19 +186,28 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
             ])
         }
 
-        FileHandle.standardOutput.write(audioData)
-        let bytesWrittenThisSample = audioData.count
+        let enqueueResult = enqueueAudioData(audioData)
 
         // Single lock region for counter updates
         outputLock.lock()
-        totalBytesWritten += bytesWrittenThisSample
         sampleCount += 1
         let currentSampleCount = sampleCount
         let currentBytesWritten = totalBytesWritten
         outputLock.unlock()
 
+        if enqueueResult.droppedDuringEnqueue &&
+            (enqueueResult.droppedChunkCount == 1 || enqueueResult.droppedChunkCount % queueDropWarningInterval == 0) {
+            sendJSON([
+                "type": "warning",
+                "code": "stdout_backpressure",
+                "message": "Audio output queue overflow; dropped \(enqueueResult.droppedChunkCount) chunks",
+                "droppedChunks": enqueueResult.droppedChunkCount,
+                "queuedBytes": enqueueResult.queuedBytes,
+            ])
+        }
+
         if currentSampleCount == 1 {
-            sendStatus("first_sample", message: "Received first audio sample (\(bytesWrittenThisSample) bytes)")
+            sendStatus("first_sample", message: "Received first audio sample (\(audioData.count) bytes)")
         }
 
         // Log periodic status every ~10 seconds (assuming ~100 samples/sec)
@@ -167,7 +215,9 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
             sendJSON([
                 "type": "progress",
                 "samples": currentSampleCount,
-                "bytesWritten": currentBytesWritten
+                "bytesWritten": currentBytesWritten,
+                "queuedBytes": enqueueResult.queuedBytes,
+                "droppedChunks": enqueueResult.droppedChunkCount,
             ])
         }
     }
@@ -191,6 +241,137 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
             ])
         } else {
             outputLock.unlock()
+        }
+    }
+
+    private func ensureWriterLoopStarted() {
+        outputLock.lock()
+        let shouldStart = !writerIsRunning
+        if shouldStart {
+            writerIsRunning = true
+            writerCompletionGroup.enter()
+        }
+        outputLock.unlock()
+
+        guard shouldStart else { return }
+
+        writerQueue.async { [weak self] in
+            self?.writerLoop()
+        }
+    }
+
+    private func writerLoop() {
+        defer {
+            outputLock.lock()
+            writerIsRunning = false
+            outputLock.unlock()
+            writerCompletionGroup.leave()
+        }
+
+        while true {
+            writerSignal.wait()
+
+            while let chunk = dequeueAudioChunk() {
+                FileHandle.standardOutput.write(chunk)
+
+                outputLock.lock()
+                totalBytesWritten += chunk.count
+                outputLock.unlock()
+            }
+
+            if shouldStopWriterLoop() {
+                break
+            }
+        }
+    }
+
+    private func enqueueAudioData(_ data: Data) -> EnqueueResult {
+        queueLock.lock()
+        var droppedDuringEnqueue = false
+
+        while pendingChunkBytes + data.count > maxQueuedBytes && pendingChunkStartIndex < pendingAudioChunks.count {
+            let dropped = pendingAudioChunks[pendingChunkStartIndex]
+            pendingChunkStartIndex += 1
+            pendingChunkBytes -= dropped.count
+            droppedChunkCount += 1
+            droppedDuringEnqueue = true
+        }
+        compactPendingAudioChunksIfNeededLocked()
+
+        if pendingChunkBytes + data.count > maxQueuedBytes {
+            droppedChunkCount += 1
+            let result = EnqueueResult(
+                queuedBytes: pendingChunkBytes,
+                droppedChunkCount: droppedChunkCount,
+                droppedDuringEnqueue: true
+            )
+            queueLock.unlock()
+            return result
+        }
+
+        pendingAudioChunks.append(data)
+        pendingChunkBytes += data.count
+
+        let result = EnqueueResult(
+            queuedBytes: pendingChunkBytes,
+            droppedChunkCount: droppedChunkCount,
+            droppedDuringEnqueue: droppedDuringEnqueue
+        )
+        queueLock.unlock()
+
+        writerSignal.signal()
+        return result
+    }
+
+    private func dequeueAudioChunk() -> Data? {
+        queueLock.lock()
+        defer { queueLock.unlock() }
+
+        guard pendingChunkStartIndex < pendingAudioChunks.count else {
+            compactPendingAudioChunksIfNeededLocked()
+            return nil
+        }
+
+        let chunk = pendingAudioChunks[pendingChunkStartIndex]
+        pendingChunkStartIndex += 1
+        pendingChunkBytes -= chunk.count
+        compactPendingAudioChunksIfNeededLocked()
+        return chunk
+    }
+
+    private func compactPendingAudioChunksIfNeededLocked() {
+        if pendingChunkStartIndex == pendingAudioChunks.count {
+            pendingAudioChunks.removeAll(keepingCapacity: true)
+            pendingChunkStartIndex = 0
+            return
+        }
+
+        if pendingChunkStartIndex > 32 && pendingChunkStartIndex * 2 >= pendingAudioChunks.count {
+            pendingAudioChunks.removeFirst(pendingChunkStartIndex)
+            pendingChunkStartIndex = 0
+        }
+    }
+
+    private func shouldStopWriterLoop() -> Bool {
+        outputLock.lock()
+        let capturing = isCapturing
+        outputLock.unlock()
+
+        queueLock.lock()
+        let queueEmpty = pendingChunkStartIndex >= pendingAudioChunks.count
+        queueLock.unlock()
+
+        return !capturing && queueEmpty
+    }
+
+    private func waitForWriterDrain(timeout: TimeInterval) {
+        let result = writerCompletionGroup.wait(timeout: .now() + timeout)
+        if result == .timedOut {
+            sendJSON([
+                "type": "warning",
+                "code": "writer_drain_timeout",
+                "message": "Timed out waiting for audio writer queue to drain"
+            ])
         }
     }
 
@@ -593,8 +774,6 @@ class AudioCapture {
         // Stop the silence check timer
         stopSilenceCheckTimer()
 
-        delegate?.stopCapturing()
-
         if let stream = stream {
             do {
                 try await stream.stopCapture()
@@ -603,6 +782,8 @@ class AudioCapture {
                 sendError("Error stopping capture: \(error.localizedDescription)")
             }
         }
+
+        delegate?.stopCapturing()
 
         stream = nil
         delegate = nil

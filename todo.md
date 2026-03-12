@@ -21,6 +21,7 @@ Status: active. Phase 00 is complete. Batch 1 is in progress.
   - more truthful macOS recorder startup behavior
   - stricter Swift helper readiness handling
   - Swift helper audio extraction rewrite for full `AudioBufferList` handling
+- Completed the Swift helper write-queue/backpressure fix to decouple ScreenCaptureKit callbacks from blocking stdout writes.
 - Latest automated validation status at time of update:
   - `npm run test:all` passing
   - `swift build -c release --arch arm64` passing
@@ -174,9 +175,9 @@ Files:
 
 ### 2. Prevent callback-path pipe backpressure
 
-- [ ] Decouple ScreenCaptureKit callback handling from stdout writes in the Swift helper.
-- [ ] Add a bounded queue/ring buffer plus dedicated writer path so slow Python reads do not stall capture.
-- [ ] Decide and implement overflow behavior explicitly:
+- [x] Decouple ScreenCaptureKit callback handling from stdout writes in the Swift helper.
+- [x] Add a bounded queue/ring buffer plus dedicated writer path so slow Python reads do not stall capture.
+- [x] Decide and implement overflow behavior explicitly:
   - bounded memory
   - logged drops if unavoidable
   - no deadlock in capture callback
@@ -646,7 +647,7 @@ Files:
 ### Batch 1 - macOS desktop audio hot path
 
 - [x] Swift helper buffer extraction fix
-- [ ] helper write-queue/backpressure fix
+- [x] helper write-queue/backpressure fix
 - [x] truthful startup/ready contract
 - [x] Electron structured stdout parsing
 - [ ] macOS stream alignment fix
