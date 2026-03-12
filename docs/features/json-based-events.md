@@ -1,60 +1,57 @@
-# JSON-Based Event System (Future Enhancement)
+# JSON-Based Recorder Event System
 
 ## Overview
 
-Currently, the app uses string-based event detection to monitor recording status. This works but is fragile and should be refactored to a JSON-based event system for better reliability and maintainability.
+The app now uses a hybrid recorder event contract:
+
+- structured JSON messages on `stdout` for `levels`, `event`, `warning`, and `error`
+- human-readable compatibility/debug logs on `stderr`
+- final recorder result JSON on `stdout`
+
+The migration away from brittle string-based startup detection is partially complete, but not every recorder/progress path has been redesigned into a single final event schema yet.
 
 ## Current Implementation
 
 ### How It Works Now
 
-The Python recorder scripts (both Windows and macOS) print status messages to stderr:
+The recorder scripts emit structured messages like:
 
 ```python
-print(f"Recording started!", file=sys.stderr)
-print(f"Device configuration:", file=sys.stderr)
-print(f"✓ Microphone stream opened at 48000 Hz", file=sys.stderr)
+print(json.dumps({"type": "event", "event": "configuring_devices", "message": "Configuring audio devices..."}), flush=True)
+print(json.dumps({"type": "event", "event": "mic_stream_opened", "message": "Microphone stream opened"}), flush=True)
+print(json.dumps({"type": "event", "event": "recording_started", "message": "Recording started!"}), flush=True)
 ```
 
-Electron's main process parses these strings to detect recording state:
+Electron's main process parses those JSON lines and maps them into renderer progress/warning updates.
 
-```javascript
-if (output.includes('Recording started!')) {
-  recordingStarted = true;
-}
-```
+Compatibility stderr logs still exist for human visibility and for any paths that have not yet been fully normalized.
 
 ### Current Status
 
-- ✅ **Works on both platforms** (Windows and macOS)
-- ✅ **Simple to implement** (just string matching)
-- ✅ **Audio levels already use JSON** (good pattern to follow)
+- ✅ Structured `event`, `warning`, `error`, and `levels` messages are implemented in the active recorder contract
+- ✅ `src/main.js` parses recorder `stdout` line-by-line via `parseRecorderStdoutChunk(...)`
+- ✅ Startup state no longer depends on brittle stderr string matching for the main recording-start flow
+- ⚠️ The contract is still hybrid: stderr remains part of debug/status output and some wording is preserved for compatibility/manual diagnosis
+- ⚠️ Any change to recorder startup/progress behavior still requires coordinated updates across Electron, recorder scripts, and regression tests
+
+### Current Electron Parser Shape
+
+```javascript
+const parsed = parseRecorderStdoutChunk(chunk, pendingBuffer)
+// kinds: levels, event, warning, error, status, result, text
+```
 
 ### Known Issues
 
-1. **Fragile string matching**: Any typo breaks functionality
-   - Example: We had a bug where macOS printed "Recording started..." (three dots) but Electron expected "Recording started!" (exclamation mark)
+1. **Hybrid contract remains**: stderr logs still exist beside structured stdout events, so both sides must stay aligned
+2. **Event vocabulary is not final**: startup/progress/error naming is more consistent than before but not fully unified into one minimal schema
+3. **Cross-file coordination required**: recorder output changes still affect `backend/audio/*_recorder.py`, `src/main.js`, `src/main-process-helpers.js`, and tests
 
-2. **Platform inconsistencies**: Different messages between Windows and macOS
-   - Windows: `Device configuration:`, `Microphone stream opened`, `Desktop audio stream opened`
-   - macOS: Only `Recording started!` (missing the intermediate progress updates)
+## Direction
 
-3. **Hard to maintain**: Need to keep strings synchronized across 3+ files
-   - `backend/audio/windows_recorder.py`
-   - `backend/audio/macos_recorder.py`
-   - `src/main.js`
+The direction is still to finish converging on structured JSON events for all recorder lifecycle messaging.
 
-4. **No structured data**: Can't include contextual information without complex parsing
-
-5. **Localization impossible**: Can't translate messages without breaking detection
-
-## Proposed Solution: JSON-Based Events
-
-### Design
-
-Use the same pattern we already have for audio levels, but extend it to all events.
-
-**Current good pattern** (audio levels):
+The current contract already uses this pattern for active recorder messaging:
 ```python
 levels = {
     "type": "levels",
@@ -64,7 +61,7 @@ levels = {
 print(json.dumps(levels), flush=True)
 ```
 
-**Proposed event pattern**:
+Representative event pattern:
 ```python
 # Recording started
 print(json.dumps({
@@ -109,124 +106,14 @@ print(json.dumps({
 6. **Future-proof**: Easy to add new events
 7. **Consistent**: All platforms send identical event structures
 
-### Implementation Plan
+### Remaining Work
 
-#### Phase 1: Recorder Scripts
+1. Finish converging the remaining recorder status/progress paths on structured stdout messages.
+2. Keep stderr for human-readable logs only.
+3. Keep the event vocabulary stable across Windows and macOS.
+4. Preserve final-result JSON compatibility (`audioPath` on Windows, `outputPath` on macOS) unless all call sites are updated together.
 
-Update both `windows_recorder.py` and `macos_recorder.py`:
-
-```python
-import json
-import time
-
-def send_event(event_type, **data):
-    """Send a JSON event to stdout for Electron to parse."""
-    event = {
-        "type": "event",
-        "event": event_type,
-        "timestamp": time.time(),
-        **data
-    }
-    print(json.dumps(event), flush=True)
-
-# Usage:
-send_event("recording_started")
-send_event("device_configured", mic_rate=48000, desktop_rate=48000)
-send_event("mic_stream_opened", sample_rate=48000, channels=1)
-send_event("desktop_stream_opened", sample_rate=48000, channels=2)
-send_event("recording_stopped", duration=123.45)
-```
-
-#### Phase 2: Electron Parser
-
-Update `src/main.js` to parse JSON events:
-
-```javascript
-pythonProcess.stdout.on('data', (data) => {
-  const lines = data.toString().split('\n');
-
-  for (const line of lines) {
-    if (!line.trim()) continue;
-
-    try {
-      const parsed = JSON.parse(line);
-
-      if (parsed.type === 'levels') {
-        // Handle audio levels (already implemented)
-        mainWindow.webContents.send('audio-levels', parsed);
-        lastLevelUpdate = Date.now();
-      }
-      else if (parsed.type === 'event') {
-        // Handle status events (NEW)
-        handleRecordingEvent(parsed);
-      }
-    } catch (e) {
-      // Not JSON, ignore
-    }
-  }
-});
-
-function handleRecordingEvent(event) {
-  switch (event.event) {
-    case 'recording_started':
-      recordingStarted = true;
-      recordingStartTime = Date.now();
-      mainWindow.webContents.send('recording-init-progress', {
-        stage: 'started',
-        message: 'Recording started!'
-      });
-      resolve({ success: true, message: 'Recording started' });
-      break;
-
-    case 'device_configured':
-      progressStage = 'device_config';
-      mainWindow.webContents.send('recording-init-progress', {
-        stage: 'device_config',
-        message: `Configuring audio (${event.mic_rate} Hz)...`
-      });
-      break;
-
-    case 'mic_stream_opened':
-      progressStage = 'mic_opened';
-      mainWindow.webContents.send('recording-init-progress', {
-        stage: 'mic_opened',
-        message: 'Microphone ready...'
-      });
-      break;
-
-    case 'desktop_stream_opened':
-      progressStage = 'desktop_opened';
-      mainWindow.webContents.send('recording-init-progress', {
-        stage: 'desktop_opened',
-        message: 'Desktop audio ready...'
-      });
-      break;
-
-    // Add more events as needed
-  }
-}
-```
-
-#### Phase 3: Backward Compatibility
-
-During migration, support both methods:
-
-```javascript
-pythonProcess.stderr.on('data', (data) => {
-  const output = data.toString();
-  console.log(`[Recorder] ${output}`);
-
-  // Keep old string-based detection as fallback
-  if (!recordingStarted && output.includes('Recording started!')) {
-    recordingStarted = true;
-    // ...
-  }
-});
-```
-
-Remove old string matching after JSON events are confirmed working.
-
-#### Phase 4: Keep stderr for Human Logs
+### stderr Role
 
 stderr should remain for human-readable logs that users/developers see:
 
@@ -240,20 +127,17 @@ print(f"  Microphone: {mic_name}", file=sys.stderr)
 print(f"  Desktop audio: {desktop_name}", file=sys.stderr)
 ```
 
-### Standard Event Types
+### Current Structured Event Types
 
-Define a standard set of events both platforms should support:
+The current recorder contract uses these structured message classes:
 
-| Event | Description | Data Fields |
-|-------|-------------|-------------|
-| `recording_started` | Recording is active | `timestamp` |
-| `recording_stopped` | Recording ended | `duration`, `timestamp` |
-| `device_configured` | Audio devices configured | `mic_rate`, `desktop_rate`, `channels` |
-| `mic_stream_opened` | Microphone stream active | `sample_rate`, `channels` |
-| `desktop_stream_opened` | Desktop audio stream active | `sample_rate`, `channels` |
-| `error` | Error occurred | `error_type`, `message`, `timestamp` |
-| `warning` | Warning condition | `warning_type`, `message`, `timestamp` |
-| `progress` | Processing progress | `stage`, `percent`, `message` |
+| Type | Purpose |
+|------|---------|
+| `levels` | Live audio meter updates |
+| `event` | Recorder lifecycle/startup/state changes |
+| `warning` | Structured non-fatal recorder issues |
+| `error` | Structured fatal recorder issues |
+| result JSON | Final recording output payload |
 
 ### Testing Strategy
 
@@ -262,18 +146,15 @@ Define a standard set of events both platforms should support:
 3. **Manual testing**: Test both Windows and macOS recorders
 4. **Fallback verification**: Ensure old string method still works during migration
 
-## Current Workarounds
+## Validation Notes
 
-Since this isn't implemented yet, current string matching issues can be avoided by:
+If you change recorder output behavior, update all of:
 
-1. **Be careful with punctuation**: "Recording started!" must match exactly
-2. **Test both platforms**: Ensure messages are consistent between Windows and macOS
-3. **Use constants**: Define message strings as constants to avoid typos
-4. **Document dependencies**: Comment which strings Electron expects
-
-## Priority
-
-**Low priority** - Current system works, but should be refactored for long-term maintainability.
+- `backend/audio/windows_recorder.py`
+- `backend/audio/macos_recorder.py`
+- `src/main.js`
+- `src/main-process-helpers.js`
+- `tests/js/main-process-helpers.test.js`
 
 ## Related Files
 
@@ -291,11 +172,6 @@ Since this isn't implemented yet, current string matching issues can be avoided 
 
 ---
 
-**Status:** Proposed (not implemented)
+**Status:** Partially implemented hybrid contract
 
-**Estimated Effort:** 4-6 hours
-- 1-2 hours: Update both recorder scripts
-- 1-2 hours: Update Electron parser
-- 1-2 hours: Testing and bug fixes
-
-**Risk Level:** Low (can implement with backward compatibility)
+**Risk Level:** Medium - recorder output changes are easy to regress unless Electron, both recorders, and tests are updated together

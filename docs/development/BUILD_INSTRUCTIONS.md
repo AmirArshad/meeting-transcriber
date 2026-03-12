@@ -1,12 +1,13 @@
 # Build Instructions
 
-This document explains how to build the Meeting Transcriber installer from source.
+This document explains how to build Meeting Transcriber from source for the supported packaged targets.
 
 ## Prerequisites
 
 - Node.js 18+ installed
 - Internet connection (for downloading Python and ffmpeg during build)
-- Windows 10/11 (64-bit)
+- Windows 10/11 (64-bit) for Windows builds
+- macOS 13+ on Apple Silicon for macOS builds
 - ~2GB free disk space for build artifacts
 
 ## Step 1: Install Dependencies
@@ -38,47 +39,33 @@ This installs:
 
 ## Step 2: Prepare Build Resources
 
-This step downloads and prepares:
+This step downloads and prepares the packaged runtime resources for the current platform:
 
-- Embedded Python 3.11.9 (~30MB)
-- Python dependencies from requirements.txt (~100MB)
-- ffmpeg binary (~100MB)
+- Bundled Python runtime
+- Python dependencies from the platform-specific requirements file
+- ffmpeg binary
+- macOS Swift `audiocapture-helper` binary when building on macOS
 
 ```bash
 npm run prepare-build
 ```
 
 **Note:** This may take 5-15 minutes depending on your internet speed.
+The build now writes a `build/resources/resource-manifest.json` file and invalidates stale runtime artifacts automatically when the pinned downloads, requirements, or helper build inputs change.
 
 The script will:
 
-1. Download Python embeddable distribution
-2. Extract Python
-3. Install pip
-4. Install all Python dependencies (including faster-whisper)
-5. Download ffmpeg essentials
+1. Download the pinned Python runtime for the current platform
+2. Verify the downloaded artifact checksum
+3. Extract Python and install platform-specific dependencies
+4. Download and verify ffmpeg
+5. Build and stage the Swift helper on macOS
 
-All resources are stored in `build/resources/` and will be bundled into the installer.
+All resources are stored in `build/resources/` and then bundled via `electron-builder`.
 
-## Step 3: Add Application Icon (Required)
+## Step 3: Build the Installer
 
-You need to provide an application icon:
-
-**File:** `build/icon.ico`
-**Format:** Windows ICO format
-**Sizes:** 16x16, 32x32, 48x48, 256x256
-
-Quick options:
-
-- Use an online converter: <https://convertio.co/png-ico/>
-- Find a free icon: <https://www.flaticon.com/>
-- Create with design tools (Photoshop, GIMP, etc.)
-
-**The build will fail without this file!**
-
-## Step 4: Build the Installer
-
-### Option A: Full Installer (Recommended)
+### Windows installer
 
 Creates a complete NSIS installer (.exe):
 
@@ -88,7 +75,7 @@ npm run build
 
 Output: `dist/Meeting Transcriber Setup 1.0.0.exe` (~600-800MB)
 
-### Option B: Portable Build (For Testing)
+### Windows unpacked build (for testing)
 
 Creates an unpacked directory (faster, no installer):
 
@@ -97,6 +84,22 @@ npm run build:dir
 ```
 
 Output: `dist/win-unpacked/` - can run directly for testing
+
+### macOS installer
+
+```bash
+npm run build:mac
+```
+
+Output: `dist/Meeting Transcriber-Setup-<version>.dmg`
+
+### macOS unpacked build (for testing)
+
+```bash
+npm run build:mac:dir
+```
+
+Output: `dist/mac-arm64/`
 
 ## What Gets Bundled
 
@@ -153,17 +156,11 @@ The NSIS installer provides:
 
 ## Troubleshooting
 
-### Build fails: "Icon not found"
-
-- Make sure `build/icon.ico` exists
-- Verify it's a valid ICO file
-
 ### Build fails: Python download errors
 
 - Check internet connection
-- Try running `npm run prebuild` again
 - Try running `npm run prepare-build` again
-- May need to manually download and place in `build/resources/python/`
+- Delete `build/resources/resource-manifest.json` and rerun if you suspect stale resource state
 
 ### Installer is too large (>1GB)
 
@@ -232,8 +229,6 @@ This removes "Unknown Publisher" warnings.
 
 After building the installer:
 
-1. Test thoroughly on a clean Windows machine
-2. Consider adding auto-update functionality
-3. Set up CI/CD for automated builds
-4. Implement crash reporting (Sentry, etc.)
-5. Add analytics (optional)
+1. Test thoroughly on a clean target machine
+2. Verify packaged resources match the current platform/runtime inputs
+3. Set up or verify CI/CD release automation

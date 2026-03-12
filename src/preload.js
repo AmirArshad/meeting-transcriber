@@ -13,6 +13,16 @@ function addListener(channel, callback) {
   return () => ipcRenderer.removeListener(channel, wrappedCallback);
 }
 
+function addOnceListener(channel, callback) {
+  const wrappedCallback = (_event, data) => callback(data);
+  ipcRenderer.once(channel, wrappedCallback);
+  return () => ipcRenderer.removeListener(channel, wrappedCallback);
+}
+
+function removeAllListeners(channel) {
+  ipcRenderer.removeAllListeners(channel);
+}
+
 // Expose protected methods to renderer process
 contextBridge.exposeInMainWorld('electronAPI', {
   // Get audio devices
@@ -68,7 +78,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onModelDownloadProgress: (callback) => addListener('model-download-progress', callback),
   onAudioLevels: (callback) => addListener('audio-levels', callback),
   onRecordingWarning: (callback) => addListener('recording-warning', callback),
-  onUpdateAvailable: (callback) => addListener('update-available', callback)
+  onUpdateAvailable: (callback) => addListener('update-available', callback),
+  onceUpdateAvailable: (callback) => addOnceListener('update-available', callback),
+  offUpdateAvailable: () => removeAllListeners('update-available')
 });
 
 console.log('Preload script loaded - API bridge ready');

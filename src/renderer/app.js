@@ -668,8 +668,8 @@ function setupEventListeners() {
     }
   }));
 
-  // Listen for updates
-  registerCleanup(window.electronAPI.onUpdateAvailable((updateInfo) => {
+  // Listen for the first available update notification only
+  registerCleanup(window.electronAPI.onceUpdateAvailable((updateInfo) => {
     showUpdateNotification(updateInfo);
   }));
 

@@ -1,10 +1,16 @@
 # macOS Audio Architecture Improvements
 
-**Status:** Planned  
+**Status:** Partially implemented / partially planned  
 **Priority:** High (Post-v1.7.0)  
 **Target:** macOS 13+ (Ventura/Sonoma)
 
-This document outlines three key architectural improvements for the macOS audio subsystem, leveraging the capabilities of Apple's **ScreenCaptureKit (SCK)** framework.
+This document outlines larger macOS audio architecture ideas. Some supporting hardening work has already landed since the original draft:
+
+- Screen Recording permission probing is now real and surfaced before recording starts.
+- The preferred Swift helper path is active, with a PyObjC fallback kept aligned to the same startup/error contract.
+- Recorder startup now emits structured stdout events instead of relying on brittle stderr string matching for the main flow.
+
+The sections below should be read as future architectural directions, not as a description of the current shipped implementation.
 
 ---
 

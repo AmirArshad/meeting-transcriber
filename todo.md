@@ -79,11 +79,16 @@ Status: active. Batches 0-4 are complete. Follow-on Batches 5-12 cover the remai
 - Completed Batch 9 Task 3 fix BrowserWindow icon pathing in dev and packaged modes.
 - Completed Batch 10 Task 1 decide whether macOS zip remains part of updater/release behavior.
 - Completed Batch 10 Task 2 align artifact naming and updater matching, or remove dead zip fallback logic.
+- Completed Batch 11 Task 1 preload once/off listener wrappers where they add value.
+- Completed Batch 11 Task 2 remove import-time hard exits from backend/device_manager.py.
+- Completed Batch 11 Task 3 refresh build/developer docs and structured recorder contract notes as needed.
+- Started Batch 12 validation and confirmed the packaged macOS app still bundles `bin/audiocapture-helper`, the helper launches from the packaged app bundle, and `swift build -c release --arch arm64` still passes.
 - Latest automated validation status at time of update:
   - `npm test` passing
   - `npm run test:all` passing
   - `python3 -m py_compile backend/*.py backend/audio/*.py backend/transcription/*.py` passing
   - `swift build -c release --arch arm64` passing
+  - `npm run build:mac:dir` passing (unsigned local bundle)
 
 ## Goals
 
@@ -638,8 +643,8 @@ Files:
 
 ### 36. Replace import-time hard exits in shared modules
 
-- [ ] Refactor `backend/device_manager.py` to raise structured errors instead of calling `sys.exit()` at import time.
-- [ ] Keep CLI behavior by exiting only in the CLI wrapper.
+- [x] Refactor `backend/device_manager.py` to raise structured errors instead of calling `sys.exit()` at import time.
+- [x] Keep CLI behavior by exiting only in the CLI wrapper.
 
 Files:
 
@@ -647,9 +652,9 @@ Files:
 
 ### 37. Update stale docs and repo guidance
 
-- [ ] Fix `docs/development/BUILD_INSTRUCTIONS.md` to use `npm run prepare-build`.
-- [ ] Update macOS architecture/troubleshooting docs after capture fixes land.
-- [ ] Add notes for the new structured recorder event contract if implemented.
+- [x] Fix `docs/development/BUILD_INSTRUCTIONS.md` to use `npm run prepare-build`.
+- [x] Update macOS architecture/troubleshooting docs after capture fixes land.
+- [x] Add notes for the new structured recorder event contract if implemented.
 
 Files:
 
@@ -666,8 +671,8 @@ Files:
 - [ ] Verify first 10 seconds of desktop audio are not missing.
 - [ ] Verify no-Screen-Recording-permission flow fails clearly before recording.
 - [ ] Verify mic-only degradation path is explicit if desktop capture is unavailable.
-- [ ] Verify packaged macOS build still bundles and launches `audiocapture-helper`.
-- [ ] Verify helper still builds with `swift build -c release --arch arm64`.
+- [x] Verify packaged macOS build still bundles and launches `audiocapture-helper`.
+- [x] Verify helper still builds with `swift build -c release --arch arm64`.
 
 ### Windows functional validation
 
@@ -773,9 +778,9 @@ Files:
 
 ### Batch 11 - code quality and docs cleanup
 
-- [ ] preload `once`/`off` listener wrappers where they add value
-- [ ] remove import-time hard exits from `backend/device_manager.py`
-- [ ] refresh build/developer docs and structured recorder contract notes as needed
+- [x] preload `once`/`off` listener wrappers where they add value
+- [x] remove import-time hard exits from `backend/device_manager.py`
+- [x] refresh build/developer docs and structured recorder contract notes as needed
 
 ### Batch 12 - manual validation passes
 
