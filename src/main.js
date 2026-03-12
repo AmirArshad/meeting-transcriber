@@ -15,8 +15,8 @@ const os = require('os');
 const {
   buildModelDownloadCheck,
   cacheContainsModel,
-  classifyRecorderStdoutChunk,
   isModelDownloadErrorOutput,
+  parseRecorderStdoutChunk,
 } = require('./main-process-helpers');
 const { checkForUpdates, openDownloadPage } = require('./updater');
 
@@ -1287,6 +1287,61 @@ ipcMain.handle('start-recording', async (event, options) => {
 
     let recordingStarted = false;
     let progressStage = 'initializing';
+    let stdoutRemainder = '';
+    let startupFailureMessage = null;
+
+    const sendInitProgress = (stage, message) => {
+      progressStage = stage;
+      mainWindow.webContents.send('recording-init-progress', { stage, message });
+    };
+
+    const sendStructuredWarning = (warning, level = 'warning') => {
+      const message = warning.message || warning.error || 'Recorder warning';
+      const payload = {
+        type: warning.type || (warning.code ? warning.code.toLowerCase() : level),
+        code: warning.code,
+        message,
+        help: warning.help,
+        level,
+      };
+
+      mainWindow.webContents.send('recording-warning', payload);
+      mainWindow.webContents.send('recording-progress', message);
+      if (payload.help) {
+        mainWindow.webContents.send('recording-progress', payload.help);
+      }
+
+      return payload;
+    };
+
+    const markRecordingStarted = (message = 'Recording started!') => {
+      if (recordingStarted) {
+        return;
+      }
+
+      recordingStarted = true;
+      recordingStartTime = Date.now();
+
+      // FIX 3: Start heartbeat monitor to detect recording failures
+      lastLevelUpdate = Date.now();
+      recordingHeartbeat = setInterval(() => {
+        const timeSinceUpdate = Date.now() - lastLevelUpdate;
+
+        // If no audio level updates for 10 seconds, something is wrong
+        if (timeSinceUpdate > 10000 && pythonProcess && !pythonProcess.killed) {
+          console.error(`Recording heartbeat lost - no audio levels for ${timeSinceUpdate / 1000}s`);
+          mainWindow.webContents.send('recording-warning', {
+            type: 'heartbeat_lost',
+            message: 'Recording may have stopped unexpectedly. No audio data received for 10+ seconds.'
+          });
+
+          // Continue monitoring - don't auto-kill, let user decide
+        }
+      }, 5000);
+
+      sendInitProgress('started', message);
+      resolve({ success: true, message: 'Recording started' });
+    };
 
     // PERFORMANCE FIX: Throttle audio level updates to reduce IPC overhead
     // Only send updates if window is visible AND we haven't sent one recently
@@ -1294,27 +1349,89 @@ ipcMain.handle('start-recording', async (event, options) => {
     const LEVEL_UPDATE_THROTTLE_MS = 100; // Max 10 updates/sec instead of 20
 
     pythonProcess.stdout.on('data', (data) => {
-      const output = data.toString();
-      const stdoutChunk = classifyRecorderStdoutChunk(output);
+      const parsedChunk = parseRecorderStdoutChunk(data.toString(), stdoutRemainder);
+      stdoutRemainder = parsedChunk.remainder;
 
-      if (stdoutChunk.type === 'levels') {
-        // FIX 3: Update heartbeat timestamp when we receive audio levels
-        lastLevelUpdate = Date.now();
+      for (const message of parsedChunk.messages) {
+        switch (message.kind) {
+          case 'levels': {
+            lastLevelUpdate = Date.now();
 
-        // PERFORMANCE: Only parse and send if window visible and throttled
-        const now = Date.now();
-        const shouldSendUpdate = (now - lastLevelSentTime) >= LEVEL_UPDATE_THROTTLE_MS;
+            const now = Date.now();
+            const shouldSendUpdate = (now - lastLevelSentTime) >= LEVEL_UPDATE_THROTTLE_MS;
 
-        if (shouldSendUpdate && mainWindow && !mainWindow.isMinimized() && mainWindow.isVisible()) {
-          if (stdoutChunk.levels) {
-            mainWindow.webContents.send('audio-levels', stdoutChunk.levels);
-            lastLevelSentTime = now;
+            if (shouldSendUpdate && mainWindow && !mainWindow.isMinimized() && mainWindow.isVisible()) {
+              mainWindow.webContents.send('audio-levels', message.payload);
+              lastLevelSentTime = now;
+            }
+            break;
           }
+
+          case 'event': {
+            const eventName = message.payload.event;
+            const eventMessage = message.payload.message;
+
+            if (eventName === 'mic_stream_opened') {
+              sendInitProgress('mic_opened', eventMessage || 'Microphone ready...');
+            } else if (eventName === 'desktop_stream_opened') {
+              sendInitProgress('desktop_opened', eventMessage || 'Desktop audio ready...');
+            } else if (eventName === 'desktop_capture_disabled') {
+              sendInitProgress('desktop_disabled', eventMessage || 'Desktop audio capture unavailable');
+              sendStructuredWarning({
+                code: message.payload.code || 'NO_DESKTOP_AUDIO',
+                message: eventMessage || 'Desktop audio capture is disabled.',
+                help: message.payload.help,
+                type: 'desktop_capture_disabled',
+              });
+            } else if (eventName === 'recording_started') {
+              markRecordingStarted(eventMessage || 'Recording started!');
+            } else if (eventMessage) {
+              mainWindow.webContents.send('recording-progress', eventMessage);
+            }
+            break;
+          }
+
+          case 'warning':
+            sendStructuredWarning(message.payload, 'warning');
+            break;
+
+          case 'error': {
+            const errorPayload = sendStructuredWarning({
+              code: message.payload.code,
+              message: message.payload.message || message.payload.error,
+              help: message.payload.help,
+              type: message.payload.type,
+            }, 'error');
+
+            if (!recordingStarted && !startupFailureMessage) {
+              startupFailureMessage = errorPayload.message;
+            }
+            progressStage = 'error';
+            break;
+          }
+
+          case 'status':
+            if (message.payload.message) {
+              mainWindow.webContents.send('recording-progress', message.payload.message);
+            }
+            break;
+
+          case 'text':
+            mainWindow.webContents.send('recording-progress', message.payload.message);
+            break;
+
+          case 'result':
+            break;
+
+          case 'json':
+            if (message.payload.message) {
+              mainWindow.webContents.send('recording-progress', message.payload.message);
+            }
+            break;
+
+          default:
+            break;
         }
-        // Note: We still update heartbeat even if we don't send to UI
-      } else {
-        // Send progress updates to renderer
-        mainWindow.webContents.send('recording-progress', stdoutChunk.output);
       }
     });
 
@@ -1336,28 +1453,7 @@ ipcMain.handle('start-recording', async (event, options) => {
 
       // Wait for confirmation that recording actually started
       if (!recordingStarted && output.includes('Recording started!')) {
-        recordingStarted = true;
-        recordingStartTime = Date.now(); // Track when recording actually started
-
-        // FIX 3: Start heartbeat monitor to detect recording failures
-        lastLevelUpdate = Date.now();
-        recordingHeartbeat = setInterval(() => {
-          const timeSinceUpdate = Date.now() - lastLevelUpdate;
-
-          // If no audio level updates for 10 seconds, something is wrong
-          if (timeSinceUpdate > 10000 && pythonProcess && !pythonProcess.killed) {
-            console.error(`Recording heartbeat lost - no audio levels for ${timeSinceUpdate / 1000}s`);
-            mainWindow.webContents.send('recording-warning', {
-              type: 'heartbeat_lost',
-              message: 'Recording may have stopped unexpectedly. No audio data received for 10+ seconds.'
-            });
-
-            // Continue monitoring - don't auto-kill, let user decide
-          }
-        }, 5000); // Check every 5 seconds
-
-        mainWindow.webContents.send('recording-init-progress', { stage: 'started', message: 'Recording started!' });
-        resolve({ success: true, message: 'Recording started' });
+        markRecordingStarted('Recording started!');
       }
     });
 
@@ -1375,12 +1471,12 @@ ipcMain.handle('start-recording', async (event, options) => {
 
       if (!recordingStarted) {
         // Process closed before recording started - this is an error
-        let errorMessage = `Recording failed to start. Process exited with code ${code}.`;
+        let errorMessage = startupFailureMessage || `Recording failed to start. Process exited with code ${code}.`;
 
         // Provide helpful hints based on progress stage
-        if (progressStage === 'initializing') {
+        if (!startupFailureMessage && progressStage === 'initializing') {
           errorMessage += '\n\nTip: Try refreshing your audio devices or restarting the app.';
-        } else if (progressStage === 'configuring') {
+        } else if (!startupFailureMessage && progressStage === 'configuring') {
           errorMessage += '\n\nTip: Check that your selected audio devices are not in use by another application.';
         }
 
@@ -1403,16 +1499,16 @@ ipcMain.handle('start-recording', async (event, options) => {
           console.log('Power save blocker disabled (timeout)');
         }
 
-        let errorMessage = `Recording failed to start within ${timeout / 1000} seconds.`;
+        let errorMessage = startupFailureMessage || `Recording failed to start within ${timeout / 1000} seconds.`;
 
         // Provide specific guidance based on what stage failed
-        if (progressStage === 'initializing') {
+        if (!startupFailureMessage && progressStage === 'initializing') {
           errorMessage += '\n\nThe audio system is taking longer than expected to initialize.';
           errorMessage += '\nThis can happen on first launch. Please try again.';
-        } else if (progressStage === 'configuring') {
+        } else if (!startupFailureMessage && progressStage === 'configuring') {
           errorMessage += '\n\nAudio device configuration is taking too long.';
           errorMessage += '\nCheck that your devices are properly connected and not in use.';
-        } else if (progressStage === 'mic_opened' || progressStage === 'desktop_opened') {
+        } else if (!startupFailureMessage && (progressStage === 'mic_opened' || progressStage === 'desktop_opened')) {
           errorMessage += '\n\nAudio streams are opening but not fully ready.';
           errorMessage += '\nTry selecting different audio devices or restarting the app.';
         }

@@ -8,6 +8,9 @@ const {
   classifyRecorderStdoutChunk,
   getModelDownloadPatterns,
   isModelDownloadErrorOutput,
+  parseRecorderMessageLine,
+  parseRecorderStdoutChunk,
+  splitBufferedLines,
 } = require('../../src/main-process-helpers');
 
 
@@ -57,17 +60,17 @@ test('classifyRecorderStdoutChunk parses the first audio level payload', () => {
   assert.equal(result.type, 'levels');
   assert.deepEqual(result.levels, {
     type: 'levels',
-    micLevel: 0.4,
-    desktopLevel: 0.2,
+    mic: 0.4,
+    desktop: 0.2,
   });
 });
 
 
-test('classifyRecorderStdoutChunk treats malformed level JSON as a level chunk without parsed data', () => {
+test('classifyRecorderStdoutChunk treats malformed level JSON as progress text until a full line arrives', () => {
   const result = classifyRecorderStdoutChunk('{"type": "levels", bad json');
 
-  assert.equal(result.type, 'levels');
-  assert.equal(result.levels, null);
+  assert.equal(result.type, 'progress');
+  assert.equal(result.output, '{"type": "levels", bad json');
 });
 
 
@@ -78,6 +81,62 @@ test('classifyRecorderStdoutChunk keeps non-level output as progress text', () =
     type: 'progress',
     output: 'Desktop audio stream opened',
   });
+});
+
+
+test('splitBufferedLines preserves incomplete trailing JSON data', () => {
+  const result = splitBufferedLines('{"type":"warning"}\n{"type":"event"', '');
+
+  assert.deepEqual(result, {
+    lines: ['{"type":"warning"}'],
+    remainder: '{"type":"event"',
+  });
+});
+
+
+test('parseRecorderMessageLine normalizes level payload keys for the renderer', () => {
+  const result = parseRecorderMessageLine('{"type":"levels","micLevel":0.3,"desktopLevel":0.6}');
+
+  assert.equal(result.kind, 'levels');
+  assert.deepEqual(result.payload, {
+    type: 'levels',
+    mic: 0.3,
+    desktop: 0.6,
+  });
+});
+
+
+test('parseRecorderStdoutChunk parses mixed structured recorder messages', () => {
+  const chunk = [
+    '{"type":"event","event":"mic_stream_opened","message":"Microphone stream opened"}',
+    '{"type":"warning","code":"NO_DESKTOP_AUDIO","message":"Desktop disabled"}',
+    '{"type":"levels","mic":0.1,"desktop":0.2}',
+    '',
+  ].join('\n');
+
+  const result = parseRecorderStdoutChunk(chunk);
+
+  assert.equal(result.remainder, '');
+  assert.deepEqual(result.messages.map((message) => message.kind), ['event', 'warning', 'levels']);
+  assert.equal(result.messages[0].payload.event, 'mic_stream_opened');
+  assert.equal(result.messages[1].payload.code, 'NO_DESKTOP_AUDIO');
+  assert.deepEqual(result.messages[2].payload, {
+    type: 'levels',
+    mic: 0.1,
+    desktop: 0.2,
+  });
+});
+
+
+test('parseRecorderStdoutChunk keeps incomplete trailing chunks for the next read', () => {
+  const firstChunk = parseRecorderStdoutChunk('{"type":"event","event":"recording_started","message":"Recording sta');
+  assert.equal(firstChunk.messages.length, 0);
+  assert.equal(firstChunk.remainder, '{"type":"event","event":"recording_started","message":"Recording sta');
+
+  const secondChunk = parseRecorderStdoutChunk('rted!"}\n', firstChunk.remainder);
+  assert.equal(secondChunk.messages.length, 1);
+  assert.equal(secondChunk.messages[0].kind, 'event');
+  assert.equal(secondChunk.messages[0].payload.event, 'recording_started');
 });
 
 

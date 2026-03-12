@@ -58,6 +58,7 @@ func sendReady() {
 
 @available(macOS 13.0, *)
 class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
+    private let expectedChannels: Int
     private var isCapturing = false
     private let outputLock = NSLock()
     private var sampleCount: Int = 0
@@ -70,6 +71,11 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
     private var hasLoggedAudioFormat = false
     private var extractionErrorCount = 0
     private let maxExtractionErrors = 5  // Only log first N errors to avoid spam
+
+    init(expectedChannels: Int) {
+        self.expectedChannels = expectedChannels
+        super.init()
+    }
 
     func startCapturing() {
         outputLock.lock()
@@ -108,8 +114,10 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
 
         guard capturing else { return }
 
-        // Extract audio data from the sample buffer
-        guard let audioBuffer = extractAudioBuffer(from: sampleBuffer) else {
+        // Extract interleaved float32 audio data from the sample buffer.
+        // This normalizes planar/non-interleaved buffers into the helper's
+        // stdout contract so Python always sees one consistent format.
+        guard let audioData = extractInterleavedAudioData(from: sampleBuffer) else {
             return
         }
 
@@ -139,41 +147,8 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
             ])
         }
 
-        // Write raw float32 PCM data to stdout (interleaved stereo)
-        // ScreenCaptureKit provides interleaved audio in mBuffers.mData
-        // We need to write all channels, not just floatChannelData[0]
-        let frameCount = Int(audioBuffer.frameLength)
-        let channelCount = Int(audioBuffer.format.channelCount)
-        let bytesPerFrame = channelCount * MemoryLayout<Float>.size
-        let totalBytes = frameCount * bytesPerFrame
-
-        // Track bytes written for this sample
-        var bytesWrittenThisSample = 0
-
-        // Get interleaved data directly from the audio buffer
-        if audioBuffer.format.isInterleaved {
-            // Interleaved format - data is already in the correct format
-            if let channelData = audioBuffer.floatChannelData?[0] {
-                let data = Data(bytes: channelData, count: totalBytes)
-                FileHandle.standardOutput.write(data)
-                bytesWrittenThisSample = totalBytes
-            }
-        } else {
-            // Non-interleaved (planar) format - need to interleave manually
-            guard let channelData = audioBuffer.floatChannelData else { return }
-
-            var interleavedData = [Float](repeating: 0, count: frameCount * channelCount)
-            for frame in 0..<frameCount {
-                for channel in 0..<channelCount {
-                    interleavedData[frame * channelCount + channel] = channelData[channel][frame]
-                }
-            }
-
-            interleavedData.withUnsafeBytes { ptr in
-                FileHandle.standardOutput.write(Data(ptr))
-            }
-            bytesWrittenThisSample = frameCount * channelCount * MemoryLayout<Float>.size
-        }
+        FileHandle.standardOutput.write(audioData)
+        let bytesWrittenThisSample = audioData.count
 
         // Single lock region for counter updates
         outputLock.lock()
@@ -184,7 +159,7 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
         outputLock.unlock()
 
         if currentSampleCount == 1 {
-            sendStatus("first_sample", message: "Received first audio sample (\(totalBytes) bytes)")
+            sendStatus("first_sample", message: "Received first audio sample (\(bytesWrittenThisSample) bytes)")
         }
 
         // Log periodic status every ~10 seconds (assuming ~100 samples/sec)
@@ -219,7 +194,7 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
         }
     }
 
-    private func extractAudioBuffer(from sampleBuffer: CMSampleBuffer) -> AVAudioPCMBuffer? {
+    private func extractInterleavedAudioData(from sampleBuffer: CMSampleBuffer) -> Data? {
         // Get format description
         guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer) else {
             logExtractionError("No format description in sample buffer")
@@ -257,25 +232,37 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
             return nil
         }
 
+        guard audioFormat.commonFormat == .pcmFormatFloat32 else {
+            logExtractionError("Unsupported audio format: \(audioFormat.commonFormat)")
+            return nil
+        }
+
+        let sourceChannels = Int(audioFormat.channelCount)
+        let isInterleaved = audioFormat.isInterleaved
+
         let numSamples = CMSampleBufferGetNumSamples(sampleBuffer)
         // Empty buffers are normal during silence - don't log as errors
         guard numSamples > 0 else { return nil }
 
-        guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: audioFormat, frameCapacity: AVAudioFrameCount(numSamples)) else {
-            logExtractionError("Could not create PCM buffer with capacity \(numSamples)")
-            return nil
-        }
-        pcmBuffer.frameLength = AVAudioFrameCount(numSamples)
-
         // Get the audio buffer list
         var blockBuffer: CMBlockBuffer?
-        var audioBufferList = AudioBufferList()
-        let audioBufferListSize = MemoryLayout<AudioBufferList>.size
+        let maxBuffers = max(1, sourceChannels)
+        let audioBufferListSize = MemoryLayout<AudioBufferList>.size +
+            max(0, maxBuffers - 1) * MemoryLayout<AudioBuffer>.size
+        let audioBufferListStorage = UnsafeMutableRawPointer.allocate(
+            byteCount: audioBufferListSize,
+            alignment: MemoryLayout<AudioBufferList>.alignment
+        )
+        audioBufferListStorage.initializeMemory(as: UInt8.self, repeating: 0, count: audioBufferListSize)
+        defer {
+            audioBufferListStorage.deallocate()
+        }
+        let audioBufferList = audioBufferListStorage.assumingMemoryBound(to: AudioBufferList.self)
 
         let status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
             sampleBuffer,
             bufferListSizeNeededOut: nil,
-            bufferListOut: &audioBufferList,
+            bufferListOut: audioBufferList,
             bufferListSize: audioBufferListSize,
             blockBufferAllocator: nil,
             blockBufferMemoryAllocator: nil,
@@ -288,31 +275,131 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
             return nil
         }
 
-        // Copy audio data to PCM buffer
-        let srcBuffer = audioBufferList.mBuffers
-        guard let srcData = srcBuffer.mData else {
-            logExtractionError("Audio buffer mData is nil")
+        let audioBuffers = UnsafeMutableAudioBufferListPointer(audioBufferList)
+
+        if shouldLogFormat {
+            let desc = streamBasicDescription.pointee
+            sendJSON([
+                "type": "audio_format",
+                "sampleRate": desc.mSampleRate,
+                "channels": desc.mChannelsPerFrame,
+                "bitsPerChannel": desc.mBitsPerChannel,
+                "bytesPerFrame": desc.mBytesPerFrame,
+                "formatFlags": desc.mFormatFlags,
+                "bufferCount": audioBuffers.count,
+                "interleaved": isInterleaved,
+                "expectedChannels": expectedChannels,
+            ])
+        }
+
+        guard !audioBuffers.isEmpty else {
+            logExtractionError("Audio buffer list was empty")
             return nil
         }
 
-        guard let dstData = pcmBuffer.floatChannelData?[0] else {
-            logExtractionError("PCM buffer floatChannelData is nil")
+        if isInterleaved {
+            return interleavedDataFromSingleBuffer(
+                audioBuffers[0],
+                frameCount: numSamples,
+                sourceChannels: sourceChannels,
+                outputChannels: expectedChannels
+            )
+        }
+
+        return interleavedDataFromPlanarBuffers(
+            audioBuffers,
+            frameCount: numSamples,
+            sourceChannels: sourceChannels,
+            outputChannels: expectedChannels
+        )
+    }
+
+    private func interleavedDataFromSingleBuffer(
+        _ audioBuffer: AudioBuffer,
+        frameCount: Int,
+        sourceChannels: Int,
+        outputChannels: Int
+    ) -> Data? {
+        guard let sourceData = audioBuffer.mData else {
+            logExtractionError("Interleaved audio buffer mData is nil")
             return nil
         }
 
-        // Validate buffer sizes before copy
-        let expectedBytes = Int(pcmBuffer.frameLength) * Int(audioFormat.channelCount) * MemoryLayout<Float>.size
-        let availableBytes = Int(srcBuffer.mDataByteSize)
+        let sourceSampleCount = frameCount * sourceChannels
+        let expectedBytes = sourceSampleCount * MemoryLayout<Float>.size
+        let availableBytes = Int(audioBuffer.mDataByteSize)
 
         if availableBytes < expectedBytes {
-            // Buffer size mismatch - return nil to avoid corrupted audio
-            // Copying partial data would leave frameLength incorrect
-            logExtractionError("Buffer size mismatch: have \(availableBytes) bytes, need \(expectedBytes) - skipping frame")
+            logExtractionError("Interleaved buffer size mismatch: have \(availableBytes) bytes, need \(expectedBytes)")
             return nil
         }
 
-        memcpy(dstData, srcData, expectedBytes)
-        return pcmBuffer
+        if sourceChannels == outputChannels {
+            return Data(bytes: sourceData, count: expectedBytes)
+        }
+
+        let samples = sourceData.bindMemory(to: Float.self, capacity: sourceSampleCount)
+        var normalized = [Float](repeating: 0, count: frameCount * outputChannels)
+
+        for frame in 0..<frameCount {
+            for outputChannel in 0..<outputChannels {
+                let sourceChannel = min(outputChannel, sourceChannels - 1)
+                normalized[frame * outputChannels + outputChannel] = samples[frame * sourceChannels + sourceChannel]
+            }
+        }
+
+        return normalized.withUnsafeBufferPointer { pointer in
+            guard let baseAddress = pointer.baseAddress else {
+                return Data()
+            }
+            return Data(bytes: baseAddress, count: pointer.count * MemoryLayout<Float>.size)
+        }
+    }
+
+    private func interleavedDataFromPlanarBuffers(
+        _ audioBuffers: UnsafeMutableAudioBufferListPointer,
+        frameCount: Int,
+        sourceChannels: Int,
+        outputChannels: Int
+    ) -> Data? {
+        if audioBuffers.count < sourceChannels {
+            logExtractionError("Planar buffer count mismatch: have \(audioBuffers.count), need \(sourceChannels)")
+            return nil
+        }
+
+        var normalized = [Float](repeating: 0, count: frameCount * outputChannels)
+        var channelPointers: [UnsafePointer<Float>] = []
+        channelPointers.reserveCapacity(sourceChannels)
+
+        for channel in 0..<sourceChannels {
+            let buffer = audioBuffers[channel]
+            guard let channelData = buffer.mData else {
+                logExtractionError("Planar channel \(channel) buffer mData is nil")
+                return nil
+            }
+
+            let availableFrames = Int(buffer.mDataByteSize) / MemoryLayout<Float>.size
+            if availableFrames < frameCount {
+                logExtractionError("Planar channel \(channel) size mismatch: have \(availableFrames) frames, need \(frameCount)")
+                return nil
+            }
+
+            channelPointers.append(channelData.bindMemory(to: Float.self, capacity: frameCount))
+        }
+
+        for frame in 0..<frameCount {
+            for outputChannel in 0..<outputChannels {
+                let sourceChannel = min(outputChannel, sourceChannels - 1)
+                normalized[frame * outputChannels + outputChannel] = channelPointers[sourceChannel][frame]
+            }
+        }
+
+        return normalized.withUnsafeBufferPointer { pointer in
+            guard let baseAddress = pointer.baseAddress else {
+                return Data()
+            }
+            return Data(bytes: baseAddress, count: pointer.count * MemoryLayout<Float>.size)
+        }
     }
 
     private func logExtractionError(_ message: String) {
@@ -434,7 +521,7 @@ class AudioCapture {
         }
 
         // Create delegate
-        delegate = AudioCaptureDelegate()
+        delegate = AudioCaptureDelegate(expectedChannels: config.channels)
 
         // Create stream
         stream = SCStream(filter: filter, configuration: streamConfig, delegate: delegate)

@@ -2,7 +2,28 @@
 
 Branch: `fix/full-audit-remediation`
 
-Status: planning only. No fixes implemented yet.
+Status: active. Phase 00 is complete. Batch 1 is in progress.
+
+## Working Rule
+
+- Update this `todo.md` whenever task status changes, major progress is made, or execution order is adjusted.
+
+## Progress Snapshot
+
+- Completed Phase 00 regression safety net work.
+- Added a Python test harness with `pytest` plus `requirements-dev.txt` and `pytest.ini`.
+- Added JS regression tests for main-process helper logic and syntax checks.
+- Added `npm test`, `npm run test:python`, and `npm run test:all`.
+- Added `docs/development/TESTING.md` and updated setup/build docs for new machines.
+- Wired the regression suite into CI.
+- Started Batch 1 and completed the first contract-focused macOS fixes:
+  - structured recorder stdout parsing in Electron
+  - more truthful macOS recorder startup behavior
+  - stricter Swift helper readiness handling
+  - Swift helper audio extraction rewrite for full `AudioBufferList` handling
+- Latest automated validation status at time of update:
+  - `npm run test:all` passing
+  - `swift build -c release --arch arm64` passing
 
 ## Goals
 
@@ -33,13 +54,13 @@ macOS desktop audio.
 
 ### 0.1 Test harness foundation
 
-- [ ] Add a Python test harness with `pytest`.
-- [ ] Add a JavaScript test harness using built-in `node:test` where practical.
-- [ ] Create a `tests/` structure that separates:
+- [x] Add a Python test harness with `pytest`.
+- [x] Add a JavaScript test harness using built-in `node:test` where practical.
+- [x] Create a `tests/` structure that separates:
   - pure Python unit tests
   - JS contract/parsing tests
   - fixtures/sample payloads
-- [ ] Prefer dependency-light tests that can run in CI without real audio hardware.
+- [x] Prefer dependency-light tests that can run in CI without real audio hardware.
 
 Files:
 
@@ -50,23 +71,23 @@ Files:
 
 ### 0.2 Highest-value Python regression tests
 
-- [ ] Add tests for `backend/audio/processor.py`:
+- [x] Add tests for `backend/audio/processor.py`:
   - stereo-safe resampling
   - mono-to-stereo behavior
   - clipping/casting boundaries
-- [ ] Add tests for `backend/audio/timeline.py`:
+- [x] Add tests for `backend/audio/timeline.py`:
   - silence-gap reconstruction
   - overlap trimming
   - target-duration padding
-- [ ] Add tests for `backend/audio/compressor.py`:
+- [x] Add tests for `backend/audio/compressor.py`:
   - ffmpeg missing fallback contract
   - failed compression fallback behavior
-- [ ] Add tests for `backend/meeting_manager.py`:
+- [x] Add tests for `backend/meeting_manager.py`:
   - duplicate ID prevention
   - scan/import correctness
   - delete behavior
   - corrupt metadata recovery behavior after refactor
-- [ ] Add tests for transcription runtime helpers where feasible:
+- [x] Add tests for transcription runtime helpers where feasible:
   - model lock handling
   - cache-path detection logic
 
@@ -82,13 +103,13 @@ Files:
 
 ### 0.3 Highest-value JavaScript regression tests
 
-- [ ] Add tests for recorder output parsing logic extracted from `src/main.js`.
-- [ ] Add tests for handling structured stdout messages:
+- [x] Add tests for recorder output parsing logic extracted from `src/main.js`.
+- [x] Add tests for handling structured stdout messages:
   - `levels`
   - `warning`
   - `error`
   - mixed/chunked line delivery
-- [ ] Add tests for model-cache detection logic, especially macOS MLX cache behavior.
+- [x] Add tests for model-cache detection logic, especially macOS MLX cache behavior.
 - [ ] Add tests for start/stop/quit state transitions where logic can be isolated without Electron UI automation.
 
 Files:
@@ -98,7 +119,7 @@ Files:
 
 ### 0.4 Manual smoke suite for hardware-dependent behavior
 
-- [ ] Create a manual smoke checklist for flows that cannot be trusted to automation alone:
+- [x] Create a manual smoke checklist for flows that cannot be trusted to automation alone:
   - macOS desktop audio capture with real system audio
   - Screen Recording denied
   - no desktop audio playing
@@ -113,9 +134,9 @@ Files:
 
 ### 0.5 CI integration for the minimal suite
 
-- [ ] Run the new Python and JS regression tests in CI.
-- [ ] Keep the suite fast enough to run on every push.
-- [ ] Do not block on full end-to-end hardware automation yet.
+- [x] Run the new Python and JS regression tests in CI.
+- [x] Keep the suite fast enough to run on every push.
+- [x] Do not block on full end-to-end hardware automation yet.
 
 Files:
 
@@ -123,7 +144,7 @@ Files:
 
 ## Phase 0 - Guardrails Before Refactors
 
-- [ ] Create a reproducible manual test checklist for:
+- [x] Create a reproducible manual test checklist for:
   - macOS mic + desktop audio recording
   - no Screen Recording permission
   - no desktop audio playing
@@ -137,15 +158,15 @@ Files:
 
 ### 1. Swift helper audio extraction correctness
 
-- [ ] Rework `swift/AudioCaptureHelper/Sources/main.swift` audio extraction to handle the full `AudioBufferList`, not just the first buffer.
-- [ ] Detect and correctly handle interleaved vs non-interleaved/planar audio.
-- [ ] Normalize helper output to one explicit format before writing to stdout:
+- [x] Rework `swift/AudioCaptureHelper/Sources/main.swift` audio extraction to handle the full `AudioBufferList`, not just the first buffer.
+- [x] Detect and correctly handle interleaved vs non-interleaved/planar audio.
+- [x] Normalize helper output to one explicit format before writing to stdout:
   - float32
   - interleaved
   - expected channel count
   - expected sample rate
-- [ ] Preserve and improve format validation and error reporting when incoming ScreenCaptureKit frames do not match assumptions.
-- [ ] Add targeted debug logging for first-frame format details and buffer layout, but keep logs bounded.
+- [x] Preserve and improve format validation and error reporting when incoming ScreenCaptureKit frames do not match assumptions.
+- [x] Add targeted debug logging for first-frame format details and buffer layout, but keep logs bounded.
 
 Files:
 
@@ -166,11 +187,11 @@ Files:
 
 ### 3. Make startup state truthful
 
-- [ ] Require explicit desktop-capture readiness before claiming recording has started.
-- [ ] Stop treating "no ready signal but continuing" as success in `backend/audio/swift_audio_capture.py`.
-- [ ] Make `backend/audio/macos_recorder.py` fail startup or degrade explicitly based on whether desktop capture is required/available.
-- [ ] Do not print `Recording started!` until mic capture and desktop capture readiness are both known.
-- [ ] Add a consistent startup event/status contract for macOS that mirrors the Windows progress stages.
+- [x] Require explicit desktop-capture readiness before claiming recording has started.
+- [x] Stop treating "no ready signal but continuing" as success in `backend/audio/swift_audio_capture.py`.
+- [x] Make `backend/audio/macos_recorder.py` fail startup or degrade explicitly based on whether desktop capture is required/available.
+- [x] Do not print `Recording started!` until mic capture and desktop capture readiness are both known.
+- [x] Add a consistent startup event/status contract for macOS that mirrors the Windows progress stages.
 
 Files:
 
@@ -180,13 +201,13 @@ Files:
 
 ### 4. Parse structured recorder output properly in Electron
 
-- [ ] Replace the current stdout parser in `src/main.js` with line-by-line JSON parsing for all structured messages.
-- [ ] Support at least:
+- [x] Replace the current stdout parser in `src/main.js` with line-by-line JSON parsing for all structured messages.
+- [x] Support at least:
   - `levels`
   - `warning`
   - `error`
   - future `event`/`progress` messages
-- [ ] Surface macOS desktop capture warnings/errors to the renderer instead of treating them as generic progress text.
+- [x] Surface macOS desktop capture warnings/errors to the renderer instead of treating them as generic progress text.
 - [ ] Keep stderr for human-readable logs only.
 
 Files:
@@ -209,7 +230,7 @@ Files:
 
 ### 6. Improve macOS stop/drain behavior
 
-- [ ] After sending `stop`, keep draining helper stdout until EOF/process exit rather than sleeping a fixed 300 ms and stopping readers early.
+- [x] After sending `stop`, keep draining helper stdout until EOF/process exit rather than sleeping a fixed 300 ms and stopping readers early.
 - [ ] Make helper shutdown semantics explicit and deterministic.
 - [ ] Ensure tail audio is preserved at stop time.
 
@@ -616,18 +637,18 @@ Files:
 
 ### Batch 0 - regression safety net
 
-- [ ] Python test harness
-- [ ] JS contract/parsing harness
-- [ ] high-value unit tests for processor/timeline/compressor/meeting manager
-- [ ] high-value JS tests for main-process parsing and cache detection
-- [ ] manual smoke checklist
+- [x] Python test harness
+- [x] JS contract/parsing harness
+- [x] high-value unit tests for processor/timeline/compressor/meeting manager
+- [x] high-value JS tests for main-process parsing and cache detection
+- [x] manual smoke checklist
 
 ### Batch 1 - macOS desktop audio hot path
 
-- [ ] Swift helper buffer extraction fix
+- [x] Swift helper buffer extraction fix
 - [ ] helper write-queue/backpressure fix
-- [ ] truthful startup/ready contract
-- [ ] Electron structured stdout parsing
+- [x] truthful startup/ready contract
+- [x] Electron structured stdout parsing
 - [ ] macOS stream alignment fix
 - [ ] macOS stop/drain fix
 

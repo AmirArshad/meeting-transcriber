@@ -35,25 +35,99 @@ function cacheContainsModel(items, modelPatterns) {
   return modelPatterns.some((pattern) => items.some((item) => item.includes(pattern)));
 }
 
-function classifyRecorderStdoutChunk(output) {
-  const trimmed = output.trim();
+function splitBufferedLines(output, pendingBuffer = '') {
+  const combined = `${pendingBuffer}${output}`;
+  const normalized = combined.replace(/\r\n/g, '\n');
+  const parts = normalized.split('\n');
 
-  if (!trimmed.startsWith('{"type": "levels"')) {
-    return { type: 'progress', output };
+  return {
+    lines: parts.slice(0, -1),
+    remainder: parts.at(-1) || ''
+  };
+}
+
+function normalizeRecorderLevels(levels) {
+  return {
+    type: 'levels',
+    mic: Number(levels.mic ?? levels.micLevel ?? 0),
+    desktop: Number(levels.desktop ?? levels.desktopLevel ?? 0)
+  };
+}
+
+function parseRecorderMessageLine(line) {
+  const trimmed = line.trim();
+
+  if (!trimmed) {
+    return null;
   }
 
-  const lines = trimmed.split('\n');
+  try {
+    const parsed = JSON.parse(trimmed);
+
+    if (!parsed || typeof parsed !== 'object') {
+      return { kind: 'text', payload: { message: trimmed } };
+    }
+
+    if (parsed.type === 'levels') {
+      return { kind: 'levels', payload: normalizeRecorderLevels(parsed), raw: parsed };
+    }
+
+    if (parsed.type === 'warning') {
+      return { kind: 'warning', payload: parsed };
+    }
+
+    if (parsed.type === 'error') {
+      return { kind: 'error', payload: parsed };
+    }
+
+    if (parsed.type === 'event') {
+      return { kind: 'event', payload: parsed };
+    }
+
+    if (parsed.type === 'status' || parsed.type === 'ready' || parsed.type === 'progress') {
+      return { kind: 'status', payload: parsed };
+    }
+
+    if (parsed.outputPath || parsed.audioPath) {
+      return { kind: 'result', payload: parsed };
+    }
+
+    return { kind: 'json', payload: parsed };
+  } catch (error) {
+    return { kind: 'text', payload: { message: trimmed } };
+  }
+}
+
+function parseRecorderStdoutChunk(output, pendingBuffer = '') {
+  const { lines, remainder } = splitBufferedLines(output, pendingBuffer);
+  const messages = [];
+
   for (const line of lines) {
-    if (line.startsWith('{"type": "levels"')) {
-      try {
-        return { type: 'levels', levels: JSON.parse(line) };
-      } catch (error) {
-        return { type: 'levels', levels: null };
-      }
+    const parsed = parseRecorderMessageLine(line);
+    if (parsed) {
+      messages.push(parsed);
     }
   }
 
-  return { type: 'levels', levels: null };
+  return { messages, remainder };
+}
+
+function classifyRecorderStdoutChunk(output) {
+  const { messages } = parseRecorderStdoutChunk(`${output}\n`);
+  const firstMessage = messages[0];
+
+  if (!firstMessage) {
+    return { type: 'progress', output };
+  }
+
+  if (firstMessage.kind === 'levels') {
+    return { type: 'levels', levels: firstMessage.payload };
+  }
+
+  return {
+    type: 'progress',
+    output: firstMessage.payload?.message || output
+  };
 }
 
 function isModelDownloadErrorOutput(output) {
@@ -66,5 +140,9 @@ module.exports = {
   classifyRecorderStdoutChunk,
   getModelDownloadCacheDir,
   getModelDownloadPatterns,
-  isModelDownloadErrorOutput
+  isModelDownloadErrorOutput,
+  normalizeRecorderLevels,
+  parseRecorderMessageLine,
+  parseRecorderStdoutChunk,
+  splitBufferedLines
 };

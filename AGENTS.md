@@ -300,6 +300,7 @@ Update all of:
 - Keep platform-specific behavior explicit rather than hiding it behind overly clever abstractions.
 - Preserve user-facing resilience: many handlers intentionally degrade gracefully instead of hard-failing.
 - When simplifying code, preserve the current operational behavior first, then reduce complexity.
+- Keep `todo.md` updated whenever task status changes, major progress is made, or execution order is adjusted.
 
 ## When In Doubt
 

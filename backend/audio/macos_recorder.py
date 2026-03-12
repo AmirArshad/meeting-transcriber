@@ -31,6 +31,27 @@ def _send_json_message(message: dict):
         print(json.dumps(message), flush=True)
 
 
+def _send_event_message(event: str, message: str, **extra):
+    """Send a structured recorder event to stdout."""
+    payload = {"type": "event", "event": event, "message": message}
+    payload.update(extra)
+    _send_json_message(payload)
+
+
+def _send_warning_message(code: str, message: str, **extra):
+    """Send a structured warning to stdout."""
+    payload = {"type": "warning", "code": code, "message": message}
+    payload.update(extra)
+    _send_json_message(payload)
+
+
+def _send_error_message(code: str, message: str, **extra):
+    """Send a structured error to stdout."""
+    payload = {"type": "error", "code": code, "message": message}
+    payload.update(extra)
+    _send_json_message(payload)
+
+
 # Audio processing constants
 CENTER_CHANNEL_ATTENUATION = 0.707  # -3dB, equivalent to 1/sqrt(2)
 SURROUND_CHANNEL_ATTENUATION = 0.5  # -6dB for extra surround channels
@@ -157,6 +178,12 @@ class MacOSAudioRecorder:
         self._last_error = None
         self._error_lock = threading.Lock()
 
+        # Startup readiness tracking
+        self._mic_started_event = threading.Event()
+        self._desktop_started_event = threading.Event()
+        self._mic_start_error = None
+        self._desktop_start_error = None
+
         # Threads
         self.mic_thread = None
         self.desktop_thread = None
@@ -221,7 +248,7 @@ class MacOSAudioRecorder:
         """Start recording from microphone and desktop (if available)."""
         if self._get_running():
             print("Already recording!", file=sys.stderr)
-            return
+            return True
 
         self._set_running(True)
         self.mic_frames = []
@@ -231,6 +258,11 @@ class MacOSAudioRecorder:
         self._error_event.clear()
         with self._error_lock:
             self._last_error = None
+
+        self._mic_started_event.clear()
+        self._desktop_started_event.clear()
+        self._mic_start_error = None
+        self._desktop_start_error = None
 
         # Set recording start time BEFORE anything else
         # This is the single reference point for preroll timing
@@ -252,7 +284,7 @@ class MacOSAudioRecorder:
         except Exception as e:
             print(f"Error querying devices: {e}", file=sys.stderr)
             self._set_running(False)
-            return
+            return False
 
         # Start microphone recording thread
         self.mic_thread = threading.Thread(target=self._record_microphone)
@@ -267,18 +299,70 @@ class MacOSAudioRecorder:
         else:
             print(f"Desktop audio capture disabled (no capture method available)", file=sys.stderr)
             print(f"  Swift helper or PyObjC ScreenCaptureKit required", file=sys.stderr)
-            # Send JSON warning to Electron for UI display (thread-safe)
-            _send_json_message({
-                "type": "warning",
-                "code": "NO_DESKTOP_AUDIO",
-                "message": "Desktop audio capture is disabled. Only microphone will be recorded.",
-                "help": "Ensure audiocapture-helper is bundled or install PyObjC as fallback."
-            })
+            _send_warning_message(
+                "NO_DESKTOP_AUDIO",
+                "Desktop audio capture is disabled. Only microphone will be recorded.",
+                help="Ensure audiocapture-helper is bundled or install PyObjC as fallback.",
+            )
+            _send_event_message(
+                "desktop_capture_disabled",
+                "Desktop audio capture is disabled. Recording microphone only.",
+                code="NO_DESKTOP_AUDIO",
+                help="Ensure audiocapture-helper is bundled or install PyObjC as fallback.",
+            )
+            self._desktop_started_event.set()
 
+        if not self._mic_started_event.wait(timeout=5.0):
+            message = "Microphone stream did not become ready within 5 seconds."
+            print(f"ERROR: {message}", file=sys.stderr)
+            _send_error_message("MIC_START_TIMEOUT", message)
+            self._abort_startup()
+            return False
+
+        if self._mic_start_error:
+            self._abort_startup()
+            return False
+
+        if self.desktop_capture:
+            if not self._desktop_started_event.wait(timeout=5.0):
+                capture_type = self.desktop_capture_type or 'unknown'
+                message = f"{capture_type} desktop audio did not become ready within 5 seconds."
+                print(f"ERROR: {message}", file=sys.stderr)
+                _send_error_message("DESKTOP_START_TIMEOUT", message)
+                self._abort_startup()
+                return False
+
+            if self._desktop_start_error:
+                self._abort_startup()
+                return False
+
+        desktop_status = 'active' if self.desktop_capture else 'unavailable'
+        _send_event_message("recording_started", "Recording started!", desktopStatus=desktop_status)
         print(f"Recording started!", file=sys.stderr)
+        return True
+
+    def _abort_startup(self):
+        """Stop any partially started streams without saving output."""
+        self._set_running(False)
+
+        if self.desktop_capture and hasattr(self.desktop_capture, 'cleanup'):
+            try:
+                self.desktop_capture.cleanup()
+            except Exception as e:
+                print(f"Warning: Failed to clean up desktop capture after startup error: {e}", file=sys.stderr)
+
+        if self.mic_thread and self.mic_thread.is_alive():
+            self.mic_thread.join(timeout=1.0)
+
+        if self.desktop_thread and self.desktop_thread.is_alive():
+            self.desktop_thread.join(timeout=1.0)
+
+        self.mic_frames = []
+        self.desktop_frames = []
 
     def _record_microphone(self):
         """Record from microphone using sounddevice."""
+        stream_opened = False
         try:
             # Determine mic channels (mono or stereo)
             mic_channels = min(self.mic_info.get('max_input_channels', 1), 2)
@@ -324,6 +408,12 @@ class MacOSAudioRecorder:
                 blocksize=self.chunk_size,
                 callback=audio_callback
             ):
+                stream_opened = True
+                self._mic_start_error = None
+                self._mic_started_event.set()
+                print("Microphone stream opened", file=sys.stderr)
+                _send_event_message("mic_stream_opened", "Microphone stream opened")
+
                 while self._get_running():
                     time.sleep(0.1)
 
@@ -334,18 +424,19 @@ class MacOSAudioRecorder:
             import traceback
             traceback.print_exc(file=sys.stderr)
 
-            # Set error state for main thread to detect
+            error_message = f"Microphone recording failed: {str(e)}"
             with self._error_lock:
-                self._last_error = f"Microphone recording failed: {str(e)}"
+                self._last_error = error_message
             self._error_event.set()
 
+            if not stream_opened:
+                self._mic_start_error = error_message
+                self._mic_started_event.set()
+                _send_error_message("MIC_START_FAILED", error_message)
+            else:
+                _send_error_message("MIC_RECORDING_FAILED", error_message)
+
             self._set_running(False)
-            # Send error to Electron UI (thread-safe)
-            _send_json_message({
-                "type": "error",
-                "code": "MIC_RECORDING_FAILED",
-                "message": f"Microphone recording failed: {str(e)}"
-            })
 
     def _record_desktop(self):
         """
@@ -362,14 +453,30 @@ class MacOSAudioRecorder:
             print(f"Desktop audio capture not available, skipping", file=sys.stderr)
             return
 
+        capture_started = False
         try:
             capture_type = self.desktop_capture_type or 'unknown'
             print(f"Starting desktop audio capture ({capture_type})...", file=sys.stderr)
 
             # Start recording
             if not self.desktop_capture.start_recording():
-                print(f"Failed to start {capture_type} desktop recording", file=sys.stderr)
+                message = f"{capture_type} desktop audio failed to start."
+                print(message, file=sys.stderr)
+                self._desktop_start_error = message
+                self._desktop_started_event.set()
+                _send_error_message("DESKTOP_START_FAILED", message)
+                self._set_running(False)
                 return
+
+            capture_started = True
+            self._desktop_start_error = None
+            self._desktop_started_event.set()
+            print("Desktop audio stream opened", file=sys.stderr)
+            _send_event_message(
+                "desktop_stream_opened",
+                "Desktop audio stream opened",
+                captureType=capture_type,
+            )
 
             # Monitor audio levels while recording
             # Track if we've logged level calculation errors to avoid spam
@@ -405,17 +512,19 @@ class MacOSAudioRecorder:
             import traceback
             traceback.print_exc(file=sys.stderr)
 
-            # Set error state for main thread to detect
+            error_message = f"Desktop audio recording failed: {str(e)}"
             with self._error_lock:
-                self._last_error = f"Desktop audio recording failed: {str(e)}"
+                self._last_error = error_message
             self._error_event.set()
 
-            # Send error to Electron UI (thread-safe)
-            _send_json_message({
-                "type": "error",
-                "code": "DESKTOP_RECORDING_FAILED",
-                "message": f"Desktop audio recording failed: {str(e)}"
-            })
+            if not capture_started:
+                self._desktop_start_error = error_message
+                self._desktop_started_event.set()
+                _send_error_message("DESKTOP_START_FAILED", error_message)
+            else:
+                _send_error_message("DESKTOP_RECORDING_FAILED", error_message)
+
+            self._set_running(False)
 
     def stop_recording(self):
         """Stop recording and process audio."""
@@ -824,7 +933,8 @@ def main():
     )
 
     # Start recording
-    recorder.start_recording()
+    if not recorder.start_recording():
+        sys.exit(1)
 
     if args.duration > 0:
         # Fixed duration
@@ -860,11 +970,7 @@ def main():
                     with recorder._error_lock:
                         error_msg = recorder._last_error or "Unknown recording error"
                     print(f"CRITICAL: Recording thread error: {error_msg}", file=sys.stderr)
-                    _send_json_message({
-                        "type": "error",
-                        "code": "RECORDING_THREAD_FAILED",
-                        "message": error_msg
-                    })
+                    _send_error_message("RECORDING_THREAD_FAILED", error_msg)
                     recorder.stop_recording()
                     break
 
@@ -874,11 +980,7 @@ def main():
                         error_msg = recorder.desktop_capture.last_error or "Unknown desktop capture error"
                         print(f"CRITICAL: Swift capture failed: {error_msg}", file=sys.stderr)
                         # Send error to Electron (thread-safe)
-                        _send_json_message({
-                            "type": "error",
-                            "code": "DESKTOP_AUDIO_FAILED",
-                            "message": f"Desktop audio capture failed: {error_msg}"
-                        })
+                        _send_error_message("DESKTOP_AUDIO_FAILED", f"Desktop audio capture failed: {error_msg}")
                         recorder.stop_recording()
                         break
 

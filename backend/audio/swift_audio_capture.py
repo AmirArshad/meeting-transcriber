@@ -203,14 +203,23 @@ class SwiftAudioCapture:
                 print("Swift audio capture ready!", file=sys.stderr)
                 return True
 
+            if self.error_event.is_set():
+                error_message = self.last_error or "Swift helper reported an error before becoming ready"
+                print(f"ERROR: {error_message}", file=sys.stderr)
+                self.cleanup()
+                return False
+
             # Check if process exited during wait
             if self.process.poll() is not None:
                 print("ERROR: Swift helper exited unexpectedly", file=sys.stderr)
                 self.cleanup()
                 return False
 
-            print("WARNING: Swift helper did not send ready signal, but continuing...", file=sys.stderr)
-            return True
+            self.last_error = "Swift helper did not send ready signal within 5 seconds"
+            self.error_event.set()
+            print(f"ERROR: {self.last_error}", file=sys.stderr)
+            self.cleanup()
+            return False
 
         except Exception as e:
             print(f"ERROR starting Swift audio capture: {e}", file=sys.stderr)
@@ -519,37 +528,32 @@ class SwiftAudioCapture:
                 # Process may have already exited
                 print(f"  Could not send stop command (process may have exited): {e}", file=sys.stderr)
 
-        # Give the reader thread a moment to drain remaining data
-        import time
-        time.sleep(0.3)
-
-        # Now signal threads to stop
-        self._recording_event.clear()
-
-        # Wait for reader threads to finish FIRST (they need to drain the pipe)
-        if self._stdout_thread and self._stdout_thread.is_alive():
-            self._stdout_thread.join(timeout=2.0)
-            if self._stdout_thread.is_alive():
-                print("  WARNING: Audio reader thread did not exit cleanly", file=sys.stderr)
-        if self._stderr_thread and self._stderr_thread.is_alive():
-            self._stderr_thread.join(timeout=1.0)
-
-        # Now wait for process to exit and check exit code
+        # Wait for process to exit while reader threads continue draining stdout/stderr
         exit_code = None
         if self.process and self.process.poll() is None:
             try:
-                exit_code = self.process.wait(timeout=2.0)
+                exit_code = self.process.wait(timeout=5.0)
             except subprocess.TimeoutExpired:
                 print("  Swift helper did not exit gracefully, terminating...", file=sys.stderr)
                 self.process.terminate()
                 try:
-                    exit_code = self.process.wait(timeout=1.0)
+                    exit_code = self.process.wait(timeout=2.0)
                 except subprocess.TimeoutExpired:
                     print("  Swift helper did not respond to terminate, killing...", file=sys.stderr)
                     self.process.kill()
                     exit_code = self.process.wait(timeout=1.0)
         elif self.process:
             exit_code = self.process.poll()
+
+        # Now signal threads to stop and wait for them to flush any final buffered data
+        self._recording_event.clear()
+
+        if self._stdout_thread and self._stdout_thread.is_alive():
+            self._stdout_thread.join(timeout=2.0)
+            if self._stdout_thread.is_alive():
+                print("  WARNING: Audio reader thread did not exit cleanly", file=sys.stderr)
+        if self._stderr_thread and self._stderr_thread.is_alive():
+            self._stderr_thread.join(timeout=1.0)
 
         if exit_code is not None and exit_code != 0:
             print(f"  Swift helper exited with code {exit_code}", file=sys.stderr)

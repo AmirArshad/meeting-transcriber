@@ -487,11 +487,18 @@ function setupEventListeners() {
   // FIX 3 & 4: Listen for recording warnings (heartbeat lost)
   window.electronAPI.onRecordingWarning((warning) => {
     console.error('Recording warning:', warning);
-    addLog(`⚠️ ${warning.message}`, 'error');
+    addLog(`⚠️ ${warning.message}`, warning.level === 'error' ? 'error' : 'warning');
 
-    // Show visual indicator in UI
-    statusText.textContent = 'Warning: Recording may be paused';
-    statusIndicator.style.backgroundColor = '#f59e0b'; // Amber warning color
+    if (warning.help) {
+      addLog(warning.help, 'warning');
+    }
+
+    if (warning.type === 'heartbeat_lost') {
+      statusText.textContent = 'Warning: Recording may be paused';
+      statusIndicator.style.backgroundColor = '#f59e0b';
+    } else if (recordingState === 'initializing' || recordingState === 'countdown') {
+      statusText.textContent = warning.message;
+    }
   });
 
   // Listen for updates
