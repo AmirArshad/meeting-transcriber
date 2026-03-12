@@ -137,6 +137,23 @@ class MeetingManager:
         unique_meetings.sort(key=lambda m: m.get('date', ''), reverse=True)
         return unique_meetings
 
+    @staticmethod
+    def _read_transcript_text(transcript_path: Path) -> str:
+        if not transcript_path.exists():
+            return ""
+
+        try:
+            return transcript_path.read_text(encoding='utf-8')
+        except Exception as exc:
+            print(f"Warning: Could not read transcript: {exc}", file=sys.stderr)
+            return ""
+
+    @staticmethod
+    def _strip_inline_transcript(meeting: Dict) -> Dict:
+        stripped = dict(meeting)
+        stripped.pop('transcript', None)
+        return stripped
+
     def add_meeting(
         self,
         audio_path: str,
@@ -213,11 +230,6 @@ class MeetingManager:
                     persisted_transcript_path = new_transcript_path
                     print(f"Persisted transcript to: {new_transcript_path}", file=sys.stderr)
 
-                # Read transcript text from the persisted location
-                transcript_text = ""
-                if persisted_transcript_path.exists():
-                    transcript_text = persisted_transcript_path.read_text(encoding='utf-8')
-
                 meeting = {
                     "id": meeting_id,
                     "title": title,
@@ -226,7 +238,6 @@ class MeetingManager:
                     "durationSeconds": duration,
                     "audioPath": str(persisted_audio_path.absolute()),
                     "transcriptPath": str(persisted_transcript_path.absolute()),
-                    "transcript": transcript_text,
                     "language": language,
                     "model": model
                 }
@@ -312,15 +323,6 @@ class MeetingManager:
             except (ValueError, IndexError):
                 date_iso = datetime.now().isoformat()
 
-            # Read transcript text
-            transcript_text = ""
-            transcript_file = Path(transcript_path)
-            if transcript_file.exists():
-                try:
-                    transcript_text = transcript_file.read_text(encoding='utf-8')
-                except Exception as e:
-                    print(f"Warning: Could not read transcript: {e}", file=sys.stderr)
-
             meeting = {
                 'id': meeting_id,
                 'title': title,
@@ -329,7 +331,6 @@ class MeetingManager:
                 'durationSeconds': duration,
                 'audioPath': audio_path,
                 'transcriptPath': transcript_path,
-                'transcript': transcript_text,
                 'language': language,
                 'model': model
             }
@@ -351,7 +352,7 @@ class MeetingManager:
             List of meeting objects
         """
         with self._metadata_guard():
-            return self._list_meetings_locked()
+            return [self._strip_inline_transcript(meeting) for meeting in self._list_meetings_locked()]
 
     def scan_and_sync_recordings(self) -> Dict[str, int]:
         """
@@ -486,7 +487,10 @@ class MeetingManager:
         meetings = self.list_meetings()
         for meeting in meetings:
             if meeting['id'] == meeting_id:
-                return meeting
+                hydrated = dict(meeting)
+                transcript_path = Path(meeting['transcriptPath'])
+                hydrated['transcript'] = self._read_transcript_text(transcript_path)
+                return hydrated
         return None
 
     def delete_meeting(self, meeting_id: str) -> bool:

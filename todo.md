@@ -69,6 +69,9 @@ Status: active. Batches 0-4 are complete. Follow-on Batches 5-12 cover the remai
 - Completed Batch 6 Task 1 real permission probing with actionable guidance.
 - Completed Batch 6 Task 2 PyObjC fallback path correctness and contract alignment.
 - Completed Batch 6 Task 3 output-device behavior validation plus macOS warning/doc alignment.
+- Completed Batch 7 Task 1 lazy-load transcript storage instead of inlining full transcript bodies in meetings.json.
+- Completed Batch 7 Task 2 renderer/detail-view updates for on-demand transcript loading.
+- Completed Batch 8 Task 1 reduce long-recording RAM usage without changing the post-processing mix architecture.
 - Latest automated validation status at time of update:
   - `npm test` passing
   - `npm run test:all` passing
@@ -394,9 +397,9 @@ Files:
 
 ### 16. Revisit transcript storage strategy
 
-- [ ] Stop inlining full transcript bodies into `meetings.json`, or make it explicitly lazy-loaded.
-- [ ] Store only summary metadata in the index and load transcript text from disk on demand.
-- [ ] Update renderer/detail views accordingly.
+- [x] Stop inlining full transcript bodies into `meetings.json`, or make it explicitly lazy-loaded.
+- [x] Store only summary metadata in the index and load transcript text from disk on demand.
+- [x] Update renderer/detail views accordingly.
 
 Files:
 
@@ -741,12 +744,12 @@ Files:
 
 ### Batch 7 - meeting metadata and transcript scaling
 
-- [ ] lazy-load transcript storage instead of inlining full transcript bodies in `meetings.json`
-- [ ] renderer/detail-view updates for on-demand transcript loading
+- [x] lazy-load transcript storage instead of inlining full transcript bodies in `meetings.json`
+- [x] renderer/detail-view updates for on-demand transcript loading
 
 ### Batch 8 - performance and memory hardening
 
-- [ ] reduce long-recording RAM usage without changing the post-processing mix architecture
+- [x] reduce long-recording RAM usage without changing the post-processing mix architecture
 - [ ] reduce Windows callback contention and separate per-stream health tracking
 - [ ] preserve timeline reconstruction wins while optimizing memory/perf hotspots
 

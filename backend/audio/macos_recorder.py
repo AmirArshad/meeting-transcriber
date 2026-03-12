@@ -15,6 +15,7 @@ from pathlib import Path
 import numpy as np
 
 from .compressor import compress_to_opus, verify_recording_integrity
+from .chunked_audio_buffer import ChunkedAudioBuffer
 
 try:
     import sounddevice as sd
@@ -171,7 +172,7 @@ class MacOSAudioRecorder:
         # Recording state
         self.is_running = False
         self._running_lock = threading.Lock()  # Protects is_running access
-        self.mic_frames = []
+        self.mic_frames = ChunkedAudioBuffer()
         self.desktop_frames = []
 
         # Audio levels for visualization
@@ -265,7 +266,7 @@ class MacOSAudioRecorder:
             return True
 
         self._set_running(True)
-        self.mic_frames = []
+        self.mic_frames.clear()
         self.desktop_frames = []
 
         # Clear error state
@@ -375,7 +376,7 @@ class MacOSAudioRecorder:
         if self.desktop_thread and self.desktop_thread.is_alive():
             self.desktop_thread.join(timeout=1.0)
 
-        self.mic_frames = []
+        self.mic_frames.clear()
         self.desktop_frames = []
 
     def _record_microphone(self):
@@ -410,7 +411,7 @@ class MacOSAudioRecorder:
                     self.mic_capture_start_time = time.time()
 
                 # Store audio data
-                self.mic_frames.append(indata.copy())
+                self.mic_frames.append(indata)
 
                 # Calculate audio level (for visualization)
                 # Subsample by 8 for performance
@@ -438,7 +439,11 @@ class MacOSAudioRecorder:
                 while self._get_running():
                     time.sleep(0.1)
 
-            print(f"Mic recording stopped. Frames captured: {len(self.mic_frames)}", file=sys.stderr)
+            print(
+                f"Mic recording stopped. Chunks captured: {len(self.mic_frames)} "
+                f"({self.mic_frames.nbytes / 1024 / 1024:.2f} MB)",
+                file=sys.stderr,
+            )
 
         except Exception as e:
             print(f"ERROR in mic recording: {e}", file=sys.stderr)
@@ -590,8 +595,8 @@ class MacOSAudioRecorder:
             print(f"ERROR: No audio recorded from microphone!", file=sys.stderr)
             return
 
-        # Convert mic frames to numpy array
-        mic_audio = np.concatenate(self.mic_frames, axis=0)
+        # Convert mic chunks to numpy array once at stop time
+        mic_audio = self.mic_frames.to_array()
         mic_channels = mic_audio.shape[1] if len(mic_audio.shape) > 1 else 1
 
         print(f"Mic audio: {len(mic_audio)} samples, {mic_channels} channel(s)", file=sys.stderr)

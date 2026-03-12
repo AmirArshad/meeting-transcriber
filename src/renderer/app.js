@@ -539,7 +539,7 @@ function renderMeetingList() {
 }
 
 // Select meeting from history
-function selectMeeting(meetingId) {
+async function selectMeeting(meetingId) {
   const meeting = meetings.find(m => m.id === meetingId);
   if (!meeting) {
     console.error(`Meeting not found: ${meetingId}`);
@@ -561,8 +561,23 @@ function selectMeeting(meetingId) {
 
   setMeetingAudioSource(meeting.audioPath);
 
-  // Load transcript
-  document.getElementById('meeting-transcript').textContent = meeting.transcript || 'No transcript available';
+  const transcriptEl = document.getElementById('meeting-transcript');
+  transcriptEl.textContent = 'Loading transcript...';
+
+  try {
+    const fullMeeting = await window.electronAPI.getMeeting(meetingId);
+
+    if (!fullMeeting || currentMeetingId !== meetingId) {
+      return;
+    }
+
+    transcriptEl.textContent = fullMeeting.transcript || 'No transcript available';
+  } catch (error) {
+    console.error(`Failed to load meeting transcript: ${error.message}`);
+    if (currentMeetingId === meetingId) {
+      transcriptEl.textContent = 'Failed to load transcript';
+    }
+  }
 
   // Show details panel, hide empty state
   document.getElementById('meeting-details-empty').style.display = 'none';

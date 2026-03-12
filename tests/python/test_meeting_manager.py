@@ -40,6 +40,7 @@ def test_add_meeting_persists_files_and_removes_originals(tmp_path):
     assert persisted_transcript.read_text(encoding='utf-8').startswith('# Transcript')
     assert not source_audio.exists()
     assert not source_transcript.exists()
+    assert 'transcript' not in meeting
 
 
 def test_add_meeting_keeps_originals_if_metadata_save_fails(tmp_path, monkeypatch):
@@ -173,7 +174,6 @@ def test_delete_meeting_removes_associated_files_and_metadata(tmp_path):
                 'durationSeconds': 5.0,
                 'audioPath': str(audio_path),
                 'transcriptPath': str(transcript_path),
-                'transcript': 'transcript',
                 'language': 'en',
                 'model': 'small',
             }
@@ -204,6 +204,7 @@ def test_scan_and_sync_recordings_imports_missing_filesystem_meeting(tmp_path):
     assert meeting is not None
     assert meeting['duration'] == '1:05'
     assert meeting['audioPath'].endswith('meeting_20250101_120000.opus')
+    assert meeting['transcript'] == '**Duration:** 1:05\n\nTranscript text'
 
 
 def test_scan_and_sync_recordings_preserves_suffixed_meeting_ids(tmp_path):
@@ -222,6 +223,69 @@ def test_scan_and_sync_recordings_preserves_suffixed_meeting_ids(tmp_path):
     assert meeting is not None
     assert meeting['id'] == '20250101_120000_1'
     assert meeting['title'] == 'Meeting 2025-01-01 12:00'
+
+
+def test_list_meetings_omits_inline_transcript_bodies(tmp_path):
+    recordings_dir = tmp_path / 'recordings'
+    manager = MeetingManager(recordings_dir=str(recordings_dir))
+
+    audio_path = recordings_dir / 'meeting_20260107_104555.opus'
+    transcript_path = recordings_dir / 'meeting_20260107_104555.md'
+    audio_path.write_bytes(b'audio')
+    transcript_path.write_text('stored transcript body', encoding='utf-8')
+
+    manager._save_meetings(
+        [
+            {
+                'id': '20260107_104555',
+                'title': 'Meeting',
+                'date': '2026-01-07T10:45:55',
+                'duration': '0:05',
+                'durationSeconds': 5.0,
+                'audioPath': str(audio_path),
+                'transcriptPath': str(transcript_path),
+                'transcript': 'stored transcript body',
+                'language': 'en',
+                'model': 'small',
+            }
+        ]
+    )
+
+    meetings = manager.list_meetings()
+
+    assert meetings[0]['id'] == '20260107_104555'
+    assert 'transcript' not in meetings[0]
+
+
+def test_get_meeting_hydrates_transcript_from_transcript_path(tmp_path):
+    recordings_dir = tmp_path / 'recordings'
+    manager = MeetingManager(recordings_dir=str(recordings_dir))
+
+    audio_path = recordings_dir / 'meeting_20260107_104555.opus'
+    transcript_path = recordings_dir / 'meeting_20260107_104555.md'
+    audio_path.write_bytes(b'audio')
+    transcript_path.write_text('hydrated transcript body', encoding='utf-8')
+
+    manager._save_meetings(
+        [
+            {
+                'id': '20260107_104555',
+                'title': 'Meeting',
+                'date': '2026-01-07T10:45:55',
+                'duration': '0:05',
+                'durationSeconds': 5.0,
+                'audioPath': str(audio_path),
+                'transcriptPath': str(transcript_path),
+                'language': 'en',
+                'model': 'small',
+            }
+        ]
+    )
+
+    meeting = manager.get_meeting('20260107_104555')
+
+    assert meeting is not None
+    assert meeting['transcript'] == 'hydrated transcript body'
 
 
 def test_save_meetings_writes_metadata_atomically(tmp_path, monkeypatch):
