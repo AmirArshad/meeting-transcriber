@@ -25,6 +25,7 @@ Meeting Transcriber is a privacy-first Electron desktop app for recording microp
 ### Electron
 
 - `src/main.js`: app lifecycle, tray, startup checks, Python process management, IPC handlers, update checks
+- `src/main-process-helpers.js`: extracted main-process parsing/model-cache helpers with JS regression coverage
 - `src/preload.js`: safe API bridge exposed as `window.electronAPI`
 - `src/renderer/app.js`: main UI state machine, settings persistence, meeting history, GPU/settings UI, update banner
 - `src/renderer/index.html`: renderer markup
@@ -52,7 +53,7 @@ Meeting Transcriber is a privacy-first Electron desktop app for recording microp
 
 - `build/prepare-resources.js`: bundles Python, ffmpeg, and macOS Swift helper
 - `package.json`: Electron builder config and build scripts
-- `.github/workflows/ci.yml`: syntax/build/doc validation
+- `.github/workflows/ci.yml`: regression tests plus syntax/build/doc validation
 - `.github/workflows/build-release.yml`: tagged release builds
 
 ## End-to-End Flow
@@ -62,27 +63,33 @@ Meeting Transcriber is a privacy-first Electron desktop app for recording microp
 3. `src/main.js` spawns Python recorder/transcriber processes.
 4. Recorder emits:
    - JSON audio level events on stdout
-   - human-readable status/progress on stderr
+   - structured recorder events/warnings/errors on stdout
+   - human-readable status/progress on stderr for compatibility and debugging
    - final JSON result on stdout when recording stops
 5. Electron parses those outputs, updates UI, then saves finished meetings through `backend/meeting_manager.py`.
 
 ## Critical Invariants
 
-### Recording startup still depends on stderr strings
+### Recorder startup and progress now use a hybrid contract
 
-`src/main.js` still detects key recorder lifecycle events by matching stderr text such as `Recording started!`.
+`src/main.js` now parses structured stdout messages such as `levels`, `event`, `warning`, and `error`, and it still retains compatibility fallbacks like matching stderr text such as `Recording started!`.
 
-If you change recorder startup/progress messages in either recorder:
+If you change recorder startup/progress behavior in either recorder:
 
 - `backend/audio/windows_recorder.py`
 - `backend/audio/macos_recorder.py`
 
-you must update the parsing logic in `src/main.js` too.
+you must update all of:
 
-There is a planned migration to structured events in `docs/features/json-based-events.md`, but it is not implemented yet.
+- `src/main.js`
+- `src/main-process-helpers.js`
+- `tests/js/main-process-helpers.test.js`
+
+The JSON-event migration in `docs/features/json-based-events.md` is now partially implemented, but it is not complete. Preserve the current hybrid stdout/stderr contract unless you update both sides together.
 
 ### Keep recorder output contracts stable
 
+- Structured stdout messages now include `levels`, `event`, `warning`, and `error`, and `src/main.js` consumes them line-by-line.
 - Windows final JSON uses `audioPath`
 - macOS final JSON uses `outputPath`
 - `src/main.js` currently supports both for backward compatibility
@@ -126,6 +133,16 @@ If you change bundled runtime locations, keep these aligned:
 
 Windows packaged Python relies on `python311._pth` containing `../backend`. Dev mode relies on `PYTHONPATH` setup in `src/main.js`.
 
+### Meeting metadata persistence
+
+If you change `backend/meeting_manager.py`, preserve:
+
+- `FileLock`-based cross-process locking
+- atomic temp-file + `os.replace()` writes
+- transactional add behavior that removes originals only after metadata is saved
+- corrupt metadata backups named `meetings.corrupt.*.json`
+- scan/import preservation of suffixed IDs like `meeting_20260107_104555_1`
+
 ### macOS desktop audio capture
 
 Preferred path is the bundled Swift helper. PyObjC ScreenCaptureKit is only a fallback.
@@ -147,8 +164,8 @@ If you change artifact naming in `package.json` or `.github/workflows/build-rele
 
 - There are no `AGENTS.md` or `CLAUDE.md` predecessors in this repo before this file.
 - CI now includes a small regression suite for pure Python logic and main-process JS helper logic, but it is still not full end-to-end product coverage.
-- Root `README.md` is broadly useful, but some docs are stale.
-- `docs/development/BUILD_INSTRUCTIONS.md` currently references `npm run prebuild`, but the real script is `npm run prepare-build`.
+- Root `README.md` is broadly useful, but some product docs may still lag code changes.
+- `backend/meeting_manager.py` now uses locked atomic metadata writes, transactional add behavior, and corrupt-file backups.
 - `src/renderer/app.js` still has a TODO for saving transcripts through a file dialog.
 
 ## Commands That Reflect The Actual Repo
@@ -247,7 +264,9 @@ swift build -c release --arch arm64
 
 - duplicate IDs are still prevented
 - scan/import still avoids re-adding persisted files
+- scan/import still preserves suffixed IDs
 - delete still handles Windows file locking gracefully
+- corrupt metadata recovery still creates `meetings.corrupt.*.json` backups when needed
 - meeting manager tests still pass
 
 ### Build/release changes

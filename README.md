@@ -37,7 +37,7 @@ No existing solution offered all of this in one package, so I built it.
 - **Professional Audio Quality** - 48kHz sampling with soxr VHQ resampling on both platforms
 - **Intelligent Audio Enhancement** - Per-channel processing for natural, broadcast-quality sound
 - **Opus Compression** - 95% file size reduction (450MB → 23MB for 40-min recording)
-- **Meeting History** - Searchable archive with audio playback and full transcripts
+- **Meeting History** - Searchable archive with audio playback, full transcripts, and recovery-friendly metadata handling
 - **One-Click Installer** - Professional installers with embedded Python runtime (no dependencies)
 - **CPU Fallback** - Automatic fallback to CPU transcription when GPU unavailable
 
@@ -104,6 +104,7 @@ npm run test:all
 ```
 
 On Windows, prefer `py -3.11` instead of `python3` for Python commands.
+For recorder changes, also run the manual smoke checklist in `tests/manual/recording-smoke-checklist.md`.
 
 ## 📸 How It Works
 
@@ -115,9 +116,9 @@ On Windows, prefer `py -3.11` instead of `python3` for Python commands.
 
 2. **Record Your Meeting**
 
-   - App captures both audio streams simultaneously
-   - Real-time audio enhancement and mixing
-   - Automatic Opus compression on save
+    - App captures both audio streams simultaneously
+    - Streams are aligned and mixed after recording stops for better reliability
+    - Automatic Opus compression on save, with WAV fallback if ffmpeg is unavailable or output verification fails
 
 3. **Get Your Transcript**
 
@@ -297,7 +298,7 @@ This project is licensed under the MIT License - see [LICENSE.txt](LICENSE.txt) 
 
 ### Planned 📋
 
-- [ ] **JSON-Based Event System:** Refactor string-based event detection to robust JSON events (see [docs/features/json-based-events.md](docs/features/json-based-events.md))
+- [ ] **JSON-Based Event System:** Finish migrating remaining recorder/transcription flows away from stderr/string parsing to robust JSON events (see [docs/features/json-based-events.md](docs/features/json-based-events.md))
 - [ ] Speaker diarization (identify who's speaking)
 - [ ] **macOS Advanced Audio:** Real-time streaming (low RAM), App-specific capture, Real-time mixing
 - [ ] Real-time transcription
