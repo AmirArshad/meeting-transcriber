@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 
 const {
+  buildFileUrl,
   buildRecordingPreflightReport,
   buildQuitRecordingDialogOptions,
   buildModelDownloadCheck,
@@ -31,6 +32,22 @@ test('buildModelDownloadCheck returns Windows faster-whisper cache settings', ()
   assert.equal(result.cacheDir, path.join('/Users/tester', '.cache', 'huggingface', 'hub'));
   assert.deepEqual(result.modelPatterns, ['models--guillaumekln--faster-whisper-medium']);
   assert.equal(result.modelSize, 'medium');
+});
+
+
+test('buildFileUrl returns a file URL for absolute paths', () => {
+  assert.equal(
+    buildFileUrl('/tmp/demo audio.opus'),
+    'file:///tmp/demo%20audio.opus',
+  );
+});
+
+
+test('buildFileUrl preserves existing file URLs', () => {
+  assert.equal(
+    buildFileUrl('file:///tmp/demo.opus'),
+    'file:///tmp/demo.opus',
+  );
 });
 
 

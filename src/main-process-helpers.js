@@ -1,4 +1,19 @@
 const path = require('path');
+const { pathToFileURL } = require('url');
+
+function buildFileUrl(filePath) {
+  const normalizedPath = String(filePath || '').trim();
+
+  if (!normalizedPath) {
+    return '';
+  }
+
+  if (normalizedPath.startsWith('file://')) {
+    return normalizedPath;
+  }
+
+  return pathToFileURL(path.resolve(normalizedPath)).toString();
+}
 
 function getModelDownloadCacheDir(homeDir) {
   return path.join(homeDir, '.cache', 'huggingface', 'hub');
@@ -317,6 +332,7 @@ function buildRecordingPreflightReport({
 }
 
 module.exports = {
+  buildFileUrl,
   buildRecordingPreflightReport,
   buildQuitRecordingDialogOptions,
   buildModelDownloadCheck,

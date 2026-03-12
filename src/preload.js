@@ -5,6 +5,13 @@
  */
 
 const { contextBridge, ipcRenderer } = require('electron');
+const { buildFileUrl } = require('./main-process-helpers');
+
+function addListener(channel, callback) {
+  const wrappedCallback = (_event, data) => callback(data);
+  ipcRenderer.on(channel, wrappedCallback);
+  return () => ipcRenderer.removeListener(channel, wrappedCallback);
+}
 
 // Expose protected methods to renderer process
 contextBridge.exposeInMainWorld('electronAPI', {
@@ -47,35 +54,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getPlatform: () => ipcRenderer.invoke('get-platform'),
   getArch: () => ipcRenderer.invoke('get-arch'),
   openSystemSettings: (type) => ipcRenderer.invoke('open-system-settings', type),
+  buildFileUrl,
 
   // Updates
   downloadUpdate: (downloadUrl) => ipcRenderer.invoke('download-update', downloadUrl),
 
   // Event listeners
-  onRecordingProgress: (callback) => {
-    ipcRenderer.on('recording-progress', (event, data) => callback(data));
-  },
-  onRecordingInitProgress: (callback) => {
-    ipcRenderer.on('recording-init-progress', (event, data) => callback(data));
-  },
-  onTranscriptionProgress: (callback) => {
-    ipcRenderer.on('transcription-progress', (event, data) => callback(data));
-  },
-  onGPUInstallProgress: (callback) => {
-    ipcRenderer.on('gpu-install-progress', (event, data) => callback(data));
-  },
-  onModelDownloadProgress: (callback) => {
-    ipcRenderer.on('model-download-progress', (event, data) => callback(data));
-  },
-  onAudioLevels: (callback) => {
-    ipcRenderer.on('audio-levels', (event, data) => callback(data));
-  },
-  onRecordingWarning: (callback) => {
-    ipcRenderer.on('recording-warning', (event, data) => callback(data));
-  },
-  onUpdateAvailable: (callback) => {
-    ipcRenderer.on('update-available', (event, data) => callback(data));
-  }
+  onRecordingProgress: (callback) => addListener('recording-progress', callback),
+  onRecordingInitProgress: (callback) => addListener('recording-init-progress', callback),
+  onTranscriptionProgress: (callback) => addListener('transcription-progress', callback),
+  onGPUInstallProgress: (callback) => addListener('gpu-install-progress', callback),
+  onModelDownloadProgress: (callback) => addListener('model-download-progress', callback),
+  onAudioLevels: (callback) => addListener('audio-levels', callback),
+  onRecordingWarning: (callback) => addListener('recording-warning', callback),
+  onUpdateAvailable: (callback) => addListener('update-available', callback)
 });
 
 console.log('Preload script loaded - API bridge ready');

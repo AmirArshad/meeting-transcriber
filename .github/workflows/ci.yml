@@ -2,9 +2,14 @@ name: CI - Tests & Validation
 
 on:
   push:
-    branches: [ master ]
+    branches: [ master, main ]
   pull_request:
-    branches: [ master ]
+    branches: [ master, main ]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test-backend-windows:
@@ -26,19 +31,21 @@ jobs:
         pip install -r requirements-windows.txt
         pip install -r requirements-dev.txt
 
-    - name: Run Python tests
+    - name: Run Python unit tests
+      run: python -m pytest tests/python
+
+    - name: Validate Python syntax
       shell: pwsh
       run: |
-        python -m pytest tests/python
-
-        # Test device manager
-        python backend/device_manager.py > $null 2>&1
-        if ($LASTEXITCODE -ne 0) { Write-Host "Device manager check complete (expected)" }
-
-        # Validate Python files syntax
         Get-ChildItem backend/*.py | ForEach-Object { python -m py_compile $_.FullName }
         Get-ChildItem backend/audio/*.py | ForEach-Object { python -m py_compile $_.FullName }
         Get-ChildItem backend/transcription/*.py | ForEach-Object { python -m py_compile $_.FullName }
+
+    - name: Smoke-check device manager
+      shell: pwsh
+      run: |
+        python backend/device_manager.py > $null 2>&1
+        if ($LASTEXITCODE -ne 0) { Write-Host "Device manager check complete (expected on CI without hardware)" }
 
     - name: Check code style
       run: |
@@ -143,8 +150,9 @@ jobs:
       continue-on-error: true
 
   test-frontend:
-    name: Test Electron Frontend
+    name: Test Electron Frontend & Build Smoke
     runs-on: windows-latest
+    timeout-minutes: 60
 
     steps:
     - uses: actions/checkout@v4
@@ -156,10 +164,36 @@ jobs:
         cache: 'npm'
 
     - name: Install dependencies
-      run: npm install
+      run: npm ci
 
-    - name: Run frontend test suite
-      run: npm test
+    - name: Validate main process syntax
+      run: node --check src/main.js
+
+    - name: Validate preload syntax
+      run: node --check src/preload.js
+
+    - name: Validate renderer syntax
+      run: node --check src/renderer/app.js
+
+    - name: Run frontend regression tests
+      run: node --test tests/js/main-process-helpers.test.js
+
+    - name: Build packaged app smoke test
+      run: npm run build:dir
+      env:
+        DOWNLOAD_MODELS: "false"
+
+    - name: Verify packaged build output
+      shell: pwsh
+      run: |
+        if (-not (Test-Path "dist/win-unpacked")) {
+          throw "Missing dist/win-unpacked build output"
+        }
+
+        $exe = Get-ChildItem "dist/win-unpacked" -Filter *.exe | Select-Object -First 1
+        if (-not $exe) {
+          throw "Missing executable in dist/win-unpacked"
+        }
 
     - name: Check for security vulnerabilities
       run: npm audit --audit-level=high

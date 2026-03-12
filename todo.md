@@ -46,6 +46,14 @@ Status: active. Phases 00-3 are complete through Batch 3. Batch 4 is next.
   - renderer now runs `validateDevices`, disk-space, and macOS audio-output checks before starting recording
   - blocking device failures now stop recording start with clearer guidance
   - warning-only preflight results now prompt before continuing
+- Completed Batch 4 Task 3 renderer safety cleanup:
+  - renderer file playback now uses a safe file-URL helper instead of manual `file://` string concatenation
+  - renderer placeholder and meeting-list updates now use DOM creation/textContent instead of `innerHTML`
+  - preload listener helpers now return unsubscribe functions and renderer teardown cleans them up
+- Completed Batch 4 Task 4 CI hardening:
+  - CI frontend validation now runs explicit syntax checks plus JS regression tests instead of a vague frontend step
+  - Windows CI now includes a packaged build smoke test with unpacked-output verification
+  - workflow now supports `main` and `master` plus manual dispatch with in-progress cancellation
 - Latest automated validation status at time of update:
   - `npm test` passing
   - `npm run test:all` passing
@@ -468,8 +476,8 @@ Files:
 
 ### 24. Remove renderer injection/path risks
 
-- [ ] Replace `innerHTML` assignments with DOM node creation plus `textContent` where backend/user-derived strings are involved.
-- [ ] Convert audio file paths using a safe file-URL helper instead of manual string concatenation.
+- [x] Replace `innerHTML` assignments with DOM node creation plus `textContent` where backend/user-derived strings are involved.
+- [x] Convert audio file paths using a safe file-URL helper instead of manual string concatenation.
 
 Files:
 
@@ -479,7 +487,7 @@ Files:
 
 ### 25. Clean up preload event APIs
 
-- [ ] Return unsubscribe functions from preload listener helpers.
+- [x] Return unsubscribe functions from preload listener helpers.
 - [ ] Consider `once`/`off` wrappers for one-shot events.
 
 Files:
@@ -588,8 +596,8 @@ Files:
 
 ### 35. Strengthen CI
 
-- [ ] Replace the current frontend "validation" step with real checks.
-- [ ] Add at minimum:
+- [x] Replace the current frontend "validation" step with real checks.
+- [x] Add at minimum:
   - `node --check src/main.js`
   - `node --check src/preload.js`
   - `node --check src/renderer/app.js`
@@ -699,8 +707,8 @@ Files:
 
 - [x] graceful quit during recording
 - [x] preflight checks before start
-- [ ] safe renderer DOM updates and file URLs
-- [ ] stronger CI
+- [x] safe renderer DOM updates and file URLs
+- [x] stronger CI
 - [ ] release workflow aggregation
 - [ ] build artifact checksum verification
 

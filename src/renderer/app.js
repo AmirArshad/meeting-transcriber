@@ -2,6 +2,9 @@
  * Renderer process - UI logic for Meeting Transcriber (Redesigned)
  */
 
+const COPY_SUCCESS_TIMEOUT_MS = 2000;
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
 // UI Elements
 const micSelect = document.getElementById('mic-select');
 const desktopSelect = document.getElementById('desktop-select');
@@ -33,6 +36,181 @@ let meetings = [];
 let audioVisualizer = null;
 let isFirstRecording = true; // Track if this is first recording (for longer timeout)
 let isInitializing = true; // Track if app is still initializing
+const cleanupFns = [];
+
+function registerCleanup(cleanupFn) {
+  if (typeof cleanupFn !== 'function') {
+    return () => {};
+  }
+
+  let isActive = true;
+
+  const wrappedCleanup = () => {
+    if (!isActive) {
+      return;
+    }
+
+    isActive = false;
+
+    const index = cleanupFns.indexOf(wrappedCleanup);
+    if (index !== -1) {
+      cleanupFns.splice(index, 1);
+    }
+
+    cleanupFn();
+  };
+
+  cleanupFns.push(wrappedCleanup);
+  return wrappedCleanup;
+}
+
+function runCleanup() {
+  while (cleanupFns.length > 0) {
+    const cleanupFn = cleanupFns.pop();
+    try {
+      cleanupFn();
+    } catch (error) {
+      console.error('Cleanup failed:', error);
+    }
+  }
+}
+
+function clearElement(element) {
+  element.replaceChildren();
+}
+
+function setPlaceholder(container, message, className = 'placeholder') {
+  const node = document.createElement('p');
+  node.className = className;
+  node.textContent = message;
+  container.replaceChildren(node);
+}
+
+function populateSelect(select, placeholder, devices) {
+  clearElement(select);
+
+  const defaultOption = document.createElement('option');
+  defaultOption.value = '';
+  defaultOption.textContent = placeholder;
+  select.appendChild(defaultOption);
+
+  devices.forEach((device) => {
+    const option = document.createElement('option');
+    option.value = device.id;
+    option.textContent = `${device.name} (${device.sample_rate} Hz)`;
+    select.appendChild(option);
+  });
+}
+
+function createSvgElement(tag, attributes = {}) {
+  const element = document.createElementNS(SVG_NS, tag);
+
+  Object.entries(attributes).forEach(([name, value]) => {
+    element.setAttribute(name, value);
+  });
+
+  return element;
+}
+
+function createDeleteIcon() {
+  const svg = createSvgElement('svg', {
+    width: '14',
+    height: '14',
+    viewBox: '0 0 24 24',
+    fill: 'none',
+    stroke: 'currentColor',
+    'stroke-width': '2',
+    'stroke-linecap': 'round',
+    'stroke-linejoin': 'round',
+  });
+
+  svg.appendChild(createSvgElement('polyline', { points: '3 6 5 6 21 6' }));
+  svg.appendChild(createSvgElement('path', {
+    d: 'M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2',
+  }));
+
+  return svg;
+}
+
+function createDeleteButton() {
+  const button = document.createElement('button');
+  button.className = 'delete-btn-list';
+  button.title = 'Delete';
+  button.setAttribute('aria-label', 'Delete meeting');
+
+  button.appendChild(createDeleteIcon());
+
+  return button;
+}
+
+function createMeetingListItem(meeting) {
+  const item = document.createElement('div');
+  item.className = 'meeting-item';
+  item.dataset.id = meeting.id;
+
+  const info = document.createElement('div');
+  info.className = 'meeting-info';
+
+  const title = document.createElement('div');
+  title.className = 'meeting-item-title';
+  title.textContent = meeting.title;
+
+  const metaRow = document.createElement('div');
+  metaRow.className = 'meeting-meta-row';
+
+  const date = document.createElement('span');
+  date.className = 'meeting-item-date';
+  date.textContent = formatDate(meeting.date);
+
+  const duration = document.createElement('span');
+  duration.className = 'meeting-item-duration';
+  duration.textContent = meeting.duration;
+
+  metaRow.append(date, duration);
+  info.append(title, metaRow);
+
+  const deleteBtn = createDeleteButton();
+
+  item.append(info, deleteBtn);
+
+  item.addEventListener('click', (e) => {
+    if (e.target.closest('.delete-btn-list')) return;
+    selectMeeting(meeting.id);
+  });
+
+  deleteBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    deleteMeetingHandler(meeting.id);
+  });
+
+  return item;
+}
+
+function setTranscriptMessage(message, isError = false) {
+  setPlaceholder(transcriptOutput, message, isError ? 'placeholder error' : 'placeholder');
+}
+
+function setMeetingAudioSource(audioPath) {
+  const audioPlayer = document.getElementById('audio-player');
+  audioPlayer.src = window.electronAPI.buildFileUrl(audioPath);
+  audioPlayer.load();
+}
+
+function setCopyButtonState(button, label, disabled) {
+  clearElement(button);
+
+  if (label === 'Copied!') {
+    const icon = document.createElement('span');
+    icon.className = 'btn-icon';
+    icon.textContent = '✓';
+    button.appendChild(icon);
+    button.append(` ${label}`);
+  } else {
+    button.textContent = label;
+  }
+
+  button.disabled = disabled;
+}
 
 // Settings persistence
 const SETTINGS_KEY = 'meeting-transcriber-settings';
@@ -183,7 +361,7 @@ async function showFirstTimeSetup(modelSize) {
   progressText.textContent = 'Downloading Whisper AI model...';
 
   // Listen for progress updates
-  window.electronAPI.onModelDownloadProgress((data) => {
+  const cleanupModelDownloadProgress = registerCleanup(window.electronAPI.onModelDownloadProgress((data) => {
     logOutput.textContent += data;
     logOutput.scrollTop = logOutput.scrollHeight;
 
@@ -195,7 +373,7 @@ async function showFirstTimeSetup(modelSize) {
     } else if (data.includes('Model loaded') || data.includes('successfully')) {
       progressText.textContent = 'Model ready!';
     }
-  });
+  }));
 
   // Simulate progress (we don't get real download progress)
   let progress = 0;
@@ -230,6 +408,8 @@ async function showFirstTimeSetup(modelSize) {
     // Wait for user to see error, then continue anyway
     await new Promise(resolve => setTimeout(resolve, 3000));
     modal.classList.add('hidden');
+  } finally {
+    cleanupModelDownloadProgress();
   }
 }
 
@@ -267,22 +447,10 @@ async function loadAudioDevices() {
     }
 
     // Populate microphone dropdown
-    micSelect.innerHTML = '<option value="">Select microphone...</option>';
-    devices.inputs.forEach(device => {
-      const option = document.createElement('option');
-      option.value = device.id;
-      option.textContent = `${device.name} (${device.sample_rate} Hz)`;
-      micSelect.appendChild(option);
-    });
+    populateSelect(micSelect, 'Select microphone...', devices.inputs);
 
     // Populate desktop audio dropdown
-    desktopSelect.innerHTML = '<option value="">Select desktop audio...</option>';
-    devices.loopbacks.forEach(device => {
-      const option = document.createElement('option');
-      option.value = device.id;
-      option.textContent = `${device.name} (${device.sample_rate} Hz)`;
-      desktopSelect.appendChild(option);
-    });
+    populateSelect(desktopSelect, 'Select desktop audio...', devices.loopbacks);
 
     addLog(`Found ${devices.inputs.length} microphones and ${devices.loopbacks.length} loopback devices`);
 
@@ -320,11 +488,11 @@ async function loadMeetingHistory() {
 // Render meeting list
 function renderMeetingList() {
   if (meetings.length === 0) {
-    meetingList.innerHTML = '<p class="placeholder">No meetings recorded yet</p>';
+    setPlaceholder(meetingList, 'No meetings recorded yet');
     return;
   }
 
-  meetingList.innerHTML = '';
+  clearElement(meetingList);
 
   // Defense-in-depth: Track rendered IDs to skip duplicates from backend
   const renderedIds = new Set();
@@ -337,37 +505,7 @@ function renderMeetingList() {
     }
     renderedIds.add(meeting.id);
 
-    const item = document.createElement('div');
-    item.className = 'meeting-item';
-    item.dataset.id = meeting.id;
-
-    item.innerHTML = `
-      <div class="meeting-info">
-        <div class="meeting-item-title">${meeting.title}</div>
-        <div class="meeting-meta-row">
-          <span class="meeting-item-date">${formatDate(meeting.date)}</span>
-          <span class="meeting-item-duration">${meeting.duration}</span>
-        </div>
-      </div>
-      <button class="delete-btn-list" title="Delete">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
-      </button>
-    `;
-
-    // Click on item to select
-    item.addEventListener('click', (e) => {
-      if (e.target.closest('.delete-btn-list')) return;
-      selectMeeting(meeting.id);
-    });
-
-    // Delete button click
-    const deleteBtn = item.querySelector('.delete-btn-list');
-    deleteBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      deleteMeetingHandler(meeting.id);
-    });
-
-    meetingList.appendChild(item);
+    meetingList.appendChild(createMeetingListItem(meeting));
   });
 }
 
@@ -392,22 +530,7 @@ function selectMeeting(meetingId) {
   document.getElementById('meeting-date').textContent = formatDate(meeting.date);
   document.getElementById('meeting-duration').textContent = meeting.duration;
 
-  // Load audio - Convert path to file:// URL for Electron
-  const audioPlayer = document.getElementById('audio-player');
-  const audioPath = meeting.audioPath.replace(/\\/g, '/');
-
-  // Convert absolute path to file:// URL
-  if (audioPath.match(/^[a-zA-Z]:/)) {
-    // Windows path: D:/path -> file:///D:/path
-    audioPlayer.src = 'file:///' + audioPath;
-  } else if (audioPath.startsWith('/')) {
-    // Unix path: /path -> file:///path
-    audioPlayer.src = 'file://' + audioPath;
-  } else {
-    audioPlayer.src = audioPath;
-  }
-
-  audioPlayer.load();
+  setMeetingAudioSource(meeting.audioPath);
 
   // Load transcript
   document.getElementById('meeting-transcript').textContent = meeting.transcript || 'No transcript available';
@@ -452,7 +575,7 @@ function setupEventListeners() {
   });
 
   // Listen for progress updates
-  window.electronAPI.onRecordingProgress((data) => {
+  registerCleanup(window.electronAPI.onRecordingProgress((data) => {
     addLog(data);
 
     // Update status text during post-processing (stopping state)
@@ -465,27 +588,27 @@ function setupEventListeners() {
         statusText.textContent = 'Processing: Mixing audio tracks...';
       }
     }
-  });
+  }));
 
-  window.electronAPI.onRecordingInitProgress((progress) => {
+  registerCleanup(window.electronAPI.onRecordingInitProgress((progress) => {
     // Show detailed progress during recording initialization
     addLog(progress.message);
     statusText.textContent = progress.message;
-  });
+  }));
 
-  window.electronAPI.onTranscriptionProgress((data) => {
+  registerCleanup(window.electronAPI.onTranscriptionProgress((data) => {
     addLog(data);
-  });
+  }));
 
   // Listen for audio levels
-  window.electronAPI.onAudioLevels((levels) => {
+  registerCleanup(window.electronAPI.onAudioLevels((levels) => {
     if (audioVisualizer && recordingState === 'recording') {
       audioVisualizer.updateLevels(levels);
     }
-  });
+  }));
 
   // FIX 3 & 4: Listen for recording warnings (heartbeat lost)
-  window.electronAPI.onRecordingWarning((warning) => {
+  registerCleanup(window.electronAPI.onRecordingWarning((warning) => {
     console.error('Recording warning:', warning);
     addLog(`⚠️ ${warning.message}`, warning.level === 'error' ? 'error' : 'warning');
 
@@ -499,12 +622,12 @@ function setupEventListeners() {
     } else if (recordingState === 'initializing' || recordingState === 'countdown') {
       statusText.textContent = warning.message;
     }
-  });
+  }));
 
   // Listen for updates
-  window.electronAPI.onUpdateAvailable((updateInfo) => {
+  registerCleanup(window.electronAPI.onUpdateAvailable((updateInfo) => {
     showUpdateNotification(updateInfo);
-  });
+  }));
 
   // Check if user has recorded before (for timeout settings)
   const settings = loadSettings();
@@ -697,7 +820,7 @@ async function startRecording() {
       audioVisualizer.start();
 
       // Clear previous transcript
-      transcriptOutput.innerHTML = '<p class="placeholder">Recording in progress...</p>';
+      setTranscriptMessage('Recording in progress...');
       transcriptActions.style.display = 'none';
 
       addLog('Recording started!');
@@ -800,14 +923,14 @@ async function stopRecording() {
       await transcribeAudio();
     } else {
       addLog('Warning: Recording stopped but no audio file path returned', 'warning');
-      transcriptOutput.innerHTML = '<p class="placeholder error">Recording completed but file not found. The recording may have failed.</p>';
+      setTranscriptMessage('Recording completed but file not found. The recording may have failed.', true);
       setRecordingState('idle');
     }
 
   } catch (error) {
     console.error('Failed to stop recording:', error);
     addLog(`Error: ${error.message}`, 'error');
-    transcriptOutput.innerHTML = `<p class="placeholder error">Recording failed: ${error.message}</p>`;
+    setTranscriptMessage(`Recording failed: ${error.message}`, true);
     
     stopTimer();
     audioVisualizer.stop();
@@ -830,14 +953,14 @@ async function transcribeAudio() {
   // Validate we have an audio file
   if (!currentAudioFile) {
     addLog('Error: No audio file to transcribe', 'error');
-    transcriptOutput.innerHTML = '<p class="placeholder error">No audio file available for transcription.</p>';
+    setTranscriptMessage('No audio file available for transcription.', true);
     setRecordingState('idle');
     return;
   }
 
   try {
     setRecordingState('transcribing');
-    transcriptOutput.innerHTML = '<p class="placeholder">Transcribing... This may take a moment.</p>';
+    setTranscriptMessage('Transcribing... This may take a moment.');
 
     addLog(`Language: ${language}, Model: ${modelSize}`);
     addLog(`File: ${currentAudioFile}`);
@@ -849,7 +972,7 @@ async function transcribeAudio() {
     });
 
     // Display transcript with timestamps
-    transcriptOutput.innerHTML = '';
+    clearElement(transcriptOutput);
 
     if (result.segments && result.segments.length > 0) {
       // Display each segment with timestamp
@@ -912,7 +1035,7 @@ async function transcribeAudio() {
   } catch (error) {
     console.error('Failed to transcribe:', error);
     addLog(`Error: ${error.message}`, 'error');
-    transcriptOutput.innerHTML = `<p class="placeholder error">Transcription failed: ${error.message}</p>`;
+    setTranscriptMessage(`Transcription failed: ${error.message}`, true);
     setRecordingState('idle');
   }
 }
@@ -932,14 +1055,11 @@ function copyMeetingTranscript() {
   navigator.clipboard.writeText(text).then(() => {
     // Visual feedback
     const btn = document.getElementById('copy-transcript-btn');
-    const originalHTML = btn.innerHTML;
-    btn.innerHTML = '<span class="btn-icon">✓</span> Copied!';
-    btn.disabled = true;
+    setCopyButtonState(btn, 'Copied!', true);
 
     setTimeout(() => {
-      btn.innerHTML = originalHTML;
-      btn.disabled = false;
-    }, 2000);
+      setCopyButtonState(btn, 'Copy', false);
+    }, COPY_SUCCESS_TIMEOUT_MS);
   }).catch(err => {
     console.error('Failed to copy:', err);
     alert('Failed to copy transcript to clipboard');
@@ -1089,9 +1209,9 @@ async function initSettingsTab() {
   document.getElementById('uninstall-gpu-btn').addEventListener('click', uninstallGPUAcceleration);
 
   // Listen for installation progress
-  window.electronAPI.onGPUInstallProgress((data) => {
+  registerCleanup(window.electronAPI.onGPUInstallProgress((data) => {
     appendGPULog(data);
-  });
+  }));
 }
 
 async function checkGPUStatus() {
@@ -1519,6 +1639,8 @@ document.addEventListener('visibilitychange', () => {
     console.log('App foregrounded - resuming visualization');
   }
 });
+
+window.addEventListener('beforeunload', runCleanup);
 
 // Start the app
 init();
