@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   validateDevices: (options) => ipcRenderer.invoke('validate-devices', options),
   checkDiskSpace: () => ipcRenderer.invoke('check-disk-space'),
   checkAudioOutput: () => ipcRenderer.invoke('check-audio-output'),
+  runRecordingPreflight: (options) => ipcRenderer.invoke('run-recording-preflight', options),
 
   // Recording controls
   startRecording: (options) => ipcRenderer.invoke('start-recording', options),

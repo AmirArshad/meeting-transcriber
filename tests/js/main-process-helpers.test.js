@@ -3,12 +3,16 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 
 const {
+  buildRecordingPreflightReport,
+  buildQuitRecordingDialogOptions,
   buildModelDownloadCheck,
   cacheContainsModel,
   classifyRecorderStdoutChunk,
+  getQuitInterceptState,
   getMacMLXCacheDir,
   getMacMLXModelStorageDirs,
   getModelDownloadPatterns,
+  getRecordingStopTimeout,
   isModelDownloadErrorOutput,
   parseRecorderMessageLine,
   parseRecorderStdoutChunk,
@@ -173,4 +177,116 @@ test('parseRecorderStdoutChunk keeps incomplete trailing chunks for the next rea
 test('isModelDownloadErrorOutput ignores non-critical warnings but flags actual errors', () => {
   assert.equal(isModelDownloadErrorOutput('ERROR: failed to download model'), true);
   assert.equal(isModelDownloadErrorOutput('non-critical error: retrying download'), false);
+});
+
+
+test('getRecordingStopTimeout uses a minimum timeout when recording has not started', () => {
+  assert.equal(getRecordingStopTimeout(null, 5000), 30000);
+});
+
+
+test('getRecordingStopTimeout scales with recording duration', () => {
+  assert.equal(getRecordingStopTimeout(0, 61000), 50000);
+});
+
+
+test('getQuitInterceptState ignores quit interception when no recorder is active', () => {
+  assert.deepEqual(getQuitInterceptState({
+    hasRecordingProcess: false,
+    recordingStartTime: Date.now(),
+    stopInProgress: false,
+  }), {
+    interceptQuit: false,
+    state: 'idle',
+    progressMessage: null,
+  });
+});
+
+
+test('getQuitInterceptState treats an active recording as graceful-stop eligible', () => {
+  assert.deepEqual(getQuitInterceptState({
+    hasRecordingProcess: true,
+    recordingStartTime: 123,
+    stopInProgress: false,
+  }), {
+    interceptQuit: true,
+    state: 'recording',
+    progressMessage: 'Stopping and saving the current recording before quitting...',
+  });
+});
+
+
+test('getQuitInterceptState prioritizes an in-progress stop over recording state', () => {
+  assert.deepEqual(getQuitInterceptState({
+    hasRecordingProcess: true,
+    recordingStartTime: 123,
+    stopInProgress: true,
+  }), {
+    interceptQuit: true,
+    state: 'stopping',
+    progressMessage: 'Finishing the current recording before quitting...',
+  });
+});
+
+
+test('buildQuitRecordingDialogOptions warns clearly about recording data loss', () => {
+  const result = buildQuitRecordingDialogOptions({
+    quitState: 'recording',
+    stopErrorMessage: 'Recorder stop is taking longer than expected.',
+  });
+
+  assert.equal(result.title, 'Recording Still In Progress');
+  assert.equal(result.message, 'Meeting Transcriber could not stop and save the current recording cleanly.');
+  assert.match(result.detail, /Recorder stop is taking longer than expected\./);
+  assert.match(result.detail, /may discard the in-progress recording/i);
+  assert.deepEqual(result.buttons, ['Keep App Open', 'Quit Anyway']);
+});
+
+
+test('buildRecordingPreflightReport blocks start when device validation returns errors', () => {
+  const result = buildRecordingPreflightReport({
+    platform: 'darwin',
+    deviceCheck: {
+      valid: false,
+      errors: ['Microphone device (ID: 3) not found. It may have been disconnected.'],
+      warnings: [],
+    },
+    diskCheck: { success: true, warning: null },
+    audioOutputCheck: { supported: true, warning: null },
+  });
+
+  assert.equal(result.canStart, false);
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errorMessage, /Recording checks failed:/);
+  assert.match(result.errorMessage, /Microphone device/);
+  assert.match(result.errorMessage, /System Settings > Privacy & Security > Microphone/);
+});
+
+
+test('buildRecordingPreflightReport combines disk and audio output warnings', () => {
+  const result = buildRecordingPreflightReport({
+    platform: 'darwin',
+    deviceCheck: {
+      valid: true,
+      errors: [],
+      warnings: ['Non-standard loopback device selected on macOS.'],
+    },
+    diskCheck: {
+      success: true,
+      warning: 'Low disk space (< 500MB)',
+      availableGB: '0.42',
+    },
+    audioOutputCheck: {
+      supported: false,
+      warning: 'Desktop audio may not be captured when using "AirPods Pro".',
+      suggestion: 'Switch to built-in speakers or use BlackHole virtual audio device',
+    },
+  });
+
+  assert.equal(result.canStart, true);
+  assert.equal(result.warnings.length, 4);
+  assert.match(result.warningMessage, /Recording checks found warnings:/);
+  assert.match(result.warningMessage, /Only 0.42 GB free/);
+  assert.match(result.warningMessage, /AirPods Pro/);
+  assert.match(result.warningMessage, /Continue anyway\?/);
 });

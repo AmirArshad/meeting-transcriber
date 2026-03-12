@@ -607,6 +607,27 @@ function updateControlsState() {
   refreshBtn.disabled = isBusy || isInitializing;
 }
 
+async function runRecordingPreflightChecks({ micId, desktopId }) {
+  const report = await window.electronAPI.runRecordingPreflight({
+    micId: parseInt(micId, 10),
+    loopbackId: parseInt(desktopId, 10),
+  });
+
+  report.errors.forEach((message) => addLog(`Preflight error: ${message}`, 'error'));
+  report.warnings.forEach((message) => addLog(`Preflight warning: ${message}`, 'warning'));
+
+  if (!report.canStart) {
+    alert(report.errorMessage || 'Recording checks failed.');
+    return false;
+  }
+
+  if (report.warningMessage) {
+    return confirm(report.warningMessage);
+  }
+
+  return true;
+}
+
 // Start recording with retry logic
 async function startRecording() {
   const micId = micSelect.value;
@@ -619,6 +640,13 @@ async function startRecording() {
 
   if (!desktopId) {
     alert('Please select a desktop audio source');
+    return;
+  }
+
+  const preflightPassed = await runRecordingPreflightChecks({ micId, desktopId });
+  if (!preflightPassed) {
+    addLog('Recording canceled by preflight checks.', 'warning');
+    setRecordingState('idle');
     return;
   }
 

@@ -38,7 +38,16 @@ Status: active. Phases 00-3 are complete through Batch 3. Batch 4 is next.
   - MLX transcription now calls the backend with the requested language and probes duration when timestamps are missing
   - transcription progress now uses stderr while stdout remains reserved for final JSON output
   - both transcribers now implement the shared `BaseTranscriber` interface and expose `get_model_info()`
+- Completed Batch 4 Task 1 graceful quit handling:
+  - `before-quit` now attempts a graceful recorder stop instead of killing an active recording immediately
+  - quit now warns clearly before forced data-loss actions if graceful stop does not complete
+  - stop/quit now share the same main-process stop path and timeout calculation
+- Completed Batch 4 Task 2 recording preflight wiring:
+  - renderer now runs `validateDevices`, disk-space, and macOS audio-output checks before starting recording
+  - blocking device failures now stop recording start with clearer guidance
+  - warning-only preflight results now prompt before continuing
 - Latest automated validation status at time of update:
+  - `npm test` passing
   - `npm run test:all` passing
   - `python3 -m py_compile backend/*.py backend/audio/*.py backend/transcription/*.py` passing
   - `swift build -c release --arch arm64` passing
@@ -412,9 +421,9 @@ Files:
 
 ### 20. Graceful quit during recording
 
-- [ ] Replace kill-on-quit behavior with a graceful stop path when a recording is in progress.
-- [ ] If graceful stop is not possible, prompt the user clearly before data-loss actions.
-- [ ] Ensure `before-quit` does not discard in-progress recordings.
+- [x] Replace kill-on-quit behavior with a graceful stop path when a recording is in progress.
+- [x] If graceful stop is not possible, prompt the user clearly before data-loss actions.
+- [x] Ensure `before-quit` does not discard in-progress recordings.
 
 Files:
 
@@ -432,9 +441,9 @@ Files:
 
 ### 22. Use preflight checks before recording
 
-- [ ] Wire `validateDevices`, `checkDiskSpace`, and `checkAudioOutput` into the actual `startRecording()` flow.
-- [ ] Block or warn before recording when checks fail.
-- [ ] Keep platform-specific guidance accurate.
+- [x] Wire `validateDevices`, `checkDiskSpace`, and `checkAudioOutput` into the actual `startRecording()` flow.
+- [x] Block or warn before recording when checks fail.
+- [x] Keep platform-specific guidance accurate.
 
 Files:
 
@@ -688,8 +697,8 @@ Files:
 
 ### Batch 4 - app lifecycle, UI, and build hardening
 
-- [ ] graceful quit during recording
-- [ ] preflight checks before start
+- [x] graceful quit during recording
+- [x] preflight checks before start
 - [ ] safe renderer DOM updates and file URLs
 - [ ] stronger CI
 - [ ] release workflow aggregation

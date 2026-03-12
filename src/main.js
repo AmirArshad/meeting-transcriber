@@ -13,8 +13,12 @@ const { spawn, execFile } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const {
+  buildRecordingPreflightReport,
+  buildQuitRecordingDialogOptions,
   buildModelDownloadCheck,
   cacheContainsModel,
+  getQuitInterceptState,
+  getRecordingStopTimeout,
   isModelDownloadErrorOutput,
   parseRecorderStdoutChunk,
 } = require('./main-process-helpers');
@@ -33,6 +37,235 @@ let isQuitting = false;
 let powerSaveId = null; // Power save blocker ID for preventing system suspension during recording
 let recordingHeartbeat = null; // Heartbeat monitor to detect recording failures
 let lastLevelUpdate = null; // Timestamp of last audio level update
+let recordingStopPromise = null;
+let quitWorkflowPromise = null;
+let allowImmediateQuit = false;
+
+function sendToRenderer(channel, payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(channel, payload);
+  }
+}
+
+function disableRecordingPowerSaveBlocker(reason = 'recording stopped') {
+  if (powerSaveId !== null) {
+    powerSaveBlocker.stop(powerSaveId);
+    powerSaveId = null;
+    console.log(`Power save blocker disabled (${reason})`);
+  }
+}
+
+function parseRecordingStopResult(stdoutData) {
+  const trimmedOutput = stdoutData.trim();
+
+  if (trimmedOutput) {
+    const lines = trimmedOutput.split('\n');
+    const jsonLine = lines[lines.length - 1];
+    const recordingInfo = JSON.parse(jsonLine);
+    const filePath = recordingInfo.audioPath || recordingInfo.outputPath;
+
+    if (filePath && fs.existsSync(filePath)) {
+      return {
+        success: true,
+        audioPath: filePath,
+        duration: recordingInfo.duration,
+      };
+    }
+
+    throw new Error(`Recording file not found: ${filePath}`);
+  }
+
+  const recordingsDir = path.join(app.getPath('userData'), 'recordings');
+  const opusPath = path.join(recordingsDir, 'temp.opus');
+
+  if (fs.existsSync(opusPath)) {
+    return { success: true, audioPath: opusPath };
+  }
+
+  throw new Error('Recording completed but output file not found.');
+}
+
+function stopRecordingProcess() {
+  if (!pythonProcess) {
+    return Promise.resolve({ success: true });
+  }
+
+  if (recordingStopPromise) {
+    return recordingStopPromise;
+  }
+
+  if (recordingHeartbeat) {
+    clearInterval(recordingHeartbeat);
+    recordingHeartbeat = null;
+    console.log('Recording heartbeat monitor stopped');
+  }
+
+  const currentProcess = pythonProcess;
+
+  recordingStopPromise = new Promise((resolve, reject) => {
+    let stdoutData = '';
+    let stderrData = '';
+    let settled = false;
+
+    const stdoutHandler = (data) => {
+      stdoutData += data.toString();
+    };
+
+    const stderrHandler = (data) => {
+      const output = data.toString();
+      stderrData += output;
+      console.log(`Python status: ${output}`);
+      sendToRenderer('recording-progress', output.trim());
+    };
+
+    const cleanupListeners = () => {
+      currentProcess.stdout.removeListener('data', stdoutHandler);
+      currentProcess.stderr.removeListener('data', stderrHandler);
+      currentProcess.removeListener('close', closeHandler);
+    };
+
+    const finalizeState = () => {
+      if (pythonProcess === currentProcess) {
+        pythonProcess = null;
+      }
+
+      recordingStartTime = null;
+      disableRecordingPowerSaveBlocker('recording completed');
+      recordingStopPromise = null;
+    };
+
+    const closeHandler = (code) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      cleanupListeners();
+      finalizeState();
+
+      if (code === 0) {
+        try {
+          resolve(parseRecordingStopResult(stdoutData));
+        } catch (error) {
+          reject(error);
+        }
+        return;
+      }
+
+      reject(new Error(`Recording stopped with exit code ${code}: ${stderrData}`));
+    };
+
+    currentProcess.stdout.on('data', stdoutHandler);
+    currentProcess.stderr.on('data', stderrHandler);
+    currentProcess.once('close', closeHandler);
+
+    try {
+      currentProcess.stdin.write('stop\n');
+    } catch (error) {
+      settled = true;
+      cleanupListeners();
+      recordingStopPromise = null;
+      reject(new Error(`Could not send stop command to recorder: ${error.message}`));
+    }
+  });
+
+  return recordingStopPromise;
+}
+
+async function waitForRecordingStop({ forceKillOnTimeout, timeoutMessage }) {
+  const stopPromise = stopRecordingProcess();
+  const timeoutMs = getRecordingStopTimeout(recordingStartTime);
+
+  let timeoutHandle;
+
+  try {
+    return await Promise.race([
+      stopPromise,
+      new Promise((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          reject(new Error(timeoutMessage));
+        }, timeoutMs);
+      }),
+    ]);
+  } catch (error) {
+    if (forceKillOnTimeout && pythonProcess) {
+      try {
+        pythonProcess.kill();
+      } catch (killError) {
+        console.warn('Failed to kill recorder after timeout:', killError.message);
+      }
+    } else if (!forceKillOnTimeout && error.message === timeoutMessage) {
+      recordingStopPromise = null;
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
+}
+
+async function promptForForcedQuit(quitState, stopError) {
+  const options = buildQuitRecordingDialogOptions({
+    quitState,
+    stopErrorMessage: stopError?.message,
+  });
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    return dialog.showMessageBox(mainWindow, options);
+  }
+
+  return dialog.showMessageBox(options);
+}
+
+async function handleQuitDuringRecording(quitState) {
+  if (quitWorkflowPromise) {
+    return quitWorkflowPromise;
+  }
+
+  isQuitting = false;
+
+  quitWorkflowPromise = (async () => {
+    if (quitState.progressMessage) {
+      sendToRenderer('recording-progress', quitState.progressMessage);
+    }
+
+    try {
+      await waitForRecordingStop({
+        forceKillOnTimeout: false,
+        timeoutMessage: 'Recorder stop is taking longer than expected.',
+      });
+
+      allowImmediateQuit = true;
+      isQuitting = true;
+      app.quit();
+      return;
+    } catch (error) {
+      console.warn('Graceful quit stop failed:', error.message);
+      const response = await promptForForcedQuit(quitState.state, error);
+
+      if (response.response === 1) {
+        allowImmediateQuit = true;
+        isQuitting = true;
+        app.quit();
+        return;
+      }
+
+      isQuitting = false;
+      const canceledMessage = quitState.state === 'stopping'
+        ? 'Quit canceled. Saving continues.'
+        : 'Quit canceled. Recording continues.';
+      sendToRenderer('recording-progress', canceledMessage);
+    }
+  })();
+
+  try {
+    await quitWorkflowPromise;
+  } finally {
+    if (!allowImmediateQuit) {
+      quitWorkflowPromise = null;
+    }
+  }
+}
 
 // ============================================================================
 // Python Process Management
@@ -496,7 +729,6 @@ function createTray() {
     {
       label: 'Quit',
       click: () => {
-        isQuitting = true;
         app.quit();
       }
     }
@@ -558,7 +790,6 @@ function createWindow() {
           mainWindow.hide();
         } else if (result.response === 1) {
           // Close app
-          isQuitting = true;
           app.quit();
         }
         // Cancel does nothing
@@ -794,12 +1025,33 @@ app.on('window-all-closed', () => {
 });
 
 // Clean up on quit
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
+  const quitState = getQuitInterceptState({
+    hasRecordingProcess: Boolean(pythonProcess),
+    recordingStartTime,
+    stopInProgress: Boolean(recordingStopPromise),
+  });
+
+  if (!allowImmediateQuit && quitState.interceptQuit) {
+    event.preventDefault();
+    void handleQuitDuringRecording(quitState);
+    return;
+  }
+
   isQuitting = true;
+
+  if (recordingHeartbeat) {
+    clearInterval(recordingHeartbeat);
+    recordingHeartbeat = null;
+  }
 
   // Kill the main recording process
   if (pythonProcess) {
-    pythonProcess.kill();
+    try {
+      pythonProcess.kill();
+    } catch (e) {
+      // Process might already be dead, ignore
+    }
   }
 
   // Kill all other spawned Python processes
@@ -818,6 +1070,7 @@ app.on('before-quit', () => {
   // Clean up tray
   if (tray) {
     tray.destroy();
+    tray = null;
   }
 });
 
@@ -830,7 +1083,7 @@ app.on('before-quit', () => {
  * Checks that selected devices exist and are accessible.
  * GRACEFUL: Returns valid=true with warning if check fails, allowing recording to proceed.
  */
-ipcMain.handle('validate-devices', async (event, { micId, loopbackId }) => {
+function validateSelectedDevices({ micId, loopbackId }) {
   const TIMEOUT_MS = 10000; // 10 second timeout
 
   return new Promise((resolve) => {
@@ -943,6 +1196,10 @@ ipcMain.handle('validate-devices', async (event, { micId, loopbackId }) => {
       });
     });
   });
+}
+
+ipcMain.handle('validate-devices', async (event, options) => {
+  return validateSelectedDevices(options);
 });
 
 /**
@@ -958,7 +1215,7 @@ ipcMain.handle('check-disk-space', async () => {
  * ScreenCaptureKit may not capture audio from these devices.
  * GRACEFUL: Returns supported=true if check fails, allowing recording to proceed.
  */
-ipcMain.handle('check-audio-output', async () => {
+function checkAudioOutputSupport() {
   if (process.platform !== 'darwin') {
     // Windows WASAPI loopback works with all devices
     return { supported: true, warning: null };
@@ -1059,6 +1316,25 @@ ipcMain.handle('check-audio-output', async () => {
       console.error('check-audio-output error:', err);
       resolve({ supported: true, warning: null });
     });
+  });
+}
+
+ipcMain.handle('check-audio-output', async () => {
+  return checkAudioOutputSupport();
+});
+
+ipcMain.handle('run-recording-preflight', async (event, { micId, loopbackId }) => {
+  const [deviceCheck, diskCheck, audioOutputCheck] = await Promise.all([
+    validateSelectedDevices({ micId, loopbackId }),
+    checkDiskSpace(),
+    checkAudioOutputSupport(),
+  ]);
+
+  return buildRecordingPreflightReport({
+    platform: process.platform,
+    deviceCheck,
+    diskCheck,
+    audioOutputCheck,
   });
 });
 
@@ -1525,117 +1801,9 @@ ipcMain.handle('start-recording', async (event, options) => {
  * Stop recording
  */
 ipcMain.handle('stop-recording', async () => {
-  return new Promise((resolve, reject) => {
-    // FIX 3: Clear heartbeat monitor
-    if (recordingHeartbeat) {
-      clearInterval(recordingHeartbeat);
-      recordingHeartbeat = null;
-      console.log('Recording heartbeat monitor stopped');
-    }
-
-    if (pythonProcess) {
-      // Save reference to current process (in case it gets nulled)
-      const currentProcess = pythonProcess;
-
-      let stdoutData = '';
-      let stderrData = '';
-
-      // Set up one-time handlers to collect remaining output
-      const stdoutHandler = (data) => {
-        stdoutData += data.toString();
-      };
-
-      const stderrHandler = (data) => {
-        const output = data.toString();
-        stderrData += output;
-
-        // Send progress updates to renderer so user sees post-processing status
-        console.log(`Python status: ${output}`);
-        mainWindow.webContents.send('recording-progress', output.trim());
-      };
-
-      // Add handlers (will be cleaned up after process closes)
-      currentProcess.stdout.on('data', stdoutHandler);
-      currentProcess.stderr.on('data', stderrHandler);
-
-      // Wait for process to actually complete
-      const closeHandler = (code) => {
-        // Clean up event handlers to prevent memory leaks
-        currentProcess.stdout.removeListener('data', stdoutHandler);
-        currentProcess.stderr.removeListener('data', stderrHandler);
-
-        pythonProcess = null;
-        recordingStartTime = null; // Reset recording start time
-
-        // FIX 1: Disable power save blocker after recording completes
-        if (powerSaveId !== null) {
-          powerSaveBlocker.stop(powerSaveId);
-          powerSaveId = null;
-          console.log('Power save blocker disabled');
-        }
-
-        if (code === 0) {
-          // Parse JSON output to get file path
-          try {
-            const lines = stdoutData.trim().split('\n');
-            const jsonLine = lines[lines.length - 1]; // Last line should be JSON
-            const recordingInfo = JSON.parse(jsonLine);
-
-            // Support both audioPath (Windows) and outputPath (macOS) for backward compatibility
-            const filePath = recordingInfo.audioPath || recordingInfo.outputPath;
-
-            // Verify file exists before resolving
-            if (filePath && fs.existsSync(filePath)) {
-              resolve({
-                success: true,
-                audioPath: filePath,
-                duration: recordingInfo.duration
-              });
-            } else {
-              reject(new Error(`Recording file not found: ${filePath}`));
-            }
-          } catch (e) {
-            // If JSON parsing fails, file might still exist at default location
-            const recordingsDir = path.join(app.getPath('userData'), 'recordings');
-            const opusPath = path.join(recordingsDir, 'temp.opus');
-
-            if (fs.existsSync(opusPath)) {
-              resolve({ success: true, audioPath: opusPath });
-            } else {
-              reject(new Error(`Recording completed but output file not found. Error: ${e.message}`));
-            }
-          }
-        } else {
-          reject(new Error(`Recording stopped with exit code ${code}: ${stderrData}`));
-        }
-      };
-
-      // Register close handler
-      currentProcess.on('close', closeHandler);
-
-      // Send signal to stop via stdin
-      currentProcess.stdin.write('stop\n');
-
-      // Calculate proportional timeout based on recording duration
-      // Post-processing time scales with recording length
-      // Formula: base 30s + (recording_minutes * 10s per minute)
-      // Examples: 5min = 80s, 30min = 330s (5.5min), 60min = 630s (10.5min)
-      const recordingDuration = recordingStartTime ? (Date.now() - recordingStartTime) / 1000 : 0;
-      const recordingMinutes = Math.ceil(recordingDuration / 60);
-      const processingTimeout = Math.max(30000, 30000 + (recordingMinutes * 10000)); // Minimum 30s
-
-      console.log(`Recording duration: ${recordingMinutes} minutes, using ${processingTimeout / 1000}s timeout`);
-
-      setTimeout(() => {
-        if (pythonProcess) {
-          pythonProcess.kill();
-          pythonProcess = null;
-          reject(new Error('Recording stop timeout - process took too long to finish'));
-        }
-      }, processingTimeout);
-    } else {
-      resolve({ success: true });
-    }
+  return waitForRecordingStop({
+    forceKillOnTimeout: true,
+    timeoutMessage: 'Recording stop timeout - process took too long to finish',
   });
 });
 
