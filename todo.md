@@ -2,7 +2,7 @@
 
 Branch: `fix/full-audit-remediation`
 
-Status: active. Phases 00-3 are complete through Batch 3. Batch 4 is next.
+Status: active. Batches 0-4 are complete. Follow-on Batches 5-12 cover the remaining backlog, and Batch 5 is next.
 
 ## Working Rule
 
@@ -58,6 +58,11 @@ Status: active. Phases 00-3 are complete through Batch 3. Batch 4 is next.
   - release builds still run in parallel per platform, but GitHub release publication now happens once in a final aggregation job
   - final release notes now list both Windows and macOS assets consistently from downloaded artifacts
   - release workflow now fails fast when expected installer artifacts are missing
+- Completed Batch 4 Task 6 build artifact checksum verification:
+  - build downloads now use a pinned manifest with SHA-256 verification for Python, ffmpeg, and `get-pip.py`
+  - build preparation now fails before extraction or execution when a downloaded artifact checksum does not match
+  - JS regression coverage now includes the build download manifest helpers
+- Rebatched the remaining unchecked work into follow-on Batches 5-12 so the rest of the audit backlog can be executed in order.
 - Latest automated validation status at time of update:
   - `npm test` passing
   - `npm run test:all` passing
@@ -559,8 +564,8 @@ Files:
 
 ### 31. Verify downloaded build artifacts
 
-- [ ] Add checksum verification for downloaded Python, ffmpeg, `get-pip.py`, and any other fetched build-time artifacts.
-- [ ] Fail fast on mismatch before extraction/execution.
+- [x] Add checksum verification for downloaded Python, ffmpeg, `get-pip.py`, and any other fetched build-time artifacts.
+- [x] Fail fast on mismatch before extraction/execution.
 
 Files:
 
@@ -714,7 +719,53 @@ Files:
 - [x] safe renderer DOM updates and file URLs
 - [x] stronger CI
 - [x] release workflow aggregation
-- [ ] build artifact checksum verification
+- [x] build artifact checksum verification
+
+### Batch 5 - recorder contract completion and guardrails
+
+- [ ] isolated start/stop/quit state tests
+- [ ] regression checklist plus representative failure fixtures/logs
+- [ ] finalize stdout/stderr recorder contract cleanup across Electron, macOS, and Windows
+
+### Batch 6 - macOS permissions, fallback, and messaging
+
+- [ ] real permission probing with actionable Electron/UI guidance
+- [ ] PyObjC fallback path correctness and contract alignment
+- [ ] output-device behavior validation plus macOS warning/doc alignment
+
+### Batch 7 - meeting metadata and transcript scaling
+
+- [ ] lazy-load transcript storage instead of inlining full transcript bodies in `meetings.json`
+- [ ] renderer/detail-view updates for on-demand transcript loading
+
+### Batch 8 - performance and memory hardening
+
+- [ ] reduce long-recording RAM usage without changing the post-processing mix architecture
+- [ ] reduce Windows callback contention and separate per-stream health tracking
+- [ ] preserve timeline reconstruction wins while optimizing memory/perf hotspots
+
+### Batch 9 - build resource and packaging hardening
+
+- [ ] version-stamp or invalidate `build/resources` when bundled runtime inputs change
+- [ ] make Swift helper path resolution use build-time discovery instead of hardcoded `.build/...` guesses
+- [ ] fix `BrowserWindow` icon pathing in dev and packaged modes
+
+### Batch 10 - updater and release asset alignment
+
+- [ ] decide whether macOS zip remains part of updater/release behavior
+- [ ] align artifact naming and updater matching, or remove dead zip fallback logic
+
+### Batch 11 - code quality and docs cleanup
+
+- [ ] preload `once`/`off` listener wrappers where they add value
+- [ ] remove import-time hard exits from `backend/device_manager.py`
+- [ ] refresh build/developer docs and structured recorder contract notes as needed
+
+### Batch 12 - manual validation passes
+
+- [ ] macOS functional and lifecycle validation
+- [ ] Windows functional validation
+- [ ] transcription and meeting-history validation
 
 ## Notes
 

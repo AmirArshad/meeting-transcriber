@@ -2,16 +2,10 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 const { execSync } = require('child_process');
-const { pipeline } = require('stream/promises');
 const AdmZip = require('adm-zip');
+const { getBuildDownload, verifyFileChecksum } = require('./download-manifest');
 
 const PYTHON_VERSION = '3.11.9';
-const PYTHON_WIN_URL = `https://www.python.org/ftp/python/${PYTHON_VERSION}/python-${PYTHON_VERSION}-embed-amd64.zip`;
-// For macOS, we'll use python-build-standalone by indygreg (used by PyOxidizer)
-// These are relocatable Python builds specifically designed for bundling
-const PYTHON_MAC_URL = `https://github.com/indygreg/python-build-standalone/releases/download/20240107/cpython-3.11.7+20240107-aarch64-apple-darwin-install_only.tar.gz`;
-const FFMPEG_WIN_URL = 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip';
-const FFMPEG_MAC_URL = 'https://evermeet.cx/ffmpeg/getrelease/ffmpeg/zip';
 
 const BUILD_DIR = path.join(__dirname, 'resources');
 const PYTHON_DIR = path.join(BUILD_DIR, 'python');
@@ -38,12 +32,12 @@ if (!fs.existsSync(BUILD_DIR)) {
 }
 
 // Helper function to download files
-async function downloadFile(url, destination) {
+async function downloadFile(download, destination) {
   return new Promise((resolve, reject) => {
-    console.log(`Downloading: ${url}`);
+    console.log(`Downloading: ${download.url}`);
     const file = fs.createWriteStream(destination);
 
-    https.get(url, { timeout: 30000 }, (response) => {
+    https.get(download.url, { timeout: 30000 }, (response) => {
       // Handle redirects (301, 302, 303, 307, 308)
       if (response.statusCode >= 300 && response.statusCode < 400) {
         file.close();
@@ -55,11 +49,11 @@ async function downloadFile(url, destination) {
         let redirectUrl = response.headers.location;
         if (redirectUrl.startsWith('/')) {
           // Relative URL - construct absolute URL from original request
-          const parsedUrl = new URL(url);
+          const parsedUrl = new URL(download.url);
           redirectUrl = `${parsedUrl.protocol}//${parsedUrl.host}${redirectUrl}`;
         }
 
-        return downloadFile(redirectUrl, destination).then(resolve).catch(reject);
+        return downloadFile({ ...download, url: redirectUrl }, destination).then(resolve).catch(reject);
       }
 
       if (response.statusCode !== 200) {
@@ -86,9 +80,19 @@ async function downloadFile(url, destination) {
       response.pipe(file);
 
       file.on('finish', () => {
-        file.close();
-        console.log('  Download complete!\n');
-        resolve();
+        file.close(async () => {
+          try {
+            const verifiedHash = await verifyFileChecksum(destination, download);
+            console.log(`  Verified SHA-256: ${verifiedHash}`);
+            console.log('  Download complete!\n');
+            resolve();
+          } catch (error) {
+            if (fs.existsSync(destination)) {
+              fs.unlinkSync(destination);
+            }
+            reject(error);
+          }
+        });
       });
     }).on('error', (err) => {
       file.close();
@@ -334,7 +338,7 @@ async function prepareResources() {
       // macOS: Download standalone Python build
       console.log('[1/4] Downloading standalone Python for macOS (arm64)...');
       const pythonTar = path.join(BUILD_DIR, 'python-macos.tar.gz');
-      await downloadFile(PYTHON_MAC_URL, pythonTar);
+      await downloadFile(getBuildDownload('pythonMac'), pythonTar);
 
       console.log('[2/4] Extracting Python...');
       // Extract to temp dir first
@@ -369,7 +373,7 @@ async function prepareResources() {
       } catch (error) {
         console.log('Installing pip...');
         const getPipPath = path.join(PYTHON_DIR, 'get-pip.py');
-        await downloadFile('https://bootstrap.pypa.io/get-pip.py', getPipPath);
+        await downloadFile(getBuildDownload('getPip'), getPipPath);
         execSync(`"${pythonExe}" "${getPipPath}"`, { stdio: 'inherit' });
         fs.unlinkSync(getPipPath);
       }
@@ -410,7 +414,7 @@ async function prepareResources() {
       // Windows: Download embedded Python
       console.log('[1/4] Downloading embedded Python...');
       const pythonZip = path.join(BUILD_DIR, 'python-embed.zip');
-      await downloadFile(PYTHON_WIN_URL, pythonZip);
+      await downloadFile(getBuildDownload('pythonWin'), pythonZip);
 
       console.log('[2/4] Extracting Python...');
       extractZip(pythonZip, PYTHON_DIR);
@@ -420,7 +424,7 @@ async function prepareResources() {
 
       // Download get-pip.py
       const getPipPath = path.join(PYTHON_DIR, 'get-pip.py');
-      await downloadFile('https://bootstrap.pypa.io/get-pip.py', getPipPath);
+      await downloadFile(getBuildDownload('getPip'), getPipPath);
 
       // Modify python311._pth to:
       // 1. Enable site packages (uncomment 'import site')
@@ -461,7 +465,7 @@ async function prepareResources() {
       // macOS: Download ffmpeg binary
       console.log('[1/2] Downloading ffmpeg for macOS...');
       const ffmpegZip = path.join(BUILD_DIR, 'ffmpeg.zip');
-      await downloadFile(FFMPEG_MAC_URL, ffmpegZip);
+      await downloadFile(getBuildDownload('ffmpegMac'), ffmpegZip);
 
       console.log('[2/2] Extracting ffmpeg...');
       if (!fs.existsSync(FFMPEG_DIR)) {
@@ -483,7 +487,7 @@ async function prepareResources() {
       // Windows: Download ffmpeg
       console.log('[1/2] Downloading ffmpeg...');
       const ffmpegZip = path.join(BUILD_DIR, 'ffmpeg.zip');
-      await downloadFile(FFMPEG_WIN_URL, ffmpegZip);
+      await downloadFile(getBuildDownload('ffmpegWin'), ffmpegZip);
 
       console.log('[2/2] Extracting ffmpeg...');
       const tempDir = path.join(BUILD_DIR, 'ffmpeg-temp');
