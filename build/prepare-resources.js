@@ -3,7 +3,7 @@ const path = require('path');
 const https = require('https');
 const { execSync } = require('child_process');
 const AdmZip = require('adm-zip');
-const { getBuildDownload, verifyFileChecksum } = require('./download-manifest');
+const { BUILD_DOWNLOADS, getBuildDownload, hashString, verifyFileChecksum } = require('./download-manifest');
 
 const PYTHON_VERSION = '3.11.9';
 
@@ -12,6 +12,8 @@ const PYTHON_DIR = path.join(BUILD_DIR, 'python');
 const FFMPEG_DIR = path.join(BUILD_DIR, 'ffmpeg');
 const BIN_DIR = path.join(BUILD_DIR, 'bin');
 const MODELS_DIR = path.join(BUILD_DIR, 'whisper-models');
+const RESOURCE_MANIFEST_PATH = path.join(BUILD_DIR, 'resource-manifest.json');
+const RESOURCE_MANIFEST_VERSION = 1;
 
 // Swift AudioCaptureHelper paths
 const SWIFT_HELPER_DIR = path.join(__dirname, '..', 'swift', 'AudioCaptureHelper');
@@ -29,6 +31,79 @@ console.log('========================================\n');
 if (!fs.existsSync(BUILD_DIR)) {
   fs.mkdirSync(BUILD_DIR, { recursive: true });
   console.log('Created build/resources/ directory\n');
+}
+
+function readTextOrEmpty(filePath) {
+  return fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : '';
+}
+
+function buildResourceManifest() {
+  return {
+    version: RESOURCE_MANIFEST_VERSION,
+    platform: process.platform,
+    downloads: BUILD_DOWNLOADS,
+    inputs: {
+      requirementsMacos: hashString(readTextOrEmpty(path.join(__dirname, '..', 'requirements-macos.txt'))),
+      requirementsWindows: hashString(readTextOrEmpty(path.join(__dirname, '..', 'requirements-windows.txt'))),
+      swiftPackage: hashString(readTextOrEmpty(path.join(__dirname, '..', 'swift', 'AudioCaptureHelper', 'Package.swift'))),
+      inheritEntitlements: hashString(readTextOrEmpty(path.join(__dirname, 'entitlements.mac.inherit.plist'))),
+    },
+  };
+}
+
+function loadResourceManifest() {
+  if (!fs.existsSync(RESOURCE_MANIFEST_PATH)) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(fs.readFileSync(RESOURCE_MANIFEST_PATH, 'utf8'));
+  } catch (error) {
+    console.log(`Warning: Could not parse resource manifest: ${error.message}`);
+    return null;
+  }
+}
+
+function manifestsMatch(currentManifest, existingManifest) {
+  return JSON.stringify(currentManifest) === JSON.stringify(existingManifest);
+}
+
+function invalidateStaleResources() {
+  const staleDirs = [PYTHON_DIR, FFMPEG_DIR];
+
+  if (IS_MAC) {
+    staleDirs.push(BIN_DIR);
+  }
+
+  for (const dir of staleDirs) {
+    if (fs.existsSync(dir)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+      console.log(`Removed stale resource directory: ${path.relative(BUILD_DIR, dir)}`);
+    }
+  }
+}
+
+function ensureFreshResourceManifest() {
+  const currentManifest = buildResourceManifest();
+  const existingManifest = loadResourceManifest();
+
+  if (existingManifest && manifestsMatch(currentManifest, existingManifest)) {
+    console.log('✓ Resource manifest matches current runtime inputs\n');
+    return currentManifest;
+  }
+
+  if (existingManifest) {
+    console.log('Runtime inputs changed; invalidating stale build/resources artifacts...');
+  } else {
+    console.log('No resource manifest found; preparing fresh build/resources artifacts...');
+  }
+
+  invalidateStaleResources();
+  return currentManifest;
+}
+
+function writeResourceManifest(manifest) {
+  fs.writeFileSync(RESOURCE_MANIFEST_PATH, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
 // Helper function to download files
@@ -198,24 +273,22 @@ function buildSwiftHelper() {
     fs.mkdirSync(BIN_DIR, { recursive: true });
   }
 
-  // Find the built binary
-  // Swift Package Manager builds to .build/release/ or .build/arm64-apple-macosx/release/
-  const possibleBinaryPaths = [
-    path.join(SWIFT_HELPER_DIR, '.build', 'release', SWIFT_HELPER_BINARY),
-    path.join(SWIFT_HELPER_DIR, '.build', 'arm64-apple-macosx', 'release', SWIFT_HELPER_BINARY)
-  ];
-
-  let sourceBinary = null;
-  for (const binaryPath of possibleBinaryPaths) {
-    if (fs.existsSync(binaryPath)) {
-      sourceBinary = binaryPath;
-      break;
-    }
+  let binPath;
+  try {
+    binPath = execSync('swift build -c release --arch arm64 --show-bin-path', {
+      cwd: SWIFT_HELPER_DIR,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'inherit']
+    }).trim();
+  } catch (error) {
+    console.error('ERROR: Could not resolve Swift binary directory via --show-bin-path');
+    throw error;
   }
 
-  if (!sourceBinary) {
-    console.error('ERROR: Built binary not found at expected locations:');
-    possibleBinaryPaths.forEach(p => console.error(`  - ${p}`));
+  const sourceBinary = path.join(binPath, SWIFT_HELPER_BINARY);
+
+  if (!fs.existsSync(sourceBinary)) {
+    console.error(`ERROR: Built binary not found at resolved bin path: ${sourceBinary}`);
     throw new Error('Swift binary not found after build');
   }
 
@@ -311,6 +384,7 @@ print('\\nModel download complete!', file=sys.stderr)
 
 // Main preparation function
 async function prepareResources() {
+  const resourceManifest = ensureFreshResourceManifest();
   const existing = checkExistingResources();
 
   // Prepare Python
@@ -554,6 +628,8 @@ async function prepareResources() {
   console.log('========================================');
   console.log('Build preparation complete!');
   console.log('========================================');
+
+  writeResourceManifest(resourceManifest);
 }
 
 // Run preparation

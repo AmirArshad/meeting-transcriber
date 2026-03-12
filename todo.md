@@ -74,6 +74,9 @@ Status: active. Batches 0-4 are complete. Follow-on Batches 5-12 cover the remai
 - Completed Batch 8 Task 1 reduce long-recording RAM usage without changing the post-processing mix architecture.
 - Completed Batch 8 Task 2 reduce Windows callback contention and separate per-stream health tracking.
 - Completed Batch 8 Task 3 preserve timeline reconstruction wins while optimizing memory/perf hotspots.
+- Completed Batch 9 Task 1 version-stamp or invalidate build/resources when bundled runtime inputs change.
+- Completed Batch 9 Task 2 make Swift helper path resolution use build-time discovery instead of hardcoded .build path guesses.
+- Completed Batch 9 Task 3 fix BrowserWindow icon pathing in dev and packaged modes.
 - Latest automated validation status at time of update:
   - `npm test` passing
   - `npm run test:all` passing
@@ -565,7 +568,7 @@ Files:
 
 ### 30. Fix stale build resource reuse
 
-- [ ] Invalidate or version-stamp `build/resources` so old Python/ffmpeg/helper artifacts are not silently reused.
+- [x] Invalidate or version-stamp `build/resources` so old Python/ffmpeg/helper artifacts are not silently reused.
 - [ ] Extend `prepare-build` cleanup beyond `dist/` when runtime versions change.
 
 Files:
@@ -584,8 +587,8 @@ Files:
 
 ### 32. Make helper path resolution less brittle
 
-- [ ] Use `swift build --show-bin-path` or equivalent at build time instead of hardcoded `.build/...` path guesses.
-- [ ] Keep dev/runtime helper lookup aligned with packaged resource layout.
+- [x] Use `swift build --show-bin-path` or equivalent at build time instead of hardcoded `.build/...` path guesses.
+- [x] Keep dev/runtime helper lookup aligned with packaged resource layout.
 
 Files:
 
@@ -757,9 +760,9 @@ Files:
 
 ### Batch 9 - build resource and packaging hardening
 
-- [ ] version-stamp or invalidate `build/resources` when bundled runtime inputs change
-- [ ] make Swift helper path resolution use build-time discovery instead of hardcoded `.build/...` guesses
-- [ ] fix `BrowserWindow` icon pathing in dev and packaged modes
+- [x] version-stamp or invalidate `build/resources` when bundled runtime inputs change
+- [x] make Swift helper path resolution use build-time discovery instead of hardcoded `.build/...` guesses
+- [x] fix `BrowserWindow` icon pathing in dev and packaged modes
 
 ### Batch 10 - updater and release asset alignment
 

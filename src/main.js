@@ -42,6 +42,24 @@ let recordingStopPromise = null;
 let quitWorkflowPromise = null;
 let allowImmediateQuit = false;
 
+function firstExistingPath(paths) {
+  return paths.find((candidate) => fs.existsSync(candidate)) || null;
+}
+
+function getWindowIconPath() {
+  if (process.platform === 'win32') {
+    return firstExistingPath([
+      path.join(process.resourcesPath, 'icon.ico'),
+      path.join(__dirname, '../build/icon.ico'),
+    ]);
+  }
+
+  return firstExistingPath([
+    path.join(process.resourcesPath, 'iconTemplate.png'),
+    path.join(__dirname, '../build/iconTemplate.png'),
+  ]);
+}
+
 function sendToRenderer(channel, payload) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(channel, payload);
@@ -751,6 +769,8 @@ function createTray() {
 
 // Create the main application window
 function createWindow() {
+  const windowIcon = getWindowIconPath();
+
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -760,7 +780,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js')
     },
     titleBarStyle: 'default',
-    icon: path.join(__dirname, '../assets/icon.png')
+    icon: windowIcon || undefined
   });
 
   // Load the HTML file

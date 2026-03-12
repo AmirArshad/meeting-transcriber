@@ -39,6 +39,10 @@ function getBuildDownload(key) {
   return download;
 }
 
+function hashString(contents) {
+  return crypto.createHash('sha256').update(String(contents)).digest('hex');
+}
+
 function hashFile(filePath) {
   return new Promise((resolve, reject) => {
     const hash = crypto.createHash('sha256');
@@ -67,5 +71,6 @@ module.exports = {
   BUILD_DOWNLOADS,
   getBuildDownload,
   hashFile,
+  hashString,
   verifyFileChecksum,
 };
