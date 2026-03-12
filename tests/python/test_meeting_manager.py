@@ -42,6 +42,68 @@ def test_add_meeting_persists_files_and_removes_originals(tmp_path):
     assert not source_transcript.exists()
 
 
+def test_add_meeting_keeps_originals_if_metadata_save_fails(tmp_path, monkeypatch):
+    recordings_dir = tmp_path / 'recordings'
+    source_audio, source_transcript = _create_source_files(tmp_path, 'rollback_test')
+    manager = MeetingManager(recordings_dir=str(recordings_dir))
+
+    original_save = manager._save_meetings_unlocked
+
+    def failing_save(meetings):
+        raise OSError('metadata save failed')
+
+    monkeypatch.setattr(manager, '_save_meetings_unlocked', failing_save)
+
+    try:
+        manager.add_meeting(
+            audio_path=str(source_audio),
+            transcript_path=str(source_transcript),
+            duration=12.0,
+        )
+    except OSError:
+        pass
+    else:
+        raise AssertionError('Expected metadata save failure to propagate')
+
+    monkeypatch.setattr(manager, '_save_meetings_unlocked', original_save)
+
+    assert source_audio.exists()
+    assert source_transcript.exists()
+    assert list(recordings_dir.glob('meeting_*')) == []
+    assert manager.list_meetings() == []
+
+
+def test_add_meeting_saves_metadata_before_removing_originals(tmp_path, monkeypatch):
+    recordings_dir = tmp_path / 'recordings'
+    source_audio, source_transcript = _create_source_files(tmp_path, 'transaction_order')
+    manager = MeetingManager(recordings_dir=str(recordings_dir))
+
+    observed = {}
+    original_save = manager._save_meetings_unlocked
+
+    def tracking_save(meetings):
+        observed['audio_exists_during_save'] = source_audio.exists()
+        observed['transcript_exists_during_save'] = source_transcript.exists()
+        original_save(meetings)
+
+    monkeypatch.setattr(manager, '_save_meetings_unlocked', tracking_save)
+
+    meeting = manager.add_meeting(
+        audio_path=str(source_audio),
+        transcript_path=str(source_transcript),
+        duration=30.0,
+    )
+
+    assert observed == {
+        'audio_exists_during_save': True,
+        'transcript_exists_during_save': True,
+    }
+    assert not source_audio.exists()
+    assert not source_transcript.exists()
+    assert Path(meeting['audioPath']).exists()
+    assert Path(meeting['transcriptPath']).exists()
+
+
 def test_add_meeting_generates_unique_suffix_for_same_second(tmp_path, monkeypatch):
     fixed_now = real_datetime(2026, 1, 7, 10, 45, 55)
 
@@ -144,6 +206,24 @@ def test_scan_and_sync_recordings_imports_missing_filesystem_meeting(tmp_path):
     assert meeting['audioPath'].endswith('meeting_20250101_120000.opus')
 
 
+def test_scan_and_sync_recordings_preserves_suffixed_meeting_ids(tmp_path):
+    recordings_dir = tmp_path / 'recordings'
+    manager = MeetingManager(recordings_dir=str(recordings_dir))
+
+    audio_path = recordings_dir / 'meeting_20250101_120000_1.opus'
+    transcript_path = recordings_dir / 'meeting_20250101_120000_1.md'
+    audio_path.write_bytes(b'audio')
+    transcript_path.write_text('**Duration:** 0:05\n\nTranscript text', encoding='utf-8')
+
+    result = manager.scan_and_sync_recordings()
+    meeting = manager.get_meeting('20250101_120000_1')
+
+    assert result == {'scanned': 1, 'added': 1, 'skipped': 0}
+    assert meeting is not None
+    assert meeting['id'] == '20250101_120000_1'
+    assert meeting['title'] == 'Meeting 2025-01-01 12:00'
+
+
 def test_save_meetings_writes_metadata_atomically(tmp_path, monkeypatch):
     recordings_dir = tmp_path / 'recordings'
     manager = MeetingManager(recordings_dir=str(recordings_dir))
@@ -205,3 +285,39 @@ def test_metadata_guard_supports_repeated_saves(tmp_path):
     assert getattr(manager, '_metadata_file_lock') is not None
     saved = json.loads(manager.metadata_file.read_text(encoding='utf-8'))
     assert saved == [{'id': 'locked-again', 'date': '2026-01-02T00:00:00'}]
+
+
+def test_list_meetings_backs_up_corrupt_metadata_file(tmp_path):
+    recordings_dir = tmp_path / 'recordings'
+    manager = MeetingManager(recordings_dir=str(recordings_dir))
+
+    manager.metadata_file.write_text('{not valid json', encoding='utf-8')
+
+    meetings = manager.list_meetings()
+
+    backups = list(recordings_dir.glob('meetings.corrupt.*.json'))
+    assert meetings == []
+    assert len(backups) == 1
+    assert backups[0].read_text(encoding='utf-8') == '{not valid json'
+    assert manager.metadata_file.read_text(encoding='utf-8') == '{not valid json'
+
+
+def test_save_after_corrupt_metadata_preserves_backup_and_writes_new_file(tmp_path):
+    recordings_dir = tmp_path / 'recordings'
+    manager = MeetingManager(recordings_dir=str(recordings_dir))
+
+    manager.metadata_file.write_text('{not valid json', encoding='utf-8')
+
+    source_audio, source_transcript = _create_source_files(tmp_path, 'recovery_save')
+    meeting = manager.add_meeting(
+        audio_path=str(source_audio),
+        transcript_path=str(source_transcript),
+        duration=10.0,
+    )
+
+    backups = list(recordings_dir.glob('meetings.corrupt.*.json'))
+    saved = json.loads(manager.metadata_file.read_text(encoding='utf-8'))
+
+    assert len(backups) == 1
+    assert backups[0].read_text(encoding='utf-8') == '{not valid json'
+    assert saved[0]['id'] == meeting['id']

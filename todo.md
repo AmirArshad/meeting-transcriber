@@ -28,6 +28,9 @@ Status: active. Phase 00 is complete. Batch 1 is in progress.
 - Started Batch 2 and fixed channel-safe resampling so interleaved multi-channel audio is resampled per channel instead of as one flat stream.
 - Fixed Opus fallback behavior so compression failures now return a real `.wav` output path instead of leaving WAV bytes behind a `.opus` filename.
 - Added lock-backed, atomic `meetings.json` saves so metadata updates serialize across threads/processes and write through temp-file replacement.
+- Made `add_meeting()` transactional so copied files are rolled back on metadata failure and originals are only removed after metadata is durably saved.
+- Added corrupt metadata recovery so invalid `meetings.json` files are backed up before the app continues with an empty in-memory list.
+- Fixed scan/import filename parsing so suffixed meeting IDs like `meeting_20260107_104555_1` are preserved instead of collapsing to the base timestamp.
 - Latest automated validation status at time of update:
   - `npm run test:all` passing
   - `swift build -c release --arch arm64` passing
@@ -321,9 +324,9 @@ Files:
 
 ### 13. Make meeting persistence transactional
 
-- [ ] Rework `add_meeting()` so originals are only deleted after metadata is durably saved.
-- [ ] Add rollback/cleanup behavior when copy or metadata write fails.
-- [ ] Avoid orphaning persisted files or losing originals.
+- [x] Rework `add_meeting()` so originals are only deleted after metadata is durably saved.
+- [x] Add rollback/cleanup behavior when copy or metadata write fails.
+- [x] Avoid orphaning persisted files or losing originals.
 
 Files:
 
@@ -331,9 +334,9 @@ Files:
 
 ### 14. Handle metadata corruption safely
 
-- [ ] Stop silently treating `JSONDecodeError` as an empty meeting list.
-- [ ] Back up corrupt `meetings.json` automatically.
-- [ ] Surface a recovery warning instead of wiping history on next save.
+- [x] Stop silently treating `JSONDecodeError` as an empty meeting list.
+- [x] Back up corrupt `meetings.json` automatically.
+- [x] Surface a recovery warning instead of wiping history on next save.
 
 Files:
 
@@ -341,9 +344,9 @@ Files:
 
 ### 15. Fix scan/import bugs
 
-- [ ] Move `re` import out of the fragile `try` block.
-- [ ] Fix the filename regex to preserve suffixed IDs like `meeting_20260107_104555_1`.
-- [ ] Ensure scan/import does not collapse distinct meetings onto one ID.
+- [x] Move `re` import out of the fragile `try` block.
+- [x] Fix the filename regex to preserve suffixed IDs like `meeting_20260107_104555_1`.
+- [x] Ensure scan/import does not collapse distinct meetings onto one ID.
 
 Files:
 
@@ -664,9 +667,9 @@ Files:
 - [x] channel-safe resampling
 - [x] safe Opus fallback
 - [x] atomic + locked meeting metadata writes
-- [ ] transactional meeting persistence
-- [ ] corruption recovery
-- [ ] scan/import bug fixes
+- [x] transactional meeting persistence
+- [x] corruption recovery
+- [x] scan/import bug fixes
 
 ### Batch 3 - transcription/runtime contract cleanup
 
