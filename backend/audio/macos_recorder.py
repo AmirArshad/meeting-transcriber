@@ -14,6 +14,8 @@ from datetime import datetime
 from pathlib import Path
 import numpy as np
 
+from .compressor import compress_to_opus, verify_recording_integrity
+
 try:
     import sounddevice as sd
 except ImportError:
@@ -654,11 +656,11 @@ class MacOSAudioRecorder:
         temp_wav_path = self.output_path.replace('.opus', '_temp.wav').replace('.wav', '_temp.wav')
         self._save_wav(final_audio, temp_wav_path)
 
-        # Determine final output path (replace .wav with .opus)
-        final_output_path = self.output_path.replace('.wav', '.opus')
+        # Determine preferred final output path (shared compressor may return .wav fallback)
+        preferred_output_path = self.output_path.replace('.wav', '.opus')
 
-        # Compress with ffmpeg (same as Windows)
-        self._compress_with_ffmpeg(temp_wav_path, final_output_path)
+        # Compress with ffmpeg (same shared helper as Windows)
+        final_output_path = self._compress_with_ffmpeg(temp_wav_path, preferred_output_path)
 
         # Clean up temp file
         try:
@@ -778,57 +780,23 @@ class MacOSAudioRecorder:
         print(f"Saved WAV: {path}", file=sys.stderr)
 
     def _compress_with_ffmpeg(self, input_path, output_path):
-        """Compress WAV to Opus using ffmpeg (same as Windows)."""
-        import subprocess
-        import shutil
+        """Compress WAV to Opus using the shared compressor helper."""
+        print(f"Compressing with ffmpeg (Opus codec)...", file=sys.stderr)
+        final_path = compress_to_opus(input_path, output_path, self.sample_rate)
 
-        # Check if ffmpeg is available
-        if not shutil.which('ffmpeg'):
-            print(f"WARNING: ffmpeg not found. Saving as WAV instead.", file=sys.stderr)
-            shutil.copy(input_path, output_path.replace('.opus', '.wav'))
-            return
+        input_size = Path(input_path).stat().st_size
+        output_size = Path(final_path).stat().st_size
+        ratio = (1 - output_size / input_size) * 100
 
-        try:
-            print(f"Compressing with ffmpeg (Opus codec)...", file=sys.stderr)
+        print(f"Compression complete!", file=sys.stderr)
+        print(f"  Original: {input_size / 1024 / 1024:.1f} MB", file=sys.stderr)
+        print(f"  Output: {output_size / 1024 / 1024:.1f} MB", file=sys.stderr)
+        print(f"  Savings: {ratio:.1f}%", file=sys.stderr)
 
-            cmd = [
-                'ffmpeg',
-                '-i', input_path,
-                '-c:a', 'libopus',
-                '-b:a', '128k',
-                '-vbr', 'on',
-                '-compression_level', '10',
-                '-application', 'audio',
-                '-y',
-                output_path
-            ]
+        if not verify_recording_integrity(final_path):
+            print(f"WARNING: Recording integrity check failed", file=sys.stderr)
 
-            result = subprocess.run(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-
-            if result.returncode == 0:
-                # Calculate compression ratio
-                input_size = Path(input_path).stat().st_size
-                output_size = Path(output_path).stat().st_size
-                ratio = (1 - output_size / input_size) * 100
-
-                print(f"Compression complete!", file=sys.stderr)
-                print(f"  Original: {input_size / 1024 / 1024:.1f} MB", file=sys.stderr)
-                print(f"  Compressed: {output_size / 1024 / 1024:.1f} MB", file=sys.stderr)
-                print(f"  Savings: {ratio:.1f}%", file=sys.stderr)
-
-                # Verify the output file integrity
-                if not self._verify_recording_integrity(output_path):
-                    print(f"WARNING: Recording integrity check failed", file=sys.stderr)
-            else:
-                print(f"ERROR: ffmpeg failed: {result.stderr}", file=sys.stderr)
-
-        except Exception as e:
-            print(f"ERROR during compression: {e}", file=sys.stderr)
+        return final_path
 
     def _verify_recording_integrity(self, file_path):
         """
@@ -839,71 +807,7 @@ class MacOSAudioRecorder:
         Returns:
             True if file is valid, False otherwise.
         """
-        import subprocess
-        import shutil
-
-        # Check if ffprobe is available
-        ffprobe_path = shutil.which('ffprobe')
-        if not ffprobe_path:
-            print(f"  Skipping integrity check (ffprobe not found)", file=sys.stderr)
-            return True  # Assume OK if we can't check
-
-        try:
-            cmd = [
-                ffprobe_path,
-                '-v', 'error',
-                '-show_format',
-                '-show_streams',
-                '-of', 'json',
-                file_path
-            ]
-
-            result = subprocess.run(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=30
-            )
-
-            if result.returncode != 0:
-                print(f"  Integrity check FAILED: {result.stderr}", file=sys.stderr)
-                return False
-
-            # Parse ffprobe output
-            probe_data = json.loads(result.stdout)
-
-            # Check for valid format
-            if 'format' not in probe_data:
-                print(f"  Integrity check FAILED: No format info", file=sys.stderr)
-                return False
-
-            # Check for audio stream
-            streams = probe_data.get('streams', [])
-            audio_streams = [s for s in streams if s.get('codec_type') == 'audio']
-
-            if not audio_streams:
-                print(f"  Integrity check FAILED: No audio streams", file=sys.stderr)
-                return False
-
-            # Check duration is positive
-            duration = float(probe_data['format'].get('duration', 0))
-            if duration <= 0:
-                print(f"  Integrity check FAILED: Invalid duration ({duration}s)", file=sys.stderr)
-                return False
-
-            print(f"  Integrity check: OK ({duration:.1f}s, {audio_streams[0].get('codec_name', 'unknown')})", file=sys.stderr)
-            return True
-
-        except subprocess.TimeoutExpired:
-            print(f"  Integrity check TIMEOUT", file=sys.stderr)
-            return False
-        except json.JSONDecodeError as e:
-            print(f"  Integrity check ERROR: Invalid ffprobe output: {e}", file=sys.stderr)
-            return False
-        except Exception as e:
-            print(f"  Integrity check ERROR: {e}", file=sys.stderr)
-            return False
+        return verify_recording_integrity(file_path)
 
     def get_audio_levels(self):
         """Get current audio levels for visualization."""

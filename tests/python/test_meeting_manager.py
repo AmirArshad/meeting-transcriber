@@ -1,4 +1,5 @@
 import json
+import os
 from datetime import datetime as real_datetime
 from pathlib import Path
 
@@ -141,3 +142,66 @@ def test_scan_and_sync_recordings_imports_missing_filesystem_meeting(tmp_path):
     assert meeting is not None
     assert meeting['duration'] == '1:05'
     assert meeting['audioPath'].endswith('meeting_20250101_120000.opus')
+
+
+def test_save_meetings_writes_metadata_atomically(tmp_path, monkeypatch):
+    recordings_dir = tmp_path / 'recordings'
+    manager = MeetingManager(recordings_dir=str(recordings_dir))
+
+    original_replace = meeting_manager_module.os.replace
+    captured = {}
+
+    def tracking_replace(src, dst):
+        captured['src'] = Path(src)
+        captured['dst'] = Path(dst)
+        assert captured['src'].exists()
+        original_replace(src, dst)
+
+    monkeypatch.setattr(meeting_manager_module.os, 'replace', tracking_replace)
+
+    manager._save_meetings([
+        {'id': 'atomic', 'date': '2026-01-01T00:00:00'}
+    ])
+
+    saved = json.loads(manager.metadata_file.read_text(encoding='utf-8'))
+    assert saved == [{'id': 'atomic', 'date': '2026-01-01T00:00:00'}]
+    assert captured['dst'] == manager.metadata_file
+    assert not captured['src'].exists()
+
+
+def test_save_meetings_removes_temp_file_on_replace_failure(tmp_path, monkeypatch):
+    recordings_dir = tmp_path / 'recordings'
+    manager = MeetingManager(recordings_dir=str(recordings_dir))
+
+    def failing_replace(src, dst):
+        raise OSError('replace failed')
+
+    monkeypatch.setattr(meeting_manager_module.os, 'replace', failing_replace)
+
+    try:
+        manager._save_meetings([
+            {'id': 'broken', 'date': '2026-01-01T00:00:00'}
+        ])
+    except OSError:
+        pass
+    else:
+        raise AssertionError('Expected OSError from failed atomic replace')
+
+    temp_files = list(recordings_dir.glob('meetings.*.tmp'))
+    assert temp_files == []
+
+
+def test_metadata_guard_supports_repeated_saves(tmp_path):
+    recordings_dir = tmp_path / 'recordings'
+    manager = MeetingManager(recordings_dir=str(recordings_dir))
+
+    manager._save_meetings([
+        {'id': 'locked', 'date': '2026-01-01T00:00:00'}
+    ])
+    manager._save_meetings([
+        {'id': 'locked-again', 'date': '2026-01-02T00:00:00'}
+    ])
+
+    assert getattr(manager, '_metadata_file_lock') is not None
+    saved = json.loads(manager.metadata_file.read_text(encoding='utf-8'))
+    assert saved == [{'id': 'locked-again', 'date': '2026-01-02T00:00:00'}]

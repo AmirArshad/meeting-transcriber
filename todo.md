@@ -26,6 +26,8 @@ Status: active. Phase 00 is complete. Batch 1 is in progress.
 - Tightened macOS stop/drain handling so the helper reader stays alive through process exit and preserves more tail audio during shutdown.
 - Improved preroll/start-offset consistency by aligning both streams against the same post-preroll reference point.
 - Started Batch 2 and fixed channel-safe resampling so interleaved multi-channel audio is resampled per channel instead of as one flat stream.
+- Fixed Opus fallback behavior so compression failures now return a real `.wav` output path instead of leaving WAV bytes behind a `.opus` filename.
+- Added lock-backed, atomic `meetings.json` saves so metadata updates serialize across threads/processes and write through temp-file replacement.
 - Latest automated validation status at time of update:
   - `npm run test:all` passing
   - `swift build -c release --arch arm64` passing
@@ -295,11 +297,11 @@ Files:
 
 ### 11. Fix Opus fallback behavior
 
-- [ ] Change `compress_to_opus()` fallback to avoid copying WAV data to a `.opus` path.
-- [ ] Pick one explicit fallback strategy:
+- [x] Change `compress_to_opus()` fallback to avoid copying WAV data to a `.opus` path.
+- [x] Pick one explicit fallback strategy:
   - return a real `.wav` path, or
   - raise and let caller handle failure
-- [ ] Make integrity-check failure a hard failure or fallback trigger rather than a warning-only path.
+- [x] Make integrity-check failure a hard failure or fallback trigger rather than a warning-only path.
 
 Files:
 
@@ -309,9 +311,9 @@ Files:
 
 ### 12. Make meeting metadata writes safe
 
-- [ ] Add inter-process file locking around all `meetings.json` reads/writes.
-- [ ] Write via temp file + fsync + `os.replace()` for atomic persistence.
-- [ ] Prevent concurrent `add`/`scan`/`delete` from corrupting metadata.
+- [x] Add inter-process file locking around all `meetings.json` reads/writes.
+- [x] Write via temp file + fsync + `os.replace()` for atomic persistence.
+- [x] Prevent concurrent `add`/`scan`/`delete` from corrupting metadata.
 
 Files:
 
@@ -660,8 +662,8 @@ Files:
 ### Batch 2 - integrity-critical backend fixes
 
 - [x] channel-safe resampling
-- [ ] safe Opus fallback
-- [ ] atomic + locked meeting metadata writes
+- [x] safe Opus fallback
+- [x] atomic + locked meeting metadata writes
 - [ ] transactional meeting persistence
 - [ ] corruption recovery
 - [ ] scan/import bug fixes

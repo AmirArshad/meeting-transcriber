@@ -33,7 +33,7 @@ def compress_to_opus(
         application: 'audio', 'voip', or 'lowdelay'. Defaults to OPUS_APPLICATION
 
     Returns:
-        Path to the output file (may be .opus or .wav if ffmpeg fails)
+        Path to the output file (`.opus` on success, `.wav` fallback on failure)
     """
     bitrate = bitrate or OPUS_BITRATE
     compression_level = compression_level if compression_level is not None else OPUS_COMPRESSION_LEVEL
@@ -62,20 +62,26 @@ def compress_to_opus(
         # Verify recording integrity
         if not verify_recording_integrity(opus_path):
             print(f"WARNING: Recording integrity check failed", file=sys.stderr)
+            print(f"Falling back to WAV format...", file=sys.stderr)
+            wav_path = str(Path(output_path).with_suffix('.wav'))
+            shutil.copy(input_path, wav_path)
+            return wav_path
 
         return opus_path
 
     except FileNotFoundError:
         print(f"Warning: ffmpeg not found in PATH", file=sys.stderr)
         print(f"Falling back to WAV format (audio will be larger)...", file=sys.stderr)
-        shutil.copy(input_path, output_path)
-        return output_path
+        wav_path = str(Path(output_path).with_suffix('.wav'))
+        shutil.copy(input_path, wav_path)
+        return wav_path
 
     except subprocess.CalledProcessError as e:
         print(f"Warning: ffmpeg compression failed: {e.stderr.decode()}", file=sys.stderr)
         print(f"Falling back to WAV format...", file=sys.stderr)
-        shutil.copy(input_path, output_path)
-        return output_path
+        wav_path = str(Path(output_path).with_suffix('.wav'))
+        shutil.copy(input_path, wav_path)
+        return wav_path
 
 
 def verify_recording_integrity(file_path: str) -> bool:
