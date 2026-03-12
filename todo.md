@@ -77,6 +77,8 @@ Status: active. Batches 0-4 are complete. Follow-on Batches 5-12 cover the remai
 - Completed Batch 9 Task 1 version-stamp or invalidate build/resources when bundled runtime inputs change.
 - Completed Batch 9 Task 2 make Swift helper path resolution use build-time discovery instead of hardcoded .build path guesses.
 - Completed Batch 9 Task 3 fix BrowserWindow icon pathing in dev and packaged modes.
+- Completed Batch 10 Task 1 decide whether macOS zip remains part of updater/release behavior.
+- Completed Batch 10 Task 2 align artifact naming and updater matching, or remove dead zip fallback logic.
 - Latest automated validation status at time of update:
   - `npm test` passing
   - `npm run test:all` passing
@@ -607,9 +609,9 @@ Files:
 
 ### 34. Align updater asset detection with actual build outputs
 
-- [ ] Decide whether macOS zip should remain part of release/update behavior.
-- [ ] If yes, make artifact naming explicit and updater matching deterministic.
-- [ ] If no, remove dead updater fallback logic.
+- [x] Decide whether macOS zip should remain part of release/update behavior.
+- [x] If yes, make artifact naming explicit and updater matching deterministic.
+- [x] If no, remove dead updater fallback logic.
 
 Files:
 
@@ -766,8 +768,8 @@ Files:
 
 ### Batch 10 - updater and release asset alignment
 
-- [ ] decide whether macOS zip remains part of updater/release behavior
-- [ ] align artifact naming and updater matching, or remove dead zip fallback logic
+- [x] decide whether macOS zip remains part of updater/release behavior
+- [x] align artifact naming and updater matching, or remove dead zip fallback logic
 
 ### Batch 11 - code quality and docs cleanup
 
