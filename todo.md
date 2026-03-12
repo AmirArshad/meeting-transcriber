@@ -67,6 +67,8 @@ Status: active. Batches 0-4 are complete. Follow-on Batches 5-12 cover the remai
 - Completed Batch 5 Task 2 regression checklist plus representative failure fixtures/logs.
 - Completed Batch 5 Task 3 recorder stdout/stderr contract cleanup.
 - Completed Batch 6 Task 1 real permission probing with actionable guidance.
+- Completed Batch 6 Task 2 PyObjC fallback path correctness and contract alignment.
+- Completed Batch 6 Task 3 output-device behavior validation plus macOS warning/doc alignment.
 - Latest automated validation status at time of update:
   - `npm test` passing
   - `npm run test:all` passing
@@ -302,8 +304,8 @@ Files:
 
 ### 8. Harden PyObjC fallback path
 
-- [ ] Make `backend/audio/screencapture_helper.py` handle multi-buffer/planar audio correctly.
-- [ ] Ensure fallback output format matches the Swift helper contract.
+- [x] Make `backend/audio/screencapture_helper.py` handle multi-buffer/planar audio correctly.
+- [x] Ensure fallback output format matches the Swift helper contract.
 - [ ] Re-test fallback only after the primary Swift path is stable.
 
 Files:
@@ -313,7 +315,7 @@ Files:
 ### 9. Reconcile macOS capture messaging and docs
 
 - [ ] Validate the real behavior of Bluetooth/USB/external output-device capture on current macOS target versions.
-- [ ] Align code comments, warnings, and docs so they do not contradict each other.
+- [x] Align code comments, warnings, and docs so they do not contradict each other.
 
 Files:
 
@@ -734,8 +736,8 @@ Files:
 ### Batch 6 - macOS permissions, fallback, and messaging
 
 - [x] real permission probing with actionable Electron/UI guidance
-- [ ] PyObjC fallback path correctness and contract alignment
-- [ ] output-device behavior validation plus macOS warning/doc alignment
+- [x] PyObjC fallback path correctness and contract alignment
+- [x] output-device behavior validation plus macOS warning/doc alignment
 
 ### Batch 7 - meeting metadata and transcript scaling
 

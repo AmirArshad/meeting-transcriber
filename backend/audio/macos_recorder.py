@@ -223,6 +223,11 @@ class MacOSAudioRecorder:
                 )
                 self.desktop_capture_type = 'pyobjc'
                 print(f"  PyObjC ScreenCaptureKit initialized for desktop audio (fallback)", file=sys.stderr)
+                _send_warning_message(
+                    "PYOBJC_FALLBACK_ACTIVE",
+                    "Using PyObjC ScreenCaptureKit fallback for desktop audio capture.",
+                    help="The native Swift helper is preferred. Re-test desktop capture carefully when running on the PyObjC fallback.",
+                )
             except Exception as e:
                 print(f"  WARNING: Could not initialize PyObjC capture: {e}", file=sys.stderr)
                 self.desktop_capture = None

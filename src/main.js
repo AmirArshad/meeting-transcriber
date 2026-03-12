@@ -1270,9 +1270,11 @@ ipcMain.handle('check-disk-space', async () => {
 });
 
 /**
- * Check macOS audio output device for Bluetooth/headphone warning.
- * ScreenCaptureKit may not capture audio from these devices.
- * GRACEFUL: Returns supported=true if check fails, allowing recording to proceed.
+ * Inspect the current macOS audio output device for diagnostics only.
+ *
+ * ScreenCaptureKit is expected to capture system audio before routing to the
+ * active output device, but we still surface the current output target so
+ * manual validation can confirm behavior on real hardware.
  */
 function checkAudioOutputSupport() {
   if (process.platform !== 'darwin') {
@@ -1323,9 +1325,8 @@ function checkAudioOutputSupport() {
         const data = JSON.parse(output);
         const audioData = data.SPAudioDataType || [];
 
-        // Look for Bluetooth or USB audio devices as default output
-        let isBluetoothOrUSB = false;
         let deviceName = null;
+        let deviceTransport = null;
 
         for (const section of audioData) {
           const items = section._items || [];
@@ -1333,36 +1334,17 @@ function checkAudioOutputSupport() {
             // Check for default output device
             if (item.coreaudio_default_audio_output_device === 'spaudio_yes') {
               deviceName = item._name;
-
-              // Check transport type or name for Bluetooth/USB indicators
-              const transport = (item.coreaudio_device_transport || '').toLowerCase();
-              const name = (item._name || '').toLowerCase();
-
-              if (transport.includes('bluetooth') ||
-                  transport.includes('usb') ||
-                  name.includes('airpods') ||
-                  name.includes('bluetooth') ||
-                  name.includes('beats') ||
-                  name.includes('headphone') ||
-                  name.includes('usb')) {
-                isBluetoothOrUSB = true;
-              }
+              deviceTransport = item.coreaudio_device_transport || null;
             }
           }
         }
 
-        if (isBluetoothOrUSB) {
-          resolve({
-            supported: false,
-            warning: `Desktop audio may not be captured when using "${deviceName}". ` +
-                     `ScreenCaptureKit works best with built-in speakers. ` +
-                     `Consider switching to built-in output or installing BlackHole for full desktop audio capture.`,
-            deviceName,
-            suggestion: 'Switch to built-in speakers or use BlackHole virtual audio device'
-          });
-        } else {
-          resolve({ supported: true, warning: null, deviceName });
-        }
+        resolve({
+          supported: true,
+          warning: null,
+          deviceName,
+          deviceTransport,
+        });
       } catch (e) {
         resolve({ supported: true, warning: null }); // Parse error, assume OK
       }

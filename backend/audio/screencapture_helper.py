@@ -9,9 +9,11 @@ ScreenCaptureKit routes audio to the content being captured:
 - Capturing a display → Captures all system audio output
 - Capturing a window → Captures only that window's audio
 
-NOTE: ScreenCaptureKit captures the system audio mix BEFORE it's routed to output devices.
-This means headphones, AirPods, and Bluetooth devices should all work correctly.
-The audio is captured at the system level, independent of the output device.
+NOTE: ScreenCaptureKit is expected to capture the system audio mix before it is
+routed to the active output device. Output-device-specific regressions can still
+occur across macOS versions or hardware, so validate real behavior on the
+current target machines instead of assuming Bluetooth/USB/headphone routing is
+always safe.
 
 Requirements:
 - macOS 13 Ventura or later
@@ -24,6 +26,15 @@ import threading
 import time
 import numpy as np
 from typing import Optional, Callable
+
+
+def _classify_permission_error(error_text: str) -> bool:
+    normalized = (error_text or '').lower()
+    return 'not authorized' in normalized or 'permission' in normalized or 'denied' in normalized
+
+
+def _build_capture_start_error(capture_type: str, detail: str) -> str:
+    return f"{capture_type} desktop audio failed to start: {detail}"
 
 
 class ScreenCaptureAudioRecorder:
@@ -51,6 +62,11 @@ class ScreenCaptureAudioRecorder:
         self.content_filter = None
         self.stream_config = None
         self.delegate = None
+        self.error_event = threading.Event()
+        self.last_error = None
+        self.first_audio_time: Optional[float] = None
+        self.last_audio_time: Optional[float] = None
+        self._ready_event = threading.Event()
 
         # Import PyObjC frameworks
         try:
@@ -149,6 +165,10 @@ class ScreenCaptureAudioRecorder:
                     if audio_data is not None and len(audio_data) > 0:
                         # Thread-safe append to audio buffer
                         with recorder.buffer_lock:
+                            now = time.time()
+                            if recorder.first_audio_time is None:
+                                recorder.first_audio_time = now
+                            recorder.last_audio_time = now
                             recorder.audio_buffer.append(audio_data)
                         self.sample_count += 1
 
@@ -158,6 +178,8 @@ class ScreenCaptureAudioRecorder:
 
                 except Exception as e:
                     print(f"Error processing audio sample: {e}", file=sys.stderr)
+                    recorder.last_error = f"PyObjC audio sample processing failed: {e}"
+                    recorder.error_event.set()
                     import traceback
                     traceback.print_exc(file=sys.stderr)
 
@@ -238,6 +260,8 @@ class ScreenCaptureAudioRecorder:
                 """Called when the stream stops, possibly with an error."""
                 if error:
                     print(f"ScreenCaptureKit stream stopped with error: {error}", file=sys.stderr)
+                    recorder.last_error = f"PyObjC ScreenCaptureKit stream stopped: {error}"
+                    recorder.error_event.set()
                 else:
                     print("ScreenCaptureKit stream stopped normally", file=sys.stderr)
 
@@ -256,10 +280,22 @@ class ScreenCaptureAudioRecorder:
 
         try:
             print("Starting ScreenCaptureKit audio capture...", file=sys.stderr)
+            self.error_event.clear()
+            self.last_error = None
+            self.first_audio_time = None
+            self.last_audio_time = None
+            self._ready_event.clear()
+            with self.buffer_lock:
+                self.audio_buffer = []
 
             # Use a flag to track if setup completed
             setup_complete = [False]
-            setup_error = [None]
+            setup_error = {}
+
+            def record_setup_error(message: str):
+                setup_error['message'] = message
+                self.last_error = message
+                self.error_event.set()
 
             # Get shareable content (displays and windows)
             # This is async in the ScreenCaptureKit API
@@ -269,7 +305,7 @@ class ScreenCaptureAudioRecorder:
                     print(f"Error getting shareable content: {error_str}", file=sys.stderr)
 
                     # Check if it's a permission error
-                    if "not authorized" in error_str.lower() or "permission" in error_str.lower():
+                    if _classify_permission_error(error_str):
                         print(f"", file=sys.stderr)
                         print(f"⚠️  SCREEN RECORDING PERMISSION REQUIRED", file=sys.stderr)
                         print(f"", file=sys.stderr)
@@ -282,8 +318,10 @@ class ScreenCaptureAudioRecorder:
                         print(f"  3. Enable 'Meeting Transcriber'", file=sys.stderr)
                         print(f"  4. Restart the app", file=sys.stderr)
                         print(f"", file=sys.stderr)
+                        record_setup_error("PERMISSION_DENIED: Screen Recording permission not granted")
+                    else:
+                        record_setup_error(_build_capture_start_error('pyobjc', error_str))
 
-                    setup_error[0] = error_str
                     setup_complete[0] = True
                     return
 
@@ -298,7 +336,7 @@ class ScreenCaptureAudioRecorder:
                     displays = content.displays if content else []
                     if not displays:
                         print(f"ERROR: No displays found in shareable content", file=sys.stderr)
-                        setup_error[0] = "No displays available"
+                        record_setup_error(_build_capture_start_error('pyobjc', 'No displays available'))
                         setup_complete[0] = True
                         return
 
@@ -364,12 +402,12 @@ class ScreenCaptureAudioRecorder:
                             success, add_output_error = result
                             if add_output_error:
                                 print(f"ERROR: Failed to add stream output: {add_output_error}", file=sys.stderr)
-                                setup_error[0] = str(add_output_error)
+                                record_setup_error(_build_capture_start_error('pyobjc', str(add_output_error)))
                                 setup_complete[0] = True
                                 return
                     except Exception as add_error:
                         print(f"ERROR: Exception adding stream output: {add_error}", file=sys.stderr)
-                        setup_error[0] = str(add_error)
+                        record_setup_error(_build_capture_start_error('pyobjc', str(add_error)))
                         setup_complete[0] = True
                         return
                     print(f"DEBUG: Added stream output with background queue", file=sys.stderr)
@@ -377,12 +415,17 @@ class ScreenCaptureAudioRecorder:
                     # Start the stream
                     def start_completion_handler(error):
                         if error:
-                            print(f"Error starting stream: {error}", file=sys.stderr)
+                            error_str = str(error)
+                            print(f"Error starting stream: {error_str}", file=sys.stderr)
                             self.is_recording = False
-                            setup_error[0] = str(error)
+                            if _classify_permission_error(error_str):
+                                record_setup_error("PERMISSION_DENIED: Screen Recording permission not granted")
+                            else:
+                                record_setup_error(_build_capture_start_error('pyobjc', error_str))
                         else:
                             print("ScreenCaptureKit stream started successfully", file=sys.stderr)
                             self.is_recording = True
+                            self._ready_event.set()
                         setup_complete[0] = True
 
                     self.stream.startCaptureWithCompletionHandler_(start_completion_handler)
@@ -392,7 +435,7 @@ class ScreenCaptureAudioRecorder:
                     import traceback
                     traceback.print_exc(file=sys.stderr)
                     self.is_recording = False
-                    setup_error[0] = str(e)
+                    record_setup_error(_build_capture_start_error('pyobjc', str(e)))
                     setup_complete[0] = True
 
             # Request shareable content asynchronously
@@ -406,14 +449,19 @@ class ScreenCaptureAudioRecorder:
 
             if not setup_complete[0]:
                 print("ERROR: ScreenCaptureKit setup timeout", file=sys.stderr)
+                record_setup_error("pyobjc desktop audio did not become ready within 5 seconds.")
                 return False
 
-            if setup_error[0]:
-                print(f"ERROR: ScreenCaptureKit setup failed: {setup_error[0]}", file=sys.stderr)
+            setup_error_message = setup_error.get('message')
+            if setup_error_message:
+                print(f"ERROR: ScreenCaptureKit setup failed: {setup_error_message}", file=sys.stderr)
                 return False
 
             if not self.is_recording:
                 print("ERROR: ScreenCaptureKit failed to start recording", file=sys.stderr)
+                if self.last_error is None:
+                    self.last_error = _build_capture_start_error('pyobjc', 'ScreenCaptureKit failed to start recording')
+                    self.error_event.set()
                 return False
 
             print("ScreenCaptureKit recording started successfully!", file=sys.stderr)
@@ -421,6 +469,8 @@ class ScreenCaptureAudioRecorder:
 
         except Exception as e:
             print(f"Error starting ScreenCaptureKit recording: {e}", file=sys.stderr)
+            self.last_error = _build_capture_start_error('pyobjc', str(e))
+            self.error_event.set()
             import traceback
             traceback.print_exc(file=sys.stderr)
             return False
@@ -460,6 +510,8 @@ class ScreenCaptureAudioRecorder:
 
             if not stop_complete[0]:
                 print("WARNING: Stream stop timeout - proceeding anyway", file=sys.stderr)
+                self.last_error = "PyObjC ScreenCaptureKit stream stop timed out"
+                self.error_event.set()
 
         # Concatenate all audio buffers (thread-safe)
         with self.buffer_lock:
@@ -469,6 +521,8 @@ class ScreenCaptureAudioRecorder:
                 print("⚠️  If you just granted Screen Recording permission, please restart the app.", file=sys.stderr)
                 print("   macOS requires an app restart after granting this permission.", file=sys.stderr)
                 print("", file=sys.stderr)
+                if self.last_error is None:
+                    self.last_error = "PyObjC ScreenCaptureKit captured no desktop audio"
                 return None
 
             try:
@@ -489,10 +543,15 @@ class ScreenCaptureAudioRecorder:
         if self.is_recording:
             self.stop_recording()
 
+        self._ready_event.clear()
         self.stream = None
         self.content_filter = None
         self.stream_config = None
         self.delegate = None
+
+    @property
+    def is_ready(self) -> bool:
+        return self._ready_event.is_set()
 
 
 def check_screen_recording_permission() -> bool:

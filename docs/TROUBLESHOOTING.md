@@ -237,6 +237,7 @@ If you still see "faster-whisper (CPU fallback)", report an issue on GitHub.
 - System Settings → Privacy & Security → Screen Recording
 - Toggle ON for Meeting Transcriber
 - Restart the app
+- If desktop audio is still missing on Bluetooth, USB, or headphones, reproduce it on the current macOS version and hardware before assuming the output device is unsupported.
 
 ---
 

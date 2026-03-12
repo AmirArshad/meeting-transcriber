@@ -376,17 +376,17 @@ test('buildRecordingPreflightReport combines disk and audio output warnings', ()
       availableGB: '0.42',
     },
     audioOutputCheck: {
-      supported: false,
-      warning: 'Desktop audio may not be captured when using "AirPods Pro".',
-      suggestion: 'Switch to built-in speakers or use BlackHole virtual audio device',
+      supported: true,
+      warning: null,
+      deviceName: 'AirPods Pro',
+      deviceTransport: 'Bluetooth',
     },
   });
 
   assert.equal(result.canStart, true);
-  assert.equal(result.warnings.length, 4);
+  assert.equal(result.warnings.length, 2);
   assert.match(result.warningMessage, /Recording checks found warnings:/);
   assert.match(result.warningMessage, /Only 0.42 GB free/);
-  assert.match(result.warningMessage, /AirPods Pro/);
   assert.match(result.warningMessage, /Continue anyway\?/);
 });
 
