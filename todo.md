@@ -54,6 +54,10 @@ Status: active. Phases 00-3 are complete through Batch 3. Batch 4 is next.
   - CI frontend validation now runs explicit syntax checks plus JS regression tests instead of a vague frontend step
   - Windows CI now includes a packaged build smoke test with unpacked-output verification
   - workflow now supports `main` and `master` plus manual dispatch with in-progress cancellation
+- Completed Batch 4 Task 5 release workflow aggregation hardening:
+  - release builds still run in parallel per platform, but GitHub release publication now happens once in a final aggregation job
+  - final release notes now list both Windows and macOS assets consistently from downloaded artifacts
+  - release workflow now fails fast when expected installer artifacts are missing
 - Latest automated validation status at time of update:
   - `npm test` passing
   - `npm run test:all` passing
@@ -574,9 +578,9 @@ Files:
 
 ### 33. Fix release publication flow
 
-- [ ] Split matrix build jobs from release creation.
-- [ ] Upload artifacts in parallel, then create/update the GitHub release once in a final aggregation job.
-- [ ] Ensure release notes list all assets consistently.
+- [x] Split matrix build jobs from release creation.
+- [x] Upload artifacts in parallel, then create/update the GitHub release once in a final aggregation job.
+- [x] Ensure release notes list all assets consistently.
 
 Files:
 
@@ -709,7 +713,7 @@ Files:
 - [x] preflight checks before start
 - [x] safe renderer DOM updates and file URLs
 - [x] stronger CI
-- [ ] release workflow aggregation
+- [x] release workflow aggregation
 - [ ] build artifact checksum verification
 
 ## Notes
