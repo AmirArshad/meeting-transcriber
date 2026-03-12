@@ -1,200 +1,237 @@
-# Pre-Merge Remediation Plan
+# Pre-Merge Review Follow-Up
 
 Branch: `fix/full-audit-remediation`
+Review baseline: full diff `master...fix/full-audit-remediation` at `d407cfb`
 
-Status: active. This file now tracks only unresolved issues from the 2026-03-12 full PR review.
+Status: active. This file now tracks the unresolved tasks from the 2026-03-12 full MR review reset.
 
-Archive: historical completed work moved to `docs/internal/FULL_AUDIT_REMEDIATION_ARCHIVE.md`.
+Archive: previous root `todo.md` snapshots and earlier remediation history live in `docs/internal/FULL_AUDIT_REMEDIATION_ARCHIVE.md`.
 
 ## Working Rule
 
 - Update this `todo.md` whenever task status changes, major progress is made, or execution order changes.
 - Do not mark an item done until the code change and the most relevant automated/manual validation are both complete.
+- Keep fixes targeted. Preserve the reviewed invariants below unless all dependent code, tests, and docs are updated together.
 
-## Priority Summary
+## Reviewed Invariants To Preserve
 
-- P0: fix merge blockers that can cause stale builds, silent data loss, recorder races, or broken macOS behavior.
-- P1: close correctness gaps and regressions that are user-visible but less catastrophic.
-- P2: clean up coverage gaps and docs drift so the same bugs do not come back.
+- Hybrid recorder contract: structured stdout messages (`levels`, `event`, `warning`, `error`) plus stderr compatibility output.
+- Final result compatibility: Windows final JSON uses `audioPath`, macOS final JSON uses `outputPath`, and Electron still accepts both.
+- Post-stop mixing architecture stays intact; do not reintroduce real-time cross-stream mixing.
+- Privacy-first/local-only behavior stays intact; no telemetry, uploads, or cloud transcription.
+- Packaged macOS builds stay Apple Silicon only.
 
-## P0 - Merge Blockers
+## Severity Summary
 
-### 1. Rebuild the Swift helper when source files change
+- blocker: 1 end-to-end regression to fix before merge.
+- high: 2 correctness/data-integrity issues.
+- medium: 5 important regression follow-ups.
+- low: 3 cleanup, docs, and coverage follow-ups.
 
-- [x] Extend the resource manifest to hash the Swift helper source tree, not just `Package.swift`.
-- [x] Ensure `npm run prepare-build` rebuilds `bin/audiocapture-helper` when any helper source changes.
-- [x] Add regression coverage for resource invalidation on Swift source edits.
+## Blocker
 
-Files:
+### 1. Make WAV fallback recordings work end-to-end
 
-- `build/prepare-resources.js`
-- `swift/AudioCaptureHelper/Sources/main.swift`
-- `tests/js/build-resource-manifest.test.js`
-
-### 2. Remove the moving-target `get-pip.py` build dependency
-
-- [x] Stop pinning a checksum to the live `https://bootstrap.pypa.io/pip/get-pip.py` URL.
-- [x] Replace it with a versioned, stable bootstrap strategy suitable for fresh macOS and Windows builds.
-- [x] Update the build manifest tests for the new approach.
+- [ ] Stop forcing transcription inputs from `.wav` back to `.opus` when WAV is the real fallback output.
+- [ ] Verify fallback outputs can still be transcribed and saved into meeting history end-to-end.
+- [ ] Add regression coverage for compressor/integrity fallback through transcription and history save.
 
 Files:
 
-- `build/download-manifest.js`
-- `build/prepare-resources.js`
-- `tests/js/build-download-manifest.test.js`
+- `src/main.js`
+- `backend/audio/compressor.py`
+- `backend/audio/windows_recorder.py`
+- `backend/audio/macos_recorder.py`
+- `tests/python/test_compressor.py`
+- `tests/python/test_meeting_manager.py`
 
-### 3. Fix the stop/quit single-flight race in the main process
+Affects:
 
-- [x] Keep `recordingStopPromise` authoritative until the original stop attempt fully settles.
-- [x] Prevent a timed-out graceful quit from attaching duplicate stop listeners or sending a second `stop\n`.
-- [x] Add regression coverage for quit-time timeout followed by another stop/quit attempt.
+- Windows
+- macOS
+
+## High
+
+### 2. Clear stale recorder state after unexpected post-start exit
+
+- [ ] Treat a recorder close after startup as recorder death, not a still-live session.
+- [ ] Clear `pythonProcess` and `recordingStartTime`, then surface a renderer-visible failure/warning.
+- [ ] Add regression coverage for stop/quit behavior after a crashed recorder.
 
 Files:
 
 - `src/main.js`
 - `src/main-process-helpers.js`
+- `src/renderer/app.js`
 - `tests/js/main-process-helpers.test.js`
 
-### 4. Surface Swift helper warning messages end-to-end
+Affects:
 
-- [x] Parse helper `warning` messages in `backend/audio/swift_audio_capture.py`.
-- [x] Propagate backpressure and writer-drain warnings through the macOS recorder and Electron UI.
-- [x] Make dropped desktop-audio chunks visible in logs/UI instead of silently disappearing.
+- Windows
+- macOS
+
+### 3. Make meeting deletion transactional
+
+- [ ] Avoid ghost metadata if meeting files are deleted but `meetings.json` fails to save.
+- [ ] Reorder delete flow or add rollback/recovery so metadata and files stay consistent.
+- [ ] Add regression coverage for metadata-save failure during delete.
+
+Files:
+
+- `backend/meeting_manager.py`
+- `tests/python/test_meeting_manager.py`
+
+Affects:
+
+- Windows
+- macOS
+
+## Medium
+
+### 4. Prevent stale macOS helper files from leaking into Windows packages
+
+- [ ] Invalidate `build/resources/bin` on manifest changes across platforms, or gate packaging so Windows cannot ship a stale helper.
+- [ ] Add regression coverage for platform-switch stale-resource cleanup.
+- [ ] Strengthen packaging verification so Windows artifacts can be checked for stray helper files.
+
+Files:
+
+- `build/prepare-resources.js`
+- `package.json`
+- `.github/workflows/ci.yml`
+- `tests/js/build-resource-manifest.test.js`
+
+Affects:
+
+- Windows packaging
+
+### 5. Use the shipped Swift helper for macOS Screen Recording preflight
+
+- [ ] Route Screen Recording preflight through `audiocapture-helper --check-permission`.
+- [ ] Keep PyObjC checking only as fallback when the helper is unavailable.
+- [ ] Add regression coverage that preflight matches the runtime helper path.
+
+Files:
+
+- `src/main.js`
+- `backend/audio/swift_audio_capture.py`
+- `backend/check_permissions.py`
+- `tests/python/test_screencapture_helper.py`
+
+Affects:
+
+- macOS
+
+### 6. Preserve the first actionable Swift startup error
+
+- [ ] Keep `permission_denied` / `capture_start_failed` classification authoritative when multiple helper errors are emitted.
+- [ ] Avoid overwriting specific startup failures with a later generic `Failed to start capture` message.
+- [ ] Add regression coverage for duplicate helper startup errors.
 
 Files:
 
 - `swift/AudioCaptureHelper/Sources/main.swift`
 - `backend/audio/swift_audio_capture.py`
 - `backend/audio/macos_recorder.py`
+- `tests/python/test_screencapture_helper.py`
+
+Affects:
+
+- macOS
+
+### 7. Remove the startup update notification timing race
+
+- [ ] Ensure the delayed startup auto-check still reaches the renderer when initialization is slow.
+- [ ] Keep later `Help > Check for Updates...` notifications repeatable in the same session.
+- [ ] Add integration-style coverage for early main-process emission and late renderer subscription.
+
+Files:
+
 - `src/main.js`
+- `src/preload.js`
+- `src/renderer/app.js`
+- `src/renderer/update-notification-helpers.js`
+- `tests/js/update-notification-helpers.test.js`
 
-### 5. Fix macOS stream alignment so it uses comparable timestamps
+Affects:
 
-- [x] Stop aligning mic and desktop audio using mismatched timestamp sources.
-- [x] Use a shared capture reference or another trustworthy method that excludes helper transport delay.
-- [ ] Re-validate that startup audio is preserved without introducing artificial mic/desktop desync.
+- Windows
+- macOS
 
-Files:
+### 8. Make Python test commands and docs truly Windows-safe
 
-- `backend/audio/macos_recorder.py`
-- `backend/audio/swift_audio_capture.py`
-- `backend/audio/screencapture_helper.py`
-
-### 6. Fix the corrupt-Opus fallback/import interaction
-
-- [x] Ensure failed Opus outputs do not leave behind a bad `.opus` that recovery scan can later import.
-- [x] Make scan/import prefer the healthy fallback file when both `.opus` and `.wav` variants exist.
-- [x] Add regression coverage for integrity-failure fallback plus later scan/import.
+- [ ] Replace hardcoded `python3` npm test usage with a Windows-safe approach, or stop claiming the npm script is cross-platform.
+- [ ] Align docs and agent guidance with the real supported commands.
+- [ ] Re-check README and testing/build docs for any remaining Windows command drift.
 
 Files:
 
-- `backend/audio/compressor.py`
+- `package.json`
+- `README.md`
+- `docs/development/TESTING.md`
+- `docs/development/BUILD_INSTRUCTIONS.md`
+- `AGENTS.md`
+- `CLAUDE.md`
+
+Affects:
+
+- Windows
+
+## Low / Follow-Up
+
+### 9. Reduce corrupt metadata backup spam
+
+- [ ] Avoid producing repeated `meetings.corrupt.*.json` backups during one scan-plus-list refresh cycle.
+- [ ] Add regression coverage for repeated reads of the same corrupt metadata file.
+
+Files:
+
 - `backend/meeting_manager.py`
+- `src/renderer/app.js`
+- `tests/python/test_meeting_manager.py`
+
+Affects:
+
+- Windows
+- macOS
+
+### 10. Align updater docs with the shipped manual-download behavior
+
+- [ ] Update README wording so it describes update checking plus manual browser download, not true auto-install.
+- [ ] Keep updater feature docs explicit about the current manual-download flow.
+
+Files:
+
+- `README.md`
+- `docs/features/FEATURE_AUTO_UPDATER.md`
+
+Affects:
+
+- Windows
+- macOS
+
+### 11. Backfill uncovered regression tests from this review
+
+- [ ] Add coverage for platform-switch stale `build/resources/bin` cleanup.
+- [ ] Add coverage for unexpected recorder exit after startup.
+- [ ] Add coverage for the WAV fallback transcription/history path.
+- [ ] Add coverage for the startup update listener race.
+- [ ] Add coverage for delete save failure / ghost meeting metadata.
+
+Files:
+
+- `tests/js/build-resource-manifest.test.js`
+- `tests/js/main-process-helpers.test.js`
+- `tests/js/update-notification-helpers.test.js`
 - `tests/python/test_compressor.py`
 - `tests/python/test_meeting_manager.py`
 
-### 7. Fix the Swift permission-check handshake
+Affects:
 
-- [x] Remove the premature `permission_check:false` emission from the helper, or make the Python side ignore placeholder messages.
-- [x] Return the real granted/denied result reliably.
-- [x] Add regression coverage for granted and denied permission checks.
+- Windows
+- macOS
 
-Files:
-
-- `swift/AudioCaptureHelper/Sources/main.swift`
-- `backend/audio/swift_audio_capture.py`
-- `tests/python/test_screencapture_helper.py`
-
-### 8. Preserve actionable desktop-start failures
-
-- [x] Keep specific startup failure details from the Swift/PyObjC capture backends.
-- [x] Surface permission-denied, timeout, and helper-specific messages through `MacOSAudioRecorder` and Electron.
-- [x] Avoid collapsing everything to a generic desktop-start failure string.
-
-Files:
-
-- `backend/audio/swift_audio_capture.py`
-- `backend/audio/screencapture_helper.py`
-- `backend/audio/macos_recorder.py`
-- `src/main.js`
-
-### 9. Add macOS packaged-build coverage to PR CI
-
-- [x] Exercise the macOS Electron packaging path in `.github/workflows/ci.yml`, not only in the release workflow.
-- [x] Verify the packaged app still includes the helper and expected resources.
-- [x] Keep the CI runtime practical while still catching packaging regressions before tag builds.
-
-Files:
-
-- `.github/workflows/ci.yml`
-- `build/prepare-resources.js`
-- `package.json`
-
-## P1 - Correctness and User-Visible Regressions
-
-### 10. Preserve legacy inline transcript fallback
-
-- [x] When `transcriptPath` is missing or unreadable, fall back to inline transcript text for older meeting records if present.
-- [x] Avoid regressing transcript availability for pre-lazy-load metadata.
-- [x] Add regression coverage for legacy records with missing `.md` files.
-
-Files:
-
-- `backend/meeting_manager.py`
-- `tests/python/test_meeting_manager.py`
-
-### 11. Restore repeatable update notifications
-
-- [x] Replace the one-shot renderer listener with behavior that still handles multiple `update-available` events in one app session.
-- [x] Keep cleanup behavior safe on renderer teardown.
-- [x] Add regression coverage for startup auto-check plus manual Help > Check for Updates.
-
-Files:
-
-- `src/preload.js`
-- `src/renderer/app.js`
-- `src/main.js`
-- `tests/js/main-process-helpers.test.js`
-
-### 12. Make meeting selection feel responsive again
-
-- [x] Show meeting details immediately while transcript loading stays asynchronous.
-- [x] Keep the race guard that prevents late transcript loads from overwriting a newer selection.
-
-Files:
-
-- `src/renderer/app.js`
-
-## P2 - Coverage and Documentation Cleanup
-
-### 13. Backfill missing regression tests for new helper/build contracts
-
-- [x] Add tests for Swift helper warning parsing.
-- [x] Add tests for the fixed permission-check contract.
-- [x] Add tests for the stop/quit race.
-- [x] Add tests for stale-helper invalidation when Swift source files change.
-
-Files:
-
-- `tests/js/main-process-helpers.test.js`
-- `tests/js/build-resource-manifest.test.js`
-- `tests/python/test_screencapture_helper.py`
-
-### 14. Fix remaining docs drift introduced on this branch
-
-- [x] Update Windows testing docs so they do not assume a `python3` alias exists.
-- [x] Update build docs to match the current Windows installer naming convention.
-- [x] Sanity-check any release/build docs touched by the checksum/bootstrap changes.
-
-Files:
-
-- `docs/development/TESTING.md`
-- `docs/development/BUILD_INSTRUCTIONS.md`
-- `package.json`
-
-## Validation Gate Before Merge
-
-### Automated
+## Validation Baseline From The Review
 
 - [x] `npm test`
 - [x] `python3 -m pytest tests/python`
@@ -202,24 +239,31 @@ Files:
 - [x] `swift build -c release --arch arm64`
 - [x] `npm run build:mac:dir`
 
-### Manual macOS
+## Validation Gate Before Merge
 
-- [ ] Record mic + desktop audio with active system audio and verify sync is still correct.
-- [ ] Verify the first seconds of desktop audio are preserved.
-- [ ] Verify denied Screen Recording permission surfaces the correct guidance.
-- [ ] Verify helper backpressure/drop warnings are visible when triggered or simulated.
-- [ ] Verify quitting during recording does not create duplicate stop flows or lose audio.
+### Automated re-run after fixes
 
-### Manual data/history/update flows
+- [ ] `npm test`
+- [ ] `python3 -m pytest tests/python`
+- [ ] `python3 -m py_compile backend/*.py backend/audio/*.py backend/transcription/*.py`
+- [ ] `swift build -c release --arch arm64`
+- [ ] `npm run build:mac:dir`
+- [ ] Confirm CI still passes the Windows packaging smoke path after the stale-`bin` fix.
 
-- [ ] Verify integrity-fallback recordings do not get re-imported from a corrupt `.opus`.
-- [ ] Verify legacy meetings with inline transcript text still show transcripts when the `.md` file is missing.
-- [ ] Verify update banners can appear more than once in the same app session.
+### Manual product validation
+
+- [ ] Verify a WAV fallback recording still transcribes and saves to history.
+- [ ] Verify an unexpected recorder failure leaves the app recoverable and does not poison stop/quit behavior.
+- [ ] Verify denied Screen Recording guidance comes from the helper-backed macOS preflight path.
+- [ ] Verify the startup update banner still appears on slow init and can reappear after a later manual check.
+- [ ] Verify mic/desktop sync and first-audio preservation on macOS.
+- [ ] Verify corrupt metadata produces a single backup per incident.
+- [ ] Verify Windows artifacts do not ship a stray `bin/audiocapture-helper`.
 
 ## Suggested Execution Order
 
-1. Build pipeline blockers: stale helper rebuilds, `get-pip.py`, macOS CI packaging.
-2. Recorder correctness blockers: stop race, helper warnings, permission handshake, desktop-start errors.
-3. Audio/data integrity blockers: stream alignment, corrupt Opus fallback/import.
-4. User-visible regressions: legacy transcripts, update notifications, meeting-selection responsiveness.
-5. Coverage + docs cleanup, then full validation.
+1. Fix the WAV fallback path, unexpected recorder-exit cleanup, and transactional delete behavior.
+2. Fix stale packaging invalidation and the macOS helper permission/startup-error gaps.
+3. Fix the startup update race and Windows test-command/docs drift.
+4. Clean up corrupt-metadata backup noise, updater docs wording, and missing regressions.
+5. Re-run automated validation, then complete targeted manual checks before merge.
