@@ -2,7 +2,7 @@
 
 Branch: `fix/full-audit-remediation`
 
-Status: active. Phase 00 is complete. Batch 1 is in progress.
+Status: active. Phases 00-3 are complete through Batch 3. Batch 4 is next.
 
 ## Working Rule
 
@@ -31,8 +31,16 @@ Status: active. Phase 00 is complete. Batch 1 is in progress.
 - Made `add_meeting()` transactional so copied files are rolled back on metadata failure and originals are only removed after metadata is durably saved.
 - Added corrupt metadata recovery so invalid `meetings.json` files are backed up before the app continues with an empty in-memory list.
 - Fixed scan/import filename parsing so suffixed meeting IDs like `meeting_20260107_104555_1` are preserved instead of collapsing to the base timestamp.
+- Completed Batch 3 transcription/runtime cleanup:
+  - faster-whisper now fails cleanly on model-lock timeout instead of bypassing the lock
+  - MLX model downloads now use an app-managed writable cache without changing process CWD
+  - MLX cache detection now matches the app's real per-model storage directories
+  - MLX transcription now calls the backend with the requested language and probes duration when timestamps are missing
+  - transcription progress now uses stderr while stdout remains reserved for final JSON output
+  - both transcribers now implement the shared `BaseTranscriber` interface and expose `get_model_info()`
 - Latest automated validation status at time of update:
   - `npm run test:all` passing
+  - `python3 -m py_compile backend/*.py backend/audio/*.py backend/transcription/*.py` passing
   - `swift build -c release --arch arm64` passing
 
 ## Goals
@@ -368,8 +376,8 @@ Files:
 
 ### 17. Honor model download locks consistently
 
-- [ ] Change `backend/transcription/faster_whisper_transcriber.py` to fail or retry on lock timeout instead of bypassing the lock.
-- [ ] Keep Windows/default behavior aligned with MLX timeout semantics.
+- [x] Change `backend/transcription/faster_whisper_transcriber.py` to fail or retry on lock timeout instead of bypassing the lock.
+- [x] Keep Windows/default behavior aligned with MLX timeout semantics.
 
 Files:
 
@@ -377,11 +385,11 @@ Files:
 
 ### 18. Fix MLX transcriber behavior
 
-- [ ] Pass requested language/task options to `lightning-whisper-mlx` if supported.
-- [ ] If explicit language is unsupported, make that limitation explicit in UI and code.
-- [ ] Stop changing process-wide CWD during model load.
-- [ ] Configure cache path without `os.chdir()` if possible; otherwise isolate loading in a subprocess.
-- [ ] Derive audio duration robustly when no segment timestamps are returned.
+- [x] Pass requested language/task options to `lightning-whisper-mlx` if supported.
+- [x] If explicit language is unsupported, make that limitation explicit in UI and code.
+- [x] Stop changing process-wide CWD during model load.
+- [x] Configure cache path without `os.chdir()` if possible; otherwise isolate loading in a subprocess.
+- [x] Derive audio duration robustly when no segment timestamps are returned.
 
 Files:
 
@@ -391,8 +399,8 @@ Files:
 
 ### 19. Clean up transcription abstraction surface
 
-- [ ] Either make real transcribers implement `BaseTranscriber`, or remove the unused abstraction.
-- [ ] Normalize naming/signatures (`transcribe` vs `transcribe_file`) across implementations.
+- [x] Either make real transcribers implement `BaseTranscriber`, or remove the unused abstraction.
+- [x] Normalize naming/signatures (`transcribe` vs `transcribe_file`) across implementations.
 
 Files:
 
@@ -414,8 +422,8 @@ Files:
 
 ### 21. Fix macOS model cache detection
 
-- [ ] Point `check-model-downloaded` at the actual MLX cache location used by the app.
-- [ ] Keep macOS and Windows model detection logic distinct and explicit.
+- [x] Point `check-model-downloaded` at the actual MLX cache location used by the app.
+- [x] Keep macOS and Windows model detection logic distinct and explicit.
 
 Files:
 
@@ -436,7 +444,7 @@ Files:
 
 ### 23. Improve progress/event contracts
 
-- [ ] Move transcription progress to stderr or structured status events only.
+- [x] Move transcription progress to stderr or structured status events only.
 - [ ] Reserve stdout for final machine-readable JSON payloads.
 - [ ] Standardize recording startup/progress events across macOS and Windows.
 - [ ] Remove remaining brittle stderr string dependencies where practical.
@@ -673,10 +681,10 @@ Files:
 
 ### Batch 3 - transcription/runtime contract cleanup
 
-- [ ] faster-whisper lock timeout behavior
-- [ ] MLX cache/language/CWD cleanup
-- [ ] transcription progress contract cleanup
-- [ ] shared transcriber abstraction cleanup
+- [x] faster-whisper lock timeout behavior
+- [x] MLX cache/language/CWD cleanup
+- [x] transcription progress contract cleanup
+- [x] shared transcriber abstraction cleanup
 
 ### Batch 4 - app lifecycle, UI, and build hardening
 

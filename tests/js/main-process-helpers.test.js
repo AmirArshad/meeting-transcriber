@@ -6,6 +6,8 @@ const {
   buildModelDownloadCheck,
   cacheContainsModel,
   classifyRecorderStdoutChunk,
+  getMacMLXCacheDir,
+  getMacMLXModelStorageDirs,
   getModelDownloadPatterns,
   isModelDownloadErrorOutput,
   parseRecorderMessageLine,
@@ -28,13 +30,41 @@ test('buildModelDownloadCheck returns Windows faster-whisper cache settings', ()
 });
 
 
+test('buildModelDownloadCheck returns macOS MLX cache settings for Apple Silicon', () => {
+  const result = buildModelDownloadCheck({
+    platform: 'darwin',
+    arch: 'arm64',
+    homeDir: '/Users/tester',
+    modelSize: 'small',
+  });
+
+  assert.equal(result.cacheDir, path.join('/Users/tester', 'Library', 'Caches', 'meeting-transcriber', 'mlx_models'));
+  assert.deepEqual(result.modelPatterns, [
+    'distil-small.en',
+    'whisper-small-mlx',
+  ]);
+});
+
+
+test('getMacMLXCacheDir returns writable MLX cache path', () => {
+  assert.equal(
+    getMacMLXCacheDir('/Users/tester'),
+    path.join('/Users/tester', 'Library', 'Caches', 'meeting-transcriber', 'mlx_models'),
+  );
+});
+
+
+test('getMacMLXModelStorageDirs returns expected per-model cache directories', () => {
+  assert.deepEqual(getMacMLXModelStorageDirs('small'), ['distil-small.en', 'whisper-small-mlx']);
+  assert.deepEqual(getMacMLXModelStorageDirs('medium'), ['distil-medium.en', 'whisper-medium-mlx']);
+  assert.deepEqual(getMacMLXModelStorageDirs('large'), ['distil-large-v3', 'whisper-large-v3-mlx']);
+});
+
+
 test('getModelDownloadPatterns returns macOS Apple Silicon MLX patterns', () => {
   assert.deepEqual(getModelDownloadPatterns('darwin', 'arm64', 'small'), [
-    'models--mlx-community--whisper-small-mlx',
-    'models--mlx-community--whisper-small',
-    'models--distil-whisper--distil-small',
+    'distil-small.en',
     'whisper-small-mlx',
-    'distil-small',
   ]);
 });
 

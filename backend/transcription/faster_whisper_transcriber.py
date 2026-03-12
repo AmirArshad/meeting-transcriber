@@ -11,8 +11,10 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 from pathlib import Path
 
+from .base_transcriber import BaseTranscriber
 
-class TranscriberService:
+
+class TranscriberService(BaseTranscriber):
     """
     Handles audio transcription using faster-whisper.
 
@@ -126,6 +128,8 @@ class TranscriberService:
         'su': 'Sundanese',
     }
 
+    model: Any
+
     def __init__(
         self,
         model_size: str = "base",
@@ -164,7 +168,7 @@ class TranscriberService:
     def load_model(self):
         """Load the Whisper model. Call this once before transcribing."""
         try:
-            from faster_whisper import WhisperModel
+            from faster_whisper import WhisperModel  # type: ignore[import-not-found]
         except ImportError:
             raise ImportError(
                 "faster-whisper not installed. Install with: pip install faster-whisper"
@@ -175,7 +179,7 @@ class TranscriberService:
         # Use file locking to prevent race conditions when multiple processes
         # try to download the model simultaneously (e.g., preload + transcription)
         import tempfile
-        import filelock
+        import filelock  # type: ignore[import-not-found]
 
         lock_file = Path(tempfile.gettempdir()) / f"whisper_model_{self.model_size}.lock"
         lock = filelock.FileLock(lock_file, timeout=300)  # 5 minute timeout
@@ -185,12 +189,14 @@ class TranscriberService:
                 print(f"Acquired model download lock...", file=sys.stderr)
                 self._load_model_internal()
         except filelock.Timeout:
-            print(f"Warning: Timeout waiting for model download lock. Proceeding anyway...", file=sys.stderr)
-            self._load_model_internal()
+            raise RuntimeError(
+                f"Timeout waiting for model download lock after 5 minutes. "
+                f"Another process may still be downloading the model, or a stale lock may need cleanup: {lock_file}"
+            )
 
     def _load_model_internal(self):
         """Internal method to load the model (called with lock held)."""
-        from faster_whisper import WhisperModel
+        from faster_whisper import WhisperModel  # type: ignore[import-not-found]
 
         # Determine device and compute type
         device = self.device
@@ -200,7 +206,7 @@ class TranscriberService:
         if device == "auto":
             # Try to detect CUDA, but fall back to CPU if issues
             try:
-                import torch
+                import torch  # type: ignore[import-not-found]
                 if torch.cuda.is_available():
                     device = "cuda"
                     print(f"CUDA detected, using GPU acceleration", file=sys.stderr)
@@ -478,6 +484,17 @@ class TranscriberService:
             self.model = None
             print("Transcriber cleaned up", file=sys.stderr)
 
+    def get_model_info(self) -> Dict[str, Any]:
+        """Return metadata about the configured model/runtime."""
+        return {
+            'backend': 'faster-whisper',
+            'model_size': self.model_size,
+            'language': self.language,
+            'device': self.device,
+            'compute_type': self.compute_type,
+            'loaded': self.model is not None,
+        }
+
 
 # CLI interface
 def main():
@@ -523,6 +540,8 @@ def main():
         sys.exit(1)
 
     # Create transcriber
+    transcriber = None
+
     try:
         transcriber = TranscriberService(
             model_size=args.model,
@@ -567,7 +586,7 @@ def main():
         traceback.print_exc(file=sys.stderr)
         sys.exit(1)
     finally:
-        if 'transcriber' in locals():
+        if transcriber is not None:
             try:
                 transcriber.cleanup()
             except Exception as cleanup_error:

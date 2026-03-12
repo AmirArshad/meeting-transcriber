@@ -1184,12 +1184,6 @@ ipcMain.handle('download-model', async (event, modelSize) => {
 
     let hasError = false;
 
-    python.stdout.on('data', (data) => {
-      const output = data.toString();
-      // Send progress updates to renderer
-      mainWindow.webContents.send('model-download-progress', output);
-    });
-
     python.stderr.on('data', (data) => {
       const output = data.toString();
       console.log(`[Model Download] ${output}`);
@@ -1690,12 +1684,12 @@ ipcMain.handle('transcribe-audio', async (event, options) => {
 
     python.stdout.on('data', (data) => {
       output += data.toString();
-      // Send progress to renderer
-      mainWindow.webContents.send('transcription-progress', data.toString());
     });
 
     python.stderr.on('data', (data) => {
-      errorOutput += data.toString();
+      const stderrChunk = data.toString();
+      errorOutput += stderrChunk;
+      mainWindow.webContents.send('transcription-progress', stderrChunk);
     });
 
     python.on('close', (code) => {

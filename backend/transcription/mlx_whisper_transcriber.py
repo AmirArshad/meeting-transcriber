@@ -8,11 +8,13 @@ Optimized for Apple M-series chips using the MLX framework with Metal GPU accele
 import sys
 import os
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from pathlib import Path
 
+from .base_transcriber import BaseTranscriber
 
-class MLXWhisperTranscriber:
+
+class MLXWhisperTranscriber(BaseTranscriber):
     """
     Handles audio transcription using Lightning-Whisper-MLX on Apple Silicon.
 
@@ -24,15 +26,83 @@ class MLXWhisperTranscriber:
     - Optimized for Apple M1/M2/M3/M4 chips
     """
 
-    # MLX model repository mappings (mlx-community on Hugging Face)
-    MLX_MODEL_REPOS = {
-        "tiny": "mlx-community/whisper-tiny-mlx",
-        "base": "mlx-community/whisper-base-mlx",
-        "small": "mlx-community/whisper-small-mlx",
-        "medium": "mlx-community/whisper-medium-mlx",
-        "large": "mlx-community/whisper-large-v3-mlx",
-        "large-v3": "mlx-community/whisper-large-v3-mlx"
+    MODEL_SPECS = {
+        "tiny": {
+            "model_key": "tiny",
+            "repo_id": "mlx-community/whisper-tiny-mlx",
+            "storage_dir": "whisper-tiny-mlx",
+        },
+        "base": {
+            "model_key": "base",
+            "repo_id": "mlx-community/whisper-base-mlx",
+            "storage_dir": "whisper-base-mlx",
+        },
+        "small": {
+            "model_key": "distil-small.en",
+            "repo_id": "mustafaaljadery/distil-whisper-mlx",
+            "storage_dir": "distil-small.en",
+            "distil": True,
+        },
+        "medium": {
+            "model_key": "distil-medium.en",
+            "repo_id": "mustafaaljadery/distil-whisper-mlx",
+            "storage_dir": "distil-medium.en",
+            "distil": True,
+        },
+        "large": {
+            "model_key": "distil-large-v3",
+            "repo_id": "mustafaaljadery/distil-whisper-mlx",
+            "storage_dir": "distil-large-v3",
+            "distil": True,
+        },
+        "large-v3": {
+            "model_key": "distil-large-v3",
+            "repo_id": "mustafaaljadery/distil-whisper-mlx",
+            "storage_dir": "distil-large-v3",
+            "distil": True,
+        },
     }
+
+    MULTILINGUAL_MODEL_SPECS = {
+        "tiny": {
+            "model_key": "tiny",
+            "repo_id": "mlx-community/whisper-tiny-mlx",
+            "storage_dir": "whisper-tiny-mlx",
+        },
+        "base": {
+            "model_key": "base",
+            "repo_id": "mlx-community/whisper-base-mlx",
+            "storage_dir": "whisper-base-mlx",
+        },
+        "small": {
+            "model_key": "small",
+            "repo_id": "mlx-community/whisper-small-mlx",
+            "storage_dir": "whisper-small-mlx",
+        },
+        "medium": {
+            "model_key": "medium",
+            "repo_id": "mlx-community/whisper-medium-mlx",
+            "storage_dir": "whisper-medium-mlx",
+        },
+        "large": {
+            "model_key": "large-v3",
+            "repo_id": "mlx-community/whisper-large-v3-mlx",
+            "storage_dir": "whisper-large-v3-mlx",
+        },
+        "large-v3": {
+            "model_key": "large-v3",
+            "repo_id": "mlx-community/whisper-large-v3-mlx",
+            "storage_dir": "whisper-large-v3-mlx",
+        },
+    }
+
+    model: Any
+    model_ready: bool
+    cache_dir: Path
+    model_key: str
+    model_repo: str
+    model_storage_dir: str
+    model_dir: Path
 
     # Supported Whisper languages
     SUPPORTED_LANGUAGES = {
@@ -158,8 +228,11 @@ class MLXWhisperTranscriber:
         self.language = language
         self.device = "metal"  # MLX uses Metal GPU
         self.compute_type = "float16"  # MLX uses float16
-        self.model = None  # Holds LightningWhisperMLX model object
+        self.model = None
         self.model_ready = False  # Flag indicating model is ready for transcription
+        self.cache_dir = self._get_cache_dir()
+        self.model_key, self.model_repo, self.model_storage_dir = self._resolve_model_spec(model_size)
+        self.model_dir = self.cache_dir / 'mlx_models' / self.model_storage_dir
 
         # Validate language
         if language not in self.SUPPORTED_LANGUAGES:
@@ -173,10 +246,57 @@ class MLXWhisperTranscriber:
         print(f"  Language: {self.SUPPORTED_LANGUAGES[language]} ({language})", file=sys.stderr)
         print(f"  Device: Metal GPU (Apple Silicon)", file=sys.stderr)
 
+    def _resolve_model_spec(self, model_size: str) -> Tuple[str, str, str]:
+        """Resolve the backend model key, download repo, and storage directory."""
+        specs = self.MODEL_SPECS if self.language == 'en' else self.MULTILINGUAL_MODEL_SPECS
+        spec = specs.get(model_size, specs['base'])
+        return spec['model_key'], spec['repo_id'], spec['storage_dir']
+
+    def _get_cache_dir(self) -> Path:
+        """Return the writable cache directory used for MLX model downloads."""
+        if sys.platform == 'darwin':
+            return Path.home() / 'Library' / 'Caches' / 'meeting-transcriber'
+        return Path.home() / '.cache' / 'meeting-transcriber'
+
+    def _download_model_files(self) -> None:
+        """Download model files into the app-managed cache directory."""
+        from huggingface_hub import hf_hub_download  # type: ignore[import-not-found]
+
+        self.model_dir.mkdir(parents=True, exist_ok=True)
+
+        if self.language == 'en' and self.model_key.startswith('distil-'):
+            filenames = [
+                f'./mlx_models/{self.model_storage_dir}/weights.npz',
+                f'./mlx_models/{self.model_storage_dir}/config.json',
+            ]
+            local_dir = str(self.cache_dir)
+        else:
+            filenames = ['weights.npz', 'config.json']
+            local_dir = str(self.model_dir)
+
+        for filename in filenames:
+            hf_hub_download(
+                repo_id=self.model_repo,
+                filename=filename,
+                local_dir=local_dir,
+            )
+
+    def _transcribe_audio(self, audio_path: str) -> Dict[str, Any]:
+        """Run MLX transcription against the prepared local model directory."""
+        from lightning_whisper_mlx.transcribe import transcribe_audio  # type: ignore[import-not-found]
+
+        return transcribe_audio(
+            audio_path,
+            path_or_hf_repo=str(self.model_dir),
+            language=self.language,
+            batch_size=12,
+        )
+
     def load_model(self):
         """Load the Whisper model via MLX. Call this once before transcribing."""
         try:
-            import lightning_whisper_mlx
+            import lightning_whisper_mlx  # noqa: F401  # type: ignore[import-not-found]
+            import huggingface_hub  # noqa: F401  # type: ignore[import-not-found]
         except ImportError:
             raise ImportError(
                 "lightning-whisper-mlx not installed. Install with: pip install lightning-whisper-mlx"
@@ -187,7 +307,7 @@ class MLXWhisperTranscriber:
         # Use file locking to prevent race conditions when multiple processes
         # try to download the model simultaneously (e.g., preload + transcription)
         import tempfile
-        import filelock
+        import filelock  # type: ignore[import-not-found]
 
         lock_file = Path(tempfile.gettempdir()) / f"whisper_mlx_model_{self.model_size}.lock"
         lock = filelock.FileLock(lock_file, timeout=1200)  # 20 minute timeout for large model downloads
@@ -205,41 +325,16 @@ class MLXWhisperTranscriber:
 
     def _load_model_internal(self):
         """Internal method to load the model (called with lock held)."""
-        # lightning-whisper-mlx downloads models to ./mlx_models/ (relative path)
-        # This fails when running from a read-only .app bundle on macOS
-        # Solution: Change to a writable directory before loading
-        original_cwd = os.getcwd()
-
-        # Use ~/Library/Caches for macOS, ~/.cache for Linux
-        if sys.platform == 'darwin':
-            cache_dir = Path.home() / "Library" / "Caches" / "meeting-transcriber"
-        else:
-            cache_dir = Path.home() / ".cache" / "meeting-transcriber"
-
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        os.chdir(cache_dir)
-        print(f"Using model cache directory: {cache_dir}", file=sys.stderr)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        print(f"Using model cache directory: {self.cache_dir}", file=sys.stderr)
 
         try:
-            from lightning_whisper_mlx import LightningWhisperMLX
-
-            # Map our model size to lightning-whisper-mlx model names
-            # lightning-whisper-mlx uses different naming than huggingface repos
-            model_name = self.model_size
-            if model_name == "large-v3":
-                model_name = "large-v3"
-            elif model_name == "large":
-                model_name = "large-v3"  # Default large to v3
-
-            print(f"Verifying/Downloading model: {model_name}...", file=sys.stderr)
-
-            # Create the LightningWhisperMLX instance
-            # This will download the model if not cached
-            self.model = LightningWhisperMLX(
-                model=model_name,
-                batch_size=12,
-                quant=None  # Use full precision for best quality
-            )
+            print(f"Verifying/Downloading model: {self.model_repo}...", file=sys.stderr)
+            self._download_model_files()
+            self.model = {
+                'model_key': self.model_key,
+                'model_dir': str(self.model_dir),
+            }
 
             self.model_ready = True
 
@@ -260,9 +355,6 @@ class MLXWhisperTranscriber:
             print(f"  3. Check that MLX is working: python -c 'import mlx'", file=sys.stderr)
             print(f"", file=sys.stderr)
             raise RuntimeError(f"Failed to load MLX transcription model: {mlx_error}")
-        finally:
-            # Always restore original working directory
-            os.chdir(original_cwd)
 
     def transcribe_file(
         self,
@@ -305,9 +397,7 @@ class MLXWhisperTranscriber:
 
         print(f"Transcribing with Lightning-Whisper-MLX...", file=sys.stderr)
 
-        # LightningWhisperMLX.transcribe() returns a dict with 'text' key
-        # Note: It may also have 'segments' depending on the version
-        result = self.model.transcribe(audio_path=audio_path)
+        result = self._transcribe_audio(audio_path)
 
         print(f"Processing result...", file=sys.stderr)
 
@@ -342,6 +432,8 @@ class MLXWhisperTranscriber:
 
         # Get audio duration (calculate from last segment if available)
         duration = segments_list[-1]['end'] if segments_list else 0.0
+        if duration <= 0:
+            duration = self._probe_audio_duration(audio_path)
 
         # Merge segments into larger chunks for better readability
         # Target: ~20 seconds per chunk (good for long meetings)
@@ -494,6 +586,55 @@ class MLXWhisperTranscriber:
             self.model_ready = False
             print("MLX Transcriber cleaned up", file=sys.stderr)
 
+    def get_model_info(self) -> Dict[str, Any]:
+        """Return metadata about the configured model/runtime."""
+        return {
+            'backend': 'lightning-whisper-mlx',
+            'model_size': self.model_size,
+            'language': self.language,
+            'device': self.device,
+            'compute_type': self.compute_type,
+            'model_key': self.model_key,
+            'model_repo': self.model_repo,
+            'cache_dir': str(self.cache_dir),
+            'model_dir': str(self.model_dir),
+            'loaded': self.model_ready,
+        }
+
+    def _probe_audio_duration(self, audio_path: str) -> float:
+        """Best-effort duration probe when the backend returns no timestamps."""
+        try:
+            import wave
+
+            with wave.open(audio_path, 'rb') as wav_file:
+                frame_rate = wav_file.getframerate()
+                if frame_rate:
+                    return wav_file.getnframes() / float(frame_rate)
+        except Exception:
+            pass
+
+        try:
+            import subprocess
+            result = subprocess.run(
+                [
+                    'ffprobe',
+                    '-v', 'error',
+                    '-show_entries', 'format=duration',
+                    '-of', 'default=noprint_wrappers=1:nokey=1',
+                    audio_path,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return float(result.stdout.strip())
+        except Exception:
+            pass
+
+        return 0.0
+
 
 # Backwards compatibility alias
 TranscriberService = MLXWhisperTranscriber
@@ -542,6 +683,8 @@ def main():
         sys.exit(1)
 
     # Create transcriber
+    transcriber = None
+
     try:
         transcriber = MLXWhisperTranscriber(
             model_size=args.model,
@@ -583,7 +726,7 @@ def main():
         traceback.print_exc(file=sys.stderr)
         sys.exit(1)
     finally:
-        if 'transcriber' in locals():
+        if transcriber is not None:
             try:
                 transcriber.cleanup()
             except Exception as cleanup_error:

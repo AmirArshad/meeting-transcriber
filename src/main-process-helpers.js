@@ -4,18 +4,36 @@ function getModelDownloadCacheDir(homeDir) {
   return path.join(homeDir, '.cache', 'huggingface', 'hub');
 }
 
+function getMacMLXCacheDir(homeDir) {
+  return path.join(homeDir, 'Library', 'Caches', 'meeting-transcriber', 'mlx_models');
+}
+
+function getMacMLXModelStorageDirs(modelSize = 'small') {
+  const size = modelSize || 'small';
+
+  switch (size) {
+    case 'tiny':
+      return ['whisper-tiny-mlx'];
+    case 'base':
+      return ['whisper-base-mlx'];
+    case 'small':
+      return ['distil-small.en', 'whisper-small-mlx'];
+    case 'medium':
+      return ['distil-medium.en', 'whisper-medium-mlx'];
+    case 'large':
+    case 'large-v3':
+      return ['distil-large-v3', 'whisper-large-v3-mlx'];
+    default:
+      return [`distil-${size}.en`, `whisper-${size}-mlx`, `whisper-${size}`];
+  }
+}
+
 function getModelDownloadPatterns(platform, arch, modelSize = 'small') {
   const size = modelSize || 'small';
   const isMacArm = platform === 'darwin' && arch === 'arm64';
 
   if (isMacArm) {
-    return [
-      `models--mlx-community--whisper-${size}-mlx`,
-      `models--mlx-community--whisper-${size}`,
-      `models--distil-whisper--distil-${size}`,
-      `whisper-${size}-mlx`,
-      `distil-${size}`
-    ];
+    return getMacMLXModelStorageDirs(size);
   }
 
   return [`models--guillaumekln--faster-whisper-${size}`];
@@ -23,9 +41,10 @@ function getModelDownloadPatterns(platform, arch, modelSize = 'small') {
 
 function buildModelDownloadCheck({ platform, arch, homeDir, modelSize }) {
   const size = modelSize || 'small';
+  const isMacArm = platform === 'darwin' && arch === 'arm64';
 
   return {
-    cacheDir: getModelDownloadCacheDir(homeDir),
+    cacheDir: isMacArm ? getMacMLXCacheDir(homeDir) : getModelDownloadCacheDir(homeDir),
     modelPatterns: getModelDownloadPatterns(platform, arch, size),
     modelSize: size
   };
@@ -138,7 +157,9 @@ module.exports = {
   buildModelDownloadCheck,
   cacheContainsModel,
   classifyRecorderStdoutChunk,
+  getMacMLXModelStorageDirs,
   getModelDownloadCacheDir,
+  getMacMLXCacheDir,
   getModelDownloadPatterns,
   isModelDownloadErrorOutput,
   normalizeRecorderLevels,
