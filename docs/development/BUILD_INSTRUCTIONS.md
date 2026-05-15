@@ -4,7 +4,7 @@ This document explains how to build Meeting Transcriber from source for the supp
 
 ## Prerequisites
 
-- Node.js 18+ installed
+- Node.js 22.12+ installed; Node 24 is used in CI
 - Internet connection (for downloading Python and ffmpeg during build)
 - Windows 10/11 (64-bit) for Windows builds
 - macOS 13+ on Apple Silicon for macOS builds

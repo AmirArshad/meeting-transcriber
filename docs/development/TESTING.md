@@ -17,7 +17,7 @@ It does not yet include full end-to-end recorder automation with real audio devi
 
 ## Prerequisites
 
-- Node.js 18+
+- Node.js 22.12+; Node 24 is used in CI
 - Python 3.11 recommended
 
 Verify versions:

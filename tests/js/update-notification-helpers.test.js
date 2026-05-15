@@ -8,6 +8,8 @@ const {
   showUpdateNotificationBanner,
 } = require('../../src/renderer/update-notification-helpers');
 
+const UPDATE_DOWNLOAD_BASE = 'https://github.com/AmirArshad/meeting-transcriber/releases/download';
+
 function createBannerElements() {
   return {
     banner: { style: { display: 'none' } },
@@ -36,7 +38,7 @@ test('showUpdateNotificationBanner handles repeated update events in one session
 
   const startupUpdate = showUpdateNotificationBanner({
     ...elements,
-    updateInfo: { version: '1.7.19', downloadUrl: 'https://example.com/v1.7.19' },
+    updateInfo: { version: '1.7.19', downloadUrl: `${UPDATE_DOWNLOAD_BASE}/v1.7.19/Meeting%20Transcriber-Setup-1.7.19.exe` },
     onDownload: firstDownload,
     onDismiss: firstDismiss,
     addLog: (message) => logs.push(message),
@@ -57,7 +59,7 @@ test('showUpdateNotificationBanner handles repeated update events in one session
 
   const manualCheckUpdate = showUpdateNotificationBanner({
     ...elements,
-    updateInfo: { version: '1.7.20', downloadUrl: 'https://example.com/v1.7.20' },
+    updateInfo: { version: '1.7.20', downloadUrl: `${UPDATE_DOWNLOAD_BASE}/v1.7.20/Meeting%20Transcriber-Setup-1.7.20.exe` },
     onDownload: secondDownload,
     onDismiss: secondDismiss,
     addLog: (message) => logs.push(message),
@@ -80,12 +82,12 @@ test('replayPendingUpdateNotification shows update emitted before renderer subsc
   const shown = [];
 
   const result = await replayPendingUpdateNotification({
-    getPendingUpdateInfo: async () => ({ version: '1.7.21', downloadUrl: 'https://example.com/v1.7.21' }),
+    getPendingUpdateInfo: async () => ({ version: '1.7.21', downloadUrl: `${UPDATE_DOWNLOAD_BASE}/v1.7.21/Meeting%20Transcriber-Setup-1.7.21.exe` }),
     showUpdateNotification: (updateInfo) => shown.push(updateInfo),
   });
 
-  assert.deepEqual(result, { version: '1.7.21', downloadUrl: 'https://example.com/v1.7.21' });
-  assert.deepEqual(shown, [{ version: '1.7.21', downloadUrl: 'https://example.com/v1.7.21' }]);
+  assert.deepEqual(result, { version: '1.7.21', downloadUrl: `${UPDATE_DOWNLOAD_BASE}/v1.7.21/Meeting%20Transcriber-Setup-1.7.21.exe` });
+  assert.deepEqual(shown, [{ version: '1.7.21', downloadUrl: `${UPDATE_DOWNLOAD_BASE}/v1.7.21/Meeting%20Transcriber-Setup-1.7.21.exe` }]);
 });
 
 

@@ -204,7 +204,7 @@ Whisper itself supports **99 languages total** - the full list can be customized
 
 ## ⚙️ Technology Stack
 
-- **Frontend:** Electron 28, HTML/CSS/JavaScript
+- **Frontend:** Electron 42, HTML/CSS/JavaScript
 - **Backend:** Python 3.11 (bundled)
 - **AI Models:**
   - Windows: faster-whisper (OpenAI Whisper with CUDA)

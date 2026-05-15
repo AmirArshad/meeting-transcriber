@@ -7,8 +7,9 @@
  * - Handles application lifecycle
  */
 
-const { app, BrowserWindow, ipcMain, Tray, Menu, dialog, powerSaveBlocker } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, dialog, powerSaveBlocker, shell } = require('electron');
 const path = require('path');
+const { pathToFileURL } = require('url');
 const { spawn, execFile } = require('child_process');
 const fs = require('fs');
 const os = require('os');
@@ -26,6 +27,7 @@ const {
   resolveStopTimeoutAction,
   isModelDownloadErrorOutput,
   parseRecorderStdoutChunk,
+  resolveExternalUrl,
   resolveTranscriptionAudioFile,
 } = require('./main-process-helpers');
 const { checkForUpdates, openDownloadPage } = require('./updater');
@@ -76,6 +78,15 @@ function sendToRenderer(channel, payload) {
 function sendUpdateAvailable(updateInfo) {
   pendingUpdateInfo = updateInfo;
   sendToRenderer('update-available', updateInfo);
+}
+
+function openTrustedExternalUrl(url) {
+  const trustedUrl = resolveExternalUrl(url);
+  if (!trustedUrl) {
+    return Promise.reject(new Error(`Blocked untrusted external URL: ${url}`));
+  }
+
+  return shell.openExternal(trustedUrl);
 }
 
 function clearRecordingRuntimeState(reason) {
@@ -900,6 +911,8 @@ function createTray() {
 // Create the main application window
 function createWindow() {
   const windowIcon = getWindowIconPath();
+  const rendererEntryPath = path.join(__dirname, 'renderer', 'index.html');
+  const rendererEntryUrl = pathToFileURL(rendererEntryPath).toString();
 
   mainWindow = new BrowserWindow({
     width: 1200,
@@ -907,14 +920,35 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      sandbox: true,
       preload: path.join(__dirname, 'preload.js')
     },
     titleBarStyle: 'default',
     icon: windowIcon || undefined
   });
 
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    void openTrustedExternalUrl(url).catch((error) => {
+      console.warn(error.message);
+    });
+
+    return { action: 'deny' };
+  });
+
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const currentUrl = mainWindow.webContents.getURL();
+    if (url === currentUrl || url === rendererEntryUrl) {
+      return;
+    }
+
+    event.preventDefault();
+    void openTrustedExternalUrl(url).catch((error) => {
+      console.warn(error.message);
+    });
+  });
+
   // Load the HTML file
-  mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+  mainWindow.loadFile(rendererEntryPath);
 
   // Open DevTools in development mode
   if (process.argv.includes('--dev')) {
@@ -1016,13 +1050,17 @@ function createApplicationMenu() {
         {
           label: 'View on GitHub',
           click: () => {
-            require('electron').shell.openExternal('https://github.com/AmirArshad/meeting-transcriber');
+            void openTrustedExternalUrl('https://github.com/AmirArshad/meeting-transcriber').catch((error) => {
+              console.warn(error.message);
+            });
           }
         },
         {
           label: 'Report Issue',
           click: () => {
-            require('electron').shell.openExternal('https://github.com/AmirArshad/meeting-transcriber/issues');
+            void openTrustedExternalUrl('https://github.com/AmirArshad/meeting-transcriber/issues').catch((error) => {
+              console.warn(error.message);
+            });
           }
         }
       ]
@@ -2426,13 +2464,12 @@ ipcMain.handle('get-arch', async () => {
  */
 ipcMain.handle('open-system-settings', async (event, type) => {
   if (process.platform === 'darwin') {
-    const { shell } = require('electron');
     const urls = {
       'privacy': 'x-apple.systempreferences:com.apple.preference.security?Privacy',
       'microphone': 'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone',
       'screen': 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'
     };
-    await shell.openExternal(urls[type] || urls.microphone);
+    await openTrustedExternalUrl(urls[type] || urls.microphone);
     return { success: true };
   }
   return { success: false, error: 'Only supported on macOS' };
@@ -2469,7 +2506,7 @@ ipcMain.handle('get-system-info', async () => {
  * Open update download page in browser
  */
 ipcMain.handle('download-update', async (event, downloadUrl) => {
-  openDownloadPage(downloadUrl);
+  await openDownloadPage(downloadUrl);
   return { success: true };
 });
 

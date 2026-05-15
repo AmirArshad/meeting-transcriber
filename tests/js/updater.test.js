@@ -1,7 +1,35 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { findInstallerAsset, isNewerVersion } = require('../../src/updater');
+const electronModulePath = require.resolve('electron');
+const updaterModulePath = require.resolve('../../src/updater');
+
+function loadUpdaterWithShell(openExternal = () => Promise.resolve()) {
+  const originalElectronModule = require.cache[electronModulePath];
+  delete require.cache[updaterModulePath];
+
+  require.cache[electronModulePath] = {
+    id: electronModulePath,
+    filename: electronModulePath,
+    loaded: true,
+    exports: {
+      app: { getVersion: () => '1.8.0' },
+      shell: { openExternal },
+    },
+  };
+
+  try {
+    return require(updaterModulePath);
+  } finally {
+    if (originalElectronModule) {
+      require.cache[electronModulePath] = originalElectronModule;
+    } else {
+      delete require.cache[electronModulePath];
+    }
+  }
+}
+
+const { findInstallerAsset, isNewerVersion } = loadUpdaterWithShell();
 
 
 test('isNewerVersion compares semantic versions correctly', () => {
@@ -42,4 +70,42 @@ test('findInstallerAsset matches the actual macOS installer naming convention', 
   } finally {
     Object.defineProperty(process, 'platform', { value: originalPlatform });
   }
+});
+
+
+test('openDownloadPage opens trusted GitHub release URLs', async () => {
+  const openedUrls = [];
+  const { openDownloadPage } = loadUpdaterWithShell((url) => {
+    openedUrls.push(url);
+    return Promise.resolve();
+  });
+
+  await openDownloadPage('https://github.com/AmirArshad/meeting-transcriber/releases/download/v1.8.0/Meeting%20Transcriber-Setup-1.8.0.exe');
+
+  assert.deepEqual(openedUrls, [
+    'https://github.com/AmirArshad/meeting-transcriber/releases/download/v1.8.0/Meeting%20Transcriber-Setup-1.8.0.exe',
+  ]);
+});
+
+
+test('openDownloadPage rejects untrusted update URLs', () => {
+  const openedUrls = [];
+  const { openDownloadPage } = loadUpdaterWithShell((url) => {
+    openedUrls.push(url);
+    return Promise.resolve();
+  });
+
+  assert.throws(
+    () => openDownloadPage('http://github.com/AmirArshad/meeting-transcriber/releases'),
+    /Refusing to open untrusted update URL/,
+  );
+  assert.throws(
+    () => openDownloadPage('https://example.com/Meeting%20Transcriber-Setup-1.8.0.exe'),
+    /Refusing to open untrusted update URL/,
+  );
+  assert.throws(
+    () => openDownloadPage('javascript:alert(1)'),
+    /Refusing to open untrusted update URL/,
+  );
+  assert.deepEqual(openedUrls, []);
 });

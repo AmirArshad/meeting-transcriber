@@ -1,6 +1,8 @@
 const path = require('path');
 const { pathToFileURL } = require('url');
 
+const TRUSTED_GITHUB_PATH_PREFIX = '/AmirArshad/meeting-transcriber';
+
 function buildFileUrl(filePath) {
   const normalizedPath = String(filePath || '').trim();
 
@@ -13,6 +15,33 @@ function buildFileUrl(filePath) {
   }
 
   return pathToFileURL(path.resolve(normalizedPath)).toString();
+}
+
+function isTrustedExternalUrl(url) {
+  try {
+    const parsedUrl = new URL(String(url || ''));
+
+    if (parsedUrl.protocol === 'x-apple.systempreferences:') {
+      return true;
+    }
+
+    return parsedUrl.protocol === 'https:' &&
+      parsedUrl.hostname === 'github.com' &&
+      (
+        parsedUrl.pathname === TRUSTED_GITHUB_PATH_PREFIX ||
+        parsedUrl.pathname.startsWith(`${TRUSTED_GITHUB_PATH_PREFIX}/`)
+      );
+  } catch (error) {
+    return false;
+  }
+}
+
+function resolveExternalUrl(url) {
+  if (!isTrustedExternalUrl(url)) {
+    return null;
+  }
+
+  return new URL(String(url)).toString();
 }
 
 function getModelDownloadCacheDir(homeDir) {
@@ -556,6 +585,8 @@ function buildRecordingPreflightReport({
 
 module.exports = {
   buildFileUrl,
+  isTrustedExternalUrl,
+  resolveExternalUrl,
   buildPermissionErrorMessage,
   buildRecordingPreflightReport,
   buildQuitRecordingDialogOptions,

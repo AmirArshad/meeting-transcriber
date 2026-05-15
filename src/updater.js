@@ -7,6 +7,7 @@
 
 const { app, shell } = require('electron');
 const https = require('https');
+const { resolveExternalUrl } = require('./main-process-helpers');
 
 // GitHub repository info
 const REPO_OWNER = 'AmirArshad';
@@ -165,7 +166,12 @@ function isNewerVersion(latest, current) {
  * @param {string} url - Download or release page URL
  */
 function openDownloadPage(url) {
-  shell.openExternal(url);
+  const trustedUrl = resolveExternalUrl(url);
+  if (!trustedUrl) {
+    throw new Error(`Refusing to open untrusted update URL: ${url}`);
+  }
+
+  return shell.openExternal(trustedUrl);
 }
 
 module.exports = {
