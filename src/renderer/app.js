@@ -38,6 +38,10 @@ let recordingStartTime = null;
 let timerInterval = null;
 let currentAudioFile = null;
 let currentMeetingId = null;
+// Tracks the meeting saved from the most recent recording (post-transcription).
+// Powers the in-place rename on the post-recording transcript card and the
+// default filename used by the "Save" button.
+let currentRecordingMeeting = null;
 let pendingMeetingTranscriptId = null;
 let meetings = [];
 let audioVisualizer = null;
@@ -175,6 +179,205 @@ function createMeetingCheckbox(meetingId) {
   box.appendChild(svg);
 
   return box;
+}
+
+// ============================================================================
+// Lightweight, safe markdown renderer for transcript .md files.
+// Supports: # / ## / ### headings, ---/=== horizontal rules, blockquotes,
+// - / * / 1. lists, **bold**, *italic*, _italic_, `code`, [text](url),
+// and paragraphs separated by blank lines. Does NOT support raw HTML.
+// All output goes through textContent so injection is impossible.
+// ============================================================================
+function renderMarkdownInto(container, markdown) {
+  clearElement(container);
+  if (!markdown || typeof markdown !== 'string') return;
+
+  const lines = markdown.replace(/\r\n/g, '\n').split('\n');
+  let i = 0;
+
+  // Inline parser: returns an array of DOM nodes for a line of text.
+  function renderInline(text) {
+    const nodes = [];
+    const len = text.length;
+    let buf = '';
+    const flushText = () => {
+      if (buf) {
+        nodes.push(document.createTextNode(buf));
+        buf = '';
+      }
+    };
+
+    let j = 0;
+    while (j < len) {
+      const ch = text[j];
+
+      // Inline code: `...`
+      if (ch === '`') {
+        const end = text.indexOf('`', j + 1);
+        if (end > j) {
+          flushText();
+          const code = document.createElement('code');
+          code.textContent = text.slice(j + 1, end);
+          nodes.push(code);
+          j = end + 1;
+          continue;
+        }
+      }
+
+      // Bold: **...**
+      if (ch === '*' && text[j + 1] === '*') {
+        const end = text.indexOf('**', j + 2);
+        if (end > j + 1) {
+          flushText();
+          const strong = document.createElement('strong');
+          strong.append(...renderInline(text.slice(j + 2, end)));
+          nodes.push(strong);
+          j = end + 2;
+          continue;
+        }
+      }
+
+      // Italic: *...* or _..._  (must not consume bold)
+      if ((ch === '*' || ch === '_') && text[j + 1] !== ch) {
+        const end = text.indexOf(ch, j + 1);
+        if (end > j) {
+          flushText();
+          const em = document.createElement('em');
+          em.append(...renderInline(text.slice(j + 1, end)));
+          nodes.push(em);
+          j = end + 1;
+          continue;
+        }
+      }
+
+      // Link: [text](url)
+      if (ch === '[') {
+        const closeBracket = text.indexOf(']', j + 1);
+        if (closeBracket > j && text[closeBracket + 1] === '(') {
+          const closeParen = text.indexOf(')', closeBracket + 2);
+          if (closeParen > closeBracket) {
+            const linkText = text.slice(j + 1, closeBracket);
+            const url = text.slice(closeBracket + 2, closeParen).trim();
+            // Only allow safe URL schemes
+            if (/^(https?:|mailto:|#)/i.test(url) || url.startsWith('/') || url.startsWith('.')) {
+              flushText();
+              const a = document.createElement('a');
+              a.href = url;
+              a.target = '_blank';
+              a.rel = 'noopener noreferrer';
+              a.append(...renderInline(linkText));
+              nodes.push(a);
+              j = closeParen + 1;
+              continue;
+            }
+          }
+        }
+      }
+
+      buf += ch;
+      j++;
+    }
+    flushText();
+    return nodes;
+  }
+
+  function isHr(line) {
+    const t = line.trim();
+    return t === '---' || t === '***' || t === '___';
+  }
+
+  while (i < lines.length) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    // Blank line
+    if (trimmed === '') { i++; continue; }
+
+    // Headings
+    const headingMatch = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(trimmed);
+    if (headingMatch) {
+      const level = Math.min(6, headingMatch[1].length);
+      const h = document.createElement('h' + level);
+      h.append(...renderInline(headingMatch[2]));
+      container.appendChild(h);
+      i++;
+      continue;
+    }
+
+    // Horizontal rule
+    if (isHr(line)) {
+      container.appendChild(document.createElement('hr'));
+      i++;
+      continue;
+    }
+
+    // Blockquote (collapse consecutive lines)
+    if (/^>\s?/.test(trimmed)) {
+      const bq = document.createElement('blockquote');
+      const buf = [];
+      while (i < lines.length && /^>\s?/.test(lines[i].trim())) {
+        buf.push(lines[i].trim().replace(/^>\s?/, ''));
+        i++;
+      }
+      const p = document.createElement('p');
+      p.append(...renderInline(buf.join(' ')));
+      bq.appendChild(p);
+      container.appendChild(bq);
+      continue;
+    }
+
+    // Unordered list
+    if (/^[-*+]\s+/.test(trimmed)) {
+      const ul = document.createElement('ul');
+      while (i < lines.length && /^[-*+]\s+/.test(lines[i].trim())) {
+        const li = document.createElement('li');
+        li.append(...renderInline(lines[i].trim().replace(/^[-*+]\s+/, '')));
+        ul.appendChild(li);
+        i++;
+      }
+      container.appendChild(ul);
+      continue;
+    }
+
+    // Ordered list
+    if (/^\d+\.\s+/.test(trimmed)) {
+      const ol = document.createElement('ol');
+      while (i < lines.length && /^\d+\.\s+/.test(lines[i].trim())) {
+        const li = document.createElement('li');
+        li.append(...renderInline(lines[i].trim().replace(/^\d+\.\s+/, '')));
+        ol.appendChild(li);
+        i++;
+      }
+      container.appendChild(ol);
+      continue;
+    }
+
+    // Paragraph: collapse consecutive non-blank lines, preserving "  \n" hard breaks
+    const buf = [];
+    while (i < lines.length) {
+      const cur = lines[i];
+      const curTrim = cur.trim();
+      if (curTrim === '' || isHr(cur) || /^(#{1,6})\s+/.test(curTrim) ||
+          /^[-*+]\s+/.test(curTrim) || /^\d+\.\s+/.test(curTrim) ||
+          /^>\s?/.test(curTrim)) break;
+      // Two trailing spaces = hard break
+      const hardBreak = /  $/.test(cur);
+      buf.push({ text: curTrim, hardBreak });
+      i++;
+    }
+    if (buf.length) {
+      const p = document.createElement('p');
+      buf.forEach((item, idx) => {
+        p.append(...renderInline(item.text));
+        if (item.hardBreak && idx < buf.length - 1) {
+          p.appendChild(document.createElement('br'));
+        } else if (idx < buf.length - 1) {
+          p.appendChild(document.createTextNode(' '));
+        }
+      });
+      container.appendChild(p);
+    }
+  }
 }
 
 function createMeetingListItem(meeting) {
@@ -744,7 +947,12 @@ async function selectMeeting(meetingId) {
   meetingDetails.style.display = 'flex';
 
   const transcriptEl = document.getElementById('meeting-transcript');
-  transcriptEl.textContent = 'Loading transcript...';
+  transcriptEl.classList.add('markdown-body');
+  clearElement(transcriptEl);
+  const loading = document.createElement('p');
+  loading.className = 'placeholder';
+  loading.textContent = 'Loading transcript...';
+  transcriptEl.appendChild(loading);
 
   try {
     const fullMeeting = await window.electronAPI.getMeeting(meetingId);
@@ -753,11 +961,24 @@ async function selectMeeting(meetingId) {
       return;
     }
 
-    transcriptEl.textContent = fullMeeting.transcript || 'No transcript available';
+    if (fullMeeting.transcript) {
+      transcriptEl.dataset.markdown = fullMeeting.transcript;
+      renderMarkdownInto(transcriptEl, fullMeeting.transcript);
+    } else {
+      clearElement(transcriptEl);
+      const empty = document.createElement('p');
+      empty.className = 'placeholder';
+      empty.textContent = 'No transcript available';
+      transcriptEl.appendChild(empty);
+    }
   } catch (error) {
     console.error(`Failed to load meeting transcript: ${error.message}`);
     if (currentMeetingId === meetingId && pendingMeetingTranscriptId === meetingId) {
-      transcriptEl.textContent = 'Failed to load transcript';
+      clearElement(transcriptEl);
+      const err = document.createElement('p');
+      err.className = 'placeholder error';
+      err.textContent = 'Failed to load transcript';
+      transcriptEl.appendChild(err);
     }
   } finally {
     if (pendingMeetingTranscriptId === meetingId) {
@@ -765,6 +986,162 @@ async function selectMeeting(meetingId) {
     }
   }
 
+}
+
+// ============================================================================
+// Inline rename: meeting title (history detail + post-recording transcript)
+// ============================================================================
+
+// Reflects currentRecordingMeeting onto the post-recording transcript card.
+// When no meeting has been saved yet, the heading reads "Transcript" and the
+// pencil button is hidden. After save, it shows the meeting label and lets
+// the user rename it in place.
+function applyCurrentRecordingTitle() {
+  const heading = document.getElementById('current-meeting-title');
+  const editBtn = document.getElementById('current-meeting-title-edit');
+  if (!heading) return;
+
+  if (currentRecordingMeeting && currentRecordingMeeting.title) {
+    heading.textContent = currentRecordingMeeting.title;
+    if (editBtn) editBtn.style.display = 'inline-flex';
+  } else {
+    heading.textContent = 'Transcript';
+    if (editBtn) editBtn.style.display = 'none';
+  }
+}
+
+// Wires an inline-rename UI for a heading + pencil button + form trio.
+// `getMeeting()` returns the meeting being renamed (history detail uses
+// `currentMeetingId`, post-recording uses `currentRecordingMeeting`).
+// `onSaved(updated)` fires after a successful update so callers can refresh
+// any local caches and the meeting list.
+function wireInlineTitleEditor({
+  rowId, headingId, editBtnId, formId, inputId, cancelBtnId,
+  getMeeting, onSaved,
+}) {
+  const row = document.getElementById(rowId);
+  const heading = document.getElementById(headingId);
+  const editBtn = document.getElementById(editBtnId);
+  const form = document.getElementById(formId);
+  const input = document.getElementById(inputId);
+  const cancelBtn = document.getElementById(cancelBtnId);
+
+  if (!row || !heading || !editBtn || !form || !input || !cancelBtn) return;
+
+  const enterEditMode = () => {
+    const meeting = getMeeting();
+    if (!meeting) return;
+    input.value = meeting.title || '';
+    heading.style.display = 'none';
+    editBtn.style.display = 'none';
+    form.style.display = 'flex';
+    // Defer focus + select to next tick so display change has applied
+    requestAnimationFrame(() => {
+      input.focus();
+      input.select();
+    });
+  };
+
+  const exitEditMode = () => {
+    form.style.display = 'none';
+    heading.style.display = '';
+    // editBtn visibility is governed by the caller (e.g. post-recording hides
+    // it until a meeting exists). We only restore it if the caller wanted it
+    // visible — defer to applyCurrentRecordingTitle / selectMeeting to set it.
+    editBtn.style.display = '';
+  };
+
+  editBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    enterEditMode();
+  });
+
+  cancelBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    exitEditMode();
+  });
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      exitEditMode();
+    }
+  });
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const meeting = getMeeting();
+    if (!meeting) {
+      exitEditMode();
+      return;
+    }
+    const newTitle = (input.value || '').trim();
+    if (!newTitle || newTitle === meeting.title) {
+      exitEditMode();
+      return;
+    }
+    try {
+      const updated = await window.electronAPI.updateMeeting(meeting.id, { title: newTitle });
+      if (updated && updated.title) {
+        heading.textContent = updated.title;
+        if (typeof onSaved === 'function') onSaved(updated);
+        addLog(`Renamed meeting to "${updated.title}"`);
+      }
+    } catch (err) {
+      console.error('Rename failed:', err);
+      addLog(`Failed to rename meeting: ${err.message}`, 'error');
+      alert(`Failed to rename meeting: ${err.message}`);
+    } finally {
+      exitEditMode();
+    }
+  });
+}
+
+function setupTitleEditors() {
+  // History detail panel
+  wireInlineTitleEditor({
+    rowId: 'meeting-title-row',
+    headingId: 'meeting-title',
+    editBtnId: 'meeting-title-edit',
+    formId: 'meeting-title-edit-form',
+    inputId: 'meeting-title-input',
+    cancelBtnId: 'meeting-title-cancel',
+    getMeeting: () => meetings.find(m => m.id === currentMeetingId) || null,
+    onSaved: (updated) => {
+      // Update local cache and re-render meeting list to reflect the new title
+      const idx = meetings.findIndex(m => m.id === updated.id);
+      if (idx !== -1) {
+        meetings[idx] = { ...meetings[idx], title: updated.title };
+      }
+      renderMeetingList();
+      // Mirror onto the post-recording card if the same meeting is shown there
+      if (currentRecordingMeeting && currentRecordingMeeting.id === updated.id) {
+        currentRecordingMeeting = { ...currentRecordingMeeting, title: updated.title };
+        applyCurrentRecordingTitle();
+      }
+    },
+  });
+
+  // Post-recording transcript card
+  wireInlineTitleEditor({
+    rowId: 'current-transcript-title-row',
+    headingId: 'current-meeting-title',
+    editBtnId: 'current-meeting-title-edit',
+    formId: 'current-meeting-title-form',
+    inputId: 'current-meeting-title-input',
+    cancelBtnId: 'current-meeting-title-cancel',
+    getMeeting: () => currentRecordingMeeting,
+    onSaved: (updated) => {
+      currentRecordingMeeting = { ...currentRecordingMeeting, title: updated.title };
+      applyCurrentRecordingTitle();
+      // Also update the cached history list so the sidebar reflects the change
+      const idx = meetings.findIndex(m => m.id === updated.id);
+      if (idx !== -1) {
+        meetings[idx] = { ...meetings[idx], title: updated.title };
+        renderMeetingList();
+      }
+    },
+  });
 }
 
 // Setup event listeners
@@ -790,6 +1167,12 @@ function setupEventListeners() {
   const copyTranscriptBtn = document.getElementById('copy-transcript-btn');
   if (copyTranscriptBtn) {
     copyTranscriptBtn.addEventListener('click', copyMeetingTranscript);
+  }
+
+  // Save transcript from meeting details (history)
+  const saveMeetingTranscriptBtn = document.getElementById('save-meeting-transcript-btn');
+  if (saveMeetingTranscriptBtn) {
+    saveMeetingTranscriptBtn.addEventListener('click', saveMeetingTranscriptToFile);
   }
 
   // Meeting search filter
@@ -1032,6 +1415,11 @@ async function runRecordingPreflightChecks({ micId, desktopId }) {
 
 // Start recording with retry logic
 async function startRecording() {
+  // Reset any previous recording's saved-meeting context so the title
+  // collapses back to "Transcript" until the new recording is saved.
+  currentRecordingMeeting = null;
+  applyCurrentRecordingTitle();
+
   const micId = micSelect.value;
   const desktopId = desktopSelect.value;
 
@@ -1306,6 +1694,10 @@ async function transcribeAudio() {
       if (savedMeeting && savedMeeting.audioPath) {
         currentAudioFile = savedMeeting.audioPath;
       }
+      if (savedMeeting && savedMeeting.id) {
+        currentRecordingMeeting = savedMeeting;
+        applyCurrentRecordingTitle();
+      }
       addLog('Meeting saved!');
     } catch (saveError) {
       console.error('Failed to save meeting:', saveError);
@@ -1335,7 +1727,8 @@ function copyTranscript() {
 // Copy meeting transcript to clipboard
 function copyMeetingTranscript() {
   const transcriptEl = document.getElementById('meeting-transcript');
-  const text = transcriptEl.textContent;
+  // Prefer the original markdown source so users get the .md they expect.
+  const text = transcriptEl.dataset.markdown || transcriptEl.textContent;
 
   navigator.clipboard.writeText(text).then(() => {
     // Visual feedback
@@ -1351,10 +1744,92 @@ function copyMeetingTranscript() {
   });
 }
 
-// Save transcript
-function saveTranscript() {
-  // TODO: Implement file save dialog via IPC
-  addLog('Save feature coming soon!');
+// Save the currently selected history meeting's transcript via native dialog.
+// Defaults the filename to the meeting's display label so renamed meetings
+// save with the user-friendly name they chose.
+async function saveMeetingTranscriptToFile() {
+  if (!currentMeetingId) {
+    addLog('No meeting selected to save.', 'warning');
+    return;
+  }
+
+  const meeting = meetings.find(m => m.id === currentMeetingId);
+  const suggestedName = (meeting && meeting.title) || 'Transcript';
+  const transcriptEl = document.getElementById('meeting-transcript');
+  let content = (transcriptEl && transcriptEl.dataset.markdown) || '';
+
+  if (!content) {
+    try {
+      const fullMeeting = await window.electronAPI.getMeeting(currentMeetingId);
+      content = (fullMeeting && fullMeeting.transcript) || '';
+    } catch (err) {
+      console.error('Failed to load transcript for save:', err);
+      addLog(`Failed to load transcript: ${err.message}`, 'error');
+      return;
+    }
+  }
+
+  if (!content.trim()) {
+    addLog('Transcript is empty.', 'warning');
+    return;
+  }
+
+  try {
+    const result = await window.electronAPI.saveTranscriptAs({ suggestedName, content });
+    if (result && !result.canceled && result.filePath) {
+      addLog(`Transcript saved to ${result.filePath}`);
+    }
+  } catch (err) {
+    console.error('Save failed:', err);
+    addLog(`Failed to save transcript: ${err.message}`, 'error');
+    alert(`Failed to save transcript: ${err.message}`);
+  }
+}
+
+// Save transcript via native Save dialog. Default filename uses the
+// current recording's display label (renamed or auto-generated) so users
+// get a meaningful name without further typing.
+async function saveTranscript() {
+  // Prefer the rich markdown saved on disk by the backend transcriber when
+  // available, falling back to whatever is currently in the transcript pane.
+  let content = '';
+  let suggestedName = 'Transcript';
+
+  if (currentRecordingMeeting && currentRecordingMeeting.id) {
+    suggestedName = currentRecordingMeeting.title || suggestedName;
+    try {
+      const fullMeeting = await window.electronAPI.getMeeting(currentRecordingMeeting.id);
+      if (fullMeeting && fullMeeting.transcript) {
+        content = fullMeeting.transcript;
+      }
+    } catch (err) {
+      console.warn('Failed to load saved transcript markdown, falling back to plain text:', err);
+    }
+  }
+
+  if (!content) {
+    // Fallback: assemble plain text from the rendered transcript output
+    content = (transcriptOutput && transcriptOutput.textContent) || '';
+  }
+
+  if (!content.trim()) {
+    addLog('Nothing to save yet.', 'warning');
+    return;
+  }
+
+  try {
+    const result = await window.electronAPI.saveTranscriptAs({
+      suggestedName,
+      content,
+    });
+    if (result && !result.canceled && result.filePath) {
+      addLog(`Transcript saved to ${result.filePath}`);
+    }
+  } catch (err) {
+    console.error('Save failed:', err);
+    addLog(`Failed to save transcript: ${err.message}`, 'error');
+    alert(`Failed to save transcript: ${err.message}`);
+  }
 }
 
 // Delete meeting
@@ -1809,7 +2284,7 @@ class AudioVisualizer {
     this.desktopCtx = this.desktopCanvas.getContext('2d');
 
     // History buffers — current displayed values (smoothly interpolated)
-    this.bufferSize = 64;
+    this.bufferSize = 96;
     this.micBuffer = new Array(this.bufferSize).fill(0);
     this.desktopBuffer = new Array(this.bufferSize).fill(0);
 
@@ -1989,8 +2464,8 @@ class AudioVisualizer {
     ctx.clearRect(0, 0, width, height);
 
     const colWidth = width / n;
-    const barWidth = Math.max(1.5, colWidth - 1.6);
-    const radius = Math.min(barWidth / 2, 2.5);
+    const barWidth = Math.max(1.2, colWidth - 1.4);
+    const radius = Math.min(barWidth / 2, 1.6);
 
     // Background midline (subtle baseline)
     ctx.strokeStyle = `rgba(${colorBase}, 0.10)`;
@@ -2004,10 +2479,11 @@ class AudioVisualizer {
     const amps = new Array(n);
     const peakAmps = new Array(n);
     let maxAmp = 0;
+    const ampScale = height * 0.40;
     for (let i = 0; i < n; i++) {
-      const a = this._shape(buffer[i]) * (height * 0.46);
-      amps[i] = Math.max(1.5, a);
-      peakAmps[i] = Math.max(amps[i], this._shape(peaks[i]) * (height * 0.46));
+      const a = this._shape(buffer[i]) * ampScale;
+      amps[i] = Math.max(1.0, a);
+      peakAmps[i] = Math.max(amps[i], this._shape(peaks[i]) * ampScale);
       if (amps[i] > maxAmp) maxAmp = amps[i];
     }
 
@@ -2018,11 +2494,11 @@ class AudioVisualizer {
     grad.addColorStop(1.0, `rgba(${colorBase}, 0.95)`);
 
     // Soft glow underlay (proportional to overall energy)
-    const energy = Math.min(1, maxAmp / (height * 0.46));
+    const energy = Math.min(1, maxAmp / ampScale);
     if (energy > 0.05) {
       ctx.save();
-      ctx.shadowColor = `rgba(${colorBase}, ${0.35 + energy * 0.45})`;
-      ctx.shadowBlur = 8 + energy * 14;
+      ctx.shadowColor = `rgba(${colorBase}, ${0.3 + energy * 0.4})`;
+      ctx.shadowBlur = 4 + energy * 8;
       ctx.fillStyle = grad;
       for (let i = 0; i < n; i++) {
         const x = i * colWidth + (colWidth - barWidth) / 2;
@@ -2050,7 +2526,7 @@ class AudioVisualizer {
       const peak = peakAmps[i];
       if (peak <= amps[i] + 0.5) continue;
       const x = i * colWidth + (colWidth - barWidth) / 2;
-      const capH = 1.6;
+      const capH = 1.0;
       // top cap
       ctx.fillRect(x, midY - peak - capH / 2, barWidth, capH);
       // bottom cap (mirrored)
@@ -2294,4 +2770,5 @@ init();
 setupTabs();
 setupDevConsole();
 setupCustomAudioPlayer();
+setupTitleEditors();
 initSettingsTab();

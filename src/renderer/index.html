@@ -47,11 +47,13 @@
       <!-- Vertical icon rail -->
       <nav class="icon-rail" aria-label="Primary">
         <div class="rail-logo" aria-hidden="true" title="Meeting Transcriber">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
-            <path d="M5 11a7 7 0 0 0 14 0"/>
-            <line x1="12" y1="18" x2="12" y2="22"/>
-          </svg>
+          <span class="rail-logo-mark">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
+              <path d="M5 11a7 7 0 0 0 14 0"/>
+              <line x1="12" y1="18" x2="12" y2="22"/>
+            </svg>
+          </span>
         </div>
 
         <button type="button" class="rail-btn active" data-tab="record" aria-label="Record">
@@ -269,7 +271,37 @@
               <!-- Current Transcript -->
               <div class="current-transcript" id="current-transcript">
                 <div class="transcript-header">
-                  <h3>Transcript</h3>
+                  <div class="current-transcript-title" id="current-transcript-title-row">
+                    <h3 id="current-meeting-title">Transcript</h3>
+                    <button
+                      type="button"
+                      id="current-meeting-title-edit"
+                      class="title-edit-btn"
+                      title="Rename meeting"
+                      aria-label="Rename meeting"
+                      style="display: none"
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 20h9"/>
+                        <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/>
+                      </svg>
+                    </button>
+                    <form
+                      id="current-meeting-title-form"
+                      class="title-edit-form"
+                      style="display: none"
+                    >
+                      <input
+                        type="text"
+                        id="current-meeting-title-input"
+                        class="title-edit-input"
+                        maxlength="120"
+                        autocomplete="off"
+                      />
+                      <button type="submit" class="btn btn-small btn-primary">Save</button>
+                      <button type="button" id="current-meeting-title-cancel" class="btn btn-small">Cancel</button>
+                    </form>
+                  </div>
                   <div
                     class="transcript-actions"
                     id="transcript-actions"
@@ -394,8 +426,37 @@
                         width: 100%;
                       "
                     >
-                      <div style="min-width: 0">
-                        <h2 id="meeting-title">Meeting Details</h2>
+                      <div style="min-width: 0; flex: 1">
+                        <div class="meeting-title-row" id="meeting-title-row">
+                          <h2 id="meeting-title">Meeting Details</h2>
+                          <button
+                            type="button"
+                            id="meeting-title-edit"
+                            class="title-edit-btn"
+                            title="Rename meeting"
+                            aria-label="Rename meeting"
+                          >
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                              <path d="M12 20h9"/>
+                              <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/>
+                            </svg>
+                          </button>
+                        </div>
+                        <form
+                          id="meeting-title-edit-form"
+                          class="title-edit-form"
+                          style="display: none"
+                        >
+                          <input
+                            type="text"
+                            id="meeting-title-input"
+                            class="title-edit-input"
+                            maxlength="120"
+                            autocomplete="off"
+                          />
+                          <button type="submit" class="btn btn-small btn-primary">Save</button>
+                          <button type="button" id="meeting-title-cancel" class="btn btn-small">Cancel</button>
+                        </form>
                         <div class="meeting-meta">
                           <span id="meeting-date"></span>
                           <span class="meta-separator">&middot;</span>
@@ -465,9 +526,14 @@
                   <div class="transcript-section">
                     <div class="transcript-header-row">
                       <h3>Transcript</h3>
-                      <button id="copy-transcript-btn" class="btn btn-small">
-                        Copy
-                      </button>
+                      <div class="transcript-section-actions">
+                        <button id="copy-transcript-btn" class="btn btn-small">
+                          Copy
+                        </button>
+                        <button id="save-meeting-transcript-btn" class="btn btn-small">
+                          Save
+                        </button>
+                      </div>
                     </div>
                     <div
                       class="meeting-transcript"

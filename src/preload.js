@@ -85,6 +85,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getMeeting: (meetingId) => ipcRenderer.invoke('get-meeting', meetingId),
   deleteMeeting: (meetingId) => ipcRenderer.invoke('delete-meeting', meetingId),
   addMeeting: (meetingData) => ipcRenderer.invoke('add-meeting', meetingData),
+  updateMeeting: (meetingId, updates) => ipcRenderer.invoke('update-meeting', { meetingId, updates }),
+  saveTranscriptAs: (options) => ipcRenderer.invoke('save-transcript-as', options),
   scanRecordings: () => ipcRenderer.invoke('scan-recordings'),
 
   // GPU acceleration

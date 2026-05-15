@@ -2286,6 +2286,93 @@ ipcMain.handle('add-meeting', async (event, meetingData) => {
 });
 
 /**
+ * Update editable meeting metadata (currently: display title).
+ *
+ * Audio/transcript filenames stay anchored to the meeting ID; only the
+ * label that the UI shows changes.
+ */
+ipcMain.handle('update-meeting', async (event, payload) => {
+  const meetingId = payload && payload.meetingId;
+  const updates = (payload && payload.updates) || {};
+  if (!meetingId) {
+    throw new Error('update-meeting requires a meetingId');
+  }
+
+  const recordingsDir = path.join(app.getPath('userData'), 'recordings');
+  const args = [
+    '--recordings-dir', recordingsDir,
+    'update',
+    String(meetingId),
+  ];
+  if (typeof updates.title === 'string') {
+    args.push('--title', updates.title);
+  }
+
+  return new Promise((resolve, reject) => {
+    const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', args), {
+      cwd: pythonConfig.backendPath,
+    });
+
+    let output = '';
+    let errorOutput = '';
+
+    python.stdout.on('data', (data) => { output += data.toString(); });
+    python.stderr.on('data', (data) => { errorOutput += data.toString(); });
+
+    python.on('close', (code) => {
+      if (code === 0) {
+        try {
+          resolve(JSON.parse(output));
+        } catch (e) {
+          reject(new Error(`Failed to parse updated meeting: ${e.message}`));
+        }
+      } else {
+        reject(new Error(errorOutput.trim() || 'Failed to update meeting'));
+      }
+    });
+
+    python.on('error', (err) => reject(err));
+  });
+});
+
+/**
+ * Show a Save dialog and write the supplied transcript text to disk.
+ *
+ * The renderer chooses the suggested filename (typically derived from the
+ * meeting's display label) so users get a meaningful default name.
+ */
+ipcMain.handle('save-transcript-as', async (event, options) => {
+  const opts = options || {};
+  const suggestedName = (opts.suggestedName || 'transcript').toString();
+  const content = typeof opts.content === 'string' ? opts.content : '';
+
+  // Sanitize for filesystem (Windows + macOS safe)
+  const safeName = suggestedName
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 120) || 'transcript';
+
+  const window = BrowserWindow.fromWebContents(event.sender);
+  const result = await dialog.showSaveDialog(window, {
+    title: 'Save Transcript',
+    defaultPath: safeName.toLowerCase().endsWith('.md') ? safeName : `${safeName}.md`,
+    filters: [
+      { name: 'Markdown', extensions: ['md'] },
+      { name: 'Text', extensions: ['txt'] },
+      { name: 'All Files', extensions: ['*'] },
+    ],
+  });
+
+  if (result.canceled || !result.filePath) {
+    return { canceled: true };
+  }
+
+  await fs.promises.writeFile(result.filePath, content, 'utf8');
+  return { canceled: false, filePath: result.filePath };
+});
+
+/**
  * Check GPU availability (detect NVIDIA GPU)
  */
 ipcMain.handle('check-gpu', async () => {
