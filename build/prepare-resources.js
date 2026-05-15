@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
-const { execSync } = require('child_process');
+const { execFileSync, execSync } = require('child_process');
 const AdmZip = require('adm-zip');
 const { BUILD_DOWNLOADS, getBuildDownload, hashString, verifyFileChecksum } = require('./download-manifest');
 
@@ -216,6 +216,39 @@ function assertNoWindowsOnlyStaleHelper() {
 function ensureWindowsEmptyBinDirectory() {
   if (IS_WINDOWS && !fs.existsSync(BIN_DIR)) {
     fs.mkdirSync(BIN_DIR, { recursive: true });
+  }
+}
+
+function buildMacOSHelperVerificationCommands(helperPath) {
+  return [
+    { command: 'codesign', args: ['--verify', '--strict', '--verbose=2', helperPath] },
+    { command: 'codesign', args: ['-d', '--entitlements', ':-', helperPath] },
+  ];
+}
+
+function macOSHelperEntitlementsIncludeInherit(entitlementsOutput) {
+  return String(entitlementsOutput || '').includes('com.apple.security.inherit');
+}
+
+function verifyMacOSHelperSignature(helperPath = path.join(BIN_DIR, SWIFT_HELPER_BINARY)) {
+  if (!IS_MAC) {
+    return;
+  }
+
+  if (!fs.existsSync(helperPath)) {
+    throw new Error(`macOS audiocapture-helper missing at ${helperPath}`);
+  }
+
+  const [verifyCommand, entitlementsCommand] = buildMacOSHelperVerificationCommands(helperPath);
+  execFileSync(verifyCommand.command, verifyCommand.args, { stdio: 'inherit' });
+
+  const entitlementsOutput = execFileSync(entitlementsCommand.command, entitlementsCommand.args, {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  if (!macOSHelperEntitlementsIncludeInherit(entitlementsOutput)) {
+    throw new Error('macOS audiocapture-helper is missing com.apple.security.inherit entitlement.');
   }
 }
 
@@ -765,11 +798,13 @@ async function prepareResources() {
       try {
         buildSwiftHelper();
       } catch (error) {
-        console.error('⚠️ Warning: Swift helper build failed:', error.message);
-        console.log('  Desktop audio capture may not work without the Swift helper.\n');
-        // Don't fail the build - PyObjC fallback may still work
+        console.error('ERROR: Swift helper build failed:', error.message);
+        console.log('  macOS desktop audio capture requires the bundled Swift helper.\n');
+        throw error;
       }
     }
+
+    verifyMacOSHelperSignature();
   }
 
   assertNoWindowsOnlyStaleHelper();
@@ -814,10 +849,13 @@ module.exports = {
   buildDirectoryManifest,
   buildResourceManifest,
   ensureWindowsEmbeddedPythonPathConfig,
+  buildMacOSHelperVerificationCommands,
+  macOSHelperEntitlementsIncludeInherit,
   getStaleResourceDirectories,
   ensureWindowsEmptyBinDirectory,
   listFilesRecursively,
   manifestsMatch,
   prepareResources,
   pruneMacOSPythonRuntimeDevelopmentFiles,
+  verifyMacOSHelperSignature,
 };

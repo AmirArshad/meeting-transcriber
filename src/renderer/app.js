@@ -456,9 +456,18 @@ function setMeetingAudioSource(audioPath) {
 function handleMacOSPermissionFailure(permissionStatus) {
   const missingMicrophone = permissionStatus?.missingMicrophone;
   const missingScreenRecording = permissionStatus?.missingScreenRecording;
+  const missingDesktopAudio = permissionStatus?.missingDesktopAudio;
 
-  if (!missingMicrophone && !missingScreenRecording) {
+  if (!missingMicrophone && !missingScreenRecording && !missingDesktopAudio) {
     return false;
+  }
+
+  if (missingDesktopAudio && !missingMicrophone && !missingScreenRecording) {
+    alert(
+      'Recording cannot start because macOS desktop audio capture is unavailable.\n\n' +
+      'Please reinstall AvaNevis or rebuild the app so the bundled audiocapture-helper is present and signed.'
+    );
+    return true;
   }
 
   let message = 'Recording cannot start until macOS permissions are granted.\n\n';
@@ -469,6 +478,11 @@ function handleMacOSPermissionFailure(permissionStatus) {
 
   if (missingScreenRecording) {
     message += '- Grant Screen Recording access in System Settings > Privacy & Security > Screen Recording\n';
+    message += '- Restart AvaNevis after granting Screen Recording access\n';
+  }
+
+  if (missingDesktopAudio) {
+    message += '- Reinstall AvaNevis or rebuild the app so desktop audio capture is bundled correctly\n';
   }
 
   message += '\nOpen System Settings now?';

@@ -2,6 +2,7 @@ const path = require('path');
 const { pathToFileURL } = require('url');
 
 const TRUSTED_GITHUB_PATH_PREFIX = '/AmirArshad/meeting-transcriber';
+const MACOS_PERMISSION_CHECK_TIMEOUT_MS = 8000;
 
 function buildFileUrl(filePath) {
   const normalizedPath = String(filePath || '').trim();
@@ -484,6 +485,35 @@ function buildPermissionErrorMessage(label, permissionCheck = {}) {
   return parts.join(' ');
 }
 
+function buildDesktopAudioAvailabilityError(desktopAudioCheck = {}) {
+  const parts = ['Desktop audio capture is unavailable.'];
+
+  if (desktopAudioCheck.error) {
+    parts.push(String(desktopAudioCheck.error).trim());
+  }
+
+  if (desktopAudioCheck.help) {
+    parts.push(String(desktopAudioCheck.help).trim());
+  }
+
+  return parts.join(' ');
+}
+
+function buildMacOSPermissionCheckFailureStatus(warning) {
+  return {
+    platform: 'darwin',
+    all_granted: false,
+    warning,
+    microphone: { granted: true },
+    screen_recording: { granted: true },
+    desktop_audio: {
+      available: false,
+      error: 'macOS recording permission and desktop-audio preflight could not be verified.',
+      help: 'Restart AvaNevis. If this persists, reinstall the app or rebuild the macOS package.',
+    },
+  };
+}
+
 function buildRecordingPreflightReport({
   platform,
   deviceCheck = {},
@@ -518,6 +548,7 @@ function buildRecordingPreflightReport({
   if (platform === 'darwin' && permissionCheck) {
     const missingMicrophone = permissionCheck.microphone?.granted === false;
     const missingScreenRecording = permissionCheck.screen_recording?.granted === false;
+    const missingDesktopAudio = permissionCheck.desktop_audio?.available === false;
 
     if (missingMicrophone) {
       errors.push(buildPermissionErrorMessage('Microphone', permissionCheck.microphone));
@@ -527,6 +558,10 @@ function buildRecordingPreflightReport({
       errors.push(buildPermissionErrorMessage('Screen Recording', permissionCheck.screen_recording));
     }
 
+    if (missingDesktopAudio) {
+      errors.push(buildDesktopAudioAvailabilityError(permissionCheck.desktop_audio));
+    }
+
     if (permissionCheck.warning) {
       warnings.push(permissionCheck.warning);
     }
@@ -534,6 +569,7 @@ function buildRecordingPreflightReport({
     permissionStatus = {
       missingMicrophone,
       missingScreenRecording,
+      missingDesktopAudio,
       settingsTarget: missingMicrophone && missingScreenRecording
         ? 'privacy'
         : (missingMicrophone ? 'microphone' : (missingScreenRecording ? 'screen' : null)),
@@ -585,6 +621,8 @@ function buildRecordingPreflightReport({
 
 module.exports = {
   buildFileUrl,
+  buildDesktopAudioAvailabilityError,
+  buildMacOSPermissionCheckFailureStatus,
   isTrustedExternalUrl,
   resolveExternalUrl,
   buildPermissionErrorMessage,
@@ -611,5 +649,6 @@ module.exports = {
   parseRecorderMessageLine,
   parseRecorderStdoutChunk,
   resolveTranscriptionAudioFile,
-  splitBufferedLines
+  splitBufferedLines,
+  MACOS_PERMISSION_CHECK_TIMEOUT_MS,
 };

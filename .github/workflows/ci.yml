@@ -181,6 +181,19 @@ jobs:
         test -f "$PYTHON_PATH"
         test -f "$FFMPEG_PATH"
 
+        codesign --verify --strict --verbose=2 "$HELPER_PATH"
+        codesign -d --entitlements :- "$HELPER_PATH" | grep -q "com.apple.security.inherit"
+
+        set +e
+        helper_output="$(timeout 10s "$HELPER_PATH" --check-permission 2>&1)"
+        helper_code=$?
+        set -e
+        echo "$helper_output"
+        if [ "$helper_code" -ne 0 ] && ! echo "$helper_output" | grep -q '"type":"permission_check"'; then
+          echo "audiocapture-helper --check-permission failed unexpectedly"
+          exit "$helper_code"
+        fi
+
         echo "✓ Packaged macOS app contains helper, Python, and ffmpeg"
 
   test-frontend:

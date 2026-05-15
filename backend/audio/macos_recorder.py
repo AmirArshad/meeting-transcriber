@@ -273,6 +273,26 @@ class MacOSAudioRecorder:
         print(f"  Sample rate: {sample_rate} Hz", file=sys.stderr)
         print(f"  Output: {output_path}", file=sys.stderr)
 
+    def _drain_desktop_warnings(self, capture_type: Optional[str] = None):
+        if not self.desktop_capture or not hasattr(self.desktop_capture, 'drain_warnings'):
+            return set()
+
+        resolved_capture_type = capture_type or self.desktop_capture_type or 'unknown'
+        warning_codes = set()
+        for warning in self.desktop_capture.drain_warnings():
+            warning_code = warning.get('code', 'DESKTOP_CAPTURE_WARNING')
+            warning_codes.add(warning_code)
+            _send_warning_message(
+                warning_code,
+                warning.get('message', 'Desktop audio capture warning'),
+                help=warning.get('help'),
+                droppedChunks=warning.get('droppedChunks'),
+                queuedBytes=warning.get('queuedBytes'),
+                captureType=resolved_capture_type,
+            )
+
+        return warning_codes
+
     def start_recording(self):
         """Start recording from microphone and desktop (if available)."""
         if self._get_running():
@@ -334,20 +354,14 @@ class MacOSAudioRecorder:
             self.desktop_thread.daemon = True
             self.desktop_thread.start()
         else:
-            print(f"Desktop audio capture disabled (no capture method available)", file=sys.stderr)
+            message = "Desktop audio capture is unavailable because no ScreenCaptureKit backend is available."
+            help_text = "Reinstall AvaNevis or rebuild the macOS package so audiocapture-helper is bundled and signed."
+            print(message, file=sys.stderr)
             print(f"  Swift helper or PyObjC ScreenCaptureKit required", file=sys.stderr)
-            _send_warning_message(
-                "NO_DESKTOP_AUDIO",
-                "Desktop audio capture is disabled. Only microphone will be recorded.",
-                help="Ensure audiocapture-helper is bundled or install PyObjC as fallback.",
-            )
-            _send_event_message(
-                "desktop_capture_disabled",
-                "Desktop audio capture is disabled. Recording microphone only.",
-                code="NO_DESKTOP_AUDIO",
-                help="Ensure audiocapture-helper is bundled or install PyObjC as fallback.",
-            )
-            self._desktop_started_event.set()
+            _send_error_message("NO_DESKTOP_AUDIO_BACKEND", message, help=help_text)
+            self._mic_started_event.wait(timeout=1.0)
+            self._abort_startup()
+            return False
 
         if not self._mic_started_event.wait(timeout=5.0):
             message = "Microphone stream did not become ready within 5 seconds."
@@ -542,16 +556,7 @@ class MacOSAudioRecorder:
             level_error_logged = False
 
             while self._get_running():
-                if hasattr(self.desktop_capture, 'drain_warnings'):
-                    for warning in self.desktop_capture.drain_warnings():
-                        _send_warning_message(
-                            warning.get('code', 'SWIFT_HELPER_WARNING'),
-                            warning.get('message', 'Desktop audio helper warning'),
-                            help=warning.get('help'),
-                            droppedChunks=warning.get('droppedChunks'),
-                            queuedBytes=warning.get('queuedBytes'),
-                            captureType=capture_type,
-                        )
+                self._drain_desktop_warnings(capture_type)
 
                 # Update desktop audio level from capture buffer (thread-safe)
                 # Avoid nested locks by copying data first, then updating level
@@ -616,16 +621,7 @@ class MacOSAudioRecorder:
             capture_type = self.desktop_capture_type or 'unknown'
             print(f"Stopping {capture_type} desktop capture...", file=sys.stderr)
             desktop_audio = self.desktop_capture.stop_recording()
-            if hasattr(self.desktop_capture, 'drain_warnings'):
-                for warning in self.desktop_capture.drain_warnings():
-                    _send_warning_message(
-                        warning.get('code', 'SWIFT_HELPER_WARNING'),
-                        warning.get('message', 'Desktop audio helper warning'),
-                        help=warning.get('help'),
-                        droppedChunks=warning.get('droppedChunks'),
-                        queuedBytes=warning.get('queuedBytes'),
-                        captureType=capture_type,
-                    )
+            warning_codes = self._drain_desktop_warnings(capture_type)
             if desktop_audio is not None:
                 # Convert to list of frames for consistency
                 self.desktop_frames = [desktop_audio]
@@ -636,6 +632,13 @@ class MacOSAudioRecorder:
                 print(f"Retrieved {len(desktop_audio)} desktop audio samples from {capture_type}", file=sys.stderr)
             else:
                 print(f"No desktop audio captured from {capture_type}", file=sys.stderr)
+                if "NO_DESKTOP_AUDIO_CAPTURED" not in warning_codes:
+                    _send_warning_message(
+                        "NO_DESKTOP_AUDIO_CAPTURED",
+                        "No desktop audio was captured; saved recording contains microphone audio only.",
+                        help="If system audio was playing, check Screen Recording permission and restart AvaNevis before recording again.",
+                        captureType=capture_type,
+                    )
 
         # Process and save audio
         print(f"Processing audio...", file=sys.stderr)
@@ -936,17 +939,29 @@ def main():
         if check_screen_recording_permission():
             print(f"  ✓ Screen Recording permission granted", file=sys.stderr)
         else:
-            print(f"  ✗ WARNING: Screen Recording permission may not be granted", file=sys.stderr)
-            print(f"  Desktop audio capture may not work", file=sys.stderr)
+            message = "Screen Recording permission is required for macOS desktop audio capture."
+            print(f"  ✗ {message}", file=sys.stderr)
             print(f"  Grant permission in: System Settings > Privacy & Security > Screen Recording", file=sys.stderr)
+            _send_error_message(
+                "PERMISSION_DENIED",
+                message,
+                help="Grant Screen Recording permission to AvaNevis, then restart the app.",
+            )
+            sys.exit(1)
 
         if SWIFT_CAPTURE_AVAILABLE:
             print(f"  Using: Swift audiocapture-helper (native)", file=sys.stderr)
         else:
             print(f"  Using: PyObjC ScreenCaptureKit (fallback)", file=sys.stderr)
     else:
-        print(f"\n✗ Desktop audio capture not available", file=sys.stderr)
-        print(f"  Neither Swift helper nor PyObjC found", file=sys.stderr)
+        message = "Desktop audio capture is unavailable because neither Swift helper nor PyObjC ScreenCaptureKit is available."
+        print(f"\n✗ {message}", file=sys.stderr)
+        _send_error_message(
+            "NO_DESKTOP_AUDIO_BACKEND",
+            message,
+            help="Reinstall AvaNevis or rebuild the macOS package so audiocapture-helper is bundled and signed.",
+        )
+        sys.exit(1)
 
     _send_configuring_devices_event()
 

@@ -8,9 +8,11 @@ const packageJson = require('../../package.json');
 const { hashString } = require('../../build/download-manifest');
 const {
   buildDirectoryManifest,
+  buildMacOSHelperVerificationCommands,
   buildResourceManifest,
   ensureWindowsEmptyBinDirectory,
   getStaleResourceDirectories,
+  macOSHelperEntitlementsIncludeInherit,
   manifestsMatch,
   pruneMacOSPythonRuntimeDevelopmentFiles,
 } = require('../../build/prepare-resources');
@@ -92,4 +94,42 @@ test('macOS helper signing path matches extraResources destination', () => {
   assert.deepEqual(packageJson.build.mac.binaries, [
     'Contents/Resources/bin/audiocapture-helper',
   ]);
+});
+
+
+test('macOS helper verification checks signature and entitlements', () => {
+  const commands = buildMacOSHelperVerificationCommands('/Applications/AvaNevis.app/Contents/Resources/bin/audiocapture-helper');
+
+  assert.deepEqual(commands, [
+    {
+      command: 'codesign',
+      args: [
+        '--verify',
+        '--strict',
+        '--verbose=2',
+        '/Applications/AvaNevis.app/Contents/Resources/bin/audiocapture-helper',
+      ],
+    },
+    {
+      command: 'codesign',
+      args: [
+        '-d',
+        '--entitlements',
+        ':-',
+        '/Applications/AvaNevis.app/Contents/Resources/bin/audiocapture-helper',
+      ],
+    },
+  ]);
+});
+
+
+test('macOS helper entitlement parser requires inherit entitlement', () => {
+  assert.equal(
+    macOSHelperEntitlementsIncludeInherit('<key>com.apple.security.inherit</key><true/>'),
+    true,
+  );
+  assert.equal(
+    macOSHelperEntitlementsIncludeInherit('<key>com.apple.security.cs.disable-library-validation</key><true/>'),
+    false,
+  );
 });

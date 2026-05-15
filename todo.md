@@ -105,6 +105,17 @@ Goal: upgrade to the latest stable, trustworthy Electron release while preservin
 - Packaged Python/resource path assumptions are sensitive; validate both dev and packaged modes.
 - macOS helper packaging is high-risk because it depends on Swift build output, entitlements, and `extraResources` layout.
 
+## macOS Permission And Desktop Audio Fixes
+
+- [x] Block recording startup when no macOS desktop audio backend is available.
+- [x] Validate the selected microphone can be opened during macOS preflight.
+- [x] Surface structured warnings when ScreenCaptureKit starts but produces no desktop audio samples.
+- [x] Avoid surprise startup Screen Recording prompts; check permissions when recording is requested.
+- [x] Verify packaged helper signing/entitlements in macOS CI smoke coverage.
+- [x] Run targeted JS/Python validation after fixes.
+- [x] Add bounded/fail-closed macOS permission preflight behavior.
+- [x] Make permission-check exit codes include desktop-audio backend failures.
+
 ## Definition Of Done
 
 - Electron and electron-builder are upgraded to current stable versions or a clearly justified stable target.

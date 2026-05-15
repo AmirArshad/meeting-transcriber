@@ -6,6 +6,8 @@ const mainProcessHelpers = require('../../src/main-process-helpers');
 
 const {
   buildFileUrl,
+  buildDesktopAudioAvailabilityError,
+  buildMacOSPermissionCheckFailureStatus,
   isTrustedExternalUrl,
   buildPermissionErrorMessage,
   buildRecordingPreflightReport,
@@ -30,6 +32,7 @@ const {
   resolveExternalUrl,
   resolveTranscriptionAudioFile,
   splitBufferedLines,
+  MACOS_PERMISSION_CHECK_TIMEOUT_MS,
 } = mainProcessHelpers;
 
 
@@ -574,6 +577,37 @@ test('buildPermissionErrorMessage includes error and help details', () => {
 });
 
 
+test('buildDesktopAudioAvailabilityError includes packaging guidance', () => {
+  assert.equal(
+    buildDesktopAudioAvailabilityError({
+      error: 'audiocapture-helper not available',
+      help: 'Reinstall AvaNevis',
+    }),
+    'Desktop audio capture is unavailable. audiocapture-helper not available Reinstall AvaNevis',
+  );
+});
+
+
+test('buildMacOSPermissionCheckFailureStatus fails closed for recording preflight', () => {
+  const result = buildMacOSPermissionCheckFailureStatus('Permission check timed out');
+
+  assert.equal(result.platform, 'darwin');
+  assert.equal(result.all_granted, false);
+  assert.equal(result.warning, 'Permission check timed out');
+  assert.equal(result.microphone.granted, true);
+  assert.equal(result.screen_recording.granted, true);
+  assert.equal(result.desktop_audio.available, false);
+  assert.match(result.desktop_audio.error, /preflight could not be verified/);
+});
+
+
+test('macOS permission preflight timeout remains bounded', () => {
+  assert.equal(Number.isInteger(MACOS_PERMISSION_CHECK_TIMEOUT_MS), true);
+  assert.equal(MACOS_PERMISSION_CHECK_TIMEOUT_MS > 0, true);
+  assert.equal(MACOS_PERMISSION_CHECK_TIMEOUT_MS <= 10000, true);
+});
+
+
 test('buildRecordingPreflightReport blocks start when device validation returns errors', () => {
   const result = buildRecordingPreflightReport({
     platform: 'darwin',
@@ -650,4 +684,30 @@ test('buildRecordingPreflightReport blocks start with actionable macOS permissio
   assert.equal(result.permissionStatus.settingsTarget, 'privacy');
   assert.match(result.errorMessage, /Microphone permission is not granted/);
   assert.match(result.errorMessage, /Screen Recording permission is not granted/);
+});
+
+
+test('buildRecordingPreflightReport blocks macOS start when desktop backend is unavailable', () => {
+  const result = buildRecordingPreflightReport({
+    platform: 'darwin',
+    deviceCheck: { valid: true, errors: [], warnings: [] },
+    diskCheck: { success: true, warning: null },
+    audioOutputCheck: { supported: true, warning: null },
+    permissionCheck: {
+      all_granted: false,
+      microphone: { granted: true },
+      screen_recording: { granted: true },
+      desktop_audio: {
+        available: false,
+        error: 'Desktop audio capture backend unavailable',
+        help: 'Reinstall AvaNevis or rebuild the macOS package',
+      },
+    },
+  });
+
+  assert.equal(result.canStart, false);
+  assert.equal(result.permissionStatus.missingDesktopAudio, true);
+  assert.equal(result.permissionStatus.settingsTarget, null);
+  assert.match(result.errorMessage, /Desktop audio capture is unavailable/);
+  assert.match(result.errorMessage, /rebuild the macOS package/);
 });

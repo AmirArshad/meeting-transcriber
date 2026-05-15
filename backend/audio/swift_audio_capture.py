@@ -157,6 +157,23 @@ class SwiftAudioCapture:
         self.warning_event = threading.Event()
         self.warning_lock = threading.Lock()
         self.warning_messages: list[dict] = []
+        self._warning_codes_sent: set[str] = set()
+
+    def _queue_warning(self, code: str, message: str, **extra):
+        """Queue a structured warning for the parent recorder to forward."""
+        with self.warning_lock:
+            if code in self._warning_codes_sent:
+                return
+
+            payload = {
+                'type': 'warning',
+                'code': code,
+                'message': message,
+            }
+            payload.update({key: value for key, value in extra.items() if value is not None})
+            self.warning_messages.append(payload)
+            self._warning_codes_sent.add(code)
+            self.warning_event.set()
 
     @property
     def is_recording(self) -> bool:
@@ -222,6 +239,7 @@ class SwiftAudioCapture:
             self.warning_event.clear()
             with self.warning_lock:
                 self.warning_messages = []
+                self._warning_codes_sent = set()
 
             # Start the Swift helper process
             self.process = subprocess.Popen(
@@ -390,9 +408,18 @@ class SwiftAudioCapture:
 
                     # Warn if no audio received after 3 seconds (and helper is still running)
                     if not no_audio_warning_sent and chunk_count == 0 and self._recording_event.is_set() and time.time() - start_time > 3.0:
-                        print("  WARNING: No audio data received after 3 seconds", file=sys.stderr)
+                        message = "Desktop audio stream started but no system audio samples have been received."
+                        print(f"  WARNING: {message}", file=sys.stderr)
                         print("    - Check that system audio is playing", file=sys.stderr)
                         print("    - Check Screen Recording permission in System Settings", file=sys.stderr)
+                        self._queue_warning(
+                            'NO_DESKTOP_AUDIO_SAMPLES',
+                            message,
+                            help=(
+                                "If audio is playing and the desktop meter stays flat, grant Screen Recording "
+                                "permission to AvaNevis and restart the app."
+                            ),
+                        )
                         no_audio_warning_sent = True
                     continue
 
@@ -677,7 +704,16 @@ class SwiftAudioCapture:
         # Concatenate all audio buffers
         with self.buffer_lock:
             if not self.audio_buffer:
+                message = "Desktop audio stream produced no samples; saved recording will contain microphone audio only."
                 print("No desktop audio captured", file=sys.stderr)
+                self._queue_warning(
+                    'NO_DESKTOP_AUDIO_CAPTURED',
+                    message,
+                    help=(
+                        "If system audio was playing, check Screen Recording permission, restart AvaNevis, "
+                        "and try another short recording."
+                    ),
+                )
                 return None
 
             try:

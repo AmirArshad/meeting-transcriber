@@ -15,6 +15,7 @@ const fs = require('fs');
 const os = require('os');
 const {
   buildRecordingPreflightReport,
+  buildMacOSPermissionCheckFailureStatus,
   buildQuitRecordingDialogOptions,
   buildModelDownloadCheck,
   buildPythonModuleArgs,
@@ -29,6 +30,7 @@ const {
   parseRecorderStdoutChunk,
   resolveExternalUrl,
   resolveTranscriptionAudioFile,
+  MACOS_PERMISSION_CHECK_TIMEOUT_MS,
 } = require('./main-process-helpers');
 const { checkForUpdates, openDownloadPage } = require('./updater');
 
@@ -1156,7 +1158,7 @@ function checkMacOSPermissions() {
   });
 }
 
-function getMacOSPermissionStatus() {
+function getMacOSPermissionStatus(micId = null) {
   if (process.platform !== 'darwin') {
     return Promise.resolve({
       platform: process.platform,
@@ -1167,13 +1169,41 @@ function getMacOSPermissionStatus() {
   }
 
   return new Promise((resolve) => {
-    const proc = spawnTrackedPython(getBackendModuleArgs('check_permissions'), {
+    let settled = false;
+    let timeoutHandle = null;
+    const args = Number.isInteger(micId)
+      ? getBackendModuleArgs('check_permissions', ['--mic-device-id', String(micId)])
+      : getBackendModuleArgs('check_permissions');
+
+    const proc = spawnTrackedPython(args, {
       cwd: pythonConfig.backendPath,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
     let stdout = '';
     let stderr = '';
+
+    const settle = (status) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
+      resolve(status);
+    };
+
+    timeoutHandle = setTimeout(() => {
+      console.warn('macOS permission status check timed out');
+      try {
+        proc.kill();
+      } catch (error) {
+        console.warn('Failed to kill timed-out macOS permission check:', error.message);
+      }
+      settle(buildMacOSPermissionCheckFailureStatus('macOS permission checks timed out before recording.'));
+    }, MACOS_PERMISSION_CHECK_TIMEOUT_MS);
 
     proc.stdout.on('data', (data) => {
       stdout += data.toString();
@@ -1184,32 +1214,28 @@ function getMacOSPermissionStatus() {
     });
 
     proc.on('close', () => {
+      if (settled) {
+        return;
+      }
+
       try {
-        resolve(JSON.parse(stdout));
+        settle(JSON.parse(stdout));
       } catch (error) {
         console.warn('Failed to parse permission status:', error.message);
         if (stderr.trim()) {
           console.warn('Permission status stderr:', stderr.trim());
         }
-        resolve({
-          platform: 'darwin',
-          all_granted: true,
-          warning: 'Could not verify macOS permissions before recording. Proceeding with device checks only.',
-          microphone: { granted: true },
-          screen_recording: { granted: true },
-        });
+        settle(buildMacOSPermissionCheckFailureStatus('Could not verify macOS permissions before recording.'));
       }
     });
 
     proc.on('error', (error) => {
+      if (settled) {
+        return;
+      }
+
       console.warn('Permission status check failed:', error.message);
-      resolve({
-        platform: 'darwin',
-        all_granted: true,
-        warning: 'Could not verify macOS permissions before recording. Proceeding with device checks only.',
-        microphone: { granted: true },
-        screen_recording: { granted: true },
-      });
+      settle(buildMacOSPermissionCheckFailureStatus('Could not run macOS permission checks before recording.'));
     });
   });
 }
@@ -1239,10 +1265,8 @@ app.whenReady().then(async () => {
   createTray();
   createWindow();
 
-  // Check macOS permissions proactively
-  if (process.platform === 'darwin') {
-    checkMacOSPermissions();
-  }
+  // macOS Screen Recording checks can trigger OS prompts, so they run only as
+  // part of recording preflight when the user explicitly starts recording.
 
   // Don't preload model in background anymore - the renderer will handle it during init
   // This prevents double-downloading and gives better UX with progress feedback
@@ -1553,7 +1577,7 @@ ipcMain.handle('run-recording-preflight', async (event, { micId, loopbackId }) =
     validateSelectedDevices({ micId, loopbackId }),
     checkDiskSpace(),
     checkAudioOutputSupport(),
-    getMacOSPermissionStatus(),
+    getMacOSPermissionStatus(Number.isInteger(micId) ? micId : null),
   ]);
 
   return buildRecordingPreflightReport({
