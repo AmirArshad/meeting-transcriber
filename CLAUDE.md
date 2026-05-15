@@ -157,7 +157,7 @@ If you touch the helper pipeline, verify:
 - the helper still builds from `swift/AudioCaptureHelper`
 - `build/prepare-resources.js` still copies it to `build/resources/bin`
 - codesign/entitlement steps still happen
-- `electron-builder` still bundles `bin/audiocapture-helper`
+- `electron-builder` still bundles and signs `Contents/Resources/bin/audiocapture-helper`
 
 ### Release asset naming
 

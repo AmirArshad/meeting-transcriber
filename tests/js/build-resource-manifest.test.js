@@ -3,6 +3,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const packageJson = require('../../package.json');
 
 const { hashString } = require('../../build/download-manifest');
 const {
@@ -84,4 +85,11 @@ test('ensureWindowsEmptyBinDirectory is exported for packaging source stability'
 
 test('pruneMacOSPythonRuntimeDevelopmentFiles is exported for macOS packaging cleanup', () => {
   assert.equal(typeof pruneMacOSPythonRuntimeDevelopmentFiles, 'function');
+});
+
+
+test('macOS helper signing path matches extraResources destination', () => {
+  assert.deepEqual(packageJson.build.mac.binaries, [
+    'Contents/Resources/bin/audiocapture-helper',
+  ]);
 });
