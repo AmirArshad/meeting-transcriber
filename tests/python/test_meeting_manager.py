@@ -188,7 +188,52 @@ def test_delete_meeting_removes_associated_files_and_metadata(tmp_path):
     assert manager.list_meetings() == []
 
 
-def test_delete_meeting_keeps_files_if_metadata_save_fails(tmp_path, monkeypatch):
+def test_delete_meeting_keeps_metadata_if_file_delete_fails(tmp_path, monkeypatch):
+    recordings_dir = tmp_path / 'recordings'
+    manager = MeetingManager(recordings_dir=str(recordings_dir))
+
+    audio_path = recordings_dir / 'meeting_20260107_104555.opus'
+    transcript_path = recordings_dir / 'meeting_20260107_104555.md'
+    audio_path.write_bytes(b'audio')
+    transcript_path.write_text('transcript', encoding='utf-8')
+
+    meeting = {
+        'id': '20260107_104555',
+        'title': 'Meeting',
+        'date': '2026-01-07T10:45:55',
+        'duration': '0:05',
+        'durationSeconds': 5.0,
+        'audioPath': str(audio_path),
+        'transcriptPath': str(transcript_path),
+        'language': 'en',
+        'model': 'small',
+    }
+    manager._save_meetings([meeting])
+
+    original_replace = Path.replace
+
+    def failing_replace(self, target):
+        if self == audio_path:
+            raise PermissionError('audio locked')
+        return original_replace(self, target)
+
+    monkeypatch.setattr(Path, 'replace', failing_replace)
+
+    try:
+        manager.delete_meeting('20260107_104555')
+    except RuntimeError as error:
+        assert 'audio' in str(error)
+        pass
+    else:
+        raise AssertionError('Expected file delete failure to propagate')
+
+    assert audio_path.exists()
+    assert transcript_path.exists()
+    saved = json.loads(manager.metadata_file.read_text(encoding='utf-8'))
+    assert saved == [meeting]
+
+
+def test_delete_meeting_restores_files_if_metadata_save_fails(tmp_path, monkeypatch):
     recordings_dir = tmp_path / 'recordings'
     manager = MeetingManager(recordings_dir=str(recordings_dir))
 
@@ -224,6 +269,7 @@ def test_delete_meeting_keeps_files_if_metadata_save_fails(tmp_path, monkeypatch
 
     assert audio_path.exists()
     assert transcript_path.exists()
+    assert list(recordings_dir.glob('*.deleting.*')) == []
     saved = json.loads(manager.metadata_file.read_text(encoding='utf-8'))
     assert saved == [meeting]
 

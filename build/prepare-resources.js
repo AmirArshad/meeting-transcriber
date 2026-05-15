@@ -14,6 +14,8 @@ const BIN_DIR = path.join(BUILD_DIR, 'bin');
 const MODELS_DIR = path.join(BUILD_DIR, 'whisper-models');
 const RESOURCE_MANIFEST_PATH = path.join(BUILD_DIR, 'resource-manifest.json');
 const RESOURCE_MANIFEST_VERSION = 2;
+const REQUIREMENTS_MACOS_BUILD = path.join(__dirname, '..', 'requirements-macos-build.txt');
+const REQUIREMENTS_WINDOWS_BUILD = path.join(__dirname, '..', 'requirements-windows-build.txt');
 
 // Swift AudioCaptureHelper paths
 const SWIFT_HELPER_DIR = path.join(__dirname, '..', 'swift', 'AudioCaptureHelper');
@@ -125,6 +127,8 @@ function buildResourceManifest() {
     inputs: {
       requirementsMacos: hashString(readTextOrEmpty(path.join(__dirname, '..', 'requirements-macos.txt'))),
       requirementsWindows: hashString(readTextOrEmpty(path.join(__dirname, '..', 'requirements-windows.txt'))),
+      requirementsMacosBuild: hashString(readTextOrEmpty(REQUIREMENTS_MACOS_BUILD)),
+      requirementsWindowsBuild: hashString(readTextOrEmpty(REQUIREMENTS_WINDOWS_BUILD)),
       swiftPackage: hashString(readTextOrEmpty(path.join(__dirname, '..', 'swift', 'AudioCaptureHelper', 'Package.swift'))),
       swiftSources: buildDirectoryManifest(
         path.join(__dirname, '..', 'swift', 'AudioCaptureHelper', 'Sources'),
@@ -580,8 +584,10 @@ async function prepareResources() {
       console.log('[4/4] Installing Python dependencies...');
 
       // Install requirements (macOS-specific)
-      const requirementsPath = path.join(__dirname, '..', 'requirements-macos.txt');
-      execSync(`"${pythonExe}" -m pip install -r "${requirementsPath}"`, {
+      const requirementsPath = fs.existsSync(REQUIREMENTS_MACOS_BUILD)
+        ? REQUIREMENTS_MACOS_BUILD
+        : path.join(__dirname, '..', 'requirements-macos.txt');
+      execSync(`"${pythonExe}" -m pip install --only-binary=:all: -r "${requirementsPath}"`, {
         stdio: 'inherit'
       });
 
@@ -635,8 +641,10 @@ async function prepareResources() {
       console.log('[4/4] Installing Python dependencies...');
 
       // Install requirements (Windows-specific)
-      const requirementsPath = path.join(__dirname, '..', 'requirements-windows.txt');
-      execSync(`"${pythonExe}" -m pip install -r "${requirementsPath}" --no-warn-script-location`, {
+      const requirementsPath = fs.existsSync(REQUIREMENTS_WINDOWS_BUILD)
+        ? REQUIREMENTS_WINDOWS_BUILD
+        : path.join(__dirname, '..', 'requirements-windows.txt');
+      execSync(`"${pythonExe}" -m pip install --only-binary=:all: -r "${requirementsPath}" --no-warn-script-location`, {
         stdio: 'inherit'
       });
 

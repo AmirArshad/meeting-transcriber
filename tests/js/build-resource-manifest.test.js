@@ -59,6 +59,16 @@ test('manifestsMatch detects Swift source changes through the resource manifest'
 });
 
 
+test('buildResourceManifest tracks pinned packaged dependency requirements', () => {
+  const manifest = buildResourceManifest();
+
+  assert.equal(typeof manifest.inputs.requirementsMacosBuild, 'string');
+  assert.equal(typeof manifest.inputs.requirementsWindowsBuild, 'string');
+  assert.equal(manifest.inputs.requirementsMacosBuild.length, 64);
+  assert.equal(manifest.inputs.requirementsWindowsBuild.length, 64);
+});
+
+
 test('stale resource invalidation includes bin directory on every platform', () => {
   const staleDirs = getStaleResourceDirectories().map((dirPath) => path.basename(dirPath));
 

@@ -20,6 +20,7 @@ const {
   getQuitInterceptState,
   getRecorderCloseAction,
   getRecorderEventAction,
+  getRecorderStderrAction,
   getRecordingStopTimeout,
   resolveStopTimeoutAction,
   isModelDownloadErrorOutput,
@@ -287,10 +288,14 @@ async function handleQuitDuringRecording(quitState) {
     }
 
     try {
-      await waitForRecordingStop({
+      const result = await waitForRecordingStop({
         forceKillOnTimeout: false,
         timeoutMessage: 'Recorder stop is taking longer than expected.',
       });
+
+      if (result?.audioPath) {
+        await persistStoppedRecordingForQuit(result);
+      }
 
       allowImmediateQuit = true;
       isQuitting = true;
@@ -322,6 +327,102 @@ async function handleQuitDuringRecording(quitState) {
       quitWorkflowPromise = null;
     }
   }
+}
+
+async function persistStoppedRecordingForQuit(recordingInfo) {
+  const audioPath = recordingInfo.audioPath;
+  const audioFile = path.basename(audioPath);
+  const recordingsDir = path.dirname(audioPath);
+  const transcriptPath = path.join(
+    recordingsDir,
+    `${path.basename(audioFile, path.extname(audioFile))}.md`
+  );
+
+  if (!fs.existsSync(transcriptPath)) {
+    const transcriptContent = [
+      '# Recording Saved Before Quit',
+      '',
+      `**Date:** ${new Date().toISOString()}`,
+      `**Duration:** ${formatDurationForTranscript(recordingInfo.duration || 0)}`,
+      '',
+      'Transcription was not completed because the app quit while recording was active.',
+      'Open Meeting Transcriber again to keep this recording in history.',
+      '',
+    ].join('\n');
+
+    fs.writeFileSync(transcriptPath, transcriptContent, 'utf8');
+  }
+
+  await addMeetingToHistory({
+    audioPath,
+    transcriptPath,
+    duration: recordingInfo.duration || 0,
+    language: 'unknown',
+    model: 'not-transcribed',
+    title: 'Recording saved before quit',
+  });
+}
+
+function formatDurationForTranscript(durationSeconds) {
+  const totalSeconds = Math.max(0, Math.floor(Number(durationSeconds) || 0));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  }
+
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
+function addMeetingToHistory(meetingData) {
+  return new Promise((resolve, reject) => {
+    const { audioPath, transcriptPath, duration, language, model, title } = meetingData;
+    const recordingsDir = path.join(app.getPath('userData'), 'recordings');
+    const args = [
+      path.join(pythonConfig.backendPath, 'meeting_manager.py'),
+      '--recordings-dir', recordingsDir,
+      'add',
+      '--audio', audioPath,
+      '--transcript', transcriptPath,
+      '--duration', String(duration || 0),
+      '--language', language || 'en',
+      '--model', model || 'unknown'
+    ];
+
+    if (title) {
+      args.push('--title', title);
+    }
+
+    const python = spawnTrackedPython(args);
+
+    let output = '';
+    let errorOutput = '';
+
+    python.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    python.stderr.on('data', (data) => {
+      errorOutput += data.toString();
+    });
+
+    python.on('close', (code) => {
+      if (code === 0) {
+        try {
+          resolve(JSON.parse(output));
+        } catch (error) {
+          reject(new Error(`Failed to parse saved meeting: ${error.message}`));
+        }
+        return;
+      }
+
+      reject(new Error(`Failed to save meeting: ${errorOutput.trim() || 'Unknown error'}`));
+    });
+
+    python.on('error', reject);
+  });
 }
 
 // ============================================================================
@@ -1833,6 +1934,14 @@ ipcMain.handle('start-recording', async (event, options) => {
     pythonProcess.stderr.on('data', (data) => {
       const output = data.toString();
       console.log(`Python status: ${output}`);
+
+      const stderrAction = getRecorderStderrAction(output);
+      if (stderrAction.initProgress) {
+        sendInitProgress(stderrAction.initProgress.stage, stderrAction.initProgress.message);
+      }
+      if (stderrAction.recordingStartedMessage) {
+        markRecordingStarted(stderrAction.recordingStartedMessage);
+      }
     });
 
     pythonProcess.on('close', (code) => {
@@ -2166,52 +2275,7 @@ ipcMain.handle('scan-recordings', async () => {
  * Add a meeting (called after transcription)
  */
 ipcMain.handle('add-meeting', async (event, meetingData) => {
-  return new Promise((resolve, reject) => {
-    const { audioPath, transcriptPath, duration, language, model, title } = meetingData;
-
-    const recordingsDir = path.join(app.getPath('userData'), 'recordings');
-    const args = [
-      path.join(pythonConfig.backendPath, 'meeting_manager.py'),
-      '--recordings-dir', recordingsDir,
-      'add',
-      '--audio', audioPath,
-      '--transcript', transcriptPath,
-      '--duration', duration.toString(),
-      '--language', language,
-      '--model', model
-    ];
-
-    if (title) {
-      args.push('--title', title);
-    }
-
-    const python = spawnTrackedPython(args);
-
-    let output = '';
-    let errorOutput = '';
-
-    python.stdout.on('data', (data) => {
-      output += data.toString();
-    });
-
-    python.stderr.on('data', (data) => {
-      errorOutput += data.toString();
-    });
-
-    python.on('close', (code) => {
-      if (code === 0) {
-        try {
-          const meeting = JSON.parse(output);
-          resolve(meeting);
-        } catch (e) {
-          reject(new Error(`Failed to parse meeting: ${e.message}`));
-        }
-      } else {
-        const errorMsg = errorOutput.trim() || 'Unknown error';
-        reject(new Error(`Failed to add meeting: ${errorMsg}`));
-      }
-    });
-  });
+  return addMeetingToHistory(meetingData);
 });
 
 /**

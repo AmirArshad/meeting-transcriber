@@ -1,6 +1,6 @@
 # macOS Audio Architecture Improvements
 
-**Status:** Partially implemented / partially planned  
+**Status:** Partially implemented / partially planned
 **Priority:** High (Post-v1.7.0)  
 **Target:** macOS 13+ (Ventura/Sonoma)
 

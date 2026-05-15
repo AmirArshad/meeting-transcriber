@@ -3,7 +3,7 @@
 Branch: `fix/full-audit-remediation`
 Review baseline: full diff `master...fix/full-audit-remediation` at `d407cfb`
 
-Status: automated fixes complete on Windows. macOS/manual validation remains before merge.
+Status: second-pass pre-merge fixes complete on Windows. macOS/manual validation remains before merge.
 
 Archive: previous root `todo.md` snapshots and earlier remediation history live in `docs/internal/FULL_AUDIT_REMEDIATION_ARCHIVE.md`.
 
@@ -27,6 +27,76 @@ Archive: previous root `todo.md` snapshots and earlier remediation history live 
 - high: 0 unresolved automated-code items.
 - medium: 0 unresolved automated-code items; macOS build/manual checks remain.
 - low: 0 unresolved automated-code items.
+
+## Second-Pass Review Fixes
+
+### 12. Normalize MLX transcription segments
+
+- [x] Support list/tuple segment shapes from `lightning_whisper_mlx.transcribe_audio`.
+- [x] Add Python regression coverage for list-shaped MLX segments.
+
+Files:
+
+- `backend/transcription/mlx_whisper_transcriber.py`
+- `tests/python/test_transcriber_helpers.py`
+
+### 13. Preserve recordings when quitting mid-recording
+
+- [x] Use the graceful stop result before quitting.
+- [x] Save a placeholder transcript and meeting-history entry when transcription cannot run before quit.
+
+Files:
+
+- `src/main.js`
+
+### 14. Keep delete retryable when files are locked
+
+- [x] Move meeting files to tombstones before metadata commit.
+- [x] Restore tombstoned files if metadata save fails.
+- [x] Keep metadata intact when a locked file cannot be prepared for deletion.
+- [x] Add Python regression coverage for file-delete and metadata-save failures.
+
+Files:
+
+- `backend/meeting_manager.py`
+- `tests/python/test_meeting_manager.py`
+
+### 15. Restore recorder stderr startup compatibility
+
+- [x] Re-add legacy stderr parsing for startup progress and `Recording started!`.
+- [x] Add JS helper coverage for legacy stderr startup fallback.
+
+Files:
+
+- `src/main.js`
+- `src/main-process-helpers.js`
+- `tests/js/main-process-helpers.test.js`
+
+### 16. Fix model-cache detection and packaged dependency determinism
+
+- [x] Detect current `Systran/faster-whisper-*` Hugging Face cache directories.
+- [x] Keep legacy `guillaumekln` detection as fallback.
+- [x] Add pinned packaged-build requirement files for Windows and macOS resource preparation.
+- [x] Track pinned build requirements in the resource manifest.
+
+Files:
+
+- `src/main-process-helpers.js`
+- `tests/js/main-process-helpers.test.js`
+- `build/prepare-resources.js`
+- `requirements-windows-build.txt`
+- `requirements-macos-build.txt`
+- `tests/js/build-resource-manifest.test.js`
+
+### 17. Clean up low-risk review findings
+
+- [x] Avoid optional Swift values in `capture_stats` JSON.
+- [x] Remove trailing whitespace flagged by `git diff --check`.
+
+Files:
+
+- `swift/AudioCaptureHelper/Sources/main.swift`
+- `docs/features/MACOS_AUDIO_ARCHITECTURE.md`
 
 ## Blocker
 
@@ -246,6 +316,10 @@ Affects:
 - [x] `npm test`
 - [x] `npm run test:python`
 - [x] `python -c "import py_compile, pathlib; [py_compile.compile(str(path), doraise=True) for pattern in ('backend/*.py','backend/audio/*.py','backend/transcription/*.py') for path in pathlib.Path().glob(pattern)]"`
+- [x] `git diff --check`
+- [x] `npm run build:dir`
+- [x] `python -m pip download --only-binary=:all: --python-version 311 --platform macosx_14_0_arm64 --implementation cp --abi cp311 -r requirements-macos-build.txt`
+- [x] Re-ran `npm run build:dir` after expanding pinned transitive build requirements.
 - [ ] `swift build -c release --arch arm64`
 - [ ] `npm run build:mac:dir`
 - [x] Confirm CI still passes the Windows packaging smoke path after the stale-`bin` fix.

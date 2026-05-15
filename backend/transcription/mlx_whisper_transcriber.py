@@ -292,6 +292,28 @@ class MLXWhisperTranscriber(BaseTranscriber):
             batch_size=12,
         )
 
+    @staticmethod
+    def _normalize_segment(segment: Any) -> Dict[str, Any]:
+        """Normalize supported MLX segment shapes into the renderer contract."""
+        if isinstance(segment, dict):
+            return {
+                'start': float(segment.get('start', 0) or 0),
+                'end': float(segment.get('end', 0) or 0),
+                'text': str(segment.get('text', '') or '').strip(),
+            }
+
+        if isinstance(segment, (list, tuple)):
+            if len(segment) >= 3:
+                return {
+                    'start': float(segment[0] or 0),
+                    'end': float(segment[1] or 0),
+                    'text': str(segment[2] or '').strip(),
+                }
+            if len(segment) == 1:
+                return {'start': 0.0, 'end': 0.0, 'text': str(segment[0] or '').strip()}
+
+        return {'start': 0.0, 'end': 0.0, 'text': str(segment or '').strip()}
+
     def load_model(self):
         """Load the Whisper model via MLX. Call this once before transcribing."""
         try:
@@ -406,12 +428,10 @@ class MLXWhisperTranscriber(BaseTranscriber):
         if isinstance(result, dict):
             if 'segments' in result and result['segments']:
                 for segment in result['segments']:
-                    segments_list.append({
-                        'start': segment.get('start', 0),
-                        'end': segment.get('end', 0),
-                        'text': segment.get('text', '').strip()
-                    })
-                    full_text.append(segment.get('text', '').strip())
+                    normalized_segment = self._normalize_segment(segment)
+                    segments_list.append(normalized_segment)
+                    if normalized_segment['text']:
+                        full_text.append(normalized_segment['text'])
             elif 'text' in result:
                 # No segments, just full text - create a single segment
                 text = result['text'].strip()

@@ -556,10 +556,6 @@ class MeetingManager:
             if not meeting:
                 return False
 
-            # Remove from list
-            meetings = [m for m in meetings if m['id'] != meeting_id]
-            self._save_meetings_unlocked(meetings)
-
             # FIX: Windows retry logic for file locks
             # Files may be locked by antivirus, file explorer, audio player, etc.
             max_retries = 3
@@ -583,8 +579,68 @@ class MeetingManager:
                     except Exception as e:
                         raise RuntimeError(f"Failed to delete {label} file: {e}")
 
-            delete_file_with_retry(Path(meeting['audioPath']), 'audio')
-            delete_file_with_retry(Path(meeting['transcriptPath']), 'transcript')
+            def tombstone_path_for(file_path: Path) -> Path:
+                base_name = f".{file_path.name}.deleting.{os.getpid()}"
+                candidate = file_path.with_name(base_name)
+                counter = 1
+                while candidate.exists():
+                    candidate = file_path.with_name(f"{base_name}.{counter}")
+                    counter += 1
+                return candidate
+
+            def move_file_to_tombstone(file_path: Path, label: str) -> Optional[Path]:
+                if not file_path.exists():
+                    return None
+
+                tombstone_path = tombstone_path_for(file_path)
+                for attempt in range(max_retries):
+                    try:
+                        file_path.replace(tombstone_path)
+                        print(f"Prepared {label} for deletion: {file_path}", file=sys.stderr)
+                        return tombstone_path
+                    except PermissionError as e:
+                        if attempt < max_retries - 1:
+                            print(f"File locked (attempt {attempt + 1}/{max_retries}), retrying... ({e})", file=sys.stderr)
+                            time.sleep(retry_delay)
+                        else:
+                            raise RuntimeError(f"Failed to prepare {label} file for deletion after {max_retries} attempts: {e}")
+                    except Exception as e:
+                        raise RuntimeError(f"Failed to prepare {label} file for deletion: {e}")
+
+                return None
+
+            def restore_moved_files(moved_files: List[tuple[Path, Path, str]]):
+                for tombstone_path, original_path, label in reversed(moved_files):
+                    if tombstone_path.exists() and not original_path.exists():
+                        try:
+                            tombstone_path.replace(original_path)
+                            print(f"Restored {label} after delete rollback: {original_path}", file=sys.stderr)
+                        except Exception as restore_error:
+                            print(f"Warning: Could not restore {label} after delete rollback: {restore_error}", file=sys.stderr)
+
+            moved_files: List[tuple[Path, Path, str]] = []
+            try:
+                for label, file_path in (
+                    ('audio', Path(meeting['audioPath'])),
+                    ('transcript', Path(meeting['transcriptPath'])),
+                ):
+                    tombstone_path = move_file_to_tombstone(file_path, label)
+                    if tombstone_path is not None:
+                        moved_files.append((tombstone_path, file_path, label))
+
+                # Commit metadata only after files have been moved out of their
+                # canonical paths. If metadata save fails, files are restored.
+                meetings = [m for m in meetings if m['id'] != meeting_id]
+                self._save_meetings_unlocked(meetings)
+            except Exception:
+                restore_moved_files(moved_files)
+                raise
+
+            for tombstone_path, _original_path, label in moved_files:
+                try:
+                    delete_file_with_retry(tombstone_path, label)
+                except RuntimeError as deletion_error:
+                    print(f"Warning: {deletion_error}", file=sys.stderr)
 
             print(f"Meeting deleted: {meeting_id}", file=sys.stderr)
             return True

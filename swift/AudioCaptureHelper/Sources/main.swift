@@ -147,15 +147,20 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
         queueLock.unlock()
 
         // Log final stats
-        sendJSON([
+        var stats: [String: Any] = [
             "type": "capture_stats",
             "totalSamples": finalSampleCount,
             "totalBytes": finalBytes,
             "droppedChunks": finalDroppedChunks,
             "queuedBytesRemaining": finalQueuedBytes,
-            "firstAudioTimestamp": finalFirstAudioTimestamp as Any,
-            "lastAudioTimestamp": finalLastAudioTimestamp as Any,
-        ])
+        ]
+        if let finalFirstAudioTimestamp {
+            stats["firstAudioTimestamp"] = finalFirstAudioTimestamp
+        }
+        if let finalLastAudioTimestamp {
+            stats["lastAudioTimestamp"] = finalLastAudioTimestamp
+        }
+        sendJSON(stats)
     }
 
     // SCStreamOutput protocol - receives audio samples

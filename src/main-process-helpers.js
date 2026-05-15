@@ -51,7 +51,10 @@ function getModelDownloadPatterns(platform, arch, modelSize = 'small') {
     return getMacMLXModelStorageDirs(size);
   }
 
-  return [`models--guillaumekln--faster-whisper-${size}`];
+  return [
+    `models--Systran--faster-whisper-${size}`,
+    `models--guillaumekln--faster-whisper-${size}`,
+  ];
 }
 
 function buildModelDownloadCheck({ platform, arch, homeDir, modelSize }) {
@@ -244,6 +247,57 @@ function getRecorderEventAction(eventPayload = {}) {
         progressMessage: eventMessage || null,
       };
   }
+}
+
+function getRecorderStderrAction(output = '') {
+  const text = String(output || '');
+
+  if (text.includes('Recording started!')) {
+    return {
+      initProgress: null,
+      recordingStartedMessage: 'Recording started!',
+      progressMessage: null,
+    };
+  }
+
+  if (text.includes('Desktop audio stream opened')) {
+    return {
+      initProgress: {
+        stage: 'desktop_opened',
+        message: 'Desktop audio ready...',
+      },
+      recordingStartedMessage: null,
+      progressMessage: null,
+    };
+  }
+
+  if (text.includes('Microphone stream opened')) {
+    return {
+      initProgress: {
+        stage: 'mic_opened',
+        message: 'Microphone ready...',
+      },
+      recordingStartedMessage: null,
+      progressMessage: null,
+    };
+  }
+
+  if (text.includes('Device configuration')) {
+    return {
+      initProgress: {
+        stage: 'configuring',
+        message: 'Configuring audio devices...',
+      },
+      recordingStartedMessage: null,
+      progressMessage: null,
+    };
+  }
+
+  return {
+    initProgress: null,
+    recordingStartedMessage: null,
+    progressMessage: text.trim() || null,
+  };
 }
 
 function getRecorderCloseAction({
@@ -543,6 +597,7 @@ module.exports = {
   getQuitInterceptState,
   getRecorderCloseAction,
   getRecorderEventAction,
+  getRecorderStderrAction,
   getMacMLXModelStorageDirs,
   getModelDownloadCacheDir,
   getMacMLXCacheDir,

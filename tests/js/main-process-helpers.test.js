@@ -13,6 +13,7 @@ const {
   getQuitInterceptState,
   getRecorderCloseAction,
   getRecorderEventAction,
+  getRecorderStderrAction,
   getMacMLXCacheDir,
   getMacMLXModelStorageDirs,
   getModelDownloadPatterns,
@@ -35,7 +36,10 @@ test('buildModelDownloadCheck returns Windows faster-whisper cache settings', ()
   });
 
   assert.equal(result.cacheDir, path.join('/Users/tester', '.cache', 'huggingface', 'hub'));
-  assert.deepEqual(result.modelPatterns, ['models--guillaumekln--faster-whisper-medium']);
+  assert.deepEqual(result.modelPatterns, [
+    'models--Systran--faster-whisper-medium',
+    'models--guillaumekln--faster-whisper-medium',
+  ]);
   assert.equal(result.modelSize, 'medium');
 });
 
@@ -334,6 +338,30 @@ test('resolveStopTimeoutAction kills the recorder on stop timeout when forced', 
     timedOut: true,
     shouldKillProcess: true,
     shouldKeepStopPromise: true,
+  });
+});
+
+
+test('getRecorderStderrAction preserves legacy recorder startup fallback', () => {
+  assert.deepEqual(getRecorderStderrAction('Microphone stream opened\n'), {
+    initProgress: {
+      stage: 'mic_opened',
+      message: 'Microphone ready...',
+    },
+    recordingStartedMessage: null,
+    progressMessage: null,
+  });
+
+  assert.deepEqual(getRecorderStderrAction('Recording started!\n'), {
+    initProgress: null,
+    recordingStartedMessage: 'Recording started!',
+    progressMessage: null,
+  });
+
+  assert.deepEqual(getRecorderStderrAction('Microphone stream opened\nRecording started!\n'), {
+    initProgress: null,
+    recordingStartedMessage: 'Recording started!',
+    progressMessage: null,
   });
 });
 
