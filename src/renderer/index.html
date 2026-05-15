@@ -208,6 +208,27 @@
         <div class="tab-content">
           <!-- Record Tab -->
           <div class="tab-pane active" id="record-tab">
+            <!-- GPU Acceleration CTA (Windows only, hidden by default) -->
+            <button
+              type="button"
+              id="gpu-cta"
+              class="gpu-cta"
+              style="display: none"
+              title="Install CUDA for 4-5x faster transcription on your NVIDIA GPU"
+              aria-label="Install CUDA for faster transcription"
+            >
+              <span class="gpu-cta-icon" aria-hidden="true">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+                </svg>
+              </span>
+              <span class="gpu-cta-text">
+                <strong>Install CUDA for faster transcription</strong>
+                <span class="gpu-cta-sub">NVIDIA GPU detected — enable 4-5x faster transcription</span>
+              </span>
+              <span class="gpu-cta-arrow" aria-hidden="true">→</span>
+            </button>
+
             <section class="card recording-section">
               <div class="recording-header">
                 <h2>Current Meeting</h2>

@@ -185,7 +185,32 @@ jobs:
         codesign -d --entitlements :- "$HELPER_PATH" | grep -q "com.apple.security.inherit"
 
         set +e
-        helper_output="$(timeout 10s "$HELPER_PATH" --check-permission 2>&1)"
+        helper_output="$(
+        python - "$HELPER_PATH" 2>&1 <<'PY'
+        import subprocess
+        import sys
+
+        helper_path = sys.argv[1]
+
+        try:
+            result = subprocess.run(
+                [helper_path, "--check-permission"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            sys.stdout.write(result.stdout)
+            sys.stderr.write(result.stderr)
+            sys.exit(result.returncode)
+        except subprocess.TimeoutExpired as exc:
+            if exc.stdout:
+                sys.stdout.write(exc.stdout if isinstance(exc.stdout, str) else exc.stdout.decode(errors="replace"))
+            if exc.stderr:
+                sys.stderr.write(exc.stderr if isinstance(exc.stderr, str) else exc.stderr.decode(errors="replace"))
+            print("audiocapture-helper --check-permission timed out", file=sys.stderr)
+            sys.exit(124)
+        PY
+        )"
         helper_code=$?
         set -e
         echo "$helper_output"

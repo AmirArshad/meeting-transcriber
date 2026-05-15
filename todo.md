@@ -2,7 +2,7 @@
 
 Branch: `upgrade/electron-latest`
 
-Status: Electron and electron-builder upgrades are implemented. Windows automated validation is complete. macOS CI packaging initially hit `EMFILE` and then a helper signing path mismatch; macOS builds now raise the open-file limit, prune Torch development headers, and sign the helper at `Contents/Resources/bin/audiocapture-helper`. macOS rerun and manual smoke validation remain pending.
+Status: Electron and electron-builder upgrades are implemented. Windows automated validation is complete. macOS CI packaging initially hit `EMFILE`, then a helper signing path mismatch, then a missing GNU `timeout` command in the helper smoke step. macOS builds now raise the open-file limit, prune Torch development headers, sign the helper at `Contents/Resources/bin/audiocapture-helper`, and run the helper permission smoke check with Python's built-in timeout support. macOS rerun and manual smoke validation remain pending.
 
 Goal: upgrade to the latest stable, trustworthy Electron release while preserving the app's local-only recording/transcription behavior and packaged Windows/macOS builds.
 

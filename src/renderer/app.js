@@ -2056,6 +2056,7 @@ async function checkGPUStatus() {
   const installBtn = document.getElementById('install-gpu-btn');
   const uninstallBtn = document.getElementById('uninstall-gpu-btn');
   const gpuActions = document.getElementById('gpu-actions');
+  const ctaState = { platform: null, gpuInfo: null, cudaInfo: null };
 
   statusBadge.textContent = 'Checking...';
   statusBadge.className = 'setting-badge';
@@ -2063,6 +2064,7 @@ async function checkGPUStatus() {
   try {
     // Get platform info
     const platform = await window.electronAPI.getPlatform();
+    ctaState.platform = platform;
     const isMac = platform === 'darwin';
 
     if (isMac) {
@@ -2121,6 +2123,7 @@ async function checkGPUStatus() {
 
       // Check if GPU exists
       const gpuInfo = await window.electronAPI.checkGPU();
+      ctaState.gpuInfo = gpuInfo;
 
       if (gpuInfo.hasGPU) {
         gpuValue1.textContent = gpuInfo.gpuName;
@@ -2138,6 +2141,7 @@ async function checkGPUStatus() {
 
       // Check CUDA installation
       const cudaInfo = await window.electronAPI.checkCUDA();
+      ctaState.cudaInfo = cudaInfo;
 
       if (cudaInfo.installed) {
         gpuValue2.textContent = `Installed (CUDA ${cudaInfo.version})`;
@@ -2165,7 +2169,36 @@ async function checkGPUStatus() {
     statusBadge.textContent = 'Error';
     statusBadge.classList.add('disabled');
     gpuDescription.textContent = 'Failed to detect system configuration.';
+  } finally {
+    updateGPUCTA(ctaState);
   }
+}
+
+// Show or hide the "Install CUDA" CTA on the Record (home) tab.
+// Only shown on Windows when an NVIDIA GPU is present and CUDA is not installed.
+function updateGPUCTA({ platform, gpuInfo, cudaInfo }) {
+  const cta = document.getElementById('gpu-cta');
+  if (!cta) return;
+
+  if (platform !== 'win32' || !gpuInfo || !gpuInfo.hasGPU || !cudaInfo || cudaInfo.installed) {
+    cta.style.display = 'none';
+    return;
+  }
+
+  const sub = cta.querySelector('.gpu-cta-sub');
+  if (sub && gpuInfo.gpuName) {
+    sub.textContent = `${gpuInfo.gpuName} detected - enable 4-5x faster transcription`;
+  }
+  cta.style.display = 'flex';
+}
+
+function setupGPUCTA() {
+  const cta = document.getElementById('gpu-cta');
+  if (!cta) return;
+  cta.addEventListener('click', () => {
+    const settingsBtn = document.querySelector('.rail-btn[data-tab="settings"]');
+    if (settingsBtn) settingsBtn.click();
+  });
 }
 
 async function installGPUAcceleration() {
@@ -2883,3 +2916,4 @@ setupDevConsole();
 setupCustomAudioPlayer();
 setupTitleEditors();
 initSettingsTab();
+setupGPUCTA();
