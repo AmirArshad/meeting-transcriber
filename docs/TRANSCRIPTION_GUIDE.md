@@ -47,6 +47,7 @@ Whisper is much better on clean, turn-based speech than on several people talkin
 ## Known Limitations
 
 - Speaker diarization is not implemented.
+- Transcript summaries are not implemented.
 - Real-time transcription is not implemented.
 - The UI does not currently expose a separate-track transcription mode for mic-only transcripts.
 - Very noisy or heavily overlapping meetings will still be harder to transcribe accurately.
@@ -73,5 +74,7 @@ Whisper is much better on clean, turn-based speech than on several people talkin
 ## Related Docs
 
 - `docs/MEETING_TRANSCRIPTION.md`
+- `docs/features/FEATURE_SPEAKER_DIARIZATION.md`
+- `docs/features/FEATURE_TRANSCRIPT_SUMMARIES.md`
 - `docs/TROUBLESHOOTING.md`
 - `docs/development/SETUP_GPU.md`

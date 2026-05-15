@@ -4,6 +4,28 @@
 
 Add speaker identification to transcripts so users can see which person said what during meetings with multiple participants.
 
+## 2026 Research Update
+
+The original design targeted `pyannote/speaker-diarization-3.1`. Current research favors `pyannote/speaker-diarization-community-1` as the default local model.
+
+Recommended defaults:
+
+| Target | Recommended model | Runtime | Notes |
+|--------|-------------------|---------|-------|
+| Cross-platform default | `pyannote/speaker-diarization-community-1` | `pyannote.audio` / PyTorch | Best implementation fit, improved speaker counting/assignment over 3.1, local after download. |
+| Windows CUDA spike | `nvidia/diar_streaming_sortformer_4spk-v2.1` | NVIDIA NeMo / PyTorch CUDA | Fast and meeting-speech-focused, but heavier dependencies, max 4 speakers, and weak macOS fit. |
+| CPU/lower-end fallback | `pyannote/speaker-diarization-community-1` | PyTorch CPU | Slower but keeps one output contract and one model family. |
+
+Important changes from the old plan:
+
+- `community-1` adds `exclusive_speaker_diarization`, which assigns one active speaker at any timestamp and simplifies merging with Whisper transcript segments.
+- The model is gated on Hugging Face and still requires user acceptance plus a token.
+- Windows should use CUDA when available.
+- macOS should attempt PyTorch MPS/Metal only after a prototype confirms stability; CPU fallback must remain available.
+- Disable optional pyannote metrics in app-spawned processes with `PYANNOTE_METRICS_ENABLED=0` to preserve AvaNevis' local-only/no-telemetry posture.
+
+Decision status: use `community-1` for v1 unless a Windows-only Sortformer spike proves a major quality or performance win without unacceptable packaging cost.
+
 ## Problem Being Solved
 
 Current transcription output shows what was said, but not who said it:
@@ -16,7 +38,7 @@ Current transcription output shows what was said, but not who said it:
 
 This makes it hard to follow conversations with multiple speakers.
 
-## Solution: Integrate pyannote.audio 3.1
+## Solution: Integrate pyannote.audio Community-1
 
 Combine Whisper (transcription) with pyannote.audio (speaker diarization) to label speakers:
 
@@ -36,7 +58,8 @@ Combine Whisper (transcription) with pyannote.audio (speaker diarization) to lab
 |----------|--------|-----------|
 | When to run | After transcription | Simpler, can retry without re-transcribing |
 | Token storage | Electron `safeStorage` | OS keychain encryption, persists across reinstalls |
-| Platform code | Single implementation | pyannote.audio works on both Windows + macOS |
+| Platform code | Single implementation first | `pyannote.audio` keeps one backend for Windows + macOS; Sortformer can remain a Windows CUDA experiment |
+| Default diarization model | `pyannote/speaker-diarization-community-1` | Current open-source pyannote model, better than 3.1, supports exclusive diarization for transcript alignment |
 | v1 scope | Speaker 1/2/3 labels | Custom naming deferred to v2 |
 
 ### File Structure
@@ -65,8 +88,8 @@ backend/
 │                                                                  │
 │  1. Convert Opus → temp WAV (ffmpeg)                            │
 │  2. Load pyannote pipeline (lazy, first use only)               │
-│  3. Run diarization → speaker segments with timestamps          │
-│  4. Merge with Whisper segments (overlap matching)              │
+│  3. Run diarization → exclusive speaker segments with timestamps│
+│  4. Merge with Whisper segments (exclusive overlap matching)    │
 │  5. Delete temp WAV                                              │
 │  6. Return speaker-labeled segments                              │
 │                                                                  │
@@ -87,14 +110,14 @@ backend/
 
 ```bash
 # Add to requirements-windows.txt and requirements-macos.txt
-pyannote.audio>=3.1.0
-torch>=2.0.0  # Required by pyannote
+pyannote.audio>=4.0.0  # Validate packaged Python 3.11 compatibility before pinning
+torch>=2.0.0           # Required by pyannote; CUDA on Windows, MPS/CPU on macOS
 ```
 
 **Hugging Face Setup (user must do once):**
 1. Sign up at https://huggingface.co/
 2. Get token from https://huggingface.co/settings/tokens
-3. Accept model terms at https://huggingface.co/pyannote/speaker-diarization-3.1
+3. Accept model terms at https://huggingface.co/pyannote/speaker-diarization-community-1
 
 ### Backend: `speaker_diarizer.py`
 
@@ -126,6 +149,8 @@ def _get_pipeline(hf_token: str, device: str = "auto"):
         import torch
         from pyannote.audio import Pipeline
 
+        os.environ.setdefault("PYANNOTE_METRICS_ENABLED", "0")
+
         if device == "auto":
             if torch.cuda.is_available():
                 device = "cuda"
@@ -135,8 +160,8 @@ def _get_pipeline(hf_token: str, device: str = "auto"):
                 device = "cpu"
 
         _pipeline = Pipeline.from_pretrained(
-            "pyannote/speaker-diarization-3.1",
-            use_auth_token=hf_token
+            "pyannote/speaker-diarization-community-1",
+            token=hf_token
         )
         _pipeline.to(torch.device(device))
         print(f"Model loaded on {device}", file=sys.stderr)
@@ -189,11 +214,16 @@ def diarize(
         pipeline = _get_pipeline(hf_token, device)
 
         print("Running speaker diarization...", file=sys.stderr)
-        diarization = pipeline(audio_path, num_speakers=num_speakers)
+        output = pipeline(audio_path, num_speakers=num_speakers)
+
+        # Community-1 exposes exclusive diarization for easier STT alignment.
+        diarization = getattr(output, "exclusive_speaker_diarization", None)
+        if diarization is None:
+            diarization = output.speaker_diarization
 
         # Extract segments
         segments = []
-        for turn, _, speaker in diarization.itertracks(yield_label=True):
+        for turn, speaker in diarization:
             segments.append({
                 'start': turn.start,
                 'end': turn.end,
@@ -507,7 +537,7 @@ Add to Settings panel in `index.html`:
       </div>
       <small>
         <a href="https://huggingface.co/settings/tokens" target="_blank">Get token</a> |
-        <a href="https://huggingface.co/pyannote/speaker-diarization-3.1" target="_blank">Accept terms</a>
+        <a href="https://huggingface.co/pyannote/speaker-diarization-community-1" target="_blank">Accept terms</a>
       </small>
     </div>
 

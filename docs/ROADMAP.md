@@ -68,7 +68,8 @@ Nothing actively in development right now. The branch's UI overhaul, Round-3 pol
 
 ### Transcription
 
-- **Speaker diarization.** Identify who is speaking in multi-person meetings via `pyannote-audio`. Adds ~500 MB model and 2–3× processing time; GPU strongly recommended. Reference: [features/FEATURE_SPEAKER_DIARIZATION.md](features/FEATURE_SPEAKER_DIARIZATION.md).
+- **Speaker diarization.** Identify who is speaking in multi-person meetings. Current v1 recommendation is `pyannote/speaker-diarization-community-1`, replacing the older pyannote 3.1 plan; Windows should use CUDA, macOS should validate MPS/Metal and keep CPU fallback. Reference: [features/FEATURE_SPEAKER_DIARIZATION.md](features/FEATURE_SPEAKER_DIARIZATION.md).
+- **Transcript summaries.** Generate local AI meeting summaries, decisions, action items, risks, and open questions from completed transcripts. Current v1 recommendation is `Qwen3-14B` 4-bit via `llama.cpp` for CUDA/Metal, with `Qwen3-8B` lower-memory and `Mistral-Nemo-Instruct-2407` long-context options. Reference: [features/FEATURE_TRANSCRIPT_SUMMARIES.md](features/FEATURE_TRANSCRIPT_SUMMARIES.md) and [features/PLAN_LOCAL_AI_FEATURES.md](features/PLAN_LOCAL_AI_FEATURES.md).
 - **Real-time transcription.** Live captions during the recording itself. Trade-off: requires a streaming Whisper implementation, raises CPU/GPU usage during capture, and accuracy is below post-processing.
 - **Export formats.** SRT, VTT, DOCX, PDF, JSON in addition to today's Markdown + plain-text Save As.
 

@@ -157,6 +157,8 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
 - **Roadmap & features**
   - [Roadmap](docs/ROADMAP.md)
   - [Speaker diarization](docs/features/FEATURE_SPEAKER_DIARIZATION.md)
+  - [Transcript summaries](docs/features/FEATURE_TRANSCRIPT_SUMMARIES.md)
+  - [Local AI feature plan](docs/features/PLAN_LOCAL_AI_FEATURES.md)
   - [Setup wizard](docs/features/FEATURE_SETUP_WIZARD.md)
   - [Audio visualizer](docs/features/FEATURE_AUDIO_VISUALIZER.md)
   - [Update checks](docs/features/FEATURE_AUTO_UPDATER.md)
@@ -175,7 +177,8 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
 
 **Next up**
 - True silent auto-install updater (today's updater detects the new release and opens the download page).
-- Speaker diarization (who said what).
+- Speaker diarization (who said what), currently planned around `pyannote/speaker-diarization-community-1`.
+- Local transcript summaries with structured decisions, action items, risks, and open questions.
 - Real-time / streaming transcription.
 - Export to SRT, VTT, DOCX, JSON.
 - Acoustic echo cancellation when desktop audio bleeds into the mic.
