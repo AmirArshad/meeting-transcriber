@@ -113,6 +113,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   storeDiarizationToken: (token) => ipcRenderer.invoke('store-diarization-token', token),
   getDiarizationTokenStatus: () => ipcRenderer.invoke('get-diarization-token-status'),
   deleteDiarizationToken: () => ipcRenderer.invoke('delete-diarization-token'),
+  setupDiarization: (options) => ipcRenderer.invoke('setup-diarization', options),
+  validateDiarizationSetup: () => ipcRenderer.invoke('validate-diarization-setup'),
+  removeDiarizationSetup: () => ipcRenderer.invoke('remove-diarization-setup'),
+  setupSummaryModel: (options) => ipcRenderer.invoke('setup-summary-model', options),
+  validateSummaryModel: (options) => ipcRenderer.invoke('validate-summary-model', options),
+  removeSummaryModel: (options) => ipcRenderer.invoke('remove-summary-model', options),
 
   // Event listeners
   onRecordingProgress: (callback) => addListener('recording-progress', callback),
@@ -120,6 +126,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onTranscriptionProgress: (callback) => addListener('transcription-progress', callback),
   onGPUInstallProgress: (callback) => addListener('gpu-install-progress', callback),
   onModelDownloadProgress: (callback) => addListener('model-download-progress', callback),
+  onAiAddonProgress: (callback) => addListener('ai-addon-progress', callback),
   onAudioLevels: (callback) => addListener('audio-levels', callback),
   onRecordingWarning: (callback) => addListener('recording-warning', callback),
   onRecordingFailed: (callback) => addListener('recording-failed', callback),

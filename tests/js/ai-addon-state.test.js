@@ -16,6 +16,7 @@ const {
   getAiAddonStatus,
   getDiarizationAvailability,
   getModelById,
+  getSummaryArtifactForPlatform,
   normalizeAiAddonManifest,
   resolveModelId,
 } = require('../../src/ai-addon-state');
@@ -133,6 +134,24 @@ test('model catalog exposes swappable v1 defaults', () => {
   assert.equal(summaryModel.inference.macosAcceleration, 'metal');
   assert.equal(summaryModel.inference.disableThinking, true);
   assert.equal(summaryModel.artifact.distribution, 'optional-setup-artifact');
+  assert.equal(summaryModel.artifact.fileName, 'Qwen3.5-9B-Q4_K_M.gguf');
+  assert.equal(summaryModel.artifact.platformArtifacts['win32-x64'].acceleration, 'cuda');
+  assert.equal(summaryModel.artifact.platformArtifacts['darwin-arm64'].acceleration, 'metal');
+});
+
+test('selects platform-specific summary setup artifacts from the catalog', () => {
+  const windowsArtifact = getSummaryArtifactForPlatform(DEFAULT_SUMMARY_MODEL_ID, 'win32', 'x64');
+  const macArtifact = getSummaryArtifactForPlatform(DEFAULT_SUMMARY_MODEL_ID, 'darwin', 'arm64');
+
+  assert.equal(windowsArtifact.artifactId, `${DEFAULT_SUMMARY_MODEL_ID}-gguf-win32-x64-cuda`);
+  assert.equal(windowsArtifact.fileName, 'Qwen3.5-9B-Q4_K_M.gguf');
+  assert.equal(windowsArtifact.acceleration, 'cuda');
+  assert.equal(windowsArtifact.runtime, 'llama.cpp');
+  assert.equal(windowsArtifact.sha256, null);
+  assert.equal(windowsArtifact.validationStatus, 'pendingPinnedArtifact');
+  assert.equal(macArtifact.artifactId, `${DEFAULT_SUMMARY_MODEL_ID}-gguf-darwin-arm64-metal`);
+  assert.equal(macArtifact.acceleration, 'metal');
+  assert.equal(getSummaryArtifactForPlatform(DEFAULT_SUMMARY_MODEL_ID, 'linux', 'x64'), null);
 });
 
 test('model selection falls back when a manifest references a retired model', () => {

@@ -59,6 +59,52 @@ const SUMMARY_PROFILES = Object.freeze([
 
 const SUMMARY_PROFILE_IDS = new Set(SUMMARY_PROFILES.map((profile) => profile.id));
 
+function buildSummaryArtifact({ modelId, label, fileName, estimatedSizeBytes, runtimeArchitecture }) {
+  const artifactBaseId = `${modelId}-gguf`;
+
+  return {
+    format: 'gguf',
+    distribution: 'optional-setup-artifact',
+    fileName,
+    sha256: null,
+    estimatedSizeBytes: Math.round(estimatedSizeBytes),
+    validationStatus: 'pendingPinnedArtifact',
+    llamaCpp: {
+      runtime: 'llama.cpp',
+      version: null,
+      validationStatus: 'pendingPinnedRuntime',
+    },
+    platformArtifacts: {
+      'win32-x64': {
+        id: `${artifactBaseId}-win32-x64-cuda`,
+        label: `${label} for Windows CUDA`,
+        platform: 'win32',
+        arch: 'x64',
+        acceleration: 'cuda',
+        runtime: 'llama.cpp',
+        runtimeArchitecture,
+        fileName,
+        sha256: null,
+        downloadUrl: null,
+        validationStatus: 'pendingPinnedArtifact',
+      },
+      'darwin-arm64': {
+        id: `${artifactBaseId}-darwin-arm64-metal`,
+        label: `${label} for macOS Metal`,
+        platform: 'darwin',
+        arch: 'arm64',
+        acceleration: 'metal',
+        runtime: 'llama.cpp',
+        runtimeArchitecture,
+        fileName,
+        sha256: null,
+        downloadUrl: null,
+        validationStatus: 'pendingPinnedArtifact',
+      },
+    },
+  };
+}
+
 const AI_MODEL_CATALOG = deepFreeze({
   version: 1,
   diarization: {
@@ -106,13 +152,13 @@ const AI_MODEL_CATALOG = deepFreeze({
           windowsAcceleration: 'cuda',
           macosAcceleration: 'metal',
         },
-        artifact: {
-          format: 'gguf',
-          distribution: 'optional-setup-artifact',
-          filename: null,
-          sha256: null,
-          validationStatus: 'pendingPinnedArtifact',
-        },
+        artifact: buildSummaryArtifact({
+          modelId: DEFAULT_SUMMARY_MODEL_ID,
+          label: 'Qwen3.5 9B Q4_K_M GGUF',
+          fileName: 'Qwen3.5-9B-Q4_K_M.gguf',
+          estimatedSizeBytes: 5.7 * 1024 * 1024 * 1024,
+          runtimeArchitecture: 'qwen35',
+        }),
         profiles: SUMMARY_PROFILES.map((profile) => profile.id),
       },
       {
@@ -129,13 +175,13 @@ const AI_MODEL_CATALOG = deepFreeze({
           windowsAcceleration: 'cuda',
           macosAcceleration: 'metal',
         },
-        artifact: {
-          format: 'gguf',
-          distribution: 'optional-setup-artifact',
-          filename: null,
-          sha256: null,
-          validationStatus: 'pendingPinnedArtifact',
-        },
+        artifact: buildSummaryArtifact({
+          modelId: 'qwen3.5-4b-q4-k-m',
+          label: 'Qwen3.5 4B Q4_K_M GGUF',
+          fileName: 'Qwen3.5-4B-Q4_K_M.gguf',
+          estimatedSizeBytes: 2.7 * 1024 * 1024 * 1024,
+          runtimeArchitecture: 'qwen35',
+        }),
         profiles: SUMMARY_PROFILES.map((profile) => profile.id),
       },
       {
@@ -152,13 +198,13 @@ const AI_MODEL_CATALOG = deepFreeze({
           windowsAcceleration: 'cuda',
           macosAcceleration: 'metal',
         },
-        artifact: {
-          format: 'gguf',
-          distribution: 'optional-setup-artifact',
-          filename: null,
-          sha256: null,
-          validationStatus: 'pendingPinnedArtifact',
-        },
+        artifact: buildSummaryArtifact({
+          modelId: 'qwen3-14b-q4-k-m',
+          label: 'Qwen3 14B Q4_K_M GGUF',
+          fileName: 'Qwen3-14B-Q4_K_M.gguf',
+          estimatedSizeBytes: 9 * 1024 * 1024 * 1024,
+          runtimeArchitecture: 'qwen3',
+        }),
         profiles: SUMMARY_PROFILES.map((profile) => profile.id),
       },
     ],
@@ -186,6 +232,38 @@ function getDefaultModelId(feature, catalog = AI_MODEL_CATALOG) {
 
 function getModelById(feature, modelId, catalog = AI_MODEL_CATALOG) {
   return getModelList(feature, catalog).find((model) => model.id === modelId) || null;
+}
+
+function getSummaryArtifactForPlatform(modelId, platform = process.platform, arch = process.arch, catalog = AI_MODEL_CATALOG) {
+  const resolvedModelId = resolveModelId('summary', modelId, catalog);
+  const model = getModelById('summary', resolvedModelId, catalog);
+  const artifact = model && model.artifact;
+  const platformKey = `${platform}-${arch}`;
+  const platformArtifact = artifact && artifact.platformArtifacts && artifact.platformArtifacts[platformKey];
+
+  if (!model || !artifact || !platformArtifact) {
+    return null;
+  }
+
+  return {
+    modelId: model.id,
+    modelLabel: model.label,
+    format: artifact.format,
+    distribution: artifact.distribution,
+    fileName: platformArtifact.fileName || artifact.fileName,
+    sha256: platformArtifact.sha256 || artifact.sha256 || null,
+    downloadUrl: platformArtifact.downloadUrl || null,
+    estimatedSizeBytes: artifact.estimatedSizeBytes || null,
+    validationStatus: platformArtifact.validationStatus || artifact.validationStatus || null,
+    llamaCpp: artifact.llamaCpp || null,
+    platform: platformArtifact.platform || platform,
+    arch: platformArtifact.arch || arch,
+    acceleration: platformArtifact.acceleration || null,
+    runtime: platformArtifact.runtime || model.runtime || null,
+    runtimeArchitecture: platformArtifact.runtimeArchitecture || model.inference?.architecture || null,
+    artifactId: platformArtifact.id || `${model.id}-${platformKey}`,
+    label: platformArtifact.label || model.label,
+  };
 }
 
 function resolveModelId(feature, requestedModelId, catalog = AI_MODEL_CATALOG) {
@@ -253,6 +331,7 @@ function normalizeSummaryState(value, catalog = AI_MODEL_CATALOG) {
   return {
     status: normalizeStatus(state.status),
     modelId: resolveModelId('summary', state.modelId, catalog),
+    artifactId: normalizeNullableString(state.artifactId),
     profile: normalizeSummaryProfile(state.profile),
     lastValidation: normalizeLastValidation(state.lastValidation),
     error: normalizeNullableString(state.error),
@@ -429,6 +508,7 @@ module.exports = {
   getDiarizationAvailability,
   getModelById,
   getModelList,
+  getSummaryArtifactForPlatform,
   getSummaryAvailability,
   loadAiAddonManifest,
   normalizeAiAddonManifest,

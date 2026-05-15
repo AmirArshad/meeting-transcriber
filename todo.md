@@ -36,6 +36,7 @@ Goal: add optional post-install local speaker diarization and transcript summari
 - 2026-05-16: Added secure diarization token storage helpers and IPC using Electron `safeStorage` only, with no plaintext fallback. `npm test` and `npm run test:python` passed.
 - 2026-05-16: Product direction updated: skip Phase 1 spikes and proceed with catalog-driven v1 defaults that can be swapped as better local models become available.
 - 2026-05-16: Summary model distribution decision: use a larger optional installer/download artifact, similar to the CUDA setup flow, instead of bundling the model in the base installer or doing opaque background downloads.
+- 2026-05-16: Added explicit AI add-on setup/check/remove/validate helpers and IPC wrappers, safe redacted `ai-addon-progress` events, platform-specific summary artifact selection, and pinned-filename/checksum enforcement that refuses summary downloads until artifact metadata is complete. `npm test` and `npm run test:python` passed.
 
 ## V1 Model Defaults
 
@@ -75,10 +76,10 @@ Skipped by product direction. Proceed with the V1 Model Defaults above and keep 
 - [x] Ensure tokens are stored only via Electron `safeStorage`, never in the manifest or meeting metadata.
 - [x] Define model cache directory under Electron `userData`.
 - [x] Add curated model metadata for diarization and summary models.
-- [ ] Add explicit download, remove, check-status, and validate actions.
-- [ ] Add checksum or pinned filename validation for summary GGUF artifacts.
+- [x] Add explicit download, remove, check-status, and validate actions. (Summary downloads are implemented behind explicit user action and currently refuse to run until pinned URLs/checksums are filled in.)
+- [x] Add checksum or pinned filename validation for summary GGUF artifacts. (Pinned filename is catalog-driven; checksum is required before ready state or download.)
 - [x] Add status states: `notConfigured`, `needsAccount`, `downloading`, `validating`, `ready`, `error`, and `unsupported`.
-- [ ] Add progress events that avoid transcript text, token values, and raw prompts.
+- [x] Add progress events that avoid transcript text, token values, and raw prompts.
 
 ## Phase 3 - Diarization Backend
 
@@ -109,11 +110,11 @@ Skipped by product direction. Proceed with the V1 Model Defaults above and keep 
 
 - [x] Add `get-ai-addon-status` IPC handler.
 - [x] Add secure token IPC for store/get/delete or reuse an existing safeStorage abstraction if available. (Status/delete/store only expose redacted state; token retrieval remains main-process-only for future backend calls.)
-- [ ] Add `setup-diarization`, `remove-diarization-setup`, and token validation IPC handlers.
-- [ ] Add `setup-summary-model` and `remove-summary-model` IPC handlers.
+- [x] Add `setup-diarization`, `remove-diarization-setup`, and token validation IPC handlers.
+- [x] Add `setup-summary-model` and `remove-summary-model` IPC handlers. (Downloads stay blocked until pinned artifact URL/checksum metadata is supplied.)
 - [ ] Add `diarize-transcript` IPC handler for post-transcription integration.
 - [ ] Add `generate-summary` IPC handler for Home and History actions.
-- [ ] Add progress events for model download, validation, diarization, chunk summaries, final merge, and save.
+- [ ] Add progress events for model download, validation, diarization, chunk summaries, final merge, and save. (Partial: add-on setup/download/validation events now emit through redacted `ai-addon-progress`.)
 - [x] Extend meeting metadata with `ai.diarization` and `ai.summary` references without storing large derived output inline.
 - [ ] Save derived files: `*.speakers.json`, `*.summary.json`, and `*.summary.md`. (Partial: metadata can reference and delete these files; generation/save integration remains pending.)
 - [x] Preserve `backend/meeting_manager.py` file locking, atomic writes, and transactional behavior.
@@ -137,7 +138,7 @@ Skipped by product direction. Proceed with the V1 Model Defaults above and keep 
 
 ## Phase 7 - Tests And Validation
 
-- [ ] Unit-test add-on state normalization and prompt priority, especially CUDA before diarization on Windows/NVIDIA.
+- [ ] Unit-test add-on state normalization and prompt priority, especially CUDA before diarization on Windows/NVIDIA. (Partial: add-on setup/cache normalization and platform support are covered; renderer prompt priority is pending.)
 - [x] Unit-test secure token storage behavior without exposing token values in logs.
 - [x] Unit-test speaker/segment overlap merge behavior.
 - [ ] Unit-test summary chunking, JSON validation, and malformed-output retry/repair behavior. (Partial: chunking and validation covered; retry/repair pending runtime integration.)

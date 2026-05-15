@@ -33,7 +33,16 @@ const {
   MACOS_PERMISSION_CHECK_TIMEOUT_MS,
 } = require('./main-process-helpers');
 const { checkForUpdates, openDownloadPage } = require('./updater');
-const { getAiAddonStatus } = require('./ai-addon-state');
+const {
+  AI_ADDON_PROGRESS_CHANNEL,
+  checkAiAddonSetupStatus,
+  removeDiarizationSetup,
+  removeSummaryModel,
+  setupDiarizationAddon,
+  setupSummaryModel,
+  validateDiarizationSetup,
+  validateSummaryModel,
+} = require('./ai-addon-setup');
 const {
   TOKEN_KEYS,
   deleteAiAddonToken,
@@ -1602,10 +1611,26 @@ ipcMain.handle('get-macos-permission-status', async () => {
 
 ipcMain.handle('get-pending-update-info', async () => pendingUpdateInfo);
 
-ipcMain.handle('get-ai-addon-status', async () => getAiAddonStatus({
+function emitAiAddonProgress(payload) {
+  sendToRenderer(AI_ADDON_PROGRESS_CHANNEL, payload);
+}
+
+function getAiAddonRuntimeOptions(extra = {}) {
+  return {
+    userDataDir: app.getPath('userData'),
+    platform: process.platform,
+    arch: process.arch,
+    safeStorage,
+    emitProgress: emitAiAddonProgress,
+    ...extra,
+  };
+}
+
+ipcMain.handle('get-ai-addon-status', async () => checkAiAddonSetupStatus({
   userDataDir: app.getPath('userData'),
   platform: process.platform,
   arch: process.arch,
+  safeStorage,
 }));
 
 ipcMain.handle('store-diarization-token', async (event, token) => storeAiAddonToken({
@@ -1627,6 +1652,29 @@ ipcMain.handle('delete-diarization-token', async () => deleteAiAddonToken({
   userDataDir: app.getPath('userData'),
   tokenKey: TOKEN_KEYS.diarizationHuggingFace,
 }));
+
+ipcMain.handle('setup-diarization', async (event, options = {}) => setupDiarizationAddon(getAiAddonRuntimeOptions({
+  modelId: options.modelId,
+  speakerCount: options.speakerCount,
+  token: options.token,
+})));
+
+ipcMain.handle('validate-diarization-setup', async () => validateDiarizationSetup(getAiAddonRuntimeOptions()));
+
+ipcMain.handle('remove-diarization-setup', async () => removeDiarizationSetup(getAiAddonRuntimeOptions()));
+
+ipcMain.handle('setup-summary-model', async (event, options = {}) => setupSummaryModel(getAiAddonRuntimeOptions({
+  modelId: options.modelId,
+  profile: options.profile,
+})));
+
+ipcMain.handle('validate-summary-model', async (event, options = {}) => validateSummaryModel(getAiAddonRuntimeOptions({
+  modelId: options.modelId,
+})));
+
+ipcMain.handle('remove-summary-model', async (event, options = {}) => removeSummaryModel(getAiAddonRuntimeOptions({
+  modelId: options.modelId,
+})));
 
 /**
  * Get list of available audio devices
