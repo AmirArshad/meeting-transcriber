@@ -1,308 +1,209 @@
-# 🎙️ AvaNevis
+# AvaNevis
 
-> AI-powered desktop application for recording and transcribing meetings with pristine audio quality
+> Privacy-first desktop app for recording and transcribing meetings locally with Whisper.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/Platform-Windows%2010%2F11-0078D6.svg)](https://www.microsoft.com/windows)
 [![macOS](https://img.shields.io/badge/Platform-macOS%2013%2B-000000.svg)](https://www.apple.com/macos)
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
-[![Electron](https://img.shields.io/badge/Electron-28.0-47848F.svg)](https://www.electronjs.org/)
+[![Electron](https://img.shields.io/badge/Electron-42-47848F.svg)](https://www.electronjs.org/)
 
-## What is this?
+AvaNevis (formerly Meeting Transcriber) records your microphone *and* desktop audio at the same time, then transcribes everything on-device with Whisper. No cloud, no telemetry, no account.
 
-AvaNevis is a **privacy-first desktop application** that captures and transcribes your meetings with exceptional audio quality. This app captures **both your voice AND desktop audio** (speakers/system audio) - perfect for recording online meetings (with attendee permission), interviews, podcasts, or any computer-based conversation.
+## Why
 
-### Why I Built This
+Online meetings are a tax on memory. The good options for getting transcripts back either upload your audio to someone else's cloud, charge per minute, or only listen to your microphone and miss whatever the other side said. AvaNevis captures both sides, runs the model locally, and keeps everything on disk under your user folder.
 
-During remote work, I found myself in countless meetings where I wished I could:
+## Highlights
 
-- 📝 **Have accurate transcripts** for later reference
-- 🔒 **Keep recordings private** - all processing happens locally on my machine
-- 🚀 **Get fast transcriptions** with GPU acceleration
+- **Dual capture** — microphone + desktop audio recorded in parallel, then mixed after the recording stops to keep both streams intact.
+- **Local transcription** — `faster-whisper` on Windows (CUDA when available), `lightning-whisper-mlx` on Apple Silicon (Metal). CPU fallback path exists for non-GPU machines.
+- **Premium dark UI** — vertical icon rail, top-bar app pane, dense waveform visualizer with peak-hold and DPR-aware rendering, and a stutter-free custom audio scrubber driven by `requestAnimationFrame`.
+- **Markdown transcripts** — saved transcripts are real Markdown (timestamps, headings, lists), and the in-app viewer renders them inline with chip-style timestamp pills.
+- **Editable meetings** — rename meetings inline (history *and* immediately after recording) without renaming any files; metadata stays anchored to the meeting ID.
+- **Save As anywhere** — export any transcript through Electron's native save dialog as `.md` or `.txt`.
+- **Search and bulk-manage history** — filter the meeting list, multi-select, bulk delete, replay with synchronized audio.
+- **Recovery-friendly storage** — meetings are persisted with an atomic write + cross-process file lock, with corrupt-metadata backups (`meetings.corrupt.*.json`) and filesystem rescan/import on demand.
+- **One-click installer** — Windows NSIS and macOS DMG with embedded Python runtime, ffmpeg, and the bundled native macOS helper. No system Python required.
+- **Update awareness** — checks GitHub Releases on launch and shows an in-app banner with one-click open of the release page.
 
-No existing solution offered all of this in one package, so I built it.
+## Privacy
 
-## ✨ Key Features
+- 100% local processing — no cloud transcription, no API calls.
+- Zero telemetry or analytics.
+- No account, login, or signup.
+- Open source — audit the code yourself.
+- See [docs/internal/SECURITY_AUDIT.md](docs/internal/SECURITY_AUDIT.md) for the full security write-up.
 
-### 🎯 Core Capabilities
-
-- **Dual Audio Capture** - Records both microphone and desktop audio (WASAPI on Windows, ScreenCaptureKit on macOS)
-- **AI Transcription** - Powered by OpenAI's Whisper model with 99 language support
-- **100% Local Processing** - No data sent to cloud, complete privacy
-- **GPU Acceleration** - CUDA support on Windows (NVIDIA), Metal support on macOS (Apple Silicon)
-- **Cross-Platform** - 100% feature parity between Windows and macOS
-
-### 🛠️ Technical Features
-
-- **Professional Audio Quality** - 48kHz sampling with soxr VHQ resampling on both platforms
-- **Intelligent Audio Enhancement** - Per-channel processing for natural, broadcast-quality sound
-- **Opus Compression** - 95% file size reduction (450MB → 23MB for 40-min recording)
-- **Meeting History** - Searchable archive with audio playback, full transcripts, and recovery-friendly metadata handling
-- **One-Click Installer** - Professional installers with embedded Python runtime (no dependencies)
-- **CPU Fallback** - Automatic fallback to CPU transcription when GPU unavailable
-
-## 🚀 Quick Start
-
-### For End Users (Installer)
-
-**Windows:**
-
-1. **Download** the latest `.exe` installer from [Releases](https://github.com/AmirArshad/meeting-transcriber/releases)
-2. **Run** `AvaNevis-Setup-<version>.exe` (may show SmartScreen warning - click "More info" → "Run anyway")
-3. **Launch** the app from Start Menu
-4. **Select** your microphone and desktop audio device
-5. **Click** "Start Recording" and transcribe!
-
-**macOS:**
-
-1. **Download** the latest `.dmg` file from [Releases](https://github.com/AmirArshad/meeting-transcriber/releases)
-2. **Open** the DMG and drag AvaNevis to Applications
-3. **⚠️ IMPORTANT:** Right-click the app → select "Open" (NOT double-click)
-   - If you double-click, macOS will show '"AvaNevis" is damaged'
-   - This is a security warning for unsigned apps, NOT actual damage
-   - Right-click → "Open" bypasses this Gatekeeper check
-4. **Click** "Open" in the confirmation dialog
-5. **Grant** microphone permissions when prompted
-6. **Select** your audio devices and start recording!
-
-> **Alternative (if right-click doesn't work):** Run in Terminal: `xattr -d com.apple.quarantine /Applications/Meeting\ Transcriber.app`
-
-**First run:** Whisper model (~500MB) downloads automatically on first transcription.
-
-### For Developers
-
-```bash
-# Clone repository
-git clone https://github.com/AmirArshad/meeting-transcriber.git
-cd avanevis
-
-# Install Node.js dependencies
-npm install
-
-# Install Python dependencies
-# Windows: py -3.11 -m pip install -r requirements-windows.txt -r requirements-dev.txt
-# macOS:   python3 -m pip install -r requirements-macos.txt -r requirements-dev.txt
-
-# Run the app
-npm start
-```
-
-See [docs/development/BUILD_INSTRUCTIONS.md](docs/development/BUILD_INSTRUCTIONS.md) for detailed setup.
-See [docs/development/TESTING.md](docs/development/TESTING.md) for test setup on a new machine.
-
-### Running Tests
-
-```bash
-# JavaScript regression tests + syntax checks
-npm test
-
-# Python regression tests (cross-platform wrapper)
-npm run test:python
-
-# Or run both
-npm run test:all
-```
-
-Direct Python commands are also supported: use `py -3.11 -m pytest tests/python` on Windows, or `python3 -m pytest tests/python` on macOS.
-For recorder changes, also run the manual smoke checklist in `tests/manual/recording-smoke-checklist.md`.
-
-## 📸 How It Works
-
-1. **Select Audio Sources**
-
-   - Choose your microphone (for your voice)
-   - Choose desktop audio/loopback device (for system audio)
-   - Select transcription language and model size
-
-2. **Record Your Meeting**
-
-    - App captures both audio streams simultaneously
-    - Streams are aligned and mixed after recording stops for better reliability
-    - Automatic Opus compression on save, with WAV fallback if ffmpeg is unavailable or output verification fails
-
-3. **Get Your Transcript**
-
-   - Click "Stop & Transcribe"
-   - Whisper AI processes audio locally
-   - View timestamped transcript with audio playback
-
-4. **Access History**
-   - Browse all past meetings
-   - Search transcripts
-   - Re-listen with synchronized audio
-
-## 🎛️ Audio Quality
-
-This app uses **professional-grade audio processing with 100% parity across Windows and macOS**:
-
-- **Microphone Enhancement:**
-
-  - 48kHz sample rate (professional broadcast standard)
-  - Per-channel processing for stereo sources
-  - DC offset removal (prevents pops/clicks)
-  - Minimal processing (Google Meet-style natural sound)
-  - Gentle normalization (preserves dynamics)
-
-- **Desktop Audio:**
-
-  - Pristine capture with no processing
-  - Maintains original quality
-  - 48kHz sample rate on both platforms
-
-- **Final Mix:**
-  - soxr VHQ resampling (Very High Quality - maximum available quality)
-  - Cross-platform quality matching (identical processing on Windows and macOS)
-  - Stereo output with per-channel enhancement
-  - Compressed to Opus format (128 kbps, maximum quality)
-
-## 🌍 Supported Languages
-
-The UI provides quick access to 12 commonly used languages:
-
-- **English**, Spanish, French, German, Italian, Portuguese
-- **Chinese** (Mandarin/Cantonese), Japanese, Korean
-- **Farsi/Persian**, Panjabi, Hindi
-
-Whisper itself supports **99 languages total** - the full list can be customized in the code if needed. See [docs/TRANSCRIPTION_GUIDE.md](docs/TRANSCRIPTION_GUIDE.md) for transcription tips.
-
-## 💻 System Requirements
+## Install
 
 ### Windows
 
-**Minimum:**
+1. Download the latest `AvaNevis-Setup-<version>.exe` from [Releases](https://github.com/AmirArshad/meeting-transcriber/releases).
+2. Run it. SmartScreen may warn — click **More info → Run anyway** (the binary is unsigned).
+3. Launch *AvaNevis* from the Start Menu.
+4. Pick your microphone and desktop-audio loopback device on the Record tab.
+5. First transcription downloads the Whisper model (~500MB) once and caches it.
 
-- **OS:** Windows 10/11 (64-bit)
-- **RAM:** 4 GB
-- **Storage:** 2 GB free space
-- **Audio:** Any microphone + audio interface
+### macOS (Apple Silicon, macOS 13+)
 
-**Recommended:**
+1. Download `AvaNevis-Setup-<version>.dmg` from [Releases](https://github.com/AmirArshad/meeting-transcriber/releases).
+2. Open the DMG and drag *AvaNevis* into Applications.
+3. **Right-click → Open** the first time. Double-clicking will trigger Gatekeeper to claim the app is "damaged" because the build is unsigned. Right-click → Open bypasses this safely.
+4. Grant microphone and screen-recording permissions when prompted (screen recording is required for ScreenCaptureKit desktop audio — no screen video is captured).
 
-- **OS:** Windows 11 (64-bit)
-- **RAM:** 8 GB
-- **Storage:** 10 GB free space (for models + recordings)
-- **GPU:** NVIDIA GPU with 4GB+ VRAM (for CUDA acceleration)
-- **Audio:** USB microphone or audio interface
+If right-click → Open misbehaves, run `xattr -d com.apple.quarantine /Applications/AvaNevis.app` once and relaunch.
+
+> **Upgrading from "Meeting Transcriber"?** The new app uses a fresh user-data folder (`%APPDATA%\AvaNevis` on Windows, `~/Library/Application Support/AvaNevis` on macOS), so old recordings won't auto-appear. Move the old folder's contents into the new one to keep your history. The first AvaNevis update prompt for existing Meeting Transcriber installs opens the GitHub release page in your browser instead of auto-downloading; future AvaNevis-to-AvaNevis updates restore the direct-download path.
+
+## Develop
+
+```bash
+git clone https://github.com/AmirArshad/meeting-transcriber.git
+cd meeting-transcriber
+
+npm install
+
+# Windows
+py -3.11 -m pip install -r requirements-windows.txt -r requirements-dev.txt
+
+# macOS
+python3 -m pip install -r requirements-macos.txt -r requirements-dev.txt
+
+npm start           # run app
+npm run dev         # run with --dev flag
+```
+
+See [docs/development/BUILD_INSTRUCTIONS.md](docs/development/BUILD_INSTRUCTIONS.md) for packaging and [docs/development/TESTING.md](docs/development/TESTING.md) for setting up the test suite on a fresh machine.
+
+### Build installers
+
+```bash
+npm run prepare-build     # downloads pinned Python + ffmpeg into build/resources
+npm run build             # Windows NSIS
+npm run build:mac         # macOS DMG (Apple Silicon)
+npm run build:dir         # unpacked dir build for fast smoke testing
+npm run build:mac:dir     # unpacked .app for macOS
+```
+
+The macOS build also signs and bundles the native `audiocapture-helper` Swift binary from `swift/AudioCaptureHelper/`.
+
+### Test
+
+```bash
+npm test            # JS regression suite + syntax checks (Node test runner)
+npm run test:python # Python regression suite (pytest via cross-platform wrapper)
+npm run test:all    # both
+```
+
+For recorder changes, also run the manual smoke checklist in `tests/manual/recording-smoke-checklist.md`.
+
+## How it works
+
+1. **Pick devices.** Choose a mic, a desktop-audio loopback device, the language, and a Whisper model size in the Settings tab.
+2. **Record.** Both streams are written to disk in parallel (WASAPI loopback on Windows, ScreenCaptureKit via the bundled Swift helper on macOS, with PyObjC ScreenCaptureKit as fallback). The audio visualizer shows live mic + desktop levels.
+3. **Stop.** The recorder reports completion as a structured stdout JSON event. The two streams are aligned and mixed at 48 kHz stereo and compressed to Opus (with WAV fallback if ffmpeg fails).
+4. **Transcribe.** The mixed audio is passed to the platform-appropriate Whisper backend; output lands as a Markdown transcript with `[mm:ss - mm:ss]` timestamp lines.
+5. **Save.** Meeting metadata, audio file, and transcript are persisted to the user-data folder under a unique meeting ID. Meetings that already exist on disk get rescanned and re-imported on launch.
+
+## Audio quality
+
+- 48 kHz target sample rate end-to-end (Windows + macOS parity).
+- soxr VHQ resampling for the highest available quality on both platforms.
+- Gentle mic enhancement (DC-offset removal, light normalization) — no aggressive denoising or compression. Desktop audio is left untouched.
+- Stereo output, Opus-compressed (≈ 95% size reduction vs WAV — a 40-minute meeting is roughly 23 MB).
+
+## Languages
+
+The UI exposes 12 commonly used languages: English, Spanish, French, German, Italian, Portuguese, Mandarin/Cantonese, Japanese, Korean, Farsi/Persian, Punjabi, Hindi. Whisper itself supports 99 — extending the list is a one-line UI change. See [docs/TRANSCRIPTION_GUIDE.md](docs/TRANSCRIPTION_GUIDE.md) for tips.
+
+## Requirements
+
+### Windows
+
+- Windows 10 or 11, 64-bit
+- 4 GB RAM minimum, 8 GB recommended
+- 2 GB free disk minimum, 10 GB recommended (models + recordings)
+- Optional: NVIDIA GPU with 4 GB+ VRAM for CUDA acceleration
 
 ### macOS
 
-**Minimum:**
+- macOS 13 (Ventura) or later
+- Apple Silicon (M1/M2/M3/M4) — Intel Macs have a CPU fallback path in dev but are not a packaged target
+- 4 GB RAM minimum, 8 GB recommended
+- 2 GB free disk minimum, 10 GB recommended
 
-- **OS:** macOS 13 (Ventura) or later
-- **Chip:** Apple Silicon (M1/M2/M3/M4)
-- **RAM:** 4 GB
-- **Storage:** 2 GB free space
-- **Audio:** Any microphone
+## Tech stack
 
-**Recommended:**
+- **Frontend:** Electron 42, plain HTML / CSS / JavaScript (no UI framework)
+- **Backend:** Python 3.11, bundled with the installer
+- **Transcription:** `faster-whisper` (Windows, CUDA optional), `lightning-whisper-mlx` (macOS, Metal)
+- **Audio capture:** `pyaudiowpatch` WASAPI loopback (Windows), `sounddevice` + native Swift `AudioCaptureHelper` over ScreenCaptureKit (macOS)
+- **Audio processing:** NumPy, SciPy, soxr, ffmpeg (Opus)
+- **Updater:** GitHub Releases API + in-app banner (release page opens in browser)
 
-- **OS:** macOS 14 (Sonoma) or later
-- **Chip:** M3/M4 (better Metal GPU performance)
-- **RAM:** 8 GB
-- **Storage:** 10 GB free space (for models + recordings)
-- **Audio:** USB microphone or audio interface
+## Documentation
 
-## ⚙️ Technology Stack
+- **Users**
+  - [Troubleshooting](docs/TROUBLESHOOTING.md) — common issues and fixes
+  - [Transcription tips](docs/TRANSCRIPTION_GUIDE.md)
+  - [Meeting features](docs/MEETING_TRANSCRIPTION.md) — history, recovery, metadata
+  - [macOS install guide](docs/MACOS_INSTALLATION.md)
+- **Developers**
+  - [Build instructions](docs/development/BUILD_INSTRUCTIONS.md)
+  - [Testing guide](docs/development/TESTING.md)
+  - [GPU setup (CUDA)](docs/development/SETUP_GPU.md)
+  - [Installer implementation](docs/development/INSTALLER_IMPLEMENTATION.md)
+- **Roadmap & features**
+  - [Roadmap](docs/ROADMAP.md)
+  - [Speaker diarization](docs/features/FEATURE_SPEAKER_DIARIZATION.md)
+  - [Setup wizard](docs/features/FEATURE_SETUP_WIZARD.md)
+  - [Audio visualizer](docs/features/FEATURE_AUDIO_VISUALIZER.md)
+  - [Update checks](docs/features/FEATURE_AUTO_UPDATER.md)
+  - [JSON-based event system](docs/features/json-based-events.md)
 
-- **Frontend:** Electron 42, HTML/CSS/JavaScript
-- **Backend:** Python 3.11 (bundled)
-- **AI Models:**
-  - Windows: faster-whisper (OpenAI Whisper with CUDA)
-  - macOS: Lightning-Whisper-MLX (Metal GPU acceleration)
-- **Audio Capture:**
-  - Windows: PyAudioWPatch (WASAPI loopback)
-  - macOS: sounddevice + ScreenCaptureKit (native Swift helper)
-- **Audio Processing:** NumPy, SciPy, soxr (high-quality resampling)
-- **Compression:** ffmpeg (Opus codec)
-- **GPU Acceleration:**
-  - Windows: PyTorch + CUDA 12.1
-  - macOS: MLX framework (Metal)
+## Roadmap (short version)
 
-## 📚 Documentation
+**Shipped recently**
+- Premium dark UI overhaul: vertical icon rail, top-bar pane, expressive dual-channel waveform with peak-hold and interpolation, custom rAF-driven audio scrubber, multi-select with bulk delete, sidebar search, relative-time meeting timestamps, developer console drawer.
+- Markdown transcript rendering in the meeting viewer (timestamps as accent pill chips), with the raw `.md` preserved as the copy/save source of truth.
+- Inline meeting rename in both history and post-recording views (via a new `update-meeting` IPC + `MeetingManager.update_meeting`).
+- Save transcripts via the native save dialog (`.md` / `.txt` / All Files) with sanitized default filenames.
+- Slimmer audio visualizer (denser buffer, gentler glow and peak cap).
+- Cross-process atomic meeting metadata writes with corrupt-file backups and transactional add behavior.
+- Rebrand from Meeting Transcriber to AvaNevis (display name, installers, Info.plist descriptions, slug paths). GitHub repo slug stays `meeting-transcriber`.
 
-- **User Guides:**
+**Next up**
+- True silent auto-install updater (today's updater detects the new release and opens the download page).
+- Speaker diarization (who said what).
+- Real-time / streaming transcription.
+- Export to SRT, VTT, DOCX, JSON.
+- Acoustic echo cancellation when desktop audio bleeds into the mic.
 
-  - [🔧 Troubleshooting](docs/TROUBLESHOOTING.md) - **Common issues & solutions**
-  - [Transcription Tips](docs/TRANSCRIPTION_GUIDE.md) - Get the best results
-  - [Meeting Features](docs/MEETING_TRANSCRIPTION.md) - Using the history viewer
+Full plan: [docs/ROADMAP.md](docs/ROADMAP.md).
 
-- **Development:**
+## Contributing
 
-  - [Build Instructions](docs/development/BUILD_INSTRUCTIONS.md) - Create installer
-  - [Testing Guide](docs/development/TESTING.md) - Set up and run the regression suite
-  - [GPU Setup](docs/development/SETUP_GPU.md) - Enable CUDA acceleration
-  - [Implementation Details](docs/development/INSTALLER_IMPLEMENTATION.md) - Technical overview
+Issues and discussions live on GitHub:
 
-- **Roadmap & Features:**
-  - [Product Roadmap](docs/ROADMAP.md) - Full development roadmap
-  - [Speaker Diarization](docs/features/FEATURE_SPEAKER_DIARIZATION.md) - Who said what
-  - [Setup Wizard](docs/features/FEATURE_SETUP_WIZARD.md) - Guided first-time setup
-  - [Combined Button](docs/features/FEATURE_COMBINED_BUTTON.md) - Unified recording control
-  - [Audio Visualizer](docs/features/FEATURE_AUDIO_VISUALIZER.md) - Real-time level meters
-  - [Update Checks](docs/features/FEATURE_AUTO_UPDATER.md) - GitHub release checks with manual download
+- **Issues:** https://github.com/AmirArshad/meeting-transcriber/issues
+- **Discussions:** https://github.com/AmirArshad/meeting-transcriber/discussions
 
-## 🔒 Privacy & Security
+PRs welcome. Please run `npm run test:all` before opening one and add coverage for any new IPC or recorder-output behavior — the JS test suite asserts cross-process contracts and the Python suite covers meeting-manager invariants.
 
-- ✅ **100% Local Processing** - No cloud uploads, no API calls
-- ✅ **No Telemetry** - Zero usage tracking or analytics
-- ✅ **No Account Required** - No login, no email, no registration
-- ✅ **Open Source** - Full transparency, audit the code yourself
-- ✅ **GDPR Compliant** - No personal data collected
+## Acknowledgments
 
-See [docs/internal/SECURITY_AUDIT.md](docs/internal/SECURITY_AUDIT.md) for full security analysis.
+- **OpenAI** for Whisper.
+- **faster-whisper** for the efficient CUDA/CPU implementation.
+- **Lightning-Whisper-MLX** for Apple Silicon Metal acceleration.
+- **PyAudioWPatch** for WASAPI loopback on Windows.
+- **ScreenCaptureKit** for clean desktop audio on macOS.
+- **Electron** for making this kind of cross-platform desktop app practical.
 
-## 📝 License
+## License
 
-This project is licensed under the MIT License - see [LICENSE.txt](LICENSE.txt) for details.
+MIT — see [LICENSE.txt](LICENSE.txt).
 
-## 🙏 Acknowledgments
+## Repo note
 
-- **OpenAI** - For the incredible Whisper model
-- **faster-whisper** - For the efficient CPU/CUDA implementation
-- **Lightning-Whisper-MLX** - For blazing-fast Metal GPU acceleration on macOS
-- **PyAudioWPatch** - For WASAPI loopback support on Windows
-- **ScreenCaptureKit** - For pristine desktop audio capture on macOS
-- **Electron** - For making desktop apps accessible
-
-## 📞 Contact & Support
-
-- **Issues:** [GitHub Issues](https://github.com/AmirArshad/meeting-transcriber/issues)
-- **Discussions:** [GitHub Discussions](https://github.com/AmirArshad/meeting-transcriber/discussions)
-
-## 🗺️ Roadmap
-
-### Completed ✅
-
-- [x] Core recording and transcription
-- [x] Meeting history with playback
-- [x] GPU acceleration support
-- [x] Professional installer
-- [x] Opus audio compression
-- [x] Model preloading for improved first-time experience
-- [x] Combined Start/Stop/Transcribe button (single action UX)
-- [x] Audio visualizer (real-time waveform during recording)
-- [x] **v1.6.0:** Background recording stability (60+ min recordings)
-- [x] **v1.6.0:** Performance optimizations (75% less CPU when minimized)
-- [x] **v1.6.0:** Audio quality improvements (Google Meet-quality)
-- [x] **v1.6.1:** Transcription reliability fixes (handle edge cases gracefully)
-- [x] **v1.6.1:** Automatic meeting recovery (scan filesystem on refresh)
-- [x] **v1.6.1:** Cantonese language support added to UI
-- [x] **v1.7.0:** macOS support with Metal GPU acceleration
-- [x] **v1.7.0:** Cross-platform audio quality parity (48kHz + soxr VHQ resampling)
-- [x] **v1.7.0:** CPU fallback for Intel Macs (faster-whisper with int8 optimization)
-- [x] **v1.7.0:** 100% feature parity across Windows and macOS
-
-### In Progress 🚧
-
-- [ ] True auto-install updater (the current app checks GitHub releases and opens manual downloads)
-
-### Planned 📋
-
-- [ ] **JSON-Based Event System:** Finish migrating remaining recorder/transcription flows away from stderr/string parsing to robust JSON events (see [docs/features/json-based-events.md](docs/features/json-based-events.md))
-- [ ] Speaker diarization (identify who's speaking)
-- [ ] **macOS Advanced Audio:** Real-time streaming (low RAM), App-specific capture, Real-time mixing
-- [ ] Real-time transcription
-- [ ] Export to various formats (SRT, VTT, DOCX)
-- [ ] **Echo Cancellation:** Remove echo when desktop audio is picked up by mic (see [docs/features/FEATURE_ECHO_CANCELLATION.md](docs/features/FEATURE_ECHO_CANCELLATION.md))
-
----
+The GitHub repository is still `AmirArshad/meeting-transcriber` even though the app is now AvaNevis. The repo slug was kept to avoid breaking existing clones, release URLs, and the in-app updater's trusted-URL allowlist. Everything user-facing (window title, installer, bundle, paths, docs) reads "AvaNevis".
