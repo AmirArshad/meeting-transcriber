@@ -6,11 +6,18 @@ operations for listing, retrieving, and deleting meetings.
 """
 
 import json
+import os
+from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional
 import sys
 import shutil
+import tempfile
+import threading
+import re
+
+from filelock import FileLock
 
 
 class MeetingManager:
@@ -29,10 +36,160 @@ class MeetingManager:
         self.recordings_dir.mkdir(parents=True, exist_ok=True)
 
         self.metadata_file = self.recordings_dir / "meetings.json"
+        self.metadata_lock_file = self.recordings_dir / "meetings.json.lock"
+        self._metadata_thread_lock = threading.RLock()
+        self._metadata_file_lock = FileLock(str(self.metadata_lock_file), timeout=10)
+        self._corrupt_metadata_backup_path: Optional[Path] = None
+        self._corrupt_metadata_signature: Optional[tuple[int, int]] = None
 
         # Create empty metadata file if it doesn't exist
         if not self.metadata_file.exists():
             self._save_meetings([])
+
+    @contextmanager
+    def _metadata_guard(self):
+        """Serialize metadata operations across threads and processes."""
+        with self._metadata_thread_lock:
+            with self._metadata_file_lock:
+                yield
+
+    def _load_meetings_unlocked(self) -> List[Dict]:
+        """Load meetings without acquiring the metadata guard."""
+        try:
+            with open(self.metadata_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return []
+        except json.JSONDecodeError as exc:
+            backup_path = self._backup_corrupt_metadata(exc)
+            warning_path = backup_path.name if backup_path else self.metadata_file.name
+            print(
+                f"Warning: meetings metadata was corrupt and has been backed up to {warning_path}",
+                file=sys.stderr,
+            )
+            return []
+
+    def _backup_corrupt_metadata(self, error: json.JSONDecodeError) -> Optional[Path]:
+        """Back up a corrupt metadata file before continuing with an empty in-memory list."""
+        if not self.metadata_file.exists():
+            return None
+
+        try:
+            stat = self.metadata_file.stat()
+            signature = (stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            signature = None
+
+        if (
+            signature is not None
+            and self._corrupt_metadata_signature == signature
+            and self._corrupt_metadata_backup_path is not None
+            and self._corrupt_metadata_backup_path.exists()
+        ):
+            return self._corrupt_metadata_backup_path
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = self.recordings_dir / f"meetings.corrupt.{timestamp}.json"
+        counter = 1
+        while backup_path.exists():
+            backup_path = self.recordings_dir / f"meetings.corrupt.{timestamp}_{counter}.json"
+            counter += 1
+
+        shutil.copy2(self.metadata_file, backup_path)
+        self._corrupt_metadata_backup_path = backup_path
+        self._corrupt_metadata_signature = signature
+        print(
+            f"Warning: Backed up corrupt meetings metadata after JSON decode failure at line {error.lineno}, column {error.colno}",
+            file=sys.stderr,
+        )
+        return backup_path
+
+    def _save_meetings_unlocked(self, meetings: List[Dict]):
+        """Atomically save meetings without acquiring the metadata guard."""
+        temp_fd, temp_path = tempfile.mkstemp(
+            prefix='meetings.',
+            suffix='.tmp',
+            dir=str(self.recordings_dir),
+        )
+
+        try:
+            with os.fdopen(temp_fd, 'w', encoding='utf-8') as f:
+                json.dump(meetings, f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+
+            os.replace(temp_path, self.metadata_file)
+            self._corrupt_metadata_backup_path = None
+            self._corrupt_metadata_signature = None
+
+            try:
+                dir_fd = os.open(self.recordings_dir, os.O_RDONLY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+            except (AttributeError, OSError):
+                pass
+        finally:
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+
+    def _list_meetings_locked(self) -> List[Dict]:
+        """Load and deduplicate meetings while already holding the metadata guard."""
+        meetings = self._load_meetings_unlocked()
+
+        seen_ids = set()
+        unique_meetings = []
+        duplicates_found = 0
+
+        for meeting in meetings:
+            meeting_id = meeting.get('id')
+            if meeting_id not in seen_ids:
+                seen_ids.add(meeting_id)
+                unique_meetings.append(meeting)
+            else:
+                duplicates_found += 1
+
+        if duplicates_found > 0:
+            print(f"Warning: Found and removed {duplicates_found} duplicate meeting(s) from database", file=sys.stderr)
+            self._save_meetings_unlocked(unique_meetings)
+
+        unique_meetings.sort(key=lambda m: m.get('date', ''), reverse=True)
+        return unique_meetings
+
+    @staticmethod
+    def _read_transcript_text(transcript_path: Path) -> str:
+        if not transcript_path.exists():
+            return ""
+
+        try:
+            return transcript_path.read_text(encoding='utf-8')
+        except Exception as exc:
+            print(f"Warning: Could not read transcript: {exc}", file=sys.stderr)
+            return ""
+
+    @staticmethod
+    def _select_scannable_audio_files(recordings_dir: Path) -> List[Path]:
+        preferred_files = {}
+
+        for audio_file in list(recordings_dir.glob('*.opus')) + list(recordings_dir.glob('*.wav')):
+            stem = audio_file.stem
+            current = preferred_files.get(stem)
+
+            if current is None:
+                preferred_files[stem] = audio_file
+                continue
+
+            if current.suffix == '.opus' and audio_file.suffix == '.wav':
+                preferred_files[stem] = audio_file
+
+        return sorted(preferred_files.values(), key=lambda item: item.name)
+
+    @staticmethod
+    def _strip_inline_transcript(meeting: Dict) -> Dict:
+        stripped = dict(meeting)
+        stripped.pop('transcript', None)
+        return stripped
 
     def add_meeting(
         self,
@@ -60,90 +217,101 @@ class MeetingManager:
         now = datetime.now()
         base_id = now.strftime("%Y%m%d_%H%M%S")
 
-        # Load meetings once for both ID check and later insertion
-        meetings = self.list_meetings()
-        existing_ids = {m['id'] for m in meetings}
-
-        # Ensure unique ID (handle rare case of multiple adds in same second)
-        meeting_id = base_id
-        counter = 1
-        while meeting_id in existing_ids:
-            meeting_id = f"{base_id}_{counter}"
-            counter += 1
-            if counter > 100:  # Safety limit
-                raise RuntimeError(f"Failed to generate unique meeting ID after {counter} attempts")
-
-        # Auto-generate title if not provided
-        if not title:
-            title = f"Meeting {now.strftime('%Y-%m-%d %H:%M')}"
-
-        # Format duration
-        minutes = int(duration // 60)
-        seconds = int(duration % 60)
-        duration_str = f"{minutes}:{seconds:02d}"
-
-        # Generate unique filenames to persist data
-        # This prevents overwriting when temp files are reused
         source_audio = Path(audio_path)
         source_transcript = Path(transcript_path)
-        
-        new_audio_filename = f"meeting_{meeting_id}{source_audio.suffix}"
-        new_transcript_filename = f"meeting_{meeting_id}.md"
-        
-        new_audio_path = self.recordings_dir / new_audio_filename
-        new_transcript_path = self.recordings_dir / new_transcript_filename
 
-        # Copy files to persistent storage (then remove originals to prevent duplicates)
-        try:
-            if source_audio.exists():
-                shutil.copy2(source_audio, new_audio_path)
-                print(f"Persisted audio to: {new_audio_path}", file=sys.stderr)
-                # Remove original to prevent scan from re-adding it
-                try:
-                    source_audio.unlink()
-                    print(f"Removed original audio: {source_audio}", file=sys.stderr)
-                except Exception as del_err:
-                    print(f"Warning: Could not remove original audio: {del_err}", file=sys.stderr)
+        with self._metadata_guard():
+            meetings = self._list_meetings_locked()
+            existing_ids = {m['id'] for m in meetings}
 
-            if source_transcript.exists():
-                shutil.copy2(source_transcript, new_transcript_path)
-                print(f"Persisted transcript to: {new_transcript_path}", file=sys.stderr)
-                # Remove original transcript too
-                try:
-                    source_transcript.unlink()
-                    print(f"Removed original transcript: {source_transcript}", file=sys.stderr)
-                except Exception as del_err:
-                    print(f"Warning: Could not remove original transcript: {del_err}", file=sys.stderr)
-        except Exception as e:
-            print(f"Error persisting files: {e}", file=sys.stderr)
-            # Fallback to original paths if copy fails
-            if not new_audio_path.exists():
-                new_audio_path = source_audio
-            if not new_transcript_path.exists():
-                new_transcript_path = source_transcript
+            # Ensure unique ID (handle rare case of multiple adds in same second)
+            meeting_id = base_id
+            counter = 1
+            while meeting_id in existing_ids:
+                meeting_id = f"{base_id}_{counter}"
+                counter += 1
+                if counter > 100:  # Safety limit
+                    raise RuntimeError(f"Failed to generate unique meeting ID after {counter} attempts")
 
-        # Read transcript text
-        transcript_text = ""
-        if new_transcript_path.exists():
-            transcript_text = new_transcript_path.read_text(encoding='utf-8')
+            # Auto-generate title if not provided
+            if not title:
+                title = f"Meeting {now.strftime('%Y-%m-%d %H:%M')}"
 
-        meeting = {
-            "id": meeting_id,
-            "title": title,
-            "date": now.isoformat(),
-            "duration": duration_str,
-            "durationSeconds": duration,
-            "audioPath": str(new_audio_path.absolute()),
-            "transcriptPath": str(new_transcript_path.absolute()),
-            "transcript": transcript_text,
-            "language": language,
-            "model": model
-        }
+            # Format duration
+            minutes = int(duration // 60)
+            seconds = int(duration % 60)
+            duration_str = f"{minutes}:{seconds:02d}"
 
-        # Add to beginning of existing meetings (most recent first)
-        meetings.insert(0, meeting)
+            # Generate unique filenames to persist data
+            # This prevents overwriting when temp files are reused
+            new_audio_filename = f"meeting_{meeting_id}{source_audio.suffix}"
+            new_transcript_filename = f"meeting_{meeting_id}.md"
 
-        self._save_meetings(meetings)
+            new_audio_path = self.recordings_dir / new_audio_filename
+            new_transcript_path = self.recordings_dir / new_transcript_filename
+            persisted_audio_path = source_audio
+            persisted_transcript_path = source_transcript
+            copied_audio = False
+            copied_transcript = False
+
+            try:
+                if source_audio.exists():
+                    shutil.copy2(source_audio, new_audio_path)
+                    copied_audio = True
+                    persisted_audio_path = new_audio_path
+                    print(f"Persisted audio to: {new_audio_path}", file=sys.stderr)
+
+                if source_transcript.exists():
+                    shutil.copy2(source_transcript, new_transcript_path)
+                    copied_transcript = True
+                    persisted_transcript_path = new_transcript_path
+                    print(f"Persisted transcript to: {new_transcript_path}", file=sys.stderr)
+
+                meeting = {
+                    "id": meeting_id,
+                    "title": title,
+                    "date": now.isoformat(),
+                    "duration": duration_str,
+                    "durationSeconds": duration,
+                    "audioPath": str(persisted_audio_path.absolute()),
+                    "transcriptPath": str(persisted_transcript_path.absolute()),
+                    "language": language,
+                    "model": model
+                }
+
+                # Add to beginning of existing meetings (most recent first)
+                meetings.insert(0, meeting)
+                self._save_meetings_unlocked(meetings)
+
+            except Exception:
+                if copied_audio and new_audio_path.exists():
+                    try:
+                        new_audio_path.unlink()
+                    except OSError:
+                        pass
+
+                if copied_transcript and new_transcript_path.exists():
+                    try:
+                        new_transcript_path.unlink()
+                    except OSError:
+                        pass
+
+                raise
+
+        # Remove originals only after metadata is durably saved
+        if copied_audio and source_audio.exists():
+            try:
+                source_audio.unlink()
+                print(f"Removed original audio: {source_audio}", file=sys.stderr)
+            except Exception as del_err:
+                print(f"Warning: Could not remove original audio: {del_err}", file=sys.stderr)
+
+        if copied_transcript and source_transcript.exists():
+            try:
+                source_transcript.unlink()
+                print(f"Removed original transcript: {source_transcript}", file=sys.stderr)
+            except Exception as del_err:
+                print(f"Warning: Could not remove original transcript: {del_err}", file=sys.stderr)
 
         print(f"Meeting saved: {meeting_id}", file=sys.stderr)
         return meeting
@@ -165,60 +333,50 @@ class MeetingManager:
         Returns:
             Meeting object if added, None if ID already exists (duplicate prevention)
         """
-        # Load meetings once for both ID check and later insertion
-        meetings = self.list_meetings()
+        with self._metadata_guard():
+            meetings = self._list_meetings_locked()
 
-        # Check for duplicate ID (defense-in-depth)
-        existing_ids = {m['id'] for m in meetings}
-        if meeting_id in existing_ids:
-            print(f"Warning: Skipping duplicate meeting ID: {meeting_id}", file=sys.stderr)
-            return None
+            # Check for duplicate ID (defense-in-depth)
+            existing_ids = {m['id'] for m in meetings}
+            if meeting_id in existing_ids:
+                print(f"Warning: Skipping duplicate meeting ID: {meeting_id}", file=sys.stderr)
+                return None
 
-        # Format duration
-        minutes = int(duration // 60)
-        seconds = int(duration % 60)
-        duration_str = f"{minutes}:{seconds:02d}"
+            # Format duration
+            minutes = int(duration // 60)
+            seconds = int(duration % 60)
+            duration_str = f"{minutes}:{seconds:02d}"
 
-        # Parse meeting_id to get date
-        # Handle suffixed IDs like "20260107_104555_1" by extracting base ID
-        try:
-            parts = meeting_id.split('_')
-            if len(parts) >= 2:
-                base_id = f"{parts[0]}_{parts[1]}"
-                dt = datetime.strptime(base_id, "%Y%m%d_%H%M%S")
-            else:
-                dt = datetime.strptime(meeting_id, "%Y%m%d_%H%M%S")
-            date_iso = dt.isoformat()
-        except (ValueError, IndexError):
-            date_iso = datetime.now().isoformat()
-
-        # Read transcript text
-        transcript_text = ""
-        transcript_file = Path(transcript_path)
-        if transcript_file.exists():
+            # Parse meeting_id to get date
+            # Handle suffixed IDs like "20260107_104555_1" by extracting base ID
             try:
-                transcript_text = transcript_file.read_text(encoding='utf-8')
-            except Exception as e:
-                print(f"Warning: Could not read transcript: {e}", file=sys.stderr)
+                parts = meeting_id.split('_')
+                if len(parts) >= 2:
+                    base_id = f"{parts[0]}_{parts[1]}"
+                    dt = datetime.strptime(base_id, "%Y%m%d_%H%M%S")
+                else:
+                    dt = datetime.strptime(meeting_id, "%Y%m%d_%H%M%S")
+                date_iso = dt.isoformat()
+            except (ValueError, IndexError):
+                date_iso = datetime.now().isoformat()
 
-        meeting = {
-            'id': meeting_id,
-            'title': title,
-            'date': date_iso,
-            'duration': duration_str,
-            'durationSeconds': duration,
-            'audioPath': audio_path,
-            'transcriptPath': transcript_path,
-            'transcript': transcript_text,
-            'language': language,
-            'model': model
-        }
+            meeting = {
+                'id': meeting_id,
+                'title': title,
+                'date': date_iso,
+                'duration': duration_str,
+                'durationSeconds': duration,
+                'audioPath': audio_path,
+                'transcriptPath': transcript_path,
+                'language': language,
+                'model': model
+            }
 
-        # Add to beginning of existing meetings (most recent first)
-        meetings.insert(0, meeting)
+            # Add to beginning of existing meetings (most recent first)
+            meetings.insert(0, meeting)
 
-        self._save_meetings(meetings)
-        return meeting
+            self._save_meetings_unlocked(meetings)
+            return meeting
 
     def list_meetings(self) -> List[Dict]:
         """
@@ -230,33 +388,8 @@ class MeetingManager:
         Returns:
             List of meeting objects
         """
-        try:
-            with open(self.metadata_file, 'r', encoding='utf-8') as f:
-                meetings = json.load(f)
-
-            # Deduplicate by ID (keep first occurrence in file order)
-            seen_ids = set()
-            unique_meetings = []
-            duplicates_found = 0
-
-            for meeting in meetings:
-                meeting_id = meeting.get('id')
-                if meeting_id not in seen_ids:
-                    seen_ids.add(meeting_id)
-                    unique_meetings.append(meeting)
-                else:
-                    duplicates_found += 1
-
-            # If duplicates were found, save the cleaned list
-            if duplicates_found > 0:
-                print(f"Warning: Found and removed {duplicates_found} duplicate meeting(s) from database", file=sys.stderr)
-                self._save_meetings(unique_meetings)
-
-            # Sort by date (newest first)
-            unique_meetings.sort(key=lambda m: m.get('date', ''), reverse=True)
-            return unique_meetings
-        except (FileNotFoundError, json.JSONDecodeError):
-            return []
+        with self._metadata_guard():
+            return [self._strip_inline_transcript(meeting) for meeting in self._list_meetings_locked()]
 
     def scan_and_sync_recordings(self) -> Dict[str, int]:
         """
@@ -277,8 +410,8 @@ class MeetingManager:
         added = 0
         skipped = 0
 
-        # Find all .opus and .wav audio files
-        audio_files = list(self.recordings_dir.glob('*.opus')) + list(self.recordings_dir.glob('*.wav'))
+        # Find all .opus and .wav audio files, preferring one candidate per stem
+        audio_files = self._select_scannable_audio_files(self.recordings_dir)
 
         for audio_file in audio_files:
             scanned += 1
@@ -300,7 +433,6 @@ class MeetingManager:
             try:
                 content = transcript_file.read_text(encoding='utf-8')
                 # Look for "Duration: HH:MM:SS" or "Duration: MM:SS"
-                import re
                 duration_match = re.search(r'\*\*Duration:\*\*\s*(\d+):(\d+):(\d+)', content)
                 if duration_match:
                     hours, mins, secs = map(int, duration_match.groups())
@@ -320,13 +452,15 @@ class MeetingManager:
             meeting_id = None
             title = None
 
-            # Check if it's already a meeting_* file (extract existing ID)
-            meeting_match = re.match(r'meeting_(\d{8}_\d{6})', filename_base)
+            # Check if it's already a meeting_* file (extract existing ID, including suffixes)
+            meeting_match = re.match(r'meeting_(\d{8}_\d{6}(?:_\d+)?)$', filename_base)
             if meeting_match:
                 meeting_id = meeting_match.group(1)
                 # Parse ID to create title: 20251208_170225 -> 2025-12-08 17:02
                 try:
-                    dt = datetime.strptime(meeting_id, "%Y%m%d_%H%M%S")
+                    parts = meeting_id.split('_')
+                    base_id = f"{parts[0]}_{parts[1]}" if len(parts) >= 2 else meeting_id
+                    dt = datetime.strptime(base_id, "%Y%m%d_%H%M%S")
                     title = f"Meeting {dt.strftime('%Y-%m-%d %H:%M')}"
                 except ValueError:
                     title = f"Meeting {meeting_id}"
@@ -387,11 +521,21 @@ class MeetingManager:
         Returns:
             Meeting object or None if not found
         """
-        meetings = self.list_meetings()
-        for meeting in meetings:
-            if meeting['id'] == meeting_id:
-                return meeting
-        return None
+        with self._metadata_guard():
+            meetings = self._list_meetings_locked()
+            for meeting in meetings:
+                if meeting['id'] == meeting_id:
+                    hydrated = dict(meeting)
+                    transcript_path = Path(meeting['transcriptPath'])
+                    transcript_text = self._read_transcript_text(transcript_path)
+                    if transcript_text:
+                        hydrated['transcript'] = transcript_text
+                    elif meeting.get('transcript'):
+                        hydrated['transcript'] = meeting['transcript']
+                    else:
+                        hydrated['transcript'] = ""
+                    return hydrated
+            return None
 
     def delete_meeting(self, meeting_id: str) -> bool:
         """
@@ -405,62 +549,106 @@ class MeetingManager:
         """
         import time
 
-        meetings = self.list_meetings()
-        meeting = self.get_meeting(meeting_id)
+        with self._metadata_guard():
+            meetings = self._list_meetings_locked()
+            meeting = next((m for m in meetings if m['id'] == meeting_id), None)
 
-        if not meeting:
-            return False
+            if not meeting:
+                return False
 
-        # FIX: Windows retry logic for file locks
-        # Files may be locked by antivirus, file explorer, audio player, etc.
-        max_retries = 3
-        retry_delay = 0.5  # 500ms
+            # FIX: Windows retry logic for file locks
+            # Files may be locked by antivirus, file explorer, audio player, etc.
+            max_retries = 3
+            retry_delay = 0.5  # 500ms
 
-        # Delete audio file with retry
-        audio_path = Path(meeting['audioPath'])
-        if audio_path.exists():
-            for attempt in range(max_retries):
+            def delete_file_with_retry(file_path: Path, label: str):
+                if not file_path.exists():
+                    return
+
+                for attempt in range(max_retries):
+                    try:
+                        file_path.unlink()
+                        print(f"Deleted {label}: {file_path}", file=sys.stderr)
+                        return
+                    except PermissionError as e:
+                        if attempt < max_retries - 1:
+                            print(f"File locked (attempt {attempt + 1}/{max_retries}), retrying... ({e})", file=sys.stderr)
+                            time.sleep(retry_delay)
+                        else:
+                            raise RuntimeError(f"Failed to delete {label} file after {max_retries} attempts: {e}")
+                    except Exception as e:
+                        raise RuntimeError(f"Failed to delete {label} file: {e}")
+
+            def tombstone_path_for(file_path: Path) -> Path:
+                base_name = f".{file_path.name}.deleting.{os.getpid()}"
+                candidate = file_path.with_name(base_name)
+                counter = 1
+                while candidate.exists():
+                    candidate = file_path.with_name(f"{base_name}.{counter}")
+                    counter += 1
+                return candidate
+
+            def move_file_to_tombstone(file_path: Path, label: str) -> Optional[Path]:
+                if not file_path.exists():
+                    return None
+
+                tombstone_path = tombstone_path_for(file_path)
+                for attempt in range(max_retries):
+                    try:
+                        file_path.replace(tombstone_path)
+                        print(f"Prepared {label} for deletion: {file_path}", file=sys.stderr)
+                        return tombstone_path
+                    except PermissionError as e:
+                        if attempt < max_retries - 1:
+                            print(f"File locked (attempt {attempt + 1}/{max_retries}), retrying... ({e})", file=sys.stderr)
+                            time.sleep(retry_delay)
+                        else:
+                            raise RuntimeError(f"Failed to prepare {label} file for deletion after {max_retries} attempts: {e}")
+                    except Exception as e:
+                        raise RuntimeError(f"Failed to prepare {label} file for deletion: {e}")
+
+                return None
+
+            def restore_moved_files(moved_files: List[tuple[Path, Path, str]]):
+                for tombstone_path, original_path, label in reversed(moved_files):
+                    if tombstone_path.exists() and not original_path.exists():
+                        try:
+                            tombstone_path.replace(original_path)
+                            print(f"Restored {label} after delete rollback: {original_path}", file=sys.stderr)
+                        except Exception as restore_error:
+                            print(f"Warning: Could not restore {label} after delete rollback: {restore_error}", file=sys.stderr)
+
+            moved_files: List[tuple[Path, Path, str]] = []
+            try:
+                for label, file_path in (
+                    ('audio', Path(meeting['audioPath'])),
+                    ('transcript', Path(meeting['transcriptPath'])),
+                ):
+                    tombstone_path = move_file_to_tombstone(file_path, label)
+                    if tombstone_path is not None:
+                        moved_files.append((tombstone_path, file_path, label))
+
+                # Commit metadata only after files have been moved out of their
+                # canonical paths. If metadata save fails, files are restored.
+                meetings = [m for m in meetings if m['id'] != meeting_id]
+                self._save_meetings_unlocked(meetings)
+            except Exception:
+                restore_moved_files(moved_files)
+                raise
+
+            for tombstone_path, _original_path, label in moved_files:
                 try:
-                    audio_path.unlink()
-                    print(f"Deleted audio: {audio_path}", file=sys.stderr)
-                    break
-                except PermissionError as e:
-                    if attempt < max_retries - 1:
-                        print(f"File locked (attempt {attempt + 1}/{max_retries}), retrying... ({e})", file=sys.stderr)
-                        time.sleep(retry_delay)
-                    else:
-                        raise RuntimeError(f"Failed to delete audio file after {max_retries} attempts: {e}")
-                except Exception as e:
-                    raise RuntimeError(f"Failed to delete audio file: {e}")
+                    delete_file_with_retry(tombstone_path, label)
+                except RuntimeError as deletion_error:
+                    print(f"Warning: {deletion_error}", file=sys.stderr)
 
-        # Delete transcript file with retry
-        transcript_path = Path(meeting['transcriptPath'])
-        if transcript_path.exists():
-            for attempt in range(max_retries):
-                try:
-                    transcript_path.unlink()
-                    print(f"Deleted transcript: {transcript_path}", file=sys.stderr)
-                    break
-                except PermissionError as e:
-                    if attempt < max_retries - 1:
-                        print(f"File locked (attempt {attempt + 1}/{max_retries}), retrying... ({e})", file=sys.stderr)
-                        time.sleep(retry_delay)
-                    else:
-                        raise RuntimeError(f"Failed to delete transcript file after {max_retries} attempts: {e}")
-                except Exception as e:
-                    raise RuntimeError(f"Failed to delete transcript file: {e}")
-
-        # Remove from list
-        meetings = [m for m in meetings if m['id'] != meeting_id]
-        self._save_meetings(meetings)
-
-        print(f"Meeting deleted: {meeting_id}", file=sys.stderr)
-        return True
+            print(f"Meeting deleted: {meeting_id}", file=sys.stderr)
+            return True
 
     def _save_meetings(self, meetings: List[Dict]):
         """Save meetings list to JSON file."""
-        with open(self.metadata_file, 'w', encoding='utf-8') as f:
-            json.dump(meetings, f, indent=2, ensure_ascii=False)
+        with self._metadata_guard():
+            self._save_meetings_unlocked(meetings)
 
 
 # CLI interface for testing

@@ -31,17 +31,26 @@ struct Config {
 
 // MARK: - JSON Output Helpers
 
+var emittedStartupError = false
+
 func sendJSON(_ dict: [String: Any]) {
+    if let type = dict["type"] as? String, type == "error" {
+        emittedStartupError = true
+    }
+
     if let data = try? JSONSerialization.data(withJSONObject: dict),
        let str = String(data: data, encoding: .utf8) {
         FileHandle.standardError.write("\(str)\n".data(using: .utf8)!)
     }
 }
 
-func sendStatus(_ status: String, message: String? = nil) {
+func sendStatus(_ status: String, message: String? = nil, extra: [String: Any] = [:]) {
     var dict: [String: Any] = ["type": "status", "status": status]
     if let msg = message {
         dict["message"] = msg
+    }
+    for (key, value) in extra {
+        dict[key] = value
     }
     sendJSON(dict)
 }
@@ -58,10 +67,13 @@ func sendReady() {
 
 @available(macOS 13.0, *)
 class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
+    private let expectedChannels: Int
     private var isCapturing = false
     private let outputLock = NSLock()
+    private let queueLock = NSLock()
     private var sampleCount: Int = 0
     private var totalBytesWritten: Int = 0
+    private var firstAudioTime: Date?
     private var lastAudioTime: Date?
     private var silencePeriodLogged = false
     private let silenceThreshold: TimeInterval = 5.0  // Log when silence exceeds 5 seconds
@@ -70,32 +82,85 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
     private var hasLoggedAudioFormat = false
     private var extractionErrorCount = 0
     private let maxExtractionErrors = 5  // Only log first N errors to avoid spam
+    private var pendingAudioChunks: [Data] = []
+    private var pendingChunkStartIndex = 0
+    private var pendingChunkBytes = 0
+    private var droppedChunkCount = 0
+    private let maxQueuedBytes = 4 * 1024 * 1024
+    private let queueDropWarningInterval = 25
+    private let writerSignal = DispatchSemaphore(value: 0)
+    private let writerCompletionGroup = DispatchGroup()
+    private let writerQueue = DispatchQueue(label: "audio.capture.writer.queue", qos: .userInitiated)
+    private var writerIsRunning = false
+
+    private struct EnqueueResult {
+        let queuedBytes: Int
+        let droppedChunkCount: Int
+        let droppedDuringEnqueue: Bool
+    }
+
+    init(expectedChannels: Int) {
+        self.expectedChannels = expectedChannels
+        super.init()
+    }
 
     func startCapturing() {
         outputLock.lock()
         isCapturing = true
         sampleCount = 0
         totalBytesWritten = 0
+        firstAudioTime = nil
         lastAudioTime = nil
         silencePeriodLogged = false
         hasLoggedAudioFormat = false
         extractionErrorCount = 0
         outputLock.unlock()
+
+        queueLock.lock()
+        pendingAudioChunks.removeAll(keepingCapacity: true)
+        pendingChunkStartIndex = 0
+        pendingChunkBytes = 0
+        droppedChunkCount = 0
+        queueLock.unlock()
+
+        ensureWriterLoopStarted()
     }
 
     func stopCapturing() {
         outputLock.lock()
-        let finalSampleCount = sampleCount
-        let finalBytes = totalBytesWritten
         isCapturing = false
         outputLock.unlock()
 
+        writerSignal.signal()
+        waitForWriterDrain(timeout: 2.0)
+
+        outputLock.lock()
+        let finalSampleCount = sampleCount
+        let finalBytes = totalBytesWritten
+        let finalFirstAudioTimestamp = firstAudioTime?.timeIntervalSince1970
+        let finalLastAudioTimestamp = lastAudioTime?.timeIntervalSince1970
+        outputLock.unlock()
+
+        queueLock.lock()
+        let finalDroppedChunks = droppedChunkCount
+        let finalQueuedBytes = pendingChunkBytes
+        queueLock.unlock()
+
         // Log final stats
-        sendJSON([
+        var stats: [String: Any] = [
             "type": "capture_stats",
             "totalSamples": finalSampleCount,
-            "totalBytes": finalBytes
-        ])
+            "totalBytes": finalBytes,
+            "droppedChunks": finalDroppedChunks,
+            "queuedBytesRemaining": finalQueuedBytes,
+        ]
+        if let finalFirstAudioTimestamp {
+            stats["firstAudioTimestamp"] = finalFirstAudioTimestamp
+        }
+        if let finalLastAudioTimestamp {
+            stats["lastAudioTimestamp"] = finalLastAudioTimestamp
+        }
+        sendJSON(stats)
     }
 
     // SCStreamOutput protocol - receives audio samples
@@ -108,8 +173,10 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
 
         guard capturing else { return }
 
-        // Extract audio data from the sample buffer
-        guard let audioBuffer = extractAudioBuffer(from: sampleBuffer) else {
+        // Extract interleaved float32 audio data from the sample buffer.
+        // This normalizes planar/non-interleaved buffers into the helper's
+        // stdout contract so Python always sees one consistent format.
+        guard let audioData = extractInterleavedAudioData(from: sampleBuffer) else {
             return
         }
 
@@ -120,6 +187,9 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
 
         // Single lock region for state updates
         outputLock.lock()
+        if firstAudioTime == nil {
+            firstAudioTime = now
+        }
         if let lastTime = lastAudioTime {
             silenceDuration = now.timeIntervalSince(lastTime)
             if silenceDuration > silenceThreshold && silencePeriodLogged {
@@ -139,52 +209,32 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
             ])
         }
 
-        // Write raw float32 PCM data to stdout (interleaved stereo)
-        // ScreenCaptureKit provides interleaved audio in mBuffers.mData
-        // We need to write all channels, not just floatChannelData[0]
-        let frameCount = Int(audioBuffer.frameLength)
-        let channelCount = Int(audioBuffer.format.channelCount)
-        let bytesPerFrame = channelCount * MemoryLayout<Float>.size
-        let totalBytes = frameCount * bytesPerFrame
-
-        // Track bytes written for this sample
-        var bytesWrittenThisSample = 0
-
-        // Get interleaved data directly from the audio buffer
-        if audioBuffer.format.isInterleaved {
-            // Interleaved format - data is already in the correct format
-            if let channelData = audioBuffer.floatChannelData?[0] {
-                let data = Data(bytes: channelData, count: totalBytes)
-                FileHandle.standardOutput.write(data)
-                bytesWrittenThisSample = totalBytes
-            }
-        } else {
-            // Non-interleaved (planar) format - need to interleave manually
-            guard let channelData = audioBuffer.floatChannelData else { return }
-
-            var interleavedData = [Float](repeating: 0, count: frameCount * channelCount)
-            for frame in 0..<frameCount {
-                for channel in 0..<channelCount {
-                    interleavedData[frame * channelCount + channel] = channelData[channel][frame]
-                }
-            }
-
-            interleavedData.withUnsafeBytes { ptr in
-                FileHandle.standardOutput.write(Data(ptr))
-            }
-            bytesWrittenThisSample = frameCount * channelCount * MemoryLayout<Float>.size
-        }
+        let enqueueResult = enqueueAudioData(audioData)
 
         // Single lock region for counter updates
         outputLock.lock()
-        totalBytesWritten += bytesWrittenThisSample
         sampleCount += 1
         let currentSampleCount = sampleCount
         let currentBytesWritten = totalBytesWritten
         outputLock.unlock()
 
+        if enqueueResult.droppedDuringEnqueue &&
+            (enqueueResult.droppedChunkCount == 1 || enqueueResult.droppedChunkCount % queueDropWarningInterval == 0) {
+            sendJSON([
+                "type": "warning",
+                "code": "stdout_backpressure",
+                "message": "Audio output queue overflow; dropped \(enqueueResult.droppedChunkCount) chunks",
+                "droppedChunks": enqueueResult.droppedChunkCount,
+                "queuedBytes": enqueueResult.queuedBytes,
+            ])
+        }
+
         if currentSampleCount == 1 {
-            sendStatus("first_sample", message: "Received first audio sample (\(totalBytes) bytes)")
+            sendStatus(
+                "first_sample",
+                message: "Received first audio sample (\(audioData.count) bytes)",
+                extra: ["timestamp": now.timeIntervalSince1970]
+            )
         }
 
         // Log periodic status every ~10 seconds (assuming ~100 samples/sec)
@@ -192,7 +242,9 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
             sendJSON([
                 "type": "progress",
                 "samples": currentSampleCount,
-                "bytesWritten": currentBytesWritten
+                "bytesWritten": currentBytesWritten,
+                "queuedBytes": enqueueResult.queuedBytes,
+                "droppedChunks": enqueueResult.droppedChunkCount,
             ])
         }
     }
@@ -219,7 +271,138 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
         }
     }
 
-    private func extractAudioBuffer(from sampleBuffer: CMSampleBuffer) -> AVAudioPCMBuffer? {
+    private func ensureWriterLoopStarted() {
+        outputLock.lock()
+        let shouldStart = !writerIsRunning
+        if shouldStart {
+            writerIsRunning = true
+            writerCompletionGroup.enter()
+        }
+        outputLock.unlock()
+
+        guard shouldStart else { return }
+
+        writerQueue.async { [weak self] in
+            self?.writerLoop()
+        }
+    }
+
+    private func writerLoop() {
+        defer {
+            outputLock.lock()
+            writerIsRunning = false
+            outputLock.unlock()
+            writerCompletionGroup.leave()
+        }
+
+        while true {
+            writerSignal.wait()
+
+            while let chunk = dequeueAudioChunk() {
+                FileHandle.standardOutput.write(chunk)
+
+                outputLock.lock()
+                totalBytesWritten += chunk.count
+                outputLock.unlock()
+            }
+
+            if shouldStopWriterLoop() {
+                break
+            }
+        }
+    }
+
+    private func enqueueAudioData(_ data: Data) -> EnqueueResult {
+        queueLock.lock()
+        var droppedDuringEnqueue = false
+
+        while pendingChunkBytes + data.count > maxQueuedBytes && pendingChunkStartIndex < pendingAudioChunks.count {
+            let dropped = pendingAudioChunks[pendingChunkStartIndex]
+            pendingChunkStartIndex += 1
+            pendingChunkBytes -= dropped.count
+            droppedChunkCount += 1
+            droppedDuringEnqueue = true
+        }
+        compactPendingAudioChunksIfNeededLocked()
+
+        if pendingChunkBytes + data.count > maxQueuedBytes {
+            droppedChunkCount += 1
+            let result = EnqueueResult(
+                queuedBytes: pendingChunkBytes,
+                droppedChunkCount: droppedChunkCount,
+                droppedDuringEnqueue: true
+            )
+            queueLock.unlock()
+            return result
+        }
+
+        pendingAudioChunks.append(data)
+        pendingChunkBytes += data.count
+
+        let result = EnqueueResult(
+            queuedBytes: pendingChunkBytes,
+            droppedChunkCount: droppedChunkCount,
+            droppedDuringEnqueue: droppedDuringEnqueue
+        )
+        queueLock.unlock()
+
+        writerSignal.signal()
+        return result
+    }
+
+    private func dequeueAudioChunk() -> Data? {
+        queueLock.lock()
+        defer { queueLock.unlock() }
+
+        guard pendingChunkStartIndex < pendingAudioChunks.count else {
+            compactPendingAudioChunksIfNeededLocked()
+            return nil
+        }
+
+        let chunk = pendingAudioChunks[pendingChunkStartIndex]
+        pendingChunkStartIndex += 1
+        pendingChunkBytes -= chunk.count
+        compactPendingAudioChunksIfNeededLocked()
+        return chunk
+    }
+
+    private func compactPendingAudioChunksIfNeededLocked() {
+        if pendingChunkStartIndex == pendingAudioChunks.count {
+            pendingAudioChunks.removeAll(keepingCapacity: true)
+            pendingChunkStartIndex = 0
+            return
+        }
+
+        if pendingChunkStartIndex > 32 && pendingChunkStartIndex * 2 >= pendingAudioChunks.count {
+            pendingAudioChunks.removeFirst(pendingChunkStartIndex)
+            pendingChunkStartIndex = 0
+        }
+    }
+
+    private func shouldStopWriterLoop() -> Bool {
+        outputLock.lock()
+        let capturing = isCapturing
+        outputLock.unlock()
+
+        queueLock.lock()
+        let queueEmpty = pendingChunkStartIndex >= pendingAudioChunks.count
+        queueLock.unlock()
+
+        return !capturing && queueEmpty
+    }
+
+    private func waitForWriterDrain(timeout: TimeInterval) {
+        let result = writerCompletionGroup.wait(timeout: .now() + timeout)
+        if result == .timedOut {
+            sendJSON([
+                "type": "warning",
+                "code": "writer_drain_timeout",
+                "message": "Timed out waiting for audio writer queue to drain"
+            ])
+        }
+    }
+
+    private func extractInterleavedAudioData(from sampleBuffer: CMSampleBuffer) -> Data? {
         // Get format description
         guard let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer) else {
             logExtractionError("No format description in sample buffer")
@@ -257,25 +440,37 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
             return nil
         }
 
+        guard audioFormat.commonFormat == .pcmFormatFloat32 else {
+            logExtractionError("Unsupported audio format: \(audioFormat.commonFormat)")
+            return nil
+        }
+
+        let sourceChannels = Int(audioFormat.channelCount)
+        let isInterleaved = audioFormat.isInterleaved
+
         let numSamples = CMSampleBufferGetNumSamples(sampleBuffer)
         // Empty buffers are normal during silence - don't log as errors
         guard numSamples > 0 else { return nil }
 
-        guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: audioFormat, frameCapacity: AVAudioFrameCount(numSamples)) else {
-            logExtractionError("Could not create PCM buffer with capacity \(numSamples)")
-            return nil
-        }
-        pcmBuffer.frameLength = AVAudioFrameCount(numSamples)
-
         // Get the audio buffer list
         var blockBuffer: CMBlockBuffer?
-        var audioBufferList = AudioBufferList()
-        let audioBufferListSize = MemoryLayout<AudioBufferList>.size
+        let maxBuffers = max(1, sourceChannels)
+        let audioBufferListSize = MemoryLayout<AudioBufferList>.size +
+            max(0, maxBuffers - 1) * MemoryLayout<AudioBuffer>.size
+        let audioBufferListStorage = UnsafeMutableRawPointer.allocate(
+            byteCount: audioBufferListSize,
+            alignment: MemoryLayout<AudioBufferList>.alignment
+        )
+        audioBufferListStorage.initializeMemory(as: UInt8.self, repeating: 0, count: audioBufferListSize)
+        defer {
+            audioBufferListStorage.deallocate()
+        }
+        let audioBufferList = audioBufferListStorage.assumingMemoryBound(to: AudioBufferList.self)
 
         let status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
             sampleBuffer,
             bufferListSizeNeededOut: nil,
-            bufferListOut: &audioBufferList,
+            bufferListOut: audioBufferList,
             bufferListSize: audioBufferListSize,
             blockBufferAllocator: nil,
             blockBufferMemoryAllocator: nil,
@@ -288,31 +483,131 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
             return nil
         }
 
-        // Copy audio data to PCM buffer
-        let srcBuffer = audioBufferList.mBuffers
-        guard let srcData = srcBuffer.mData else {
-            logExtractionError("Audio buffer mData is nil")
+        let audioBuffers = UnsafeMutableAudioBufferListPointer(audioBufferList)
+
+        if shouldLogFormat {
+            let desc = streamBasicDescription.pointee
+            sendJSON([
+                "type": "audio_format",
+                "sampleRate": desc.mSampleRate,
+                "channels": desc.mChannelsPerFrame,
+                "bitsPerChannel": desc.mBitsPerChannel,
+                "bytesPerFrame": desc.mBytesPerFrame,
+                "formatFlags": desc.mFormatFlags,
+                "bufferCount": audioBuffers.count,
+                "interleaved": isInterleaved,
+                "expectedChannels": expectedChannels,
+            ])
+        }
+
+        guard !audioBuffers.isEmpty else {
+            logExtractionError("Audio buffer list was empty")
             return nil
         }
 
-        guard let dstData = pcmBuffer.floatChannelData?[0] else {
-            logExtractionError("PCM buffer floatChannelData is nil")
+        if isInterleaved {
+            return interleavedDataFromSingleBuffer(
+                audioBuffers[0],
+                frameCount: numSamples,
+                sourceChannels: sourceChannels,
+                outputChannels: expectedChannels
+            )
+        }
+
+        return interleavedDataFromPlanarBuffers(
+            audioBuffers,
+            frameCount: numSamples,
+            sourceChannels: sourceChannels,
+            outputChannels: expectedChannels
+        )
+    }
+
+    private func interleavedDataFromSingleBuffer(
+        _ audioBuffer: AudioBuffer,
+        frameCount: Int,
+        sourceChannels: Int,
+        outputChannels: Int
+    ) -> Data? {
+        guard let sourceData = audioBuffer.mData else {
+            logExtractionError("Interleaved audio buffer mData is nil")
             return nil
         }
 
-        // Validate buffer sizes before copy
-        let expectedBytes = Int(pcmBuffer.frameLength) * Int(audioFormat.channelCount) * MemoryLayout<Float>.size
-        let availableBytes = Int(srcBuffer.mDataByteSize)
+        let sourceSampleCount = frameCount * sourceChannels
+        let expectedBytes = sourceSampleCount * MemoryLayout<Float>.size
+        let availableBytes = Int(audioBuffer.mDataByteSize)
 
         if availableBytes < expectedBytes {
-            // Buffer size mismatch - return nil to avoid corrupted audio
-            // Copying partial data would leave frameLength incorrect
-            logExtractionError("Buffer size mismatch: have \(availableBytes) bytes, need \(expectedBytes) - skipping frame")
+            logExtractionError("Interleaved buffer size mismatch: have \(availableBytes) bytes, need \(expectedBytes)")
             return nil
         }
 
-        memcpy(dstData, srcData, expectedBytes)
-        return pcmBuffer
+        if sourceChannels == outputChannels {
+            return Data(bytes: sourceData, count: expectedBytes)
+        }
+
+        let samples = sourceData.bindMemory(to: Float.self, capacity: sourceSampleCount)
+        var normalized = [Float](repeating: 0, count: frameCount * outputChannels)
+
+        for frame in 0..<frameCount {
+            for outputChannel in 0..<outputChannels {
+                let sourceChannel = min(outputChannel, sourceChannels - 1)
+                normalized[frame * outputChannels + outputChannel] = samples[frame * sourceChannels + sourceChannel]
+            }
+        }
+
+        return normalized.withUnsafeBufferPointer { pointer in
+            guard let baseAddress = pointer.baseAddress else {
+                return Data()
+            }
+            return Data(bytes: baseAddress, count: pointer.count * MemoryLayout<Float>.size)
+        }
+    }
+
+    private func interleavedDataFromPlanarBuffers(
+        _ audioBuffers: UnsafeMutableAudioBufferListPointer,
+        frameCount: Int,
+        sourceChannels: Int,
+        outputChannels: Int
+    ) -> Data? {
+        if audioBuffers.count < sourceChannels {
+            logExtractionError("Planar buffer count mismatch: have \(audioBuffers.count), need \(sourceChannels)")
+            return nil
+        }
+
+        var normalized = [Float](repeating: 0, count: frameCount * outputChannels)
+        var channelPointers: [UnsafePointer<Float>] = []
+        channelPointers.reserveCapacity(sourceChannels)
+
+        for channel in 0..<sourceChannels {
+            let buffer = audioBuffers[channel]
+            guard let channelData = buffer.mData else {
+                logExtractionError("Planar channel \(channel) buffer mData is nil")
+                return nil
+            }
+
+            let availableFrames = Int(buffer.mDataByteSize) / MemoryLayout<Float>.size
+            if availableFrames < frameCount {
+                logExtractionError("Planar channel \(channel) size mismatch: have \(availableFrames) frames, need \(frameCount)")
+                return nil
+            }
+
+            channelPointers.append(channelData.bindMemory(to: Float.self, capacity: frameCount))
+        }
+
+        for frame in 0..<frameCount {
+            for outputChannel in 0..<outputChannels {
+                let sourceChannel = min(outputChannel, sourceChannels - 1)
+                normalized[frame * outputChannels + outputChannel] = channelPointers[sourceChannel][frame]
+            }
+        }
+
+        return normalized.withUnsafeBufferPointer { pointer in
+            guard let baseAddress = pointer.baseAddress else {
+                return Data()
+            }
+            return Data(bytes: baseAddress, count: pointer.count * MemoryLayout<Float>.size)
+        }
     }
 
     private func logExtractionError(_ message: String) {
@@ -434,7 +729,7 @@ class AudioCapture {
         }
 
         // Create delegate
-        delegate = AudioCaptureDelegate()
+        delegate = AudioCaptureDelegate(expectedChannels: config.channels)
 
         // Create stream
         stream = SCStream(filter: filter, configuration: streamConfig, delegate: delegate)
@@ -506,8 +801,6 @@ class AudioCapture {
         // Stop the silence check timer
         stopSilenceCheckTimer()
 
-        delegate?.stopCapturing()
-
         if let stream = stream {
             do {
                 try await stream.stopCapture()
@@ -516,6 +809,8 @@ class AudioCapture {
                 sendError("Error stopping capture: \(error.localizedDescription)")
             }
         }
+
+        delegate?.stopCapturing()
 
         stream = nil
         delegate = nil
@@ -543,6 +838,46 @@ func parseArguments() -> Config {
             }
         case "--include-self":
             config.excludeCurrentApp = false
+        case "--check-permission":
+            if #available(macOS 13.0, *) {
+                Task {
+                    do {
+                        _ = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+                        sendJSON(["type": "permission_check", "granted": true])
+                        exit(0)
+                    } catch {
+                        let nsError = error as NSError
+                        let permissionDenied = nsError.code == -3801 ||
+                            nsError.domain == "com.apple.ScreenCaptureKit.SCStreamErrorDomain" ||
+                            nsError.localizedDescription.lowercased().contains("permission") ||
+                            nsError.localizedDescription.lowercased().contains("denied") ||
+                            nsError.localizedDescription.lowercased().contains("not authorized")
+                        if permissionDenied {
+                            sendJSON([
+                                "type": "permission_check",
+                                "granted": false,
+                                "error": "Screen Recording permission not granted",
+                                "help": "Open System Settings > Privacy & Security > Screen Recording and enable this app"
+                            ])
+                        } else {
+                            sendJSON([
+                                "type": "permission_check",
+                                "granted": false,
+                                "error": "Failed to check Screen Recording permission: \(error.localizedDescription)"
+                            ])
+                        }
+                        exit(1)
+                    }
+                }
+                dispatchMain()
+            } else {
+                sendJSON([
+                    "type": "permission_check",
+                    "granted": false,
+                    "error": "macOS 13.0 or later required"
+                ])
+                exit(1)
+            }
         case "--help", "-h":
             printUsage()
             exit(0)
@@ -621,7 +956,13 @@ func main() async {
     do {
         try await capture.start()
     } catch {
-        sendError("Failed to start capture: \(error.localizedDescription)")
+        if !emittedStartupError {
+            sendJSON([
+                "type": "error",
+                "code": "capture_start_failed",
+                "error": "Failed to start capture: \(error.localizedDescription)"
+            ])
+        }
         exit(1)
     }
 

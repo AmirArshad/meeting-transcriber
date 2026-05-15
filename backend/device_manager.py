@@ -9,28 +9,46 @@ Platform-specific implementations:
 import json
 import sys
 import platform
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 
 # Platform detection
 IS_WINDOWS = platform.system() == 'Windows'
 IS_MACOS = platform.system() == 'Darwin'
 
-# Import platform-specific audio library
-if IS_WINDOWS:
-    try:
-        import pyaudiowpatch as pyaudio
-    except ImportError:
-        print("ERROR: pyaudiowpatch not installed. Run: pip install pyaudiowpatch", file=sys.stderr)
-        sys.exit(1)
-elif IS_MACOS:
-    try:
-        import sounddevice as sd
-    except ImportError:
-        print("ERROR: sounddevice not installed. Run: pip install sounddevice", file=sys.stderr)
-        sys.exit(1)
-else:
-    print(f"ERROR: Unsupported platform: {platform.system()}", file=sys.stderr)
-    sys.exit(1)
+pyaudio: Optional[object] = None
+sd: Optional[object] = None
+
+
+class DeviceManagerEnvironmentError(RuntimeError):
+    """Raised when the device manager environment is unsupported or incomplete."""
+
+
+def load_audio_backend():
+    global pyaudio, sd
+
+    if IS_WINDOWS:
+        if pyaudio is None:
+            try:
+                import pyaudiowpatch as imported_pyaudio
+                pyaudio = imported_pyaudio
+            except ImportError as exc:
+                raise DeviceManagerEnvironmentError(
+                    "pyaudiowpatch not installed. Run: pip install pyaudiowpatch"
+                ) from exc
+        return pyaudio
+
+    if IS_MACOS:
+        if sd is None:
+            try:
+                import sounddevice as imported_sd
+                sd = imported_sd
+            except ImportError as exc:
+                raise DeviceManagerEnvironmentError(
+                    "sounddevice not installed. Run: pip install sounddevice"
+                ) from exc
+        return sd
+
+    raise DeviceManagerEnvironmentError(f"Unsupported platform: {platform.system()}")
 
 
 class DeviceManager:
@@ -38,9 +56,14 @@ class DeviceManager:
 
     def __init__(self):
         if IS_WINDOWS:
-            self.pa = pyaudio.PyAudio()
+            backend = load_audio_backend()
+            self.audio_backend = backend
+            self.pa = backend.PyAudio()
         elif IS_MACOS:
+            self.audio_backend = load_audio_backend()
             self.pa = None  # sounddevice doesn't need initialization
+        else:
+            raise DeviceManagerEnvironmentError(f"Unsupported platform: {platform.system()}")
 
     def __del__(self):
         """Clean up PyAudio instance."""
@@ -59,6 +82,8 @@ class DeviceManager:
             return self._list_devices_windows()
         elif IS_MACOS:
             return self._list_devices_macos()
+
+        raise DeviceManagerEnvironmentError(f"Unsupported platform: {platform.system()}")
 
     def _list_devices_windows(self) -> Dict[str, List[Dict[str, Any]]]:
         """Windows-specific device enumeration using pyaudiowpatch."""
@@ -221,6 +246,8 @@ class DeviceManager:
         elif IS_MACOS:
             return self._get_device_info_macos(device_id)
 
+        return {"error": f"Unsupported platform: {platform.system()}"}
+
     def _get_device_info_windows(self, device_id: int) -> Dict[str, Any]:
         """Windows-specific device info retrieval."""
         try:
@@ -267,6 +294,8 @@ class DeviceManager:
         elif IS_MACOS:
             return self._get_default_devices_macos()
 
+        return {"default_input": -1, "default_output": -1}
+
     def _get_default_devices_windows(self) -> Dict[str, int]:
         """Windows-specific default device retrieval."""
         try:
@@ -312,7 +341,11 @@ def main():
     Command-line interface for testing device enumeration.
     Outputs JSON to stdout for easy parsing by Electron.
     """
-    manager = DeviceManager()
+    try:
+        manager = DeviceManager()
+    except DeviceManagerEnvironmentError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
 
     # Get all devices
     devices = manager.list_all_devices()

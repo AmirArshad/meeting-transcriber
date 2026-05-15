@@ -46,11 +46,11 @@ No features currently in development.
 
 #### 1. JSON-Based Event System
 
-**Status:** Planned
+**Status:** Complete
 **Priority:** Low
 **Description:** Refactor from string-based event detection to JSON-based event system
 
-Currently, the app uses fragile string matching to detect recording state (e.g., \`output.includes('Recording started!')\`). This should be refactored to a robust JSON-based event system for better reliability and cross-platform consistency.
+The recorder startup/control path now uses structured stdout JSON instead of fragile stderr string matching. Keep new recorder lifecycle behavior on this contract for reliability and cross-platform consistency.
 
 **Benefits:**
 - Type-safe event detection

@@ -6,6 +6,57 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
+function buildFileUrl(filePath) {
+  const normalizedPath = String(filePath || '').trim();
+
+  if (!normalizedPath) {
+    return '';
+  }
+
+  if (normalizedPath.startsWith('file://')) {
+    return normalizedPath;
+  }
+
+  let slashPath = normalizedPath.replace(/\\/g, '/');
+
+  if (/^[A-Za-z]:\//.test(slashPath)) {
+    slashPath = `/${slashPath}`;
+  }
+
+  const encodedPath = slashPath
+    .split('/')
+    .map((part, index) => {
+      if (!part || (index === 1 && /^[A-Za-z]:$/.test(part))) {
+        return part;
+      }
+
+      return encodeURIComponent(part);
+    })
+    .join('/');
+
+  if (encodedPath.startsWith('//')) {
+    return `file:${encodedPath}`;
+  }
+
+  return `file://${encodedPath.startsWith('/') ? '' : '/'}${encodedPath}`;
+}
+
+function addListener(channel, callback) {
+  const wrappedCallback = (_event, data) => callback(data);
+  ipcRenderer.on(channel, wrappedCallback);
+  return () => ipcRenderer.removeListener(channel, wrappedCallback);
+}
+
+function addOnceListener(channel, callback) {
+  const wrappedCallback = (_event, data) => callback(data);
+  ipcRenderer.once(channel, wrappedCallback);
+  return () => ipcRenderer.removeListener(channel, wrappedCallback);
+}
+
+function removeAllListeners(channel) {
+  ipcRenderer.removeAllListeners(channel);
+}
+
 // Expose protected methods to renderer process
 contextBridge.exposeInMainWorld('electronAPI', {
   // Get audio devices
@@ -20,6 +71,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   validateDevices: (options) => ipcRenderer.invoke('validate-devices', options),
   checkDiskSpace: () => ipcRenderer.invoke('check-disk-space'),
   checkAudioOutput: () => ipcRenderer.invoke('check-audio-output'),
+  runRecordingPreflight: (options) => ipcRenderer.invoke('run-recording-preflight', options),
 
   // Recording controls
   startRecording: (options) => ipcRenderer.invoke('start-recording', options),
@@ -45,36 +97,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Platform detection
   getPlatform: () => ipcRenderer.invoke('get-platform'),
   getArch: () => ipcRenderer.invoke('get-arch'),
+  getMacOSPermissionStatus: () => ipcRenderer.invoke('get-macos-permission-status'),
   openSystemSettings: (type) => ipcRenderer.invoke('open-system-settings', type),
+  buildFileUrl,
 
   // Updates
   downloadUpdate: (downloadUrl) => ipcRenderer.invoke('download-update', downloadUrl),
+  getPendingUpdateInfo: () => ipcRenderer.invoke('get-pending-update-info'),
 
   // Event listeners
-  onRecordingProgress: (callback) => {
-    ipcRenderer.on('recording-progress', (event, data) => callback(data));
-  },
-  onRecordingInitProgress: (callback) => {
-    ipcRenderer.on('recording-init-progress', (event, data) => callback(data));
-  },
-  onTranscriptionProgress: (callback) => {
-    ipcRenderer.on('transcription-progress', (event, data) => callback(data));
-  },
-  onGPUInstallProgress: (callback) => {
-    ipcRenderer.on('gpu-install-progress', (event, data) => callback(data));
-  },
-  onModelDownloadProgress: (callback) => {
-    ipcRenderer.on('model-download-progress', (event, data) => callback(data));
-  },
-  onAudioLevels: (callback) => {
-    ipcRenderer.on('audio-levels', (event, data) => callback(data));
-  },
-  onRecordingWarning: (callback) => {
-    ipcRenderer.on('recording-warning', (event, data) => callback(data));
-  },
-  onUpdateAvailable: (callback) => {
-    ipcRenderer.on('update-available', (event, data) => callback(data));
-  }
+  onRecordingProgress: (callback) => addListener('recording-progress', callback),
+  onRecordingInitProgress: (callback) => addListener('recording-init-progress', callback),
+  onTranscriptionProgress: (callback) => addListener('transcription-progress', callback),
+  onGPUInstallProgress: (callback) => addListener('gpu-install-progress', callback),
+  onModelDownloadProgress: (callback) => addListener('model-download-progress', callback),
+  onAudioLevels: (callback) => addListener('audio-levels', callback),
+  onRecordingWarning: (callback) => addListener('recording-warning', callback),
+  onRecordingFailed: (callback) => addListener('recording-failed', callback),
+  onUpdateAvailable: (callback) => addListener('update-available', callback),
+  offUpdateAvailable: () => removeAllListeners('update-available')
 });
 
 console.log('Preload script loaded - API bridge ready');

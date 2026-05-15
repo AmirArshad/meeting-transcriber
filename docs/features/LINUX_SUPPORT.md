@@ -137,7 +137,7 @@ This document outlines the plan for adding native Linux support to Meeting Trans
 **Tasks:**
 
 1. Add Linux build targets to `package.json`
-2. Create `build/prepare-resources-linux.js`
+2. Extend the unified `build/prepare-resources.js` flow for Linux
 3. Bundle Python runtime for Linux (x64)
 4. Bundle ffmpeg static binary for Linux
 5. Test AppImage on Ubuntu and Arch
@@ -206,15 +206,10 @@ meeting-transcriber/
 │   └── platform_utils.py            # Platform detection utilities
 ├── build/
 │   ├── resources/
-│   │   ├── python-windows/          # Windows Python + deps
-│   │   ├── python-macos/            # macOS Python + deps
-│   │   ├── python-linux/            # 🆕 Linux Python + deps
-│   │   ├── ffmpeg-windows/          # Windows ffmpeg
-│   │   ├── ffmpeg-macos/            # macOS ffmpeg
-│   │   └── ffmpeg-linux/            # 🆕 Linux ffmpeg (static)
-│   ├── prepare-resources-windows.js
-│   ├── prepare-resources-macos.js
-│   ├── prepare-resources-linux.js   # 🆕
+│   │   ├── python/                  # staged current-platform Python runtime
+│   │   ├── ffmpeg/                  # staged current-platform ffmpeg
+│   │   └── bin/                     # staged helper binaries when needed
+│   ├── prepare-resources.js         # unified resource preparation entrypoint
 │   ├── icon.ico                     # Windows
 │   ├── icon.icns                    # macOS
 │   └── icon.png                     # 🆕 Linux (256x256)
@@ -395,7 +390,7 @@ jobs:
         run: npm install
 
       - name: Prepare Linux Resources
-        run: node build/prepare-resources-linux.js
+        run: npm run prepare-build
 
       - name: Build AppImage & DEB
         run: npm run build:linux
@@ -411,14 +406,14 @@ jobs:
             dist/*.deb
 ```
 
-### Resource Preparation (`build/prepare-resources-linux.js`)
+### Resource Preparation (`build/prepare-resources.js`)
 
 ```javascript
 // 1. Download portable Python for Linux
 // 2. Install Python dependencies via pip
 // 3. Download static ffmpeg binary
-// 4. Create build/resources/python-linux/
-// 5. Create build/resources/ffmpeg-linux/
+// 4. Stage build/resources/python/
+// 5. Stage build/resources/ffmpeg/
 ```
 
 ### Package.json Updates
@@ -478,9 +473,9 @@ git checkout -b feature/linux-support
 
 **v1.8.0 Release Assets:**
 
-- `Meeting-Transcriber-Setup-1.8.0.exe` (Windows)
-- `Meeting-Transcriber-1.8.0.dmg` (macOS)
-- `Meeting-Transcriber-1.8.0.AppImage` (Linux Universal)
+- `Meeting Transcriber-Setup-1.8.0.exe` (Windows)
+- `Meeting Transcriber-Setup-1.8.0.dmg` (macOS)
+- `Meeting Transcriber-1.8.0.AppImage` (Linux Universal)
 - `meeting-transcriber_1.8.0_amd64.deb` (Ubuntu/Debian)
 
 ### Installation Instructions (README)
@@ -490,9 +485,9 @@ git checkout -b feature/linux-support
 
 ### AppImage (All Distros)
 
-1. Download `Meeting-Transcriber-1.8.0.AppImage`
-2. Make executable: `chmod +x Meeting-Transcriber-1.8.0.AppImage`
-3. Run: `./Meeting-Transcriber-1.8.0.AppImage`
+1. Download `Meeting Transcriber-1.8.0.AppImage`
+2. Make executable: `chmod +x "Meeting Transcriber-1.8.0.AppImage"`
+3. Run: `./Meeting\ Transcriber-1.8.0.AppImage`
 
 ### Ubuntu/Debian (.deb)
 

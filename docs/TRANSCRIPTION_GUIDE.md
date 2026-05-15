@@ -1,123 +1,77 @@
 # Transcription Guide
 
-## Why Separate Tracks for Meetings?
+## How The App Transcribes Meetings Today
 
-When recording meetings, **mixing mic + desktop audio into one file creates poor transcription results**.
+Meeting Transcriber records microphone audio and desktop audio separately, then aligns and mixes them after recording stops.
 
-### The Problem with Mixed Audio:
+That mixed meeting file is what the app transcribes and saves to history.
 
-1. **Multiple voices confuse Whisper** - Your voice + meeting participants = overlapping speech
-2. **Lower audio quality** - Mixing/resampling degrades clarity
-3. **Hard to distinguish speakers** - Whisper can't tell who said what
-4. **Background noise** - Desktop audio adds noise to your voice
+This design keeps the recording pipeline reliable while still producing a single playback file and a single meeting transcript.
 
-### Example:
-```
-Mixed audio transcription:
-"Okay" (only 1 word from 10 seconds!)
+## Platform Backends
 
-Separate mic transcription:
-"Okay, so today we're going to discuss the project timeline and deliverables..."
-(full accurate transcript!)
-```
+- Windows: `faster-whisper`
+- macOS Apple Silicon: `lightning-whisper-mlx`
+- Intel Mac development fallback: `faster-whisper` CPU path in `src/main.js`
 
-## Recommended Approach: Separate Track Recording
+## Best Results
 
-### For Meetings (Zoom, Teams, etc.):
+### Use the right model size
 
-**Use `record_meeting.py`** - Records to two separate files:
+- `small` is the default and a good general choice.
+- `medium` usually helps with noisier meetings or heavier overlap.
+- `tiny` and `base` are faster but less resilient to real meeting audio.
 
-1. **`meeting_mic_TIMESTAMP.wav`** - Your voice only
-   - Clean audio
-   - Perfect for transcription
-   - Captures everything you say
+### Pick the correct language
 
-2. **`meeting_desktop_TIMESTAMP.wav`** - Desktop audio only
-   - Other participants' voices
-   - Keep for reference/playback
-   - Don't transcribe (too many voices)
+Whisper quality drops quickly if the selected language does not match the dominant speech in the recording.
 
-### Workflow:
+### Keep the source audio clean
 
-```bash
-# 1. Record meeting with separate tracks
-python record_meeting.py
+- use a decent microphone
+- avoid clipping or extremely low mic volume
+- keep system audio audible and stable
+- reduce unnecessary notification sounds during meetings
 
-# 2. Transcribe YOUR voice only
-python test_transcribe.py
-# Select: meeting_mic_TIMESTAMP.wav
+### Expect overlap to remain hard
 
-# 3. You now have:
-#    - Accurate transcript of what YOU said
-#    - Desktop audio file for listening to others
-```
+Whisper is much better on clean, turn-based speech than on several people talking at once.
 
-## When to Use Mixed Audio:
+## What The App Is Optimized For
 
-Mixed audio (mic + desktop) is useful for:
-- **Playback** - Hearing both sources together
-- **Archiving** - Single file with full meeting audio
-- **Video recording** - When you need synchronized audio
+- local-only transcription
+- full-meeting notes and playback
+- timestamped transcript output
+- one saved meeting record per recording session
 
-But **NOT for transcription** - always transcribe mic separately!
+## Known Limitations
 
-## Current Limitations:
+- Speaker diarization is not implemented.
+- Real-time transcription is not implemented.
+- The UI does not currently expose a separate-track transcription mode for mic-only transcripts.
+- Very noisy or heavily overlapping meetings will still be harder to transcribe accurately.
 
-- **Desktop audio transcription**: Not recommended due to multiple speakers
-- **Speaker identification**: Not implemented (future feature)
-- **Voice separation**: Not implemented (future feature)
+## GPU Notes
 
-## Future Enhancements:
+### Windows
 
-1. **Dual transcription** - Transcribe mic and desktop separately, combine with labels
-2. **Speaker diarization** - Identify "Speaker 1", "Speaker 2", etc.
-3. **Voice isolation** - Use AI to separate your voice from background
-4. **Real-time transcription** - Live captions during meeting
+- CUDA acceleration is optional.
+- If GPU packages are not installed, transcription falls back to CPU.
 
-## GPU Acceleration Note:
+### macOS
 
-**Python 3.13 users:** PyTorch doesn't support Python 3.13 yet.
+- Apple Silicon packaged builds use MLX/Metal automatically.
+- MLX model files are stored in `~/Library/Caches/meeting-transcriber/mlx_models`.
 
-**Solutions:**
-- Use Python 3.12 or 3.11 for GPU support
-- Or use CPU mode (4-5x slower but works fine for short meetings)
+## Practical Recommendations
 
-See [SETUP_GPU.md](SETUP_GPU.md) for details.
+1. Start with the default `small` model.
+2. Move to `medium` if the meeting is noisy or has frequent overlap.
+3. Confirm both mic and desktop audio are actually present before relying on the transcript.
+4. For recorder changes, validate with the manual checklist in `tests/manual/recording-smoke-checklist.md`.
 
-## Tips for Better Transcription:
+## Related Docs
 
-1. **Good microphone** - Clear audio = better transcription
-2. **Reduce background noise** - Quiet environment helps
-3. **Speak clearly** - Whisper works best with clear speech
-4. **Use correct language** - Select the right language in test_transcribe.py
-5. **Mic-only mode** - Don't mix desktop audio for transcription
-
-## Testing:
-
-### Test 1: Mic-only recording (BEST for transcription)
-```bash
-python test_fix.py
-python test_transcribe.py  # Select the file
-```
-
-### Test 2: Meeting recording (separate tracks)
-```bash
-python record_meeting.py
-python test_transcribe.py  # Select meeting_mic_*.wav
-```
-
-### Test 3: Mixed audio (for playback, NOT transcription)
-```bash
-python test_mixing.py
-# Play the file, but don't expect good transcription
-```
-
-## Summary:
-
-✅ **DO:** Record mic separately for transcription
-✅ **DO:** Use high-quality microphone
-✅ **DO:** Speak clearly in quiet environment
-
-❌ **DON'T:** Mix mic + desktop for transcription
-❌ **DON'T:** Try to transcribe desktop audio with multiple speakers
-❌ **DON'T:** Expect good results from low-quality/noisy audio
+- `docs/MEETING_TRANSCRIPTION.md`
+- `docs/TROUBLESHOOTING.md`
+- `docs/development/SETUP_GPU.md`

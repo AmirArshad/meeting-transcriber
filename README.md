@@ -37,7 +37,7 @@ No existing solution offered all of this in one package, so I built it.
 - **Professional Audio Quality** - 48kHz sampling with soxr VHQ resampling on both platforms
 - **Intelligent Audio Enhancement** - Per-channel processing for natural, broadcast-quality sound
 - **Opus Compression** - 95% file size reduction (450MB → 23MB for 40-min recording)
-- **Meeting History** - Searchable archive with audio playback and full transcripts
+- **Meeting History** - Searchable archive with audio playback, full transcripts, and recovery-friendly metadata handling
 - **One-Click Installer** - Professional installers with embedded Python runtime (no dependencies)
 - **CPU Fallback** - Automatic fallback to CPU transcription when GPU unavailable
 
@@ -48,7 +48,7 @@ No existing solution offered all of this in one package, so I built it.
 **Windows:**
 
 1. **Download** the latest `.exe` installer from [Releases](https://github.com/AmirArshad/meeting-transcriber/releases)
-2. **Run** `Meeting Transcriber Setup.exe` (may show SmartScreen warning - click "More info" → "Run anyway")
+2. **Run** `Meeting Transcriber-Setup-<version>.exe` (may show SmartScreen warning - click "More info" → "Run anyway")
 3. **Launch** the app from Start Menu
 4. **Select** your microphone and desktop audio device
 5. **Click** "Start Recording" and transcribe!
@@ -76,17 +76,35 @@ No existing solution offered all of this in one package, so I built it.
 git clone https://github.com/AmirArshad/meeting-transcriber.git
 cd meeting-transcriber
 
-# Install Python dependencies
-pip install -r requirements.txt
-
 # Install Node.js dependencies
 npm install
+
+# Install Python dependencies
+# Windows: py -3.11 -m pip install -r requirements-windows.txt -r requirements-dev.txt
+# macOS:   python3 -m pip install -r requirements-macos.txt -r requirements-dev.txt
 
 # Run the app
 npm start
 ```
 
 See [docs/development/BUILD_INSTRUCTIONS.md](docs/development/BUILD_INSTRUCTIONS.md) for detailed setup.
+See [docs/development/TESTING.md](docs/development/TESTING.md) for test setup on a new machine.
+
+### Running Tests
+
+```bash
+# JavaScript regression tests + syntax checks
+npm test
+
+# Python regression tests (cross-platform wrapper)
+npm run test:python
+
+# Or run both
+npm run test:all
+```
+
+Direct Python commands are also supported: use `py -3.11 -m pytest tests/python` on Windows, or `python3 -m pytest tests/python` on macOS.
+For recorder changes, also run the manual smoke checklist in `tests/manual/recording-smoke-checklist.md`.
 
 ## 📸 How It Works
 
@@ -98,9 +116,9 @@ See [docs/development/BUILD_INSTRUCTIONS.md](docs/development/BUILD_INSTRUCTIONS
 
 2. **Record Your Meeting**
 
-   - App captures both audio streams simultaneously
-   - Real-time audio enhancement and mixing
-   - Automatic Opus compression on save
+    - App captures both audio streams simultaneously
+    - Streams are aligned and mixed after recording stops for better reliability
+    - Automatic Opus compression on save, with WAV fallback if ffmpeg is unavailable or output verification fails
 
 3. **Get Your Transcript**
 
@@ -211,6 +229,7 @@ Whisper itself supports **99 languages total** - the full list can be customized
 - **Development:**
 
   - [Build Instructions](docs/development/BUILD_INSTRUCTIONS.md) - Create installer
+  - [Testing Guide](docs/development/TESTING.md) - Set up and run the regression suite
   - [GPU Setup](docs/development/SETUP_GPU.md) - Enable CUDA acceleration
   - [Implementation Details](docs/development/INSTALLER_IMPLEMENTATION.md) - Technical overview
 
@@ -220,7 +239,7 @@ Whisper itself supports **99 languages total** - the full list can be customized
   - [Setup Wizard](docs/features/FEATURE_SETUP_WIZARD.md) - Guided first-time setup
   - [Combined Button](docs/features/FEATURE_COMBINED_BUTTON.md) - Unified recording control
   - [Audio Visualizer](docs/features/FEATURE_AUDIO_VISUALIZER.md) - Real-time level meters
-  - [Auto-Updater](docs/features/FEATURE_AUTO_UPDATER.md) - Automatic updates from GitHub
+  - [Update Checks](docs/features/FEATURE_AUTO_UPDATER.md) - GitHub release checks with manual download
 
 ## 🔒 Privacy & Security
 
@@ -275,11 +294,11 @@ This project is licensed under the MIT License - see [LICENSE.txt](LICENSE.txt) 
 
 ### In Progress 🚧
 
-- [ ] Auto-updater (GitHub release detection and installation)
+- [ ] True auto-install updater (the current app checks GitHub releases and opens manual downloads)
 
 ### Planned 📋
 
-- [ ] **JSON-Based Event System:** Refactor string-based event detection to robust JSON events (see [docs/features/json-based-events.md](docs/features/json-based-events.md))
+- [ ] **JSON-Based Event System:** Finish migrating remaining recorder/transcription flows away from stderr/string parsing to robust JSON events (see [docs/features/json-based-events.md](docs/features/json-based-events.md))
 - [ ] Speaker diarization (identify who's speaking)
 - [ ] **macOS Advanced Audio:** Real-time streaming (low RAM), App-specific capture, Real-time mixing
 - [ ] Real-time transcription

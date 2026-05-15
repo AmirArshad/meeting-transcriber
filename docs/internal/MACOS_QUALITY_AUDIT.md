@@ -1,5 +1,7 @@
 # macOS Recording Quality & Installation Size Audit
 
+> Historical note: this audit reflects repo state from December 2025 and is not a live source of truth for current product behavior. For current recorder/build behavior, use `README.md`, `docs/development/*.md`, `docs/features/json-based-events.md`, and `docs/internal/FULL_AUDIT_REMEDIATION_ARCHIVE.md`.
+
 **Date:** December 2, 2025
 **Purpose:** Compare macOS implementation against Windows to ensure feature parity for recording quality optimizations and installation size efficiency.
 

@@ -11,17 +11,6 @@ import json
 import sys
 import platform
 
-# Only run on macOS
-if platform.system() != 'Darwin':
-    print(json.dumps({
-        "platform": platform.system(),
-        "microphone": True,
-        "screen_recording": True,
-        "message": "Permission checks only needed on macOS"
-    }))
-    sys.exit(0)
-
-
 def get_macos_version() -> tuple:
     """
     Get macOS version as tuple (major, minor).
@@ -90,6 +79,19 @@ def check_microphone_permission() -> tuple[bool, str]:
         return False, f"Cannot access audio devices: {e}"
 
 
+def _check_screen_recording_permission_with_swift_helper() -> tuple[bool, str] | None:
+    try:
+        try:
+            from audio.swift_audio_capture import check_screen_recording_permission_detail
+        except ImportError:
+            from backend.audio.swift_audio_capture import check_screen_recording_permission_detail
+
+        return check_screen_recording_permission_detail()
+    except Exception as e:
+        print(f"Warning: Swift helper permission check unavailable: {e}", file=sys.stderr)
+        return None
+
+
 def check_screen_recording_permission() -> tuple[bool, str]:
     """
     Check if the app has Screen Recording permission.
@@ -99,6 +101,18 @@ def check_screen_recording_permission() -> tuple[bool, str]:
     Returns:
         Tuple of (has_permission, error_message)
     """
+    swift_result = _check_screen_recording_permission_with_swift_helper()
+    if swift_result is not None:
+        swift_granted, swift_error = swift_result
+        if swift_granted:
+            return True, ""
+
+        swift_error_lower = (swift_error or "").lower()
+
+        # If the shipped helper is available, its result matches the runtime path.
+        if "not available" not in swift_error_lower and "not found" not in swift_error_lower:
+            return False, swift_error or "Screen Recording permission denied"
+
     try:
         from ScreenCaptureKit import SCShareableContent
         from Foundation import NSRunLoop, NSDate
@@ -140,6 +154,15 @@ def main():
     """
     Check all permissions and output JSON result.
     """
+    if platform.system() != 'Darwin':
+        print(json.dumps({
+            "platform": platform.system(),
+            "microphone": True,
+            "screen_recording": True,
+            "message": "Permission checks only needed on macOS"
+        }))
+        sys.exit(0)
+
     # Check macOS version compatibility first
     version_compatible, version_str, version_warning = check_macos_version_compatibility()
 

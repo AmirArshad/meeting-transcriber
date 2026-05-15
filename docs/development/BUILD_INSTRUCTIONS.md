@@ -1,12 +1,13 @@
 # Build Instructions
 
-This document explains how to build the Meeting Transcriber installer from source.
+This document explains how to build Meeting Transcriber from source for the supported packaged targets.
 
 ## Prerequisites
 
 - Node.js 18+ installed
 - Internet connection (for downloading Python and ffmpeg during build)
-- Windows 10/11 (64-bit)
+- Windows 10/11 (64-bit) for Windows builds
+- macOS 13+ on Apple Silicon for macOS builds
 - ~2GB free disk space for build artifacts
 
 ## Step 1: Install Dependencies
@@ -15,54 +16,56 @@ This document explains how to build the Meeting Transcriber installer from sourc
 npm install
 ```
 
+Install Python dependencies for your platform:
+
+### Windows
+
+```bash
+py -3.11 -m pip install -r requirements-windows.txt -r requirements-dev.txt
+```
+
+### macOS
+
+```bash
+python3 -m pip install -r requirements-macos.txt -r requirements-dev.txt
+```
+
 This installs:
 
 - Electron
 - electron-builder (packaging tool)
+- Python runtime dependencies for local development
+- Python test dependencies
 
 ## Step 2: Prepare Build Resources
 
-This step downloads and prepares:
+This step downloads and prepares the packaged runtime resources for the current platform:
 
-- Embedded Python 3.11.9 (~30MB)
-- Python dependencies from requirements.txt (~100MB)
-- ffmpeg binary (~100MB)
+- Bundled Python runtime
+- Python dependencies from the platform-specific requirements file
+- ffmpeg binary
+- macOS Swift `audiocapture-helper` binary when building on macOS
 
 ```bash
-npm run prebuild
+npm run prepare-build
 ```
 
 **Note:** This may take 5-15 minutes depending on your internet speed.
+The build now writes a `build/resources/resource-manifest.json` file and invalidates stale runtime artifacts automatically when pinned downloads, requirements, entitlements, or Swift helper sources change.
 
 The script will:
 
-1. Download Python embeddable distribution
-2. Extract Python
-3. Install pip
-4. Install all Python dependencies (including faster-whisper)
-5. Download ffmpeg essentials
+1. Download the pinned Python runtime for the current platform
+2. Verify checksums for runtime downloads and the pinned pip bootstrap wheel
+3. Extract Python, bootstrap pip from the pinned wheel, and install platform-specific dependencies
+4. Download and verify ffmpeg
+5. Build and stage the Swift helper on macOS
 
-All resources are stored in `build/resources/` and will be bundled into the installer.
+All resources are stored in `build/resources/` and then bundled via `electron-builder`.
 
-## Step 3: Add Application Icon (Required)
+## Step 3: Build the Installer
 
-You need to provide an application icon:
-
-**File:** `build/icon.ico`
-**Format:** Windows ICO format
-**Sizes:** 16x16, 32x32, 48x48, 256x256
-
-Quick options:
-
-- Use an online converter: <https://convertio.co/png-ico/>
-- Find a free icon: <https://www.flaticon.com/>
-- Create with design tools (Photoshop, GIMP, etc.)
-
-**The build will fail without this file!**
-
-## Step 4: Build the Installer
-
-### Option A: Full Installer (Recommended)
+### Windows installer
 
 Creates a complete NSIS installer (.exe):
 
@@ -70,9 +73,9 @@ Creates a complete NSIS installer (.exe):
 npm run build
 ```
 
-Output: `dist/Meeting Transcriber Setup 1.0.0.exe` (~600-800MB)
+Output: `dist/Meeting Transcriber-Setup-<version>.exe` (~600-800MB)
 
-### Option B: Portable Build (For Testing)
+### Windows unpacked build (for testing)
 
 Creates an unpacked directory (faster, no installer):
 
@@ -81,6 +84,22 @@ npm run build:dir
 ```
 
 Output: `dist/win-unpacked/` - can run directly for testing
+
+### macOS installer
+
+```bash
+npm run build:mac
+```
+
+Output: `dist/Meeting Transcriber-Setup-<version>.dmg`
+
+### macOS unpacked build (for testing)
+
+```bash
+npm run build:mac:dir
+```
+
+Output: `dist/mac-arm64/`
 
 ## What Gets Bundled
 
@@ -103,7 +122,7 @@ After building, you'll have:
 
 ```text
 dist/
-├── Meeting Transcriber Setup 1.0.0.exe  # Main installer
+├── Meeting Transcriber-Setup-<version>.exe  # Main installer
 ├── win-unpacked/                         # Unpacked app (if using build:dir)
 └── builder-*.yaml                        # Build metadata
 ```
@@ -112,14 +131,13 @@ dist/
 
 1. **Test the unpacked version first:**
 
-   ```bash
+   ```powershell
    npm run build:dir
-   cd dist/win-unpacked
-   "Meeting Transcriber.exe"
+   .\dist\win-unpacked\Meeting Transcriber.exe
    ```
 
 2. **Then test the full installer:**
-   - Run `Meeting Transcriber Setup 1.0.0.exe`
+   - Run `Meeting Transcriber-Setup-<version>.exe`
    - Install to a test location
    - Verify the app launches
    - Test recording and transcription
@@ -137,16 +155,11 @@ The NSIS installer provides:
 
 ## Troubleshooting
 
-### Build fails: "Icon not found"
-
-- Make sure `build/icon.ico` exists
-- Verify it's a valid ICO file
-
 ### Build fails: Python download errors
 
 - Check internet connection
-- Try running `npm run prebuild` again
-- May need to manually download and place in `build/resources/python/`
+- Try running `npm run prepare-build` again
+- Delete `build/resources/resource-manifest.json` and rerun if you suspect stale resource state
 
 ### Installer is too large (>1GB)
 
@@ -165,14 +178,27 @@ The NSIS installer provides:
 To start fresh:
 
 ```bash
-# Remove build artifacts
-rmdir /s /q dist
-rmdir /s /q build\resources
-
-# Rebuild everything
-npm run prebuild
+npm run clean
+rm -rf build/resources
+npm run prepare-build
 npm run build
 ```
+
+On Windows PowerShell, replace `rm -rf build/resources` with:
+
+```powershell
+Remove-Item -Recurse -Force build/resources
+```
+
+## Test Before Building
+
+Before creating installers, run the regression suite:
+
+```bash
+npm run test:all
+```
+
+See [TESTING.md](TESTING.md) for the full test setup and platform-specific commands.
 
 ## Distribution
 
@@ -205,8 +231,6 @@ This removes "Unknown Publisher" warnings.
 
 After building the installer:
 
-1. Test thoroughly on a clean Windows machine
-2. Consider adding auto-update functionality
-3. Set up CI/CD for automated builds
-4. Implement crash reporting (Sentry, etc.)
-5. Add analytics (optional)
+1. Test thoroughly on a clean target machine
+2. Verify packaged resources match the current platform/runtime inputs
+3. Set up or verify CI/CD release automation

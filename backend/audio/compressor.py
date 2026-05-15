@@ -17,9 +17,9 @@ def compress_to_opus(
     input_path: str,
     output_path: str,
     sample_rate: int,
-    bitrate: str = None,
-    compression_level: int = None,
-    application: str = None
+    bitrate: str | None = None,
+    compression_level: int | None = None,
+    application: str | None = None
 ) -> str:
     """
     Compress audio to Opus format using ffmpeg.
@@ -33,7 +33,7 @@ def compress_to_opus(
         application: 'audio', 'voip', or 'lowdelay'. Defaults to OPUS_APPLICATION
 
     Returns:
-        Path to the output file (may be .opus or .wav if ffmpeg fails)
+        Path to the output file (`.opus` on success, `.wav` fallback on failure)
     """
     bitrate = bitrate or OPUS_BITRATE
     compression_level = compression_level if compression_level is not None else OPUS_COMPRESSION_LEVEL
@@ -41,6 +41,15 @@ def compress_to_opus(
 
     # Change extension to .opus
     opus_path = str(Path(output_path).with_suffix('.opus'))
+    wav_path = str(Path(output_path).with_suffix('.wav'))
+
+    def _cleanup_bad_opus_file():
+        opus_file = Path(opus_path)
+        if opus_file.exists():
+            try:
+                opus_file.unlink()
+            except OSError:
+                pass
 
     cmd = [
         'ffmpeg',
@@ -62,20 +71,26 @@ def compress_to_opus(
         # Verify recording integrity
         if not verify_recording_integrity(opus_path):
             print(f"WARNING: Recording integrity check failed", file=sys.stderr)
+            print(f"Falling back to WAV format...", file=sys.stderr)
+            _cleanup_bad_opus_file()
+            shutil.copy(input_path, wav_path)
+            return wav_path
 
         return opus_path
 
     except FileNotFoundError:
         print(f"Warning: ffmpeg not found in PATH", file=sys.stderr)
         print(f"Falling back to WAV format (audio will be larger)...", file=sys.stderr)
-        shutil.copy(input_path, output_path)
-        return output_path
+        _cleanup_bad_opus_file()
+        shutil.copy(input_path, wav_path)
+        return wav_path
 
     except subprocess.CalledProcessError as e:
         print(f"Warning: ffmpeg compression failed: {e.stderr.decode()}", file=sys.stderr)
         print(f"Falling back to WAV format...", file=sys.stderr)
-        shutil.copy(input_path, output_path)
-        return output_path
+        _cleanup_bad_opus_file()
+        shutil.copy(input_path, wav_path)
+        return wav_path
 
 
 def verify_recording_integrity(file_path: str) -> bool:

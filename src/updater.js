@@ -12,6 +12,7 @@ const https = require('https');
 const REPO_OWNER = 'AmirArshad';
 const REPO_NAME = 'meeting-transcriber';
 const GITHUB_API = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest`;
+const INSTALLER_NAME_TOKEN = 'Meeting Transcriber-Setup-';
 
 /**
  * Check if a new version is available on GitHub
@@ -114,20 +115,15 @@ function findInstallerAsset(assets) {
   const platform = process.platform;
 
   if (platform === 'darwin') {
-    // macOS: prefer .dmg, fall back to .zip
-    const dmgAsset = assets.find(asset => asset.name.endsWith('.dmg'));
-    if (dmgAsset) return dmgAsset;
-
-    const zipAsset = assets.find(asset =>
-      asset.name.endsWith('.zip') && asset.name.toLowerCase().includes('mac')
+    const dmgAsset = assets.find(asset =>
+      asset.name.startsWith(INSTALLER_NAME_TOKEN) && asset.name.endsWith('.dmg')
     );
-    return zipAsset || null;
+    return dmgAsset || null;
   }
 
   if (platform === 'win32') {
-    // Windows: .exe installer
     const exeAsset = assets.find(asset =>
-      asset.name.endsWith('.exe') && asset.name.includes('Setup')
+      asset.name.startsWith(INSTALLER_NAME_TOKEN) && asset.name.endsWith('.exe')
     );
     return exeAsset || null;
   }
@@ -174,6 +170,7 @@ function openDownloadPage(url) {
 
 module.exports = {
   checkForUpdates,
+  findInstallerAsset,
   openDownloadPage,
   isNewerVersion // Export for testing
 };

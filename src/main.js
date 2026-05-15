@@ -12,6 +12,22 @@ const path = require('path');
 const { spawn, execFile } = require('child_process');
 const fs = require('fs');
 const os = require('os');
+const {
+  buildRecordingPreflightReport,
+  buildQuitRecordingDialogOptions,
+  buildModelDownloadCheck,
+  buildPythonModuleArgs,
+  buildTranscriberArgs,
+  cacheContainsModel,
+  getQuitInterceptState,
+  getRecorderCloseAction,
+  getRecorderEventAction,
+  getRecordingStopTimeout,
+  resolveStopTimeoutAction,
+  isModelDownloadErrorOutput,
+  parseRecorderStdoutChunk,
+  resolveTranscriptionAudioFile,
+} = require('./main-process-helpers');
 const { checkForUpdates, openDownloadPage } = require('./updater');
 
 // Use Electron's default userData path, which handles packaging correctly
@@ -27,6 +43,386 @@ let isQuitting = false;
 let powerSaveId = null; // Power save blocker ID for preventing system suspension during recording
 let recordingHeartbeat = null; // Heartbeat monitor to detect recording failures
 let lastLevelUpdate = null; // Timestamp of last audio level update
+let recordingStopPromise = null;
+let stopCommandSent = false;
+let quitWorkflowPromise = null;
+let allowImmediateQuit = false;
+let pendingUpdateInfo = null;
+
+function firstExistingPath(paths) {
+  return paths.find((candidate) => fs.existsSync(candidate)) || null;
+}
+
+function getWindowIconPath() {
+  if (process.platform === 'win32') {
+    return firstExistingPath([
+      path.join(process.resourcesPath, 'icon.ico'),
+      path.join(__dirname, '../build/icon.ico'),
+    ]);
+  }
+
+  return firstExistingPath([
+    path.join(process.resourcesPath, 'iconTemplate.png'),
+    path.join(__dirname, '../build/iconTemplate.png'),
+  ]);
+}
+
+function sendToRenderer(channel, payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(channel, payload);
+  }
+}
+
+function sendUpdateAvailable(updateInfo) {
+  pendingUpdateInfo = updateInfo;
+  sendToRenderer('update-available', updateInfo);
+}
+
+function clearRecordingRuntimeState(reason) {
+  if (recordingHeartbeat) {
+    clearInterval(recordingHeartbeat);
+    recordingHeartbeat = null;
+    console.log(`Recording heartbeat monitor stopped (${reason})`);
+  }
+
+  pythonProcess = null;
+  recordingStartTime = null;
+  disableRecordingPowerSaveBlocker(reason);
+  resetStopWorkflowState();
+}
+
+function disableRecordingPowerSaveBlocker(reason = 'recording stopped') {
+  if (powerSaveId !== null) {
+    powerSaveBlocker.stop(powerSaveId);
+    powerSaveId = null;
+    console.log(`Power save blocker disabled (${reason})`);
+  }
+}
+
+function resetStopWorkflowState() {
+  recordingStopPromise = null;
+  stopCommandSent = false;
+}
+
+function parseRecordingStopResult(stdoutData) {
+  const trimmedOutput = stdoutData.trim();
+
+  if (trimmedOutput) {
+    const lines = trimmedOutput.split('\n');
+    const jsonLine = lines[lines.length - 1];
+    const recordingInfo = JSON.parse(jsonLine);
+    const filePath = recordingInfo.audioPath || recordingInfo.outputPath;
+
+    if (filePath && fs.existsSync(filePath)) {
+      return {
+        success: true,
+        audioPath: filePath,
+        duration: recordingInfo.duration,
+      };
+    }
+
+    throw new Error(`Recording file not found: ${filePath}`);
+  }
+
+  const recordingsDir = path.join(app.getPath('userData'), 'recordings');
+  const opusPath = path.join(recordingsDir, 'temp.opus');
+
+  if (fs.existsSync(opusPath)) {
+    return { success: true, audioPath: opusPath };
+  }
+
+  throw new Error('Recording completed but output file not found.');
+}
+
+function stopRecordingProcess() {
+  if (!pythonProcess) {
+    return Promise.resolve({ success: true });
+  }
+
+  if (recordingStopPromise) {
+    return recordingStopPromise;
+  }
+
+  if (recordingHeartbeat) {
+    clearInterval(recordingHeartbeat);
+    recordingHeartbeat = null;
+    console.log('Recording heartbeat monitor stopped');
+  }
+
+  const currentProcess = pythonProcess;
+
+  recordingStopPromise = new Promise((resolve, reject) => {
+    let stdoutData = '';
+    let stderrData = '';
+    let settled = false;
+
+    const stdoutHandler = (data) => {
+      stdoutData += data.toString();
+    };
+
+    const stderrHandler = (data) => {
+      const output = data.toString();
+      stderrData += output;
+      console.log(`Python status: ${output}`);
+    };
+
+    const cleanupListeners = () => {
+      currentProcess.stdout.removeListener('data', stdoutHandler);
+      currentProcess.stderr.removeListener('data', stderrHandler);
+      currentProcess.removeListener('close', closeHandler);
+    };
+
+    const finalizeState = () => {
+      if (pythonProcess === currentProcess) {
+        clearRecordingRuntimeState('recording completed');
+        return;
+      }
+
+      resetStopWorkflowState();
+    };
+
+    const closeHandler = (code) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      cleanupListeners();
+      finalizeState();
+
+      if (code === 0) {
+        try {
+          resolve(parseRecordingStopResult(stdoutData));
+        } catch (error) {
+          reject(error);
+        }
+        return;
+      }
+
+      reject(new Error(`Recording stopped with exit code ${code}: ${stderrData}`));
+    };
+
+    currentProcess.stdout.on('data', stdoutHandler);
+    currentProcess.stderr.on('data', stderrHandler);
+    currentProcess.once('close', closeHandler);
+
+    try {
+      if (stopCommandSent) {
+        return;
+      }
+
+      currentProcess.stdin.write('stop\n');
+      stopCommandSent = true;
+    } catch (error) {
+      settled = true;
+      cleanupListeners();
+      resetStopWorkflowState();
+      reject(new Error(`Could not send stop command to recorder: ${error.message}`));
+    }
+  });
+
+  return recordingStopPromise;
+}
+
+async function waitForRecordingStop({ forceKillOnTimeout, timeoutMessage }) {
+  const stopPromise = stopRecordingProcess();
+  const timeoutMs = getRecordingStopTimeout(recordingStartTime);
+
+  let timeoutHandle;
+
+  try {
+    return await Promise.race([
+      stopPromise,
+      new Promise((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          reject(new Error(timeoutMessage));
+        }, timeoutMs);
+      }),
+    ]);
+  } catch (error) {
+    const timeoutAction = resolveStopTimeoutAction({
+      forceKillOnTimeout,
+      errorMessage: error.message,
+      timeoutMessage,
+      hasRecordingProcess: Boolean(pythonProcess),
+    });
+
+    if (timeoutAction.shouldKillProcess && pythonProcess) {
+      try {
+        pythonProcess.kill();
+        resetStopWorkflowState();
+      } catch (killError) {
+        console.warn('Failed to kill recorder after timeout:', killError.message);
+      }
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
+}
+
+async function promptForForcedQuit(quitState, stopError) {
+  const options = buildQuitRecordingDialogOptions({
+    quitState,
+    stopErrorMessage: stopError?.message,
+  });
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    return dialog.showMessageBox(mainWindow, options);
+  }
+
+  return dialog.showMessageBox(options);
+}
+
+async function handleQuitDuringRecording(quitState) {
+  if (quitWorkflowPromise) {
+    return quitWorkflowPromise;
+  }
+
+  isQuitting = false;
+
+  quitWorkflowPromise = (async () => {
+    if (quitState.progressMessage) {
+      sendToRenderer('recording-progress', quitState.progressMessage);
+    }
+
+    try {
+      const result = await waitForRecordingStop({
+        forceKillOnTimeout: false,
+        timeoutMessage: 'Recorder stop is taking longer than expected.',
+      });
+
+      if (result?.audioPath) {
+        await persistStoppedRecordingForQuit(result);
+      }
+
+      allowImmediateQuit = true;
+      isQuitting = true;
+      app.quit();
+      return;
+    } catch (error) {
+      console.warn('Graceful quit stop failed:', error.message);
+      const response = await promptForForcedQuit(quitState.state, error);
+
+      if (response.response === 1) {
+        allowImmediateQuit = true;
+        isQuitting = true;
+        app.quit();
+        return;
+      }
+
+      isQuitting = false;
+      const canceledMessage = quitState.state === 'stopping'
+        ? 'Quit canceled. Saving continues.'
+        : 'Quit canceled. Recording continues.';
+      sendToRenderer('recording-progress', canceledMessage);
+    }
+  })();
+
+  try {
+    await quitWorkflowPromise;
+  } finally {
+    if (!allowImmediateQuit) {
+      quitWorkflowPromise = null;
+    }
+  }
+}
+
+async function persistStoppedRecordingForQuit(recordingInfo) {
+  const audioPath = recordingInfo.audioPath;
+  const audioFile = path.basename(audioPath);
+  const recordingsDir = path.dirname(audioPath);
+  const transcriptPath = path.join(
+    recordingsDir,
+    `${path.basename(audioFile, path.extname(audioFile))}.md`
+  );
+
+  if (!fs.existsSync(transcriptPath)) {
+    const transcriptContent = [
+      '# Recording Saved Before Quit',
+      '',
+      `**Date:** ${new Date().toISOString()}`,
+      `**Duration:** ${formatDurationForTranscript(recordingInfo.duration || 0)}`,
+      '',
+      'Transcription was not completed because the app quit while recording was active.',
+      'Open Meeting Transcriber again to keep this recording in history.',
+      '',
+    ].join('\n');
+
+    fs.writeFileSync(transcriptPath, transcriptContent, 'utf8');
+  }
+
+  await addMeetingToHistory({
+    audioPath,
+    transcriptPath,
+    duration: recordingInfo.duration || 0,
+    language: 'unknown',
+    model: 'not-transcribed',
+    title: 'Recording saved before quit',
+  });
+}
+
+function formatDurationForTranscript(durationSeconds) {
+  const totalSeconds = Math.max(0, Math.floor(Number(durationSeconds) || 0));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  }
+
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
+function addMeetingToHistory(meetingData) {
+  return new Promise((resolve, reject) => {
+    const { audioPath, transcriptPath, duration, language, model, title } = meetingData;
+    const recordingsDir = path.join(app.getPath('userData'), 'recordings');
+    const args = getBackendModuleArgs('meeting_manager', [
+      '--recordings-dir', recordingsDir,
+      'add',
+      '--audio', audioPath,
+      '--transcript', transcriptPath,
+      '--duration', String(duration || 0),
+      '--language', language || 'en',
+      '--model', model || 'unknown'
+    ]);
+
+    if (title) {
+      args.push('--title', title);
+    }
+
+    const python = spawnTrackedPython(args, { cwd: pythonConfig.backendPath });
+
+    let output = '';
+    let errorOutput = '';
+
+    python.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    python.stderr.on('data', (data) => {
+      errorOutput += data.toString();
+    });
+
+    python.on('close', (code) => {
+      if (code === 0) {
+        try {
+          resolve(JSON.parse(output));
+        } catch (error) {
+          reject(new Error(`Failed to parse saved meeting: ${error.message}`));
+        }
+        return;
+      }
+
+      reject(new Error(`Failed to save meeting: ${errorOutput.trim() || 'Unknown error'}`));
+    });
+
+    python.on('error', reject);
+  });
+}
 
 // ============================================================================
 // Python Process Management
@@ -113,29 +509,21 @@ function getPythonConfig() {
 
 const pythonConfig = getPythonConfig();
 
-/**
- * Get the platform-specific transcriber script path.
- * Returns the appropriate transcriber based on the operating system:
- * - macOS: MLX Whisper (Metal GPU acceleration for Apple Silicon)
- * - Windows/others: faster-whisper (CUDA GPU acceleration)
- */
-function getTranscriberScript() {
-  const isMac = process.platform === 'darwin';
+const transcriberModule = buildTranscriberArgs({
+  platform: process.platform,
+  arch: process.arch,
+}).at(1);
 
-  if (isMac) {
-    // Check for Apple Silicon (arm64)
-    // MLX requires native arm64 execution
-    if (process.arch === 'arm64') {
-      return path.join(pythonConfig.backendPath, 'transcription', 'mlx_whisper_transcriber.py');
-    } else {
-      // Intel Mac (x64) -> Use faster-whisper (CPU fallback)
-      console.log('Intel Mac detected: Using faster-whisper fallback (CPU)');
-      return path.join(pythonConfig.backendPath, 'transcription', 'faster_whisper_transcriber.py');
-    }
-  }
+function getTranscriberArgs(extraArgs = []) {
+  return buildTranscriberArgs({
+    platform: process.platform,
+    arch: process.arch,
+    extraArgs,
+  });
+}
 
-  // Windows/Linux -> faster-whisper (CUDA/CPU)
-  return path.join(pythonConfig.backendPath, 'transcription', 'faster_whisper_transcriber.py');
+function getBackendModuleArgs(moduleName, extraArgs = []) {
+  return buildPythonModuleArgs(moduleName, extraArgs);
 }
 
 // Add ffmpeg to PATH so Python scripts can find it
@@ -154,7 +542,7 @@ process.env.PYTHONWARNINGS = 'ignore::DeprecationWarning,ignore::UserWarning';
 console.log('Python Configuration:', pythonConfig);
 console.log('userData path:', app.getPath('userData'));
 console.log('Recordings will be saved to:', path.join(app.getPath('userData'), 'recordings'));
-console.log('Transcriber:', getTranscriberScript());
+console.log('Transcriber module:', transcriberModule);
 
 // ============================================================================
 // Safety Checks and Verification Functions
@@ -490,7 +878,6 @@ function createTray() {
     {
       label: 'Quit',
       click: () => {
-        isQuitting = true;
         app.quit();
       }
     }
@@ -512,6 +899,8 @@ function createTray() {
 
 // Create the main application window
 function createWindow() {
+  const windowIcon = getWindowIconPath();
+
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -521,7 +910,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js')
     },
     titleBarStyle: 'default',
-    icon: path.join(__dirname, '../assets/icon.png')
+    icon: windowIcon || undefined
   });
 
   // Load the HTML file
@@ -552,7 +941,6 @@ function createWindow() {
           mainWindow.hide();
         } else if (result.response === 1) {
           // Close app
-          isQuitting = true;
           app.quit();
         }
         // Cancel does nothing
@@ -612,7 +1000,7 @@ function createApplicationMenu() {
           click: async () => {
             const updateInfo = await checkForUpdates();
             if (updateInfo && mainWindow) {
-              mainWindow.webContents.send('update-available', updateInfo);
+              sendUpdateAvailable(updateInfo);
             } else if (mainWindow) {
               dialog.showMessageBox(mainWindow, {
                 type: 'info',
@@ -653,11 +1041,10 @@ function preloadWhisperModel() {
   const modelSize = 'small'; // Default model size
   console.log(`Preloading Whisper model (${modelSize})...`);
 
-  const preloadProcess = spawnTrackedPython([
-    getTranscriberScript(),
+  const preloadProcess = spawnTrackedPython(getTranscriberArgs([
     '--preload',
     '--model', modelSize
-  ]);
+  ]), { cwd: pythonConfig.backendPath });
 
   preloadProcess.stderr.on('data', (data) => {
     console.log(`[Model Preload] ${data.toString().trim()}`);
@@ -680,12 +1067,11 @@ function preloadWhisperModel() {
  * when the user first tries to record.
  */
 function checkMacOSPermissions() {
-  const checkScript = path.join(pythonConfig.backendPath, 'check_permissions.py');
-
   console.log('Checking macOS permissions...');
 
-  const proc = spawn(pythonConfig.pythonExe, [checkScript], {
-    stdio: ['ignore', 'pipe', 'pipe']
+  const proc = spawnTrackedPython(getBackendModuleArgs('check_permissions'), {
+    cwd: pythonConfig.backendPath,
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
 
   let stdout = '';
@@ -732,6 +1118,64 @@ function checkMacOSPermissions() {
   });
 }
 
+function getMacOSPermissionStatus() {
+  if (process.platform !== 'darwin') {
+    return Promise.resolve({
+      platform: process.platform,
+      all_granted: true,
+      microphone: { granted: true },
+      screen_recording: { granted: true },
+    });
+  }
+
+  return new Promise((resolve) => {
+    const proc = spawnTrackedPython(getBackendModuleArgs('check_permissions'), {
+      cwd: pythonConfig.backendPath,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    proc.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    proc.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    proc.on('close', () => {
+      try {
+        resolve(JSON.parse(stdout));
+      } catch (error) {
+        console.warn('Failed to parse permission status:', error.message);
+        if (stderr.trim()) {
+          console.warn('Permission status stderr:', stderr.trim());
+        }
+        resolve({
+          platform: 'darwin',
+          all_granted: true,
+          warning: 'Could not verify macOS permissions before recording. Proceeding with device checks only.',
+          microphone: { granted: true },
+          screen_recording: { granted: true },
+        });
+      }
+    });
+
+    proc.on('error', (error) => {
+      console.warn('Permission status check failed:', error.message);
+      resolve({
+        platform: 'darwin',
+        all_granted: true,
+        warning: 'Could not verify macOS permissions before recording. Proceeding with device checks only.',
+        microphone: { granted: true },
+        screen_recording: { granted: true },
+      });
+    });
+  });
+}
+
 // Initialize app
 app.whenReady().then(async () => {
   // IMPORTANT: Log all app paths for debugging
@@ -770,7 +1214,7 @@ app.whenReady().then(async () => {
   setTimeout(async () => {
     const updateInfo = await checkForUpdates();
     if (updateInfo && mainWindow) {
-      mainWindow.webContents.send('update-available', updateInfo);
+      sendUpdateAvailable(updateInfo);
     }
   }, 5000);
 
@@ -788,12 +1232,33 @@ app.on('window-all-closed', () => {
 });
 
 // Clean up on quit
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
+  const quitState = getQuitInterceptState({
+    hasRecordingProcess: Boolean(pythonProcess),
+    recordingStartTime,
+    stopInProgress: Boolean(recordingStopPromise),
+  });
+
+  if (!allowImmediateQuit && quitState.interceptQuit) {
+    event.preventDefault();
+    void handleQuitDuringRecording(quitState);
+    return;
+  }
+
   isQuitting = true;
+
+  if (recordingHeartbeat) {
+    clearInterval(recordingHeartbeat);
+    recordingHeartbeat = null;
+  }
 
   // Kill the main recording process
   if (pythonProcess) {
-    pythonProcess.kill();
+    try {
+      pythonProcess.kill();
+    } catch (e) {
+      // Process might already be dead, ignore
+    }
   }
 
   // Kill all other spawned Python processes
@@ -812,6 +1277,7 @@ app.on('before-quit', () => {
   // Clean up tray
   if (tray) {
     tray.destroy();
+    tray = null;
   }
 });
 
@@ -824,7 +1290,7 @@ app.on('before-quit', () => {
  * Checks that selected devices exist and are accessible.
  * GRACEFUL: Returns valid=true with warning if check fails, allowing recording to proceed.
  */
-ipcMain.handle('validate-devices', async (event, { micId, loopbackId }) => {
+function validateSelectedDevices({ micId, loopbackId }) {
   const TIMEOUT_MS = 10000; // 10 second timeout
 
   return new Promise((resolve) => {
@@ -848,12 +1314,10 @@ ipcMain.handle('validate-devices', async (event, { micId, loopbackId }) => {
 
     let python;
     try {
-      python = spawnTrackedPython([
-        path.join(pythonConfig.backendPath, 'device_manager.py')
-      ]);
+      python = spawnTrackedPython(getBackendModuleArgs('device_manager'), { cwd: pythonConfig.backendPath });
     } catch (e) {
       clearTimeout(timeout);
-      console.error('Failed to spawn device_manager.py:', e);
+      console.error('Failed to spawn device_manager module:', e);
       resolve({
         valid: true, // Allow recording to proceed
         warnings: ['Could not validate devices - proceeding anyway'],
@@ -937,6 +1401,10 @@ ipcMain.handle('validate-devices', async (event, { micId, loopbackId }) => {
       });
     });
   });
+}
+
+ipcMain.handle('validate-devices', async (event, options) => {
+  return validateSelectedDevices(options);
 });
 
 /**
@@ -948,11 +1416,13 @@ ipcMain.handle('check-disk-space', async () => {
 });
 
 /**
- * Check macOS audio output device for Bluetooth/headphone warning.
- * ScreenCaptureKit may not capture audio from these devices.
- * GRACEFUL: Returns supported=true if check fails, allowing recording to proceed.
+ * Inspect the current macOS audio output device for diagnostics only.
+ *
+ * ScreenCaptureKit is expected to capture system audio before routing to the
+ * active output device, but we still surface the current output target so
+ * manual validation can confirm behavior on real hardware.
  */
-ipcMain.handle('check-audio-output', async () => {
+function checkAudioOutputSupport() {
   if (process.platform !== 'darwin') {
     // Windows WASAPI loopback works with all devices
     return { supported: true, warning: null };
@@ -1001,9 +1471,8 @@ ipcMain.handle('check-audio-output', async () => {
         const data = JSON.parse(output);
         const audioData = data.SPAudioDataType || [];
 
-        // Look for Bluetooth or USB audio devices as default output
-        let isBluetoothOrUSB = false;
         let deviceName = null;
+        let deviceTransport = null;
 
         for (const section of audioData) {
           const items = section._items || [];
@@ -1011,36 +1480,17 @@ ipcMain.handle('check-audio-output', async () => {
             // Check for default output device
             if (item.coreaudio_default_audio_output_device === 'spaudio_yes') {
               deviceName = item._name;
-
-              // Check transport type or name for Bluetooth/USB indicators
-              const transport = (item.coreaudio_device_transport || '').toLowerCase();
-              const name = (item._name || '').toLowerCase();
-
-              if (transport.includes('bluetooth') ||
-                  transport.includes('usb') ||
-                  name.includes('airpods') ||
-                  name.includes('bluetooth') ||
-                  name.includes('beats') ||
-                  name.includes('headphone') ||
-                  name.includes('usb')) {
-                isBluetoothOrUSB = true;
-              }
+              deviceTransport = item.coreaudio_device_transport || null;
             }
           }
         }
 
-        if (isBluetoothOrUSB) {
-          resolve({
-            supported: false,
-            warning: `Desktop audio may not be captured when using "${deviceName}". ` +
-                     `ScreenCaptureKit works best with built-in speakers. ` +
-                     `Consider switching to built-in output or installing BlackHole for full desktop audio capture.`,
-            deviceName,
-            suggestion: 'Switch to built-in speakers or use BlackHole virtual audio device'
-          });
-        } else {
-          resolve({ supported: true, warning: null, deviceName });
-        }
+        resolve({
+          supported: true,
+          warning: null,
+          deviceName,
+          deviceTransport,
+        });
       } catch (e) {
         resolve({ supported: true, warning: null }); // Parse error, assume OK
       }
@@ -1054,16 +1504,41 @@ ipcMain.handle('check-audio-output', async () => {
       resolve({ supported: true, warning: null });
     });
   });
+}
+
+ipcMain.handle('check-audio-output', async () => {
+  return checkAudioOutputSupport();
 });
+
+ipcMain.handle('run-recording-preflight', async (event, { micId, loopbackId }) => {
+  const [deviceCheck, diskCheck, audioOutputCheck, permissionCheck] = await Promise.all([
+    validateSelectedDevices({ micId, loopbackId }),
+    checkDiskSpace(),
+    checkAudioOutputSupport(),
+    getMacOSPermissionStatus(),
+  ]);
+
+  return buildRecordingPreflightReport({
+    platform: process.platform,
+    deviceCheck,
+    diskCheck,
+    audioOutputCheck,
+    permissionCheck,
+  });
+});
+
+ipcMain.handle('get-macos-permission-status', async () => {
+  return getMacOSPermissionStatus();
+});
+
+ipcMain.handle('get-pending-update-info', async () => pendingUpdateInfo);
 
 /**
  * Get list of available audio devices
  */
 ipcMain.handle('get-audio-devices', async () => {
   return new Promise((resolve, reject) => {
-    const python = spawnTrackedPython([
-      path.join(pythonConfig.backendPath, 'device_manager.py')
-    ]);
+    const python = spawnTrackedPython(getBackendModuleArgs('device_manager'), { cwd: pythonConfig.backendPath });
 
     let output = '';
     let errorOutput = '';
@@ -1103,9 +1578,7 @@ ipcMain.handle('get-audio-devices', async () => {
 ipcMain.handle('warm-up-audio-system', async () => {
   return new Promise((resolve) => {
     // Step 1: Enumerate devices (forces driver initialization)
-    const python = spawnTrackedPython([
-      path.join(pythonConfig.backendPath, 'device_manager.py')
-    ]);
+    const python = spawnTrackedPython(getBackendModuleArgs('device_manager'), { cwd: pythonConfig.backendPath });
 
     let output = '';
 
@@ -1140,41 +1613,17 @@ ipcMain.handle('warm-up-audio-system', async () => {
  */
 ipcMain.handle('check-model-downloaded', async (event, modelSize) => {
   return new Promise((resolve) => {
-    // Check if model exists in cache
-    // faster-whisper downloads to ~/.cache/huggingface/hub
-    const homeDir = require('os').homedir();
-    const cacheDir = path.join(homeDir, '.cache', 'huggingface', 'hub');
-
-    // Determine correct model pattern based on architecture
-    let modelPatterns = [];
-    const isMacArm = process.platform === 'darwin' && process.arch === 'arm64';
-    const size = modelSize || 'small';
-
-    if (isMacArm) {
-      // Lightning-Whisper-MLX downloads models from multiple repos:
-      // - distil models: distil-whisper/distil-{size}
-      // - standard models: mlx-community/whisper-{size}-mlx
-      // Check for both patterns in HuggingFace cache
-      modelPatterns = [
-        `models--mlx-community--whisper-${size}-mlx`,
-        `models--mlx-community--whisper-${size}`,
-        `models--distil-whisper--distil-${size}`,
-        // Also check for the model name without organization prefix
-        `whisper-${size}-mlx`,
-        `distil-${size}`
-      ];
-    } else {
-      // Faster-whisper models: models--guillaumekln--faster-whisper-{size}
-      modelPatterns = [`models--guillaumekln--faster-whisper-${size}`];
-    }
+    const { cacheDir, modelPatterns, modelSize: size } = buildModelDownloadCheck({
+      platform: process.platform,
+      arch: process.arch,
+      homeDir: os.homedir(),
+      modelSize,
+    });
 
     try {
       if (fs.existsSync(cacheDir)) {
         const items = fs.readdirSync(cacheDir);
-        // Check if any of the model patterns exist
-        const modelExists = modelPatterns.some(pattern =>
-          items.some(item => item.includes(pattern))
-        );
+        const modelExists = cacheContainsModel(items, modelPatterns);
         resolve({ downloaded: modelExists, modelSize: size });
       } else {
         resolve({ downloaded: false, modelSize: size });
@@ -1194,19 +1643,12 @@ ipcMain.handle('download-model', async (event, modelSize) => {
     const model = modelSize || 'small';
     console.log(`Downloading Whisper model: ${model}`);
 
-    const python = spawnTrackedPython([
-      getTranscriberScript(),
+    const python = spawnTrackedPython(getTranscriberArgs([
       '--preload',
       '--model', model
-    ]);
+    ]), { cwd: pythonConfig.backendPath });
 
     let hasError = false;
-
-    python.stdout.on('data', (data) => {
-      const output = data.toString();
-      // Send progress updates to renderer
-      mainWindow.webContents.send('model-download-progress', output);
-    });
 
     python.stderr.on('data', (data) => {
       const output = data.toString();
@@ -1216,7 +1658,7 @@ ipcMain.handle('download-model', async (event, modelSize) => {
       mainWindow.webContents.send('model-download-progress', output);
 
       // Check for errors
-      if (output.toLowerCase().includes('error') && !output.includes('non-critical')) {
+      if (isModelDownloadErrorOutput(output)) {
         hasError = true;
       }
     });
@@ -1305,6 +1747,84 @@ ipcMain.handle('start-recording', async (event, options) => {
 
     let recordingStarted = false;
     let progressStage = 'initializing';
+    let stdoutRemainder = '';
+    let startupFailureMessage = null;
+    let startupSettled = false;
+
+    const sendInitProgress = (stage, message) => {
+      progressStage = stage;
+      mainWindow.webContents.send('recording-init-progress', { stage, message });
+    };
+
+    const failActiveRecording = (warning) => {
+      const payload = {
+        type: warning.type || 'recorder_exited',
+        code: warning.code || 'RECORDER_EXITED',
+        message: warning.message,
+        help: warning.help,
+        level: warning.level || 'error',
+      };
+
+      sendToRenderer('recording-warning', payload);
+      sendToRenderer('recording-failed', {
+        message: payload.message,
+        code: payload.code,
+        help: payload.help,
+      });
+      sendToRenderer('recording-progress', payload.message);
+      if (payload.help) {
+        sendToRenderer('recording-progress', payload.help);
+      }
+    };
+
+    const sendStructuredWarning = (warning, level = 'warning') => {
+      const message = warning.message || warning.error || 'Recorder warning';
+      const payload = {
+        type: warning.type || (warning.code ? warning.code.toLowerCase() : level),
+        code: warning.code,
+        message,
+        help: warning.help,
+        level,
+      };
+
+      mainWindow.webContents.send('recording-warning', payload);
+      mainWindow.webContents.send('recording-progress', message);
+      if (payload.help) {
+        mainWindow.webContents.send('recording-progress', payload.help);
+      }
+
+      return payload;
+    };
+
+    const markRecordingStarted = (message = 'Recording started!') => {
+      if (recordingStarted) {
+        return;
+      }
+
+      recordingStarted = true;
+      recordingStartTime = Date.now();
+
+      // FIX 3: Start heartbeat monitor to detect recording failures
+      lastLevelUpdate = Date.now();
+      recordingHeartbeat = setInterval(() => {
+        const timeSinceUpdate = Date.now() - lastLevelUpdate;
+
+        // If no audio level updates for 10 seconds, something is wrong
+        if (timeSinceUpdate > 10000 && pythonProcess && !pythonProcess.killed) {
+          console.error(`Recording heartbeat lost - no audio levels for ${timeSinceUpdate / 1000}s`);
+          mainWindow.webContents.send('recording-warning', {
+            type: 'heartbeat_lost',
+            message: 'Recording may have stopped unexpectedly. No audio data received for 10+ seconds.'
+          });
+
+          // Continue monitoring - don't auto-kill, let user decide
+        }
+      }, 5000);
+
+      sendInitProgress('started', message);
+      startupSettled = true;
+      resolve({ success: true, message: 'Recording started' });
+    };
 
     // PERFORMANCE FIX: Throttle audio level updates to reduce IPC overhead
     // Only send updates if window is visible AND we haven't sent one recently
@@ -1312,107 +1832,129 @@ ipcMain.handle('start-recording', async (event, options) => {
     const LEVEL_UPDATE_THROTTLE_MS = 100; // Max 10 updates/sec instead of 20
 
     pythonProcess.stdout.on('data', (data) => {
-      const output = data.toString();
+      const parsedChunk = parseRecorderStdoutChunk(data.toString(), stdoutRemainder);
+      stdoutRemainder = parsedChunk.remainder;
 
-      // Check if this is a JSON level update
-      if (output.trim().startsWith('{"type": "levels"')) {
-        // FIX 3: Update heartbeat timestamp when we receive audio levels
-        lastLevelUpdate = Date.now();
+      for (const message of parsedChunk.messages) {
+        switch (message.kind) {
+          case 'levels': {
+            lastLevelUpdate = Date.now();
 
-        // PERFORMANCE: Only parse and send if window visible and throttled
-        const now = Date.now();
-        const shouldSendUpdate = (now - lastLevelSentTime) >= LEVEL_UPDATE_THROTTLE_MS;
+            const now = Date.now();
+            const shouldSendUpdate = (now - lastLevelSentTime) >= LEVEL_UPDATE_THROTTLE_MS;
 
-        if (shouldSendUpdate && mainWindow && !mainWindow.isMinimized() && mainWindow.isVisible()) {
-          try {
-            // There might be multiple JSON objects in one chunk, or mixed with newlines
-            const lines = output.trim().split('\n');
-            for (const line of lines) {
-              if (line.startsWith('{"type": "levels"')) {
-                const levels = JSON.parse(line);
-                mainWindow.webContents.send('audio-levels', levels);
-                lastLevelSentTime = now;
-                break; // Only send first valid level to reduce overhead
-              }
+            if (shouldSendUpdate && mainWindow && !mainWindow.isMinimized() && mainWindow.isVisible()) {
+              mainWindow.webContents.send('audio-levels', message.payload);
+              lastLevelSentTime = now;
             }
-          } catch (e) {
-            // Ignore parse errors for levels
+            break;
           }
+
+          case 'event': {
+            const eventAction = getRecorderEventAction(message.payload);
+
+            if (eventAction.initProgress) {
+              sendInitProgress(eventAction.initProgress.stage, eventAction.initProgress.message);
+            }
+
+            if (eventAction.warning) {
+              sendStructuredWarning(eventAction.warning);
+            }
+
+            if (eventAction.recordingStartedMessage) {
+              markRecordingStarted(eventAction.recordingStartedMessage);
+            } else if (eventAction.progressMessage) {
+              mainWindow.webContents.send('recording-progress', eventAction.progressMessage);
+            }
+            break;
+          }
+
+          case 'warning':
+            sendStructuredWarning(message.payload, 'warning');
+            break;
+
+          case 'error': {
+            const errorPayload = sendStructuredWarning({
+              code: message.payload.code,
+              message: message.payload.message || message.payload.error,
+              help: message.payload.help,
+              type: message.payload.type,
+            }, 'error');
+
+            if (!recordingStarted && !startupFailureMessage) {
+              startupFailureMessage = errorPayload.message;
+            }
+            progressStage = 'error';
+            break;
+          }
+
+          case 'status':
+            if (message.payload.message) {
+              mainWindow.webContents.send('recording-progress', message.payload.message);
+            }
+            break;
+
+          case 'text':
+            mainWindow.webContents.send('recording-progress', message.payload.message);
+            break;
+
+          case 'result':
+            break;
+
+          case 'json':
+            if (message.payload.message) {
+              mainWindow.webContents.send('recording-progress', message.payload.message);
+            }
+            break;
+
+          default:
+            break;
         }
-        // Note: We still update heartbeat even if we don't send to UI
-      } else {
-        // Send progress updates to renderer
-        mainWindow.webContents.send('recording-progress', output);
       }
     });
 
     pythonProcess.stderr.on('data', (data) => {
       const output = data.toString();
       console.log(`Python status: ${output}`);
-
-      // Send detailed progress updates
-      if (output.includes('Device configuration')) {
-        progressStage = 'configuring';
-        mainWindow.webContents.send('recording-init-progress', { stage: 'configuring', message: 'Configuring audio devices...' });
-      } else if (output.includes('Microphone stream opened')) {
-        progressStage = 'mic_opened';
-        mainWindow.webContents.send('recording-init-progress', { stage: 'mic_opened', message: 'Microphone ready...' });
-      } else if (output.includes('Desktop audio stream opened')) {
-        progressStage = 'desktop_opened';
-        mainWindow.webContents.send('recording-init-progress', { stage: 'desktop_opened', message: 'Desktop audio ready...' });
-      }
-
-      // Wait for confirmation that recording actually started
-      if (!recordingStarted && output.includes('Recording started!')) {
-        recordingStarted = true;
-        recordingStartTime = Date.now(); // Track when recording actually started
-
-        // FIX 3: Start heartbeat monitor to detect recording failures
-        lastLevelUpdate = Date.now();
-        recordingHeartbeat = setInterval(() => {
-          const timeSinceUpdate = Date.now() - lastLevelUpdate;
-
-          // If no audio level updates for 10 seconds, something is wrong
-          if (timeSinceUpdate > 10000 && pythonProcess && !pythonProcess.killed) {
-            console.error(`Recording heartbeat lost - no audio levels for ${timeSinceUpdate / 1000}s`);
-            mainWindow.webContents.send('recording-warning', {
-              type: 'heartbeat_lost',
-              message: 'Recording may have stopped unexpectedly. No audio data received for 10+ seconds.'
-            });
-
-            // Continue monitoring - don't auto-kill, let user decide
-          }
-        }, 5000); // Check every 5 seconds
-
-        mainWindow.webContents.send('recording-init-progress', { stage: 'started', message: 'Recording started!' });
-        resolve({ success: true, message: 'Recording started' });
-      }
     });
 
     pythonProcess.on('close', (code) => {
-      // CRITICAL FIX: Clean up resources on error
-      if (recordingHeartbeat) {
-        clearInterval(recordingHeartbeat);
-        recordingHeartbeat = null;
-      }
-      if (powerSaveId !== null) {
-        powerSaveBlocker.stop(powerSaveId);
-        powerSaveId = null;
-        console.log('Power save blocker disabled (recording failed)');
+      const closeAction = getRecorderCloseAction({
+        recordingStarted,
+        stopInProgress: Boolean(recordingStopPromise),
+        startupSettled,
+        startupFailureMessage,
+        progressStage,
+        exitCode: code,
+      });
+
+      if (closeAction.type === 'stop_in_progress') {
+        return;
       }
 
-      if (!recordingStarted) {
-        // Process closed before recording started - this is an error
-        let errorMessage = `Recording failed to start. Process exited with code ${code}.`;
-
-        // Provide helpful hints based on progress stage
-        if (progressStage === 'initializing') {
-          errorMessage += '\n\nTip: Try refreshing your audio devices or restarting the app.';
-        } else if (progressStage === 'configuring') {
-          errorMessage += '\n\nTip: Check that your selected audio devices are not in use by another application.';
+      if (closeAction.type === 'startup_already_settled') {
+        if (pythonProcess) {
+          clearRecordingRuntimeState('recording startup already settled');
         }
+        return;
+      }
 
-        reject(new Error(errorMessage));
+      clearRecordingRuntimeState(
+        closeAction.type === 'unexpected_exit'
+          ? 'recorder exited unexpectedly'
+          : 'recording failed'
+      );
+      recordingStarted = false;
+
+      if (closeAction.warning) {
+        failActiveRecording(closeAction.warning);
+        startupSettled = true;
+        return;
+      }
+
+      if (closeAction.errorMessage) {
+        startupSettled = true;
+        reject(new Error(closeAction.errorMessage));
       }
     });
 
@@ -1420,35 +1962,27 @@ ipcMain.handle('start-recording', async (event, options) => {
     const timeout = isFirstRecording ? 15000 : 10000;
     const timeoutHandle = setTimeout(() => {
       if (!recordingStarted) {
-        // CRITICAL FIX: Clean up resources on timeout
-        if (recordingHeartbeat) {
-          clearInterval(recordingHeartbeat);
-          recordingHeartbeat = null;
-        }
-        if (powerSaveId !== null) {
-          powerSaveBlocker.stop(powerSaveId);
-          powerSaveId = null;
-          console.log('Power save blocker disabled (timeout)');
-        }
-
-        let errorMessage = `Recording failed to start within ${timeout / 1000} seconds.`;
+        let errorMessage = startupFailureMessage || `Recording failed to start within ${timeout / 1000} seconds.`;
 
         // Provide specific guidance based on what stage failed
-        if (progressStage === 'initializing') {
+        if (!startupFailureMessage && progressStage === 'initializing') {
           errorMessage += '\n\nThe audio system is taking longer than expected to initialize.';
           errorMessage += '\nThis can happen on first launch. Please try again.';
-        } else if (progressStage === 'configuring') {
+        } else if (!startupFailureMessage && progressStage === 'configuring') {
           errorMessage += '\n\nAudio device configuration is taking too long.';
           errorMessage += '\nCheck that your devices are properly connected and not in use.';
-        } else if (progressStage === 'mic_opened' || progressStage === 'desktop_opened') {
+        } else if (!startupFailureMessage && (progressStage === 'mic_opened' || progressStage === 'desktop_opened')) {
           errorMessage += '\n\nAudio streams are opening but not fully ready.';
           errorMessage += '\nTry selecting different audio devices or restarting the app.';
         }
 
-        reject(new Error(errorMessage));
-        if (pythonProcess && !pythonProcess.killed) {
-          pythonProcess.kill();
+        startupSettled = true;
+        const timedOutProcess = pythonProcess;
+        if (timedOutProcess && !timedOutProcess.killed) {
+          timedOutProcess.kill();
         }
+        clearRecordingRuntimeState('recording startup timeout');
+        reject(new Error(errorMessage));
       }
     }, timeout);
 
@@ -1463,117 +1997,9 @@ ipcMain.handle('start-recording', async (event, options) => {
  * Stop recording
  */
 ipcMain.handle('stop-recording', async () => {
-  return new Promise((resolve, reject) => {
-    // FIX 3: Clear heartbeat monitor
-    if (recordingHeartbeat) {
-      clearInterval(recordingHeartbeat);
-      recordingHeartbeat = null;
-      console.log('Recording heartbeat monitor stopped');
-    }
-
-    if (pythonProcess) {
-      // Save reference to current process (in case it gets nulled)
-      const currentProcess = pythonProcess;
-
-      let stdoutData = '';
-      let stderrData = '';
-
-      // Set up one-time handlers to collect remaining output
-      const stdoutHandler = (data) => {
-        stdoutData += data.toString();
-      };
-
-      const stderrHandler = (data) => {
-        const output = data.toString();
-        stderrData += output;
-
-        // Send progress updates to renderer so user sees post-processing status
-        console.log(`Python status: ${output}`);
-        mainWindow.webContents.send('recording-progress', output.trim());
-      };
-
-      // Add handlers (will be cleaned up after process closes)
-      currentProcess.stdout.on('data', stdoutHandler);
-      currentProcess.stderr.on('data', stderrHandler);
-
-      // Wait for process to actually complete
-      const closeHandler = (code) => {
-        // Clean up event handlers to prevent memory leaks
-        currentProcess.stdout.removeListener('data', stdoutHandler);
-        currentProcess.stderr.removeListener('data', stderrHandler);
-
-        pythonProcess = null;
-        recordingStartTime = null; // Reset recording start time
-
-        // FIX 1: Disable power save blocker after recording completes
-        if (powerSaveId !== null) {
-          powerSaveBlocker.stop(powerSaveId);
-          powerSaveId = null;
-          console.log('Power save blocker disabled');
-        }
-
-        if (code === 0) {
-          // Parse JSON output to get file path
-          try {
-            const lines = stdoutData.trim().split('\n');
-            const jsonLine = lines[lines.length - 1]; // Last line should be JSON
-            const recordingInfo = JSON.parse(jsonLine);
-
-            // Support both audioPath (Windows) and outputPath (macOS) for backward compatibility
-            const filePath = recordingInfo.audioPath || recordingInfo.outputPath;
-
-            // Verify file exists before resolving
-            if (filePath && fs.existsSync(filePath)) {
-              resolve({
-                success: true,
-                audioPath: filePath,
-                duration: recordingInfo.duration
-              });
-            } else {
-              reject(new Error(`Recording file not found: ${filePath}`));
-            }
-          } catch (e) {
-            // If JSON parsing fails, file might still exist at default location
-            const recordingsDir = path.join(app.getPath('userData'), 'recordings');
-            const opusPath = path.join(recordingsDir, 'temp.opus');
-
-            if (fs.existsSync(opusPath)) {
-              resolve({ success: true, audioPath: opusPath });
-            } else {
-              reject(new Error(`Recording completed but output file not found. Error: ${e.message}`));
-            }
-          }
-        } else {
-          reject(new Error(`Recording stopped with exit code ${code}: ${stderrData}`));
-        }
-      };
-
-      // Register close handler
-      currentProcess.on('close', closeHandler);
-
-      // Send signal to stop via stdin
-      currentProcess.stdin.write('stop\n');
-
-      // Calculate proportional timeout based on recording duration
-      // Post-processing time scales with recording length
-      // Formula: base 30s + (recording_minutes * 10s per minute)
-      // Examples: 5min = 80s, 30min = 330s (5.5min), 60min = 630s (10.5min)
-      const recordingDuration = recordingStartTime ? (Date.now() - recordingStartTime) / 1000 : 0;
-      const recordingMinutes = Math.ceil(recordingDuration / 60);
-      const processingTimeout = Math.max(30000, 30000 + (recordingMinutes * 10000)); // Minimum 30s
-
-      console.log(`Recording duration: ${recordingMinutes} minutes, using ${processingTimeout / 1000}s timeout`);
-
-      setTimeout(() => {
-        if (pythonProcess) {
-          pythonProcess.kill();
-          pythonProcess = null;
-          reject(new Error('Recording stop timeout - process took too long to finish'));
-        }
-      }, processingTimeout);
-    } else {
-      resolve({ success: true });
-    }
+  return waitForRecordingStop({
+    forceKillOnTimeout: true,
+    timeoutMessage: 'Recording stop timeout - process took too long to finish',
   });
 });
 
@@ -1584,25 +2010,30 @@ ipcMain.handle('transcribe-audio', async (event, options) => {
   return new Promise((resolve, reject) => {
     let { audioFile, language, modelSize } = options;
 
-    // Resolve relative paths and handle .opus extension
+    // Resolve relative paths. Keep real .wav fallback files transcribable; only
+    // fall back to an .opus sibling when the .wav path is missing.
     if (!path.isAbsolute(audioFile)) {
       // Use userData recordings directory
       const recordingsDir = path.join(app.getPath('userData'), 'recordings');
-      audioFile = path.join(recordingsDir, path.basename(audioFile));
+      audioFile = resolveTranscriptionAudioFile({
+        audioFile,
+        recordingsDir,
+        existsSync: fs.existsSync,
+      });
+    } else {
+      audioFile = resolveTranscriptionAudioFile({
+        audioFile,
+        recordingsDir: path.dirname(audioFile),
+        existsSync: fs.existsSync,
+      });
     }
 
-    // The recorder saves as .opus, so if we get .wav, use .opus instead
-    if (audioFile.endsWith('.wav')) {
-      audioFile = audioFile.replace('.wav', '.opus');
-    }
-
-    const python = spawnTrackedPython([
-      getTranscriberScript(),
+    const python = spawnTrackedPython(getTranscriberArgs([
       '--file', audioFile,
       '--language', language || 'en',
       '--model', modelSize || 'small',
       '--json'
-    ]);
+    ]), { cwd: pythonConfig.backendPath });
 
     let output = '';
     let errorOutput = '';
@@ -1622,12 +2053,12 @@ ipcMain.handle('transcribe-audio', async (event, options) => {
 
     python.stdout.on('data', (data) => {
       output += data.toString();
-      // Send progress to renderer
-      mainWindow.webContents.send('transcription-progress', data.toString());
     });
 
     python.stderr.on('data', (data) => {
-      errorOutput += data.toString();
+      const stderrChunk = data.toString();
+      errorOutput += stderrChunk;
+      mainWindow.webContents.send('transcription-progress', stderrChunk);
     });
 
     python.on('close', (code) => {
@@ -1666,11 +2097,10 @@ ipcMain.handle('transcribe-audio', async (event, options) => {
 ipcMain.handle('list-meetings', async () => {
   return new Promise((resolve, reject) => {
     const recordingsDir = path.join(app.getPath('userData'), 'recordings');
-    const python = spawnTrackedPython([
-      path.join(pythonConfig.backendPath, 'meeting_manager.py'),
+    const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
       '--recordings-dir', recordingsDir,
       'list'
-    ]);
+    ]), { cwd: pythonConfig.backendPath });
 
     let output = '';
     let errorOutput = '';
@@ -1705,12 +2135,11 @@ ipcMain.handle('list-meetings', async () => {
 ipcMain.handle('get-meeting', async (event, meetingId) => {
   return new Promise((resolve, reject) => {
     const recordingsDir = path.join(app.getPath('userData'), 'recordings');
-    const python = spawnTrackedPython([
-      path.join(pythonConfig.backendPath, 'meeting_manager.py'),
+    const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
       '--recordings-dir', recordingsDir,
       'get',
       meetingId
-    ]);
+    ]), { cwd: pythonConfig.backendPath });
 
     let output = '';
     let errorOutput = '';
@@ -1746,12 +2175,11 @@ ipcMain.handle('delete-meeting', async (event, meetingId) => {
   const recordingsDir = path.join(app.getPath('userData'), 'recordings');
 
   return new Promise((resolve, reject) => {
-    const python = spawnTrackedPython([
-      path.join(pythonConfig.backendPath, 'meeting_manager.py'),
+    const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
       '--recordings-dir', recordingsDir,
       'delete',
       meetingId
-    ]);
+    ]), { cwd: pythonConfig.backendPath });
 
     let errorOutput = '';
 
@@ -1780,11 +2208,10 @@ ipcMain.handle('delete-meeting', async (event, meetingId) => {
 ipcMain.handle('scan-recordings', async () => {
   return new Promise((resolve, reject) => {
     const recordingsDir = path.join(app.getPath('userData'), 'recordings');
-    const python = spawnTrackedPython([
-      path.join(pythonConfig.backendPath, 'meeting_manager.py'),
+    const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
       '--recordings-dir', recordingsDir,
       'scan'
-    ]);
+    ]), { cwd: pythonConfig.backendPath });
 
     let output = '';
     let errorOutput = '';
@@ -1817,52 +2244,7 @@ ipcMain.handle('scan-recordings', async () => {
  * Add a meeting (called after transcription)
  */
 ipcMain.handle('add-meeting', async (event, meetingData) => {
-  return new Promise((resolve, reject) => {
-    const { audioPath, transcriptPath, duration, language, model, title } = meetingData;
-
-    const recordingsDir = path.join(app.getPath('userData'), 'recordings');
-    const args = [
-      path.join(pythonConfig.backendPath, 'meeting_manager.py'),
-      '--recordings-dir', recordingsDir,
-      'add',
-      '--audio', audioPath,
-      '--transcript', transcriptPath,
-      '--duration', duration.toString(),
-      '--language', language,
-      '--model', model
-    ];
-
-    if (title) {
-      args.push('--title', title);
-    }
-
-    const python = spawnTrackedPython(args);
-
-    let output = '';
-    let errorOutput = '';
-
-    python.stdout.on('data', (data) => {
-      output += data.toString();
-    });
-
-    python.stderr.on('data', (data) => {
-      errorOutput += data.toString();
-    });
-
-    python.on('close', (code) => {
-      if (code === 0) {
-        try {
-          const meeting = JSON.parse(output);
-          resolve(meeting);
-        } catch (e) {
-          reject(new Error(`Failed to parse meeting: ${e.message}`));
-        }
-      } else {
-        const errorMsg = errorOutput.trim() || 'Unknown error';
-        reject(new Error(`Failed to add meeting: ${errorMsg}`));
-      }
-    });
-  });
+  return addMeetingToHistory(meetingData);
 });
 
 /**
@@ -2046,6 +2428,7 @@ ipcMain.handle('open-system-settings', async (event, type) => {
   if (process.platform === 'darwin') {
     const { shell } = require('electron');
     const urls = {
+      'privacy': 'x-apple.systempreferences:com.apple.preference.security?Privacy',
       'microphone': 'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone',
       'screen': 'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture'
     };

@@ -68,7 +68,7 @@ If right-click doesn't work, use Terminal:
 xattr -d com.apple.quarantine /Applications/Meeting\ Transcriber.app
 
 # Method B: Remove quarantine from DMG before installing
-xattr -d com.apple.quarantine ~/Downloads/Meeting-Transcriber-*.dmg
+xattr -d com.apple.quarantine ~/Downloads/Meeting\ Transcriber-Setup-*.dmg
 ```
 
 After running this command, you can double-click the app normally.
@@ -133,7 +133,7 @@ This is an **open-source project** without commercial funding, so the app isn't 
 - ✅ **Source code is public** on GitHub - you can audit it
 - ✅ **Built by GitHub Actions** - public build logs, no tampering
 - ✅ **No telemetry** - 100% local processing, no data sent anywhere
-- ✅ **No network access** - except for model downloads (one-time)
+- ✅ **No background uploads** - only explicit model downloads and update checks
 - ✅ **Full security audit** - See [SECURITY_AUDIT.md](internal/SECURITY_AUDIT.md)
 
 The app does exactly what it says: records audio and transcribes it locally.
@@ -156,7 +156,7 @@ sudo xattr -d com.apple.quarantine /Applications/Meeting\ Transcriber.app
 3. Re-download the DMG
 4. Run the xattr command on the DMG before installing:
    ```bash
-   xattr -d com.apple.quarantine ~/Downloads/Meeting-Transcriber-*.dmg
+   xattr -d com.apple.quarantine ~/Downloads/Meeting\ Transcriber-Setup-*.dmg
    ```
 5. Install the app
 6. Try opening it
@@ -181,7 +181,9 @@ See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) or [open an issue on GitHub](https:
 - **Recommended:** macOS 14 (Sonoma) or later
 - **Architecture:**
   - ✅ Apple Silicon (M1/M2/M3/M4) - Full GPU acceleration
-  - ⚠️ Intel Mac (x64) - CPU-only fallback (slower transcription)
+  - ❌ Intel Mac (x64) - packaged releases are not supported
+
+If you are building from source for development only, the repo still contains an Intel Mac CPU fallback path.
 
 ---
 

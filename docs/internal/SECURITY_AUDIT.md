@@ -1,5 +1,7 @@
 # Security Audit Report - Meeting Transcriber
 
+> Historical note: this audit reflects repo state from November 2025. Treat it as a point-in-time review, not a live description of current updater/build/runtime behavior.
+
 **Audit Date:** 2025-11-19
 **Version:** 1.0.0
 **Auditor:** Claude (Anthropic AI)
@@ -357,7 +359,7 @@ The Meeting Transcriber application has been thoroughly audited and contains:
 **Ready to build:**
 ```bash
 npm install
-npm run prebuild
+npm run prepare-build
 npm run build
 ```
 

@@ -16,7 +16,6 @@ import sys
 import subprocess
 import threading
 import json
-import struct
 import numpy as np
 from pathlib import Path
 from typing import Optional, Callable
@@ -67,6 +66,46 @@ def get_audiocapture_helper_path() -> Optional[Path]:
     return None
 
 
+def _parse_permission_check_output(stderr_output: str, returncode: int) -> tuple[bool, Optional[str]]:
+    permission_payload = None
+    permission_error = None
+
+    if stderr_output:
+        for line in stderr_output.splitlines():
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            if payload.get("type") == "permission_check":
+                permission_payload = payload
+                continue
+
+            if payload.get("type") == "error" and payload.get("code") == "permission_denied":
+                permission_error = payload.get("error") or "Screen Recording permission not granted"
+
+    if permission_payload is not None:
+        granted = bool(permission_payload.get("granted"))
+        return granted, None if granted else permission_payload.get("error")
+
+    if permission_error:
+        return False, permission_error
+
+    return returncode == 0, None if returncode == 0 else "Screen Recording permission check failed"
+
+
+def _apply_helper_error(capture, payload: dict):
+    """Store the first actionable helper error for startup reporting."""
+    error = payload.get('error', '')
+    code = payload.get('code', 'unknown')
+
+    if not capture.error_event.is_set():
+        capture.last_error = error
+        if code == 'permission_denied':
+            capture.last_error = f"PERMISSION_DENIED: {error}"
+    capture.error_event.set()
+
+
 class SwiftAudioCapture:
     """
     Captures desktop audio using the native Swift audiocapture-helper.
@@ -113,6 +152,11 @@ class SwiftAudioCapture:
         # Error signaling
         self.error_event = threading.Event()
         self.last_error = None
+        self.first_audio_time: Optional[float] = None
+        self.last_audio_time: Optional[float] = None
+        self.warning_event = threading.Event()
+        self.warning_lock = threading.Lock()
+        self.warning_messages: list[dict] = []
 
     @property
     def is_recording(self) -> bool:
@@ -173,6 +217,11 @@ class SwiftAudioCapture:
             self.error_event.clear()
             self._ready_event.clear()
             self.last_error = None
+            self.first_audio_time = None
+            self.last_audio_time = None
+            self.warning_event.clear()
+            with self.warning_lock:
+                self.warning_messages = []
 
             # Start the Swift helper process
             self.process = subprocess.Popen(
@@ -203,14 +252,23 @@ class SwiftAudioCapture:
                 print("Swift audio capture ready!", file=sys.stderr)
                 return True
 
+            if self.error_event.is_set():
+                error_message = self.last_error or "Swift helper reported an error before becoming ready"
+                print(f"ERROR: {error_message}", file=sys.stderr)
+                self.cleanup()
+                return False
+
             # Check if process exited during wait
             if self.process.poll() is not None:
                 print("ERROR: Swift helper exited unexpectedly", file=sys.stderr)
                 self.cleanup()
                 return False
 
-            print("WARNING: Swift helper did not send ready signal, but continuing...", file=sys.stderr)
-            return True
+            self.last_error = "Swift helper did not send ready signal within 5 seconds"
+            self.error_event.set()
+            print(f"ERROR: {self.last_error}", file=sys.stderr)
+            self.cleanup()
+            return False
 
         except Exception as e:
             print(f"ERROR starting Swift audio capture: {e}", file=sys.stderr)
@@ -237,7 +295,11 @@ class SwiftAudioCapture:
         chunk_count = 0
 
         # Get file descriptor for non-blocking reads
-        stdout_fd = self.process.stdout.fileno()
+        process = self.process
+        if process is None or process.stdout is None:
+            return
+
+        stdout_fd = process.stdout.fileno()
 
         def bytes_to_samples(data: bytes) -> Optional[np.ndarray]:
             """
@@ -311,14 +373,23 @@ class SwiftAudioCapture:
         no_audio_warning_sent = False
 
         try:
-            while self._recording_event.is_set() and self.process and self.process.poll() is None:
+            while self.process:
+                process = self.process
+                if process is None or process.stdout is None:
+                    break
+                if process.poll() is not None and not self._recording_event.is_set():
+                    break
+
                 # Use select to check if data is available (100ms timeout)
                 # This prevents blocking forever and allows clean shutdown
-                ready, _, _ = select.select([self.process.stdout], [], [], 0.1)
+                ready, _, _ = select.select([process.stdout], [], [], 0.1)
 
                 if not ready:
+                    if process.poll() is not None:
+                        break
+
                     # Warn if no audio received after 3 seconds (and helper is still running)
-                    if not no_audio_warning_sent and chunk_count == 0 and time.time() - start_time > 3.0:
+                    if not no_audio_warning_sent and chunk_count == 0 and self._recording_event.is_set() and time.time() - start_time > 3.0:
                         print("  WARNING: No audio data received after 3 seconds", file=sys.stderr)
                         print("    - Check that system audio is playing", file=sys.stderr)
                         print("    - Check Screen Recording permission in System Settings", file=sys.stderr)
@@ -329,6 +400,8 @@ class SwiftAudioCapture:
                 # Unlike file.read(n) which blocks until n bytes are available
                 new_data = os.read(stdout_fd, chunk_bytes)
                 if not new_data:
+                    if process.poll() is not None:
+                        break
                     continue
 
                 audio_data = process_audio_bytes(new_data)
@@ -337,6 +410,10 @@ class SwiftAudioCapture:
 
                 # Add to buffer (thread-safe)
                 with self.buffer_lock:
+                    now = time.time()
+                    if self.first_audio_time is None:
+                        self.first_audio_time = now
+                    self.last_audio_time = now
                     self.audio_buffer.append(audio_data)
 
                 total_samples += len(audio_data)
@@ -350,12 +427,14 @@ class SwiftAudioCapture:
             # This ensures we capture audio right up to the stop point
             if self.process and self.process.stdout:
                 try:
-                    # Drain up to 1MB of remaining data (enough for ~5 seconds of audio)
-                    max_drain = 1024 * 1024
+                    # Drain up to 4MB of remaining data to preserve tail audio
+                    max_drain = 4 * 1024 * 1024
                     drained_total = 0
                     while drained_total < max_drain:
-                        ready, _, _ = select.select([self.process.stdout], [], [], 0.1)
+                        ready, _, _ = select.select([self.process.stdout], [], [], 0.2)
                         if not ready:
+                            if self.process.poll() is not None:
+                                break
                             break
                         new_data = os.read(stdout_fd, chunk_bytes)
                         if not new_data:
@@ -368,6 +447,10 @@ class SwiftAudioCapture:
                             continue
 
                         with self.buffer_lock:
+                            now = time.time()
+                            if self.first_audio_time is None:
+                                self.first_audio_time = now
+                            self.last_audio_time = now
                             self.audio_buffer.append(audio_data)
                         total_samples += len(audio_data)
 
@@ -392,12 +475,16 @@ class SwiftAudioCapture:
         message_count = 0
         try:
             while self._recording_event.is_set() and self.process and self.process.poll() is None:
+                process = self.process
+                if process is None or process.stderr is None:
+                    break
+
                 # Use select to avoid blocking forever on readline
-                ready, _, _ = select.select([self.process.stderr], [], [], 0.1)
+                ready, _, _ = select.select([process.stderr], [], [], 0.1)
                 if not ready:
                     continue
 
-                line = self.process.stderr.readline()
+                line = process.stderr.readline()
                 if not line:
                     continue
 
@@ -417,7 +504,32 @@ class SwiftAudioCapture:
                     elif msg_type == 'status':
                         status = msg.get('status', '')
                         message = msg.get('message', '')
+                        timestamp = msg.get('timestamp')
+
+                        if status == 'first_sample' and isinstance(timestamp, (int, float)):
+                            helper_timestamp = float(timestamp)
+                            if self.first_audio_time is None or helper_timestamp < self.first_audio_time:
+                                self.first_audio_time = helper_timestamp
+
                         print(f"Swift helper: {status} - {message}", file=sys.stderr)
+
+                    elif msg_type == 'warning':
+                        code = msg.get('code', 'warning')
+                        message = msg.get('message', 'Swift helper warning')
+                        warning_payload = {
+                            'type': 'warning',
+                            'code': code,
+                            'message': message,
+                        }
+
+                        for key in ('help', 'droppedChunks', 'queuedBytes'):
+                            if key in msg:
+                                warning_payload[key] = msg[key]
+
+                        with self.warning_lock:
+                            self.warning_messages.append(warning_payload)
+                            self.warning_event.set()
+                        print(f"Swift helper WARNING [{code}]: {message}", file=sys.stderr)
 
                     elif msg_type == 'error':
                         error = msg.get('error', '')
@@ -428,11 +540,11 @@ class SwiftAudioCapture:
                         if help_text:
                             print(f"  Help: {help_text}", file=sys.stderr)
 
-                        # Store error for main thread to access
-                        self.last_error = error
-                        if code == 'permission_denied':
-                            self.last_error = f"PERMISSION_DENIED: {error}"
-                        self.error_event.set()
+                        msg['error'] = error
+                        msg['code'] = code
+                        # Preserve the first actionable startup error. The helper may emit
+                        # a later generic wrapper after the specific failure.
+                        _apply_helper_error(self, msg)
 
                     elif msg_type == 'config':
                         print(f"Swift helper config: {msg}", file=sys.stderr)
@@ -469,6 +581,14 @@ class SwiftAudioCapture:
                         # Final capture statistics
                         total_samples = msg.get('totalSamples', 0)
                         total_bytes = msg.get('totalBytes', 0)
+                        first_audio_timestamp = msg.get('firstAudioTimestamp')
+                        last_audio_timestamp = msg.get('lastAudioTimestamp')
+                        if isinstance(first_audio_timestamp, (int, float)):
+                            helper_timestamp = float(first_audio_timestamp)
+                            if self.first_audio_time is None or helper_timestamp < self.first_audio_time:
+                                self.first_audio_time = helper_timestamp
+                        if isinstance(last_audio_timestamp, (int, float)):
+                            self.last_audio_time = float(last_audio_timestamp)
                         print(f"Swift helper: Final stats - {total_samples} samples, {total_bytes / 1024:.1f} KB", file=sys.stderr)
 
                 except json.JSONDecodeError:
@@ -512,6 +632,8 @@ class SwiftAudioCapture:
         # This allows reader threads to drain remaining data
         if self.process and self.process.poll() is None:
             try:
+                if self.process.stdin is None:
+                    raise OSError("Swift helper stdin is unavailable")
                 self.process.stdin.write(b"stop\n")
                 self.process.stdin.flush()
                 print("  Sent stop command to Swift helper", file=sys.stderr)
@@ -519,37 +641,32 @@ class SwiftAudioCapture:
                 # Process may have already exited
                 print(f"  Could not send stop command (process may have exited): {e}", file=sys.stderr)
 
-        # Give the reader thread a moment to drain remaining data
-        import time
-        time.sleep(0.3)
-
-        # Now signal threads to stop
-        self._recording_event.clear()
-
-        # Wait for reader threads to finish FIRST (they need to drain the pipe)
-        if self._stdout_thread and self._stdout_thread.is_alive():
-            self._stdout_thread.join(timeout=2.0)
-            if self._stdout_thread.is_alive():
-                print("  WARNING: Audio reader thread did not exit cleanly", file=sys.stderr)
-        if self._stderr_thread and self._stderr_thread.is_alive():
-            self._stderr_thread.join(timeout=1.0)
-
-        # Now wait for process to exit and check exit code
+        # Wait for process to exit while reader threads continue draining stdout/stderr
         exit_code = None
         if self.process and self.process.poll() is None:
             try:
-                exit_code = self.process.wait(timeout=2.0)
+                exit_code = self.process.wait(timeout=5.0)
             except subprocess.TimeoutExpired:
                 print("  Swift helper did not exit gracefully, terminating...", file=sys.stderr)
                 self.process.terminate()
                 try:
-                    exit_code = self.process.wait(timeout=1.0)
+                    exit_code = self.process.wait(timeout=2.0)
                 except subprocess.TimeoutExpired:
                     print("  Swift helper did not respond to terminate, killing...", file=sys.stderr)
                     self.process.kill()
                     exit_code = self.process.wait(timeout=1.0)
         elif self.process:
             exit_code = self.process.poll()
+
+        # Now signal threads to stop and wait for them to flush any final buffered data
+        self._recording_event.clear()
+
+        if self._stdout_thread and self._stdout_thread.is_alive():
+            self._stdout_thread.join(timeout=4.0)
+            if self._stdout_thread.is_alive():
+                print("  WARNING: Audio reader thread did not exit cleanly", file=sys.stderr)
+        if self._stderr_thread and self._stderr_thread.is_alive():
+            self._stderr_thread.join(timeout=1.0)
 
         if exit_code is not None and exit_code != 0:
             print(f"  Swift helper exited with code {exit_code}", file=sys.stderr)
@@ -578,6 +695,14 @@ class SwiftAudioCapture:
                 traceback.print_exc(file=sys.stderr)
                 return None
 
+    def drain_warnings(self) -> list[dict]:
+        """Return and clear any queued helper warnings."""
+        with self.warning_lock:
+            warnings = list(self.warning_messages)
+            self.warning_messages = []
+            self.warning_event.clear()
+            return warnings
+
     def cleanup(self):
         """Clean up resources."""
         self._recording_event.clear()
@@ -599,19 +724,42 @@ class SwiftAudioCapture:
         self._stderr_thread = None
 
 
+def check_screen_recording_permission_detail() -> tuple[bool, str]:
+    """
+    Check if Screen Recording permission is granted.
+
+    Returns:
+        True if permission is granted, False otherwise
+    """
+    helper_path = get_audiocapture_helper_path()
+
+    if helper_path is None:
+        return False, "audiocapture-helper not available"
+
+    try:
+        result = subprocess.run(
+            [str(helper_path), "--check-permission"],
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+            check=False,
+        )
+
+        return _parse_permission_check_output(result.stderr.strip(), result.returncode)
+    except Exception as error:
+        print(f"Error checking Screen Recording permission via Swift helper: {error}", file=sys.stderr)
+        return False, str(error)
+
+
 def check_screen_recording_permission() -> bool:
     """
     Check if Screen Recording permission is granted.
 
-    Note: On macOS, there's no direct API to check this.
-    The Swift helper will fail to capture if permission is not granted.
-
     Returns:
-        True (we assume permission is granted, helper will fail if not)
+        True if permission is granted, False otherwise
     """
-    # We can't easily check this from Python
-    # The Swift helper will report an error if permission is denied
-    return True
+    granted, _error = check_screen_recording_permission_detail()
+    return granted
 
 
 # For backwards compatibility with existing code

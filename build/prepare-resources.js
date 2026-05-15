@@ -2,22 +2,20 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 const { execSync } = require('child_process');
-const { pipeline } = require('stream/promises');
 const AdmZip = require('adm-zip');
+const { BUILD_DOWNLOADS, getBuildDownload, hashString, verifyFileChecksum } = require('./download-manifest');
 
 const PYTHON_VERSION = '3.11.9';
-const PYTHON_WIN_URL = `https://www.python.org/ftp/python/${PYTHON_VERSION}/python-${PYTHON_VERSION}-embed-amd64.zip`;
-// For macOS, we'll use python-build-standalone by indygreg (used by PyOxidizer)
-// These are relocatable Python builds specifically designed for bundling
-const PYTHON_MAC_URL = `https://github.com/indygreg/python-build-standalone/releases/download/20240107/cpython-3.11.7+20240107-aarch64-apple-darwin-install_only.tar.gz`;
-const FFMPEG_WIN_URL = 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip';
-const FFMPEG_MAC_URL = 'https://evermeet.cx/ffmpeg/getrelease/ffmpeg/zip';
 
 const BUILD_DIR = path.join(__dirname, 'resources');
 const PYTHON_DIR = path.join(BUILD_DIR, 'python');
 const FFMPEG_DIR = path.join(BUILD_DIR, 'ffmpeg');
 const BIN_DIR = path.join(BUILD_DIR, 'bin');
 const MODELS_DIR = path.join(BUILD_DIR, 'whisper-models');
+const RESOURCE_MANIFEST_PATH = path.join(BUILD_DIR, 'resource-manifest.json');
+const RESOURCE_MANIFEST_VERSION = 2;
+const REQUIREMENTS_MACOS_BUILD = path.join(__dirname, '..', 'requirements-macos-build.txt');
+const REQUIREMENTS_WINDOWS_BUILD = path.join(__dirname, '..', 'requirements-windows-build.txt');
 
 // Swift AudioCaptureHelper paths
 const SWIFT_HELPER_DIR = path.join(__dirname, '..', 'swift', 'AudioCaptureHelper');
@@ -26,24 +24,231 @@ const SWIFT_HELPER_BINARY = 'audiocapture-helper';
 const IS_MAC = process.platform === 'darwin';
 const IS_WINDOWS = process.platform === 'win32';
 
-console.log('========================================');
-console.log('Meeting Transcriber - Build Preparation');
-console.log(`Platform: ${process.platform}`);
-console.log('========================================\n');
+function readTextOrEmpty(filePath) {
+  return fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : '';
+}
 
-// Ensure build directories exist
-if (!fs.existsSync(BUILD_DIR)) {
-  fs.mkdirSync(BUILD_DIR, { recursive: true });
-  console.log('Created build/resources/ directory\n');
+function listFilesRecursively(dirPath) {
+  if (!fs.existsSync(dirPath)) {
+    return [];
+  }
+
+  const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+  const results = [];
+
+  for (const entry of entries) {
+    const fullPath = path.join(dirPath, entry.name);
+    if (entry.isDirectory()) {
+      results.push(...listFilesRecursively(fullPath));
+    } else if (entry.isFile()) {
+      results.push(fullPath);
+    }
+  }
+
+  return results.sort();
+}
+
+function hashFileContent(filePath) {
+  return hashString(fs.readFileSync(filePath));
+}
+
+function buildDirectoryManifest(dirPath, rootPath) {
+  const files = listFilesRecursively(dirPath);
+  return files.map((filePath) => ({
+    path: path.relative(rootPath, filePath).replace(/\\/g, '/'),
+    sha256: hashFileContent(filePath),
+  }));
+}
+
+function ensureBuildDirectory() {
+  if (!fs.existsSync(BUILD_DIR)) {
+    fs.mkdirSync(BUILD_DIR, { recursive: true });
+    console.log('Created build/resources/ directory\n');
+  }
+}
+
+function ensureWindowsEmbeddedPythonPathConfig() {
+  const pthFile = path.join(PYTHON_DIR, 'python311._pth');
+
+  if (!fs.existsSync(pthFile)) {
+    return;
+  }
+
+  const pthContent = fs.readFileSync(pthFile, 'utf8');
+  const lines = pthContent.split(/\r?\n/);
+  const cleanedLines = lines.filter((line) => line.trim() !== '');
+  const normalizedLines = [];
+  const seen = new Set();
+  let siteEnabled = false;
+
+  for (const line of cleanedLines) {
+    const trimmed = line.trim();
+
+    if (trimmed === '#import site' || trimmed === 'import site') {
+      if (!siteEnabled) {
+        normalizedLines.push('import site');
+        siteEnabled = true;
+      }
+      continue;
+    }
+
+    if (!seen.has(trimmed)) {
+      normalizedLines.push(trimmed);
+      seen.add(trimmed);
+    }
+  }
+
+  const requiredPaths = ['../backend', './Lib/site-packages'];
+  for (const requiredPath of requiredPaths.reverse()) {
+    if (!seen.has(requiredPath)) {
+      normalizedLines.unshift(requiredPath);
+      seen.add(requiredPath);
+    }
+  }
+
+  if (!siteEnabled) {
+    normalizedLines.push('import site');
+  }
+
+  const updatedContent = `${normalizedLines.join('\n')}\n`;
+  if (updatedContent !== pthContent) {
+    fs.writeFileSync(pthFile, updatedContent);
+    console.log('  → Embedded Python path configuration updated');
+  } else {
+    console.log('  → Embedded Python path configuration already current');
+  }
+}
+
+function buildResourceManifest() {
+  return {
+    version: RESOURCE_MANIFEST_VERSION,
+    platform: process.platform,
+    downloads: BUILD_DOWNLOADS,
+    inputs: {
+      requirementsMacos: hashString(readTextOrEmpty(path.join(__dirname, '..', 'requirements-macos.txt'))),
+      requirementsWindows: hashString(readTextOrEmpty(path.join(__dirname, '..', 'requirements-windows.txt'))),
+      requirementsMacosBuild: hashString(readTextOrEmpty(REQUIREMENTS_MACOS_BUILD)),
+      requirementsWindowsBuild: hashString(readTextOrEmpty(REQUIREMENTS_WINDOWS_BUILD)),
+      swiftPackage: hashString(readTextOrEmpty(path.join(__dirname, '..', 'swift', 'AudioCaptureHelper', 'Package.swift'))),
+      swiftSources: buildDirectoryManifest(
+        path.join(__dirname, '..', 'swift', 'AudioCaptureHelper', 'Sources'),
+        path.join(__dirname, '..', 'swift', 'AudioCaptureHelper')
+      ),
+      inheritEntitlements: hashString(readTextOrEmpty(path.join(__dirname, 'entitlements.mac.inherit.plist'))),
+    },
+  };
+}
+
+function ensurePipInstalled(pythonExe, pipTargetDir) {
+  try {
+    execSync(`"${pythonExe}" -m pip --version`, { stdio: 'inherit' });
+    return Promise.resolve();
+  } catch (error) {
+    console.log('  pip not found; bootstrapping from pinned wheel...');
+  }
+
+  if (!fs.existsSync(pipTargetDir)) {
+    fs.mkdirSync(pipTargetDir, { recursive: true });
+  }
+
+  const pipWheelPath = path.join(BUILD_DIR, path.basename(getBuildDownload('pipWheel').url));
+
+  return downloadFile(getBuildDownload('pipWheel'), pipWheelPath)
+    .then(() => {
+      execSync(`"${pythonExe}" -m zipfile -e "${pipWheelPath}" "${pipTargetDir}"`, { stdio: 'inherit' });
+
+      if (IS_WINDOWS) {
+        ensureWindowsEmbeddedPythonPathConfig();
+      }
+
+      execSync(`"${pythonExe}" -m pip --version`, { stdio: 'inherit' });
+    })
+    .finally(() => {
+      if (fs.existsSync(pipWheelPath)) {
+        fs.unlinkSync(pipWheelPath);
+      }
+    });
+}
+
+function loadResourceManifest() {
+  if (!fs.existsSync(RESOURCE_MANIFEST_PATH)) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(fs.readFileSync(RESOURCE_MANIFEST_PATH, 'utf8'));
+  } catch (error) {
+    console.log(`Warning: Could not parse resource manifest: ${error.message}`);
+    return null;
+  }
+}
+
+function manifestsMatch(currentManifest, existingManifest) {
+  return JSON.stringify(currentManifest) === JSON.stringify(existingManifest);
+}
+
+function getStaleResourceDirectories() {
+  return [PYTHON_DIR, FFMPEG_DIR, BIN_DIR];
+}
+
+function invalidateStaleResources() {
+  const staleDirs = getStaleResourceDirectories();
+
+  for (const dir of staleDirs) {
+    if (fs.existsSync(dir)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+      console.log(`Removed stale resource directory: ${path.relative(BUILD_DIR, dir)}`);
+    }
+  }
+}
+
+function assertNoWindowsOnlyStaleHelper() {
+  if (!IS_WINDOWS) {
+    return;
+  }
+
+  const helperPath = path.join(BIN_DIR, SWIFT_HELPER_BINARY);
+  if (fs.existsSync(helperPath)) {
+    throw new Error('Windows resources contain stale macOS audiocapture-helper; rerun prepare-build after cleanup.');
+  }
+}
+
+function ensureWindowsEmptyBinDirectory() {
+  if (IS_WINDOWS && !fs.existsSync(BIN_DIR)) {
+    fs.mkdirSync(BIN_DIR, { recursive: true });
+  }
+}
+
+function ensureFreshResourceManifest() {
+  const currentManifest = buildResourceManifest();
+  const existingManifest = loadResourceManifest();
+
+  if (existingManifest && manifestsMatch(currentManifest, existingManifest)) {
+    console.log('✓ Resource manifest matches current runtime inputs\n');
+    return currentManifest;
+  }
+
+  if (existingManifest) {
+    console.log('Runtime inputs changed; invalidating stale build/resources artifacts...');
+  } else {
+    console.log('No resource manifest found; preparing fresh build/resources artifacts...');
+  }
+
+  invalidateStaleResources();
+  return currentManifest;
+}
+
+function writeResourceManifest(manifest) {
+  fs.writeFileSync(RESOURCE_MANIFEST_PATH, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
 // Helper function to download files
-async function downloadFile(url, destination) {
+async function downloadFile(download, destination) {
   return new Promise((resolve, reject) => {
-    console.log(`Downloading: ${url}`);
+    console.log(`Downloading: ${download.url}`);
     const file = fs.createWriteStream(destination);
 
-    https.get(url, { timeout: 30000 }, (response) => {
+    https.get(download.url, { timeout: 30000 }, (response) => {
       // Handle redirects (301, 302, 303, 307, 308)
       if (response.statusCode >= 300 && response.statusCode < 400) {
         file.close();
@@ -55,11 +260,11 @@ async function downloadFile(url, destination) {
         let redirectUrl = response.headers.location;
         if (redirectUrl.startsWith('/')) {
           // Relative URL - construct absolute URL from original request
-          const parsedUrl = new URL(url);
+          const parsedUrl = new URL(download.url);
           redirectUrl = `${parsedUrl.protocol}//${parsedUrl.host}${redirectUrl}`;
         }
 
-        return downloadFile(redirectUrl, destination).then(resolve).catch(reject);
+        return downloadFile({ ...download, url: redirectUrl }, destination).then(resolve).catch(reject);
       }
 
       if (response.statusCode !== 200) {
@@ -86,9 +291,19 @@ async function downloadFile(url, destination) {
       response.pipe(file);
 
       file.on('finish', () => {
-        file.close();
-        console.log('  Download complete!\n');
-        resolve();
+        file.close(async () => {
+          try {
+            const verifiedHash = await verifyFileChecksum(destination, download);
+            console.log(`  Verified SHA-256: ${verifiedHash}`);
+            console.log('  Download complete!\n');
+            resolve();
+          } catch (error) {
+            if (fs.existsSync(destination)) {
+              fs.unlinkSync(destination);
+            }
+            reject(error);
+          }
+        });
       });
     }).on('error', (err) => {
       file.close();
@@ -194,24 +409,22 @@ function buildSwiftHelper() {
     fs.mkdirSync(BIN_DIR, { recursive: true });
   }
 
-  // Find the built binary
-  // Swift Package Manager builds to .build/release/ or .build/arm64-apple-macosx/release/
-  const possibleBinaryPaths = [
-    path.join(SWIFT_HELPER_DIR, '.build', 'release', SWIFT_HELPER_BINARY),
-    path.join(SWIFT_HELPER_DIR, '.build', 'arm64-apple-macosx', 'release', SWIFT_HELPER_BINARY)
-  ];
-
-  let sourceBinary = null;
-  for (const binaryPath of possibleBinaryPaths) {
-    if (fs.existsSync(binaryPath)) {
-      sourceBinary = binaryPath;
-      break;
-    }
+  let binPath;
+  try {
+    binPath = execSync('swift build -c release --arch arm64 --show-bin-path', {
+      cwd: SWIFT_HELPER_DIR,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'inherit']
+    }).trim();
+  } catch (error) {
+    console.error('ERROR: Could not resolve Swift binary directory via --show-bin-path');
+    throw error;
   }
 
-  if (!sourceBinary) {
-    console.error('ERROR: Built binary not found at expected locations:');
-    possibleBinaryPaths.forEach(p => console.error(`  - ${p}`));
+  const sourceBinary = path.join(binPath, SWIFT_HELPER_BINARY);
+
+  if (!fs.existsSync(sourceBinary)) {
+    console.error(`ERROR: Built binary not found at resolved bin path: ${sourceBinary}`);
     throw new Error('Swift binary not found after build');
   }
 
@@ -307,7 +520,17 @@ print('\\nModel download complete!', file=sys.stderr)
 
 // Main preparation function
 async function prepareResources() {
+  console.log('========================================');
+  console.log('Meeting Transcriber - Build Preparation');
+  console.log(`Platform: ${process.platform}`);
+  console.log('========================================\n');
+
+  ensureBuildDirectory();
+
+  const resourceManifest = ensureFreshResourceManifest();
   const existing = checkExistingResources();
+  assertNoWindowsOnlyStaleHelper();
+  ensureWindowsEmptyBinDirectory();
 
   // Prepare Python
   if (existing.pythonExists) {
@@ -318,15 +541,8 @@ async function prepareResources() {
     if (IS_WINDOWS) {
       const pthFile = path.join(PYTHON_DIR, 'python311._pth');
       if (fs.existsSync(pthFile)) {
-        let pthContent = fs.readFileSync(pthFile, 'utf8');
-        if (!pthContent.includes('../backend')) {
-          console.log('  → Updating .pth file to include backend path...');
-          pthContent = '../backend\n' + pthContent;
-          fs.writeFileSync(pthFile, pthContent);
-          console.log('  → .pth file updated!\n');
-        } else {
-          console.log('  → .pth file already configured\n');
-        }
+        ensureWindowsEmbeddedPythonPathConfig();
+        console.log('');
       }
     }
   } else {
@@ -334,7 +550,7 @@ async function prepareResources() {
       // macOS: Download standalone Python build
       console.log('[1/4] Downloading standalone Python for macOS (arm64)...');
       const pythonTar = path.join(BUILD_DIR, 'python-macos.tar.gz');
-      await downloadFile(PYTHON_MAC_URL, pythonTar);
+      await downloadFile(getBuildDownload('pythonMac'), pythonTar);
 
       console.log('[2/4] Extracting Python...');
       // Extract to temp dir first
@@ -363,22 +579,15 @@ async function prepareResources() {
       // Make python executable
       execSync(`chmod +x "${pythonExe}"`, { stdio: 'inherit' });
 
-      // Verify pip
-      try {
-        execSync(`"${pythonExe}" -m pip --version`, { stdio: 'inherit' });
-      } catch (error) {
-        console.log('Installing pip...');
-        const getPipPath = path.join(PYTHON_DIR, 'get-pip.py');
-        await downloadFile('https://bootstrap.pypa.io/get-pip.py', getPipPath);
-        execSync(`"${pythonExe}" "${getPipPath}"`, { stdio: 'inherit' });
-        fs.unlinkSync(getPipPath);
-      }
+      await ensurePipInstalled(pythonExe, path.join(PYTHON_DIR, 'lib', 'python3.11', 'site-packages'));
 
       console.log('[4/4] Installing Python dependencies...');
 
       // Install requirements (macOS-specific)
-      const requirementsPath = path.join(__dirname, '..', 'requirements-macos.txt');
-      execSync(`"${pythonExe}" -m pip install -r "${requirementsPath}"`, {
+      const requirementsPath = fs.existsSync(REQUIREMENTS_MACOS_BUILD)
+        ? REQUIREMENTS_MACOS_BUILD
+        : path.join(__dirname, '..', 'requirements-macos.txt');
+      execSync(`"${pythonExe}" -m pip install --only-binary=:all: -r "${requirementsPath}"`, {
         stdio: 'inherit'
       });
 
@@ -410,7 +619,7 @@ async function prepareResources() {
       // Windows: Download embedded Python
       console.log('[1/4] Downloading embedded Python...');
       const pythonZip = path.join(BUILD_DIR, 'python-embed.zip');
-      await downloadFile(PYTHON_WIN_URL, pythonZip);
+      await downloadFile(getBuildDownload('pythonWin'), pythonZip);
 
       console.log('[2/4] Extracting Python...');
       extractZip(pythonZip, PYTHON_DIR);
@@ -418,34 +627,24 @@ async function prepareResources() {
 
       console.log('[3/4] Setting up pip...');
 
-      // Download get-pip.py
-      const getPipPath = path.join(PYTHON_DIR, 'get-pip.py');
-      await downloadFile('https://bootstrap.pypa.io/get-pip.py', getPipPath);
-
       // Modify python311._pth to:
       // 1. Enable site packages (uncomment 'import site')
       // 2. Add backend folder path so -m flag can find our modules (audio, transcription)
       //    CRITICAL FIX (v1.7.3): Embedded Python ignores PYTHONPATH env var, so we MUST
       //    add paths directly to the .pth file for module resolution to work.
-      const pthFile = path.join(PYTHON_DIR, 'python311._pth');
-      let pthContent = fs.readFileSync(pthFile, 'utf8');
-      pthContent = pthContent.replace('#import site', 'import site');
-      // Add relative path to backend folder (installed at ../backend relative to python/)
-      // This enables: python -m audio.windows_recorder
-      if (!pthContent.includes('../backend')) {
-        pthContent = '../backend\n' + pthContent;
-      }
-      fs.writeFileSync(pthFile, pthContent);
+      ensureWindowsEmbeddedPythonPathConfig();
 
       // Install pip
       const pythonExe = path.join(PYTHON_DIR, 'python.exe');
-      execSync(`"${pythonExe}" "${getPipPath}"`, { stdio: 'inherit' });
+      await ensurePipInstalled(pythonExe, path.join(PYTHON_DIR, 'Lib', 'site-packages'));
 
       console.log('[4/4] Installing Python dependencies...');
 
       // Install requirements (Windows-specific)
-      const requirementsPath = path.join(__dirname, '..', 'requirements-windows.txt');
-      execSync(`"${pythonExe}" -m pip install -r "${requirementsPath}" --no-warn-script-location`, {
+      const requirementsPath = fs.existsSync(REQUIREMENTS_WINDOWS_BUILD)
+        ? REQUIREMENTS_WINDOWS_BUILD
+        : path.join(__dirname, '..', 'requirements-windows.txt');
+      execSync(`"${pythonExe}" -m pip install --only-binary=:all: -r "${requirementsPath}" --no-warn-script-location`, {
         stdio: 'inherit'
       });
 
@@ -461,7 +660,7 @@ async function prepareResources() {
       // macOS: Download ffmpeg binary
       console.log('[1/2] Downloading ffmpeg for macOS...');
       const ffmpegZip = path.join(BUILD_DIR, 'ffmpeg.zip');
-      await downloadFile(FFMPEG_MAC_URL, ffmpegZip);
+      await downloadFile(getBuildDownload('ffmpegMac'), ffmpegZip);
 
       console.log('[2/2] Extracting ffmpeg...');
       if (!fs.existsSync(FFMPEG_DIR)) {
@@ -483,7 +682,7 @@ async function prepareResources() {
       // Windows: Download ffmpeg
       console.log('[1/2] Downloading ffmpeg...');
       const ffmpegZip = path.join(BUILD_DIR, 'ffmpeg.zip');
-      await downloadFile(FFMPEG_WIN_URL, ffmpegZip);
+      await downloadFile(getBuildDownload('ffmpegWin'), ffmpegZip);
 
       console.log('[2/2] Extracting ffmpeg...');
       const tempDir = path.join(BUILD_DIR, 'ffmpeg-temp');
@@ -526,6 +725,9 @@ async function prepareResources() {
     }
   }
 
+  assertNoWindowsOnlyStaleHelper();
+  ensureWindowsEmptyBinDirectory();
+
   // Download Whisper models (optional, Windows only)
   // macOS uses MLX-format models from mlx-community/* which are incompatible with
   // the CTranslate2 models downloaded by faster-whisper. The macOS app downloads
@@ -550,10 +752,24 @@ async function prepareResources() {
   console.log('========================================');
   console.log('Build preparation complete!');
   console.log('========================================');
+
+  writeResourceManifest(resourceManifest);
 }
 
-// Run preparation
-prepareResources().catch((error) => {
-  console.error('ERROR:', error.message);
-  process.exit(1);
-});
+if (require.main === module) {
+  prepareResources().catch((error) => {
+    console.error('ERROR:', error.message);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  buildDirectoryManifest,
+  buildResourceManifest,
+  ensureWindowsEmbeddedPythonPathConfig,
+  getStaleResourceDirectories,
+  ensureWindowsEmptyBinDirectory,
+  listFilesRecursively,
+  manifestsMatch,
+  prepareResources,
+};

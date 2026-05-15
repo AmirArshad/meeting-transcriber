@@ -25,8 +25,10 @@ Meeting Transcriber is a privacy-first Electron desktop app for recording microp
 ### Electron
 
 - `src/main.js`: app lifecycle, tray, startup checks, Python process management, IPC handlers, update checks
+- `src/main-process-helpers.js`: extracted main-process parsing/model-cache helpers with JS regression coverage
 - `src/preload.js`: safe API bridge exposed as `window.electronAPI`
 - `src/renderer/app.js`: main UI state machine, settings persistence, meeting history, GPU/settings UI, update banner
+- `src/renderer/update-notification-helpers.js`: extracted update-banner helpers with JS regression coverage
 - `src/renderer/index.html`: renderer markup
 - `src/renderer/styles.css`: renderer styles
 - `src/updater.js`: GitHub Releases update checker
@@ -50,9 +52,10 @@ Meeting Transcriber is a privacy-first Electron desktop app for recording microp
 
 ### Build and release
 
-- `build/prepare-resources.js`: bundles Python, ffmpeg, and macOS Swift helper
+- `build/download-manifest.js`: pinned build-time download URLs and checksums
+- `build/prepare-resources.js`: stages Python/ffmpeg/Swift helper resources, bootstraps pip from a pinned wheel, and invalidates stale prepared resources via `resource-manifest.json`
 - `package.json`: Electron builder config and build scripts
-- `.github/workflows/ci.yml`: syntax/build/doc validation
+- `.github/workflows/ci.yml`: regression tests, syntax checks, packaged-build smoke coverage, and doc validation
 - `.github/workflows/build-release.yml`: tagged release builds
 
 ## End-to-End Flow
@@ -62,27 +65,33 @@ Meeting Transcriber is a privacy-first Electron desktop app for recording microp
 3. `src/main.js` spawns Python recorder/transcriber processes.
 4. Recorder emits:
    - JSON audio level events on stdout
-   - human-readable status/progress on stderr
+   - structured recorder events/warnings/errors on stdout
+   - human-readable debug logs on stderr
    - final JSON result on stdout when recording stops
 5. Electron parses those outputs, updates UI, then saves finished meetings through `backend/meeting_manager.py`.
 
 ## Critical Invariants
 
-### Recording startup still depends on stderr strings
+### Recorder startup and progress use structured stdout JSON
 
-`src/main.js` still detects key recorder lifecycle events by matching stderr text such as `Recording started!`.
+`src/main.js` parses structured stdout messages such as `levels`, `event`, `warning`, and `error` for recorder control flow. stderr is debug-only and must not drive startup stages, warnings/errors, or recording-start state.
 
-If you change recorder startup/progress messages in either recorder:
+If you change recorder startup/progress behavior in either recorder:
 
 - `backend/audio/windows_recorder.py`
 - `backend/audio/macos_recorder.py`
 
-you must update the parsing logic in `src/main.js` too.
+you must update all of:
 
-There is a planned migration to structured events in `docs/features/json-based-events.md`, but it is not implemented yet.
+- `src/main.js`
+- `src/main-process-helpers.js`
+- `tests/js/main-process-helpers.test.js`
+
+The JSON-event migration in `docs/features/json-based-events.md` is complete for recorder control flow. Preserve the stdout JSON control contract unless you update both sides together.
 
 ### Keep recorder output contracts stable
 
+- Structured stdout messages now include `levels`, `event`, `warning`, and `error`, and `src/main.js` consumes them line-by-line.
 - Windows final JSON uses `audioPath`
 - macOS final JSON uses `outputPath`
 - `src/main.js` currently supports both for backward compatibility
@@ -118,13 +127,26 @@ If you rename or change an IPC handler in `src/main.js`, update `src/preload.js`
 
 ### Build packaging
 
-If you change bundled runtime locations, keep these aligned:
+If you change bundled runtime locations or prepared-resource inputs, keep these aligned:
 
 - `build/prepare-resources.js`
+- `build/download-manifest.js`
 - `package.json` `extraResources`
 - `src/main.js` runtime path resolution
 
+The generated `build/resources/resource-manifest.json` should continue to invalidate stale prepared resources when those inputs change.
+
 Windows packaged Python relies on `python311._pth` containing `../backend`. Dev mode relies on `PYTHONPATH` setup in `src/main.js`.
+
+### Meeting metadata persistence
+
+If you change `backend/meeting_manager.py`, preserve:
+
+- `FileLock`-based cross-process locking
+- atomic temp-file + `os.replace()` writes
+- transactional add behavior that removes originals only after metadata is saved
+- corrupt metadata backups named `meetings.corrupt.*.json`
+- scan/import preservation of suffixed IDs like `meeting_20260107_104555_1`
 
 ### macOS desktop audio capture
 
@@ -146,9 +168,9 @@ If you change artifact naming in `package.json` or `.github/workflows/build-rele
 ## Important Repo Facts
 
 - There are no `AGENTS.md` or `CLAUDE.md` predecessors in this repo before this file.
-- CI is mostly syntax/build/doc validation, not deep product test coverage.
-- Root `README.md` is broadly useful, but some docs are stale.
-- `docs/development/BUILD_INSTRUCTIONS.md` currently references `npm run prebuild`, but the real script is `npm run prepare-build`.
+- CI now includes backend tests, build/download-manifest tests, main-process and renderer helper JS tests, plus Windows/macOS packaged-build smoke checks, but it is still not full end-to-end product coverage.
+- Root `README.md` is broadly useful, but some product docs may still lag code changes.
+- `backend/meeting_manager.py` now uses locked atomic metadata writes, transactional add behavior, and corrupt-file backups.
 - `src/renderer/app.js` still has a TODO for saving transcripts through a file dialog.
 
 ## Commands That Reflect The Actual Repo
@@ -163,10 +185,10 @@ Use platform-specific Python requirements for local development:
 
 ```bash
 # Windows
-py -3.11 -m pip install -r requirements-windows.txt
+py -3.11 -m pip install -r requirements-windows.txt -r requirements-dev.txt
 
 # macOS
-python3 -m pip install -r requirements-macos.txt
+python3 -m pip install -r requirements-macos.txt -r requirements-dev.txt
 ```
 
 ### Run
@@ -194,9 +216,25 @@ swift build -c release --arch arm64
 
 Run that inside `swift/AudioCaptureHelper`.
 
+### Test suite
+
+```bash
+npm test
+npm run test:python
+npm run test:all
+```
+
+- `npm test`: JS regression tests plus syntax checks
+- `npm run test:python`: cross-platform Python unit-test wrapper for `tests/python`
+- `npm run test:all`: runs both JS and Python suites
+- Manual recorder validation checklist lives in `tests/manual/recording-smoke-checklist.md`
+- Setup instructions for new machines live in `docs/development/TESTING.md`
+
 ### CI-style validation
 
 ```bash
+npm test
+npm run test:python
 python -m py_compile backend/*.py backend/audio/*.py backend/transcription/*.py
 python backend/device_manager.py
 ```
@@ -216,6 +254,8 @@ swift build -c release --arch arm64
 - audio level updates still reach the renderer
 - stop flow still returns a valid output path
 - meeting history still saves usable audio/transcript files
+- relevant automated tests still pass
+- manual smoke checklist still passes on the affected platform
 
 ### Transcription changes
 
@@ -223,18 +263,23 @@ swift build -c release --arch arm64
 - transcript JSON shape still matches renderer expectations
 - markdown transcript output still saves correctly
 - CPU/GPU fallback behavior still makes sense for the platform
+- relevant automated tests still pass
 
 ### Meeting history changes
 
 - duplicate IDs are still prevented
 - scan/import still avoids re-adding persisted files
+- scan/import still preserves suffixed IDs
 - delete still handles Windows file locking gracefully
+- corrupt metadata recovery still creates `meetings.corrupt.*.json` backups when needed
+- meeting manager tests still pass
 
 ### Build/release changes
 
 - `npm run prepare-build` still stages Python/ffmpeg correctly
 - macOS helper still lands in bundled resources
 - updater can still detect release assets by filename
+- CI still runs the regression suite successfully
 
 ## Common Change Patterns
 
@@ -279,6 +324,7 @@ Update all of:
 - Keep platform-specific behavior explicit rather than hiding it behind overly clever abstractions.
 - Preserve user-facing resilience: many handlers intentionally degrade gracefully instead of hard-failing.
 - When simplifying code, preserve the current operational behavior first, then reduce complexity.
+- Keep `todo.md` updated whenever task status changes, major progress is made, or execution order is adjusted.
 
 ## When In Doubt
 
