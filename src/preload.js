@@ -5,7 +5,41 @@
  */
 
 const { contextBridge, ipcRenderer } = require('electron');
-const { buildFileUrl } = require('./main-process-helpers');
+
+function buildFileUrl(filePath) {
+  const normalizedPath = String(filePath || '').trim();
+
+  if (!normalizedPath) {
+    return '';
+  }
+
+  if (normalizedPath.startsWith('file://')) {
+    return normalizedPath;
+  }
+
+  let slashPath = normalizedPath.replace(/\\/g, '/');
+
+  if (/^[A-Za-z]:\//.test(slashPath)) {
+    slashPath = `/${slashPath}`;
+  }
+
+  const encodedPath = slashPath
+    .split('/')
+    .map((part, index) => {
+      if (!part || (index === 1 && /^[A-Za-z]:$/.test(part))) {
+        return part;
+      }
+
+      return encodeURIComponent(part);
+    })
+    .join('/');
+
+  if (encodedPath.startsWith('//')) {
+    return `file:${encodedPath}`;
+  }
+
+  return `file://${encodedPath.startsWith('/') ? '' : '/'}${encodedPath}`;
+}
 
 function addListener(channel, callback) {
   const wrappedCallback = (_event, data) => callback(data);

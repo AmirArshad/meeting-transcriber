@@ -112,11 +112,11 @@ Meeting Transcriber.app/
   - macOS uses `resources/python/bin/python3`
   - ffmpeg is resolved from the packaged `resources/ffmpeg` directory
 
-The main process also selects the platform transcriber:
+The main process also selects the platform transcriber and launches it with `python -m` so package-relative imports work in packaged builds:
 
-- Apple Silicon macOS packaged builds use `mlx_whisper_transcriber.py`
-- Windows uses `faster_whisper_transcriber.py`
-- Intel Mac development runs can still fall back to `faster_whisper_transcriber.py`
+- Apple Silicon macOS packaged builds use `transcription.mlx_whisper_transcriber`
+- Windows uses `transcription.faster_whisper_transcriber`
+- Intel Mac development runs can still fall back to `transcription.faster_whisper_transcriber`
 
 ## Installer Artifacts
 

@@ -16,6 +16,8 @@ const {
   buildRecordingPreflightReport,
   buildQuitRecordingDialogOptions,
   buildModelDownloadCheck,
+  buildPythonModuleArgs,
+  buildTranscriberArgs,
   cacheContainsModel,
   getQuitInterceptState,
   getRecorderCloseAction,
@@ -378,8 +380,7 @@ function addMeetingToHistory(meetingData) {
   return new Promise((resolve, reject) => {
     const { audioPath, transcriptPath, duration, language, model, title } = meetingData;
     const recordingsDir = path.join(app.getPath('userData'), 'recordings');
-    const args = [
-      path.join(pythonConfig.backendPath, 'meeting_manager.py'),
+    const args = getBackendModuleArgs('meeting_manager', [
       '--recordings-dir', recordingsDir,
       'add',
       '--audio', audioPath,
@@ -387,13 +388,13 @@ function addMeetingToHistory(meetingData) {
       '--duration', String(duration || 0),
       '--language', language || 'en',
       '--model', model || 'unknown'
-    ];
+    ]);
 
     if (title) {
       args.push('--title', title);
     }
 
-    const python = spawnTrackedPython(args);
+    const python = spawnTrackedPython(args, { cwd: pythonConfig.backendPath });
 
     let output = '';
     let errorOutput = '';
@@ -508,29 +509,21 @@ function getPythonConfig() {
 
 const pythonConfig = getPythonConfig();
 
-/**
- * Get the platform-specific transcriber script path.
- * Returns the appropriate transcriber based on the operating system:
- * - macOS: MLX Whisper (Metal GPU acceleration for Apple Silicon)
- * - Windows/others: faster-whisper (CUDA GPU acceleration)
- */
-function getTranscriberScript() {
-  const isMac = process.platform === 'darwin';
+const transcriberModule = buildTranscriberArgs({
+  platform: process.platform,
+  arch: process.arch,
+}).at(1);
 
-  if (isMac) {
-    // Check for Apple Silicon (arm64)
-    // MLX requires native arm64 execution
-    if (process.arch === 'arm64') {
-      return path.join(pythonConfig.backendPath, 'transcription', 'mlx_whisper_transcriber.py');
-    } else {
-      // Intel Mac (x64) -> Use faster-whisper (CPU fallback)
-      console.log('Intel Mac detected: Using faster-whisper fallback (CPU)');
-      return path.join(pythonConfig.backendPath, 'transcription', 'faster_whisper_transcriber.py');
-    }
-  }
+function getTranscriberArgs(extraArgs = []) {
+  return buildTranscriberArgs({
+    platform: process.platform,
+    arch: process.arch,
+    extraArgs,
+  });
+}
 
-  // Windows/Linux -> faster-whisper (CUDA/CPU)
-  return path.join(pythonConfig.backendPath, 'transcription', 'faster_whisper_transcriber.py');
+function getBackendModuleArgs(moduleName, extraArgs = []) {
+  return buildPythonModuleArgs(moduleName, extraArgs);
 }
 
 // Add ffmpeg to PATH so Python scripts can find it
@@ -549,7 +542,7 @@ process.env.PYTHONWARNINGS = 'ignore::DeprecationWarning,ignore::UserWarning';
 console.log('Python Configuration:', pythonConfig);
 console.log('userData path:', app.getPath('userData'));
 console.log('Recordings will be saved to:', path.join(app.getPath('userData'), 'recordings'));
-console.log('Transcriber:', getTranscriberScript());
+console.log('Transcriber module:', transcriberModule);
 
 // ============================================================================
 // Safety Checks and Verification Functions
@@ -1048,11 +1041,10 @@ function preloadWhisperModel() {
   const modelSize = 'small'; // Default model size
   console.log(`Preloading Whisper model (${modelSize})...`);
 
-  const preloadProcess = spawnTrackedPython([
-    getTranscriberScript(),
+  const preloadProcess = spawnTrackedPython(getTranscriberArgs([
     '--preload',
     '--model', modelSize
-  ]);
+  ]), { cwd: pythonConfig.backendPath });
 
   preloadProcess.stderr.on('data', (data) => {
     console.log(`[Model Preload] ${data.toString().trim()}`);
@@ -1075,12 +1067,11 @@ function preloadWhisperModel() {
  * when the user first tries to record.
  */
 function checkMacOSPermissions() {
-  const checkScript = path.join(pythonConfig.backendPath, 'check_permissions.py');
-
   console.log('Checking macOS permissions...');
 
-  const proc = spawn(pythonConfig.pythonExe, [checkScript], {
-    stdio: ['ignore', 'pipe', 'pipe']
+  const proc = spawnTrackedPython(getBackendModuleArgs('check_permissions'), {
+    cwd: pythonConfig.backendPath,
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
 
   let stdout = '';
@@ -1138,9 +1129,9 @@ function getMacOSPermissionStatus() {
   }
 
   return new Promise((resolve) => {
-    const checkScript = path.join(pythonConfig.backendPath, 'check_permissions.py');
-    const proc = spawn(pythonConfig.pythonExe, [checkScript], {
-      stdio: ['ignore', 'pipe', 'pipe']
+    const proc = spawnTrackedPython(getBackendModuleArgs('check_permissions'), {
+      cwd: pythonConfig.backendPath,
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
 
     let stdout = '';
@@ -1323,12 +1314,10 @@ function validateSelectedDevices({ micId, loopbackId }) {
 
     let python;
     try {
-      python = spawnTrackedPython([
-        path.join(pythonConfig.backendPath, 'device_manager.py')
-      ]);
+      python = spawnTrackedPython(getBackendModuleArgs('device_manager'), { cwd: pythonConfig.backendPath });
     } catch (e) {
       clearTimeout(timeout);
-      console.error('Failed to spawn device_manager.py:', e);
+      console.error('Failed to spawn device_manager module:', e);
       resolve({
         valid: true, // Allow recording to proceed
         warnings: ['Could not validate devices - proceeding anyway'],
@@ -1549,9 +1538,7 @@ ipcMain.handle('get-pending-update-info', async () => pendingUpdateInfo);
  */
 ipcMain.handle('get-audio-devices', async () => {
   return new Promise((resolve, reject) => {
-    const python = spawnTrackedPython([
-      path.join(pythonConfig.backendPath, 'device_manager.py')
-    ]);
+    const python = spawnTrackedPython(getBackendModuleArgs('device_manager'), { cwd: pythonConfig.backendPath });
 
     let output = '';
     let errorOutput = '';
@@ -1591,9 +1578,7 @@ ipcMain.handle('get-audio-devices', async () => {
 ipcMain.handle('warm-up-audio-system', async () => {
   return new Promise((resolve) => {
     // Step 1: Enumerate devices (forces driver initialization)
-    const python = spawnTrackedPython([
-      path.join(pythonConfig.backendPath, 'device_manager.py')
-    ]);
+    const python = spawnTrackedPython(getBackendModuleArgs('device_manager'), { cwd: pythonConfig.backendPath });
 
     let output = '';
 
@@ -1658,11 +1643,10 @@ ipcMain.handle('download-model', async (event, modelSize) => {
     const model = modelSize || 'small';
     console.log(`Downloading Whisper model: ${model}`);
 
-    const python = spawnTrackedPython([
-      getTranscriberScript(),
+    const python = spawnTrackedPython(getTranscriberArgs([
       '--preload',
       '--model', model
-    ]);
+    ]), { cwd: pythonConfig.backendPath });
 
     let hasError = false;
 
@@ -2044,13 +2028,12 @@ ipcMain.handle('transcribe-audio', async (event, options) => {
       });
     }
 
-    const python = spawnTrackedPython([
-      getTranscriberScript(),
+    const python = spawnTrackedPython(getTranscriberArgs([
       '--file', audioFile,
       '--language', language || 'en',
       '--model', modelSize || 'small',
       '--json'
-    ]);
+    ]), { cwd: pythonConfig.backendPath });
 
     let output = '';
     let errorOutput = '';
@@ -2114,11 +2097,10 @@ ipcMain.handle('transcribe-audio', async (event, options) => {
 ipcMain.handle('list-meetings', async () => {
   return new Promise((resolve, reject) => {
     const recordingsDir = path.join(app.getPath('userData'), 'recordings');
-    const python = spawnTrackedPython([
-      path.join(pythonConfig.backendPath, 'meeting_manager.py'),
+    const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
       '--recordings-dir', recordingsDir,
       'list'
-    ]);
+    ]), { cwd: pythonConfig.backendPath });
 
     let output = '';
     let errorOutput = '';
@@ -2153,12 +2135,11 @@ ipcMain.handle('list-meetings', async () => {
 ipcMain.handle('get-meeting', async (event, meetingId) => {
   return new Promise((resolve, reject) => {
     const recordingsDir = path.join(app.getPath('userData'), 'recordings');
-    const python = spawnTrackedPython([
-      path.join(pythonConfig.backendPath, 'meeting_manager.py'),
+    const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
       '--recordings-dir', recordingsDir,
       'get',
       meetingId
-    ]);
+    ]), { cwd: pythonConfig.backendPath });
 
     let output = '';
     let errorOutput = '';
@@ -2194,12 +2175,11 @@ ipcMain.handle('delete-meeting', async (event, meetingId) => {
   const recordingsDir = path.join(app.getPath('userData'), 'recordings');
 
   return new Promise((resolve, reject) => {
-    const python = spawnTrackedPython([
-      path.join(pythonConfig.backendPath, 'meeting_manager.py'),
+    const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
       '--recordings-dir', recordingsDir,
       'delete',
       meetingId
-    ]);
+    ]), { cwd: pythonConfig.backendPath });
 
     let errorOutput = '';
 
@@ -2228,11 +2208,10 @@ ipcMain.handle('delete-meeting', async (event, meetingId) => {
 ipcMain.handle('scan-recordings', async () => {
   return new Promise((resolve, reject) => {
     const recordingsDir = path.join(app.getPath('userData'), 'recordings');
-    const python = spawnTrackedPython([
-      path.join(pythonConfig.backendPath, 'meeting_manager.py'),
+    const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
       '--recordings-dir', recordingsDir,
       'scan'
-    ]);
+    ]), { cwd: pythonConfig.backendPath });
 
     let output = '';
     let errorOutput = '';

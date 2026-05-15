@@ -27,8 +27,8 @@ Status: implemented
 
 ### Transcription
 
-- Apple Silicon packaged builds use `backend/transcription/mlx_whisper_transcriber.py`.
-- Development runs on Intel Macs can still fall back to `backend/transcription/faster_whisper_transcriber.py`.
+- Apple Silicon packaged builds launch `transcription.mlx_whisper_transcriber` with `python -m`.
+- Development runs on Intel Macs can still fall back to `transcription.faster_whisper_transcriber` with `python -m`.
 - Apple Silicon MLX models are cached under `~/Library/Caches/meeting-transcriber/mlx_models`.
 
 ## Build And Packaging

@@ -68,6 +68,26 @@ function buildModelDownloadCheck({ platform, arch, homeDir, modelSize }) {
   };
 }
 
+function getTranscriberModule(platform, arch) {
+  if (platform === 'darwin' && arch === 'arm64') {
+    return 'transcription.mlx_whisper_transcriber';
+  }
+
+  return 'transcription.faster_whisper_transcriber';
+}
+
+function buildPythonModuleArgs(moduleName, extraArgs = []) {
+  return [
+    '-m',
+    moduleName,
+    ...extraArgs,
+  ];
+}
+
+function buildTranscriberArgs({ platform, arch, extraArgs = [] } = {}) {
+  return buildPythonModuleArgs(getTranscriberModule(platform, arch), extraArgs);
+}
+
 function resolveTranscriptionAudioFile({ audioFile, recordingsDir, existsSync }) {
   const fileExists = existsSync || (() => false);
   let resolvedAudioFile = String(audioFile || '');
@@ -540,6 +560,8 @@ module.exports = {
   buildRecordingPreflightReport,
   buildQuitRecordingDialogOptions,
   buildModelDownloadCheck,
+  buildPythonModuleArgs,
+  buildTranscriberArgs,
   cacheContainsModel,
   classifyRecorderStdoutChunk,
   dedupeMessages,
@@ -547,6 +569,7 @@ module.exports = {
   getRecorderCloseAction,
   getRecorderEventAction,
   getMacMLXModelStorageDirs,
+  getTranscriberModule,
   getModelDownloadCacheDir,
   getMacMLXCacheDir,
   getModelDownloadPatterns,

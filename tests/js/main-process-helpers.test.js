@@ -10,6 +10,8 @@ const {
   buildRecordingPreflightReport,
   buildQuitRecordingDialogOptions,
   buildModelDownloadCheck,
+  buildPythonModuleArgs,
+  buildTranscriberArgs,
   cacheContainsModel,
   classifyRecorderStdoutChunk,
   getQuitInterceptState,
@@ -19,6 +21,7 @@ const {
   getMacMLXModelStorageDirs,
   getModelDownloadPatterns,
   getRecordingStopTimeout,
+  getTranscriberModule,
   resolveStopTimeoutAction,
   isModelDownloadErrorOutput,
   parseRecorderMessageLine,
@@ -138,6 +141,52 @@ test('cacheContainsModel matches a cached model entry by pattern fragment', () =
   assert.equal(
     cacheContainsModel(items, ['models--guillaumekln--faster-whisper-small']),
     true,
+  );
+});
+
+
+test('getTranscriberModule returns packaged-safe module names', () => {
+  assert.equal(
+    getTranscriberModule('win32', 'x64'),
+    'transcription.faster_whisper_transcriber',
+  );
+  assert.equal(
+    getTranscriberModule('darwin', 'arm64'),
+    'transcription.mlx_whisper_transcriber',
+  );
+  assert.equal(
+    getTranscriberModule('darwin', 'x64'),
+    'transcription.faster_whisper_transcriber',
+  );
+});
+
+
+test('buildTranscriberArgs runs transcribers as modules for relative imports', () => {
+  assert.deepEqual(
+    buildTranscriberArgs({
+      platform: 'win32',
+      arch: 'x64',
+      extraArgs: ['--file', 'demo.opus', '--json'],
+    }),
+    [
+      '-m',
+      'transcription.faster_whisper_transcriber',
+      '--file',
+      'demo.opus',
+      '--json',
+    ],
+  );
+});
+
+
+test('buildPythonModuleArgs builds generic backend module entrypoints', () => {
+  assert.deepEqual(
+    buildPythonModuleArgs('meeting_manager', ['list']),
+    ['-m', 'meeting_manager', 'list'],
+  );
+  assert.deepEqual(
+    buildPythonModuleArgs('device_manager'),
+    ['-m', 'device_manager'],
   );
 });
 
