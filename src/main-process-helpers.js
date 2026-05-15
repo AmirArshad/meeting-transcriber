@@ -49,7 +49,7 @@ function getModelDownloadCacheDir(homeDir) {
 }
 
 function getMacMLXCacheDir(homeDir) {
-  return path.join(homeDir, 'Library', 'Caches', 'meeting-transcriber', 'mlx_models');
+  return path.join(homeDir, 'Library', 'Caches', 'avanevis', 'mlx_models');
 }
 
 function getMacMLXModelStorageDirs(modelSize = 'small') {
@@ -427,16 +427,16 @@ function buildQuitRecordingDialogOptions({ quitState, stopErrorMessage }) {
     : '';
 
   let title = 'Recorder Still Busy';
-  let message = 'Meeting Transcriber could not stop the recorder cleanly.';
+  let message = 'AvaNevis could not stop the recorder cleanly.';
   let detail = 'Quitting now may interrupt recorder startup or discard any audio already captured. Keep the app open and try stopping again, or quit anyway and risk losing the recording.';
 
   if (quitState === 'recording') {
     title = 'Recording Still In Progress';
-    message = 'Meeting Transcriber could not stop and save the current recording cleanly.';
+    message = 'AvaNevis could not stop and save the current recording cleanly.';
     detail = 'Quitting now may discard the in-progress recording. Keep the app open to stop it manually and wait for saving to finish, or quit anyway and risk losing the recording.';
   } else if (quitState === 'stopping') {
     title = 'Recording Save Still Running';
-    message = 'Meeting Transcriber is still finishing the current recording.';
+    message = 'AvaNevis is still finishing the current recording.';
     detail = 'Quitting now may interrupt post-processing before the recording is fully saved. Keep the app open and let it finish, or quit anyway and risk losing the recording.';
   }
 

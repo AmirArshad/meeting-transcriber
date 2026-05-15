@@ -99,7 +99,7 @@ When sharing on LinkedIn:
 
 **Good post:**
 ```
-🚀 Just released my latest open-source project: Meeting Transcriber
+🚀 Just released my latest open-source project: AvaNevis
 
 Built with Electron and Python, it uses AI (Whisper) to transcribe
 meetings in real-time with desktop audio capture.
@@ -117,7 +117,7 @@ Check it out: github.com/YOUR_USERNAME/meeting-transcriber
 
 **Portfolio description:**
 ```
-Meeting Transcriber - Desktop application for AI-powered meeting
+AvaNevis - Desktop application for AI-powered meeting
 transcription with WASAPI loopback support for desktop audio capture.
 
 Tech stack: Electron, Python, faster-whisper, PyTorch

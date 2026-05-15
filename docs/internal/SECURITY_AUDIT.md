@@ -1,4 +1,4 @@
-# Security Audit Report - Meeting Transcriber
+# Security Audit Report - AvaNevis
 
 > Historical note: this audit reflects repo state from November 2025. Treat it as a point-in-time review, not a live description of current updater/build/runtime behavior.
 
@@ -245,7 +245,7 @@ Users might see these warnings (they are SAFE):
 **Action:** Submit to antivirus vendors as false positive
 
 ### 3. Firewall Prompts
-**Message:** "Allow Meeting Transcriber to access network?"
+**Message:** "Allow AvaNevis to access network?"
 **Reason:** Whisper model downloads
 **Safe?** YES - Required for AI functionality
 **Action:** User should click "Allow"
@@ -342,7 +342,7 @@ We will respond within 48 hours.
 
 ✅ **Your application is SAFE to distribute to users**
 
-The Meeting Transcriber application has been thoroughly audited and contains:
+The AvaNevis application has been thoroughly audited and contains:
 - ❌ No viruses or malware
 - ❌ No security vulnerabilities
 - ❌ No privacy violations

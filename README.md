@@ -1,4 +1,4 @@
-# 🎙️ Meeting Transcriber
+# 🎙️ AvaNevis
 
 > AI-powered desktop application for recording and transcribing meetings with pristine audio quality
 
@@ -10,7 +10,7 @@
 
 ## What is this?
 
-Meeting Transcriber is a **privacy-first desktop application** that captures and transcribes your meetings with exceptional audio quality. This app captures **both your voice AND desktop audio** (speakers/system audio) - perfect for recording online meetings (with attendee permission), interviews, podcasts, or any computer-based conversation.
+AvaNevis is a **privacy-first desktop application** that captures and transcribes your meetings with exceptional audio quality. This app captures **both your voice AND desktop audio** (speakers/system audio) - perfect for recording online meetings (with attendee permission), interviews, podcasts, or any computer-based conversation.
 
 ### Why I Built This
 
@@ -48,7 +48,7 @@ No existing solution offered all of this in one package, so I built it.
 **Windows:**
 
 1. **Download** the latest `.exe` installer from [Releases](https://github.com/AmirArshad/meeting-transcriber/releases)
-2. **Run** `Meeting Transcriber-Setup-<version>.exe` (may show SmartScreen warning - click "More info" → "Run anyway")
+2. **Run** `AvaNevis-Setup-<version>.exe` (may show SmartScreen warning - click "More info" → "Run anyway")
 3. **Launch** the app from Start Menu
 4. **Select** your microphone and desktop audio device
 5. **Click** "Start Recording" and transcribe!
@@ -56,9 +56,9 @@ No existing solution offered all of this in one package, so I built it.
 **macOS:**
 
 1. **Download** the latest `.dmg` file from [Releases](https://github.com/AmirArshad/meeting-transcriber/releases)
-2. **Open** the DMG and drag Meeting Transcriber to Applications
+2. **Open** the DMG and drag AvaNevis to Applications
 3. **⚠️ IMPORTANT:** Right-click the app → select "Open" (NOT double-click)
-   - If you double-click, macOS will show '"Meeting Transcriber" is damaged'
+   - If you double-click, macOS will show '"AvaNevis" is damaged'
    - This is a security warning for unsigned apps, NOT actual damage
    - Right-click → "Open" bypasses this Gatekeeper check
 4. **Click** "Open" in the confirmation dialog
@@ -74,7 +74,7 @@ No existing solution offered all of this in one package, so I built it.
 ```bash
 # Clone repository
 git clone https://github.com/AmirArshad/meeting-transcriber.git
-cd meeting-transcriber
+cd avanevis
 
 # Install Node.js dependencies
 npm install

@@ -1,4 +1,4 @@
-# GPU Setup Guide for Meeting Transcriber
+# GPU Setup Guide for AvaNevis
 
 This guide helps you set up GPU acceleration for faster transcription using CUDA.
 

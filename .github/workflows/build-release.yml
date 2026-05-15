@@ -26,12 +26,12 @@ jobs:
             runner: windows-latest
             build-script: npm run build
             artifact-pattern: "*Setup-*.exe"
-            artifact-name: meeting-transcriber-installer-windows
+            artifact-name: avanevis-installer-windows
           - os: macOS
             runner: macos-14 # macOS 14 (Sonoma) with M1/M2/M3 runners
             build-script: npm run build:mac
             artifact-pattern: "*Setup-*.dmg"
-            artifact-name: meeting-transcriber-installer-macos
+            artifact-name: avanevis-installer-macos
 
     steps:
       - uses: actions/checkout@v6
@@ -157,8 +157,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          windows_asset=$(find release-artifacts/meeting-transcriber-installer-windows -type f -name '*.exe' | head -n 1)
-          macos_asset=$(find release-artifacts/meeting-transcriber-installer-macos -type f -name '*.dmg' | head -n 1)
+          windows_asset=$(find release-artifacts/avanevis-installer-windows -type f -name '*.exe' | head -n 1)
+          macos_asset=$(find release-artifacts/avanevis-installer-macos -type f -name '*.dmg' | head -n 1)
 
           if [ -z "$windows_asset" ] || [ -z "$macos_asset" ]; then
             echo "Expected release assets were not downloaded"
@@ -180,7 +180,7 @@ jobs:
         shell: bash
         run: |
           cat <<EOF > release-notes.md
-          ## Meeting Transcriber v${{ steps.collect_assets.outputs.version }}
+          ## AvaNevis v${{ steps.collect_assets.outputs.version }}
 
           ### Downloads
 
@@ -197,11 +197,11 @@ jobs:
           **Windows**
           1. Download the `.exe` installer.
           2. Run it. If SmartScreen appears, choose "More info" then "Run anyway".
-          3. Launch Meeting Transcriber from the Start Menu.
+          3. Launch AvaNevis from the Start Menu.
 
           **macOS**
           1. Download the `.dmg` file.
-          2. Drag Meeting Transcriber into Applications.
+          2. Drag AvaNevis into Applications.
           3. On first launch, right-click the app and choose "Open" to bypass Gatekeeper for the unsigned build.
           4. Grant microphone and screen recording permissions when prompted.
 
@@ -226,7 +226,7 @@ jobs:
       - name: Create or update GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          name: Meeting Transcriber ${{ github.ref_name }}
+          name: AvaNevis ${{ github.ref_name }}
           files: release-upload/*
           body_path: release-notes.md
           fail_on_unmatched_files: true

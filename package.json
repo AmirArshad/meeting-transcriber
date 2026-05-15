@@ -1,5 +1,5 @@
 {
-  "name": "meeting-transcriber",
+  "name": "avanevis",
   "version": "1.9.0",
   "description": "AI-powered meeting transcription with desktop audio capture",
   "main": "src/main.js",
@@ -24,7 +24,7 @@
     "meeting",
     "audio"
   ],
-  "author": "Meeting Transcriber Team",
+  "author": "AvaNevis",
   "license": "MIT",
   "devDependencies": {
     "adm-zip": "^0.5.16",
@@ -32,8 +32,8 @@
     "electron-builder": "^26.8.1"
   },
   "build": {
-    "appId": "com.meetingtranscriber.app",
-    "productName": "Meeting Transcriber",
+    "appId": "com.avanevis.app",
+    "productName": "AvaNevis",
     "win": {
       "target": [
         {
@@ -64,11 +64,11 @@
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.inherit.plist",
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "Meeting Transcriber needs microphone access to record your voice during meetings.",
-        "NSAudioCaptureUsageDescription": "Meeting Transcriber needs system audio access to capture desktop audio locally for meeting transcription.",
-        "NSAppleMusicUsageDescription": "Meeting Transcriber does not access your music library.",
-        "NSCameraUsageDescription": "Meeting Transcriber does not use your camera.",
-        "NSScreenCaptureUsageDescription": "Meeting Transcriber needs screen recording permission to capture system audio (desktop audio) using ScreenCaptureKit. No screen video is recorded, only audio."
+        "NSMicrophoneUsageDescription": "AvaNevis needs microphone access to record your voice during meetings.",
+        "NSAudioCaptureUsageDescription": "AvaNevis needs system audio access to capture desktop audio locally for meeting transcription.",
+        "NSAppleMusicUsageDescription": "AvaNevis does not access your music library.",
+        "NSCameraUsageDescription": "AvaNevis does not use your camera.",
+        "NSScreenCaptureUsageDescription": "AvaNevis needs screen recording permission to capture system audio (desktop audio) using ScreenCaptureKit. No screen video is recorded, only audio."
       }
     },
     "dmg": {
@@ -94,7 +94,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Meeting Transcriber",
+      "shortcutName": "AvaNevis",
       "installerIcon": "build/icon.ico",
       "uninstallerIcon": "build/icon.ico",
       "installerHeaderIcon": "build/icon.ico",

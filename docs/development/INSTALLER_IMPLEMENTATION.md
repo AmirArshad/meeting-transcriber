@@ -1,10 +1,10 @@
 # Installer And Packaged Runtime Implementation
 
-This document describes how packaged Meeting Transcriber builds are assembled today.
+This document describes how packaged AvaNevis builds are assembled today.
 
 ## Overview
 
-Meeting Transcriber ships as an Electron app with bundled Python, backend scripts, ffmpeg, and (on macOS) the native Swift desktop-audio helper.
+AvaNevis ships as an Electron app with bundled Python, backend scripts, ffmpeg, and (on macOS) the native Swift desktop-audio helper.
 
 The packaging flow is intentionally explicit:
 
@@ -85,7 +85,7 @@ resources/
 ### macOS packaged app
 
 ```text
-Meeting Transcriber.app/
+AvaNevis.app/
 └── Contents/Resources/
     ├── python/
     │   └── bin/python3
@@ -122,8 +122,8 @@ The main process also selects the platform transcriber and launches it with `pyt
 
 `package.json` sets the artifact naming convention to:
 
-- Windows: `Meeting Transcriber-Setup-<version>.exe`
-- macOS: `Meeting Transcriber-Setup-<version>.dmg`
+- Windows: `AvaNevis-Setup-<version>.exe`
+- macOS: `AvaNevis-Setup-<version>.dmg`
 
 ## CI Coverage
 

@@ -255,8 +255,8 @@ class MLXWhisperTranscriber(BaseTranscriber):
     def _get_cache_dir(self) -> Path:
         """Return the writable cache directory used for MLX model downloads."""
         if sys.platform == 'darwin':
-            return Path.home() / 'Library' / 'Caches' / 'meeting-transcriber'
-        return Path.home() / '.cache' / 'meeting-transcriber'
+            return Path.home() / 'Library' / 'Caches' / 'avanevis'
+        return Path.home() / '.cache' / 'avanevis'
 
     def _download_model_files(self) -> None:
         """Download model files into the app-managed cache directory."""
@@ -669,7 +669,7 @@ def main():
     import json
     import sys
 
-    parser = argparse.ArgumentParser(description="Meeting Transcriber CLI (MLX/Apple Silicon)")
+    parser = argparse.ArgumentParser(description="AvaNevis CLI (MLX/Apple Silicon)")
     parser.add_argument("audio_file", nargs="?", help="Path to audio file")
     parser.add_argument("--file", dest="file_arg", help="Path to audio file (alternative)")
     parser.add_argument("--language", default="en", help="Language code (default: en)")

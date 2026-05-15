@@ -566,7 +566,7 @@ print('\\nModel download complete!', file=sys.stderr)
 // Main preparation function
 async function prepareResources() {
   console.log('========================================');
-  console.log('Meeting Transcriber - Build Preparation');
+  console.log('AvaNevis - Build Preparation');
   console.log(`Platform: ${process.platform}`);
   console.log('========================================\n');
 

@@ -13,7 +13,7 @@ const { resolveExternalUrl } = require('./main-process-helpers');
 const REPO_OWNER = 'AmirArshad';
 const REPO_NAME = 'meeting-transcriber';
 const GITHUB_API = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest`;
-const INSTALLER_NAME_TOKEN = 'Meeting Transcriber-Setup-';
+const INSTALLER_NAME_TOKEN = 'AvaNevis-Setup-';
 
 /**
  * Check if a new version is available on GitHub
@@ -72,7 +72,7 @@ function fetchLatestRelease() {
   return new Promise((resolve, reject) => {
     const options = {
       headers: {
-        'User-Agent': 'Meeting-Transcriber-App',
+        'User-Agent': 'AvaNevis-App',
         'Accept': 'application/vnd.github.v3+json'
       }
     };

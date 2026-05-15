@@ -505,7 +505,7 @@ def main():
     import json
     import sys
 
-    parser = argparse.ArgumentParser(description="Meeting Transcriber CLI")
+    parser = argparse.ArgumentParser(description="AvaNevis CLI")
     parser.add_argument("audio_file", nargs="?", help="Path to audio file")
     parser.add_argument("--file", dest="file_arg", help="Path to audio file (alternative)")
     parser.add_argument("--language", default="en", help="Language code (default: en)")

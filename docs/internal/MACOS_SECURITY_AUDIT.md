@@ -1,4 +1,4 @@
-# macOS Security Audit Report - Meeting Transcriber
+# macOS Security Audit Report - AvaNevis
 
 > Historical note: this audit reflects repo state from December 2025 and is not a live product spec. For current packaging, updater, and platform behavior, use `README.md`, `docs/development/*.md`, and `docs/internal/FULL_AUDIT_REMEDIATION_ARCHIVE.md`.
 
@@ -13,7 +13,7 @@
 
 **Overall Assessment: SAFE TO DISTRIBUTE**
 
-The macOS build of Meeting Transcriber has been thoroughly audited for security vulnerabilities, supply chain risks, and platform-specific security concerns. The application is **secure and safe to distribute** to macOS users.
+The macOS build of AvaNevis has been thoroughly audited for security vulnerabilities, supply chain risks, and platform-specific security concerns. The application is **secure and safe to distribute** to macOS users.
 
 **Risk Level:** Low
 **Recommendation:** Safe to build and distribute with awareness of platform-specific security considerations.
@@ -1005,7 +1005,7 @@ If a dependency is compromised:
 
 ### Summary
 
-The macOS version of Meeting Transcriber is **secure and safe to distribute** to users. The security audit found:
+The macOS version of AvaNevis is **secure and safe to distribute** to users. The security audit found:
 
 - **No critical vulnerabilities**
 - **No high-severity security issues**

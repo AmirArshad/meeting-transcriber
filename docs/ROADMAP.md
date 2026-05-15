@@ -1,6 +1,6 @@
-# Meeting Transcriber - Product Roadmap
+# AvaNevis - Product Roadmap
 
-This document outlines the development roadmap for Meeting Transcriber, organized by priority and implementation status.
+This document outlines the development roadmap for AvaNevis, organized by priority and implementation status.
 
 ## Completed Features ✅
 

@@ -1,12 +1,12 @@
 # 🔧 Troubleshooting Guide
 
-Common issues and solutions for Meeting Transcriber.
+Common issues and solutions for AvaNevis.
 
 ---
 
 ## macOS Issues
 
-### ❌ "Meeting Transcriber is damaged and can't be opened"
+### ❌ "AvaNevis is damaged and can't be opened"
 
 **Symptom:** When trying to open the app, macOS shows an error saying the app is damaged and suggests moving it to the Bin.
 
@@ -14,7 +14,7 @@ Common issues and solutions for Meeting Transcriber.
 
 **Solution 1: Right-Click Method (Recommended)**
 1. **Don't** double-click the app
-2. **Right-click** (or Ctrl+click) on "Meeting Transcriber.app" in Applications
+2. **Right-click** (or Ctrl+click) on "AvaNevis.app" in Applications
 3. Select **"Open"** from the context menu
 4. Click **"Open"** in the confirmation dialog
 5. The app will now launch
@@ -33,7 +33,7 @@ xattr -d com.apple.quarantine ~/Downloads/Meeting\ Transcriber-Setup-*.dmg
 1. Try to open the app (you'll see the "damaged" error)
 2. Go to **System Settings** → **Privacy & Security**
 3. Scroll down to the "Security" section
-4. You should see a message about Meeting Transcriber being blocked
+4. You should see a message about AvaNevis being blocked
 5. Click **"Open Anyway"**
 
 **Why This Happens:**
@@ -50,7 +50,7 @@ xattr -d com.apple.quarantine ~/Downloads/Meeting\ Transcriber-Setup-*.dmg
 
 ---
 
-### ⚠️ "Meeting Transcriber wants to access your microphone"
+### ⚠️ "AvaNevis wants to access your microphone"
 
 **Symptom:** macOS shows a permission request for microphone access.
 
@@ -58,19 +58,19 @@ xattr -d com.apple.quarantine ~/Downloads/Meeting\ Transcriber-Setup-*.dmg
 
 **If you accidentally denied permission:**
 1. Go to **System Settings** → **Privacy & Security** → **Microphone** (NOT "Recording"!)
-2. Find "Meeting Transcriber" in the list
+2. Find "AvaNevis" in the list
 3. Toggle it **ON**
 4. Restart the app
 
-**If Meeting Transcriber doesn't appear in the list:**
+**If AvaNevis doesn't appear in the list:**
 1. **Important:** Apps only appear after requesting permission
 2. Launch the app
-3. The app should show a popup: **"Meeting Transcriber would like to access the microphone"**
+3. The app should show a popup: **"AvaNevis would like to access the microphone"**
 4. Click **"OK"** to grant permission
 5. If no popup appears:
    - The permission may have been denied previously
    - Try to start a recording (this triggers the permission request again)
-   - Check Console.app for errors (search for "Meeting Transcriber")
+   - Check Console.app for errors (search for "AvaNevis")
 
 **Why doesn't it appear?**
 - macOS only shows apps in permission lists **after** they request access
@@ -87,7 +87,7 @@ xattr -d com.apple.quarantine ~/Downloads/Meeting\ Transcriber-Setup-*.dmg
 
 **Solution:**
 1. Go to **System Settings** → **Privacy & Security** → **Screen Recording**
-2. Find "Meeting Transcriber" in the list
+2. Find "AvaNevis" in the list
 3. Toggle it **ON**
 4. Restart the app
 
@@ -127,7 +127,7 @@ xattr -d com.apple.quarantine ~/Downloads/Meeting\ Transcriber-Setup-*.dmg
 - Or manually fix:
   1. Delete the app
   2. Download and reinstall the latest version
-  3. The fix redirects MLX cache to `~/Library/Caches/meeting-transcriber/mlx_models`
+  3. The fix redirects MLX cache to `~/Library/Caches/avanevis/mlx_models`
 
 **Verification after update:**
 Look for this in the console when loading a model:
@@ -184,7 +184,7 @@ If you still see "faster-whisper (CPU fallback)", report an issue on GitHub.
 **Symptom:** App crashes immediately when starting a recording.
 
 **Possible Causes:**
-1. **Antivirus blocking Python process** - Add exception for Meeting Transcriber
+1. **Antivirus blocking Python process** - Add exception for AvaNevis
 2. **Missing audio drivers** - Update audio drivers from manufacturer
 3. **Conflicting audio software** - Close other recording apps (OBS, Audacity, etc.)
 
@@ -192,8 +192,8 @@ If you still see "faster-whisper (CPU fallback)", report an issue on GitHub.
 1. Check Windows Event Viewer for error details
 2. Run app from Command Prompt to see Python errors:
    ```cmd
-   cd "C:\Program Files\Meeting Transcriber"
-   "Meeting Transcriber.exe"
+   cd "C:\Program Files\AvaNevis"
+   "AvaNevis.exe"
    ```
 3. Report issue on GitHub with error logs
 
@@ -210,7 +210,7 @@ If you still see "faster-whisper (CPU fallback)", report an issue on GitHub.
 2. Try again - downloads are resumable
 3. If a partial model cache is corrupted, remove the platform cache and retry:
    - Windows / `faster-whisper`: `%USERPROFILE%\.cache\huggingface\hub`
-   - macOS Apple Silicon / MLX: `~/Library/Caches/meeting-transcriber`
+   - macOS Apple Silicon / MLX: `~/Library/Caches/avanevis`
 
 ---
 
@@ -226,7 +226,7 @@ If you still see "faster-whisper (CPU fallback)", report an issue on GitHub.
 **macOS:**
 - Grant **Screen Recording** permission (required for ScreenCaptureKit)
 - System Settings → Privacy & Security → Screen Recording
-- Toggle ON for Meeting Transcriber
+- Toggle ON for AvaNevis
 - Restart the app
 - If desktop audio is still missing on Bluetooth, USB, or headphones, reproduce it on the current macOS version and hardware before assuming the output device is unsupported.
 
@@ -262,12 +262,12 @@ If you still see "faster-whisper (CPU fallback)", report an issue on GitHub.
 
 **Windows:**
 ```
-C:\Users\<YourUsername>\AppData\Roaming\Meeting Transcriber\recordings\
+C:\Users\<YourUsername>\AppData\Roaming\AvaNevis\recordings\
 ```
 
 **macOS:**
 ```
-~/Library/Application Support/Meeting Transcriber/recordings/
+~/Library/Application Support/AvaNevis/recordings/
 ```
 
 Open that path manually in File Explorer or Finder.
@@ -279,14 +279,14 @@ The app does not currently expose a `Show in Folder` action in the history UI.
 ### 🗑️ How to Completely Uninstall
 
 **Windows:**
-1. Uninstall via Settings → Apps → Meeting Transcriber
-2. Delete data folder: `%APPDATA%\Meeting Transcriber`
+1. Uninstall via Settings → Apps → AvaNevis
+2. Delete data folder: `%APPDATA%\AvaNevis`
 3. Delete cache: `%USERPROFILE%\.cache\huggingface`
 
 **macOS:**
 1. Drag app to Trash from Applications
-2. Delete data: `~/Library/Application Support/Meeting Transcriber`
-3. Delete cache: `~/Library/Caches/meeting-transcriber`
+2. Delete data: `~/Library/Application Support/AvaNevis`
+3. Delete cache: `~/Library/Caches/avanevis`
 
 If you also ran a non-MLX development setup on macOS, you may additionally have `~/.cache/huggingface`.
 
@@ -297,7 +297,7 @@ If you also ran a non-MLX development setup on macOS, you may additionally have 
 1. **Check Existing Issues:** [GitHub Issues](https://github.com/AmirArshad/meeting-transcriber/issues)
 2. **Enable Debug Mode:**
    - Windows: Run from Command Prompt
-   - macOS: Run from Terminal with `open -a "Meeting Transcriber"`
+   - macOS: Run from Terminal with `open -a "AvaNevis"`
    - Check Console.app (macOS) or Event Viewer (Windows) for errors
 3. **Report a Bug:** [Create New Issue](https://github.com/AmirArshad/meeting-transcriber/issues/new)
    - Include OS version

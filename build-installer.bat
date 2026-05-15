@@ -1,6 +1,6 @@
 @echo off
 echo ========================================
-echo Meeting Transcriber - Build Installer
+echo AvaNevis - Build Installer
 echo ========================================
 echo.
 
@@ -67,7 +67,7 @@ if %ERRORLEVEL% EQU 0 (
     echo Build completed successfully!
     echo ========================================
     echo.
-    echo Installer location: dist\Meeting Transcriber Setup 1.0.0.exe
+    echo Installer location: dist\AvaNevis Setup 1.0.0.exe
     echo.
     echo You can now distribute this installer to users.
     echo.

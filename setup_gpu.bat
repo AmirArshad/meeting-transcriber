@@ -1,9 +1,9 @@
 @echo off
-REM GPU Setup Script for Meeting Transcriber
+REM GPU Setup Script for AvaNevis
 REM This script installs CUDA libraries for GPU-accelerated transcription
 
 echo ============================================================
-echo Meeting Transcriber - GPU Setup (CUDA)
+echo AvaNevis - GPU Setup (CUDA)
 echo ============================================================
 echo.
 echo This will install CUDA libraries for GPU acceleration.

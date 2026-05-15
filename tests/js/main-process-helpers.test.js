@@ -123,7 +123,7 @@ test('buildModelDownloadCheck returns macOS MLX cache settings for Apple Silicon
     modelSize: 'small',
   });
 
-  assert.equal(result.cacheDir, path.join('/Users/tester', 'Library', 'Caches', 'meeting-transcriber', 'mlx_models'));
+  assert.equal(result.cacheDir, path.join('/Users/tester', 'Library', 'Caches', 'avanevis', 'mlx_models'));
   assert.deepEqual(result.modelPatterns, [
     'distil-small.en',
     'whisper-small-mlx',
@@ -134,7 +134,7 @@ test('buildModelDownloadCheck returns macOS MLX cache settings for Apple Silicon
 test('getMacMLXCacheDir returns writable MLX cache path', () => {
   assert.equal(
     getMacMLXCacheDir('/Users/tester'),
-    path.join('/Users/tester', 'Library', 'Caches', 'meeting-transcriber', 'mlx_models'),
+    path.join('/Users/tester', 'Library', 'Caches', 'avanevis', 'mlx_models'),
   );
 });
 
@@ -556,7 +556,7 @@ test('buildQuitRecordingDialogOptions warns clearly about recording data loss', 
   });
 
   assert.equal(result.title, 'Recording Still In Progress');
-  assert.equal(result.message, 'Meeting Transcriber could not stop and save the current recording cleanly.');
+  assert.equal(result.message, 'AvaNevis could not stop and save the current recording cleanly.');
   assert.match(result.detail, /Recorder stop is taking longer than expected\./);
   assert.match(result.detail, /may discard the in-progress recording/i);
   assert.deepEqual(result.buttons, ['Keep App Open', 'Quit Anyway']);

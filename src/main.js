@@ -1,5 +1,5 @@
 /**
- * Main process for Meeting Transcriber Electron app.
+ * Main process for AvaNevis Electron app.
  *
  * This file:
  * - Creates the application window
@@ -33,7 +33,7 @@ const {
 const { checkForUpdates, openDownloadPage } = require('./updater');
 
 // Use Electron's default userData path, which handles packaging correctly
-// This is typically: C:\Users\<username>\AppData\Roaming\Meeting Transcriber
+// This is typically: C:\Users\<username>\AppData\Roaming\AvaNevis
 // No need to set a custom path - Electron manages this properly
 
 let mainWindow;
@@ -357,7 +357,7 @@ async function persistStoppedRecordingForQuit(recordingInfo) {
       `**Duration:** ${formatDurationForTranscript(recordingInfo.duration || 0)}`,
       '',
       'Transcription was not completed because the app quit while recording was active.',
-      'Open Meeting Transcriber again to keep this recording in history.',
+      'Open AvaNevis again to keep this recording in history.',
       '',
     ].join('\n');
 
@@ -894,7 +894,7 @@ function createTray() {
     }
   ]);
 
-  tray.setToolTip('Meeting Transcriber');
+  tray.setToolTip('AvaNevis');
   tray.setContextMenu(contextMenu);
 
   // Show/hide window on tray icon click
@@ -1040,7 +1040,7 @@ function createApplicationMenu() {
                 type: 'info',
                 title: 'No Updates Available',
                 message: 'You\'re up to date!',
-                detail: `Meeting Transcriber v${app.getVersion()} is the latest version.`,
+                detail: `AvaNevis v${app.getVersion()} is the latest version.`,
                 buttons: ['OK']
               });
             }
@@ -2597,4 +2597,4 @@ ipcMain.handle('download-update', async (event, downloadUrl) => {
   return { success: true };
 });
 
-console.log('Meeting Transcriber - Main process started');
+console.log('AvaNevis - Main process started');

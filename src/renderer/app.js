@@ -1,5 +1,5 @@
 /**
- * Renderer process - UI logic for Meeting Transcriber (Redesigned)
+ * Renderer process - UI logic for AvaNevis (Redesigned)
  */
 
 const COPY_SUCCESS_TIMEOUT_MS = 2000;
@@ -498,7 +498,7 @@ function setCopyButtonState(button, label, disabled) {
 }
 
 // Settings persistence
-const SETTINGS_KEY = 'meeting-transcriber-settings';
+const SETTINGS_KEY = 'avanevis-settings';
 
 // Load settings from localStorage
 function loadSettings() {
@@ -719,7 +719,7 @@ async function loadAudioDevices() {
           'This usually means microphone permission is not granted.\n\n' +
           'Would you like to open System Settings to grant permission?\n\n' +
           '1. Go to Privacy & Security → Microphone\n' +
-          '2. Grant permission to Meeting Transcriber\n' +
+          '2. Grant permission to AvaNevis\n' +
           '3. Restart the app'
         );
 
@@ -2601,7 +2601,7 @@ function setupDevConsole() {
   const toggle = document.getElementById('dev-console-toggle');
   if (!consoleEl || !toggle) return;
 
-  const STORAGE_KEY = 'meeting-transcriber-devconsole-open';
+  const STORAGE_KEY = 'avanevis-devconsole-open';
   const setOpen = (open) => {
     consoleEl.classList.toggle('open', open);
     toggle.setAttribute('aria-expanded', String(open));

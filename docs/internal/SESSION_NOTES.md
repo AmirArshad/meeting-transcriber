@@ -1,4 +1,4 @@
-# Session Notes - Meeting Transcriber Project
+# Session Notes - AvaNevis Project
 
 **Last Updated:** 2025-11-19 (COMPRESSION ADDED - 95% SMALLER FILES!)
 

@@ -1,6 +1,6 @@
 # Meeting History And Transcript Storage
 
-This document describes what gets saved after a recording and how Meeting Transcriber recovers existing meeting data.
+This document describes what gets saved after a recording and how AvaNevis recovers existing meeting data.
 
 ## What Gets Saved
 

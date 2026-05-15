@@ -1,10 +1,10 @@
-# Meeting Transcriber Agent Guide
+# AvaNevis Agent Guide
 
 This file is intentionally mirrored with its counterpart. Keep `AGENTS.md` and `CLAUDE.md` byte-for-byte aligned whenever agent guidance changes.
 
 ## Product Summary
 
-Meeting Transcriber is a privacy-first Electron desktop app for recording microphone audio plus desktop/system audio, then transcribing locally with Whisper.
+AvaNevis is a privacy-first Electron desktop app for recording microphone audio plus desktop/system audio, then transcribing locally with Whisper.
 
 - Frontend: Electron 42 with plain HTML/CSS/JavaScript
 - Backend: Python 3.11 scripts spawned from Electron

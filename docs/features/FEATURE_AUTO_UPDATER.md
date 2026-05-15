@@ -4,7 +4,7 @@ Status: implemented (manual download flow)
 
 ## Overview
 
-Meeting Transcriber checks GitHub Releases for a newer version and notifies the renderer when one is available.
+AvaNevis checks GitHub Releases for a newer version and notifies the renderer when one is available.
 
 The current implementation does not download or install updates inside the app. Instead, it opens the matching release asset in the user's browser.
 
@@ -39,8 +39,8 @@ The current implementation does not download or install updates inside the app. 
 
 The updater looks for release assets that match the packaged artifact naming convention from `package.json`:
 
-- Windows: `Meeting Transcriber-Setup-<version>.exe`
-- macOS: `Meeting Transcriber-Setup-<version>.dmg`
+- Windows: `AvaNevis-Setup-<version>.exe`
+- macOS: `AvaNevis-Setup-<version>.dmg`
 
 If a platform-specific installer asset is not present, the updater falls back to the release page URL.
 

@@ -45,11 +45,11 @@ test('findInstallerAsset matches the actual Windows installer naming convention'
 
   try {
     const asset = findInstallerAsset([
-      { name: 'Meeting Transcriber-Setup-1.7.18.exe' },
-      { name: 'meeting-transcriber-portable.exe' },
+      { name: 'AvaNevis-Setup-1.7.18.exe' },
+      { name: 'avanevis-portable.exe' },
     ]);
 
-    assert.deepEqual(asset, { name: 'Meeting Transcriber-Setup-1.7.18.exe' });
+    assert.deepEqual(asset, { name: 'AvaNevis-Setup-1.7.18.exe' });
   } finally {
     Object.defineProperty(process, 'platform', { value: originalPlatform });
   }
@@ -62,11 +62,11 @@ test('findInstallerAsset matches the actual macOS installer naming convention', 
 
   try {
     const asset = findInstallerAsset([
-      { name: 'Meeting Transcriber-Setup-1.7.18.dmg' },
-      { name: 'Meeting Transcriber-1.7.18.dmg' },
+      { name: 'AvaNevis-Setup-1.7.18.dmg' },
+      { name: 'AvaNevis-1.7.18.dmg' },
     ]);
 
-    assert.deepEqual(asset, { name: 'Meeting Transcriber-Setup-1.7.18.dmg' });
+    assert.deepEqual(asset, { name: 'AvaNevis-Setup-1.7.18.dmg' });
   } finally {
     Object.defineProperty(process, 'platform', { value: originalPlatform });
   }
@@ -80,10 +80,10 @@ test('openDownloadPage opens trusted GitHub release URLs', async () => {
     return Promise.resolve();
   });
 
-  await openDownloadPage('https://github.com/AmirArshad/meeting-transcriber/releases/download/v1.8.0/Meeting%20Transcriber-Setup-1.8.0.exe');
+  await openDownloadPage('https://github.com/AmirArshad/meeting-transcriber/releases/download/v1.8.0/AvaNevis-Setup-1.8.0.exe');
 
   assert.deepEqual(openedUrls, [
-    'https://github.com/AmirArshad/meeting-transcriber/releases/download/v1.8.0/Meeting%20Transcriber-Setup-1.8.0.exe',
+    'https://github.com/AmirArshad/meeting-transcriber/releases/download/v1.8.0/AvaNevis-Setup-1.8.0.exe',
   ]);
 });
 
@@ -100,7 +100,7 @@ test('openDownloadPage rejects untrusted update URLs', () => {
     /Refusing to open untrusted update URL/,
   );
   assert.throws(
-    () => openDownloadPage('https://example.com/Meeting%20Transcriber-Setup-1.8.0.exe'),
+    () => openDownloadPage('https://example.com/AvaNevis-Setup-1.8.0.exe'),
     /Refusing to open untrusted update URL/,
   );
   assert.throws(
