@@ -13,7 +13,7 @@ const FFMPEG_DIR = path.join(BUILD_DIR, 'ffmpeg');
 const BIN_DIR = path.join(BUILD_DIR, 'bin');
 const MODELS_DIR = path.join(BUILD_DIR, 'whisper-models');
 const RESOURCE_MANIFEST_PATH = path.join(BUILD_DIR, 'resource-manifest.json');
-const RESOURCE_MANIFEST_VERSION = 2;
+const RESOURCE_MANIFEST_VERSION = 3;
 const REQUIREMENTS_MACOS_BUILD = path.join(__dirname, '..', 'requirements-macos-build.txt');
 const REQUIREMENTS_WINDOWS_BUILD = path.join(__dirname, '..', 'requirements-windows-build.txt');
 
@@ -216,6 +216,51 @@ function assertNoWindowsOnlyStaleHelper() {
 function ensureWindowsEmptyBinDirectory() {
   if (IS_WINDOWS && !fs.existsSync(BIN_DIR)) {
     fs.mkdirSync(BIN_DIR, { recursive: true });
+  }
+}
+
+function removeDirectoryIfExists(dirPath, label) {
+  if (!fs.existsSync(dirPath)) {
+    return false;
+  }
+
+  let sizeMB = null;
+  if (IS_MAC) {
+    try {
+      sizeMB = execSync(`du -sm "${dirPath}" | cut -f1`, { encoding: 'utf8' }).trim();
+    } catch (error) {
+      sizeMB = null;
+    }
+  }
+
+  fs.rmSync(dirPath, { recursive: true, force: true });
+  console.log(sizeMB ? `  → Removed ${label} (${sizeMB} MB)` : `  → Removed ${label}`);
+  return true;
+}
+
+function pruneMacOSPythonRuntimeDevelopmentFiles(sitePackagesDir) {
+  if (!IS_MAC || !fs.existsSync(sitePackagesDir)) {
+    return;
+  }
+
+  const pruneTargets = [
+    {
+      path: path.join(sitePackagesDir, 'torch', 'include'),
+      label: 'torch/include development headers',
+    },
+    {
+      path: path.join(sitePackagesDir, 'torch', 'share', 'cmake'),
+      label: 'torch/share/cmake development metadata',
+    },
+  ];
+
+  let removedAny = false;
+  for (const target of pruneTargets) {
+    removedAny = removeDirectoryIfExists(target.path, target.label) || removedAny;
+  }
+
+  if (removedAny) {
+    console.log('  → Pruned macOS Python development files not needed at runtime');
   }
 }
 
@@ -607,12 +652,10 @@ async function prepareResources() {
 
       for (const pkg of packagesToRemove) {
         const pkgPath = path.join(sitePackages, pkg);
-        if (fs.existsSync(pkgPath)) {
-          const sizeMB = execSync(`du -sm "${pkgPath}" | cut -f1`, { encoding: 'utf8' }).trim();
-          fs.rmSync(pkgPath, { recursive: true, force: true });
-          console.log(`  → Removed ${pkg} (${sizeMB} MB)`);
-        }
+        removeDirectoryIfExists(pkgPath, pkg);
       }
+
+      pruneMacOSPythonRuntimeDevelopmentFiles(sitePackages);
 
       console.log('✓ Python setup complete!\n');
     } else {
@@ -650,6 +693,10 @@ async function prepareResources() {
 
       console.log('✓ Python setup complete!\n');
     }
+  }
+
+  if (IS_MAC) {
+    pruneMacOSPythonRuntimeDevelopmentFiles(path.join(PYTHON_DIR, 'lib', 'python3.11', 'site-packages'));
   }
 
   // Prepare ffmpeg
@@ -772,4 +819,5 @@ module.exports = {
   listFilesRecursively,
   manifestsMatch,
   prepareResources,
+  pruneMacOSPythonRuntimeDevelopmentFiles,
 };

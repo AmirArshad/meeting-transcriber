@@ -11,6 +11,7 @@ const {
   ensureWindowsEmptyBinDirectory,
   getStaleResourceDirectories,
   manifestsMatch,
+  pruneMacOSPythonRuntimeDevelopmentFiles,
 } = require('../../build/prepare-resources');
 
 
@@ -78,4 +79,9 @@ test('stale resource invalidation includes bin directory on every platform', () 
 
 test('ensureWindowsEmptyBinDirectory is exported for packaging source stability', () => {
   assert.equal(typeof ensureWindowsEmptyBinDirectory, 'function');
+});
+
+
+test('pruneMacOSPythonRuntimeDevelopmentFiles is exported for macOS packaging cleanup', () => {
+  assert.equal(typeof pruneMacOSPythonRuntimeDevelopmentFiles, 'function');
 });

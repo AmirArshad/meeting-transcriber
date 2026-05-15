@@ -2,7 +2,7 @@
 
 Branch: `upgrade/electron-latest`
 
-Status: Electron and electron-builder upgrades are implemented. Windows automated validation is complete. macOS CI packaging initially hit `EMFILE` during signing, so macOS build jobs now raise the open-file limit before running electron-builder; macOS rerun and manual smoke validation remain pending.
+Status: Electron and electron-builder upgrades are implemented. Windows automated validation is complete. macOS CI packaging initially hit `EMFILE` during signing, so macOS builds now raise the open-file limit and prune Torch development headers before electron-builder signing; macOS rerun and manual smoke validation remain pending.
 
 Goal: upgrade to the latest stable, trustworthy Electron release while preserving the app's local-only recording/transcription behavior and packaged Windows/macOS builds.
 
