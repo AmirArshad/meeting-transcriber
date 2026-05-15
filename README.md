@@ -96,17 +96,14 @@ See [docs/development/TESTING.md](docs/development/TESTING.md) for test setup on
 # JavaScript regression tests + syntax checks
 npm test
 
-# Python regression tests (macOS)
-python3 -m pytest tests/python
-
-# Python regression tests (Windows)
-py -3.11 -m pytest tests/python
+# Python regression tests (cross-platform wrapper)
+npm run test:python
 
 # Or run both
 npm run test:all
 ```
 
-On Windows, prefer `py -3.11` instead of `python3` for Python commands.
+Direct Python commands are also supported: use `py -3.11 -m pytest tests/python` on Windows, or `python3 -m pytest tests/python` on macOS.
 For recorder changes, also run the manual smoke checklist in `tests/manual/recording-smoke-checklist.md`.
 
 ## 📸 How It Works
@@ -242,7 +239,7 @@ Whisper itself supports **99 languages total** - the full list can be customized
   - [Setup Wizard](docs/features/FEATURE_SETUP_WIZARD.md) - Guided first-time setup
   - [Combined Button](docs/features/FEATURE_COMBINED_BUTTON.md) - Unified recording control
   - [Audio Visualizer](docs/features/FEATURE_AUDIO_VISUALIZER.md) - Real-time level meters
-  - [Auto-Updater](docs/features/FEATURE_AUTO_UPDATER.md) - Automatic updates from GitHub
+  - [Update Checks](docs/features/FEATURE_AUTO_UPDATER.md) - GitHub release checks with manual download
 
 ## 🔒 Privacy & Security
 
@@ -297,7 +294,7 @@ This project is licensed under the MIT License - see [LICENSE.txt](LICENSE.txt) 
 
 ### In Progress 🚧
 
-- [ ] Auto-updater (GitHub release detection and installation)
+- [ ] True auto-install updater (the current app checks GitHub releases and opens manual downloads)
 
 ### Planned 📋
 

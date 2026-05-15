@@ -502,8 +502,10 @@ class MacOSAudioRecorder:
             if not self.desktop_capture.start_recording():
                 detailed_message = self.desktop_capture.last_error or f"{capture_type} desktop audio failed to start."
                 message = detailed_message
+                error_code = "DESKTOP_START_FAILED"
                 if detailed_message.startswith('PERMISSION_DENIED:'):
-                    message = detailed_message
+                    message = detailed_message.replace('PERMISSION_DENIED:', '', 1).strip()
+                    error_code = "PERMISSION_DENIED"
                 elif 'failed to start' not in detailed_message.lower():
                     message = f"{capture_type} desktop audio failed to start: {detailed_message}"
                 print(message, file=sys.stderr)
@@ -513,7 +515,7 @@ class MacOSAudioRecorder:
                     'rawMessage': detailed_message,
                 }
                 self._desktop_started_event.set()
-                _send_error_message("DESKTOP_START_FAILED", message)
+                _send_error_message(error_code, message)
                 self._set_running(False)
                 return
 

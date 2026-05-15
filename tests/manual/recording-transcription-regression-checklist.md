@@ -6,7 +6,7 @@ Use this lightweight checklist for any future recording, transcription, or cross
 
 - [ ] Run `npm test`.
 - [ ] Run `npm run test:python` if any Python recorder/transcriber code changed.
-- [ ] Run `python3 -m py_compile backend/*.py backend/audio/*.py backend/transcription/*.py` if recorder/transcriber code changed.
+- [ ] Run `python -m py_compile backend/*.py backend/audio/*.py backend/transcription/*.py` if recorder/transcriber code changed, using `py -3.11` on Windows if needed.
 - [ ] Run `swift build -c release --arch arm64` if the macOS helper or helper integration changed.
 
 ## 2. Re-check process contracts

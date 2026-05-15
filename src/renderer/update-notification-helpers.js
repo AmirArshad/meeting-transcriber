@@ -59,10 +59,24 @@
     }
   }
 
+  async function replayPendingUpdateNotification({ getPendingUpdateInfo, showUpdateNotification }) {
+    if (typeof getPendingUpdateInfo !== 'function' || typeof showUpdateNotification !== 'function') {
+      return null;
+    }
+
+    const updateInfo = await getPendingUpdateInfo();
+    if (updateInfo && updateInfo.version) {
+      showUpdateNotification(updateInfo);
+    }
+
+    return updateInfo && updateInfo.version ? updateInfo : null;
+  }
+
   const helpers = {
     buildUpdateNotificationView,
     showUpdateNotificationBanner,
     hideUpdateNotificationBanner,
+    replayPendingUpdateNotification,
   };
 
   if (typeof module === 'object' && module.exports) {

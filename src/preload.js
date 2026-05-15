@@ -69,6 +69,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Updates
   downloadUpdate: (downloadUrl) => ipcRenderer.invoke('download-update', downloadUrl),
+  getPendingUpdateInfo: () => ipcRenderer.invoke('get-pending-update-info'),
 
   // Event listeners
   onRecordingProgress: (callback) => addListener('recording-progress', callback),
@@ -78,6 +79,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onModelDownloadProgress: (callback) => addListener('model-download-progress', callback),
   onAudioLevels: (callback) => addListener('audio-levels', callback),
   onRecordingWarning: (callback) => addListener('recording-warning', callback),
+  onRecordingFailed: (callback) => addListener('recording-failed', callback),
   onUpdateAvailable: (callback) => addListener('update-available', callback),
   offUpdateAvailable: () => removeAllListeners('update-available')
 });

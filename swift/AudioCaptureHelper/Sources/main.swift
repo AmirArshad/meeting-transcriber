@@ -31,7 +31,13 @@ struct Config {
 
 // MARK: - JSON Output Helpers
 
+var emittedStartupError = false
+
 func sendJSON(_ dict: [String: Any]) {
+    if let type = dict["type"] as? String, type == "error" {
+        emittedStartupError = true
+    }
+
     if let data = try? JSONSerialization.data(withJSONObject: dict),
        let str = String(data: data, encoding: .utf8) {
         FileHandle.standardError.write("\(str)\n".data(using: .utf8)!)
@@ -945,7 +951,13 @@ func main() async {
     do {
         try await capture.start()
     } catch {
-        sendError("Failed to start capture: \(error.localizedDescription)")
+        if !emittedStartupError {
+            sendJSON([
+                "type": "error",
+                "code": "capture_start_failed",
+                "error": "Failed to start capture: \(error.localizedDescription)"
+            ])
+        }
         exit(1)
     }
 

@@ -188,6 +188,46 @@ def test_delete_meeting_removes_associated_files_and_metadata(tmp_path):
     assert manager.list_meetings() == []
 
 
+def test_delete_meeting_keeps_files_if_metadata_save_fails(tmp_path, monkeypatch):
+    recordings_dir = tmp_path / 'recordings'
+    manager = MeetingManager(recordings_dir=str(recordings_dir))
+
+    audio_path = recordings_dir / 'meeting_20260107_104555.opus'
+    transcript_path = recordings_dir / 'meeting_20260107_104555.md'
+    audio_path.write_bytes(b'audio')
+    transcript_path.write_text('transcript', encoding='utf-8')
+
+    meeting = {
+        'id': '20260107_104555',
+        'title': 'Meeting',
+        'date': '2026-01-07T10:45:55',
+        'duration': '0:05',
+        'durationSeconds': 5.0,
+        'audioPath': str(audio_path),
+        'transcriptPath': str(transcript_path),
+        'language': 'en',
+        'model': 'small',
+    }
+    manager._save_meetings([meeting])
+
+    def failing_save(_meetings):
+        raise OSError('metadata save failed')
+
+    monkeypatch.setattr(manager, '_save_meetings_unlocked', failing_save)
+
+    try:
+        manager.delete_meeting('20260107_104555')
+    except OSError:
+        pass
+    else:
+        raise AssertionError('Expected metadata save failure to propagate')
+
+    assert audio_path.exists()
+    assert transcript_path.exists()
+    saved = json.loads(manager.metadata_file.read_text(encoding='utf-8'))
+    assert saved == [meeting]
+
+
 def test_scan_and_sync_recordings_imports_missing_filesystem_meeting(tmp_path):
     recordings_dir = tmp_path / 'recordings'
     manager = MeetingManager(recordings_dir=str(recordings_dir))
@@ -427,6 +467,19 @@ def test_list_meetings_backs_up_corrupt_metadata_file(tmp_path):
     assert len(backups) == 1
     assert backups[0].read_text(encoding='utf-8') == '{not valid json'
     assert manager.metadata_file.read_text(encoding='utf-8') == '{not valid json'
+
+
+def test_repeated_corrupt_metadata_reads_reuse_backup_for_same_file(tmp_path):
+    recordings_dir = tmp_path / 'recordings'
+    manager = MeetingManager(recordings_dir=str(recordings_dir))
+
+    manager.metadata_file.write_text('{not valid json', encoding='utf-8')
+
+    assert manager.list_meetings() == []
+    assert manager.list_meetings() == []
+
+    backups = list(recordings_dir.glob('meetings.corrupt.*.json'))
+    assert len(backups) == 1
 
 
 def test_save_after_corrupt_metadata_preserves_backup_and_writes_new_file(tmp_path):

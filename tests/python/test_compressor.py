@@ -3,6 +3,26 @@ import subprocess
 import backend.audio.compressor as compressor
 
 
+def test_compress_to_opus_returns_real_wav_fallback_path_for_transcription(tmp_path, monkeypatch):
+    input_path = tmp_path / 'input.wav'
+    output_path = tmp_path / 'meeting.opus'
+    input_path.write_bytes(b'wav fallback bytes')
+    output_path.write_bytes(b'bad opus bytes')
+
+    monkeypatch.setattr(compressor, 'verify_recording_integrity', lambda _: False)
+    monkeypatch.setattr(
+        compressor.subprocess,
+        'run',
+        lambda *args, **kwargs: subprocess.CompletedProcess(args=['ffmpeg'], returncode=0),
+    )
+
+    result = compressor.compress_to_opus(str(input_path), str(output_path), sample_rate=48000)
+
+    assert result == str(output_path.with_suffix('.wav'))
+    assert output_path.with_suffix('.wav').read_bytes() == b'wav fallback bytes'
+    assert not output_path.exists()
+
+
 def test_compress_to_opus_falls_back_to_wav_when_ffmpeg_is_missing(tmp_path, monkeypatch):
     input_path = tmp_path / 'input.wav'
     output_path = tmp_path / 'output.opus'

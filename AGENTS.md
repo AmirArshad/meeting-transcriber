@@ -225,7 +225,7 @@ npm run test:all
 ```
 
 - `npm test`: JS regression tests plus syntax checks
-- `npm run test:python`: Python unit tests under `tests/python`
+- `npm run test:python`: cross-platform Python unit-test wrapper for `tests/python`
 - `npm run test:all`: runs both JS and Python suites
 - Manual recorder validation checklist lives in `tests/manual/recording-smoke-checklist.md`
 - Setup instructions for new machines live in `docs/development/TESTING.md`
@@ -234,7 +234,7 @@ npm run test:all
 
 ```bash
 npm test
-python3 -m pytest tests/python
+npm run test:python
 python -m py_compile backend/*.py backend/audio/*.py backend/transcription/*.py
 python backend/device_manager.py
 ```

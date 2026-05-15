@@ -183,18 +183,35 @@ function manifestsMatch(currentManifest, existingManifest) {
   return JSON.stringify(currentManifest) === JSON.stringify(existingManifest);
 }
 
-function invalidateStaleResources() {
-  const staleDirs = [PYTHON_DIR, FFMPEG_DIR];
+function getStaleResourceDirectories() {
+  return [PYTHON_DIR, FFMPEG_DIR, BIN_DIR];
+}
 
-  if (IS_MAC) {
-    staleDirs.push(BIN_DIR);
-  }
+function invalidateStaleResources() {
+  const staleDirs = getStaleResourceDirectories();
 
   for (const dir of staleDirs) {
     if (fs.existsSync(dir)) {
       fs.rmSync(dir, { recursive: true, force: true });
       console.log(`Removed stale resource directory: ${path.relative(BUILD_DIR, dir)}`);
     }
+  }
+}
+
+function assertNoWindowsOnlyStaleHelper() {
+  if (!IS_WINDOWS) {
+    return;
+  }
+
+  const helperPath = path.join(BIN_DIR, SWIFT_HELPER_BINARY);
+  if (fs.existsSync(helperPath)) {
+    throw new Error('Windows resources contain stale macOS audiocapture-helper; rerun prepare-build after cleanup.');
+  }
+}
+
+function ensureWindowsEmptyBinDirectory() {
+  if (IS_WINDOWS && !fs.existsSync(BIN_DIR)) {
+    fs.mkdirSync(BIN_DIR, { recursive: true });
   }
 }
 
@@ -508,6 +525,8 @@ async function prepareResources() {
 
   const resourceManifest = ensureFreshResourceManifest();
   const existing = checkExistingResources();
+  assertNoWindowsOnlyStaleHelper();
+  ensureWindowsEmptyBinDirectory();
 
   // Prepare Python
   if (existing.pythonExists) {
@@ -698,6 +717,9 @@ async function prepareResources() {
     }
   }
 
+  assertNoWindowsOnlyStaleHelper();
+  ensureWindowsEmptyBinDirectory();
+
   // Download Whisper models (optional, Windows only)
   // macOS uses MLX-format models from mlx-community/* which are incompatible with
   // the CTranslate2 models downloaded by faster-whisper. The macOS app downloads
@@ -737,6 +759,8 @@ module.exports = {
   buildDirectoryManifest,
   buildResourceManifest,
   ensureWindowsEmbeddedPythonPathConfig,
+  getStaleResourceDirectories,
+  ensureWindowsEmptyBinDirectory,
   listFilesRecursively,
   manifestsMatch,
   prepareResources,

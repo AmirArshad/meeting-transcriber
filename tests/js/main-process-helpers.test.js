@@ -11,6 +11,7 @@ const {
   cacheContainsModel,
   classifyRecorderStdoutChunk,
   getQuitInterceptState,
+  getRecorderCloseAction,
   getRecorderEventAction,
   getMacMLXCacheDir,
   getMacMLXModelStorageDirs,
@@ -20,6 +21,7 @@ const {
   isModelDownloadErrorOutput,
   parseRecorderMessageLine,
   parseRecorderStdoutChunk,
+  resolveTranscriptionAudioFile,
   splitBufferedLines,
 } = require('../../src/main-process-helpers');
 
@@ -39,10 +41,10 @@ test('buildModelDownloadCheck returns Windows faster-whisper cache settings', ()
 
 
 test('buildFileUrl returns a file URL for absolute paths', () => {
-  assert.equal(
-    buildFileUrl('/tmp/demo audio.opus'),
-    'file:///tmp/demo%20audio.opus',
-  );
+  const absolutePath = path.resolve('/tmp/demo audio.opus');
+
+  assert.match(buildFileUrl(absolutePath), /^file:\/\//);
+  assert.match(buildFileUrl(absolutePath), /demo%20audio\.opus$/);
 });
 
 
@@ -50,6 +52,35 @@ test('buildFileUrl preserves existing file URLs', () => {
   assert.equal(
     buildFileUrl('file:///tmp/demo.opus'),
     'file:///tmp/demo.opus',
+  );
+});
+
+
+test('resolveTranscriptionAudioFile keeps existing wav fallback files', () => {
+  const wavPath = path.join('/recordings', 'fallback.wav');
+
+  assert.equal(
+    resolveTranscriptionAudioFile({
+      audioFile: wavPath,
+      recordingsDir: '/recordings',
+      existsSync: (candidate) => candidate === wavPath,
+    }),
+    wavPath,
+  );
+});
+
+
+test('resolveTranscriptionAudioFile uses opus sibling only when wav is missing', () => {
+  const wavPath = path.join('/recordings', 'recording.wav');
+  const opusPath = path.join('/recordings', 'recording.opus');
+
+  assert.equal(
+    resolveTranscriptionAudioFile({
+      audioFile: 'recording.wav',
+      recordingsDir: '/recordings',
+      existsSync: (candidate) => candidate === opusPath,
+    }),
+    opusPath,
   );
 });
 
@@ -303,6 +334,54 @@ test('resolveStopTimeoutAction kills the recorder on stop timeout when forced', 
     timedOut: true,
     shouldKillProcess: true,
     shouldKeepStopPromise: true,
+  });
+});
+
+
+test('getRecorderCloseAction clears active recording after unexpected recorder exit', () => {
+  assert.deepEqual(getRecorderCloseAction({
+    recordingStarted: true,
+    stopInProgress: false,
+    exitCode: 1,
+  }), {
+    type: 'unexpected_exit',
+    errorMessage: null,
+    warning: {
+      type: 'recorder_exited',
+      code: 'RECORDER_EXITED',
+      level: 'error',
+      message: 'Recorder exited unexpectedly after startup with code 1.',
+      help: 'The recording process stopped unexpectedly. Start a new recording when ready.',
+    },
+  });
+});
+
+
+test('getRecorderCloseAction preserves startup failure guidance before recording starts', () => {
+  const result = getRecorderCloseAction({
+    recordingStarted: false,
+    stopInProgress: false,
+    progressStage: 'configuring',
+    exitCode: 1,
+  });
+
+  assert.equal(result.type, 'startup_failed');
+  assert.match(result.errorMessage, /Recording failed to start/);
+  assert.match(result.errorMessage, /selected audio devices/);
+  assert.equal(result.warning, null);
+});
+
+
+test('getRecorderCloseAction ignores process close after startup failure was already rejected', () => {
+  assert.deepEqual(getRecorderCloseAction({
+    recordingStarted: false,
+    stopInProgress: false,
+    startupSettled: true,
+    exitCode: null,
+  }), {
+    type: 'startup_already_settled',
+    errorMessage: null,
+    warning: null,
   });
 });
 

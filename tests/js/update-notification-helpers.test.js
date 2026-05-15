@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {
   buildUpdateNotificationView,
   hideUpdateNotificationBanner,
+  replayPendingUpdateNotification,
   showUpdateNotificationBanner,
 } = require('../../src/renderer/update-notification-helpers');
 
@@ -72,4 +73,32 @@ test('showUpdateNotificationBanner handles repeated update events in one session
     'Update reminder dismissed',
     '✨ Update available: v1.7.20',
   ]);
+});
+
+
+test('replayPendingUpdateNotification shows update emitted before renderer subscription', async () => {
+  const shown = [];
+
+  const result = await replayPendingUpdateNotification({
+    getPendingUpdateInfo: async () => ({ version: '1.7.21', downloadUrl: 'https://example.com/v1.7.21' }),
+    showUpdateNotification: (updateInfo) => shown.push(updateInfo),
+  });
+
+  assert.deepEqual(result, { version: '1.7.21', downloadUrl: 'https://example.com/v1.7.21' });
+  assert.deepEqual(shown, [{ version: '1.7.21', downloadUrl: 'https://example.com/v1.7.21' }]);
+});
+
+
+test('replayPendingUpdateNotification ignores empty pending update state', async () => {
+  let shown = false;
+
+  const result = await replayPendingUpdateNotification({
+    getPendingUpdateInfo: async () => null,
+    showUpdateNotification: () => {
+      shown = true;
+    },
+  });
+
+  assert.equal(result, null);
+  assert.equal(shown, false);
 });

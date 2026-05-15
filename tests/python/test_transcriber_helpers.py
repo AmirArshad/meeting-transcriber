@@ -143,7 +143,7 @@ def test_mlx_transcriber_loads_multilingual_models_for_non_english_languages():
 
     assert info['model_key'] == 'small'
     assert info['model_repo'] == 'mlx-community/whisper-small-mlx'
-    assert info['model_dir'].endswith('mlx_models/whisper-small-mlx')
+    assert Path(info['model_dir']).parts[-2:] == ('mlx_models', 'whisper-small-mlx')
 
 
 def test_mlx_transcriber_probes_wave_duration_when_segments_have_no_end(tmp_path):
@@ -199,7 +199,7 @@ def test_mlx_transcriber_passes_requested_language_to_backend(tmp_path, monkeypa
 
     assert result['language'] == 'fa'
     assert captured['language'] == 'fa'
-    assert captured['model_dir'].endswith('mlx_models/whisper-small-mlx')
+    assert Path(captured['model_dir']).parts[-2:] == ('mlx_models', 'whisper-small-mlx')
 
 
 def test_get_model_info_for_faster_whisper_includes_runtime_state():

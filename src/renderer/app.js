@@ -7,6 +7,7 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 const { getRecordButtonAction } = window.recordingStateHelpers;
 const {
   hideUpdateNotificationBanner,
+  replayPendingUpdateNotification,
   showUpdateNotificationBanner,
 } = window.updateNotificationHelpers;
 
@@ -679,9 +680,31 @@ function setupEventListeners() {
     }
   }));
 
+  registerCleanup(window.electronAPI.onRecordingFailed((failure) => {
+    console.error('Recording failed:', failure);
+    addLog(`Recording failed: ${failure.message}`, 'error');
+    if (failure.help) {
+      addLog(failure.help, 'warning');
+    }
+
+    stopTimer();
+    if (audioVisualizer) {
+      audioVisualizer.stop();
+    }
+    setTranscriptMessage(`Recording failed: ${failure.message}`, true);
+    setRecordingState('idle');
+  }));
+
   registerCleanup(window.electronAPI.onUpdateAvailable((updateInfo) => {
     showUpdateNotification(updateInfo);
   }));
+
+  if (typeof window.electronAPI.getPendingUpdateInfo === 'function') {
+    replayPendingUpdateNotification({
+      getPendingUpdateInfo: window.electronAPI.getPendingUpdateInfo,
+      showUpdateNotification,
+    }).catch((error) => console.warn('Could not replay pending update notification:', error));
+  }
 
   // Check if user has recorded before (for timeout settings)
   const settings = loadSettings();
@@ -1079,13 +1102,16 @@ async function transcribeAudio() {
     // Save meeting to history
     try {
       addLog('Saving meeting to history...');
-      await window.electronAPI.addMeeting({
+      const savedMeeting = await window.electronAPI.addMeeting({
         audioPath: result.audioPath || currentAudioFile,
         transcriptPath: result.output_file,
         duration: result.duration || 0,
         language: language,
         model: modelSize
       });
+      if (savedMeeting && savedMeeting.audioPath) {
+        currentAudioFile = savedMeeting.audioPath;
+      }
       addLog('Meeting saved!');
     } catch (saveError) {
       console.error('Failed to save meeting:', saveError);
@@ -1178,6 +1204,7 @@ async function deleteMeetingHandler(meetingId) {
       // Remove from local list immediately
       meetings = meetings.filter(m => m.id !== idToDelete);
       renderMeetingList();
+      await loadMeetingHistory();
 
       addLog('Meeting deleted successfully!');
     } catch (error) {

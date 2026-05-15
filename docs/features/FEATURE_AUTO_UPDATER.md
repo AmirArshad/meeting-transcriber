@@ -27,6 +27,7 @@ The current implementation does not download or install updates inside the app. 
 - `src/preload.js` exposes `window.electronAPI.onUpdateAvailable(...)`.
 - `src/renderer/app.js` listens for update events and shows the banner at the top of the window.
 - `src/renderer/update-notification-helpers.js` owns the banner view state so repeated update events are handled safely in one renderer session.
+- The renderer asks the main process for any pending update after it subscribes, so the delayed startup check is not lost if initialization is slow.
 
 ### Download action
 

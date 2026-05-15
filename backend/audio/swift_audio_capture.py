@@ -66,6 +66,46 @@ def get_audiocapture_helper_path() -> Optional[Path]:
     return None
 
 
+def _parse_permission_check_output(stderr_output: str, returncode: int) -> tuple[bool, Optional[str]]:
+    permission_payload = None
+    permission_error = None
+
+    if stderr_output:
+        for line in stderr_output.splitlines():
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            if payload.get("type") == "permission_check":
+                permission_payload = payload
+                continue
+
+            if payload.get("type") == "error" and payload.get("code") == "permission_denied":
+                permission_error = payload.get("error") or "Screen Recording permission not granted"
+
+    if permission_payload is not None:
+        granted = bool(permission_payload.get("granted"))
+        return granted, None if granted else permission_payload.get("error")
+
+    if permission_error:
+        return False, permission_error
+
+    return returncode == 0, None if returncode == 0 else "Screen Recording permission check failed"
+
+
+def _apply_helper_error(capture, payload: dict):
+    """Store the first actionable helper error for startup reporting."""
+    error = payload.get('error', '')
+    code = payload.get('code', 'unknown')
+
+    if not capture.error_event.is_set():
+        capture.last_error = error
+        if code == 'permission_denied':
+            capture.last_error = f"PERMISSION_DENIED: {error}"
+    capture.error_event.set()
+
+
 class SwiftAudioCapture:
     """
     Captures desktop audio using the native Swift audiocapture-helper.
@@ -500,11 +540,11 @@ class SwiftAudioCapture:
                         if help_text:
                             print(f"  Help: {help_text}", file=sys.stderr)
 
-                        # Store error for main thread to access
-                        self.last_error = error
-                        if code == 'permission_denied':
-                            self.last_error = f"PERMISSION_DENIED: {error}"
-                        self.error_event.set()
+                        msg['error'] = error
+                        msg['code'] = code
+                        # Preserve the first actionable startup error. The helper may emit
+                        # a later generic wrapper after the specific failure.
+                        _apply_helper_error(self, msg)
 
                     elif msg_type == 'config':
                         print(f"Swift helper config: {msg}", file=sys.stderr)
@@ -684,7 +724,7 @@ class SwiftAudioCapture:
         self._stderr_thread = None
 
 
-def check_screen_recording_permission() -> bool:
+def check_screen_recording_permission_detail() -> tuple[bool, str]:
     """
     Check if Screen Recording permission is granted.
 
@@ -694,7 +734,7 @@ def check_screen_recording_permission() -> bool:
     helper_path = get_audiocapture_helper_path()
 
     if helper_path is None:
-        return False
+        return False, "audiocapture-helper not available"
 
     try:
         result = subprocess.run(
@@ -705,32 +745,21 @@ def check_screen_recording_permission() -> bool:
             check=False,
         )
 
-        stderr_output = result.stderr.strip()
-        permission_payload = None
-        permission_denied = False
-        if stderr_output:
-            for line in stderr_output.splitlines():
-                try:
-                    payload = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-
-                if payload.get("type") == "permission_check":
-                    permission_payload = payload
-                    continue
-                if payload.get("type") == "error" and payload.get("code") == "permission_denied":
-                    permission_denied = True
-
-        if permission_payload is not None:
-            return bool(permission_payload.get("granted"))
-
-        if permission_denied:
-            return False
-
-        return result.returncode == 0
+        return _parse_permission_check_output(result.stderr.strip(), result.returncode)
     except Exception as error:
         print(f"Error checking Screen Recording permission via Swift helper: {error}", file=sys.stderr)
-        return False
+        return False, str(error)
+
+
+def check_screen_recording_permission() -> bool:
+    """
+    Check if Screen Recording permission is granted.
+
+    Returns:
+        True if permission is granted, False otherwise
+    """
+    granted, _error = check_screen_recording_permission_detail()
+    return granted
 
 
 # For backwards compatibility with existing code

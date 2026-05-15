@@ -8,6 +8,8 @@ const { hashString } = require('../../build/download-manifest');
 const {
   buildDirectoryManifest,
   buildResourceManifest,
+  ensureWindowsEmptyBinDirectory,
+  getStaleResourceDirectories,
   manifestsMatch,
 } = require('../../build/prepare-resources');
 
@@ -54,4 +56,16 @@ test('manifestsMatch detects Swift source changes through the resource manifest'
   ];
 
   assert.equal(manifestsMatch(originalManifest, updatedManifest), false);
+});
+
+
+test('stale resource invalidation includes bin directory on every platform', () => {
+  const staleDirs = getStaleResourceDirectories().map((dirPath) => path.basename(dirPath));
+
+  assert.deepEqual(staleDirs, ['python', 'ffmpeg', 'bin']);
+});
+
+
+test('ensureWindowsEmptyBinDirectory is exported for packaging source stability', () => {
+  assert.equal(typeof ensureWindowsEmptyBinDirectory, 'function');
 });

@@ -89,7 +89,17 @@ This runs:
 - `npm run test:syntax`
 - `npm run test:js`
 
-### Python regression tests
+### Python Regression Tests
+
+Use this for routine validation; it selects `py -3.11` on Windows and `python3` on macOS/Linux when available.
+
+Cross-platform wrapper:
+
+```bash
+npm run test:python
+```
+
+Direct commands are still useful when debugging interpreter-specific issues.
 
 macOS:
 
@@ -101,12 +111,6 @@ Windows:
 
 ```powershell
 py -3.11 -m pytest tests/python
-```
-
-Or use the cross-platform npm script:
-
-```bash
-npm run test:python
 ```
 
 ### Run everything
@@ -131,7 +135,7 @@ If you only want the regression suite and not the full runtime stack:
 npm install
 py -3.11 -m pip install -r requirements-dev.txt
 npm test
-py -3.11 -m pytest tests/python
+npm run test:python
 ```
 
 ## Manual Recorder Validation

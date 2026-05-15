@@ -65,6 +65,34 @@ function buildModelDownloadCheck({ platform, arch, homeDir, modelSize }) {
   };
 }
 
+function resolveTranscriptionAudioFile({ audioFile, recordingsDir, existsSync }) {
+  const fileExists = existsSync || (() => false);
+  let resolvedAudioFile = String(audioFile || '');
+
+  if (!resolvedAudioFile) {
+    return resolvedAudioFile;
+  }
+
+  if (!path.isAbsolute(resolvedAudioFile) && !resolvedAudioFile.includes(path.sep) && !resolvedAudioFile.includes('/')) {
+    resolvedAudioFile = path.join(recordingsDir, path.basename(resolvedAudioFile));
+  }
+
+  if (path.extname(resolvedAudioFile).toLowerCase() !== '.wav') {
+    return resolvedAudioFile;
+  }
+
+  if (fileExists(resolvedAudioFile)) {
+    return resolvedAudioFile;
+  }
+
+  const opusSibling = resolvedAudioFile.replace(/\.wav$/i, '.opus');
+  if (fileExists(opusSibling)) {
+    return opusSibling;
+  }
+
+  return resolvedAudioFile;
+}
+
 function cacheContainsModel(items, modelPatterns) {
   return modelPatterns.some((pattern) => items.some((item) => item.includes(pattern)));
 }
@@ -216,6 +244,54 @@ function getRecorderEventAction(eventPayload = {}) {
         progressMessage: eventMessage || null,
       };
   }
+}
+
+function getRecorderCloseAction({
+  recordingStarted,
+  stopInProgress,
+  startupSettled,
+  startupFailureMessage,
+  progressStage,
+  exitCode,
+} = {}) {
+  if (stopInProgress) {
+    return { type: 'stop_in_progress', errorMessage: null, warning: null };
+  }
+
+  if (!recordingStarted && startupSettled) {
+    return { type: 'startup_already_settled', errorMessage: null, warning: null };
+  }
+
+  if (recordingStarted) {
+    const message = exitCode === 0
+      ? 'Recorder exited unexpectedly after startup.'
+      : `Recorder exited unexpectedly after startup with code ${exitCode}.`;
+
+    return {
+      type: 'unexpected_exit',
+      errorMessage: null,
+      warning: {
+        type: 'recorder_exited',
+        code: 'RECORDER_EXITED',
+        level: 'error',
+        message,
+        help: 'The recording process stopped unexpectedly. Start a new recording when ready.',
+      },
+    };
+  }
+
+  const codeDetail = exitCode === null || typeof exitCode === 'undefined'
+    ? 'without an exit code'
+    : `with code ${exitCode}`;
+  let errorMessage = startupFailureMessage || `Recording failed to start. Process exited ${codeDetail}.`;
+
+  if (!startupFailureMessage && progressStage === 'initializing') {
+    errorMessage += '\n\nTip: Try refreshing your audio devices or restarting the app.';
+  } else if (!startupFailureMessage && progressStage === 'configuring') {
+    errorMessage += '\n\nTip: Check that your selected audio devices are not in use by another application.';
+  }
+
+  return { type: 'startup_failed', errorMessage, warning: null };
 }
 
 function classifyRecorderStdoutChunk(output) {
@@ -465,6 +541,7 @@ module.exports = {
   classifyRecorderStdoutChunk,
   dedupeMessages,
   getQuitInterceptState,
+  getRecorderCloseAction,
   getRecorderEventAction,
   getMacMLXModelStorageDirs,
   getModelDownloadCacheDir,
@@ -476,5 +553,6 @@ module.exports = {
   normalizeRecorderLevels,
   parseRecorderMessageLine,
   parseRecorderStdoutChunk,
+  resolveTranscriptionAudioFile,
   splitBufferedLines
 };

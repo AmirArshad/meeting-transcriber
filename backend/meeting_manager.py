@@ -39,6 +39,8 @@ class MeetingManager:
         self.metadata_lock_file = self.recordings_dir / "meetings.json.lock"
         self._metadata_thread_lock = threading.RLock()
         self._metadata_file_lock = FileLock(str(self.metadata_lock_file), timeout=10)
+        self._corrupt_metadata_backup_path: Optional[Path] = None
+        self._corrupt_metadata_signature: Optional[tuple[int, int]] = None
 
         # Create empty metadata file if it doesn't exist
         if not self.metadata_file.exists():
@@ -72,6 +74,20 @@ class MeetingManager:
         if not self.metadata_file.exists():
             return None
 
+        try:
+            stat = self.metadata_file.stat()
+            signature = (stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            signature = None
+
+        if (
+            signature is not None
+            and self._corrupt_metadata_signature == signature
+            and self._corrupt_metadata_backup_path is not None
+            and self._corrupt_metadata_backup_path.exists()
+        ):
+            return self._corrupt_metadata_backup_path
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_path = self.recordings_dir / f"meetings.corrupt.{timestamp}.json"
         counter = 1
@@ -80,6 +96,8 @@ class MeetingManager:
             counter += 1
 
         shutil.copy2(self.metadata_file, backup_path)
+        self._corrupt_metadata_backup_path = backup_path
+        self._corrupt_metadata_signature = signature
         print(
             f"Warning: Backed up corrupt meetings metadata after JSON decode failure at line {error.lineno}, column {error.colno}",
             file=sys.stderr,
@@ -101,6 +119,8 @@ class MeetingManager:
                 os.fsync(f.fileno())
 
             os.replace(temp_path, self.metadata_file)
+            self._corrupt_metadata_backup_path = None
+            self._corrupt_metadata_signature = None
 
             try:
                 dir_fd = os.open(self.recordings_dir, os.O_RDONLY)
@@ -536,48 +556,35 @@ class MeetingManager:
             if not meeting:
                 return False
 
+            # Remove from list
+            meetings = [m for m in meetings if m['id'] != meeting_id]
+            self._save_meetings_unlocked(meetings)
+
             # FIX: Windows retry logic for file locks
             # Files may be locked by antivirus, file explorer, audio player, etc.
             max_retries = 3
             retry_delay = 0.5  # 500ms
 
-            # Delete audio file with retry
-            audio_path = Path(meeting['audioPath'])
-            if audio_path.exists():
+            def delete_file_with_retry(file_path: Path, label: str):
+                if not file_path.exists():
+                    return
+
                 for attempt in range(max_retries):
                     try:
-                        audio_path.unlink()
-                        print(f"Deleted audio: {audio_path}", file=sys.stderr)
-                        break
+                        file_path.unlink()
+                        print(f"Deleted {label}: {file_path}", file=sys.stderr)
+                        return
                     except PermissionError as e:
                         if attempt < max_retries - 1:
                             print(f"File locked (attempt {attempt + 1}/{max_retries}), retrying... ({e})", file=sys.stderr)
                             time.sleep(retry_delay)
                         else:
-                            raise RuntimeError(f"Failed to delete audio file after {max_retries} attempts: {e}")
+                            raise RuntimeError(f"Failed to delete {label} file after {max_retries} attempts: {e}")
                     except Exception as e:
-                        raise RuntimeError(f"Failed to delete audio file: {e}")
+                        raise RuntimeError(f"Failed to delete {label} file: {e}")
 
-            # Delete transcript file with retry
-            transcript_path = Path(meeting['transcriptPath'])
-            if transcript_path.exists():
-                for attempt in range(max_retries):
-                    try:
-                        transcript_path.unlink()
-                        print(f"Deleted transcript: {transcript_path}", file=sys.stderr)
-                        break
-                    except PermissionError as e:
-                        if attempt < max_retries - 1:
-                            print(f"File locked (attempt {attempt + 1}/{max_retries}), retrying... ({e})", file=sys.stderr)
-                            time.sleep(retry_delay)
-                        else:
-                            raise RuntimeError(f"Failed to delete transcript file after {max_retries} attempts: {e}")
-                    except Exception as e:
-                        raise RuntimeError(f"Failed to delete transcript file: {e}")
-
-            # Remove from list
-            meetings = [m for m in meetings if m['id'] != meeting_id]
-            self._save_meetings_unlocked(meetings)
+            delete_file_with_retry(Path(meeting['audioPath']), 'audio')
+            delete_file_with_retry(Path(meeting['transcriptPath']), 'transcript')
 
             print(f"Meeting deleted: {meeting_id}", file=sys.stderr)
             return True

@@ -18,11 +18,13 @@ const {
   buildModelDownloadCheck,
   cacheContainsModel,
   getQuitInterceptState,
+  getRecorderCloseAction,
   getRecorderEventAction,
   getRecordingStopTimeout,
   resolveStopTimeoutAction,
   isModelDownloadErrorOutput,
   parseRecorderStdoutChunk,
+  resolveTranscriptionAudioFile,
 } = require('./main-process-helpers');
 const { checkForUpdates, openDownloadPage } = require('./updater');
 
@@ -43,6 +45,7 @@ let recordingStopPromise = null;
 let stopCommandSent = false;
 let quitWorkflowPromise = null;
 let allowImmediateQuit = false;
+let pendingUpdateInfo = null;
 
 function firstExistingPath(paths) {
   return paths.find((candidate) => fs.existsSync(candidate)) || null;
@@ -66,6 +69,24 @@ function sendToRenderer(channel, payload) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(channel, payload);
   }
+}
+
+function sendUpdateAvailable(updateInfo) {
+  pendingUpdateInfo = updateInfo;
+  sendToRenderer('update-available', updateInfo);
+}
+
+function clearRecordingRuntimeState(reason) {
+  if (recordingHeartbeat) {
+    clearInterval(recordingHeartbeat);
+    recordingHeartbeat = null;
+    console.log(`Recording heartbeat monitor stopped (${reason})`);
+  }
+
+  pythonProcess = null;
+  recordingStartTime = null;
+  disableRecordingPowerSaveBlocker(reason);
+  resetStopWorkflowState();
 }
 
 function disableRecordingPowerSaveBlocker(reason = 'recording stopped') {
@@ -152,11 +173,10 @@ function stopRecordingProcess() {
 
     const finalizeState = () => {
       if (pythonProcess === currentProcess) {
-        pythonProcess = null;
+        clearRecordingRuntimeState('recording completed');
+        return;
       }
 
-      recordingStartTime = null;
-      disableRecordingPowerSaveBlocker('recording completed');
       resetStopWorkflowState();
     };
 
@@ -888,7 +908,7 @@ function createApplicationMenu() {
           click: async () => {
             const updateInfo = await checkForUpdates();
             if (updateInfo && mainWindow) {
-              mainWindow.webContents.send('update-available', updateInfo);
+              sendUpdateAvailable(updateInfo);
             } else if (mainWindow) {
               dialog.showMessageBox(mainWindow, {
                 type: 'info',
@@ -1104,7 +1124,7 @@ app.whenReady().then(async () => {
   setTimeout(async () => {
     const updateInfo = await checkForUpdates();
     if (updateInfo && mainWindow) {
-      mainWindow.webContents.send('update-available', updateInfo);
+      sendUpdateAvailable(updateInfo);
     }
   }, 5000);
 
@@ -1423,6 +1443,8 @@ ipcMain.handle('get-macos-permission-status', async () => {
   return getMacOSPermissionStatus();
 });
 
+ipcMain.handle('get-pending-update-info', async () => pendingUpdateInfo);
+
 /**
  * Get list of available audio devices
  */
@@ -1644,10 +1666,32 @@ ipcMain.handle('start-recording', async (event, options) => {
     let progressStage = 'initializing';
     let stdoutRemainder = '';
     let startupFailureMessage = null;
+    let startupSettled = false;
 
     const sendInitProgress = (stage, message) => {
       progressStage = stage;
       mainWindow.webContents.send('recording-init-progress', { stage, message });
+    };
+
+    const failActiveRecording = (warning) => {
+      const payload = {
+        type: warning.type || 'recorder_exited',
+        code: warning.code || 'RECORDER_EXITED',
+        message: warning.message,
+        help: warning.help,
+        level: warning.level || 'error',
+      };
+
+      sendToRenderer('recording-warning', payload);
+      sendToRenderer('recording-failed', {
+        message: payload.message,
+        code: payload.code,
+        help: payload.help,
+      });
+      sendToRenderer('recording-progress', payload.message);
+      if (payload.help) {
+        sendToRenderer('recording-progress', payload.help);
+      }
     };
 
     const sendStructuredWarning = (warning, level = 'warning') => {
@@ -1695,6 +1739,7 @@ ipcMain.handle('start-recording', async (event, options) => {
       }, 5000);
 
       sendInitProgress('started', message);
+      startupSettled = true;
       resolve({ success: true, message: 'Recording started' });
     };
 
@@ -1791,29 +1836,42 @@ ipcMain.handle('start-recording', async (event, options) => {
     });
 
     pythonProcess.on('close', (code) => {
-      // CRITICAL FIX: Clean up resources on error
-      if (recordingHeartbeat) {
-        clearInterval(recordingHeartbeat);
-        recordingHeartbeat = null;
-      }
-      if (powerSaveId !== null) {
-        powerSaveBlocker.stop(powerSaveId);
-        powerSaveId = null;
-        console.log('Power save blocker disabled (recording failed)');
+      const closeAction = getRecorderCloseAction({
+        recordingStarted,
+        stopInProgress: Boolean(recordingStopPromise),
+        startupSettled,
+        startupFailureMessage,
+        progressStage,
+        exitCode: code,
+      });
+
+      if (closeAction.type === 'stop_in_progress') {
+        return;
       }
 
-      if (!recordingStarted) {
-        // Process closed before recording started - this is an error
-        let errorMessage = startupFailureMessage || `Recording failed to start. Process exited with code ${code}.`;
-
-        // Provide helpful hints based on progress stage
-        if (!startupFailureMessage && progressStage === 'initializing') {
-          errorMessage += '\n\nTip: Try refreshing your audio devices or restarting the app.';
-        } else if (!startupFailureMessage && progressStage === 'configuring') {
-          errorMessage += '\n\nTip: Check that your selected audio devices are not in use by another application.';
+      if (closeAction.type === 'startup_already_settled') {
+        if (pythonProcess) {
+          clearRecordingRuntimeState('recording startup already settled');
         }
+        return;
+      }
 
-        reject(new Error(errorMessage));
+      clearRecordingRuntimeState(
+        closeAction.type === 'unexpected_exit'
+          ? 'recorder exited unexpectedly'
+          : 'recording failed'
+      );
+      recordingStarted = false;
+
+      if (closeAction.warning) {
+        failActiveRecording(closeAction.warning);
+        startupSettled = true;
+        return;
+      }
+
+      if (closeAction.errorMessage) {
+        startupSettled = true;
+        reject(new Error(closeAction.errorMessage));
       }
     });
 
@@ -1821,17 +1879,6 @@ ipcMain.handle('start-recording', async (event, options) => {
     const timeout = isFirstRecording ? 15000 : 10000;
     const timeoutHandle = setTimeout(() => {
       if (!recordingStarted) {
-        // CRITICAL FIX: Clean up resources on timeout
-        if (recordingHeartbeat) {
-          clearInterval(recordingHeartbeat);
-          recordingHeartbeat = null;
-        }
-        if (powerSaveId !== null) {
-          powerSaveBlocker.stop(powerSaveId);
-          powerSaveId = null;
-          console.log('Power save blocker disabled (timeout)');
-        }
-
         let errorMessage = startupFailureMessage || `Recording failed to start within ${timeout / 1000} seconds.`;
 
         // Provide specific guidance based on what stage failed
@@ -1846,10 +1893,13 @@ ipcMain.handle('start-recording', async (event, options) => {
           errorMessage += '\nTry selecting different audio devices or restarting the app.';
         }
 
-        reject(new Error(errorMessage));
-        if (pythonProcess && !pythonProcess.killed) {
-          pythonProcess.kill();
+        startupSettled = true;
+        const timedOutProcess = pythonProcess;
+        if (timedOutProcess && !timedOutProcess.killed) {
+          timedOutProcess.kill();
         }
+        clearRecordingRuntimeState('recording startup timeout');
+        reject(new Error(errorMessage));
       }
     }, timeout);
 
@@ -1877,16 +1927,22 @@ ipcMain.handle('transcribe-audio', async (event, options) => {
   return new Promise((resolve, reject) => {
     let { audioFile, language, modelSize } = options;
 
-    // Resolve relative paths and handle .opus extension
+    // Resolve relative paths. Keep real .wav fallback files transcribable; only
+    // fall back to an .opus sibling when the .wav path is missing.
     if (!path.isAbsolute(audioFile)) {
       // Use userData recordings directory
       const recordingsDir = path.join(app.getPath('userData'), 'recordings');
-      audioFile = path.join(recordingsDir, path.basename(audioFile));
-    }
-
-    // The recorder saves as .opus, so if we get .wav, use .opus instead
-    if (audioFile.endsWith('.wav')) {
-      audioFile = audioFile.replace('.wav', '.opus');
+      audioFile = resolveTranscriptionAudioFile({
+        audioFile,
+        recordingsDir,
+        existsSync: fs.existsSync,
+      });
+    } else {
+      audioFile = resolveTranscriptionAudioFile({
+        audioFile,
+        recordingsDir: path.dirname(audioFile),
+        existsSync: fs.existsSync,
+      });
     }
 
     const python = spawnTrackedPython([

@@ -225,6 +225,11 @@ jobs:
           throw "Missing executable in dist/win-unpacked"
         }
 
+        $helper = Get-ChildItem "dist/win-unpacked" -Recurse -Filter "audiocapture-helper" -ErrorAction SilentlyContinue
+        if ($helper) {
+          throw "Windows package contains stale macOS audiocapture-helper"
+        }
+
     - name: Check for security vulnerabilities
       run: npm audit --audit-level=high
       continue-on-error: true
