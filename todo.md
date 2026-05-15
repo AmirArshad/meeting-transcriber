@@ -2,7 +2,7 @@
 
 Branch: `upgrade/electron-latest`
 
-Status: Electron and electron-builder upgrades are implemented. Windows automated validation is complete. macOS CI packaging initially hit `EMFILE`, then a helper signing path mismatch, then a missing GNU `timeout` command in the helper smoke step. macOS builds now raise the open-file limit, prune Torch development headers, sign the helper at `Contents/Resources/bin/audiocapture-helper`, and run the helper permission smoke check with Python's built-in timeout support. macOS rerun and manual smoke validation remain pending.
+Status: Electron and electron-builder upgrades are implemented. Windows automated validation is complete. macOS CI packaging initially hit `EMFILE`, then a helper signing path mismatch, then a missing GNU `timeout` command, then a headless runner failure while invoking ScreenCaptureKit permission checks. macOS builds now raise the open-file limit, prune Torch development headers, sign the helper at `Contents/Resources/bin/audiocapture-helper`, and smoke-test helper execution with `--help` instead of probing Screen Recording permission in CI. macOS rerun and manual smoke validation remain pending.
 
 Goal: upgrade to the latest stable, trustworthy Electron release while preserving the app's local-only recording/transcription behavior and packaged Windows/macOS builds.
 
@@ -115,6 +115,7 @@ Goal: upgrade to the latest stable, trustworthy Electron release while preservin
 - [x] Run targeted JS/Python validation after fixes.
 - [x] Add bounded/fail-closed macOS permission preflight behavior.
 - [x] Make permission-check exit codes include desktop-audio backend failures.
+- [x] Avoid invoking ScreenCaptureKit permission checks in headless macOS CI package smoke tests.
 
 ## Definition Of Done
 

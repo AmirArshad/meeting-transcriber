@@ -4,6 +4,8 @@
 
 Add speaker identification to transcripts so users can see which person said what during meetings with multiple participants.
 
+Product-flow design for optional setup, Home prompts, automatic post-transcription execution, and History integration lives in [Optional local AI add-ons](DESIGN_LOCAL_AI_ADDONS.md).
+
 ## 2026 Research Update
 
 The original design targeted `pyannote/speaker-diarization-3.1`. Current research favors `pyannote/speaker-diarization-community-1` as the default local model.
@@ -12,16 +14,17 @@ Recommended defaults:
 
 | Target | Recommended model | Runtime | Notes |
 |--------|-------------------|---------|-------|
-| Cross-platform default | `pyannote/speaker-diarization-community-1` | `pyannote.audio` / PyTorch | Best implementation fit, improved speaker counting/assignment over 3.1, local after download. |
+| Windows default | `pyannote/speaker-diarization-community-1` | `pyannote.audio` / PyTorch CUDA | Best implementation fit, improved speaker counting/assignment over 3.1, local after download. |
+| macOS target | `pyannote/speaker-diarization-community-1` | Validated accelerated Apple Silicon path | Do not expose in product until acceleration is good enough; otherwise use the current transcription-only flow. |
 | Windows CUDA spike | `nvidia/diar_streaming_sortformer_4spk-v2.1` | NVIDIA NeMo / PyTorch CUDA | Fast and meeting-speech-focused, but heavier dependencies, max 4 speakers, and weak macOS fit. |
-| CPU/lower-end fallback | `pyannote/speaker-diarization-community-1` | PyTorch CPU | Slower but keeps one output contract and one model family. |
+| Windows CPU/lower-end fallback | `pyannote/speaker-diarization-community-1` | PyTorch CPU | Slower but keeps one output contract and one model family; not the macOS v1 fallback. |
 
 Important changes from the old plan:
 
 - `community-1` adds `exclusive_speaker_diarization`, which assigns one active speaker at any timestamp and simplifies merging with Whisper transcript segments.
 - The model is gated on Hugging Face and still requires user acceptance plus a token.
 - Windows should use CUDA when available.
-- macOS should attempt PyTorch MPS/Metal only after a prototype confirms stability; CPU fallback must remain available.
+- macOS should only expose diarization after accelerated Apple Silicon diarization is good enough. If acceleration is unavailable or validation fails, keep the current transcription-only flow rather than shipping CPU-only diarization in v1.
 - Disable optional pyannote metrics in app-spawned processes with `PYANNOTE_METRICS_ENABLED=0` to preserve AvaNevis' local-only/no-telemetry posture.
 
 Decision status: use `community-1` for v1 unless a Windows-only Sortformer spike proves a major quality or performance win without unacceptable packaging cost.
@@ -109,15 +112,17 @@ backend/
 ### Dependencies
 
 ```bash
-# Add to requirements-windows.txt and requirements-macos.txt
+# Add to requirements-windows.txt and requirements-macos.txt after platform validation
 pyannote.audio>=4.0.0  # Validate packaged Python 3.11 compatibility before pinning
-torch>=2.0.0           # Required by pyannote; CUDA on Windows, MPS/CPU on macOS
+torch>=2.0.0           # Required by pyannote; CUDA on Windows, validated acceleration on macOS
 ```
 
 **Hugging Face Setup (user must do once):**
 1. Sign up at https://huggingface.co/
 2. Get token from https://huggingface.co/settings/tokens
 3. Accept model terms at https://huggingface.co/pyannote/speaker-diarization-community-1
+
+Users must provide their own Hugging Face token. Do not ship a maintainer-owned token in the app or hide one behind an AvaNevis service; desktop app secrets are extractable, and a shared token would create account, quota, revocation, and model-term compliance risk.
 
 ### Backend: `speaker_diarizer.py`
 

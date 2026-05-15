@@ -184,7 +184,6 @@ jobs:
         codesign --verify --strict --verbose=2 "$HELPER_PATH"
         codesign -d --entitlements :- "$HELPER_PATH" | grep -q "com.apple.security.inherit"
 
-        set +e
         helper_output="$(
         python - "$HELPER_PATH" 2>&1 <<'PY'
         import subprocess
@@ -194,10 +193,11 @@ jobs:
 
         try:
             result = subprocess.run(
-                [helper_path, "--check-permission"],
+                [helper_path, "--help"],
                 capture_output=True,
                 text=True,
                 timeout=10,
+                check=False,
             )
             sys.stdout.write(result.stdout)
             sys.stderr.write(result.stderr)
@@ -207,17 +207,12 @@ jobs:
                 sys.stdout.write(exc.stdout if isinstance(exc.stdout, str) else exc.stdout.decode(errors="replace"))
             if exc.stderr:
                 sys.stderr.write(exc.stderr if isinstance(exc.stderr, str) else exc.stderr.decode(errors="replace"))
-            print("audiocapture-helper --check-permission timed out", file=sys.stderr)
+            print("audiocapture-helper --help timed out", file=sys.stderr)
             sys.exit(124)
         PY
         )"
-        helper_code=$?
-        set -e
         echo "$helper_output"
-        if [ "$helper_code" -ne 0 ] && ! echo "$helper_output" | grep -q '"type":"permission_check"'; then
-          echo "audiocapture-helper --check-permission failed unexpectedly"
-          exit "$helper_code"
-        fi
+        echo "$helper_output" | grep -q "AudioCaptureHelper"
 
         echo "✓ Packaged macOS app contains helper, Python, and ffmpeg"
 
