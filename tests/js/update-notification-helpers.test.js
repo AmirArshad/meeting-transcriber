@@ -23,7 +23,7 @@ function createBannerElements() {
 test('buildUpdateNotificationView formats banner copy from update info', () => {
   assert.deepEqual(buildUpdateNotificationView({ version: '1.7.19' }), {
     title: 'Update Available: v1.7.19',
-    description: 'A new version of Meeting Transcriber is ready to download.',
+    description: 'A new version of AvaNevis is ready to download.',
     logMessage: '✨ Update available: v1.7.19',
   });
 });

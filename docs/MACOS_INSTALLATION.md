@@ -1,6 +1,6 @@
 # 🍎 macOS Installation Guide
 
-Complete guide for installing Meeting Transcriber on macOS.
+Complete guide for installing AvaNevis on macOS.
 
 ---
 
@@ -9,7 +9,7 @@ Complete guide for installing Meeting Transcriber on macOS.
 If you see this error:
 
 ```
-"Meeting Transcriber" is damaged and can't be opened.
+"AvaNevis" is damaged and can't be opened.
 You should move it to the Bin.
 ```
 
@@ -25,11 +25,11 @@ You should move it to the Bin.
 
 2. **Open** the DMG file (double-click it)
 
-3. **Drag** Meeting Transcriber to the Applications folder
+3. **Drag** AvaNevis to the Applications folder
 
 4. **Go to Applications** folder (Cmd+Shift+A in Finder)
 
-5. **Find** "Meeting Transcriber.app"
+5. **Find** "AvaNevis.app"
 
 6. **Right-click** (or Control+Click) on the app icon
    - DO NOT double-click!
@@ -47,7 +47,7 @@ You should move it to the Bin.
 
 8. **macOS will show a different dialog:**
    ```
-   "Meeting Transcriber" is from an unidentified developer.
+   "AvaNevis" is from an unidentified developer.
    Are you sure you want to open it?
 
    [Cancel]  [Open]  ← Click "Open"
@@ -81,7 +81,7 @@ After running this command, you can double-click the app normally.
 2. Go to **System Settings** (or System Preferences on older macOS)
 3. Navigate to **Privacy & Security**
 4. Scroll down to the **Security** section
-5. You should see a message: `"Meeting Transcriber" was blocked from use because it is not from an identified developer`
+5. You should see a message: `"AvaNevis" was blocked from use because it is not from an identified developer`
 6. Click **"Open Anyway"**
 7. Try opening the app again
 8. Click **"Open"** in the confirmation dialog
@@ -94,7 +94,7 @@ After first launch, macOS will ask for permissions:
 
 ### 1. Microphone Access
 ```
-"Meeting Transcriber" would like to access the microphone.
+"AvaNevis" would like to access the microphone.
 
 [Don't Allow]  [OK]  ← Click "OK"
 ```
@@ -103,7 +103,7 @@ After first launch, macOS will ask for permissions:
 
 ### 2. Screen Recording (for Desktop Audio)
 ```
-"Meeting Transcriber" would like to record this screen.
+"AvaNevis" would like to record this screen.
 
 [Don't Allow]  [OK]  ← Click "OK"
 ```
@@ -112,7 +112,7 @@ After first launch, macOS will ask for permissions:
 
 **Note:** This permission may not appear on first launch. If desktop audio doesn't work, grant it manually:
 1. System Settings → Privacy & Security → Screen Recording
-2. Toggle ON for "Meeting Transcriber"
+2. Toggle ON for "AvaNevis"
 3. Restart the app
 
 ---

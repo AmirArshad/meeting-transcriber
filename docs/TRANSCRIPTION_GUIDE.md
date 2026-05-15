@@ -2,7 +2,7 @@
 
 ## How The App Transcribes Meetings Today
 
-Meeting Transcriber records microphone audio and desktop audio separately, then aligns and mixes them after recording stops.
+AvaNevis records microphone audio and desktop audio separately, then aligns and mixes them after recording stops.
 
 That mixed meeting file is what the app transcribes and saves to history.
 
@@ -61,7 +61,7 @@ Whisper is much better on clean, turn-based speech than on several people talkin
 ### macOS
 
 - Apple Silicon packaged builds use MLX/Metal automatically.
-- MLX model files are stored in `~/Library/Caches/meeting-transcriber/mlx_models`.
+- MLX model files are stored in `~/Library/Caches/avanevis/mlx_models`.
 
 ## Practical Recommendations
 

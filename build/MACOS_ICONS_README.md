@@ -32,7 +32,7 @@ For macOS menu bar (tray) icons, you need **Template Images** that automatically
 - Test at actual size (zoom way out in design tool)
 - Ensure it works in both light and dark mode
 
-### Icon Ideas for Meeting Transcriber
+### Icon Ideas for AvaNevis
 
 Option 1: **Microphone Icon**
 ```

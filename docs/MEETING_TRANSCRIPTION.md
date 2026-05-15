@@ -1,6 +1,6 @@
 # Meeting History And Transcript Storage
 
-This document describes what gets saved after a recording and how Meeting Transcriber recovers existing meeting data.
+This document describes what gets saved after a recording and how AvaNevis recovers existing meeting data.
 
 ## What Gets Saved
 
@@ -62,10 +62,27 @@ Deleting a meeting removes:
 
 The renderer also clears the audio player first to reduce Windows file-lock issues.
 
+## Renaming Meetings
+
+Meetings can be renamed inline from both the history detail view and the post-recording view:
+
+- Click the pencil icon next to the title, edit, then press Enter or click Save.
+- Esc cancels.
+- The rename is persisted via the `update-meeting` IPC, which calls `MeetingManager.update_meeting(meeting_id, title=...)`.
+- Filenames stay anchored to the meeting ID; only the `title` field in `meetings.json` changes. Existing audio and transcript files are not moved or rewritten.
+
+## Saving / Exporting Transcripts
+
+Transcripts can be exported to disk via Electron's native save dialog:
+
+- Available from the history detail view (Save button next to the transcript header) and from the post-recording view (Save Transcript button).
+- The default filename is derived from the meeting title with filesystem-unsafe characters sanitized.
+- File-type filters: Markdown (`.md`), Plain Text (`.txt`), All Files.
+- Wired through the `save-transcript-as` IPC, which uses `dialog.showSaveDialog` and writes via `fs.promises.writeFile`. The raw `.md` content from disk is preserved as the export source so the user always gets the original Markdown formatting.
+
 ## Current Limitations
 
-- The renderer still has a TODO for saving/exporting transcripts through a file dialog.
-- Search/filter tooling in the history view is still minimal.
+- Search/filter tooling in the history view is functional (sidebar text filter, multi-select with bulk delete) but does not yet support semantic search or full-text indexing.
 - Manual filesystem edits inside the recordings directory can still confuse recovery if files are renamed arbitrarily.
 
 ## If You Need To Recover Meetings Manually

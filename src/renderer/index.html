@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Meeting Transcriber</title>
+    <title>AvaNevis</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -11,7 +11,7 @@
     <div id="loading-screen" class="loading-screen">
       <div class="loading-content">
         <div class="loading-spinner"></div>
-        <h2 class="loading-title">Meeting Transcriber</h2>
+        <h2 class="loading-title">AvaNevis</h2>
         <p class="loading-message" id="loading-message">Initializing...</p>
       </div>
     </div>
@@ -25,14 +25,14 @@
         <div class="modal-body">
           <p class="setting-description">
             Downloading AI transcription model. This only happens once and takes
-            2-5 minutes.
+            2&ndash;5 minutes.
           </p>
 
           <div class="gpu-progress" style="margin-top: 0; display: block">
             <div class="progress-bar-container">
               <div class="progress-bar" id="ftue-progress-bar"></div>
             </div>
-            <p class="progress-text" id="ftue-progress-text">Initializing...</p>
+            <p class="progress-text" id="ftue-progress-text">Initializing&hellip;</p>
           </div>
 
           <div class="gpu-log" style="display: block">
@@ -44,18 +44,75 @@
     </div>
 
     <div class="container">
-      <!-- Header -->
-      <header>
+      <!-- Vertical icon rail -->
+      <nav class="icon-rail" aria-label="Primary">
+        <div class="rail-logo" aria-hidden="true" title="AvaNevis">
+          <span class="rail-logo-mark">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
+              <path d="M5 11a7 7 0 0 0 14 0"/>
+              <line x1="12" y1="18" x2="12" y2="22"/>
+            </svg>
+          </span>
+        </div>
+
+        <button type="button" class="rail-btn active" data-tab="record" aria-label="Record">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="6" fill="currentColor" stroke="none" opacity="0.85"/>
+            <circle cx="12" cy="12" r="9"/>
+          </svg>
+          <span class="rail-tooltip">Record</span>
+        </button>
+
+        <button type="button" class="rail-btn" data-tab="history" aria-label="History">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 12a9 9 0 1 0 3-6.7"/>
+            <polyline points="3 4 3 10 9 10"/>
+            <polyline points="12 7 12 12 16 14"/>
+          </svg>
+          <span class="rail-tooltip">History</span>
+        </button>
+
+        <div class="rail-spacer"></div>
+
+        <button type="button" class="rail-btn" data-tab="settings" aria-label="Settings">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3h.1a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8v.1a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>
+          </svg>
+          <span class="rail-tooltip">Settings</span>
+        </button>
+      </nav>
+
+      <!-- Main pane -->
+      <div class="app-pane">
+        <!-- Top bar -->
+        <div class="top-bar">
+          <div class="top-bar-title">
+            <h1>AvaNevis</h1>
+            <span class="subtitle">Local AI &middot; Privacy-first</span>
+          </div>
+          <div class="top-bar-spacer"></div>
+        </div>
+
+      <!-- Legacy header retained for compatibility but hidden via CSS -->
+      <header class="legacy-header" hidden>
         <div class="header-content">
-          <h1>Meeting Transcriber</h1>
-          <p class="subtitle">AI-powered transcription</p>
+          <h1>AvaNevis</h1>
+          <p class="subtitle">Local AI</p>
         </div>
       </header>
 
       <!-- Update Notification Banner -->
       <div id="update-banner" class="update-banner" style="display: none">
         <div class="update-content">
-          <span class="update-icon">📦</span>
+          <span class="update-icon" aria-hidden="true">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="7 10 12 15 17 10"/>
+              <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+          </span>
           <div class="update-text">
             <strong id="update-title">Update Available</strong>
             <p id="update-description">A new version is ready to download.</p>
@@ -70,21 +127,21 @@
       </div>
 
       <!-- Main Content -->
-      <main>
+      <main class="app-content">
         <!-- Compact Audio Setup -->
         <section class="card setup-section compact">
           <div class="setup-row">
             <div class="setup-item">
               <label for="mic-select">Microphone</label>
               <select id="mic-select" class="device-select">
-                <option value="">Loading...</option>
+                <option value="">Loading&hellip;</option>
               </select>
             </div>
 
             <div class="setup-item">
               <label for="desktop-select">Desktop Audio</label>
               <select id="desktop-select" class="device-select">
-                <option value="">Loading...</option>
+                <option value="">Loading&hellip;</option>
               </select>
             </div>
 
@@ -118,12 +175,13 @@
 
             <button
               id="refresh-devices"
-              class="btn btn-icon-only"
+              class="btn-icon-only"
               title="Refresh Devices"
+              aria-label="Refresh audio devices"
             >
               <svg
-                width="16"
-                height="16"
+                width="15"
+                height="15"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
@@ -139,8 +197,8 @@
           </div>
         </section>
 
-        <!-- Tab Navigation -->
-        <div class="tabs">
+        <!-- Tab Navigation (legacy — kept hidden so existing JS selectors keep working; rail handles UX) -->
+        <div class="tabs" hidden>
           <button class="tab-btn active" data-tab="record">Record</button>
           <button class="tab-btn" data-tab="history">History</button>
           <button class="tab-btn" data-tab="settings">Settings</button>
@@ -175,22 +233,35 @@
                   style="display: none"
                 >
                   <div class="visualizer-track">
-                    <span class="track-icon" title="Microphone">🎤</span>
+                    <span class="track-icon" title="Microphone" aria-hidden="true">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                        <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                        <line x1="12" y1="19" x2="12" y2="23"/>
+                        <line x1="8" y1="23" x2="16" y2="23"/>
+                      </svg>
+                    </span>
                     <div class="waveform-container">
                       <canvas
                         id="mic-waveform"
-                        width="200"
-                        height="30"
+                        width="280"
+                        height="28"
                       ></canvas>
                     </div>
                   </div>
                   <div class="visualizer-track">
-                    <span class="track-icon" title="Desktop Audio">🔊</span>
+                    <span class="track-icon" title="Desktop Audio" aria-hidden="true">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+                        <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+                        <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+                      </svg>
+                    </span>
                     <div class="waveform-container">
                       <canvas
                         id="desktop-waveform"
-                        width="200"
-                        height="30"
+                        width="280"
+                        height="28"
                       ></canvas>
                     </div>
                   </div>
@@ -200,7 +271,37 @@
               <!-- Current Transcript -->
               <div class="current-transcript" id="current-transcript">
                 <div class="transcript-header">
-                  <h3>Transcript</h3>
+                  <div class="current-transcript-title" id="current-transcript-title-row">
+                    <h3 id="current-meeting-title">Transcript</h3>
+                    <button
+                      type="button"
+                      id="current-meeting-title-edit"
+                      class="title-edit-btn"
+                      title="Rename meeting"
+                      aria-label="Rename meeting"
+                      style="display: none"
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 20h9"/>
+                        <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/>
+                      </svg>
+                    </button>
+                    <form
+                      id="current-meeting-title-form"
+                      class="title-edit-form"
+                      style="display: none"
+                    >
+                      <input
+                        type="text"
+                        id="current-meeting-title-input"
+                        class="title-edit-input"
+                        maxlength="120"
+                        autocomplete="off"
+                      />
+                      <button type="submit" class="btn btn-small btn-primary">Save</button>
+                      <button type="button" id="current-meeting-title-cancel" class="btn btn-small">Cancel</button>
+                    </form>
+                  </div>
                   <div
                     class="transcript-actions"
                     id="transcript-actions"
@@ -212,12 +313,29 @@
                 </div>
                 <div class="transcript-output" id="transcript-output">
                   <p class="placeholder">
-                    Transcript will appear here after recording...
+                    Transcript will appear here after recording&hellip;
                   </p>
                 </div>
               </div>
 
-              <div class="progress-log" id="progress-log"></div>
+              <!-- Developer Console (collapsible drawer) -->
+              <div class="dev-console" id="dev-console">
+                <button
+                  type="button"
+                  class="dev-console-toggle"
+                  id="dev-console-toggle"
+                  aria-expanded="false"
+                  aria-controls="dev-console-body"
+                >
+                  <span class="dev-console-label">Developer Console</span>
+                  <svg class="chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="6 9 12 15 18 9"/>
+                  </svg>
+                </button>
+                <div class="dev-console-body" id="dev-console-body">
+                  <div class="progress-log" id="progress-log"></div>
+                </div>
+              </div>
             </section>
           </div>
 
@@ -230,12 +348,13 @@
                   <h3>Meetings</h3>
                   <button
                     id="refresh-history"
-                    class="btn btn-icon-only"
+                    class="btn-icon-only"
                     title="Refresh"
+                    aria-label="Refresh meetings"
                   >
                     <svg
-                      width="14"
-                      height="14"
+                      width="13"
+                      height="13"
                       viewBox="0 0 24 24"
                       fill="none"
                       stroke="currentColor"
@@ -248,6 +367,37 @@
                       />
                     </svg>
                   </button>
+                </div>
+
+                <div class="sidebar-search">
+                  <span class="search-icon" aria-hidden="true">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <circle cx="11" cy="11" r="7"/>
+                      <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                    </svg>
+                  </span>
+                  <input
+                    type="search"
+                    id="meeting-search"
+                    placeholder="Search meetings..."
+                    aria-label="Search meetings"
+                  />
+                </div>
+
+                <div class="selection-toolbar" id="selection-toolbar" role="toolbar" aria-label="Bulk actions">
+                  <span class="selection-count">
+                    <span id="selection-count-text">0 selected</span>
+                  </span>
+                  <span class="selection-actions">
+                    <button type="button" id="selection-clear" title="Clear selection">Clear</button>
+                    <button type="button" id="selection-delete" class="danger" title="Delete selected">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="3 6 5 6 21 6"/>
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                      </svg>
+                      Delete
+                    </button>
+                  </span>
                 </div>
 
                 <div class="meeting-list" id="meeting-list">
@@ -272,14 +422,44 @@
                         display: flex;
                         justify-content: space-between;
                         align-items: flex-start;
+                        gap: 16px;
                         width: 100%;
                       "
                     >
-                      <div>
-                        <h2 id="meeting-title">Meeting Details</h2>
+                      <div style="min-width: 0; flex: 1">
+                        <div class="meeting-title-row" id="meeting-title-row">
+                          <h2 id="meeting-title">Meeting Details</h2>
+                          <button
+                            type="button"
+                            id="meeting-title-edit"
+                            class="title-edit-btn"
+                            title="Rename meeting"
+                            aria-label="Rename meeting"
+                          >
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                              <path d="M12 20h9"/>
+                              <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/>
+                            </svg>
+                          </button>
+                        </div>
+                        <form
+                          id="meeting-title-edit-form"
+                          class="title-edit-form"
+                          style="display: none"
+                        >
+                          <input
+                            type="text"
+                            id="meeting-title-input"
+                            class="title-edit-input"
+                            maxlength="120"
+                            autocomplete="off"
+                          />
+                          <button type="submit" class="btn btn-small btn-primary">Save</button>
+                          <button type="button" id="meeting-title-cancel" class="btn btn-small">Cancel</button>
+                        </form>
                         <div class="meeting-meta">
                           <span id="meeting-date"></span>
-                          <span class="meta-separator">•</span>
+                          <span class="meta-separator">&middot;</span>
                           <span id="meeting-duration"></span>
                         </div>
                       </div>
@@ -294,17 +474,66 @@
                   </div>
 
                   <div class="audio-player-section">
-                    <audio id="audio-player" controls style="width: 100%">
+                    <!-- Native player kept for control surface; visually replaced by custom UI -->
+                    <audio id="audio-player" preload="metadata">
                       Your browser does not support audio playback.
                     </audio>
+
+                    <div class="custom-audio-player" id="custom-audio-player">
+                      <button
+                        type="button"
+                        class="cap-play-btn"
+                        id="cap-play-btn"
+                        aria-label="Play"
+                      >
+                        <svg id="cap-play-icon" width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                          <path d="M8 5v14l11-7z"/>
+                        </svg>
+                      </button>
+
+                      <span class="cap-time" id="cap-current">0:00</span>
+
+                      <div class="cap-track" id="cap-track" role="slider" tabindex="0" aria-label="Seek" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                        <div class="cap-track-rail">
+                          <div class="cap-track-fill" id="cap-track-fill"></div>
+                        </div>
+                        <div class="cap-track-thumb" id="cap-track-thumb"></div>
+                      </div>
+
+                      <span class="cap-time" id="cap-duration">0:00</span>
+
+                      <div class="cap-volume">
+                        <span class="cap-volume-icon" aria-hidden="true">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+                            <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+                          </svg>
+                        </span>
+                        <input
+                          type="range"
+                          class="cap-volume-slider"
+                          id="cap-volume"
+                          min="0"
+                          max="1"
+                          step="0.01"
+                          value="1"
+                          aria-label="Volume"
+                        />
+                      </div>
+                    </div>
                   </div>
 
                   <div class="transcript-section">
                     <div class="transcript-header-row">
                       <h3>Transcript</h3>
-                      <button id="copy-transcript-btn" class="btn btn-small">
-                        Copy
-                      </button>
+                      <div class="transcript-section-actions">
+                        <button id="copy-transcript-btn" class="btn btn-small">
+                          Copy
+                        </button>
+                        <button id="save-meeting-transcript-btn" class="btn btn-small">
+                          Save
+                        </button>
+                      </div>
                     </div>
                     <div
                       class="meeting-transcript"
@@ -327,25 +556,25 @@
                   <div class="setting-header">
                     <h3>GPU Acceleration</h3>
                     <span class="setting-badge" id="gpu-status-badge"
-                      >Checking...</span
+                      >Checking&hellip;</span
                     >
                   </div>
 
                   <p class="setting-description" id="gpu-description">
-                    Checking system configuration...
+                    Checking system configuration&hellip;
                   </p>
 
                   <div class="gpu-info" id="gpu-info">
                     <div class="info-row">
                       <span class="info-label" id="gpu-label-1">GPU:</span>
                       <span class="info-value" id="gpu-value-1"
-                        >Checking...</span
+                        >Checking&hellip;</span
                       >
                     </div>
                     <div class="info-row">
                       <span class="info-label" id="gpu-label-2">Status:</span>
                       <span class="info-value" id="gpu-value-2"
-                        >Checking...</span
+                        >Checking&hellip;</span
                       >
                     </div>
                     <div class="info-row" id="gpu-row-3">
@@ -384,7 +613,7 @@
                       <div class="progress-bar" id="gpu-progress-bar"></div>
                     </div>
                     <p class="progress-text" id="gpu-progress-text">
-                      Initializing...
+                      Initializing&hellip;
                     </p>
                   </div>
 
@@ -398,21 +627,23 @@
                 <!-- App Info -->
                 <div class="settings-group">
                   <h3>About</h3>
-                  <div class="info-row">
-                    <span class="info-label">Version:</span>
-                    <span class="info-value" id="app-version">Loading...</span>
-                  </div>
-                  <div class="info-row">
-                    <span class="info-label">Electron:</span>
-                    <span class="info-value" id="electron-version"
-                      >Loading...</span
-                    >
-                  </div>
-                  <div class="info-row">
-                    <span class="info-label">Python:</span>
-                    <span class="info-value" id="python-version"
-                      >Loading...</span
-                    >
+                  <div class="gpu-info" style="margin-top: 12px; margin-bottom: 0">
+                    <div class="info-row">
+                      <span class="info-label">Version</span>
+                      <span class="info-value" id="app-version">Loading&hellip;</span>
+                    </div>
+                    <div class="info-row">
+                      <span class="info-label">Electron</span>
+                      <span class="info-value" id="electron-version"
+                        >Loading&hellip;</span
+                      >
+                    </div>
+                    <div class="info-row">
+                      <span class="info-label">Python</span>
+                      <span class="info-value" id="python-version"
+                        >Loading&hellip;</span
+                      >
+                    </div>
                   </div>
                 </div>
               </div>
@@ -423,8 +654,9 @@
 
       <!-- Footer -->
       <footer>
-        <p>Powered by Whisper AI</p>
+        <p>Powered by Whisper AI &middot; All processing happens locally</p>
       </footer>
+      </div><!-- /.app-pane -->
     </div>
 
     <script src="recording-state-helpers.js"></script>

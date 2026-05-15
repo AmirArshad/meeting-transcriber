@@ -1,5 +1,5 @@
 /**
- * Main process for Meeting Transcriber Electron app.
+ * Main process for AvaNevis Electron app.
  *
  * This file:
  * - Creates the application window
@@ -33,7 +33,7 @@ const {
 const { checkForUpdates, openDownloadPage } = require('./updater');
 
 // Use Electron's default userData path, which handles packaging correctly
-// This is typically: C:\Users\<username>\AppData\Roaming\Meeting Transcriber
+// This is typically: C:\Users\<username>\AppData\Roaming\AvaNevis
 // No need to set a custom path - Electron manages this properly
 
 let mainWindow;
@@ -357,7 +357,7 @@ async function persistStoppedRecordingForQuit(recordingInfo) {
       `**Duration:** ${formatDurationForTranscript(recordingInfo.duration || 0)}`,
       '',
       'Transcription was not completed because the app quit while recording was active.',
-      'Open Meeting Transcriber again to keep this recording in history.',
+      'Open AvaNevis again to keep this recording in history.',
       '',
     ].join('\n');
 
@@ -894,7 +894,7 @@ function createTray() {
     }
   ]);
 
-  tray.setToolTip('Meeting Transcriber');
+  tray.setToolTip('AvaNevis');
   tray.setContextMenu(contextMenu);
 
   // Show/hide window on tray icon click
@@ -1040,7 +1040,7 @@ function createApplicationMenu() {
                 type: 'info',
                 title: 'No Updates Available',
                 message: 'You\'re up to date!',
-                detail: `Meeting Transcriber v${app.getVersion()} is the latest version.`,
+                detail: `AvaNevis v${app.getVersion()} is the latest version.`,
                 buttons: ['OK']
               });
             }
@@ -2286,6 +2286,93 @@ ipcMain.handle('add-meeting', async (event, meetingData) => {
 });
 
 /**
+ * Update editable meeting metadata (currently: display title).
+ *
+ * Audio/transcript filenames stay anchored to the meeting ID; only the
+ * label that the UI shows changes.
+ */
+ipcMain.handle('update-meeting', async (event, payload) => {
+  const meetingId = payload && payload.meetingId;
+  const updates = (payload && payload.updates) || {};
+  if (!meetingId) {
+    throw new Error('update-meeting requires a meetingId');
+  }
+
+  const recordingsDir = path.join(app.getPath('userData'), 'recordings');
+  const args = [
+    '--recordings-dir', recordingsDir,
+    'update',
+    String(meetingId),
+  ];
+  if (typeof updates.title === 'string') {
+    args.push('--title', updates.title);
+  }
+
+  return new Promise((resolve, reject) => {
+    const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', args), {
+      cwd: pythonConfig.backendPath,
+    });
+
+    let output = '';
+    let errorOutput = '';
+
+    python.stdout.on('data', (data) => { output += data.toString(); });
+    python.stderr.on('data', (data) => { errorOutput += data.toString(); });
+
+    python.on('close', (code) => {
+      if (code === 0) {
+        try {
+          resolve(JSON.parse(output));
+        } catch (e) {
+          reject(new Error(`Failed to parse updated meeting: ${e.message}`));
+        }
+      } else {
+        reject(new Error(errorOutput.trim() || 'Failed to update meeting'));
+      }
+    });
+
+    python.on('error', (err) => reject(err));
+  });
+});
+
+/**
+ * Show a Save dialog and write the supplied transcript text to disk.
+ *
+ * The renderer chooses the suggested filename (typically derived from the
+ * meeting's display label) so users get a meaningful default name.
+ */
+ipcMain.handle('save-transcript-as', async (event, options) => {
+  const opts = options || {};
+  const suggestedName = (opts.suggestedName || 'transcript').toString();
+  const content = typeof opts.content === 'string' ? opts.content : '';
+
+  // Sanitize for filesystem (Windows + macOS safe)
+  const safeName = suggestedName
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 120) || 'transcript';
+
+  const window = BrowserWindow.fromWebContents(event.sender);
+  const result = await dialog.showSaveDialog(window, {
+    title: 'Save Transcript',
+    defaultPath: safeName.toLowerCase().endsWith('.md') ? safeName : `${safeName}.md`,
+    filters: [
+      { name: 'Markdown', extensions: ['md'] },
+      { name: 'Text', extensions: ['txt'] },
+      { name: 'All Files', extensions: ['*'] },
+    ],
+  });
+
+  if (result.canceled || !result.filePath) {
+    return { canceled: true };
+  }
+
+  await fs.promises.writeFile(result.filePath, content, 'utf8');
+  return { canceled: false, filePath: result.filePath };
+});
+
+/**
  * Check GPU availability (detect NVIDIA GPU)
  */
 ipcMain.handle('check-gpu', async () => {
@@ -2510,4 +2597,4 @@ ipcMain.handle('download-update', async (event, downloadUrl) => {
   return { success: true };
 });
 
-console.log('Meeting Transcriber - Main process started');
+console.log('AvaNevis - Main process started');

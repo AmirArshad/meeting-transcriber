@@ -4,7 +4,7 @@
 
     return {
       title: `Update Available${versionSuffix}`,
-      description: 'A new version of Meeting Transcriber is ready to download.',
+      description: 'A new version of AvaNevis is ready to download.',
       logMessage: `✨ Update available${versionSuffix}`,
     };
   }

@@ -537,6 +537,41 @@ class MeetingManager:
                     return hydrated
             return None
 
+    def update_meeting(self, meeting_id: str, *, title: Optional[str] = None) -> Optional[Dict]:
+        """
+        Update editable fields on a meeting (currently: display title).
+
+        The on-disk audio/transcript filenames are intentionally left untouched
+        so the underlying recording can always be located by ID. Only the
+        display label stored in metadata changes.
+
+        Args:
+            meeting_id: Meeting ID to update.
+            title: New display title. If None, no change is made.
+
+        Returns:
+            Updated meeting dict, or None if the meeting was not found.
+        """
+        with self._metadata_guard():
+            meetings = self._list_meetings_locked()
+            meeting = next((m for m in meetings if m['id'] == meeting_id), None)
+
+            if not meeting:
+                return None
+
+            changed = False
+            if title is not None:
+                clean = title.strip()
+                if clean and clean != meeting.get('title'):
+                    meeting['title'] = clean
+                    changed = True
+
+            if changed:
+                self._save_meetings_unlocked(meetings)
+                print(f"Meeting updated: {meeting_id}", file=sys.stderr)
+
+            return meeting
+
     def delete_meeting(self, meeting_id: str) -> bool:
         """
         Delete a meeting and its associated files.
@@ -674,6 +709,11 @@ def main():
     delete_parser = subparsers.add_parser('delete', help='Delete meeting')
     delete_parser.add_argument('id', help='Meeting ID')
 
+    # Update meeting (rename, etc.)
+    update_parser = subparsers.add_parser('update', help='Update meeting metadata')
+    update_parser.add_argument('id', help='Meeting ID')
+    update_parser.add_argument('--title', help='New display title')
+
     # Add meeting (for testing)
     add_parser = subparsers.add_parser('add', help='Add meeting')
     add_parser.add_argument('--audio', required=True, help='Audio file path')
@@ -706,6 +746,14 @@ def main():
     elif args.command == 'delete':
         if manager.delete_meeting(args.id):
             print(f"Deleted: {args.id}")
+        else:
+            print(f"Meeting not found: {args.id}", file=sys.stderr)
+            sys.exit(1)
+
+    elif args.command == 'update':
+        meeting = manager.update_meeting(args.id, title=args.title)
+        if meeting:
+            print(json.dumps(meeting, indent=2))
         else:
             print(f"Meeting not found: {args.id}", file=sys.stderr)
             sys.exit(1)

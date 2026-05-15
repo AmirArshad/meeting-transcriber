@@ -170,7 +170,7 @@ jobs:
 
     - name: Verify packaged macOS helper and resources
       run: |
-        APP_PATH="dist/mac-arm64/Meeting Transcriber.app"
+        APP_PATH="dist/mac-arm64/AvaNevis.app"
         HELPER_PATH="$APP_PATH/Contents/Resources/bin/audiocapture-helper"
         PYTHON_PATH="$APP_PATH/Contents/Resources/python/bin/python3"
         FFMPEG_PATH="$APP_PATH/Contents/Resources/ffmpeg/ffmpeg"

@@ -4,7 +4,7 @@ Status: implemented (manual download flow)
 
 ## Overview
 
-Meeting Transcriber checks GitHub Releases for a newer version and notifies the renderer when one is available.
+AvaNevis checks GitHub Releases for a newer version and notifies the renderer when one is available.
 
 The current implementation does not download or install updates inside the app. Instead, it opens the matching release asset in the user's browser.
 
@@ -39,10 +39,21 @@ The current implementation does not download or install updates inside the app. 
 
 The updater looks for release assets that match the packaged artifact naming convention from `package.json`:
 
-- Windows: `Meeting Transcriber-Setup-<version>.exe`
-- macOS: `Meeting Transcriber-Setup-<version>.dmg`
+- Windows: `AvaNevis-Setup-<version>.exe`
+- macOS: `AvaNevis-Setup-<version>.dmg`
 
 If a platform-specific installer asset is not present, the updater falls back to the release page URL.
+
+### Legacy Meeting Transcriber Upgrade Path
+
+Older "Meeting Transcriber" builds shipped with `INSTALLER_NAME_TOKEN = 'MeetingTranscriber-Setup-'`. After the AvaNevis rebrand, those legacy clients will:
+
+1. Still successfully reach `/repos/AmirArshad/meeting-transcriber/releases/latest` (the GitHub repo slug did not change).
+2. Detect a newer version is available and surface the in-app banner.
+3. Fail to match the new `AvaNevis-Setup-` asset filename token.
+4. Fall back to opening the GitHub release page in the user's browser, where they can manually download `AvaNevis-Setup-<version>.{exe,dmg}` and install it over the old app.
+
+Once the user is on AvaNevis, future AvaNevis-to-AvaNevis updates restore the direct-download `shell.openExternal` flow against the matching installer asset.
 
 ## Important Properties
 

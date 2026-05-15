@@ -401,4 +401,4 @@ Total perceived delay: 3 seconds (or slightly more if backend takes >3s)
 
 **Version:** 1.4.0
 **Date:** 2025-01-21
-**Author:** Meeting Transcriber Team
+**Author:** AvaNevis Team

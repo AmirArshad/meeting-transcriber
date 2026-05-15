@@ -1,4 +1,4 @@
-; Custom NSIS installer script for Meeting Transcriber
+; Custom NSIS installer script for AvaNevis
 ; Adds progress messages during installation
 
 ; Progress messages for better UX during install

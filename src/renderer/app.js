@@ -1,5 +1,5 @@
 /**
- * Renderer process - UI logic for Meeting Transcriber (Redesigned)
+ * Renderer process - UI logic for AvaNevis (Redesigned)
  */
 
 const COPY_SUCCESS_TIMEOUT_MS = 2000;
@@ -38,11 +38,17 @@ let recordingStartTime = null;
 let timerInterval = null;
 let currentAudioFile = null;
 let currentMeetingId = null;
+// Tracks the meeting saved from the most recent recording (post-transcription).
+// Powers the in-place rename on the post-recording transcript card and the
+// default filename used by the "Save" button.
+let currentRecordingMeeting = null;
 let pendingMeetingTranscriptId = null;
 let meetings = [];
 let audioVisualizer = null;
 let isFirstRecording = true; // Track if this is first recording (for longer timeout)
 let isInitializing = true; // Track if app is still initializing
+const checkedMeetingIds = new Set();
+let meetingSearchQuery = '';
 const cleanupFns = [];
 
 function registerCleanup(cleanupFn) {
@@ -150,10 +156,236 @@ function createDeleteButton() {
   return button;
 }
 
+function createMeetingCheckbox(meetingId) {
+  const box = document.createElement('div');
+  box.className = 'meeting-checkbox';
+  box.setAttribute('role', 'checkbox');
+  box.setAttribute('aria-checked', 'false');
+  box.setAttribute('tabindex', '0');
+  box.title = 'Select meeting';
+  box.dataset.id = meetingId;
+
+  const svg = createSvgElement('svg', {
+    width: '11',
+    height: '11',
+    viewBox: '0 0 24 24',
+    fill: 'none',
+    stroke: 'currentColor',
+    'stroke-width': '3.2',
+    'stroke-linecap': 'round',
+    'stroke-linejoin': 'round',
+  });
+  svg.appendChild(createSvgElement('polyline', { points: '5 12 10 17 19 7' }));
+  box.appendChild(svg);
+
+  return box;
+}
+
+// ============================================================================
+// Lightweight, safe markdown renderer for transcript .md files.
+// Supports: # / ## / ### headings, ---/=== horizontal rules, blockquotes,
+// - / * / 1. lists, **bold**, *italic*, _italic_, `code`, [text](url),
+// and paragraphs separated by blank lines. Does NOT support raw HTML.
+// All output goes through textContent so injection is impossible.
+// ============================================================================
+function renderMarkdownInto(container, markdown) {
+  clearElement(container);
+  if (!markdown || typeof markdown !== 'string') return;
+
+  const lines = markdown.replace(/\r\n/g, '\n').split('\n');
+  let i = 0;
+
+  // Inline parser: returns an array of DOM nodes for a line of text.
+  function renderInline(text) {
+    const nodes = [];
+    const len = text.length;
+    let buf = '';
+    const flushText = () => {
+      if (buf) {
+        nodes.push(document.createTextNode(buf));
+        buf = '';
+      }
+    };
+
+    let j = 0;
+    while (j < len) {
+      const ch = text[j];
+
+      // Inline code: `...`
+      if (ch === '`') {
+        const end = text.indexOf('`', j + 1);
+        if (end > j) {
+          flushText();
+          const code = document.createElement('code');
+          code.textContent = text.slice(j + 1, end);
+          nodes.push(code);
+          j = end + 1;
+          continue;
+        }
+      }
+
+      // Bold: **...**
+      if (ch === '*' && text[j + 1] === '*') {
+        const end = text.indexOf('**', j + 2);
+        if (end > j + 1) {
+          flushText();
+          const strong = document.createElement('strong');
+          strong.append(...renderInline(text.slice(j + 2, end)));
+          nodes.push(strong);
+          j = end + 2;
+          continue;
+        }
+      }
+
+      // Italic: *...* or _..._  (must not consume bold)
+      if ((ch === '*' || ch === '_') && text[j + 1] !== ch) {
+        const end = text.indexOf(ch, j + 1);
+        if (end > j) {
+          flushText();
+          const em = document.createElement('em');
+          em.append(...renderInline(text.slice(j + 1, end)));
+          nodes.push(em);
+          j = end + 1;
+          continue;
+        }
+      }
+
+      // Link: [text](url)
+      if (ch === '[') {
+        const closeBracket = text.indexOf(']', j + 1);
+        if (closeBracket > j && text[closeBracket + 1] === '(') {
+          const closeParen = text.indexOf(')', closeBracket + 2);
+          if (closeParen > closeBracket) {
+            const linkText = text.slice(j + 1, closeBracket);
+            const url = text.slice(closeBracket + 2, closeParen).trim();
+            // Only allow safe URL schemes
+            if (/^(https?:|mailto:|#)/i.test(url) || url.startsWith('/') || url.startsWith('.')) {
+              flushText();
+              const a = document.createElement('a');
+              a.href = url;
+              a.target = '_blank';
+              a.rel = 'noopener noreferrer';
+              a.append(...renderInline(linkText));
+              nodes.push(a);
+              j = closeParen + 1;
+              continue;
+            }
+          }
+        }
+      }
+
+      buf += ch;
+      j++;
+    }
+    flushText();
+    return nodes;
+  }
+
+  function isHr(line) {
+    const t = line.trim();
+    return t === '---' || t === '***' || t === '___';
+  }
+
+  while (i < lines.length) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    // Blank line
+    if (trimmed === '') { i++; continue; }
+
+    // Headings
+    const headingMatch = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(trimmed);
+    if (headingMatch) {
+      const level = Math.min(6, headingMatch[1].length);
+      const h = document.createElement('h' + level);
+      h.append(...renderInline(headingMatch[2]));
+      container.appendChild(h);
+      i++;
+      continue;
+    }
+
+    // Horizontal rule
+    if (isHr(line)) {
+      container.appendChild(document.createElement('hr'));
+      i++;
+      continue;
+    }
+
+    // Blockquote (collapse consecutive lines)
+    if (/^>\s?/.test(trimmed)) {
+      const bq = document.createElement('blockquote');
+      const buf = [];
+      while (i < lines.length && /^>\s?/.test(lines[i].trim())) {
+        buf.push(lines[i].trim().replace(/^>\s?/, ''));
+        i++;
+      }
+      const p = document.createElement('p');
+      p.append(...renderInline(buf.join(' ')));
+      bq.appendChild(p);
+      container.appendChild(bq);
+      continue;
+    }
+
+    // Unordered list
+    if (/^[-*+]\s+/.test(trimmed)) {
+      const ul = document.createElement('ul');
+      while (i < lines.length && /^[-*+]\s+/.test(lines[i].trim())) {
+        const li = document.createElement('li');
+        li.append(...renderInline(lines[i].trim().replace(/^[-*+]\s+/, '')));
+        ul.appendChild(li);
+        i++;
+      }
+      container.appendChild(ul);
+      continue;
+    }
+
+    // Ordered list
+    if (/^\d+\.\s+/.test(trimmed)) {
+      const ol = document.createElement('ol');
+      while (i < lines.length && /^\d+\.\s+/.test(lines[i].trim())) {
+        const li = document.createElement('li');
+        li.append(...renderInline(lines[i].trim().replace(/^\d+\.\s+/, '')));
+        ol.appendChild(li);
+        i++;
+      }
+      container.appendChild(ol);
+      continue;
+    }
+
+    // Paragraph: collapse consecutive non-blank lines, preserving "  \n" hard breaks
+    const buf = [];
+    while (i < lines.length) {
+      const cur = lines[i];
+      const curTrim = cur.trim();
+      if (curTrim === '' || isHr(cur) || /^(#{1,6})\s+/.test(curTrim) ||
+          /^[-*+]\s+/.test(curTrim) || /^\d+\.\s+/.test(curTrim) ||
+          /^>\s?/.test(curTrim)) break;
+      // Two trailing spaces = hard break
+      const hardBreak = /  $/.test(cur);
+      buf.push({ text: curTrim, hardBreak });
+      i++;
+    }
+    if (buf.length) {
+      const p = document.createElement('p');
+      buf.forEach((item, idx) => {
+        p.append(...renderInline(item.text));
+        if (item.hardBreak && idx < buf.length - 1) {
+          p.appendChild(document.createElement('br'));
+        } else if (idx < buf.length - 1) {
+          p.appendChild(document.createTextNode(' '));
+        }
+      });
+      container.appendChild(p);
+    }
+  }
+}
+
 function createMeetingListItem(meeting) {
   const item = document.createElement('div');
   item.className = 'meeting-item';
   item.dataset.id = meeting.id;
+
+  const checkbox = createMeetingCheckbox(meeting.id);
 
   const info = document.createElement('div');
   info.className = 'meeting-info';
@@ -167,7 +399,8 @@ function createMeetingListItem(meeting) {
 
   const date = document.createElement('span');
   date.className = 'meeting-item-date';
-  date.textContent = formatDate(meeting.date);
+  date.textContent = formatRelativeDate(meeting.date);
+  date.title = formatDate(meeting.date);
 
   const duration = document.createElement('span');
   duration.className = 'meeting-item-duration';
@@ -178,11 +411,24 @@ function createMeetingListItem(meeting) {
 
   const deleteBtn = createDeleteButton();
 
-  item.append(info, deleteBtn);
+  item.append(checkbox, info, deleteBtn);
 
   item.addEventListener('click', (e) => {
     if (e.target.closest('.delete-btn-list')) return;
+    if (e.target.closest('.meeting-checkbox')) return;
     selectMeeting(meeting.id);
+  });
+
+  checkbox.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleMeetingChecked(meeting.id);
+  });
+
+  checkbox.addEventListener('keydown', (e) => {
+    if (e.key === ' ' || e.key === 'Enter') {
+      e.preventDefault();
+      toggleMeetingChecked(meeting.id);
+    }
   });
 
   deleteBtn.addEventListener('click', (e) => {
@@ -201,6 +447,10 @@ function setMeetingAudioSource(audioPath) {
   const audioPlayer = document.getElementById('audio-player');
   audioPlayer.src = window.electronAPI.buildFileUrl(audioPath);
   audioPlayer.load();
+  // Reset custom player UI when a new source loads
+  if (typeof window.__resetCustomAudioPlayer === 'function') {
+    window.__resetCustomAudioPlayer();
+  }
 }
 
 function handleMacOSPermissionFailure(permissionStatus) {
@@ -247,8 +497,18 @@ function setCopyButtonState(button, label, disabled) {
   button.disabled = disabled;
 }
 
+function closeInlineTitleEditor({ headingId, editBtnId, formId, editBtnDisplay = '' }) {
+  const heading = document.getElementById(headingId);
+  const editBtn = document.getElementById(editBtnId);
+  const form = document.getElementById(formId);
+
+  if (form) form.style.display = 'none';
+  if (heading) heading.style.display = '';
+  if (editBtn) editBtn.style.display = editBtnDisplay;
+}
+
 // Settings persistence
-const SETTINGS_KEY = 'meeting-transcriber-settings';
+const SETTINGS_KEY = 'avanevis-settings';
 
 // Load settings from localStorage
 function loadSettings() {
@@ -469,7 +729,7 @@ async function loadAudioDevices() {
           'This usually means microphone permission is not granted.\n\n' +
           'Would you like to open System Settings to grant permission?\n\n' +
           '1. Go to Privacy & Security → Microphone\n' +
-          '2. Grant permission to Meeting Transcriber\n' +
+          '2. Grant permission to AvaNevis\n' +
           '3. Restart the app'
         );
 
@@ -522,8 +782,17 @@ async function loadMeetingHistory() {
 
 // Render meeting list
 function renderMeetingList() {
-  if (meetings.length === 0) {
-    setPlaceholder(meetingList, 'No meetings recorded yet');
+  const query = meetingSearchQuery.trim().toLowerCase();
+  const filtered = query
+    ? meetings.filter((m) => (m.title || '').toLowerCase().includes(query))
+    : meetings;
+
+  if (filtered.length === 0) {
+    setPlaceholder(
+      meetingList,
+      meetings.length === 0 ? 'No meetings recorded yet' : 'No matches for your search',
+    );
+    updateSelectionToolbar();
     return;
   }
 
@@ -532,16 +801,131 @@ function renderMeetingList() {
   // Defense-in-depth: Track rendered IDs to skip duplicates from backend
   const renderedIds = new Set();
 
-  meetings.forEach((meeting, index) => {
-    // Skip duplicate IDs (shouldn't happen after backend fix, but safety first)
+  filtered.forEach((meeting) => {
     if (renderedIds.has(meeting.id)) {
       console.warn(`Skipping duplicate meeting ID in render: ${meeting.id}`);
       return;
     }
     renderedIds.add(meeting.id);
 
-    meetingList.appendChild(createMeetingListItem(meeting));
+    const item = createMeetingListItem(meeting);
+    if (checkedMeetingIds.has(String(meeting.id))) {
+      item.classList.add('checked');
+      const cb = item.querySelector('.meeting-checkbox');
+      if (cb) {
+        cb.classList.add('checked');
+        cb.setAttribute('aria-checked', 'true');
+      }
+    }
+    if (currentMeetingId !== null && String(currentMeetingId) === String(meeting.id)) {
+      item.classList.add('selected');
+    }
+    meetingList.appendChild(item);
   });
+
+  updateSelectionToolbar();
+}
+
+// ---- Multi-select state for meetings ----
+function toggleMeetingChecked(meetingId) {
+  const id = String(meetingId);
+  if (checkedMeetingIds.has(id)) {
+    checkedMeetingIds.delete(id);
+  } else {
+    checkedMeetingIds.add(id);
+  }
+
+  const item = meetingList.querySelector(`.meeting-item[data-id="${CSS.escape(id)}"]`);
+  if (item) {
+    const isChecked = checkedMeetingIds.has(id);
+    item.classList.toggle('checked', isChecked);
+    const cb = item.querySelector('.meeting-checkbox');
+    if (cb) {
+      cb.classList.toggle('checked', isChecked);
+      cb.setAttribute('aria-checked', String(isChecked));
+    }
+  }
+
+  updateSelectionToolbar();
+}
+
+function clearMeetingSelection() {
+  checkedMeetingIds.clear();
+  meetingList.querySelectorAll('.meeting-item.checked').forEach((el) => {
+    el.classList.remove('checked');
+    const cb = el.querySelector('.meeting-checkbox');
+    if (cb) {
+      cb.classList.remove('checked');
+      cb.setAttribute('aria-checked', 'false');
+    }
+  });
+  updateSelectionToolbar();
+}
+
+function updateSelectionToolbar() {
+  const toolbar = document.getElementById('selection-toolbar');
+  const countEl = document.getElementById('selection-count-text');
+  if (!toolbar || !countEl) return;
+
+  const count = checkedMeetingIds.size;
+  toolbar.classList.toggle('visible', count > 0);
+  meetingList.classList.toggle('selection-mode', count > 0);
+  countEl.textContent = `${count} selected`;
+}
+
+async function deleteCheckedMeetings() {
+  if (checkedMeetingIds.size === 0) return;
+
+  const ids = [...checkedMeetingIds];
+  const confirmMsg = ids.length === 1
+    ? 'Delete the selected meeting? This cannot be undone.'
+    : `Delete ${ids.length} selected meetings? This cannot be undone.`;
+  if (!confirm(confirmMsg)) return;
+
+  // Release audio player file lock if a checked meeting is currently playing
+  const audioPlayer = document.getElementById('audio-player');
+  if (audioPlayer && audioPlayer.src) {
+    audioPlayer.pause();
+    audioPlayer.removeAttribute('src');
+    audioPlayer.load();
+    if (typeof window.__resetCustomAudioPlayer === 'function') {
+      window.__resetCustomAudioPlayer();
+    }
+  }
+
+  await new Promise((resolve) => setTimeout(resolve, 300));
+
+  const failures = [];
+  for (const id of ids) {
+    try {
+      await window.electronAPI.deleteMeeting(id);
+    } catch (error) {
+      console.error(`Failed to delete meeting ${id}:`, error);
+      failures.push({ id, message: error.message });
+    }
+  }
+
+  if (currentMeetingId && ids.includes(String(currentMeetingId))) {
+    meetingDetails.style.display = 'none';
+    document.getElementById('meeting-details-empty').style.display = 'flex';
+    currentMeetingId = null;
+  }
+
+  meetings = meetings.filter((m) => !ids.includes(String(m.id)));
+  checkedMeetingIds.clear();
+  renderMeetingList();
+
+  await loadMeetingHistory();
+
+  if (failures.length === 0) {
+    addLog(`Deleted ${ids.length} meeting${ids.length === 1 ? '' : 's'}.`);
+  } else {
+    addLog(
+      `Deleted ${ids.length - failures.length} of ${ids.length} meetings (${failures.length} failed).`,
+      'error',
+    );
+    alert(`Some meetings could not be deleted:\n\n${failures.map((f) => `- ${f.id}: ${f.message}`).join('\n')}`);
+  }
 }
 
 // Select meeting from history
@@ -565,6 +949,11 @@ async function selectMeeting(meetingId) {
   document.getElementById('meeting-title').textContent = meeting.title;
   document.getElementById('meeting-date').textContent = formatDate(meeting.date);
   document.getElementById('meeting-duration').textContent = meeting.duration;
+  closeInlineTitleEditor({
+    headingId: 'meeting-title',
+    editBtnId: 'meeting-title-edit',
+    formId: 'meeting-title-edit-form',
+  });
 
   setMeetingAudioSource(meeting.audioPath);
 
@@ -573,7 +962,13 @@ async function selectMeeting(meetingId) {
   meetingDetails.style.display = 'flex';
 
   const transcriptEl = document.getElementById('meeting-transcript');
-  transcriptEl.textContent = 'Loading transcript...';
+  transcriptEl.classList.add('markdown-body');
+  delete transcriptEl.dataset.markdown;
+  clearElement(transcriptEl);
+  const loading = document.createElement('p');
+  loading.className = 'placeholder';
+  loading.textContent = 'Loading transcript...';
+  transcriptEl.appendChild(loading);
 
   try {
     const fullMeeting = await window.electronAPI.getMeeting(meetingId);
@@ -582,11 +977,26 @@ async function selectMeeting(meetingId) {
       return;
     }
 
-    transcriptEl.textContent = fullMeeting.transcript || 'No transcript available';
+    if (fullMeeting.transcript) {
+      transcriptEl.dataset.markdown = fullMeeting.transcript;
+      renderMarkdownInto(transcriptEl, fullMeeting.transcript);
+    } else {
+      delete transcriptEl.dataset.markdown;
+      clearElement(transcriptEl);
+      const empty = document.createElement('p');
+      empty.className = 'placeholder';
+      empty.textContent = 'No transcript available';
+      transcriptEl.appendChild(empty);
+    }
   } catch (error) {
     console.error(`Failed to load meeting transcript: ${error.message}`);
     if (currentMeetingId === meetingId && pendingMeetingTranscriptId === meetingId) {
-      transcriptEl.textContent = 'Failed to load transcript';
+      clearElement(transcriptEl);
+      delete transcriptEl.dataset.markdown;
+      const err = document.createElement('p');
+      err.className = 'placeholder error';
+      err.textContent = 'Failed to load transcript';
+      transcriptEl.appendChild(err);
     }
   } finally {
     if (pendingMeetingTranscriptId === meetingId) {
@@ -596,10 +1006,188 @@ async function selectMeeting(meetingId) {
 
 }
 
+// ============================================================================
+// Inline rename: meeting title (history detail + post-recording transcript)
+// ============================================================================
+
+// Reflects currentRecordingMeeting onto the post-recording transcript card.
+// When no meeting has been saved yet, the heading reads "Transcript" and the
+// pencil button is hidden. After save, it shows the meeting label and lets
+// the user rename it in place.
+function applyCurrentRecordingTitle() {
+  const heading = document.getElementById('current-meeting-title');
+  const editBtn = document.getElementById('current-meeting-title-edit');
+  if (!heading) return;
+
+  closeInlineTitleEditor({
+    headingId: 'current-meeting-title',
+    editBtnId: 'current-meeting-title-edit',
+    formId: 'current-meeting-title-form',
+    editBtnDisplay: currentRecordingMeeting && currentRecordingMeeting.title ? 'inline-flex' : 'none',
+  });
+
+  if (currentRecordingMeeting && currentRecordingMeeting.title) {
+    heading.textContent = currentRecordingMeeting.title;
+    if (editBtn) editBtn.style.display = 'inline-flex';
+  } else {
+    heading.textContent = 'Transcript';
+    if (editBtn) editBtn.style.display = 'none';
+  }
+}
+
+// Wires an inline-rename UI for a heading + pencil button + form trio.
+// `getMeeting()` returns the meeting being renamed (history detail uses
+// `currentMeetingId`, post-recording uses `currentRecordingMeeting`).
+// `onSaved(updated)` fires after a successful update so callers can refresh
+// any local caches and the meeting list.
+function wireInlineTitleEditor({
+  rowId, headingId, editBtnId, formId, inputId, cancelBtnId,
+  getMeeting, onSaved,
+}) {
+  const row = document.getElementById(rowId);
+  const heading = document.getElementById(headingId);
+  const editBtn = document.getElementById(editBtnId);
+  const form = document.getElementById(formId);
+  const input = document.getElementById(inputId);
+  const cancelBtn = document.getElementById(cancelBtnId);
+
+  if (!row || !heading || !editBtn || !form || !input || !cancelBtn) return;
+
+  const enterEditMode = () => {
+    const meeting = getMeeting();
+    if (!meeting) return;
+    input.value = meeting.title || '';
+    heading.style.display = 'none';
+    editBtn.style.display = 'none';
+    form.style.display = 'flex';
+    // Defer focus + select to next tick so display change has applied
+    requestAnimationFrame(() => {
+      input.focus();
+      input.select();
+    });
+  };
+
+  const exitEditMode = () => {
+    form.style.display = 'none';
+    heading.style.display = '';
+    // editBtn visibility is governed by the caller (e.g. post-recording hides
+    // it until a meeting exists). We only restore it if the caller wanted it
+    // visible — defer to applyCurrentRecordingTitle / selectMeeting to set it.
+    editBtn.style.display = '';
+  };
+
+  editBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    enterEditMode();
+  });
+
+  cancelBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    exitEditMode();
+  });
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      exitEditMode();
+    }
+  });
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const meeting = getMeeting();
+    if (!meeting) {
+      exitEditMode();
+      return;
+    }
+    const editedMeetingId = String(meeting.id);
+    const newTitle = (input.value || '').trim();
+    if (!newTitle || newTitle === meeting.title) {
+      exitEditMode();
+      return;
+    }
+    try {
+      const updated = await window.electronAPI.updateMeeting(meeting.id, { title: newTitle });
+      if (updated && updated.title) {
+        const activeMeeting = getMeeting();
+        if (activeMeeting && String(activeMeeting.id) === editedMeetingId) {
+          heading.textContent = updated.title;
+        }
+        if (typeof onSaved === 'function') onSaved(updated);
+        addLog(`Renamed meeting to "${updated.title}"`);
+      }
+    } catch (err) {
+      console.error('Rename failed:', err);
+      addLog(`Failed to rename meeting: ${err.message}`, 'error');
+      alert(`Failed to rename meeting: ${err.message}`);
+    } finally {
+      const activeMeeting = getMeeting();
+      if (activeMeeting && String(activeMeeting.id) === editedMeetingId) {
+        exitEditMode();
+      }
+    }
+  });
+}
+
+function setupTitleEditors() {
+  // History detail panel
+  wireInlineTitleEditor({
+    rowId: 'meeting-title-row',
+    headingId: 'meeting-title',
+    editBtnId: 'meeting-title-edit',
+    formId: 'meeting-title-edit-form',
+    inputId: 'meeting-title-input',
+    cancelBtnId: 'meeting-title-cancel',
+    getMeeting: () => meetings.find(m => m.id === currentMeetingId) || null,
+    onSaved: (updated) => {
+      // Update local cache and re-render meeting list to reflect the new title
+      const idx = meetings.findIndex(m => m.id === updated.id);
+      if (idx !== -1) {
+        meetings[idx] = { ...meetings[idx], title: updated.title };
+      }
+      renderMeetingList();
+      // Mirror onto the post-recording card if the same meeting is shown there
+      if (currentRecordingMeeting && currentRecordingMeeting.id === updated.id) {
+        currentRecordingMeeting = { ...currentRecordingMeeting, title: updated.title };
+        applyCurrentRecordingTitle();
+      }
+    },
+  });
+
+  // Post-recording transcript card
+  wireInlineTitleEditor({
+    rowId: 'current-transcript-title-row',
+    headingId: 'current-meeting-title',
+    editBtnId: 'current-meeting-title-edit',
+    formId: 'current-meeting-title-form',
+    inputId: 'current-meeting-title-input',
+    cancelBtnId: 'current-meeting-title-cancel',
+    getMeeting: () => currentRecordingMeeting,
+    onSaved: (updated) => {
+      currentRecordingMeeting = { ...currentRecordingMeeting, title: updated.title };
+      applyCurrentRecordingTitle();
+      // Also update the cached history list so the sidebar reflects the change
+      const idx = meetings.findIndex(m => m.id === updated.id);
+      if (idx !== -1) {
+        meetings[idx] = { ...meetings[idx], title: updated.title };
+        renderMeetingList();
+      }
+    },
+  });
+}
+
 // Setup event listeners
 function setupEventListeners() {
-  refreshBtn.addEventListener('click', loadAudioDevices);
-  refreshHistory.addEventListener('click', loadMeetingHistory);
+  refreshBtn.addEventListener('click', () => {
+    refreshBtn.classList.add('spinning');
+    setTimeout(() => refreshBtn.classList.remove('spinning'), 600);
+    loadAudioDevices();
+  });
+  refreshHistory.addEventListener('click', () => {
+    refreshHistory.classList.add('spinning');
+    setTimeout(() => refreshHistory.classList.remove('spinning'), 600);
+    loadMeetingHistory();
+  });
   recordBtn.addEventListener('click', handleRecordButtonClick);
   copyBtn.addEventListener('click', copyTranscript);
   saveBtn.addEventListener('click', saveTranscript);
@@ -612,6 +1200,27 @@ function setupEventListeners() {
   if (copyTranscriptBtn) {
     copyTranscriptBtn.addEventListener('click', copyMeetingTranscript);
   }
+
+  // Save transcript from meeting details (history)
+  const saveMeetingTranscriptBtn = document.getElementById('save-meeting-transcript-btn');
+  if (saveMeetingTranscriptBtn) {
+    saveMeetingTranscriptBtn.addEventListener('click', saveMeetingTranscriptToFile);
+  }
+
+  // Meeting search filter
+  const searchInput = document.getElementById('meeting-search');
+  if (searchInput) {
+    searchInput.addEventListener('input', () => {
+      meetingSearchQuery = searchInput.value || '';
+      renderMeetingList();
+    });
+  }
+
+  // Selection toolbar
+  const selClear = document.getElementById('selection-clear');
+  if (selClear) selClear.addEventListener('click', clearMeetingSelection);
+  const selDelete = document.getElementById('selection-delete');
+  if (selDelete) selDelete.addEventListener('click', deleteCheckedMeetings);
 
   // Save settings when selections change
   micSelect.addEventListener('change', () => {
@@ -838,6 +1447,11 @@ async function runRecordingPreflightChecks({ micId, desktopId }) {
 
 // Start recording with retry logic
 async function startRecording() {
+  // Reset any previous recording's saved-meeting context so the title
+  // collapses back to "Transcript" until the new recording is saved.
+  currentRecordingMeeting = null;
+  applyCurrentRecordingTitle();
+
   const micId = micSelect.value;
   const desktopId = desktopSelect.value;
 
@@ -1112,6 +1726,10 @@ async function transcribeAudio() {
       if (savedMeeting && savedMeeting.audioPath) {
         currentAudioFile = savedMeeting.audioPath;
       }
+      if (savedMeeting && savedMeeting.id) {
+        currentRecordingMeeting = savedMeeting;
+        applyCurrentRecordingTitle();
+      }
       addLog('Meeting saved!');
     } catch (saveError) {
       console.error('Failed to save meeting:', saveError);
@@ -1141,7 +1759,8 @@ function copyTranscript() {
 // Copy meeting transcript to clipboard
 function copyMeetingTranscript() {
   const transcriptEl = document.getElementById('meeting-transcript');
-  const text = transcriptEl.textContent;
+  // Prefer the original markdown source so users get the .md they expect.
+  const text = transcriptEl.dataset.markdown || transcriptEl.textContent;
 
   navigator.clipboard.writeText(text).then(() => {
     // Visual feedback
@@ -1157,10 +1776,92 @@ function copyMeetingTranscript() {
   });
 }
 
-// Save transcript
-function saveTranscript() {
-  // TODO: Implement file save dialog via IPC
-  addLog('Save feature coming soon!');
+// Save the currently selected history meeting's transcript via native dialog.
+// Defaults the filename to the meeting's display label so renamed meetings
+// save with the user-friendly name they chose.
+async function saveMeetingTranscriptToFile() {
+  if (!currentMeetingId) {
+    addLog('No meeting selected to save.', 'warning');
+    return;
+  }
+
+  const meeting = meetings.find(m => m.id === currentMeetingId);
+  const suggestedName = (meeting && meeting.title) || 'Transcript';
+  const transcriptEl = document.getElementById('meeting-transcript');
+  let content = (transcriptEl && transcriptEl.dataset.markdown) || '';
+
+  if (!content) {
+    try {
+      const fullMeeting = await window.electronAPI.getMeeting(currentMeetingId);
+      content = (fullMeeting && fullMeeting.transcript) || '';
+    } catch (err) {
+      console.error('Failed to load transcript for save:', err);
+      addLog(`Failed to load transcript: ${err.message}`, 'error');
+      return;
+    }
+  }
+
+  if (!content.trim()) {
+    addLog('Transcript is empty.', 'warning');
+    return;
+  }
+
+  try {
+    const result = await window.electronAPI.saveTranscriptAs({ suggestedName, content });
+    if (result && !result.canceled && result.filePath) {
+      addLog(`Transcript saved to ${result.filePath}`);
+    }
+  } catch (err) {
+    console.error('Save failed:', err);
+    addLog(`Failed to save transcript: ${err.message}`, 'error');
+    alert(`Failed to save transcript: ${err.message}`);
+  }
+}
+
+// Save transcript via native Save dialog. Default filename uses the
+// current recording's display label (renamed or auto-generated) so users
+// get a meaningful name without further typing.
+async function saveTranscript() {
+  // Prefer the rich markdown saved on disk by the backend transcriber when
+  // available, falling back to whatever is currently in the transcript pane.
+  let content = '';
+  let suggestedName = 'Transcript';
+
+  if (currentRecordingMeeting && currentRecordingMeeting.id) {
+    suggestedName = currentRecordingMeeting.title || suggestedName;
+    try {
+      const fullMeeting = await window.electronAPI.getMeeting(currentRecordingMeeting.id);
+      if (fullMeeting && fullMeeting.transcript) {
+        content = fullMeeting.transcript;
+      }
+    } catch (err) {
+      console.warn('Failed to load saved transcript markdown, falling back to plain text:', err);
+    }
+  }
+
+  if (!content) {
+    // Fallback: assemble plain text from the rendered transcript output
+    content = (transcriptOutput && transcriptOutput.textContent) || '';
+  }
+
+  if (!content.trim()) {
+    addLog('Nothing to save yet.', 'warning');
+    return;
+  }
+
+  try {
+    const result = await window.electronAPI.saveTranscriptAs({
+      suggestedName,
+      content,
+    });
+    if (result && !result.canceled && result.filePath) {
+      addLog(`Transcript saved to ${result.filePath}`);
+    }
+  } catch (err) {
+    console.error('Save failed:', err);
+    addLog(`Failed to save transcript: ${err.message}`, 'error');
+    alert(`Failed to save transcript: ${err.message}`);
+  }
 }
 
 // Delete meeting
@@ -1253,27 +1954,49 @@ function formatDate(dateString) {
   });
 }
 
+// Compact, Notion-style relative date for the meeting list
+function formatRelativeDate(dateString) {
+  const date = new Date(dateString);
+  if (Number.isNaN(date.getTime())) return '';
+  const now = new Date();
+  const diffMs = now - date;
+  const diffSec = Math.floor(diffMs / 1000);
+  const diffMin = Math.floor(diffSec / 60);
+  const diffHr = Math.floor(diffMin / 60);
+  const diffDay = Math.floor(diffHr / 24);
+
+  if (diffSec < 60) return 'just now';
+  if (diffMin < 60) return `${diffMin}m ago`;
+  if (diffHr < 24) return `${diffHr}h ago`;
+  if (diffDay < 7) return `${diffDay}d ago`;
+
+  const sameYear = date.getFullYear() === now.getFullYear();
+  return date.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    ...(sameYear ? {} : { year: 'numeric' }),
+  });
+}
+
 // Tab switching
 function setupTabs() {
   const tabButtons = document.querySelectorAll('.tab-btn');
+  const railButtons = document.querySelectorAll('.rail-btn[data-tab]');
   const tabPanes = document.querySelectorAll('.tab-pane');
+  const allNavButtons = [...tabButtons, ...railButtons];
 
-  tabButtons.forEach(button => {
+  function activate(targetTab) {
+    allNavButtons.forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.tab === targetTab);
+    });
+    tabPanes.forEach((pane) => {
+      pane.classList.toggle('active', pane.id === `${targetTab}-tab`);
+    });
+  }
+
+  allNavButtons.forEach((button) => {
     button.addEventListener('click', () => {
-      const targetTab = button.dataset.tab;
-
-      // Update active button
-      tabButtons.forEach(btn => btn.classList.remove('active'));
-      button.classList.add('active');
-
-      // Update active pane
-      tabPanes.forEach(pane => {
-        if (pane.id === `${targetTab}-tab`) {
-          pane.classList.add('active');
-        } else {
-          pane.classList.remove('active');
-        }
-      });
+      activate(button.dataset.tab);
     });
   });
 }
@@ -1451,6 +2174,7 @@ async function installGPUAcceleration() {
 
   // UI setup
   installBtn.disabled = true;
+  installBtn.classList.add('is-loading');
   statusBadge.textContent = 'Installing...';
   statusBadge.className = 'setting-badge installing';
   progressDiv.style.display = 'block';
@@ -1482,6 +2206,7 @@ async function installGPUAcceleration() {
     // Update status
     statusBadge.textContent = 'Enabled';
     statusBadge.className = 'setting-badge enabled';
+    installBtn.classList.remove('is-loading');
 
     // Hide progress after delay
     setTimeout(() => {
@@ -1500,6 +2225,7 @@ async function installGPUAcceleration() {
     statusBadge.textContent = 'Failed';
     statusBadge.className = 'setting-badge disabled';
     installBtn.disabled = false;
+    installBtn.classList.remove('is-loading');
 
     alert('GPU installation failed. Check the log for details.');
   }
@@ -1577,7 +2303,7 @@ function handleDismissUpdate() {
 }
 
 // ============================================================================
-// Audio Visualizer Class
+// Audio Visualizer Class — dramatic, interpolated, dual-channel
 // ============================================================================
 
 class AudioVisualizer {
@@ -1589,17 +2315,45 @@ class AudioVisualizer {
     this.micCtx = this.micCanvas.getContext('2d');
     this.desktopCtx = this.desktopCanvas.getContext('2d');
 
-    // History buffers for waveform effect
-    this.bufferSize = 50;
+    // History buffers — current displayed values (smoothly interpolated)
+    this.bufferSize = 96;
     this.micBuffer = new Array(this.bufferSize).fill(0);
     this.desktopBuffer = new Array(this.bufferSize).fill(0);
 
-    this.animationId = null;
+    // Per-channel "current incoming sample" target. Each draw frame the
+    // newest column lerps toward this target so the wave keeps moving even
+    // between the recorder's 5 Hz updates.
+    this.micTarget = 0;
+    this.desktopTarget = 0;
+
+    // Peak-hold values (decay over time)
+    this.micPeaks = new Array(this.bufferSize).fill(0);
+    this.desktopPeaks = new Array(this.bufferSize).fill(0);
+
+    // Sample-arrival metering — decides when to "shift" a new column in.
+    // The recorder emits at ~5 Hz (every 200ms); we shift at that cadence.
+    this.lastShiftTime = 0;
+    this.shiftIntervalMs = 80; // visual shift cadence — denser than recorder for fluidity
+
+    this.rafId = null;
+    this.fallbackIntervalId = null;
     this.isRunning = false;
 
-    // FIX 4: Track when we last received updates
     this.lastUpdateTime = 0;
     this.warningShown = false;
+
+    // For subtle ambient motion when input is near-silent
+    this.phase = 0;
+  }
+
+  _setupCanvas(canvas, ctx) {
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    canvas.width = Math.round(rect.width * dpr);
+    canvas.height = Math.round(rect.height * dpr);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.scale(dpr, dpr);
   }
 
   start() {
@@ -1607,112 +2361,258 @@ class AudioVisualizer {
     this.container.style.display = 'flex';
     this.micBuffer.fill(0);
     this.desktopBuffer.fill(0);
-    this.lastUpdateTime = Date.now(); // Initialize update time
+    this.micPeaks.fill(0);
+    this.desktopPeaks.fill(0);
+    this.micTarget = 0;
+    this.desktopTarget = 0;
+    this.lastUpdateTime = Date.now();
+    this.lastShiftTime = performance.now();
     this.warningShown = false;
-    // Use setInterval instead of requestAnimationFrame
-    // This ensures visualization continues even when window is backgrounded
-    this.animationId = setInterval(() => this.draw(), 50); // 20 FPS
+
+    // Defer a tick so the container is visible and has layout
+    requestAnimationFrame(() => {
+      this._setupCanvas(this.micCanvas, this.micCtx);
+      this._setupCanvas(this.desktopCanvas, this.desktopCtx);
+      this._loop();
+    });
+
+    // Background safety: if document is hidden, rAF is throttled to ~1 Hz.
+    // Use a setInterval to ensure visualization keeps ticking near hidden too.
+    this.fallbackIntervalId = setInterval(() => {
+      if (document.hidden && this.isRunning) {
+        // No need to draw, but keep peak decay current so when window
+        // returns to focus the state is consistent.
+        this._decayPeaks();
+      }
+    }, 200);
   }
 
   stop() {
     this.isRunning = false;
-    if (this.animationId) {
-      clearInterval(this.animationId);
-      this.animationId = null;
+    if (this.rafId !== null) {
+      cancelAnimationFrame(this.rafId);
+      this.rafId = null;
     }
-    // Keep visible for a moment or hide immediately?
-    // Let's hide it to keep UI clean when not recording
+    if (this.fallbackIntervalId !== null) {
+      clearInterval(this.fallbackIntervalId);
+      this.fallbackIntervalId = null;
+    }
     this.container.style.display = 'none';
     this.warningShown = false;
   }
 
   updateLevels(levels) {
-    // FIX 4: Update timestamp when we receive levels
     this.lastUpdateTime = Date.now();
-    this.warningShown = false; // Reset warning when we get updates
+    this.warningShown = false;
 
-    // Shift buffer and add new level
-    this.micBuffer.shift();
-    this.micBuffer.push(levels.mic);
-
-    this.desktopBuffer.shift();
-    this.desktopBuffer.push(levels.desktop);
+    // Just update the targets — the rAF loop will smoothly pull current toward them.
+    this.micTarget = Math.max(0, Math.min(1, levels.mic || 0));
+    this.desktopTarget = Math.max(0, Math.min(1, levels.desktop || 0));
   }
 
-  draw() {
+  _decayPeaks() {
+    for (let i = 0; i < this.bufferSize; i++) {
+      this.micPeaks[i] *= 0.94;
+      this.desktopPeaks[i] *= 0.94;
+    }
+  }
+
+  _loop() {
     if (!this.isRunning) return;
 
-    // PERFORMANCE: Skip rendering if document is hidden (minimized/backgrounded)
-    // Saves CPU/GPU when user can't see the visualization
-    if (document.hidden) {
-      return; // Don't render, but keep interval running for quick resume
-    }
+    if (!document.hidden) {
+      const now = performance.now();
+      this.phase = (this.phase + 0.06) % (Math.PI * 2);
 
-    // FIX 4: Check if we've received updates recently
-    const timeSinceUpdate = Date.now() - this.lastUpdateTime;
+      // Smoothly lerp the newest column toward the target (fast attack, slow release)
+      const lastIdx = this.bufferSize - 1;
+      const lerp = (cur, target) => {
+        const k = target > cur ? 0.55 : 0.18; // attack vs release
+        return cur + (target - cur) * k;
+      };
+      this.micBuffer[lastIdx] = lerp(this.micBuffer[lastIdx], this.micTarget);
+      this.desktopBuffer[lastIdx] = lerp(this.desktopBuffer[lastIdx], this.desktopTarget);
 
-    // If no updates for 5 seconds, fade out visualization to indicate problem
-    if (timeSinceUpdate > 5000) {
-      // PERFORMANCE: In-place mutation instead of creating new array
-      for (let i = 0; i < this.micBuffer.length; i++) {
-        this.micBuffer[i] *= 0.9;
-        this.desktopBuffer[i] *= 0.9;
+      // Periodically shift a new column in so the wave scrolls left
+      if (now - this.lastShiftTime >= this.shiftIntervalMs) {
+        this.lastShiftTime = now;
+        // Shift left
+        for (let i = 0; i < this.bufferSize - 1; i++) {
+          this.micBuffer[i] = this.micBuffer[i + 1];
+          this.desktopBuffer[i] = this.desktopBuffer[i + 1];
+          this.micPeaks[i] = this.micPeaks[i + 1];
+          this.desktopPeaks[i] = this.desktopPeaks[i + 1];
+        }
+        // New column starts at current target
+        this.micBuffer[lastIdx] = this.micTarget;
+        this.desktopBuffer[lastIdx] = this.desktopTarget;
       }
 
-      // Show warning once
-      if (!this.warningShown && recordingState === 'recording') {
-        console.warn('Visualizer: No audio levels for 5s - recording may be paused');
-        addLog('⚠️ Warning: Audio visualization paused (no data from recorder)', 'warning');
-        this.warningShown = true;
+      // Update peaks: refresh if the live value is higher; otherwise decay
+      for (let i = 0; i < this.bufferSize; i++) {
+        this.micPeaks[i] = Math.max(this.micPeaks[i] * 0.95, this.micBuffer[i]);
+        this.desktopPeaks[i] = Math.max(this.desktopPeaks[i] * 0.95, this.desktopBuffer[i]);
       }
+
+      // Heartbeat-lost fade
+      const timeSinceUpdate = Date.now() - this.lastUpdateTime;
+      if (timeSinceUpdate > 5000) {
+        for (let i = 0; i < this.bufferSize; i++) {
+          this.micBuffer[i] *= 0.92;
+          this.desktopBuffer[i] *= 0.92;
+        }
+        if (!this.warningShown && recordingState === 'recording') {
+          console.warn('Visualizer: No audio levels for 5s - recording may be paused');
+          addLog('⚠️ Warning: Audio visualization paused (no data from recorder)', 'warning');
+          this.warningShown = true;
+        }
+      }
+
+      this._draw(this.micCtx, this.micBuffer, this.micPeaks, [139, 124, 246]);
+      this._draw(this.desktopCtx, this.desktopBuffer, this.desktopPeaks, [56, 189, 248]);
     }
 
-    this.drawWaveform(this.micCtx, this.micBuffer, '#10b981'); // Emerald 500
-    this.drawWaveform(this.desktopCtx, this.desktopBuffer, '#3b82f6'); // Blue 500
-
-    // No longer using requestAnimationFrame - we use setInterval in start()
+    this.rafId = requestAnimationFrame(() => this._loop());
   }
 
-  drawWaveform(ctx, buffer, color) {
-    const width = ctx.canvas.width;
-    const height = ctx.canvas.height;
-    const barWidth = width / this.bufferSize;
+  // Aggressive perceptual scaling to make speech visible without crushing peaks.
+  _shape(level) {
+    const x = Math.max(0, Math.min(1, level));
+    // Soft expander: emphasize mid + boost low signal visibility
+    const shaped = Math.pow(x, 0.38);
+    return shaped;
+  }
 
-    // Clear canvas
+  _draw(ctx, buffer, peaks, rgb) {
+    const canvas = ctx.canvas;
+    const dpr = window.devicePixelRatio || 1;
+    const width = canvas.width / dpr;
+    const height = canvas.height / dpr;
+    const midY = height / 2;
+    const n = this.bufferSize;
+    const [r, g, b] = rgb;
+    const colorBase = `${r}, ${g}, ${b}`;
+
     ctx.clearRect(0, 0, width, height);
 
-    // Draw bars
-    ctx.fillStyle = color;
-    
-    for (let i = 0; i < this.bufferSize; i++) {
-      const level = buffer[i];
-      // Non-linear scaling for better visual feedback on low volumes
-      const scaledLevel = Math.pow(level, 0.5); 
-      
-      const barHeight = Math.max(2, scaledLevel * height);
-      const x = i * barWidth;
-      const y = (height - barHeight) / 2; // Center vertically
+    const colWidth = width / n;
+    const barWidth = Math.max(1.2, colWidth - 1.4);
+    const radius = Math.min(barWidth / 2, 1.6);
 
-      // Draw rounded bar
-      this.roundRect(ctx, x, y, barWidth - 1, barHeight, 1);
+    // Background midline (subtle baseline)
+    ctx.strokeStyle = `rgba(${colorBase}, 0.10)`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, midY);
+    ctx.lineTo(width, midY);
+    ctx.stroke();
+
+    // Compute per-bar shaped amplitudes
+    const amps = new Array(n);
+    const peakAmps = new Array(n);
+    let maxAmp = 0;
+    const ampScale = height * 0.40;
+    for (let i = 0; i < n; i++) {
+      const a = this._shape(buffer[i]) * ampScale;
+      amps[i] = Math.max(1.0, a);
+      peakAmps[i] = Math.max(amps[i], this._shape(peaks[i]) * ampScale);
+      if (amps[i] > maxAmp) maxAmp = amps[i];
+    }
+
+    // Vertical gradient for the bars
+    const grad = ctx.createLinearGradient(0, 0, 0, height);
+    grad.addColorStop(0.0, `rgba(${colorBase}, 0.95)`);
+    grad.addColorStop(0.5, `rgba(${colorBase}, 0.55)`);
+    grad.addColorStop(1.0, `rgba(${colorBase}, 0.95)`);
+
+    // Soft glow underlay (proportional to overall energy)
+    const energy = Math.min(1, maxAmp / ampScale);
+    if (energy > 0.05) {
+      ctx.save();
+      ctx.shadowColor = `rgba(${colorBase}, ${0.3 + energy * 0.4})`;
+      ctx.shadowBlur = 4 + energy * 8;
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      for (let i = 0; i < n; i++) {
+        const x = i * colWidth + (colWidth - barWidth) / 2;
+        const h = amps[i] * 2;
+        const y = midY - amps[i];
+        roundedBar(ctx, x, y, barWidth, h, radius);
+      }
+      ctx.fill();
+      ctx.restore();
+    } else {
+      // Quiet state: just draw bars without glow for performance
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      for (let i = 0; i < n; i++) {
+        const x = i * colWidth + (colWidth - barWidth) / 2;
+        const h = amps[i] * 2;
+        const y = midY - amps[i];
+        roundedBar(ctx, x, y, barWidth, h, radius);
+      }
+      ctx.fill();
+    }
+
+    // Peak-hold caps (bright crest leftover from loud moments)
+    ctx.fillStyle = `rgba(${colorBase}, 0.95)`;
+    for (let i = 0; i < n; i++) {
+      const peak = peakAmps[i];
+      if (peak <= amps[i] + 0.5) continue;
+      const x = i * colWidth + (colWidth - barWidth) / 2;
+      const capH = 1.0;
+      // top cap
+      ctx.fillRect(x, midY - peak - capH / 2, barWidth, capH);
+      // bottom cap (mirrored)
+      ctx.fillRect(x, midY + peak - capH / 2, barWidth, capH);
+    }
+
+    // Crisp envelope outline (smooth curve over the bar tops)
+    ctx.strokeStyle = `rgba(${colorBase}, 0.9)`;
+    ctx.lineWidth = 1.1;
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    for (let i = 0; i < n; i++) {
+      const x = i * colWidth + colWidth / 2;
+      const y = midY - amps[i];
+      if (i === 0) ctx.moveTo(x, y);
+      else {
+        const px = (i - 1) * colWidth + colWidth / 2;
+        const py = midY - amps[i - 1];
+        const cx = (px + x) / 2;
+        const cy = (py + y) / 2;
+        ctx.quadraticCurveTo(px, py, cx, cy);
+      }
+    }
+    ctx.stroke();
+
+    // When near-silent, add a tiny breathing shimmer so the UI feels alive
+    if (energy < 0.04) {
+      const shimmer = (Math.sin(this.phase) + 1) / 2; // 0..1
+      const sa = 0.2 + shimmer * 0.8;
+      ctx.fillStyle = `rgba(${colorBase}, ${0.18 * sa})`;
+      const dotR = 1.2;
+      ctx.beginPath();
+      ctx.arc(width / 2, midY, dotR, 0, Math.PI * 2);
       ctx.fill();
     }
   }
+}
 
-  // Helper for rounded rectangles
-  roundRect(ctx, x, y, width, height, radius) {
-    ctx.beginPath();
-    ctx.moveTo(x + radius, y);
-    ctx.lineTo(x + width - radius, y);
-    ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
-    ctx.lineTo(x + width, y + height - radius);
-    ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
-    ctx.lineTo(x + radius, y + height);
-    ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
-    ctx.lineTo(x, y + radius);
-    ctx.quadraticCurveTo(x, y, x + radius, y);
-    ctx.closePath();
-  }
+// Helper: rounded bar path (does not fill — caller decides batch fill)
+function roundedBar(ctx, x, y, w, h, r) {
+  const rr = Math.min(r, w / 2, h / 2);
+  ctx.moveTo(x + rr, y);
+  ctx.lineTo(x + w - rr, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + rr);
+  ctx.lineTo(x + w, y + h - rr);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
+  ctx.lineTo(x + rr, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - rr);
+  ctx.lineTo(x, y + rr);
+  ctx.quadraticCurveTo(x, y, x + rr, y);
+  ctx.closePath();
 }
 
 // Handle page visibility changes (for debugging backgrounded recording)
@@ -1726,7 +2626,246 @@ document.addEventListener('visibilitychange', () => {
 
 window.addEventListener('beforeunload', runCleanup);
 
+// ============================================================================
+// Developer Console drawer
+// ============================================================================
+
+function setupDevConsole() {
+  const consoleEl = document.getElementById('dev-console');
+  const toggle = document.getElementById('dev-console-toggle');
+  if (!consoleEl || !toggle) return;
+
+  const STORAGE_KEY = 'avanevis-devconsole-open';
+  const setOpen = (open) => {
+    consoleEl.classList.toggle('open', open);
+    toggle.setAttribute('aria-expanded', String(open));
+    try { localStorage.setItem(STORAGE_KEY, open ? '1' : '0'); } catch (_) {}
+  };
+
+  let initial = false;
+  try { initial = localStorage.getItem(STORAGE_KEY) === '1'; } catch (_) {}
+  setOpen(initial);
+
+  toggle.addEventListener('click', () => {
+    setOpen(!consoleEl.classList.contains('open'));
+  });
+}
+
+// ============================================================================
+// Custom Audio Player (drives the hidden native <audio id="audio-player">)
+// ============================================================================
+
+function setupCustomAudioPlayer() {
+  const audio = document.getElementById('audio-player');
+  const playBtn = document.getElementById('cap-play-btn');
+  const playIcon = document.getElementById('cap-play-icon');
+  const track = document.getElementById('cap-track');
+  const fill = document.getElementById('cap-track-fill');
+  const thumb = document.getElementById('cap-track-thumb');
+  const currentEl = document.getElementById('cap-current');
+  const durationEl = document.getElementById('cap-duration');
+  const volume = document.getElementById('cap-volume');
+
+  if (!audio || !playBtn || !track) return;
+
+  const PLAY_PATH = 'M8 5v14l11-7z';
+  const PAUSE_PATH = 'M6 5h4v14H6zM14 5h4v14h-4z';
+
+  const fmt = (s) => {
+    if (!Number.isFinite(s) || s < 0) s = 0;
+    const m = Math.floor(s / 60);
+    const sec = Math.floor(s % 60);
+    return `${m}:${String(sec).padStart(2, '0')}`;
+  };
+
+  const setIcon = (path) => {
+    const svg = playIcon;
+    if (!svg) return;
+    svg.innerHTML = `<path d="${path}"/>`;
+  };
+
+  const updateProgress = () => {
+    const dur = audio.duration || 0;
+    const cur = audio.currentTime || 0;
+    const pct = dur > 0 ? (cur / dur) * 100 : 0;
+    fill.style.width = `${pct}%`;
+    thumb.style.left = `${pct}%`;
+    currentEl.textContent = fmt(cur);
+    track.setAttribute('aria-valuenow', String(Math.round(pct)));
+  };
+
+  // ---- Smooth, frame-driven progress (avoids the stuttery 4Hz `timeupdate` event) ----
+  let rafId = null;
+  const tick = () => {
+    rafId = null;
+    if (!audio.paused && !audio.ended) {
+      updateProgress();
+      rafId = requestAnimationFrame(tick);
+    }
+  };
+  const startTicking = () => {
+    if (rafId === null) rafId = requestAnimationFrame(tick);
+  };
+  const stopTicking = () => {
+    if (rafId !== null) {
+      cancelAnimationFrame(rafId);
+      rafId = null;
+    }
+    updateProgress();
+  };
+
+  const updateDuration = () => {
+    durationEl.textContent = fmt(audio.duration || 0);
+  };
+
+  audio.addEventListener('loadedmetadata', () => {
+    updateDuration();
+    updateProgress();
+  });
+  audio.addEventListener('durationchange', updateDuration);
+  audio.addEventListener('play', () => {
+    setIcon(PAUSE_PATH);
+    startTicking();
+  });
+  audio.addEventListener('pause', () => {
+    setIcon(PLAY_PATH);
+    stopTicking();
+  });
+  audio.addEventListener('seeked', updateProgress);
+  audio.addEventListener('ended', () => {
+    setIcon(PLAY_PATH);
+    stopTicking();
+    audio.currentTime = 0;
+    updateProgress();
+  });
+
+  playBtn.addEventListener('click', () => {
+    if (!audio.src) return;
+    if (audio.paused) {
+      audio.play().catch((err) => console.warn('Audio play failed:', err));
+    } else {
+      audio.pause();
+    }
+  });
+
+  // Seeking (click + drag on the track)
+  let scrubbing = false;
+  const seekFromEvent = (e) => {
+    const rect = track.getBoundingClientRect();
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const x = Math.max(0, Math.min(rect.width, clientX - rect.left));
+    const ratio = rect.width > 0 ? x / rect.width : 0;
+    if (Number.isFinite(audio.duration) && audio.duration > 0) {
+      audio.currentTime = ratio * audio.duration;
+      updateProgress();
+    } else {
+      // Allow visual feedback even before metadata loads
+      fill.style.width = `${ratio * 100}%`;
+      thumb.style.left = `${ratio * 100}%`;
+    }
+  };
+
+  const seekBySeconds = (deltaSeconds) => {
+    if (!Number.isFinite(audio.duration) || audio.duration <= 0) return;
+    audio.currentTime = Math.max(0, Math.min(audio.duration, audio.currentTime + deltaSeconds));
+    updateProgress();
+  };
+
+  const seekToRatio = (ratio) => {
+    if (!Number.isFinite(audio.duration) || audio.duration <= 0) return;
+    audio.currentTime = Math.max(0, Math.min(1, ratio)) * audio.duration;
+    updateProgress();
+  };
+
+  const beginScrub = (e) => {
+    scrubbing = true;
+    track.classList.add('scrubbing');
+    seekFromEvent(e);
+  };
+
+  const endScrub = () => {
+    if (scrubbing) {
+      scrubbing = false;
+      track.classList.remove('scrubbing');
+    }
+  };
+
+  track.addEventListener('mousedown', (e) => {
+    beginScrub(e);
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (scrubbing) seekFromEvent(e);
+  });
+  window.addEventListener('mouseup', endScrub);
+
+  track.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    beginScrub(e);
+  }, { passive: false });
+  window.addEventListener('touchmove', (e) => {
+    if (!scrubbing) return;
+    e.preventDefault();
+    seekFromEvent(e);
+  }, { passive: false });
+  window.addEventListener('touchend', endScrub);
+  window.addEventListener('touchcancel', endScrub);
+
+  track.addEventListener('keydown', (e) => {
+    switch (e.key) {
+      case 'ArrowLeft':
+      case 'ArrowDown':
+        e.preventDefault();
+        seekBySeconds(-5);
+        break;
+      case 'ArrowRight':
+      case 'ArrowUp':
+        e.preventDefault();
+        seekBySeconds(5);
+        break;
+      case 'Home':
+        e.preventDefault();
+        seekToRatio(0);
+        break;
+      case 'End':
+        e.preventDefault();
+        seekToRatio(1);
+        break;
+      case 'PageDown':
+        e.preventDefault();
+        seekBySeconds(-30);
+        break;
+      case 'PageUp':
+        e.preventDefault();
+        seekBySeconds(30);
+        break;
+      default:
+        break;
+    }
+  });
+
+  // Volume
+  if (volume) {
+    audio.volume = parseFloat(volume.value);
+    volume.addEventListener('input', () => {
+      audio.volume = parseFloat(volume.value);
+    });
+  }
+
+  // Reset hook used by setMeetingAudioSource()
+  window.__resetCustomAudioPlayer = () => {
+    setIcon(PLAY_PATH);
+    fill.style.width = '0%';
+    thumb.style.left = '0%';
+    currentEl.textContent = '0:00';
+    durationEl.textContent = '0:00';
+    track.setAttribute('aria-valuenow', '0');
+  };
+}
+
 // Start the app
 init();
 setupTabs();
+setupDevConsole();
+setupCustomAudioPlayer();
+setupTitleEditors();
 initSettingsTab();

@@ -1,6 +1,6 @@
 # Build Instructions
 
-This document explains how to build Meeting Transcriber from source for the supported packaged targets.
+This document explains how to build AvaNevis from source for the supported packaged targets.
 
 ## Prerequisites
 
@@ -73,7 +73,7 @@ Creates a complete NSIS installer (.exe):
 npm run build
 ```
 
-Output: `dist/Meeting Transcriber-Setup-<version>.exe` (~600-800MB)
+Output: `dist/AvaNevis-Setup-<version>.exe` (~600-800MB)
 
 ### Windows unpacked build (for testing)
 
@@ -91,7 +91,7 @@ Output: `dist/win-unpacked/` - can run directly for testing
 npm run build:mac
 ```
 
-Output: `dist/Meeting Transcriber-Setup-<version>.dmg`
+Output: `dist/AvaNevis-Setup-<version>.dmg`
 
 ### macOS unpacked build (for testing)
 
@@ -122,7 +122,7 @@ After building, you'll have:
 
 ```text
 dist/
-├── Meeting Transcriber-Setup-<version>.exe  # Main installer
+├── AvaNevis-Setup-<version>.exe  # Main installer
 ├── win-unpacked/                         # Unpacked app (if using build:dir)
 └── builder-*.yaml                        # Build metadata
 ```
@@ -133,11 +133,11 @@ dist/
 
    ```powershell
    npm run build:dir
-   .\dist\win-unpacked\Meeting Transcriber.exe
+   .\dist\win-unpacked\AvaNevis.exe
    ```
 
 2. **Then test the full installer:**
-   - Run `Meeting Transcriber-Setup-<version>.exe`
+   - Run `AvaNevis-Setup-<version>.exe`
    - Install to a test location
    - Verify the app launches
    - Test recording and transcription

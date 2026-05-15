@@ -274,7 +274,7 @@ FunctionEnd
 ## Upgrade Behavior
 
 ### Seamless Upgrades
-- User data preserved in `%APPDATA%\meeting-transcriber`
+- User data preserved in `%APPDATA%\avanevis`
 - Models cached in `%USERPROFILE%\.cache\huggingface\hub\`
 - NSIS differential package: Only changed files downloaded
 - **No re-download of models** on upgrade
@@ -485,13 +485,13 @@ These were considered but not implemented in v1.5.0:
 npm run build
 
 # Output:
-# dist/Meeting Transcriber-Setup-1.5.0.exe
+# dist/AvaNevis-Setup-1.5.0.exe
 ```
 
 ### Release Notes Template
 
 ```markdown
-## Meeting Transcriber v1.5.0 - Installer Performance Update
+## AvaNevis v1.5.0 - Installer Performance Update
 
 ### 🚀 Major Improvements
 
@@ -532,7 +532,7 @@ Seamless upgrade from v1.4.0:
 
 ### 📦 Downloads
 
-[Download Meeting Transcriber v1.5.0](https://github.com/...)
+[Download AvaNevis v1.5.0](https://github.com/...)
 ```
 
 ---
@@ -569,4 +569,4 @@ Seamless upgrade from v1.4.0:
 
 **Version:** 1.5.0
 **Date:** 2025-01-21
-**Author:** Meeting Transcriber Team
+**Author:** AvaNevis Team

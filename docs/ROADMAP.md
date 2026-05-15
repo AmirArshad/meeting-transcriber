@@ -1,214 +1,118 @@
-# Meeting Transcriber - Product Roadmap
+# AvaNevis — Product Roadmap
 
-This document outlines the development roadmap for Meeting Transcriber, organized by priority and implementation status.
+This document outlines what's shipped, what's in flight, and what's planned. AvaNevis (formerly Meeting Transcriber) is a privacy-first local-only meeting recorder + transcriber for Windows and Apple Silicon macOS.
 
-## Completed Features ✅
+## Shipped
 
-### Core Functionality
+### Core
 
-- **Recording & Transcription** - Dual audio capture (mic + desktop) with Whisper AI transcription
-- **Meeting History** - Searchable archive with audio playback and full transcripts
-- **GPU Acceleration** - CUDA support for 4-5x faster transcription (Windows), Metal GPU for Apple Silicon (macOS)
-- **Professional Installer** - One-click NSIS installer (Windows) and DMG installer (macOS) with embedded Python runtime
-- **Opus Compression** - 95% file size reduction (450MB → 23MB for 40-min recording)
-- **Model Preloading** - Improved first-time user experience with background model loading
-- **macOS Support** - Full macOS support with ScreenCaptureKit for desktop audio and MLX Whisper for Apple Silicon
+- **Dual audio capture** — microphone + desktop audio recorded in parallel and mixed after the recording stops. WASAPI loopback on Windows; ScreenCaptureKit (native Swift helper, PyObjC fallback) on macOS.
+- **Local Whisper transcription** — `faster-whisper` on Windows with optional CUDA, `lightning-whisper-mlx` on Apple Silicon with Metal. CPU fallback path for non-GPU machines.
+- **Meeting history** — persisted under the user-data folder with a unique meeting ID, browseable list, transcript viewer, and synchronized audio playback.
+- **Cross-platform installers** — Windows NSIS and macOS DMG with embedded Python runtime, ffmpeg, and the bundled native macOS audio helper.
+- **GPU acceleration** — CUDA on Windows, Metal/MLX on Apple Silicon.
+- **Opus compression** — ~95% size reduction vs WAV (≈ 23 MB for a 40-minute meeting), with WAV fallback if ffmpeg fails or output verification fails.
+- **Model preloading** — improves first-time experience by warming the model in the background.
+- **Auto-aware updater** — checks GitHub Releases on launch and surfaces an in-app banner; clicking opens the release page in the user's browser.
+- **macOS feature parity** — full parity with Windows including 48 kHz / soxr VHQ resampling.
 
-### Audio Quality
+### Audio quality
 
-- **Intelligent Enhancement** - Automatic noise gate, compression, and EQ for microphone
-- **WASAPI Loopback** - Direct desktop audio capture without virtual cables (Windows)
-- **ScreenCaptureKit** - System audio capture for macOS
-- **Stereo Mixing** - Professional audio processing and resampling
+- 48 kHz target sample rate end-to-end on both platforms.
+- soxr VHQ resampling everywhere it matters.
+- Gentle mic enhancement (DC-offset removal, light normalization). Desktop audio is left untouched.
+- Stereo output with per-channel processing.
 
-### User Interface
+### UI / UX (latest UI overhaul)
 
-- **Settings Persistence** - Audio and model settings saved between sessions
-- **Progress Logging** - Real-time feedback during recording and transcription
-- **Meeting Management** - Browse, search, and replay past meetings
-- **Combined Record Button** - Single action button for seamless recording flow
-- **Audio Visualizer** - Real-time waveform visualization for mic and desktop audio
-- **Auto-Updater** - Automatic update notifications with GitHub integration
+- **Premium dark theme** with vertical icon rail (Record / History / Settings), top-bar app pane, Inter + JetBrains Mono typography, and violet/sky accents on a layered obsidian background.
+- **Expressive dual-channel waveform visualizer** with sample interpolation, peak-hold caps, glow, and DPR-aware rendering — running off `requestAnimationFrame` rather than the recorder's 5 FPS level events.
+- **Custom audio scrubber** built on the native `<audio>` element with rAF-driven progress updates for stutter-free seeking.
+- **Markdown transcript rendering** in the meeting viewer (headings, lists, links, inline code, blockquotes, bold/italic) with `[mm:ss - mm:ss]` timestamp lines styled as accent pill chips. The raw `.md` is preserved as the source of truth for copy and save.
+- **Inline meeting rename** in both history detail and the post-recording view, backed by a new `update-meeting` IPC and `MeetingManager.update_meeting` that mutates only the title — filenames stay anchored to the meeting ID.
+- **Save Transcript As** via Electron's native save dialog with sanitized default filenames and `.md` / `.txt` / All Files filters, available from history detail and the post-recording view.
+- **Multi-select + bulk delete** for the history list, plus a sidebar search filter, relative-time meeting timestamps, and a developer console drawer for inspecting backend logs.
+- **Slimmer waveform container** (28 px high, denser buffer, gentler glow and peak cap) for a less-dominant visualizer.
 
----
+### Reliability / data integrity
 
-## In Progress Features 🚧
+- **Atomic, locked meeting metadata writes** — `FileLock`-based cross-process locking, atomic temp-file + `os.replace()`, transactional add behavior (originals removed only after metadata is saved).
+- **Corrupt metadata recovery** — corrupt `meetings.json` files are backed up as `meetings.corrupt.*.json` and the app recovers gracefully.
+- **Filesystem rescan / import** — on launch the app rescans the recordings folder and re-imports any meetings present on disk but missing from metadata, preserving suffixed IDs like `meeting_20260107_104555_1`.
+- **Structured stdout JSON event contract** — recorder startup, levels, warnings, errors, and completion are emitted as JSON on stdout; stderr is debug-only. The Electron parser is fully migrated to the JSON contract.
 
-### User Experience Improvements
+### Branding
 
-No features currently in development.
+- **Renamed from Meeting Transcriber to AvaNevis** — display name, window title, tray tooltip, dialogs, NSIS shortcut and installer header, macOS Info.plist permission descriptions, Python permission and CLI strings, NPM package name, renderer localStorage keys, and the MLX cache directory all read AvaNevis. Installers ship as `AvaNevis-Setup-<version>.{exe,dmg}`. The GitHub repository slug stays `AmirArshad/meeting-transcriber` for compatibility with existing clones and release URLs.
 
----
+### Historical milestones
 
-## Planned Features 📋
-
-### Code Quality Improvements
-
-#### 1. JSON-Based Event System
-
-**Status:** Complete
-**Priority:** Low
-**Description:** Refactor from string-based event detection to JSON-based event system
-
-The recorder startup/control path now uses structured stdout JSON instead of fragile stderr string matching. Keep new recorder lifecycle behavior on this contract for reliability and cross-platform consistency.
-
-**Benefits:**
-- Type-safe event detection
-- Extensible without breaking changes
-- Better cross-platform consistency
-- Easier to debug and maintain
-
-**Reference:** [json-based-events.md](features/json-based-events.md)
-
-**Estimated Effort:** 4-6 hours
+- **v1.7.0** — macOS support with Metal GPU acceleration, cross-platform 48 kHz / soxr VHQ parity, Intel Mac CPU fallback (`faster-whisper` int8), 100% feature parity across platforms.
+- **v1.6.1** — Transcription reliability fixes, automatic meeting recovery via filesystem scan, Cantonese added to UI.
+- **v1.6.0** — Background recording stability for 60+ minute sessions, ~75% less CPU when minimized, Google-Meet-quality audio improvements.
+- Earlier — Combined Start/Stop/Transcribe button, audio visualizer first version, Opus compression, professional installer, model preloading.
 
 ---
 
-### Advanced Functionality
+## In progress
 
-#### 2. Speaker Diarization
-
-**Status:** Planned
-**Priority:** Medium
-**Description:** Identify who is speaking in multi-person meetings
-
-**Challenge:** This is technically complex
-
-- Requires \`pyannote-audio\` library
-- Adds ~500MB model download
-- 2-3x slower processing time
-- GPU strongly recommended
-
-**Output Example:**
-
-\`\`\`markdown
-[00:00:00 - 00:00:05] **Speaker 1:** Hello everyone.
-[00:00:05 - 00:00:10] **Speaker 2:** Thanks for having me.
-\`\`\`
-
-**Reference:** [FEATURE_SPEAKER_DIARIZATION.md](features/FEATURE_SPEAKER_DIARIZATION.md)
+Nothing actively in development right now. The branch's UI overhaul, Round-3 polish (markdown / rename / save-as / slim visualizer), and AvaNevis rebrand are all merged on the feature branch and awaiting release.
 
 ---
 
-#### 3. macOS Audio Architecture (Advanced)
+## Planned
 
-**Status:** Future Enhancement
-**Priority:** Medium
-**Description:** Advanced audio features for macOS using ScreenCaptureKit
+### Updater
 
-**Features:**
+- **True silent auto-install updater.** Today's updater detects new GitHub releases and opens the release page; the next iteration should download and apply the installer in-app. Reference: [features/FEATURE_AUTO_UPDATER.md](features/FEATURE_AUTO_UPDATER.md).
 
-1.  **Real-Time Streaming:** Write audio to disk during recording to keep RAM usage low (flat ~50MB).
-2.  **App-Specific Capture:** Capture audio only from specific apps (e.g., Zoom, Chrome) to exclude system notifications.
-3.  **Real-Time Mixing:** Mix mic and desktop audio on-the-fly to eliminate post-processing wait times.
+### Transcription
 
-**Reference:** [MACOS_AUDIO_ARCHITECTURE.md](features/MACOS_AUDIO_ARCHITECTURE.md)
+- **Speaker diarization.** Identify who is speaking in multi-person meetings via `pyannote-audio`. Adds ~500 MB model and 2–3× processing time; GPU strongly recommended. Reference: [features/FEATURE_SPEAKER_DIARIZATION.md](features/FEATURE_SPEAKER_DIARIZATION.md).
+- **Real-time transcription.** Live captions during the recording itself. Trade-off: requires a streaming Whisper implementation, raises CPU/GPU usage during capture, and accuracy is below post-processing.
+- **Export formats.** SRT, VTT, DOCX, PDF, JSON in addition to today's Markdown + plain-text Save As.
 
----
+### Audio
 
-#### 4. Real-Time Transcription
-
-**Status:** Planned
-**Priority:** Low
-**Description:** Show transcription while recording (live captions)
-
-**Challenges:**
-
-- Requires streaming Whisper implementation
-- Higher CPU/GPU usage during recording
-- May impact recording quality
-- Accuracy lower than post-processing
-
-**Use Cases:**
-
-- Live captions for accessibility
-- Quick reference during long meetings
-- Detect important keywords in real-time
+- **Acoustic echo cancellation (AEC).** Remove echo when desktop audio bleeds into the mic. Requires real-time, frame-synchronized processing — a significant change to the current post-processing mix architecture. Workaround today: use headphones. Reference: [features/FEATURE_ECHO_CANCELLATION.md](features/FEATURE_ECHO_CANCELLATION.md).
+- **macOS advanced audio.** Stream audio to disk during capture (flat ~50 MB RAM), per-app capture (e.g. Zoom-only), and real-time mixing to remove the post-recording mix step. Reference: [features/MACOS_AUDIO_ARCHITECTURE.md](features/MACOS_AUDIO_ARCHITECTURE.md).
 
 ---
 
-#### 5. Export Formats
+## Future enhancements
 
-**Status:** Planned
-**Priority:** Low
-**Description:** Export transcripts to various formats
+Longer horizon, lower priority:
 
-**Supported Formats:**
-
-- **SRT** - Subtitle format for video editors
-- **VTT** - WebVTT for web players
-- **DOCX** - Microsoft Word document
-- **PDF** - Formatted document with timestamps
-- **JSON** - Raw data for programmatic access
-
-**Current Format:** Markdown only
+- **Linux support.** Native build for Linux desktops. Reference: [features/LINUX_SUPPORT.md](features/LINUX_SUPPORT.md).
+- **Setup wizard.** Guided first-time configuration. Reference: [features/FEATURE_SETUP_WIZARD.md](features/FEATURE_SETUP_WIZARD.md).
+- **Optional cloud sync** to user-owned cloud storage (never to a hosted backend).
+- **Companion mobile apps** (iOS / Android) for remote review.
+- **Localized UI** (Spanish, French, etc.).
+- **Semantic search** across transcripts.
+- **Meeting templates** with preset device + model configuration.
+- **Global keyboard shortcuts** for start/stop recording.
 
 ---
 
-#### 6. Acoustic Echo Cancellation (AEC)
+## Feature requests
 
-**Status:** Future Enhancement
-**Priority:** Medium
-**Description:** Remove echo when desktop audio is picked up by microphone
-
-When desktop audio plays through speakers, the microphone picks it up, creating an echo effect. AEC algorithms remove this echo by subtracting the known "reference" signal (desktop audio) from the microphone input.
-
-**Technical Challenge:**
-
-Current architecture uses post-processing (mixing after recording stops). True AEC requires:
-- Real-time, frame-synchronized processing
-- Both audio streams processed simultaneously during capture
-- Significant architectural changes to recording pipeline
-
-**Available Libraries:**
-
-- **speexdsp-python** - Mature, requires real-time processing
-- **pyaec** - Newer Rust-based library with cross-platform binaries
-
-**Workaround:** Use headphones during recording to eliminate echo at source.
-
-**Reference:** [FEATURE_ECHO_CANCELLATION.md](features/FEATURE_ECHO_CANCELLATION.md)
+1. Check this roadmap and [GitHub Issues](https://github.com/AmirArshad/meeting-transcriber/issues) first.
+2. Open or join a [GitHub Discussion](https://github.com/AmirArshad/meeting-transcriber/discussions) for new ideas.
+3. 👍 react to issues you want prioritized.
+4. PRs welcome — see [development/BUILD_INSTRUCTIONS.md](development/BUILD_INSTRUCTIONS.md) and run `npm run test:all` before opening one.
 
 ---
 
-## Future Enhancements (Long-term) 🔮
+## Versioning
 
-### Nice-to-Have Features
+- **Major (X.0.0)** — Breaking changes or major new features.
+- **Minor (1.X.0)** — New features, backwards compatible.
+- **Patch (1.2.X)** — Bug fixes and minor improvements.
 
-- **Linux Support** - Expand to Linux desktop
-- **Setup Wizard** - Guided first-time configuration (see [FEATURE_SETUP_WIZARD.md](features/FEATURE_SETUP_WIZARD.md))
-- **Cloud Sync** - Optional backup to personal cloud storage
-- **Mobile Apps** - Companion apps for iOS/Android
-- **Multi-Language UI** - Localized interface (Spanish, French, etc.)
-- **Advanced Search** - Semantic search across all meetings
-- **Meeting Templates** - Pre-configured settings for different meeting types
-- **Keyboard Shortcuts** - Global hotkeys for start/stop recording
+**Current branch version:** 1.10.0 (with the UI overhaul + AvaNevis rebrand pending release — see versioning notes below).
+
+The rebrand introduces a new Electron `productName`, which changes the user-data folder. Existing Meeting Transcriber installs won't see their old recordings until the user manually moves the data folder. That's user-visible but not strictly an API break — major or minor bump is a release-time call.
 
 ---
 
-## Feature Request Process
-
-Have an idea for a new feature?
-
-1. **Check existing features** - Review this roadmap and [GitHub Issues](https://github.com/AmirArshad/meeting-transcriber/issues)
-2. **Open a discussion** - Post in [GitHub Discussions](https://github.com/AmirArshad/meeting-transcriber/discussions)
-3. **Vote on features** - 👍 React to issues/discussions you want prioritized
-4. **Contribute** - PRs welcome! See [BUILD_INSTRUCTIONS.md](development/BUILD_INSTRUCTIONS.md)
-
----
-
-## Release Schedule
-
-**Current Version:** 1.7.0
-**Next Release:** 1.8.0 (Q1 2025)
-
-**Versioning:**
-
-- **Major (X.0.0)** - Breaking changes, major new features
-- **Minor (1.X.0)** - New features, backwards compatible
-- **Patch (1.2.X)** - Bug fixes, minor improvements
-
----
-
-**Last Updated:** December 7, 2025
-**Maintained By:** [@AmirArshad](https://github.com/AmirArshad)
+**Maintainer:** [@AmirArshad](https://github.com/AmirArshad)

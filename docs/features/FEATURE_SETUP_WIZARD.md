@@ -16,7 +16,7 @@ Users have multiple audio devices (monitors with speakers, virtual cables, noise
 
 ### Step 1: Welcome & Purpose
 ```
-Welcome to Meeting Transcriber!
+Welcome to AvaNevis!
 
 Let's configure your audio sources for the best transcription quality.
 
@@ -125,7 +125,7 @@ These will be used for all future recordings.
 
 [You can change these later in Settings]
 
-[Start Using Meeting Transcriber]
+[Start Using AvaNevis]
 ```
 
 ## Technical Implementation
@@ -203,7 +203,7 @@ Save & Complete
 
 ## Configuration Storage
 
-### `~/.meeting-transcriber/config.json`
+### `~/.avanevis/config.json`
 ```json
 {
   "audio": {

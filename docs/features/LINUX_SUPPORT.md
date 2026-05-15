@@ -8,7 +8,7 @@
 
 ## Overview
 
-This document outlines the plan for adding native Linux support to Meeting Transcriber while maintaining existing Windows and macOS versions in a single repository. The approach follows the established pattern of platform-specific optimizations with maximum code sharing.
+This document outlines the plan for adding native Linux support to AvaNevis while maintaining existing Windows and macOS versions in a single repository. The approach follows the established pattern of platform-specific optimizations with maximum code sharing.
 
 ## Key Features (Linux)
 
@@ -157,7 +157,7 @@ This document outlines the plan for adding native Linux support to Meeting Trans
     }
   ],
   "category": "Office",
-  "maintainer": "meeting-transcriber@example.com"
+  "maintainer": "avanevis@example.com"
 }
 ```
 
@@ -188,7 +188,7 @@ This document outlines the plan for adding native Linux support to Meeting Trans
 ## File Organization
 
 ```
-meeting-transcriber/
+avanevis/
 ├── backend/
 │   ├── audio/
 │   │   ├── __init__.py              # Factory: get_audio_recorder()
@@ -285,14 +285,14 @@ pulsectl>=23.5.0           # Optional: PulseAudio monitor detection
 
 ```bash
 # Download from GitHub Releases
-chmod +x Meeting-Transcriber-1.8.0.AppImage
-./Meeting-Transcriber-1.8.0.AppImage
+chmod +x avanevis-1.8.0.AppImage
+./avanevis-1.8.0.AppImage
 ```
 
 **Debian/Ubuntu (.deb):**
 
 ```bash
-sudo dpkg -i meeting-transcriber_1.8.0_amd64.deb
+sudo dpkg -i avanevis_1.8.0_amd64.deb
 sudo apt-get install -f  # Fix dependencies
 ```
 
@@ -473,10 +473,10 @@ git checkout -b feature/linux-support
 
 **v1.8.0 Release Assets:**
 
-- `Meeting Transcriber-Setup-1.8.0.exe` (Windows)
-- `Meeting Transcriber-Setup-1.8.0.dmg` (macOS)
-- `Meeting Transcriber-1.8.0.AppImage` (Linux Universal)
-- `meeting-transcriber_1.8.0_amd64.deb` (Ubuntu/Debian)
+- `AvaNevis-Setup-1.8.0.exe` (Windows)
+- `AvaNevis-Setup-1.8.0.dmg` (macOS)
+- `AvaNevis-1.8.0.AppImage` (Linux Universal)
+- `avanevis_1.8.0_amd64.deb` (Ubuntu/Debian)
 
 ### Installation Instructions (README)
 
@@ -485,14 +485,14 @@ git checkout -b feature/linux-support
 
 ### AppImage (All Distros)
 
-1. Download `Meeting Transcriber-1.8.0.AppImage`
-2. Make executable: `chmod +x "Meeting Transcriber-1.8.0.AppImage"`
+1. Download `AvaNevis-1.8.0.AppImage`
+2. Make executable: `chmod +x "AvaNevis-1.8.0.AppImage"`
 3. Run: `./Meeting\ Transcriber-1.8.0.AppImage`
 
 ### Ubuntu/Debian (.deb)
 
-1. Download `meeting-transcriber_1.8.0_amd64.deb`
-2. Install: `sudo dpkg -i meeting-transcriber_1.8.0_amd64.deb`
+1. Download `avanevis_1.8.0_amd64.deb`
+2. Install: `sudo dpkg -i avanevis_1.8.0_amd64.deb`
 3. Fix dependencies: `sudo apt-get install -f`
 ```
 
