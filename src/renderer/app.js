@@ -497,6 +497,16 @@ function setCopyButtonState(button, label, disabled) {
   button.disabled = disabled;
 }
 
+function closeInlineTitleEditor({ headingId, editBtnId, formId, editBtnDisplay = '' }) {
+  const heading = document.getElementById(headingId);
+  const editBtn = document.getElementById(editBtnId);
+  const form = document.getElementById(formId);
+
+  if (form) form.style.display = 'none';
+  if (heading) heading.style.display = '';
+  if (editBtn) editBtn.style.display = editBtnDisplay;
+}
+
 // Settings persistence
 const SETTINGS_KEY = 'avanevis-settings';
 
@@ -939,6 +949,11 @@ async function selectMeeting(meetingId) {
   document.getElementById('meeting-title').textContent = meeting.title;
   document.getElementById('meeting-date').textContent = formatDate(meeting.date);
   document.getElementById('meeting-duration').textContent = meeting.duration;
+  closeInlineTitleEditor({
+    headingId: 'meeting-title',
+    editBtnId: 'meeting-title-edit',
+    formId: 'meeting-title-edit-form',
+  });
 
   setMeetingAudioSource(meeting.audioPath);
 
@@ -948,6 +963,7 @@ async function selectMeeting(meetingId) {
 
   const transcriptEl = document.getElementById('meeting-transcript');
   transcriptEl.classList.add('markdown-body');
+  delete transcriptEl.dataset.markdown;
   clearElement(transcriptEl);
   const loading = document.createElement('p');
   loading.className = 'placeholder';
@@ -965,6 +981,7 @@ async function selectMeeting(meetingId) {
       transcriptEl.dataset.markdown = fullMeeting.transcript;
       renderMarkdownInto(transcriptEl, fullMeeting.transcript);
     } else {
+      delete transcriptEl.dataset.markdown;
       clearElement(transcriptEl);
       const empty = document.createElement('p');
       empty.className = 'placeholder';
@@ -975,6 +992,7 @@ async function selectMeeting(meetingId) {
     console.error(`Failed to load meeting transcript: ${error.message}`);
     if (currentMeetingId === meetingId && pendingMeetingTranscriptId === meetingId) {
       clearElement(transcriptEl);
+      delete transcriptEl.dataset.markdown;
       const err = document.createElement('p');
       err.className = 'placeholder error';
       err.textContent = 'Failed to load transcript';
@@ -1000,6 +1018,13 @@ function applyCurrentRecordingTitle() {
   const heading = document.getElementById('current-meeting-title');
   const editBtn = document.getElementById('current-meeting-title-edit');
   if (!heading) return;
+
+  closeInlineTitleEditor({
+    headingId: 'current-meeting-title',
+    editBtnId: 'current-meeting-title-edit',
+    formId: 'current-meeting-title-form',
+    editBtnDisplay: currentRecordingMeeting && currentRecordingMeeting.title ? 'inline-flex' : 'none',
+  });
 
   if (currentRecordingMeeting && currentRecordingMeeting.title) {
     heading.textContent = currentRecordingMeeting.title;
@@ -1075,6 +1100,7 @@ function wireInlineTitleEditor({
       exitEditMode();
       return;
     }
+    const editedMeetingId = String(meeting.id);
     const newTitle = (input.value || '').trim();
     if (!newTitle || newTitle === meeting.title) {
       exitEditMode();
@@ -1083,7 +1109,10 @@ function wireInlineTitleEditor({
     try {
       const updated = await window.electronAPI.updateMeeting(meeting.id, { title: newTitle });
       if (updated && updated.title) {
-        heading.textContent = updated.title;
+        const activeMeeting = getMeeting();
+        if (activeMeeting && String(activeMeeting.id) === editedMeetingId) {
+          heading.textContent = updated.title;
+        }
         if (typeof onSaved === 'function') onSaved(updated);
         addLog(`Renamed meeting to "${updated.title}"`);
       }
@@ -1092,7 +1121,10 @@ function wireInlineTitleEditor({
       addLog(`Failed to rename meeting: ${err.message}`, 'error');
       alert(`Failed to rename meeting: ${err.message}`);
     } finally {
-      exitEditMode();
+      const activeMeeting = getMeeting();
+      if (activeMeeting && String(activeMeeting.id) === editedMeetingId) {
+        exitEditMode();
+      }
     }
   });
 }
@@ -2500,6 +2532,7 @@ class AudioVisualizer {
       ctx.shadowColor = `rgba(${colorBase}, ${0.3 + energy * 0.4})`;
       ctx.shadowBlur = 4 + energy * 8;
       ctx.fillStyle = grad;
+      ctx.beginPath();
       for (let i = 0; i < n; i++) {
         const x = i * colWidth + (colWidth - barWidth) / 2;
         const h = amps[i] * 2;
@@ -2511,13 +2544,14 @@ class AudioVisualizer {
     } else {
       // Quiet state: just draw bars without glow for performance
       ctx.fillStyle = grad;
+      ctx.beginPath();
       for (let i = 0; i < n; i++) {
         const x = i * colWidth + (colWidth - barWidth) / 2;
         const h = amps[i] * 2;
         const y = midY - amps[i];
         roundedBar(ctx, x, y, barWidth, h, radius);
-        ctx.fill();
       }
+      ctx.fill();
     }
 
     // Peak-hold caps (bright crest leftover from loud moments)
@@ -2731,18 +2765,81 @@ function setupCustomAudioPlayer() {
     }
   };
 
-  track.addEventListener('mousedown', (e) => {
+  const seekBySeconds = (deltaSeconds) => {
+    if (!Number.isFinite(audio.duration) || audio.duration <= 0) return;
+    audio.currentTime = Math.max(0, Math.min(audio.duration, audio.currentTime + deltaSeconds));
+    updateProgress();
+  };
+
+  const seekToRatio = (ratio) => {
+    if (!Number.isFinite(audio.duration) || audio.duration <= 0) return;
+    audio.currentTime = Math.max(0, Math.min(1, ratio)) * audio.duration;
+    updateProgress();
+  };
+
+  const beginScrub = (e) => {
     scrubbing = true;
     track.classList.add('scrubbing');
     seekFromEvent(e);
+  };
+
+  const endScrub = () => {
+    if (scrubbing) {
+      scrubbing = false;
+      track.classList.remove('scrubbing');
+    }
+  };
+
+  track.addEventListener('mousedown', (e) => {
+    beginScrub(e);
   });
   window.addEventListener('mousemove', (e) => {
     if (scrubbing) seekFromEvent(e);
   });
-  window.addEventListener('mouseup', () => {
-    if (scrubbing) {
-      scrubbing = false;
-      track.classList.remove('scrubbing');
+  window.addEventListener('mouseup', endScrub);
+
+  track.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    beginScrub(e);
+  }, { passive: false });
+  window.addEventListener('touchmove', (e) => {
+    if (!scrubbing) return;
+    e.preventDefault();
+    seekFromEvent(e);
+  }, { passive: false });
+  window.addEventListener('touchend', endScrub);
+  window.addEventListener('touchcancel', endScrub);
+
+  track.addEventListener('keydown', (e) => {
+    switch (e.key) {
+      case 'ArrowLeft':
+      case 'ArrowDown':
+        e.preventDefault();
+        seekBySeconds(-5);
+        break;
+      case 'ArrowRight':
+      case 'ArrowUp':
+        e.preventDefault();
+        seekBySeconds(5);
+        break;
+      case 'Home':
+        e.preventDefault();
+        seekToRatio(0);
+        break;
+      case 'End':
+        e.preventDefault();
+        seekToRatio(1);
+        break;
+      case 'PageDown':
+        e.preventDefault();
+        seekBySeconds(-30);
+        break;
+      case 'PageUp':
+        e.preventDefault();
+        seekBySeconds(30);
+        break;
+      default:
+        break;
     }
   });
 

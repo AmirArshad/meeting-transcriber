@@ -61,10 +61,10 @@
     0 8px 24px -8px var(--accent-glow);
 
   /* ---- Type ---- */
-  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Text",
-    "Segoe UI", system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono",
-    Menlo, Consolas, monospace;
+  --font-sans: "Inter", "Segoe UI Variable Text", "Segoe UI", -apple-system,
+    BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Mono", "Cascadia Code",
+    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
@@ -1554,8 +1554,17 @@ select.device-select:disabled {
 }
 
 .cap-track:hover .cap-track-thumb,
+.cap-track:focus-visible .cap-track-thumb,
 .cap-track.scrubbing .cap-track-thumb {
   opacity: 1;
+}
+
+.cap-track:focus-visible {
+  outline: none;
+}
+
+.cap-track:focus-visible .cap-track-rail {
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .cap-volume {

@@ -109,7 +109,7 @@ Longer horizon, lower priority:
 - **Minor (1.X.0)** — New features, backwards compatible.
 - **Patch (1.2.X)** — Bug fixes and minor improvements.
 
-**Current branch version:** 1.9.0 (with the UI overhaul + AvaNevis rebrand pending release as 1.10.0 or 2.0.0 — see versioning notes below).
+**Current branch version:** 1.10.0 (with the UI overhaul + AvaNevis rebrand pending release — see versioning notes below).
 
 The rebrand introduces a new Electron `productName`, which changes the user-data folder. Existing Meeting Transcriber installs won't see their old recordings until the user manually moves the data folder. That's user-visible but not strictly an API break — major or minor bump is a release-time call.
 
