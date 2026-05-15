@@ -96,8 +96,20 @@ jobs:
       # Note: npm run build/build:mac includes prepare-build which:
       # 1. Cleans dist/ folder (prevents stale files from previous builds)
       # 2. Downloads Python runtime, ffmpeg, and prepares dependencies
-      - name: Build installer
+      - name: Build installer (Windows)
+        if: matrix.os == 'Windows'
         run: ${{ matrix.build-script }}
+        timeout-minutes: 45
+        env:
+          DOWNLOAD_MODELS: "false" # Skip model download - users download on-demand
+
+      - name: Build installer (macOS)
+        if: matrix.os == 'macOS'
+        run: |
+          echo "Open file limit before: $(ulimit -n)"
+          ulimit -n 10240 || true
+          echo "Open file limit after: $(ulimit -n)"
+          ${{ matrix.build-script }}
         timeout-minutes: 45
         env:
           DOWNLOAD_MODELS: "false" # Skip model download - users download on-demand

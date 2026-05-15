@@ -160,7 +160,11 @@ jobs:
       run: npm ci
 
     - name: Build packaged macOS app smoke test
-      run: npm run build:mac:dir
+      run: |
+        echo "Open file limit before: $(ulimit -n)"
+        ulimit -n 10240 || true
+        echo "Open file limit after: $(ulimit -n)"
+        npm run build:mac:dir
       env:
         DOWNLOAD_MODELS: "false"
 
