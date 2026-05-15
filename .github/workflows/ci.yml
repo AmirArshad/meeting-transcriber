@@ -206,7 +206,7 @@ jobs:
       run: node --check src/renderer/app.js
 
     - name: Run frontend regression tests
-      run: node --test tests/js/*.test.js
+      run: npm run test:js
 
     - name: Build packaged app smoke test
       run: npm run build:dir

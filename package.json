@@ -7,7 +7,7 @@
     "start": "electron .",
     "dev": "electron . --dev",
     "test": "npm run test:syntax && npm run test:js",
-    "test:js": "node --test tests/js/*.test.js",
+    "test:js": "node --test",
     "test:python": "node scripts/run-python-tests.js",
     "test:all": "npm test && npm run test:python",
     "test:syntax": "node --check src/main.js && node --check src/preload.js && node --check src/renderer/app.js",
