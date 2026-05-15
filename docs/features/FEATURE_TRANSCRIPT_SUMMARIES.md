@@ -206,6 +206,7 @@ Cons:
 Suggested v1 controls:
 
 - Summary setup/status card in Settings.
+- Explicit optional setup artifact download/install flow for the selected summary runtime/model, matching the current CUDA setup pattern.
 - One installed model by default, with summary profiles that adjust prompt style, output length, chunk budget, and runtime knobs.
 - Profiles: `Concise`, `Balanced`, `Detailed`, and `Action items` if they perform reliably on the same installed model.
 - Manual `Generate Summary` button for existing meetings.
@@ -222,11 +223,13 @@ Suggested defaults:
 
 ## Packaging Considerations
 
-- Do not bundle all models in the installer; download on demand with explicit user action.
+- Keep the base app installer lean. Do not bundle the default summary model in the base installer.
+- Provide the default summary runtime/model as a larger optional installer/download artifact, installed only after explicit user action from Settings, similar to the CUDA setup flow.
 - Store model files under Electron `userData` or a clearly managed model-cache directory.
 - Reuse existing model preloading UX patterns where practical.
 - Add model-cache inspection/removal UI before shipping large summary models.
 - Keep checksums or pinned model filenames for any curated model downloads.
+- Artifact metadata should stay data-driven so future summary models can replace the default without rewriting setup UI or generation logic.
 
 ## Risks
 

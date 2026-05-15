@@ -374,6 +374,126 @@ def test_get_meeting_hydrates_transcript_from_transcript_path(tmp_path):
     assert meeting['transcript'] == 'hydrated transcript body'
 
 
+def test_update_meeting_ai_persists_derived_artifact_references(tmp_path):
+    recordings_dir = tmp_path / 'recordings'
+    manager = MeetingManager(recordings_dir=str(recordings_dir))
+
+    audio_path = recordings_dir / 'meeting_20260107_104555.opus'
+    transcript_path = recordings_dir / 'meeting_20260107_104555.md'
+    speakers_path = recordings_dir / 'meeting_20260107_104555.speakers.json'
+    summary_json_path = recordings_dir / 'meeting_20260107_104555.summary.json'
+    summary_md_path = recordings_dir / 'meeting_20260107_104555.summary.md'
+    audio_path.write_bytes(b'audio')
+    transcript_path.write_text('hydrated transcript body', encoding='utf-8')
+    speakers_path.write_text('{"segments": []}', encoding='utf-8')
+    summary_json_path.write_text('{"summary": "ok"}', encoding='utf-8')
+    summary_md_path.write_text('# Summary', encoding='utf-8')
+
+    manager._save_meetings(
+        [
+            {
+                'id': '20260107_104555',
+                'title': 'Meeting',
+                'date': '2026-01-07T10:45:55',
+                'duration': '0:05',
+                'durationSeconds': 5.0,
+                'audioPath': str(audio_path),
+                'transcriptPath': str(transcript_path),
+                'language': 'en',
+                'model': 'small',
+            }
+        ]
+    )
+
+    meeting = manager.update_meeting_ai(
+        '20260107_104555',
+        diarization={
+            'status': 'completed',
+            'model': 'pyannote/speaker-diarization-community-1',
+            'completedAt': '2026-05-16T00:00:00Z',
+            'speakerCount': '3',
+            'segmentsPath': str(speakers_path),
+            'error': None,
+            'token': 'hf_secret',
+        },
+        summary={
+            'status': 'completed',
+            'modelProfile': 'balanced',
+            'model': 'Qwen3.5-9B-Q4_K_M',
+            'generatedAt': '2026-05-16T00:05:00Z',
+            'sourceTranscriptHash': 'sha256:abc',
+            'jsonPath': str(summary_json_path),
+            'markdownPath': str(summary_md_path),
+            'error': None,
+            'prompt': 'do not store this',
+        },
+    )
+
+    assert meeting is not None
+    assert meeting['ai']['diarization'] == {
+        'status': 'completed',
+        'model': 'pyannote/speaker-diarization-community-1',
+        'completedAt': '2026-05-16T00:00:00Z',
+        'speakerCount': 3,
+        'segmentsPath': str(speakers_path),
+        'error': None,
+    }
+    assert meeting['ai']['summary'] == {
+        'status': 'completed',
+        'modelProfile': 'balanced',
+        'model': 'Qwen3.5-9B-Q4_K_M',
+        'generatedAt': '2026-05-16T00:05:00Z',
+        'sourceTranscriptHash': 'sha256:abc',
+        'jsonPath': str(summary_json_path),
+        'markdownPath': str(summary_md_path),
+        'error': None,
+    }
+    assert 'hf_secret' not in json.dumps(meeting)
+    assert 'prompt' not in json.dumps(meeting)
+
+
+def test_delete_meeting_removes_derived_ai_artifacts(tmp_path):
+    recordings_dir = tmp_path / 'recordings'
+    manager = MeetingManager(recordings_dir=str(recordings_dir))
+
+    audio_path = recordings_dir / 'meeting_20260107_104555.opus'
+    transcript_path = recordings_dir / 'meeting_20260107_104555.md'
+    speakers_path = recordings_dir / 'meeting_20260107_104555.speakers.json'
+    summary_json_path = recordings_dir / 'meeting_20260107_104555.summary.json'
+    summary_md_path = recordings_dir / 'meeting_20260107_104555.summary.md'
+    for path in (audio_path, transcript_path, speakers_path, summary_json_path, summary_md_path):
+        path.write_text('data', encoding='utf-8')
+
+    manager._save_meetings(
+        [
+            {
+                'id': '20260107_104555',
+                'title': 'Meeting',
+                'date': '2026-01-07T10:45:55',
+                'duration': '0:05',
+                'durationSeconds': 5.0,
+                'audioPath': str(audio_path),
+                'transcriptPath': str(transcript_path),
+                'language': 'en',
+                'model': 'small',
+                'ai': {
+                    'diarization': {'segmentsPath': str(speakers_path)},
+                    'summary': {
+                        'jsonPath': str(summary_json_path),
+                        'markdownPath': str(summary_md_path),
+                    },
+                },
+            }
+        ]
+    )
+
+    assert manager.delete_meeting('20260107_104555') is True
+
+    for path in (audio_path, transcript_path, speakers_path, summary_json_path, summary_md_path):
+        assert not path.exists()
+    assert manager.list_meetings() == []
+
+
 def test_get_meeting_falls_back_to_inline_transcript_when_file_is_missing(tmp_path):
     recordings_dir = tmp_path / 'recordings'
     manager = MeetingManager(recordings_dir=str(recordings_dir))

@@ -7,7 +7,7 @@
  * - Handles application lifecycle
  */
 
-const { app, BrowserWindow, ipcMain, Tray, Menu, dialog, powerSaveBlocker, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, dialog, powerSaveBlocker, shell, safeStorage } = require('electron');
 const path = require('path');
 const { pathToFileURL } = require('url');
 const { spawn, execFile } = require('child_process');
@@ -33,6 +33,13 @@ const {
   MACOS_PERMISSION_CHECK_TIMEOUT_MS,
 } = require('./main-process-helpers');
 const { checkForUpdates, openDownloadPage } = require('./updater');
+const { getAiAddonStatus } = require('./ai-addon-state');
+const {
+  TOKEN_KEYS,
+  deleteAiAddonToken,
+  hasAiAddonToken,
+  storeAiAddonToken,
+} = require('./ai-addon-token-store');
 
 // Use Electron's default userData path, which handles packaging correctly
 // This is typically: C:\Users\<username>\AppData\Roaming\AvaNevis
@@ -1595,6 +1602,32 @@ ipcMain.handle('get-macos-permission-status', async () => {
 
 ipcMain.handle('get-pending-update-info', async () => pendingUpdateInfo);
 
+ipcMain.handle('get-ai-addon-status', async () => getAiAddonStatus({
+  userDataDir: app.getPath('userData'),
+  platform: process.platform,
+  arch: process.arch,
+}));
+
+ipcMain.handle('store-diarization-token', async (event, token) => storeAiAddonToken({
+  userDataDir: app.getPath('userData'),
+  tokenKey: TOKEN_KEYS.diarizationHuggingFace,
+  token,
+  safeStorage,
+}));
+
+ipcMain.handle('get-diarization-token-status', async () => ({
+  hasToken: hasAiAddonToken({
+    userDataDir: app.getPath('userData'),
+    tokenKey: TOKEN_KEYS.diarizationHuggingFace,
+  }),
+  encryptionAvailable: safeStorage.isEncryptionAvailable(),
+}));
+
+ipcMain.handle('delete-diarization-token', async () => deleteAiAddonToken({
+  userDataDir: app.getPath('userData'),
+  tokenKey: TOKEN_KEYS.diarizationHuggingFace,
+}));
+
 /**
  * Get list of available audio devices
  */
@@ -2352,6 +2385,63 @@ ipcMain.handle('update-meeting', async (event, payload) => {
         }
       } else {
         reject(new Error(errorOutput.trim() || 'Failed to update meeting'));
+      }
+    });
+
+    python.on('error', (err) => reject(err));
+  });
+});
+
+ipcMain.handle('update-meeting-ai', async (event, payload) => {
+  const meetingId = payload && payload.meetingId;
+  const updates = (payload && payload.updates) || {};
+  if (!meetingId) {
+    throw new Error('update-meeting-ai requires a meetingId');
+  }
+
+  const recordingsDir = path.join(app.getPath('userData'), 'recordings');
+  const args = [
+    '--recordings-dir', recordingsDir,
+    'update-ai',
+    String(meetingId),
+  ];
+
+  if (Object.prototype.hasOwnProperty.call(updates, 'diarization')) {
+    if (updates.diarization === null) {
+      args.push('--clear-diarization');
+    } else {
+      args.push('--diarization-json', JSON.stringify(updates.diarization));
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(updates, 'summary')) {
+    if (updates.summary === null) {
+      args.push('--clear-summary');
+    } else {
+      args.push('--summary-json', JSON.stringify(updates.summary));
+    }
+  }
+
+  return new Promise((resolve, reject) => {
+    const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', args), {
+      cwd: pythonConfig.backendPath,
+    });
+
+    let output = '';
+    let errorOutput = '';
+
+    python.stdout.on('data', (data) => { output += data.toString(); });
+    python.stderr.on('data', (data) => { errorOutput += data.toString(); });
+
+    python.on('close', (code) => {
+      if (code === 0) {
+        try {
+          resolve(JSON.parse(output));
+        } catch (e) {
+          reject(new Error(`Failed to parse updated AI meeting metadata: ${e.message}`));
+        }
+      } else {
+        reject(new Error(errorOutput.trim() || 'Failed to update AI meeting metadata'));
       }
     });
 

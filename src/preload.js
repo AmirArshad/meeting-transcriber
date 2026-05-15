@@ -86,6 +86,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteMeeting: (meetingId) => ipcRenderer.invoke('delete-meeting', meetingId),
   addMeeting: (meetingData) => ipcRenderer.invoke('add-meeting', meetingData),
   updateMeeting: (meetingId, updates) => ipcRenderer.invoke('update-meeting', { meetingId, updates }),
+  updateMeetingAi: (meetingId, updates) => ipcRenderer.invoke('update-meeting-ai', { meetingId, updates }),
   saveTranscriptAs: (options) => ipcRenderer.invoke('save-transcript-as', options),
   scanRecordings: () => ipcRenderer.invoke('scan-recordings'),
 
@@ -106,6 +107,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Updates
   downloadUpdate: (downloadUrl) => ipcRenderer.invoke('download-update', downloadUrl),
   getPendingUpdateInfo: () => ipcRenderer.invoke('get-pending-update-info'),
+
+  // Local AI add-ons
+  getAiAddonStatus: () => ipcRenderer.invoke('get-ai-addon-status'),
+  storeDiarizationToken: (token) => ipcRenderer.invoke('store-diarization-token', token),
+  getDiarizationTokenStatus: () => ipcRenderer.invoke('get-diarization-token-status'),
+  deleteDiarizationToken: () => ipcRenderer.invoke('delete-diarization-token'),
 
   // Event listeners
   onRecordingProgress: (callback) => addListener('recording-progress', callback),

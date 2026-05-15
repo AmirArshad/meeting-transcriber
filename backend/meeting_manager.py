@@ -20,6 +20,9 @@ import re
 from filelock import FileLock
 
 
+_UNSET = object()
+
+
 class MeetingManager:
     """
     Manages meeting history with persistent JSON storage.
@@ -190,6 +193,100 @@ class MeetingManager:
         stripped = dict(meeting)
         stripped.pop('transcript', None)
         return stripped
+
+    @staticmethod
+    def _normalize_ai_feature_metadata(feature: str, metadata: Dict) -> Dict:
+        allowed_fields = {
+            'diarization': (
+                'status',
+                'model',
+                'completedAt',
+                'speakerCount',
+                'segmentsPath',
+                'error',
+            ),
+            'summary': (
+                'status',
+                'modelProfile',
+                'model',
+                'generatedAt',
+                'sourceTranscriptHash',
+                'jsonPath',
+                'markdownPath',
+                'error',
+            ),
+        }
+
+        if feature not in allowed_fields:
+            raise ValueError(f"Unsupported AI metadata feature: {feature}")
+        if not isinstance(metadata, dict):
+            raise ValueError(f"AI metadata for {feature} must be an object")
+
+        normalized = {}
+        for field in allowed_fields[feature]:
+            if field not in metadata:
+                continue
+
+            value = metadata[field]
+            if value is None:
+                normalized[field] = None
+            elif field == 'speakerCount':
+                try:
+                    normalized[field] = int(value)
+                except (TypeError, ValueError):
+                    continue
+            else:
+                normalized[field] = str(value)
+
+        return normalized
+
+    @staticmethod
+    def _iter_ai_file_references(meeting: Dict) -> List[tuple[str, Path]]:
+        ai = meeting.get('ai')
+        if not isinstance(ai, dict):
+            return []
+
+        references: List[tuple[str, Path]] = []
+        feature_file_fields = {
+            'diarization': (
+                ('speaker labels', 'segmentsPath'),
+            ),
+            'summary': (
+                ('summary JSON', 'jsonPath'),
+                ('summary Markdown', 'markdownPath'),
+            ),
+        }
+
+        for feature, fields in feature_file_fields.items():
+            feature_metadata = ai.get(feature)
+            if not isinstance(feature_metadata, dict):
+                continue
+
+            for label, field in fields:
+                file_path = feature_metadata.get(field)
+                if file_path:
+                    references.append((label, Path(str(file_path))))
+
+        return references
+
+    @classmethod
+    def _meeting_file_references(cls, meeting: Dict) -> List[tuple[str, Path]]:
+        references = [
+            ('audio', Path(meeting['audioPath'])),
+            ('transcript', Path(meeting['transcriptPath'])),
+            *cls._iter_ai_file_references(meeting),
+        ]
+
+        unique_references: List[tuple[str, Path]] = []
+        seen_paths = set()
+        for label, file_path in references:
+            path_key = str(file_path.resolve(strict=False))
+            if path_key in seen_paths:
+                continue
+            seen_paths.add(path_key)
+            unique_references.append((label, file_path))
+
+        return unique_references
 
     def add_meeting(
         self,
@@ -572,6 +669,57 @@ class MeetingManager:
 
             return meeting
 
+    def update_meeting_ai(
+        self,
+        meeting_id: str,
+        *,
+        diarization=_UNSET,
+        summary=_UNSET,
+    ) -> Optional[Dict]:
+        """Persist derived local AI artifact references for a meeting.
+
+        Large derived outputs stay in sidecar files. This method stores only
+        concise metadata and paths while reusing the existing locked atomic
+        metadata write path.
+        """
+        with self._metadata_guard():
+            meetings = self._list_meetings_locked()
+            meeting = next((m for m in meetings if m['id'] == meeting_id), None)
+
+            if not meeting:
+                return None
+
+            ai = dict(meeting.get('ai') or {})
+            changed = False
+
+            for feature, value in (
+                ('diarization', diarization),
+                ('summary', summary),
+            ):
+                if value is _UNSET:
+                    continue
+
+                if value is None:
+                    if feature in ai:
+                        ai.pop(feature, None)
+                        changed = True
+                    continue
+
+                normalized = self._normalize_ai_feature_metadata(feature, value)
+                if ai.get(feature) != normalized:
+                    ai[feature] = normalized
+                    changed = True
+
+            if changed:
+                if ai:
+                    meeting['ai'] = ai
+                else:
+                    meeting.pop('ai', None)
+                self._save_meetings_unlocked(meetings)
+                print(f"Meeting AI metadata updated: {meeting_id}", file=sys.stderr)
+
+            return meeting
+
     def delete_meeting(self, meeting_id: str) -> bool:
         """
         Delete a meeting and its associated files.
@@ -655,10 +803,7 @@ class MeetingManager:
 
             moved_files: List[tuple[Path, Path, str]] = []
             try:
-                for label, file_path in (
-                    ('audio', Path(meeting['audioPath'])),
-                    ('transcript', Path(meeting['transcriptPath'])),
-                ):
+                for label, file_path in self._meeting_file_references(meeting):
                     tombstone_path = move_file_to_tombstone(file_path, label)
                     if tombstone_path is not None:
                         moved_files.append((tombstone_path, file_path, label))
@@ -714,6 +859,13 @@ def main():
     update_parser.add_argument('id', help='Meeting ID')
     update_parser.add_argument('--title', help='New display title')
 
+    update_ai_parser = subparsers.add_parser('update-ai', help='Update derived local AI metadata')
+    update_ai_parser.add_argument('id', help='Meeting ID')
+    update_ai_parser.add_argument('--diarization-json', help='Diarization metadata JSON object')
+    update_ai_parser.add_argument('--summary-json', help='Summary metadata JSON object')
+    update_ai_parser.add_argument('--clear-diarization', action='store_true', help='Remove diarization metadata')
+    update_ai_parser.add_argument('--clear-summary', action='store_true', help='Remove summary metadata')
+
     # Add meeting (for testing)
     add_parser = subparsers.add_parser('add', help='Add meeting')
     add_parser.add_argument('--audio', required=True, help='Audio file path')
@@ -752,6 +904,31 @@ def main():
 
     elif args.command == 'update':
         meeting = manager.update_meeting(args.id, title=args.title)
+        if meeting:
+            print(json.dumps(meeting, indent=2))
+        else:
+            print(f"Meeting not found: {args.id}", file=sys.stderr)
+            sys.exit(1)
+
+    elif args.command == 'update-ai':
+        def parse_metadata(raw_value: Optional[str], label: str):
+            if raw_value is None:
+                return _UNSET
+            try:
+                parsed = json.loads(raw_value)
+            except json.JSONDecodeError as exc:
+                raise SystemExit(f"Invalid {label} metadata JSON: {exc}")
+            if not isinstance(parsed, dict):
+                raise SystemExit(f"Invalid {label} metadata JSON: expected object")
+            return parsed
+
+        diarization_metadata = None if args.clear_diarization else parse_metadata(args.diarization_json, 'diarization')
+        summary_metadata = None if args.clear_summary else parse_metadata(args.summary_json, 'summary')
+        meeting = manager.update_meeting_ai(
+            args.id,
+            diarization=diarization_metadata,
+            summary=summary_metadata,
+        )
         if meeting:
             print(json.dumps(meeting, indent=2))
         else:

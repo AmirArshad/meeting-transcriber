@@ -18,6 +18,7 @@ This design translates the model research docs into product behavior for Setting
 | Mac diarization | Ship only after accelerated diarization is good enough on Apple Silicon. If acceleration is not available or validation fails, fall back to today's normal transcription flow without diarization. |
 | Summary behavior | Summary generation is always user-triggered, even when the summary model is set up. |
 | Summary model footprint | Prefer one installed summary model with selectable profiles. Do not require users to download multiple large models for basic profile selection. |
+| Summary distribution | Keep the base installer lean. Install the default summary runtime/model through an explicit optional setup artifact/download flow, similar to CUDA setup. |
 | Main entry points | Settings owns setup. Home and History expose prompts/actions that route to Settings when setup is missing. |
 | History display | Meeting detail uses `Transcript` and `Summary` tabs. |
 | Source of truth | Raw transcript remains the source of truth. Speaker labels and summaries are derived artifacts. |
@@ -112,6 +113,8 @@ Controls:
 | Summary profile | Selects output style, detail level, chunk budget, and runtime knobs for the installed model. |
 | `Remove Model` | Deletes local summary model cache after confirmation. |
 | `Validate` | Confirms runtime, model file, checksum, and a tiny JSON-only smoke prompt. |
+
+Summary setup should use a larger optional installer/download artifact rather than bundling the model in the base app. The flow should match the existing CUDA setup pattern: the user explicitly starts setup, the app downloads a pinned artifact for the current platform/runtime, verifies filenames/checksums, unpacks or stages it into the managed model cache, and then validates the local runtime. No summary model or runtime download should happen automatically in the background.
 
 Initial installed model:
 

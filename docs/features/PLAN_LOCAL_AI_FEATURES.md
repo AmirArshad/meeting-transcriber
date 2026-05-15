@@ -5,7 +5,7 @@
 1. Should summaries run automatically after every transcription, or should they be manual by default with an optional setting for auto-run? Decision: manual only in v1.
 2. Are we comfortable requiring a Hugging Face account/token for diarization v1, or should we only ship diarization after we can provide a token-free model path? Decision: v1 may require users to bring their own Hugging Face token; do not ship a maintainer-owned token.
 3. For macOS diarization, should we accept CPU fallback in v1 if PyTorch MPS is unstable, or should Metal acceleration be a hard requirement before release? Decision: wait for good accelerated Apple Silicon diarization; if unavailable, keep the current transcription-only flow.
-4. Should the summary model be downloaded on demand, or should we offer a separate larger installer/build artifact with the default model bundled?
+4. Should the summary model be downloaded on demand, or should we offer a separate larger installer/build artifact with the default model bundled? Decision: use a larger optional setup artifact/download flow similar to CUDA setup, keeping the base installer lean.
 5. Should we implement one cross-platform summary runtime first with `llama.cpp`, or accept a better Mac-specific `mlx-lm` path from day one?
 6. What is the minimum supported hardware for summaries: RTX 4070/M4 Pro only, or also 8 GB NVIDIA GPUs and 16 GB Apple Silicon Macs?
 7. Should speaker diarization be required before summaries can assign owners, or should summaries work from unlabeled transcripts and mark owners as unknown when needed?
@@ -36,6 +36,7 @@ Secondary model choices:
 
 - No cloud transcription, cloud diarization, cloud summarization, telemetry, or background uploads.
 - All model downloads must be explicit user actions or clearly user-triggered setup steps.
+- Summary runtime/model installation uses an explicit optional setup artifact/download flow, similar to CUDA setup. Do not bundle the default summary model in the base installer or download it in the background.
 - Users must provide their own Hugging Face token for gated diarization models; do not embed or proxy a shared maintainer token.
 - Summary profiles should reuse one installed model where possible. Do not require multiple large model downloads for normal profile selection.
 - Recorder stdout JSON contracts remain unchanged unless both Electron and Python sides are updated together.
@@ -47,6 +48,7 @@ Secondary model choices:
 - [ ] Answer the questions at the top of this plan.
 - [x] Decide summary run behavior. Decision: always user-triggered in v1.
 - [ ] Validate the v1 summary default: `Qwen3.5-9B` with pinned `llama.cpp` CUDA/Metal builds.
+- [x] Decide summary model distribution. Decision: larger optional setup artifact/download flow, not base-installer bundled and not background on-demand.
 - [x] Decide profile model strategy. Decision: profiles reuse one installed model where possible; alternate models are replacement installs, not required downloads.
 - [ ] Decide whether `Qwen3-14B` remains a shipped fallback if `Qwen3.5` runtime support lags.
 - [ ] Decide whether `Mistral-Nemo-Instruct-2407` is exposed in v1 or held as an advanced option.
@@ -85,6 +87,7 @@ Record for each spike:
 - [ ] Add model metadata for curated diarization and summary models.
 - [ ] Add explicit download/remove/check-status actions.
 - [ ] Add checksum or pinned filename validation for curated summary models.
+- [ ] Add optional summary setup artifact metadata and platform-specific artifact selection.
 - [ ] Ensure app-spawned pyannote processes set `PYANNOTE_METRICS_ENABLED=0`.
 - [ ] Add settings/status for GPU/acceleration policy where needed.
 
