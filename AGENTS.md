@@ -66,15 +66,15 @@ Meeting Transcriber is a privacy-first Electron desktop app for recording microp
 4. Recorder emits:
    - JSON audio level events on stdout
    - structured recorder events/warnings/errors on stdout
-   - human-readable status/progress on stderr for compatibility and debugging
+   - human-readable debug logs on stderr
    - final JSON result on stdout when recording stops
 5. Electron parses those outputs, updates UI, then saves finished meetings through `backend/meeting_manager.py`.
 
 ## Critical Invariants
 
-### Recorder startup and progress now use a hybrid contract
+### Recorder startup and progress use structured stdout JSON
 
-`src/main.js` now parses structured stdout messages such as `levels`, `event`, `warning`, and `error`, and it still retains compatibility fallbacks like matching stderr text such as `Recording started!`.
+`src/main.js` parses structured stdout messages such as `levels`, `event`, `warning`, and `error` for recorder control flow. stderr is debug-only and must not drive startup stages, warnings/errors, or recording-start state.
 
 If you change recorder startup/progress behavior in either recorder:
 
@@ -87,7 +87,7 @@ you must update all of:
 - `src/main-process-helpers.js`
 - `tests/js/main-process-helpers.test.js`
 
-The JSON-event migration in `docs/features/json-based-events.md` is now partially implemented, but it is not complete. Preserve the current hybrid stdout/stderr contract unless you update both sides together.
+The JSON-event migration in `docs/features/json-based-events.md` is complete for recorder control flow. Preserve the stdout JSON control contract unless you update both sides together.
 
 ### Keep recorder output contracts stable
 

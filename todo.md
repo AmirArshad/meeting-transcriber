@@ -15,7 +15,7 @@ Archive: previous root `todo.md` snapshots and earlier remediation history live 
 
 ## Reviewed Invariants To Preserve
 
-- Hybrid recorder contract: structured stdout messages (`levels`, `event`, `warning`, `error`) plus stderr compatibility output.
+- Recorder control contract: structured stdout messages (`levels`, `event`, `warning`, `error`); stderr is debug-only.
 - Final result compatibility: Windows final JSON uses `audioPath`, macOS final JSON uses `outputPath`, and Electron still accepts both.
 - Post-stop mixing architecture stays intact; do not reintroduce real-time cross-stream mixing.
 - Privacy-first/local-only behavior stays intact; no telemetry, uploads, or cloud transcription.
@@ -61,10 +61,10 @@ Files:
 - `backend/meeting_manager.py`
 - `tests/python/test_meeting_manager.py`
 
-### 15. Restore recorder stderr startup compatibility
+### 15. Finish recorder stdout JSON migration
 
-- [x] Re-add legacy stderr parsing for startup progress and `Recording started!`.
-- [x] Add JS helper coverage for legacy stderr startup fallback.
+- [x] Remove legacy stderr parsing for startup progress and `Recording started!`.
+- [x] Add JS helper coverage for required stdout startup events.
 
 Files:
 

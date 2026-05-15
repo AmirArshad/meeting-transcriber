@@ -23,7 +23,7 @@ Status: implemented
 - Recording preflight runs before the recorder starts.
 - Missing Microphone or Screen Recording permission is surfaced before recording begins.
 - Desktop-start failures preserve detailed messages instead of collapsing to a generic error.
-- The current recorder contract uses structured stdout messages plus stderr compatibility output.
+- The current recorder contract uses structured stdout messages for control flow. stderr is debug-only.
 
 ### Transcription
 

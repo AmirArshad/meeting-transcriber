@@ -2,6 +2,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 
+const mainProcessHelpers = require('../../src/main-process-helpers');
+
 const {
   buildFileUrl,
   buildPermissionErrorMessage,
@@ -13,7 +15,6 @@ const {
   getQuitInterceptState,
   getRecorderCloseAction,
   getRecorderEventAction,
-  getRecorderStderrAction,
   getMacMLXCacheDir,
   getMacMLXModelStorageDirs,
   getModelDownloadPatterns,
@@ -24,7 +25,7 @@ const {
   parseRecorderStdoutChunk,
   resolveTranscriptionAudioFile,
   splitBufferedLines,
-} = require('../../src/main-process-helpers');
+} = mainProcessHelpers;
 
 
 test('buildModelDownloadCheck returns Windows faster-whisper cache settings', () => {
@@ -164,11 +165,11 @@ test('classifyRecorderStdoutChunk treats malformed level JSON as progress text u
 
 
 test('classifyRecorderStdoutChunk keeps non-level output as progress text', () => {
-  const result = classifyRecorderStdoutChunk('Desktop audio stream opened');
+  const result = classifyRecorderStdoutChunk('diagnostic output');
 
   assert.deepEqual(result, {
     type: 'progress',
-    output: 'Desktop audio stream opened',
+    output: 'diagnostic output',
   });
 });
 
@@ -217,6 +218,20 @@ test('parseRecorderStdoutChunk parses mixed structured recorder messages', () =>
 });
 
 
+test('parseRecorderMessageLine preserves structured recorder startup errors', () => {
+  const result = parseRecorderMessageLine(
+    '{"type":"error","code":"MIC_START_FAILED","message":"Microphone recording failed"}',
+  );
+
+  assert.equal(result.kind, 'error');
+  assert.deepEqual(result.payload, {
+    type: 'error',
+    code: 'MIC_START_FAILED',
+    message: 'Microphone recording failed',
+  });
+});
+
+
 test('parseRecorderStdoutChunk keeps incomplete trailing chunks for the next read', () => {
   const firstChunk = parseRecorderStdoutChunk('{"type":"event","event":"recording_started","message":"Recording sta');
   assert.equal(firstChunk.messages.length, 0);
@@ -249,19 +264,58 @@ test('parseRecorderStdoutChunk parses recorder config events without stderr fall
 });
 
 
-test('getRecorderEventAction maps structured recorder events to renderer actions', () => {
-  assert.deepEqual(
-    getRecorderEventAction({ event: 'configuring_devices', message: 'Configuring audio devices...' }),
+test('getRecorderEventAction maps required stdout startup events to renderer actions', () => {
+  const requiredEvents = [
     {
-      initProgress: {
-        stage: 'configuring',
-        message: 'Configuring audio devices...',
+      payload: { event: 'configuring_devices', message: 'Configuring audio devices...' },
+      expected: {
+        initProgress: {
+          stage: 'configuring',
+          message: 'Configuring audio devices...',
+        },
+        warning: null,
+        recordingStartedMessage: null,
+        progressMessage: null,
       },
-      warning: null,
-      recordingStartedMessage: null,
-      progressMessage: null,
     },
-  );
+    {
+      payload: { event: 'mic_stream_opened', message: 'Microphone stream opened' },
+      expected: {
+        initProgress: {
+          stage: 'mic_opened',
+          message: 'Microphone stream opened',
+        },
+        warning: null,
+        recordingStartedMessage: null,
+        progressMessage: null,
+      },
+    },
+    {
+      payload: { event: 'desktop_stream_opened', message: 'Desktop audio stream opened' },
+      expected: {
+        initProgress: {
+          stage: 'desktop_opened',
+          message: 'Desktop audio stream opened',
+        },
+        warning: null,
+        recordingStartedMessage: null,
+        progressMessage: null,
+      },
+    },
+    {
+      payload: { event: 'recording_started', message: 'Recording started!' },
+      expected: {
+        initProgress: null,
+        warning: null,
+        recordingStartedMessage: 'Recording started!',
+        progressMessage: null,
+      },
+    },
+  ];
+
+  for (const { payload, expected } of requiredEvents) {
+    assert.deepEqual(getRecorderEventAction(payload), expected);
+  }
 
   assert.deepEqual(
     getRecorderEventAction({
@@ -282,16 +336,6 @@ test('getRecorderEventAction maps structured recorder events to renderer actions
         type: 'desktop_capture_disabled',
       },
       recordingStartedMessage: null,
-      progressMessage: null,
-    },
-  );
-
-  assert.deepEqual(
-    getRecorderEventAction({ event: 'recording_started', message: 'Recording started!' }),
-    {
-      initProgress: null,
-      warning: null,
-      recordingStartedMessage: 'Recording started!',
       progressMessage: null,
     },
   );
@@ -342,27 +386,8 @@ test('resolveStopTimeoutAction kills the recorder on stop timeout when forced', 
 });
 
 
-test('getRecorderStderrAction preserves legacy recorder startup fallback', () => {
-  assert.deepEqual(getRecorderStderrAction('Microphone stream opened\n'), {
-    initProgress: {
-      stage: 'mic_opened',
-      message: 'Microphone ready...',
-    },
-    recordingStartedMessage: null,
-    progressMessage: null,
-  });
-
-  assert.deepEqual(getRecorderStderrAction('Recording started!\n'), {
-    initProgress: null,
-    recordingStartedMessage: 'Recording started!',
-    progressMessage: null,
-  });
-
-  assert.deepEqual(getRecorderStderrAction('Microphone stream opened\nRecording started!\n'), {
-    initProgress: null,
-    recordingStartedMessage: 'Recording started!',
-    progressMessage: null,
-  });
+test('main process helpers do not export a recorder stderr control parser', () => {
+  assert.equal(Object.hasOwn(mainProcessHelpers, 'getRecorderStderrAction'), false);
 });
 
 

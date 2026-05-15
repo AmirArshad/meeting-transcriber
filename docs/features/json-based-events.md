@@ -2,17 +2,17 @@
 
 ## Overview
 
-The app now uses a hybrid recorder event contract:
+The app now uses a structured recorder event contract:
 
 - structured JSON messages on `stdout` for `levels`, `event`, `warning`, and `error`
-- human-readable compatibility/debug logs on `stderr`
+- human-readable debug logs on `stderr`
 - final recorder result JSON on `stdout`
 
-The migration away from brittle string-based startup detection is partially complete, but not every recorder/progress path has been redesigned into a single final event schema yet.
+Recorder startup and control state are driven only by structured `stdout` JSON. `stderr` remains available for console/debug logs, but Electron does not parse it for startup milestones, warnings, errors, or recording state transitions.
 
 ## Current Implementation
 
-### How It Works Now
+### How It Works
 
 The recorder scripts emit structured messages like:
 
@@ -24,14 +24,14 @@ print(json.dumps({"type": "event", "event": "recording_started", "message": "Rec
 
 Electron's main process parses those JSON lines and maps them into renderer progress/warning updates.
 
-Compatibility stderr logs still exist for human visibility and for any paths that have not yet been fully normalized.
+stderr logs still exist for human visibility during development and manual diagnosis.
 
 ### Current Status
 
 - ✅ Structured `event`, `warning`, `error`, and `levels` messages are implemented in the active recorder contract
 - ✅ `src/main.js` parses recorder `stdout` line-by-line via `parseRecorderStdoutChunk(...)`
-- ✅ Startup state no longer depends on brittle stderr string matching for the main recording-start flow
-- ⚠️ The contract is still hybrid: stderr remains part of debug/status output and some wording is preserved for compatibility/manual diagnosis
+- ✅ Startup state no longer depends on brittle stderr string matching
+- ✅ `stderr` is debug-only and is not part of recorder control flow
 - ⚠️ Any change to recorder startup/progress behavior still requires coordinated updates across Electron, recorder scripts, and regression tests
 
 ### Current Electron Parser Shape
@@ -43,13 +43,12 @@ const parsed = parseRecorderStdoutChunk(chunk, pendingBuffer)
 
 ### Known Issues
 
-1. **Hybrid contract remains**: stderr logs still exist beside structured stdout events, so both sides must stay aligned
-2. **Event vocabulary is not final**: startup/progress/error naming is more consistent than before but not fully unified into one minimal schema
-3. **Cross-file coordination required**: recorder output changes still affect `backend/audio/*_recorder.py`, `src/main.js`, `src/main-process-helpers.js`, and tests
+1. **Cross-file coordination required**: recorder output changes still affect `backend/audio/*_recorder.py`, `src/main.js`, `src/main-process-helpers.js`, and tests
+2. **Final result keys remain platform-specific**: Windows uses `audioPath`; macOS uses `outputPath`; Electron accepts both
 
 ## Direction
 
-The direction is still to finish converging on structured JSON events for all recorder lifecycle messaging.
+The recorder lifecycle contract is structured JSON on stdout.
 
 The current contract already uses this pattern for active recorder messaging:
 ```python
@@ -73,7 +72,7 @@ print(json.dumps({
 # Device configuration
 print(json.dumps({
     "type": "event",
-    "event": "device_configured",
+    "event": "configuring_devices",
     "mic_rate": 48000,
     "desktop_rate": 48000,
     "channels": 2
@@ -106,9 +105,9 @@ print(json.dumps({
 6. **Future-proof**: Easy to add new events
 7. **Consistent**: All platforms send identical event structures
 
-### Remaining Work
+### Contract Requirements
 
-1. Finish converging the remaining recorder status/progress paths on structured stdout messages.
+1. Emit recorder control/status messages as newline-delimited JSON on stdout.
 2. Keep stderr for human-readable logs only.
 3. Keep the event vocabulary stable across Windows and macOS.
 4. Preserve final-result JSON compatibility (`audioPath` on Windows, `outputPath` on macOS) unless all call sites are updated together.
@@ -144,7 +143,7 @@ The current recorder contract uses these structured message classes:
 1. **Unit tests**: Parse sample JSON events in tests
 2. **Integration tests**: Mock Python process and send JSON events
 3. **Manual testing**: Test both Windows and macOS recorders
-4. **Fallback verification**: Ensure old string method still works during migration
+4. **Smoke testing**: Test both Windows and macOS recorders with real devices
 
 ## Validation Notes
 
@@ -172,6 +171,6 @@ If you change recorder output behavior, update all of:
 
 ---
 
-**Status:** Partially implemented hybrid contract
+**Status:** Complete stdout JSON control contract
 
 **Risk Level:** Medium - recorder output changes are easy to regress unless Electron, both recorders, and tests are updated together

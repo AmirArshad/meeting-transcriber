@@ -28,6 +28,7 @@ except ImportError:
 
 # Lock for thread-safe JSON output to stdout
 _stdout_lock = threading.Lock()
+_configuring_devices_event_sent = False
 
 
 def _send_json_message(message: dict):
@@ -44,7 +45,12 @@ def _send_event_message(event: str, message: str, **extra):
 
 
 def _send_configuring_devices_event():
+    global _configuring_devices_event_sent
+    if _configuring_devices_event_sent:
+        return
+
     _send_event_message("configuring_devices", "Configuring audio devices...")
+    _configuring_devices_event_sent = True
 
 
 def _send_warning_message(code: str, message: str, **extra):
@@ -162,6 +168,7 @@ class MacOSAudioRecorder:
         preroll_seconds: Optional[float] = None  # None = use default 1.5s, 0 = no preroll (for production with countdown)
     ):
         """Initialize the macOS recorder."""
+        _send_configuring_devices_event()
         self.mic_device_id = mic_device_id
         self.desktop_device_id = desktop_device_id
         self.output_path = output_path
@@ -298,7 +305,6 @@ class MacOSAudioRecorder:
         try:
             if sd.query_devices is None:
                 raise RuntimeError("sounddevice is not available")
-            _send_configuring_devices_event()
             devices = sd.query_devices()
             self.mic_info = devices[self.mic_device_id]
             print(f"Microphone: {(self.mic_info or {}).get('name', 'unknown')}", file=sys.stderr)
@@ -311,7 +317,9 @@ class MacOSAudioRecorder:
                 print(f"Desktop audio: disabled (no capture method available)", file=sys.stderr)
 
         except Exception as e:
-            print(f"Error querying devices: {e}", file=sys.stderr)
+            message = f"Error querying devices: {e}"
+            print(message, file=sys.stderr)
+            _send_error_message("DEVICE_QUERY_FAILED", message)
             self._set_running(False)
             return False
 
@@ -940,6 +948,8 @@ def main():
         print(f"\n✗ Desktop audio capture not available", file=sys.stderr)
         print(f"  Neither Swift helper nor PyObjC found", file=sys.stderr)
 
+    _send_configuring_devices_event()
+
     # List available devices for reference
     print(f"\nAvailable audio devices:", file=sys.stderr)
     try:
@@ -953,18 +963,32 @@ def main():
         print(f"  {e}", file=sys.stderr)
         print(f"  Microphone permission may not be granted.", file=sys.stderr)
         print(f"  Grant permission in: System Settings > Privacy & Security > Microphone", file=sys.stderr)
+        _send_error_message(
+            "DEVICE_ENUMERATION_FAILED",
+            f"Could not enumerate audio devices: {e}",
+            help="Grant Microphone permission in System Settings > Privacy & Security > Microphone.",
+        )
         sys.exit(1)
 
-    # Create recorder
-    recorder = MacOSAudioRecorder(
-        mic_device_id=args.mic,
-        desktop_device_id=args.loopback,
-        output_path=args.output,
-        preroll_seconds=0  # Production mode: no preroll, countdown in Electron app handles device warm-up
-    )
+    recorder = None
+    try:
+        # Create recorder
+        recorder = MacOSAudioRecorder(
+            mic_device_id=args.mic,
+            desktop_device_id=args.loopback,
+            output_path=args.output,
+            preroll_seconds=0  # Production mode: no preroll, countdown in Electron app handles device warm-up
+        )
 
-    # Start recording
-    if not recorder.start_recording():
+        # Start recording
+        if not recorder.start_recording():
+            sys.exit(1)
+    except Exception as e:
+        message = f"Recorder failed: {e}"
+        print(message, file=sys.stderr)
+        _send_error_message("RECORDER_FAILED", message)
+        if recorder is not None:
+            recorder._abort_startup()
         sys.exit(1)
 
     if args.duration > 0:

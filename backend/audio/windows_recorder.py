@@ -135,6 +135,7 @@ class AudioRecorder:
             preroll_seconds: Seconds to discard at start for device warm-up
                             (None = default 1.5s, 0 = disabled for production)
         """
+        _send_event_message("configuring_devices", "Configuring audio devices...")
         self.mic_device_id = mic_device_id
         self.loopback_device_id = loopback_device_id
         self.output_path = output_path
@@ -413,7 +414,6 @@ class AudioRecorder:
     def start_recording(self):
         """Start recording from both sources."""
         print("Starting recording...", file=sys.stderr)
-        _send_event_message("configuring_devices", "Configuring audio devices...")
 
         # Reset buffers and counters
         self.mic_frames = []
@@ -882,19 +882,14 @@ def main():
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    recorder = AudioRecorder(
-        mic_device_id=args.mic,
-        loopback_device_id=args.loopback,
-        output_path=str(output_path),
-        sample_rate=48000,
-        preroll_seconds=0  # Production mode: no preroll, countdown in Electron app handles device warm-up
-    )
+    recorder = None
 
     # Handle interrupt signals for manual stop
     def signal_handler(sig, frame):
         print("\nStopping recording...", file=sys.stderr)
-        recorder.stop_recording()
-        recorder.cleanup()
+        if recorder is not None:
+            recorder.stop_recording()
+            recorder.cleanup()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, signal_handler)
@@ -917,6 +912,13 @@ def main():
     input_thread.start()
 
     try:
+        recorder = AudioRecorder(
+            mic_device_id=args.mic,
+            loopback_device_id=args.loopback,
+            output_path=str(output_path),
+            sample_rate=48000,
+            preroll_seconds=0  # Production mode: no preroll, countdown in Electron app handles device warm-up
+        )
         recorder.start_recording()
         
         if args.duration > 0:
@@ -941,18 +943,20 @@ def main():
                     "mic": round(recorder.mic_level, 3),
                     "desktop": round(recorder.desktop_level, 3)
                 }
-                print(json.dumps(levels), flush=True)
+                _send_json_message(levels)
                 time.sleep(0.2) # 5 FPS updates (was 0.05 = 20 FPS)
             
             print("\nStopping recording...", file=sys.stderr)
             recorder.stop_recording()
 
     except Exception as e:
+        message = f"Recorder failed: {e}"
         print(f"Error: {e}", file=sys.stderr)
-        recorder.cleanup()
+        _send_error_message("RECORDER_FAILED", message)
         sys.exit(1)
     finally:
-        recorder.cleanup()
+        if recorder is not None:
+            recorder.cleanup()
 
         # Output recording info as JSON for Electron to capture
         if _final_output_path:

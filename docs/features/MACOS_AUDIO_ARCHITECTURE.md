@@ -8,7 +8,7 @@ This document outlines larger macOS audio architecture ideas. Some supporting ha
 
 - Screen Recording permission probing is now real and surfaced before recording starts.
 - The preferred Swift helper path is active, with a PyObjC fallback kept aligned to the same startup/error contract.
-- Recorder startup now emits structured stdout events instead of relying on brittle stderr string matching for the main flow.
+- Recorder startup uses structured stdout events; stderr is debug-only.
 
 The sections below should be read as future architectural directions, not as a description of the current shipped implementation.
 

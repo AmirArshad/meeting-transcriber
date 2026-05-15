@@ -249,57 +249,6 @@ function getRecorderEventAction(eventPayload = {}) {
   }
 }
 
-function getRecorderStderrAction(output = '') {
-  const text = String(output || '');
-
-  if (text.includes('Recording started!')) {
-    return {
-      initProgress: null,
-      recordingStartedMessage: 'Recording started!',
-      progressMessage: null,
-    };
-  }
-
-  if (text.includes('Desktop audio stream opened')) {
-    return {
-      initProgress: {
-        stage: 'desktop_opened',
-        message: 'Desktop audio ready...',
-      },
-      recordingStartedMessage: null,
-      progressMessage: null,
-    };
-  }
-
-  if (text.includes('Microphone stream opened')) {
-    return {
-      initProgress: {
-        stage: 'mic_opened',
-        message: 'Microphone ready...',
-      },
-      recordingStartedMessage: null,
-      progressMessage: null,
-    };
-  }
-
-  if (text.includes('Device configuration')) {
-    return {
-      initProgress: {
-        stage: 'configuring',
-        message: 'Configuring audio devices...',
-      },
-      recordingStartedMessage: null,
-      progressMessage: null,
-    };
-  }
-
-  return {
-    initProgress: null,
-    recordingStartedMessage: null,
-    progressMessage: text.trim() || null,
-  };
-}
-
 function getRecorderCloseAction({
   recordingStarted,
   stopInProgress,
@@ -597,7 +546,6 @@ module.exports = {
   getQuitInterceptState,
   getRecorderCloseAction,
   getRecorderEventAction,
-  getRecorderStderrAction,
   getMacMLXModelStorageDirs,
   getModelDownloadCacheDir,
   getMacMLXCacheDir,

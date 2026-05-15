@@ -20,7 +20,6 @@ const {
   getQuitInterceptState,
   getRecorderCloseAction,
   getRecorderEventAction,
-  getRecorderStderrAction,
   getRecordingStopTimeout,
   resolveStopTimeoutAction,
   isModelDownloadErrorOutput,
@@ -163,7 +162,6 @@ function stopRecordingProcess() {
       const output = data.toString();
       stderrData += output;
       console.log(`Python status: ${output}`);
-      sendToRenderer('recording-progress', output.trim());
     };
 
     const cleanupListeners = () => {
@@ -1934,14 +1932,6 @@ ipcMain.handle('start-recording', async (event, options) => {
     pythonProcess.stderr.on('data', (data) => {
       const output = data.toString();
       console.log(`Python status: ${output}`);
-
-      const stderrAction = getRecorderStderrAction(output);
-      if (stderrAction.initProgress) {
-        sendInitProgress(stderrAction.initProgress.stage, stderrAction.initProgress.message);
-      }
-      if (stderrAction.recordingStartedMessage) {
-        markRecordingStarted(stderrAction.recordingStartedMessage);
-      }
     });
 
     pythonProcess.on('close', (code) => {
