@@ -2,18 +2,18 @@
 
 Branch: `upgrade/electron-latest`
 
-Status: planning complete. Dependency upgrades have not started yet.
+Status: Electron and electron-builder upgrades are implemented. Windows automated validation is complete; macOS packaging, GitHub Actions, and manual smoke validation remain pending.
 
 Goal: upgrade to the latest stable, trustworthy Electron release while preserving the app's local-only recording/transcription behavior and packaged Windows/macOS builds.
 
 ## Current Baseline
 
-- Installed Electron: `28.3.3`
-- Latest stable Electron observed from npm: `42.1.0`
-- Installed electron-builder: `24.13.3`
-- Latest stable electron-builder observed from npm: `26.8.1`
-- CI frontend job currently uses Node `18`
-- Root JS test command now avoids Windows/Node 18 wildcard expansion issues by using default Node test discovery
+- Previous Electron baseline: `28.3.3`
+- Current Electron target/install: `42.1.0`
+- Previous electron-builder baseline: `24.13.3`
+- Current electron-builder target/install: `26.8.1`
+- CI Node target: `24`
+- Root JS test command avoids Windows shell glob expansion issues by using default Node test discovery
 
 ## Working Rules
 
@@ -28,52 +28,53 @@ Goal: upgrade to the latest stable, trustworthy Electron release while preservin
 - [x] Create dedicated branch `upgrade/electron-latest`.
 - [x] Archive old root todo/plan content under `docs/internal/TODO_ARCHIVE_2026-05-15.md`.
 - [x] Replace root `todo.md` with this focused Electron upgrade plan.
-- [ ] Commit planning and CI test-runner cleanup before starting dependency upgrades.
+- [x] Commit planning and CI test-runner cleanup before starting dependency upgrades.
 
 ## Phase 1 - Version And Release Research
 
-- [ ] Confirm the current stable npm dist-tag for `electron` before installing.
-- [ ] Confirm the current stable npm dist-tag for `electron-builder` before installing.
-- [ ] Review Electron breaking changes from 29 through the target major version.
-- [ ] Check target Electron platform support against our targets: Windows 10/11 x64 and macOS 13+ Apple Silicon.
-- [ ] Decide CI Node target: prefer Node 24 if the toolchain passes, fall back to Node 22 only if needed.
-- [ ] Check whether newer `actions/checkout` and `actions/setup-node` majors are available to reduce GitHub's Node 20 action-runtime warning.
+- [x] Confirm the current stable npm dist-tag for `electron` before installing: `42.1.0`.
+- [x] Confirm the current stable npm dist-tag for `electron-builder` before installing: `26.8.1`.
+- [x] Review Electron breaking changes from 29 through the target major version.
+- [x] Check target Electron platform support against our targets: Windows 10/11 x64 and macOS 13+ Apple Silicon.
+- [x] Decide CI Node target: Node 24, validated with Node 24 syntax checks and JS tests.
+- [x] Check whether newer `actions/checkout` and `actions/setup-node` majors are available to reduce GitHub's Node 20 action-runtime warning.
 
 ## Phase 2 - Dependency Upgrade
 
-- [ ] Update `electron` to the latest stable release.
-- [ ] Update `electron-builder` to the latest stable release.
-- [ ] Regenerate `package-lock.json` with a normal install, not a forced audit fix.
-- [ ] Update CI Node versions after validating the chosen Node runtime.
-- [ ] Re-run `npm audit --audit-level=high` and record any remaining advisories.
+- [x] Update `electron` to the latest stable release: `42.1.0`.
+- [x] Update `electron-builder` to the latest stable release: `26.8.1`.
+- [x] Regenerate `package-lock.json` with a normal install, not a forced audit fix.
+- [x] Update CI Node versions after validating the chosen Node runtime.
+- [x] Re-run `npm audit --audit-level=high` and record any remaining advisories: `0 vulnerabilities`.
 
 ## Phase 3 - Electron Compatibility Review
 
-- [ ] Verify main-process startup, single-instance behavior, tray behavior, quit handling, and menu actions.
-- [ ] Verify `BrowserWindow` security settings still behave as expected: `nodeIntegration: false`, `contextIsolation: true`, and preload access through `contextBridge`.
-- [ ] Evaluate whether `sandbox: true` is now practical without breaking preload APIs.
-- [ ] Verify local `loadFile(...)` renderer loading and file URL behavior for recordings/history.
-- [ ] Verify all `shell.openExternal(...)` paths are explicit and safe.
-- [ ] Verify IPC handler names and preload bridge APIs remain stable for the renderer.
-- [ ] Verify custom updater behavior and release asset matching still work.
+- [x] Verify main-process startup, tray behavior, quit handling, and menu actions at code-review level. Existing code does not implement `requestSingleInstanceLock`; this remains unchanged.
+- [x] Verify `BrowserWindow` security settings still behave as expected: `nodeIntegration: false`, `contextIsolation: true`, and preload access through `contextBridge`.
+- [x] Evaluate whether `sandbox: true` is now practical without breaking preload APIs; enabled and covered by syntax/regression tests.
+- [x] Verify local `loadFile(...)` renderer loading and file URL behavior for recordings/history.
+- [x] Verify all `shell.openExternal(...)` paths are explicit and safe.
+- [x] Verify IPC handler names and preload bridge APIs remain stable for the renderer.
+- [x] Verify custom updater behavior and release asset matching still work.
 
 ## Phase 4 - Packaged Build Compatibility
 
-- [ ] Verify Windows packaged resource layout still includes Python, ffmpeg, backend files, and no stale macOS helper.
+- [x] Verify Windows packaged resource layout still includes Python, ffmpeg, backend files, and no stale macOS helper.
 - [ ] Verify macOS packaged resource layout still includes Python, ffmpeg, and `bin/audiocapture-helper`.
 - [ ] Verify macOS hardened runtime, entitlements, and helper binary packaging still work with the new builder.
-- [ ] Verify `artifactName` output still matches updater expectations.
-- [ ] Verify build resource invalidation still works after dependency changes.
+- [x] Verify `artifactName` output still matches updater expectations.
+- [x] Verify build resource invalidation still works after dependency changes.
 
 ## Phase 5 - Automated Validation
 
-- [ ] `npm test`
-- [ ] `npm run test:python`
-- [ ] `python -m py_compile backend/*.py backend/audio/*.py backend/transcription/*.py`
-- [ ] `npm run build:dir`
+- [x] `npm test`
+- [x] `npm run test:python`
+- [x] `python -m py_compile backend/*.py backend/audio/*.py backend/transcription/*.py` equivalent via Python-side globbing on Windows
+- [x] `npm run build:dir`
 - [ ] `npm run build:mac:dir` on macOS or CI
 - [ ] `swift build -c release --arch arm64` inside `swift/AudioCaptureHelper` on macOS or CI
 - [ ] GitHub Actions CI passes on Windows and macOS
+- [x] `npm exec --package node@24 -- node --check ... && npm exec --package node@24 -- node --test`
 
 ## Phase 6 - Manual Smoke Validation
 
@@ -90,10 +91,10 @@ Goal: upgrade to the latest stable, trustworthy Electron release while preservin
 
 ## Phase 7 - Release Readiness
 
-- [ ] Update docs if install/build/test commands change.
-- [ ] Update `AGENTS.md` and `CLAUDE.md` together if agent guidance changes.
-- [ ] Confirm no new network behavior was introduced beyond explicit update/model/build downloads.
-- [ ] Confirm no secrets, local build outputs, or downloaded runtimes are staged.
+- [x] Update docs if install/build/test commands change.
+- [x] Update `AGENTS.md` and `CLAUDE.md` together if agent guidance changes.
+- [x] Confirm no new network behavior was introduced beyond explicit update/model/build downloads.
+- [x] Confirm no secrets, local build outputs, or downloaded runtimes are staged.
 - [ ] Prepare a concise upgrade summary and residual-risk note before PR/merge.
 
 ## Known Risk Areas

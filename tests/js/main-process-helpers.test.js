@@ -6,6 +6,7 @@ const mainProcessHelpers = require('../../src/main-process-helpers');
 
 const {
   buildFileUrl,
+  isTrustedExternalUrl,
   buildPermissionErrorMessage,
   buildRecordingPreflightReport,
   buildQuitRecordingDialogOptions,
@@ -26,6 +27,7 @@ const {
   isModelDownloadErrorOutput,
   parseRecorderMessageLine,
   parseRecorderStdoutChunk,
+  resolveExternalUrl,
   resolveTranscriptionAudioFile,
   splitBufferedLines,
 } = mainProcessHelpers;
@@ -61,6 +63,26 @@ test('buildFileUrl preserves existing file URLs', () => {
     buildFileUrl('file:///tmp/demo.opus'),
     'file:///tmp/demo.opus',
   );
+});
+
+
+test('isTrustedExternalUrl only allows explicit external destinations', () => {
+  assert.equal(isTrustedExternalUrl('https://github.com/AmirArshad/meeting-transcriber'), true);
+  assert.equal(isTrustedExternalUrl('https://github.com/AmirArshad/meeting-transcriber/releases/download/v1.8.0/app.exe'), true);
+  assert.equal(isTrustedExternalUrl('x-apple.systempreferences:com.apple.preference.security?Privacy'), true);
+  assert.equal(isTrustedExternalUrl('https://example.com'), false);
+  assert.equal(isTrustedExternalUrl('https://github.com/electron/electron'), false);
+  assert.equal(isTrustedExternalUrl('https://github.com/AmirArshad/meeting-transcriber-malicious'), false);
+  assert.equal(isTrustedExternalUrl('http://example.com'), false);
+  assert.equal(isTrustedExternalUrl('file:///tmp/demo.opus'), false);
+  assert.equal(isTrustedExternalUrl('not a url'), false);
+});
+
+
+test('resolveExternalUrl returns null for untrusted external URLs', () => {
+  assert.equal(resolveExternalUrl('https://github.com/AmirArshad/meeting-transcriber'), 'https://github.com/AmirArshad/meeting-transcriber');
+  assert.equal(resolveExternalUrl('x-apple.systempreferences:com.apple.preference.security?Privacy'), 'x-apple.systempreferences:com.apple.preference.security?Privacy');
+  assert.equal(resolveExternalUrl('javascript:alert(1)'), null);
 });
 
 

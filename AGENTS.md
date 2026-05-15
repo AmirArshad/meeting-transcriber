@@ -6,7 +6,7 @@ This file is intentionally mirrored with its counterpart. Keep `AGENTS.md` and `
 
 Meeting Transcriber is a privacy-first Electron desktop app for recording microphone audio plus desktop/system audio, then transcribing locally with Whisper.
 
-- Frontend: Electron 28 with plain HTML/CSS/JavaScript
+- Frontend: Electron 42 with plain HTML/CSS/JavaScript
 - Backend: Python 3.11 scripts spawned from Electron
 - macOS desktop audio: native Swift helper preferred, PyObjC fallback
 - Windows transcription: `faster-whisper`

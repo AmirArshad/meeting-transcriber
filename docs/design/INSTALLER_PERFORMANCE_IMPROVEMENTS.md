@@ -323,7 +323,7 @@ FunctionEnd
 ## Build Instructions
 
 ### Prerequisites
-- Node.js 18+ with npm
+- Node.js 22.12+ with npm; Node 24 is used in CI
 - Python 3.11.9 (downloaded automatically)
 - ~5 GB free disk space (for build artifacts + models)
 - Good internet connection (model downloads: 2-3 GB)

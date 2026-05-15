@@ -28,8 +28,8 @@
   "license": "MIT",
   "devDependencies": {
     "adm-zip": "^0.5.16",
-    "electron": "^28.0.0",
-    "electron-builder": "^24.13.3"
+    "electron": "^42.1.0",
+    "electron-builder": "^26.8.1"
   },
   "build": {
     "appId": "com.meetingtranscriber.app",
@@ -56,13 +56,16 @@
       ],
       "icon": "build/icon.icns",
       "category": "public.app-category.productivity",
-      "binaries": ["bin/audiocapture-helper"],
+      "binaries": [
+        "bin/audiocapture-helper"
+      ],
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.inherit.plist",
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Meeting Transcriber needs microphone access to record your voice during meetings.",
+        "NSAudioCaptureUsageDescription": "Meeting Transcriber needs system audio access to capture desktop audio locally for meeting transcription.",
         "NSAppleMusicUsageDescription": "Meeting Transcriber does not access your music library.",
         "NSCameraUsageDescription": "Meeting Transcriber does not use your camera.",
         "NSScreenCaptureUsageDescription": "Meeting Transcriber needs screen recording permission to capture system audio (desktop audio) using ScreenCaptureKit. No screen video is recorded, only audio."
