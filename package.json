@@ -1,6 +1,6 @@
 {
   "name": "avanevis",
-  "version": "1.10.0",
+  "version": "1.9.5",
   "description": "AI-powered meeting transcription with desktop audio capture",
   "main": "src/main.js",
   "scripts": {
