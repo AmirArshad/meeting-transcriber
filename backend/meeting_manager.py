@@ -22,6 +22,7 @@ from filelock import FileLock
 
 
 _UNSET = object()
+_MAX_AI_METADATA_STRING_LENGTH = 300
 
 
 class MeetingManager:
@@ -248,6 +249,10 @@ class MeetingManager:
         if not isinstance(metadata, dict):
             raise ValueError(f"AI metadata for {feature} must be an object")
 
+        def normalize_text(value: object) -> str:
+            text = re.sub(r"\s+", " ", str(value or "")).strip()
+            return text[:_MAX_AI_METADATA_STRING_LENGTH]
+
         normalized = {}
         for field in allowed_fields[feature]:
             if field not in metadata:
@@ -269,8 +274,12 @@ class MeetingManager:
                 normalized_path = self._normalize_sidecar_path(value, ('.md',))
                 if normalized_path is not None:
                     normalized[field] = normalized_path
+            elif field == 'sourceTranscriptHash':
+                text = normalize_text(value)
+                if re.fullmatch(r"sha256:[a-fA-F0-9]{64}", text):
+                    normalized[field] = text
             else:
-                normalized[field] = str(value)
+                normalized[field] = normalize_text(value)
 
         return normalized
 

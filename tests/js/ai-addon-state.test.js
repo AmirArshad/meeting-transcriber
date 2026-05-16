@@ -17,6 +17,7 @@ const {
   getAiAddonPaths,
   getAiAddonStatus,
   getDiarizationAvailability,
+  getDiarizationModelRef,
   getModelById,
   getSummaryArtifactForPlatform,
   getSummaryRuntimeArtifactForPlatform,
@@ -131,6 +132,7 @@ test('model catalog exposes swappable v1 defaults', () => {
   const summaryModel = getModelById('summary', DEFAULT_SUMMARY_MODEL_ID);
 
   assert.equal(diarizationModel.runtime.modelRef, 'pyannote/speaker-diarization-community-1');
+  assert.equal(getDiarizationModelRef('renderer-supplied-id'), 'pyannote/speaker-diarization-community-1');
   assert.equal(diarizationModel.supportedPlatforms.darwin.status, 'disabledUntilValidated');
   assert.equal(summaryModel.inference.runtime, 'llama.cpp');
   assert.equal(summaryModel.inference.windowsAcceleration, 'cuda');

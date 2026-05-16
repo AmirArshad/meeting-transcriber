@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import sys
 import tempfile
@@ -180,8 +181,9 @@ def save_summary_outputs(
     markdown_target.parent.mkdir(parents=True, exist_ok=True)
 
     json_payload = {"summary": validate_summary_json(summary), "metadata": dict(metadata)}
-    temp_json = json_target.with_name(f".{json_target.name}.tmp")
-    temp_markdown = markdown_target.with_name(f".{markdown_target.name}.tmp")
+    temp_suffix = f".{os.getpid()}.{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}.tmp"
+    temp_json = json_target.with_name(f".{json_target.name}{temp_suffix}")
+    temp_markdown = markdown_target.with_name(f".{markdown_target.name}{temp_suffix}")
     backup_json = json_target.with_name(f".{json_target.name}.bak")
     backup_markdown = markdown_target.with_name(f".{markdown_target.name}.bak")
     had_json = json_target.exists()

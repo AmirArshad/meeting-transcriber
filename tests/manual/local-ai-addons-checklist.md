@@ -21,6 +21,7 @@ Use this checklist when validating speaker identification or local summaries on 
 - [ ] Confirm normal transcript remains saved if diarization fails.
 - [ ] Confirm `*.speakers.json` is written and meeting metadata references it without token values.
 - [ ] Confirm current transcript and History transcript show speaker labels.
+- [ ] Attempt a second diarization/summary run while one local AI backend is active and confirm the app serializes work instead of launching concurrent GPU-heavy processes.
 
 ## macOS Diarization Policy
 
@@ -32,6 +33,7 @@ Use this checklist when validating speaker identification or local summaries on 
 
 - [ ] Start summary setup explicitly from Settings.
 - [ ] Confirm the pinned llama.cpp runtime downloads, verifies, and extracts before the model is marked ready.
+- [ ] Confirm runtime archives extract into a cleaned staging directory and the final `llama-cli` executable lands under the stable runtime cache path.
 - [ ] Confirm the pinned GGUF model downloads and checksum-verifies before Ready.
 - [ ] Generate a summary from Home after a saved transcript.
 - [ ] Generate or regenerate a summary from History.
@@ -54,4 +56,6 @@ Use this checklist when validating speaker identification or local summaries on 
 - [ ] Missing summary model routes the user to Settings and does not start generation.
 - [ ] Runtime missing `llama-cli` keeps summary setup out of Ready.
 - [ ] Checksum mismatch keeps summary setup out of Ready and explains the mismatch.
+- [ ] Untrusted summary/runtime download host keeps setup out of Ready.
+- [ ] Unsafe ZIP entries that escape the extraction directory are rejected before extraction.
 - [ ] Summary generation failure leaves transcript files unchanged.

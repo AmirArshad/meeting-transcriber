@@ -10,10 +10,12 @@ const {
   checkSummaryModelCache,
   checkSummaryRuntimeCache,
   createAiAddonProgressEvent,
+  extractZipArchive,
   getSummaryArtifactPath,
   getSummaryRuntimeArchivePath,
   getSummaryRuntimeDir,
   getSummaryRuntimeExecutablePath,
+  isAllowedDownloadUrl,
   removeDiarizationSetup,
   removeSummaryModel,
   setupDiarizationAddon,
@@ -29,14 +31,35 @@ function createMemoryFs() {
   const dirs = new Set();
   const removed = [];
 
+  function pathVariants(targetPath) {
+    return [...new Set([targetPath, path.normalize(targetPath), path.resolve(targetPath)])];
+  }
+
+  function addDirTree(targetPath) {
+    const normalized = path.normalize(targetPath);
+    const root = path.parse(normalized).root;
+    let current = root;
+    if (current) {
+      dirs.add(current);
+    }
+    for (const segment of normalized.slice(current.length).split(path.sep).filter(Boolean)) {
+      current = current ? path.join(current, segment) : segment;
+      dirs.add(current);
+    }
+    dirs.add(targetPath);
+  }
+
   return {
     files,
     dirs,
     removed,
     mkdirSync(dirPath) {
-      dirs.add(dirPath);
+      for (const variant of pathVariants(dirPath)) {
+        addDirTree(variant);
+      }
     },
     writeFileSync(filePath, data) {
+      this.mkdirSync(path.dirname(filePath));
       files.set(filePath, Buffer.isBuffer(data) ? data : Buffer.from(String(data)));
     },
     readFileSync(filePath, encoding) {
@@ -47,7 +70,7 @@ function createMemoryFs() {
       return encoding ? data.toString(encoding) : data;
     },
     existsSync(filePath) {
-      return files.has(filePath) || dirs.has(filePath);
+      return pathVariants(filePath).some((variant) => files.has(variant) || dirs.has(variant));
     },
     unlinkSync(filePath) {
       files.delete(filePath);
@@ -56,6 +79,7 @@ function createMemoryFs() {
       if (!files.has(fromPath)) {
         throw new Error(`Missing file: ${fromPath}`);
       }
+      this.mkdirSync(path.dirname(toPath));
       files.set(toPath, Buffer.from(files.get(fromPath)));
     },
     renameSync(fromPath, toPath) {
@@ -75,13 +99,14 @@ function createMemoryFs() {
     },
     readdirSync(dirPath, options = {}) {
       const names = new Set();
+      const parentVariants = pathVariants(dirPath);
       for (const filePath of files.keys()) {
-        if (path.dirname(filePath) === dirPath) {
+        if (parentVariants.includes(path.dirname(filePath)) || parentVariants.includes(path.normalize(path.dirname(filePath)))) {
           names.add(path.basename(filePath));
         }
       }
       for (const childDir of dirs) {
-        if (path.dirname(childDir) === dirPath && childDir !== dirPath) {
+        if ((parentVariants.includes(path.dirname(childDir)) || parentVariants.includes(path.normalize(path.dirname(childDir)))) && !parentVariants.includes(childDir)) {
           names.add(path.basename(childDir));
         }
       }
@@ -91,13 +116,24 @@ function createMemoryFs() {
       }
       return entries.map((name) => ({
         name,
-        isDirectory: () => dirs.has(path.join(dirPath, name)),
+        isDirectory: () => pathVariants(path.join(dirPath, name)).some((variant) => dirs.has(variant)),
       }));
     },
     statSync(targetPath) {
       return {
-        isDirectory: () => dirs.has(targetPath),
+        isDirectory: () => pathVariants(targetPath).some((variant) => dirs.has(variant)),
       };
+    },
+  };
+}
+
+function createMemoryZip(entries) {
+  return {
+    getEntries() {
+      return entries.map((entryName) => ({ entryName }));
+    },
+    extractAllTo() {
+      this.extracted = true;
     },
   };
 }
@@ -122,7 +158,7 @@ function createUnavailableSafeStorage() {
   };
 }
 
-function createCatalogWithPinnedSummaryArtifact({ sha256 = 'abc123', downloadUrl = 'https://example.test/model.gguf' } = {}) {
+function createCatalogWithPinnedSummaryArtifact({ sha256 = 'abc123', downloadUrl = 'https://huggingface.co/example/model.gguf' } = {}) {
   const artifact = {
     format: 'gguf',
     distribution: 'optional-setup-artifact',
@@ -177,7 +213,7 @@ function createCatalogWithPinnedSummaryArtifact({ sha256 = 'abc123', downloadUrl
               archiveFormat: 'zip',
               sha256: '3f8ef8b3bfedd12cb8d81101703a10e5fc12f764dda294a4aaa963de0519b291',
               sizeBytes: 123,
-              downloadUrl: 'https://example.test/runtime.zip',
+              downloadUrl: 'https://github.com/example/runtime.zip',
             },
           ],
         },
@@ -211,6 +247,29 @@ test('progress events redact known sensitive fields and token-looking values', (
   assert.equal('transcriptText' in event, false);
   assert.equal('prompt' in event, false);
   assert.equal('token' in event, false);
+});
+
+test('download URL validation allows only expected HTTPS artifact hosts', () => {
+  assert.equal(isAllowedDownloadUrl('https://github.com/ggml-org/llama.cpp/releases/download/b9173/runtime.zip'), true);
+  assert.equal(isAllowedDownloadUrl('https://huggingface.co/unsloth/model/resolve/main/model.gguf'), true);
+  assert.equal(isAllowedDownloadUrl('http://github.com/ggml-org/llama.cpp/releases/download/b9173/runtime.zip'), false);
+  assert.equal(isAllowedDownloadUrl('https://example.test/model.gguf'), false);
+});
+
+test('zip extraction rejects unsafe archive entry names', () => {
+  assert.throws(
+    () => extractZipArchive(createMemoryZip(['bin/llama-cli.exe', '../escape.txt']), '/tmp/runtime'),
+    /unsafe path traversal/,
+  );
+  assert.throws(
+    () => extractZipArchive(createMemoryZip(['..\\escape.txt']), '/tmp/runtime'),
+    /unsafe path traversal/,
+  );
+  assert.throws(
+    () => extractZipArchive(createMemoryZip([path.resolve('/tmp/escape.txt')]), '/tmp/runtime'),
+    /unsafe absolute path/,
+  );
+  assert.doesNotThrow(() => extractZipArchive(createMemoryZip(['bin/llama-cli.exe']), '/tmp/runtime'));
 });
 
 test('check status includes token and summary cache state without exposing token values', async () => {
@@ -389,6 +448,7 @@ test('setup diarization runs runtime validation before marking ready', async () 
   assert.equal(status.features.diarization.status, 'ready');
   assert.equal(validations.length, 1);
   assert.equal(validations[0].modelId, 'pyannote/speaker-diarization-community-1');
+  assert.equal(validations[0].modelRef, 'pyannote/speaker-diarization-community-1');
   assert.equal(validations[0].token, 'hf_validtoken123');
   assert.equal(validations[0].dependencyCache.valid, true);
 });
@@ -659,15 +719,16 @@ test('setup summary model downloads explicit runtime and model artifacts only wh
     extractor: async (archivePath) => {
       const archive = runtimeArtifact.artifacts[0];
       assert.equal(archivePath, getSummaryRuntimeArchivePath('/tmp/AvaNevis', getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog), archive));
-      fsModule.writeFileSync(getSummaryRuntimeExecutablePath('/tmp/AvaNevis', getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog), runtimeArtifact), 'bin');
+      fsModule.writeFileSync(path.join(getSummaryRuntimeDir('/tmp/AvaNevis', getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog)), 'extract', 'nested', 'llama-cli.exe'), 'bin');
     },
   });
 
-  assert.deepEqual(downloadedUrls, ['https://example.test/runtime.zip', 'https://example.test/model.gguf']);
+  assert.deepEqual(downloadedUrls, ['https://github.com/example/runtime.zip', 'https://huggingface.co/example/model.gguf']);
   assert.equal(status.features.summary.status, 'ready');
   assert.equal(status.features.summary.profile, 'detailed');
   assert.equal(status.features.summary.setupComplete, true);
   assert.equal(status.features.summary.runtimeCache.valid, true);
+  assert.equal(fsModule.existsSync(getSummaryRuntimeExecutablePath('/tmp/AvaNevis', getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog), runtimeArtifact)), true);
 });
 
 test('setup summary model records downloader failures and removes temp model downloads', async () => {
@@ -695,7 +756,7 @@ test('setup summary model records downloader failures and removes temp model dow
       throw new Error('network timeout');
     },
     extractor: async () => fsModule.writeFileSync(
-      getSummaryRuntimeExecutablePath('/tmp/AvaNevis', artifact, catalog.summary.runtimeArtifacts['win32-x64']),
+      path.join(getSummaryRuntimeDir('/tmp/AvaNevis', artifact), 'extract', 'llama-cli.exe'),
       'bin',
     ),
   });
@@ -720,7 +781,7 @@ test('remove summary model clears cache and manifest state', async () => {
     catalog,
     downloader: async ({ url, destinationPath }) => fsModule.writeFileSync(destinationPath, url.endsWith('/runtime.zip') ? 'runtime archive\n' : 'checksum target\n'),
     extractor: async () => fsModule.writeFileSync(
-      getSummaryRuntimeExecutablePath('/tmp/AvaNevis', getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog), catalog.summary.runtimeArtifacts['win32-x64']),
+      path.join(getSummaryRuntimeDir('/tmp/AvaNevis', getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog)), 'extract', 'llama-cli.exe'),
       'bin',
     ),
   });

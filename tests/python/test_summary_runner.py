@@ -101,6 +101,31 @@ def test_save_summary_outputs_writes_json_and_markdown(tmp_path):
     assert '# Meeting Summary' in markdown_path.read_text(encoding='utf-8')
 
 
+def test_save_summary_outputs_uses_unique_temp_names(monkeypatch, tmp_path):
+    json_path = tmp_path / 'meeting.summary.json'
+    markdown_path = tmp_path / 'meeting.summary.md'
+    observed = []
+    original_write_text = type(json_path).write_text
+
+    def capture_write_text(self, *args, **kwargs):
+        observed.append(self.name)
+        return original_write_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(type(json_path), 'write_text', capture_write_text)
+
+    save_summary_outputs(
+        summary={'summary': 'Saved summary', 'topics': []},
+        metadata={'profile': 'balanced', 'model': 'Qwen3.5-9B'},
+        json_path=str(json_path),
+        markdown_path=str(markdown_path),
+    )
+
+    temp_names = [name for name in observed if name.startswith('.meeting.summary')]
+    assert len(temp_names) == 2
+    assert all(name.endswith('.tmp') for name in temp_names)
+    assert all(name.count('.') >= 5 for name in temp_names)
+
+
 def test_validate_summary_runtime_smoke_tests_resolved_runtime(monkeypatch, tmp_path):
     runtime_dir = tmp_path / 'runtime'
     runtime_dir.mkdir()

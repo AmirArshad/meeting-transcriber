@@ -127,10 +127,14 @@ Key quality assumptions to preserve:
 - Speaker diarization uses `pyannote/speaker-diarization-community-1` with the user's own Hugging Face token only. Do not embed, proxy, log, or persist a maintainer-owned token.
 - Tokens must stay in Electron `safeStorage`; do not write token values to manifests, meeting metadata, transcripts, summaries, progress events, or logs.
 - Diarization runs automatically only after transcription when setup is complete and platform policy allows it.
+- Diarization model refs must be resolved from the catalog in the main process, not trusted from renderer input.
 - macOS diarization remains unavailable unless accelerated Apple Silicon diarization is explicitly validated; do not add CPU-only macOS diarization as a v1 fallback.
 - Summary generation is always user-triggered from Home or History.
 - Summary model and runtime artifacts are pinned and catalog-driven in `src/ai-addon-state.js`; do not hard-code artifact URLs, filenames, checksums, or runtime names in renderer/business logic.
 - Summary runtime/model setup must be an explicit user action. No hidden or background summary downloads.
+- Summary downloads must stay HTTPS and host-allowlisted, and runtime archive extraction must guard against path traversal.
+- Summary generation and diarization execution must remain serialized through a main-process compute queue to avoid concurrent GPU-heavy local AI runs.
+- Meeting AI metadata must accept only `diarization` and `summary`, keep sidecar paths under recordings, and store only concise sanitized strings.
 - AI add-on model/runtime caches live under Electron `userData` (`ai-addons/models/...`) so app updates preserve installed artifacts.
 
 ## High-Risk Areas
@@ -286,7 +290,8 @@ swift build -c release --arch arm64
 - Windows speaker prompts remain behind CUDA readiness when NVIDIA/CUDA is the target path
 - macOS speaker setup remains hidden/unsupported until accelerated diarization is validated
 - summaries remain user-triggered and never modify transcripts on failure
-- summary setup refuses unpinned or checksum-mismatched artifacts
+- summary setup refuses unpinned, checksum-mismatched, unallowed-host, or unsafe runtime archive artifacts
+- summary/diarization generation remains serialized and cannot launch overlapping GPU-heavy backends
 - summary output saves `*.summary.json` and `*.summary.md` and metadata stores only concise sidecar references
 - stale summaries are detectable through `sourceTranscriptHash`
 - relevant JS and Python regression tests pass

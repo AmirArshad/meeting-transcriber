@@ -360,6 +360,12 @@ function getModelById(feature, modelId, catalog = AI_MODEL_CATALOG) {
   return getModelList(feature, catalog).find((model) => model.id === modelId) || null;
 }
 
+function getDiarizationModelRef(modelId, catalog = AI_MODEL_CATALOG) {
+  const resolvedModelId = resolveModelId('diarization', modelId, catalog);
+  const model = getModelById('diarization', resolvedModelId, catalog);
+  return model && model.runtime && model.runtime.modelRef ? model.runtime.modelRef : null;
+}
+
 function getSummaryArtifactForPlatform(modelId, platform = process.platform, arch = process.arch, catalog = AI_MODEL_CATALOG) {
   const resolvedModelId = resolveModelId('summary', modelId, catalog);
   const model = getModelById('summary', resolvedModelId, catalog);
@@ -676,6 +682,7 @@ module.exports = {
   getDefaultModelId,
   getDiarizationAvailability,
   getDiarizationDependencyArtifactForPlatform,
+  getDiarizationModelRef,
   getModelById,
   getModelList,
   getSummaryArtifactForPlatform,

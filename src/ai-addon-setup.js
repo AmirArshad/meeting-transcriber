@@ -4,11 +4,13 @@ const fs = require('fs');
 const https = require('https');
 const path = require('path');
 const AdmZip = require('adm-zip');
+const { SENSITIVE_PROGRESS_KEY_SET } = require('./ai-progress-sanitizer');
 
 const {
   AI_MODEL_CATALOG,
   buildAiAddonStatus,
   getAiAddonPaths,
+  getDiarizationModelRef,
   getDiarizationAvailability,
   getDiarizationDependencyArtifactForPlatform,
   getSummaryArtifactForPlatform,
@@ -29,17 +31,7 @@ const {
 const AI_ADDON_PROGRESS_CHANNEL = 'ai-addon-progress';
 const DOWNLOAD_TIMEOUT_MS = 120000;
 const MAX_DOWNLOAD_REDIRECTS = 5;
-
-const SENSITIVE_PROGRESS_KEYS = new Set([
-  'hfToken',
-  'llmOutput',
-  'prompt',
-  'rawOutput',
-  'text',
-  'token',
-  'transcript',
-  'transcriptText',
-]);
+const ALLOWED_DOWNLOAD_HOSTS = new Set(['github.com', 'huggingface.co']);
 
 function safePathSegment(value) {
   return String(value || 'model')
@@ -85,7 +77,7 @@ function getSummaryRuntimeExecutablePath(userDataDir, artifact, runtimeArtifact)
 }
 
 function getSummaryRuntimeExtractDir(userDataDir, artifact, runtimeArtifact) {
-  return getSummaryRuntimeDir(userDataDir, artifact);
+  return path.join(getSummaryRuntimeDir(userDataDir, artifact), 'extract');
 }
 
 function getSummaryRuntimeArchiveDir(userDataDir, artifact) {
@@ -113,12 +105,12 @@ function findRuntimeExecutablePath(runtimeDir, executableName, fsModule = fs) {
     const currentDir = queue.shift();
     for (const entry of readdirSync(currentDir, { withFileTypes: true })) {
       const entryPath = path.join(currentDir, entry.name);
-      if (entry.name === executableName) {
-        return entryPath;
-      }
       const isDirectory = typeof entry.isDirectory === 'function'
         ? entry.isDirectory()
         : statSync(entryPath).isDirectory();
+      if (!isDirectory && entry.name === executableName) {
+        return entryPath;
+      }
       if (isDirectory) {
         queue.push(entryPath);
       }
@@ -235,7 +227,7 @@ function createAiAddonProgressEvent(input = {}) {
   }
 
   for (const key of Object.keys(input)) {
-    if (SENSITIVE_PROGRESS_KEYS.has(key)) {
+    if (SENSITIVE_PROGRESS_KEY_SET.has(key)) {
       delete event[key];
     }
   }
@@ -372,9 +364,21 @@ function validateSummaryRuntimeArtifact(runtimeArtifact) {
     if (!archive.fileName || !archive.downloadUrl || !isPinnedSha256(archive.sha256)) {
       return 'Pinned llama.cpp runtime archive metadata is incomplete.';
     }
+    if (!isAllowedDownloadUrl(archive.downloadUrl)) {
+      return 'Pinned llama.cpp runtime archive host is not allowed.';
+    }
   }
 
   return null;
+}
+
+function isAllowedDownloadUrl(url) {
+  try {
+    const parsedUrl = new URL(String(url || ''));
+    return parsedUrl.protocol === 'https:' && ALLOWED_DOWNLOAD_HOSTS.has(parsedUrl.hostname.toLowerCase());
+  } catch (error) {
+    return false;
+  }
 }
 
 function checkSummaryRuntimeCache({
@@ -826,7 +830,7 @@ async function validateDiarizationSetup({
         error = message;
       } else if (typeof runtimeValidator === 'function') {
         try {
-          await runtimeValidator({ modelId, token, dependencyCache });
+          await runtimeValidator({ modelId, modelRef: getDiarizationModelRef(modelId, catalog), token, dependencyCache });
         } catch (runtimeError) {
           status = 'error';
           message = runtimeError.message || 'Speaker identification runtime validation failed.';
@@ -1108,6 +1112,9 @@ function validateSummarySetupArtifact(artifact) {
   if (!artifact.downloadUrl) {
     return 'Pinned summary setup artifact download URL is not configured.';
   }
+  if (!isAllowedDownloadUrl(artifact.downloadUrl)) {
+    return 'Pinned summary setup artifact host is not allowed.';
+  }
   return null;
 }
 
@@ -1120,6 +1127,9 @@ async function downloadFile({ url, destinationPath, expectedSizeBytes, onProgres
   const client = parsedUrl.protocol === 'https:' ? https : null;
   if (!client) {
     throw new Error('Summary setup artifact downloads require HTTPS.');
+  }
+  if (!isAllowedDownloadUrl(parsedUrl.toString())) {
+    throw new Error('Summary setup artifact download host is not allowed.');
   }
   if (redirectCount > MAX_DOWNLOAD_REDIRECTS) {
     throw new Error('Summary setup artifact download followed too many redirects.');
@@ -1194,8 +1204,22 @@ async function downloadFile({ url, destinationPath, expectedSizeBytes, onProgres
 }
 
 function extractZipArchive(archivePath, destinationDir) {
-  const zip = new AdmZip(archivePath);
-  zip.extractAllTo(destinationDir, true);
+  const zip = archivePath && typeof archivePath.getEntries === 'function'
+    ? archivePath
+    : new AdmZip(archivePath);
+  const resolvedDestination = path.resolve(destinationDir);
+  for (const entry of zip.getEntries()) {
+    const entryName = String(entry.entryName || '').replace(/\\/g, '/');
+    if (!entryName || path.isAbsolute(entryName)) {
+      throw new Error('Archive contains an unsafe absolute path.');
+    }
+
+    const resolvedEntryPath = path.resolve(resolvedDestination, entryName);
+    if (resolvedEntryPath !== resolvedDestination && !resolvedEntryPath.startsWith(`${resolvedDestination}${path.sep}`)) {
+      throw new Error('Archive contains an unsafe path traversal entry.');
+    }
+  }
+  zip.extractAllTo(resolvedDestination, true);
 }
 
 function extractTarGzArchive(archivePath, destinationDir) {
@@ -1278,8 +1302,15 @@ async function installSummaryRuntime({
   const archiveDir = getSummaryRuntimeArchiveDir(userDataDir, artifact);
   const mkdirSync = bindFsMethod(fsModule, 'mkdirSync');
   const unlinkSync = bindFsMethod(fsModule, 'unlinkSync');
+  const rmSync = bindFsMethod(fsModule, 'rmSync');
   if (mkdirSync) {
     mkdirSync(runtimeDir, { recursive: true });
+    mkdirSync(archiveDir, { recursive: true });
+  }
+  if (rmSync) {
+    rmSync(extractDir, { recursive: true, force: true });
+  }
+  if (mkdirSync) {
     mkdirSync(extractDir, { recursive: true });
     mkdirSync(archiveDir, { recursive: true });
   }
@@ -1339,9 +1370,7 @@ async function installSummaryRuntime({
     await extractor(archivePath, extractDir, runtimeArchive.archiveFormat);
   }
 
-  if (runtimeArtifact.platform === 'win32') {
-    copyInstalledRuntimeExecutable({ userDataDir, artifact, runtimeArtifact, fsModule });
-  }
+  copyInstalledRuntimeExecutable({ userDataDir, artifact, runtimeArtifact, fsModule });
 
   const runtimeCache = checkSummaryRuntimeCache({ userDataDir, platform, arch, modelId, fsModule, catalog });
   if (!runtimeCache.valid) {
@@ -1653,6 +1682,7 @@ module.exports = {
   checkSummaryRuntimeCache,
   buildDiarizationDependencyInstallArgs,
   createAiAddonProgressEvent,
+  extractZipArchive,
   getDiarizationDependencySitePackagesDir,
   getDiarizationModelCacheDir,
   getSummaryArtifactPath,
@@ -1660,6 +1690,7 @@ module.exports = {
   getSummaryRuntimeArchivePath,
   getSummaryRuntimeDir,
   getSummaryRuntimeExecutablePath,
+  isAllowedDownloadUrl,
   isLikelyHuggingFaceToken,
   installDiarizationDependencies,
   removeDiarizationSetup,

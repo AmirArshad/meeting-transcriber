@@ -56,6 +56,7 @@ const {
 } = require('./ai-addon-setup');
 const {
   getDiarizationAvailability,
+  getDiarizationModelRef,
   getSummaryArtifactForPlatform,
 } = require('./ai-addon-state');
 const {
@@ -695,7 +696,6 @@ function buildManagedDiarizationArgs({ audioPath, segmentsJsonPath, outputPath, 
 function buildSummaryArgs({ meetingId, transcriptPath, runtimeDir, modelPath, outputJson, outputMarkdown, speakersJsonPath, profile, modelLabel, validateRuntime = false }) {
   const args = [
     '--meeting-id', meetingId,
-    '--transcript', transcriptPath,
     '--runtime-dir', runtimeDir,
     '--model-path', modelPath,
     '--profile', profile || 'balanced',
@@ -706,6 +706,8 @@ function buildSummaryArgs({ meetingId, transcriptPath, runtimeDir, modelPath, ou
 
   if (validateRuntime) {
     args.push('--validate-runtime');
+  } else {
+    args.push('--transcript', transcriptPath);
   }
 
   if (outputJson) {
@@ -1804,6 +1806,7 @@ function createAsyncActionQueue() {
 }
 
 const enqueueAiAddonAction = createAsyncActionQueue();
+const enqueueAiComputeAction = createAsyncActionQueue();
 
 function getRecordingsDir() {
   return path.join(app.getPath('userData'), 'recordings');
@@ -1837,9 +1840,29 @@ function assertSafeExistingSegmentsPath(segmentsJsonPath) {
   return resolvedPath;
 }
 
+function assertSafeExistingTranscriptPath(transcriptPath) {
+  const recordingsDir = getRecordingsDir();
+  if (!isSafeRecordingsMarkdownPath({ filePath: transcriptPath, recordingsDir })) {
+    throw new Error('Meeting transcript must be a Markdown file in the recordings directory.');
+  }
+
+  const resolvedPath = path.resolve(transcriptPath);
+  if (!fs.existsSync(resolvedPath)) {
+    throw new Error('Meeting transcript file was not found.');
+  }
+
+  return resolvedPath;
+}
+
 function validateAiMetadataPaths(updates = {}) {
   const recordingsDir = getRecordingsDir();
   const validated = { ...updates };
+
+  for (const key of Object.keys(validated)) {
+    if (key !== 'diarization' && key !== 'summary') {
+      throw new Error('AI metadata updates may only include diarization or summary.');
+    }
+  }
 
   if (validated.diarization && typeof validated.diarization === 'object') {
     validated.diarization = { ...validated.diarization };
@@ -1870,7 +1893,7 @@ function validateAiMetadataPaths(updates = {}) {
   return validated;
 }
 
-function validateDiarizationRuntime({ modelId }) {
+function validateDiarizationRuntime({ modelRef }) {
   const token = getAiAddonToken({
     userDataDir: app.getPath('userData'),
     tokenKey: TOKEN_KEYS.diarizationHuggingFace,
@@ -1878,7 +1901,7 @@ function validateDiarizationRuntime({ modelId }) {
   });
 
   return new Promise((resolve, reject) => {
-    const python = spawnTrackedPython(buildManagedDiarizationValidationArgs(modelId), {
+    const python = spawnTrackedPython(buildManagedDiarizationValidationArgs(modelRef), {
       cwd: pythonConfig.backendPath,
       env: {
         ...getDiarizationDependencyEnv(),
@@ -1926,10 +1949,9 @@ function validateSummaryRuntimeSmoke({ modelId, cache }) {
   const modelPath = cache && cache.artifactPath ? cache.artifactPath : getSummaryArtifactPath(app.getPath('userData'), artifact);
   const runtimeDir = getSummaryRuntimeDir(app.getPath('userData'), artifact);
 
-  return new Promise((resolve, reject) => {
+  return enqueueAiComputeAction(() => new Promise((resolve, reject) => {
     const python = spawnTrackedPython(buildSummaryArgs({
       meetingId: 'setup-validation',
-      transcriptPath: modelPath,
       runtimeDir,
       modelPath,
       validateRuntime: true,
@@ -1953,7 +1975,7 @@ function validateSummaryRuntimeSmoke({ modelId, cache }) {
       reject(new Error(reason || 'Local summary runtime validation failed.'));
     });
     python.on('error', reject);
-  });
+  }));
 }
 
 function getAiAddonRuntimeOptions(extra = {}) {
@@ -2583,7 +2605,7 @@ ipcMain.handle('transcribe-audio', async (event, options) => {
 });
 
 ipcMain.handle('diarize-transcript', async (event, options = {}) => {
-  const { audioPath, segments, segmentsJsonPath, modelRef, speakerCount } = options;
+  const { audioPath, segments, segmentsJsonPath, speakerCount } = options;
 
   if (!audioPath) {
     throw new Error('diarize-transcript requires an audioPath');
@@ -2598,6 +2620,10 @@ ipcMain.handle('diarize-transcript', async (event, options = {}) => {
   const diarizationStatus = aiStatus && aiStatus.features && aiStatus.features.diarization;
   if (!diarizationStatus || diarizationStatus.status !== 'ready' || !diarizationStatus.setupComplete) {
     throw new Error('Speaker identification setup is not ready.');
+  }
+  const catalogModelRef = getDiarizationModelRef(diarizationStatus.modelId);
+  if (!catalogModelRef) {
+    throw new Error('Speaker identification model is not configured.');
   }
 
   const resolvedAudioPath = assertSafeExistingRecordingAudioPath(audioPath);
@@ -2626,12 +2652,12 @@ ipcMain.handle('diarize-transcript', async (event, options = {}) => {
     safeStorage,
   });
 
-  return new Promise((resolve, reject) => {
+  return enqueueAiComputeAction(() => new Promise((resolve, reject) => {
     const python = spawnTrackedPython(buildManagedDiarizationArgs({
       audioPath: resolvedAudioPath,
       segmentsJsonPath: resolvedSegmentsJsonPath,
       outputPath: resolvedOutputPath,
-      modelRef: modelRef || diarizationStatus.modelId,
+      modelRef: catalogModelRef,
       speakerCount,
     }), {
       cwd: pythonConfig.backendPath,
@@ -2684,7 +2710,7 @@ ipcMain.handle('diarize-transcript', async (event, options = {}) => {
       }
       reject(error);
     });
-  });
+  }));
 });
 
 ipcMain.handle('generate-summary', async (event, options = {}) => {
@@ -2735,13 +2761,14 @@ ipcMain.handle('generate-summary', async (event, options = {}) => {
 
   const modelPath = getSummaryArtifactPath(app.getPath('userData'), artifact);
   const runtimeDir = getSummaryRuntimeDir(app.getPath('userData'), artifact);
-  const transcriptPath = meeting.transcriptPath;
+  const transcriptPath = assertSafeExistingTranscriptPath(meeting.transcriptPath);
   const transcriptBase = transcriptPath.replace(/\.md$/i, '');
   const outputJson = `${transcriptBase}.summary.json`;
   const outputMarkdown = `${transcriptBase}.summary.md`;
-  const speakersJsonPath = meeting.ai && meeting.ai.diarization && meeting.ai.diarization.segmentsPath;
+  const speakerMetadataPath = meeting.ai && meeting.ai.diarization && meeting.ai.diarization.segmentsPath;
+  const speakersJsonPath = speakerMetadataPath ? assertSafeExistingSegmentsPath(speakerMetadataPath) : null;
 
-  return new Promise((resolve, reject) => {
+  return enqueueAiComputeAction(() => new Promise((resolve, reject) => {
     const python = spawnTrackedPython(buildSummaryArgs({
       meetingId: String(meetingId),
       transcriptPath,
@@ -2826,7 +2853,7 @@ ipcMain.handle('generate-summary', async (event, options = {}) => {
     });
 
     python.on('error', reject);
-  });
+  }));
 });
 
 /**

@@ -2017,7 +2017,6 @@ async function maybeRunDiarizationAfterTranscription(savedMeeting, transcription
       audioPath: savedMeeting.audioPath,
       segments: transcriptionResult.segments,
       speakerCount: diarizationStatus.speakerCount || 'auto',
-      modelRef: (aiStatus.models && aiStatus.models.diarization && aiStatus.models.diarization.defaultModelId) || diarizationStatus.modelId,
     });
 
     if (result && Array.isArray(result.segments) && result.segments.length > 0) {

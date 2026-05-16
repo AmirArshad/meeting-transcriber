@@ -115,12 +115,13 @@ Transcript segments
 ## Implementation Snapshot
 
 - Deterministic helpers live in `backend/summaries/summary_pipeline.py`; runtime execution lives in `backend/summaries/summary_runner.py` and `backend/summaries/llama_runtime.py`.
-- Summary setup uses pinned llama.cpp runtime archives and pinned GGUF artifacts from `src/ai-addon-state.js`; setup is explicit and checksum-gated.
+- Summary setup uses pinned llama.cpp runtime archives and pinned GGUF artifacts from `src/ai-addon-state.js`; setup is explicit, HTTPS host-allowlisted, and checksum-gated.
 - Summaries are generated only by a user action from Home or History.
+- Summary generation runs through the main-process local AI compute queue so it cannot overlap with another summary or diarization backend run.
 - The runner prefers speaker sidecars when available, otherwise parses saved transcript Markdown and assigns `Unknown` owners when needed.
 - Chunking honors token budget and timestamps, and now prefers topic-boundary heuristics such as "next topic" or "moving on" when a chunk has enough content.
 - Malformed JSON is extracted/repaired locally; if validation still fails, the runner sends one explicit repair prompt before failing without modifying transcripts.
-- Output is saved as `*.summary.json` and `*.summary.md`; metadata stores sidecar references and `sourceTranscriptHash` for stale-summary detection.
+- Output is saved as `*.summary.json` and `*.summary.md` through unique process/timestamp temp files; metadata stores sidecar references and a validated `sourceTranscriptHash` for stale-summary detection.
 
 ## Chunking Strategy
 
@@ -238,7 +239,8 @@ Suggested defaults:
 - Store model files under Electron `userData` or a clearly managed model-cache directory.
 - Reuse existing model preloading UX patterns where practical.
 - Add model-cache inspection/removal UI before shipping large summary models.
-- Keep checksums or pinned model filenames for any curated model downloads.
+- Keep checksums, pinned model filenames, HTTPS-only URLs, and the allowed artifact hosts for any curated model downloads.
+- Extract runtime archives into cleaned staging, reject ZIP entries that resolve outside the extraction directory, and copy the expected `llama-cli` executable to the stable runtime cache path.
 - Artifact metadata should stay data-driven so future summary models can replace the default without rewriting setup UI or generation logic.
 
 ## Risks
@@ -248,6 +250,7 @@ Suggested defaults:
 - LLM output can hallucinate action owners or decisions if prompts are not strict.
 - JSON parsing/repair must be robust before saving generated metadata.
 - `llama.cpp` GPU packaging adds new native binaries to the build pipeline.
+- Concurrent local AI runs can exhaust consumer GPUs; keep summary and diarization generation serialized in the main process.
 
 ## Implementation Checklist
 

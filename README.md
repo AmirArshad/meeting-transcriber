@@ -84,8 +84,8 @@ See [docs/development/BUILD_INSTRUCTIONS.md](docs/development/BUILD_INSTRUCTIONS
 
 AI Add-ons are optional and live under Settings. They are not required for recording or transcription.
 
-- **Speaker Identification:** Windows CUDA path uses `pyannote/speaker-diarization-community-1` with the user's own Hugging Face token. It runs automatically after transcription only when setup is ready. macOS speaker identification remains unavailable until accelerated Apple Silicon diarization is validated.
-- **Meeting Summaries:** Uses a pinned local `llama.cpp` runtime and pinned GGUF model artifacts stored under Electron `userData`. Summary generation is always user-triggered from Home or History.
+- **Speaker Identification:** Windows CUDA path uses `pyannote/speaker-diarization-community-1` with the user's own Hugging Face token. It runs automatically after transcription only when setup is ready. The main process uses catalog-resolved model refs and serializes local AI compute work. macOS speaker identification remains unavailable until accelerated Apple Silicon diarization is validated.
+- **Meeting Summaries:** Uses a pinned local `llama.cpp` runtime and pinned GGUF model artifacts stored under Electron `userData`. Summary setup verifies HTTPS artifact hosts, SHA-256 checksums, and safe runtime extraction. Summary generation is always user-triggered from Home or History.
 - **Expected size:** the default summary model is about 5.7 GB plus platform runtime archives. CUDA setup remains separate and can add several GB.
 - **Outputs:** derived files are saved beside recordings as `*.speakers.json`, `*.summary.json`, and `*.summary.md`; raw transcripts remain the source of truth.
 

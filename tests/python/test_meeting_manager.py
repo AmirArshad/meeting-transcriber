@@ -389,6 +389,7 @@ def test_update_meeting_ai_persists_derived_artifact_references(tmp_path):
     speakers_path.write_text('{"segments": []}', encoding='utf-8')
     summary_json_path.write_text('{"summary": "ok"}', encoding='utf-8')
     summary_md_path.write_text('# Summary', encoding='utf-8')
+    source_hash = f"sha256:{hashlib.sha256('different transcript'.encode('utf-8')).hexdigest()}"
 
     manager._save_meetings(
         [
@@ -422,7 +423,7 @@ def test_update_meeting_ai_persists_derived_artifact_references(tmp_path):
             'modelProfile': 'balanced',
             'model': 'Qwen3.5-9B-Q4_K_M',
             'generatedAt': '2026-05-16T00:05:00Z',
-            'sourceTranscriptHash': 'sha256:abc',
+            'sourceTranscriptHash': source_hash,
             'jsonPath': str(summary_json_path),
             'markdownPath': str(summary_md_path),
             'error': None,
@@ -444,7 +445,7 @@ def test_update_meeting_ai_persists_derived_artifact_references(tmp_path):
         'modelProfile': 'balanced',
         'model': 'Qwen3.5-9B-Q4_K_M',
         'generatedAt': '2026-05-16T00:05:00Z',
-        'sourceTranscriptHash': 'sha256:abc',
+        'sourceTranscriptHash': source_hash,
         'jsonPath': str(summary_json_path),
         'markdownPath': str(summary_md_path),
         'error': None,
@@ -455,6 +456,49 @@ def test_update_meeting_ai_persists_derived_artifact_references(tmp_path):
     hydrated = manager.get_meeting('20260107_104555')
     assert hydrated['summary'] == '# Summary'
     assert hydrated['summaryStale'] is True
+
+
+def test_update_meeting_ai_sanitizes_and_caps_text_metadata(tmp_path):
+    recordings_dir = tmp_path / 'recordings'
+    manager = MeetingManager(recordings_dir=str(recordings_dir))
+    audio_path = recordings_dir / 'meeting_20260107_104555.opus'
+    transcript_path = recordings_dir / 'meeting_20260107_104555.md'
+    audio_path.write_bytes(b'audio')
+    transcript_path.write_text('Transcript', encoding='utf-8')
+
+    manager._save_meetings(
+        [
+            {
+                'id': '20260107_104555',
+                'title': 'Meeting',
+                'date': '2026-01-07T10:45:55',
+                'duration': '0:05',
+                'durationSeconds': 5.0,
+                'audioPath': str(audio_path),
+                'transcriptPath': str(transcript_path),
+                'language': 'en',
+                'model': 'small',
+            }
+        ]
+    )
+
+    meeting = manager.update_meeting_ai(
+        '20260107_104555',
+        summary={
+            'status': 'completed\nwith whitespace',
+            'modelProfile': 'balanced\n' + ('x' * 400),
+            'model': 'Qwen\tModel',
+            'sourceTranscriptHash': 'not-a-hash',
+            'error': 'failure\n' + ('y' * 400),
+        },
+    )
+
+    summary = meeting['ai']['summary']
+    assert summary['status'] == 'completed with whitespace'
+    assert len(summary['modelProfile']) == 300
+    assert summary['model'] == 'Qwen Model'
+    assert 'sourceTranscriptHash' not in summary
+    assert len(summary['error']) == 300
 
 
 def test_get_meeting_marks_summary_fresh_when_transcript_hash_matches(tmp_path):

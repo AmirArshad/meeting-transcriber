@@ -26,10 +26,12 @@ This design translates the model research docs into product behavior for Setting
 ## Implementation Snapshot
 
 - Add-on setup state and model metadata are catalog-driven through `src/ai-addon-state.js`.
-- Summary runtime/model setup downloads pinned llama.cpp/GGUF artifacts only after explicit user action and verifies filenames/checksums before Ready.
+- Summary runtime/model setup downloads pinned llama.cpp/GGUF artifacts only after explicit user action and verifies HTTPS host allowlists, filenames, and checksums before Ready.
+- Summary runtime archives extract into a cleaned staging directory with ZIP path-traversal checks; the expected `llama-cli` executable is copied to the stable runtime cache path.
 - Speaker tokens are stored only with Electron `safeStorage`; token values are not exposed through status IPC, metadata, progress, transcripts, or summaries.
 - Derived artifacts live beside recordings as `*.speakers.json`, `*.summary.json`, and `*.summary.md`; meeting metadata stores concise sidecar references only.
 - History displays transcript and summary in separate tabs, warns when a saved summary is stale via `sourceTranscriptHash`, and keeps summary generation manual.
+- Summary and diarization runs are serialized in the main process so two local AI backends do not compete for consumer GPU memory.
 
 ## Feature States
 
@@ -93,6 +95,7 @@ Setup-ready definition:
 - Hugging Face token is present and valid.
 - User has access to `pyannote/speaker-diarization-community-1`.
 - Required Python dependencies and model cache are present or can be downloaded explicitly.
+- The main process resolves the pyannote model reference from the catalog; renderer-provided model refs are ignored.
 - Runtime device policy is valid for the platform. On macOS, this means accelerated Apple Silicon diarization has passed validation; CPU-only diarization is not a v1 shipping path.
 - App-spawned diarization processes set `PYANNOTE_METRICS_ENABLED=0`.
 
@@ -122,7 +125,9 @@ Controls:
 | `Remove Model` | Deletes local summary model cache after confirmation. |
 | `Validate` | Confirms runtime, model file, checksum, and a tiny JSON-only smoke prompt. |
 
-Summary setup should use a larger optional installer/download artifact rather than bundling the model in the base app. The flow should match the existing CUDA setup pattern: the user explicitly starts setup, the app downloads a pinned artifact for the current platform/runtime, verifies filenames/checksums, unpacks or stages it into the managed model cache, and then validates the local runtime. No summary model or runtime download should happen automatically in the background.
+Summary setup should use a larger optional installer/download artifact rather than bundling the model in the base app. The flow should match the existing CUDA setup pattern: the user explicitly starts setup, the app downloads a pinned artifact for the current platform/runtime, verifies HTTPS host allowlists, filenames, and checksums, unpacks or stages it into the managed model cache, and then validates the local runtime. No summary model or runtime download should happen automatically in the background.
+
+Runtime archives are staged defensively: ZIP entries must resolve inside the extraction directory, stale extraction staging is removed before reinstall, and runtime validation invokes only the runtime/model smoke path rather than passing transcript generation arguments.
 
 Initial installed model:
 
@@ -237,6 +242,7 @@ Implementation notes:
 
 - Run diarization after Whisper produces timestamped segments.
 - Use the same source audio file that was transcribed.
+- Main-process path checks must keep audio, transcript, speaker sidecar, and generated summary sidecars inside the recordings directory.
 - On macOS, only run diarization when the accelerated path is available and validated.
 - Prefer `exclusive_speaker_diarization` for timestamp alignment.
 - Merge speaker labels by overlap with Whisper segments.
@@ -275,6 +281,8 @@ Guidelines:
 - Disable model thinking mode for Qwen models where applicable.
 - Validate JSON before writing meeting metadata.
 - A failed summary run should not alter the transcript.
+- Save summary sidecars through unique process/timestamp temp filenames before replacing existing outputs.
+- Summary generation runs through the main-process local AI compute queue shared with diarization.
 
 ## History UX
 
@@ -307,6 +315,8 @@ If a summary already exists:
 ## Persistence Shape
 
 Keep meeting history writes inside the existing `backend/meeting_manager.py` locking and atomic-write path. Store large derived outputs as files and store only references plus concise metadata in `meetings.json`.
+
+AI metadata updates are intentionally narrow: only `diarization` and `summary` are accepted at the top level, sidecar paths must stay inside the recordings directory, `sourceTranscriptHash` must be a `sha256:<64 hex>` value, and string metadata is whitespace-normalized and length-capped before persistence.
 
 Suggested meeting metadata additions:
 
@@ -363,6 +373,8 @@ Candidate handlers:
 | `remove-summary-model` | Remove selected summary model cache. |
 | `generate-summary` | Generate or regenerate a summary for one meeting. |
 
+Setup/remove/validate actions are serialized through the add-on setup queue. Compute-heavy summary and diarization runs are serialized through a separate main-process compute queue to avoid concurrent `llama-cli`/pyannote GPU pressure.
+
 Candidate progress events:
 
 | Event | Payload |
@@ -371,7 +383,7 @@ Candidate progress events:
 | `diarization-progress` | `{ meetingId, phase, message }` |
 | `summary-progress` | `{ meetingId, phase, chunkIndex?, chunkTotal?, message }` |
 
-Progress must avoid emitting transcript text or token values to logs.
+Progress must avoid emitting transcript text or token values to logs. Redaction keys are shared by setup progress and backend progress parsing to avoid drift.
 
 ## Failure Handling
 
@@ -383,6 +395,8 @@ Progress must avoid emitting transcript text or token values to logs.
 | Diarization runtime error | Save normal transcript, mark diarization `error`, warn user. |
 | Summary model missing | Route `Generate Summary` to Settings. |
 | Summary malformed JSON | Retry/repair; if still invalid, save no summary and show error. |
+| Unsafe runtime archive path | Reject extraction and keep setup out of Ready. |
+| Unallowed summary download host | Reject download before network transfer and keep setup out of Ready. |
 | User deletes model cache externally | Next status check returns `notConfigured` or `error` and offers repair. |
 | Transcript changed after summary | Mark summary stale using `sourceTranscriptHash` and offer regenerate. |
 
@@ -395,6 +409,8 @@ Automated coverage:
 - Unit-test speaker/segment overlap merge behavior.
 - Unit-test summary JSON validation and malformed-output retry behavior.
 - Unit-test meeting metadata persistence with derived artifact references.
+- Unit-test summary download host allowlists and ZIP traversal guards.
+- Unit-test summary/diarization metadata sanitization and catalog-resolved model refs.
 - JS tests for History `Transcript` / `Summary` tab state.
 
 Manual coverage:

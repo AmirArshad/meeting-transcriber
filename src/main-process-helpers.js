@@ -1,18 +1,9 @@
 const path = require('path');
 const { pathToFileURL } = require('url');
+const { SENSITIVE_PROGRESS_KEY_SET } = require('./ai-progress-sanitizer');
 
 const TRUSTED_GITHUB_PATH_PREFIX = '/AmirArshad/meeting-transcriber';
 const MACOS_PERMISSION_CHECK_TIMEOUT_MS = 8000;
-const AI_PROGRESS_SENSITIVE_KEYS = new Set([
-  'hfToken',
-  'llmOutput',
-  'prompt',
-  'rawOutput',
-  'text',
-  'token',
-  'transcript',
-  'transcriptText',
-]);
 
 function buildFileUrl(filePath) {
   const normalizedPath = String(filePath || '').trim();
@@ -200,7 +191,7 @@ function parseAiBackendProgressLine(line, expectedFeature = null) {
   }
 
   for (const key of Object.keys(parsed)) {
-    if (AI_PROGRESS_SENSITIVE_KEYS.has(key)) {
+    if (SENSITIVE_PROGRESS_KEY_SET.has(key)) {
       delete event[key];
     }
   }
