@@ -75,7 +75,7 @@ def test_build_llama_cli_args_uses_json_prompt_file(tmp_path):
     assert '--no-display-prompt' in args
 
 
-def test_smoke_test_llama_runtime_uses_help_command(monkeypatch, tmp_path):
+def test_smoke_test_llama_runtime_loads_model_with_tiny_prompt(monkeypatch, tmp_path):
     calls = []
 
     class Result:
@@ -83,16 +83,27 @@ def test_smoke_test_llama_runtime_uses_help_command(monkeypatch, tmp_path):
         stdout = 'llama.cpp help'
         stderr = ''
 
-    def fake_run(args, capture_output, text, check, timeout):
-        calls.append((args, capture_output, text, check, timeout))
+    def fake_run(args, capture_output, text, check, timeout, **kwargs):
+        calls.append((args, capture_output, text, check, timeout, kwargs))
         return Result()
 
     executable = tmp_path / 'llama-cli'
+    model_path = tmp_path / 'model.gguf'
+    model_path.write_text('model', encoding='utf-8')
     monkeypatch.setattr('backend.summaries.llama_runtime.subprocess.run', fake_run)
 
-    smoke_test_llama_runtime({'executable': str(executable)}, timeout_seconds=5)
+    smoke_test_llama_runtime({'executable': str(executable), 'modelPath': str(model_path)}, timeout_seconds=5)
 
-    assert calls == [([str(executable), '--help'], True, True, False, 5)]
+    args, capture_output, text, check, timeout, kwargs = calls[0]
+    assert args[0] == str(executable)
+    assert '--model' in args
+    assert str(model_path) in args
+    assert '--file' in args
+    assert capture_output is True
+    assert text is True
+    assert check is False
+    assert timeout == 5
+    assert kwargs['cwd'] == str(tmp_path)
 
 
 def test_smoke_test_llama_runtime_rejects_failed_help(monkeypatch, tmp_path):
@@ -103,8 +114,11 @@ def test_smoke_test_llama_runtime_rejects_failed_help(monkeypatch, tmp_path):
 
     monkeypatch.setattr('backend.summaries.llama_runtime.subprocess.run', lambda *args, **kwargs: Result())
 
+    model_path = tmp_path / 'model.gguf'
+    model_path.write_text('model', encoding='utf-8')
+
     with pytest.raises(SummaryRuntimeError, match='smoke validation failed'):
-        smoke_test_llama_runtime({'executable': str(tmp_path / 'llama-cli')})
+        smoke_test_llama_runtime({'executable': str(tmp_path / 'llama-cli'), 'modelPath': str(model_path)})
 
 
 def test_build_summary_progress_event_never_includes_prompt_text():

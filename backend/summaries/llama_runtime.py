@@ -124,6 +124,11 @@ def build_llama_cli_args(
     ]
 
 
+def build_llama_smoke_test_args(runtime: Dict[str, Any], *, prompt_path: str) -> List[str]:
+    args = build_llama_cli_args(runtime, prompt_path=prompt_path, max_tokens=64)
+    return [*args, "--seed", "1"]
+
+
 def run_llama_prompt(
     runtime: Dict[str, Any],
     *,
@@ -138,14 +143,32 @@ def run_llama_prompt(
     return result.stdout.strip()
 
 
-def smoke_test_llama_runtime(runtime: Dict[str, Any], *, timeout_seconds: int = 30) -> None:
+def smoke_test_llama_runtime(runtime: Dict[str, Any], *, timeout_seconds: int = 120) -> None:
     executable = runtime.get("executable")
+    model_path = runtime.get("modelPath")
     if not executable:
         raise SummaryRuntimeError("Resolved llama.cpp runtime must include executable.")
+    if not model_path:
+        raise SummaryRuntimeError("Resolved llama.cpp runtime must include modelPath.")
 
-    result = subprocess.run([str(executable), "--help"], capture_output=True, text=True, check=False, timeout=timeout_seconds)
+    prompt_path = Path(model_path).with_name(".avanevis-llama-smoke.prompt.txt")
+    prompt_path.write_text('{"summary":"ok","topics":[]}', encoding="utf-8")
+    try:
+        result = subprocess.run(
+            build_llama_smoke_test_args(runtime, prompt_path=str(prompt_path)),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout_seconds,
+            cwd=str(Path(str(executable)).parent),
+        )
+    finally:
+        try:
+            prompt_path.unlink()
+        except OSError:
+            pass
     combined = f"{result.stdout}\n{result.stderr}".lower()
-    if result.returncode != 0 or "llama" not in combined:
+    if result.returncode != 0 or not result.stdout.strip():
         raise SummaryRuntimeError("llama.cpp runtime smoke validation failed.")
 
 

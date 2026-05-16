@@ -29,6 +29,8 @@ const {
   getTranscriberModule,
   resolveStopTimeoutAction,
   isModelDownloadErrorOutput,
+  isSafeRecordingsAudioPath,
+  isSafeRecordingsJsonPath,
   isSafeRecordingsMarkdownPath,
   isSupportedCudaInstallPythonVersion,
   parseAiBackendProgressLine,
@@ -134,7 +136,7 @@ test('buildDiarizationOutputPath creates speakers sidecar path', () => {
       audioPath: path.join('/recordings', 'meeting.opus'),
       outputPath: path.join('/custom', 'meeting.speakers.json'),
     }),
-    path.join('/custom', 'meeting.speakers.json'),
+    path.join('/recordings', 'meeting.speakers.json'),
   );
 });
 
@@ -154,6 +156,18 @@ test('isSafeRecordingsMarkdownPath allows only markdown files inside recordings'
     filePath: path.join('/tmp', 'AvaNevis', 'other', 'meeting.md'),
     recordingsDir,
   }), false);
+  assert.equal(isSafeRecordingsJsonPath({
+    filePath: path.join(recordingsDir, 'meeting.speakers.json'),
+    recordingsDir,
+  }), true);
+  assert.equal(isSafeRecordingsJsonPath({
+    filePath: path.join(recordingsDir, '..', 'meeting.speakers.json'),
+    recordingsDir,
+  }), false);
+  assert.equal(isSafeRecordingsAudioPath({
+    filePath: path.join(recordingsDir, 'meeting.opus'),
+    recordingsDir,
+  }), true);
 });
 
 

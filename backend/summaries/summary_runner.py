@@ -182,15 +182,41 @@ def save_summary_outputs(
     json_payload = {"summary": validate_summary_json(summary), "metadata": dict(metadata)}
     temp_json = json_target.with_name(f".{json_target.name}.tmp")
     temp_markdown = markdown_target.with_name(f".{markdown_target.name}.tmp")
+    backup_json = json_target.with_name(f".{json_target.name}.bak")
+    backup_markdown = markdown_target.with_name(f".{markdown_target.name}.bak")
+    had_json = json_target.exists()
+    had_markdown = markdown_target.exists()
     try:
         temp_json.write_text(json.dumps(json_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         temp_markdown.write_text(render_summary_markdown(summary, metadata), encoding="utf-8")
+        if had_json:
+            json_target.replace(backup_json)
+        if had_markdown:
+            markdown_target.replace(backup_markdown)
         temp_json.replace(json_target)
-        temp_markdown.replace(markdown_target)
+        try:
+            temp_markdown.replace(markdown_target)
+        except Exception:
+            if json_target.exists():
+                json_target.unlink()
+            if had_json and backup_json.exists():
+                backup_json.replace(json_target)
+            raise
+        for backup_path in (backup_json, backup_markdown):
+            if backup_path.exists():
+                backup_path.unlink()
     finally:
         for temp_path in (temp_json, temp_markdown):
             if temp_path.exists():
                 temp_path.unlink()
+        if backup_json.exists() and not json_target.exists():
+            backup_json.replace(json_target)
+        elif backup_json.exists():
+            backup_json.unlink()
+        if backup_markdown.exists() and not markdown_target.exists():
+            backup_markdown.replace(markdown_target)
+        elif backup_markdown.exists():
+            backup_markdown.unlink()
     return {"jsonPath": str(json_target), "markdownPath": str(markdown_target)}
 
 
@@ -298,6 +324,9 @@ def main() -> None:
             )
             print(json.dumps(result, ensure_ascii=True))
             return
+
+        if not args.transcript:
+            raise ValueError("--transcript is required unless --validate-runtime is used.")
 
         result = generate_summary(
             meeting_id=args.meeting_id,

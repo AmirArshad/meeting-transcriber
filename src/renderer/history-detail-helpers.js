@@ -180,14 +180,14 @@
     return reason || 'Install the local summary model in Settings before generating summaries.';
   }
 
-  function shouldShowSpeakerSetupPrompt({ diarization, platform, cudaInstalled, hasNvidiaGpu }) {
+function shouldShowSpeakerSetupPrompt({ diarization, platform, cudaInstalled, hasNvidiaGpu }) {
     if (!diarization || diarization.status === 'ready' || diarization.setupComplete) {
       return false;
     }
     if (!diarization.availability || diarization.availability.supported !== true) {
       return false;
     }
-    if (platform === 'win32' && hasNvidiaGpu && !cudaInstalled) {
+    if (platform === 'win32' && (!hasNvidiaGpu || !cudaInstalled)) {
       return false;
     }
     return diarization.status === 'notConfigured' || diarization.status === 'needsAccount' || diarization.status === 'error';

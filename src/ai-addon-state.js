@@ -121,6 +121,31 @@ const SUMMARY_RUNTIME_ARTIFACTS = deepFreeze({
   },
 });
 
+const DIARIZATION_DEPENDENCY_ARTIFACTS = deepFreeze({
+  'win32-x64': {
+    id: 'pyannote-audio-4.0.1-win32-x64-cuda-12.6',
+    label: 'pyannote.audio 4.0.1 for Windows CUDA 12.6',
+    platform: 'win32',
+    arch: 'x64',
+    acceleration: 'cuda',
+    package: 'pyannote.audio',
+    version: '4.0.1',
+    installTarget: 'userData',
+    pip: {
+      indexUrl: 'https://pypi.org/simple',
+      extraIndexUrls: ['https://download.pytorch.org/whl/cu126'],
+      allowSourceBuilds: true,
+      requirements: [
+        'pyannote.audio==4.0.1',
+        'torch==2.8.0+cu126',
+        'torchaudio==2.8.0+cu126',
+        'torchcodec==0.7.0',
+      ],
+    },
+    validationStatus: 'ready',
+  },
+});
+
 function buildHuggingFaceModelSource({ repo, revision, fileName, sha256, sizeBytes }) {
   return {
     provider: 'huggingface',
@@ -214,6 +239,7 @@ const AI_MODEL_CATALOG = deepFreeze({
   version: 1,
   diarization: {
     defaultModelId: DEFAULT_DIARIZATION_MODEL_ID,
+    dependencyArtifacts: DIARIZATION_DEPENDENCY_ARTIFACTS,
     models: [
       {
         id: DEFAULT_DIARIZATION_MODEL_ID,
@@ -382,6 +408,23 @@ function getSummaryRuntimeArtifactForPlatform(platform = process.platform, arch 
   };
 }
 
+function getDiarizationDependencyArtifactForPlatform(platform = process.platform, arch = process.arch, catalog = AI_MODEL_CATALOG) {
+  const dependencyArtifacts = catalog?.diarization?.dependencyArtifacts || DIARIZATION_DEPENDENCY_ARTIFACTS;
+  const artifact = dependencyArtifacts[`${platform}-${arch}`];
+  if (!artifact) {
+    return null;
+  }
+
+  return {
+    ...artifact,
+    pip: {
+      ...(artifact.pip || {}),
+      extraIndexUrls: Array.isArray(artifact.pip?.extraIndexUrls) ? [...artifact.pip.extraIndexUrls] : [],
+      requirements: Array.isArray(artifact.pip?.requirements) ? [...artifact.pip.requirements] : [],
+    },
+  };
+}
+
 function resolveModelId(feature, requestedModelId, catalog = AI_MODEL_CATALOG) {
   const requested = typeof requestedModelId === 'string' && requestedModelId.trim()
     ? requestedModelId.trim()
@@ -470,12 +513,15 @@ function normalizeAiAddonManifest(value = {}, catalog = AI_MODEL_CATALOG) {
 function getAiAddonPaths(userDataDir) {
   const rootDir = path.join(String(userDataDir || ''), 'ai-addons');
   const modelCacheDir = path.join(rootDir, 'models');
+  const dependencyCacheDir = path.join(rootDir, 'dependencies');
 
   return {
     rootDir,
     manifestPath: path.join(rootDir, 'manifest.json'),
     modelCacheDir,
+    dependencyCacheDir,
     diarizationModelCacheDir: path.join(modelCacheDir, 'diarization'),
+    diarizationDependencyCacheDir: path.join(dependencyCacheDir, 'diarization'),
     summaryModelCacheDir: path.join(modelCacheDir, 'summary'),
   };
 }
@@ -580,9 +626,13 @@ function buildAiAddonStatus({ userDataDir, platform = process.platform, arch = p
     manifestVersion: MANIFEST_VERSION,
     manifestPath: paths.manifestPath,
     modelCacheDir: paths.modelCacheDir,
+    dependencyCacheDir: paths.dependencyCacheDir,
     modelCacheDirs: {
       diarization: paths.diarizationModelCacheDir,
       summary: paths.summaryModelCacheDir,
+    },
+    dependencyCacheDirs: {
+      diarization: paths.diarizationDependencyCacheDir,
     },
     readError,
     statusStates: AI_ADDON_STATUS_STATES,
@@ -615,6 +665,7 @@ module.exports = {
   DEFAULT_DIARIZATION_MODEL_ID,
   DEFAULT_SUMMARY_MODEL_ID,
   DEFAULT_SUMMARY_PROFILE,
+  DIARIZATION_DEPENDENCY_ARTIFACTS,
   MANIFEST_VERSION,
   PINNED_LLAMA_CPP_RUNTIME,
   SUMMARY_PROFILES,
@@ -624,6 +675,7 @@ module.exports = {
   getAiAddonStatus,
   getDefaultModelId,
   getDiarizationAvailability,
+  getDiarizationDependencyArtifactForPlatform,
   getModelById,
   getModelList,
   getSummaryArtifactForPlatform,

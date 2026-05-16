@@ -252,9 +252,11 @@ def build_diarization_result(
 def save_diarization_result(output_json: str, result: Dict[str, Any]) -> None:
     output_path = Path(output_json)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w", encoding="utf-8") as handle:
+    temp_path = output_path.with_name(f".{output_path.name}.tmp")
+    with open(temp_path, "w", encoding="utf-8") as handle:
         json.dump(result, handle, indent=2, ensure_ascii=False)
         handle.write("\n")
+    temp_path.replace(output_path)
 
 
 def diarize_transcript(

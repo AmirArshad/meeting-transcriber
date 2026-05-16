@@ -68,15 +68,28 @@ def test_chunk_transcript_respects_token_budget_and_timestamps():
 
 def test_chunk_transcript_supports_segment_overlap():
     segments = [
-        {'start': 0, 'end': 1, 'text': 'a' * 20},
-        {'start': 1, 'end': 2, 'text': 'b' * 20},
-        {'start': 2, 'end': 3, 'text': 'c' * 20},
+        {'start': 0, 'end': 1, 'text': 'short a'},
+        {'start': 1, 'end': 2, 'text': 'short b'},
+        {'start': 2, 'end': 3, 'text': 'short c'},
     ]
 
-    chunks = chunk_transcript(segments, max_tokens=16, overlap_segments=1)
+    chunks = chunk_transcript(segments, max_tokens=18, overlap_segments=1)
 
     assert len(chunks) >= 2
     assert chunks[1]['segments'][0]['text'] == chunks[0]['segments'][-1]['text']
+
+
+def test_chunk_transcript_drops_overlap_when_it_would_break_budget():
+    segments = [
+        {'start': 0, 'end': 1, 'text': 'a' * 20},
+        {'start': 1, 'end': 2, 'text': 'b' * 80},
+        {'start': 2, 'end': 3, 'text': 'c' * 20},
+    ]
+
+    chunks = chunk_transcript(segments, max_tokens=18, overlap_segments=1)
+
+    assert all(chunk['estimatedTokens'] <= 30 for chunk in chunks)
+    assert chunks[1]['segments'][0]['text'] == 'b' * 80
 
 
 def test_chunk_transcript_prefers_topic_boundaries_after_threshold():

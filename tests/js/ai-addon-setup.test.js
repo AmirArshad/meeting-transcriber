@@ -4,7 +4,9 @@ const path = require('node:path');
 
 const {
   AI_ADDON_PROGRESS_CHANNEL,
+  buildDiarizationDependencyInstallArgs,
   checkAiAddonSetupStatus,
+  checkDiarizationDependencyCache,
   checkSummaryModelCache,
   checkSummaryRuntimeCache,
   createAiAddonProgressEvent,
@@ -16,10 +18,11 @@ const {
   removeSummaryModel,
   setupDiarizationAddon,
   setupSummaryModel,
+  summarizePipProgress,
   validateSummaryModel,
 } = require('../../src/ai-addon-setup');
 const { TOKEN_KEYS, getTokenPath } = require('../../src/ai-addon-token-store');
-const { DEFAULT_SUMMARY_MODEL_ID, getSummaryArtifactForPlatform } = require('../../src/ai-addon-state');
+const { DEFAULT_SUMMARY_MODEL_ID, getDiarizationDependencyArtifactForPlatform, getSummaryArtifactForPlatform } = require('../../src/ai-addon-state');
 
 function createMemoryFs() {
   const files = new Map();
@@ -107,6 +110,18 @@ function createSafeStorage() {
   };
 }
 
+function createUnavailableSafeStorage() {
+  return {
+    isEncryptionAvailable: () => false,
+    encryptString: () => {
+      throw new Error('unavailable');
+    },
+    decryptString: () => {
+      throw new Error('unavailable');
+    },
+  };
+}
+
 function createCatalogWithPinnedSummaryArtifact({ sha256 = 'abc123', downloadUrl = 'https://example.test/model.gguf' } = {}) {
   const artifact = {
     format: 'gguf',
@@ -172,6 +187,11 @@ function createCatalogWithPinnedSummaryArtifact({ sha256 = 'abc123', downloadUrl
   };
 }
 
+async function stubDiarizationDependencyInstaller({ targetDir, artifact }) {
+  assert.ok(targetDir.includes(path.join('dependencies', 'diarization')));
+  assert.equal(artifact.id, 'pyannote-audio-4.0.1-win32-x64-cuda-12.6');
+}
+
 test('progress events redact known sensitive fields and token-looking values', () => {
   const event = createAiAddonProgressEvent({
     feature: 'summary',
@@ -212,6 +232,42 @@ test('check status includes token and summary cache state without exposing token
   assert.equal(JSON.stringify(status).includes('hf_secret'), false);
 });
 
+test('diarization dependency cache uses managed userData path and pinned requirements', () => {
+  const fsModule = createMemoryFs();
+  const artifact = getDiarizationDependencyArtifactForPlatform('win32', 'x64');
+  const cache = checkDiarizationDependencyCache({
+    userDataDir: '/tmp/AvaNevis',
+    platform: 'win32',
+    arch: 'x64',
+    fsModule,
+  });
+
+  assert.equal(cache.installed, false);
+  assert.equal(cache.artifactId, 'pyannote-audio-4.0.1-win32-x64-cuda-12.6');
+  assert.equal(cache.sitePackagesDir, path.join('/tmp/AvaNevis', 'ai-addons', 'dependencies', 'diarization', artifact.id, 'site-packages'));
+  assert.ok(artifact.pip.requirements.includes('pyannote.audio==4.0.1'));
+  assert.ok(artifact.pip.requirements.includes('torch==2.8.0+cu126'));
+});
+
+test('diarization dependency installer builds pinned pip target args', () => {
+  const artifact = getDiarizationDependencyArtifactForPlatform('win32', 'x64');
+  const args = buildDiarizationDependencyInstallArgs({ artifact, targetDir: 'deps/site-packages' });
+
+  assert.deepEqual(args.slice(0, 8), ['-m', 'pip', 'install', '--upgrade', '--ignore-installed', '--target', 'deps/site-packages', '--no-warn-script-location']);
+  assert.ok(args.includes('--index-url'));
+  assert.ok(args.includes('https://pypi.org/simple'));
+  assert.ok(args.includes('--extra-index-url'));
+  assert.ok(args.includes('https://download.pytorch.org/whl/cu126'));
+  assert.equal(args.includes('--only-binary=:all:'), false);
+  assert.ok(args.includes('pyannote.audio==4.0.1'));
+  assert.ok(args.includes('torch==2.8.0+cu126'));
+});
+
+test('pip progress summarizer returns non-sensitive install milestones', () => {
+  assert.equal(summarizePipProgress('Collecting pyannote.audio==4.0.1\n'), 'Collecting pyannote.audio==4.0.1');
+  assert.equal(summarizePipProgress('WARNING only\n'), null);
+});
+
 test('setup diarization stores token securely and writes ready manifest state', async () => {
   const fsModule = createMemoryFs();
   const progress = [];
@@ -224,12 +280,97 @@ test('setup diarization stores token securely and writes ready manifest state', 
     fsModule,
     now: () => '2026-05-16T00:00:00Z',
     emitProgress: (event) => progress.push(event),
+    dependencyInstaller: stubDiarizationDependencyInstaller,
   });
 
   assert.equal(status.features.diarization.status, 'ready');
   assert.equal(status.features.diarization.setupComplete, true);
+  assert.equal(status.features.diarization.dependencyCache.valid, true);
   assert.equal(progress.at(-1).status, 'ready');
   assert.equal(JSON.stringify(progress).includes('hf_validtoken123'), false);
+});
+
+test('setup diarization installs dependencies before runtime validation', async () => {
+  const fsModule = createMemoryFs();
+  const calls = [];
+  const status = await setupDiarizationAddon({
+    userDataDir: '/tmp/AvaNevis',
+    platform: 'win32',
+    arch: 'x64',
+    token: 'hf_validtoken123',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    dependencyInstaller: async ({ targetDir }) => {
+      calls.push(`install:${targetDir}`);
+    },
+    runtimeValidator: async (payload) => {
+      calls.push(`validate:${payload.dependencyCache.sitePackagesDir}`);
+    },
+  });
+
+  assert.equal(status.features.diarization.status, 'ready');
+  assert.equal(calls.length, 2);
+  assert.match(calls[0], /^install:/);
+  assert.match(calls[1], /^validate:/);
+});
+
+test('setup diarization reports dependency install failures before token validation', async () => {
+  const status = await setupDiarizationAddon({
+    userDataDir: '/tmp/AvaNevis',
+    platform: 'win32',
+    arch: 'x64',
+    token: 'hf_validtoken123',
+    safeStorage: createSafeStorage(),
+    fsModule: createMemoryFs(),
+    dependencyInstaller: async () => {
+      throw new Error('julius source build failed');
+    },
+    runtimeValidator: async () => {
+      throw new Error('should not run');
+    },
+  });
+
+  assert.equal(status.features.diarization.status, 'error');
+  assert.match(status.features.diarization.error, /julius source build failed/);
+  assert.equal(status.features.diarization.setupComplete, false);
+});
+
+test('setup diarization requires token before installing dependencies', async () => {
+  let installCalled = false;
+  const status = await setupDiarizationAddon({
+    userDataDir: '/tmp/AvaNevis',
+    platform: 'win32',
+    arch: 'x64',
+    safeStorage: createSafeStorage(),
+    fsModule: createMemoryFs(),
+    dependencyInstaller: async () => {
+      installCalled = true;
+    },
+  });
+
+  assert.equal(status.features.diarization.status, 'needsAccount');
+  assert.equal(status.features.diarization.setupComplete, false);
+  assert.equal(installCalled, false);
+});
+
+test('setup diarization reports unavailable secure token storage before installing dependencies', async () => {
+  let installCalled = false;
+  const status = await setupDiarizationAddon({
+    userDataDir: '/tmp/AvaNevis',
+    platform: 'win32',
+    arch: 'x64',
+    token: 'hf_validtoken123',
+    safeStorage: createUnavailableSafeStorage(),
+    fsModule: createMemoryFs(),
+    dependencyInstaller: async () => {
+      installCalled = true;
+    },
+  });
+
+  assert.equal(status.features.diarization.status, 'error');
+  assert.match(status.features.diarization.error, /Secure token storage is unavailable/);
+  assert.equal(status.features.diarization.setupComplete, false);
+  assert.equal(installCalled, false);
 });
 
 test('setup diarization runs runtime validation before marking ready', async () => {
@@ -241,6 +382,7 @@ test('setup diarization runs runtime validation before marking ready', async () 
     token: 'hf_validtoken123',
     safeStorage: createSafeStorage(),
     fsModule: createMemoryFs(),
+    dependencyInstaller: stubDiarizationDependencyInstaller,
     runtimeValidator: async (payload) => validations.push(payload),
   });
 
@@ -248,6 +390,7 @@ test('setup diarization runs runtime validation before marking ready', async () 
   assert.equal(validations.length, 1);
   assert.equal(validations[0].modelId, 'pyannote/speaker-diarization-community-1');
   assert.equal(validations[0].token, 'hf_validtoken123');
+  assert.equal(validations[0].dependencyCache.valid, true);
 });
 
 test('setup diarization reports runtime validation failures before first run', async () => {
@@ -258,6 +401,7 @@ test('setup diarization reports runtime validation failures before first run', a
     token: 'hf_validtoken123',
     safeStorage: createSafeStorage(),
     fsModule: createMemoryFs(),
+    dependencyInstaller: stubDiarizationDependencyInstaller,
     runtimeValidator: async () => {
       throw new Error('pyannote.audio is not installed for speaker diarization.');
     },
@@ -305,6 +449,7 @@ test('remove diarization setup deletes token and managed cache reference', async
     token: 'hf_validtoken123',
     safeStorage: createSafeStorage(),
     fsModule,
+    dependencyInstaller: stubDiarizationDependencyInstaller,
   });
 
   const status = await removeDiarizationSetup({
@@ -318,6 +463,7 @@ test('remove diarization setup deletes token and managed cache reference', async
   assert.equal(status.features.diarization.status, 'notConfigured');
   assert.equal(status.features.diarization.tokenStatus.hasToken, false);
   assert.ok(fsModule.removed.some((targetPath) => targetPath.includes(path.join('models', 'diarization'))));
+  assert.ok(fsModule.removed.some((targetPath) => targetPath.includes(path.join('dependencies', 'diarization'))));
 });
 
 test('summary cache validation accepts pinned catalog artifact checksums', async () => {
@@ -501,6 +647,7 @@ test('setup summary model downloads explicit runtime and model artifacts only wh
     platform: 'win32',
     arch: 'x64',
     modelId: 'summary-model',
+    profile: 'detailed',
     safeStorage: createSafeStorage(),
     fsModule,
     catalog,
@@ -518,8 +665,44 @@ test('setup summary model downloads explicit runtime and model artifacts only wh
 
   assert.deepEqual(downloadedUrls, ['https://example.test/runtime.zip', 'https://example.test/model.gguf']);
   assert.equal(status.features.summary.status, 'ready');
+  assert.equal(status.features.summary.profile, 'detailed');
   assert.equal(status.features.summary.setupComplete, true);
   assert.equal(status.features.summary.runtimeCache.valid, true);
+});
+
+test('setup summary model records downloader failures and removes temp model downloads', async () => {
+  const fsModule = createMemoryFs();
+  const catalog = createCatalogWithPinnedSummaryArtifact({
+    sha256: 'a0700a1b17cb3f2328437cbc70a3ac543fab2c1e7d1d8014862d801e1eb11162',
+  });
+  const artifact = getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog);
+  const tempModelPath = `${getSummaryArtifactPath('/tmp/AvaNevis', artifact)}.download`;
+
+  const status = await setupSummaryModel({
+    userDataDir: '/tmp/AvaNevis',
+    platform: 'win32',
+    arch: 'x64',
+    modelId: 'summary-model',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog,
+    downloader: async ({ url, destinationPath }) => {
+      if (url.endsWith('/runtime.zip')) {
+        fsModule.writeFileSync(destinationPath, 'runtime archive\n');
+        return;
+      }
+      fsModule.writeFileSync(destinationPath, 'partial model');
+      throw new Error('network timeout');
+    },
+    extractor: async () => fsModule.writeFileSync(
+      getSummaryRuntimeExecutablePath('/tmp/AvaNevis', artifact, catalog.summary.runtimeArtifacts['win32-x64']),
+      'bin',
+    ),
+  });
+
+  assert.equal(status.features.summary.status, 'error');
+  assert.match(status.features.summary.error, /network timeout/);
+  assert.equal(fsModule.existsSync(tempModelPath), false);
 });
 
 test('remove summary model clears cache and manifest state', async () => {

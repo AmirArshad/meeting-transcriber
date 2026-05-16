@@ -1,7 +1,6 @@
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const fs = require('fs');
-const http = require('http');
 const https = require('https');
 const path = require('path');
 const AdmZip = require('adm-zip');
@@ -11,6 +10,7 @@ const {
   buildAiAddonStatus,
   getAiAddonPaths,
   getDiarizationAvailability,
+  getDiarizationDependencyArtifactForPlatform,
   getSummaryArtifactForPlatform,
   getSummaryRuntimeArtifactForPlatform,
   getSummaryAvailability,
@@ -27,6 +27,8 @@ const {
 } = require('./ai-addon-token-store');
 
 const AI_ADDON_PROGRESS_CHANNEL = 'ai-addon-progress';
+const DOWNLOAD_TIMEOUT_MS = 120000;
+const MAX_DOWNLOAD_REDIRECTS = 5;
 
 const SENSITIVE_PROGRESS_KEYS = new Set([
   'hfToken',
@@ -51,6 +53,18 @@ function getSummaryModelCacheDir(userDataDir, modelId) {
 
 function getDiarizationModelCacheDir(userDataDir, modelId) {
   return path.join(getAiAddonPaths(userDataDir).diarizationModelCacheDir, safePathSegment(modelId));
+}
+
+function getDiarizationDependencyDir(userDataDir, artifact) {
+  return path.join(getAiAddonPaths(userDataDir).diarizationDependencyCacheDir, safePathSegment(artifact && artifact.id));
+}
+
+function getDiarizationDependencySitePackagesDir(userDataDir, artifact) {
+  return path.join(getDiarizationDependencyDir(userDataDir, artifact), 'site-packages');
+}
+
+function getDiarizationDependencyMarkerPath(userDataDir, artifact) {
+  return path.join(getDiarizationDependencyDir(userDataDir, artifact), 'install.json');
 }
 
 function getSummaryArtifactPath(userDataDir, artifact) {
@@ -258,6 +272,73 @@ function checkDiarizationCache({ userDataDir, modelId }) {
   };
 }
 
+function validateDiarizationDependencyArtifact(artifact) {
+  if (!artifact) {
+    return 'No speaker identification dependency setup is available for this platform.';
+  }
+  if (!artifact.id || !artifact.package || !artifact.version) {
+    return 'Speaker identification dependency metadata is incomplete.';
+  }
+  if (!artifact.pip || !Array.isArray(artifact.pip.requirements) || artifact.pip.requirements.length === 0) {
+    return 'Speaker identification dependency requirements are not configured.';
+  }
+  if (!artifact.pip.indexUrl || !String(artifact.pip.indexUrl).startsWith('https://')) {
+    return 'Speaker identification dependency index URL must use HTTPS.';
+  }
+  for (const extraIndexUrl of artifact.pip.extraIndexUrls || []) {
+    if (!String(extraIndexUrl).startsWith('https://')) {
+      return 'Speaker identification dependency extra index URLs must use HTTPS.';
+    }
+  }
+  return null;
+}
+
+function readDiarizationDependencyMarker({ userDataDir, artifact, fsModule = fs } = {}) {
+  const markerPath = getDiarizationDependencyMarkerPath(userDataDir, artifact);
+  const existsSync = bindFsMethod(fsModule, 'existsSync');
+  const readFileSync = bindFsMethod(fsModule, 'readFileSync');
+  if (!existsSync || !readFileSync || !existsSync(markerPath)) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(readFileSync(markerPath, 'utf8'));
+  } catch (error) {
+    return null;
+  }
+}
+
+function checkDiarizationDependencyCache({
+  userDataDir,
+  platform = process.platform,
+  arch = process.arch,
+  fsModule = fs,
+  catalog = AI_MODEL_CATALOG,
+} = {}) {
+  const artifact = getDiarizationDependencyArtifactForPlatform(platform, arch, catalog);
+  const validationError = validateDiarizationDependencyArtifact(artifact);
+  const dependencyDir = artifact ? getDiarizationDependencyDir(userDataDir, artifact) : null;
+  const sitePackagesDir = artifact ? getDiarizationDependencySitePackagesDir(userDataDir, artifact) : null;
+  const markerPath = artifact ? getDiarizationDependencyMarkerPath(userDataDir, artifact) : null;
+  const existsSync = bindFsMethod(fsModule, 'existsSync');
+  const marker = artifact ? readDiarizationDependencyMarker({ userDataDir, artifact, fsModule }) : null;
+  const installed = Boolean(sitePackagesDir && existsSync && existsSync(sitePackagesDir) && marker && marker.artifactId === artifact.id);
+
+  return {
+    supported: Boolean(artifact),
+    installed,
+    valid: installed && !validationError,
+    validationStatus: validationError ? 'error' : installed ? 'ready' : 'notConfigured',
+    reason: validationError || (installed ? null : 'Speaker identification dependencies are not installed.'),
+    artifact,
+    artifactId: artifact && artifact.id,
+    dependencyDir,
+    sitePackagesDir,
+    markerPath,
+    marker,
+  };
+}
+
 async function hashFileSha256(filePath, fsModule = fs) {
   const createReadStream = bindFsMethod(fsModule, 'createReadStream');
   if (!createReadStream) {
@@ -424,9 +505,23 @@ async function checkSummaryModelCache({
   };
 }
 
-function deriveDiarizationStatus(featureStatus, tokenStatus) {
+function deriveDiarizationStatus(featureStatus, tokenStatus, dependencyCache) {
   if (!featureStatus.availability.supported) {
     return { ...featureStatus, status: 'unsupported' };
+  }
+  if (featureStatus.status === 'ready' && (!dependencyCache.installed || dependencyCache.valid === false)) {
+    return {
+      ...featureStatus,
+      status: 'error',
+      error: dependencyCache.reason || 'Speaker identification dependencies are not installed.',
+    };
+  }
+  if (featureStatus.status === 'ready' && tokenStatus.encryptionAvailable === false) {
+    return {
+      ...featureStatus,
+      status: 'error',
+      error: 'Secure token storage is unavailable.',
+    };
   }
   if (featureStatus.status === 'ready' && !tokenStatus.hasToken) {
     return {
@@ -483,6 +578,7 @@ async function checkAiAddonSetupStatus({
   });
   const status = buildAiAddonStatus({ userDataDir, platform, arch, manifest, readError, catalog });
   const tokenStatus = getDiarizationTokenStatus({ userDataDir, safeStorage, fsModule });
+  const diarizationDependencyCache = checkDiarizationDependencyCache({ userDataDir, platform, arch, fsModule, catalog });
   const summaryCache = await checkSummaryModelCache({
     userDataDir,
     platform,
@@ -500,7 +596,7 @@ async function checkAiAddonSetupStatus({
     fsModule,
     catalog,
   });
-  const diarization = deriveDiarizationStatus(status.features.diarization, tokenStatus);
+  const diarization = deriveDiarizationStatus(status.features.diarization, tokenStatus, diarizationDependencyCache);
   const summary = deriveSummaryStatus(status.features.summary, summaryCache, summaryRuntimeCache);
 
   return {
@@ -510,7 +606,8 @@ async function checkAiAddonSetupStatus({
         ...diarization,
         tokenStatus,
         cache: checkDiarizationCache({ userDataDir, modelId: diarization.modelId }),
-        setupComplete: diarization.status === 'ready' && tokenStatus.hasToken,
+        dependencyCache: diarizationDependencyCache,
+        setupComplete: diarization.status === 'ready' && tokenStatus.hasToken && tokenStatus.encryptionAvailable !== false && diarizationDependencyCache.valid,
       },
       summary: {
         ...summary,
@@ -546,6 +643,138 @@ function buildFeatureUpdates({ status, modelId, speakerCount, artifactId, profil
   return updates;
 }
 
+function buildDiarizationDependencyInstallArgs({ artifact, targetDir }) {
+  const pip = artifact && artifact.pip ? artifact.pip : {};
+  const args = [
+    '-m',
+    'pip',
+    'install',
+    '--upgrade',
+    '--ignore-installed',
+    '--target',
+    targetDir,
+    '--no-warn-script-location',
+    '--index-url',
+    pip.indexUrl,
+  ];
+
+  for (const extraIndexUrl of pip.extraIndexUrls || []) {
+    args.push('--extra-index-url', extraIndexUrl);
+  }
+  if (!pip.allowSourceBuilds) {
+    args.push('--only-binary=:all:');
+  }
+  args.push(...pip.requirements);
+  return args;
+}
+
+function summarizePipProgress(output) {
+  const lines = String(output || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const relevantLine = [...lines].reverse().find((line) => /^(Collecting|Downloading|Installing|Successfully installed|Building wheel|Using cached)/.test(line));
+  return relevantLine || null;
+}
+
+function installDiarizationDependenciesWithPip({ pythonExe = 'python', artifact, targetDir, onProgress } = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(pythonExe, buildDiarizationDependencyInstallArgs({ artifact, targetDir }), { windowsHide: true });
+    let errorOutput = '';
+
+    const handleOutput = (data) => {
+      const text = data.toString();
+      errorOutput += text;
+      const message = summarizePipProgress(text);
+      if (message && typeof onProgress === 'function') {
+        onProgress(message);
+      }
+    };
+
+    child.stdout.on('data', handleOutput);
+    child.stderr.on('data', handleOutput);
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve({ success: true });
+        return;
+      }
+      const reason = errorOutput.trim().split(/\r?\n/).filter(Boolean).slice(-1)[0];
+      reject(new Error(reason || `Speaker identification dependency install failed with code ${code}.`));
+    });
+  });
+}
+
+async function installDiarizationDependencies({
+  userDataDir,
+  platform = process.platform,
+  arch = process.arch,
+  fsModule = fs,
+  catalog = AI_MODEL_CATALOG,
+  now = () => new Date().toISOString(),
+  emitProgress,
+  pythonExe,
+  dependencyInstaller = installDiarizationDependenciesWithPip,
+} = {}) {
+  const artifact = getDiarizationDependencyArtifactForPlatform(platform, arch, catalog);
+  const validationError = validateDiarizationDependencyArtifact(artifact);
+  if (validationError) {
+    throw new Error(validationError);
+  }
+
+  const existingCache = checkDiarizationDependencyCache({ userDataDir, platform, arch, fsModule, catalog });
+  if (existingCache.valid) {
+    return existingCache;
+  }
+
+  const dependencyDir = getDiarizationDependencyDir(userDataDir, artifact);
+  const sitePackagesDir = getDiarizationDependencySitePackagesDir(userDataDir, artifact);
+  const markerPath = getDiarizationDependencyMarkerPath(userDataDir, artifact);
+  const mkdirSync = bindFsMethod(fsModule, 'mkdirSync');
+  const rmSync = bindFsMethod(fsModule, 'rmSync');
+  const unlinkSync = bindFsMethod(fsModule, 'unlinkSync');
+  if (mkdirSync) {
+    mkdirSync(dependencyDir, { recursive: true });
+  }
+  if (unlinkSync && bindFsMethod(fsModule, 'existsSync')?.(markerPath)) {
+    unlinkSync(markerPath);
+  }
+  if (rmSync) {
+    rmSync(sitePackagesDir, { recursive: true, force: true });
+  }
+  if (mkdirSync) {
+    mkdirSync(sitePackagesDir, { recursive: true });
+  }
+
+  emitSafeProgress(emitProgress, {
+    feature: 'diarization',
+    phase: 'downloading-dependencies',
+    message: 'Installing local speaker identification dependencies.',
+  });
+
+  await dependencyInstaller({
+    pythonExe,
+    artifact,
+    targetDir: sitePackagesDir,
+    onProgress: (message) => emitSafeProgress(emitProgress, {
+      feature: 'diarization',
+      phase: 'downloading-dependencies',
+      message,
+    }),
+  });
+
+  writeFileAtomicSync(fsModule, markerPath, `${JSON.stringify({
+    artifactId: artifact.id,
+    package: artifact.package,
+    version: artifact.version,
+    requirements: artifact.pip.requirements,
+    installedAt: now(),
+  }, null, 2)}\n`);
+
+  const installedCache = checkDiarizationDependencyCache({ userDataDir, platform, arch, fsModule, catalog });
+  if (!installedCache.valid) {
+    throw new Error(installedCache.reason || 'Speaker identification dependency installation did not complete.');
+  }
+  return installedCache;
+}
+
 async function validateDiarizationSetup({
   userDataDir,
   platform = process.platform,
@@ -566,6 +795,7 @@ async function validateDiarizationSetup({
   const manifest = loadManifest({ userDataDir, fsModule, catalog });
   const modelId = resolveModelId('diarization', manifest.features.diarization.modelId, catalog);
   const availability = getDiarizationAvailability(platform, arch);
+  const dependencyCache = checkDiarizationDependencyCache({ userDataDir, platform, arch, fsModule, catalog });
   let status = 'ready';
   let message = 'Speaker identification setup is ready.';
   let error = null;
@@ -574,6 +804,10 @@ async function validateDiarizationSetup({
     status = 'unsupported';
     message = availability.reason;
     error = availability.reason;
+  } else if (!dependencyCache.valid) {
+    status = dependencyCache.validationStatus === 'error' ? 'error' : 'notConfigured';
+    message = dependencyCache.reason || 'Speaker identification dependencies are not installed.';
+    error = message;
   } else if (!getDiarizationTokenStatus({ userDataDir, safeStorage, fsModule }).hasToken) {
     status = 'needsAccount';
     message = 'Hugging Face token is required for speaker identification setup.';
@@ -592,7 +826,7 @@ async function validateDiarizationSetup({
         error = message;
       } else if (typeof runtimeValidator === 'function') {
         try {
-          await runtimeValidator({ modelId, token });
+          await runtimeValidator({ modelId, token, dependencyCache });
         } catch (runtimeError) {
           status = 'error';
           message = runtimeError.message || 'Speaker identification runtime validation failed.';
@@ -646,6 +880,8 @@ async function setupDiarizationAddon({
   now = () => new Date().toISOString(),
   emitProgress,
   runtimeValidator,
+  pythonExe,
+  dependencyInstaller,
 } = {}) {
   emitSafeProgress(emitProgress, {
     feature: 'diarization',
@@ -695,6 +931,25 @@ async function setupDiarizationAddon({
       return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
     }
 
+    if (!getDiarizationTokenStatus({ userDataDir, safeStorage, fsModule }).encryptionAvailable) {
+      const message = 'Secure token storage is unavailable.';
+      updateManifestFeature({
+        userDataDir,
+        feature: 'diarization',
+        fsModule,
+        catalog,
+        updates: buildFeatureUpdates({
+          status: 'error',
+          modelId: selectedModelId,
+          speakerCount,
+          validation: createValidation('error', message, now),
+          error: message,
+        }),
+      });
+      emitSafeProgress(emitProgress, { feature: 'diarization', phase: 'error', status: 'error', message, modelId: selectedModelId });
+      return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
+    }
+
     storeAiAddonToken({
       userDataDir,
       tokenKey: TOKEN_KEYS.diarizationHuggingFace,
@@ -702,6 +957,44 @@ async function setupDiarizationAddon({
       safeStorage,
       fsModule,
     });
+  }
+
+  const tokenStatus = getDiarizationTokenStatus({ userDataDir, safeStorage, fsModule });
+  if (tokenStatus.encryptionAvailable === false) {
+    const message = 'Secure token storage is unavailable.';
+    updateManifestFeature({
+      userDataDir,
+      feature: 'diarization',
+      fsModule,
+      catalog,
+      updates: buildFeatureUpdates({
+        status: 'error',
+        modelId: selectedModelId,
+        speakerCount,
+        validation: createValidation('error', message, now),
+        error: message,
+      }),
+    });
+    emitSafeProgress(emitProgress, { feature: 'diarization', phase: 'error', status: 'error', message, modelId: selectedModelId });
+    return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
+  }
+  if (!tokenStatus.hasToken) {
+    const message = 'Hugging Face token is required for speaker identification setup.';
+    updateManifestFeature({
+      userDataDir,
+      feature: 'diarization',
+      fsModule,
+      catalog,
+      updates: buildFeatureUpdates({
+        status: 'needsAccount',
+        modelId: selectedModelId,
+        speakerCount,
+        validation: createValidation('needsAccount', message, now),
+        error: message,
+      }),
+    });
+    emitSafeProgress(emitProgress, { feature: 'diarization', phase: 'needsAccount', status: 'needsAccount', message, modelId: selectedModelId });
+    return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
   }
 
   updateManifestFeature({
@@ -717,6 +1010,37 @@ async function setupDiarizationAddon({
       error: null,
     }),
   });
+
+  try {
+    await installDiarizationDependencies({
+      userDataDir,
+      platform,
+      arch,
+      fsModule,
+      catalog,
+      now,
+      emitProgress,
+      pythonExe,
+      dependencyInstaller,
+    });
+  } catch (dependencyError) {
+    const message = dependencyError.message || 'Speaker identification dependency setup failed.';
+    updateManifestFeature({
+      userDataDir,
+      feature: 'diarization',
+      fsModule,
+      catalog,
+      updates: buildFeatureUpdates({
+        status: 'error',
+        modelId: selectedModelId,
+        speakerCount,
+        validation: createValidation('error', message, now),
+        error: message,
+      }),
+    });
+    emitSafeProgress(emitProgress, { feature: 'diarization', phase: 'error', status: 'error', message, modelId: selectedModelId });
+    return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
+  }
 
   return validateDiarizationSetup({ userDataDir, platform, arch, safeStorage, fsModule, catalog, now, emitProgress, runtimeValidator });
 }
@@ -743,6 +1067,7 @@ async function removeDiarizationSetup({
   deleteAiAddonToken({ userDataDir, tokenKey: TOKEN_KEYS.diarizationHuggingFace, fsModule });
   if (fsModule.rmSync) {
     fsModule.rmSync(getDiarizationModelCacheDir(userDataDir, modelId), { recursive: true, force: true });
+    fsModule.rmSync(getAiAddonPaths(userDataDir).diarizationDependencyCacheDir, { recursive: true, force: true });
   }
 
   updateManifestFeature({
@@ -790,24 +1115,44 @@ function validatePinnedSummarySetup({ artifact, runtimeArtifact }) {
   return validateSummarySetupArtifact(artifact) || validateSummaryRuntimeArtifact(runtimeArtifact);
 }
 
-async function downloadFile({ url, destinationPath, onProgress }) {
+async function downloadFile({ url, destinationPath, expectedSizeBytes, onProgress, redirectCount = 0, timeoutMs = DOWNLOAD_TIMEOUT_MS }) {
   const parsedUrl = new URL(url);
-  const client = parsedUrl.protocol === 'https:' ? https : parsedUrl.protocol === 'http:' ? http : null;
+  const client = parsedUrl.protocol === 'https:' ? https : null;
   if (!client) {
-    throw new Error('Unsupported summary setup artifact URL protocol.');
+    throw new Error('Summary setup artifact downloads require HTTPS.');
+  }
+  if (redirectCount > MAX_DOWNLOAD_REDIRECTS) {
+    throw new Error('Summary setup artifact download followed too many redirects.');
   }
 
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const fail = (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      reject(error);
+    };
+    const succeed = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve();
+    };
+
     const request = client.get(parsedUrl, (response) => {
       if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
         response.resume();
-        downloadFile({ url: response.headers.location, destinationPath, onProgress }).then(resolve, reject);
+        const nextUrl = new URL(response.headers.location, parsedUrl).toString();
+        downloadFile({ url: nextUrl, destinationPath, expectedSizeBytes, onProgress, redirectCount: redirectCount + 1, timeoutMs }).then(succeed, fail);
         return;
       }
 
       if (response.statusCode !== 200) {
         response.resume();
-        reject(new Error(`Summary setup artifact download failed with HTTP ${response.statusCode}.`));
+        fail(new Error(`Summary setup artifact download failed with HTTP ${response.statusCode}.`));
         return;
       }
 
@@ -816,19 +1161,35 @@ async function downloadFile({ url, destinationPath, onProgress }) {
       const total = Number(response.headers['content-length']) || null;
       let downloaded = 0;
 
+      if (expectedSizeBytes && total && total > expectedSizeBytes * 1.1) {
+        response.resume();
+        file.destroy();
+        fail(new Error('Summary setup artifact is larger than the pinned expected size.'));
+        return;
+      }
+
       response.on('data', (chunk) => {
         downloaded += chunk.length;
+        if (expectedSizeBytes && downloaded > expectedSizeBytes * 1.1) {
+          response.destroy(new Error('Summary setup artifact exceeded the pinned expected size.'));
+          file.destroy();
+          return;
+        }
         if (total && typeof onProgress === 'function') {
           onProgress({ downloaded, total, percent: (downloaded / total) * 100 });
         }
       });
 
-      file.on('error', reject);
-      file.on('finish', () => file.close(resolve));
+      response.on('error', fail);
+      file.on('error', fail);
+      file.on('finish', () => file.close(succeed));
       response.pipe(file);
     });
 
-    request.on('error', reject);
+    request.setTimeout(timeoutMs, () => {
+      request.destroy(new Error('Summary setup artifact download timed out.'));
+    });
+    request.on('error', fail);
   });
 }
 
@@ -934,18 +1295,29 @@ async function installSummaryRuntime({
       modelId,
       percent: (index / runtimeArtifact.artifacts.length) * 100,
     });
-    await downloader({
-      url: runtimeArchive.downloadUrl,
-      destinationPath: tempPath,
-      expectedSizeBytes: runtimeArchive.sizeBytes,
-      onProgress: (progress) => emitSafeProgress(emitProgress, {
-        feature: 'summary',
-        phase: 'downloading-runtime',
-        message: 'Downloading local summary runtime.',
-        percent: ((index + (progress.percent || 0) / 100) / runtimeArtifact.artifacts.length) * 100,
-        modelId,
-      }),
-    });
+    try {
+      await downloader({
+        url: runtimeArchive.downloadUrl,
+        destinationPath: tempPath,
+        expectedSizeBytes: runtimeArchive.sizeBytes,
+        onProgress: (progress) => emitSafeProgress(emitProgress, {
+          feature: 'summary',
+          phase: 'downloading-runtime',
+          message: 'Downloading local summary runtime.',
+          percent: ((index + (progress.percent || 0) / 100) / runtimeArtifact.artifacts.length) * 100,
+          modelId,
+        }),
+      });
+    } catch (downloadError) {
+      if (unlinkSync) {
+        try {
+          unlinkSync(tempPath);
+        } catch (cleanupError) {
+          // Best effort cleanup only.
+        }
+      }
+      throw downloadError;
+    }
 
     const actualSha256 = await hashFileSha256(tempPath, fsModule);
     if (actualSha256 !== runtimeArchive.sha256) {
@@ -984,6 +1356,7 @@ async function validateSummaryModel({
   platform = process.platform,
   arch = process.arch,
   modelId,
+  profile,
   safeStorage,
   fsModule = fs,
   catalog = AI_MODEL_CATALOG,
@@ -1046,6 +1419,7 @@ async function validateSummaryModel({
       status,
       modelId: selectedModelId,
       artifactId: cache.artifactId || null,
+      profile,
       validation: createValidation(status, message, now),
       error: status === 'ready' ? null : message,
     }),
@@ -1113,7 +1487,7 @@ async function setupSummaryModel({
   const cache = await checkSummaryModelCache({ userDataDir, platform, arch, modelId: selectedModelId, fsModule, catalog, verifyChecksum: true });
   const runtimeCache = checkSummaryRuntimeCache({ userDataDir, platform, arch, modelId: selectedModelId, fsModule, catalog });
   if (cache.valid && runtimeCache.valid) {
-    return validateSummaryModel({ userDataDir, platform, arch, modelId: selectedModelId, safeStorage, fsModule, catalog, now, emitProgress, runtimeValidator });
+    return validateSummaryModel({ userDataDir, platform, arch, modelId: selectedModelId, profile, safeStorage, fsModule, catalog, now, emitProgress, runtimeValidator });
   }
 
   if (!runtimeCache.valid) {
@@ -1150,18 +1524,45 @@ async function setupSummaryModel({
       mkdirSync(path.dirname(artifactPath), { recursive: true });
     }
 
-    await downloader({
-      url: artifact.downloadUrl,
-      destinationPath: tempPath,
-      expectedSizeBytes: artifact.estimatedSizeBytes,
-      onProgress: (progress) => emitSafeProgress(emitProgress, {
+    try {
+      await downloader({
+        url: artifact.downloadUrl,
+        destinationPath: tempPath,
+        expectedSizeBytes: artifact.estimatedSizeBytes,
+        onProgress: (progress) => emitSafeProgress(emitProgress, {
+          feature: 'summary',
+          phase: 'downloading',
+          message: 'Downloading local summary setup artifact.',
+          percent: progress.percent,
+          modelId: selectedModelId,
+        }),
+      });
+    } catch (downloadError) {
+      if (unlinkSync) {
+        try {
+          unlinkSync(tempPath);
+        } catch (cleanupError) {
+          // Best effort cleanup only.
+        }
+      }
+      const message = downloadError.message || 'Local summary model download failed.';
+      updateManifestFeature({
+        userDataDir,
         feature: 'summary',
-        phase: 'downloading',
-        message: 'Downloading local summary setup artifact.',
-        percent: progress.percent,
-        modelId: selectedModelId,
-      }),
-    });
+        fsModule,
+        catalog,
+        updates: buildFeatureUpdates({
+          status: 'error',
+          modelId: selectedModelId,
+          artifactId: artifact.artifactId,
+          profile,
+          validation: createValidation('error', message, now),
+          error: message,
+        }),
+      });
+      emitSafeProgress(emitProgress, { feature: 'summary', phase: 'error', status: 'error', message, modelId: selectedModelId });
+      return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
+    }
 
     const actualSha256 = await hashFileSha256(tempPath, fsModule);
     if (actualSha256 !== artifact.sha256) {
@@ -1193,7 +1594,7 @@ async function setupSummaryModel({
     renameSync(tempPath, artifactPath);
   }
 
-  return validateSummaryModel({ userDataDir, platform, arch, modelId: selectedModelId, safeStorage, fsModule, catalog, now, emitProgress, runtimeValidator });
+  return validateSummaryModel({ userDataDir, platform, arch, modelId: selectedModelId, profile, safeStorage, fsModule, catalog, now, emitProgress, runtimeValidator });
 }
 
 async function removeSummaryModel({
@@ -1247,9 +1648,12 @@ async function removeSummaryModel({
 module.exports = {
   AI_ADDON_PROGRESS_CHANNEL,
   checkAiAddonSetupStatus,
+  checkDiarizationDependencyCache,
   checkSummaryModelCache,
   checkSummaryRuntimeCache,
+  buildDiarizationDependencyInstallArgs,
   createAiAddonProgressEvent,
+  getDiarizationDependencySitePackagesDir,
   getDiarizationModelCacheDir,
   getSummaryArtifactPath,
   getSummaryModelCacheDir,
@@ -1257,11 +1661,13 @@ module.exports = {
   getSummaryRuntimeDir,
   getSummaryRuntimeExecutablePath,
   isLikelyHuggingFaceToken,
+  installDiarizationDependencies,
   removeDiarizationSetup,
   removeSummaryModel,
   saveAiAddonManifest,
   setupDiarizationAddon,
   setupSummaryModel,
+  summarizePipProgress,
   validateDiarizationSetup,
   validateSummaryModel,
 };

@@ -29,6 +29,8 @@ const {
   getRecordingStopTimeout,
   resolveStopTimeoutAction,
   isModelDownloadErrorOutput,
+  isSafeRecordingsAudioPath,
+  isSafeRecordingsJsonPath,
   isSafeRecordingsMarkdownPath,
   isSupportedCudaInstallPythonVersion,
   parseRecorderStdoutChunk,
@@ -42,6 +44,7 @@ const { checkForUpdates, openDownloadPage } = require('./updater');
 const {
   AI_ADDON_PROGRESS_CHANNEL,
   checkAiAddonSetupStatus,
+  checkDiarizationDependencyCache,
   getSummaryArtifactPath,
   getSummaryRuntimeDir,
   removeDiarizationSetup,
@@ -52,6 +55,7 @@ const {
   validateSummaryModel,
 } = require('./ai-addon-setup');
 const {
+  getDiarizationAvailability,
   getSummaryArtifactForPlatform,
 } = require('./ai-addon-state');
 const {
@@ -557,12 +561,44 @@ function buildPythonProcessArgs(args = []) {
 }
 
 function buildPythonEnv(extra = {}) {
+  const { PYTHONPATH: extraPythonPath, ...restExtra } = extra || {};
+  const basePythonPath = pythonConfig.backendPath + (process.env.PYTHONPATH ?
+    (process.platform === 'win32' ? ';' : ':') + process.env.PYTHONPATH : '');
+  const separator = process.platform === 'win32' ? ';' : ':';
+
   return {
     ...process.env,
-    PYTHONPATH: pythonConfig.backendPath + (process.env.PYTHONPATH ?
-      (process.platform === 'win32' ? ';' : ':') + process.env.PYTHONPATH : ''),
-    ...extra,
+    ...restExtra,
+    PYTHONPATH: extraPythonPath ? `${extraPythonPath}${separator}${basePythonPath}` : basePythonPath,
   };
+}
+
+function getDiarizationDependencyEnv(userDataDir = app.getPath('userData')) {
+  if (process.env.AVANEVIS_SKIP_MANAGED_DIARIZATION_DEPS === '1') {
+    return {};
+  }
+
+  const cache = checkDiarizationDependencyCache({
+    userDataDir,
+    platform: process.platform,
+    arch: process.arch,
+  });
+
+  return cache.valid && cache.sitePackagesDir ? { PYTHONPATH: cache.sitePackagesDir } : {};
+}
+
+function getDiarizationDependencySitePackagesPath(userDataDir = app.getPath('userData')) {
+  if (process.env.AVANEVIS_SKIP_MANAGED_DIARIZATION_DEPS === '1') {
+    return null;
+  }
+
+  const cache = checkDiarizationDependencyCache({
+    userDataDir,
+    platform: process.platform,
+    arch: process.arch,
+  });
+
+  return cache.valid ? cache.sitePackagesDir : null;
 }
 
 function getDiarizationCacheEnv(userDataDir = app.getPath('userData')) {
@@ -612,6 +648,48 @@ function buildDiarizationValidationArgs(modelRef) {
     '--validate-setup',
     '--model-ref', modelRef || 'pyannote/speaker-diarization-community-1',
   ]);
+}
+
+function buildManagedModuleShim() {
+  return 'import runpy, sys; sys.path.insert(0, sys.argv[1]); sys.argv = [sys.argv[2]] + sys.argv[3:]; runpy.run_module(sys.argv[0], run_name="__main__", alter_sys=False)';
+}
+
+function buildManagedPythonModuleArgs(moduleName, extraArgs = [], managedSitePackagesPath = null) {
+  if (!managedSitePackagesPath) {
+    return getBackendModuleArgs(moduleName, extraArgs);
+  }
+
+  return [
+    '-c',
+    buildManagedModuleShim(),
+    managedSitePackagesPath,
+    moduleName,
+    ...extraArgs,
+  ];
+}
+
+function buildManagedDiarizationValidationArgs(modelRef) {
+  return buildManagedPythonModuleArgs(
+    'diarization.diarization_pipeline',
+    [
+      '--validate-setup',
+      '--model-ref', modelRef || 'pyannote/speaker-diarization-community-1',
+    ],
+    getDiarizationDependencySitePackagesPath(),
+  );
+}
+
+function buildManagedDiarizationArgs({ audioPath, segmentsJsonPath, outputPath, modelRef, speakerCount }) {
+  const args = [
+    '--audio', audioPath,
+    '--segments-json', segmentsJsonPath,
+    '--output-json', outputPath,
+    '--model-ref', modelRef || 'pyannote/speaker-diarization-community-1',
+    '--speaker-count', speakerCount === undefined || speakerCount === null ? 'auto' : String(speakerCount),
+    '--ffmpeg', pythonConfig.ffmpegPath,
+  ];
+
+  return buildManagedPythonModuleArgs('diarization.diarization_pipeline', args, getDiarizationDependencySitePackagesPath());
 }
 
 function buildSummaryArgs({ meetingId, transcriptPath, runtimeDir, modelPath, outputJson, outputMarkdown, speakersJsonPath, profile, modelLabel, validateRuntime = false }) {
@@ -1715,6 +1793,83 @@ function emitAiAddonProgress(payload) {
   sendToRenderer(AI_ADDON_PROGRESS_CHANNEL, payload);
 }
 
+function createAsyncActionQueue() {
+  let tail = Promise.resolve();
+
+  return function enqueue(action) {
+    const run = tail.then(action, action);
+    tail = run.catch(() => {});
+    return run;
+  };
+}
+
+const enqueueAiAddonAction = createAsyncActionQueue();
+
+function getRecordingsDir() {
+  return path.join(app.getPath('userData'), 'recordings');
+}
+
+function assertSafeExistingRecordingAudioPath(audioPath) {
+  const recordingsDir = getRecordingsDir();
+  if (!isSafeRecordingsAudioPath({ filePath: audioPath, recordingsDir })) {
+    throw new Error('Audio file must be in the recordings directory.');
+  }
+
+  const resolvedPath = path.resolve(audioPath);
+  if (!fs.existsSync(resolvedPath)) {
+    throw new Error('Audio file was not found.');
+  }
+
+  return resolvedPath;
+}
+
+function assertSafeExistingSegmentsPath(segmentsJsonPath) {
+  const recordingsDir = getRecordingsDir();
+  if (!isSafeRecordingsJsonPath({ filePath: segmentsJsonPath, recordingsDir })) {
+    throw new Error('Speaker segment file must be in the recordings directory.');
+  }
+
+  const resolvedPath = path.resolve(segmentsJsonPath);
+  if (!fs.existsSync(resolvedPath)) {
+    throw new Error('Speaker segment file was not found.');
+  }
+
+  return resolvedPath;
+}
+
+function validateAiMetadataPaths(updates = {}) {
+  const recordingsDir = getRecordingsDir();
+  const validated = { ...updates };
+
+  if (validated.diarization && typeof validated.diarization === 'object') {
+    validated.diarization = { ...validated.diarization };
+    if (validated.diarization.segmentsPath) {
+      if (!isSafeRecordingsJsonPath({ filePath: validated.diarization.segmentsPath, recordingsDir })) {
+        throw new Error('Speaker labels metadata must reference a JSON file in the recordings directory.');
+      }
+      validated.diarization.segmentsPath = path.resolve(validated.diarization.segmentsPath);
+    }
+  }
+
+  if (validated.summary && typeof validated.summary === 'object') {
+    validated.summary = { ...validated.summary };
+    if (validated.summary.jsonPath) {
+      if (!isSafeRecordingsJsonPath({ filePath: validated.summary.jsonPath, recordingsDir })) {
+        throw new Error('Summary metadata must reference a JSON file in the recordings directory.');
+      }
+      validated.summary.jsonPath = path.resolve(validated.summary.jsonPath);
+    }
+    if (validated.summary.markdownPath) {
+      if (!isSafeRecordingsMarkdownPath({ filePath: validated.summary.markdownPath, recordingsDir })) {
+        throw new Error('Summary metadata must reference a Markdown file in the recordings directory.');
+      }
+      validated.summary.markdownPath = path.resolve(validated.summary.markdownPath);
+    }
+  }
+
+  return validated;
+}
+
 function validateDiarizationRuntime({ modelId }) {
   const token = getAiAddonToken({
     userDataDir: app.getPath('userData'),
@@ -1723,9 +1878,10 @@ function validateDiarizationRuntime({ modelId }) {
   });
 
   return new Promise((resolve, reject) => {
-    const python = spawnTrackedPython(buildDiarizationValidationArgs(modelId), {
+    const python = spawnTrackedPython(buildManagedDiarizationValidationArgs(modelId), {
       cwd: pythonConfig.backendPath,
       env: {
+        ...getDiarizationDependencyEnv(),
         ...getDiarizationCacheEnv(),
         HF_TOKEN: token || '',
         HUGGINGFACE_HUB_TOKEN: token || '',
@@ -1838,33 +1994,35 @@ ipcMain.handle('delete-diarization-token', async () => deleteAiAddonToken({
   tokenKey: TOKEN_KEYS.diarizationHuggingFace,
 }));
 
-ipcMain.handle('setup-diarization', async (event, options = {}) => setupDiarizationAddon(getAiAddonRuntimeOptions({
+ipcMain.handle('setup-diarization', async (event, options = {}) => enqueueAiAddonAction(() => setupDiarizationAddon(getAiAddonRuntimeOptions({
   modelId: options.modelId,
   speakerCount: options.speakerCount,
   token: options.token,
+  pythonExe: pythonConfig.pythonExe,
   runtimeValidator: validateDiarizationRuntime,
-})));
+}))));
 
-ipcMain.handle('validate-diarization-setup', async () => validateDiarizationSetup(getAiAddonRuntimeOptions({
+ipcMain.handle('validate-diarization-setup', async () => enqueueAiAddonAction(() => validateDiarizationSetup(getAiAddonRuntimeOptions({
   runtimeValidator: validateDiarizationRuntime,
-})));
+}))));
 
-ipcMain.handle('remove-diarization-setup', async () => removeDiarizationSetup(getAiAddonRuntimeOptions()));
+ipcMain.handle('remove-diarization-setup', async () => enqueueAiAddonAction(() => removeDiarizationSetup(getAiAddonRuntimeOptions())));
 
-ipcMain.handle('setup-summary-model', async (event, options = {}) => setupSummaryModel(getAiAddonRuntimeOptions({
+ipcMain.handle('setup-summary-model', async (event, options = {}) => enqueueAiAddonAction(() => setupSummaryModel(getAiAddonRuntimeOptions({
   modelId: options.modelId,
   profile: options.profile,
   runtimeValidator: validateSummaryRuntimeSmoke,
-})));
+}))));
 
-ipcMain.handle('validate-summary-model', async (event, options = {}) => validateSummaryModel(getAiAddonRuntimeOptions({
+ipcMain.handle('validate-summary-model', async (event, options = {}) => enqueueAiAddonAction(() => validateSummaryModel(getAiAddonRuntimeOptions({
   modelId: options.modelId,
+  profile: options.profile,
   runtimeValidator: validateSummaryRuntimeSmoke,
-})));
+}))));
 
-ipcMain.handle('remove-summary-model', async (event, options = {}) => removeSummaryModel(getAiAddonRuntimeOptions({
+ipcMain.handle('remove-summary-model', async (event, options = {}) => enqueueAiAddonAction(() => removeSummaryModel(getAiAddonRuntimeOptions({
   modelId: options.modelId,
-})));
+}))));
 
 /**
  * Get list of available audio devices
@@ -2425,11 +2583,24 @@ ipcMain.handle('transcribe-audio', async (event, options) => {
 });
 
 ipcMain.handle('diarize-transcript', async (event, options = {}) => {
-  const { audioPath, segments, segmentsJsonPath, outputPath, modelRef, speakerCount } = options;
+  const { audioPath, segments, segmentsJsonPath, modelRef, speakerCount } = options;
 
   if (!audioPath) {
     throw new Error('diarize-transcript requires an audioPath');
   }
+
+  const availability = getDiarizationAvailability(process.platform, process.arch);
+  if (!availability.supported) {
+    throw new Error(availability.reason || 'Speaker identification is not supported on this platform.');
+  }
+
+  const aiStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions());
+  const diarizationStatus = aiStatus && aiStatus.features && aiStatus.features.diarization;
+  if (!diarizationStatus || diarizationStatus.status !== 'ready' || !diarizationStatus.setupComplete) {
+    throw new Error('Speaker identification setup is not ready.');
+  }
+
+  const resolvedAudioPath = assertSafeExistingRecordingAudioPath(audioPath);
 
   let tempSegmentsPath = null;
   let resolvedSegmentsJsonPath = segmentsJsonPath;
@@ -2441,9 +2612,14 @@ ipcMain.handle('diarize-transcript', async (event, options = {}) => {
     tempSegmentsPath = path.join(tempDir, 'segments.json');
     await fs.promises.writeFile(tempSegmentsPath, JSON.stringify({ segments }, null, 2), 'utf8');
     resolvedSegmentsJsonPath = tempSegmentsPath;
+  } else {
+    resolvedSegmentsJsonPath = assertSafeExistingSegmentsPath(resolvedSegmentsJsonPath);
   }
 
-  const resolvedOutputPath = buildDiarizationOutputPath({ audioPath, outputPath });
+  const resolvedOutputPath = buildDiarizationOutputPath({ audioPath: resolvedAudioPath });
+  if (!isSafeRecordingsJsonPath({ filePath: resolvedOutputPath, recordingsDir: getRecordingsDir() })) {
+    throw new Error('Speaker labels output must be a JSON file in the recordings directory.');
+  }
   const token = getAiAddonToken({
     userDataDir: app.getPath('userData'),
     tokenKey: TOKEN_KEYS.diarizationHuggingFace,
@@ -2451,15 +2627,16 @@ ipcMain.handle('diarize-transcript', async (event, options = {}) => {
   });
 
   return new Promise((resolve, reject) => {
-    const python = spawnTrackedPython(buildDiarizationArgs({
-      audioPath,
+    const python = spawnTrackedPython(buildManagedDiarizationArgs({
+      audioPath: resolvedAudioPath,
       segmentsJsonPath: resolvedSegmentsJsonPath,
       outputPath: resolvedOutputPath,
-      modelRef,
+      modelRef: modelRef || diarizationStatus.modelId,
       speakerCount,
     }), {
       cwd: pythonConfig.backendPath,
       env: {
+        ...getDiarizationDependencyEnv(),
         ...getDiarizationCacheEnv(),
         HF_TOKEN: token || '',
         HUGGINGFACE_HUB_TOKEN: token || '',
@@ -2860,7 +3037,7 @@ ipcMain.handle('update-meeting', async (event, payload) => {
 
 ipcMain.handle('update-meeting-ai', async (event, payload) => {
   const meetingId = payload && payload.meetingId;
-  const updates = (payload && payload.updates) || {};
+  const updates = validateAiMetadataPaths((payload && payload.updates) || {});
   if (!meetingId) {
     throw new Error('update-meeting-ai requires a meetingId');
   }

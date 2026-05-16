@@ -208,24 +208,45 @@ function parseAiBackendProgressLine(line, expectedFeature = null) {
   return event;
 }
 
-function buildDiarizationOutputPath({ audioPath, outputPath } = {}) {
-  if (outputPath) {
-    return String(outputPath);
-  }
-
+function buildDiarizationOutputPath({ audioPath } = {}) {
   const sourcePath = String(audioPath || '');
   const parsedPath = path.parse(sourcePath);
   return path.join(parsedPath.dir || '.', `${parsedPath.name || 'meeting'}.speakers.json`);
 }
 
-function isSafeRecordingsMarkdownPath({ filePath, recordingsDir } = {}) {
-  if (!filePath || !recordingsDir) {
+function isPathInsideDirectory(filePath, directoryPath) {
+  if (!filePath || !directoryPath) {
     return false;
   }
 
   const resolvedPath = path.resolve(filePath);
-  const resolvedRecordingsDir = path.resolve(recordingsDir);
-  return resolvedPath.startsWith(resolvedRecordingsDir + path.sep) && path.extname(resolvedPath).toLowerCase() === '.md';
+  const resolvedDirectory = path.resolve(directoryPath);
+  return resolvedPath === resolvedDirectory || resolvedPath.startsWith(resolvedDirectory + path.sep);
+}
+
+function isSafeRecordingsPath({ filePath, recordingsDir, allowedExtensions = [] } = {}) {
+  if (!isPathInsideDirectory(filePath, recordingsDir)) {
+    return false;
+  }
+
+  if (!allowedExtensions.length) {
+    return true;
+  }
+
+  const extension = path.extname(path.resolve(filePath)).toLowerCase();
+  return allowedExtensions.map((item) => String(item).toLowerCase()).includes(extension);
+}
+
+function isSafeRecordingsMarkdownPath({ filePath, recordingsDir } = {}) {
+  return isSafeRecordingsPath({ filePath, recordingsDir, allowedExtensions: ['.md'] });
+}
+
+function isSafeRecordingsAudioPath({ filePath, recordingsDir } = {}) {
+  return isSafeRecordingsPath({ filePath, recordingsDir, allowedExtensions: ['.opus', '.wav', '.m4a', '.mp3', '.flac'] });
+}
+
+function isSafeRecordingsJsonPath({ filePath, recordingsDir } = {}) {
+  return isSafeRecordingsPath({ filePath, recordingsDir, allowedExtensions: ['.json'] });
 }
 
 function resolveTranscriptionAudioFile({ audioFile, recordingsDir, existsSync }) {
@@ -757,7 +778,11 @@ module.exports = {
   getRecordingStopTimeout,
   resolveStopTimeoutAction,
   isModelDownloadErrorOutput,
+  isPathInsideDirectory,
+  isSafeRecordingsAudioPath,
+  isSafeRecordingsJsonPath,
   isSafeRecordingsMarkdownPath,
+  isSafeRecordingsPath,
   isSupportedCudaInstallPythonVersion,
   normalizeRecorderLevels,
   parsePythonVersion,

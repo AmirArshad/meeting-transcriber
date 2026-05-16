@@ -6,12 +6,15 @@ Use this checklist when validating speaker identification or local summaries on 
 
 - [ ] Confirm no network activity occurs during transcription, diarization, or summary generation.
 - [ ] Confirm network activity occurs only when the user explicitly starts summary model/runtime setup, Whisper model setup, CUDA setup, or update checks.
+- [ ] Confirm pyannote/PyTorch dependency downloads occur only when the user explicitly starts speaker identification setup.
 - [ ] Confirm Hugging Face token values never appear in logs, progress events, meeting metadata, transcripts, or summaries.
 
 ## Windows CUDA Speaker Identification
 
 - [ ] Use Windows 10/11 x64 with NVIDIA GPU and CUDA setup complete.
 - [ ] Enter the user's own Hugging Face token after accepting `pyannote/speaker-diarization-community-1` terms.
+- [ ] Confirm speaker setup does not download dependencies until a token is entered.
+- [ ] Start speaker setup and confirm managed dependencies install under Electron `userData/ai-addons/dependencies/diarization`.
 - [ ] Validate setup from Settings and confirm status becomes Ready.
 - [ ] Record and transcribe a meeting with 2-4 speakers.
 - [ ] Confirm diarization starts automatically only after transcription is saved.

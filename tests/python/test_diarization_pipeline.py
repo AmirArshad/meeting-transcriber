@@ -84,6 +84,7 @@ def test_save_diarization_result_writes_json_sidecar(tmp_path):
     pipeline.save_diarization_result(str(output_path), {'status': 'completed', 'segments': []})
 
     assert json.loads(output_path.read_text(encoding='utf-8'))['status'] == 'completed'
+    assert not list(tmp_path.glob('*.tmp'))
 
 
 def test_validate_pyannote_setup_requires_token(monkeypatch):

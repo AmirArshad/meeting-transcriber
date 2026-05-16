@@ -203,8 +203,25 @@ class MeetingManager:
         stripped.pop('transcript', None)
         return stripped
 
-    @staticmethod
-    def _normalize_ai_feature_metadata(feature: str, metadata: Dict) -> Dict:
+    def _is_recordings_path(self, file_path: Path) -> bool:
+        try:
+            file_path.resolve(strict=False).relative_to(self.recordings_dir.resolve(strict=False))
+            return True
+        except ValueError:
+            return False
+
+    def _normalize_sidecar_path(self, value: object, allowed_suffixes: tuple[str, ...]) -> Optional[str]:
+        if value in (None, ''):
+            return None
+
+        file_path = Path(str(value)).resolve(strict=False)
+        if file_path.suffix.lower() not in allowed_suffixes:
+            raise ValueError('AI artifact path has an unsupported file extension')
+        if not self._is_recordings_path(file_path):
+            raise ValueError('AI artifact path must stay inside the recordings directory')
+        return str(file_path)
+
+    def _normalize_ai_feature_metadata(self, feature: str, metadata: Dict) -> Dict:
         allowed_fields = {
             'diarization': (
                 'status',
@@ -244,13 +261,20 @@ class MeetingManager:
                     normalized[field] = int(value)
                 except (TypeError, ValueError):
                     continue
+            elif field in ('segmentsPath', 'jsonPath'):
+                normalized_path = self._normalize_sidecar_path(value, ('.json',))
+                if normalized_path is not None:
+                    normalized[field] = normalized_path
+            elif field == 'markdownPath':
+                normalized_path = self._normalize_sidecar_path(value, ('.md',))
+                if normalized_path is not None:
+                    normalized[field] = normalized_path
             else:
                 normalized[field] = str(value)
 
         return normalized
 
-    @staticmethod
-    def _iter_ai_file_references(meeting: Dict) -> List[tuple[str, Path]]:
+    def _iter_ai_file_references(self, meeting: Dict) -> List[tuple[str, Path]]:
         ai = meeting.get('ai')
         if not isinstance(ai, dict):
             return []
@@ -274,16 +298,19 @@ class MeetingManager:
             for label, field in fields:
                 file_path = feature_metadata.get(field)
                 if file_path:
-                    references.append((label, Path(str(file_path))))
+                    candidate = Path(str(file_path))
+                    if self._is_recordings_path(candidate):
+                        references.append((label, candidate))
+                    else:
+                        print(f"Warning: Ignoring unsafe AI artifact path for deletion: {candidate}", file=sys.stderr)
 
         return references
 
-    @classmethod
-    def _meeting_file_references(cls, meeting: Dict) -> List[tuple[str, Path]]:
+    def _meeting_file_references(self, meeting: Dict) -> List[tuple[str, Path]]:
         references = [
             ('audio', Path(meeting['audioPath'])),
             ('transcript', Path(meeting['transcriptPath'])),
-            *cls._iter_ai_file_references(meeting),
+            *self._iter_ai_file_references(meeting),
         ]
 
         unique_references: List[tuple[str, Path]] = []
@@ -602,6 +629,8 @@ class MeetingManager:
                     title=title
                 )
                 if meeting is not None:
+                    existing_meetings.append(meeting)
+                    existing_audio_paths.add(Path(meeting['audioPath']).name)
                     added += 1
                     print(f"Added meeting from filesystem: {audio_file.name} (ID: {meeting_id})", file=sys.stderr)
                 else:
@@ -721,9 +750,11 @@ class MeetingManager:
                         changed = True
                     continue
 
+                existing_feature = ai.get(feature) if isinstance(ai.get(feature), dict) else {}
                 normalized = self._normalize_ai_feature_metadata(feature, value)
-                if ai.get(feature) != normalized:
-                    ai[feature] = normalized
+                merged = {**existing_feature, **normalized}
+                if ai.get(feature) != merged:
+                    ai[feature] = merged
                     changed = True
 
             if changed:

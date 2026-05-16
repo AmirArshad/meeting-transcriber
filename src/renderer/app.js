@@ -122,6 +122,24 @@ function showSummaryMessage(message, isError = false) {
   updateSummaryActionState();
 }
 
+async function restoreCurrentHistorySummary(meetingId) {
+  if (!meetingId || currentMeetingId !== meetingId) {
+    return false;
+  }
+
+  try {
+    const fullMeeting = await window.electronAPI.getMeeting(meetingId);
+    if (fullMeeting && fullMeeting.summary) {
+      renderSummaryMarkdown(fullMeeting.summary, { stale: fullMeeting.summaryStale });
+      return true;
+    }
+  } catch (error) {
+    console.warn(`Could not restore saved summary: ${error.message}`);
+  }
+
+  return false;
+}
+
 function renderSummaryMarkdown(markdown, options = {}) {
   const summaryEl = document.getElementById('meeting-summary');
   if (!summaryEl) {
@@ -2083,7 +2101,10 @@ async function generateSummaryForMeeting(meetingId, button) {
     const message = getSummarySetupMessage(summaryStatus);
     addLog(message, summaryStatus && summaryStatus.status === 'unsupported' ? 'error' : 'warning');
     if (currentMeetingId === meetingId) {
-      showSummaryMessage(message, summaryStatus && summaryStatus.status === 'error');
+      const restored = await restoreCurrentHistorySummary(meetingId);
+      if (!restored) {
+        showSummaryMessage(message, summaryStatus && summaryStatus.status === 'error');
+      }
       activateHistoryDetailTab('summary');
     }
     openSettingsAtAiAddons();
@@ -2110,6 +2131,11 @@ async function generateSummaryForMeeting(meetingId, button) {
       renderSummaryMarkdown((fullMeeting && fullMeeting.summary) || '', { stale: fullMeeting && fullMeeting.summaryStale });
       syncMeetingInList((result && result.meeting) || fullMeeting);
       activateHistoryDetailTab('summary');
+    } else if (currentRecordingMeeting && currentRecordingMeeting.id === meetingId) {
+      syncMeetingInList(result && result.meeting);
+      activateTab('history');
+      await selectMeeting(meetingId);
+      activateHistoryDetailTab('summary');
     } else {
       syncMeetingInList(result && result.meeting);
     }
@@ -2120,7 +2146,10 @@ async function generateSummaryForMeeting(meetingId, button) {
     const message = `Summary generation failed. Transcript is unchanged. ${error.message}`;
     addLog(message, 'error');
     if (currentMeetingId === meetingId) {
-      showSummaryMessage(message, true);
+      const restored = await restoreCurrentHistorySummary(meetingId);
+      if (!restored) {
+        showSummaryMessage(message, true);
+      }
       activateHistoryDetailTab('summary');
     }
   } finally {
@@ -2605,7 +2634,8 @@ function updateAiAddonSettings(status) {
     setStatusBadge(document.getElementById('summary-status-badge'), summary.status);
     const profileSelect = document.getElementById('summary-profile-select');
     if (profileSelect) {
-      profileSelect.value = summary.profile || DEFAULT_SUMMARY_PROFILE;
+      const savedProfile = loadSettings().summaryProfile;
+      profileSelect.value = savedProfile || summary.profile || DEFAULT_SUMMARY_PROFILE;
     }
 
     const statusText = document.getElementById('summary-status-text');

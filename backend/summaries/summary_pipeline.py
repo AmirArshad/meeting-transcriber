@@ -246,6 +246,9 @@ def chunk_transcript(
 
         if current_segments and current_tokens + segment_tokens > max_tokens:
             flush_current()
+            if current_segments and current_tokens + segment_tokens > max_tokens:
+                current_segments = []
+                current_tokens = 0
 
         current_segments.append(segment)
         current_tokens += segment_tokens
