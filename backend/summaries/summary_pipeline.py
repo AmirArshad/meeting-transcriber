@@ -7,15 +7,49 @@ without downloading GGUF files or launching local inference.
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any, Dict, Iterable, List, Optional
 
 
 SUMMARY_ARRAY_FIELDS = ("topics", "decisions", "action_items", "risks", "open_questions")
 
+SUMMARY_PROFILE_CONFIGS: Dict[str, Dict[str, Any]] = {
+    "concise": {
+        "label": "Concise",
+        "max_output_tokens": 900,
+        "chunk_tokens": 12000,
+        "instructions": "Be brief. Capture only the most important outcome, decisions, and next steps.",
+    },
+    "balanced": {
+        "label": "Balanced",
+        "max_output_tokens": 1600,
+        "chunk_tokens": 16000,
+        "instructions": "Create balanced meeting notes with topics, decisions, action items, risks, and open questions.",
+    },
+    "detailed": {
+        "label": "Detailed",
+        "max_output_tokens": 2600,
+        "chunk_tokens": 20000,
+        "instructions": "Include broader topic coverage, important supporting timestamps, and nuanced risks or open questions.",
+    },
+    "action-items": {
+        "label": "Action items",
+        "max_output_tokens": 1400,
+        "chunk_tokens": 14000,
+        "instructions": "Prioritize tasks, owners, due dates, blockers, decisions, and follow-up questions.",
+    },
+}
+
 
 class SummaryValidationError(ValueError):
     """Raised when a generated summary does not match the persisted shape."""
+
+
+def get_summary_profile(profile: str = "balanced") -> Dict[str, Any]:
+    """Return a safe profile config, defaulting unknown values to balanced."""
+    config = SUMMARY_PROFILE_CONFIGS.get(str(profile or "").strip(), SUMMARY_PROFILE_CONFIGS["balanced"])
+    return dict(config)
 
 
 def _to_float(value: Any, default: float = 0.0) -> float:
@@ -122,6 +156,73 @@ def chunk_transcript(
     flush_current()
 
     return chunks
+
+
+def summary_json_schema_instruction() -> str:
+    return """Return only valid JSON with this exact shape:
+{
+  "summary": "short grounded overview",
+  "topics": [{"title": "topic", "summary": "what was discussed", "timestamps": ["MM:SS"]}],
+  "decisions": [{"decision": "decision made", "owner": "Speaker or Unknown", "timestamp": "MM:SS"}],
+  "action_items": [{"task": "task", "owner": "Speaker or Unknown", "due": "date or null", "timestamp": "MM:SS"}],
+  "risks": [{"risk": "risk or blocker", "timestamp": "MM:SS"}],
+  "open_questions": [{"question": "question", "timestamp": "MM:SS"}]
+}
+Use only evidence from the transcript. If an owner is not explicit, use "Unknown". Do not include markdown."""
+
+
+def build_chunk_summary_prompt(chunk: Dict[str, Any], *, profile: str = "balanced") -> str:
+    """Build the local LLM prompt for one transcript chunk."""
+    profile_config = get_summary_profile(profile)
+    return "\n\n".join([
+        "You are AvaNevis, a local-only meeting summarizer. The transcript never leaves this device.",
+        profile_config["instructions"],
+        summary_json_schema_instruction(),
+        f"Chunk {chunk.get('index', 1)} transcript:",
+        str(chunk.get("text", "")),
+    ])
+
+
+def build_final_merge_prompt(chunk_summaries: Iterable[Dict[str, Any]], *, profile: str = "balanced") -> str:
+    """Build the local LLM prompt that merges validated chunk summaries."""
+    profile_config = get_summary_profile(profile)
+    normalized_summaries = [validate_summary_json(summary) for summary in chunk_summaries]
+    return "\n\n".join([
+        "You are AvaNevis, a local-only meeting summarizer. Merge these chunk summaries into one final meeting summary.",
+        profile_config["instructions"],
+        summary_json_schema_instruction(),
+        "Validated chunk summaries JSON:",
+        json.dumps(normalized_summaries, ensure_ascii=False, indent=2),
+    ])
+
+
+def extract_json_object(raw_output: str) -> Dict[str, Any]:
+    """Extract one JSON object from model output, tolerating fenced text."""
+    output = str(raw_output or "").strip()
+    if output.startswith("```"):
+        output = re.sub(r"^```(?:json)?\s*", "", output, flags=re.IGNORECASE)
+        output = re.sub(r"\s*```$", "", output).strip()
+
+    try:
+        parsed = json.loads(output)
+    except json.JSONDecodeError:
+        start = output.find("{")
+        end = output.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            raise SummaryValidationError("model output did not contain a JSON object")
+        try:
+            parsed = json.loads(output[start:end + 1])
+        except json.JSONDecodeError as exc:
+            raise SummaryValidationError(f"model output JSON could not be parsed: {exc}") from exc
+
+    if not isinstance(parsed, dict):
+        raise SummaryValidationError("model output must be a JSON object")
+    return parsed
+
+
+def repair_summary_json(raw_output: str) -> Dict[str, Any]:
+    """Best-effort local repair for common wrapper text around JSON output."""
+    return validate_summary_json(extract_json_object(raw_output))
 
 
 def _require_list(summary: Dict[str, Any], field: str) -> List[Dict[str, Any]]:

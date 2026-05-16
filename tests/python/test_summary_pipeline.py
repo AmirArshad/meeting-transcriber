@@ -2,8 +2,12 @@ import pytest
 
 from backend.summaries.summary_pipeline import (
     SummaryValidationError,
+    build_chunk_summary_prompt,
+    build_final_merge_prompt,
     chunk_transcript,
+    get_summary_profile,
     normalize_transcript_segments,
+    repair_summary_json,
     render_summary_markdown,
     validate_summary_json,
 )
@@ -93,3 +97,42 @@ def test_render_summary_markdown_includes_sections_and_metadata():
     assert '## Decisions' in markdown
     assert '- Launch on Friday (owner: Speaker 1; timestamp: 00:12)' in markdown
     assert '## Risks\n\nNone captured.' in markdown
+
+
+def test_get_summary_profile_falls_back_to_balanced():
+    assert get_summary_profile('concise')['max_output_tokens'] < get_summary_profile('detailed')['max_output_tokens']
+    assert get_summary_profile('missing')['label'] == 'Balanced'
+
+
+def test_build_chunk_summary_prompt_includes_schema_and_transcript_chunk():
+    prompt = build_chunk_summary_prompt(
+        {'index': 2, 'text': '[00:01 - 00:03] Speaker 1: Ship it'},
+        profile='action-items',
+    )
+
+    assert 'Return only valid JSON' in prompt
+    assert 'action_items' in prompt
+    assert 'Chunk 2 transcript' in prompt
+    assert 'Speaker 1: Ship it' in prompt
+    assert 'local-only' in prompt
+
+
+def test_build_final_merge_prompt_validates_chunk_summaries():
+    prompt = build_final_merge_prompt([
+        {'summary': 'Launch approved.', 'topics': [{'title': 'Launch'}]},
+    ])
+
+    assert 'Merge these chunk summaries' in prompt
+    assert 'Launch approved.' in prompt
+    assert '"decisions": []' in prompt
+
+
+def test_repair_summary_json_extracts_fenced_or_wrapped_json():
+    repaired = repair_summary_json('Here is JSON:\n```json\n{"summary":"ok","topics":[]}\n```')
+
+    assert repaired['summary'] == 'ok'
+    assert repaired['topics'] == []
+    assert repaired['action_items'] == []
+
+    with pytest.raises(SummaryValidationError):
+        repair_summary_json('no json here')

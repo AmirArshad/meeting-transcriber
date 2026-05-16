@@ -38,6 +38,7 @@ Goal: add optional post-install local speaker diarization and transcript summari
 - 2026-05-16: Summary model distribution decision: use a larger optional installer/download artifact, similar to the CUDA setup flow, instead of bundling the model in the base installer or doing opaque background downloads.
 - 2026-05-16: Added explicit AI add-on setup/check/remove/validate helpers and IPC wrappers, safe redacted `ai-addon-progress` events, platform-specific summary artifact selection, and pinned-filename/checksum enforcement that refuses summary downloads until artifact metadata is complete. `npm test` and `npm run test:python` passed.
 - 2026-05-16: Added lazy pyannote diarization runner and `diarize-transcript` IPC boundary without changing Whisper transcription paths. The backend prepares 16 kHz mono WAV input, disables pyannote metrics, prefers exclusive diarization output, writes `*.speakers.json`, and emits redacted progress. `npm test` and `npm run test:python` passed.
+- 2026-05-16: Added deterministic summary runtime/prompt helpers: llama.cpp path and CLI argument resolution for Windows CUDA/macOS Metal, profile-specific chunk/final-merge prompts, and JSON extraction/repair around local model output. Runtime execution remains pending until pinned llama.cpp/model artifacts are supplied. `npm test` and `npm run test:python` passed.
 
 ## V1 Model Defaults
 
@@ -97,13 +98,13 @@ Skipped by product direction. Proceed with the V1 Model Defaults above and keep 
 ## Phase 4 - Summary Backend
 
 - [x] Add `backend/summaries/` module. (Pure pipeline helpers only; llama.cpp runtime integration remains pending.)
-- [ ] Add pinned `llama.cpp` runtime resolution for Windows CUDA and macOS Metal.
+- [x] Add pinned `llama.cpp` runtime resolution for Windows CUDA and macOS Metal. (Path/argument resolution is implemented; packaged runtime artifacts are still pending.)
 - [x] Add transcript normalization that uses speaker labels when available and works without them.
 - [ ] Add token-budget chunking by timestamp and topic boundaries. (Partial: token-budget/timestamp chunks added; topic-boundary heuristics remain pending.)
-- [ ] Add prompt templates for `Concise`, `Balanced`, `Detailed`, and `Action items` profiles against one installed model.
-- [ ] Add chunk summary and final merge flow.
+- [x] Add prompt templates for `Concise`, `Balanced`, `Detailed`, and `Action items` profiles against one installed model.
+- [ ] Add chunk summary and final merge flow. (Partial: chunk and final merge prompts are implemented; llama.cpp process execution remains pending.)
 - [x] Require structured JSON output and validate before saving. (Pure validation helper added; runtime save integration remains pending.)
-- [ ] Add retry/repair path for malformed JSON.
+- [ ] Add retry/repair path for malformed JSON. (Partial: local JSON extraction/repair helper added; runtime retry loop remains pending.)
 - [x] Render summary JSON to Markdown for History display/export.
 - [ ] Ensure failed summary generation never modifies the transcript.
 
