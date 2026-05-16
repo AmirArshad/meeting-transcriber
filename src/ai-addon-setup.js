@@ -405,7 +405,7 @@ function createAiAddonCancelError(message = 'AI add-on setup was canceled.') {
 }
 
 function forceKillChildProcess(child) {
-  if (!child || child.killed) {
+  if (!child || child.exitCode !== null || child.signalCode) {
     return;
   }
   try {
@@ -413,7 +413,16 @@ function forceKillChildProcess(child) {
       spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }).on('error', () => {});
       return;
     }
-    child.kill();
+    child.kill('SIGTERM');
+    setTimeout(() => {
+      try {
+        if (child.exitCode === null && !child.signalCode) {
+          child.kill('SIGKILL');
+        }
+      } catch (killError) {
+        // Best effort cleanup only.
+      }
+    }, 2000).unref?.();
   } catch (killError) {
     // Best effort cleanup only.
   }
@@ -1659,6 +1668,135 @@ function validatePinnedSummarySetup({ artifact, runtimeArtifact }) {
   return validateSummarySetupArtifact(artifact) || validateSummaryRuntimeArtifact(runtimeArtifact);
 }
 
+function isHuggingFaceSummaryArtifact(artifact) {
+  return Boolean(artifact && artifact.source && artifact.source.provider === 'huggingface' && artifact.source.repo && artifact.source.revision && artifact.source.fileName);
+}
+
+function buildPythonEnvForBackend({ backendPath, extra = {} } = {}) {
+  const separator = process.platform === 'win32' ? ';' : ':';
+  const existingPythonPath = process.env.PYTHONPATH || '';
+  const pythonPathParts = [backendPath, existingPythonPath].filter(Boolean);
+  return {
+    ...process.env,
+    ...extra,
+    PYTHONPATH: pythonPathParts.join(separator),
+  };
+}
+
+async function downloadHuggingFaceSummaryArtifact({ artifact, destinationPath, expectedSizeBytes, userDataDir, pythonExe, backendPath, onProgress, cancelSignal, fsModule = fs }) {
+  const spawnProcess = fsModule.__spawn || spawn;
+  if (!isHuggingFaceSummaryArtifact(artifact)) {
+    throw new Error('Summary model artifact is not a pinned Hugging Face source.');
+  }
+  if (!pythonExe || !backendPath) {
+    throw new Error('Bundled Python is not available for Hugging Face summary model downloads.');
+  }
+
+  throwIfAiAddonCanceled(cancelSignal, 'Summary model setup was canceled.');
+  const source = artifact.source;
+  const cacheRoot = path.join(getAiAddonPaths(userDataDir).rootDir, 'huggingface-cache');
+  const args = [
+    '-m', 'summaries.hf_model_downloader',
+    '--repo', source.repo,
+    '--revision', source.revision,
+    '--filename', source.fileName,
+    '--destination', destinationPath,
+    '--expected-size', String(expectedSizeBytes || source.sizeBytes || 0),
+    '--cache-root', cacheRoot,
+  ];
+
+  await new Promise((resolve, reject) => {
+    let settled = false;
+    let cancelError = null;
+    let cancelFallbackTimer = null;
+    let stdoutBuffer = '';
+    let stderrOutput = '';
+    const child = spawnProcess(pythonExe, args, {
+      cwd: backendPath,
+      windowsHide: true,
+      env: buildPythonEnvForBackend({
+        backendPath,
+        extra: {
+          HF_HUB_DISABLE_IMPLICIT_TOKEN: '1',
+          HF_HUB_DISABLE_TELEMETRY: '1',
+          DO_NOT_TRACK: '1',
+          HF_HUB_DISABLE_PROGRESS_BARS: '1',
+        },
+      }),
+    });
+    const cleanupCancel = onAiAddonCancel(cancelSignal, (abortError) => {
+      if (settled || cancelError) {
+        return;
+      }
+      cancelError = abortError;
+      forceKillChildProcess(child);
+      cleanupCancel?.();
+      cancelFallbackTimer = setTimeout(() => {
+        finish(reject, cancelError);
+      }, 5000);
+      cancelFallbackTimer.unref?.();
+    });
+    const finish = (callback, value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (cancelFallbackTimer) {
+        clearTimeout(cancelFallbackTimer);
+      }
+      cleanupCancel?.();
+      callback(value);
+    };
+    const handleStdoutLine = (line) => {
+      if (!line.trim()) {
+        return;
+      }
+      try {
+        const event = JSON.parse(line);
+        if ((event.type === 'progress' || event.type === 'result') && typeof onProgress === 'function') {
+          onProgress({
+            downloaded: event.downloadedBytes,
+            total: event.totalBytes || expectedSizeBytes,
+            percent: event.percent,
+          });
+        }
+      } catch (error) {
+        // Ignore non-JSON helper output; stderr is summarized on failure.
+      }
+    };
+    child.stdout.on('data', (data) => {
+      stdoutBuffer += data.toString();
+      const lines = stdoutBuffer.split(/\r?\n/);
+      stdoutBuffer = lines.pop() || '';
+      for (const line of lines) {
+        handleStdoutLine(line);
+      }
+    });
+    child.stderr.on('data', (data) => { stderrOutput += data.toString(); });
+    child.on('error', (error) => finish(reject, cancelError || error));
+    child.on('close', (code) => {
+      if (stdoutBuffer) {
+        handleStdoutLine(stdoutBuffer);
+      }
+      if (cancelError) {
+        finish(reject, cancelError);
+        return;
+      }
+      if (code === 0) {
+        finish(resolve);
+        return;
+      }
+      const reason = stderrOutput.trim().split(/\r?\n/).filter(Boolean).pop() || `Hugging Face downloader exited with code ${code}.`;
+      finish(reject, new Error(reason.replace(/^ERROR:\s*/i, '')));
+    });
+  });
+
+  const existsSync = bindFsMethod(fsModule, 'existsSync');
+  if (!existsSync || !existsSync(destinationPath)) {
+    throw new Error('Hugging Face summary model download did not produce the expected artifact.');
+  }
+}
+
 async function downloadFile({ url, destinationPath, expectedSizeBytes, onProgress, redirectCount = 0, timeoutMs = DOWNLOAD_TIMEOUT_MS, cancelSignal }) {
   throwIfAiAddonCanceled(cancelSignal, 'Download was canceled.');
   const parsedUrl = new URL(url);
@@ -2139,8 +2277,11 @@ async function setupSummaryModel({
   now = () => new Date().toISOString(),
   emitProgress,
   downloader = downloadFile,
+  huggingFaceDownloader = downloadHuggingFaceSummaryArtifact,
   extractor = extractRuntimeArchive,
   runtimeValidator,
+  pythonExe,
+  backendPath,
   cancelSignal,
 } = {}) {
   const selectedModelId = resolveModelId('summary', modelId, catalog);
@@ -2288,7 +2429,10 @@ async function setupSummaryModel({
     }
 
     try {
-      await downloader({
+      const selectedDownloader = isHuggingFaceSummaryArtifact(artifact) && pythonExe && backendPath
+        ? (options) => huggingFaceDownloader({ ...options, artifact, userDataDir, pythonExe, backendPath, fsModule })
+        : downloader;
+      await selectedDownloader({
         url: artifact.downloadUrl,
         destinationPath: tempPath,
         expectedSizeBytes: artifact.estimatedSizeBytes,
@@ -2296,7 +2440,9 @@ async function setupSummaryModel({
         onProgress: (progress) => emitSafeProgress(emitProgress, {
           feature: 'summary',
           phase: 'downloading',
-          message: 'Downloading local summary setup artifact.',
+          message: isHuggingFaceSummaryArtifact(artifact)
+            ? 'Downloading local summary model through Hugging Face accelerated transfer.'
+            : 'Downloading local summary setup artifact.',
           percent: progress.percent,
           downloadedBytes: progress.downloaded,
           totalBytes: progress.total || artifact.estimatedSizeBytes,
@@ -2513,6 +2659,7 @@ module.exports = {
   buildDiarizationDependencyInstallArgs,
   createAiAddonProgressEvent,
   downloadFile,
+  downloadHuggingFaceSummaryArtifact,
   extractZipArchive,
   getDiarizationTokenStatus,
   getDiarizationDependencySitePackagesDir,

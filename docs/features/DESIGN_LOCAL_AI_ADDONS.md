@@ -131,6 +131,8 @@ Controls:
 
 Summary setup should use a larger optional installer/download artifact rather than bundling the model in the base app. The flow should match the existing CUDA setup pattern: the user explicitly starts setup, the app downloads a pinned artifact for the current platform/runtime, verifies HTTPS host allowlists, filenames, and checksums, unpacks or stages it into the managed model cache, and then validates the local runtime. No summary model or runtime download should happen automatically in the background.
 
+Hugging Face-hosted public GGUF summary artifacts should use the bundled Python `huggingface_hub`/`hf_xet` downloader so the app can use Hugging Face's accelerated Xet transfer path on Windows and macOS. This path remains unauthenticated for public summary models and must not reuse the diarization token; the app still performs pinned SHA-256 verification after download. Canceling setup must terminate the downloader subprocess (`taskkill` on Windows, `SIGTERM`/`SIGKILL` on macOS) before cleanup finishes.
+
 Runtime archives are staged defensively: ZIP entries must resolve inside the extraction directory, extraction destinations are created explicitly, stale extraction staging is removed before reinstall, extracted archive layout is preserved for native library loading, and runtime validation invokes only the runtime/model smoke path rather than passing transcript generation arguments.
 
 Initial installed model:

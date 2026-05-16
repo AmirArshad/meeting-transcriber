@@ -4,6 +4,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const https = require('node:https');
 const { PassThrough } = require('node:stream');
+const { EventEmitter } = require('node:events');
 
 const {
   AI_ADDON_PROGRESS_CHANNEL,
@@ -15,6 +16,7 @@ const {
   checkSummaryRuntimeCache,
   createAiAddonProgressEvent,
   downloadFile,
+  downloadHuggingFaceSummaryArtifact,
   extractZipArchive,
   getSummaryArtifactPath,
   getSummaryRuntimeArchivePath,
@@ -194,6 +196,13 @@ function createCatalogWithPinnedSummaryArtifact({ sha256 = 'abc123', downloadUrl
     fileName: 'model.gguf',
     sha256,
     estimatedSizeBytes: 1234,
+    source: {
+      provider: 'huggingface',
+      repo: 'example/model',
+      revision: 'abc123abc123abc123abc123abc123abc123abc1',
+      fileName: 'model.gguf',
+      sizeBytes: 1234,
+    },
     validationStatus: 'ready',
     llamaCpp: {
       runtime: 'llama.cpp',
@@ -212,6 +221,13 @@ function createCatalogWithPinnedSummaryArtifact({ sha256 = 'abc123', downloadUrl
         fileName: 'model.gguf',
         sha256,
         downloadUrl,
+        source: {
+          provider: 'huggingface',
+          repo: 'example/model',
+          revision: 'abc123abc123abc123abc123abc123abc123abc1',
+          fileName: 'model.gguf',
+          sizeBytes: 1234,
+        },
         validationStatus: 'ready',
       },
     },
@@ -353,6 +369,53 @@ test('downloadFile removes partial destination when request fails', async () => 
     } catch (error) {
       // Best effort cleanup.
     }
+  }
+});
+
+test('Hugging Face downloader kills child process and rejects on cancellation', async () => {
+  const fsModule = createMemoryFs();
+  const artifact = getSummaryArtifactForPlatform(
+    'summary-model',
+    'win32',
+    'x64',
+    createCatalogWithPinnedSummaryArtifact({
+      sha256: 'a0700a1b17cb3f2328437cbc70a3ac543fab2c1e7d1d8014862d801e1eb11162',
+    }),
+  );
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.exitCode = null;
+  child.signalCode = null;
+  child.killedWithTaskkill = false;
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+  Object.defineProperty(process, 'platform', { value: 'darwin' });
+  try {
+    fsModule.__spawn = () => {
+      child.kill = () => {
+        child.signalCode = 'SIGTERM';
+        setImmediate(() => child.emit('close', null, 'SIGTERM'));
+        return true;
+      };
+      return child;
+    };
+    const controller = new AbortController();
+    const downloadPromise = downloadHuggingFaceSummaryArtifact({
+      artifact,
+      destinationPath: '/tmp/AvaNevis/model.gguf.download',
+      expectedSizeBytes: 1234,
+      userDataDir: '/tmp/AvaNevis',
+      pythonExe: '/python/bin/python3',
+      backendPath: '/app/backend',
+      fsModule,
+      cancelSignal: controller.signal,
+    });
+    controller.abort();
+
+    await assert.rejects(downloadPromise, /canceled/i);
+    assert.equal(child.signalCode, 'SIGTERM');
+  } finally {
+    Object.defineProperty(process, 'platform', originalPlatform || { value: process.platform });
   }
 });
 
@@ -1194,6 +1257,46 @@ test('setup summary model downloads explicit runtime and model artifacts only wh
   assert.equal(status.features.summary.runtimeCache.executablePath, nestedRuntimeExecutable);
   assert.equal(fsModule.existsSync(getSummaryRuntimeArchivePath('/tmp/AvaNevis', artifact, runtimeArtifact.artifacts[0])), false);
   assert.equal(fsModule.existsSync(getSummaryRuntimeExecutablePath('/tmp/AvaNevis', artifact, runtimeArtifact)), false);
+});
+
+test('setup summary model uses Hugging Face downloader for pinned Hugging Face model artifacts', async () => {
+  const fsModule = createMemoryFs();
+  const catalog = createCatalogWithPinnedSummaryArtifact({
+    sha256: 'a0700a1b17cb3f2328437cbc70a3ac543fab2c1e7d1d8014862d801e1eb11162',
+  });
+  const runtimeArtifact = catalog.summary.runtimeArtifacts['win32-x64'];
+  const artifact = getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog);
+  const calls = [];
+  const status = await setupSummaryModel({
+    userDataDir: '/tmp/AvaNevis',
+    platform: 'win32',
+    arch: 'x64',
+    modelId: 'summary-model',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog,
+    pythonExe: '/python/python.exe',
+    backendPath: '/app/backend',
+    downloader: async ({ url, destinationPath }) => {
+      calls.push({ type: 'generic', url });
+      fsModule.writeFileSync(destinationPath, 'runtime archive\n');
+    },
+    huggingFaceDownloader: async ({ artifact: downloadedArtifact, destinationPath, userDataDir, pythonExe, backendPath, onProgress }) => {
+      calls.push({ type: 'huggingface', artifact: downloadedArtifact, userDataDir, pythonExe, backendPath });
+      fsModule.writeFileSync(destinationPath, 'checksum target\n');
+      onProgress({ downloaded: 1234, total: 1234, percent: 100 });
+    },
+    extractor: async (archivePath) => {
+      assert.equal(archivePath, getSummaryRuntimeArchivePath('/tmp/AvaNevis', artifact, runtimeArtifact.artifacts[0]));
+      fsModule.writeFileSync(path.join(getSummaryRuntimeDir('/tmp/AvaNevis', artifact), 'extract', 'llama-cli.exe'), 'bin');
+    },
+  });
+
+  assert.deepEqual(calls.map((call) => call.type), ['generic', 'huggingface']);
+  assert.equal(calls[1].artifact.source.repo, 'example/model');
+  assert.equal(calls[1].pythonExe, '/python/python.exe');
+  assert.equal(calls[1].backendPath, '/app/backend');
+  assert.equal(status.features.summary.status, 'ready');
 });
 
 test('setup summary model records downloader failures and removes temp model downloads', async () => {

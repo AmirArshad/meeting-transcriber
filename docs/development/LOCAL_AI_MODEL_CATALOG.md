@@ -11,6 +11,7 @@ This app keeps optional local AI add-on artifacts catalog-driven in `src/ai-addo
 - Setup downloads must emit redacted progress, support cancellation, clean partial `.download` files, and preserve any previously valid install when cancellation happens during validation.
 - Pin every downloadable summary model and runtime artifact by immutable URL, filename, and SHA-256 checksum.
 - Summary model/runtime download URLs must use HTTPS and an allowed artifact host. The allowlist is derived from the configured catalog URLs plus known GitHub/Hugging Face/PyPI redirect hosts; Hugging Face/Xet redirect subdomains under `hf.co` and `huggingface.co` are allowed, while arbitrary HTTPS hosts remain blocked.
+- Hugging Face summary model artifacts should download through the bundled Python `huggingface_hub`/`hf_xet` path when available. Keep it unauthenticated for public GGUF models (`token=False` / implicit token disabled) and keep post-download SHA-256 verification in the app.
 - Prefer official model-owner GGUF artifacts. If unavailable, use established community quantizations with immutable revision URLs.
 - Store artifacts under Electron `userData` via the AI add-on cache helpers so app updates do not remove installed add-ons.
 - Speaker diarization must use the user's own Hugging Face token stored through Electron `safeStorage` only.
@@ -36,7 +37,8 @@ This app keeps optional local AI add-on artifacts catalog-driven in `src/ai-addo
 4. Collect the LFS SHA-256 checksum for the exact artifact.
 5. Confirm the configured URL and any expected redirects are covered by the setup download host allowlist; setup rejects unallowed hosts even when SHA-256 metadata exists.
 6. Update the summary model source metadata and the model metadata in `AI_MODEL_CATALOG`.
-7. Run `npm test` to verify catalog normalization, checksum status, setup selection, and syntax checks.
+7. Confirm packaged Windows and macOS requirements still include compatible `huggingface-hub` and `hf-xet` pins if the artifact is hosted on Hugging Face.
+8. Run `npm test` to verify catalog normalization, checksum status, setup selection, cancellation, and syntax checks.
 
 ## Updating llama.cpp Runtime Pins
 
@@ -54,6 +56,7 @@ This app keeps optional local AI add-on artifacts catalog-driven in `src/ai-addo
 - `npm run test:python`
 - `npm run prepare-build` when runtime packaging or prepared resources change
 - Manual summary setup on Windows CUDA and macOS Apple Silicon when artifacts change
+- Cancel summary setup during the Hugging Face model download and confirm the downloader child process exits and partial files are removed
 - Confirm failed checksum/runtime validation keeps setup out of `ready`
 - Confirm canceling setup removes partial downloads and does not remove a previously valid model/runtime
 - Confirm Windows speaker setup still requires CUDA and macOS speaker setup still requires Apple Silicon MPS, with no CPU fallback on either platform

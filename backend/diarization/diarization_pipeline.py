@@ -8,6 +8,7 @@ structured JSON on stderr and intentionally excludes transcript text and tokens.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import re
@@ -25,6 +26,27 @@ DEFAULT_MODEL_REF = "pyannote/speaker-diarization-community-1"
 UNKNOWN_PROGRESS_ERROR = "Speaker diarization failed."
 
 os.environ.setdefault("PYANNOTE_METRICS_ENABLED", "0")
+
+
+@contextlib.contextmanager
+def pyannote_torch_load_compat() -> Any:
+    """Allow trusted pyannote checkpoints to load on PyTorch 2.6+.
+
+    PyTorch 2.6 changed torch.load's default to weights_only=True. Current
+    pyannote checkpoints can require the historical loader path. Scope the
+    override to Pipeline.from_pretrained and restore the user's environment
+    immediately afterwards.
+    """
+    key = "TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"
+    previous = os.environ.get(key)
+    os.environ[key] = "1"
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = previous
 
 
 def validate_pyannote_setup(
@@ -230,10 +252,11 @@ def load_pyannote_pipeline(model_ref: str, hf_token: str) -> Any:
     except ImportError as exc:
         raise RuntimeError("pyannote.audio is not installed for speaker diarization.") from exc
 
-    try:
-        return Pipeline.from_pretrained(model_ref, token=hf_token)
-    except TypeError:
-        return Pipeline.from_pretrained(model_ref, use_auth_token=hf_token)
+    with pyannote_torch_load_compat():
+        try:
+            return Pipeline.from_pretrained(model_ref, token=hf_token)
+        except TypeError:
+            return Pipeline.from_pretrained(model_ref, use_auth_token=hf_token)
 
 
 def move_pipeline_to_best_device(pipeline: Any, *, required_device: Optional[str] = None) -> str:

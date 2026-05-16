@@ -233,6 +233,55 @@ def test_validate_pyannote_setup_checks_required_mps_before_ready(monkeypatch):
     assert calls == ['check:mps', 'move:mps']
 
 
+def test_pyannote_torch_load_compat_scopes_weights_only_override(monkeypatch):
+    monkeypatch.delenv('TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD', raising=False)
+
+    with pipeline.pyannote_torch_load_compat():
+        assert os.environ['TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD'] == '1'
+
+    assert 'TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD' not in os.environ
+
+
+def test_pyannote_torch_load_compat_restores_existing_override(monkeypatch):
+    monkeypatch.setenv('TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD', '0')
+
+    with pipeline.pyannote_torch_load_compat():
+        assert os.environ['TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD'] == '1'
+
+    assert os.environ['TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD'] == '0'
+
+
+def test_load_pyannote_pipeline_uses_scoped_torch_load_compat(monkeypatch):
+    calls = []
+
+    class FakePipeline:
+        @staticmethod
+        def from_pretrained(model_ref, token=None, use_auth_token=None):
+            calls.append({
+                'model_ref': model_ref,
+                'token': token,
+                'use_auth_token': use_auth_token,
+                'override': os.environ.get('TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD'),
+            })
+            return {'loaded': model_ref}
+
+    fake_pyannote_audio = types.SimpleNamespace(Pipeline=FakePipeline)
+    monkeypatch.setitem(sys.modules, 'pyannote', types.SimpleNamespace(audio=fake_pyannote_audio))
+    monkeypatch.setitem(sys.modules, 'pyannote.audio', fake_pyannote_audio)
+    monkeypatch.delenv('TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD', raising=False)
+
+    loaded = pipeline.load_pyannote_pipeline('pyannote/test-model', 'hf_validtoken123')
+
+    assert loaded == {'loaded': 'pyannote/test-model'}
+    assert calls == [{
+        'model_ref': 'pyannote/test-model',
+        'token': 'hf_validtoken123',
+        'use_auth_token': None,
+        'override': '1',
+    }]
+    assert 'TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD' not in os.environ
+
+
 def test_emit_progress_redacts_token_values(capsys):
     pipeline.emit_progress('loading model', 'Using hf_secret_token for setup', percent=120)
     captured = capsys.readouterr()

@@ -45,7 +45,8 @@ Use this checklist when validating speaker identification or local summaries on 
 - [ ] Cancel summary setup during validation after a previously ready install and confirm the existing model/runtime remain Ready.
 - [ ] Confirm the pinned llama.cpp runtime downloads, verifies, and extracts before the model is marked ready.
 - [ ] Confirm runtime archives extract into a cleaned staging directory and summary execution uses the extracted `llama-cli` location with adjacent native libraries intact.
-- [ ] Confirm the pinned GGUF model downloads and checksum-verifies before Ready.
+- [ ] Confirm the pinned GGUF model downloads through Hugging Face `huggingface_hub`/`hf_xet` on Hugging Face-hosted artifacts and checksum-verifies before Ready.
+- [ ] Cancel summary setup during the Hugging Face model download and confirm the downloader subprocess exits, partial files are removed, and no diarization token is used.
 - [ ] Generate a summary from Home after a saved transcript.
 - [ ] Generate or regenerate a summary from History.
 - [ ] Confirm `*.summary.json` and `*.summary.md` are written and referenced in meeting metadata.

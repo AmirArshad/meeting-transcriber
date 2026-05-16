@@ -2302,6 +2302,8 @@ ipcMain.handle('remove-diarization-setup', async () => {
 ipcMain.handle('setup-summary-model', async (event, options = {}) => runCancellableAiAddonSetup('summary', (cancelSignal) => setupSummaryModel(getAiAddonRuntimeOptions({
   modelId: options.modelId,
   profile: options.profile,
+  pythonExe: pythonConfig.pythonExe,
+  backendPath: pythonConfig.backendPath,
   runtimeValidator: validateSummaryRuntimeSmoke,
   cancelSignal,
 }))));

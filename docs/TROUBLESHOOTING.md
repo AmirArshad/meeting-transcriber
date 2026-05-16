@@ -174,6 +174,18 @@ If you still see "faster-whisper (CPU fallback)", report an issue on GitHub.
 
 ---
 
+### Slow Or Cancelled Summary Model Download
+
+**Symptom:** Summary setup is slow while downloading the Qwen GGUF model, or Cancel Download appears to hang briefly.
+
+**Cause:** The default summary model is about 5.7 GB and comes from Hugging Face. AvaNevis uses the bundled Python `huggingface_hub`/`hf_xet` downloader for Hugging Face-hosted summary models on Windows and macOS, but throughput still depends on the user's network route, disk speed, and Hugging Face availability.
+
+**Expected behavior:** No Hugging Face token is required for public summary models, and AvaNevis does not reuse the speaker-identification token. Cancel Download terminates the downloader subprocess, waits briefly for it to exit, and removes partial setup files before returning to a non-ready state unless an older valid model/runtime was already installed.
+
+**What to do:** If cancellation takes a few seconds, wait for cleanup to finish. If setup remains stuck after relaunch, use Settings > AI Add-ons > Remove Model, then start summary setup again on a stable connection.
+
+---
+
 ## Windows Issues
 
 ### 🛡️ Windows SmartScreen Warning

@@ -46,7 +46,7 @@ AvaNevis is a privacy-first Electron desktop app for recording microphone audio 
 - `backend/transcription/faster_whisper_transcriber.py`: Windows/default transcriber
 - `backend/transcription/mlx_whisper_transcriber.py`: Apple Silicon transcriber
 - `backend/diarization/diarization_pipeline.py`: local pyannote diarization runner and timestamp/speaker merge output
-- `backend/summaries/summary_pipeline.py`, `backend/summaries/summary_runner.py`, `backend/summaries/llama_runtime.py`: local summary chunking, prompts, JSON validation/repair, Markdown rendering, and pinned `llama.cpp` execution
+- `backend/summaries/summary_pipeline.py`, `backend/summaries/summary_runner.py`, `backend/summaries/llama_runtime.py`, `backend/summaries/hf_model_downloader.py`: local summary chunking, prompts, JSON validation/repair, Markdown rendering, pinned `llama.cpp` execution, and Hugging Face/Xet-backed summary model downloads
 
 ### Native macOS helper
 
@@ -134,6 +134,7 @@ Key quality assumptions to preserve:
 - Summary model and runtime artifacts are pinned and catalog-driven in `src/ai-addon-state.js`; do not hard-code artifact URLs, filenames, checksums, or runtime names in renderer/business logic.
 - Summary runtime/model setup must be an explicit user action. No hidden or background summary downloads.
 - Summary downloads must stay HTTPS and host-allowlisted, and runtime archive extraction must guard against path traversal.
+- Hugging Face-hosted public summary models download through bundled Python `huggingface_hub`/`hf_xet` when available, without reusing the diarization token, and still require pinned SHA-256 verification after download.
 - Summary generation and diarization execution must remain serialized through a main-process compute queue to avoid concurrent GPU-heavy local AI runs.
 - Meeting AI metadata must accept only `diarization` and `summary`, keep sidecar paths under recordings, and store only concise sanitized strings.
 - AI add-on model/runtime caches live under Electron `userData` (`ai-addons/models/...`) so app updates preserve installed artifacts.
@@ -304,6 +305,7 @@ swift build -c release --arch arm64
 - macOS speaker setup remains hidden/unsupported until accelerated diarization is validated
 - summaries remain user-triggered and never modify transcripts on failure
 - summary setup refuses unpinned, checksum-mismatched, unallowed-host, or unsafe runtime archive artifacts
+- summary setup cancellation kills in-progress downloader subprocesses and removes partial setup files without deleting previously valid installs
 - summary/diarization generation remains serialized and cannot launch overlapping GPU-heavy backends
 - summary output saves `*.summary.json` and `*.summary.md` and metadata stores only concise sidecar references
 - stale summaries are detectable through `sourceTranscriptHash`
