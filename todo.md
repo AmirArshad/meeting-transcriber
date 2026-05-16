@@ -40,12 +40,21 @@ Goal: add optional post-install local speaker diarization and transcript summari
 - 2026-05-16: Added lazy pyannote diarization runner and `diarize-transcript` IPC boundary without changing Whisper transcription paths. The backend prepares 16 kHz mono WAV input, disables pyannote metrics, prefers exclusive diarization output, writes `*.speakers.json`, and emits redacted progress. `npm test` and `npm run test:python` passed.
 - 2026-05-16: Added deterministic summary runtime/prompt helpers: llama.cpp path and CLI argument resolution for Windows CUDA/macOS Metal, profile-specific chunk/final-merge prompts, and JSON extraction/repair around local model output. Runtime execution remains pending until pinned llama.cpp/model artifacts are supplied. `npm test` and `npm run test:python` passed.
 - 2026-05-16: Added explicit `generate-summary` IPC and backend runner that reads saved meeting transcripts, prefers speaker sidecars, runs local llama.cpp prompts when setup is ready, writes `*.summary.json`/`*.summary.md`, and stores `sourceTranscriptHash` in meeting metadata. Model/runtime cache paths remain under Electron `userData` so normal app updates/reinstalls preserve installed local AI artifacts. `npm test` and `npm run test:python` passed.
+- 2026-05-16: Wired automatic post-transcription diarization in the renderer when speaker setup is complete and ready. The normal transcript is saved first, diarization failures are warning-only, successful speaker labels update the current transcript view and saved transcript Markdown through a main-process guarded recordings-only write IPC. `npm test` and `npm run test:python` passed.
+- 2026-05-16: Added user-triggered summary generation buttons for the current saved transcript and History details, summary progress logging, History summary hydration from `*.summary.md`, and a simple saved summary viewer/empty/error state. Missing setup remains graceful and points users to Settings. `npm test` and `npm run test:python` passed.
+- 2026-05-16: Added Settings > AI Add-ons cards below GPU Acceleration with diarization token/speaker-count setup, validation/removal controls, summary profile/model setup validation/removal controls, redacted progress log display, and direct routing from missing summary setup to the Settings add-on area. Summary artifact downloads still remain blocked until pinned URL/checksum metadata is supplied. `npm test` and `npm run test:python` passed.
+- 2026-05-16: Selecting and pinning trusted summary model artifact sources/checksums is now in progress. Preferred source policy: use official model-owner GGUF artifacts when available; otherwise use high-reputation community quantizations with immutable commit-pinned URLs and verified SHA-256 checksums.
+- 2026-05-16: Pinned summary GGUF artifacts to immutable Hugging Face revisions with LFS SHA-256 checksums and pinned llama.cpp b9173 runtime archives for Windows CUDA 12.4 and macOS arm64. Summary setup now downloads/verifies/extracts the runtime before the model and status cannot become ready unless both model and `llama-cli` are installed. `npm test` and `npm run test:python` passed.
 
 ## V1 Model Defaults
 
 - Speaker diarization: `pyannote/speaker-diarization-community-1` through `pyannote.audio`; Windows uses CUDA when available, macOS remains unavailable unless a supported accelerated Apple Silicon path is explicitly enabled later.
 - Transcript summaries: `Qwen3.5-9B` 4-bit GGUF through pinned `llama.cpp`; Windows runtime target is CUDA, macOS runtime target is Metal.
 - Summary model/runtime distribution: explicit optional setup artifact, downloaded/installed only after user action through Settings, with pinned filenames/checksums.
+- Summary artifact source policy: prefer official model-owner GGUF artifacts; otherwise use established community GGUF repositories only with commit-pinned download URLs and SHA-256 verification.
+- Pinned summary default: `unsloth/Qwen3.5-9B-GGUF` revision `3885219b6810b007914f3a7950a8d1b469d598a5`, file `Qwen3.5-9B-Q4_K_M.gguf`, SHA-256 `03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8`.
+- Pinned summary alternates: `unsloth/Qwen3.5-4B-GGUF` revision `e87f176479d0855a907a41277aca2f8ee7a09523`, file `Qwen3.5-4B-Q4_K_M.gguf`, SHA-256 `00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4`; `Qwen/Qwen3-14B-GGUF` revision `530227a7d994db8eca5ab5ced2fb692b614357fd`, file `Qwen3-14B-Q4_K_M.gguf`, SHA-256 `500a8806e85ee9c83f3ae08420295592451379b4f8cf2d0f41c15dffeb6b81f0`.
+- Pinned summary runtime: `ggml-org/llama.cpp` release `b9173`, commit `49d1701bd24e4cedf6dfec9e50e185111203946b`; Windows CUDA 12.4 archives `llama-b9173-bin-win-cuda-12.4-x64.zip` and `cudart-llama-bin-win-cuda-12.4-x64.zip`; macOS archive `llama-b9173-bin-macos-arm64.tar.gz`.
 - Model choices must remain data-driven through the app model catalog so replacing defaults or adding alternates does not require touching renderer/business logic.
 
 ## Phase 0 - Project Setup And Decisions
@@ -79,8 +88,9 @@ Skipped by product direction. Proceed with the V1 Model Defaults above and keep 
 - [x] Ensure tokens are stored only via Electron `safeStorage`, never in the manifest or meeting metadata.
 - [x] Define model cache directory under Electron `userData`.
 - [x] Add curated model metadata for diarization and summary models.
-- [x] Add explicit download, remove, check-status, and validate actions. (Summary downloads are implemented behind explicit user action and currently refuse to run until pinned URLs/checksums are filled in.)
+- [x] Add explicit download, remove, check-status, and validate actions. (Summary downloads are explicit user actions with pinned URL/checksum verification.)
 - [x] Add checksum or pinned filename validation for summary GGUF artifacts. (Pinned filename is catalog-driven; checksum is required before ready state or download.)
+- [x] Pin trusted summary GGUF artifact download URLs and SHA-256 checksums for catalog models.
 - [x] Add status states: `notConfigured`, `needsAccount`, `downloading`, `validating`, `ready`, `error`, and `unsupported`.
 - [x] Add progress events that avoid transcript text, token values, and raw prompts.
 
@@ -94,12 +104,12 @@ Skipped by product direction. Proceed with the V1 Model Defaults above and keep 
 - [x] Preserve standard diarization output as a fallback only when exclusive output is unavailable.
 - [x] Merge speaker labels into Whisper segments by timestamp overlap.
 - [x] Return structured JSON to Electron and progress-safe stderr/events.
-- [ ] Gracefully save the normal transcript if diarization fails. (Backend/IPC boundaries are ready; automatic post-transcription integration remains pending.)
+- [x] Gracefully save the normal transcript if diarization fails.
 
 ## Phase 4 - Summary Backend
 
 - [x] Add `backend/summaries/` module. (Pure pipeline helpers only; llama.cpp runtime integration remains pending.)
-- [x] Add pinned `llama.cpp` runtime resolution for Windows CUDA and macOS Metal. (Path/argument resolution is implemented; packaged runtime artifacts are still pending.)
+- [x] Add pinned `llama.cpp` runtime resolution for Windows CUDA and macOS Metal. (Pinned runtime download/verification/extraction is implemented for optional setup.)
 - [x] Add transcript normalization that uses speaker labels when available and works without them.
 - [ ] Add token-budget chunking by timestamp and topic boundaries. (Partial: token-budget/timestamp chunks added; topic-boundary heuristics remain pending.)
 - [x] Add prompt templates for `Concise`, `Balanced`, `Detailed`, and `Action items` profiles against one installed model.
@@ -107,15 +117,15 @@ Skipped by product direction. Proceed with the V1 Model Defaults above and keep 
 - [x] Require structured JSON output and validate before saving. (Pure validation helper added; runtime save integration remains pending.)
 - [ ] Add retry/repair path for malformed JSON. (Partial: local JSON extraction/repair helper is used on model output; explicit retry prompt loop remains pending.)
 - [x] Render summary JSON to Markdown for History display/export.
-- [ ] Ensure failed summary generation never modifies the transcript.
+- [x] Ensure failed summary generation never modifies the transcript.
 
 ## Phase 5 - IPC And Persistence
 
 - [x] Add `get-ai-addon-status` IPC handler.
 - [x] Add secure token IPC for store/get/delete or reuse an existing safeStorage abstraction if available. (Status/delete/store only expose redacted state; token retrieval remains main-process-only for future backend calls.)
 - [x] Add `setup-diarization`, `remove-diarization-setup`, and token validation IPC handlers.
-- [x] Add `setup-summary-model` and `remove-summary-model` IPC handlers. (Downloads stay blocked until pinned artifact URL/checksum metadata is supplied.)
-- [x] Add `diarize-transcript` IPC handler for post-transcription integration. (Not yet auto-wired into the renderer transcription flow.)
+- [x] Add `setup-summary-model` and `remove-summary-model` IPC handlers. (Pinned model/runtime downloads are verified before setup can become ready.)
+- [x] Add `diarize-transcript` IPC handler for post-transcription integration.
 - [x] Add `generate-summary` IPC handler for Home and History actions. (Renderer buttons are still pending.)
 - [ ] Add progress events for model download, validation, diarization, chunk summaries, final merge, and save. (Partial: add-on setup/download/validation, diarization, and summary generation events now emit redacted progress.)
 - [x] Extend meeting metadata with `ai.diarization` and `ai.summary` references without storing large derived output inline.
@@ -125,18 +135,18 @@ Skipped by product direction. Proceed with the V1 Model Defaults above and keep 
 
 ## Phase 6 - Renderer UX
 
-- [ ] Add `AI Add-ons` Settings area below GPU Acceleration.
-- [ ] Add Speaker Identification setup card with token input, model-terms link, token test, status badge, progress, retry, and remove setup.
-- [ ] Add Summary setup card with one installed model, profile selection, model-cache status, validate, progress, and remove model.
+- [x] Add `AI Add-ons` Settings area below GPU Acceleration.
+- [ ] Add Speaker Identification setup card with token input, model-terms link, token test, status badge, progress, retry, and remove setup. (Partial: token input, speaker count, status badge, setup/validate/remove, and progress log are implemented; model-terms link remains pending.)
+- [x] Add Summary setup card with one installed model, profile selection, model-cache status, validate, progress, and remove model.
 - [ ] Add Home prompt priority: Whisper setup, permissions/devices, CUDA, speaker setup, summary setup.
 - [ ] Hide Windows speaker setup prompt until CUDA is installed when NVIDIA/CUDA is the target path.
 - [ ] Hide macOS speaker setup prompt unless accelerated Apple Silicon diarization is validated and available.
-- [ ] Run diarization automatically after transcription when configured.
-- [ ] Add `Generate Summary` action after a meeting is transcribed and saved.
-- [ ] Make `Generate Summary` navigate to Settings when summary setup is missing.
-- [ ] Add History `Transcript` and `Summary` tabs.
-- [ ] Add Summary empty state, progress state, saved summary viewer, regenerate action, and optional copy/save actions.
-- [ ] Render speaker labels in the current transcript and History transcript viewer.
+- [x] Run diarization automatically after transcription when configured.
+- [x] Add `Generate Summary` action after a meeting is transcribed and saved.
+- [x] Make `Generate Summary` navigate to Settings when summary setup is missing.
+- [ ] Add History `Transcript` and `Summary` tabs. (Partial: History now shows a transcript pane plus a summary pane; tabbed switching remains pending.)
+- [ ] Add Summary empty state, progress state, saved summary viewer, regenerate action, and optional copy/save actions. (Partial: empty, progress, saved viewer, and regenerate via the same button are implemented; copy/save summary actions remain pending.)
+- [ ] Render speaker labels in the current transcript and History transcript viewer. (Partial: current transcript view renders speaker labels after successful automatic diarization; History viewer remains pending.)
 - [ ] Add graceful degradation for invalid token, terms not accepted, missing model, unsupported hardware, and runtime failure.
 
 ## Phase 7 - Tests And Validation
@@ -153,6 +163,16 @@ Skipped by product direction. Proceed with the V1 Model Defaults above and keep 
 - [ ] Run macOS manual smoke tests on M4 Pro.
 - [ ] Validate no network calls happen except explicit model downloads and update checks.
 - [ ] Validate 1-2 hour meetings with 2-4 speakers.
+
+## Phase 8 - Documentation And Maintainability
+
+- [ ] Add a local AI model catalog maintenance doc explaining how to swap summary models, update Hugging Face revisions, collect LFS SHA-256 checksums, update llama.cpp runtime pins, and run the relevant tests.
+- [ ] Update `README.md` with user-facing AI Add-ons setup notes, local-only privacy behavior, expected download sizes, and supported platforms.
+- [ ] Update `AGENTS.md` with the local AI add-on architecture, pinned artifact policy, runtime/model cache locations, and validation expectations.
+- [ ] Keep `CLAUDE.md` byte-for-byte aligned with `AGENTS.md` after agent guidance changes.
+- [ ] Update feature docs under `docs/features/` so the implementation notes match the catalog-driven diarization and summary setup flow.
+- [ ] Document summary setup failure modes and troubleshooting for missing token, unsupported hardware, checksum mismatch, missing `llama-cli`, and runtime extraction failures.
+- [ ] Document manual validation steps for speaker diarization and summaries in `tests/manual/` or the existing testing guide.
 
 ## Known Risk Areas
 

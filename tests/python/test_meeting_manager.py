@@ -451,6 +451,9 @@ def test_update_meeting_ai_persists_derived_artifact_references(tmp_path):
     assert 'hf_secret' not in json.dumps(meeting)
     assert 'prompt' not in json.dumps(meeting)
 
+    hydrated = manager.get_meeting('20260107_104555')
+    assert hydrated['summary'] == '# Summary'
+
 
 def test_delete_meeting_removes_derived_ai_artifacts(tmp_path):
     recordings_dir = tmp_path / 'recordings'

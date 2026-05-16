@@ -69,6 +69,14 @@ def resolve_llama_runtime(
     executable = Path(runtime_dir) / default_llama_executable_name(normalized["platform"])
     model = Path(model_path)
 
+    if normalized["platform"] == "darwin":
+        # GitHub's llama.cpp macOS tarballs keep dylibs beside llama-cli in a
+        # versioned subdirectory. Preserve that layout by letting dyld resolve
+        # libraries from the executable directory.
+        nested_executable = next(Path(runtime_dir).glob(f"llama-*/{executable.name}"), None)
+        if nested_executable:
+            executable = nested_executable
+
     if not executable.exists():
         raise SummaryRuntimeError(f"llama.cpp runtime not found: {executable}")
     if not model.exists():

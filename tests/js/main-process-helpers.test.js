@@ -28,6 +28,7 @@ const {
   getTranscriberModule,
   resolveStopTimeoutAction,
   isModelDownloadErrorOutput,
+  isSafeRecordingsMarkdownPath,
   parseAiBackendProgressLine,
   parseRecorderMessageLine,
   parseRecorderStdoutChunk,
@@ -132,6 +133,24 @@ test('buildDiarizationOutputPath creates speakers sidecar path', () => {
     }),
     path.join('/custom', 'meeting.speakers.json'),
   );
+});
+
+
+test('isSafeRecordingsMarkdownPath allows only markdown files inside recordings', () => {
+  const recordingsDir = path.join('/tmp', 'AvaNevis', 'recordings');
+
+  assert.equal(isSafeRecordingsMarkdownPath({
+    filePath: path.join(recordingsDir, 'meeting_20260107_104555.md'),
+    recordingsDir,
+  }), true);
+  assert.equal(isSafeRecordingsMarkdownPath({
+    filePath: path.join(recordingsDir, 'meeting_20260107_104555.txt'),
+    recordingsDir,
+  }), false);
+  assert.equal(isSafeRecordingsMarkdownPath({
+    filePath: path.join('/tmp', 'AvaNevis', 'other', 'meeting.md'),
+    recordingsDir,
+  }), false);
 });
 
 

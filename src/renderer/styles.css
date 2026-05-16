@@ -1615,6 +1615,14 @@ select.device-select:disabled {
   min-height: 0;
 }
 
+.summary-section {
+  flex: 0 0 min(36%, 300px);
+  display: flex;
+  flex-direction: column;
+  min-height: 180px;
+  border-top: 1px solid var(--hairline);
+}
+
 .transcript-header-row {
   display: flex;
   justify-content: space-between;
@@ -1649,6 +1657,30 @@ select.device-select:disabled {
   max-width: 760px;
   margin: 0 auto;
   width: 100%;
+}
+
+.meeting-summary {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 32px 32px;
+  color: var(--text-primary);
+  line-height: 1.72;
+  font-size: 14px;
+  letter-spacing: -0.005em;
+  max-width: 760px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.meeting-summary.is-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn.is-loading {
+  pointer-events: none;
+  opacity: 0.75;
 }
 
 /* Plain (non-markdown-body) preserves whitespace; markdown-body uses normal flow */
@@ -1939,6 +1971,91 @@ footer {
   display: flex;
   gap: 10px;
   margin-bottom: 4px;
+}
+
+.ai-addon-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.ai-addon-card {
+  background: var(--surface-2);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  padding: 14px;
+}
+
+.ai-addon-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.ai-addon-card h4 {
+  font-size: 13px;
+  margin: 0 0 3px;
+}
+
+.ai-addon-card-header p,
+.ai-addon-status-text {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.ai-addon-status-text {
+  margin: 10px 0 12px;
+  min-height: 18px;
+}
+
+.ai-addon-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.ai-addon-field.compact {
+  max-width: 220px;
+}
+
+.ai-addon-field label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.settings-input {
+  width: 100%;
+  background: var(--surface-3);
+  border: 1px solid var(--hairline);
+  color: var(--text-primary);
+  padding: 8px 10px;
+  font-size: 13px;
+  border-radius: var(--r-sm);
+  outline: none;
+}
+
+.settings-input:focus-visible {
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.ai-addon-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+@media (max-width: 760px) {
+  .ai-addon-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .gpu-progress {

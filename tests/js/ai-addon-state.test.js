@@ -9,7 +9,9 @@ const {
   DEFAULT_DIARIZATION_MODEL_ID,
   DEFAULT_SUMMARY_MODEL_ID,
   DEFAULT_SUMMARY_PROFILE,
+  PINNED_LLAMA_CPP_RUNTIME,
   SUMMARY_PROFILES,
+  SUMMARY_RUNTIME_ARTIFACTS,
   buildAiAddonStatus,
   getDefaultModelId,
   getAiAddonPaths,
@@ -17,6 +19,7 @@ const {
   getDiarizationAvailability,
   getModelById,
   getSummaryArtifactForPlatform,
+  getSummaryRuntimeArtifactForPlatform,
   normalizeAiAddonManifest,
   resolveModelId,
 } = require('../../src/ai-addon-state');
@@ -135,8 +138,34 @@ test('model catalog exposes swappable v1 defaults', () => {
   assert.equal(summaryModel.inference.disableThinking, true);
   assert.equal(summaryModel.artifact.distribution, 'optional-setup-artifact');
   assert.equal(summaryModel.artifact.fileName, 'Qwen3.5-9B-Q4_K_M.gguf');
+  assert.equal(summaryModel.artifact.source.repo, 'unsloth/Qwen3.5-9B-GGUF');
+  assert.equal(summaryModel.artifact.source.revision, '3885219b6810b007914f3a7950a8d1b469d598a5');
+  assert.equal(summaryModel.artifact.source.license, 'apache-2.0');
+  assert.equal(summaryModel.artifact.source.gated, false);
+  assert.equal(summaryModel.artifact.source.sizeBytes, 5680522464);
   assert.equal(summaryModel.artifact.platformArtifacts['win32-x64'].acceleration, 'cuda');
   assert.equal(summaryModel.artifact.platformArtifacts['darwin-arm64'].acceleration, 'metal');
+});
+
+test('catalog pins llama.cpp runtime release artifacts', () => {
+  assert.equal(PINNED_LLAMA_CPP_RUNTIME.version, 'b9173');
+  assert.equal(PINNED_LLAMA_CPP_RUNTIME.repository, 'ggml-org/llama.cpp');
+  assert.equal(PINNED_LLAMA_CPP_RUNTIME.commit, '49d1701bd24e4cedf6dfec9e50e185111203946b');
+
+  const windowsRuntime = getSummaryRuntimeArtifactForPlatform('win32', 'x64');
+  const macRuntime = getSummaryRuntimeArtifactForPlatform('darwin', 'arm64');
+
+  assert.deepEqual(windowsRuntime, SUMMARY_RUNTIME_ARTIFACTS['win32-x64']);
+  assert.equal(windowsRuntime.executableName, 'llama-cli.exe');
+  assert.deepEqual(windowsRuntime.artifacts.map((artifact) => artifact.fileName), [
+    'llama-b9173-bin-win-cuda-12.4-x64.zip',
+    'cudart-llama-bin-win-cuda-12.4-x64.zip',
+  ]);
+  assert.equal(windowsRuntime.artifacts[0].sha256, 'b8bdbe94f84579b0ba70c909b2b4aae5e31b38bd301edca37fc9ad10884e7a2b');
+  assert.equal(windowsRuntime.artifacts[1].sha256, '8c79a9b226de4b3cacfd1f83d24f962d0773be79f1e7b75c6af4ded7e32ae1d6');
+  assert.equal(macRuntime.executableName, 'llama-cli');
+  assert.equal(macRuntime.artifacts[0].fileName, 'llama-b9173-bin-macos-arm64.tar.gz');
+  assert.equal(macRuntime.artifacts[0].sha256, '18764a5a179e023a3007a3a32b309febbe249f63c5716a6827428435f7439ff8');
 });
 
 test('selects platform-specific summary setup artifacts from the catalog', () => {
@@ -147,8 +176,9 @@ test('selects platform-specific summary setup artifacts from the catalog', () =>
   assert.equal(windowsArtifact.fileName, 'Qwen3.5-9B-Q4_K_M.gguf');
   assert.equal(windowsArtifact.acceleration, 'cuda');
   assert.equal(windowsArtifact.runtime, 'llama.cpp');
-  assert.equal(windowsArtifact.sha256, null);
-  assert.equal(windowsArtifact.validationStatus, 'pendingPinnedArtifact');
+  assert.equal(windowsArtifact.sha256, '03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8');
+  assert.equal(windowsArtifact.downloadUrl, 'https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/3885219b6810b007914f3a7950a8d1b469d598a5/Qwen3.5-9B-Q4_K_M.gguf');
+  assert.equal(windowsArtifact.validationStatus, 'ready');
   assert.equal(macArtifact.artifactId, `${DEFAULT_SUMMARY_MODEL_ID}-gguf-darwin-arm64-metal`);
   assert.equal(macArtifact.acceleration, 'metal');
   assert.equal(getSummaryArtifactForPlatform(DEFAULT_SUMMARY_MODEL_ID, 'linux', 'x64'), null);

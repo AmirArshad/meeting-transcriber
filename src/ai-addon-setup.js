@@ -1,8 +1,10 @@
 const crypto = require('crypto');
+const { spawn } = require('child_process');
 const fs = require('fs');
 const http = require('http');
 const https = require('https');
 const path = require('path');
+const AdmZip = require('adm-zip');
 
 const {
   AI_MODEL_CATALOG,
@@ -10,6 +12,7 @@ const {
   getAiAddonPaths,
   getDiarizationAvailability,
   getSummaryArtifactForPlatform,
+  getSummaryRuntimeArtifactForPlatform,
   getSummaryAvailability,
   loadAiAddonManifest,
   normalizeAiAddonManifest,
@@ -60,6 +63,55 @@ function getSummaryArtifactPath(userDataDir, artifact) {
 
 function getSummaryRuntimeDir(userDataDir, artifact) {
   return path.join(getSummaryModelCacheDir(userDataDir, artifact && artifact.modelId), 'runtime', artifact && artifact.platform ? `${artifact.platform}-${artifact.arch}` : 'current');
+}
+
+function getSummaryRuntimeExecutablePath(userDataDir, artifact, runtimeArtifact) {
+  const executableName = runtimeArtifact && runtimeArtifact.executableName;
+  return executableName ? path.join(getSummaryRuntimeDir(userDataDir, artifact), executableName) : null;
+}
+
+function getSummaryRuntimeExtractDir(userDataDir, artifact, runtimeArtifact) {
+  return getSummaryRuntimeDir(userDataDir, artifact);
+}
+
+function getSummaryRuntimeArchiveDir(userDataDir, artifact) {
+  return path.join(getSummaryRuntimeDir(userDataDir, artifact), 'archives');
+}
+
+function getSummaryRuntimeArchivePath(userDataDir, artifact, runtimeArchive) {
+  if (!runtimeArchive || !runtimeArchive.fileName) {
+    return null;
+  }
+
+  return path.join(getSummaryRuntimeArchiveDir(userDataDir, artifact), runtimeArchive.fileName);
+}
+
+function findRuntimeExecutablePath(runtimeDir, executableName, fsModule = fs) {
+  const existsSync = bindFsMethod(fsModule, 'existsSync');
+  const readdirSync = bindFsMethod(fsModule, 'readdirSync');
+  const statSync = bindFsMethod(fsModule, 'statSync');
+  if (!runtimeDir || !executableName || !existsSync || !readdirSync || !statSync || !existsSync(runtimeDir)) {
+    return null;
+  }
+
+  const queue = [runtimeDir];
+  while (queue.length) {
+    const currentDir = queue.shift();
+    for (const entry of readdirSync(currentDir, { withFileTypes: true })) {
+      const entryPath = path.join(currentDir, entry.name);
+      if (entry.name === executableName) {
+        return entryPath;
+      }
+      const isDirectory = typeof entry.isDirectory === 'function'
+        ? entry.isDirectory()
+        : statSync(entryPath).isDirectory();
+      if (isDirectory) {
+        queue.push(entryPath);
+      }
+    }
+  }
+
+  return null;
 }
 
 function bindFsMethod(fsModule, methodName) {
@@ -221,6 +273,63 @@ async function hashFileSha256(filePath, fsModule = fs) {
   });
 }
 
+function isPinnedSha256(value) {
+  return /^[a-f0-9]{64}$/i.test(String(value || ''));
+}
+
+function validateSummaryRuntimeArtifact(runtimeArtifact) {
+  if (!runtimeArtifact) {
+    return 'Pinned llama.cpp runtime artifact is not configured for this platform.';
+  }
+  if (!runtimeArtifact.executableName) {
+    return 'Pinned llama.cpp runtime executable name is not configured.';
+  }
+  if (!Array.isArray(runtimeArtifact.artifacts) || runtimeArtifact.artifacts.length === 0) {
+    return 'Pinned llama.cpp runtime archives are not configured.';
+  }
+  for (const archive of runtimeArtifact.artifacts) {
+    if (!archive.fileName || !archive.downloadUrl || !isPinnedSha256(archive.sha256)) {
+      return 'Pinned llama.cpp runtime archive metadata is incomplete.';
+    }
+  }
+
+  return null;
+}
+
+function checkSummaryRuntimeCache({
+  userDataDir,
+  platform = process.platform,
+  arch = process.arch,
+  modelId,
+  fsModule = fs,
+  catalog = AI_MODEL_CATALOG,
+} = {}) {
+  const artifact = getSummaryArtifactForPlatform(modelId, platform, arch, catalog);
+  const runtimeArtifact = getSummaryRuntimeArtifactForPlatform(platform, arch, catalog);
+  const runtimeDir = artifact ? getSummaryRuntimeDir(userDataDir, artifact) : null;
+  const expectedExecutablePath = artifact && runtimeArtifact
+    ? getSummaryRuntimeExecutablePath(userDataDir, artifact, runtimeArtifact)
+    : null;
+  const existsSync = bindFsMethod(fsModule, 'existsSync');
+  const validationError = validateSummaryRuntimeArtifact(runtimeArtifact);
+  const executablePath = expectedExecutablePath && existsSync && existsSync(expectedExecutablePath)
+    ? expectedExecutablePath
+    : findRuntimeExecutablePath(runtimeDir, runtimeArtifact && runtimeArtifact.executableName, fsModule);
+  const installed = Boolean(executablePath && existsSync && existsSync(executablePath));
+
+  return {
+    supported: Boolean(artifact && runtimeArtifact),
+    installed,
+    valid: installed && !validationError,
+    validationStatus: validationError ? 'pendingPinnedRuntime' : installed ? 'ready' : 'notConfigured',
+    reason: validationError || (installed ? null : 'llama.cpp runtime is not installed.'),
+    runtimeDir,
+    expectedExecutablePath,
+    executablePath,
+    runtimeArtifact,
+  };
+}
+
 async function checkSummaryModelCache({
   userDataDir,
   platform = process.platform,
@@ -329,7 +438,7 @@ function deriveDiarizationStatus(featureStatus, tokenStatus) {
   return featureStatus;
 }
 
-function deriveSummaryStatus(featureStatus, cache) {
+function deriveSummaryStatus(featureStatus, cache, runtimeCache) {
   if (!featureStatus.availability.supported) {
     return { ...featureStatus, status: 'unsupported' };
   }
@@ -345,6 +454,13 @@ function deriveSummaryStatus(featureStatus, cache) {
       ...featureStatus,
       status: 'error',
       error: cache.reason || 'Summary model cache validation failed.',
+    };
+  }
+  if (featureStatus.status === 'ready' && (!runtimeCache.installed || runtimeCache.valid === false)) {
+    return {
+      ...featureStatus,
+      status: 'error',
+      error: runtimeCache.reason || 'llama.cpp runtime validation failed.',
     };
   }
   return featureStatus;
@@ -376,8 +492,16 @@ async function checkAiAddonSetupStatus({
     catalog,
     verifyChecksum: verifyChecksums,
   });
+  const summaryRuntimeCache = checkSummaryRuntimeCache({
+    userDataDir,
+    platform,
+    arch,
+    modelId: status.features.summary.modelId,
+    fsModule,
+    catalog,
+  });
   const diarization = deriveDiarizationStatus(status.features.diarization, tokenStatus);
-  const summary = deriveSummaryStatus(status.features.summary, summaryCache);
+  const summary = deriveSummaryStatus(status.features.summary, summaryCache, summaryRuntimeCache);
 
   return {
     ...status,
@@ -392,7 +516,8 @@ async function checkAiAddonSetupStatus({
         ...summary,
         artifact: getSummaryArtifactForPlatform(summary.modelId, platform, arch, catalog),
         cache: summaryCache,
-        setupComplete: summary.status === 'ready' && summaryCache.installed,
+        runtimeCache: summaryRuntimeCache,
+        setupComplete: summary.status === 'ready' && summaryCache.installed && summaryRuntimeCache.installed,
       },
     },
   };
@@ -649,6 +774,10 @@ function validateSummarySetupArtifact(artifact) {
   return null;
 }
 
+function validatePinnedSummarySetup({ artifact, runtimeArtifact }) {
+  return validateSummarySetupArtifact(artifact) || validateSummaryRuntimeArtifact(runtimeArtifact);
+}
+
 async function downloadFile({ url, destinationPath, onProgress }) {
   const parsedUrl = new URL(url);
   const client = parsedUrl.protocol === 'https:' ? https : parsedUrl.protocol === 'http:' ? http : null;
@@ -691,6 +820,153 @@ async function downloadFile({ url, destinationPath, onProgress }) {
   });
 }
 
+function extractZipArchive(archivePath, destinationDir) {
+  const zip = new AdmZip(archivePath);
+  zip.extractAllTo(destinationDir, true);
+}
+
+function extractTarGzArchive(archivePath, destinationDir) {
+  return new Promise((resolve, reject) => {
+    const tar = spawn('tar', ['-xzf', archivePath, '-C', destinationDir], { windowsHide: true });
+    let errorOutput = '';
+    tar.stderr.on('data', (data) => { errorOutput += data.toString(); });
+    tar.on('error', reject);
+    tar.on('close', (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(errorOutput.trim() || `Failed to extract llama.cpp runtime archive: tar exited with code ${code}.`));
+    });
+  });
+}
+
+async function extractRuntimeArchive(archivePath, destinationDir, archiveFormat) {
+  if (archiveFormat === 'zip') {
+    extractZipArchive(archivePath, destinationDir);
+    return;
+  }
+  if (archiveFormat === 'tar.gz') {
+    await extractTarGzArchive(archivePath, destinationDir);
+    return;
+  }
+
+  throw new Error('Unsupported llama.cpp runtime archive format.');
+}
+
+function copyInstalledRuntimeExecutable({ userDataDir, artifact, runtimeArtifact, fsModule = fs }) {
+  const sourcePath = findRuntimeExecutablePath(
+    getSummaryRuntimeExtractDir(userDataDir, artifact, runtimeArtifact),
+    runtimeArtifact.executableName,
+    fsModule,
+  );
+  const targetPath = getSummaryRuntimeExecutablePath(userDataDir, artifact, runtimeArtifact);
+  const copyFileSync = bindFsMethod(fsModule, 'copyFileSync');
+  const chmodSync = bindFsMethod(fsModule, 'chmodSync');
+  if (!sourcePath || !targetPath || sourcePath === targetPath || !copyFileSync) {
+    return;
+  }
+
+  copyFileSync(sourcePath, targetPath);
+  if (chmodSync) {
+    try {
+      chmodSync(targetPath, 0o755);
+    } catch (error) {
+      // Best effort: Windows does not need POSIX execute bits.
+    }
+  }
+}
+
+async function installSummaryRuntime({
+  userDataDir,
+  platform,
+  arch,
+  modelId,
+  fsModule = fs,
+  catalog = AI_MODEL_CATALOG,
+  emitProgress,
+  downloader = downloadFile,
+  extractor = extractRuntimeArchive,
+} = {}) {
+  const artifact = getSummaryArtifactForPlatform(modelId, platform, arch, catalog);
+  const runtimeArtifact = getSummaryRuntimeArtifactForPlatform(platform, arch, catalog);
+  const runtimeError = validateSummaryRuntimeArtifact(runtimeArtifact);
+  if (runtimeError) {
+    throw new Error(runtimeError);
+  }
+
+  const existingCache = checkSummaryRuntimeCache({ userDataDir, platform, arch, modelId, fsModule, catalog });
+  if (existingCache.valid) {
+    return existingCache;
+  }
+
+  const runtimeDir = getSummaryRuntimeDir(userDataDir, artifact);
+  const extractDir = getSummaryRuntimeExtractDir(userDataDir, artifact, runtimeArtifact);
+  const archiveDir = getSummaryRuntimeArchiveDir(userDataDir, artifact);
+  const mkdirSync = bindFsMethod(fsModule, 'mkdirSync');
+  const unlinkSync = bindFsMethod(fsModule, 'unlinkSync');
+  if (mkdirSync) {
+    mkdirSync(runtimeDir, { recursive: true });
+    mkdirSync(extractDir, { recursive: true });
+    mkdirSync(archiveDir, { recursive: true });
+  }
+
+  for (let index = 0; index < runtimeArtifact.artifacts.length; index += 1) {
+    const runtimeArchive = runtimeArtifact.artifacts[index];
+    const archivePath = getSummaryRuntimeArchivePath(userDataDir, artifact, runtimeArchive);
+    const tempPath = `${archivePath}.download`;
+    emitSafeProgress(emitProgress, {
+      feature: 'summary',
+      phase: 'downloading-runtime',
+      message: 'Downloading local summary runtime.',
+      modelId,
+      percent: (index / runtimeArtifact.artifacts.length) * 100,
+    });
+    await downloader({
+      url: runtimeArchive.downloadUrl,
+      destinationPath: tempPath,
+      expectedSizeBytes: runtimeArchive.sizeBytes,
+      onProgress: (progress) => emitSafeProgress(emitProgress, {
+        feature: 'summary',
+        phase: 'downloading-runtime',
+        message: 'Downloading local summary runtime.',
+        percent: ((index + (progress.percent || 0) / 100) / runtimeArtifact.artifacts.length) * 100,
+        modelId,
+      }),
+    });
+
+    const actualSha256 = await hashFileSha256(tempPath, fsModule);
+    if (actualSha256 !== runtimeArchive.sha256) {
+      if (unlinkSync) {
+        unlinkSync(tempPath);
+      }
+      throw new Error('Downloaded llama.cpp runtime checksum does not match the pinned checksum.');
+    }
+
+    if (fsModule.renameSync) {
+      fsModule.renameSync(tempPath, archivePath);
+    }
+    emitSafeProgress(emitProgress, {
+      feature: 'summary',
+      phase: 'extracting-runtime',
+      message: 'Installing local summary runtime.',
+      modelId,
+    });
+    await extractor(archivePath, extractDir, runtimeArchive.archiveFormat);
+  }
+
+  if (runtimeArtifact.platform === 'win32') {
+    copyInstalledRuntimeExecutable({ userDataDir, artifact, runtimeArtifact, fsModule });
+  }
+
+  const runtimeCache = checkSummaryRuntimeCache({ userDataDir, platform, arch, modelId, fsModule, catalog });
+  if (!runtimeCache.valid) {
+    throw new Error(runtimeCache.reason || 'llama.cpp runtime installation did not produce the expected executable.');
+  }
+
+  return runtimeCache;
+}
+
 async function validateSummaryModel({
   userDataDir,
   platform = process.platform,
@@ -720,12 +996,23 @@ async function validateSummaryModel({
     catalog,
     verifyChecksum: true,
   });
+  const runtimeCache = checkSummaryRuntimeCache({
+    userDataDir,
+    platform,
+    arch,
+    modelId: selectedModelId,
+    fsModule,
+    catalog,
+  });
   let status = cache.valid ? 'ready' : 'error';
   let message = cache.valid ? 'Local summary model is ready.' : cache.reason;
 
   if (!availability.supported) {
     status = 'unsupported';
     message = availability.reason;
+  } else if (cache.valid && !runtimeCache.valid) {
+    status = runtimeCache.validationStatus === 'pendingPinnedRuntime' ? 'error' : 'notConfigured';
+    message = runtimeCache.reason;
   } else if (!cache.installed) {
     status = 'notConfigured';
   }
@@ -767,11 +1054,13 @@ async function setupSummaryModel({
   now = () => new Date().toISOString(),
   emitProgress,
   downloader = downloadFile,
+  extractor = extractRuntimeArchive,
 } = {}) {
   const selectedModelId = resolveModelId('summary', modelId, catalog);
   const artifact = getSummaryArtifactForPlatform(selectedModelId, platform, arch, catalog);
+  const runtimeArtifact = getSummaryRuntimeArtifactForPlatform(platform, arch, catalog);
   const availability = getSummaryAvailability(platform, arch);
-  const artifactError = availability.supported ? validateSummarySetupArtifact(artifact) : availability.reason;
+  const artifactError = availability.supported ? validatePinnedSummarySetup({ artifact, runtimeArtifact }) : availability.reason;
 
   emitSafeProgress(emitProgress, {
     feature: 'summary',
@@ -801,60 +1090,87 @@ async function setupSummaryModel({
   }
 
   const cache = await checkSummaryModelCache({ userDataDir, platform, arch, modelId: selectedModelId, fsModule, catalog, verifyChecksum: true });
-  if (cache.valid) {
+  const runtimeCache = checkSummaryRuntimeCache({ userDataDir, platform, arch, modelId: selectedModelId, fsModule, catalog });
+  if (cache.valid && runtimeCache.valid) {
     return validateSummaryModel({ userDataDir, platform, arch, modelId: selectedModelId, safeStorage, fsModule, catalog, now, emitProgress });
   }
 
-  const artifactPath = getSummaryArtifactPath(userDataDir, artifact);
-  const tempPath = `${artifactPath}.download`;
-  const mkdirSync = bindFsMethod(fsModule, 'mkdirSync');
-  const renameSync = bindFsMethod(fsModule, 'renameSync');
-  const unlinkSync = bindFsMethod(fsModule, 'unlinkSync');
-  if (mkdirSync) {
-    mkdirSync(path.dirname(artifactPath), { recursive: true });
+  if (!runtimeCache.valid) {
+    try {
+      await installSummaryRuntime({ userDataDir, platform, arch, modelId: selectedModelId, fsModule, catalog, emitProgress, downloader, extractor });
+    } catch (runtimeError) {
+      const message = runtimeError.message || 'Local summary runtime setup failed.';
+      updateManifestFeature({
+        userDataDir,
+        feature: 'summary',
+        fsModule,
+        catalog,
+        updates: buildFeatureUpdates({
+          status: 'error',
+          modelId: selectedModelId,
+          artifactId: artifact && artifact.artifactId,
+          profile,
+          validation: createValidation('error', message, now),
+          error: message,
+        }),
+      });
+      emitSafeProgress(emitProgress, { feature: 'summary', phase: 'error', status: 'error', message, modelId: selectedModelId });
+      return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
+    }
   }
 
-  await downloader({
-    url: artifact.downloadUrl,
-    destinationPath: tempPath,
-    expectedSizeBytes: artifact.estimatedSizeBytes,
-    onProgress: (progress) => emitSafeProgress(emitProgress, {
-      feature: 'summary',
-      phase: 'downloading',
-      message: 'Downloading local summary setup artifact.',
-      percent: progress.percent,
-      modelId: selectedModelId,
-    }),
-  });
-
-  const actualSha256 = await hashFileSha256(tempPath, fsModule);
-  if (actualSha256 !== artifact.sha256) {
-    if (unlinkSync) {
-      unlinkSync(tempPath);
+  if (!cache.valid) {
+    const artifactPath = getSummaryArtifactPath(userDataDir, artifact);
+    const tempPath = `${artifactPath}.download`;
+    const mkdirSync = bindFsMethod(fsModule, 'mkdirSync');
+    const renameSync = bindFsMethod(fsModule, 'renameSync');
+    const unlinkSync = bindFsMethod(fsModule, 'unlinkSync');
+    if (mkdirSync) {
+      mkdirSync(path.dirname(artifactPath), { recursive: true });
     }
-    const message = 'Downloaded summary setup artifact checksum does not match the pinned checksum.';
-    updateManifestFeature({
-      userDataDir,
-      feature: 'summary',
-      fsModule,
-      catalog,
-      updates: buildFeatureUpdates({
-        status: 'error',
+
+    await downloader({
+      url: artifact.downloadUrl,
+      destinationPath: tempPath,
+      expectedSizeBytes: artifact.estimatedSizeBytes,
+      onProgress: (progress) => emitSafeProgress(emitProgress, {
+        feature: 'summary',
+        phase: 'downloading',
+        message: 'Downloading local summary setup artifact.',
+        percent: progress.percent,
         modelId: selectedModelId,
-        artifactId: artifact.artifactId,
-        profile,
-        validation: createValidation('error', message, now),
-        error: message,
       }),
     });
-    emitSafeProgress(emitProgress, { feature: 'summary', phase: 'error', status: 'error', message, modelId: selectedModelId });
-    return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
-  }
 
-  if (!renameSync) {
-    throw new Error('File system does not support installing summary setup artifacts.');
+    const actualSha256 = await hashFileSha256(tempPath, fsModule);
+    if (actualSha256 !== artifact.sha256) {
+      if (unlinkSync) {
+        unlinkSync(tempPath);
+      }
+      const message = 'Downloaded summary setup artifact checksum does not match the pinned checksum.';
+      updateManifestFeature({
+        userDataDir,
+        feature: 'summary',
+        fsModule,
+        catalog,
+        updates: buildFeatureUpdates({
+          status: 'error',
+          modelId: selectedModelId,
+          artifactId: artifact.artifactId,
+          profile,
+          validation: createValidation('error', message, now),
+          error: message,
+        }),
+      });
+      emitSafeProgress(emitProgress, { feature: 'summary', phase: 'error', status: 'error', message, modelId: selectedModelId });
+      return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
+    }
+
+    if (!renameSync) {
+      throw new Error('File system does not support installing summary setup artifacts.');
+    }
+    renameSync(tempPath, artifactPath);
   }
-  renameSync(tempPath, artifactPath);
 
   return validateSummaryModel({ userDataDir, platform, arch, modelId: selectedModelId, safeStorage, fsModule, catalog, now, emitProgress });
 }
@@ -911,11 +1227,14 @@ module.exports = {
   AI_ADDON_PROGRESS_CHANNEL,
   checkAiAddonSetupStatus,
   checkSummaryModelCache,
+  checkSummaryRuntimeCache,
   createAiAddonProgressEvent,
   getDiarizationModelCacheDir,
   getSummaryArtifactPath,
   getSummaryModelCacheDir,
+  getSummaryRuntimeArchivePath,
   getSummaryRuntimeDir,
+  getSummaryRuntimeExecutablePath,
   isLikelyHuggingFaceToken,
   removeDiarizationSetup,
   removeSummaryModel,

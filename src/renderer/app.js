@@ -3,6 +3,7 @@
  */
 
 const COPY_SUCCESS_TIMEOUT_MS = 2000;
+const DEFAULT_SUMMARY_PROFILE = 'balanced';
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const { getRecordButtonAction } = window.recordingStateHelpers;
 const {
@@ -43,6 +44,7 @@ let currentMeetingId = null;
 // default filename used by the "Save" button.
 let currentRecordingMeeting = null;
 let pendingMeetingTranscriptId = null;
+let summaryGenerationMeetingId = null;
 let meetings = [];
 let audioVisualizer = null;
 let isFirstRecording = true; // Track if this is first recording (for longer timeout)
@@ -97,6 +99,34 @@ function setPlaceholder(container, message, className = 'placeholder') {
   node.className = className;
   node.textContent = message;
   container.replaceChildren(node);
+}
+
+function showSummaryMessage(message, isError = false) {
+  const summaryEl = document.getElementById('meeting-summary');
+  if (!summaryEl) {
+    return;
+  }
+
+  summaryEl.classList.add('is-empty');
+  delete summaryEl.dataset.markdown;
+  setPlaceholder(summaryEl, message, isError ? 'placeholder error' : 'placeholder');
+}
+
+function renderSummaryMarkdown(markdown) {
+  const summaryEl = document.getElementById('meeting-summary');
+  if (!summaryEl) {
+    return;
+  }
+
+  summaryEl.classList.remove('is-empty');
+  if (markdown && markdown.trim()) {
+    summaryEl.dataset.markdown = markdown;
+    renderMarkdownInto(summaryEl, markdown);
+    return;
+  }
+
+  delete summaryEl.dataset.markdown;
+  showSummaryMessage('No summary generated yet');
 }
 
 function populateSelect(select, placeholder, devices) {
@@ -511,6 +541,47 @@ function setCopyButtonState(button, label, disabled) {
   button.disabled = disabled;
 }
 
+function setButtonBusy(button, busy, busyLabel = 'Working...') {
+  if (!button) {
+    return;
+  }
+
+  if (busy) {
+    button.dataset.originalLabel = button.textContent;
+    button.textContent = busyLabel;
+    button.disabled = true;
+    button.classList.add('is-loading');
+    return;
+  }
+
+  button.textContent = button.dataset.originalLabel || button.textContent;
+  delete button.dataset.originalLabel;
+  button.disabled = false;
+  button.classList.remove('is-loading');
+}
+
+function activateTab(targetTab) {
+  const tabButtons = document.querySelectorAll('.tab-btn');
+  const railButtons = document.querySelectorAll('.rail-btn[data-tab]');
+  const tabPanes = document.querySelectorAll('.tab-pane');
+  const allNavButtons = [...tabButtons, ...railButtons];
+
+  allNavButtons.forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.tab === targetTab);
+  });
+  tabPanes.forEach((pane) => {
+    pane.classList.toggle('active', pane.id === `${targetTab}-tab`);
+  });
+}
+
+function openSettingsAtAiAddons() {
+  activateTab('settings');
+  const section = document.getElementById('ai-addons-settings');
+  if (section) {
+    section.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }
+}
+
 function closeInlineTitleEditor({ headingId, editBtnId, formId, editBtnDisplay = '' }) {
   const heading = document.getElementById(headingId);
   const editBtn = document.getElementById(editBtnId);
@@ -564,6 +635,11 @@ function applySavedSettings() {
 
   if (settings.modelSize) {
     modelSelect.value = settings.modelSize;
+  }
+
+  const summaryProfileSelect = document.getElementById('summary-profile-select');
+  if (summaryProfileSelect && settings.summaryProfile) {
+    summaryProfileSelect.value = settings.summaryProfile;
   }
 }
 
@@ -979,6 +1055,7 @@ async function selectMeeting(meetingId) {
   transcriptEl.classList.add('markdown-body');
   delete transcriptEl.dataset.markdown;
   clearElement(transcriptEl);
+  renderSummaryMarkdown('');
   const loading = document.createElement('p');
   loading.className = 'placeholder';
   loading.textContent = 'Loading transcript...';
@@ -1002,6 +1079,8 @@ async function selectMeeting(meetingId) {
       empty.textContent = 'No transcript available';
       transcriptEl.appendChild(empty);
     }
+
+    renderSummaryMarkdown(fullMeeting.summary || '');
   } catch (error) {
     console.error(`Failed to load meeting transcript: ${error.message}`);
     if (currentMeetingId === meetingId && pendingMeetingTranscriptId === meetingId) {
@@ -1221,6 +1300,16 @@ function setupEventListeners() {
     saveMeetingTranscriptBtn.addEventListener('click', saveMeetingTranscriptToFile);
   }
 
+  const generateCurrentSummaryBtn = document.getElementById('generate-current-summary-btn');
+  if (generateCurrentSummaryBtn) {
+    generateCurrentSummaryBtn.addEventListener('click', () => generateSummaryForMeeting(currentRecordingMeeting && currentRecordingMeeting.id, generateCurrentSummaryBtn));
+  }
+
+  const generateSummaryBtn = document.getElementById('generate-summary-btn');
+  if (generateSummaryBtn) {
+    generateSummaryBtn.addEventListener('click', () => generateSummaryForMeeting(currentMeetingId, generateSummaryBtn));
+  }
+
   // Meeting search filter
   const searchInput = document.getElementById('meeting-search');
   if (searchInput) {
@@ -1278,6 +1367,22 @@ function setupEventListeners() {
   registerCleanup(window.electronAPI.onTranscriptionProgress((data) => {
     addLog(data);
   }));
+
+  if (window.electronAPI.onDiarizationProgress) {
+    registerCleanup(window.electronAPI.onDiarizationProgress((progress) => {
+      if (progress && progress.message) {
+        addLog(progress.message);
+      }
+    }));
+  }
+
+  if (window.electronAPI.onSummaryProgress) {
+    registerCleanup(window.electronAPI.onSummaryProgress((progress) => {
+      if (progress && progress.message) {
+        addLog(progress.message);
+      }
+    }));
+  }
 
   // Listen for audio levels
   registerCleanup(window.electronAPI.onAudioLevels((levels) => {
@@ -1661,6 +1766,214 @@ function formatTimestamp(seconds) {
   return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 }
 
+function renderTranscriptSegments(segments) {
+  clearElement(transcriptOutput);
+
+  if (segments && segments.length > 0) {
+    segments.forEach(segment => {
+      const segmentDiv = document.createElement('div');
+      segmentDiv.style.marginBottom = '12px';
+
+      const timestamp = document.createElement('div');
+      timestamp.style.fontSize = '11px';
+      timestamp.style.color = '#888';
+      timestamp.style.marginBottom = '4px';
+      const startTime = formatTimestamp(segment.start);
+      const endTime = formatTimestamp(segment.end);
+      timestamp.textContent = `[${startTime} - ${endTime}]${segment.speaker ? ` ${segment.speaker}` : ''}`;
+
+      const text = document.createElement('div');
+      text.textContent = segment.text;
+      text.style.lineHeight = '1.5';
+
+      segmentDiv.appendChild(timestamp);
+      segmentDiv.appendChild(text);
+      transcriptOutput.appendChild(segmentDiv);
+    });
+    return;
+  }
+
+  const transcriptText = document.createElement('div');
+  transcriptText.textContent = 'No transcription available';
+  transcriptOutput.appendChild(transcriptText);
+}
+
+function writeTranscriptMarkdown({ meeting, transcriptionResult, diarizationResult }) {
+  const sourceSegments = diarizationResult && Array.isArray(diarizationResult.segments)
+    ? diarizationResult.segments
+    : (transcriptionResult.segments || []);
+  const lines = [
+    '# Meeting Transcription',
+    '',
+    `**File:** ${meeting && meeting.audioPath ? meeting.audioPath.split(/[\\/]/).pop() : 'recording'}`,
+    `**Date:** ${new Date().toISOString().replace('T', ' ').slice(0, 19)}`,
+    `**Duration:** ${formatTimestamp(transcriptionResult.duration || 0)}`,
+    `**Language:** ${languageSelect.value || transcriptionResult.language || 'en'}`,
+    '',
+    '---',
+    '',
+    '## Transcript',
+    '',
+  ];
+
+  sourceSegments.forEach((segment) => {
+    const startTime = formatTimestamp(segment.start || 0);
+    const endTime = formatTimestamp(segment.end || 0);
+    const speaker = segment.speaker ? ` **${segment.speaker}:**` : '';
+    lines.push(`**[${startTime} - ${endTime}]**${speaker}`);
+    lines.push(segment.text || '');
+    lines.push('');
+  });
+
+  return lines.join('\n');
+}
+
+async function maybeRunDiarizationAfterTranscription(savedMeeting, transcriptionResult) {
+  if (!savedMeeting || !savedMeeting.id || !savedMeeting.audioPath || !transcriptionResult.segments || transcriptionResult.segments.length === 0) {
+    return null;
+  }
+
+  let aiStatus;
+  try {
+    aiStatus = await window.electronAPI.getAiAddonStatus();
+  } catch (error) {
+    addLog(`Speaker identification status unavailable: ${error.message}`, 'warning');
+    return null;
+  }
+
+  const diarizationStatus = aiStatus && aiStatus.features && aiStatus.features.diarization;
+  if (!diarizationStatus || !diarizationStatus.setupComplete || diarizationStatus.status !== 'ready') {
+    return null;
+  }
+
+  addLog('Running speaker identification...');
+  try {
+    const result = await window.electronAPI.diarizeTranscript({
+      audioPath: savedMeeting.audioPath,
+      segments: transcriptionResult.segments,
+      speakerCount: diarizationStatus.speakerCount || 'auto',
+      modelRef: (aiStatus.models && aiStatus.models.diarization && aiStatus.models.diarization.defaultModelId) || diarizationStatus.modelId,
+    });
+
+    if (result && Array.isArray(result.segments) && result.segments.length > 0) {
+      renderTranscriptSegments(result.segments);
+      if (savedMeeting.transcriptPath) {
+        await window.electronAPI.saveTranscriptFile({
+          filePath: savedMeeting.transcriptPath,
+          content: writeTranscriptMarkdown({ meeting: savedMeeting, transcriptionResult, diarizationResult: result }),
+        });
+      }
+    }
+
+    await window.electronAPI.updateMeetingAi(savedMeeting.id, {
+      diarization: {
+        status: 'completed',
+        model: result.model || diarizationStatus.modelId,
+        completedAt: result.completedAt,
+        speakerCount: result.speakerCount,
+        segmentsPath: result.segmentsPath,
+        error: null,
+      },
+    });
+    addLog('Speaker identification complete!');
+    return result;
+  } catch (error) {
+    addLog(`Speaker identification failed; saved normal transcript. ${error.message}`, 'warning');
+    try {
+      await window.electronAPI.updateMeetingAi(savedMeeting.id, {
+        diarization: {
+          status: 'error',
+          model: diarizationStatus.modelId,
+          completedAt: new Date().toISOString(),
+          error: error.message,
+        },
+      });
+    } catch (metadataError) {
+      addLog(`Could not save speaker identification failure state: ${metadataError.message}`, 'warning');
+    }
+    return null;
+  }
+}
+
+function syncMeetingInList(updatedMeeting) {
+  if (!updatedMeeting || !updatedMeeting.id) {
+    return;
+  }
+
+  const index = meetings.findIndex(m => m.id === updatedMeeting.id);
+  if (index !== -1) {
+    meetings[index] = { ...meetings[index], ...updatedMeeting };
+    renderMeetingList();
+  }
+
+  if (currentRecordingMeeting && currentRecordingMeeting.id === updatedMeeting.id) {
+    currentRecordingMeeting = { ...currentRecordingMeeting, ...updatedMeeting };
+    applyCurrentRecordingTitle();
+  }
+}
+
+async function generateSummaryForMeeting(meetingId, button) {
+  if (!meetingId) {
+    addLog('Save a transcript before generating a summary.', 'warning');
+    return;
+  }
+
+  if (summaryGenerationMeetingId) {
+    addLog('Summary generation is already running.', 'warning');
+    return;
+  }
+
+  let aiStatus;
+  try {
+    aiStatus = await window.electronAPI.getAiAddonStatus();
+  } catch (error) {
+    addLog(`Summary setup status unavailable: ${error.message}`, 'error');
+    return;
+  }
+
+  const summaryStatus = aiStatus && aiStatus.features && aiStatus.features.summary;
+  if (!summaryStatus || !summaryStatus.setupComplete || summaryStatus.status !== 'ready') {
+    addLog('Summary model is not ready. Open Settings to install or validate the local summary model.', 'warning');
+    openSettingsAtAiAddons();
+    return;
+  }
+
+  summaryGenerationMeetingId = meetingId;
+  setButtonBusy(button, true, 'Summarizing...');
+  if (currentMeetingId === meetingId) {
+    showSummaryMessage('Generating local summary...');
+  }
+
+  try {
+    addLog('Generating local summary...');
+    const summaryProfileSelect = document.getElementById('summary-profile-select');
+    const result = await window.electronAPI.generateSummary({
+      meetingId,
+      profile: (summaryProfileSelect && summaryProfileSelect.value) || summaryStatus.profile || DEFAULT_SUMMARY_PROFILE,
+      modelId: summaryStatus.modelId,
+    });
+
+    if (currentMeetingId === meetingId) {
+      const fullMeeting = await window.electronAPI.getMeeting(meetingId);
+      renderSummaryMarkdown((fullMeeting && fullMeeting.summary) || '');
+      syncMeetingInList((result && result.meeting) || fullMeeting);
+    } else {
+      syncMeetingInList(result && result.meeting);
+    }
+
+    addLog('Summary generated!');
+  } catch (error) {
+    console.error('Failed to generate summary:', error);
+    addLog(`Summary generation failed: ${error.message}`, 'error');
+    if (currentMeetingId === meetingId) {
+      showSummaryMessage(`Summary generation failed: ${error.message}`, true);
+    }
+  } finally {
+    summaryGenerationMeetingId = null;
+    setButtonBusy(button, false);
+  }
+}
+
 // Transcribe audio (auto-called after stop)
 async function transcribeAudio() {
   const language = languageSelect.value;
@@ -1688,34 +2001,10 @@ async function transcribeAudio() {
     });
 
     // Display transcript with timestamps
-    clearElement(transcriptOutput);
-
     if (result.segments && result.segments.length > 0) {
-      // Display each segment with timestamp
-      result.segments.forEach(segment => {
-        const segmentDiv = document.createElement('div');
-        segmentDiv.style.marginBottom = '12px';
-
-        // Timestamp
-        const timestamp = document.createElement('div');
-        timestamp.style.fontSize = '11px';
-        timestamp.style.color = '#888';
-        timestamp.style.marginBottom = '4px';
-        const startTime = formatTimestamp(segment.start);
-        const endTime = formatTimestamp(segment.end);
-        timestamp.textContent = `[${startTime} - ${endTime}]`;
-
-        // Text
-        const text = document.createElement('div');
-        text.textContent = segment.text;
-        text.style.lineHeight = '1.5';
-
-        segmentDiv.appendChild(timestamp);
-        segmentDiv.appendChild(text);
-        transcriptOutput.appendChild(segmentDiv);
-      });
+      renderTranscriptSegments(result.segments);
     } else {
-      // Fallback to plain text if no segments
+      clearElement(transcriptOutput);
       const transcriptText = document.createElement('div');
       transcriptText.textContent = result.text || 'No transcription available';
       transcriptOutput.appendChild(transcriptText);
@@ -1743,6 +2032,7 @@ async function transcribeAudio() {
       if (savedMeeting && savedMeeting.id) {
         currentRecordingMeeting = savedMeeting;
         applyCurrentRecordingTitle();
+        await maybeRunDiarizationAfterTranscription(savedMeeting, result);
       }
       addLog('Meeting saved!');
     } catch (saveError) {
@@ -1996,23 +2286,246 @@ function formatRelativeDate(dateString) {
 function setupTabs() {
   const tabButtons = document.querySelectorAll('.tab-btn');
   const railButtons = document.querySelectorAll('.rail-btn[data-tab]');
-  const tabPanes = document.querySelectorAll('.tab-pane');
   const allNavButtons = [...tabButtons, ...railButtons];
-
-  function activate(targetTab) {
-    allNavButtons.forEach((btn) => {
-      btn.classList.toggle('active', btn.dataset.tab === targetTab);
-    });
-    tabPanes.forEach((pane) => {
-      pane.classList.toggle('active', pane.id === `${targetTab}-tab`);
-    });
-  }
 
   allNavButtons.forEach((button) => {
     button.addEventListener('click', () => {
-      activate(button.dataset.tab);
+      activateTab(button.dataset.tab);
     });
   });
+}
+
+function formatStatusLabel(status) {
+  const labels = {
+    notConfigured: 'Not configured',
+    needsAccount: 'Needs account',
+    downloading: 'Downloading',
+    validating: 'Validating',
+    ready: 'Ready',
+    error: 'Error',
+    unsupported: 'Unsupported',
+  };
+  return labels[status] || 'Unknown';
+}
+
+function setStatusBadge(badge, status) {
+  if (!badge) {
+    return;
+  }
+
+  badge.textContent = formatStatusLabel(status);
+  badge.className = 'setting-badge';
+  if (status === 'ready') {
+    badge.classList.add('enabled');
+  } else if (status === 'downloading' || status === 'validating') {
+    badge.classList.add('installing');
+  } else {
+    badge.classList.add('disabled');
+  }
+}
+
+function setAiAddonControlsDisabled(disabled) {
+  [
+    'diarization-token-input',
+    'diarization-speaker-count',
+    'setup-diarization-btn',
+    'validate-diarization-btn',
+    'remove-diarization-btn',
+    'summary-profile-select',
+    'setup-summary-btn',
+    'validate-summary-btn',
+    'remove-summary-btn',
+  ].forEach((id) => {
+    const element = document.getElementById(id);
+    if (element) {
+      element.disabled = disabled;
+    }
+  });
+}
+
+function appendAiAddonLog(text) {
+  const logDiv = document.getElementById('ai-addon-log');
+  const logOutput = document.getElementById('ai-addon-log-output');
+  if (!logDiv || !logOutput) {
+    return;
+  }
+
+  logDiv.style.display = 'block';
+  logOutput.textContent += `${text}\n`;
+  logOutput.scrollTop = logOutput.scrollHeight;
+}
+
+function featureStatusMessage(feature) {
+  const validationMessage = feature && feature.lastValidation && feature.lastValidation.message;
+  return (feature && (feature.error || validationMessage)) || '';
+}
+
+function updateAiAddonSettings(status) {
+  const diarization = status && status.features && status.features.diarization;
+  const summary = status && status.features && status.features.summary;
+  const overallStatus = (diarization && diarization.status === 'ready') || (summary && summary.status === 'ready')
+    ? 'ready'
+    : ((diarization && diarization.status === 'error') || (summary && summary.status === 'error') ? 'error' : 'notConfigured');
+
+  setStatusBadge(document.getElementById('ai-addons-status-badge'), overallStatus);
+
+  if (diarization) {
+    setStatusBadge(document.getElementById('diarization-status-badge'), diarization.status);
+    const speakerCount = document.getElementById('diarization-speaker-count');
+    if (speakerCount) {
+      speakerCount.value = String(diarization.speakerCount || 'auto');
+    }
+
+    const statusText = document.getElementById('diarization-status-text');
+    if (statusText) {
+      statusText.textContent = featureStatusMessage(diarization) || (diarization.setupComplete
+        ? 'Speaker labels will run automatically after transcription.'
+        : 'Enter your own Hugging Face token to enable local speaker labels.');
+    }
+  }
+
+  if (summary) {
+    setStatusBadge(document.getElementById('summary-status-badge'), summary.status);
+    const profileSelect = document.getElementById('summary-profile-select');
+    if (profileSelect) {
+      profileSelect.value = summary.profile || DEFAULT_SUMMARY_PROFILE;
+    }
+
+    const statusText = document.getElementById('summary-status-text');
+    if (statusText) {
+      const artifactMessage = summary.artifact && summary.artifact.validationStatus === 'pendingPinnedArtifact'
+        ? 'Summary downloads are blocked until the model artifact URL and checksum are pinned.'
+        : '';
+      statusText.textContent = featureStatusMessage(summary) || artifactMessage || (summary.setupComplete
+        ? 'Generate summaries from a saved transcript when you choose.'
+        : 'Install the local summary model before generating summaries.');
+    }
+  }
+}
+
+async function refreshAiAddonSettings() {
+  try {
+    const status = await window.electronAPI.getAiAddonStatus();
+    updateAiAddonSettings(status);
+    return status;
+  } catch (error) {
+    addLog(`Failed to check AI add-ons: ${error.message}`, 'error');
+    setStatusBadge(document.getElementById('ai-addons-status-badge'), 'error');
+    return null;
+  }
+}
+
+async function withAiAddonAction(button, label, action) {
+  setAiAddonControlsDisabled(true);
+  setButtonBusy(button, true, label);
+  try {
+    const status = await action();
+    if (status) {
+      updateAiAddonSettings(status);
+    } else {
+      await refreshAiAddonSettings();
+    }
+  } catch (error) {
+    console.error('AI add-on action failed:', error);
+    addLog(`AI add-on action failed: ${error.message}`, 'error');
+    appendAiAddonLog(`ERROR: ${error.message}`);
+  } finally {
+    setButtonBusy(button, false);
+    setAiAddonControlsDisabled(false);
+  }
+}
+
+function setupAiAddonSettingsListeners() {
+  const setupDiarizationBtn = document.getElementById('setup-diarization-btn');
+  const validateDiarizationBtn = document.getElementById('validate-diarization-btn');
+  const removeDiarizationBtn = document.getElementById('remove-diarization-btn');
+  const setupSummaryBtn = document.getElementById('setup-summary-btn');
+  const validateSummaryBtn = document.getElementById('validate-summary-btn');
+  const removeSummaryBtn = document.getElementById('remove-summary-btn');
+  const summaryProfileSelect = document.getElementById('summary-profile-select');
+
+  if (setupDiarizationBtn) {
+    setupDiarizationBtn.addEventListener('click', () => withAiAddonAction(setupDiarizationBtn, 'Setting up...', async () => {
+      const tokenInput = document.getElementById('diarization-token-input');
+      const speakerCount = document.getElementById('diarization-speaker-count');
+      const status = await window.electronAPI.setupDiarization({
+        token: tokenInput ? tokenInput.value.trim() : '',
+        speakerCount: speakerCount ? speakerCount.value : 'auto',
+      });
+      if (tokenInput) {
+        tokenInput.value = '';
+      }
+      addLog('Speaker identification setup checked.');
+      return status;
+    }));
+  }
+
+  if (validateDiarizationBtn) {
+    validateDiarizationBtn.addEventListener('click', () => withAiAddonAction(validateDiarizationBtn, 'Validating...', async () => {
+      const status = await window.electronAPI.validateDiarizationSetup();
+      addLog('Speaker identification validation complete.');
+      return status;
+    }));
+  }
+
+  if (removeDiarizationBtn) {
+    removeDiarizationBtn.addEventListener('click', () => {
+      if (!confirm('Remove speaker identification setup and stored token?')) {
+        return;
+      }
+      withAiAddonAction(removeDiarizationBtn, 'Removing...', async () => {
+        const status = await window.electronAPI.removeDiarizationSetup();
+        addLog('Speaker identification setup removed.');
+        return status;
+      });
+    });
+  }
+
+  if (setupSummaryBtn) {
+    setupSummaryBtn.addEventListener('click', () => withAiAddonAction(setupSummaryBtn, 'Installing...', async () => {
+      const status = await window.electronAPI.setupSummaryModel({
+        profile: summaryProfileSelect ? summaryProfileSelect.value : DEFAULT_SUMMARY_PROFILE,
+      });
+      addLog('Summary model setup checked.');
+      return status;
+    }));
+  }
+
+  if (validateSummaryBtn) {
+    validateSummaryBtn.addEventListener('click', () => withAiAddonAction(validateSummaryBtn, 'Validating...', async () => {
+      const status = await window.electronAPI.validateSummaryModel({});
+      addLog('Summary model validation complete.');
+      return status;
+    }));
+  }
+
+  if (removeSummaryBtn) {
+    removeSummaryBtn.addEventListener('click', () => {
+      if (!confirm('Remove the local summary model from this device?')) {
+        return;
+      }
+      withAiAddonAction(removeSummaryBtn, 'Removing...', async () => {
+        const status = await window.electronAPI.removeSummaryModel({});
+        addLog('Summary model removed.');
+        return status;
+      });
+    });
+  }
+
+  if (summaryProfileSelect) {
+    summaryProfileSelect.addEventListener('change', () => {
+      saveSettings({ summaryProfile: summaryProfileSelect.value });
+    });
+  }
+
+  if (window.electronAPI.onAiAddonProgress) {
+    registerCleanup(window.electronAPI.onAiAddonProgress((progress) => {
+      if (progress && progress.message) {
+        appendAiAddonLog(progress.message);
+        addLog(progress.message);
+      }
+    }));
+  }
 }
 
 // ============================================================================
@@ -2041,6 +2554,9 @@ async function initSettingsTab() {
   registerCleanup(window.electronAPI.onGPUInstallProgress((data) => {
     appendGPULog(data);
   }));
+
+  setupAiAddonSettingsListeners();
+  await refreshAiAddonSettings();
 }
 
 async function checkGPUStatus() {
@@ -2196,8 +2712,7 @@ function setupGPUCTA() {
   const cta = document.getElementById('gpu-cta');
   if (!cta) return;
   cta.addEventListener('click', () => {
-    const settingsBtn = document.querySelector('.rail-btn[data-tab="settings"]');
-    if (settingsBtn) settingsBtn.click();
+    activateTab('settings');
   });
 }
 

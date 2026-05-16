@@ -191,6 +191,16 @@ function buildDiarizationOutputPath({ audioPath, outputPath } = {}) {
   return path.join(parsedPath.dir || '.', `${parsedPath.name || 'meeting'}.speakers.json`);
 }
 
+function isSafeRecordingsMarkdownPath({ filePath, recordingsDir } = {}) {
+  if (!filePath || !recordingsDir) {
+    return false;
+  }
+
+  const resolvedPath = path.resolve(filePath);
+  const resolvedRecordingsDir = path.resolve(recordingsDir);
+  return resolvedPath.startsWith(resolvedRecordingsDir + path.sep) && path.extname(resolvedPath).toLowerCase() === '.md';
+}
+
 function resolveTranscriptionAudioFile({ audioFile, recordingsDir, existsSync }) {
   const fileExists = existsSync || (() => false);
   let resolvedAudioFile = String(audioFile || '');
@@ -719,6 +729,7 @@ module.exports = {
   getRecordingStopTimeout,
   resolveStopTimeoutAction,
   isModelDownloadErrorOutput,
+  isSafeRecordingsMarkdownPath,
   normalizeRecorderLevels,
   parseRecorderMessageLine,
   parseAiBackendProgressLine,

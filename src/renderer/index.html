@@ -328,6 +328,9 @@
                     id="transcript-actions"
                     style="display: none"
                   >
+                    <button id="generate-current-summary-btn" class="btn btn-small">
+                      Generate Summary
+                    </button>
                     <button id="copy-btn" class="btn btn-small">Copy</button>
                     <button id="save-btn" class="btn btn-small">Save</button>
                   </div>
@@ -548,6 +551,9 @@
                     <div class="transcript-header-row">
                       <h3>Transcript</h3>
                       <div class="transcript-section-actions">
+                        <button id="generate-summary-btn" class="btn btn-small">
+                          Generate Summary
+                        </button>
                         <button id="copy-transcript-btn" class="btn btn-small">
                           Copy
                         </button>
@@ -560,6 +566,18 @@
                       class="meeting-transcript"
                       id="meeting-transcript"
                     ></div>
+                  </div>
+
+                  <div class="summary-section" id="meeting-summary-section">
+                    <div class="transcript-header-row">
+                      <h3>Summary</h3>
+                    </div>
+                    <div
+                      class="meeting-summary markdown-body"
+                      id="meeting-summary"
+                    >
+                      <p class="placeholder">No summary generated yet</p>
+                    </div>
                   </div>
                 </div>
               </main>
@@ -642,6 +660,92 @@
                   <div class="gpu-log" id="gpu-log" style="display: none">
                     <h4>Installation Log</h4>
                     <div class="log-output" id="gpu-log-output"></div>
+                  </div>
+                </div>
+
+                <!-- Local AI Add-ons -->
+                <div class="settings-group" id="ai-addons-settings">
+                  <div class="setting-header">
+                    <h3>AI Add-ons</h3>
+                    <span class="setting-badge" id="ai-addons-status-badge">Checking&hellip;</span>
+                  </div>
+
+                  <p class="setting-description">
+                    Optional local-only features for speaker labels and meeting summaries. Models and tokens stay on this device.
+                  </p>
+
+                  <div class="ai-addon-grid">
+                    <div class="ai-addon-card">
+                      <div class="ai-addon-card-header">
+                        <div>
+                          <h4>Speaker Identification</h4>
+                          <p>Runs after transcription when setup is ready.</p>
+                        </div>
+                        <span class="setting-badge" id="diarization-status-badge">Checking&hellip;</span>
+                      </div>
+
+                      <div class="ai-addon-field">
+                        <label for="diarization-token-input">Hugging Face token</label>
+                        <input
+                          type="password"
+                          id="diarization-token-input"
+                          class="settings-input"
+                          placeholder="hf_..."
+                          autocomplete="off"
+                        />
+                      </div>
+
+                      <div class="ai-addon-field compact">
+                        <label for="diarization-speaker-count">Speakers</label>
+                        <select id="diarization-speaker-count" class="device-select">
+                          <option value="auto">Auto</option>
+                          <option value="2">2 speakers</option>
+                          <option value="3">3 speakers</option>
+                          <option value="4">4 speakers</option>
+                          <option value="5">5 speakers</option>
+                          <option value="6">6 speakers</option>
+                        </select>
+                      </div>
+
+                      <p class="ai-addon-status-text" id="diarization-status-text">Checking setup&hellip;</p>
+                      <div class="ai-addon-actions">
+                        <button id="setup-diarization-btn" class="btn btn-primary btn-small">Set Up</button>
+                        <button id="validate-diarization-btn" class="btn btn-small">Validate</button>
+                        <button id="remove-diarization-btn" class="btn btn-danger btn-small">Remove</button>
+                      </div>
+                    </div>
+
+                    <div class="ai-addon-card">
+                      <div class="ai-addon-card-header">
+                        <div>
+                          <h4>Meeting Summaries</h4>
+                          <p>User-triggered summaries from saved transcripts.</p>
+                        </div>
+                        <span class="setting-badge" id="summary-status-badge">Checking&hellip;</span>
+                      </div>
+
+                      <div class="ai-addon-field compact">
+                        <label for="summary-profile-select">Profile</label>
+                        <select id="summary-profile-select" class="device-select">
+                          <option value="concise">Concise</option>
+                          <option value="balanced" selected>Balanced</option>
+                          <option value="detailed">Detailed</option>
+                          <option value="action-items">Action items</option>
+                        </select>
+                      </div>
+
+                      <p class="ai-addon-status-text" id="summary-status-text">Checking setup&hellip;</p>
+                      <div class="ai-addon-actions">
+                        <button id="setup-summary-btn" class="btn btn-primary btn-small">Install Model</button>
+                        <button id="validate-summary-btn" class="btn btn-small">Validate</button>
+                        <button id="remove-summary-btn" class="btn btn-danger btn-small">Remove</button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div class="gpu-log" id="ai-addon-log" style="display: none">
+                    <h4>AI Add-on Log</h4>
+                    <div class="log-output" id="ai-addon-log-output"></div>
                   </div>
                 </div>
 

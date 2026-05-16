@@ -28,6 +28,7 @@ const {
   getRecordingStopTimeout,
   resolveStopTimeoutAction,
   isModelDownloadErrorOutput,
+  isSafeRecordingsMarkdownPath,
   parseRecorderStdoutChunk,
   parseAiBackendProgressLine,
   resolveExternalUrl,
@@ -2766,6 +2767,22 @@ ipcMain.handle('update-meeting-ai', async (event, payload) => {
 
     python.on('error', (err) => reject(err));
   });
+});
+
+ipcMain.handle('save-transcript-file', async (event, options = {}) => {
+  const { filePath, content } = options;
+  if (!filePath || typeof content !== 'string') {
+    throw new Error('save-transcript-file requires filePath and content');
+  }
+
+  const recordingsDir = path.join(app.getPath('userData'), 'recordings');
+  if (!isSafeRecordingsMarkdownPath({ filePath, recordingsDir })) {
+    throw new Error('Transcript file must be a Markdown file in the recordings directory.');
+  }
+
+  const resolvedPath = path.resolve(filePath);
+  await fs.promises.writeFile(resolvedPath, content, 'utf8');
+  return { success: true, filePath: resolvedPath };
 });
 
 /**

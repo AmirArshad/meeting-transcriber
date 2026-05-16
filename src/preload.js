@@ -89,6 +89,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   addMeeting: (meetingData) => ipcRenderer.invoke('add-meeting', meetingData),
   updateMeeting: (meetingId, updates) => ipcRenderer.invoke('update-meeting', { meetingId, updates }),
   updateMeetingAi: (meetingId, updates) => ipcRenderer.invoke('update-meeting-ai', { meetingId, updates }),
+  saveTranscriptFile: (options) => ipcRenderer.invoke('save-transcript-file', options),
   saveTranscriptAs: (options) => ipcRenderer.invoke('save-transcript-as', options),
   scanRecordings: () => ipcRenderer.invoke('scan-recordings'),
 

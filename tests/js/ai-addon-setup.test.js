@@ -6,9 +6,12 @@ const {
   AI_ADDON_PROGRESS_CHANNEL,
   checkAiAddonSetupStatus,
   checkSummaryModelCache,
+  checkSummaryRuntimeCache,
   createAiAddonProgressEvent,
   getSummaryArtifactPath,
+  getSummaryRuntimeArchivePath,
   getSummaryRuntimeDir,
+  getSummaryRuntimeExecutablePath,
   removeDiarizationSetup,
   removeSummaryModel,
   setupDiarizationAddon,
@@ -46,6 +49,12 @@ function createMemoryFs() {
     unlinkSync(filePath) {
       files.delete(filePath);
     },
+    copyFileSync(fromPath, toPath) {
+      if (!files.has(fromPath)) {
+        throw new Error(`Missing file: ${fromPath}`);
+      }
+      files.set(toPath, Buffer.from(files.get(fromPath)));
+    },
     renameSync(fromPath, toPath) {
       if (!files.has(fromPath)) {
         throw new Error(`Missing file: ${fromPath}`);
@@ -60,6 +69,32 @@ function createMemoryFs() {
           files.delete(filePath);
         }
       }
+    },
+    readdirSync(dirPath, options = {}) {
+      const names = new Set();
+      for (const filePath of files.keys()) {
+        if (path.dirname(filePath) === dirPath) {
+          names.add(path.basename(filePath));
+        }
+      }
+      for (const childDir of dirs) {
+        if (path.dirname(childDir) === dirPath && childDir !== dirPath) {
+          names.add(path.basename(childDir));
+        }
+      }
+      const entries = [...names].sort();
+      if (!options.withFileTypes) {
+        return entries;
+      }
+      return entries.map((name) => ({
+        name,
+        isDirectory: () => dirs.has(path.join(dirPath, name)),
+      }));
+    },
+    statSync(targetPath) {
+      return {
+        isDirectory: () => dirs.has(targetPath),
+      };
     },
   };
 }
@@ -110,6 +145,28 @@ function createCatalogWithPinnedSummaryArtifact({ sha256 = 'abc123', downloadUrl
     },
     summary: {
       defaultModelId: 'summary-model',
+      runtimeArtifacts: {
+        'win32-x64': {
+          id: 'summary-runtime-win32-x64',
+          label: 'Summary runtime for Windows CUDA',
+          runtime: 'llama.cpp',
+          version: 'b9999',
+          platform: 'win32',
+          arch: 'x64',
+          acceleration: 'cuda',
+          executableName: 'llama-cli.exe',
+          validationStatus: 'ready',
+          artifacts: [
+            {
+              fileName: 'runtime.zip',
+              archiveFormat: 'zip',
+              sha256: '3f8ef8b3bfedd12cb8d81101703a10e5fc12f764dda294a4aaa963de0519b291',
+              sizeBytes: 123,
+              downloadUrl: 'https://example.test/runtime.zip',
+            },
+          ],
+        },
+      },
       models: [{ id: 'summary-model', label: 'Summary Model', runtime: 'llama.cpp', artifact }],
     },
   };
@@ -227,7 +284,7 @@ test('remove diarization setup deletes token and managed cache reference', async
   assert.ok(fsModule.removed.some((targetPath) => targetPath.includes(path.join('models', 'diarization'))));
 });
 
-test('summary cache validation requires pinned checksum before ready state', async () => {
+test('summary cache validation accepts pinned catalog artifact checksums', async () => {
   const fsModule = createMemoryFs();
   const userDataDir = '/tmp/AvaNevis';
   const artifact = getSummaryArtifactForPlatform(DEFAULT_SUMMARY_MODEL_ID, 'win32', 'x64');
@@ -244,19 +301,46 @@ test('summary cache validation requires pinned checksum before ready state', asy
   });
 
   assert.equal(cache.installed, true);
-  assert.equal(cache.valid, false);
-  assert.equal(cache.checksumStatus, 'pendingPinnedChecksum');
-  assert.equal(cache.validationStatus, 'pendingPinnedArtifact');
+  assert.equal(cache.valid, true);
+  assert.equal(cache.checksumStatus, 'notChecked');
+  assert.equal(cache.validationStatus, 'installed');
 });
 
-test('summary runtime directory stays in userData model cache', () => {
+test('summary runtime cache stays in userData and requires llama-cli', () => {
+  const fsModule = createMemoryFs();
   const artifact = getSummaryArtifactForPlatform(DEFAULT_SUMMARY_MODEL_ID, 'win32', 'x64');
   const runtimeDir = getSummaryRuntimeDir('/tmp/AvaNevis', artifact);
+  const runtimeExecutable = getSummaryRuntimeExecutablePath('/tmp/AvaNevis', artifact, {
+    executableName: 'llama-cli.exe',
+  });
 
   assert.equal(runtimeDir, path.join('/tmp/AvaNevis', 'ai-addons', 'models', 'summary', DEFAULT_SUMMARY_MODEL_ID, 'runtime', 'win32-x64'));
+  assert.equal(runtimeExecutable, path.join(runtimeDir, 'llama-cli.exe'));
+
+  const missingCache = checkSummaryRuntimeCache({
+    userDataDir: '/tmp/AvaNevis',
+    platform: 'win32',
+    arch: 'x64',
+    modelId: DEFAULT_SUMMARY_MODEL_ID,
+    fsModule,
+  });
+  assert.equal(missingCache.valid, false);
+  assert.equal(missingCache.reason, 'llama.cpp runtime is not installed.');
+
+  fsModule.mkdirSync(runtimeDir);
+  fsModule.writeFileSync(runtimeExecutable, 'bin');
+  const installedCache = checkSummaryRuntimeCache({
+    userDataDir: '/tmp/AvaNevis',
+    platform: 'win32',
+    arch: 'x64',
+    modelId: DEFAULT_SUMMARY_MODEL_ID,
+    fsModule,
+  });
+  assert.equal(installedCache.valid, true);
+  assert.equal(installedCache.executablePath, runtimeExecutable);
 });
 
-test('validate summary model accepts installed artifact with matching checksum', async () => {
+test('validate summary model accepts installed model and runtime with matching checksum', async () => {
   const fsModule = createMemoryFs();
   const catalog = createCatalogWithPinnedSummaryArtifact({
     sha256: 'a0700a1b17cb3f2328437cbc70a3ac543fab2c1e7d1d8014862d801e1eb11162',
@@ -266,6 +350,9 @@ test('validate summary model accepts installed artifact with matching checksum',
   const artifactPath = getSummaryArtifactPath(userDataDir, artifact);
   fsModule.mkdirSync(path.dirname(artifactPath));
   fsModule.writeFileSync(artifactPath, 'checksum target\n');
+  const runtimeExecutable = getSummaryRuntimeExecutablePath(userDataDir, artifact, catalog.summary.runtimeArtifacts['win32-x64']);
+  fsModule.mkdirSync(path.dirname(runtimeExecutable));
+  fsModule.writeFileSync(runtimeExecutable, 'bin');
 
   const status = await validateSummaryModel({
     userDataDir,
@@ -280,9 +367,10 @@ test('validate summary model accepts installed artifact with matching checksum',
   assert.equal(status.features.summary.status, 'ready');
   assert.equal(status.features.summary.setupComplete, true);
   assert.equal(status.features.summary.cache.checksumStatus, 'notChecked');
+  assert.equal(status.features.summary.runtimeCache.installed, true);
 });
 
-test('setup summary model refuses downloads until artifact metadata is pinned', async () => {
+test('setup summary model uses pinned default metadata and fails if runtime install fails', async () => {
   const progress = [];
   const status = await setupSummaryModel({
     userDataDir: '/tmp/AvaNevis',
@@ -291,19 +379,23 @@ test('setup summary model refuses downloads until artifact metadata is pinned', 
     safeStorage: createSafeStorage(),
     fsModule: createMemoryFs(),
     emitProgress: (event) => progress.push(event),
+    downloader: async ({ destinationPath }) => {
+      throw new Error(`unexpected download ${destinationPath}`);
+    },
   });
 
   assert.equal(status.features.summary.status, 'error');
-  assert.match(status.features.summary.error, /checksum/);
+  assert.match(status.features.summary.error, /unexpected download/);
   assert.equal(progress.at(-1).status, 'error');
 });
 
-test('setup summary model downloads explicit artifact only when metadata is pinned', async () => {
+test('setup summary model downloads explicit runtime and model artifacts only when metadata is pinned', async () => {
   const fsModule = createMemoryFs();
   const catalog = createCatalogWithPinnedSummaryArtifact({
     sha256: 'a0700a1b17cb3f2328437cbc70a3ac543fab2c1e7d1d8014862d801e1eb11162',
   });
-  let downloadedUrl = null;
+  const downloadedUrls = [];
+  const runtimeArtifact = catalog.summary.runtimeArtifacts['win32-x64'];
   const status = await setupSummaryModel({
     userDataDir: '/tmp/AvaNevis',
     platform: 'win32',
@@ -313,15 +405,21 @@ test('setup summary model downloads explicit artifact only when metadata is pinn
     fsModule,
     catalog,
     downloader: async ({ url, destinationPath, onProgress }) => {
-      downloadedUrl = url;
-      fsModule.writeFileSync(destinationPath, 'checksum target\n');
+      downloadedUrls.push(url);
+      fsModule.writeFileSync(destinationPath, url.endsWith('/runtime.zip') ? 'runtime archive\n' : 'checksum target\n');
       onProgress({ percent: 50 });
+    },
+    extractor: async (archivePath) => {
+      const archive = runtimeArtifact.artifacts[0];
+      assert.equal(archivePath, getSummaryRuntimeArchivePath('/tmp/AvaNevis', getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog), archive));
+      fsModule.writeFileSync(getSummaryRuntimeExecutablePath('/tmp/AvaNevis', getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog), runtimeArtifact), 'bin');
     },
   });
 
-  assert.equal(downloadedUrl, 'https://example.test/model.gguf');
+  assert.deepEqual(downloadedUrls, ['https://example.test/runtime.zip', 'https://example.test/model.gguf']);
   assert.equal(status.features.summary.status, 'ready');
   assert.equal(status.features.summary.setupComplete, true);
+  assert.equal(status.features.summary.runtimeCache.valid, true);
 });
 
 test('remove summary model clears cache and manifest state', async () => {
@@ -337,7 +435,11 @@ test('remove summary model clears cache and manifest state', async () => {
     safeStorage: createSafeStorage(),
     fsModule,
     catalog,
-    downloader: async ({ destinationPath }) => fsModule.writeFileSync(destinationPath, 'checksum target\n'),
+    downloader: async ({ url, destinationPath }) => fsModule.writeFileSync(destinationPath, url.endsWith('/runtime.zip') ? 'runtime archive\n' : 'checksum target\n'),
+    extractor: async () => fsModule.writeFileSync(
+      getSummaryRuntimeExecutablePath('/tmp/AvaNevis', getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog), catalog.summary.runtimeArtifacts['win32-x64']),
+      'bin',
+    ),
   });
 
   const status = await removeSummaryModel({

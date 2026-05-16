@@ -161,15 +161,19 @@ class MeetingManager:
         return unique_meetings
 
     @staticmethod
-    def _read_transcript_text(transcript_path: Path) -> str:
-        if not transcript_path.exists():
+    def _read_text_file(file_path: Path, label: str) -> str:
+        if not file_path.exists():
             return ""
 
         try:
-            return transcript_path.read_text(encoding='utf-8')
+            return file_path.read_text(encoding='utf-8')
         except Exception as exc:
-            print(f"Warning: Could not read transcript: {exc}", file=sys.stderr)
+            print(f"Warning: Could not read {label}: {exc}", file=sys.stderr)
             return ""
+
+    @staticmethod
+    def _read_transcript_text(transcript_path: Path) -> str:
+        return MeetingManager._read_text_file(transcript_path, 'transcript')
 
     @staticmethod
     def _select_scannable_audio_files(recordings_dir: Path) -> List[Path]:
@@ -631,6 +635,9 @@ class MeetingManager:
                         hydrated['transcript'] = meeting['transcript']
                     else:
                         hydrated['transcript'] = ""
+                    summary = (meeting.get('ai') or {}).get('summary')
+                    summary_path = summary.get('markdownPath') if isinstance(summary, dict) else None
+                    hydrated['summary'] = self._read_text_file(Path(summary_path), 'summary') if summary_path else ""
                     return hydrated
             return None
 

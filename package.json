@@ -26,8 +26,10 @@
   ],
   "author": "AvaNevis",
   "license": "MIT",
+  "dependencies": {
+    "adm-zip": "^0.5.16"
+  },
   "devDependencies": {
-    "adm-zip": "^0.5.16",
     "electron": "^42.1.0",
     "electron-builder": "^26.8.1"
   },
