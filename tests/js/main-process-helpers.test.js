@@ -12,6 +12,7 @@ const {
   buildPermissionErrorMessage,
   buildRecordingPreflightReport,
   buildQuitRecordingDialogOptions,
+  buildDiarizationOutputPath,
   buildModelDownloadCheck,
   buildPythonModuleArgs,
   buildTranscriberArgs,
@@ -27,6 +28,7 @@ const {
   getTranscriberModule,
   resolveStopTimeoutAction,
   isModelDownloadErrorOutput,
+  parseAiBackendProgressLine,
   parseRecorderMessageLine,
   parseRecorderStdoutChunk,
   resolveExternalUrl,
@@ -115,6 +117,43 @@ test('resolveTranscriptionAudioFile uses opus sibling only when wav is missing',
     }),
     opusPath,
   );
+});
+
+
+test('buildDiarizationOutputPath creates speakers sidecar path', () => {
+  assert.equal(
+    buildDiarizationOutputPath({ audioPath: path.join('/recordings', 'meeting_20260107_104555.opus') }),
+    path.join('/recordings', 'meeting_20260107_104555.speakers.json'),
+  );
+  assert.equal(
+    buildDiarizationOutputPath({
+      audioPath: path.join('/recordings', 'meeting.opus'),
+      outputPath: path.join('/custom', 'meeting.speakers.json'),
+    }),
+    path.join('/custom', 'meeting.speakers.json'),
+  );
+});
+
+
+test('parseAiBackendProgressLine returns redacted progress events only', () => {
+  const event = parseAiBackendProgressLine(JSON.stringify({
+    type: 'progress',
+    feature: 'diarization',
+    phase: 'loading model',
+    message: 'Loading with hf_secret_token',
+    percent: 120,
+    transcriptText: 'do not expose',
+    token: 'hf_secret_token',
+  }), 'diarization');
+
+  assert.deepEqual(event, {
+    feature: 'diarization',
+    phase: 'loading-model',
+    message: 'Loading with [redacted-token]',
+    percent: 100,
+  });
+  assert.equal(parseAiBackendProgressLine('not json', 'diarization'), null);
+  assert.equal(parseAiBackendProgressLine('{"type":"progress","feature":"summary"}', 'diarization'), null);
 });
 
 

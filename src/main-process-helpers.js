@@ -3,6 +3,16 @@ const { pathToFileURL } = require('url');
 
 const TRUSTED_GITHUB_PATH_PREFIX = '/AmirArshad/meeting-transcriber';
 const MACOS_PERMISSION_CHECK_TIMEOUT_MS = 8000;
+const AI_PROGRESS_SENSITIVE_KEYS = new Set([
+  'hfToken',
+  'llmOutput',
+  'prompt',
+  'rawOutput',
+  'text',
+  'token',
+  'transcript',
+  'transcriptText',
+]);
 
 function buildFileUrl(filePath) {
   const normalizedPath = String(filePath || '').trim();
@@ -116,6 +126,69 @@ function buildPythonModuleArgs(moduleName, extraArgs = []) {
 
 function buildTranscriberArgs({ platform, arch, extraArgs = [] } = {}) {
   return buildPythonModuleArgs(getTranscriberModule(platform, arch), extraArgs);
+}
+
+function sanitizeAiProgressMessage(message) {
+  return String(message || '')
+    .replace(/hf_[A-Za-z0-9_-]+/g, '[redacted-token]')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 300);
+}
+
+function parseAiBackendProgressLine(line, expectedFeature = null) {
+  let parsed;
+  try {
+    parsed = JSON.parse(String(line || '').trim());
+  } catch (error) {
+    return null;
+  }
+
+  if (!parsed || parsed.type !== 'progress') {
+    return null;
+  }
+
+  const feature = String(parsed.feature || '').trim();
+  if (!feature || (expectedFeature && feature !== expectedFeature)) {
+    return null;
+  }
+
+  const event = {
+    feature,
+    phase: String(parsed.phase || 'status').replace(/[^A-Za-z0-9._-]+/g, '-').slice(0, 80),
+    message: sanitizeAiProgressMessage(parsed.message),
+  };
+
+  if (Number.isFinite(parsed.percent)) {
+    event.percent = Math.max(0, Math.min(100, Number(parsed.percent)));
+  }
+  if (Number.isInteger(parsed.chunkIndex)) {
+    event.chunkIndex = parsed.chunkIndex;
+  }
+  if (Number.isInteger(parsed.chunkTotal)) {
+    event.chunkTotal = parsed.chunkTotal;
+  }
+  if (typeof parsed.status === 'string' && parsed.status.trim()) {
+    event.status = parsed.status.trim().slice(0, 80);
+  }
+
+  for (const key of Object.keys(parsed)) {
+    if (AI_PROGRESS_SENSITIVE_KEYS.has(key)) {
+      delete event[key];
+    }
+  }
+
+  return event;
+}
+
+function buildDiarizationOutputPath({ audioPath, outputPath } = {}) {
+  if (outputPath) {
+    return String(outputPath);
+  }
+
+  const sourcePath = String(audioPath || '');
+  const parsedPath = path.parse(sourcePath);
+  return path.join(parsedPath.dir || '.', `${parsedPath.name || 'meeting'}.speakers.json`);
 }
 
 function resolveTranscriptionAudioFile({ audioFile, recordingsDir, existsSync }) {
@@ -631,6 +704,7 @@ module.exports = {
   buildModelDownloadCheck,
   buildPythonModuleArgs,
   buildTranscriberArgs,
+  buildDiarizationOutputPath,
   cacheContainsModel,
   classifyRecorderStdoutChunk,
   dedupeMessages,
@@ -647,6 +721,7 @@ module.exports = {
   isModelDownloadErrorOutput,
   normalizeRecorderLevels,
   parseRecorderMessageLine,
+  parseAiBackendProgressLine,
   parseRecorderStdoutChunk,
   resolveTranscriptionAudioFile,
   splitBufferedLines,

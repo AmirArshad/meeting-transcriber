@@ -37,6 +37,7 @@ Goal: add optional post-install local speaker diarization and transcript summari
 - 2026-05-16: Product direction updated: skip Phase 1 spikes and proceed with catalog-driven v1 defaults that can be swapped as better local models become available.
 - 2026-05-16: Summary model distribution decision: use a larger optional installer/download artifact, similar to the CUDA setup flow, instead of bundling the model in the base installer or doing opaque background downloads.
 - 2026-05-16: Added explicit AI add-on setup/check/remove/validate helpers and IPC wrappers, safe redacted `ai-addon-progress` events, platform-specific summary artifact selection, and pinned-filename/checksum enforcement that refuses summary downloads until artifact metadata is complete. `npm test` and `npm run test:python` passed.
+- 2026-05-16: Added lazy pyannote diarization runner and `diarize-transcript` IPC boundary without changing Whisper transcription paths. The backend prepares 16 kHz mono WAV input, disables pyannote metrics, prefers exclusive diarization output, writes `*.speakers.json`, and emits redacted progress. `npm test` and `npm run test:python` passed.
 
 ## V1 Model Defaults
 
@@ -84,14 +85,14 @@ Skipped by product direction. Proceed with the V1 Model Defaults above and keep 
 ## Phase 3 - Diarization Backend
 
 - [x] Add `backend/diarization/` module. (Pure merge helpers only; pyannote runtime integration remains pending.)
-- [ ] Add lazy loading for `pyannote/speaker-diarization-community-1`.
-- [ ] Set `PYANNOTE_METRICS_ENABLED=0` in app-spawned diarization processes.
-- [ ] Convert Opus recordings to 16 kHz mono WAV when required.
-- [ ] Prefer `exclusive_speaker_diarization` for alignment.
-- [ ] Preserve standard diarization output as a fallback only when exclusive output is unavailable.
+- [x] Add lazy loading for `pyannote/speaker-diarization-community-1`.
+- [x] Set `PYANNOTE_METRICS_ENABLED=0` in app-spawned diarization processes.
+- [x] Convert Opus recordings to 16 kHz mono WAV when required.
+- [x] Prefer `exclusive_speaker_diarization` for alignment.
+- [x] Preserve standard diarization output as a fallback only when exclusive output is unavailable.
 - [x] Merge speaker labels into Whisper segments by timestamp overlap.
-- [ ] Return structured JSON to Electron and progress-safe stderr/events.
-- [ ] Gracefully save the normal transcript if diarization fails.
+- [x] Return structured JSON to Electron and progress-safe stderr/events.
+- [ ] Gracefully save the normal transcript if diarization fails. (Backend/IPC boundaries are ready; automatic post-transcription integration remains pending.)
 
 ## Phase 4 - Summary Backend
 
@@ -112,11 +113,11 @@ Skipped by product direction. Proceed with the V1 Model Defaults above and keep 
 - [x] Add secure token IPC for store/get/delete or reuse an existing safeStorage abstraction if available. (Status/delete/store only expose redacted state; token retrieval remains main-process-only for future backend calls.)
 - [x] Add `setup-diarization`, `remove-diarization-setup`, and token validation IPC handlers.
 - [x] Add `setup-summary-model` and `remove-summary-model` IPC handlers. (Downloads stay blocked until pinned artifact URL/checksum metadata is supplied.)
-- [ ] Add `diarize-transcript` IPC handler for post-transcription integration.
+- [x] Add `diarize-transcript` IPC handler for post-transcription integration. (Not yet auto-wired into the renderer transcription flow.)
 - [ ] Add `generate-summary` IPC handler for Home and History actions.
 - [ ] Add progress events for model download, validation, diarization, chunk summaries, final merge, and save. (Partial: add-on setup/download/validation events now emit through redacted `ai-addon-progress`.)
 - [x] Extend meeting metadata with `ai.diarization` and `ai.summary` references without storing large derived output inline.
-- [ ] Save derived files: `*.speakers.json`, `*.summary.json`, and `*.summary.md`. (Partial: metadata can reference and delete these files; generation/save integration remains pending.)
+- [ ] Save derived files: `*.speakers.json`, `*.summary.json`, and `*.summary.md`. (Partial: diarization can now write `*.speakers.json`; summary generation/save integration remains pending.)
 - [x] Preserve `backend/meeting_manager.py` file locking, atomic writes, and transactional behavior.
 - [ ] Use `sourceTranscriptHash` to mark stale summaries after transcript changes.
 

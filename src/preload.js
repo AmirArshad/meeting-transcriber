@@ -79,6 +79,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Transcription
   transcribeAudio: (options) => ipcRenderer.invoke('transcribe-audio', options),
+  diarizeTranscript: (options) => ipcRenderer.invoke('diarize-transcript', options),
 
   // Meeting history
   listMeetings: () => ipcRenderer.invoke('list-meetings'),
@@ -127,6 +128,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onGPUInstallProgress: (callback) => addListener('gpu-install-progress', callback),
   onModelDownloadProgress: (callback) => addListener('model-download-progress', callback),
   onAiAddonProgress: (callback) => addListener('ai-addon-progress', callback),
+  onDiarizationProgress: (callback) => addListener('diarization-progress', callback),
   onAudioLevels: (callback) => addListener('audio-levels', callback),
   onRecordingWarning: (callback) => addListener('recording-warning', callback),
   onRecordingFailed: (callback) => addListener('recording-failed', callback),

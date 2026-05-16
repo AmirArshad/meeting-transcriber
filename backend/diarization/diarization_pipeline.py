@@ -1,0 +1,307 @@
+"""Runtime speaker diarization pipeline.
+
+The pyannote runtime is imported lazily so unit tests and normal app startup do
+not require model downloads or GPU-specific dependencies. Progress is emitted as
+structured JSON on stderr and intentionally excludes transcript text and tokens.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+from .speaker_segments import merge_speaker_labels
+
+
+DEFAULT_MODEL_REF = "pyannote/speaker-diarization-community-1"
+UNKNOWN_PROGRESS_ERROR = "Speaker diarization failed."
+
+os.environ.setdefault("PYANNOTE_METRICS_ENABLED", "0")
+
+
+def _safe_message(message: Any) -> str:
+    cleaned = re.sub(r"hf_[A-Za-z0-9_-]+", "[redacted-token]", str(message or ""))
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned[:300]
+
+
+def emit_progress(phase: str, message: str, *, percent: Optional[float] = None) -> None:
+    payload: Dict[str, Any] = {
+        "type": "progress",
+        "feature": "diarization",
+        "phase": re.sub(r"[^A-Za-z0-9._-]+", "-", str(phase or "status"))[:80],
+        "message": _safe_message(message),
+    }
+
+    if percent is not None:
+        try:
+            payload["percent"] = max(0.0, min(100.0, float(percent)))
+        except (TypeError, ValueError):
+            pass
+
+    print(json.dumps(payload), file=sys.stderr, flush=True)
+
+
+def normalize_speaker_count(value: Any) -> Optional[int]:
+    if value in (None, "", "auto"):
+        return None
+
+    count = int(value)
+    if count < 2 or count > 10:
+        raise ValueError("speaker count must be between 2 and 10, or 'auto'")
+    return count
+
+
+def build_audio_conversion_command(ffmpeg_path: str, source_path: Path, target_path: Path) -> List[str]:
+    return [
+        ffmpeg_path,
+        "-y",
+        "-i",
+        str(source_path),
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        str(target_path),
+    ]
+
+
+def prepare_diarization_audio(audio_path: str, work_dir: str, *, ffmpeg_path: str = "ffmpeg") -> Path:
+    source_path = Path(audio_path)
+    if not source_path.exists():
+        raise FileNotFoundError(f"Audio file not found: {source_path}")
+
+    target_path = Path(work_dir) / f"{source_path.stem}.diarization.16k.wav"
+    command = build_audio_conversion_command(ffmpeg_path, source_path, target_path)
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+
+    if result.returncode != 0:
+        raise RuntimeError(f"Could not prepare audio for diarization with ffmpeg (exit code {result.returncode}).")
+    if not target_path.exists():
+        raise RuntimeError("ffmpeg did not create the diarization WAV file.")
+
+    return target_path
+
+
+def load_transcript_segments(segments_json_path: str) -> List[Dict[str, Any]]:
+    with open(segments_json_path, "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+
+    if isinstance(payload, dict):
+        segments = payload.get("segments")
+    else:
+        segments = payload
+
+    if not isinstance(segments, list):
+        raise ValueError("Transcript segments JSON must be a list or an object with a segments list.")
+
+    normalized: List[Dict[str, Any]] = []
+    for item in segments:
+        if isinstance(item, dict):
+            normalized.append(dict(item))
+    return normalized
+
+
+def select_annotation(diarization_result: Any) -> Tuple[Any, str]:
+    for field in ("exclusive_speaker_diarization", "speaker_diarization"):
+        if isinstance(diarization_result, dict):
+            candidate = diarization_result.get(field)
+        else:
+            candidate = getattr(diarization_result, field, None)
+
+        if candidate is not None:
+            return candidate, field
+
+    return diarization_result, "diarization"
+
+
+def _segment_from_mapping(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    try:
+        start = float(item.get("start", 0) or 0)
+        end = float(item.get("end", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+
+    speaker = str(item.get("speaker", "") or "").strip()
+    if not speaker or end <= start:
+        return None
+
+    return {"start": start, "end": end, "speaker": speaker}
+
+
+def annotation_to_speaker_segments(annotation: Any) -> List[Dict[str, Any]]:
+    if isinstance(annotation, list):
+        segments = [_segment_from_mapping(item) for item in annotation if isinstance(item, dict)]
+        return [segment for segment in segments if segment is not None]
+
+    if not hasattr(annotation, "itertracks"):
+        raise ValueError("Unsupported diarization annotation format.")
+
+    speaker_segments: List[Dict[str, Any]] = []
+    for turn, _track, speaker in annotation.itertracks(yield_label=True):
+        start = float(getattr(turn, "start", 0) or 0)
+        end = float(getattr(turn, "end", 0) or 0)
+        speaker_label = str(speaker or "").strip()
+        if speaker_label and end > start:
+            speaker_segments.append({"start": start, "end": end, "speaker": speaker_label})
+
+    return speaker_segments
+
+
+def load_pyannote_pipeline(model_ref: str, hf_token: str) -> Any:
+    try:
+        from pyannote.audio import Pipeline  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise RuntimeError("pyannote.audio is not installed for speaker diarization.") from exc
+
+    try:
+        return Pipeline.from_pretrained(model_ref, token=hf_token)
+    except TypeError:
+        return Pipeline.from_pretrained(model_ref, use_auth_token=hf_token)
+
+
+def move_pipeline_to_best_device(pipeline: Any) -> str:
+    try:
+        import torch  # type: ignore[import-not-found]
+
+        if torch.cuda.is_available():
+            pipeline.to(torch.device("cuda"))
+            return "cuda"
+    except Exception:
+        pass
+
+    return "cpu"
+
+
+def run_pyannote_diarization(
+    audio_path: Path,
+    *,
+    model_ref: str,
+    hf_token: str,
+    speaker_count: Optional[int] = None,
+) -> Tuple[List[Dict[str, Any]], str, str]:
+    if not hf_token:
+        raise ValueError("Hugging Face token is required for speaker diarization.")
+
+    emit_progress("loading-model", "Loading speaker diarization model.", percent=35)
+    pipeline = load_pyannote_pipeline(model_ref, hf_token)
+    device = move_pipeline_to_best_device(pipeline)
+
+    emit_progress("running-model", "Running speaker diarization locally.", percent=55)
+    kwargs: Dict[str, Any] = {}
+    if speaker_count is not None:
+        kwargs["num_speakers"] = speaker_count
+
+    result = pipeline(str(audio_path), **kwargs)
+    annotation, annotation_source = select_annotation(result)
+
+    emit_progress("merging-speakers", "Merging speaker labels into transcript timestamps.", percent=80)
+    return annotation_to_speaker_segments(annotation), annotation_source, device
+
+
+def build_diarization_result(
+    *,
+    audio_path: str,
+    transcript_segments: Iterable[Dict[str, Any]],
+    speaker_segments: Iterable[Dict[str, Any]],
+    model_ref: str,
+    annotation_source: str,
+    device: str,
+) -> Dict[str, Any]:
+    speaker_turns = [dict(segment) for segment in speaker_segments]
+    merged_segments = merge_speaker_labels(transcript_segments, speaker_turns)
+    speaker_count = len({segment.get("speaker") for segment in speaker_turns if segment.get("speaker")})
+
+    return {
+        "status": "completed",
+        "model": model_ref,
+        "completedAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "audioPath": str(audio_path),
+        "speakerCount": speaker_count,
+        "annotationSource": annotation_source,
+        "device": device,
+        "speakerSegments": speaker_turns,
+        "segments": merged_segments,
+    }
+
+
+def save_diarization_result(output_json: str, result: Dict[str, Any]) -> None:
+    output_path = Path(output_json)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as handle:
+        json.dump(result, handle, indent=2, ensure_ascii=False)
+        handle.write("\n")
+
+
+def diarize_transcript(
+    *,
+    audio_path: str,
+    segments_json_path: str,
+    output_json: str,
+    model_ref: str = DEFAULT_MODEL_REF,
+    speaker_count: Optional[int] = None,
+    ffmpeg_path: str = "ffmpeg",
+    hf_token: Optional[str] = None,
+) -> Dict[str, Any]:
+    emit_progress("loading-transcript", "Loading transcript segments.", percent=5)
+    transcript_segments = load_transcript_segments(segments_json_path)
+
+    with tempfile.TemporaryDirectory(prefix="avanevis-diarization-") as work_dir:
+        emit_progress("preparing-audio", "Preparing audio for speaker diarization.", percent=15)
+        prepared_audio = prepare_diarization_audio(audio_path, work_dir, ffmpeg_path=ffmpeg_path)
+        speaker_segments, annotation_source, device = run_pyannote_diarization(
+            prepared_audio,
+            model_ref=model_ref,
+            hf_token=hf_token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN") or "",
+            speaker_count=speaker_count,
+        )
+
+    result = build_diarization_result(
+        audio_path=audio_path,
+        transcript_segments=transcript_segments,
+        speaker_segments=speaker_segments,
+        model_ref=model_ref,
+        annotation_source=annotation_source,
+        device=device,
+    )
+    save_diarization_result(output_json, result)
+    emit_progress("completed", "Speaker diarization completed.", percent=100)
+    return result
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run local speaker diarization for an AvaNevis transcript")
+    parser.add_argument("--audio", required=True, help="Source audio file path")
+    parser.add_argument("--segments-json", required=True, help="Transcript segments JSON path")
+    parser.add_argument("--output-json", required=True, help="Output speakers JSON path")
+    parser.add_argument("--model-ref", default=DEFAULT_MODEL_REF, help="pyannote model reference")
+    parser.add_argument("--speaker-count", default="auto", help="Known speaker count or auto")
+    parser.add_argument("--ffmpeg", default="ffmpeg", help="ffmpeg executable path")
+    args = parser.parse_args()
+
+    try:
+        result = diarize_transcript(
+            audio_path=args.audio,
+            segments_json_path=args.segments_json,
+            output_json=args.output_json,
+            model_ref=args.model_ref,
+            speaker_count=normalize_speaker_count(args.speaker_count),
+            ffmpeg_path=args.ffmpeg,
+        )
+        print(json.dumps({**result, "segmentsPath": args.output_json}, ensure_ascii=True))
+    except Exception as exc:
+        emit_progress("error", UNKNOWN_PROGRESS_ERROR)
+        print(f"ERROR: {_safe_message(exc)}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

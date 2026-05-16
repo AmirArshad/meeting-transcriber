@@ -18,6 +18,7 @@ const {
   buildMacOSPermissionCheckFailureStatus,
   buildQuitRecordingDialogOptions,
   buildModelDownloadCheck,
+  buildDiarizationOutputPath,
   buildPythonModuleArgs,
   buildTranscriberArgs,
   cacheContainsModel,
@@ -28,6 +29,7 @@ const {
   resolveStopTimeoutAction,
   isModelDownloadErrorOutput,
   parseRecorderStdoutChunk,
+  parseAiBackendProgressLine,
   resolveExternalUrl,
   resolveTranscriptionAudioFile,
   MACOS_PERMISSION_CHECK_TIMEOUT_MS,
@@ -46,6 +48,7 @@ const {
 const {
   TOKEN_KEYS,
   deleteAiAddonToken,
+  getAiAddonToken,
   hasAiAddonToken,
   storeAiAddonToken,
 } = require('./ai-addon-token-store');
@@ -553,6 +556,19 @@ function getTranscriberArgs(extraArgs = []) {
 
 function getBackendModuleArgs(moduleName, extraArgs = []) {
   return buildPythonModuleArgs(moduleName, extraArgs);
+}
+
+function buildDiarizationArgs({ audioPath, segmentsJsonPath, outputPath, modelRef, speakerCount }) {
+  const args = [
+    '--audio', audioPath,
+    '--segments-json', segmentsJsonPath,
+    '--output-json', outputPath,
+    '--model-ref', modelRef || 'pyannote/speaker-diarization-community-1',
+    '--speaker-count', speakerCount === undefined || speakerCount === null ? 'auto' : String(speakerCount),
+    '--ffmpeg', pythonConfig.ffmpegPath,
+  ];
+
+  return getBackendModuleArgs('diarization.diarization_pipeline', args);
 }
 
 // Add ffmpeg to PATH so Python scripts can find it
@@ -2230,6 +2246,92 @@ ipcMain.handle('transcribe-audio', async (event, options) => {
       } else {
         reject(new Error(`Transcription failed: ${errorOutput || 'Unknown error'}`));
       }
+    });
+  });
+});
+
+ipcMain.handle('diarize-transcript', async (event, options = {}) => {
+  const { audioPath, segments, segmentsJsonPath, outputPath, modelRef, speakerCount } = options;
+
+  if (!audioPath) {
+    throw new Error('diarize-transcript requires an audioPath');
+  }
+
+  let tempSegmentsPath = null;
+  let resolvedSegmentsJsonPath = segmentsJsonPath;
+  if (!resolvedSegmentsJsonPath) {
+    if (!Array.isArray(segments)) {
+      throw new Error('diarize-transcript requires transcript segments');
+    }
+    const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'avanevis-diarization-segments-'));
+    tempSegmentsPath = path.join(tempDir, 'segments.json');
+    await fs.promises.writeFile(tempSegmentsPath, JSON.stringify({ segments }, null, 2), 'utf8');
+    resolvedSegmentsJsonPath = tempSegmentsPath;
+  }
+
+  const resolvedOutputPath = buildDiarizationOutputPath({ audioPath, outputPath });
+  const token = getAiAddonToken({
+    userDataDir: app.getPath('userData'),
+    tokenKey: TOKEN_KEYS.diarizationHuggingFace,
+    safeStorage,
+  });
+
+  return new Promise((resolve, reject) => {
+    const python = spawnTrackedPython(buildDiarizationArgs({
+      audioPath,
+      segmentsJsonPath: resolvedSegmentsJsonPath,
+      outputPath: resolvedOutputPath,
+      modelRef,
+      speakerCount,
+    }), {
+      cwd: pythonConfig.backendPath,
+      env: {
+        HF_TOKEN: token || '',
+        HUGGINGFACE_HUB_TOKEN: token || '',
+        PYANNOTE_METRICS_ENABLED: '0',
+      },
+    });
+
+    let output = '';
+    let errorOutput = '';
+
+    python.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    python.stderr.on('data', (data) => {
+      const stderrChunk = data.toString();
+      errorOutput += stderrChunk;
+      for (const line of stderrChunk.split(/\r?\n/)) {
+        const progressEvent = parseAiBackendProgressLine(line, 'diarization');
+        if (progressEvent) {
+          sendToRenderer('diarization-progress', progressEvent);
+        }
+      }
+    });
+
+    python.on('close', (code) => {
+      if (tempSegmentsPath) {
+        fs.promises.rm(path.dirname(tempSegmentsPath), { recursive: true, force: true }).catch(() => {});
+      }
+
+      if (code === 0) {
+        try {
+          resolve(JSON.parse(output));
+        } catch (error) {
+          reject(new Error(`Failed to parse diarization result: ${error.message}`));
+        }
+        return;
+      }
+
+      reject(new Error('Speaker diarization failed.'));
+    });
+
+    python.on('error', (error) => {
+      if (tempSegmentsPath) {
+        fs.promises.rm(path.dirname(tempSegmentsPath), { recursive: true, force: true }).catch(() => {});
+      }
+      reject(error);
     });
   });
 });
