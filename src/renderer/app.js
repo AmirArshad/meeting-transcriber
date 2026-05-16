@@ -7,6 +7,7 @@ const DEFAULT_SUMMARY_PROFILE = 'balanced';
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const { getRecordButtonAction } = window.recordingStateHelpers;
 const {
+  buildHomeAiAddonPrompt,
   getDiarizationSetupMessage,
   getSummarySetupMessage,
   normalizeHistoryDetailTab,
@@ -52,6 +53,7 @@ let currentRecordingMeeting = null;
 let pendingMeetingTranscriptId = null;
 let summaryGenerationMeetingId = null;
 let activeHistoryDetailTab = 'transcript';
+let homePromptContext = { platform: null, hasNvidiaGpu: false, cudaInstalled: false };
 let meetings = [];
 let audioVisualizer = null;
 let isFirstRecording = true; // Track if this is first recording (for longer timeout)
@@ -120,7 +122,7 @@ function showSummaryMessage(message, isError = false) {
   updateSummaryActionState();
 }
 
-function renderSummaryMarkdown(markdown) {
+function renderSummaryMarkdown(markdown, options = {}) {
   const summaryEl = document.getElementById('meeting-summary');
   if (!summaryEl) {
     return;
@@ -130,6 +132,12 @@ function renderSummaryMarkdown(markdown) {
   if (markdown && markdown.trim()) {
     summaryEl.dataset.markdown = markdown;
     renderMarkdownInto(summaryEl, markdown);
+    if (options.stale) {
+      const warning = document.createElement('p');
+      warning.className = 'summary-stale-warning';
+      warning.textContent = 'This summary may be stale because the transcript changed after it was generated. Regenerate it for the latest transcript.';
+      summaryEl.prepend(warning);
+    }
     updateSummaryActionState();
     return;
   }
@@ -664,6 +672,38 @@ function openSettingsAtAiAddons() {
   }
 }
 
+function updateHomeAiAddonCTA(aiStatus) {
+  const cta = document.getElementById('ai-addon-cta');
+  if (!cta) {
+    return;
+  }
+
+  const prompt = buildHomeAiAddonPrompt({
+    aiStatus,
+    platform: homePromptContext.platform,
+    cudaInstalled: homePromptContext.cudaInstalled,
+    hasNvidiaGpu: homePromptContext.hasNvidiaGpu,
+  });
+
+  if (!prompt) {
+    cta.style.display = 'none';
+    return;
+  }
+
+  const title = document.getElementById('ai-addon-cta-title');
+  const sub = document.getElementById('ai-addon-cta-sub');
+  if (title) title.textContent = prompt.title;
+  if (sub) sub.textContent = prompt.message;
+  cta.dataset.feature = prompt.feature;
+  cta.style.display = 'flex';
+}
+
+function setupHomeAiAddonCTA() {
+  const cta = document.getElementById('ai-addon-cta');
+  if (!cta) return;
+  cta.addEventListener('click', openSettingsAtAiAddons);
+}
+
 function closeInlineTitleEditor({ headingId, editBtnId, formId, editBtnDisplay = '' }) {
   const heading = document.getElementById(headingId);
   const editBtn = document.getElementById(editBtnId);
@@ -785,6 +825,8 @@ async function init() {
 
     // Step 4: Load meeting history
     await loadMeetingHistory();
+
+    await refreshHomePrompts();
 
     // Initialize visualizer
     audioVisualizer = new AudioVisualizer();
@@ -1164,7 +1206,7 @@ async function selectMeeting(meetingId) {
     }
 
     if (fullMeeting.summary) {
-      renderSummaryMarkdown(fullMeeting.summary);
+      renderSummaryMarkdown(fullMeeting.summary, { stale: fullMeeting.summaryStale });
     } else {
       showSummaryMessage('No summary yet. Generate one locally when the summary model is installed.');
     }
@@ -2065,7 +2107,7 @@ async function generateSummaryForMeeting(meetingId, button) {
 
     if (currentMeetingId === meetingId) {
       const fullMeeting = await window.electronAPI.getMeeting(meetingId);
-      renderSummaryMarkdown((fullMeeting && fullMeeting.summary) || '');
+      renderSummaryMarkdown((fullMeeting && fullMeeting.summary) || '', { stale: fullMeeting && fullMeeting.summaryStale });
       syncMeetingInList((result && result.meeting) || fullMeeting);
       activateHistoryDetailTab('summary');
     } else {
@@ -2577,10 +2619,12 @@ async function refreshAiAddonSettings() {
   try {
     const status = await window.electronAPI.getAiAddonStatus();
     updateAiAddonSettings(status);
+    updateHomeAiAddonCTA(status);
     return status;
   } catch (error) {
     addLog(`Failed to check AI add-ons: ${error.message}`, 'error');
     setStatusBadge(document.getElementById('ai-addons-status-badge'), 'error');
+    updateHomeAiAddonCTA(null);
     return null;
   }
 }
@@ -2857,6 +2901,12 @@ async function checkGPUStatus() {
     gpuDescription.textContent = 'Failed to detect system configuration.';
   } finally {
     updateGPUCTA(ctaState);
+    homePromptContext = {
+      platform: ctaState.platform,
+      hasNvidiaGpu: Boolean(ctaState.gpuInfo && ctaState.gpuInfo.hasGPU),
+      cudaInstalled: Boolean(ctaState.cudaInfo && ctaState.cudaInfo.installed),
+    };
+    refreshAiAddonSettings().catch((error) => console.warn('Could not refresh AI add-on CTA:', error));
   }
 }
 
@@ -2884,6 +2934,14 @@ function setupGPUCTA() {
   cta.addEventListener('click', () => {
     activateTab('settings');
   });
+}
+
+async function refreshHomePrompts() {
+  try {
+    await checkGPUStatus();
+  } catch (error) {
+    console.warn('Could not refresh home setup prompts:', error);
+  }
 }
 
 async function installGPUAcceleration() {
@@ -2948,6 +3006,7 @@ async function installGPUAcceleration() {
 
     // Refresh status
     await checkGPUStatus();
+    await refreshAiAddonSettings();
 
     alert('GPU acceleration installed successfully!\n\nFaster transcription is now available.');
   } catch (error) {
@@ -2979,6 +3038,7 @@ async function uninstallGPUAcceleration() {
   try {
     await window.electronAPI.uninstallGPU();
     await checkGPUStatus();
+    await refreshAiAddonSettings();
     alert('GPU acceleration uninstalled successfully.');
   } catch (error) {
     console.error('Uninstall failed:', error);
@@ -3602,3 +3662,4 @@ setupCustomAudioPlayer();
 setupTitleEditors();
 initSettingsTab();
 setupGPUCTA();
+setupHomeAiAddonCTA();

@@ -1738,6 +1738,17 @@ select.device-select:disabled {
   justify-content: center;
 }
 
+.summary-stale-warning {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  border: 1px solid rgba(245, 158, 11, 0.28);
+  border-radius: var(--r-sm);
+  background: rgba(245, 158, 11, 0.08);
+  color: var(--amber);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
 .history-transcript-segment {
   padding: 0 0 18px;
   margin-bottom: 18px;
@@ -2484,6 +2495,20 @@ footer {
 .gpu-cta:hover .gpu-cta-arrow {
   color: var(--accent);
   transform: translateX(3px);
+}
+
+.ai-addon-cta .gpu-cta-icon {
+  color: var(--sky);
+  background: rgba(56, 189, 248, 0.08);
+}
+
+.ai-addon-cta:hover {
+  border-color: var(--sky);
+  box-shadow: 0 6px 18px -8px rgba(56, 189, 248, 0.5);
+}
+
+.ai-addon-cta:hover .gpu-cta-arrow {
+  color: var(--sky);
 }
 
 /* ============================================================================

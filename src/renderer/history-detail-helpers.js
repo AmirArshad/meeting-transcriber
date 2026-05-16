@@ -180,11 +180,60 @@
     return reason || 'Install the local summary model in Settings before generating summaries.';
   }
 
+  function shouldShowSpeakerSetupPrompt({ diarization, platform, cudaInstalled, hasNvidiaGpu }) {
+    if (!diarization || diarization.status === 'ready' || diarization.setupComplete) {
+      return false;
+    }
+    if (!diarization.availability || diarization.availability.supported !== true) {
+      return false;
+    }
+    if (platform === 'win32' && hasNvidiaGpu && !cudaInstalled) {
+      return false;
+    }
+    return diarization.status === 'notConfigured' || diarization.status === 'needsAccount' || diarization.status === 'error';
+  }
+
+  function shouldShowSummarySetupPrompt(summary) {
+    if (!summary || summary.status === 'ready' || summary.setupComplete) {
+      return false;
+    }
+    if (!summary.availability || summary.availability.supported !== true) {
+      return false;
+    }
+    return summary.status === 'notConfigured' || summary.status === 'error';
+  }
+
+  function buildHomeAiAddonPrompt({ aiStatus, platform, cudaInstalled = false, hasNvidiaGpu = false } = {}) {
+    const diarization = aiStatus && aiStatus.features && aiStatus.features.diarization;
+    const summary = aiStatus && aiStatus.features && aiStatus.features.summary;
+
+    if (shouldShowSpeakerSetupPrompt({ diarization, platform, cudaInstalled, hasNvidiaGpu })) {
+      return {
+        feature: 'diarization',
+        title: 'Add speaker labels to future transcripts',
+        message: 'Set up local speaker identification in Settings. Once ready, it will run automatically after transcription.',
+      };
+    }
+
+    if (shouldShowSummarySetupPrompt(summary)) {
+      return {
+        feature: 'summary',
+        title: 'Generate local meeting summaries',
+        message: 'Set up the local summary model to create decisions, action items, risks, and open questions on demand.',
+      };
+    }
+
+    return null;
+  }
+
   return {
+    buildHomeAiAddonPrompt,
     cleanMarkdownText,
     getDiarizationSetupMessage,
     getSummarySetupMessage,
     normalizeHistoryDetailTab,
     parseTranscriptMarkdownSegments,
+    shouldShowSpeakerSetupPrompt,
+    shouldShowSummarySetupPrompt,
   };
 }));

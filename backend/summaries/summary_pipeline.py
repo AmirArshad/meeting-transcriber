@@ -17,6 +17,14 @@ TRANSCRIPT_TIMESTAMP_RE = re.compile(
     r"^(?:\*\*)?\[(?P<start>\d{1,2}:\d{2}(?::\d{2})?)\s+-\s+(?P<end>\d{1,2}:\d{2}(?::\d{2})?)\](?:\*\*)?\s*(?P<tail>.*)$"
 )
 SPEAKER_PREFIX_RE = re.compile(r"^(?:\*\*)?(?P<speaker>Speaker\s+\d+|Unknown):(?:\*\*)?\s*(?P<text>.*)$", re.IGNORECASE)
+TOPIC_BOUNDARY_RE = re.compile(
+    r"\b(next|new|another)\s+(topic|item|section)\b|"
+    r"\b(moving|move)\s+on\b|"
+    r"\b(switching|shift(?:ing)?)\s+(to|gears)\b|"
+    r"\b(let'?s|we should)\s+(talk|discuss|cover)(\s+about)?\b|"
+    r"\bagenda\s+item\b",
+    re.IGNORECASE,
+)
 
 SUMMARY_PROFILE_CONFIGS: Dict[str, Dict[str, Any]] = {
     "concise": {
@@ -169,22 +177,40 @@ def estimate_token_count(text: str) -> int:
     return max(1, (len(text) + 3) // 4)
 
 
+def is_topic_boundary_segment(segment: Dict[str, Any]) -> bool:
+    """Return True when a transcript segment likely starts a new discussion topic."""
+    text = _clean_text(segment.get("text"))
+    if not text:
+        return False
+    return bool(TOPIC_BOUNDARY_RE.search(text))
+
+
 def chunk_transcript(
     segments: Iterable[Dict[str, Any]],
     *,
     max_tokens: int,
     overlap_segments: int = 0,
+    prefer_topic_boundaries: bool = True,
+    min_topic_chunk_tokens: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
-    """Split normalized transcript lines into token-budgeted chunks."""
+    """Split normalized transcript lines into timestamped chunks.
+
+    Chunks always honor the token budget. When a segment appears to start a
+    new agenda/topic and the current chunk has enough content, flush before the
+    boundary so map prompts receive more coherent discussion units.
+    """
     if max_tokens <= 0:
         raise ValueError("max_tokens must be greater than 0")
     if overlap_segments < 0:
         raise ValueError("overlap_segments must not be negative")
+    if min_topic_chunk_tokens is not None and min_topic_chunk_tokens < 0:
+        raise ValueError("min_topic_chunk_tokens must not be negative")
 
     normalized = normalize_transcript_segments(segments)
     chunks: List[Dict[str, Any]] = []
     current_segments: List[Dict[str, Any]] = []
     current_tokens = 0
+    topic_threshold = min_topic_chunk_tokens if min_topic_chunk_tokens is not None else max(1, int(max_tokens * 0.5))
 
     def flush_current() -> None:
         nonlocal current_segments, current_tokens
@@ -210,6 +236,14 @@ def chunk_transcript(
 
     for segment in normalized:
         segment_tokens = estimate_token_count(segment["line"])
+        if (
+            prefer_topic_boundaries
+            and current_segments
+            and current_tokens >= topic_threshold
+            and is_topic_boundary_segment(segment)
+        ):
+            flush_current()
+
         if current_segments and current_tokens + segment_tokens > max_tokens:
             flush_current()
 

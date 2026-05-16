@@ -61,6 +61,29 @@ def test_generate_summary_from_segments_runs_chunk_and_merge_prompts():
     assert calls[0][1] == 900
 
 
+def test_generate_summary_from_segments_retries_malformed_json_once():
+    calls = []
+
+    def run_prompt(_runtime, prompt_path, _max_tokens):
+        calls.append(prompt_path)
+        if 'repair' in prompt_path:
+            return json.dumps({'summary': 'Repaired summary', 'topics': []})
+        if 'final-merge' in prompt_path:
+            return json.dumps({'summary': 'Final summary', 'topics': []})
+        return 'not json'
+
+    summary = generate_summary_from_segments(
+        meeting_id='20260107_104555',
+        segments=[{'start': 0, 'end': 1, 'text': 'Discussed launch'}],
+        runtime={'runtime': 'llama.cpp'},
+        profile='concise',
+        run_prompt=run_prompt,
+    )
+
+    assert summary['summary'] == 'Final summary'
+    assert any('repair' in call for call in calls)
+
+
 def test_save_summary_outputs_writes_json_and_markdown(tmp_path):
     json_path = tmp_path / 'meeting.summary.json'
     markdown_path = tmp_path / 'meeting.summary.md'

@@ -27,6 +27,7 @@ from .summary_pipeline import (
 
 
 DEFAULT_PROFILE = "balanced"
+MAX_SUMMARY_REPAIR_ATTEMPTS = 1
 
 
 def _safe_message(message: Any) -> str:
@@ -81,6 +82,45 @@ def write_prompt(path: Path, prompt: str) -> None:
     path.write_text(prompt, encoding="utf-8")
 
 
+def build_json_repair_prompt(raw_output: str) -> str:
+    return "\n\n".join([
+        "You are AvaNevis, a local-only meeting summarizer. The previous response was not valid summary JSON.",
+        "Return only a corrected JSON object using the required summary schema. Do not include markdown or commentary.",
+        "Invalid model output:",
+        str(raw_output or "")[:12000],
+    ])
+
+
+def run_summary_prompt_with_repair(
+    *,
+    meeting_id: str,
+    runtime: Dict[str, Any],
+    prompt_path: Path,
+    max_tokens: int,
+    run_prompt: Callable[[Dict[str, Any], str, int], str],
+    work_path: Path,
+    repair_name: str,
+) -> Dict[str, Any]:
+    raw_output = run_prompt(runtime, str(prompt_path), max_tokens)
+    try:
+        return repair_summary_json(raw_output)
+    except SummaryValidationError:
+        emit_progress(meeting_id, "json-repair", "Repairing malformed summary JSON.")
+
+    last_error: Optional[SummaryValidationError] = None
+    for attempt in range(1, MAX_SUMMARY_REPAIR_ATTEMPTS + 1):
+        repair_prompt_path = work_path / f"{repair_name}-repair-{attempt}.prompt.txt"
+        write_prompt(repair_prompt_path, build_json_repair_prompt(raw_output))
+        repaired_output = run_prompt(runtime, str(repair_prompt_path), max_tokens)
+        try:
+            return repair_summary_json(repaired_output)
+        except SummaryValidationError as exc:
+            raw_output = repaired_output
+            last_error = exc
+
+    raise last_error or SummaryValidationError("summary JSON repair failed")
+
+
 def generate_summary_from_segments(
     *,
     meeting_id: str,
@@ -101,15 +141,30 @@ def generate_summary_from_segments(
             emit_progress(meeting_id, "chunk-summary", "Summarizing transcript chunk.", chunk_index=chunk["index"], chunk_total=len(chunks))
             prompt_path = work_path / f"chunk-{chunk['index']}.prompt.txt"
             write_prompt(prompt_path, build_chunk_summary_prompt(chunk, profile=profile))
-            raw_output = run_prompt(runtime, str(prompt_path), int(profile_config["max_output_tokens"]))
-            chunk_summaries.append(repair_summary_json(raw_output))
+            chunk_summaries.append(run_summary_prompt_with_repair(
+                meeting_id=meeting_id,
+                runtime=runtime,
+                prompt_path=prompt_path,
+                max_tokens=int(profile_config["max_output_tokens"]),
+                run_prompt=run_prompt,
+                work_path=work_path,
+                repair_name=f"chunk-{chunk['index']}",
+            ))
 
         emit_progress(meeting_id, "final-merge", "Merging chunk summaries.")
         final_prompt_path = work_path / "final-merge.prompt.txt"
         write_prompt(final_prompt_path, build_final_merge_prompt(chunk_summaries, profile=profile))
-        raw_final = run_prompt(runtime, str(final_prompt_path), int(profile_config["max_output_tokens"]))
+        final_summary = run_summary_prompt_with_repair(
+            meeting_id=meeting_id,
+            runtime=runtime,
+            prompt_path=final_prompt_path,
+            max_tokens=int(profile_config["max_output_tokens"]),
+            run_prompt=run_prompt,
+            work_path=work_path,
+            repair_name="final-merge",
+        )
 
-    return validate_summary_json(repair_summary_json(raw_final))
+    return validate_summary_json(final_summary)
 
 
 def save_summary_outputs(
@@ -125,8 +180,17 @@ def save_summary_outputs(
     markdown_target.parent.mkdir(parents=True, exist_ok=True)
 
     json_payload = {"summary": validate_summary_json(summary), "metadata": dict(metadata)}
-    json_target.write_text(json.dumps(json_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    markdown_target.write_text(render_summary_markdown(summary, metadata), encoding="utf-8")
+    temp_json = json_target.with_name(f".{json_target.name}.tmp")
+    temp_markdown = markdown_target.with_name(f".{markdown_target.name}.tmp")
+    try:
+        temp_json.write_text(json.dumps(json_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        temp_markdown.write_text(render_summary_markdown(summary, metadata), encoding="utf-8")
+        temp_json.replace(json_target)
+        temp_markdown.replace(markdown_target)
+    finally:
+        for temp_path in (temp_json, temp_markdown):
+            if temp_path.exists():
+                temp_path.unlink()
     return {"jsonPath": str(json_target), "markdownPath": str(markdown_target)}
 
 

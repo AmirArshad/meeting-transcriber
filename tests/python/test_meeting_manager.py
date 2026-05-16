@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 from datetime import datetime as real_datetime
 from pathlib import Path
@@ -453,6 +454,46 @@ def test_update_meeting_ai_persists_derived_artifact_references(tmp_path):
 
     hydrated = manager.get_meeting('20260107_104555')
     assert hydrated['summary'] == '# Summary'
+    assert hydrated['summaryStale'] is True
+
+
+def test_get_meeting_marks_summary_fresh_when_transcript_hash_matches(tmp_path):
+    recordings_dir = tmp_path / 'recordings'
+    manager = MeetingManager(recordings_dir=str(recordings_dir))
+
+    audio_path = recordings_dir / 'meeting_20260107_104555.opus'
+    transcript_path = recordings_dir / 'meeting_20260107_104555.md'
+    summary_md_path = recordings_dir / 'meeting_20260107_104555.summary.md'
+    transcript_text = 'hydrated transcript body'
+    source_hash = f"sha256:{hashlib.sha256(transcript_text.encode('utf-8')).hexdigest()}"
+    audio_path.write_bytes(b'audio')
+    transcript_path.write_text(transcript_text, encoding='utf-8')
+    summary_md_path.write_text('# Summary', encoding='utf-8')
+
+    manager._save_meetings([
+        {
+            'id': '20260107_104555',
+            'title': 'Meeting',
+            'date': '2026-01-07T10:45:55',
+            'duration': '0:05',
+            'durationSeconds': 5.0,
+            'audioPath': str(audio_path),
+            'transcriptPath': str(transcript_path),
+            'language': 'en',
+            'model': 'small',
+            'ai': {
+                'summary': {
+                    'sourceTranscriptHash': source_hash,
+                    'markdownPath': str(summary_md_path),
+                },
+            },
+        }
+    ])
+
+    hydrated = manager.get_meeting('20260107_104555')
+
+    assert hydrated['summary'] == '# Summary'
+    assert hydrated['summaryStale'] is False
 
 
 def test_delete_meeting_removes_derived_ai_artifacts(tmp_path):

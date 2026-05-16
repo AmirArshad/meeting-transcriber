@@ -23,6 +23,14 @@ This design translates the model research docs into product behavior for Setting
 | History display | Meeting detail uses `Transcript` and `Summary` tabs. |
 | Source of truth | Raw transcript remains the source of truth. Speaker labels and summaries are derived artifacts. |
 
+## Implementation Snapshot
+
+- Add-on setup state and model metadata are catalog-driven through `src/ai-addon-state.js`.
+- Summary runtime/model setup downloads pinned llama.cpp/GGUF artifacts only after explicit user action and verifies filenames/checksums before Ready.
+- Speaker tokens are stored only with Electron `safeStorage`; token values are not exposed through status IPC, metadata, progress, transcripts, or summaries.
+- Derived artifacts live beside recordings as `*.speakers.json`, `*.summary.json`, and `*.summary.md`; meeting metadata stores concise sidecar references only.
+- History displays transcript and summary in separate tabs, warns when a saved summary is stale via `sourceTranscriptHash`, and keeps summary generation manual.
+
 ## Feature States
 
 Use a shared add-on state model so Settings, Home, and History render consistently.
@@ -209,6 +217,8 @@ Button behavior:
 | `unsupported` | Explain why summaries are unavailable. |
 
 Summary generation must never start automatically after transcription.
+
+Saved summaries include a `sourceTranscriptHash`. If a transcript changes after generation, History should mark the summary as stale and offer regeneration instead of silently treating it as current.
 
 ## Transcription Flow
 

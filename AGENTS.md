@@ -28,6 +28,7 @@ AvaNevis is a privacy-first Electron desktop app for recording microphone audio 
 - `src/main-process-helpers.js`: extracted main-process parsing/model-cache helpers with JS regression coverage
 - `src/preload.js`: safe API bridge exposed as `window.electronAPI`
 - `src/renderer/app.js`: main UI state machine, settings persistence, meeting history, GPU/settings UI, update banner
+- `src/renderer/history-detail-helpers.js`: extracted History tab and AI add-on prompt helpers with JS regression coverage
 - `src/renderer/update-notification-helpers.js`: extracted update-banner helpers with JS regression coverage
 - `src/renderer/index.html`: renderer markup
 - `src/renderer/styles.css`: renderer styles
@@ -44,6 +45,8 @@ AvaNevis is a privacy-first Electron desktop app for recording microphone audio 
 - `backend/audio/processor.py`, `backend/audio/compressor.py`, `backend/audio/timeline.py`, `backend/audio/constants.py`: Windows audio processing modules
 - `backend/transcription/faster_whisper_transcriber.py`: Windows/default transcriber
 - `backend/transcription/mlx_whisper_transcriber.py`: Apple Silicon transcriber
+- `backend/diarization/diarization_pipeline.py`: local pyannote diarization runner and timestamp/speaker merge output
+- `backend/summaries/summary_pipeline.py`, `backend/summaries/summary_runner.py`, `backend/summaries/llama_runtime.py`: local summary chunking, prompts, JSON validation/repair, Markdown rendering, and pinned `llama.cpp` execution
 
 ### Native macOS helper
 
@@ -118,6 +121,17 @@ Key quality assumptions to preserve:
 - No telemetry or analytics
 - No background uploads
 - No surprise network dependencies beyond explicit model/update checks and build-time downloads
+
+### Local AI add-ons remain explicit and catalog-driven
+
+- Speaker diarization uses `pyannote/speaker-diarization-community-1` with the user's own Hugging Face token only. Do not embed, proxy, log, or persist a maintainer-owned token.
+- Tokens must stay in Electron `safeStorage`; do not write token values to manifests, meeting metadata, transcripts, summaries, progress events, or logs.
+- Diarization runs automatically only after transcription when setup is complete and platform policy allows it.
+- macOS diarization remains unavailable unless accelerated Apple Silicon diarization is explicitly validated; do not add CPU-only macOS diarization as a v1 fallback.
+- Summary generation is always user-triggered from Home or History.
+- Summary model and runtime artifacts are pinned and catalog-driven in `src/ai-addon-state.js`; do not hard-code artifact URLs, filenames, checksums, or runtime names in renderer/business logic.
+- Summary runtime/model setup must be an explicit user action. No hidden or background summary downloads.
+- AI add-on model/runtime caches live under Electron `userData` (`ai-addons/models/...`) so app updates preserve installed artifacts.
 
 ## High-Risk Areas
 
@@ -265,6 +279,18 @@ swift build -c release --arch arm64
 - CPU/GPU fallback behavior still makes sense for the platform
 - relevant automated tests still pass
 
+### Local AI add-on changes
+
+- status still reflects `notConfigured`, `needsAccount`, `downloading`, `validating`, `ready`, `error`, and `unsupported`
+- diarization setup never exposes token values and uses only the user's token
+- Windows speaker prompts remain behind CUDA readiness when NVIDIA/CUDA is the target path
+- macOS speaker setup remains hidden/unsupported until accelerated diarization is validated
+- summaries remain user-triggered and never modify transcripts on failure
+- summary setup refuses unpinned or checksum-mismatched artifacts
+- summary output saves `*.summary.json` and `*.summary.md` and metadata stores only concise sidecar references
+- stale summaries are detectable through `sourceTranscriptHash`
+- relevant JS and Python regression tests pass
+
 ### Meeting history changes
 
 - duplicate IDs are still prevented
@@ -309,6 +335,16 @@ Update all of:
 - renderer first-time setup flow in `src/renderer/app.js`
 - transcriber preload CLI behavior
 - build logic if bundled/offline behavior changes
+
+### If you change local AI model catalog or runtime pins
+
+Update all of:
+
+- `src/ai-addon-state.js`
+- `src/ai-addon-setup.js` if cache/setup semantics change
+- `docs/development/LOCAL_AI_MODEL_CATALOG.md`
+- `todo.md` model-default notes if product defaults change
+- relevant JS tests under `tests/js/ai-addon-*.test.js`
 
 ## Known Maintenance Hotspots
 

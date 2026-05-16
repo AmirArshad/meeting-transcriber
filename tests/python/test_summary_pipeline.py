@@ -6,6 +6,7 @@ from backend.summaries.summary_pipeline import (
     build_final_merge_prompt,
     chunk_transcript,
     get_summary_profile,
+    is_topic_boundary_segment,
     normalize_transcript_segments,
     parse_markdown_transcript,
     parse_timestamp,
@@ -76,6 +77,21 @@ def test_chunk_transcript_supports_segment_overlap():
 
     assert len(chunks) >= 2
     assert chunks[1]['segments'][0]['text'] == chunks[0]['segments'][-1]['text']
+
+
+def test_chunk_transcript_prefers_topic_boundaries_after_threshold():
+    segments = [
+        {'start': 0, 'end': 5, 'text': 'Project launch status and current blockers.'},
+        {'start': 5, 'end': 10, 'text': 'We resolved one launch blocker and kept another open.'},
+        {'start': 10, 'end': 15, 'text': 'Next topic is budget planning for the pilot.'},
+    ]
+
+    chunks = chunk_transcript(segments, max_tokens=100, min_topic_chunk_tokens=1)
+
+    assert len(chunks) == 2
+    assert chunks[0]['end'] == 10.0
+    assert chunks[1]['start'] == 10.0
+    assert is_topic_boundary_segment(segments[2]) is True
 
 
 def test_validate_summary_json_requires_structured_object():

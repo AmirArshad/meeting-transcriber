@@ -112,6 +112,16 @@ Transcript segments
   -> render summary in the meeting viewer and save to meeting history
 ```
 
+## Implementation Snapshot
+
+- Deterministic helpers live in `backend/summaries/summary_pipeline.py`; runtime execution lives in `backend/summaries/summary_runner.py` and `backend/summaries/llama_runtime.py`.
+- Summary setup uses pinned llama.cpp runtime archives and pinned GGUF artifacts from `src/ai-addon-state.js`; setup is explicit and checksum-gated.
+- Summaries are generated only by a user action from Home or History.
+- The runner prefers speaker sidecars when available, otherwise parses saved transcript Markdown and assigns `Unknown` owners when needed.
+- Chunking honors token budget and timestamps, and now prefers topic-boundary heuristics such as "next topic" or "moving on" when a chunk has enough content.
+- Malformed JSON is extracted/repaired locally; if validation still fails, the runner sends one explicit repair prompt before failing without modifying transcripts.
+- Output is saved as `*.summary.json` and `*.summary.md`; metadata stores sidecar references and `sourceTranscriptHash` for stale-summary detection.
+
 ## Chunking Strategy
 
 Use chunked map-reduce even for long-context models.
@@ -211,7 +221,7 @@ Suggested v1 controls:
 - Profiles: `Concise`, `Balanced`, `Detailed`, and `Action items` if they perform reliably on the same installed model.
 - Manual `Generate Summary` button for existing meetings.
 - Progress state: loading model, chunk summaries, final merge, saving.
-- Meeting detail section with summary, decisions, action items, risks, and open questions.
+- Meeting detail `Summary` tab with empty/progress/error states, saved summary viewer, regenerate, copy, and save actions.
 
 Suggested defaults:
 

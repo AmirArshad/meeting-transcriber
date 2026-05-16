@@ -46,6 +46,7 @@ Goal: add optional post-install local speaker diarization and transcript summari
 - 2026-05-16: Selecting and pinning trusted summary model artifact sources/checksums is now in progress. Preferred source policy: use official model-owner GGUF artifacts when available; otherwise use high-reputation community quantizations with immutable commit-pinned URLs and verified SHA-256 checksums.
 - 2026-05-16: Pinned summary GGUF artifacts to immutable Hugging Face revisions with LFS SHA-256 checksums and pinned llama.cpp b9173 runtime archives for Windows CUDA 12.4 and macOS arm64. Summary setup now downloads/verifies/extracts the runtime before the model and status cannot become ready unless both model and `llama-cli` are installed. `npm test` and `npm run test:python` passed.
 - 2026-05-16: Added History Transcript/Summary tabs, History speaker-label rendering from saved transcript Markdown, summary copy/save actions, a model-terms link for the user's own Hugging Face token flow, and clearer graceful-degradation messages for missing token/model/runtime and unsupported hardware. `npm test` and `npm run test:python` passed.
+- 2026-05-16: Added topic-boundary summary chunking heuristics, one explicit malformed-JSON repair prompt retry, atomic summary sidecar writes, summary stale-state hydration/display, Home AI add-on prompt priority with Windows CUDA and macOS diarization gating, catalog maintenance docs, README/docs/manual checklist updates, and AGENTS/CLAUDE local AI guidance alignment. `npm test` and `npm run test:python` passed. Static network-surface review found only explicit setup/update/build download paths and trusted external links; live network validation remains pending.
 
 ## V1 Model Defaults
 
@@ -112,11 +113,11 @@ Skipped by product direction. Proceed with the V1 Model Defaults above and keep 
 - [x] Add `backend/summaries/` module. (Pure pipeline helpers only; llama.cpp runtime integration remains pending.)
 - [x] Add pinned `llama.cpp` runtime resolution for Windows CUDA and macOS Metal. (Pinned runtime download/verification/extraction is implemented for optional setup.)
 - [x] Add transcript normalization that uses speaker labels when available and works without them.
-- [ ] Add token-budget chunking by timestamp and topic boundaries. (Partial: token-budget/timestamp chunks added; topic-boundary heuristics remain pending.)
+- [x] Add token-budget chunking by timestamp and topic boundaries.
 - [x] Add prompt templates for `Concise`, `Balanced`, `Detailed`, and `Action items` profiles against one installed model.
 - [x] Add chunk summary and final merge flow.
 - [x] Require structured JSON output and validate before saving. (Pure validation helper added; runtime save integration remains pending.)
-- [ ] Add retry/repair path for malformed JSON. (Partial: local JSON extraction/repair helper is used on model output; explicit retry prompt loop remains pending.)
+- [x] Add retry/repair path for malformed JSON.
 - [x] Render summary JSON to Markdown for History display/export.
 - [x] Ensure failed summary generation never modifies the transcript.
 
@@ -128,20 +129,20 @@ Skipped by product direction. Proceed with the V1 Model Defaults above and keep 
 - [x] Add `setup-summary-model` and `remove-summary-model` IPC handlers. (Pinned model/runtime downloads are verified before setup can become ready.)
 - [x] Add `diarize-transcript` IPC handler for post-transcription integration.
 - [x] Add `generate-summary` IPC handler for Home and History actions. (Renderer buttons are still pending.)
-- [ ] Add progress events for model download, validation, diarization, chunk summaries, final merge, and save. (Partial: add-on setup/download/validation, diarization, and summary generation events now emit redacted progress.)
+- [x] Add progress events for model download, validation, diarization, chunk summaries, final merge, and save.
 - [x] Extend meeting metadata with `ai.diarization` and `ai.summary` references without storing large derived output inline.
 - [x] Save derived files: `*.speakers.json`, `*.summary.json`, and `*.summary.md`.
 - [x] Preserve `backend/meeting_manager.py` file locking, atomic writes, and transactional behavior.
-- [x] Use `sourceTranscriptHash` to mark stale summaries after transcript changes. (Hash is persisted; renderer stale-state display remains pending.)
+- [x] Use `sourceTranscriptHash` to mark stale summaries after transcript changes.
 
 ## Phase 6 - Renderer UX
 
 - [x] Add `AI Add-ons` Settings area below GPU Acceleration.
 - [x] Add Speaker Identification setup card with token input, model-terms link, token test, status badge, progress, retry, and remove setup.
 - [x] Add Summary setup card with one installed model, profile selection, model-cache status, validate, progress, and remove model.
-- [ ] Add Home prompt priority: Whisper setup, permissions/devices, CUDA, speaker setup, summary setup.
-- [ ] Hide Windows speaker setup prompt until CUDA is installed when NVIDIA/CUDA is the target path.
-- [ ] Hide macOS speaker setup prompt unless accelerated Apple Silicon diarization is validated and available.
+- [x] Add Home prompt priority: Whisper setup, permissions/devices, CUDA, speaker setup, summary setup.
+- [x] Hide Windows speaker setup prompt until CUDA is installed when NVIDIA/CUDA is the target path.
+- [x] Hide macOS speaker setup prompt unless accelerated Apple Silicon diarization is validated and available.
 - [x] Run diarization automatically after transcription when configured.
 - [x] Add `Generate Summary` action after a meeting is transcribed and saved.
 - [x] Make `Generate Summary` navigate to Settings when summary setup is missing.
@@ -152,28 +153,28 @@ Skipped by product direction. Proceed with the V1 Model Defaults above and keep 
 
 ## Phase 7 - Tests And Validation
 
-- [ ] Unit-test add-on state normalization and prompt priority, especially CUDA before diarization on Windows/NVIDIA. (Partial: add-on setup/cache normalization and platform support are covered; renderer prompt priority is pending.)
+- [x] Unit-test add-on state normalization and prompt priority, especially CUDA before diarization on Windows/NVIDIA.
 - [x] Unit-test secure token storage behavior without exposing token values in logs.
 - [x] Unit-test speaker/segment overlap merge behavior.
-- [ ] Unit-test summary chunking, JSON validation, and malformed-output retry/repair behavior. (Partial: chunking, validation, JSON extraction/repair, and summary sidecar writes covered; explicit retry loop pending.)
+- [x] Unit-test summary chunking, JSON validation, and malformed-output retry/repair behavior.
 - [x] Unit-test meeting metadata persistence with derived artifact references.
-- [ ] Add JS tests for History `Transcript` / `Summary` tab state and setup routing. (Partial: pure History tab normalization, transcript speaker-label parsing, and setup/degradation copy are covered; DOM event routing remains pending.)
+- [x] Add JS tests for History `Transcript` / `Summary` tab state and setup routing.
 - [x] Run `npm test`.
 - [x] Run `npm run test:python`.
 - [ ] Run Windows CUDA manual smoke tests on RTX 4070.
 - [ ] Run macOS manual smoke tests on M4 Pro.
-- [ ] Validate no network calls happen except explicit model downloads and update checks.
+- [ ] Validate no network calls happen except explicit model downloads and update checks. (Documented manual checklist; live network validation remains pending.)
 - [ ] Validate 1-2 hour meetings with 2-4 speakers.
 
 ## Phase 8 - Documentation And Maintainability
 
-- [ ] Add a local AI model catalog maintenance doc explaining how to swap summary models, update Hugging Face revisions, collect LFS SHA-256 checksums, update llama.cpp runtime pins, and run the relevant tests.
-- [ ] Update `README.md` with user-facing AI Add-ons setup notes, local-only privacy behavior, expected download sizes, and supported platforms.
-- [ ] Update `AGENTS.md` with the local AI add-on architecture, pinned artifact policy, runtime/model cache locations, and validation expectations.
-- [ ] Keep `CLAUDE.md` byte-for-byte aligned with `AGENTS.md` after agent guidance changes.
-- [ ] Update feature docs under `docs/features/` so the implementation notes match the catalog-driven diarization and summary setup flow.
-- [ ] Document summary setup failure modes and troubleshooting for missing token, unsupported hardware, checksum mismatch, missing `llama-cli`, and runtime extraction failures.
-- [ ] Document manual validation steps for speaker diarization and summaries in `tests/manual/` or the existing testing guide.
+- [x] Add a local AI model catalog maintenance doc explaining how to swap summary models, update Hugging Face revisions, collect LFS SHA-256 checksums, update llama.cpp runtime pins, and run the relevant tests.
+- [x] Update `README.md` with user-facing AI Add-ons setup notes, local-only privacy behavior, expected download sizes, and supported platforms.
+- [x] Update `AGENTS.md` with the local AI add-on architecture, pinned artifact policy, runtime/model cache locations, and validation expectations.
+- [x] Keep `CLAUDE.md` byte-for-byte aligned with `AGENTS.md` after agent guidance changes.
+- [x] Update feature docs under `docs/features/` so the implementation notes match the catalog-driven diarization and summary setup flow.
+- [x] Document summary setup failure modes and troubleshooting for missing token, unsupported hardware, checksum mismatch, missing `llama-cli`, and runtime extraction failures.
+- [x] Document manual validation steps for speaker diarization and summaries in `tests/manual/` or the existing testing guide.
 
 ## Known Risk Areas
 

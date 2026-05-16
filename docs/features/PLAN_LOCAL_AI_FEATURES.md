@@ -24,6 +24,15 @@ Default model choices:
 | Speaker diarization | `pyannote/speaker-diarization-community-1` | CUDA on Windows; validated accelerated Apple Silicon path on Mac | Current transcription-only flow if Mac acceleration is not good enough |
 | Transcript summaries | `Qwen3.5-9B` 4-bit via `llama.cpp`, pending pinned-runtime validation | CUDA on Windows; Metal on Mac | Alternate single-model installs: `Qwen3-14B` for mature runtime support or `Qwen3.5-4B` for low memory |
 
+Implementation status on `feature/local-ai-addons`:
+
+- Phase 1 runtime spikes were intentionally skipped by product direction; v1 is built around pinned catalog defaults that can be swapped later.
+- Summary model/runtime artifacts are pinned in `src/ai-addon-state.js` and installed only through explicit Settings setup.
+- Windows speaker identification uses `pyannote/speaker-diarization-community-1` with the user's own Hugging Face token and CUDA policy; macOS diarization remains unavailable until accelerated Apple Silicon validation exists.
+- Summary generation runs only from user action in Home or History and saves `*.summary.json` / `*.summary.md` sidecars.
+- Summary chunks now prefer token budget, timestamps, and topic-boundary heuristics; malformed JSON gets one explicit local repair prompt before failure.
+- History exposes Transcript/Summary tabs, speaker-label rendering, summary copy/save, and stale-summary warnings based on `sourceTranscriptHash`.
+
 Secondary model choices:
 
 - Test `nvidia/diar_streaming_sortformer_4spk-v2.1` as a Windows CUDA diarization spike, not the cross-platform default.

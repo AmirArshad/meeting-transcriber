@@ -29,6 +29,15 @@ Important changes from the old plan:
 
 Decision status: use `community-1` for v1 unless a Windows-only Sortformer spike proves a major quality or performance win without unacceptable packaging cost.
 
+## Implementation Snapshot
+
+- The current backend entry point is `backend/diarization/diarization_pipeline.py`.
+- Electron invokes it through `diarize-transcript` after Whisper transcription only when setup status is Ready.
+- The runner prepares 16 kHz mono WAV input, sets `PYANNOTE_METRICS_ENABLED=0`, prefers `exclusive_speaker_diarization`, writes a `*.speakers.json` sidecar, and returns redacted progress events.
+- Renderer updates the current transcript and saved Markdown with `**Speaker N:**` labels after successful diarization.
+- History parses saved transcript Markdown so speaker labels remain visible after restart.
+- Failure is warning-only: the normal transcript remains saved and meeting metadata records the diarization error without token values.
+
 ## Problem Being Solved
 
 Current transcription output shows what was said, but not who said it:

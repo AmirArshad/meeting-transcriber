@@ -24,14 +24,18 @@ Online meetings are a tax on memory. The good options for getting transcripts ba
 - **Save As anywhere** — export any transcript through Electron's native save dialog as `.md` or `.txt`.
 - **Search and bulk-manage history** — filter the meeting list, multi-select, bulk delete, replay with synchronized audio.
 - **Recovery-friendly storage** — meetings are persisted with an atomic write + cross-process file lock, with corrupt-metadata backups (`meetings.corrupt.*.json`) and filesystem rescan/import on demand.
+- **Optional local AI add-ons** — speaker labels and meeting summaries can be set up after install. Speaker identification uses the user's own Hugging Face token; summaries use pinned local `llama.cpp`/GGUF artifacts and run only when the user clicks Generate Summary.
 - **One-click installer** — Windows NSIS and macOS DMG with embedded Python runtime, ffmpeg, and the bundled native macOS helper. No system Python required.
 - **Update awareness** — checks GitHub Releases on launch and shows an in-app banner with one-click open of the release page.
 
 ## Privacy
 
 - 100% local processing — no cloud transcription, no API calls.
+- Optional speaker diarization and summaries are local-only after explicit setup.
 - Zero telemetry or analytics.
 - No account, login, or signup.
+- Speaker diarization requires your own Hugging Face token for the gated pyannote model; AvaNevis does not ship, proxy, or log a maintainer-owned token.
+- Summary models/runtimes download only after you explicitly start setup from Settings.
 - Open source — audit the code yourself.
 - See [docs/internal/SECURITY_AUDIT.md](docs/internal/SECURITY_AUDIT.md) for the full security write-up.
 
@@ -75,6 +79,17 @@ npm run dev         # run with --dev flag
 ```
 
 See [docs/development/BUILD_INSTRUCTIONS.md](docs/development/BUILD_INSTRUCTIONS.md) for packaging and [docs/development/TESTING.md](docs/development/TESTING.md) for setting up the test suite on a fresh machine.
+
+## AI Add-ons
+
+AI Add-ons are optional and live under Settings. They are not required for recording or transcription.
+
+- **Speaker Identification:** Windows CUDA path uses `pyannote/speaker-diarization-community-1` with the user's own Hugging Face token. It runs automatically after transcription only when setup is ready. macOS speaker identification remains unavailable until accelerated Apple Silicon diarization is validated.
+- **Meeting Summaries:** Uses a pinned local `llama.cpp` runtime and pinned GGUF model artifacts stored under Electron `userData`. Summary generation is always user-triggered from Home or History.
+- **Expected size:** the default summary model is about 5.7 GB plus platform runtime archives. CUDA setup remains separate and can add several GB.
+- **Outputs:** derived files are saved beside recordings as `*.speakers.json`, `*.summary.json`, and `*.summary.md`; raw transcripts remain the source of truth.
+
+See [docs/development/LOCAL_AI_MODEL_CATALOG.md](docs/development/LOCAL_AI_MODEL_CATALOG.md) for catalog maintenance and [tests/manual/local-ai-addons-checklist.md](tests/manual/local-ai-addons-checklist.md) for manual validation.
 
 ### Build installers
 
@@ -138,6 +153,7 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
 - **Frontend:** Electron 42, plain HTML / CSS / JavaScript (no UI framework)
 - **Backend:** Python 3.11, bundled with the installer
 - **Transcription:** `faster-whisper` (Windows, CUDA optional), `lightning-whisper-mlx` (macOS, Metal)
+- **Local AI add-ons:** `pyannote.audio` for Windows speaker identification, pinned `llama.cpp` + GGUF for user-triggered summaries
 - **Audio capture:** `pyaudiowpatch` WASAPI loopback (Windows), `sounddevice` + native Swift `AudioCaptureHelper` over ScreenCaptureKit (macOS)
 - **Audio processing:** NumPy, SciPy, soxr, ffmpeg (Opus)
 - **Updater:** GitHub Releases API + in-app banner (release page opens in browser)
@@ -153,6 +169,7 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
   - [Build instructions](docs/development/BUILD_INSTRUCTIONS.md)
   - [Testing guide](docs/development/TESTING.md)
   - [GPU setup (CUDA)](docs/development/SETUP_GPU.md)
+  - [Local AI model catalog](docs/development/LOCAL_AI_MODEL_CATALOG.md)
   - [Installer implementation](docs/development/INSTALLER_IMPLEMENTATION.md)
 - **Roadmap & features**
   - [Roadmap](docs/ROADMAP.md)
@@ -167,6 +184,7 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
 ## Roadmap (short version)
 
 **Shipped recently**
+- Optional local AI add-on foundations: Settings setup cards, pinned summary model/runtime catalog, secure diarization token storage, automatic post-transcription speaker labels when setup is ready, and user-triggered summary generation with History Transcript/Summary tabs.
 - Premium dark UI overhaul: vertical icon rail, top-bar pane, expressive dual-channel waveform with peak-hold and interpolation, custom rAF-driven audio scrubber, multi-select with bulk delete, sidebar search, relative-time meeting timestamps, developer console drawer.
 - Markdown transcript rendering in the meeting viewer (timestamps as accent pill chips), with the raw `.md` preserved as the copy/save source of truth.
 - Inline meeting rename in both history and post-recording views (via a new `update-meeting` IPC + `MeetingManager.update_meeting`).
@@ -177,8 +195,7 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
 
 **Next up**
 - True silent auto-install updater (today's updater detects the new release and opens the download page).
-- Speaker diarization (who said what), currently planned around `pyannote/speaker-diarization-community-1`.
-- Local transcript summaries with structured decisions, action items, risks, and open questions.
+- Hardware validation for Windows CUDA speaker identification and long local summaries.
 - Real-time / streaming transcription.
 - Export to SRT, VTT, DOCX, JSON.
 - Acoustic echo cancellation when desktop audio bleeds into the mic.

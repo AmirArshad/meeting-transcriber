@@ -16,6 +16,7 @@ import shutil
 import tempfile
 import threading
 import re
+import hashlib
 
 from filelock import FileLock
 
@@ -174,6 +175,10 @@ class MeetingManager:
     @staticmethod
     def _read_transcript_text(transcript_path: Path) -> str:
         return MeetingManager._read_text_file(transcript_path, 'transcript')
+
+    @staticmethod
+    def _hash_text(text: str) -> str:
+        return f"sha256:{hashlib.sha256(str(text or '').encode('utf-8')).hexdigest()}"
 
     @staticmethod
     def _select_scannable_audio_files(recordings_dir: Path) -> List[Path]:
@@ -638,6 +643,10 @@ class MeetingManager:
                     summary = (meeting.get('ai') or {}).get('summary')
                     summary_path = summary.get('markdownPath') if isinstance(summary, dict) else None
                     hydrated['summary'] = self._read_text_file(Path(summary_path), 'summary') if summary_path else ""
+                    if isinstance(summary, dict) and summary.get('sourceTranscriptHash'):
+                        hydrated['summaryStale'] = summary.get('sourceTranscriptHash') != self._hash_text(hydrated.get('transcript', ''))
+                    else:
+                        hydrated['summaryStale'] = False
                     return hydrated
             return None
 

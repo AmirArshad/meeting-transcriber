@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {
   getDiarizationSetupMessage,
   getSummarySetupMessage,
+  buildHomeAiAddonPrompt,
   normalizeHistoryDetailTab,
   parseTranscriptMarkdownSegments,
 } = require('../../src/renderer/history-detail-helpers');
@@ -74,4 +75,46 @@ test('setup messages explain graceful degradation paths', () => {
     getSummarySetupMessage({ status: 'notConfigured' }),
     /Install the local summary model/i,
   );
+});
+
+test('buildHomeAiAddonPrompt gates speaker setup behind Windows CUDA', () => {
+  const aiStatus = {
+    features: {
+      diarization: {
+        status: 'notConfigured',
+        setupComplete: false,
+        availability: { supported: true },
+      },
+      summary: {
+        status: 'notConfigured',
+        setupComplete: false,
+        availability: { supported: true },
+      },
+    },
+  };
+
+  assert.equal(buildHomeAiAddonPrompt({ aiStatus, platform: 'win32', hasNvidiaGpu: true, cudaInstalled: false }).feature, 'summary');
+  assert.equal(buildHomeAiAddonPrompt({ aiStatus, platform: 'win32', hasNvidiaGpu: true, cudaInstalled: true }).feature, 'diarization');
+});
+
+test('buildHomeAiAddonPrompt hides unsupported macOS diarization prompt', () => {
+  const prompt = buildHomeAiAddonPrompt({
+    platform: 'darwin',
+    aiStatus: {
+      features: {
+        diarization: {
+          status: 'unsupported',
+          setupComplete: false,
+          availability: { supported: false },
+        },
+        summary: {
+          status: 'notConfigured',
+          setupComplete: false,
+          availability: { supported: true },
+        },
+      },
+    },
+  });
+
+  assert.equal(prompt.feature, 'summary');
 });
