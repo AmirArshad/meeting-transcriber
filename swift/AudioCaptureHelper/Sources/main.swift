@@ -1132,7 +1132,7 @@ class CoreAudioTapCapture: SystemAudioCaptureBackend {
             return nil
         }
 
-        if isNonInterleaved(streamFormat) {
+        if buffers.count > 1 || isNonInterleaved(streamFormat) {
             return interleavedDataFromPlanarBuffers(buffers)
         }
 
@@ -1144,7 +1144,7 @@ class CoreAudioTapCapture: SystemAudioCaptureBackend {
             return nil
         }
 
-        let sourceChannels = max(1, Int(streamFormat.mChannelsPerFrame))
+        let sourceChannels = max(1, Int(audioBuffer.mNumberChannels) > 0 ? Int(audioBuffer.mNumberChannels) : Int(streamFormat.mChannelsPerFrame))
         let outputChannels = max(1, config.channels)
         let availableBytes = Int(audioBuffer.mDataByteSize)
         guard availableBytes >= MemoryLayout<Float>.size * sourceChannels else {
@@ -1174,7 +1174,8 @@ class CoreAudioTapCapture: SystemAudioCaptureBackend {
     }
 
     private func interleavedDataFromPlanarBuffers(_ audioBuffers: UnsafeMutableAudioBufferListPointer) -> Data? {
-        let sourceChannels = max(1, Int(streamFormat.mChannelsPerFrame))
+        let streamChannels = max(1, Int(streamFormat.mChannelsPerFrame))
+        let sourceChannels = max(1, min(max(streamChannels, audioBuffers.count), audioBuffers.count))
         let outputChannels = max(1, config.channels)
 
         guard audioBuffers.count >= sourceChannels else {

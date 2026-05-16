@@ -8,7 +8,7 @@ This app keeps optional local AI add-on artifacts catalog-driven in `src/ai-addo
 - Summary model and runtime downloads must be explicit user-triggered setup actions.
 - Speaker diarization dependency installs must be explicit user-triggered setup actions and stay under Electron `userData`.
 - Pin every downloadable summary model and runtime artifact by immutable URL, filename, and SHA-256 checksum.
-- Summary model/runtime download URLs must use HTTPS and an allowed artifact host (`github.com` for llama.cpp runtime archives, `huggingface.co` for GGUF model artifacts).
+- Summary model/runtime download URLs must use HTTPS and an allowed artifact host. The allowlist is derived from the configured catalog URLs plus known GitHub/Hugging Face/PyPI redirect hosts; arbitrary HTTPS hosts remain blocked.
 - Prefer official model-owner GGUF artifacts. If unavailable, use established community quantizations with immutable revision URLs.
 - Store artifacts under Electron `userData` via the AI add-on cache helpers so app updates do not remove installed add-ons.
 - Speaker diarization must use the user's own Hugging Face token stored through Electron `safeStorage` only.
@@ -17,7 +17,7 @@ This app keeps optional local AI add-on artifacts catalog-driven in `src/ai-addo
 
 1. Update `DIARIZATION_DEPENDENCY_ARTIFACTS` in `src/ai-addon-state.js`.
 2. Keep dependency installs under `userData/ai-addons/dependencies/diarization` so app updates do not remove them.
-3. Keep any package indexes HTTPS-only and catalog-driven.
+3. Keep any package indexes HTTPS-only, catalog-driven, and covered by the setup download host allowlist.
 4. Keep `runtime.modelRef` catalog-owned; renderer input must not decide which Hugging Face model is loaded.
 5. Validate that packaged build requirements do not include `pyannote.audio` unless every transitive dependency has a binary wheel under the build policy.
 6. Run `npm test`, `npm run test:python`, and a Windows speaker setup smoke test.
@@ -28,7 +28,7 @@ This app keeps optional local AI add-on artifacts catalog-driven in `src/ai-addo
 2. Use an immutable Hugging Face revision URL, not a moving branch like `main`.
 3. Record the exact filename, model label, quantization, expected size, and runtime architecture.
 4. Collect the LFS SHA-256 checksum for the exact artifact.
-5. Confirm the resolved download URL remains under `huggingface.co`; setup rejects unallowed hosts even when SHA-256 metadata exists.
+5. Confirm the configured URL and any expected redirects are covered by the setup download host allowlist; setup rejects unallowed hosts even when SHA-256 metadata exists.
 6. Update the summary model source metadata and the model metadata in `AI_MODEL_CATALOG`.
 7. Run `npm test` to verify catalog normalization, checksum status, setup selection, and syntax checks.
 
@@ -37,7 +37,7 @@ This app keeps optional local AI add-on artifacts catalog-driven in `src/ai-addo
 1. Update `PINNED_LLAMA_CPP_RUNTIME` in `src/ai-addon-state.js` with the release tag and commit.
 2. Update every platform entry in `SUMMARY_RUNTIME_ARTIFACTS`.
 3. Include all runtime archives needed for the platform, including CUDA dependency archives when required.
-4. Keep runtime archive URLs under `github.com`; setup rejects unallowed hosts even when SHA-256 metadata exists.
+4. Keep runtime archive URLs under trusted release hosts covered by the setup download host allowlist; setup rejects unallowed hosts even when SHA-256 metadata exists.
 5. Keep `executableName` aligned with the extracted `llama-cli` binary. Runtime archives extract into a cleaned staging directory and the executable is copied to the stable runtime directory.
 6. For ZIP archives, keep extraction paths relative and safe; setup rejects archive entries that escape the extraction directory.
 7. Run `npm test` and `npm run test:python`.

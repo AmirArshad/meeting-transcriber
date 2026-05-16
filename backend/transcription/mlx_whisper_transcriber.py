@@ -260,9 +260,15 @@ class MLXWhisperTranscriber(BaseTranscriber):
 
     def _download_model_files(self) -> None:
         """Download model files into the app-managed cache directory."""
+        import logging
+
         from huggingface_hub import hf_hub_download  # type: ignore[import-not-found]
 
         self.model_dir.mkdir(parents=True, exist_ok=True)
+
+        if self._required_model_files_cached():
+            print("MLX model files already cached.", file=sys.stderr)
+            return
 
         if self.language == 'en' and self.model_key.startswith('distil-'):
             filenames = [
@@ -274,12 +280,25 @@ class MLXWhisperTranscriber(BaseTranscriber):
             filenames = ['weights.npz', 'config.json']
             local_dir = str(self.model_dir)
 
-        for filename in filenames:
-            hf_hub_download(
-                repo_id=self.model_repo,
-                filename=filename,
-                local_dir=local_dir,
-            )
+        hf_logger = logging.getLogger('huggingface_hub')
+        previous_level = hf_logger.level
+        hf_logger.setLevel(logging.ERROR)
+        try:
+            for filename in filenames:
+                hf_hub_download(
+                    repo_id=self.model_repo,
+                    filename=filename,
+                    local_dir=local_dir,
+                )
+        finally:
+            hf_logger.setLevel(previous_level)
+
+    def _required_model_files_cached(self) -> bool:
+        required_files = [
+            self.model_dir / 'weights.npz',
+            self.model_dir / 'config.json',
+        ]
+        return all(file_path.exists() and file_path.is_file() for file_path in required_files)
 
     def _transcribe_audio(self, audio_path: str) -> Dict[str, Any]:
         """Run MLX transcription against the prepared local model directory."""
@@ -351,7 +370,7 @@ class MLXWhisperTranscriber(BaseTranscriber):
         print(f"Using model cache directory: {self.cache_dir}", file=sys.stderr)
 
         try:
-            print(f"Verifying/Downloading model: {self.model_repo}...", file=sys.stderr)
+            print(f"Verifying public MLX Whisper model cache: {self.model_repo}...", file=sys.stderr)
             self._download_model_files()
             self.model = {
                 'model_key': self.model_key,

@@ -75,6 +75,10 @@ test('setup messages explain graceful degradation paths', () => {
     getSummarySetupMessage({ status: 'notConfigured' }),
     /Install the local summary model/i,
   );
+  assert.match(
+    getDiarizationSetupMessage({ status: 'notConfigured' }),
+    /supported platforms/i,
+  );
 });
 
 test('buildHomeAiAddonPrompt gates speaker setup behind Windows CUDA', () => {

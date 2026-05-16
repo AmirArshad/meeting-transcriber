@@ -7,6 +7,8 @@
 This document outlines larger macOS audio architecture ideas. Some supporting hardening work has already landed since the original draft:
 
 - The preferred Swift helper path is active. It uses a CoreAudio process tap on macOS 14.2+ and falls back to Swift/PyObjC ScreenCaptureKit paths.
+- CoreAudio tap output is normalized to raw interleaved float32 PCM even when CoreAudio exposes the input as multiple channel buffers.
+- The current post-processing mixer includes a defensive one-sided stereo repair so desktop speech survives MLX/ffmpeg mono downmixing for transcription.
 - Desktop-audio permission handling now distinguishes CoreAudio System Audio Recording behavior from ScreenCaptureKit Screen Recording fallback behavior.
 - Recorder startup uses structured stdout events; stderr is debug-only.
 

@@ -111,6 +111,7 @@ Key quality assumptions to preserve:
 
 - 48 kHz target output
 - stereo output
+- mono-compatible stereo output for transcription downmixes
 - Opus compression via ffmpeg
 - gentle mic enhancement instead of aggressive processing
 - desktop audio preserved as faithfully as possible
@@ -172,6 +173,8 @@ Preferred path is the bundled Swift helper using CoreAudio process taps on macOS
 
 The Swift helper stdout contract is raw interleaved float32 PCM. Helper JSON status, diagnostics, warnings, and errors go to stderr and are parsed by `backend/audio/swift_audio_capture.py`, not directly by Electron.
 
+CoreAudio can expose tap input as multiple channel buffers even when the stream format is not explicitly marked non-interleaved. Preserve the helper's interleaved stdout normalization and the Python mixer one-sided stereo repair so desktop speech survives MLX/ffmpeg mono transcription downmixing.
+
 Permission behavior differs by backend:
 
 - CoreAudio process tap can require macOS System Audio Recording permission for `com.avanevis.app.audiocapture-helper`.
@@ -185,6 +188,7 @@ If you touch the helper pipeline, verify:
 - codesign/entitlement steps still happen
 - `electron-builder` still bundles and signs `Contents/Resources/bin/audiocapture-helper`
 - a packaged macOS recording with active Chrome/system audio captures desktop audio and reports `helperCaptureBackend=coreaudio_tap` on macOS 14.2+
+- browser/YouTube speech appears in the transcript, not only in the desktop audio meter or saved stereo channel
 
 ### Release asset naming
 

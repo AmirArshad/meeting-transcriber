@@ -32,7 +32,56 @@ const {
 const AI_ADDON_PROGRESS_CHANNEL = 'ai-addon-progress';
 const DOWNLOAD_TIMEOUT_MS = 120000;
 const MAX_DOWNLOAD_REDIRECTS = 5;
-const ALLOWED_DOWNLOAD_HOSTS = new Set(['github.com', 'huggingface.co']);
+const DOWNLOAD_REDIRECT_HOSTS = new Set([
+  'objects.githubusercontent.com',
+  'release-assets.githubusercontent.com',
+  'github-releases.githubusercontent.com',
+  'files.pythonhosted.org',
+  'cdn-lfs.hf.co',
+  'cdn-lfs-us-1.hf.co',
+  'cdn-lfs-eu-1.hf.co',
+  'cdn-lfs.huggingface.co',
+  'cdn-lfs-us-1.huggingface.co',
+  'cdn-lfs-eu-1.huggingface.co',
+  'cas-bridge.xethub.hf.co',
+  'transfer.xethub.hf.co',
+]);
+const ALLOWED_DOWNLOAD_HOSTS = new Set([
+  ...collectConfiguredDownloadHosts(AI_MODEL_CATALOG),
+  ...DOWNLOAD_REDIRECT_HOSTS,
+]);
+
+function collectConfiguredDownloadHosts(value, hosts = new Set()) {
+  if (!value) {
+    return hosts;
+  }
+
+  if (typeof value === 'string') {
+    if (value.startsWith('https://')) {
+      try {
+        hosts.add(new URL(value).hostname.toLowerCase());
+      } catch (error) {
+        // Validation below reports malformed configured URLs at their call sites.
+      }
+    }
+    return hosts;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectConfiguredDownloadHosts(item, hosts);
+    }
+    return hosts;
+  }
+
+  if (typeof value === 'object') {
+    for (const item of Object.values(value)) {
+      collectConfiguredDownloadHosts(item, hosts);
+    }
+  }
+
+  return hosts;
+}
 
 function getDirectorySizeBytes(dirPath, fsModule = fs) {
   const existsSync = bindFsMethod(fsModule, 'existsSync');
@@ -396,12 +445,12 @@ function validateDiarizationDependencyArtifact(artifact) {
   if (!artifact.pip || !Array.isArray(artifact.pip.requirements) || artifact.pip.requirements.length === 0) {
     return 'Speaker identification dependency requirements are not configured.';
   }
-  if (!artifact.pip.indexUrl || !String(artifact.pip.indexUrl).startsWith('https://')) {
-    return 'Speaker identification dependency index URL must use HTTPS.';
+  if (!artifact.pip.indexUrl || !isAllowedDownloadUrl(artifact.pip.indexUrl)) {
+    return 'Speaker identification dependency index URL host is not allowed.';
   }
   for (const extraIndexUrl of artifact.pip.extraIndexUrls || []) {
-    if (!String(extraIndexUrl).startsWith('https://')) {
-      return 'Speaker identification dependency extra index URLs must use HTTPS.';
+    if (!isAllowedDownloadUrl(extraIndexUrl)) {
+      return 'Speaker identification dependency extra index URL host is not allowed.';
     }
   }
   return null;

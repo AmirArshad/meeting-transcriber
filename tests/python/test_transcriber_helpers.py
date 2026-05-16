@@ -121,6 +121,22 @@ def test_mlx_transcriber_uses_writable_cache_dir_without_chdir(monkeypatch, tmp_
     assert Path(__import__('os').getcwd()) == original_cwd
 
 
+def test_mlx_transcriber_skips_hf_download_when_model_files_are_cached(tmp_path, monkeypatch):
+    service = cast(Any, MLXWhisperTranscriber(model_size='small', language='en'))
+    service.cache_dir = tmp_path / 'cache-root'
+    service.model_dir = service.cache_dir / 'mlx_models' / service.model_storage_dir
+    service.model_dir.mkdir(parents=True)
+    (service.model_dir / 'weights.npz').write_text('weights')
+    (service.model_dir / 'config.json').write_text('{}')
+
+    def fail_download(*_args, **_kwargs):
+        raise AssertionError('hf_hub_download should not run for cached MLX model files')
+
+    monkeypatch.setitem(__import__('sys').modules, 'huggingface_hub', types.SimpleNamespace(hf_hub_download=fail_download))
+
+    service._download_model_files()
+
+
 def test_mlx_transcriber_get_model_info_reports_cache_and_repo(tmp_path, monkeypatch):
     service = cast(Any, MLXWhisperTranscriber(model_size='large', language='en'))
     monkeypatch.setattr(service, '_get_cache_dir', lambda: tmp_path / 'cache-root')

@@ -55,6 +55,7 @@ Online meetings are a tax on memory. The good options for getting transcripts ba
 2. Open the DMG and drag *AvaNevis* into Applications.
 3. **Right-click → Open** the first time. Double-clicking will trigger Gatekeeper to claim the app is "damaged" because the build is unsigned. Right-click → Open bypasses this safely.
 4. Grant microphone and desktop-audio permissions when prompted. On macOS 14.2+, AvaNevis uses a CoreAudio process tap that may request System Audio Recording permission; Screen Recording may still be requested by the ScreenCaptureKit fallback. No screen video is saved.
+5. First transcription downloads the MLX Whisper model once and caches it under `~/Library/Caches/avanevis/mlx_models`; cached files are reused on later transcriptions.
 
 If right-click → Open misbehaves, run `xattr -d com.apple.quarantine /Applications/AvaNevis.app` once and relaunch.
 
@@ -135,7 +136,7 @@ For recorder changes, also run the manual smoke checklist in `tests/manual/recor
 
 1. **Pick devices.** Choose a mic, a desktop-audio loopback device, the language, and a Whisper model size in the Settings tab.
 2. **Record.** Both streams are written to disk in parallel (WASAPI loopback on Windows, CoreAudio process tap via the bundled Swift helper on macOS 14.2+, with Swift/PyObjC ScreenCaptureKit fallback). The audio visualizer shows live mic + desktop levels.
-3. **Stop.** The recorder reports completion as a structured stdout JSON event. The two streams are aligned and mixed at 48 kHz stereo and compressed to Opus (with WAV fallback if ffmpeg fails).
+3. **Stop.** The recorder reports completion as a structured stdout JSON event. The two streams are aligned, mixed at 48 kHz stereo, kept mono-compatible for transcription, and compressed to Opus (with WAV fallback if ffmpeg fails).
 4. **Transcribe.** The mixed audio is passed to the platform-appropriate Whisper backend; output lands as a Markdown transcript with `[mm:ss - mm:ss]` timestamp lines.
 5. **Save.** Meeting metadata, audio file, and transcript are persisted to the user-data folder under a unique meeting ID. Meetings that already exist on disk get rescanned and re-imported on launch.
 

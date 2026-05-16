@@ -116,6 +116,38 @@ def _downmix_to_stereo(audio: np.ndarray, num_channels: int) -> np.ndarray:
 
     return np.column_stack([left, right])
 
+
+def _repair_one_sided_stereo(audio: np.ndarray, stream_name: str) -> np.ndarray:
+    """Duplicate a dominant stereo channel so transcription downmixes do not lose speech."""
+    if len(audio.shape) != 2 or audio.shape[1] != 2 or len(audio) == 0:
+        return audio
+
+    left = audio[:, 0]
+    right = audio[:, 1]
+    left_rms = float(np.sqrt(np.mean(np.square(left)))) if left.size else 0.0
+    right_rms = float(np.sqrt(np.mean(np.square(right)))) if right.size else 0.0
+    left_peak = float(np.max(np.abs(left))) if left.size else 0.0
+    right_peak = float(np.max(np.abs(right))) if right.size else 0.0
+
+    max_rms = max(left_rms, right_rms)
+    min_rms = min(left_rms, right_rms)
+    max_peak = max(left_peak, right_peak)
+    min_peak = min(left_peak, right_peak)
+
+    if max_rms < 1e-5 or max_peak < 1e-4:
+        return audio
+
+    if min_rms > max_rms * 0.20 or min_peak > max_peak * 0.35:
+        return audio
+
+    dominant = left if left_rms >= right_rms else right
+    print(
+        f"  Repairing one-sided {stream_name} stereo for mono-compatible transcription "
+        f"(left_rms={left_rms:.6f}, right_rms={right_rms:.6f})",
+        file=sys.stderr,
+    )
+    return np.column_stack([dominant, dominant])
+
 # Import Swift audio capture helper (preferred for macOS 13+)
 # Falls back to PyObjC ScreenCaptureKit if Swift helper not available
 SWIFT_CAPTURE_AVAILABLE = False
@@ -317,23 +349,27 @@ class MacOSAudioRecorder:
         if capture is None:
             return diagnostics
 
+        read_chunks = int(getattr(capture, 'read_chunk_count', 0) or 0)
+        read_samples = int(getattr(capture, 'read_sample_count', 0) or 0)
         try:
             with capture.buffer_lock:
                 live_buffer = getattr(capture, 'audio_buffer', []) or []
-                diagnostics['bufferChunks'] = int(
+                buffer_chunks = int(
                     getattr(capture, 'last_captured_chunk_count', 0) or len(live_buffer)
                 )
-                diagnostics['bufferSamples'] = int(
+                buffer_samples = int(
                     getattr(capture, 'last_captured_sample_count', 0) or sum(len(chunk) for chunk in live_buffer)
                 )
+                diagnostics['bufferChunks'] = buffer_chunks if buffer_chunks > 0 else read_chunks
+                diagnostics['bufferSamples'] = buffer_samples if buffer_samples > 0 else read_samples
                 diagnostics['peakLevel'] = float(getattr(capture, 'read_peak_level', 0.0) or 0.0)
         except Exception as error:
             diagnostics['error'] = f'Could not read desktop buffer diagnostics: {error}'
 
         diagnostics['firstAudioTime'] = getattr(capture, 'first_audio_time', None)
         diagnostics['lastAudioTime'] = getattr(capture, 'last_audio_time', None)
-        diagnostics['readChunks'] = int(getattr(capture, 'read_chunk_count', 0) or 0)
-        diagnostics['readSamples'] = int(getattr(capture, 'read_sample_count', 0) or 0)
+        diagnostics['readChunks'] = read_chunks
+        diagnostics['readSamples'] = read_samples
         diagnostics['helperSampleBuffers'] = int(
             getattr(capture, 'helper_total_sample_buffers', 0)
             or getattr(capture, 'last_helper_sample_buffers', 0)
@@ -711,7 +747,7 @@ class MacOSAudioRecorder:
             print(f"Stopping {capture_type} desktop capture...", file=sys.stderr)
             desktop_audio = self.desktop_capture.stop_recording()
             warning_codes = self._drain_desktop_warnings(capture_type)
-            if desktop_audio is not None:
+            if desktop_audio is not None and len(desktop_audio) > 0:
                 diagnostics = self._emit_desktop_diagnostics_warning(emit_warning=False)
                 if diagnostics.get('bufferSamples', 0) <= 0:
                     diagnostics['bufferChunks'] = max(int(diagnostics.get('bufferChunks', 0) or 0), 1)
@@ -723,7 +759,13 @@ class MacOSAudioRecorder:
                 self.desktop_capture_end_time = getattr(self.desktop_capture, 'last_audio_time', None)
                 if self.desktop_capture_start_time is None and self.recording_start_time is not None:
                     self.desktop_capture_start_time = self.recording_start_time + self.preroll_seconds
-                print(f"Retrieved {len(desktop_audio)} desktop audio samples from {capture_type}", file=sys.stderr)
+                desktop_peak = float(np.max(np.abs(desktop_audio))) if desktop_audio.size else 0.0
+                desktop_rms = float(np.sqrt(np.mean(np.square(desktop_audio)))) if desktop_audio.size else 0.0
+                print(
+                    f"Retrieved {len(desktop_audio)} desktop audio samples from {capture_type} "
+                    f"(peak={desktop_peak:.6f}, rms={desktop_rms:.6f})",
+                    file=sys.stderr,
+                )
             else:
                 self._emit_desktop_diagnostics_warning()
                 print(f"No desktop audio captured from {capture_type}", file=sys.stderr)
@@ -785,6 +827,9 @@ class MacOSAudioRecorder:
                 print(f"  Downmixing desktop audio from {desktop_channels} channel(s) to stereo...", file=sys.stderr)
                 desktop_audio = _downmix_to_stereo(desktop_audio, desktop_channels)
 
+            mic_audio = _repair_one_sided_stereo(mic_audio, 'microphone')
+            desktop_audio = _repair_one_sided_stereo(desktop_audio, 'desktop')
+
             mic_audio, desktop_audio = self._align_streams_by_start_time(mic_audio, desktop_audio)
 
             # Match lengths by padding shorter stream with silence (NOT resampling)
@@ -828,6 +873,8 @@ class MacOSAudioRecorder:
                 final_audio = _downmix_to_stereo(mic_audio, mic_channels)
             else:
                 final_audio = mic_audio
+
+            final_audio = _repair_one_sided_stereo(final_audio, 'microphone')
 
             # Apply mic volume
             final_audio = final_audio * self.mic_volume

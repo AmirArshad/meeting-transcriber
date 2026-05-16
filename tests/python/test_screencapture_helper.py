@@ -1,4 +1,5 @@
 import backend.audio.screencapture_helper as helper_module
+import backend.audio.macos_recorder as macos_recorder_module
 import backend.audio.swift_audio_capture as swift_capture_module
 import backend.check_permissions as check_permissions_module
 from pathlib import Path
@@ -89,6 +90,8 @@ def test_swift_helper_uses_coreaudio_tap_before_screencapturekit():
     assert 'AudioHardwareCreateProcessTap' in contents
     assert 'CATapDescription(stereoGlobalTapButExcludeProcesses:' in contents
     assert 'AudioHardwareCreateAggregateDevice' in contents
+    assert 'audioBuffer.mNumberChannels' in contents
+    assert 'buffers.count > 1 || isNonInterleaved(streamFormat)' in contents
     assert '--screencapturekit' in contents
 
 
@@ -290,6 +293,70 @@ def test_swift_audio_capture_records_helper_diagnostics(monkeypatch):
     assert capture.helper_stream_config['width'] == 1728
     assert capture.helper_screen_frames == 5
     assert capture.helper_capture_backend == 'screencapturekit'
+
+
+def test_macos_desktop_diagnostics_fall_back_to_read_counts_after_buffer_clear():
+    capture = swift_capture_module.SwiftAudioCapture.__new__(swift_capture_module.SwiftAudioCapture)
+    capture.buffer_lock = swift_capture_module.threading.Lock()
+    capture.audio_buffer = []
+    capture.last_captured_chunk_count = 0
+    capture.last_captured_sample_count = 0
+    capture.read_chunk_count = 12
+    capture.read_sample_count = 48000
+    capture.read_peak_level = 0.5
+    capture.first_audio_time = 1000.0
+    capture.last_audio_time = 1001.0
+    capture.helper_total_sample_buffers = 12
+    capture.helper_total_bytes = 384000
+    capture.last_helper_sample_buffers = 0
+    capture.last_helper_bytes = 0
+    capture.helper_screen_frames = 0
+    capture.helper_dropped_chunks = 0
+    capture.helper_queued_bytes_remaining = 0
+    capture.helper_capture_backend = 'coreaudio_tap'
+    capture.helper_audio_format = None
+    capture.helper_content_info = None
+    capture.helper_stream_config = None
+
+    recorder = macos_recorder_module.MacOSAudioRecorder.__new__(macos_recorder_module.MacOSAudioRecorder)
+    recorder.desktop_capture = capture
+    recorder.desktop_capture_type = 'swift'
+
+    diagnostics = recorder._build_desktop_diagnostics()
+
+    assert diagnostics['bufferChunks'] == 12
+    assert diagnostics['bufferSamples'] == 48000
+    assert diagnostics['readChunks'] == 12
+    assert diagnostics['readSamples'] == 48000
+    assert diagnostics['peakLevel'] == 0.5
+    assert diagnostics['helperCaptureBackend'] == 'coreaudio_tap'
+
+
+def test_macos_one_sided_stereo_repair_preserves_mono_transcription_energy():
+    import numpy as np
+
+    audio = np.column_stack([
+        np.array([0.0, 0.5, -0.5, 0.25], dtype=np.float64),
+        np.zeros(4, dtype=np.float64),
+    ])
+
+    repaired = macos_recorder_module._repair_one_sided_stereo(audio, 'desktop')
+
+    assert np.allclose(repaired[:, 0], audio[:, 0])
+    assert np.allclose(repaired[:, 1], audio[:, 0])
+
+
+def test_macos_one_sided_stereo_repair_keeps_balanced_stereo_unchanged():
+    import numpy as np
+
+    audio = np.column_stack([
+        np.array([0.0, 0.5, -0.5, 0.25], dtype=np.float64),
+        np.array([0.1, -0.4, 0.4, -0.2], dtype=np.float64),
+    ])
+
+    repaired = macos_recorder_module._repair_one_sided_stereo(audio, 'desktop')
+
+    assert np.allclose(repaired, audio)
 
 
 def test_desktop_audio_availability_reports_missing_backends(monkeypatch):

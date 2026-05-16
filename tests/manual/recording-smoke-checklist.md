@@ -6,6 +6,7 @@ Use this checklist before and after high-risk recorder changes.
 
 - [ ] Record microphone + desktop audio while system audio is actively playing.
 - [ ] Verify the first 10 seconds of desktop audio are present in the saved recording.
+- [ ] On macOS, play browser/YouTube speech and verify that speech appears in the transcript, not only in the audio meter.
 - [ ] Deny Screen Recording permission and verify the failure is explicit.
 - [ ] Record with no desktop audio playing and verify the app behaves predictably.
 - [ ] Record while using Bluetooth/USB/headphone output and note whether desktop audio still captures correctly on the current macOS version.

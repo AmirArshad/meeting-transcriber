@@ -2632,6 +2632,14 @@ function renderFootprintRows(container, rows) {
 }
 
 function updateDiarizationFootprint(diarization) {
+  if (diarization && diarization.status === 'unsupported') {
+    renderFootprintRows(document.getElementById('diarization-footprint'), [
+      { label: 'Platform', value: 'unsupported' },
+      { label: 'Runtime', value: 'disabled' },
+    ]);
+    return;
+  }
+
   const storage = diarization && diarization.storage;
   const estimatedDownload = storage && storage.estimatedDownloadBytes;
   const installed = storage && storage.installedBytes;
@@ -2713,6 +2721,7 @@ function appendAiAddonLog(text) {
 function updateAiAddonSettings(status) {
   const diarization = status && status.features && status.features.diarization;
   const summary = status && status.features && status.features.summary;
+  const diarizationUnsupported = diarization && diarization.status === 'unsupported';
   const overallStatus = (diarization && diarization.status === 'ready') || (summary && summary.status === 'ready')
     ? 'ready'
     : ((diarization && diarization.status === 'error') || (summary && summary.status === 'error') ? 'error' : 'notConfigured');
@@ -2724,6 +2733,23 @@ function updateAiAddonSettings(status) {
     const speakerCount = document.getElementById('diarization-speaker-count');
     if (speakerCount) {
       speakerCount.value = String(diarization.speakerCount || 'auto');
+      speakerCount.disabled = diarizationUnsupported;
+    }
+
+    const tokenInput = document.getElementById('diarization-token-input');
+    if (tokenInput) {
+      tokenInput.disabled = diarizationUnsupported;
+      tokenInput.placeholder = diarizationUnsupported ? 'Unavailable on this platform' : 'hf_...';
+    }
+
+    const setupButton = document.getElementById('setup-diarization-btn');
+    if (setupButton) {
+      setupButton.disabled = diarizationUnsupported;
+    }
+
+    const validateButton = document.getElementById('validate-diarization-btn');
+    if (validateButton) {
+      validateButton.disabled = diarizationUnsupported;
     }
 
     const statusText = document.getElementById('diarization-status-text');

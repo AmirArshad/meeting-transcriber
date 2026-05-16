@@ -162,6 +162,18 @@ If you still see "faster-whisper (CPU fallback)", report an issue on GitHub.
 
 ---
 
+### ⚠️ Hugging Face Token Warning During macOS Transcription
+
+**Symptom:** During macOS transcription, the log mentions unauthenticated Hugging Face requests or `HF_TOKEN`.
+
+**Cause:** The Apple Silicon transcription backend verifies or downloads public MLX Whisper model files from Hugging Face. This is separate from speaker identification. macOS speaker identification remains unsupported unless accelerated diarization is validated later.
+
+**Expected behavior:** Once `~/Library/Caches/avanevis/mlx_models/<model>` contains `weights.npz` and `config.json`, AvaNevis reuses those files and skips the Hugging Face Hub check for normal transcription.
+
+**What to do:** No Hugging Face token is required for normal transcription. If the warning repeats every transcription, verify the cache directory is writable and not being deleted between launches.
+
+---
+
 ## Windows Issues
 
 ### 🛡️ Windows SmartScreen Warning
@@ -249,6 +261,7 @@ If you still see "faster-whisper (CPU fallback)", report an issue on GitHub.
 - If logs mention ScreenCaptureKit fallback, also grant **Screen Recording** permission
 - System Settings → Privacy & Security → System Audio Recording / Screen Recording
 - Restart the app
+- If the desktop meter moves but the transcript misses desktop speech, update to the latest build. AvaNevis now normalizes CoreAudio multi-buffer channels and repairs one-sided stereo before MLX transcription.
 - If desktop audio is still missing on Bluetooth, USB, or headphones, reproduce it on the current macOS version and hardware before assuming the output device is unsupported.
 
 ---

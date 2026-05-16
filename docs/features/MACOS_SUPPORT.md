@@ -14,6 +14,8 @@ Status: implemented
 
 - Preferred path: native Swift `audiocapture-helper` using CoreAudio process taps on macOS 14.2+
 - Fallback paths: Swift ScreenCaptureKit, then PyObjC ScreenCaptureKit bridge
+- The CoreAudio tap bridge normalizes multi-buffer or non-interleaved input into the helper's raw interleaved float32 PCM stdout contract.
+- The Python mixer keeps the saved file mono-compatible for transcription when a backend delivers one-sided stereo desktop audio.
 - Recorder implementation: `backend/audio/macos_recorder.py`
 - Swift bridge: `backend/audio/swift_audio_capture.py`
 - Native helper source: `swift/AudioCaptureHelper/Sources/main.swift`
@@ -30,7 +32,8 @@ Status: implemented
 
 - Apple Silicon packaged builds launch `transcription.mlx_whisper_transcriber` with `python -m`.
 - Development runs on Intel Macs can still fall back to `transcription.faster_whisper_transcriber` with `python -m`.
-- Apple Silicon MLX models are cached under `~/Library/Caches/avanevis/mlx_models`.
+- Apple Silicon MLX models are cached under `~/Library/Caches/avanevis/mlx_models`; cached model files are reused without rechecking Hugging Face on every transcription.
+- English `small` currently maps to `mustafaaljadery/distil-whisper-mlx` / `distil-small.en`; multilingual `small` uses `mlx-community/whisper-small-mlx`.
 
 ## Build And Packaging
 

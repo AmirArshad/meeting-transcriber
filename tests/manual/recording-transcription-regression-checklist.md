@@ -22,6 +22,7 @@ Use this lightweight checklist for any future recording, transcription, or cross
 - [ ] Re-check quit during recording if start/stop/quit behavior changed.
 - [ ] Re-check no-permission and no-desktop-audio flows if macOS capture behavior changed.
 - [ ] Re-check model preload/download and transcript save flow if transcription behavior changed.
+- [ ] On macOS, verify desktop speech survives the saved stereo file and the MLX mono transcription path.
 
 ## 4. Update evidence
 

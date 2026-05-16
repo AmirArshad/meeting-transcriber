@@ -271,9 +271,15 @@ test('progress events redact known sensitive fields and token-looking values', (
   assert.equal('token' in event, false);
 });
 
-test('download URL validation allows only expected HTTPS artifact hosts', () => {
+test('download URL validation allows configured HTTPS hosts and expected redirects', () => {
   assert.equal(isAllowedDownloadUrl('https://github.com/ggml-org/llama.cpp/releases/download/b9173/runtime.zip'), true);
+  assert.equal(isAllowedDownloadUrl('https://objects.githubusercontent.com/github-production-release-asset-2e65be/runtime.zip'), true);
   assert.equal(isAllowedDownloadUrl('https://huggingface.co/unsloth/model/resolve/main/model.gguf'), true);
+  assert.equal(isAllowedDownloadUrl('https://cdn-lfs.hf.co/repos/model.gguf'), true);
+  assert.equal(isAllowedDownloadUrl('https://cas-bridge.xethub.hf.co/xet-bridge-us/model.gguf'), true);
+  assert.equal(isAllowedDownloadUrl('https://pypi.org/simple'), true);
+  assert.equal(isAllowedDownloadUrl('https://download.pytorch.org/whl/cu126'), true);
+  assert.equal(isAllowedDownloadUrl('https://files.pythonhosted.org/packages/example.whl'), true);
   assert.equal(isAllowedDownloadUrl('http://github.com/ggml-org/llama.cpp/releases/download/b9173/runtime.zip'), false);
   assert.equal(isAllowedDownloadUrl('https://example.test/model.gguf'), false);
 });
@@ -376,6 +382,31 @@ test('diarization dependency cache uses managed userData path and pinned require
   assert.equal(cache.sitePackagesDir, path.join('/tmp/AvaNevis', 'ai-addons', 'dependencies', 'diarization', artifact.id, 'site-packages'));
   assert.ok(artifact.pip.requirements.includes('pyannote.audio==4.0.1'));
   assert.ok(artifact.pip.requirements.includes('torch==2.8.0+cu126'));
+});
+
+test('diarization dependency cache rejects unallowed pip index hosts', () => {
+  const artifact = JSON.parse(JSON.stringify(getDiarizationDependencyArtifactForPlatform('win32', 'x64')));
+  artifact.pip.indexUrl = 'https://example.test/simple';
+  const catalog = {
+    version: 1,
+    diarization: {
+      defaultModelId: 'diarizer',
+      dependencyArtifacts: { 'win32-x64': artifact },
+      models: [{ id: 'diarizer' }],
+    },
+    summary: { defaultModelId: 'summary', runtimeArtifacts: {}, models: [] },
+  };
+
+  const cache = checkDiarizationDependencyCache({
+    userDataDir: '/tmp/AvaNevis',
+    platform: 'win32',
+    arch: 'x64',
+    fsModule: createMemoryFs(),
+    catalog,
+  });
+
+  assert.equal(cache.valid, false);
+  assert.match(cache.reason, /index URL host is not allowed/);
 });
 
 test('diarization dependency installer builds pinned pip target args', () => {

@@ -149,7 +149,7 @@
     if (status === 'error') {
       return `${reason || 'Speaker identification setup failed.'} Check your token, accepted model terms, and local runtime setup.`;
     }
-    return reason || 'Enter your own Hugging Face token to enable local speaker labels.';
+    return reason || 'Speaker identification setup is available only on supported platforms.';
   }
 
   function getSummarySetupMessage(feature) {
