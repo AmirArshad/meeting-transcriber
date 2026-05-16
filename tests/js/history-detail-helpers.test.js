@@ -71,6 +71,10 @@ test('setup messages explain graceful degradation paths', () => {
     }),
     /llama\.cpp runtime is not installed.*validate or reinstall/i,
   );
+  assert.doesNotMatch(
+    getSummarySetupMessage({ status: 'error' }),
+    /Open Settings/i,
+  );
   assert.match(
     getSummarySetupMessage({ status: 'notConfigured' }),
     /Install the local summary model/i,

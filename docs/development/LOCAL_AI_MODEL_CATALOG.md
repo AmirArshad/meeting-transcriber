@@ -8,7 +8,7 @@ This app keeps optional local AI add-on artifacts catalog-driven in `src/ai-addo
 - Summary model and runtime downloads must be explicit user-triggered setup actions.
 - Speaker diarization dependency installs must be explicit user-triggered setup actions and stay under Electron `userData`.
 - Pin every downloadable summary model and runtime artifact by immutable URL, filename, and SHA-256 checksum.
-- Summary model/runtime download URLs must use HTTPS and an allowed artifact host. The allowlist is derived from the configured catalog URLs plus known GitHub/Hugging Face/PyPI redirect hosts; arbitrary HTTPS hosts remain blocked.
+- Summary model/runtime download URLs must use HTTPS and an allowed artifact host. The allowlist is derived from the configured catalog URLs plus known GitHub/Hugging Face/PyPI redirect hosts; Hugging Face/Xet redirect subdomains under `hf.co` and `huggingface.co` are allowed, while arbitrary HTTPS hosts remain blocked.
 - Prefer official model-owner GGUF artifacts. If unavailable, use established community quantizations with immutable revision URLs.
 - Store artifacts under Electron `userData` via the AI add-on cache helpers so app updates do not remove installed add-ons.
 - Speaker diarization must use the user's own Hugging Face token stored through Electron `safeStorage` only.

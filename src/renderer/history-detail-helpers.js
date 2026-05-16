@@ -172,7 +172,7 @@
       return 'The local summary model is being validated. Try again after validation finishes.';
     }
     if (status === 'error') {
-      return `${reason || 'Summary model setup failed.'} Open Settings to validate or reinstall the local model.`;
+      return `${reason || 'Summary model setup failed.'} Validate or reinstall the local model from Settings.`;
     }
     if (status === 'ready') {
       return reason || 'Summary setup is incomplete. Validate the local model and llama.cpp runtime in Settings.';

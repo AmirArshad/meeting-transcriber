@@ -44,7 +44,11 @@ const DOWNLOAD_REDIRECT_HOSTS = new Set([
   'cdn-lfs-us-1.huggingface.co',
   'cdn-lfs-eu-1.huggingface.co',
   'cas-bridge.xethub.hf.co',
+  'cas-server.xethub.hf.co',
+  'cas-server.xethub.huggingface.co',
+  'cas-bridge.xethub.huggingface.co',
   'transfer.xethub.hf.co',
+  'transfer.xethub.huggingface.co',
 ]);
 const ALLOWED_DOWNLOAD_HOSTS = new Set([
   ...collectConfiguredDownloadHosts(AI_MODEL_CATALOG),
@@ -546,9 +550,24 @@ function validateSummaryRuntimeArtifact(runtimeArtifact) {
 function isAllowedDownloadUrl(url) {
   try {
     const parsedUrl = new URL(String(url || ''));
-    return parsedUrl.protocol === 'https:' && ALLOWED_DOWNLOAD_HOSTS.has(parsedUrl.hostname.toLowerCase());
+    return parsedUrl.protocol === 'https:' && isAllowedDownloadHost(parsedUrl.hostname);
   } catch (error) {
     return false;
+  }
+}
+
+function isAllowedDownloadHost(hostname) {
+  const normalizedHostname = String(hostname || '').toLowerCase();
+  return ALLOWED_DOWNLOAD_HOSTS.has(normalizedHostname)
+    || normalizedHostname.endsWith('.hf.co')
+    || normalizedHostname.endsWith('.huggingface.co');
+}
+
+function getDownloadHost(url) {
+  try {
+    return new URL(String(url || '')).hostname.toLowerCase();
+  } catch (error) {
+    return 'unknown';
   }
 }
 
@@ -1356,7 +1375,7 @@ async function downloadFile({ url, destinationPath, expectedSizeBytes, onProgres
     throw new Error('Summary setup artifact downloads require HTTPS.');
   }
   if (!isAllowedDownloadUrl(parsedUrl.toString())) {
-    throw new Error('Summary setup artifact download host is not allowed.');
+    throw new Error(`Summary setup artifact download host is not allowed: ${getDownloadHost(parsedUrl.toString())}.`);
   }
   if (redirectCount > MAX_DOWNLOAD_REDIRECTS) {
     throw new Error('Summary setup artifact download followed too many redirects.');
