@@ -1224,7 +1224,14 @@ async function validateDiarizationSetup({
         error = message;
       } else if (typeof runtimeValidator === 'function') {
         try {
-          await runtimeValidator({ modelId, modelRef: getDiarizationModelRef(modelId, catalog), token, dependencyCache, cancelSignal });
+          await runtimeValidator({
+            modelId,
+            modelRef: getDiarizationModelRef(modelId, catalog),
+            token,
+            dependencyCache,
+            requiredDevice: availability.runtimeDevice || null,
+            cancelSignal,
+          });
         } catch (runtimeError) {
           if (isAiAddonCancelError(runtimeError)) {
             throw runtimeError;

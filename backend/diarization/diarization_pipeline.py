@@ -27,15 +27,25 @@ UNKNOWN_PROGRESS_ERROR = "Speaker diarization failed."
 os.environ.setdefault("PYANNOTE_METRICS_ENABLED", "0")
 
 
-def validate_pyannote_setup(*, model_ref: str = DEFAULT_MODEL_REF, hf_token: Optional[str] = None) -> Dict[str, Any]:
+def validate_pyannote_setup(
+    *,
+    model_ref: str = DEFAULT_MODEL_REF,
+    hf_token: Optional[str] = None,
+    required_device: Optional[str] = None,
+) -> Dict[str, Any]:
     """Validate that local pyannote setup can load the gated model."""
     token = hf_token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN") or ""
     if not token:
         raise ValueError("Hugging Face token is required for speaker diarization.")
 
+    device_requirement = normalize_required_device(required_device or os.environ.get("AVANEVIS_DIARIZATION_REQUIRE_DEVICE"))
+    if device_requirement:
+        emit_progress("validating-accelerator", f"Checking {device_requirement.upper()} speaker identification acceleration.", percent=8)
+        assert_required_device_available(device_requirement)
+
     emit_progress("validating-runtime", "Checking pyannote.audio runtime.", percent=10)
     pipeline = load_pyannote_pipeline(model_ref, token)
-    device = move_pipeline_to_best_device(pipeline)
+    device = move_pipeline_to_best_device(pipeline, required_device=device_requirement)
     return {
         "status": "ready",
         "model": model_ref,
@@ -74,6 +84,46 @@ def normalize_speaker_count(value: Any) -> Optional[int]:
     if count < 2 or count > 10:
         raise ValueError("speaker count must be between 2 and 10, or 'auto'")
     return count
+
+
+def normalize_required_device(value: Any) -> Optional[str]:
+    if value in (None, "", "auto"):
+        return None
+
+    device = str(value).strip().lower()
+    if device not in {"cuda", "mps"}:
+        raise ValueError("Speaker diarization requires either CUDA or Metal/MPS acceleration; CPU fallback is disabled.")
+    return device
+
+
+def assert_required_device_available(required_device: str) -> Any:
+    normalized_device = normalize_required_device(required_device)
+    if not normalized_device:
+        raise ValueError("Speaker diarization requires either CUDA or Metal/MPS acceleration; CPU fallback is disabled.")
+
+    try:
+        import torch  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise RuntimeError("PyTorch is not installed for accelerated speaker diarization.") from exc
+
+    if normalized_device == "cuda":
+        if not getattr(torch, "cuda", None) or not torch.cuda.is_available():
+            raise RuntimeError("Speaker identification requires CUDA acceleration. CPU fallback is disabled.")
+    elif normalized_device == "mps":
+        mps_backend = getattr(getattr(torch, "backends", None), "mps", None)
+        is_built = bool(mps_backend and mps_backend.is_built())
+        is_available = bool(mps_backend and mps_backend.is_available())
+        if not is_built or not is_available:
+            raise RuntimeError("Speaker identification on macOS requires PyTorch Metal/MPS acceleration. CPU fallback is disabled.")
+
+    device = torch.device(normalized_device)
+    try:
+        probe_tensor = torch.empty(1, device=device)
+        if hasattr(probe_tensor, "cpu"):
+            probe_tensor.cpu()
+    except Exception as exc:
+        raise RuntimeError(f"Speaker identification could not initialize {normalized_device.upper()} acceleration. CPU fallback is disabled.") from exc
+    return device
 
 
 def build_audio_conversion_command(ffmpeg_path: str, source_path: Path, target_path: Path) -> List[str]:
@@ -184,14 +234,29 @@ def load_pyannote_pipeline(model_ref: str, hf_token: str) -> Any:
         return Pipeline.from_pretrained(model_ref, use_auth_token=hf_token)
 
 
-def move_pipeline_to_best_device(pipeline: Any) -> str:
+def move_pipeline_to_best_device(pipeline: Any, *, required_device: Optional[str] = None) -> str:
     try:
         import torch  # type: ignore[import-not-found]
+
+        normalized_required_device = normalize_required_device(required_device)
+        if normalized_required_device:
+            device = assert_required_device_available(normalized_required_device)
+            try:
+                pipeline.to(device)
+            except Exception as exc:
+                raise RuntimeError(f"Speaker identification could not use {normalized_required_device.upper()} acceleration. CPU fallback is disabled.") from exc
+            return normalized_required_device
 
         if torch.cuda.is_available():
             pipeline.to(torch.device("cuda"))
             return "cuda"
+        mps_backend = getattr(getattr(torch, "backends", None), "mps", None)
+        if mps_backend and mps_backend.is_built() and mps_backend.is_available():
+            pipeline.to(torch.device("mps"))
+            return "mps"
     except Exception:
+        if required_device:
+            raise
         pass
 
     return "cpu"
@@ -203,13 +268,19 @@ def run_pyannote_diarization(
     model_ref: str,
     hf_token: str,
     speaker_count: Optional[int] = None,
+    required_device: Optional[str] = None,
 ) -> Tuple[List[Dict[str, Any]], str, str]:
     if not hf_token:
         raise ValueError("Hugging Face token is required for speaker diarization.")
 
+    device_requirement = normalize_required_device(required_device or os.environ.get("AVANEVIS_DIARIZATION_REQUIRE_DEVICE"))
+    if device_requirement:
+        emit_progress("validating-accelerator", f"Checking {device_requirement.upper()} speaker identification acceleration.", percent=30)
+        assert_required_device_available(device_requirement)
+
     emit_progress("loading-model", "Loading speaker diarization model.", percent=35)
     pipeline = load_pyannote_pipeline(model_ref, hf_token)
-    device = move_pipeline_to_best_device(pipeline)
+    device = move_pipeline_to_best_device(pipeline, required_device=device_requirement)
 
     emit_progress("running-model", "Running speaker diarization locally.", percent=55)
     kwargs: Dict[str, Any] = {}
@@ -268,6 +339,7 @@ def diarize_transcript(
     speaker_count: Optional[int] = None,
     ffmpeg_path: str = "ffmpeg",
     hf_token: Optional[str] = None,
+    required_device: Optional[str] = None,
 ) -> Dict[str, Any]:
     emit_progress("loading-transcript", "Loading transcript segments.", percent=5)
     transcript_segments = load_transcript_segments(segments_json_path)
@@ -280,6 +352,7 @@ def diarize_transcript(
             model_ref=model_ref,
             hf_token=hf_token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN") or "",
             speaker_count=speaker_count,
+            required_device=required_device,
         )
 
     result = build_diarization_result(
@@ -303,12 +376,13 @@ def main() -> None:
     parser.add_argument("--output-json", help="Output speakers JSON path")
     parser.add_argument("--model-ref", default=DEFAULT_MODEL_REF, help="pyannote model reference")
     parser.add_argument("--speaker-count", default="auto", help="Known speaker count or auto")
+    parser.add_argument("--require-device", default=None, help="Require accelerated torch device: cuda or mps")
     parser.add_argument("--ffmpeg", default="ffmpeg", help="ffmpeg executable path")
     args = parser.parse_args()
 
     try:
         if args.validate_setup:
-            result = validate_pyannote_setup(model_ref=args.model_ref)
+            result = validate_pyannote_setup(model_ref=args.model_ref, required_device=args.require_device)
             emit_progress("ready", "Speaker diarization setup is ready.", percent=100)
             print(json.dumps(result, ensure_ascii=True))
             return
@@ -323,6 +397,7 @@ def main() -> None:
             model_ref=args.model_ref,
             speaker_count=normalize_speaker_count(args.speaker_count),
             ffmpeg_path=args.ffmpeg,
+            required_device=args.require_device,
         )
         print(json.dumps({**result, "segmentsPath": args.output_json}, ensure_ascii=True))
     except Exception as exc:

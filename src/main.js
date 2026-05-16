@@ -675,7 +675,7 @@ function getBackendModuleArgs(moduleName, extraArgs = []) {
   return buildPythonModuleArgs(moduleName, extraArgs);
 }
 
-function buildDiarizationArgs({ audioPath, segmentsJsonPath, outputPath, modelRef, speakerCount }) {
+function buildDiarizationArgs({ audioPath, segmentsJsonPath, outputPath, modelRef, speakerCount, requiredDevice }) {
   const args = [
     '--audio', audioPath,
     '--segments-json', segmentsJsonPath,
@@ -685,14 +685,24 @@ function buildDiarizationArgs({ audioPath, segmentsJsonPath, outputPath, modelRe
     '--ffmpeg', pythonConfig.ffmpegPath,
   ];
 
+  if (requiredDevice) {
+    args.push('--require-device', requiredDevice);
+  }
+
   return getBackendModuleArgs('diarization.diarization_pipeline', args);
 }
 
-function buildDiarizationValidationArgs(modelRef) {
-  return getBackendModuleArgs('diarization.diarization_pipeline', [
+function buildDiarizationValidationArgs(modelRef, requiredDevice) {
+  const args = [
     '--validate-setup',
     '--model-ref', modelRef || 'pyannote/speaker-diarization-community-1',
-  ]);
+  ];
+
+  if (requiredDevice) {
+    args.push('--require-device', requiredDevice);
+  }
+
+  return getBackendModuleArgs('diarization.diarization_pipeline', args);
 }
 
 function buildManagedModuleShim() {
@@ -713,18 +723,24 @@ function buildManagedPythonModuleArgs(moduleName, extraArgs = [], managedSitePac
   ];
 }
 
-function buildManagedDiarizationValidationArgs(modelRef) {
+function buildManagedDiarizationValidationArgs(modelRef, requiredDevice) {
+  const args = [
+    '--validate-setup',
+    '--model-ref', modelRef || 'pyannote/speaker-diarization-community-1',
+  ];
+
+  if (requiredDevice) {
+    args.push('--require-device', requiredDevice);
+  }
+
   return buildManagedPythonModuleArgs(
     'diarization.diarization_pipeline',
-    [
-      '--validate-setup',
-      '--model-ref', modelRef || 'pyannote/speaker-diarization-community-1',
-    ],
+    args,
     getDiarizationDependencySitePackagesPath(),
   );
 }
 
-function buildManagedDiarizationArgs({ audioPath, segmentsJsonPath, outputPath, modelRef, speakerCount }) {
+function buildManagedDiarizationArgs({ audioPath, segmentsJsonPath, outputPath, modelRef, speakerCount, requiredDevice }) {
   const args = [
     '--audio', audioPath,
     '--segments-json', segmentsJsonPath,
@@ -733,6 +749,10 @@ function buildManagedDiarizationArgs({ audioPath, segmentsJsonPath, outputPath, 
     '--speaker-count', speakerCount === undefined || speakerCount === null ? 'auto' : String(speakerCount),
     '--ffmpeg', pythonConfig.ffmpegPath,
   ];
+
+  if (requiredDevice) {
+    args.push('--require-device', requiredDevice);
+  }
 
   return buildManagedPythonModuleArgs('diarization.diarization_pipeline', args, getDiarizationDependencySitePackagesPath());
 }
@@ -1974,7 +1994,7 @@ function validateAiMetadataPaths(updates = {}) {
   return validated;
 }
 
-function validateDiarizationRuntime({ modelRef, token, cancelSignal }) {
+function validateDiarizationRuntime({ modelRef, token, requiredDevice, cancelSignal }) {
   const resolvedToken = token || getAiAddonToken({
     userDataDir: app.getPath('userData'),
     tokenKey: TOKEN_KEYS.diarizationHuggingFace,
@@ -1987,13 +2007,14 @@ function validateDiarizationRuntime({ modelRef, token, cancelSignal }) {
       return;
     }
 
-    const python = spawnTrackedPython(buildManagedDiarizationValidationArgs(modelRef), {
+    const python = spawnTrackedPython(buildManagedDiarizationValidationArgs(modelRef, requiredDevice), {
       cwd: pythonConfig.backendPath,
       env: {
         ...getDiarizationDependencyEnv(),
         ...getDiarizationCacheEnv(),
         HF_TOKEN: resolvedToken || '',
         HUGGINGFACE_HUB_TOKEN: resolvedToken || '',
+        AVANEVIS_DIARIZATION_REQUIRE_DEVICE: requiredDevice || '',
       },
     });
 
@@ -2042,11 +2063,30 @@ function validateDiarizationRuntime({ modelRef, token, cancelSignal }) {
         }
         return;
       }
-      const reason = errorOutput.trim().split(/\r?\n/).filter(Boolean).slice(-1)[0];
+      const reason = summarizeDiarizationError(errorOutput);
       finish(reject, new Error(reason || 'Speaker identification runtime validation failed.'));
     });
     python.on('error', (error) => finish(reject, error));
   });
+}
+
+function summarizeDiarizationError(errorOutput) {
+  const userDataDir = app.getPath('userData');
+  const homeDir = os.homedir();
+  const lines = String(errorOutput || '').trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  for (const line of [...lines].reverse()) {
+    const cleaned = line
+      .replace(/^ERROR:\s*/i, '')
+      .replace(/hf_[A-Za-z0-9_-]+/g, '[redacted-token]')
+      .replaceAll(userDataDir, '<userData>')
+      .replaceAll(homeDir, '<home>')
+      .trim();
+    if (!cleaned || cleaned === 'Speaker diarization failed.') {
+      continue;
+    }
+    return cleaned;
+  }
+  return '';
 }
 
 function summarizeSummaryValidationError(errorOutput) {
@@ -2874,6 +2914,10 @@ ipcMain.handle('diarize-transcript', async (event, options = {}) => {
   if (!availability.supported) {
     throw new Error(availability.reason || 'Speaker identification is not supported on this platform.');
   }
+  const requiredDevice = availability.runtimeDevice;
+  if (!requiredDevice) {
+    throw new Error('Speaker identification accelerator policy is not configured for this platform.');
+  }
 
   const aiStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions());
   const diarizationStatus = aiStatus && aiStatus.features && aiStatus.features.diarization;
@@ -2918,6 +2962,7 @@ ipcMain.handle('diarize-transcript', async (event, options = {}) => {
       outputPath: resolvedOutputPath,
       modelRef: catalogModelRef,
       speakerCount,
+      requiredDevice,
     }), {
       cwd: pythonConfig.backendPath,
       env: {
@@ -2925,6 +2970,7 @@ ipcMain.handle('diarize-transcript', async (event, options = {}) => {
         ...getDiarizationCacheEnv(),
         HF_TOKEN: token || '',
         HUGGINGFACE_HUB_TOKEN: token || '',
+        AVANEVIS_DIARIZATION_REQUIRE_DEVICE: requiredDevice,
       },
     });
 
@@ -2960,7 +3006,8 @@ ipcMain.handle('diarize-transcript', async (event, options = {}) => {
         return;
       }
 
-      reject(new Error('Speaker diarization failed.'));
+      const reason = summarizeDiarizationError(errorOutput);
+      reject(new Error(reason || 'Speaker diarization failed.'));
     });
 
     python.on('error', (error) => {

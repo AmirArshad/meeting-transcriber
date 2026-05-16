@@ -27,9 +27,15 @@ Use this checklist when validating speaker identification or local summaries on 
 
 ## macOS Diarization Policy
 
-- [ ] Confirm speaker identification setup is hidden or marked unsupported unless accelerated Apple Silicon diarization has been explicitly validated.
-- [ ] Confirm macOS transcription still works normally when diarization is unavailable.
-- [ ] Confirm no CPU-only diarization fallback runs in v1.
+- [ ] Use Apple Silicon macOS only; confirm Intel macOS is unsupported for speaker identification.
+- [ ] Enter the user's own Hugging Face token after accepting `pyannote/speaker-diarization-community-1` terms.
+- [ ] Confirm speaker setup installs managed dependencies under Electron `userData/ai-addons/dependencies/diarization` only after explicit setup.
+- [ ] Confirm setup validates PyTorch Metal/MPS availability from the managed dependency environment before status becomes Ready.
+- [ ] Temporarily make MPS unavailable or force validation failure and confirm setup stays Error/Unsupported with clear Metal/MPS copy.
+- [ ] Record and transcribe a meeting with 2-4 speakers and confirm diarization runs after transcription using MPS, writes `*.speakers.json`, and speaker labels appear.
+- [ ] Confirm macOS transcription still works normally when diarization setup or runtime fails.
+- [ ] Confirm no CPU-only diarization fallback runs in setup or at runtime.
+- [ ] Cancel speaker setup during dependency download/install and confirm partial dependency files are removed and token values are not logged.
 
 ## Summary Setup And Generation
 

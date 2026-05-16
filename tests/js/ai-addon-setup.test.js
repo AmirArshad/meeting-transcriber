@@ -256,6 +256,10 @@ async function stubDiarizationDependencyInstaller({ targetDir, artifact }) {
   assert.equal(artifact.id, 'pyannote-audio-4.0.1-win32-x64-cuda-12.6');
 }
 
+async function stubAnyDiarizationDependencyInstaller({ targetDir }) {
+  assert.ok(targetDir.includes(path.join('dependencies', 'diarization')));
+}
+
 test('progress events redact known sensitive fields and token-looking values', () => {
   const event = createAiAddonProgressEvent({
     feature: 'summary',
@@ -482,6 +486,24 @@ test('diarization dependency cache uses managed userData path and pinned require
   assert.ok(artifact.pip.requirements.includes('torch==2.8.0+cu126'));
 });
 
+test('macOS diarization dependency cache uses managed MPS artifact', () => {
+  const fsModule = createMemoryFs();
+  const artifact = getDiarizationDependencyArtifactForPlatform('darwin', 'arm64');
+  const cache = checkDiarizationDependencyCache({
+    userDataDir: '/tmp/AvaNevis',
+    platform: 'darwin',
+    arch: 'arm64',
+    fsModule,
+  });
+
+  assert.equal(cache.installed, false);
+  assert.equal(cache.artifactId, 'pyannote-audio-4.0.1-darwin-arm64-mps');
+  assert.equal(cache.sitePackagesDir, path.join('/tmp/AvaNevis', 'ai-addons', 'dependencies', 'diarization', artifact.id, 'site-packages'));
+  assert.ok(artifact.pip.requirements.includes('pyannote.audio==4.0.1'));
+  assert.ok(artifact.pip.requirements.includes('torch==2.8.0'));
+  assert.equal(artifact.pip.requirements.includes('torch==2.8.0+cu126'), false);
+});
+
 test('diarization dependency cache rejects unallowed pip index hosts', () => {
   const artifact = JSON.parse(JSON.stringify(getDiarizationDependencyArtifactForPlatform('win32', 'x64')));
   artifact.pip.indexUrl = 'https://example.test/simple';
@@ -519,6 +541,21 @@ test('diarization dependency installer builds pinned pip target args', () => {
   assert.equal(args.includes('--only-binary=:all:'), false);
   assert.ok(args.includes('pyannote.audio==4.0.1'));
   assert.ok(args.includes('torch==2.8.0+cu126'));
+});
+
+test('macOS diarization dependency installer builds pinned MPS pip target args', () => {
+  const artifact = getDiarizationDependencyArtifactForPlatform('darwin', 'arm64');
+  const args = buildDiarizationDependencyInstallArgs({ artifact, targetDir: 'deps/site-packages' });
+
+  assert.ok(args.includes('--index-url'));
+  assert.ok(args.includes('https://pypi.org/simple'));
+  assert.equal(args.includes('--extra-index-url'), false);
+  assert.equal(args.includes('https://download.pytorch.org/whl/cu126'), false);
+  assert.equal(args.includes('--only-binary=:all:'), false);
+  assert.ok(args.includes('pyannote.audio==4.0.1'));
+  assert.ok(args.includes('torch==2.8.0'));
+  assert.ok(args.includes('torchaudio==2.8.0'));
+  assert.ok(args.includes('torchcodec==0.7.0'));
 });
 
 test('pip progress summarizer returns non-sensitive install milestones', () => {
@@ -673,6 +710,7 @@ test('setup diarization runs runtime validation before marking ready', async () 
   assert.equal(validations[0].modelRef, 'pyannote/speaker-diarization-community-1');
   assert.equal(validations[0].token, 'hf_validtoken123');
   assert.equal(validations[0].dependencyCache.valid, true);
+  assert.equal(validations[0].requiredDevice, 'cuda');
 });
 
 test('setup diarization does not decrypt a newly entered token for runtime validation', async () => {
@@ -754,7 +792,8 @@ test('invalid diarization token keeps setup in needsAccount', async () => {
   assert.equal(status.features.diarization.setupComplete, false);
 });
 
-test('macOS diarization setup remains unsupported', async () => {
+test('macOS diarization setup validates MPS before ready', async () => {
+  const validations = [];
   const status = await setupDiarizationAddon({
     userDataDir: '/tmp/AvaNevis',
     platform: 'darwin',
@@ -762,10 +801,51 @@ test('macOS diarization setup remains unsupported', async () => {
     token: 'hf_validtoken123',
     safeStorage: createSafeStorage(),
     fsModule: createMemoryFs(),
+    dependencyInstaller: stubAnyDiarizationDependencyInstaller,
+    runtimeValidator: async (payload) => validations.push(payload),
+  });
+
+  assert.equal(status.features.diarization.status, 'ready');
+  assert.equal(status.features.diarization.setupComplete, true);
+  assert.equal(status.features.diarization.availability.acceleration, 'mps');
+  assert.equal(validations.length, 1);
+  assert.equal(validations[0].requiredDevice, 'mps');
+  assert.equal(validations[0].modelRef, 'pyannote/speaker-diarization-community-1');
+});
+
+test('macOS diarization setup fails closed when MPS validation fails', async () => {
+  const status = await setupDiarizationAddon({
+    userDataDir: '/tmp/AvaNevis',
+    platform: 'darwin',
+    arch: 'arm64',
+    token: 'hf_validtoken123',
+    safeStorage: createSafeStorage(),
+    fsModule: createMemoryFs(),
+    dependencyInstaller: stubAnyDiarizationDependencyInstaller,
+    runtimeValidator: async ({ requiredDevice }) => {
+      assert.equal(requiredDevice, 'mps');
+      throw new Error('Speaker identification on macOS requires PyTorch Metal/MPS acceleration. CPU fallback is disabled.');
+    },
+  });
+
+  assert.equal(status.features.diarization.status, 'error');
+  assert.match(status.features.diarization.error, /Metal\/MPS acceleration/);
+  assert.equal(status.features.diarization.setupComplete, false);
+});
+
+test('Intel macOS diarization setup remains unsupported', async () => {
+  const status = await setupDiarizationAddon({
+    userDataDir: '/tmp/AvaNevis',
+    platform: 'darwin',
+    arch: 'x64',
+    token: 'hf_validtoken123',
+    safeStorage: createSafeStorage(),
+    fsModule: createMemoryFs(),
   });
 
   assert.equal(status.features.diarization.status, 'unsupported');
   assert.equal(status.features.diarization.setupComplete, false);
+  assert.match(status.features.diarization.error, /Apple Silicon.*Metal\/MPS/);
 });
 
 test('remove diarization setup deletes token and managed cache reference', async () => {

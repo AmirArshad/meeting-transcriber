@@ -17,6 +17,7 @@ const {
   getAiAddonPaths,
   getAiAddonStatus,
   getDiarizationAvailability,
+  getDiarizationDependencyArtifactForPlatform,
   getDiarizationModelRef,
   getModelById,
   getSummaryArtifactForPlatform,
@@ -87,12 +88,16 @@ test('returns AI add-on paths under Electron userData', () => {
   assert.equal(paths.summaryModelCacheDir, path.join('/Users/tester/AppData/AvaNevis', 'ai-addons', 'models', 'summary'));
 });
 
-test('marks macOS diarization unsupported until accelerated validation exists', () => {
+test('supports macOS diarization only on Apple Silicon MPS policy', () => {
   const availability = getDiarizationAvailability('darwin', 'arm64');
+  const intelAvailability = getDiarizationAvailability('darwin', 'x64');
 
-  assert.equal(availability.supported, false);
-  assert.equal(availability.automaticAfterTranscription, false);
-  assert.match(availability.reason, /accelerated Apple Silicon diarization/);
+  assert.equal(availability.supported, true);
+  assert.equal(availability.acceleration, 'mps');
+  assert.equal(availability.runtimeDevice, 'mps');
+  assert.equal(availability.automaticAfterTranscription, true);
+  assert.equal(intelAvailability.supported, false);
+  assert.match(intelAvailability.reason, /Apple Silicon.*Metal\/MPS/);
 });
 
 test('allows Windows x64 diarization candidate without changing transcription paths', () => {
@@ -110,8 +115,25 @@ test('allows Windows x64 diarization candidate without changing transcription pa
   assert.equal(status.features.diarization.status, 'ready');
   assert.equal(status.features.diarization.availability.supported, true);
   assert.equal(status.features.diarization.availability.acceleration, 'cuda');
+  assert.equal(status.features.diarization.availability.runtimeDevice, 'cuda');
   assert.equal(status.features.diarization.availability.automaticAfterTranscription, true);
   assert.equal(status.features.diarization.speakerCount, 3);
+});
+
+test('catalog exposes managed diarization dependency artifacts for Windows CUDA and macOS MPS', () => {
+  const windowsArtifact = getDiarizationDependencyArtifactForPlatform('win32', 'x64');
+  const macArtifact = getDiarizationDependencyArtifactForPlatform('darwin', 'arm64');
+
+  assert.equal(windowsArtifact.id, 'pyannote-audio-4.0.1-win32-x64-cuda-12.6');
+  assert.equal(windowsArtifact.acceleration, 'cuda');
+  assert.deepEqual(windowsArtifact.runtimeFamilies, ['pytorch-cuda']);
+  assert.ok(windowsArtifact.pip.requirements.includes('torch==2.8.0+cu126'));
+  assert.equal(macArtifact.id, 'pyannote-audio-4.0.1-darwin-arm64-mps');
+  assert.equal(macArtifact.acceleration, 'mps');
+  assert.deepEqual(macArtifact.runtimeFamilies, ['pytorch-mps']);
+  assert.ok(macArtifact.pip.requirements.includes('torch==2.8.0'));
+  assert.ok(macArtifact.pip.requirements.includes('torchcodec==0.7.0'));
+  assert.equal(getDiarizationDependencyArtifactForPlatform('darwin', 'x64'), null);
 });
 
 test('summary profiles reuse the curated default summary model', () => {
@@ -133,7 +155,8 @@ test('model catalog exposes swappable v1 defaults', () => {
 
   assert.equal(diarizationModel.runtime.modelRef, 'pyannote/speaker-diarization-community-1');
   assert.equal(getDiarizationModelRef('renderer-supplied-id'), 'pyannote/speaker-diarization-community-1');
-  assert.equal(diarizationModel.supportedPlatforms.darwin.status, 'disabledUntilValidated');
+  assert.equal(diarizationModel.supportedPlatforms.darwin.status, 'enabled');
+  assert.equal(diarizationModel.supportedPlatforms.darwin.acceleration, 'mps');
   assert.equal(summaryModel.inference.runtime, 'llama.cpp');
   assert.equal(summaryModel.inference.windowsAcceleration, 'cuda');
   assert.equal(summaryModel.inference.macosAcceleration, 'metal');

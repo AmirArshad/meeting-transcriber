@@ -129,7 +129,7 @@ Key quality assumptions to preserve:
 - Tokens must stay in Electron `safeStorage`; do not write token values to manifests, meeting metadata, transcripts, summaries, progress events, or logs.
 - Diarization runs automatically only after transcription when setup is complete and platform policy allows it.
 - Diarization model refs must be resolved from the catalog in the main process, not trusted from renderer input.
-- macOS diarization remains unavailable unless accelerated Apple Silicon diarization is explicitly validated; do not add CPU-only macOS diarization as a v1 fallback.
+- macOS diarization is Apple Silicon MPS-only; do not add CPU-only macOS diarization as a fallback.
 - Summary generation is always user-triggered from Home or History.
 - Summary model and runtime artifacts are pinned and catalog-driven in `src/ai-addon-state.js`; do not hard-code artifact URLs, filenames, checksums, or runtime names in renderer/business logic.
 - Summary runtime/model setup must be an explicit user action. No hidden or background summary downloads.

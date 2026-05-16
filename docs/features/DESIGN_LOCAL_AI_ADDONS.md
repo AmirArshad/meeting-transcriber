@@ -15,7 +15,7 @@ This design translates the model research docs into product behavior for Setting
 | Hugging Face token | Users provide their own token during setup. Do not ship or proxy a maintainer-owned token. |
 | Transcription engines | Keep current transcription paths unchanged: `faster-whisper` on Windows/CUDA and `lightning-whisper-mlx` on Apple Silicon/Metal. |
 | Diarization behavior | If speaker identification is set up, it runs automatically for every transcription. No per-meeting opt-in in v1. |
-| Mac diarization | Ship only after accelerated diarization is good enough on Apple Silicon. If acceleration is not available or validation fails, fall back to today's normal transcription flow without diarization. |
+| Mac diarization | Apple Silicon only, using PyTorch Metal/MPS validation for `pyannote/speaker-diarization-community-1`. If MPS is unavailable or validation fails, fall back to today's normal transcription flow without diarization. CPU-only macOS diarization is not shipped. |
 | Summary behavior | Summary generation is always user-triggered, even when the summary model is set up. |
 | Summary model footprint | Prefer one installed summary model with selectable profiles. Do not require users to download multiple large models for basic profile selection. |
 | Summary distribution | Keep the base installer lean. Install the default summary runtime/model through an explicit optional setup artifact/download flow, similar to CUDA setup. |
@@ -27,6 +27,7 @@ This design translates the model research docs into product behavior for Setting
 
 - Add-on setup state and model metadata are catalog-driven through `src/ai-addon-state.js`.
 - Summary runtime/model setup downloads pinned llama.cpp/GGUF artifacts only after explicit user action and verifies HTTPS host allowlists, filenames, and checksums before Ready.
+- Speaker setup installs managed `pyannote.audio` dependencies under Electron `userData` for Windows CUDA or macOS Apple Silicon MPS only, then validates the accelerator and gated model access before Ready.
 - Summary and speaker setup report structured add-on progress with percent/byte counters where available. Settings owns the cancel controls; cancellation aborts active downloads/processes and removes partial setup artifacts without deleting a previously valid install.
 - Summary runtime archives extract into a cleaned staging directory with ZIP path-traversal checks; runtime resolution prefers the extracted `llama-cli` location so adjacent Windows DLLs and macOS dylibs remain loadable.
 - Speaker tokens are stored only with Electron `safeStorage`; token values are not exposed through status IPC, metadata, progress, transcripts, or summaries.
@@ -98,12 +99,12 @@ Setup-ready definition:
 - User has access to `pyannote/speaker-diarization-community-1`.
 - Required Python dependencies and model cache are present or can be downloaded explicitly.
 - The main process resolves the pyannote model reference from the catalog; renderer-provided model refs are ignored.
-- Runtime device policy is valid for the platform. On macOS, this means accelerated Apple Silicon diarization has passed validation; CPU-only diarization is not a v1 shipping path.
+- Runtime device policy is valid for the platform. Windows requires CUDA. macOS requires Apple Silicon plus `torch.backends.mps.is_built()` and `torch.backends.mps.is_available()` from the managed dependency environment. CPU-only diarization is not a v1 shipping path.
 - App-spawned diarization processes set `PYANNOTE_METRICS_ENABLED=0`.
 
 Once ready, speaker identification is considered active. To disable it, the user removes setup or resets the add-on. This avoids a separate toggle that would conflict with the rule that configured diarization always runs.
 
-If macOS acceleration is unavailable, not validated, or fails at runtime, the app should continue with the current transcription-only flow and show speaker identification as unavailable rather than silently running a slow CPU diarization path.
+If macOS MPS acceleration is unavailable, not validated, or fails at runtime, the app should continue with the current transcription-only flow and show speaker identification as unavailable or failed rather than silently running a slow CPU diarization path.
 
 ### Summary Card
 
@@ -176,7 +177,7 @@ Render setup prompts in this order so users are not asked to configure downstrea
 
 Speaker identification setup must be gated behind CUDA readiness on Windows/NVIDIA systems. If CUDA is missing, show the CUDA CTA and hide the diarization setup CTA. After CUDA is installed, the Home prompt can ask the user to set up speaker identification.
 
-For macOS, use the validated accelerated diarization policy instead of the CUDA gate. If Apple Silicon acceleration is not good enough, hide the setup prompt and keep the current transcription-only flow.
+For macOS, use the validated MPS diarization policy instead of the CUDA gate. If Apple Silicon MPS acceleration is unavailable, setup must fail closed or be shown as unsupported, and the app must keep the current transcription-only flow.
 
 ### Speaker Identification Prompt
 
@@ -185,7 +186,7 @@ Show when all are true:
 - The base app is initialized.
 - A platform-supported diarization runtime is available.
 - On Windows/NVIDIA, CUDA is installed and detected.
-- On macOS, accelerated Apple Silicon diarization is validated and available.
+- On macOS, Apple Silicon MPS diarization is supported and setup has not already failed accelerator validation.
 - Speaker identification is not configured.
 - No higher-priority setup prompt is visible.
 
@@ -246,7 +247,7 @@ Implementation notes:
 - Run diarization after Whisper produces timestamped segments.
 - Use the same source audio file that was transcribed.
 - Main-process path checks must keep audio, transcript, speaker sidecar, and generated summary sidecars inside the recordings directory.
-- On macOS, only run diarization when the accelerated path is available and validated.
+- On macOS, only run diarization with the MPS device required by the main process. If MPS is unavailable, refuse CPU fallback and save the normal transcript without speaker labels.
 - Prefer `exclusive_speaker_diarization` for timestamp alignment.
 - Merge speaker labels by overlap with Whisper segments.
 - Rewrite or create the final Markdown transcript only after speaker labels have been merged.
@@ -394,7 +395,7 @@ Progress must avoid emitting transcript text or token values to logs. Redaction 
 |---------|----------|
 | Invalid HF token | Keep diarization not ready, focus token input, do not run automatically. |
 | HF terms not accepted | Show terms link and keep setup in `needsAccount`. |
-| macOS diarization acceleration unavailable | Hide setup/run controls and continue with the current transcription-only flow. |
+| macOS diarization acceleration unavailable | Keep setup unsupported or fail setup/run closed with clear Metal/MPS copy, and continue with the current transcription-only flow. |
 | Diarization runtime error | Save normal transcript, mark diarization `error`, warn user. |
 | Summary model missing | Route `Generate Summary` to Settings. |
 | Summary malformed JSON | Retry/repair; if still invalid, save no summary and show error. |
@@ -419,10 +420,10 @@ Automated coverage:
 Manual coverage:
 
 - RTX 4070 12 GB: CUDA transcription remains unchanged, diarization runs after setup, summary generation runs only on click.
-- M4 Pro: Metal transcription remains unchanged, diarization is offered only if accelerated diarization is good enough, and summary generation works through `llama.cpp` Metal or chosen validated runtime.
+- M4 Pro: Metal transcription remains unchanged, diarization setup validates PyTorch MPS before Ready, runtime forces MPS with no CPU fallback, and summary generation works through `llama.cpp` Metal or chosen validated runtime.
 - 1-2 hour meetings with 2-4 speakers.
 - Missing CUDA hides diarization setup prompt until CUDA is installed.
-- macOS without validated diarization acceleration keeps the existing transcription-only flow.
+- macOS without PyTorch MPS availability keeps the existing transcription-only flow and never runs CPU-only diarization.
 - Missing summary setup makes Home/History `Generate Summary` navigate to Settings.
 - Generated summaries persist and reopen in History.
 

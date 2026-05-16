@@ -60,9 +60,9 @@ test('setup messages explain graceful degradation paths', () => {
   assert.match(
     getDiarizationSetupMessage({
       status: 'unsupported',
-      availability: { reason: 'macOS speaker identification is unavailable until accelerated Apple Silicon diarization is validated.' },
+      availability: { reason: 'Speaker identification on macOS requires Apple Silicon with PyTorch Metal/MPS acceleration. CPU-only diarization is not supported.' },
     }),
-    /macOS speaker identification is unavailable/i,
+    /Apple Silicon.*Metal\/MPS/i,
   );
   assert.match(
     getSummarySetupMessage({
@@ -126,4 +126,26 @@ test('buildHomeAiAddonPrompt hides unsupported macOS diarization prompt', () => 
   });
 
   assert.equal(prompt.feature, 'summary');
+});
+
+test('buildHomeAiAddonPrompt offers macOS speaker setup when MPS policy is supported', () => {
+  const prompt = buildHomeAiAddonPrompt({
+    platform: 'darwin',
+    aiStatus: {
+      features: {
+        diarization: {
+          status: 'notConfigured',
+          setupComplete: false,
+          availability: { supported: true, acceleration: 'mps' },
+        },
+        summary: {
+          status: 'notConfigured',
+          setupComplete: false,
+          availability: { supported: true },
+        },
+      },
+    },
+  });
+
+  assert.equal(prompt.feature, 'diarization');
 });

@@ -1,5 +1,7 @@
 import json
 import os
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -14,6 +16,81 @@ def test_normalize_speaker_count_accepts_auto_and_valid_counts():
 
     with pytest.raises(ValueError):
         pipeline.normalize_speaker_count('11')
+
+
+def test_normalize_required_device_accepts_only_accelerators():
+    assert pipeline.normalize_required_device(None) is None
+    assert pipeline.normalize_required_device('auto') is None
+    assert pipeline.normalize_required_device('CUDA') == 'cuda'
+    assert pipeline.normalize_required_device('mps') == 'mps'
+
+    with pytest.raises(ValueError, match='CPU fallback is disabled'):
+        pipeline.normalize_required_device('cpu')
+
+
+def install_fake_torch(monkeypatch, *, cuda_available=False, mps_built=True, mps_available=True):
+    class FakeMpsBackend:
+        @staticmethod
+        def is_built():
+            return mps_built
+
+        @staticmethod
+        def is_available():
+            return mps_available
+
+    fake_torch = types.SimpleNamespace(
+        cuda=types.SimpleNamespace(is_available=lambda: cuda_available),
+        backends=types.SimpleNamespace(mps=FakeMpsBackend()),
+        device=lambda name: f'device:{name}',
+        empty=lambda _size, device=None: {'device': device},
+    )
+    monkeypatch.setitem(sys.modules, 'torch', fake_torch)
+    return fake_torch
+
+
+def test_move_pipeline_to_required_mps_device(monkeypatch):
+    install_fake_torch(monkeypatch, cuda_available=False, mps_built=True, mps_available=True)
+    calls = []
+    fake_pipeline = types.SimpleNamespace(to=lambda device: calls.append(device))
+
+    device = pipeline.move_pipeline_to_best_device(fake_pipeline, required_device='mps')
+
+    assert device == 'mps'
+    assert calls == ['device:mps']
+
+
+def test_required_mps_refuses_cpu_fallback_when_unavailable(monkeypatch):
+    install_fake_torch(monkeypatch, cuda_available=False, mps_built=True, mps_available=False)
+    fake_pipeline = types.SimpleNamespace(to=lambda _device: None)
+
+    with pytest.raises(RuntimeError, match='MPS acceleration.*CPU fallback is disabled'):
+        pipeline.move_pipeline_to_best_device(fake_pipeline, required_device='mps')
+
+
+def test_required_cuda_behavior_remains_accelerator_only(monkeypatch):
+    install_fake_torch(monkeypatch, cuda_available=True, mps_built=False, mps_available=False)
+    calls = []
+    fake_pipeline = types.SimpleNamespace(to=lambda device: calls.append(device))
+
+    device = pipeline.move_pipeline_to_best_device(fake_pipeline, required_device='cuda')
+
+    assert device == 'cuda'
+    assert calls == ['device:cuda']
+
+
+def test_required_cuda_refuses_cpu_fallback_when_unavailable(monkeypatch):
+    install_fake_torch(monkeypatch, cuda_available=False, mps_built=False, mps_available=False)
+    fake_pipeline = types.SimpleNamespace(to=lambda _device: None)
+
+    with pytest.raises(RuntimeError, match='CUDA acceleration.*CPU fallback is disabled'):
+        pipeline.move_pipeline_to_best_device(fake_pipeline, required_device='cuda')
+
+
+def test_required_device_probe_rejects_cpu_directly(monkeypatch):
+    install_fake_torch(monkeypatch, cuda_available=True, mps_built=True, mps_available=True)
+
+    with pytest.raises(ValueError, match='CPU fallback is disabled'):
+        pipeline.assert_required_device_available('cpu')
 
 
 def test_build_audio_conversion_command_targets_16khz_mono(tmp_path):
@@ -105,7 +182,7 @@ def test_validate_pyannote_setup_loads_model_and_moves_device(monkeypatch):
 
     monkeypatch.setenv('HF_TOKEN', 'hf_validtoken123')
     monkeypatch.setattr(pipeline, 'load_pyannote_pipeline', fake_load)
-    monkeypatch.setattr(pipeline, 'move_pipeline_to_best_device', lambda _pipeline: 'cuda')
+    monkeypatch.setattr(pipeline, 'move_pipeline_to_best_device', lambda _pipeline, required_device=None: 'cuda')
 
     result = pipeline.validate_pyannote_setup(model_ref='pyannote/test-model')
 
@@ -115,6 +192,20 @@ def test_validate_pyannote_setup_loads_model_and_moves_device(monkeypatch):
         'device': 'cuda',
     }
     assert calls == {'model_ref': 'pyannote/test-model', 'hf_token': 'hf_validtoken123'}
+
+
+def test_validate_pyannote_setup_checks_required_mps_before_ready(monkeypatch):
+    calls = []
+
+    monkeypatch.setenv('HF_TOKEN', 'hf_validtoken123')
+    monkeypatch.setattr(pipeline, 'assert_required_device_available', lambda device: calls.append(f'check:{device}') or f'device:{device}')
+    monkeypatch.setattr(pipeline, 'load_pyannote_pipeline', lambda _model_ref, _hf_token: object())
+    monkeypatch.setattr(pipeline, 'move_pipeline_to_best_device', lambda _pipeline, required_device=None: calls.append(f'move:{required_device}') or required_device)
+
+    result = pipeline.validate_pyannote_setup(model_ref='pyannote/test-model', required_device='mps')
+
+    assert result['device'] == 'mps'
+    assert calls == ['check:mps', 'move:mps']
 
 
 def test_emit_progress_redacts_token_values(capsys):

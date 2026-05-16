@@ -15,16 +15,16 @@ Recommended defaults:
 | Target | Recommended model | Runtime | Notes |
 |--------|-------------------|---------|-------|
 | Windows default | `pyannote/speaker-diarization-community-1` | `pyannote.audio` / PyTorch CUDA | Best implementation fit, improved speaker counting/assignment over 3.1, local after download. |
-| macOS target | `pyannote/speaker-diarization-community-1` | Validated accelerated Apple Silicon path | Do not expose in product until acceleration is good enough; otherwise use the current transcription-only flow. |
+| macOS target | `pyannote/speaker-diarization-community-1` | `pyannote.audio` / PyTorch Metal/MPS on Apple Silicon | Setup and runtime require MPS; otherwise use the current transcription-only flow. |
 | Windows CUDA spike | `nvidia/diar_streaming_sortformer_4spk-v2.1` | NVIDIA NeMo / PyTorch CUDA | Fast and meeting-speech-focused, but heavier dependencies, max 4 speakers, and weak macOS fit. |
-| Windows CPU/lower-end fallback | `pyannote/speaker-diarization-community-1` | PyTorch CPU | Slower but keeps one output contract and one model family; not the macOS v1 fallback. |
+| CPU/lower-end fallback | Not shipped in v1 | None | Keep the current transcription-only flow instead of running slow CPU diarization. |
 
 Important changes from the old plan:
 
 - `community-1` adds `exclusive_speaker_diarization`, which assigns one active speaker at any timestamp and simplifies merging with Whisper transcript segments.
 - The model is gated on Hugging Face and still requires user acceptance plus a token.
 - Windows should use CUDA when available.
-- macOS should only expose diarization after accelerated Apple Silicon diarization is good enough. If acceleration is unavailable or validation fails, keep the current transcription-only flow rather than shipping CPU-only diarization in v1.
+- macOS should only expose diarization on Apple Silicon and must validate PyTorch Metal/MPS before setup becomes ready. If MPS is unavailable or validation fails, keep the current transcription-only flow rather than shipping CPU-only diarization in v1.
 - Disable optional pyannote metrics in app-spawned processes with `PYANNOTE_METRICS_ENABLED=0` to preserve AvaNevis' local-only/no-telemetry posture.
 
 Decision status: use `community-1` for v1 unless a Windows-only Sortformer spike proves a major quality or performance win without unacceptable packaging cost.
@@ -34,6 +34,7 @@ Decision status: use `community-1` for v1 unless a Windows-only Sortformer spike
 - The current backend entry point is `backend/diarization/diarization_pipeline.py`.
 - Electron invokes it through `diarize-transcript` after Whisper transcription only when setup status is Ready.
 - The main process resolves the pyannote model reference from the catalog and ignores renderer-supplied model refs.
+- The main process passes a required accelerator device to the backend (`cuda` on Windows, `mps` on macOS Apple Silicon). The backend refuses CPU fallback when a required device is unavailable.
 - Diarization runs through the main-process local AI compute queue so it cannot overlap with summary generation or another diarization run.
 - The runner prepares 16 kHz mono WAV input, sets `PYANNOTE_METRICS_ENABLED=0`, prefers `exclusive_speaker_diarization`, writes a `*.speakers.json` sidecar, and returns redacted progress events.
 - Renderer updates the current transcript and saved Markdown with `**Speaker N:**` labels after successful diarization.
@@ -171,10 +172,10 @@ def _get_pipeline(hf_token: str, device: str = "auto"):
         if device == "auto":
             if torch.cuda.is_available():
                 device = "cuda"
-            elif torch.backends.mps.is_available():
+            elif torch.backends.mps.is_built() and torch.backends.mps.is_available():
                 device = "mps"  # macOS Metal
             else:
-                device = "cpu"
+                raise RuntimeError("Speaker diarization requires CUDA or Metal/MPS acceleration.")
 
         _pipeline = Pipeline.from_pretrained(
             "pyannote/speaker-diarization-community-1",
@@ -213,7 +214,7 @@ def diarize(
         audio_path: Path to audio file (.opus or .wav)
         hf_token: Hugging Face API token
         num_speakers: Expected number of speakers (None = auto-detect)
-        device: "auto", "cuda", "mps", or "cpu"
+        device: "auto", "cuda", or "mps"; CPU fallback is not shipped in v1
 
     Returns:
         List of segments: [{'start': float, 'end': float, 'speaker': str}, ...]

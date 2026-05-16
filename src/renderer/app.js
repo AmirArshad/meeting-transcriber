@@ -2791,12 +2791,18 @@ function updateDiarizationFootprint(diarization) {
   const estimatedDownload = storage && storage.estimatedDownloadBytes;
   const installed = storage && storage.installedBytes;
   const estimatedInstalled = storage && storage.estimatedInstalledBytes;
+  const runtimeLabel = diarization && diarization.availability && diarization.availability.acceleration === 'mps'
+    ? 'PyTorch Metal/MPS, isolated under user data'
+    : 'PyTorch CUDA, isolated under user data';
+  const downloadFallback = diarization && diarization.availability && diarization.availability.acceleration === 'mps'
+    ? 'depends on PyTorch MPS wheels'
+    : 'depends on PyTorch CUDA wheels';
   const downloadState = aiAddonDownloadState.diarization;
   renderFootprintRows(document.getElementById('diarization-footprint'), [
-    { label: 'Download', value: estimatedDownload ? `up to ${formatBytes(estimatedDownload)}` : 'depends on PyTorch CUDA wheels' },
+    { label: 'Download', value: estimatedDownload ? `up to ${formatBytes(estimatedDownload)}` : downloadFallback },
     { label: 'Progress', value: downloadState.active ? `${Math.round(downloadState.percent || 0)}%` : null },
     { label: 'Installed', value: installed ? formatBytes(installed) : (estimatedInstalled ? `about ${formatBytes(estimatedInstalled)}` : 'not installed') },
-    { label: 'Runtime', value: 'PyTorch CUDA, isolated under user data' },
+    { label: 'Runtime', value: runtimeLabel },
   ]);
 }
 

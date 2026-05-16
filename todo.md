@@ -62,10 +62,11 @@ Goal: add optional post-install local speaker diarization and transcript summari
 - 2026-05-16: Addressed Opus 4.7 review follow-ups: summary runtime resolution now prefers extracted `llama-cli` locations so Windows DLLs stay adjacent to the EXE, AI add-on status defaults to no storage-size cache walks, Home gets a lightweight boot-time AI add-on prompt refresh, transcription CUDA uninstall also removes legacy torch packages, Windows CUDA bin discovery checks venv/user site-packages, and low-risk cleanup/tests were added. Windows packaged end-to-end summary validation remains pending on target hardware.
 - 2026-05-16: Improving AI add-on setup UX/reliability after manual summary setup feedback: adding real progress UI for summary and diarization setup, cancel-and-cleanup controls, clearer in-Settings recovery copy, cancellable setup subprocess/download plumbing, and cleanup of partial summary runtime/model caches after cancellation or validation failure.
 - 2026-05-16: macOS MLX transcription completeness workaround keeps `lightning-whisper-mlx==0.0.10` batch size at 1 by default because larger batches can drop earlier windows. `AVANEVIS_MLX_WHISPER_BATCH_SIZE` exists for controlled perf testing only; before changing the default, validate transcript completeness and runtime on a 30+ minute Apple Silicon recording.
+- 2026-05-16: Enabled catalog-driven macOS Apple Silicon speaker diarization setup/run policy for `pyannote/speaker-diarization-community-1` using managed PyTorch MPS dependencies under `userData`. Setup validation and runtime now require platform accelerators (`cuda` on Windows, `mps` on macOS) and refuse CPU fallback; manual Apple Silicon validation is still pending.
 
 ## V1 Model Defaults
 
-- Speaker diarization: `pyannote/speaker-diarization-community-1` through `pyannote.audio`; Windows uses CUDA when available, macOS remains unavailable unless a supported accelerated Apple Silicon path is explicitly enabled later.
+- Speaker diarization: `pyannote/speaker-diarization-community-1` through `pyannote.audio`; Windows requires CUDA, macOS requires Apple Silicon PyTorch Metal/MPS, and CPU fallback is disabled.
 - Transcript summaries: `Qwen3.5-9B` 4-bit GGUF through pinned `llama.cpp`; Windows runtime target is CUDA, macOS runtime target is Metal.
 - Summary model/runtime distribution: explicit optional setup artifact, downloaded/installed only after user action through Settings, with pinned filenames/checksums.
 - Summary artifact source policy: prefer official model-owner GGUF artifacts; otherwise use established community GGUF repositories only with commit-pinned download URLs and SHA-256 verification.
@@ -90,7 +91,7 @@ Skipped by product direction. Proceed with the V1 Model Defaults above and keep 
 
 - [x] Windows RTX 4070: validate `pyannote/speaker-diarization-community-1` with CUDA on a 30-60 minute meeting. (Skipped.)
 - [x] Windows RTX 4070: compare `nvidia/diar_streaming_sortformer_4spk-v2.1` as a Windows-only spike. (Skipped; keep swappable model catalog instead.)
-- [x] M4 Pro: validate accelerated Apple Silicon diarization for `pyannote/speaker-diarization-community-1`; do not ship CPU-only diarization as v1 fallback. (Skipped; macOS diarization remains unavailable by default.)
+- [x] M4 Pro: validate accelerated Apple Silicon diarization for `pyannote/speaker-diarization-community-1`; do not ship CPU-only diarization as v1 fallback. (Implemented as MPS-only setup/run policy; manual target-hardware validation remains pending.)
 - [x] Windows RTX 4070: validate `Qwen3.5-9B Q4_K_M` or `UD-Q4_K_XL` with pinned `llama.cpp` CUDA. (Skipped.)
 - [x] M4 Pro: validate `Qwen3.5-9B Q4_K_M` or `UD-Q4_K_XL` with pinned `llama.cpp` Metal. (Skipped.)
 - [x] Verify `Qwen3.5` thinking-disabled mode and JSON-only output reliability. (Skipped; implement strict JSON validation/repair around output.)
@@ -157,7 +158,7 @@ Skipped by product direction. Proceed with the V1 Model Defaults above and keep 
 - [x] Add Summary setup card with one installed model, profile selection, model-cache status, validate, progress, and remove model.
 - [x] Add Home prompt priority: Whisper setup, permissions/devices, CUDA, speaker setup, summary setup.
 - [x] Hide Windows speaker setup prompt until CUDA is installed when NVIDIA/CUDA is the target path.
-- [x] Hide macOS speaker setup prompt unless accelerated Apple Silicon diarization is validated and available.
+- [x] Show macOS speaker setup only on the Apple Silicon MPS-supported path; setup/run still fails closed if MPS validation is unavailable.
 - [x] Run diarization automatically after transcription when configured.
 - [x] Add `Generate Summary` action after a meeting is transcribed and saved.
 - [x] Make `Generate Summary` navigate to Settings when summary setup is missing.
@@ -200,7 +201,7 @@ Skipped by product direction. Proceed with the V1 Model Defaults above and keep 
 ## Known Risk Areas
 
 - `pyannote.audio` 4.x and packaged Python 3.11 dependency pins may be difficult to package consistently.
-- macOS diarization acceleration may not be good enough for v1; the expected fallback is transcription-only behavior.
+- macOS diarization depends on PyTorch MPS support for the target machine; the expected fallback on accelerator failure is transcription-only behavior.
 - `llama.cpp` GPU packaging adds platform-specific native binaries and model-cache concerns.
 - Long-context summary generation can exceed memory budgets without conservative chunking.
 - Hugging Face gated model setup adds user friction and must be explained clearly.
@@ -210,7 +211,7 @@ Skipped by product direction. Proceed with the V1 Model Defaults above and keep 
 
 - Speaker identification can be set up post-install with the user's own Hugging Face token.
 - Windows diarization runs automatically after transcription when configured and degrades to normal transcript on failure.
-- macOS diarization is offered only when accelerated Apple Silicon diarization is validated; otherwise current flow remains unchanged.
+- macOS diarization is offered only on Apple Silicon and must validate/run on MPS; otherwise current flow remains unchanged.
 - Summary model setup is explicit and local, with one installed default model and multiple profiles where possible.
 - Summaries are generated only from explicit Home or History user action.
 - Generated summaries persist and reopen in History under a `Summary` tab.

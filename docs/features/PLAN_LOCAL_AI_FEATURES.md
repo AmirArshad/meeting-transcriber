@@ -4,7 +4,7 @@
 
 1. Should summaries run automatically after every transcription, or should they be manual by default with an optional setting for auto-run? Decision: manual only in v1.
 2. Are we comfortable requiring a Hugging Face account/token for diarization v1, or should we only ship diarization after we can provide a token-free model path? Decision: v1 may require users to bring their own Hugging Face token; do not ship a maintainer-owned token.
-3. For macOS diarization, should we accept CPU fallback in v1 if PyTorch MPS is unstable, or should Metal acceleration be a hard requirement before release? Decision: wait for good accelerated Apple Silicon diarization; if unavailable, keep the current transcription-only flow.
+3. For macOS diarization, should we accept CPU fallback in v1 if PyTorch MPS is unstable, or should Metal acceleration be a hard requirement before release? Decision: Metal/MPS is a hard requirement; if unavailable, keep the current transcription-only flow.
 4. Should the summary model be downloaded on demand, or should we offer a separate larger installer/build artifact with the default model bundled? Decision: use a larger optional setup artifact/download flow similar to CUDA setup, keeping the base installer lean.
 5. Should we implement one cross-platform summary runtime first with `llama.cpp`, or accept a better Mac-specific `mlx-lm` path from day one?
 6. What is the minimum supported hardware for summaries: RTX 4070/M4 Pro only, or also 8 GB NVIDIA GPUs and 16 GB Apple Silicon Macs?
@@ -21,14 +21,14 @@ Default model choices:
 
 | Feature | Default | Acceleration | Fallback |
 |---------|---------|--------------|----------|
-| Speaker diarization | `pyannote/speaker-diarization-community-1` | CUDA on Windows; validated accelerated Apple Silicon path on Mac | Current transcription-only flow if Mac acceleration is not good enough |
+| Speaker diarization | `pyannote/speaker-diarization-community-1` | CUDA on Windows; PyTorch Metal/MPS on Apple Silicon Mac | Current transcription-only flow if the required accelerator is unavailable |
 | Transcript summaries | `Qwen3.5-9B` 4-bit via `llama.cpp`, pending pinned-runtime validation | CUDA on Windows; Metal on Mac | Alternate single-model installs: `Qwen3-14B` for mature runtime support or `Qwen3.5-4B` for low memory |
 
 Implementation status on `feature/local-ai-addons`:
 
 - Phase 1 runtime spikes were intentionally skipped by product direction; v1 is built around pinned catalog defaults that can be swapped later.
 - Summary model/runtime artifacts are pinned in `src/ai-addon-state.js` and installed only through explicit Settings setup.
-- Windows speaker identification uses `pyannote/speaker-diarization-community-1` with the user's own Hugging Face token and CUDA policy; macOS diarization remains unavailable until accelerated Apple Silicon validation exists.
+- Speaker identification uses `pyannote/speaker-diarization-community-1` with the user's own Hugging Face token; Windows is CUDA-only and macOS is Apple Silicon MPS-only with CPU fallback refused during setup and runtime.
 - Summary generation runs only from user action in Home or History and saves `*.summary.json` / `*.summary.md` sidecars.
 - Summary chunks now prefer token budget, timestamps, and topic-boundary heuristics; malformed JSON gets one explicit local repair prompt before failure.
 - History exposes Transcript/Summary tabs, speaker-label rendering, summary copy/save, and stale-summary warnings based on `sourceTranscriptHash`.
@@ -63,7 +63,7 @@ Secondary model choices:
 - [ ] Decide whether `Mistral-Nemo-Instruct-2407` is exposed in v1 or held as an advanced option.
 - [ ] Decide whether Apache-2.0 Gemma 4 models join the prototype matrix beyond research notes.
 - [ ] Decide whether macOS summary v1 uses only `llama.cpp` or also `mlx-lm`.
-- [x] Decide whether diarization v1 can ship with Mac CPU fallback if MPS validation fails. Decision: no; wait for validated acceleration and otherwise use the current transcription-only flow.
+- [x] Decide whether diarization v1 can ship with Mac CPU fallback if MPS validation fails. Decision: no; require MPS and otherwise use the current transcription-only flow.
 - [ ] Define target acceptance timings on RTX 4070 and M4 Pro for a 60-minute meeting.
 
 ## Phase 1: Hardware Spikes
@@ -72,7 +72,7 @@ Run these before changing product UI.
 
 - [ ] Windows RTX 4070: `pyannote/speaker-diarization-community-1` with CUDA on a 30-60 minute meeting.
 - [ ] Windows RTX 4070: `nvidia/diar_streaming_sortformer_4spk-v2.1` with CUDA on the same audio.
-- [ ] Mac M4 Pro: `pyannote/speaker-diarization-community-1` with accelerated Apple Silicon path; do not ship CPU-only diarization as v1 fallback.
+- [ ] Mac M4 Pro: `pyannote/speaker-diarization-community-1` with PyTorch Metal/MPS; do not ship CPU-only diarization as v1 fallback.
 - [ ] Windows RTX 4070: `Qwen3.5-9B Q4_K_M` or `UD-Q4_K_XL` with `llama.cpp` CUDA.
 - [ ] Mac M4 Pro: `Qwen3.5-9B Q4_K_M` or `UD-Q4_K_XL` with `llama.cpp` Metal.
 - [ ] Verify `Qwen3.5` thinking-disabled mode and JSON-only output reliability.
@@ -149,13 +149,13 @@ Record for each spike:
 - [ ] Run `npm run test:python`.
 - [ ] Run Windows CUDA manual smoke tests on RTX 4070.
 - [ ] Run macOS manual smoke tests on M4 Pro.
-- [ ] Validate Windows CPU fallback behavior and macOS transcription-only fallback when diarization acceleration is unavailable.
+- [ ] Validate Windows CUDA failure behavior and macOS transcription-only fallback when diarization acceleration is unavailable.
 - [ ] Validate no network calls happen except explicit model downloads and update checks.
 
 ## Open Risks
 
 - `pyannote.audio` 4.x and packaged Python 3.11 dependency pins need validation on both platforms.
-- PyTorch MPS support for pyannote may not be reliable enough for a marketed Metal path; if so, macOS diarization waits rather than using CPU-only v1 behavior.
+- PyTorch MPS support for pyannote may vary by target machine; if MPS setup/run validation fails, macOS diarization must fail closed rather than using CPU-only v1 behavior.
 - `llama.cpp` packaging may require new native binaries and platform-specific build/download logic.
 - 14B summary models may be too heavy for lower-end machines once KV cache is included.
 - Hugging Face gated model flows add product friction and token-storage UX requirements.

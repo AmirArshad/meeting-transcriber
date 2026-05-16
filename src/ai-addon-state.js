@@ -148,6 +148,30 @@ const DIARIZATION_DEPENDENCY_ARTIFACTS = deepFreeze({
     },
     validationStatus: 'ready',
   },
+  'darwin-arm64': {
+    id: 'pyannote-audio-4.0.1-darwin-arm64-mps',
+    label: 'pyannote.audio 4.0.1 for macOS Metal/MPS',
+    platform: 'darwin',
+    arch: 'arm64',
+    acceleration: 'mps',
+    package: 'pyannote.audio',
+    version: '4.0.1',
+    installTarget: 'userData',
+    runtimeFamilies: ['pytorch-mps'],
+    estimatedDownloadBytes: 2 * 1024 * 1024 * 1024,
+    pip: {
+      indexUrl: 'https://pypi.org/simple',
+      extraIndexUrls: [],
+      allowSourceBuilds: true,
+      requirements: [
+        'pyannote.audio==4.0.1',
+        'torch==2.8.0',
+        'torchaudio==2.8.0',
+        'torchcodec==0.7.0',
+      ],
+    },
+    validationStatus: 'ready',
+  },
 });
 
 function buildHuggingFaceModelSource({ repo, revision, fileName, sha256, sizeBytes }) {
@@ -265,7 +289,7 @@ const AI_MODEL_CATALOG = deepFreeze({
         },
         supportedPlatforms: {
           win32: { acceleration: 'cuda', status: 'enabled' },
-          darwin: { acceleration: 'apple-silicon', status: 'disabledUntilValidated' },
+          darwin: { acceleration: 'mps', arch: 'arm64', status: 'enabled' },
         },
       },
     ],
@@ -542,6 +566,17 @@ function getDiarizationAvailability(platform, arch) {
       supported: true,
       reason: null,
       acceleration: 'cuda',
+      runtimeDevice: 'cuda',
+      automaticAfterTranscription: true,
+    };
+  }
+
+  if (platform === 'darwin' && arch === 'arm64') {
+    return {
+      supported: true,
+      reason: null,
+      acceleration: 'mps',
+      runtimeDevice: 'mps',
       automaticAfterTranscription: true,
     };
   }
@@ -549,8 +584,9 @@ function getDiarizationAvailability(platform, arch) {
   if (platform === 'darwin') {
     return {
       supported: false,
-      reason: 'macOS speaker identification is unavailable until accelerated Apple Silicon diarization is validated.',
-      acceleration: arch === 'arm64' ? 'apple-silicon-pending-validation' : 'unsupported',
+      reason: 'Speaker identification on macOS requires Apple Silicon with PyTorch Metal/MPS acceleration. CPU-only diarization is not supported.',
+      acceleration: 'unsupported',
+      runtimeDevice: null,
       automaticAfterTranscription: false,
     };
   }
@@ -559,6 +595,7 @@ function getDiarizationAvailability(platform, arch) {
     supported: false,
     reason: 'Speaker identification is not supported on this platform.',
     acceleration: 'unsupported',
+    runtimeDevice: null,
     automaticAfterTranscription: false,
   };
 }
