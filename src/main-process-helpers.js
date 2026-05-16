@@ -3,6 +3,10 @@ const { pathToFileURL } = require('url');
 const { SENSITIVE_PROGRESS_KEY_SET } = require('./ai-progress-sanitizer');
 
 const TRUSTED_GITHUB_PATH_PREFIX = '/AmirArshad/meeting-transcriber';
+const TRUSTED_HUGGING_FACE_PATHS = new Set([
+  '/pyannote/speaker-diarization-community-1',
+  '/settings/tokens',
+]);
 const MACOS_PERMISSION_CHECK_TIMEOUT_MS = 8000;
 
 function buildFileUrl(filePath) {
@@ -27,12 +31,17 @@ function isTrustedExternalUrl(url) {
       return true;
     }
 
-    return parsedUrl.protocol === 'https:' &&
-      parsedUrl.hostname === 'github.com' &&
-      (
-        parsedUrl.pathname === TRUSTED_GITHUB_PATH_PREFIX ||
-        parsedUrl.pathname.startsWith(`${TRUSTED_GITHUB_PATH_PREFIX}/`)
-      );
+    if (parsedUrl.protocol !== 'https:') {
+      return false;
+    }
+
+    if (parsedUrl.hostname === 'github.com') {
+      return parsedUrl.pathname === TRUSTED_GITHUB_PATH_PREFIX ||
+        parsedUrl.pathname.startsWith(`${TRUSTED_GITHUB_PATH_PREFIX}/`);
+    }
+
+    return parsedUrl.hostname === 'huggingface.co' &&
+      TRUSTED_HUGGING_FACE_PATHS.has(parsedUrl.pathname);
   } catch (error) {
     return false;
   }

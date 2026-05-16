@@ -67,16 +67,34 @@ git clone https://github.com/AmirArshad/meeting-transcriber.git
 cd meeting-transcriber
 
 npm install
+```
 
-# Windows
-py -3.11 -m pip install -r requirements-windows.txt -r requirements-dev.txt
+Create a repo-local Python virtual environment named `.venv`. The Electron main process auto-detects this path in development, so you do not need to activate it before running `npm start`.
 
-# macOS
-python3 -m pip install -r requirements-macos.txt -r requirements-dev.txt
+### Windows `.venv`
 
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\python -m pip install --upgrade pip
+.\.venv\Scripts\python -m pip install -r requirements-windows.txt -r requirements-dev.txt
+```
+
+### macOS `.venv`
+
+```bash
+python3.11 -m venv .venv
+./.venv/bin/python -m pip install --upgrade pip
+./.venv/bin/python -m pip install -r requirements-macos.txt -r requirements-dev.txt
+```
+
+Then start the app from the repo root:
+
+```bash
 npm start           # run app
 npm run dev         # run with --dev flag
 ```
+
+During local development, AvaNevis picks Python in this order: `AVANEVIS_PYTHON`, an activated `VIRTUAL_ENV`, the repo-local `.venv`, then the system `python3`/`python`.
 
 See [docs/development/BUILD_INSTRUCTIONS.md](docs/development/BUILD_INSTRUCTIONS.md) for packaging and [docs/development/TESTING.md](docs/development/TESTING.md) for setting up the test suite on a fresh machine.
 

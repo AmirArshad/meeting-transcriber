@@ -2093,9 +2093,9 @@ footer {
   margin-bottom: 4px;
 }
 
-.ai-addon-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+.ai-addon-list {
+  display: flex;
+  flex-direction: column;
   gap: 12px;
 }
 
@@ -2104,6 +2104,7 @@ footer {
   border: 1px solid var(--hairline);
   border-radius: var(--r-md);
   padding: 14px;
+  width: 100%;
 }
 
 .ai-addon-card-header {
@@ -2217,9 +2218,6 @@ footer {
     padding-right: 18px;
   }
 
-  .ai-addon-grid {
-    grid-template-columns: 1fr;
-  }
 }
 
 .gpu-progress {
