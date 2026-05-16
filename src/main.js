@@ -21,6 +21,8 @@ const {
   buildDiarizationOutputPath,
   buildPythonModuleArgs,
   buildTranscriberArgs,
+  buildTranscriptionCudaInstallArgs,
+  buildTranscriptionCudaUninstallArgs,
   buildUnsupportedCudaPythonMessage,
   cacheContainsModel,
   getQuitInterceptState,
@@ -612,6 +614,31 @@ function getDiarizationCacheEnv(userDataDir = app.getPath('userData')) {
     TRANSFORMERS_CACHE: hubCache,
     PYANNOTE_METRICS_ENABLED: '0',
   };
+}
+
+function buildCudaRuntimeEnv(extra = {}) {
+  if (process.platform !== 'win32') {
+    return extra;
+  }
+
+  const sitePackagesDir = path.join(path.dirname(pythonConfig.pythonExe), 'Lib', 'site-packages');
+  const cudaBinDirs = [
+    path.join(sitePackagesDir, 'nvidia', 'cublas', 'bin'),
+    path.join(sitePackagesDir, 'nvidia', 'cudnn', 'bin'),
+  ].filter((candidate) => fs.existsSync(candidate));
+
+  if (!cudaBinDirs.length) {
+    return extra;
+  }
+
+  return {
+    ...extra,
+    PATH: `${cudaBinDirs.join(path.delimiter)}${path.delimiter}${extra.PATH || process.env.PATH || ''}`,
+  };
+}
+
+function getTranscriptionCudaPackages() {
+  return buildTranscriptionCudaInstallArgs().slice(3, -1);
 }
 
 const transcriberModule = buildTranscriberArgs({
@@ -1280,7 +1307,7 @@ function preloadWhisperModel() {
   const preloadProcess = spawnTrackedPython(getTranscriberArgs([
     '--preload',
     '--model', modelSize
-  ]), { cwd: pythonConfig.backendPath });
+  ]), { cwd: pythonConfig.backendPath, env: buildCudaRuntimeEnv() });
 
   preloadProcess.stderr.on('data', (data) => {
     console.log(`[Model Preload] ${data.toString().trim()}`);
@@ -1994,6 +2021,7 @@ ipcMain.handle('get-ai-addon-status', async () => checkAiAddonSetupStatus({
   platform: process.platform,
   arch: process.arch,
   safeStorage,
+  includeStorageSizes: true,
 }));
 
 ipcMain.handle('store-diarization-token', async (event, token) => storeAiAddonToken({
@@ -2159,7 +2187,7 @@ ipcMain.handle('download-model', async (event, modelSize) => {
     const python = spawnTrackedPython(getTranscriberArgs([
       '--preload',
       '--model', model
-    ]), { cwd: pythonConfig.backendPath });
+    ]), { cwd: pythonConfig.backendPath, env: buildCudaRuntimeEnv() });
 
     let hasError = false;
 
@@ -2546,7 +2574,7 @@ ipcMain.handle('transcribe-audio', async (event, options) => {
       '--language', language || 'en',
       '--model', modelSize || 'small',
       '--json'
-    ]), { cwd: pythonConfig.backendPath });
+    ]), { cwd: pythonConfig.backendPath, env: buildCudaRuntimeEnv() });
 
     let output = '';
     let errorOutput = '';
@@ -3204,10 +3232,11 @@ ipcMain.handle('check-gpu', async () => {
  */
 ipcMain.handle('check-cuda', async () => {
   return new Promise((resolve) => {
+    const cudaPackages = getTranscriptionCudaPackages();
     const python = spawnTrackedPython([
       '-c',
-      'try:\n    import torch\n    print("cuda_available:" + str(torch.cuda.is_available()))\n    if torch.cuda.is_available():\n        print("cuda_version:" + torch.version.cuda)\nexcept ImportError:\n    print("cuda_available:False")'
-    ]);
+      'try:\n    import ctranslate2\n    count = ctranslate2.get_cuda_device_count()\n    print("cuda_available:" + str(count > 0))\n    print("cuda_device_count:" + str(count))\n    print("cuda_runtime:ctranslate2")\nexcept Exception as exc:\n    print("cuda_available:False")\n    print("cuda_error:" + str(exc))'
+    ], { env: buildCudaRuntimeEnv() });
 
     let output = '';
 
@@ -3222,6 +3251,8 @@ ipcMain.handle('check-cuda', async () => {
         resolve({
           installed: cudaAvailable,
           version: versionMatch ? versionMatch[1] : null,
+          runtime: 'ctranslate2',
+          packages: cudaPackages,
           pythonVersion: pythonVersion.parsed ? pythonVersion.parsed.version : pythonVersion.output,
           pythonSupportedForInstall: isSupportedCudaInstallPythonVersion(pythonVersion.parsed),
           pythonExecutable: pythonConfig.pythonExe,
@@ -3230,6 +3261,8 @@ ipcMain.handle('check-cuda', async () => {
         resolve({
           installed: cudaAvailable,
           version: versionMatch ? versionMatch[1] : null,
+          runtime: 'ctranslate2',
+          packages: cudaPackages,
           pythonVersion: null,
           pythonSupportedForInstall: false,
           pythonExecutable: pythonConfig.pythonExe,
@@ -3250,21 +3283,7 @@ ipcMain.handle('install-gpu', async () => {
         return;
       }
 
-      const packages = [
-      'torch',
-      'torchvision',
-      'torchaudio',
-      '--index-url',
-      'https://download.pytorch.org/whl/cu121'
-    ];
-
-      const python = spawnTrackedPython([
-      '-m',
-      'pip',
-      'install',
-      ...packages,
-      '--no-warn-script-location'
-    ]);
+      const python = spawnTrackedPython(buildTranscriptionCudaInstallArgs());
 
       let output = '';
       let errorOutput = '';
@@ -3284,39 +3303,9 @@ ipcMain.handle('install-gpu', async () => {
 
       python.on('close', (code) => {
         if (code === 0) {
-          // Install CUDA libraries
-          const cudaPackages = ['nvidia-cublas-cu12', 'nvidia-cudnn-cu12'];
-
-          const cudaProcess = spawnTrackedPython([
-          '-m',
-          'pip',
-          'install',
-          ...cudaPackages,
-          '--no-warn-script-location'
-        ]);
-
-          let cudaErrorOutput = '';
-
-          cudaProcess.stdout.on('data', (data) => {
-            mainWindow.webContents.send('gpu-install-progress', data.toString());
-          });
-
-          cudaProcess.stderr.on('data', (data) => {
-            const text = data.toString();
-            cudaErrorOutput += text;
-            mainWindow.webContents.send('gpu-install-progress', text);
-          });
-
-          cudaProcess.on('close', (cudaCode) => {
-            if (cudaCode === 0) {
-              resolve({ success: true, message: 'GPU acceleration installed successfully' });
-            } else {
-              const errorMsg = cudaErrorOutput.trim() || 'Unknown error';
-              reject(new Error(`Failed to install CUDA libraries: ${errorMsg}`));
-            }
-          });
+          resolve({ success: true, message: 'GPU acceleration installed successfully' });
         } else {
-          reject(new Error(`Failed to install PyTorch: ${errorOutput}`));
+          reject(new Error(`Failed to install CUDA libraries: ${errorOutput}`));
         }
       });
     }).catch((error) => {
@@ -3330,15 +3319,7 @@ ipcMain.handle('install-gpu', async () => {
  */
 ipcMain.handle('uninstall-gpu', async () => {
   return new Promise((resolve, reject) => {
-    const packages = ['torch', 'torchvision', 'torchaudio', 'nvidia-cublas-cu12', 'nvidia-cudnn-cu12'];
-
-    const python = spawnTrackedPython([
-      '-m',
-      'pip',
-      'uninstall',
-      '-y',
-      ...packages
-    ]);
+    const python = spawnTrackedPython(buildTranscriptionCudaUninstallArgs());
 
     let errorOutput = '';
 

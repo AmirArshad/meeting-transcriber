@@ -20,43 +20,27 @@ nvidia-smi
 
 You should see your GPU listed with driver version and CUDA version.
 
-### Step 2: Install PyTorch with CUDA Support
-
-**IMPORTANT:** Install PyTorch BEFORE installing the other dependencies.
-
-```bash
-# For CUDA 12.1 (recommended for most modern GPUs):
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-
-# For CUDA 11.8 (older GPUs or older CUDA installation):
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-```
-
-**Note:** This is a ~2GB download and may take a few minutes.
-
-### Step 3: Install CUDA Libraries for faster-whisper
+### Step 2: Install CUDA Libraries for faster-whisper
 
 ```bash
 pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
 ```
 
-**Note:** This is another ~2GB download.
+**Note:** This is about a 1GB download. AvaNevis transcription uses faster-whisper/CTranslate2, so PyTorch is not required for transcription acceleration.
 
-### Step 4: Install Project Dependencies
+### Step 3: Install Project Dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### Step 5: Verify GPU is Working
+### Step 4: Verify GPU is Working
 
 Run this quick test:
 
 ```python
-import torch
-print(f"CUDA available: {torch.cuda.is_available()}")
-print(f"CUDA version: {torch.version.cuda}")
-print(f"GPU: {torch.cuda.get_device_name(0)}")
+import ctranslate2
+print(f"CUDA devices: {ctranslate2.get_cuda_device_count()}")
 ```
 
 ## Troubleshooting
@@ -86,17 +70,18 @@ pip install nvidia-cudnn-cu12
 
 If you see "Using CPU (safer default)" in the logs but you have CUDA installed:
 
-1. Verify PyTorch detects CUDA:
-   ```python
-   import torch
-   print(torch.cuda.is_available())
-   ```
+1. Verify CTranslate2 detects CUDA:
+    ```python
+    import ctranslate2
+    print(ctranslate2.get_cuda_device_count())
+    ```
 
-2. If it returns `False`, reinstall PyTorch with CUDA:
-   ```bash
-   pip uninstall torch torchvision torchaudio
-   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-   ```
+2. If it returns `0`, reinstall CUDA runtime libraries:
+    ```bash
+    pip install --upgrade nvidia-cublas-cu12 nvidia-cudnn-cu12
+    ```
+
+Speaker identification is separate: it uses managed PyTorch CUDA dependencies under Electron `userData` only after explicit speaker setup.
 
 ## Performance Comparison
 

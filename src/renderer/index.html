@@ -784,6 +784,7 @@
                         </select>
                       </div>
 
+                      <div class="ai-addon-footprint" id="diarization-footprint" aria-live="polite"></div>
                       <p class="ai-addon-status-text" id="diarization-status-text">Checking setup&hellip;</p>
                       <div class="ai-addon-actions">
                         <button id="setup-diarization-btn" class="btn btn-primary btn-small">Set Up</button>
@@ -811,6 +812,7 @@
                         </select>
                       </div>
 
+                      <div class="ai-addon-footprint" id="summary-footprint" aria-live="polite"></div>
                       <p class="ai-addon-status-text" id="summary-status-text">Checking setup&hellip;</p>
                       <div class="ai-addon-actions">
                         <button id="setup-summary-btn" class="btn btn-primary btn-small">Install Model</button>
@@ -824,6 +826,8 @@
                     <h4>AI Add-on Log</h4>
                     <div class="log-output" id="ai-addon-log-output"></div>
                   </div>
+
+                  <p class="ai-addon-warning" id="ai-addon-footprint-warning" style="display: none"></p>
                 </div>
 
                 <!-- App Info -->

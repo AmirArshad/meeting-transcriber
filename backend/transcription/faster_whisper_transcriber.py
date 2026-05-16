@@ -14,6 +14,36 @@ from pathlib import Path
 from .base_transcriber import BaseTranscriber
 
 
+def add_python_nvidia_bin_dirs_to_path() -> None:
+    """Expose pip-installed NVIDIA DLL directories to CTranslate2 on Windows."""
+    if os.name != "nt":
+        return
+
+    try:
+        import site
+
+        candidate_dirs = []
+        for site_packages in site.getsitepackages():
+            root = Path(site_packages) / "nvidia"
+            candidate_dirs.extend([
+                root / "cublas" / "bin",
+                root / "cudnn" / "bin",
+            ])
+
+        existing = [str(candidate) for candidate in candidate_dirs if candidate.exists()]
+        if not existing:
+            return
+
+        os.environ["PATH"] = os.pathsep.join([*existing, os.environ.get("PATH", "")])
+        for dll_dir in existing:
+            os.add_dll_directory(dll_dir)
+    except Exception:
+        return
+
+
+add_python_nvidia_bin_dirs_to_path()
+
+
 class TranscriberService(BaseTranscriber):
     """
     Handles audio transcription using faster-whisper.
@@ -202,21 +232,20 @@ class TranscriberService(BaseTranscriber):
         device = self.device
         compute_type = self.compute_type
 
-        # Auto-detect device if set to "auto"
+        # Auto-detect device if set to "auto". Use CTranslate2 directly so
+        # transcription CUDA setup does not require a full PyTorch install.
         if device == "auto":
-            # Try to detect CUDA, but fall back to CPU if issues
             try:
-                import torch  # type: ignore[import-not-found]
-                if torch.cuda.is_available():
+                import ctranslate2  # type: ignore[import-not-found]
+                if ctranslate2.get_cuda_device_count() > 0:
                     device = "cuda"
-                    print(f"CUDA detected, using GPU acceleration", file=sys.stderr)
+                    print(f"CUDA detected through CTranslate2, using GPU acceleration", file=sys.stderr)
                 else:
                     device = "cpu"
                     print(f"No CUDA detected, using CPU", file=sys.stderr)
-            except:
-                # If torch not installed or any issues, use CPU
+            except Exception as cuda_error:
                 device = "cpu"
-                print(f"Using CPU (safer default)", file=sys.stderr)
+                print(f"Using CPU (CUDA runtime check failed: {cuda_error})", file=sys.stderr)
 
         # Auto-detect best compute type if set to default
         if compute_type == "default":
@@ -256,10 +285,7 @@ class TranscriberService(BaseTranscriber):
                 elif "cuda" in error_msg:
                     print(f"  CUDA not available or misconfigured.", file=sys.stderr)
                     print(f"  To enable GPU acceleration:", file=sys.stderr)
-                    print(f"    1. Install PyTorch with CUDA:", file=sys.stderr)
-                    print(f"       pip install torch --index-url https://download.pytorch.org/whl/cu121", file=sys.stderr)
-                    print(f"    2. Install CUDA libraries:", file=sys.stderr)
-                    print(f"       pip install nvidia-cublas-cu12 nvidia-cudnn-cu12", file=sys.stderr)
+                    print(f"    pip install nvidia-cublas-cu12 nvidia-cudnn-cu12", file=sys.stderr)
                     print(f"", file=sys.stderr)
                     print(f"  See SETUP_GPU.md for detailed instructions.", file=sys.stderr)
 

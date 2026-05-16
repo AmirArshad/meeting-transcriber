@@ -2576,6 +2576,85 @@ function setStatusBadge(badge, status) {
   }
 }
 
+function formatBytes(bytes) {
+  const value = Number(bytes) || 0;
+  if (value <= 0) {
+    return '0 MB';
+  }
+
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let size = value;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+
+  const precision = unitIndex >= 3 ? 1 : 0;
+  return `${size.toFixed(precision)} ${units[unitIndex]}`;
+}
+
+function renderFootprintRows(container, rows) {
+  if (!container) {
+    return;
+  }
+
+  clearElement(container);
+  rows.filter((row) => row && row.value).forEach((row) => {
+    const item = document.createElement('div');
+    item.textContent = `${row.label}: ${row.value}`;
+    container.appendChild(item);
+  });
+}
+
+function updateDiarizationFootprint(diarization) {
+  const storage = diarization && diarization.storage;
+  const estimatedDownload = storage && storage.estimatedDownloadBytes;
+  const installed = storage && storage.installedBytes;
+  const estimatedInstalled = storage && storage.estimatedInstalledBytes;
+  renderFootprintRows(document.getElementById('diarization-footprint'), [
+    { label: 'Download', value: estimatedDownload ? `up to ${formatBytes(estimatedDownload)}` : 'depends on PyTorch CUDA wheels' },
+    { label: 'Installed', value: installed ? formatBytes(installed) : (estimatedInstalled ? `about ${formatBytes(estimatedInstalled)}` : 'not installed') },
+    { label: 'Runtime', value: 'PyTorch CUDA, isolated under user data' },
+  ]);
+}
+
+function updateSummaryFootprint(summary) {
+  const storage = summary && summary.storage;
+  const estimatedModel = storage && storage.estimatedModelBytes;
+  const estimatedRuntime = storage && storage.estimatedRuntimeBytes;
+  const installed = storage && storage.installedBytes;
+  const estimatedInstalled = storage && storage.estimatedInstalledBytes;
+  const runtimeLabel = summary && summary.artifact && summary.artifact.acceleration === 'metal'
+    ? 'llama.cpp Metal'
+    : 'llama.cpp CUDA';
+  renderFootprintRows(document.getElementById('summary-footprint'), [
+    { label: 'Model download', value: estimatedModel ? formatBytes(estimatedModel) : null },
+    { label: 'Runtime download', value: estimatedRuntime ? formatBytes(estimatedRuntime) : null },
+    { label: 'Installed', value: installed ? formatBytes(installed) : (estimatedInstalled ? `about ${formatBytes(estimatedInstalled)}` : 'not installed') },
+    { label: 'Runtime', value: runtimeLabel },
+  ]);
+}
+
+function updateAiAddonFootprintWarning(status) {
+  const warningEl = document.getElementById('ai-addon-footprint-warning');
+  if (!warningEl) {
+    return;
+  }
+
+  const warnings = status && status.footprint && Array.isArray(status.footprint.warnings)
+    ? status.footprint.warnings
+    : [];
+  if (!warnings.length) {
+    warningEl.style.display = 'none';
+    warningEl.textContent = '';
+    return;
+  }
+
+  warningEl.textContent = warnings.join(' ');
+  warningEl.style.display = 'block';
+}
+
 function setAiAddonControlsDisabled(disabled) {
   [
     'diarization-token-input',
@@ -2627,6 +2706,7 @@ function updateAiAddonSettings(status) {
     if (statusText) {
       statusText.textContent = getDiarizationSetupMessage(diarization);
     }
+    updateDiarizationFootprint(diarization);
   }
 
   if (summary) {
@@ -2641,7 +2721,10 @@ function updateAiAddonSettings(status) {
     if (statusText) {
       statusText.textContent = getSummarySetupMessage(summary);
     }
+    updateSummaryFootprint(summary);
   }
+
+  updateAiAddonFootprintWarning(status);
 }
 
 async function refreshAiAddonSettings() {
@@ -2873,7 +2956,7 @@ async function checkGPUStatus() {
 
     } else {
       // ============ Windows: Show CUDA Status ============
-      gpuDescription.textContent = 'Enable GPU acceleration for 4-5x faster transcription. Requires NVIDIA GPU with CUDA support.';
+      gpuDescription.textContent = 'Enable faster-whisper GPU acceleration for 4-5x faster transcription. Installs only the CUDA runtime libraries needed by CTranslate2.';
       
       // Update labels for Windows
       gpuLabel1.textContent = 'GPU Detected:';
@@ -2915,7 +2998,7 @@ async function checkGPUStatus() {
         gpuValue2.classList.add('warning');
         gpuValue3.textContent = cudaInfo.pythonSupportedForInstall === false && cudaInfo.pythonVersion
           ? `Requires Python 3.11 (current: ${cudaInfo.pythonVersion})`
-          : '~2-3 GB';
+          : '~1 GB';
         statusBadge.textContent = 'Available';
         statusBadge.classList.add('disabled');
         installBtn.disabled = cudaInfo.pythonSupportedForInstall === false;
@@ -2986,7 +3069,8 @@ async function installGPUAcceleration() {
 
   // Show confirmation
   const confirmed = confirm(
-    'This will download and install ~2-3GB of GPU acceleration libraries.\n\n' +
+    'This will download and install about 1GB of CUDA runtime libraries for faster transcription.\n\n' +
+    'Speaker identification uses its own managed PyTorch CUDA setup only if you explicitly enable it.\n\n' +
     'The download may take 10-30 minutes depending on your internet speed.\n\n' +
     'Continue?'
   );
@@ -3014,7 +3098,7 @@ async function installGPUAcceleration() {
       }
     }, 2000);
 
-    progressText.textContent = 'Downloading PyTorch with CUDA support...';
+    progressText.textContent = 'Downloading CUDA runtime libraries for faster-whisper...';
 
     // Install GPU packages
     await window.electronAPI.installGPU();

@@ -9,10 +9,8 @@ filelock>=3.12.0         # Prevent race conditions during model downloads
 
 # GPU Acceleration (Optional but recommended for faster transcription)
 # For NVIDIA GPU users with CUDA installed:
-# 1. Install PyTorch with CUDA support first:
-#    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-#
-# 2. Then install CuBLAS and cuDNN for faster-whisper:
+# Install CuBLAS and cuDNN for faster-whisper/CTranslate2:
 #    pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
 #
-# Note: These are large downloads (~2-4GB total) but provide 4-5x speedup
+# Speaker diarization uses separate managed PyTorch CUDA dependencies only when
+# the user explicitly enables that add-on.

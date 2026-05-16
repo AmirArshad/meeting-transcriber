@@ -33,6 +33,49 @@ const DOWNLOAD_TIMEOUT_MS = 120000;
 const MAX_DOWNLOAD_REDIRECTS = 5;
 const ALLOWED_DOWNLOAD_HOSTS = new Set(['github.com', 'huggingface.co']);
 
+function getDirectorySizeBytes(dirPath, fsModule = fs) {
+  const existsSync = bindFsMethod(fsModule, 'existsSync');
+  const readdirSync = bindFsMethod(fsModule, 'readdirSync');
+  const statSync = bindFsMethod(fsModule, 'statSync');
+  if (!dirPath || !existsSync || !readdirSync || !statSync || !existsSync(dirPath)) {
+    return 0;
+  }
+
+  let total = 0;
+  const queue = [dirPath];
+  while (queue.length) {
+    const currentDir = queue.shift();
+    for (const entry of readdirSync(currentDir, { withFileTypes: true })) {
+      const entryPath = path.join(currentDir, entry.name);
+      const entryStats = statSync(entryPath);
+      const isDirectory = typeof entry.isDirectory === 'function'
+        ? entry.isDirectory()
+        : entryStats.isDirectory();
+      if (isDirectory) {
+        queue.push(entryPath);
+      } else if (typeof entryStats.size === 'number') {
+        total += entryStats.size;
+      }
+    }
+  }
+
+  return total;
+}
+
+function getFileSizeBytes(filePath, fsModule = fs) {
+  const existsSync = bindFsMethod(fsModule, 'existsSync');
+  const statSync = bindFsMethod(fsModule, 'statSync');
+  if (!filePath || !existsSync || !statSync || !existsSync(filePath)) {
+    return 0;
+  }
+
+  const stats = statSync(filePath);
+  if (stats && typeof stats.isDirectory === 'function' && stats.isDirectory()) {
+    return 0;
+  }
+  return typeof stats.size === 'number' ? stats.size : 0;
+}
+
 function safePathSegment(value) {
   return String(value || 'model')
     .replace(/[^A-Za-z0-9._-]+/g, '_')
@@ -264,6 +307,84 @@ function checkDiarizationCache({ userDataDir, modelId }) {
   };
 }
 
+function buildDiarizationStorageFootprint({ userDataDir, dependencyCache, fsModule = fs, includeSizes = false } = {}) {
+  const modelCacheDir = getAiAddonPaths(userDataDir).diarizationModelCacheDir;
+  const dependencyDir = dependencyCache && dependencyCache.dependencyDir;
+  const modelCacheBytes = includeSizes ? getDirectorySizeBytes(modelCacheDir, fsModule) : null;
+  const dependencyBytes = includeSizes ? getDirectorySizeBytes(dependencyDir, fsModule) : null;
+  const estimatedDependencyDownloadBytes = dependencyCache?.artifact?.estimatedDownloadBytes || null;
+  const runtimeFamilies = dependencyCache?.artifact?.runtimeFamilies || [];
+  const estimatedInstalledBytes = dependencyCache?.installed && estimatedDependencyDownloadBytes
+    ? estimatedDependencyDownloadBytes
+    : null;
+
+  return {
+    modelCacheDir,
+    dependencyDir,
+    modelCacheBytes,
+    dependencyBytes,
+    installedBytes: includeSizes ? (modelCacheBytes || 0) + (dependencyBytes || 0) : null,
+    installedBytesAccuracy: includeSizes ? 'actual' : 'notScanned',
+    estimatedInstalledBytes,
+    estimatedDownloadBytes: estimatedDependencyDownloadBytes,
+    runtimeFamilies,
+  };
+}
+
+function buildSummaryStorageFootprint({ userDataDir, modelId, cache, runtimeCache, fsModule = fs, includeSizes = false } = {}) {
+  const modelCacheDir = cache?.modelCacheDir || getSummaryModelCacheDir(userDataDir, modelId);
+  const runtimeDir = runtimeCache?.runtimeDir || null;
+  const cacheBytes = includeSizes ? getDirectorySizeBytes(modelCacheDir, fsModule) : null;
+  const runtimeBytes = includeSizes ? getDirectorySizeBytes(runtimeDir, fsModule) : null;
+  const artifactSize = includeSizes && cache?.installed && typeof cache?.artifactPath === 'string'
+    ? getFileSizeBytes(cache.artifactPath, fsModule)
+    : 0;
+  const modelBytes = artifactSize || (cache?.installed ? cache?.estimatedSizeBytes || 0 : 0);
+  const estimatedModelBytes = cache?.artifact?.estimatedSizeBytes || null;
+  const estimatedRuntimeBytes = Array.isArray(runtimeCache?.runtimeArtifact?.artifacts)
+    ? runtimeCache.runtimeArtifact.artifacts.reduce((total, artifact) => total + (Number(artifact.sizeBytes) || 0), 0)
+    : null;
+  const estimatedInstalledBytes = cache?.installed
+    ? (estimatedModelBytes || 0) + (runtimeCache?.installed ? estimatedRuntimeBytes || 0 : 0)
+    : null;
+
+  return {
+    modelCacheDir,
+    runtimeDir,
+    modelBytes,
+    runtimeBytes,
+    cacheBytes,
+    installedBytes: includeSizes ? cacheBytes : null,
+    installedBytesAccuracy: includeSizes ? 'actual' : 'notScanned',
+    estimatedInstalledBytes,
+    estimatedModelBytes,
+    estimatedRuntimeBytes,
+    runtimeFamilies: runtimeCache?.runtimeArtifact?.runtimeFamilies || ['llama.cpp'],
+  };
+}
+
+function buildGpuRuntimeFootprint({ platform, diarization, summary }) {
+  const warnings = [];
+  if (platform === 'win32') {
+    const runtimeFamilies = [
+      ...(diarization?.storage?.runtimeFamilies || []),
+      ...(summary?.storage?.runtimeFamilies || []),
+    ];
+    const usesPyTorchCuda = runtimeFamilies.includes('pytorch-cuda');
+    const usesLlamaCuda = runtimeFamilies.includes('llama-cpp-cuda');
+    if (usesPyTorchCuda && usesLlamaCuda) {
+      warnings.push('Speaker identification and summaries use separate CUDA runtimes; disk and VRAM use can add up. GPU-heavy work is serialized.');
+    }
+  }
+
+  return {
+    platform,
+    warnings,
+    totalInstalledBytes: (diarization?.storage?.installedBytes || 0) + (summary?.storage?.installedBytes || 0),
+    estimatedTotalInstalledBytes: (diarization?.storage?.estimatedInstalledBytes || 0) + (summary?.storage?.estimatedInstalledBytes || 0),
+  };
+}
+
 function validateDiarizationDependencyArtifact(artifact) {
   if (!artifact) {
     return 'No speaker identification dependency setup is available for this platform.';
@@ -408,6 +529,9 @@ function checkSummaryRuntimeCache({
     valid: installed && !validationError,
     validationStatus: validationError ? 'pendingPinnedRuntime' : installed ? 'ready' : 'notConfigured',
     reason: validationError || (installed ? null : 'llama.cpp runtime is not installed.'),
+    estimatedDownloadBytes: Array.isArray(runtimeArtifact?.artifacts)
+      ? runtimeArtifact.artifacts.reduce((total, runtimeArchive) => total + (Number(runtimeArchive.sizeBytes) || 0), 0)
+      : null,
     runtimeDir,
     expectedExecutablePath,
     executablePath,
@@ -448,6 +572,8 @@ async function checkSummaryModelCache({
     artifactPath,
     expectedFileName: artifact.fileName,
     expectedSha256: artifact.sha256,
+    estimatedSizeBytes: artifact.estimatedSizeBytes || null,
+    artifact,
     installed,
     valid: false,
     checksumStatus: artifact.sha256 ? 'notChecked' : 'pendingPinnedChecksum',
@@ -573,6 +699,7 @@ async function checkAiAddonSetupStatus({
   fsModule = fs,
   catalog = AI_MODEL_CATALOG,
   verifyChecksums = false,
+  includeStorageSizes = false,
 } = {}) {
   const { manifest, readError } = loadAiAddonManifest({
     userDataDir,
@@ -602,24 +729,45 @@ async function checkAiAddonSetupStatus({
   });
   const diarization = deriveDiarizationStatus(status.features.diarization, tokenStatus, diarizationDependencyCache);
   const summary = deriveSummaryStatus(status.features.summary, summaryCache, summaryRuntimeCache);
+  const diarizationWithStorage = {
+    ...diarization,
+    tokenStatus,
+    cache: checkDiarizationCache({ userDataDir, modelId: diarization.modelId }),
+    dependencyCache: diarizationDependencyCache,
+    setupComplete: diarization.status === 'ready' && tokenStatus.hasToken && tokenStatus.encryptionAvailable !== false && diarizationDependencyCache.valid,
+  };
+  diarizationWithStorage.storage = buildDiarizationStorageFootprint({
+    userDataDir,
+    dependencyCache: diarizationDependencyCache,
+    fsModule,
+    includeSizes: includeStorageSizes,
+  });
+  const summaryWithStorage = {
+    ...summary,
+    artifact: getSummaryArtifactForPlatform(summary.modelId, platform, arch, catalog),
+    cache: summaryCache,
+    runtimeCache: summaryRuntimeCache,
+    setupComplete: summary.status === 'ready' && summaryCache.installed && summaryRuntimeCache.installed,
+  };
+  summaryWithStorage.storage = buildSummaryStorageFootprint({
+    userDataDir,
+    modelId: summary.modelId,
+    cache: summaryCache,
+    runtimeCache: summaryRuntimeCache,
+    fsModule,
+    includeSizes: includeStorageSizes,
+  });
 
   return {
     ...status,
+    footprint: buildGpuRuntimeFootprint({
+      platform,
+      diarization: diarizationWithStorage,
+      summary: summaryWithStorage,
+    }),
     features: {
-      diarization: {
-        ...diarization,
-        tokenStatus,
-        cache: checkDiarizationCache({ userDataDir, modelId: diarization.modelId }),
-        dependencyCache: diarizationDependencyCache,
-        setupComplete: diarization.status === 'ready' && tokenStatus.hasToken && tokenStatus.encryptionAvailable !== false && diarizationDependencyCache.valid,
-      },
-      summary: {
-        ...summary,
-        artifact: getSummaryArtifactForPlatform(summary.modelId, platform, arch, catalog),
-        cache: summaryCache,
-        runtimeCache: summaryRuntimeCache,
-        setupComplete: summary.status === 'ready' && summaryCache.installed && summaryRuntimeCache.installed,
-      },
+      diarization: diarizationWithStorage,
+      summary: summaryWithStorage,
     },
   };
 }
@@ -1368,6 +1516,13 @@ async function installSummaryRuntime({
       modelId,
     });
     await extractor(archivePath, extractDir, runtimeArchive.archiveFormat);
+    if (unlinkSync) {
+      try {
+        unlinkSync(archivePath);
+      } catch (cleanupError) {
+        // Best effort cleanup: runtime archives are redownloadable from the pinned catalog.
+      }
+    }
   }
 
   copyInstalledRuntimeExecutable({ userDataDir, artifact, runtimeArtifact, fsModule });

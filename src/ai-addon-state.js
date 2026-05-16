@@ -79,6 +79,7 @@ const SUMMARY_RUNTIME_ARTIFACTS = deepFreeze({
     arch: 'x64',
     acceleration: 'cuda',
     executableName: 'llama-cli.exe',
+    runtimeFamilies: ['llama-cpp-cuda'],
     artifacts: [
       {
         fileName: 'llama-b9173-bin-win-cuda-12.4-x64.zip',
@@ -108,6 +109,7 @@ const SUMMARY_RUNTIME_ARTIFACTS = deepFreeze({
     arch: 'arm64',
     acceleration: 'metal',
     executableName: 'llama-cli',
+    runtimeFamilies: ['llama-cpp-metal'],
     artifacts: [
       {
         fileName: 'llama-b9173-bin-macos-arm64.tar.gz',
@@ -131,6 +133,8 @@ const DIARIZATION_DEPENDENCY_ARTIFACTS = deepFreeze({
     package: 'pyannote.audio',
     version: '4.0.1',
     installTarget: 'userData',
+    runtimeFamilies: ['pytorch-cuda'],
+    estimatedDownloadBytes: 4 * 1024 * 1024 * 1024,
     pip: {
       indexUrl: 'https://pypi.org/simple',
       extraIndexUrls: ['https://download.pytorch.org/whl/cu126'],

@@ -155,6 +155,28 @@ function buildUnsupportedCudaPythonMessage(versionOutput) {
   ].join(' ');
 }
 
+const TRANSCRIPTION_CUDA_PACKAGES = Object.freeze(['nvidia-cublas-cu12', 'nvidia-cudnn-cu12']);
+
+function buildTranscriptionCudaInstallArgs(packages = TRANSCRIPTION_CUDA_PACKAGES) {
+  return [
+    '-m',
+    'pip',
+    'install',
+    ...packages,
+    '--no-warn-script-location',
+  ];
+}
+
+function buildTranscriptionCudaUninstallArgs(packages = TRANSCRIPTION_CUDA_PACKAGES) {
+  return [
+    '-m',
+    'pip',
+    'uninstall',
+    '-y',
+    ...packages,
+  ];
+}
+
 function sanitizeAiProgressMessage(message) {
   return String(message || '')
     .replace(/hf_[A-Za-z0-9_-]+/g, '[redacted-token]')
@@ -762,6 +784,8 @@ module.exports = {
   buildModelDownloadCheck,
   buildPythonModuleArgs,
   buildTranscriberArgs,
+  buildTranscriptionCudaInstallArgs,
+  buildTranscriptionCudaUninstallArgs,
   buildUnsupportedCudaPythonMessage,
   buildDiarizationOutputPath,
   cacheContainsModel,
@@ -791,5 +815,6 @@ module.exports = {
   parseRecorderStdoutChunk,
   resolveTranscriptionAudioFile,
   splitBufferedLines,
+  TRANSCRIPTION_CUDA_PACKAGES,
   MACOS_PERMISSION_CHECK_TIMEOUT_MS,
 };

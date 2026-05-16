@@ -120,8 +120,10 @@ function createMemoryFs() {
       }));
     },
     statSync(targetPath) {
+      const resolvedFilePath = pathVariants(targetPath).find((variant) => files.has(variant));
       return {
         isDirectory: () => pathVariants(targetPath).some((variant) => dirs.has(variant)),
+        size: resolvedFilePath ? files.get(resolvedFilePath).length : 0,
       };
     },
   };
@@ -288,6 +290,10 @@ test('check status includes token and summary cache state without exposing token
 
   assert.equal(status.features.diarization.tokenStatus.hasToken, true);
   assert.equal(status.features.summary.cache.installed, false);
+  assert.equal(status.features.diarization.storage.installedBytes, null);
+  assert.equal(status.features.summary.storage.installedBytes, null);
+  assert.equal(status.features.summary.storage.installedBytesAccuracy, 'notScanned');
+  assert.equal(typeof status.footprint.totalInstalledBytes, 'number');
   assert.equal(JSON.stringify(status).includes('hf_secret'), false);
 });
 
@@ -728,6 +734,7 @@ test('setup summary model downloads explicit runtime and model artifacts only wh
   assert.equal(status.features.summary.profile, 'detailed');
   assert.equal(status.features.summary.setupComplete, true);
   assert.equal(status.features.summary.runtimeCache.valid, true);
+  assert.equal(fsModule.existsSync(getSummaryRuntimeArchivePath('/tmp/AvaNevis', getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog), runtimeArtifact.artifacts[0])), false);
   assert.equal(fsModule.existsSync(getSummaryRuntimeExecutablePath('/tmp/AvaNevis', getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog), runtimeArtifact)), true);
 });
 

@@ -285,6 +285,22 @@ function pruneMacOSPythonRuntimeDevelopmentFiles(sitePackagesDir) {
       path: path.join(sitePackagesDir, 'torch', 'share', 'cmake'),
       label: 'torch/share/cmake development metadata',
     },
+    {
+      path: path.join(sitePackagesDir, 'torch', 'test'),
+      label: 'torch/test runtime test suite',
+    },
+    {
+      path: path.join(sitePackagesDir, 'torch', 'testing', '_internal'),
+      label: 'torch/testing/_internal development helpers',
+    },
+    {
+      path: path.join(sitePackagesDir, 'torchgen'),
+      label: 'torchgen code-generation package',
+    },
+    {
+      path: path.join(sitePackagesDir, 'caffe2'),
+      label: 'caffe2 development package',
+    },
   ];
 
   let removedAny = false;
@@ -670,7 +686,8 @@ async function prepareResources() {
       });
 
       // Clean up bloated transitive dependencies to reduce bundle size
-      // NOTE: scipy is REQUIRED by lightning-whisper-mlx for word timing/alignment
+      // NOTE: scipy and torch are REQUIRED by lightning-whisper-mlx metadata.
+      // Keep runtime packages, but prune torch development/test files below.
       console.log('[5/5] Cleaning up unused dependencies...');
       const sitePackages = path.join(PYTHON_DIR, 'lib', 'python3.11', 'site-packages');
       const packagesToRemove = [

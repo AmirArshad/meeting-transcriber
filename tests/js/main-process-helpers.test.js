@@ -16,6 +16,8 @@ const {
   buildModelDownloadCheck,
   buildPythonModuleArgs,
   buildTranscriberArgs,
+  buildTranscriptionCudaInstallArgs,
+  buildTranscriptionCudaUninstallArgs,
   buildUnsupportedCudaPythonMessage,
   cacheContainsModel,
   classifyRecorderStdoutChunk,
@@ -308,6 +310,18 @@ test('parsePythonVersion supports CUDA installer runtime checks', () => {
   assert.match(
     buildUnsupportedCudaPythonMessage('Python 3.13.2'),
     /requires AvaNevis' supported Python 3\.11 runtime/,
+  );
+});
+
+
+test('transcription CUDA installer only targets CTranslate2 runtime libraries', () => {
+  assert.deepEqual(
+    buildTranscriptionCudaInstallArgs(),
+    ['-m', 'pip', 'install', 'nvidia-cublas-cu12', 'nvidia-cudnn-cu12', '--no-warn-script-location'],
+  );
+  assert.deepEqual(
+    buildTranscriptionCudaUninstallArgs(),
+    ['-m', 'pip', 'uninstall', '-y', 'nvidia-cublas-cu12', 'nvidia-cudnn-cu12'],
   );
 });
 
