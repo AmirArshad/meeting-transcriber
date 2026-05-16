@@ -213,6 +213,13 @@ test('redactSensitiveText removes bearer tokens and URL credentials', () => {
 });
 
 
+test('redactSensitiveText preserves at signs outside URL credentials', () => {
+  const url = 'https://api.huggingface.co/models?webhook=user@example.com#team@docs';
+
+  assert.equal(redactSensitiveText(url), url);
+});
+
+
 test('summarizeAiBackendError redacts sensitive values and local paths', () => {
   const summary = summarizeAiBackendError({
     errorOutput: [
