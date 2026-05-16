@@ -627,11 +627,20 @@ function buildCudaRuntimeEnv(extra = {}) {
     return extra;
   }
 
-  const sitePackagesDir = path.join(path.dirname(pythonConfig.pythonExe), 'Lib', 'site-packages');
+  const pythonExeDir = path.dirname(pythonConfig.pythonExe);
+  const pythonRootDir = path.basename(pythonExeDir).toLowerCase() === 'scripts'
+    ? path.dirname(pythonExeDir)
+    : pythonExeDir;
+  const candidateSitePackagesDirs = [
+    path.join(pythonRootDir, 'Lib', 'site-packages'),
+    process.env.VIRTUAL_ENV ? path.join(process.env.VIRTUAL_ENV, 'Lib', 'site-packages') : null,
+    process.env.APPDATA ? path.join(process.env.APPDATA, 'Python', 'Python311', 'site-packages') : null,
+  ].filter(Boolean);
+
   const cudaBinDirs = [
-    path.join(sitePackagesDir, 'nvidia', 'cublas', 'bin'),
-    path.join(sitePackagesDir, 'nvidia', 'cudnn', 'bin'),
-  ].filter((candidate) => fs.existsSync(candidate));
+    ...candidateSitePackagesDirs.map((sitePackagesDir) => path.join(sitePackagesDir, 'nvidia', 'cublas', 'bin')),
+    ...candidateSitePackagesDirs.map((sitePackagesDir) => path.join(sitePackagesDir, 'nvidia', 'cudnn', 'bin')),
+  ].filter((candidate, index, candidates) => fs.existsSync(candidate) && candidates.indexOf(candidate) === index);
 
   if (!cudaBinDirs.length) {
     return extra;
@@ -2028,11 +2037,11 @@ function getAiAddonRuntimeOptions(extra = {}) {
   return options;
 }
 
-ipcMain.handle('get-ai-addon-status', async () => checkAiAddonSetupStatus({
+ipcMain.handle('get-ai-addon-status', async (event, options = {}) => checkAiAddonSetupStatus({
   userDataDir: app.getPath('userData'),
   platform: process.platform,
   arch: process.arch,
-  includeStorageSizes: true,
+  includeStorageSizes: Boolean(options && options.includeStorageSizes),
   checkTokenEncryption: false,
 }));
 

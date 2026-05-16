@@ -240,7 +240,7 @@ Suggested defaults:
 - Reuse existing model preloading UX patterns where practical.
 - Add model-cache inspection/removal UI before shipping large summary models.
 - Keep checksums, pinned model filenames, HTTPS-only URLs, and the allowed artifact hosts for any curated model downloads.
-- Extract runtime archives into cleaned staging, reject ZIP entries that resolve outside the extraction directory, and copy the expected `llama-cli` executable to the stable runtime cache path.
+- Extract runtime archives into cleaned staging, reject ZIP entries that resolve outside the extraction directory, and preserve the extracted archive layout when resolving `llama-cli` so adjacent Windows DLLs and macOS dylibs remain loadable.
 - Artifact metadata should stay data-driven so future summary models can replace the default without rewriting setup UI or generation logic.
 
 ## Risks

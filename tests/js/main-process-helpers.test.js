@@ -322,7 +322,7 @@ test('transcription CUDA installer only targets CTranslate2 runtime libraries', 
   );
   assert.deepEqual(
     buildTranscriptionCudaUninstallArgs(),
-    ['-m', 'pip', 'uninstall', '-y', 'nvidia-cublas-cu12', 'nvidia-cudnn-cu12'],
+    ['-m', 'pip', 'uninstall', '-y', 'nvidia-cublas-cu12', 'nvidia-cudnn-cu12', 'torch', 'torchvision', 'torchaudio'],
   );
 });
 

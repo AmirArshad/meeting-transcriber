@@ -112,7 +112,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getPendingUpdateInfo: () => ipcRenderer.invoke('get-pending-update-info'),
 
   // Local AI add-ons
-  getAiAddonStatus: () => ipcRenderer.invoke('get-ai-addon-status'),
+  getAiAddonStatus: (options) => ipcRenderer.invoke('get-ai-addon-status', options),
   storeDiarizationToken: (token) => ipcRenderer.invoke('store-diarization-token', token),
   getDiarizationTokenStatus: () => ipcRenderer.invoke('get-diarization-token-status'),
   deleteDiarizationToken: () => ipcRenderer.invoke('delete-diarization-token'),

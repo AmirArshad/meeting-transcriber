@@ -38,7 +38,7 @@ This app keeps optional local AI add-on artifacts catalog-driven in `src/ai-addo
 2. Update every platform entry in `SUMMARY_RUNTIME_ARTIFACTS`.
 3. Include all runtime archives needed for the platform, including CUDA dependency archives when required.
 4. Keep runtime archive URLs under trusted release hosts covered by the setup download host allowlist; setup rejects unallowed hosts even when SHA-256 metadata exists.
-5. Keep `executableName` aligned with the extracted `llama-cli` binary. Runtime archives extract into a cleaned staging directory and the executable is copied to the stable runtime directory.
+5. Keep `executableName` aligned with the extracted `llama-cli` binary. Runtime archives extract under the managed runtime cache's `extract/` directory, and execution should prefer the extracted archive layout so Windows DLLs and macOS dylibs remain beside the executable.
 6. For ZIP archives, keep extraction paths relative and safe; setup rejects archive entries that escape the extraction directory.
 7. Run `npm test` and `npm run test:python`.
 
@@ -60,5 +60,5 @@ This app keeps optional local AI add-on artifacts catalog-driven in `src/ai-addo
 - Unallowed download host: setup must refuse to download the artifact.
 - Checksum mismatch: delete the cached file, re-download intentionally, and verify whether the upstream artifact changed.
 - Unsafe ZIP entry: reject the archive and verify the upstream runtime packaging before updating pins.
-- Missing `llama-cli`: inspect the runtime archive layout, cleaned extraction staging, and `executableName` before updating pins.
+- Missing `llama-cli`: inspect the runtime archive layout under `runtime/<platform-arch>/extract/`, cleaned extraction staging, and `executableName` before updating pins.
 - Unsupported platform: keep status `unsupported`; do not add fallback cloud behavior.

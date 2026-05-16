@@ -197,24 +197,40 @@ function findRuntimeExecutablePath(runtimeDir, executableName, fsModule = fs) {
     return null;
   }
 
-  const queue = [runtimeDir];
-  while (queue.length) {
-    const currentDir = queue.shift();
-    for (const entry of readdirSync(currentDir, { withFileTypes: true })) {
-      const entryPath = path.join(currentDir, entry.name);
-      const isDirectory = typeof entry.isDirectory === 'function'
-        ? entry.isDirectory()
-        : statSync(entryPath).isDirectory();
-      if (!isDirectory && entry.name === executableName) {
-        return entryPath;
+  const visited = new Set();
+  const searchRoot = (rootDir) => {
+    const queue = [rootDir];
+    while (queue.length) {
+      const currentDir = queue.shift();
+      const normalizedDir = path.normalize(currentDir);
+      if (visited.has(normalizedDir)) {
+        continue;
       }
-      if (isDirectory) {
-        queue.push(entryPath);
+      visited.add(normalizedDir);
+      for (const entry of readdirSync(currentDir, { withFileTypes: true })) {
+        const entryPath = path.join(currentDir, entry.name);
+        const isDirectory = typeof entry.isDirectory === 'function'
+          ? entry.isDirectory()
+          : statSync(entryPath).isDirectory();
+        if (!isDirectory && entry.name === executableName) {
+          return entryPath;
+        }
+        if (isDirectory) {
+          queue.push(entryPath);
+        }
       }
     }
+
+    return null;
+  };
+
+  const extractDir = path.join(runtimeDir, 'extract');
+  const extractMatch = existsSync(extractDir) ? searchRoot(extractDir) : null;
+  if (extractMatch) {
+    return extractMatch;
   }
 
-  return null;
+  return searchRoot(runtimeDir);
 }
 
 function bindFsMethod(fsModule, methodName) {
@@ -558,6 +574,8 @@ function isAllowedDownloadUrl(url) {
 
 function isAllowedDownloadHost(hostname) {
   const normalizedHostname = String(hostname || '').toLowerCase();
+  // Hugging Face/Xet redirects rotate among CDN subdomains. Artifact downloads
+  // that rely on this wildcard must still pass pinned SHA-256 validation.
   return ALLOWED_DOWNLOAD_HOSTS.has(normalizedHostname)
     || normalizedHostname.endsWith('.hf.co')
     || normalizedHostname.endsWith('.huggingface.co');
@@ -587,9 +605,8 @@ function checkSummaryRuntimeCache({
     : null;
   const existsSync = bindFsMethod(fsModule, 'existsSync');
   const validationError = validateSummaryRuntimeArtifact(runtimeArtifact);
-  const executablePath = expectedExecutablePath && existsSync && existsSync(expectedExecutablePath)
-    ? expectedExecutablePath
-    : findRuntimeExecutablePath(runtimeDir, runtimeArtifact && runtimeArtifact.executableName, fsModule);
+  const executablePath = findRuntimeExecutablePath(runtimeDir, runtimeArtifact && runtimeArtifact.executableName, fsModule)
+    || (expectedExecutablePath && existsSync && existsSync(expectedExecutablePath) ? expectedExecutablePath : null);
   const installed = Boolean(executablePath && existsSync && existsSync(executablePath));
 
   return {
@@ -1497,26 +1514,21 @@ async function extractRuntimeArchive(archivePath, destinationDir, archiveFormat)
   throw new Error('Unsupported llama.cpp runtime archive format.');
 }
 
-function copyInstalledRuntimeExecutable({ userDataDir, artifact, runtimeArtifact, fsModule = fs }) {
-  const sourcePath = findRuntimeExecutablePath(
+function finalizeInstalledRuntimeExecutable({ userDataDir, artifact, runtimeArtifact, fsModule = fs }) {
+  const executablePath = findRuntimeExecutablePath(
     getSummaryRuntimeExtractDir(userDataDir, artifact, runtimeArtifact),
     runtimeArtifact.executableName,
     fsModule,
   );
-  const targetPath = getSummaryRuntimeExecutablePath(userDataDir, artifact, runtimeArtifact);
-  const copyFileSync = bindFsMethod(fsModule, 'copyFileSync');
   const chmodSync = bindFsMethod(fsModule, 'chmodSync');
-  if (!sourcePath || !targetPath || sourcePath === targetPath || !copyFileSync) {
+  if (!executablePath || !chmodSync) {
     return;
   }
 
-  copyFileSync(sourcePath, targetPath);
-  if (chmodSync) {
-    try {
-      chmodSync(targetPath, 0o755);
-    } catch (error) {
-      // Best effort: Windows does not need POSIX execute bits.
-    }
+  try {
+    chmodSync(executablePath, 0o755);
+  } catch (error) {
+    // Best effort: Windows does not need POSIX execute bits.
   }
 }
 
@@ -1553,12 +1565,19 @@ async function installSummaryRuntime({
     mkdirSync(runtimeDir, { recursive: true });
     mkdirSync(archiveDir, { recursive: true });
   }
+  const staleTopLevelExecutablePath = getSummaryRuntimeExecutablePath(userDataDir, artifact, runtimeArtifact);
+  if (unlinkSync && bindFsMethod(fsModule, 'existsSync')?.(staleTopLevelExecutablePath)) {
+    try {
+      unlinkSync(staleTopLevelExecutablePath);
+    } catch (cleanupError) {
+      // Best effort: ignore stale executable cleanup failures.
+    }
+  }
   if (rmSync) {
     rmSync(extractDir, { recursive: true, force: true });
   }
   if (mkdirSync) {
     mkdirSync(extractDir, { recursive: true });
-    mkdirSync(archiveDir, { recursive: true });
   }
 
   for (let index = 0; index < runtimeArtifact.artifacts.length; index += 1) {
@@ -1623,7 +1642,7 @@ async function installSummaryRuntime({
     }
   }
 
-  copyInstalledRuntimeExecutable({ userDataDir, artifact, runtimeArtifact, fsModule });
+  finalizeInstalledRuntimeExecutable({ userDataDir, artifact, runtimeArtifact, fsModule });
 
   const runtimeCache = checkSummaryRuntimeCache({ userDataDir, platform, arch, modelId, fsModule, catalog });
   if (!runtimeCache.valid) {

@@ -27,7 +27,7 @@ This design translates the model research docs into product behavior for Setting
 
 - Add-on setup state and model metadata are catalog-driven through `src/ai-addon-state.js`.
 - Summary runtime/model setup downloads pinned llama.cpp/GGUF artifacts only after explicit user action and verifies HTTPS host allowlists, filenames, and checksums before Ready.
-- Summary runtime archives extract into a cleaned staging directory with ZIP path-traversal checks; the expected `llama-cli` executable is copied to the stable runtime cache path.
+- Summary runtime archives extract into a cleaned staging directory with ZIP path-traversal checks; runtime resolution prefers the extracted `llama-cli` location so adjacent Windows DLLs and macOS dylibs remain loadable.
 - Speaker tokens are stored only with Electron `safeStorage`; token values are not exposed through status IPC, metadata, progress, transcripts, or summaries.
 - Derived artifacts live beside recordings as `*.speakers.json`, `*.summary.json`, and `*.summary.md`; meeting metadata stores concise sidecar references only.
 - History displays transcript and summary in separate tabs, warns when a saved summary is stale via `sourceTranscriptHash`, and keeps summary generation manual.
@@ -127,7 +127,7 @@ Controls:
 
 Summary setup should use a larger optional installer/download artifact rather than bundling the model in the base app. The flow should match the existing CUDA setup pattern: the user explicitly starts setup, the app downloads a pinned artifact for the current platform/runtime, verifies HTTPS host allowlists, filenames, and checksums, unpacks or stages it into the managed model cache, and then validates the local runtime. No summary model or runtime download should happen automatically in the background.
 
-Runtime archives are staged defensively: ZIP entries must resolve inside the extraction directory, stale extraction staging is removed before reinstall, and runtime validation invokes only the runtime/model smoke path rather than passing transcript generation arguments.
+Runtime archives are staged defensively: ZIP entries must resolve inside the extraction directory, stale extraction staging is removed before reinstall, extracted archive layout is preserved for native library loading, and runtime validation invokes only the runtime/model smoke path rather than passing transcript generation arguments.
 
 Initial installed model:
 

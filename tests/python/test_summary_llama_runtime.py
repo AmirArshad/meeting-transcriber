@@ -10,6 +10,7 @@ from backend.summaries.llama_runtime import (
     get_platform_acceleration,
     normalize_platform,
     resolve_llama_runtime,
+    run_llama_prompt,
     smoke_test_llama_runtime,
 )
 
@@ -59,6 +60,28 @@ def test_resolve_llama_runtime_requires_executable_and_model(tmp_path):
     assert runtime['modelPath'] == str(model_path)
 
 
+def test_resolve_llama_runtime_prefers_extracted_windows_executable(tmp_path):
+    runtime_dir = tmp_path / 'runtime'
+    nested_dir = runtime_dir / 'extract' / 'llama-b9173-bin-win-cuda-12.4-x64'
+    nested_dir.mkdir(parents=True)
+    model_path = tmp_path / 'model.gguf'
+    model_path.write_text('model', encoding='utf-8')
+    top_level_executable = runtime_dir / 'llama-cli.exe'
+    nested_executable = nested_dir / 'llama-cli.exe'
+    top_level_executable.write_text('orphaned exe', encoding='utf-8')
+    nested_executable.write_text('exe with adjacent dlls', encoding='utf-8')
+
+    runtime = resolve_llama_runtime(
+        runtime_dir=str(runtime_dir),
+        model_path=str(model_path),
+        platform='win32',
+        arch='x64',
+    )
+
+    assert runtime['acceleration'] == 'cuda'
+    assert runtime['executable'] == str(nested_executable)
+
+
 def test_build_llama_cli_args_uses_json_prompt_file(tmp_path):
     runtime = {
         'executable': str(tmp_path / 'llama-cli'),
@@ -104,6 +127,34 @@ def test_smoke_test_llama_runtime_loads_model_with_tiny_prompt(monkeypatch, tmp_
     assert check is False
     assert timeout == 5
     assert kwargs['cwd'] == str(tmp_path)
+
+
+def test_run_llama_prompt_uses_executable_directory(monkeypatch, tmp_path):
+    calls = []
+
+    class Result:
+        returncode = 0
+        stdout = '{"summary":"ok"}'
+        stderr = ''
+
+    def fake_run(args, capture_output, text, check, timeout, cwd):
+        calls.append((args, capture_output, text, check, timeout, cwd))
+        return Result()
+
+    executable = tmp_path / 'runtime' / 'extract' / 'llama-cli.exe'
+    executable.parent.mkdir(parents=True)
+    prompt_path = tmp_path / 'prompt.txt'
+    monkeypatch.setattr('backend.summaries.llama_runtime.subprocess.run', fake_run)
+
+    output = run_llama_prompt(
+        {'executable': str(executable), 'modelPath': str(tmp_path / 'model.gguf')},
+        prompt_path=str(prompt_path),
+        max_tokens=64,
+        timeout_seconds=5,
+    )
+
+    assert output == '{"summary":"ok"}'
+    assert calls[0][5] == str(executable.parent)
 
 
 def test_smoke_test_llama_runtime_rejects_failed_help(monkeypatch, tmp_path):

@@ -156,6 +156,7 @@ function buildUnsupportedCudaPythonMessage(versionOutput) {
 }
 
 const TRANSCRIPTION_CUDA_PACKAGES = Object.freeze(['nvidia-cublas-cu12', 'nvidia-cudnn-cu12']);
+const LEGACY_TRANSCRIPTION_CUDA_PACKAGES = Object.freeze(['torch', 'torchvision', 'torchaudio']);
 
 function buildTranscriptionCudaInstallArgs(packages = TRANSCRIPTION_CUDA_PACKAGES) {
   return [
@@ -174,6 +175,7 @@ function buildTranscriptionCudaUninstallArgs(packages = TRANSCRIPTION_CUDA_PACKA
     'uninstall',
     '-y',
     ...packages,
+    ...LEGACY_TRANSCRIPTION_CUDA_PACKAGES,
   ];
 }
 

@@ -33,7 +33,7 @@ Use this checklist when validating speaker identification or local summaries on 
 
 - [ ] Start summary setup explicitly from Settings.
 - [ ] Confirm the pinned llama.cpp runtime downloads, verifies, and extracts before the model is marked ready.
-- [ ] Confirm runtime archives extract into a cleaned staging directory and the final `llama-cli` executable lands under the stable runtime cache path.
+- [ ] Confirm runtime archives extract into a cleaned staging directory and summary execution uses the extracted `llama-cli` location with adjacent native libraries intact.
 - [ ] Confirm the pinned GGUF model downloads and checksum-verifies before Ready.
 - [ ] Generate a summary from Home after a saved transcript.
 - [ ] Generate or regenerate a summary from History.

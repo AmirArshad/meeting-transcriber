@@ -54,6 +54,22 @@ def default_llama_executable_name(platform: str) -> str:
     return "llama-cli.exe" if platform == "win32" else "llama-cli"
 
 
+def find_llama_executable(runtime_dir: Path, executable_name: str) -> Path:
+    # Prefer the extracted archive layout so platform libraries stay beside the
+    # executable. This is required for Windows DLL loading and macOS dylibs.
+    for root in (runtime_dir / "extract", runtime_dir):
+        if not root.exists():
+            continue
+        direct = root / executable_name
+        if direct.exists():
+            return direct
+        for candidate in sorted(root.rglob(executable_name)):
+            if candidate.is_file():
+                return candidate
+
+    return runtime_dir / executable_name
+
+
 def resolve_llama_runtime(
     *,
     runtime_dir: str,
@@ -66,16 +82,9 @@ def resolve_llama_runtime(
     if acceleration == "unsupported":
         raise SummaryRuntimeError("Local summaries are not supported on this platform.")
 
-    executable = Path(runtime_dir) / default_llama_executable_name(normalized["platform"])
+    runtime_root = Path(runtime_dir)
+    executable = find_llama_executable(runtime_root, default_llama_executable_name(normalized["platform"]))
     model = Path(model_path)
-
-    if normalized["platform"] == "darwin":
-        # GitHub's llama.cpp macOS tarballs keep dylibs beside llama-cli in a
-        # versioned subdirectory. Preserve that layout by letting dyld resolve
-        # libraries from the executable directory.
-        nested_executable = next(Path(runtime_dir).glob(f"llama-*/{executable.name}"), None)
-        if nested_executable:
-            executable = nested_executable
 
     if not executable.exists():
         raise SummaryRuntimeError(f"llama.cpp runtime not found: {executable}")
@@ -137,7 +146,14 @@ def run_llama_prompt(
     timeout_seconds: int = 900,
 ) -> str:
     args = build_llama_cli_args(runtime, prompt_path=prompt_path, max_tokens=max_tokens)
-    result = subprocess.run(args, capture_output=True, text=True, check=False, timeout=timeout_seconds)
+    result = subprocess.run(
+        args,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=timeout_seconds,
+        cwd=str(Path(str(runtime["executable"])).parent),
+    )
     if result.returncode != 0:
         raise SummaryRuntimeError("llama.cpp summary generation failed.")
     return result.stdout.strip()

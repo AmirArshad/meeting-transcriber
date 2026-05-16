@@ -14,6 +14,9 @@ from pathlib import Path
 from .base_transcriber import BaseTranscriber
 
 
+_NVIDIA_DLL_DIRECTORY_HANDLES = []
+
+
 def add_python_nvidia_bin_dirs_to_path() -> None:
     """Expose pip-installed NVIDIA DLL directories to CTranslate2 on Windows."""
     if os.name != "nt":
@@ -23,7 +26,26 @@ def add_python_nvidia_bin_dirs_to_path() -> None:
         import site
 
         candidate_dirs = []
-        for site_packages in site.getsitepackages():
+        site_package_paths = []
+        try:
+            site_package_paths.extend(getattr(site, "getsitepackages", lambda: [])() or [])
+        except Exception:
+            pass
+        try:
+            user_site = getattr(site, "getusersitepackages", lambda: "")()
+            if user_site:
+                site_package_paths.append(user_site)
+        except Exception:
+            pass
+        site_package_paths.extend(sys.path)
+        seen = set()
+        for site_packages in site_package_paths:
+            if not site_packages:
+                continue
+            site_packages = str(site_packages)
+            if site_packages in seen:
+                continue
+            seen.add(site_packages)
             root = Path(site_packages) / "nvidia"
             candidate_dirs.extend([
                 root / "cublas" / "bin",
@@ -36,7 +58,7 @@ def add_python_nvidia_bin_dirs_to_path() -> None:
 
         os.environ["PATH"] = os.pathsep.join([*existing, os.environ.get("PATH", "")])
         for dll_dir in existing:
-            os.add_dll_directory(dll_dir)
+            _NVIDIA_DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(dll_dir))
     except Exception:
         return
 

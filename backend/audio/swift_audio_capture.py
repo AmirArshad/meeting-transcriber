@@ -802,6 +802,8 @@ class SwiftAudioCapture:
             exit_code = self.process.poll()
 
         # Now signal threads to stop and wait for them to flush any final buffered data
+        # Keep self.process assigned until after the stderr thread joins; the
+        # status reader uses it to drain final capture_stats diagnostics.
         self._recording_event.clear()
 
         if self._stdout_thread and self._stdout_thread.is_alive():

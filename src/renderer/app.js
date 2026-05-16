@@ -62,6 +62,7 @@ const checkedMeetingIds = new Set();
 let meetingSearchQuery = '';
 const cleanupFns = [];
 let aiAddonStatusRefreshPromise = null;
+let aiAddonStatusSnapshot = null;
 
 function registerCleanup(cleanupFn) {
   if (typeof cleanupFn !== 'function') {
@@ -850,6 +851,7 @@ async function init() {
     await loadMeetingHistory();
 
     await refreshHomePrompts();
+    await refreshHomeAiAddonPrompt();
 
     // Initialize visualizer
     audioVisualizer = new AudioVisualizer();
@@ -1514,26 +1516,27 @@ function setupEventListeners() {
 
   // Listen for progress updates
   registerCleanup(window.electronAPI.onRecordingProgress((data) => {
-    if (recordingState === 'recording' && data === 'Recording started!') {
+    const message = typeof data === 'string' ? data : data && data.message;
+    if (!message) {
       return;
     }
 
-    addLog(data);
+    addLog(message);
 
     // Update status text during post-processing (stopping state)
     if (recordingState === 'stopping') {
-      if (data.includes('Resampling')) {
+      if (message.includes('Resampling')) {
         statusText.textContent = 'Processing: Resampling audio...';
-      } else if (data.includes('noise reduction')) {
+      } else if (message.includes('noise reduction')) {
         statusText.textContent = 'Processing: Applying noise reduction...';
-      } else if (data.includes('Mixing')) {
+      } else if (message.includes('Mixing')) {
         statusText.textContent = 'Processing: Mixing audio tracks...';
       }
     }
   }));
 
   registerCleanup(window.electronAPI.onRecordingInitProgress((progress) => {
-    if (recordingState === 'recording' && progress.message === 'Recording started!') {
+    if (progress.stage === 'started') {
       return;
     }
 
@@ -2784,7 +2787,8 @@ async function refreshAiAddonSettings() {
 
   aiAddonStatusRefreshPromise = (async () => {
     try {
-      const status = await window.electronAPI.getAiAddonStatus();
+      const status = await window.electronAPI.getAiAddonStatus({ includeStorageSizes: false });
+      aiAddonStatusSnapshot = status;
       updateAiAddonSettings(status);
       updateHomeAiAddonCTA(status);
       return status;
@@ -2801,13 +2805,28 @@ async function refreshAiAddonSettings() {
   return aiAddonStatusRefreshPromise;
 }
 
+async function refreshHomeAiAddonPrompt() {
+  try {
+    const status = await window.electronAPI.getAiAddonStatus({ includeStorageSizes: false });
+    aiAddonStatusSnapshot = status;
+    updateHomeAiAddonCTA(status);
+    return status;
+  } catch (error) {
+    console.warn('Could not refresh home AI add-on prompt:', error);
+    updateHomeAiAddonCTA(null);
+    return null;
+  }
+}
+
 async function withAiAddonAction(button, label, action) {
   setAiAddonControlsDisabled(true);
   setButtonBusy(button, true, label);
   try {
     const status = await action();
     if (status) {
+      aiAddonStatusSnapshot = status;
       updateAiAddonSettings(status);
+      updateHomeAiAddonCTA(status);
     } else {
       await refreshAiAddonSettings();
     }
@@ -3093,6 +3112,7 @@ async function checkGPUStatus() {
       hasNvidiaGpu: Boolean(ctaState.gpuInfo && ctaState.gpuInfo.hasGPU),
       cudaInstalled: Boolean(ctaState.cudaInfo && ctaState.cudaInfo.installed),
     };
+    updateHomeAiAddonCTA(aiAddonStatusSnapshot);
   }
 }
 

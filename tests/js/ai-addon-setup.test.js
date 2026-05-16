@@ -351,6 +351,27 @@ test('passive add-on status does not query secure storage availability', async (
   assert.equal(encryptionChecks, 0);
 });
 
+test('passive add-on status does not walk storage cache directories', async () => {
+  const fsModule = createMemoryFs();
+  const originalReaddirSync = fsModule.readdirSync;
+  fsModule.readdirSync = () => {
+    throw new Error('storage scan should not run');
+  };
+
+  const status = await checkAiAddonSetupStatus({
+    userDataDir: '/tmp/AvaNevis',
+    platform: 'win32',
+    arch: 'x64',
+    safeStorage: createSafeStorage(),
+    fsModule,
+  });
+
+  assert.equal(status.features.summary.storage.installedBytes, null);
+  assert.equal(status.features.summary.storage.installedBytesAccuracy, 'notScanned');
+
+  fsModule.readdirSync = originalReaddirSync;
+});
+
 test('explicit token status can query secure storage availability', () => {
   const fsModule = createMemoryFs();
   const userDataDir = '/tmp/AvaNevis';
@@ -705,6 +726,7 @@ test('summary runtime cache stays in userData and requires llama-cli', () => {
   const runtimeExecutable = getSummaryRuntimeExecutablePath('/tmp/AvaNevis', artifact, {
     executableName: 'llama-cli.exe',
   });
+  const nestedRuntimeExecutable = path.join(runtimeDir, 'extract', 'nested', 'llama-cli.exe');
 
   assert.equal(runtimeDir, path.join('/tmp/AvaNevis', 'ai-addons', 'models', 'summary', DEFAULT_SUMMARY_MODEL_ID, 'runtime', 'win32-x64'));
   assert.equal(runtimeExecutable, path.join(runtimeDir, 'llama-cli.exe'));
@@ -719,8 +741,9 @@ test('summary runtime cache stays in userData and requires llama-cli', () => {
   assert.equal(missingCache.valid, false);
   assert.equal(missingCache.reason, 'llama.cpp runtime is not installed.');
 
-  fsModule.mkdirSync(runtimeDir);
-  fsModule.writeFileSync(runtimeExecutable, 'bin');
+  fsModule.mkdirSync(path.dirname(nestedRuntimeExecutable));
+  fsModule.writeFileSync(nestedRuntimeExecutable, 'bin');
+  fsModule.writeFileSync(runtimeExecutable, 'orphaned bin');
   const installedCache = checkSummaryRuntimeCache({
     userDataDir: '/tmp/AvaNevis',
     platform: 'win32',
@@ -729,7 +752,7 @@ test('summary runtime cache stays in userData and requires llama-cli', () => {
     fsModule,
   });
   assert.equal(installedCache.valid, true);
-  assert.equal(installedCache.executablePath, runtimeExecutable);
+  assert.equal(installedCache.executablePath, nestedRuntimeExecutable);
 });
 
 test('validate summary model accepts installed model and runtime with matching checksum', async () => {
@@ -852,6 +875,8 @@ test('setup summary model downloads explicit runtime and model artifacts only wh
   });
   const downloadedUrls = [];
   const runtimeArtifact = catalog.summary.runtimeArtifacts['win32-x64'];
+  const artifact = getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog);
+  const nestedRuntimeExecutable = path.join(getSummaryRuntimeDir('/tmp/AvaNevis', artifact), 'extract', 'nested', 'llama-cli.exe');
   const status = await setupSummaryModel({
     userDataDir: '/tmp/AvaNevis',
     platform: 'win32',
@@ -868,8 +893,8 @@ test('setup summary model downloads explicit runtime and model artifacts only wh
     },
     extractor: async (archivePath) => {
       const archive = runtimeArtifact.artifacts[0];
-      assert.equal(archivePath, getSummaryRuntimeArchivePath('/tmp/AvaNevis', getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog), archive));
-      fsModule.writeFileSync(path.join(getSummaryRuntimeDir('/tmp/AvaNevis', getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog)), 'extract', 'nested', 'llama-cli.exe'), 'bin');
+      assert.equal(archivePath, getSummaryRuntimeArchivePath('/tmp/AvaNevis', artifact, archive));
+      fsModule.writeFileSync(nestedRuntimeExecutable, 'bin');
     },
   });
 
@@ -878,8 +903,9 @@ test('setup summary model downloads explicit runtime and model artifacts only wh
   assert.equal(status.features.summary.profile, 'detailed');
   assert.equal(status.features.summary.setupComplete, true);
   assert.equal(status.features.summary.runtimeCache.valid, true);
-  assert.equal(fsModule.existsSync(getSummaryRuntimeArchivePath('/tmp/AvaNevis', getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog), runtimeArtifact.artifacts[0])), false);
-  assert.equal(fsModule.existsSync(getSummaryRuntimeExecutablePath('/tmp/AvaNevis', getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog), runtimeArtifact)), true);
+  assert.equal(status.features.summary.runtimeCache.executablePath, nestedRuntimeExecutable);
+  assert.equal(fsModule.existsSync(getSummaryRuntimeArchivePath('/tmp/AvaNevis', artifact, runtimeArtifact.artifacts[0])), false);
+  assert.equal(fsModule.existsSync(getSummaryRuntimeExecutablePath('/tmp/AvaNevis', artifact, runtimeArtifact)), false);
 });
 
 test('setup summary model records downloader failures and removes temp model downloads', async () => {
