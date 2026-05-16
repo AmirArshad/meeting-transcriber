@@ -266,6 +266,38 @@ def test_mlx_transcriber_passes_requested_language_to_backend(tmp_path, monkeypa
     assert Path(captured['model_dir']).parts[-2:] == ('mlx_models', 'whisper-small-mlx')
 
 
+def test_mlx_transcriber_uses_safe_single_chunk_batch_size(monkeypatch):
+    service = cast(Any, MLXWhisperTranscriber(model_size='small', language='en'))
+    captured = {}
+
+    def fake_transcribe_audio(audio_path, **kwargs):
+        captured['audio_path'] = audio_path
+        captured.update(kwargs)
+        return {'text': 'full transcript', 'segments': []}
+
+    monkeypatch.setitem(
+        __import__('sys').modules,
+        'lightning_whisper_mlx.transcribe',
+        types.SimpleNamespace(transcribe_audio=fake_transcribe_audio),
+    )
+
+    result = service._transcribe_audio('/tmp/audio.opus')
+
+    assert result['text'] == 'full transcript'
+    assert captured['audio_path'] == '/tmp/audio.opus'
+    assert captured['path_or_hf_repo'] == str(service.model_dir)
+    assert captured['language'] == 'en'
+    assert captured['batch_size'] == 1
+
+
+def test_mlx_transcriber_allows_bounded_batch_size_override(monkeypatch):
+    monkeypatch.setenv('AVANEVIS_MLX_WHISPER_BATCH_SIZE', '64')
+
+    service = cast(Any, MLXWhisperTranscriber(model_size='small', language='en'))
+
+    assert service.batch_size == 16
+
+
 def test_get_model_info_for_faster_whisper_includes_runtime_state():
     service = cast(Any, TranscriberService(model_size='base', language='en', device='cpu', compute_type='int8'))
 

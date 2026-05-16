@@ -15,6 +15,8 @@ Use this checklist when validating speaker identification or local summaries on 
 - [ ] Enter the user's own Hugging Face token after accepting `pyannote/speaker-diarization-community-1` terms.
 - [ ] Confirm speaker setup does not download dependencies until a token is entered.
 - [ ] Start speaker setup and confirm managed dependencies install under Electron `userData/ai-addons/dependencies/diarization`.
+- [ ] Cancel speaker setup during dependency download/install and confirm setup returns to Not configured, partial dependency files are removed, and token values are not logged.
+- [ ] Re-run speaker setup after cancellation and confirm stale dependency artifact directories are removed while the current artifact installs cleanly.
 - [ ] Validate setup from Settings and confirm status becomes Ready.
 - [ ] Record and transcribe a meeting with 2-4 speakers.
 - [ ] Confirm diarization starts automatically only after transcription is saved.
@@ -32,6 +34,9 @@ Use this checklist when validating speaker identification or local summaries on 
 ## Summary Setup And Generation
 
 - [ ] Start summary setup explicitly from Settings.
+- [ ] Confirm Settings shows progress and a Cancel Download action while runtime/model setup is active.
+- [ ] Cancel summary setup during runtime download and confirm partial `.download` files and newly staged runtime artifacts are removed.
+- [ ] Cancel summary setup during validation after a previously ready install and confirm the existing model/runtime remain Ready.
 - [ ] Confirm the pinned llama.cpp runtime downloads, verifies, and extracts before the model is marked ready.
 - [ ] Confirm runtime archives extract into a cleaned staging directory and summary execution uses the extracted `llama-cli` location with adjacent native libraries intact.
 - [ ] Confirm the pinned GGUF model downloads and checksum-verifies before Ready.
@@ -45,6 +50,7 @@ Use this checklist when validating speaker identification or local summaries on 
 ## Long Meeting Validation
 
 - [ ] Validate a 30-60 minute meeting with 2-4 speakers on Windows CUDA.
+- [ ] Validate a 30+ minute Apple Silicon transcription for transcript completeness with the default MLX batch size. Only test `AVANEVIS_MLX_WHISPER_BATCH_SIZE` overrides as a controlled performance experiment.
 - [ ] Validate a 1-2 hour transcript summary with the default profile.
 - [ ] Validate Concise, Balanced, Detailed, and Action items profiles reuse the installed model.
 - [ ] Record processing time, peak RAM/VRAM, model sizes, and quality notes.

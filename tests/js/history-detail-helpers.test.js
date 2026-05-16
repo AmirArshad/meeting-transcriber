@@ -69,7 +69,7 @@ test('setup messages explain graceful degradation paths', () => {
       status: 'error',
       runtimeCache: { reason: 'llama.cpp runtime is not installed.' },
     }),
-    /llama\.cpp runtime is not installed.*validate or reinstall/i,
+    /llama\.cpp runtime is not installed.*install model.*validate.*remove/i,
   );
   assert.doesNotMatch(
     getSummarySetupMessage({ status: 'error' }),

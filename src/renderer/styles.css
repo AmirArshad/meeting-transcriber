@@ -2218,6 +2218,29 @@ footer {
   gap: 8px;
 }
 
+.ai-addon-actions .cancel-download-btn {
+  display: none;
+}
+
+.ai-addon-progress {
+  margin: 10px 0 12px;
+  padding: 10px 12px;
+  min-height: 50px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--r-sm);
+}
+
+.ai-addon-progress .progress-bar-container {
+  height: 5px;
+  margin-bottom: 8px;
+}
+
+.ai-addon-progress .progress-text {
+  color: var(--text-tertiary);
+  text-align: left;
+}
+
 @media (max-width: 760px) {
   .history-layout {
     grid-template-columns: 1fr;

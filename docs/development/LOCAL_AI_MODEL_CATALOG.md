@@ -7,6 +7,7 @@ This app keeps optional local AI add-on artifacts catalog-driven in `src/ai-addo
 - Keep AvaNevis local-only: no cloud diarization, cloud summarization, telemetry, or background uploads.
 - Summary model and runtime downloads must be explicit user-triggered setup actions.
 - Speaker diarization dependency installs must be explicit user-triggered setup actions and stay under Electron `userData`.
+- Setup downloads must emit redacted progress, support cancellation, clean partial `.download` files, and preserve any previously valid install when cancellation happens during validation.
 - Pin every downloadable summary model and runtime artifact by immutable URL, filename, and SHA-256 checksum.
 - Summary model/runtime download URLs must use HTTPS and an allowed artifact host. The allowlist is derived from the configured catalog URLs plus known GitHub/Hugging Face/PyPI redirect hosts; Hugging Face/Xet redirect subdomains under `hf.co` and `huggingface.co` are allowed, while arbitrary HTTPS hosts remain blocked.
 - Prefer official model-owner GGUF artifacts. If unavailable, use established community quantizations with immutable revision URLs.
@@ -20,7 +21,8 @@ This app keeps optional local AI add-on artifacts catalog-driven in `src/ai-addo
 3. Keep any package indexes HTTPS-only, catalog-driven, and covered by the setup download host allowlist.
 4. Keep `runtime.modelRef` catalog-owned; renderer input must not decide which Hugging Face model is loaded.
 5. Validate that packaged build requirements do not include `pyannote.audio` unless every transitive dependency has a binary wheel under the build policy.
-6. Run `npm test`, `npm run test:python`, and a Windows speaker setup smoke test.
+6. Confirm old artifact directories under `userData/ai-addons/dependencies/diarization` are cleaned when a new dependency artifact is installed.
+7. Run `npm test`, `npm run test:python`, and a Windows speaker setup smoke test including cancel during dependency install.
 
 ## Updating Summary Model Pins
 
@@ -39,7 +41,7 @@ This app keeps optional local AI add-on artifacts catalog-driven in `src/ai-addo
 3. Include all runtime archives needed for the platform, including CUDA dependency archives when required.
 4. Keep runtime archive URLs under trusted release hosts covered by the setup download host allowlist; setup rejects unallowed hosts even when SHA-256 metadata exists.
 5. Keep `executableName` aligned with the extracted `llama-cli` binary. Runtime archives extract under the managed runtime cache's `extract/` directory, and execution should prefer the extracted archive layout so Windows DLLs and macOS dylibs remain beside the executable.
-6. For ZIP archives, keep extraction paths relative and safe; setup rejects archive entries that escape the extraction directory.
+6. For ZIP archives, keep extraction paths relative and safe; setup creates the extraction directory and rejects archive entries that escape it.
 7. Run `npm test` and `npm run test:python`.
 
 ## Validation Checklist
@@ -49,6 +51,7 @@ This app keeps optional local AI add-on artifacts catalog-driven in `src/ai-addo
 - `npm run prepare-build` when runtime packaging or prepared resources change
 - Manual summary setup on Windows CUDA and macOS Apple Silicon when artifacts change
 - Confirm failed checksum/runtime validation keeps setup out of `ready`
+- Confirm canceling setup removes partial downloads and does not remove a previously valid model/runtime
 - Confirm no transcript text, prompts, or tokens appear in progress events or logs
 - Confirm summary generation and diarization are serialized so concurrent local AI runs do not compete for GPU memory
 - Confirm meeting AI metadata only stores `diarization` and `summary`, with sidecar paths under recordings and concise string fields

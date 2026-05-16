@@ -103,6 +103,7 @@ class MLXWhisperTranscriber(BaseTranscriber):
     model_repo: str
     model_storage_dir: str
     model_dir: Path
+    batch_size: int
 
     # Supported Whisper languages
     SUPPORTED_LANGUAGES = {
@@ -233,6 +234,7 @@ class MLXWhisperTranscriber(BaseTranscriber):
         self.cache_dir = self._get_cache_dir()
         self.model_key, self.model_repo, self.model_storage_dir = self._resolve_model_spec(model_size)
         self.model_dir = self.cache_dir / 'mlx_models' / self.model_storage_dir
+        self.batch_size = self._resolve_batch_size()
 
         # Validate language
         if language not in self.SUPPORTED_LANGUAGES:
@@ -300,6 +302,20 @@ class MLXWhisperTranscriber(BaseTranscriber):
         ]
         return all(file_path.exists() and file_path.is_file() for file_path in required_files)
 
+    def _resolve_batch_size(self) -> int:
+        value = os.environ.get('AVANEVIS_MLX_WHISPER_BATCH_SIZE', '').strip()
+        if value:
+            try:
+                batch_size = int(value)
+            except ValueError:
+                batch_size = 1
+            return max(1, min(batch_size, 16))
+
+        # lightning-whisper-mlx 0.0.10 can drop earlier windows when batching
+        # multiple 30s chunks. Keep the safe default at 1 until the pinned
+        # runtime is validated with larger batches on real long meetings.
+        return 1
+
     def _transcribe_audio(self, audio_path: str) -> Dict[str, Any]:
         """Run MLX transcription against the prepared local model directory."""
         from lightning_whisper_mlx.transcribe import transcribe_audio  # type: ignore[import-not-found]
@@ -308,7 +324,7 @@ class MLXWhisperTranscriber(BaseTranscriber):
             audio_path,
             path_or_hf_repo=str(self.model_dir),
             language=self.language,
-            batch_size=12,
+            batch_size=self.batch_size,
         )
 
     @staticmethod

@@ -786,8 +786,15 @@
 
                       <div class="ai-addon-footprint" id="diarization-footprint" aria-live="polite"></div>
                       <p class="ai-addon-status-text" id="diarization-status-text">Checking setup&hellip;</p>
+                      <div class="ai-addon-progress" id="diarization-progress" style="display: none">
+                        <div class="progress-bar-container">
+                          <div class="progress-bar" id="diarization-progress-bar"></div>
+                        </div>
+                        <p class="progress-text" id="diarization-progress-text">Starting&hellip;</p>
+                      </div>
                       <div class="ai-addon-actions">
                         <button id="setup-diarization-btn" class="btn btn-primary btn-small">Set Up</button>
+                        <button id="cancel-diarization-btn" class="btn btn-secondary btn-small cancel-download-btn">Cancel Download</button>
                         <button id="validate-diarization-btn" class="btn btn-small">Validate</button>
                         <button id="remove-diarization-btn" class="btn btn-danger btn-small">Remove</button>
                       </div>
@@ -814,8 +821,15 @@
 
                       <div class="ai-addon-footprint" id="summary-footprint" aria-live="polite"></div>
                       <p class="ai-addon-status-text" id="summary-status-text">Checking setup&hellip;</p>
+                      <div class="ai-addon-progress" id="summary-progress" style="display: none">
+                        <div class="progress-bar-container">
+                          <div class="progress-bar" id="summary-progress-bar"></div>
+                        </div>
+                        <p class="progress-text" id="summary-progress-text">Starting&hellip;</p>
+                      </div>
                       <div class="ai-addon-actions">
                         <button id="setup-summary-btn" class="btn btn-primary btn-small">Install Model</button>
+                        <button id="cancel-summary-btn" class="btn btn-secondary btn-small cancel-download-btn">Cancel Download</button>
                         <button id="validate-summary-btn" class="btn btn-small">Validate</button>
                         <button id="remove-summary-btn" class="btn btn-danger btn-small">Remove</button>
                       </div>

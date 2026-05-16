@@ -27,6 +27,7 @@ This design translates the model research docs into product behavior for Setting
 
 - Add-on setup state and model metadata are catalog-driven through `src/ai-addon-state.js`.
 - Summary runtime/model setup downloads pinned llama.cpp/GGUF artifacts only after explicit user action and verifies HTTPS host allowlists, filenames, and checksums before Ready.
+- Summary and speaker setup report structured add-on progress with percent/byte counters where available. Settings owns the cancel controls; cancellation aborts active downloads/processes and removes partial setup artifacts without deleting a previously valid install.
 - Summary runtime archives extract into a cleaned staging directory with ZIP path-traversal checks; runtime resolution prefers the extracted `llama-cli` location so adjacent Windows DLLs and macOS dylibs remain loadable.
 - Speaker tokens are stored only with Electron `safeStorage`; token values are not exposed through status IPC, metadata, progress, transcripts, or summaries.
 - Derived artifacts live beside recordings as `*.speakers.json`, `*.summary.json`, and `*.summary.md`; meeting metadata stores concise sidecar references only.
@@ -77,6 +78,7 @@ Controls:
 | `Test Token` | Validates token and model access before marking setup ready. |
 | Speaker count | Default `Auto`. Optional fixed count should start with 2-4 speaker meeting presets. |
 | `Remove Setup` | Deletes local diarization setup state and stops automatic diarization for future transcriptions. |
+| `Cancel Download` | Aborts in-progress setup and removes partial managed dependency downloads. Existing ready setup is preserved when cancellation happens during validation. |
 
 Users should bring their own Hugging Face token. A maintainer-owned token should not be embedded in the app, bundled in resources, downloaded from the release, or hidden behind an AvaNevis endpoint because it would be extractable, revocable for everyone after abuse, and tied to the maintainer's account and model-term obligations.
 
@@ -124,10 +126,11 @@ Controls:
 | Summary profile | Selects output style, detail level, chunk budget, and runtime knobs for the installed model. |
 | `Remove Model` | Deletes local summary model cache after confirmation. |
 | `Validate` | Confirms runtime, model file, checksum, and a tiny JSON-only smoke prompt. |
+| `Cancel Download` | Aborts in-progress runtime/model setup, removes partial `.download` files and newly staged artifacts, and preserves an existing ready model/runtime when cancellation happens during validation. |
 
 Summary setup should use a larger optional installer/download artifact rather than bundling the model in the base app. The flow should match the existing CUDA setup pattern: the user explicitly starts setup, the app downloads a pinned artifact for the current platform/runtime, verifies HTTPS host allowlists, filenames, and checksums, unpacks or stages it into the managed model cache, and then validates the local runtime. No summary model or runtime download should happen automatically in the background.
 
-Runtime archives are staged defensively: ZIP entries must resolve inside the extraction directory, stale extraction staging is removed before reinstall, extracted archive layout is preserved for native library loading, and runtime validation invokes only the runtime/model smoke path rather than passing transcript generation arguments.
+Runtime archives are staged defensively: ZIP entries must resolve inside the extraction directory, extraction destinations are created explicitly, stale extraction staging is removed before reinstall, extracted archive layout is preserved for native library loading, and runtime validation invokes only the runtime/model smoke path rather than passing transcript generation arguments.
 
 Initial installed model:
 

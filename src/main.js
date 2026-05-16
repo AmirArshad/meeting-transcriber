@@ -41,11 +41,13 @@ const {
   parseAiBackendProgressLine,
   resolveExternalUrl,
   resolveTranscriptionAudioFile,
+  TRANSCRIPTION_CUDA_PACKAGES,
   MACOS_PERMISSION_CHECK_TIMEOUT_MS,
 } = require('./main-process-helpers');
 const { checkForUpdates, openDownloadPage } = require('./updater');
 const {
   AI_ADDON_PROGRESS_CHANNEL,
+  AI_ADDON_CANCEL_CODE,
   checkAiAddonSetupStatus,
   checkDiarizationDependencyCache,
   getSummaryArtifactPath,
@@ -653,7 +655,7 @@ function buildCudaRuntimeEnv(extra = {}) {
 }
 
 function getTranscriptionCudaPackages() {
-  return buildTranscriptionCudaInstallArgs().slice(3, -1);
+  return [...TRANSCRIPTION_CUDA_PACKAGES];
 }
 
 const transcriberModule = buildTranscriberArgs({
@@ -1837,6 +1839,42 @@ function emitAiAddonProgress(payload) {
   sendToRenderer(AI_ADDON_PROGRESS_CHANNEL, payload);
 }
 
+function createAiAddonCancelError(message = 'AI add-on setup was canceled.') {
+  const error = new Error(message);
+  error.name = 'AbortError';
+  error.code = AI_ADDON_CANCEL_CODE;
+  return error;
+}
+
+function runCancellableAiAddonSetup(feature, action) {
+  if (aiAddonSetupAbortControllers.has(feature)) {
+    return Promise.reject(new Error(`${feature === 'summary' ? 'Summary model' : 'Speaker identification'} setup is already running.`));
+  }
+
+  const controller = new AbortController();
+  aiAddonSetupAbortControllers.set(feature, controller);
+
+  return enqueueAiAddonAction(async () => {
+    try {
+      return await action(controller.signal);
+    } finally {
+      if (aiAddonSetupAbortControllers.get(feature) === controller) {
+        aiAddonSetupAbortControllers.delete(feature);
+      }
+    }
+  });
+}
+
+function cancelAiAddonSetup(feature) {
+  const controller = aiAddonSetupAbortControllers.get(feature);
+  if (!controller) {
+    return { canceled: false, message: 'No setup download is currently running.' };
+  }
+
+  controller.abort(createAiAddonCancelError());
+  return { canceled: true };
+}
+
 function createAsyncActionQueue() {
   let tail = Promise.resolve();
 
@@ -1849,6 +1887,7 @@ function createAsyncActionQueue() {
 
 const enqueueAiAddonAction = createAsyncActionQueue();
 const enqueueAiComputeAction = createAsyncActionQueue();
+const aiAddonSetupAbortControllers = new Map();
 
 function getRecordingsDir() {
   return path.join(app.getPath('userData'), 'recordings');
@@ -1935,7 +1974,7 @@ function validateAiMetadataPaths(updates = {}) {
   return validated;
 }
 
-function validateDiarizationRuntime({ modelRef, token }) {
+function validateDiarizationRuntime({ modelRef, token, cancelSignal }) {
   const resolvedToken = token || getAiAddonToken({
     userDataDir: app.getPath('userData'),
     tokenKey: TOKEN_KEYS.diarizationHuggingFace,
@@ -1943,6 +1982,11 @@ function validateDiarizationRuntime({ modelRef, token }) {
   });
 
   return new Promise((resolve, reject) => {
+    if (cancelSignal && cancelSignal.aborted) {
+      reject(createAiAddonCancelError('Speaker identification setup was canceled.'));
+      return;
+    }
+
     const python = spawnTrackedPython(buildManagedDiarizationValidationArgs(modelRef), {
       cwd: pythonConfig.backendPath,
       env: {
@@ -1955,6 +1999,29 @@ function validateDiarizationRuntime({ modelRef, token }) {
 
     let output = '';
     let errorOutput = '';
+    let settled = false;
+    const cleanupCancel = cancelSignal && typeof cancelSignal.addEventListener === 'function'
+      ? (() => {
+        const handleAbort = () => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          terminateProcessBestEffort(python);
+          reject(createAiAddonCancelError('Speaker identification setup was canceled.'));
+        };
+        cancelSignal.addEventListener('abort', handleAbort, { once: true });
+        return () => cancelSignal.removeEventListener('abort', handleAbort);
+      })()
+      : () => {};
+    const finish = (callback, value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanupCancel();
+      callback(value);
+    };
     python.stdout.on('data', (data) => { output += data.toString(); });
     python.stderr.on('data', (data) => {
       const stderrChunk = data.toString();
@@ -1969,20 +2036,96 @@ function validateDiarizationRuntime({ modelRef, token }) {
     python.on('close', (code) => {
       if (code === 0) {
         try {
-          resolve(JSON.parse(output));
+          finish(resolve, JSON.parse(output));
         } catch (error) {
-          reject(new Error(`Failed to parse diarization setup validation: ${error.message}`));
+          finish(reject, new Error(`Failed to parse diarization setup validation: ${error.message}`));
         }
         return;
       }
       const reason = errorOutput.trim().split(/\r?\n/).filter(Boolean).slice(-1)[0];
-      reject(new Error(reason || 'Speaker identification runtime validation failed.'));
+      finish(reject, new Error(reason || 'Speaker identification runtime validation failed.'));
     });
-    python.on('error', reject);
+    python.on('error', (error) => finish(reject, error));
   });
 }
 
-function validateSummaryRuntimeSmoke({ modelId, cache }) {
+function summarizeSummaryValidationError(errorOutput) {
+  const userDataDir = app.getPath('userData');
+  const homeDir = os.homedir();
+  const lines = String(errorOutput || '').trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  for (const line of [...lines].reverse()) {
+    const cleaned = line
+      .replace(/^ERROR:\s*/i, '')
+      .replaceAll(userDataDir, '<userData>')
+      .replaceAll(homeDir, '<home>')
+      .trim();
+    if (!cleaned || cleaned === 'Local summary generation failed.') {
+      continue;
+    }
+    return cleaned;
+  }
+  return '';
+}
+
+function terminateProcessBestEffort(proc) {
+  if (!proc || proc.killed) {
+    return;
+  }
+
+  try {
+    if (process.platform === 'win32' && proc.pid) {
+      execFile('taskkill', ['/PID', String(proc.pid), '/T', '/F'], { windowsHide: true }, () => {});
+      return;
+    }
+
+    proc.kill();
+  } catch (error) {
+    // Best effort cleanup.
+  }
+}
+
+function createAbortableComputeAction({ cancelSignal, cancelMessage, action }) {
+  return new Promise((resolve, reject) => {
+    if (cancelSignal && cancelSignal.aborted) {
+      reject(createAiAddonCancelError(cancelMessage));
+      return;
+    }
+
+    let started = false;
+    let settled = false;
+    const cleanup = cancelSignal && typeof cancelSignal.addEventListener === 'function'
+      ? (() => {
+        const handleAbort = () => {
+          if (settled || started) {
+            return;
+          }
+          settled = true;
+          reject(createAiAddonCancelError(cancelMessage));
+        };
+        cancelSignal.addEventListener('abort', handleAbort, { once: true });
+        return () => cancelSignal.removeEventListener('abort', handleAbort);
+      })()
+      : () => {};
+
+    enqueueAiComputeAction(async () => {
+      if (settled) {
+        return;
+      }
+      started = true;
+      cleanup();
+      try {
+        const result = await action();
+        settled = true;
+        resolve(result);
+      } catch (error) {
+        settled = true;
+        reject(error);
+      }
+    });
+  });
+}
+
+function validateSummaryRuntimeSmoke({ modelId, cache, cancelSignal }) {
   const artifact = getSummaryArtifactForPlatform(modelId, process.platform, process.arch);
   if (!artifact) {
     return Promise.reject(new Error('No summary model artifact is available for this platform.'));
@@ -1991,33 +2134,68 @@ function validateSummaryRuntimeSmoke({ modelId, cache }) {
   const modelPath = cache && cache.artifactPath ? cache.artifactPath : getSummaryArtifactPath(app.getPath('userData'), artifact);
   const runtimeDir = getSummaryRuntimeDir(app.getPath('userData'), artifact);
 
-  return enqueueAiComputeAction(() => new Promise((resolve, reject) => {
-    const python = spawnTrackedPython(buildSummaryArgs({
-      meetingId: 'setup-validation',
-      runtimeDir,
-      modelPath,
-      validateRuntime: true,
-      modelLabel: artifact.modelLabel || artifact.modelId,
-    }), { cwd: pythonConfig.backendPath });
-
-    let output = '';
-    let errorOutput = '';
-    python.stdout.on('data', (data) => { output += data.toString(); });
-    python.stderr.on('data', (data) => { errorOutput += data.toString(); });
-    python.on('close', (code) => {
-      if (code === 0) {
-        try {
-          resolve(JSON.parse(output));
-        } catch (error) {
-          reject(new Error(`Failed to parse summary runtime validation: ${error.message}`));
-        }
+  return createAbortableComputeAction({
+    cancelSignal,
+    cancelMessage: 'Summary model setup was canceled.',
+    action: () => new Promise((resolve, reject) => {
+      if (cancelSignal && cancelSignal.aborted) {
+        reject(createAiAddonCancelError('Summary model setup was canceled.'));
         return;
       }
-      const reason = errorOutput.trim().split(/\r?\n/).filter(Boolean).slice(-1)[0];
-      reject(new Error(reason || 'Local summary runtime validation failed.'));
-    });
-    python.on('error', reject);
-  }));
+
+      const python = spawnTrackedPython(buildSummaryArgs({
+        meetingId: 'setup-validation',
+        runtimeDir,
+        modelPath,
+        validateRuntime: true,
+        modelLabel: artifact.modelLabel || artifact.modelId,
+      }), { cwd: pythonConfig.backendPath });
+
+      let output = '';
+      let errorOutput = '';
+      let settled = false;
+      const cleanupCancel = cancelSignal && typeof cancelSignal.addEventListener === 'function'
+        ? (() => {
+          const handleAbort = () => {
+            if (settled) {
+              return;
+            }
+            settled = true;
+            terminateProcessBestEffort(python);
+            reject(createAiAddonCancelError('Summary model setup was canceled.'));
+          };
+          cancelSignal.addEventListener('abort', handleAbort, { once: true });
+          return () => cancelSignal.removeEventListener('abort', handleAbort);
+        })()
+        : () => {};
+      const finish = (callback, value) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanupCancel();
+        callback(value);
+      };
+      python.stdout.on('data', (data) => { output += data.toString(); });
+      python.stderr.on('data', (data) => { errorOutput += data.toString(); });
+      python.on('close', (code) => {
+        if (code === 0) {
+          try {
+            finish(resolve, JSON.parse(output));
+          } catch (error) {
+            finish(reject, new Error(`Failed to parse summary runtime validation: ${error.message}`));
+          }
+          return;
+        }
+        const reason = summarizeSummaryValidationError(errorOutput);
+        const message = reason && /^local summary runtime validation failed/i.test(reason)
+          ? reason
+          : `Local summary runtime validation failed${reason ? `: ${reason}` : '.'}`;
+        finish(reject, new Error(message));
+      });
+      python.on('error', (error) => finish(reject, error));
+    }),
+  });
 }
 
 function getAiAddonRuntimeOptions(extra = {}) {
@@ -2065,37 +2243,67 @@ ipcMain.handle('delete-diarization-token', async () => deleteAiAddonToken({
   tokenKey: TOKEN_KEYS.diarizationHuggingFace,
 }));
 
-ipcMain.handle('setup-diarization', async (event, options = {}) => enqueueAiAddonAction(() => setupDiarizationAddon(getAiAddonRuntimeOptions({
+ipcMain.handle('setup-diarization', async (event, options = {}) => runCancellableAiAddonSetup('diarization', (cancelSignal) => setupDiarizationAddon(getAiAddonRuntimeOptions({
   includeSafeStorage: true,
   modelId: options.modelId,
   speakerCount: options.speakerCount,
   token: options.token,
   pythonExe: pythonConfig.pythonExe,
   runtimeValidator: validateDiarizationRuntime,
+  cancelSignal,
 }))));
 
-ipcMain.handle('validate-diarization-setup', async () => enqueueAiAddonAction(() => validateDiarizationSetup(getAiAddonRuntimeOptions({
-  includeSafeStorage: true,
-  runtimeValidator: validateDiarizationRuntime,
-}))));
+ipcMain.handle('cancel-diarization-setup', async () => cancelAiAddonSetup('diarization'));
 
-ipcMain.handle('remove-diarization-setup', async () => enqueueAiAddonAction(() => removeDiarizationSetup(getAiAddonRuntimeOptions())));
+ipcMain.handle('validate-diarization-setup', async () => {
+  if (aiAddonSetupAbortControllers.has('diarization')) {
+    throw new Error('Speaker identification setup is already running. Cancel it or wait for it to finish before validating.');
+  }
 
-ipcMain.handle('setup-summary-model', async (event, options = {}) => enqueueAiAddonAction(() => setupSummaryModel(getAiAddonRuntimeOptions({
+  return enqueueAiAddonAction(() => validateDiarizationSetup(getAiAddonRuntimeOptions({
+    includeSafeStorage: true,
+    runtimeValidator: validateDiarizationRuntime,
+  })));
+});
+
+ipcMain.handle('remove-diarization-setup', async () => {
+  if (aiAddonSetupAbortControllers.has('diarization')) {
+    throw new Error('Speaker identification setup is already running. Cancel it before removing setup.');
+  }
+
+  return enqueueAiAddonAction(() => removeDiarizationSetup(getAiAddonRuntimeOptions()));
+});
+
+ipcMain.handle('setup-summary-model', async (event, options = {}) => runCancellableAiAddonSetup('summary', (cancelSignal) => setupSummaryModel(getAiAddonRuntimeOptions({
   modelId: options.modelId,
   profile: options.profile,
   runtimeValidator: validateSummaryRuntimeSmoke,
+  cancelSignal,
 }))));
 
-ipcMain.handle('validate-summary-model', async (event, options = {}) => enqueueAiAddonAction(() => validateSummaryModel(getAiAddonRuntimeOptions({
-  modelId: options.modelId,
-  profile: options.profile,
-  runtimeValidator: validateSummaryRuntimeSmoke,
-}))));
+ipcMain.handle('cancel-summary-model-setup', async () => cancelAiAddonSetup('summary'));
 
-ipcMain.handle('remove-summary-model', async (event, options = {}) => enqueueAiAddonAction(() => removeSummaryModel(getAiAddonRuntimeOptions({
-  modelId: options.modelId,
-}))));
+ipcMain.handle('validate-summary-model', async (event, options = {}) => {
+  if (aiAddonSetupAbortControllers.has('summary')) {
+    throw new Error('Summary model setup is already running. Cancel it or wait for it to finish before validating.');
+  }
+
+  return enqueueAiAddonAction(() => validateSummaryModel(getAiAddonRuntimeOptions({
+    modelId: options.modelId,
+    profile: options.profile,
+    runtimeValidator: validateSummaryRuntimeSmoke,
+  })));
+});
+
+ipcMain.handle('remove-summary-model', async (event, options = {}) => {
+  if (aiAddonSetupAbortControllers.has('summary')) {
+    throw new Error('Summary model setup is already running. Cancel it before removing the model.');
+  }
+
+  return enqueueAiAddonAction(() => removeSummaryModel(getAiAddonRuntimeOptions({
+    modelId: options.modelId,
+  })));
+});
 
 /**
  * Get list of available audio devices

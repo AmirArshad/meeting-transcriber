@@ -30,8 +30,9 @@ const {
 } = require('./ai-addon-token-store');
 
 const AI_ADDON_PROGRESS_CHANNEL = 'ai-addon-progress';
-const DOWNLOAD_TIMEOUT_MS = 120000;
+const DOWNLOAD_TIMEOUT_MS = 300000;
 const MAX_DOWNLOAD_REDIRECTS = 5;
+const AI_ADDON_CANCEL_CODE = 'AI_ADDON_SETUP_CANCELLED';
 const DOWNLOAD_REDIRECT_HOSTS = new Set([
   'objects.githubusercontent.com',
   'release-assets.githubusercontent.com',
@@ -154,6 +155,30 @@ function getDiarizationDependencySitePackagesDir(userDataDir, artifact) {
 
 function getDiarizationDependencyMarkerPath(userDataDir, artifact) {
   return path.join(getDiarizationDependencyDir(userDataDir, artifact), 'install.json');
+}
+
+function cleanupStaleDiarizationDependencyDirs({ userDataDir, artifact, fsModule = fs } = {}) {
+  const dependencyRoot = getAiAddonPaths(userDataDir).diarizationDependencyCacheDir;
+  const currentDirName = safePathSegment(artifact && artifact.id);
+  const existsSync = bindFsMethod(fsModule, 'existsSync');
+  const readdirSync = bindFsMethod(fsModule, 'readdirSync');
+  const rmSync = bindFsMethod(fsModule, 'rmSync');
+  if (!dependencyRoot || !currentDirName || !existsSync || !readdirSync || !rmSync || !existsSync(dependencyRoot)) {
+    return;
+  }
+
+  for (const entry of readdirSync(dependencyRoot, { withFileTypes: true })) {
+    const entryName = String(entry.name || '');
+    if (!entryName || entryName === currentDirName) {
+      continue;
+    }
+
+    const entryPath = path.join(dependencyRoot, entryName);
+    const isDirectory = typeof entry.isDirectory === 'function' ? entry.isDirectory() : true;
+    if (isDirectory) {
+      rmSync(entryPath, { recursive: true, force: true });
+    }
+  }
 }
 
 function getSummaryArtifactPath(userDataDir, artifact) {
@@ -338,6 +363,15 @@ function createAiAddonProgressEvent(input = {}) {
   if (typeof input.status === 'string' && input.status.trim()) {
     event.status = input.status.trim();
   }
+  if (Number.isFinite(input.downloadedBytes) && input.downloadedBytes >= 0) {
+    event.downloadedBytes = Math.floor(input.downloadedBytes);
+  }
+  if (Number.isFinite(input.totalBytes) && input.totalBytes > 0) {
+    event.totalBytes = Math.floor(input.totalBytes);
+  }
+  if (event.totalBytes && event.downloadedBytes > event.totalBytes) {
+    event.downloadedBytes = event.totalBytes;
+  }
 
   for (const key of Object.keys(input)) {
     if (SENSITIVE_PROGRESS_KEY_SET.has(key)) {
@@ -352,6 +386,58 @@ function emitSafeProgress(emitProgress, payload) {
   if (typeof emitProgress === 'function') {
     emitProgress(createAiAddonProgressEvent(payload));
   }
+}
+
+function clampPercent(value) {
+  return Math.max(0, Math.min(100, Number(value) || 0));
+}
+
+function clampBytes(value, maxValue) {
+  const bytes = Math.max(0, Math.floor(Number(value) || 0));
+  const maxBytes = Math.max(0, Math.floor(Number(maxValue) || 0));
+  return maxBytes > 0 ? Math.min(bytes, maxBytes) : bytes;
+}
+
+function createAiAddonCancelError(message = 'AI add-on setup was canceled.') {
+  const error = new Error(message);
+  error.name = 'AbortError';
+  error.code = AI_ADDON_CANCEL_CODE;
+  return error;
+}
+
+function forceKillChildProcess(child) {
+  if (!child || child.killed) {
+    return;
+  }
+  try {
+    if (process.platform === 'win32' && child.pid) {
+      spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }).on('error', () => {});
+      return;
+    }
+    child.kill();
+  } catch (killError) {
+    // Best effort cleanup only.
+  }
+}
+
+function isAiAddonCancelError(error) {
+  return Boolean(error && (error.code === AI_ADDON_CANCEL_CODE || error.name === 'AbortError'));
+}
+
+function throwIfAiAddonCanceled(cancelSignal, message) {
+  if (cancelSignal && cancelSignal.aborted) {
+    throw createAiAddonCancelError(message);
+  }
+}
+
+function onAiAddonCancel(cancelSignal, callback) {
+  if (!cancelSignal || typeof cancelSignal.addEventListener !== 'function') {
+    return () => {};
+  }
+
+  const handleAbort = () => callback(createAiAddonCancelError());
+  cancelSignal.addEventListener('abort', handleAbort, { once: true });
+  return () => cancelSignal.removeEventListener('abort', handleAbort);
 }
 
 function isLikelyHuggingFaceToken(token) {
@@ -414,9 +500,7 @@ function buildSummaryStorageFootprint({ userDataDir, modelId, cache, runtimeCach
   const estimatedRuntimeBytes = Array.isArray(runtimeCache?.runtimeArtifact?.artifacts)
     ? runtimeCache.runtimeArtifact.artifacts.reduce((total, artifact) => total + (Number(artifact.sizeBytes) || 0), 0)
     : null;
-  const estimatedInstalledBytes = cache?.installed
-    ? (estimatedModelBytes || 0) + (runtimeCache?.installed ? estimatedRuntimeBytes || 0 : 0)
-    : null;
+  const estimatedInstalledBytes = (estimatedModelBytes || 0) + (estimatedRuntimeBytes || 0) || null;
 
   return {
     modelCacheDir,
@@ -918,10 +1002,34 @@ function summarizePipProgress(output) {
   return relevantLine || null;
 }
 
-function installDiarizationDependenciesWithPip({ pythonExe = 'python', artifact, targetDir, onProgress } = {}) {
+function installDiarizationDependenciesWithPip({ pythonExe = 'python', artifact, targetDir, onProgress, cancelSignal } = {}) {
   return new Promise((resolve, reject) => {
+    if (cancelSignal && cancelSignal.aborted) {
+      reject(createAiAddonCancelError('Speaker identification setup was canceled.'));
+      return;
+    }
+
     const child = spawn(pythonExe, buildDiarizationDependencyInstallArgs({ artifact, targetDir }), { windowsHide: true });
     let errorOutput = '';
+    let settled = false;
+
+    const cleanupCancel = onAiAddonCancel(cancelSignal, (cancelError) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      forceKillChildProcess(child);
+      reject(cancelError);
+    });
+
+    const finish = (callback, value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanupCancel();
+      callback(value);
+    };
 
     const handleOutput = (data) => {
       const text = data.toString();
@@ -934,16 +1042,33 @@ function installDiarizationDependenciesWithPip({ pythonExe = 'python', artifact,
 
     child.stdout.on('data', handleOutput);
     child.stderr.on('data', handleOutput);
-    child.on('error', reject);
+    child.on('error', (error) => finish(reject, error));
     child.on('close', (code) => {
       if (code === 0) {
-        resolve({ success: true });
+        finish(resolve, { success: true });
         return;
       }
       const reason = errorOutput.trim().split(/\r?\n/).filter(Boolean).slice(-1)[0];
-      reject(new Error(reason || `Speaker identification dependency install failed with code ${code}.`));
+      finish(reject, new Error(reason || `Speaker identification dependency install failed with code ${code}.`));
     });
   });
+}
+
+function estimatePipDownloadPercent(message) {
+  const text = String(message || '');
+  if (/^Collecting\b/.test(text)) {
+    return 12;
+  }
+  if (/^(Downloading|Using cached)\b/.test(text)) {
+    return 45;
+  }
+  if (/^(Installing|Building wheel)\b/.test(text)) {
+    return 70;
+  }
+  if (/^Successfully installed\b/.test(text)) {
+    return 82;
+  }
+  return 30;
 }
 
 async function installDiarizationDependencies({
@@ -956,16 +1081,13 @@ async function installDiarizationDependencies({
   emitProgress,
   pythonExe,
   dependencyInstaller = installDiarizationDependenciesWithPip,
+  cancelSignal,
 } = {}) {
+  throwIfAiAddonCanceled(cancelSignal, 'Speaker identification setup was canceled.');
   const artifact = getDiarizationDependencyArtifactForPlatform(platform, arch, catalog);
   const validationError = validateDiarizationDependencyArtifact(artifact);
   if (validationError) {
     throw new Error(validationError);
-  }
-
-  const existingCache = checkDiarizationDependencyCache({ userDataDir, platform, arch, fsModule, catalog });
-  if (existingCache.valid) {
-    return existingCache;
   }
 
   const dependencyDir = getDiarizationDependencyDir(userDataDir, artifact);
@@ -974,10 +1096,18 @@ async function installDiarizationDependencies({
   const mkdirSync = bindFsMethod(fsModule, 'mkdirSync');
   const rmSync = bindFsMethod(fsModule, 'rmSync');
   const unlinkSync = bindFsMethod(fsModule, 'unlinkSync');
+  const existsSync = bindFsMethod(fsModule, 'existsSync');
+  cleanupStaleDiarizationDependencyDirs({ userDataDir, artifact, fsModule });
+
+  const existingCache = checkDiarizationDependencyCache({ userDataDir, platform, arch, fsModule, catalog });
+  if (existingCache.valid) {
+    return existingCache;
+  }
+
   if (mkdirSync) {
     mkdirSync(dependencyDir, { recursive: true });
   }
-  if (unlinkSync && bindFsMethod(fsModule, 'existsSync')?.(markerPath)) {
+  if (unlinkSync && existsSync?.(markerPath)) {
     unlinkSync(markerPath);
   }
   if (rmSync) {
@@ -991,18 +1121,33 @@ async function installDiarizationDependencies({
     feature: 'diarization',
     phase: 'downloading-dependencies',
     message: 'Installing local speaker identification dependencies.',
+    percent: 5,
   });
 
-  await dependencyInstaller({
-    pythonExe,
-    artifact,
-    targetDir: sitePackagesDir,
-    onProgress: (message) => emitSafeProgress(emitProgress, {
-      feature: 'diarization',
-      phase: 'downloading-dependencies',
-      message,
-    }),
-  });
+  try {
+    await dependencyInstaller({
+      pythonExe,
+      artifact,
+      targetDir: sitePackagesDir,
+      cancelSignal,
+      onProgress: (message) => emitSafeProgress(emitProgress, {
+        feature: 'diarization',
+        phase: 'downloading-dependencies',
+        message,
+        percent: estimatePipDownloadPercent(message),
+      }),
+    });
+  } catch (error) {
+    if (rmSync) {
+      rmSync(sitePackagesDir, { recursive: true, force: true });
+    }
+    if (unlinkSync && existsSync?.(markerPath)) {
+      unlinkSync(markerPath);
+    }
+    throw error;
+  }
+
+  throwIfAiAddonCanceled(cancelSignal, 'Speaker identification setup was canceled.');
 
   writeFileAtomicSync(fsModule, markerPath, `${JSON.stringify({
     artifactId: artifact.id,
@@ -1030,11 +1175,14 @@ async function validateDiarizationSetup({
   emitProgress,
   runtimeValidator,
   existingToken,
+  cancelSignal,
 } = {}) {
+  throwIfAiAddonCanceled(cancelSignal, 'Speaker identification setup was canceled.');
   emitSafeProgress(emitProgress, {
     feature: 'diarization',
     phase: 'validating',
     message: 'Validating speaker identification setup.',
+    percent: 85,
   });
 
   const manifest = loadManifest({ userDataDir, fsModule, catalog });
@@ -1076,14 +1224,20 @@ async function validateDiarizationSetup({
         error = message;
       } else if (typeof runtimeValidator === 'function') {
         try {
-          await runtimeValidator({ modelId, modelRef: getDiarizationModelRef(modelId, catalog), token, dependencyCache });
+          await runtimeValidator({ modelId, modelRef: getDiarizationModelRef(modelId, catalog), token, dependencyCache, cancelSignal });
         } catch (runtimeError) {
+          if (isAiAddonCancelError(runtimeError)) {
+            throw runtimeError;
+          }
           status = 'error';
           message = runtimeError.message || 'Speaker identification runtime validation failed.';
           error = message;
         }
       }
     } catch (validationError) {
+      if (isAiAddonCancelError(validationError)) {
+        throw validationError;
+      }
       status = 'error';
       message = validationError.message && validationError.message.includes('decrypt')
         ? 'Stored Hugging Face token could not be decrypted.'
@@ -1112,6 +1266,7 @@ async function validateDiarizationSetup({
     status,
     message,
     modelId,
+    percent: status === 'ready' ? 100 : undefined,
   });
 
   return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
@@ -1132,11 +1287,14 @@ async function setupDiarizationAddon({
   runtimeValidator,
   pythonExe,
   dependencyInstaller,
+  cancelSignal,
 } = {}) {
+  throwIfAiAddonCanceled(cancelSignal, 'Speaker identification setup was canceled.');
   emitSafeProgress(emitProgress, {
     feature: 'diarization',
     phase: 'validating',
     message: 'Checking speaker identification setup.',
+    percent: 0,
   });
 
   const selectedModelId = resolveModelId('diarization', modelId, catalog);
@@ -1246,13 +1404,35 @@ async function setupDiarizationAddon({
     fsModule,
     catalog,
     updates: buildFeatureUpdates({
-      status: 'validating',
+      status: 'downloading',
       modelId: selectedModelId,
       speakerCount,
-      validation: createValidation('validating', 'Speaker identification setup validation started.', now),
+      validation: createValidation('downloading', 'Speaker identification dependency installation started.', now),
       error: null,
     }),
   });
+
+  const dependencyCacheBeforeInstall = checkDiarizationDependencyCache({ userDataDir, platform, arch, fsModule, catalog });
+  const cleanupDownloadedDiarizationDependencies = () => {
+    const artifact = getDiarizationDependencyArtifactForPlatform(platform, arch, catalog);
+    const unlinkSync = bindFsMethod(fsModule, 'unlinkSync');
+    const existsSync = bindFsMethod(fsModule, 'existsSync');
+    const markerPath = artifact ? getDiarizationDependencyMarkerPath(userDataDir, artifact) : null;
+    if (markerPath && unlinkSync && existsSync?.(markerPath)) {
+      try {
+        unlinkSync(markerPath);
+      } catch (cleanupError) {
+        // Best effort cleanup.
+      }
+    }
+    if (dependencyCacheBeforeInstall.valid) {
+      return;
+    }
+    const rmSync = bindFsMethod(fsModule, 'rmSync');
+    if (artifact && rmSync) {
+      rmSync(getDiarizationDependencyDir(userDataDir, artifact), { recursive: true, force: true });
+    }
+  };
 
   try {
     await installDiarizationDependencies({
@@ -1265,8 +1445,29 @@ async function setupDiarizationAddon({
       emitProgress,
       pythonExe,
       dependencyInstaller,
+      cancelSignal,
     });
   } catch (dependencyError) {
+    if (isAiAddonCancelError(dependencyError)) {
+      const message = 'Speaker identification setup was canceled. Partial downloads were removed.';
+      cleanupDownloadedDiarizationDependencies();
+      updateManifestFeature({
+        userDataDir,
+        feature: 'diarization',
+        fsModule,
+        catalog,
+        updates: buildFeatureUpdates({
+          status: 'notConfigured',
+          modelId: selectedModelId,
+          speakerCount,
+          validation: createValidation('notConfigured', message, now),
+          error: null,
+        }),
+      });
+      emitSafeProgress(emitProgress, { feature: 'diarization', phase: 'cancelled', status: 'notConfigured', message, modelId: selectedModelId, percent: 0 });
+      return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
+    }
+
     const message = dependencyError.message || 'Speaker identification dependency setup failed.';
     updateManifestFeature({
       userDataDir,
@@ -1298,18 +1499,44 @@ async function setupDiarizationAddon({
     }
   }
 
-  return validateDiarizationSetup({
-    userDataDir,
-    platform,
-    arch,
-    safeStorage,
-    fsModule,
-    catalog,
-    now,
-    emitProgress,
-    runtimeValidator,
-    existingToken: tokenForValidation,
-  });
+  try {
+    throwIfAiAddonCanceled(cancelSignal, 'Speaker identification setup was canceled.');
+    return await validateDiarizationSetup({
+      userDataDir,
+      platform,
+      arch,
+      safeStorage,
+      fsModule,
+      catalog,
+      now,
+      emitProgress,
+      runtimeValidator,
+      existingToken: tokenForValidation,
+      cancelSignal,
+    });
+  } catch (validationError) {
+    if (!isAiAddonCancelError(validationError)) {
+      throw validationError;
+    }
+
+    const message = 'Speaker identification setup was canceled. Partial downloads were removed.';
+    cleanupDownloadedDiarizationDependencies();
+    updateManifestFeature({
+      userDataDir,
+      feature: 'diarization',
+      fsModule,
+      catalog,
+      updates: buildFeatureUpdates({
+        status: 'notConfigured',
+        modelId: selectedModelId,
+        speakerCount,
+        validation: createValidation('notConfigured', message, now),
+        error: null,
+      }),
+    });
+    emitSafeProgress(emitProgress, { feature: 'diarization', phase: 'cancelled', status: 'notConfigured', message, modelId: selectedModelId, percent: 0 });
+    return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
+  }
 }
 
 async function removeDiarizationSetup({
@@ -1385,7 +1612,8 @@ function validatePinnedSummarySetup({ artifact, runtimeArtifact }) {
   return validateSummarySetupArtifact(artifact) || validateSummaryRuntimeArtifact(runtimeArtifact);
 }
 
-async function downloadFile({ url, destinationPath, expectedSizeBytes, onProgress, redirectCount = 0, timeoutMs = DOWNLOAD_TIMEOUT_MS }) {
+async function downloadFile({ url, destinationPath, expectedSizeBytes, onProgress, redirectCount = 0, timeoutMs = DOWNLOAD_TIMEOUT_MS, cancelSignal }) {
+  throwIfAiAddonCanceled(cancelSignal, 'Download was canceled.');
   const parsedUrl = new URL(url);
   const client = parsedUrl.protocol === 'https:' ? https : null;
   if (!client) {
@@ -1400,26 +1628,74 @@ async function downloadFile({ url, destinationPath, expectedSizeBytes, onProgres
 
   return new Promise((resolve, reject) => {
     let settled = false;
+    let request = null;
+    let file = null;
+    const removePartialFile = () => {
+      try {
+        if (destinationPath && fs.existsSync(destinationPath)) {
+          fs.unlinkSync(destinationPath);
+        }
+      } catch (cleanupError) {
+        // Best effort cleanup only.
+      }
+    };
+    const closeAndRemovePartialFile = (done = () => {}) => {
+      if (!file) {
+        removePartialFile();
+        done();
+        return;
+      }
+      let cleanupDone = false;
+      const finishCleanup = () => {
+        if (cleanupDone) {
+          return;
+        }
+        cleanupDone = true;
+        removePartialFile();
+        setTimeout(removePartialFile, 1000).unref?.();
+        done();
+      };
+      file.once('close', finishCleanup);
+      try {
+        file.destroy();
+      } catch (cleanupError) {
+        // Best effort cleanup only.
+      }
+      setTimeout(finishCleanup, 250).unref?.();
+    };
+    const cleanupCancel = onAiAddonCancel(cancelSignal, (cancelError) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanupCancel?.();
+      if (request) {
+        request.destroy(cancelError);
+      }
+      closeAndRemovePartialFile(() => reject(cancelError));
+    });
     const fail = (error) => {
       if (settled) {
         return;
       }
       settled = true;
-      reject(error);
+      cleanupCancel?.();
+      closeAndRemovePartialFile(() => reject(error));
     };
     const succeed = () => {
       if (settled) {
         return;
       }
       settled = true;
+      cleanupCancel?.();
       resolve();
     };
 
-    const request = client.get(parsedUrl, (response) => {
+    request = client.get(parsedUrl, (response) => {
       if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
         response.resume();
         const nextUrl = new URL(response.headers.location, parsedUrl).toString();
-        downloadFile({ url: nextUrl, destinationPath, expectedSizeBytes, onProgress, redirectCount: redirectCount + 1, timeoutMs }).then(succeed, fail);
+        downloadFile({ url: nextUrl, destinationPath, expectedSizeBytes, onProgress, redirectCount: redirectCount + 1, timeoutMs, cancelSignal }).then(succeed, fail);
         return;
       }
 
@@ -1430,13 +1706,12 @@ async function downloadFile({ url, destinationPath, expectedSizeBytes, onProgres
       }
 
       fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
-      const file = fs.createWriteStream(destinationPath);
-      const total = Number(response.headers['content-length']) || null;
+      file = fs.createWriteStream(destinationPath);
+      const total = Number(response.headers['content-length']) || Number(expectedSizeBytes) || null;
       let downloaded = 0;
 
       if (expectedSizeBytes && total && total > expectedSizeBytes * 1.1) {
         response.resume();
-        file.destroy();
         fail(new Error('Summary setup artifact is larger than the pinned expected size.'));
         return;
       }
@@ -1445,16 +1720,15 @@ async function downloadFile({ url, destinationPath, expectedSizeBytes, onProgres
         downloaded += chunk.length;
         if (expectedSizeBytes && downloaded > expectedSizeBytes * 1.1) {
           response.destroy(new Error('Summary setup artifact exceeded the pinned expected size.'));
-          file.destroy();
           return;
         }
         if (total && typeof onProgress === 'function') {
-          onProgress({ downloaded, total, percent: (downloaded / total) * 100 });
+          onProgress({ downloaded, total, percent: Math.min((downloaded / total) * 100, 100) });
         }
       });
 
-      response.on('error', fail);
-      file.on('error', fail);
+      response.on('error', (error) => fail(isAiAddonCancelError(error) ? error : new Error(`Summary setup artifact download stream failed: ${error.message}`)));
+      file.on('error', (error) => fail(isAiAddonCancelError(error) ? error : new Error(`Could not write summary setup artifact: ${error.message}`)));
       file.on('finish', () => file.close(succeed));
       response.pipe(file);
     });
@@ -1462,7 +1736,13 @@ async function downloadFile({ url, destinationPath, expectedSizeBytes, onProgres
     request.setTimeout(timeoutMs, () => {
       request.destroy(new Error('Summary setup artifact download timed out.'));
     });
-    request.on('error', fail);
+    request.on('error', (error) => {
+      if (isAiAddonCancelError(error)) {
+        fail(error);
+        return;
+      }
+      fail(new Error(`Summary setup artifact download failed from ${getDownloadHost(parsedUrl.toString())}: ${error.message}`));
+    });
   });
 }
 
@@ -1471,6 +1751,7 @@ function extractZipArchive(archivePath, destinationDir) {
     ? archivePath
     : new AdmZip(archivePath);
   const resolvedDestination = path.resolve(destinationDir);
+  fs.mkdirSync(resolvedDestination, { recursive: true });
   for (const entry of zip.getEntries()) {
     const entryName = String(entry.entryName || '').replace(/\\/g, '/');
     if (!entryName || path.isAbsolute(entryName)) {
@@ -1507,11 +1788,12 @@ async function extractRuntimeArchive(archivePath, destinationDir, archiveFormat)
     return;
   }
   if (archiveFormat === 'tar.gz') {
+    fs.mkdirSync(destinationDir, { recursive: true });
     await extractTarGzArchive(archivePath, destinationDir);
     return;
   }
 
-  throw new Error('Unsupported llama.cpp runtime archive format.');
+  throw new Error(`Unsupported llama.cpp runtime archive format: ${archiveFormat || 'unknown'}.`);
 }
 
 function finalizeInstalledRuntimeExecutable({ userDataDir, artifact, runtimeArtifact, fsModule = fs }) {
@@ -1542,7 +1824,9 @@ async function installSummaryRuntime({
   emitProgress,
   downloader = downloadFile,
   extractor = extractRuntimeArchive,
+  cancelSignal,
 } = {}) {
+  throwIfAiAddonCanceled(cancelSignal, 'Summary model setup was canceled.');
   const artifact = getSummaryArtifactForPlatform(modelId, platform, arch, catalog);
   const runtimeArtifact = getSummaryRuntimeArtifactForPlatform(platform, arch, catalog);
   const runtimeError = validateSummaryRuntimeArtifact(runtimeArtifact);
@@ -1561,12 +1845,13 @@ async function installSummaryRuntime({
   const mkdirSync = bindFsMethod(fsModule, 'mkdirSync');
   const unlinkSync = bindFsMethod(fsModule, 'unlinkSync');
   const rmSync = bindFsMethod(fsModule, 'rmSync');
+  const existsSync = bindFsMethod(fsModule, 'existsSync');
   if (mkdirSync) {
     mkdirSync(runtimeDir, { recursive: true });
     mkdirSync(archiveDir, { recursive: true });
   }
   const staleTopLevelExecutablePath = getSummaryRuntimeExecutablePath(userDataDir, artifact, runtimeArtifact);
-  if (unlinkSync && bindFsMethod(fsModule, 'existsSync')?.(staleTopLevelExecutablePath)) {
+  if (unlinkSync && existsSync?.(staleTopLevelExecutablePath)) {
     try {
       unlinkSync(staleTopLevelExecutablePath);
     } catch (cleanupError) {
@@ -1584,23 +1869,34 @@ async function installSummaryRuntime({
     const runtimeArchive = runtimeArtifact.artifacts[index];
     const archivePath = getSummaryRuntimeArchivePath(userDataDir, artifact, runtimeArchive);
     const tempPath = `${archivePath}.download`;
+    const totalRuntimeBytes = runtimeArtifact.artifacts.reduce((total, archive) => total + (Number(archive.sizeBytes) || 0), 0);
+    const completedRuntimeBytes = runtimeArtifact.artifacts
+      .slice(0, index)
+      .reduce((total, archive) => total + (Number(archive.sizeBytes) || 0), 0);
     emitSafeProgress(emitProgress, {
       feature: 'summary',
       phase: 'downloading-runtime',
       message: 'Downloading local summary runtime.',
       modelId,
-      percent: (index / runtimeArtifact.artifacts.length) * 100,
+      percent: clampPercent(totalRuntimeBytes ? (completedRuntimeBytes / totalRuntimeBytes) * 100 : (index / runtimeArtifact.artifacts.length) * 100),
+      downloadedBytes: clampBytes(completedRuntimeBytes, totalRuntimeBytes),
+      totalBytes: totalRuntimeBytes || undefined,
     });
     try {
       await downloader({
         url: runtimeArchive.downloadUrl,
         destinationPath: tempPath,
         expectedSizeBytes: runtimeArchive.sizeBytes,
+        cancelSignal,
         onProgress: (progress) => emitSafeProgress(emitProgress, {
           feature: 'summary',
           phase: 'downloading-runtime',
           message: 'Downloading local summary runtime.',
-          percent: ((index + (progress.percent || 0) / 100) / runtimeArtifact.artifacts.length) * 100,
+          percent: clampPercent(totalRuntimeBytes
+            ? ((completedRuntimeBytes + (progress.downloaded || 0)) / totalRuntimeBytes) * 100
+            : ((index + (progress.percent || 0) / 100) / runtimeArtifact.artifacts.length) * 100),
+          downloadedBytes: clampBytes(completedRuntimeBytes + (progress.downloaded || 0), totalRuntimeBytes || progress.total),
+          totalBytes: totalRuntimeBytes || progress.total,
           modelId,
         }),
       });
@@ -1615,24 +1911,64 @@ async function installSummaryRuntime({
       throw downloadError;
     }
 
+    try {
+      throwIfAiAddonCanceled(cancelSignal, 'Summary model setup was canceled.');
+    } catch (cancelError) {
+      if (unlinkSync) {
+        try {
+          unlinkSync(tempPath);
+        } catch (cleanupError) {
+          // Best effort cleanup only.
+        }
+      }
+      throw cancelError;
+    }
+
     const actualSha256 = await hashFileSha256(tempPath, fsModule);
     if (actualSha256 !== runtimeArchive.sha256) {
       if (unlinkSync) {
-        unlinkSync(tempPath);
+        try {
+          unlinkSync(tempPath);
+        } catch (cleanupError) {
+          // Best effort cleanup only.
+        }
       }
       throw new Error('Downloaded llama.cpp runtime checksum does not match the pinned checksum.');
     }
 
-    if (fsModule.renameSync) {
-      fsModule.renameSync(tempPath, archivePath);
+    if (!fsModule.renameSync) {
+      if (unlinkSync) {
+        try {
+          unlinkSync(tempPath);
+        } catch (cleanupError) {
+          // Best effort cleanup only.
+        }
+      }
+      throw new Error('File system does not support installing summary runtime archives.');
     }
+    fsModule.renameSync(tempPath, archivePath);
     emitSafeProgress(emitProgress, {
       feature: 'summary',
       phase: 'extracting-runtime',
       message: 'Installing local summary runtime.',
       modelId,
+      percent: 95,
     });
-    await extractor(archivePath, extractDir, runtimeArchive.archiveFormat);
+    try {
+      await extractor(archivePath, extractDir, runtimeArchive.archiveFormat);
+    } catch (extractError) {
+      if (rmSync) {
+        rmSync(extractDir, { recursive: true, force: true });
+      }
+      if (unlinkSync) {
+        try {
+          unlinkSync(archivePath);
+        } catch (cleanupError) {
+          // Best effort cleanup only.
+        }
+      }
+      throw extractError;
+    }
     if (unlinkSync) {
       try {
         unlinkSync(archivePath);
@@ -1664,13 +2000,16 @@ async function validateSummaryModel({
   now = () => new Date().toISOString(),
   emitProgress,
   runtimeValidator,
+  cancelSignal,
 } = {}) {
   const selectedModelId = resolveModelId('summary', modelId, catalog);
+  throwIfAiAddonCanceled(cancelSignal, 'Summary model setup was canceled.');
   emitSafeProgress(emitProgress, {
     feature: 'summary',
     phase: 'validating',
     message: 'Validating local summary model.',
     modelId: selectedModelId,
+    percent: 95,
   });
 
   const availability = getSummaryAvailability(platform, arch);
@@ -1704,10 +2043,13 @@ async function validateSummaryModel({
     status = 'notConfigured';
   } else if (cache.valid && runtimeCache.valid && typeof runtimeValidator === 'function') {
     try {
-      await runtimeValidator({ modelId: selectedModelId, cache, runtimeCache });
+      await runtimeValidator({ modelId: selectedModelId, cache, runtimeCache, cancelSignal });
     } catch (runtimeError) {
+      if (isAiAddonCancelError(runtimeError)) {
+        throw runtimeError;
+      }
       status = 'error';
-      message = runtimeError.message || 'llama.cpp runtime smoke validation failed.';
+      message = runtimeError.message || 'Local summary runtime validation failed.';
     }
   }
 
@@ -1732,6 +2074,7 @@ async function validateSummaryModel({
     status,
     message,
     modelId: selectedModelId,
+    percent: status === 'ready' ? 100 : undefined,
   });
 
   return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
@@ -1751,8 +2094,10 @@ async function setupSummaryModel({
   downloader = downloadFile,
   extractor = extractRuntimeArchive,
   runtimeValidator,
+  cancelSignal,
 } = {}) {
   const selectedModelId = resolveModelId('summary', modelId, catalog);
+  throwIfAiAddonCanceled(cancelSignal, 'Summary model setup was canceled.');
   const artifact = getSummaryArtifactForPlatform(selectedModelId, platform, arch, catalog);
   const runtimeArtifact = getSummaryRuntimeArtifactForPlatform(platform, arch, catalog);
   const availability = getSummaryAvailability(platform, arch);
@@ -1763,6 +2108,7 @@ async function setupSummaryModel({
     phase: 'downloading',
     message: 'Checking local summary setup artifact.',
     modelId: selectedModelId,
+    percent: 0,
   });
 
   if (artifactError) {
@@ -1787,14 +2133,81 @@ async function setupSummaryModel({
 
   const cache = await checkSummaryModelCache({ userDataDir, platform, arch, modelId: selectedModelId, fsModule, catalog, verifyChecksum: true });
   const runtimeCache = checkSummaryRuntimeCache({ userDataDir, platform, arch, modelId: selectedModelId, fsModule, catalog });
+  const hadValidModelBeforeSetup = cache.valid;
+  const hadValidRuntimeBeforeSetup = runtimeCache.valid;
+  const cleanupDownloadedSummaryArtifacts = ({ includeModel = !hadValidModelBeforeSetup, includeRuntime = !hadValidRuntimeBeforeSetup } = {}) => {
+    const rmSync = bindFsMethod(fsModule, 'rmSync');
+    const unlinkSync = bindFsMethod(fsModule, 'unlinkSync');
+    if (unlinkSync && artifact) {
+      try {
+        unlinkSync(`${getSummaryArtifactPath(userDataDir, artifact)}.download`);
+      } catch (cleanupError) {
+        // Best effort cleanup.
+      }
+    }
+    if (!rmSync) {
+      return;
+    }
+    if (includeRuntime) {
+      rmSync(getSummaryRuntimeDir(userDataDir, artifact), { recursive: true, force: true });
+    }
+    if (includeModel) {
+      rmSync(getSummaryModelCacheDir(userDataDir, selectedModelId), { recursive: true, force: true });
+    }
+  };
   if (cache.valid && runtimeCache.valid) {
-    return validateSummaryModel({ userDataDir, platform, arch, modelId: selectedModelId, profile, safeStorage, fsModule, catalog, now, emitProgress, runtimeValidator });
+    try {
+      return await validateSummaryModel({ userDataDir, platform, arch, modelId: selectedModelId, profile, safeStorage, fsModule, catalog, now, emitProgress, runtimeValidator, cancelSignal });
+    } catch (validationError) {
+      if (isAiAddonCancelError(validationError)) {
+        const message = 'Summary model setup was canceled. Existing local model and runtime were kept.';
+        cleanupDownloadedSummaryArtifacts({ includeModel: false, includeRuntime: false });
+        updateManifestFeature({
+          userDataDir,
+          feature: 'summary',
+          fsModule,
+          catalog,
+          updates: buildFeatureUpdates({
+            status: 'ready',
+            modelId: selectedModelId,
+            artifactId: artifact && artifact.artifactId,
+            profile,
+            validation: createValidation('ready', message, now),
+            error: null,
+          }),
+        });
+        emitSafeProgress(emitProgress, { feature: 'summary', phase: 'cancelled', status: 'ready', message, modelId: selectedModelId, percent: 100 });
+        return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
+      }
+      throw validationError;
+    }
   }
 
   if (!runtimeCache.valid) {
     try {
-      await installSummaryRuntime({ userDataDir, platform, arch, modelId: selectedModelId, fsModule, catalog, emitProgress, downloader, extractor });
+      await installSummaryRuntime({ userDataDir, platform, arch, modelId: selectedModelId, fsModule, catalog, emitProgress, downloader, extractor, cancelSignal });
     } catch (runtimeError) {
+      if (isAiAddonCancelError(runtimeError)) {
+        const message = 'Summary model setup was canceled. Partial downloads were removed.';
+        updateManifestFeature({
+          userDataDir,
+          feature: 'summary',
+          fsModule,
+          catalog,
+          updates: buildFeatureUpdates({
+            status: 'notConfigured',
+            modelId: selectedModelId,
+            artifactId: artifact && artifact.artifactId,
+            profile,
+            validation: createValidation('notConfigured', message, now),
+            error: null,
+          }),
+        });
+        cleanupDownloadedSummaryArtifacts({ includeModel: false, includeRuntime: !hadValidRuntimeBeforeSetup });
+        emitSafeProgress(emitProgress, { feature: 'summary', phase: 'cancelled', status: 'notConfigured', message, modelId: selectedModelId, percent: 0 });
+        return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
+      }
+
       const message = runtimeError.message || 'Local summary runtime setup failed.';
       updateManifestFeature({
         userDataDir,
@@ -1815,6 +2228,8 @@ async function setupSummaryModel({
     }
   }
 
+  const runtimeCacheAfterInstall = checkSummaryRuntimeCache({ userDataDir, platform, arch, modelId: selectedModelId, fsModule, catalog });
+
   if (!cache.valid) {
     const artifactPath = getSummaryArtifactPath(userDataDir, artifact);
     const tempPath = `${artifactPath}.download`;
@@ -1830,11 +2245,14 @@ async function setupSummaryModel({
         url: artifact.downloadUrl,
         destinationPath: tempPath,
         expectedSizeBytes: artifact.estimatedSizeBytes,
+        cancelSignal,
         onProgress: (progress) => emitSafeProgress(emitProgress, {
           feature: 'summary',
           phase: 'downloading',
           message: 'Downloading local summary setup artifact.',
           percent: progress.percent,
+          downloadedBytes: progress.downloaded,
+          totalBytes: progress.total || artifact.estimatedSizeBytes,
           modelId: selectedModelId,
         }),
       });
@@ -1845,6 +2263,26 @@ async function setupSummaryModel({
         } catch (cleanupError) {
           // Best effort cleanup only.
         }
+      }
+      if (isAiAddonCancelError(downloadError)) {
+        const message = 'Summary model setup was canceled. Partial downloads were removed.';
+        updateManifestFeature({
+          userDataDir,
+          feature: 'summary',
+          fsModule,
+          catalog,
+          updates: buildFeatureUpdates({
+            status: 'notConfigured',
+            modelId: selectedModelId,
+            artifactId: hadValidModelBeforeSetup ? artifact.artifactId : null,
+            profile,
+            validation: createValidation('notConfigured', message, now),
+            error: null,
+          }),
+        });
+        cleanupDownloadedSummaryArtifacts({ includeModel: !hadValidModelBeforeSetup, includeRuntime: !hadValidRuntimeBeforeSetup });
+        emitSafeProgress(emitProgress, { feature: 'summary', phase: 'cancelled', status: 'notConfigured', message, modelId: selectedModelId, percent: 0 });
+        return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
       }
       const message = downloadError.message || 'Local summary model download failed.';
       updateManifestFeature({
@@ -1861,14 +2299,49 @@ async function setupSummaryModel({
           error: message,
         }),
       });
+      cleanupDownloadedSummaryArtifacts({ includeModel: !hadValidModelBeforeSetup, includeRuntime: !hadValidRuntimeBeforeSetup });
       emitSafeProgress(emitProgress, { feature: 'summary', phase: 'error', status: 'error', message, modelId: selectedModelId });
+      return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
+    }
+
+    try {
+      throwIfAiAddonCanceled(cancelSignal, 'Summary model setup was canceled.');
+    } catch (cancelError) {
+      if (unlinkSync) {
+        try {
+          unlinkSync(tempPath);
+        } catch (cleanupError) {
+          // Best effort cleanup only.
+        }
+      }
+      const message = 'Summary model setup was canceled. Partial downloads were removed.';
+      updateManifestFeature({
+        userDataDir,
+        feature: 'summary',
+        fsModule,
+        catalog,
+        updates: buildFeatureUpdates({
+          status: 'notConfigured',
+          modelId: selectedModelId,
+          artifactId: hadValidModelBeforeSetup ? artifact.artifactId : null,
+          profile,
+          validation: createValidation('notConfigured', message, now),
+          error: null,
+        }),
+      });
+      cleanupDownloadedSummaryArtifacts({ includeModel: !hadValidModelBeforeSetup, includeRuntime: !hadValidRuntimeBeforeSetup });
+      emitSafeProgress(emitProgress, { feature: 'summary', phase: 'cancelled', status: 'notConfigured', message, modelId: selectedModelId, percent: 0 });
       return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
     }
 
     const actualSha256 = await hashFileSha256(tempPath, fsModule);
     if (actualSha256 !== artifact.sha256) {
       if (unlinkSync) {
-        unlinkSync(tempPath);
+        try {
+          unlinkSync(tempPath);
+        } catch (cleanupError) {
+          // Best effort cleanup only.
+        }
       }
       const message = 'Downloaded summary setup artifact checksum does not match the pinned checksum.';
       updateManifestFeature({
@@ -1885,6 +2358,7 @@ async function setupSummaryModel({
           error: message,
         }),
       });
+      cleanupDownloadedSummaryArtifacts({ includeModel: !hadValidModelBeforeSetup, includeRuntime: !hadValidRuntimeBeforeSetup });
       emitSafeProgress(emitProgress, { feature: 'summary', phase: 'error', status: 'error', message, modelId: selectedModelId });
       return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
     }
@@ -1895,7 +2369,42 @@ async function setupSummaryModel({
     renameSync(tempPath, artifactPath);
   }
 
-  return validateSummaryModel({ userDataDir, platform, arch, modelId: selectedModelId, profile, safeStorage, fsModule, catalog, now, emitProgress, runtimeValidator });
+  try {
+    const status = await validateSummaryModel({ userDataDir, platform, arch, modelId: selectedModelId, profile, safeStorage, fsModule, catalog, now, emitProgress, runtimeValidator, cancelSignal });
+    if (status.features.summary.status !== 'ready' && !hadValidRuntimeBeforeSetup && runtimeCacheAfterInstall.valid) {
+      const rmSync = bindFsMethod(fsModule, 'rmSync');
+      if (rmSync) {
+        rmSync(getSummaryRuntimeDir(userDataDir, artifact), { recursive: true, force: true });
+      }
+    }
+    return status;
+  } catch (validationError) {
+    if (isAiAddonCancelError(validationError)) {
+      const status = hadValidModelBeforeSetup && hadValidRuntimeBeforeSetup ? 'ready' : 'notConfigured';
+      const percent = status === 'ready' ? 100 : 0;
+      const message = hadValidModelBeforeSetup && hadValidRuntimeBeforeSetup
+        ? 'Summary model setup was canceled. Existing local model and runtime were kept.'
+        : 'Summary model setup was canceled. Partial downloads were removed.';
+      cleanupDownloadedSummaryArtifacts({ includeModel: status !== 'ready', includeRuntime: status !== 'ready' });
+      updateManifestFeature({
+        userDataDir,
+        feature: 'summary',
+        fsModule,
+        catalog,
+        updates: buildFeatureUpdates({
+          status,
+          modelId: selectedModelId,
+          artifactId: artifact && artifact.artifactId,
+          profile,
+          validation: createValidation(status, message, now),
+          error: null,
+        }),
+      });
+      emitSafeProgress(emitProgress, { feature: 'summary', phase: 'cancelled', status, message, modelId: selectedModelId, percent });
+      return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
+    }
+    throw validationError;
+  }
 }
 
 async function removeSummaryModel({
@@ -1948,12 +2457,14 @@ async function removeSummaryModel({
 
 module.exports = {
   AI_ADDON_PROGRESS_CHANNEL,
+  AI_ADDON_CANCEL_CODE,
   checkAiAddonSetupStatus,
   checkDiarizationDependencyCache,
   checkSummaryModelCache,
   checkSummaryRuntimeCache,
   buildDiarizationDependencyInstallArgs,
   createAiAddonProgressEvent,
+  downloadFile,
   extractZipArchive,
   getDiarizationTokenStatus,
   getDiarizationDependencySitePackagesDir,
@@ -1964,6 +2475,7 @@ module.exports = {
   getSummaryRuntimeDir,
   getSummaryRuntimeExecutablePath,
   isAllowedDownloadUrl,
+  isAiAddonCancelError,
   isLikelyHuggingFaceToken,
   installDiarizationDependencies,
   removeDiarizationSetup,

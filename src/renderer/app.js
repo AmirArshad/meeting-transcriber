@@ -63,6 +63,10 @@ let meetingSearchQuery = '';
 const cleanupFns = [];
 let aiAddonStatusRefreshPromise = null;
 let aiAddonStatusSnapshot = null;
+const aiAddonDownloadState = {
+  diarization: { active: false, cancelling: false, percent: 0, message: '' },
+  summary: { active: false, cancelling: false, percent: 0, message: '' },
+};
 
 function registerCleanup(cleanupFn) {
   if (typeof cleanupFn !== 'function') {
@@ -635,7 +639,9 @@ function setButtonBusy(button, busy, busyLabel = 'Working...') {
   }
 
   if (busy) {
-    button.dataset.originalLabel = button.textContent;
+    if (!button.dataset.originalLabel) {
+      button.dataset.originalLabel = button.textContent;
+    }
     button.textContent = busyLabel;
     button.disabled = true;
     button.classList.add('is-loading');
@@ -2603,6 +2609,14 @@ function setStatusBadge(badge, status) {
   }
 }
 
+function isAiAddonTerminalStatus(status) {
+  return status === 'ready'
+    || status === 'error'
+    || status === 'notConfigured'
+    || status === 'needsAccount'
+    || status === 'unsupported';
+}
+
 function formatBytes(bytes) {
   const value = Number(bytes) || 0;
   if (value <= 0) {
@@ -2619,6 +2633,136 @@ function formatBytes(bytes) {
 
   const precision = unitIndex >= 3 ? 1 : 0;
   return `${size.toFixed(precision)} ${units[unitIndex]}`;
+}
+
+function isAiAddonProgressPhase(progress) {
+  const phase = progress && progress.phase;
+  return phase === 'downloading'
+    || phase === 'downloading-runtime'
+    || phase === 'downloading-dependencies'
+    || phase === 'extracting-runtime'
+    || phase === 'validating';
+}
+
+function formatAiAddonProgressText(progress) {
+  const message = progress && progress.message ? progress.message : 'Working...';
+  const percent = Number.isFinite(progress && progress.percent)
+    ? Math.max(0, Math.min(100, progress.percent))
+    : null;
+  const downloaded = Number(progress && progress.downloadedBytes) || 0;
+  const total = Number(progress && progress.totalBytes) || 0;
+
+  if (downloaded > 0 && total > 0) {
+    return `${message} ${formatBytes(downloaded)} of ${formatBytes(total)} (${Math.round(percent || ((downloaded / total) * 100))}%)`;
+  }
+  if (percent !== null) {
+    return `${message} ${Math.round(percent)}%`;
+  }
+  return message;
+}
+
+function renderAiAddonProgress(feature) {
+  const state = aiAddonDownloadState[feature];
+  const progressEl = document.getElementById(`${feature}-progress`);
+  const progressBar = document.getElementById(`${feature}-progress-bar`);
+  const progressText = document.getElementById(`${feature}-progress-text`);
+  const cancelButton = document.getElementById(`cancel-${feature === 'summary' ? 'summary' : 'diarization'}-btn`);
+  const terminalMessage = /ready|failed|error|cancel|unsupported|token|not supported/i.test((state && state.message) || '');
+  const showCancel = Boolean(state && state.active && !(terminalMessage && !state.cancelling));
+  if (!state || !progressEl || !progressBar || !progressText) {
+    if (cancelButton) {
+      cancelButton.style.display = showCancel ? 'inline-flex' : 'none';
+      cancelButton.disabled = Boolean(state && state.cancelling);
+      cancelButton.toggleAttribute('aria-busy', Boolean(state && state.cancelling));
+    }
+    return;
+  }
+
+  progressEl.style.display = state.active ? 'block' : 'none';
+  progressEl.setAttribute('aria-busy', state.active && !state.cancelling ? 'true' : 'false');
+  progressBar.style.width = `${Math.max(0, Math.min(100, state.percent || 0))}%`;
+  progressText.textContent = state.cancelling ? 'Cancelling and cleaning up partial files...' : (state.message || 'Starting...');
+  if (cancelButton) {
+    cancelButton.style.display = showCancel ? 'inline-flex' : 'none';
+    cancelButton.disabled = Boolean(state.cancelling);
+    cancelButton.textContent = state.cancelling ? 'Cancelling...' : 'Cancel Download';
+    cancelButton.toggleAttribute('aria-busy', Boolean(state.cancelling));
+  }
+}
+
+function setAiAddonProgressState(feature, updates = {}) {
+  if (!aiAddonDownloadState[feature]) {
+    return;
+  }
+
+  aiAddonDownloadState[feature] = {
+    ...aiAddonDownloadState[feature],
+    ...updates,
+  };
+  renderAiAddonProgress(feature);
+}
+
+function hideAiAddonProgressSoon(feature, delayMs = 2500) {
+  setTimeout(() => {
+    const state = aiAddonDownloadState[feature];
+    if (state && !state.cancelling) {
+      setAiAddonProgressState(feature, { active: false, cancelling: false });
+    }
+  }, delayMs);
+}
+
+function handleAiAddonProgress(progress) {
+  if (!progress || (progress.feature !== 'summary' && progress.feature !== 'diarization')) {
+    return;
+  }
+
+  const percent = Number.isFinite(progress.percent)
+    ? progress.percent
+    : aiAddonDownloadState[progress.feature].percent;
+  const fallbackPercent = progress.phase === 'extracting-runtime' ? 90 : percent;
+  const isActive = isAiAddonProgressPhase(progress) && progress.status !== 'ready';
+  const isCancelled = progress.phase === 'cancelled';
+  const isTerminal = progress.status === 'ready'
+    || progress.status === 'error'
+    || isCancelled
+    || progress.phase === 'cancelled'
+    || progress.phase === 'unsupported'
+    || progress.phase === 'needsAccount';
+
+  if (isTerminal) {
+    const keepReadyProgress = progress.status === 'ready' && progress.phase !== 'cancelled';
+    const holdProgress = keepReadyProgress || progress.status === 'error';
+    let terminalPercent = aiAddonDownloadState[progress.feature].percent || 0;
+    if (keepReadyProgress) {
+      terminalPercent = 100;
+    } else if (progress.status === 'error') {
+      terminalPercent = Math.max(terminalPercent, 100);
+    } else if (isCancelled) {
+      terminalPercent = 0;
+    }
+    setAiAddonProgressState(progress.feature, {
+      active: holdProgress || isCancelled,
+      cancelling: false,
+      percent: terminalPercent,
+      message: progress.message || '',
+    });
+    if (holdProgress || isCancelled) {
+      hideAiAddonProgressSoon(progress.feature, progress.status === 'ready' ? 2500 : 5000);
+    }
+    if (progress.status !== 'ready') {
+      setTimeout(() => refreshAiAddonSettings(), 0);
+    }
+    return;
+  }
+
+  if (isActive) {
+    setAiAddonProgressState(progress.feature, {
+      active: true,
+      cancelling: false,
+      percent: Math.max(0, Math.min(100, fallbackPercent || 0)),
+      message: formatAiAddonProgressText(progress),
+    });
+  }
 }
 
 function renderFootprintRows(container, rows) {
@@ -2647,8 +2791,10 @@ function updateDiarizationFootprint(diarization) {
   const estimatedDownload = storage && storage.estimatedDownloadBytes;
   const installed = storage && storage.installedBytes;
   const estimatedInstalled = storage && storage.estimatedInstalledBytes;
+  const downloadState = aiAddonDownloadState.diarization;
   renderFootprintRows(document.getElementById('diarization-footprint'), [
     { label: 'Download', value: estimatedDownload ? `up to ${formatBytes(estimatedDownload)}` : 'depends on PyTorch CUDA wheels' },
+    { label: 'Progress', value: downloadState.active ? `${Math.round(downloadState.percent || 0)}%` : null },
     { label: 'Installed', value: installed ? formatBytes(installed) : (estimatedInstalled ? `about ${formatBytes(estimatedInstalled)}` : 'not installed') },
     { label: 'Runtime', value: 'PyTorch CUDA, isolated under user data' },
   ]);
@@ -2663,9 +2809,12 @@ function updateSummaryFootprint(summary) {
   const runtimeLabel = summary && summary.artifact && summary.artifact.acceleration === 'metal'
     ? 'llama.cpp Metal'
     : 'llama.cpp CUDA';
+  const downloadState = aiAddonDownloadState.summary;
   renderFootprintRows(document.getElementById('summary-footprint'), [
+    { label: 'Model', value: summary && summary.artifact && summary.artifact.label },
     { label: 'Model download', value: estimatedModel ? formatBytes(estimatedModel) : null },
     { label: 'Runtime download', value: estimatedRuntime ? formatBytes(estimatedRuntime) : null },
+    { label: 'Progress', value: downloadState.active ? `${Math.round(downloadState.percent || 0)}%` : null },
     { label: 'Installed', value: installed ? formatBytes(installed) : (estimatedInstalled ? `about ${formatBytes(estimatedInstalled)}` : 'not installed') },
     { label: 'Runtime', value: runtimeLabel },
   ]);
@@ -2725,9 +2874,14 @@ function updateAiAddonSettings(status) {
   const diarization = status && status.features && status.features.diarization;
   const summary = status && status.features && status.features.summary;
   const diarizationUnsupported = diarization && diarization.status === 'unsupported';
-  const overallStatus = (diarization && diarization.status === 'ready') || (summary && summary.status === 'ready')
-    ? 'ready'
-    : ((diarization && diarization.status === 'error') || (summary && summary.status === 'error') ? 'error' : 'notConfigured');
+  const hasActiveSetup = aiAddonDownloadState.diarization.active || aiAddonDownloadState.summary.active
+    || (diarization && (diarization.status === 'downloading' || diarization.status === 'validating'))
+    || (summary && (summary.status === 'downloading' || summary.status === 'validating'));
+  const overallStatus = hasActiveSetup
+    ? 'downloading'
+    : ((diarization && diarization.status === 'ready') || (summary && summary.status === 'ready')
+      ? 'ready'
+      : ((diarization && diarization.status === 'error') || (summary && summary.status === 'error') ? 'error' : 'notConfigured'));
 
   setStatusBadge(document.getElementById('ai-addons-status-badge'), overallStatus);
 
@@ -2759,6 +2913,9 @@ function updateAiAddonSettings(status) {
     if (statusText) {
       statusText.textContent = getDiarizationSetupMessage(diarization);
     }
+    if (!aiAddonDownloadState.diarization.active && isAiAddonTerminalStatus(diarization.status)) {
+      setAiAddonProgressState('diarization', { active: false, cancelling: false });
+    }
     updateDiarizationFootprint(diarization);
   }
 
@@ -2774,8 +2931,14 @@ function updateAiAddonSettings(status) {
     if (statusText) {
       statusText.textContent = getSummarySetupMessage(summary);
     }
+    if (!aiAddonDownloadState.summary.active && isAiAddonTerminalStatus(summary.status)) {
+      setAiAddonProgressState('summary', { active: false, cancelling: false });
+    }
     updateSummaryFootprint(summary);
   }
+
+  renderAiAddonProgress('diarization');
+  renderAiAddonProgress('summary');
 
   updateAiAddonFootprintWarning(status);
 }
@@ -2840,17 +3003,48 @@ async function withAiAddonAction(button, label, action) {
   }
 }
 
+async function withAiAddonSetupAction(feature, button, label, startMessage, action) {
+  setAiAddonControlsDisabled(true);
+  setButtonBusy(button, true, label);
+  try {
+    const status = await action();
+    if (status) {
+      aiAddonStatusSnapshot = status;
+      updateAiAddonSettings(status);
+      updateHomeAiAddonCTA(status);
+    } else {
+      await refreshAiAddonSettings();
+    }
+  } catch (error) {
+    console.error('AI add-on setup failed:', error);
+    addLog(`AI add-on setup failed: ${error.message}`, 'error');
+    appendAiAddonLog(`ERROR: ${error.message}`);
+    setAiAddonProgressState(feature, {
+      active: true,
+      cancelling: false,
+      percent: 100,
+      message: error.message || `${startMessage} failed.`,
+    });
+    hideAiAddonProgressSoon(feature, 5000);
+  } finally {
+    setButtonBusy(button, false);
+    setAiAddonControlsDisabled(false);
+  }
+}
+
 function setupAiAddonSettingsListeners() {
   const setupDiarizationBtn = document.getElementById('setup-diarization-btn');
+  const cancelDiarizationBtn = document.getElementById('cancel-diarization-btn');
   const validateDiarizationBtn = document.getElementById('validate-diarization-btn');
   const removeDiarizationBtn = document.getElementById('remove-diarization-btn');
   const setupSummaryBtn = document.getElementById('setup-summary-btn');
+  const cancelSummaryBtn = document.getElementById('cancel-summary-btn');
   const validateSummaryBtn = document.getElementById('validate-summary-btn');
   const removeSummaryBtn = document.getElementById('remove-summary-btn');
   const summaryProfileSelect = document.getElementById('summary-profile-select');
 
   if (setupDiarizationBtn) {
-    setupDiarizationBtn.addEventListener('click', () => withAiAddonAction(setupDiarizationBtn, 'Setting up...', async () => {
+    setupDiarizationBtn.addEventListener('click', () => withAiAddonSetupAction('diarization', setupDiarizationBtn, 'Setting up...', 'Speaker identification setup', async () => {
       const tokenInput = document.getElementById('diarization-token-input');
       const speakerCount = document.getElementById('diarization-speaker-count');
       const status = await window.electronAPI.setupDiarization({
@@ -2863,6 +3057,22 @@ function setupAiAddonSettingsListeners() {
       addLog('Speaker identification setup checked.');
       return status;
     }));
+  }
+
+  if (cancelDiarizationBtn) {
+    cancelDiarizationBtn.addEventListener('click', async () => {
+      setAiAddonProgressState('diarization', { cancelling: true, message: 'Cancelling and cleaning up partial files...' });
+      try {
+        const result = await window.electronAPI.cancelDiarizationSetup();
+        if (!result || !result.canceled) {
+          setAiAddonProgressState('diarization', { active: false, cancelling: false });
+        }
+      } catch (error) {
+        addLog(`Failed to cancel speaker identification setup: ${error.message}`, 'error');
+        appendAiAddonLog(`ERROR: ${error.message}`);
+        setAiAddonProgressState('diarization', { cancelling: false });
+      }
+    });
   }
 
   if (validateDiarizationBtn) {
@@ -2887,13 +3097,29 @@ function setupAiAddonSettingsListeners() {
   }
 
   if (setupSummaryBtn) {
-    setupSummaryBtn.addEventListener('click', () => withAiAddonAction(setupSummaryBtn, 'Installing...', async () => {
+    setupSummaryBtn.addEventListener('click', () => withAiAddonSetupAction('summary', setupSummaryBtn, 'Installing...', 'Summary model setup', async () => {
       const status = await window.electronAPI.setupSummaryModel({
         profile: summaryProfileSelect ? summaryProfileSelect.value : DEFAULT_SUMMARY_PROFILE,
       });
       addLog('Summary model setup checked.');
       return status;
     }));
+  }
+
+  if (cancelSummaryBtn) {
+    cancelSummaryBtn.addEventListener('click', async () => {
+      setAiAddonProgressState('summary', { cancelling: true, message: 'Cancelling and cleaning up partial files...' });
+      try {
+        const result = await window.electronAPI.cancelSummaryModelSetup();
+        if (!result || !result.canceled) {
+          setAiAddonProgressState('summary', { active: false, cancelling: false });
+        }
+      } catch (error) {
+        addLog(`Failed to cancel summary model setup: ${error.message}`, 'error');
+        appendAiAddonLog(`ERROR: ${error.message}`);
+        setAiAddonProgressState('summary', { cancelling: false });
+      }
+    });
   }
 
   if (validateSummaryBtn) {
@@ -2925,6 +3151,7 @@ function setupAiAddonSettingsListeners() {
 
   if (window.electronAPI.onAiAddonProgress) {
     registerCleanup(window.electronAPI.onAiAddonProgress((progress) => {
+      handleAiAddonProgress(progress);
       if (progress && progress.message) {
         appendAiAddonLog(progress.message);
         addLog(progress.message);

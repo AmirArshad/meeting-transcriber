@@ -1,6 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const fs = require('node:fs');
+const https = require('node:https');
+const { PassThrough } = require('node:stream');
 
 const {
   AI_ADDON_PROGRESS_CHANNEL,
@@ -10,6 +13,7 @@ const {
   checkSummaryModelCache,
   checkSummaryRuntimeCache,
   createAiAddonProgressEvent,
+  downloadFile,
   extractZipArchive,
   getSummaryArtifactPath,
   getSummaryRuntimeArchivePath,
@@ -132,10 +136,12 @@ function createMemoryFs() {
 
 function createMemoryZip(entries) {
   return {
+    extractedTo: null,
     getEntries() {
       return entries.map((entryName) => ({ entryName }));
     },
-    extractAllTo() {
+    extractAllTo(destination) {
+      this.extractedTo = destination;
       this.extracted = true;
     },
   };
@@ -271,6 +277,21 @@ test('progress events redact known sensitive fields and token-looking values', (
   assert.equal('token' in event, false);
 });
 
+test('progress events preserve bounded byte counters', () => {
+  const event = createAiAddonProgressEvent({
+    feature: 'summary',
+    phase: 'download',
+    message: 'Downloading',
+    percent: 25,
+    downloadedBytes: 600.9,
+    totalBytes: 500.1,
+  });
+
+  assert.equal(event.downloadedBytes, 500);
+  assert.equal(event.totalBytes, 500);
+  assert.equal(event.percent, 25);
+});
+
 test('download URL validation allows configured HTTPS hosts and expected redirects', () => {
   assert.equal(isAllowedDownloadUrl('https://github.com/ggml-org/llama.cpp/releases/download/b9173/runtime.zip'), true);
   assert.equal(isAllowedDownloadUrl('https://objects.githubusercontent.com/github-production-release-asset-2e65be/runtime.zip'), true);
@@ -287,6 +308,44 @@ test('download URL validation allows configured HTTPS hosts and expected redirec
   assert.equal(isAllowedDownloadUrl('https://example.test/model.gguf'), false);
 });
 
+test('downloadFile removes partial destination when request fails', async () => {
+  const destinationPath = path.join(__dirname, '..', 'tmp-partial-download.bin');
+  const originalGet = https.get;
+  try {
+    https.get = (_url, callback) => {
+      const response = new PassThrough();
+      response.statusCode = 200;
+      response.headers = { 'content-length': '12' };
+      process.nextTick(() => {
+        callback(response);
+        response.write(Buffer.from('partial'));
+        setImmediate(() => response.destroy(new Error('simulated socket failure')));
+      });
+      return {
+        setTimeout() {},
+        on() {},
+        destroy() {},
+      };
+    };
+    await assert.rejects(
+      () => downloadFile({
+        url: 'https://github.com/example/artifact.bin',
+        destinationPath,
+        timeoutMs: 1000,
+      }),
+      /stream failed|socket failure/i,
+    );
+    assert.equal(fs.existsSync(destinationPath), false);
+  } finally {
+    https.get = originalGet;
+    try {
+      fs.unlinkSync(destinationPath);
+    } catch (error) {
+      // Best effort cleanup.
+    }
+  }
+});
+
 test('zip extraction rejects unsafe archive entry names', () => {
   assert.throws(
     () => extractZipArchive(createMemoryZip(['bin/llama-cli.exe', '../escape.txt']), '/tmp/runtime'),
@@ -301,6 +360,20 @@ test('zip extraction rejects unsafe archive entry names', () => {
     /unsafe absolute path/,
   );
   assert.doesNotThrow(() => extractZipArchive(createMemoryZip(['bin/llama-cli.exe']), '/tmp/runtime'));
+});
+
+test('zip extraction creates missing destination directory', () => {
+  const destinationDir = path.join(__dirname, '..', 'tmp-runtime-extract');
+  const zip = createMemoryZip(['bin/llama-cli.exe']);
+  try {
+    fs.rmSync(destinationDir, { recursive: true, force: true });
+    extractZipArchive(zip, destinationDir);
+
+    assert.equal(fs.existsSync(destinationDir), true);
+    assert.equal(zip.extractedTo, path.resolve(destinationDir));
+  } finally {
+    fs.rmSync(destinationDir, { recursive: true, force: true });
+  }
 });
 
 test('check status includes token and summary cache state without exposing token values', async () => {
@@ -322,6 +395,7 @@ test('check status includes token and summary cache state without exposing token
   assert.equal(status.features.diarization.storage.installedBytes, null);
   assert.equal(status.features.summary.storage.installedBytes, null);
   assert.equal(status.features.summary.storage.installedBytesAccuracy, 'notScanned');
+  assert.ok(status.features.summary.storage.estimatedInstalledBytes > status.features.summary.storage.estimatedModelBytes);
   assert.equal(typeof status.footprint.totalInstalledBytes, 'number');
   assert.equal(JSON.stringify(status).includes('hf_secret'), false);
 });
@@ -449,6 +523,7 @@ test('diarization dependency installer builds pinned pip target args', () => {
 
 test('pip progress summarizer returns non-sensitive install milestones', () => {
   assert.equal(summarizePipProgress('Collecting pyannote.audio==4.0.1\n'), 'Collecting pyannote.audio==4.0.1');
+  assert.equal(summarizePipProgress('Downloading torch-2.8.0.whl\n'), 'Downloading torch-2.8.0.whl');
   assert.equal(summarizePipProgress('WARNING only\n'), null);
 });
 
@@ -517,6 +592,28 @@ test('setup diarization reports dependency install failures before token validat
   assert.equal(status.features.diarization.status, 'error');
   assert.match(status.features.diarization.error, /julius source build failed/);
   assert.equal(status.features.diarization.setupComplete, false);
+});
+
+test('setup diarization cancellation cleans managed dependencies', async () => {
+  const fsModule = createMemoryFs();
+  const controller = new AbortController();
+  const status = await setupDiarizationAddon({
+    userDataDir: '/tmp/AvaNevis',
+    platform: 'win32',
+    arch: 'x64',
+    token: 'hf_validtoken123',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    cancelSignal: controller.signal,
+    dependencyInstaller: async ({ targetDir }) => {
+      fsModule.writeFileSync(path.join(targetDir, 'partial.txt'), 'partial');
+      controller.abort();
+    },
+  });
+
+  assert.equal(status.features.diarization.status, 'notConfigured');
+  assert.equal(status.features.diarization.error, null);
+  assert.ok(fsModule.removed.some((targetPath) => targetPath.includes(path.join('dependencies', 'diarization'))));
 });
 
 test('setup diarization requires token before installing dependencies', async () => {
@@ -695,6 +792,29 @@ test('remove diarization setup deletes token and managed cache reference', async
   assert.equal(status.features.diarization.tokenStatus.hasToken, false);
   assert.ok(fsModule.removed.some((targetPath) => targetPath.includes(path.join('models', 'diarization'))));
   assert.ok(fsModule.removed.some((targetPath) => targetPath.includes(path.join('dependencies', 'diarization'))));
+});
+
+test('diarization setup removes stale dependency artifact directories', async () => {
+  const fsModule = createMemoryFs();
+  const userDataDir = '/tmp/AvaNevis';
+  const artifact = getDiarizationDependencyArtifactForPlatform('win32', 'x64');
+  const staleDependencyDir = path.join(userDataDir, 'ai-addons', 'dependencies', 'diarization', 'old-pyannote-artifact');
+  const currentDependencyDir = path.join(userDataDir, 'ai-addons', 'dependencies', 'diarization', artifact.id);
+  fsModule.mkdirSync(staleDependencyDir);
+  fsModule.writeFileSync(path.join(staleDependencyDir, 'old.whl'), 'stale');
+
+  await setupDiarizationAddon({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    token: 'hf_validtoken123',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    dependencyInstaller: stubDiarizationDependencyInstaller,
+  });
+
+  assert.ok(fsModule.removed.includes(staleDependencyDir));
+  assert.equal(fsModule.existsSync(currentDependencyDir), true);
 });
 
 test('summary cache validation accepts pinned catalog artifact checksums', async () => {
@@ -941,6 +1061,107 @@ test('setup summary model records downloader failures and removes temp model dow
   assert.equal(status.features.summary.status, 'error');
   assert.match(status.features.summary.error, /network timeout/);
   assert.equal(fsModule.existsSync(tempModelPath), false);
+});
+
+test('setup summary model cancellation cleans partial cache and resets state', async () => {
+  const fsModule = createMemoryFs();
+  const catalog = createCatalogWithPinnedSummaryArtifact({
+    sha256: 'a0700a1b17cb3f2328437cbc70a3ac543fab2c1e7d1d8014862d801e1eb11162',
+  });
+  const artifact = getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog);
+  const controller = new AbortController();
+
+  const status = await setupSummaryModel({
+    userDataDir: '/tmp/AvaNevis',
+    platform: 'win32',
+    arch: 'x64',
+    modelId: 'summary-model',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog,
+    cancelSignal: controller.signal,
+    downloader: async ({ url, destinationPath }) => {
+      fsModule.writeFileSync(destinationPath, url.endsWith('/runtime.zip') ? 'runtime archive\n' : 'partial model');
+      if (!url.endsWith('/runtime.zip')) {
+        controller.abort();
+      }
+    },
+    extractor: async () => fsModule.writeFileSync(
+      path.join(getSummaryRuntimeDir('/tmp/AvaNevis', artifact), 'extract', 'llama-cli.exe'),
+      'bin',
+    ),
+  });
+
+  assert.equal(status.features.summary.status, 'notConfigured');
+  assert.equal(status.features.summary.error, null);
+  assert.equal(fsModule.existsSync(getSummaryArtifactPath('/tmp/AvaNevis', artifact)), false);
+  assert.ok(fsModule.removed.includes(getSummaryRuntimeDir('/tmp/AvaNevis', artifact)));
+});
+
+test('summary validation failure removes runtime installed during failed setup', async () => {
+  const fsModule = createMemoryFs();
+  const catalog = createCatalogWithPinnedSummaryArtifact({
+    sha256: 'a0700a1b17cb3f2328437cbc70a3ac543fab2c1e7d1d8014862d801e1eb11162',
+  });
+  const artifact = getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog);
+  const runtimeDir = getSummaryRuntimeDir('/tmp/AvaNevis', artifact);
+
+  const status = await setupSummaryModel({
+    userDataDir: '/tmp/AvaNevis',
+    platform: 'win32',
+    arch: 'x64',
+    modelId: 'summary-model',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog,
+    downloader: async ({ url, destinationPath }) => fsModule.writeFileSync(destinationPath, url.endsWith('/runtime.zip') ? 'runtime archive\n' : 'checksum target\n'),
+    extractor: async () => fsModule.writeFileSync(path.join(runtimeDir, 'extract', 'llama-cli.exe'), 'bin'),
+    runtimeValidator: async () => {
+      throw new Error('missing CUDA DLL');
+    },
+  });
+
+  assert.equal(status.features.summary.status, 'error');
+  assert.match(status.features.summary.error, /missing CUDA DLL/);
+  assert.ok(fsModule.removed.includes(runtimeDir));
+});
+
+test('summary cancellation during validation preserves pre-existing ready cache', async () => {
+  const fsModule = createMemoryFs();
+  const catalog = createCatalogWithPinnedSummaryArtifact({
+    sha256: 'a0700a1b17cb3f2328437cbc70a3ac543fab2c1e7d1d8014862d801e1eb11162',
+  });
+  const artifact = getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog);
+  const artifactPath = getSummaryArtifactPath('/tmp/AvaNevis', artifact);
+  const runtimeExecutable = path.join(getSummaryRuntimeDir('/tmp/AvaNevis', artifact), 'extract', 'llama-cli.exe');
+  fsModule.mkdirSync(path.dirname(artifactPath));
+  fsModule.mkdirSync(path.dirname(runtimeExecutable));
+  fsModule.writeFileSync(artifactPath, 'checksum target\n');
+  fsModule.writeFileSync(runtimeExecutable, 'bin');
+  const controller = new AbortController();
+
+  const status = await setupSummaryModel({
+    userDataDir: '/tmp/AvaNevis',
+    platform: 'win32',
+    arch: 'x64',
+    modelId: 'summary-model',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog,
+    cancelSignal: controller.signal,
+    runtimeValidator: async () => {
+      controller.abort();
+      const error = new Error('aborted');
+      error.name = 'AbortError';
+      throw error;
+    },
+  });
+
+  assert.equal(status.features.summary.status, 'ready');
+  assert.equal(fsModule.existsSync(artifactPath), true);
+  assert.equal(fsModule.existsSync(runtimeExecutable), true);
+  assert.equal(fsModule.removed.length, 0);
+  assert.match(status.features.summary.lastValidation.message, /Existing local model and runtime were kept/);
 });
 
 test('remove summary model clears cache and manifest state', async () => {

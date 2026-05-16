@@ -8,6 +8,7 @@ future generation runner will use.
 from __future__ import annotations
 
 import platform as platform_module
+import re
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -138,6 +139,32 @@ def build_llama_smoke_test_args(runtime: Dict[str, Any], *, prompt_path: str) ->
     return [*args, "--seed", "1"]
 
 
+def sanitize_runtime_error_line(line: str, runtime: Optional[Dict[str, Any]] = None) -> str:
+    cleaned = str(line or "")
+    if runtime:
+        for label, value in (("<model>", runtime.get("modelPath")), ("<llama-cli>", runtime.get("executable"))):
+            if value:
+                cleaned = cleaned.replace(str(value), label)
+        executable = runtime.get("executable")
+        if executable:
+            cleaned = cleaned.replace(str(Path(str(executable)).parent), "<runtime>")
+        model_path = runtime.get("modelPath")
+        if model_path:
+            cleaned = cleaned.replace(str(Path(str(model_path)).parent), "<model-dir>")
+    cleaned = re.sub(r"(?<!\w)(?:[A-Za-z]:)?[/\\][^\s'\"]+", "<path>", cleaned)
+    return re.sub(r"\s+", " ", cleaned).strip()[:240]
+
+
+def summarize_llama_failure(result: subprocess.CompletedProcess[str], runtime: Optional[Dict[str, Any]] = None) -> str:
+    combined = f"{result.stderr or ''}\n{result.stdout or ''}"
+    lines = [line.strip() for line in combined.splitlines() if line.strip()]
+    for line in reversed(lines):
+        lower = line.lower()
+        if any(token in lower for token in ("error", "failed", "not found", "no such file", "cuda", "metal")):
+            return sanitize_runtime_error_line(line, runtime)
+    return sanitize_runtime_error_line(lines[-1], runtime) if lines else "llama.cpp exited without output."
+
+
 def run_llama_prompt(
     runtime: Dict[str, Any],
     *,
@@ -183,9 +210,9 @@ def smoke_test_llama_runtime(runtime: Dict[str, Any], *, timeout_seconds: int = 
             prompt_path.unlink()
         except OSError:
             pass
-    combined = f"{result.stdout}\n{result.stderr}".lower()
     if result.returncode != 0 or not result.stdout.strip():
-        raise SummaryRuntimeError("llama.cpp runtime smoke validation failed.")
+        detail = summarize_llama_failure(result, runtime)
+        raise SummaryRuntimeError(f"Local summary runtime validation failed: {detail}")
 
 
 def build_summary_progress_event(

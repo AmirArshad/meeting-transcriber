@@ -5,6 +5,7 @@ import pytest
 from backend.summaries.llama_runtime import (
     SummaryRuntimeError,
     build_llama_cli_args,
+    build_llama_smoke_test_args,
     build_summary_progress_event,
     default_llama_executable_name,
     get_platform_acceleration,
@@ -98,6 +99,17 @@ def test_build_llama_cli_args_uses_json_prompt_file(tmp_path):
     assert '--no-display-prompt' in args
 
 
+def test_smoke_args_use_pinned_runtime_compatible_flags(tmp_path):
+    runtime = {
+        'executable': str(tmp_path / 'llama-cli'),
+        'modelPath': str(tmp_path / 'model.gguf'),
+    }
+    args = build_llama_smoke_test_args(runtime, prompt_path=str(tmp_path / 'prompt.txt'))
+
+    assert '--seed' in args
+    assert '--no-mmap' not in args
+
+
 def test_smoke_test_llama_runtime_loads_model_with_tiny_prompt(monkeypatch, tmp_path):
     calls = []
 
@@ -168,8 +180,25 @@ def test_smoke_test_llama_runtime_rejects_failed_help(monkeypatch, tmp_path):
     model_path = tmp_path / 'model.gguf'
     model_path.write_text('model', encoding='utf-8')
 
-    with pytest.raises(SummaryRuntimeError, match='smoke validation failed'):
+    with pytest.raises(SummaryRuntimeError, match='Local summary runtime validation failed: missing dll'):
         smoke_test_llama_runtime({'executable': str(tmp_path / 'llama-cli'), 'modelPath': str(model_path)})
+
+
+def test_smoke_test_llama_runtime_redacts_paths(monkeypatch, tmp_path):
+    class Result:
+        returncode = 1
+        stdout = ''
+        stderr = f"error: failed to open {tmp_path / 'model.gguf'}"
+
+    monkeypatch.setattr('backend.summaries.llama_runtime.subprocess.run', lambda *args, **kwargs: Result())
+    model_path = tmp_path / 'model.gguf'
+    model_path.write_text('model', encoding='utf-8')
+
+    with pytest.raises(SummaryRuntimeError) as excinfo:
+        smoke_test_llama_runtime({'executable': str(tmp_path / 'runtime' / 'llama-cli'), 'modelPath': str(model_path)})
+
+    assert str(tmp_path) not in str(excinfo.value)
+    assert '<model>' in str(excinfo.value) or '<path>' in str(excinfo.value)
 
 
 def test_build_summary_progress_event_never_includes_prompt_text():

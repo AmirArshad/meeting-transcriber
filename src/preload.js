@@ -117,9 +117,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getDiarizationTokenStatus: () => ipcRenderer.invoke('get-diarization-token-status'),
   deleteDiarizationToken: () => ipcRenderer.invoke('delete-diarization-token'),
   setupDiarization: (options) => ipcRenderer.invoke('setup-diarization', options),
+  cancelDiarizationSetup: () => ipcRenderer.invoke('cancel-diarization-setup'),
   validateDiarizationSetup: () => ipcRenderer.invoke('validate-diarization-setup'),
   removeDiarizationSetup: () => ipcRenderer.invoke('remove-diarization-setup'),
   setupSummaryModel: (options) => ipcRenderer.invoke('setup-summary-model', options),
+  cancelSummaryModelSetup: () => ipcRenderer.invoke('cancel-summary-model-setup'),
   validateSummaryModel: (options) => ipcRenderer.invoke('validate-summary-model', options),
   removeSummaryModel: (options) => ipcRenderer.invoke('remove-summary-model', options),
 
