@@ -352,7 +352,14 @@ function parseRecorderMessageLine(line) {
       return { kind: 'event', payload: parsed };
     }
 
-    if (parsed.type === 'status' || parsed.type === 'ready' || parsed.type === 'progress') {
+    if (
+      parsed.type === 'status' ||
+      parsed.type === 'ready' ||
+      parsed.type === 'progress' ||
+      parsed.type === 'content_info' ||
+      parsed.type === 'stream_config' ||
+      parsed.type === 'audio_format'
+    ) {
       return { kind: 'status', payload: parsed };
     }
 
@@ -378,6 +385,23 @@ function parseRecorderStdoutChunk(output, pendingBuffer = '') {
   }
 
   return { messages, remainder };
+}
+
+function findRecorderResultPayload(stdoutData) {
+  const lines = String(stdoutData || '').split(/\r?\n/).filter((line) => line.trim());
+
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    try {
+      const parsed = JSON.parse(lines[index]);
+      if (parsed && typeof parsed === 'object' && (parsed.outputPath || parsed.audioPath)) {
+        return parsed;
+      }
+    } catch (error) {
+      // Ignore progress text and malformed partial lines.
+    }
+  }
+
+  return null;
 }
 
 function getRecorderEventAction(eventPayload = {}) {
@@ -794,6 +818,7 @@ module.exports = {
   getQuitInterceptState,
   getRecorderCloseAction,
   getRecorderEventAction,
+  findRecorderResultPayload,
   getMacMLXModelStorageDirs,
   getTranscriberModule,
   getModelDownloadCacheDir,

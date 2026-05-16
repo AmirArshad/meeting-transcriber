@@ -232,6 +232,11 @@ def main():
     """
     parser = argparse.ArgumentParser(description="Check macOS recording permissions")
     parser.add_argument("--mic-device-id", type=int, default=None, help="Selected microphone device ID to open-test")
+    parser.add_argument(
+        "--skip-screen-recording-check",
+        action="store_true",
+        help="Skip the proactive Screen Recording check and let the recorder surface runtime ScreenCaptureKit errors.",
+    )
     args = parser.parse_args()
 
     if platform.system() != 'Darwin':
@@ -263,6 +268,9 @@ def main():
     if not version_compatible:
         screen_granted = False
         screen_error = version_warning
+    elif args.skip_screen_recording_check:
+        screen_granted = True
+        screen_error = ""
     elif desktop_available:
         screen_granted, screen_error = check_screen_recording_permission()
     else:

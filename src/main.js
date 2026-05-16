@@ -7,7 +7,7 @@
  * - Handles application lifecycle
  */
 
-const { app, BrowserWindow, ipcMain, Tray, Menu, dialog, powerSaveBlocker, shell, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, dialog, powerSaveBlocker, shell } = require('electron');
 const path = require('path');
 const { pathToFileURL } = require('url');
 const { spawn, execFile } = require('child_process');
@@ -29,6 +29,7 @@ const {
   getRecorderCloseAction,
   getRecorderEventAction,
   getRecordingStopTimeout,
+  findRecorderResultPayload,
   resolveStopTimeoutAction,
   isModelDownloadErrorOutput,
   isSafeRecordingsAudioPath,
@@ -66,6 +67,7 @@ const {
   deleteAiAddonToken,
   getAiAddonToken,
   hasAiAddonToken,
+  isTokenEncryptionAvailable,
   storeAiAddonToken,
 } = require('./ai-addon-token-store');
 
@@ -87,6 +89,12 @@ let stopCommandSent = false;
 let quitWorkflowPromise = null;
 let allowImmediateQuit = false;
 let pendingUpdateInfo = null;
+
+function getSafeStorage() {
+  // On macOS, Electron safeStorage can prompt Keychain access. Keep this lazy
+  // so passive startup/status checks never touch Keychain.
+  return require('electron').safeStorage;
+}
 
 function firstExistingPath(paths) {
   return paths.find((candidate) => fs.existsSync(candidate)) || null;
@@ -153,12 +161,9 @@ function resetStopWorkflowState() {
 }
 
 function parseRecordingStopResult(stdoutData) {
-  const trimmedOutput = stdoutData.trim();
+  const recordingInfo = findRecorderResultPayload(stdoutData);
 
-  if (trimmedOutput) {
-    const lines = trimmedOutput.split('\n');
-    const jsonLine = lines[lines.length - 1];
-    const recordingInfo = JSON.parse(jsonLine);
+  if (recordingInfo) {
     const filePath = recordingInfo.audioPath || recordingInfo.outputPath;
 
     if (filePath && fs.existsSync(filePath)) {
@@ -166,6 +171,7 @@ function parseRecordingStopResult(stdoutData) {
         success: true,
         audioPath: filePath,
         duration: recordingInfo.duration,
+        desktopDiagnostics: recordingInfo.desktopDiagnostics,
       };
     }
 
@@ -1395,8 +1401,8 @@ function getMacOSPermissionStatus(micId = null) {
     let settled = false;
     let timeoutHandle = null;
     const args = Number.isInteger(micId)
-      ? getBackendModuleArgs('check_permissions', ['--mic-device-id', String(micId)])
-      : getBackendModuleArgs('check_permissions');
+      ? getBackendModuleArgs('check_permissions', ['--mic-device-id', String(micId), '--skip-screen-recording-check'])
+      : getBackendModuleArgs('check_permissions', ['--skip-screen-recording-check']);
 
     const proc = spawnTrackedPython(args, {
       cwd: pythonConfig.backendPath,
@@ -1920,11 +1926,11 @@ function validateAiMetadataPaths(updates = {}) {
   return validated;
 }
 
-function validateDiarizationRuntime({ modelRef }) {
-  const token = getAiAddonToken({
+function validateDiarizationRuntime({ modelRef, token }) {
+  const resolvedToken = token || getAiAddonToken({
     userDataDir: app.getPath('userData'),
     tokenKey: TOKEN_KEYS.diarizationHuggingFace,
-    safeStorage,
+    safeStorage: getSafeStorage(),
   });
 
   return new Promise((resolve, reject) => {
@@ -1933,8 +1939,8 @@ function validateDiarizationRuntime({ modelRef }) {
       env: {
         ...getDiarizationDependencyEnv(),
         ...getDiarizationCacheEnv(),
-        HF_TOKEN: token || '',
-        HUGGINGFACE_HUB_TOKEN: token || '',
+        HF_TOKEN: resolvedToken || '',
+        HUGGINGFACE_HUB_TOKEN: resolvedToken || '',
       },
     });
 
@@ -2006,29 +2012,35 @@ function validateSummaryRuntimeSmoke({ modelId, cache }) {
 }
 
 function getAiAddonRuntimeOptions(extra = {}) {
-  return {
+  const options = {
     userDataDir: app.getPath('userData'),
     platform: process.platform,
     arch: process.arch,
-    safeStorage,
     emitProgress: emitAiAddonProgress,
     ...extra,
   };
+
+  if (extra.includeSafeStorage) {
+    options.safeStorage = getSafeStorage();
+    delete options.includeSafeStorage;
+  }
+
+  return options;
 }
 
 ipcMain.handle('get-ai-addon-status', async () => checkAiAddonSetupStatus({
   userDataDir: app.getPath('userData'),
   platform: process.platform,
   arch: process.arch,
-  safeStorage,
   includeStorageSizes: true,
+  checkTokenEncryption: false,
 }));
 
 ipcMain.handle('store-diarization-token', async (event, token) => storeAiAddonToken({
   userDataDir: app.getPath('userData'),
   tokenKey: TOKEN_KEYS.diarizationHuggingFace,
   token,
-  safeStorage,
+  safeStorage: getSafeStorage(),
 }));
 
 ipcMain.handle('get-diarization-token-status', async () => ({
@@ -2036,7 +2048,7 @@ ipcMain.handle('get-diarization-token-status', async () => ({
     userDataDir: app.getPath('userData'),
     tokenKey: TOKEN_KEYS.diarizationHuggingFace,
   }),
-  encryptionAvailable: safeStorage.isEncryptionAvailable(),
+  encryptionAvailable: isTokenEncryptionAvailable({ safeStorage: getSafeStorage() }),
 }));
 
 ipcMain.handle('delete-diarization-token', async () => deleteAiAddonToken({
@@ -2045,6 +2057,7 @@ ipcMain.handle('delete-diarization-token', async () => deleteAiAddonToken({
 }));
 
 ipcMain.handle('setup-diarization', async (event, options = {}) => enqueueAiAddonAction(() => setupDiarizationAddon(getAiAddonRuntimeOptions({
+  includeSafeStorage: true,
   modelId: options.modelId,
   speakerCount: options.speakerCount,
   token: options.token,
@@ -2053,6 +2066,7 @@ ipcMain.handle('setup-diarization', async (event, options = {}) => enqueueAiAddo
 }))));
 
 ipcMain.handle('validate-diarization-setup', async () => enqueueAiAddonAction(() => validateDiarizationSetup(getAiAddonRuntimeOptions({
+  includeSafeStorage: true,
   runtimeValidator: validateDiarizationRuntime,
 }))));
 
@@ -2677,7 +2691,7 @@ ipcMain.handle('diarize-transcript', async (event, options = {}) => {
   const token = getAiAddonToken({
     userDataDir: app.getPath('userData'),
     tokenKey: TOKEN_KEYS.diarizationHuggingFace,
-    safeStorage,
+    safeStorage: getSafeStorage(),
   });
 
   return enqueueAiComputeAction(() => new Promise((resolve, reject) => {

@@ -8,6 +8,7 @@ const {
   getAiAddonToken,
   getTokenPath,
   hasAiAddonToken,
+  isTokenEncryptionAvailable,
   storeAiAddonToken,
 } = require('../../src/ai-addon-token-store');
 
@@ -81,6 +82,21 @@ test('does not store tokens when encryption is unavailable', () => {
     /Secure token storage is unavailable/,
   );
   assert.equal(fsModule.files.size, 0);
+});
+
+test('can report unknown encryption availability without touching safeStorage', () => {
+  let calls = 0;
+  const safeStorage = {
+    isEncryptionAvailable: () => {
+      calls += 1;
+      return true;
+    },
+  };
+
+  assert.equal(isTokenEncryptionAvailable({ safeStorage, checkAvailability: false }), null);
+  assert.equal(calls, 0);
+  assert.equal(isTokenEncryptionAvailable({ safeStorage }), true);
+  assert.equal(calls, 1);
 });
 
 test('rejects unsupported token keys instead of writing arbitrary files', () => {

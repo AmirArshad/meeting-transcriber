@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>com.avanevis.app.audiocapture-helper</string>
+	<key>CFBundleName</key>
+	<string>AvaNevis Audio Capture Helper</string>
+	<key>CFBundleDisplayName</key>
+	<string>AvaNevis Audio Capture Helper</string>
+	<key>CFBundleExecutable</key>
+	<string>audiocapture-helper</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>AvaNevis needs screen recording permission to capture system audio using ScreenCaptureKit. No screen video is saved.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>AvaNevis needs system audio access to capture desktop audio locally for meeting transcription.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>AvaNevis records microphone audio from the main app while this helper captures system audio.</string>
+</dict>
+</plist>

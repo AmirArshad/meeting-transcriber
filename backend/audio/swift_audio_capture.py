@@ -44,6 +44,8 @@ def get_audiocapture_helper_path() -> Optional[Path]:
         # Bundled in resources
         current_dir.parent.parent / "bin" / "audiocapture-helper",
         # Development path (Swift Package Manager build)
+        current_dir.parent.parent / "swift" / "AudioCaptureHelper" / ".build" / "release" / "audiocapture-helper",
+        current_dir.parent.parent / "swift" / "AudioCaptureHelper" / ".build" / "arm64-apple-macosx" / "release" / "audiocapture-helper",
         current_dir.parent.parent.parent / "swift" / "AudioCaptureHelper" / ".build" / "release" / "audiocapture-helper",
         current_dir.parent.parent.parent / "swift" / "AudioCaptureHelper" / ".build" / "arm64-apple-macosx" / "release" / "audiocapture-helper",
     ]
@@ -158,6 +160,17 @@ class SwiftAudioCapture:
         self.warning_lock = threading.Lock()
         self.warning_messages: list[dict] = []
         self._warning_codes_sent: set[str] = set()
+        self.read_chunk_count = 0
+        self.read_sample_count = 0
+        self.read_peak_level = 0.0
+        self.helper_total_sample_buffers = 0
+        self.helper_total_bytes = 0
+        self.helper_screen_frames = 0
+        self.helper_dropped_chunks = 0
+        self.helper_queued_bytes_remaining = 0
+        self.helper_audio_format: Optional[dict] = None
+        self.helper_content_info: Optional[dict] = None
+        self.helper_stream_config: Optional[dict] = None
 
     def _queue_warning(self, code: str, message: str, **extra):
         """Queue a structured warning for the parent recorder to forward."""
@@ -240,6 +253,17 @@ class SwiftAudioCapture:
             with self.warning_lock:
                 self.warning_messages = []
                 self._warning_codes_sent = set()
+            self.read_chunk_count = 0
+            self.read_sample_count = 0
+            self.read_peak_level = 0.0
+            self.helper_total_sample_buffers = 0
+            self.helper_total_bytes = 0
+            self.helper_screen_frames = 0
+            self.helper_dropped_chunks = 0
+            self.helper_queued_bytes_remaining = 0
+            self.helper_audio_format = None
+            self.helper_content_info = None
+            self.helper_stream_config = None
 
             # Start the Swift helper process
             self.process = subprocess.Popen(
@@ -436,12 +460,16 @@ class SwiftAudioCapture:
                     continue
 
                 # Add to buffer (thread-safe)
+                chunk_peak = float(np.max(np.abs(audio_data))) if audio_data.size else 0.0
                 with self.buffer_lock:
                     now = time.time()
                     if self.first_audio_time is None:
                         self.first_audio_time = now
                     self.last_audio_time = now
                     self.audio_buffer.append(audio_data)
+                    self.read_chunk_count += 1
+                    self.read_sample_count += len(audio_data)
+                    self.read_peak_level = max(self.read_peak_level, chunk_peak)
 
                 total_samples += len(audio_data)
                 chunk_count += 1
@@ -473,12 +501,16 @@ class SwiftAudioCapture:
                         if audio_data is None:
                             continue
 
+                        chunk_peak = float(np.max(np.abs(audio_data))) if audio_data.size else 0.0
                         with self.buffer_lock:
                             now = time.time()
                             if self.first_audio_time is None:
                                 self.first_audio_time = now
                             self.last_audio_time = now
                             self.audio_buffer.append(audio_data)
+                            self.read_chunk_count += 1
+                            self.read_sample_count += len(audio_data)
+                            self.read_peak_level = max(self.read_peak_level, chunk_peak)
                         total_samples += len(audio_data)
 
                     if drained_total > 0:
@@ -537,6 +569,10 @@ class SwiftAudioCapture:
                             helper_timestamp = float(timestamp)
                             if self.first_audio_time is None or helper_timestamp < self.first_audio_time:
                                 self.first_audio_time = helper_timestamp
+                        elif status == 'screen_sample':
+                            screen_frames = msg.get('screenFrames')
+                            if isinstance(screen_frames, int):
+                                self.helper_screen_frames = screen_frames
 
                         print(f"Swift helper: {status} - {message}", file=sys.stderr)
 
@@ -576,10 +612,25 @@ class SwiftAudioCapture:
                     elif msg_type == 'config':
                         print(f"Swift helper config: {msg}", file=sys.stderr)
 
+                    elif msg_type == 'content_info':
+                        self.helper_content_info = dict(msg)
+                        print(
+                            "Swift helper: content - "
+                            f"displays={msg.get('displayCount', 'unknown')}, "
+                            f"apps={msg.get('applicationCount', 'unknown')}, "
+                            f"windows={msg.get('windowCount', 'unknown')}",
+                            file=sys.stderr,
+                        )
+
+                    elif msg_type == 'stream_config':
+                        self.helper_stream_config = dict(msg)
+                        print(f"Swift helper stream config: {msg}", file=sys.stderr)
+
                     elif msg_type == 'audio_format':
                         # Log audio format details for debugging
                         rate = msg.get('sampleRate', 'unknown')
                         channels = msg.get('channels', 'unknown')
+                        self.helper_audio_format = dict(msg)
                         print(f"Swift helper: Audio format - {rate}Hz, {channels} channels", file=sys.stderr)
 
                     elif msg_type == 'extraction_error':
@@ -608,6 +659,11 @@ class SwiftAudioCapture:
                         # Final capture statistics
                         total_samples = msg.get('totalSamples', 0)
                         total_bytes = msg.get('totalBytes', 0)
+                        self.helper_total_sample_buffers = int(total_samples) if isinstance(total_samples, int) else 0
+                        self.helper_total_bytes = int(total_bytes) if isinstance(total_bytes, int) else 0
+                        self.helper_screen_frames = int(msg.get('screenFrames', 0) or 0)
+                        self.helper_dropped_chunks = int(msg.get('droppedChunks', 0) or 0)
+                        self.helper_queued_bytes_remaining = int(msg.get('queuedBytesRemaining', 0) or 0)
                         first_audio_timestamp = msg.get('firstAudioTimestamp')
                         last_audio_timestamp = msg.get('lastAudioTimestamp')
                         if isinstance(first_audio_timestamp, (int, float)):

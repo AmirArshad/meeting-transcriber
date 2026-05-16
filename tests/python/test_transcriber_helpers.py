@@ -196,6 +196,30 @@ def test_mlx_transcriber_normalizes_list_shaped_segments(tmp_path):
     assert result['segments'] == [{'start': 0.0, 'end': 2.4, 'text': 'hello world'}]
 
 
+def test_mlx_transcriber_prefers_file_duration_over_inflated_segment_end(tmp_path):
+    audio_path = tmp_path / 'sample.wav'
+    import wave
+
+    with wave.open(str(audio_path), 'wb') as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(16000)
+        wav_file.writeframes(b'\x00\x00' * 16000)
+
+    service = cast(Any, MLXWhisperTranscriber(model_size='small', language='en'))
+    service.model_ready = True
+
+    def fake_transcribe_audio(_audio_path_value):
+        return {'text': 'hello world', 'segments': [{'start': 0, 'end': 2048, 'text': 'hello world'}]}
+
+    service._transcribe_audio = fake_transcribe_audio
+
+    result = service.transcribe_file(str(audio_path), save_markdown=False)
+
+    assert result['duration'] == pytest.approx(1.0, rel=1e-3)
+    assert result['segments'] == [{'start': 0.0, 'end': 1.0, 'text': 'hello world'}]
+
+
 def test_mlx_transcriber_passes_requested_language_to_backend(tmp_path, monkeypatch):
     audio_path = tmp_path / 'sample.wav'
     import wave

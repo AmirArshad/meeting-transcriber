@@ -27,6 +27,18 @@ function requireEncryption(safeStorage) {
   }
 }
 
+function isTokenEncryptionAvailable({ safeStorage, checkAvailability = true } = {}) {
+  if (!checkAvailability) {
+    return null;
+  }
+
+  if (!safeStorage || typeof safeStorage.isEncryptionAvailable !== 'function') {
+    return false;
+  }
+
+  return safeStorage.isEncryptionAvailable();
+}
+
 function storeAiAddonToken({ userDataDir, tokenKey, token, safeStorage, fsModule = fs } = {}) {
   const normalizedToken = typeof token === 'string' ? token.trim() : '';
   if (!normalizedToken) {
@@ -71,5 +83,6 @@ module.exports = {
   getTokenPath,
   getTokenStoreDir,
   hasAiAddonToken,
+  isTokenEncryptionAvailable,
   storeAiAddonToken,
 };

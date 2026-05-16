@@ -6,6 +6,12 @@
 	<key>com.apple.security.inherit</key>
 	<true/>
 
+	<!-- Allow ScreenCaptureKit/CoreAudio audio capture from the helper process -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+	<key>com.apple.security.device.microphone</key>
+	<true/>
+
 	<!-- Allow JIT for any runtime code generation -->
 	<key>com.apple.security.cs.allow-jit</key>
 	<true/>

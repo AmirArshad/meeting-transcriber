@@ -450,10 +450,14 @@ class MLXWhisperTranscriber(BaseTranscriber):
             full_text.append(str(result))
             segments_list.append({'start': 0, 'end': 0, 'text': str(result)})
 
-        # Get audio duration (calculate from last segment if available)
-        duration = segments_list[-1]['end'] if segments_list else 0.0
-        if duration <= 0:
-            duration = self._probe_audio_duration(audio_path)
+        # Lightning-Whisper-MLX can return inflated segment timestamps for some
+        # compressed inputs, so prefer the container duration when available.
+        segment_duration = segments_list[-1]['end'] if segments_list else 0.0
+        file_duration = self._probe_audio_duration(audio_path)
+        duration = file_duration if file_duration > 0 else segment_duration
+
+        if file_duration > 0 and segment_duration > file_duration + max(5.0, file_duration * 0.5):
+            segments_list = self._clamp_segments_to_duration(segments_list, file_duration)
 
         # Merge segments into larger chunks for better readability
         # Target: ~20 seconds per chunk (good for long meetings)
@@ -598,6 +602,36 @@ class MLXWhisperTranscriber(BaseTranscriber):
         else:
             return f"{minutes:02d}:{secs:02d}"
 
+    @staticmethod
+    def _clamp_segments_to_duration(
+        segments: List[Dict[str, Any]],
+        duration: float,
+        tolerance_seconds: float = 1.0,
+    ) -> List[Dict[str, Any]]:
+        """Clamp clearly impossible MLX timestamps to the actual audio length."""
+        if duration <= 0:
+            return segments
+
+        clamped_segments = []
+        for segment in segments:
+            start = float(segment.get('start', 0) or 0)
+            end = float(segment.get('end', 0) or 0)
+
+            if start > duration + tolerance_seconds:
+                start = duration
+            if end <= 0 or end > duration + tolerance_seconds:
+                end = duration
+            if end < start:
+                end = start
+
+            clamped_segments.append({
+                'start': max(0.0, start),
+                'end': max(0.0, end),
+                'text': segment.get('text', ''),
+            })
+
+        return clamped_segments
+
     def cleanup(self):
         """Clean up resources."""
         if self.model_ready:
@@ -633,11 +667,20 @@ class MLXWhisperTranscriber(BaseTranscriber):
         except Exception:
             pass
 
+        def parse_duration(duration_text: str) -> float:
+            try:
+                return float(duration_text.strip())
+            except Exception:
+                return 0.0
+
         try:
             import subprocess
+            import shutil
+
+            ffprobe_path = shutil.which('ffprobe') or 'ffprobe'
             result = subprocess.run(
                 [
-                    'ffprobe',
+                    ffprobe_path,
                     '-v', 'error',
                     '-show_entries', 'format=duration',
                     '-of', 'default=noprint_wrappers=1:nokey=1',
@@ -649,7 +692,37 @@ class MLXWhisperTranscriber(BaseTranscriber):
                 check=False,
             )
             if result.returncode == 0 and result.stdout.strip():
-                return float(result.stdout.strip())
+                duration = parse_duration(result.stdout)
+                if duration > 0:
+                    return duration
+        except Exception:
+            pass
+
+        try:
+            import re
+            import subprocess
+            import shutil
+
+            ffmpeg_path = shutil.which('ffmpeg') or 'ffmpeg'
+            result = subprocess.run(
+                [
+                    ffmpeg_path,
+                    '-hide_banner',
+                    '-i', audio_path,
+                    '-f', 'null',
+                    '-',
+                ],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            duration_match = re.search(r'Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)', result.stderr or '')
+            if duration_match:
+                hours, minutes, seconds = duration_match.groups()
+                duration = (int(hours) * 3600) + (int(minutes) * 60) + float(seconds)
+                if duration > 0:
+                    return duration
         except Exception:
             pass
 

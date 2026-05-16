@@ -24,6 +24,7 @@ const {
   getQuitInterceptState,
   getRecorderCloseAction,
   getRecorderEventAction,
+  findRecorderResultPayload,
   getMacMLXCacheDir,
   getMacMLXModelStorageDirs,
   getModelDownloadPatterns,
@@ -399,6 +400,47 @@ test('parseRecorderStdoutChunk parses mixed structured recorder messages', () =>
     mic: 0.1,
     desktop: 0.2,
   });
+});
+
+
+test('parseRecorderMessageLine treats desktop diagnostics JSON as status', () => {
+  const contentInfo = parseRecorderMessageLine(
+    '{"type":"content_info","displayCount":1,"applicationCount":12,"windowCount":34}',
+  );
+  const streamConfig = parseRecorderMessageLine(
+    '{"type":"stream_config","width":1728,"height":1117,"capturesAudio":true}',
+  );
+
+  assert.equal(contentInfo.kind, 'status');
+  assert.equal(contentInfo.payload.displayCount, 1);
+  assert.equal(streamConfig.kind, 'status');
+  assert.equal(streamConfig.payload.width, 1728);
+});
+
+
+test('findRecorderResultPayload returns last recorder result among structured messages', () => {
+  const output = [
+    '{"type":"levels","mic":0.1,"desktop":0}',
+    '{"type":"warning","code":"NO_DESKTOP_AUDIO_CAPTURED","message":"No desktop audio"}',
+    '{"success":true,"outputPath":"/recordings/meeting.opus","duration":12.5,"desktopDiagnostics":{"bufferSamples":0}}',
+  ].join('\n');
+
+  assert.deepEqual(findRecorderResultPayload(output), {
+    success: true,
+    outputPath: '/recordings/meeting.opus',
+    duration: 12.5,
+    desktopDiagnostics: { bufferSamples: 0 },
+  });
+});
+
+
+test('findRecorderResultPayload ignores non-result JSON lines', () => {
+  const output = [
+    '{"type":"levels","mic":0.1,"desktop":0}',
+    '{"type":"warning","code":"NO_DESKTOP_AUDIO_CAPTURED","message":"No desktop audio"}',
+  ].join('\n');
+
+  assert.equal(findRecorderResultPayload(output), null);
 });
 
 
@@ -794,6 +836,25 @@ test('buildRecordingPreflightReport blocks start with actionable macOS permissio
   assert.equal(result.permissionStatus.settingsTarget, 'privacy');
   assert.match(result.errorMessage, /Microphone permission is not granted/);
   assert.match(result.errorMessage, /Screen Recording permission is not granted/);
+});
+
+
+test('buildRecordingPreflightReport allows macOS start when proactive screen check is skipped', () => {
+  const result = buildRecordingPreflightReport({
+    platform: 'darwin',
+    deviceCheck: { valid: true, errors: [], warnings: [] },
+    diskCheck: { success: true, warning: null },
+    audioOutputCheck: { supported: true, warning: null },
+    permissionCheck: {
+      all_granted: true,
+      microphone: { granted: true },
+      screen_recording: { granted: true },
+      desktop_audio: { available: true, backend: 'swift' },
+    },
+  });
+
+  assert.equal(result.canStart, true);
+  assert.equal(result.permissionStatus.missingScreenRecording, false);
 });
 
 

@@ -1,6 +1,7 @@
 import backend.audio.screencapture_helper as helper_module
 import backend.audio.swift_audio_capture as swift_capture_module
 import backend.check_permissions as check_permissions_module
+from pathlib import Path
 import pytest
 
 
@@ -61,6 +62,26 @@ def test_parse_permission_check_output_uses_last_permission_payload():
     assert error is None
 
 
+def test_get_audiocapture_helper_path_finds_repo_local_swift_build(tmp_path, monkeypatch):
+    repo_root = tmp_path / 'meeting-transcriber'
+    helper_path = repo_root / 'swift' / 'AudioCaptureHelper' / '.build' / 'release' / 'audiocapture-helper'
+    helper_path.parent.mkdir(parents=True)
+    helper_path.write_text('')
+
+    fake_module_file = repo_root / 'backend' / 'audio' / 'swift_audio_capture.py'
+    monkeypatch.setattr(swift_capture_module, '__file__', str(fake_module_file))
+
+    assert swift_capture_module.get_audiocapture_helper_path() == helper_path
+
+
+def test_swift_helper_info_plist_declares_audio_capture_usage():
+    info_plist = Path(__file__).resolve().parents[2] / 'swift' / 'AudioCaptureHelper' / 'Info.plist'
+    contents = info_plist.read_text(encoding='utf-8')
+
+    assert 'NSAudioCaptureUsageDescription' in contents
+    assert 'NSScreenCaptureUsageDescription' in contents
+
+
 def test_check_permissions_uses_swift_helper_before_pyobjc(monkeypatch):
     monkeypatch.setattr(
         check_permissions_module,
@@ -72,6 +93,31 @@ def test_check_permissions_uses_swift_helper_before_pyobjc(monkeypatch):
 
     assert granted is False
     assert error == 'Screen Recording permission not granted'
+
+
+def test_check_permissions_can_skip_proactive_screen_recording_check(monkeypatch, capsys):
+    monkeypatch.setattr(check_permissions_module.platform, 'system', lambda: 'Darwin')
+    monkeypatch.setattr(check_permissions_module, 'check_macos_version_compatibility', lambda: (True, '14.0', None))
+    monkeypatch.setattr(check_permissions_module, 'check_microphone_permission', lambda mic_device_id=None: (True, ''))
+    monkeypatch.setattr(
+        check_permissions_module,
+        'check_desktop_audio_capture_availability',
+        lambda: (True, 'swift', ''),
+    )
+    monkeypatch.setattr(
+        check_permissions_module,
+        'check_screen_recording_permission',
+        lambda: (_ for _ in ()).throw(AssertionError('should not run screen permission check')),
+    )
+    monkeypatch.setattr(check_permissions_module.sys, 'argv', ['check_permissions.py', '--skip-screen-recording-check'])
+
+    with pytest.raises(SystemExit) as exc_info:
+        check_permissions_module.main()
+
+    output = capsys.readouterr().out
+    assert exc_info.value.code == 0
+    assert '"all_granted": true' in output
+
 
 
 def test_swift_audio_capture_preserves_first_startup_error():
@@ -129,6 +175,65 @@ def test_swift_audio_capture_queues_no_audio_warning_once():
             'message': 'No desktop samples',
         }
     ]
+
+
+def test_swift_audio_capture_records_helper_diagnostics(monkeypatch):
+    import select
+
+    capture = swift_capture_module.SwiftAudioCapture.__new__(swift_capture_module.SwiftAudioCapture)
+    capture._recording_event = swift_capture_module.threading.Event()
+    capture.process = None
+    capture.helper_screen_frames = 0
+    capture.helper_content_info = None
+    capture.helper_stream_config = None
+    capture.helper_total_sample_buffers = 0
+    capture.helper_total_bytes = 0
+    capture.helper_dropped_chunks = 0
+    capture.helper_queued_bytes_remaining = 0
+    capture.first_audio_time = None
+    capture.last_audio_time = None
+
+    messages = [
+        '{"type":"content_info","displayCount":1,"applicationCount":12,"windowCount":34}',
+        '{"type":"stream_config","width":1728,"height":1117,"capturesAudio":true}',
+        '{"type":"status","status":"screen_sample","message":"screen","screenFrames":1}',
+        '{"type":"capture_stats","totalSamples":0,"totalBytes":0,"screenFrames":5}',
+    ]
+
+    class FakeStderr:
+        def __init__(self, lines):
+            self.lines = [line.encode('utf-8') + b'\n' for line in lines]
+
+        def fileno(self):
+            return 0
+
+        def readline(self):
+            if self.lines:
+                return self.lines.pop(0)
+            return b''
+
+    class FakeProcess:
+        def __init__(self, lines):
+            self.stderr = FakeStderr(lines)
+
+        def poll(self):
+            return None if self.stderr.lines else 0
+
+    capture.process = FakeProcess(messages)
+    capture._recording_event.set()
+
+    def fake_select(readers, _writers, _errors, _timeout):
+        if capture.process.stderr.lines:
+            return readers, [], []
+        return [], [], []
+
+    monkeypatch.setattr(select, 'select', fake_select)
+
+    capture._read_status_messages()
+
+    assert capture.helper_content_info['displayCount'] == 1
+    assert capture.helper_stream_config['width'] == 1728
+    assert capture.helper_screen_frames == 5
 
 
 def test_desktop_audio_availability_reports_missing_backends(monkeypatch):

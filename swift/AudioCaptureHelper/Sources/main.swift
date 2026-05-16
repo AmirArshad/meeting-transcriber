@@ -92,6 +92,7 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
     private let writerCompletionGroup = DispatchGroup()
     private let writerQueue = DispatchQueue(label: "audio.capture.writer.queue", qos: .userInitiated)
     private var writerIsRunning = false
+    private var screenFrameCount = 0
 
     private struct EnqueueResult {
         let queuedBytes: Int
@@ -109,6 +110,7 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
         isCapturing = true
         sampleCount = 0
         totalBytesWritten = 0
+        screenFrameCount = 0
         firstAudioTime = nil
         lastAudioTime = nil
         silencePeriodLogged = false
@@ -137,6 +139,7 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
         outputLock.lock()
         let finalSampleCount = sampleCount
         let finalBytes = totalBytesWritten
+        let finalScreenFrameCount = screenFrameCount
         let finalFirstAudioTimestamp = firstAudioTime?.timeIntervalSince1970
         let finalLastAudioTimestamp = lastAudioTime?.timeIntervalSince1970
         outputLock.unlock()
@@ -151,6 +154,7 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
             "type": "capture_stats",
             "totalSamples": finalSampleCount,
             "totalBytes": finalBytes,
+            "screenFrames": finalScreenFrameCount,
             "droppedChunks": finalDroppedChunks,
             "queuedBytesRemaining": finalQueuedBytes,
         ]
@@ -165,6 +169,22 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
 
     // SCStreamOutput protocol - receives audio samples
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
+        if type == .screen {
+            outputLock.lock()
+            screenFrameCount += 1
+            let currentScreenFrameCount = screenFrameCount
+            outputLock.unlock()
+
+            if currentScreenFrameCount == 1 {
+                sendStatus(
+                    "screen_sample",
+                    message: "Received first screen sample; video frames are discarded",
+                    extra: ["screenFrames": currentScreenFrameCount]
+                )
+            }
+            return
+        }
+
         guard type == .audio else { return }
 
         outputLock.lock()
@@ -642,6 +662,23 @@ class AudioCapture {
     private var isRunning = false
     private var silenceCheckTimer: DispatchSourceTimer?
 
+    private func displayDimension(_ display: SCDisplay, _ key: String, fallback: Int) -> Int {
+        let mirror = Mirror(reflecting: display)
+        for child in mirror.children {
+            guard child.label == key else { continue }
+            if let value = child.value as? Int {
+                return value
+            }
+            if let value = child.value as? UInt32 {
+                return Int(value)
+            }
+            if let value = child.value as? Double {
+                return Int(value)
+            }
+        }
+        return fallback
+    }
+
     init(config: Config) {
         self.config = config
     }
@@ -698,7 +735,18 @@ class AudioCapture {
             throw error
         }
 
-        guard let display = content.displays.first else {
+        let displays = content.displays
+        let applications = content.applications
+        let windows = content.windows
+
+        sendJSON([
+            "type": "content_info",
+            "displayCount": displays.count,
+            "applicationCount": applications.count,
+            "windowCount": windows.count,
+        ])
+
+        guard let display = displays.first else {
             sendJSON([
                 "type": "error",
                 "code": "no_display",
@@ -707,17 +755,30 @@ class AudioCapture {
             throw NSError(domain: "AudioCapture", code: 1, userInfo: [NSLocalizedDescriptionKey: "No display found"])
         }
 
-        sendStatus("configuring", message: "Setting up audio capture for display: \(display.displayID)")
+        let displayWidth = displayDimension(display, "width", fallback: 1920)
+        let displayHeight = displayDimension(display, "height", fallback: 1080)
 
-        // Create content filter - capture entire display audio
-        // Use excludingApplications API (preferred for audio capture) instead of excludingWindows
-        // Empty array = capture audio from ALL applications (browsers, Zoom, Spotify, etc.)
-        let filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
+        sendStatus(
+            "configuring",
+            message: "Setting up audio capture for display: \(display.displayID)",
+            extra: [
+                "displayID": display.displayID,
+                "displayWidth": displayWidth,
+                "displayHeight": displayHeight,
+            ]
+        )
 
-        // Configure stream for audio only
+        // Create content filter for full-display capture. The simpler
+        // excludingWindows initializer matches Apple's display-capture path and
+        // avoids app-filter edge cases that can starve desktop audio callbacks.
+        let filter = SCContentFilter(display: display, excludingWindows: [])
+
+        // Configure stream. Screen frames are discarded, but using the real
+        // display dimensions avoids ScreenCaptureKit silently starving outputs
+        // on some macOS versions when given a tiny 1x1/2x2 video configuration.
         let streamConfig = SCStreamConfiguration()
-        streamConfig.width = 2  // Minimal video (required but not used)
-        streamConfig.height = 2
+        streamConfig.width = displayWidth
+        streamConfig.height = displayHeight
         streamConfig.minimumFrameInterval = CMTime(value: 1, timescale: 1)  // 1 FPS minimum
         streamConfig.capturesAudio = true
         streamConfig.sampleRate = config.sampleRate
@@ -727,6 +788,16 @@ class AudioCapture {
         if config.excludeCurrentApp {
             streamConfig.excludesCurrentProcessAudio = true
         }
+
+        sendJSON([
+            "type": "stream_config",
+            "width": streamConfig.width,
+            "height": streamConfig.height,
+            "capturesAudio": streamConfig.capturesAudio,
+            "sampleRate": streamConfig.sampleRate,
+            "channelCount": streamConfig.channelCount,
+            "excludesCurrentProcessAudio": streamConfig.excludesCurrentProcessAudio,
+        ])
 
         // Create delegate
         delegate = AudioCaptureDelegate(expectedChannels: config.channels)
@@ -743,8 +814,11 @@ class AudioCapture {
             throw NSError(domain: "AudioCapture", code: 2, userInfo: [NSLocalizedDescriptionKey: "Failed to create stream"])
         }
 
-        // Add stream output for audio
+        // Add a minimal screen output as well as audio. Some ScreenCaptureKit
+        // paths start successfully but never deliver audio-only callbacks unless
+        // a screen output is attached. The delegate immediately discards frames.
         do {
+            try stream.addStreamOutput(delegate, type: .screen, sampleHandlerQueue: DispatchQueue(label: "screen.capture.discard.queue"))
             try stream.addStreamOutput(delegate, type: .audio, sampleHandlerQueue: DispatchQueue(label: "audio.capture.queue"))
         } catch {
             sendJSON([

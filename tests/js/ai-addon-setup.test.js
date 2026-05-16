@@ -22,6 +22,7 @@ const {
   setupSummaryModel,
   summarizePipProgress,
   validateSummaryModel,
+  getDiarizationTokenStatus,
 } = require('../../src/ai-addon-setup');
 const { TOKEN_KEYS, getTokenPath } = require('../../src/ai-addon-token-store');
 const { DEFAULT_SUMMARY_MODEL_ID, getDiarizationDependencyArtifactForPlatform, getSummaryArtifactForPlatform } = require('../../src/ai-addon-state');
@@ -145,6 +146,25 @@ function createSafeStorage() {
     isEncryptionAvailable: () => true,
     encryptString: (value) => Buffer.from(`encrypted:${value}`, 'utf8'),
     decryptString: (value) => Buffer.from(value).toString('utf8').replace(/^encrypted:/, ''),
+  };
+}
+
+function createCountingSafeStorage() {
+  const counters = { availability: 0, encrypt: 0, decrypt: 0 };
+  return {
+    counters,
+    isEncryptionAvailable: () => {
+      counters.availability += 1;
+      return true;
+    },
+    encryptString: (value) => {
+      counters.encrypt += 1;
+      return Buffer.from(`encrypted:${value}`, 'utf8');
+    },
+    decryptString: (value) => {
+      counters.decrypt += 1;
+      return Buffer.from(value).toString('utf8').replace(/^encrypted:/, '');
+    },
   };
 }
 
@@ -295,6 +315,50 @@ test('check status includes token and summary cache state without exposing token
   assert.equal(status.features.summary.storage.installedBytesAccuracy, 'notScanned');
   assert.equal(typeof status.footprint.totalInstalledBytes, 'number');
   assert.equal(JSON.stringify(status).includes('hf_secret'), false);
+});
+
+test('passive add-on status does not query secure storage availability', async () => {
+  const fsModule = createMemoryFs();
+  const userDataDir = '/tmp/AvaNevis';
+  fsModule.writeFileSync(getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace), Buffer.from('encrypted:hf_secret'));
+  let encryptionChecks = 0;
+  const safeStorage = {
+    isEncryptionAvailable: () => {
+      encryptionChecks += 1;
+      return true;
+    },
+  };
+
+  const status = await checkAiAddonSetupStatus({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    safeStorage,
+    fsModule,
+  });
+
+  assert.equal(status.features.diarization.tokenStatus.hasToken, true);
+  assert.equal(status.features.diarization.tokenStatus.encryptionAvailable, null);
+  assert.equal(encryptionChecks, 0);
+});
+
+test('explicit token status can query secure storage availability', () => {
+  const fsModule = createMemoryFs();
+  const userDataDir = '/tmp/AvaNevis';
+  fsModule.writeFileSync(getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace), Buffer.from('encrypted:hf_secret'));
+  let encryptionChecks = 0;
+  const safeStorage = {
+    isEncryptionAvailable: () => {
+      encryptionChecks += 1;
+      return true;
+    },
+  };
+
+  const status = getDiarizationTokenStatus({ userDataDir, safeStorage, fsModule });
+
+  assert.equal(status.hasToken, true);
+  assert.equal(status.encryptionAvailable, true);
+  assert.equal(encryptionChecks, 1);
 });
 
 test('diarization dependency cache uses managed userData path and pinned requirements', () => {
@@ -457,6 +521,52 @@ test('setup diarization runs runtime validation before marking ready', async () 
   assert.equal(validations[0].modelRef, 'pyannote/speaker-diarization-community-1');
   assert.equal(validations[0].token, 'hf_validtoken123');
   assert.equal(validations[0].dependencyCache.valid, true);
+});
+
+test('setup diarization does not decrypt a newly entered token for runtime validation', async () => {
+  const safeStorage = createCountingSafeStorage();
+  const validations = [];
+
+  const status = await setupDiarizationAddon({
+    userDataDir: '/tmp/AvaNevis',
+    platform: 'win32',
+    arch: 'x64',
+    token: 'hf_validtoken123',
+    safeStorage,
+    fsModule: createMemoryFs(),
+    dependencyInstaller: stubDiarizationDependencyInstaller,
+    runtimeValidator: async (payload) => validations.push(payload),
+  });
+
+  assert.equal(status.features.diarization.status, 'ready');
+  assert.equal(validations.length, 1);
+  assert.equal(validations[0].token, 'hf_validtoken123');
+  assert.equal(safeStorage.counters.encrypt, 1);
+  assert.equal(safeStorage.counters.decrypt, 0);
+});
+
+test('setup diarization decrypts an existing token once for runtime validation', async () => {
+  const fsModule = createMemoryFs();
+  const safeStorage = createCountingSafeStorage();
+  const userDataDir = '/tmp/AvaNevis';
+  fsModule.writeFileSync(getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace), Buffer.from('encrypted:hf_validtoken123'));
+  const validations = [];
+
+  const status = await setupDiarizationAddon({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    safeStorage,
+    fsModule,
+    dependencyInstaller: stubDiarizationDependencyInstaller,
+    runtimeValidator: async (payload) => validations.push(payload),
+  });
+
+  assert.equal(status.features.diarization.status, 'ready');
+  assert.equal(validations.length, 1);
+  assert.equal(validations[0].token, 'hf_validtoken123');
+  assert.equal(safeStorage.counters.encrypt, 0);
+  assert.equal(safeStorage.counters.decrypt, 1);
 });
 
 test('setup diarization reports runtime validation failures before first run', async () => {

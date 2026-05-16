@@ -61,6 +61,7 @@ let isInitializing = true; // Track if app is still initializing
 const checkedMeetingIds = new Set();
 let meetingSearchQuery = '';
 const cleanupFns = [];
+let aiAddonStatusRefreshPromise = null;
 
 function registerCleanup(cleanupFn) {
   if (typeof cleanupFn !== 'function') {
@@ -680,6 +681,10 @@ function activateTab(targetTab) {
   tabPanes.forEach((pane) => {
     pane.classList.toggle('active', pane.id === `${targetTab}-tab`);
   });
+
+  if (targetTab === 'settings') {
+    initSettingsTab().catch((error) => console.error('Failed to initialize settings tab:', error));
+  }
 }
 
 function openSettingsAtAiAddons() {
@@ -1903,6 +1908,16 @@ async function stopRecording() {
     if (result.audioPath) {
       currentAudioFile = result.audioPath;
       addLog(`Recording saved: ${currentAudioFile}`);
+      if (result.desktopDiagnostics) {
+        const diag = result.desktopDiagnostics;
+        addLog(
+          `Desktop capture diagnostics: type=${diag.captureType || 'unknown'}, ` +
+          `chunks=${diag.bufferChunks || 0}, samples=${diag.bufferSamples || 0}, ` +
+          `peak=${Number(diag.peakLevel || 0).toFixed(6)}, ` +
+          `helperBytes=${diag.helperBytes || 0}, helperScreenFrames=${diag.helperScreenFrames || 0}`,
+          (diag.bufferSamples || 0) > 0 ? 'info' : 'warning'
+        );
+      }
 
       // Auto-transcribe
       addLog('Starting transcription...');
@@ -2728,17 +2743,27 @@ function updateAiAddonSettings(status) {
 }
 
 async function refreshAiAddonSettings() {
-  try {
-    const status = await window.electronAPI.getAiAddonStatus();
-    updateAiAddonSettings(status);
-    updateHomeAiAddonCTA(status);
-    return status;
-  } catch (error) {
-    addLog(`Failed to check AI add-ons: ${error.message}`, 'error');
-    setStatusBadge(document.getElementById('ai-addons-status-badge'), 'error');
-    updateHomeAiAddonCTA(null);
-    return null;
+  if (aiAddonStatusRefreshPromise) {
+    return aiAddonStatusRefreshPromise;
   }
+
+  aiAddonStatusRefreshPromise = (async () => {
+    try {
+      const status = await window.electronAPI.getAiAddonStatus();
+      updateAiAddonSettings(status);
+      updateHomeAiAddonCTA(status);
+      return status;
+    } catch (error) {
+      addLog(`Failed to check AI add-ons: ${error.message}`, 'error');
+      setStatusBadge(document.getElementById('ai-addons-status-badge'), 'error');
+      updateHomeAiAddonCTA(null);
+      return null;
+    } finally {
+      aiAddonStatusRefreshPromise = null;
+    }
+  })();
+
+  return aiAddonStatusRefreshPromise;
 }
 
 async function withAiAddonAction(button, label, action) {
@@ -2859,6 +2884,19 @@ function setupAiAddonSettingsListeners() {
 // ============================================================================
 
 async function initSettingsTab() {
+  if (initSettingsTab.promise) {
+    return initSettingsTab.promise;
+  }
+
+  initSettingsTab.promise = initSettingsTabOnce().catch((error) => {
+    initSettingsTab.promise = null;
+    throw error;
+  });
+
+  return initSettingsTab.promise;
+}
+
+async function initSettingsTabOnce() {
   // Get system info
   try {
     const systemInfo = await window.electronAPI.getSystemInfo();
@@ -3020,7 +3058,6 @@ async function checkGPUStatus() {
       hasNvidiaGpu: Boolean(ctaState.gpuInfo && ctaState.gpuInfo.hasGPU),
       cudaInstalled: Boolean(ctaState.cudaInfo && ctaState.cudaInfo.installed),
     };
-    refreshAiAddonSettings().catch((error) => console.warn('Could not refresh AI add-on CTA:', error));
   }
 }
 
@@ -3775,6 +3812,5 @@ setupTabs();
 setupDevConsole();
 setupCustomAudioPlayer();
 setupTitleEditors();
-initSettingsTab();
 setupGPUCTA();
 setupHomeAiAddonCTA();

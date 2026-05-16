@@ -130,6 +130,7 @@ function buildResourceManifest() {
       requirementsMacosBuild: hashString(readTextOrEmpty(REQUIREMENTS_MACOS_BUILD)),
       requirementsWindowsBuild: hashString(readTextOrEmpty(REQUIREMENTS_WINDOWS_BUILD)),
       swiftPackage: hashString(readTextOrEmpty(path.join(__dirname, '..', 'swift', 'AudioCaptureHelper', 'Package.swift'))),
+      swiftInfoPlist: hashString(readTextOrEmpty(path.join(__dirname, '..', 'swift', 'AudioCaptureHelper', 'Info.plist'))),
       swiftSources: buildDirectoryManifest(
         path.join(__dirname, '..', 'swift', 'AudioCaptureHelper', 'Sources'),
         path.join(__dirname, '..', 'swift', 'AudioCaptureHelper')

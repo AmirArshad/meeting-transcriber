@@ -25,6 +25,7 @@ const {
   deleteAiAddonToken,
   getAiAddonToken,
   hasAiAddonToken,
+  isTokenEncryptionAvailable,
   storeAiAddonToken,
 } = require('./ai-addon-token-store');
 
@@ -288,14 +289,14 @@ function isLikelyHuggingFaceToken(token) {
   return /^hf_[A-Za-z0-9_-]{8,}$/.test(String(token || '').trim());
 }
 
-function getDiarizationTokenStatus({ userDataDir, safeStorage, fsModule = fs } = {}) {
+function getDiarizationTokenStatus({ userDataDir, safeStorage, fsModule = fs, checkEncryptionAvailability = true } = {}) {
   return {
     hasToken: hasAiAddonToken({
       userDataDir,
       tokenKey: TOKEN_KEYS.diarizationHuggingFace,
       fsModule,
     }),
-    encryptionAvailable: Boolean(safeStorage && safeStorage.isEncryptionAvailable && safeStorage.isEncryptionAvailable()),
+    encryptionAvailable: isTokenEncryptionAvailable({ safeStorage, checkAvailability: checkEncryptionAvailability }),
   };
 }
 
@@ -700,6 +701,7 @@ async function checkAiAddonSetupStatus({
   catalog = AI_MODEL_CATALOG,
   verifyChecksums = false,
   includeStorageSizes = false,
+  checkTokenEncryption = false,
 } = {}) {
   const { manifest, readError } = loadAiAddonManifest({
     userDataDir,
@@ -708,7 +710,12 @@ async function checkAiAddonSetupStatus({
     catalog,
   });
   const status = buildAiAddonStatus({ userDataDir, platform, arch, manifest, readError, catalog });
-  const tokenStatus = getDiarizationTokenStatus({ userDataDir, safeStorage, fsModule });
+  const tokenStatus = getDiarizationTokenStatus({
+    userDataDir,
+    safeStorage,
+    fsModule,
+    checkEncryptionAvailability: checkTokenEncryption,
+  });
   const diarizationDependencyCache = checkDiarizationDependencyCache({ userDataDir, platform, arch, fsModule, catalog });
   const summaryCache = await checkSummaryModelCache({
     userDataDir,
@@ -937,6 +944,7 @@ async function validateDiarizationSetup({
   now = () => new Date().toISOString(),
   emitProgress,
   runtimeValidator,
+  existingToken,
 } = {}) {
   emitSafeProgress(emitProgress, {
     feature: 'diarization',
@@ -960,13 +968,18 @@ async function validateDiarizationSetup({
     status = dependencyCache.validationStatus === 'error' ? 'error' : 'notConfigured';
     message = dependencyCache.reason || 'Speaker identification dependencies are not installed.';
     error = message;
-  } else if (!getDiarizationTokenStatus({ userDataDir, safeStorage, fsModule }).hasToken) {
+  } else if (!getDiarizationTokenStatus({
+    userDataDir,
+    safeStorage,
+    fsModule,
+    checkEncryptionAvailability: false,
+  }).hasToken) {
     status = 'needsAccount';
     message = 'Hugging Face token is required for speaker identification setup.';
     error = message;
   } else {
     try {
-      const token = getAiAddonToken({
+      const token = existingToken || getAiAddonToken({
         userDataDir,
         tokenKey: TOKEN_KEYS.diarizationHuggingFace,
         safeStorage,
@@ -1043,6 +1056,26 @@ async function setupDiarizationAddon({
 
   const selectedModelId = resolveModelId('diarization', modelId, catalog);
   const availability = getDiarizationAvailability(platform, arch);
+  let tokenForValidation = null;
+
+  function markDiarizationError(message) {
+    updateManifestFeature({
+      userDataDir,
+      feature: 'diarization',
+      fsModule,
+      catalog,
+      updates: buildFeatureUpdates({
+        status: 'error',
+        modelId: selectedModelId,
+        speakerCount,
+        validation: createValidation('error', message, now),
+        error: message,
+      }),
+    });
+    emitSafeProgress(emitProgress, { feature: 'diarization', phase: 'error', status: 'error', message, modelId: selectedModelId });
+    return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
+  }
+
   if (!availability.supported) {
     const message = availability.reason;
     updateManifestFeature({
@@ -1083,53 +1116,26 @@ async function setupDiarizationAddon({
       return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
     }
 
-    if (!getDiarizationTokenStatus({ userDataDir, safeStorage, fsModule }).encryptionAvailable) {
-      const message = 'Secure token storage is unavailable.';
-      updateManifestFeature({
+    try {
+      storeAiAddonToken({
         userDataDir,
-        feature: 'diarization',
+        tokenKey: TOKEN_KEYS.diarizationHuggingFace,
+        token: trimmedToken,
+        safeStorage,
         fsModule,
-        catalog,
-        updates: buildFeatureUpdates({
-          status: 'error',
-          modelId: selectedModelId,
-          speakerCount,
-          validation: createValidation('error', message, now),
-          error: message,
-        }),
       });
-      emitSafeProgress(emitProgress, { feature: 'diarization', phase: 'error', status: 'error', message, modelId: selectedModelId });
-      return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
+      tokenForValidation = trimmedToken;
+    } catch (storageError) {
+      return markDiarizationError(storageError.message || 'Secure token storage is unavailable.');
     }
-
-    storeAiAddonToken({
-      userDataDir,
-      tokenKey: TOKEN_KEYS.diarizationHuggingFace,
-      token: trimmedToken,
-      safeStorage,
-      fsModule,
-    });
   }
 
-  const tokenStatus = getDiarizationTokenStatus({ userDataDir, safeStorage, fsModule });
-  if (tokenStatus.encryptionAvailable === false) {
-    const message = 'Secure token storage is unavailable.';
-    updateManifestFeature({
-      userDataDir,
-      feature: 'diarization',
-      fsModule,
-      catalog,
-      updates: buildFeatureUpdates({
-        status: 'error',
-        modelId: selectedModelId,
-        speakerCount,
-        validation: createValidation('error', message, now),
-        error: message,
-      }),
-    });
-    emitSafeProgress(emitProgress, { feature: 'diarization', phase: 'error', status: 'error', message, modelId: selectedModelId });
-    return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
-  }
+  const tokenStatus = getDiarizationTokenStatus({
+    userDataDir,
+    safeStorage,
+    fsModule,
+    checkEncryptionAvailability: false,
+  });
   if (!tokenStatus.hasToken) {
     const message = 'Hugging Face token is required for speaker identification setup.';
     updateManifestFeature({
@@ -1194,7 +1200,31 @@ async function setupDiarizationAddon({
     return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
   }
 
-  return validateDiarizationSetup({ userDataDir, platform, arch, safeStorage, fsModule, catalog, now, emitProgress, runtimeValidator });
+  if (!tokenForValidation) {
+    try {
+      tokenForValidation = getAiAddonToken({
+        userDataDir,
+        tokenKey: TOKEN_KEYS.diarizationHuggingFace,
+        safeStorage,
+        fsModule,
+      });
+    } catch (storageError) {
+      return markDiarizationError(storageError.message || 'Stored Hugging Face token could not be decrypted.');
+    }
+  }
+
+  return validateDiarizationSetup({
+    userDataDir,
+    platform,
+    arch,
+    safeStorage,
+    fsModule,
+    catalog,
+    now,
+    emitProgress,
+    runtimeValidator,
+    existingToken: tokenForValidation,
+  });
 }
 
 async function removeDiarizationSetup({
@@ -1838,6 +1868,7 @@ module.exports = {
   buildDiarizationDependencyInstallArgs,
   createAiAddonProgressEvent,
   extractZipArchive,
+  getDiarizationTokenStatus,
   getDiarizationDependencySitePackagesDir,
   getDiarizationModelCacheDir,
   getSummaryArtifactPath,

@@ -52,6 +52,8 @@ test('manifestsMatch detects Swift source changes through the resource manifest'
   const originalManifest = buildResourceManifest();
   const updatedManifest = structuredClone(originalManifest);
 
+  assert.equal(typeof originalManifest.inputs.swiftInfoPlist, 'string');
+  assert.equal(originalManifest.inputs.swiftInfoPlist.length, 64);
   assert.equal(manifestsMatch(originalManifest, updatedManifest), true);
 
   updatedManifest.inputs.swiftSources = [
@@ -60,6 +62,10 @@ test('manifestsMatch detects Swift source changes through the resource manifest'
   ];
 
   assert.equal(manifestsMatch(originalManifest, updatedManifest), false);
+
+  const updatedInfoPlistManifest = structuredClone(originalManifest);
+  updatedInfoPlistManifest.inputs.swiftInfoPlist = 'changed';
+  assert.equal(manifestsMatch(originalManifest, updatedInfoPlistManifest), false);
 });
 
 
@@ -126,6 +132,10 @@ test('macOS helper verification checks signature and entitlements', () => {
 test('macOS helper entitlement parser requires inherit entitlement', () => {
   assert.equal(
     macOSHelperEntitlementsIncludeInherit('<key>com.apple.security.inherit</key><true/>'),
+    true,
+  );
+  assert.equal(
+    macOSHelperEntitlementsIncludeInherit('<key>com.apple.security.inherit</key><true/><key>com.apple.security.device.audio-input</key><true/>'),
     true,
   );
   assert.equal(

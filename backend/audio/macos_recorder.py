@@ -122,10 +122,9 @@ SWIFT_CAPTURE_AVAILABLE = False
 SCREENCAPTURE_AVAILABLE = False
 SwiftAudioCapture = None
 ScreenCaptureAudioRecorder = None
-check_screen_recording_permission = lambda: False
 
 try:
-    from .swift_audio_capture import SwiftAudioCapture, is_swift_capture_available, check_screen_recording_permission
+    from .swift_audio_capture import SwiftAudioCapture, is_swift_capture_available
     if is_swift_capture_available():
         SWIFT_CAPTURE_AVAILABLE = True
         print("Using Swift audiocapture-helper for desktop audio", file=sys.stderr)
@@ -137,7 +136,7 @@ except ImportError as e:
 # Fallback to PyObjC ScreenCaptureKit (may not work on macOS 15+)
 if not SWIFT_CAPTURE_AVAILABLE:
     try:
-        from .screencapture_helper import ScreenCaptureAudioRecorder, check_screen_recording_permission
+        from .screencapture_helper import ScreenCaptureAudioRecorder
         SCREENCAPTURE_AVAILABLE = True
         print("Using PyObjC ScreenCaptureKit for desktop audio (fallback)", file=sys.stderr)
     except ImportError:
@@ -266,6 +265,7 @@ class MacOSAudioRecorder:
         # Output tracking (instance variables instead of globals)
         self.final_output_path = None
         self.recording_duration = 0.0
+        self.desktop_diagnostics = {}
 
         print(f"Initialized macOS audio recorder", file=sys.stderr)
         print(f"  Mic device: {mic_device_id}", file=sys.stderr)
@@ -292,6 +292,77 @@ class MacOSAudioRecorder:
             )
 
         return warning_codes
+
+    def _build_desktop_diagnostics(self):
+        capture = self.desktop_capture
+        diagnostics = {
+            'captureType': self.desktop_capture_type or 'none',
+            'available': capture is not None,
+            'bufferChunks': 0,
+            'bufferSamples': 0,
+            'peakLevel': 0.0,
+            'firstAudioTime': None,
+            'lastAudioTime': None,
+            'helperSampleBuffers': 0,
+            'helperBytes': 0,
+            'helperScreenFrames': 0,
+            'helperDroppedChunks': 0,
+            'helperQueuedBytesRemaining': 0,
+            'helperAudioFormat': None,
+            'helperContentInfo': None,
+            'helperStreamConfig': None,
+        }
+
+        if capture is None:
+            return diagnostics
+
+        try:
+            with capture.buffer_lock:
+                diagnostics['bufferChunks'] = len(getattr(capture, 'audio_buffer', []) or [])
+                diagnostics['bufferSamples'] = int(sum(len(chunk) for chunk in getattr(capture, 'audio_buffer', []) or []))
+                diagnostics['peakLevel'] = float(getattr(capture, 'read_peak_level', 0.0) or 0.0)
+        except Exception as error:
+            diagnostics['error'] = f'Could not read desktop buffer diagnostics: {error}'
+
+        diagnostics['firstAudioTime'] = getattr(capture, 'first_audio_time', None)
+        diagnostics['lastAudioTime'] = getattr(capture, 'last_audio_time', None)
+        diagnostics['readChunks'] = int(getattr(capture, 'read_chunk_count', 0) or 0)
+        diagnostics['readSamples'] = int(getattr(capture, 'read_sample_count', 0) or 0)
+        diagnostics['helperSampleBuffers'] = int(getattr(capture, 'helper_total_sample_buffers', 0) or 0)
+        diagnostics['helperBytes'] = int(getattr(capture, 'helper_total_bytes', 0) or 0)
+        diagnostics['helperScreenFrames'] = int(getattr(capture, 'helper_screen_frames', 0) or 0)
+        diagnostics['helperDroppedChunks'] = int(getattr(capture, 'helper_dropped_chunks', 0) or 0)
+        diagnostics['helperQueuedBytesRemaining'] = int(getattr(capture, 'helper_queued_bytes_remaining', 0) or 0)
+        diagnostics['helperAudioFormat'] = getattr(capture, 'helper_audio_format', None)
+        diagnostics['helperContentInfo'] = getattr(capture, 'helper_content_info', None)
+        diagnostics['helperStreamConfig'] = getattr(capture, 'helper_stream_config', None)
+        return diagnostics
+
+    def _emit_desktop_diagnostics_warning(self):
+        diagnostics = self._build_desktop_diagnostics()
+        self.desktop_diagnostics = diagnostics
+        summary = (
+            f"Desktop capture diagnostics: type={diagnostics['captureType']}, "
+            f"chunks={diagnostics['bufferChunks']}, samples={diagnostics['bufferSamples']}, "
+            f"peak={diagnostics['peakLevel']:.6f}, helperBuffers={diagnostics['helperSampleBuffers']}, "
+            f"helperBytes={diagnostics['helperBytes']}, helperScreenFrames={diagnostics['helperScreenFrames']}"
+        )
+        print(summary, file=sys.stderr)
+        _send_warning_message(
+            'DESKTOP_CAPTURE_DIAGNOSTICS',
+            summary,
+            captureType=diagnostics['captureType'],
+            bufferChunks=diagnostics['bufferChunks'],
+            bufferSamples=diagnostics['bufferSamples'],
+            peakLevel=round(diagnostics['peakLevel'], 6),
+            helperSampleBuffers=diagnostics['helperSampleBuffers'],
+            helperBytes=diagnostics['helperBytes'],
+            helperScreenFrames=diagnostics['helperScreenFrames'],
+            helperDroppedChunks=diagnostics['helperDroppedChunks'],
+            helperContentInfo=diagnostics['helperContentInfo'],
+            helperStreamConfig=diagnostics['helperStreamConfig'],
+        )
+        return diagnostics
 
     def start_recording(self):
         """Start recording from microphone and desktop (if available)."""
@@ -622,6 +693,7 @@ class MacOSAudioRecorder:
             print(f"Stopping {capture_type} desktop capture...", file=sys.stderr)
             desktop_audio = self.desktop_capture.stop_recording()
             warning_codes = self._drain_desktop_warnings(capture_type)
+            self._emit_desktop_diagnostics_warning()
             if desktop_audio is not None:
                 # Convert to list of frames for consistency
                 self.desktop_frames = [desktop_audio]
@@ -933,22 +1005,7 @@ def main():
 
     args = parser.parse_args()
 
-    # Check Screen Recording permission if desktop capture is available
     if SWIFT_CAPTURE_AVAILABLE or SCREENCAPTURE_AVAILABLE:
-        print(f"\nChecking Screen Recording permission...", file=sys.stderr)
-        if check_screen_recording_permission():
-            print(f"  ✓ Screen Recording permission granted", file=sys.stderr)
-        else:
-            message = "Screen Recording permission is required for macOS desktop audio capture."
-            print(f"  ✗ {message}", file=sys.stderr)
-            print(f"  Grant permission in: System Settings > Privacy & Security > Screen Recording", file=sys.stderr)
-            _send_error_message(
-                "PERMISSION_DENIED",
-                message,
-                help="Grant Screen Recording permission to AvaNevis, then restart the app.",
-            )
-            sys.exit(1)
-
         if SWIFT_CAPTURE_AVAILABLE:
             print(f"  Using: Swift audiocapture-helper (native)", file=sys.stderr)
         else:
@@ -1080,7 +1137,8 @@ def main():
     result = {
         'success': True,
         'outputPath': recorder.final_output_path or args.output,
-        'duration': recorder.recording_duration
+        'duration': recorder.recording_duration,
+        'desktopDiagnostics': recorder.desktop_diagnostics,
     }
     # Use lock since other threads may still be winding down
     with _stdout_lock:
