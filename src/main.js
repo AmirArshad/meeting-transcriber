@@ -41,6 +41,7 @@ const {
   parseAiBackendProgressLine,
   resolveExternalUrl,
   resolveTranscriptionAudioFile,
+  summarizeAiBackendError,
   TRANSCRIPTION_CUDA_PACKAGES,
   MACOS_PERMISSION_CHECK_TIMEOUT_MS,
 } = require('./main-process-helpers');
@@ -2001,110 +2002,94 @@ function validateDiarizationRuntime({ modelRef, token, requiredDevice, cancelSig
     safeStorage: getSafeStorage(),
   });
 
-  return new Promise((resolve, reject) => {
-    if (cancelSignal && cancelSignal.aborted) {
-      reject(createAiAddonCancelError('Speaker identification setup was canceled.'));
-      return;
-    }
+  return createAbortableComputeAction({
+    cancelSignal,
+    cancelMessage: 'Speaker identification setup was canceled.',
+    action: () => new Promise((resolve, reject) => {
+      if (cancelSignal && cancelSignal.aborted) {
+        reject(createAiAddonCancelError('Speaker identification setup was canceled.'));
+        return;
+      }
 
-    const python = spawnTrackedPython(buildManagedDiarizationValidationArgs(modelRef, requiredDevice), {
-      cwd: pythonConfig.backendPath,
-      env: {
-        ...getDiarizationDependencyEnv(),
-        ...getDiarizationCacheEnv(),
-        HF_TOKEN: resolvedToken || '',
-        HUGGINGFACE_HUB_TOKEN: resolvedToken || '',
-        AVANEVIS_DIARIZATION_REQUIRE_DEVICE: requiredDevice || '',
-      },
-    });
+      const python = spawnTrackedPython(buildManagedDiarizationValidationArgs(modelRef, requiredDevice), {
+        cwd: pythonConfig.backendPath,
+        env: {
+          ...getDiarizationDependencyEnv(),
+          ...getDiarizationCacheEnv(),
+          HF_TOKEN: resolvedToken || '',
+          HUGGINGFACE_HUB_TOKEN: resolvedToken || '',
+        },
+      });
 
-    let output = '';
-    let errorOutput = '';
-    let settled = false;
-    const cleanupCancel = cancelSignal && typeof cancelSignal.addEventListener === 'function'
-      ? (() => {
-        const handleAbort = () => {
-          if (settled) {
-            return;
+      let output = '';
+      let errorOutput = '';
+      let settled = false;
+      const cleanupCancel = cancelSignal && typeof cancelSignal.addEventListener === 'function'
+        ? (() => {
+          const handleAbort = () => {
+            if (settled) {
+              return;
+            }
+            settled = true;
+            terminateProcessBestEffort(python);
+            reject(createAiAddonCancelError('Speaker identification setup was canceled.'));
+          };
+          cancelSignal.addEventListener('abort', handleAbort, { once: true });
+          return () => cancelSignal.removeEventListener('abort', handleAbort);
+        })()
+        : () => {};
+      const finish = (callback, value) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanupCancel();
+        callback(value);
+      };
+      python.stdout.on('data', (data) => { output += data.toString(); });
+      python.stderr.on('data', (data) => {
+        const stderrChunk = data.toString();
+        errorOutput += stderrChunk;
+        for (const line of stderrChunk.split(/\r?\n/)) {
+          const progressEvent = parseAiBackendProgressLine(line, 'diarization');
+          if (progressEvent) {
+            emitAiAddonProgress(progressEvent);
           }
-          settled = true;
-          terminateProcessBestEffort(python);
-          reject(createAiAddonCancelError('Speaker identification setup was canceled.'));
-        };
-        cancelSignal.addEventListener('abort', handleAbort, { once: true });
-        return () => cancelSignal.removeEventListener('abort', handleAbort);
-      })()
-      : () => {};
-    const finish = (callback, value) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanupCancel();
-      callback(value);
-    };
-    python.stdout.on('data', (data) => { output += data.toString(); });
-    python.stderr.on('data', (data) => {
-      const stderrChunk = data.toString();
-      errorOutput += stderrChunk;
-      for (const line of stderrChunk.split(/\r?\n/)) {
-        const progressEvent = parseAiBackendProgressLine(line, 'diarization');
-        if (progressEvent) {
-          emitAiAddonProgress(progressEvent);
         }
-      }
-    });
-    python.on('close', (code) => {
-      if (code === 0) {
-        try {
-          finish(resolve, JSON.parse(output));
-        } catch (error) {
-          finish(reject, new Error(`Failed to parse diarization setup validation: ${error.message}`));
+      });
+      python.on('close', (code) => {
+        if (code === 0) {
+          try {
+            finish(resolve, JSON.parse(output));
+          } catch (error) {
+            finish(reject, new Error(`Failed to parse diarization setup validation: ${error.message}`));
+          }
+          return;
         }
-        return;
-      }
-      const reason = summarizeDiarizationError(errorOutput);
-      finish(reject, new Error(reason || 'Speaker identification runtime validation failed.'));
-    });
-    python.on('error', (error) => finish(reject, error));
+        const reason = summarizeDiarizationError(errorOutput);
+        finish(reject, new Error(reason || 'Speaker identification runtime validation failed.'));
+      });
+      python.on('error', (error) => finish(reject, error));
+    }),
   });
 }
 
 function summarizeDiarizationError(errorOutput) {
-  const userDataDir = app.getPath('userData');
-  const homeDir = os.homedir();
-  const lines = String(errorOutput || '').trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  for (const line of [...lines].reverse()) {
-    const cleaned = line
-      .replace(/^ERROR:\s*/i, '')
-      .replace(/hf_[A-Za-z0-9_-]+/g, '[redacted-token]')
-      .replaceAll(userDataDir, '<userData>')
-      .replaceAll(homeDir, '<home>')
-      .trim();
-    if (!cleaned || cleaned === 'Speaker diarization failed.') {
-      continue;
-    }
-    return cleaned;
-  }
-  return '';
+  return summarizeAiBackendError({
+    errorOutput,
+    userDataDir: app.getPath('userData'),
+    homeDir: os.homedir(),
+    genericMessage: 'Speaker diarization failed.',
+  });
 }
 
 function summarizeSummaryValidationError(errorOutput) {
-  const userDataDir = app.getPath('userData');
-  const homeDir = os.homedir();
-  const lines = String(errorOutput || '').trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  for (const line of [...lines].reverse()) {
-    const cleaned = line
-      .replace(/^ERROR:\s*/i, '')
-      .replaceAll(userDataDir, '<userData>')
-      .replaceAll(homeDir, '<home>')
-      .trim();
-    if (!cleaned || cleaned === 'Local summary generation failed.') {
-      continue;
-    }
-    return cleaned;
-  }
-  return '';
+  return summarizeAiBackendError({
+    errorOutput,
+    userDataDir: app.getPath('userData'),
+    homeDir: os.homedir(),
+    genericMessage: 'Local summary generation failed.',
+  });
 }
 
 function terminateProcessBestEffort(proc) {
@@ -2970,7 +2955,6 @@ ipcMain.handle('diarize-transcript', async (event, options = {}) => {
         ...getDiarizationCacheEnv(),
         HF_TOKEN: token || '',
         HUGGINGFACE_HUB_TOKEN: token || '',
-        AVANEVIS_DIARIZATION_REQUIRE_DEVICE: requiredDevice,
       },
     });
 

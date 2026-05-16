@@ -4,7 +4,7 @@ const fs = require('fs');
 const https = require('https');
 const path = require('path');
 const AdmZip = require('adm-zip');
-const { SENSITIVE_PROGRESS_KEY_SET } = require('./ai-progress-sanitizer');
+const { redactSensitiveText, SENSITIVE_PROGRESS_KEY_SET } = require('./ai-progress-sanitizer');
 
 const {
   AI_MODEL_CATALOG,
@@ -342,8 +342,7 @@ function createValidation(status, message, now = () => new Date().toISOString())
 }
 
 function sanitizeProgressMessage(message) {
-  return String(message || '')
-    .replace(/hf_[A-Za-z0-9_-]+/g, '[redacted-token]')
+  return redactSensitiveText(message)
     .slice(0, 300);
 }
 

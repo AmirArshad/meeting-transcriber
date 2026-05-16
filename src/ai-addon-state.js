@@ -162,7 +162,7 @@ const DIARIZATION_DEPENDENCY_ARTIFACTS = deepFreeze({
     pip: {
       indexUrl: 'https://pypi.org/simple',
       extraIndexUrls: [],
-      allowSourceBuilds: true,
+      allowSourceBuilds: false,
       requirements: [
         'pyannote.audio==4.0.1',
         'torch==2.8.0',

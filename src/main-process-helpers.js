@@ -1,6 +1,6 @@
 const path = require('path');
 const { pathToFileURL } = require('url');
-const { SENSITIVE_PROGRESS_KEY_SET } = require('./ai-progress-sanitizer');
+const { redactSensitiveText, SENSITIVE_PROGRESS_KEY_SET } = require('./ai-progress-sanitizer');
 
 const TRUSTED_GITHUB_PATH_PREFIX = '/AmirArshad/meeting-transcriber';
 const TRUSTED_HUGGING_FACE_PATHS = new Set([
@@ -180,11 +180,31 @@ function buildTranscriptionCudaUninstallArgs(packages = TRANSCRIPTION_CUDA_PACKA
 }
 
 function sanitizeAiProgressMessage(message) {
-  return String(message || '')
-    .replace(/hf_[A-Za-z0-9_-]+/g, '[redacted-token]')
+  return redactSensitiveText(message)
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 300);
+}
+
+function summarizeAiBackendError({ errorOutput, userDataDir = '', homeDir = '', genericMessage = '' } = {}) {
+  const lines = String(errorOutput || '').trim().split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  for (const line of [...lines].reverse()) {
+    let cleaned = redactSensitiveText(line)
+      .replace(/^ERROR:\s*/i, '')
+      .trim();
+    if (userDataDir) {
+      cleaned = cleaned.replaceAll(userDataDir, '<userData>');
+    }
+    if (homeDir) {
+      cleaned = cleaned.replaceAll(homeDir, '<home>');
+    }
+    cleaned = cleaned.trim();
+    if (!cleaned || cleaned === genericMessage) {
+      continue;
+    }
+    return cleaned;
+  }
+  return '';
 }
 
 function parseAiBackendProgressLine(line, expectedFeature = null) {
@@ -840,8 +860,10 @@ module.exports = {
   parseRecorderMessageLine,
   parseAiBackendProgressLine,
   parseRecorderStdoutChunk,
+  summarizeAiBackendError,
   resolveTranscriptionAudioFile,
   splitBufferedLines,
   TRANSCRIPTION_CUDA_PACKAGES,
   MACOS_PERMISSION_CHECK_TIMEOUT_MS,
+  redactSensitiveText,
 };

@@ -551,7 +551,7 @@ test('macOS diarization dependency installer builds pinned MPS pip target args',
   assert.ok(args.includes('https://pypi.org/simple'));
   assert.equal(args.includes('--extra-index-url'), false);
   assert.equal(args.includes('https://download.pytorch.org/whl/cu126'), false);
-  assert.equal(args.includes('--only-binary=:all:'), false);
+  assert.equal(args.includes('--only-binary=:all:'), true);
   assert.ok(args.includes('pyannote.audio==4.0.1'));
   assert.ok(args.includes('torch==2.8.0'));
   assert.ok(args.includes('torchaudio==2.8.0'));

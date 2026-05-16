@@ -48,6 +48,16 @@ def install_fake_torch(monkeypatch, *, cuda_available=False, mps_built=True, mps
     return fake_torch
 
 
+class FakeTensor:
+    def __init__(self, *, cpu_error=None):
+        self.cpu_error = cpu_error
+
+    def cpu(self):
+        if self.cpu_error:
+            raise self.cpu_error
+        return self
+
+
 def test_move_pipeline_to_required_mps_device(monkeypatch):
     install_fake_torch(monkeypatch, cuda_available=False, mps_built=True, mps_available=True)
     calls = []
@@ -84,6 +94,21 @@ def test_required_cuda_refuses_cpu_fallback_when_unavailable(monkeypatch):
 
     with pytest.raises(RuntimeError, match='CUDA acceleration.*CPU fallback is disabled'):
         pipeline.move_pipeline_to_best_device(fake_pipeline, required_device='cuda')
+
+
+def test_required_mps_distinguishes_unbuilt_torch(monkeypatch):
+    install_fake_torch(monkeypatch, cuda_available=False, mps_built=False, mps_available=True)
+
+    with pytest.raises(RuntimeError, match='PyTorch build with Metal/MPS support.*Reinstall'):
+        pipeline.assert_required_device_available('mps')
+
+
+def test_required_device_probe_wraps_sync_failures(monkeypatch):
+    fake_torch = install_fake_torch(monkeypatch, cuda_available=False, mps_built=True, mps_available=True)
+    fake_torch.empty = lambda _size, device=None: FakeTensor(cpu_error=RuntimeError('lazy mps fault'))
+
+    with pytest.raises(RuntimeError, match='could not initialize MPS acceleration.*CPU fallback is disabled'):
+        pipeline.assert_required_device_available('mps')
 
 
 def test_required_device_probe_rejects_cpu_directly(monkeypatch):

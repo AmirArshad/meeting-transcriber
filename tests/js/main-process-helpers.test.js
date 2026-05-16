@@ -40,8 +40,10 @@ const {
   parsePythonVersion,
   parseRecorderMessageLine,
   parseRecorderStdoutChunk,
+  redactSensitiveText,
   resolveExternalUrl,
   resolveTranscriptionAudioFile,
+  summarizeAiBackendError,
   splitBufferedLines,
   MACOS_PERMISSION_CHECK_TIMEOUT_MS,
 } = mainProcessHelpers;
@@ -197,6 +199,37 @@ test('parseAiBackendProgressLine returns redacted progress events only', () => {
   });
   assert.equal(parseAiBackendProgressLine('not json', 'diarization'), null);
   assert.equal(parseAiBackendProgressLine('{"type":"progress","feature":"summary"}', 'diarization'), null);
+});
+
+
+test('redactSensitiveText removes bearer tokens and URL credentials', () => {
+  const redacted = redactSensitiveText('Authorization: Bearer abc.DEF_123 https://user:secret@huggingface.co/model hf_secret_token');
+
+  assert.equal(redacted.includes('abc.DEF_123'), false);
+  assert.equal(redacted.includes('user:secret'), false);
+  assert.equal(redacted.includes('hf_secret_token'), false);
+  assert.match(redacted, /Bearer \[redacted-token]/);
+  assert.match(redacted, /https:\/\/\[redacted]@huggingface\.co/);
+});
+
+
+test('summarizeAiBackendError redacts sensitive values and local paths', () => {
+  const summary = summarizeAiBackendError({
+    errorOutput: [
+      'Speaker diarization failed.',
+      'ERROR: failed at /Users/tester/AppData/AvaNevis/ai-addons with Authorization: Bearer secret.token and https://user:pass@huggingface.co/model hf_secret_token',
+    ].join('\n'),
+    userDataDir: '/Users/tester/AppData/AvaNevis',
+    homeDir: '/Users/tester',
+    genericMessage: 'Speaker diarization failed.',
+  });
+
+  assert.equal(summary.includes('secret.token'), false);
+  assert.equal(summary.includes('user:pass'), false);
+  assert.equal(summary.includes('hf_secret_token'), false);
+  assert.equal(summary.includes('/Users/tester'), false);
+  assert.match(summary, /<userData>\/ai-addons/);
+  assert.match(summary, /Bearer \[redacted-token]/);
 });
 
 

@@ -23,9 +23,10 @@ This app keeps optional local AI add-on artifacts catalog-driven in `src/ai-addo
 4. Keep `runtime.modelRef` catalog-owned; renderer input must not decide which Hugging Face model is loaded.
 5. Keep platform pins accelerator-specific: `win32-x64` must remain CUDA-only and `darwin-arm64` must remain MPS-only. Do not add `darwin-x64` or CPU-only artifacts.
 6. Validate that setup calls the backend with a required device (`cuda` or `mps`) and refuses Ready when `torch.backends.mps.is_built()` / `torch.backends.mps.is_available()` or CUDA checks fail.
-7. Validate that packaged build requirements do not include `pyannote.audio` unless every transitive dependency has a binary wheel under the build policy.
-8. Confirm old artifact directories under `userData/ai-addons/dependencies/diarization` are cleaned when a new dependency artifact is installed.
-9. Run `npm test`, `npm run test:python`, and platform speaker setup smoke tests including cancel during dependency install.
+7. Keep managed dependency installs binary-only on macOS (`allowSourceBuilds: false`) unless setup also gains an explicit compiler/toolchain preflight with clear recovery copy.
+8. Validate that packaged build requirements do not include `pyannote.audio` unless every transitive dependency has a binary wheel under the build policy.
+9. Confirm old artifact directories under `userData/ai-addons/dependencies/diarization` are cleaned when a new dependency artifact is installed.
+10. Run `npm test`, `npm run test:python`, and platform speaker setup smoke tests including cancel during dependency install.
 
 ## Updating Summary Model Pins
 

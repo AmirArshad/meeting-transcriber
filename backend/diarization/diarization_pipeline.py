@@ -38,7 +38,7 @@ def validate_pyannote_setup(
     if not token:
         raise ValueError("Hugging Face token is required for speaker diarization.")
 
-    device_requirement = normalize_required_device(required_device or os.environ.get("AVANEVIS_DIARIZATION_REQUIRE_DEVICE"))
+    device_requirement = normalize_required_device(required_device)
     if device_requirement:
         emit_progress("validating-accelerator", f"Checking {device_requirement.upper()} speaker identification acceleration.", percent=8)
         assert_required_device_available(device_requirement)
@@ -113,7 +113,9 @@ def assert_required_device_available(required_device: str) -> Any:
         mps_backend = getattr(getattr(torch, "backends", None), "mps", None)
         is_built = bool(mps_backend and mps_backend.is_built())
         is_available = bool(mps_backend and mps_backend.is_available())
-        if not is_built or not is_available:
+        if not is_built:
+            raise RuntimeError("Speaker identification on macOS requires a PyTorch build with Metal/MPS support. Reinstall speaker identification setup. CPU fallback is disabled.")
+        if not is_available:
             raise RuntimeError("Speaker identification on macOS requires PyTorch Metal/MPS acceleration. CPU fallback is disabled.")
 
     device = torch.device(normalized_device)
@@ -235,10 +237,12 @@ def load_pyannote_pipeline(model_ref: str, hf_token: str) -> Any:
 
 
 def move_pipeline_to_best_device(pipeline: Any, *, required_device: Optional[str] = None) -> str:
+    """Move pipeline to a required accelerator or best-effort dev fallback."""
+    normalized_required_device = normalize_required_device(required_device)
+
     try:
         import torch  # type: ignore[import-not-found]
 
-        normalized_required_device = normalize_required_device(required_device)
         if normalized_required_device:
             device = assert_required_device_available(normalized_required_device)
             try:
@@ -255,7 +259,7 @@ def move_pipeline_to_best_device(pipeline: Any, *, required_device: Optional[str
             pipeline.to(torch.device("mps"))
             return "mps"
     except Exception:
-        if required_device:
+        if normalized_required_device:
             raise
         pass
 
@@ -273,7 +277,7 @@ def run_pyannote_diarization(
     if not hf_token:
         raise ValueError("Hugging Face token is required for speaker diarization.")
 
-    device_requirement = normalize_required_device(required_device or os.environ.get("AVANEVIS_DIARIZATION_REQUIRE_DEVICE"))
+    device_requirement = normalize_required_device(required_device)
     if device_requirement:
         emit_progress("validating-accelerator", f"Checking {device_requirement.upper()} speaker identification acceleration.", percent=30)
         assert_required_device_available(device_requirement)
