@@ -21,6 +21,7 @@ const {
   buildDiarizationOutputPath,
   buildPythonModuleArgs,
   buildTranscriberArgs,
+  buildUnsupportedCudaPythonMessage,
   cacheContainsModel,
   getQuitInterceptState,
   getRecorderCloseAction,
@@ -29,7 +30,9 @@ const {
   resolveStopTimeoutAction,
   isModelDownloadErrorOutput,
   isSafeRecordingsMarkdownPath,
+  isSupportedCudaInstallPythonVersion,
   parseRecorderStdoutChunk,
+  parsePythonVersion,
   parseAiBackendProgressLine,
   resolveExternalUrl,
   resolveTranscriptionAudioFile,
@@ -475,21 +478,13 @@ function addMeetingToHistory(meetingData) {
  * Python ignores the PYTHONPATH environment variable.
  */
 function spawnTrackedPython(args, options = {}) {
-  // Merge PYTHONPATH with existing environment
-  // This ensures Python can find our backend modules (audio, transcription, etc.)
-  const pythonEnv = {
-    ...process.env,
-    PYTHONPATH: pythonConfig.backendPath + (process.env.PYTHONPATH ? 
-      (process.platform === 'win32' ? ';' : ':') + process.env.PYTHONPATH : '')
-  };
-  
   // Merge our environment with any options.env provided by caller
   const mergedOptions = {
     ...options,
-    env: { ...pythonEnv, ...(options.env || {}) }
+    env: buildPythonEnv(options.env || {})
   };
   
-  const proc = spawn(pythonConfig.pythonExe, args, mergedOptions);
+  const proc = spawn(pythonConfig.pythonExe, buildPythonProcessArgs(args), mergedOptions);
   activeProcesses.push(proc);
 
   // Auto-remove from tracking when process exits
@@ -517,9 +512,17 @@ function getPythonConfig() {
   const isMac = process.platform === 'darwin';
 
   if (isDev) {
+    const explicitPython = process.env.AVANEVIS_PYTHON || null;
+    const venvPython = process.env.VIRTUAL_ENV
+      ? path.join(process.env.VIRTUAL_ENV, isMac ? 'bin' : 'Scripts', isMac ? 'python3' : 'python.exe')
+      : null;
+    const repoVenvPython = path.join(__dirname, '..', '.venv', isMac ? 'bin' : 'Scripts', isMac ? 'python3' : 'python.exe');
+    const detectedVenvPython = venvPython || (fs.existsSync(repoVenvPython) ? repoVenvPython : null);
+
     // Development mode - use system Python
     return {
-      pythonExe: isMac ? 'python3' : 'python',
+      pythonExe: explicitPython || detectedVenvPython || (isMac ? 'python3' : 'python'),
+      pythonArgsPrefix: [],
       backendPath: path.join(__dirname, '../backend'),
       ffmpegPath: 'ffmpeg' // Assume in PATH
     };
@@ -531,6 +534,7 @@ function getPythonConfig() {
       // macOS: Use bundled Python from resources/python/bin/
       return {
         pythonExe: path.join(resourcesPath, 'python', 'bin', 'python3'),
+        pythonArgsPrefix: [],
         backendPath: path.join(resourcesPath, 'backend'),
         ffmpegPath: path.join(resourcesPath, 'ffmpeg', 'ffmpeg')
       };
@@ -538,6 +542,7 @@ function getPythonConfig() {
       // Windows: Use bundled Python from resources/python/
       return {
         pythonExe: path.join(resourcesPath, 'python', 'python.exe'),
+        pythonArgsPrefix: [],
         backendPath: path.join(resourcesPath, 'backend'),
         ffmpegPath: path.join(resourcesPath, 'ffmpeg', 'ffmpeg.exe')
       };
@@ -546,6 +551,31 @@ function getPythonConfig() {
 }
 
 const pythonConfig = getPythonConfig();
+
+function buildPythonProcessArgs(args = []) {
+  return [...(pythonConfig.pythonArgsPrefix || []), ...args];
+}
+
+function buildPythonEnv(extra = {}) {
+  return {
+    ...process.env,
+    PYTHONPATH: pythonConfig.backendPath + (process.env.PYTHONPATH ?
+      (process.platform === 'win32' ? ';' : ':') + process.env.PYTHONPATH : ''),
+    ...extra,
+  };
+}
+
+function getDiarizationCacheEnv(userDataDir = app.getPath('userData')) {
+  const cacheRoot = path.join(userDataDir, 'ai-addons', 'models', 'diarization');
+  const hubCache = path.join(cacheRoot, 'hub');
+  return {
+    HF_HOME: cacheRoot,
+    HF_HUB_CACHE: hubCache,
+    HUGGINGFACE_HUB_CACHE: hubCache,
+    TRANSFORMERS_CACHE: hubCache,
+    PYANNOTE_METRICS_ENABLED: '0',
+  };
+}
 
 const transcriberModule = buildTranscriberArgs({
   platform: process.platform,
@@ -577,7 +607,14 @@ function buildDiarizationArgs({ audioPath, segmentsJsonPath, outputPath, modelRe
   return getBackendModuleArgs('diarization.diarization_pipeline', args);
 }
 
-function buildSummaryArgs({ meetingId, transcriptPath, runtimeDir, modelPath, outputJson, outputMarkdown, speakersJsonPath, profile, modelLabel }) {
+function buildDiarizationValidationArgs(modelRef) {
+  return getBackendModuleArgs('diarization.diarization_pipeline', [
+    '--validate-setup',
+    '--model-ref', modelRef || 'pyannote/speaker-diarization-community-1',
+  ]);
+}
+
+function buildSummaryArgs({ meetingId, transcriptPath, runtimeDir, modelPath, outputJson, outputMarkdown, speakersJsonPath, profile, modelLabel, validateRuntime = false }) {
   const args = [
     '--meeting-id', meetingId,
     '--transcript', transcriptPath,
@@ -588,6 +625,10 @@ function buildSummaryArgs({ meetingId, transcriptPath, runtimeDir, modelPath, ou
     '--platform', process.platform,
     '--arch', process.arch,
   ];
+
+  if (validateRuntime) {
+    args.push('--validate-runtime');
+  }
 
   if (outputJson) {
     args.push('--output-json', outputJson);
@@ -695,7 +736,7 @@ async function verifyPythonInstallation() {
       };
     }
 
-    const result = await runProcessWithTimeout(pythonPath, ['--version'], 10000);
+    const result = await runProcessWithTimeout(pythonPath, buildPythonProcessArgs(['--version']), 10000);
 
     if (result.timedOut) {
       return {
@@ -732,6 +773,18 @@ async function verifyPythonInstallation() {
       help: 'An unexpected error occurred during startup checks.'
     };
   }
+}
+
+async function getActivePythonVersion() {
+  const result = await runProcessWithTimeout(pythonConfig.pythonExe, buildPythonProcessArgs(['--version']), 10000);
+  if (result.timedOut || result.error || result.code !== 0) {
+    throw new Error(result.error ? result.error.message : 'Could not determine Python version.');
+  }
+  const output = `${result.stdout}${result.stderr}`.trim();
+  return {
+    output,
+    parsed: parsePythonVersion(output),
+  };
 }
 
 /**
@@ -1662,6 +1715,91 @@ function emitAiAddonProgress(payload) {
   sendToRenderer(AI_ADDON_PROGRESS_CHANNEL, payload);
 }
 
+function validateDiarizationRuntime({ modelId }) {
+  const token = getAiAddonToken({
+    userDataDir: app.getPath('userData'),
+    tokenKey: TOKEN_KEYS.diarizationHuggingFace,
+    safeStorage,
+  });
+
+  return new Promise((resolve, reject) => {
+    const python = spawnTrackedPython(buildDiarizationValidationArgs(modelId), {
+      cwd: pythonConfig.backendPath,
+      env: {
+        ...getDiarizationCacheEnv(),
+        HF_TOKEN: token || '',
+        HUGGINGFACE_HUB_TOKEN: token || '',
+      },
+    });
+
+    let output = '';
+    let errorOutput = '';
+    python.stdout.on('data', (data) => { output += data.toString(); });
+    python.stderr.on('data', (data) => {
+      const stderrChunk = data.toString();
+      errorOutput += stderrChunk;
+      for (const line of stderrChunk.split(/\r?\n/)) {
+        const progressEvent = parseAiBackendProgressLine(line, 'diarization');
+        if (progressEvent) {
+          emitAiAddonProgress(progressEvent);
+        }
+      }
+    });
+    python.on('close', (code) => {
+      if (code === 0) {
+        try {
+          resolve(JSON.parse(output));
+        } catch (error) {
+          reject(new Error(`Failed to parse diarization setup validation: ${error.message}`));
+        }
+        return;
+      }
+      const reason = errorOutput.trim().split(/\r?\n/).filter(Boolean).slice(-1)[0];
+      reject(new Error(reason || 'Speaker identification runtime validation failed.'));
+    });
+    python.on('error', reject);
+  });
+}
+
+function validateSummaryRuntimeSmoke({ modelId, cache }) {
+  const artifact = getSummaryArtifactForPlatform(modelId, process.platform, process.arch);
+  if (!artifact) {
+    return Promise.reject(new Error('No summary model artifact is available for this platform.'));
+  }
+
+  const modelPath = cache && cache.artifactPath ? cache.artifactPath : getSummaryArtifactPath(app.getPath('userData'), artifact);
+  const runtimeDir = getSummaryRuntimeDir(app.getPath('userData'), artifact);
+
+  return new Promise((resolve, reject) => {
+    const python = spawnTrackedPython(buildSummaryArgs({
+      meetingId: 'setup-validation',
+      transcriptPath: modelPath,
+      runtimeDir,
+      modelPath,
+      validateRuntime: true,
+      modelLabel: artifact.modelLabel || artifact.modelId,
+    }), { cwd: pythonConfig.backendPath });
+
+    let output = '';
+    let errorOutput = '';
+    python.stdout.on('data', (data) => { output += data.toString(); });
+    python.stderr.on('data', (data) => { errorOutput += data.toString(); });
+    python.on('close', (code) => {
+      if (code === 0) {
+        try {
+          resolve(JSON.parse(output));
+        } catch (error) {
+          reject(new Error(`Failed to parse summary runtime validation: ${error.message}`));
+        }
+        return;
+      }
+      const reason = errorOutput.trim().split(/\r?\n/).filter(Boolean).slice(-1)[0];
+      reject(new Error(reason || 'Local summary runtime validation failed.'));
+    });
+    python.on('error', reject);
+  });
+}
+
 function getAiAddonRuntimeOptions(extra = {}) {
   return {
     userDataDir: app.getPath('userData'),
@@ -1704,19 +1842,24 @@ ipcMain.handle('setup-diarization', async (event, options = {}) => setupDiarizat
   modelId: options.modelId,
   speakerCount: options.speakerCount,
   token: options.token,
+  runtimeValidator: validateDiarizationRuntime,
 })));
 
-ipcMain.handle('validate-diarization-setup', async () => validateDiarizationSetup(getAiAddonRuntimeOptions()));
+ipcMain.handle('validate-diarization-setup', async () => validateDiarizationSetup(getAiAddonRuntimeOptions({
+  runtimeValidator: validateDiarizationRuntime,
+})));
 
 ipcMain.handle('remove-diarization-setup', async () => removeDiarizationSetup(getAiAddonRuntimeOptions()));
 
 ipcMain.handle('setup-summary-model', async (event, options = {}) => setupSummaryModel(getAiAddonRuntimeOptions({
   modelId: options.modelId,
   profile: options.profile,
+  runtimeValidator: validateSummaryRuntimeSmoke,
 })));
 
 ipcMain.handle('validate-summary-model', async (event, options = {}) => validateSummaryModel(getAiAddonRuntimeOptions({
   modelId: options.modelId,
+  runtimeValidator: validateSummaryRuntimeSmoke,
 })));
 
 ipcMain.handle('remove-summary-model', async (event, options = {}) => removeSummaryModel(getAiAddonRuntimeOptions({
@@ -2317,9 +2460,9 @@ ipcMain.handle('diarize-transcript', async (event, options = {}) => {
     }), {
       cwd: pythonConfig.backendPath,
       env: {
+        ...getDiarizationCacheEnv(),
         HF_TOKEN: token || '',
         HUGGINGFACE_HUB_TOKEN: token || '',
-        PYANNOTE_METRICS_ENABLED: '0',
       },
     });
 
@@ -2871,9 +3014,22 @@ ipcMain.handle('check-cuda', async () => {
     python.on('close', () => {
       const cudaAvailable = output.includes('cuda_available:True');
       const versionMatch = output.match(/cuda_version:([\d.]+)/);
-      resolve({
-        installed: cudaAvailable,
-        version: versionMatch ? versionMatch[1] : null
+      getActivePythonVersion().then((pythonVersion) => {
+        resolve({
+          installed: cudaAvailable,
+          version: versionMatch ? versionMatch[1] : null,
+          pythonVersion: pythonVersion.parsed ? pythonVersion.parsed.version : pythonVersion.output,
+          pythonSupportedForInstall: isSupportedCudaInstallPythonVersion(pythonVersion.parsed),
+          pythonExecutable: pythonConfig.pythonExe,
+        });
+      }).catch(() => {
+        resolve({
+          installed: cudaAvailable,
+          version: versionMatch ? versionMatch[1] : null,
+          pythonVersion: null,
+          pythonSupportedForInstall: false,
+          pythonExecutable: pythonConfig.pythonExe,
+        });
       });
     });
   });
@@ -2884,7 +3040,13 @@ ipcMain.handle('check-cuda', async () => {
  */
 ipcMain.handle('install-gpu', async () => {
   return new Promise((resolve, reject) => {
-    const packages = [
+    getActivePythonVersion().then((pythonVersion) => {
+      if (!isSupportedCudaInstallPythonVersion(pythonVersion.parsed)) {
+        reject(new Error(buildUnsupportedCudaPythonMessage(pythonVersion.output)));
+        return;
+      }
+
+      const packages = [
       'torch',
       'torchvision',
       'torchaudio',
@@ -2892,7 +3054,7 @@ ipcMain.handle('install-gpu', async () => {
       'https://download.pytorch.org/whl/cu121'
     ];
 
-    const python = spawnTrackedPython([
+      const python = spawnTrackedPython([
       '-m',
       'pip',
       'install',
@@ -2900,28 +3062,28 @@ ipcMain.handle('install-gpu', async () => {
       '--no-warn-script-location'
     ]);
 
-    let output = '';
-    let errorOutput = '';
+      let output = '';
+      let errorOutput = '';
 
-    python.stdout.on('data', (data) => {
-      const text = data.toString();
-      output += text;
-      // Send progress to renderer
-      mainWindow.webContents.send('gpu-install-progress', text);
-    });
+      python.stdout.on('data', (data) => {
+        const text = data.toString();
+        output += text;
+        // Send progress to renderer
+        mainWindow.webContents.send('gpu-install-progress', text);
+      });
 
-    python.stderr.on('data', (data) => {
-      const text = data.toString();
-      errorOutput += text;
-      mainWindow.webContents.send('gpu-install-progress', text);
-    });
+      python.stderr.on('data', (data) => {
+        const text = data.toString();
+        errorOutput += text;
+        mainWindow.webContents.send('gpu-install-progress', text);
+      });
 
-    python.on('close', (code) => {
-      if (code === 0) {
-        // Install CUDA libraries
-        const cudaPackages = ['nvidia-cublas-cu12', 'nvidia-cudnn-cu12'];
+      python.on('close', (code) => {
+        if (code === 0) {
+          // Install CUDA libraries
+          const cudaPackages = ['nvidia-cublas-cu12', 'nvidia-cudnn-cu12'];
 
-        const cudaProcess = spawnTrackedPython([
+          const cudaProcess = spawnTrackedPython([
           '-m',
           'pip',
           'install',
@@ -2929,29 +3091,32 @@ ipcMain.handle('install-gpu', async () => {
           '--no-warn-script-location'
         ]);
 
-        let cudaErrorOutput = '';
+          let cudaErrorOutput = '';
 
-        cudaProcess.stdout.on('data', (data) => {
-          mainWindow.webContents.send('gpu-install-progress', data.toString());
-        });
+          cudaProcess.stdout.on('data', (data) => {
+            mainWindow.webContents.send('gpu-install-progress', data.toString());
+          });
 
-        cudaProcess.stderr.on('data', (data) => {
-          const text = data.toString();
-          cudaErrorOutput += text;
-          mainWindow.webContents.send('gpu-install-progress', text);
-        });
+          cudaProcess.stderr.on('data', (data) => {
+            const text = data.toString();
+            cudaErrorOutput += text;
+            mainWindow.webContents.send('gpu-install-progress', text);
+          });
 
-        cudaProcess.on('close', (cudaCode) => {
-          if (cudaCode === 0) {
-            resolve({ success: true, message: 'GPU acceleration installed successfully' });
-          } else {
-            const errorMsg = cudaErrorOutput.trim() || 'Unknown error';
-            reject(new Error(`Failed to install CUDA libraries: ${errorMsg}`));
-          }
-        });
-      } else {
-        reject(new Error(`Failed to install PyTorch: ${errorOutput}`));
-      }
+          cudaProcess.on('close', (cudaCode) => {
+            if (cudaCode === 0) {
+              resolve({ success: true, message: 'GPU acceleration installed successfully' });
+            } else {
+              const errorMsg = cudaErrorOutput.trim() || 'Unknown error';
+              reject(new Error(`Failed to install CUDA libraries: ${errorMsg}`));
+            }
+          });
+        } else {
+          reject(new Error(`Failed to install PyTorch: ${errorOutput}`));
+        }
+      });
+    }).catch((error) => {
+      reject(new Error(`Could not verify Python before installing GPU acceleration: ${error.message}`));
     });
   });
 });

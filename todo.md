@@ -38,15 +38,16 @@ Goal: add optional post-install local speaker diarization and transcript summari
 - 2026-05-16: Summary model distribution decision: use a larger optional installer/download artifact, similar to the CUDA setup flow, instead of bundling the model in the base installer or doing opaque background downloads.
 - 2026-05-16: Added explicit AI add-on setup/check/remove/validate helpers and IPC wrappers, safe redacted `ai-addon-progress` events, platform-specific summary artifact selection, and pinned-filename/checksum enforcement that refuses summary downloads until artifact metadata is complete. `npm test` and `npm run test:python` passed.
 - 2026-05-16: Added lazy pyannote diarization runner and `diarize-transcript` IPC boundary without changing Whisper transcription paths. The backend prepares 16 kHz mono WAV input, disables pyannote metrics, prefers exclusive diarization output, writes `*.speakers.json`, and emits redacted progress. `npm test` and `npm run test:python` passed.
-- 2026-05-16: Added deterministic summary runtime/prompt helpers: llama.cpp path and CLI argument resolution for Windows CUDA/macOS Metal, profile-specific chunk/final-merge prompts, and JSON extraction/repair around local model output. Runtime execution remains pending until pinned llama.cpp/model artifacts are supplied. `npm test` and `npm run test:python` passed.
+- 2026-05-16: Added deterministic summary runtime/prompt helpers: llama.cpp path and CLI argument resolution for Windows CUDA/macOS Metal, profile-specific chunk/final-merge prompts, and JSON extraction/repair around local model output. `npm test` and `npm run test:python` passed.
 - 2026-05-16: Added explicit `generate-summary` IPC and backend runner that reads saved meeting transcripts, prefers speaker sidecars, runs local llama.cpp prompts when setup is ready, writes `*.summary.json`/`*.summary.md`, and stores `sourceTranscriptHash` in meeting metadata. Model/runtime cache paths remain under Electron `userData` so normal app updates/reinstalls preserve installed local AI artifacts. `npm test` and `npm run test:python` passed.
 - 2026-05-16: Wired automatic post-transcription diarization in the renderer when speaker setup is complete and ready. The normal transcript is saved first, diarization failures are warning-only, successful speaker labels update the current transcript view and saved transcript Markdown through a main-process guarded recordings-only write IPC. `npm test` and `npm run test:python` passed.
 - 2026-05-16: Added user-triggered summary generation buttons for the current saved transcript and History details, summary progress logging, History summary hydration from `*.summary.md`, and a simple saved summary viewer/empty/error state. Missing setup remains graceful and points users to Settings. `npm test` and `npm run test:python` passed.
-- 2026-05-16: Added Settings > AI Add-ons cards below GPU Acceleration with diarization token/speaker-count setup, validation/removal controls, summary profile/model setup validation/removal controls, redacted progress log display, and direct routing from missing summary setup to the Settings add-on area. Summary artifact downloads still remain blocked until pinned URL/checksum metadata is supplied. `npm test` and `npm run test:python` passed.
+- 2026-05-16: Added Settings > AI Add-ons cards below GPU Acceleration with diarization token/speaker-count setup, validation/removal controls, summary profile/model setup validation/removal controls, redacted progress log display, and direct routing from missing summary setup to the Settings add-on area. `npm test` and `npm run test:python` passed.
 - 2026-05-16: Selecting and pinning trusted summary model artifact sources/checksums is now in progress. Preferred source policy: use official model-owner GGUF artifacts when available; otherwise use high-reputation community quantizations with immutable commit-pinned URLs and verified SHA-256 checksums.
 - 2026-05-16: Pinned summary GGUF artifacts to immutable Hugging Face revisions with LFS SHA-256 checksums and pinned llama.cpp b9173 runtime archives for Windows CUDA 12.4 and macOS arm64. Summary setup now downloads/verifies/extracts the runtime before the model and status cannot become ready unless both model and `llama-cli` are installed. `npm test` and `npm run test:python` passed.
 - 2026-05-16: Added History Transcript/Summary tabs, History speaker-label rendering from saved transcript Markdown, summary copy/save actions, a model-terms link for the user's own Hugging Face token flow, and clearer graceful-degradation messages for missing token/model/runtime and unsupported hardware. `npm test` and `npm run test:python` passed.
 - 2026-05-16: Added topic-boundary summary chunking heuristics, one explicit malformed-JSON repair prompt retry, atomic summary sidecar writes, summary stale-state hydration/display, Home AI add-on prompt priority with Windows CUDA and macOS diarization gating, catalog maintenance docs, README/docs/manual checklist updates, and AGENTS/CLAUDE local AI guidance alignment. `npm test` and `npm run test:python` passed. Static network-surface review found only explicit setup/update/build download paths and trusted external links; live network validation remains pending.
+- 2026-05-16: Tightened pre-manual-test setup checks: dev mode now prefers a repo/active Python 3.11 environment or `AVANEVIS_PYTHON`, GPU install blocks unsupported Python runtimes with a clear message, speaker setup validates `pyannote.audio` model access and stores Hugging Face cache under `userData`, and summary setup smoke-tests `llama-cli --help` before Ready. `npm test` and `npm run test:python` passed.
 
 ## V1 Model Defaults
 
@@ -98,7 +99,7 @@ Skipped by product direction. Proceed with the V1 Model Defaults above and keep 
 
 ## Phase 3 - Diarization Backend
 
-- [x] Add `backend/diarization/` module. (Pure merge helpers only; pyannote runtime integration remains pending.)
+- [x] Add `backend/diarization/` module.
 - [x] Add lazy loading for `pyannote/speaker-diarization-community-1`.
 - [x] Set `PYANNOTE_METRICS_ENABLED=0` in app-spawned diarization processes.
 - [x] Convert Opus recordings to 16 kHz mono WAV when required.
@@ -110,13 +111,13 @@ Skipped by product direction. Proceed with the V1 Model Defaults above and keep 
 
 ## Phase 4 - Summary Backend
 
-- [x] Add `backend/summaries/` module. (Pure pipeline helpers only; llama.cpp runtime integration remains pending.)
+- [x] Add `backend/summaries/` module.
 - [x] Add pinned `llama.cpp` runtime resolution for Windows CUDA and macOS Metal. (Pinned runtime download/verification/extraction is implemented for optional setup.)
 - [x] Add transcript normalization that uses speaker labels when available and works without them.
 - [x] Add token-budget chunking by timestamp and topic boundaries.
 - [x] Add prompt templates for `Concise`, `Balanced`, `Detailed`, and `Action items` profiles against one installed model.
 - [x] Add chunk summary and final merge flow.
-- [x] Require structured JSON output and validate before saving. (Pure validation helper added; runtime save integration remains pending.)
+- [x] Require structured JSON output and validate before saving.
 - [x] Add retry/repair path for malformed JSON.
 - [x] Render summary JSON to Markdown for History display/export.
 - [x] Ensure failed summary generation never modifies the transcript.
@@ -128,7 +129,7 @@ Skipped by product direction. Proceed with the V1 Model Defaults above and keep 
 - [x] Add `setup-diarization`, `remove-diarization-setup`, and token validation IPC handlers.
 - [x] Add `setup-summary-model` and `remove-summary-model` IPC handlers. (Pinned model/runtime downloads are verified before setup can become ready.)
 - [x] Add `diarize-transcript` IPC handler for post-transcription integration.
-- [x] Add `generate-summary` IPC handler for Home and History actions. (Renderer buttons are still pending.)
+- [x] Add `generate-summary` IPC handler for Home and History actions.
 - [x] Add progress events for model download, validation, diarization, chunk summaries, final merge, and save.
 - [x] Extend meeting metadata with `ai.diarization` and `ai.summary` references without storing large derived output inline.
 - [x] Save derived files: `*.speakers.json`, `*.summary.json`, and `*.summary.md`.
@@ -153,6 +154,12 @@ Skipped by product direction. Proceed with the V1 Model Defaults above and keep 
 
 ## Phase 7 - Tests And Validation
 
+- [x] Add or validate a Windows `pyannote.audio` dependency/setup path before speaker diarization testing. (Speaker setup now imports/loads pyannote during validation; packaging pins still need validation on target hardware.)
+- [x] Make speaker setup validation prove `pyannote.audio` imports and the user's token can access `pyannote/speaker-diarization-community-1`, or relabel setup as token-only until first run.
+- [x] Force Hugging Face/pyannote model cache under Electron `userData/ai-addons/models/diarization`.
+- [x] Add summary runtime smoke validation after setup, such as `llama-cli --help` or a tiny local prompt, so missing DLLs/CUDA runtime issues fail during setup instead of first summary generation.
+- [x] Clean up stale completed-task notes in this file before using it as the manual test tracker.
+- [x] Fix GPU installer Python runtime selection and error handling: manual Windows testing hit `C:\Python313\python.exe` with `ERROR: No matching distribution found for torch` from the PyTorch CUDA 12.1 index. Detect unsupported Python versions, prefer the app-supported Python 3.11 runtime, and show a clear remediation instead of attempting an incompatible install.
 - [x] Unit-test add-on state normalization and prompt priority, especially CUDA before diarization on Windows/NVIDIA.
 - [x] Unit-test secure token storage behavior without exposing token values in logs.
 - [x] Unit-test speaker/segment overlap merge behavior.

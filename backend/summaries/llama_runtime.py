@@ -138,6 +138,17 @@ def run_llama_prompt(
     return result.stdout.strip()
 
 
+def smoke_test_llama_runtime(runtime: Dict[str, Any], *, timeout_seconds: int = 30) -> None:
+    executable = runtime.get("executable")
+    if not executable:
+        raise SummaryRuntimeError("Resolved llama.cpp runtime must include executable.")
+
+    result = subprocess.run([str(executable), "--help"], capture_output=True, text=True, check=False, timeout=timeout_seconds)
+    combined = f"{result.stdout}\n{result.stderr}".lower()
+    if result.returncode != 0 or "llama" not in combined:
+        raise SummaryRuntimeError("llama.cpp runtime smoke validation failed.")
+
+
 def build_summary_progress_event(
     *,
     meeting_id: str,

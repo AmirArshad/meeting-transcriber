@@ -8,6 +8,7 @@ from backend.summaries.summary_runner import (
     load_summary_segments,
     save_summary_outputs,
     sidecar_paths,
+    validate_summary_runtime,
 )
 
 
@@ -98,3 +99,27 @@ def test_save_summary_outputs_writes_json_and_markdown(tmp_path):
     assert payload['summary']['summary'] == 'Saved summary'
     assert payload['metadata']['profile'] == 'balanced'
     assert '# Meeting Summary' in markdown_path.read_text(encoding='utf-8')
+
+
+def test_validate_summary_runtime_smoke_tests_resolved_runtime(monkeypatch, tmp_path):
+    runtime_dir = tmp_path / 'runtime'
+    runtime_dir.mkdir()
+    executable = runtime_dir / 'llama-cli.exe'
+    executable.write_text('bin', encoding='utf-8')
+    model_path = tmp_path / 'model.gguf'
+    model_path.write_text('model', encoding='utf-8')
+    calls = []
+
+    monkeypatch.setattr('backend.summaries.summary_runner.smoke_test_llama_runtime', lambda runtime: calls.append(runtime))
+
+    result = validate_summary_runtime(
+        runtime_dir=str(runtime_dir),
+        model_path=str(model_path),
+        platform='win32',
+        arch='x64',
+    )
+
+    assert result['status'] == 'ready'
+    assert result['acceleration'] == 'cuda'
+    assert result['executable'] == str(executable)
+    assert calls[0]['modelPath'] == str(model_path)

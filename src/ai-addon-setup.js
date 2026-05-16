@@ -555,6 +555,7 @@ async function validateDiarizationSetup({
   catalog = AI_MODEL_CATALOG,
   now = () => new Date().toISOString(),
   emitProgress,
+  runtimeValidator,
 } = {}) {
   emitSafeProgress(emitProgress, {
     feature: 'diarization',
@@ -589,10 +590,20 @@ async function validateDiarizationSetup({
         status = 'needsAccount';
         message = 'Stored Hugging Face token does not match the expected token format.';
         error = message;
+      } else if (typeof runtimeValidator === 'function') {
+        try {
+          await runtimeValidator({ modelId, token });
+        } catch (runtimeError) {
+          status = 'error';
+          message = runtimeError.message || 'Speaker identification runtime validation failed.';
+          error = message;
+        }
       }
     } catch (validationError) {
       status = 'error';
-      message = 'Stored Hugging Face token could not be decrypted.';
+      message = validationError.message && validationError.message.includes('decrypt')
+        ? 'Stored Hugging Face token could not be decrypted.'
+        : validationError.message || 'Stored Hugging Face token could not be decrypted.';
       error = message;
     }
   }
@@ -634,6 +645,7 @@ async function setupDiarizationAddon({
   catalog = AI_MODEL_CATALOG,
   now = () => new Date().toISOString(),
   emitProgress,
+  runtimeValidator,
 } = {}) {
   emitSafeProgress(emitProgress, {
     feature: 'diarization',
@@ -706,7 +718,7 @@ async function setupDiarizationAddon({
     }),
   });
 
-  return validateDiarizationSetup({ userDataDir, platform, arch, safeStorage, fsModule, catalog, now, emitProgress });
+  return validateDiarizationSetup({ userDataDir, platform, arch, safeStorage, fsModule, catalog, now, emitProgress, runtimeValidator });
 }
 
 async function removeDiarizationSetup({
@@ -977,6 +989,7 @@ async function validateSummaryModel({
   catalog = AI_MODEL_CATALOG,
   now = () => new Date().toISOString(),
   emitProgress,
+  runtimeValidator,
 } = {}) {
   const selectedModelId = resolveModelId('summary', modelId, catalog);
   emitSafeProgress(emitProgress, {
@@ -1015,6 +1028,13 @@ async function validateSummaryModel({
     message = runtimeCache.reason;
   } else if (!cache.installed) {
     status = 'notConfigured';
+  } else if (cache.valid && runtimeCache.valid && typeof runtimeValidator === 'function') {
+    try {
+      await runtimeValidator({ modelId: selectedModelId, cache, runtimeCache });
+    } catch (runtimeError) {
+      status = 'error';
+      message = runtimeError.message || 'llama.cpp runtime smoke validation failed.';
+    }
   }
 
   updateManifestFeature({
@@ -1055,6 +1075,7 @@ async function setupSummaryModel({
   emitProgress,
   downloader = downloadFile,
   extractor = extractRuntimeArchive,
+  runtimeValidator,
 } = {}) {
   const selectedModelId = resolveModelId('summary', modelId, catalog);
   const artifact = getSummaryArtifactForPlatform(selectedModelId, platform, arch, catalog);
@@ -1092,7 +1113,7 @@ async function setupSummaryModel({
   const cache = await checkSummaryModelCache({ userDataDir, platform, arch, modelId: selectedModelId, fsModule, catalog, verifyChecksum: true });
   const runtimeCache = checkSummaryRuntimeCache({ userDataDir, platform, arch, modelId: selectedModelId, fsModule, catalog });
   if (cache.valid && runtimeCache.valid) {
-    return validateSummaryModel({ userDataDir, platform, arch, modelId: selectedModelId, safeStorage, fsModule, catalog, now, emitProgress });
+    return validateSummaryModel({ userDataDir, platform, arch, modelId: selectedModelId, safeStorage, fsModule, catalog, now, emitProgress, runtimeValidator });
   }
 
   if (!runtimeCache.valid) {
@@ -1172,7 +1193,7 @@ async function setupSummaryModel({
     renameSync(tempPath, artifactPath);
   }
 
-  return validateSummaryModel({ userDataDir, platform, arch, modelId: selectedModelId, safeStorage, fsModule, catalog, now, emitProgress });
+  return validateSummaryModel({ userDataDir, platform, arch, modelId: selectedModelId, safeStorage, fsModule, catalog, now, emitProgress, runtimeValidator });
 }
 
 async function removeSummaryModel({

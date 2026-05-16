@@ -128,6 +128,33 @@ function buildTranscriberArgs({ platform, arch, extraArgs = [] } = {}) {
   return buildPythonModuleArgs(getTranscriberModule(platform, arch), extraArgs);
 }
 
+function parsePythonVersion(output) {
+  const match = String(output || '').match(/Python\s+(\d+)\.(\d+)\.(\d+)/i);
+  if (!match) {
+    return null;
+  }
+
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+    version: `${match[1]}.${match[2]}.${match[3]}`,
+  };
+}
+
+function isSupportedCudaInstallPythonVersion(versionInfo) {
+  return Boolean(versionInfo && versionInfo.major === 3 && versionInfo.minor === 11);
+}
+
+function buildUnsupportedCudaPythonMessage(versionOutput) {
+  const versionInfo = parsePythonVersion(versionOutput);
+  const version = versionInfo ? versionInfo.version : String(versionOutput || '').trim() || 'unknown';
+  return [
+    `GPU acceleration setup requires AvaNevis' supported Python 3.11 runtime, but the current runtime is Python ${version}.`,
+    'Start dev mode from a Python 3.11 virtual environment, set AVANEVIS_PYTHON to a Python 3.11 executable, or install Python 3.11 so the Windows py launcher can resolve py -3.11.',
+  ].join(' ');
+}
+
 function sanitizeAiProgressMessage(message) {
   return String(message || '')
     .replace(/hf_[A-Za-z0-9_-]+/g, '[redacted-token]')
@@ -714,6 +741,7 @@ module.exports = {
   buildModelDownloadCheck,
   buildPythonModuleArgs,
   buildTranscriberArgs,
+  buildUnsupportedCudaPythonMessage,
   buildDiarizationOutputPath,
   cacheContainsModel,
   classifyRecorderStdoutChunk,
@@ -730,7 +758,9 @@ module.exports = {
   resolveStopTimeoutAction,
   isModelDownloadErrorOutput,
   isSafeRecordingsMarkdownPath,
+  isSupportedCudaInstallPythonVersion,
   normalizeRecorderLevels,
+  parsePythonVersion,
   parseRecorderMessageLine,
   parseAiBackendProgressLine,
   parseRecorderStdoutChunk,

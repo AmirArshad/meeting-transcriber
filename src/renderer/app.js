@@ -2884,10 +2884,12 @@ async function checkGPUStatus() {
       } else {
         gpuValue2.textContent = 'Not installed';
         gpuValue2.classList.add('warning');
-        gpuValue3.textContent = '~2-3 GB';
+        gpuValue3.textContent = cudaInfo.pythonSupportedForInstall === false && cudaInfo.pythonVersion
+          ? `Requires Python 3.11 (current: ${cudaInfo.pythonVersion})`
+          : '~2-3 GB';
         statusBadge.textContent = 'Available';
         statusBadge.classList.add('disabled');
-        installBtn.disabled = false;
+        installBtn.disabled = cudaInfo.pythonSupportedForInstall === false;
         installBtn.style.display = 'block';
         uninstallBtn.style.display = 'none';
       }
@@ -3018,7 +3020,7 @@ async function installGPUAcceleration() {
     installBtn.disabled = false;
     installBtn.classList.remove('is-loading');
 
-    alert('GPU installation failed. Check the log for details.');
+    alert(`GPU installation failed.\n\n${error.message}`);
   }
 }
 

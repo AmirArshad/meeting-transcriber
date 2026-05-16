@@ -27,6 +27,22 @@ UNKNOWN_PROGRESS_ERROR = "Speaker diarization failed."
 os.environ.setdefault("PYANNOTE_METRICS_ENABLED", "0")
 
 
+def validate_pyannote_setup(*, model_ref: str = DEFAULT_MODEL_REF, hf_token: Optional[str] = None) -> Dict[str, Any]:
+    """Validate that local pyannote setup can load the gated model."""
+    token = hf_token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN") or ""
+    if not token:
+        raise ValueError("Hugging Face token is required for speaker diarization.")
+
+    emit_progress("validating-runtime", "Checking pyannote.audio runtime.", percent=10)
+    pipeline = load_pyannote_pipeline(model_ref, token)
+    device = move_pipeline_to_best_device(pipeline)
+    return {
+        "status": "ready",
+        "model": model_ref,
+        "device": device,
+    }
+
+
 def _safe_message(message: Any) -> str:
     cleaned = re.sub(r"hf_[A-Za-z0-9_-]+", "[redacted-token]", str(message or ""))
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
@@ -279,15 +295,25 @@ def diarize_transcript(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run local speaker diarization for an AvaNevis transcript")
-    parser.add_argument("--audio", required=True, help="Source audio file path")
-    parser.add_argument("--segments-json", required=True, help="Transcript segments JSON path")
-    parser.add_argument("--output-json", required=True, help="Output speakers JSON path")
+    parser.add_argument("--validate-setup", action="store_true", help="Validate pyannote runtime and model access without diarizing audio")
+    parser.add_argument("--audio", help="Source audio file path")
+    parser.add_argument("--segments-json", help="Transcript segments JSON path")
+    parser.add_argument("--output-json", help="Output speakers JSON path")
     parser.add_argument("--model-ref", default=DEFAULT_MODEL_REF, help="pyannote model reference")
     parser.add_argument("--speaker-count", default="auto", help="Known speaker count or auto")
     parser.add_argument("--ffmpeg", default="ffmpeg", help="ffmpeg executable path")
     args = parser.parse_args()
 
     try:
+        if args.validate_setup:
+            result = validate_pyannote_setup(model_ref=args.model_ref)
+            emit_progress("ready", "Speaker diarization setup is ready.", percent=100)
+            print(json.dumps(result, ensure_ascii=True))
+            return
+
+        if not args.audio or not args.segments_json or not args.output_json:
+            raise ValueError("--audio, --segments-json, and --output-json are required unless --validate-setup is used.")
+
         result = diarize_transcript(
             audio_path=args.audio,
             segments_json_path=args.segments_json,

@@ -86,6 +86,36 @@ def test_save_diarization_result_writes_json_sidecar(tmp_path):
     assert json.loads(output_path.read_text(encoding='utf-8'))['status'] == 'completed'
 
 
+def test_validate_pyannote_setup_requires_token(monkeypatch):
+    monkeypatch.delenv('HF_TOKEN', raising=False)
+    monkeypatch.delenv('HUGGINGFACE_HUB_TOKEN', raising=False)
+
+    with pytest.raises(ValueError, match='token is required'):
+        pipeline.validate_pyannote_setup()
+
+
+def test_validate_pyannote_setup_loads_model_and_moves_device(monkeypatch):
+    calls = {}
+
+    def fake_load(model_ref, hf_token):
+        calls['model_ref'] = model_ref
+        calls['hf_token'] = hf_token
+        return object()
+
+    monkeypatch.setenv('HF_TOKEN', 'hf_validtoken123')
+    monkeypatch.setattr(pipeline, 'load_pyannote_pipeline', fake_load)
+    monkeypatch.setattr(pipeline, 'move_pipeline_to_best_device', lambda _pipeline: 'cuda')
+
+    result = pipeline.validate_pyannote_setup(model_ref='pyannote/test-model')
+
+    assert result == {
+        'status': 'ready',
+        'model': 'pyannote/test-model',
+        'device': 'cuda',
+    }
+    assert calls == {'model_ref': 'pyannote/test-model', 'hf_token': 'hf_validtoken123'}
+
+
 def test_emit_progress_redacts_token_values(capsys):
     pipeline.emit_progress('loading model', 'Using hf_secret_token for setup', percent=120)
     captured = capsys.readouterr()

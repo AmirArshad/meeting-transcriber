@@ -232,6 +232,42 @@ test('setup diarization stores token securely and writes ready manifest state', 
   assert.equal(JSON.stringify(progress).includes('hf_validtoken123'), false);
 });
 
+test('setup diarization runs runtime validation before marking ready', async () => {
+  const validations = [];
+  const status = await setupDiarizationAddon({
+    userDataDir: '/tmp/AvaNevis',
+    platform: 'win32',
+    arch: 'x64',
+    token: 'hf_validtoken123',
+    safeStorage: createSafeStorage(),
+    fsModule: createMemoryFs(),
+    runtimeValidator: async (payload) => validations.push(payload),
+  });
+
+  assert.equal(status.features.diarization.status, 'ready');
+  assert.equal(validations.length, 1);
+  assert.equal(validations[0].modelId, 'pyannote/speaker-diarization-community-1');
+  assert.equal(validations[0].token, 'hf_validtoken123');
+});
+
+test('setup diarization reports runtime validation failures before first run', async () => {
+  const status = await setupDiarizationAddon({
+    userDataDir: '/tmp/AvaNevis',
+    platform: 'win32',
+    arch: 'x64',
+    token: 'hf_validtoken123',
+    safeStorage: createSafeStorage(),
+    fsModule: createMemoryFs(),
+    runtimeValidator: async () => {
+      throw new Error('pyannote.audio is not installed for speaker diarization.');
+    },
+  });
+
+  assert.equal(status.features.diarization.status, 'error');
+  assert.match(status.features.diarization.error, /pyannote\.audio is not installed/);
+  assert.equal(status.features.diarization.setupComplete, false);
+});
+
 test('invalid diarization token keeps setup in needsAccount', async () => {
   const status = await setupDiarizationAddon({
     userDataDir: '/tmp/AvaNevis',
@@ -368,6 +404,70 @@ test('validate summary model accepts installed model and runtime with matching c
   assert.equal(status.features.summary.setupComplete, true);
   assert.equal(status.features.summary.cache.checksumStatus, 'notChecked');
   assert.equal(status.features.summary.runtimeCache.installed, true);
+});
+
+test('validate summary model smoke-tests runtime before ready state', async () => {
+  const fsModule = createMemoryFs();
+  const catalog = createCatalogWithPinnedSummaryArtifact({
+    sha256: 'a0700a1b17cb3f2328437cbc70a3ac543fab2c1e7d1d8014862d801e1eb11162',
+  });
+  const userDataDir = '/tmp/AvaNevis';
+  const artifact = getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog);
+  const artifactPath = getSummaryArtifactPath(userDataDir, artifact);
+  fsModule.mkdirSync(path.dirname(artifactPath));
+  fsModule.writeFileSync(artifactPath, 'checksum target\n');
+  const runtimeExecutable = getSummaryRuntimeExecutablePath(userDataDir, artifact, catalog.summary.runtimeArtifacts['win32-x64']);
+  fsModule.mkdirSync(path.dirname(runtimeExecutable));
+  fsModule.writeFileSync(runtimeExecutable, 'bin');
+  const validations = [];
+
+  const status = await validateSummaryModel({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    modelId: 'summary-model',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog,
+    runtimeValidator: async (payload) => validations.push(payload),
+  });
+
+  assert.equal(status.features.summary.status, 'ready');
+  assert.equal(validations.length, 1);
+  assert.equal(validations[0].modelId, 'summary-model');
+  assert.equal(validations[0].cache.artifactPath, artifactPath);
+});
+
+test('validate summary model reports smoke-test failure', async () => {
+  const fsModule = createMemoryFs();
+  const catalog = createCatalogWithPinnedSummaryArtifact({
+    sha256: 'a0700a1b17cb3f2328437cbc70a3ac543fab2c1e7d1d8014862d801e1eb11162',
+  });
+  const userDataDir = '/tmp/AvaNevis';
+  const artifact = getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog);
+  const artifactPath = getSummaryArtifactPath(userDataDir, artifact);
+  fsModule.mkdirSync(path.dirname(artifactPath));
+  fsModule.writeFileSync(artifactPath, 'checksum target\n');
+  const runtimeExecutable = getSummaryRuntimeExecutablePath(userDataDir, artifact, catalog.summary.runtimeArtifacts['win32-x64']);
+  fsModule.mkdirSync(path.dirname(runtimeExecutable));
+  fsModule.writeFileSync(runtimeExecutable, 'bin');
+
+  const status = await validateSummaryModel({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    modelId: 'summary-model',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog,
+    runtimeValidator: async () => {
+      throw new Error('llama.cpp runtime smoke validation failed.');
+    },
+  });
+
+  assert.equal(status.features.summary.status, 'error');
+  assert.match(status.features.summary.error, /smoke validation failed/);
+  assert.equal(status.features.summary.setupComplete, false);
 });
 
 test('setup summary model uses pinned default metadata and fails if runtime install fails', async () => {

@@ -16,6 +16,7 @@ const {
   buildModelDownloadCheck,
   buildPythonModuleArgs,
   buildTranscriberArgs,
+  buildUnsupportedCudaPythonMessage,
   cacheContainsModel,
   classifyRecorderStdoutChunk,
   getQuitInterceptState,
@@ -29,7 +30,9 @@ const {
   resolveStopTimeoutAction,
   isModelDownloadErrorOutput,
   isSafeRecordingsMarkdownPath,
+  isSupportedCudaInstallPythonVersion,
   parseAiBackendProgressLine,
+  parsePythonVersion,
   parseRecorderMessageLine,
   parseRecorderStdoutChunk,
   resolveExternalUrl,
@@ -270,6 +273,23 @@ test('buildPythonModuleArgs builds generic backend module entrypoints', () => {
   assert.deepEqual(
     buildPythonModuleArgs('device_manager'),
     ['-m', 'device_manager'],
+  );
+});
+
+
+test('parsePythonVersion supports CUDA installer runtime checks', () => {
+  assert.deepEqual(parsePythonVersion('Python 3.11.9'), {
+    major: 3,
+    minor: 11,
+    patch: 9,
+    version: '3.11.9',
+  });
+  assert.equal(parsePythonVersion('not python'), null);
+  assert.equal(isSupportedCudaInstallPythonVersion(parsePythonVersion('Python 3.11.9')), true);
+  assert.equal(isSupportedCudaInstallPythonVersion(parsePythonVersion('Python 3.13.2')), false);
+  assert.match(
+    buildUnsupportedCudaPythonMessage('Python 3.13.2'),
+    /requires AvaNevis' supported Python 3\.11 runtime/,
   );
 });
 

@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
-from .llama_runtime import build_summary_progress_event, resolve_llama_runtime, run_llama_prompt
+from .llama_runtime import build_summary_progress_event, resolve_llama_runtime, run_llama_prompt, smoke_test_llama_runtime
 from .summary_pipeline import (
     SummaryValidationError,
     build_chunk_summary_prompt,
@@ -255,10 +255,27 @@ def generate_summary(
     }
 
 
+def validate_summary_runtime(
+    *,
+    runtime_dir: str,
+    model_path: str,
+    platform: Optional[str] = None,
+    arch: Optional[str] = None,
+) -> Dict[str, Any]:
+    runtime = resolve_llama_runtime(runtime_dir=runtime_dir, model_path=model_path, platform=platform, arch=arch)
+    smoke_test_llama_runtime(runtime)
+    return {
+        "status": "ready",
+        "runtime": runtime["runtime"],
+        "acceleration": runtime["acceleration"],
+        "executable": runtime["executable"],
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate a local AvaNevis meeting summary")
-    parser.add_argument("--meeting-id", required=True)
-    parser.add_argument("--transcript", required=True)
+    parser.add_argument("--meeting-id", default="setup-validation")
+    parser.add_argument("--transcript")
     parser.add_argument("--runtime-dir", required=True)
     parser.add_argument("--model-path", required=True)
     parser.add_argument("--output-json")
@@ -268,9 +285,20 @@ def main() -> None:
     parser.add_argument("--model-label", default="local-summary-model")
     parser.add_argument("--platform")
     parser.add_argument("--arch")
+    parser.add_argument("--validate-runtime", action="store_true", help="Validate llama.cpp runtime and model paths without generating a summary")
     args = parser.parse_args()
 
     try:
+        if args.validate_runtime:
+            result = validate_summary_runtime(
+                runtime_dir=args.runtime_dir,
+                model_path=args.model_path,
+                platform=args.platform,
+                arch=args.arch,
+            )
+            print(json.dumps(result, ensure_ascii=True))
+            return
+
         result = generate_summary(
             meeting_id=args.meeting_id,
             transcript_path=args.transcript,
