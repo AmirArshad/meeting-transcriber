@@ -13,6 +13,10 @@ from typing import Any, Dict, Iterable, List, Optional
 
 
 SUMMARY_ARRAY_FIELDS = ("topics", "decisions", "action_items", "risks", "open_questions")
+TRANSCRIPT_TIMESTAMP_RE = re.compile(
+    r"^(?:\*\*)?\[(?P<start>\d{1,2}:\d{2}(?::\d{2})?)\s+-\s+(?P<end>\d{1,2}:\d{2}(?::\d{2})?)\](?:\*\*)?\s*(?P<tail>.*)$"
+)
+SPEAKER_PREFIX_RE = re.compile(r"^(?:\*\*)?(?P<speaker>Speaker\s+\d+|Unknown):(?:\*\*)?\s*(?P<text>.*)$", re.IGNORECASE)
 
 SUMMARY_PROFILE_CONFIGS: Dict[str, Dict[str, Any]] = {
     "concise": {
@@ -72,6 +76,65 @@ def format_timestamp(seconds: Any) -> str:
     if hours:
         return f"{hours:02d}:{minutes:02d}:{secs:02d}"
     return f"{minutes:02d}:{secs:02d}"
+
+
+def parse_timestamp(value: str) -> float:
+    parts = [int(part) for part in str(value or "").split(":")]
+    if len(parts) == 2:
+        minutes, seconds = parts
+        return float(minutes * 60 + seconds)
+    if len(parts) == 3:
+        hours, minutes, seconds = parts
+        return float(hours * 3600 + minutes * 60 + seconds)
+    raise ValueError(f"Unsupported timestamp: {value}")
+
+
+def _split_speaker_prefix(text: str) -> Dict[str, str]:
+    cleaned = _clean_text(text)
+    match = SPEAKER_PREFIX_RE.match(cleaned)
+    if not match:
+        return {"speaker": "Unknown", "text": cleaned}
+
+    return {
+        "speaker": _clean_text(match.group("speaker")) or "Unknown",
+        "text": _clean_text(match.group("text")),
+    }
+
+
+def parse_markdown_transcript(markdown_text: str) -> List[Dict[str, Any]]:
+    """Parse AvaNevis Markdown transcripts back into timestamped segments."""
+    lines = str(markdown_text or "").splitlines()
+    segments: List[Dict[str, Any]] = []
+    index = 0
+
+    while index < len(lines):
+        line = lines[index].strip()
+        match = TRANSCRIPT_TIMESTAMP_RE.match(line)
+        if not match:
+            index += 1
+            continue
+
+        tail = _clean_text(match.group("tail"))
+        if not tail:
+            next_index = index + 1
+            while next_index < len(lines) and not lines[next_index].strip():
+                next_index += 1
+            if next_index < len(lines):
+                tail = _clean_text(lines[next_index])
+                index = next_index
+
+        speaker_text = _split_speaker_prefix(tail)
+        if speaker_text["text"]:
+            segments.append({
+                "start": parse_timestamp(match.group("start")),
+                "end": parse_timestamp(match.group("end")),
+                "speaker": speaker_text["speaker"],
+                "text": speaker_text["text"],
+            })
+
+        index += 1
+
+    return segments
 
 
 def normalize_transcript_segments(segments: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:

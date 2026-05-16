@@ -7,10 +7,12 @@ from .summary_pipeline import (
     chunk_transcript,
     get_summary_profile,
     normalize_transcript_segments,
+    parse_markdown_transcript,
     repair_summary_json,
     render_summary_markdown,
     validate_summary_json,
 )
+from .summary_runner import hash_transcript_text, load_summary_segments, sidecar_paths
 
 __all__ = [
     "SummaryValidationError",
@@ -19,7 +21,11 @@ __all__ = [
     "chunk_transcript",
     "get_summary_profile",
     "normalize_transcript_segments",
+    "parse_markdown_transcript",
     "repair_summary_json",
     "render_summary_markdown",
+    "hash_transcript_text",
+    "load_summary_segments",
+    "sidecar_paths",
     "validate_summary_json",
 ]

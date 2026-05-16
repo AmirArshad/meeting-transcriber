@@ -1,0 +1,77 @@
+import json
+
+import pytest
+
+from backend.summaries.summary_runner import (
+    generate_summary_from_segments,
+    hash_transcript_text,
+    load_summary_segments,
+    save_summary_outputs,
+    sidecar_paths,
+)
+
+
+def test_hash_transcript_text_is_stable_and_prefixed():
+    digest = hash_transcript_text('hello')
+
+    assert digest.startswith('sha256:')
+    assert digest == hash_transcript_text('hello')
+    assert digest != hash_transcript_text('hello!')
+
+
+def test_load_summary_segments_prefers_speaker_sidecar(tmp_path):
+    transcript_path = tmp_path / 'meeting.md'
+    speakers_path = tmp_path / 'meeting.speakers.json'
+    transcript_path.write_text('**[00:01 - 00:02]**\nPlain transcript', encoding='utf-8')
+    speakers_path.write_text(json.dumps({'segments': [{'start': 1, 'end': 2, 'speaker': 'Speaker 1', 'text': 'Labeled'}]}), encoding='utf-8')
+
+    segments = load_summary_segments(str(transcript_path), str(speakers_path))
+
+    assert segments == [{'start': 1, 'end': 2, 'speaker': 'Speaker 1', 'text': 'Labeled'}]
+
+
+def test_sidecar_paths_use_transcript_stem():
+    paths = sidecar_paths('meeting_20260107_104555.md')
+
+    assert paths == {
+        'jsonPath': 'meeting_20260107_104555.summary.json',
+        'markdownPath': 'meeting_20260107_104555.summary.md',
+    }
+
+
+def test_generate_summary_from_segments_runs_chunk_and_merge_prompts():
+    calls = []
+
+    def run_prompt(_runtime, prompt_path, max_tokens):
+        calls.append((prompt_path, max_tokens))
+        if 'final-merge' in prompt_path:
+            return json.dumps({'summary': 'Final summary', 'topics': [{'title': 'Launch'}]})
+        return json.dumps({'summary': 'Chunk summary', 'topics': [{'title': 'Launch'}]})
+
+    summary = generate_summary_from_segments(
+        meeting_id='20260107_104555',
+        segments=[{'start': 0, 'end': 1, 'speaker': 'Speaker 1', 'text': 'Launch approved'}],
+        runtime={'runtime': 'llama.cpp'},
+        profile='concise',
+        run_prompt=run_prompt,
+    )
+
+    assert summary['summary'] == 'Final summary'
+    assert len(calls) == 2
+    assert calls[0][1] == 900
+
+
+def test_save_summary_outputs_writes_json_and_markdown(tmp_path):
+    json_path = tmp_path / 'meeting.summary.json'
+    markdown_path = tmp_path / 'meeting.summary.md'
+    save_summary_outputs(
+        summary={'summary': 'Saved summary', 'topics': []},
+        metadata={'profile': 'balanced', 'model': 'Qwen3.5-9B'},
+        json_path=str(json_path),
+        markdown_path=str(markdown_path),
+    )
+
+    payload = json.loads(json_path.read_text(encoding='utf-8'))
+    assert payload['summary']['summary'] == 'Saved summary'
+    assert payload['metadata']['profile'] == 'balanced'
+    assert '# Meeting Summary' in markdown_path.read_text(encoding='utf-8')

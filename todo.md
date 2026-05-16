@@ -39,6 +39,7 @@ Goal: add optional post-install local speaker diarization and transcript summari
 - 2026-05-16: Added explicit AI add-on setup/check/remove/validate helpers and IPC wrappers, safe redacted `ai-addon-progress` events, platform-specific summary artifact selection, and pinned-filename/checksum enforcement that refuses summary downloads until artifact metadata is complete. `npm test` and `npm run test:python` passed.
 - 2026-05-16: Added lazy pyannote diarization runner and `diarize-transcript` IPC boundary without changing Whisper transcription paths. The backend prepares 16 kHz mono WAV input, disables pyannote metrics, prefers exclusive diarization output, writes `*.speakers.json`, and emits redacted progress. `npm test` and `npm run test:python` passed.
 - 2026-05-16: Added deterministic summary runtime/prompt helpers: llama.cpp path and CLI argument resolution for Windows CUDA/macOS Metal, profile-specific chunk/final-merge prompts, and JSON extraction/repair around local model output. Runtime execution remains pending until pinned llama.cpp/model artifacts are supplied. `npm test` and `npm run test:python` passed.
+- 2026-05-16: Added explicit `generate-summary` IPC and backend runner that reads saved meeting transcripts, prefers speaker sidecars, runs local llama.cpp prompts when setup is ready, writes `*.summary.json`/`*.summary.md`, and stores `sourceTranscriptHash` in meeting metadata. Model/runtime cache paths remain under Electron `userData` so normal app updates/reinstalls preserve installed local AI artifacts. `npm test` and `npm run test:python` passed.
 
 ## V1 Model Defaults
 
@@ -102,9 +103,9 @@ Skipped by product direction. Proceed with the V1 Model Defaults above and keep 
 - [x] Add transcript normalization that uses speaker labels when available and works without them.
 - [ ] Add token-budget chunking by timestamp and topic boundaries. (Partial: token-budget/timestamp chunks added; topic-boundary heuristics remain pending.)
 - [x] Add prompt templates for `Concise`, `Balanced`, `Detailed`, and `Action items` profiles against one installed model.
-- [ ] Add chunk summary and final merge flow. (Partial: chunk and final merge prompts are implemented; llama.cpp process execution remains pending.)
+- [x] Add chunk summary and final merge flow.
 - [x] Require structured JSON output and validate before saving. (Pure validation helper added; runtime save integration remains pending.)
-- [ ] Add retry/repair path for malformed JSON. (Partial: local JSON extraction/repair helper added; runtime retry loop remains pending.)
+- [ ] Add retry/repair path for malformed JSON. (Partial: local JSON extraction/repair helper is used on model output; explicit retry prompt loop remains pending.)
 - [x] Render summary JSON to Markdown for History display/export.
 - [ ] Ensure failed summary generation never modifies the transcript.
 
@@ -115,12 +116,12 @@ Skipped by product direction. Proceed with the V1 Model Defaults above and keep 
 - [x] Add `setup-diarization`, `remove-diarization-setup`, and token validation IPC handlers.
 - [x] Add `setup-summary-model` and `remove-summary-model` IPC handlers. (Downloads stay blocked until pinned artifact URL/checksum metadata is supplied.)
 - [x] Add `diarize-transcript` IPC handler for post-transcription integration. (Not yet auto-wired into the renderer transcription flow.)
-- [ ] Add `generate-summary` IPC handler for Home and History actions.
-- [ ] Add progress events for model download, validation, diarization, chunk summaries, final merge, and save. (Partial: add-on setup/download/validation events now emit through redacted `ai-addon-progress`.)
+- [x] Add `generate-summary` IPC handler for Home and History actions. (Renderer buttons are still pending.)
+- [ ] Add progress events for model download, validation, diarization, chunk summaries, final merge, and save. (Partial: add-on setup/download/validation, diarization, and summary generation events now emit redacted progress.)
 - [x] Extend meeting metadata with `ai.diarization` and `ai.summary` references without storing large derived output inline.
-- [ ] Save derived files: `*.speakers.json`, `*.summary.json`, and `*.summary.md`. (Partial: diarization can now write `*.speakers.json`; summary generation/save integration remains pending.)
+- [x] Save derived files: `*.speakers.json`, `*.summary.json`, and `*.summary.md`.
 - [x] Preserve `backend/meeting_manager.py` file locking, atomic writes, and transactional behavior.
-- [ ] Use `sourceTranscriptHash` to mark stale summaries after transcript changes.
+- [x] Use `sourceTranscriptHash` to mark stale summaries after transcript changes. (Hash is persisted; renderer stale-state display remains pending.)
 
 ## Phase 6 - Renderer UX
 
@@ -143,7 +144,7 @@ Skipped by product direction. Proceed with the V1 Model Defaults above and keep 
 - [ ] Unit-test add-on state normalization and prompt priority, especially CUDA before diarization on Windows/NVIDIA. (Partial: add-on setup/cache normalization and platform support are covered; renderer prompt priority is pending.)
 - [x] Unit-test secure token storage behavior without exposing token values in logs.
 - [x] Unit-test speaker/segment overlap merge behavior.
-- [ ] Unit-test summary chunking, JSON validation, and malformed-output retry/repair behavior. (Partial: chunking and validation covered; retry/repair pending runtime integration.)
+- [ ] Unit-test summary chunking, JSON validation, and malformed-output retry/repair behavior. (Partial: chunking, validation, JSON extraction/repair, and summary sidecar writes covered; explicit retry loop pending.)
 - [x] Unit-test meeting metadata persistence with derived artifact references.
 - [ ] Add JS tests for History `Transcript` / `Summary` tab state and setup routing.
 - [x] Run `npm test`.

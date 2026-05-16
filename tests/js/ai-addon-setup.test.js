@@ -8,6 +8,7 @@ const {
   checkSummaryModelCache,
   createAiAddonProgressEvent,
   getSummaryArtifactPath,
+  getSummaryRuntimeDir,
   removeDiarizationSetup,
   removeSummaryModel,
   setupDiarizationAddon,
@@ -246,6 +247,13 @@ test('summary cache validation requires pinned checksum before ready state', asy
   assert.equal(cache.valid, false);
   assert.equal(cache.checksumStatus, 'pendingPinnedChecksum');
   assert.equal(cache.validationStatus, 'pendingPinnedArtifact');
+});
+
+test('summary runtime directory stays in userData model cache', () => {
+  const artifact = getSummaryArtifactForPlatform(DEFAULT_SUMMARY_MODEL_ID, 'win32', 'x64');
+  const runtimeDir = getSummaryRuntimeDir('/tmp/AvaNevis', artifact);
+
+  assert.equal(runtimeDir, path.join('/tmp/AvaNevis', 'ai-addons', 'models', 'summary', DEFAULT_SUMMARY_MODEL_ID, 'runtime', 'win32-x64'));
 });
 
 test('validate summary model accepts installed artifact with matching checksum', async () => {

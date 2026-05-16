@@ -58,6 +58,10 @@ function getSummaryArtifactPath(userDataDir, artifact) {
   return path.join(getSummaryModelCacheDir(userDataDir, artifact.modelId), artifact.fileName);
 }
 
+function getSummaryRuntimeDir(userDataDir, artifact) {
+  return path.join(getSummaryModelCacheDir(userDataDir, artifact && artifact.modelId), 'runtime', artifact && artifact.platform ? `${artifact.platform}-${artifact.arch}` : 'current');
+}
+
 function bindFsMethod(fsModule, methodName) {
   const method = fsModule && fsModule[methodName];
   return typeof method === 'function' ? method.bind(fsModule) : undefined;
@@ -911,6 +915,7 @@ module.exports = {
   getDiarizationModelCacheDir,
   getSummaryArtifactPath,
   getSummaryModelCacheDir,
+  getSummaryRuntimeDir,
   isLikelyHuggingFaceToken,
   removeDiarizationSetup,
   removeSummaryModel,

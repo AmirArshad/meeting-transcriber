@@ -7,6 +7,8 @@ from backend.summaries.summary_pipeline import (
     chunk_transcript,
     get_summary_profile,
     normalize_transcript_segments,
+    parse_markdown_transcript,
+    parse_timestamp,
     repair_summary_json,
     render_summary_markdown,
     validate_summary_json,
@@ -21,6 +23,28 @@ def test_normalize_transcript_segments_uses_speaker_labels_when_available():
 
     assert normalized[0]['line'] == '[00:03 - 00:08] Speaker 2: hello world'
     assert normalized[1]['line'] == '[00:09 - 00:11] Unknown: without speaker'
+
+
+def test_parse_timestamp_supports_minute_and_hour_formats():
+    assert parse_timestamp('01:05') == 65.0
+    assert parse_timestamp('01:02:03') == 3723.0
+
+
+def test_parse_markdown_transcript_handles_existing_transcript_shapes():
+    segments = parse_markdown_transcript('''# Meeting Transcription
+
+## Transcript
+
+**[00:01 - 00:03]**
+Hello world
+
+[00:04 - 00:06] **Speaker 2:** Follow up
+''')
+
+    assert segments == [
+        {'start': 1.0, 'end': 3.0, 'speaker': 'Unknown', 'text': 'Hello world'},
+        {'start': 4.0, 'end': 6.0, 'speaker': 'Speaker 2', 'text': 'Follow up'},
+    ]
 
 
 def test_chunk_transcript_respects_token_budget_and_timestamps():

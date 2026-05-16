@@ -38,6 +38,8 @@ const { checkForUpdates, openDownloadPage } = require('./updater');
 const {
   AI_ADDON_PROGRESS_CHANNEL,
   checkAiAddonSetupStatus,
+  getSummaryArtifactPath,
+  getSummaryRuntimeDir,
   removeDiarizationSetup,
   removeSummaryModel,
   setupDiarizationAddon,
@@ -45,6 +47,9 @@ const {
   validateDiarizationSetup,
   validateSummaryModel,
 } = require('./ai-addon-setup');
+const {
+  getSummaryArtifactForPlatform,
+} = require('./ai-addon-state');
 const {
   TOKEN_KEYS,
   deleteAiAddonToken,
@@ -569,6 +574,31 @@ function buildDiarizationArgs({ audioPath, segmentsJsonPath, outputPath, modelRe
   ];
 
   return getBackendModuleArgs('diarization.diarization_pipeline', args);
+}
+
+function buildSummaryArgs({ meetingId, transcriptPath, runtimeDir, modelPath, outputJson, outputMarkdown, speakersJsonPath, profile, modelLabel }) {
+  const args = [
+    '--meeting-id', meetingId,
+    '--transcript', transcriptPath,
+    '--runtime-dir', runtimeDir,
+    '--model-path', modelPath,
+    '--profile', profile || 'balanced',
+    '--model-label', modelLabel || 'local-summary-model',
+    '--platform', process.platform,
+    '--arch', process.arch,
+  ];
+
+  if (outputJson) {
+    args.push('--output-json', outputJson);
+  }
+  if (outputMarkdown) {
+    args.push('--output-markdown', outputMarkdown);
+  }
+  if (speakersJsonPath) {
+    args.push('--speakers-json', speakersJsonPath);
+  }
+
+  return getBackendModuleArgs('summaries.summary_runner', args);
 }
 
 // Add ffmpeg to PATH so Python scripts can find it
@@ -2333,6 +2363,145 @@ ipcMain.handle('diarize-transcript', async (event, options = {}) => {
       }
       reject(error);
     });
+  });
+});
+
+ipcMain.handle('generate-summary', async (event, options = {}) => {
+  const { meetingId, profile, modelId } = options;
+  if (!meetingId) {
+    throw new Error('generate-summary requires a meetingId');
+  }
+
+  const meeting = await new Promise((resolve, reject) => {
+    const recordingsDir = path.join(app.getPath('userData'), 'recordings');
+    const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
+      '--recordings-dir', recordingsDir,
+      'get',
+      String(meetingId),
+    ]), { cwd: pythonConfig.backendPath });
+    let output = '';
+    let errorOutput = '';
+    python.stdout.on('data', (data) => { output += data.toString(); });
+    python.stderr.on('data', (data) => { errorOutput += data.toString(); });
+    python.on('close', (code) => {
+      if (code === 0) {
+        try {
+          resolve(JSON.parse(output));
+        } catch (error) {
+          reject(new Error(`Failed to parse meeting before summary generation: ${error.message}`));
+        }
+        return;
+      }
+      reject(new Error(errorOutput.trim() || 'Meeting not found'));
+    });
+    python.on('error', reject);
+  });
+
+  if (!meeting || !meeting.transcriptPath) {
+    throw new Error('Meeting transcript is not available for summary generation.');
+  }
+
+  const aiStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions({ verifyChecksums: true }));
+  if (aiStatus.features.summary.status !== 'ready' || !aiStatus.features.summary.setupComplete) {
+    throw new Error('Summary model setup is not ready.');
+  }
+
+  const selectedModelId = modelId || aiStatus.features.summary.modelId;
+  const artifact = getSummaryArtifactForPlatform(selectedModelId, process.platform, process.arch);
+  if (!artifact) {
+    throw new Error('No summary model artifact is available for this platform.');
+  }
+
+  const modelPath = getSummaryArtifactPath(app.getPath('userData'), artifact);
+  const runtimeDir = getSummaryRuntimeDir(app.getPath('userData'), artifact);
+  const transcriptPath = meeting.transcriptPath;
+  const transcriptBase = transcriptPath.replace(/\.md$/i, '');
+  const outputJson = `${transcriptBase}.summary.json`;
+  const outputMarkdown = `${transcriptBase}.summary.md`;
+  const speakersJsonPath = meeting.ai && meeting.ai.diarization && meeting.ai.diarization.segmentsPath;
+
+  return new Promise((resolve, reject) => {
+    const python = spawnTrackedPython(buildSummaryArgs({
+      meetingId: String(meetingId),
+      transcriptPath,
+      runtimeDir,
+      modelPath,
+      outputJson,
+      outputMarkdown,
+      speakersJsonPath,
+      profile: profile || 'balanced',
+      modelLabel: artifact.modelLabel || artifact.modelId,
+    }), { cwd: pythonConfig.backendPath });
+
+    let output = '';
+    let errorOutput = '';
+
+    python.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    python.stderr.on('data', (data) => {
+      const stderrChunk = data.toString();
+      errorOutput += stderrChunk;
+      for (const line of stderrChunk.split(/\r?\n/)) {
+        const progressEvent = parseAiBackendProgressLine(line, 'summary');
+        if (progressEvent) {
+          sendToRenderer('summary-progress', progressEvent);
+        }
+      }
+    });
+
+    python.on('close', async (code) => {
+      if (code !== 0) {
+        reject(new Error('Summary generation failed.'));
+        return;
+      }
+
+      try {
+        const result = JSON.parse(output);
+        const summaryMetadata = {
+          status: 'completed',
+          modelProfile: result.metadata.profile,
+          model: result.metadata.model,
+          generatedAt: result.metadata.generatedAt,
+          sourceTranscriptHash: result.metadata.sourceTranscriptHash,
+          jsonPath: result.jsonPath,
+          markdownPath: result.markdownPath,
+          error: null,
+        };
+        const updatedMeeting = await new Promise((metadataResolve, metadataReject) => {
+          const recordingsDir = path.join(app.getPath('userData'), 'recordings');
+          const pythonUpdate = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
+            '--recordings-dir', recordingsDir,
+            'update-ai',
+            String(meetingId),
+            '--summary-json', JSON.stringify(summaryMetadata),
+          ]), { cwd: pythonConfig.backendPath });
+          let metadataOutput = '';
+          let metadataErrorOutput = '';
+          pythonUpdate.stdout.on('data', (data) => { metadataOutput += data.toString(); });
+          pythonUpdate.stderr.on('data', (data) => { metadataErrorOutput += data.toString(); });
+          pythonUpdate.on('close', (updateCode) => {
+            if (updateCode === 0) {
+              try {
+                metadataResolve(JSON.parse(metadataOutput));
+              } catch (error) {
+                metadataReject(new Error(`Failed to parse summary metadata update: ${error.message}`));
+              }
+              return;
+            }
+            metadataReject(new Error(metadataErrorOutput.trim() || 'Failed to update summary metadata'));
+          });
+          pythonUpdate.on('error', metadataReject);
+        });
+
+        resolve({ ...result, meeting: updatedMeeting });
+      } catch (error) {
+        reject(error);
+      }
+    });
+
+    python.on('error', reject);
   });
 });
 

@@ -8,6 +8,7 @@ future generation runner will use.
 from __future__ import annotations
 
 import platform as platform_module
+import subprocess
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -113,6 +114,20 @@ def build_llama_cli_args(
         str(max_tokens),
         "--no-display-prompt",
     ]
+
+
+def run_llama_prompt(
+    runtime: Dict[str, Any],
+    *,
+    prompt_path: str,
+    max_tokens: int,
+    timeout_seconds: int = 900,
+) -> str:
+    args = build_llama_cli_args(runtime, prompt_path=prompt_path, max_tokens=max_tokens)
+    result = subprocess.run(args, capture_output=True, text=True, check=False, timeout=timeout_seconds)
+    if result.returncode != 0:
+        raise SummaryRuntimeError("llama.cpp summary generation failed.")
+    return result.stdout.strip()
 
 
 def build_summary_progress_event(
