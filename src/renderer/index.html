@@ -547,37 +547,86 @@
                     </div>
                   </div>
 
-                  <div class="transcript-section">
-                    <div class="transcript-header-row">
-                      <h3>Transcript</h3>
-                      <div class="transcript-section-actions">
-                        <button id="generate-summary-btn" class="btn btn-small">
-                          Generate Summary
-                        </button>
-                        <button id="copy-transcript-btn" class="btn btn-small">
-                          Copy
-                        </button>
-                        <button id="save-meeting-transcript-btn" class="btn btn-small">
-                          Save
-                        </button>
-                      </div>
-                    </div>
-                    <div
-                      class="meeting-transcript"
-                      id="meeting-transcript"
-                    ></div>
+                  <div class="history-detail-tabs" role="tablist" aria-label="Meeting details">
+                    <button
+                      type="button"
+                      class="history-detail-tab-btn active"
+                      id="history-transcript-tab-btn"
+                      data-history-detail-tab="transcript"
+                      role="tab"
+                      aria-selected="true"
+                      aria-controls="history-transcript-panel"
+                    >
+                      Transcript
+                    </button>
+                    <button
+                      type="button"
+                      class="history-detail-tab-btn"
+                      id="history-summary-tab-btn"
+                      data-history-detail-tab="summary"
+                      role="tab"
+                      aria-selected="false"
+                      aria-controls="history-summary-panel"
+                    >
+                      Summary
+                    </button>
                   </div>
 
-                  <div class="summary-section" id="meeting-summary-section">
-                    <div class="transcript-header-row">
-                      <h3>Summary</h3>
-                    </div>
-                    <div
-                      class="meeting-summary markdown-body"
-                      id="meeting-summary"
+                  <div class="history-detail-panels">
+                    <section
+                      class="transcript-section history-detail-panel active"
+                      id="history-transcript-panel"
+                      role="tabpanel"
+                      aria-labelledby="history-transcript-tab-btn"
                     >
-                      <p class="placeholder">No summary generated yet</p>
-                    </div>
+                      <div class="transcript-header-row">
+                        <h3>Transcript</h3>
+                        <div class="transcript-section-actions">
+                          <button id="generate-summary-btn" class="btn btn-small">
+                            Generate Summary
+                          </button>
+                          <button id="copy-transcript-btn" class="btn btn-small">
+                            Copy
+                          </button>
+                          <button id="save-meeting-transcript-btn" class="btn btn-small">
+                            Save
+                          </button>
+                        </div>
+                      </div>
+                      <div
+                        class="meeting-transcript"
+                        id="meeting-transcript"
+                      ></div>
+                    </section>
+
+                    <section
+                      class="summary-section history-detail-panel"
+                      id="history-summary-panel"
+                      role="tabpanel"
+                      aria-labelledby="history-summary-tab-btn"
+                      hidden
+                    >
+                      <div class="transcript-header-row">
+                        <h3>Summary</h3>
+                        <div class="transcript-section-actions">
+                          <button id="regenerate-summary-btn" class="btn btn-small">
+                            Generate Summary
+                          </button>
+                          <button id="copy-summary-btn" class="btn btn-small" disabled>
+                            Copy
+                          </button>
+                          <button id="save-summary-btn" class="btn btn-small" disabled>
+                            Save
+                          </button>
+                        </div>
+                      </div>
+                      <div
+                        class="meeting-summary markdown-body"
+                        id="meeting-summary"
+                      >
+                        <p class="placeholder">No summary generated yet</p>
+                      </div>
+                    </section>
                   </div>
                 </div>
               </main>
@@ -693,6 +742,10 @@
                           placeholder="hf_..."
                           autocomplete="off"
                         />
+                        <p class="ai-addon-help">
+                          Use your own Hugging Face token and accept the pyannote model terms before setup.
+                          <a href="https://huggingface.co/pyannote/speaker-diarization-community-1" target="_blank" rel="noopener noreferrer">Open model terms</a>
+                        </p>
                       </div>
 
                       <div class="ai-addon-field compact">
@@ -786,6 +839,7 @@
 
     <script src="recording-state-helpers.js"></script>
     <script src="update-notification-helpers.js"></script>
+    <script src="history-detail-helpers.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

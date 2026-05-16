@@ -2454,7 +2454,10 @@ ipcMain.handle('generate-summary', async (event, options = {}) => {
 
     python.on('close', async (code) => {
       if (code !== 0) {
-        reject(new Error('Summary generation failed.'));
+        const reason = errorOutput && errorOutput.trim()
+          ? errorOutput.trim().split(/\r?\n/).filter(Boolean).slice(-1)[0]
+          : '';
+        reject(new Error(reason || 'Summary generation failed.'));
         return;
       }
 
@@ -2795,6 +2798,7 @@ ipcMain.handle('save-transcript-as', async (event, options) => {
   const opts = options || {};
   const suggestedName = (opts.suggestedName || 'transcript').toString();
   const content = typeof opts.content === 'string' ? opts.content : '';
+  const title = typeof opts.title === 'string' && opts.title.trim() ? opts.title.trim() : 'Save Transcript';
 
   // Sanitize for filesystem (Windows + macOS safe)
   const safeName = suggestedName
@@ -2805,7 +2809,7 @@ ipcMain.handle('save-transcript-as', async (event, options) => {
 
   const window = BrowserWindow.fromWebContents(event.sender);
   const result = await dialog.showSaveDialog(window, {
-    title: 'Save Transcript',
+    title,
     defaultPath: safeName.toLowerCase().endsWith('.md') ? safeName : `${safeName}.md`,
     filters: [
       { name: 'Markdown', extensions: ['md'] },

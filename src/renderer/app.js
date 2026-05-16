@@ -7,6 +7,12 @@ const DEFAULT_SUMMARY_PROFILE = 'balanced';
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const { getRecordButtonAction } = window.recordingStateHelpers;
 const {
+  getDiarizationSetupMessage,
+  getSummarySetupMessage,
+  normalizeHistoryDetailTab,
+  parseTranscriptMarkdownSegments,
+} = window.historyDetailHelpers;
+const {
   hideUpdateNotificationBanner,
   replayPendingUpdateNotification,
   showUpdateNotificationBanner,
@@ -45,6 +51,7 @@ let currentMeetingId = null;
 let currentRecordingMeeting = null;
 let pendingMeetingTranscriptId = null;
 let summaryGenerationMeetingId = null;
+let activeHistoryDetailTab = 'transcript';
 let meetings = [];
 let audioVisualizer = null;
 let isFirstRecording = true; // Track if this is first recording (for longer timeout)
@@ -110,6 +117,7 @@ function showSummaryMessage(message, isError = false) {
   summaryEl.classList.add('is-empty');
   delete summaryEl.dataset.markdown;
   setPlaceholder(summaryEl, message, isError ? 'placeholder error' : 'placeholder');
+  updateSummaryActionState();
 }
 
 function renderSummaryMarkdown(markdown) {
@@ -122,11 +130,24 @@ function renderSummaryMarkdown(markdown) {
   if (markdown && markdown.trim()) {
     summaryEl.dataset.markdown = markdown;
     renderMarkdownInto(summaryEl, markdown);
+    updateSummaryActionState();
     return;
   }
 
   delete summaryEl.dataset.markdown;
   showSummaryMessage('No summary generated yet');
+}
+
+function updateSummaryActionState() {
+  const summaryEl = document.getElementById('meeting-summary');
+  const hasSummary = Boolean(summaryEl && summaryEl.dataset.markdown && summaryEl.dataset.markdown.trim());
+
+  ['copy-summary-btn', 'save-summary-btn'].forEach((id) => {
+    const button = document.getElementById(id);
+    if (button) {
+      button.disabled = !hasSummary;
+    }
+  });
 }
 
 function populateSelect(select, placeholder, devices) {
@@ -483,6 +504,45 @@ function setMeetingAudioSource(audioPath) {
   }
 }
 
+function renderHistoryTranscriptMarkdown(transcriptEl, markdown) {
+  transcriptEl.classList.remove('markdown-body');
+  clearElement(transcriptEl);
+
+  const segments = parseTranscriptMarkdownSegments(markdown);
+  if (!segments.length) {
+    transcriptEl.classList.add('markdown-body');
+    renderMarkdownInto(transcriptEl, markdown);
+    return;
+  }
+
+  segments.forEach((segment) => {
+    const segmentDiv = document.createElement('div');
+    segmentDiv.className = 'history-transcript-segment';
+
+    const meta = document.createElement('div');
+    meta.className = 'history-transcript-meta';
+
+    const timestamp = document.createElement('span');
+    timestamp.className = 'history-transcript-timestamp';
+    timestamp.textContent = `[${segment.start} - ${segment.end}]`;
+    meta.appendChild(timestamp);
+
+    if (segment.speaker) {
+      const speaker = document.createElement('span');
+      speaker.className = 'history-transcript-speaker';
+      speaker.textContent = segment.speaker;
+      meta.appendChild(speaker);
+    }
+
+    const text = document.createElement('div');
+    text.className = 'history-transcript-text';
+    text.textContent = segment.text || '';
+
+    segmentDiv.append(meta, text);
+    transcriptEl.appendChild(segmentDiv);
+  });
+}
+
 function handleMacOSPermissionFailure(permissionStatus) {
   const missingMicrophone = permissionStatus?.missingMicrophone;
   const missingScreenRecording = permissionStatus?.missingScreenRecording;
@@ -558,6 +618,28 @@ function setButtonBusy(button, busy, busyLabel = 'Working...') {
   delete button.dataset.originalLabel;
   button.disabled = false;
   button.classList.remove('is-loading');
+}
+
+function activateHistoryDetailTab(targetTab) {
+  activeHistoryDetailTab = normalizeHistoryDetailTab(targetTab);
+
+  document.querySelectorAll('[data-history-detail-tab]').forEach((button) => {
+    const isActive = button.dataset.historyDetailTab === activeHistoryDetailTab;
+    button.classList.toggle('active', isActive);
+    button.setAttribute('aria-selected', isActive ? 'true' : 'false');
+  });
+
+  document.querySelectorAll('.history-detail-panel').forEach((panel) => {
+    const isActive = panel.id === `history-${activeHistoryDetailTab}-panel`;
+    panel.classList.toggle('active', isActive);
+    panel.hidden = !isActive;
+  });
+}
+
+function setupHistoryDetailTabs() {
+  document.querySelectorAll('[data-history-detail-tab]').forEach((button) => {
+    button.addEventListener('click', () => activateHistoryDetailTab(button.dataset.historyDetailTab));
+  });
 }
 
 function activateTab(targetTab) {
@@ -1052,10 +1134,11 @@ async function selectMeeting(meetingId) {
   meetingDetails.style.display = 'flex';
 
   const transcriptEl = document.getElementById('meeting-transcript');
-  transcriptEl.classList.add('markdown-body');
+  transcriptEl.classList.remove('markdown-body');
   delete transcriptEl.dataset.markdown;
   clearElement(transcriptEl);
   renderSummaryMarkdown('');
+  activateHistoryDetailTab(activeHistoryDetailTab);
   const loading = document.createElement('p');
   loading.className = 'placeholder';
   loading.textContent = 'Loading transcript...';
@@ -1070,7 +1153,7 @@ async function selectMeeting(meetingId) {
 
     if (fullMeeting.transcript) {
       transcriptEl.dataset.markdown = fullMeeting.transcript;
-      renderMarkdownInto(transcriptEl, fullMeeting.transcript);
+      renderHistoryTranscriptMarkdown(transcriptEl, fullMeeting.transcript);
     } else {
       delete transcriptEl.dataset.markdown;
       clearElement(transcriptEl);
@@ -1080,7 +1163,11 @@ async function selectMeeting(meetingId) {
       transcriptEl.appendChild(empty);
     }
 
-    renderSummaryMarkdown(fullMeeting.summary || '');
+    if (fullMeeting.summary) {
+      renderSummaryMarkdown(fullMeeting.summary);
+    } else {
+      showSummaryMessage('No summary yet. Generate one locally when the summary model is installed.');
+    }
   } catch (error) {
     console.error(`Failed to load meeting transcript: ${error.message}`);
     if (currentMeetingId === meetingId && pendingMeetingTranscriptId === meetingId) {
@@ -1088,8 +1175,9 @@ async function selectMeeting(meetingId) {
       delete transcriptEl.dataset.markdown;
       const err = document.createElement('p');
       err.className = 'placeholder error';
-      err.textContent = 'Failed to load transcript';
+      err.textContent = 'Failed to load transcript. The saved recording is still available above.';
       transcriptEl.appendChild(err);
+      showSummaryMessage('Summary unavailable because the meeting details could not be loaded.', true);
     }
   } finally {
     if (pendingMeetingTranscriptId === meetingId) {
@@ -1309,6 +1397,23 @@ function setupEventListeners() {
   if (generateSummaryBtn) {
     generateSummaryBtn.addEventListener('click', () => generateSummaryForMeeting(currentMeetingId, generateSummaryBtn));
   }
+
+  const regenerateSummaryBtn = document.getElementById('regenerate-summary-btn');
+  if (regenerateSummaryBtn) {
+    regenerateSummaryBtn.addEventListener('click', () => generateSummaryForMeeting(currentMeetingId, regenerateSummaryBtn));
+  }
+
+  const copySummaryBtn = document.getElementById('copy-summary-btn');
+  if (copySummaryBtn) {
+    copySummaryBtn.addEventListener('click', copyMeetingSummary);
+  }
+
+  const saveSummaryBtn = document.getElementById('save-summary-btn');
+  if (saveSummaryBtn) {
+    saveSummaryBtn.addEventListener('click', saveMeetingSummaryToFile);
+  }
+
+  setupHistoryDetailTabs();
 
   // Meeting search filter
   const searchInput = document.getElementById('meeting-search');
@@ -1933,7 +2038,12 @@ async function generateSummaryForMeeting(meetingId, button) {
 
   const summaryStatus = aiStatus && aiStatus.features && aiStatus.features.summary;
   if (!summaryStatus || !summaryStatus.setupComplete || summaryStatus.status !== 'ready') {
-    addLog('Summary model is not ready. Open Settings to install or validate the local summary model.', 'warning');
+    const message = getSummarySetupMessage(summaryStatus);
+    addLog(message, summaryStatus && summaryStatus.status === 'unsupported' ? 'error' : 'warning');
+    if (currentMeetingId === meetingId) {
+      showSummaryMessage(message, summaryStatus && summaryStatus.status === 'error');
+      activateHistoryDetailTab('summary');
+    }
     openSettingsAtAiAddons();
     return;
   }
@@ -1957,6 +2067,7 @@ async function generateSummaryForMeeting(meetingId, button) {
       const fullMeeting = await window.electronAPI.getMeeting(meetingId);
       renderSummaryMarkdown((fullMeeting && fullMeeting.summary) || '');
       syncMeetingInList((result && result.meeting) || fullMeeting);
+      activateHistoryDetailTab('summary');
     } else {
       syncMeetingInList(result && result.meeting);
     }
@@ -1964,9 +2075,11 @@ async function generateSummaryForMeeting(meetingId, button) {
     addLog('Summary generated!');
   } catch (error) {
     console.error('Failed to generate summary:', error);
-    addLog(`Summary generation failed: ${error.message}`, 'error');
+    const message = `Summary generation failed. Transcript is unchanged. ${error.message}`;
+    addLog(message, 'error');
     if (currentMeetingId === meetingId) {
-      showSummaryMessage(`Summary generation failed: ${error.message}`, true);
+      showSummaryMessage(message, true);
+      activateHistoryDetailTab('summary');
     }
   } finally {
     summaryGenerationMeetingId = null;
@@ -2078,6 +2191,75 @@ function copyMeetingTranscript() {
     console.error('Failed to copy:', err);
     alert('Failed to copy transcript to clipboard');
   });
+}
+
+function getCurrentSummaryMarkdown() {
+  const summaryEl = document.getElementById('meeting-summary');
+  return (summaryEl && summaryEl.dataset.markdown) || '';
+}
+
+function copyMeetingSummary() {
+  const text = getCurrentSummaryMarkdown();
+  if (!text.trim()) {
+    addLog('No summary available to copy.', 'warning');
+    return;
+  }
+
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById('copy-summary-btn');
+    setCopyButtonState(btn, 'Copied!', true);
+
+    setTimeout(() => {
+      setCopyButtonState(btn, 'Copy', false);
+      updateSummaryActionState();
+    }, COPY_SUCCESS_TIMEOUT_MS);
+  }).catch(err => {
+    console.error('Failed to copy summary:', err);
+    addLog(`Failed to copy summary: ${err.message}`, 'error');
+    alert('Failed to copy summary to clipboard');
+  });
+}
+
+async function saveMeetingSummaryToFile() {
+  if (!currentMeetingId) {
+    addLog('No meeting selected to save.', 'warning');
+    return;
+  }
+
+  const meeting = meetings.find(m => m.id === currentMeetingId);
+  const suggestedName = `${(meeting && meeting.title) || 'Summary'} Summary`;
+  let content = getCurrentSummaryMarkdown();
+
+  if (!content) {
+    try {
+      const fullMeeting = await window.electronAPI.getMeeting(currentMeetingId);
+      content = (fullMeeting && fullMeeting.summary) || '';
+    } catch (err) {
+      console.error('Failed to load summary for save:', err);
+      addLog(`Failed to load summary: ${err.message}`, 'error');
+      return;
+    }
+  }
+
+  if (!content.trim()) {
+    addLog('No summary available to save.', 'warning');
+    return;
+  }
+
+  try {
+    const result = await window.electronAPI.saveTranscriptAs({
+      suggestedName,
+      content,
+      title: 'Save Summary',
+    });
+    if (result && !result.canceled && result.filePath) {
+      addLog(`Summary saved to ${result.filePath}`);
+    }
+  } catch (err) {
+    console.error('Summary save failed:', err);
+    addLog(`Failed to save summary: ${err.message}`, 'error');
+    alert(`Failed to save summary: ${err.message}`);
+  }
 }
 
 // Save the currently selected history meeting's transcript via native dialog.
@@ -2355,11 +2537,6 @@ function appendAiAddonLog(text) {
   logOutput.scrollTop = logOutput.scrollHeight;
 }
 
-function featureStatusMessage(feature) {
-  const validationMessage = feature && feature.lastValidation && feature.lastValidation.message;
-  return (feature && (feature.error || validationMessage)) || '';
-}
-
 function updateAiAddonSettings(status) {
   const diarization = status && status.features && status.features.diarization;
   const summary = status && status.features && status.features.summary;
@@ -2378,9 +2555,7 @@ function updateAiAddonSettings(status) {
 
     const statusText = document.getElementById('diarization-status-text');
     if (statusText) {
-      statusText.textContent = featureStatusMessage(diarization) || (diarization.setupComplete
-        ? 'Speaker labels will run automatically after transcription.'
-        : 'Enter your own Hugging Face token to enable local speaker labels.');
+      statusText.textContent = getDiarizationSetupMessage(diarization);
     }
   }
 
@@ -2393,12 +2568,7 @@ function updateAiAddonSettings(status) {
 
     const statusText = document.getElementById('summary-status-text');
     if (statusText) {
-      const artifactMessage = summary.artifact && summary.artifact.validationStatus === 'pendingPinnedArtifact'
-        ? 'Summary downloads are blocked until the model artifact URL and checksum are pinned.'
-        : '';
-      statusText.textContent = featureStatusMessage(summary) || artifactMessage || (summary.setupComplete
-        ? 'Generate summaries from a saved transcript when you choose.'
-        : 'Install the local summary model before generating summaries.');
+      statusText.textContent = getSummarySetupMessage(summary);
     }
   }
 }

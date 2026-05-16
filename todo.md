@@ -45,6 +45,7 @@ Goal: add optional post-install local speaker diarization and transcript summari
 - 2026-05-16: Added Settings > AI Add-ons cards below GPU Acceleration with diarization token/speaker-count setup, validation/removal controls, summary profile/model setup validation/removal controls, redacted progress log display, and direct routing from missing summary setup to the Settings add-on area. Summary artifact downloads still remain blocked until pinned URL/checksum metadata is supplied. `npm test` and `npm run test:python` passed.
 - 2026-05-16: Selecting and pinning trusted summary model artifact sources/checksums is now in progress. Preferred source policy: use official model-owner GGUF artifacts when available; otherwise use high-reputation community quantizations with immutable commit-pinned URLs and verified SHA-256 checksums.
 - 2026-05-16: Pinned summary GGUF artifacts to immutable Hugging Face revisions with LFS SHA-256 checksums and pinned llama.cpp b9173 runtime archives for Windows CUDA 12.4 and macOS arm64. Summary setup now downloads/verifies/extracts the runtime before the model and status cannot become ready unless both model and `llama-cli` are installed. `npm test` and `npm run test:python` passed.
+- 2026-05-16: Added History Transcript/Summary tabs, History speaker-label rendering from saved transcript Markdown, summary copy/save actions, a model-terms link for the user's own Hugging Face token flow, and clearer graceful-degradation messages for missing token/model/runtime and unsupported hardware. `npm test` and `npm run test:python` passed.
 
 ## V1 Model Defaults
 
@@ -136,7 +137,7 @@ Skipped by product direction. Proceed with the V1 Model Defaults above and keep 
 ## Phase 6 - Renderer UX
 
 - [x] Add `AI Add-ons` Settings area below GPU Acceleration.
-- [ ] Add Speaker Identification setup card with token input, model-terms link, token test, status badge, progress, retry, and remove setup. (Partial: token input, speaker count, status badge, setup/validate/remove, and progress log are implemented; model-terms link remains pending.)
+- [x] Add Speaker Identification setup card with token input, model-terms link, token test, status badge, progress, retry, and remove setup.
 - [x] Add Summary setup card with one installed model, profile selection, model-cache status, validate, progress, and remove model.
 - [ ] Add Home prompt priority: Whisper setup, permissions/devices, CUDA, speaker setup, summary setup.
 - [ ] Hide Windows speaker setup prompt until CUDA is installed when NVIDIA/CUDA is the target path.
@@ -144,10 +145,10 @@ Skipped by product direction. Proceed with the V1 Model Defaults above and keep 
 - [x] Run diarization automatically after transcription when configured.
 - [x] Add `Generate Summary` action after a meeting is transcribed and saved.
 - [x] Make `Generate Summary` navigate to Settings when summary setup is missing.
-- [ ] Add History `Transcript` and `Summary` tabs. (Partial: History now shows a transcript pane plus a summary pane; tabbed switching remains pending.)
-- [ ] Add Summary empty state, progress state, saved summary viewer, regenerate action, and optional copy/save actions. (Partial: empty, progress, saved viewer, and regenerate via the same button are implemented; copy/save summary actions remain pending.)
-- [ ] Render speaker labels in the current transcript and History transcript viewer. (Partial: current transcript view renders speaker labels after successful automatic diarization; History viewer remains pending.)
-- [ ] Add graceful degradation for invalid token, terms not accepted, missing model, unsupported hardware, and runtime failure.
+- [x] Add History `Transcript` and `Summary` tabs.
+- [x] Add Summary empty state, progress state, saved summary viewer, regenerate action, and optional copy/save actions.
+- [x] Render speaker labels in the current transcript and History transcript viewer.
+- [x] Add graceful degradation for invalid token, terms not accepted, missing model, unsupported hardware, and runtime failure.
 
 ## Phase 7 - Tests And Validation
 
@@ -156,7 +157,7 @@ Skipped by product direction. Proceed with the V1 Model Defaults above and keep 
 - [x] Unit-test speaker/segment overlap merge behavior.
 - [ ] Unit-test summary chunking, JSON validation, and malformed-output retry/repair behavior. (Partial: chunking, validation, JSON extraction/repair, and summary sidecar writes covered; explicit retry loop pending.)
 - [x] Unit-test meeting metadata persistence with derived artifact references.
-- [ ] Add JS tests for History `Transcript` / `Summary` tab state and setup routing.
+- [ ] Add JS tests for History `Transcript` / `Summary` tab state and setup routing. (Partial: pure History tab normalization, transcript speaker-label parsing, and setup/degradation copy are covered; DOM event routing remains pending.)
 - [x] Run `npm test`.
 - [x] Run `npm run test:python`.
 - [ ] Run Windows CUDA manual smoke tests on RTX 4070.
