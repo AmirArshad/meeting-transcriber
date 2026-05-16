@@ -150,7 +150,7 @@ Before and after recorder changes, run the manual smoke checklist:
 This is especially important for:
 
 - macOS desktop audio capture
-- Screen Recording permission flows
+- macOS System Audio Recording and Screen Recording fallback permission flows
 - long recording stop/drain behavior
 - quit during active recording
 - Windows loopback recording

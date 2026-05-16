@@ -101,14 +101,35 @@ After first launch, macOS will ask for permissions:
 
 **Why:** Required to record your voice during meetings.
 
-### 2. Screen Recording (for Desktop Audio)
+### 2. Desktop Audio Access
+
+On macOS 14.2 or later, AvaNevis uses a CoreAudio process tap for system audio. macOS may show a **System Audio Recording** permission prompt.
+
+```
+"AvaNevis" would like to access system audio.
+
+[Don't Allow]  [OK]  ← Click "OK"
+```
+
+**Why:** Required to capture desktop/system audio locally. AvaNevis records audio only; no screen video is saved.
+
+If desktop audio does not work, check this permission manually:
+
+1. System Settings → Privacy & Security → System Audio Recording, Local Network, or the audio-related permission macOS shows for AvaNevis on your version
+2. Toggle ON for "AvaNevis"
+3. Restart the app
+
+### 3. Screen Recording Fallback Permission
+
+If the CoreAudio path is unavailable or fails, AvaNevis falls back to ScreenCaptureKit. macOS may then ask for Screen Recording:
+
 ```
 "AvaNevis" would like to record this screen.
 
 [Don't Allow]  [OK]  ← Click "OK"
 ```
 
-**Why:** macOS requires this permission for ScreenCaptureKit to capture system audio. The app does NOT actually record your screen - only system audio.
+**Why:** ScreenCaptureKit may require this permission to capture system audio. The app does NOT save screen video.
 
 **Note:** This permission may not appear on first launch. If desktop audio doesn't work, grant it manually:
 1. System Settings → Privacy & Security → Screen Recording
@@ -178,7 +199,7 @@ See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) or [open an issue on GitHub](https:
 ## 📋 macOS Version Requirements
 
 - **Minimum:** macOS 13 (Ventura)
-- **Recommended:** macOS 14 (Sonoma) or later
+- **Recommended:** macOS 14.2 or later for CoreAudio system-audio capture
 - **Architecture:**
   - ✅ Apple Silicon (M1/M2/M3/M4) - Full GPU acceleration
   - ❌ Intel Mac (x64) - packaged releases are not supported
@@ -194,7 +215,7 @@ Once installed and opened successfully:
 1. **First launch:** The app will show a loading screen
 2. **Select audio devices:**
    - Microphone: Your built-in mic or external mic
-   - Desktop Audio: "System Audio (ScreenCaptureKit)"
+   - Desktop Audio: "System Audio" (CoreAudio tap on macOS 14.2+, ScreenCaptureKit fallback otherwise)
 3. **Start recording:** Click "Start Recording"
 4. **First transcription:** Will download Whisper model (~500MB, one-time)
 

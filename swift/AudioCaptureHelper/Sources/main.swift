@@ -20,6 +20,7 @@ import Foundation
 import ScreenCaptureKit
 import CoreMedia
 import AVFoundation
+import CoreAudio
 
 // MARK: - Configuration
 
@@ -27,6 +28,7 @@ struct Config {
     var sampleRate: Int = 48000
     var channels: Int = 2
     var excludeCurrentApp: Bool = true
+    var preferCoreAudioTap: Bool = true
 }
 
 // MARK: - JSON Output Helpers
@@ -61,6 +63,38 @@ func sendError(_ error: String) {
 
 func sendReady() {
     sendJSON(["type": "ready"])
+}
+
+func osStatusDescription(_ status: OSStatus) -> String {
+    let raw = UInt32(bitPattern: status)
+    let bytes = [
+        UInt8((raw >> 24) & 0xff),
+        UInt8((raw >> 16) & 0xff),
+        UInt8((raw >> 8) & 0xff),
+        UInt8(raw & 0xff),
+    ]
+
+    if bytes.allSatisfy({ $0 >= 32 && $0 <= 126 }),
+       let fourCC = String(bytes: bytes, encoding: .ascii) {
+        return "\(status) ('\(fourCC)')"
+    }
+
+    return "\(status)"
+}
+
+func makeCoreAudioError(_ message: String, status: OSStatus) -> NSError {
+    NSError(
+        domain: "AudioCaptureHelper.CoreAudio",
+        code: Int(status),
+        userInfo: [NSLocalizedDescriptionKey: "\(message) (OSStatus \(osStatusDescription(status)))"]
+    )
+}
+
+protocol SystemAudioCaptureBackend: AnyObject {
+    var running: Bool { get }
+    func start() throws
+    func stop()
+    func checkForSilence()
 }
 
 // MARK: - Audio Capture Delegate
@@ -652,12 +686,737 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
     }
 }
 
+// MARK: - CoreAudio Process Tap Capture
+
+@available(macOS 14.2, *)
+class CoreAudioTapCapture: SystemAudioCaptureBackend {
+    private let config: Config
+    private let outputLock = NSLock()
+    private let queueLock = NSLock()
+    private let writerSignal = DispatchSemaphore(value: 0)
+    private let writerCompletionGroup = DispatchGroup()
+    private let writerQueue = DispatchQueue(label: "audio.capture.coreaudio.writer.queue", qos: .userInitiated)
+    private let callbackQueue = DispatchQueue(label: "audio.capture.coreaudio.io.queue", qos: .userInitiated)
+
+    private var tapID = AudioObjectID(kAudioObjectUnknown)
+    private var aggregateDeviceID = AudioObjectID(kAudioObjectUnknown)
+    private var ioProcID: AudioDeviceIOProcID?
+    private var streamFormat = AudioStreamBasicDescription()
+    private var isRunning = false
+    private var writerIsRunning = false
+    private var pendingAudioChunks: [Data] = []
+    private var pendingChunkStartIndex = 0
+    private var pendingChunkBytes = 0
+    private var droppedChunkCount = 0
+    private var totalBuffers = 0
+    private var totalBytesWritten = 0
+    private var firstAudioTime: Date?
+    private var lastAudioTime: Date?
+    private var silencePeriodLogged = false
+    private var audioFormatLogged = false
+    private var extractionErrorCount = 0
+
+    private let maxQueuedBytes = 4 * 1024 * 1024
+    private let queueDropWarningInterval = 25
+    private let silenceThreshold: TimeInterval = 5.0
+    private let maxExtractionErrors = 5
+
+    private struct EnqueueResult {
+        let queuedBytes: Int
+        let droppedChunkCount: Int
+        let droppedDuringEnqueue: Bool
+    }
+
+    init(config: Config) {
+        self.config = config
+    }
+
+    var running: Bool {
+        outputLock.lock()
+        let value = isRunning
+        outputLock.unlock()
+        return value
+    }
+
+    func start() throws {
+        sendStatus("tap_initializing", message: "Starting CoreAudio process tap...")
+
+        outputLock.lock()
+        isRunning = true
+        totalBuffers = 0
+        totalBytesWritten = 0
+        firstAudioTime = nil
+        lastAudioTime = nil
+        silencePeriodLogged = false
+        audioFormatLogged = false
+        extractionErrorCount = 0
+        outputLock.unlock()
+
+        queueLock.lock()
+        pendingAudioChunks.removeAll(keepingCapacity: true)
+        pendingChunkStartIndex = 0
+        pendingChunkBytes = 0
+        droppedChunkCount = 0
+        queueLock.unlock()
+
+        do {
+            try createTapAndAggregateDevice()
+            ensureWriterLoopStarted()
+            try createAndStartIOProc()
+        } catch {
+            cleanupAfterFailedStart()
+            throw error
+        }
+
+        sendReady()
+        sendStatus("recording", message: "CoreAudio process tap active")
+    }
+
+    func stop() {
+        outputLock.lock()
+        let wasRunning = isRunning
+        isRunning = false
+        outputLock.unlock()
+
+        if wasRunning {
+            if let ioProcID {
+                let stopStatus = AudioDeviceStop(aggregateDeviceID, ioProcID)
+                if stopStatus != noErr {
+                    sendJSON([
+                        "type": "warning",
+                        "code": "coreaudio_tap_stop_failed",
+                        "message": "AudioDeviceStop failed with OSStatus \(osStatusDescription(stopStatus))",
+                    ])
+                }
+
+                let destroyStatus = AudioDeviceDestroyIOProcID(aggregateDeviceID, ioProcID)
+                if destroyStatus != noErr {
+                    sendJSON([
+                        "type": "warning",
+                        "code": "coreaudio_tap_ioproc_destroy_failed",
+                        "message": "AudioDeviceDestroyIOProcID failed with OSStatus \(osStatusDescription(destroyStatus))",
+                    ])
+                }
+                self.ioProcID = nil
+            }
+        }
+
+        writerSignal.signal()
+        waitForWriterDrain(timeout: 2.0)
+        destroyAggregateAndTap()
+
+        outputLock.lock()
+        let finalBuffers = totalBuffers
+        let finalBytes = totalBytesWritten
+        let finalFirstAudioTimestamp = firstAudioTime?.timeIntervalSince1970
+        let finalLastAudioTimestamp = lastAudioTime?.timeIntervalSince1970
+        outputLock.unlock()
+
+        queueLock.lock()
+        let finalDroppedChunks = droppedChunkCount
+        let finalQueuedBytes = pendingChunkBytes
+        queueLock.unlock()
+
+        var stats: [String: Any] = [
+            "type": "capture_stats",
+            "captureBackend": "coreaudio_tap",
+            "totalSamples": finalBuffers,
+            "totalBytes": finalBytes,
+            "screenFrames": 0,
+            "droppedChunks": finalDroppedChunks,
+            "queuedBytesRemaining": finalQueuedBytes,
+        ]
+        if let finalFirstAudioTimestamp {
+            stats["firstAudioTimestamp"] = finalFirstAudioTimestamp
+        }
+        if let finalLastAudioTimestamp {
+            stats["lastAudioTimestamp"] = finalLastAudioTimestamp
+        }
+        sendJSON(stats)
+        sendStatus("stopped", message: "CoreAudio process tap stopped")
+    }
+
+    func checkForSilence() {
+        outputLock.lock()
+        guard isRunning, let lastTime = lastAudioTime else {
+            outputLock.unlock()
+            return
+        }
+        let silenceDuration = Date().timeIntervalSince(lastTime)
+        let alreadyLogged = silencePeriodLogged
+        if silenceDuration > silenceThreshold && !alreadyLogged {
+            silencePeriodLogged = true
+            outputLock.unlock()
+            sendJSON([
+                "type": "silence_detected",
+                "captureBackend": "coreaudio_tap",
+                "duration": silenceDuration,
+                "message": "No CoreAudio tap data received for \(String(format: "%.1f", silenceDuration)) seconds (this is normal if no audio is playing)"
+            ])
+        } else {
+            outputLock.unlock()
+        }
+    }
+
+    private func createTapAndAggregateDevice() throws {
+        let excludedProcesses = config.excludeCurrentApp ? currentAudioProcessObjectIDs() : []
+        let tapDescription = config.channels == 1
+            ? CATapDescription(monoGlobalTapButExcludeProcesses: excludedProcesses)
+            : CATapDescription(stereoGlobalTapButExcludeProcesses: excludedProcesses)
+
+        let uuid = UUID()
+        tapDescription.name = "AvaNevis System Audio"
+        tapDescription.uuid = uuid
+        tapDescription.isPrivate = true
+        tapDescription.muteBehavior = CATapMuteBehavior(rawValue: 0)!
+
+        var createdTapID = AudioObjectID(kAudioObjectUnknown)
+        let tapStatus = AudioHardwareCreateProcessTap(tapDescription, &createdTapID)
+        guard tapStatus == noErr else {
+            throw makeCoreAudioError("AudioHardwareCreateProcessTap failed", status: tapStatus)
+        }
+        tapID = createdTapID
+
+        try loadTapFormat()
+
+        let aggregateUID = "com.avanevis.app.audiocapture-helper.tap.\(UUID().uuidString)"
+        let aggregateDescription: [String: Any] = [
+            String(kAudioAggregateDeviceUIDKey): aggregateUID,
+            String(kAudioAggregateDeviceNameKey): "AvaNevis System Audio Capture",
+            String(kAudioAggregateDeviceIsPrivateKey): true,
+            String(kAudioAggregateDeviceTapListKey): [[String(kAudioSubTapUIDKey): uuid.uuidString]],
+            String(kAudioAggregateDeviceTapAutoStartKey): false,
+        ]
+
+        var createdAggregateID = AudioObjectID(kAudioObjectUnknown)
+        let aggregateStatus = AudioHardwareCreateAggregateDevice(aggregateDescription as CFDictionary, &createdAggregateID)
+        guard aggregateStatus == noErr else {
+            throw makeCoreAudioError("AudioHardwareCreateAggregateDevice failed", status: aggregateStatus)
+        }
+        aggregateDeviceID = createdAggregateID
+
+        setAggregateNominalSampleRateIfPossible()
+
+        sendJSON([
+            "type": "stream_config",
+            "captureBackend": "coreaudio_tap",
+            "capturesAudio": true,
+            "sampleRate": config.sampleRate,
+            "channelCount": config.channels,
+            "tapSampleRate": streamFormat.mSampleRate,
+            "tapChannels": streamFormat.mChannelsPerFrame,
+            "tapFormatID": streamFormat.mFormatID,
+            "tapFormatFlags": streamFormat.mFormatFlags,
+            "tapBytesPerFrame": streamFormat.mBytesPerFrame,
+            "tapFramesPerPacket": streamFormat.mFramesPerPacket,
+            "excludedProcessCount": excludedProcesses.count,
+        ])
+    }
+
+    private func createAndStartIOProc() throws {
+        var procID: AudioDeviceIOProcID?
+        let createStatus = AudioDeviceCreateIOProcIDWithBlock(&procID, aggregateDeviceID, callbackQueue) { [weak self] _, inputData, _, _, _ in
+            self?.handleInputData(inputData)
+        }
+
+        guard createStatus == noErr, let procID else {
+            throw makeCoreAudioError("AudioDeviceCreateIOProcIDWithBlock failed", status: createStatus)
+        }
+
+        ioProcID = procID
+
+        let startStatus = AudioDeviceStart(aggregateDeviceID, procID)
+        guard startStatus == noErr else {
+            _ = AudioDeviceDestroyIOProcID(aggregateDeviceID, procID)
+            ioProcID = nil
+            throw makeCoreAudioError("AudioDeviceStart failed", status: startStatus)
+        }
+    }
+
+    private func handleInputData(_ inputData: UnsafePointer<AudioBufferList>) {
+        outputLock.lock()
+        let capturing = isRunning
+        outputLock.unlock()
+        guard capturing else { return }
+
+        logTapAudioFormatIfNeeded(inputData)
+
+        guard let audioData = extractInterleavedAudioData(inputData) else {
+            return
+        }
+
+        let now = Date()
+        var shouldLogAudioResumed = false
+        var silenceDuration: TimeInterval = 0
+
+        outputLock.lock()
+        if firstAudioTime == nil {
+            firstAudioTime = now
+        }
+        if let lastTime = lastAudioTime {
+            silenceDuration = now.timeIntervalSince(lastTime)
+            if silenceDuration > silenceThreshold && silencePeriodLogged {
+                shouldLogAudioResumed = true
+                silencePeriodLogged = false
+            }
+        }
+        lastAudioTime = now
+        outputLock.unlock()
+
+        if shouldLogAudioResumed {
+            sendJSON([
+                "type": "audio_resumed",
+                "captureBackend": "coreaudio_tap",
+                "silenceDuration": silenceDuration,
+                "message": "CoreAudio tap data resumed after \(String(format: "%.1f", silenceDuration)) seconds of silence"
+            ])
+        }
+
+        let enqueueResult = enqueueAudioData(audioData)
+
+        outputLock.lock()
+        totalBuffers += 1
+        let currentBufferCount = totalBuffers
+        let currentBytesWritten = totalBytesWritten
+        outputLock.unlock()
+
+        if enqueueResult.droppedDuringEnqueue &&
+            (enqueueResult.droppedChunkCount == 1 || enqueueResult.droppedChunkCount % queueDropWarningInterval == 0) {
+            sendJSON([
+                "type": "warning",
+                "code": "stdout_backpressure",
+                "message": "Audio output queue overflow; dropped \(enqueueResult.droppedChunkCount) chunks",
+                "droppedChunks": enqueueResult.droppedChunkCount,
+                "queuedBytes": enqueueResult.queuedBytes,
+            ])
+        }
+
+        if currentBufferCount == 1 {
+            sendStatus(
+                "first_sample",
+                message: "Received first CoreAudio tap sample (\(audioData.count) bytes)",
+                extra: ["timestamp": now.timeIntervalSince1970, "captureBackend": "coreaudio_tap"]
+            )
+        }
+
+        if currentBufferCount % 1000 == 0 {
+            sendJSON([
+                "type": "progress",
+                "captureBackend": "coreaudio_tap",
+                "samples": currentBufferCount,
+                "bytesWritten": currentBytesWritten,
+                "queuedBytes": enqueueResult.queuedBytes,
+                "droppedChunks": enqueueResult.droppedChunkCount,
+            ])
+        }
+    }
+
+    private func currentAudioProcessObjectIDs() -> [AudioObjectID] {
+        var pid = getpid()
+        var processObjectID = AudioObjectID(kAudioObjectUnknown)
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyTranslatePIDToProcessObject,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        let status = withUnsafePointer(to: &pid) { pidPointer in
+            AudioObjectGetPropertyData(
+                AudioObjectID(kAudioObjectSystemObject),
+                &address,
+                UInt32(MemoryLayout<pid_t>.size),
+                pidPointer,
+                &size,
+                &processObjectID
+            )
+        }
+
+        if status != noErr || processObjectID == kAudioObjectUnknown {
+            sendJSON([
+                "type": "warning",
+                "code": "coreaudio_self_exclusion_unavailable",
+                "message": "Could not resolve helper process object for CoreAudio tap exclusion",
+                "osStatus": status,
+                "osStatusText": osStatusDescription(status),
+            ])
+            return []
+        }
+
+        return [processObjectID]
+    }
+
+    private func loadTapFormat() throws {
+        var format = AudioStreamBasicDescription()
+        var size = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioTapPropertyFormat,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+
+        let status = AudioObjectGetPropertyData(tapID, &address, 0, nil, &size, &format)
+        guard status == noErr else {
+            throw makeCoreAudioError("AudioObjectGetPropertyData(kAudioTapPropertyFormat) failed", status: status)
+        }
+        streamFormat = format
+    }
+
+    private func setAggregateNominalSampleRateIfPossible() {
+        var sampleRate = Float64(config.sampleRate)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyNominalSampleRate,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let status = AudioObjectSetPropertyData(
+            aggregateDeviceID,
+            &address,
+            0,
+            nil,
+            UInt32(MemoryLayout<Float64>.size),
+            &sampleRate
+        )
+
+        if status != noErr {
+            sendJSON([
+                "type": "warning",
+                "code": "coreaudio_sample_rate_set_failed",
+                "message": "Could not set CoreAudio tap aggregate sample rate; using tap format sample rate",
+                "osStatus": status,
+                "osStatusText": osStatusDescription(status),
+                "tapSampleRate": streamFormat.mSampleRate,
+            ])
+        }
+    }
+
+    private func logTapAudioFormatIfNeeded(_ inputData: UnsafePointer<AudioBufferList>) {
+        outputLock.lock()
+        let shouldLog = !audioFormatLogged
+        if shouldLog {
+            audioFormatLogged = true
+        }
+        outputLock.unlock()
+
+        guard shouldLog else { return }
+
+        let buffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: inputData))
+        sendJSON([
+            "type": "audio_format",
+            "captureBackend": "coreaudio_tap",
+            "sampleRate": streamFormat.mSampleRate,
+            "channels": streamFormat.mChannelsPerFrame,
+            "bitsPerChannel": streamFormat.mBitsPerChannel,
+            "bytesPerFrame": streamFormat.mBytesPerFrame,
+            "formatID": streamFormat.mFormatID,
+            "formatFlags": streamFormat.mFormatFlags,
+            "bufferCount": buffers.count,
+            "interleaved": !isNonInterleaved(streamFormat),
+            "expectedChannels": config.channels,
+        ])
+    }
+
+    private func extractInterleavedAudioData(_ inputData: UnsafePointer<AudioBufferList>) -> Data? {
+        let buffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: inputData))
+        guard !buffers.isEmpty else {
+            logExtractionError("CoreAudio tap buffer list was empty")
+            return nil
+        }
+
+        guard streamFormat.mFormatID == kAudioFormatLinearPCM,
+              (streamFormat.mFormatFlags & kAudioFormatFlagIsFloat) != 0,
+              streamFormat.mBitsPerChannel == 32 else {
+            logExtractionError(
+                "Unsupported CoreAudio tap format: formatID=\(streamFormat.mFormatID), flags=\(streamFormat.mFormatFlags), bits=\(streamFormat.mBitsPerChannel)"
+            )
+            return nil
+        }
+
+        if isNonInterleaved(streamFormat) {
+            return interleavedDataFromPlanarBuffers(buffers)
+        }
+
+        return interleavedDataFromSingleBuffer(buffers[0])
+    }
+
+    private func interleavedDataFromSingleBuffer(_ audioBuffer: AudioBuffer) -> Data? {
+        guard let sourceData = audioBuffer.mData else {
+            return nil
+        }
+
+        let sourceChannels = max(1, Int(streamFormat.mChannelsPerFrame))
+        let outputChannels = max(1, config.channels)
+        let availableBytes = Int(audioBuffer.mDataByteSize)
+        guard availableBytes >= MemoryLayout<Float>.size * sourceChannels else {
+            return nil
+        }
+
+        let sourceFrameCount = availableBytes / (MemoryLayout<Float>.size * sourceChannels)
+        if sourceChannels == outputChannels {
+            return Data(bytes: sourceData, count: sourceFrameCount * sourceChannels * MemoryLayout<Float>.size)
+        }
+
+        let sourceSampleCount = sourceFrameCount * sourceChannels
+        let samples = sourceData.bindMemory(to: Float.self, capacity: sourceSampleCount)
+        var normalized = [Float](repeating: 0, count: sourceFrameCount * outputChannels)
+
+        for frame in 0..<sourceFrameCount {
+            for outputChannel in 0..<outputChannels {
+                let sourceChannel = min(outputChannel, sourceChannels - 1)
+                normalized[frame * outputChannels + outputChannel] = samples[frame * sourceChannels + sourceChannel]
+            }
+        }
+
+        return normalized.withUnsafeBufferPointer { pointer in
+            guard let baseAddress = pointer.baseAddress else { return Data() }
+            return Data(bytes: baseAddress, count: pointer.count * MemoryLayout<Float>.size)
+        }
+    }
+
+    private func interleavedDataFromPlanarBuffers(_ audioBuffers: UnsafeMutableAudioBufferListPointer) -> Data? {
+        let sourceChannels = max(1, Int(streamFormat.mChannelsPerFrame))
+        let outputChannels = max(1, config.channels)
+
+        guard audioBuffers.count >= sourceChannels else {
+            logExtractionError("CoreAudio tap planar buffer count mismatch: have \(audioBuffers.count), need \(sourceChannels)")
+            return nil
+        }
+
+        let frameCount = Int(audioBuffers[0].mDataByteSize) / MemoryLayout<Float>.size
+        guard frameCount > 0 else { return nil }
+
+        var channelPointers: [UnsafePointer<Float>] = []
+        channelPointers.reserveCapacity(sourceChannels)
+
+        for channel in 0..<sourceChannels {
+            let buffer = audioBuffers[channel]
+            guard let channelData = buffer.mData else {
+                return nil
+            }
+
+            let availableFrames = Int(buffer.mDataByteSize) / MemoryLayout<Float>.size
+            if availableFrames < frameCount {
+                logExtractionError("CoreAudio tap planar channel \(channel) size mismatch: have \(availableFrames), need \(frameCount)")
+                return nil
+            }
+
+            channelPointers.append(channelData.bindMemory(to: Float.self, capacity: frameCount))
+        }
+
+        var normalized = [Float](repeating: 0, count: frameCount * outputChannels)
+        for frame in 0..<frameCount {
+            for outputChannel in 0..<outputChannels {
+                let sourceChannel = min(outputChannel, sourceChannels - 1)
+                normalized[frame * outputChannels + outputChannel] = channelPointers[sourceChannel][frame]
+            }
+        }
+
+        return normalized.withUnsafeBufferPointer { pointer in
+            guard let baseAddress = pointer.baseAddress else { return Data() }
+            return Data(bytes: baseAddress, count: pointer.count * MemoryLayout<Float>.size)
+        }
+    }
+
+    private func isNonInterleaved(_ format: AudioStreamBasicDescription) -> Bool {
+        (format.mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0
+    }
+
+    private func logExtractionError(_ message: String) {
+        outputLock.lock()
+        extractionErrorCount += 1
+        let currentCount = extractionErrorCount
+        let maxErrors = maxExtractionErrors
+        outputLock.unlock()
+
+        if currentCount <= maxErrors {
+            sendJSON(["type": "extraction_error", "captureBackend": "coreaudio_tap", "error": message, "count": currentCount])
+        } else if currentCount == maxErrors + 1 {
+            sendJSON(["type": "extraction_error", "captureBackend": "coreaudio_tap", "error": "Too many CoreAudio tap extraction errors, suppressing further logs", "count": currentCount])
+        }
+    }
+
+    private func ensureWriterLoopStarted() {
+        outputLock.lock()
+        let shouldStart = !writerIsRunning
+        if shouldStart {
+            writerIsRunning = true
+            writerCompletionGroup.enter()
+        }
+        outputLock.unlock()
+
+        guard shouldStart else { return }
+
+        writerQueue.async { [weak self] in
+            self?.writerLoop()
+        }
+    }
+
+    private func writerLoop() {
+        defer {
+            outputLock.lock()
+            writerIsRunning = false
+            outputLock.unlock()
+            writerCompletionGroup.leave()
+        }
+
+        while true {
+            writerSignal.wait()
+
+            while let chunk = dequeueAudioChunk() {
+                FileHandle.standardOutput.write(chunk)
+
+                outputLock.lock()
+                totalBytesWritten += chunk.count
+                outputLock.unlock()
+            }
+
+            if shouldStopWriterLoop() {
+                break
+            }
+        }
+    }
+
+    private func enqueueAudioData(_ data: Data) -> EnqueueResult {
+        queueLock.lock()
+        var droppedDuringEnqueue = false
+
+        while pendingChunkBytes + data.count > maxQueuedBytes && pendingChunkStartIndex < pendingAudioChunks.count {
+            let dropped = pendingAudioChunks[pendingChunkStartIndex]
+            pendingChunkStartIndex += 1
+            pendingChunkBytes -= dropped.count
+            droppedChunkCount += 1
+            droppedDuringEnqueue = true
+        }
+        compactPendingAudioChunksIfNeededLocked()
+
+        if pendingChunkBytes + data.count > maxQueuedBytes {
+            droppedChunkCount += 1
+            let result = EnqueueResult(
+                queuedBytes: pendingChunkBytes,
+                droppedChunkCount: droppedChunkCount,
+                droppedDuringEnqueue: true
+            )
+            queueLock.unlock()
+            return result
+        }
+
+        pendingAudioChunks.append(data)
+        pendingChunkBytes += data.count
+
+        let result = EnqueueResult(
+            queuedBytes: pendingChunkBytes,
+            droppedChunkCount: droppedChunkCount,
+            droppedDuringEnqueue: droppedDuringEnqueue
+        )
+        queueLock.unlock()
+
+        writerSignal.signal()
+        return result
+    }
+
+    private func dequeueAudioChunk() -> Data? {
+        queueLock.lock()
+        defer { queueLock.unlock() }
+
+        guard pendingChunkStartIndex < pendingAudioChunks.count else {
+            compactPendingAudioChunksIfNeededLocked()
+            return nil
+        }
+
+        let chunk = pendingAudioChunks[pendingChunkStartIndex]
+        pendingChunkStartIndex += 1
+        pendingChunkBytes -= chunk.count
+        compactPendingAudioChunksIfNeededLocked()
+        return chunk
+    }
+
+    private func compactPendingAudioChunksIfNeededLocked() {
+        if pendingChunkStartIndex == pendingAudioChunks.count {
+            pendingAudioChunks.removeAll(keepingCapacity: true)
+            pendingChunkStartIndex = 0
+            return
+        }
+
+        if pendingChunkStartIndex > 32 && pendingChunkStartIndex * 2 >= pendingAudioChunks.count {
+            pendingAudioChunks.removeFirst(pendingChunkStartIndex)
+            pendingChunkStartIndex = 0
+        }
+    }
+
+    private func shouldStopWriterLoop() -> Bool {
+        outputLock.lock()
+        let capturing = isRunning
+        outputLock.unlock()
+
+        queueLock.lock()
+        let queueEmpty = pendingChunkStartIndex >= pendingAudioChunks.count
+        queueLock.unlock()
+
+        return !capturing && queueEmpty
+    }
+
+    private func waitForWriterDrain(timeout: TimeInterval) {
+        let result = writerCompletionGroup.wait(timeout: .now() + timeout)
+        if result == .timedOut {
+            sendJSON([
+                "type": "warning",
+                "code": "writer_drain_timeout",
+                "message": "Timed out waiting for CoreAudio tap writer queue to drain"
+            ])
+        }
+    }
+
+    private func cleanupAfterFailedStart() {
+        outputLock.lock()
+        isRunning = false
+        outputLock.unlock()
+
+        if let ioProcID {
+            _ = AudioDeviceStop(aggregateDeviceID, ioProcID)
+            _ = AudioDeviceDestroyIOProcID(aggregateDeviceID, ioProcID)
+            self.ioProcID = nil
+        }
+
+        writerSignal.signal()
+        waitForWriterDrain(timeout: 1.0)
+        destroyAggregateAndTap()
+    }
+
+    private func destroyAggregateAndTap() {
+        if aggregateDeviceID != kAudioObjectUnknown {
+            let status = AudioHardwareDestroyAggregateDevice(aggregateDeviceID)
+            if status != noErr {
+                sendJSON([
+                    "type": "warning",
+                    "code": "coreaudio_aggregate_destroy_failed",
+                    "message": "AudioHardwareDestroyAggregateDevice failed with OSStatus \(osStatusDescription(status))",
+                ])
+            }
+            aggregateDeviceID = AudioObjectID(kAudioObjectUnknown)
+        }
+
+        if tapID != kAudioObjectUnknown {
+            let status = AudioHardwareDestroyProcessTap(tapID)
+            if status != noErr {
+                sendJSON([
+                    "type": "warning",
+                    "code": "coreaudio_tap_destroy_failed",
+                    "message": "AudioHardwareDestroyProcessTap failed with OSStatus \(osStatusDescription(status))",
+                ])
+            }
+            tapID = AudioObjectID(kAudioObjectUnknown)
+        }
+    }
+}
+
 // MARK: - Main Capture Class
 
 @available(macOS 13.0, *)
 class AudioCapture {
     private var stream: SCStream?
     private var delegate: AudioCaptureDelegate?
+    private var coreAudioTapCapture: SystemAudioCaptureBackend?
+    private var activeBackend: String?
     private var config: Config
     private var isRunning = false
     private var silenceCheckTimer: DispatchSourceTimer?
@@ -687,7 +1446,12 @@ class AudioCapture {
         let timer = DispatchSource.makeTimerSource(queue: .global())
         timer.schedule(deadline: .now() + 5.0, repeating: 5.0)
         timer.setEventHandler { [weak self] in
-            self?.delegate?.checkForSilence()
+            guard let self else { return }
+            if self.activeBackend == "coreaudio_tap" {
+                self.coreAudioTapCapture?.checkForSilence()
+            } else {
+                self.delegate?.checkForSilence()
+            }
         }
         timer.resume()
         silenceCheckTimer = timer
@@ -699,6 +1463,42 @@ class AudioCapture {
     }
 
     func start() async throws {
+        if config.preferCoreAudioTap {
+            if #available(macOS 14.2, *) {
+                let tapCapture = CoreAudioTapCapture(config: config)
+                do {
+                    try tapCapture.start()
+                    coreAudioTapCapture = tapCapture
+                    activeBackend = "coreaudio_tap"
+                    isRunning = true
+                    startSilenceCheckTimer()
+                    sendJSON([
+                        "type": "capture_backend",
+                        "backend": "coreaudio_tap",
+                        "message": "Using CoreAudio process tap for system audio capture"
+                    ])
+                    return
+                } catch {
+                    let nsError = error as NSError
+                    sendJSON([
+                        "type": "warning",
+                        "code": "coreaudio_tap_start_failed",
+                        "message": "CoreAudio process tap failed to start; falling back to ScreenCaptureKit",
+                        "error": error.localizedDescription,
+                        "nsErrorCode": nsError.code,
+                        "nsErrorDomain": nsError.domain,
+                    ])
+                }
+            } else {
+                sendJSON([
+                    "type": "status",
+                    "status": "coreaudio_tap_unavailable",
+                    "message": "CoreAudio process tap requires macOS 14.2 or later; using ScreenCaptureKit"
+                ])
+            }
+        }
+
+        activeBackend = "screencapturekit"
         sendStatus("initializing", message: "Getting shareable content...")
 
         // Get available content to capture
@@ -741,6 +1541,7 @@ class AudioCapture {
 
         sendJSON([
             "type": "content_info",
+            "captureBackend": "screencapturekit",
             "displayCount": displays.count,
             "applicationCount": applications.count,
             "windowCount": windows.count,
@@ -791,6 +1592,7 @@ class AudioCapture {
 
         sendJSON([
             "type": "stream_config",
+            "captureBackend": "screencapturekit",
             "width": streamConfig.width,
             "height": streamConfig.height,
             "capturesAudio": streamConfig.capturesAudio,
@@ -875,6 +1677,13 @@ class AudioCapture {
         // Stop the silence check timer
         stopSilenceCheckTimer()
 
+        if activeBackend == "coreaudio_tap" || coreAudioTapCapture != nil {
+            coreAudioTapCapture?.stop()
+            coreAudioTapCapture = nil
+            activeBackend = nil
+            return
+        }
+
         if let stream = stream {
             do {
                 try await stream.stopCapture()
@@ -888,6 +1697,7 @@ class AudioCapture {
 
         stream = nil
         delegate = nil
+        activeBackend = nil
     }
 }
 
@@ -912,6 +1722,10 @@ func parseArguments() -> Config {
             }
         case "--include-self":
             config.excludeCurrentApp = false
+        case "--screencapturekit":
+            config.preferCoreAudioTap = false
+        case "--coreaudio-tap":
+            config.preferCoreAudioTap = true
         case "--check-permission":
             if #available(macOS 13.0, *) {
                 Task {
@@ -974,6 +1788,8 @@ func printUsage() {
       --sample-rate, -r <rate>   Sample rate in Hz (default: 48000)
       --channels, -c <num>       Number of channels (default: 2)
       --include-self             Include audio from this process
+      --coreaudio-tap            Prefer CoreAudio process tap on macOS 14.2+ (default)
+      --screencapturekit         Force ScreenCaptureKit capture path
       --help, -h                 Show this help
 
     Output:
@@ -1000,7 +1816,8 @@ func main() async {
     sendJSON([
         "type": "config",
         "sampleRate": config.sampleRate,
-        "channels": config.channels
+        "channels": config.channels,
+        "preferCoreAudioTap": config.preferCoreAudioTap,
     ])
 
     let capture = AudioCapture(config: config)

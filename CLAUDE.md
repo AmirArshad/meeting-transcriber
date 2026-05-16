@@ -8,7 +8,7 @@ AvaNevis is a privacy-first Electron desktop app for recording microphone audio 
 
 - Frontend: Electron 42 with plain HTML/CSS/JavaScript
 - Backend: Python 3.11 scripts spawned from Electron
-- macOS desktop audio: native Swift helper preferred, PyObjC fallback
+- macOS desktop audio: native Swift helper preferred with CoreAudio process tap on macOS 14.2+, Swift/PyObjC ScreenCaptureKit fallback
 - Windows transcription: `faster-whisper`
 - macOS transcription: `lightning-whisper-mlx` on Apple Silicon, CPU fallback path exists for Intel Macs in dev logic
 - Storage: recordings and meeting metadata live in Electron `userData`, not in the repo
@@ -40,8 +40,8 @@ AvaNevis is a privacy-first Electron desktop app for recording microphone audio 
 - `backend/meeting_manager.py`: persistent meeting history in `meetings.json`, dedupe, scan/import, delete with retry
 - `backend/check_permissions.py`: macOS permission checks
 - `backend/audio/windows_recorder.py`: Windows recording pipeline using `pyaudiowpatch` WASAPI loopback
-- `backend/audio/macos_recorder.py`: macOS recording pipeline using `sounddevice` + Swift/PyObjC desktop capture
-- `backend/audio/swift_audio_capture.py`: bridge to bundled Swift helper
+- `backend/audio/macos_recorder.py`: macOS recording pipeline using `sounddevice` + Swift helper desktop capture with PyObjC fallback
+- `backend/audio/swift_audio_capture.py`: Python bridge to bundled Swift helper; preserves raw PCM stdout and JSON stderr helper contract
 - `backend/audio/processor.py`, `backend/audio/compressor.py`, `backend/audio/timeline.py`, `backend/audio/constants.py`: Windows audio processing modules
 - `backend/transcription/faster_whisper_transcriber.py`: Windows/default transcriber
 - `backend/transcription/mlx_whisper_transcriber.py`: Apple Silicon transcriber
@@ -168,7 +168,15 @@ If you change `backend/meeting_manager.py`, preserve:
 
 ### macOS desktop audio capture
 
-Preferred path is the bundled Swift helper. PyObjC ScreenCaptureKit is only a fallback.
+Preferred path is the bundled Swift helper using CoreAudio process taps on macOS 14.2+. The helper falls back to Swift ScreenCaptureKit when CoreAudio tap startup fails or macOS is older; PyObjC ScreenCaptureKit is only a final fallback.
+
+The Swift helper stdout contract is raw interleaved float32 PCM. Helper JSON status, diagnostics, warnings, and errors go to stderr and are parsed by `backend/audio/swift_audio_capture.py`, not directly by Electron.
+
+Permission behavior differs by backend:
+
+- CoreAudio process tap can require macOS System Audio Recording permission for `com.avanevis.app.audiocapture-helper`.
+- ScreenCaptureKit fallback can require Screen Recording permission.
+- Do not assume missing desktop audio is a generic Screen Recording issue; inspect `helperCaptureBackend`, helper diagnostics, and unified logs.
 
 If you touch the helper pipeline, verify:
 
@@ -176,6 +184,7 @@ If you touch the helper pipeline, verify:
 - `build/prepare-resources.js` still copies it to `build/resources/bin`
 - codesign/entitlement steps still happen
 - `electron-builder` still bundles and signs `Contents/Resources/bin/audiocapture-helper`
+- a packaged macOS recording with active Chrome/system audio captures desktop audio and reports `helperCaptureBackend=coreaudio_tap` on macOS 14.2+
 
 ### Release asset naming
 

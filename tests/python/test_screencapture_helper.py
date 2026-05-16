@@ -82,6 +82,16 @@ def test_swift_helper_info_plist_declares_audio_capture_usage():
     assert 'NSScreenCaptureUsageDescription' in contents
 
 
+def test_swift_helper_uses_coreaudio_tap_before_screencapturekit():
+    helper_source = Path(__file__).resolve().parents[2] / 'swift' / 'AudioCaptureHelper' / 'Sources' / 'main.swift'
+    contents = helper_source.read_text(encoding='utf-8')
+
+    assert 'AudioHardwareCreateProcessTap' in contents
+    assert 'CATapDescription(stereoGlobalTapButExcludeProcesses:' in contents
+    assert 'AudioHardwareCreateAggregateDevice' in contents
+    assert '--screencapturekit' in contents
+
+
 def test_check_permissions_uses_swift_helper_before_pyobjc(monkeypatch):
     monkeypatch.setattr(
         check_permissions_module,
@@ -177,6 +187,49 @@ def test_swift_audio_capture_queues_no_audio_warning_once():
     ]
 
 
+def test_swift_audio_capture_missing_audio_help_prefers_system_audio_for_coreaudio_tap():
+    capture = swift_capture_module.SwiftAudioCapture.__new__(swift_capture_module.SwiftAudioCapture)
+    capture.helper_capture_backend = 'coreaudio_tap'
+
+    assert 'System Audio Recording permission' in capture._missing_audio_help()
+    assert 'Screen Recording permission' not in capture._missing_audio_help()
+
+
+def test_swift_audio_capture_missing_audio_help_keeps_screen_recording_for_screencapturekit():
+    capture = swift_capture_module.SwiftAudioCapture.__new__(swift_capture_module.SwiftAudioCapture)
+    capture.helper_capture_backend = 'screencapturekit'
+
+    assert 'Screen Recording permission' in capture._missing_audio_help()
+
+
+def test_swift_audio_capture_preserves_final_diagnostics_after_buffer_clear():
+    import numpy as np
+
+    capture = swift_capture_module.SwiftAudioCapture.__new__(swift_capture_module.SwiftAudioCapture)
+    capture._recording_event = swift_capture_module.threading.Event()
+    capture._recording_event.set()
+    capture.buffer_lock = swift_capture_module.threading.Lock()
+    capture.warning_lock = swift_capture_module.threading.Lock()
+    capture.warning_event = swift_capture_module.threading.Event()
+    capture.warning_messages = []
+    capture._warning_codes_sent = set()
+    capture.audio_buffer = [np.ones((10, 2), dtype=np.float64)]
+    capture.process = None
+    capture._stdout_thread = None
+    capture._stderr_thread = None
+    capture.helper_total_sample_buffers = 3
+    capture.helper_total_bytes = 80
+
+    audio = capture.stop_recording()
+
+    assert audio.shape == (10, 2)
+    assert capture.audio_buffer == []
+    assert capture.last_captured_chunk_count == 1
+    assert capture.last_captured_sample_count == 10
+    assert capture.last_helper_sample_buffers == 3
+    assert capture.last_helper_bytes == 80
+
+
 def test_swift_audio_capture_records_helper_diagnostics(monkeypatch):
     import select
 
@@ -190,14 +243,16 @@ def test_swift_audio_capture_records_helper_diagnostics(monkeypatch):
     capture.helper_total_bytes = 0
     capture.helper_dropped_chunks = 0
     capture.helper_queued_bytes_remaining = 0
+    capture.helper_capture_backend = None
     capture.first_audio_time = None
     capture.last_audio_time = None
 
     messages = [
-        '{"type":"content_info","displayCount":1,"applicationCount":12,"windowCount":34}',
-        '{"type":"stream_config","width":1728,"height":1117,"capturesAudio":true}',
+        '{"type":"capture_backend","backend":"coreaudio_tap"}',
+        '{"type":"content_info","captureBackend":"screencapturekit","displayCount":1,"applicationCount":12,"windowCount":34}',
+        '{"type":"stream_config","captureBackend":"screencapturekit","width":1728,"height":1117,"capturesAudio":true}',
         '{"type":"status","status":"screen_sample","message":"screen","screenFrames":1}',
-        '{"type":"capture_stats","totalSamples":0,"totalBytes":0,"screenFrames":5}',
+        '{"type":"capture_stats","captureBackend":"screencapturekit","totalSamples":0,"totalBytes":0,"screenFrames":5}',
     ]
 
     class FakeStderr:
@@ -234,6 +289,7 @@ def test_swift_audio_capture_records_helper_diagnostics(monkeypatch):
     assert capture.helper_content_info['displayCount'] == 1
     assert capture.helper_stream_config['width'] == 1728
     assert capture.helper_screen_frames == 5
+    assert capture.helper_capture_backend == 'screencapturekit'
 
 
 def test_desktop_audio_availability_reports_missing_backends(monkeypatch):

@@ -14,7 +14,7 @@ This document tracks the current state of major user-facing features on macOS.
 | --- | --- | --- |
 | Window/tray behavior | Implemented | Uses Electron APIs; macOS tray uses template PNG assets. |
 | Recording while minimized | Implemented | Recorder runs in Python subprocesses; not tied to renderer visibility. |
-| Desktop audio capture | Implemented | Swift helper preferred, PyObjC fallback. Screen Recording permission required. |
+| Desktop audio capture | Implemented | Swift helper preferred: CoreAudio process tap on macOS 14.2+, Swift ScreenCaptureKit fallback, PyObjC ScreenCaptureKit fallback. System Audio Recording and/or Screen Recording permission may be required depending on the path. |
 | Microphone capture | Implemented | Uses `sounddevice` on macOS. |
 | Audio visualizer | Implemented | Recorder emits structured `levels` messages consumed by the renderer. |
 | Stop-and-save workflow | Implemented | Main-process stop flow is guarded against duplicate stop races. |
@@ -30,7 +30,8 @@ This document tracks the current state of major user-facing features on macOS.
 ### Permissions
 
 - Microphone permission is required for mic capture.
-- Screen Recording permission is required for desktop audio capture.
+- Desktop audio capture uses the bundled Swift helper. macOS 14.2+ prefers CoreAudio process taps and may require System Audio Recording permission.
+- Screen Recording permission is still required when the ScreenCaptureKit fallback path is used.
 - Recording preflight now blocks start when those permissions are missing and can direct the user to System Settings.
 
 ### Packaging
@@ -51,7 +52,7 @@ These areas have code coverage and smoke coverage, but still need real-hardware 
 
 - mic + desktop sync on current macOS hardware
 - first seconds of desktop audio after recording starts
-- denied Screen Recording guidance
+- denied System Audio Recording / Screen Recording guidance
 - helper backpressure/drop warnings
 - quitting during an active recording
 

@@ -6,8 +6,8 @@
 
 This document outlines larger macOS audio architecture ideas. Some supporting hardening work has already landed since the original draft:
 
-- Screen Recording permission probing is now real and surfaced before recording starts.
-- The preferred Swift helper path is active, with a PyObjC fallback kept aligned to the same startup/error contract.
+- The preferred Swift helper path is active. It uses a CoreAudio process tap on macOS 14.2+ and falls back to Swift/PyObjC ScreenCaptureKit paths.
+- Desktop-audio permission handling now distinguishes CoreAudio System Audio Recording behavior from ScreenCaptureKit Screen Recording fallback behavior.
 - Recorder startup uses structured stdout events; stderr is debug-only.
 
 The sections below should be read as future architectural directions, not as a description of the current shipped implementation.
@@ -54,18 +54,20 @@ The current implementation captures "All System Audio". This includes unwanted s
 
 ### Solution
 
-Leverage ScreenCaptureKit's `SCContentFilter` to capture audio **only from specific applications** (e.g., Zoom, Teams, Chrome).
+Leverage CoreAudio process-tap process inclusion/exclusion on macOS 14.2+ where possible, with ScreenCaptureKit `SCContentFilter` as a fallback strategy, to capture audio **only from specific applications** (e.g., Zoom, Teams, Chrome).
 
 ### Implementation Plan
 
-1.  **Enumerate Windows/Apps:**
+1.  **Enumerate Processes/Windows/Apps:**
+    - Prefer CoreAudio process object IDs for app-specific process taps.
     - Use `SCShareableContent.getShareableContentWithCompletionHandler_` to list running applications.
     - Filter for relevant apps (browsers, meeting tools).
 2.  **Update UI:**
     - Add a "Source" dropdown in the frontend: `[System Audio]`, `[Zoom]`, `[Chrome]`.
 3.  **Update Backend:**
     - Pass `app_id` (PID) to `macos_recorder.py`.
-    - Modify `SCContentFilter` to use `initWithDesktopIndependentWindow:` targeting specific `SCRunningApplication`.
+    - Configure `CATapDescription` process inclusion/exclusion on macOS 14.2+.
+    - Keep `SCContentFilter` targeting specific `SCRunningApplication` as the ScreenCaptureKit fallback.
 
 ---
 

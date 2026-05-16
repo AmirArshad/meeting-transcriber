@@ -1514,6 +1514,10 @@ function setupEventListeners() {
 
   // Listen for progress updates
   registerCleanup(window.electronAPI.onRecordingProgress((data) => {
+    if (recordingState === 'recording' && data === 'Recording started!') {
+      return;
+    }
+
     addLog(data);
 
     // Update status text during post-processing (stopping state)
@@ -1529,6 +1533,10 @@ function setupEventListeners() {
   }));
 
   registerCleanup(window.electronAPI.onRecordingInitProgress((progress) => {
+    if (recordingState === 'recording' && progress.message === 'Recording started!') {
+      return;
+    }
+
     // Show detailed progress during recording initialization
     addLog(progress.message);
     statusText.textContent = progress.message;
@@ -1912,6 +1920,7 @@ async function stopRecording() {
         const diag = result.desktopDiagnostics;
         addLog(
           `Desktop capture diagnostics: type=${diag.captureType || 'unknown'}, ` +
+          `backend=${diag.helperCaptureBackend || 'unknown'}, ` +
           `chunks=${diag.bufferChunks || 0}, samples=${diag.bufferSamples || 0}, ` +
           `peak=${Number(diag.peakLevel || 0).toFixed(6)}, ` +
           `helperBytes=${diag.helperBytes || 0}, helperScreenFrames=${diag.helperScreenFrames || 0}`,

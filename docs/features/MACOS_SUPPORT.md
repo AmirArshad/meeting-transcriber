@@ -12,8 +12,8 @@ Status: implemented
 
 ### Desktop audio capture
 
-- Preferred path: native Swift `audiocapture-helper`
-- Fallback path: PyObjC ScreenCaptureKit bridge
+- Preferred path: native Swift `audiocapture-helper` using CoreAudio process taps on macOS 14.2+
+- Fallback paths: Swift ScreenCaptureKit, then PyObjC ScreenCaptureKit bridge
 - Recorder implementation: `backend/audio/macos_recorder.py`
 - Swift bridge: `backend/audio/swift_audio_capture.py`
 - Native helper source: `swift/AudioCaptureHelper/Sources/main.swift`
@@ -21,7 +21,8 @@ Status: implemented
 ### Permissions and startup behavior
 
 - Recording preflight runs before the recorder starts.
-- Missing Microphone or Screen Recording permission is surfaced before recording begins.
+- Missing Microphone permission is surfaced before recording begins.
+- Desktop audio may require System Audio Recording permission for the CoreAudio tap path or Screen Recording permission for ScreenCaptureKit fallback.
 - Desktop-start failures preserve detailed messages instead of collapsing to a generic error.
 - The current recorder contract uses structured stdout messages for control flow. stderr is debug-only.
 
@@ -80,6 +81,7 @@ PR CI now validates the macOS path more directly:
 - Packaged macOS builds are `arm64` only.
 - The app is not code-signed/notarized by default, so first-run Gatekeeper workarounds are still documented.
 - Hardware-dependent validation is still required for recorder sync, permission prompts, and desktop-audio edge cases.
+- macOS 13 remains supported through ScreenCaptureKit fallback behavior; macOS 14.2+ is preferred for the CoreAudio process-tap backend.
 
 ## Related Docs
 

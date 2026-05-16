@@ -54,7 +54,7 @@ Online meetings are a tax on memory. The good options for getting transcripts ba
 1. Download `AvaNevis-Setup-<version>.dmg` from [Releases](https://github.com/AmirArshad/meeting-transcriber/releases).
 2. Open the DMG and drag *AvaNevis* into Applications.
 3. **Right-click → Open** the first time. Double-clicking will trigger Gatekeeper to claim the app is "damaged" because the build is unsigned. Right-click → Open bypasses this safely.
-4. Grant microphone and screen-recording permissions when prompted (screen recording is required for ScreenCaptureKit desktop audio — no screen video is captured).
+4. Grant microphone and desktop-audio permissions when prompted. On macOS 14.2+, AvaNevis uses a CoreAudio process tap that may request System Audio Recording permission; Screen Recording may still be requested by the ScreenCaptureKit fallback. No screen video is saved.
 
 If right-click → Open misbehaves, run `xattr -d com.apple.quarantine /Applications/AvaNevis.app` once and relaunch.
 
@@ -134,7 +134,7 @@ For recorder changes, also run the manual smoke checklist in `tests/manual/recor
 ## How it works
 
 1. **Pick devices.** Choose a mic, a desktop-audio loopback device, the language, and a Whisper model size in the Settings tab.
-2. **Record.** Both streams are written to disk in parallel (WASAPI loopback on Windows, ScreenCaptureKit via the bundled Swift helper on macOS, with PyObjC ScreenCaptureKit as fallback). The audio visualizer shows live mic + desktop levels.
+2. **Record.** Both streams are written to disk in parallel (WASAPI loopback on Windows, CoreAudio process tap via the bundled Swift helper on macOS 14.2+, with Swift/PyObjC ScreenCaptureKit fallback). The audio visualizer shows live mic + desktop levels.
 3. **Stop.** The recorder reports completion as a structured stdout JSON event. The two streams are aligned and mixed at 48 kHz stereo and compressed to Opus (with WAV fallback if ffmpeg fails).
 4. **Transcribe.** The mixed audio is passed to the platform-appropriate Whisper backend; output lands as a Markdown transcript with `[mm:ss - mm:ss]` timestamp lines.
 5. **Save.** Meeting metadata, audio file, and transcript are persisted to the user-data folder under a unique meeting ID. Meetings that already exist on disk get rescanned and re-imported on launch.
@@ -162,6 +162,7 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
 ### macOS
 
 - macOS 13 (Ventura) or later
+- macOS 14.2+ recommended for the CoreAudio system-audio capture path; macOS 13+ uses ScreenCaptureKit fallback behavior
 - Apple Silicon (M1/M2/M3/M4) — Intel Macs have a CPU fallback path in dev but are not a packaged target
 - 4 GB RAM minimum, 8 GB recommended
 - 2 GB free disk minimum, 10 GB recommended
@@ -172,7 +173,7 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
 - **Backend:** Python 3.11, bundled with the installer
 - **Transcription:** `faster-whisper` (Windows, CUDA optional), `lightning-whisper-mlx` (macOS, Metal)
 - **Local AI add-ons:** `pyannote.audio` for Windows speaker identification, pinned `llama.cpp` + GGUF for user-triggered summaries
-- **Audio capture:** `pyaudiowpatch` WASAPI loopback (Windows), `sounddevice` + native Swift `AudioCaptureHelper` over ScreenCaptureKit (macOS)
+- **Audio capture:** `pyaudiowpatch` WASAPI loopback (Windows), `sounddevice` + native Swift `AudioCaptureHelper` using CoreAudio process taps on macOS 14.2+ with ScreenCaptureKit fallback
 - **Audio processing:** NumPy, SciPy, soxr, ffmpeg (Opus)
 - **Updater:** GitHub Releases API + in-app banner (release page opens in browser)
 
@@ -235,7 +236,7 @@ PRs welcome. Please run `npm run test:all` before opening one and add coverage f
 - **faster-whisper** for the efficient CUDA/CPU implementation.
 - **Lightning-Whisper-MLX** for Apple Silicon Metal acceleration.
 - **PyAudioWPatch** for WASAPI loopback on Windows.
-- **ScreenCaptureKit** for clean desktop audio on macOS.
+- **CoreAudio process taps** and **ScreenCaptureKit** for clean desktop audio on macOS.
 - **Electron** for making this kind of cross-platform desktop app practical.
 
 ## License

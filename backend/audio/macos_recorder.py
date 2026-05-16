@@ -308,6 +308,7 @@ class MacOSAudioRecorder:
             'helperScreenFrames': 0,
             'helperDroppedChunks': 0,
             'helperQueuedBytesRemaining': 0,
+            'helperCaptureBackend': None,
             'helperAudioFormat': None,
             'helperContentInfo': None,
             'helperStreamConfig': None,
@@ -318,8 +319,13 @@ class MacOSAudioRecorder:
 
         try:
             with capture.buffer_lock:
-                diagnostics['bufferChunks'] = len(getattr(capture, 'audio_buffer', []) or [])
-                diagnostics['bufferSamples'] = int(sum(len(chunk) for chunk in getattr(capture, 'audio_buffer', []) or []))
+                live_buffer = getattr(capture, 'audio_buffer', []) or []
+                diagnostics['bufferChunks'] = int(
+                    getattr(capture, 'last_captured_chunk_count', 0) or len(live_buffer)
+                )
+                diagnostics['bufferSamples'] = int(
+                    getattr(capture, 'last_captured_sample_count', 0) or sum(len(chunk) for chunk in live_buffer)
+                )
                 diagnostics['peakLevel'] = float(getattr(capture, 'read_peak_level', 0.0) or 0.0)
         except Exception as error:
             diagnostics['error'] = f'Could not read desktop buffer diagnostics: {error}'
@@ -328,40 +334,52 @@ class MacOSAudioRecorder:
         diagnostics['lastAudioTime'] = getattr(capture, 'last_audio_time', None)
         diagnostics['readChunks'] = int(getattr(capture, 'read_chunk_count', 0) or 0)
         diagnostics['readSamples'] = int(getattr(capture, 'read_sample_count', 0) or 0)
-        diagnostics['helperSampleBuffers'] = int(getattr(capture, 'helper_total_sample_buffers', 0) or 0)
-        diagnostics['helperBytes'] = int(getattr(capture, 'helper_total_bytes', 0) or 0)
+        diagnostics['helperSampleBuffers'] = int(
+            getattr(capture, 'helper_total_sample_buffers', 0)
+            or getattr(capture, 'last_helper_sample_buffers', 0)
+            or 0
+        )
+        diagnostics['helperBytes'] = int(
+            getattr(capture, 'helper_total_bytes', 0)
+            or getattr(capture, 'last_helper_bytes', 0)
+            or 0
+        )
         diagnostics['helperScreenFrames'] = int(getattr(capture, 'helper_screen_frames', 0) or 0)
         diagnostics['helperDroppedChunks'] = int(getattr(capture, 'helper_dropped_chunks', 0) or 0)
         diagnostics['helperQueuedBytesRemaining'] = int(getattr(capture, 'helper_queued_bytes_remaining', 0) or 0)
+        diagnostics['helperCaptureBackend'] = getattr(capture, 'helper_capture_backend', None)
         diagnostics['helperAudioFormat'] = getattr(capture, 'helper_audio_format', None)
         diagnostics['helperContentInfo'] = getattr(capture, 'helper_content_info', None)
         diagnostics['helperStreamConfig'] = getattr(capture, 'helper_stream_config', None)
         return diagnostics
 
-    def _emit_desktop_diagnostics_warning(self):
+    def _emit_desktop_diagnostics_warning(self, emit_warning: bool = True):
         diagnostics = self._build_desktop_diagnostics()
         self.desktop_diagnostics = diagnostics
         summary = (
             f"Desktop capture diagnostics: type={diagnostics['captureType']}, "
+            f"backend={diagnostics['helperCaptureBackend'] or 'unknown'}, "
             f"chunks={diagnostics['bufferChunks']}, samples={diagnostics['bufferSamples']}, "
             f"peak={diagnostics['peakLevel']:.6f}, helperBuffers={diagnostics['helperSampleBuffers']}, "
             f"helperBytes={diagnostics['helperBytes']}, helperScreenFrames={diagnostics['helperScreenFrames']}"
         )
         print(summary, file=sys.stderr)
-        _send_warning_message(
-            'DESKTOP_CAPTURE_DIAGNOSTICS',
-            summary,
-            captureType=diagnostics['captureType'],
-            bufferChunks=diagnostics['bufferChunks'],
-            bufferSamples=diagnostics['bufferSamples'],
-            peakLevel=round(diagnostics['peakLevel'], 6),
-            helperSampleBuffers=diagnostics['helperSampleBuffers'],
-            helperBytes=diagnostics['helperBytes'],
-            helperScreenFrames=diagnostics['helperScreenFrames'],
-            helperDroppedChunks=diagnostics['helperDroppedChunks'],
-            helperContentInfo=diagnostics['helperContentInfo'],
-            helperStreamConfig=diagnostics['helperStreamConfig'],
-        )
+        if emit_warning:
+            _send_warning_message(
+                'DESKTOP_CAPTURE_DIAGNOSTICS',
+                summary,
+                captureType=diagnostics['captureType'],
+                bufferChunks=diagnostics['bufferChunks'],
+                bufferSamples=diagnostics['bufferSamples'],
+                peakLevel=round(diagnostics['peakLevel'], 6),
+                helperSampleBuffers=diagnostics['helperSampleBuffers'],
+                helperBytes=diagnostics['helperBytes'],
+                helperScreenFrames=diagnostics['helperScreenFrames'],
+                helperDroppedChunks=diagnostics['helperDroppedChunks'],
+                helperCaptureBackend=diagnostics['helperCaptureBackend'],
+                helperContentInfo=diagnostics['helperContentInfo'],
+                helperStreamConfig=diagnostics['helperStreamConfig'],
+            )
         return diagnostics
 
     def start_recording(self):
@@ -693,8 +711,12 @@ class MacOSAudioRecorder:
             print(f"Stopping {capture_type} desktop capture...", file=sys.stderr)
             desktop_audio = self.desktop_capture.stop_recording()
             warning_codes = self._drain_desktop_warnings(capture_type)
-            self._emit_desktop_diagnostics_warning()
             if desktop_audio is not None:
+                diagnostics = self._emit_desktop_diagnostics_warning(emit_warning=False)
+                if diagnostics.get('bufferSamples', 0) <= 0:
+                    diagnostics['bufferChunks'] = max(int(diagnostics.get('bufferChunks', 0) or 0), 1)
+                    diagnostics['bufferSamples'] = int(len(desktop_audio))
+                    self.desktop_diagnostics = diagnostics
                 # Convert to list of frames for consistency
                 self.desktop_frames = [desktop_audio]
                 self.desktop_capture_start_time = self._resolve_desktop_capture_start_time()
@@ -703,12 +725,29 @@ class MacOSAudioRecorder:
                     self.desktop_capture_start_time = self.recording_start_time + self.preroll_seconds
                 print(f"Retrieved {len(desktop_audio)} desktop audio samples from {capture_type}", file=sys.stderr)
             else:
+                self._emit_desktop_diagnostics_warning()
                 print(f"No desktop audio captured from {capture_type}", file=sys.stderr)
                 if "NO_DESKTOP_AUDIO_CAPTURED" not in warning_codes:
+                    helper_backend = self.desktop_diagnostics.get('helperCaptureBackend') if self.desktop_diagnostics else None
+                    if helper_backend == 'coreaudio_tap':
+                        help_text = (
+                            "If system audio was playing, check macOS System Audio Recording permission, "
+                            "restart AvaNevis, and try another short recording."
+                        )
+                    elif helper_backend == 'screencapturekit':
+                        help_text = (
+                            "If system audio was playing, check Screen Recording permission, restart AvaNevis, "
+                            "and try another short recording."
+                        )
+                    else:
+                        help_text = (
+                            "If system audio was playing, check macOS System Audio Recording and Screen Recording "
+                            "permissions, restart AvaNevis, and try another short recording."
+                        )
                     _send_warning_message(
                         "NO_DESKTOP_AUDIO_CAPTURED",
                         "No desktop audio was captured; saved recording contains microphone audio only.",
-                        help="If system audio was playing, check Screen Recording permission and restart AvaNevis before recording again.",
+                        help=help_text,
                         captureType=capture_type,
                     )
 

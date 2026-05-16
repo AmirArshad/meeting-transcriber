@@ -6,7 +6,7 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 
 ### Core
 
-- **Dual audio capture** — microphone + desktop audio recorded in parallel and mixed after the recording stops. WASAPI loopback on Windows; ScreenCaptureKit (native Swift helper, PyObjC fallback) on macOS.
+- **Dual audio capture** — microphone + desktop audio recorded in parallel and mixed after the recording stops. WASAPI loopback on Windows; native Swift helper on macOS using CoreAudio process taps on macOS 14.2+ with Swift/PyObjC ScreenCaptureKit fallback.
 - **Local Whisper transcription** — `faster-whisper` on Windows with optional CUDA, `lightning-whisper-mlx` on Apple Silicon with Metal. CPU fallback path for non-GPU machines.
 - **Meeting history** — persisted under the user-data folder with a unique meeting ID, browseable list, transcript viewer, and synchronized audio playback.
 - **Cross-platform installers** — Windows NSIS and macOS DMG with embedded Python runtime, ffmpeg, and the bundled native macOS audio helper.

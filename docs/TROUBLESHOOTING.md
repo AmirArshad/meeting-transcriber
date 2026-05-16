@@ -79,11 +79,32 @@ xattr -d com.apple.quarantine ~/Downloads/Meeting\ Transcriber-Setup-*.dmg
 
 ---
 
-### ⚠️ Screen Recording Permission (for Desktop Audio)
+### ⚠️ macOS Desktop Audio Permission
 
-**Symptom:** Desktop audio capture doesn't work, or you see warnings about Screen Recording permission.
+**Symptom:** Desktop audio capture doesn't work, the desktop meter stays flat, or you see warnings about System Audio Recording or Screen Recording permission.
 
-**Cause:** macOS requires "Screen Recording" permission for ScreenCaptureKit to capture system audio (even though we're not recording the screen).
+**Cause:** AvaNevis prefers a CoreAudio process tap on macOS 14.2+ and falls back to ScreenCaptureKit when needed. Current macOS versions may require a System Audio Recording permission for the CoreAudio tap, while the fallback may require Screen Recording permission. AvaNevis does not save screen video.
+
+**Solution:**
+1. Go to **System Settings** → **Privacy & Security**
+2. Check for **System Audio Recording** or the audio-related permission entry macOS shows for AvaNevis and toggle it **ON**
+3. If desktop audio is still missing, also check **Screen Recording** and toggle AvaNevis **ON** for fallback capture
+4. Restart the app
+
+**If AvaNevis is not listed:**
+1. Start a short recording while system audio is playing
+2. Stop the recording and check whether macOS shows a permission prompt
+3. Reopen System Settings → Privacy & Security and check again
+
+**Note:** Screen Recording is only used by the ScreenCaptureKit fallback. No screenshots or screen recordings are saved.
+
+---
+
+### ⚠️ Screen Recording Permission (ScreenCaptureKit Fallback)
+
+**Symptom:** Logs mention ScreenCaptureKit or Screen Recording permission.
+
+**Cause:** The CoreAudio process-tap path was unavailable or failed, so AvaNevis used the ScreenCaptureKit fallback.
 
 **Solution:**
 1. Go to **System Settings** → **Privacy & Security** → **Screen Recording**
@@ -91,7 +112,7 @@ xattr -d com.apple.quarantine ~/Downloads/Meeting\ Transcriber-Setup-*.dmg
 3. Toggle it **ON**
 4. Restart the app
 
-**Note:** This permission is only used to capture desktop audio via ScreenCaptureKit. No screenshots or screen recordings are taken.
+**Note:** This permission is only used to capture desktop audio via ScreenCaptureKit. No screenshots or screen recordings are saved.
 
 ---
 
@@ -224,9 +245,9 @@ If you still see "faster-whisper (CPU fallback)", report an issue on GitHub.
 - Check Windows audio is playing during recording
 
 **macOS:**
-- Grant **Screen Recording** permission (required for ScreenCaptureKit)
-- System Settings → Privacy & Security → Screen Recording
-- Toggle ON for AvaNevis
+- On macOS 14.2+, grant **System Audio Recording** or the audio-related permission macOS shows for AvaNevis
+- If logs mention ScreenCaptureKit fallback, also grant **Screen Recording** permission
+- System Settings → Privacy & Security → System Audio Recording / Screen Recording
 - Restart the app
 - If desktop audio is still missing on Bluetooth, USB, or headphones, reproduce it on the current macOS version and hardware before assuming the output device is unsupported.
 

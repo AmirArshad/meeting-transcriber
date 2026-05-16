@@ -163,11 +163,16 @@ class SwiftAudioCapture:
         self.read_chunk_count = 0
         self.read_sample_count = 0
         self.read_peak_level = 0.0
+        self.last_captured_chunk_count = 0
+        self.last_captured_sample_count = 0
+        self.last_helper_sample_buffers = 0
+        self.last_helper_bytes = 0
         self.helper_total_sample_buffers = 0
         self.helper_total_bytes = 0
         self.helper_screen_frames = 0
         self.helper_dropped_chunks = 0
         self.helper_queued_bytes_remaining = 0
+        self.helper_capture_backend: Optional[str] = None
         self.helper_audio_format: Optional[dict] = None
         self.helper_content_info: Optional[dict] = None
         self.helper_stream_config: Optional[dict] = None
@@ -187,6 +192,25 @@ class SwiftAudioCapture:
             self.warning_messages.append(payload)
             self._warning_codes_sent.add(code)
             self.warning_event.set()
+
+    def _missing_audio_help(self) -> str:
+        backend = self.helper_capture_backend
+        if backend == 'coreaudio_tap':
+            return (
+                "If audio is playing and the desktop meter stays flat, grant macOS System Audio "
+                "Recording permission to AvaNevis when prompted, then restart the app."
+            )
+
+        if backend == 'screencapturekit':
+            return (
+                "If audio is playing and the desktop meter stays flat, grant Screen Recording "
+                "permission to AvaNevis and restart the app."
+            )
+
+        return (
+            "If audio is playing and the desktop meter stays flat, check macOS System Audio "
+            "Recording and Screen Recording permissions for AvaNevis, then restart the app."
+        )
 
     @property
     def is_recording(self) -> bool:
@@ -256,11 +280,16 @@ class SwiftAudioCapture:
             self.read_chunk_count = 0
             self.read_sample_count = 0
             self.read_peak_level = 0.0
+            self.last_captured_chunk_count = 0
+            self.last_captured_sample_count = 0
+            self.last_helper_sample_buffers = 0
+            self.last_helper_bytes = 0
             self.helper_total_sample_buffers = 0
             self.helper_total_bytes = 0
             self.helper_screen_frames = 0
             self.helper_dropped_chunks = 0
             self.helper_queued_bytes_remaining = 0
+            self.helper_capture_backend = None
             self.helper_audio_format = None
             self.helper_content_info = None
             self.helper_stream_config = None
@@ -435,14 +464,16 @@ class SwiftAudioCapture:
                         message = "Desktop audio stream started but no system audio samples have been received."
                         print(f"  WARNING: {message}", file=sys.stderr)
                         print("    - Check that system audio is playing", file=sys.stderr)
-                        print("    - Check Screen Recording permission in System Settings", file=sys.stderr)
+                        if self.helper_capture_backend == 'coreaudio_tap':
+                            print("    - Check macOS System Audio Recording permission in System Settings", file=sys.stderr)
+                        elif self.helper_capture_backend == 'screencapturekit':
+                            print("    - Check Screen Recording permission in System Settings", file=sys.stderr)
+                        else:
+                            print("    - Check macOS System Audio Recording and Screen Recording permissions", file=sys.stderr)
                         self._queue_warning(
                             'NO_DESKTOP_AUDIO_SAMPLES',
                             message,
-                            help=(
-                                "If audio is playing and the desktop meter stays flat, grant Screen Recording "
-                                "permission to AvaNevis and restart the app."
-                            ),
+                            help=self._missing_audio_help(),
                         )
                         no_audio_warning_sent = True
                     continue
@@ -533,18 +564,26 @@ class SwiftAudioCapture:
 
         message_count = 0
         try:
-            while self._recording_event.is_set() and self.process and self.process.poll() is None:
+            while self.process:
                 process = self.process
                 if process is None or process.stderr is None:
                     break
 
-                # Use select to avoid blocking forever on readline
-                ready, _, _ = select.select([process.stderr], [], [], 0.1)
+                process_exited = process.poll() is not None
+                should_wait_for_more = self._recording_event.is_set() and not process_exited
+
+                # Drain final diagnostics after process exit; capture_stats often
+                # arrives during graceful shutdown after stdout has already closed.
+                ready, _, _ = select.select([process.stderr], [], [], 0.1 if should_wait_for_more else 0)
                 if not ready:
+                    if process_exited or not self._recording_event.is_set():
+                        break
                     continue
 
                 line = process.stderr.readline()
                 if not line:
+                    if process_exited or not self._recording_event.is_set():
+                        break
                     continue
 
                 line = line.decode('utf-8').strip()
@@ -573,6 +612,9 @@ class SwiftAudioCapture:
                             screen_frames = msg.get('screenFrames')
                             if isinstance(screen_frames, int):
                                 self.helper_screen_frames = screen_frames
+                        capture_backend = msg.get('captureBackend')
+                        if isinstance(capture_backend, str) and capture_backend:
+                            self.helper_capture_backend = capture_backend
 
                         print(f"Swift helper: {status} - {message}", file=sys.stderr)
 
@@ -614,6 +656,9 @@ class SwiftAudioCapture:
 
                     elif msg_type == 'content_info':
                         self.helper_content_info = dict(msg)
+                        capture_backend = msg.get('captureBackend')
+                        if isinstance(capture_backend, str) and capture_backend:
+                            self.helper_capture_backend = capture_backend
                         print(
                             "Swift helper: content - "
                             f"displays={msg.get('displayCount', 'unknown')}, "
@@ -624,13 +669,25 @@ class SwiftAudioCapture:
 
                     elif msg_type == 'stream_config':
                         self.helper_stream_config = dict(msg)
+                        capture_backend = msg.get('captureBackend')
+                        if isinstance(capture_backend, str) and capture_backend:
+                            self.helper_capture_backend = capture_backend
                         print(f"Swift helper stream config: {msg}", file=sys.stderr)
+
+                    elif msg_type == 'capture_backend':
+                        capture_backend = msg.get('backend')
+                        if isinstance(capture_backend, str) and capture_backend:
+                            self.helper_capture_backend = capture_backend
+                        print(f"Swift helper backend: {capture_backend or 'unknown'}", file=sys.stderr)
 
                     elif msg_type == 'audio_format':
                         # Log audio format details for debugging
                         rate = msg.get('sampleRate', 'unknown')
                         channels = msg.get('channels', 'unknown')
                         self.helper_audio_format = dict(msg)
+                        capture_backend = msg.get('captureBackend')
+                        if isinstance(capture_backend, str) and capture_backend:
+                            self.helper_capture_backend = capture_backend
                         print(f"Swift helper: Audio format - {rate}Hz, {channels} channels", file=sys.stderr)
 
                     elif msg_type == 'extraction_error':
@@ -659,6 +716,9 @@ class SwiftAudioCapture:
                         # Final capture statistics
                         total_samples = msg.get('totalSamples', 0)
                         total_bytes = msg.get('totalBytes', 0)
+                        capture_backend = msg.get('captureBackend')
+                        if isinstance(capture_backend, str) and capture_backend:
+                            self.helper_capture_backend = capture_backend
                         self.helper_total_sample_buffers = int(total_samples) if isinstance(total_samples, int) else 0
                         self.helper_total_bytes = int(total_bytes) if isinstance(total_bytes, int) else 0
                         self.helper_screen_frames = int(msg.get('screenFrames', 0) or 0)
@@ -754,38 +814,41 @@ class SwiftAudioCapture:
         if exit_code is not None and exit_code != 0:
             print(f"  Swift helper exited with code {exit_code}", file=sys.stderr)
 
-        # Clear process reference
-        self.process = None
-
-        # Concatenate all audio buffers
+        # Concatenate all audio buffers while preserving final diagnostics after
+        # the buffer is cleared for mixing.
+        desktop_audio = None
         with self.buffer_lock:
+            self.last_captured_chunk_count = len(self.audio_buffer)
+            self.last_captured_sample_count = int(sum(len(chunk) for chunk in self.audio_buffer))
+            self.last_helper_sample_buffers = self.helper_total_sample_buffers
+            self.last_helper_bytes = self.helper_total_bytes
+
             if not self.audio_buffer:
                 message = "Desktop audio stream produced no samples; saved recording will contain microphone audio only."
                 print("No desktop audio captured", file=sys.stderr)
                 self._queue_warning(
                     'NO_DESKTOP_AUDIO_CAPTURED',
                     message,
-                    help=(
-                        "If system audio was playing, check Screen Recording permission, restart AvaNevis, "
-                        "and try another short recording."
-                    ),
+                    help=self._missing_audio_help(),
                 )
-                return None
+                desktop_audio = None
+            else:
+                try:
+                    desktop_audio = np.concatenate(self.audio_buffer, axis=0)
+                    print(f"Captured {len(desktop_audio)} desktop audio samples", file=sys.stderr)
 
-            try:
-                audio_data = np.concatenate(self.audio_buffer, axis=0)
-                print(f"Captured {len(audio_data)} desktop audio samples", file=sys.stderr)
+                    # Clear buffer after taking the final diagnostics snapshot.
+                    self.audio_buffer = []
 
-                # Clear buffer
-                self.audio_buffer = []
+                except Exception as e:
+                    print(f"Error concatenating audio buffers: {e}", file=sys.stderr)
+                    import traceback
+                    traceback.print_exc(file=sys.stderr)
+                    desktop_audio = None
 
-                return audio_data
-
-            except Exception as e:
-                print(f"Error concatenating audio buffers: {e}", file=sys.stderr)
-                import traceback
-                traceback.print_exc(file=sys.stderr)
-                return None
+        # Clear process reference after final diagnostics are available to callers.
+        self.process = None
+        return desktop_audio
 
     def drain_warnings(self) -> list[dict]:
         """Return and clear any queued helper warnings."""
