@@ -180,7 +180,63 @@
     return reason || 'Install the local summary model in Settings before generating summaries.';
   }
 
-function shouldShowSpeakerSetupPrompt({ diarization, platform, cudaInstalled, hasNvidiaGpu }) {
+  function hasPositiveSize(value) {
+    return Number(value) > 0;
+  }
+
+  function hasDiarizationLocalState(feature) {
+    if (!feature) {
+      return false;
+    }
+    return Boolean(
+      feature.setupComplete
+      || feature.status === 'ready'
+      || feature.status === 'downloading'
+      || feature.status === 'validating'
+      || (feature.dependencyCache && feature.dependencyCache.installed)
+      || (feature.dependencyCache && feature.dependencyCache.partial)
+      || (feature.storage && hasPositiveSize(feature.storage.dependencyBytes))
+      || (feature.storage && hasPositiveSize(feature.storage.installedBytes))
+    );
+  }
+
+  function hasSummaryLocalState(feature) {
+    if (!feature) {
+      return false;
+    }
+    return Boolean(
+      feature.setupComplete
+      || feature.status === 'ready'
+      || feature.status === 'downloading'
+      || feature.status === 'validating'
+      || (feature.cache && feature.cache.installed)
+      || (feature.cache && feature.cache.partial)
+      || (feature.runtimeCache && feature.runtimeCache.installed)
+      || (feature.runtimeCache && feature.runtimeCache.partial)
+      || (feature.storage && hasPositiveSize(feature.storage.modelBytes))
+      || (feature.storage && hasPositiveSize(feature.storage.runtimeBytes))
+      || (feature.storage && hasPositiveSize(feature.storage.installedBytes))
+    );
+  }
+
+  function buildAiAddonControlState({ feature, type, setupActive = false, unsupported = false } = {}) {
+    const hasLocalState = type === 'summary'
+      ? hasSummaryLocalState(feature)
+      : hasDiarizationLocalState(feature);
+    const isBusy = Boolean(setupActive || (feature && (feature.status === 'downloading' || feature.status === 'validating')));
+    const isUnsupported = Boolean(unsupported || (feature && feature.status === 'unsupported'));
+
+    return {
+      canConfigure: !isUnsupported && !isBusy,
+      canValidate: !isUnsupported && !isBusy && hasLocalState,
+      canRemove: !isUnsupported && !isBusy && hasLocalState,
+      hasLocalState,
+      isBusy,
+      isUnsupported,
+    };
+  }
+
+  function shouldShowSpeakerSetupPrompt({ diarization, platform, cudaInstalled, hasNvidiaGpu }) {
     if (!diarization || diarization.status === 'ready' || diarization.setupComplete) {
       return false;
     }
@@ -227,6 +283,7 @@ function shouldShowSpeakerSetupPrompt({ diarization, platform, cudaInstalled, ha
   }
 
   return {
+    buildAiAddonControlState,
     buildHomeAiAddonPrompt,
     cleanMarkdownText,
     getDiarizationSetupMessage,

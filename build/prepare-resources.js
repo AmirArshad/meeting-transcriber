@@ -13,9 +13,18 @@ const FFMPEG_DIR = path.join(BUILD_DIR, 'ffmpeg');
 const BIN_DIR = path.join(BUILD_DIR, 'bin');
 const MODELS_DIR = path.join(BUILD_DIR, 'whisper-models');
 const RESOURCE_MANIFEST_PATH = path.join(BUILD_DIR, 'resource-manifest.json');
-const RESOURCE_MANIFEST_VERSION = 3;
+const RESOURCE_MANIFEST_VERSION = 4;
 const REQUIREMENTS_MACOS_BUILD = path.join(__dirname, '..', 'requirements-macos-build.txt');
 const REQUIREMENTS_WINDOWS_BUILD = path.join(__dirname, '..', 'requirements-windows-build.txt');
+const MACOS_RUNTIME_REMOVABLE_PACKAGES = Object.freeze([
+  'sympy',
+  'av.libs',
+  'setuptools',
+  'onnxruntime',
+  'faster_whisper',
+  'ctranslate2',
+  'ctranslate2.libs',
+]);
 
 // Swift AudioCaptureHelper paths
 const SWIFT_HELPER_DIR = path.join(__dirname, '..', 'swift', 'AudioCaptureHelper');
@@ -67,9 +76,7 @@ function ensureBuildDirectory() {
   }
 }
 
-function ensureWindowsEmbeddedPythonPathConfig() {
-  const pthFile = path.join(PYTHON_DIR, 'python311._pth');
-
+function ensureWindowsEmbeddedPythonPathConfig(pthFile = path.join(PYTHON_DIR, 'python311._pth')) {
   if (!fs.existsSync(pthFile)) {
     return;
   }
@@ -312,6 +319,10 @@ function pruneMacOSPythonRuntimeDevelopmentFiles(sitePackagesDir) {
   if (removedAny) {
     console.log('  → Pruned macOS Python development files not needed at runtime');
   }
+}
+
+function getMacOSPythonRuntimeRemovablePackages() {
+  return [...MACOS_RUNTIME_REMOVABLE_PACKAGES];
 }
 
 function ensureFreshResourceManifest() {
@@ -691,15 +702,9 @@ async function prepareResources() {
       // Keep runtime packages, but prune torch development/test files below.
       console.log('[5/5] Cleaning up unused dependencies...');
       const sitePackages = path.join(PYTHON_DIR, 'lib', 'python3.11', 'site-packages');
-      const packagesToRemove = [
-        // 'scipy', 'scipy.libs',         // KEEP: Required by lightning-whisper-mlx for timing
-        'sympy',                          // ~79 MB - transitive dep, not used
-        'av.libs',                        // ~83 MB - duplicate FFmpeg libs (we bundle ffmpeg separately)
-        'pip', 'setuptools',              // ~22 MB - not needed at runtime
-        'onnxruntime',                    // ~43 MB - transitive dep from faster-whisper
-        'faster_whisper',                 // ~1.5 MB - not used on macOS (MLX only)
-        'ctranslate2', 'ctranslate2.libs', // ~60 MB - faster-whisper inference engine, not needed
-      ];
+      // Keep pip: explicit speaker diarization setup installs optional pyannote
+      // dependencies into userData after the packaged app is installed.
+      const packagesToRemove = getMacOSPythonRuntimeRemovablePackages();
 
       for (const pkg of packagesToRemove) {
         const pkgPath = path.join(sitePackages, pkg);
@@ -867,6 +872,7 @@ module.exports = {
   buildDirectoryManifest,
   buildResourceManifest,
   ensureWindowsEmbeddedPythonPathConfig,
+  getMacOSPythonRuntimeRemovablePackages,
   buildMacOSHelperVerificationCommands,
   macOSHelperEntitlementsIncludeInherit,
   getStaleResourceDirectories,

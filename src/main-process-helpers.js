@@ -199,7 +199,7 @@ function summarizeAiBackendError({ errorOutput, userDataDir = '', homeDir = '', 
       cleaned = cleaned.replaceAll(homeDir, '<home>');
     }
     cleaned = cleaned.trim();
-    if (!cleaned || cleaned === genericMessage) {
+    if (!cleaned || cleaned === genericMessage || /RuntimeWarning:.*found in sys\.modules.*prior to execution/.test(cleaned)) {
       continue;
     }
     return cleaned;

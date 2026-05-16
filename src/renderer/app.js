@@ -7,6 +7,7 @@ const DEFAULT_SUMMARY_PROFILE = 'balanced';
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const { getRecordButtonAction } = window.recordingStateHelpers;
 const {
+  buildAiAddonControlState,
   buildHomeAiAddonPrompt,
   getDiarizationSetupMessage,
   getSummarySetupMessage,
@@ -2864,6 +2865,19 @@ function setAiAddonControlsDisabled(disabled) {
   });
 }
 
+function applyAiAddonButtonState({ setupButton, validateButton, removeButton, controlState }) {
+  const state = controlState || { canConfigure: false, canValidate: false, canRemove: false };
+  if (setupButton) {
+    setupButton.disabled = !state.canConfigure;
+  }
+  if (validateButton) {
+    validateButton.disabled = !state.canValidate;
+  }
+  if (removeButton) {
+    removeButton.disabled = !state.canRemove;
+  }
+}
+
 function appendAiAddonLog(text) {
   const logDiv = document.getElementById('ai-addon-log');
   const logOutput = document.getElementById('ai-addon-log-output');
@@ -2893,27 +2907,30 @@ function updateAiAddonSettings(status) {
 
   if (diarization) {
     setStatusBadge(document.getElementById('diarization-status-badge'), diarization.status);
+    const diarizationControlState = buildAiAddonControlState({
+      feature: diarization,
+      type: 'diarization',
+      setupActive: aiAddonDownloadState.diarization.active,
+      unsupported: diarizationUnsupported,
+    });
     const speakerCount = document.getElementById('diarization-speaker-count');
     if (speakerCount) {
       speakerCount.value = String(diarization.speakerCount || 'auto');
-      speakerCount.disabled = diarizationUnsupported;
+      speakerCount.disabled = !diarizationControlState.canConfigure;
     }
 
     const tokenInput = document.getElementById('diarization-token-input');
     if (tokenInput) {
-      tokenInput.disabled = diarizationUnsupported;
+      tokenInput.disabled = !diarizationControlState.canConfigure;
       tokenInput.placeholder = diarizationUnsupported ? 'Unavailable on this platform' : 'hf_...';
     }
 
-    const setupButton = document.getElementById('setup-diarization-btn');
-    if (setupButton) {
-      setupButton.disabled = diarizationUnsupported;
-    }
-
-    const validateButton = document.getElementById('validate-diarization-btn');
-    if (validateButton) {
-      validateButton.disabled = diarizationUnsupported;
-    }
+    applyAiAddonButtonState({
+      setupButton: document.getElementById('setup-diarization-btn'),
+      validateButton: document.getElementById('validate-diarization-btn'),
+      removeButton: document.getElementById('remove-diarization-btn'),
+      controlState: diarizationControlState,
+    });
 
     const statusText = document.getElementById('diarization-status-text');
     if (statusText) {
@@ -2927,11 +2944,24 @@ function updateAiAddonSettings(status) {
 
   if (summary) {
     setStatusBadge(document.getElementById('summary-status-badge'), summary.status);
+    const summaryControlState = buildAiAddonControlState({
+      feature: summary,
+      type: 'summary',
+      setupActive: aiAddonDownloadState.summary.active,
+    });
     const profileSelect = document.getElementById('summary-profile-select');
     if (profileSelect) {
       const savedProfile = loadSettings().summaryProfile;
       profileSelect.value = savedProfile || summary.profile || DEFAULT_SUMMARY_PROFILE;
+      profileSelect.disabled = !summaryControlState.canConfigure;
     }
+
+    applyAiAddonButtonState({
+      setupButton: document.getElementById('setup-summary-btn'),
+      validateButton: document.getElementById('validate-summary-btn'),
+      removeButton: document.getElementById('remove-summary-btn'),
+      controlState: summaryControlState,
+    });
 
     const statusText = document.getElementById('summary-status-text');
     if (statusText) {
@@ -2990,41 +3020,49 @@ async function refreshHomeAiAddonPrompt() {
 async function withAiAddonAction(button, label, action) {
   setAiAddonControlsDisabled(true);
   setButtonBusy(button, true, label);
+  let latestStatus = null;
   try {
     const status = await action();
     if (status) {
-      aiAddonStatusSnapshot = status;
-      updateAiAddonSettings(status);
-      updateHomeAiAddonCTA(status);
+      latestStatus = status;
     } else {
-      await refreshAiAddonSettings();
+      latestStatus = await refreshAiAddonSettings();
     }
   } catch (error) {
     console.error('AI add-on action failed:', error);
     addLog(`AI add-on action failed: ${error.message}`, 'error');
     appendAiAddonLog(`ERROR: ${error.message}`);
+    latestStatus = await refreshAiAddonSettings();
   } finally {
     setButtonBusy(button, false);
-    setAiAddonControlsDisabled(false);
+    if (latestStatus) {
+      aiAddonStatusSnapshot = latestStatus;
+      updateAiAddonSettings(latestStatus);
+      updateHomeAiAddonCTA(latestStatus);
+    } else if (aiAddonStatusSnapshot) {
+      updateAiAddonSettings(aiAddonStatusSnapshot);
+    } else {
+      setAiAddonControlsDisabled(false);
+    }
   }
 }
 
 async function withAiAddonSetupAction(feature, button, label, startMessage, action) {
   setAiAddonControlsDisabled(true);
   setButtonBusy(button, true, label);
+  let latestStatus = null;
   try {
     const status = await action();
     if (status) {
-      aiAddonStatusSnapshot = status;
-      updateAiAddonSettings(status);
-      updateHomeAiAddonCTA(status);
+      latestStatus = status;
     } else {
-      await refreshAiAddonSettings();
+      latestStatus = await refreshAiAddonSettings();
     }
   } catch (error) {
     console.error('AI add-on setup failed:', error);
     addLog(`AI add-on setup failed: ${error.message}`, 'error');
     appendAiAddonLog(`ERROR: ${error.message}`);
+    latestStatus = await refreshAiAddonSettings();
     setAiAddonProgressState(feature, {
       active: true,
       cancelling: false,
@@ -3034,7 +3072,15 @@ async function withAiAddonSetupAction(feature, button, label, startMessage, acti
     hideAiAddonProgressSoon(feature, 5000);
   } finally {
     setButtonBusy(button, false);
-    setAiAddonControlsDisabled(false);
+    if (latestStatus) {
+      aiAddonStatusSnapshot = latestStatus;
+      updateAiAddonSettings(latestStatus);
+      updateHomeAiAddonCTA(latestStatus);
+    } else if (aiAddonStatusSnapshot) {
+      updateAiAddonSettings(aiAddonStatusSnapshot);
+    } else {
+      setAiAddonControlsDisabled(false);
+    }
   }
 }
 

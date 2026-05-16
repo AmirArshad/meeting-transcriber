@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
+  buildAiAddonControlState,
   getDiarizationSetupMessage,
   getSummarySetupMessage,
   buildHomeAiAddonPrompt,
@@ -83,6 +84,72 @@ test('setup messages explain graceful degradation paths', () => {
     getDiarizationSetupMessage({ status: 'notConfigured' }),
     /supported platforms/i,
   );
+});
+
+test('AI add-on validate and remove buttons require local setup state', () => {
+  assert.deepEqual(
+    buildAiAddonControlState({
+      type: 'summary',
+      feature: { status: 'notConfigured', availability: { supported: true }, cache: { installed: false }, runtimeCache: { installed: false } },
+    }),
+    {
+      canConfigure: true,
+      canValidate: false,
+      canRemove: false,
+      hasLocalState: false,
+      isBusy: false,
+      isUnsupported: false,
+    },
+  );
+
+  const partialSummary = buildAiAddonControlState({
+    type: 'summary',
+    feature: { status: 'error', cache: { installed: false, partial: true }, runtimeCache: { installed: false } },
+  });
+  assert.equal(partialSummary.canValidate, true);
+  assert.equal(partialSummary.canRemove, true);
+
+  const removedDiarization = buildAiAddonControlState({
+    type: 'diarization',
+    feature: { status: 'notConfigured', tokenStatus: { hasToken: false }, dependencyCache: { installed: false } },
+  });
+  assert.equal(removedDiarization.canRemove, false);
+  assert.equal(removedDiarization.canValidate, false);
+
+  const partialDiarization = buildAiAddonControlState({
+    type: 'diarization',
+    feature: { status: 'needsAccount', tokenStatus: { hasToken: false }, dependencyCache: { installed: false, partial: true } },
+  });
+  assert.equal(partialDiarization.canRemove, true);
+  assert.equal(partialDiarization.canValidate, true);
+
+  const removedSummary = buildAiAddonControlState({
+    type: 'summary',
+    feature: { status: 'notConfigured', cache: { installed: false, partial: false }, runtimeCache: { installed: false, partial: false } },
+  });
+  assert.equal(removedSummary.canRemove, false);
+  assert.equal(removedSummary.canValidate, false);
+});
+
+test('AI add-on controls are disabled during active setup or unsupported state', () => {
+  const downloadingSummary = buildAiAddonControlState({
+    type: 'summary',
+    setupActive: true,
+    feature: { status: 'downloading', cache: { installed: true } },
+  });
+  assert.equal(downloadingSummary.hasLocalState, true);
+  assert.equal(downloadingSummary.canConfigure, false);
+  assert.equal(downloadingSummary.canValidate, false);
+  assert.equal(downloadingSummary.canRemove, false);
+
+  const unsupportedDiarization = buildAiAddonControlState({
+    type: 'diarization',
+    feature: { status: 'unsupported', tokenStatus: { hasToken: true }, dependencyCache: { installed: true } },
+  });
+  assert.equal(unsupportedDiarization.hasLocalState, true);
+  assert.equal(unsupportedDiarization.canConfigure, false);
+  assert.equal(unsupportedDiarization.canValidate, false);
+  assert.equal(unsupportedDiarization.canRemove, false);
 });
 
 test('buildHomeAiAddonPrompt gates speaker setup behind Windows CUDA', () => {

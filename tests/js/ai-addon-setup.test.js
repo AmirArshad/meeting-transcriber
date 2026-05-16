@@ -10,6 +10,7 @@ const {
   buildDiarizationDependencyInstallArgs,
   checkAiAddonSetupStatus,
   checkDiarizationDependencyCache,
+  checkMacOSCompilerToolchain,
   checkSummaryModelCache,
   checkSummaryRuntimeCache,
   createAiAddonProgressEvent,
@@ -260,6 +261,11 @@ async function stubAnyDiarizationDependencyInstaller({ targetDir }) {
   assert.ok(targetDir.includes(path.join('dependencies', 'diarization')));
 }
 
+async function stubAvailableToolchain({ platform }) {
+  assert.equal(platform, 'darwin');
+  return { available: true };
+}
+
 test('progress events redact known sensitive fields and token-looking values', () => {
   const event = createAiAddonProgressEvent({
     feature: 'summary',
@@ -480,8 +486,18 @@ test('diarization dependency cache uses managed userData path and pinned require
   });
 
   assert.equal(cache.installed, false);
+  assert.equal(cache.partial, false);
   assert.equal(cache.artifactId, 'pyannote-audio-4.0.1-win32-x64-cuda-12.6');
   assert.equal(cache.sitePackagesDir, path.join('/tmp/AvaNevis', 'ai-addons', 'dependencies', 'diarization', artifact.id, 'site-packages'));
+  fsModule.mkdirSync(cache.dependencyDir);
+  const partialCache = checkDiarizationDependencyCache({
+    userDataDir: '/tmp/AvaNevis',
+    platform: 'win32',
+    arch: 'x64',
+    fsModule,
+  });
+  assert.equal(partialCache.installed, false);
+  assert.equal(partialCache.partial, true);
   assert.ok(artifact.pip.requirements.includes('pyannote.audio==4.0.1'));
   assert.ok(artifact.pip.requirements.includes('torch==2.8.0+cu126'));
 });
@@ -551,7 +567,7 @@ test('macOS diarization dependency installer builds pinned MPS pip target args',
   assert.ok(args.includes('https://pypi.org/simple'));
   assert.equal(args.includes('--extra-index-url'), false);
   assert.equal(args.includes('https://download.pytorch.org/whl/cu126'), false);
-  assert.equal(args.includes('--only-binary=:all:'), true);
+  assert.equal(args.includes('--only-binary=:all:'), false);
   assert.ok(args.includes('pyannote.audio==4.0.1'));
   assert.ok(args.includes('torch==2.8.0'));
   assert.ok(args.includes('torchaudio==2.8.0'));
@@ -629,6 +645,52 @@ test('setup diarization reports dependency install failures before token validat
   assert.equal(status.features.diarization.status, 'error');
   assert.match(status.features.diarization.error, /julius source build failed/);
   assert.equal(status.features.diarization.setupComplete, false);
+});
+
+test('macOS diarization setup preflights source-build toolchain before pip install', async () => {
+  let installCalled = false;
+  const status = await setupDiarizationAddon({
+    userDataDir: '/tmp/AvaNevis',
+    platform: 'darwin',
+    arch: 'arm64',
+    token: 'hf_validtoken123',
+    safeStorage: createSafeStorage(),
+    fsModule: createMemoryFs(),
+    toolchainChecker: async () => ({ available: false }),
+    dependencyInstaller: async () => {
+      installCalled = true;
+    },
+  });
+
+  assert.equal(status.features.diarization.status, 'error');
+  assert.match(status.features.diarization.error, /xcode-select --install/);
+  assert.equal(installCalled, false);
+});
+
+test('macOS compiler toolchain checker reports xcode-select failure clearly', async () => {
+  const calls = [];
+  const result = await checkMacOSCompilerToolchain({
+    execFileFn(command, args, _options, callback) {
+      calls.push([command, args]);
+      callback(new Error('missing xcode'));
+    },
+  });
+
+  assert.deepEqual(calls, [['xcode-select', ['-p']]]);
+  assert.deepEqual(result, { available: false, reason: 'xcode-select' });
+});
+
+test('compiler toolchain checker is skipped outside macOS', async () => {
+  let called = false;
+  const result = await checkMacOSCompilerToolchain({
+    platform: 'win32',
+    execFileFn() {
+      called = true;
+    },
+  });
+
+  assert.equal(called, false);
+  assert.deepEqual(result, { available: true, skipped: true });
 });
 
 test('setup diarization cancellation cleans managed dependencies', async () => {
@@ -802,6 +864,7 @@ test('macOS diarization setup validates MPS before ready', async () => {
     safeStorage: createSafeStorage(),
     fsModule: createMemoryFs(),
     dependencyInstaller: stubAnyDiarizationDependencyInstaller,
+    toolchainChecker: stubAvailableToolchain,
     runtimeValidator: async (payload) => validations.push(payload),
   });
 
@@ -822,6 +885,7 @@ test('macOS diarization setup fails closed when MPS validation fails', async () 
     safeStorage: createSafeStorage(),
     fsModule: createMemoryFs(),
     dependencyInstaller: stubAnyDiarizationDependencyInstaller,
+    toolchainChecker: stubAvailableToolchain,
     runtimeValidator: async ({ requiredDevice }) => {
       assert.equal(requiredDevice, 'mps');
       throw new Error('Speaker identification on macOS requires PyTorch Metal/MPS acceleration. CPU fallback is disabled.');
@@ -902,7 +966,18 @@ test('summary cache validation accepts pinned catalog artifact checksums', async
   const userDataDir = '/tmp/AvaNevis';
   const artifact = getSummaryArtifactForPlatform(DEFAULT_SUMMARY_MODEL_ID, 'win32', 'x64');
   const artifactPath = getSummaryArtifactPath(userDataDir, artifact);
-  fsModule.mkdirSync(path.dirname(artifactPath));
+  const artifactDir = path.dirname(artifactPath);
+  fsModule.mkdirSync(artifactDir);
+  const partialCache = await checkSummaryModelCache({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    modelId: DEFAULT_SUMMARY_MODEL_ID,
+    fsModule,
+  });
+  assert.equal(partialCache.installed, false);
+  assert.equal(partialCache.partial, true);
+
   fsModule.writeFileSync(artifactPath, 'model data');
 
   const cache = await checkSummaryModelCache({
@@ -914,6 +989,7 @@ test('summary cache validation accepts pinned catalog artifact checksums', async
   });
 
   assert.equal(cache.installed, true);
+  assert.equal(cache.partial, false);
   assert.equal(cache.valid, true);
   assert.equal(cache.checksumStatus, 'notChecked');
   assert.equal(cache.validationStatus, 'installed');
@@ -939,7 +1015,19 @@ test('summary runtime cache stays in userData and requires llama-cli', () => {
     fsModule,
   });
   assert.equal(missingCache.valid, false);
+  assert.equal(missingCache.partial, false);
   assert.equal(missingCache.reason, 'llama.cpp runtime is not installed.');
+
+  fsModule.mkdirSync(path.join(runtimeDir, 'extract'));
+  const partialCache = checkSummaryRuntimeCache({
+    userDataDir: '/tmp/AvaNevis',
+    platform: 'win32',
+    arch: 'x64',
+    modelId: DEFAULT_SUMMARY_MODEL_ID,
+    fsModule,
+  });
+  assert.equal(partialCache.installed, false);
+  assert.equal(partialCache.partial, true);
 
   fsModule.mkdirSync(path.dirname(nestedRuntimeExecutable));
   fsModule.writeFileSync(nestedRuntimeExecutable, 'bin');

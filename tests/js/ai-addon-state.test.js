@@ -131,6 +131,7 @@ test('catalog exposes managed diarization dependency artifacts for Windows CUDA 
   assert.equal(macArtifact.id, 'pyannote-audio-4.0.1-darwin-arm64-mps');
   assert.equal(macArtifact.acceleration, 'mps');
   assert.deepEqual(macArtifact.runtimeFamilies, ['pytorch-mps']);
+  assert.equal(macArtifact.pip.allowSourceBuilds, true);
   assert.ok(macArtifact.pip.requirements.includes('torch==2.8.0'));
   assert.ok(macArtifact.pip.requirements.includes('torchcodec==0.7.0'));
   assert.equal(getDiarizationDependencyArtifactForPlatform('darwin', 'x64'), null);

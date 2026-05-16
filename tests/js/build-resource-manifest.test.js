@@ -10,7 +10,9 @@ const {
   buildDirectoryManifest,
   buildMacOSHelperVerificationCommands,
   buildResourceManifest,
+  ensureWindowsEmbeddedPythonPathConfig,
   ensureWindowsEmptyBinDirectory,
+  getMacOSPythonRuntimeRemovablePackages,
   getStaleResourceDirectories,
   macOSHelperEntitlementsIncludeInherit,
   manifestsMatch,
@@ -72,10 +74,38 @@ test('manifestsMatch detects Swift source changes through the resource manifest'
 test('buildResourceManifest tracks pinned packaged dependency requirements', () => {
   const manifest = buildResourceManifest();
 
+  assert.equal(manifest.version, 4);
   assert.equal(typeof manifest.inputs.requirementsMacosBuild, 'string');
   assert.equal(typeof manifest.inputs.requirementsWindowsBuild, 'string');
   assert.equal(manifest.inputs.requirementsMacosBuild.length, 64);
   assert.equal(manifest.inputs.requirementsWindowsBuild.length, 64);
+});
+
+
+test('macOS packaged Python keeps pip for optional diarization setup', () => {
+  const removablePackages = getMacOSPythonRuntimeRemovablePackages();
+
+  assert.equal(removablePackages.includes('pip'), false);
+  assert.ok(removablePackages.includes('setuptools'));
+});
+
+
+test('Windows embedded Python path config enables pip and backend imports', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mt-python-pth-'));
+  const pthFile = path.join(tempDir, 'python311._pth');
+  fs.writeFileSync(pthFile, 'python311.zip\n.\n#import site\n', 'utf8');
+
+  ensureWindowsEmbeddedPythonPathConfig(pthFile);
+
+  const lines = fs.readFileSync(pthFile, 'utf8').trim().split(/\r?\n/);
+  assert.ok(lines.includes('../backend'));
+  assert.ok(lines.includes('./Lib/site-packages'));
+  assert.ok(lines.includes('python311.zip'));
+  assert.ok(lines.includes('.'));
+  assert.equal(lines.at(-1), 'import site');
+  assert.equal(lines.filter((line) => line === 'import site').length, 1);
+
+  fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
 

@@ -1,5 +1,5 @@
 const crypto = require('crypto');
-const { spawn } = require('child_process');
+const { execFile, spawn } = require('child_process');
 const fs = require('fs');
 const https = require('https');
 const path = require('path');
@@ -589,10 +589,12 @@ function checkDiarizationDependencyCache({
   const existsSync = bindFsMethod(fsModule, 'existsSync');
   const marker = artifact ? readDiarizationDependencyMarker({ userDataDir, artifact, fsModule }) : null;
   const installed = Boolean(sitePackagesDir && existsSync && existsSync(sitePackagesDir) && marker && marker.artifactId === artifact.id);
+  const partial = Boolean(dependencyDir && existsSync && existsSync(dependencyDir) && !installed);
 
   return {
     supported: Boolean(artifact),
     installed,
+    partial,
     valid: installed && !validationError,
     validationStatus: validationError ? 'error' : installed ? 'ready' : 'notConfigured',
     reason: validationError || (installed ? null : 'Speaker identification dependencies are not installed.'),
@@ -691,10 +693,12 @@ function checkSummaryRuntimeCache({
   const executablePath = findRuntimeExecutablePath(runtimeDir, runtimeArtifact && runtimeArtifact.executableName, fsModule)
     || (expectedExecutablePath && existsSync && existsSync(expectedExecutablePath) ? expectedExecutablePath : null);
   const installed = Boolean(executablePath && existsSync && existsSync(executablePath));
+  const partial = Boolean(runtimeDir && existsSync && existsSync(runtimeDir) && !installed);
 
   return {
     supported: Boolean(artifact && runtimeArtifact),
     installed,
+    partial,
     valid: installed && !validationError,
     validationStatus: validationError ? 'pendingPinnedRuntime' : installed ? 'ready' : 'notConfigured',
     reason: validationError || (installed ? null : 'llama.cpp runtime is not installed.'),
@@ -732,6 +736,7 @@ async function checkSummaryModelCache({
   const modelCacheDir = getSummaryModelCacheDir(userDataDir, artifact.modelId);
   const existsSync = bindFsMethod(fsModule, 'existsSync');
   const installed = Boolean(artifactPath && existsSync && existsSync(artifactPath));
+  const partial = Boolean(modelCacheDir && existsSync && existsSync(modelCacheDir) && !installed);
 
   const base = {
     supported: true,
@@ -744,6 +749,7 @@ async function checkSummaryModelCache({
     estimatedSizeBytes: artifact.estimatedSizeBytes || null,
     artifact,
     installed,
+    partial,
     valid: false,
     checksumStatus: artifact.sha256 ? 'notChecked' : 'pendingPinnedChecksum',
     validationStatus: artifact.validationStatus,
@@ -1053,6 +1059,37 @@ function installDiarizationDependenciesWithPip({ pythonExe = 'python', artifact,
   });
 }
 
+function checkMacOSCompilerToolchain({ platform = process.platform, execFileFn = execFile } = {}) {
+  if (platform !== 'darwin') {
+    return Promise.resolve({ available: true, skipped: true });
+  }
+
+  return new Promise((resolve) => {
+    execFileFn('xcode-select', ['-p'], { timeout: 10000 }, (xcodeError) => {
+      if (xcodeError) {
+        resolve({ available: false, reason: 'xcode-select' });
+        return;
+      }
+      execFileFn('cc', ['--version'], { timeout: 10000 }, (compilerError) => {
+        resolve(compilerError
+          ? { available: false, reason: 'cc' }
+          : { available: true });
+      });
+    });
+  });
+}
+
+async function assertDiarizationSourceBuildToolchain({ platform = process.platform, artifact, toolchainChecker = checkMacOSCompilerToolchain } = {}) {
+  if (platform !== 'darwin' || !artifact || !artifact.pip || !artifact.pip.allowSourceBuilds) {
+    return;
+  }
+
+  const result = await toolchainChecker({ artifact, platform });
+  if (!result || result.available !== true) {
+    throw new Error('Speaker identification setup on macOS needs Apple Command Line Tools to build a source-only pyannote dependency. Install them with `xcode-select --install`, then try setup again.');
+  }
+}
+
 function estimatePipDownloadPercent(message) {
   const text = String(message || '');
   if (/^Collecting\b/.test(text)) {
@@ -1080,6 +1117,7 @@ async function installDiarizationDependencies({
   emitProgress,
   pythonExe,
   dependencyInstaller = installDiarizationDependenciesWithPip,
+  toolchainChecker = checkMacOSCompilerToolchain,
   cancelSignal,
 } = {}) {
   throwIfAiAddonCanceled(cancelSignal, 'Speaker identification setup was canceled.');
@@ -1124,6 +1162,7 @@ async function installDiarizationDependencies({
   });
 
   try {
+    await assertDiarizationSourceBuildToolchain({ platform, artifact, toolchainChecker });
     await dependencyInstaller({
       pythonExe,
       artifact,
@@ -1293,6 +1332,7 @@ async function setupDiarizationAddon({
   runtimeValidator,
   pythonExe,
   dependencyInstaller,
+  toolchainChecker,
   cancelSignal,
 } = {}) {
   throwIfAiAddonCanceled(cancelSignal, 'Speaker identification setup was canceled.');
@@ -1451,6 +1491,7 @@ async function setupDiarizationAddon({
       emitProgress,
       pythonExe,
       dependencyInstaller,
+      toolchainChecker,
       cancelSignal,
     });
   } catch (dependencyError) {
@@ -2466,6 +2507,7 @@ module.exports = {
   AI_ADDON_CANCEL_CODE,
   checkAiAddonSetupStatus,
   checkDiarizationDependencyCache,
+  checkMacOSCompilerToolchain,
   checkSummaryModelCache,
   checkSummaryRuntimeCache,
   buildDiarizationDependencyInstallArgs,

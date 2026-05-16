@@ -1,4 +1,8 @@
 import json
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -148,3 +152,36 @@ def test_validate_summary_runtime_smoke_tests_resolved_runtime(monkeypatch, tmp_
     assert result['acceleration'] == 'cuda'
     assert result['executable'] == str(executable)
     assert calls[0]['modelPath'] == str(model_path)
+
+
+def test_summary_runner_module_execution_has_no_preimport_warning(tmp_path):
+    runtime_dir = tmp_path / 'runtime'
+    runtime_dir.mkdir()
+    model_path = tmp_path / 'model.gguf'
+    model_path.write_text('model', encoding='utf-8')
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            '-m',
+            'summaries.summary_runner',
+            '--validate-runtime',
+            '--runtime-dir',
+            str(runtime_dir),
+            '--model-path',
+            str(model_path),
+            '--platform',
+            'win32',
+            '--arch',
+            'x64',
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            **os.environ,
+            'PYTHONPATH': str(Path(__file__).resolve().parents[2] / 'backend'),
+        },
+    )
+
+    assert 'RuntimeWarning' not in result.stderr

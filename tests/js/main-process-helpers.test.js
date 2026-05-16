@@ -240,6 +240,19 @@ test('summarizeAiBackendError redacts sensitive values and local paths', () => {
 });
 
 
+test('summarizeAiBackendError ignores Python module execution warnings', () => {
+  const summary = summarizeAiBackendError({
+    errorOutput: [
+      "<frozen runpy>:128: RuntimeWarning: 'summaries.summary_runner' found in sys.modules after import of package 'summaries', but prior to execution of 'summaries.summary_runner'; this may result in unpredictable behaviour",
+      'ERROR: Local summary runtime validation failed: missing llama-cli',
+    ].join('\n'),
+    genericMessage: 'Local summary generation failed.',
+  });
+
+  assert.equal(summary, 'Local summary runtime validation failed: missing llama-cli');
+});
+
+
 test('buildModelDownloadCheck returns macOS MLX cache settings for Apple Silicon', () => {
   const result = buildModelDownloadCheck({
     platform: 'darwin',
