@@ -79,6 +79,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Transcription
   transcribeAudio: (options) => ipcRenderer.invoke('transcribe-audio', options),
+  transcribeAudioWithSpeakers: (options) => ipcRenderer.invoke('transcribe-audio-with-speakers', options),
   diarizeTranscript: (options) => ipcRenderer.invoke('diarize-transcript', options),
   generateSummary: (options) => ipcRenderer.invoke('generate-summary', options),
   cancelSummaryGeneration: (options) => ipcRenderer.invoke('cancel-summary-generation', options),
@@ -91,6 +92,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updateMeeting: (meetingId, updates) => ipcRenderer.invoke('update-meeting', { meetingId, updates }),
   updateMeetingAi: (meetingId, updates) => ipcRenderer.invoke('update-meeting-ai', { meetingId, updates }),
   saveTranscriptFile: (options) => ipcRenderer.invoke('save-transcript-file', options),
+  saveSpeakerSegmentsFile: (options) => ipcRenderer.invoke('save-speaker-segments-file', options),
   saveTranscriptAs: (options) => ipcRenderer.invoke('save-transcript-as', options),
   scanRecordings: () => ipcRenderer.invoke('scan-recordings'),
 

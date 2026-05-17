@@ -769,6 +769,36 @@ function buildManagedDiarizationArgs({ audioPath, segmentsJsonPath, outputPath, 
   return buildManagedPythonModuleArgs('diarization.diarization_pipeline', args, getDiarizationDependencySitePackagesPath());
 }
 
+function getTranscriberBackendName() {
+  if (process.platform === 'darwin' && process.arch === 'arm64') {
+    return 'mlx';
+  }
+  return 'faster';
+}
+
+function buildManagedDiarizationGuidedTranscriptionArgs({ audioPath, outputTranscript, outputJson, language, modelSize, modelRef, speakerCount, requiredDevice }) {
+  const args = [
+    '--audio', audioPath,
+    '--output-transcript', outputTranscript,
+    '--language', language || 'en',
+    '--model', modelSize || 'small',
+    '--transcriber-backend', getTranscriberBackendName(),
+    '--model-ref', modelRef || 'pyannote/speaker-diarization-community-1',
+    '--speaker-count', speakerCount === undefined || speakerCount === null ? 'auto' : String(speakerCount),
+    '--ffmpeg', pythonConfig.ffmpegPath,
+  ];
+
+  if (outputJson) {
+    args.push('--output-json', outputJson);
+  }
+
+  if (requiredDevice) {
+    args.push('--require-device', requiredDevice);
+  }
+
+  return buildManagedPythonModuleArgs('diarization.guided_transcription', args, getDiarizationDependencySitePackagesPath());
+}
+
 function buildSummaryArgs({ meetingId, transcriptPath, runtimeDir, modelPath, outputJson, outputMarkdown, speakersJsonPath, profile, modelLabel, validateRuntime = false }) {
   const args = [
     '--meeting-id', meetingId,
@@ -2936,6 +2966,123 @@ ipcMain.handle('transcribe-audio', async (event, options) => {
   });
 });
 
+ipcMain.handle('transcribe-audio-with-speakers', async (event, options = {}) => {
+  let { audioFile, language, modelSize, speakerCount } = options;
+
+  if (!audioFile) {
+    throw new Error('transcribe-audio-with-speakers requires an audioFile');
+  }
+
+  if (!path.isAbsolute(audioFile)) {
+    audioFile = resolveTranscriptionAudioFile({
+      audioFile,
+      recordingsDir: getRecordingsDir(),
+      existsSync: fs.existsSync,
+    });
+  } else {
+    audioFile = resolveTranscriptionAudioFile({
+      audioFile,
+      recordingsDir: path.dirname(audioFile),
+      existsSync: fs.existsSync,
+    });
+  }
+
+  const resolvedAudioPath = assertSafeExistingRecordingAudioPath(audioFile);
+  const availability = getDiarizationAvailability(process.platform, process.arch);
+  if (!availability.supported) {
+    throw new Error(availability.reason || 'Speaker identification is not supported on this platform.');
+  }
+  const requiredDevice = availability.runtimeDevice;
+  if (!requiredDevice) {
+    throw new Error('Speaker identification accelerator policy is not configured for this platform.');
+  }
+
+  const aiStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions());
+  const diarizationStatus = aiStatus && aiStatus.features && aiStatus.features.diarization;
+  if (!diarizationStatus || diarizationStatus.status !== 'ready' || !diarizationStatus.setupComplete) {
+    throw new Error('Speaker identification setup is not ready.');
+  }
+  const catalogModelRef = getDiarizationModelRef(diarizationStatus.modelId);
+  if (!catalogModelRef) {
+    throw new Error('Speaker identification model is not configured.');
+  }
+
+  const token = getAiAddonToken({
+    userDataDir: app.getPath('userData'),
+    tokenKey: TOKEN_KEYS.diarizationHuggingFace,
+    safeStorage: getSafeStorage(),
+  });
+  const outputTranscript = resolvedAudioPath.replace(/\.[^/.]+$/, '.md');
+  if (!isSafeRecordingsMarkdownPath({ filePath: outputTranscript, recordingsDir: getRecordingsDir() })) {
+    throw new Error('Speaker-guided transcript must be a Markdown file in the recordings directory.');
+  }
+
+  return enqueueAiComputeAction(() => new Promise((resolve, reject) => {
+    const python = spawnTrackedPython(buildManagedDiarizationGuidedTranscriptionArgs({
+      audioPath: resolvedAudioPath,
+      outputTranscript,
+      language,
+      modelSize,
+      modelRef: catalogModelRef,
+      speakerCount: speakerCount || diarizationStatus.speakerCount || 'auto',
+      requiredDevice,
+    }), {
+      cwd: pythonConfig.backendPath,
+      env: {
+        ...getDiarizationDependencyEnv(),
+        ...getDiarizationCacheEnv(),
+        ...buildCudaRuntimeEnv({}, { includeManagedDiarization: true }),
+        HF_TOKEN: token || '',
+        HUGGINGFACE_HUB_TOKEN: token || '',
+      },
+    });
+
+    let output = '';
+    let errorOutput = '';
+
+    python.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    python.stderr.on('data', (data) => {
+      const stderrChunk = data.toString();
+      errorOutput += stderrChunk;
+      for (const line of stderrChunk.split(/\r?\n/)) {
+        const progressEvent = parseAiBackendProgressLine(line, 'diarization');
+        if (progressEvent) {
+          sendToRenderer('diarization-progress', progressEvent);
+        } else if (line.trim()) {
+          sendToRenderer('transcription-progress', line);
+        }
+      }
+    });
+
+    python.on('close', async (code) => {
+      if (code === 0) {
+        try {
+          const result = JSON.parse(output);
+          const transcriptContent = await fs.promises.readFile(outputTranscript, 'utf8');
+          resolve({
+            ...result,
+            output_file: outputTranscript,
+            transcriptContent,
+          });
+        } catch (error) {
+          reject(new Error(`Failed to parse speaker-guided transcription result: ${error.message}`));
+        }
+        return;
+      }
+
+      const reason = summarizeDiarizationError(errorOutput);
+      reject(new Error(reason || 'Speaker-guided transcription failed.'));
+    });
+
+    python.on('error', (error) => {
+      reject(error);
+    });
+  }));
+});
+
 ipcMain.handle('diarize-transcript', async (event, options = {}) => {
   const { audioPath, segments, segmentsJsonPath, speakerCount } = options;
 
@@ -3626,6 +3773,23 @@ ipcMain.handle('save-transcript-file', async (event, options = {}) => {
 
   const resolvedPath = path.resolve(filePath);
   await fs.promises.writeFile(resolvedPath, content, 'utf8');
+  return { success: true, filePath: resolvedPath };
+});
+
+ipcMain.handle('save-speaker-segments-file', async (event, options = {}) => {
+  const { filePath, content } = options;
+  if (!filePath || typeof content !== 'string') {
+    throw new Error('save-speaker-segments-file requires filePath and content');
+  }
+
+  const recordingsDir = path.join(app.getPath('userData'), 'recordings');
+  if (!isSafeRecordingsJsonPath({ filePath, recordingsDir })) {
+    throw new Error('Speaker segment file must be a JSON file in the recordings directory.');
+  }
+
+  const resolvedPath = path.resolve(filePath);
+  const parsed = JSON.parse(content);
+  await fs.promises.writeFile(resolvedPath, `${JSON.stringify(parsed, null, 2)}\n`, 'utf8');
   return { success: true, filePath: resolvedPath };
 });
 

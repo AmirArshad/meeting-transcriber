@@ -2175,6 +2175,55 @@ async function maybeRunDiarizationAfterTranscription(savedMeeting, transcription
   }
 }
 
+async function getReadyDiarizationStatusForRecording() {
+  if (!window.electronAPI.transcribeAudioWithSpeakers) {
+    return null;
+  }
+
+  try {
+    const aiStatus = await window.electronAPI.getAiAddonStatus();
+    const diarizationStatus = aiStatus && aiStatus.features && aiStatus.features.diarization;
+    if (diarizationStatus && diarizationStatus.setupComplete && diarizationStatus.status === 'ready') {
+      return diarizationStatus;
+    }
+  } catch (error) {
+    addLog(`Speaker identification status unavailable: ${error.message}`, 'warning');
+  }
+
+  return null;
+}
+
+async function saveGuidedDiarizationMetadata(savedMeeting, diarizationStatus, diarizationResult) {
+  if (!savedMeeting || !savedMeeting.id || !savedMeeting.audioPath || !diarizationResult) {
+    return null;
+  }
+
+  const speakerSidecarPath = savedMeeting.audioPath.replace(/\.[^/.]+$/, '.speakers.json');
+  const sidecarContent = JSON.stringify({
+    ...diarizationResult,
+    audioPath: savedMeeting.audioPath,
+    segmentsPath: speakerSidecarPath,
+  }, null, 2);
+
+  await window.electronAPI.saveSpeakerSegmentsFile({
+    filePath: speakerSidecarPath,
+    content: sidecarContent,
+  });
+
+  await window.electronAPI.updateMeetingAi(savedMeeting.id, {
+    diarization: {
+      status: 'completed',
+      model: diarizationResult.model || (diarizationStatus && diarizationStatus.modelId),
+      completedAt: diarizationResult.completedAt,
+      speakerCount: diarizationResult.speakerCount,
+      segmentsPath: speakerSidecarPath,
+      error: null,
+    },
+  });
+
+  return speakerSidecarPath;
+}
+
 function syncMeetingInList(updatedMeeting) {
   if (!updatedMeeting || !updatedMeeting.id) {
     return;
@@ -2319,17 +2368,50 @@ async function transcribeAudio() {
   }
 
   try {
+    const diarizationStatus = await getReadyDiarizationStatusForRecording();
+    const useGuidedTranscription = Boolean(diarizationStatus);
+
     setRecordingState('transcribing');
-    setTranscriptMessage('Transcribing... This may take a moment.');
+    setTranscriptMessage(useGuidedTranscription
+      ? 'Identifying speakers and transcribing... This may take a moment.'
+      : 'Transcribing... This may take a moment.');
 
     addLog(`Language: ${language}, Model: ${modelSize}`);
     addLog(`File: ${currentAudioFile}`);
 
-    const result = await window.electronAPI.transcribeAudio({
-      audioFile: currentAudioFile,
-      language,
-      modelSize
-    });
+    let result;
+    let guidedDiarizationStatus = diarizationStatus;
+    let guidedDiarizationResult = null;
+    try {
+      if (useGuidedTranscription) {
+        addLog('Speaker identification is ready; using speaker-guided transcription.');
+        result = await window.electronAPI.transcribeAudioWithSpeakers({
+          audioFile: currentAudioFile,
+          language,
+          modelSize,
+          speakerCount: diarizationStatus.speakerCount || 'auto',
+        });
+        guidedDiarizationResult = result.diarization || null;
+      } else {
+        result = await window.electronAPI.transcribeAudio({
+          audioFile: currentAudioFile,
+          language,
+          modelSize
+        });
+      }
+    } catch (guidedError) {
+      if (!useGuidedTranscription) {
+        throw guidedError;
+      }
+      addLog(`Speaker-guided transcription failed; falling back to normal transcription. ${guidedError.message}`, 'warning');
+      result = await window.electronAPI.transcribeAudio({
+        audioFile: currentAudioFile,
+        language,
+        modelSize
+      });
+      guidedDiarizationStatus = null;
+      guidedDiarizationResult = null;
+    }
 
     // Display transcript with timestamps
     if (result.segments && result.segments.length > 0) {
@@ -2369,7 +2451,22 @@ async function transcribeAudio() {
       if (savedMeeting && savedMeeting.id) {
         currentRecordingMeeting = savedMeeting;
         applyCurrentRecordingTitle();
-        await maybeRunDiarizationAfterTranscription(savedMeeting, result);
+        if (guidedDiarizationResult) {
+          const speakerSidecarPath = await saveGuidedDiarizationMetadata(savedMeeting, guidedDiarizationStatus, guidedDiarizationResult);
+          if (speakerSidecarPath && savedMeeting.ai) {
+            savedMeeting.ai.diarization = {
+              status: 'completed',
+              model: guidedDiarizationResult.model || (guidedDiarizationStatus && guidedDiarizationStatus.modelId),
+              completedAt: guidedDiarizationResult.completedAt,
+              speakerCount: guidedDiarizationResult.speakerCount,
+              segmentsPath: speakerSidecarPath,
+              error: null,
+            };
+          }
+          addLog('Speaker-guided transcript saved!');
+        } else {
+          await maybeRunDiarizationAfterTranscription(savedMeeting, result);
+        }
       }
       addLog('Meeting saved!');
     } catch (saveError) {
