@@ -208,6 +208,8 @@ def get_audio_duration_seconds(audio_path: Path) -> float:
     import wave
 
     try:
+        # prepare_diarization_audio writes uncompressed PCM WAV. If that ever
+        # changes, fail closed into file-path mode instead of loading blindly.
         with wave.open(str(audio_path), "rb") as handle:
             frame_rate = handle.getframerate()
             if frame_rate <= 0:

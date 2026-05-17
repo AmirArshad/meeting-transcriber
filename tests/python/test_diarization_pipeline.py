@@ -429,6 +429,23 @@ def test_load_pyannote_pipeline_reports_missing_offline_cache(monkeypatch):
         pipeline.load_pyannote_pipeline('pyannote/test-model', 'hf_validtoken123', local_files_only=True)
 
 
+def test_load_pyannote_pipeline_wraps_non_oserror_offline_failures(monkeypatch):
+    class FakeLocalEntryNotFoundError(Exception):
+        pass
+
+    class FakePipeline:
+        @staticmethod
+        def from_pretrained(*_args, **_kwargs):
+            raise FakeLocalEntryNotFoundError('missing cached snapshot')
+
+    fake_pyannote_audio = types.SimpleNamespace(Pipeline=FakePipeline)
+    monkeypatch.setitem(sys.modules, 'pyannote', types.SimpleNamespace(audio=fake_pyannote_audio))
+    monkeypatch.setitem(sys.modules, 'pyannote.audio', fake_pyannote_audio)
+
+    with pytest.raises(RuntimeError, match='model cache is missing or incomplete'):
+        pipeline.load_pyannote_pipeline('pyannote/test-model', 'hf_validtoken123', local_files_only=True)
+
+
 def test_emit_progress_redacts_token_values(capsys):
     pipeline.emit_progress('loading model', 'Using hf_secret_token Authorization: token ghp_secret X-Api-Key: key123 api_key=third for setup', percent=120)
     captured = capsys.readouterr()

@@ -196,6 +196,8 @@ def strip_llama_prompt_echo(raw_output: str, prompt_text: str) -> str:
 
     for prompt_variant in prompt_variants:
         prompt_index = output.find(prompt_variant)
+        # Prompt echoes appear near process output start; cap the search so
+        # generated text containing the prompt later is left intact.
         if prompt_index == -1 or prompt_index > 8192:
             continue
         prefix = output[:prompt_index].rstrip()

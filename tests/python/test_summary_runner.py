@@ -60,7 +60,7 @@ def test_generate_summary_from_segments_runs_chunk_and_merge_prompts():
             {'start': 0, 'end': 60, 'speaker': 'Speaker 1', 'text': 'Launch approved. ' * 2000},
             {'start': 60, 'end': 120, 'speaker': 'Speaker 2', 'text': 'Rollout planning. ' * 2000},
         ],
-        runtime={'runtime': 'llama.cpp'},
+        runtime={'runtime': 'llama.cpp', 'contextTokens': 7600},
         profile='concise',
         run_prompt=run_prompt,
     )

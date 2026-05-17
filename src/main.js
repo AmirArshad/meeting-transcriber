@@ -94,6 +94,7 @@ let stopCommandSent = false;
 let quitWorkflowPromise = null;
 let allowImmediateQuit = false;
 let pendingUpdateInfo = null;
+let diarizationDependencySitePackagesCache = null;
 
 function getSafeStorage() {
   // On macOS, Electron safeStorage can prompt Keychain access. Keep this lazy
@@ -587,18 +588,17 @@ function buildPythonEnv(extra = {}) {
   };
 }
 
+function clearDiarizationDependencySitePackagesCache() {
+  diarizationDependencySitePackagesCache = null;
+}
+
+function getDiarizationDependencySitePackagesCacheKey(userDataDir) {
+  return [userDataDir, process.platform, process.arch].join('\0');
+}
+
 function getDiarizationDependencyEnv(userDataDir = app.getPath('userData')) {
-  if (process.env.AVANEVIS_SKIP_MANAGED_DIARIZATION_DEPS === '1') {
-    return {};
-  }
-
-  const cache = checkDiarizationDependencyCache({
-    userDataDir,
-    platform: process.platform,
-    arch: process.arch,
-  });
-
-  return cache.valid && cache.sitePackagesDir ? { PYTHONPATH: cache.sitePackagesDir } : {};
+  const sitePackagesDir = getDiarizationDependencySitePackagesPath(userDataDir);
+  return sitePackagesDir ? { PYTHONPATH: sitePackagesDir } : {};
 }
 
 function getDiarizationDependencySitePackagesPath(userDataDir = app.getPath('userData')) {
@@ -606,13 +606,24 @@ function getDiarizationDependencySitePackagesPath(userDataDir = app.getPath('use
     return null;
   }
 
+  const cacheKey = getDiarizationDependencySitePackagesCacheKey(userDataDir);
+  if (diarizationDependencySitePackagesCache && diarizationDependencySitePackagesCache.key === cacheKey) {
+    const cachedPath = diarizationDependencySitePackagesCache.sitePackagesDir;
+    if (!cachedPath || fs.existsSync(cachedPath)) {
+      return cachedPath;
+    }
+    clearDiarizationDependencySitePackagesCache();
+  }
+
   const cache = checkDiarizationDependencyCache({
     userDataDir,
     platform: process.platform,
     arch: process.arch,
   });
 
-  return cache.valid ? cache.sitePackagesDir : null;
+  const sitePackagesDir = cache.valid ? cache.sitePackagesDir : null;
+  diarizationDependencySitePackagesCache = { key: cacheKey, sitePackagesDir };
+  return sitePackagesDir;
 }
 
 function getDiarizationCacheEnv(userDataDir = app.getPath('userData')) {
@@ -1996,6 +2007,7 @@ function validateAiMetadataPaths(updates = {}) {
 }
 
 function validateDiarizationRuntime({ modelRef, token, requiredDevice, cancelSignal }) {
+  clearDiarizationDependencySitePackagesCache();
   const resolvedToken = token || getAiAddonToken({
     userDataDir: app.getPath('userData'),
     tokenKey: TOKEN_KEYS.diarizationHuggingFace,
@@ -2323,7 +2335,13 @@ ipcMain.handle('remove-diarization-setup', async () => {
     throw new Error('Speaker identification setup is already running. Cancel it before removing setup.');
   }
 
-  return enqueueAiAddonAction(() => removeDiarizationSetup(getAiAddonRuntimeOptions()));
+  return enqueueAiAddonAction(async () => {
+    try {
+      return await removeDiarizationSetup(getAiAddonRuntimeOptions());
+    } finally {
+      clearDiarizationDependencySitePackagesCache();
+    }
+  });
 });
 
 ipcMain.handle('setup-summary-model', async (event, options = {}) => runCancellableAiAddonSetup('summary', (cancelSignal) => setupSummaryModel(getAiAddonRuntimeOptions({
