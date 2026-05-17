@@ -13,6 +13,7 @@ from backend.summaries.llama_runtime import (
     resolve_llama_runtime,
     run_llama_prompt,
     smoke_test_llama_runtime,
+    strip_llama_prompt_echo,
 )
 
 
@@ -97,6 +98,10 @@ def test_build_llama_cli_args_uses_json_prompt_file(tmp_path):
     assert '--ctx-size' in args
     assert '4096' in args
     assert '--no-display-prompt' in args
+    assert '--no-warmup' in args
+    assert '--single-turn' in args
+    assert '--simple-io' in args
+    assert args[args.index('--reasoning') + 1] == 'off'
 
 
 def test_smoke_args_use_pinned_runtime_compatible_flags(tmp_path):
@@ -109,9 +114,6 @@ def test_smoke_args_use_pinned_runtime_compatible_flags(tmp_path):
     assert '--seed' in args
     assert args[args.index('--ctx-size') + 1] == '512'
     assert args[args.index('--predict') + 1] == '1'
-    assert '--no-warmup' in args
-    assert '--single-turn' in args
-    assert '--simple-io' in args
     assert '--no-mmap' not in args
 
 
@@ -175,6 +177,7 @@ def test_run_llama_prompt_uses_executable_directory(monkeypatch, tmp_path):
     executable = tmp_path / 'runtime' / 'extract' / 'llama-cli.exe'
     executable.parent.mkdir(parents=True)
     prompt_path = tmp_path / 'prompt.txt'
+    prompt_path.write_text('prompt', encoding='utf-8')
     monkeypatch.setattr('backend.summaries.llama_runtime.subprocess.run', fake_run)
 
     output = run_llama_prompt(
@@ -186,6 +189,36 @@ def test_run_llama_prompt_uses_executable_directory(monkeypatch, tmp_path):
 
     assert output == '{"summary":"ok"}'
     assert calls[0][5] == str(executable.parent)
+
+
+def test_run_llama_prompt_strips_echoed_prompt(monkeypatch, tmp_path):
+    prompt_text = 'Return JSON like {"summary":"schema","topics":[]}.'
+    generated = '{"summary":"generated","topics":[]}'
+
+    class Result:
+        returncode = 0
+        stdout = f'Loading model...\n> {prompt_text}\n\n{generated}\n\nExiting...'
+        stderr = ''
+
+    executable = tmp_path / 'runtime' / 'llama-cli'
+    executable.parent.mkdir(parents=True)
+    prompt_path = tmp_path / 'prompt.txt'
+    prompt_path.write_text(prompt_text, encoding='utf-8')
+    monkeypatch.setattr('backend.summaries.llama_runtime.subprocess.run', lambda *args, **kwargs: Result())
+
+    output = run_llama_prompt(
+        {'executable': str(executable), 'modelPath': str(tmp_path / 'model.gguf')},
+        prompt_path=str(prompt_path),
+        max_tokens=64,
+        timeout_seconds=5,
+    )
+
+    assert output == f'{generated}\n\nExiting...'
+    assert 'schema' not in output
+
+
+def test_strip_llama_prompt_echo_leaves_plain_generation_output():
+    assert strip_llama_prompt_echo('{"summary":"ok"}', 'prompt') == '{"summary":"ok"}'
 
 
 def test_smoke_test_llama_runtime_rejects_failed_help(monkeypatch, tmp_path):

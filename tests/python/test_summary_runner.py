@@ -10,6 +10,7 @@ from backend.summaries.summary_runner import (
     generate_summary_from_segments,
     hash_transcript_text,
     load_summary_segments,
+    resolve_chunk_token_budget,
     save_summary_outputs,
     sidecar_paths,
     validate_summary_runtime,
@@ -55,15 +56,43 @@ def test_generate_summary_from_segments_runs_chunk_and_merge_prompts():
 
     summary = generate_summary_from_segments(
         meeting_id='20260107_104555',
-        segments=[{'start': 0, 'end': 1, 'speaker': 'Speaker 1', 'text': 'Launch approved'}],
+        segments=[
+            {'start': 0, 'end': 60, 'speaker': 'Speaker 1', 'text': 'Launch approved. ' * 2000},
+            {'start': 60, 'end': 120, 'speaker': 'Speaker 2', 'text': 'Rollout planning. ' * 2000},
+        ],
         runtime={'runtime': 'llama.cpp'},
         profile='concise',
         run_prompt=run_prompt,
     )
 
     assert summary['summary'] == 'Final summary'
-    assert len(calls) == 2
+    assert len(calls) == 3
     assert calls[0][1] == 900
+
+
+def test_generate_summary_from_segments_skips_merge_for_single_chunk():
+    calls = []
+
+    def run_prompt(_runtime, prompt_path, max_tokens):
+        calls.append((prompt_path, max_tokens))
+        return json.dumps({'summary': 'Single chunk summary', 'topics': [{'title': 'Launch'}]})
+
+    summary = generate_summary_from_segments(
+        meeting_id='20260107_104555',
+        segments=[{'start': 0, 'end': 1, 'speaker': 'Speaker 1', 'text': 'Launch approved'}],
+        runtime={'runtime': 'llama.cpp'},
+        profile='balanced',
+        run_prompt=run_prompt,
+    )
+
+    assert summary['summary'] == 'Single chunk summary'
+    assert len(calls) == 1
+    assert 'final-merge' not in calls[0][0]
+
+
+def test_resolve_chunk_token_budget_uses_available_context_without_shrinking_profile():
+    assert resolve_chunk_token_budget({'contextTokens': 32768}, {'chunk_tokens': 16000, 'max_output_tokens': 1600}) == 27072
+    assert resolve_chunk_token_budget({'contextTokens': 8192}, {'chunk_tokens': 16000, 'max_output_tokens': 1600}) == 16000
 
 
 def test_generate_summary_from_segments_retries_malformed_json_once():
@@ -79,7 +108,10 @@ def test_generate_summary_from_segments_retries_malformed_json_once():
 
     summary = generate_summary_from_segments(
         meeting_id='20260107_104555',
-        segments=[{'start': 0, 'end': 1, 'text': 'Discussed launch'}],
+        segments=[
+            {'start': 0, 'end': 60, 'text': 'Discussed launch. ' * 2000},
+            {'start': 60, 'end': 120, 'text': 'Discussed follow-up. ' * 2000},
+        ],
         runtime={'runtime': 'llama.cpp'},
         profile='concise',
         run_prompt=run_prompt,

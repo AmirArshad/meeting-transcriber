@@ -133,6 +133,11 @@ def build_llama_cli_args(
         "--predict",
         str(max_tokens),
         "--no-display-prompt",
+        "--no-warmup",
+        "--single-turn",
+        "--simple-io",
+        "--reasoning",
+        "off",
     ]
 
 
@@ -142,7 +147,7 @@ def build_llama_smoke_test_args(runtime: Dict[str, Any], *, prompt_path: str) ->
         "contextTokens": LLAMA_SMOKE_CONTEXT_TOKENS,
     }
     args = build_llama_cli_args(smoke_runtime, prompt_path=prompt_path, max_tokens=LLAMA_SMOKE_PREDICT_TOKENS)
-    return [*args, "--no-warmup", "--single-turn", "--simple-io", "--seed", "1"]
+    return [*args, "--seed", "1"]
 
 
 def sanitize_runtime_error_line(line: str, runtime: Optional[Dict[str, Any]] = None) -> str:
@@ -171,6 +176,19 @@ def summarize_llama_failure(result: subprocess.CompletedProcess[str], runtime: O
     return sanitize_runtime_error_line(lines[-1], runtime) if lines else "llama.cpp exited without output."
 
 
+def strip_llama_prompt_echo(raw_output: str, prompt_text: str) -> str:
+    output = str(raw_output or "")
+    prompt = str(prompt_text or "")
+    if not output or not prompt:
+        return output.strip()
+
+    prompt_index = output.find(prompt)
+    if prompt_index == -1:
+        return output.strip()
+
+    return output[prompt_index + len(prompt):].strip()
+
+
 def run_llama_prompt(
     runtime: Dict[str, Any],
     *,
@@ -179,6 +197,7 @@ def run_llama_prompt(
     timeout_seconds: int = 900,
 ) -> str:
     args = build_llama_cli_args(runtime, prompt_path=prompt_path, max_tokens=max_tokens)
+    prompt_text = Path(prompt_path).read_text(encoding="utf-8")
     result = subprocess.run(
         args,
         capture_output=True,
@@ -189,7 +208,7 @@ def run_llama_prompt(
     )
     if result.returncode != 0:
         raise SummaryRuntimeError("llama.cpp summary generation failed.")
-    return result.stdout.strip()
+    return strip_llama_prompt_echo(result.stdout, prompt_text)
 
 
 def smoke_test_llama_runtime(runtime: Dict[str, Any], *, timeout_seconds: int = 120) -> None:

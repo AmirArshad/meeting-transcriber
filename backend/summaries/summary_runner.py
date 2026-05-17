@@ -29,6 +29,7 @@ from .summary_pipeline import (
 
 DEFAULT_PROFILE = "balanced"
 MAX_SUMMARY_REPAIR_ATTEMPTS = 1
+CHUNK_PROMPT_TOKEN_RESERVE = 4096
 
 
 def _safe_message(message: Any) -> str:
@@ -122,6 +123,19 @@ def run_summary_prompt_with_repair(
     raise last_error or SummaryValidationError("summary JSON repair failed")
 
 
+def resolve_chunk_token_budget(runtime: Dict[str, Any], profile_config: Dict[str, Any]) -> int:
+    profile_budget = int(profile_config["chunk_tokens"])
+    context_tokens = int(runtime.get("contextTokens") or 0)
+    max_output_tokens = int(profile_config["max_output_tokens"])
+    if context_tokens <= 0:
+        return profile_budget
+
+    context_budget = context_tokens - max_output_tokens - CHUNK_PROMPT_TOKEN_RESERVE
+    if context_budget <= 0:
+        return profile_budget
+    return max(profile_budget, context_budget)
+
+
 def generate_summary_from_segments(
     *,
     meeting_id: str,
@@ -131,7 +145,7 @@ def generate_summary_from_segments(
     run_prompt: Callable[[Dict[str, Any], str, int], str],
 ) -> Dict[str, Any]:
     profile_config = get_summary_profile(profile)
-    chunks = chunk_transcript(segments, max_tokens=int(profile_config["chunk_tokens"]), overlap_segments=1)
+    chunks = chunk_transcript(segments, max_tokens=resolve_chunk_token_budget(runtime, profile_config), overlap_segments=1)
     if not chunks:
         raise SummaryValidationError("Transcript has no summary-ready segments.")
 
@@ -151,6 +165,9 @@ def generate_summary_from_segments(
                 work_path=work_path,
                 repair_name=f"chunk-{chunk['index']}",
             ))
+
+        if len(chunk_summaries) == 1:
+            return validate_summary_json(chunk_summaries[0])
 
         emit_progress(meeting_id, "final-merge", "Merging chunk summaries.")
         final_prompt_path = work_path / "final-merge.prompt.txt"
