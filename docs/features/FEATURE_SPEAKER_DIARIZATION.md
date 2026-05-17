@@ -36,7 +36,7 @@ Decision status: use `community-1` for v1 unless a Windows-only Sortformer spike
 - The main process resolves the pyannote model reference from the catalog and ignores renderer-supplied model refs.
 - The main process passes a required accelerator device to the backend (`cuda` on Windows, `mps` on macOS Apple Silicon). The backend refuses CPU fallback when a required device is unavailable.
 - Diarization runs through the main-process local AI compute queue so it cannot overlap with summary generation or another diarization run.
-- The runner prepares 16 kHz mono WAV input, sets `PYANNOTE_METRICS_ENABLED=0`, prefers `exclusive_speaker_diarization`, writes a `*.speakers.json` sidecar, and returns redacted progress events.
+- The runner prepares uncompressed 16 kHz mono PCM WAV input, sets `PYANNOTE_METRICS_ENABLED=0`, loads the pyannote model from local cache only during actual diarization, uses bounded in-memory audio input for shorter recordings, falls back to file-path input for longer recordings, prefers `exclusive_speaker_diarization`, writes a `*.speakers.json` sidecar, and returns redacted progress events.
 - Renderer updates the current transcript and saved Markdown with `**Speaker N:**` labels after successful diarization.
 - History parses saved transcript Markdown so speaker labels remain visible after restart.
 - Failure is warning-only: the normal transcript remains saved and meeting metadata records the diarization error without token values.

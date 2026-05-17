@@ -29,6 +29,7 @@ This design translates the model research docs into product behavior for Setting
 - Summary runtime/model setup downloads pinned llama.cpp/GGUF artifacts only after explicit user action and verifies HTTPS host allowlists, filenames, and checksums before Ready.
 - Speaker setup installs managed `pyannote.audio` dependencies under Electron `userData` for Windows CUDA or macOS Apple Silicon MPS only, then validates the accelerator and gated model access before Ready.
 - Summary and speaker setup report structured add-on progress with percent/byte counters where available. Settings owns the cancel controls; cancellation aborts active downloads/processes and removes partial setup artifacts without deleting a previously valid install.
+- Actual speaker runs use the local pyannote cache populated by setup; missing or incomplete cache is treated as setup drift and asks the user to re-run speaker identification setup instead of downloading implicitly.
 - Summary runtime archives extract into a cleaned staging directory with ZIP path-traversal checks; runtime resolution prefers the extracted `llama-cli` location so adjacent Windows DLLs and macOS dylibs remain loadable.
 - Speaker tokens are stored only with Electron `safeStorage`; token values are not exposed through status IPC, metadata, progress, transcripts, or summaries.
 - Derived artifacts live beside recordings as `*.speakers.json`, `*.summary.json`, and `*.summary.md`; meeting metadata stores concise sidecar references only.
@@ -134,6 +135,8 @@ Summary setup should use a larger optional installer/download artifact rather th
 Hugging Face-hosted public GGUF summary artifacts should use the bundled Python `huggingface_hub`/`hf_xet` downloader so the app can use Hugging Face's accelerated Xet transfer path on Windows and macOS. This path remains unauthenticated for public summary models and must not reuse the diarization token; the app still performs pinned SHA-256 verification after download. Canceling setup must terminate the downloader subprocess (`taskkill` on Windows, `SIGTERM`/`SIGKILL` on macOS) before cleanup finishes.
 
 Runtime archives are staged defensively: ZIP entries must resolve inside the extraction directory, extraction destinations are created explicitly, stale extraction staging is removed before reinstall, extracted archive layout is preserved for native library loading, and runtime validation invokes only the runtime/model smoke path rather than passing transcript generation arguments.
+
+Generation runs `llama-cli` in non-interactive single-turn/simple-IO mode for the pinned runtime. The current Qwen3.5 catalog path disables reasoning output for structured JSON summaries; add catalog-level runtime flag metadata before adding a summary model that needs different behavior.
 
 Initial installed model:
 

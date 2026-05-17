@@ -120,6 +120,7 @@ Transcript segments
 - Summary generation runs through the main-process local AI compute queue so it cannot overlap with another summary or diarization backend run.
 - The runner prefers speaker sidecars when available, otherwise parses saved transcript Markdown and assigns `Unknown` owners when needed.
 - Chunking honors token budget and timestamps, and now prefers topic-boundary heuristics such as "next topic" or "moving on" when a chunk has enough content.
+- The `llama-cli` runner uses non-interactive single-turn/simple-IO mode, disables Qwen reasoning output for the pinned Qwen3.5 model/runtime, strips only obvious prompt echoes near process start, and skips the final merge prompt when a transcript fits in one chunk.
 - Malformed JSON is extracted/repaired locally; if validation still fails, the runner sends one explicit repair prompt before failing without modifying transcripts.
 - Output is saved as `*.summary.json` and `*.summary.md` through unique process/timestamp temp files; metadata stores sidecar references and a validated `sourceTranscriptHash` for stale-summary detection.
 
