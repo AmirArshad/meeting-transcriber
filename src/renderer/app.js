@@ -2123,7 +2123,7 @@ async function generateSummaryForMeeting(meetingId, button) {
 
   let aiStatus;
   try {
-    aiStatus = await window.electronAPI.getAiAddonStatus();
+    aiStatus = await window.electronAPI.getAiAddonStatus({ verifyChecksums: true });
   } catch (error) {
     addLog(`Summary setup status unavailable: ${error.message}`, 'error');
     return;
@@ -2156,7 +2156,6 @@ async function generateSummaryForMeeting(meetingId, button) {
     const result = await window.electronAPI.generateSummary({
       meetingId,
       profile: (summaryProfileSelect && summaryProfileSelect.value) || summaryStatus.profile || DEFAULT_SUMMARY_PROFILE,
-      modelId: summaryStatus.modelId,
     });
 
     if (currentMeetingId === meetingId) {
@@ -2230,8 +2229,14 @@ async function transcribeAudio() {
     // Enable actions
     transcriptActions.style.display = 'flex';
 
+    const transcriptTextForStats = typeof result.text === 'string'
+      ? result.text
+      : (result.segments || []).map((segment) => segment && segment.text ? segment.text : '').join(' ');
+    const wordCount = transcriptTextForStats.trim()
+      ? transcriptTextForStats.trim().split(/\s+/).length
+      : 0;
     addLog('Transcription complete!');
-    addLog(`Word count: ${result.text.split(' ').length}`);
+    addLog(`Word count: ${wordCount}`);
 
     // Save meeting to history
     try {

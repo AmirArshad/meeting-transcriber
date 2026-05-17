@@ -6,6 +6,8 @@ const https = require('node:https');
 const { PassThrough } = require('node:stream');
 const { EventEmitter } = require('node:events');
 
+const CHECKSUM_TARGET_SHA256 = 'a0700a1b17cb3f2328437cbc70a3ac543fab2c1e7d1d8014862d801e1eb11162';
+
 const {
   AI_ADDON_PROGRESS_CHANNEL,
   buildDiarizationDependencyInstallArgs,
@@ -18,11 +20,13 @@ const {
   downloadFile,
   downloadHuggingFaceSummaryArtifact,
   extractZipArchive,
+  extractTarGzArchive,
   getSummaryArtifactPath,
   getSummaryRuntimeArchivePath,
   getSummaryRuntimeDir,
   getSummaryRuntimeExecutablePath,
   isAllowedDownloadUrl,
+  validateTarListing,
   removeDiarizationSetup,
   removeSummaryModel,
   setupDiarizationAddon,
@@ -150,6 +154,34 @@ function createMemoryZip(entries) {
   };
 }
 
+function createSourceArtifactDownloader(fsModule) {
+  return async ({ url, destinationPath }) => {
+    if (url.endsWith('julius-0.2.7.tar.gz')) {
+      fsModule.writeFileSync(destinationPath, Buffer.from('mock julius source artifact'));
+      return;
+    }
+    fsModule.writeFileSync(destinationPath, Buffer.from(String(url)));
+  };
+}
+
+function createCatalogWithMockDiarizationSourceArtifact(platformKey = 'win32-x64') {
+  const [platform, arch] = platformKey.split('-');
+  const artifact = JSON.parse(JSON.stringify(getDiarizationDependencyArtifactForPlatform(platform, arch)));
+  artifact.pip.sourceArtifacts = artifact.pip.sourceArtifacts.map((sourceArtifact) => ({
+    ...sourceArtifact,
+    sha256: '196a4a6677ffcdfe7c3b1a4db8bc805647cef61137a2e67d0540f774523d6278',
+  }));
+  return {
+    version: 1,
+    diarization: {
+      defaultModelId: 'pyannote/speaker-diarization-community-1',
+      dependencyArtifacts: { [platformKey]: artifact },
+      models: [{ id: 'pyannote/speaker-diarization-community-1', runtime: { modelRef: 'pyannote/speaker-diarization-community-1' } }],
+    },
+    summary: { defaultModelId: 'summary-model', runtimeArtifacts: {}, models: [{ id: 'summary-model' }] },
+  };
+}
+
 function createSafeStorage() {
   return {
     isEncryptionAvailable: () => true,
@@ -189,7 +221,7 @@ function createUnavailableSafeStorage() {
   };
 }
 
-function createCatalogWithPinnedSummaryArtifact({ sha256 = 'abc123', downloadUrl = 'https://huggingface.co/example/model.gguf' } = {}) {
+function createCatalogWithPinnedSummaryArtifact({ sha256 = CHECKSUM_TARGET_SHA256, downloadUrl = 'https://huggingface.co/example/model.gguf' } = {}) {
   const artifact = {
     format: 'gguf',
     distribution: 'optional-setup-artifact',
@@ -270,7 +302,7 @@ function createCatalogWithPinnedSummaryArtifact({ sha256 = 'abc123', downloadUrl
 
 async function stubDiarizationDependencyInstaller({ targetDir, artifact }) {
   assert.ok(targetDir.includes(path.join('dependencies', 'diarization')));
-  assert.equal(artifact.id, 'pyannote-audio-4.0.1-win32-x64-cuda-12.6');
+  assert.ok(artifact.id === 'pyannote-audio-4.0.1-win32-x64-cuda-12.6' || artifact.id === 'pyannote-audio-4.0.1-darwin-arm64-mps');
 }
 
 async function stubAnyDiarizationDependencyInstaller({ targetDir }) {
@@ -379,7 +411,7 @@ test('Hugging Face downloader kills child process and rejects on cancellation', 
     'win32',
     'x64',
     createCatalogWithPinnedSummaryArtifact({
-      sha256: 'a0700a1b17cb3f2328437cbc70a3ac543fab2c1e7d1d8014862d801e1eb11162',
+      sha256: CHECKSUM_TARGET_SHA256,
     }),
   );
   const child = new EventEmitter();
@@ -447,6 +479,42 @@ test('zip extraction creates missing destination directory', () => {
   } finally {
     fs.rmSync(destinationDir, { recursive: true, force: true });
   }
+});
+
+test('tar.gz extraction rejects unsafe archive entries before extracting', async () => {
+  const safeListing = '-rwxr-xr-x 0 user group 1 Jan 01 00:00 llama/bin/llama-cli\n';
+  const calls = [];
+  await extractTarGzArchive('/tmp/runtime.tar.gz', '/tmp/runtime', async (args) => {
+    calls.push(args);
+    return args[0] === '-tzvf' ? safeListing : '';
+  });
+  assert.deepEqual(calls, [
+    ['-tzvf', '/tmp/runtime.tar.gz'],
+    ['-xzf', '/tmp/runtime.tar.gz', '-C', '/tmp/runtime'],
+  ]);
+
+  assert.throws(
+    () => validateTarListing('-rw-r--r-- 0 user group 1 Jan 01 00:00 ../escape\n', '/tmp/runtime'),
+    /path traversal/,
+  );
+  assert.throws(
+    () => validateTarListing('lrwxr-xr-x 0 user group 1 Jan 01 00:00 llama/link -> ../../escape\n', '/tmp/runtime'),
+    /unsafe symlink/,
+  );
+  assert.throws(
+    () => validateTarListing('-rw-r--r-- malformed-entry-without-a-name\n', '/tmp/runtime'),
+    /unparseable tar listing/,
+  );
+  assert.doesNotThrow(
+    () => validateTarListing('xrw-r--r-- 0 user group 1 Jan 01 00:00 llama/PaxHeaders/runtime\n', '/tmp/runtime'),
+  );
+  await assert.rejects(
+    () => extractTarGzArchive('/tmp/runtime.tar.gz', '/tmp/runtime', async (args) => {
+      calls.push(args);
+      return '-rw-r--r-- 0 user group 1 Jan 01 00:00 /tmp/escape\n';
+    }),
+    /absolute path/,
+  );
 });
 
 test('check status includes token and summary cache state without exposing token values', async () => {
@@ -613,28 +681,48 @@ test('diarization dependency installer builds pinned pip target args', () => {
   const args = buildDiarizationDependencyInstallArgs({ artifact, targetDir: 'deps/site-packages' });
 
   assert.deepEqual(args.slice(0, 8), ['-m', 'pip', 'install', '--upgrade', '--ignore-installed', '--target', 'deps/site-packages', '--no-warn-script-location']);
+  assert.equal(artifact.pip.allowSourceBuilds, false);
   assert.ok(args.includes('--index-url'));
   assert.ok(args.includes('https://pypi.org/simple'));
   assert.ok(args.includes('--extra-index-url'));
   assert.ok(args.includes('https://download.pytorch.org/whl/cu126'));
-  assert.equal(args.includes('--only-binary=:all:'), false);
+  assert.equal(args.includes('--only-binary=:all:'), true);
+  assert.equal(args.includes('--no-binary=julius'), false);
   assert.ok(args.includes('pyannote.audio==4.0.1'));
   assert.ok(args.includes('torch==2.8.0+cu126'));
+  assert.equal(args.includes('julius==0.2.7'), true);
+  assert.ok(artifact.pip.sourceArtifacts.some((sourceArtifact) => sourceArtifact.package === 'julius'));
+});
+
+test('diarization dependency installer allows only curated source artifacts', () => {
+  const artifact = JSON.parse(JSON.stringify(getDiarizationDependencyArtifactForPlatform('darwin', 'arm64')));
+  artifact.pip.sourceArtifacts = artifact.pip.sourceArtifacts.map((sourceArtifact) => ({
+    ...sourceArtifact,
+    localPath: `/tmp/${sourceArtifact.fileName}`,
+  }));
+  const args = buildDiarizationDependencyInstallArgs({ artifact, targetDir: 'deps/site-packages' });
+
+  assert.equal(args.includes('--only-binary=:all:'), true);
+  assert.equal(args.includes('--no-binary=julius'), true);
+  assert.equal(args.includes('julius==0.2.7'), false);
+  assert.ok(args.includes('/tmp/julius-0.2.7.tar.gz'));
 });
 
 test('macOS diarization dependency installer builds pinned MPS pip target args', () => {
   const artifact = getDiarizationDependencyArtifactForPlatform('darwin', 'arm64');
   const args = buildDiarizationDependencyInstallArgs({ artifact, targetDir: 'deps/site-packages' });
 
+  assert.equal(artifact.pip.allowSourceBuilds, false);
   assert.ok(args.includes('--index-url'));
   assert.ok(args.includes('https://pypi.org/simple'));
   assert.equal(args.includes('--extra-index-url'), false);
   assert.equal(args.includes('https://download.pytorch.org/whl/cu126'), false);
-  assert.equal(args.includes('--only-binary=:all:'), false);
+  assert.equal(args.includes('--only-binary=:all:'), true);
   assert.ok(args.includes('pyannote.audio==4.0.1'));
   assert.ok(args.includes('torch==2.8.0'));
   assert.ok(args.includes('torchaudio==2.8.0'));
   assert.ok(args.includes('torchcodec==0.7.0'));
+  assert.equal(args.includes('julius==0.2.7'), true);
 });
 
 test('pip progress summarizer returns non-sensitive install milestones', () => {
@@ -652,7 +740,9 @@ test('setup diarization stores token securely and writes ready manifest state', 
     arch: 'x64',
     token: 'hf_validtoken123',
     safeStorage: createSafeStorage(),
-    fsModule,
+  fsModule,
+  catalog: createCatalogWithMockDiarizationSourceArtifact('win32-x64'),
+  downloader: createSourceArtifactDownloader(fsModule),
     now: () => '2026-05-16T00:00:00Z',
     emitProgress: (event) => progress.push(event),
     dependencyInstaller: stubDiarizationDependencyInstaller,
@@ -663,6 +753,59 @@ test('setup diarization stores token securely and writes ready manifest state', 
   assert.equal(status.features.diarization.dependencyCache.valid, true);
   assert.equal(progress.at(-1).status, 'ready');
   assert.equal(JSON.stringify(progress).includes('hf_validtoken123'), false);
+});
+
+test('setup diarization downloads pinned source artifacts before pip install', async () => {
+  const fsModule = createMemoryFs();
+  let installedArtifact = null;
+  let toolchainChecked = false;
+  const status = await setupDiarizationAddon({
+    userDataDir: '/tmp/AvaNevis',
+    platform: 'win32',
+    arch: 'x64',
+    token: 'hf_validtoken123',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog: createCatalogWithMockDiarizationSourceArtifact('win32-x64'),
+    downloader: createSourceArtifactDownloader(fsModule),
+    dependencyInstaller: async ({ artifact }) => {
+      installedArtifact = artifact;
+    },
+    downloadSourceArtifacts: true,
+    toolchainChecker: async () => {
+      toolchainChecked = true;
+      return { available: true };
+    },
+  });
+
+  assert.equal(status.features.diarization.status, 'ready');
+  assert.equal(toolchainChecked, false);
+  assert.ok(installedArtifact.pip.sourceArtifacts[0].localPath.endsWith('julius-0.2.7.tar.gz'));
+  assert.equal(fsModule.existsSync(installedArtifact.pip.sourceArtifacts[0].localPath), true);
+});
+
+test('macOS curated diarization source artifacts require compiler toolchain', async () => {
+  const fsModule = createMemoryFs();
+  let installCalled = false;
+  const status = await setupDiarizationAddon({
+    userDataDir: '/tmp/AvaNevis',
+    platform: 'darwin',
+    arch: 'arm64',
+    token: 'hf_validtoken123',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog: createCatalogWithMockDiarizationSourceArtifact('darwin-arm64'),
+    downloader: createSourceArtifactDownloader(fsModule),
+    dependencyInstaller: async () => {
+      installCalled = true;
+    },
+    downloadSourceArtifacts: true,
+    toolchainChecker: async () => ({ available: false }),
+  });
+
+  assert.equal(status.features.diarization.status, 'error');
+  assert.match(status.features.diarization.error, /xcode-select --install/);
+  assert.equal(installCalled, false);
 });
 
 test('setup diarization installs dependencies before runtime validation', async () => {
@@ -710,15 +853,29 @@ test('setup diarization reports dependency install failures before token validat
   assert.equal(status.features.diarization.setupComplete, false);
 });
 
-test('macOS diarization setup preflights source-build toolchain before pip install', async () => {
+test('macOS diarization setup preflights broad source-build toolchain before pip install', async () => {
   let installCalled = false;
+  const fsModule = createMemoryFs();
+  const artifact = JSON.parse(JSON.stringify(getDiarizationDependencyArtifactForPlatform('darwin', 'arm64')));
+  artifact.pip.allowSourceBuilds = true;
+  artifact.pip.sourceArtifacts = [];
+  const catalog = {
+    version: 1,
+    diarization: {
+      defaultModelId: 'pyannote/speaker-diarization-community-1',
+      dependencyArtifacts: { 'darwin-arm64': artifact },
+      models: [{ id: 'pyannote/speaker-diarization-community-1', runtime: { modelRef: 'pyannote/speaker-diarization-community-1' } }],
+    },
+    summary: { defaultModelId: 'summary-model', runtimeArtifacts: {}, models: [{ id: 'summary-model' }] },
+  };
   const status = await setupDiarizationAddon({
     userDataDir: '/tmp/AvaNevis',
     platform: 'darwin',
     arch: 'arm64',
     token: 'hf_validtoken123',
     safeStorage: createSafeStorage(),
-    fsModule: createMemoryFs(),
+    fsModule,
+    catalog,
     toolchainChecker: async () => ({ available: false }),
     dependencyInstaller: async () => {
       installCalled = true;
@@ -1056,6 +1213,17 @@ test('summary cache validation accepts pinned catalog artifact checksums', async
   assert.equal(cache.valid, true);
   assert.equal(cache.checksumStatus, 'notChecked');
   assert.equal(cache.validationStatus, 'installed');
+
+  const verifiedCache = await checkSummaryModelCache({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    modelId: DEFAULT_SUMMARY_MODEL_ID,
+    fsModule,
+    verifyChecksum: true,
+  });
+  assert.equal(verifiedCache.valid, false);
+  assert.equal(verifiedCache.checksumStatus, 'mismatch');
 });
 
 test('summary runtime cache stays in userData and requires llama-cli', () => {
@@ -1109,7 +1277,7 @@ test('summary runtime cache stays in userData and requires llama-cli', () => {
 test('validate summary model accepts installed model and runtime with matching checksum', async () => {
   const fsModule = createMemoryFs();
   const catalog = createCatalogWithPinnedSummaryArtifact({
-    sha256: 'a0700a1b17cb3f2328437cbc70a3ac543fab2c1e7d1d8014862d801e1eb11162',
+    sha256: CHECKSUM_TARGET_SHA256,
   });
   const userDataDir = '/tmp/AvaNevis';
   const artifact = getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog);
@@ -1132,14 +1300,81 @@ test('validate summary model accepts installed model and runtime with matching c
 
   assert.equal(status.features.summary.status, 'ready');
   assert.equal(status.features.summary.setupComplete, true);
-  assert.equal(status.features.summary.cache.checksumStatus, 'notChecked');
+  assert.equal(status.features.summary.cache.checksumStatus, 'match');
   assert.equal(status.features.summary.runtimeCache.installed, true);
+});
+
+test('ready summary status remains checksum-backed during passive refresh', async () => {
+  const fsModule = createMemoryFs();
+  const catalog = createCatalogWithPinnedSummaryArtifact({
+    sha256: CHECKSUM_TARGET_SHA256,
+  });
+  const userDataDir = '/tmp/AvaNevis';
+  const artifact = getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog);
+  const artifactPath = getSummaryArtifactPath(userDataDir, artifact);
+  fsModule.mkdirSync(path.dirname(artifactPath));
+  fsModule.writeFileSync(artifactPath, 'tampered model\n');
+  const runtimeExecutable = getSummaryRuntimeExecutablePath(userDataDir, artifact, catalog.summary.runtimeArtifacts['win32-x64']);
+  fsModule.mkdirSync(path.dirname(runtimeExecutable));
+  fsModule.writeFileSync(runtimeExecutable, 'bin');
+  await validateSummaryModel({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    modelId: 'summary-model',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog,
+  });
+
+  const status = await checkAiAddonSetupStatus({ userDataDir, platform: 'win32', arch: 'x64', safeStorage: createSafeStorage(), fsModule, catalog });
+
+  assert.equal(status.features.summary.status, 'error');
+  assert.equal(status.features.summary.setupComplete, false);
+  assert.equal(status.features.summary.cache.checksumStatus, 'mismatch');
+});
+
+test('passive summary status keeps healthy setup complete without rehashing model', async () => {
+  const fsModule = createMemoryFs();
+  const catalog = createCatalogWithPinnedSummaryArtifact({
+    sha256: CHECKSUM_TARGET_SHA256,
+  });
+  const userDataDir = '/tmp/AvaNevis';
+  const artifact = getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog);
+  const artifactPath = getSummaryArtifactPath(userDataDir, artifact);
+  fsModule.mkdirSync(path.dirname(artifactPath));
+  fsModule.writeFileSync(artifactPath, 'checksum target\n');
+  const runtimeExecutable = getSummaryRuntimeExecutablePath(userDataDir, artifact, catalog.summary.runtimeArtifacts['win32-x64']);
+  fsModule.mkdirSync(path.dirname(runtimeExecutable));
+  fsModule.writeFileSync(runtimeExecutable, 'bin');
+  await validateSummaryModel({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    modelId: 'summary-model',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog,
+  });
+  const originalReadFileSync = fsModule.readFileSync.bind(fsModule);
+  fsModule.readFileSync = (filePath, encoding) => {
+    if (filePath === artifactPath) {
+      throw new Error('passive status should not hash model artifact');
+    }
+    return originalReadFileSync(filePath, encoding);
+  };
+
+  const status = await checkAiAddonSetupStatus({ userDataDir, platform: 'win32', arch: 'x64', safeStorage: createSafeStorage(), fsModule, catalog });
+
+  assert.equal(status.features.summary.status, 'ready');
+  assert.equal(status.features.summary.setupComplete, true);
+  assert.equal(status.features.summary.cache.checksumStatus, 'notChecked');
 });
 
 test('validate summary model smoke-tests runtime before ready state', async () => {
   const fsModule = createMemoryFs();
   const catalog = createCatalogWithPinnedSummaryArtifact({
-    sha256: 'a0700a1b17cb3f2328437cbc70a3ac543fab2c1e7d1d8014862d801e1eb11162',
+    sha256: CHECKSUM_TARGET_SHA256,
   });
   const userDataDir = '/tmp/AvaNevis';
   const artifact = getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog);
@@ -1171,7 +1406,7 @@ test('validate summary model smoke-tests runtime before ready state', async () =
 test('validate summary model reports smoke-test failure', async () => {
   const fsModule = createMemoryFs();
   const catalog = createCatalogWithPinnedSummaryArtifact({
-    sha256: 'a0700a1b17cb3f2328437cbc70a3ac543fab2c1e7d1d8014862d801e1eb11162',
+    sha256: CHECKSUM_TARGET_SHA256,
   });
   const userDataDir = '/tmp/AvaNevis';
   const artifact = getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog);
@@ -1222,7 +1457,7 @@ test('setup summary model uses pinned default metadata and fails if runtime inst
 test('setup summary model downloads explicit runtime and model artifacts only when metadata is pinned', async () => {
   const fsModule = createMemoryFs();
   const catalog = createCatalogWithPinnedSummaryArtifact({
-    sha256: 'a0700a1b17cb3f2328437cbc70a3ac543fab2c1e7d1d8014862d801e1eb11162',
+    sha256: CHECKSUM_TARGET_SHA256,
   });
   const downloadedUrls = [];
   const runtimeArtifact = catalog.summary.runtimeArtifacts['win32-x64'];
@@ -1262,7 +1497,7 @@ test('setup summary model downloads explicit runtime and model artifacts only wh
 test('setup summary model uses Hugging Face downloader for pinned Hugging Face model artifacts', async () => {
   const fsModule = createMemoryFs();
   const catalog = createCatalogWithPinnedSummaryArtifact({
-    sha256: 'a0700a1b17cb3f2328437cbc70a3ac543fab2c1e7d1d8014862d801e1eb11162',
+    sha256: CHECKSUM_TARGET_SHA256,
   });
   const runtimeArtifact = catalog.summary.runtimeArtifacts['win32-x64'];
   const artifact = getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog);
@@ -1283,6 +1518,7 @@ test('setup summary model uses Hugging Face downloader for pinned Hugging Face m
     },
     huggingFaceDownloader: async ({ artifact: downloadedArtifact, destinationPath, userDataDir, pythonExe, backendPath, onProgress }) => {
       calls.push({ type: 'huggingface', artifact: downloadedArtifact, userDataDir, pythonExe, backendPath });
+      assert.equal(downloadedArtifact.sha256, CHECKSUM_TARGET_SHA256);
       fsModule.writeFileSync(destinationPath, 'checksum target\n');
       onProgress({ downloaded: 1234, total: 1234, percent: 100 });
     },
@@ -1302,7 +1538,7 @@ test('setup summary model uses Hugging Face downloader for pinned Hugging Face m
 test('setup summary model records downloader failures and removes temp model downloads', async () => {
   const fsModule = createMemoryFs();
   const catalog = createCatalogWithPinnedSummaryArtifact({
-    sha256: 'a0700a1b17cb3f2328437cbc70a3ac543fab2c1e7d1d8014862d801e1eb11162',
+    sha256: CHECKSUM_TARGET_SHA256,
   });
   const artifact = getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog);
   const tempModelPath = `${getSummaryArtifactPath('/tmp/AvaNevis', artifact)}.download`;
@@ -1337,7 +1573,7 @@ test('setup summary model records downloader failures and removes temp model dow
 test('setup summary model cancellation cleans partial cache and resets state', async () => {
   const fsModule = createMemoryFs();
   const catalog = createCatalogWithPinnedSummaryArtifact({
-    sha256: 'a0700a1b17cb3f2328437cbc70a3ac543fab2c1e7d1d8014862d801e1eb11162',
+    sha256: CHECKSUM_TARGET_SHA256,
   });
   const artifact = getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog);
   const controller = new AbortController();
@@ -1372,7 +1608,7 @@ test('setup summary model cancellation cleans partial cache and resets state', a
 test('summary validation failure removes runtime installed during failed setup', async () => {
   const fsModule = createMemoryFs();
   const catalog = createCatalogWithPinnedSummaryArtifact({
-    sha256: 'a0700a1b17cb3f2328437cbc70a3ac543fab2c1e7d1d8014862d801e1eb11162',
+    sha256: CHECKSUM_TARGET_SHA256,
   });
   const artifact = getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog);
   const runtimeDir = getSummaryRuntimeDir('/tmp/AvaNevis', artifact);
@@ -1400,7 +1636,7 @@ test('summary validation failure removes runtime installed during failed setup',
 test('summary cancellation during validation preserves pre-existing ready cache', async () => {
   const fsModule = createMemoryFs();
   const catalog = createCatalogWithPinnedSummaryArtifact({
-    sha256: 'a0700a1b17cb3f2328437cbc70a3ac543fab2c1e7d1d8014862d801e1eb11162',
+    sha256: CHECKSUM_TARGET_SHA256,
   });
   const artifact = getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog);
   const artifactPath = getSummaryArtifactPath('/tmp/AvaNevis', artifact);
@@ -1438,7 +1674,7 @@ test('summary cancellation during validation preserves pre-existing ready cache'
 test('remove summary model clears cache and manifest state', async () => {
   const fsModule = createMemoryFs();
   const catalog = createCatalogWithPinnedSummaryArtifact({
-    sha256: 'a0700a1b17cb3f2328437cbc70a3ac543fab2c1e7d1d8014862d801e1eb11162',
+    sha256: CHECKSUM_TARGET_SHA256,
   });
   await setupSummaryModel({
     userDataDir: '/tmp/AvaNevis',

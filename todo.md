@@ -68,6 +68,7 @@ Goal: add optional post-install local speaker diarization and transcript summari
 - 2026-05-16: Fixed summary setup validation warning from `python -m summaries.summary_runner` by lazy-loading runner exports from the summaries package, and tightened Settings AI add-on button states so Validate/Remove only enable when a local install or partial setup exists. Partial cache detection now covers managed diarization dependencies plus summary model/runtime directories.
 - 2026-05-16: Review follow-up: AI add-on action failures now refresh setup status from disk before restoring controls, macOS diarization setup preflights Command Line Tools before source-building pyannote transitive dependencies, and button-state tests cover removed/partial setup states.
 - 2026-05-17: Added a Hugging Face `huggingface_hub`/`hf_xet` summary model downloader for public GGUF artifacts on packaged Windows/macOS, kept it unauthenticated and checksum-verified, fixed cancellation to wait for downloader subprocess exit before cleanup, and added PyTorch 2.6+ pyannote load compatibility. `npm test`, `npm run test:python`, targeted syntax checks, and `git diff --check` passed.
+- 2026-05-17: Completed post-review hardening before manual smoke: summary runtime `tar.gz` listings are validated before extraction, diarization dependency source builds are limited to pinned curated `julius`, token/path redaction is stronger across JS/Python progress, Hugging Face summary downloads are destination-confined and checksum-verified before move, summary generation no longer trusts renderer-provided model IDs, summary readiness is checksum-backed for generation while passive status still reports healthy installs as complete, renderer CSP is set with inline style attributes explicitly allowed for existing startup state, macOS helper entitlement and CoreAudio/ScreenCaptureKit edge cases were tightened, and Qwen summary prompts explicitly disable thinking output. Fixed validation regressions in tar listing parsing, passive checksum-mismatch status, and HF downloader tests. `npm test`, `npm run test:python`, and `git diff --check origin/master...HEAD` passed.
 
 ## V1 Model Defaults
 
@@ -191,6 +192,7 @@ Skipped by product direction. Proceed with the V1 Model Defaults above and keep 
 - [x] Run `npm run test:python`.
 - [ ] Run Windows CUDA manual smoke tests on RTX 4070.
 - [ ] Run macOS manual smoke tests on M4 Pro.
+- [ ] Verify final packaged macOS `.app` still bundles, signs, and entitles `Contents/Resources/bin/audiocapture-helper` after post-builder processing.
 - [ ] Validate no network calls happen except explicit model downloads and update checks. (Documented manual checklist; live network validation remains pending.)
 - [ ] Validate 1-2 hour meetings with 2-4 speakers.
 

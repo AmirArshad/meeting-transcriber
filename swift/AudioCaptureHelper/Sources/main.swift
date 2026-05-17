@@ -559,7 +559,7 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
             return nil
         }
 
-        if isInterleaved {
+        if isInterleaved && audioBuffers.count == 1 {
             return interleavedDataFromSingleBuffer(
                 audioBuffers[0],
                 frameCount: numSamples,
@@ -896,6 +896,7 @@ class CoreAudioTapCapture: SystemAudioCaptureBackend {
         aggregateDeviceID = createdAggregateID
 
         setAggregateNominalSampleRateIfPossible()
+        try verifyAggregateNominalSampleRate()
 
         sendJSON([
             "type": "stream_config",
@@ -1087,6 +1088,45 @@ class CoreAudioTapCapture: SystemAudioCaptureBackend {
                 "osStatusText": osStatusDescription(status),
                 "tapSampleRate": streamFormat.mSampleRate,
             ])
+        }
+    }
+
+    private func readAggregateNominalSampleRate() throws -> Float64 {
+        var sampleRate = Float64(0)
+        var size = UInt32(MemoryLayout<Float64>.size)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyNominalSampleRate,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let status = AudioObjectGetPropertyData(
+            aggregateDeviceID,
+            &address,
+            0,
+            nil,
+            &size,
+            &sampleRate
+        )
+
+        guard status == noErr else {
+            throw makeCoreAudioError("AudioObjectGetPropertyData(kAudioDevicePropertyNominalSampleRate) failed", status: status)
+        }
+        return sampleRate
+    }
+
+    private func verifyAggregateNominalSampleRate() throws {
+        let expectedSampleRate = Float64(config.sampleRate)
+        var actualSampleRate = try readAggregateNominalSampleRate()
+        for attempt in 0..<3 where abs(actualSampleRate - expectedSampleRate) > 1.0 {
+            usleep(useconds_t((attempt + 1) * 10_000))
+            actualSampleRate = try readAggregateNominalSampleRate()
+        }
+        guard abs(actualSampleRate - expectedSampleRate) <= 2.0 else {
+            throw NSError(
+                domain: "AudioCaptureHelper.CoreAudio",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "CoreAudio tap sample rate mismatch: expected \(config.sampleRate) Hz, got \(String(format: "%.1f", actualSampleRate)) Hz"]
+            )
         }
     }
 

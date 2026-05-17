@@ -138,12 +138,22 @@ const DIARIZATION_DEPENDENCY_ARTIFACTS = deepFreeze({
     pip: {
       indexUrl: 'https://pypi.org/simple',
       extraIndexUrls: ['https://download.pytorch.org/whl/cu126'],
-      allowSourceBuilds: true,
+      allowSourceBuilds: false,
+      sourceArtifacts: [
+        {
+          package: 'julius',
+          version: '0.2.7',
+          fileName: 'julius-0.2.7.tar.gz',
+          url: 'https://files.pythonhosted.org/packages/a1/19/c9e1596b5572c786b93428d0904280e964c930fae7e6c9368ed9e1b63922/julius-0.2.7.tar.gz',
+          sha256: '3c0f5f5306d7d6016fcc95196b274cae6f07e2c9596eed314e4e7641554fbb08',
+        },
+      ],
       requirements: [
         'pyannote.audio==4.0.1',
         'torch==2.8.0+cu126',
         'torchaudio==2.8.0+cu126',
         'torchcodec==0.7.0',
+        'julius==0.2.7',
       ],
     },
     validationStatus: 'ready',
@@ -162,12 +172,22 @@ const DIARIZATION_DEPENDENCY_ARTIFACTS = deepFreeze({
     pip: {
       indexUrl: 'https://pypi.org/simple',
       extraIndexUrls: [],
-      allowSourceBuilds: true,
+      allowSourceBuilds: false,
+      sourceArtifacts: [
+        {
+          package: 'julius',
+          version: '0.2.7',
+          fileName: 'julius-0.2.7.tar.gz',
+          url: 'https://files.pythonhosted.org/packages/a1/19/c9e1596b5572c786b93428d0904280e964c930fae7e6c9368ed9e1b63922/julius-0.2.7.tar.gz',
+          sha256: '3c0f5f5306d7d6016fcc95196b274cae6f07e2c9596eed314e4e7641554fbb08',
+        },
+      ],
       requirements: [
         'pyannote.audio==4.0.1',
         'torch==2.8.0',
         'torchaudio==2.8.0',
         'torchcodec==0.7.0',
+        'julius==0.2.7',
       ],
     },
     validationStatus: 'ready',
@@ -454,6 +474,7 @@ function getDiarizationDependencyArtifactForPlatform(platform = process.platform
     pip: {
       ...(artifact.pip || {}),
       extraIndexUrls: Array.isArray(artifact.pip?.extraIndexUrls) ? [...artifact.pip.extraIndexUrls] : [],
+      sourceArtifacts: Array.isArray(artifact.pip?.sourceArtifacts) ? artifact.pip.sourceArtifacts.map((sourceArtifact) => ({ ...sourceArtifact })) : [],
       requirements: Array.isArray(artifact.pip?.requirements) ? [...artifact.pip.requirements] : [],
     },
   };

@@ -565,6 +565,14 @@ function validateDiarizationDependencyArtifact(artifact) {
       return 'Speaker identification dependency extra index URL host is not allowed.';
     }
   }
+  for (const sourceArtifact of artifact.pip.sourceArtifacts || []) {
+    if (!sourceArtifact.fileName || !sourceArtifact.url || !isPinnedSha256(sourceArtifact.sha256)) {
+      return 'Speaker identification dependency source artifact metadata is incomplete.';
+    }
+    if (!isAllowedDownloadUrl(sourceArtifact.url)) {
+      return 'Speaker identification dependency source artifact host is not allowed.';
+    }
+  }
   return null;
 }
 
@@ -781,7 +789,7 @@ async function checkSummaryModelCache({
     };
   }
 
-  if (!artifact.sha256) {
+  if (!isPinnedSha256(artifact.sha256)) {
     return {
       ...base,
       reason: 'Pinned summary artifact checksum is not configured.',
@@ -900,7 +908,7 @@ async function checkAiAddonSetupStatus({
     checkEncryptionAvailability: checkTokenEncryption,
   });
   const diarizationDependencyCache = checkDiarizationDependencyCache({ userDataDir, platform, arch, fsModule, catalog });
-  const summaryCache = await checkSummaryModelCache({
+  let summaryCache = await checkSummaryModelCache({
     userDataDir,
     platform,
     arch,
@@ -909,6 +917,19 @@ async function checkAiAddonSetupStatus({
     catalog,
     verifyChecksum: verifyChecksums,
   });
+  const summaryValidationText = [
+    status.features.summary.error,
+    status.features.summary.lastValidation && status.features.summary.lastValidation.message,
+  ].filter(Boolean).join(' ');
+  if (!verifyChecksums && status.features.summary.status === 'error' && summaryCache.installed && summaryCache.checksumStatus === 'notChecked' && /checksum/i.test(summaryValidationText)) {
+    summaryCache = {
+      ...summaryCache,
+      valid: false,
+      checksumStatus: 'mismatch',
+      validationStatus: 'error',
+      reason: status.features.summary.error || (status.features.summary.lastValidation && status.features.summary.lastValidation.message) || 'Summary model artifact checksum does not match the pinned checksum.',
+    };
+  }
   const summaryRuntimeCache = checkSummaryRuntimeCache({
     userDataDir,
     platform,
@@ -937,7 +958,7 @@ async function checkAiAddonSetupStatus({
     artifact: getSummaryArtifactForPlatform(summary.modelId, platform, arch, catalog),
     cache: summaryCache,
     runtimeCache: summaryRuntimeCache,
-    setupComplete: summary.status === 'ready' && summaryCache.installed && summaryRuntimeCache.installed,
+    setupComplete: summary.status === 'ready' && summaryCache.valid === true && summaryCache.checksumStatus !== 'mismatch' && summaryRuntimeCache.valid === true,
   };
   summaryWithStorage.storage = buildSummaryStorageFootprint({
     userDataDir,
@@ -987,6 +1008,18 @@ function buildFeatureUpdates({ status, modelId, speakerCount, artifactId, profil
 
 function buildDiarizationDependencyInstallArgs({ artifact, targetDir }) {
   const pip = artifact && artifact.pip ? artifact.pip : {};
+  const installedSourceArtifacts = (pip.sourceArtifacts || [])
+    .filter((sourceArtifact) => sourceArtifact && sourceArtifact.localPath);
+  const sourceArtifactPaths = installedSourceArtifacts
+    .map((sourceArtifact) => sourceArtifact.localPath)
+    .filter(Boolean);
+  const sourceArtifactPackages = new Set(installedSourceArtifacts
+    .map((sourceArtifact) => String(sourceArtifact && sourceArtifact.package || '').toLowerCase())
+    .filter(Boolean));
+  const requirements = (pip.requirements || []).filter((requirement) => {
+    const packageName = String(requirement || '').split(/[<>=!~\[]/)[0].trim().toLowerCase();
+    return !sourceArtifactPackages.has(packageName);
+  });
   const args = [
     '-m',
     'pip',
@@ -1006,8 +1039,83 @@ function buildDiarizationDependencyInstallArgs({ artifact, targetDir }) {
   if (!pip.allowSourceBuilds) {
     args.push('--only-binary=:all:');
   }
-  args.push(...pip.requirements);
+  const sourceBuildPackages = installedSourceArtifacts
+    .map((sourceArtifact) => sourceArtifact && sourceArtifact.package)
+    .filter(Boolean);
+  if (sourceBuildPackages.length) {
+    args.push(`--no-binary=${sourceBuildPackages.join(',')}`);
+  }
+  args.push(...requirements, ...sourceArtifactPaths);
   return args;
+}
+
+async function downloadDiarizationSourceArtifacts({ artifact, dependencyDir, downloader = downloadFile, fsModule = fs, emitProgress, cancelSignal } = {}) {
+  const sourceArtifacts = artifact && artifact.pip && Array.isArray(artifact.pip.sourceArtifacts)
+    ? artifact.pip.sourceArtifacts
+    : [];
+  if (!sourceArtifacts.length) {
+    return artifact;
+  }
+
+  const sourceDir = path.join(dependencyDir, 'source-artifacts');
+  const mkdirSync = bindFsMethod(fsModule, 'mkdirSync');
+  const renameSync = bindFsMethod(fsModule, 'renameSync');
+  const unlinkSync = bindFsMethod(fsModule, 'unlinkSync');
+  if (!mkdirSync || !renameSync) {
+    throw new Error('File system does not support installing speaker identification source artifacts.');
+  }
+  mkdirSync(sourceDir, { recursive: true });
+
+  const installedSourceArtifacts = [];
+  for (let index = 0; index < sourceArtifacts.length; index += 1) {
+    const sourceArtifact = sourceArtifacts[index];
+    const artifactPath = path.join(sourceDir, sourceArtifact.fileName);
+    const tempPath = `${artifactPath}.download`;
+    emitSafeProgress(emitProgress, {
+      feature: 'diarization',
+      phase: 'downloading-dependencies',
+      message: `Downloading pinned speaker dependency source artifact ${index + 1} of ${sourceArtifacts.length}.`,
+      percent: 8 + Math.round((index / sourceArtifacts.length) * 10),
+    });
+    try {
+      await downloader({
+        url: sourceArtifact.url,
+        destinationPath: tempPath,
+        cancelSignal,
+        onProgress: (progress) => emitSafeProgress(emitProgress, {
+          feature: 'diarization',
+          phase: 'downloading-dependencies',
+          message: `Downloading pinned speaker dependency source artifact ${index + 1} of ${sourceArtifacts.length}.`,
+          percent: 8 + Math.round(((index + ((progress.percent || 0) / 100)) / sourceArtifacts.length) * 10),
+          downloadedBytes: progress.downloaded,
+          totalBytes: progress.total,
+        }),
+      });
+      const actualSha256 = await hashFileSha256(tempPath, fsModule);
+      if (actualSha256 !== sourceArtifact.sha256) {
+        throw new Error(`Pinned speaker dependency source artifact checksum mismatch for ${sourceArtifact.fileName}.`);
+      }
+      renameSync(tempPath, artifactPath);
+      installedSourceArtifacts.push({ ...sourceArtifact, localPath: artifactPath });
+    } catch (error) {
+      if (unlinkSync) {
+        try {
+          unlinkSync(tempPath);
+        } catch (cleanupError) {
+          // Best effort cleanup only.
+        }
+      }
+      throw error;
+    }
+  }
+
+  return {
+    ...artifact,
+    pip: {
+      ...artifact.pip,
+      sourceArtifacts: installedSourceArtifacts,
+    },
+  };
 }
 
 function summarizePipProgress(output) {
@@ -1024,16 +1132,20 @@ function installDiarizationDependenciesWithPip({ pythonExe = 'python', artifact,
     }
 
     const child = spawn(pythonExe, buildDiarizationDependencyInstallArgs({ artifact, targetDir }), { windowsHide: true });
+    const maxBufferedOutput = 64 * 1024;
     let errorOutput = '';
     let settled = false;
+    let cancelError = null;
+    let cancelFallbackTimer = null;
 
-    const cleanupCancel = onAiAddonCancel(cancelSignal, (cancelError) => {
-      if (settled) {
+    const cleanupCancel = onAiAddonCancel(cancelSignal, (abortError) => {
+      if (settled || cancelError) {
         return;
       }
-      settled = true;
+      cancelError = abortError;
       forceKillChildProcess(child);
-      reject(cancelError);
+      cancelFallbackTimer = setTimeout(() => finish(reject, cancelError), 5000);
+      cancelFallbackTimer.unref?.();
     });
 
     const finish = (callback, value) => {
@@ -1041,6 +1153,9 @@ function installDiarizationDependenciesWithPip({ pythonExe = 'python', artifact,
         return;
       }
       settled = true;
+      if (cancelFallbackTimer) {
+        clearTimeout(cancelFallbackTimer);
+      }
       cleanupCancel();
       callback(value);
     };
@@ -1048,6 +1163,9 @@ function installDiarizationDependenciesWithPip({ pythonExe = 'python', artifact,
     const handleOutput = (data) => {
       const text = data.toString();
       errorOutput += text;
+      if (errorOutput.length > maxBufferedOutput) {
+        errorOutput = errorOutput.slice(-maxBufferedOutput);
+      }
       const message = summarizePipProgress(text);
       if (message && typeof onProgress === 'function') {
         onProgress(message);
@@ -1058,6 +1176,10 @@ function installDiarizationDependenciesWithPip({ pythonExe = 'python', artifact,
     child.stderr.on('data', handleOutput);
     child.on('error', (error) => finish(reject, error));
     child.on('close', (code) => {
+      if (cancelError) {
+        finish(reject, cancelError);
+        return;
+      }
       if (code === 0) {
         finish(resolve, { success: true });
         return;
@@ -1089,7 +1211,8 @@ function checkMacOSCompilerToolchain({ platform = process.platform, execFileFn =
 }
 
 async function assertDiarizationSourceBuildToolchain({ platform = process.platform, artifact, toolchainChecker = checkMacOSCompilerToolchain } = {}) {
-  if (platform !== 'darwin' || !artifact || !artifact.pip || !artifact.pip.allowSourceBuilds) {
+  const hasCuratedSourceArtifacts = Boolean(artifact && artifact.pip && Array.isArray(artifact.pip.sourceArtifacts) && artifact.pip.sourceArtifacts.length > 0);
+  if (platform !== 'darwin' || !artifact || !artifact.pip || (!artifact.pip.allowSourceBuilds && !hasCuratedSourceArtifacts)) {
     return;
   }
 
@@ -1125,7 +1248,9 @@ async function installDiarizationDependencies({
   now = () => new Date().toISOString(),
   emitProgress,
   pythonExe,
+  downloader = downloadFile,
   dependencyInstaller = installDiarizationDependenciesWithPip,
+  downloadSourceArtifacts = dependencyInstaller === installDiarizationDependenciesWithPip,
   toolchainChecker = checkMacOSCompilerToolchain,
   cancelSignal,
 } = {}) {
@@ -1171,10 +1296,20 @@ async function installDiarizationDependencies({
   });
 
   try {
-    await assertDiarizationSourceBuildToolchain({ platform, artifact, toolchainChecker });
+    const installArtifact = downloadSourceArtifacts
+      ? await downloadDiarizationSourceArtifacts({
+        artifact,
+        dependencyDir,
+        downloader,
+        fsModule,
+        emitProgress,
+        cancelSignal,
+      })
+      : artifact;
+    await assertDiarizationSourceBuildToolchain({ platform, artifact: installArtifact, toolchainChecker });
     await dependencyInstaller({
       pythonExe,
-      artifact,
+      artifact: installArtifact,
       targetDir: sitePackagesDir,
       cancelSignal,
       onProgress: (message) => emitSafeProgress(emitProgress, {
@@ -1201,6 +1336,12 @@ async function installDiarizationDependencies({
     package: artifact.package,
     version: artifact.version,
     requirements: artifact.pip.requirements,
+    sourceArtifacts: (artifact.pip.sourceArtifacts || []).map((sourceArtifact) => ({
+      package: sourceArtifact.package,
+      version: sourceArtifact.version,
+      fileName: sourceArtifact.fileName,
+      sha256: sourceArtifact.sha256,
+    })),
     installedAt: now(),
   }, null, 2)}\n`);
 
@@ -1340,7 +1481,9 @@ async function setupDiarizationAddon({
   emitProgress,
   runtimeValidator,
   pythonExe,
+  downloader = downloadFile,
   dependencyInstaller,
+  downloadSourceArtifacts,
   toolchainChecker,
   cancelSignal,
 } = {}) {
@@ -1499,6 +1642,8 @@ async function setupDiarizationAddon({
       now,
       emitProgress,
       pythonExe,
+      downloader,
+      downloadSourceArtifacts,
       dependencyInstaller,
       toolchainChecker,
       cancelSignal,
@@ -1652,7 +1797,7 @@ function validateSummarySetupArtifact(artifact) {
   if (!artifact.fileName) {
     return 'Summary setup artifact filename is not configured.';
   }
-  if (!artifact.sha256) {
+  if (!isPinnedSha256(artifact.sha256)) {
     return 'Pinned summary artifact checksum is not configured.';
   }
   if (!artifact.downloadUrl) {
@@ -1695,13 +1840,16 @@ async function downloadHuggingFaceSummaryArtifact({ artifact, destinationPath, e
   throwIfAiAddonCanceled(cancelSignal, 'Summary model setup was canceled.');
   const source = artifact.source;
   const cacheRoot = path.join(getAiAddonPaths(userDataDir).rootDir, 'huggingface-cache');
+  const destinationRoot = path.dirname(path.resolve(destinationPath));
   const args = [
     '-m', 'summaries.hf_model_downloader',
     '--repo', source.repo,
     '--revision', source.revision,
     '--filename', source.fileName,
     '--destination', destinationPath,
+    '--destination-root', destinationRoot,
     '--expected-size', String(expectedSizeBytes || source.sizeBytes || 0),
+    '--expected-sha256', artifact.sha256,
     '--cache-root', cacheRoot,
   ];
 
@@ -1951,20 +2099,106 @@ function extractZipArchive(archivePath, destinationDir) {
   zip.extractAllTo(resolvedDestination, true);
 }
 
-function extractTarGzArchive(archivePath, destinationDir) {
+function validateTarEntryName(entryName, destinationDir) {
+  const normalizedEntryName = String(entryName || '').trim().replace(/\\/g, '/');
+  if (!normalizedEntryName) {
+    return;
+  }
+  if (normalizedEntryName.startsWith('/') || path.isAbsolute(normalizedEntryName)) {
+    throw new Error('Archive contains an unsafe absolute path.');
+  }
+
+  const parts = normalizedEntryName.split('/').filter(Boolean);
+  if (parts.some((part) => part === '..')) {
+    throw new Error('Archive contains an unsafe path traversal entry.');
+  }
+
+  const resolvedDestination = path.resolve(destinationDir);
+  const resolvedEntryPath = path.resolve(resolvedDestination, normalizedEntryName);
+  if (resolvedEntryPath !== resolvedDestination && !resolvedEntryPath.startsWith(`${resolvedDestination}${path.sep}`)) {
+    throw new Error('Archive contains an unsafe path traversal entry.');
+  }
+}
+
+function parseTarListingLine(line) {
+  const text = String(line || '').trim();
+  if (!text) {
+    return null;
+  }
+
+  const mode = text.slice(0, 10);
+  const type = mode[0];
+  const tokens = text.split(/\s+/);
+  if (tokens.length < 6) {
+    throw new Error('Runtime archive contains an unparseable tar listing entry.');
+  }
+
+  const timeIndex = tokens.findIndex((token, index) => index > 0 && /^\d{1,2}:\d{2}(?::\d{2})?$/.test(token));
+  const monthIndex = tokens.findIndex((token, index) => index > 0 && /^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)$/i.test(token));
+  let nameStartIndex = timeIndex >= 0 ? timeIndex + 1 : -1;
+  if (nameStartIndex < 0 && monthIndex >= 0 && tokens.length > monthIndex + 3) {
+    nameStartIndex = monthIndex + 3;
+  }
+  if (nameStartIndex < 0 || nameStartIndex >= tokens.length) {
+    throw new Error('Runtime archive contains an unparseable tar listing entry.');
+  }
+  let name = tokens.slice(nameStartIndex).join(' ');
+  const linkIndex = name.indexOf(' -> ');
+  const linkTarget = linkIndex >= 0 ? name.slice(linkIndex + 4) : null;
+  if (linkIndex >= 0) {
+    name = name.slice(0, linkIndex);
+  }
+
+  return { type, name, linkTarget };
+}
+
+function validateTarListing(listingOutput, destinationDir) {
+  const entries = String(listingOutput || '').split(/\r?\n/).map(parseTarListingLine).filter(Boolean);
+  if (!entries.length) {
+    throw new Error('Runtime archive did not contain any extractable entries.');
+  }
+
+  for (const entry of entries) {
+    validateTarEntryName(entry.name, destinationDir);
+    if (!['-', 'd', 'l', 'x', 'g'].includes(entry.type)) {
+      throw new Error('Archive contains an unsupported file type.');
+    }
+    if (entry.type === 'l') {
+      if (!entry.linkTarget) {
+        throw new Error('Archive contains an unsafe symlink entry.');
+      }
+      const linkTarget = String(entry.linkTarget).replace(/\\/g, '/');
+      if (linkTarget.startsWith('/') || path.isAbsolute(linkTarget) || linkTarget.split('/').some((part) => part === '..')) {
+        throw new Error('Archive contains an unsafe symlink entry.');
+      }
+      const linkBase = path.dirname(entry.name);
+      validateTarEntryName(path.join(linkBase, linkTarget), destinationDir);
+    }
+  }
+}
+
+function runTarCommand(args) {
   return new Promise((resolve, reject) => {
-    const tar = spawn('tar', ['-xzf', archivePath, '-C', destinationDir], { windowsHide: true });
+    const tar = spawn('tar', args, { windowsHide: true });
+    let stdout = '';
     let errorOutput = '';
+    tar.stdout.on('data', (data) => { stdout += data.toString(); });
     tar.stderr.on('data', (data) => { errorOutput += data.toString(); });
     tar.on('error', reject);
     tar.on('close', (code) => {
       if (code === 0) {
-        resolve();
+        resolve(stdout);
         return;
       }
-      reject(new Error(errorOutput.trim() || `Failed to extract llama.cpp runtime archive: tar exited with code ${code}.`));
+      reject(new Error(errorOutput.trim() || `Failed to inspect llama.cpp runtime archive: tar exited with code ${code}.`));
     });
   });
+}
+
+async function extractTarGzArchive(archivePath, destinationDir, tarRunner = runTarCommand) {
+  const listingOutput = await tarRunner(['-tzvf', archivePath]);
+  validateTarListing(listingOutput, destinationDir);
+  await tarRunner(['-xzf', archivePath, '-C', destinationDir]);
 }
 
 async function extractRuntimeArchive(archivePath, destinationDir, archiveFormat) {
@@ -2262,7 +2496,7 @@ async function validateSummaryModel({
     percent: status === 'ready' ? 100 : undefined,
   });
 
-  return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
+  return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, verifyChecksums: true });
 }
 
 async function setupSummaryModel({
@@ -2661,6 +2895,8 @@ module.exports = {
   downloadFile,
   downloadHuggingFaceSummaryArtifact,
   extractZipArchive,
+  extractTarGzArchive,
+  validateTarListing,
   getDiarizationTokenStatus,
   getDiarizationDependencySitePackagesDir,
   getDiarizationModelCacheDir,
@@ -2673,6 +2909,7 @@ module.exports = {
   isAiAddonCancelError,
   isLikelyHuggingFaceToken,
   installDiarizationDependencies,
+  downloadDiarizationSourceArtifacts,
   removeDiarizationSetup,
   removeSummaryModel,
   saveAiAddonManifest,

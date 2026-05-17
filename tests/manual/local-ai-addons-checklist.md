@@ -8,6 +8,7 @@ Use this checklist when validating speaker identification or local summaries on 
 - [ ] Confirm network activity occurs only when the user explicitly starts summary model/runtime setup, Whisper model setup, CUDA setup, or update checks.
 - [ ] Confirm pyannote/PyTorch dependency downloads occur only when the user explicitly starts speaker identification setup.
 - [ ] Confirm Hugging Face token values never appear in logs, progress events, meeting metadata, transcripts, or summaries.
+- [ ] Confirm bearer tokens, legacy `Authorization: token ...`, `token=` / `access_token=` / `api_key=` values, `X-Api-Key`, and URL credentials are redacted from setup/runtime errors.
 
 ## Windows CUDA Speaker Identification
 
@@ -44,8 +45,10 @@ Use this checklist when validating speaker identification or local summaries on 
 - [ ] Cancel summary setup during runtime download and confirm partial `.download` files and newly staged runtime artifacts are removed.
 - [ ] Cancel summary setup during validation after a previously ready install and confirm the existing model/runtime remain Ready.
 - [ ] Confirm the pinned llama.cpp runtime downloads, verifies, and extracts before the model is marked ready.
+- [ ] Confirm unsafe or unparseable ZIP/`tar.gz` runtime entries are rejected before extraction.
 - [ ] Confirm runtime archives extract into a cleaned staging directory and summary execution uses the extracted `llama-cli` location with adjacent native libraries intact.
 - [ ] Confirm the pinned GGUF model downloads through Hugging Face `huggingface_hub`/`hf_xet` on Hugging Face-hosted artifacts and checksum-verifies before Ready.
+- [ ] Confirm Hugging Face model downloads write temporary files only under the managed summary cache and checksum-verify before moving into place.
 - [ ] Cancel summary setup during the Hugging Face model download and confirm the downloader subprocess exits, partial files are removed, and no diarization token is used.
 - [ ] Generate a summary from Home after a saved transcript.
 - [ ] Generate or regenerate a summary from History.

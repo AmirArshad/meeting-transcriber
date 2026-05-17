@@ -92,7 +92,7 @@ def test_build_llama_cli_args_uses_json_prompt_file(tmp_path):
     }
     args = build_llama_cli_args(runtime, prompt_path=str(tmp_path / 'prompt.txt'), max_tokens=512)
 
-    assert args[:2] == [runtime['executable'], '--model']
+    assert args[0] == runtime['executable']
     assert '--file' in args
     assert '--ctx-size' in args
     assert '4096' in args

@@ -2109,7 +2109,7 @@ function terminateProcessBestEffort(proc) {
   }
 }
 
-function createAbortableComputeAction({ cancelSignal, cancelMessage, action }) {
+function createAbortableComputeAction({ cancelSignal, cancelMessage, action, waitTimeoutMs = 15000 }) {
   return new Promise((resolve, reject) => {
     if (cancelSignal && cancelSignal.aborted) {
       reject(createAiAddonCancelError(cancelMessage));
@@ -2118,33 +2118,58 @@ function createAbortableComputeAction({ cancelSignal, cancelMessage, action }) {
 
     let started = false;
     let settled = false;
+    let waitTimer = null;
+    const settle = (callback, value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (waitTimer) {
+        clearTimeout(waitTimer);
+      }
+      cleanup();
+      callback(value);
+    };
     const cleanup = cancelSignal && typeof cancelSignal.addEventListener === 'function'
       ? (() => {
         const handleAbort = () => {
-          if (settled || started) {
+          if (settled) {
             return;
           }
-          settled = true;
-          reject(createAiAddonCancelError(cancelMessage));
+          if (!started) {
+            settle(reject, createAiAddonCancelError(cancelMessage));
+          }
         };
         cancelSignal.addEventListener('abort', handleAbort, { once: true });
         return () => cancelSignal.removeEventListener('abort', handleAbort);
       })()
       : () => {};
 
+    if (waitTimeoutMs > 0) {
+      waitTimer = setTimeout(() => {
+        if (!settled && !started) {
+          settle(reject, new Error('Local AI setup validation is waiting for another AI job to finish. Try again after the current summary or speaker identification job completes.'));
+        }
+      }, waitTimeoutMs);
+      waitTimer.unref?.();
+    }
+
     enqueueAiComputeAction(async () => {
+      // If waitTimeoutMs rejected while this was queued, the queue still drains
+      // this no-op slot so later AI work is not blocked behind a stale action.
       if (settled) {
         return;
       }
       started = true;
-      cleanup();
+      if (waitTimer) {
+        clearTimeout(waitTimer);
+        waitTimer = null;
+      }
       try {
         const result = await action();
-        settled = true;
-        resolve(result);
+        settle(resolve, result);
       } catch (error) {
-        settled = true;
-        reject(error);
+        settle(reject, error);
       }
     });
   });
@@ -2245,6 +2270,7 @@ ipcMain.handle('get-ai-addon-status', async (event, options = {}) => checkAiAddo
   platform: process.platform,
   arch: process.arch,
   includeStorageSizes: Boolean(options && options.includeStorageSizes),
+  verifyChecksums: Boolean(options && options.verifyChecksums),
   checkTokenEncryption: false,
 }));
 
@@ -3045,7 +3071,10 @@ ipcMain.handle('generate-summary', async (event, options = {}) => {
     throw new Error('Summary model setup is not ready.');
   }
 
-  const selectedModelId = modelId || aiStatus.features.summary.modelId;
+  const selectedModelId = aiStatus.features.summary.modelId;
+  if (modelId && modelId !== selectedModelId) {
+    throw new Error('Summary model selection is managed by local setup. Validate or reinstall the selected model in Settings.');
+  }
   const artifact = getSummaryArtifactForPlatform(selectedModelId, process.platform, process.arch);
   if (!artifact) {
     throw new Error('No summary model artifact is available for this platform.');

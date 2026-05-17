@@ -92,6 +92,9 @@ def test_swift_helper_uses_coreaudio_tap_before_screencapturekit():
     assert 'AudioHardwareCreateAggregateDevice' in contents
     assert 'audioBuffer.mNumberChannels' in contents
     assert 'buffers.count > 1 || isNonInterleaved(streamFormat)' in contents
+    assert 'isInterleaved && audioBuffers.count == 1' in contents
+    assert 'verifyAggregateNominalSampleRate' in contents
+    assert 'usleep(useconds_t((attempt + 1) * 10_000))' in contents
     assert '--screencapturekit' in contents
 
 

@@ -168,6 +168,7 @@ def test_build_chunk_summary_prompt_includes_schema_and_transcript_chunk():
     assert 'Chunk 2 transcript' in prompt
     assert 'Speaker 1: Ship it' in prompt
     assert 'local-only' in prompt
+    assert 'Do not output <think> tags' in prompt
 
 
 def test_build_final_merge_prompt_validates_chunk_summaries():
@@ -178,6 +179,7 @@ def test_build_final_merge_prompt_validates_chunk_summaries():
     assert 'Merge these chunk summaries' in prompt
     assert 'Launch approved.' in prompt
     assert '"decisions": []' in prompt
+    assert 'Do not output <think> tags' in prompt
 
 
 def test_repair_summary_json_extracts_fenced_or_wrapped_json():

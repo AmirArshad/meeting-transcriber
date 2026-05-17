@@ -468,10 +468,14 @@ select.device-select {
   transition: border-color 0.15s var(--ease-out),
     background-color 0.15s var(--ease-out),
     box-shadow 0.15s var(--ease-out);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7180' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
-  background-position: right 10px center;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--text-tertiary) 50%),
+    linear-gradient(135deg, var(--text-tertiary) 50%, transparent 50%);
+  background-position:
+    calc(100% - 16px) center,
+    calc(100% - 10px) center;
   background-repeat: no-repeat;
-  background-size: 12px 12px;
+  background-size: 6px 6px, 6px 6px;
 }
 
 select.device-select:hover {

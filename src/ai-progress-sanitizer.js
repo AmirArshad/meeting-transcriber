@@ -15,6 +15,9 @@ function redactSensitiveText(value) {
   return String(value || '')
     .replace(/hf_[A-Za-z0-9_-]+/g, '[redacted-token]')
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [redacted-token]')
+    .replace(/(Authorization:\s*token\s+)[A-Za-z0-9._~+/=-]+/gi, '$1[redacted-token]')
+    .replace(/((?:access_)?token=|api_key=)[^&#\s]+/gi, '$1[redacted-token]')
+    .replace(/(X-Api-Key:\s*)[^\r\n\s]+/gi, '$1[redacted-token]')
     .replace(/(https?:\/\/)[^/?#@\s]+@/gi, '$1[redacted]@');
 }
 

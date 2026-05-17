@@ -271,11 +271,16 @@ def summary_json_schema_instruction() -> str:
 Use only evidence from the transcript. If an owner is not explicit, use "Unknown". Do not include markdown."""
 
 
+def no_thinking_instruction() -> str:
+    return "Do not use a thinking or reasoning section. Do not output <think> tags. Return the JSON object directly."
+
+
 def build_chunk_summary_prompt(chunk: Dict[str, Any], *, profile: str = "balanced") -> str:
     """Build the local LLM prompt for one transcript chunk."""
     profile_config = get_summary_profile(profile)
     return "\n\n".join([
         "You are AvaNevis, a local-only meeting summarizer. The transcript never leaves this device.",
+        no_thinking_instruction(),
         profile_config["instructions"],
         summary_json_schema_instruction(),
         f"Chunk {chunk.get('index', 1)} transcript:",
@@ -289,6 +294,7 @@ def build_final_merge_prompt(chunk_summaries: Iterable[Dict[str, Any]], *, profi
     normalized_summaries = [validate_summary_json(summary) for summary in chunk_summaries]
     return "\n\n".join([
         "You are AvaNevis, a local-only meeting summarizer. Merge these chunk summaries into one final meeting summary.",
+        no_thinking_instruction(),
         profile_config["instructions"],
         summary_json_schema_instruction(),
         "Validated chunk summaries JSON:",

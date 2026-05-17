@@ -283,7 +283,7 @@ def test_load_pyannote_pipeline_uses_scoped_torch_load_compat(monkeypatch):
 
 
 def test_emit_progress_redacts_token_values(capsys):
-    pipeline.emit_progress('loading model', 'Using hf_secret_token for setup', percent=120)
+    pipeline.emit_progress('loading model', 'Using hf_secret_token Authorization: token ghp_secret X-Api-Key: key123 api_key=third for setup', percent=120)
     captured = capsys.readouterr()
     event = json.loads(captured.err)
 
@@ -291,7 +291,7 @@ def test_emit_progress_redacts_token_values(capsys):
         'type': 'progress',
         'feature': 'diarization',
         'phase': 'loading-model',
-        'message': 'Using [redacted-token] for setup',
+        'message': 'Using [redacted-token] Authorization: token [redacted-token] X-Api-Key: [redacted-token] api_key=[redacted-token] for setup',
         'percent': 100.0,
     }
 

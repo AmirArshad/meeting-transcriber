@@ -169,7 +169,7 @@
       return 'The local summary model is still downloading. Wait for setup to finish before generating a summary.';
     }
     if (status === 'validating') {
-      return 'The local summary model is being validated. Try again after validation finishes.';
+      return reason || 'The local summary model is being validated. Try again after validation finishes.';
     }
     if (status === 'error') {
       return `${reason || 'Summary model setup failed.'} Try Install Model again, Validate, or Remove and reinstall the local model.`;

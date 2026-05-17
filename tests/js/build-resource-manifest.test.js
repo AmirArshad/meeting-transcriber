@@ -169,6 +169,10 @@ test('macOS helper entitlement parser requires inherit entitlement', () => {
     true,
   );
   assert.equal(
+    macOSHelperEntitlementsIncludeInherit('<key>com.apple.security.inherit</key><false/>'),
+    false,
+  );
+  assert.equal(
     macOSHelperEntitlementsIncludeInherit('<key>com.apple.security.cs.disable-library-validation</key><true/>'),
     false,
   );

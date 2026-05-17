@@ -127,13 +127,16 @@ test('catalog exposes managed diarization dependency artifacts for Windows CUDA 
   assert.equal(windowsArtifact.id, 'pyannote-audio-4.0.1-win32-x64-cuda-12.6');
   assert.equal(windowsArtifact.acceleration, 'cuda');
   assert.deepEqual(windowsArtifact.runtimeFamilies, ['pytorch-cuda']);
+  assert.equal(windowsArtifact.pip.allowSourceBuilds, false);
   assert.ok(windowsArtifact.pip.requirements.includes('torch==2.8.0+cu126'));
+  assert.ok(windowsArtifact.pip.sourceArtifacts.some((artifact) => artifact.package === 'julius' && artifact.sha256));
   assert.equal(macArtifact.id, 'pyannote-audio-4.0.1-darwin-arm64-mps');
   assert.equal(macArtifact.acceleration, 'mps');
   assert.deepEqual(macArtifact.runtimeFamilies, ['pytorch-mps']);
-  assert.equal(macArtifact.pip.allowSourceBuilds, true);
+  assert.equal(macArtifact.pip.allowSourceBuilds, false);
   assert.ok(macArtifact.pip.requirements.includes('torch==2.8.0'));
   assert.ok(macArtifact.pip.requirements.includes('torchcodec==0.7.0'));
+  assert.ok(macArtifact.pip.sourceArtifacts.some((artifact) => artifact.package === 'julius' && artifact.sha256));
   assert.equal(getDiarizationDependencyArtifactForPlatform('darwin', 'x64'), null);
 });
 

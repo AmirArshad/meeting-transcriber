@@ -187,6 +187,8 @@ test('parseAiBackendProgressLine returns redacted progress events only', () => {
     phase: 'loading model',
     message: 'Loading with hf_secret_token',
     percent: 120,
+    downloadedBytes: 600.9,
+    totalBytes: 500.1,
     transcriptText: 'do not expose',
     token: 'hf_secret_token',
   }), 'diarization');
@@ -196,6 +198,9 @@ test('parseAiBackendProgressLine returns redacted progress events only', () => {
     phase: 'loading-model',
     message: 'Loading with [redacted-token]',
     percent: 100,
+    // Progress bytes are floored and clamped so downloaded never exceeds total.
+    downloadedBytes: 500,
+    totalBytes: 500,
   });
   assert.equal(parseAiBackendProgressLine('not json', 'diarization'), null);
   assert.equal(parseAiBackendProgressLine('{"type":"progress","feature":"summary"}', 'diarization'), null);
@@ -203,12 +208,19 @@ test('parseAiBackendProgressLine returns redacted progress events only', () => {
 
 
 test('redactSensitiveText removes bearer tokens and URL credentials', () => {
-  const redacted = redactSensitiveText('Authorization: Bearer abc.DEF_123 https://user:secret@huggingface.co/model hf_secret_token');
+  const redacted = redactSensitiveText('Authorization: Bearer abc.DEF_123 Authorization: token ghp_secret X-Api-Key: key123 https://user:secret@huggingface.co/model?token=secret&access_token=other&api_key=third hf_secret_token');
 
   assert.equal(redacted.includes('abc.DEF_123'), false);
+  assert.equal(redacted.includes('ghp_secret'), false);
+  assert.equal(redacted.includes('key123'), false);
   assert.equal(redacted.includes('user:secret'), false);
+  assert.equal(redacted.includes('token=secret'), false);
+  assert.equal(redacted.includes('access_token=other'), false);
+  assert.equal(redacted.includes('api_key=third'), false);
   assert.equal(redacted.includes('hf_secret_token'), false);
   assert.match(redacted, /Bearer \[redacted-token]/);
+  assert.match(redacted, /Authorization: token \[redacted-token]/);
+  assert.match(redacted, /X-Api-Key: \[redacted-token]/);
   assert.match(redacted, /https:\/\/\[redacted]@huggingface\.co/);
 });
 

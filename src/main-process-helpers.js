@@ -233,6 +233,15 @@ function parseAiBackendProgressLine(line, expectedFeature = null) {
   if (Number.isFinite(parsed.percent)) {
     event.percent = Math.max(0, Math.min(100, Number(parsed.percent)));
   }
+  if (Number.isFinite(parsed.downloadedBytes) && parsed.downloadedBytes >= 0) {
+    event.downloadedBytes = Math.floor(parsed.downloadedBytes);
+  }
+  if (Number.isFinite(parsed.totalBytes) && parsed.totalBytes > 0) {
+    event.totalBytes = Math.floor(parsed.totalBytes);
+  }
+  if (event.totalBytes && event.downloadedBytes > event.totalBytes) {
+    event.downloadedBytes = event.totalBytes;
+  }
   if (Number.isInteger(parsed.chunkIndex)) {
     event.chunkIndex = parsed.chunkIndex;
   }

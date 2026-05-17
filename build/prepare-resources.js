@@ -235,7 +235,7 @@ function buildMacOSHelperVerificationCommands(helperPath) {
 }
 
 function macOSHelperEntitlementsIncludeInherit(entitlementsOutput) {
-  return String(entitlementsOutput || '').includes('com.apple.security.inherit');
+  return /<key>\s*com\.apple\.security\.inherit\s*<\/key>\s*<true\s*\/>/m.test(String(entitlementsOutput || ''));
 }
 
 function verifyMacOSHelperSignature(helperPath = path.join(BIN_DIR, SWIFT_HELPER_BINARY)) {
