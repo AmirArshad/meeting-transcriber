@@ -199,6 +199,13 @@ jobs:
           - Windows installer: `${{ steps.collect_assets.outputs.windows_name }}` (${{ steps.collect_assets.outputs.windows_size }})
           - macOS installer: `${{ steps.collect_assets.outputs.macos_name }}` (${{ steps.collect_assets.outputs.macos_size }})
 
+          ### What's New
+
+          - Renamed the app to AvaNevis.
+          - Redesigned the app with a sleeker, more modern interface.
+          - Reached full feature parity between the macOS and Windows versions.
+          - Introduced optional Speaker Identification and Meeting Summarisation powered by local models.
+
           ### Platform Support
 
           - Windows 10/11 x64
