@@ -91,8 +91,9 @@ def test_generate_summary_from_segments_skips_merge_for_single_chunk():
 
 
 def test_resolve_chunk_token_budget_uses_available_context_without_shrinking_profile():
-    assert resolve_chunk_token_budget({'contextTokens': 32768}, {'chunk_tokens': 16000, 'max_output_tokens': 1600}) == 27072
+    assert resolve_chunk_token_budget({'contextTokens': 32768}, {'chunk_tokens': 16000, 'max_output_tokens': 1600}) == 25168
     assert resolve_chunk_token_budget({'contextTokens': 8192}, {'chunk_tokens': 16000, 'max_output_tokens': 1600}) == 16000
+    assert resolve_chunk_token_budget({'contextTokens': 7600}, {'chunk_tokens': 16000, 'max_output_tokens': 1600}) == 16000
 
 
 def test_generate_summary_from_segments_retries_malformed_json_once():

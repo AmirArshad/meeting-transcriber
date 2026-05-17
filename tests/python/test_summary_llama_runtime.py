@@ -221,6 +221,20 @@ def test_strip_llama_prompt_echo_leaves_plain_generation_output():
     assert strip_llama_prompt_echo('{"summary":"ok"}', 'prompt') == '{"summary":"ok"}'
 
 
+def test_strip_llama_prompt_echo_does_not_strip_generated_prompt_text():
+    prompt_text = 'Return JSON like {"summary":"schema","topics":[]}.'
+    raw_output = f'{prompt_text}\n{{"summary":"generated","topics":[]}}'
+
+    assert strip_llama_prompt_echo(raw_output, prompt_text) == raw_output
+
+
+def test_strip_llama_prompt_echo_handles_crlf_echo():
+    prompt_text = 'Line one\nLine two'
+    raw_output = 'Loading model...\n> Line one\r\nLine two\n\n{"summary":"ok"}'
+
+    assert strip_llama_prompt_echo(raw_output, prompt_text) == '{"summary":"ok"}'
+
+
 def test_smoke_test_llama_runtime_rejects_failed_help(monkeypatch, tmp_path):
     class Result:
         returncode = 1

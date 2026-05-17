@@ -177,16 +177,32 @@ def summarize_llama_failure(result: subprocess.CompletedProcess[str], runtime: O
 
 
 def strip_llama_prompt_echo(raw_output: str, prompt_text: str) -> str:
+    """Remove llama-cli's interactive prompt echo when it is clearly present.
+
+    This is a safety net for the pinned llama-cli single-turn mode: some builds
+    echo the prompt after a leading ">" marker even with --no-display-prompt.
+    Avoid stripping arbitrary generated text that happens to contain the prompt.
+    """
     output = str(raw_output or "")
     prompt = str(prompt_text or "")
     if not output or not prompt:
         return output.strip()
 
-    prompt_index = output.find(prompt)
-    if prompt_index == -1:
-        return output.strip()
+    prompt_variants = [prompt]
+    if "\n" in prompt:
+        prompt_variants.append(prompt.replace("\n", "\r\n"))
+    if "\r\n" in prompt:
+        prompt_variants.append(prompt.replace("\r\n", "\n"))
 
-    return output[prompt_index + len(prompt):].strip()
+    for prompt_variant in prompt_variants:
+        prompt_index = output.find(prompt_variant)
+        if prompt_index == -1 or prompt_index > 8192:
+            continue
+        prefix = output[:prompt_index].rstrip()
+        if prefix.endswith(">"):
+            return output[prompt_index + len(prompt_variant):].strip()
+
+    return output.strip()
 
 
 def run_llama_prompt(

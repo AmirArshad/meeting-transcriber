@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import types
+import wave
 from pathlib import Path
 
 import pytest
@@ -147,6 +148,24 @@ def test_load_prepared_audio_for_pipeline_uses_torchaudio(monkeypatch, tmp_path)
     assert calls == [str(audio_path)]
 
 
+def write_wav(path: Path, *, seconds: int, sample_rate: int = 16000) -> None:
+    with wave.open(str(path), 'wb') as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(sample_rate)
+        handle.writeframes(b'\x00\x00' * sample_rate * seconds)
+
+
+def test_should_load_audio_in_memory_respects_duration_limit(tmp_path):
+    short_audio = tmp_path / 'short.wav'
+    long_audio = tmp_path / 'long.wav'
+    write_wav(short_audio, seconds=2)
+    write_wav(long_audio, seconds=4)
+
+    assert pipeline.should_load_audio_in_memory(short_audio, max_seconds=2) is True
+    assert pipeline.should_load_audio_in_memory(long_audio, max_seconds=2) is False
+
+
 def test_run_pyannote_diarization_passes_audio_from_memory(monkeypatch, tmp_path):
     audio_path = tmp_path / 'meeting.wav'
     audio_path.write_text('audio', encoding='utf-8')
@@ -160,6 +179,7 @@ def test_run_pyannote_diarization_passes_audio_from_memory(monkeypatch, tmp_path
     monkeypatch.setattr(pipeline, 'assert_required_device_available', lambda _device: object())
     monkeypatch.setattr(pipeline, 'load_pyannote_pipeline', lambda _model_ref, _token, **_kwargs: FakePipeline())
     monkeypatch.setattr(pipeline, 'move_pipeline_to_best_device', lambda _pipeline, required_device=None: required_device or 'cuda')
+    monkeypatch.setattr(pipeline, 'should_load_audio_in_memory', lambda _path: True)
     monkeypatch.setattr(pipeline, 'load_prepared_audio_for_pipeline', lambda path: {'waveform': str(path), 'sample_rate': 16000})
 
     speaker_segments, annotation_source, device = pipeline.run_pyannote_diarization(
@@ -174,6 +194,31 @@ def test_run_pyannote_diarization_passes_audio_from_memory(monkeypatch, tmp_path
     assert annotation_source == 'exclusive_speaker_diarization'
     assert device == 'cuda'
     assert calls == [({'waveform': str(audio_path), 'sample_rate': 16000}, {'num_speakers': 2})]
+
+
+def test_run_pyannote_diarization_uses_file_path_for_long_audio(monkeypatch, tmp_path):
+    audio_path = tmp_path / 'meeting.wav'
+    audio_path.write_text('audio', encoding='utf-8')
+    calls = []
+
+    class FakePipeline:
+        def __call__(self, audio_input, **kwargs):
+            calls.append((audio_input, kwargs))
+            return {'exclusive_speaker_diarization': [{'start': 0, 'end': 1, 'speaker': 'SPEAKER_00'}]}
+
+    monkeypatch.setattr(pipeline, 'assert_required_device_available', lambda _device: object())
+    monkeypatch.setattr(pipeline, 'load_pyannote_pipeline', lambda _model_ref, _token, **_kwargs: FakePipeline())
+    monkeypatch.setattr(pipeline, 'move_pipeline_to_best_device', lambda _pipeline, required_device=None: required_device or 'cuda')
+    monkeypatch.setattr(pipeline, 'should_load_audio_in_memory', lambda _path: False)
+
+    pipeline.run_pyannote_diarization(
+        audio_path,
+        model_ref='pyannote/test-model',
+        hf_token='hf_validtoken123',
+        required_device='cuda',
+    )
+
+    assert calls == [(str(audio_path), {})]
 
 
 def test_load_transcript_segments_accepts_list_or_object(tmp_path):
@@ -368,6 +413,20 @@ def test_load_pyannote_pipeline_supports_offline_cached_execution(monkeypatch):
         'offline': '1',
     }]
     assert 'HF_HUB_OFFLINE' not in os.environ
+
+
+def test_load_pyannote_pipeline_reports_missing_offline_cache(monkeypatch):
+    class FakePipeline:
+        @staticmethod
+        def from_pretrained(*_args, **_kwargs):
+            raise OSError('not found in cache')
+
+    fake_pyannote_audio = types.SimpleNamespace(Pipeline=FakePipeline)
+    monkeypatch.setitem(sys.modules, 'pyannote', types.SimpleNamespace(audio=fake_pyannote_audio))
+    monkeypatch.setitem(sys.modules, 'pyannote.audio', fake_pyannote_audio)
+
+    with pytest.raises(RuntimeError, match='model cache is missing or incomplete'):
+        pipeline.load_pyannote_pipeline('pyannote/test-model', 'hf_validtoken123', local_files_only=True)
 
 
 def test_emit_progress_redacts_token_values(capsys):

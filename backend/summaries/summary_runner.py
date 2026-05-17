@@ -29,7 +29,7 @@ from .summary_pipeline import (
 
 DEFAULT_PROFILE = "balanced"
 MAX_SUMMARY_REPAIR_ATTEMPTS = 1
-CHUNK_PROMPT_TOKEN_RESERVE = 4096
+CHUNK_PROMPT_TOKEN_RESERVE = 6000
 
 
 def _safe_message(message: Any) -> str:

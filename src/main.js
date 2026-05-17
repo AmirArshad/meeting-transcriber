@@ -627,12 +627,11 @@ function getDiarizationCacheEnv(userDataDir = app.getPath('userData')) {
   };
 }
 
-function buildCudaRuntimeEnv(extra = {}) {
+function buildCudaRuntimeEnv(extra = {}, { includeManagedDiarization = false } = {}) {
   if (process.platform !== 'win32') {
     return extra;
   }
 
-  const managedDiarizationSitePackagesDir = getDiarizationDependencySitePackagesPath();
   const candidateSitePackagesDirs = [
     ...getPythonSitePackagesCandidates({
       pythonExe: pythonConfig.pythonExe,
@@ -640,7 +639,7 @@ function buildCudaRuntimeEnv(extra = {}) {
       appData: process.env.APPDATA,
       platform: process.platform,
     }),
-    managedDiarizationSitePackagesDir,
+    includeManagedDiarization ? getDiarizationDependencySitePackagesPath() : null,
   ].filter(Boolean);
 
   const cudaBinDirs = getPyTorchCudaBinCandidates(candidateSitePackagesDirs)
@@ -2017,7 +2016,7 @@ function validateDiarizationRuntime({ modelRef, token, requiredDevice, cancelSig
         env: {
           ...getDiarizationDependencyEnv(),
           ...getDiarizationCacheEnv(),
-          ...buildCudaRuntimeEnv(),
+          ...buildCudaRuntimeEnv({}, { includeManagedDiarization: true }),
           HF_TOKEN: resolvedToken || '',
           HUGGINGFACE_HUB_TOKEN: resolvedToken || '',
         },
@@ -2983,7 +2982,7 @@ ipcMain.handle('diarize-transcript', async (event, options = {}) => {
       env: {
         ...getDiarizationDependencyEnv(),
         ...getDiarizationCacheEnv(),
-        ...buildCudaRuntimeEnv(),
+        ...buildCudaRuntimeEnv({}, { includeManagedDiarization: true }),
         HF_TOKEN: token || '',
         HUGGINGFACE_HUB_TOKEN: token || '',
       },

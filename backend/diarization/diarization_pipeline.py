@@ -24,6 +24,7 @@ from .speaker_segments import merge_speaker_labels
 
 DEFAULT_MODEL_REF = "pyannote/speaker-diarization-community-1"
 UNKNOWN_PROGRESS_ERROR = "Speaker diarization failed."
+MAX_IN_MEMORY_AUDIO_SECONDS = 45 * 60
 
 os.environ.setdefault("PYANNOTE_METRICS_ENABLED", "0")
 
@@ -203,6 +204,24 @@ def prepare_diarization_audio(audio_path: str, work_dir: str, *, ffmpeg_path: st
     return target_path
 
 
+def get_audio_duration_seconds(audio_path: Path) -> float:
+    import wave
+
+    try:
+        with wave.open(str(audio_path), "rb") as handle:
+            frame_rate = handle.getframerate()
+            if frame_rate <= 0:
+                return 0.0
+            return float(handle.getnframes()) / float(frame_rate)
+    except (wave.Error, OSError):
+        return 0.0
+
+
+def should_load_audio_in_memory(audio_path: Path, *, max_seconds: int = MAX_IN_MEMORY_AUDIO_SECONDS) -> bool:
+    duration = get_audio_duration_seconds(audio_path)
+    return duration > 0 and duration <= max_seconds
+
+
 def load_prepared_audio_for_pipeline(audio_path: Path) -> Any:
     """Load prepared 16 kHz mono WAV into memory for pyannote inference."""
     try:
@@ -285,11 +304,16 @@ def load_pyannote_pipeline(model_ref: str, hf_token: str, *, local_files_only: b
     except ImportError as exc:
         raise RuntimeError("pyannote.audio is not installed for speaker diarization.") from exc
 
-    with pyannote_torch_load_compat(), hugging_face_offline_mode(local_files_only):
-        try:
-            return Pipeline.from_pretrained(model_ref, token=hf_token, local_files_only=local_files_only)
-        except TypeError:
-            return Pipeline.from_pretrained(model_ref, use_auth_token=hf_token)
+    try:
+        with pyannote_torch_load_compat(), hugging_face_offline_mode(local_files_only):
+            try:
+                return Pipeline.from_pretrained(model_ref, token=hf_token, local_files_only=local_files_only)
+            except TypeError:
+                return Pipeline.from_pretrained(model_ref, use_auth_token=hf_token)
+    except Exception as exc:
+        if local_files_only:
+            raise RuntimeError("Speaker diarization model cache is missing or incomplete. Re-run speaker identification setup in Settings.") from exc
+        raise
 
 
 def move_pipeline_to_best_device(pipeline: Any, *, required_device: Optional[str] = None) -> str:
@@ -347,7 +371,7 @@ def run_pyannote_diarization(
     if speaker_count is not None:
         kwargs["num_speakers"] = speaker_count
 
-    audio_input = load_prepared_audio_for_pipeline(audio_path)
+    audio_input = load_prepared_audio_for_pipeline(audio_path) if should_load_audio_in_memory(audio_path) else str(audio_path)
     result = pipeline(audio_input, **kwargs)
     annotation, annotation_source = select_annotation(result)
 
