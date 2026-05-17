@@ -3063,75 +3063,147 @@ ipcMain.handle('generate-summary', async (event, options = {}) => {
     throw new Error('Summary generation is already running. Cancel it or wait for it to finish.');
   }
 
+  const controller = new AbortController();
+  activeSummaryGeneration = {
+    meetingId: normalizedMeetingId,
+    controller,
+    phase: 'preflight',
+    process: null,
+  };
+
+  const clearActiveSummaryGeneration = () => {
+    if (activeSummaryGeneration && activeSummaryGeneration.controller === controller) {
+      activeSummaryGeneration = null;
+    }
+  };
+
   const meeting = await new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (callback, value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanupCancel();
+      callback(value);
+    };
+    const cleanupCancel = (() => {
+      const handleAbort = () => {
+        finish(reject, createAiAddonCancelError('Summary generation was canceled.'));
+      };
+      controller.signal.addEventListener('abort', handleAbort, { once: true });
+      return () => controller.signal.removeEventListener('abort', handleAbort);
+    })();
+
+    if (controller.signal.aborted) {
+      finish(reject, createAiAddonCancelError('Summary generation was canceled.'));
+      return;
+    }
+
     const recordingsDir = path.join(app.getPath('userData'), 'recordings');
     const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
       '--recordings-dir', recordingsDir,
       'get',
       normalizedMeetingId,
     ]), { cwd: pythonConfig.backendPath });
+    activeSummaryGeneration.process = python;
     let output = '';
     let errorOutput = '';
     python.stdout.on('data', (data) => { output += data.toString(); });
     python.stderr.on('data', (data) => { errorOutput += data.toString(); });
     python.on('close', (code) => {
+      if (controller.signal.aborted) {
+        finish(reject, createAiAddonCancelError('Summary generation was canceled.'));
+        return;
+      }
       if (code === 0) {
         try {
-          resolve(JSON.parse(output));
+          finish(resolve, JSON.parse(output));
         } catch (error) {
-          reject(new Error(`Failed to parse meeting before summary generation: ${error.message}`));
+          finish(reject, new Error(`Failed to parse meeting before summary generation: ${error.message}`));
         }
         return;
       }
-      reject(new Error(errorOutput.trim() || 'Meeting not found'));
+      finish(reject, new Error(errorOutput.trim() || 'Meeting not found'));
     });
-    python.on('error', reject);
+    python.on('error', (error) => finish(reject, controller.signal.aborted ? createAiAddonCancelError('Summary generation was canceled.') : error));
+  }).catch((error) => {
+    clearActiveSummaryGeneration();
+    throw error;
   });
 
+  if (controller.signal.aborted) {
+    clearActiveSummaryGeneration();
+    throw createAiAddonCancelError('Summary generation was canceled.');
+  }
+
   if (!meeting || !meeting.transcriptPath) {
+    clearActiveSummaryGeneration();
     throw new Error('Meeting transcript is not available for summary generation.');
   }
 
-  const aiStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions({ verifyChecksums: true }));
+  let aiStatus;
+  try {
+    aiStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions({ verifyChecksums: true }));
+  } catch (error) {
+    clearActiveSummaryGeneration();
+    throw error;
+  }
+
+  if (controller.signal.aborted) {
+    clearActiveSummaryGeneration();
+    throw createAiAddonCancelError('Summary generation was canceled.');
+  }
   if (aiStatus.features.summary.status !== 'ready' || !aiStatus.features.summary.setupComplete) {
+    clearActiveSummaryGeneration();
     throw new Error('Summary model setup is not ready.');
   }
 
   const selectedModelId = aiStatus.features.summary.modelId;
   if (modelId && modelId !== selectedModelId) {
+    clearActiveSummaryGeneration();
     throw new Error('Summary model selection is managed by local setup. Validate or reinstall the selected model in Settings.');
   }
   const artifact = getSummaryArtifactForPlatform(selectedModelId, process.platform, process.arch);
   if (!artifact) {
+    clearActiveSummaryGeneration();
     throw new Error('No summary model artifact is available for this platform.');
   }
 
-  const modelPath = getSummaryArtifactPath(app.getPath('userData'), artifact);
-  const runtimeDir = getSummaryRuntimeDir(app.getPath('userData'), artifact);
-  const transcriptPath = assertSafeExistingTranscriptPath(meeting.transcriptPath);
+  let modelPath;
+  let runtimeDir;
+  let transcriptPath;
+  try {
+    modelPath = getSummaryArtifactPath(app.getPath('userData'), artifact);
+    runtimeDir = getSummaryRuntimeDir(app.getPath('userData'), artifact);
+    transcriptPath = assertSafeExistingTranscriptPath(meeting.transcriptPath);
+  } catch (error) {
+    clearActiveSummaryGeneration();
+    throw error;
+  }
+
   const transcriptBase = transcriptPath.replace(/\.md$/i, '');
   const outputJson = `${transcriptBase}.summary.json`;
   const outputMarkdown = `${transcriptBase}.summary.md`;
   const speakerMetadataPath = meeting.ai && meeting.ai.diarization && meeting.ai.diarization.segmentsPath;
-  const speakersJsonPath = speakerMetadataPath ? assertSafeExistingSegmentsPath(speakerMetadataPath) : null;
-
-  const controller = new AbortController();
-  activeSummaryGeneration = {
-    meetingId: normalizedMeetingId,
-    controller,
-    process: null,
-  };
+  let speakersJsonPath;
+  try {
+    speakersJsonPath = speakerMetadataPath ? assertSafeExistingSegmentsPath(speakerMetadataPath) : null;
+  } catch (error) {
+    clearActiveSummaryGeneration();
+    throw error;
+  }
 
   return enqueueAiComputeAction(() => new Promise((resolve, reject) => {
     if (!activeSummaryGeneration || activeSummaryGeneration.controller !== controller || controller.signal.aborted) {
-      if (activeSummaryGeneration && activeSummaryGeneration.controller === controller) {
-        activeSummaryGeneration = null;
-      }
+      clearActiveSummaryGeneration();
       reject(createAiAddonCancelError('Summary generation was canceled.'));
       return;
     }
 
     let settled = false;
+    activeSummaryGeneration.phase = 'summary';
+    activeSummaryGeneration.process = null;
     const python = spawnTrackedPython(buildSummaryArgs({
       meetingId: normalizedMeetingId,
       transcriptPath,
@@ -3163,9 +3235,7 @@ ipcMain.handle('generate-summary', async (event, options = {}) => {
       }
       settled = true;
       cleanupCancel();
-      if (activeSummaryGeneration && activeSummaryGeneration.controller === controller) {
-        activeSummaryGeneration = null;
-      }
+      clearActiveSummaryGeneration();
       callback(value);
     };
 
@@ -3203,6 +3273,8 @@ ipcMain.handle('generate-summary', async (event, options = {}) => {
           finish(reject, createAiAddonCancelError('Summary generation was canceled.'));
           return;
         }
+        activeSummaryGeneration.phase = 'metadata';
+        activeSummaryGeneration.process = null;
         const summaryMetadata = {
           status: 'completed',
           modelProfile: result.metadata.profile,
@@ -3221,9 +3293,6 @@ ipcMain.handle('generate-summary', async (event, options = {}) => {
             normalizedMeetingId,
             '--summary-json', JSON.stringify(summaryMetadata),
           ]), { cwd: pythonConfig.backendPath });
-          if (activeSummaryGeneration && activeSummaryGeneration.controller === controller) {
-            activeSummaryGeneration.process = pythonUpdate;
-          }
           let metadataOutput = '';
           let metadataErrorOutput = '';
           pythonUpdate.stdout.on('data', (data) => { metadataOutput += data.toString(); });
@@ -3264,6 +3333,12 @@ ipcMain.handle('cancel-summary-generation', async (event, options = {}) => {
   const requestedMeetingId = options && options.meetingId ? String(options.meetingId) : null;
   if (requestedMeetingId && requestedMeetingId !== activeSummaryGeneration.meetingId) {
     return { canceled: false, message: 'A different meeting summary is currently running.' };
+  }
+
+  // The preflight/summary phases are safe to terminate. Once sidecars are
+  // written, let the quick metadata update finish so summary files are tracked.
+  if (activeSummaryGeneration.phase === 'metadata') {
+    return { canceled: false, message: 'Summary output is being saved and can no longer be canceled.' };
   }
 
   activeSummaryGeneration.controller.abort(createAiAddonCancelError('Summary generation was canceled.'));

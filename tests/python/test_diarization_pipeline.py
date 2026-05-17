@@ -437,6 +437,24 @@ def test_load_pyannote_pipeline_supports_legacy_auth_token_signature(monkeypatch
     }]
 
 
+def test_load_pyannote_pipeline_rejects_legacy_auth_token_signature_for_offline_execution(monkeypatch):
+    class FakePipeline:
+        @staticmethod
+        def from_pretrained(model_ref, use_auth_token=None):
+            return {'loaded': model_ref, 'token': use_auth_token}
+
+    fake_pyannote_audio = types.SimpleNamespace(Pipeline=FakePipeline)
+    monkeypatch.setitem(sys.modules, 'pyannote', types.SimpleNamespace(audio=fake_pyannote_audio))
+    monkeypatch.setitem(sys.modules, 'pyannote.audio', fake_pyannote_audio)
+
+    with pytest.raises(RuntimeError, match='model cache is missing or incomplete') as exc_info:
+        pipeline.load_pyannote_pipeline('pyannote/test-model', 'hf_validtoken123', local_files_only=True)
+
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+    assert 'too old to enforce offline cached execution' in str(exc_info.value.__cause__)
+    assert 'HF_HUB_OFFLINE' not in os.environ
+
+
 def test_load_pyannote_pipeline_supports_offline_cached_execution(monkeypatch):
     calls = []
 

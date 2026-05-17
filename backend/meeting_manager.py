@@ -168,7 +168,7 @@ class MeetingManager:
             return ""
 
         try:
-            return file_path.read_text(encoding='utf-8')
+            return file_path.read_text(encoding='utf-8', errors='replace')
         except Exception as exc:
             print(f"Warning: Could not read {label}: {exc}", file=sys.stderr)
             return ""
@@ -573,7 +573,7 @@ class MeetingManager:
             # Try to extract duration from transcript
             duration = 0.0
             try:
-                content = transcript_file.read_text(encoding='utf-8')
+                content = transcript_file.read_text(encoding='utf-8', errors='replace')
                 # Look for "Duration: HH:MM:SS" or "Duration: MM:SS"
                 duration_match = re.search(r'\*\*Duration:\*\*\s*(\d+):(\d+):(\d+)', content)
                 if duration_match:

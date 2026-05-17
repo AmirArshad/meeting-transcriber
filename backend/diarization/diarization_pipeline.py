@@ -312,6 +312,8 @@ def build_pyannote_from_pretrained_kwargs(from_pretrained: Any, hf_token: str, *
     if accepts_kwargs or "token" in parameters:
         kwargs["token"] = hf_token
     elif "use_auth_token" in parameters:
+        if local_files_only:
+            raise RuntimeError("Installed pyannote.audio is too old to enforce offline cached execution. Re-run speaker identification setup in Settings.")
         kwargs["use_auth_token"] = hf_token
 
     if accepts_kwargs or "local_files_only" in parameters:

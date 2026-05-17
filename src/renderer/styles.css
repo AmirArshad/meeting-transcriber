@@ -1803,12 +1803,22 @@ select.device-select:disabled {
 }
 
 .btn.is-loading {
+  /* Busy buttons are real <button> elements; disabled gates clicks except for
+     summary generation, which intentionally stays clickable as Cancel. */
   opacity: 0.75;
 }
 
 .summary-generation-active {
   position: relative;
   min-width: 128px;
+}
+
+.summary-generation-active:hover:not(:disabled) {
+  color: #ff6b6f;
+  border-color: rgba(229, 72, 77, 0.42);
+  background: var(--crimson-soft);
+  opacity: 1;
+  font-size: 0;
 }
 
 .summary-generation-active::before {
@@ -1821,19 +1831,8 @@ select.device-select:disabled {
   animation: spin 0.8s linear infinite;
 }
 
-.summary-generation-active:hover:not(:disabled) {
-  color: #ff6b6f;
-  border-color: rgba(229, 72, 77, 0.42);
-  background: var(--crimson-soft);
-  opacity: 1;
-}
-
 .summary-generation-active:hover:not(:disabled)::after {
   content: attr(data-hover-label);
-}
-
-.summary-generation-active:hover:not(:disabled) {
-  font-size: 0;
 }
 
 .summary-generation-active:hover:not(:disabled)::before,

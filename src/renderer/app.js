@@ -727,6 +727,8 @@ async function cancelSummaryGeneration(meetingId) {
     const result = await window.electronAPI.cancelSummaryGeneration({ meetingId: meetingId || summaryGenerationMeetingId });
     if (result && result.message && !result.canceled) {
       addLog(result.message, 'warning');
+      summaryGenerationCancelling = false;
+      updateSummaryGenerationButtons();
     }
   } catch (error) {
     summaryGenerationCancelling = false;

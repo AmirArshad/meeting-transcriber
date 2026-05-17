@@ -24,6 +24,7 @@ Use this checklist before and after high-risk recorder changes.
 - [ ] Verify model preload/download state is reported correctly in the UI.
 - [ ] Verify meeting history save/delete/scan still behaves correctly.
 - [ ] Verify the app can be launched, record, stop, transcribe, and save a meeting end to end.
+- [ ] Start summary generation, immediately hover/click the active Generate Summary button, and verify cancellation leaves the transcript unchanged and no summary sidecars are orphaned without metadata.
 
 ## Related guardrails
 
