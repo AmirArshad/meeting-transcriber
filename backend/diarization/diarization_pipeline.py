@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 from datetime import datetime, timezone
+from inspect import Parameter, signature
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -300,6 +301,25 @@ def annotation_to_speaker_segments(annotation: Any) -> List[Dict[str, Any]]:
     return speaker_segments
 
 
+def build_pyannote_from_pretrained_kwargs(from_pretrained: Any, hf_token: str, *, local_files_only: bool = False) -> Dict[str, Any]:
+    try:
+        parameters = signature(from_pretrained).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+
+    accepts_kwargs = any(parameter.kind == Parameter.VAR_KEYWORD for parameter in parameters.values())
+    kwargs: Dict[str, Any] = {}
+    if accepts_kwargs or "token" in parameters:
+        kwargs["token"] = hf_token
+    elif "use_auth_token" in parameters:
+        kwargs["use_auth_token"] = hf_token
+
+    if accepts_kwargs or "local_files_only" in parameters:
+        kwargs["local_files_only"] = local_files_only
+
+    return kwargs
+
+
 def load_pyannote_pipeline(model_ref: str, hf_token: str, *, local_files_only: bool = False) -> Any:
     try:
         from pyannote.audio import Pipeline  # type: ignore[import-not-found]
@@ -308,10 +328,8 @@ def load_pyannote_pipeline(model_ref: str, hf_token: str, *, local_files_only: b
 
     try:
         with pyannote_torch_load_compat(), hugging_face_offline_mode(local_files_only):
-            try:
-                return Pipeline.from_pretrained(model_ref, token=hf_token, local_files_only=local_files_only)
-            except TypeError:
-                return Pipeline.from_pretrained(model_ref, use_auth_token=hf_token)
+            kwargs = build_pyannote_from_pretrained_kwargs(Pipeline.from_pretrained, hf_token, local_files_only=local_files_only)
+            return Pipeline.from_pretrained(model_ref, **kwargs)
     except Exception as exc:
         if local_files_only:
             raise RuntimeError("Speaker diarization model cache is missing or incomplete. Re-run speaker identification setup in Settings.") from exc

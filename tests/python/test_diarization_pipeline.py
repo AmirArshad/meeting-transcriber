@@ -384,6 +384,59 @@ def test_load_pyannote_pipeline_uses_scoped_torch_load_compat(monkeypatch):
     assert 'TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD' not in os.environ
 
 
+def test_load_pyannote_pipeline_omits_unsupported_local_files_only(monkeypatch):
+    calls = []
+
+    class FakePipeline:
+        @staticmethod
+        def from_pretrained(model_ref, token=None):
+            calls.append({
+                'model_ref': model_ref,
+                'token': token,
+                'offline': os.environ.get('HF_HUB_OFFLINE'),
+            })
+            return {'loaded': model_ref}
+
+    fake_pyannote_audio = types.SimpleNamespace(Pipeline=FakePipeline)
+    monkeypatch.setitem(sys.modules, 'pyannote', types.SimpleNamespace(audio=fake_pyannote_audio))
+    monkeypatch.setitem(sys.modules, 'pyannote.audio', fake_pyannote_audio)
+
+    loaded = pipeline.load_pyannote_pipeline('pyannote/test-model', 'hf_validtoken123', local_files_only=True)
+
+    assert loaded == {'loaded': 'pyannote/test-model'}
+    assert calls == [{
+        'model_ref': 'pyannote/test-model',
+        'token': 'hf_validtoken123',
+        'offline': '1',
+    }]
+    assert 'HF_HUB_OFFLINE' not in os.environ
+
+
+def test_load_pyannote_pipeline_supports_legacy_auth_token_signature(monkeypatch):
+    calls = []
+
+    class FakePipeline:
+        @staticmethod
+        def from_pretrained(model_ref, use_auth_token=None):
+            calls.append({
+                'model_ref': model_ref,
+                'use_auth_token': use_auth_token,
+            })
+            return {'loaded': model_ref}
+
+    fake_pyannote_audio = types.SimpleNamespace(Pipeline=FakePipeline)
+    monkeypatch.setitem(sys.modules, 'pyannote', types.SimpleNamespace(audio=fake_pyannote_audio))
+    monkeypatch.setitem(sys.modules, 'pyannote.audio', fake_pyannote_audio)
+
+    loaded = pipeline.load_pyannote_pipeline('pyannote/test-model', 'hf_validtoken123')
+
+    assert loaded == {'loaded': 'pyannote/test-model'}
+    assert calls == [{
+        'model_ref': 'pyannote/test-model',
+        'use_auth_token': 'hf_validtoken123',
+    }]
+
+
 def test_load_pyannote_pipeline_supports_offline_cached_execution(monkeypatch):
     calls = []
 
