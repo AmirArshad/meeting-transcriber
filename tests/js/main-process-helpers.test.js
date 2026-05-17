@@ -13,7 +13,10 @@ const {
   buildRecordingPreflightReport,
   buildQuitRecordingDialogOptions,
   buildDiarizationOutputPath,
+  buildGuidedTranscriptTempPath,
   buildModelDownloadCheck,
+  runGuidedTranscriptionProcess,
+  buildTokenEnv,
   buildPythonModuleArgs,
   buildTranscriberArgs,
   buildTranscriptionCudaInstallArgs,
@@ -29,6 +32,8 @@ const {
   findRecorderResultPayload,
   getMacMLXCacheDir,
   getMacMLXModelStorageDirs,
+  getGuidedTranscriptionTimeoutMinutes,
+  validateGuidedTranscriptionToken,
   getModelDownloadPatterns,
   getRecordingStopTimeout,
   getTranscriberModule,
@@ -149,6 +154,162 @@ test('buildDiarizationOutputPath creates speakers sidecar path', () => {
     }),
     path.join('/recordings', 'meeting.speakers.json'),
   );
+});
+
+
+test('buildGuidedTranscriptTempPath creates hidden markdown temp path', () => {
+  assert.equal(
+    buildGuidedTranscriptTempPath({ finalTranscriptPath: path.join('/recordings', 'meeting_1.md'), now: 1234 }),
+    path.join('/recordings', '.meeting_1.guided.1234.tmp.md'),
+  );
+});
+
+
+test('buildTokenEnv only exposes non-empty tokens', () => {
+  assert.deepEqual(buildTokenEnv(''), {});
+  assert.deepEqual(buildTokenEnv('   '), {});
+  assert.deepEqual(buildTokenEnv(' hf_secret '), {
+    HF_TOKEN: 'hf_secret',
+    HUGGINGFACE_HUB_TOKEN: 'hf_secret',
+  });
+});
+
+
+test('validateGuidedTranscriptionToken rejects missing token', () => {
+  assert.throws(
+    () => validateGuidedTranscriptionToken(''),
+    /token could not be read/i,
+  );
+  assert.equal(validateGuidedTranscriptionToken(' hf_secret '), 'hf_secret');
+});
+
+
+test('getGuidedTranscriptionTimeoutMinutes scales by model size', () => {
+  assert.equal(getGuidedTranscriptionTimeoutMinutes('base'), 60);
+  assert.equal(getGuidedTranscriptionTimeoutMinutes('medium'), 135);
+  assert.equal(getGuidedTranscriptionTimeoutMinutes('large-v3'), 180);
+  assert.equal(getGuidedTranscriptionTimeoutMinutes('custom'), 90);
+});
+
+
+function createFakeGuidedProcess() {
+  const handlers = { stdout: {}, stderr: {}, process: {} };
+  return {
+    stdout: { on: (event, callback) => { handlers.stdout[event] = callback; } },
+    stderr: { on: (event, callback) => { handlers.stderr[event] = callback; } },
+    on: (event, callback) => { handlers.process[event] = callback; },
+    emitStdout: (data) => handlers.stdout.data(Buffer.from(data)),
+    emitStderr: (data) => handlers.stderr.data(Buffer.from(data)),
+    close: (code) => handlers.process.close(code),
+    error: (error) => handlers.process.error(error),
+  };
+}
+
+
+test('runGuidedTranscriptionProcess renames temp transcript on success', async () => {
+  const fakeProcess = createFakeGuidedProcess();
+  const operations = [];
+  const run = runGuidedTranscriptionProcess({
+    spawnProcess: () => fakeProcess,
+    args: ['-m', 'diarization.guided_transcription'],
+    cwd: '/backend',
+    env: {},
+    finalTranscriptPath: '/recordings/meeting.md',
+    tempTranscriptPath: '/recordings/.meeting.guided.1.tmp.md',
+    modelSize: 'base',
+    fsPromises: {
+      rename: async (from, to) => operations.push(['rename', from, to]),
+      readFile: async (filePath, encoding) => {
+        operations.push(['readFile', filePath, encoding]);
+        return '# transcript';
+      },
+      rm: async (filePath, options) => operations.push(['rm', filePath, options]),
+    },
+    terminateProcess: () => operations.push(['terminate']),
+    summarizeError: () => '',
+    setTimer: () => 'timer',
+    clearTimer: (timer) => operations.push(['clearTimer', timer]),
+  });
+
+  fakeProcess.emitStdout(JSON.stringify({ text: 'ok', segments: [] }));
+  fakeProcess.close(0);
+  const result = await run;
+
+  assert.equal(result.output_file, '/recordings/meeting.md');
+  assert.equal(result.transcriptContent, '# transcript');
+  assert.deepEqual(operations, [
+    ['rename', '/recordings/.meeting.guided.1.tmp.md', '/recordings/meeting.md'],
+    ['readFile', '/recordings/meeting.md', 'utf8'],
+    ['clearTimer', 'timer'],
+  ]);
+});
+
+
+test('runGuidedTranscriptionProcess cleans temp transcript on failure', async () => {
+  const fakeProcess = createFakeGuidedProcess();
+  const operations = [];
+  const run = runGuidedTranscriptionProcess({
+    spawnProcess: () => fakeProcess,
+    args: [],
+    cwd: '/backend',
+    env: {},
+    finalTranscriptPath: '/recordings/meeting.md',
+    tempTranscriptPath: '/recordings/.meeting.guided.1.tmp.md',
+    modelSize: 'base',
+    fsPromises: {
+      rename: async () => operations.push(['rename']),
+      readFile: async () => '# transcript',
+      rm: async (filePath, options) => operations.push(['rm', filePath, options]),
+    },
+    terminateProcess: () => operations.push(['terminate']),
+    summarizeError: () => 'pyannote failed',
+    setTimer: () => 'timer',
+    clearTimer: (timer) => operations.push(['clearTimer', timer]),
+  });
+
+  fakeProcess.close(1);
+  await assert.rejects(run, /pyannote failed/);
+  assert.deepEqual(operations, [
+    ['rm', '/recordings/.meeting.guided.1.tmp.md', { force: true }],
+    ['clearTimer', 'timer'],
+  ]);
+});
+
+
+test('runGuidedTranscriptionProcess terminates and cleans temp transcript on timeout', async () => {
+  const fakeProcess = createFakeGuidedProcess();
+  const operations = [];
+  let timeoutCallback;
+  const run = runGuidedTranscriptionProcess({
+    spawnProcess: () => fakeProcess,
+    args: [],
+    cwd: '/backend',
+    env: {},
+    finalTranscriptPath: '/recordings/meeting.md',
+    tempTranscriptPath: '/recordings/.meeting.guided.1.tmp.md',
+    modelSize: 'base',
+    fsPromises: {
+      rename: async () => operations.push(['rename']),
+      readFile: async () => '# transcript',
+      rm: async (filePath, options) => operations.push(['rm', filePath, options]),
+    },
+    terminateProcess: () => operations.push(['terminate']),
+    summarizeError: () => '',
+    setTimer: (callback, timeoutMs) => {
+      timeoutCallback = callback;
+      operations.push(['setTimer', timeoutMs]);
+      return 'timer';
+    },
+    clearTimer: (timer) => operations.push(['clearTimer', timer]),
+  });
+
+  timeoutCallback();
+  await assert.rejects(run, /timeout after 60 minutes/);
+  assert.deepEqual(operations, [
+    ['setTimer', 60 * 60 * 1000],
+    ['terminate'],
+    ['rm', '/recordings/.meeting.guided.1.tmp.md', { force: true }],
+  ]);
 });
 
 
@@ -293,7 +454,7 @@ test('getMacMLXCacheDir returns writable MLX cache path', () => {
 test('getMacMLXModelStorageDirs returns expected per-model cache directories', () => {
   assert.deepEqual(getMacMLXModelStorageDirs('small'), ['whisper-small-mlx']);
   assert.deepEqual(getMacMLXModelStorageDirs('medium'), ['whisper-medium-mlx']);
-  assert.deepEqual(getMacMLXModelStorageDirs('large'), ['distil-large-v3', 'whisper-large-v3-mlx']);
+  assert.deepEqual(getMacMLXModelStorageDirs('large'), ['whisper-large-v3-mlx']);
 });
 
 

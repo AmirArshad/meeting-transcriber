@@ -291,6 +291,28 @@ def test_build_diarization_result_splits_coarse_transcript_segments_by_speaker_t
     assert 'lima' in result['segments'][-1]['text']
 
 
+def test_build_diarization_result_splits_short_text_across_longest_speaker_blocks():
+    result = pipeline.build_diarization_result(
+        audio_path='meeting.opus',
+        transcript_segments=[{'start': 0, 'end': 30, 'text': 'yes'}],
+        speaker_segments=[
+            {'start': 0, 'end': 2, 'speaker': 'SPEAKER_00'},
+            {'start': 2, 'end': 20, 'speaker': 'SPEAKER_01'},
+            {'start': 20, 'end': 30, 'speaker': 'SPEAKER_00'},
+        ],
+        model_ref='pyannote/speaker-diarization-community-1',
+        annotation_source='exclusive_speaker_diarization',
+        device='mps',
+    )
+
+    assert result['segments'] == [{
+        'start': 2,
+        'end': 20,
+        'text': 'yes',
+        'speaker': 'Speaker 2',
+    }]
+
+
 def test_save_diarization_result_writes_json_sidecar(tmp_path):
     output_path = tmp_path / 'meeting.speakers.json'
     pipeline.save_diarization_result(str(output_path), {'status': 'completed', 'segments': []})

@@ -4,7 +4,7 @@
 
 Add speaker identification to transcripts so users can see which person said what during meetings with multiple participants.
 
-Product-flow design for optional setup, Home prompts, automatic post-transcription execution, and History integration lives in [Optional local AI add-ons](DESIGN_LOCAL_AI_ADDONS.md).
+Product-flow design for optional setup, Home prompts, automatic speaker-guided transcription, and History integration lives in [Optional local AI add-ons](DESIGN_LOCAL_AI_ADDONS.md).
 
 ## 2026 Research Update
 
@@ -31,13 +31,13 @@ Decision status: use `community-1` for v1 unless a Windows-only Sortformer spike
 
 ## Implementation Snapshot
 
-- The current backend entry point is `backend/diarization/diarization_pipeline.py`.
-- Electron invokes it through `diarize-transcript` after Whisper transcription only when setup status is Ready.
+- The current backend entry points are `backend/diarization/guided_transcription.py` for new speaker-guided recordings and `backend/diarization/diarization_pipeline.py` for legacy/post-hoc speaker merging.
+- Electron invokes `transcribe-audio-with-speakers` when setup status is Ready. This runs pyannote first, builds padded speaker turns, transcribes those windows with Whisper, and saves speaker-labeled chunks.
 - The main process resolves the pyannote model reference from the catalog and ignores renderer-supplied model refs.
 - The main process passes a required accelerator device to the backend (`cuda` on Windows, `mps` on macOS Apple Silicon). The backend refuses CPU fallback when a required device is unavailable.
-- Diarization runs through the main-process local AI compute queue so it cannot overlap with summary generation or another diarization run.
+- Diarization-guided transcription runs through the main-process local AI compute queue so it cannot overlap with summary generation or another local AI run.
 - The runner prepares uncompressed 16 kHz mono PCM WAV input, sets `PYANNOTE_METRICS_ENABLED=0`, loads the pyannote model from local cache only during actual diarization, uses bounded in-memory audio input for shorter recordings, falls back to file-path input for longer recordings, prefers `exclusive_speaker_diarization`, writes a `*.speakers.json` sidecar, and returns redacted progress events.
-- Renderer updates the current transcript and saved Markdown with `**Speaker N:**` labels after successful diarization.
+- Renderer saves guided Markdown with `**Speaker N:**` labels when the guided path succeeds. If it fails, the app falls back to normal transcription and records diarization error metadata.
 - History parses saved transcript Markdown so speaker labels remain visible after restart.
 - Failure is warning-only: the normal transcript remains saved and meeting metadata records the diarization error without token values.
 - Audio and speaker sidecar paths are checked in the main process so derived AI metadata remains inside the recordings directory.
@@ -72,7 +72,7 @@ Combine Whisper (transcription) with pyannote.audio (speaker diarization) to lab
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| When to run | After transcription | Simpler, can retry without re-transcribing |
+| When to run | Before transcription when setup is ready | Speaker turns shape Whisper chunks instead of labeling large transcript chunks after the fact |
 | Token storage | Electron `safeStorage` | OS keychain encryption, persists across reinstalls |
 | Platform code | Single implementation first | `pyannote.audio` keeps one backend for Windows + macOS; Sortformer can remain a Windows CUDA experiment |
 | Default diarization model | `pyannote/speaker-diarization-community-1` | Current open-source pyannote model, better than 3.1, supports exclusive diarization for transcript alignment |
@@ -94,20 +94,18 @@ backend/
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    TRANSCRIPTION (existing)                      │
-│  Opus file → Whisper → segments with timestamps                 │
+│                    DIARIZATION FIRST                             │
+│  Opus file → pyannote → exclusive speaker turns                 │
 └──────────────────────────────┬──────────────────────────────────┘
                                │
-                               ▼ (if diarization enabled)
+                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    DIARIZATION (new)                             │
+│                    SPEAKER-GUIDED TRANSCRIPTION                  │
 │                                                                  │
-│  1. Convert Opus → temp WAV (ffmpeg)                            │
-│  2. Load pyannote pipeline (lazy, first use only)               │
-│  3. Run diarization → exclusive speaker segments with timestamps│
-│  4. Merge with Whisper segments (exclusive overlap matching)    │
-│  5. Delete temp WAV                                              │
-│  6. Return speaker-labeled segments                              │
+│  1. Build padded speaker windows from diarization turns         │
+│  2. Transcribe each window with Whisper                         │
+│  3. Drop padded context when Whisper timestamps allow it         │
+│  4. Save speaker-labeled transcript and sidecar                 │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
                                │

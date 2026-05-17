@@ -107,6 +107,17 @@ def _split_words_by_block_durations(text: str, blocks: List[Dict[str, Any]]) -> 
     if not words or not blocks:
         return []
 
+    if len(words) < len(blocks):
+        longest_block_indexes = sorted(
+            range(len(blocks)),
+            key=lambda index: _segment_duration(blocks[index]),
+            reverse=True,
+        )[:len(words)]
+        chunks = [""] * len(blocks)
+        for word, block_index in zip(words, sorted(longest_block_indexes)):
+            chunks[block_index] = word
+        return chunks
+
     total_duration = sum(_segment_duration(block) for block in blocks)
     if total_duration <= 0:
         return [" ".join(words)]

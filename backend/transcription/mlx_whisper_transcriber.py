@@ -48,16 +48,14 @@ class MLXWhisperTranscriber(BaseTranscriber):
             "storage_dir": "whisper-medium-mlx",
         },
         "large": {
-            "model_key": "distil-large-v3",
-            "repo_id": "mustafaaljadery/distil-whisper-mlx",
-            "storage_dir": "distil-large-v3",
-            "distil": True,
+            "model_key": "large-v3",
+            "repo_id": "mlx-community/whisper-large-v3-mlx",
+            "storage_dir": "whisper-large-v3-mlx",
         },
         "large-v3": {
-            "model_key": "distil-large-v3",
-            "repo_id": "mustafaaljadery/distil-whisper-mlx",
-            "storage_dir": "distil-large-v3",
-            "distil": True,
+            "model_key": "large-v3",
+            "repo_id": "mlx-community/whisper-large-v3-mlx",
+            "storage_dir": "whisper-large-v3-mlx",
         },
     }
 

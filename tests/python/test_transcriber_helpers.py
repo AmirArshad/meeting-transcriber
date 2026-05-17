@@ -146,15 +146,16 @@ def test_mlx_transcriber_get_model_info_reports_cache_and_repo(tmp_path, monkeyp
     info = service.get_model_info()
 
     assert info['backend'] == 'lightning-whisper-mlx'
-    assert info['model_key'] == 'distil-large-v3'
-    assert info['model_repo'] == 'mustafaaljadery/distil-whisper-mlx'
+    assert info['model_key'] == 'large-v3'
+    assert info['model_repo'] == 'mlx-community/whisper-large-v3-mlx'
     assert info['cache_dir'] == str(tmp_path / 'cache-root')
-    assert info['model_dir'] == str(tmp_path / 'cache-root' / 'mlx_models' / 'distil-large-v3')
+    assert info['model_dir'] == str(tmp_path / 'cache-root' / 'mlx_models' / 'whisper-large-v3-mlx')
 
 
-def test_mlx_transcriber_uses_standard_small_and_medium_models_for_english():
+def test_mlx_transcriber_uses_standard_models_for_english():
     small = MLXWhisperTranscriber(model_size='small', language='en')
     medium = MLXWhisperTranscriber(model_size='medium', language='en')
+    large = MLXWhisperTranscriber(model_size='large', language='en')
 
     assert small.get_model_info()['model_key'] == 'small'
     assert small.get_model_info()['model_repo'] == 'mlx-community/whisper-small-mlx'
@@ -162,6 +163,9 @@ def test_mlx_transcriber_uses_standard_small_and_medium_models_for_english():
     assert medium.get_model_info()['model_key'] == 'medium'
     assert medium.get_model_info()['model_repo'] == 'mlx-community/whisper-medium-mlx'
     assert Path(medium.get_model_info()['model_dir']).parts[-2:] == ('mlx_models', 'whisper-medium-mlx')
+    assert large.get_model_info()['model_key'] == 'large-v3'
+    assert large.get_model_info()['model_repo'] == 'mlx-community/whisper-large-v3-mlx'
+    assert Path(large.get_model_info()['model_dir']).parts[-2:] == ('mlx_models', 'whisper-large-v3-mlx')
 
 
 def test_mlx_transcriber_loads_multilingual_models_for_non_english_languages():
@@ -276,6 +280,30 @@ def test_mlx_transcriber_repairs_lightning_mlx_frame_timestamps(tmp_path):
         {'start': 0.0, 'end': 30.0, 'text': 'one'},
         {'start': 30.0, 'end': 60.0, 'text': 'two'},
     ]
+
+
+def test_mlx_transcriber_repairs_lightning_mlx_millisecond_timestamps(tmp_path):
+    audio_path = tmp_path / 'sample.wav'
+    import wave
+
+    with wave.open(str(audio_path), 'wb') as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(16000)
+        wav_file.writeframes(b'\x00\x00' * 16000 * 12)
+
+    service = cast(Any, MLXWhisperTranscriber(model_size='base', language='en'))
+    service.model_ready = True
+
+    def fake_transcribe_audio(_audio_path_value):
+        return {'text': 'hello', 'segments': [[0, 12000, 'hello']]}
+
+    service._transcribe_audio = fake_transcribe_audio
+
+    result = service.transcribe_file(str(audio_path), save_markdown=False)
+
+    assert result['duration'] == pytest.approx(12.0, rel=1e-3)
+    assert result['segments'] == [{'start': 0.0, 'end': 12.0, 'text': 'hello'}]
 
 
 def test_mlx_transcriber_passes_requested_language_to_backend(tmp_path, monkeypatch):

@@ -19,7 +19,10 @@ const {
   buildQuitRecordingDialogOptions,
   buildModelDownloadCheck,
   buildDiarizationOutputPath,
+  buildGuidedTranscriptTempPath,
+  buildTokenEnv,
   buildPythonModuleArgs,
+  runGuidedTranscriptionProcess,
   buildTranscriberArgs,
   buildTranscriptionCudaInstallArgs,
   buildTranscriptionCudaUninstallArgs,
@@ -31,6 +34,7 @@ const {
   getRecorderCloseAction,
   getRecorderEventAction,
   getRecordingStopTimeout,
+  validateGuidedTranscriptionToken,
   findRecorderResultPayload,
   resolveStopTimeoutAction,
   isModelDownloadErrorOutput,
@@ -770,6 +774,7 @@ function buildManagedDiarizationArgs({ audioPath, segmentsJsonPath, outputPath, 
 }
 
 function getTranscriberBackendName() {
+  // Keep aligned with backend/diarization/guided_transcription.py resolve_transcriber_backend.
   if (process.platform === 'darwin' && process.arch === 'arm64') {
     return 'mlx';
   }
@@ -1563,6 +1568,7 @@ app.whenReady().then(async () => {
   if (!checksOk) {
     return; // App will quit if critical checks fail
   }
+  await cleanupGuidedTranscriptTempFiles();
 
   createTray();
   createWindow();
@@ -1954,6 +1960,20 @@ let activeSummaryGeneration = null;
 
 function getRecordingsDir() {
   return path.join(app.getPath('userData'), 'recordings');
+}
+
+async function cleanupGuidedTranscriptTempFiles() {
+  const recordingsDir = getRecordingsDir();
+  try {
+    const entries = await fs.promises.readdir(recordingsDir, { withFileTypes: true });
+    await Promise.all(entries
+      .filter((entry) => entry.isFile() && /^\..+\.guided\.\d+\.tmp\.md$/i.test(entry.name))
+      .map((entry) => fs.promises.rm(path.join(recordingsDir, entry.name), { force: true })));
+  } catch (error) {
+    if (error && error.code !== 'ENOENT') {
+      console.warn('Could not clean up stale speaker-guided transcript temp files:', error.message);
+    }
+  }
 }
 
 function assertSafeExistingRecordingAudioPath(audioPath) {
@@ -3012,74 +3032,52 @@ ipcMain.handle('transcribe-audio-with-speakers', async (event, options = {}) => 
     tokenKey: TOKEN_KEYS.diarizationHuggingFace,
     safeStorage: getSafeStorage(),
   });
-  const outputTranscript = resolvedAudioPath.replace(/\.[^/.]+$/, '.md');
-  if (!isSafeRecordingsMarkdownPath({ filePath: outputTranscript, recordingsDir: getRecordingsDir() })) {
+  validateGuidedTranscriptionToken(token);
+
+  const recordingsDir = getRecordingsDir();
+  const finalTranscriptPath = resolvedAudioPath.replace(/\.[^/.]+$/, '.md');
+  if (!isSafeRecordingsMarkdownPath({ filePath: finalTranscriptPath, recordingsDir })) {
     throw new Error('Speaker-guided transcript must be a Markdown file in the recordings directory.');
   }
+  // The temporary file keeps a .md suffix so the existing Markdown path guard can
+  // validate it; startup cleanup removes orphaned hidden guided temp files.
+  const tempTranscriptPath = buildGuidedTranscriptTempPath({ finalTranscriptPath });
+  if (!isSafeRecordingsMarkdownPath({ filePath: tempTranscriptPath, recordingsDir })) {
+    throw new Error('Temporary speaker-guided transcript path is invalid.');
+  }
 
-  return enqueueAiComputeAction(() => new Promise((resolve, reject) => {
-    const python = spawnTrackedPython(buildManagedDiarizationGuidedTranscriptionArgs({
+  return enqueueAiComputeAction(() => runGuidedTranscriptionProcess({
+    spawnProcess: spawnTrackedPython,
+    args: buildManagedDiarizationGuidedTranscriptionArgs({
       audioPath: resolvedAudioPath,
-      outputTranscript,
+      outputTranscript: tempTranscriptPath,
       language,
       modelSize,
       modelRef: catalogModelRef,
       speakerCount: speakerCount || diarizationStatus.speakerCount || 'auto',
       requiredDevice,
-    }), {
-      cwd: pythonConfig.backendPath,
-      env: {
-        ...getDiarizationDependencyEnv(),
-        ...getDiarizationCacheEnv(),
-        ...buildCudaRuntimeEnv({}, { includeManagedDiarization: true }),
-        HF_TOKEN: token || '',
-        HUGGINGFACE_HUB_TOKEN: token || '',
-      },
-    });
-
-    let output = '';
-    let errorOutput = '';
-
-    python.stdout.on('data', (data) => {
-      output += data.toString();
-    });
-
-    python.stderr.on('data', (data) => {
-      const stderrChunk = data.toString();
-      errorOutput += stderrChunk;
-      for (const line of stderrChunk.split(/\r?\n/)) {
-        const progressEvent = parseAiBackendProgressLine(line, 'diarization');
-        if (progressEvent) {
-          sendToRenderer('diarization-progress', progressEvent);
-        } else if (line.trim()) {
-          sendToRenderer('transcription-progress', line);
-        }
+    }),
+    cwd: pythonConfig.backendPath,
+    env: {
+      ...getDiarizationDependencyEnv(),
+      ...getDiarizationCacheEnv(),
+      ...buildCudaRuntimeEnv({}, { includeManagedDiarization: true }),
+      ...buildTokenEnv(token),
+    },
+    finalTranscriptPath,
+    tempTranscriptPath,
+    modelSize,
+    fsPromises: fs.promises,
+    terminateProcess: terminateProcessBestEffort,
+    summarizeError: summarizeDiarizationError,
+    onProgressLine: (line) => {
+      const progressEvent = parseAiBackendProgressLine(line, 'diarization');
+      if (progressEvent) {
+        sendToRenderer('diarization-progress', progressEvent);
+      } else if (line.trim()) {
+        sendToRenderer('transcription-progress', line);
       }
-    });
-
-    python.on('close', async (code) => {
-      if (code === 0) {
-        try {
-          const result = JSON.parse(output);
-          const transcriptContent = await fs.promises.readFile(outputTranscript, 'utf8');
-          resolve({
-            ...result,
-            output_file: outputTranscript,
-            transcriptContent,
-          });
-        } catch (error) {
-          reject(new Error(`Failed to parse speaker-guided transcription result: ${error.message}`));
-        }
-        return;
-      }
-
-      const reason = summarizeDiarizationError(errorOutput);
-      reject(new Error(reason || 'Speaker-guided transcription failed.'));
-    });
-
-    python.on('error', (error) => {
-      reject(error);
-    });
+    },
   }));
 });
 
@@ -3149,8 +3147,7 @@ ipcMain.handle('diarize-transcript', async (event, options = {}) => {
         ...getDiarizationDependencyEnv(),
         ...getDiarizationCacheEnv(),
         ...buildCudaRuntimeEnv({}, { includeManagedDiarization: true }),
-        HF_TOKEN: token || '',
-        HUGGINGFACE_HUB_TOKEN: token || '',
+        ...buildTokenEnv(token),
       },
     });
 

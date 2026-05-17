@@ -25,8 +25,8 @@ class SummaryRuntimeError(ValueError):
 
 
 def decode_process_output(value: Any) -> str:
-    if isinstance(value, bytes):
-        return value.decode("utf-8", errors="replace")
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value).decode("utf-8", errors="replace")
     return str(value or "")
 
 

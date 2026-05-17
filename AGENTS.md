@@ -46,6 +46,7 @@ AvaNevis is a privacy-first Electron desktop app for recording microphone audio 
 - `backend/transcription/faster_whisper_transcriber.py`: Windows/default transcriber
 - `backend/transcription/mlx_whisper_transcriber.py`: Apple Silicon transcriber
 - `backend/diarization/diarization_pipeline.py`: local pyannote diarization runner and timestamp/speaker merge output
+- `backend/diarization/guided_transcription.py`: diarization-first speaker-guided transcription flow using padded speaker turns
 - `backend/summaries/summary_pipeline.py`, `backend/summaries/summary_runner.py`, `backend/summaries/llama_runtime.py`, `backend/summaries/hf_model_downloader.py`: local summary chunking, prompts, JSON validation/repair, Markdown rendering, pinned `llama.cpp` execution, and Hugging Face/Xet-backed summary model downloads
 
 ### Native macOS helper
@@ -128,6 +129,7 @@ Key quality assumptions to preserve:
 - Speaker diarization uses `pyannote/speaker-diarization-community-1` with the user's own Hugging Face token only. Do not embed, proxy, log, or persist a maintainer-owned token.
 - Tokens must stay in Electron `safeStorage`; do not write token values to manifests, meeting metadata, transcripts, summaries, progress events, or logs.
 - Diarization runs automatically only after transcription when setup is complete and platform policy allows it.
+- For new recordings with diarization ready, prefer the diarization-guided transcription path: run pyannote first, build padded speaker windows, transcribe those windows, then save speaker-labeled transcript chunks. If that guided path fails, save a normal transcript and persist diarization error metadata.
 - Diarization model refs must be resolved from the catalog in the main process, not trusted from renderer input.
 - macOS diarization is Apple Silicon MPS-only; do not add CPU-only macOS diarization as a fallback.
 - Summary generation is always user-triggered from Home or History.

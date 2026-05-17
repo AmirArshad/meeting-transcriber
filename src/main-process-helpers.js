@@ -77,7 +77,7 @@ function getMacMLXModelStorageDirs(modelSize = 'small') {
       return ['whisper-medium-mlx'];
     case 'large':
     case 'large-v3':
-      return ['distil-large-v3', 'whisper-large-v3-mlx'];
+      return ['whisper-large-v3-mlx'];
     default:
       return [`distil-${size}.en`, `whisper-${size}-mlx`, `whisper-${size}`];
   }
@@ -304,6 +304,133 @@ function buildDiarizationOutputPath({ audioPath } = {}) {
   const sourcePath = String(audioPath || '');
   const parsedPath = path.parse(sourcePath);
   return path.join(parsedPath.dir || '.', `${parsedPath.name || 'meeting'}.speakers.json`);
+}
+
+function buildGuidedTranscriptTempPath({ finalTranscriptPath, now = Date.now() } = {}) {
+  const parsedPath = path.parse(String(finalTranscriptPath || 'meeting.md'));
+  return path.join(parsedPath.dir || '.', `.${parsedPath.name || 'meeting'}.guided.${now}.tmp.md`);
+}
+
+function buildTokenEnv(token) {
+  const trimmedToken = typeof token === 'string' ? token.trim() : '';
+  if (!trimmedToken) {
+    return {};
+  }
+  return {
+    HF_TOKEN: trimmedToken,
+    HUGGINGFACE_HUB_TOKEN: trimmedToken,
+  };
+}
+
+function getGuidedTranscriptionTimeoutMinutes(modelSize) {
+  const modelTimeouts = { tiny: 45, base: 60, small: 90, medium: 135, large: 180, 'large-v3': 180 };
+  return modelTimeouts[modelSize] || 90;
+}
+
+function validateGuidedTranscriptionToken(token) {
+  if (!token || !String(token).trim()) {
+    throw new Error('Speaker identification setup is ready, but the Hugging Face token could not be read. Re-save the token in Settings and try again.');
+  }
+  return String(token).trim();
+}
+
+function runGuidedTranscriptionProcess({
+  spawnProcess,
+  args,
+  cwd,
+  env,
+  finalTranscriptPath,
+  tempTranscriptPath,
+  modelSize,
+  fsPromises,
+  terminateProcess,
+  summarizeError,
+  onProgressLine,
+  setTimer = setTimeout,
+  clearTimer = clearTimeout,
+} = {}) {
+  if (typeof spawnProcess !== 'function') {
+    return Promise.reject(new Error('Guided transcription requires a process spawner.'));
+  }
+
+  const files = fsPromises;
+  const timeoutMinutes = getGuidedTranscriptionTimeoutMinutes(modelSize);
+  return new Promise((resolve, reject) => {
+    const python = spawnProcess(args, { cwd, env });
+    let output = '';
+    let errorOutput = '';
+    let hasCompleted = false;
+
+    const cleanupTemp = () => {
+      if (files && typeof files.rm === 'function' && tempTranscriptPath) {
+        files.rm(tempTranscriptPath, { force: true }).catch(() => {});
+      }
+    };
+    const finish = (callback, value) => {
+      if (hasCompleted) {
+        return;
+      }
+      hasCompleted = true;
+      clearTimer(guidedTimeout);
+      callback(value);
+    };
+    const guidedTimeout = setTimer(() => {
+      if (hasCompleted) {
+        return;
+      }
+      hasCompleted = true;
+      if (typeof terminateProcess === 'function') {
+        terminateProcess(python);
+      }
+      cleanupTemp();
+      reject(new Error(`Speaker-guided transcription timeout after ${timeoutMinutes} minutes. The process may have stalled.`));
+    }, timeoutMinutes * 60 * 1000);
+
+    python.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    python.stderr.on('data', (data) => {
+      const stderrChunk = data.toString();
+      errorOutput += stderrChunk;
+      if (typeof onProgressLine === 'function') {
+        for (const line of stderrChunk.split(/\r?\n/)) {
+          if (line.trim()) {
+            onProgressLine(line);
+          }
+        }
+      }
+    });
+
+    python.on('close', async (code) => {
+      if (hasCompleted) return;
+      if (code === 0) {
+        try {
+          const result = JSON.parse(output);
+          await files.rename(tempTranscriptPath, finalTranscriptPath);
+          const transcriptContent = await files.readFile(finalTranscriptPath, 'utf8');
+          finish(resolve, {
+            ...result,
+            output_file: finalTranscriptPath,
+            transcriptContent,
+          });
+        } catch (error) {
+          cleanupTemp();
+          finish(reject, new Error(`Failed to parse speaker-guided transcription result: ${error.message}`));
+        }
+        return;
+      }
+
+      cleanupTemp();
+      const reason = typeof summarizeError === 'function' ? summarizeError(errorOutput) : '';
+      finish(reject, new Error(reason || 'Speaker-guided transcription failed.'));
+    });
+
+    python.on('error', (error) => {
+      cleanupTemp();
+      finish(reject, error);
+    });
+  });
 }
 
 function isPathInsideDirectory(filePath, directoryPath) {
@@ -877,6 +1004,8 @@ module.exports = {
   buildQuitRecordingDialogOptions,
   buildModelDownloadCheck,
   buildPythonModuleArgs,
+  buildGuidedTranscriptTempPath,
+  runGuidedTranscriptionProcess,
   buildTranscriberArgs,
   buildTranscriptionCudaInstallArgs,
   buildTranscriptionCudaUninstallArgs,
@@ -884,6 +1013,8 @@ module.exports = {
   getPythonSitePackagesCandidates,
   getPyTorchCudaBinCandidates,
   buildDiarizationOutputPath,
+  buildTokenEnv,
+  validateGuidedTranscriptionToken,
   cacheContainsModel,
   classifyRecorderStdoutChunk,
   dedupeMessages,
@@ -891,6 +1022,7 @@ module.exports = {
   getRecorderCloseAction,
   getRecorderEventAction,
   findRecorderResultPayload,
+  getGuidedTranscriptionTimeoutMinutes,
   getMacMLXModelStorageDirs,
   getTranscriberModule,
   getModelDownloadCacheDir,

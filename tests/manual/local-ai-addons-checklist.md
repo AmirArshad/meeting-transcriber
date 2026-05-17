@@ -20,9 +20,10 @@ Use this checklist when validating speaker identification or local summaries on 
 - [ ] Re-run speaker setup after cancellation and confirm stale dependency artifact directories are removed while the current artifact installs cleanly.
 - [ ] Validate setup from Settings and confirm status becomes Ready.
 - [ ] Record and transcribe a meeting with 2-4 speakers.
-- [ ] Confirm diarization starts automatically only after transcription is saved.
+- [ ] Confirm speaker-guided transcription starts automatically when setup is ready: pyannote runs first, then Whisper transcribes speaker-shaped windows.
 - [ ] Confirm normal transcript remains saved if diarization fails.
 - [ ] Confirm `*.speakers.json` is written and meeting metadata references it without token values.
+- [ ] Confirm History shows a per-recording speaker-identification failure message if guided transcription falls back to normal transcription.
 - [ ] Confirm current transcript and History transcript show speaker labels.
 - [ ] Attempt a second diarization/summary run while one local AI backend is active and confirm the app serializes work instead of launching concurrent GPU-heavy processes.
 
@@ -33,7 +34,7 @@ Use this checklist when validating speaker identification or local summaries on 
 - [ ] Confirm speaker setup installs managed dependencies under Electron `userData/ai-addons/dependencies/diarization` only after explicit setup.
 - [ ] Confirm setup validates PyTorch Metal/MPS availability from the managed dependency environment before status becomes Ready.
 - [ ] Temporarily make MPS unavailable or force validation failure and confirm setup stays Error/Unsupported with clear Metal/MPS copy.
-- [ ] Record and transcribe a meeting with 2-4 speakers and confirm diarization runs after transcription using MPS, writes `*.speakers.json`, and speaker labels appear.
+- [ ] Record and transcribe a meeting with 2-4 speakers and confirm speaker-guided transcription uses MPS, writes `*.speakers.json`, and speaker labels appear.
 - [ ] Confirm macOS transcription still works normally when diarization setup or runtime fails.
 - [ ] Confirm no CPU-only diarization fallback runs in setup or at runtime.
 - [ ] Cancel speaker setup during dependency download/install and confirm partial dependency files are removed and token values are not logged.

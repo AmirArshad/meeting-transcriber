@@ -241,6 +241,7 @@ def test_run_llama_prompt_replaces_invalid_utf8_output(monkeypatch, tmp_path):
 
 def test_decode_process_output_replaces_invalid_utf8_bytes():
     assert decode_process_output(b'ERROR: bad \xe2 byte') == 'ERROR: bad � byte'
+    assert decode_process_output(bytearray(b'ERROR: bad \xe2 byte')) == 'ERROR: bad � byte'
 
 
 def test_strip_llama_prompt_echo_leaves_plain_generation_output():

@@ -49,6 +49,12 @@ def normalize_whitespace(text: Any) -> str:
     return re.sub(r"\s+", " ", str(text or "")).strip()
 
 
+def decode_process_output(value: Any) -> str:
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value).decode("utf-8", errors="replace")
+    return str(value or "")
+
+
 def normalize_speaker_turns(
     speaker_segments: Iterable[Dict[str, Any]],
     *,
@@ -178,11 +184,12 @@ def extract_audio_window(
     result = subprocess.run(
         build_audio_window_extract_command(ffmpeg_path, source_audio, target_audio, start=start, end=end),
         capture_output=True,
-        text=True,
         check=False,
     )
     if result.returncode != 0:
-        raise RuntimeError(f"Could not extract diarization-guided audio window (exit code {result.returncode}).")
+        detail = normalize_whitespace(decode_process_output(result.stderr))
+        suffix = f": {detail[:200]}" if detail else ""
+        raise RuntimeError(f"Could not extract diarization-guided audio window (exit code {result.returncode}){suffix}.")
     if not target_audio.exists():
         raise RuntimeError("ffmpeg did not create the diarization-guided audio window.")
 
@@ -239,12 +246,14 @@ def extract_window_text_for_turn(result: Dict[str, Any], window: Dict[str, Any])
     audio_start = _to_float(window.get("audioStart"))
     selected_text: List[str] = []
     fallback_text: List[str] = []
+    all_text: List[str] = []
     for segment in segments:
         if not isinstance(segment, dict):
             continue
         text = normalize_whitespace(segment.get("text"))
         if not text:
             continue
+        all_text.append(text)
         absolute = {
             "start": audio_start + _to_float(segment.get("start")),
             "end": audio_start + _to_float(segment.get("end")),
@@ -255,7 +264,7 @@ def extract_window_text_for_turn(result: Dict[str, Any], window: Dict[str, Any])
         if temporal_overlap(absolute, turn) > 0:
             selected_text.append(text)
 
-    return normalize_whitespace(" ".join(selected_text or fallback_text))
+    return normalize_whitespace(" ".join(selected_text or fallback_text or all_text))
 
 
 def transcribe_speaker_windows(

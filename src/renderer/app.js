@@ -1318,6 +1318,7 @@ async function selectMeeting(meetingId) {
       empty.textContent = 'No transcript available';
       transcriptEl.appendChild(empty);
     }
+    renderMeetingDiarizationStatus(fullMeeting, transcriptEl);
 
     if (fullMeeting.summary) {
       renderSummaryMarkdown(fullMeeting.summary, { stale: fullMeeting.summaryStale });
@@ -2109,6 +2110,18 @@ function writeTranscriptMarkdown({ meeting, transcriptionResult, diarizationResu
   return lines.join('\n');
 }
 
+function renderMeetingDiarizationStatus(meeting, container) {
+  const diarization = meeting && meeting.ai && meeting.ai.diarization;
+  if (!diarization || diarization.status !== 'error') {
+    return;
+  }
+
+  const message = document.createElement('p');
+  message.className = 'placeholder error';
+  message.textContent = `Speaker identification failed for this recording. ${diarization.error || 'The transcript was saved without speaker-guided chunks.'}`;
+  container.appendChild(message);
+}
+
 async function maybeRunDiarizationAfterTranscription(savedMeeting, transcriptionResult) {
   if (!savedMeeting || !savedMeeting.id || !savedMeeting.audioPath || !transcriptionResult.segments || transcriptionResult.segments.length === 0) {
     return null;
@@ -2187,7 +2200,9 @@ async function getReadyDiarizationStatusForRecording() {
       return diarizationStatus;
     }
   } catch (error) {
-    addLog(`Speaker identification status unavailable: ${error.message}`, 'warning');
+    const message = `Speaker identification temporarily unavailable; recording will be transcribed without speaker-guided chunks. ${error.message}`;
+    addLog(message, 'warning');
+    setTranscriptMessage(message, true);
   }
 
   return null;
@@ -2222,6 +2237,25 @@ async function saveGuidedDiarizationMetadata(savedMeeting, diarizationStatus, di
   });
 
   return speakerSidecarPath;
+}
+
+async function saveDiarizationFailureMetadata(savedMeeting, diarizationStatus, error) {
+  if (!savedMeeting || !savedMeeting.id) {
+    return;
+  }
+
+  try {
+    await window.electronAPI.updateMeetingAi(savedMeeting.id, {
+      diarization: {
+        status: 'error',
+        model: diarizationStatus && diarizationStatus.modelId,
+        completedAt: new Date().toISOString(),
+        error: error && error.message ? error.message : 'Speaker-guided transcription failed.',
+      },
+    });
+  } catch (metadataError) {
+    addLog(`Could not save speaker identification failure state: ${metadataError.message}`, 'warning');
+  }
 }
 
 function syncMeetingInList(updatedMeeting) {
@@ -2382,6 +2416,7 @@ async function transcribeAudio() {
     let result;
     let guidedDiarizationStatus = diarizationStatus;
     let guidedDiarizationResult = null;
+    let guidedTranscriptionError = null;
     try {
       if (useGuidedTranscription) {
         addLog('Speaker identification is ready; using speaker-guided transcription.');
@@ -2404,6 +2439,8 @@ async function transcribeAudio() {
         throw guidedError;
       }
       addLog(`Speaker-guided transcription failed; falling back to normal transcription. ${guidedError.message}`, 'warning');
+      setTranscriptMessage(`Speaker-guided transcription failed; saving a normal transcript instead. ${guidedError.message}`, true);
+      guidedTranscriptionError = guidedError;
       result = await window.electronAPI.transcribeAudio({
         audioFile: currentAudioFile,
         language,
@@ -2465,7 +2502,11 @@ async function transcribeAudio() {
           }
           addLog('Speaker-guided transcript saved!');
         } else {
-          await maybeRunDiarizationAfterTranscription(savedMeeting, result);
+          if (guidedTranscriptionError) {
+            await saveDiarizationFailureMetadata(savedMeeting, diarizationStatus, guidedTranscriptionError);
+          } else {
+            await maybeRunDiarizationAfterTranscription(savedMeeting, result);
+          }
         }
       }
       addLog('Meeting saved!');

@@ -60,6 +60,22 @@ def test_extract_window_text_for_turn_drops_padded_context():
     assert guided.extract_window_text_for_turn(result, window) == 'current speaker words'
 
 
+def test_extract_window_text_for_turn_keeps_text_when_segments_do_not_overlap():
+    result = {
+        'segments': [
+            {'start': 0.0, 'end': 0.2, 'text': 'edge words'},
+            {'start': 0.2, 'end': 0.4, 'text': 'kept'},
+        ]
+    }
+    window = {'start': 20.0, 'end': 21.0, 'audioStart': 10.0, 'audioEnd': 21.2}
+
+    assert guided.extract_window_text_for_turn(result, window) == 'edge words kept'
+
+
+def test_decode_process_output_replaces_invalid_bytes():
+    assert guided.decode_process_output(bytearray(b'bad \xe2 byte')) == 'bad � byte'
+
+
 def test_transcribe_speaker_windows_uses_turn_timestamps_and_speaker(monkeypatch, tmp_path):
     source_audio = tmp_path / 'source.wav'
     source_audio.write_bytes(b'audio')

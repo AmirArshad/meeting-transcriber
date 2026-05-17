@@ -236,28 +236,29 @@ Saved summaries include a `sourceTranscriptHash`. If a transcript changes after 
 
 ## Transcription Flow
 
-Existing recording and Whisper transcription remain unchanged until Whisper has produced text, timestamps, and output files.
+When speaker identification is ready, new recordings use a diarization-guided transcription path so speaker labels are based on pyannote turns before Whisper chunks are created. If guided transcription fails, AvaNevis saves a normal transcript, persists diarization error metadata, and keeps the transcript usable.
 
 ```text
 recording stops
-  -> existing Whisper transcription path
-  -> if speaker identification is ready, run diarization automatically
-  -> write final transcript artifact
+  -> if speaker identification is ready, run pyannote diarization first
+  -> build padded speaker windows from diarization turns
+  -> transcribe speaker windows with Whisper
+  -> save speaker-labeled transcript and speaker sidecar
   -> save meeting metadata
   -> render transcript on Home
 ```
 
 Implementation notes:
 
-- Run diarization after Whisper produces timestamped segments.
-- Use the same source audio file that was transcribed.
+- Run diarization before Whisper chunking when setup is ready; keep the post-hoc diarization merge as a fallback/legacy path only.
+- Use padded speaker windows so Whisper has boundary context, but assign text back to the unpadded speaker turn when timestamps are available.
+- Use the same source audio file for diarization and transcription windows.
 - Main-process path checks must keep audio, transcript, speaker sidecar, and generated summary sidecars inside the recordings directory.
-- On macOS, only run diarization with the MPS device required by the main process. If MPS is unavailable, refuse CPU fallback and save the normal transcript without speaker labels.
+- On macOS, only run diarization with the MPS device required by the main process. On Windows, require CUDA where platform policy says CUDA is required. If the required accelerator is unavailable, refuse CPU fallback and save the normal transcript without speaker labels.
 - Prefer `exclusive_speaker_diarization` for timestamp alignment.
-- Merge speaker labels by overlap with Whisper segments.
-- Rewrite or create the final Markdown transcript only after speaker labels have been merged.
+- Write guided transcripts through hidden temporary Markdown files before replacing the final transcript path; clean up stale guided temp files on startup.
 - Preserve the unlabeled transcript data or source hash for debugging/regeneration if practical.
-- If diarization fails, save the meeting with the normal transcript, mark the diarization run as failed, and show a warning. Do not discard the transcript.
+- If guided diarization/transcription fails, save the meeting with the normal transcript, mark the diarization run as failed, and show a warning. Do not discard the transcript.
 
 The final transcript display should include speaker labels when available:
 
