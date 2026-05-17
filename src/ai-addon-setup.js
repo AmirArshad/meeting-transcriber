@@ -838,22 +838,6 @@ function deriveDiarizationStatus(featureStatus, tokenStatus, dependencyCache) {
       error: dependencyCache.reason || 'Speaker identification dependencies are not installed.',
     };
   }
-  if (featureStatus.status === 'ready' && tokenStatus.encryptionAvailable === false) {
-    return {
-      ...featureStatus,
-      status: 'error',
-      error: tokenStatus.hasToken
-        ? 'Stored Hugging Face token exists, but secure token storage is unavailable right now. Unlock Keychain or restart AvaNevis and try again.'
-        : 'Secure token storage is unavailable right now. Unlock Keychain or restart AvaNevis and try again.',
-    };
-  }
-  if (featureStatus.status === 'ready' && !tokenStatus.hasToken) {
-    return {
-      ...featureStatus,
-      status: 'needsAccount',
-      error: 'Hugging Face token is missing.',
-    };
-  }
   return featureStatus;
 }
 
@@ -947,7 +931,7 @@ async function checkAiAddonSetupStatus({
     tokenStatus,
     cache: checkDiarizationCache({ userDataDir, modelId: diarization.modelId }),
     dependencyCache: diarizationDependencyCache,
-    setupComplete: diarization.status === 'ready' && tokenStatus.hasToken && tokenStatus.encryptionAvailable !== false && diarizationDependencyCache.valid,
+    setupComplete: diarization.status === 'ready' && diarizationDependencyCache.valid,
   };
   diarizationWithStorage.storage = buildDiarizationStorageFootprint({
     userDataDir,

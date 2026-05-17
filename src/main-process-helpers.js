@@ -311,27 +311,9 @@ function buildGuidedTranscriptTempPath({ finalTranscriptPath, now = Date.now() }
   return path.join(parsedPath.dir || '.', `.${parsedPath.name || 'meeting'}.guided.${now}.tmp.md`);
 }
 
-function buildTokenEnv(token) {
-  const trimmedToken = typeof token === 'string' ? token.trim() : '';
-  if (!trimmedToken) {
-    return {};
-  }
-  return {
-    HF_TOKEN: trimmedToken,
-    HUGGINGFACE_HUB_TOKEN: trimmedToken,
-  };
-}
-
 function getGuidedTranscriptionTimeoutMinutes(modelSize) {
   const modelTimeouts = { tiny: 45, base: 60, small: 90, medium: 135, large: 180, 'large-v3': 180 };
   return modelTimeouts[modelSize] || 90;
-}
-
-function validateGuidedTranscriptionToken(token) {
-  if (!token || !String(token).trim()) {
-    throw new Error('Speaker identification setup is ready, but the Hugging Face token could not be read. Re-save the token in Settings and try again.');
-  }
-  return String(token).trim();
 }
 
 function runGuidedTranscriptionProcess({
@@ -1013,8 +995,6 @@ module.exports = {
   getPythonSitePackagesCandidates,
   getPyTorchCudaBinCandidates,
   buildDiarizationOutputPath,
-  buildTokenEnv,
-  validateGuidedTranscriptionToken,
   cacheContainsModel,
   classifyRecorderStdoutChunk,
   dedupeMessages,

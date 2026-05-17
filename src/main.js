@@ -20,7 +20,6 @@ const {
   buildModelDownloadCheck,
   buildDiarizationOutputPath,
   buildGuidedTranscriptTempPath,
-  buildTokenEnv,
   buildPythonModuleArgs,
   runGuidedTranscriptionProcess,
   buildTranscriberArgs,
@@ -34,7 +33,6 @@ const {
   getRecorderCloseAction,
   getRecorderEventAction,
   getRecordingStopTimeout,
-  validateGuidedTranscriptionToken,
   findRecorderResultPayload,
   resolveStopTimeoutAction,
   isModelDownloadErrorOutput,
@@ -3027,13 +3025,6 @@ ipcMain.handle('transcribe-audio-with-speakers', async (event, options = {}) => 
     throw new Error('Speaker identification model is not configured.');
   }
 
-  const token = getAiAddonToken({
-    userDataDir: app.getPath('userData'),
-    tokenKey: TOKEN_KEYS.diarizationHuggingFace,
-    safeStorage: getSafeStorage(),
-  });
-  validateGuidedTranscriptionToken(token);
-
   const recordingsDir = getRecordingsDir();
   const finalTranscriptPath = resolvedAudioPath.replace(/\.[^/.]+$/, '.md');
   if (!isSafeRecordingsMarkdownPath({ filePath: finalTranscriptPath, recordingsDir })) {
@@ -3062,7 +3053,8 @@ ipcMain.handle('transcribe-audio-with-speakers', async (event, options = {}) => 
       ...getDiarizationDependencyEnv(),
       ...getDiarizationCacheEnv(),
       ...buildCudaRuntimeEnv({}, { includeManagedDiarization: true }),
-      ...buildTokenEnv(token),
+      HF_TOKEN: '',
+      HUGGINGFACE_HUB_TOKEN: '',
     },
     finalTranscriptPath,
     tempTranscriptPath,
@@ -3127,12 +3119,6 @@ ipcMain.handle('diarize-transcript', async (event, options = {}) => {
   if (!isSafeRecordingsJsonPath({ filePath: resolvedOutputPath, recordingsDir: getRecordingsDir() })) {
     throw new Error('Speaker labels output must be a JSON file in the recordings directory.');
   }
-  const token = getAiAddonToken({
-    userDataDir: app.getPath('userData'),
-    tokenKey: TOKEN_KEYS.diarizationHuggingFace,
-    safeStorage: getSafeStorage(),
-  });
-
   return enqueueAiComputeAction(() => new Promise((resolve, reject) => {
     const python = spawnTrackedPython(buildManagedDiarizationArgs({
       audioPath: resolvedAudioPath,
@@ -3147,7 +3133,8 @@ ipcMain.handle('diarize-transcript', async (event, options = {}) => {
         ...getDiarizationDependencyEnv(),
         ...getDiarizationCacheEnv(),
         ...buildCudaRuntimeEnv({}, { includeManagedDiarization: true }),
-        ...buildTokenEnv(token),
+        HF_TOKEN: '',
+        HUGGINGFACE_HUB_TOKEN: '',
       },
     });
 

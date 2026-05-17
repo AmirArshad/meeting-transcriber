@@ -103,3 +103,44 @@ def test_transcribe_speaker_windows_uses_turn_timestamps_and_speaker(monkeypatch
 def test_resolve_transcriber_backend_rejects_unknown_backend():
     with pytest.raises(ValueError, match='auto, mlx, or faster'):
         guided.resolve_transcriber_backend('cloud')
+
+
+def test_guided_transcription_runs_diarization_without_token(monkeypatch, tmp_path):
+    audio_path = tmp_path / 'meeting.wav'
+    audio_path.write_bytes(b'audio')
+    output_path = tmp_path / 'meeting.md'
+    calls = []
+
+    class FakeTranscriber:
+        def load_model(self):
+            pass
+
+        def transcribe_file(self, audio_path, save_markdown=False):
+            return {'segments': [{'start': 0.0, 'end': 1.0, 'text': 'hello'}]}
+
+        def cleanup(self):
+            pass
+
+    monkeypatch.delenv('HF_TOKEN', raising=False)
+    monkeypatch.delenv('HUGGINGFACE_HUB_TOKEN', raising=False)
+    monkeypatch.setattr(guided, 'prepare_diarization_audio', lambda _audio_path, _work_dir, ffmpeg_path='ffmpeg': audio_path)
+    monkeypatch.setattr(guided, 'get_audio_duration_seconds', lambda _path: 2.0)
+    monkeypatch.setattr(guided, 'run_pyannote_diarization', lambda audio, **kwargs: calls.append((audio, kwargs)) or ([{'start': 0.0, 'end': 1.0, 'speaker': 'SPEAKER_00'}], 'exclusive_speaker_diarization', 'mps'))
+    monkeypatch.setattr(guided, 'create_transcriber', lambda **_kwargs: FakeTranscriber())
+    monkeypatch.setattr(guided, 'extract_audio_window', lambda *args, **kwargs: None)
+
+    result = guided.transcribe_with_diarization_guidance(
+        audio_path=str(audio_path),
+        output_transcript=str(output_path),
+        model_ref='pyannote/test-model',
+        required_device='mps',
+    )
+
+    assert result['text'] == 'hello'
+    assert output_path.exists()
+    assert calls == [(audio_path, {
+        'model_ref': 'pyannote/test-model',
+        'hf_token': '',
+        'speaker_count': None,
+        'required_device': 'mps',
+    })]

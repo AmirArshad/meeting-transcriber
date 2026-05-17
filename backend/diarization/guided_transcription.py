@@ -388,10 +388,11 @@ def transcribe_with_diarization_guidance(
         prepared_audio = prepare_diarization_audio(str(source_audio), work_dir_name, ffmpeg_path=ffmpeg_path)
         audio_duration = get_audio_duration_seconds(prepared_audio)
 
+        token = hf_token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN") or ""
         speaker_segments, annotation_source, device = run_pyannote_diarization(
             prepared_audio,
             model_ref=model_ref,
-            hf_token=hf_token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN") or "",
+            hf_token=token,
             speaker_count=speaker_count,
             required_device=required_device,
         )

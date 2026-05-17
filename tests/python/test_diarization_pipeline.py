@@ -221,6 +221,35 @@ def test_run_pyannote_diarization_uses_file_path_for_long_audio(monkeypatch, tmp
     assert calls == [(str(audio_path), {})]
 
 
+def test_run_pyannote_diarization_loads_cached_model_without_token(monkeypatch, tmp_path):
+    audio_path = tmp_path / 'meeting.wav'
+    audio_path.write_text('audio', encoding='utf-8')
+    load_calls = []
+
+    class FakePipeline:
+        def __call__(self, audio_input, **kwargs):
+            return {'exclusive_speaker_diarization': [{'start': 0, 'end': 1, 'speaker': 'SPEAKER_00'}]}
+
+    def fake_load(model_ref, hf_token='', **kwargs):
+        load_calls.append({'model_ref': model_ref, 'hf_token': hf_token, **kwargs})
+        return FakePipeline()
+
+    monkeypatch.setattr(pipeline, 'assert_required_device_available', lambda _device: object())
+    monkeypatch.setattr(pipeline, 'load_pyannote_pipeline', fake_load)
+    monkeypatch.setattr(pipeline, 'move_pipeline_to_best_device', lambda _pipeline, required_device=None: required_device or 'mps')
+    monkeypatch.setattr(pipeline, 'should_load_audio_in_memory', lambda _path: False)
+
+    speaker_segments, _annotation_source, device = pipeline.run_pyannote_diarization(
+        audio_path,
+        model_ref='pyannote/test-model',
+        required_device='mps',
+    )
+
+    assert speaker_segments == [{'start': 0.0, 'end': 1.0, 'speaker': 'SPEAKER_00'}]
+    assert device == 'mps'
+    assert load_calls == [{'model_ref': 'pyannote/test-model', 'hf_token': '', 'local_files_only': True}]
+
+
 def test_load_transcript_segments_accepts_list_or_object(tmp_path):
     list_path = tmp_path / 'segments-list.json'
     object_path = tmp_path / 'segments-object.json'
@@ -526,6 +555,37 @@ def test_load_pyannote_pipeline_supports_offline_cached_execution(monkeypatch):
     assert calls == [{
         'model_ref': 'pyannote/test-model',
         'token': 'hf_validtoken123',
+        'local_files_only': True,
+        'offline': '1',
+    }]
+    assert 'HF_HUB_OFFLINE' not in os.environ
+
+
+def test_load_pyannote_pipeline_omits_token_for_offline_cached_execution(monkeypatch):
+    calls = []
+
+    class FakePipeline:
+        @staticmethod
+        def from_pretrained(model_ref, token=None, local_files_only=None):
+            calls.append({
+                'model_ref': model_ref,
+                'token': token,
+                'local_files_only': local_files_only,
+                'offline': os.environ.get('HF_HUB_OFFLINE'),
+            })
+            return {'loaded': model_ref}
+
+    fake_pyannote_audio = types.SimpleNamespace(Pipeline=FakePipeline)
+    monkeypatch.setitem(sys.modules, 'pyannote', types.SimpleNamespace(audio=fake_pyannote_audio))
+    monkeypatch.setitem(sys.modules, 'pyannote.audio', fake_pyannote_audio)
+    monkeypatch.delenv('HF_HUB_OFFLINE', raising=False)
+
+    loaded = pipeline.load_pyannote_pipeline('pyannote/test-model', local_files_only=True)
+
+    assert loaded == {'loaded': 'pyannote/test-model'}
+    assert calls == [{
+        'model_ref': 'pyannote/test-model',
+        'token': None,
         'local_files_only': True,
         'offline': '1',
     }]

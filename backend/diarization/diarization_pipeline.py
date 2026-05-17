@@ -301,7 +301,7 @@ def annotation_to_speaker_segments(annotation: Any) -> List[Dict[str, Any]]:
     return speaker_segments
 
 
-def build_pyannote_from_pretrained_kwargs(from_pretrained: Any, hf_token: str, *, local_files_only: bool = False) -> Dict[str, Any]:
+def build_pyannote_from_pretrained_kwargs(from_pretrained: Any, hf_token: str = "", *, local_files_only: bool = False) -> Dict[str, Any]:
     try:
         parameters = signature(from_pretrained).parameters
     except (TypeError, ValueError):
@@ -309,12 +309,13 @@ def build_pyannote_from_pretrained_kwargs(from_pretrained: Any, hf_token: str, *
 
     accepts_kwargs = any(parameter.kind == Parameter.VAR_KEYWORD for parameter in parameters.values())
     kwargs: Dict[str, Any] = {}
-    if accepts_kwargs or "token" in parameters:
+    if (accepts_kwargs or "token" in parameters) and hf_token:
         kwargs["token"] = hf_token
     elif "use_auth_token" in parameters:
         if local_files_only:
             raise RuntimeError("Installed pyannote.audio is too old to enforce offline cached execution. Re-run speaker identification setup in Settings.")
-        kwargs["use_auth_token"] = hf_token
+        if hf_token:
+            kwargs["use_auth_token"] = hf_token
 
     if accepts_kwargs or "local_files_only" in parameters:
         kwargs["local_files_only"] = local_files_only
@@ -322,7 +323,7 @@ def build_pyannote_from_pretrained_kwargs(from_pretrained: Any, hf_token: str, *
     return kwargs
 
 
-def load_pyannote_pipeline(model_ref: str, hf_token: str, *, local_files_only: bool = False) -> Any:
+def load_pyannote_pipeline(model_ref: str, hf_token: str = "", *, local_files_only: bool = False) -> Any:
     try:
         from pyannote.audio import Pipeline  # type: ignore[import-not-found]
     except ImportError as exc:
@@ -372,13 +373,10 @@ def run_pyannote_diarization(
     audio_path: Path,
     *,
     model_ref: str,
-    hf_token: str,
+    hf_token: str = "",
     speaker_count: Optional[int] = None,
     required_device: Optional[str] = None,
 ) -> Tuple[List[Dict[str, Any]], str, str]:
-    if not hf_token:
-        raise ValueError("Hugging Face token is required for speaker diarization.")
-
     device_requirement = normalize_required_device(required_device)
     if device_requirement:
         emit_progress("validating-accelerator", f"Checking {device_requirement.upper()} speaker identification acceleration.", percent=30)
@@ -454,10 +452,11 @@ def diarize_transcript(
     with tempfile.TemporaryDirectory(prefix="avanevis-diarization-") as work_dir:
         emit_progress("preparing-audio", "Preparing audio for speaker diarization.", percent=15)
         prepared_audio = prepare_diarization_audio(audio_path, work_dir, ffmpeg_path=ffmpeg_path)
+        token = hf_token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN") or ""
         speaker_segments, annotation_source, device = run_pyannote_diarization(
             prepared_audio,
             model_ref=model_ref,
-            hf_token=hf_token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN") or "",
+            hf_token=token,
             speaker_count=speaker_count,
             required_device=required_device,
         )

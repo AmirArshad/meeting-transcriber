@@ -16,7 +16,6 @@ const {
   buildGuidedTranscriptTempPath,
   buildModelDownloadCheck,
   runGuidedTranscriptionProcess,
-  buildTokenEnv,
   buildPythonModuleArgs,
   buildTranscriberArgs,
   buildTranscriptionCudaInstallArgs,
@@ -33,7 +32,6 @@ const {
   getMacMLXCacheDir,
   getMacMLXModelStorageDirs,
   getGuidedTranscriptionTimeoutMinutes,
-  validateGuidedTranscriptionToken,
   getModelDownloadPatterns,
   getRecordingStopTimeout,
   getTranscriberModule,
@@ -162,25 +160,6 @@ test('buildGuidedTranscriptTempPath creates hidden markdown temp path', () => {
     buildGuidedTranscriptTempPath({ finalTranscriptPath: path.join('/recordings', 'meeting_1.md'), now: 1234 }),
     path.join('/recordings', '.meeting_1.guided.1234.tmp.md'),
   );
-});
-
-
-test('buildTokenEnv only exposes non-empty tokens', () => {
-  assert.deepEqual(buildTokenEnv(''), {});
-  assert.deepEqual(buildTokenEnv('   '), {});
-  assert.deepEqual(buildTokenEnv(' hf_secret '), {
-    HF_TOKEN: 'hf_secret',
-    HUGGINGFACE_HUB_TOKEN: 'hf_secret',
-  });
-});
-
-
-test('validateGuidedTranscriptionToken rejects missing token', () => {
-  assert.throws(
-    () => validateGuidedTranscriptionToken(''),
-    /token could not be read/i,
-  );
-  assert.equal(validateGuidedTranscriptionToken(' hf_secret '), 'hf_secret');
 });
 
 

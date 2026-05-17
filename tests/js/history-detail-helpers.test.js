@@ -59,12 +59,12 @@ test('setup messages explain graceful degradation paths', () => {
     getDiarizationSetupMessage({ status: 'needsAccount' }),
     /own Hugging Face token.*model terms/i,
   );
-  assert.match(
+  assert.doesNotMatch(
     getDiarizationSetupMessage({
       status: 'needsAccount',
       tokenStatus: { hasToken: true, encryptionAvailable: false },
     }),
-    /token is still stored.*secure storage is unavailable/i,
+    /secure storage is unavailable/i,
   );
   assert.match(
     getDiarizationSetupMessage({
