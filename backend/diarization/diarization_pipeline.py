@@ -49,6 +49,23 @@ def pyannote_torch_load_compat() -> Any:
             os.environ[key] = previous
 
 
+@contextlib.contextmanager
+def hugging_face_offline_mode(enabled: bool) -> Any:
+    keys = ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE")
+    previous = {key: os.environ.get(key) for key in keys}
+    if enabled:
+        for key in keys:
+            os.environ[key] = "1"
+    try:
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
 def validate_pyannote_setup(
     *,
     model_ref: str = DEFAULT_MODEL_REF,
@@ -186,6 +203,17 @@ def prepare_diarization_audio(audio_path: str, work_dir: str, *, ffmpeg_path: st
     return target_path
 
 
+def load_prepared_audio_for_pipeline(audio_path: Path) -> Any:
+    """Load prepared 16 kHz mono WAV into memory for pyannote inference."""
+    try:
+        import torchaudio  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise RuntimeError("torchaudio is not installed for speaker diarization.") from exc
+
+    waveform, sample_rate = torchaudio.load(str(audio_path))
+    return {"waveform": waveform, "sample_rate": sample_rate}
+
+
 def load_transcript_segments(segments_json_path: str) -> List[Dict[str, Any]]:
     with open(segments_json_path, "r", encoding="utf-8") as handle:
         payload = json.load(handle)
@@ -251,15 +279,15 @@ def annotation_to_speaker_segments(annotation: Any) -> List[Dict[str, Any]]:
     return speaker_segments
 
 
-def load_pyannote_pipeline(model_ref: str, hf_token: str) -> Any:
+def load_pyannote_pipeline(model_ref: str, hf_token: str, *, local_files_only: bool = False) -> Any:
     try:
         from pyannote.audio import Pipeline  # type: ignore[import-not-found]
     except ImportError as exc:
         raise RuntimeError("pyannote.audio is not installed for speaker diarization.") from exc
 
-    with pyannote_torch_load_compat():
+    with pyannote_torch_load_compat(), hugging_face_offline_mode(local_files_only):
         try:
-            return Pipeline.from_pretrained(model_ref, token=hf_token)
+            return Pipeline.from_pretrained(model_ref, token=hf_token, local_files_only=local_files_only)
         except TypeError:
             return Pipeline.from_pretrained(model_ref, use_auth_token=hf_token)
 
@@ -311,7 +339,7 @@ def run_pyannote_diarization(
         assert_required_device_available(device_requirement)
 
     emit_progress("loading-model", "Loading speaker diarization model.", percent=35)
-    pipeline = load_pyannote_pipeline(model_ref, hf_token)
+    pipeline = load_pyannote_pipeline(model_ref, hf_token, local_files_only=True)
     device = move_pipeline_to_best_device(pipeline, required_device=device_requirement)
 
     emit_progress("running-model", "Running speaker diarization locally.", percent=55)
@@ -319,7 +347,8 @@ def run_pyannote_diarization(
     if speaker_count is not None:
         kwargs["num_speakers"] = speaker_count
 
-    result = pipeline(str(audio_path), **kwargs)
+    audio_input = load_prepared_audio_for_pipeline(audio_path)
+    result = pipeline(audio_input, **kwargs)
     annotation, annotation_source = select_annotation(result)
 
     emit_progress("merging-speakers", "Merging speaker labels into transcript timestamps.", percent=80)

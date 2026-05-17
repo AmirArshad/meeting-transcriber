@@ -157,6 +157,45 @@ function buildUnsupportedCudaPythonMessage(versionOutput) {
 
 const TRANSCRIPTION_CUDA_PACKAGES = Object.freeze(['nvidia-cublas-cu12', 'nvidia-cudnn-cu12']);
 const LEGACY_TRANSCRIPTION_CUDA_PACKAGES = Object.freeze(['torch', 'torchvision', 'torchaudio']);
+const PYTORCH_CUDA_BIN_DIRS = Object.freeze([
+  ['nvidia', 'cublas', 'bin'],
+  ['nvidia', 'cudnn', 'bin'],
+  ['nvidia', 'cuda_runtime', 'bin'],
+  ['nvidia', 'cufft', 'bin'],
+  ['nvidia', 'curand', 'bin'],
+  ['nvidia', 'cusolver', 'bin'],
+  ['nvidia', 'cusparse', 'bin'],
+  ['nvidia', 'nccl', 'bin'],
+  ['nvidia', 'nvjitlink', 'bin'],
+  ['nvidia', 'nvtx', 'bin'],
+]);
+
+function getPythonSitePackagesCandidates({ pythonExe = '', virtualEnv = '', appData = '', platform = process.platform } = {}) {
+  if (platform !== 'win32') {
+    return [];
+  }
+
+  const pythonExeDir = pythonExe ? path.dirname(pythonExe) : '';
+  const pythonRootDir = path.basename(pythonExeDir).toLowerCase() === 'scripts'
+    ? path.dirname(pythonExeDir)
+    : pythonExeDir;
+
+  return [
+    pythonRootDir ? path.join(pythonRootDir, 'Lib', 'site-packages') : null,
+    virtualEnv ? path.join(virtualEnv, 'Lib', 'site-packages') : null,
+    appData ? path.join(appData, 'Python', 'Python311', 'site-packages') : null,
+  ].filter(Boolean);
+}
+
+function getPyTorchCudaBinCandidates(sitePackagesDirs = []) {
+  const candidates = [];
+  for (const sitePackagesDir of sitePackagesDirs || []) {
+    for (const parts of PYTORCH_CUDA_BIN_DIRS) {
+      candidates.push(path.join(sitePackagesDir, ...parts));
+    }
+  }
+  return candidates;
+}
 
 function buildTranscriptionCudaInstallArgs(packages = TRANSCRIPTION_CUDA_PACKAGES) {
   return [
@@ -842,6 +881,8 @@ module.exports = {
   buildTranscriptionCudaInstallArgs,
   buildTranscriptionCudaUninstallArgs,
   buildUnsupportedCudaPythonMessage,
+  getPythonSitePackagesCandidates,
+  getPyTorchCudaBinCandidates,
   buildDiarizationOutputPath,
   cacheContainsModel,
   classifyRecorderStdoutChunk,
@@ -873,6 +914,7 @@ module.exports = {
   resolveTranscriptionAudioFile,
   splitBufferedLines,
   TRANSCRIPTION_CUDA_PACKAGES,
+  PYTORCH_CUDA_BIN_DIRS,
   MACOS_PERMISSION_CHECK_TIMEOUT_MS,
   redactSensitiveText,
 };

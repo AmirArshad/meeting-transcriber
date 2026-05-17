@@ -24,6 +24,8 @@ const {
   buildTranscriptionCudaInstallArgs,
   buildTranscriptionCudaUninstallArgs,
   buildUnsupportedCudaPythonMessage,
+  getPythonSitePackagesCandidates,
+  getPyTorchCudaBinCandidates,
   cacheContainsModel,
   getQuitInterceptState,
   getRecorderCloseAction,
@@ -630,20 +632,19 @@ function buildCudaRuntimeEnv(extra = {}) {
     return extra;
   }
 
-  const pythonExeDir = path.dirname(pythonConfig.pythonExe);
-  const pythonRootDir = path.basename(pythonExeDir).toLowerCase() === 'scripts'
-    ? path.dirname(pythonExeDir)
-    : pythonExeDir;
+  const managedDiarizationSitePackagesDir = getDiarizationDependencySitePackagesPath();
   const candidateSitePackagesDirs = [
-    path.join(pythonRootDir, 'Lib', 'site-packages'),
-    process.env.VIRTUAL_ENV ? path.join(process.env.VIRTUAL_ENV, 'Lib', 'site-packages') : null,
-    process.env.APPDATA ? path.join(process.env.APPDATA, 'Python', 'Python311', 'site-packages') : null,
+    ...getPythonSitePackagesCandidates({
+      pythonExe: pythonConfig.pythonExe,
+      virtualEnv: process.env.VIRTUAL_ENV,
+      appData: process.env.APPDATA,
+      platform: process.platform,
+    }),
+    managedDiarizationSitePackagesDir,
   ].filter(Boolean);
 
-  const cudaBinDirs = [
-    ...candidateSitePackagesDirs.map((sitePackagesDir) => path.join(sitePackagesDir, 'nvidia', 'cublas', 'bin')),
-    ...candidateSitePackagesDirs.map((sitePackagesDir) => path.join(sitePackagesDir, 'nvidia', 'cudnn', 'bin')),
-  ].filter((candidate, index, candidates) => fs.existsSync(candidate) && candidates.indexOf(candidate) === index);
+  const cudaBinDirs = getPyTorchCudaBinCandidates(candidateSitePackagesDirs)
+    .filter((candidate, index, candidates) => fs.existsSync(candidate) && candidates.indexOf(candidate) === index);
 
   if (!cudaBinDirs.length) {
     return extra;
@@ -2016,6 +2017,7 @@ function validateDiarizationRuntime({ modelRef, token, requiredDevice, cancelSig
         env: {
           ...getDiarizationDependencyEnv(),
           ...getDiarizationCacheEnv(),
+          ...buildCudaRuntimeEnv(),
           HF_TOKEN: resolvedToken || '',
           HUGGINGFACE_HUB_TOKEN: resolvedToken || '',
         },
@@ -2981,6 +2983,7 @@ ipcMain.handle('diarize-transcript', async (event, options = {}) => {
       env: {
         ...getDiarizationDependencyEnv(),
         ...getDiarizationCacheEnv(),
+        ...buildCudaRuntimeEnv(),
         HF_TOKEN: token || '',
         HUGGINGFACE_HUB_TOKEN: token || '',
       },

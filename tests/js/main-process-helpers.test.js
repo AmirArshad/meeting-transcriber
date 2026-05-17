@@ -20,6 +20,8 @@ const {
   buildTranscriptionCudaUninstallArgs,
   buildUnsupportedCudaPythonMessage,
   cacheContainsModel,
+  getPythonSitePackagesCandidates,
+  getPyTorchCudaBinCandidates,
   classifyRecorderStdoutChunk,
   getQuitInterceptState,
   getRecorderCloseAction,
@@ -389,6 +391,34 @@ test('transcription CUDA installer only targets CTranslate2 runtime libraries', 
     buildTranscriptionCudaUninstallArgs(),
     ['-m', 'pip', 'uninstall', '-y', 'nvidia-cublas-cu12', 'nvidia-cudnn-cu12', 'torch', 'torchvision', 'torchaudio'],
   );
+});
+
+
+test('PyTorch CUDA bin discovery includes managed dependency site-packages', () => {
+  const sitePackages = [path.join('C:', 'AvaNevis', 'ai-addons', 'dependencies', 'diarization', 'site-packages')];
+  const candidates = getPyTorchCudaBinCandidates(sitePackages);
+
+  assert(candidates.includes(path.join(sitePackages[0], 'nvidia', 'cublas', 'bin')));
+  assert(candidates.includes(path.join(sitePackages[0], 'nvidia', 'cuda_runtime', 'bin')));
+  assert(candidates.includes(path.join(sitePackages[0], 'nvidia', 'cudnn', 'bin')));
+});
+
+
+test('Python site-packages candidates support Windows Python layouts', () => {
+  assert.deepEqual(
+    getPythonSitePackagesCandidates({
+      pythonExe: path.join('C:', 'App', 'python', 'python.exe'),
+      virtualEnv: path.join('C:', 'venv'),
+      appData: path.join('C:', 'Users', 'Name', 'AppData', 'Roaming'),
+      platform: 'win32',
+    }),
+    [
+      path.join('C:', 'App', 'python', 'Lib', 'site-packages'),
+      path.join('C:', 'venv', 'Lib', 'site-packages'),
+      path.join('C:', 'Users', 'Name', 'AppData', 'Roaming', 'Python', 'Python311', 'site-packages'),
+    ],
+  );
+  assert.deepEqual(getPythonSitePackagesCandidates({ platform: 'darwin' }), []);
 });
 
 
