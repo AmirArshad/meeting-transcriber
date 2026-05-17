@@ -106,8 +106,17 @@ test('AI add-on validate and remove buttons require local setup state', () => {
     type: 'summary',
     feature: { status: 'error', cache: { installed: false, partial: true }, runtimeCache: { installed: false } },
   });
+  assert.equal(partialSummary.canConfigure, true);
   assert.equal(partialSummary.canValidate, true);
   assert.equal(partialSummary.canRemove, true);
+
+  const readySummary = buildAiAddonControlState({
+    type: 'summary',
+    feature: { status: 'ready', setupComplete: true, cache: { installed: true }, runtimeCache: { installed: true } },
+  });
+  assert.equal(readySummary.canConfigure, false);
+  assert.equal(readySummary.canValidate, true);
+  assert.equal(readySummary.canRemove, true);
 
   const removedDiarization = buildAiAddonControlState({
     type: 'diarization',

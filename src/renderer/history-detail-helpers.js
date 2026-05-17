@@ -225,9 +225,10 @@
       : hasDiarizationLocalState(feature);
     const isBusy = Boolean(setupActive || (feature && (feature.status === 'downloading' || feature.status === 'validating')));
     const isUnsupported = Boolean(unsupported || (feature && feature.status === 'unsupported'));
+    const setupComplete = Boolean(feature && (feature.setupComplete || feature.status === 'ready'));
 
     return {
-      canConfigure: !isUnsupported && !isBusy,
+      canConfigure: !isUnsupported && !isBusy && !setupComplete,
       canValidate: !isUnsupported && !isBusy && hasLocalState,
       canRemove: !isUnsupported && !isBusy && hasLocalState,
       hasLocalState,

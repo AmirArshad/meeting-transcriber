@@ -10,6 +10,7 @@ from backend.summaries.summary_runner import (
     generate_summary_from_segments,
     hash_transcript_text,
     load_summary_segments,
+    read_transcript_text,
     resolve_chunk_token_budget,
     save_summary_outputs,
     sidecar_paths,
@@ -34,6 +35,22 @@ def test_load_summary_segments_prefers_speaker_sidecar(tmp_path):
     segments = load_summary_segments(str(transcript_path), str(speakers_path))
 
     assert segments == [{'start': 1, 'end': 2, 'speaker': 'Speaker 1', 'text': 'Labeled'}]
+
+
+def test_read_transcript_text_replaces_invalid_utf8_bytes(tmp_path):
+    transcript_path = tmp_path / 'meeting.md'
+    transcript_path.write_bytes(b'# Meeting\n\nValid text \xe2 invalid tail')
+
+    assert read_transcript_text(str(transcript_path)) == '# Meeting\n\nValid text \ufffd invalid tail'
+
+
+def test_load_summary_segments_tolerates_invalid_utf8_bytes(tmp_path):
+    transcript_path = tmp_path / 'meeting.md'
+    transcript_path.write_bytes(b'**[00:01 - 00:02]**\nValid text \xe2 invalid tail')
+
+    segments = load_summary_segments(str(transcript_path))
+
+    assert segments[0]['text'] == 'Valid text \ufffd invalid tail'
 
 
 def test_sidecar_paths_use_transcript_stem():

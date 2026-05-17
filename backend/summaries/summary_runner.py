@@ -55,6 +55,10 @@ def hash_transcript_text(transcript_text: str) -> str:
     return f"sha256:{hashlib.sha256(str(transcript_text or '').encode('utf-8')).hexdigest()}"
 
 
+def read_transcript_text(transcript_path: str) -> str:
+    return Path(transcript_path).read_text(encoding="utf-8", errors="replace")
+
+
 def load_summary_segments(transcript_path: str, speakers_json_path: Optional[str] = None) -> List[Dict[str, Any]]:
     if speakers_json_path and Path(speakers_json_path).exists():
         with open(speakers_json_path, "r", encoding="utf-8") as handle:
@@ -63,7 +67,7 @@ def load_summary_segments(transcript_path: str, speakers_json_path: Optional[str
         if isinstance(segments, list) and segments:
             return [dict(segment) for segment in segments if isinstance(segment, dict)]
 
-    transcript_text = Path(transcript_path).read_text(encoding="utf-8")
+    transcript_text = read_transcript_text(transcript_path)
     segments = parse_markdown_transcript(transcript_text)
     if segments:
         return segments
@@ -255,7 +259,7 @@ def generate_summary(
     run_prompt: Optional[Callable[[Dict[str, Any], str, int], str]] = None,
 ) -> Dict[str, Any]:
     emit_progress(meeting_id, "loading-transcript", "Loading transcript for local summary.")
-    transcript_text = Path(transcript_path).read_text(encoding="utf-8")
+    transcript_text = read_transcript_text(transcript_path)
     source_hash = hash_transcript_text(transcript_text)
     segments = load_summary_segments(transcript_path, speakers_json_path)
     runtime = resolve_llama_runtime(runtime_dir=runtime_dir, model_path=model_path, platform=platform, arch=arch)
