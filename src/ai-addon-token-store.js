@@ -23,7 +23,7 @@ function getTokenPath(userDataDir, tokenKey) {
 
 function requireEncryption(safeStorage) {
   if (!safeStorage || typeof safeStorage.isEncryptionAvailable !== 'function' || !safeStorage.isEncryptionAvailable()) {
-    throw new Error('Secure token storage is unavailable on this system.');
+    throw new Error('Secure token storage is unavailable right now. Unlock Keychain or restart AvaNevis and try again.');
   }
 }
 

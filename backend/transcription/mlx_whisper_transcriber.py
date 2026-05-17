@@ -38,16 +38,14 @@ class MLXWhisperTranscriber(BaseTranscriber):
             "storage_dir": "whisper-base-mlx",
         },
         "small": {
-            "model_key": "distil-small.en",
-            "repo_id": "mustafaaljadery/distil-whisper-mlx",
-            "storage_dir": "distil-small.en",
-            "distil": True,
+            "model_key": "small",
+            "repo_id": "mlx-community/whisper-small-mlx",
+            "storage_dir": "whisper-small-mlx",
         },
         "medium": {
-            "model_key": "distil-medium.en",
-            "repo_id": "mustafaaljadery/distil-whisper-mlx",
-            "storage_dir": "distil-medium.en",
-            "distil": True,
+            "model_key": "medium",
+            "repo_id": "mlx-community/whisper-medium-mlx",
+            "storage_dir": "whisper-medium-mlx",
         },
         "large": {
             "model_key": "distil-large-v3",
@@ -105,6 +103,7 @@ class MLXWhisperTranscriber(BaseTranscriber):
     model_dir: Path
     batch_size: int
 
+    TIMEBASE_CANDIDATE_DIVISORS = (1000.0, 100.0)
     # Supported Whisper languages
     SUPPORTED_LANGUAGES = {
         'en': 'English',
@@ -349,6 +348,108 @@ class MLXWhisperTranscriber(BaseTranscriber):
 
         return {'start': 0.0, 'end': 0.0, 'text': str(segment or '').strip()}
 
+    @classmethod
+    def _max_segment_end(cls, segments: List[Dict[str, Any]]) -> float:
+        return max((float(segment.get('end', 0) or 0) for segment in segments), default=0.0)
+
+    @classmethod
+    def _repair_segment_timebase(
+        cls,
+        segments: List[Dict[str, Any]],
+        duration: float,
+    ) -> List[Dict[str, Any]]:
+        """Convert known lightning-whisper-mlx frame/millisecond times to seconds."""
+        if not segments or duration <= 0:
+            return segments
+
+        max_end = cls._max_segment_end(segments)
+        tolerance = max(0.5, duration * 0.05)
+        if max_end <= duration + tolerance:
+            return segments
+
+        for divisor in cls.TIMEBASE_CANDIDATE_DIVISORS:
+            scaled_end = max_end / divisor
+            if duration * 0.85 <= scaled_end <= duration + tolerance:
+                print(
+                    f"Repairing MLX segment timestamp timebase by /{divisor:g} "
+                    f"(raw_end={max_end:.2f}, duration={duration:.2f})",
+                    file=sys.stderr,
+                )
+                return [
+                    {
+                        **segment,
+                        'start': max(0.0, float(segment.get('start', 0) or 0) / divisor),
+                        'end': max(0.0, float(segment.get('end', 0) or 0) / divisor),
+                    }
+                    for segment in segments
+                ]
+
+        return segments
+
+    def _build_results_from_backend_result(
+        self,
+        result: Any,
+        audio_path: str,
+        file_duration: float,
+    ) -> Dict[str, Any]:
+        detected_language = self.language
+        raw_segments: List[Dict[str, Any]] = []
+        full_text: List[str] = []
+
+        if isinstance(result, dict):
+            if 'segments' in result and result['segments']:
+                raw_segments = [self._normalize_segment(segment) for segment in result['segments']]
+            elif 'text' in result:
+                text = str(result['text'] or '').strip()
+                if text:
+                    raw_segments.append({'start': 0.0, 'end': file_duration if file_duration > 0 else 0.0, 'text': text})
+
+            detected_language = result.get('language', self.language)
+        else:
+            print(f"WARNING: Unexpected result format: {type(result)}", file=sys.stderr)
+            raw_segments.append({'start': 0.0, 'end': 0.0, 'text': str(result)})
+
+        raw_segments = self._repair_segment_timebase(raw_segments, file_duration)
+        segment_duration = self._max_segment_end(raw_segments)
+        duration = file_duration if file_duration > 0 else segment_duration
+
+        if file_duration > 0 and segment_duration > file_duration + max(5.0, file_duration * 0.5):
+            raw_segments = self._clamp_segments_to_duration(raw_segments, file_duration)
+            segment_duration = self._max_segment_end(raw_segments)
+
+        segments_list: List[Dict[str, Any]] = []
+        for segment in raw_segments:
+            text = str(segment.get('text', '') or '').strip()
+            if not text:
+                continue
+            normalized_segment = {
+                'start': float(segment.get('start', 0) or 0),
+                'end': float(segment.get('end', 0) or 0),
+                'text': text,
+            }
+            if normalized_segment['end'] <= normalized_segment['start'] and duration > 0:
+                normalized_segment['start'] = 0.0
+                normalized_segment['end'] = duration
+            segments_list.append(normalized_segment)
+            full_text.append(text)
+
+        if not segments_list and isinstance(result, dict) and str(result.get('text', '') or '').strip():
+            text = str(result.get('text', '') or '').strip()
+            segments_list.append({'start': 0.0, 'end': duration if duration > 0 else 0.0, 'text': text})
+            full_text.append(text)
+
+        print(f"Merging {len(segments_list)} segments into larger chunks...", file=sys.stderr)
+        segments_list = self._merge_segments(segments_list, target_duration=20.0)
+
+        return {
+            'text': ' '.join(full_text),
+            'segments': segments_list,
+            'language': detected_language,
+            'duration': duration,
+            'output_file': None,
+            'audioPath': str(audio_path),
+        }
+
     def load_model(self):
         """Load the Whisper model via MLX. Call this once before transcribing."""
         try:
@@ -447,71 +548,18 @@ class MLXWhisperTranscriber(BaseTranscriber):
         print(f"\nTranscribing: {audio_path}", file=sys.stderr)
         print(f"Language: {self.SUPPORTED_LANGUAGES[self.language]} ({self.language})", file=sys.stderr)
 
-        # Transcribe using Lightning-Whisper-MLX
-        detected_language = self.language  # Default fallback
-        segments_list = []
-        full_text = []
-
         print(f"Transcribing with Lightning-Whisper-MLX...", file=sys.stderr)
 
         result = self._transcribe_audio(audio_path)
 
         print(f"Processing result...", file=sys.stderr)
-
-        # Handle the result - lightning-whisper-mlx returns dict with 'text'
-        # and optionally 'segments'
-        if isinstance(result, dict):
-            if 'segments' in result and result['segments']:
-                for segment in result['segments']:
-                    normalized_segment = self._normalize_segment(segment)
-                    segments_list.append(normalized_segment)
-                    if normalized_segment['text']:
-                        full_text.append(normalized_segment['text'])
-            elif 'text' in result:
-                # No segments, just full text - create a single segment
-                text = result['text'].strip()
-                full_text.append(text)
-                segments_list.append({
-                    'start': 0,
-                    'end': 0,  # Duration unknown without segments
-                    'text': text
-                })
-
-            # Get detected language from result if available
-            detected_language = result.get('language', self.language)
-        else:
-            # Unexpected result format
-            print(f"WARNING: Unexpected result format: {type(result)}", file=sys.stderr)
-            full_text.append(str(result))
-            segments_list.append({'start': 0, 'end': 0, 'text': str(result)})
-
-        # Lightning-Whisper-MLX can return inflated segment timestamps for some
-        # compressed inputs, so prefer the container duration when available.
-        segment_duration = segments_list[-1]['end'] if segments_list else 0.0
         file_duration = self._probe_audio_duration(audio_path)
-        duration = file_duration if file_duration > 0 else segment_duration
-
-        if file_duration > 0 and segment_duration > file_duration + max(5.0, file_duration * 0.5):
-            segments_list = self._clamp_segments_to_duration(segments_list, file_duration)
-
-        # Merge segments into larger chunks for better readability
-        # Target: ~20 seconds per chunk (good for long meetings)
-        print(f"Merging {len(segments_list)} segments into larger chunks...", file=sys.stderr)
-        segments_list = self._merge_segments(segments_list, target_duration=20.0)
-
-        # Prepare results
-        results = {
-            'text': ' '.join(full_text),
-            'segments': segments_list,
-            'language': detected_language,
-            'duration': duration,
-            'output_file': None
-        }
+        results = self._build_results_from_backend_result(result, audio_path, file_duration)
 
         print(f"Transcription complete!", file=sys.stderr)
         print(f"  Detected language: {results['language']}", file=sys.stderr)
-        print(f"  Duration: {duration:.2f} seconds", file=sys.stderr)
-        print(f"  Segments: {len(segments_list)}", file=sys.stderr)
+        print(f"  Duration: {float(results.get('duration', 0) or 0):.2f} seconds", file=sys.stderr)
+        print(f"  Segments: {len(results.get('segments') or [])}", file=sys.stderr)
 
         # Save to markdown if requested
         if save_markdown:
@@ -522,9 +570,6 @@ class MLXWhisperTranscriber(BaseTranscriber):
 
             self._save_markdown(results, audio_path, output_path)
             results['output_file'] = output_path
-
-        # Add audio path to results for meeting manager
-        results['audioPath'] = str(audio_path)
 
         return results
 
@@ -550,6 +595,8 @@ class MLXWhisperTranscriber(BaseTranscriber):
         current_chunk = None
 
         for segment in segments:
+            if not str(segment.get('text', '') or '').strip():
+                continue
             if current_chunk is None:
                 # Start new chunk
                 current_chunk = {

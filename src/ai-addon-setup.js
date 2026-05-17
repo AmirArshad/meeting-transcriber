@@ -842,7 +842,9 @@ function deriveDiarizationStatus(featureStatus, tokenStatus, dependencyCache) {
     return {
       ...featureStatus,
       status: 'error',
-      error: 'Secure token storage is unavailable.',
+      error: tokenStatus.hasToken
+        ? 'Stored Hugging Face token exists, but secure token storage is unavailable right now. Unlock Keychain or restart AvaNevis and try again.'
+        : 'Secure token storage is unavailable right now. Unlock Keychain or restart AvaNevis and try again.',
     };
   }
   if (featureStatus.status === 'ready' && !tokenStatus.hasToken) {

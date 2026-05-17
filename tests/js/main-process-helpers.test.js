@@ -277,7 +277,6 @@ test('buildModelDownloadCheck returns macOS MLX cache settings for Apple Silicon
 
   assert.equal(result.cacheDir, path.join('/Users/tester', 'Library', 'Caches', 'avanevis', 'mlx_models'));
   assert.deepEqual(result.modelPatterns, [
-    'distil-small.en',
     'whisper-small-mlx',
   ]);
 });
@@ -292,15 +291,14 @@ test('getMacMLXCacheDir returns writable MLX cache path', () => {
 
 
 test('getMacMLXModelStorageDirs returns expected per-model cache directories', () => {
-  assert.deepEqual(getMacMLXModelStorageDirs('small'), ['distil-small.en', 'whisper-small-mlx']);
-  assert.deepEqual(getMacMLXModelStorageDirs('medium'), ['distil-medium.en', 'whisper-medium-mlx']);
+  assert.deepEqual(getMacMLXModelStorageDirs('small'), ['whisper-small-mlx']);
+  assert.deepEqual(getMacMLXModelStorageDirs('medium'), ['whisper-medium-mlx']);
   assert.deepEqual(getMacMLXModelStorageDirs('large'), ['distil-large-v3', 'whisper-large-v3-mlx']);
 });
 
 
 test('getModelDownloadPatterns returns macOS Apple Silicon MLX patterns', () => {
   assert.deepEqual(getModelDownloadPatterns('darwin', 'arm64', 'small'), [
-    'distil-small.en',
     'whisper-small-mlx',
   ]);
 });

@@ -267,6 +267,30 @@ def test_build_diarization_result_merges_speakers_without_transcript_leakage_in_
     assert result['speakerSegments'][0]['speaker'] == 'SPEAKER_00'
 
 
+def test_build_diarization_result_splits_coarse_transcript_segments_by_speaker_turns():
+    result = pipeline.build_diarization_result(
+        audio_path='meeting.opus',
+        transcript_segments=[{
+            'start': 0,
+            'end': 30,
+            'text': 'alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima',
+        }],
+        speaker_segments=[
+            {'start': 10, 'end': 20, 'speaker': 'SPEAKER_01'},
+            {'start': 20, 'end': 30, 'speaker': 'SPEAKER_00'},
+            {'start': 0, 'end': 10, 'speaker': 'SPEAKER_00'},
+        ],
+        model_ref='pyannote/speaker-diarization-community-1',
+        annotation_source='exclusive_speaker_diarization',
+        device='mps',
+    )
+
+    assert [segment['speaker'] for segment in result['segments']] == ['Speaker 1', 'Speaker 2', 'Speaker 1']
+    assert [(segment['start'], segment['end']) for segment in result['segments']] == [(0, 10), (10, 20), (20, 30)]
+    assert 'alpha' in result['segments'][0]['text']
+    assert 'lima' in result['segments'][-1]['text']
+
+
 def test_save_diarization_result_writes_json_sidecar(tmp_path):
     output_path = tmp_path / 'meeting.speakers.json'
     pipeline.save_diarization_result(str(output_path), {'status': 'completed', 'segments': []})

@@ -152,6 +152,18 @@ def test_mlx_transcriber_get_model_info_reports_cache_and_repo(tmp_path, monkeyp
     assert info['model_dir'] == str(tmp_path / 'cache-root' / 'mlx_models' / 'distil-large-v3')
 
 
+def test_mlx_transcriber_uses_standard_small_and_medium_models_for_english():
+    small = MLXWhisperTranscriber(model_size='small', language='en')
+    medium = MLXWhisperTranscriber(model_size='medium', language='en')
+
+    assert small.get_model_info()['model_key'] == 'small'
+    assert small.get_model_info()['model_repo'] == 'mlx-community/whisper-small-mlx'
+    assert Path(small.get_model_info()['model_dir']).parts[-2:] == ('mlx_models', 'whisper-small-mlx')
+    assert medium.get_model_info()['model_key'] == 'medium'
+    assert medium.get_model_info()['model_repo'] == 'mlx-community/whisper-medium-mlx'
+    assert Path(medium.get_model_info()['model_dir']).parts[-2:] == ('mlx_models', 'whisper-medium-mlx')
+
+
 def test_mlx_transcriber_loads_multilingual_models_for_non_english_languages():
     service = cast(Any, MLXWhisperTranscriber(model_size='small', language='fa'))
 
@@ -234,6 +246,36 @@ def test_mlx_transcriber_prefers_file_duration_over_inflated_segment_end(tmp_pat
 
     assert result['duration'] == pytest.approx(1.0, rel=1e-3)
     assert result['segments'] == [{'start': 0.0, 'end': 1.0, 'text': 'hello world'}]
+
+
+def test_mlx_transcriber_repairs_lightning_mlx_frame_timestamps(tmp_path):
+    audio_path = tmp_path / 'sample.wav'
+    import wave
+
+    with wave.open(str(audio_path), 'wb') as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(16000)
+        wav_file.writeframes(b'\x00\x00' * 16000 * 150)
+
+    service = cast(Any, MLXWhisperTranscriber(model_size='base', language='en'))
+    service.model_ready = True
+
+    def fake_transcribe_audio(_audio_path_value):
+        return {
+            'text': 'one two',
+            'segments': [[0, 3000, 'one'], [3000, 6000, 'two'], [6000, 15000, '']],
+        }
+
+    service._transcribe_audio = fake_transcribe_audio
+
+    result = service.transcribe_file(str(audio_path), save_markdown=False)
+
+    assert result['duration'] == pytest.approx(150.0, rel=1e-3)
+    assert result['segments'] == [
+        {'start': 0.0, 'end': 30.0, 'text': 'one'},
+        {'start': 30.0, 'end': 60.0, 'text': 'two'},
+    ]
 
 
 def test_mlx_transcriber_passes_requested_language_to_backend(tmp_path, monkeypatch):

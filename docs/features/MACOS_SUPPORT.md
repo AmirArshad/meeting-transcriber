@@ -33,7 +33,7 @@ Status: implemented
 - Apple Silicon packaged builds launch `transcription.mlx_whisper_transcriber` with `python -m`.
 - Development runs on Intel Macs can still fall back to `transcription.faster_whisper_transcriber` with `python -m`.
 - Apple Silicon MLX models are cached under `~/Library/Caches/avanevis/mlx_models`; cached model files are reused without rechecking Hugging Face on every transcription.
-- English `small` currently maps to `mustafaaljadery/distil-whisper-mlx` / `distil-small.en`; multilingual `small` uses `mlx-community/whisper-small-mlx`.
+- English and multilingual `small`/`medium` use the standard `mlx-community/whisper-*-mlx` models; distil variants are not used for these quality tiers.
 
 ## Build And Packaging
 

@@ -24,6 +24,12 @@ class SummaryRuntimeError(ValueError):
     """Raised when the local summary runtime cannot be resolved safely."""
 
 
+def decode_process_output(value: Any) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return str(value or "")
+
+
 def normalize_platform(system: Optional[str] = None, machine: Optional[str] = None) -> Dict[str, str]:
     raw_system = (system or platform_module.system()).lower()
     raw_machine = (machine or platform_module.machine()).lower()
@@ -167,7 +173,7 @@ def sanitize_runtime_error_line(line: str, runtime: Optional[Dict[str, Any]] = N
 
 
 def summarize_llama_failure(result: subprocess.CompletedProcess[str], runtime: Optional[Dict[str, Any]] = None) -> str:
-    combined = f"{result.stderr or ''}\n{result.stdout or ''}"
+    combined = f"{decode_process_output(result.stderr)}\n{decode_process_output(result.stdout)}"
     lines = [line.strip() for line in combined.splitlines() if line.strip()]
     for line in reversed(lines):
         lower = line.lower()
@@ -219,14 +225,13 @@ def run_llama_prompt(
     result = subprocess.run(
         args,
         capture_output=True,
-        text=True,
         check=False,
         timeout=timeout_seconds,
         cwd=str(Path(str(runtime["executable"])).parent),
     )
     if result.returncode != 0:
         raise SummaryRuntimeError("llama.cpp summary generation failed.")
-    return strip_llama_prompt_echo(result.stdout, prompt_text)
+    return strip_llama_prompt_echo(decode_process_output(result.stdout), prompt_text)
 
 
 def smoke_test_llama_runtime(runtime: Dict[str, Any], *, timeout_seconds: int = 120) -> None:
@@ -244,7 +249,6 @@ def smoke_test_llama_runtime(runtime: Dict[str, Any], *, timeout_seconds: int = 
             result = subprocess.run(
                 build_llama_smoke_test_args(runtime, prompt_path=str(prompt_path)),
                 capture_output=True,
-                text=True,
                 check=False,
                 timeout=timeout_seconds,
                 cwd=str(Path(str(executable)).parent),

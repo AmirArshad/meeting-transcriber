@@ -141,6 +141,9 @@
       return reason || 'Speaker identification is not supported on this platform.';
     }
     if (status === 'needsAccount') {
+      if (feature && feature.tokenStatus && feature.tokenStatus.hasToken && feature.tokenStatus.encryptionAvailable === false) {
+        return 'Your Hugging Face token is still stored, but secure storage is unavailable right now. Unlock Keychain or restart AvaNevis, then validate speaker identification.';
+      }
       return 'Use your own Hugging Face token and accept the pyannote model terms before enabling local speaker labels.';
     }
     if (status === 'validating') {

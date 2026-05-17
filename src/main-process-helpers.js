@@ -72,9 +72,9 @@ function getMacMLXModelStorageDirs(modelSize = 'small') {
     case 'base':
       return ['whisper-base-mlx'];
     case 'small':
-      return ['distil-small.en', 'whisper-small-mlx'];
+      return ['whisper-small-mlx'];
     case 'medium':
-      return ['distil-medium.en', 'whisper-medium-mlx'];
+      return ['whisper-medium-mlx'];
     case 'large':
     case 'large-v3':
       return ['distil-large-v3', 'whisper-large-v3-mlx'];

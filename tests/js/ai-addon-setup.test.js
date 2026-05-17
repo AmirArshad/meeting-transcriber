@@ -606,6 +606,42 @@ test('explicit token status can query secure storage availability', () => {
   assert.equal(encryptionChecks, 1);
 });
 
+test('ready diarization with stored token reports temporary secure storage outage clearly', async () => {
+  const fsModule = createMemoryFs();
+  const userDataDir = '/tmp/AvaNevis';
+  fsModule.writeFileSync(getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace), Buffer.from('encrypted:hf_secret'));
+  const artifact = getDiarizationDependencyArtifactForPlatform('darwin', 'arm64');
+  const sitePackagesDir = path.join(userDataDir, 'ai-addons', 'dependencies', 'diarization', artifact.id, 'site-packages');
+  fsModule.mkdirSync(sitePackagesDir, { recursive: true });
+  fsModule.writeFileSync(
+    path.join(userDataDir, 'ai-addons', 'dependencies', 'diarization', artifact.id, 'install.json'),
+    JSON.stringify({ artifactId: artifact.id }),
+  );
+
+  const manifestPath = path.join(userDataDir, 'ai-addons', 'manifest.json');
+  fsModule.mkdirSync(path.dirname(manifestPath), { recursive: true });
+  fsModule.writeFileSync(manifestPath, JSON.stringify({
+    manifestVersion: 1,
+    features: {
+      diarization: { status: 'ready', modelId: 'pyannote/speaker-diarization-community-1' },
+      summary: { status: 'notConfigured', modelId: 'qwen3.5-9b-q4-k-m' },
+    },
+  }));
+
+  const status = await checkAiAddonSetupStatus({
+    userDataDir,
+    platform: 'darwin',
+    arch: 'arm64',
+    safeStorage: createUnavailableSafeStorage(),
+    fsModule,
+    checkTokenEncryption: true,
+  });
+
+  assert.equal(status.features.diarization.tokenStatus.hasToken, true);
+  assert.equal(status.features.diarization.status, 'error');
+  assert.match(status.features.diarization.error, /token exists.*secure token storage is unavailable/i);
+});
+
 test('diarization dependency cache uses managed userData path and pinned requirements', () => {
   const fsModule = createMemoryFs();
   const artifact = getDiarizationDependencyArtifactForPlatform('win32', 'x64');

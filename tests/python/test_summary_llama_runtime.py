@@ -6,6 +6,7 @@ from backend.summaries.llama_runtime import (
     SummaryRuntimeError,
     build_llama_cli_args,
     build_llama_smoke_test_args,
+    decode_process_output,
     build_summary_progress_event,
     default_llama_executable_name,
     get_platform_acceleration,
@@ -125,8 +126,8 @@ def test_smoke_test_llama_runtime_loads_model_with_tiny_prompt(monkeypatch, tmp_
         stdout = 'llama.cpp help'
         stderr = ''
 
-    def fake_run(args, capture_output, text, check, timeout, **kwargs):
-        calls.append((args, capture_output, text, check, timeout, kwargs))
+    def fake_run(args, capture_output, check, timeout, **kwargs):
+        calls.append((args, capture_output, check, timeout, kwargs))
         return Result()
 
     executable = tmp_path / 'llama-cli'
@@ -136,13 +137,12 @@ def test_smoke_test_llama_runtime_loads_model_with_tiny_prompt(monkeypatch, tmp_
 
     smoke_test_llama_runtime({'executable': str(executable), 'modelPath': str(model_path)}, timeout_seconds=5)
 
-    args, capture_output, text, check, timeout, kwargs = calls[0]
+    args, capture_output, check, timeout, kwargs = calls[0]
     assert args[0] == str(executable)
     assert '--model' in args
     assert str(model_path) in args
     assert '--file' in args
     assert capture_output is True
-    assert text is True
     assert check is False
     assert timeout == 5
     assert kwargs['cwd'] == str(tmp_path)
@@ -170,8 +170,8 @@ def test_run_llama_prompt_uses_executable_directory(monkeypatch, tmp_path):
         stdout = '{"summary":"ok"}'
         stderr = ''
 
-    def fake_run(args, capture_output, text, check, timeout, cwd):
-        calls.append((args, capture_output, text, check, timeout, cwd))
+    def fake_run(args, capture_output, check, timeout, cwd):
+        calls.append((args, capture_output, check, timeout, cwd))
         return Result()
 
     executable = tmp_path / 'runtime' / 'extract' / 'llama-cli.exe'
@@ -188,7 +188,7 @@ def test_run_llama_prompt_uses_executable_directory(monkeypatch, tmp_path):
     )
 
     assert output == '{"summary":"ok"}'
-    assert calls[0][5] == str(executable.parent)
+    assert calls[0][4] == str(executable.parent)
 
 
 def test_run_llama_prompt_strips_echoed_prompt(monkeypatch, tmp_path):
@@ -215,6 +215,32 @@ def test_run_llama_prompt_strips_echoed_prompt(monkeypatch, tmp_path):
 
     assert output == f'{generated}\n\nExiting...'
     assert 'schema' not in output
+
+
+def test_run_llama_prompt_replaces_invalid_utf8_output(monkeypatch, tmp_path):
+    class Result:
+        returncode = 0
+        stdout = b'{"summary":"bad \xe2 byte","topics":[]}'
+        stderr = b''
+
+    executable = tmp_path / 'runtime' / 'llama-cli'
+    executable.parent.mkdir(parents=True)
+    prompt_path = tmp_path / 'prompt.txt'
+    prompt_path.write_text('prompt', encoding='utf-8')
+    monkeypatch.setattr('backend.summaries.llama_runtime.subprocess.run', lambda *args, **kwargs: Result())
+
+    output = run_llama_prompt(
+        {'executable': str(executable), 'modelPath': str(tmp_path / 'model.gguf')},
+        prompt_path=str(prompt_path),
+        max_tokens=64,
+        timeout_seconds=5,
+    )
+
+    assert output == '{"summary":"bad � byte","topics":[]}'
+
+
+def test_decode_process_output_replaces_invalid_utf8_bytes():
+    assert decode_process_output(b'ERROR: bad \xe2 byte') == 'ERROR: bad � byte'
 
 
 def test_strip_llama_prompt_echo_leaves_plain_generation_output():

@@ -61,6 +61,13 @@ test('setup messages explain graceful degradation paths', () => {
   );
   assert.match(
     getDiarizationSetupMessage({
+      status: 'needsAccount',
+      tokenStatus: { hasToken: true, encryptionAvailable: false },
+    }),
+    /token is still stored.*secure storage is unavailable/i,
+  );
+  assert.match(
+    getDiarizationSetupMessage({
       status: 'unsupported',
       availability: { reason: 'Speaker identification on macOS requires Apple Silicon with PyTorch Metal/MPS acceleration. CPU-only diarization is not supported.' },
     }),
