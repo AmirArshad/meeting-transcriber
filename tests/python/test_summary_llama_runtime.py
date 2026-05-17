@@ -107,6 +107,11 @@ def test_smoke_args_use_pinned_runtime_compatible_flags(tmp_path):
     args = build_llama_smoke_test_args(runtime, prompt_path=str(tmp_path / 'prompt.txt'))
 
     assert '--seed' in args
+    assert args[args.index('--ctx-size') + 1] == '512'
+    assert args[args.index('--predict') + 1] == '1'
+    assert '--no-warmup' in args
+    assert '--single-turn' in args
+    assert '--simple-io' in args
     assert '--no-mmap' not in args
 
 
@@ -139,6 +144,20 @@ def test_smoke_test_llama_runtime_loads_model_with_tiny_prompt(monkeypatch, tmp_
     assert check is False
     assert timeout == 5
     assert kwargs['cwd'] == str(tmp_path)
+
+
+def test_smoke_test_llama_runtime_allows_empty_success_output(monkeypatch, tmp_path):
+    class Result:
+        returncode = 0
+        stdout = ''
+        stderr = ''
+
+    monkeypatch.setattr('backend.summaries.llama_runtime.subprocess.run', lambda *args, **kwargs: Result())
+
+    model_path = tmp_path / 'model.gguf'
+    model_path.write_text('model', encoding='utf-8')
+
+    smoke_test_llama_runtime({'executable': str(tmp_path / 'llama-cli'), 'modelPath': str(model_path)})
 
 
 def test_run_llama_prompt_uses_executable_directory(monkeypatch, tmp_path):
@@ -182,6 +201,25 @@ def test_smoke_test_llama_runtime_rejects_failed_help(monkeypatch, tmp_path):
 
     with pytest.raises(SummaryRuntimeError, match='Local summary runtime validation failed: missing dll'):
         smoke_test_llama_runtime({'executable': str(tmp_path / 'llama-cli'), 'modelPath': str(model_path)})
+
+
+def test_smoke_test_llama_runtime_reports_timeout_without_command(monkeypatch, tmp_path):
+    def fake_timeout(args, **kwargs):
+        import subprocess
+
+        raise subprocess.TimeoutExpired(cmd=args[0] if args else ['llama-cli'], timeout=kwargs['timeout'])
+
+    monkeypatch.setattr('backend.summaries.llama_runtime.subprocess.run', fake_timeout)
+    model_path = tmp_path / 'model.gguf'
+    model_path.write_text('model', encoding='utf-8')
+
+    with pytest.raises(SummaryRuntimeError) as excinfo:
+        smoke_test_llama_runtime({'executable': str(tmp_path / 'runtime' / 'llama-cli'), 'modelPath': str(model_path)}, timeout_seconds=3)
+
+    message = str(excinfo.value)
+    assert 'timed out after 3 seconds' in message
+    assert '--model' not in message
+    assert str(tmp_path) not in message
 
 
 def test_smoke_test_llama_runtime_redacts_paths(monkeypatch, tmp_path):

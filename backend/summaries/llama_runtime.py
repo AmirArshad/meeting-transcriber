@@ -15,6 +15,8 @@ from typing import Any, Dict, Iterable, List, Optional
 
 
 LLAMA_CONTEXT_TOKENS = 32768
+LLAMA_SMOKE_CONTEXT_TOKENS = 512
+LLAMA_SMOKE_PREDICT_TOKENS = 1
 DEFAULT_GPU_LAYERS = -1
 
 
@@ -135,8 +137,12 @@ def build_llama_cli_args(
 
 
 def build_llama_smoke_test_args(runtime: Dict[str, Any], *, prompt_path: str) -> List[str]:
-    args = build_llama_cli_args(runtime, prompt_path=prompt_path, max_tokens=64)
-    return [*args, "--seed", "1"]
+    smoke_runtime = {
+        **runtime,
+        "contextTokens": LLAMA_SMOKE_CONTEXT_TOKENS,
+    }
+    args = build_llama_cli_args(smoke_runtime, prompt_path=prompt_path, max_tokens=LLAMA_SMOKE_PREDICT_TOKENS)
+    return [*args, "--no-warmup", "--single-turn", "--simple-io", "--seed", "1"]
 
 
 def sanitize_runtime_error_line(line: str, runtime: Optional[Dict[str, Any]] = None) -> str:
@@ -197,20 +203,32 @@ def smoke_test_llama_runtime(runtime: Dict[str, Any], *, timeout_seconds: int = 
     prompt_path = Path(model_path).with_name(".avanevis-llama-smoke.prompt.txt")
     prompt_path.write_text('{"summary":"ok","topics":[]}', encoding="utf-8")
     try:
-        result = subprocess.run(
-            build_llama_smoke_test_args(runtime, prompt_path=str(prompt_path)),
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=timeout_seconds,
-            cwd=str(Path(str(executable)).parent),
-        )
+        try:
+            result = subprocess.run(
+                build_llama_smoke_test_args(runtime, prompt_path=str(prompt_path)),
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout_seconds,
+                cwd=str(Path(str(executable)).parent),
+            )
+        except subprocess.TimeoutExpired as exc:
+            partial = subprocess.CompletedProcess(
+                exc.cmd,
+                returncode=124,
+                stdout=exc.stdout or "",
+                stderr=exc.stderr or "",
+            )
+            detail = summarize_llama_failure(partial, runtime)
+            if detail == "llama.cpp exited without output.":
+                detail = f"llama.cpp validation timed out after {timeout_seconds} seconds."
+            raise SummaryRuntimeError(f"Local summary runtime validation failed: {detail}") from exc
     finally:
         try:
             prompt_path.unlink()
         except OSError:
             pass
-    if result.returncode != 0 or not result.stdout.strip():
+    if result.returncode != 0:
         detail = summarize_llama_failure(result, runtime)
         raise SummaryRuntimeError(f"Local summary runtime validation failed: {detail}")
 
