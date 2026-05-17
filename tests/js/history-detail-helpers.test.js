@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {
   buildAiAddonControlState,
   getDiarizationSetupMessage,
+  getSummaryGenerationButtonView,
   getSummarySetupMessage,
   buildHomeAiAddonPrompt,
   normalizeHistoryDetailTab,
@@ -159,6 +160,32 @@ test('AI add-on controls are disabled during active setup or unsupported state',
   assert.equal(unsupportedDiarization.canConfigure, false);
   assert.equal(unsupportedDiarization.canValidate, false);
   assert.equal(unsupportedDiarization.canRemove, false);
+});
+
+test('summary generation button view exposes spinner and cancel hover copy', () => {
+  assert.deepEqual(getSummaryGenerationButtonView({ active: false }), {
+    active: false,
+    label: null,
+    hoverLabel: null,
+    title: null,
+    ariaBusy: false,
+  });
+
+  assert.deepEqual(getSummaryGenerationButtonView({ active: true }), {
+    active: true,
+    label: 'Summarising...',
+    hoverLabel: 'Cancel Summarisation',
+    title: 'Click to cancel summary generation',
+    ariaBusy: true,
+  });
+
+  assert.deepEqual(getSummaryGenerationButtonView({ active: true, cancelling: true }), {
+    active: true,
+    label: 'Cancelling...',
+    hoverLabel: 'Cancelling...',
+    title: 'Cancelling summary generation...',
+    ariaBusy: true,
+  });
 });
 
 test('buildHomeAiAddonPrompt gates speaker setup behind Windows CUDA', () => {

@@ -81,6 +81,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   transcribeAudio: (options) => ipcRenderer.invoke('transcribe-audio', options),
   diarizeTranscript: (options) => ipcRenderer.invoke('diarize-transcript', options),
   generateSummary: (options) => ipcRenderer.invoke('generate-summary', options),
+  cancelSummaryGeneration: (options) => ipcRenderer.invoke('cancel-summary-generation', options),
 
   // Meeting history
   listMeetings: () => ipcRenderer.invoke('list-meetings'),

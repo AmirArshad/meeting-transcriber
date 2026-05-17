@@ -10,6 +10,7 @@ const {
   buildAiAddonControlState,
   buildHomeAiAddonPrompt,
   getDiarizationSetupMessage,
+  getSummaryGenerationButtonView,
   getSummarySetupMessage,
   normalizeHistoryDetailTab,
   parseTranscriptMarkdownSegments,
@@ -53,6 +54,7 @@ let currentMeetingId = null;
 let currentRecordingMeeting = null;
 let pendingMeetingTranscriptId = null;
 let summaryGenerationMeetingId = null;
+let summaryGenerationCancelling = false;
 let activeHistoryDetailTab = 'transcript';
 let homePromptContext = { platform: null, hasNvidiaGpu: false, cudaInstalled: false };
 let meetings = [];
@@ -653,6 +655,84 @@ function setButtonBusy(button, busy, busyLabel = 'Working...') {
   delete button.dataset.originalLabel;
   button.disabled = false;
   button.classList.remove('is-loading');
+}
+
+function getSummaryButtonMeetingId(button) {
+  if (!button) {
+    return null;
+  }
+  if (button.id === 'generate-current-summary-btn') {
+    return currentRecordingMeeting && currentRecordingMeeting.id ? String(currentRecordingMeeting.id) : null;
+  }
+  return currentMeetingId ? String(currentMeetingId) : null;
+}
+
+function getSummaryGenerationButtons() {
+  return [
+    document.getElementById('generate-current-summary-btn'),
+    document.getElementById('generate-summary-btn'),
+    document.getElementById('regenerate-summary-btn'),
+  ].filter(Boolean);
+}
+
+function restoreSummaryGenerationButton(button) {
+  if (!button) {
+    return;
+  }
+
+  button.textContent = button.dataset.originalLabel || button.textContent || 'Generate Summary';
+  button.disabled = false;
+  button.classList.remove('is-loading', 'summary-generation-active', 'is-cancelling');
+  delete button.dataset.originalLabel;
+  delete button.dataset.hoverLabel;
+  button.removeAttribute('aria-busy');
+  button.removeAttribute('title');
+}
+
+function updateSummaryGenerationButtons() {
+  const view = getSummaryGenerationButtonView({
+    active: Boolean(summaryGenerationMeetingId),
+    cancelling: summaryGenerationCancelling,
+  });
+
+  for (const button of getSummaryGenerationButtons()) {
+    if (!view.active) {
+      restoreSummaryGenerationButton(button);
+      continue;
+    }
+
+    if (!button.dataset.originalLabel) {
+      button.dataset.originalLabel = button.textContent;
+    }
+    button.textContent = view.label;
+    button.dataset.hoverLabel = view.hoverLabel || view.label;
+    button.title = view.title || '';
+    button.disabled = getSummaryButtonMeetingId(button) !== summaryGenerationMeetingId || summaryGenerationCancelling;
+    button.setAttribute('aria-busy', view.ariaBusy ? 'true' : 'false');
+    button.classList.add('is-loading', 'summary-generation-active');
+    button.classList.toggle('is-cancelling', summaryGenerationCancelling);
+  }
+}
+
+async function cancelSummaryGeneration(meetingId) {
+  if (!summaryGenerationMeetingId || summaryGenerationCancelling) {
+    return;
+  }
+
+  summaryGenerationCancelling = true;
+  updateSummaryGenerationButtons();
+  addLog('Cancelling summary generation...');
+
+  try {
+    const result = await window.electronAPI.cancelSummaryGeneration({ meetingId: meetingId || summaryGenerationMeetingId });
+    if (result && result.message && !result.canceled) {
+      addLog(result.message, 'warning');
+    }
+  } catch (error) {
+    summaryGenerationCancelling = false;
+    updateSummaryGenerationButtons();
+    addLog(`Failed to cancel summary generation: ${error.message}`, 'error');
+  }
 }
 
 function activateHistoryDetailTab(targetTab) {
@@ -1464,17 +1544,17 @@ function setupEventListeners() {
 
   const generateCurrentSummaryBtn = document.getElementById('generate-current-summary-btn');
   if (generateCurrentSummaryBtn) {
-    generateCurrentSummaryBtn.addEventListener('click', () => generateSummaryForMeeting(currentRecordingMeeting && currentRecordingMeeting.id, generateCurrentSummaryBtn));
+    generateCurrentSummaryBtn.addEventListener('click', () => handleSummaryGenerationButtonClick(currentRecordingMeeting && currentRecordingMeeting.id, generateCurrentSummaryBtn));
   }
 
   const generateSummaryBtn = document.getElementById('generate-summary-btn');
   if (generateSummaryBtn) {
-    generateSummaryBtn.addEventListener('click', () => generateSummaryForMeeting(currentMeetingId, generateSummaryBtn));
+    generateSummaryBtn.addEventListener('click', () => handleSummaryGenerationButtonClick(currentMeetingId, generateSummaryBtn));
   }
 
   const regenerateSummaryBtn = document.getElementById('regenerate-summary-btn');
   if (regenerateSummaryBtn) {
-    regenerateSummaryBtn.addEventListener('click', () => generateSummaryForMeeting(currentMeetingId, regenerateSummaryBtn));
+    regenerateSummaryBtn.addEventListener('click', () => handleSummaryGenerationButtonClick(currentMeetingId, regenerateSummaryBtn));
   }
 
   const copySummaryBtn = document.getElementById('copy-summary-btn');
@@ -2110,22 +2190,40 @@ function syncMeetingInList(updatedMeeting) {
   }
 }
 
-async function generateSummaryForMeeting(meetingId, button) {
+function handleSummaryGenerationButtonClick(meetingId, button) {
+  if (summaryGenerationMeetingId && String(summaryGenerationMeetingId) === String(meetingId || '')) {
+    cancelSummaryGeneration(meetingId);
+    return;
+  }
+
+  generateSummaryForMeeting(meetingId);
+}
+
+async function generateSummaryForMeeting(meetingId) {
   if (!meetingId) {
     addLog('Save a transcript before generating a summary.', 'warning');
     return;
   }
+
+  const normalizedMeetingId = String(meetingId);
 
   if (summaryGenerationMeetingId) {
     addLog('Summary generation is already running.', 'warning');
     return;
   }
 
+  summaryGenerationMeetingId = normalizedMeetingId;
+  summaryGenerationCancelling = false;
+  updateSummaryGenerationButtons();
+
   let aiStatus;
   try {
     aiStatus = await window.electronAPI.getAiAddonStatus({ verifyChecksums: true });
   } catch (error) {
     addLog(`Summary setup status unavailable: ${error.message}`, 'error');
+    summaryGenerationMeetingId = null;
+    summaryGenerationCancelling = false;
+    updateSummaryGenerationButtons();
     return;
   }
 
@@ -2141,11 +2239,12 @@ async function generateSummaryForMeeting(meetingId, button) {
       activateHistoryDetailTab('summary');
     }
     openSettingsAtAiAddons();
+    summaryGenerationMeetingId = null;
+    summaryGenerationCancelling = false;
+    updateSummaryGenerationButtons();
     return;
   }
 
-  summaryGenerationMeetingId = meetingId;
-  setButtonBusy(button, true, 'Summarizing...');
   if (currentMeetingId === meetingId) {
     showSummaryMessage('Generating local summary...');
   }
@@ -2175,6 +2274,19 @@ async function generateSummaryForMeeting(meetingId, button) {
     addLog('Summary generated!');
   } catch (error) {
     console.error('Failed to generate summary:', error);
+    const wasCancelled = error && (error.code === 'AI_ADDON_SETUP_CANCELLED' || error.name === 'AbortError' || /cancell?ed/i.test(error.message || ''));
+    if (wasCancelled) {
+      addLog('Summary generation cancelled. Transcript is unchanged.', 'warning');
+      if (currentMeetingId === meetingId) {
+        const restored = await restoreCurrentHistorySummary(meetingId);
+        if (!restored) {
+          showSummaryMessage('Summary generation cancelled. Transcript is unchanged.');
+        }
+        activateHistoryDetailTab('summary');
+      }
+      return;
+    }
+
     const message = `Summary generation failed. Transcript is unchanged. ${error.message}`;
     addLog(message, 'error');
     if (currentMeetingId === meetingId) {
@@ -2186,7 +2298,8 @@ async function generateSummaryForMeeting(meetingId, button) {
     }
   } finally {
     summaryGenerationMeetingId = null;
-    setButtonBusy(button, false);
+    summaryGenerationCancelling = false;
+    updateSummaryGenerationButtons();
   }
 }
 

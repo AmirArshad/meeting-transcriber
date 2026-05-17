@@ -1920,6 +1920,7 @@ function createAsyncActionQueue() {
 const enqueueAiAddonAction = createAsyncActionQueue();
 const enqueueAiComputeAction = createAsyncActionQueue();
 const aiAddonSetupAbortControllers = new Map();
+let activeSummaryGeneration = null;
 
 function getRecordingsDir() {
   return path.join(app.getPath('userData'), 'recordings');
@@ -3056,13 +3057,18 @@ ipcMain.handle('generate-summary', async (event, options = {}) => {
   if (!meetingId) {
     throw new Error('generate-summary requires a meetingId');
   }
+  const normalizedMeetingId = String(meetingId);
+
+  if (activeSummaryGeneration) {
+    throw new Error('Summary generation is already running. Cancel it or wait for it to finish.');
+  }
 
   const meeting = await new Promise((resolve, reject) => {
     const recordingsDir = path.join(app.getPath('userData'), 'recordings');
     const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
       '--recordings-dir', recordingsDir,
       'get',
-      String(meetingId),
+      normalizedMeetingId,
     ]), { cwd: pythonConfig.backendPath });
     let output = '';
     let errorOutput = '';
@@ -3109,9 +3115,25 @@ ipcMain.handle('generate-summary', async (event, options = {}) => {
   const speakerMetadataPath = meeting.ai && meeting.ai.diarization && meeting.ai.diarization.segmentsPath;
   const speakersJsonPath = speakerMetadataPath ? assertSafeExistingSegmentsPath(speakerMetadataPath) : null;
 
+  const controller = new AbortController();
+  activeSummaryGeneration = {
+    meetingId: normalizedMeetingId,
+    controller,
+    process: null,
+  };
+
   return enqueueAiComputeAction(() => new Promise((resolve, reject) => {
+    if (!activeSummaryGeneration || activeSummaryGeneration.controller !== controller || controller.signal.aborted) {
+      if (activeSummaryGeneration && activeSummaryGeneration.controller === controller) {
+        activeSummaryGeneration = null;
+      }
+      reject(createAiAddonCancelError('Summary generation was canceled.'));
+      return;
+    }
+
+    let settled = false;
     const python = spawnTrackedPython(buildSummaryArgs({
-      meetingId: String(meetingId),
+      meetingId: normalizedMeetingId,
       transcriptPath,
       runtimeDir,
       modelPath,
@@ -3121,9 +3143,31 @@ ipcMain.handle('generate-summary', async (event, options = {}) => {
       profile: profile || 'balanced',
       modelLabel: artifact.modelLabel || artifact.modelId,
     }), { cwd: pythonConfig.backendPath });
+    activeSummaryGeneration.process = python;
 
     let output = '';
     let errorOutput = '';
+    const cleanupCancel = (() => {
+      const handleAbort = () => {
+        if (settled) {
+          return;
+        }
+        terminateProcessBestEffort(python);
+      };
+      controller.signal.addEventListener('abort', handleAbort, { once: true });
+      return () => controller.signal.removeEventListener('abort', handleAbort);
+    })();
+    const finish = (callback, value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanupCancel();
+      if (activeSummaryGeneration && activeSummaryGeneration.controller === controller) {
+        activeSummaryGeneration = null;
+      }
+      callback(value);
+    };
 
     python.stdout.on('data', (data) => {
       output += data.toString();
@@ -3141,16 +3185,24 @@ ipcMain.handle('generate-summary', async (event, options = {}) => {
     });
 
     python.on('close', async (code) => {
+      if (controller.signal.aborted) {
+        finish(reject, createAiAddonCancelError('Summary generation was canceled.'));
+        return;
+      }
       if (code !== 0) {
         const reason = errorOutput && errorOutput.trim()
           ? errorOutput.trim().split(/\r?\n/).filter(Boolean).slice(-1)[0]
           : '';
-        reject(new Error(reason || 'Summary generation failed.'));
+        finish(reject, new Error(reason || 'Summary generation failed.'));
         return;
       }
 
       try {
         const result = JSON.parse(output);
+        if (controller.signal.aborted) {
+          finish(reject, createAiAddonCancelError('Summary generation was canceled.'));
+          return;
+        }
         const summaryMetadata = {
           status: 'completed',
           modelProfile: result.metadata.profile,
@@ -3166,14 +3218,21 @@ ipcMain.handle('generate-summary', async (event, options = {}) => {
           const pythonUpdate = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
             '--recordings-dir', recordingsDir,
             'update-ai',
-            String(meetingId),
+            normalizedMeetingId,
             '--summary-json', JSON.stringify(summaryMetadata),
           ]), { cwd: pythonConfig.backendPath });
+          if (activeSummaryGeneration && activeSummaryGeneration.controller === controller) {
+            activeSummaryGeneration.process = pythonUpdate;
+          }
           let metadataOutput = '';
           let metadataErrorOutput = '';
           pythonUpdate.stdout.on('data', (data) => { metadataOutput += data.toString(); });
           pythonUpdate.stderr.on('data', (data) => { metadataErrorOutput += data.toString(); });
           pythonUpdate.on('close', (updateCode) => {
+            if (controller.signal.aborted) {
+              metadataReject(createAiAddonCancelError('Summary generation was canceled.'));
+              return;
+            }
             if (updateCode === 0) {
               try {
                 metadataResolve(JSON.parse(metadataOutput));
@@ -3184,17 +3243,32 @@ ipcMain.handle('generate-summary', async (event, options = {}) => {
             }
             metadataReject(new Error(metadataErrorOutput.trim() || 'Failed to update summary metadata'));
           });
-          pythonUpdate.on('error', metadataReject);
+          pythonUpdate.on('error', (error) => metadataReject(controller.signal.aborted ? createAiAddonCancelError('Summary generation was canceled.') : error));
         });
 
-        resolve({ ...result, meeting: updatedMeeting });
+        finish(resolve, { ...result, meeting: updatedMeeting });
       } catch (error) {
-        reject(error);
+        finish(reject, error);
       }
     });
 
-    python.on('error', reject);
+    python.on('error', (error) => finish(reject, controller.signal.aborted ? createAiAddonCancelError('Summary generation was canceled.') : error));
   }));
+});
+
+ipcMain.handle('cancel-summary-generation', async (event, options = {}) => {
+  if (!activeSummaryGeneration) {
+    return { canceled: false, message: 'No summary generation is currently running.' };
+  }
+
+  const requestedMeetingId = options && options.meetingId ? String(options.meetingId) : null;
+  if (requestedMeetingId && requestedMeetingId !== activeSummaryGeneration.meetingId) {
+    return { canceled: false, message: 'A different meeting summary is currently running.' };
+  }
+
+  activeSummaryGeneration.controller.abort(createAiAddonCancelError('Summary generation was canceled.'));
+  terminateProcessBestEffort(activeSummaryGeneration.process);
+  return { canceled: true };
 });
 
 /**

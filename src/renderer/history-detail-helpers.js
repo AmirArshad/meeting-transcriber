@@ -237,6 +237,26 @@
     };
   }
 
+  function getSummaryGenerationButtonView({ active = false, cancelling = false } = {}) {
+    if (!active) {
+      return {
+        active: false,
+        label: null,
+        hoverLabel: null,
+        title: null,
+        ariaBusy: false,
+      };
+    }
+
+    return {
+      active: true,
+      label: cancelling ? 'Cancelling...' : 'Summarising...',
+      hoverLabel: cancelling ? 'Cancelling...' : 'Cancel Summarisation',
+      title: cancelling ? 'Cancelling summary generation...' : 'Click to cancel summary generation',
+      ariaBusy: true,
+    };
+  }
+
   function shouldShowSpeakerSetupPrompt({ diarization, platform, cudaInstalled, hasNvidiaGpu }) {
     if (!diarization || diarization.status === 'ready' || diarization.setupComplete) {
       return false;
@@ -288,6 +308,7 @@
     buildHomeAiAddonPrompt,
     cleanMarkdownText,
     getDiarizationSetupMessage,
+    getSummaryGenerationButtonView,
     getSummarySetupMessage,
     normalizeHistoryDetailTab,
     parseTranscriptMarkdownSegments,
