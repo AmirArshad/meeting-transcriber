@@ -437,7 +437,7 @@ def test_load_pyannote_pipeline_supports_legacy_auth_token_signature(monkeypatch
     }]
 
 
-def test_load_pyannote_pipeline_rejects_legacy_auth_token_signature_for_offline_execution(monkeypatch):
+def test_load_pyannote_pipeline_wraps_legacy_auth_token_offline_rejection(monkeypatch):
     class FakePipeline:
         @staticmethod
         def from_pretrained(model_ref, use_auth_token=None):

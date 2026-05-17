@@ -3078,25 +3078,27 @@ ipcMain.handle('generate-summary', async (event, options = {}) => {
   };
 
   const meeting = await new Promise((resolve, reject) => {
-    let settled = false;
-    const finish = (callback, value) => {
-      if (settled) {
+    let preflightSettled = false;
+    let cleanupPreflightCancel = () => {};
+    const finishPreflight = (callback, value) => {
+      if (preflightSettled) {
         return;
       }
-      settled = true;
-      cleanupCancel();
+      preflightSettled = true;
+      cleanupPreflightCancel();
       callback(value);
     };
     const cleanupCancel = (() => {
       const handleAbort = () => {
-        finish(reject, createAiAddonCancelError('Summary generation was canceled.'));
+        finishPreflight(reject, createAiAddonCancelError('Summary generation was canceled.'));
       };
       controller.signal.addEventListener('abort', handleAbort, { once: true });
       return () => controller.signal.removeEventListener('abort', handleAbort);
     })();
+    cleanupPreflightCancel = cleanupCancel;
 
     if (controller.signal.aborted) {
-      finish(reject, createAiAddonCancelError('Summary generation was canceled.'));
+      finishPreflight(reject, createAiAddonCancelError('Summary generation was canceled.'));
       return;
     }
 
@@ -3113,20 +3115,20 @@ ipcMain.handle('generate-summary', async (event, options = {}) => {
     python.stderr.on('data', (data) => { errorOutput += data.toString(); });
     python.on('close', (code) => {
       if (controller.signal.aborted) {
-        finish(reject, createAiAddonCancelError('Summary generation was canceled.'));
+        finishPreflight(reject, createAiAddonCancelError('Summary generation was canceled.'));
         return;
       }
       if (code === 0) {
         try {
-          finish(resolve, JSON.parse(output));
+          finishPreflight(resolve, JSON.parse(output));
         } catch (error) {
-          finish(reject, new Error(`Failed to parse meeting before summary generation: ${error.message}`));
+          finishPreflight(reject, new Error(`Failed to parse meeting before summary generation: ${error.message}`));
         }
         return;
       }
-      finish(reject, new Error(errorOutput.trim() || 'Meeting not found'));
+      finishPreflight(reject, new Error(errorOutput.trim() || 'Meeting not found'));
     });
-    python.on('error', (error) => finish(reject, controller.signal.aborted ? createAiAddonCancelError('Summary generation was canceled.') : error));
+    python.on('error', (error) => finishPreflight(reject, controller.signal.aborted ? createAiAddonCancelError('Summary generation was canceled.') : error));
   }).catch((error) => {
     clearActiveSummaryGeneration();
     throw error;
@@ -3201,8 +3203,10 @@ ipcMain.handle('generate-summary', async (event, options = {}) => {
       return;
     }
 
-    let settled = false;
+    let summarySettled = false;
     activeSummaryGeneration.phase = 'summary';
+    // While assigning the actual subprocess, cancellation relies on the shared
+    // AbortController. terminateProcessBestEffort is best-effort for null.
     activeSummaryGeneration.process = null;
     const python = spawnTrackedPython(buildSummaryArgs({
       meetingId: normalizedMeetingId,
@@ -3221,7 +3225,7 @@ ipcMain.handle('generate-summary', async (event, options = {}) => {
     let errorOutput = '';
     const cleanupCancel = (() => {
       const handleAbort = () => {
-        if (settled) {
+        if (summarySettled) {
           return;
         }
         terminateProcessBestEffort(python);
@@ -3230,10 +3234,10 @@ ipcMain.handle('generate-summary', async (event, options = {}) => {
       return () => controller.signal.removeEventListener('abort', handleAbort);
     })();
     const finish = (callback, value) => {
-      if (settled) {
+      if (summarySettled) {
         return;
       }
-      settled = true;
+      summarySettled = true;
       cleanupCancel();
       clearActiveSummaryGeneration();
       callback(value);
