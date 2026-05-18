@@ -46,6 +46,7 @@ const {
   parsePythonVersion,
   parseAiBackendProgressLine,
   resolveExternalUrl,
+  getLegalNoticesPath,
   resolveTranscriptionAudioFile,
   summarizeAiBackendError,
   TRANSCRIPTION_CUDA_PACKAGES,
@@ -4078,6 +4079,34 @@ ipcMain.handle('get-system-info', async () => {
       });
     });
   });
+});
+
+ipcMain.handle('open-legal-notices', async () => {
+  const noticesPath = getLegalNoticesPath({
+    resourcesPath: app.isPackaged ? process.resourcesPath : null,
+    devRoot: path.join(__dirname, '..'),
+  });
+
+  if (!noticesPath) {
+    return {
+      success: false,
+      error: 'Third-party notices file is not available.',
+    };
+  }
+
+  const openError = await shell.openPath(noticesPath);
+  if (openError) {
+    return {
+      success: false,
+      path: noticesPath,
+      error: openError,
+    };
+  }
+
+  return {
+    success: true,
+    path: noticesPath,
+  };
 });
 
 /**

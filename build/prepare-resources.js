@@ -10,7 +10,9 @@ const PYTHON_VERSION = '3.11.9';
 const BUILD_DIR = path.join(__dirname, 'resources');
 const PYTHON_DIR = path.join(BUILD_DIR, 'python');
 const FFMPEG_DIR = path.join(BUILD_DIR, 'ffmpeg');
+const LEGAL_DIR = path.join(BUILD_DIR, 'legal');
 const BIN_DIR = path.join(BUILD_DIR, 'bin');
+const REPO_ROOT = path.join(__dirname, '..');
 const MODELS_DIR = path.join(BUILD_DIR, 'whisper-models');
 const RESOURCE_MANIFEST_PATH = path.join(BUILD_DIR, 'resource-manifest.json');
 const RESOURCE_MANIFEST_VERSION = 4;
@@ -74,6 +76,49 @@ function ensureBuildDirectory() {
     fs.mkdirSync(BUILD_DIR, { recursive: true });
     console.log('Created build/resources/ directory\n');
   }
+}
+
+function copyFileIfExists(sourcePath, destPath) {
+  if (!fs.existsSync(sourcePath)) {
+    return false;
+  }
+
+  fs.mkdirSync(path.dirname(destPath), { recursive: true });
+  fs.copyFileSync(sourcePath, destPath);
+  return true;
+}
+
+function copyWindowsFfmpegUpstreamLicense(ffmpegExtractRoot) {
+  const licenseCandidates = ['LICENSE', 'COPYING.GPLv3', 'COPYING', 'license.txt'];
+
+  for (const name of licenseCandidates) {
+    const sourcePath = path.join(ffmpegExtractRoot, name);
+    if (copyFileIfExists(sourcePath, path.join(LEGAL_DIR, `ffmpeg-upstream-${name}`))) {
+      return name;
+    }
+  }
+
+  return null;
+}
+
+function stageLegalBundle() {
+  fs.mkdirSync(LEGAL_DIR, { recursive: true });
+
+  copyFileIfExists(path.join(REPO_ROOT, 'THIRD_PARTY_NOTICES.md'), path.join(LEGAL_DIR, 'THIRD_PARTY_NOTICES.md'));
+  copyFileIfExists(path.join(REPO_ROOT, 'LICENSE.txt'), path.join(LEGAL_DIR, 'LICENSE.txt'));
+
+  const repoLegalDir = path.join(REPO_ROOT, 'legal');
+  if (fs.existsSync(repoLegalDir)) {
+    for (const entry of fs.readdirSync(repoLegalDir, { withFileTypes: true })) {
+      if (!entry.isFile()) {
+        continue;
+      }
+
+      copyFileIfExists(path.join(repoLegalDir, entry.name), path.join(LEGAL_DIR, entry.name));
+    }
+  }
+
+  console.log('✓ Legal notices staged for installer bundling\n');
 }
 
 function ensureWindowsEmbeddedPythonPathConfig(pthFile = path.join(PYTHON_DIR, 'python311._pth')) {
@@ -793,7 +838,8 @@ async function prepareResources() {
 
       // Find the bin directory (ffmpeg extracts to a versioned folder)
       const extractedDirs = fs.readdirSync(tempDir);
-      const ffmpegBinDir = path.join(tempDir, extractedDirs[0], 'bin');
+      const ffmpegExtractRoot = path.join(tempDir, extractedDirs[0]);
+      const ffmpegBinDir = path.join(ffmpegExtractRoot, 'bin');
 
       // Copy binaries to ffmpeg dir
       if (!fs.existsSync(FFMPEG_DIR)) {
@@ -804,6 +850,12 @@ async function prepareResources() {
         path.join(ffmpegBinDir, 'ffmpeg.exe'),
         path.join(FFMPEG_DIR, 'ffmpeg.exe')
       );
+
+      fs.mkdirSync(LEGAL_DIR, { recursive: true });
+      const upstreamLicense = copyWindowsFfmpegUpstreamLicense(ffmpegExtractRoot);
+      if (upstreamLicense) {
+        console.log(`  → Copied upstream ffmpeg license file (${upstreamLicense})\n`);
+      }
 
       // Cleanup
       fs.unlinkSync(ffmpegZip);
@@ -854,6 +906,8 @@ async function prepareResources() {
     }
   }
 
+  stageLegalBundle();
+
   console.log('========================================');
   console.log('Build preparation complete!');
   console.log('========================================');
@@ -881,5 +935,6 @@ module.exports = {
   manifestsMatch,
   prepareResources,
   pruneMacOSPythonRuntimeDevelopmentFiles,
+  stageLegalBundle,
   verifyMacOSHelperSignature,
 };

@@ -102,6 +102,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   installGPU: () => ipcRenderer.invoke('install-gpu'),
   uninstallGPU: () => ipcRenderer.invoke('uninstall-gpu'),
   getSystemInfo: () => ipcRenderer.invoke('get-system-info'),
+  openLegalNotices: () => ipcRenderer.invoke('open-legal-notices'),
 
   // Platform detection
   getPlatform: () => ipcRenderer.invoke('get-platform'),

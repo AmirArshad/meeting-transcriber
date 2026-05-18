@@ -3599,6 +3599,20 @@ async function initSettingsTabOnce() {
 
   setupAiAddonSettingsListeners();
   await refreshAiAddonSettings();
+
+  const openLegalNoticesBtn = document.getElementById('open-legal-notices-btn');
+  if (openLegalNoticesBtn) {
+    openLegalNoticesBtn.addEventListener('click', async () => {
+      try {
+        const result = await window.electronAPI.openLegalNotices();
+        if (!result || !result.success) {
+          addLog(`Could not open third-party notices: ${result?.error || 'unknown error'}`);
+        }
+      } catch (error) {
+        addLog(`Could not open third-party notices: ${error.message}`);
+      }
+    });
+  }
 }
 
 async function checkGPUStatus() {

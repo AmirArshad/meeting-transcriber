@@ -61,6 +61,21 @@ function resolveExternalUrl(url) {
   return new URL(String(url)).toString();
 }
 
+function getLegalNoticesPath(options = {}) {
+  const devRoot = options.devRoot || path.join(__dirname, '..');
+  const resourcesPath = options.resourcesPath ? String(options.resourcesPath) : '';
+
+  if (resourcesPath) {
+    const packagedPath = path.join(resourcesPath, 'legal', 'THIRD_PARTY_NOTICES.md');
+    if (fs.existsSync(packagedPath)) {
+      return packagedPath;
+    }
+  }
+
+  const devPath = path.join(devRoot, 'THIRD_PARTY_NOTICES.md');
+  return fs.existsSync(devPath) ? devPath : null;
+}
+
 function getModelDownloadCacheDir(homeDir) {
   return path.join(homeDir, '.cache', 'huggingface', 'hub');
 }
@@ -1083,6 +1098,7 @@ module.exports = {
   buildMacOSPermissionCheckFailureStatus,
   isTrustedExternalUrl,
   resolveExternalUrl,
+  getLegalNoticesPath,
   buildPermissionErrorMessage,
   buildRecordingPreflightReport,
   buildQuitRecordingDialogOptions,

@@ -160,6 +160,7 @@ test('model catalog exposes swappable v1 defaults', () => {
   const summaryModel = getModelById('summary', DEFAULT_SUMMARY_MODEL_ID);
 
   assert.equal(diarizationModel.runtime.modelRef, 'pyannote/speaker-diarization-community-1');
+  assert.equal(diarizationModel.license, 'cc-by-4.0');
   assert.equal(getDiarizationModelRef('renderer-supplied-id'), 'pyannote/speaker-diarization-community-1');
   assert.equal(diarizationModel.supportedPlatforms.darwin.status, 'enabled');
   assert.equal(diarizationModel.supportedPlatforms.darwin.acceleration, 'mps');

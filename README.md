@@ -37,6 +37,7 @@ Online meetings are a tax on memory. The good options for getting transcripts ba
 - Speaker diarization requires your own Hugging Face token for the gated pyannote model; AvaNevis does not ship, proxy, or log a maintainer-owned token.
 - Summary models/runtimes download only after you explicitly start setup from Settings.
 - Open source — audit the code yourself.
+- Third-party licenses and attributions: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 - See [docs/internal/SECURITY_AUDIT.md](docs/internal/SECURITY_AUDIT.md) for the full security write-up.
 
 ## Install
@@ -233,16 +234,23 @@ PRs welcome. Please run `npm run test:all` before opening one and add coverage f
 
 ## Acknowledgments
 
-- **OpenAI** for Whisper.
-- **faster-whisper** for the efficient CUDA/CPU implementation.
+- **OpenAI** for [Whisper](https://github.com/openai/whisper) (MIT).
+- **Systran / guillaumekln** and **mlx-community** for packaged Whisper weights used by faster-whisper and Lightning-Whisper-MLX.
+- **faster-whisper** for the efficient CUDA/CPU transcription runtime.
 - **Lightning-Whisper-MLX** for Apple Silicon Metal acceleration.
+- **pyannote** for [Speaker Diarization Community-1](https://huggingface.co/pyannote/speaker-diarization-community-1) (CC BY 4.0), used when you enable optional speaker labels with your own Hugging Face token.
+- **Alibaba Qwen** and community quantizers (e.g. Unsloth GGUF builds) for optional local meeting summaries (Apache-2.0).
+- **ggml-org** for [llama.cpp](https://github.com/ggml-org/llama.cpp) summary inference (MIT).
 - **PyAudioWPatch** for WASAPI loopback on Windows.
+- **ffmpeg** for Opus compression in installers (GPLv3 — see third-party notices).
 - **CoreAudio process taps** and **ScreenCaptureKit** for clean desktop audio on macOS.
 - **Electron** for making this kind of cross-platform desktop app practical.
 
 ## License
 
-MIT — see [LICENSE.txt](LICENSE.txt).
+AvaNevis application source code is licensed under the [MIT License](LICENSE.txt).
+
+Bundled and optional components (ffmpeg, Python packages, Whisper weights, pyannote, Qwen GGUF, llama.cpp, CUDA runtimes, and others) are governed by their own licenses. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for attribution, copyleft obligations, and optional model terms. Packaged installers also include a copy under `resources/legal/`.
 
 ## Repo note
 

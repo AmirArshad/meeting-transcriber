@@ -1,0 +1,22 @@
+FFmpeg — GPLv3 source offer (AvaNevis installers)
+
+AvaNevis installers may bundle an ffmpeg binary built by third parties (for
+example, gyan.dev on Windows or evermeet.cx on macOS). Those builds are
+commonly distributed under the GNU General Public License version 3 (GPLv3).
+
+Under GPLv3 section 6, you may obtain the complete corresponding source code
+for the ffmpeg version bundled with your AvaNevis build from:
+
+  https://ffmpeg.org/download.html
+
+For the pinned build used during `npm run prepare-build`, see
+`build/download-manifest.js` (ffmpegWin / ffmpegMac URLs and versions).
+
+If you received AvaNevis without access to this file, contact the distributor
+who provided the installer and request the corresponding ffmpeg source code,
+or download it from ffmpeg.org using the version string shown in Settings →
+About → Third-party notices.
+
+Upstream license texts copied during Windows prepare-build (when available)
+may also appear alongside this file as `ffmpeg-upstream-*` in the packaged
+`legal/` directory.

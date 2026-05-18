@@ -2128,6 +2128,23 @@ footer {
 .info-value.error   { color: var(--crimson); }
 .info-value.warning { color: var(--amber); }
 
+.about-credits {
+  margin: 12px 0 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  max-width: 62ch;
+}
+
+.about-credits a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.about-credits a:hover {
+  text-decoration: underline;
+}
+
 .gpu-actions {
   display: flex;
   gap: 10px;

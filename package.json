@@ -118,6 +118,8 @@
     ],
     "files": [
       "src/**/*",
+      "THIRD_PARTY_NOTICES.md",
+      "legal/**/*",
       "package.json",
       "!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}",
       "!**/node_modules/.bin",
@@ -169,6 +171,13 @@
       {
         "from": "build/iconTemplate@2x.png",
         "to": "iconTemplate@2x.png"
+      },
+      {
+        "from": "build/resources/legal",
+        "to": "legal",
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "directories": {

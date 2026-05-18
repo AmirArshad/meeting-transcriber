@@ -294,6 +294,8 @@ const AI_MODEL_CATALOG = deepFreeze({
         id: DEFAULT_DIARIZATION_MODEL_ID,
         label: 'pyannote Speaker Diarization Community-1',
         provider: 'huggingface',
+        license: 'cc-by-4.0',
+        licenseUrl: 'https://huggingface.co/pyannote/speaker-diarization-community-1',
         gated: true,
         tokenRequired: true,
         termsRequired: true,
