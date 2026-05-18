@@ -3,6 +3,7 @@ const { execFile, spawn } = require('child_process');
 const fs = require('fs');
 const https = require('https');
 const path = require('path');
+const { Worker } = require('worker_threads');
 const AdmZip = require('adm-zip');
 const { redactSensitiveText, SENSITIVE_PROGRESS_KEY_SET } = require('./ai-progress-sanitizer');
 
@@ -31,8 +32,11 @@ const {
 
 const AI_ADDON_PROGRESS_CHANNEL = 'ai-addon-progress';
 const DOWNLOAD_TIMEOUT_MS = 300000;
+const DOWNLOAD_PROGRESS_INTERVAL_MS = 250;
+const HASH_YIELD_BYTES = 8 * 1024 * 1024;
 const MAX_DOWNLOAD_REDIRECTS = 5;
 const AI_ADDON_CANCEL_CODE = 'AI_ADDON_SETUP_CANCELLED';
+const LATE_DOWNLOAD_ABORT_CODES = new Set(['ECONNABORTED', 'ECONNRESET']);
 const DOWNLOAD_REDIRECT_HOSTS = new Set([
   'objects.githubusercontent.com',
   'release-assets.githubusercontent.com',
@@ -591,6 +595,46 @@ function readDiarizationDependencyMarker({ userDataDir, artifact, fsModule = fs 
   }
 }
 
+function normalizeMarkerStringList(values) {
+  return Array.isArray(values)
+    ? values.map((value) => String(value || '').trim()).filter(Boolean)
+    : [];
+}
+
+function areStringListsEqual(left, right) {
+  if (left.length !== right.length) {
+    return false;
+  }
+  return left.every((value, index) => value === right[index]);
+}
+
+function getDiarizationSourceArtifactMarker(sourceArtifact) {
+  return {
+    package: String(sourceArtifact?.package || ''),
+    version: String(sourceArtifact?.version || ''),
+    fileName: String(sourceArtifact?.fileName || ''),
+    sha256: String(sourceArtifact?.sha256 || ''),
+  };
+}
+
+function doesDiarizationDependencyMarkerMatch(marker, artifact) {
+  if (!marker || !artifact || marker.artifactId !== artifact.id) {
+    return false;
+  }
+
+  const expectedRequirements = normalizeMarkerStringList(artifact.pip?.requirements);
+  const markerRequirements = normalizeMarkerStringList(marker.requirements);
+  if (!areStringListsEqual(markerRequirements, expectedRequirements)) {
+    return false;
+  }
+
+  const expectedSourceArtifacts = (artifact.pip?.sourceArtifacts || []).map(getDiarizationSourceArtifactMarker);
+  const markerSourceArtifacts = Array.isArray(marker.sourceArtifacts)
+    ? marker.sourceArtifacts.map(getDiarizationSourceArtifactMarker)
+    : [];
+  return JSON.stringify(markerSourceArtifacts) === JSON.stringify(expectedSourceArtifacts);
+}
+
 function checkDiarizationDependencyCache({
   userDataDir,
   platform = process.platform,
@@ -605,8 +649,11 @@ function checkDiarizationDependencyCache({
   const markerPath = artifact ? getDiarizationDependencyMarkerPath(userDataDir, artifact) : null;
   const existsSync = bindFsMethod(fsModule, 'existsSync');
   const marker = artifact ? readDiarizationDependencyMarker({ userDataDir, artifact, fsModule }) : null;
-  const installed = Boolean(sitePackagesDir && existsSync && existsSync(sitePackagesDir) && marker && marker.artifactId === artifact.id);
+  const hasSitePackages = Boolean(sitePackagesDir && existsSync && existsSync(sitePackagesDir));
+  const markerMatches = Boolean(hasSitePackages && doesDiarizationDependencyMarkerMatch(marker, artifact));
+  const installed = Boolean(hasSitePackages && markerMatches);
   const partial = Boolean(dependencyDir && existsSync && existsSync(dependencyDir) && !installed);
+  const staleInstall = Boolean(hasSitePackages && marker && !markerMatches && !validationError);
 
   return {
     supported: Boolean(artifact),
@@ -614,7 +661,10 @@ function checkDiarizationDependencyCache({
     partial,
     valid: installed && !validationError,
     validationStatus: validationError ? 'error' : installed ? 'ready' : 'notConfigured',
-    reason: validationError || (installed ? null : 'Speaker identification dependencies are not installed.'),
+    reason: validationError
+      || (installed ? null : staleInstall
+        ? 'Speaker identification dependencies are out of date. Remove and reinstall speaker identification setup.'
+        : 'Speaker identification dependencies are not installed.'),
     artifact,
     artifactId: artifact && artifact.id,
     dependencyDir,
@@ -632,9 +682,29 @@ async function hashFileSha256(filePath, fsModule = fs) {
 
   return new Promise((resolve, reject) => {
     const hash = crypto.createHash('sha256');
-    const stream = createReadStream(filePath);
+    let stream;
+    try {
+      stream = createReadStream(filePath);
+    } catch (error) {
+      reject(error);
+      return;
+    }
+    let bytesSinceYield = 0;
+    let resuming = false;
     stream.on('error', reject);
-    stream.on('data', (chunk) => hash.update(chunk));
+    stream.on('data', (chunk) => {
+      hash.update(chunk);
+      bytesSinceYield += chunk.length;
+      if (bytesSinceYield >= HASH_YIELD_BYTES && !resuming) {
+        bytesSinceYield = 0;
+        resuming = true;
+        stream.pause();
+        setImmediate(() => {
+          resuming = false;
+          stream.resume();
+        });
+      }
+    });
     stream.on('end', () => resolve(hash.digest('hex')));
   });
 }
@@ -1948,15 +2018,40 @@ async function downloadFile({ url, destinationPath, expectedSizeBytes, onProgres
   return new Promise((resolve, reject) => {
     let settled = false;
     let request = null;
+    let responseStream = null;
     let file = null;
+    let lastProgressEmitMs = 0;
+    let lastProgress = null;
+    let fileFinished = false;
+    let completingLateAbort = false;
+    let downloaded = 0;
+    let total = Number(expectedSizeBytes) || 0;
+    const emitDownloadProgress = (progress, force = false) => {
+      if (typeof onProgress !== 'function') {
+        return;
+      }
+      const downloaded = Math.max(0, Math.floor(Number(progress.downloaded) || 0));
+      const total = Math.max(0, Math.floor(Number(progress.total) || 0));
+      const percent = Number.isFinite(progress.percent) ? Math.max(0, Math.min(100, progress.percent)) : undefined;
+      const nowMs = Date.now();
+      const complete = total > 0 && downloaded >= total;
+      if (!force && lastProgress && lastProgress.downloaded === downloaded && lastProgress.total === total) {
+        return;
+      }
+      if (!force && lastProgressEmitMs && nowMs - lastProgressEmitMs < DOWNLOAD_PROGRESS_INTERVAL_MS && !complete) {
+        return;
+      }
+
+      lastProgressEmitMs = nowMs;
+      lastProgress = { downloaded, total };
+      onProgress({ downloaded, total, percent });
+    };
     const removePartialFile = () => {
       try {
         if (destinationPath && fs.existsSync(destinationPath)) {
           fs.unlinkSync(destinationPath);
         }
-      } catch (cleanupError) {
-        // Best effort cleanup only.
-      }
+      } catch (cleanupError) {}
     };
     const closeAndRemovePartialFile = (done = () => {}) => {
       if (!file) {
@@ -1977,10 +2072,25 @@ async function downloadFile({ url, destinationPath, expectedSizeBytes, onProgres
       file.once('close', finishCleanup);
       try {
         file.destroy();
-      } catch (cleanupError) {
-        // Best effort cleanup only.
-      }
+      } catch (cleanupError) {}
       setTimeout(finishCleanup, 250).unref?.();
+    };
+    const destroyActiveTransfer = (error) => {
+      if (responseStream) {
+        try {
+          if (file) {
+            responseStream.unpipe(file);
+          }
+        } catch (cleanupError) {}
+        try {
+          responseStream.destroy(error);
+        } catch (cleanupError) {}
+      }
+      if (request) {
+        try {
+          request.destroy(error);
+        } catch (cleanupError) {}
+      }
     };
     const cleanupCancel = onAiAddonCancel(cancelSignal, (cancelError) => {
       if (settled) {
@@ -1988,9 +2098,7 @@ async function downloadFile({ url, destinationPath, expectedSizeBytes, onProgres
       }
       settled = true;
       cleanupCancel?.();
-      if (request) {
-        request.destroy(cancelError);
-      }
+      destroyActiveTransfer(cancelError);
       closeAndRemovePartialFile(() => reject(cancelError));
     });
     const fail = (error) => {
@@ -1999,6 +2107,7 @@ async function downloadFile({ url, destinationPath, expectedSizeBytes, onProgres
       }
       settled = true;
       cleanupCancel?.();
+      destroyActiveTransfer(error);
       closeAndRemovePartialFile(() => reject(error));
     };
     const succeed = () => {
@@ -2009,8 +2118,36 @@ async function downloadFile({ url, destinationPath, expectedSizeBytes, onProgres
       cleanupCancel?.();
       resolve();
     };
+    const hasCompleteDownload = () => Boolean(fileFinished || (total > 0 && downloaded >= total));
+    const isLateDownloadAbort = (error) => Boolean(error && LATE_DOWNLOAD_ABORT_CODES.has(error.code) && hasCompleteDownload());
+    const completeAfterLateDownloadAbort = (error) => {
+      if (!isLateDownloadAbort(error)) {
+        return false;
+      }
+      if (!file || fileFinished || completingLateAbort) {
+        return true;
+      }
+      completingLateAbort = true;
+      try {
+        responseStream?.unpipe(file);
+      } catch (cleanupError) {}
+      if (total > 0) {
+        emitDownloadProgress({ downloaded, total, percent: 100 }, true);
+      }
+      try {
+        file.end();
+      } catch (endError) {
+        fail(endError);
+      }
+      return true;
+    };
 
     request = client.get(parsedUrl, (response) => {
+      responseStream = response;
+      if (settled) {
+        response.resume();
+        return;
+      }
       if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
         response.resume();
         const nextUrl = new URL(response.headers.location, parsedUrl).toString();
@@ -2026,8 +2163,7 @@ async function downloadFile({ url, destinationPath, expectedSizeBytes, onProgres
 
       fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
       file = fs.createWriteStream(destinationPath);
-      const total = Number(response.headers['content-length']) || Number(expectedSizeBytes) || null;
-      let downloaded = 0;
+      total = Number(response.headers['content-length']) || Number(expectedSizeBytes) || 0;
 
       if (expectedSizeBytes && total && total > expectedSizeBytes * 1.1) {
         response.resume();
@@ -2036,28 +2172,50 @@ async function downloadFile({ url, destinationPath, expectedSizeBytes, onProgres
       }
 
       response.on('data', (chunk) => {
-        downloaded += chunk.length;
-        if (expectedSizeBytes && downloaded > expectedSizeBytes * 1.1) {
-          response.destroy(new Error('Summary setup artifact exceeded the pinned expected size.'));
+        if (settled) {
           return;
         }
-        if (total && typeof onProgress === 'function') {
-          onProgress({ downloaded, total, percent: Math.min((downloaded / total) * 100, 100) });
+        downloaded += chunk.length;
+        if (expectedSizeBytes && downloaded > expectedSizeBytes * 1.1) {
+          const sizeError = new Error('Summary setup artifact exceeded the pinned expected size.');
+          fail(sizeError);
+          return;
+        }
+        if (total > 0) {
+          emitDownloadProgress({ downloaded, total, percent: Math.min((downloaded / total) * 100, 100) });
         }
       });
 
-      response.on('error', (error) => fail(isAiAddonCancelError(error) ? error : new Error(`Summary setup artifact download stream failed: ${error.message}`)));
+      response.on('error', (error) => {
+        if (completeAfterLateDownloadAbort(error)) {
+          return;
+        }
+        fail(isAiAddonCancelError(error) ? error : new Error(`Summary setup artifact download stream failed: ${error.message}`));
+      });
       file.on('error', (error) => fail(isAiAddonCancelError(error) ? error : new Error(`Could not write summary setup artifact: ${error.message}`)));
-      file.on('finish', () => file.close(succeed));
+      file.on('finish', () => {
+        if (settled) {
+          return;
+        }
+        fileFinished = true;
+        if (total > 0) {
+          emitDownloadProgress({ downloaded, total, percent: Math.min((downloaded / total) * 100, 100) }, true);
+        }
+        file.close(succeed);
+      });
       response.pipe(file);
     });
 
     request.setTimeout(timeoutMs, () => {
+      // Preserve the host-qualified request error message from the error handler.
       request.destroy(new Error('Summary setup artifact download timed out.'));
     });
     request.on('error', (error) => {
       if (isAiAddonCancelError(error)) {
         fail(error);
+        return;
+      }
+      if (completeAfterLateDownloadAbort(error)) {
         return;
       }
       fail(new Error(`Summary setup artifact download failed from ${getDownloadHost(parsedUrl.toString())}: ${error.message}`));
@@ -2083,6 +2241,45 @@ function extractZipArchive(archivePath, destinationDir) {
     }
   }
   zip.extractAllTo(resolvedDestination, true);
+}
+
+function extractZipArchiveInWorker(archivePath, destinationDir) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let worker;
+    const finish = (callback, value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      callback(value);
+    };
+    try {
+      worker = new Worker(path.join(__dirname, 'ai-addon-zip-extractor-worker.js'), {
+        workerData: { archivePath, destinationDir },
+      });
+    } catch (error) {
+      finish(reject, error);
+      return;
+    }
+    worker.once('message', (message) => {
+      if (message && message.ok) {
+        finish(resolve);
+        return;
+      }
+      const error = new Error((message && message.error && message.error.message) || 'Failed to extract runtime archive.');
+      if (message && message.error && message.error.stack) {
+        error.stack = message.error.stack;
+      }
+      finish(reject, error);
+    });
+    worker.once('error', (error) => finish(reject, error));
+    worker.once('exit', (code) => {
+      if (code !== 0) {
+        finish(reject, new Error(`Runtime archive extraction worker exited with code ${code}.`));
+      }
+    });
+  });
 }
 
 function validateTarEntryName(entryName, destinationDir) {
@@ -2189,6 +2386,10 @@ async function extractTarGzArchive(archivePath, destinationDir, tarRunner = runT
 
 async function extractRuntimeArchive(archivePath, destinationDir, archiveFormat) {
   if (archiveFormat === 'zip') {
+    if (typeof archivePath === 'string') {
+      await extractZipArchiveInWorker(archivePath, destinationDir);
+      return;
+    }
     extractZipArchive(archivePath, destinationDir);
     return;
   }
@@ -2278,12 +2479,14 @@ async function installSummaryRuntime({
     const completedRuntimeBytes = runtimeArtifact.artifacts
       .slice(0, index)
       .reduce((total, archive) => total + (Number(archive.sizeBytes) || 0), 0);
+    const runtimeArchiveStartPercent = clampPercent(totalRuntimeBytes ? (completedRuntimeBytes / totalRuntimeBytes) * 100 : (index / runtimeArtifact.artifacts.length) * 100);
+    const runtimeArchiveCompletePercent = clampPercent(totalRuntimeBytes ? ((completedRuntimeBytes + (Number(runtimeArchive.sizeBytes) || 0)) / totalRuntimeBytes) * 100 : ((index + 1) / runtimeArtifact.artifacts.length) * 100);
     emitSafeProgress(emitProgress, {
       feature: 'summary',
       phase: 'downloading-runtime',
       message: 'Downloading local summary runtime.',
       modelId,
-      percent: clampPercent(totalRuntimeBytes ? (completedRuntimeBytes / totalRuntimeBytes) * 100 : (index / runtimeArtifact.artifacts.length) * 100),
+      percent: runtimeArchiveStartPercent,
       downloadedBytes: clampBytes(completedRuntimeBytes, totalRuntimeBytes),
       totalBytes: totalRuntimeBytes || undefined,
     });
@@ -2317,6 +2520,13 @@ async function installSummaryRuntime({
     }
 
     try {
+      emitSafeProgress(emitProgress, {
+        feature: 'summary',
+        phase: 'validating',
+        message: 'Verifying local summary runtime download.',
+        modelId,
+        percent: runtimeArchiveCompletePercent,
+      });
       throwIfAiAddonCanceled(cancelSignal, 'Summary model setup was canceled.');
     } catch (cancelError) {
       if (unlinkSync) {
@@ -2747,6 +2957,14 @@ async function setupSummaryModel({
       return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog });
     }
 
+    emitSafeProgress(emitProgress, {
+      feature: 'summary',
+      phase: 'validating',
+      message: 'Verifying local summary model download.',
+      modelId: selectedModelId,
+      percent: 100,
+    });
+
     const actualSha256 = await hashFileSha256(tempPath, fsModule);
     if (actualSha256 !== artifact.sha256) {
       if (unlinkSync) {
@@ -2881,6 +3099,7 @@ module.exports = {
   downloadFile,
   downloadHuggingFaceSummaryArtifact,
   extractZipArchive,
+  extractRuntimeArchive,
   extractTarGzArchive,
   validateTarListing,
   getDiarizationTokenStatus,

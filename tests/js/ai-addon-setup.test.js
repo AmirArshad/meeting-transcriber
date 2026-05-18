@@ -19,6 +19,7 @@ const {
   createAiAddonProgressEvent,
   downloadFile,
   downloadHuggingFaceSummaryArtifact,
+  extractRuntimeArchive,
   extractZipArchive,
   extractTarGzArchive,
   getSummaryArtifactPath,
@@ -137,6 +138,15 @@ function createMemoryFs() {
         isDirectory: () => pathVariants(targetPath).some((variant) => dirs.has(variant)),
         size: resolvedFilePath ? files.get(resolvedFilePath).length : 0,
       };
+    },
+    createReadStream(filePath) {
+      const resolvedFilePath = pathVariants(filePath).find((variant) => files.has(variant));
+      if (!resolvedFilePath) {
+        throw new Error(`Missing file: ${filePath}`);
+      }
+      const stream = new PassThrough();
+      process.nextTick(() => stream.end(files.get(resolvedFilePath)));
+      return stream;
     },
   };
 }
@@ -404,6 +414,196 @@ test('downloadFile removes partial destination when request fails', async () => 
   }
 });
 
+test('downloadFile throttles progress callbacks for large downloads', async () => {
+  const destinationPath = path.join(__dirname, '..', 'tmp-throttled-download.bin');
+  const originalGet = https.get;
+  const originalDateNow = Date.now;
+  let nowMs = 1000;
+  const progressEvents = [];
+  try {
+    Date.now = () => nowMs;
+    https.get = (_url, callback) => {
+      const response = new PassThrough();
+      response.statusCode = 200;
+      response.headers = { 'content-length': '50' };
+      process.nextTick(() => {
+        callback(response);
+        for (let index = 0; index < 5; index += 1) {
+          response.write(Buffer.alloc(10));
+          nowMs += 50;
+        }
+        response.end();
+      });
+      return {
+        setTimeout() {},
+        on() {},
+        destroy() {},
+        abort() {},
+      };
+    };
+
+    await downloadFile({
+      url: 'https://github.com/example/artifact.bin',
+      destinationPath,
+      expectedSizeBytes: 50,
+      timeoutMs: 1000,
+      onProgress: (progress) => progressEvents.push(progress),
+    });
+
+    assert.ok(progressEvents.length >= 1);
+    assert.ok(progressEvents.length <= 3);
+    assert.equal(progressEvents[0].total, 50);
+    assert.equal(progressEvents.at(-1).downloaded, 50);
+    assert.equal(progressEvents.at(-1).percent, 100);
+  } finally {
+    https.get = originalGet;
+    Date.now = originalDateNow;
+    try {
+      fs.unlinkSync(destinationPath);
+    } catch (error) {
+      // Best effort cleanup.
+    }
+  }
+});
+
+test('downloadFile tears down active transfer on cancellation', async () => {
+  const destinationPath = path.join(__dirname, '..', 'tmp-cancel-download.bin');
+  const originalGet = https.get;
+  const controller = new AbortController();
+  const counters = { requestDestroyed: 0, requestAborted: 0, responseDestroyed: 0 };
+  try {
+    https.get = (_url, callback) => {
+      const response = new PassThrough();
+      const originalDestroy = response.destroy.bind(response);
+      response.statusCode = 200;
+      response.headers = { 'content-length': '100' };
+      response.destroy = (error) => {
+        counters.responseDestroyed += 1;
+        return originalDestroy(error);
+      };
+      process.nextTick(() => {
+        callback(response);
+        response.write(Buffer.alloc(10));
+        setImmediate(() => controller.abort());
+      });
+      return {
+        setTimeout() {},
+        on() {},
+        destroy() {
+          counters.requestDestroyed += 1;
+        },
+        abort() {
+          counters.requestAborted += 1;
+        },
+      };
+    };
+
+    await assert.rejects(
+      () => downloadFile({
+        url: 'https://github.com/example/artifact.bin',
+        destinationPath,
+        expectedSizeBytes: 100,
+        timeoutMs: 1000,
+        cancelSignal: controller.signal,
+      }),
+      /canceled/i,
+    );
+
+    assert.equal(counters.responseDestroyed, 1);
+    assert.ok(counters.requestDestroyed + counters.requestAborted >= 1);
+    assert.equal(fs.existsSync(destinationPath), false);
+  } finally {
+    https.get = originalGet;
+    try {
+      fs.unlinkSync(destinationPath);
+    } catch (error) {
+      // Best effort cleanup.
+    }
+  }
+});
+
+test('downloadFile ignores late ECONNABORTED after expected bytes are written', async () => {
+  const destinationPath = path.join(__dirname, '..', 'tmp-complete-aborted-download.bin');
+  const originalGet = https.get;
+  try {
+    https.get = (_url, callback) => {
+      const response = new PassThrough();
+      const request = new EventEmitter();
+      request.setTimeout = () => {};
+      request.destroy = () => {};
+      response.statusCode = 200;
+      response.headers = { 'content-length': '12' };
+      process.nextTick(() => {
+        callback(response);
+        response.end(Buffer.from('complete-data'));
+        setImmediate(() => {
+          const error = new Error('write ECONNABORTED');
+          error.code = 'ECONNABORTED';
+          request.emit('error', error);
+        });
+      });
+      return request;
+    };
+
+    await downloadFile({
+      url: 'https://github.com/example/artifact.bin',
+      destinationPath,
+      expectedSizeBytes: 12,
+      timeoutMs: 1000,
+    });
+
+    assert.equal(fs.readFileSync(destinationPath, 'utf8'), 'complete-data');
+  } finally {
+    https.get = originalGet;
+    try {
+      fs.unlinkSync(destinationPath);
+    } catch (error) {
+      // Best effort cleanup.
+    }
+  }
+});
+
+test('downloadFile completes when ECONNABORTED fires after full payload before response end', async () => {
+  const destinationPath = path.join(__dirname, '..', 'tmp-aborted-before-end-download.bin');
+  const originalGet = https.get;
+  try {
+    https.get = (_url, callback) => {
+      const response = new PassThrough();
+      const request = new EventEmitter();
+      request.setTimeout = () => {};
+      request.destroy = () => {};
+      response.statusCode = 200;
+      response.headers = { 'content-length': '12' };
+      process.nextTick(() => {
+        callback(response);
+        response.write(Buffer.from('complete-data'));
+        setImmediate(() => {
+          const error = new Error('write ECONNABORTED');
+          error.code = 'ECONNABORTED';
+          response.destroy(error);
+        });
+      });
+      return request;
+    };
+
+    await downloadFile({
+      url: 'https://github.com/example/artifact.bin',
+      destinationPath,
+      expectedSizeBytes: 12,
+      timeoutMs: 1000,
+    });
+
+    assert.equal(fs.readFileSync(destinationPath, 'utf8'), 'complete-data');
+  } finally {
+    https.get = originalGet;
+    try {
+      fs.unlinkSync(destinationPath);
+    } catch (error) {
+      // Best effort cleanup.
+    }
+  }
+});
+
 test('Hugging Face downloader kills child process and rejects on cancellation', async () => {
   const fsModule = createMemoryFs();
   const artifact = getSummaryArtifactForPlatform(
@@ -478,6 +678,26 @@ test('zip extraction creates missing destination directory', () => {
     assert.equal(zip.extractedTo, path.resolve(destinationDir));
   } finally {
     fs.rmSync(destinationDir, { recursive: true, force: true });
+  }
+});
+
+test('runtime zip extraction runs off the main thread worker path', async () => {
+  const archivePath = path.join(__dirname, '..', 'tmp-runtime-worker.zip');
+  const destinationDir = path.join(__dirname, '..', 'tmp-runtime-worker-extract');
+  try {
+    fs.rmSync(destinationDir, { recursive: true, force: true });
+    fs.rmSync(archivePath, { force: true });
+    const AdmZip = require('adm-zip');
+    const zip = new AdmZip();
+    zip.addFile('bin/llama-cli.exe', Buffer.from('runtime'));
+    zip.writeZip(archivePath);
+
+    await extractRuntimeArchive(archivePath, destinationDir, 'zip');
+
+    assert.equal(fs.readFileSync(path.join(destinationDir, 'bin', 'llama-cli.exe'), 'utf8'), 'runtime');
+  } finally {
+    fs.rmSync(destinationDir, { recursive: true, force: true });
+    fs.rmSync(archivePath, { force: true });
   }
 });
 
@@ -615,7 +835,16 @@ test('ready diarization does not require secure token storage after setup', asyn
   fsModule.mkdirSync(sitePackagesDir, { recursive: true });
   fsModule.writeFileSync(
     path.join(userDataDir, 'ai-addons', 'dependencies', 'diarization', artifact.id, 'install.json'),
-    JSON.stringify({ artifactId: artifact.id }),
+    JSON.stringify({
+      artifactId: artifact.id,
+      requirements: artifact.pip.requirements,
+      sourceArtifacts: artifact.pip.sourceArtifacts.map((sourceArtifact) => ({
+        package: sourceArtifact.package,
+        version: sourceArtifact.version,
+        fileName: sourceArtifact.fileName,
+        sha256: sourceArtifact.sha256,
+      })),
+    }),
   );
 
   const manifestPath = path.join(userDataDir, 'ai-addons', 'manifest.json');
@@ -650,7 +879,16 @@ test('ready diarization can remain complete after stored token is removed', asyn
   fsModule.mkdirSync(sitePackagesDir, { recursive: true });
   fsModule.writeFileSync(
     path.join(userDataDir, 'ai-addons', 'dependencies', 'diarization', artifact.id, 'install.json'),
-    JSON.stringify({ artifactId: artifact.id }),
+    JSON.stringify({
+      artifactId: artifact.id,
+      requirements: artifact.pip.requirements,
+      sourceArtifacts: artifact.pip.sourceArtifacts.map((sourceArtifact) => ({
+        package: sourceArtifact.package,
+        version: sourceArtifact.version,
+        fileName: sourceArtifact.fileName,
+        sha256: sourceArtifact.sha256,
+      })),
+    }),
   );
 
   const manifestPath = path.join(userDataDir, 'ai-addons', 'manifest.json');
@@ -702,6 +940,45 @@ test('diarization dependency cache uses managed userData path and pinned require
   assert.equal(partialCache.partial, true);
   assert.ok(artifact.pip.requirements.includes('pyannote.audio==4.0.1'));
   assert.ok(artifact.pip.requirements.includes('torch==2.8.0+cu126'));
+  assert.ok(artifact.pip.requirements.includes('torchvision==0.23.0+cu126'));
+});
+
+test('diarization dependency cache invalidates stale pinned requirements', () => {
+  const fsModule = createMemoryFs();
+  const artifact = getDiarizationDependencyArtifactForPlatform('win32', 'x64');
+  const initialCache = checkDiarizationDependencyCache({
+    userDataDir: '/tmp/AvaNevis',
+    platform: 'win32',
+    arch: 'x64',
+    fsModule,
+  });
+
+  fsModule.mkdirSync(initialCache.sitePackagesDir);
+  fsModule.writeFileSync(initialCache.markerPath, `${JSON.stringify({
+    artifactId: artifact.id,
+    package: artifact.package,
+    version: artifact.version,
+    requirements: artifact.pip.requirements.filter((requirement) => !requirement.startsWith('torchvision==')),
+    sourceArtifacts: artifact.pip.sourceArtifacts.map((sourceArtifact) => ({
+      package: sourceArtifact.package,
+      version: sourceArtifact.version,
+      fileName: sourceArtifact.fileName,
+      sha256: sourceArtifact.sha256,
+    })),
+    installedAt: '2026-05-18T00:00:00.000Z',
+  })}\n`);
+
+  const cache = checkDiarizationDependencyCache({
+    userDataDir: '/tmp/AvaNevis',
+    platform: 'win32',
+    arch: 'x64',
+    fsModule,
+  });
+
+  assert.equal(cache.installed, false);
+  assert.equal(cache.valid, false);
+  assert.equal(cache.partial, true);
+  assert.match(cache.reason, /out of date/i);
 });
 
 test('macOS diarization dependency cache uses managed MPS artifact', () => {
@@ -761,6 +1038,8 @@ test('diarization dependency installer builds pinned pip target args', () => {
   assert.equal(args.includes('--no-binary=julius'), false);
   assert.ok(args.includes('pyannote.audio==4.0.1'));
   assert.ok(args.includes('torch==2.8.0+cu126'));
+  assert.ok(args.includes('torchvision==0.23.0+cu126'));
+  assert.ok(args.includes('torchaudio==2.8.0+cu126'));
   assert.equal(args.includes('julius==0.2.7'), true);
   assert.ok(artifact.pip.sourceArtifacts.some((sourceArtifact) => sourceArtifact.package === 'julius'));
 });
@@ -961,6 +1240,7 @@ test('macOS diarization setup preflights broad source-build toolchain before pip
 test('macOS compiler toolchain checker reports xcode-select failure clearly', async () => {
   const calls = [];
   const result = await checkMacOSCompilerToolchain({
+    platform: 'darwin',
     execFileFn(command, args, _options, callback) {
       calls.push([command, args]);
       callback(new Error('missing xcode'));

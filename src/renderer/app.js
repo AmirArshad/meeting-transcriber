@@ -4,6 +4,8 @@
 
 const COPY_SUCCESS_TIMEOUT_MS = 2000;
 const DEFAULT_SUMMARY_PROFILE = 'balanced';
+const MAX_PROGRESS_LOG_ENTRIES = 250;
+const AI_ADDON_PROGRESS_LOG_INTERVAL_MS = 1000;
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const { getRecordButtonAction } = window.recordingStateHelpers;
 const {
@@ -52,6 +54,7 @@ let currentMeetingId = null;
 // Powers the in-place rename on the post-recording transcript card and the
 // default filename used by the "Save" button.
 let currentRecordingMeeting = null;
+let currentRecordingTranscriptMarkdown = '';
 let pendingMeetingTranscriptId = null;
 let summaryGenerationMeetingId = null;
 let summaryGenerationCancelling = false;
@@ -69,6 +72,10 @@ let aiAddonStatusSnapshot = null;
 const aiAddonDownloadState = {
   diarization: { active: false, cancelling: false, percent: 0, message: '' },
   summary: { active: false, cancelling: false, percent: 0, message: '' },
+};
+const aiAddonProgressLogState = {
+  diarization: { lastKey: '', lastPercent: -1, lastAt: 0 },
+  summary: { lastKey: '', lastPercent: -1, lastAt: 0 },
 };
 
 function registerCleanup(cleanupFn) {
@@ -1446,14 +1453,16 @@ function wireInlineTitleEditor({
     }
     try {
       const updated = await window.electronAPI.updateMeeting(meeting.id, { title: newTitle });
-      if (updated && updated.title) {
-        const activeMeeting = getMeeting();
-        if (activeMeeting && String(activeMeeting.id) === editedMeetingId) {
-          heading.textContent = updated.title;
-        }
-        if (typeof onSaved === 'function') onSaved(updated);
-        addLog(`Renamed meeting to "${updated.title}"`);
+      if (!updated || !updated.title) {
+        throw new Error('Meeting was not found.');
       }
+
+      const activeMeeting = getMeeting();
+      if (activeMeeting && String(activeMeeting.id) === editedMeetingId) {
+        heading.textContent = updated.title;
+      }
+      if (typeof onSaved === 'function') onSaved(updated);
+      addLog(`Renamed meeting to "${updated.title}"`);
     } catch (err) {
       console.error('Rename failed:', err);
       addLog(`Failed to rename meeting: ${err.message}`, 'error');
@@ -1837,11 +1846,6 @@ async function runRecordingPreflightChecks({ micId, desktopId }) {
 
 // Start recording with retry logic
 async function startRecording() {
-  // Reset any previous recording's saved-meeting context so the title
-  // collapses back to "Transcript" until the new recording is saved.
-  currentRecordingMeeting = null;
-  applyCurrentRecordingTitle();
-
   const micId = micSelect.value;
   const desktopId = desktopSelect.value;
 
@@ -1909,6 +1913,9 @@ async function startRecording() {
       audioVisualizer.start();
 
       // Clear previous transcript
+      currentRecordingMeeting = null;
+      currentRecordingTranscriptMarkdown = '';
+      applyCurrentRecordingTitle();
       setTranscriptMessage('Recording in progress...');
       transcriptActions.style.display = 'none';
 
@@ -2107,6 +2114,11 @@ function writeTranscriptMarkdown({ meeting, transcriptionResult, diarizationResu
     lines.push('');
   });
 
+  if (!sourceSegments.length && transcriptionResult && transcriptionResult.text) {
+    lines.push(transcriptionResult.text);
+    lines.push('');
+  }
+
   return lines.join('\n');
 }
 
@@ -2149,11 +2161,13 @@ async function maybeRunDiarizationAfterTranscription(savedMeeting, transcription
     });
 
     if (result && Array.isArray(result.segments) && result.segments.length > 0) {
+      const updatedTranscriptMarkdown = writeTranscriptMarkdown({ meeting: savedMeeting, transcriptionResult, diarizationResult: result });
+      currentRecordingTranscriptMarkdown = updatedTranscriptMarkdown;
       renderTranscriptSegments(result.segments);
       if (savedMeeting.transcriptPath) {
         await window.electronAPI.saveTranscriptFile({
           filePath: savedMeeting.transcriptPath,
-          content: writeTranscriptMarkdown({ meeting: savedMeeting, transcriptionResult, diarizationResult: result }),
+          content: updatedTranscriptMarkdown,
         });
       }
     }
@@ -2450,6 +2464,13 @@ async function transcribeAudio() {
       guidedDiarizationResult = null;
     }
 
+    currentRecordingTranscriptMarkdown = typeof result.transcriptContent === 'string' && result.transcriptContent.trim()
+      ? result.transcriptContent
+      : writeTranscriptMarkdown({
+        meeting: { audioPath: result.audioPath || currentAudioFile },
+        transcriptionResult: result,
+      });
+
     // Display transcript with timestamps
     if (result.segments && result.segments.length > 0) {
       renderTranscriptSegments(result.segments);
@@ -2488,6 +2509,16 @@ async function transcribeAudio() {
       if (savedMeeting && savedMeeting.id) {
         currentRecordingMeeting = savedMeeting;
         applyCurrentRecordingTitle();
+        // Guided transcription can rewrite the persisted transcript during save;
+        // reload it so Save As uses the exact markdown stored in history.
+        try {
+          const fullMeeting = await window.electronAPI.getMeeting(savedMeeting.id);
+          if (fullMeeting && fullMeeting.transcript) {
+            currentRecordingTranscriptMarkdown = fullMeeting.transcript;
+          }
+        } catch (loadTranscriptError) {
+          console.warn('Could not load persisted transcript markdown after save:', loadTranscriptError);
+        }
         if (guidedDiarizationResult) {
           const speakerSidecarPath = await saveGuidedDiarizationMetadata(savedMeeting, guidedDiarizationStatus, guidedDiarizationResult);
           if (speakerSidecarPath && savedMeeting.ai) {
@@ -2666,30 +2697,48 @@ async function saveMeetingTranscriptToFile() {
   }
 }
 
+function getRenderedTranscriptFallbackText() {
+  if (!transcriptOutput) {
+    return '';
+  }
+
+  const blocks = Array.from(transcriptOutput.children || []).map((child) => {
+    const childLines = Array.from(child.children || [])
+      .map((node) => (node.textContent || '').trim())
+      .filter(Boolean);
+    return childLines.length ? childLines.join('\n') : (child.textContent || '').trim();
+  }).filter(Boolean);
+
+  return blocks.length ? blocks.join('\n\n') : ((transcriptOutput.textContent || '').trim());
+}
+
 // Save transcript via native Save dialog. Default filename uses the
 // current recording's display label (renamed or auto-generated) so users
 // get a meaningful name without further typing.
 async function saveTranscript() {
   // Prefer the rich markdown saved on disk by the backend transcriber when
   // available, falling back to whatever is currently in the transcript pane.
-  let content = '';
+  let content = currentRecordingTranscriptMarkdown || '';
   let suggestedName = 'Transcript';
 
   if (currentRecordingMeeting && currentRecordingMeeting.id) {
     suggestedName = currentRecordingMeeting.title || suggestedName;
-    try {
-      const fullMeeting = await window.electronAPI.getMeeting(currentRecordingMeeting.id);
-      if (fullMeeting && fullMeeting.transcript) {
-        content = fullMeeting.transcript;
+    if (!content) {
+      try {
+        const fullMeeting = await window.electronAPI.getMeeting(currentRecordingMeeting.id);
+        if (fullMeeting && fullMeeting.transcript) {
+          content = fullMeeting.transcript;
+          currentRecordingTranscriptMarkdown = fullMeeting.transcript;
+        }
+      } catch (err) {
+        console.warn('Failed to load saved transcript markdown, falling back to rendered text:', err);
       }
-    } catch (err) {
-      console.warn('Failed to load saved transcript markdown, falling back to plain text:', err);
     }
   }
 
   if (!content) {
-    // Fallback: assemble plain text from the rendered transcript output
-    content = (transcriptOutput && transcriptOutput.textContent) || '';
+    // Last-resort fallback for unsaved/legacy states where only rendered text exists.
+    content = getRenderedTranscriptFallbackText();
   }
 
   if (!content.trim()) {
@@ -2788,6 +2837,9 @@ function addLog(message, type = 'info') {
   logEntry.className = `log-entry ${type}`;
   logEntry.textContent = `[${timestamp}] ${message}`;
   progressLog.appendChild(logEntry);
+  while (progressLog.children.length > MAX_PROGRESS_LOG_ENTRIES) {
+    progressLog.removeChild(progressLog.firstChild);
+  }
   progressLog.scrollTop = progressLog.scrollHeight;
 }
 
@@ -3145,7 +3197,42 @@ function appendAiAddonLog(text) {
 
   logDiv.style.display = 'block';
   logOutput.textContent += `${text}\n`;
+  const lines = logOutput.textContent.split('\n');
+  if (lines.length > MAX_PROGRESS_LOG_ENTRIES) {
+    logOutput.textContent = lines.slice(-MAX_PROGRESS_LOG_ENTRIES).join('\n');
+  }
   logOutput.scrollTop = logOutput.scrollHeight;
+}
+
+function shouldLogAiAddonProgress(progress) {
+  if (!progress || (progress.feature !== 'summary' && progress.feature !== 'diarization') || !progress.message) {
+    return false;
+  }
+
+  const state = aiAddonProgressLogState[progress.feature];
+  const percent = Number.isFinite(progress.percent) ? Math.round(progress.percent) : null;
+  const key = `${progress.phase || ''}:${progress.status || ''}:${progress.message}`;
+  const now = Date.now();
+  const terminal = progress.status === 'ready'
+    || progress.status === 'error'
+    || progress.phase === 'cancelled'
+    || progress.phase === 'unsupported'
+    || progress.phase === 'needsAccount';
+
+  if (terminal || key !== state.lastKey) {
+    state.lastKey = key;
+    state.lastPercent = percent ?? state.lastPercent;
+    state.lastAt = now;
+    return true;
+  }
+
+  if (percent !== null && Math.abs(percent - state.lastPercent) >= 5 && now - state.lastAt >= AI_ADDON_PROGRESS_LOG_INTERVAL_MS) {
+    state.lastPercent = percent;
+    state.lastAt = now;
+    return true;
+  }
+
+  return false;
 }
 
 function updateAiAddonSettings(status) {
@@ -3462,7 +3549,7 @@ function setupAiAddonSettingsListeners() {
   if (window.electronAPI.onAiAddonProgress) {
     registerCleanup(window.electronAPI.onAiAddonProgress((progress) => {
       handleAiAddonProgress(progress);
-      if (progress && progress.message) {
+      if (shouldLogAiAddonProgress(progress)) {
         appendAiAddonLog(progress.message);
         addLog(progress.message);
       }

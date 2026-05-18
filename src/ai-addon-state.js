@@ -151,6 +151,7 @@ const DIARIZATION_DEPENDENCY_ARTIFACTS = deepFreeze({
       requirements: [
         'pyannote.audio==4.0.1',
         'torch==2.8.0+cu126',
+        'torchvision==0.23.0+cu126',
         'torchaudio==2.8.0+cu126',
         'torchcodec==0.7.0',
         'julius==0.2.7',

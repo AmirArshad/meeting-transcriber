@@ -131,6 +131,19 @@
       || '';
   }
 
+  function getDiarizationErrorRecoveryHint(reason) {
+    const text = String(reason || '').toLowerCase();
+    if (/\b(?:token|model terms|unauthorized|forbidden|gated|authenticated|authentication|permission)\b/.test(text)
+      || /\b(?:model|repository) access\b/.test(text)
+      || /\baccess (?:denied|token|to (?:the )?(?:model|repository))\b/.test(text)) {
+      return 'Check your Hugging Face token and accepted pyannote model terms, then validate again.';
+    }
+    if (/dependency|runtime|pyannote\.audio|torch|torchvision|torchaudio|module|import|installed/.test(text)) {
+      return 'Remove and reinstall speaker identification setup, then validate again.';
+    }
+    return 'Validate again or remove and reinstall speaker identification setup.';
+  }
+
   function getDiarizationSetupMessage(feature) {
     const status = feature && feature.status;
     const reason = featureReason(feature);
@@ -147,7 +160,7 @@
       return 'Validating local speaker identification setup.';
     }
     if (status === 'error') {
-      return `${reason || 'Speaker identification setup failed.'} Check your token, accepted model terms, and local runtime setup.`;
+      return `${reason || 'Speaker identification setup failed.'} ${getDiarizationErrorRecoveryHint(reason)}`;
     }
     return reason || 'Speaker identification setup is available only on supported platforms.';
   }

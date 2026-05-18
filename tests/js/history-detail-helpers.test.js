@@ -92,6 +92,18 @@ test('setup messages explain graceful degradation paths', () => {
     getDiarizationSetupMessage({ status: 'notConfigured' }),
     /supported platforms/i,
   );
+  const runtimeFailure = getDiarizationSetupMessage({
+    status: 'error',
+    error: "partially initialized module 'torchvision' has no attribute 'extension'",
+  });
+  assert.match(runtimeFailure, /remove and reinstall speaker identification setup/i);
+  assert.doesNotMatch(runtimeFailure, /token.*model terms/i);
+  const localCacheFailure = getDiarizationSetupMessage({
+    status: 'error',
+    error: 'Could not access local cache directory.',
+  });
+  assert.match(localCacheFailure, /validate again or remove and reinstall/i);
+  assert.doesNotMatch(localCacheFailure, /token.*model terms/i);
 });
 
 test('AI add-on validate and remove buttons require local setup state', () => {

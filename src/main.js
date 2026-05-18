@@ -3674,7 +3674,12 @@ ipcMain.handle('update-meeting', async (event, payload) => {
     python.on('close', (code) => {
       if (code === 0) {
         try {
-          resolve(JSON.parse(output));
+          const updatedMeeting = JSON.parse(output);
+          if (!updatedMeeting) {
+            reject(new Error('Meeting was not found.'));
+            return;
+          }
+          resolve(updatedMeeting);
         } catch (e) {
           reject(new Error(`Failed to parse updated meeting: ${e.message}`));
         }
@@ -3777,6 +3782,31 @@ ipcMain.handle('save-speaker-segments-file', async (event, options = {}) => {
   return { success: true, filePath: resolvedPath };
 });
 
+const WINDOWS_RESERVED_FILE_BASENAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i;
+
+function buildSafeSaveDialogDefaultPath(suggestedName) {
+  let safeName = suggestedName
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 120)
+    .replace(/[. ]+$/g, '');
+
+  if (!safeName) {
+    safeName = 'transcript';
+  }
+
+  const defaultName = safeName.toLowerCase().endsWith('.md') ? safeName : `${safeName}.md`;
+  const parsed = path.parse(defaultName);
+  let baseName = (parsed.name || 'transcript').replace(/[. ]+$/g, '') || 'transcript';
+
+  if (WINDOWS_RESERVED_FILE_BASENAME.test(baseName)) {
+    baseName = `file ${baseName}`;
+  }
+
+  return `${baseName}${parsed.ext || '.md'}`;
+}
+
 /**
  * Show a Save dialog and write the supplied transcript text to disk.
  *
@@ -3789,17 +3819,10 @@ ipcMain.handle('save-transcript-as', async (event, options) => {
   const content = typeof opts.content === 'string' ? opts.content : '';
   const title = typeof opts.title === 'string' && opts.title.trim() ? opts.title.trim() : 'Save Transcript';
 
-  // Sanitize for filesystem (Windows + macOS safe)
-  const safeName = suggestedName
-    .replace(/[<>:"/\\|?*\x00-\x1f]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 120) || 'transcript';
-
   const window = BrowserWindow.fromWebContents(event.sender);
   const result = await dialog.showSaveDialog(window, {
     title,
-    defaultPath: safeName.toLowerCase().endsWith('.md') ? safeName : `${safeName}.md`,
+    defaultPath: buildSafeSaveDialogDefaultPath(suggestedName),
     filters: [
       { name: 'Markdown', extensions: ['md'] },
       { name: 'Text', extensions: ['txt'] },

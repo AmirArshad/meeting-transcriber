@@ -407,6 +407,19 @@ test('summarizeAiBackendError ignores Python module execution warnings', () => {
 });
 
 
+test('summarizeAiBackendError preserves local runtime import failures', () => {
+  const summary = summarizeAiBackendError({
+    errorOutput: [
+      '{"type":"progress","feature":"diarization","phase":"error","message":"Speaker diarization failed."}',
+      "ERROR: partially initialized module 'torchvision' has no attribute 'extension' (most likely due to a circular import)",
+    ].join('\n'),
+    genericMessage: 'Speaker diarization failed.',
+  });
+
+  assert.equal(summary, "partially initialized module 'torchvision' has no attribute 'extension' (most likely due to a circular import)");
+});
+
+
 test('buildModelDownloadCheck returns macOS MLX cache settings for Apple Silicon', () => {
   const result = buildModelDownloadCheck({
     platform: 'darwin',
