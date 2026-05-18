@@ -1,12 +1,15 @@
 ---
 description: Build packaging — prepared resources, manifests, updater names
-globs: build/**,package.json,src/updater.js,.github/workflows/build-release.yml
+globs: build/**,package.json,src/updater.js,.github/workflows/build-release.yml,.github/workflows/ci.yml
 alwaysApply: false
 ---
 
 # Build and release packaging
 
+Details: `docs/development/BUILD_INSTRUCTIONS.md`, `docs/development/INSTALLER_IMPLEMENTATION.md`.
+
 - Keep aligned when changing bundled runtime locations: `build/prepare-resources.js`, `build/download-manifest.js`, `package.json` `extraResources`, `src/main.js` path resolution.
+- Pinned download URLs/checksums: `build/download-manifest.js` (+ `tests/js/build-download-manifest.test.js`).
 - `build/resources/resource-manifest.json` must invalidate stale prepared resources when inputs change.
 - Windows packaged Python: `python311._pth` includes `../backend`; dev mode uses `PYTHONPATH` in `src/main.js`.
 - macOS helper: build from `swift/AudioCaptureHelper`, copy via `prepare-resources.js`, sign in `electron-builder` as `Contents/Resources/bin/audiocapture-helper`.

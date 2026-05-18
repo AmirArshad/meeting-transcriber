@@ -1,0 +1,29 @@
+---
+description: Regression tests, CI expectations, and manual smoke paths
+globs: tests/**,.github/workflows/**
+alwaysApply: false
+---
+
+# Validation and CI
+
+## Automated suites
+
+| Command | Covers |
+|---------|--------|
+| `npm test` | `node --test` on `tests/js/**` + syntax `--check` on main, preload, `app.js`, `history-detail-helpers.js` |
+| `npm run test:python` | `tests/python/**` via `scripts/run-python-tests.js` |
+| `npm run test:all` | Both — run before opening a PR |
+
+CI (`.github/workflows/ci.yml`): JS + Python tests, `py_compile`, syntax checks, manifest tests, packaged-build smoke — not full E2E with real audio devices.
+
+## When to add tests
+
+- New pure helpers → `tests/js/` or `tests/python/` alongside existing patterns.
+- Recorder stdout / IPC / cache semantics → update existing contract tests (`main-process-helpers`, `test_transcriber_helpers`, `ai-addon-*`).
+
+## Manual checklists (hardware-dependent)
+
+- Recorder pipeline: `tests/manual/recording-smoke-checklist.md`
+- Local AI add-ons: `tests/manual/local-ai-addons-checklist.md`
+
+Fresh machine setup: `docs/development/TESTING.md`.

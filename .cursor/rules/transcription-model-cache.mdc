@@ -1,0 +1,32 @@
+---
+description: Whisper cache locations, completeness checks, and offline spawn policy
+globs: src/main-process-helpers.js,src/main.js,backend/transcription/**,tests/js/main-process-helpers.test.js,tests/python/test_transcriber_helpers.py
+alwaysApply: false
+---
+
+# Transcription model cache
+
+Whisper caches are **separate** from diarization under `userData/ai-addons/models/diarization`. Guided transcription must not let diarization `HF_HUB_CACHE` mask the Whisper cache.
+
+## Cache locations
+
+- **faster-whisper** (Windows / Intel Mac): `~/.cache/huggingface/hub` — `models--Systran--faster-whisper-<size>` or legacy `models--guillaumekln--faster-whisper-<size>`.
+- **MLX** (Apple Silicon): `~/Library/Caches/avanevis/mlx_models/<model-dir>/`.
+
+## Completeness (keep JS and Python aligned)
+
+- **faster-whisper snapshot:** non-empty `config.json`, `model.bin`, `tokenizer.json`, plus `vocabulary.txt` or `vocabulary.json`.
+- **MLX directory:** non-empty `weights.npz` and `config.json`.
+
+## Implementation map
+
+- UI / spawn: `cacheContainsCompleteTranscriptionModel`, `buildTranscriptionRuntimeEnv` in `src/main-process-helpers.js`; `getTranscriptionRuntimeEnv` in `src/main.js`.
+- Python: `has_cached_faster_whisper_model`, `AVANEVIS_TRANSCRIPTION_HF_CACHE_DIR`, `AVANEVIS_TRANSCRIPTION_LOCAL_FILES_ONLY` in `backend/transcription/faster_whisper_transcriber.py`; `_required_model_files_cached` in `backend/transcription/mlx_whisper_transcriber.py`.
+
+## Offline behavior
+
+- Set `AVANEVIS_TRANSCRIPTION_LOCAL_FILES_ONLY=1` / HF offline only when cache is **complete**.
+- `--preload` and download flows must keep `modelCached: false` while cache is incomplete so downloads can finish.
+- When diarization HF env is present, guided transcription still passes `AVANEVIS_TRANSCRIPTION_HF_CACHE_DIR` for Whisper only.
+
+Changing required files or env var names: update all files above plus both test files.

@@ -1,0 +1,15 @@
+---
+description: Renderer UI — plain JS, helper extraction, and regression tests
+globs: src/renderer/**,tests/js/history-detail-helpers.test.js,tests/js/update-notification-helpers.test.js,tests/js/recording-state-helpers.test.js
+alwaysApply: false
+---
+
+# Renderer patterns
+
+- Stack: plain HTML/CSS/JS (no React/Vue). Main state machine: `src/renderer/app.js` — prefer **extracting** pure logic to `*-helpers.js` with `tests/js/*-helpers.test.js` over growing `app.js`.
+- IPC: only via `window.electronAPI` (`src/preload.js`). See `electron-ipc.mdc` when adding handlers.
+- Transcripts: saved `.md` is source of truth; viewer renders Markdown with timestamp chips. Save/export uses native dialog (`.md` / `.txt`).
+- Meeting rename updates metadata by meeting ID — does not rename audio/transcript files on disk.
+- Styles: `src/renderer/styles.css`; keep DPR-aware canvas/scrubber patterns when touching visualizer or playback UI.
+
+After helper extraction or IPC/UI contract changes: `npm test` (includes syntax check on `app.js` and `history-detail-helpers.js`).

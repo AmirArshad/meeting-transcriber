@@ -12,4 +12,7 @@ alwaysApply: false
 - Summaries: always user-triggered; explicit setup only; HTTPS + host allowlist; ZIP/tar.gz runtime extraction uses `src/ai-addon-archive-helpers.js` plus worker threads; verify SHA-256 after download.
 - Serialize GPU-heavy diarization and summary runs through the main-process compute queue.
 - Meeting AI metadata: only `diarization` and `summary`; sidecars under recordings; concise sanitized strings.
+- **Cache separation:** diarization HF cache under `userData/ai-addons/models/diarization`; Whisper cache is separate — see `transcription-model-cache.mdc` for guided transcription env vars.
+- Stale summaries: honor `sourceTranscriptHash` when transcript changes.
 - Catalog/runtime changes: update `src/ai-addon-state.js`, `src/ai-addon-setup.js` if needed, `docs/development/LOCAL_AI_MODEL_CATALOG.md`, and `tests/js/ai-addon-*.test.js`.
+- Manual QA: `tests/manual/local-ai-addons-checklist.md`.

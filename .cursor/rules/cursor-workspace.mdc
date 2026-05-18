@@ -1,12 +1,55 @@
 ---
-description: AvaNevis Cursor workspace — canonical guide and validation
+description: AvaNevis Cursor workspace — guide map, validation, and scoped rules index
 alwaysApply: true
 ---
 
 # Cursor workspace
 
-- Full architecture, invariants, and commands: root `AGENTS.md` (shared with OpenCode).
-- Scoped rules in `.cursor/rules/` apply when matching files are in context; they do not replace `AGENTS.md`.
-- After JS helper or Python backend changes, run `npm test` and `npm run test:python` when relevant.
+Canonical architecture and invariants: root `AGENTS.md` (shared with OpenCode). Scoped rules below add file-targeted checklists; they do not replace `AGENTS.md`.
+
+## When to read which doc
+
+| Task | Start here |
+|------|------------|
+| Architecture / contracts | `AGENTS.md` |
+| Local dev & `.venv` | `README.md` → Develop |
+| Tests on a new machine | `docs/development/TESTING.md` |
+| Packaging / installers | `docs/development/BUILD_INSTRUCTIONS.md` |
+| Recorder stdout JSON | `docs/features/json-based-events.md` + `.cursor/rules/recorder-stdout-contract.mdc` |
+| AI catalog pins | `docs/development/LOCAL_AI_MODEL_CATALOG.md` + `.cursor/rules/local-ai-addons.mdc` |
+| macOS capture (shipped vs planned) | `docs/features/MACOS_AUDIO_ARCHITECTURE.md` |
+| Manual recorder QA | `tests/manual/recording-smoke-checklist.md` |
+| Manual AI add-ons QA | `tests/manual/local-ai-addons-checklist.md` |
+
+## Commands (repo root)
+
+```bash
+npm start | npm run dev
+npm test              # JS helpers + syntax (--check main, preload, app, history-detail-helpers)
+npm run test:python
+npm run test:all      # before PRs
+npm run prepare-build # before packaged builds
+```
+
+Windows: `py -3.11`; macOS: `python3.11`. Dev Python: repo `.venv` (auto-detected) or `AVANEVIS_PYTHON`.
+
+## Scoped rules (`.cursor/rules/`)
+
+| Rule | Triggers on |
+|------|-------------|
+| `recorder-stdout-contract` | Recorders, `src/main.js`, main-process helpers |
+| `electron-ipc` | Main, preload, renderer |
+| `transcription-model-cache` | Transcription cache / Whisper spawn env |
+| `local-ai-addons` | AI add-on catalog, diarization, summaries |
+| `meeting-metadata` | `meeting_manager.py` |
+| `macos-swift-helper` | Swift helper + macOS recorder bridge |
+| `renderer-patterns` | Renderer UI and helper modules |
+| `python-backend` | `backend/**` |
+| `build-packaging` | Build scripts, `package.json`, updater |
+| `validation-and-ci` | `tests/**`, workflows |
+
+## Agent maintenance
+
+- After JS helper or Python backend changes: run `npm test` and `npm run test:python` when relevant.
 - Update `AGENTS.md` when changing cross-process contracts, AI catalog pins, build inputs, or validation expectations.
-- Do not add repo-root `CLAUDE.md` while using Cursor.
+- Do not add repo-root `CLAUDE.md` (duplicates context with `AGENTS.md`).

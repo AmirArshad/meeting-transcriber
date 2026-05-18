@@ -1,0 +1,23 @@
+---
+description: Python backend — platform modules, spawn contracts, and quick checks
+globs: backend/**
+alwaysApply: false
+---
+
+# Python backend
+
+- Invoked by Electron (`src/main.js`), not a long-running server. Dev: `PYTHONPATH` / packaged `python311._pth` includes `../backend`.
+- **Platform split:** `backend/audio/windows_recorder.py` vs `macos_recorder.py`; transcription: `faster_whisper_transcriber.py` vs `mlx_whisper_transcriber.py`.
+- **stdout JSON** drives recorder control (`levels`, `event`, `warning`, `error`); stderr is debug-only. See `recorder-stdout-contract.mdc`.
+- **Post-processing mix:** record mic + desktop separately; mix after stop at 48 kHz stereo, Opus via ffmpeg.
+- Meeting persistence: `backend/meeting_manager.py` — see `meeting-metadata.mdc`.
+- Diarization / summaries: `backend/diarization/**`, `backend/summaries/**` — see `local-ai-addons.mdc`.
+
+Quick validation after edits:
+
+```bash
+npm run test:python
+python -m py_compile backend/*.py backend/audio/*.py backend/transcription/*.py
+```
+
+Device smoke (manual): `python backend/device_manager.py`.

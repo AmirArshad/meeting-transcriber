@@ -1,0 +1,30 @@
+---
+description: macOS desktop audio — Swift helper PCM contract, permissions, packaging
+globs: swift/**,backend/audio/macos_recorder.py,backend/audio/swift_audio_capture.py,build/prepare-resources.js
+alwaysApply: false
+---
+
+# macOS Swift audio helper
+
+Preferred capture: bundled `audiocapture-helper` with **CoreAudio process tap** on macOS 14.2+; falls back to Swift ScreenCaptureKit, then PyObjC ScreenCaptureKit.
+
+## stdout / stderr contract
+
+- **stdout:** raw interleaved float32 PCM only (Electron does not parse helper stdout).
+- **stderr:** JSON status, diagnostics, warnings, errors — parsed by `backend/audio/swift_audio_capture.py`.
+
+CoreAudio may expose multi-channel buffers; preserve helper interleaved normalization and Python mixer **one-sided stereo repair** so desktop speech survives MLX/ffmpeg mono downmix.
+
+## Permissions (do not conflate)
+
+- CoreAudio tap → System Audio Recording for `com.avanevis.app.audiocapture-helper`.
+- ScreenCaptureKit fallback → Screen Recording.
+- Inspect `helperCaptureBackend` and helper diagnostics before blaming “missing desktop audio” on generic screen-recording issues.
+
+## Packaging checklist
+
+- Build: `swift build -c release --arch arm64` in `swift/AudioCaptureHelper`.
+- Stage via `build/prepare-resources.js` → `build/resources/bin`.
+- Bundle/sign as `Contents/Resources/bin/audiocapture-helper` in electron-builder.
+
+`docs/features/MACOS_AUDIO_ARCHITECTURE.md` describes **future** ideas (streaming to disk, app-specific capture); do not treat planned sections as shipped behavior.
