@@ -49,7 +49,7 @@ This app keeps optional local AI add-on artifacts catalog-driven in `src/ai-addo
 3. Include all runtime archives needed for the platform, including CUDA dependency archives when required.
 4. Keep runtime archive URLs under trusted release hosts covered by the setup download host allowlist; setup rejects unallowed hosts even when SHA-256 metadata exists.
 5. Keep `executableName` aligned with the extracted `llama-cli` binary. Runtime archives extract under the managed runtime cache's `extract/` directory, and execution should prefer the extracted archive layout so Windows DLLs and macOS dylibs remain beside the executable.
-6. For ZIP and `tar.gz` archives, keep extraction paths relative and safe; setup creates the extraction directory and rejects unsafe or unparseable archive entries before extraction.
+6. For ZIP and `tar.gz` archives, keep extraction paths relative and safe; shared validation lives in `src/ai-addon-archive-helpers.js`. On-disk runtime archives extract off the main thread (`src/ai-addon-zip-extractor-worker.js` on Windows, `src/ai-addon-tar-extractor-worker.js` on macOS). Setup creates the extraction directory and rejects unsafe or unparseable archive entries before extraction.
 7. Confirm the pinned runtime supports the non-interactive CLI flags used by setup/generation (`--no-warmup`, `--single-turn`, `--simple-io`, and the current Qwen reasoning flag) before changing runtime pins.
 8. Run `npm test` and `npm run test:python`.
 

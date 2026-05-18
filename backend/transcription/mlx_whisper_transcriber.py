@@ -293,6 +293,7 @@ class MLXWhisperTranscriber(BaseTranscriber):
             hf_logger.setLevel(previous_level)
 
     def _required_model_files_cached(self) -> bool:
+        # Keep aligned with MLX_REQUIRED_CACHE_FILES in src/main-process-helpers.js (AGENTS.md).
         required_files = [
             self.model_dir / 'weights.npz',
             self.model_dir / 'config.json',

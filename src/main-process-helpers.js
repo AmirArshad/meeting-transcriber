@@ -9,6 +9,8 @@ const TRUSTED_HUGGING_FACE_PATHS = new Set([
   '/settings/tokens',
 ]);
 const MACOS_PERMISSION_CHECK_TIMEOUT_MS = 8000;
+// Transcription cache completeness (keep aligned with backend/transcription/faster_whisper_transcriber.py
+// and MLX _required_model_files_cached in mlx_whisper_transcriber.py; see AGENTS.md).
 const FASTER_WHISPER_REQUIRED_CACHE_FILES = ['config.json', 'model.bin', 'tokenizer.json'];
 const FASTER_WHISPER_VOCABULARY_CACHE_FILES = ['vocabulary.txt', 'vocabulary.json'];
 const MLX_REQUIRED_CACHE_FILES = ['weights.npz', 'config.json'];

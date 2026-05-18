@@ -9,7 +9,7 @@ alwaysApply: false
 - Privacy-first: no cloud transcription, no telemetry, no background uploads. HF token is user-owned only; store in `safeStorage`, never in logs, metadata, transcripts, or progress events.
 - Catalog-driven pins live in `src/ai-addon-state.js` — do not hard-code URLs, checksums, or runtime names in renderer logic.
 - Diarization: auto after transcription when ready; prefer guided transcription (pyannote → padded windows → transcribe). macOS diarization is Apple Silicon MPS-only.
-- Summaries: always user-triggered; explicit setup only; HTTPS + host allowlist; guard zip extraction against path traversal; verify SHA-256 after download.
+- Summaries: always user-triggered; explicit setup only; HTTPS + host allowlist; ZIP/tar.gz runtime extraction uses `src/ai-addon-archive-helpers.js` plus worker threads; verify SHA-256 after download.
 - Serialize GPU-heavy diarization and summary runs through the main-process compute queue.
 - Meeting AI metadata: only `diarization` and `summary`; sidecars under recordings; concise sanitized strings.
 - Catalog/runtime changes: update `src/ai-addon-state.js`, `src/ai-addon-setup.js` if needed, `docs/development/LOCAL_AI_MODEL_CATALOG.md`, and `tests/js/ai-addon-*.test.js`.

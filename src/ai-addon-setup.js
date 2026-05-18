@@ -6,6 +6,7 @@ const path = require('path');
 const { Worker } = require('worker_threads');
 const AdmZip = require('adm-zip');
 const { redactSensitiveText, SENSITIVE_PROGRESS_KEY_SET } = require('./ai-progress-sanitizer');
+const { validateZipEntries, validateTarListing } = require('./ai-addon-archive-helpers');
 
 const {
   AI_MODEL_CATALOG,
@@ -2229,21 +2230,11 @@ function extractZipArchive(archivePath, destinationDir) {
     : new AdmZip(archivePath);
   const resolvedDestination = path.resolve(destinationDir);
   fs.mkdirSync(resolvedDestination, { recursive: true });
-  for (const entry of zip.getEntries()) {
-    const entryName = String(entry.entryName || '').replace(/\\/g, '/');
-    if (!entryName || path.isAbsolute(entryName)) {
-      throw new Error('Archive contains an unsafe absolute path.');
-    }
-
-    const resolvedEntryPath = path.resolve(resolvedDestination, entryName);
-    if (resolvedEntryPath !== resolvedDestination && !resolvedEntryPath.startsWith(`${resolvedDestination}${path.sep}`)) {
-      throw new Error('Archive contains an unsafe path traversal entry.');
-    }
-  }
+  validateZipEntries(zip, resolvedDestination);
   zip.extractAllTo(resolvedDestination, true);
 }
 
-function extractZipArchiveInWorker(archivePath, destinationDir) {
+function runArchiveExtractionInWorker(workerFileName, workerData, label = 'Runtime archive') {
   return new Promise((resolve, reject) => {
     let settled = false;
     let worker;
@@ -2252,12 +2243,13 @@ function extractZipArchiveInWorker(archivePath, destinationDir) {
         return;
       }
       settled = true;
+      if (worker) {
+        worker.terminate().catch(() => {});
+      }
       callback(value);
     };
     try {
-      worker = new Worker(path.join(__dirname, 'ai-addon-zip-extractor-worker.js'), {
-        workerData: { archivePath, destinationDir },
-      });
+      worker = new Worker(path.join(__dirname, workerFileName), { workerData });
     } catch (error) {
       finish(reject, error);
       return;
@@ -2267,7 +2259,7 @@ function extractZipArchiveInWorker(archivePath, destinationDir) {
         finish(resolve);
         return;
       }
-      const error = new Error((message && message.error && message.error.message) || 'Failed to extract runtime archive.');
+      const error = new Error((message && message.error && message.error.message) || `Failed to extract ${label.toLowerCase()}.`);
       if (message && message.error && message.error.stack) {
         error.stack = message.error.stack;
       }
@@ -2275,89 +2267,32 @@ function extractZipArchiveInWorker(archivePath, destinationDir) {
     });
     worker.once('error', (error) => finish(reject, error));
     worker.once('exit', (code) => {
-      if (code !== 0) {
-        finish(reject, new Error(`Runtime archive extraction worker exited with code ${code}.`));
+      if (settled) {
+        return;
       }
+      if (code !== 0) {
+        finish(reject, new Error(`${label} extraction worker exited with code ${code}.`));
+        return;
+      }
+      finish(reject, new Error(`${label} extraction worker exited without a result.`));
     });
   });
 }
 
-function validateTarEntryName(entryName, destinationDir) {
-  const normalizedEntryName = String(entryName || '').trim().replace(/\\/g, '/');
-  if (!normalizedEntryName) {
-    return;
-  }
-  if (normalizedEntryName.startsWith('/') || path.isAbsolute(normalizedEntryName)) {
-    throw new Error('Archive contains an unsafe absolute path.');
-  }
-
-  const parts = normalizedEntryName.split('/').filter(Boolean);
-  if (parts.some((part) => part === '..')) {
-    throw new Error('Archive contains an unsafe path traversal entry.');
-  }
-
-  const resolvedDestination = path.resolve(destinationDir);
-  const resolvedEntryPath = path.resolve(resolvedDestination, normalizedEntryName);
-  if (resolvedEntryPath !== resolvedDestination && !resolvedEntryPath.startsWith(`${resolvedDestination}${path.sep}`)) {
-    throw new Error('Archive contains an unsafe path traversal entry.');
-  }
+function extractZipArchiveInWorker(archivePath, destinationDir) {
+  return runArchiveExtractionInWorker(
+    'ai-addon-zip-extractor-worker.js',
+    { archivePath, destinationDir },
+    'Runtime zip archive',
+  );
 }
 
-function parseTarListingLine(line) {
-  const text = String(line || '').trim();
-  if (!text) {
-    return null;
-  }
-
-  const mode = text.slice(0, 10);
-  const type = mode[0];
-  const tokens = text.split(/\s+/);
-  if (tokens.length < 6) {
-    throw new Error('Runtime archive contains an unparseable tar listing entry.');
-  }
-
-  const timeIndex = tokens.findIndex((token, index) => index > 0 && /^\d{1,2}:\d{2}(?::\d{2})?$/.test(token));
-  const monthIndex = tokens.findIndex((token, index) => index > 0 && /^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)$/i.test(token));
-  let nameStartIndex = timeIndex >= 0 ? timeIndex + 1 : -1;
-  if (nameStartIndex < 0 && monthIndex >= 0 && tokens.length > monthIndex + 3) {
-    nameStartIndex = monthIndex + 3;
-  }
-  if (nameStartIndex < 0 || nameStartIndex >= tokens.length) {
-    throw new Error('Runtime archive contains an unparseable tar listing entry.');
-  }
-  let name = tokens.slice(nameStartIndex).join(' ');
-  const linkIndex = name.indexOf(' -> ');
-  const linkTarget = linkIndex >= 0 ? name.slice(linkIndex + 4) : null;
-  if (linkIndex >= 0) {
-    name = name.slice(0, linkIndex);
-  }
-
-  return { type, name, linkTarget };
-}
-
-function validateTarListing(listingOutput, destinationDir) {
-  const entries = String(listingOutput || '').split(/\r?\n/).map(parseTarListingLine).filter(Boolean);
-  if (!entries.length) {
-    throw new Error('Runtime archive did not contain any extractable entries.');
-  }
-
-  for (const entry of entries) {
-    validateTarEntryName(entry.name, destinationDir);
-    if (!['-', 'd', 'l', 'x', 'g'].includes(entry.type)) {
-      throw new Error('Archive contains an unsupported file type.');
-    }
-    if (entry.type === 'l') {
-      if (!entry.linkTarget) {
-        throw new Error('Archive contains an unsafe symlink entry.');
-      }
-      const linkTarget = String(entry.linkTarget).replace(/\\/g, '/');
-      if (linkTarget.startsWith('/') || path.isAbsolute(linkTarget) || linkTarget.split('/').some((part) => part === '..')) {
-        throw new Error('Archive contains an unsafe symlink entry.');
-      }
-      const linkBase = path.dirname(entry.name);
-      validateTarEntryName(path.join(linkBase, linkTarget), destinationDir);
-    }
-  }
+function extractTarGzArchiveInWorker(archivePath, destinationDir) {
+  return runArchiveExtractionInWorker(
+    'ai-addon-tar-extractor-worker.js',
+    { archivePath, destinationDir },
+    'Runtime tar.gz archive',
+  );
 }
 
 function runTarCommand(args) {
@@ -2381,6 +2316,7 @@ function runTarCommand(args) {
 async function extractTarGzArchive(archivePath, destinationDir, tarRunner = runTarCommand) {
   const listingOutput = await tarRunner(['-tzvf', archivePath]);
   validateTarListing(listingOutput, destinationDir);
+  fs.mkdirSync(path.resolve(destinationDir), { recursive: true });
   await tarRunner(['-xzf', archivePath, '-C', destinationDir]);
 }
 
@@ -2394,6 +2330,10 @@ async function extractRuntimeArchive(archivePath, destinationDir, archiveFormat)
     return;
   }
   if (archiveFormat === 'tar.gz') {
+    if (typeof archivePath === 'string') {
+      await extractTarGzArchiveInWorker(archivePath, destinationDir);
+      return;
+    }
     fs.mkdirSync(destinationDir, { recursive: true });
     await extractTarGzArchive(archivePath, destinationDir);
     return;

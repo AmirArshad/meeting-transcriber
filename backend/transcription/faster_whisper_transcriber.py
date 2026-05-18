@@ -17,6 +17,7 @@ from .base_transcriber import BaseTranscriber
 
 
 _NVIDIA_DLL_DIRECTORY_HANDLES = []
+# Keep aligned with cacheContainsCompleteFasterWhisperModel in src/main-process-helpers.js (AGENTS.md).
 _REQUIRED_CACHE_FILES = ("config.json", "model.bin", "tokenizer.json")
 _VOCABULARY_CACHE_FILES = ("vocabulary.txt", "vocabulary.json")
 

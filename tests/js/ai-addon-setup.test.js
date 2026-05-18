@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const fs = require('node:fs');
+const { execFileSync } = require('node:child_process');
 const https = require('node:https');
 const { PassThrough } = require('node:stream');
 const { EventEmitter } = require('node:events');
@@ -697,6 +698,39 @@ test('runtime zip extraction runs off the main thread worker path', async () => 
     assert.equal(fs.readFileSync(path.join(destinationDir, 'bin', 'llama-cli.exe'), 'utf8'), 'runtime');
   } finally {
     fs.rmSync(destinationDir, { recursive: true, force: true });
+    fs.rmSync(archivePath, { force: true });
+  }
+});
+
+test('runtime tar.gz extraction runs off the main thread worker path', async (t) => {
+  let tarAvailable = true;
+  try {
+    execFileSync('tar', ['--version'], { stdio: 'ignore' });
+  } catch (error) {
+    tarAvailable = false;
+  }
+  if (!tarAvailable) {
+    t.skip('tar is not available in this environment');
+    return;
+  }
+
+  const stagingDir = path.join(__dirname, '..', 'tmp-runtime-worker-tar-src');
+  const archivePath = path.join(__dirname, '..', 'tmp-runtime-worker.tar.gz');
+  const destinationDir = path.join(__dirname, '..', 'tmp-runtime-worker-tar-extract');
+  try {
+    fs.rmSync(destinationDir, { recursive: true, force: true });
+    fs.rmSync(stagingDir, { recursive: true, force: true });
+    fs.rmSync(archivePath, { force: true });
+    fs.mkdirSync(path.join(stagingDir, 'bin'), { recursive: true });
+    fs.writeFileSync(path.join(stagingDir, 'bin', 'llama-cli'), 'runtime');
+    execFileSync('tar', ['-czf', archivePath, '-C', stagingDir, 'bin'], { windowsHide: true });
+
+    await extractRuntimeArchive(archivePath, destinationDir, 'tar.gz');
+
+    assert.equal(fs.readFileSync(path.join(destinationDir, 'bin', 'llama-cli'), 'utf8'), 'runtime');
+  } finally {
+    fs.rmSync(destinationDir, { recursive: true, force: true });
+    fs.rmSync(stagingDir, { recursive: true, force: true });
     fs.rmSync(archivePath, { force: true });
   }
 });

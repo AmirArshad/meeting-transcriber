@@ -146,6 +146,35 @@ Key quality assumptions to preserve:
 - Summary generation and diarization execution must remain serialized through a main-process compute queue to avoid concurrent GPU-heavy local AI runs.
 - Meeting AI metadata must accept only `diarization` and `summary`, keep sidecar paths under recordings, and store only concise sanitized strings.
 - AI add-on model/runtime caches live under Electron `userData` (`ai-addons/models/...`) so app updates preserve installed artifacts.
+- Pinned summary runtime archives extract off the main thread: ZIP via `src/ai-addon-zip-extractor-worker.js`, `tar.gz` via `src/ai-addon-tar-extractor-worker.js`, with shared traversal checks in `src/ai-addon-archive-helpers.js`.
+
+### Transcription model cache and offline runtime
+
+Whisper transcription caches are separate from diarization’s Hugging Face cache under `userData/ai-addons/models/diarization`. Guided transcription must not let diarization `HF_HUB_CACHE` mask the Whisper cache.
+
+**Cache locations**
+
+- Windows / Intel Mac / faster-whisper: `~/.cache/huggingface/hub` (`models--Systran--faster-whisper-<size>` or `models--guillaumekln--faster-whisper-<size>`).
+- Apple Silicon MLX: `~/Library/Caches/avanevis/mlx_models/<model-dir>/`.
+
+**Completeness (keep JS and Python aligned)**
+
+- faster-whisper snapshot: non-empty `config.json`, `model.bin`, `tokenizer.json`, plus `vocabulary.txt` or `vocabulary.json`.
+- MLX: non-empty `weights.npz` and `config.json` in the model directory.
+
+**Implementation map**
+
+- UI / spawn policy: `cacheContainsCompleteTranscriptionModel` and `buildTranscriptionRuntimeEnv` in `src/main-process-helpers.js`; `getTranscriptionRuntimeEnv` in `src/main.js`.
+- Python faster-whisper: `has_cached_faster_whisper_model`, `AVANEVIS_TRANSCRIPTION_HF_CACHE_DIR`, `AVANEVIS_TRANSCRIPTION_LOCAL_FILES_ONLY` in `backend/transcription/faster_whisper_transcriber.py`.
+- Python MLX: `_required_model_files_cached` in `backend/transcription/mlx_whisper_transcriber.py`.
+
+**Offline behavior**
+
+- Enable HF offline / `local_files_only` only when the cache is **complete** (main sets `AVANEVIS_TRANSCRIPTION_LOCAL_FILES_ONLY=1`; Python may also auto-detect).
+- Model download / `--preload` must keep `modelCached: false` so incomplete caches can still download.
+- Diarization loads pyannote with `local_files_only=True`; summary generation uses `buildHuggingFaceOfflineEnv()` when artifacts are installed.
+
+If you change required cache files or env var names, update all of the files above plus `tests/js/main-process-helpers.test.js` and `tests/python/test_transcriber_helpers.py`.
 
 ## High-Risk Areas
 
@@ -303,6 +332,8 @@ swift build -c release --arch arm64
 - transcript JSON shape still matches renderer expectations
 - markdown transcript output still saves correctly
 - CPU/GPU fallback behavior still makes sense for the platform
+- complete-cache detection stays aligned between `src/main-process-helpers.js` and `backend/transcription/faster_whisper_transcriber.py` / MLX cache checks
+- guided transcription still passes `AVANEVIS_TRANSCRIPTION_HF_CACHE_DIR` when diarization HF env is present
 - relevant automated tests still pass
 
 ### Local AI add-on changes

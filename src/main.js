@@ -1420,10 +1420,18 @@ function preloadWhisperModel() {
   const modelSize = 'small'; // Default model size
   console.log(`Preloading Whisper model (${modelSize})...`);
 
+  const downloadCheck = getTranscriptionModelDownloadCheck(modelSize);
   const preloadProcess = spawnTrackedPython(getTranscriberArgs([
     '--preload',
     '--model', modelSize
-  ]), { cwd: pythonConfig.backendPath, env: buildCudaRuntimeEnv() });
+  ]), {
+    cwd: pythonConfig.backendPath,
+    env: buildTranscriptionRuntimeEnv({
+      cacheDir: downloadCheck.cacheDir,
+      modelCached: false,
+      baseEnv: buildCudaRuntimeEnv(),
+    }),
+  });
 
   preloadProcess.stderr.on('data', (data) => {
     console.log(`[Model Preload] ${data.toString().trim()}`);
@@ -2570,10 +2578,18 @@ ipcMain.handle('download-model', async (event, modelSize) => {
     const model = modelSize || 'small';
     console.log(`Downloading Whisper model: ${model}`);
 
+    const downloadCheck = getTranscriptionModelDownloadCheck(model);
     const python = spawnTrackedPython(getTranscriberArgs([
       '--preload',
       '--model', model
-    ]), { cwd: pythonConfig.backendPath, env: buildCudaRuntimeEnv() });
+    ]), {
+      cwd: pythonConfig.backendPath,
+      env: buildTranscriptionRuntimeEnv({
+        cacheDir: downloadCheck.cacheDir,
+        modelCached: false,
+        baseEnv: buildCudaRuntimeEnv(),
+      }),
+    });
 
     let hasError = false;
 
