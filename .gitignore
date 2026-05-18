@@ -21,6 +21,7 @@ yarn-error.log*
 out/
 dist-electron/
 release/
+release-legal/
 dist/
 
 # Build - ignore all except specific files

@@ -19,7 +19,7 @@ These components are included when you build installers via
 |-----------|------|-------------------|--------|
 | [Electron](https://www.electronjs.org/) | Desktop shell | MIT | |
 | [Python](https://www.python.org/) | Embedded / standalone runtime in installer | PSF License | See python.org license page |
-| [ffmpeg](https://ffmpeg.org/) | Opus compression after recording | **GPLv3** (typical third-party builds) | See [legal/ffmpeg-SOURCE-OFFER.txt](legal/ffmpeg-SOURCE-OFFER.txt). Windows builds may include `legal/ffmpeg-upstream-*` copied from the upstream archive. |
+| [ffmpeg](https://ffmpeg.org/) | Opus compression after recording | **GPLv3** (typical third-party builds) | See [legal/ffmpeg-SOURCE-OFFER.txt](legal/ffmpeg-SOURCE-OFFER.txt) and [legal/FFMPEG-COMPLIANCE.json](legal/FFMPEG-COMPLIANCE.json). Windows builds may include `legal/ffmpeg-upstream-*` copied from the gyan.dev archive. |
 | Python packages in `requirements-*-build.txt` | Recording, transcription, HF downloads | Mostly MIT / BSD / Apache-2.0 | Non-exhaustive list below |
 | macOS `audiocapture-helper` (Swift) | Desktop audio capture | Same as AvaNevis (MIT) unless otherwise noted in `swift/` | |
 
@@ -34,7 +34,7 @@ These components are included when you build installers via
 | huggingface-hub, hf-xet, httpx | Apache-2.0 |
 | pyobjc-* (macOS) | MIT |
 
-Full pinned versions: `requirements-windows-build.txt`, `requirements-macos-build.txt`.
+Full pinned versions: `requirements-windows-build.txt`, `requirements-macos-build.txt`. A generated table of direct pins lives in [legal/PYTHON-BUNDLED-PACKAGES.md](legal/PYTHON-BUNDLED-PACKAGES.md) (refresh with `npm run legal:sbom`).
 
 ---
 
@@ -91,8 +91,12 @@ Names such as **Whisper**, **Qwen**, **pyannote**, **Hugging Face**, **Electron*
 If you distribute AvaNevis installers that bundle ffmpeg:
 
 1. Include this file (or the copy installed to `resources/legal/`).
-2. Include [legal/ffmpeg-SOURCE-OFFER.txt](legal/ffmpeg-SOURCE-OFFER.txt).
-3. Honor GPLv3 obligations for the specific ffmpeg build you ship (source offer, license text, and any required notices from the upstream archive).
+2. Include [legal/ffmpeg-SOURCE-OFFER.txt](legal/ffmpeg-SOURCE-OFFER.txt) and [legal/FFMPEG-COMPLIANCE.json](legal/FFMPEG-COMPLIANCE.json).
+3. On [GitHub Releases](https://github.com/AmirArshad/meeting-transcriber/releases), attach **`ffmpeg-8.0.1.tar.xz`** (official FFmpeg source, SHA-256 pinned in `build/download-manifest.js`) on the **same page** as the Windows/macOS installers. CI runs `node scripts/stage-release-legal-assets.js` when publishing a version tag.
+4. Mention FFmpeg in release notes (see `docs/development/RELEASE_FFMPEG_NOTICE.md`).
+5. Honor GPLv3 obligations for the specific ffmpeg build you ship (license text, source offer, and any notices from the third-party binary archive).
+
+Installers intentionally omit the full source tarball to save size; the release page is the canonical source distribution channel for AvaNevis builds produced by this repository.
 
 ---
 

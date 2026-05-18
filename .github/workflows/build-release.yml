@@ -163,6 +163,29 @@ jobs:
         with:
           path: release-artifacts
 
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: "npm"
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Resolve release version
+        id: release_version
+        shell: bash
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+
+      - name: Stage release legal assets
+        env:
+          RELEASE_VERSION: ${{ steps.release_version.outputs.version }}
+          RELEASE_LEGAL_DIR: ${{ github.workspace }}/release-legal
+        run: node scripts/stage-release-legal-assets.js
+
       - name: Collect release assets
         id: collect_assets
         shell: bash
@@ -240,13 +263,20 @@ jobs:
 
           - Documentation: https://github.com/${{ github.repository }}/blob/master/README.md
           - Security audit: https://github.com/${{ github.repository }}/blob/master/docs/internal/SECURITY_AUDIT.md
+          - Third-party notices: https://github.com/${{ github.repository }}/blob/master/THIRD_PARTY_NOTICES.md
           EOF
+
+          cat docs/development/RELEASE_FFMPEG_NOTICE.md >> release-notes.md
 
       - name: Create or update GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           name: AvaNevis ${{ github.ref_name }}
-          files: release-upload/*
+          files: |
+            release-upload/*
+            release-legal/legal/ffmpeg-8.0.1.tar.xz
+            release-legal/legal/THIRD_PARTY_NOTICES.md
+            release-legal/avanevis-legal-${{ steps.collect_assets.outputs.version }}.zip
           body_path: release-notes.md
           fail_on_unmatched_files: true
           draft: false

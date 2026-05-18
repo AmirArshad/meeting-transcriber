@@ -257,14 +257,16 @@ Users might see these warnings (they are SAFE):
 ### Software Licenses
 
 **Your code:** MIT License ✅
-**Dependencies:**
-- Electron: MIT License ✅
-- Python: PSF License ✅
-- Whisper (faster-whisper): MIT License ✅
-- PyTorch: BSD License ✅
-- NumPy/SciPy: BSD License ✅
 
-**Verdict:** All open-source, commercially friendly ✅
+**Bundled in installers (see [THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md)):**
+- Electron: MIT ✅
+- Python runtime: PSF ✅
+- **ffmpeg: GPLv3** (third-party prebuilt binaries from gyan.dev / evermeet.cx) — **not** “permissive-only”; requires source offer and release-page distribution (see `legal/FFMPEG-COMPLIANCE.json`, `docs/development/RELEASE_COMPLIANCE.md`)
+- Pinned Python wheels: mostly MIT / BSD / Apache-2.0 (see `legal/PYTHON-BUNDLED-PACKAGES.md`)
+
+**Downloaded at runtime (user-triggered):** Whisper/MIT, pyannote/CC-BY-4.0 + HF terms, Qwen/Apache-2.0, llama.cpp/MIT, optional NVIDIA CUDA EULA.
+
+**Verdict:** Suitable for open-source distribution when third-party notices and ffmpeg source release practices are followed. **Not** a substitute for legal review before commercial marketing.
 
 ### GDPR Compliance
 

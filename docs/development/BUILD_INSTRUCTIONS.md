@@ -205,8 +205,10 @@ See [TESTING.md](TESTING.md) for the full test setup and platform-specific comma
 Once built, you can distribute the installer:
 
 - Upload to file sharing service
-- Host on GitHub releases
+- Host on **GitHub Releases** (recommended — CI attaches FFmpeg source and legal files; see [RELEASE_COMPLIANCE.md](RELEASE_COMPLIANCE.md))
 - Share direct download link
+
+**Legal:** Installers bundle GPLv3 ffmpeg. Tagged releases must include `ffmpeg-8.0.1.tar.xz` and third-party notices on the same release page. See [THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md).
 
 **Installer size:** ~600-800MB
 **Installed size:** ~1.2-1.5GB (plus Whisper models on first use)

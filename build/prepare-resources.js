@@ -101,11 +101,11 @@ function copyWindowsFfmpegUpstreamLicense(ffmpegExtractRoot) {
   return null;
 }
 
-function stageLegalBundle() {
-  fs.mkdirSync(LEGAL_DIR, { recursive: true });
+function stageLegalBundle(targetDir = LEGAL_DIR) {
+  fs.mkdirSync(targetDir, { recursive: true });
 
-  copyFileIfExists(path.join(REPO_ROOT, 'THIRD_PARTY_NOTICES.md'), path.join(LEGAL_DIR, 'THIRD_PARTY_NOTICES.md'));
-  copyFileIfExists(path.join(REPO_ROOT, 'LICENSE.txt'), path.join(LEGAL_DIR, 'LICENSE.txt'));
+  copyFileIfExists(path.join(REPO_ROOT, 'THIRD_PARTY_NOTICES.md'), path.join(targetDir, 'THIRD_PARTY_NOTICES.md'));
+  copyFileIfExists(path.join(REPO_ROOT, 'LICENSE.txt'), path.join(targetDir, 'LICENSE.txt'));
 
   const repoLegalDir = path.join(REPO_ROOT, 'legal');
   if (fs.existsSync(repoLegalDir)) {
@@ -114,11 +114,88 @@ function stageLegalBundle() {
         continue;
       }
 
-      copyFileIfExists(path.join(repoLegalDir, entry.name), path.join(LEGAL_DIR, entry.name));
+      copyFileIfExists(path.join(repoLegalDir, entry.name), path.join(targetDir, entry.name));
     }
   }
 
-  console.log('✓ Legal notices staged for installer bundling\n');
+  writeFfmpegComplianceManifest(targetDir);
+}
+
+function writeFfmpegComplianceManifest(targetDir = LEGAL_DIR) {
+  const templatePath = path.join(REPO_ROOT, 'legal', 'FFMPEG-COMPLIANCE.json');
+  const ffmpegSource = getBuildDownload('ffmpegSource');
+  const compliance = {
+    ffmpegVersion: '8.0.1',
+    license: 'GPL-3.0-or-later',
+    binaryProvenance: {
+      win32: {
+        label: BUILD_DOWNLOADS.ffmpegWin.label,
+        downloadUrl: BUILD_DOWNLOADS.ffmpegWin.url,
+        buildPage: 'https://www.gyan.dev/ffmpeg/builds/',
+        sha256: BUILD_DOWNLOADS.ffmpegWin.sha256,
+      },
+      darwin: {
+        label: BUILD_DOWNLOADS.ffmpegMac.label,
+        downloadUrl: BUILD_DOWNLOADS.ffmpegMac.url,
+        sha256: BUILD_DOWNLOADS.ffmpegMac.sha256,
+      },
+    },
+    correspondingSource: {
+      label: ffmpegSource.label,
+      downloadUrl: ffmpegSource.url,
+      archiveFileName: ffmpegSource.archiveFileName,
+      sha256: ffmpegSource.sha256,
+    },
+    usageInAvaNevis: 'ffmpeg is invoked as a separate subprocess for Opus compression after recording.',
+  };
+
+  if (fs.existsSync(templatePath)) {
+    try {
+      const template = JSON.parse(fs.readFileSync(templatePath, 'utf8'));
+      Object.assign(compliance, template, {
+        binaryProvenance: compliance.binaryProvenance,
+        correspondingSource: compliance.correspondingSource,
+      });
+    } catch (error) {
+      console.log(`Warning: Could not parse ${templatePath}: ${error.message}`);
+    }
+  }
+
+  fs.writeFileSync(
+    path.join(targetDir, 'FFMPEG-COMPLIANCE.json'),
+    `${JSON.stringify(compliance, null, 2)}\n`,
+    'utf8'
+  );
+}
+
+function writeFfmpegBinaryInfo(targetDir = LEGAL_DIR) {
+  const ffmpegExe = IS_WINDOWS ? 'ffmpeg.exe' : 'ffmpeg';
+  const ffmpegPath = path.join(FFMPEG_DIR, ffmpegExe);
+
+  if (!fs.existsSync(ffmpegPath)) {
+    return;
+  }
+
+  try {
+    const output = execFileSync(ffmpegPath, ['-version'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    fs.writeFileSync(path.join(targetDir, 'FFMPEG-BINARY-INFO.txt'), output, 'utf8');
+  } catch (error) {
+    console.log(`Warning: Could not capture ffmpeg -version: ${error.message}`);
+  }
+}
+
+async function stageFfmpegSourceArchive(targetDir = LEGAL_DIR) {
+  const download = getBuildDownload('ffmpegSource');
+  const destPath = path.join(targetDir, download.archiveFileName || 'ffmpeg-8.0.1.tar.xz');
+
+  if (!fs.existsSync(destPath)) {
+    console.log(`Downloading ${download.label} for legal compliance...`);
+    await downloadFile(download, destPath);
+  }
+
+  await verifyFileChecksum(destPath, download);
+  console.log(`✓ FFmpeg source archive verified (${path.basename(destPath)})\n`);
+  return destPath;
 }
 
 function ensureWindowsEmbeddedPythonPathConfig(pthFile = path.join(PYTHON_DIR, 'python311._pth')) {
@@ -907,6 +984,8 @@ async function prepareResources() {
   }
 
   stageLegalBundle();
+  writeFfmpegBinaryInfo();
+  console.log('✓ Legal notices staged for installer bundling\n');
 
   console.log('========================================');
   console.log('Build preparation complete!');
@@ -935,6 +1014,10 @@ module.exports = {
   manifestsMatch,
   prepareResources,
   pruneMacOSPythonRuntimeDevelopmentFiles,
+  downloadFile,
   stageLegalBundle,
+  stageFfmpegSourceArchive,
+  writeFfmpegBinaryInfo,
+  writeFfmpegComplianceManifest,
   verifyMacOSHelperSignature,
 };

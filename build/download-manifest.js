@@ -22,6 +22,12 @@ const BUILD_DOWNLOADS = Object.freeze({
     url: 'https://evermeet.cx/ffmpeg/ffmpeg-8.0.1.zip',
     sha256: '470e482f6e290eac92984ac12b2d67bad425b1e5269fd75fb6a3536c16e824e4',
   }),
+  ffmpegSource: Object.freeze({
+    label: 'FFmpeg 8.0.1 release source',
+    url: 'https://ffmpeg.org/releases/ffmpeg-8.0.1.tar.xz',
+    archiveFileName: 'ffmpeg-8.0.1.tar.xz',
+    sha256: '05ee0b03119b45c0bdb4df654b96802e909e0a752f72e4fe3794f487229e5a41',
+  }),
   pipWheel: Object.freeze({
     label: 'pip 26.0.1 wheel',
     url: 'https://files.pythonhosted.org/packages/de/f0/c81e05b613866b76d2d1066490adf1a3dbc4ee9d9c839961c3fc8a6997af/pip-26.0.1-py3-none-any.whl',
