@@ -1,0 +1,7 @@
+# Large generated or vendor trees (Cursor also respects .gitignore)
+node_modules/
+build/resources/
+dist/
+out/
+release/
+swift/**/.build/

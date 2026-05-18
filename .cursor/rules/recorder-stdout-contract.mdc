@@ -1,0 +1,13 @@
+---
+description: Recorder stdout JSON contract and Electron parser coupling
+globs: backend/audio/**,src/main.js,src/main-process-helpers.js,tests/js/main-process-helpers.test.js
+alwaysApply: false
+---
+
+# Recorder stdout contract
+
+- Recorder **control flow** uses structured **stdout** JSON: `levels`, `event`, `warning`, `error`. stderr is debug-only; do not drive startup or errors from stderr.
+- If you change startup/progress in `backend/audio/windows_recorder.py` or `backend/audio/macos_recorder.py`, update together: both recorders (if applicable), `src/main.js`, `src/main-process-helpers.js`, `tests/js/main-process-helpers.test.js`.
+- Final result JSON: Windows uses `audioPath`; macOS uses `outputPath` — `src/main.js` supports both.
+- Preserve post-processing mix: record mic and desktop separately; mix after stop. Do not reintroduce real-time mixing without an intentional redesign.
+- Audio output assumptions: 48 kHz stereo, mono-compatible stereo for transcription downmixes, Opus via ffmpeg, gentle mic processing, faithful desktop audio.

@@ -1,0 +1,12 @@
+---
+description: AvaNevis Cursor workspace — canonical guide and validation
+alwaysApply: true
+---
+
+# Cursor workspace
+
+- Full architecture, invariants, and commands: root `AGENTS.md` (shared with OpenCode).
+- Scoped rules in `.cursor/rules/` apply when matching files are in context; they do not replace `AGENTS.md`.
+- After JS helper or Python backend changes, run `npm test` and `npm run test:python` when relevant.
+- Update `AGENTS.md` when changing cross-process contracts, AI catalog pins, build inputs, or validation expectations.
+- Do not add repo-root `CLAUDE.md` while using Cursor.

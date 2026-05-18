@@ -1,6 +1,12 @@
 # AvaNevis Agent Guide
 
-This file is intentionally mirrored with its counterpart. Keep `AGENTS.md` and `CLAUDE.md` byte-for-byte aligned whenever agent guidance changes.
+Canonical agent instructions for **OpenCode** and **Cursor**. Update this file when project invariants, architecture, or validation expectations change.
+
+| Tool | How it loads guidance |
+|------|------------------------|
+| OpenCode | Root `AGENTS.md` |
+| Cursor | Root `AGENTS.md` plus scoped rules in `.cursor/rules/` |
+| Claude Code | Not in use; archived snapshot at `docs/internal/archive/CLAUDE.md` (not auto-loaded). To re-enable, copy `AGENTS.md` to repo-root `CLAUDE.md` only if that tool requires it. |
 
 ## Product Summary
 
@@ -201,7 +207,7 @@ If you change artifact naming in `package.json` or `.github/workflows/build-rele
 
 ## Important Repo Facts
 
-- There are no `AGENTS.md` or `CLAUDE.md` predecessors in this repo before this file.
+- Root `AGENTS.md` is the single source of truth for agent guidance; do not add repo-root `CLAUDE.md` while using Cursor (it auto-loads and duplicates context).
 - CI now includes backend tests, build/download-manifest tests, main-process and renderer helper JS tests, plus Windows/macOS packaged-build smoke checks, but it is still not full end-to-end product coverage.
 - Root `README.md` is broadly useful, but some product docs may still lag code changes.
 - `backend/meeting_manager.py` now uses locked atomic metadata writes, transactional add behavior, and corrupt-file backups.

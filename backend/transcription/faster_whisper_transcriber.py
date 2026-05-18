@@ -7,7 +7,9 @@ Supports all Whisper languages with English as default.
 
 import sys
 import os
+import contextlib
 from datetime import datetime, timedelta
+from inspect import Parameter, signature
 from typing import Optional, List, Dict, Any
 from pathlib import Path
 
@@ -15,6 +17,89 @@ from .base_transcriber import BaseTranscriber
 
 
 _NVIDIA_DLL_DIRECTORY_HANDLES = []
+_REQUIRED_CACHE_FILES = ("config.json", "model.bin", "tokenizer.json")
+_VOCABULARY_CACHE_FILES = ("vocabulary.txt", "vocabulary.json")
+
+
+@contextlib.contextmanager
+def hugging_face_offline_mode(enabled: bool):
+    keys = ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE")
+    previous = {key: os.environ.get(key) for key in keys}
+    if enabled:
+        for key in keys:
+            os.environ[key] = "1"
+    try:
+        yield
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def get_hugging_face_hub_cache_dir() -> Path:
+    explicit_cache = (
+        os.environ.get("AVANEVIS_TRANSCRIPTION_HF_CACHE_DIR")
+        or os.environ.get("HUGGINGFACE_HUB_CACHE")
+        or os.environ.get("HF_HUB_CACHE")
+    )
+    if explicit_cache:
+        return Path(explicit_cache)
+    hf_home = os.environ.get("HF_HOME")
+    if hf_home:
+        return Path(hf_home) / "hub"
+    return Path.home() / ".cache" / "huggingface" / "hub"
+
+
+def has_cached_faster_whisper_model(model_size: str) -> bool:
+    cache_dir = get_hugging_face_hub_cache_dir()
+    if not cache_dir.exists() or not cache_dir.is_dir():
+        return False
+
+    patterns = (
+        f"models--Systran--faster-whisper-{model_size}",
+        f"models--guillaumekln--faster-whisper-{model_size}",
+    )
+    for candidate in cache_dir.iterdir():
+        if not any(pattern in candidate.name for pattern in patterns):
+            continue
+        snapshots_dir = candidate / "snapshots"
+        if snapshots_dir.is_dir() and any(is_complete_faster_whisper_snapshot(item) for item in snapshots_dir.iterdir()):
+            return True
+    return False
+
+
+def is_complete_faster_whisper_snapshot(snapshot_dir: Path) -> bool:
+    if not snapshot_dir.is_dir():
+        return False
+
+    return all(_has_non_empty_file(snapshot_dir / filename) for filename in _REQUIRED_CACHE_FILES) and any(
+        _has_non_empty_file(snapshot_dir / filename) for filename in _VOCABULARY_CACHE_FILES
+    )
+
+
+def _has_non_empty_file(path: Path) -> bool:
+    try:
+        return path.is_file() and path.stat().st_size > 0
+    except OSError:
+        return False
+
+
+def whisper_model_supports_local_files_only(whisper_model_cls: Any) -> bool:
+    try:
+        parameters = signature(whisper_model_cls.__init__).parameters
+    except (TypeError, ValueError, AttributeError):
+        return False
+    return "local_files_only" in parameters or any(parameter.kind == Parameter.VAR_KEYWORD for parameter in parameters.values())
+
+
+def whisper_model_supports_download_root(whisper_model_cls: Any) -> bool:
+    try:
+        parameters = signature(whisper_model_cls.__init__).parameters
+    except (TypeError, ValueError, AttributeError):
+        return False
+    return "download_root" in parameters or any(parameter.kind == Parameter.VAR_KEYWORD for parameter in parameters.values())
 
 
 def add_python_nvidia_bin_dirs_to_path() -> None:
@@ -277,11 +362,16 @@ class TranscriberService(BaseTranscriber):
             else:
                 compute_type = "float16"
 
+        local_files_only = self._should_use_local_files_only()
+        if local_files_only:
+            print("Using cached Whisper model files only.", file=sys.stderr)
+
         try:
-            self.model = WhisperModel(
-                self.model_size,
+            self.model = self._create_whisper_model(
+                WhisperModel,
                 device=device,
-                compute_type=compute_type
+                compute_type=compute_type,
+                local_files_only=local_files_only,
             )
             print(f"Model loaded successfully!", file=sys.stderr)
             print(f"  Device: {device.upper()}", file=sys.stderr)
@@ -317,15 +407,37 @@ class TranscriberService(BaseTranscriber):
 
                 device = "cpu"
                 compute_type = "int8"
-                self.model = WhisperModel(
-                    self.model_size,
+                self.model = self._create_whisper_model(
+                    WhisperModel,
                     device=device,
-                    compute_type=compute_type
+                    compute_type=compute_type,
+                    local_files_only=local_files_only,
                 )
                 print(f"Model loaded successfully on CPU!", file=sys.stderr)
                 print(f"  Note: CPU is 4-5x slower than GPU. Consider setting up CUDA for faster transcription.", file=sys.stderr)
             else:
                 raise
+
+    def _should_use_local_files_only(self) -> bool:
+        explicit = os.environ.get("AVANEVIS_TRANSCRIPTION_LOCAL_FILES_ONLY", "").strip().lower()
+        if explicit in {"1", "true", "yes"}:
+            return True
+        if explicit in {"0", "false", "no"}:
+            return False
+        return has_cached_faster_whisper_model(self.model_size)
+
+    def _create_whisper_model(self, whisper_model_cls: Any, *, device: str, compute_type: str, local_files_only: bool) -> Any:
+        kwargs = {
+            "device": device,
+            "compute_type": compute_type,
+        }
+        if whisper_model_supports_local_files_only(whisper_model_cls):
+            kwargs["local_files_only"] = local_files_only
+        if whisper_model_supports_download_root(whisper_model_cls):
+            kwargs["download_root"] = str(get_hugging_face_hub_cache_dir())
+
+        with hugging_face_offline_mode(local_files_only):
+            return whisper_model_cls(self.model_size, **kwargs)
 
     def transcribe_file(
         self,

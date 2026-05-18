@@ -1,5 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const mainProcessHelpers = require('../../src/main-process-helpers');
@@ -14,6 +16,8 @@ const {
   buildQuitRecordingDialogOptions,
   buildDiarizationOutputPath,
   buildGuidedTranscriptTempPath,
+  buildHuggingFaceOfflineEnv,
+  buildTranscriptionRuntimeEnv,
   buildModelDownloadCheck,
   runGuidedTranscriptionProcess,
   buildPythonModuleArgs,
@@ -25,6 +29,7 @@ const {
   getPythonSitePackagesCandidates,
   getPyTorchCudaBinCandidates,
   classifyRecorderStdoutChunk,
+  cacheContainsCompleteTranscriptionModel,
   getQuitInterceptState,
   getRecorderCloseAction,
   getRecorderEventAction,
@@ -470,6 +475,70 @@ test('cacheContainsModel matches a cached model entry by pattern fragment', () =
 });
 
 
+test('cacheContainsCompleteTranscriptionModel requires faster-whisper snapshot files', (t) => {
+  const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-fw-cache-'));
+  t.after(() => fs.rmSync(cacheDir, { recursive: true, force: true }));
+  const snapshotDir = path.join(cacheDir, 'models--Systran--faster-whisper-small', 'snapshots', 'abc123');
+  fs.mkdirSync(snapshotDir, { recursive: true });
+  fs.writeFileSync(path.join(snapshotDir, 'config.json'), '{}');
+  fs.writeFileSync(path.join(snapshotDir, 'model.bin'), 'weights');
+  fs.writeFileSync(path.join(snapshotDir, 'tokenizer.json'), '{}');
+
+  assert.equal(
+    cacheContainsCompleteTranscriptionModel({
+      cacheDir,
+      modelPatterns: ['models--Systran--faster-whisper-small'],
+      platform: 'win32',
+      arch: 'x64',
+    }),
+    false,
+  );
+
+  fs.writeFileSync(path.join(snapshotDir, 'vocabulary.txt'), 'tokens');
+
+  assert.equal(
+    cacheContainsCompleteTranscriptionModel({
+      cacheDir,
+      modelPatterns: ['models--Systran--faster-whisper-small'],
+      platform: 'win32',
+      arch: 'x64',
+    }),
+    true,
+  );
+});
+
+
+test('cacheContainsCompleteTranscriptionModel checks macOS MLX required files', (t) => {
+  const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-mlx-cache-'));
+  t.after(() => fs.rmSync(cacheDir, { recursive: true, force: true }));
+  const modelDir = path.join(cacheDir, 'whisper-small-mlx');
+  fs.mkdirSync(modelDir, { recursive: true });
+  fs.writeFileSync(path.join(modelDir, 'weights.npz'), 'weights');
+
+  assert.equal(
+    cacheContainsCompleteTranscriptionModel({
+      cacheDir,
+      modelPatterns: ['whisper-small-mlx'],
+      platform: 'darwin',
+      arch: 'arm64',
+    }),
+    false,
+  );
+
+  fs.writeFileSync(path.join(modelDir, 'config.json'), '{}');
+
+  assert.equal(
+    cacheContainsCompleteTranscriptionModel({
+      cacheDir,
+      modelPatterns: ['whisper-small-mlx'],
+      platform: 'darwin',
+      arch: 'arm64',
+    }),
+    true,
+  );
+});
+
+
 test('getTranscriberModule returns packaged-safe module names', () => {
   assert.equal(
     getTranscriberModule('win32', 'x64'),
@@ -500,6 +569,59 @@ test('buildTranscriberArgs runs transcribers as modules for relative imports', (
       'demo.opus',
       '--json',
     ],
+  );
+});
+
+
+test('buildHuggingFaceOfflineEnv enables offline runtime model loading', () => {
+  assert.deepEqual(
+    buildHuggingFaceOfflineEnv({ PATH: 'existing-path' }),
+    {
+      PATH: 'existing-path',
+      HF_HUB_OFFLINE: '1',
+      TRANSFORMERS_OFFLINE: '1',
+      HF_HUB_VERBOSITY: 'error',
+    },
+  );
+});
+
+
+test('buildTranscriptionRuntimeEnv preserves diarization cache and passes Whisper cache explicitly', () => {
+  assert.deepEqual(
+    buildTranscriptionRuntimeEnv({
+      cacheDir: '/normal/whisper/hub',
+      modelCached: true,
+      baseEnv: {
+        HF_HOME: '/diarization/cache',
+        HF_HUB_CACHE: '/diarization/cache/hub',
+        PATH: 'existing-path',
+      },
+    }),
+    {
+      HF_HOME: '/diarization/cache',
+      HF_HUB_CACHE: '/diarization/cache/hub',
+      PATH: 'existing-path',
+      AVANEVIS_TRANSCRIPTION_HF_CACHE_DIR: '/normal/whisper/hub',
+      AVANEVIS_TRANSCRIPTION_LOCAL_FILES_ONLY: '1',
+      HF_HUB_OFFLINE: '1',
+      TRANSFORMERS_OFFLINE: '1',
+      HF_HUB_VERBOSITY: 'error',
+    },
+  );
+});
+
+
+test('buildTranscriptionRuntimeEnv passes Whisper cache without offline mode for incomplete caches', () => {
+  assert.deepEqual(
+    buildTranscriptionRuntimeEnv({
+      cacheDir: '/normal/whisper/hub',
+      modelCached: false,
+      baseEnv: { PATH: 'existing-path' },
+    }),
+    {
+      PATH: 'existing-path',
+      AVANEVIS_TRANSCRIPTION_HF_CACHE_DIR: '/normal/whisper/hub',
+    },
   );
 });
 

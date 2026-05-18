@@ -1,4 +1,5 @@
 const path = require('path');
+const fs = require('fs');
 const { pathToFileURL } = require('url');
 const { redactSensitiveText, SENSITIVE_PROGRESS_KEY_SET } = require('./ai-progress-sanitizer');
 
@@ -8,6 +9,9 @@ const TRUSTED_HUGGING_FACE_PATHS = new Set([
   '/settings/tokens',
 ]);
 const MACOS_PERMISSION_CHECK_TIMEOUT_MS = 8000;
+const FASTER_WHISPER_REQUIRED_CACHE_FILES = ['config.json', 'model.bin', 'tokenizer.json'];
+const FASTER_WHISPER_VOCABULARY_CACHE_FILES = ['vocabulary.txt', 'vocabulary.json'];
+const MLX_REQUIRED_CACHE_FILES = ['weights.npz', 'config.json'];
 
 function buildFileUrl(filePath) {
   const normalizedPath = String(filePath || '').trim();
@@ -128,6 +132,29 @@ function buildTranscriberArgs({ platform, arch, extraArgs = [] } = {}) {
   return buildPythonModuleArgs(getTranscriberModule(platform, arch), extraArgs);
 }
 
+function buildHuggingFaceOfflineEnv(extra = {}) {
+  return {
+    ...extra,
+    HF_HUB_OFFLINE: '1',
+    TRANSFORMERS_OFFLINE: '1',
+    HF_HUB_VERBOSITY: 'error',
+  };
+}
+
+function buildTranscriptionRuntimeEnv({ cacheDir, modelCached = false, baseEnv = {} } = {}) {
+  const env = {
+    ...baseEnv,
+    ...(cacheDir ? { AVANEVIS_TRANSCRIPTION_HF_CACHE_DIR: cacheDir } : {}),
+  };
+
+  return modelCached
+    ? buildHuggingFaceOfflineEnv({
+      ...env,
+      AVANEVIS_TRANSCRIPTION_LOCAL_FILES_ONLY: '1',
+    })
+    : env;
+}
+
 function parsePythonVersion(output) {
   const match = String(output || '').match(/Python\s+(\d+)\.(\d+)\.(\d+)/i);
   if (!match) {
@@ -238,7 +265,9 @@ function summarizeAiBackendError({ errorOutput, userDataDir = '', homeDir = '', 
       cleaned = cleaned.replaceAll(homeDir, '<home>');
     }
     cleaned = cleaned.trim();
-    if (!cleaned || cleaned === genericMessage || /RuntimeWarning:.*found in sys\.modules.*prior to execution/.test(cleaned)) {
+    if (!cleaned
+      || cleaned === genericMessage
+      || /RuntimeWarning:.*found in sys\.modules.*prior to execution/.test(cleaned)) {
       continue;
     }
     return cleaned;
@@ -480,6 +509,77 @@ function resolveTranscriptionAudioFile({ audioFile, recordingsDir, existsSync })
 
 function cacheContainsModel(items, modelPatterns) {
   return modelPatterns.some((pattern) => items.some((item) => item.includes(pattern)));
+}
+
+function safeReadDir(dirPath, fsImpl = fs) {
+  try {
+    return fsImpl.readdirSync(dirPath, { withFileTypes: true });
+  } catch (error) {
+    return [];
+  }
+}
+
+function hasReadableFile(filePath, fsImpl = fs) {
+  try {
+    const stats = fsImpl.statSync(filePath);
+    return stats.isFile() && stats.size > 0;
+  } catch (error) {
+    return false;
+  }
+}
+
+function directoryHasRequiredFiles(dirPath, requiredFiles, alternateFiles = [], fsImpl = fs) {
+  return requiredFiles.every((fileName) => hasReadableFile(path.join(dirPath, fileName), fsImpl)) &&
+    (!alternateFiles.length || alternateFiles.some((fileName) => hasReadableFile(path.join(dirPath, fileName), fsImpl)));
+}
+
+function cacheContainsCompleteFasterWhisperModel({ cacheDir, modelPatterns, fsImpl = fs } = {}) {
+  if (!cacheDir || !Array.isArray(modelPatterns) || !modelPatterns.length) {
+    return false;
+  }
+
+  return safeReadDir(cacheDir, fsImpl).some((entry) => {
+    const entryName = entry && entry.name ? entry.name : String(entry || '');
+    if (!modelPatterns.some((pattern) => entryName.includes(pattern))) {
+      return false;
+    }
+
+    const snapshotsDir = path.join(cacheDir, entryName, 'snapshots');
+    return safeReadDir(snapshotsDir, fsImpl).some((snapshot) => {
+      if (snapshot && typeof snapshot.isDirectory === 'function' && !snapshot.isDirectory()) {
+        return false;
+      }
+
+      const snapshotName = snapshot && snapshot.name ? snapshot.name : String(snapshot || '');
+      return directoryHasRequiredFiles(
+        path.join(snapshotsDir, snapshotName),
+        FASTER_WHISPER_REQUIRED_CACHE_FILES,
+        FASTER_WHISPER_VOCABULARY_CACHE_FILES,
+        fsImpl,
+      );
+    });
+  });
+}
+
+function cacheContainsCompleteMacMLXModel({ cacheDir, modelPatterns, fsImpl = fs } = {}) {
+  if (!cacheDir || !Array.isArray(modelPatterns) || !modelPatterns.length) {
+    return false;
+  }
+
+  return modelPatterns.some((modelDir) => directoryHasRequiredFiles(
+    path.join(cacheDir, modelDir),
+    MLX_REQUIRED_CACHE_FILES,
+    [],
+    fsImpl,
+  ));
+}
+
+function cacheContainsCompleteTranscriptionModel({ cacheDir, modelPatterns, platform, arch, fsImpl = fs } = {}) {
+  if (platform === 'darwin' && arch === 'arm64') {
+    return cacheContainsCompleteMacMLXModel({ cacheDir, modelPatterns, fsImpl });
+  }
+
+  return cacheContainsCompleteFasterWhisperModel({ cacheDir, modelPatterns, fsImpl });
 }
 
 function splitBufferedLines(output, pendingBuffer = '') {
@@ -989,6 +1089,8 @@ module.exports = {
   buildGuidedTranscriptTempPath,
   runGuidedTranscriptionProcess,
   buildTranscriberArgs,
+  buildHuggingFaceOfflineEnv,
+  buildTranscriptionRuntimeEnv,
   buildTranscriptionCudaInstallArgs,
   buildTranscriptionCudaUninstallArgs,
   buildUnsupportedCudaPythonMessage,
@@ -996,6 +1098,9 @@ module.exports = {
   getPyTorchCudaBinCandidates,
   buildDiarizationOutputPath,
   cacheContainsModel,
+  cacheContainsCompleteFasterWhisperModel,
+  cacheContainsCompleteMacMLXModel,
+  cacheContainsCompleteTranscriptionModel,
   classifyRecorderStdoutChunk,
   dedupeMessages,
   getQuitInterceptState,

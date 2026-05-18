@@ -1,6 +1,10 @@
-# AvaNevis Agent Guide
+# AvaNevis Agent Guide (archived)
 
-This file is intentionally mirrored with its counterpart. Keep `AGENTS.md` and `CLAUDE.md` byte-for-byte aligned whenever agent guidance changes.
+> **Archived 2026-05-18.** This file is kept for Claude Code only. Cursor and OpenCode do **not** load it.
+>
+> **Canonical guide:** [`AGENTS.md`](../../../AGENTS.md) at the repo root. Edit that file; sync here only if you resume Claude Code and need a root `CLAUDE.md` copy.
+>
+> Do not move this file back to the repo root while using Cursor — root `CLAUDE.md` is auto-injected and duplicates `AGENTS.md` context.
 
 ## Product Summary
 

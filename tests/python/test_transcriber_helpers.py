@@ -2,9 +2,11 @@ import tempfile
 import types
 from typing import Any, cast
 from pathlib import Path
+import builtins
 
 import pytest
 
+from backend.transcription import faster_whisper_transcriber as fw_transcriber
 from backend.transcription.faster_whisper_transcriber import TranscriberService
 from backend.transcription.mlx_whisper_transcriber import MLXWhisperTranscriber
 
@@ -97,6 +99,141 @@ def test_faster_whisper_lock_timeout_raises_helpful_runtime_error(monkeypatch):
         service.load_model()
 
 
+def test_faster_whisper_uses_local_files_only_when_cache_exists(monkeypatch, tmp_path):
+    cache_dir = tmp_path / 'hf-cache'
+    snapshot_dir = cache_dir / 'models--Systran--faster-whisper-small' / 'snapshots' / 'abc123'
+    snapshot_dir.mkdir(parents=True)
+    (snapshot_dir / 'config.json').write_text('{}')
+    (snapshot_dir / 'model.bin').write_bytes(b'weights')
+    (snapshot_dir / 'tokenizer.json').write_text('{}')
+    (snapshot_dir / 'vocabulary.txt').write_text('tokens')
+    captured = {}
+
+    class FakeWhisperModel:
+        def __init__(self, model_size, **kwargs):
+            captured['model_size'] = model_size
+            captured.update(kwargs)
+            captured['hf_offline'] = __import__('os').environ.get('HF_HUB_OFFLINE')
+
+    service = TranscriberService(model_size='small', device='cpu', compute_type='int8')
+    monkeypatch.setenv('HF_HUB_CACHE', str(cache_dir))
+    monkeypatch.setitem(__import__('sys').modules, 'faster_whisper', types.SimpleNamespace(WhisperModel=FakeWhisperModel))
+
+    service._load_model_internal()
+
+    assert captured['model_size'] == 'small'
+    assert captured['local_files_only'] is True
+    assert captured['download_root'] == str(cache_dir)
+    assert captured['hf_offline'] == '1'
+    assert __import__('os').environ.get('HF_HUB_OFFLINE') is None
+
+
+def test_faster_whisper_explicit_cache_root_overrides_diarization_hf_cache(monkeypatch, tmp_path):
+    transcription_cache = tmp_path / 'transcription-hf-cache'
+    diarization_cache = tmp_path / 'diarization-hf-cache'
+    snapshot_dir = transcription_cache / 'models--Systran--faster-whisper-small' / 'snapshots' / 'abc123'
+    snapshot_dir.mkdir(parents=True)
+    diarization_cache.mkdir()
+    (snapshot_dir / 'config.json').write_text('{}')
+    (snapshot_dir / 'model.bin').write_bytes(b'weights')
+    (snapshot_dir / 'tokenizer.json').write_text('{}')
+    (snapshot_dir / 'vocabulary.txt').write_text('tokens')
+    captured = {}
+
+    class FakeWhisperModel:
+        def __init__(self, model_size, **kwargs):
+            captured['model_size'] = model_size
+            captured.update(kwargs)
+
+    service = TranscriberService(model_size='small', device='cpu', compute_type='int8')
+    monkeypatch.setenv('HF_HUB_CACHE', str(diarization_cache))
+    monkeypatch.setenv('AVANEVIS_TRANSCRIPTION_HF_CACHE_DIR', str(transcription_cache))
+    monkeypatch.setitem(__import__('sys').modules, 'faster_whisper', types.SimpleNamespace(WhisperModel=FakeWhisperModel))
+
+    service._load_model_internal()
+
+    assert captured['local_files_only'] is True
+    assert captured['download_root'] == str(transcription_cache)
+
+
+def test_faster_whisper_allows_download_when_cache_snapshot_is_incomplete(monkeypatch, tmp_path):
+    cache_dir = tmp_path / 'hf-cache'
+    snapshot_dir = cache_dir / 'models--Systran--faster-whisper-small' / 'snapshots' / 'abc123'
+    snapshot_dir.mkdir(parents=True)
+    (snapshot_dir / 'config.json').write_text('{}')
+    captured = {}
+
+    class FakeWhisperModel:
+        def __init__(self, model_size, **kwargs):
+            captured['model_size'] = model_size
+            captured.update(kwargs)
+            captured['hf_offline'] = __import__('os').environ.get('HF_HUB_OFFLINE')
+
+    service = TranscriberService(model_size='small', device='cpu', compute_type='int8')
+    monkeypatch.setenv('HF_HUB_CACHE', str(cache_dir))
+    monkeypatch.setitem(__import__('sys').modules, 'faster_whisper', types.SimpleNamespace(WhisperModel=FakeWhisperModel))
+
+    service._load_model_internal()
+
+    assert captured['local_files_only'] is False
+    assert captured['download_root'] == str(cache_dir)
+    assert captured['hf_offline'] is None
+
+
+def test_faster_whisper_allows_download_when_cache_is_missing(monkeypatch, tmp_path):
+    captured = {}
+
+    class FakeWhisperModel:
+        def __init__(self, model_size, **kwargs):
+            captured['model_size'] = model_size
+            captured.update(kwargs)
+            captured['hf_offline'] = __import__('os').environ.get('HF_HUB_OFFLINE')
+
+    service = TranscriberService(model_size='small', device='cpu', compute_type='int8')
+    monkeypatch.setenv('HF_HUB_CACHE', str(tmp_path / 'missing-cache'))
+    monkeypatch.setitem(__import__('sys').modules, 'faster_whisper', types.SimpleNamespace(WhisperModel=FakeWhisperModel))
+
+    service._load_model_internal()
+
+    assert captured['local_files_only'] is False
+    assert captured['download_root'] == str(tmp_path / 'missing-cache')
+    assert captured['hf_offline'] is None
+
+
+def test_faster_whisper_signature_probe_fails_closed(monkeypatch):
+    def fail_signature(_value):
+        raise ValueError('signature unavailable')
+
+    monkeypatch.setattr(fw_transcriber, 'signature', fail_signature)
+
+    assert fw_transcriber.whisper_model_supports_local_files_only(object) is False
+    assert fw_transcriber.whisper_model_supports_download_root(object) is False
+
+
+def test_faster_whisper_does_not_pass_optional_kwargs_when_signature_probe_fails(monkeypatch):
+    def fail_signature(_value):
+        raise ValueError('signature unavailable')
+
+    captured = {}
+
+    class FakeWhisperModel:
+        def __init__(self, model_size, device, compute_type):
+            captured['model_size'] = model_size
+            captured['device'] = device
+            captured['compute_type'] = compute_type
+
+    service = TranscriberService(model_size='small', device='cpu', compute_type='int8')
+    monkeypatch.setattr(fw_transcriber, 'signature', fail_signature)
+
+    service._create_whisper_model(FakeWhisperModel, device='cpu', compute_type='int8', local_files_only=True)
+
+    assert captured == {
+        'model_size': 'small',
+        'device': 'cpu',
+        'compute_type': 'int8',
+    }
+
+
 def test_mlx_transcriber_uses_writable_cache_dir_without_chdir(monkeypatch, tmp_path):
     service = cast(Any, MLXWhisperTranscriber(model_size='small', language='fa'))
     cache_dir = tmp_path / 'mlx-cache'
@@ -133,6 +270,26 @@ def test_mlx_transcriber_skips_hf_download_when_model_files_are_cached(tmp_path,
         raise AssertionError('hf_hub_download should not run for cached MLX model files')
 
     monkeypatch.setitem(__import__('sys').modules, 'huggingface_hub', types.SimpleNamespace(hf_hub_download=fail_download))
+
+    service._download_model_files()
+
+
+def test_mlx_transcriber_does_not_import_hf_hub_when_model_files_are_cached(tmp_path, monkeypatch):
+    service = cast(Any, MLXWhisperTranscriber(model_size='small', language='en'))
+    service.cache_dir = tmp_path / 'cache-root'
+    service.model_dir = service.cache_dir / 'mlx_models' / service.model_storage_dir
+    service.model_dir.mkdir(parents=True)
+    (service.model_dir / 'weights.npz').write_text('weights')
+    (service.model_dir / 'config.json').write_text('{}')
+
+    original_import = builtins.__import__
+
+    def fail_hf_import(name, *args, **kwargs):
+        if name == 'huggingface_hub':
+            raise AssertionError('huggingface_hub should not be imported for cached MLX model files')
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, '__import__', fail_hf_import)
 
     service._download_model_files()
 

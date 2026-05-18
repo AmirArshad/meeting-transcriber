@@ -261,13 +261,13 @@ class MLXWhisperTranscriber(BaseTranscriber):
         """Download model files into the app-managed cache directory."""
         import logging
 
-        from huggingface_hub import hf_hub_download  # type: ignore[import-not-found]
-
         self.model_dir.mkdir(parents=True, exist_ok=True)
 
         if self._required_model_files_cached():
             print("MLX model files already cached.", file=sys.stderr)
             return
+
+        from huggingface_hub import hf_hub_download  # type: ignore[import-not-found]
 
         if self.language == 'en' and self.model_key.startswith('distil-'):
             filenames = [

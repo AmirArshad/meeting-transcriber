@@ -1,0 +1,11 @@
+---
+description: Electron IPC — keep main, preload, and renderer in sync
+globs: src/main.js,src/preload.js,src/renderer/**
+alwaysApply: false
+---
+
+# Electron IPC surface
+
+- Renderer uses `window.electronAPI` from `src/preload.js` → `ipcMain.handle` in `src/main.js`.
+- Renaming or changing an IPC handler requires updating **all three**: `src/main.js`, `src/preload.js`, and every call site in `src/renderer/app.js` (and other renderer modules if applicable).
+- Prefer extracting logic with stable interfaces over rewriting large flows in `src/main.js` or `src/renderer/app.js`.

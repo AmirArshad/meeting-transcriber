@@ -1,0 +1,13 @@
+---
+description: Meeting history persistence — locks, atomic writes, import IDs
+globs: backend/meeting_manager.py,tests/python/**/test*meeting*
+alwaysApply: false
+---
+
+# Meeting metadata persistence
+
+- Use `FileLock` cross-process locking and atomic temp-file + `os.replace()` writes.
+- Transactional add: remove originals only after metadata is saved.
+- Corrupt file recovery: backup as `meetings.corrupt.*.json`.
+- Scan/import must preserve suffixed IDs (e.g. `meeting_20260107_104555_1`) and avoid duplicate IDs.
+- Delete must tolerate Windows file locking with retry.

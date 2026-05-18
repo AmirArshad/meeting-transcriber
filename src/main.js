@@ -23,12 +23,14 @@ const {
   buildPythonModuleArgs,
   runGuidedTranscriptionProcess,
   buildTranscriberArgs,
+  buildHuggingFaceOfflineEnv,
+  buildTranscriptionRuntimeEnv,
   buildTranscriptionCudaInstallArgs,
   buildTranscriptionCudaUninstallArgs,
   buildUnsupportedCudaPythonMessage,
   getPythonSitePackagesCandidates,
   getPyTorchCudaBinCandidates,
-  cacheContainsModel,
+  cacheContainsCompleteTranscriptionModel,
   getQuitInterceptState,
   getRecorderCloseAction,
   getRecorderEventAction,
@@ -638,6 +640,38 @@ function getDiarizationCacheEnv(userDataDir = app.getPath('userData')) {
     TRANSFORMERS_CACHE: hubCache,
     PYANNOTE_METRICS_ENABLED: '0',
   };
+}
+
+function getTranscriptionModelDownloadCheck(modelSize) {
+  return buildModelDownloadCheck({
+    platform: process.platform,
+    arch: process.arch,
+    homeDir: os.homedir(),
+    modelSize,
+  });
+}
+
+function isTranscriptionModelCached(modelSize, downloadCheck = getTranscriptionModelDownloadCheck(modelSize)) {
+  const { cacheDir, modelPatterns } = downloadCheck;
+  try {
+    return cacheContainsCompleteTranscriptionModel({
+      cacheDir,
+      modelPatterns,
+      platform: process.platform,
+      arch: process.arch,
+    });
+  } catch (error) {
+    return false;
+  }
+}
+
+function getTranscriptionRuntimeEnv(modelSize, cudaOptions = {}) {
+  const downloadCheck = getTranscriptionModelDownloadCheck(modelSize);
+  return buildTranscriptionRuntimeEnv({
+    cacheDir: downloadCheck.cacheDir,
+    modelCached: isTranscriptionModelCached(modelSize, downloadCheck),
+    baseEnv: buildCudaRuntimeEnv({}, cudaOptions),
+  });
 }
 
 function buildCudaRuntimeEnv(extra = {}, { includeManagedDiarization = false } = {}) {
@@ -2514,13 +2548,13 @@ ipcMain.handle('check-model-downloaded', async (event, modelSize) => {
     });
 
     try {
-      if (fs.existsSync(cacheDir)) {
-        const items = fs.readdirSync(cacheDir);
-        const modelExists = cacheContainsModel(items, modelPatterns);
-        resolve({ downloaded: modelExists, modelSize: size });
-      } else {
-        resolve({ downloaded: false, modelSize: size });
-      }
+      const modelExists = cacheContainsCompleteTranscriptionModel({
+        cacheDir,
+        modelPatterns,
+        platform: process.platform,
+        arch: process.arch,
+      });
+      resolve({ downloaded: modelExists, modelSize: size });
     } catch (e) {
       // If we can't check, assume not downloaded
       resolve({ downloaded: false, modelSize: size });
@@ -2926,7 +2960,7 @@ ipcMain.handle('transcribe-audio', async (event, options) => {
       '--language', language || 'en',
       '--model', modelSize || 'small',
       '--json'
-    ]), { cwd: pythonConfig.backendPath, env: buildCudaRuntimeEnv() });
+    ]), { cwd: pythonConfig.backendPath, env: getTranscriptionRuntimeEnv(modelSize || 'small') });
 
     let output = '';
     let errorOutput = '';
@@ -3052,7 +3086,7 @@ ipcMain.handle('transcribe-audio-with-speakers', async (event, options = {}) => 
     env: {
       ...getDiarizationDependencyEnv(),
       ...getDiarizationCacheEnv(),
-      ...buildCudaRuntimeEnv({}, { includeManagedDiarization: true }),
+      ...getTranscriptionRuntimeEnv(modelSize, { includeManagedDiarization: true }),
       HF_TOKEN: '',
       HUGGINGFACE_HUB_TOKEN: '',
     },
@@ -3349,7 +3383,7 @@ ipcMain.handle('generate-summary', async (event, options = {}) => {
       speakersJsonPath,
       profile: profile || 'balanced',
       modelLabel: artifact.modelLabel || artifact.modelId,
-    }), { cwd: pythonConfig.backendPath });
+    }), { cwd: pythonConfig.backendPath, env: buildHuggingFaceOfflineEnv() });
     activeSummaryGeneration.process = python;
 
     let output = '';
