@@ -8,6 +8,7 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 
 - **Dual audio capture** — microphone + desktop audio recorded in parallel and mixed after the recording stops. WASAPI loopback on Windows; native Swift helper on macOS using CoreAudio process taps on macOS 14.2+ with Swift/PyObjC ScreenCaptureKit fallback.
 - **Local Whisper transcription** — `faster-whisper` on Windows with optional CUDA, `lightning-whisper-mlx` on Apple Silicon with Metal. CPU fallback path for non-GPU machines.
+- **Local AI add-ons (optional)** — speaker diarization and transcript summaries with explicit setup and local-only execution. Diarization uses `pyannote/speaker-diarization-community-1` (Windows CUDA, macOS Apple Silicon MPS). Summaries use pinned local `llama.cpp` runtime/model setup with History integration.
 - **Meeting history** — persisted under the user-data folder with a unique meeting ID, browseable list, transcript viewer, and synchronized audio playback.
 - **Cross-platform installers** — Windows NSIS and macOS DMG with embedded Python runtime, ffmpeg, and the bundled native macOS audio helper.
 - **GPU acceleration** — CUDA on Windows, Metal/MLX on Apple Silicon.
@@ -47,6 +48,8 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 
 ### Historical milestones
 
+- **v2.1.0** — Local AI add-on reliability hardening: setup/install resilience, cancellation/recovery improvements, offline/cache behavior tightening, and archive extraction performance/safety updates.
+- **v2.0.0** — AvaNevis rebrand and local AI add-ons delivered: optional speaker diarization, optional transcript summaries, History transcript/summary experience, and setup/validation flows.
 - **v1.7.0** — macOS support with Metal GPU acceleration, cross-platform 48 kHz / soxr VHQ parity, Intel Mac CPU fallback (`faster-whisper` int8), 100% feature parity across platforms.
 - **v1.6.1** — Transcription reliability fixes, automatic meeting recovery via filesystem scan, Cantonese added to UI.
 - **v1.6.0** — Background recording stability for 60+ minute sessions, ~75% less CPU when minimized, Google-Meet-quality audio improvements.
@@ -56,7 +59,7 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 
 ## In progress
 
-Nothing actively in development right now. The branch's UI overhaul, Round-3 polish (markdown / rename / save-as / slim visualizer), and AvaNevis rebrand are all merged on the feature branch and awaiting release.
+Nothing actively in development right now.
 
 ---
 
@@ -68,8 +71,8 @@ Nothing actively in development right now. The branch's UI overhaul, Round-3 pol
 
 ### Transcription
 
-- **Speaker diarization.** Identify who is speaking in multi-person meetings. Current v1 recommendation is `pyannote/speaker-diarization-community-1`, replacing the older pyannote 3.1 plan; Windows requires CUDA, and macOS requires Apple Silicon PyTorch Metal/MPS rather than shipping CPU-only diarization. Product flow: optional Settings setup with the user's own Hugging Face token, Home prompt after accelerator readiness, then automatic diarization for every transcription once configured. Reference: [features/FEATURE_SPEAKER_DIARIZATION.md](features/FEATURE_SPEAKER_DIARIZATION.md) and [features/DESIGN_LOCAL_AI_ADDONS.md](features/DESIGN_LOCAL_AI_ADDONS.md).
-- **Transcript summaries.** Generate local AI meeting summaries, decisions, action items, risks, and open questions from completed transcripts. Current v1 prototype recommendation is one installed `Qwen3.5-9B` 4-bit model via `llama.cpp` for CUDA/Metal after pinned-runtime validation, with selectable summary profiles driven by prompts/runtime settings rather than multiple required model downloads. `Qwen3.5-4B`, `Qwen3-14B`, `Gemma 4`, and `Mistral-Nemo-Instruct-2407` remain alternate install or research options. Product flow: optional Settings setup, explicit Home/History `Generate Summary` actions, saved summaries, and History `Transcript` / `Summary` tabs. Reference: [features/FEATURE_TRANSCRIPT_SUMMARIES.md](features/FEATURE_TRANSCRIPT_SUMMARIES.md), [features/PLAN_LOCAL_AI_FEATURES.md](features/PLAN_LOCAL_AI_FEATURES.md), and [features/DESIGN_LOCAL_AI_ADDONS.md](features/DESIGN_LOCAL_AI_ADDONS.md).
+- **Upload existing audio files.** Import user-provided `.mp3`, `.wav`, and `.opus` files, normalize them into the app's processing format, run transcription/summaries with the same local pipeline, and save results into Meeting History as first-class meetings.
+- **History chat over meetings.** Use the installed local summary runtime/model to ask questions about historical meetings, with responses grounded in saved transcript and summary artifacts.
 - **Real-time transcription.** Live captions during the recording itself. Trade-off: requires a streaming Whisper implementation, raises CPU/GPU usage during capture, and accuracy is below post-processing.
 - **Export formats.** SRT, VTT, DOCX, PDF, JSON in addition to today's Markdown + plain-text Save As.
 

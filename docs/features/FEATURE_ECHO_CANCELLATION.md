@@ -1,211 +1,156 @@
 # Feature: Acoustic Echo Cancellation (AEC)
 
-## Status: Planned (Future Enhancement)
+## Status: Planned (recommended next project)
 
-## Overview
+## Problem statement
 
-When desktop audio is playing (e.g., another meeting participant speaking), the microphone picks up this audio from the speakers, creating an echo effect in the final recording. Acoustic Echo Cancellation (AEC) removes this echo by subtracting the known "reference" signal (desktop audio) from the microphone input.
+This is a real, high-impact issue for speaker users (especially on macOS laptops with strong speakers and sensitive mics).
 
-## The Problem
+Current signal path during speaker use:
 
-Currently, when recording a meeting:
-1. Desktop audio plays through speakers (the other person talking)
-2. Microphone picks up your voice + echo of desktop audio
-3. Final mix contains both sources, so the desktop audio appears twice (original + echo)
+1. Desktop stream captures clean far-end speech.
+2. Microphone captures near-end voice plus delayed acoustic leakage of that far-end speech.
+3. Final output mixes both streams, so far-end speech is duplicated (clean + delayed leak), producing audible echo/reverb.
 
-This results in a noticeable echo/reverb effect, especially in quiet rooms or with louder speaker volumes.
+This degrades recording quality, transcription accuracy, and downstream diarization/summary quality.
 
-## Technical Challenges
+## Clarification on terminology
 
-### Current Architecture: Post-Processing
+The app is privacy-first and local. In this document:
 
-Our current approach mixes audio **after** recording completes (post-processing). This creates a fundamental challenge for AEC:
+- **Post-processing** means processing done after recording stops.
+- **Real-time** means processing while capture is running.
 
-- AEC algorithms require **real-time, frame-synchronized** processing
-- The algorithm needs both streams simultaneously to cancel echo
-- By post-processing time, we've lost the precise timing relationship needed
+Avoid calling post-processing "offline mode" to reduce confusion.
 
-### AEC Requirements
+## Architecture constraints to preserve
 
-True echo cancellation needs:
-1. **Frame-synchronized streams** - Mic and desktop audio aligned sample-by-sample
-2. **Real-time processing** - AEC applied during capture, not after
-3. **Reference signal** - The exact audio being played to speakers
-4. **Adaptive filter** - Adjusts to room acoustics in real-time
+- Keep the current product invariant: mic and desktop are still recorded separately and mixed after stop.
+- Preserve structured recorder stdout JSON contracts consumed by `src/main.js`.
+- Keep post-stop compression/transcription flows unchanged.
 
-## Available Python Libraries
+## Refined strategy (cross-platform)
 
-### 1. speexdsp-python (Most Mature)
+## V1 (recommended): Real-time capture-time AEC on microphone path
 
-**Repository:** https://github.com/xiongyihui/speexdsp-python
+Run AEC while recording so large speaker leakage is removed before final mix.
 
-Python bindings for Speex DSP's acoustic echo cancellation.
+Important: this does **not** require real-time final mixing. Keep post-stop mix architecture intact.
 
-```python
-from speexdsp import EchoCanceller
+Target V1 flow:
 
-# Frame size, filter length, sample rate
-echo_canceller = EchoCanceller.create(256, 2048, 16000)
+1. Capture mic stream and desktop reference stream as today.
+2. During recording, feed synchronized short frames to AEC engine:
+   - near-end input: mic frame
+   - far-end reference: desktop frame
+3. Write de-echoed mic frames to mic buffer/file.
+4. At stop, run current post-mix path: de-echoed mic + clean desktop.
 
-# Process requires synchronized frames
-in_data = mic_audio.readframes(256)    # Near-end (mic with echo)
-out_data = speaker_audio.readframes(256)  # Far-end (reference)
-cleaned = echo_canceller.process(in_data, out_data)
-```
+Why this is best for V1:
 
-**Requirements:**
-- Mono 16kHz audio
-- Linux: `sudo apt install libspeexdsp-dev`
-- Windows/macOS: Requires building from source
+- Handles strong, dynamic speaker bleed better than post-processing-only suppression.
+- Avoids a full recorder redesign.
+- Preserves existing post-stop mix/compress pipeline and contracts.
 
-**Limitations:**
-- Designed for real-time processing
-- Requires precise frame synchronization
+## V1.5 (optional fallback): Post-processing echo suppressor
 
-### 2. pyaec (Newer, Cross-Platform)
+If real-time AEC cannot initialize (engine/runtime issue), optionally run a conservative post-processing suppressor before final mix and surface a warning state.
 
-**Repository:** https://github.com/thewh1teagle/aec-rs
-**PyPI:** https://pypi.org/project/pyaec/
+This is fallback behavior, not primary strategy.
 
-Rust-based AEC with Python bindings. Cross-platform binaries available.
+## Engine recommendation
 
-```bash
-pip install pyaec
-```
+Primary recommendation: mature WebRTC AudioProcessing-style AEC implementation through a thin native wrapper.
 
-**Platforms:**
-- Windows (ARM64, x86-64)
-- macOS (10.12+ x86-64, 11.0+ ARM64)
-- Linux (manylinux with glibc 2.17+)
+Why:
 
-**Note:** Documentation is sparse; requires experimentation.
+- Better delay handling, double-talk protection, and residual suppression for real-world room/speaker conditions.
+- More suitable for high-echo cases than lightweight spectral subtraction alone.
 
-### 3. Adaptive Filter Implementations
+## Concrete implementation plan
 
-**Repository:** https://github.com/Keyvanhardani/Python-Acoustic-Echo-Cancellation-Library
+## Phase 0 - Spike and quality gate (3-5 days)
 
-Pure Python implementation of adaptive filters:
-- LMS (Least Mean Squares)
-- NLMS (Normalized LMS) - Faster convergence
-- RLS (Recursive Least Squares) - Best quality, highest CPU
+- Validate candidate AEC engine on Windows and macOS with recorded test pairs.
+- Confirm acceptable CPU cost and packaging feasibility.
+- Define fixed frame size (for example 10 ms), analysis sample rate (for example 16 kHz mono), and conversion strategy from current 48 kHz/stereo capture.
 
-These are educational implementations; may not be production-ready.
+Exit criteria:
 
-## Implementation Options
+- Clear quality win on loud-speaker test cases.
+- No blocking packaging issue identified.
 
-### Option 1: Real-Time AEC (Major Refactor)
+## Phase 1 - Shared AEC runtime wrapper
 
-**Effort:** High (2-3 weeks)
+- Add `backend/audio/aec_runtime.py` abstraction:
+  - `initialize(config)`
+  - `process_frame(mic_frame, desktop_ref_frame)`
+  - `flush()`
+  - `close()`
+- Add strict fail-safe behavior: if runtime errors, disable AEC for current recording and continue standard pipeline.
 
-Restructure recording to process audio in real-time:
+## Phase 2 - Windows integration
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                  Real-Time Processing                    │
-├─────────────────────────────────────────────────────────┤
-│                                                          │
-│   Mic Input ──────┐                                      │
-│                   ├──► AEC ──► Enhanced Mic ──► Mix ──► │
-│   Desktop Audio ──┘      │                               │
-│        │                 │                               │
-│        └─────────────────┘ (reference signal)            │
-│                                                          │
-└─────────────────────────────────────────────────────────┘
-```
+- Integrate frame sync/adaptation in `backend/audio/windows_recorder.py`.
+- Keep timeline reconstruction for desktop reference semantics.
+- Store processed mic frames for existing post-stop mix path.
 
-**Changes Required:**
-1. Move from callback-based capture to streaming capture
-2. Implement frame synchronization between streams
-3. Process audio in small chunks (256-512 samples)
-4. Buffer management for latency handling
-5. Handle sample rate conversion in real-time
+## Phase 3 - macOS integration
 
-**Pros:**
-- True echo cancellation
-- Best audio quality
-- Standard approach used by Zoom, Teams, etc.
+- Integrate the same wrapper in `backend/audio/macos_recorder.py`.
+- Use current startup alignment logic plus running drift correction for frame pairing.
+- Ensure helper backend differences (CoreAudio tap vs ScreenCaptureKit fallback) do not break frame feeding.
 
-**Cons:**
-- Major architectural change
-- Higher CPU usage during recording
-- More complex error handling
-- Risk of introducing audio glitches
+## Phase 4 - UX and controls
 
-### Option 2: Post-Processing Spectral Subtraction (Simpler)
+- Add Settings control: `Echo cancellation` with `Off | Standard | Strong`.
+- Add lightweight runtime status in logs/dev console (active, degraded, fallback).
+- Keep headphone recommendation tip as best-practice guidance.
 
-**Effort:** Medium (1 week)
+## Phase 5 - Validation and rollout
 
-Apply frequency-domain echo reduction after recording:
+- Ship behind beta toggle first.
+- Expand manual smoke checklist for loud-speaker scenarios on both platforms.
+- Promote to default-on after quality and stability targets are met.
 
-```python
-def reduce_echo_spectral(mic_audio, desktop_audio, alpha=0.5):
-    """
-    Simple spectral subtraction for echo reduction.
-    Less effective than real AEC but works in post-processing.
-    """
-    # FFT both signals
-    mic_fft = np.fft.rfft(mic_audio)
-    desktop_fft = np.fft.rfft(desktop_audio)
+## Acceptance criteria
 
-    # Reduce frequencies present in both signals
-    mask = np.abs(desktop_fft) / (np.abs(mic_fft) + 1e-10)
-    mask = np.clip(1 - alpha * mask, 0, 1)
+For reproducible speaker tests (quiet/moderate/noisy rooms):
 
-    # Apply mask and inverse FFT
-    cleaned_fft = mic_fft * mask
-    return np.fft.irfft(cleaned_fft)
-```
+- Echo reduction:
+  - median ERLE improvement >= 12 dB in far-end-only segments.
+- Voice preservation:
+  - near-end speech loss <= 1.5 dB in double-talk segments.
+- Stability:
+  - no recording failures caused by AEC; clean fallback to non-AEC path.
+- Performance:
+  - recording CPU increase stays within acceptable platform budgets.
+  - post-stop processing time does not materially regress.
 
-**Pros:**
-- Works with current post-processing architecture
-- No real-time constraints
-- Simpler implementation
+## Risks and mitigations
 
-**Cons:**
-- Less effective than true AEC
-- May reduce voice quality
-- Artifacts possible (musical noise)
-- Doesn't handle room reverb well
+- **Frame misalignment/drift:** implement continuous delay tracking, not one-time offset only.
+- **Over-suppression of near-end voice:** enforce double-talk protection and conservative defaults.
+- **Packaging complexity:** gate with spike milestone before broad integration.
+- **Backend divergence:** keep one shared AEC wrapper with platform adapters only where needed.
 
-### Option 3: Headphone Recommendation (Zero Effort)
+## Decision recommendation
 
-**Effort:** None
+Make this the next project and implement **real-time capture-time AEC v1** as the primary path.
 
-Simply recommend users wear headphones during recording.
+Rationale:
 
-**Pros:**
-- Eliminates echo at source
-- No code changes needed
-- Best audio quality
-
-**Cons:**
-- Not always practical
-- Relies on user compliance
-
-## Recommendation
-
-For the near term, **Option 3** (headphone recommendation) is the most practical solution. Add a tip to the UI or documentation.
-
-For a future version, **Option 1** (real-time AEC) would provide the best user experience but requires significant architectural changes. This should be planned as a major feature release.
-
-**Option 2** (spectral subtraction) could be a middle-ground experiment, but the quality tradeoffs may not be worth it.
-
-## Implementation Priority
-
-| Priority | Approach | Effort | Quality |
-|----------|----------|--------|---------|
-| Now | Recommend headphones | None | Best |
-| Future | Real-time AEC with speexdsp/pyaec | High | Excellent |
-| Maybe | Post-processing spectral subtraction | Medium | Fair |
+- Highest quality impact on core recording experience.
+- Strongly addresses severe speaker leakage scenarios.
+- Achievable without abandoning current post-stop mix architecture.
 
 ## References
 
+- [WebRTC AudioProcessing](https://webrtc.googlesource.com/src/+/refs/heads/main/modules/audio_processing/)
 - [speexdsp-python](https://github.com/xiongyihui/speexdsp-python)
 - [pyaec on PyPI](https://pypi.org/project/pyaec/)
 - [aec-rs (pyaec backend)](https://github.com/thewh1teagle/aec-rs)
-- [Python AEC Library](https://github.com/Keyvanhardani/Python-Acoustic-Echo-Cancellation-Library)
-- [WebRTC AEC](https://webrtc.googlesource.com/src/+/refs/heads/main/modules/audio_processing/)
 
 ---
 
-**Last Updated:** December 7, 2025
+**Last Updated:** May 18, 2026
