@@ -201,10 +201,10 @@ jobs:
 
           ### What's New
 
-          - Renamed the app to AvaNevis.
-          - Redesigned the app with a sleeker, more modern interface.
-          - Reached full feature parity between the macOS and Windows versions.
-          - Introduced optional Speaker Identification and Meeting Summarisation powered by local models.
+          - Improved local AI add-on setup: faster downloads, more reliable cancellation, and off-main-thread runtime archive extraction on Windows and macOS.
+          - Hardened transcription model caching so installed Whisper/MLX models load offline without conflicting with the speaker-identification Hugging Face cache.
+          - Guided speaker-identification transcription and meeting summaries avoid unnecessary Hugging Face network access when models are already installed.
+          - Fixed Windows speaker-setup dependency drift (`torchvision` pin) and clearer reinstall guidance when managed dependencies are stale.
 
           ### Platform Support
 

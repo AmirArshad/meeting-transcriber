@@ -110,7 +110,7 @@ Longer horizon, lower priority:
 - **Minor (1.X.0)** — New features, backwards compatible.
 - **Patch (1.2.X)** — Bug fixes and minor improvements.
 
-**Current branch version:** 2.0.0 (AvaNevis rebrand, refreshed UI, cross-platform parity, and local AI add-ons).
+**Current branch version:** 2.1.0 (local AI add-on reliability, transcription cache/offline hardening, and runtime extraction performance).
 
 The rebrand introduces a new Electron `productName`, which changes the user-data folder. Existing Meeting Transcriber installs won't see their old recordings until the user manually moves the data folder, so this release uses a major version bump.
 
