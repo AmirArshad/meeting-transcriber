@@ -22,9 +22,11 @@ Previous project plan was archived to `docs/internal/TODO_ARCHIVE_2026-05-18_LOC
 
 # Code review remediation (2026-05-19)
 
-Source: main-flow security / performance / functional review (Electron + Python + AI add-ons). Implement **one phase per PR or agent session**. Run validation after each phase before starting the next.
+Source: main-flow security / performance / functional review (Electron + Python + AI add-ons), validated against the codebase 2026-05-19. Implement **one phase per PR or agent session**. Run validation after each phase before starting the next.
 
 **Branch:** `chore/code-review-remediation`
+
+**Validation summary:** ~47 of 50 items confirmed real. Three items rescoped (3.5 dropped, 5.1 split, 7.2 rejected). Highest-priority fixes: **5.3** (compute queue timeout), **1.2 / 1.4 / 1.14** (IPC trust + stderr redaction + `modelSize` allowlist), **2.1 + 2.4** (concurrent start race), **3.1–3.3** (path guards — safe; no legitimate caller passes paths outside recordings today).
 
 **Global validation (after every phase):**
 
@@ -44,6 +46,16 @@ npm run test:python
 - Do not combine high-risk phases (6–7) with recorder path changes in one PR.
 - Preserve stdout JSON recorder contract (`AGENTS.md`); update `main-process-helpers.js` + tests if parser changes.
 - Path guards: grep all `electronAPI` call sites before rejecting paths in main.
+- **4.6 is not Python-only:** ships with `src/main.js` + `src/main-process-helpers.js` + `tests/js/main-process-helpers.test.js` in the same PR.
+- **Do not route `download-model` through `enqueueAiComputeAction`** — long HF downloads would block GPU work and trip the 15s validation wait timeout.
+
+**Cross-cutting themes (batch when touching related files):**
+
+1. **Sanitization** — `redactSensitiveText` is wired for AI progress JSON only; extend to stderr IPC (1.4), summary errors (1.5), persisted metadata (1.10), Python runners (1.11).
+2. **IPC input validation** — renderer trust at boundaries: update URL (1.2), HF token (1.6), paths (3.x), `modelSize` (1.14), optional sender check (2.8).
+3. **Lifecycle teardown** — disposer pattern: GPU interval (1.1), countdown interval (2.5), AI progress hide (1.12), quit aborts (2.7).
+
+**Suggested agent order:** 1 → 2 → 3 → 4 → 5 → 6 → 7 (7.x one item per PR). Within Phase 5, run **5.3 before 5.1**.
 
 ---
 
@@ -51,21 +63,24 @@ npm run test:python
 
 **Risk:** Low | **Regression:** Unlikely on happy paths
 
-- [ ] **1.1** Clear GPU install progress interval on failure (`src/renderer/app.js` `installGPUAcceleration` catch/finally; mirror FTUE pattern ~1022).
-- [ ] **1.2** Bind `download-update` IPC to `pendingUpdateInfo` only; ignore renderer `downloadUrl` (`src/main.js`, `src/updater.js`).
-- [ ] **1.3** Cap stdout/stderr buffer growth in main Python spawns and updater HTTP (`src/main.js`, `src/main-process-helpers.js` if shared helper extracted).
-- [ ] **1.4** Sanitize `transcription-progress` and `model-download-progress` before IPC (`redactSensitiveText` / `ai-progress-sanitizer.js` rules).
-- [ ] **1.5** Use `summarizeAiBackendError` + redaction for summary failure messages (`src/main.js` ~3448+).
-- [ ] **1.6** Validate HF token format in `store-diarization-token` IPC (`isLikelyHuggingFaceToken` from `ai-addon-setup.js`).
-- [ ] **1.7** Gate DevTools menu item behind `!app.isPackaged` or explicit dev flag (`src/main.js` menu).
-- [ ] **1.8** Remove or gate preload `console.log` (`src/preload.js`).
-- [ ] **1.9** Fix `offUpdateAvailable` to use disposer pattern instead of `removeAllListeners` (`src/preload.js`).
-- [ ] **1.10** Redact HF tokens in persisted meeting AI `error` fields (`backend/meeting_manager.py`; align with `diarization_pipeline._safe_message`).
-- [ ] **1.11** Share `_safe_message` redaction in `summary_runner.py` with diarization.
-- [ ] **1.12** Clear `hideAiAddonProgressSoon` timeouts on new progress / teardown (`src/renderer/app.js`).
-- [ ] **1.13** Home-tab `copyTranscript` clipboard `.catch` + user feedback (match history copy).
+**Elevated within phase (do early):** 1.2, 1.4, 1.14 — security-relevant IPC/sanitization.
 
-**Phase 1 tests:** extend `tests/js/main-process-helpers.test.js` / `tests/js/ai-addon-*.test.js` where sanitization or URL binding changes.
+- [ ] **1.1** Clear GPU install progress interval on failure (`src/renderer/app.js` `installGPUAcceleration` — use `finally { clearInterval(...) }`; mirror FTUE ~1022).
+- [ ] **1.2** Bind `download-update` IPC to `pendingUpdateInfo` only; drop renderer `downloadUrl` param from preload (`src/main.js`, `src/preload.js`, `src/updater.js`). Reject when `pendingUpdateInfo == null`.
+- [ ] **1.3** Cap stdout/stderr buffer growth in main Python spawns and updater HTTP (`src/main.js`, `src/main-process-helpers.js` if shared helper extracted). **Caveat:** cap stderr/log freely; for result-JSON stdout (transcription, stop recording) use hard `maxBuffer` + reject — do not truncate mid-JSON.
+- [ ] **1.4** Sanitize `transcription-progress`, `model-download-progress`, and `gpu-install-progress` with `redactSensitiveText` before IPC (`src/ai-progress-sanitizer.js`). Prefer line-chunked redaction so split tokens across buffer boundaries are not missed.
+- [ ] **1.5** Use `summarizeSummaryValidationError` (or shared `summarizeAiBackendError`) for summary failure messages (`src/main.js` ~3448+); redact metadata-phase errors too.
+- [ ] **1.6** Validate HF token format in `store-diarization-token` IPC (`isLikelyHuggingFaceToken` from `ai-addon-setup.js`); trim before check; return structured error for renderer.
+- [ ] **1.7** Gate DevTools (and optionally reload/forceReload) behind `!app.isPackaged` or `AVANEVIS_ENABLE_DEVTOOLS=1` (`src/main.js` menu).
+- [ ] **1.8** Remove preload startup `console.log` (`src/preload.js` — only log in dev if needed).
+- [ ] **1.9** Remove dead `offUpdateAvailable` from preload (unused; `onUpdateAvailable` already returns a disposer). Do not “fix” with `removeAllListeners`.
+- [ ] **1.10** Redact HF tokens in persisted meeting AI `error` fields (`backend/meeting_manager.py`; align with `diarization_pipeline._safe_message`).
+- [ ] **1.11** Share redaction helper in `summary_runner.py` with diarization (e.g. `backend/common/sensitive_text.py`; fold `hf_model_downloader` duplicate regex).
+- [ ] **1.12** Clear `hideAiAddonProgressSoon` timeouts on new progress / teardown — per-feature timer map (`src/renderer/app.js`).
+- [ ] **1.13** Home-tab `copyTranscript` clipboard `.catch` + user feedback (match history copy); guard empty text.
+- [ ] **1.14** Allowlist `modelSize` on all transcription IPCs: `check-model-downloaded`, `download-model`, `transcribe-audio`, `transcribe-audio-with-speakers` (`src/main.js` + `src/main-process-helpers.js`; central `ALLOWED_WHISPER_MODELS` / `normalizeModelSize`). *Moved forward from Phase 6 — flows to filesystem patterns and Python `--model` with no validation today.*
+
+**Phase 1 tests:** extend `tests/js/main-process-helpers.test.js` / `tests/js/ai-addon-*.test.js` for sanitization, URL binding, and `modelSize` rejection.
 
 ---
 
@@ -73,14 +88,16 @@ npm run test:python
 
 **Risk:** Medium | **Regression:** Stuck “can’t record” if process refs not cleared
 
-- [ ] **2.1** Reject `start-recording` when `pythonProcess` active or `recordingStopPromise` in flight (`src/main.js`).
-- [ ] **2.2** Always clear `pythonProcess` on `close` / `error` / `failActiveRecording` (audit all exit paths).
-- [ ] **2.3** Merge duplicate `pythonProcess.on('close')` handlers into one (`src/main.js` ~2865, ~2934).
-- [ ] **2.4** Renderer: set `recordingState` to `'starting'` before preflight `await`; ignore Start while busy (`src/renderer/app.js`, `recording-state-helpers.js`).
-- [ ] **2.5** Renderer: disposer for countdown `setInterval` on retry/failure; call `stopTimer()` / `audioVisualizer.stop()` before retry (`app.js` ~1873–1998).
-- [ ] **2.6** Renderer: session token for `onRecordingFailed` — ignore stale failures; don’t force idle during `stopping`/`transcribing` without main ack (`app.js` ~1691+).
-- [ ] **2.7** Quit path: abort `aiAddonSetupAbortControllers`, cancel `activeSummaryGeneration`, drain/kill AI children before exit (`src/main.js` `before-quit` ~1646+).
-- [ ] **2.8** Optional: `ipcMain` sender check `event.sender === mainWindow.webContents` (defense in depth).
+**Elevated within phase:** 2.1 + 2.4 — concurrent start is reachable via renderer double-click during preflight.
+
+- [ ] **2.1** Reject `start-recording` when `pythonProcess` active or `recordingStopPromise` in flight; guard **before** `powerSaveBlocker.start` (`src/main.js`). Return `{ code: 'RECORDER_BUSY', ... }` for renderer to ignore vs alert.
+- [ ] **2.2** Always clear `pythonProcess` on all exit paths: add `pythonProcess.on('error', …)` → same cleanup as `close`; audit `failActiveRecording` (emit-only today). Capture local `proc` in handlers so concurrent overwrite (2.1) cannot target wrong PID.
+- [ ] **2.3** Merge duplicate `pythonProcess.on('close')` handlers — `clearTimeout(timeoutHandle)` inside the single handler (`src/main.js` ~2865, ~2934).
+- [ ] **2.4** Renderer: set `recordingState` to `'starting'` **before** `runRecordingPreflightChecks` `await`; extend `getRecordButtonAction` / button UI for busy state (`src/renderer/app.js`, `recording-state-helpers.js`). Prefer new `'starting'` over reusing `'initializing'`.
+- [ ] **2.5** Renderer: cancellable `startCountdown` (return `{ promise, cancel }`); clear interval on retry/failure and in `setRecordingState('idle')` (`app.js` ~1873–1998).
+- [ ] **2.6** Renderer: session epoch for `onRecordingFailed` — ignore stale failures; do not force `idle` during `stopping`/`transcribing` without main ack (`app.js` ~1691+). Keep `sessionId` on IPC only — **not** in recorder stdout JSON.
+- [ ] **2.7** Quit path: abort all `aiAddonSetupAbortControllers`, `activeSummaryGeneration?.controller.abort(...)`, then brief drain/kill AI children (`src/main.js` `before-quit` ~1646+). Extend intercept path if setup/summary in flight.
+- [ ] **2.8** Optional: `ipcMain` sender check `event.sender === mainWindow.webContents` (wrap high-risk handlers only; do not blanket-wrap without audit).
 
 **Phase 2 manual:** double-click Start during preflight; quit during recording; quit during transcription.
 
@@ -90,14 +107,14 @@ npm run test:python
 
 **Risk:** Medium | **Regression:** False rejections if call sites pass paths outside recordings
 
-**Prerequisite:** Grep all `addMeeting`, `transcribeAudio`, `add-meeting`, `transcribe-audio` call sites.
+**Prerequisite:** Grep all `addMeeting`, `transcribeAudio`, `add-meeting`, `transcribe-audio` call sites. **Validated:** every current caller already passes paths under `userData/recordings`; rejection-by-default is safe.
 
-- [ ] **3.1** `addMeetingToHistory` / `add-meeting`: `assertSafeExistingRecordingAudioPath` + markdown guard before spawn (`src/main.js` ~444+).
-- [ ] **3.2** `transcribe-audio`: always resolve under recordings + `assertSafeExistingRecordingAudioPath` (match guided path ~3059).
-- [ ] **3.3** `meeting_manager.add_meeting`: require resolved paths under `recordings_dir`; reject `..` escapes (`backend/meeting_manager.py`).
-- [ ] **3.4** `add_meeting`: fail or retry if audio/transcript missing (avoid broken history rows); document race with async transcript write.
-- [ ] **3.5** Renderer defensive: `result.audioPath || result.outputPath` after stop (`app.js` ~2013+).
-- [ ] **3.6** Tests: `tests/python/test_meeting_manager.py` for path rejection; `tests/js/main-process-helpers.test.js` if helpers extended.
+- [ ] **3.1** `addMeetingToHistory` / `add-meeting`: `assertSafeExistingRecordingAudioPath` + transcript markdown guard before spawn (`src/main.js` ~444+).
+- [ ] **3.2** `transcribe-audio`: after `resolveTranscriptionAudioFile`, call `assertSafeExistingRecordingAudioPath`; always resolve against `getRecordingsDir()` (drop `path.dirname(audioFile)` branch for absolutes) (`src/main.js` ~2953; match guided ~3059).
+- [ ] **3.3** `meeting_manager.add_meeting`: require resolved paths under `recordings_dir`; reject `..` escapes — use existing `_is_recordings_path` (`backend/meeting_manager.py`).
+- [ ] **3.4** `add_meeting`: fail fast if audio/transcript missing; optional bounded retry for transcript only (race with AV); document that renderer saves transcript before `addMeeting` (`backend/meeting_manager.py`).
+- [ ] **3.5** Regression test: `parseRecordingStopResult` / `findRecorderResultPayload` always expose `audioPath` for Windows (`audioPath`) and macOS (`outputPath`) recorder payloads (`tests/js/main-process-helpers.test.js`). *Replaces dropped item “renderer `audioPath || outputPath`” — main already normalizes at `src/main.js:174–200`; renderer reads only `result.audioPath`.*
+- [ ] **3.6** Tests: path rejection in `tests/python/test_meeting_manager.py` (repath `_create_source_files` into recordings dir); JS helper tests if extended.
 
 **Phase 3 manual:** full record → stop → transcribe → save; scan/import if used.
 
@@ -107,15 +124,17 @@ npm run test:python
 
 **Risk:** Medium | **Regression:** Trimmed tail audio (macOS flag); stricter failure surfaces
 
-- [ ] **4.1** Windows: on any `start_recording` failure, set `is_recording = False` and close partial streams (`windows_recorder.py` ~424–520).
+**Quick win:** 4.3 (one-line lock on Windows final JSON).
+
+- [ ] **4.1** Windows: on any `start_recording` failure, set `is_recording = False` and stop/close partial streams (`windows_recorder.py` ~424–520).
 - [ ] **4.2** Windows: `cleanup()` stop/close streams before `pa.terminate()` (`windows_recorder.py` ~857+).
-- [ ] **4.3** Windows: wrap final JSON in stdout lock / `_send_json_message` (~967).
+- [ ] **4.3** Windows: emit final result via `_send_json_message` (lock + flush); keep `audioPath` shape (`windows_recorder.py` ~967).
 - [ ] **4.4** macOS: gate mic callback on `_get_running()` (`macos_recorder.py` ~572+).
-- [ ] **4.5** macOS: lock or drain-before-`to_array()` for `ChunkedAudioBuffer` (coordinate with `chunked_audio_buffer.py`).
-- [ ] **4.6** macOS: empty mic → structured stdout `error` / `success: false`; do not emit bogus `outputPath` (`macos_recorder.py` ~804+, ~1223+); align `src/main.js` parser if needed.
-- [ ] **4.7** macOS: validate `mic_device_id` after enumeration (`macos_recorder.py`, `device_manager.py`).
-- [ ] **4.8** Swift: rate-limit or drain stderr aggressively to avoid pipe stall (`swift_audio_capture.py`).
-- [ ] **4.9** Update `tests/js/main-process-helpers.test.js` if stop/result parsing changes; Python compile + manual smoke both platforms.
+- [ ] **4.5** macOS: lock `ChunkedAudioBuffer` or `to_array()` copy; join mic thread before read; fix `_abort_startup` vs callback race (`chunked_audio_buffer.py`, `macos_recorder.py`).
+- [ ] **4.6** macOS: empty mic → `success: false` + structured error; **omit bogus `outputPath`** (`macos_recorder.py` ~804+, ~1223+). **Same PR:** widen `findRecorderResultPayload` / `parseRecordingStopResult` in `src/main-process-helpers.js` + `src/main.js`; add tests for `success: false` result shape.
+- [ ] **4.7** macOS (+ optional Windows): validate `mic_device_id` in range and `max_input_channels > 0` after enumeration (`macos_recorder.py`, `device_manager.py`).
+- [ ] **4.8** Swift: batch-drain stderr after `select` ready; bump join timeout for final `capture_stats` (`swift_audio_capture.py`). Do not drop `type: error` / `warning` messages.
+- [ ] **4.9** Tests: Windows `audioPath` result in `tests/js/main-process-helpers.test.js`; `success: false` variant; Python compile + manual smoke both platforms.
 
 **Phase 4 manual:** `tests/manual/recording-smoke-checklist.md` on Windows and macOS; mic permission denied on macOS.
 
@@ -123,19 +142,21 @@ npm run test:python
 
 ## Phase 5 — AI concurrency, errors, and archive hardening
 
-**Risk:** Medium–high | **Regression:** Slower parallel ops; queue deadlocks without timeouts
+**Risk:** Medium–high | **Regression:** Queue stall without timeouts; slower parallel ops
 
-- [ ] **5.1** Route `transcribe-audio` and `download-model` through `enqueueAiComputeAction` (or shared GPU lock) (`src/main.js`).
-- [ ] **5.2** Gate setup validation: no GPU smoke test on addon queue while compute queue busy (unify or block — document in `AGENTS.md`).
-- [ ] **5.3** Wall-clock timeout + process kill for hung compute jobs (`createAsyncActionQueue` / per-job wrapper).
-- [ ] **5.4** Summary metadata failure: delete orphan sidecars or transactional metadata+files (`src/main.js` ~3456+).
-- [ ] **5.5** ZIP extraction: reject symlink entries / validate link targets like tar (`ai-addon-archive-helpers.js`, `ai-addon-zip-extractor-worker.js` + tests).
-- [ ] **5.6** MLX cache completeness: non-empty file checks aligned with faster-whisper + `main-process-helpers.js` (`mlx_whisper_transcriber.py`).
-- [ ] **5.7** faster-whisper cache dir matching: exact hub folder names vs substring (`faster_whisper_transcriber.py`).
-- [ ] **5.8** Optional hardening: pass HF token to validation spawn without env (stdin/temp file) — lower priority.
-- [ ] **5.9** Update `AGENTS.md` GPU serialization section when 5.1–5.2 land.
+**Order within phase:** **5.3 → 5.1 → 5.2 → …** (timeout before adding more queue consumers).
 
-**Phase 5 manual:** `tests/manual/local-ai-addons-checklist.md`; attempt overlapping transcribe + diarize + summary setup.
+- [ ] **5.3** Wall-clock timeout + process kill for hung compute jobs (`createAsyncActionQueue` per-job wrapper + `terminateProcessBestEffort`). Per-type limits (e.g. summary 90m, diarization 30m). **Highest priority in this phase** — one hung child currently stalls the queue for the rest of the session.
+- [ ] **5.1** Route **`transcribe-audio` only** through `enqueueAiComputeAction` (`src/main.js` ~2953). **Do not** enqueue `download-model` on the GPU queue — use separate download serialization or leave off-queue. *Validated: guided transcription, diarize, and summary already use the compute queue.*
+- [ ] **5.2** Setup validation vs compute: replace 15s false-failure with blocking wait + progress, or queue-depth check before smoke test; document policy in new `AGENTS.md` § GPU compute serialization (5.9).
+- [ ] **5.4** Summary metadata failure: staging paths (`.summary.json.tmp`) + rename on success, or delete sidecars on `update-ai` failure (`src/main.js` ~3443+).
+- [ ] **5.5** ZIP extraction: reject symlink entries (UNIX `externalFileAttributes`); mirror tar link-target checks (`ai-addon-archive-helpers.js`, `ai-addon-zip-extractor-worker.js` + tests).
+- [ ] **5.6** MLX cache completeness: non-empty `weights.npz` and `config.json` (align `main-process-helpers.js` / `AGENTS.md`) (`mlx_whisper_transcriber.py`).
+- [ ] **5.7** faster-whisper cache dir: exact folder name match, not substring (update JS + Python + `tests/python/test_transcriber_helpers.py`, `tests/js/main-process-helpers.test.js`).
+- [ ] **5.8** Optional: pass HF token to validation spawn via stdin instead of env — lower priority; Windows/macOS exposure is limited.
+- [ ] **5.9** Add `AGENTS.md` § **GPU compute serialization and timeouts**: handlers on compute queue (after 5.1: transcribe + diarize + guided + summary), validation wait policy, wall-clock kills (5.3).
+
+**Phase 5 manual:** `tests/manual/local-ai-addons-checklist.md`; overlapping transcribe + diarize; confirm model download still works during transcription.
 
 ---
 
@@ -143,14 +164,15 @@ npm run test:python
 
 **Risk:** Low–medium | **Regression:** Search feels delayed; less frequent disk sync
 
-- [ ] **6.1** Debounce meeting search input (150–300 ms) (`app.js` ~1587+).
-- [ ] **6.2** `loadMeetingHistory`: skip `scanRecordings()` except launch / explicit refresh (`app.js` ~1533+).
-- [ ] **6.3** Audio visualizer: pause rAF when document hidden; lower FPS or skip redraw when levels unchanged (`app.js` ~3973+).
-- [ ] **6.4** Normalize `meetingId` to string at selection and in summary comparisons (`app.js`).
-- [ ] **6.5** Chunked transcript rendering for large meetings (`requestAnimationFrame` / collapse) — optional if needed after profiling.
-- [ ] **6.6** Markdown links: restrict to `https:` and `mailto:` for AI-generated content (`app.js` ~354+).
-- [ ] **6.7** `handleDismissUpdate`: clear `currentUpdateInfo`; validate full payload on replay (`update-notification-helpers.js`, `app.js`).
-- [ ] **6.8** Allowlist `modelSize` on download/check IPC (`src/main.js`).
+- [ ] **6.1** Debounce meeting search input (150–300 ms); cache lowercased query (`app.js` ~1587+).
+- [ ] **6.2** `loadMeetingHistory({ scan })`: skip `scanRecordings()` except launch / explicit refresh (`app.js` ~1533+).
+- [ ] **6.3** Audio visualizer: stop rAF loop when `document.hidden`; skip redraw when levels unchanged (`app.js` ~3973+). Drawing already skips when hidden; rAF still runs today.
+- [ ] **6.4** Normalize `meetingId` to string once in `selectMeeting` so downstream `===` is safe (`app.js`). Backend returns strings today; inconsistency is latent.
+- [ ] **6.5** Chunked transcript rendering — **optional / profile first**; only if large meetings show jank (`app.js` ~549+). No observed bug at typical sizes.
+- [ ] **6.6** Markdown links for AI content: restrict to `https:` and `mailto:` only (`app.js` ~354+). `javascript:` already blocked by CSP in `index.html`; tighten AI-rendered path and drop relative `href` branches.
+- [ ] **6.7** `handleDismissUpdate`: clear `currentUpdateInfo`; `replayPendingUpdateNotification` require `https:` on `downloadUrl` (`update-notification-helpers.js`, `app.js`).
+
+*`modelSize` allowlist moved to Phase 1 item 1.14.*
 
 ---
 
@@ -158,11 +180,13 @@ npm run test:python
 
 **Risk:** High | **Do not batch with phases 3–4**
 
-- [ ] **7.1** Stream-to-disk during capture (Windows frame lists, macOS desktop/Swift buffers) — design doc first; feature flag; long-recording manual test.
-- [ ] **7.2** Full single GPU queue including setup pip/download vs compute (only after 5.1–5.3 proven stable).
-- [ ] **7.3** Fail-closed device validation (product decision; may block VMs/BT mics) — optional strict mode vs preflight-only.
-- [ ] **7.4** `scan_and_sync_recordings` hold lock for full scan or idempotent scan keys (`meeting_manager.py`) — measure lock timeout on large libraries.
-- [ ] **7.5** Production Swift helper path: skip `PATH` `which()` when bundled (`swift_audio_capture.py`).
+**Do soon (smaller items):** 7.5 (PATH `which()` in packaged builds), then 7.1 (memory) when long meetings are a product priority.
+
+- [ ] **7.1** Stream-to-disk during capture — design doc first; feature flag; long-recording manual test. **Preserve:** post-processing mix (separate mic/desktop files), WASAPI timestamp sidecar for desktop gaps, macOS one-sided stereo repair. **Pre-fix:** stop float64 upcast in Swift `samples_to_frames` (halves desktop RAM). Est. ~8 GB RSS macOS / ~2.8 GB Windows for 2 h today.
+- [ ] **7.2** **Rejected:** merging setup download queue with GPU compute queue — causes UX deadlock (transcription blocks model download). **Replace with:** gate `validateDiarizationRuntime` / `validateSummaryRuntimeSmoke` on `activeAiComputeAction` ref so smoke tests cannot run concurrently with summary/diarization/transcribe — only after 5.3 stable.
+- [ ] **7.3** Device validation strict mode — **opt-in Settings toggle only**; keep fail-open default (`validate-devices` `valid: true` on timeout). Strict would block BT/VM/virtual mics without measured rollout.
+- [ ] **7.4** `scan_and_sync_recordings`: prefer **idempotent scan keys** + document outer caches as perf-only (`meeting_manager.py`); avoid full-scan FileLock hold (10s timeout risk on large libraries). Add concurrent `add_meeting` regression test.
+- [ ] **7.5** Packaged Swift helper: skip `shutil.which("audiocapture-helper")` when `AVANEVIS_PACKAGED=1` (set from `src/main.js`); keep `which()` for dev/`npm start` only (`swift_audio_capture.py`).
 
 ---
 
@@ -170,12 +194,12 @@ npm run test:python
 
 | Phase | Focus | Status |
 |-------|--------|--------|
-| 1 | Hygiene | Not started |
+| 1 | Hygiene + `modelSize` allowlist (1.14) | Not started |
 | 2 | Recording lifecycle | Not started |
 | 3 | Path enforcement | Not started |
 | 4 | Recorder correctness | Not started |
-| 5 | AI concurrency & archives | Not started |
+| 5 | AI concurrency & archives (5.3 before 5.1) | Not started |
 | 6 | Performance & UX | Not started |
 | 7 | Architectural | Not started |
 
-**Suggested agent order:** 1 → 2 → 3 → 4 → 5 → 6 → 7 (7.x one item per PR).
+**Suggested agent order:** 1 → 2 → 3 → 4 → 5 → 6 → 7 (7.x one item per PR; **7.2 is the narrow compute-busy gate, not queue merge**).
