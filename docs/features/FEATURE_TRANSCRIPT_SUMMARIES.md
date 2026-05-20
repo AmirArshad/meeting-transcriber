@@ -117,7 +117,7 @@ Transcript segments
 - Deterministic helpers live in `backend/summaries/summary_pipeline.py`; runtime execution lives in `backend/summaries/summary_runner.py` and `backend/summaries/llama_runtime.py`.
 - Summary setup uses pinned llama.cpp runtime archives and pinned GGUF artifacts from `src/ai-addon-state.js`; setup is explicit, HTTPS host-allowlisted, and checksum-gated.
 - Summaries are generated only by a user action from Home or History.
-- Summary generation runs through the main-process local AI compute queue so it cannot overlap with another summary or diarization backend run.
+- Summary generation runs through the main-process local AI compute queue (with wall-clock timeout and process kill) so it cannot overlap with transcription, diarization, or another summary run.
 - The runner prefers speaker sidecars when available, otherwise parses saved transcript Markdown and assigns `Unknown` owners when needed.
 - Chunking honors token budget and timestamps, and now prefers topic-boundary heuristics such as "next topic" or "moving on" when a chunk has enough content.
 - The `llama-cli` runner uses non-interactive single-turn/simple-IO mode, disables Qwen reasoning output for the pinned Qwen3.5 model/runtime, strips only obvious prompt echoes near process start, and skips the final merge prompt when a transcript fits in one chunk.

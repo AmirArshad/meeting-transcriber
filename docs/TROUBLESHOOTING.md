@@ -23,10 +23,10 @@ Common issues and solutions for AvaNevis.
 **Solution 2: Terminal Method**
 ```bash
 # Remove the quarantine flag
-xattr -d com.apple.quarantine /Applications/Meeting\ Transcriber.app
+xattr -d com.apple.quarantine /Applications/AvaNevis.app
 
 # Or for the DMG file before installing:
-xattr -d com.apple.quarantine ~/Downloads/Meeting\ Transcriber-Setup-*.dmg
+xattr -d com.apple.quarantine ~/Downloads/AvaNevis-Setup-*.dmg
 ```
 
 **Solution 3: System Settings (macOS Ventura+)**
@@ -46,7 +46,7 @@ xattr -d com.apple.quarantine ~/Downloads/Meeting\ Transcriber-Setup-*.dmg
 - Yes! You can verify the source code on GitHub
 - The app is built by GitHub Actions (public build logs)
 - No telemetry or tracking - 100% local processing
-- See [SECURITY_AUDIT.md](internal/SECURITY_AUDIT.md) for full audit
+- See [SECURITY_AUDIT.md](internal/SECURITY_AUDIT.md) for the November 2025 audit and [CODE_REVIEW_REMEDIATION_2026-05.md](internal/CODE_REVIEW_REMEDIATION_2026-05.md) for May 2026 hardening
 
 ---
 
@@ -231,6 +231,26 @@ If you still see "faster-whisper (CPU fallback)", report an issue on GitHub.
 - Requires Windows 10 or later
 - Loopback devices appear as "Speakers (Loopback)" or similar
 - If missing, try updating audio drivers
+
+---
+
+### ⏳ Recording start ignored or "busy"
+
+**Symptom:** You tap Start but nothing happens, or a second start while stopping does nothing.
+
+**Cause:** AvaNevis allows only one recorder workflow at a time. If a recorder is still starting, recording, or finishing stop/post-processing, a new `start-recording` returns `RECORDER_BUSY`.
+
+**What to do:** Wait for stop to finish (including the post-recording mix step). If the UI looks stuck, quit and relaunch; check the developer console for recorder errors.
+
+---
+
+### 🎤 Recording failed with no microphone audio
+
+**Symptom:** Stop completes but there is no meeting file; you see a failure about empty or missing microphone capture.
+
+**Cause:** The recorder detected no usable mic audio and returned structured `success: false` on stdout (no bogus output path).
+
+**What to do:** Confirm the correct mic in Settings, speak during the test, check OS microphone permission, then record again.
 
 ---
 

@@ -39,8 +39,9 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 
 - **Atomic, locked meeting metadata writes** — `FileLock`-based cross-process locking, atomic temp-file + `os.replace()`, transactional add behavior (originals removed only after metadata is saved).
 - **Corrupt metadata recovery** — corrupt `meetings.json` files are backed up as `meetings.corrupt.*.json` and the app recovers gracefully.
-- **Filesystem rescan / import** — on launch the app rescans the recordings folder and re-imports any meetings present on disk but missing from metadata, preserving suffixed IDs like `meeting_20260107_104555_1`.
-- **Structured stdout JSON event contract** — recorder startup, levels, warnings, errors, and completion are emitted as JSON on stdout; stderr is debug-only. The Electron parser is fully migrated to the JSON contract.
+- **Filesystem rescan / import** — on launch the app rescans the recordings folder and re-imports any meetings present on disk but missing from metadata, preserving suffixed IDs like `meeting_20260107_104555_1`. History search filters metadata only until you refresh.
+- **Structured stdout JSON event contract** — recorder startup, levels, warnings, errors, and completion are emitted as JSON on stdout; stderr is debug-only. The Electron parser is fully migrated to the JSON contract. Failed captures return `success: false` without a bogus output path.
+- **Security and compute hardening (May 2026)** — IPC path guards, sensitive-text redaction, trusted update downloads, single GPU compute queue with wall-clock timeouts, recording lifecycle guards (`RECORDER_BUSY`), and expanded regression tests. See [internal/CODE_REVIEW_REMEDIATION_2026-05.md](internal/CODE_REVIEW_REMEDIATION_2026-05.md) and root [`AGENTS.md`](../AGENTS.md).
 
 ### Branding
 
@@ -48,6 +49,7 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 
 ### Historical milestones
 
+- **May 2026** — Code review remediation merged to `master`: Phases 1–6 (security, recording lifecycle, local AI queue/timeouts, performance). Phase 7 backlog tracked in root `todo.md` and [TODO_ARCHIVE_2026-05-20_CODE_REVIEW_REMEDIATION.md](internal/TODO_ARCHIVE_2026-05-20_CODE_REVIEW_REMEDIATION.md).
 - **v2.1.0** — Local AI add-on reliability hardening: setup/install resilience, cancellation/recovery improvements, offline/cache behavior tightening, and archive extraction performance/safety updates.
 - **v2.0.0** — AvaNevis rebrand and local AI add-ons delivered: optional speaker diarization, optional transcript summaries, History transcript/summary experience, and setup/validation flows.
 - **v1.7.0** — macOS support with Metal GPU acceleration, cross-platform 48 kHz / soxr VHQ parity, Intel Mac CPU fallback (`faster-whisper` int8), 100% feature parity across platforms.

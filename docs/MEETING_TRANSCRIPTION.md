@@ -32,7 +32,9 @@ That preserves transcript access for older meetings whose `.md` file is missing 
 
 ## Scan / Import Recovery
 
-Refreshing history triggers a filesystem scan for orphaned recordings that are not yet in `meetings.json`.
+The app rescans the recordings folder on launch and when you explicitly refresh history. Listing or searching meetings does not rescan the filesystem on every load (that keeps large libraries responsive).
+
+The scan looks for orphaned recordings that are not yet in `meetings.json`.
 
 The recovery scan now:
 
@@ -51,6 +53,9 @@ That last rule matters when Opus compression failed but left behind a bad `.opus
 - atomic temp-file writes plus `os.replace()`
 - duplicate-ID cleanup on load
 - corrupt-file backups named `meetings.corrupt.*.json`
+- path guards: meeting audio, transcript, and AI sidecar paths must stay under the recordings directory; symlinks are rejected
+
+The Electron main process applies the same recordings-directory rules before spawning Python for meeting mutations and local AI work. Persisted `ai.*.error` fields are sanitized so tokens and other secrets do not land in `meetings.json`.
 
 ## Delete Behavior
 

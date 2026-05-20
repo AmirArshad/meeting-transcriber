@@ -31,9 +31,11 @@ The current implementation does not download or install updates inside the app. 
 
 ### Download action
 
-- Clicking `Download Update` calls the `download-update` IPC handler.
-- `src/main.js` forwards that request to `src/updater.js`.
-- `src/updater.js` opens the download URL with `shell.openExternal(...)`.
+- Clicking `Download Update` calls the `download-update` IPC handler (no URL argument from the renderer).
+- `src/main.js` requires trusted renderer sender, then uses only main-process `pendingUpdateInfo` from the last successful check.
+- If no pending update is stored, the handler rejects the request.
+- `src/updater.js` opens the trusted installer or release-page URL with `shell.openExternal(...)`.
+- Dismiss/replay helpers in `update-notification-helpers.js` only surface stored `https:` release URLs.
 
 ## Release Asset Selection
 
@@ -54,6 +56,11 @@ Older "Meeting Transcriber" builds shipped with `INSTALLER_NAME_TOKEN = 'Meeting
 4. Fall back to opening the GitHub release page in the user's browser, where they can manually download `AvaNevis-Setup-<version>.{exe,dmg}` and install it over the old app.
 
 Once the user is on AvaNevis, future AvaNevis-to-AvaNevis updates restore the direct-download `shell.openExternal` flow against the matching installer asset.
+
+## Security notes
+
+- The renderer cannot supply an arbitrary download URL; this prevents open-redirect style abuse if IPC were ever reachable from untrusted content.
+- Updater HTTP responses are read with a UTF-8 encoding and a size cap so malformed or oversized release metadata cannot exhaust memory.
 
 ## Important Properties
 

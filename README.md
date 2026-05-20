@@ -23,7 +23,7 @@ Online meetings are a tax on memory. The good options for getting transcripts ba
 - **Editable meetings** — rename meetings inline (history *and* immediately after recording) without renaming any files; metadata stays anchored to the meeting ID.
 - **Save As anywhere** — export any transcript through Electron's native save dialog as `.md` or `.txt`.
 - **Search and bulk-manage history** — filter the meeting list, multi-select, bulk delete, replay with synchronized audio.
-- **Recovery-friendly storage** — meetings are persisted with an atomic write + cross-process file lock, with corrupt-metadata backups (`meetings.corrupt.*.json`) and filesystem rescan/import on demand.
+- **Recovery-friendly storage** — meetings are persisted with an atomic write + cross-process file lock, with corrupt-metadata backups (`meetings.corrupt.*.json`) and filesystem rescan/import on launch or when you refresh history (not on every list reload).
 - **Optional local AI add-ons** — speaker labels and meeting summaries can be set up after install. Speaker identification uses the user's own Hugging Face token; summaries use pinned local `llama.cpp`/GGUF artifacts and run only when the user clicks Generate Summary.
 - **One-click installer** — Windows NSIS and macOS DMG with embedded Python runtime, ffmpeg, and the bundled native macOS helper. No system Python required.
 - **Update awareness** — checks GitHub Releases on launch and shows an in-app banner with one-click open of the release page.
@@ -34,7 +34,7 @@ Online meetings are a tax on memory. The good options for getting transcripts ba
 - Optional speaker diarization and summaries are local-only after explicit setup.
 - Zero telemetry or analytics.
 - No account, login, or signup.
-- Speaker diarization requires your own Hugging Face token for the gated pyannote model; AvaNevis does not ship, proxy, or log a maintainer-owned token.
+- Speaker diarization requires your own Hugging Face token for the gated pyannote model; AvaNevis does not ship, proxy, or log a maintainer-owned token. Tokens and other secrets are redacted from progress output and from persisted meeting AI error fields.
 - Summary models/runtimes download only after you explicitly start setup from Settings.
 - Open source — audit the code yourself.
 - Third-party licenses and attributions: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
@@ -104,7 +104,7 @@ See [docs/development/BUILD_INSTRUCTIONS.md](docs/development/BUILD_INSTRUCTIONS
 
 AI Add-ons are optional and live under Settings. They are not required for recording or transcription.
 
-- **Speaker Identification:** Windows CUDA and macOS Apple Silicon MPS paths use `pyannote/speaker-diarization-community-1` with the user's own Hugging Face token. When setup is ready, AvaNevis runs diarization before transcription and uses padded speaker turns to create speaker-guided Whisper chunks; if that guided path fails, it saves a normal transcript and records the speaker-label failure. The main process uses catalog-resolved model refs, validates the required accelerator, refuses CPU fallback, and serializes local AI compute work.
+- **Speaker Identification:** Windows CUDA and macOS Apple Silicon MPS paths use `pyannote/speaker-diarization-community-1` with the user's own Hugging Face token. When setup is ready, AvaNevis runs diarization before transcription and uses padded speaker turns to create speaker-guided Whisper chunks; if that guided path fails, it saves a normal transcript and records the speaker-label failure. The main process uses catalog-resolved model refs, validates the required accelerator, refuses CPU fallback, and serializes GPU-heavy work (transcription, diarization, guided transcription, summaries) through one compute queue with wall-clock timeouts so a hung job cannot block the app for the rest of the session.
 - **Meeting Summaries:** Uses a pinned local `llama.cpp` runtime and pinned GGUF model artifacts stored under Electron `userData`. Hugging Face-hosted public GGUF downloads use the bundled `huggingface_hub`/`hf_xet` path without reusing the speaker token. Summary setup verifies HTTPS artifact hosts, SHA-256 checksums, and safe runtime extraction. Summary generation is always user-triggered from Home or History.
 - **Expected size:** the default summary model is about 5.7 GB plus platform runtime archives. CUDA setup remains separate and can add several GB.
 - **Outputs:** derived files are saved beside recordings as `*.speakers.json`, `*.summary.json`, and `*.summary.md`; raw transcripts remain the source of truth.
@@ -137,7 +137,7 @@ For recorder changes, also run the manual smoke checklist in `tests/manual/recor
 
 1. **Pick devices.** Choose a mic, a desktop-audio loopback device, the language, and a Whisper model size in the Settings tab.
 2. **Record.** Both streams are written to disk in parallel (WASAPI loopback on Windows, CoreAudio process tap via the bundled Swift helper on macOS 14.2+, with Swift/PyObjC ScreenCaptureKit fallback). The audio visualizer shows live mic + desktop levels.
-3. **Stop.** The recorder reports completion as a structured stdout JSON event. The two streams are aligned, mixed at 48 kHz stereo, kept mono-compatible for transcription, and compressed to Opus (with WAV fallback if ffmpeg fails).
+3. **Stop.** The recorder reports completion as structured stdout JSON (`success: true` with a file path, or `success: false` with a code and message when capture fails). The main process normalizes Windows `audioPath` and macOS `outputPath` into one `audioPath` for the UI. On success, the two streams are aligned, mixed at 48 kHz stereo, kept mono-compatible for transcription, and compressed to Opus (with WAV fallback if ffmpeg fails).
 4. **Transcribe.** The mixed audio is passed to the platform-appropriate Whisper backend; output lands as a Markdown transcript with `[mm:ss - mm:ss]` timestamp lines.
 5. **Save.** Meeting metadata, audio file, and transcript are persisted to the user-data folder under a unique meeting ID. Meetings that already exist on disk get rescanned and re-imported on launch.
 
@@ -187,11 +187,13 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
   - [Meeting features](docs/MEETING_TRANSCRIPTION.md) — history, recovery, metadata
   - [macOS install guide](docs/MACOS_INSTALLATION.md)
 - **Developers**
+  - [Agent guide / invariants](AGENTS.md) — architecture, IPC contracts, compute queue, validation expectations
   - [Build instructions](docs/development/BUILD_INSTRUCTIONS.md)
   - [Testing guide](docs/development/TESTING.md)
   - [GPU setup (CUDA)](docs/development/SETUP_GPU.md)
   - [Local AI model catalog](docs/development/LOCAL_AI_MODEL_CATALOG.md)
   - [Installer implementation](docs/development/INSTALLER_IMPLEMENTATION.md)
+  - [Code review remediation (May 2026)](docs/internal/CODE_REVIEW_REMEDIATION_2026-05.md)
 - **Roadmap & features**
   - [Roadmap](docs/ROADMAP.md)
   - [Speaker diarization](docs/features/FEATURE_SPEAKER_DIARIZATION.md)
@@ -205,6 +207,7 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
 ## Roadmap (short version)
 
 **Shipped recently**
+- Security and reliability hardening (May 2026): IPC path guards, sensitive-text redaction, trusted update downloads, single GPU compute queue with wall-clock timeouts, recording lifecycle guards (`RECORDER_BUSY`, session-aware failures), recorder `success: false` results, summary sidecar staging, and expanded regression tests. See [docs/internal/CODE_REVIEW_REMEDIATION_2026-05.md](docs/internal/CODE_REVIEW_REMEDIATION_2026-05.md).
 - Optional local AI add-on foundations: Settings setup cards, pinned summary model/runtime catalog, secure diarization token storage, automatic post-transcription speaker labels when setup is ready, and user-triggered summary generation with History Transcript/Summary tabs.
 - Premium dark UI overhaul: vertical icon rail, top-bar pane, expressive dual-channel waveform with peak-hold and interpolation, custom rAF-driven audio scrubber, multi-select with bulk delete, sidebar search, relative-time meeting timestamps, developer console drawer.
 - Markdown transcript rendering in the meeting viewer (timestamps as accent pill chips), with the raw `.md` preserved as the copy/save source of truth.
@@ -230,7 +233,7 @@ Issues and discussions live on GitHub:
 - **Issues:** https://github.com/AmirArshad/meeting-transcriber/issues
 - **Discussions:** https://github.com/AmirArshad/meeting-transcriber/discussions
 
-PRs welcome. Please run `npm run test:all` before opening one and add coverage for any new IPC or recorder-output behavior — the JS test suite asserts cross-process contracts and the Python suite covers meeting-manager invariants.
+PRs welcome. Please run `npm run test:all` before opening one and add coverage for any new IPC or recorder-output behavior — the JS test suite asserts cross-process contracts (paths, recorder stop payloads, compute timeouts, update URL trust) and the Python suite covers meeting-manager invariants. See [`AGENTS.md`](AGENTS.md) when changing main/renderer/Python contracts.
 
 ## Acknowledgments
 

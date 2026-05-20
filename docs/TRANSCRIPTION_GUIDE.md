@@ -46,9 +46,9 @@ Whisper is much better on clean, turn-based speech than on several people talkin
 
 ## Known Limitations
 
-- Speaker diarization is not implemented.
-- Transcript summaries are not implemented.
+- Speaker diarization and transcript summaries are optional local AI add-ons (explicit setup; see feature docs below).
 - Real-time transcription is not implemented.
+- Transcription, guided speaker transcription, diarization, and summaries run one at a time through the main-process compute queue (model download/preload is separate).
 - The UI does not currently expose a separate-track transcription mode for mic-only transcripts.
 - Very noisy or heavily overlapping meetings will still be harder to transcribe accurately.
 
@@ -73,6 +73,7 @@ Whisper is much better on clean, turn-based speech than on several people talkin
 
 ## Related Docs
 
+- Root [`AGENTS.md`](../AGENTS.md) — transcription cache locations, offline behavior, compute queue
 - `docs/MEETING_TRANSCRIPTION.md`
 - `docs/features/FEATURE_SPEAKER_DIARIZATION.md`
 - `docs/features/FEATURE_TRANSCRIPT_SUMMARIES.md`

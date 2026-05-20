@@ -8,9 +8,9 @@ The current test setup is intentionally small and fast. It focuses on high-value
 
 It includes:
 
-- JavaScript tests for main-process helper logic
+- JavaScript tests for main-process helper logic (recorder stop payloads, compute timeouts, trusted update URLs, path guards, spawn output limits)
 - JavaScript syntax checks for key Electron files
-- Python unit tests for pure backend modules
+- Python unit tests for pure backend modules (`meeting_manager` path/symlink rules, sensitive-text redaction, recorder helpers, diarization/summary utilities)
 - A manual smoke checklist for hardware-dependent recording flows
 
 It does not yet include full end-to-end recorder automation with real audio devices.
@@ -155,6 +155,20 @@ This is especially important for:
 - long recording stop/drain behavior
 - quit during active recording
 - Windows loopback recording
+
+## Regression themes (May 2026 remediation)
+
+When changing IPC, recording, or local AI behavior, run `npm run test:all` and consult root [`AGENTS.md`](../../AGENTS.md). High-value automated areas:
+
+| Area | Examples |
+|------|----------|
+| Recorder stdout | `parseRecordingStopResult`, `parseRecorderStdoutChunk`, `success: false` fixtures |
+| Meeting paths | Recordings-dir guards, symlink rejection, `collectPythonProcessOutput` JSON limits |
+| Compute queue | `runWallClockComputeAction`, transcription/diarization/summary timeouts |
+| Updates | `pendingUpdateInfo`-only download, `https:` replay validation |
+| Privacy | `backend/common/sensitive_text.py`, redacted progress and AI error fields |
+
+Full remediation checklist (archived): [`docs/internal/TODO_ARCHIVE_2026-05-20_CODE_REVIEW_REMEDIATION.md`](../internal/TODO_ARCHIVE_2026-05-20_CODE_REVIEW_REMEDIATION.md).
 
 ## CI Coverage
 

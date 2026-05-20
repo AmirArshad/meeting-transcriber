@@ -41,10 +41,16 @@ const parsed = parseRecorderStdoutChunk(chunk, pendingBuffer)
 // kinds: levels, event, warning, error, status, result, text
 ```
 
+### Failed recordings (`success: false`)
+
+When capture fails (for example no microphone audio), recorders emit a final stdout JSON object with `success: false`, a `code`, and a `message` instead of a file path. The main process uses `parseRecordingStopResult` in `src/main-process-helpers.js` to normalize that payload for the renderer.
+
+On success, final result keys remain platform-specific: Windows uses `audioPath`; macOS uses `outputPath`. Electron normalizes both to a single `audioPath` for the UI.
+
 ### Known Issues
 
 1. **Cross-file coordination required**: recorder output changes still affect `backend/audio/*_recorder.py`, `src/main.js`, `src/main-process-helpers.js`, and tests
-2. **Final result keys remain platform-specific**: Windows uses `audioPath`; macOS uses `outputPath`; Electron accepts both
+2. **Final result keys remain platform-specific on the Python side** until both recorders are updated together; Electron already accepts both success shapes
 
 ## Direction
 
@@ -110,7 +116,7 @@ print(json.dumps({
 1. Emit recorder control/status messages as newline-delimited JSON on stdout.
 2. Keep stderr for human-readable logs only.
 3. Keep the event vocabulary stable across Windows and macOS.
-4. Preserve final-result JSON compatibility (`audioPath` on Windows, `outputPath` on macOS) unless all call sites are updated together.
+4. Preserve final-result JSON compatibility (`audioPath` on Windows, `outputPath` on macOS on success; `success: false` with `code`/`message` on failure) unless all call sites are updated together.
 
 ### stderr Role
 
