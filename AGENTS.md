@@ -231,6 +231,8 @@ The generated `build/resources/resource-manifest.json` should continue to invali
 
 Windows packaged Python relies on `python311._pth` containing `../backend`. Dev mode relies on `PYTHONPATH` setup in `src/main.js`.
 
+Packaged apps set `AVANEVIS_PACKAGED=1` in `buildPythonEnv()` (`src/main.js`) for all spawned Python children. `backend/audio/swift_audio_capture.py` must not call `shutil.which("audiocapture-helper")` when that env var is set — only bundled `Resources/bin/audiocapture-helper` (or explicit dev build paths) are valid. Dev/`npm start` leaves the var unset so PATH lookup still works.
+
 ### Meeting metadata persistence
 
 If you change `backend/meeting_manager.py`, preserve:
@@ -245,7 +247,7 @@ If you change `backend/meeting_manager.py`, preserve:
 
 Preferred path is the bundled Swift helper using CoreAudio process taps on macOS 14.2+. The helper falls back to Swift ScreenCaptureKit when CoreAudio tap startup fails or macOS is older; PyObjC ScreenCaptureKit is only a final fallback.
 
-The Swift helper stdout contract is raw interleaved float32 PCM. Helper JSON status, diagnostics, warnings, and errors go to stderr and are parsed by `backend/audio/swift_audio_capture.py`, not directly by Electron.
+The Swift helper stdout contract is raw interleaved float32 PCM. `swift_audio_capture.py` must keep desktop frames as float32 through `samples_to_frames` (no float64 upcast); mixing and one-sided stereo repair in `macos_recorder.py` expect float32-compatible numpy arrays. Helper JSON status, diagnostics, warnings, and errors go to stderr and are parsed by `backend/audio/swift_audio_capture.py`, not directly by Electron.
 
 CoreAudio can expose tap input as multiple channel buffers even when the stream format is not explicitly marked non-interleaved. Preserve the helper's interleaved stdout normalization and the Python mixer one-sided stereo repair so desktop speech survives MLX/ffmpeg mono transcription downmixing.
 

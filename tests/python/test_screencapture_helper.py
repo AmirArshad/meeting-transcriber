@@ -63,6 +63,38 @@ def test_parse_permission_check_output_uses_last_permission_payload():
     assert error is None
 
 
+def test_get_audiocapture_helper_path_skips_which_when_packaged(tmp_path, monkeypatch):
+    import shutil
+
+    which_calls = []
+    monkeypatch.setattr(shutil, 'which', lambda name: which_calls.append(name))
+    monkeypatch.setenv('AVANEVIS_PACKAGED', '1')
+
+    fake_module_file = tmp_path / 'resources' / 'backend' / 'audio' / 'swift_audio_capture.py'
+    monkeypatch.setattr(swift_capture_module, '__file__', str(fake_module_file))
+
+    assert swift_capture_module.get_audiocapture_helper_path() is None
+    assert which_calls == []
+
+
+def test_get_audiocapture_helper_path_packaged_uses_bundle_without_which(tmp_path, monkeypatch):
+    import shutil
+
+    which_calls = []
+    monkeypatch.setattr(shutil, 'which', lambda name: which_calls.append(name))
+    monkeypatch.setenv('AVANEVIS_PACKAGED', '1')
+
+    audio_dir = tmp_path / 'resources' / 'backend' / 'audio'
+    helper_path = tmp_path / 'resources' / 'bin' / 'audiocapture-helper'
+    helper_path.parent.mkdir(parents=True)
+    helper_path.write_text('')
+
+    monkeypatch.setattr(swift_capture_module, '__file__', str(audio_dir / 'swift_audio_capture.py'))
+
+    assert swift_capture_module.get_audiocapture_helper_path() == helper_path
+    assert which_calls == []
+
+
 def test_get_audiocapture_helper_path_finds_repo_local_swift_build(tmp_path, monkeypatch):
     repo_root = tmp_path / 'meeting-transcriber'
     helper_path = repo_root / 'swift' / 'AudioCaptureHelper' / '.build' / 'release' / 'audiocapture-helper'
@@ -359,6 +391,35 @@ def test_macos_one_sided_stereo_repair_keeps_balanced_stereo_unchanged():
 
     repaired = macos_recorder_module._repair_one_sided_stereo(audio, 'desktop')
 
+    assert np.allclose(repaired, audio)
+
+
+def test_macos_one_sided_stereo_repair_preserves_float32_desktop_frames():
+    import numpy as np
+
+    audio = np.column_stack([
+        np.array([0.0, 0.5, -0.5, 0.25], dtype=np.float32),
+        np.zeros(4, dtype=np.float32),
+    ])
+
+    repaired = macos_recorder_module._repair_one_sided_stereo(audio, 'desktop')
+
+    assert repaired.dtype == np.float32
+    assert np.allclose(repaired[:, 0], audio[:, 0])
+    assert np.allclose(repaired[:, 1], audio[:, 0])
+
+
+def test_macos_one_sided_stereo_repair_keeps_balanced_float32_unchanged():
+    import numpy as np
+
+    audio = np.column_stack([
+        np.array([0.0, 0.5, -0.5, 0.25], dtype=np.float32),
+        np.array([0.1, -0.4, 0.4, -0.2], dtype=np.float32),
+    ])
+
+    repaired = macos_recorder_module._repair_one_sided_stereo(audio, 'desktop')
+
+    assert repaired.dtype == np.float32
     assert np.allclose(repaired, audio)
 
 

@@ -719,9 +719,11 @@ function buildPythonEnv(extra = {}) {
   const basePythonPath = pythonConfig.backendPath + (process.env.PYTHONPATH ?
     (process.platform === 'win32' ? ';' : ':') + process.env.PYTHONPATH : '');
   const separator = process.platform === 'win32' ? ';' : ':';
+  const packagedEnv = app.isPackaged ? { AVANEVIS_PACKAGED: '1' } : {};
 
   return {
     ...process.env,
+    ...packagedEnv,
     ...restExtra,
     PYTHONPATH: extraPythonPath ? `${extraPythonPath}${separator}${basePythonPath}` : basePythonPath,
   };

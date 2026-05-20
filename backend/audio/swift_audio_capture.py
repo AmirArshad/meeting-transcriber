@@ -12,6 +12,7 @@ The Swift helper:
 - Accepts "stop" command on stdin
 """
 
+import os
 import sys
 import subprocess
 import threading
@@ -19,6 +20,18 @@ import json
 import numpy as np
 from pathlib import Path
 from typing import Optional, Callable
+
+
+def _log_helper_search_miss(possible_paths: list[Path], *, packaged: bool) -> None:
+    if packaged:
+        print(
+            "audiocapture-helper not found in packaged app resources (PATH lookup skipped):",
+            file=sys.stderr,
+        )
+    else:
+        print("audiocapture-helper not found. Searched:", file=sys.stderr)
+    for path in possible_paths:
+        print(f"  - {path}", file=sys.stderr)
 
 
 def get_audiocapture_helper_path() -> Optional[Path]:
@@ -55,16 +68,19 @@ def get_audiocapture_helper_path() -> Optional[Path]:
             print(f"Found audiocapture-helper at: {path}", file=sys.stderr)
             return path
 
-    # Check system PATH
+    # Packaged Electron builds ship the helper under Resources/bin; PATH lookup can
+    # resolve a stale dev binary and must be skipped when AVANEVIS_PACKAGED=1.
+    if os.environ.get('AVANEVIS_PACKAGED') == '1':
+        _log_helper_search_miss(possible_paths, packaged=True)
+        return None
+
+    # Development: allow a locally built helper on PATH
     which_path = shutil.which("audiocapture-helper")
     if which_path:
         print(f"Found audiocapture-helper in PATH: {which_path}", file=sys.stderr)
         return Path(which_path)
 
-    print(f"audiocapture-helper not found. Searched:", file=sys.stderr)
-    for p in possible_paths:
-        print(f"  - {p}", file=sys.stderr)
-
+    _log_helper_search_miss(possible_paths, packaged=False)
     return None
 
 
@@ -416,7 +432,7 @@ class SwiftAudioCapture:
 
             # For mono, no frame alignment needed
             if self.channels == 1:
-                return samples.reshape(-1, 1).astype(np.float64)
+                return samples.reshape(-1, 1)
 
             # Ensure frame alignment (all channels present for each frame)
             leftover_samples = len(samples) % self.channels
@@ -427,9 +443,8 @@ class SwiftAudioCapture:
             if len(samples) == 0:
                 return None
 
-            # Reshape to (frames, channels) for interleaved stereo data
-            # Convert to float64 for consistency with sounddevice mic input
-            return samples.reshape(-1, self.channels).astype(np.float64)
+            # Reshape to (frames, channels); keep float32 from helper stdout (matches mic path)
+            return samples.reshape(-1, self.channels)
 
         def process_audio_bytes(data: bytes) -> Optional[np.ndarray]:
             """Process raw bytes into audio frames through both alignment stages."""
