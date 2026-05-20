@@ -17,7 +17,7 @@ test('getRecordButtonAction stops from recording', () => {
 
 
 test('getRecordButtonAction ignores busy renderer states', () => {
-  for (const state of ['initializing', 'countdown', 'stopping', 'transcribing']) {
+  for (const state of ['starting', 'initializing', 'countdown', 'stopping', 'transcribing']) {
     assert.equal(getRecordButtonAction(state), 'ignore');
   }
 });

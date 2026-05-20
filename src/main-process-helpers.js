@@ -120,6 +120,18 @@ function normalizeModelSize(modelSize, { defaultSize = 'small' } = {}) {
   };
 }
 
+function isRecorderBusy({ pythonProcess = null, recordingStopPromise = null } = {}) {
+  return Boolean(pythonProcess || recordingStopPromise);
+}
+
+function buildRecorderBusyResponse() {
+  return {
+    success: false,
+    code: 'RECORDER_BUSY',
+    message: 'Recorder is already active or finishing a previous recording.',
+  };
+}
+
 function getModelDownloadCacheDir(homeDir) {
   return path.join(homeDir, '.cache', 'huggingface', 'hub');
 }
@@ -1148,7 +1160,9 @@ module.exports = {
   ALLOWED_WHISPER_MODELS,
   appendCappedSpawnLogBuffer,
   appendSpawnJsonResultBuffer,
+  buildRecorderBusyResponse,
   createLineChunkRedactor,
+  isRecorderBusy,
   normalizeModelSize,
   SPAWN_LOG_BUFFER_MAX_CHARS,
   SPAWN_JSON_RESULT_BUFFER_MAX_CHARS,

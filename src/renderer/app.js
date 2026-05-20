@@ -44,9 +44,11 @@ const refreshHistory = document.getElementById('refresh-history');
 const deleteMeeting = document.getElementById('delete-meeting');
 
 // State
-let recordingState = 'idle'; // idle, recording, stopping, transcribing, countdown
+let recordingState = 'idle'; // idle, starting, recording, stopping, transcribing, countdown
 let countdownValue = 3;
 let recordingStartTime = null;
+let activeRecordingSessionId = null;
+let activeCountdownCancel = null;
 let timerInterval = null;
 let currentAudioFile = null;
 let currentMeetingId = null;
@@ -1689,6 +1691,16 @@ function setupEventListeners() {
   }));
 
   registerCleanup(window.electronAPI.onRecordingFailed((failure) => {
+    if (failure?.sessionId != null && activeRecordingSessionId != null && failure.sessionId !== activeRecordingSessionId) {
+      console.warn('Ignoring stale recording failure:', failure);
+      return;
+    }
+
+    if (recordingState === 'stopping' || recordingState === 'transcribing') {
+      console.warn('Ignoring recording failure during stop/transcribe flow:', failure);
+      return;
+    }
+
     console.error('Recording failed:', failure);
     addLog(`Recording failed: ${failure.message}`, 'error');
     if (failure.help) {
@@ -1736,7 +1748,19 @@ function handleRecordButtonClick() {
 }
 
 // Set recording state and update UI
+function cancelActiveCountdown() {
+  if (typeof activeCountdownCancel === 'function') {
+    activeCountdownCancel();
+    activeCountdownCancel = null;
+  }
+}
+
 function setRecordingState(state) {
+  if (state === 'idle') {
+    cancelActiveCountdown();
+    activeRecordingSessionId = null;
+  }
+
   recordingState = state;
   updateButtonUI();
   updateControlsState();
@@ -1759,6 +1783,15 @@ function updateButtonUI() {
       text.textContent = 'Initializing...';
       statusIndicator.classList.remove('recording');
       statusText.textContent = 'Initializing...';
+      break;
+
+    case 'starting':
+      button.classList.add('processing');
+      button.disabled = true;
+      icon.textContent = '⏳';
+      text.textContent = 'Starting...';
+      statusIndicator.classList.remove('recording');
+      statusText.textContent = 'Running checks...';
       break;
 
     case 'idle':
@@ -1859,6 +1892,8 @@ async function startRecording() {
     return;
   }
 
+  setRecordingState('starting');
+
   const preflightPassed = await runRecordingPreflightChecks({ micId, desktopId });
   if (!preflightPassed) {
     addLog('Recording canceled by preflight checks.', 'warning');
@@ -1892,12 +1927,26 @@ async function startRecording() {
         isFirstRecording: isFirstRecording && attempt === 1 // Only use first-recording timeout on first attempt
       });
 
-      // Countdown runs in parallel (3 seconds)
-      const countdownPromise = startCountdown();
+      const { promise: countdownPromise, cancel: cancelCountdown } = startCountdown();
 
-      // Wait for both to complete
-      // In most cases, countdown will finish first and backend will be ready by then
-      await Promise.all([recordingPromise, countdownPromise]);
+      let recordingResult;
+      try {
+        [recordingResult] = await Promise.all([recordingPromise, countdownPromise]);
+      } catch (error) {
+        cancelCountdown();
+        throw error;
+      }
+
+      if (recordingResult?.code === 'RECORDER_BUSY') {
+        cancelCountdown();
+        addLog('Recording start ignored because the recorder is already busy.', 'warning');
+        setRecordingState('idle');
+        return;
+      }
+
+      if (recordingResult?.sessionId != null) {
+        activeRecordingSessionId = recordingResult.sessionId;
+      }
 
       // After first successful recording, set flag to false
       if (isFirstRecording) {
@@ -1924,6 +1973,11 @@ async function startRecording() {
 
     } catch (error) {
       console.error(`Failed to start recording (attempt ${attempt}):`, error);
+      cancelActiveCountdown();
+
+      if (error?.sessionId != null) {
+        activeRecordingSessionId = error.sessionId;
+      }
 
       if (attempt >= maxAttempts) {
         // All attempts failed
@@ -1983,21 +2037,41 @@ async function startRecording() {
 
 // Countdown function
 function startCountdown() {
-  return new Promise((resolve) => {
+  let interval = null;
+  let settled = false;
+
+  const promise = new Promise((resolve) => {
     countdownValue = 3;
-    updateButtonUI(); // Show initial "Starting in 3..."
-    
-    const interval = setInterval(() => {
-      countdownValue--;
-      
+    updateButtonUI();
+
+    interval = setInterval(() => {
+      countdownValue -= 1;
+
       if (countdownValue > 0) {
         updateButtonUI();
       } else {
+        settled = true;
         clearInterval(interval);
+        interval = null;
+        activeCountdownCancel = null;
         resolve();
       }
     }, 1000);
   });
+
+  const cancel = () => {
+    if (interval) {
+      clearInterval(interval);
+      interval = null;
+    }
+    if (!settled) {
+      settled = true;
+    }
+    activeCountdownCancel = null;
+  };
+
+  activeCountdownCancel = cancel;
+  return { promise, cancel };
 }
 
 // Stop recording and auto-transcribe

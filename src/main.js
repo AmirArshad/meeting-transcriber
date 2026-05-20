@@ -53,6 +53,8 @@ const {
   appendSpawnJsonResultBuffer,
   createLineChunkRedactor,
   normalizeModelSize,
+  buildRecorderBusyResponse,
+  isRecorderBusy,
   SPAWN_LOG_BUFFER_MAX_CHARS,
   SPAWN_JSON_RESULT_BUFFER_MAX_CHARS,
   redactSensitiveText,
@@ -108,6 +110,7 @@ let quitWorkflowPromise = null;
 let allowImmediateQuit = false;
 let pendingUpdateInfo = null;
 let diarizationDependencySitePackagesCache = null;
+let recordingSessionCounter = 0;
 
 function getSafeStorage() {
   // On macOS, Electron safeStorage can prompt Keychain access. Keep this lazy
@@ -201,6 +204,41 @@ function collectPythonProcessOutput(python, { jsonResult = false } = {}) {
 
 function isDevToolsEnabled() {
   return !app.isPackaged || process.env.AVANEVIS_ENABLE_DEVTOOLS === '1';
+}
+
+function assertTrustedRendererSender(event) {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
+    throw new Error('Untrusted IPC sender.');
+  }
+}
+
+function hasInFlightAiWork() {
+  return aiAddonSetupAbortControllers.size > 0 || Boolean(activeSummaryGeneration);
+}
+
+function abortInFlightAiWork() {
+  for (const controller of aiAddonSetupAbortControllers.values()) {
+    try {
+      controller.abort(createAiAddonCancelError('Local AI work was canceled because the app is quitting.'));
+    } catch (error) {
+      // Best effort abort.
+    }
+  }
+
+  if (activeSummaryGeneration?.controller && !activeSummaryGeneration.controller.signal.aborted) {
+    activeSummaryGeneration.controller.abort(createAiAddonCancelError('Summary generation was canceled because the app is quitting.'));
+  }
+
+  terminateProcessBestEffort(activeSummaryGeneration?.process);
+}
+
+async function drainAiWorkBeforeQuit() {
+  abortInFlightAiWork();
+  await new Promise((resolve) => setTimeout(resolve, 250));
+
+  for (const proc of activeProcesses) {
+    terminateProcessBestEffort(proc);
+  }
 }
 
 function sendUpdateAvailable(updateInfo) {
@@ -1728,7 +1766,18 @@ app.on('before-quit', (event) => {
     return;
   }
 
+  if (!allowImmediateQuit && hasInFlightAiWork()) {
+    event.preventDefault();
+    void (async () => {
+      await drainAiWorkBeforeQuit();
+      allowImmediateQuit = true;
+      app.quit();
+    })();
+    return;
+  }
+
   isQuitting = true;
+  abortInFlightAiWork();
 
   if (recordingHeartbeat) {
     clearInterval(recordingHeartbeat);
@@ -2722,6 +2771,14 @@ ipcMain.handle('download-model', async (event, modelSize) => {
  * Start recording with improved timeout and progress feedback
  */
 ipcMain.handle('start-recording', async (event, options) => {
+  assertTrustedRendererSender(event);
+
+  if (isRecorderBusy({ pythonProcess, recordingStopPromise })) {
+    return buildRecorderBusyResponse();
+  }
+
+  const sessionId = ++recordingSessionCounter;
+
   return new Promise((resolve, reject) => {
     const { micId, loopbackId, isFirstRecording } = options;
 
@@ -2759,20 +2816,26 @@ ipcMain.handle('start-recording', async (event, options) => {
     const isMac = process.platform === 'darwin';
     const recorderModule = isMac ? 'audio.macos_recorder' : 'audio.windows_recorder';
 
-    pythonProcess = spawnTrackedPython([
+    const proc = spawnTrackedPython([
       '-m', recorderModule,
       '--mic', micId.toString(),
       '--loopback', loopbackId.toString(),
       '--output', outputPath
     ], { cwd: pythonConfig.backendPath });
+    pythonProcess = proc;
 
     // FIX 2 (REFINED): Set high priority for Python recording process on Windows
     // Use small delay to ensure process is fully initialized before setting priority
-    if (process.platform === 'win32' && pythonProcess.pid) {
+    if (process.platform === 'win32' && proc.pid) {
+      const procPid = proc.pid;
       setTimeout(() => {
+        if (pythonProcess !== proc || !procPid) {
+          return;
+        }
+
         try {
           const { exec } = require('child_process');
-          exec(`wmic process where processid="${pythonProcess.pid}" CALL setpriority "high priority"`, (error) => {
+          exec(`wmic process where processid="${procPid}" CALL setpriority "high priority"`, (error) => {
             if (error) {
               console.warn('Failed to set high priority:', error.message);
             } else {
@@ -2796,6 +2859,22 @@ ipcMain.handle('start-recording', async (event, options) => {
       mainWindow.webContents.send('recording-init-progress', { stage, message });
     };
 
+    const rejectStartupFailure = (errorMessage) => {
+      if (startupSettled) {
+        return;
+      }
+
+      startupSettled = true;
+      if (pythonProcess === proc) {
+        clearRecordingRuntimeState('recording startup failure');
+      }
+
+      const error = new Error(errorMessage);
+      error.code = 'STARTUP_FAILED';
+      error.sessionId = sessionId;
+      reject(error);
+    };
+
     const failActiveRecording = (warning) => {
       const payload = {
         type: warning.type || 'recorder_exited',
@@ -2805,8 +2884,13 @@ ipcMain.handle('start-recording', async (event, options) => {
         level: warning.level || 'error',
       };
 
+      if (pythonProcess === proc) {
+        clearRecordingRuntimeState('recording failed');
+      }
+
       sendToRenderer('recording-warning', payload);
       sendToRenderer('recording-failed', {
+        sessionId,
         message: payload.message,
         code: payload.code,
         help: payload.help,
@@ -2850,7 +2934,7 @@ ipcMain.handle('start-recording', async (event, options) => {
         const timeSinceUpdate = Date.now() - lastLevelUpdate;
 
         // If no audio level updates for 10 seconds, something is wrong
-        if (timeSinceUpdate > 10000 && pythonProcess && !pythonProcess.killed) {
+        if (timeSinceUpdate > 10000 && pythonProcess === proc && !proc.killed) {
           console.error(`Recording heartbeat lost - no audio levels for ${timeSinceUpdate / 1000}s`);
           mainWindow.webContents.send('recording-warning', {
             type: 'heartbeat_lost',
@@ -2863,7 +2947,7 @@ ipcMain.handle('start-recording', async (event, options) => {
 
       sendInitProgress('started', message);
       startupSettled = true;
-      resolve({ success: true, message: 'Recording started' });
+      resolve({ success: true, message: 'Recording started', sessionId });
     };
 
     // PERFORMANCE FIX: Throttle audio level updates to reduce IPC overhead
@@ -2871,7 +2955,7 @@ ipcMain.handle('start-recording', async (event, options) => {
     let lastLevelSentTime = 0;
     const LEVEL_UPDATE_THROTTLE_MS = 100; // Max 10 updates/sec instead of 20
 
-    pythonProcess.stdout.on('data', (data) => {
+    proc.stdout.on('data', (data) => {
       const parsedChunk = parseRecorderStdoutChunk(data.toString(), stdoutRemainder);
       stdoutRemainder = parsedChunk.remainder;
 
@@ -2953,12 +3037,14 @@ ipcMain.handle('start-recording', async (event, options) => {
       }
     });
 
-    pythonProcess.stderr.on('data', (data) => {
+    proc.stderr.on('data', (data) => {
       const output = data.toString();
       console.log(`Python status: ${output}`);
     });
 
-    pythonProcess.on('close', (code) => {
+    const handleProcessClosed = (code) => {
+      clearTimeout(timeoutHandle);
+
       const closeAction = getRecorderCloseAction({
         recordingStarted,
         stopInProgress: Boolean(recordingStopPromise),
@@ -2973,7 +3059,7 @@ ipcMain.handle('start-recording', async (event, options) => {
       }
 
       if (closeAction.type === 'startup_already_settled') {
-        if (pythonProcess) {
+        if (pythonProcess === proc) {
           clearRecordingRuntimeState('recording startup already settled');
         }
         return;
@@ -2993,9 +3079,37 @@ ipcMain.handle('start-recording', async (event, options) => {
       }
 
       if (closeAction.errorMessage) {
-        startupSettled = true;
-        reject(new Error(closeAction.errorMessage));
+        rejectStartupFailure(closeAction.errorMessage);
       }
+    };
+
+    proc.on('close', handleProcessClosed);
+
+    proc.on('error', (spawnError) => {
+      if (proc !== pythonProcess) {
+        return;
+      }
+
+      clearTimeout(timeoutHandle);
+
+      if (recordingStopPromise) {
+        return;
+      }
+
+      const wasRecording = recordingStarted;
+      recordingStarted = false;
+      clearRecordingRuntimeState(spawnError?.message || 'recorder process error');
+
+      if (wasRecording) {
+        failActiveRecording({
+          type: 'recorder_error',
+          code: 'RECORDER_PROCESS_ERROR',
+          message: spawnError?.message || 'Recorder process failed.',
+        });
+        return;
+      }
+
+      rejectStartupFailure(spawnError?.message || 'Recorder process failed to start.');
     });
 
     // Longer timeout for first recording (15s), shorter for subsequent (10s)
@@ -3016,27 +3130,20 @@ ipcMain.handle('start-recording', async (event, options) => {
           errorMessage += '\nTry selecting different audio devices or restarting the app.';
         }
 
-        startupSettled = true;
-        const timedOutProcess = pythonProcess;
-        if (timedOutProcess && !timedOutProcess.killed) {
-          timedOutProcess.kill();
+        if (pythonProcess === proc && !proc.killed) {
+          proc.kill();
         }
-        clearRecordingRuntimeState('recording startup timeout');
-        reject(new Error(errorMessage));
+        rejectStartupFailure(errorMessage);
       }
     }, timeout);
-
-    // Clean up timeout if recording starts successfully
-    pythonProcess.on('close', () => {
-      clearTimeout(timeoutHandle);
-    });
   });
 });
 
 /**
  * Stop recording
  */
-ipcMain.handle('stop-recording', async () => {
+ipcMain.handle('stop-recording', async (event) => {
+  assertTrustedRendererSender(event);
   return waitForRecordingStop({
     forceKillOnTimeout: true,
     timeoutMessage: 'Recording stop timeout - process took too long to finish',

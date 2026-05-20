@@ -90,14 +90,14 @@ npm run test:python
 
 **Elevated within phase:** 2.1 + 2.4 — concurrent start is reachable via renderer double-click during preflight.
 
-- [ ] **2.1** Reject `start-recording` when `pythonProcess` active or `recordingStopPromise` in flight; guard **before** `powerSaveBlocker.start` (`src/main.js`). Return `{ code: 'RECORDER_BUSY', ... }` for renderer to ignore vs alert.
-- [ ] **2.2** Always clear `pythonProcess` on all exit paths: add `pythonProcess.on('error', …)` → same cleanup as `close`; audit `failActiveRecording` (emit-only today). Capture local `proc` in handlers so concurrent overwrite (2.1) cannot target wrong PID.
-- [ ] **2.3** Merge duplicate `pythonProcess.on('close')` handlers — `clearTimeout(timeoutHandle)` inside the single handler (`src/main.js` ~2865, ~2934).
-- [ ] **2.4** Renderer: set `recordingState` to `'starting'` **before** `runRecordingPreflightChecks` `await`; extend `getRecordButtonAction` / button UI for busy state (`src/renderer/app.js`, `recording-state-helpers.js`). Prefer new `'starting'` over reusing `'initializing'`.
-- [ ] **2.5** Renderer: cancellable `startCountdown` (return `{ promise, cancel }`); clear interval on retry/failure and in `setRecordingState('idle')` (`app.js` ~1873–1998).
-- [ ] **2.6** Renderer: session epoch for `onRecordingFailed` — ignore stale failures; do not force `idle` during `stopping`/`transcribing` without main ack (`app.js` ~1691+). Keep `sessionId` on IPC only — **not** in recorder stdout JSON.
-- [ ] **2.7** Quit path: abort all `aiAddonSetupAbortControllers`, `activeSummaryGeneration?.controller.abort(...)`, then brief drain/kill AI children (`src/main.js` `before-quit` ~1646+). Extend intercept path if setup/summary in flight.
-- [ ] **2.8** Optional: `ipcMain` sender check `event.sender === mainWindow.webContents` (wrap high-risk handlers only; do not blanket-wrap without audit).
+- [x] **2.1** Reject `start-recording` when `pythonProcess` active or `recordingStopPromise` in flight; guard **before** `powerSaveBlocker.start` (`src/main.js`). Return `{ code: 'RECORDER_BUSY', ... }` for renderer to ignore vs alert.
+- [x] **2.2** Always clear `pythonProcess` on all exit paths: add `pythonProcess.on('error', …)` → same cleanup as `close`; audit `failActiveRecording` (emit-only today). Capture local `proc` in handlers so concurrent overwrite (2.1) cannot target wrong PID.
+- [x] **2.3** Merge duplicate `pythonProcess.on('close')` handlers — `clearTimeout(timeoutHandle)` inside the single handler (`src/main.js` ~2865, ~2934).
+- [x] **2.4** Renderer: set `recordingState` to `'starting'` **before** `runRecordingPreflightChecks` `await`; extend `getRecordButtonAction` / button UI for busy state (`src/renderer/app.js`, `recording-state-helpers.js`). Prefer new `'starting'` over reusing `'initializing'`.
+- [x] **2.5** Renderer: cancellable `startCountdown` (return `{ promise, cancel }`); clear interval on retry/failure and in `setRecordingState('idle')` (`app.js` ~1873–1998).
+- [x] **2.6** Renderer: session epoch for `onRecordingFailed` — ignore stale failures; do not force `idle` during `stopping`/`transcribing` without main ack (`app.js` ~1691+). Keep `sessionId` on IPC only — **not** in recorder stdout JSON.
+- [x] **2.7** Quit path: abort all `aiAddonSetupAbortControllers`, `activeSummaryGeneration?.controller.abort(...)`, then brief drain/kill AI children (`src/main.js` `before-quit` ~1646+). Extend intercept path if setup/summary in flight.
+- [x] **2.8** Optional: `ipcMain` sender check `event.sender === mainWindow.webContents` (wrap high-risk handlers only; do not blanket-wrap without audit).
 
 **Phase 2 manual:** double-click Start during preflight; quit during recording; quit during transcription.
 
@@ -195,7 +195,7 @@ npm run test:python
 | Phase | Focus | Status |
 |-------|--------|--------|
 | 1 | Hygiene + `modelSize` allowlist (1.14) | Complete |
-| 2 | Recording lifecycle | Not started |
+| 2 | Recording lifecycle | Complete |
 | 3 | Path enforcement | Not started |
 | 4 | Recorder correctness | Not started |
 | 5 | AI concurrency & archives (5.3 before 5.1) | Not started |

@@ -58,7 +58,9 @@ const {
   splitBufferedLines,
   appendCappedSpawnLogBuffer,
   appendSpawnJsonResultBuffer,
+  buildRecorderBusyResponse,
   normalizeModelSize,
+  isRecorderBusy,
   ALLOWED_WHISPER_MODELS,
   MACOS_PERMISSION_CHECK_TIMEOUT_MS,
 } = mainProcessHelpers;
@@ -413,6 +415,20 @@ test('normalizeModelSize accepts allowlisted sizes and rejects unknown values', 
   assert.deepEqual(normalizeModelSize('large-v3'), { ok: true, modelSize: 'large-v3' });
   assert.equal(normalizeModelSize('../../../etc/passwd').ok, false);
   assert.equal(ALLOWED_WHISPER_MODELS.includes('small'), true);
+});
+
+test('isRecorderBusy detects active recorder or stop workflow', () => {
+  assert.equal(isRecorderBusy({ pythonProcess: null, recordingStopPromise: null }), false);
+  assert.equal(isRecorderBusy({ pythonProcess: {}, recordingStopPromise: null }), true);
+  assert.equal(isRecorderBusy({ pythonProcess: null, recordingStopPromise: Promise.resolve() }), true);
+});
+
+test('buildRecorderBusyResponse returns structured busy error', () => {
+  assert.deepEqual(buildRecorderBusyResponse(), {
+    success: false,
+    code: 'RECORDER_BUSY',
+    message: 'Recorder is already active or finishing a previous recording.',
+  });
 });
 
 test('appendCappedSpawnLogBuffer keeps the tail when stderr exceeds the cap', () => {
