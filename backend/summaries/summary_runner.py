@@ -6,12 +6,13 @@ import argparse
 import hashlib
 import json
 import os
-import re
 import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional
+
+from common.sensitive_text import redact_sensitive_text
 
 from .llama_runtime import build_summary_progress_event, resolve_llama_runtime, run_llama_prompt, smoke_test_llama_runtime
 from .summary_pipeline import (
@@ -33,7 +34,7 @@ CHUNK_PROMPT_TOKEN_RESERVE = 6000
 
 
 def _safe_message(message: Any) -> str:
-    return re.sub(r"\s+", " ", str(message or "")).strip()[:300]
+    return redact_sensitive_text(message)
 
 
 def emit_progress(meeting_id: str, phase: str, message: str, *, chunk_index: Optional[int] = None, chunk_total: Optional[int] = None) -> None:

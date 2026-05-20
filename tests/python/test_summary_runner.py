@@ -235,3 +235,19 @@ def test_summary_runner_module_execution_has_no_preimport_warning(tmp_path):
     )
 
     assert 'RuntimeWarning' not in result.stderr
+
+
+def test_summary_runner_help_exits_successfully():
+    result = subprocess.run(
+        [sys.executable, '-m', 'summaries.summary_runner', '--help'],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            **os.environ,
+            'PYTHONPATH': str(Path(__file__).resolve().parents[2] / 'backend'),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert 'Generate a local AvaNevis meeting summary' in result.stdout

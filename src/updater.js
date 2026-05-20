@@ -7,7 +7,7 @@
 
 const { app, shell } = require('electron');
 const https = require('https');
-const { resolveExternalUrl } = require('./main-process-helpers');
+const { resolveExternalUrl, UPDATER_HTTP_RESPONSE_MAX_CHARS } = require('./main-process-helpers');
 
 // GitHub repository info
 const REPO_OWNER = 'AmirArshad';
@@ -81,7 +81,11 @@ function fetchLatestRelease() {
       let data = '';
 
       res.on('data', (chunk) => {
-        data += chunk;
+        if (data.length >= UPDATER_HTTP_RESPONSE_MAX_CHARS) {
+          return;
+        }
+        const remaining = UPDATER_HTTP_RESPONSE_MAX_CHARS - data.length;
+        data += chunk.length > remaining ? chunk.slice(0, remaining) : chunk;
       });
 
       res.on('end', () => {

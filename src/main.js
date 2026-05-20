@@ -49,6 +49,13 @@ const {
   getLegalNoticesPath,
   resolveTranscriptionAudioFile,
   summarizeAiBackendError,
+  appendCappedSpawnLogBuffer,
+  appendSpawnJsonResultBuffer,
+  createLineChunkRedactor,
+  normalizeModelSize,
+  SPAWN_LOG_BUFFER_MAX_CHARS,
+  SPAWN_JSON_RESULT_BUFFER_MAX_CHARS,
+  redactSensitiveText,
   TRANSCRIPTION_CUDA_PACKAGES,
   MACOS_PERMISSION_CHECK_TIMEOUT_MS,
 } = require('./main-process-helpers');
@@ -66,6 +73,7 @@ const {
   setupSummaryModel,
   validateDiarizationSetup,
   validateSummaryModel,
+  isLikelyHuggingFaceToken,
 } = require('./ai-addon-setup');
 const {
   getDiarizationAvailability,
@@ -129,6 +137,70 @@ function sendToRenderer(channel, payload) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(channel, payload);
   }
+}
+
+function appendSpawnLogBuffer(buffer, chunk) {
+  return appendCappedSpawnLogBuffer(buffer, chunk, SPAWN_LOG_BUFFER_MAX_CHARS);
+}
+
+function appendSpawnJsonStdout(buffer, chunk, overflowState) {
+  const result = appendSpawnJsonResultBuffer(buffer, chunk, SPAWN_JSON_RESULT_BUFFER_MAX_CHARS);
+  if (result.overflowed) {
+    overflowState.overflowed = true;
+  }
+  return result.buffer;
+}
+
+function sendRedactedProgress(channel, chunk, redactor) {
+  const redacted = redactor.redactChunk(chunk);
+  if (redacted) {
+    sendToRenderer(channel, redacted);
+  }
+}
+
+function flushRedactedProgress(channel, redactor) {
+  const flushed = redactor.flush();
+  if (flushed) {
+    sendToRenderer(channel, flushed);
+  }
+}
+
+function requireAllowedModelSize(modelSize, defaultSize = 'small') {
+  const normalized = normalizeModelSize(modelSize, { defaultSize });
+  if (!normalized.ok) {
+    throw new Error(normalized.error);
+  }
+  return normalized.modelSize;
+}
+
+function collectPythonProcessOutput(python, { jsonResult = false } = {}) {
+  let stdout = '';
+  let stderr = '';
+  const stdoutOverflow = { overflowed: false };
+
+  python.stdout.on('data', (data) => {
+    stdout = jsonResult
+      ? appendSpawnJsonStdout(stdout, data, stdoutOverflow)
+      : appendSpawnLogBuffer(stdout, data);
+  });
+
+  python.stderr.on('data', (data) => {
+    stderr = appendSpawnLogBuffer(stderr, data);
+  });
+
+  return {
+    getStdout: () => stdout,
+    getStderr: () => stderr,
+    assertStdoutWithinLimit: () => {
+      if (stdoutOverflow.overflowed) {
+        throw new Error('Process output exceeded the maximum allowed size.');
+      }
+    },
+  };
+}
+
+function isDevToolsEnabled() {
+  return !app.isPackaged || process.env.AVANEVIS_ENABLE_DEVTOOLS === '1';
 }
 
 function sendUpdateAvailable(updateInfo) {
@@ -461,28 +533,26 @@ function addMeetingToHistory(meetingData) {
 
     const python = spawnTrackedPython(args, { cwd: pythonConfig.backendPath });
 
-    let output = '';
-    let errorOutput = '';
-
-    python.stdout.on('data', (data) => {
-      output += data.toString();
-    });
-
-    python.stderr.on('data', (data) => {
-      errorOutput += data.toString();
-    });
+    const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
 
     python.on('close', (code) => {
+      try {
+        processOutput.assertStdoutWithinLimit();
+      } catch (error) {
+        reject(error);
+        return;
+      }
+
       if (code === 0) {
         try {
-          resolve(JSON.parse(output));
+          resolve(JSON.parse(processOutput.getStdout()));
         } catch (error) {
           reject(new Error(`Failed to parse saved meeting: ${error.message}`));
         }
         return;
       }
 
-      reject(new Error(`Failed to save meeting: ${errorOutput.trim() || 'Unknown error'}`));
+      reject(new Error(`Failed to save meeting: ${processOutput.getStderr().trim() || 'Unknown error'}`));
     });
 
     python.on('error', reject);
@@ -921,8 +991,8 @@ function runProcessWithTimeout(command, args, timeoutMs = 10000) {
       return;
     }
 
-    proc.stdout.on('data', (data) => { stdout += data.toString(); });
-    proc.stderr.on('data', (data) => { stderr += data.toString(); });
+    proc.stdout.on('data', (data) => { stdout = appendSpawnLogBuffer(stdout, data); });
+    proc.stderr.on('data', (data) => { stderr = appendSpawnLogBuffer(stderr, data); });
 
     proc.on('close', (code) => {
       if (!resolved) {
@@ -1357,10 +1427,12 @@ function createApplicationMenu() {
     {
       label: 'View',
       submenu: [
-        { role: 'reload' },
-        { role: 'forceReload' },
-        { role: 'toggleDevTools' },
-        { type: 'separator' },
+        ...(isDevToolsEnabled() ? [
+          { role: 'reload' },
+          { role: 'forceReload' },
+          { role: 'toggleDevTools' },
+          { type: 'separator' },
+        ] : []),
         { role: 'resetZoom' },
         { role: 'zoomIn' },
         { role: 'zoomOut' },
@@ -1466,11 +1538,11 @@ function checkMacOSPermissions() {
   let stderr = '';
 
   proc.stdout.on('data', (data) => {
-    stdout += data.toString();
+    stdout = appendSpawnLogBuffer(stdout, data);
   });
 
   proc.stderr.on('data', (data) => {
-    stderr += data.toString();
+    stderr = appendSpawnLogBuffer(stderr, data);
   });
 
   proc.on('close', (code) => {
@@ -1554,11 +1626,11 @@ function getMacOSPermissionStatus(micId = null) {
     }, MACOS_PERMISSION_CHECK_TIMEOUT_MS);
 
     proc.stdout.on('data', (data) => {
-      stdout += data.toString();
+      stdout = appendSpawnLogBuffer(stdout, data);
     });
 
     proc.stderr.on('data', (data) => {
-      stderr += data.toString();
+      stderr = appendSpawnLogBuffer(stderr, data);
     });
 
     proc.on('close', () => {
@@ -1737,8 +1809,8 @@ function validateSelectedDevices({ micId, loopbackId }) {
       return;
     }
 
-    python.stdout.on('data', (data) => { output += data.toString(); });
-    python.stderr.on('data', (data) => { errorOutput += data.toString(); });
+    python.stdout.on('data', (data) => { output = appendSpawnLogBuffer(output, data); });
+    python.stderr.on('data', (data) => { errorOutput = appendSpawnLogBuffer(errorOutput, data); });
 
     python.on('close', (code) => {
       if (resolved) return;
@@ -1866,7 +1938,7 @@ function checkAudioOutputSupport() {
       return;
     }
 
-    proc.stdout.on('data', (data) => { output += data.toString(); });
+    proc.stdout.on('data', (data) => { output = appendSpawnLogBuffer(output, data); });
 
     proc.on('close', (code) => {
       if (resolved) return;
@@ -2151,10 +2223,10 @@ function validateDiarizationRuntime({ modelRef, token, requiredDevice, cancelSig
         cleanupCancel();
         callback(value);
       };
-      python.stdout.on('data', (data) => { output += data.toString(); });
+      python.stdout.on('data', (data) => { output = appendSpawnLogBuffer(output, data); });
       python.stderr.on('data', (data) => {
         const stderrChunk = data.toString();
-        errorOutput += stderrChunk;
+        errorOutput = appendSpawnLogBuffer(errorOutput, stderrChunk);
         for (const line of stderrChunk.split(/\r?\n/)) {
           const progressEvent = parseAiBackendProgressLine(line, 'diarization');
           if (progressEvent) {
@@ -2331,8 +2403,8 @@ function validateSummaryRuntimeSmoke({ modelId, cache, cancelSignal }) {
         cleanupCancel();
         callback(value);
       };
-      python.stdout.on('data', (data) => { output += data.toString(); });
-      python.stderr.on('data', (data) => { errorOutput += data.toString(); });
+      python.stdout.on('data', (data) => { output = appendSpawnLogBuffer(output, data); });
+      python.stderr.on('data', (data) => { errorOutput = appendSpawnLogBuffer(errorOutput, data); });
       python.on('close', (code) => {
         if (code === 0) {
           try {
@@ -2379,12 +2451,34 @@ ipcMain.handle('get-ai-addon-status', async (event, options = {}) => checkAiAddo
   checkTokenEncryption: false,
 }));
 
-ipcMain.handle('store-diarization-token', async (event, token) => storeAiAddonToken({
-  userDataDir: app.getPath('userData'),
-  tokenKey: TOKEN_KEYS.diarizationHuggingFace,
-  token,
-  safeStorage: getSafeStorage(),
-}));
+ipcMain.handle('store-diarization-token', async (event, token) => {
+  const trimmedToken = typeof token === 'string' ? token.trim() : '';
+  if (!trimmedToken) {
+    return { success: false, code: 'EMPTY_TOKEN', message: 'Token must not be empty.' };
+  }
+  if (!isLikelyHuggingFaceToken(trimmedToken)) {
+    return {
+      success: false,
+      code: 'INVALID_TOKEN',
+      message: 'Hugging Face token does not match the expected token format.',
+    };
+  }
+
+  try {
+    return await storeAiAddonToken({
+      userDataDir: app.getPath('userData'),
+      tokenKey: TOKEN_KEYS.diarizationHuggingFace,
+      token: trimmedToken,
+      safeStorage: getSafeStorage(),
+    });
+  } catch (error) {
+    return {
+      success: false,
+      code: 'STORAGE_ERROR',
+      message: error.message || 'Secure token storage is unavailable.',
+    };
+  }
+});
 
 ipcMain.handle('get-diarization-token-status', async () => ({
   hasToken: hasAiAddonToken({
@@ -2480,11 +2574,11 @@ ipcMain.handle('get-audio-devices', async () => {
     let errorOutput = '';
 
     python.stdout.on('data', (data) => {
-      output += data.toString();
+      output = appendSpawnLogBuffer(output, data);
     });
 
     python.stderr.on('data', (data) => {
-      errorOutput += data.toString();
+      errorOutput = appendSpawnLogBuffer(errorOutput, data);
     });
 
     python.on('close', (code) => {
@@ -2519,7 +2613,7 @@ ipcMain.handle('warm-up-audio-system', async () => {
     let output = '';
 
     python.stdout.on('data', (data) => {
-      output += data.toString();
+      output = appendSpawnLogBuffer(output, data);
     });
 
     python.on('close', (code) => {
@@ -2548,12 +2642,13 @@ ipcMain.handle('warm-up-audio-system', async () => {
  * Check if Whisper model is downloaded
  */
 ipcMain.handle('check-model-downloaded', async (event, modelSize) => {
+  const size = requireAllowedModelSize(modelSize);
   return new Promise((resolve) => {
-    const { cacheDir, modelPatterns, modelSize: size } = buildModelDownloadCheck({
+    const { cacheDir, modelPatterns } = buildModelDownloadCheck({
       platform: process.platform,
       arch: process.arch,
       homeDir: os.homedir(),
-      modelSize,
+      modelSize: size,
     });
 
     try {
@@ -2575,8 +2670,8 @@ ipcMain.handle('check-model-downloaded', async (event, modelSize) => {
  * Download Whisper model (preload)
  */
 ipcMain.handle('download-model', async (event, modelSize) => {
+  const model = requireAllowedModelSize(modelSize);
   return new Promise((resolve, reject) => {
-    const model = modelSize || 'small';
     console.log(`Downloading Whisper model: ${model}`);
 
     const downloadCheck = getTranscriptionModelDownloadCheck(model);
@@ -2593,13 +2688,13 @@ ipcMain.handle('download-model', async (event, modelSize) => {
     });
 
     let hasError = false;
+    const progressRedactor = createLineChunkRedactor();
 
     python.stderr.on('data', (data) => {
       const output = data.toString();
       console.log(`[Model Download] ${output}`);
 
-      // Send progress to renderer
-      mainWindow.webContents.send('model-download-progress', output);
+      sendRedactedProgress('model-download-progress', output, progressRedactor);
 
       // Check for errors
       if (isModelDownloadErrorOutput(output)) {
@@ -2608,6 +2703,7 @@ ipcMain.handle('download-model', async (event, modelSize) => {
     });
 
     python.on('close', (code) => {
+      flushRedactedProgress('model-download-progress', progressRedactor);
       if (code === 0) {
         console.log('Model downloaded successfully');
         resolve({ success: true });
@@ -2954,6 +3050,13 @@ ipcMain.handle('transcribe-audio', async (event, options) => {
   return new Promise((resolve, reject) => {
     let { audioFile, language, modelSize } = options;
 
+    try {
+      modelSize = requireAllowedModelSize(modelSize);
+    } catch (error) {
+      reject(error);
+      return;
+    }
+
     // Resolve relative paths. Keep real .wav fallback files transcribable; only
     // fall back to an .opus sibling when the .wav path is missing.
     if (!path.isAbsolute(audioFile)) {
@@ -2975,17 +3078,19 @@ ipcMain.handle('transcribe-audio', async (event, options) => {
     const python = spawnTrackedPython(getTranscriberArgs([
       '--file', audioFile,
       '--language', language || 'en',
-      '--model', modelSize || 'small',
+      '--model', modelSize,
       '--json'
-    ]), { cwd: pythonConfig.backendPath, env: getTranscriptionRuntimeEnv(modelSize || 'small') });
+    ]), { cwd: pythonConfig.backendPath, env: getTranscriptionRuntimeEnv(modelSize) });
 
     let output = '';
     let errorOutput = '';
     let hasCompleted = false;
+    const stdoutOverflow = { overflowed: false };
+    const progressRedactor = createLineChunkRedactor();
 
     // Timeout: generous limits for slow CPUs and long recordings
     // These are safety nets to catch stalled processes, not performance limits
-    const modelTimeouts = { tiny: 30, base: 45, small: 60, medium: 90, large: 120 };
+    const modelTimeouts = { tiny: 30, base: 45, small: 60, medium: 90, large: 120, 'large-v3': 120 };
     const timeoutMinutes = modelTimeouts[modelSize] || 60;
     const transcriptionTimeout = setTimeout(() => {
       if (!hasCompleted) {
@@ -2996,19 +3101,25 @@ ipcMain.handle('transcribe-audio', async (event, options) => {
     }, timeoutMinutes * 60 * 1000);
 
     python.stdout.on('data', (data) => {
-      output += data.toString();
+      output = appendSpawnJsonStdout(output, data, stdoutOverflow);
     });
 
     python.stderr.on('data', (data) => {
       const stderrChunk = data.toString();
-      errorOutput += stderrChunk;
-      mainWindow.webContents.send('transcription-progress', stderrChunk);
+      errorOutput = appendSpawnLogBuffer(errorOutput, stderrChunk);
+      sendRedactedProgress('transcription-progress', stderrChunk, progressRedactor);
     });
 
     python.on('close', (code) => {
       if (hasCompleted) return; // Already timed out
       hasCompleted = true;
       clearTimeout(transcriptionTimeout);
+      flushRedactedProgress('transcription-progress', progressRedactor);
+
+      if (stdoutOverflow.overflowed) {
+        reject(new Error('Transcription output exceeded the maximum allowed size.'));
+        return;
+      }
 
       // Try to parse JSON output first, even if exit code is non-zero
       // This handles cases where transcription succeeds but cleanup fails
@@ -3037,6 +3148,7 @@ ipcMain.handle('transcribe-audio', async (event, options) => {
 
 ipcMain.handle('transcribe-audio-with-speakers', async (event, options = {}) => {
   let { audioFile, language, modelSize, speakerCount } = options;
+  modelSize = requireAllowedModelSize(modelSize);
 
   if (!audioFile) {
     throw new Error('transcribe-audio-with-speakers requires an audioFile');
@@ -3118,7 +3230,7 @@ ipcMain.handle('transcribe-audio-with-speakers', async (event, options = {}) => 
       if (progressEvent) {
         sendToRenderer('diarization-progress', progressEvent);
       } else if (line.trim()) {
-        sendToRenderer('transcription-progress', line);
+        sendToRenderer('transcription-progress', `${redactSensitiveText(line)}\n`);
       }
     },
   }));
@@ -3191,14 +3303,15 @@ ipcMain.handle('diarize-transcript', async (event, options = {}) => {
 
     let output = '';
     let errorOutput = '';
+    const stdoutOverflow = { overflowed: false };
 
     python.stdout.on('data', (data) => {
-      output += data.toString();
+      output = appendSpawnJsonStdout(output, data, stdoutOverflow);
     });
 
     python.stderr.on('data', (data) => {
       const stderrChunk = data.toString();
-      errorOutput += stderrChunk;
+      errorOutput = appendSpawnLogBuffer(errorOutput, stderrChunk);
       for (const line of stderrChunk.split(/\r?\n/)) {
         const progressEvent = parseAiBackendProgressLine(line, 'diarization');
         if (progressEvent) {
@@ -3210,6 +3323,11 @@ ipcMain.handle('diarize-transcript', async (event, options = {}) => {
     python.on('close', (code) => {
       if (tempSegmentsPath) {
         fs.promises.rm(path.dirname(tempSegmentsPath), { recursive: true, force: true }).catch(() => {});
+      }
+
+      if (stdoutOverflow.overflowed) {
+        reject(new Error('Speaker diarization output exceeded the maximum allowed size.'));
+        return;
       }
 
       if (code === 0) {
@@ -3293,8 +3411,8 @@ ipcMain.handle('generate-summary', async (event, options = {}) => {
     activeSummaryGeneration.process = python;
     let output = '';
     let errorOutput = '';
-    python.stdout.on('data', (data) => { output += data.toString(); });
-    python.stderr.on('data', (data) => { errorOutput += data.toString(); });
+    python.stdout.on('data', (data) => { output = appendSpawnLogBuffer(output, data); });
+    python.stderr.on('data', (data) => { errorOutput = appendSpawnLogBuffer(errorOutput, data); });
     python.on('close', (code) => {
       if (controller.signal.aborted) {
         finishPreflight(reject, createAiAddonCancelError('Summary generation was canceled.'));
@@ -3405,6 +3523,7 @@ ipcMain.handle('generate-summary', async (event, options = {}) => {
 
     let output = '';
     let errorOutput = '';
+    const stdoutOverflow = { overflowed: false };
     const cleanupCancel = (() => {
       const handleAbort = () => {
         if (summarySettled) {
@@ -3426,12 +3545,12 @@ ipcMain.handle('generate-summary', async (event, options = {}) => {
     };
 
     python.stdout.on('data', (data) => {
-      output += data.toString();
+      output = appendSpawnJsonStdout(output, data, stdoutOverflow);
     });
 
     python.stderr.on('data', (data) => {
       const stderrChunk = data.toString();
-      errorOutput += stderrChunk;
+      errorOutput = appendSpawnLogBuffer(errorOutput, stderrChunk);
       for (const line of stderrChunk.split(/\r?\n/)) {
         const progressEvent = parseAiBackendProgressLine(line, 'summary');
         if (progressEvent) {
@@ -3445,11 +3564,12 @@ ipcMain.handle('generate-summary', async (event, options = {}) => {
         finish(reject, createAiAddonCancelError('Summary generation was canceled.'));
         return;
       }
+      if (stdoutOverflow.overflowed) {
+        finish(reject, new Error('Summary generation output exceeded the maximum allowed size.'));
+        return;
+      }
       if (code !== 0) {
-        const reason = errorOutput && errorOutput.trim()
-          ? errorOutput.trim().split(/\r?\n/).filter(Boolean).slice(-1)[0]
-          : '';
-        finish(reject, new Error(reason || 'Summary generation failed.'));
+        finish(reject, new Error(summarizeSummaryValidationError(errorOutput)));
         return;
       }
 
@@ -3481,11 +3601,18 @@ ipcMain.handle('generate-summary', async (event, options = {}) => {
           ]), { cwd: pythonConfig.backendPath });
           let metadataOutput = '';
           let metadataErrorOutput = '';
-          pythonUpdate.stdout.on('data', (data) => { metadataOutput += data.toString(); });
-          pythonUpdate.stderr.on('data', (data) => { metadataErrorOutput += data.toString(); });
+          const metadataStdoutOverflow = { overflowed: false };
+          pythonUpdate.stdout.on('data', (data) => {
+            metadataOutput = appendSpawnJsonStdout(metadataOutput, data, metadataStdoutOverflow);
+          });
+          pythonUpdate.stderr.on('data', (data) => { metadataErrorOutput = appendSpawnLogBuffer(metadataErrorOutput, data); });
           pythonUpdate.on('close', (updateCode) => {
             if (controller.signal.aborted) {
               metadataReject(createAiAddonCancelError('Summary generation was canceled.'));
+              return;
+            }
+            if (metadataStdoutOverflow.overflowed) {
+              metadataReject(new Error('Summary metadata update output exceeded the maximum allowed size.'));
               return;
             }
             if (updateCode === 0) {
@@ -3496,7 +3623,7 @@ ipcMain.handle('generate-summary', async (event, options = {}) => {
               }
               return;
             }
-            metadataReject(new Error(metadataErrorOutput.trim() || 'Failed to update summary metadata'));
+            metadataReject(new Error(summarizeSummaryValidationError(metadataErrorOutput) || 'Failed to update summary metadata'));
           });
           pythonUpdate.on('error', (error) => metadataReject(controller.signal.aborted ? createAiAddonCancelError('Summary generation was canceled.') : error));
         });
@@ -3547,11 +3674,11 @@ ipcMain.handle('list-meetings', async () => {
     let errorOutput = '';
 
     python.stdout.on('data', (data) => {
-      output += data.toString();
+      output = appendSpawnLogBuffer(output, data);
     });
 
     python.stderr.on('data', (data) => {
-      errorOutput += data.toString();
+      errorOutput = appendSpawnLogBuffer(errorOutput, data);
     });
 
     python.on('close', (code) => {
@@ -3582,27 +3709,25 @@ ipcMain.handle('get-meeting', async (event, meetingId) => {
       meetingId
     ]), { cwd: pythonConfig.backendPath });
 
-    let output = '';
-    let errorOutput = '';
-
-    python.stdout.on('data', (data) => {
-      output += data.toString();
-    });
-
-    python.stderr.on('data', (data) => {
-      errorOutput += data.toString();
-    });
+    const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
 
     python.on('close', (code) => {
+      try {
+        processOutput.assertStdoutWithinLimit();
+      } catch (error) {
+        reject(error);
+        return;
+      }
+
       if (code === 0) {
         try {
-          const meeting = JSON.parse(output);
+          const meeting = JSON.parse(processOutput.getStdout());
           resolve(meeting);
         } catch (e) {
           reject(new Error(`Failed to parse meeting: ${e.message}`));
         }
       } else {
-        const errorMsg = errorOutput.trim() || 'Meeting not found';
+        const errorMsg = processOutput.getStderr().trim() || 'Meeting not found';
         reject(new Error(errorMsg));
       }
     });
@@ -3625,7 +3750,7 @@ ipcMain.handle('delete-meeting', async (event, meetingId) => {
     let errorOutput = '';
 
     python.stderr.on('data', (data) => {
-      errorOutput += data.toString();
+      errorOutput = appendSpawnLogBuffer(errorOutput, data);
     });
 
     python.on('close', (code) => {
@@ -3658,11 +3783,11 @@ ipcMain.handle('scan-recordings', async () => {
     let errorOutput = '';
 
     python.stdout.on('data', (data) => {
-      output += data.toString();
+      output = appendSpawnLogBuffer(output, data);
     });
 
     python.stderr.on('data', (data) => {
-      errorOutput += data.toString();
+      errorOutput = appendSpawnLogBuffer(errorOutput, data);
     });
 
     python.on('close', (code) => {
@@ -3719,8 +3844,8 @@ ipcMain.handle('update-meeting', async (event, payload) => {
     let output = '';
     let errorOutput = '';
 
-    python.stdout.on('data', (data) => { output += data.toString(); });
-    python.stderr.on('data', (data) => { errorOutput += data.toString(); });
+    python.stdout.on('data', (data) => { output = appendSpawnLogBuffer(output, data); });
+    python.stderr.on('data', (data) => { errorOutput = appendSpawnLogBuffer(errorOutput, data); });
 
     python.on('close', (code) => {
       if (code === 0) {
@@ -3781,8 +3906,8 @@ ipcMain.handle('update-meeting-ai', async (event, payload) => {
     let output = '';
     let errorOutput = '';
 
-    python.stdout.on('data', (data) => { output += data.toString(); });
-    python.stderr.on('data', (data) => { errorOutput += data.toString(); });
+    python.stdout.on('data', (data) => { output = appendSpawnLogBuffer(output, data); });
+    python.stderr.on('data', (data) => { errorOutput = appendSpawnLogBuffer(errorOutput, data); });
 
     python.on('close', (code) => {
       if (code === 0) {
@@ -3902,7 +4027,7 @@ ipcMain.handle('check-gpu', async () => {
     let output = '';
 
     python.stdout.on('data', (data) => {
-      output += data.toString();
+      output = appendSpawnLogBuffer(output, data);
     });
 
     python.on('close', () => {
@@ -3929,7 +4054,7 @@ ipcMain.handle('check-cuda', async () => {
     let output = '';
 
     python.stdout.on('data', (data) => {
-      output += data.toString();
+      output = appendSpawnLogBuffer(output, data);
     });
 
     python.on('close', () => {
@@ -3975,18 +4100,18 @@ ipcMain.handle('install-gpu', async () => {
 
       let output = '';
       let errorOutput = '';
+      const progressRedactor = createLineChunkRedactor();
 
       python.stdout.on('data', (data) => {
         const text = data.toString();
-        output += text;
-        // Send progress to renderer
-        mainWindow.webContents.send('gpu-install-progress', text);
+        output = appendSpawnLogBuffer(output, text);
+        sendRedactedProgress('gpu-install-progress', text, progressRedactor);
       });
 
       python.stderr.on('data', (data) => {
         const text = data.toString();
-        errorOutput += text;
-        mainWindow.webContents.send('gpu-install-progress', text);
+        errorOutput = appendSpawnLogBuffer(errorOutput, text);
+        sendRedactedProgress('gpu-install-progress', text, progressRedactor);
       });
 
       python.on('close', (code) => {
@@ -3995,6 +4120,7 @@ ipcMain.handle('install-gpu', async () => {
         } else {
           reject(new Error(`Failed to install CUDA libraries: ${errorOutput}`));
         }
+        flushRedactedProgress('gpu-install-progress', progressRedactor);
       });
     }).catch((error) => {
       reject(new Error(`Could not verify Python before installing GPU acceleration: ${error.message}`));
@@ -4012,7 +4138,7 @@ ipcMain.handle('uninstall-gpu', async () => {
     let errorOutput = '';
 
     python.stderr.on('data', (data) => {
-      errorOutput += data.toString();
+      errorOutput = appendSpawnLogBuffer(errorOutput, data);
     });
 
     python.on('close', (code) => {
@@ -4112,8 +4238,12 @@ ipcMain.handle('open-legal-notices', async () => {
 /**
  * Open update download page in browser
  */
-ipcMain.handle('download-update', async (event, downloadUrl) => {
-  await openDownloadPage(downloadUrl);
+ipcMain.handle('download-update', async () => {
+  if (!pendingUpdateInfo || !pendingUpdateInfo.downloadUrl) {
+    throw new Error('No pending update is available to download.');
+  }
+
+  await openDownloadPage(pendingUpdateInfo.downloadUrl);
   return { success: true };
 });
 

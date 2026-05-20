@@ -1,7 +1,12 @@
 const path = require('path');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
-const { redactSensitiveText, SENSITIVE_PROGRESS_KEY_SET } = require('./ai-progress-sanitizer');
+const { redactSensitiveText, createLineChunkRedactor, SENSITIVE_PROGRESS_KEY_SET } = require('./ai-progress-sanitizer');
+
+const ALLOWED_WHISPER_MODELS = Object.freeze(['tiny', 'base', 'small', 'medium', 'large', 'large-v3']);
+const SPAWN_LOG_BUFFER_MAX_CHARS = 512 * 1024;
+const SPAWN_JSON_RESULT_BUFFER_MAX_CHARS = 32 * 1024 * 1024;
+const UPDATER_HTTP_RESPONSE_MAX_CHARS = 1024 * 1024;
 
 const TRUSTED_GITHUB_PATH_PREFIX = '/AmirArshad/meeting-transcriber';
 const TRUSTED_HUGGING_FACE_PATHS = new Set([
@@ -74,6 +79,45 @@ function getLegalNoticesPath(options = {}) {
 
   const devPath = path.join(devRoot, 'THIRD_PARTY_NOTICES.md');
   return fs.existsSync(devPath) ? devPath : null;
+}
+
+function appendCappedSpawnLogBuffer(buffer, chunk, maxChars = SPAWN_LOG_BUFFER_MAX_CHARS) {
+  const combined = `${buffer || ''}${String(chunk || '')}`;
+  if (combined.length <= maxChars) {
+    return combined;
+  }
+  return combined.slice(combined.length - maxChars);
+}
+
+function appendSpawnJsonResultBuffer(buffer, chunk, maxChars = SPAWN_JSON_RESULT_BUFFER_MAX_CHARS) {
+  const current = buffer || '';
+  const nextChunk = String(chunk || '');
+  const nextLength = current.length + nextChunk.length;
+  if (nextLength > maxChars) {
+    return {
+      buffer: current,
+      overflowed: true,
+    };
+  }
+  return {
+    buffer: current + nextChunk,
+    overflowed: false,
+  };
+}
+
+function normalizeModelSize(modelSize, { defaultSize = 'small' } = {}) {
+  const normalized = String(modelSize || '').trim().toLowerCase();
+  if (!normalized) {
+    return { ok: true, modelSize: defaultSize };
+  }
+  if (ALLOWED_WHISPER_MODELS.includes(normalized)) {
+    return { ok: true, modelSize: normalized };
+  }
+  return {
+    ok: false,
+    modelSize: null,
+    error: `Unsupported Whisper model size: ${modelSize}`,
+  };
 }
 
 function getModelDownloadCacheDir(homeDir) {
@@ -387,6 +431,7 @@ function runGuidedTranscriptionProcess({
     const python = spawnProcess(args, { cwd, env });
     let output = '';
     let errorOutput = '';
+    let stdoutOverflowed = false;
     let hasCompleted = false;
 
     const cleanupTemp = () => {
@@ -415,12 +460,14 @@ function runGuidedTranscriptionProcess({
     }, timeoutMinutes * 60 * 1000);
 
     python.stdout.on('data', (data) => {
-      output += data.toString();
+      const result = appendSpawnJsonResultBuffer(output, data, SPAWN_JSON_RESULT_BUFFER_MAX_CHARS);
+      output = result.buffer;
+      stdoutOverflowed = stdoutOverflowed || result.overflowed;
     });
 
     python.stderr.on('data', (data) => {
       const stderrChunk = data.toString();
-      errorOutput += stderrChunk;
+      errorOutput = appendCappedSpawnLogBuffer(errorOutput, stderrChunk);
       if (typeof onProgressLine === 'function') {
         for (const line of stderrChunk.split(/\r?\n/)) {
           if (line.trim()) {
@@ -432,6 +479,11 @@ function runGuidedTranscriptionProcess({
 
     python.on('close', async (code) => {
       if (hasCompleted) return;
+      if (stdoutOverflowed) {
+        cleanupTemp();
+        finish(reject, new Error('Speaker-guided transcription output exceeded the maximum allowed size.'));
+        return;
+      }
       if (code === 0) {
         try {
           const result = JSON.parse(output);
@@ -1093,6 +1145,14 @@ function buildRecordingPreflightReport({
 }
 
 module.exports = {
+  ALLOWED_WHISPER_MODELS,
+  appendCappedSpawnLogBuffer,
+  appendSpawnJsonResultBuffer,
+  createLineChunkRedactor,
+  normalizeModelSize,
+  SPAWN_LOG_BUFFER_MAX_CHARS,
+  SPAWN_JSON_RESULT_BUFFER_MAX_CHARS,
+  UPDATER_HTTP_RESPONSE_MAX_CHARS,
   buildFileUrl,
   buildDesktopAudioAvailabilityError,
   buildMacOSPermissionCheckFailureStatus,

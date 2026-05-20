@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const mainProcessHelpers = require('../../src/main-process-helpers');
+const { createLineChunkRedactor } = require('../../src/ai-progress-sanitizer');
 
 const {
   buildFileUrl,
@@ -55,6 +56,10 @@ const {
   resolveTranscriptionAudioFile,
   summarizeAiBackendError,
   splitBufferedLines,
+  appendCappedSpawnLogBuffer,
+  appendSpawnJsonResultBuffer,
+  normalizeModelSize,
+  ALLOWED_WHISPER_MODELS,
   MACOS_PERMISSION_CHECK_TIMEOUT_MS,
 } = mainProcessHelpers;
 
@@ -376,6 +381,53 @@ test('redactSensitiveText preserves at signs outside URL credentials', () => {
   const url = 'https://api.huggingface.co/models?webhook=user@example.com#team@docs';
 
   assert.equal(redactSensitiveText(url), url);
+});
+
+test('createLineChunkRedactor redacts tokens split across stderr chunks', () => {
+  const redactor = createLineChunkRedactor();
+  const first = redactor.redactChunk('prefix hf_abc');
+  assert.equal(first, '');
+
+  const second = redactor.redactChunk('123token suffix\nnext line hf_other\n');
+  assert.match(second, /\[redacted-token]/);
+  assert.equal(second.includes('hf_abc123token'), false);
+  assert.match(second, /next line \[redacted-token]/);
+});
+
+test('createLineChunkRedactor flush emits trailing partial line', () => {
+  const redactor = createLineChunkRedactor();
+  assert.equal(redactor.redactChunk('still running hf_secret_token'), '');
+  assert.equal(redactor.flush(), 'still running [redacted-token]');
+  assert.equal(redactor.flush(), '');
+});
+
+test('createLineChunkRedactor caps unbounded newline-free remainder', () => {
+  const redactor = createLineChunkRedactor({ maxRemainderChars: 8 });
+  assert.equal(redactor.redactChunk('123456789'), '');
+  assert.equal(redactor.flush(), '23456789');
+});
+
+test('normalizeModelSize accepts allowlisted sizes and rejects unknown values', () => {
+  assert.deepEqual(normalizeModelSize('small'), { ok: true, modelSize: 'small' });
+  assert.deepEqual(normalizeModelSize(''), { ok: true, modelSize: 'small' });
+  assert.deepEqual(normalizeModelSize('large-v3'), { ok: true, modelSize: 'large-v3' });
+  assert.equal(normalizeModelSize('../../../etc/passwd').ok, false);
+  assert.equal(ALLOWED_WHISPER_MODELS.includes('small'), true);
+});
+
+test('appendCappedSpawnLogBuffer keeps the tail when stderr exceeds the cap', () => {
+  const capped = appendCappedSpawnLogBuffer('0123456789', 'abcdef', 8);
+  assert.equal(capped, '89abcdef');
+});
+
+test('appendSpawnJsonResultBuffer rejects growth beyond the JSON result cap', () => {
+  const within = appendSpawnJsonResultBuffer('abc', 'def', 10);
+  assert.equal(within.overflowed, false);
+  assert.equal(within.buffer, 'abcdef');
+
+  const overflow = appendSpawnJsonResultBuffer('0123456789', 'abc', 10);
+  assert.equal(overflow.overflowed, true);
+  assert.equal(overflow.buffer, '0123456789');
 });
 
 

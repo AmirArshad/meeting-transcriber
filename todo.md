@@ -65,20 +65,20 @@ npm run test:python
 
 **Elevated within phase (do early):** 1.2, 1.4, 1.14 — security-relevant IPC/sanitization.
 
-- [ ] **1.1** Clear GPU install progress interval on failure (`src/renderer/app.js` `installGPUAcceleration` — use `finally { clearInterval(...) }`; mirror FTUE ~1022).
-- [ ] **1.2** Bind `download-update` IPC to `pendingUpdateInfo` only; drop renderer `downloadUrl` param from preload (`src/main.js`, `src/preload.js`, `src/updater.js`). Reject when `pendingUpdateInfo == null`.
-- [ ] **1.3** Cap stdout/stderr buffer growth in main Python spawns and updater HTTP (`src/main.js`, `src/main-process-helpers.js` if shared helper extracted). **Caveat:** cap stderr/log freely; for result-JSON stdout (transcription, stop recording) use hard `maxBuffer` + reject — do not truncate mid-JSON.
-- [ ] **1.4** Sanitize `transcription-progress`, `model-download-progress`, and `gpu-install-progress` with `redactSensitiveText` before IPC (`src/ai-progress-sanitizer.js`). Prefer line-chunked redaction so split tokens across buffer boundaries are not missed.
-- [ ] **1.5** Use `summarizeSummaryValidationError` (or shared `summarizeAiBackendError`) for summary failure messages (`src/main.js` ~3448+); redact metadata-phase errors too.
-- [ ] **1.6** Validate HF token format in `store-diarization-token` IPC (`isLikelyHuggingFaceToken` from `ai-addon-setup.js`); trim before check; return structured error for renderer.
-- [ ] **1.7** Gate DevTools (and optionally reload/forceReload) behind `!app.isPackaged` or `AVANEVIS_ENABLE_DEVTOOLS=1` (`src/main.js` menu).
-- [ ] **1.8** Remove preload startup `console.log` (`src/preload.js` — only log in dev if needed).
-- [ ] **1.9** Remove dead `offUpdateAvailable` from preload (unused; `onUpdateAvailable` already returns a disposer). Do not “fix” with `removeAllListeners`.
-- [ ] **1.10** Redact HF tokens in persisted meeting AI `error` fields (`backend/meeting_manager.py`; align with `diarization_pipeline._safe_message`).
-- [ ] **1.11** Share redaction helper in `summary_runner.py` with diarization (e.g. `backend/common/sensitive_text.py`; fold `hf_model_downloader` duplicate regex).
-- [ ] **1.12** Clear `hideAiAddonProgressSoon` timeouts on new progress / teardown — per-feature timer map (`src/renderer/app.js`).
-- [ ] **1.13** Home-tab `copyTranscript` clipboard `.catch` + user feedback (match history copy); guard empty text.
-- [ ] **1.14** Allowlist `modelSize` on all transcription IPCs: `check-model-downloaded`, `download-model`, `transcribe-audio`, `transcribe-audio-with-speakers` (`src/main.js` + `src/main-process-helpers.js`; central `ALLOWED_WHISPER_MODELS` / `normalizeModelSize`). *Moved forward from Phase 6 — flows to filesystem patterns and Python `--model` with no validation today.*
+- [x] **1.1** Clear GPU install progress interval on failure (`src/renderer/app.js` `installGPUAcceleration` — use `finally { clearInterval(...) }`; mirror FTUE ~1022).
+- [x] **1.2** Bind `download-update` IPC to `pendingUpdateInfo` only; drop renderer `downloadUrl` param from preload (`src/main.js`, `src/preload.js`, `src/updater.js`). Reject when `pendingUpdateInfo == null`.
+- [x] **1.3** Cap stdout/stderr buffer growth in main Python spawns and updater HTTP (`src/main.js`, `src/main-process-helpers.js` if shared helper extracted). **Caveat:** cap stderr/log freely; for result-JSON stdout (transcription, stop recording) use hard `maxBuffer` + reject — do not truncate mid-JSON.
+- [x] **1.4** Sanitize `transcription-progress`, `model-download-progress`, and `gpu-install-progress` with `redactSensitiveText` before IPC (`src/ai-progress-sanitizer.js`). Prefer line-chunked redaction so split tokens across buffer boundaries are not missed.
+- [x] **1.5** Use `summarizeSummaryValidationError` (or shared `summarizeAiBackendError`) for summary failure messages (`src/main.js` ~3448+); redact metadata-phase errors too.
+- [x] **1.6** Validate HF token format in `store-diarization-token` IPC (`isLikelyHuggingFaceToken` from `ai-addon-setup.js`); trim before check; return structured error for renderer.
+- [x] **1.7** Gate DevTools (and optionally reload/forceReload) behind `!app.isPackaged` or `AVANEVIS_ENABLE_DEVTOOLS=1` (`src/main.js` menu).
+- [x] **1.8** Remove preload startup `console.log` (`src/preload.js` — only log in dev if needed).
+- [x] **1.9** Remove dead `offUpdateAvailable` from preload (unused; `onUpdateAvailable` already returns a disposer). Do not “fix” with `removeAllListeners`.
+- [x] **1.10** Redact HF tokens in persisted meeting AI `error` fields (`backend/meeting_manager.py`; align with `diarization_pipeline._safe_message`).
+- [x] **1.11** Share redaction helper in `summary_runner.py` with diarization (e.g. `backend/common/sensitive_text.py`; fold `hf_model_downloader` duplicate regex).
+- [x] **1.12** Clear `hideAiAddonProgressSoon` timeouts on new progress / teardown — per-feature timer map (`src/renderer/app.js`).
+- [x] **1.13** Home-tab `copyTranscript` clipboard `.catch` + user feedback (match history copy); guard empty text.
+- [x] **1.14** Allowlist `modelSize` on all transcription IPCs: `check-model-downloaded`, `download-model`, `transcribe-audio`, `transcribe-audio-with-speakers` (`src/main.js` + `src/main-process-helpers.js`; central `ALLOWED_WHISPER_MODELS` / `normalizeModelSize`). *Moved forward from Phase 6 — flows to filesystem patterns and Python `--model` with no validation today.*
 
 **Phase 1 tests:** extend `tests/js/main-process-helpers.test.js` / `tests/js/ai-addon-*.test.js` for sanitization, URL binding, and `modelSize` rejection.
 
@@ -194,7 +194,7 @@ npm run test:python
 
 | Phase | Focus | Status |
 |-------|--------|--------|
-| 1 | Hygiene + `modelSize` allowlist (1.14) | Not started |
+| 1 | Hygiene + `modelSize` allowlist (1.14) | Complete |
 | 2 | Recording lifecycle | Not started |
 | 3 | Path enforcement | Not started |
 | 4 | Recorder correctness | Not started |

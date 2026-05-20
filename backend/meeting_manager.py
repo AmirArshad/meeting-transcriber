@@ -20,6 +20,8 @@ import hashlib
 
 from filelock import FileLock
 
+from common.sensitive_text import redact_sensitive_text
+
 
 _UNSET = object()
 _MAX_AI_METADATA_STRING_LENGTH = 300
@@ -279,7 +281,10 @@ class MeetingManager:
                 if re.fullmatch(r"sha256:[a-fA-F0-9]{64}", text):
                     normalized[field] = text
             else:
-                normalized[field] = normalize_text(value)
+                if field == 'error':
+                    normalized[field] = redact_sensitive_text(value)
+                else:
+                    normalized[field] = normalize_text(value)
 
         return normalized
 

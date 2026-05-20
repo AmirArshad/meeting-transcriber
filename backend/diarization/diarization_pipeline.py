@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from .speaker_segments import merge_speaker_labels
+from common.sensitive_text import redact_sensitive_text
 
 
 DEFAULT_MODEL_REF = "pyannote/speaker-diarization-community-1"
@@ -95,14 +96,7 @@ def validate_pyannote_setup(
 
 
 def _safe_message(message: Any) -> str:
-    cleaned = re.sub(r"hf_[A-Za-z0-9_-]+", "[redacted-token]", str(message or ""))
-    cleaned = re.sub(r"Bearer\s+[A-Za-z0-9._~+/=-]+", "Bearer [redacted-token]", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"(Authorization:\s*token\s+)[A-Za-z0-9._~+/=-]+", r"\1[redacted-token]", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"((?:access_)?token=|api_key=)[^&#\s]+", r"\1[redacted-token]", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"(X-Api-Key:\s*)[^\r\n\s]+", r"\1[redacted-token]", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"(https?://)[^/?#@\s]+@", r"\1[redacted]@", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    return cleaned[:300]
+    return redact_sensitive_text(message)
 
 
 def emit_progress(phase: str, message: str, *, percent: Optional[float] = None) -> None:

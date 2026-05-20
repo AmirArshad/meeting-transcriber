@@ -17,19 +17,15 @@ import sys
 from pathlib import Path
 from typing import Any, Dict
 
+from common.sensitive_text import redact_sensitive_text
+
 
 def _emit(event: Dict[str, Any]) -> None:
     print(json.dumps(event, ensure_ascii=True), flush=True)
 
 
 def _safe_error(exc: BaseException) -> str:
-    cleaned = re.sub(r"hf_[A-Za-z0-9_-]+", "[redacted-token]", str(exc or ""))
-    cleaned = re.sub(r"Bearer\s+[A-Za-z0-9._~+/=-]+", "Bearer [redacted-token]", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"(Authorization:\s*token\s+)[A-Za-z0-9._~+/=-]+", r"\1[redacted-token]", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"((?:access_)?token=|api_key=)[^&#\s]+", r"\1[redacted-token]", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"(X-Api-Key:\s*)[^\r\n\s]+", r"\1[redacted-token]", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"(https?://)[^/?#@\s]+@", r"\1[redacted]@", cleaned, flags=re.IGNORECASE)
-    return " ".join(cleaned.split())[:500]
+    return redact_sensitive_text(exc, max_length=500)
 
 
 def _sha256_file(path: Path) -> str:

@@ -108,3 +108,24 @@ def test_hugging_face_downloader_rejects_unexpected_external_download_path(tmp_p
             destination_root=str(destination.parent),
             expected_sha256=expected_sha,
         )
+
+
+def test_hf_model_downloader_help_exits_successfully():
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    result = subprocess.run(
+        [sys.executable, '-m', 'summaries.hf_model_downloader', '--help'],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={
+            **os.environ,
+            'PYTHONPATH': str(Path(__file__).resolve().parents[2] / 'backend'),
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert 'Download a pinned Hugging Face summary model artifact' in result.stdout

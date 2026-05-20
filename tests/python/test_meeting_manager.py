@@ -501,6 +501,37 @@ def test_update_meeting_ai_sanitizes_and_caps_text_metadata(tmp_path):
     assert len(summary['error']) == 300
 
 
+def test_update_meeting_ai_redacts_hf_tokens_in_error_field(tmp_path):
+    recordings_dir = tmp_path / 'recordings'
+    manager = MeetingManager(recordings_dir=str(recordings_dir))
+
+    audio_path = recordings_dir / 'meeting_20260107_104555.opus'
+    transcript_path = recordings_dir / 'meeting_20260107_104555.md'
+    audio_path.write_bytes(b'audio')
+    transcript_path.write_text('# transcript', encoding='utf-8')
+    manager._save_meetings([
+        {
+            'id': '20260107_104555',
+            'title': 'Test',
+            'date': '2026-01-07',
+            'time': '10:45:55',
+            'duration': '0:05',
+            'durationSeconds': 5.0,
+            'audioPath': str(audio_path),
+            'transcriptPath': str(transcript_path),
+            'language': 'en',
+            'model': 'small',
+        }
+    ])
+
+    meeting = manager.update_meeting_ai(
+        '20260107_104555',
+        diarization={'error': 'Auth failed for hf_secret_token_value'},
+    )
+
+    assert meeting['ai']['diarization']['error'] == 'Auth failed for [redacted-token]'
+
+
 def test_get_meeting_marks_summary_fresh_when_transcript_hash_matches(tmp_path):
     recordings_dir = tmp_path / 'recordings'
     manager = MeetingManager(recordings_dir=str(recordings_dir))

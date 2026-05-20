@@ -2562,8 +2562,17 @@ async function transcribeAudio() {
 // Copy transcript to clipboard (current recording)
 function copyTranscript() {
   const text = transcriptOutput.textContent;
-  navigator.clipboard.writeText(text);
-  addLog('Transcript copied to clipboard!');
+  if (!text || !text.trim()) {
+    addLog('No transcript available to copy.', 'warning');
+    return;
+  }
+
+  navigator.clipboard.writeText(text).then(() => {
+    addLog('Transcript copied to clipboard!');
+  }).catch((err) => {
+    console.error('Failed to copy:', err);
+    addLog('Failed to copy transcript to clipboard', 'error');
+  });
 }
 
 // Copy meeting transcript to clipboard
@@ -3013,8 +3022,23 @@ function setAiAddonProgressState(feature, updates = {}) {
   renderAiAddonProgress(feature);
 }
 
+const aiAddonProgressHideTimers = {
+  diarization: null,
+  summary: null,
+};
+
+function clearAiAddonProgressHideTimer(feature) {
+  const timer = aiAddonProgressHideTimers[feature];
+  if (timer) {
+    clearTimeout(timer);
+    aiAddonProgressHideTimers[feature] = null;
+  }
+}
+
 function hideAiAddonProgressSoon(feature, delayMs = 2500) {
-  setTimeout(() => {
+  clearAiAddonProgressHideTimer(feature);
+  aiAddonProgressHideTimers[feature] = setTimeout(() => {
+    aiAddonProgressHideTimers[feature] = null;
     const state = aiAddonDownloadState[feature];
     if (state && !state.cancelling) {
       setAiAddonProgressState(feature, { active: false, cancelling: false });
@@ -3067,6 +3091,7 @@ function handleAiAddonProgress(progress) {
   }
 
   if (isActive) {
+    clearAiAddonProgressHideTimer(progress.feature);
     setAiAddonProgressState(progress.feature, {
       active: true,
       cancelling: false,
@@ -3818,10 +3843,11 @@ async function installGPUAcceleration() {
   progressBar.style.width = '0%';
   progressText.textContent = 'Starting installation...';
 
+  let progressInterval = null;
   try {
     // Simulate progress (pip doesn't give us real progress)
     let progress = 0;
-    const progressInterval = setInterval(() => {
+    progressInterval = setInterval(() => {
       if (progress < 90) {
         progress += Math.random() * 5;
         progressBar.style.width = `${Math.min(progress, 90)}%`;
@@ -3834,7 +3860,6 @@ async function installGPUAcceleration() {
     await window.electronAPI.installGPU();
 
     // Complete progress
-    clearInterval(progressInterval);
     progressBar.style.width = '100%';
     progressText.textContent = 'Installation complete!';
 
@@ -3864,6 +3889,10 @@ async function installGPUAcceleration() {
     installBtn.classList.remove('is-loading');
 
     alert(`GPU installation failed.\n\n${error.message}`);
+  } finally {
+    if (progressInterval) {
+      clearInterval(progressInterval);
+    }
   }
 }
 
@@ -3922,7 +3951,7 @@ async function handleDownloadUpdate() {
 
   try {
     addLog('Opening download page...');
-    await window.electronAPI.downloadUpdate(currentUpdateInfo.downloadUrl);
+    await window.electronAPI.downloadUpdate();
     addLog('Download started in your browser. Install when ready!');
 
     // Keep banner visible so user remembers to install
