@@ -50,6 +50,7 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 ### Historical milestones
 
 - **May 2026** — Code review remediation merged to `master`: Phases 1–6 (security, recording lifecycle, local AI queue/timeouts, performance). Phase 7 backlog tracked in root `todo.md` and [TODO_ARCHIVE_2026-05-20_CODE_REVIEW_REMEDIATION.md](internal/TODO_ARCHIVE_2026-05-20_CODE_REVIEW_REMEDIATION.md).
+- **v2.2.0** — Recording reliability and macOS desktop audio fixes in packaged builds, plus May 2026 security/stability remediation (lifecycle guards, path safety, compute queue timeouts, license notices in releases).
 - **v2.1.0** — Local AI add-on reliability hardening: setup/install resilience, cancellation/recovery improvements, offline/cache behavior tightening, and archive extraction performance/safety updates.
 - **v2.0.0** — AvaNevis rebrand and local AI add-ons delivered: optional speaker diarization, optional transcript summaries, History transcript/summary experience, and setup/validation flows.
 - **v1.7.0** — macOS support with Metal GPU acceleration, cross-platform 48 kHz / soxr VHQ parity, Intel Mac CPU fallback (`faster-whisper` int8), 100% feature parity across platforms.
@@ -115,7 +116,7 @@ Longer horizon, lower priority:
 - **Minor (1.X.0)** — New features, backwards compatible.
 - **Patch (1.2.X)** — Bug fixes and minor improvements.
 
-**Current branch version:** 2.1.0 (local AI add-on reliability, transcription cache/offline hardening, and runtime extraction performance).
+**Current branch version:** 2.2.0 (recording reliability, macOS packaged desktop audio capture, and security/stability remediation).
 
 The rebrand introduces a new Electron `productName`, which changes the user-data folder. Existing Meeting Transcriber installs won't see their old recordings until the user manually moves the data folder, so this release uses a major version bump.
 
