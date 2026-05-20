@@ -126,15 +126,15 @@ npm run test:python
 
 **Quick win:** 4.3 (one-line lock on Windows final JSON).
 
-- [ ] **4.1** Windows: on any `start_recording` failure, set `is_recording = False` and stop/close partial streams (`windows_recorder.py` ~424–520).
-- [ ] **4.2** Windows: `cleanup()` stop/close streams before `pa.terminate()` (`windows_recorder.py` ~857+).
-- [ ] **4.3** Windows: emit final result via `_send_json_message` (lock + flush); keep `audioPath` shape (`windows_recorder.py` ~967).
-- [ ] **4.4** macOS: gate mic callback on `_get_running()` (`macos_recorder.py` ~572+).
-- [ ] **4.5** macOS: lock `ChunkedAudioBuffer` or `to_array()` copy; join mic thread before read; fix `_abort_startup` vs callback race (`chunked_audio_buffer.py`, `macos_recorder.py`).
-- [ ] **4.6** macOS: empty mic → `success: false` + structured error; **omit bogus `outputPath`** (`macos_recorder.py` ~804+, ~1223+). **Same PR:** widen `findRecorderResultPayload` / `parseRecordingStopResult` in `src/main-process-helpers.js` + `src/main.js`; add tests for `success: false` result shape.
-- [ ] **4.7** macOS (+ optional Windows): validate `mic_device_id` in range and `max_input_channels > 0` after enumeration (`macos_recorder.py`, `device_manager.py`).
-- [ ] **4.8** Swift: batch-drain stderr after `select` ready; bump join timeout for final `capture_stats` (`swift_audio_capture.py`). Do not drop `type: error` / `warning` messages.
-- [ ] **4.9** Tests: Windows `audioPath` result in `tests/js/main-process-helpers.test.js`; `success: false` variant; Python compile + manual smoke both platforms.
+- [x] **4.1** Windows: on any `start_recording` failure, set `is_recording = False` and stop/close partial streams (`windows_recorder.py` ~424–520).
+- [x] **4.2** Windows: `cleanup()` stop/close streams before `pa.terminate()` (`windows_recorder.py` ~857+).
+- [x] **4.3** Windows: emit final result via `_send_json_message` (lock + flush); keep `audioPath` shape (`windows_recorder.py` ~967).
+- [x] **4.4** macOS: gate mic callback on `_get_running()` (`macos_recorder.py` ~572+).
+- [x] **4.5** macOS: lock `ChunkedAudioBuffer` or `to_array()` copy; join mic thread before read; fix `_abort_startup` vs callback race (`chunked_audio_buffer.py`, `macos_recorder.py`).
+- [x] **4.6** macOS: empty mic → `success: false` + structured error; **omit bogus `outputPath`** (`macos_recorder.py` ~804+, ~1223+). **Same PR:** widen `findRecorderResultPayload` / `parseRecordingStopResult` in `src/main-process-helpers.js` + `src/main.js`; add tests for `success: false` result shape.
+- [x] **4.7** macOS (+ optional Windows): validate `mic_device_id` in range and `max_input_channels > 0` after enumeration (`macos_recorder.py`, `device_manager.py`).
+- [x] **4.8** Swift: batch-drain stderr after `select` ready; bump join timeout for final `capture_stats` (`swift_audio_capture.py`). Do not drop `type: error` / `warning` messages.
+- [x] **4.9** Tests: Windows `audioPath` result in `tests/js/main-process-helpers.test.js`; `success: false` variant; Python compile + manual smoke both platforms.
 
 **Phase 4 manual:** `tests/manual/recording-smoke-checklist.md` on Windows and macOS; mic permission denied on macOS.
 
@@ -197,7 +197,7 @@ npm run test:python
 | 1 | Hygiene + `modelSize` allowlist (1.14) | Complete |
 | 2 | Recording lifecycle | Complete |
 | 3 | Path enforcement | Complete |
-| 4 | Recorder correctness | Not started |
+| 4 | Recorder correctness | Complete |
 | 5 | AI concurrency & archives (5.3 before 5.1) | Not started |
 | 6 | Performance & UX | Not started |
 | 7 | Architectural | Not started |

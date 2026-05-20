@@ -214,6 +214,7 @@ class MacOSAudioRecorder:
         self._running_lock = threading.Lock()  # Protects is_running access
         self.mic_frames = ChunkedAudioBuffer()
         self.desktop_frames = []
+        self.recording_failure = None
 
         # Audio levels for visualization
         self.mic_level = 0.0
@@ -451,7 +452,13 @@ class MacOSAudioRecorder:
             if sd.query_devices is None:
                 raise RuntimeError("sounddevice is not available")
             devices = sd.query_devices()
+            if self.mic_device_id < 0 or self.mic_device_id >= len(devices):
+                raise ValueError(
+                    f"Microphone device ID {self.mic_device_id} is out of range (0-{len(devices) - 1})"
+                )
             self.mic_info = devices[self.mic_device_id]
+            if self.mic_info.get('max_input_channels', 0) <= 0:
+                raise ValueError(f"Microphone device {self.mic_device_id} has no input channels")
             print(f"Microphone: {(self.mic_info or {}).get('name', 'unknown')}", file=sys.stderr)
 
             # Desktop audio status
@@ -551,6 +558,9 @@ class MacOSAudioRecorder:
             def audio_callback(indata, frames, time_info, status):
                 """Callback for audio input."""
                 nonlocal frame_count
+
+                if not self._get_running():
+                    return
 
                 if status:
                     print(f"Mic status: {status}", file=sys.stderr)
@@ -726,14 +736,47 @@ class MacOSAudioRecorder:
 
             self._set_running(False)
 
+    def _has_async_recording_error(self) -> bool:
+        if self._error_event.is_set():
+            return True
+        if self.desktop_capture and hasattr(self.desktop_capture, 'error_event'):
+            return self.desktop_capture.error_event.is_set()
+        return False
+
+    def _resolve_async_recording_failure(self) -> Optional[dict]:
+        if self._error_event.is_set():
+            with self._error_lock:
+                error_msg = self._last_error or "Unknown recording error"
+            return {
+                'code': 'RECORDING_THREAD_FAILED',
+                'message': error_msg,
+            }
+
+        if self.desktop_capture and hasattr(self.desktop_capture, 'error_event'):
+            if self.desktop_capture.error_event.is_set():
+                error_msg = getattr(self.desktop_capture, 'last_error', None) or "Unknown desktop capture error"
+                return {
+                    'code': 'DESKTOP_AUDIO_FAILED',
+                    'message': f"Desktop audio capture failed: {error_msg}",
+                }
+
+        return None
+
+    def _finalize_recording_failure(self, failure: dict) -> None:
+        self.recording_failure = failure
+        self.final_output_path = None
+        self.recording_duration = 0.0
+
     def stop_recording(self):
         """Stop recording and process audio."""
-        if not self._get_running():
+        pending_error = self._has_async_recording_error()
+        if not self._get_running() and not pending_error:
             print("Not recording!", file=sys.stderr)
             return
 
-        print(f"\nStopping recording...", file=sys.stderr)
-        self._set_running(False)
+        if self._get_running():
+            print(f"\nStopping recording...", file=sys.stderr)
+            self._set_running(False)
 
         # Wait for threads to finish
         if self.mic_thread:
@@ -793,17 +836,36 @@ class MacOSAudioRecorder:
                         captureType=capture_type,
                     )
 
+        async_failure = self._resolve_async_recording_failure()
+        if async_failure:
+            if not self.recording_failure:
+                self._finalize_recording_failure(async_failure)
+            return
+
         # Process and save audio
         print(f"Processing audio...", file=sys.stderr)
-        self._process_and_save()
+        if not self._process_and_save():
+            return
 
         print(f"Recording complete!", file=sys.stderr)
 
     def _process_and_save(self):
         """Process recorded audio and save to file."""
         if not self.mic_frames:
-            print(f"ERROR: No audio recorded from microphone!", file=sys.stderr)
-            return
+            message = "No audio was captured from the microphone."
+            print(f"ERROR: {message}", file=sys.stderr)
+            _send_error_message(
+                "NO_MIC_AUDIO_CAPTURED",
+                message,
+                help="Check Microphone permission and confirm the selected input device is still connected.",
+            )
+            self.recording_failure = {
+                'code': 'NO_MIC_AUDIO_CAPTURED',
+                'message': message,
+            }
+            self.final_output_path = None
+            self.recording_duration = 0.0
+            return False
 
         # Convert mic chunks to numpy array once at stop time
         mic_audio = self.mic_frames.to_array()
@@ -905,6 +967,8 @@ class MacOSAudioRecorder:
 
         print(f"Final file: {final_output_path}", file=sys.stderr)
         print(f"Duration: {duration_seconds:.1f} seconds", file=sys.stderr)
+        self.recording_failure = None
+        return True
 
     def _resolve_desktop_capture_start_time(self):
         """Prefer helper-provided capture timestamps over Python receive times."""
@@ -1177,25 +1241,25 @@ def main():
         # Main loop - continuously send audio levels for visualization
         # PERFORMANCE: 5 FPS updates to minimize CPU/IPC overhead (matches Windows)
         try:
-            while not stop_event.is_set() and recorder.is_recording():
-                # CHECK FOR ASYNC ERRORS from recording threads
-                if recorder._error_event.is_set():
+            while not stop_event.is_set():
+                if recorder._has_async_recording_error():
                     with recorder._error_lock:
                         error_msg = recorder._last_error or "Unknown recording error"
-                    print(f"CRITICAL: Recording thread error: {error_msg}", file=sys.stderr)
-                    _send_error_message("RECORDING_THREAD_FAILED", error_msg)
-                    recorder.stop_recording()
+                    if recorder._error_event.is_set():
+                        print(f"CRITICAL: Recording thread error: {error_msg}", file=sys.stderr)
+                        _send_error_message("RECORDING_THREAD_FAILED", error_msg)
+                    elif recorder.desktop_capture and hasattr(recorder.desktop_capture, 'error_event'):
+                        if recorder.desktop_capture.error_event.is_set():
+                            helper_error = recorder.desktop_capture.last_error or "Unknown desktop capture error"
+                            print(f"CRITICAL: Swift capture failed: {helper_error}", file=sys.stderr)
+                            _send_error_message(
+                                "DESKTOP_AUDIO_FAILED",
+                                f"Desktop audio capture failed: {helper_error}",
+                            )
                     break
 
-                # CHECK FOR ASYNC ERRORS from Swift helper
-                if recorder.desktop_capture and hasattr(recorder.desktop_capture, 'error_event'):
-                    if recorder.desktop_capture.error_event.is_set():
-                        error_msg = recorder.desktop_capture.last_error or "Unknown desktop capture error"
-                        print(f"CRITICAL: Swift capture failed: {error_msg}", file=sys.stderr)
-                        # Send error to Electron (thread-safe)
-                        _send_error_message("DESKTOP_AUDIO_FAILED", f"Desktop audio capture failed: {error_msg}")
-                        recorder.stop_recording()
-                        break
+                if not recorder.is_recording():
+                    break
 
                 try:
                     # Send audio levels as JSON to stdout (Electron will parse this)
@@ -1218,15 +1282,27 @@ def main():
             recorder.stop_recording()
 
     # Output result as JSON for Electron
-    # Note: This final result uses the original format without 'type' field
-    # for backwards compatibility with existing Electron parsing
-    result = {
-        'success': True,
-        'outputPath': recorder.final_output_path or args.output,
-        'duration': recorder.recording_duration,
-        'desktopDiagnostics': recorder.desktop_diagnostics,
-    }
-    # Use lock since other threads may still be winding down
+    failure = getattr(recorder, 'recording_failure', None)
+    if not failure and not getattr(recorder, 'final_output_path', None):
+        failure = {
+            'code': 'RECORDING_FAILED',
+            'message': 'Recording did not produce an output file.',
+        }
+    if failure:
+        result = {
+            'success': False,
+            'code': failure.get('code', 'RECORDING_FAILED'),
+            'message': failure.get('message', 'Recording failed.'),
+            'duration': recorder.recording_duration or 0,
+            'desktopDiagnostics': recorder.desktop_diagnostics,
+        }
+    else:
+        result = {
+            'success': True,
+            'outputPath': recorder.final_output_path or args.output,
+            'duration': recorder.recording_duration,
+            'desktopDiagnostics': recorder.desktop_diagnostics,
+        }
     with _stdout_lock:
         print(json.dumps(result), flush=True)
     sys.exit(0)

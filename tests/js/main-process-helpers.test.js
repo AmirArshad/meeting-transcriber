@@ -36,6 +36,8 @@ const {
   getRecorderEventAction,
   findRecorderResultPayload,
   getRecorderResultAudioPath,
+  normalizeRecordingStopPayload,
+  parseRecordingStopResult,
   getMacMLXCacheDir,
   getMacMLXModelStorageDirs,
   getGuidedTranscriptionTimeoutMinutes,
@@ -929,6 +931,90 @@ test('getRecorderResultAudioPath normalizes Windows and macOS recorder payloads'
     '/Users/me/recordings/meeting.opus',
   );
   assert.equal(getRecorderResultAudioPath({ success: true, duration: 1 }), null);
+});
+
+
+test('findRecorderResultPayload accepts structured success false recorder results', () => {
+  const output = [
+    '{"type":"levels","mic":0.1,"desktop":0}',
+    '{"success":false,"code":"NO_MIC_AUDIO_CAPTURED","message":"No audio was captured from the microphone.","duration":0}',
+  ].join('\n');
+
+  assert.deepEqual(findRecorderResultPayload(output), {
+    success: false,
+    code: 'NO_MIC_AUDIO_CAPTURED',
+    message: 'No audio was captured from the microphone.',
+    duration: 0,
+  });
+});
+
+
+test('normalizeRecordingStopPayload maps macOS and Windows recorder stop payloads', () => {
+  const exists = (filePath) => filePath === 'C:\\recordings\\meeting.opus';
+
+  assert.deepEqual(
+    normalizeRecordingStopPayload({
+      success: true,
+      audioPath: 'C:\\recordings\\meeting.opus',
+      duration: 12.5,
+      desktopDiagnostics: { bufferSamples: 4 },
+    }, { existsSync: exists }),
+    {
+      success: true,
+      audioPath: 'C:\\recordings\\meeting.opus',
+      duration: 12.5,
+      desktopDiagnostics: { bufferSamples: 4 },
+    },
+  );
+
+  assert.deepEqual(
+    normalizeRecordingStopPayload({
+      success: true,
+      outputPath: '/Users/me/recordings/meeting.opus',
+      duration: 8,
+    }, { existsSync: () => true }),
+    {
+      success: true,
+      audioPath: '/Users/me/recordings/meeting.opus',
+      duration: 8,
+      desktopDiagnostics: undefined,
+    },
+  );
+
+  assert.deepEqual(
+    normalizeRecordingStopPayload({
+      success: false,
+      code: 'NO_MIC_AUDIO_CAPTURED',
+      message: 'No audio was captured from the microphone.',
+      duration: 0,
+    }, { existsSync: exists }),
+    {
+      success: false,
+      code: 'NO_MIC_AUDIO_CAPTURED',
+      message: 'No audio was captured from the microphone.',
+      duration: 0,
+      desktopDiagnostics: undefined,
+    },
+  );
+});
+
+
+test('parseRecordingStopResult returns structured failure without requiring outputPath', () => {
+  const stdout = [
+    '{"type":"levels","mic":0,"desktop":0}',
+    '{"success":false,"code":"NO_MIC_AUDIO_CAPTURED","message":"No audio was captured from the microphone.","duration":0}',
+  ].join('\n');
+
+  assert.deepEqual(parseRecordingStopResult(stdout, {
+    existsSync: () => false,
+    getRecordingsDir: () => '/tmp/recordings',
+  }), {
+    success: false,
+    code: 'NO_MIC_AUDIO_CAPTURED',
+    message: 'No audio was captured from the microphone.',
+    duration: 0,
+    desktopDiagnostics: undefined,
+  });
 });
 
 

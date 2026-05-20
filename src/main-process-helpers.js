@@ -759,7 +759,7 @@ function parseRecorderMessageLine(line) {
       return { kind: 'status', payload: parsed };
     }
 
-    if (parsed.outputPath || parsed.audioPath) {
+    if (parsed.success === false || parsed.outputPath || parsed.audioPath) {
       return { kind: 'result', payload: parsed };
     }
 
@@ -789,7 +789,10 @@ function findRecorderResultPayload(stdoutData) {
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     try {
       const parsed = JSON.parse(lines[index]);
-      if (parsed && typeof parsed === 'object' && getRecorderResultAudioPath(parsed)) {
+      if (parsed && typeof parsed === 'object' && (
+        parsed.success === false ||
+        getRecorderResultAudioPath(parsed)
+      )) {
         return parsed;
       }
     } catch (error) {
@@ -807,6 +810,68 @@ function getRecorderResultAudioPath(recordingInfo) {
 
   const audioPath = recordingInfo.audioPath || recordingInfo.outputPath;
   return audioPath ? String(audioPath) : null;
+}
+
+function normalizeRecordingStopPayload(recordingInfo, { existsSync = () => false } = {}) {
+  if (!recordingInfo || typeof recordingInfo !== 'object') {
+    return null;
+  }
+
+  if (recordingInfo.success === false) {
+    return {
+      success: false,
+      code: recordingInfo.code || 'RECORDING_FAILED',
+      message: recordingInfo.message || 'Recording failed.',
+      duration: recordingInfo.duration,
+      desktopDiagnostics: recordingInfo.desktopDiagnostics,
+    };
+  }
+
+  const filePath = getRecorderResultAudioPath(recordingInfo);
+  if (filePath && existsSync(filePath)) {
+    return {
+      success: true,
+      audioPath: filePath,
+      duration: recordingInfo.duration,
+      desktopDiagnostics: recordingInfo.desktopDiagnostics,
+    };
+  }
+
+  if (filePath) {
+    return {
+      error: new Error(`Recording file not found: ${filePath}`),
+    };
+  }
+
+  return null;
+}
+
+function parseRecordingStopResult(stdoutData, { existsSync = () => false, getRecordingsDir: getRecordingsDirFn } = {}) {
+  const recordingInfo = findRecorderResultPayload(stdoutData);
+  const normalized = normalizeRecordingStopPayload(recordingInfo, { existsSync });
+
+  if (normalized?.error) {
+    throw normalized.error;
+  }
+  if (normalized) {
+    return normalized;
+  }
+
+  const recordingsDir = typeof getRecordingsDirFn === 'function'
+    ? getRecordingsDirFn()
+    : null;
+
+  if (!recordingsDir) {
+    throw new Error('Recording completed but output file not found.');
+  }
+
+  const opusPath = path.join(recordingsDir, 'temp.opus');
+
+  if (existsSync(opusPath)) {
+    return { success: true, audioPath: opusPath };
+  }
+
+  throw new Error('Recording completed but output file not found.');
 }
 
 function getRecorderEventAction(eventPayload = {}) {
@@ -1245,6 +1310,8 @@ module.exports = {
   getRecorderEventAction,
   findRecorderResultPayload,
   getRecorderResultAudioPath,
+  normalizeRecordingStopPayload,
+  parseRecordingStopResult,
   getGuidedTranscriptionTimeoutMinutes,
   getMacMLXModelStorageDirs,
   getTranscriberModule,

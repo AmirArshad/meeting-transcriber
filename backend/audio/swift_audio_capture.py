@@ -558,6 +558,146 @@ class SwiftAudioCapture:
                 self.last_error = msg
                 self.error_event.set()
 
+    def _process_status_line(self, line: str) -> None:
+        """Handle one stderr status line from the Swift helper."""
+        try:
+            msg = json.loads(line)
+            msg_type = msg.get('type', '')
+
+            if msg_type == 'ready':
+                self._ready_event.set()
+                print("Swift helper: READY", file=sys.stderr)
+
+            elif msg_type == 'status':
+                status = msg.get('status', '')
+                message = msg.get('message', '')
+                timestamp = msg.get('timestamp')
+
+                if status == 'first_sample' and isinstance(timestamp, (int, float)):
+                    helper_timestamp = float(timestamp)
+                    if self.first_audio_time is None or helper_timestamp < self.first_audio_time:
+                        self.first_audio_time = helper_timestamp
+                elif status == 'screen_sample':
+                    screen_frames = msg.get('screenFrames')
+                    if isinstance(screen_frames, int):
+                        self.helper_screen_frames = screen_frames
+                capture_backend = msg.get('captureBackend')
+                if isinstance(capture_backend, str) and capture_backend:
+                    self.helper_capture_backend = capture_backend
+
+                print(f"Swift helper: {status} - {message}", file=sys.stderr)
+
+            elif msg_type == 'warning':
+                code = msg.get('code', 'warning')
+                message = msg.get('message', 'Swift helper warning')
+                warning_payload = {
+                    'type': 'warning',
+                    'code': code,
+                    'message': message,
+                }
+
+                for key in ('help', 'droppedChunks', 'queuedBytes'):
+                    if key in msg:
+                        warning_payload[key] = msg[key]
+
+                with self.warning_lock:
+                    self.warning_messages.append(warning_payload)
+                    self.warning_event.set()
+                print(f"Swift helper WARNING [{code}]: {message}", file=sys.stderr)
+
+            elif msg_type == 'error':
+                error = msg.get('error', '')
+                code = msg.get('code', 'unknown')
+                help_text = msg.get('help', '')
+
+                print(f"Swift helper ERROR [{code}]: {error}", file=sys.stderr)
+                if help_text:
+                    print(f"  Help: {help_text}", file=sys.stderr)
+
+                msg['error'] = error
+                msg['code'] = code
+                _apply_helper_error(self, msg)
+
+            elif msg_type == 'config':
+                print(f"Swift helper config: {msg}", file=sys.stderr)
+
+            elif msg_type == 'content_info':
+                self.helper_content_info = dict(msg)
+                capture_backend = msg.get('captureBackend')
+                if isinstance(capture_backend, str) and capture_backend:
+                    self.helper_capture_backend = capture_backend
+                print(
+                    "Swift helper: content - "
+                    f"displays={msg.get('displayCount', 'unknown')}, "
+                    f"apps={msg.get('applicationCount', 'unknown')}, "
+                    f"windows={msg.get('windowCount', 'unknown')}",
+                    file=sys.stderr,
+                )
+
+            elif msg_type == 'stream_config':
+                self.helper_stream_config = dict(msg)
+                capture_backend = msg.get('captureBackend')
+                if isinstance(capture_backend, str) and capture_backend:
+                    self.helper_capture_backend = capture_backend
+                print(f"Swift helper stream config: {msg}", file=sys.stderr)
+
+            elif msg_type == 'capture_backend':
+                capture_backend = msg.get('backend')
+                if isinstance(capture_backend, str) and capture_backend:
+                    self.helper_capture_backend = capture_backend
+                print(f"Swift helper backend: {capture_backend or 'unknown'}", file=sys.stderr)
+
+            elif msg_type == 'audio_format':
+                rate = msg.get('sampleRate', 'unknown')
+                channels = msg.get('channels', 'unknown')
+                self.helper_audio_format = dict(msg)
+                capture_backend = msg.get('captureBackend')
+                if isinstance(capture_backend, str) and capture_backend:
+                    self.helper_capture_backend = capture_backend
+                print(f"Swift helper: Audio format - {rate}Hz, {channels} channels", file=sys.stderr)
+
+            elif msg_type == 'extraction_error':
+                error = msg.get('error', 'unknown')
+                count = msg.get('count', 0)
+                print(f"Swift helper: Audio extraction error #{count}: {error}", file=sys.stderr)
+
+            elif msg_type == 'silence_detected':
+                message = msg.get('message', 'Silence detected')
+                print(f"Swift helper: {message}", file=sys.stderr)
+
+            elif msg_type == 'audio_resumed':
+                message = msg.get('message', 'Audio resumed')
+                print(f"Swift helper: {message}", file=sys.stderr)
+
+            elif msg_type == 'progress':
+                samples = msg.get('samples', 0)
+                bytes_written = msg.get('bytesWritten', 0)
+                print(f"Swift helper: Progress - {samples} samples, {bytes_written / 1024:.1f} KB", file=sys.stderr)
+
+            elif msg_type == 'capture_stats':
+                total_samples = msg.get('totalSamples', 0)
+                total_bytes = msg.get('totalBytes', 0)
+                capture_backend = msg.get('captureBackend')
+                if isinstance(capture_backend, str) and capture_backend:
+                    self.helper_capture_backend = capture_backend
+                self.helper_total_sample_buffers = int(total_samples) if isinstance(total_samples, int) else 0
+                self.helper_total_bytes = int(total_bytes) if isinstance(total_bytes, int) else 0
+                self.helper_screen_frames = int(msg.get('screenFrames', 0) or 0)
+                self.helper_dropped_chunks = int(msg.get('droppedChunks', 0) or 0)
+                self.helper_queued_bytes_remaining = int(msg.get('queuedBytesRemaining', 0) or 0)
+                first_audio_timestamp = msg.get('firstAudioTimestamp')
+                last_audio_timestamp = msg.get('lastAudioTimestamp')
+                if isinstance(first_audio_timestamp, (int, float)):
+                    helper_timestamp = float(first_audio_timestamp)
+                    if self.first_audio_time is None or helper_timestamp < self.first_audio_time:
+                        self.first_audio_time = helper_timestamp
+                if isinstance(last_audio_timestamp, (int, float)):
+                    self.last_audio_time = float(last_audio_timestamp)
+                print(f"Swift helper: Final stats - {total_samples} samples, {total_bytes / 1024:.1f} KB", file=sys.stderr)
+
+        except json.JSONDecodeError:
+            print(f"Swift helper: {line}", file=sys.stderr)
+
     def _read_status_messages(self):
         """Read JSON status messages from stderr."""
         import select
@@ -572,173 +712,36 @@ class SwiftAudioCapture:
                 process_exited = process.poll() is not None
                 should_wait_for_more = self._recording_event.is_set() and not process_exited
 
-                # Drain final diagnostics after process exit; capture_stats often
-                # arrives during graceful shutdown after stdout has already closed.
                 ready, _, _ = select.select([process.stderr], [], [], 0.1 if should_wait_for_more else 0)
                 if not ready:
                     if process_exited or not self._recording_event.is_set():
                         break
                     continue
 
-                line = process.stderr.readline()
-                if not line:
-                    if process_exited or not self._recording_event.is_set():
+                drained_any = False
+                while True:
+                    line = process.stderr.readline()
+                    if not line:
                         break
-                    continue
 
-                line = line.decode('utf-8').strip()
-                if not line:
-                    continue
+                    drained_any = True
+                    line_text = line.decode('utf-8').strip()
+                    if not line_text:
+                        ready_more, _, _ = select.select([process.stderr], [], [], 0)
+                        if not ready_more:
+                            break
+                        continue
 
-                message_count += 1
-                try:
-                    msg = json.loads(line)
-                    msg_type = msg.get('type', '')
+                    message_count += 1
+                    self._process_status_line(line_text)
 
-                    if msg_type == 'ready':
-                        self._ready_event.set()
-                        print("Swift helper: READY", file=sys.stderr)
+                    ready_more, _, _ = select.select([process.stderr], [], [], 0)
+                    if not ready_more:
+                        break
 
-                    elif msg_type == 'status':
-                        status = msg.get('status', '')
-                        message = msg.get('message', '')
-                        timestamp = msg.get('timestamp')
+                if not drained_any and (process_exited or not self._recording_event.is_set()):
+                    break
 
-                        if status == 'first_sample' and isinstance(timestamp, (int, float)):
-                            helper_timestamp = float(timestamp)
-                            if self.first_audio_time is None or helper_timestamp < self.first_audio_time:
-                                self.first_audio_time = helper_timestamp
-                        elif status == 'screen_sample':
-                            screen_frames = msg.get('screenFrames')
-                            if isinstance(screen_frames, int):
-                                self.helper_screen_frames = screen_frames
-                        capture_backend = msg.get('captureBackend')
-                        if isinstance(capture_backend, str) and capture_backend:
-                            self.helper_capture_backend = capture_backend
-
-                        print(f"Swift helper: {status} - {message}", file=sys.stderr)
-
-                    elif msg_type == 'warning':
-                        code = msg.get('code', 'warning')
-                        message = msg.get('message', 'Swift helper warning')
-                        warning_payload = {
-                            'type': 'warning',
-                            'code': code,
-                            'message': message,
-                        }
-
-                        for key in ('help', 'droppedChunks', 'queuedBytes'):
-                            if key in msg:
-                                warning_payload[key] = msg[key]
-
-                        with self.warning_lock:
-                            self.warning_messages.append(warning_payload)
-                            self.warning_event.set()
-                        print(f"Swift helper WARNING [{code}]: {message}", file=sys.stderr)
-
-                    elif msg_type == 'error':
-                        error = msg.get('error', '')
-                        code = msg.get('code', 'unknown')
-                        help_text = msg.get('help', '')
-
-                        print(f"Swift helper ERROR [{code}]: {error}", file=sys.stderr)
-                        if help_text:
-                            print(f"  Help: {help_text}", file=sys.stderr)
-
-                        msg['error'] = error
-                        msg['code'] = code
-                        # Preserve the first actionable startup error. The helper may emit
-                        # a later generic wrapper after the specific failure.
-                        _apply_helper_error(self, msg)
-
-                    elif msg_type == 'config':
-                        print(f"Swift helper config: {msg}", file=sys.stderr)
-
-                    elif msg_type == 'content_info':
-                        self.helper_content_info = dict(msg)
-                        capture_backend = msg.get('captureBackend')
-                        if isinstance(capture_backend, str) and capture_backend:
-                            self.helper_capture_backend = capture_backend
-                        print(
-                            "Swift helper: content - "
-                            f"displays={msg.get('displayCount', 'unknown')}, "
-                            f"apps={msg.get('applicationCount', 'unknown')}, "
-                            f"windows={msg.get('windowCount', 'unknown')}",
-                            file=sys.stderr,
-                        )
-
-                    elif msg_type == 'stream_config':
-                        self.helper_stream_config = dict(msg)
-                        capture_backend = msg.get('captureBackend')
-                        if isinstance(capture_backend, str) and capture_backend:
-                            self.helper_capture_backend = capture_backend
-                        print(f"Swift helper stream config: {msg}", file=sys.stderr)
-
-                    elif msg_type == 'capture_backend':
-                        capture_backend = msg.get('backend')
-                        if isinstance(capture_backend, str) and capture_backend:
-                            self.helper_capture_backend = capture_backend
-                        print(f"Swift helper backend: {capture_backend or 'unknown'}", file=sys.stderr)
-
-                    elif msg_type == 'audio_format':
-                        # Log audio format details for debugging
-                        rate = msg.get('sampleRate', 'unknown')
-                        channels = msg.get('channels', 'unknown')
-                        self.helper_audio_format = dict(msg)
-                        capture_backend = msg.get('captureBackend')
-                        if isinstance(capture_backend, str) and capture_backend:
-                            self.helper_capture_backend = capture_backend
-                        print(f"Swift helper: Audio format - {rate}Hz, {channels} channels", file=sys.stderr)
-
-                    elif msg_type == 'extraction_error':
-                        # Log audio extraction errors (indicates something wrong with audio pipeline)
-                        error = msg.get('error', 'unknown')
-                        count = msg.get('count', 0)
-                        print(f"Swift helper: Audio extraction error #{count}: {error}", file=sys.stderr)
-
-                    elif msg_type == 'silence_detected':
-                        # Normal during meetings - just log at debug level
-                        message = msg.get('message', 'Silence detected')
-                        print(f"Swift helper: {message}", file=sys.stderr)
-
-                    elif msg_type == 'audio_resumed':
-                        # Audio started after silence - useful for debugging late audio
-                        message = msg.get('message', 'Audio resumed')
-                        print(f"Swift helper: {message}", file=sys.stderr)
-
-                    elif msg_type == 'progress':
-                        # Periodic progress update - log at debug level
-                        samples = msg.get('samples', 0)
-                        bytes_written = msg.get('bytesWritten', 0)
-                        print(f"Swift helper: Progress - {samples} samples, {bytes_written / 1024:.1f} KB", file=sys.stderr)
-
-                    elif msg_type == 'capture_stats':
-                        # Final capture statistics
-                        total_samples = msg.get('totalSamples', 0)
-                        total_bytes = msg.get('totalBytes', 0)
-                        capture_backend = msg.get('captureBackend')
-                        if isinstance(capture_backend, str) and capture_backend:
-                            self.helper_capture_backend = capture_backend
-                        self.helper_total_sample_buffers = int(total_samples) if isinstance(total_samples, int) else 0
-                        self.helper_total_bytes = int(total_bytes) if isinstance(total_bytes, int) else 0
-                        self.helper_screen_frames = int(msg.get('screenFrames', 0) or 0)
-                        self.helper_dropped_chunks = int(msg.get('droppedChunks', 0) or 0)
-                        self.helper_queued_bytes_remaining = int(msg.get('queuedBytesRemaining', 0) or 0)
-                        first_audio_timestamp = msg.get('firstAudioTimestamp')
-                        last_audio_timestamp = msg.get('lastAudioTimestamp')
-                        if isinstance(first_audio_timestamp, (int, float)):
-                            helper_timestamp = float(first_audio_timestamp)
-                            if self.first_audio_time is None or helper_timestamp < self.first_audio_time:
-                                self.first_audio_time = helper_timestamp
-                        if isinstance(last_audio_timestamp, (int, float)):
-                            self.last_audio_time = float(last_audio_timestamp)
-                        print(f"Swift helper: Final stats - {total_samples} samples, {total_bytes / 1024:.1f} KB", file=sys.stderr)
-
-                except json.JSONDecodeError:
-                    # Not JSON, print as-is
-                    print(f"Swift helper: {line}", file=sys.stderr)
-
-            # Log when loop exits
             exit_reason = "unknown"
             if not self._recording_event.is_set():
                 exit_reason = "recording stopped"
@@ -811,7 +814,7 @@ class SwiftAudioCapture:
             if self._stdout_thread.is_alive():
                 print("  WARNING: Audio reader thread did not exit cleanly", file=sys.stderr)
         if self._stderr_thread and self._stderr_thread.is_alive():
-            self._stderr_thread.join(timeout=1.0)
+            self._stderr_thread.join(timeout=4.0)
 
         if exit_code is not None and exit_code != 0:
             print(f"  Swift helper exited with code {exit_code}", file=sys.stderr)

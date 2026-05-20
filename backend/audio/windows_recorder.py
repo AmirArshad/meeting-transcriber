@@ -147,25 +147,47 @@ class AudioRecorder:
 
         self.pa = pyaudio.PyAudio()
 
-        # Get device info and auto-detect channel counts
-        mic_info = self.pa.get_device_info_by_index(mic_device_id)
+        try:
+            # Get device info and auto-detect channel counts
+            device_count = self.pa.get_device_count()
+            if mic_device_id < 0 or mic_device_id >= device_count:
+                raise RuntimeError(
+                    f"Microphone device ID {mic_device_id} is out of range (0-{device_count - 1})"
+                )
 
-        # AUDIO QUALITY FIX: Try to use high-quality mode instead of default
-        # Many modern USB mics support 48kHz even if default is 16kHz
-        # This avoids quality-degrading resampling
-        default_rate = int(mic_info['defaultSampleRate'])
+            mic_info = self.pa.get_device_info_by_index(mic_device_id)
+            if mic_info.get('maxInputChannels', 0) <= 0:
+                raise RuntimeError(f"Microphone device {mic_device_id} has no input channels")
 
-        # Try to use 48kHz if device supports it, otherwise use native rate
-        # This matches Google Meet's approach
-        if default_rate < 48000 and sample_rate == 48000:
-            print(f"Mic default rate is {default_rate} Hz, will attempt to use {sample_rate} Hz", file=sys.stderr)
-            self.mic_sample_rate = sample_rate  # Try requested rate
-            self.mic_requested_higher_rate = True
-        else:
-            self.mic_sample_rate = default_rate
-            self.mic_requested_higher_rate = False
+            # AUDIO QUALITY FIX: Try to use high-quality mode instead of default
+            # Many modern USB mics support 48kHz even if default is 16kHz
+            # This avoids quality-degrading resampling
+            default_rate = int(mic_info['defaultSampleRate'])
 
-        self.mic_channels = int(mic_info['maxInputChannels'])
+            # Try to use 48kHz if device supports it, otherwise use native rate
+            # This matches Google Meet's approach
+            if default_rate < 48000 and sample_rate == 48000:
+                print(f"Mic default rate is {default_rate} Hz, will attempt to use {sample_rate} Hz", file=sys.stderr)
+                self.mic_sample_rate = sample_rate  # Try requested rate
+                self.mic_requested_higher_rate = True
+            else:
+                self.mic_sample_rate = default_rate
+                self.mic_requested_higher_rate = False
+
+            self.mic_channels = int(mic_info['maxInputChannels'])
+
+            if loopback_device_id >= 0:
+                if loopback_device_id >= device_count:
+                    raise RuntimeError(
+                        f"Loopback device ID {loopback_device_id} is out of range (0-{device_count - 1})"
+                    )
+                loopback_info = self.pa.get_device_info_by_index(loopback_device_id)
+                if loopback_info.get('maxInputChannels', 0) <= 0:
+                    raise RuntimeError(f"Loopback device {loopback_device_id} has no input channels")
+        except Exception:
+            self.pa.terminate()
+            self.pa = None
+            raise
 
         if loopback_device_id >= 0:
             loopback_info = self.pa.get_device_info_by_index(loopback_device_id)
@@ -411,6 +433,40 @@ class AudioRecorder:
 
         return (in_data, pyaudio.paContinue)
 
+    def _close_streams(self):
+        """Stop and close any partially opened PyAudio streams."""
+        if self.mic_stream is not None:
+            try:
+                if self.mic_stream.is_active():
+                    self.mic_stream.stop_stream()
+            except Exception:
+                pass
+            try:
+                self.mic_stream.close()
+            except Exception:
+                pass
+            self.mic_stream = None
+
+        if self.desktop_stream is not None:
+            try:
+                if self.desktop_stream.is_active():
+                    self.desktop_stream.stop_stream()
+            except Exception:
+                pass
+            try:
+                self.desktop_stream.close()
+            except Exception:
+                pass
+            self.desktop_stream = None
+
+    def _abort_start_recording(self):
+        """Reset recording state and close any streams opened during a failed start."""
+        self.is_recording = False
+        self.watchdog_running = False
+        if self.callback_watchdog and self.callback_watchdog.is_alive():
+            self.callback_watchdog.join(timeout=1.0)
+        self._close_streams()
+
     def start_recording(self):
         """Start recording from both sources."""
         print("Starting recording...", file=sys.stderr)
@@ -484,8 +540,10 @@ class AudioRecorder:
                     print(f"✓ Microphone stream opened at {self.mic_sample_rate} Hz (fallback)", file=sys.stderr)
                     _send_event_message("mic_stream_opened", "Microphone stream opened")
                 except Exception as e2:
+                    self._abort_start_recording()
                     raise RuntimeError(f"Failed to open microphone stream: {e2}")
             else:
+                self._abort_start_recording()
                 raise RuntimeError(f"Failed to open microphone stream (device {self.mic_device_id}): {e}")
 
         if self.mixing_mode:
@@ -503,11 +561,7 @@ class AudioRecorder:
                 print(f"✓ Desktop audio stream opened successfully", file=sys.stderr)
                 _send_event_message("desktop_stream_opened", "Desktop audio stream opened")
             except Exception as e:
-                # Close mic stream if desktop fails
-                if self.mic_stream:
-                    self.mic_stream.stop_stream()
-                    self.mic_stream.close()
-                    self.mic_stream = None
+                self._abort_start_recording()
                 raise RuntimeError(f"Failed to open desktop audio stream (device {self.loopback_device_id}): {e}")
 
         # Start streams
@@ -516,7 +570,7 @@ class AudioRecorder:
             if self.desktop_stream:
                 self.desktop_stream.start_stream()
         except Exception as e:
-            self.cleanup()
+            self._abort_start_recording()
             raise RuntimeError(f"Failed to start audio streams: {e}")
 
         # Start watchdog thread to detect callback stalls
@@ -594,15 +648,7 @@ class AudioRecorder:
             self.callback_watchdog.join(timeout=1.0)
 
         # Stop streams
-        if self.mic_stream:
-            self.mic_stream.stop_stream()
-            self.mic_stream.close()
-            self.mic_stream = None
-
-        if self.desktop_stream:
-            self.desktop_stream.stop_stream()
-            self.desktop_stream.close()
-            self.desktop_stream = None
+        self._close_streams()
 
         print(f"Streams stopped", file=sys.stderr)
         print(f"  Mic frames: {len(self.mic_frames)}", file=sys.stderr)
@@ -856,6 +902,11 @@ class AudioRecorder:
 
     def cleanup(self):
         """Clean up resources."""
+        self.is_recording = False
+        self.watchdog_running = False
+        if self.callback_watchdog and self.callback_watchdog.is_alive():
+            self.callback_watchdog.join(timeout=1.0)
+        self._close_streams()
         if self.pa:
             self.pa.terminate()
             self.pa = None
@@ -964,7 +1015,7 @@ def main():
                 "audioPath": str(_final_output_path),
                 "duration": _recording_duration
             }
-            print(json.dumps(recording_info))  # To stdout for Electron
+            _send_json_message(recording_info)
 
 
 if __name__ == "__main__":

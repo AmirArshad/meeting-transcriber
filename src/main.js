@@ -37,6 +37,8 @@ const {
   getRecordingStopTimeout,
   findRecorderResultPayload,
   getRecorderResultAudioPath,
+  normalizeRecordingStopPayload,
+  parseRecordingStopResult,
   resolveStopTimeoutAction,
   isModelDownloadErrorOutput,
   isSafeRecordingsAudioPath,
@@ -313,32 +315,11 @@ function resetStopWorkflowState() {
   stopCommandSent = false;
 }
 
-function parseRecordingStopResult(stdoutData) {
-  const recordingInfo = findRecorderResultPayload(stdoutData);
-
-  if (recordingInfo) {
-    const filePath = getRecorderResultAudioPath(recordingInfo);
-
-    if (filePath && fs.existsSync(filePath)) {
-      return {
-        success: true,
-        audioPath: filePath,
-        duration: recordingInfo.duration,
-        desktopDiagnostics: recordingInfo.desktopDiagnostics,
-      };
-    }
-
-    throw new Error(`Recording file not found: ${filePath}`);
-  }
-
-  const recordingsDir = path.join(app.getPath('userData'), 'recordings');
-  const opusPath = path.join(recordingsDir, 'temp.opus');
-
-  if (fs.existsSync(opusPath)) {
-    return { success: true, audioPath: opusPath };
-  }
-
-  throw new Error('Recording completed but output file not found.');
+function parseRecordingStopResultFromStdout(stdoutData) {
+  return parseRecordingStopResult(stdoutData, {
+    existsSync: fs.existsSync,
+    getRecordingsDir,
+  });
 }
 
 function stopRecordingProcess() {
@@ -399,7 +380,7 @@ function stopRecordingProcess() {
 
       if (code === 0) {
         try {
-          resolve(parseRecordingStopResult(stdoutData));
+          resolve(parseRecordingStopResultFromStdout(stdoutData));
         } catch (error) {
           reject(error);
         }

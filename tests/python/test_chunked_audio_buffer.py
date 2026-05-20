@@ -29,6 +29,10 @@ def test_chunked_audio_buffer_exposes_latest_chunk_for_level_calculation():
 
     assert np.array_equal(buffer[-1], latest)
 
+    mutated = buffer[-1]
+    mutated[0, 0] = 99.0
+    assert buffer[-1][0, 0] == 3.0
+
 
 def test_chunked_audio_buffer_rejects_mismatched_channel_shapes():
     buffer = ChunkedAudioBuffer()

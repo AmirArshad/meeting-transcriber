@@ -231,6 +231,27 @@ class DeviceManager:
             "loopback_devices": loopback_devices  # Empty for now, will use ScreenCaptureKit
         }
 
+    def validate_input_device(self, device_id: int, *, label: str = "Microphone") -> None:
+        """Raise ValueError when device_id is not a usable input device."""
+        if IS_WINDOWS:
+            device_count = self.pa.get_device_count()
+            if device_id < 0 or device_id >= device_count:
+                raise ValueError(f"{label} device ID {device_id} is out of range (0-{device_count - 1})")
+            device_info = self.pa.get_device_info_by_index(device_id)
+            if device_info.get("maxInputChannels", 0) <= 0:
+                raise ValueError(f"{label} device {device_id} has no input channels")
+            return
+
+        if IS_MACOS:
+            devices = sd.query_devices()
+            if device_id < 0 or device_id >= len(devices):
+                raise ValueError(f"{label} device ID {device_id} is out of range (0-{len(devices) - 1})")
+            if devices[device_id]["max_input_channels"] <= 0:
+                raise ValueError(f"{label} device {device_id} has no input channels")
+            return
+
+        raise ValueError(f"{label} device validation is not supported on this platform")
+
     def get_device_info(self, device_id: int) -> Dict[str, Any]:
         """
         Get detailed information for a specific device.

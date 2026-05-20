@@ -2091,6 +2091,13 @@ async function stopRecording() {
 
     const result = await window.electronAPI.stopRecording();
 
+    if (result?.success === false) {
+      addLog(`Recording failed: ${result.message || result.code}`, 'error');
+      setTranscriptMessage(result.message || 'Recording failed.', true);
+      setRecordingState('idle');
+      return;
+    }
+
     // Store the audio file path for transcription
     if (result.audioPath) {
       currentAudioFile = result.audioPath;
