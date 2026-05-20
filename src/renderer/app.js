@@ -1894,9 +1894,16 @@ async function startRecording() {
 
   setRecordingState('starting');
 
-  const preflightPassed = await runRecordingPreflightChecks({ micId, desktopId });
-  if (!preflightPassed) {
-    addLog('Recording canceled by preflight checks.', 'warning');
+  try {
+    const preflightPassed = await runRecordingPreflightChecks({ micId, desktopId });
+    if (!preflightPassed) {
+      addLog('Recording canceled by preflight checks.', 'warning');
+      setRecordingState('idle');
+      return;
+    }
+  } catch (error) {
+    console.error('Preflight checks failed:', error);
+    addLog(`Preflight checks failed: ${error.message}`, 'error');
     setRecordingState('idle');
     return;
   }
@@ -1917,25 +1924,17 @@ async function startRecording() {
         addLog('Starting recording...');
       }
 
-      // Start countdown IMMEDIATELY (don't wait for backend)
+      // Start countdown in parallel with backend initialization
       setRecordingState('countdown');
 
-      // Start backend initialization in parallel with countdown
+      const { promise: countdownPromise, cancel: cancelCountdown } = startCountdown();
       const recordingPromise = window.electronAPI.startRecording({
         micId: parseInt(micId),
         loopbackId: parseInt(desktopId),
         isFirstRecording: isFirstRecording && attempt === 1 // Only use first-recording timeout on first attempt
       });
 
-      const { promise: countdownPromise, cancel: cancelCountdown } = startCountdown();
-
-      let recordingResult;
-      try {
-        [recordingResult] = await Promise.all([recordingPromise, countdownPromise]);
-      } catch (error) {
-        cancelCountdown();
-        throw error;
-      }
+      const recordingResult = await recordingPromise;
 
       if (recordingResult?.code === 'RECORDER_BUSY') {
         cancelCountdown();
@@ -1943,6 +1942,16 @@ async function startRecording() {
         setRecordingState('idle');
         return;
       }
+
+      if (recordingResult?.success === false) {
+        cancelCountdown();
+        if (recordingResult.sessionId != null) {
+          activeRecordingSessionId = recordingResult.sessionId;
+        }
+        throw new Error(recordingResult.message || 'Recording failed to start.');
+      }
+
+      await countdownPromise;
 
       if (recordingResult?.sessionId != null) {
         activeRecordingSessionId = recordingResult.sessionId;
@@ -1974,10 +1983,6 @@ async function startRecording() {
     } catch (error) {
       console.error(`Failed to start recording (attempt ${attempt}):`, error);
       cancelActiveCountdown();
-
-      if (error?.sessionId != null) {
-        activeRecordingSessionId = error.sessionId;
-      }
 
       if (attempt >= maxAttempts) {
         // All attempts failed

@@ -35,6 +35,7 @@ const {
   getRecorderCloseAction,
   getRecorderEventAction,
   findRecorderResultPayload,
+  getRecorderResultAudioPath,
   getMacMLXCacheDir,
   getMacMLXModelStorageDirs,
   getGuidedTranscriptionTimeoutMinutes,
@@ -331,6 +332,32 @@ test('isSafeRecordingsMarkdownPath allows only markdown files inside recordings'
     filePath: path.join(recordingsDir, 'meeting.opus'),
     recordingsDir,
   }), true);
+});
+
+
+test('isSafeRecordingsAudioPath rejects symlinks that resolve outside recordings', (t) => {
+  if (process.platform === 'win32') {
+    t.skip('Symlink path hardening test requires Unix-style symlinks.');
+    return;
+  }
+
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-recordings-safe-'));
+  const recordingsDir = path.join(rootDir, 'recordings');
+  const outsideFile = path.join(rootDir, 'outside.opus');
+  const symlinkPath = path.join(recordingsDir, 'linked.opus');
+
+  try {
+    fs.mkdirSync(recordingsDir, { recursive: true });
+    fs.writeFileSync(outsideFile, 'outside');
+    fs.symlinkSync(outsideFile, symlinkPath);
+
+    assert.equal(isSafeRecordingsAudioPath({
+      filePath: symlinkPath,
+      recordingsDir,
+    }), false);
+  } finally {
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  }
 });
 
 
@@ -867,6 +894,41 @@ test('findRecorderResultPayload returns last recorder result among structured me
     duration: 12.5,
     desktopDiagnostics: { bufferSamples: 0 },
   });
+});
+
+
+test('findRecorderResultPayload accepts Windows audioPath payloads', () => {
+  const output = [
+    '{"type":"levels","mic":0.1,"desktop":0}',
+    '{"success":true,"audioPath":"C:\\\\Users\\\\me\\\\recordings\\\\meeting.opus","duration":8.25}',
+  ].join('\n');
+
+  assert.deepEqual(findRecorderResultPayload(output), {
+    success: true,
+    audioPath: 'C:\\Users\\me\\recordings\\meeting.opus',
+    duration: 8.25,
+  });
+});
+
+
+test('getRecorderResultAudioPath normalizes Windows and macOS recorder payloads', () => {
+  assert.equal(
+    getRecorderResultAudioPath({
+      success: true,
+      audioPath: 'C:\\recordings\\meeting.opus',
+      duration: 8.25,
+    }),
+    'C:\\recordings\\meeting.opus',
+  );
+  assert.equal(
+    getRecorderResultAudioPath({
+      success: true,
+      outputPath: '/Users/me/recordings/meeting.opus',
+      duration: 12.5,
+    }),
+    '/Users/me/recordings/meeting.opus',
+  );
+  assert.equal(getRecorderResultAudioPath({ success: true, duration: 1 }), null);
 });
 
 

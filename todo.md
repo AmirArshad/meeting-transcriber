@@ -109,12 +109,12 @@ npm run test:python
 
 **Prerequisite:** Grep all `addMeeting`, `transcribeAudio`, `add-meeting`, `transcribe-audio` call sites. **Validated:** every current caller already passes paths under `userData/recordings`; rejection-by-default is safe.
 
-- [ ] **3.1** `addMeetingToHistory` / `add-meeting`: `assertSafeExistingRecordingAudioPath` + transcript markdown guard before spawn (`src/main.js` ~444+).
-- [ ] **3.2** `transcribe-audio`: after `resolveTranscriptionAudioFile`, call `assertSafeExistingRecordingAudioPath`; always resolve against `getRecordingsDir()` (drop `path.dirname(audioFile)` branch for absolutes) (`src/main.js` ~2953; match guided ~3059).
-- [ ] **3.3** `meeting_manager.add_meeting`: require resolved paths under `recordings_dir`; reject `..` escapes — use existing `_is_recordings_path` (`backend/meeting_manager.py`).
-- [ ] **3.4** `add_meeting`: fail fast if audio/transcript missing; optional bounded retry for transcript only (race with AV); document that renderer saves transcript before `addMeeting` (`backend/meeting_manager.py`).
-- [ ] **3.5** Regression test: `parseRecordingStopResult` / `findRecorderResultPayload` always expose `audioPath` for Windows (`audioPath`) and macOS (`outputPath`) recorder payloads (`tests/js/main-process-helpers.test.js`). *Replaces dropped item “renderer `audioPath || outputPath`” — main already normalizes at `src/main.js:174–200`; renderer reads only `result.audioPath`.*
-- [ ] **3.6** Tests: path rejection in `tests/python/test_meeting_manager.py` (repath `_create_source_files` into recordings dir); JS helper tests if extended.
+- [x] **3.1** `addMeetingToHistory` / `add-meeting`: `assertSafeExistingRecordingAudioPath` + transcript markdown guard before spawn (`src/main.js` ~444+).
+- [x] **3.2** `transcribe-audio`: after `resolveTranscriptionAudioFile`, call `assertSafeExistingRecordingAudioPath`; always resolve against `getRecordingsDir()` (drop `path.dirname(audioFile)` branch for absolutes) (`src/main.js` ~2953; match guided ~3059).
+- [x] **3.3** `meeting_manager.add_meeting`: require resolved paths under `recordings_dir`; reject `..` escapes — use existing `_is_recordings_path` (`backend/meeting_manager.py`).
+- [x] **3.4** `add_meeting`: fail fast if audio/transcript missing; optional bounded retry for transcript only (race with AV); document that renderer saves transcript before `addMeeting` (`backend/meeting_manager.py`).
+- [x] **3.5** Regression test: `parseRecordingStopResult` / `findRecorderResultPayload` always expose `audioPath` for Windows (`audioPath`) and macOS (`outputPath`) recorder payloads (`tests/js/main-process-helpers.test.js`). *Replaces dropped item “renderer `audioPath || outputPath`” — main already normalizes at `src/main.js:174–200`; renderer reads only `result.audioPath`.*
+- [x] **3.6** Tests: path rejection in `tests/python/test_meeting_manager.py` (repath `_create_source_files` into recordings dir); JS helper tests if extended.
 
 **Phase 3 manual:** full record → stop → transcribe → save; scan/import if used.
 
@@ -196,7 +196,7 @@ npm run test:python
 |-------|--------|--------|
 | 1 | Hygiene + `modelSize` allowlist (1.14) | Complete |
 | 2 | Recording lifecycle | Complete |
-| 3 | Path enforcement | Not started |
+| 3 | Path enforcement | Complete |
 | 4 | Recorder correctness | Not started |
 | 5 | AI concurrency & archives (5.3 before 5.1) | Not started |
 | 6 | Performance & UX | Not started |

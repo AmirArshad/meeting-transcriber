@@ -525,14 +525,50 @@ function runGuidedTranscriptionProcess({
   });
 }
 
-function isPathInsideDirectory(filePath, directoryPath) {
+function resolveExistingRealPath(filePath, fsImpl = fs) {
+  if (!filePath) {
+    return null;
+  }
+
+  try {
+    const realpathSync = fsImpl.realpathSync.native || fsImpl.realpathSync;
+    return realpathSync(filePath);
+  } catch (error) {
+    if (error && error.code === 'ENOENT') {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function isPathInsideDirectory(filePath, directoryPath, fsImpl = fs) {
   if (!filePath || !directoryPath) {
     return false;
   }
 
-  const resolvedPath = path.resolve(filePath);
-  const resolvedDirectory = path.resolve(directoryPath);
-  return resolvedPath === resolvedDirectory || resolvedPath.startsWith(resolvedDirectory + path.sep);
+  const resolvedDirectory = resolveExistingRealPath(directoryPath, fsImpl);
+  const resolvedPath = resolveExistingRealPath(filePath, fsImpl);
+
+  if (resolvedDirectory && resolvedPath) {
+    return resolvedPath === resolvedDirectory || resolvedPath.startsWith(resolvedDirectory + path.sep);
+  }
+
+  if (resolvedDirectory && !resolvedPath) {
+    const lexicalPath = path.resolve(filePath);
+    if (!(lexicalPath === resolvedDirectory || lexicalPath.startsWith(resolvedDirectory + path.sep))) {
+      return false;
+    }
+
+    const parentRealPath = resolveExistingRealPath(path.dirname(filePath), fsImpl);
+    return Boolean(
+      parentRealPath
+      && (parentRealPath === resolvedDirectory || parentRealPath.startsWith(resolvedDirectory + path.sep))
+    );
+  }
+
+  const lexicalPath = path.resolve(filePath);
+  const lexicalDirectory = path.resolve(directoryPath);
+  return lexicalPath === lexicalDirectory || lexicalPath.startsWith(lexicalDirectory + path.sep);
 }
 
 function isSafeRecordingsPath({ filePath, recordingsDir, allowedExtensions = [] } = {}) {
@@ -753,7 +789,7 @@ function findRecorderResultPayload(stdoutData) {
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     try {
       const parsed = JSON.parse(lines[index]);
-      if (parsed && typeof parsed === 'object' && (parsed.outputPath || parsed.audioPath)) {
+      if (parsed && typeof parsed === 'object' && getRecorderResultAudioPath(parsed)) {
         return parsed;
       }
     } catch (error) {
@@ -762,6 +798,15 @@ function findRecorderResultPayload(stdoutData) {
   }
 
   return null;
+}
+
+function getRecorderResultAudioPath(recordingInfo) {
+  if (!recordingInfo || typeof recordingInfo !== 'object') {
+    return null;
+  }
+
+  const audioPath = recordingInfo.audioPath || recordingInfo.outputPath;
+  return audioPath ? String(audioPath) : null;
 }
 
 function getRecorderEventAction(eventPayload = {}) {
@@ -1199,6 +1244,7 @@ module.exports = {
   getRecorderCloseAction,
   getRecorderEventAction,
   findRecorderResultPayload,
+  getRecorderResultAudioPath,
   getGuidedTranscriptionTimeoutMinutes,
   getMacMLXModelStorageDirs,
   getTranscriberModule,
@@ -1209,6 +1255,7 @@ module.exports = {
   resolveStopTimeoutAction,
   isModelDownloadErrorOutput,
   isPathInsideDirectory,
+  resolveExistingRealPath,
   isSafeRecordingsAudioPath,
   isSafeRecordingsJsonPath,
   isSafeRecordingsMarkdownPath,

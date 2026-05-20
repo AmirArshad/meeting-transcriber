@@ -8,9 +8,10 @@ import backend.meeting_manager as meeting_manager_module
 from backend.meeting_manager import MeetingManager
 
 
-def _create_source_files(base_dir: Path, stem: str):
-    audio_path = base_dir / f'{stem}.opus'
-    transcript_path = base_dir / f'{stem}.md'
+def _create_source_files(recordings_dir: Path, stem: str):
+    recordings_dir.mkdir(parents=True, exist_ok=True)
+    audio_path = recordings_dir / f'{stem}.opus'
+    transcript_path = recordings_dir / f'{stem}.md'
     audio_path.write_bytes(b'audio-bytes')
     transcript_path.write_text('# Transcript\n\nHello world', encoding='utf-8')
     return audio_path, transcript_path
@@ -18,7 +19,7 @@ def _create_source_files(base_dir: Path, stem: str):
 
 def test_add_meeting_persists_files_and_removes_originals(tmp_path):
     recordings_dir = tmp_path / 'recordings'
-    source_audio, source_transcript = _create_source_files(tmp_path, 'temp_recording')
+    source_audio, source_transcript = _create_source_files(recordings_dir, 'temp_recording')
     manager = MeetingManager(recordings_dir=str(recordings_dir))
 
     meeting = manager.add_meeting(
@@ -44,9 +45,67 @@ def test_add_meeting_persists_files_and_removes_originals(tmp_path):
     assert 'transcript' not in meeting
 
 
+def test_add_meeting_rejects_paths_outside_recordings_dir(tmp_path):
+    recordings_dir = tmp_path / 'recordings'
+    recordings_dir.mkdir()
+    outside_audio, outside_transcript = _create_source_files(tmp_path / 'outside', 'outside')
+    manager = MeetingManager(recordings_dir=str(recordings_dir))
+
+    try:
+        manager.add_meeting(
+            audio_path=str(outside_audio),
+            transcript_path=str(outside_transcript),
+            duration=12.0,
+        )
+    except ValueError as error:
+        assert 'recordings directory' in str(error).lower()
+    else:
+        raise AssertionError('Expected add_meeting to reject paths outside recordings_dir')
+
+
+def test_add_meeting_fails_fast_when_audio_missing(tmp_path):
+    recordings_dir = tmp_path / 'recordings'
+    _, source_transcript = _create_source_files(recordings_dir, 'missing_audio')
+    missing_audio = recordings_dir / 'missing_audio.opus'
+    missing_audio.unlink()
+    manager = MeetingManager(recordings_dir=str(recordings_dir))
+
+    try:
+        manager.add_meeting(
+            audio_path=str(missing_audio),
+            transcript_path=str(source_transcript),
+            duration=12.0,
+        )
+    except ValueError as error:
+        assert 'audio file not found' in str(error).lower()
+    else:
+        raise AssertionError('Expected add_meeting to fail when audio is missing')
+
+
+def test_add_meeting_waits_briefly_for_transcript(tmp_path, monkeypatch):
+    recordings_dir = tmp_path / 'recordings'
+    source_audio, source_transcript = _create_source_files(recordings_dir, 'delayed_transcript')
+    source_transcript.unlink()
+    manager = MeetingManager(recordings_dir=str(recordings_dir))
+
+    def restore_transcript(*args, **kwargs):
+        source_transcript.write_text('# Transcript\n\nDelayed', encoding='utf-8')
+
+    monkeypatch.setattr(meeting_manager_module.time, 'sleep', restore_transcript)
+
+    meeting = manager.add_meeting(
+        audio_path=str(source_audio),
+        transcript_path=str(source_transcript),
+        duration=12.0,
+    )
+
+    assert meeting['id']
+    assert Path(meeting['transcriptPath']).exists()
+
+
 def test_add_meeting_keeps_originals_if_metadata_save_fails(tmp_path, monkeypatch):
     recordings_dir = tmp_path / 'recordings'
-    source_audio, source_transcript = _create_source_files(tmp_path, 'rollback_test')
+    source_audio, source_transcript = _create_source_files(recordings_dir, 'rollback_test')
     manager = MeetingManager(recordings_dir=str(recordings_dir))
 
     original_save = manager._save_meetings_unlocked
@@ -77,7 +136,7 @@ def test_add_meeting_keeps_originals_if_metadata_save_fails(tmp_path, monkeypatc
 
 def test_add_meeting_saves_metadata_before_removing_originals(tmp_path, monkeypatch):
     recordings_dir = tmp_path / 'recordings'
-    source_audio, source_transcript = _create_source_files(tmp_path, 'transaction_order')
+    source_audio, source_transcript = _create_source_files(recordings_dir, 'transaction_order')
     manager = MeetingManager(recordings_dir=str(recordings_dir))
 
     observed = {}
@@ -123,10 +182,10 @@ def test_add_meeting_generates_unique_suffix_for_same_second(tmp_path, monkeypat
     recordings_dir = tmp_path / 'recordings'
     manager = MeetingManager(recordings_dir=str(recordings_dir))
 
-    audio1, transcript1 = _create_source_files(tmp_path, 'first')
+    audio1, transcript1 = _create_source_files(recordings_dir, 'first')
     first = manager.add_meeting(str(audio1), str(transcript1), duration=1.0)
 
-    audio2, transcript2 = _create_source_files(tmp_path, 'second')
+    audio2, transcript2 = _create_source_files(recordings_dir, 'second')
     second = manager.add_meeting(str(audio2), str(transcript2), duration=2.0)
 
     assert first['id'] == '20260107_104555'
@@ -718,6 +777,101 @@ def test_delete_meeting_ignores_unsafe_ai_artifact_paths_in_existing_metadata(tm
     assert outside_path.read_text(encoding='utf-8') == 'do not delete'
 
 
+def test_delete_meeting_ignores_unsafe_core_paths_in_existing_metadata(tmp_path):
+    recordings_dir = tmp_path / 'recordings'
+    recordings_dir.mkdir()
+    manager = MeetingManager(recordings_dir=str(recordings_dir))
+
+    outside_audio = tmp_path / 'outside.opus'
+    outside_transcript = tmp_path / 'outside.md'
+    outside_audio.write_bytes(b'outside-audio')
+    outside_transcript.write_text('outside transcript', encoding='utf-8')
+
+    manager._save_meetings([
+        {
+            'id': '20260107_104555',
+            'title': 'Meeting',
+            'date': '2026-01-07T10:45:55',
+            'duration': '0:05',
+            'durationSeconds': 5.0,
+            'audioPath': str(outside_audio),
+            'transcriptPath': str(outside_transcript),
+            'language': 'en',
+            'model': 'small',
+        }
+    ])
+
+    assert manager.delete_meeting('20260107_104555') is True
+    assert outside_audio.exists()
+    assert outside_transcript.read_text(encoding='utf-8') == 'outside transcript'
+    assert manager.list_meetings() == []
+
+
+def test_get_meeting_does_not_read_outside_transcript_or_summary(tmp_path):
+    recordings_dir = tmp_path / 'recordings'
+    recordings_dir.mkdir()
+    manager = MeetingManager(recordings_dir=str(recordings_dir))
+
+    audio_path = recordings_dir / 'meeting_20260107_104555.opus'
+    transcript_path = recordings_dir / 'meeting_20260107_104555.md'
+    outside_transcript = tmp_path / 'outside.md'
+    outside_summary = tmp_path / 'outside.summary.md'
+    audio_path.write_bytes(b'audio')
+    transcript_path.write_text('safe transcript', encoding='utf-8')
+    outside_transcript.write_text('secret transcript', encoding='utf-8')
+    outside_summary.write_text('secret summary', encoding='utf-8')
+
+    manager._save_meetings([
+        {
+            'id': '20260107_104555',
+            'title': 'Meeting',
+            'date': '2026-01-07T10:45:55',
+            'duration': '0:05',
+            'durationSeconds': 5.0,
+            'audioPath': str(audio_path),
+            'transcriptPath': str(outside_transcript),
+            'language': 'en',
+            'model': 'small',
+            'ai': {'summary': {'markdownPath': str(outside_summary)}},
+        }
+    ])
+
+    hydrated = manager.get_meeting('20260107_104555')
+
+    assert hydrated['transcript'] == ''
+    assert hydrated['summary'] == ''
+    assert outside_transcript.read_text(encoding='utf-8') == 'secret transcript'
+    assert outside_summary.read_text(encoding='utf-8') == 'secret summary'
+
+
+def test_add_meeting_rejects_symlink_sources(tmp_path):
+    recordings_dir = tmp_path / 'recordings'
+    recordings_dir.mkdir()
+    outside_audio = tmp_path / 'outside.opus'
+    outside_audio.write_bytes(b'outside-audio')
+    symlink_audio = recordings_dir / 'linked.opus'
+    transcript_path = recordings_dir / 'linked.md'
+    transcript_path.write_text('# Transcript', encoding='utf-8')
+
+    try:
+        symlink_audio.symlink_to(outside_audio)
+    except OSError:
+        return
+
+    manager = MeetingManager(recordings_dir=str(recordings_dir))
+
+    try:
+        manager.add_meeting(
+            audio_path=str(symlink_audio),
+            transcript_path=str(transcript_path),
+            duration=12.0,
+        )
+    except ValueError as error:
+        assert 'symlink' in str(error).lower()
+    else:
+        raise AssertionError('Expected add_meeting to reject symlink sources')
+
+
 def test_update_meeting_ai_merges_partial_feature_updates(tmp_path):
     recordings_dir = tmp_path / 'recordings'
     manager = MeetingManager(recordings_dir=str(recordings_dir))
@@ -910,7 +1064,7 @@ def test_save_after_corrupt_metadata_preserves_backup_and_writes_new_file(tmp_pa
 
     manager.metadata_file.write_text('{not valid json', encoding='utf-8')
 
-    source_audio, source_transcript = _create_source_files(tmp_path, 'recovery_save')
+    source_audio, source_transcript = _create_source_files(recordings_dir, 'recovery_save')
     meeting = manager.add_meeting(
         audio_path=str(source_audio),
         transcript_path=str(source_transcript),

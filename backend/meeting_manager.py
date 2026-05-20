@@ -7,6 +7,7 @@ operations for listing, retrieving, and deleting meetings.
 
 import json
 import os
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime
@@ -165,8 +166,8 @@ class MeetingManager:
         return unique_meetings
 
     @staticmethod
-    def _read_text_file(file_path: Path, label: str) -> str:
-        if not file_path.exists():
+    def _read_text_file(file_path: Optional[Path], label: str) -> str:
+        if file_path is None or not file_path.exists():
             return ""
 
         try:
@@ -176,7 +177,7 @@ class MeetingManager:
             return ""
 
     @staticmethod
-    def _read_transcript_text(transcript_path: Path) -> str:
+    def _read_transcript_text(transcript_path: Optional[Path]) -> str:
         return MeetingManager._read_text_file(transcript_path, 'transcript')
 
     @staticmethod
@@ -213,11 +214,46 @@ class MeetingManager:
         except ValueError:
             return False
 
+    def _resolve_accessible_recordings_file(
+        self,
+        file_path: Path,
+        *,
+        allowed_suffixes: Optional[tuple[str, ...]] = None,
+        must_exist: bool = True,
+        label: str = 'file',
+    ) -> Optional[Path]:
+        candidate = Path(str(file_path))
+        if candidate.is_symlink():
+            print(f"Warning: Ignoring symlink {label}: {candidate}", file=sys.stderr)
+            return None
+
+        resolved = candidate.resolve(strict=False)
+        if not self._is_recordings_path(resolved):
+            print(f"Warning: Ignoring unsafe {label} path: {candidate}", file=sys.stderr)
+            return None
+
+        if allowed_suffixes is not None:
+            normalized_suffixes = tuple(suffix.lower() for suffix in allowed_suffixes)
+            if resolved.suffix.lower() not in normalized_suffixes:
+                print(
+                    f"Warning: Ignoring {label} path with unsupported extension: {candidate}",
+                    file=sys.stderr,
+                )
+                return None
+
+        if must_exist and not resolved.is_file():
+            return None
+
+        return resolved
+
     def _normalize_sidecar_path(self, value: object, allowed_suffixes: tuple[str, ...]) -> Optional[str]:
         if value in (None, ''):
             return None
 
-        file_path = Path(str(value)).resolve(strict=False)
+        file_path = Path(str(value))
+        if file_path.is_symlink():
+            raise ValueError('AI artifact path must not be a symlink')
+        file_path = file_path.resolve(strict=False)
         if file_path.suffix.lower() not in allowed_suffixes:
             raise ValueError('AI artifact path has an unsupported file extension')
         if not self._is_recordings_path(file_path):
@@ -296,11 +332,11 @@ class MeetingManager:
         references: List[tuple[str, Path]] = []
         feature_file_fields = {
             'diarization': (
-                ('speaker labels', 'segmentsPath'),
+                ('speaker labels', 'segmentsPath', ('.json',)),
             ),
             'summary': (
-                ('summary JSON', 'jsonPath'),
-                ('summary Markdown', 'markdownPath'),
+                ('summary JSON', 'jsonPath', ('.json',)),
+                ('summary Markdown', 'markdownPath', ('.md',)),
             ),
         }
 
@@ -309,23 +345,41 @@ class MeetingManager:
             if not isinstance(feature_metadata, dict):
                 continue
 
-            for label, field in fields:
+            for label, field, allowed_suffixes in fields:
                 file_path = feature_metadata.get(field)
-                if file_path:
-                    candidate = Path(str(file_path))
-                    if self._is_recordings_path(candidate):
-                        references.append((label, candidate))
-                    else:
-                        print(f"Warning: Ignoring unsafe AI artifact path for deletion: {candidate}", file=sys.stderr)
+                if not file_path:
+                    continue
+                safe_path = self._resolve_accessible_recordings_file(
+                    Path(str(file_path)),
+                    allowed_suffixes=allowed_suffixes,
+                    must_exist=True,
+                    label=label,
+                )
+                if safe_path is not None:
+                    references.append((label, safe_path))
 
         return references
 
     def _meeting_file_references(self, meeting: Dict) -> List[tuple[str, Path]]:
-        references = [
-            ('audio', Path(meeting['audioPath'])),
-            ('transcript', Path(meeting['transcriptPath'])),
-            *self._iter_ai_file_references(meeting),
-        ]
+        references: List[tuple[str, Path]] = []
+        core_file_fields = (
+            ('audio', meeting.get('audioPath'), ('.opus', '.wav', '.m4a', '.mp3', '.flac')),
+            ('transcript', meeting.get('transcriptPath'), ('.md',)),
+        )
+
+        for label, raw_path, allowed_suffixes in core_file_fields:
+            if not raw_path:
+                continue
+            safe_path = self._resolve_accessible_recordings_file(
+                Path(str(raw_path)),
+                allowed_suffixes=allowed_suffixes,
+                must_exist=True,
+                label=label,
+            )
+            if safe_path is not None:
+                references.append((label, safe_path))
+
+        references.extend(self._iter_ai_file_references(meeting))
 
         unique_references: List[tuple[str, Path]] = []
         seen_paths = set()
@@ -338,6 +392,14 @@ class MeetingManager:
 
         return unique_references
 
+    def _wait_for_file(self, file_path: Path, attempts: int = 5, delay_seconds: float = 0.1) -> bool:
+        for attempt in range(attempts):
+            if file_path.is_file():
+                return True
+            if attempt < attempts - 1:
+                time.sleep(delay_seconds)
+        return False
+
     def add_meeting(
         self,
         audio_path: str,
@@ -349,6 +411,11 @@ class MeetingManager:
     ) -> Dict:
         """
         Add a new meeting to the history.
+
+        Callers must pass audio and transcript paths that already live under
+        ``recordings_dir``. The Electron renderer writes the transcript file
+        before invoking ``add-meeting``; a short transcript wait covers races
+        with antivirus or slow filesystem sync.
 
         Args:
             audio_path: Path to audio file (.opus)
@@ -366,6 +433,21 @@ class MeetingManager:
 
         source_audio = Path(audio_path)
         source_transcript = Path(transcript_path)
+
+        if source_audio.is_symlink() or source_transcript.is_symlink():
+            raise ValueError('Symlinks are not allowed for meeting source files')
+
+        source_audio = source_audio.resolve(strict=False)
+        source_transcript = source_transcript.resolve(strict=False)
+
+        if not self._is_recordings_path(source_audio):
+            raise ValueError('Audio path must stay inside the recordings directory')
+        if not self._is_recordings_path(source_transcript):
+            raise ValueError('Transcript path must stay inside the recordings directory')
+        if not source_audio.is_file():
+            raise ValueError(f'Audio file not found: {source_audio}')
+        if not self._wait_for_file(source_transcript):
+            raise ValueError(f'Transcript file not found: {source_transcript}')
 
         with self._metadata_guard():
             meetings = self._list_meetings_locked()
@@ -402,17 +484,15 @@ class MeetingManager:
             copied_transcript = False
 
             try:
-                if source_audio.exists():
-                    shutil.copy2(source_audio, new_audio_path)
-                    copied_audio = True
-                    persisted_audio_path = new_audio_path
-                    print(f"Persisted audio to: {new_audio_path}", file=sys.stderr)
+                shutil.copy2(source_audio, new_audio_path)
+                copied_audio = True
+                persisted_audio_path = new_audio_path
+                print(f"Persisted audio to: {new_audio_path}", file=sys.stderr)
 
-                if source_transcript.exists():
-                    shutil.copy2(source_transcript, new_transcript_path)
-                    copied_transcript = True
-                    persisted_transcript_path = new_transcript_path
-                    print(f"Persisted transcript to: {new_transcript_path}", file=sys.stderr)
+                shutil.copy2(source_transcript, new_transcript_path)
+                copied_transcript = True
+                persisted_transcript_path = new_transcript_path
+                print(f"Persisted transcript to: {new_transcript_path}", file=sys.stderr)
 
                 meeting = {
                     "id": meeting_id,
@@ -563,6 +643,11 @@ class MeetingManager:
         for audio_file in audio_files:
             scanned += 1
 
+            if audio_file.is_symlink():
+                print(f"Warning: Skipping symlink audio file during scan: {audio_file.name}", file=sys.stderr)
+                skipped += 1
+                continue
+
             # Skip if already in database
             if audio_file.name in existing_audio_paths:
                 skipped += 1
@@ -570,6 +655,10 @@ class MeetingManager:
 
             # Look for corresponding transcript
             transcript_file = audio_file.with_suffix('.md')
+            if transcript_file.is_symlink():
+                print(f"Warning: Skipping symlink transcript during scan: {transcript_file.name}", file=sys.stderr)
+                skipped += 1
+                continue
             if not transcript_file.exists():
                 print(f"Warning: No transcript found for {audio_file.name}", file=sys.stderr)
                 skipped += 1
@@ -633,10 +722,20 @@ class MeetingManager:
 
             # Add meeting to database directly (don't copy files - they're already in place)
             try:
+                resolved_audio = audio_file.resolve(strict=False)
+                resolved_transcript = transcript_file.resolve(strict=False)
+                if not self._is_recordings_path(resolved_audio) or not self._is_recordings_path(resolved_transcript):
+                    print(
+                        f"Warning: Skipping {audio_file.name}: resolved path escapes recordings directory",
+                        file=sys.stderr,
+                    )
+                    skipped += 1
+                    continue
+
                 meeting = self._add_meeting_direct(
                     meeting_id=meeting_id,
-                    audio_path=str(audio_file.absolute()),
-                    transcript_path=str(transcript_file.absolute()),
+                    audio_path=str(resolved_audio),
+                    transcript_path=str(resolved_transcript),
                     duration=duration,
                     language="en",
                     model="unknown",
@@ -675,8 +774,13 @@ class MeetingManager:
             for meeting in meetings:
                 if meeting['id'] == meeting_id:
                     hydrated = dict(meeting)
-                    transcript_path = Path(meeting['transcriptPath'])
-                    transcript_text = self._read_transcript_text(transcript_path)
+                    safe_transcript_path = self._resolve_accessible_recordings_file(
+                        Path(meeting['transcriptPath']),
+                        allowed_suffixes=('.md',),
+                        must_exist=True,
+                        label='transcript',
+                    )
+                    transcript_text = self._read_transcript_text(safe_transcript_path) if safe_transcript_path else ""
                     if transcript_text:
                         hydrated['transcript'] = transcript_text
                     elif meeting.get('transcript'):
@@ -685,7 +789,13 @@ class MeetingManager:
                         hydrated['transcript'] = ""
                     summary = (meeting.get('ai') or {}).get('summary')
                     summary_path = summary.get('markdownPath') if isinstance(summary, dict) else None
-                    hydrated['summary'] = self._read_text_file(Path(summary_path), 'summary') if summary_path else ""
+                    safe_summary_path = self._resolve_accessible_recordings_file(
+                        Path(summary_path),
+                        allowed_suffixes=('.md',),
+                        must_exist=True,
+                        label='summary',
+                    ) if summary_path else None
+                    hydrated['summary'] = self._read_text_file(safe_summary_path, 'summary') if safe_summary_path else ""
                     if isinstance(summary, dict) and summary.get('sourceTranscriptHash'):
                         hydrated['summaryStale'] = summary.get('sourceTranscriptHash') != self._hash_text(hydrated.get('transcript', ''))
                     else:

@@ -36,6 +36,7 @@ const {
   getRecorderEventAction,
   getRecordingStopTimeout,
   findRecorderResultPayload,
+  getRecorderResultAudioPath,
   resolveStopTimeoutAction,
   isModelDownloadErrorOutput,
   isSafeRecordingsAudioPath,
@@ -213,10 +214,21 @@ function assertTrustedRendererSender(event) {
 }
 
 function hasInFlightAiWork() {
-  return aiAddonSetupAbortControllers.size > 0 || Boolean(activeSummaryGeneration);
+  return aiAddonSetupAbortControllers.size > 0
+    || Boolean(activeSummaryGeneration)
+    || aiAddonActionQueue.hasPendingWork()
+    || aiComputeActionQueue.hasPendingWork();
 }
 
-function abortInFlightAiWork() {
+function canAbortActiveSummaryGeneration() {
+  return Boolean(
+    activeSummaryGeneration?.controller
+    && !activeSummaryGeneration.controller.signal.aborted
+    && activeSummaryGeneration.phase !== 'metadata'
+  );
+}
+
+function abortInFlightAiSetup() {
   for (const controller of aiAddonSetupAbortControllers.values()) {
     try {
       controller.abort(createAiAddonCancelError('Local AI work was canceled because the app is quitting.'));
@@ -224,20 +236,40 @@ function abortInFlightAiWork() {
       // Best effort abort.
     }
   }
+}
 
-  if (activeSummaryGeneration?.controller && !activeSummaryGeneration.controller.signal.aborted) {
+function abortInFlightAiWork() {
+  abortInFlightAiSetup();
+
+  if (canAbortActiveSummaryGeneration()) {
     activeSummaryGeneration.controller.abort(createAiAddonCancelError('Summary generation was canceled because the app is quitting.'));
+    terminateProcessBestEffort(activeSummaryGeneration.process);
   }
-
-  terminateProcessBestEffort(activeSummaryGeneration?.process);
 }
 
 async function drainAiWorkBeforeQuit() {
-  abortInFlightAiWork();
-  await new Promise((resolve) => setTimeout(resolve, 250));
+  const metadataPhaseActive = activeSummaryGeneration?.phase === 'metadata';
 
-  for (const proc of activeProcesses) {
-    terminateProcessBestEffort(proc);
+  abortInFlightAiSetup();
+
+  if (canAbortActiveSummaryGeneration()) {
+    activeSummaryGeneration.controller.abort(createAiAddonCancelError('Summary generation was canceled because the app is quitting.'));
+    terminateProcessBestEffort(activeSummaryGeneration.process);
+  }
+
+  const drainTimeoutMs = metadataPhaseActive ? 15000 : 30000;
+  try {
+    await Promise.race([
+      Promise.all([
+        aiAddonActionQueue.drain(),
+        aiComputeActionQueue.drain(),
+      ]),
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Timed out waiting for local AI work to finish.')), drainTimeoutMs);
+      }),
+    ]);
+  } catch (error) {
+    console.warn('Quit drain for local AI work did not finish cleanly:', error.message);
   }
 }
 
@@ -285,7 +317,7 @@ function parseRecordingStopResult(stdoutData) {
   const recordingInfo = findRecorderResultPayload(stdoutData);
 
   if (recordingInfo) {
-    const filePath = recordingInfo.audioPath || recordingInfo.outputPath;
+    const filePath = getRecorderResultAudioPath(recordingInfo);
 
     if (filePath && fs.existsSync(filePath)) {
       return {
@@ -552,14 +584,24 @@ function formatDurationForTranscript(durationSeconds) {
 }
 
 function addMeetingToHistory(meetingData) {
+  let resolvedAudioPath;
+  let resolvedTranscriptPath;
+
+  try {
+    resolvedAudioPath = assertSafeExistingRecordingAudioPath(meetingData.audioPath);
+    resolvedTranscriptPath = assertSafeExistingTranscriptPath(meetingData.transcriptPath);
+  } catch (error) {
+    return Promise.reject(error);
+  }
+
   return new Promise((resolve, reject) => {
-    const { audioPath, transcriptPath, duration, language, model, title } = meetingData;
-    const recordingsDir = path.join(app.getPath('userData'), 'recordings');
+    const { duration, language, model, title } = meetingData;
+    const recordingsDir = getRecordingsDir();
     const args = getBackendModuleArgs('meeting_manager', [
       '--recordings-dir', recordingsDir,
       'add',
-      '--audio', audioPath,
-      '--transcript', transcriptPath,
+      '--audio', resolvedAudioPath,
+      '--transcript', resolvedTranscriptPath,
       '--duration', String(duration || 0),
       '--language', language || 'en',
       '--model', model || 'unknown'
@@ -2107,16 +2149,32 @@ function cancelAiAddonSetup(feature) {
 
 function createAsyncActionQueue() {
   let tail = Promise.resolve();
+  let pendingWorkCount = 0;
 
-  return function enqueue(action) {
-    const run = tail.then(action, action);
+  function enqueue(action) {
+    pendingWorkCount += 1;
+    const run = tail.then(() => action()).finally(() => {
+      pendingWorkCount -= 1;
+    });
     tail = run.catch(() => {});
     return run;
-  };
+  }
+
+  function drain() {
+    return tail;
+  }
+
+  function hasPendingWork() {
+    return pendingWorkCount > 0;
+  }
+
+  return { enqueue, drain, hasPendingWork };
 }
 
-const enqueueAiAddonAction = createAsyncActionQueue();
-const enqueueAiComputeAction = createAsyncActionQueue();
+const aiAddonActionQueue = createAsyncActionQueue();
+const aiComputeActionQueue = createAsyncActionQueue();
+const enqueueAiAddonAction = aiAddonActionQueue.enqueue;
+const enqueueAiComputeAction = aiComputeActionQueue.enqueue;
 const aiAddonSetupAbortControllers = new Map();
 let activeSummaryGeneration = null;
 
@@ -2859,7 +2917,7 @@ ipcMain.handle('start-recording', async (event, options) => {
       mainWindow.webContents.send('recording-init-progress', { stage, message });
     };
 
-    const rejectStartupFailure = (errorMessage) => {
+    const settleStartupFailure = (errorMessage) => {
       if (startupSettled) {
         return;
       }
@@ -2869,10 +2927,12 @@ ipcMain.handle('start-recording', async (event, options) => {
         clearRecordingRuntimeState('recording startup failure');
       }
 
-      const error = new Error(errorMessage);
-      error.code = 'STARTUP_FAILED';
-      error.sessionId = sessionId;
-      reject(error);
+      resolve({
+        success: false,
+        code: 'STARTUP_FAILED',
+        sessionId,
+        message: errorMessage,
+      });
     };
 
     const failActiveRecording = (warning) => {
@@ -3079,7 +3139,7 @@ ipcMain.handle('start-recording', async (event, options) => {
       }
 
       if (closeAction.errorMessage) {
-        rejectStartupFailure(closeAction.errorMessage);
+        settleStartupFailure(closeAction.errorMessage);
       }
     };
 
@@ -3109,7 +3169,7 @@ ipcMain.handle('start-recording', async (event, options) => {
         return;
       }
 
-      rejectStartupFailure(spawnError?.message || 'Recorder process failed to start.');
+      settleStartupFailure(spawnError?.message || 'Recorder process failed to start.');
     });
 
     // Longer timeout for first recording (15s), shorter for subsequent (10s)
@@ -3133,7 +3193,7 @@ ipcMain.handle('start-recording', async (event, options) => {
         if (pythonProcess === proc && !proc.killed) {
           proc.kill();
         }
-        rejectStartupFailure(errorMessage);
+        settleStartupFailure(errorMessage);
       }
     }, timeout);
   });
@@ -3164,22 +3224,18 @@ ipcMain.handle('transcribe-audio', async (event, options) => {
       return;
     }
 
-    // Resolve relative paths. Keep real .wav fallback files transcribable; only
-    // fall back to an .opus sibling when the .wav path is missing.
-    if (!path.isAbsolute(audioFile)) {
-      // Use userData recordings directory
-      const recordingsDir = path.join(app.getPath('userData'), 'recordings');
-      audioFile = resolveTranscriptionAudioFile({
-        audioFile,
-        recordingsDir,
-        existsSync: fs.existsSync,
-      });
-    } else {
-      audioFile = resolveTranscriptionAudioFile({
-        audioFile,
-        recordingsDir: path.dirname(audioFile),
-        existsSync: fs.existsSync,
-      });
+    const recordingsDir = getRecordingsDir();
+    audioFile = resolveTranscriptionAudioFile({
+      audioFile,
+      recordingsDir,
+      existsSync: fs.existsSync,
+    });
+
+    try {
+      audioFile = assertSafeExistingRecordingAudioPath(audioFile);
+    } catch (error) {
+      reject(error);
+      return;
     }
 
     const python = spawnTrackedPython(getTranscriberArgs([
@@ -3261,19 +3317,11 @@ ipcMain.handle('transcribe-audio-with-speakers', async (event, options = {}) => 
     throw new Error('transcribe-audio-with-speakers requires an audioFile');
   }
 
-  if (!path.isAbsolute(audioFile)) {
-    audioFile = resolveTranscriptionAudioFile({
-      audioFile,
-      recordingsDir: getRecordingsDir(),
-      existsSync: fs.existsSync,
-    });
-  } else {
-    audioFile = resolveTranscriptionAudioFile({
-      audioFile,
-      recordingsDir: path.dirname(audioFile),
-      existsSync: fs.existsSync,
-    });
-  }
+  audioFile = resolveTranscriptionAudioFile({
+    audioFile,
+    recordingsDir: getRecordingsDir(),
+    existsSync: fs.existsSync,
+  });
 
   const resolvedAudioPath = assertSafeExistingRecordingAudioPath(audioFile);
   const availability = getDiarizationAvailability(process.platform, process.arch);
