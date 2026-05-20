@@ -348,12 +348,12 @@ function stopRecordingProcess() {
     let settled = false;
 
     const stdoutHandler = (data) => {
-      stdoutData += data.toString();
+      stdoutData = appendCappedSpawnLogBuffer(stdoutData, data, SPAWN_JSON_RESULT_BUFFER_MAX_CHARS);
     };
 
     const stderrHandler = (data) => {
       const output = data.toString();
-      stderrData += output;
+      stderrData = appendCappedSpawnLogBuffer(stderrData, output);
       console.log(`Python status: ${output}`);
     };
 
@@ -2582,6 +2582,8 @@ ipcMain.handle('get-ai-addon-status', async (event, options = {}) => checkAiAddo
 }));
 
 ipcMain.handle('store-diarization-token', async (event, token) => {
+  assertTrustedRendererSender(event);
+
   const trimmedToken = typeof token === 'string' ? token.trim() : '';
   if (!trimmedToken) {
     return { success: false, code: 'EMPTY_TOKEN', message: 'Token must not be empty.' };
@@ -3237,6 +3239,8 @@ ipcMain.handle('stop-recording', async (event) => {
  * Transcribe audio file
  */
 ipcMain.handle('transcribe-audio', async (event, options) => {
+  assertTrustedRendererSender(event);
+
   let { audioFile, language, modelSize } = options;
 
   modelSize = requireAllowedModelSize(modelSize);
@@ -3319,6 +3323,8 @@ ipcMain.handle('transcribe-audio', async (event, options) => {
 });
 
 ipcMain.handle('transcribe-audio-with-speakers', async (event, options = {}) => {
+  assertTrustedRendererSender(event);
+
   let { audioFile, language, modelSize, speakerCount } = options;
   modelSize = requireAllowedModelSize(modelSize);
 
@@ -3407,6 +3413,8 @@ ipcMain.handle('transcribe-audio-with-speakers', async (event, options = {}) => 
 });
 
 ipcMain.handle('diarize-transcript', async (event, options = {}) => {
+  assertTrustedRendererSender(event);
+
   const { audioPath, segments, segmentsJsonPath, speakerCount } = options;
 
   if (!audioPath) {
@@ -3529,6 +3537,8 @@ ipcMain.handle('diarize-transcript', async (event, options = {}) => {
 });
 
 ipcMain.handle('generate-summary', async (event, options = {}) => {
+  assertTrustedRendererSender(event);
+
   const { meetingId, profile, modelId } = options;
   if (!meetingId) {
     throw new Error('generate-summary requires a meetingId');
@@ -3585,24 +3595,27 @@ ipcMain.handle('generate-summary', async (event, options = {}) => {
       normalizedMeetingId,
     ]), { cwd: pythonConfig.backendPath });
     activeSummaryGeneration.process = python;
-    let output = '';
-    let errorOutput = '';
-    python.stdout.on('data', (data) => { output = appendSpawnLogBuffer(output, data); });
-    python.stderr.on('data', (data) => { errorOutput = appendSpawnLogBuffer(errorOutput, data); });
+    const preflightOutput = collectPythonProcessOutput(python, { jsonResult: true });
     python.on('close', (code) => {
       if (controller.signal.aborted) {
         finishPreflight(reject, createAiAddonCancelError('Summary generation was canceled.'));
         return;
       }
+      try {
+        preflightOutput.assertStdoutWithinLimit();
+      } catch (error) {
+        finishPreflight(reject, error);
+        return;
+      }
       if (code === 0) {
         try {
-          finishPreflight(resolve, JSON.parse(output));
+          finishPreflight(resolve, JSON.parse(preflightOutput.getStdout()));
         } catch (error) {
           finishPreflight(reject, new Error(`Failed to parse meeting before summary generation: ${error.message}`));
         }
         return;
       }
-      finishPreflight(reject, new Error(errorOutput.trim() || 'Meeting not found'));
+      finishPreflight(reject, new Error(preflightOutput.getStderr().trim() || 'Meeting not found'));
     });
     python.on('error', (error) => finishPreflight(reject, controller.signal.aborted ? createAiAddonCancelError('Summary generation was canceled.') : error));
   }).catch((error) => {
@@ -3743,23 +3756,26 @@ ipcMain.handle('generate-summary', async (event, options = {}) => {
     });
 
     python.on('close', async (code) => {
-      const cleanupStagingFiles = () => removeSummarySidecarFiles([outputJsonTemp, outputMarkdownTemp]);
-      const cleanupPromotedFiles = () => removeSummarySidecarFiles([outputJson, outputMarkdown]);
-      let promotedSidecars = false;
+      const cleanupSummarySidecars = () => removeSummarySidecarFiles([
+        outputJsonTemp,
+        outputMarkdownTemp,
+        outputJson,
+        outputMarkdown,
+      ]);
 
       try {
         if (controller.signal.aborted) {
-          await cleanupStagingFiles();
+          await cleanupSummarySidecars();
           finish(reject, createAiAddonCancelError('Summary generation was canceled.'));
           return;
         }
         if (stdoutOverflow.overflowed) {
-          await cleanupStagingFiles();
+          await cleanupSummarySidecars();
           finish(reject, new Error('Summary generation output exceeded the maximum allowed size.'));
           return;
         }
         if (code !== 0) {
-          await cleanupStagingFiles();
+          await cleanupSummarySidecars();
           finish(reject, new Error(summarizeSummaryValidationError(errorOutput)));
           return;
         }
@@ -3769,14 +3785,18 @@ ipcMain.handle('generate-summary', async (event, options = {}) => {
           throw new Error('Summary generation returned an invalid result payload.');
         }
         if (controller.signal.aborted) {
-          await cleanupStagingFiles();
+          await cleanupSummarySidecars();
           finish(reject, createAiAddonCancelError('Summary generation was canceled.'));
           return;
         }
 
         await fs.promises.rename(outputJsonTemp, outputJson);
-        await fs.promises.rename(outputMarkdownTemp, outputMarkdown);
-        promotedSidecars = true;
+        try {
+          await fs.promises.rename(outputMarkdownTemp, outputMarkdown);
+        } catch (renameError) {
+          await cleanupSummarySidecars();
+          throw renameError;
+        }
 
         activeSummaryGeneration.phase = 'metadata';
         const summaryMetadata = {
@@ -3837,17 +3857,21 @@ ipcMain.handle('generate-summary', async (event, options = {}) => {
           meeting: updatedMeeting,
         });
       } catch (error) {
-        if (promotedSidecars) {
-          await cleanupPromotedFiles();
-        } else {
-          await cleanupStagingFiles();
-        }
+        await cleanupSummarySidecars();
         finish(reject, error);
       }
     });
 
     python.on('error', async (error) => {
-      await removeSummarySidecarFiles([outputJsonTemp, outputMarkdownTemp]);
+      if (summarySettled) {
+        return;
+      }
+      await removeSummarySidecarFiles([
+        outputJsonTemp,
+        outputMarkdownTemp,
+        outputJson,
+        outputMarkdown,
+      ]);
       finish(reject, controller.signal.aborted ? createAiAddonCancelError('Summary generation was canceled.') : error);
     });
   }),
@@ -3886,30 +3910,30 @@ ipcMain.handle('list-meetings', async () => {
       'list'
     ]), { cwd: pythonConfig.backendPath });
 
-    let output = '';
-    let errorOutput = '';
-
-    python.stdout.on('data', (data) => {
-      output = appendSpawnLogBuffer(output, data);
-    });
-
-    python.stderr.on('data', (data) => {
-      errorOutput = appendSpawnLogBuffer(errorOutput, data);
-    });
+    const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
 
     python.on('close', (code) => {
+      try {
+        processOutput.assertStdoutWithinLimit();
+      } catch (error) {
+        reject(error);
+        return;
+      }
+
       if (code === 0) {
         try {
-          const meetings = JSON.parse(output);
+          const meetings = JSON.parse(processOutput.getStdout());
           resolve(meetings);
         } catch (e) {
           reject(new Error(`Failed to parse meetings: ${e.message}`));
         }
       } else {
-        const errorMsg = errorOutput.trim() || 'Unknown error';
+        const errorMsg = processOutput.getStderr().trim() || 'Unknown error';
         reject(new Error(`Failed to list meetings: ${errorMsg}`));
       }
     });
+
+    python.on('error', reject);
   });
 });
 
@@ -3954,6 +3978,8 @@ ipcMain.handle('get-meeting', async (event, meetingId) => {
  * Delete a meeting
  */
 ipcMain.handle('delete-meeting', async (event, meetingId) => {
+  assertTrustedRendererSender(event);
+
   const recordingsDir = path.join(app.getPath('userData'), 'recordings');
 
   return new Promise((resolve, reject) => {
@@ -3995,30 +4021,30 @@ ipcMain.handle('scan-recordings', async () => {
       'scan'
     ]), { cwd: pythonConfig.backendPath });
 
-    let output = '';
-    let errorOutput = '';
-
-    python.stdout.on('data', (data) => {
-      output = appendSpawnLogBuffer(output, data);
-    });
-
-    python.stderr.on('data', (data) => {
-      errorOutput = appendSpawnLogBuffer(errorOutput, data);
-    });
+    const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
 
     python.on('close', (code) => {
+      try {
+        processOutput.assertStdoutWithinLimit();
+      } catch (error) {
+        reject(error);
+        return;
+      }
+
       if (code === 0) {
         try {
-          const result = JSON.parse(output);
+          const result = JSON.parse(processOutput.getStdout());
           resolve(result);
         } catch (e) {
           reject(new Error(`Failed to parse scan result: ${e.message}`));
         }
       } else {
-        const errorMsg = errorOutput.trim() || 'Unknown error';
+        const errorMsg = processOutput.getStderr().trim() || 'Unknown error';
         reject(new Error(`Failed to scan recordings: ${errorMsg}`));
       }
     });
+
+    python.on('error', reject);
   });
 });
 
@@ -4026,6 +4052,7 @@ ipcMain.handle('scan-recordings', async () => {
  * Add a meeting (called after transcription)
  */
 ipcMain.handle('add-meeting', async (event, meetingData) => {
+  assertTrustedRendererSender(event);
   return addMeetingToHistory(meetingData);
 });
 
@@ -4036,6 +4063,8 @@ ipcMain.handle('add-meeting', async (event, meetingData) => {
  * label that the UI shows changes.
  */
 ipcMain.handle('update-meeting', async (event, payload) => {
+  assertTrustedRendererSender(event);
+
   const meetingId = payload && payload.meetingId;
   const updates = (payload && payload.updates) || {};
   if (!meetingId) {
@@ -4057,16 +4086,19 @@ ipcMain.handle('update-meeting', async (event, payload) => {
       cwd: pythonConfig.backendPath,
     });
 
-    let output = '';
-    let errorOutput = '';
-
-    python.stdout.on('data', (data) => { output = appendSpawnLogBuffer(output, data); });
-    python.stderr.on('data', (data) => { errorOutput = appendSpawnLogBuffer(errorOutput, data); });
+    const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
 
     python.on('close', (code) => {
+      try {
+        processOutput.assertStdoutWithinLimit();
+      } catch (error) {
+        reject(error);
+        return;
+      }
+
       if (code === 0) {
         try {
-          const updatedMeeting = JSON.parse(output);
+          const updatedMeeting = JSON.parse(processOutput.getStdout());
           if (!updatedMeeting) {
             reject(new Error('Meeting was not found.'));
             return;
@@ -4076,7 +4108,7 @@ ipcMain.handle('update-meeting', async (event, payload) => {
           reject(new Error(`Failed to parse updated meeting: ${e.message}`));
         }
       } else {
-        reject(new Error(errorOutput.trim() || 'Failed to update meeting'));
+        reject(new Error(processOutput.getStderr().trim() || 'Failed to update meeting'));
       }
     });
 
@@ -4085,6 +4117,8 @@ ipcMain.handle('update-meeting', async (event, payload) => {
 });
 
 ipcMain.handle('update-meeting-ai', async (event, payload) => {
+  assertTrustedRendererSender(event);
+
   const meetingId = payload && payload.meetingId;
   const updates = validateAiMetadataPaths((payload && payload.updates) || {});
   if (!meetingId) {
@@ -4119,21 +4153,24 @@ ipcMain.handle('update-meeting-ai', async (event, payload) => {
       cwd: pythonConfig.backendPath,
     });
 
-    let output = '';
-    let errorOutput = '';
-
-    python.stdout.on('data', (data) => { output = appendSpawnLogBuffer(output, data); });
-    python.stderr.on('data', (data) => { errorOutput = appendSpawnLogBuffer(errorOutput, data); });
+    const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
 
     python.on('close', (code) => {
+      try {
+        processOutput.assertStdoutWithinLimit();
+      } catch (error) {
+        reject(error);
+        return;
+      }
+
       if (code === 0) {
         try {
-          resolve(JSON.parse(output));
+          resolve(JSON.parse(processOutput.getStdout()));
         } catch (e) {
           reject(new Error(`Failed to parse updated AI meeting metadata: ${e.message}`));
         }
       } else {
-        reject(new Error(errorOutput.trim() || 'Failed to update AI meeting metadata'));
+        reject(new Error(processOutput.getStderr().trim() || 'Failed to update AI meeting metadata'));
       }
     });
 
@@ -4454,7 +4491,9 @@ ipcMain.handle('open-legal-notices', async () => {
 /**
  * Open update download page in browser
  */
-ipcMain.handle('download-update', async () => {
+ipcMain.handle('download-update', async (event) => {
+  assertTrustedRendererSender(event);
+
   if (!pendingUpdateInfo || !pendingUpdateInfo.downloadUrl) {
     throw new Error('No pending update is available to download.');
   }

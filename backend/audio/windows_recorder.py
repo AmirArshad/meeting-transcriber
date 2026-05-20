@@ -146,6 +146,7 @@ class AudioRecorder:
         self.desktop_volume = desktop_volume
 
         self.pa = pyaudio.PyAudio()
+        loopback_info = None
 
         try:
             # Get device info and auto-detect channel counts
@@ -189,9 +190,7 @@ class AudioRecorder:
             self.pa = None
             raise
 
-        if loopback_device_id >= 0:
-            loopback_info = self.pa.get_device_info_by_index(loopback_device_id)
-
+        if loopback_device_id >= 0 and loopback_info is not None:
             # COMPATIBILITY FIX: Probe actual working sample rate instead of trusting default
             # This prevents distorted audio on Bluetooth headsets and other devices
             # where reported rate doesn't match actual operating rate

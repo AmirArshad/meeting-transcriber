@@ -37,6 +37,11 @@ function getTranscriptionComputeTimeoutMs(modelSize) {
   return (modelTimeouts[modelSize] || 60) * 60 * 1000;
 }
 
+function formatComputeTimeoutLabel(timeoutMs) {
+  const minutes = Math.max(1, Math.round(timeoutMs / 60000));
+  return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+}
+
 function runWallClockComputeAction({
   action,
   timeoutMs,
@@ -78,7 +83,7 @@ function runWallClockComputeAction({
         return;
       }
       timedOut = true;
-      const timeoutError = new Error(`${label} timed out after ${Math.round(timeoutMs / 60000)} minutes.`);
+      const timeoutError = new Error(`${label} timed out after ${formatComputeTimeoutLabel(timeoutMs)}.`);
       Promise.resolve(terminateProcess(activeProcess))
         .then(() => actionPromise)
         .catch(() => undefined)
@@ -1369,6 +1374,7 @@ module.exports = {
   UPDATER_HTTP_RESPONSE_MAX_CHARS,
   AI_COMPUTE_TIMEOUT_MS,
   getTranscriptionComputeTimeoutMs,
+  formatComputeTimeoutLabel,
   runWallClockComputeAction,
   matchesFasterWhisperCacheFolderName,
   buildFileUrl,

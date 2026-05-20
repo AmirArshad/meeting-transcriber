@@ -654,7 +654,7 @@ test('runWallClockComputeAction rejects when the wall-clock limit is exceeded', 
   await Promise.resolve();
   t.mock.timers.tick(1000);
 
-  await assert.rejects(actionPromise, /Test job timed out after 0 minutes/);
+  await assert.rejects(actionPromise, /Test job timed out after 1 minute/);
   assert.equal(killedProcess.pid, 4242);
 });
 

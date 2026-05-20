@@ -78,6 +78,7 @@ function fetchLatestRelease() {
     };
 
     https.get(GITHUB_API, options, (res) => {
+      res.setEncoding('utf8');
       let data = '';
 
       res.on('data', (chunk) => {
@@ -85,7 +86,7 @@ function fetchLatestRelease() {
           return;
         }
         const remaining = UPDATER_HTTP_RESPONSE_MAX_CHARS - data.length;
-        data += chunk.length > remaining ? chunk.slice(0, remaining) : chunk;
+        data += chunk.slice(0, remaining);
       });
 
       res.on('end', () => {

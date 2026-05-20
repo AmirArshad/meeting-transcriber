@@ -4221,6 +4221,10 @@ class AudioVisualizer {
     }
     this.micTarget = nextMicTarget;
     this.desktopTarget = nextDesktopTarget;
+
+    if (this.isRunning && this.rafId === null && !document.hidden) {
+      this._loop();
+    }
   }
 
   _decayPeaks() {
@@ -4246,7 +4250,7 @@ class AudioVisualizer {
       && this.desktopTarget === this._lastDrawnDesktopTarget;
 
     if (!shouldShift && targetsUnchanged && !heartbeatFade) {
-      this.rafId = requestAnimationFrame(() => this._loop());
+      this.rafId = null;
       return;
     }
 
