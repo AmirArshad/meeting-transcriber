@@ -158,11 +158,8 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download installer artifacts
-        uses: actions/download-artifact@v8
-        with:
-          path: release-artifacts
-
+      # Checkout must run before download-artifact: checkout clears the workspace and
+      # would delete release-artifacts/ if download ran first (see f411436 regression).
       - name: Checkout repository
         uses: actions/checkout@v6
 
@@ -185,6 +182,11 @@ jobs:
           RELEASE_VERSION: ${{ steps.release_version.outputs.version }}
           RELEASE_LEGAL_DIR: ${{ github.workspace }}/release-legal
         run: node scripts/stage-release-legal-assets.js
+
+      - name: Download installer artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: release-artifacts
 
       - name: Collect release assets
         id: collect_assets
