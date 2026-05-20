@@ -63,7 +63,7 @@ def has_cached_faster_whisper_model(model_size: str) -> bool:
         f"models--guillaumekln--faster-whisper-{model_size}",
     )
     for candidate in cache_dir.iterdir():
-        if not any(pattern in candidate.name for pattern in patterns):
+        if candidate.name not in patterns:
             continue
         snapshots_dir = candidate / "snapshots"
         if snapshots_dir.is_dir() and any(is_complete_faster_whisper_snapshot(item) for item in snapshots_dir.iterdir()):

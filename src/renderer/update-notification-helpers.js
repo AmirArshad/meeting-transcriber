@@ -9,6 +9,22 @@
     };
   }
 
+  const TRUSTED_GITHUB_REPO_PATH_PREFIX = '/AmirArshad/meeting-transcriber';
+
+  function isTrustedUpdateDownloadUrl(url) {
+    try {
+      const parsedUrl = new URL(String(url || ''));
+      if (parsedUrl.protocol !== 'https:' || parsedUrl.hostname !== 'github.com') {
+        return false;
+      }
+
+      return parsedUrl.pathname === TRUSTED_GITHUB_REPO_PATH_PREFIX
+        || parsedUrl.pathname.startsWith(`${TRUSTED_GITHUB_REPO_PATH_PREFIX}/`);
+    } catch (error) {
+      return false;
+    }
+  }
+
   function showUpdateNotificationBanner({
     banner,
     title,
@@ -65,15 +81,17 @@
     }
 
     const updateInfo = await getPendingUpdateInfo();
-    if (updateInfo && updateInfo.version) {
+    if (updateInfo && updateInfo.version && isTrustedUpdateDownloadUrl(updateInfo.downloadUrl)) {
       showUpdateNotification(updateInfo);
+      return updateInfo;
     }
 
-    return updateInfo && updateInfo.version ? updateInfo : null;
+    return null;
   }
 
   const helpers = {
     buildUpdateNotificationView,
+    isTrustedUpdateDownloadUrl,
     showUpdateNotificationBanner,
     hideUpdateNotificationBanner,
     replayPendingUpdateNotification,

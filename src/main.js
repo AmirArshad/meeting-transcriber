@@ -63,6 +63,9 @@ const {
   redactSensitiveText,
   TRANSCRIPTION_CUDA_PACKAGES,
   MACOS_PERMISSION_CHECK_TIMEOUT_MS,
+  AI_COMPUTE_TIMEOUT_MS,
+  getTranscriptionComputeTimeoutMs,
+  runWallClockComputeAction,
 } = require('./main-process-helpers');
 const { checkForUpdates, openDownloadPage } = require('./updater');
 const {
@@ -2159,6 +2162,72 @@ const enqueueAiComputeAction = aiComputeActionQueue.enqueue;
 const aiAddonSetupAbortControllers = new Map();
 let activeSummaryGeneration = null;
 
+function waitForAiComputeQueueIdle({ cancelSignal, cancelMessage, pollIntervalMs = 250 }) {
+  return new Promise((resolve, reject) => {
+    if (cancelSignal && cancelSignal.aborted) {
+      reject(createAiAddonCancelError(cancelMessage));
+      return;
+    }
+
+    let timer = null;
+    let settled = false;
+    const cleanupAbort = cancelSignal && typeof cancelSignal.addEventListener === 'function'
+      ? (() => {
+        const handleAbort = () => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          if (timer) {
+            clearInterval(timer);
+            timer = null;
+          }
+          reject(createAiAddonCancelError(cancelMessage));
+        };
+        cancelSignal.addEventListener('abort', handleAbort, { once: true });
+        return () => cancelSignal.removeEventListener('abort', handleAbort);
+      })()
+      : () => {};
+
+    const finish = (callback, value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+      cleanupAbort();
+      callback(value);
+    };
+
+    const checkIdle = () => {
+      if (cancelSignal && cancelSignal.aborted) {
+        finish(reject, createAiAddonCancelError(cancelMessage));
+        return;
+      }
+      if (!aiComputeActionQueue.hasPendingWork()) {
+        finish(resolve);
+      }
+    };
+
+    checkIdle();
+    if (settled) {
+      return;
+    }
+
+    timer = setInterval(checkIdle, pollIntervalMs);
+    timer.unref?.();
+  });
+}
+
+async function removeSummarySidecarFiles(filePaths = []) {
+  await Promise.all(filePaths.filter(Boolean).map((filePath) => (
+    fs.promises.rm(filePath, { force: true }).catch(() => {})
+  )));
+}
+
 function getRecordingsDir() {
   return path.join(app.getPath('userData'), 'recordings');
 }
@@ -2359,85 +2428,58 @@ function summarizeSummaryValidationError(errorOutput) {
 
 function terminateProcessBestEffort(proc) {
   if (!proc || proc.killed) {
-    return;
+    return Promise.resolve();
   }
 
-  try {
-    if (process.platform === 'win32' && proc.pid) {
-      execFile('taskkill', ['/PID', String(proc.pid), '/T', '/F'], { windowsHide: true }, () => {});
-      return;
-    }
-
-    proc.kill();
-  } catch (error) {
-    // Best effort cleanup.
-  }
-}
-
-function createAbortableComputeAction({ cancelSignal, cancelMessage, action, waitTimeoutMs = 15000 }) {
-  return new Promise((resolve, reject) => {
-    if (cancelSignal && cancelSignal.aborted) {
-      reject(createAiAddonCancelError(cancelMessage));
-      return;
-    }
-
-    let started = false;
+  return new Promise((resolve) => {
     let settled = false;
-    let waitTimer = null;
-    const settle = (callback, value) => {
+    const finish = () => {
       if (settled) {
         return;
       }
       settled = true;
-      if (waitTimer) {
-        clearTimeout(waitTimer);
-      }
-      cleanup();
-      callback(value);
+      clearTimeout(waitTimeout);
+      resolve();
     };
-    const cleanup = cancelSignal && typeof cancelSignal.addEventListener === 'function'
-      ? (() => {
-        const handleAbort = () => {
-          if (settled) {
-            return;
-          }
-          if (!started) {
-            settle(reject, createAiAddonCancelError(cancelMessage));
-          }
-        };
-        cancelSignal.addEventListener('abort', handleAbort, { once: true });
-        return () => cancelSignal.removeEventListener('abort', handleAbort);
-      })()
-      : () => {};
 
-    if (waitTimeoutMs > 0) {
-      waitTimer = setTimeout(() => {
-        if (!settled && !started) {
-          settle(reject, new Error('Local AI setup validation is waiting for another AI job to finish. Try again after the current summary or speaker identification job completes.'));
-        }
-      }, waitTimeoutMs);
-      waitTimer.unref?.();
+    if (typeof proc.once === 'function') {
+      proc.once('close', finish);
+      proc.once('error', finish);
     }
 
-    enqueueAiComputeAction(async () => {
-      // If waitTimeoutMs rejected while this was queued, the queue still drains
-      // this no-op slot so later AI work is not blocked behind a stale action.
-      if (settled) {
+    const waitTimeout = setTimeout(finish, 15000);
+    waitTimeout.unref?.();
+
+    try {
+      if (process.platform === 'win32' && proc.pid) {
+        execFile('taskkill', ['/PID', String(proc.pid), '/T', '/F'], { windowsHide: true }, () => {});
         return;
       }
-      started = true;
-      if (waitTimer) {
-        clearTimeout(waitTimer);
-        waitTimer = null;
-      }
-      try {
-        const result = await action();
-        settle(resolve, result);
-      } catch (error) {
-        settle(reject, error);
-      }
-    });
+
+      proc.kill('SIGTERM');
+      setTimeout(() => {
+        if (!settled && proc && !proc.killed && typeof proc.kill === 'function') {
+          try {
+            proc.kill('SIGKILL');
+          } catch (error) {
+            // Best effort cleanup.
+          }
+        }
+      }, 3000).unref?.();
+    } catch (error) {
+      finish();
+    }
   });
+}
+
+function createAbortableComputeAction({ cancelSignal, cancelMessage, action }) {
+  return waitForAiComputeQueueIdle({ cancelSignal, cancelMessage })
+    .then(() => {
+      if (cancelSignal && cancelSignal.aborted) {
+        throw createAiAddonCancelError(cancelMessage);
+      }
+      return enqueueAiComputeAction(() => action());
+    });
 }
 
 function validateSummaryRuntimeSmoke({ modelId, cache, cancelSignal }) {
@@ -3195,99 +3237,85 @@ ipcMain.handle('stop-recording', async (event) => {
  * Transcribe audio file
  */
 ipcMain.handle('transcribe-audio', async (event, options) => {
-  return new Promise((resolve, reject) => {
-    let { audioFile, language, modelSize } = options;
+  let { audioFile, language, modelSize } = options;
 
-    try {
-      modelSize = requireAllowedModelSize(modelSize);
-    } catch (error) {
-      reject(error);
-      return;
-    }
+  modelSize = requireAllowedModelSize(modelSize);
 
-    const recordingsDir = getRecordingsDir();
-    audioFile = resolveTranscriptionAudioFile({
-      audioFile,
-      recordingsDir,
-      existsSync: fs.existsSync,
-    });
-
-    try {
-      audioFile = assertSafeExistingRecordingAudioPath(audioFile);
-    } catch (error) {
-      reject(error);
-      return;
-    }
-
-    const python = spawnTrackedPython(getTranscriberArgs([
-      '--file', audioFile,
-      '--language', language || 'en',
-      '--model', modelSize,
-      '--json'
-    ]), { cwd: pythonConfig.backendPath, env: getTranscriptionRuntimeEnv(modelSize) });
-
-    let output = '';
-    let errorOutput = '';
-    let hasCompleted = false;
-    const stdoutOverflow = { overflowed: false };
-    const progressRedactor = createLineChunkRedactor();
-
-    // Timeout: generous limits for slow CPUs and long recordings
-    // These are safety nets to catch stalled processes, not performance limits
-    const modelTimeouts = { tiny: 30, base: 45, small: 60, medium: 90, large: 120, 'large-v3': 120 };
-    const timeoutMinutes = modelTimeouts[modelSize] || 60;
-    const transcriptionTimeout = setTimeout(() => {
-      if (!hasCompleted) {
-        hasCompleted = true;
-        python.kill();
-        reject(new Error(`Transcription timeout after ${timeoutMinutes} minutes. The process may have stalled.`));
-      }
-    }, timeoutMinutes * 60 * 1000);
-
-    python.stdout.on('data', (data) => {
-      output = appendSpawnJsonStdout(output, data, stdoutOverflow);
-    });
-
-    python.stderr.on('data', (data) => {
-      const stderrChunk = data.toString();
-      errorOutput = appendSpawnLogBuffer(errorOutput, stderrChunk);
-      sendRedactedProgress('transcription-progress', stderrChunk, progressRedactor);
-    });
-
-    python.on('close', (code) => {
-      if (hasCompleted) return; // Already timed out
-      hasCompleted = true;
-      clearTimeout(transcriptionTimeout);
-      flushRedactedProgress('transcription-progress', progressRedactor);
-
-      if (stdoutOverflow.overflowed) {
-        reject(new Error('Transcription output exceeded the maximum allowed size.'));
-        return;
-      }
-
-      // Try to parse JSON output first, even if exit code is non-zero
-      // This handles cases where transcription succeeds but cleanup fails
-      if (output.trim()) {
-        try {
-          const result = JSON.parse(output);
-          // If we successfully parsed JSON with the expected structure, consider it success
-          if (result.text !== undefined || result.segments !== undefined) {
-            resolve(result);
-            return;
-          }
-        } catch (e) {
-          // JSON parsing failed, continue to error handling
-        }
-      }
-
-      // If we get here, either no output or parsing failed
-      if (code === 0) {
-        reject(new Error(`Transcription produced no valid output`));
-      } else {
-        reject(new Error(`Transcription failed: ${errorOutput || 'Unknown error'}`));
-      }
-    });
+  const recordingsDir = getRecordingsDir();
+  audioFile = resolveTranscriptionAudioFile({
+    audioFile,
+    recordingsDir,
+    existsSync: fs.existsSync,
   });
+  audioFile = assertSafeExistingRecordingAudioPath(audioFile);
+
+  return enqueueAiComputeAction(() => runWallClockComputeAction({
+    timeoutMs: getTranscriptionComputeTimeoutMs(modelSize),
+    label: 'Transcription',
+    terminateProcess: terminateProcessBestEffort,
+    action: (registerProcess) => new Promise((resolve, reject) => {
+      const python = spawnTrackedPython(getTranscriberArgs([
+        '--file', audioFile,
+        '--language', language || 'en',
+        '--model', modelSize,
+        '--json',
+      ]), { cwd: pythonConfig.backendPath, env: getTranscriptionRuntimeEnv(modelSize) });
+      registerProcess(python);
+
+      let output = '';
+      let errorOutput = '';
+      let hasCompleted = false;
+      const stdoutOverflow = { overflowed: false };
+      const progressRedactor = createLineChunkRedactor();
+
+      python.stdout.on('data', (data) => {
+        output = appendSpawnJsonStdout(output, data, stdoutOverflow);
+      });
+
+      python.stderr.on('data', (data) => {
+        const stderrChunk = data.toString();
+        errorOutput = appendSpawnLogBuffer(errorOutput, stderrChunk);
+        sendRedactedProgress('transcription-progress', stderrChunk, progressRedactor);
+      });
+
+      python.on('close', (code) => {
+        if (hasCompleted) return;
+        hasCompleted = true;
+        flushRedactedProgress('transcription-progress', progressRedactor);
+
+        if (stdoutOverflow.overflowed) {
+          reject(new Error('Transcription output exceeded the maximum allowed size.'));
+          return;
+        }
+
+        if (output.trim()) {
+          try {
+            const result = JSON.parse(output);
+            if (result.text !== undefined || result.segments !== undefined) {
+              resolve(result);
+              return;
+            }
+          } catch (e) {
+            // JSON parsing failed, continue to error handling
+          }
+        }
+
+        if (code === 0) {
+          reject(new Error('Transcription produced no valid output'));
+        } else {
+          reject(new Error(`Transcription failed: ${errorOutput || 'Unknown error'}`));
+        }
+      });
+
+      python.on('error', (error) => {
+        if (hasCompleted) {
+          return;
+        }
+        hasCompleted = true;
+        reject(error);
+      });
+    }),
+  }));
 });
 
 ipcMain.handle('transcribe-audio-with-speakers', async (event, options = {}) => {
@@ -3336,7 +3364,11 @@ ipcMain.handle('transcribe-audio-with-speakers', async (event, options = {}) => 
     throw new Error('Temporary speaker-guided transcript path is invalid.');
   }
 
-  return enqueueAiComputeAction(() => runGuidedTranscriptionProcess({
+  return enqueueAiComputeAction(() => runWallClockComputeAction({
+    timeoutMs: AI_COMPUTE_TIMEOUT_MS.guidedTranscription,
+    label: 'Speaker-guided transcription',
+    terminateProcess: terminateProcessBestEffort,
+    action: (registerProcess) => runGuidedTranscriptionProcess({
     spawnProcess: spawnTrackedPython,
     args: buildManagedDiarizationGuidedTranscriptionArgs({
       audioPath: resolvedAudioPath,
@@ -3359,6 +3391,7 @@ ipcMain.handle('transcribe-audio-with-speakers', async (event, options = {}) => 
     tempTranscriptPath,
     modelSize,
     fsPromises: fs.promises,
+    registerProcess,
     terminateProcess: terminateProcessBestEffort,
     summarizeError: summarizeDiarizationError,
     onProgressLine: (line) => {
@@ -3369,6 +3402,7 @@ ipcMain.handle('transcribe-audio-with-speakers', async (event, options = {}) => 
         sendToRenderer('transcription-progress', `${redactSensitiveText(line)}\n`);
       }
     },
+  }),
   }));
 });
 
@@ -3418,7 +3452,11 @@ ipcMain.handle('diarize-transcript', async (event, options = {}) => {
   if (!isSafeRecordingsJsonPath({ filePath: resolvedOutputPath, recordingsDir: getRecordingsDir() })) {
     throw new Error('Speaker labels output must be a JSON file in the recordings directory.');
   }
-  return enqueueAiComputeAction(() => new Promise((resolve, reject) => {
+  return enqueueAiComputeAction(() => runWallClockComputeAction({
+    timeoutMs: AI_COMPUTE_TIMEOUT_MS.diarization,
+    label: 'Speaker identification',
+    terminateProcess: terminateProcessBestEffort,
+    action: (registerProcess) => new Promise((resolve, reject) => {
     const python = spawnTrackedPython(buildManagedDiarizationArgs({
       audioPath: resolvedAudioPath,
       segmentsJsonPath: resolvedSegmentsJsonPath,
@@ -3436,6 +3474,7 @@ ipcMain.handle('diarize-transcript', async (event, options = {}) => {
         HUGGINGFACE_HUB_TOKEN: '',
       },
     });
+    registerProcess(python);
 
     let output = '';
     let errorOutput = '';
@@ -3485,6 +3524,7 @@ ipcMain.handle('diarize-transcript', async (event, options = {}) => {
       }
       reject(error);
     });
+  }),
   }));
 });
 
@@ -3623,6 +3663,8 @@ ipcMain.handle('generate-summary', async (event, options = {}) => {
   const transcriptBase = transcriptPath.replace(/\.md$/i, '');
   const outputJson = `${transcriptBase}.summary.json`;
   const outputMarkdown = `${transcriptBase}.summary.md`;
+  const outputJsonTemp = `${outputJson}.tmp`;
+  const outputMarkdownTemp = `${outputMarkdown}.tmp`;
   const speakerMetadataPath = meeting.ai && meeting.ai.diarization && meeting.ai.diarization.segmentsPath;
   let speakersJsonPath;
   try {
@@ -3632,7 +3674,11 @@ ipcMain.handle('generate-summary', async (event, options = {}) => {
     throw error;
   }
 
-  return enqueueAiComputeAction(() => new Promise((resolve, reject) => {
+  return enqueueAiComputeAction(() => runWallClockComputeAction({
+    timeoutMs: AI_COMPUTE_TIMEOUT_MS.summary,
+    label: 'Summary generation',
+    terminateProcess: terminateProcessBestEffort,
+    action: (registerProcess) => new Promise((resolve, reject) => {
     if (!activeSummaryGeneration || activeSummaryGeneration.controller !== controller || controller.signal.aborted) {
       clearActiveSummaryGeneration();
       reject(createAiAddonCancelError('Summary generation was canceled.'));
@@ -3649,13 +3695,14 @@ ipcMain.handle('generate-summary', async (event, options = {}) => {
       transcriptPath,
       runtimeDir,
       modelPath,
-      outputJson,
-      outputMarkdown,
+      outputJson: outputJsonTemp,
+      outputMarkdown: outputMarkdownTemp,
       speakersJsonPath,
       profile: profile || 'balanced',
       modelLabel: artifact.modelLabel || artifact.modelId,
     }), { cwd: pythonConfig.backendPath, env: buildHuggingFaceOfflineEnv() });
     activeSummaryGeneration.process = python;
+    registerProcess(python);
 
     let output = '';
     let errorOutput = '';
@@ -3696,37 +3743,53 @@ ipcMain.handle('generate-summary', async (event, options = {}) => {
     });
 
     python.on('close', async (code) => {
-      if (controller.signal.aborted) {
-        finish(reject, createAiAddonCancelError('Summary generation was canceled.'));
-        return;
-      }
-      if (stdoutOverflow.overflowed) {
-        finish(reject, new Error('Summary generation output exceeded the maximum allowed size.'));
-        return;
-      }
-      if (code !== 0) {
-        finish(reject, new Error(summarizeSummaryValidationError(errorOutput)));
-        return;
-      }
+      const cleanupStagingFiles = () => removeSummarySidecarFiles([outputJsonTemp, outputMarkdownTemp]);
+      const cleanupPromotedFiles = () => removeSummarySidecarFiles([outputJson, outputMarkdown]);
+      let promotedSidecars = false;
 
       try {
-        const result = JSON.parse(output);
         if (controller.signal.aborted) {
+          await cleanupStagingFiles();
           finish(reject, createAiAddonCancelError('Summary generation was canceled.'));
           return;
         }
+        if (stdoutOverflow.overflowed) {
+          await cleanupStagingFiles();
+          finish(reject, new Error('Summary generation output exceeded the maximum allowed size.'));
+          return;
+        }
+        if (code !== 0) {
+          await cleanupStagingFiles();
+          finish(reject, new Error(summarizeSummaryValidationError(errorOutput)));
+          return;
+        }
+
+        const result = JSON.parse(output);
+        if (!result || typeof result !== 'object' || !result.metadata || typeof result.metadata !== 'object') {
+          throw new Error('Summary generation returned an invalid result payload.');
+        }
+        if (controller.signal.aborted) {
+          await cleanupStagingFiles();
+          finish(reject, createAiAddonCancelError('Summary generation was canceled.'));
+          return;
+        }
+
+        await fs.promises.rename(outputJsonTemp, outputJson);
+        await fs.promises.rename(outputMarkdownTemp, outputMarkdown);
+        promotedSidecars = true;
+
         activeSummaryGeneration.phase = 'metadata';
-        activeSummaryGeneration.process = null;
         const summaryMetadata = {
           status: 'completed',
           modelProfile: result.metadata.profile,
           model: result.metadata.model,
           generatedAt: result.metadata.generatedAt,
           sourceTranscriptHash: result.metadata.sourceTranscriptHash,
-          jsonPath: result.jsonPath,
-          markdownPath: result.markdownPath,
+          jsonPath: outputJson,
+          markdownPath: outputMarkdown,
           error: null,
         };
+
         const updatedMeeting = await new Promise((metadataResolve, metadataReject) => {
           const recordingsDir = path.join(app.getPath('userData'), 'recordings');
           const pythonUpdate = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
@@ -3735,6 +3798,9 @@ ipcMain.handle('generate-summary', async (event, options = {}) => {
             normalizedMeetingId,
             '--summary-json', JSON.stringify(summaryMetadata),
           ]), { cwd: pythonConfig.backendPath });
+          activeSummaryGeneration.process = pythonUpdate;
+          registerProcess(pythonUpdate);
+
           let metadataOutput = '';
           let metadataErrorOutput = '';
           const metadataStdoutOverflow = { overflowed: false };
@@ -3764,13 +3830,27 @@ ipcMain.handle('generate-summary', async (event, options = {}) => {
           pythonUpdate.on('error', (error) => metadataReject(controller.signal.aborted ? createAiAddonCancelError('Summary generation was canceled.') : error));
         });
 
-        finish(resolve, { ...result, meeting: updatedMeeting });
+        finish(resolve, {
+          ...result,
+          jsonPath: outputJson,
+          markdownPath: outputMarkdown,
+          meeting: updatedMeeting,
+        });
       } catch (error) {
+        if (promotedSidecars) {
+          await cleanupPromotedFiles();
+        } else {
+          await cleanupStagingFiles();
+        }
         finish(reject, error);
       }
     });
 
-    python.on('error', (error) => finish(reject, controller.signal.aborted ? createAiAddonCancelError('Summary generation was canceled.') : error));
+    python.on('error', async (error) => {
+      await removeSummarySidecarFiles([outputJsonTemp, outputMarkdownTemp]);
+      finish(reject, controller.signal.aborted ? createAiAddonCancelError('Summary generation was canceled.') : error);
+    });
+  }),
   }));
 });
 

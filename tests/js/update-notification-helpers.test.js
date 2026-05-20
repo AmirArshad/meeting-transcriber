@@ -4,11 +4,16 @@ const assert = require('node:assert/strict');
 const {
   buildUpdateNotificationView,
   hideUpdateNotificationBanner,
+  isTrustedUpdateDownloadUrl,
   replayPendingUpdateNotification,
   showUpdateNotificationBanner,
 } = require('../../src/renderer/update-notification-helpers');
 
 const UPDATE_DOWNLOAD_BASE = 'https://github.com/AmirArshad/meeting-transcriber/releases/download';
+
+function avanevisInstallerUrl(version) {
+  return `${UPDATE_DOWNLOAD_BASE}/v${version}/AvaNevis-Setup-${version}.exe`;
+}
 
 function createBannerElements() {
   return {
@@ -38,7 +43,7 @@ test('showUpdateNotificationBanner handles repeated update events in one session
 
   const startupUpdate = showUpdateNotificationBanner({
     ...elements,
-    updateInfo: { version: '1.7.19', downloadUrl: `${UPDATE_DOWNLOAD_BASE}/v1.7.19/Meeting%20Transcriber-Setup-1.7.19.exe` },
+    updateInfo: { version: '1.7.19', downloadUrl: avanevisInstallerUrl('1.7.19') },
     onDownload: firstDownload,
     onDismiss: firstDismiss,
     addLog: (message) => logs.push(message),
@@ -59,7 +64,7 @@ test('showUpdateNotificationBanner handles repeated update events in one session
 
   const manualCheckUpdate = showUpdateNotificationBanner({
     ...elements,
-    updateInfo: { version: '1.7.20', downloadUrl: `${UPDATE_DOWNLOAD_BASE}/v1.7.20/Meeting%20Transcriber-Setup-1.7.20.exe` },
+    updateInfo: { version: '1.7.20', downloadUrl: avanevisInstallerUrl('1.7.20') },
     onDownload: secondDownload,
     onDismiss: secondDismiss,
     addLog: (message) => logs.push(message),
@@ -80,14 +85,15 @@ test('showUpdateNotificationBanner handles repeated update events in one session
 
 test('replayPendingUpdateNotification shows update emitted before renderer subscription', async () => {
   const shown = [];
+  const updateInfo = { version: '1.7.21', downloadUrl: avanevisInstallerUrl('1.7.21') };
 
   const result = await replayPendingUpdateNotification({
-    getPendingUpdateInfo: async () => ({ version: '1.7.21', downloadUrl: `${UPDATE_DOWNLOAD_BASE}/v1.7.21/Meeting%20Transcriber-Setup-1.7.21.exe` }),
-    showUpdateNotification: (updateInfo) => shown.push(updateInfo),
+    getPendingUpdateInfo: async () => updateInfo,
+    showUpdateNotification: (info) => shown.push(info),
   });
 
-  assert.deepEqual(result, { version: '1.7.21', downloadUrl: `${UPDATE_DOWNLOAD_BASE}/v1.7.21/Meeting%20Transcriber-Setup-1.7.21.exe` });
-  assert.deepEqual(shown, [{ version: '1.7.21', downloadUrl: `${UPDATE_DOWNLOAD_BASE}/v1.7.21/Meeting%20Transcriber-Setup-1.7.21.exe` }]);
+  assert.deepEqual(result, updateInfo);
+  assert.deepEqual(shown, [updateInfo]);
 });
 
 
@@ -103,4 +109,37 @@ test('replayPendingUpdateNotification ignores empty pending update state', async
 
   assert.equal(result, null);
   assert.equal(shown, false);
+});
+
+
+test('replayPendingUpdateNotification ignores pending updates without trusted downloadUrl', async () => {
+  const shown = [];
+
+  const httpResult = await replayPendingUpdateNotification({
+    getPendingUpdateInfo: async () => ({ version: '1.7.22', downloadUrl: 'http://example.com/installer.exe' }),
+    showUpdateNotification: (updateInfo) => shown.push(updateInfo),
+  });
+  assert.equal(httpResult, null);
+
+  const httpsResult = await replayPendingUpdateNotification({
+    getPendingUpdateInfo: async () => ({ version: '1.7.22', downloadUrl: 'https://example.com/AvaNevis-Setup-1.7.22.exe' }),
+    showUpdateNotification: (updateInfo) => shown.push(updateInfo),
+  });
+  assert.equal(httpsResult, null);
+  assert.deepEqual(shown, []);
+});
+
+
+test('isTrustedUpdateDownloadUrl accepts only trusted GitHub repo release links', () => {
+  assert.equal(isTrustedUpdateDownloadUrl(avanevisInstallerUrl('1.7.21')), true);
+  assert.equal(
+    isTrustedUpdateDownloadUrl('https://github.com/AmirArshad/meeting-transcriber/releases/latest'),
+    true,
+  );
+  assert.equal(isTrustedUpdateDownloadUrl('http://example.com/installer.exe'), false);
+  assert.equal(isTrustedUpdateDownloadUrl('https://example.com/AvaNevis-Setup-1.7.21.exe'), false);
+  assert.equal(isTrustedUpdateDownloadUrl('https://github.com/electron/electron/releases/latest'), false);
+  assert.equal(isTrustedUpdateDownloadUrl('https://github.com/AmirArshad/meeting-transcriber-malicious/releases/latest'), false);
+  assert.equal(isTrustedUpdateDownloadUrl('mailto:updates@example.com'), false);
+  assert.equal(isTrustedUpdateDownloadUrl('/local/installer.exe'), false);
 });

@@ -66,6 +66,10 @@ const {
   isRecorderBusy,
   ALLOWED_WHISPER_MODELS,
   MACOS_PERMISSION_CHECK_TIMEOUT_MS,
+  AI_COMPUTE_TIMEOUT_MS,
+  getTranscriptionComputeTimeoutMs,
+  runWallClockComputeAction,
+  matchesFasterWhisperCacheFolderName,
 } = mainProcessHelpers;
 
 
@@ -198,6 +202,36 @@ function createFakeGuidedProcess() {
     error: (error) => handlers.process.error(error),
   };
 }
+
+
+test('runGuidedTranscriptionProcess registers spawned process for external timeout control', async () => {
+  const fakeProcess = createFakeGuidedProcess();
+  const registered = [];
+  const run = runGuidedTranscriptionProcess({
+    spawnProcess: () => fakeProcess,
+    args: [],
+    cwd: '/backend',
+    env: {},
+    finalTranscriptPath: '/recordings/meeting.md',
+    tempTranscriptPath: '/recordings/.meeting.guided.1.tmp.md',
+    modelSize: 'base',
+    registerProcess: (proc) => registered.push(proc),
+    fsPromises: {
+      rename: async () => {},
+      readFile: async () => '# transcript',
+      rm: async () => {},
+    },
+    terminateProcess: () => {},
+    summarizeError: () => '',
+    setTimer: () => 'timer',
+    clearTimer: () => {},
+  });
+
+  assert.deepEqual(registered, [fakeProcess]);
+  fakeProcess.emitStdout(JSON.stringify({ text: 'ok', segments: [] }));
+  fakeProcess.close(0);
+  await run;
+});
 
 
 test('runGuidedTranscriptionProcess renames temp transcript on success', async () => {
@@ -559,7 +593,7 @@ test('getModelDownloadPatterns returns macOS Apple Silicon MLX patterns', () => 
 });
 
 
-test('cacheContainsModel matches a cached model entry by pattern fragment', () => {
+test('cacheContainsModel matches a cached model entry by exact folder name', () => {
   const items = [
     'models--foo--bar',
     'models--guillaumekln--faster-whisper-small',
@@ -568,6 +602,108 @@ test('cacheContainsModel matches a cached model entry by pattern fragment', () =
   assert.equal(
     cacheContainsModel(items, ['models--guillaumekln--faster-whisper-small']),
     true,
+  );
+  assert.equal(
+    cacheContainsModel(items, ['models--guillaumekln--faster-whisper-sm']),
+    false,
+  );
+});
+
+
+test('cacheContainsCompleteTranscriptionModel ignores substring faster-whisper folder names', (t) => {
+  const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-fw-cache-'));
+  t.after(() => fs.rmSync(cacheDir, { recursive: true, force: true }));
+  const decoyDir = path.join(cacheDir, 'models--Systran--faster-whisper-small-extra', 'snapshots', 'abc123');
+  fs.mkdirSync(decoyDir, { recursive: true });
+  fs.writeFileSync(path.join(decoyDir, 'config.json'), '{}');
+  fs.writeFileSync(path.join(decoyDir, 'model.bin'), 'weights');
+  fs.writeFileSync(path.join(decoyDir, 'tokenizer.json'), '{}');
+  fs.writeFileSync(path.join(decoyDir, 'vocabulary.txt'), 'tokens');
+
+  assert.equal(
+    cacheContainsCompleteTranscriptionModel({
+      cacheDir,
+      modelPatterns: ['models--Systran--faster-whisper-small'],
+      platform: 'win32',
+      arch: 'x64',
+    }),
+    false,
+  );
+});
+
+
+test('runWallClockComputeAction rejects when the wall-clock limit is exceeded', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+
+  let killedProcess = null;
+  let rejectAction = null;
+  const actionPromise = runWallClockComputeAction({
+    timeoutMs: 1000,
+    label: 'Test job',
+    terminateProcess: (proc) => {
+      killedProcess = proc;
+      rejectAction?.(new Error('process killed'));
+      return Promise.resolve();
+    },
+    action: (registerProcess) => new Promise((resolve, reject) => {
+      rejectAction = reject;
+      registerProcess({ pid: 4242 });
+    }),
+  });
+
+  await Promise.resolve();
+  t.mock.timers.tick(1000);
+
+  await assert.rejects(actionPromise, /Test job timed out after 0 minutes/);
+  assert.equal(killedProcess.pid, 4242);
+});
+
+
+test('runWallClockComputeAction waits for action settlement before rejecting on timeout', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const events = [];
+  let rejectAction = null;
+
+  const actionPromise = runWallClockComputeAction({
+    timeoutMs: 1000,
+    label: 'Test job',
+    terminateProcess: () => {
+      events.push('terminate');
+      rejectAction?.();
+      return Promise.resolve();
+    },
+    action: (registerProcess) => new Promise((resolve, reject) => {
+      rejectAction = () => {
+        events.push('action-settled');
+        reject(new Error('process killed'));
+      };
+      registerProcess({ pid: 1 });
+    }),
+  });
+
+  await Promise.resolve();
+  t.mock.timers.tick(1000);
+  await assert.rejects(actionPromise, /timed out/);
+  assert.deepEqual(events, ['terminate', 'action-settled']);
+});
+
+
+test('getTranscriptionComputeTimeoutMs scales by model size', () => {
+  assert.equal(getTranscriptionComputeTimeoutMs('small'), 60 * 60 * 1000);
+  assert.equal(getTranscriptionComputeTimeoutMs('large-v3'), 120 * 60 * 1000);
+  assert.equal(getTranscriptionComputeTimeoutMs('unknown'), 60 * 60 * 1000);
+});
+
+
+test('matchesFasterWhisperCacheFolderName requires exact cache folder names', () => {
+  const patterns = ['models--Systran--faster-whisper-small'];
+  assert.equal(
+    matchesFasterWhisperCacheFolderName('models--Systran--faster-whisper-small', patterns),
+    true,
+  );
+  assert.equal(
+    matchesFasterWhisperCacheFolderName('models--Systran--faster-whisper-small-extra', patterns),
+    false,
   );
 });
 

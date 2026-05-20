@@ -298,7 +298,13 @@ class MLXWhisperTranscriber(BaseTranscriber):
             self.model_dir / 'weights.npz',
             self.model_dir / 'config.json',
         ]
-        return all(file_path.exists() and file_path.is_file() for file_path in required_files)
+        return all(self._has_non_empty_file(file_path) for file_path in required_files)
+
+    def _has_non_empty_file(self, file_path) -> bool:
+        try:
+            return file_path.is_file() and file_path.stat().st_size > 0
+        except OSError:
+            return False
 
     def _resolve_batch_size(self) -> int:
         value = os.environ.get('AVANEVIS_MLX_WHISPER_BATCH_SIZE', '').strip()

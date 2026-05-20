@@ -68,6 +68,9 @@ let isFirstRecording = true; // Track if this is first recording (for longer tim
 let isInitializing = true; // Track if app is still initializing
 const checkedMeetingIds = new Set();
 let meetingSearchQuery = '';
+let meetingSearchQueryNormalized = '';
+let meetingSearchDebounceTimer = null;
+const MEETING_SEARCH_DEBOUNCE_MS = 200;
 const cleanupFns = [];
 let aiAddonStatusRefreshPromise = null;
 let aiAddonStatusSnapshot = null;
@@ -140,8 +143,31 @@ function showSummaryMessage(message, isError = false) {
   updateSummaryActionState();
 }
 
+function meetingIdsEqual(left, right) {
+  if (left == null || right == null) {
+    return false;
+  }
+  return String(left) === String(right);
+}
+
+function findMeetingById(meetingId) {
+  if (meetingId == null) {
+    return null;
+  }
+  const targetId = String(meetingId);
+  return meetings.find((meeting) => String(meeting.id) === targetId) || null;
+}
+
+function findMeetingIndexById(meetingId) {
+  if (meetingId == null) {
+    return -1;
+  }
+  const targetId = String(meetingId);
+  return meetings.findIndex((meeting) => String(meeting.id) === targetId);
+}
+
 async function restoreCurrentHistorySummary(meetingId) {
-  if (!meetingId || currentMeetingId !== meetingId) {
+  if (!meetingId || !meetingIdsEqual(currentMeetingId, meetingId)) {
     return false;
   }
 
@@ -167,7 +193,7 @@ function renderSummaryMarkdown(markdown, options = {}) {
   summaryEl.classList.remove('is-empty');
   if (markdown && markdown.trim()) {
     summaryEl.dataset.markdown = markdown;
-    renderMarkdownInto(summaryEl, markdown);
+    renderMarkdownInto(summaryEl, markdown, { aiLinkPolicy: true });
     if (options.stale) {
       const warning = document.createElement('p');
       warning.className = 'summary-stale-warning';
@@ -283,10 +309,11 @@ function createMeetingCheckbox(meetingId) {
 // and paragraphs separated by blank lines. Does NOT support raw HTML.
 // All output goes through textContent so injection is impossible.
 // ============================================================================
-function renderMarkdownInto(container, markdown) {
+function renderMarkdownInto(container, markdown, options = {}) {
   clearElement(container);
   if (!markdown || typeof markdown !== 'string') return;
 
+  const aiLinkPolicy = options.aiLinkPolicy === true;
   const lines = markdown.replace(/\r\n/g, '\n').split('\n');
   let i = 0;
 
@@ -353,8 +380,10 @@ function renderMarkdownInto(container, markdown) {
           if (closeParen > closeBracket) {
             const linkText = text.slice(j + 1, closeBracket);
             const url = text.slice(closeBracket + 2, closeParen).trim();
-            // Only allow safe URL schemes
-            if (/^(https?:|mailto:|#)/i.test(url) || url.startsWith('/') || url.startsWith('.')) {
+            const linkAllowed = aiLinkPolicy
+              ? /^(https:|mailto:)/i.test(url)
+              : (/^(https?:|mailto:|#)/i.test(url) || url.startsWith('/') || url.startsWith('.'));
+            if (linkAllowed) {
               flushText();
               const a = document.createElement('a');
               a.href = url;
@@ -946,7 +975,7 @@ async function init() {
     await loadAudioDevices();
 
     // Step 4: Load meeting history
-    await loadMeetingHistory();
+    await loadMeetingHistory({ scan: true });
 
     await refreshHomePrompts();
     await refreshHomeAiAddonPrompt();
@@ -1095,16 +1124,17 @@ async function loadAudioDevices() {
 }
 
 // Load meeting history
-async function loadMeetingHistory() {
+async function loadMeetingHistory({ scan = false } = {}) {
   try {
-    // Scan the filesystem for any orphaned recordings not in the database
-    try {
-      const scanResult = await window.electronAPI.scanRecordings();
-      if (scanResult.added > 0) {
-        addLog(`Found ${scanResult.added} recording(s) not in database`);
+    if (scan) {
+      try {
+        const scanResult = await window.electronAPI.scanRecordings();
+        if (scanResult.added > 0) {
+          addLog(`Found ${scanResult.added} recording(s) not in database`);
+        }
+      } catch (scanError) {
+        console.warn('Scan failed:', scanError);
       }
-    } catch (scanError) {
-      console.warn('Scan failed:', scanError);
     }
 
     // Load the meeting list
@@ -1119,7 +1149,7 @@ async function loadMeetingHistory() {
 
 // Render meeting list
 function renderMeetingList() {
-  const query = meetingSearchQuery.trim().toLowerCase();
+  const query = meetingSearchQueryNormalized;
   const filtered = query
     ? meetings.filter((m) => (m.title || '').toLowerCase().includes(query))
     : meetings;
@@ -1267,20 +1297,19 @@ async function deleteCheckedMeetings() {
 
 // Select meeting from history
 async function selectMeeting(meetingId) {
-  const meeting = meetings.find(m => m.id === meetingId);
+  const targetId = String(meetingId);
+  const meeting = meetings.find((m) => String(m.id) === targetId);
   if (!meeting) {
-    console.error(`Meeting not found: ${meetingId}`);
+    console.error(`Meeting not found: ${targetId}`);
     return;
   }
 
-  // Update selection - convert both to strings for reliable comparison
-  const targetId = String(meetingId);
-  document.querySelectorAll('.meeting-item').forEach(item => {
+  document.querySelectorAll('.meeting-item').forEach((item) => {
     item.classList.toggle('selected', item.dataset.id === targetId);
   });
 
-  currentMeetingId = meetingId;
-  pendingMeetingTranscriptId = meetingId;
+  currentMeetingId = targetId;
+  pendingMeetingTranscriptId = targetId;
 
   // Show meeting details
   document.getElementById('meeting-title').textContent = meeting.title;
@@ -1310,9 +1339,9 @@ async function selectMeeting(meetingId) {
   transcriptEl.appendChild(loading);
 
   try {
-    const fullMeeting = await window.electronAPI.getMeeting(meetingId);
+    const fullMeeting = await window.electronAPI.getMeeting(targetId);
 
-    if (!fullMeeting || currentMeetingId !== meetingId || pendingMeetingTranscriptId !== meetingId) {
+    if (!fullMeeting || currentMeetingId !== targetId || pendingMeetingTranscriptId !== targetId) {
       return;
     }
 
@@ -1336,7 +1365,7 @@ async function selectMeeting(meetingId) {
     }
   } catch (error) {
     console.error(`Failed to load meeting transcript: ${error.message}`);
-    if (currentMeetingId === meetingId && pendingMeetingTranscriptId === meetingId) {
+    if (currentMeetingId === targetId && pendingMeetingTranscriptId === targetId) {
       clearElement(transcriptEl);
       delete transcriptEl.dataset.markdown;
       const err = document.createElement('p');
@@ -1346,7 +1375,7 @@ async function selectMeeting(meetingId) {
       showSummaryMessage('Summary unavailable because the meeting details could not be loaded.', true);
     }
   } finally {
-    if (pendingMeetingTranscriptId === meetingId) {
+    if (pendingMeetingTranscriptId === targetId) {
       pendingMeetingTranscriptId = null;
     }
   }
@@ -1487,16 +1516,16 @@ function setupTitleEditors() {
     formId: 'meeting-title-edit-form',
     inputId: 'meeting-title-input',
     cancelBtnId: 'meeting-title-cancel',
-    getMeeting: () => meetings.find(m => m.id === currentMeetingId) || null,
+    getMeeting: () => findMeetingById(currentMeetingId),
     onSaved: (updated) => {
       // Update local cache and re-render meeting list to reflect the new title
-      const idx = meetings.findIndex(m => m.id === updated.id);
+      const idx = findMeetingIndexById(updated.id);
       if (idx !== -1) {
         meetings[idx] = { ...meetings[idx], title: updated.title };
       }
       renderMeetingList();
       // Mirror onto the post-recording card if the same meeting is shown there
-      if (currentRecordingMeeting && currentRecordingMeeting.id === updated.id) {
+      if (currentRecordingMeeting && meetingIdsEqual(currentRecordingMeeting.id, updated.id)) {
         currentRecordingMeeting = { ...currentRecordingMeeting, title: updated.title };
         applyCurrentRecordingTitle();
       }
@@ -1516,7 +1545,7 @@ function setupTitleEditors() {
       currentRecordingMeeting = { ...currentRecordingMeeting, title: updated.title };
       applyCurrentRecordingTitle();
       // Also update the cached history list so the sidebar reflects the change
-      const idx = meetings.findIndex(m => m.id === updated.id);
+      const idx = findMeetingIndexById(updated.id);
       if (idx !== -1) {
         meetings[idx] = { ...meetings[idx], title: updated.title };
         renderMeetingList();
@@ -1535,7 +1564,7 @@ function setupEventListeners() {
   refreshHistory.addEventListener('click', () => {
     refreshHistory.classList.add('spinning');
     setTimeout(() => refreshHistory.classList.remove('spinning'), 600);
-    loadMeetingHistory();
+    loadMeetingHistory({ scan: true });
   });
   recordBtn.addEventListener('click', handleRecordButtonClick);
   copyBtn.addEventListener('click', copyTranscript);
@@ -1588,7 +1617,14 @@ function setupEventListeners() {
   if (searchInput) {
     searchInput.addEventListener('input', () => {
       meetingSearchQuery = searchInput.value || '';
-      renderMeetingList();
+      if (meetingSearchDebounceTimer) {
+        clearTimeout(meetingSearchDebounceTimer);
+      }
+      meetingSearchDebounceTimer = setTimeout(() => {
+        meetingSearchDebounceTimer = null;
+        meetingSearchQueryNormalized = meetingSearchQuery.trim().toLowerCase();
+        renderMeetingList();
+      }, MEETING_SEARCH_DEBOUNCE_MS);
     });
   }
 
@@ -2363,13 +2399,13 @@ function syncMeetingInList(updatedMeeting) {
     return;
   }
 
-  const index = meetings.findIndex(m => m.id === updatedMeeting.id);
+  const index = findMeetingIndexById(updatedMeeting.id);
   if (index !== -1) {
     meetings[index] = { ...meetings[index], ...updatedMeeting };
     renderMeetingList();
   }
 
-  if (currentRecordingMeeting && currentRecordingMeeting.id === updatedMeeting.id) {
+  if (currentRecordingMeeting && meetingIdsEqual(currentRecordingMeeting.id, updatedMeeting.id)) {
     currentRecordingMeeting = { ...currentRecordingMeeting, ...updatedMeeting };
     applyCurrentRecordingTitle();
   }
@@ -2416,8 +2452,8 @@ async function generateSummaryForMeeting(meetingId) {
   if (!summaryStatus || !summaryStatus.setupComplete || summaryStatus.status !== 'ready') {
     const message = getSummarySetupMessage(summaryStatus);
     addLog(message, summaryStatus && summaryStatus.status === 'unsupported' ? 'error' : 'warning');
-    if (currentMeetingId === meetingId) {
-      const restored = await restoreCurrentHistorySummary(meetingId);
+    if (meetingIdsEqual(currentMeetingId, normalizedMeetingId)) {
+      const restored = await restoreCurrentHistorySummary(normalizedMeetingId);
       if (!restored) {
         showSummaryMessage(message, summaryStatus && summaryStatus.status === 'error');
       }
@@ -2430,7 +2466,7 @@ async function generateSummaryForMeeting(meetingId) {
     return;
   }
 
-  if (currentMeetingId === meetingId) {
+  if (meetingIdsEqual(currentMeetingId, normalizedMeetingId)) {
     showSummaryMessage('Generating local summary...');
   }
 
@@ -2438,19 +2474,19 @@ async function generateSummaryForMeeting(meetingId) {
     addLog('Generating local summary...');
     const summaryProfileSelect = document.getElementById('summary-profile-select');
     const result = await window.electronAPI.generateSummary({
-      meetingId,
+      meetingId: normalizedMeetingId,
       profile: (summaryProfileSelect && summaryProfileSelect.value) || summaryStatus.profile || DEFAULT_SUMMARY_PROFILE,
     });
 
-    if (currentMeetingId === meetingId) {
-      const fullMeeting = await window.electronAPI.getMeeting(meetingId);
+    if (meetingIdsEqual(currentMeetingId, normalizedMeetingId)) {
+      const fullMeeting = await window.electronAPI.getMeeting(normalizedMeetingId);
       renderSummaryMarkdown((fullMeeting && fullMeeting.summary) || '', { stale: fullMeeting && fullMeeting.summaryStale });
       syncMeetingInList((result && result.meeting) || fullMeeting);
       activateHistoryDetailTab('summary');
-    } else if (currentRecordingMeeting && currentRecordingMeeting.id === meetingId) {
+    } else if (currentRecordingMeeting && meetingIdsEqual(currentRecordingMeeting.id, normalizedMeetingId)) {
       syncMeetingInList(result && result.meeting);
       activateTab('history');
-      await selectMeeting(meetingId);
+      await selectMeeting(normalizedMeetingId);
       activateHistoryDetailTab('summary');
     } else {
       syncMeetingInList(result && result.meeting);
@@ -2462,8 +2498,8 @@ async function generateSummaryForMeeting(meetingId) {
     const wasCancelled = error && (error.code === 'AI_ADDON_SETUP_CANCELLED' || error.name === 'AbortError' || /cancell?ed/i.test(error.message || ''));
     if (wasCancelled) {
       addLog('Summary generation cancelled. Transcript is unchanged.', 'warning');
-      if (currentMeetingId === meetingId) {
-        const restored = await restoreCurrentHistorySummary(meetingId);
+      if (meetingIdsEqual(currentMeetingId, normalizedMeetingId)) {
+        const restored = await restoreCurrentHistorySummary(normalizedMeetingId);
         if (!restored) {
           showSummaryMessage('Summary generation cancelled. Transcript is unchanged.');
         }
@@ -2474,8 +2510,8 @@ async function generateSummaryForMeeting(meetingId) {
 
     const message = `Summary generation failed. Transcript is unchanged. ${error.message}`;
     addLog(message, 'error');
-    if (currentMeetingId === meetingId) {
-      const restored = await restoreCurrentHistorySummary(meetingId);
+    if (meetingIdsEqual(currentMeetingId, normalizedMeetingId)) {
+      const restored = await restoreCurrentHistorySummary(normalizedMeetingId);
       if (!restored) {
         showSummaryMessage(message, true);
       }
@@ -2714,7 +2750,7 @@ async function saveMeetingSummaryToFile() {
     return;
   }
 
-  const meeting = meetings.find(m => m.id === currentMeetingId);
+  const meeting = findMeetingById(currentMeetingId);
   const suggestedName = `${(meeting && meeting.title) || 'Summary'} Summary`;
   let content = getCurrentSummaryMarkdown();
 
@@ -2759,7 +2795,7 @@ async function saveMeetingTranscriptToFile() {
     return;
   }
 
-  const meeting = meetings.find(m => m.id === currentMeetingId);
+  const meeting = findMeetingById(currentMeetingId);
   const suggestedName = (meeting && meeting.title) || 'Transcript';
   const transcriptEl = document.getElementById('meeting-transcript');
   let content = (transcriptEl && transcriptEl.dataset.markdown) || '';
@@ -2858,13 +2894,13 @@ async function saveTranscript() {
 
 // Delete meeting
 async function deleteMeetingHandler(meetingId) {
-  const idToDelete = meetingId || currentMeetingId;
+  const idToDelete = meetingId != null ? String(meetingId) : currentMeetingId;
   if (!idToDelete) {
     console.error('No meeting ID to delete');
     return;
   }
 
-  const meeting = meetings.find(m => m.id === idToDelete);
+  const meeting = findMeetingById(idToDelete);
   if (!meeting) {
     console.error('Meeting not found:', idToDelete);
     return;
@@ -2888,14 +2924,14 @@ async function deleteMeetingHandler(meetingId) {
       await window.electronAPI.deleteMeeting(idToDelete);
 
       // Clear the view immediately
-      if (currentMeetingId === idToDelete) {
+      if (meetingIdsEqual(currentMeetingId, idToDelete)) {
         meetingDetails.style.display = 'none';
         document.getElementById('meeting-details-empty').style.display = 'flex';
         currentMeetingId = null;
       }
 
       // Remove from local list immediately
-      meetings = meetings.filter(m => m.id !== idToDelete);
+      meetings = meetings.filter((m) => !meetingIdsEqual(m.id, idToDelete));
       renderMeetingList();
       await loadMeetingHistory();
 
@@ -4052,6 +4088,7 @@ function handleDismissUpdate() {
     banner: document.getElementById('update-banner'),
     addLog,
   });
+  currentUpdateInfo = null;
 }
 
 // ============================================================================
@@ -4093,6 +4130,9 @@ class AudioVisualizer {
 
     this.lastUpdateTime = 0;
     this.warningShown = false;
+    this._lastDrawnMicTarget = null;
+    this._lastDrawnDesktopTarget = null;
+    this._visibilityHandler = null;
 
     // For subtle ambient motion when input is near-silent
     this.phase = 0;
@@ -4120,6 +4160,18 @@ class AudioVisualizer {
     this.lastUpdateTime = Date.now();
     this.lastShiftTime = performance.now();
     this.warningShown = false;
+    this._lastDrawnMicTarget = null;
+    this._lastDrawnDesktopTarget = null;
+
+    if (!this._visibilityHandler) {
+      this._visibilityHandler = () => {
+        if (!this.isRunning || document.hidden || this.rafId !== null) {
+          return;
+        }
+        this._loop();
+      };
+      document.addEventListener('visibilitychange', this._visibilityHandler);
+    }
 
     // Defer a tick so the container is visible and has layout
     requestAnimationFrame(() => {
@@ -4149,6 +4201,10 @@ class AudioVisualizer {
       clearInterval(this.fallbackIntervalId);
       this.fallbackIntervalId = null;
     }
+    if (this._visibilityHandler) {
+      document.removeEventListener('visibilitychange', this._visibilityHandler);
+      this._visibilityHandler = null;
+    }
     this.container.style.display = 'none';
     this.warningShown = false;
   }
@@ -4157,9 +4213,14 @@ class AudioVisualizer {
     this.lastUpdateTime = Date.now();
     this.warningShown = false;
 
-    // Just update the targets — the rAF loop will smoothly pull current toward them.
-    this.micTarget = Math.max(0, Math.min(1, levels.mic || 0));
-    this.desktopTarget = Math.max(0, Math.min(1, levels.desktop || 0));
+    const nextMicTarget = Math.max(0, Math.min(1, levels.mic || 0));
+    const nextDesktopTarget = Math.max(0, Math.min(1, levels.desktop || 0));
+    if (nextMicTarget !== this.micTarget || nextDesktopTarget !== this.desktopTarget) {
+      this._lastDrawnMicTarget = null;
+      this._lastDrawnDesktopTarget = null;
+    }
+    this.micTarget = nextMicTarget;
+    this.desktopTarget = nextDesktopTarget;
   }
 
   _decayPeaks() {
@@ -4172,57 +4233,68 @@ class AudioVisualizer {
   _loop() {
     if (!this.isRunning) return;
 
-    if (!document.hidden) {
-      const now = performance.now();
-      this.phase = (this.phase + 0.06) % (Math.PI * 2);
-
-      // Smoothly lerp the newest column toward the target (fast attack, slow release)
-      const lastIdx = this.bufferSize - 1;
-      const lerp = (cur, target) => {
-        const k = target > cur ? 0.55 : 0.18; // attack vs release
-        return cur + (target - cur) * k;
-      };
-      this.micBuffer[lastIdx] = lerp(this.micBuffer[lastIdx], this.micTarget);
-      this.desktopBuffer[lastIdx] = lerp(this.desktopBuffer[lastIdx], this.desktopTarget);
-
-      // Periodically shift a new column in so the wave scrolls left
-      if (now - this.lastShiftTime >= this.shiftIntervalMs) {
-        this.lastShiftTime = now;
-        // Shift left
-        for (let i = 0; i < this.bufferSize - 1; i++) {
-          this.micBuffer[i] = this.micBuffer[i + 1];
-          this.desktopBuffer[i] = this.desktopBuffer[i + 1];
-          this.micPeaks[i] = this.micPeaks[i + 1];
-          this.desktopPeaks[i] = this.desktopPeaks[i + 1];
-        }
-        // New column starts at current target
-        this.micBuffer[lastIdx] = this.micTarget;
-        this.desktopBuffer[lastIdx] = this.desktopTarget;
-      }
-
-      // Update peaks: refresh if the live value is higher; otherwise decay
-      for (let i = 0; i < this.bufferSize; i++) {
-        this.micPeaks[i] = Math.max(this.micPeaks[i] * 0.95, this.micBuffer[i]);
-        this.desktopPeaks[i] = Math.max(this.desktopPeaks[i] * 0.95, this.desktopBuffer[i]);
-      }
-
-      // Heartbeat-lost fade
-      const timeSinceUpdate = Date.now() - this.lastUpdateTime;
-      if (timeSinceUpdate > 5000) {
-        for (let i = 0; i < this.bufferSize; i++) {
-          this.micBuffer[i] *= 0.92;
-          this.desktopBuffer[i] *= 0.92;
-        }
-        if (!this.warningShown && recordingState === 'recording') {
-          console.warn('Visualizer: No audio levels for 5s - recording may be paused');
-          addLog('⚠️ Warning: Audio visualization paused (no data from recorder)', 'warning');
-          this.warningShown = true;
-        }
-      }
-
-      this._draw(this.micCtx, this.micBuffer, this.micPeaks, [139, 124, 246]);
-      this._draw(this.desktopCtx, this.desktopBuffer, this.desktopPeaks, [56, 189, 248]);
+    if (document.hidden) {
+      this.rafId = null;
+      return;
     }
+
+    const now = performance.now();
+    const shouldShift = now - this.lastShiftTime >= this.shiftIntervalMs;
+    const timeSinceUpdate = Date.now() - this.lastUpdateTime;
+    const heartbeatFade = timeSinceUpdate > 5000;
+    const targetsUnchanged = this.micTarget === this._lastDrawnMicTarget
+      && this.desktopTarget === this._lastDrawnDesktopTarget;
+
+    if (!shouldShift && targetsUnchanged && !heartbeatFade) {
+      this.rafId = requestAnimationFrame(() => this._loop());
+      return;
+    }
+
+    this.phase = (this.phase + 0.06) % (Math.PI * 2);
+
+    // Smoothly lerp the newest column toward the target (fast attack, slow release)
+    const lastIdx = this.bufferSize - 1;
+    const lerp = (cur, target) => {
+      const k = target > cur ? 0.55 : 0.18; // attack vs release
+      return cur + (target - cur) * k;
+    };
+    this.micBuffer[lastIdx] = lerp(this.micBuffer[lastIdx], this.micTarget);
+    this.desktopBuffer[lastIdx] = lerp(this.desktopBuffer[lastIdx], this.desktopTarget);
+
+    // Periodically shift a new column in so the wave scrolls left
+    if (shouldShift) {
+      this.lastShiftTime = now;
+      for (let i = 0; i < this.bufferSize - 1; i++) {
+        this.micBuffer[i] = this.micBuffer[i + 1];
+        this.desktopBuffer[i] = this.desktopBuffer[i + 1];
+        this.micPeaks[i] = this.micPeaks[i + 1];
+        this.desktopPeaks[i] = this.desktopPeaks[i + 1];
+      }
+      this.micBuffer[lastIdx] = this.micTarget;
+      this.desktopBuffer[lastIdx] = this.desktopTarget;
+    }
+
+    for (let i = 0; i < this.bufferSize; i++) {
+      this.micPeaks[i] = Math.max(this.micPeaks[i] * 0.95, this.micBuffer[i]);
+      this.desktopPeaks[i] = Math.max(this.desktopPeaks[i] * 0.95, this.desktopBuffer[i]);
+    }
+
+    if (heartbeatFade) {
+      for (let i = 0; i < this.bufferSize; i++) {
+        this.micBuffer[i] *= 0.92;
+        this.desktopBuffer[i] *= 0.92;
+      }
+      if (!this.warningShown && recordingState === 'recording') {
+        console.warn('Visualizer: No audio levels for 5s - recording may be paused');
+        addLog('⚠️ Warning: Audio visualization paused (no data from recorder)', 'warning');
+        this.warningShown = true;
+      }
+    }
+
+    this._draw(this.micCtx, this.micBuffer, this.micPeaks, [139, 124, 246]);
+    this._draw(this.desktopCtx, this.desktopBuffer, this.desktopPeaks, [56, 189, 248]);
+    this._lastDrawnMicTarget = this.micTarget;
+    this._lastDrawnDesktopTarget = this.desktopTarget;
 
     this.rafId = requestAnimationFrame(() => this._loop());
   }

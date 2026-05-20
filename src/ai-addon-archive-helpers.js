@@ -1,5 +1,15 @@
 const path = require('path');
 
+const UNIX_SYMLINK_MODE = 0o120000;
+
+function isZipSymlinkEntry(entry) {
+  const attr = entry && entry.header && typeof entry.header.attr === 'number'
+    ? entry.header.attr
+    : 0;
+  const unixMode = attr >>> 16;
+  return (unixMode & 0o170000) === UNIX_SYMLINK_MODE;
+}
+
 function validateZipEntryName(entryName, destinationDir) {
   const normalizedEntryName = String(entryName || '').replace(/\\/g, '/');
   if (!normalizedEntryName || path.isAbsolute(normalizedEntryName)) {
@@ -16,6 +26,9 @@ function validateZipEntryName(entryName, destinationDir) {
 function validateZipEntries(zip, destinationDir) {
   const resolvedDestination = path.resolve(destinationDir);
   for (const entry of zip.getEntries()) {
+    if (isZipSymlinkEntry(entry)) {
+      throw new Error('Archive contains an unsafe symlink entry.');
+    }
     validateZipEntryName(entry.entryName, resolvedDestination);
   }
 }
@@ -99,6 +112,7 @@ function validateTarListing(listingOutput, destinationDir) {
 }
 
 module.exports = {
+  isZipSymlinkEntry,
   validateZipEntryName,
   validateZipEntries,
   validateTarEntryName,

@@ -19,6 +19,92 @@ const MACOS_PERMISSION_CHECK_TIMEOUT_MS = 8000;
 const FASTER_WHISPER_REQUIRED_CACHE_FILES = ['config.json', 'model.bin', 'tokenizer.json'];
 const FASTER_WHISPER_VOCABULARY_CACHE_FILES = ['vocabulary.txt', 'vocabulary.json'];
 const MLX_REQUIRED_CACHE_FILES = ['weights.npz', 'config.json'];
+const AI_COMPUTE_TIMEOUT_MS = Object.freeze({
+  diarization: 30 * 60 * 1000,
+  guidedTranscription: 120 * 60 * 1000,
+  summary: 90 * 60 * 1000,
+});
+
+function getTranscriptionComputeTimeoutMs(modelSize) {
+  const modelTimeouts = {
+    tiny: 30,
+    base: 45,
+    small: 60,
+    medium: 90,
+    large: 120,
+    'large-v3': 120,
+  };
+  return (modelTimeouts[modelSize] || 60) * 60 * 1000;
+}
+
+function runWallClockComputeAction({
+  action,
+  timeoutMs,
+  label = 'Local AI job',
+  terminateProcess = () => {},
+}) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return Promise.resolve().then(() => action(() => {}));
+  }
+
+  let activeProcess = null;
+  let timeoutHandle = null;
+  let settled = false;
+  let timedOut = false;
+
+  const registerProcess = (proc) => {
+    activeProcess = proc;
+    return proc;
+  };
+
+  const settle = (callback, value) => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+      timeoutHandle = null;
+    }
+    callback(value);
+  };
+
+  return new Promise((resolve, reject) => {
+    const actionPromise = Promise.resolve()
+      .then(() => action(registerProcess));
+
+    timeoutHandle = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      timedOut = true;
+      const timeoutError = new Error(`${label} timed out after ${Math.round(timeoutMs / 60000)} minutes.`);
+      Promise.resolve(terminateProcess(activeProcess))
+        .then(() => actionPromise)
+        .catch(() => undefined)
+        .finally(() => settle(reject, timeoutError));
+    }, timeoutMs);
+    timeoutHandle.unref?.();
+
+    actionPromise
+      .then((result) => {
+        if (timedOut) {
+          return;
+        }
+        settle(resolve, result);
+      })
+      .catch((error) => {
+        if (timedOut) {
+          return;
+        }
+        settle(reject, error);
+      });
+  });
+}
+
+function matchesFasterWhisperCacheFolderName(entryName, modelPatterns) {
+  return modelPatterns.some((pattern) => entryName === pattern);
+}
 
 function buildFileUrl(filePath) {
   const normalizedPath = String(filePath || '').trim();
@@ -430,6 +516,7 @@ function runGuidedTranscriptionProcess({
   terminateProcess,
   summarizeError,
   onProgressLine,
+  registerProcess,
   setTimer = setTimeout,
   clearTimer = clearTimeout,
 } = {}) {
@@ -441,6 +528,9 @@ function runGuidedTranscriptionProcess({
   const timeoutMinutes = getGuidedTranscriptionTimeoutMinutes(modelSize);
   return new Promise((resolve, reject) => {
     const python = spawnProcess(args, { cwd, env });
+    if (typeof registerProcess === 'function') {
+      registerProcess(python);
+    }
     let output = '';
     let errorOutput = '';
     let stdoutOverflowed = false;
@@ -625,7 +715,7 @@ function resolveTranscriptionAudioFile({ audioFile, recordingsDir, existsSync })
 }
 
 function cacheContainsModel(items, modelPatterns) {
-  return modelPatterns.some((pattern) => items.some((item) => item.includes(pattern)));
+  return modelPatterns.some((pattern) => items.some((item) => item === pattern));
 }
 
 function safeReadDir(dirPath, fsImpl = fs) {
@@ -657,7 +747,7 @@ function cacheContainsCompleteFasterWhisperModel({ cacheDir, modelPatterns, fsIm
 
   return safeReadDir(cacheDir, fsImpl).some((entry) => {
     const entryName = entry && entry.name ? entry.name : String(entry || '');
-    if (!modelPatterns.some((pattern) => entryName.includes(pattern))) {
+    if (!matchesFasterWhisperCacheFolderName(entryName, modelPatterns)) {
       return false;
     }
 
@@ -1277,6 +1367,10 @@ module.exports = {
   SPAWN_LOG_BUFFER_MAX_CHARS,
   SPAWN_JSON_RESULT_BUFFER_MAX_CHARS,
   UPDATER_HTTP_RESPONSE_MAX_CHARS,
+  AI_COMPUTE_TIMEOUT_MS,
+  getTranscriptionComputeTimeoutMs,
+  runWallClockComputeAction,
+  matchesFasterWhisperCacheFolderName,
   buildFileUrl,
   buildDesktopAudioAvailabilityError,
   buildMacOSPermissionCheckFailureStatus,

@@ -146,15 +146,15 @@ npm run test:python
 
 **Order within phase:** **5.3 → 5.1 → 5.2 → …** (timeout before adding more queue consumers).
 
-- [ ] **5.3** Wall-clock timeout + process kill for hung compute jobs (`createAsyncActionQueue` per-job wrapper + `terminateProcessBestEffort`). Per-type limits (e.g. summary 90m, diarization 30m). **Highest priority in this phase** — one hung child currently stalls the queue for the rest of the session.
-- [ ] **5.1** Route **`transcribe-audio` only** through `enqueueAiComputeAction` (`src/main.js` ~2953). **Do not** enqueue `download-model` on the GPU queue — use separate download serialization or leave off-queue. *Validated: guided transcription, diarize, and summary already use the compute queue.*
-- [ ] **5.2** Setup validation vs compute: replace 15s false-failure with blocking wait + progress, or queue-depth check before smoke test; document policy in new `AGENTS.md` § GPU compute serialization (5.9).
-- [ ] **5.4** Summary metadata failure: staging paths (`.summary.json.tmp`) + rename on success, or delete sidecars on `update-ai` failure (`src/main.js` ~3443+).
-- [ ] **5.5** ZIP extraction: reject symlink entries (UNIX `externalFileAttributes`); mirror tar link-target checks (`ai-addon-archive-helpers.js`, `ai-addon-zip-extractor-worker.js` + tests).
-- [ ] **5.6** MLX cache completeness: non-empty `weights.npz` and `config.json` (align `main-process-helpers.js` / `AGENTS.md`) (`mlx_whisper_transcriber.py`).
-- [ ] **5.7** faster-whisper cache dir: exact folder name match, not substring (update JS + Python + `tests/python/test_transcriber_helpers.py`, `tests/js/main-process-helpers.test.js`).
+- [x] **5.3** Wall-clock timeout + process kill for hung compute jobs (`createAsyncActionQueue` per-job wrapper + `terminateProcessBestEffort`). Per-type limits (e.g. summary 90m, diarization 30m). **Highest priority in this phase** — one hung child currently stalls the queue for the rest of the session.
+- [x] **5.1** Route **`transcribe-audio` only** through `enqueueAiComputeAction` (`src/main.js` ~2953). **Do not** enqueue `download-model` on the GPU queue — use separate download serialization or leave off-queue. *Validated: guided transcription, diarize, and summary already use the compute queue.*
+- [x] **5.2** Setup validation vs compute: replace 15s false-failure with blocking wait + progress, or queue-depth check before smoke test; document policy in new `AGENTS.md` § GPU compute serialization (5.9).
+- [x] **5.4** Summary metadata failure: staging paths (`.summary.json.tmp`) + rename on success, or delete sidecars on `update-ai` failure (`src/main.js` ~3443+).
+- [x] **5.5** ZIP extraction: reject symlink entries (UNIX `externalFileAttributes`); mirror tar link-target checks (`ai-addon-archive-helpers.js`, `ai-addon-zip-extractor-worker.js` + tests).
+- [x] **5.6** MLX cache completeness: non-empty `weights.npz` and `config.json` (align `main-process-helpers.js` / `AGENTS.md`) (`mlx_whisper_transcriber.py`).
+- [x] **5.7** faster-whisper cache dir: exact folder name match, not substring (update JS + Python + `tests/python/test_transcriber_helpers.py`, `tests/js/main-process-helpers.test.js`).
 - [ ] **5.8** Optional: pass HF token to validation spawn via stdin instead of env — lower priority; Windows/macOS exposure is limited.
-- [ ] **5.9** Add `AGENTS.md` § **GPU compute serialization and timeouts**: handlers on compute queue (after 5.1: transcribe + diarize + guided + summary), validation wait policy, wall-clock kills (5.3).
+- [x] **5.9** Add `AGENTS.md` § **GPU compute serialization and timeouts**: handlers on compute queue (after 5.1: transcribe + diarize + guided + summary), validation wait policy, wall-clock kills (5.3).
 
 **Phase 5 manual:** `tests/manual/local-ai-addons-checklist.md`; overlapping transcribe + diarize; confirm model download still works during transcription.
 
@@ -164,13 +164,13 @@ npm run test:python
 
 **Risk:** Low–medium | **Regression:** Search feels delayed; less frequent disk sync
 
-- [ ] **6.1** Debounce meeting search input (150–300 ms); cache lowercased query (`app.js` ~1587+).
-- [ ] **6.2** `loadMeetingHistory({ scan })`: skip `scanRecordings()` except launch / explicit refresh (`app.js` ~1533+).
-- [ ] **6.3** Audio visualizer: stop rAF loop when `document.hidden`; skip redraw when levels unchanged (`app.js` ~3973+). Drawing already skips when hidden; rAF still runs today.
-- [ ] **6.4** Normalize `meetingId` to string once in `selectMeeting` so downstream `===` is safe (`app.js`). Backend returns strings today; inconsistency is latent.
+- [x] **6.1** Debounce meeting search input (150–300 ms); cache lowercased query (`app.js` ~1587+).
+- [x] **6.2** `loadMeetingHistory({ scan })`: skip `scanRecordings()` except launch / explicit refresh (`app.js` ~1533+).
+- [x] **6.3** Audio visualizer: stop rAF loop when `document.hidden`; skip redraw when levels unchanged (`app.js` ~3973+). Drawing already skips when hidden; rAF still runs today.
+- [x] **6.4** Normalize `meetingId` to string once in `selectMeeting` so downstream `===` is safe (`app.js`). Backend returns strings today; inconsistency is latent.
 - [ ] **6.5** Chunked transcript rendering — **optional / profile first**; only if large meetings show jank (`app.js` ~549+). No observed bug at typical sizes.
-- [ ] **6.6** Markdown links for AI content: restrict to `https:` and `mailto:` only (`app.js` ~354+). `javascript:` already blocked by CSP in `index.html`; tighten AI-rendered path and drop relative `href` branches.
-- [ ] **6.7** `handleDismissUpdate`: clear `currentUpdateInfo`; `replayPendingUpdateNotification` require `https:` on `downloadUrl` (`update-notification-helpers.js`, `app.js`).
+- [x] **6.6** Markdown links for AI content: restrict to `https:` and `mailto:` only (`app.js` ~354+). `javascript:` already blocked by CSP in `index.html`; tighten AI-rendered path and drop relative `href` branches.
+- [x] **6.7** `handleDismissUpdate`: clear `currentUpdateInfo`; `replayPendingUpdateNotification` require `https:` on `downloadUrl` (`update-notification-helpers.js`, `app.js`).
 
 *`modelSize` allowlist moved to Phase 1 item 1.14.*
 
@@ -198,8 +198,8 @@ npm run test:python
 | 2 | Recording lifecycle | Complete |
 | 3 | Path enforcement | Complete |
 | 4 | Recorder correctness | Complete |
-| 5 | AI concurrency & archives (5.3 before 5.1) | Not started |
-| 6 | Performance & UX | Not started |
+| 5 | AI concurrency & archives (5.3 before 5.1) | Complete |
+| 6 | Performance & UX | Complete |
 | 7 | Architectural | Not started |
 
 **Suggested agent order:** 1 → 2 → 3 → 4 → 5 → 6 → 7 (7.x one item per PR; **7.2 is the narrow compute-busy gate, not queue merge**).

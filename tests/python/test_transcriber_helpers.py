@@ -180,6 +180,30 @@ def test_faster_whisper_allows_download_when_cache_snapshot_is_incomplete(monkey
     assert captured['hf_offline'] is None
 
 
+def test_faster_whisper_cache_dir_requires_exact_folder_name(monkeypatch, tmp_path):
+    cache_dir = tmp_path / 'hf-cache'
+    decoy_dir = cache_dir / 'models--Systran--faster-whisper-small-extra' / 'snapshots' / 'abc123'
+    decoy_dir.mkdir(parents=True)
+    (decoy_dir / 'config.json').write_text('{}')
+    (decoy_dir / 'model.bin').write_bytes(b'weights')
+    (decoy_dir / 'tokenizer.json').write_text('{}')
+    (decoy_dir / 'vocabulary.txt').write_text('tokens')
+    monkeypatch.setenv('HF_HUB_CACHE', str(cache_dir))
+
+    assert fw_transcriber.has_cached_faster_whisper_model('small') is False
+
+
+def test_mlx_cache_requires_non_empty_model_files(tmp_path):
+    service = cast(Any, MLXWhisperTranscriber(model_size='small', language='en'))
+    service.cache_dir = tmp_path / 'cache-root'
+    service.model_dir = service.cache_dir / 'mlx_models' / service.model_storage_dir
+    service.model_dir.mkdir(parents=True)
+    (service.model_dir / 'weights.npz').write_text('')
+    (service.model_dir / 'config.json').write_text('{}')
+
+    assert service._required_model_files_cached() is False
+
+
 def test_faster_whisper_allows_download_when_cache_is_missing(monkeypatch, tmp_path):
     captured = {}
 

@@ -176,6 +176,42 @@ Whisper transcription caches are separate from diarization’s Hugging Face cach
 
 If you change required cache files or env var names, update all of the files above plus `tests/js/main-process-helpers.test.js` and `tests/python/test_transcriber_helpers.py`.
 
+### GPU compute serialization and timeouts
+
+Heavy local AI work runs through a single main-process compute queue (`aiComputeActionQueue` in `src/main.js`) so only one GPU-heavy job runs at a time.
+
+**Handlers on the compute queue**
+
+- `transcribe-audio`
+- `transcribe-audio-with-speakers` (guided diarization-first transcription)
+- `diarize-transcript`
+- `generate-summary` (generation subprocess only; meeting preflight runs before enqueue)
+
+**Not on the compute queue**
+
+- Whisper model download / preload (`download-model`) — must remain off-queue so downloads can proceed while transcription is idle or blocked behind other work; do not merge with the compute queue.
+- AI add-on setup downloads (`aiAddonActionQueue`) — separate serialization from compute.
+
+**Wall-clock timeouts**
+
+Each enqueued compute job is wrapped with `runWallClockComputeAction` in `src/main-process-helpers.js`, which kills the active child via `terminateProcessBestEffort` when a per-job limit is exceeded. On timeout, the wrapper waits for the child process to exit and for the job promise to settle before releasing the compute queue.
+
+- Transcription: model-size limits via `getTranscriptionComputeTimeoutMs` (30–120 minutes)
+- Speaker identification (diarization): 30 minutes (`AI_COMPUTE_TIMEOUT_MS.diarization`)
+- Speaker-guided transcription: 120 minutes (`AI_COMPUTE_TIMEOUT_MS.guidedTranscription`)
+- Summary generation: 90 minutes (`AI_COMPUTE_TIMEOUT_MS.summary`)
+
+Hung children must not stall the queue indefinitely.
+
+**Setup validation vs compute**
+
+Diarization and summary setup smoke tests use `createAbortableComputeAction`, which:
+
+1. Blocks on `waitForAiComputeQueueIdle` until `aiComputeActionQueue.hasPendingWork()` is false (no 15s false-failure)
+2. Enqueues the validation subprocess on the compute queue so validation cannot overlap transcription, diarization, or summary runs
+
+Validation remains user-triggered setup work, not automatic post-transcription behavior.
+
 ## High-Risk Areas
 
 ### IPC surface
