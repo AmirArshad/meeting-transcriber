@@ -22,12 +22,14 @@ updates:
       day: monday
     open-pull-requests-limit: 10
     ignore:
+      # Phased upgrades on chore/phased-dependency-upgrades — see todo.md
       - dependency-name: numpy
         update-types:
           - version-update:semver-major
       - dependency-name: scipy
-        update-types:
-          - version-update:semver-major
+      - dependency-name: soxr
+      - dependency-name: pytest
+      - dependency-name: tiktoken
     groups:
       python-runtime-pins:
         patterns:
