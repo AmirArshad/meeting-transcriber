@@ -28,7 +28,7 @@ certifi==2026.4.22
 idna==3.15
 h11==0.16.0
 colorama==0.4.6
-click==8.3.3
+click==8.4.1
 shellingham==1.5.4
 rich==15.0.0
 annotated-doc==0.0.4
