@@ -43,7 +43,7 @@ typing-extensions==4.15.0
 anyio==4.13.0
 colorama==0.4.6
 mlx==0.31.2
-more-itertools==11.0.2
+more-itertools==11.1.0
 numba==0.65.1
 llvmlite==0.47.0
 # Required by pinned lightning-whisper-mlx==0.0.10 metadata; build cleanup prunes torch dev/test files.
