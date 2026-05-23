@@ -1,6 +1,6 @@
 # Pinned dependencies used only for packaged macOS builds.
 # Keep local development requirements in requirements-macos.txt.
-sounddevice==0.4.6
+sounddevice==0.5.5
 numpy==1.26.4
 soxr==0.3.7
 pyobjc-framework-ScreenCaptureKit==10.0
