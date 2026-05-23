@@ -34,11 +34,6 @@ jobs:
     - name: Run Python unit tests
       run: python -m pytest tests/python
 
-    - name: Audit pinned Windows Python dependencies
-      run: |
-        python -m pip install pip-audit
-        python -m pip_audit -r requirements-windows-build.txt
-
     - name: Validate Python syntax
       shell: pwsh
       run: |
@@ -80,11 +75,6 @@ jobs:
 
     - name: Run Python unit tests
       run: python -m pytest tests/python
-
-    - name: Audit pinned macOS Python dependencies
-      run: |
-        python -m pip install pip-audit
-        python -m pip_audit -r requirements-macos-build.txt
 
     - name: Validate Python syntax (all backend files)
       run: |
@@ -281,33 +271,58 @@ jobs:
       run: npm audit --audit-level=high
 
   security-audit:
-    name: Security audit (npm + Python pins)
-    runs-on: ubuntu-latest
+    name: Security audit (${{ matrix.label }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: npm
+            runner: ubuntu-latest
+            kind: npm
+          - label: macos-python
+            runner: macos-14
+            kind: pip-macos
+          - label: windows-python
+            runner: windows-latest
+            kind: pip-windows
 
     steps:
     - uses: actions/checkout@v6
 
     - name: Set up Node.js
+      if: matrix.kind == 'npm'
       uses: actions/setup-node@v6
       with:
         node-version: '24'
         cache: 'npm'
 
     - name: Install Node dependencies
+      if: matrix.kind == 'npm'
       run: npm ci
 
     - name: Audit npm dependencies
+      if: matrix.kind == 'npm'
       run: npm audit --audit-level=high
 
     - name: Set up Python 3.11
+      if: matrix.kind != 'npm'
       uses: actions/setup-python@v6
       with:
         python-version: '3.11'
 
     - name: Audit pinned macOS Python dependencies
+      if: matrix.kind == 'pip-macos'
       run: |
         python -m pip install pip-audit
         python -m pip_audit -r requirements-macos-build.txt
+
+    - name: Audit pinned Windows Python dependencies
+      if: matrix.kind == 'pip-windows'
+      shell: pwsh
+      run: |
+        python -m pip install pip-audit
+        python -m pip_audit -r requirements-windows-build.txt
 
   validate-docs:
     name: Validate Documentation
