@@ -1,5 +1,5 @@
 # Audio Recording Dependencies
-pyaudiowpatch>=0.2.12.4  # PyAudio fork with WASAPI loopback support for Windows
+pyaudiowpatch>=0.2.12.8  # PyAudio fork with WASAPI loopback support for Windows
 numpy>=1.24.0            # For audio processing and mixing
 
 # Future dependencies (commented out for now)

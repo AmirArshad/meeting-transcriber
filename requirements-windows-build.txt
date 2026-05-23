@@ -1,6 +1,6 @@
 # Pinned dependencies used only for packaged Windows builds.
 # Keep local development requirements in requirements-windows.txt.
-pyaudiowpatch==0.2.12.4
+pyaudiowpatch==0.2.12.8
 numpy==1.26.4
 scipy==1.11.4
 soxr==0.3.7
