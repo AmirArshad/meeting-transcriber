@@ -229,7 +229,7 @@ requirements-common.txt:
 numpy>=1.24.0
 scipy>=1.11.0
 soxr>=0.3.0
-filelock>=3.12.0
+filelock>=3.20.3
 ```
 
 ### Windows-Specific (Unchanged)

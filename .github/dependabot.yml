@@ -1,0 +1,34 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      electron-toolchain:
+        patterns:
+          - electron
+          - electron-builder
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    groups:
+      python-runtime-pins:
+        patterns:
+          - filelock
+          - numpy
+          - certifi
+          - urllib3
+          - requests
+        update-types:
+          - patch
+          - minor

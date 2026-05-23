@@ -257,6 +257,12 @@ class MLXWhisperTranscriber(BaseTranscriber):
             return Path.home() / 'Library' / 'Caches' / 'avanevis'
         return Path.home() / '.cache' / 'avanevis'
 
+    def _get_download_lock_path(self) -> Path:
+        """Return a user-private lock file path for MLX model downloads."""
+        lock_dir = self.cache_dir / '.locks'
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        return lock_dir / f'whisper_mlx_model_{self.model_size}.lock'
+
     def _download_model_files(self) -> None:
         """Download model files into the app-managed cache directory."""
         import logging
@@ -469,10 +475,9 @@ class MLXWhisperTranscriber(BaseTranscriber):
 
         # Use file locking to prevent race conditions when multiple processes
         # try to download the model simultaneously (e.g., preload + transcription)
-        import tempfile
         import filelock  # type: ignore[import-not-found]
 
-        lock_file = Path(tempfile.gettempdir()) / f"whisper_mlx_model_{self.model_size}.lock"
+        lock_file = self._get_download_lock_path()
         lock = filelock.FileLock(lock_file, timeout=1200)  # 20 minute timeout for large model downloads
 
         try:

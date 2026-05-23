@@ -21,9 +21,11 @@ def test_mlx_transcriber_rejects_unknown_language():
         MLXWhisperTranscriber(language='xx')
 
 
-def test_faster_whisper_lock_file_path_uses_tempdir(monkeypatch):
+def test_faster_whisper_lock_file_path_uses_private_lock_dir(monkeypatch, tmp_path):
     service = TranscriberService(model_size='small')
     captured = {}
+    lock_dir = tmp_path / 'hf-cache-parent' / '.locks'
+    expected_lock = lock_dir / 'whisper_model_small.lock'
 
     class DummyFileLock:
         def __init__(self, path, timeout):
@@ -36,13 +38,18 @@ def test_faster_whisper_lock_file_path_uses_tempdir(monkeypatch):
         def __exit__(self, exc_type, exc, tb):
             return False
 
+    monkeypatch.setattr(
+        fw_transcriber,
+        'get_transcription_download_lock_path',
+        lambda model_size: lock_dir / f'whisper_model_{model_size}.lock',
+    )
     monkeypatch.setattr('filelock.FileLock', DummyFileLock)
     monkeypatch.setattr(service, '_load_model_internal', lambda: captured.setdefault('loaded', True))
     monkeypatch.setitem(__import__('sys').modules, 'faster_whisper', types.SimpleNamespace(WhisperModel=object))
 
     service.load_model()
 
-    assert str(captured['path']).endswith('whisper_model_small.lock')
+    assert captured['path'] == expected_lock
     assert captured['timeout'] == 300
     assert captured['loaded'] is True
 
@@ -64,7 +71,7 @@ def test_mlx_lock_timeout_raises_helpful_runtime_error(monkeypatch):
         def __exit__(self, exc_type, exc, tb):
             return False
 
-    monkeypatch.setattr(tempfile, 'gettempdir', lambda: '/tmp/test-locks')
+    monkeypatch.setattr(service, '_get_download_lock_path', lambda: Path('/tmp/test-locks/whisper_mlx_model_small.lock'))
     monkeypatch.setattr('filelock.FileLock', DummyFileLock)
     monkeypatch.setattr('filelock.Timeout', DummyTimeout)
     monkeypatch.setitem(__import__('sys').modules, 'lightning_whisper_mlx', types.SimpleNamespace())

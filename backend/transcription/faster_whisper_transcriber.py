@@ -53,6 +53,13 @@ def get_hugging_face_hub_cache_dir() -> Path:
     return Path.home() / ".cache" / "huggingface" / "hub"
 
 
+def get_transcription_download_lock_path(model_size: str) -> Path:
+    """Return a user-private lock file path for Whisper model downloads."""
+    lock_dir = get_hugging_face_hub_cache_dir().parent / ".locks"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    return lock_dir / f"whisper_model_{model_size}.lock"
+
+
 def has_cached_faster_whisper_model(model_size: str) -> bool:
     cache_dir = get_hugging_face_hub_cache_dir()
     if not cache_dir.exists() or not cache_dir.is_dir():
@@ -316,10 +323,9 @@ class TranscriberService(BaseTranscriber):
 
         # Use file locking to prevent race conditions when multiple processes
         # try to download the model simultaneously (e.g., preload + transcription)
-        import tempfile
         import filelock  # type: ignore[import-not-found]
 
-        lock_file = Path(tempfile.gettempdir()) / f"whisper_model_{self.model_size}.lock"
+        lock_file = get_transcription_download_lock_path(self.model_size)
         lock = filelock.FileLock(lock_file, timeout=300)  # 5 minute timeout
 
         try:

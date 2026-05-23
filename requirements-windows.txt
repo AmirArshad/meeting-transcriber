@@ -6,7 +6,7 @@ soxr>=0.3.0              # For high-quality audio resampling
 
 # Transcription Dependencies
 faster-whisper>=1.0.0    # Fast, accurate Whisper implementation (CPU + GPU)
-filelock>=3.12.0         # Prevent race conditions during model downloads
+filelock>=3.20.3         # Prevent race conditions during model downloads
 
 # Optional local speaker identification add-on
 # The desktop app installs pyannote.audio into userData during explicit speaker setup.
