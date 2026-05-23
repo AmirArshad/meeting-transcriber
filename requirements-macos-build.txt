@@ -12,16 +12,16 @@ pyobjc-framework-CoreMedia==12.1
 pyobjc-framework-Quartz==12.1
 lightning-whisper-mlx==0.0.10
 scipy==1.11.4
-filelock==3.20.3
+filelock==3.29.0
 cffi==2.0.0
 pycparser==3.0
 tiktoken==0.3.3
 regex==2026.5.9
 requests==2.34.2
 charset-normalizer==3.4.7
-idna==3.15
+idna==3.16
 urllib3==2.7.0
-certifi==2026.4.22
+certifi==2026.5.20
 huggingface-hub==1.15.0
 hf-xet==1.5.0
 httpx==0.28.1
@@ -33,7 +33,7 @@ PyYAML==6.0.3
 tqdm==4.67.3
 typer==0.25.1
 annotated-doc==0.0.4
-click==8.3.3
+click==8.4.1
 rich==15.0.0
 Pygments==2.20.0
 markdown-it-py==4.2.0
@@ -43,7 +43,7 @@ typing-extensions==4.15.0
 anyio==4.13.0
 colorama==0.4.6
 mlx==0.31.2
-more-itertools==11.0.2
+more-itertools==11.1.0
 numba==0.65.1
 llvmlite==0.47.0
 # Required by pinned lightning-whisper-mlx==0.0.10 metadata; build cleanup prunes torch dev/test files.

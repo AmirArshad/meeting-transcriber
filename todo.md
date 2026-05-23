@@ -35,13 +35,13 @@ Dependabot PRs (reference only — merge via phase branches, not blindly):
 
 **Scope:** Transitive / small packages with minimal app surface area. Close or cherry-pick Dependabot PRs #2, #6, #7, #8.
 
-- [ ] Bump `certifi`, `idna`, `click`, `more-itertools` in `requirements-*-build.txt` (match Dependabot pins).
-- [ ] Optional: bump `filelock` 3.20.3 → latest patch in `python-runtime-pins` group (PR #2); keep `>=3.20.3` floor.
-- [ ] Bump `adm-zip` and `electron` patch (`package.json` + `npm install` + lockfile).
-- [ ] Regenerate `legal/PYTHON-BUNDLED-PACKAGES.md` (`node scripts/generate-python-sbom.js`).
-- [ ] Tune Dependabot: ignore `numpy` / `scipy` **major** until Phase 4 (optional `.github/dependabot.yml` ignore rules).
+- [x] Bump `certifi`, `idna`, `click`, `more-itertools` in `requirements-*-build.txt` (match Dependabot pins).
+- [x] Bump `filelock` 3.20.3 → 3.29.0 in build pins (PR #2); keep `>=3.20.3` floor in dev requirements.
+- [x] `adm-zip` / `electron` patch already on `master` (`^0.5.17`, `^42.2.0`).
+- [x] Regenerate `legal/PYTHON-BUNDLED-PACKAGES.md` (`node scripts/generate-python-sbom.js`).
+- [x] Dependabot: ignore `numpy` / `scipy` **major** until Phase 4.
 
-**Files:** `requirements-*-build.txt`, `package.json`, `package-lock.json`, `legal/PYTHON-BUNDLED-PACKAGES.md`, optionally `.github/dependabot.yml`.
+**Files:** `requirements-*-build.txt`, `legal/PYTHON-BUNDLED-PACKAGES.md`, `.github/dependabot.yml`.
 
 **Automated (required):**
 
@@ -49,14 +49,22 @@ Dependabot PRs (reference only — merge via phase branches, not blindly):
 npm test
 npm run test:python
 npm audit --audit-level=high
+# macOS: .venv/bin/pip-audit -r requirements-macos-build.txt
 ```
 
-**Manual smoke (light):**
+**Manual smoke (light) — use packaged app, not `npm start`:**
 
-- [ ] `npm start` — app launches, Settings opens.
-- [ ] Cross-platform item from `tests/manual/recording-smoke-checklist.md` § Cross-platform (launch → record → stop → transcribe → save).
+Recording/desktop audio paths require a built app under `dist/` (dev `npm start` is not valid for audio QA on this machine).
 
-**Merge gate:** All automated green; light manual pass on one platform (dev machine).
+```bash
+npm run build:mac:dir   # macOS: dist/mac-arm64/AvaNevis.app
+# or npm run build:dir on Windows → dist/win-unpacked/
+```
+
+- [ ] Launch **built** app from `dist/` — Settings opens, no startup errors.
+- [ ] `tests/manual/recording-smoke-checklist.md` § Cross-platform (launch → record → stop → transcribe → save) using the **packaged** binary.
+
+**Merge gate:** All automated green; light manual pass on packaged build (one platform).
 
 ---
 
