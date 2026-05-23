@@ -8,10 +8,10 @@ Dependabot PRs (reference only — merge via phase branches, not blindly):
 
 | PR | Package | Target phase |
 |----|---------|----------------|
-| #2 | filelock + certifi (group) | Phase 1 |
-| #6 | more-itertools | Phase 1 |
-| #7 | click | Phase 1 |
-| #8 | idna | Phase 1 |
+| #2 | filelock + certifi (group) | Phase 1 — **done** (close PR) |
+| #6 | more-itertools | Phase 1 — **done** (close PR) |
+| #7 | click | Phase 1 — **done** (close PR) |
+| #8 | idna | Phase 1 — **done** (close PR) |
 | #5 | soxr 0.3.7 → 1.1.0 | Phase 2 |
 | #9 | pytest ≥9 | Phase 3 |
 | #3 | numpy 1.26 → 2.x | Phase 4 |
@@ -31,9 +31,11 @@ Dependabot PRs (reference only — merge via phase branches, not blindly):
 
 ---
 
-## Phase 1 — Low-risk runtime utilities + npm patches
+## Phase 1 — Low-risk runtime utilities + npm patches ✅
 
-**Scope:** Transitive / small packages with minimal app surface area. Close or cherry-pick Dependabot PRs #2, #6, #7, #8.
+**Status:** Complete (packaged smoke passed). Merge to `master` when ready. Close Dependabot PRs #2, #6, #7, #8.
+
+**Scope:** Transitive / small packages with minimal app surface area.
 
 - [x] Bump `certifi`, `idna`, `click`, `more-itertools` in `requirements-*-build.txt` (match Dependabot pins).
 - [x] Bump `filelock` 3.20.3 → 3.29.0 in build pins (PR #2); keep `>=3.20.3` floor in dev requirements.
@@ -61,10 +63,77 @@ npm run build:mac:dir   # macOS: dist/mac-arm64/AvaNevis.app
 # or npm run build:dir on Windows → dist/win-unpacked/
 ```
 
-- [ ] Launch **built** app from `dist/` — Settings opens, no startup errors.
-- [ ] `tests/manual/recording-smoke-checklist.md` § Cross-platform (launch → record → stop → transcribe → save) using the **packaged** binary.
+- [x] Launch **built** app from `dist/` — Settings opens, no startup errors.
+- [x] `tests/manual/recording-smoke-checklist.md` § Cross-platform (launch → record → stop → transcribe → save) using the **packaged** binary.
 
-**Merge gate:** All automated green; light manual pass on packaged build (one platform).
+**Merge gate:** ✅ Automated green; packaged smoke passed.
+
+---
+
+## Phase 1b — Installer slimming (unused Python pins)
+
+**Scope:** Shrink bundled Python in `dist/` without changing product features. Almost all installer weight is `build/resources/python` (~1 GB macOS) + ffmpeg (~76 MB macOS), not npm. Diarization, summaries, and Whisper weights stay **out** of the default installer (userData / cache) — no change needed there.
+
+**Audit reference (macOS build sizes observed):** `torch` ~368 MB, `mlx` ~178 MB, `scipy` ~112 MB, `llvmlite`/`numba` ~144 MB, `numpy` ~60 MB — only `scipy` and `soxr` on mac look unused by app code.
+
+### Not bloat (do not remove)
+
+- **npm:** `adm-zip` (runtime), `electron` / `electron-builder` (dev/build only) — already minimal.
+- **ffmpeg binary** — required for Opus post-processing after recording.
+- **macOS Swift helper** — required for desktop audio.
+- **torch + mlx + lightning-whisper-mlx** — macOS Apple Silicon transcription stack (large but intentional).
+- **faster-whisper + ctranslate2 + soxr** — Windows transcription + resampling.
+- **pip on macOS bundle** — intentional for optional diarization setup into userData.
+- **ffmpeg source `.tar.xz`** — **not** in default app; only `npm run legal:release-assets` (compliance). Shipped `legal/` is notices + JSON only.
+- **Whisper model pre-bundle** — skipped unless `DOWNLOAD_MODELS=true` (Windows); macOS uses MLX cache on first use.
+
+### High confidence — do first
+
+- [ ] **Remove `soxr` from macOS build pins** (`requirements-macos-build.txt`, `requirements-macos.txt`, `requirements-common.txt` if mac-only parity). macOS never imports `backend/audio/processor.py` (Windows-only resampling path). ~2 MB + cleaner pins.
+- [ ] **Try removing `scipy` from `requirements-windows-build.txt`** (and `requirements-windows.txt`). App uses **soxr** only (`processor.py`); scipy was replaced per `docs/design/INSTALLER_PERFORMANCE_IMPROVEMENTS.md`. Re-run `prepare-build` on Windows, measure `dist/win-unpacked` size, transcribe smoke.
+- [ ] Record **before/after** `du -sh build/resources/python` and packaged app size in a short note (commit message or `docs/development/` one-liner).
+
+### Medium confidence — validate with packaged smoke
+
+- [ ] **Try removing `scipy` from `requirements-macos-build.txt`** (~112 MB in site-packages). No `import scipy` in `backend/`; comment claims lightning-whisper-mlx needs it — verify with MLX transcribe on short clip after `npm run build:mac:dir`. If import fails at runtime, revert and document actual transitive requirement.
+- [ ] **Trial drop explicit transitive-only pins** on one platform (e.g. `tiktoken`, `regex`, `networkx`, `sympy` already pruned post-install on mac) — prefer `pip install` resolving from minimal direct deps, then diff lock/pins. Higher engineering cost; do only if high-confidence trims succeed.
+
+### Low priority — small or diminishing returns
+
+- [ ] **PyObjC `Cocoa` / `Quartz`** in mac pins — not directly imported; test removal with `pip check` + SCK fallback smoke if pursued.
+- [ ] **Further torch pruning** — `prepare-resources.js` already removes `torchgen`, tests, `caffe2`, etc.; expect small gains only.
+- [ ] **Windows `onnxruntime` / `tokenizers` / `av`** — faster-whisper transitive; only removable if a slimmer faster-whisper install graph is confirmed.
+
+### Probably not worth chasing soon
+
+- **numba / llvmlite** on mac — MLX/torch transitive; graph surgery only.
+- **Bundled mac `torch`** — required for lightning-whisper-mlx unless transcription architecture changes.
+- **npm lockfile transitive bulk** — dev/CI only.
+
+**Files:** `requirements-macos-build.txt`, `requirements-windows-build.txt`, loose `requirements-*.txt`, `legal/PYTHON-BUNDLED-PACKAGES.md`, optionally `requirements-macos.txt` comments (scipy/soxr notes).
+
+**Automated (required):**
+
+```bash
+npm test
+npm run test:python
+npm audit --audit-level=high
+# After pin changes: npm run prepare-build (platform-native host)
+```
+
+**Manual smoke — packaged app only (not `npm start`):**
+
+```bash
+npm run build:mac:dir    # macOS
+# npm run build:dir    # Windows
+```
+
+- [ ] App launches from `dist/` with no Python import errors on startup.
+- [ ] Record → stop → transcribe → save (cross-platform checklist minimum).
+- [ ] **macOS only if scipy removed:** MLX transcription on short meeting.
+- [ ] **Windows only if scipy removed:** faster-whisper transcription on short meeting.
+
+**Merge gate:** `prepare-build` succeeds; site-packages size reduced or unchanged; packaged smoke passes on affected platform(s).
 
 ---
 
@@ -160,11 +229,12 @@ CI: `test-backend-macos`, `test-backend-windows`, `test-frontend` build smoke, `
 
 ## Execution order
 
-1. Phase 1 → merge → smoke  
-2. Phase 2 → merge → audio smoke  
-3. Phase 3 → merge  
-4. Phase 4 → merge → full smoke  
-5. Phase 5 → continuous  
+1. Phase 1 → merge to `master` ✅ (smoke done on branch)  
+2. Phase 1b → merge → packaged smoke per platform touched  
+3. Phase 2 → merge → audio smoke (Windows-focused; mac may drop soxr pin in 1b first)  
+4. Phase 3 → merge  
+5. Phase 4 → merge → full smoke  
+6. Phase 5 → continuous  
 
 ---
 
