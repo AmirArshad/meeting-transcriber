@@ -1,6 +1,6 @@
 # Audio Recording Dependencies (macOS)
 sounddevice>=0.4.6       # Cross-platform audio I/O (for microphone)
-numpy>=1.24.0            # For audio processing and mixing
+numpy>=2.4.6            # For audio processing and mixing
 soxr>=0.3.0              # For high-quality audio resampling (VHQ quality)
 pyobjc-framework-ScreenCaptureKit>=10.0  # macOS ScreenCaptureKit for desktop audio (fallback)
 pyobjc-framework-CoreAudio>=10.0         # macOS CoreAudio support
