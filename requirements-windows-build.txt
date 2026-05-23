@@ -16,7 +16,7 @@ setuptools==82.0.1
 PyYAML==6.0.3
 flatbuffers==25.12.19
 packaging==26.2
-protobuf==7.34.1
+protobuf==7.35.0
 fsspec==2026.4.0
 hf-xet==1.5.0
 httpx==0.28.1
