@@ -48,7 +48,7 @@ numba==0.65.1
 llvmlite==0.47.0
 # Required by pinned lightning-whisper-mlx==0.0.10 metadata; build cleanup prunes torch dev/test files.
 torch==2.12.0
-setuptools==81.0.0
+setuptools==82.0.1
 networkx==3.6.1
 sympy==1.14.0
 mpmath==1.3.0
