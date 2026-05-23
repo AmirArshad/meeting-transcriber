@@ -20,8 +20,10 @@ updates:
     schedule:
       interval: weekly
       day: monday
-    open-pull-requests-limit: 10
+    # Paused while phased Python upgrades run on chore/phased-dependency-upgrades (todo.md).
+    open-pull-requests-limit: 0
     ignore:
+      # Re-enable pip PRs after Phase 4; ignores below are backup if limit is raised early.
       # Phased upgrades on chore/phased-dependency-upgrades — see todo.md
       - dependency-name: numpy
         update-types:
