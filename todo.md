@@ -56,17 +56,27 @@ npm audit --audit-level=high
 
 **Manual smoke (light) — use packaged app, not `npm start`:**
 
-Recording/desktop audio paths require a built app under `dist/` (dev `npm start` is not valid for audio QA on this machine).
+Do **not** use `npm start` / `npm run dev` for dependency-phase smoke. Dev mode uses repo `.venv` Python and different paths; recording/transcription QA must hit the **bundled** runtime from `dist/`.
 
 ```bash
-npm run build:mac:dir   # macOS: dist/mac-arm64/AvaNevis.app
-# or npm run build:dir on Windows → dist/win-unpacked/
+npm run prepare-build
+npm run build:mac:dir   # macOS → dist/mac-arm64/AvaNevis.app
+# or
+npm run build:dir       # Windows → dist/win-unpacked/AvaNevis.exe
 ```
 
-- [x] Launch **built** app from `dist/` — Settings opens, no startup errors.
-- [x] `tests/manual/recording-smoke-checklist.md` § Cross-platform (launch → record → stop → transcribe → save) using the **packaged** binary.
+**Launch the built binary** (quit any dev instance first):
 
-**Merge gate:** ✅ Automated green; packaged smoke passed.
+- **Windows:** `dist\win-unpacked\AvaNevis.exe` (Explorer double-click or `Start-Process .\dist\win-unpacked\AvaNevis.exe` from repo root)
+- **macOS:** open `dist/mac-arm64/AvaNevis.app`
+
+**Minimum pass** (`tests/manual/recording-smoke-checklist.md`): Cross-platform § (launch → record → stop → transcribe → save) plus **Windows** § (mic + WASAPI loopback, balanced mix). Optional for Phase 1: full macOS/Windows sections.
+
+- [x] Launch **built** app from `dist/` — Settings opens, no startup errors. (macOS)
+- [ ] Launch **built** app from `dist\win-unpacked\AvaNevis.exe` — Settings opens, no startup errors. (Windows)
+- [ ] `tests/manual/recording-smoke-checklist.md` § Cross-platform + § Windows using the **packaged** binary. (Windows)
+
+**Merge gate:** Automated green; packaged smoke passed on macOS; confirm Windows `AvaNevis.exe` smoke before merge.
 
 ---
 
@@ -124,9 +134,12 @@ npm audit --audit-level=high
 **Manual smoke — packaged app only (not `npm start`):**
 
 ```bash
-npm run build:mac:dir    # macOS
-# npm run build:dir    # Windows
+npm run prepare-build
+npm run build:mac:dir    # macOS → dist/mac-arm64/AvaNevis.app
+npm run build:dir        # Windows → dist/win-unpacked/AvaNevis.exe
 ```
+
+Launch `AvaNevis.exe` / `AvaNevis.app` from `dist/` — not `npm start`.
 
 - [ ] App launches from `dist/` with no Python import errors on startup.
 - [ ] Record → stop → transcribe → save (cross-platform checklist minimum).
