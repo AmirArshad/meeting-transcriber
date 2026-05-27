@@ -4,7 +4,7 @@ sounddevice==0.4.6
 numpy==2.4.6
 pyobjc-framework-ScreenCaptureKit==10.0
 pyobjc-framework-CoreAudio==10.0
-pyobjc-framework-AVFoundation==10.0
+pyobjc-framework-AVFoundation==10.3.2
 pyobjc-core==12.1
 pyobjc-framework-Cocoa==12.1
 pyobjc-framework-CoreMedia==12.1
