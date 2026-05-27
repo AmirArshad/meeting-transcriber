@@ -1,8 +1,7 @@
 # Audio Recording Dependencies (Windows)
 pyaudiowpatch>=0.2.12.4  # PyAudio fork with WASAPI loopback support for Windows
 numpy>=1.24.0            # For audio processing and mixing
-scipy>=1.11.0            # For audio enhancement (filtering, resampling)
-soxr>=0.3.0              # For high-quality audio resampling
+soxr>=1.1.0              # Resampling in backend/audio/processor.py (Windows recorder path)
 
 # Transcription Dependencies
 faster-whisper>=1.0.0    # Fast, accurate Whisper implementation (CPU + GPU)

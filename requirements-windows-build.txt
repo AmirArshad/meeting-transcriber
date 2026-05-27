@@ -2,8 +2,7 @@
 # Keep local development requirements in requirements-windows.txt.
 pyaudiowpatch==0.2.12.4
 numpy==1.26.4
-scipy==1.11.4
-soxr==0.3.7
+soxr==1.1.0
 faster-whisper==1.2.1
 filelock==3.29.0
 av==17.0.1

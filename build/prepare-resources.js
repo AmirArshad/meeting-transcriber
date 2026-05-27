@@ -820,8 +820,9 @@ async function prepareResources() {
       });
 
       // Clean up bloated transitive dependencies to reduce bundle size
-      // NOTE: scipy and torch are REQUIRED by lightning-whisper-mlx metadata.
-      // Keep runtime packages, but prune torch development/test files below.
+      // NOTE: scipy and torch are required by lightning-whisper-mlx (scipy is not used by
+      // backend/ but remains in the macOS bundle via that dependency). torch dev/test files
+      // are pruned below.
       console.log('[5/5] Cleaning up unused dependencies...');
       const sitePackages = path.join(PYTHON_DIR, 'lib', 'python3.11', 'site-packages');
       // Keep pip: explicit speaker diarization setup installs optional pyannote

@@ -12,8 +12,8 @@ Dependabot PRs (reference only — merge via phase branches, not blindly):
 | #6 | more-itertools | Phase 1 — **done** (close PR) |
 | #7 | click | Phase 1 — **done** (close PR) |
 | #8 | idna | Phase 1 — **done** (close PR) |
-| #5 | soxr 0.3.7 → 1.1.0 | Phase 2 |
-| #9 | pytest ≥9 | Phase 3 |
+| #5 | soxr 0.3.7 → 1.1.0 | Phase 2 — **done** (close PR) |
+| #9 | pytest ≥9 | Phase 3 — **done** (close PR) |
 | #3 | numpy 1.26 → 2.x | Phase 4 |
 | #4 | scipy 1.11 → 1.17 | Phase 4 |
 
@@ -73,14 +73,16 @@ npm run build:dir       # Windows → dist/win-unpacked/AvaNevis.exe
 **Minimum pass** (`tests/manual/recording-smoke-checklist.md`): Cross-platform § (launch → record → stop → transcribe → save) plus **Windows** § (mic + WASAPI loopback, balanced mix). Optional for Phase 1: full macOS/Windows sections.
 
 - [x] Launch **built** app from `dist/` — Settings opens, no startup errors. (macOS)
-- [ ] Launch **built** app from `dist\win-unpacked\AvaNevis.exe` — Settings opens, no startup errors. (Windows)
-- [ ] `tests/manual/recording-smoke-checklist.md` § Cross-platform + § Windows using the **packaged** binary. (Windows)
+- [x] Launch **built** app from `dist\win-unpacked\AvaNevis.exe` — Settings opens, no startup errors. (Windows)
+- [x] `tests/manual/recording-smoke-checklist.md` § Cross-platform + § Windows using the **packaged** binary. (Windows)
 
-**Merge gate:** Automated green; packaged smoke passed on macOS; confirm Windows `AvaNevis.exe` smoke before merge.
+**Merge gate:** ✅ Automated green; packaged smoke passed (macOS + Windows).
 
 ---
 
-## Phase 1b — Installer slimming (unused Python pins)
+## Phase 1b — Installer slimming (unused Python pins) ✅
+
+**Status:** Complete on branch (Windows `scipy` removed; macOS `soxr` removed). Re-run `prepare-build` + packaged smoke after merge prep. Size notes: `docs/development/INSTALLER_SIZE_NOTES.md`.
 
 **Scope:** Shrink bundled Python in `dist/` without changing product features. Almost all installer weight is `build/resources/python` (~1 GB macOS) + ffmpeg (~76 MB macOS), not npm. Diarization, summaries, and Whisper weights stay **out** of the default installer (userData / cache) — no change needed there.
 
@@ -99,13 +101,13 @@ npm run build:dir       # Windows → dist/win-unpacked/AvaNevis.exe
 
 ### High confidence — do first
 
-- [ ] **Remove `soxr` from macOS build pins** (`requirements-macos-build.txt`, `requirements-macos.txt`, `requirements-common.txt` if mac-only parity). macOS never imports `backend/audio/processor.py` (Windows-only resampling path). ~2 MB + cleaner pins.
-- [ ] **Try removing `scipy` from `requirements-windows-build.txt`** (and `requirements-windows.txt`). App uses **soxr** only (`processor.py`); scipy was replaced per `docs/design/INSTALLER_PERFORMANCE_IMPROVEMENTS.md`. Re-run `prepare-build` on Windows, measure `dist/win-unpacked` size, transcribe smoke.
-- [ ] Record **before/after** `du -sh build/resources/python` and packaged app size in a short note (commit message or `docs/development/` one-liner).
+- [x] **Remove `soxr` from macOS build pins** (`requirements-macos-build.txt`, `requirements-macos.txt`, `requirements-common.txt`). macOS never imports `backend/audio/processor.py` (Windows-only resampling path).
+- [x] **Remove `scipy` from `requirements-windows-build.txt`** and `requirements-windows.txt`. App uses **soxr** only (`processor.py`).
+- [x] Record **before/after** sizes in `docs/development/INSTALLER_SIZE_NOTES.md`.
 
 ### Medium confidence — validate with packaged smoke
 
-- [ ] **Try removing `scipy` from `requirements-macos-build.txt`** (~112 MB in site-packages). No `import scipy` in `backend/`; comment claims lightning-whisper-mlx needs it — verify with MLX transcribe on short clip after `npm run build:mac:dir`. If import fails at runtime, revert and document actual transitive requirement.
+- [ ] **Try removing `scipy` from `requirements-macos-build.txt`** (~112 MB). **Deferred:** `lightning-whisper-mlx==0.0.10` declares `scipy`; pip still installs it without an explicit pin. Needs upstream dep change or post-install removal + MLX smoke on macOS.
 - [ ] **Trial drop explicit transitive-only pins** on one platform (e.g. `tiktoken`, `regex`, `networkx`, `sympy` already pruned post-install on mac) — prefer `pip install` resolving from minimal direct deps, then diff lock/pins. Higher engineering cost; do only if high-confidence trims succeed.
 
 ### Low priority — small or diminishing returns
@@ -141,22 +143,24 @@ npm run build:dir        # Windows → dist/win-unpacked/AvaNevis.exe
 
 Launch `AvaNevis.exe` / `AvaNevis.app` from `dist/` — not `npm start`.
 
-- [ ] App launches from `dist/` with no Python import errors on startup.
+- [ ] App launches from `dist/` with no Python import errors on startup. (re-verify after `prepare-build` with 1b+2 pins)
 - [ ] Record → stop → transcribe → save (cross-platform checklist minimum).
-- [ ] **macOS only if scipy removed:** MLX transcription on short meeting.
-- [ ] **Windows only if scipy removed:** faster-whisper transcription on short meeting.
+- [x] **Windows:** faster-whisper transcription smoke passed (Phase 1; pre-1b rebuild).
+- [ ] **macOS:** re-verify launch after `soxr` pin removed from mac bundle.
 
-**Merge gate:** `prepare-build` succeeds; site-packages size reduced or unchanged; packaged smoke passes on affected platform(s).
+**Merge gate:** `prepare-build` succeeds; site-packages size reduced on Windows; packaged smoke passes on affected platform(s).
 
 ---
 
-## Phase 2 — soxr 1.x (audio resampling)
+## Phase 2 — soxr 1.x (audio resampling) ✅
+
+**Status:** Pins updated on branch. Close Dependabot PR #5. Re-run Windows packaged smoke after `prepare-build` with `soxr==1.1.0`.
 
 **Scope:** `soxr==0.3.7` → `1.1.0` (Dependabot PR #5). Single integration point: `backend/audio/processor.py` (`soxr.resample(..., quality='VHQ')`).
 
-- [ ] Update `soxr` pin in all `requirements*.txt` and both `requirements-*-build.txt`.
-- [ ] Regenerate `legal/PYTHON-BUNDLED-PACKAGES.md`.
-- [ ] Confirm packaged build still installs soxr wheel on Windows + macOS (`npm run prepare-build` smoke or CI `build:dir` / `build:mac:dir`).
+- [x] Update `soxr` pin in Windows / dev `requirements*.txt` and `requirements-windows-build.txt` (removed from macOS pins in Phase 1b).
+- [x] Regenerate `legal/PYTHON-BUNDLED-PACKAGES.md`.
+- [ ] Confirm packaged build installs `soxr` 1.1.0 wheel on Windows (`npm run prepare-build` + `build:dir`).
 
 **Automated (required):** Phase 1 commands plus CI packaged-build smoke jobs if touched.
 
@@ -170,12 +174,14 @@ Launch `AvaNevis.exe` / `AvaNevis.app` from `dist/` — not `npm start`.
 
 ---
 
-## Phase 3 — Dev tooling (pytest 9)
+## Phase 3 — Dev tooling (pytest 9) ✅
+
+**Status:** Complete on branch. Close Dependabot PR #9. No packaged runtime change.
 
 **Scope:** `requirements-dev.txt` only (Dependabot PR #9). No packaged runtime change.
 
-- [ ] Bump `pytest>=9.0.3` in `requirements-dev.txt`.
-- [ ] Fix any test API deprecations if CI reports failures.
+- [x] Bump `pytest>=9.0.3` in `requirements-dev.txt`.
+- [x] Fix any test API deprecations if CI reports failures. (`npm run test:python` — 224 passed)
 
 **Automated (required):**
 
@@ -267,12 +273,10 @@ CI: `test-backend-macos`, `test-backend-windows`, `test-frontend` build smoke, `
 ## Execution order
 
 1. Phase 1 → merge to `master` ✅ (smoke done on branch)  
-2. Phase 1b → merge → packaged smoke per platform touched  
-3. Phase 2 → merge → audio smoke (Windows-focused; mac may drop soxr pin in 1b first)  
-4. Phase 3 → merge  
-5. Phase 4 → merge → full smoke  
-6. Phase 5 → continuous  
-7. Transcription retry and recording recovery → implement from `docs/design/TRANSCRIPTION_RETRY_RECOVERY.md`
+2. Phase 1b + 2 + 3 → on branch; re-run `prepare-build` + Windows packaged smoke, then merge  
+3. Phase 4 → merge → full smoke  
+4. Phase 5 → continuous  
+5. Transcription retry and recording recovery → implement from `docs/design/TRANSCRIPTION_RETRY_RECOVERY.md`
 
 ---
 

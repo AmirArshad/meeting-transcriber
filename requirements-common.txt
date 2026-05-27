@@ -2,7 +2,7 @@
 
 # Audio processing
 numpy>=1.24.0            # For audio processing and mixing
-soxr>=0.3.0              # For high-quality audio resampling
+# soxr is Windows-only (backend/audio/processor.py); see requirements-windows*.txt
 
 # Transcription
 filelock>=3.20.3         # Prevent race conditions during model downloads (CVE-2025-68146, CVE-2026-22701)

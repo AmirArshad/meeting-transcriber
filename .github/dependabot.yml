@@ -29,8 +29,6 @@ updates:
         update-types:
           - version-update:semver-major
       - dependency-name: scipy
-      - dependency-name: soxr
-      - dependency-name: pytest
       - dependency-name: tiktoken
     groups:
       python-runtime-pins:
