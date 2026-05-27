@@ -20,6 +20,13 @@ _NVIDIA_DLL_DIRECTORY_HANDLES = []
 # Keep aligned with cacheContainsCompleteFasterWhisperModel in src/main-process-helpers.js (AGENTS.md).
 _REQUIRED_CACHE_FILES = ("config.json", "model.bin", "tokenizer.json")
 _VOCABULARY_CACHE_FILES = ("vocabulary.txt", "vocabulary.json")
+_RETRYABLE_CUDA_ERROR_PATTERNS = (
+    "cublas64_12.dll",
+    "cublaslt64_12.dll",
+    "cudnn",
+    "cuda failed",
+    "cuda error",
+)
 
 
 @contextlib.contextmanager
@@ -446,6 +453,45 @@ class TranscriberService(BaseTranscriber):
         with hugging_face_offline_mode(local_files_only):
             return whisper_model_cls(self.model_size, **kwargs)
 
+    @staticmethod
+    def _is_retryable_cuda_runtime_error(error: Exception) -> bool:
+        message = str(error or "").lower()
+        return any(pattern in message for pattern in _RETRYABLE_CUDA_ERROR_PATTERNS)
+
+    def _run_transcription_attempt(self, audio_path: str) -> Dict[str, Any]:
+        segments, info = self.model.transcribe(
+            audio_path,
+            language=self.language,
+            beam_size=5,  # Good balance of accuracy and speed
+            vad_filter=True,  # Voice activity detection - removes silence
+            vad_parameters=dict(min_silence_duration_ms=500)  # Remove pauses > 500ms
+        )
+
+        segments_list = []
+        full_text = []
+
+        print(f"Processing segments...", file=sys.stderr)
+        for segment in segments:
+            segments_list.append({
+                'start': segment.start,
+                'end': segment.end,
+                'text': segment.text.strip()
+            })
+            full_text.append(segment.text.strip())
+
+        # Merge segments into larger chunks for better readability
+        # Target: ~20 seconds per chunk (good for long meetings)
+        print(f"Merging {len(segments_list)} segments into larger chunks...", file=sys.stderr)
+        segments_list = self._merge_segments(segments_list, target_duration=20.0)
+
+        return {
+            'text': ' '.join(full_text),
+            'segments': segments_list,
+            'language': info.language,
+            'duration': info.duration,
+            'output_file': None,
+        }
+
     def transcribe_file(
         self,
         audio_path: str,
@@ -480,46 +526,32 @@ class TranscriberService(BaseTranscriber):
         print(f"\nTranscribing: {audio_path}", file=sys.stderr)
         print(f"Language: {self.SUPPORTED_LANGUAGES[self.language]} ({self.language})", file=sys.stderr)
 
-        # Transcribe with faster-whisper
-        segments, info = self.model.transcribe(
-            audio_path,
-            language=self.language,
-            beam_size=5,  # Good balance of accuracy and speed
-            vad_filter=True,  # Voice activity detection - removes silence
-            vad_parameters=dict(min_silence_duration_ms=500)  # Remove pauses > 500ms
-        )
+        retry_device = self.device in {"auto", "cuda"}
+        try:
+            results = self._run_transcription_attempt(audio_path)
+        except Exception as error:
+            if not retry_device or not self._is_retryable_cuda_runtime_error(error):
+                raise
 
-        # Convert generator to list and extract info
-        segments_list = []
-        full_text = []
+            print(
+                "CUDA transcription failed because required runtime libraries could not be loaded.",
+                file=sys.stderr,
+            )
+            print(
+                "Retrying transcription on CPU. This may take significantly longer.",
+                file=sys.stderr,
+            )
 
-        print(f"Processing segments...", file=sys.stderr)
-        for segment in segments:
-            segments_list.append({
-                'start': segment.start,
-                'end': segment.end,
-                'text': segment.text.strip()
-            })
-            full_text.append(segment.text.strip())
-
-        # Merge segments into larger chunks for better readability
-        # Target: ~20 seconds per chunk (good for long meetings)
-        print(f"Merging {len(segments_list)} segments into larger chunks...", file=sys.stderr)
-        segments_list = self._merge_segments(segments_list, target_duration=20.0)
-
-        # Prepare results
-        results = {
-            'text': ' '.join(full_text),
-            'segments': segments_list,
-            'language': info.language,
-            'duration': info.duration,
-            'output_file': None
-        }
+            self.cleanup()
+            self.device = "cpu"
+            self.compute_type = "int8"
+            self.load_model()
+            results = self._run_transcription_attempt(audio_path)
 
         print(f"Transcription complete!", file=sys.stderr)
-        print(f"  Detected language: {info.language}", file=sys.stderr)
-        print(f"  Duration: {info.duration:.2f} seconds", file=sys.stderr)
-        print(f"  Segments: {len(segments_list)}", file=sys.stderr)
+        print(f"  Detected language: {results['language']}", file=sys.stderr)
+        print(f"  Duration: {results['duration']:.2f} seconds", file=sys.stderr)
+        print(f"  Segments: {len(results['segments'])}", file=sys.stderr)
 
         # Save to markdown if requested
         if save_markdown:
@@ -677,6 +709,7 @@ def main():
     parser.add_argument("--file", dest="file_arg", help="Path to audio file (alternative)")
     parser.add_argument("--language", default="en", help="Language code (default: en)")
     parser.add_argument("--model", default="base", help="Model size (default: base)")
+    parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"], help="Inference device (default: auto)")
     parser.add_argument("--json", action="store_true", help="Output results as JSON")
     parser.add_argument("--preload", action="store_true", help="Preload model and exit (for warming up)")
 
@@ -689,7 +722,7 @@ def main():
             transcriber = TranscriberService(
                 model_size=args.model,
                 language=args.language,
-                device="auto"
+                device=args.device
             )
             transcriber.load_model()
             print(f"Model preloaded successfully!", file=sys.stderr)
@@ -713,7 +746,7 @@ def main():
         transcriber = TranscriberService(
             model_size=args.model,
             language=args.language,
-            device="auto"
+            device=args.device
         )
         
         # Load model

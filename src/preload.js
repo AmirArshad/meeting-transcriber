@@ -75,6 +75,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Transcription
   transcribeAudio: (options) => ipcRenderer.invoke('transcribe-audio', options),
+  retryTranscription: (options) => ipcRenderer.invoke('retry-transcription', options),
   transcribeAudioWithSpeakers: (options) => ipcRenderer.invoke('transcribe-audio-with-speakers', options),
   diarizeTranscript: (options) => ipcRenderer.invoke('diarize-transcript', options),
   generateSummary: (options) => ipcRenderer.invoke('generate-summary', options),

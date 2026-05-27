@@ -2618,6 +2618,35 @@ footer {
   color: var(--sky);
 }
 
+.cuda-runtime-warning {
+  margin: 0 0 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.cuda-runtime-warning-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cuda-runtime-warning-text strong {
+  color: #f59e0b;
+  font-size: 0.9rem;
+}
+
+#cuda-runtime-warning-sub {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
 /* ============================================================================
    Modal Overlay (FTUE)
    ============================================================================ */

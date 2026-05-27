@@ -26,6 +26,7 @@ from common.sensitive_text import redact_sensitive_text
 
 _UNSET = object()
 _MAX_AI_METADATA_STRING_LENGTH = 300
+_VALID_TRANSCRIPTION_STATUSES = {"pending", "failed", "completed"}
 
 
 class MeetingManager:
@@ -183,6 +184,35 @@ class MeetingManager:
     @staticmethod
     def _hash_text(text: str) -> str:
         return f"sha256:{hashlib.sha256(str(text or '').encode('utf-8')).hexdigest()}"
+
+    @staticmethod
+    def _normalize_transcription_status(value: object, default: str = "completed") -> str:
+        candidate = str(value or "").strip().lower()
+        if candidate in _VALID_TRANSCRIPTION_STATUSES:
+            return candidate
+        return default
+
+    @staticmethod
+    def _normalize_transcription_error(value: object) -> Optional[str]:
+        if value in (None, ""):
+            return None
+        text = redact_sensitive_text(value)
+        text = re.sub(r"\s+", " ", str(text)).strip()
+        return text[:_MAX_AI_METADATA_STRING_LENGTH] if text else None
+
+    @staticmethod
+    def _build_pending_transcript_placeholder(audio_file_name: str) -> str:
+        return "\n".join([
+            "# Recording Awaiting Transcription",
+            "",
+            f"**File:** {audio_file_name}",
+            f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            "**Status:** Transcription pending",
+            "",
+            "The recording was saved successfully, but a transcript is not available yet.",
+            "Use Retry transcription in AvaNevis to generate a transcript.",
+            "",
+        ])
 
     @staticmethod
     def _select_scannable_audio_files(recordings_dir: Path) -> List[Path]:
@@ -407,7 +437,9 @@ class MeetingManager:
         duration: float,
         language: str = "en",
         model: str = "base",
-        title: Optional[str] = None
+        title: Optional[str] = None,
+        transcription_status: str = "completed",
+        transcription_error: Optional[str] = None,
     ) -> Dict:
         """
         Add a new meeting to the history.
@@ -503,7 +535,9 @@ class MeetingManager:
                     "audioPath": str(persisted_audio_path.absolute()),
                     "transcriptPath": str(persisted_transcript_path.absolute()),
                     "language": language,
-                    "model": model
+                    "model": model,
+                    "transcriptionStatus": self._normalize_transcription_status(transcription_status),
+                    "transcriptionError": self._normalize_transcription_error(transcription_error),
                 }
 
                 # Add to beginning of existing meetings (most recent first)
@@ -551,7 +585,9 @@ class MeetingManager:
         duration: float,
         language: str,
         model: str,
-        title: str
+        title: str,
+        transcription_status: str = "completed",
+        transcription_error: Optional[str] = None,
     ) -> Optional[Dict]:
         """
         Add a meeting directly without copying files (used by scan).
@@ -596,7 +632,9 @@ class MeetingManager:
                 'audioPath': audio_path,
                 'transcriptPath': transcript_path,
                 'language': language,
-                'model': model
+                'model': model,
+                'transcriptionStatus': self._normalize_transcription_status(transcription_status),
+                'transcriptionError': self._normalize_transcription_error(transcription_error),
             }
 
             # Add to beginning of existing meetings (most recent first)
@@ -655,14 +693,21 @@ class MeetingManager:
 
             # Look for corresponding transcript
             transcript_file = audio_file.with_suffix('.md')
+            placeholder_created = False
             if transcript_file.is_symlink():
                 print(f"Warning: Skipping symlink transcript during scan: {transcript_file.name}", file=sys.stderr)
                 skipped += 1
                 continue
             if not transcript_file.exists():
-                print(f"Warning: No transcript found for {audio_file.name}", file=sys.stderr)
-                skipped += 1
-                continue
+                placeholder = self._build_pending_transcript_placeholder(audio_file.name)
+                try:
+                    transcript_file.write_text(placeholder, encoding='utf-8')
+                    placeholder_created = True
+                    print(f"Created pending transcript placeholder for {audio_file.name}", file=sys.stderr)
+                except Exception as e:
+                    print(f"Warning: Could not create placeholder transcript for {audio_file.name}: {e}", file=sys.stderr)
+                    skipped += 1
+                    continue
 
             # Try to extract duration from transcript
             duration = 0.0
@@ -739,7 +784,8 @@ class MeetingManager:
                     duration=duration,
                     language="en",
                     model="unknown",
-                    title=title
+                    title=title,
+                    transcription_status="pending" if placeholder_created else "completed",
                 )
                 if meeting is not None:
                     existing_meetings.append(meeting)
@@ -836,6 +882,68 @@ class MeetingManager:
                 self._save_meetings_unlocked(meetings)
                 print(f"Meeting updated: {meeting_id}", file=sys.stderr)
 
+            return meeting
+
+    def update_transcription(
+        self,
+        meeting_id: str,
+        *,
+        status: Optional[str] = None,
+        error: Optional[str] = None,
+        clear_error: bool = False,
+        language: Optional[str] = None,
+        model: Optional[str] = None,
+        duration: Optional[float] = None,
+    ) -> Optional[Dict]:
+        with self._metadata_guard():
+            meetings = self._list_meetings_locked()
+            meeting = next((m for m in meetings if m['id'] == meeting_id), None)
+            if not meeting:
+                return None
+
+            changed = False
+            if status is not None:
+                normalized_status = self._normalize_transcription_status(status, default=meeting.get('transcriptionStatus', 'completed'))
+                if meeting.get('transcriptionStatus') != normalized_status:
+                    meeting['transcriptionStatus'] = normalized_status
+                    changed = True
+
+            if clear_error:
+                if meeting.get('transcriptionError') is not None:
+                    meeting['transcriptionError'] = None
+                    changed = True
+            elif error is not None:
+                normalized_error = self._normalize_transcription_error(error)
+                if meeting.get('transcriptionError') != normalized_error:
+                    meeting['transcriptionError'] = normalized_error
+                    changed = True
+
+            if language is not None and language != '':
+                normalized_language = str(language).strip() or meeting.get('language') or 'en'
+                if meeting.get('language') != normalized_language:
+                    meeting['language'] = normalized_language
+                    changed = True
+
+            if model is not None and model != '':
+                normalized_model = str(model).strip() or meeting.get('model') or 'unknown'
+                if meeting.get('model') != normalized_model:
+                    meeting['model'] = normalized_model
+                    changed = True
+
+            if duration is not None:
+                duration_value = max(0.0, float(duration))
+                minutes = int(duration_value // 60)
+                seconds = int(duration_value % 60)
+                duration_str = f"{minutes}:{seconds:02d}"
+                if meeting.get('durationSeconds') != duration_value:
+                    meeting['durationSeconds'] = duration_value
+                    changed = True
+                if meeting.get('duration') != duration_str:
+                    meeting['duration'] = duration_str
+                    changed = True
+
+            if changed:
+                self._save_meetings_unlocked(meetings)
             return meeting
 
     def update_meeting_ai(
@@ -1030,6 +1138,15 @@ def main():
     update_parser.add_argument('id', help='Meeting ID')
     update_parser.add_argument('--title', help='New display title')
 
+    update_transcription_parser = subparsers.add_parser('update-transcription', help='Update transcription metadata for a meeting')
+    update_transcription_parser.add_argument('id', help='Meeting ID')
+    update_transcription_parser.add_argument('--status', choices=sorted(_VALID_TRANSCRIPTION_STATUSES), help='Transcription status')
+    update_transcription_parser.add_argument('--error', help='Sanitized transcription error')
+    update_transcription_parser.add_argument('--clear-error', action='store_true', help='Clear transcription error')
+    update_transcription_parser.add_argument('--language', help='Updated language code')
+    update_transcription_parser.add_argument('--model', help='Updated model name')
+    update_transcription_parser.add_argument('--duration', type=float, help='Updated duration in seconds')
+
     update_ai_parser = subparsers.add_parser('update-ai', help='Update derived local AI metadata')
     update_ai_parser.add_argument('id', help='Meeting ID')
     update_ai_parser.add_argument('--diarization-json', help='Diarization metadata JSON object')
@@ -1045,6 +1162,8 @@ def main():
     add_parser.add_argument('--language', default='en', help='Language code')
     add_parser.add_argument('--model', default='base', help='Model size')
     add_parser.add_argument('--title', help='Custom title')
+    add_parser.add_argument('--transcription-status', choices=sorted(_VALID_TRANSCRIPTION_STATUSES), default='completed', help='Transcription status')
+    add_parser.add_argument('--transcription-error', help='Sanitized transcription error')
 
     args = parser.parse_args()
 
@@ -1075,6 +1194,22 @@ def main():
 
     elif args.command == 'update':
         meeting = manager.update_meeting(args.id, title=args.title)
+        if meeting:
+            print(json.dumps(meeting, indent=2))
+        else:
+            print(f"Meeting not found: {args.id}", file=sys.stderr)
+            sys.exit(1)
+
+    elif args.command == 'update-transcription':
+        meeting = manager.update_transcription(
+            args.id,
+            status=args.status,
+            error=args.error,
+            clear_error=args.clear_error,
+            language=args.language,
+            model=args.model,
+            duration=args.duration,
+        )
         if meeting:
             print(json.dumps(meeting, indent=2))
         else:
@@ -1113,7 +1248,9 @@ def main():
             duration=args.duration,
             language=args.language,
             model=args.model,
-            title=args.title
+            title=args.title,
+            transcription_status=args.transcription_status,
+            transcription_error=args.transcription_error,
         )
         print(json.dumps(meeting, indent=2))
 

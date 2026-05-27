@@ -53,9 +53,9 @@ gh pr close 15 --comment "Declined: coordinate all pyobjc-framework pins (10→1
 |----|---------|------------|
 | #17 | pyaudiowpatch 0.2.12.4 → 0.2.12.8 | `requirements-windows-build.txt`, dev `>=0.2.12.8` |
 | #14 | protobuf 7.34.1 → 7.35.0 | `requirements-windows-build.txt` |
-| #16 | setuptools 81 → 82 (mac) | `requirements-macos-build.txt` → **82.0.1** (parity with Windows) |
+| #16 | setuptools 81 → 82 (mac) | Windows **82.0.1**; macOS **81.0.0** (`torch==2.12.0` requires `setuptools<82`) |
 | #21 | huggingface-hub 1.15.0 → 1.16.1 | both `requirements-*-build.txt` |
-| #13 | mpmath 1.3.0 → 1.4.1 | `requirements-macos-build.txt` |
+| #13 | mpmath 1.3.0 → 1.4.1 | Deferred on macOS (`sympy==1.14.0` requires `mpmath<1.4`) |
 
 Close with `scripts/close-superseded-dependabot-prs.ps1` after `gh auth login`.
 

@@ -253,6 +253,16 @@
               <span class="gpu-cta-arrow" aria-hidden="true">→</span>
             </button>
 
+            <div id="cuda-runtime-warning" class="cuda-runtime-warning" style="display: none;" role="status" aria-live="polite">
+              <div class="cuda-runtime-warning-text">
+                <strong>CUDA runtime issue detected</strong>
+                <span id="cuda-runtime-warning-sub">GPU runtime libraries are missing. Transcription will automatically fall back to CPU.</span>
+              </div>
+              <button type="button" id="cuda-runtime-warning-action" class="btn btn-small">
+                Open CUDA Settings
+              </button>
+            </div>
+
             <section class="card recording-section">
               <div class="recording-header">
                 <h2>Current Meeting</h2>
@@ -606,6 +616,9 @@
                       <div class="transcript-header-row">
                         <h3>Transcript</h3>
                         <div class="transcript-section-actions">
+                          <button id="retry-transcription-btn" class="btn btn-small" style="display: none;">
+                            Retry Transcription
+                          </button>
                           <button id="generate-summary-btn" class="btn btn-small">
                             Generate Summary
                           </button>
@@ -694,6 +707,10 @@
                         >Framework:</span
                       >
                       <span class="info-value" id="gpu-value-3"></span>
+                    </div>
+                    <div class="info-row" id="gpu-row-4">
+                      <span class="info-label" id="gpu-label-4">Diagnostics:</span>
+                      <span class="info-value" id="gpu-value-4">None</span>
                     </div>
                   </div>
 

@@ -262,16 +262,16 @@ CI: `test-backend-macos`, `test-backend-windows`, `test-frontend` build smoke, `
 
 **Scope:**
 
-- [ ] Verify CUDA runtime DLL loadability, not just CUDA device presence.
-- [ ] Add explicit transcriber `--device auto|cpu|cuda` support.
-- [ ] Retry known CUDA runtime transcription failures once on CPU.
-- [ ] Persist completed recordings to History even when transcription fails.
-- [ ] Add History retry action for failed or pending transcriptions.
-- [ ] Extend scan/import to recover audio-only recordings with placeholder transcripts.
+- [x] Verify CUDA runtime DLL loadability, not just CUDA device presence.
+- [x] Add explicit transcriber `--device auto|cpu|cuda` support.
+- [x] Retry known CUDA runtime transcription failures once on CPU.
+- [x] Persist completed recordings to History even when transcription fails.
+- [x] Add History retry action for failed or pending transcriptions.
+- [x] Extend scan/import to recover audio-only recordings with placeholder transcripts.
 
 **Validation:**
 
-- [ ] Automated: `npm test`, `npm run test:python`.
+- [x] Automated: `npm test`, `npm run test:python`.
 - [ ] Windows packaged smoke: healthy CUDA transcribes on GPU.
 - [ ] Windows packaged smoke: broken CUDA runtime falls back to CPU and saves transcript.
 - [ ] Recovery smoke: existing `.opus` without transcript appears in History and can be retried.

@@ -351,6 +351,7 @@ def test_scan_and_sync_recordings_imports_missing_filesystem_meeting(tmp_path):
     assert meeting['duration'] == '1:05'
     assert meeting['audioPath'].endswith('meeting_20250101_120000.opus')
     assert meeting['transcript'] == '**Duration:** 1:05\n\nTranscript text'
+    assert meeting['transcriptionStatus'] == 'completed'
 
 
 def test_scan_and_sync_recordings_preserves_suffixed_meeting_ids(tmp_path):
@@ -369,6 +370,24 @@ def test_scan_and_sync_recordings_preserves_suffixed_meeting_ids(tmp_path):
     assert meeting is not None
     assert meeting['id'] == '20250101_120000_1'
     assert meeting['title'] == 'Meeting 2025-01-01 12:00'
+    assert meeting['transcriptionStatus'] == 'completed'
+
+
+def test_scan_and_sync_recordings_recovers_audio_only_recordings_with_pending_status(tmp_path):
+    recordings_dir = tmp_path / 'recordings'
+    manager = MeetingManager(recordings_dir=str(recordings_dir))
+
+    audio_path = recordings_dir / 'recording_2025-01-01T12-00-00.opus'
+    audio_path.write_bytes(b'audio')
+
+    result = manager.scan_and_sync_recordings()
+    meeting = manager.get_meeting('20250101_120000')
+
+    assert result == {'scanned': 1, 'added': 1, 'skipped': 0}
+    assert meeting is not None
+    assert meeting['transcriptionStatus'] == 'pending'
+    assert meeting['transcriptionError'] is None
+    assert 'Recording Awaiting Transcription' in meeting['transcript']
 
 
 def test_list_meetings_omits_inline_transcript_bodies(tmp_path):
@@ -933,6 +952,47 @@ def test_get_meeting_falls_back_to_inline_transcript_when_file_is_missing(tmp_pa
 
     assert meeting is not None
     assert meeting['transcript'] == 'legacy inline transcript'
+
+
+def test_update_transcription_updates_status_fields_and_duration(tmp_path):
+    recordings_dir = tmp_path / 'recordings'
+    manager = MeetingManager(recordings_dir=str(recordings_dir))
+    audio_path = recordings_dir / 'meeting_20260107_104555.opus'
+    transcript_path = recordings_dir / 'meeting_20260107_104555.md'
+    audio_path.write_bytes(b'audio')
+    transcript_path.write_text('# Transcript', encoding='utf-8')
+    manager._save_meetings([
+        {
+            'id': '20260107_104555',
+            'title': 'Meeting',
+            'date': '2026-01-07T10:45:55',
+            'duration': '0:05',
+            'durationSeconds': 5.0,
+            'audioPath': str(audio_path),
+            'transcriptPath': str(transcript_path),
+            'language': 'en',
+            'model': 'small',
+            'transcriptionStatus': 'failed',
+            'transcriptionError': 'old error',
+        }
+    ])
+
+    updated = manager.update_transcription(
+        '20260107_104555',
+        status='completed',
+        clear_error=True,
+        language='fa',
+        model='medium',
+        duration=125.0,
+    )
+
+    assert updated is not None
+    assert updated['transcriptionStatus'] == 'completed'
+    assert updated['transcriptionError'] is None
+    assert updated['language'] == 'fa'
+    assert updated['model'] == 'medium'
+    assert updated['durationSeconds'] == 125.0
+    assert updated['duration'] == '2:05'
 
 
 def test_scan_and_sync_recordings_prefers_single_audio_candidate_per_stem(tmp_path):

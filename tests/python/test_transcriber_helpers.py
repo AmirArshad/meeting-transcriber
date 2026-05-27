@@ -564,3 +564,70 @@ def test_get_model_info_for_faster_whisper_includes_runtime_state():
     assert info['backend'] == 'faster-whisper'
     assert info['model_size'] == 'base'
     assert info['device'] == 'cpu'
+
+
+def test_transcribe_file_retries_on_retryable_cuda_runtime_error(monkeypatch, tmp_path):
+    audio_path = tmp_path / 'sample.opus'
+    audio_path.write_bytes(b'audio')
+    service = TranscriberService(model_size='small', language='en', device='auto')
+    calls = {'attempt': 0}
+
+    class Segment:
+        def __init__(self, start, end, text):
+            self.start = start
+            self.end = end
+            self.text = text
+
+    class Info:
+        language = 'en'
+        duration = 3.0
+
+    class Model:
+        def transcribe(self, *_args, **_kwargs):
+            calls['attempt'] += 1
+            if calls['attempt'] == 1:
+                raise RuntimeError('Library cublas64_12.dll is not found or cannot be loaded')
+            return iter([Segment(0.0, 3.0, 'hello')]), Info()
+
+    service.model = Model()
+    monkeypatch.setattr(service, 'load_model', lambda: setattr(service, 'model', Model()))
+
+    result = service.transcribe_file(str(audio_path), save_markdown=False)
+
+    assert result['text'] == 'hello'
+    assert calls['attempt'] == 2
+    assert service.device == 'cpu'
+
+
+def test_transcribe_file_does_not_retry_non_cuda_errors(tmp_path):
+    audio_path = tmp_path / 'sample.opus'
+    audio_path.write_bytes(b'audio')
+    service = TranscriberService(model_size='small', language='en', device='auto')
+
+    class Model:
+        def transcribe(self, *_args, **_kwargs):
+            raise RuntimeError('invalid model cache')
+
+    service.model = Model()
+
+    with pytest.raises(RuntimeError, match='invalid model cache'):
+        service.transcribe_file(str(audio_path), save_markdown=False)
+
+
+def test_transcribe_file_does_not_retry_generic_load_errors(tmp_path):
+    audio_path = tmp_path / 'sample.opus'
+    audio_path.write_bytes(b'audio')
+    service = TranscriberService(model_size='small', language='en', device='auto')
+    calls = {'attempt': 0}
+
+    class Model:
+        def transcribe(self, *_args, **_kwargs):
+            calls['attempt'] += 1
+            raise RuntimeError('Library foo.dll cannot be loaded')
+
+    service.model = Model()
+
+    with pytest.raises(RuntimeError, match='foo\\.dll cannot be loaded'):
+        service.transcribe_file(str(audio_path), save_markdown=False)
+
+    assert calls['attempt'] == 1
