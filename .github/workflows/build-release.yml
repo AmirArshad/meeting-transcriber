@@ -226,10 +226,10 @@ jobs:
 
           ### What's New
 
-          - More dependable recording on Windows and Mac, with clearer startup, stop, and error handling when something goes wrong.
-          - Better macOS desktop audio in installed builds, so browser and app sound is more likely to show up in your transcript.
-          - Stability and privacy improvements from our recent security review: safer stored file paths, less sensitive data in logs, and local AI jobs run one at a time with sensible timeouts.
-          - Installers now include bundled third-party license notices for easier transparency and compliance.
+          - **Transcription recovery:** Completed recordings are saved even when transcription fails. History can scan for audio without a transcript and offers **Retry transcription**, including speaker-guided retry when diarization is already set up.
+          - **Smarter GPU handling on Windows:** CUDA readiness now probes the actual DLLs faster-whisper needs, detects CUDA 12 vs newer runtime mismatches, can repair the bundled CUDA 12 stack, and automatically retries once on CPU when GPU transcription fails at runtime.
+          - **Settings GPU setup:** New ensure-compatible flow walks probe → install/repair → re-probe so transcription and speaker-identification setup see accurate CUDA status.
+          - **Dependency and build maintenance:** Phased Python upgrades (NumPy 2, pytest 9, soxr 1.1.0), a slimmer Windows installer bundle, OS-matched CI security audits, and fixes for macOS release clean failures.
 
           ### Platform Support
 
