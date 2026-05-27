@@ -1,7 +1,7 @@
 # Common dependencies shared by both Windows and macOS
 
 # Audio processing
-numpy>=1.24.0            # For audio processing and mixing
+numpy>=2.4.0            # For audio processing and mixing
 # soxr is Windows-only (backend/audio/processor.py); see requirements-windows*.txt
 
 # Transcription

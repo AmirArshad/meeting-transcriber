@@ -31,6 +31,20 @@ du -sh dist/mac-arm64/AvaNevis.app
 
 **macOS `scipy` trim (investigated, not done):** Removing the explicit `scipy` pin does not shrink the bundle — pip still installs scipy for `lightning-whisper-mlx`. Post-install removal would break MLX transcription unless upstream drops the dependency.
 
+## Phase 4 (2026-05-27)
+
+| Change | Pin update |
+|--------|------------|
+| NumPy | `1.26.4` -> `2.4.6` (Windows + macOS build pins, shared/dev floors) |
+| SciPy (macOS MLX stack) | `1.11.4` -> `1.17.1` |
+| CTranslate2 (Windows) | `4.7.1` -> `4.7.2` (latest patch) |
+
+Compatibility notes:
+
+- `soxr` 1.1.0 keeps `quality='VHQ'` API and has Python 3.11 Windows/macOS wheels.
+- `lightning-whisper-mlx==0.0.10` still depends on `scipy`, `numba`, and `torch`; those remain pinned on macOS.
+- `numba` / `llvmlite` pins already satisfy NumPy 2 support ranges per upstream compatibility tables.
+
 ## Smoke validation
 
 | Platform | Phase 1b + 2 packaged smoke |

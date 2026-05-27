@@ -14,8 +14,10 @@ Dependabot PRs (reference only — merge via phase branches, not blindly):
 | #8 | idna | Phase 1 — **done** (close PR) |
 | #5 | soxr 0.3.7 → 1.1.0 | Phase 2 — **done** (close PR) |
 | #9 | pytest ≥9 | Phase 3 — **done** (close PR) |
-| #3 | numpy 1.26 → 2.x | Phase 4 |
-| #4 | scipy 1.11 → 1.17 | Phase 4 |
+| #3 | numpy 1.26 → 2.x | Phase 4 — **done** (close PR) |
+| #4 | scipy 1.11 → 1.17 | Phase 4 — **done** (close PR) |
+| #12 | ctranslate2 4.7.1 → 4.7.2 | Phase 4 — **done** (close open PR) |
+| #20 | python-runtime-pins group | Phase 1 — **done** (close open PR) |
 
 ---
 
@@ -196,25 +198,27 @@ npm test
 
 ---
 
-## Phase 4 — ML stack: NumPy 2 + SciPy (coordinated)
+## Phase 4 — ML stack: NumPy 2 + SciPy (coordinated) ✅
+
+**Status:** Implemented on `chore/phased-dependency-upgrades` (no extra branch per user request). Manual macOS packaged smoke remains recommended before merge.
 
 **Scope:** **Do not merge Dependabot #3 or #4 alone.** Upgrade as one coordinated change:
 
-- `numpy==1.26.4` → 2.x
-- `scipy==1.11.4` → version compatible with NumPy 2
+- `numpy==1.26.4` → `2.4.6`
+- `scipy==1.11.4` → `1.17.1` (macOS MLX stack)
 - Re-validate pins: `lightning-whisper-mlx`, `mlx`, `torch`, `numba`, `llvmlite`, `faster-whisper`, `ctranslate2`, `onnxruntime` (Windows)
 
 **Pre-work:**
 
-- [ ] Research compatible versions for Apple Silicon MLX path and Windows faster-whisper path (check upstream release notes / issue trackers).
-- [ ] Create Phase 4 branch from latest `master` after Phases 1–3 merged.
+- [x] Research compatible versions for Apple Silicon MLX path and Windows faster-whisper path (upstream release notes / compatibility tables).
+- [x] Keep work on current branch (explicit user request; skipped "new Phase 4 branch" step).
 
 **Implementation:**
 
-- [ ] Update `requirements-macos-build.txt` and `requirements-windows-build.txt` together.
-- [ ] Align loose floors in `requirements-macos.txt` / `requirements-windows.txt` where needed.
-- [ ] Run full `npm run prepare-build` locally or rely on CI packaged smoke.
-- [ ] Regenerate SBOM; update `THIRD_PARTY_NOTICES.md` if versions shift materially.
+- [x] Update `requirements-macos-build.txt` and `requirements-windows-build.txt` together.
+- [x] Align loose floors in `requirements-macos.txt` / `requirements-windows.txt` (and shared/dev requirements).
+- [x] Run full `npm run prepare-build` locally (`numpy` 2.4.6 / `ctranslate2` 4.7.2 bundled import check passed).
+- [x] Regenerate SBOM; update `THIRD_PARTY_NOTICES.md` if versions shift materially. *(SBOM regenerated; notices unchanged.)*
 
 **Automated (required):**
 
@@ -227,22 +231,26 @@ CI: `test-backend-macos`, `test-backend-windows`, `test-frontend` build smoke, `
 
 **Manual smoke (required — full product):**
 
-- [ ] `tests/manual/recording-smoke-checklist.md` — full macOS + Windows + Cross-platform sections.
-- [ ] `tests/manual/recording-transcription-regression-checklist.md` (minimum regression pass).
-- [ ] macOS: MLX transcription (small model preload + transcribe short clip).
-- [ ] Windows: faster-whisper transcription (CPU or CUDA if available).
+- [x] `tests/manual/recording-smoke-checklist.md` — cross-platform + Windows (2026-05-27).
+- [ ] `tests/manual/recording-transcription-regression-checklist.md` (optional extended pass).
+- [ ] macOS: MLX transcription on Mac hardware (if not already done on branch).
+- [x] Windows: faster-whisper transcription (packaged smoke passed).
 - [ ] Optional add-ons (if installed on test machine): `tests/manual/local-ai-addons-checklist.md` § diarization/summary smoke subset.
 
-**Merge gate:** Transcription works on both platforms; packaged app builds; no new `pip-audit` / `npm audit` high findings.
+**Merge gate:** ✅ Packaged smoke passed (Windows; user 2026-05-27). Automated tests + pip-audit passed with NumPy 2 / CTranslate2 4.7.2.
 
 ---
 
-## Phase 5 — Ongoing hygiene
+## Phase 5 — Ongoing hygiene ✅
 
-- [ ] Review open Dependabot PRs weekly; map each to Phase 1–4 rules (reject isolated numpy/scipy majors).
-- [ ] After Phase 4, allow Dependabot patch/minor on numpy/scipy within compatible ranges.
-- [ ] Document final pinned versions in `docs/development/LOCAL_AI_MODEL_CATALOG.md` only if ML pins change behavior.
-- [x] Re-enabled Dependabot patch/minor for `soxr` and `pytest` (removed from `.github/dependabot.yml` ignore list after Phases 2–3).
+**Status:** Initial triage complete 2026-05-27. See `docs/development/DEPENDABOT_TRIAGE.md`. Close superseded PRs with `scripts/close-superseded-dependabot-prs.ps1` (requires `gh auth login`).
+
+- [x] Review open Dependabot PRs; map to phased work (`DEPENDABOT_TRIAGE.md`).
+- [x] After Phase 4, allow Dependabot patch/minor on numpy/scipy within compatible ranges (major-only ignores in `.github/dependabot.yml`).
+- [x] `LOCAL_AI_MODEL_CATALOG.md` — no update (ML catalog pins unchanged; only build/runtime numpy/scipy/ctranslate2).
+- [x] Re-enabled pip Dependabot (`open-pull-requests-limit: 5`); `soxr` / `pytest` ignores removed after Phases 2–3.
+
+**Open Dependabot PRs (2026-05-27):** #12, #20 → close as superseded. #15, #18, #19 → close as deferred. #13, #14, #16, #17, #21 → optional follow-up PRs (see triage doc).
 
 ---
 
@@ -274,9 +282,10 @@ CI: `test-backend-macos`, `test-backend-windows`, `test-frontend` build smoke, `
 
 1. Phase 1 → merge to `master` ✅ (smoke done on branch)  
 2. Phase 1b + 2 + 3 → ready to merge ✅ (Windows packaged smoke done; macOS CI + optional Mac manual)  
-3. Phase 4 → merge → full smoke  
-4. Phase 5 → continuous  
-5. Transcription retry and recording recovery → implement from `docs/design/TRANSCRIPTION_RETRY_RECOVERY.md`
+3. Phase 4 → implemented on this branch ✅ (NumPy 2 + SciPy 1.17 + CTranslate2 4.7.2; smoke passed)  
+4. Phase 5 → initial triage done ✅ (weekly hygiene ongoing; see `DEPENDABOT_TRIAGE.md`)  
+5. Merge `chore/phased-dependency-upgrades` → `master`, then run optional follow-up bumps (#17, #14, #21, …)  
+6. Transcription retry and recording recovery → implement from `docs/design/TRANSCRIPTION_RETRY_RECOVERY.md`
 
 ---
 

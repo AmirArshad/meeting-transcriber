@@ -36,7 +36,6 @@ function getDistCleanHints(lastError) {
       '  - Close File Explorer windows showing dist\\',
       '  - If the error mentions app.asar, close any editor tab or tool holding that file',
       '  - Then run: Remove-Item -Recurse -Force dist',
-      '  - Or: $env:AVANEVIS_CLEAN_KILL=1; npm run clean',
       '  - Last resort (stale lock): $env:AVANEVIS_SKIP_DIST_CLEAN=1; npm run prepare-build',
     ].join('\n') + detail;
   }
@@ -71,17 +70,6 @@ function cleanDist() {
     const retryable = ['ENOTEMPTY', 'EBUSY', 'EPERM', 'EACCES'].includes(firstError.code);
     if (!retryable) {
       throw firstError;
-    }
-  }
-
-  if (process.env.AVANEVIS_CLEAN_KILL !== '1') {
-    stopPackagedAppBestEffort();
-    try {
-      removePath(DIST_DIR);
-      console.log('Cleaned dist/');
-      return;
-    } catch (retryError) {
-      // Fall through to rename attempt.
     }
   }
 

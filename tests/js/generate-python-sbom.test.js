@@ -7,7 +7,7 @@ test('parsePinnedRequirements extracts name==version pins', () => {
   const packages = parsePinnedRequirements(__filename.replace('generate-python-sbom.test.js', '../../requirements-windows-build.txt'));
   const numpy = packages.find((pkg) => pkg.name === 'numpy');
   assert.ok(numpy);
-  assert.equal(numpy.version, '1.26.4');
+  assert.equal(numpy.version, '2.4.6');
 });
 
 test('mergePackages deduplicates requirements across platform build files', () => {

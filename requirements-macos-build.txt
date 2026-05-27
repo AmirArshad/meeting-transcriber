@@ -1,7 +1,7 @@
 # Pinned dependencies used only for packaged macOS builds.
 # Keep local development requirements in requirements-macos.txt.
 sounddevice==0.4.6
-numpy==1.26.4
+numpy==2.4.6
 pyobjc-framework-ScreenCaptureKit==10.0
 pyobjc-framework-CoreAudio==10.0
 pyobjc-framework-AVFoundation==10.0
@@ -11,7 +11,7 @@ pyobjc-framework-CoreMedia==12.1
 pyobjc-framework-Quartz==12.1
 lightning-whisper-mlx==0.0.10
 # Pinned for reproducibility; also installed transitively via lightning-whisper-mlx (not used by backend/).
-scipy==1.11.4
+scipy==1.17.1
 filelock==3.29.0
 cffi==2.0.0
 pycparser==3.0
