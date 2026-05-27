@@ -20,12 +20,30 @@ updates:
     schedule:
       interval: weekly
       day: monday
-    open-pull-requests-limit: 10
+    # Re-enabled after Phases 1-4; keep numpy/scipy majors manual.
+    open-pull-requests-limit: 5
+    ignore:
+      # Keep major upgrades manual for coordinated ML stack validation.
+      - dependency-name: numpy
+        update-types:
+          - version-update:semver-major
+      - dependency-name: scipy
+        update-types:
+          - version-update:semver-major
+      - dependency-name: tiktoken
+      - dependency-name: pyobjc-framework-ScreenCaptureKit
+        update-types:
+          - version-update:semver-major
+      - dependency-name: pyobjc-framework-CoreAudio
+        update-types:
+          - version-update:semver-major
+      - dependency-name: pyobjc-framework-AVFoundation
+        update-types:
+          - version-update:semver-major
     groups:
       python-runtime-pins:
         patterns:
           - filelock
-          - numpy
           - certifi
           - urllib3
           - requests

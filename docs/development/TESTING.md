@@ -195,6 +195,8 @@ python3 -m pip install -r requirements-dev.txt
 
 ### `numpy` or `soxr` import failures
 
+`soxr` is bundled only on **Windows** packaged builds. macOS dev/CI still needs it for `tests/python/test_processor.py` via `requirements-dev.txt` (not `requirements-macos.txt`).
+
 Reinstall the Python test requirements:
 
 ```bash
