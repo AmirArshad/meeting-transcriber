@@ -15,6 +15,31 @@ This incident exposed two separate gaps:
 1. CUDA readiness detection can report success when the NVIDIA device is visible but required runtime DLLs are not loadable by the packaged Python process.
 2. Transcription failures leave valid recordings stranded on disk with no History entry or retry action.
 
+## Manual test fixture (incident recording)
+
+Keep this recording on the development machine (or a backup copy) to validate scan/recovery and **Retry transcription** after the feature ships. It is **not** checked into the repo; paths are under the user’s Electron `userData` cache.
+
+| Field | Value |
+| --- | --- |
+| **Audio file** | `C:\Users\Amirs\AppData\Roaming\avanevis\Cache\avanevis\recordings\recording_2026-05-27T14-32-26.opus` |
+| **Filename** | `recording_2026-05-27T14-32-26.opus` |
+| **Expected transcript (missing)** | `recording_2026-05-27T14-32-26.md` — not created because transcription failed |
+| **Approx. size** | ~78.6 MB (~82,400,000 bytes) on disk as of 2026-05-27 |
+| **Approx. duration** | ~92 minutes (recording stopped before transcription failed) |
+| **Failure time (local)** | 2026-05-27 ~16:56 (transcription failed at segment encode) |
+| **Transcription settings** | Model: `medium`, language: `en`, device: `auto` (CUDA selected, then `cublas64_12.dll` load failure) |
+| **Expected scan meeting ID** | `20260527_143226` (derived from `recording_YYYY-MM-DDTHH-MM-SS` stem in `meeting_manager.scan_and_sync_recordings`) |
+| **History status before fix** | Audio on disk only; not in `meetings.json` (no successful `addMeeting`) |
+
+**Post-implementation checks using this file:**
+
+1. Confirm the `.opus` file still exists at the path above (or restore from backup).
+2. Run **scan/import** (or app launch recovery, per final UX) and verify the meeting appears with `transcriptionStatus` `pending` or `failed`.
+3. Use **Retry transcription** from History; expect a full transcript and normal `meeting_*.md` persistence.
+4. Optional CLI smoke before UI: packaged or dev Python transcriber with `--file` pointing at this path and `--device cpu` (long run; medium model timeout is 90 minutes per `getTranscriptionComputeTimeoutMs`).
+
+Do not commit this audio file to git. If the path moves after an app reinstall, search `userData` for `recording_2026-05-27T14-32-26.opus`.
+
 ## Goals
 
 - Preserve every completed recording even when transcription, diarization, or summary generation fails.
@@ -305,7 +330,7 @@ Manual Windows smoke:
 
 - Healthy CUDA: record short clip, transcribe on GPU.
 - Broken CUDA runtime: temporarily remove CUDA DLL path or uninstall optional CUDA packages, record short clip, verify CPU fallback and successful transcript.
-- Long recording recovery: use an existing `.opus` with no transcript, scan/retry from History.
+- Long recording recovery: use the incident fixture `recording_2026-05-27T14-32-26.opus` (see **Manual test fixture**); scan/retry from History and confirm ~92-minute transcript completes (CPU fallback acceptable).
 - Failed retry path: force CPU failure with invalid audio and verify recording remains in History.
 
 Manual packaging smoke:
