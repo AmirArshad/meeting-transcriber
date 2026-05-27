@@ -9,6 +9,11 @@ import os
 from collections.abc import Callable, Iterable
 from typing import Any
 
+from .nvidia_dll_loader import add_python_nvidia_bin_dirs_to_path
+
+
+add_python_nvidia_bin_dirs_to_path()
+
 
 def classify_cuda_probe_status(
     *,

@@ -11,6 +11,7 @@ from backend.transcription import faster_whisper_transcriber as fw_transcriber
 from backend.transcription.cuda_probe import build_probe_report, find_unsupported_runtime_profiles
 from backend.transcription.faster_whisper_transcriber import TranscriberService
 from backend.transcription.mlx_whisper_transcriber import MLXWhisperTranscriber
+from backend.transcription import nvidia_dll_loader
 
 
 def test_transcriber_service_rejects_unknown_language():
@@ -103,6 +104,69 @@ def test_cuda_probe_reports_ready_supported_runtime():
     assert report['matchedProfile'] == 'cuda12'
     assert report['installedProfile'] == 'cuda12'
     assert report['statusCode'] == 'ready'
+
+
+def test_cuda_probe_prefers_ready_supported_runtime_even_with_cuda13_on_path(tmp_path):
+    cuda13_bin = tmp_path / 'cuda13-bin'
+    cuda13_bin.mkdir()
+    (cuda13_bin / 'cublas64_13.dll').write_text('dll')
+
+    report = build_probe_report(
+        profiles=[{
+            'id': 'cuda12',
+            'requiredDlls': ['cublas64_12.dll', 'cublasLt64_12.dll', 'cudnn64_9.dll'],
+        }],
+        supported_profiles=['cuda12'],
+        unsupported_hints=[{
+            'id': 'cuda13',
+            'expectedDllPrefixes': ['cublas64_13', 'cublaslt64_13'],
+        }],
+        device_count_getter=lambda: 1,
+        load_dll=lambda dll: object(),
+        path_value=str(cuda13_bin),
+    )
+
+    assert report['runtimeLoadable'] is True
+    assert report['matchedProfile'] == 'cuda12'
+    assert report['unsupportedDetectedProfiles'] == ['cuda13']
+    assert report['installedProfile'] == 'cuda12'
+    assert report['statusCode'] == 'ready'
+
+
+def test_cuda_probe_module_invokes_nvidia_dll_loader_at_import():
+    from backend.transcription import cuda_probe as probe_module
+
+    # The probe must register pip-installed NVIDIA DLL directories before any
+    # ctypes.WinDLL load, otherwise installed CUDA 12 runtime wheels are
+    # invisible to the probe and the user sees a misleading
+    # "unsupportedRuntimeMajor" error.
+    assert probe_module.add_python_nvidia_bin_dirs_to_path is (
+        nvidia_dll_loader.add_python_nvidia_bin_dirs_to_path
+    )
+    source = Path(probe_module.__file__).read_text(encoding='utf-8')
+    assert 'add_python_nvidia_bin_dirs_to_path()' in source
+
+
+def test_nvidia_dll_loader_registers_site_package_bin_dirs(monkeypatch, tmp_path):
+    site_packages = tmp_path / 'site-packages'
+    cublas_bin = site_packages / 'nvidia' / 'cublas' / 'bin'
+    cudnn_bin = site_packages / 'nvidia' / 'cudnn' / 'bin'
+    cublas_bin.mkdir(parents=True)
+    cudnn_bin.mkdir(parents=True)
+    registered = []
+
+    monkeypatch.setattr(nvidia_dll_loader.os, 'name', 'nt')
+    monkeypatch.setattr(nvidia_dll_loader.site, 'getsitepackages', lambda: [str(site_packages)])
+    monkeypatch.setattr(nvidia_dll_loader.site, 'getusersitepackages', lambda: '')
+    monkeypatch.setattr(nvidia_dll_loader.sys, 'path', [])
+    monkeypatch.setattr(nvidia_dll_loader, '_NVIDIA_DLL_DIRECTORY_HANDLES', [])
+    monkeypatch.setattr(nvidia_dll_loader.os, 'add_dll_directory', lambda dll_dir: registered.append(dll_dir) or object(), raising=False)
+    monkeypatch.setenv('PATH', 'original')
+
+    nvidia_dll_loader.add_python_nvidia_bin_dirs_to_path()
+
+    assert registered == [str(cublas_bin), str(cudnn_bin)]
+    assert os.environ['PATH'].startswith(f'{cublas_bin}{os.pathsep}{cudnn_bin}{os.pathsep}')
 
 
 def test_cuda_probe_unsupported_profile_search_dedupes_path_entries(tmp_path):
