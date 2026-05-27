@@ -5,7 +5,7 @@ This guide helps you set up GPU acceleration for faster transcription using CUDA
 ## Prerequisites
 
 - **NVIDIA GPU** with CUDA support (GTX 10xx series or newer recommended)
-- **CUDA Toolkit** installed on your system (CUDA 11.8 or 12.1)
+- **CUDA runtime libraries** compatible with AvaNevis packaged transcription stack (currently CUDA 12 profile)
 - **Windows 10/11** (for this project, though Linux/Mac also supported)
 
 ## Quick Setup
@@ -80,6 +80,11 @@ If you see "Using CPU (safer default)" in the logs but you have CUDA installed:
     ```bash
     pip install --upgrade nvidia-cublas-cu12 nvidia-cudnn-cu12
     ```
+
+### Newer CUDA major detected (for example CUDA 13)
+
+AvaNevis currently ships transcription dependencies validated against the CUDA 12 runtime profile (`nvidia-cublas-cu12` + `nvidia-cudnn-cu12`).
+If your machine has only newer runtime DLLs (for example `cublas64_13.dll`) and not CUDA 12 runtime DLLs, AvaNevis will detect this mismatch and safely fall back to CPU transcription.
 
 Speaker identification is separate: it uses managed PyTorch CUDA dependencies under Electron `userData` only after explicit speaker setup.
 

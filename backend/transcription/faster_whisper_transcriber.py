@@ -22,7 +22,9 @@ _REQUIRED_CACHE_FILES = ("config.json", "model.bin", "tokenizer.json")
 _VOCABULARY_CACHE_FILES = ("vocabulary.txt", "vocabulary.json")
 _RETRYABLE_CUDA_ERROR_PATTERNS = (
     "cublas64_12.dll",
+    "cublas64_13.dll",
     "cublaslt64_12.dll",
+    "cublaslt64_13.dll",
     "cudnn",
     "cuda failed",
     "cuda error",

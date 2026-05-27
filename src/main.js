@@ -62,11 +62,12 @@ const {
   isRecorderBusy,
   isRetryableCudaTranscriptionError,
   shouldForceCpuTranscriptionFromCudaStatus,
-  REQUIRED_CUDA_RUNTIME_DLLS,
+  getCudaRuntimeProfiles,
+  getSupportedTranscriptionCudaProfileIds,
+  getTranscriptionCudaPackages,
   SPAWN_LOG_BUFFER_MAX_CHARS,
   SPAWN_JSON_RESULT_BUFFER_MAX_CHARS,
   redactSensitiveText,
-  TRANSCRIPTION_CUDA_PACKAGES,
   MACOS_PERMISSION_CHECK_TIMEOUT_MS,
   AI_COMPUTE_TIMEOUT_MS,
   getTranscriptionComputeTimeoutMs,
@@ -905,8 +906,8 @@ function buildCudaRuntimeEnv(extra = {}, { includeManagedDiarization = false } =
   };
 }
 
-function getTranscriptionCudaPackages() {
-  return [...TRANSCRIPTION_CUDA_PACKAGES];
+function getDefaultTranscriptionCudaPackages() {
+  return getTranscriptionCudaPackages();
 }
 
 const transcriberModule = buildTranscriberArgs({
@@ -3389,17 +3390,35 @@ function checkCudaRuntimeStatus() {
         runtimeLoadable: false,
         missingLibraries: [],
         runtime: 'ctranslate2',
+        statusCode: 'unsupportedPlatform',
+        supportedProfiles: getSupportedTranscriptionCudaProfileIds(),
+        unsupportedDetectedProfiles: [],
+        recommendedInstallProfile: getSupportedTranscriptionCudaProfileIds()[0] || 'cuda12',
         error: 'CUDA runtime checks are only supported on Windows.',
       });
       return;
     }
 
+    const knownProfiles = getCudaRuntimeProfiles();
+    const supportedProfileIds = getSupportedTranscriptionCudaProfileIds();
+    const supportedProfiles = knownProfiles.filter((profile) => supportedProfileIds.includes(profile.id));
+    const unsupportedProfiles = knownProfiles.filter((profile) => !supportedProfileIds.includes(profile.id));
+    const probeProfiles = supportedProfiles.map((profile) => ({
+      id: profile.id,
+      requiredDlls: profile.requiredDlls,
+    }));
+    const unsupportedDllHints = unsupportedProfiles.map((profile) => ({
+      id: profile.id,
+      expectedDllPrefixes: Array.isArray(profile.expectedDllPrefixes) ? profile.expectedDllPrefixes : [],
+    }));
+
     const python = spawnTrackedPython([
       '-c',
-      `import ctypes\nmissing=[]\nprobe_error=""\nrequired=${JSON.stringify(REQUIRED_CUDA_RUNTIME_DLLS)}\n` +
+      `import ctypes\nimport os\nprobe_error=""\nprofiles=${JSON.stringify(probeProfiles)}\nsupported=${JSON.stringify(supportedProfileIds)}\nunsupported_hints=${JSON.stringify(unsupportedDllHints)}\nprofile_missing={}\n` +
       `try:\n    import ctranslate2\n    count=ctranslate2.get_cuda_device_count()\nexcept Exception as exc:\n    count=0\n    probe_error=str(exc)\n` +
-      `for dll in required:\n    try:\n        ctypes.WinDLL(dll)\n    except Exception:\n        missing.append(dll)\n` +
-      `runtime_loadable=(len(missing)==0)\nprint("deviceAvailable:"+str(count>0))\nprint("runtimeLoadable:"+str(runtime_loadable))\nprint("missingLibraries:"+",".join(missing))\nprint("runtime:ctranslate2")\nprint("error:"+probe_error)`
+      `for profile in profiles:\n    missing=[]\n    for dll in profile["requiredDlls"]:\n        try:\n            ctypes.WinDLL(dll)\n        except Exception:\n            missing.append(dll)\n    profile_missing[profile["id"]]=missing\n` +
+      `matched=''\nmissing=[]\nfor profile_id in supported:\n    current=profile_missing.get(profile_id,[])\n    if len(current)==0:\n        matched=profile_id\n        break\n    if not missing:\n        missing=current\nruntime_loadable=(matched!='')\nsearch_dirs=[]\nfor raw_part in os.environ.get("PATH","").split(os.pathsep):\n    part=raw_part.strip()\n    if not part or part in search_dirs or not os.path.isdir(part):\n        continue\n    search_dirs.append(part)\nunsupported=[]\nfor hint in unsupported_hints:\n    found=False\n    prefixes=[str(prefix).lower() for prefix in hint.get("expectedDllPrefixes",[]) if prefix]\n    if not prefixes:\n        continue\n    for folder in search_dirs:\n        try:\n            names=os.listdir(folder)\n        except Exception:\n            continue\n        for name in names:\n            lower_name=name.lower()\n            if not lower_name.endswith(".dll"):\n                continue\n            if any(lower_name.startswith(prefix) for prefix in prefixes):\n                found=True\n                break\n        if found:\n            break\n    if found:\n        unsupported.append(hint.get("id",""))\nunsupported=[item for item in unsupported if item]\nstatus='ready' if runtime_loadable else ('unsupportedRuntimeMajor' if len(unsupported)>0 else ('missingLibraries' if count>0 else 'deviceUnavailable'))\ninstalled_profile=matched if matched else (unsupported[0] if len(unsupported)>0 else '')\n` +
+      `print("deviceAvailable:"+str(count>0))\nprint("runtimeLoadable:"+str(runtime_loadable))\nprint("missingLibraries:"+",".join(missing))\nprint("runtime:ctranslate2")\nprint("matchedProfile:"+matched)\nprint("installedProfile:"+installed_profile)\nprint("unsupportedDetectedProfiles:"+",".join(unsupported))\nprint("supportedProfiles:"+",".join(supported))\nprint("recommendedInstallProfile:"+(supported[0] if len(supported)>0 else ""))\nprint("statusCode:"+status)\nprint("error:"+probe_error)`
     ], { env: buildCudaRuntimeEnv() });
 
     let output = '';
@@ -3418,6 +3437,10 @@ function checkCudaRuntimeStatus() {
         runtimeLoadable: false,
         missingLibraries: [],
         runtime: 'ctranslate2',
+        statusCode: 'probeError',
+        supportedProfiles: getSupportedTranscriptionCudaProfileIds(),
+        unsupportedDetectedProfiles: [],
+        recommendedInstallProfile: getSupportedTranscriptionCudaProfileIds()[0] || 'cuda12',
         error: String(error && error.message ? error.message : error),
       };
       updateCachedCudaStatus(status);
@@ -4685,6 +4708,10 @@ ipcMain.handle('check-cuda', async () => {
         runtimeLoadable: false,
         missingLibraries: [],
         runtime: 'ctranslate2',
+        statusCode: 'unsupportedPlatform',
+        supportedProfiles: getSupportedTranscriptionCudaProfileIds(),
+        unsupportedDetectedProfiles: [],
+        recommendedInstallProfile: getSupportedTranscriptionCudaProfileIds()[0] || 'cuda12',
         error: 'CUDA runtime checks are only supported on Windows.',
         version: null,
         packages: getTranscriptionCudaPackages(),
@@ -4694,13 +4721,12 @@ ipcMain.handle('check-cuda', async () => {
       });
       return;
     }
-    const cudaPackages = getTranscriptionCudaPackages();
     checkCudaRuntimeStatus().then((parsedStatus) => {
       getActivePythonVersion().then((pythonVersion) => {
         resolve({
           ...parsedStatus,
           version: null,
-          packages: cudaPackages,
+          packages: getDefaultTranscriptionCudaPackages(),
           pythonVersion: pythonVersion.parsed ? pythonVersion.parsed.version : pythonVersion.output,
           pythonSupportedForInstall: isSupportedCudaInstallPythonVersion(pythonVersion.parsed),
           pythonExecutable: pythonConfig.pythonExe,
@@ -4709,7 +4735,7 @@ ipcMain.handle('check-cuda', async () => {
         resolve({
           ...parsedStatus,
           version: null,
-          packages: cudaPackages,
+          packages: getDefaultTranscriptionCudaPackages(),
           pythonVersion: null,
           pythonSupportedForInstall: false,
           pythonExecutable: pythonConfig.pythonExe,
@@ -4722,9 +4748,13 @@ ipcMain.handle('check-cuda', async () => {
         runtimeLoadable: false,
         missingLibraries: [],
         runtime: 'ctranslate2',
+        statusCode: 'probeError',
+        supportedProfiles: getSupportedTranscriptionCudaProfileIds(),
+        unsupportedDetectedProfiles: [],
+        recommendedInstallProfile: getSupportedTranscriptionCudaProfileIds()[0] || 'cuda12',
         error: String(error && error.message ? error.message : error),
         version: null,
-        packages: cudaPackages,
+        packages: getDefaultTranscriptionCudaPackages(),
         pythonVersion: null,
         pythonSupportedForInstall: false,
         pythonExecutable: pythonConfig.pythonExe,
@@ -4736,7 +4766,7 @@ ipcMain.handle('check-cuda', async () => {
 /**
  * Install GPU acceleration packages
  */
-ipcMain.handle('install-gpu', async () => {
+ipcMain.handle('install-gpu', async (_event, options = {}) => {
   return new Promise((resolve, reject) => {
     getActivePythonVersion().then((pythonVersion) => {
       if (!isSupportedCudaInstallPythonVersion(pythonVersion.parsed)) {
@@ -4744,7 +4774,12 @@ ipcMain.handle('install-gpu', async () => {
         return;
       }
 
-      const python = spawnTrackedPython(buildTranscriptionCudaInstallArgs());
+      const requestedMode = String(options && options.mode ? options.mode : 'install').trim().toLowerCase();
+      const isRepairMode = requestedMode === 'repair';
+      const python = spawnTrackedPython(buildTranscriptionCudaInstallArgs({
+        forceReinstall: isRepairMode,
+        noCache: isRepairMode,
+      }));
 
       let output = '';
       let errorOutput = '';

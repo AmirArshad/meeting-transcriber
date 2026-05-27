@@ -1,5 +1,8 @@
 # Pinned dependencies used only for packaged Windows builds.
 # Keep local development requirements in requirements-windows.txt.
+# Official packaged GPU support target remains CUDA 12 runtime profile
+# (nvidia-cublas-cu12 + nvidia-cudnn-cu12) until upstream CTranslate2/faster-whisper
+# wheels for newer CUDA majors are validated in packaged regression testing.
 pyaudiowpatch==0.2.12.8
 numpy==2.4.6
 soxr==1.1.0

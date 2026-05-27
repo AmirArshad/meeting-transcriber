@@ -174,6 +174,11 @@ Whisper transcription caches are separate from diarization’s Hugging Face cach
 - Model download / `--preload` must keep `modelCached: false` so incomplete caches can still download.
 - Diarization loads pyannote with `local_files_only=True`; summary generation uses `buildHuggingFaceOfflineEnv()` when artifacts are installed.
 
+**Windows CUDA runtime profile**
+
+- Packaged transcription currently supports a CUDA 12 runtime profile (`nvidia-cublas-cu12`, `nvidia-cudnn-cu12`) and probes matching DLLs before GPU use.
+- If only newer CUDA-major runtime DLLs are detected (for example CUDA 13 DLL names), status should surface a runtime-major mismatch and transcription must remain on safe CPU fallback.
+
 If you change required cache files or env var names, update all of the files above plus `tests/js/main-process-helpers.test.js` and `tests/python/test_transcriber_helpers.py`.
 
 ### GPU compute serialization and timeouts

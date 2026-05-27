@@ -599,6 +599,39 @@ def test_transcribe_file_retries_on_retryable_cuda_runtime_error(monkeypatch, tm
     assert service.device == 'cpu'
 
 
+def test_transcribe_file_retries_on_cuda13_runtime_error(monkeypatch, tmp_path):
+    audio_path = tmp_path / 'sample.opus'
+    audio_path.write_bytes(b'audio')
+    service = TranscriberService(model_size='small', language='en', device='auto')
+    calls = {'attempt': 0}
+
+    class Segment:
+        def __init__(self, start, end, text):
+            self.start = start
+            self.end = end
+            self.text = text
+
+    class Info:
+        language = 'en'
+        duration = 2.0
+
+    class Model:
+        def transcribe(self, *_args, **_kwargs):
+            calls['attempt'] += 1
+            if calls['attempt'] == 1:
+                raise RuntimeError('Library cublas64_13.dll is not found or cannot be loaded')
+            return iter([Segment(0.0, 2.0, 'ok')]), Info()
+
+    service.model = Model()
+    monkeypatch.setattr(service, 'load_model', lambda: setattr(service, 'model', Model()))
+
+    result = service.transcribe_file(str(audio_path), save_markdown=False)
+
+    assert result['text'] == 'ok'
+    assert calls['attempt'] == 2
+    assert service.device == 'cpu'
+
+
 def test_transcribe_file_does_not_retry_non_cuda_errors(tmp_path):
     audio_path = tmp_path / 'sample.opus'
     audio_path.write_bytes(b'audio')

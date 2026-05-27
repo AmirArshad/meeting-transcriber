@@ -19,10 +19,31 @@ const MACOS_PERMISSION_CHECK_TIMEOUT_MS = 8000;
 const FASTER_WHISPER_REQUIRED_CACHE_FILES = ['config.json', 'model.bin', 'tokenizer.json'];
 const FASTER_WHISPER_VOCABULARY_CACHE_FILES = ['vocabulary.txt', 'vocabulary.json'];
 const MLX_REQUIRED_CACHE_FILES = ['weights.npz', 'config.json'];
-const REQUIRED_CUDA_RUNTIME_DLLS = Object.freeze(['cublas64_12.dll', 'cublasLt64_12.dll', 'cudnn64_9.dll']);
+const CUDA_RUNTIME_PROFILES = Object.freeze({
+  cuda12: Object.freeze({
+    id: 'cuda12',
+    label: 'CUDA 12 runtime',
+    supported: true,
+    pipPackages: Object.freeze(['nvidia-cublas-cu12', 'nvidia-cudnn-cu12']),
+    requiredDlls: Object.freeze(['cublas64_12.dll', 'cublasLt64_12.dll', 'cudnn64_9.dll']),
+    expectedDllPrefixes: Object.freeze(['cublas64_12', 'cublaslt64_12', 'cudnn64_9']),
+  }),
+  cuda13: Object.freeze({
+    id: 'cuda13',
+    label: 'CUDA 13 runtime',
+    supported: false,
+    pipPackages: Object.freeze(['nvidia-cublas', 'nvidia-cudnn-cu13']),
+    requiredDlls: Object.freeze(['cublas64_13.dll', 'cublasLt64_13.dll', 'cudnn64_9.dll']),
+    expectedDllPrefixes: Object.freeze(['cublas64_13', 'cublaslt64_13', 'cudnn64_9']),
+  }),
+});
+const SUPPORTED_TRANSCRIPTION_CUDA_PROFILE_IDS = Object.freeze(['cuda12']);
+const DEFAULT_TRANSCRIPTION_CUDA_PROFILE_ID = SUPPORTED_TRANSCRIPTION_CUDA_PROFILE_IDS[0];
 const RETRYABLE_CUDA_TRANSCRIPTION_ERROR_PATTERNS = Object.freeze([
   'cublas64_12.dll',
+  'cublas64_13.dll',
   'cublaslt64_12.dll',
+  'cublaslt64_13.dll',
   'cudnn',
   'cuda failed',
   'cuda error',
@@ -376,7 +397,6 @@ function buildUnsupportedCudaPythonMessage(versionOutput) {
   ].join(' ');
 }
 
-const TRANSCRIPTION_CUDA_PACKAGES = Object.freeze(['nvidia-cublas-cu12', 'nvidia-cudnn-cu12']);
 const LEGACY_TRANSCRIPTION_CUDA_PACKAGES = Object.freeze(['torch', 'torchvision', 'torchaudio']);
 const PYTORCH_CUDA_BIN_DIRS = Object.freeze([
   ['nvidia', 'cublas', 'bin'],
@@ -418,17 +438,64 @@ function getPyTorchCudaBinCandidates(sitePackagesDirs = []) {
   return candidates;
 }
 
-function buildTranscriptionCudaInstallArgs(packages = TRANSCRIPTION_CUDA_PACKAGES) {
-  return [
+function getCudaRuntimeProfile(profileId = DEFAULT_TRANSCRIPTION_CUDA_PROFILE_ID) {
+  return CUDA_RUNTIME_PROFILES[profileId] || null;
+}
+
+function getCudaRuntimeProfiles() {
+  return Object.values(CUDA_RUNTIME_PROFILES);
+}
+
+function getSupportedTranscriptionCudaProfileIds() {
+  return [...SUPPORTED_TRANSCRIPTION_CUDA_PROFILE_IDS];
+}
+
+function getRequiredCudaRuntimeDlls(profileId = DEFAULT_TRANSCRIPTION_CUDA_PROFILE_ID) {
+  const profile = getCudaRuntimeProfile(profileId);
+  return profile ? [...profile.requiredDlls] : [];
+}
+
+function getTranscriptionCudaPackages(profileId = DEFAULT_TRANSCRIPTION_CUDA_PROFILE_ID) {
+  const profile = getCudaRuntimeProfile(profileId);
+  return profile ? [...profile.pipPackages] : [];
+}
+
+function buildTranscriptionCudaInstallArgs(options = {}) {
+  const profileId = typeof options === 'string'
+    ? options
+    : (options && options.profileId) || DEFAULT_TRANSCRIPTION_CUDA_PROFILE_ID;
+  const forceReinstall = Boolean(options && options.forceReinstall);
+  const noCache = Boolean(options && options.noCache);
+  const explicitPackages = Array.isArray(options && options.packages) ? options.packages : null;
+  const packages = explicitPackages && explicitPackages.length
+    ? explicitPackages
+    : getTranscriptionCudaPackages(profileId);
+  const args = [
     '-m',
     'pip',
     'install',
+  ];
+  if (forceReinstall) {
+    args.push('--upgrade', '--force-reinstall');
+  }
+  if (noCache) {
+    args.push('--no-cache-dir');
+  }
+  args.push(
     ...packages,
     '--no-warn-script-location',
-  ];
+  );
+  return args;
 }
 
-function buildTranscriptionCudaUninstallArgs(packages = TRANSCRIPTION_CUDA_PACKAGES) {
+function buildTranscriptionCudaUninstallArgs(options = {}) {
+  const profileId = typeof options === 'string'
+    ? options
+    : (options && options.profileId) || DEFAULT_TRANSCRIPTION_CUDA_PROFILE_ID;
+  const explicitPackages = Array.isArray(options && options.packages) ? options.packages : null;
+  const packages = explicitPackages && explicitPackages.length
+    ? explicitPackages
+    : getTranscriptionCudaPackages(profileId);
   return [
     '-m',
     'pip',
@@ -1149,6 +1216,37 @@ function isRetryableCudaTranscriptionError(errorOutput) {
   return RETRYABLE_CUDA_TRANSCRIPTION_ERROR_PATTERNS.some((pattern) => normalized.includes(pattern));
 }
 
+function classifyCudaProbeStatus({
+  deviceAvailable = false,
+  runtimeLoadable = false,
+  missingLibraries = [],
+  unsupportedDetectedProfiles = [],
+} = {}) {
+  if (deviceAvailable && runtimeLoadable) {
+    return 'ready';
+  }
+  if (unsupportedDetectedProfiles.length > 0) {
+    return 'unsupportedRuntimeMajor';
+  }
+  if (deviceAvailable && missingLibraries.length > 0) {
+    return 'missingLibraries';
+  }
+  if (!deviceAvailable) {
+    return 'deviceUnavailable';
+  }
+  return 'runtimeUnavailable';
+}
+
+function resolveCudaInstalledProfile({ matchedProfile = '', installedProfile = '', unsupportedDetectedProfiles = [] } = {}) {
+  if (matchedProfile) {
+    return matchedProfile;
+  }
+  if (installedProfile) {
+    return installedProfile;
+  }
+  return unsupportedDetectedProfiles[0] || '';
+}
+
 function parseCheckCudaStatus(output = '') {
   const lines = String(output || '')
     .split(/\r?\n/)
@@ -1173,6 +1271,28 @@ function parseCheckCudaStatus(output = '') {
     .filter(Boolean);
   const runtime = values.runtime || 'ctranslate2';
   const error = values.error || '';
+  const matchedProfile = values.matchedProfile || '';
+  const rawInstalledProfile = values.installedProfile || '';
+  const unsupportedDetectedProfiles = (values.unsupportedDetectedProfiles || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const supportedProfiles = (values.supportedProfiles || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const recommendedInstallProfile = values.recommendedInstallProfile || DEFAULT_TRANSCRIPTION_CUDA_PROFILE_ID;
+  const statusCode = classifyCudaProbeStatus({
+    deviceAvailable,
+    runtimeLoadable,
+    missingLibraries,
+    unsupportedDetectedProfiles,
+  });
+  const installedProfile = resolveCudaInstalledProfile({
+    matchedProfile,
+    installedProfile: rawInstalledProfile,
+    unsupportedDetectedProfiles,
+  });
 
   return {
     installed: Boolean(deviceAvailable && runtimeLoadable && missingLibraries.length === 0),
@@ -1181,6 +1301,12 @@ function parseCheckCudaStatus(output = '') {
     missingLibraries,
     runtime,
     error,
+    statusCode,
+    matchedProfile,
+    installedProfile,
+    supportedProfiles: supportedProfiles.length ? supportedProfiles : getSupportedTranscriptionCudaProfileIds(),
+    unsupportedDetectedProfiles,
+    recommendedInstallProfile,
   };
 }
 
@@ -1503,10 +1629,17 @@ module.exports = {
   getRecordingStopTimeout,
   resolveStopTimeoutAction,
   isModelDownloadErrorOutput,
+  classifyCudaProbeStatus,
+  resolveCudaInstalledProfile,
   shouldForceCpuTranscriptionFromCudaStatus,
   isRetryableCudaTranscriptionError,
   parseCheckCudaStatus,
-  REQUIRED_CUDA_RUNTIME_DLLS,
+  CUDA_RUNTIME_PROFILES,
+  getCudaRuntimeProfile,
+  getCudaRuntimeProfiles,
+  getSupportedTranscriptionCudaProfileIds,
+  getRequiredCudaRuntimeDlls,
+  getTranscriptionCudaPackages,
   isPathInsideDirectory,
   resolveExistingRealPath,
   isSafeRecordingsAudioPath,
@@ -1522,7 +1655,6 @@ module.exports = {
   summarizeAiBackendError,
   resolveTranscriptionAudioFile,
   splitBufferedLines,
-  TRANSCRIPTION_CUDA_PACKAGES,
   PYTORCH_CUDA_BIN_DIRS,
   MACOS_PERMISSION_CHECK_TIMEOUT_MS,
   redactSensitiveText,

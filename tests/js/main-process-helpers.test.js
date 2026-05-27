@@ -26,11 +26,16 @@ const {
   buildTranscriberArgs,
   buildTranscriptionCudaInstallArgs,
   buildTranscriptionCudaUninstallArgs,
+  getCudaRuntimeProfiles,
+  getSupportedTranscriptionCudaProfileIds,
+  getRequiredCudaRuntimeDlls,
+  getTranscriptionCudaPackages,
   buildUnsupportedCudaPythonMessage,
   isRetryableCudaTranscriptionError,
+  classifyCudaProbeStatus,
+  resolveCudaInstalledProfile,
   shouldForceCpuTranscriptionFromCudaStatus,
   parseCheckCudaStatus,
-  REQUIRED_CUDA_RUNTIME_DLLS,
   cacheContainsModel,
   getPythonSitePackagesCandidates,
   getPyTorchCudaBinCandidates,
@@ -949,9 +954,29 @@ test('transcription CUDA installer only targets CTranslate2 runtime libraries', 
     ['-m', 'pip', 'install', 'nvidia-cublas-cu12', 'nvidia-cudnn-cu12', '--no-warn-script-location'],
   );
   assert.deepEqual(
+    buildTranscriptionCudaInstallArgs({ forceReinstall: true, noCache: true }),
+    [
+      '-m', 'pip', 'install',
+      '--upgrade', '--force-reinstall',
+      '--no-cache-dir',
+      'nvidia-cublas-cu12', 'nvidia-cudnn-cu12',
+      '--no-warn-script-location',
+    ],
+  );
+  assert.deepEqual(
     buildTranscriptionCudaUninstallArgs(),
     ['-m', 'pip', 'uninstall', '-y', 'nvidia-cublas-cu12', 'nvidia-cudnn-cu12', 'torch', 'torchvision', 'torchaudio'],
   );
+});
+
+test('CUDA runtime profiles expose supported baseline and optional newer runtimes', () => {
+  const profiles = getCudaRuntimeProfiles();
+  const supportedIds = getSupportedTranscriptionCudaProfileIds();
+  assert.ok(profiles.some((profile) => profile.id === 'cuda12' && profile.supported === true));
+  assert.ok(profiles.some((profile) => profile.id === 'cuda13' && profile.supported === false));
+  assert.deepEqual(supportedIds, ['cuda12']);
+  assert.deepEqual(getRequiredCudaRuntimeDlls(), ['cublas64_12.dll', 'cublasLt64_12.dll', 'cudnn64_9.dll']);
+  assert.deepEqual(getTranscriptionCudaPackages(), ['nvidia-cublas-cu12', 'nvidia-cudnn-cu12']);
 });
 
 test('isRetryableCudaTranscriptionError detects runtime DLL/load failures', () => {
@@ -960,9 +985,58 @@ test('isRetryableCudaTranscriptionError detects runtime DLL/load failures', () =
     true,
   );
   assert.equal(
+    isRetryableCudaTranscriptionError('RuntimeError: Library cublas64_13.dll is not found or cannot be loaded'),
+    true,
+  );
+  assert.equal(
     isRetryableCudaTranscriptionError('ValueError: Audio file not found'),
     false,
   );
+});
+
+test('classifyCudaProbeStatus classifies probe outcomes deterministically', () => {
+  assert.equal(classifyCudaProbeStatus({
+    deviceAvailable: true,
+    runtimeLoadable: true,
+    missingLibraries: [],
+    unsupportedDetectedProfiles: [],
+  }), 'ready');
+  assert.equal(classifyCudaProbeStatus({
+    deviceAvailable: true,
+    runtimeLoadable: false,
+    missingLibraries: ['cublas64_12.dll'],
+    unsupportedDetectedProfiles: ['cuda13'],
+  }), 'unsupportedRuntimeMajor');
+  assert.equal(classifyCudaProbeStatus({
+    deviceAvailable: true,
+    runtimeLoadable: false,
+    missingLibraries: ['cublas64_12.dll'],
+    unsupportedDetectedProfiles: [],
+  }), 'missingLibraries');
+  assert.equal(classifyCudaProbeStatus({
+    deviceAvailable: false,
+    runtimeLoadable: false,
+    missingLibraries: [],
+    unsupportedDetectedProfiles: [],
+  }), 'deviceUnavailable');
+});
+
+test('resolveCudaInstalledProfile prefers matched supported profile', () => {
+  assert.equal(resolveCudaInstalledProfile({
+    matchedProfile: 'cuda12',
+    installedProfile: 'cuda13',
+    unsupportedDetectedProfiles: ['cuda13'],
+  }), 'cuda12');
+  assert.equal(resolveCudaInstalledProfile({
+    matchedProfile: '',
+    installedProfile: 'cuda13',
+    unsupportedDetectedProfiles: [],
+  }), 'cuda13');
+  assert.equal(resolveCudaInstalledProfile({
+    matchedProfile: '',
+    installedProfile: '',
+    unsupportedDetectedProfiles: ['cuda13'],
+  }), 'cuda13');
 });
 
 test('parseCheckCudaStatus reports missing CUDA runtime libraries separately', () => {
@@ -978,7 +1052,7 @@ test('parseCheckCudaStatus reports missing CUDA runtime libraries separately', (
   assert.equal(status.runtimeLoadable, false);
   assert.deepEqual(status.missingLibraries, ['cublas64_12.dll', 'cudnn64_9.dll']);
   assert.equal(status.runtime, 'ctranslate2');
-  assert.equal(Array.isArray(REQUIRED_CUDA_RUNTIME_DLLS), true);
+  assert.equal(status.statusCode, 'missingLibraries');
 });
 
 test('parseCheckCudaStatus keeps probe error details for diagnostics', () => {
@@ -992,6 +1066,39 @@ test('parseCheckCudaStatus keeps probe error details for diagnostics', () => {
 
   assert.equal(status.installed, false);
   assert.equal(status.error, 'No module named ctranslate2');
+  assert.equal(status.statusCode, 'deviceUnavailable');
+});
+
+test('parseCheckCudaStatus reports newer unsupported CUDA major separately', () => {
+  const status = parseCheckCudaStatus([
+    'deviceAvailable:True',
+    'runtimeLoadable:False',
+    'missingLibraries:cublas64_12.dll,cublasLt64_12.dll',
+    'runtime:ctranslate2',
+    'installedProfile:cuda13',
+    'unsupportedDetectedProfiles:cuda13',
+    'supportedProfiles:cuda12',
+    'statusCode:unsupportedRuntimeMajor',
+  ].join('\n'));
+
+  assert.equal(status.statusCode, 'unsupportedRuntimeMajor');
+  assert.deepEqual(status.unsupportedDetectedProfiles, ['cuda13']);
+  assert.deepEqual(status.supportedProfiles, ['cuda12']);
+  assert.equal(status.installedProfile, 'cuda13');
+});
+
+test('parseCheckCudaStatus prefers matched profile over raw installed profile', () => {
+  const status = parseCheckCudaStatus([
+    'deviceAvailable:True',
+    'runtimeLoadable:True',
+    'missingLibraries:',
+    'runtime:ctranslate2',
+    'matchedProfile:cuda12',
+    'installedProfile:cuda13',
+    'unsupportedDetectedProfiles:cuda13',
+  ].join('\n'));
+  assert.equal(status.statusCode, 'ready');
+  assert.equal(status.installedProfile, 'cuda12');
 });
 
 test('shouldForceCpuTranscriptionFromCudaStatus only when runtime is broken', () => {

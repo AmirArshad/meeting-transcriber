@@ -85,6 +85,8 @@ On the affected Windows machine:
 
 This means "CUDA device exists" is not enough. The app must verify that the exact runtime libraries required by the packaged transcription process are present and loadable.
 
+As of the current packaged runtime, the supported transcription CUDA profile is CUDA 12 (`nvidia-cublas-cu12` + `nvidia-cudnn-cu12`). If only newer major runtime DLLs are present (for example `cublas64_13.dll`), the runtime check should report an unsupported runtime-major mismatch and continue with CPU fallback rather than treating the system as fully GPU-ready.
+
 ## Proposed Design
 
 ### 1. Add explicit transcription device control

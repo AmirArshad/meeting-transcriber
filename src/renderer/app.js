@@ -3948,6 +3948,17 @@ async function checkGPUStatus() {
   const uninstallBtn = document.getElementById('uninstall-gpu-btn');
   const gpuActions = document.getElementById('gpu-actions');
   const ctaState = { platform: null, gpuInfo: null, cudaInfo: null };
+  const resetInstallButton = () => {
+    installBtn.textContent = 'Install GPU Acceleration';
+    installBtn.dataset.mode = 'install';
+    installBtn.title = 'Install AvaNevis-compatible CUDA runtime libraries';
+  };
+  const setRepairInstallButton = () => {
+    installBtn.textContent = 'Repair GPU Runtime (Recommended)';
+    installBtn.dataset.mode = 'repair';
+    installBtn.title = 'Reinstall AvaNevis-compatible CUDA runtime libraries';
+  };
+  resetInstallButton();
 
   statusBadge.textContent = 'Checking...';
   statusBadge.className = 'setting-badge';
@@ -4065,15 +4076,28 @@ async function checkGPUStatus() {
         statusBadge.classList.add('enabled');
         installBtn.style.display = 'none';
         uninstallBtn.style.display = 'block';
+        resetInstallButton();
       } else {
-        if (cudaInfo.deviceAvailable && cudaInfo.runtimeLoadable === false) {
+        const statusCode = String(cudaInfo.statusCode || '').trim();
+        if (statusCode === 'unsupportedRuntimeMajor') {
+          setRepairInstallButton();
+          const unsupportedProfiles = Array.isArray(cudaInfo.unsupportedDetectedProfiles)
+            ? cudaInfo.unsupportedDetectedProfiles.filter(Boolean)
+            : [];
+          gpuValue2.textContent = unsupportedProfiles.length
+            ? `Unsupported runtime detected (${unsupportedProfiles.join(', ')})`
+            : 'Unsupported CUDA runtime detected';
+        } else if (cudaInfo.deviceAvailable && cudaInfo.runtimeLoadable === false) {
+          resetInstallButton();
           const missing = Array.isArray(cudaInfo.missingLibraries) && cudaInfo.missingLibraries.length
             ? `Missing: ${cudaInfo.missingLibraries.join(', ')}`
             : 'CUDA runtime libraries are not loadable';
           gpuValue2.textContent = missing;
         } else if (cudaInfo.deviceAvailable) {
+          resetInstallButton();
           gpuValue2.textContent = 'CUDA runtime not ready';
         } else {
+          resetInstallButton();
           gpuValue2.textContent = 'No CUDA device available';
         }
         gpuValue2.classList.add('warning');
@@ -4082,6 +4106,16 @@ async function checkGPUStatus() {
           : '~1 GB';
         if (gpuValue4) {
           const diagnostics = [];
+          if (statusCode === 'unsupportedRuntimeMajor') {
+            const unsupportedProfiles = Array.isArray(cudaInfo.unsupportedDetectedProfiles)
+              ? cudaInfo.unsupportedDetectedProfiles.filter(Boolean)
+              : [];
+            diagnostics.push(
+              unsupportedProfiles.length
+                ? `Detected newer CUDA runtime (${unsupportedProfiles.join(', ')}), but packaged transcription currently supports ${Array.isArray(cudaInfo.supportedProfiles) ? cudaInfo.supportedProfiles.join(', ') : 'cuda12'}.`
+                : 'Detected CUDA runtime is newer than the packaged transcription stack currently supports.',
+            );
+          }
           if (cudaInfo.deviceAvailable === false) {
             diagnostics.push('CUDA device not available to CTranslate2.');
           }
@@ -4135,6 +4169,21 @@ function updateGPUCTA({ platform, gpuInfo, cudaInfo }) {
   }
 
   const sub = cta.querySelector('.gpu-cta-sub');
+  const title = cta.querySelector('strong');
+  const statusCode = String((cudaInfo && cudaInfo.statusCode) || '').trim();
+  if (statusCode === 'unsupportedRuntimeMajor') {
+    if (title) {
+      title.textContent = 'Repair GPU runtime compatibility';
+    }
+    if (sub) {
+      sub.textContent = `${gpuInfo.gpuName || 'NVIDIA GPU'} detected - keep newer CUDA for other apps and add AvaNevis-compatible runtime libs`;
+    }
+    cta.style.display = 'flex';
+    return;
+  }
+  if (title) {
+    title.textContent = 'Install CUDA for faster transcription';
+  }
   if (sub && gpuInfo.gpuName) {
     sub.textContent = `${gpuInfo.gpuName} detected - enable 4-5x faster transcription`;
   }
@@ -4161,9 +4210,19 @@ function updateCudaRuntimeWarning({ platform, gpuInfo, cudaInfo }) {
   }
 
   const missing = Array.isArray(cudaInfo.missingLibraries) ? cudaInfo.missingLibraries.filter(Boolean) : [];
-  warningSub.textContent = missing.length
-    ? `Missing CUDA runtime libraries: ${missing.join(', ')}. Transcription will automatically fall back to CPU until CUDA is fixed.`
-    : 'CUDA runtime libraries are not loadable. Transcription will automatically fall back to CPU until CUDA is fixed.';
+  const statusCode = String(cudaInfo.statusCode || '').trim();
+  if (statusCode === 'unsupportedRuntimeMajor') {
+    const unsupportedProfiles = Array.isArray(cudaInfo.unsupportedDetectedProfiles)
+      ? cudaInfo.unsupportedDetectedProfiles.filter(Boolean)
+      : [];
+    warningSub.textContent = unsupportedProfiles.length
+      ? `Detected ${unsupportedProfiles.join(', ')} runtime libraries, but this AvaNevis build currently supports ${Array.isArray(cudaInfo.supportedProfiles) ? cudaInfo.supportedProfiles.join(', ') : 'cuda12'}. Transcription will fall back to CPU until supported GPU runtime libraries are installed.`
+      : 'Detected a newer CUDA runtime than this AvaNevis build currently supports. Transcription will fall back to CPU until supported GPU runtime libraries are installed.';
+  } else {
+    warningSub.textContent = missing.length
+      ? `Missing CUDA runtime libraries: ${missing.join(', ')}. Transcription will automatically fall back to CPU until CUDA is fixed.`
+      : 'CUDA runtime libraries are not loadable. Transcription will automatically fall back to CPU until CUDA is fixed.';
+  }
   warning.style.display = 'flex';
 }
 
@@ -4201,8 +4260,12 @@ async function installGPUAcceleration() {
   const logOutput = document.getElementById('gpu-log-output');
 
   // Show confirmation
+  const isRepairFlow = installBtn.dataset.mode === 'repair';
   const confirmed = confirm(
-    'This will download and install about 1GB of CUDA runtime libraries for faster transcription.\n\n' +
+    (isRepairFlow
+      ? 'This will repair AvaNevis GPU compatibility by adding the app-supported CUDA runtime libraries (about 1GB).\n\n'
+      : 'This will download and install about 1GB of CUDA runtime libraries for faster transcription.\n\n') +
+    'This does not remove newer CUDA runtime libraries used by other applications.\n\n' +
     'Speaker identification uses its own managed PyTorch CUDA setup only if you explicitly enable it.\n\n' +
     'The download may take 10-30 minutes depending on your internet speed.\n\n' +
     'Continue?'
@@ -4235,7 +4298,7 @@ async function installGPUAcceleration() {
     progressText.textContent = 'Downloading CUDA runtime libraries for faster-whisper...';
 
     // Install GPU packages
-    await window.electronAPI.installGPU();
+    await window.electronAPI.installGPU({ mode: isRepairFlow ? 'repair' : 'install' });
 
     // Complete progress
     progressBar.style.width = '100%';
@@ -4256,7 +4319,11 @@ async function installGPUAcceleration() {
     await checkGPUStatus();
     await refreshAiAddonSettings();
 
-    alert('GPU acceleration installed successfully!\n\nFaster transcription is now available.');
+    alert(
+      isRepairFlow
+        ? 'GPU runtime repair completed.\n\nAvaNevis will now use the supported runtime profile for faster transcription. Other CUDA runtimes used by other apps were not removed.'
+        : 'GPU acceleration installed successfully!\n\nFaster transcription is now available.',
+    );
   } catch (error) {
     console.error('GPU installation failed:', error);
     appendGPULog(`\nERROR: ${error.message}`);
@@ -4276,8 +4343,9 @@ async function installGPUAcceleration() {
 
 async function uninstallGPUAcceleration() {
   const confirmed = confirm(
-    'This will remove all GPU acceleration libraries.\n\n' +
-    'Transcription will fall back to CPU mode.\n\n' +
+    'This will remove AvaNevis-installed GPU runtime libraries used for transcription acceleration.\n\n' +
+    'It does not remove newer system CUDA runtimes used by other applications.\n\n' +
+    'AvaNevis transcription will fall back to CPU mode.\n\n' +
     'Continue?'
   );
 
@@ -4291,10 +4359,16 @@ async function uninstallGPUAcceleration() {
     await window.electronAPI.uninstallGPU();
     await checkGPUStatus();
     await refreshAiAddonSettings();
-    alert('GPU acceleration uninstalled successfully.');
+    alert(
+      'AvaNevis GPU acceleration libraries were uninstalled successfully.\n\n' +
+      'Other CUDA runtimes used by other applications were not removed.',
+    );
   } catch (error) {
     console.error('Uninstall failed:', error);
-    alert('Failed to uninstall GPU acceleration.');
+    alert(
+      'Failed to uninstall AvaNevis GPU acceleration libraries.\n\n' +
+      'No changes were made to system CUDA runtimes used by other applications.',
+    );
   }
 }
 
