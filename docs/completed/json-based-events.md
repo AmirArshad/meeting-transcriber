@@ -166,7 +166,7 @@ If you change recorder output behavior, update all of:
 - `backend/audio/windows_recorder.py` - Windows recorder implementation
 - `backend/audio/macos_recorder.py` - macOS recorder implementation
 - `src/main.js` - Electron main process (event parser)
-- `docs/features/json-based-events.md` - This document
+- `docs/completed/json-based-events.md` - This document
 
 ## References
 

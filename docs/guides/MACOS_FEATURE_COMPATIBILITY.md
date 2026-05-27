@@ -38,7 +38,7 @@ This document tracks the current state of major user-facing features on macOS.
 
 - Distributed macOS installers are `AvaNevis-Setup-<version>.dmg`.
 - Packaged builds target Apple Silicon only.
-- Unsigned builds still require the normal Gatekeeper bypass steps described in `docs/MACOS_INSTALLATION.md`.
+- Unsigned builds still require the normal Gatekeeper bypass steps described in [MACOS_INSTALLATION.md](MACOS_INSTALLATION.md).
 
 ### Update flow
 

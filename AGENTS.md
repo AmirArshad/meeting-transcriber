@@ -6,7 +6,7 @@ Canonical agent instructions for **OpenCode** and **Cursor**. Update this file w
 |------|------------------------|
 | OpenCode | Root `AGENTS.md` |
 | Cursor | Root `AGENTS.md` plus scoped rules in `.cursor/rules/` |
-| Claude Code | Not in use; archived snapshot at `docs/internal/archive/CLAUDE.md` (not auto-loaded). To re-enable, copy `AGENTS.md` to repo-root `CLAUDE.md` only if that tool requires it. |
+| Claude Code | Not in use; archived snapshot at `docs/completed/archive/CLAUDE.md` (not auto-loaded). To re-enable, copy `AGENTS.md` to repo-root `CLAUDE.md` only if that tool requires it. |
 
 ## Product Summary
 
@@ -97,7 +97,7 @@ you must update all of:
 - `src/main-process-helpers.js`
 - `tests/js/main-process-helpers.test.js`
 
-The JSON-event migration in `docs/features/json-based-events.md` is complete for recorder control flow. Preserve the stdout JSON control contract unless you update both sides together.
+The JSON-event migration in `docs/completed/json-based-events.md` is complete for recorder control flow. Preserve the stdout JSON control contract unless you update both sides together.
 
 ### Keep recorder output contracts stable
 

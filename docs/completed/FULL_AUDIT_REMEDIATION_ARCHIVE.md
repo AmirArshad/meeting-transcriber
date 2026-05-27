@@ -54,7 +54,7 @@ Branch: `fix/full-audit-remediation`
 
 Status: active. This file now tracks only unresolved issues from the 2026-03-12 full PR review.
 
-Archive: historical completed work moved to `docs/internal/FULL_AUDIT_REMEDIATION_ARCHIVE.md`.
+Archive: historical completed work moved to `docs/completed/FULL_AUDIT_REMEDIATION_ARCHIVE.md`.
 
 ## Working Rule
 

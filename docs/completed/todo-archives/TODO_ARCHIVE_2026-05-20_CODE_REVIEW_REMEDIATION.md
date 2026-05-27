@@ -2,13 +2,13 @@
 
 **Status:** Merged to `master` on 2026-05-20 (branch `chore/code-review-remediation`, including follow-up commit `4632565`).
 
-**Summary for readers:** Phases 1–6 are complete. Phase 7 remains backlog. For current behavior and invariants, see root [`AGENTS.md`](../../AGENTS.md) (GPU compute serialization, recorder stdout contract, path guards) and [`CODE_REVIEW_REMEDIATION_2026-05.md`](CODE_REVIEW_REMEDIATION_2026-05.md).
+**Summary for readers:** Phases 1–6 are complete. Phase 7 remains backlog. For current behavior and invariants, see root [`AGENTS.md`](../../../AGENTS.md) (GPU compute serialization, recorder stdout contract, path guards) and [`CODE_REVIEW_REMEDIATION_2026-05.md`](../CODE_REVIEW_REMEDIATION_2026-05.md).
 
 ---
 
 # Next Project Decision (snapshot at archive time)
 
-Previous project plan was archived to `docs/internal/TODO_ARCHIVE_2026-05-18_LOCAL_AI_ADDONS.md`.
+Previous project plan was archived to `docs/completed/todo-archives/TODO_ARCHIVE_2026-05-18_LOCAL_AI_ADDONS.md`.
 
 ## Candidate projects
 

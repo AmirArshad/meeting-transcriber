@@ -2,7 +2,7 @@
 
 > Historical note: this audit reflects repo state from November 2025. Treat it as a point-in-time review, not a live description of current updater/build/runtime behavior.
 >
-> **May 2026 follow-up:** Security and reliability remediation merged to `master` is summarized in [CODE_REVIEW_REMEDIATION_2026-05.md](CODE_REVIEW_REMEDIATION_2026-05.md). Current invariants (IPC trust, compute queue, path guards, redaction) live in root [`AGENTS.md`](../../AGENTS.md).
+> **May 2026 follow-up:** Security and reliability remediation merged to `master` is summarized in [CODE_REVIEW_REMEDIATION_2026-05.md](../CODE_REVIEW_REMEDIATION_2026-05.md). Current invariants (IPC trust, compute queue, path guards, redaction) live in root [`AGENTS.md`](../../../AGENTS.md).
 
 **Audit Date:** 2025-11-19
 **Version:** 1.0.0

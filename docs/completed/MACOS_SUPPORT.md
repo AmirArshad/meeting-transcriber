@@ -33,7 +33,7 @@ Status: implemented
 - Apple Silicon packaged builds launch `transcription.mlx_whisper_transcriber` with `python -m`.
 - Development runs on Intel Macs can still fall back to `transcription.faster_whisper_transcriber` with `python -m`.
 - Apple Silicon MLX models are cached under `~/Library/Caches/avanevis/mlx_models`; cached `weights.npz` and `config.json` are required before offline reuse (see transcription cache rules in `AGENTS.md`).
-- Pinned summary `llama.cpp` macOS runtime archives (`tar.gz`) extract off the main thread during setup; see `docs/development/LOCAL_AI_MODEL_CATALOG.md`.
+- Pinned summary `llama.cpp` macOS runtime archives (`tar.gz`) extract off the main thread during setup; see [LOCAL_AI_MODEL_CATALOG.md](../development/LOCAL_AI_MODEL_CATALOG.md).
 - English and multilingual `small`/`medium`/`large` use the standard `mlx-community/whisper-*-mlx` models; distil variants are not used for these quality tiers.
 
 ## Build And Packaging
@@ -89,7 +89,7 @@ PR CI now validates the macOS path more directly:
 
 ## Related Docs
 
-- `docs/MACOS_INSTALLATION.md`
-- `docs/TROUBLESHOOTING.md`
-- `docs/features/MACOS_AUDIO_ARCHITECTURE.md`
-- `docs/features/json-based-events.md`
+- [macOS installation](../guides/MACOS_INSTALLATION.md)
+- [Troubleshooting](../guides/TROUBLESHOOTING.md)
+- [macOS audio architecture](../initiatives/MACOS_AUDIO_ARCHITECTURE.md)
+- [JSON-based events](json-based-events.md)

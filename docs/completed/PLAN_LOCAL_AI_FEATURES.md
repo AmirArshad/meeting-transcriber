@@ -165,4 +165,4 @@ Record for each spike:
 - [Speaker diarization](FEATURE_SPEAKER_DIARIZATION.md)
 - [Transcript summaries](FEATURE_TRANSCRIPT_SUMMARIES.md)
 - [Optional local AI add-ons](DESIGN_LOCAL_AI_ADDONS.md)
-- [Roadmap](../ROADMAP.md)
+- [Roadmap](../initiatives/ROADMAP.md)

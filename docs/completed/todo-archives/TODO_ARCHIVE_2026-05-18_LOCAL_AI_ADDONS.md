@@ -13,7 +13,7 @@ Archived from `todo.md` on 2026-05-18 after completing the local AI add-ons proj
 ## Final status at archive time
 
 - Core implementation work for the local AI add-ons track was completed.
-- Follow-up manual/regression validation items were captured in `docs/ROADMAP.md` and release planning.
+- Follow-up manual/regression validation items were captured in `docs/initiatives/ROADMAP.md` and release planning.
 
 ## Snapshot note
 

@@ -1,6 +1,6 @@
 # macOS Security Audit Report - AvaNevis
 
-> Historical note: this audit reflects repo state from December 2025 and is not a live product spec. For current packaging, updater, and platform behavior, use `README.md`, `docs/development/*.md`, and `docs/internal/FULL_AUDIT_REMEDIATION_ARCHIVE.md`.
+> Historical note: this audit reflects repo state from December 2025 and is not a live product spec. For current packaging, updater, and platform behavior, use `README.md`, `docs/development/*.md`, and `docs/completed/FULL_AUDIT_REMEDIATION_ARCHIVE.md`.
 
 **Audit Date:** 2025-12-02
 **Version:** 1.6.1

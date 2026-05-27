@@ -27,4 +27,4 @@ CoreAudio may expose multi-channel buffers; preserve helper interleaved normaliz
 - Stage via `build/prepare-resources.js` → `build/resources/bin`.
 - Bundle/sign as `Contents/Resources/bin/audiocapture-helper` in electron-builder.
 
-`docs/features/MACOS_AUDIO_ARCHITECTURE.md` describes **future** ideas (streaming to disk, app-specific capture); do not treat planned sections as shipped behavior.
+`docs/initiatives/MACOS_AUDIO_ARCHITECTURE.md` describes **future** ideas (streaming to disk, app-specific capture); do not treat planned sections as shipped behavior.

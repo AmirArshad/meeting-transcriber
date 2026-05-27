@@ -168,7 +168,7 @@ When changing IPC, recording, or local AI behavior, run `npm run test:all` and c
 | Updates | `pendingUpdateInfo`-only download, `https:` replay validation |
 | Privacy | `backend/common/sensitive_text.py`, redacted progress and AI error fields |
 
-Full remediation checklist (archived): [`docs/internal/TODO_ARCHIVE_2026-05-20_CODE_REVIEW_REMEDIATION.md`](../internal/TODO_ARCHIVE_2026-05-20_CODE_REVIEW_REMEDIATION.md).
+Full remediation checklist (archived): [`docs/completed/todo-archives/TODO_ARCHIVE_2026-05-20_CODE_REVIEW_REMEDIATION.md`](../completed/todo-archives/TODO_ARCHIVE_2026-05-20_CODE_REVIEW_REMEDIATION.md).
 
 ## CI Coverage
 

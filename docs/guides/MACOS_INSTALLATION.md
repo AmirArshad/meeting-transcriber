@@ -155,7 +155,7 @@ This is an **open-source project** without commercial funding, so the app isn't 
 - ✅ **Built by GitHub Actions** - public build logs, no tampering
 - ✅ **No telemetry** - 100% local processing, no data sent anywhere
 - ✅ **No background uploads** - only explicit model downloads and update checks
-- ✅ **Full security audit** - See [SECURITY_AUDIT.md](internal/SECURITY_AUDIT.md)
+- ✅ **Full security audit** - See [SECURITY_AUDIT.md](../completed/audits/SECURITY_AUDIT.md)
 
 The app does exactly what it says: records audio and transcribes it locally.
 

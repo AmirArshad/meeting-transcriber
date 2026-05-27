@@ -38,7 +38,7 @@ Online meetings are a tax on memory. The good options for getting transcripts ba
 - Summary models/runtimes download only after you explicitly start setup from Settings.
 - Open source — audit the code yourself.
 - Third-party licenses and attributions: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-- See [docs/internal/SECURITY_AUDIT.md](docs/internal/SECURITY_AUDIT.md) for the full security write-up.
+- See [docs/completed/audits/SECURITY_AUDIT.md](docs/completed/audits/SECURITY_AUDIT.md) for the full security write-up.
 
 ## Install
 
@@ -150,7 +150,7 @@ For recorder changes, also run the manual smoke checklist in `tests/manual/recor
 
 ## Languages
 
-The UI exposes 12 commonly used languages: English, Spanish, French, German, Italian, Portuguese, Mandarin/Cantonese, Japanese, Korean, Farsi/Persian, Punjabi, Hindi. Whisper itself supports 99 — extending the list is a one-line UI change. See [docs/TRANSCRIPTION_GUIDE.md](docs/TRANSCRIPTION_GUIDE.md) for tips.
+The UI exposes 12 commonly used languages: English, Spanish, French, German, Italian, Portuguese, Mandarin/Cantonese, Japanese, Korean, Farsi/Persian, Punjabi, Hindi. Whisper itself supports 99 — extending the list is a one-line UI change. See [docs/guides/TRANSCRIPTION_GUIDE.md](docs/guides/TRANSCRIPTION_GUIDE.md) for tips.
 
 ## Requirements
 
@@ -182,32 +182,37 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
 ## Documentation
 
 - **Users**
-  - [Troubleshooting](docs/TROUBLESHOOTING.md) — common issues and fixes
-  - [Transcription tips](docs/TRANSCRIPTION_GUIDE.md)
-  - [Meeting features](docs/MEETING_TRANSCRIPTION.md) — history, recovery, metadata
-  - [macOS install guide](docs/MACOS_INSTALLATION.md)
+  - [Documentation index](docs/README.md)
+  - [Troubleshooting](docs/guides/TROUBLESHOOTING.md) — common issues and fixes
+  - [Transcription tips](docs/guides/TRANSCRIPTION_GUIDE.md)
+  - [Meeting features](docs/guides/MEETING_TRANSCRIPTION.md) — history, recovery, metadata
+  - [macOS install guide](docs/guides/MACOS_INSTALLATION.md)
 - **Developers**
   - [Agent guide / invariants](AGENTS.md) — architecture, IPC contracts, compute queue, validation expectations
   - [Build instructions](docs/development/BUILD_INSTRUCTIONS.md)
   - [Testing guide](docs/development/TESTING.md)
+  - [Backend development notes](docs/development/BACKEND.md)
   - [GPU setup (CUDA)](docs/development/SETUP_GPU.md)
   - [Local AI model catalog](docs/development/LOCAL_AI_MODEL_CATALOG.md)
   - [Installer implementation](docs/development/INSTALLER_IMPLEMENTATION.md)
-  - [Code review remediation (May 2026)](docs/internal/CODE_REVIEW_REMEDIATION_2026-05.md)
+  - [Code review remediation (May 2026)](docs/completed/CODE_REVIEW_REMEDIATION_2026-05.md)
 - **Roadmap & features**
-  - [Roadmap](docs/ROADMAP.md)
-  - [Speaker diarization](docs/features/FEATURE_SPEAKER_DIARIZATION.md)
-  - [Transcript summaries](docs/features/FEATURE_TRANSCRIPT_SUMMARIES.md)
-  - [Local AI feature plan](docs/features/PLAN_LOCAL_AI_FEATURES.md)
-  - [Setup wizard](docs/features/FEATURE_SETUP_WIZARD.md)
-  - [Audio visualizer](docs/features/FEATURE_AUDIO_VISUALIZER.md)
-  - [Update checks](docs/features/FEATURE_AUTO_UPDATER.md)
-  - [JSON-based event system](docs/features/json-based-events.md)
+  - [Roadmap](docs/initiatives/ROADMAP.md)
+  - [Aurison codebase refactor](docs/initiatives/AURISON_CODEBASE_REFACTOR.md)
+  - [Acoustic echo cancellation](docs/initiatives/FEATURE_ECHO_CANCELLATION.md)
+  - [Linux support](docs/initiatives/LINUX_SUPPORT.md)
+  - [Speaker diarization](docs/completed/FEATURE_SPEAKER_DIARIZATION.md)
+  - [Transcript summaries](docs/completed/FEATURE_TRANSCRIPT_SUMMARIES.md)
+  - [Local AI feature plan](docs/completed/PLAN_LOCAL_AI_FEATURES.md)
+  - [Setup wizard](docs/initiatives/FEATURE_SETUP_WIZARD.md)
+  - [Audio visualizer](docs/completed/FEATURE_AUDIO_VISUALIZER.md)
+  - [Update checks](docs/completed/FEATURE_AUTO_UPDATER.md)
+  - [JSON-based event system](docs/completed/json-based-events.md)
 
 ## Roadmap (short version)
 
 **Shipped recently**
-- Security and reliability hardening (May 2026): IPC path guards, sensitive-text redaction, trusted update downloads, single GPU compute queue with wall-clock timeouts, recording lifecycle guards (`RECORDER_BUSY`, session-aware failures), recorder `success: false` results, summary sidecar staging, and expanded regression tests. See [docs/internal/CODE_REVIEW_REMEDIATION_2026-05.md](docs/internal/CODE_REVIEW_REMEDIATION_2026-05.md).
+- Security and reliability hardening (May 2026): IPC path guards, sensitive-text redaction, trusted update downloads, single GPU compute queue with wall-clock timeouts, recording lifecycle guards (`RECORDER_BUSY`, session-aware failures), recorder `success: false` results, summary sidecar staging, and expanded regression tests. See [docs/completed/CODE_REVIEW_REMEDIATION_2026-05.md](docs/completed/CODE_REVIEW_REMEDIATION_2026-05.md).
 - Optional local AI add-on foundations: Settings setup cards, pinned summary model/runtime catalog, secure diarization token storage, automatic post-transcription speaker labels when setup is ready, and user-triggered summary generation with History Transcript/Summary tabs.
 - Premium dark UI overhaul: vertical icon rail, top-bar pane, expressive dual-channel waveform with peak-hold and interpolation, custom rAF-driven audio scrubber, multi-select with bulk delete, sidebar search, relative-time meeting timestamps, developer console drawer.
 - Markdown transcript rendering in the meeting viewer (timestamps as accent pill chips), with the raw `.md` preserved as the copy/save source of truth.
@@ -224,7 +229,7 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
 - Export to SRT, VTT, DOCX, JSON.
 - Acoustic echo cancellation when desktop audio bleeds into the mic.
 
-Full plan: [docs/ROADMAP.md](docs/ROADMAP.md).
+Full plan: [docs/initiatives/ROADMAP.md](docs/initiatives/ROADMAP.md).
 
 ## Contributing
 

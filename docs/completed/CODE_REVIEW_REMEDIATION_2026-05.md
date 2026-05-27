@@ -1,6 +1,6 @@
 # Code Review Remediation (May 2026)
 
-This document summarizes the security, reliability, and performance hardening merged to `master` in May 2026. It is aimed at developers and reviewers; the full phased checklist lives in [`TODO_ARCHIVE_2026-05-20_CODE_REVIEW_REMEDIATION.md`](TODO_ARCHIVE_2026-05-20_CODE_REVIEW_REMEDIATION.md).
+This document summarizes the security, reliability, and performance hardening merged to `master` in May 2026. It is aimed at developers and reviewers; the full phased checklist lives in [`TODO_ARCHIVE_2026-05-20_CODE_REVIEW_REMEDIATION.md`](todo-archives/TODO_ARCHIVE_2026-05-20_CODE_REVIEW_REMEDIATION.md).
 
 Canonical runtime invariants are in root [`AGENTS.md`](../../AGENTS.md).
 

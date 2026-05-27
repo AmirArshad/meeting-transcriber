@@ -26,7 +26,7 @@ Review baseline: full diff `master...fix/full-audit-remediation` at `d407cfb`
 
 Status at archive time: automated remediation work was complete. Remaining notes were manual validation reminders from the already-merged remediation branch.
 
-The detailed historical remediation archive remains in `docs/internal/FULL_AUDIT_REMEDIATION_ARCHIVE.md`.
+The detailed historical remediation archive remains in `docs/completed/FULL_AUDIT_REMEDIATION_ARCHIVE.md`.
 
 ### Completed Second-Pass Review Fixes
 

@@ -15,9 +15,9 @@ Canonical architecture and invariants: root `AGENTS.md` (shared with OpenCode). 
 | Local dev & `.venv` | `README.md` → Develop |
 | Tests on a new machine | `docs/development/TESTING.md` |
 | Packaging / installers | `docs/development/BUILD_INSTRUCTIONS.md` |
-| Recorder stdout JSON | `docs/features/json-based-events.md` + `.cursor/rules/recorder-stdout-contract.mdc` |
+| Recorder stdout JSON | `docs/completed/json-based-events.md` + `.cursor/rules/recorder-stdout-contract.mdc` |
 | AI catalog pins | `docs/development/LOCAL_AI_MODEL_CATALOG.md` + `.cursor/rules/local-ai-addons.mdc` |
-| macOS capture (shipped vs planned) | `docs/features/MACOS_AUDIO_ARCHITECTURE.md` |
+| macOS capture (shipped vs planned) | `docs/initiatives/MACOS_AUDIO_ARCHITECTURE.md` |
 | Manual recorder QA | `tests/manual/recording-smoke-checklist.md` |
 | Manual AI add-ons QA | `tests/manual/local-ai-addons-checklist.md` |
 

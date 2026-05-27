@@ -46,7 +46,7 @@ xattr -d com.apple.quarantine ~/Downloads/AvaNevis-Setup-*.dmg
 - Yes! You can verify the source code on GitHub
 - The app is built by GitHub Actions (public build logs)
 - No telemetry or tracking - 100% local processing
-- See [SECURITY_AUDIT.md](internal/SECURITY_AUDIT.md) for the November 2025 audit and [CODE_REVIEW_REMEDIATION_2026-05.md](internal/CODE_REVIEW_REMEDIATION_2026-05.md) for May 2026 hardening
+- See [SECURITY_AUDIT.md](../completed/audits/SECURITY_AUDIT.md) for the November 2025 audit and [CODE_REVIEW_REMEDIATION_2026-05.md](../completed/CODE_REVIEW_REMEDIATION_2026-05.md) for May 2026 hardening
 
 ---
 

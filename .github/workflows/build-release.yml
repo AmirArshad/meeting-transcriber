@@ -264,7 +264,7 @@ jobs:
           ### Help
 
           - Documentation: https://github.com/${{ github.repository }}/blob/master/README.md
-          - Security audit: https://github.com/${{ github.repository }}/blob/master/docs/internal/SECURITY_AUDIT.md
+          - Security audit: https://github.com/${{ github.repository }}/blob/master/docs/completed/audits/SECURITY_AUDIT.md
           - Third-party notices: https://github.com/${{ github.repository }}/blob/master/THIRD_PARTY_NOTICES.md
           EOF
 

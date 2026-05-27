@@ -438,4 +438,4 @@ Manual coverage:
 - [Speaker diarization research](FEATURE_SPEAKER_DIARIZATION.md)
 - [Transcript summaries research](FEATURE_TRANSCRIPT_SUMMARIES.md)
 - [Local AI implementation plan](PLAN_LOCAL_AI_FEATURES.md)
-- [Roadmap](../ROADMAP.md)
+- [Roadmap](../initiatives/ROADMAP.md)

@@ -26,7 +26,7 @@ Goal: upgrade to the latest stable, trustworthy Electron release while preservin
 ## Phase 0 - Branch And Planning Hygiene
 
 - [x] Create dedicated branch `upgrade/electron-latest`.
-- [x] Archive old root todo/plan content under `docs/internal/TODO_ARCHIVE_2026-05-15.md`.
+- [x] Archive old root todo/plan content under `docs/completed/todo-archives/TODO_ARCHIVE_2026-05-15.md`.
 - [x] Replace root `todo.md` with this focused Electron upgrade plan.
 - [x] Commit planning and CI test-runner cleanup before starting dependency upgrades.
 

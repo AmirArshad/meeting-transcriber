@@ -6,7 +6,7 @@ alwaysApply: false
 
 # Recorder stdout contract
 
-Reference: `docs/features/json-based-events.md` (migration complete — preserve contract unless updating both sides).
+Reference: `docs/completed/json-based-events.md` (migration complete — preserve contract unless updating both sides).
 
 - Recorder **control flow** uses structured **stdout** JSON: `levels`, `event`, `warning`, `error`. stderr is debug-only; do not drive startup or errors from stderr.
 - Electron parses via `parseRecorderStdoutChunk` in `src/main.js` (line-by-line stdout).

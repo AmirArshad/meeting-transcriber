@@ -107,7 +107,7 @@ The installer includes:
 
 - ✅ Electron application (UI)
 - ✅ Embedded Python 3.11.9 runtime
-- ✅ Platform Python stack from `requirements-*-build.txt` (Windows: `faster-whisper`, `soxr`, `numpy`, …; macOS: `lightning-whisper-mlx`, `scipy`, `mlx`, `torch`, …). See `docs/development/INSTALLER_SIZE_NOTES.md` for 1b/2/4 pin differences; Dependabot handling: `docs/development/DEPENDABOT_TRIAGE.md`.
+- ✅ Platform Python stack from `requirements-*-build.txt` (Windows: `faster-whisper`, `soxr`, `numpy`, …; macOS: `lightning-whisper-mlx`, `scipy`, `mlx`, `torch`, …). See [installer size notes](../completed/INSTALLER_SIZE_NOTES.md) for 1b/2/4 pin differences; Dependabot handling: [Dependabot triage](DEPENDABOT_TRIAGE.md).
 - ✅ ffmpeg binary
 - ✅ Backend Python scripts
 

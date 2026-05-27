@@ -95,7 +95,7 @@ you must update all of:
 - `src/main-process-helpers.js`
 - `tests/js/main-process-helpers.test.js`
 
-The JSON-event migration in `docs/features/json-based-events.md` is complete for recorder control flow. Preserve the stdout JSON control contract unless you update both sides together.
+The JSON-event migration in `docs/completed/json-based-events.md` is complete for recorder control flow. Preserve the stdout JSON control contract unless you update both sides together.
 
 ### Keep recorder output contracts stable
 

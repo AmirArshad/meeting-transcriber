@@ -73,9 +73,9 @@ Whisper is much better on clean, turn-based speech than on several people talkin
 
 ## Related Docs
 
-- Root [`AGENTS.md`](../AGENTS.md) — transcription cache locations, offline behavior, compute queue
-- `docs/MEETING_TRANSCRIPTION.md`
-- `docs/features/FEATURE_SPEAKER_DIARIZATION.md`
-- `docs/features/FEATURE_TRANSCRIPT_SUMMARIES.md`
-- `docs/TROUBLESHOOTING.md`
-- `docs/development/SETUP_GPU.md`
+- Root [`AGENTS.md`](../../AGENTS.md) — transcription cache locations, offline behavior, compute queue
+- [Meeting transcription and history](MEETING_TRANSCRIPTION.md)
+- [Speaker diarization](../completed/FEATURE_SPEAKER_DIARIZATION.md)
+- [Transcript summaries](../completed/FEATURE_TRANSCRIPT_SUMMARIES.md)
+- [Troubleshooting](TROUBLESHOOTING.md)
+- [GPU setup](../development/SETUP_GPU.md)
