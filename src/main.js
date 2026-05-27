@@ -21,6 +21,7 @@ const {
   buildDiarizationOutputPath,
   buildGuidedTranscriptTempPath,
   buildPythonModuleArgs,
+  buildTranscriptionCliArgs,
   runGuidedTranscriptionProcess,
   buildTranscriberArgs,
   buildHuggingFaceOfflineEnv,
@@ -48,6 +49,7 @@ const {
   parseRecorderStdoutChunk,
   parsePythonVersion,
   parseAiBackendProgressLine,
+  parseCheckCudaStatus,
   resolveExternalUrl,
   getLegalNoticesPath,
   resolveTranscriptionAudioFile,
@@ -58,6 +60,9 @@ const {
   normalizeModelSize,
   buildRecorderBusyResponse,
   isRecorderBusy,
+  isRetryableCudaTranscriptionError,
+  shouldForceCpuTranscriptionFromCudaStatus,
+  REQUIRED_CUDA_RUNTIME_DLLS,
   SPAWN_LOG_BUFFER_MAX_CHARS,
   SPAWN_JSON_RESULT_BUFFER_MAX_CHARS,
   redactSensitiveText,
@@ -117,6 +122,7 @@ let allowImmediateQuit = false;
 let pendingUpdateInfo = null;
 let diarizationDependencySitePackagesCache = null;
 let recordingSessionCounter = 0;
+let cachedCudaStatus = null;
 
 function getSafeStorage() {
   // On macOS, Electron safeStorage can prompt Keychain access. Keep this lazy
@@ -567,6 +573,39 @@ function formatDurationForTranscript(durationSeconds) {
   return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
+function sanitizeTranscriptionError(errorText) {
+  return String(errorText || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 300);
+}
+
+function buildTranscriptionPlaceholderMarkdown({
+  audioPath,
+  duration = 0,
+  status = 'failed',
+  errorMessage = '',
+} = {}) {
+  const statusLabel = status === 'pending' ? 'Pending' : 'Failed';
+  const normalizedError = sanitizeTranscriptionError(errorMessage);
+  const lines = [
+    '# Recording Awaiting Transcription',
+    '',
+    `**File:** ${path.basename(String(audioPath || 'recording'))}`,
+    `**Date:** ${new Date().toISOString().replace('T', ' ').slice(0, 19)}`,
+    `**Duration:** ${formatDurationForTranscript(duration)}`,
+    `**Status:** Transcription ${statusLabel.toLowerCase()}`,
+    '',
+    'The recording was saved successfully, but a transcript is not available yet.',
+    'Use Retry transcription in AvaNevis History to generate a transcript.',
+  ];
+  if (normalizedError) {
+    lines.push('', `**Last error:** ${normalizedError}`);
+  }
+  lines.push('');
+  return lines.join('\n');
+}
+
 function addMeetingToHistory(meetingData) {
   let resolvedAudioPath;
   let resolvedTranscriptPath;
@@ -579,7 +618,7 @@ function addMeetingToHistory(meetingData) {
   }
 
   return new Promise((resolve, reject) => {
-    const { duration, language, model, title } = meetingData;
+    const { duration, language, model, title, transcriptionStatus, transcriptionError } = meetingData;
     const recordingsDir = getRecordingsDir();
     const args = getBackendModuleArgs('meeting_manager', [
       '--recordings-dir', recordingsDir,
@@ -593,6 +632,12 @@ function addMeetingToHistory(meetingData) {
 
     if (title) {
       args.push('--title', title);
+    }
+    if (transcriptionStatus) {
+      args.push('--transcription-status', String(transcriptionStatus));
+    }
+    if (transcriptionError) {
+      args.push('--transcription-error', sanitizeTranscriptionError(transcriptionError));
     }
 
     const python = spawnTrackedPython(args, { cwd: pythonConfig.backendPath });
@@ -809,6 +854,27 @@ function getTranscriptionRuntimeEnv(modelSize, cudaOptions = {}) {
     modelCached: isTranscriptionModelCached(modelSize, downloadCheck),
     baseEnv: buildCudaRuntimeEnv({}, cudaOptions),
   });
+}
+
+function updateCachedCudaStatus(status) {
+  if (!status || typeof status !== 'object') {
+    return;
+  }
+  cachedCudaStatus = {
+    ...status,
+    checkedAt: Date.now(),
+  };
+}
+
+function getCachedCudaStatus() {
+  if (!cachedCudaStatus || typeof cachedCudaStatus !== 'object') {
+    return null;
+  }
+  const maxAgeMs = 5 * 60 * 1000;
+  if (!Number.isFinite(cachedCudaStatus.checkedAt) || Date.now() - cachedCudaStatus.checkedAt > maxAgeMs) {
+    return null;
+  }
+  return cachedCudaStatus;
 }
 
 function buildCudaRuntimeEnv(extra = {}, { includeManagedDiarization = false } = {}) {
@@ -3237,6 +3303,129 @@ ipcMain.handle('stop-recording', async (event) => {
   });
 });
 
+function runTranscriptionProcess({
+  audioFile,
+  language,
+  modelSize,
+  device = 'auto',
+  registerProcess,
+} = {}) {
+  return new Promise((resolve, reject) => {
+    const python = spawnTrackedPython(buildTranscriptionCliArgs({
+      platform: process.platform,
+      arch: process.arch,
+      audioFile,
+      language: language || 'en',
+      modelSize,
+      device,
+    }), { cwd: pythonConfig.backendPath, env: getTranscriptionRuntimeEnv(modelSize) });
+
+    if (typeof registerProcess === 'function') {
+      registerProcess(python);
+    }
+
+    let output = '';
+    let errorOutput = '';
+    let hasCompleted = false;
+    const stdoutOverflow = { overflowed: false };
+    const progressRedactor = createLineChunkRedactor();
+
+    python.stdout.on('data', (data) => {
+      output = appendSpawnJsonStdout(output, data, stdoutOverflow);
+    });
+
+    python.stderr.on('data', (data) => {
+      const stderrChunk = data.toString();
+      errorOutput = appendSpawnLogBuffer(errorOutput, stderrChunk);
+      sendRedactedProgress('transcription-progress', stderrChunk, progressRedactor);
+    });
+
+    python.on('close', (code) => {
+      if (hasCompleted) return;
+      hasCompleted = true;
+      flushRedactedProgress('transcription-progress', progressRedactor);
+
+      if (stdoutOverflow.overflowed) {
+        reject(new Error('Transcription output exceeded the maximum allowed size.'));
+        return;
+      }
+
+      if (output.trim()) {
+        try {
+          const result = JSON.parse(output);
+          if (result.text !== undefined || result.segments !== undefined) {
+            resolve({ ...result, transcriptionDevice: device });
+            return;
+          }
+        } catch (error) {
+          // Continue to stderr/error classification.
+        }
+      }
+
+      if (code === 0) {
+        reject(new Error('Transcription produced no valid output'));
+        return;
+      }
+
+      reject(new Error(`Transcription failed: ${errorOutput || 'Unknown error'}`));
+    });
+
+    python.on('error', (error) => {
+      if (hasCompleted) {
+        return;
+      }
+      hasCompleted = true;
+      reject(error);
+    });
+  });
+}
+
+function checkCudaRuntimeStatus() {
+  return new Promise((resolve) => {
+    if (process.platform !== 'win32') {
+      resolve({
+        installed: false,
+        deviceAvailable: false,
+        runtimeLoadable: false,
+        missingLibraries: [],
+        runtime: 'ctranslate2',
+        error: 'CUDA runtime checks are only supported on Windows.',
+      });
+      return;
+    }
+
+    const python = spawnTrackedPython([
+      '-c',
+      `import ctypes\nmissing=[]\nprobe_error=""\nrequired=${JSON.stringify(REQUIRED_CUDA_RUNTIME_DLLS)}\n` +
+      `try:\n    import ctranslate2\n    count=ctranslate2.get_cuda_device_count()\nexcept Exception as exc:\n    count=0\n    probe_error=str(exc)\n` +
+      `for dll in required:\n    try:\n        ctypes.WinDLL(dll)\n    except Exception:\n        missing.append(dll)\n` +
+      `runtime_loadable=(len(missing)==0)\nprint("deviceAvailable:"+str(count>0))\nprint("runtimeLoadable:"+str(runtime_loadable))\nprint("missingLibraries:"+",".join(missing))\nprint("runtime:ctranslate2")\nprint("error:"+probe_error)`
+    ], { env: buildCudaRuntimeEnv() });
+
+    let output = '';
+    python.stdout.on('data', (data) => {
+      output = appendSpawnLogBuffer(output, data);
+    });
+    python.on('close', () => {
+      const status = parseCheckCudaStatus(output);
+      updateCachedCudaStatus(status);
+      resolve(status);
+    });
+    python.on('error', (error) => {
+      const status = {
+        installed: false,
+        deviceAvailable: false,
+        runtimeLoadable: false,
+        missingLibraries: [],
+        runtime: 'ctranslate2',
+        error: String(error && error.message ? error.message : error),
+      };
+      updateCachedCudaStatus(status);
+      resolve(status);
+    });
+  });
+}
+
 /**
  * Transcribe audio file
  */
@@ -3255,72 +3444,45 @@ ipcMain.handle('transcribe-audio', async (event, options) => {
   });
   audioFile = assertSafeExistingRecordingAudioPath(audioFile);
 
+  const shouldPreemptiveCpuRetry = process.platform === 'win32'
+    && shouldForceCpuTranscriptionFromCudaStatus(getCachedCudaStatus());
+
   return enqueueAiComputeAction(() => runWallClockComputeAction({
     timeoutMs: getTranscriptionComputeTimeoutMs(modelSize),
     label: 'Transcription',
     terminateProcess: terminateProcessBestEffort,
-    action: (registerProcess) => new Promise((resolve, reject) => {
-      const python = spawnTrackedPython(getTranscriberArgs([
-        '--file', audioFile,
-        '--language', language || 'en',
-        '--model', modelSize,
-        '--json',
-      ]), { cwd: pythonConfig.backendPath, env: getTranscriptionRuntimeEnv(modelSize) });
-      registerProcess(python);
-
-      let output = '';
-      let errorOutput = '';
-      let hasCompleted = false;
-      const stdoutOverflow = { overflowed: false };
-      const progressRedactor = createLineChunkRedactor();
-
-      python.stdout.on('data', (data) => {
-        output = appendSpawnJsonStdout(output, data, stdoutOverflow);
-      });
-
-      python.stderr.on('data', (data) => {
-        const stderrChunk = data.toString();
-        errorOutput = appendSpawnLogBuffer(errorOutput, stderrChunk);
-        sendRedactedProgress('transcription-progress', stderrChunk, progressRedactor);
-      });
-
-      python.on('close', (code) => {
-        if (hasCompleted) return;
-        hasCompleted = true;
-        flushRedactedProgress('transcription-progress', progressRedactor);
-
-        if (stdoutOverflow.overflowed) {
-          reject(new Error('Transcription output exceeded the maximum allowed size.'));
-          return;
+    action: async (registerProcess) => {
+      if (shouldPreemptiveCpuRetry) {
+        sendToRenderer(
+          'transcription-progress',
+          'CUDA runtime is not loadable on this system. Starting transcription on CPU.\n',
+        );
+      }
+      try {
+        return await runTranscriptionProcess({
+          audioFile,
+          language,
+          modelSize,
+          device: shouldPreemptiveCpuRetry ? 'cpu' : 'auto',
+          registerProcess,
+        });
+      } catch (error) {
+        if (!isRetryableCudaTranscriptionError(error && error.message)) {
+          throw error;
         }
-
-        if (output.trim()) {
-          try {
-            const result = JSON.parse(output);
-            if (result.text !== undefined || result.segments !== undefined) {
-              resolve(result);
-              return;
-            }
-          } catch (e) {
-            // JSON parsing failed, continue to error handling
-          }
-        }
-
-        if (code === 0) {
-          reject(new Error('Transcription produced no valid output'));
-        } else {
-          reject(new Error(`Transcription failed: ${errorOutput || 'Unknown error'}`));
-        }
-      });
-
-      python.on('error', (error) => {
-        if (hasCompleted) {
-          return;
-        }
-        hasCompleted = true;
-        reject(error);
-      });
-    }),
+        sendToRenderer(
+          'transcription-progress',
+          'GPU transcription failed because CUDA runtime libraries could not be loaded. Retrying on CPU; this may take significantly longer.\n',
+        );
+        return runTranscriptionProcess({
+          audioFile,
+          language,
+          modelSize,
+          device: 'cpu',
+          registerProcess,
+        });
+      }
+    },
   }));
 });
 
@@ -3633,6 +3795,10 @@ ipcMain.handle('generate-summary', async (event, options = {}) => {
   if (!meeting || !meeting.transcriptPath) {
     clearActiveSummaryGeneration();
     throw new Error('Meeting transcript is not available for summary generation.');
+  }
+  if (meeting.transcriptionStatus && meeting.transcriptionStatus !== 'completed') {
+    clearActiveSummaryGeneration();
+    throw new Error('Summary generation is available after transcription completes. Retry transcription from History first.');
   }
 
   let aiStatus;
@@ -4058,6 +4224,139 @@ ipcMain.handle('add-meeting', async (event, meetingData) => {
   return addMeetingToHistory(meetingData);
 });
 
+ipcMain.handle('retry-transcription', async (event, options = {}) => {
+  assertTrustedRendererSender(event);
+
+  const meetingId = String(options.meetingId || '').trim();
+  if (!meetingId) {
+    throw new Error('retry-transcription requires a meetingId');
+  }
+
+  const recordingsDir = getRecordingsDir();
+  const meeting = await new Promise((resolve, reject) => {
+    const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
+      '--recordings-dir', recordingsDir,
+      'get',
+      meetingId,
+    ]), { cwd: pythonConfig.backendPath });
+    const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
+
+    python.on('close', (code) => {
+      try {
+        processOutput.assertStdoutWithinLimit();
+      } catch (error) {
+        reject(error);
+        return;
+      }
+      if (code !== 0) {
+        reject(new Error(processOutput.getStderr().trim() || 'Meeting not found.'));
+        return;
+      }
+      try {
+        resolve(JSON.parse(processOutput.getStdout()));
+      } catch (error) {
+        reject(new Error(`Failed to parse meeting details: ${error.message}`));
+      }
+    });
+    python.on('error', reject);
+  });
+
+  if (!meeting || !meeting.audioPath || !meeting.transcriptPath) {
+    throw new Error('Meeting is missing audio or transcript path.');
+  }
+
+  const normalizedModel = requireAllowedModelSize(options.modelSize || meeting.model || 'small');
+  const normalizedLanguage = String(options.language || meeting.language || 'en');
+  const audioFile = assertSafeExistingRecordingAudioPath(meeting.audioPath);
+  const transcriptPath = assertSafeExistingTranscriptPath(meeting.transcriptPath);
+
+  const shouldPreemptiveCpuRetry = process.platform === 'win32'
+    && shouldForceCpuTranscriptionFromCudaStatus(getCachedCudaStatus());
+
+  const result = await enqueueAiComputeAction(() => runWallClockComputeAction({
+    timeoutMs: getTranscriptionComputeTimeoutMs(normalizedModel),
+    label: 'Transcription retry',
+    terminateProcess: terminateProcessBestEffort,
+    action: async (registerProcess) => {
+      if (shouldPreemptiveCpuRetry) {
+        sendToRenderer(
+          'transcription-progress',
+          'CUDA runtime is not loadable on this system. Starting transcription retry on CPU.\n',
+        );
+      }
+      try {
+        return await runTranscriptionProcess({
+          audioFile,
+          language: normalizedLanguage,
+          modelSize: normalizedModel,
+          device: shouldPreemptiveCpuRetry ? 'cpu' : 'auto',
+          registerProcess,
+        });
+      } catch (error) {
+        if (!isRetryableCudaTranscriptionError(error && error.message)) {
+          throw error;
+        }
+        sendToRenderer(
+          'transcription-progress',
+          'GPU transcription failed because CUDA runtime libraries could not be loaded. Retrying on CPU; this may take significantly longer.\n',
+        );
+        return runTranscriptionProcess({
+          audioFile,
+          language: normalizedLanguage,
+          modelSize: normalizedModel,
+          device: 'cpu',
+          registerProcess,
+        });
+      }
+    },
+  }));
+
+  const transcribedPath = assertSafeExistingTranscriptPath(result.output_file || transcriptPath);
+  if (path.resolve(transcribedPath) !== path.resolve(transcriptPath)) {
+    const transcriptContent = await fs.promises.readFile(transcribedPath, 'utf8');
+    await fs.promises.writeFile(transcriptPath, transcriptContent, 'utf8');
+  }
+
+  const updatedMeeting = await new Promise((resolve, reject) => {
+    const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
+      '--recordings-dir', recordingsDir,
+      'update-transcription',
+      meetingId,
+      '--status', 'completed',
+      '--language', normalizedLanguage,
+      '--model', normalizedModel,
+      '--duration', String(result.duration || 0),
+      '--clear-error',
+    ]), { cwd: pythonConfig.backendPath });
+    const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
+    python.on('close', (code) => {
+      try {
+        processOutput.assertStdoutWithinLimit();
+      } catch (error) {
+        reject(error);
+        return;
+      }
+      if (code !== 0) {
+        reject(new Error(processOutput.getStderr().trim() || 'Failed to update meeting status.'));
+        return;
+      }
+      try {
+        resolve(JSON.parse(processOutput.getStdout()));
+      } catch (error) {
+        reject(new Error(`Failed to parse updated meeting: ${error.message}`));
+      }
+    });
+    python.on('error', reject);
+  });
+
+  return {
+    ...result,
+    output_file: transcriptPath,
+    transcriptPath,
+    meeting: updatedMeeting,
+  };
+});
+
 /**
  * Update editable meeting metadata (currently: display title).
  *
@@ -4300,26 +4599,28 @@ ipcMain.handle('check-gpu', async () => {
  */
 ipcMain.handle('check-cuda', async () => {
   return new Promise((resolve) => {
+    if (process.platform !== 'win32') {
+      resolve({
+        installed: false,
+        deviceAvailable: false,
+        runtimeLoadable: false,
+        missingLibraries: [],
+        runtime: 'ctranslate2',
+        error: 'CUDA runtime checks are only supported on Windows.',
+        version: null,
+        packages: getTranscriptionCudaPackages(),
+        pythonVersion: null,
+        pythonSupportedForInstall: false,
+        pythonExecutable: pythonConfig.pythonExe,
+      });
+      return;
+    }
     const cudaPackages = getTranscriptionCudaPackages();
-    const python = spawnTrackedPython([
-      '-c',
-      'try:\n    import ctranslate2\n    count = ctranslate2.get_cuda_device_count()\n    print("cuda_available:" + str(count > 0))\n    print("cuda_device_count:" + str(count))\n    print("cuda_runtime:ctranslate2")\nexcept Exception as exc:\n    print("cuda_available:False")\n    print("cuda_error:" + str(exc))'
-    ], { env: buildCudaRuntimeEnv() });
-
-    let output = '';
-
-    python.stdout.on('data', (data) => {
-      output = appendSpawnLogBuffer(output, data);
-    });
-
-    python.on('close', () => {
-      const cudaAvailable = output.includes('cuda_available:True');
-      const versionMatch = output.match(/cuda_version:([\d.]+)/);
+    checkCudaRuntimeStatus().then((parsedStatus) => {
       getActivePythonVersion().then((pythonVersion) => {
         resolve({
-          installed: cudaAvailable,
-          version: versionMatch ? versionMatch[1] : null,
-          runtime: 'ctranslate2',
+          ...parsedStatus,
+          version: null,
           packages: cudaPackages,
           pythonVersion: pythonVersion.parsed ? pythonVersion.parsed.version : pythonVersion.output,
           pythonSupportedForInstall: isSupportedCudaInstallPythonVersion(pythonVersion.parsed),
@@ -4327,14 +4628,27 @@ ipcMain.handle('check-cuda', async () => {
         });
       }).catch(() => {
         resolve({
-          installed: cudaAvailable,
-          version: versionMatch ? versionMatch[1] : null,
-          runtime: 'ctranslate2',
+          ...parsedStatus,
+          version: null,
           packages: cudaPackages,
           pythonVersion: null,
           pythonSupportedForInstall: false,
           pythonExecutable: pythonConfig.pythonExe,
         });
+      });
+    }).catch((error) => {
+      resolve({
+        installed: false,
+        deviceAvailable: false,
+        runtimeLoadable: false,
+        missingLibraries: [],
+        runtime: 'ctranslate2',
+        error: String(error && error.message ? error.message : error),
+        version: null,
+        packages: cudaPackages,
+        pythonVersion: null,
+        pythonSupportedForInstall: false,
+        pythonExecutable: pythonConfig.pythonExe,
       });
     });
   });

@@ -22,10 +22,15 @@ const {
   buildModelDownloadCheck,
   runGuidedTranscriptionProcess,
   buildPythonModuleArgs,
+  buildTranscriptionCliArgs,
   buildTranscriberArgs,
   buildTranscriptionCudaInstallArgs,
   buildTranscriptionCudaUninstallArgs,
   buildUnsupportedCudaPythonMessage,
+  isRetryableCudaTranscriptionError,
+  shouldForceCpuTranscriptionFromCudaStatus,
+  parseCheckCudaStatus,
+  REQUIRED_CUDA_RUNTIME_DLLS,
   cacheContainsModel,
   getPythonSitePackagesCandidates,
   getPyTorchCudaBinCandidates,
@@ -805,6 +810,56 @@ test('buildTranscriberArgs runs transcribers as modules for relative imports', (
   );
 });
 
+test('buildTranscriptionCliArgs includes --device for faster-whisper platforms', () => {
+  assert.deepEqual(
+    buildTranscriptionCliArgs({
+      platform: 'win32',
+      arch: 'x64',
+      audioFile: 'demo.opus',
+      language: 'en',
+      modelSize: 'small',
+      device: 'cpu',
+    }),
+    [
+      '-m',
+      'transcription.faster_whisper_transcriber',
+      '--file',
+      'demo.opus',
+      '--language',
+      'en',
+      '--model',
+      'small',
+      '--device',
+      'cpu',
+      '--json',
+    ],
+  );
+});
+
+test('buildTranscriptionCliArgs omits --device for mlx macOS arm64', () => {
+  assert.deepEqual(
+    buildTranscriptionCliArgs({
+      platform: 'darwin',
+      arch: 'arm64',
+      audioFile: 'demo.opus',
+      language: 'en',
+      modelSize: 'small',
+      device: 'cpu',
+    }),
+    [
+      '-m',
+      'transcription.mlx_whisper_transcriber',
+      '--file',
+      'demo.opus',
+      '--language',
+      'en',
+      '--model',
+      'small',
+      '--json',
+    ],
+  );
+});
+
 
 test('buildHuggingFaceOfflineEnv enables offline runtime model loading', () => {
   assert.deepEqual(
@@ -897,6 +952,62 @@ test('transcription CUDA installer only targets CTranslate2 runtime libraries', 
     buildTranscriptionCudaUninstallArgs(),
     ['-m', 'pip', 'uninstall', '-y', 'nvidia-cublas-cu12', 'nvidia-cudnn-cu12', 'torch', 'torchvision', 'torchaudio'],
   );
+});
+
+test('isRetryableCudaTranscriptionError detects runtime DLL/load failures', () => {
+  assert.equal(
+    isRetryableCudaTranscriptionError('RuntimeError: Library cublas64_12.dll is not found or cannot be loaded'),
+    true,
+  );
+  assert.equal(
+    isRetryableCudaTranscriptionError('ValueError: Audio file not found'),
+    false,
+  );
+});
+
+test('parseCheckCudaStatus reports missing CUDA runtime libraries separately', () => {
+  const status = parseCheckCudaStatus([
+    'deviceAvailable:True',
+    'runtimeLoadable:False',
+    'missingLibraries:cublas64_12.dll,cudnn64_9.dll',
+    'runtime:ctranslate2',
+  ].join('\n'));
+
+  assert.equal(status.installed, false);
+  assert.equal(status.deviceAvailable, true);
+  assert.equal(status.runtimeLoadable, false);
+  assert.deepEqual(status.missingLibraries, ['cublas64_12.dll', 'cudnn64_9.dll']);
+  assert.equal(status.runtime, 'ctranslate2');
+  assert.equal(Array.isArray(REQUIRED_CUDA_RUNTIME_DLLS), true);
+});
+
+test('parseCheckCudaStatus keeps probe error details for diagnostics', () => {
+  const status = parseCheckCudaStatus([
+    'deviceAvailable:False',
+    'runtimeLoadable:False',
+    'missingLibraries:',
+    'runtime:ctranslate2',
+    'error:No module named ctranslate2',
+  ].join('\n'));
+
+  assert.equal(status.installed, false);
+  assert.equal(status.error, 'No module named ctranslate2');
+});
+
+test('shouldForceCpuTranscriptionFromCudaStatus only when runtime is broken', () => {
+  assert.equal(shouldForceCpuTranscriptionFromCudaStatus(null), false);
+  assert.equal(shouldForceCpuTranscriptionFromCudaStatus({
+    deviceAvailable: true,
+    runtimeLoadable: false,
+  }), true);
+  assert.equal(shouldForceCpuTranscriptionFromCudaStatus({
+    deviceAvailable: true,
+    runtimeLoadable: true,
+  }), false);
+  assert.equal(shouldForceCpuTranscriptionFromCudaStatus({
+    deviceAvailable: false,
+    runtimeLoadable: false,
+  }), false);
 });
 
 

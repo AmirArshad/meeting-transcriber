@@ -19,6 +19,16 @@ const MACOS_PERMISSION_CHECK_TIMEOUT_MS = 8000;
 const FASTER_WHISPER_REQUIRED_CACHE_FILES = ['config.json', 'model.bin', 'tokenizer.json'];
 const FASTER_WHISPER_VOCABULARY_CACHE_FILES = ['vocabulary.txt', 'vocabulary.json'];
 const MLX_REQUIRED_CACHE_FILES = ['weights.npz', 'config.json'];
+const REQUIRED_CUDA_RUNTIME_DLLS = Object.freeze(['cublas64_12.dll', 'cublasLt64_12.dll', 'cudnn64_9.dll']);
+const RETRYABLE_CUDA_TRANSCRIPTION_ERROR_PATTERNS = Object.freeze([
+  'cublas64_12.dll',
+  'cublaslt64_12.dll',
+  'cudnn',
+  'cuda failed',
+  'cuda error',
+  'is not found or cannot be loaded',
+  'cannot be loaded',
+]);
 const AI_COMPUTE_TIMEOUT_MS = Object.freeze({
   diarization: 30 * 60 * 1000,
   guidedTranscription: 120 * 60 * 1000,
@@ -294,6 +304,26 @@ function buildPythonModuleArgs(moduleName, extraArgs = []) {
 
 function buildTranscriberArgs({ platform, arch, extraArgs = [] } = {}) {
   return buildPythonModuleArgs(getTranscriberModule(platform, arch), extraArgs);
+}
+
+function buildTranscriptionCliArgs({
+  platform,
+  arch,
+  audioFile,
+  language = 'en',
+  modelSize,
+  device = 'auto',
+} = {}) {
+  const extraArgs = [
+    '--file', audioFile,
+    '--language', language,
+    '--model', modelSize,
+  ];
+  if (!(platform === 'darwin' && arch === 'arm64')) {
+    extraArgs.push('--device', device);
+  }
+  extraArgs.push('--json');
+  return buildTranscriberArgs({ platform, arch, extraArgs });
 }
 
 function buildHuggingFaceOfflineEnv(extra = {}) {
@@ -1111,6 +1141,57 @@ function isModelDownloadErrorOutput(output) {
   return output.toLowerCase().includes('error') && !output.includes('non-critical');
 }
 
+function isRetryableCudaTranscriptionError(errorOutput) {
+  const normalized = String(errorOutput || '').toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return RETRYABLE_CUDA_TRANSCRIPTION_ERROR_PATTERNS.some((pattern) => normalized.includes(pattern));
+}
+
+function parseCheckCudaStatus(output = '') {
+  const lines = String(output || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const values = {};
+  for (const line of lines) {
+    const separator = line.indexOf(':');
+    if (separator <= 0) {
+      continue;
+    }
+    const key = line.slice(0, separator).trim();
+    const value = line.slice(separator + 1).trim();
+    values[key] = value;
+  }
+
+  const deviceAvailable = values.deviceAvailable === 'True' || values.deviceAvailable === 'true';
+  const runtimeLoadable = values.runtimeLoadable === 'True' || values.runtimeLoadable === 'true';
+  const missingLibraries = (values.missingLibraries || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const runtime = values.runtime || 'ctranslate2';
+  const error = values.error || '';
+
+  return {
+    installed: Boolean(deviceAvailable && runtimeLoadable && missingLibraries.length === 0),
+    deviceAvailable,
+    runtimeLoadable,
+    missingLibraries,
+    runtime,
+    error,
+  };
+}
+
+function shouldForceCpuTranscriptionFromCudaStatus(status = null) {
+  return Boolean(
+    status
+    && status.deviceAvailable === true
+    && status.runtimeLoadable === false
+  );
+}
+
 function getRecordingStopTimeout(recordingStartTime, now = Date.now()) {
   if (!Number.isFinite(recordingStartTime)) {
     return 30000;
@@ -1388,6 +1469,7 @@ module.exports = {
   buildQuitRecordingDialogOptions,
   buildModelDownloadCheck,
   buildPythonModuleArgs,
+  buildTranscriptionCliArgs,
   buildGuidedTranscriptTempPath,
   runGuidedTranscriptionProcess,
   buildTranscriberArgs,
@@ -1421,6 +1503,10 @@ module.exports = {
   getRecordingStopTimeout,
   resolveStopTimeoutAction,
   isModelDownloadErrorOutput,
+  shouldForceCpuTranscriptionFromCudaStatus,
+  isRetryableCudaTranscriptionError,
+  parseCheckCudaStatus,
+  REQUIRED_CUDA_RUNTIME_DLLS,
   isPathInsideDirectory,
   resolveExistingRealPath,
   isSafeRecordingsAudioPath,
