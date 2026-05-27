@@ -20,7 +20,7 @@ fsspec==2026.4.0
 hf-xet==1.5.0
 httpx==0.28.1
 httpcore==1.0.9
-typer==0.25.1
+typer==0.26.2
 typing-extensions==4.15.0
 anyio==4.13.0
 certifi==2026.5.20
