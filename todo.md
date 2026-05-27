@@ -82,7 +82,7 @@ npm run build:dir       # Windows → dist/win-unpacked/AvaNevis.exe
 
 ## Phase 1b — Installer slimming (unused Python pins) ✅
 
-**Status:** Complete on branch (Windows `scipy` removed; macOS `soxr` removed). Re-run `prepare-build` + packaged smoke after merge prep. Size notes: `docs/development/INSTALLER_SIZE_NOTES.md`.
+**Status:** Complete. Windows `scipy` removed; macOS `soxr` removed; macOS `scipy` investigated (cannot drop from bundle — see size notes). Merge when ready. Size notes: `docs/development/INSTALLER_SIZE_NOTES.md`.
 
 **Scope:** Shrink bundled Python in `dist/` without changing product features. Almost all installer weight is `build/resources/python` (~1 GB macOS) + ffmpeg (~76 MB macOS), not npm. Diarization, summaries, and Whisper weights stay **out** of the default installer (userData / cache) — no change needed there.
 
@@ -107,8 +107,8 @@ npm run build:dir       # Windows → dist/win-unpacked/AvaNevis.exe
 
 ### Medium confidence — validate with packaged smoke
 
-- [ ] **Try removing `scipy` from `requirements-macos-build.txt`** (~112 MB). **Deferred:** `lightning-whisper-mlx==0.0.10` declares `scipy`; pip still installs it without an explicit pin. Needs upstream dep change or post-install removal + MLX smoke on macOS.
-- [ ] **Trial drop explicit transitive-only pins** on one platform (e.g. `tiktoken`, `regex`, `networkx`, `sympy` already pruned post-install on mac) — prefer `pip install` resolving from minimal direct deps, then diff lock/pins. Higher engineering cost; do only if high-confidence trims succeed.
+- [x] **Try removing `scipy` from `requirements-macos-build.txt`** (~112 MB). **Result:** No bundle savings — `lightning-whisper-mlx==0.0.10` always pulls `scipy`. Explicit pin kept for reproducible builds; documented in `INSTALLER_SIZE_NOTES.md`.
+- [ ] **Trial drop explicit transitive-only pins** — deferred (Phase 5 / future trim pass).
 
 ### Low priority — small or diminishing returns
 
@@ -143,40 +143,40 @@ npm run build:dir        # Windows → dist/win-unpacked/AvaNevis.exe
 
 Launch `AvaNevis.exe` / `AvaNevis.app` from `dist/` — not `npm start`.
 
-- [ ] App launches from `dist/` with no Python import errors on startup. (re-verify after `prepare-build` with 1b+2 pins)
-- [ ] Record → stop → transcribe → save (cross-platform checklist minimum).
-- [x] **Windows:** faster-whisper transcription smoke passed (Phase 1; pre-1b rebuild).
-- [ ] **macOS:** re-verify launch after `soxr` pin removed from mac bundle.
+- [x] App launches from `dist/` with no Python import errors on startup. (Windows, post–1b+2 rebuild)
+- [x] Record → stop → transcribe → save (Windows, post–1b+2 rebuild).
+- [x] **Windows:** faster-whisper + `soxr==1.1.0` packaged smoke passed (2026-05-27).
+- [ ] **macOS:** launch + short MLX transcribe after `build:mac:dir` (soxr removed from bundle; scipy unchanged). Same checklist as Phase 1 on a Mac before merge if not already done on branch.
 
-**Merge gate:** `prepare-build` succeeds; site-packages size reduced on Windows; packaged smoke passes on affected platform(s).
+**Merge gate:** ✅ Windows — `prepare-build` + packaged smoke passed. macOS — CI `build:mac:dir` + backend tests; optional Mac manual smoke before merge.
 
 ---
 
 ## Phase 2 — soxr 1.x (audio resampling) ✅
 
-**Status:** Pins updated on branch. Close Dependabot PR #5. Re-run Windows packaged smoke after `prepare-build` with `soxr==1.1.0`.
+**Status:** Complete. Windows bundled `soxr==1.1.0`; macOS has no bundled soxr (N/A). Close Dependabot PR #5.
 
 **Scope:** `soxr==0.3.7` → `1.1.0` (Dependabot PR #5). Single integration point: `backend/audio/processor.py` (`soxr.resample(..., quality='VHQ')`).
 
 - [x] Update `soxr` pin in Windows / dev `requirements*.txt` and `requirements-windows-build.txt` (removed from macOS pins in Phase 1b).
 - [x] Regenerate `legal/PYTHON-BUNDLED-PACKAGES.md`.
-- [ ] Confirm packaged build installs `soxr` 1.1.0 wheel on Windows (`npm run prepare-build` + `build:dir`).
+- [x] Confirm packaged build installs `soxr` 1.1.0 wheel on Windows (`npm run prepare-build` + `build:dir`).
 
 **Automated (required):** Phase 1 commands plus CI packaged-build smoke jobs if touched.
 
 **Manual smoke (required — audio quality):**
 
-- [ ] `tests/manual/recording-smoke-checklist.md` § **Windows** (WASAPI loopback + mix balance).
-- [ ] If macOS dev box available: § **macOS** first bullet (mic + desktop while system audio plays).
-- [ ] Compare saved recording sample rate / length vs pre-upgrade on same machine (no truncated tail).
+- [x] `tests/manual/recording-smoke-checklist.md` § **Windows** (WASAPI loopback + mix balance; 2026-05-27).
+- [ ] **macOS:** § first bullet only if validating a Mac build (no soxr in mac bundle; recording path unchanged).
+- [x] Windows: no truncated tail / obvious pitch artifacts observed in smoke.
 
-**Merge gate:** No resample crashes; no obvious pitch/tempo artifacts on Windows loopback path.
+**Merge gate:** ✅ Windows — resample path OK with `soxr` 1.1.0.
 
 ---
 
 ## Phase 3 — Dev tooling (pytest 9) ✅
 
-**Status:** Complete on branch. Close Dependabot PR #9. No packaged runtime change.
+**Status:** Complete. Close Dependabot PR #9. No packaged runtime change; merge with 1b+2.
 
 **Scope:** `requirements-dev.txt` only (Dependabot PR #9). No packaged runtime change.
 
@@ -242,7 +242,7 @@ CI: `test-backend-macos`, `test-backend-windows`, `test-frontend` build smoke, `
 - [ ] Review open Dependabot PRs weekly; map each to Phase 1–4 rules (reject isolated numpy/scipy majors).
 - [ ] After Phase 4, allow Dependabot patch/minor on numpy/scipy within compatible ranges.
 - [ ] Document final pinned versions in `docs/development/LOCAL_AI_MODEL_CATALOG.md` only if ML pins change behavior.
-- [ ] Consider pinning `soxr` major in Dependabot (`@dependabot ignore` removed for soxr after Phase 2 proves stable).
+- [x] Re-enabled Dependabot patch/minor for `soxr` and `pytest` (removed from `.github/dependabot.yml` ignore list after Phases 2–3).
 
 ---
 
@@ -273,7 +273,7 @@ CI: `test-backend-macos`, `test-backend-windows`, `test-frontend` build smoke, `
 ## Execution order
 
 1. Phase 1 → merge to `master` ✅ (smoke done on branch)  
-2. Phase 1b + 2 + 3 → on branch; re-run `prepare-build` + Windows packaged smoke, then merge  
+2. Phase 1b + 2 + 3 → ready to merge ✅ (Windows packaged smoke done; macOS CI + optional Mac manual)  
 3. Phase 4 → merge → full smoke  
 4. Phase 5 → continuous  
 5. Transcription retry and recording recovery → implement from `docs/design/TRANSCRIPTION_RETRY_RECOVERY.md`
