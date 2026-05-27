@@ -980,6 +980,8 @@ test('CUDA runtime profiles expose supported baseline and optional newer runtime
   assert.deepEqual(supportedIds, ['cuda12']);
   assert.deepEqual(getRequiredCudaRuntimeDlls(), ['cublas64_12.dll', 'cublasLt64_12.dll', 'cudnn64_9.dll']);
   assert.deepEqual(getTranscriptionCudaPackages(), ['nvidia-cublas-cu12', 'nvidia-cudnn-cu12']);
+  const cuda13Profile = profiles.find((profile) => profile.id === 'cuda13');
+  assert.equal(cuda13Profile.expectedDllPrefixes.includes('cudnn64_9'), false);
 });
 
 test('isRetryableCudaTranscriptionError detects runtime DLL/load failures', () => {

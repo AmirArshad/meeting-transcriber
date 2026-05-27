@@ -119,6 +119,19 @@ def test_cuda_probe_unsupported_profile_search_dedupes_path_entries(tmp_path):
     assert detected == ['cuda13']
 
 
+def test_cuda_probe_unsupported_profile_ignores_shared_cudnn_runtime(tmp_path):
+    cuda12_bin = tmp_path / 'cuda12-bin'
+    cuda12_bin.mkdir()
+    (cuda12_bin / 'cudnn64_9.dll').write_text('dll')
+
+    detected = find_unsupported_runtime_profiles(
+        [{'id': 'cuda13', 'expectedDllPrefixes': ['cublas64_13', 'cublaslt64_13']}],
+        path_value=str(cuda12_bin),
+    )
+
+    assert detected == []
+
+
 def test_mlx_lock_timeout_raises_helpful_runtime_error(monkeypatch):
     service = MLXWhisperTranscriber(model_size='small')
 

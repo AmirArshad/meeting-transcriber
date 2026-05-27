@@ -34,7 +34,7 @@ const CUDA_RUNTIME_PROFILES = Object.freeze({
     supported: false,
     pipPackages: Object.freeze(['nvidia-cublas', 'nvidia-cudnn-cu13']),
     requiredDlls: Object.freeze(['cublas64_13.dll', 'cublasLt64_13.dll', 'cudnn64_9.dll']),
-    expectedDllPrefixes: Object.freeze(['cublas64_13', 'cublaslt64_13', 'cudnn64_9']),
+    expectedDllPrefixes: Object.freeze(['cublas64_13', 'cublaslt64_13']),
   }),
 });
 const SUPPORTED_TRANSCRIPTION_CUDA_PROFILE_IDS = Object.freeze(['cuda12']);
