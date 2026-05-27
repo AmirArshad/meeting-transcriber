@@ -4269,15 +4269,91 @@ ipcMain.handle('retry-transcription', async (event, options = {}) => {
   const normalizedLanguage = String(options.language || meeting.language || 'en');
   const audioFile = assertSafeExistingRecordingAudioPath(meeting.audioPath);
   const transcriptPath = assertSafeExistingTranscriptPath(meeting.transcriptPath);
+  const preferredSpeakerCount = String(options.speakerCount || '').trim();
+  let guidedDiarizationStatus = null;
+  let guidedDiarizationResult = null;
+  let guidedTranscriptionError = null;
+
+  const diarizationAvailability = getDiarizationAvailability(process.platform, process.arch);
+  if (diarizationAvailability.supported && diarizationAvailability.runtimeDevice) {
+    try {
+      const aiStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions());
+      const diarizationStatus = aiStatus && aiStatus.features && aiStatus.features.diarization;
+      const catalogModelRef = diarizationStatus ? getDiarizationModelRef(diarizationStatus.modelId) : null;
+      if (diarizationStatus && diarizationStatus.status === 'ready' && diarizationStatus.setupComplete && catalogModelRef) {
+        guidedDiarizationStatus = {
+          modelId: diarizationStatus.modelId,
+          speakerCount: diarizationStatus.speakerCount || 'auto',
+          modelRef: catalogModelRef,
+          requiredDevice: diarizationAvailability.runtimeDevice,
+        };
+      }
+    } catch (error) {
+      sendToRenderer(
+        'transcription-progress',
+        `Speaker identification status unavailable; continuing with normal retry transcription. ${error.message}\n`,
+      );
+    }
+  }
 
   const shouldPreemptiveCpuRetry = process.platform === 'win32'
     && shouldForceCpuTranscriptionFromCudaStatus(getCachedCudaStatus());
 
   const result = await enqueueAiComputeAction(() => runWallClockComputeAction({
-    timeoutMs: getTranscriptionComputeTimeoutMs(normalizedModel),
+    timeoutMs: guidedDiarizationStatus
+      ? AI_COMPUTE_TIMEOUT_MS.guidedTranscription
+      : getTranscriptionComputeTimeoutMs(normalizedModel),
     label: 'Transcription retry',
     terminateProcess: terminateProcessBestEffort,
     action: async (registerProcess) => {
+      if (guidedDiarizationStatus) {
+        try {
+          const tempTranscriptPath = buildGuidedTranscriptTempPath({ finalTranscriptPath: transcriptPath });
+          guidedDiarizationResult = await runGuidedTranscriptionProcess({
+            spawnProcess: spawnTrackedPython,
+            args: buildManagedDiarizationGuidedTranscriptionArgs({
+              audioPath: audioFile,
+              outputTranscript: tempTranscriptPath,
+              language: normalizedLanguage,
+              modelSize: normalizedModel,
+              modelRef: guidedDiarizationStatus.modelRef,
+              speakerCount: preferredSpeakerCount || guidedDiarizationStatus.speakerCount || 'auto',
+              requiredDevice: guidedDiarizationStatus.requiredDevice,
+            }),
+            cwd: pythonConfig.backendPath,
+            env: {
+              ...getDiarizationDependencyEnv(),
+              ...getDiarizationCacheEnv(),
+              ...getTranscriptionRuntimeEnv(normalizedModel, { includeManagedDiarization: true }),
+              HF_TOKEN: '',
+              HUGGINGFACE_HUB_TOKEN: '',
+            },
+            finalTranscriptPath: transcriptPath,
+            tempTranscriptPath,
+            modelSize: normalizedModel,
+            fsPromises: fs.promises,
+            registerProcess,
+            terminateProcess: terminateProcessBestEffort,
+            summarizeError: summarizeDiarizationError,
+            onProgressLine: (line) => {
+              const progressEvent = parseAiBackendProgressLine(line, 'diarization');
+              if (progressEvent) {
+                sendToRenderer('diarization-progress', progressEvent);
+              } else if (line.trim()) {
+                sendToRenderer('transcription-progress', `${redactSensitiveText(line)}\n`);
+              }
+            },
+          });
+          return guidedDiarizationResult;
+        } catch (error) {
+          guidedTranscriptionError = error;
+          sendToRenderer(
+            'transcription-progress',
+            `Speaker-guided transcription failed; retrying with standard transcription. ${error.message}\n`,
+          );
+        }
+      }
+
       if (shouldPreemptiveCpuRetry) {
         sendToRenderer(
           'transcription-progress',
@@ -4353,6 +4429,9 @@ ipcMain.handle('retry-transcription', async (event, options = {}) => {
     ...result,
     output_file: transcriptPath,
     transcriptPath,
+    diarization: guidedDiarizationResult,
+    diarizationStatus: guidedDiarizationStatus,
+    diarizationError: guidedTranscriptionError ? guidedTranscriptionError.message : null,
     meeting: updatedMeeting,
   };
 });

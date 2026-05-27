@@ -2802,6 +2802,40 @@ async function retryMeetingTranscription() {
     });
     addLog('Transcription retry completed.');
     if (result && result.meeting) {
+      if (result.diarization) {
+        const speakerSidecarPath = await saveGuidedDiarizationMetadata(
+          result.meeting,
+          result.diarizationStatus,
+          result.diarization,
+        );
+        if (speakerSidecarPath && result.meeting.ai) {
+          result.meeting.ai.diarization = {
+            status: 'completed',
+            model: result.diarization.model || (result.diarizationStatus && result.diarizationStatus.modelId),
+            completedAt: result.diarization.completedAt,
+            speakerCount: result.diarization.speakerCount,
+            segmentsPath: speakerSidecarPath,
+            error: null,
+          };
+        }
+        addLog('Speaker-guided transcript saved!');
+      } else if (result.diarizationError) {
+        await saveDiarizationFailureMetadata(result.meeting, result.diarizationStatus, {
+          message: result.diarizationError,
+        });
+      } else {
+        // Retry produced a non-speaker transcript; clear stale speaker metadata
+        // before optionally re-running diarization for this fresh transcript.
+        try {
+          await window.electronAPI.updateMeetingAi(result.meeting.id, { diarization: null });
+          if (result.meeting.ai && result.meeting.ai.diarization) {
+            delete result.meeting.ai.diarization;
+          }
+        } catch (metadataError) {
+          addLog(`Could not clear previous speaker identification metadata: ${metadataError.message}`, 'warning');
+        }
+        await maybeRunDiarizationAfterTranscription(result.meeting, result);
+      }
       syncMeetingInList(result.meeting);
     }
     await loadMeetingHistory();
