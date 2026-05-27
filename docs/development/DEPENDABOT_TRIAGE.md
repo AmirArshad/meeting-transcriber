@@ -47,17 +47,17 @@ gh pr close 18 --comment "Declined: coordinate all pyobjc-framework pins (10→1
 gh pr close 15 --comment "Declined: coordinate all pyobjc-framework pins (10→12) in one macOS-tested change."
 ```
 
-## Optional follow-up (low/medium — separate PR after merge)
+## Incorporated on `chore/phased-dependency-upgrades` (close Dependabot PRs)
 
-| PR | Package | Assessment | Suggested action |
-|----|---------|------------|------------------|
-| #17 | pyaudiowpatch 0.2.12.4 → 0.2.12.8 | **Low** — patch, Windows loopback only | Small PR: bump build + dev pins, Windows packaged smoke |
-| #14 | protobuf 7.34.1 → 7.35.0 | **Low** — patch, faster-whisper transitive | Include with next Windows pin refresh + `pip-audit` |
-| #16 | setuptools 81 → 82 (mac pin) | **Low** — Windows already **82.0.1**; mac still **81.0.0** | Optional mac parity bump; verify `prepare-build` on Mac |
-| #21 | huggingface-hub 1.15.0 → 1.16.1 | **Medium** — both platforms; HF API surface | Test model download/preload + diarization HF paths before bump |
-| #13 | mpmath 1.3.0 → 1.4.1 | **Low** — mac torch transitive | Defer unless mac bundle rebuild is already planned |
+| PR | Package | Branch pin |
+|----|---------|------------|
+| #17 | pyaudiowpatch 0.2.12.4 → 0.2.12.8 | `requirements-windows-build.txt`, dev `>=0.2.12.8` |
+| #14 | protobuf 7.34.1 → 7.35.0 | `requirements-windows-build.txt` |
+| #16 | setuptools 81 → 82 (mac) | `requirements-macos-build.txt` → **82.0.1** (parity with Windows) |
+| #21 | huggingface-hub 1.15.0 → 1.16.1 | both `requirements-*-build.txt` |
+| #13 | mpmath 1.3.0 → 1.4.1 | `requirements-macos-build.txt` |
 
-**Do not merge #17–#21 into the phased branch** unless you explicitly want to extend validation scope before merge to `master`.
+Close with `scripts/close-superseded-dependabot-prs.ps1` after `gh auth login`.
 
 ## Dependabot policy (`.github/dependabot.yml`)
 
