@@ -178,6 +178,7 @@ Whisper transcription caches are separate from diarization’s Hugging Face cach
 
 - Packaged transcription currently supports a CUDA 12 runtime profile (`nvidia-cublas-cu12`, `nvidia-cudnn-cu12`) and probes matching DLLs before GPU use.
 - If only newer CUDA-major runtime DLLs are detected (for example CUDA 13 DLL names), status should surface a runtime-major mismatch and transcription must remain on safe CPU fallback.
+- Transcription GPU setup uses `check-cuda`, `install-gpu` (`mode: install|repair`), and `ensure-compatible-gpu-runtime` (probe → install/repair if needed → re-probe). Transcription CUDA install/repair/uninstall/ensure actions are serialized through a main-process lock with a wall-clock timeout so concurrent base-runtime pip jobs cannot overlap; this is separate from `aiAddonActionQueue` and `aiComputeActionQueue`.
 
 If you change required cache files or env var names, update all of the files above plus `tests/js/main-process-helpers.test.js` and `tests/python/test_transcriber_helpers.py`.
 

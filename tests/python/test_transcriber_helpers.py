@@ -1,5 +1,6 @@
 import tempfile
 import types
+import os
 from typing import Any, cast
 from pathlib import Path
 import builtins
@@ -7,6 +8,7 @@ import builtins
 import pytest
 
 from backend.transcription import faster_whisper_transcriber as fw_transcriber
+from backend.transcription.cuda_probe import build_probe_report, find_unsupported_runtime_profiles
 from backend.transcription.faster_whisper_transcriber import TranscriberService
 from backend.transcription.mlx_whisper_transcriber import MLXWhisperTranscriber
 
@@ -52,6 +54,69 @@ def test_faster_whisper_lock_file_path_uses_private_lock_dir(monkeypatch, tmp_pa
     assert captured['path'] == expected_lock
     assert captured['timeout'] == 300
     assert captured['loaded'] is True
+
+
+def test_cuda_probe_detects_unsupported_newer_runtime(tmp_path):
+    cuda13_bin = tmp_path / 'cuda13-bin'
+    cuda13_bin.mkdir()
+    (cuda13_bin / 'cublas64_13.dll').write_text('dll')
+
+    report = build_probe_report(
+        profiles=[{
+            'id': 'cuda12',
+            'requiredDlls': ['cublas64_12.dll', 'cublasLt64_12.dll', 'cudnn64_9.dll'],
+        }],
+        supported_profiles=['cuda12'],
+        unsupported_hints=[{
+            'id': 'cuda13',
+            'expectedDllPrefixes': ['cublas64_13', 'cublaslt64_13', 'cudnn64_9'],
+        }],
+        device_count_getter=lambda: 1,
+        load_dll=lambda dll: (_ for _ in ()).throw(OSError(dll)),
+        path_value=str(cuda13_bin),
+    )
+
+    assert report['deviceAvailable'] is True
+    assert report['runtimeLoadable'] is False
+    assert report['missingLibraries'] == ['cublas64_12.dll', 'cublasLt64_12.dll', 'cudnn64_9.dll']
+    assert report['unsupportedDetectedProfiles'] == ['cuda13']
+    assert report['installedProfile'] == 'cuda13'
+    assert report['statusCode'] == 'unsupportedRuntimeMajor'
+
+
+def test_cuda_probe_reports_ready_supported_runtime():
+    report = build_probe_report(
+        profiles=[{
+            'id': 'cuda12',
+            'requiredDlls': ['cublas64_12.dll', 'cublasLt64_12.dll', 'cudnn64_9.dll'],
+        }],
+        supported_profiles=['cuda12'],
+        unsupported_hints=[],
+        device_count_getter=lambda: 1,
+        load_dll=lambda dll: object(),
+        path_value='',
+    )
+
+    assert report['deviceAvailable'] is True
+    assert report['runtimeLoadable'] is True
+    assert report['missingLibraries'] == []
+    assert report['matchedProfile'] == 'cuda12'
+    assert report['installedProfile'] == 'cuda12'
+    assert report['statusCode'] == 'ready'
+
+
+def test_cuda_probe_unsupported_profile_search_dedupes_path_entries(tmp_path):
+    cuda_bin = tmp_path / 'cuda-bin'
+    cuda_bin.mkdir()
+    (cuda_bin / 'cublasLt64_13.dll').write_text('dll')
+    path_value = f'{cuda_bin}{os.pathsep}{cuda_bin}'
+
+    detected = find_unsupported_runtime_profiles(
+        [{'id': 'cuda13', 'expectedDllPrefixes': ['cublaslt64_13']}],
+        path_value=path_value,
+    )
+
+    assert detected == ['cuda13']
 
 
 def test_mlx_lock_timeout_raises_helpful_runtime_error(monkeypatch):

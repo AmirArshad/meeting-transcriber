@@ -34,6 +34,9 @@ const {
   isRetryableCudaTranscriptionError,
   classifyCudaProbeStatus,
   resolveCudaInstalledProfile,
+  cudaStatusNeedsGpuRuntimeEnsure,
+  selectGpuInstallModeForCudaStatus,
+  getGpuRuntimeEnsurePlan,
   shouldForceCpuTranscriptionFromCudaStatus,
   parseCheckCudaStatus,
   cacheContainsModel,
@@ -1019,6 +1022,100 @@ test('classifyCudaProbeStatus classifies probe outcomes deterministically', () =
     missingLibraries: [],
     unsupportedDetectedProfiles: [],
   }), 'deviceUnavailable');
+});
+
+test('cudaStatusNeedsGpuRuntimeEnsure only targets recoverable runtime states', () => {
+  assert.equal(cudaStatusNeedsGpuRuntimeEnsure({ installed: true, statusCode: 'ready' }), false);
+  assert.equal(cudaStatusNeedsGpuRuntimeEnsure({
+    installed: false,
+    statusCode: 'missingLibraries',
+    deviceAvailable: true,
+  }), true);
+  assert.equal(cudaStatusNeedsGpuRuntimeEnsure({
+    installed: false,
+    statusCode: 'unsupportedRuntimeMajor',
+    deviceAvailable: true,
+  }), true);
+  assert.equal(cudaStatusNeedsGpuRuntimeEnsure({
+    installed: false,
+    statusCode: 'deviceUnavailable',
+    deviceAvailable: false,
+  }), false);
+});
+
+test('selectGpuInstallModeForCudaStatus prefers repair for drifted runtimes', () => {
+  assert.equal(selectGpuInstallModeForCudaStatus({
+    statusCode: 'unsupportedRuntimeMajor',
+  }), 'repair');
+  assert.equal(selectGpuInstallModeForCudaStatus({
+    statusCode: 'missingLibraries',
+  }), 'repair');
+  assert.equal(selectGpuInstallModeForCudaStatus({
+    statusCode: 'runtimeUnavailable',
+  }, { forceRepair: true }), 'repair');
+  assert.equal(selectGpuInstallModeForCudaStatus({
+    statusCode: 'runtimeUnavailable',
+  }), 'install');
+});
+
+test('getGpuRuntimeEnsurePlan honors ready-skip and forced repair semantics', () => {
+  assert.deepEqual(getGpuRuntimeEnsurePlan({
+    installed: true,
+    statusCode: 'ready',
+  }), {
+    action: 'none',
+    shouldInstall: false,
+    success: true,
+    message: 'CUDA runtime is already installed and loadable.',
+  });
+  assert.deepEqual(getGpuRuntimeEnsurePlan({
+    installed: true,
+    statusCode: 'ready',
+  }, { forceRepair: true }), {
+    action: 'repair',
+    shouldInstall: true,
+    success: false,
+    message: 'CUDA runtime is already loadable; forcing a repair reinstall.',
+  });
+  assert.deepEqual(getGpuRuntimeEnsurePlan({
+    installed: true,
+    statusCode: 'ready',
+  }, { skipInstallIfReady: false }), {
+    action: 'repair',
+    shouldInstall: true,
+    success: false,
+    message: 'CUDA runtime is already loadable; forcing a repair reinstall.',
+  });
+});
+
+test('getGpuRuntimeEnsurePlan selects install or repair for recoverable runtime states', () => {
+  assert.deepEqual(getGpuRuntimeEnsurePlan({
+    installed: false,
+    statusCode: 'unsupportedRuntimeMajor',
+  }), {
+    action: 'repair',
+    shouldInstall: true,
+    success: false,
+    message: 'GPU runtime requires a repair reinstall.',
+  });
+  assert.deepEqual(getGpuRuntimeEnsurePlan({
+    installed: false,
+    statusCode: 'runtimeUnavailable',
+  }), {
+    action: 'install',
+    shouldInstall: true,
+    success: false,
+    message: 'GPU runtime libraries need to be installed.',
+  });
+  assert.deepEqual(getGpuRuntimeEnsurePlan({
+    installed: false,
+    statusCode: 'deviceUnavailable',
+  }), {
+    action: 'none',
+    shouldInstall: false,
+    success: false,
+    message: 'GPU runtime is not ready (deviceUnavailable).',
+  });
 });
 
 test('resolveCudaInstalledProfile prefers matched supported profile', () => {

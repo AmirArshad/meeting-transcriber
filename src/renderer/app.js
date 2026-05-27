@@ -4295,14 +4295,24 @@ async function installGPUAcceleration() {
       }
     }, 2000);
 
-    progressText.textContent = 'Downloading CUDA runtime libraries for faster-whisper...';
+    progressText.textContent = isRepairFlow
+      ? 'Checking GPU runtime and repairing compatibility...'
+      : 'Checking GPU runtime and installing libraries...';
 
-    // Install GPU packages
-    await window.electronAPI.installGPU({ mode: isRepairFlow ? 'repair' : 'install' });
+    const ensureResult = await window.electronAPI.ensureCompatibleGpuRuntime({
+      skipInstallIfReady: true,
+      forceRepair: isRepairFlow,
+    });
+
+    if (!ensureResult || !ensureResult.success) {
+      throw new Error((ensureResult && ensureResult.message) || 'GPU runtime is still not loadable.');
+    }
 
     // Complete progress
     progressBar.style.width = '100%';
-    progressText.textContent = 'Installation complete!';
+    progressText.textContent = ensureResult.action === 'none'
+      ? 'GPU runtime already ready.'
+      : 'Installation complete!';
 
     // Update status
     statusBadge.textContent = 'Enabled';
@@ -4319,10 +4329,14 @@ async function installGPUAcceleration() {
     await checkGPUStatus();
     await refreshAiAddonSettings();
 
+    const didRepair = ensureResult.action === 'repair';
+    const alreadyReady = ensureResult.action === 'none';
     alert(
-      isRepairFlow
-        ? 'GPU runtime repair completed.\n\nAvaNevis will now use the supported runtime profile for faster transcription. Other CUDA runtimes used by other apps were not removed.'
-        : 'GPU acceleration installed successfully!\n\nFaster transcription is now available.',
+      alreadyReady
+        ? 'GPU runtime is already installed and loadable.\n\nFaster transcription is available.'
+        : (didRepair
+          ? 'GPU runtime repair completed.\n\nAvaNevis verified the supported runtime profile is loadable. Other CUDA runtimes used by other apps were not removed.'
+          : 'GPU acceleration installed successfully.\n\nAvaNevis verified the runtime is loadable and faster transcription is available.'),
     );
   } catch (error) {
     console.error('GPU installation failed:', error);
@@ -4333,7 +4347,14 @@ async function installGPUAcceleration() {
     installBtn.disabled = false;
     installBtn.classList.remove('is-loading');
 
-    alert(`GPU installation failed.\n\n${error.message}`);
+    if (isGpuRuntimeActionBusyError(error)) {
+      alert(
+        'Another GPU setup operation is already running.\n\n' +
+        'Please wait for it to finish and then try again.',
+      );
+    } else {
+      alert(`GPU installation failed.\n\n${error.message}`);
+    }
   } finally {
     if (progressInterval) {
       clearInterval(progressInterval);
@@ -4365,10 +4386,17 @@ async function uninstallGPUAcceleration() {
     );
   } catch (error) {
     console.error('Uninstall failed:', error);
-    alert(
-      'Failed to uninstall AvaNevis GPU acceleration libraries.\n\n' +
-      'No changes were made to system CUDA runtimes used by other applications.',
-    );
+    if (isGpuRuntimeActionBusyError(error)) {
+      alert(
+        'Another GPU setup operation is already running.\n\n' +
+        'Please wait for it to finish and then try again.',
+      );
+    } else {
+      alert(
+        'Failed to uninstall AvaNevis GPU acceleration libraries.\n\n' +
+        'No changes were made to system CUDA runtimes used by other applications.',
+      );
+    }
   }
 }
 
@@ -4376,6 +4404,11 @@ function appendGPULog(text) {
   const logOutput = document.getElementById('gpu-log-output');
   logOutput.textContent += text;
   logOutput.scrollTop = logOutput.scrollHeight;
+}
+
+function isGpuRuntimeActionBusyError(error) {
+  const message = String(error && error.message ? error.message : '').toUpperCase();
+  return message.includes('GPU_RUNTIME_ACTION_BUSY') || message.includes('ALREADY IN PROGRESS');
 }
 
 // ============================================================================

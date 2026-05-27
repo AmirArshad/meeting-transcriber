@@ -97,6 +97,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   checkGPU: () => ipcRenderer.invoke('check-gpu'),
   checkCUDA: () => ipcRenderer.invoke('check-cuda'),
   installGPU: (options) => ipcRenderer.invoke('install-gpu', options),
+  ensureCompatibleGpuRuntime: (options) => ipcRenderer.invoke('ensure-compatible-gpu-runtime', options),
   uninstallGPU: () => ipcRenderer.invoke('uninstall-gpu'),
   getSystemInfo: () => ipcRenderer.invoke('get-system-info'),
   openLegalNotices: () => ipcRenderer.invoke('open-legal-notices'),

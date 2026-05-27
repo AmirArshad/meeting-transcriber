@@ -55,6 +55,7 @@ const AI_COMPUTE_TIMEOUT_MS = Object.freeze({
   guidedTranscription: 120 * 60 * 1000,
   summary: 90 * 60 * 1000,
 });
+const GPU_RUNTIME_ACTION_TIMEOUT_MS = 60 * 60 * 1000;
 
 function getTranscriptionComputeTimeoutMs(modelSize) {
   const modelTimeouts = {
@@ -1247,6 +1248,69 @@ function resolveCudaInstalledProfile({ matchedProfile = '', installedProfile = '
   return unsupportedDetectedProfiles[0] || '';
 }
 
+function cudaStatusNeedsGpuRuntimeEnsure(status = {}) {
+  if (!status || status.installed) {
+    return false;
+  }
+  const statusCode = String(status.statusCode || '').trim();
+  if (statusCode === 'unsupportedPlatform' || statusCode === 'probeError' || statusCode === 'deviceUnavailable') {
+    return false;
+  }
+  return statusCode === 'missingLibraries'
+    || statusCode === 'unsupportedRuntimeMajor'
+    || statusCode === 'runtimeUnavailable';
+}
+
+function selectGpuInstallModeForCudaStatus(status = {}, { forceRepair = false } = {}) {
+  if (forceRepair) {
+    return 'repair';
+  }
+  const statusCode = String(status.statusCode || '').trim();
+  if (statusCode === 'unsupportedRuntimeMajor' || statusCode === 'missingLibraries') {
+    return 'repair';
+  }
+  return 'install';
+}
+
+function getGpuRuntimeEnsurePlan(status = {}, { forceRepair = false, skipInstallIfReady = true } = {}) {
+  if (status && status.installed && skipInstallIfReady && !forceRepair) {
+    return {
+      action: 'none',
+      shouldInstall: false,
+      success: true,
+      message: 'CUDA runtime is already installed and loadable.',
+    };
+  }
+
+  if (status && status.installed) {
+    return {
+      action: 'repair',
+      shouldInstall: true,
+      success: false,
+      message: 'CUDA runtime is already loadable; forcing a repair reinstall.',
+    };
+  }
+
+  if (!cudaStatusNeedsGpuRuntimeEnsure(status)) {
+    return {
+      action: 'none',
+      shouldInstall: false,
+      success: false,
+      message: `GPU runtime is not ready (${status && status.statusCode ? status.statusCode : 'unknown'}).`,
+    };
+  }
+
+  const action = selectGpuInstallModeForCudaStatus(status, { forceRepair });
+  return {
+    action,
+    shouldInstall: true,
+    success: false,
+    message: action === 'repair'
+      ? 'GPU runtime requires a repair reinstall.'
+      : 'GPU runtime libraries need to be installed.',
+  };
+}
+
 function parseCheckCudaStatus(output = '') {
   const lines = String(output || '')
     .split(/\r?\n/)
@@ -1631,6 +1695,9 @@ module.exports = {
   isModelDownloadErrorOutput,
   classifyCudaProbeStatus,
   resolveCudaInstalledProfile,
+  cudaStatusNeedsGpuRuntimeEnsure,
+  selectGpuInstallModeForCudaStatus,
+  getGpuRuntimeEnsurePlan,
   shouldForceCpuTranscriptionFromCudaStatus,
   isRetryableCudaTranscriptionError,
   parseCheckCudaStatus,
@@ -1658,4 +1725,5 @@ module.exports = {
   PYTORCH_CUDA_BIN_DIRS,
   MACOS_PERMISSION_CHECK_TIMEOUT_MS,
   redactSensitiveText,
+  GPU_RUNTIME_ACTION_TIMEOUT_MS,
 };

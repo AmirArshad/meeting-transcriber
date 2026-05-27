@@ -29,6 +29,7 @@ const {
   buildTranscriptionCudaInstallArgs,
   buildTranscriptionCudaUninstallArgs,
   buildUnsupportedCudaPythonMessage,
+  getGpuRuntimeEnsurePlan,
   getPythonSitePackagesCandidates,
   getPyTorchCudaBinCandidates,
   cacheContainsCompleteTranscriptionModel,
@@ -70,6 +71,7 @@ const {
   redactSensitiveText,
   MACOS_PERMISSION_CHECK_TIMEOUT_MS,
   AI_COMPUTE_TIMEOUT_MS,
+  GPU_RUNTIME_ACTION_TIMEOUT_MS,
   getTranscriptionComputeTimeoutMs,
   runWallClockComputeAction,
 } = require('./main-process-helpers');
@@ -124,6 +126,7 @@ let pendingUpdateInfo = null;
 let diarizationDependencySitePackagesCache = null;
 let recordingSessionCounter = 0;
 let cachedCudaStatus = null;
+let gpuRuntimeActionPromise = null;
 
 function getSafeStorage() {
   // On macOS, Electron safeStorage can prompt Keychain access. Keep this lazy
@@ -908,6 +911,209 @@ function buildCudaRuntimeEnv(extra = {}, { includeManagedDiarization = false } =
 
 function getDefaultTranscriptionCudaPackages() {
   return getTranscriptionCudaPackages();
+}
+
+function runGpuRuntimeAction(actionFn) {
+  if (gpuRuntimeActionPromise) {
+    const error = new Error('A GPU runtime action is already in progress. Please wait for it to finish.');
+    error.code = 'GPU_RUNTIME_ACTION_BUSY';
+    return Promise.reject(error);
+  }
+
+  gpuRuntimeActionPromise = runWallClockComputeAction({
+    action: (registerProcess) => actionFn(registerProcess),
+    timeoutMs: GPU_RUNTIME_ACTION_TIMEOUT_MS,
+    label: 'GPU runtime setup',
+    terminateProcess: terminateProcessBestEffort,
+  })
+    .finally(() => {
+      gpuRuntimeActionPromise = null;
+    });
+  return gpuRuntimeActionPromise;
+}
+
+function checkNvidiaGpuAvailability({ registerProcess = (proc) => proc } = {}) {
+  return new Promise((resolve) => {
+    const python = registerProcess(spawnTrackedPython([
+      '-c',
+      'import subprocess; result = subprocess.run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"], capture_output=True, text=True); print(result.stdout.strip() if result.returncode == 0 else "None")'
+    ]));
+
+    let output = '';
+    python.stdout.on('data', (data) => {
+      output = appendSpawnLogBuffer(output, data);
+    });
+    python.on('close', () => {
+      const gpuName = output.trim();
+      resolve({
+        hasGPU: gpuName !== 'None' && gpuName !== '',
+        gpuName: gpuName !== 'None' ? gpuName : null,
+      });
+    });
+    python.on('error', () => {
+      resolve({
+        hasGPU: false,
+        gpuName: null,
+      });
+    });
+  });
+}
+
+async function enrichCheckCudaStatus(parsedStatus) {
+  try {
+    const pythonVersion = await getActivePythonVersion();
+    return {
+      ...parsedStatus,
+      version: null,
+      packages: getDefaultTranscriptionCudaPackages(),
+      pythonVersion: pythonVersion.parsed ? pythonVersion.parsed.version : pythonVersion.output,
+      pythonSupportedForInstall: isSupportedCudaInstallPythonVersion(pythonVersion.parsed),
+      pythonExecutable: pythonConfig.pythonExe,
+    };
+  } catch (error) {
+    return {
+      ...parsedStatus,
+      version: null,
+      packages: getDefaultTranscriptionCudaPackages(),
+      pythonVersion: null,
+      pythonSupportedForInstall: false,
+      pythonExecutable: pythonConfig.pythonExe,
+    };
+  }
+}
+
+function runGpuPackageInstall({ mode = 'install', registerProcess = (proc) => proc } = {}) {
+  const normalizedMode = String(mode || 'install').trim().toLowerCase() === 'repair' ? 'repair' : 'install';
+  const isRepairMode = normalizedMode === 'repair';
+
+  return new Promise((resolve, reject) => {
+    const python = registerProcess(spawnTrackedPython(buildTranscriptionCudaInstallArgs({
+      forceReinstall: isRepairMode,
+      noCache: isRepairMode,
+    })));
+
+    let errorOutput = '';
+    const progressRedactor = createLineChunkRedactor();
+
+    python.stdout.on('data', (data) => {
+      const text = data.toString();
+      sendRedactedProgress('gpu-install-progress', text, progressRedactor);
+    });
+
+    python.stderr.on('data', (data) => {
+      const text = data.toString();
+      errorOutput = appendSpawnLogBuffer(errorOutput, text);
+      sendRedactedProgress('gpu-install-progress', text, progressRedactor);
+    });
+
+    python.on('close', (code) => {
+      flushRedactedProgress('gpu-install-progress', progressRedactor);
+      if (code === 0) {
+        resolve({
+          success: true,
+          mode: normalizedMode,
+          message: isRepairMode
+            ? 'GPU runtime repair completed successfully.'
+            : 'GPU acceleration installed successfully.',
+        });
+        return;
+      }
+      reject(new Error(`Failed to install CUDA libraries: ${errorOutput}`));
+    });
+
+    python.on('error', (error) => {
+      flushRedactedProgress('gpu-install-progress', progressRedactor);
+      reject(error);
+    });
+  });
+}
+
+async function ensureCompatibleGpuRuntime(options = {}) {
+  const skipInstallIfReady = options.skipInstallIfReady !== false;
+  const forceRepair = Boolean(options.forceRepair);
+  const registerProcess = typeof options.registerProcess === 'function'
+    ? options.registerProcess
+    : (proc) => proc;
+
+  if (process.platform !== 'win32') {
+    const finalStatus = await enrichCheckCudaStatus({
+      installed: false,
+      deviceAvailable: false,
+      runtimeLoadable: false,
+      missingLibraries: [],
+      runtime: 'ctranslate2',
+      statusCode: 'unsupportedPlatform',
+      supportedProfiles: getSupportedTranscriptionCudaProfileIds(),
+      unsupportedDetectedProfiles: [],
+      recommendedInstallProfile: getSupportedTranscriptionCudaProfileIds()[0] || 'cuda12',
+      error: 'CUDA runtime checks are only supported on Windows.',
+    });
+    return {
+      success: false,
+      action: 'none',
+      initialStatus: finalStatus,
+      finalStatus,
+      message: finalStatus.error,
+    };
+  }
+
+  const initialStatus = await enrichCheckCudaStatus(await checkCudaRuntimeStatus({ registerProcess }));
+  const gpuInfo = await checkNvidiaGpuAvailability({ registerProcess });
+
+  const ensurePlan = getGpuRuntimeEnsurePlan(initialStatus, { forceRepair, skipInstallIfReady });
+  if (!ensurePlan.shouldInstall && ensurePlan.success) {
+    return {
+      success: true,
+      action: ensurePlan.action,
+      initialStatus,
+      finalStatus: initialStatus,
+      message: ensurePlan.message,
+    };
+  }
+
+  if (!initialStatus.pythonSupportedForInstall) {
+    return {
+      success: false,
+      action: 'none',
+      initialStatus,
+      finalStatus: initialStatus,
+      message: buildUnsupportedCudaPythonMessage(initialStatus.pythonVersion || ''),
+    };
+  }
+
+  if (!gpuInfo.hasGPU) {
+    return {
+      success: false,
+      action: 'none',
+      initialStatus,
+      finalStatus: initialStatus,
+      message: 'No NVIDIA GPU was detected on this system. GPU acceleration cannot be enabled.',
+    };
+  }
+
+  if (!ensurePlan.shouldInstall) {
+    return {
+      success: false,
+      action: ensurePlan.action,
+      initialStatus,
+      finalStatus: initialStatus,
+      message: ensurePlan.message,
+    };
+  }
+
+  const installMode = ensurePlan.action;
+  await runGpuPackageInstall({ mode: installMode, registerProcess });
+  const finalStatus = await enrichCheckCudaStatus(await checkCudaRuntimeStatus({ registerProcess }));
+
+  return {
+    success: Boolean(finalStatus.installed),
+    action: installMode,
+    initialStatus,
+    finalStatus,
+    message: finalStatus.installed
+      ? 'CUDA runtime is installed and loadable.'
+      : `CUDA runtime is still not loadable (${finalStatus.statusCode || 'unknown'}).`,
+  };
 }
 
 const transcriberModule = buildTranscriberArgs({
@@ -3381,7 +3587,7 @@ function runTranscriptionProcess({
   });
 }
 
-function checkCudaRuntimeStatus() {
+function checkCudaRuntimeStatus({ registerProcess = (proc) => proc } = {}) {
   return new Promise((resolve) => {
     if (process.platform !== 'win32') {
       resolve({
@@ -3412,14 +3618,11 @@ function checkCudaRuntimeStatus() {
       expectedDllPrefixes: Array.isArray(profile.expectedDllPrefixes) ? profile.expectedDllPrefixes : [],
     }));
 
-    const python = spawnTrackedPython([
-      '-c',
-      `import ctypes\nimport os\nprobe_error=""\nprofiles=${JSON.stringify(probeProfiles)}\nsupported=${JSON.stringify(supportedProfileIds)}\nunsupported_hints=${JSON.stringify(unsupportedDllHints)}\nprofile_missing={}\n` +
-      `try:\n    import ctranslate2\n    count=ctranslate2.get_cuda_device_count()\nexcept Exception as exc:\n    count=0\n    probe_error=str(exc)\n` +
-      `for profile in profiles:\n    missing=[]\n    for dll in profile["requiredDlls"]:\n        try:\n            ctypes.WinDLL(dll)\n        except Exception:\n            missing.append(dll)\n    profile_missing[profile["id"]]=missing\n` +
-      `matched=''\nmissing=[]\nfor profile_id in supported:\n    current=profile_missing.get(profile_id,[])\n    if len(current)==0:\n        matched=profile_id\n        break\n    if not missing:\n        missing=current\nruntime_loadable=(matched!='')\nsearch_dirs=[]\nfor raw_part in os.environ.get("PATH","").split(os.pathsep):\n    part=raw_part.strip()\n    if not part or part in search_dirs or not os.path.isdir(part):\n        continue\n    search_dirs.append(part)\nunsupported=[]\nfor hint in unsupported_hints:\n    found=False\n    prefixes=[str(prefix).lower() for prefix in hint.get("expectedDllPrefixes",[]) if prefix]\n    if not prefixes:\n        continue\n    for folder in search_dirs:\n        try:\n            names=os.listdir(folder)\n        except Exception:\n            continue\n        for name in names:\n            lower_name=name.lower()\n            if not lower_name.endswith(".dll"):\n                continue\n            if any(lower_name.startswith(prefix) for prefix in prefixes):\n                found=True\n                break\n        if found:\n            break\n    if found:\n        unsupported.append(hint.get("id",""))\nunsupported=[item for item in unsupported if item]\nstatus='ready' if runtime_loadable else ('unsupportedRuntimeMajor' if len(unsupported)>0 else ('missingLibraries' if count>0 else 'deviceUnavailable'))\ninstalled_profile=matched if matched else (unsupported[0] if len(unsupported)>0 else '')\n` +
-      `print("deviceAvailable:"+str(count>0))\nprint("runtimeLoadable:"+str(runtime_loadable))\nprint("missingLibraries:"+",".join(missing))\nprint("runtime:ctranslate2")\nprint("matchedProfile:"+matched)\nprint("installedProfile:"+installed_profile)\nprint("unsupportedDetectedProfiles:"+",".join(unsupported))\nprint("supportedProfiles:"+",".join(supported))\nprint("recommendedInstallProfile:"+(supported[0] if len(supported)>0 else ""))\nprint("statusCode:"+status)\nprint("error:"+probe_error)`
-    ], { env: buildCudaRuntimeEnv() });
+    const python = registerProcess(spawnTrackedPython(getBackendModuleArgs('transcription.cuda_probe', [
+      '--profiles-json', JSON.stringify(probeProfiles),
+      '--supported-profiles', supportedProfileIds.join(','),
+      '--unsupported-hints-json', JSON.stringify(unsupportedDllHints),
+    ]), { env: buildCudaRuntimeEnv() }));
 
     let output = '';
     python.stdout.on('data', (data) => {
@@ -4673,36 +4876,19 @@ ipcMain.handle('save-transcript-as', async (event, options) => {
 /**
  * Check GPU availability (detect NVIDIA GPU)
  */
-ipcMain.handle('check-gpu', async () => {
-  return new Promise((resolve) => {
-    const python = spawnTrackedPython([
-      '-c',
-      'import subprocess; result = subprocess.run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"], capture_output=True, text=True); print(result.stdout.strip() if result.returncode == 0 else "None")'
-    ]);
-
-    let output = '';
-
-    python.stdout.on('data', (data) => {
-      output = appendSpawnLogBuffer(output, data);
-    });
-
-    python.on('close', () => {
-      const gpuName = output.trim();
-      resolve({
-        hasGPU: gpuName !== 'None' && gpuName !== '',
-        gpuName: gpuName !== 'None' ? gpuName : null
-      });
-    });
-  });
+ipcMain.handle('check-gpu', async (event) => {
+  assertTrustedRendererSender(event);
+  return checkNvidiaGpuAvailability();
 });
 
 /**
  * Check CUDA installation status
  */
-ipcMain.handle('check-cuda', async () => {
-  return new Promise((resolve) => {
+ipcMain.handle('check-cuda', async (event) => {
+  assertTrustedRendererSender(event);
+  try {
     if (process.platform !== 'win32') {
-      resolve({
+      return enrichCheckCudaStatus({
         installed: false,
         deviceAvailable: false,
         runtimeLoadable: false,
@@ -4713,110 +4899,59 @@ ipcMain.handle('check-cuda', async () => {
         unsupportedDetectedProfiles: [],
         recommendedInstallProfile: getSupportedTranscriptionCudaProfileIds()[0] || 'cuda12',
         error: 'CUDA runtime checks are only supported on Windows.',
-        version: null,
-        packages: getTranscriptionCudaPackages(),
-        pythonVersion: null,
-        pythonSupportedForInstall: false,
-        pythonExecutable: pythonConfig.pythonExe,
       });
-      return;
     }
-    checkCudaRuntimeStatus().then((parsedStatus) => {
-      getActivePythonVersion().then((pythonVersion) => {
-        resolve({
-          ...parsedStatus,
-          version: null,
-          packages: getDefaultTranscriptionCudaPackages(),
-          pythonVersion: pythonVersion.parsed ? pythonVersion.parsed.version : pythonVersion.output,
-          pythonSupportedForInstall: isSupportedCudaInstallPythonVersion(pythonVersion.parsed),
-          pythonExecutable: pythonConfig.pythonExe,
-        });
-      }).catch(() => {
-        resolve({
-          ...parsedStatus,
-          version: null,
-          packages: getDefaultTranscriptionCudaPackages(),
-          pythonVersion: null,
-          pythonSupportedForInstall: false,
-          pythonExecutable: pythonConfig.pythonExe,
-        });
-      });
-    }).catch((error) => {
-      resolve({
-        installed: false,
-        deviceAvailable: false,
-        runtimeLoadable: false,
-        missingLibraries: [],
-        runtime: 'ctranslate2',
-        statusCode: 'probeError',
-        supportedProfiles: getSupportedTranscriptionCudaProfileIds(),
-        unsupportedDetectedProfiles: [],
-        recommendedInstallProfile: getSupportedTranscriptionCudaProfileIds()[0] || 'cuda12',
-        error: String(error && error.message ? error.message : error),
-        version: null,
-        packages: getDefaultTranscriptionCudaPackages(),
-        pythonVersion: null,
-        pythonSupportedForInstall: false,
-        pythonExecutable: pythonConfig.pythonExe,
-      });
+    return enrichCheckCudaStatus(await checkCudaRuntimeStatus());
+  } catch (error) {
+    return enrichCheckCudaStatus({
+      installed: false,
+      deviceAvailable: false,
+      runtimeLoadable: false,
+      missingLibraries: [],
+      runtime: 'ctranslate2',
+      statusCode: 'probeError',
+      supportedProfiles: getSupportedTranscriptionCudaProfileIds(),
+      unsupportedDetectedProfiles: [],
+      recommendedInstallProfile: getSupportedTranscriptionCudaProfileIds()[0] || 'cuda12',
+      error: String(error && error.message ? error.message : error),
     });
-  });
+  }
 });
 
 /**
  * Install GPU acceleration packages
  */
-ipcMain.handle('install-gpu', async (_event, options = {}) => {
-  return new Promise((resolve, reject) => {
-    getActivePythonVersion().then((pythonVersion) => {
-      if (!isSupportedCudaInstallPythonVersion(pythonVersion.parsed)) {
-        reject(new Error(buildUnsupportedCudaPythonMessage(pythonVersion.output)));
-        return;
-      }
-
-      const requestedMode = String(options && options.mode ? options.mode : 'install').trim().toLowerCase();
-      const isRepairMode = requestedMode === 'repair';
-      const python = spawnTrackedPython(buildTranscriptionCudaInstallArgs({
-        forceReinstall: isRepairMode,
-        noCache: isRepairMode,
-      }));
-
-      let output = '';
-      let errorOutput = '';
-      const progressRedactor = createLineChunkRedactor();
-
-      python.stdout.on('data', (data) => {
-        const text = data.toString();
-        output = appendSpawnLogBuffer(output, text);
-        sendRedactedProgress('gpu-install-progress', text, progressRedactor);
-      });
-
-      python.stderr.on('data', (data) => {
-        const text = data.toString();
-        errorOutput = appendSpawnLogBuffer(errorOutput, text);
-        sendRedactedProgress('gpu-install-progress', text, progressRedactor);
-      });
-
-      python.on('close', (code) => {
-        if (code === 0) {
-          resolve({ success: true, message: 'GPU acceleration installed successfully' });
-        } else {
-          reject(new Error(`Failed to install CUDA libraries: ${errorOutput}`));
-        }
-        flushRedactedProgress('gpu-install-progress', progressRedactor);
-      });
-    }).catch((error) => {
-      reject(new Error(`Could not verify Python before installing GPU acceleration: ${error.message}`));
+ipcMain.handle('install-gpu', async (event, options = {}) => {
+  assertTrustedRendererSender(event);
+  return runGpuRuntimeAction(async (registerProcess) => {
+    const requestedMode = String(options && options.mode ? options.mode : 'install').trim().toLowerCase();
+    const ensureResult = await ensureCompatibleGpuRuntime({
+      skipInstallIfReady: false,
+      forceRepair: requestedMode === 'repair',
+      registerProcess,
     });
+    if (!ensureResult.success) {
+      throw new Error(ensureResult.message || 'GPU runtime is still not loadable.');
+    }
+    return ensureResult;
   });
+});
+
+ipcMain.handle('ensure-compatible-gpu-runtime', async (event, options = {}) => {
+  assertTrustedRendererSender(event);
+  return runGpuRuntimeAction((registerProcess) => ensureCompatibleGpuRuntime({
+    ...options,
+    registerProcess,
+  }));
 });
 
 /**
  * Uninstall GPU packages
  */
-ipcMain.handle('uninstall-gpu', async () => {
-  return new Promise((resolve, reject) => {
-    const python = spawnTrackedPython(buildTranscriptionCudaUninstallArgs());
+ipcMain.handle('uninstall-gpu', async (event) => {
+  assertTrustedRendererSender(event);
+  return runGpuRuntimeAction((registerProcess) => new Promise((resolve, reject) => {
+    const python = registerProcess(spawnTrackedPython(buildTranscriptionCudaUninstallArgs()));
 
     let errorOutput = '';
 
@@ -4832,7 +4967,11 @@ ipcMain.handle('uninstall-gpu', async () => {
         reject(new Error(`Failed to uninstall GPU packages: ${errorMsg}`));
       }
     });
-  });
+
+    python.on('error', (error) => {
+      reject(error);
+    });
+  }));
 });
 
 /**

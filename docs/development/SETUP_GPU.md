@@ -1,32 +1,32 @@
 # GPU Setup Guide for AvaNevis
 
-This guide helps you set up GPU acceleration for faster transcription using CUDA.
+This guide helps you set up GPU acceleration for faster transcription using AvaNevis-compatible CUDA runtime libraries.
 
 ## Prerequisites
 
 - **NVIDIA GPU** with CUDA support (GTX 10xx series or newer recommended)
-- **CUDA runtime libraries** compatible with AvaNevis packaged transcription stack (currently CUDA 12 profile)
-- **Windows 10/11** (for this project, though Linux/Mac also supported)
+- **A recent NVIDIA driver** visible to `nvidia-smi`
+- **Windows 10/11** for AvaNevis packaged CUDA transcription acceleration
 
 ## Quick Setup
 
-### Step 1: Verify CUDA Installation
+### Step 1: Verify NVIDIA Driver/GPU Visibility
 
-Open PowerShell and check if CUDA is available:
+Open PowerShell and check whether Windows can see the NVIDIA GPU:
 
 ```powershell
 nvidia-smi
 ```
 
-You should see your GPU listed with driver version and CUDA version.
+You should see your GPU listed with driver version and the maximum CUDA API version supported by the driver. This does not mean AvaNevis can use every installed CUDA runtime major.
 
-### Step 2: Install CUDA Libraries for faster-whisper
+### Step 2: Install CUDA 12 Runtime Libraries for faster-whisper
 
 ```bash
 pip install nvidia-cublas-cu12 nvidia-cudnn-cu12
 ```
 
-**Note:** This is about a 1GB download. AvaNevis transcription uses faster-whisper/CTranslate2, so PyTorch is not required for transcription acceleration.
+**Note:** This is about a 1GB download. AvaNevis transcription uses faster-whisper/CTranslate2 and currently targets the CUDA 12 runtime profile, so PyTorch and the CUDA Toolkit are not required for transcription acceleration.
 
 ### Step 3: Install Project Dependencies
 
@@ -63,7 +63,7 @@ pip install nvidia-cudnn-cu12
 
 **Solutions:**
 1. Update your NVIDIA drivers to the latest version
-2. Verify CUDA toolkit is installed: `nvcc --version`
+2. Verify the NVIDIA driver sees your GPU: `nvidia-smi`
 3. Check if your GPU supports CUDA: [NVIDIA GPU Compute Capability](https://developer.nvidia.com/cuda-gpus)
 
 ### Transcriber Falls Back to CPU
@@ -76,15 +76,17 @@ If you see "Using CPU (safer default)" in the logs but you have CUDA installed:
     print(ctranslate2.get_cuda_device_count())
     ```
 
-2. If it returns `0`, reinstall CUDA runtime libraries:
+2. If it returns `0`, repair CUDA runtime libraries:
     ```bash
-    pip install --upgrade nvidia-cublas-cu12 nvidia-cudnn-cu12
+    pip install --upgrade --force-reinstall --no-cache-dir nvidia-cublas-cu12 nvidia-cudnn-cu12
     ```
 
 ### Newer CUDA major detected (for example CUDA 13)
 
 AvaNevis currently ships transcription dependencies validated against the CUDA 12 runtime profile (`nvidia-cublas-cu12` + `nvidia-cudnn-cu12`).
 If your machine has only newer runtime DLLs (for example `cublas64_13.dll`) and not CUDA 12 runtime DLLs, AvaNevis will detect this mismatch and safely fall back to CPU transcription.
+
+Use the in-app **Repair GPU Runtime** action to add the CUDA 12 libraries AvaNevis needs. This does not remove newer CUDA runtime libraries used by other applications.
 
 Speaker identification is separate: it uses managed PyTorch CUDA dependencies under Electron `userData` only after explicit speaker setup.
 
