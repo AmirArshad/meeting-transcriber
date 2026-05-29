@@ -147,6 +147,14 @@ def test_cuda_probe_module_invokes_nvidia_dll_loader_at_import():
     assert 'add_python_nvidia_bin_dirs_to_path()' in source
 
 
+@pytest.mark.skipif(
+    os.name != 'nt',
+    reason=(
+        'Forces os.name="nt" to exercise Windows-only NVIDIA DLL loading. '
+        'On non-Windows hosts pathlib can only build POSIX paths, so Path() '
+        'would raise NotImplementedError for WindowsPath while os.name is patched.'
+    ),
+)
 def test_nvidia_dll_loader_registers_site_package_bin_dirs(monkeypatch, tmp_path):
     site_packages = tmp_path / 'site-packages'
     cublas_bin = site_packages / 'nvidia' / 'cublas' / 'bin'
