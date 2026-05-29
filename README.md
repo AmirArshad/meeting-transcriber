@@ -198,7 +198,7 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
   - [Code review remediation (May 2026)](docs/completed/CODE_REVIEW_REMEDIATION_2026-05.md)
 - **Roadmap & features**
   - [Roadmap](docs/initiatives/ROADMAP.md)
-  - [Aurison codebase refactor](docs/initiatives/AURISON_CODEBASE_REFACTOR.md)
+  - [AvaNevis codebase refactor](docs/initiatives/AVANEVIS_CODEBASE_REFACTOR.md)
   - [Acoustic echo cancellation](docs/initiatives/FEATURE_ECHO_CANCELLATION.md)
   - [Linux support](docs/initiatives/LINUX_SUPPORT.md)
   - [Speaker diarization](docs/completed/FEATURE_SPEAKER_DIARIZATION.md)

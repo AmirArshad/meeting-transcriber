@@ -36,7 +36,7 @@ This directory separates current guides, maintainer references, completed implem
 ## New Initiatives
 
 - [Roadmap](initiatives/ROADMAP.md)
-- [Aurison codebase refactor](initiatives/AURISON_CODEBASE_REFACTOR.md)
+- [AvaNevis codebase refactor](initiatives/AVANEVIS_CODEBASE_REFACTOR.md)
 - [Acoustic echo cancellation](initiatives/FEATURE_ECHO_CANCELLATION.md)
 - [Linux support](initiatives/LINUX_SUPPORT.md)
 - [Audio setup wizard](initiatives/FEATURE_SETUP_WIZARD.md)

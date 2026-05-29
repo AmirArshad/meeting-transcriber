@@ -30,19 +30,21 @@ Active TODOs only. Completed dependency-upgrade phase history has been removed f
 - [ ] [Risk: Medium] Verify the archived "packaged Swift helper skips `which()` when `AVANEVIS_PACKAGED=1`" item is fully implemented and tested; close if redundant with current `test_screencapture_helper.py` coverage.
 - [ ] [Risk: Medium] Decide the next feature project after the codebase refactor stabilizes.
 
-## Next: Aurison Codebase Refactor
+## Next: AvaNevis Codebase Refactor
 
-Design doc: `docs/initiatives/AURISON_CODEBASE_REFACTOR.md`.
+Design doc: `docs/initiatives/AVANEVIS_CODEBASE_REFACTOR.md`.
 
-Execution rule: one phase per PR unless the change is purely mechanical and tightly coupled. Move code first, preserve behavior, then improve internals in later PRs.
+Execution rule: one phase per PR unless the change is purely mechanical and tightly coupled. Move code first, preserve behavior, then improve internals in later PRs. Revert (do not fix forward) any phase that breaks a preserved contract or a manual smoke check. Add every new JS entry file to `test:syntax`, keep new renderer globals uniquely named, and target no source file over 1,500 lines after its owning phase.
 
-- [ ] [Risk: Medium] Phase 0: add characterization tests for IPC contracts, compute queue membership, renderer helper behavior, and recorder stdout event shapes.
-- [ ] [Risk: Low] Phase 1: split `src/main-process-helpers.js` into smaller domain modules behind the existing facade.
-- [ ] [Risk: Medium] Phase 2: extract low-risk helpers from `src/renderer/app.js`, including visualizer, formatters, DOM helpers, settings helpers, transcript rendering, summary UI, AI add-on UI, and GPU UI helpers.
+- [ ] [Risk: Medium] Phase 0: add characterization tests for IPC contracts, compute queue membership, renderer helper behavior, and recorder stdout event shapes. Compute-queue tests (0.2) block Phase 3; recorder-event tests (0.4) block Phase 7.
+- [ ] [Risk: Low] Phase 1: split `src/main-process-helpers.js` into smaller domain modules behind the existing facade. May run in parallel with the Phase 5 low-risk subset.
+- [ ] [Risk: Medium] Phase 2: extract low-risk helpers from `src/renderer/app.js`, including visualizer, formatters, DOM helpers, settings helpers, transcript rendering, summary UI, AI add-on UI, and GPU UI helpers. Extend existing `recording-state-helpers.js` / `history-detail-helpers.js` / `update-notification-helpers.js` rather than duplicating.
 - [ ] [Risk: High] Phase 2 follow-up: extract renderer recording and transcription controllers only after helper coverage is in place.
-- [ ] [Risk: High] Phase 3: split `src/main.js` into services for Python runtime, meeting manager client, device/file IPC, GPU runtime, AI compute queue, AI add-ons, transcription, summaries, and recorder lifecycle.
+- [ ] [Risk: High] Phase 3a: split lower-risk `src/main.js` handlers (Python runtime, meeting manager client, device IPC, file export IPC) into services with explicit dependency injection.
+- [ ] [Risk: High] Phase 3b: split AI/GPU surface (GPU runtime, AI compute queue, AI add-on IPC) into services; depends on Phase 3a.
+- [ ] [Risk: High] Phase 3c: split recorder/transcription lifecycle (transcription, summary, recorder) into services last; gated on Phase 0.2 and 0.4 tests.
 - [ ] [Risk: Medium] Phase 4: split `src/ai-addon-setup.js` into manifest, progress, download, archive, diarization setup, and summary setup modules while preserving the exported facade.
-- [ ] [Risk: Medium] Phase 5: extract Python common helpers for transcription formatting, structured events, device normalization, diarization audio prep, and summary sidecar IO.
+- [ ] [Risk: Medium] Phase 5: extract Python common helpers for transcription formatting, structured events, device normalization, diarization audio prep, and summary sidecar IO. The low-risk subset (formatting, sidecar IO, device normalization) may start early alongside Phase 1.
 - [ ] [Risk: High] Phase 6: decompose `backend/meeting_manager.py` into metadata normalization, safe paths, scan/import, locked JSON storage, and delete transaction helpers.
 - [ ] [Risk: High] Phase 7: clean recorder and Swift helper internals only through narrow behavior-preserving extractions.
-- [ ] [Risk: Medium] Phase 8: update build, CI, syntax checks, architecture docs, and validation docs for the new module layout.
+- [ ] [Risk: Medium] Phase 8: update build, CI, syntax checks (convert `test:syntax` to a glob), architecture docs, and validation docs for the new module layout.
