@@ -61,7 +61,8 @@
       "icon": "build/icon.icns",
       "category": "public.app-category.productivity",
       "binaries": [
-        "Contents/Resources/bin/audiocapture-helper"
+        "Contents/Resources/bin/audiocapture-helper",
+        "Contents/Resources/ffmpeg/ffmpeg"
       ],
       "hardenedRuntime": true,
       "gatekeeperAssess": false,

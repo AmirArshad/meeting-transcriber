@@ -14,7 +14,12 @@ const {
 
 test('BUILD_DOWNLOADS uses pinned direct download URLs', () => {
   assert.equal(BUILD_DOWNLOADS.ffmpegWin.url, 'https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-8.0.1-essentials_build.zip');
-  assert.equal(BUILD_DOWNLOADS.ffmpegMac.url, 'https://evermeet.cx/ffmpeg/ffmpeg-8.0.1.zip');
+  assert.equal(
+    BUILD_DOWNLOADS.ffmpegMac.url,
+    'https://github.com/shaka-project/static-ffmpeg-binaries/releases/download/n8.0.1-1/ffmpeg-osx-arm64',
+  );
+  assert.equal(BUILD_DOWNLOADS.ffmpegMac.requiredArch, 'arm64');
+  assert.match(BUILD_DOWNLOADS.ffmpegMac.sha256, /^[a-f0-9]{64}$/);
   assert.equal(BUILD_DOWNLOADS.ffmpegSource.url, 'https://ffmpeg.org/releases/ffmpeg-8.0.1.tar.xz');
   assert.equal(BUILD_DOWNLOADS.ffmpegSource.archiveFileName, 'ffmpeg-8.0.1.tar.xz');
   assert.match(BUILD_DOWNLOADS.ffmpegSource.sha256, /^[a-f0-9]{64}$/);

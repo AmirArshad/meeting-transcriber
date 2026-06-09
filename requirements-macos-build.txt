@@ -46,7 +46,8 @@ mlx==0.31.2
 more-itertools==11.1.0
 numba==0.65.1
 llvmlite==0.47.0
-# Required by pinned lightning-whisper-mlx==0.0.10 metadata; build cleanup prunes torch dev/test files.
+# Pinned for reproducible pip resolution; lightning-whisper-mlx requires torch but MLX inference
+# never imports torch_whisper.py, so prepare-resources removes torch after install.
 # torch==2.12.0 requires setuptools<82 (Windows build pin stays at 82.0.1).
 torch==2.12.0
 setuptools==81.0.0

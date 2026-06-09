@@ -2,6 +2,17 @@
 
 Active TODOs only. Completed dependency-upgrade phase history has been removed from this file; use git history and `docs/development/DEPENDABOT_TRIAGE.md` for background.
 
+## Active: macOS arm64 ffmpeg + bundle trim (`fix/macos-arm64-ffmpeg-and-bundle-trim`)
+
+Replace Intel-only evermeet.cx ffmpeg with a pinned Apple Silicon static build (fixes macOS 26.4+ Rosetta deprecation warnings). Trim the packaged macOS Python runtime by removing `torch` and other MLX-unused PyTorch baggage after `pip install` (MLX transcription does not import `torch_whisper.py`).
+
+- [x] [Risk: Low] Pin arm64 ffmpeg download (shaka-project/static-ffmpeg-binaries n8.0.1-1) with SHA-256 verification.
+- [x] [Risk: Low] CI: assert bundled `Contents/Resources/ffmpeg/ffmpeg` is arm64 via `file`.
+- [x] [Risk: Medium] Post-install removal of `torch` + transitive PyTorch-only packages; keep `scipy` (required by MLX).
+- [ ] [Risk: High] macOS packaged smoke: record → Opus via arm64 ffmpeg → short MLX transcription (CI now verifies arm64 arch, codesign, and `ffmpeg -version` spawn).
+- [ ] [Risk: Medium] Measure `du -sh build/resources/python` before/after on a Mac build host; update `docs/completed/INSTALLER_SIZE_NOTES.md`.
+- [ ] [Risk: High] Evaluate PyObjC `Cocoa` / `Quartz` pin removal (separate follow-up; needs capture smoke).
+
 ## Remaining Dependency And Release Hygiene
 
 - [ ] [Risk: Low] Close superseded Dependabot PRs that were absorbed by the dependency-upgrade branch: #12 and #20.
@@ -9,7 +20,7 @@ Active TODOs only. Completed dependency-upgrade phase history has been removed f
 - [ ] [Risk: Medium] Decide whether optional follow-up dependency PRs #13, #14, #16, #17, and #21 should ship as small separate PRs or stay deferred.
 - [ ] [Risk: Low] Trial dropping explicit transitive-only pins in a follow-up trim pass; keep any pin needed for reproducible packaged builds.
 - [ ] [Risk: High] Evaluate whether macOS PyObjC `Cocoa` / `Quartz` pins are removable; requires `pip check`, PyObjC import checks, packaged `build:mac:dir`, and ScreenCaptureKit fallback smoke.
-- [ ] [Risk: Medium] Continue low-value torch bundle pruning only if measurements show meaningful package-size reduction.
+- [x] [Risk: Medium] Remove bundled macOS `torch` after pip install (MLX path does not import it; diarization installs its own torch into userData).
 - [ ] [Risk: Medium] Investigate Windows faster-whisper transitive packages such as `onnxruntime`, `tokenizers`, and `av`; remove only if the packaged transcription graph remains valid.
 
 ## Remaining Validation And Smoke Checks

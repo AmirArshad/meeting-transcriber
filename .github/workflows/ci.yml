@@ -180,6 +180,10 @@ jobs:
         test -x "$HELPER_PATH"
         test -f "$PYTHON_PATH"
         test -f "$FFMPEG_PATH"
+        test -x "$FFMPEG_PATH"
+        file "$FFMPEG_PATH" | grep -q "arm64"
+        codesign --verify --strict --verbose=2 "$FFMPEG_PATH"
+        "$FFMPEG_PATH" -version | grep -q "ffmpeg version"
 
         codesign --verify --strict --verbose=2 "$HELPER_PATH"
         codesign -d --entitlements :- "$HELPER_PATH" | grep -q "com.apple.security.inherit"
@@ -214,7 +218,7 @@ jobs:
         echo "$helper_output"
         echo "$helper_output" | grep -q "AudioCaptureHelper"
 
-        echo "✓ Packaged macOS app contains helper, Python, and ffmpeg"
+        echo "✓ Packaged macOS app contains helper, Python, and arm64 ffmpeg"
 
   test-frontend:
     name: Test Electron Frontend & Build Smoke

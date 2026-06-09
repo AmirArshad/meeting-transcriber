@@ -15,7 +15,7 @@ const BIN_DIR = path.join(BUILD_DIR, 'bin');
 const REPO_ROOT = path.join(__dirname, '..');
 const MODELS_DIR = path.join(BUILD_DIR, 'whisper-models');
 const RESOURCE_MANIFEST_PATH = path.join(BUILD_DIR, 'resource-manifest.json');
-const RESOURCE_MANIFEST_VERSION = 4;
+const RESOURCE_MANIFEST_VERSION = 5;
 const REQUIREMENTS_MACOS_BUILD = path.join(__dirname, '..', 'requirements-macos-build.txt');
 const REQUIREMENTS_WINDOWS_BUILD = path.join(__dirname, '..', 'requirements-windows-build.txt');
 const MACOS_RUNTIME_REMOVABLE_PACKAGES = Object.freeze([
@@ -26,6 +26,14 @@ const MACOS_RUNTIME_REMOVABLE_PACKAGES = Object.freeze([
   'faster_whisper',
   'ctranslate2',
   'ctranslate2.libs',
+  // lightning-whisper-mlx declares torch but MLX inference never imports torch_whisper.py.
+  'torch',
+  'torchgen',
+  'caffe2',
+  'networkx',
+  'mpmath',
+  'Jinja2',
+  'MarkupSafe',
 ]);
 
 // Swift AudioCaptureHelper paths
@@ -124,42 +132,47 @@ function stageLegalBundle(targetDir = LEGAL_DIR) {
 function writeFfmpegComplianceManifest(targetDir = LEGAL_DIR) {
   const templatePath = path.join(REPO_ROOT, 'legal', 'FFMPEG-COMPLIANCE.json');
   const ffmpegSource = getBuildDownload('ffmpegSource');
+  let template = {};
+
+  if (fs.existsSync(templatePath)) {
+    try {
+      template = JSON.parse(fs.readFileSync(templatePath, 'utf8'));
+    } catch (error) {
+      console.log(`Warning: Could not parse ${templatePath}: ${error.message}`);
+    }
+  }
+
+  const templateProvenance = template.binaryProvenance || {};
   const compliance = {
-    ffmpegVersion: '8.0.1',
-    license: 'GPL-3.0-or-later',
+    ffmpegVersion: template.ffmpegVersion || '8.0.1',
+    license: template.license || 'GPL-3.0-or-later',
     binaryProvenance: {
       win32: {
+        ...(templateProvenance.win32 || {}),
         label: BUILD_DOWNLOADS.ffmpegWin.label,
         downloadUrl: BUILD_DOWNLOADS.ffmpegWin.url,
         buildPage: 'https://www.gyan.dev/ffmpeg/builds/',
         sha256: BUILD_DOWNLOADS.ffmpegWin.sha256,
       },
       darwin: {
+        ...(templateProvenance.darwin || {}),
         label: BUILD_DOWNLOADS.ffmpegMac.label,
         downloadUrl: BUILD_DOWNLOADS.ffmpegMac.url,
         sha256: BUILD_DOWNLOADS.ffmpegMac.sha256,
+        requiredArch: BUILD_DOWNLOADS.ffmpegMac.requiredArch || 'arm64',
       },
     },
     correspondingSource: {
+      ...(template.correspondingSource || {}),
       label: ffmpegSource.label,
       downloadUrl: ffmpegSource.url,
       archiveFileName: ffmpegSource.archiveFileName,
       sha256: ffmpegSource.sha256,
     },
-    usageInAvaNevis: 'ffmpeg is invoked as a separate subprocess for Opus compression after recording.',
+    usageInAvaNevis: template.usageInAvaNevis
+      || 'ffmpeg is invoked as a separate subprocess for Opus compression after recording.',
+    releaseDistribution: template.releaseDistribution,
   };
-
-  if (fs.existsSync(templatePath)) {
-    try {
-      const template = JSON.parse(fs.readFileSync(templatePath, 'utf8'));
-      Object.assign(compliance, template, {
-        binaryProvenance: compliance.binaryProvenance,
-        correspondingSource: compliance.correspondingSource,
-      });
-    } catch (error) {
-      console.log(`Warning: Could not parse ${templatePath}: ${error.message}`);
-    }
-  }
 
   fs.writeFileSync(
     path.join(targetDir, 'FFMPEG-COMPLIANCE.json'),
@@ -399,6 +412,32 @@ function removeDirectoryIfExists(dirPath, label) {
   fs.rmSync(dirPath, { recursive: true, force: true });
   console.log(sizeMB ? `  → Removed ${label} (${sizeMB} MB)` : `  → Removed ${label}`);
   return true;
+}
+
+function assertMacOSFfmpegBinaryArchitecture(ffmpegPath) {
+  const requiredArch = getBuildDownload('ffmpegMac').requiredArch || 'arm64';
+  const fileOutput = execSync(`file "${ffmpegPath}"`, { encoding: 'utf8' });
+  if (!fileOutput.includes(requiredArch)) {
+    throw new Error(
+      `Bundled macOS ffmpeg is not ${requiredArch}: ${fileOutput.trim()}`
+    );
+  }
+}
+
+function assertMacOSPythonRuntimeImports(pythonExe) {
+  const importCheck = [
+    'import lightning_whisper_mlx',
+    'from lightning_whisper_mlx.lightning import LightningWhisperMLX',
+    'import transcription.mlx_whisper_transcriber',
+  ].join('; ');
+
+  execSync(`"${pythonExe}" -c "${importCheck}"`, {
+    stdio: 'inherit',
+    env: {
+      ...process.env,
+      PYTHONPATH: path.join(REPO_ROOT, 'backend'),
+    },
+  });
 }
 
 function pruneMacOSPythonRuntimeDevelopmentFiles(sitePackagesDir) {
@@ -819,10 +858,10 @@ async function prepareResources() {
         stdio: 'inherit'
       });
 
-      // Clean up bloated transitive dependencies to reduce bundle size
-      // NOTE: scipy and torch are required by lightning-whisper-mlx (scipy is not used by
-      // backend/ but remains in the macOS bundle via that dependency). torch dev/test files
-      // are pruned below.
+      // Clean up bloated transitive dependencies to reduce bundle size.
+      // scipy stays bundled (lightning-whisper-mlx imports scipy.signal at runtime).
+      // torch and its transitive-only packages are installed for reproducible pip resolution
+      // then removed because MLX inference never imports torch_whisper.py.
       console.log('[5/5] Cleaning up unused dependencies...');
       const sitePackages = path.join(PYTHON_DIR, 'lib', 'python3.11', 'site-packages');
       // Keep pip: explicit speaker diarization setup installs optional pyannote
@@ -835,6 +874,7 @@ async function prepareResources() {
       }
 
       pruneMacOSPythonRuntimeDevelopmentFiles(sitePackages);
+      assertMacOSPythonRuntimeImports(pythonExe);
 
       console.log('✓ Python setup complete!\n');
     } else {
@@ -883,25 +923,21 @@ async function prepareResources() {
     console.log('✓ ffmpeg already prepared\n');
   } else {
     if (IS_MAC) {
-      // macOS: Download ffmpeg binary
-      console.log('[1/2] Downloading ffmpeg for macOS...');
-      const ffmpegZip = path.join(BUILD_DIR, 'ffmpeg.zip');
-      await downloadFile(getBuildDownload('ffmpegMac'), ffmpegZip);
+      const ffmpegDownload = getBuildDownload('ffmpegMac');
+      console.log('[1/2] Downloading ffmpeg for macOS (arm64)...');
+      const ffmpegStagingPath = path.join(BUILD_DIR, ffmpegDownload.archiveFileName || 'ffmpeg-osx-arm64');
+      await downloadFile(ffmpegDownload, ffmpegStagingPath);
 
-      console.log('[2/2] Extracting ffmpeg...');
+      console.log('[2/2] Staging ffmpeg...');
       if (!fs.existsSync(FFMPEG_DIR)) {
         fs.mkdirSync(FFMPEG_DIR, { recursive: true });
       }
 
-      // Extract zip directly to ffmpeg dir
-      extractZip(ffmpegZip, FFMPEG_DIR);
-
-      // Make executable
       const ffmpegPath = path.join(FFMPEG_DIR, 'ffmpeg');
-      execSync(`chmod +x "${ffmpegPath}"`, { stdio: 'inherit' });
-
-      // Cleanup
-      fs.unlinkSync(ffmpegZip);
+      fs.copyFileSync(ffmpegStagingPath, ffmpegPath);
+      fs.chmodSync(ffmpegPath, 0o755);
+      fs.unlinkSync(ffmpegStagingPath);
+      assertMacOSFfmpegBinaryArchitecture(ffmpegPath);
 
       console.log('✓ ffmpeg setup complete!\n');
     } else {

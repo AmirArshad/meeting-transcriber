@@ -18,9 +18,11 @@ const BUILD_DOWNLOADS = Object.freeze({
     sha256: 'e2aaeaa0fdbc397d4794828086424d4aaa2102cef1fb6874f6ffd29c0b88b673',
   }),
   ffmpegMac: Object.freeze({
-    label: 'macOS ffmpeg 8.0.1',
-    url: 'https://evermeet.cx/ffmpeg/ffmpeg-8.0.1.zip',
-    sha256: '470e482f6e290eac92984ac12b2d67bad425b1e5269fd75fb6a3536c16e824e4',
+    label: 'macOS ffmpeg n8.0.1 arm64 static (shaka-project/static-ffmpeg-binaries)',
+    url: 'https://github.com/shaka-project/static-ffmpeg-binaries/releases/download/n8.0.1-1/ffmpeg-osx-arm64',
+    sha256: 'c334b7f418e10201dc6c8e42407f5198c3270524cc77d40606e746be3c49159a',
+    archiveFileName: 'ffmpeg-osx-arm64',
+    requiredArch: 'arm64',
   }),
   ffmpegSource: Object.freeze({
     label: 'FFmpeg 8.0.1 release source',

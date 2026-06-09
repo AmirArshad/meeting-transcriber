@@ -74,7 +74,7 @@ test('manifestsMatch detects Swift source changes through the resource manifest'
 test('buildResourceManifest tracks pinned packaged dependency requirements', () => {
   const manifest = buildResourceManifest();
 
-  assert.equal(manifest.version, 4);
+  assert.equal(manifest.version, 5);
   assert.equal(typeof manifest.inputs.requirementsMacosBuild, 'string');
   assert.equal(typeof manifest.inputs.requirementsWindowsBuild, 'string');
   assert.equal(manifest.inputs.requirementsMacosBuild.length, 64);
@@ -87,6 +87,9 @@ test('macOS packaged Python keeps pip for optional diarization setup', () => {
 
   assert.equal(removablePackages.includes('pip'), false);
   assert.ok(removablePackages.includes('setuptools'));
+  assert.ok(removablePackages.includes('torch'));
+  assert.ok(removablePackages.includes('Jinja2'));
+  assert.ok(removablePackages.includes('MarkupSafe'));
 });
 
 
@@ -126,9 +129,10 @@ test('pruneMacOSPythonRuntimeDevelopmentFiles is exported for macOS packaging cl
 });
 
 
-test('macOS helper signing path matches extraResources destination', () => {
+test('macOS bundled Mach-O signing paths match extraResources destinations', () => {
   assert.deepEqual(packageJson.build.mac.binaries, [
     'Contents/Resources/bin/audiocapture-helper',
+    'Contents/Resources/ffmpeg/ffmpeg',
   ]);
 });
 

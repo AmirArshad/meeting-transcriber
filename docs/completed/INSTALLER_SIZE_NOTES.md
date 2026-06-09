@@ -2,6 +2,37 @@
 
 Short log of bundled Python size changes from phased dependency work. Measure on the **native** build host after `npm run prepare-build`:
 
+## macOS vs Windows installer gap (2026-06-09 analysis)
+
+Packaged builds do **not** bundle Whisper models by default (`DOWNLOAD_MODELS` is off). The ~1.3 GB macOS DMG vs ~200 MB Windows installer gap is almost entirely the **bundled Python runtime**, not Electron or ffmpeg.
+
+| Component | Windows | macOS | Notes |
+|-----------|---------|-------|-------|
+| Transcription stack | `faster-whisper` + `ctranslate2` (~80–120 MB) | `lightning-whisper-mlx` + `mlx` + `scipy` + `numba` (~150–250 MB) | macOS needs Metal/MLX path |
+| PyTorch (`torch`) | Not bundled | Was ~400–600 MB | **Removed post-install** — MLX inference never imports `lightning_whisper_mlx/torch_whisper.py`; diarization installs its own torch into `userData` |
+| PyObjC frameworks | N/A | ~50–100 MB | Required for ScreenCaptureKit / CoreAudio capture |
+| Python runtime | Embedded (~15 MB) | python-build-standalone (~45 MB) | macOS uses relocatable standalone build |
+| ffmpeg | gyan.dev x64 (~50 MB) | arm64 static (~32 MB) | Switched from evermeet.cx Intel-only build (Rosetta) to shaka `ffmpeg-osx-arm64` |
+| Electron shell | ~100 MB | ~100 MB | macOS target is `arm64` only |
+
+**Expected savings from this branch**
+
+- arm64 ffmpeg: ~25–30 MB smaller vs evermeet Intel static binary; removes Rosetta deprecation warning
+- torch + PyTorch-only transitive packages removed after `pip install`: **~400–600 MB** (measure on Mac with `du -sh build/resources/python`)
+
+**Still not trimmable without product/architecture changes**
+
+- `scipy` — required at runtime by `lightning-whisper-mlx` (`timing.py` imports `scipy.signal`)
+- PyObjC capture frameworks — required for desktop audio
+- `mlx` / `numba` / `llvmlite` — MLX transcription runtime
+
+**Measure after `npm run prepare-build` on macOS:**
+
+```bash
+du -sh build/resources/python build/resources/ffmpeg dist/mac-arm64/AvaNevis.app
+du -sh build/resources/python/lib/python3.11/site-packages/{torch,scipy,mlx,torchgen} 2>/dev/null || true
+```
+
 ```bash
 # macOS
 du -sh build/resources/python
