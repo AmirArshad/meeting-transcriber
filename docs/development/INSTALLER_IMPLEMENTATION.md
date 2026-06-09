@@ -20,8 +20,8 @@ The packaging flow is intentionally explicit:
 
 - Windows embedded Python
 - macOS standalone Python
-- Windows ffmpeg
-- macOS ffmpeg
+- Windows ffmpeg (gyan.dev essentials)
+- macOS ffmpeg (shaka-project/static-ffmpeg-binaries `ffmpeg-osx-arm64`, arm64)
 - a pinned `pip` wheel used for bootstrap
 
 The build no longer depends on the moving-target `get-pip.py` bootstrap script.

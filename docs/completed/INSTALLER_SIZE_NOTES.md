@@ -4,7 +4,7 @@ Short log of bundled Python size changes from phased dependency work. Measure on
 
 ## macOS vs Windows installer gap (2026-06-09 analysis)
 
-Packaged builds do **not** bundle Whisper models by default (`DOWNLOAD_MODELS` is off). The ~1.3 GB macOS DMG vs ~200 MB Windows installer gap is almost entirely the **bundled Python runtime**, not Electron or ffmpeg.
+Packaged builds do **not** bundle Whisper models by default (`DOWNLOAD_MODELS` is off). The ~800 MB macOS DMG vs ~200 MB Windows installer gap is almost entirely the **bundled Python runtime**, not Electron or ffmpeg.
 
 | Component | Windows | macOS | Notes |
 |-----------|---------|-------|-------|
@@ -15,10 +15,10 @@ Packaged builds do **not** bundle Whisper models by default (`DOWNLOAD_MODELS` i
 | ffmpeg | gyan.dev x64 (~50 MB) | arm64 static (~32 MB) | Switched from evermeet.cx Intel-only build (Rosetta) to shaka `ffmpeg-osx-arm64` |
 | Electron shell | ~100 MB | ~100 MB | macOS target is `arm64` only |
 
-**Expected savings from this branch**
+**Savings shipped in v2.4.1 (2026-06-09)**
 
-- arm64 ffmpeg: ~25–30 MB smaller vs evermeet Intel static binary; removes Rosetta deprecation warning
-- torch + PyTorch-only transitive packages removed after `pip install`: **~400–600 MB** (measure on Mac with `du -sh build/resources/python`)
+- arm64 ffmpeg: ~25–30 MB smaller vs the previous evermeet.cx Intel static binary; removes Rosetta deprecation warning
+- torch + PyTorch-only transitive packages removed after `pip install`: **~400–600 MB** (packaged app ~800 MB, down from ~1.3 GB)
 
 **Still not trimmable without product/architecture changes**
 
@@ -73,7 +73,7 @@ du -sh dist/mac-arm64/AvaNevis.app
 Compatibility notes:
 
 - `soxr` 1.1.0 keeps `quality='VHQ'` API and has Python 3.11 Windows/macOS wheels.
-- `lightning-whisper-mlx==0.0.10` still depends on `scipy`, `numba`, and `torch`; those remain pinned on macOS.
+- `lightning-whisper-mlx==0.0.10` still depends on `scipy`, `numba`, and `torch`; `torch` is installed during macOS prepare-build then removed from the bundle (MLX inference does not import it).
 - `numba` / `llvmlite` pins already satisfy NumPy 2 support ranges per upstream compatibility tables.
 
 ## Smoke validation

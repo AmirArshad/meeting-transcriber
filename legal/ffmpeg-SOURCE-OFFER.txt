@@ -4,7 +4,7 @@ AvaNevis installers bundle ffmpeg 8.0.1 as a separate subprocess (Opus
 compression). Prebuilt binaries come from third-party hosts:
 
   Windows: gyan.dev FFmpeg 8.0.1 essentials (GPLv3)
-  macOS:   evermeet.cx FFmpeg 8.0.1 (GPLv3)
+  macOS:   shaka-project/static-ffmpeg-binaries ffmpeg n8.0.1 arm64 (GPLv3)
 
 Pinned URLs and SHA-256 checksums: legal/FFMPEG-COMPLIANCE.json
 

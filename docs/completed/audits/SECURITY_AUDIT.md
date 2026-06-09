@@ -128,7 +128,7 @@ Your application is **secure and safe to distribute** to other users. No malicio
 
 **Downloads:**
 - ✅ Python from official python.org (HTTPS)
-- ✅ ffmpeg from trusted source (gyan.dev, HTTPS)
+- ✅ ffmpeg from trusted sources (gyan.dev on Windows, shaka-project/static-ffmpeg-binaries on macOS; HTTPS, pinned SHA-256)
 - ✅ PyTorch from official PyPI (HTTPS)
 
 **Security Features:**
@@ -263,7 +263,7 @@ Users might see these warnings (they are SAFE):
 **Bundled in installers (see [THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md)):**
 - Electron: MIT ✅
 - Python runtime: PSF ✅
-- **ffmpeg: GPLv3** (third-party prebuilt binaries from gyan.dev / evermeet.cx) — **not** “permissive-only”; requires source offer and release-page distribution (see `legal/FFMPEG-COMPLIANCE.json`, `docs/development/RELEASE_COMPLIANCE.md`)
+- **ffmpeg: GPLv3** (third-party prebuilt binaries from gyan.dev on Windows and shaka-project/static-ffmpeg-binaries on macOS) — **not** “permissive-only”; requires source offer and release-page distribution (see `legal/FFMPEG-COMPLIANCE.json`, `docs/development/RELEASE_COMPLIANCE.md`)
 - Pinned Python wheels: mostly MIT / BSD / Apache-2.0 (see `legal/PYTHON-BUNDLED-PACKAGES.md`)
 
 **Downloaded at runtime (user-triggered):** Whisper/MIT, pyannote/CC-BY-4.0 + HF terms, Qwen/Apache-2.0, llama.cpp/MIT, optional NVIDIA CUDA EULA.

@@ -264,17 +264,19 @@ filelock>=3.12.0                            # <1 MB
 
 ### 2.4 FFmpeg Bundle
 
+> **Update (2026-06-09):** macOS now uses a pinned shaka-project `ffmpeg-osx-arm64` static binary (~32 MB) instead of evermeet.cx. See `build/download-manifest.js` and `legal/FFMPEG-COMPLIANCE.json`.
+
 | Component | Windows | macOS | Status |
 |-----------|---------|-------|--------|
-| **FFmpeg Type** | Essentials build | Minimal build | ✓ MATCH |
-| **Estimated Size** | ~50 MB | ~60 MB | ⚠️ SLIGHTLY LARGER |
-| **Download Source** | gyan.dev | evermeet.cx | ⚠️ DIFFERENT |
+| **FFmpeg Type** | Essentials build | arm64 static build | ✓ MATCH |
+| **Estimated Size** | ~50 MB | ~32 MB | ✓ SMALLER |
+| **Download Source** | gyan.dev | shaka-project/static-ffmpeg-binaries | ⚠️ DIFFERENT |
 
 **Details:**
-- **Windows** (`prepare-resources.js:13`): Downloads "essentials" build from gyan.dev (~50 MB)
-- **macOS** (`prepare-resources.js:14`): Downloads from evermeet.cx (~60 MB)
-- **Both**: Only include ffmpeg binary (no ffprobe, ffplay, or extra codecs)
-- **Impact:** macOS ffmpeg is ~10 MB larger
+- **Windows** (`build/download-manifest.js`): Downloads "essentials" build from gyan.dev (~50 MB)
+- **macOS** (`build/download-manifest.js`): Downloads pinned `ffmpeg-osx-arm64` from shaka-project/static-ffmpeg-binaries (~32 MB)
+- **Both**: Only include the ffmpeg binary (no ffprobe, ffplay, or extra codecs)
+- **Impact:** macOS ffmpeg is native arm64 (no Rosetta); smaller than the previous evermeet Intel binary
 
 ### 2.5 Total Installation Size Estimate
 
