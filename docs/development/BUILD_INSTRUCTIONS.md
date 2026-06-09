@@ -107,7 +107,7 @@ The installer includes:
 
 - ✅ Electron application (UI)
 - ✅ Embedded Python 3.11.9 runtime
-- ✅ Platform Python stack from `requirements-*-build.txt` (Windows: `faster-whisper`, `soxr`, `numpy`, …; macOS: `lightning-whisper-mlx`, `scipy`, `mlx`, `torch`, …). See [installer size notes](../completed/INSTALLER_SIZE_NOTES.md) for 1b/2/4 pin differences; Dependabot handling: [Dependabot triage](DEPENDABOT_TRIAGE.md).
+- ✅ Platform Python stack from `requirements-*-build.txt` (Windows: `faster-whisper`, `soxr`, `numpy`, …; macOS: `lightning-whisper-mlx`, `scipy`, `mlx`, …; `torch` is installed during build then removed). See [installer size notes](../completed/INSTALLER_SIZE_NOTES.md).
 - ✅ ffmpeg binary
 - ✅ Backend Python scripts
 
@@ -210,24 +210,42 @@ Once built, you can distribute the installer:
 
 **Legal:** Installers bundle GPLv3 ffmpeg. Tagged releases must include `ffmpeg-8.0.1.tar.xz` and third-party notices on the same release page. See [THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md).
 
-**Installer size:** ~600-800MB
-**Installed size:** ~1.2-1.5GB (plus Whisper models on first use)
+**Installer size (approximate):** Windows ~200–300 MB; macOS ~700–900 MB after arm64 ffmpeg + torch bundle trim (plus Whisper models on first use).
 
-## Code Signing (Optional)
+### macOS packaged smoke (no Apple Developer account required)
 
-For production distribution, you should code-sign the installer:
+After `npm run build:mac:dir`:
 
-1. Obtain a code signing certificate
-2. Add to electron-builder config in package.json:
+```bash
+npm run verify:mac:packaged
+```
 
-   ```json
-   "win": {
-     "certificateFile": "path/to/cert.pfx",
-     "certificatePassword": "..."
-   }
-   ```
+Checks arm64 ffmpeg, ad-hoc codesign validity, `libopus` encode, bundled MLX imports, absence of bundled `torch`, and prints bundle sizes.
 
-This removes "Unknown Publisher" warnings.
+## Code Signing (Optional — paid Apple / Windows certs)
+
+**Default builds are unsigned/ad-hoc signed.** Users install via the Gatekeeper workaround documented in [MACOS_INSTALLATION.md](../guides/MACOS_INSTALLATION.md). No Apple Developer Program ($99/year) is required for local builds or CI smoke tests.
+
+When you enroll in the Apple Developer Program later, set GitHub Actions secrets and uncomment the env block in `.github/workflows/build-release.yml`:
+
+| Secret | Purpose |
+|--------|---------|
+| `MACOS_CERTIFICATE_BASE64` | Developer ID Application `.p12` (base64) |
+| `MACOS_CERTIFICATE_PASSWORD` | Certificate export password |
+| `APPLE_ID` | Apple ID for notarization |
+| `APPLE_APP_SPECIFIC_PASSWORD` | App-specific password |
+| `APPLE_TEAM_ID` | Team ID |
+
+Then set `"notarize": true` in `package.json` `build.mac` (currently `false` so CI/release builds do not require Apple credentials).
+
+Windows EV/standard code signing (optional, separate cost):
+
+```json
+"win": {
+  "certificateFile": "path/to/cert.pfx",
+  "certificatePassword": "..."
+}
+```
 
 ## Next Steps
 

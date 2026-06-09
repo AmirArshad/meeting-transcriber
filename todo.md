@@ -9,8 +9,9 @@ Replace Intel-only evermeet.cx ffmpeg with a pinned Apple Silicon static build (
 - [x] [Risk: Low] Pin arm64 ffmpeg download (shaka-project/static-ffmpeg-binaries n8.0.1-1) with SHA-256 verification.
 - [x] [Risk: Low] CI: assert bundled `Contents/Resources/ffmpeg/ffmpeg` is arm64 via `file`.
 - [x] [Risk: Medium] Post-install removal of `torch` + transitive PyTorch-only packages; keep `scipy` (required by MLX).
-- [ ] [Risk: High] macOS packaged smoke: record → Opus via arm64 ffmpeg → short MLX transcription (CI now verifies arm64 arch, codesign, and `ffmpeg -version` spawn).
-- [ ] [Risk: Medium] Measure `du -sh build/resources/python` before/after on a Mac build host; update `docs/completed/INSTALLER_SIZE_NOTES.md`.
+- [x] [Risk: Medium] CI packaged smoke: `scripts/verify-macos-packaged-app.sh` (arm64 ffmpeg, codesign, libopus encode, MLX imports, no bundled torch, `du -sh`).
+- [ ] [Risk: High] Manual macOS smoke: record → Opus via packaged ffmpeg → short MLX transcription on a real Mac.
+- [ ] [Risk: Low] Apple Developer signing/notarization: enable when enrolled (`package.json` `mac.notarize`, release workflow secrets).
 - [ ] [Risk: High] Evaluate PyObjC `Cocoa` / `Quartz` pin removal (separate follow-up; needs capture smoke).
 
 ## Remaining Dependency And Release Hygiene

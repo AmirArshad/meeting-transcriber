@@ -113,6 +113,16 @@ jobs:
         timeout-minutes: 45
         env:
           DOWNLOAD_MODELS: "false" # Skip model download - users download on-demand
+          # Optional Apple Developer signing (omit until enrolled — builds ad-hoc sign today):
+          # CSC_LINK: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          # CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          # APPLE_ID: ${{ secrets.APPLE_ID }}
+          # APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          # APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Verify packaged macOS app smoke checks
+        if: matrix.os == 'macOS'
+        run: bash scripts/verify-macos-packaged-app.sh
 
       - name: Verify package version matches tag
         if: startsWith(github.ref, 'refs/tags/')

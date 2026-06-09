@@ -168,57 +168,8 @@ jobs:
       env:
         DOWNLOAD_MODELS: "false"
 
-    - name: Verify packaged macOS helper and resources
-      run: |
-        APP_PATH="dist/mac-arm64/AvaNevis.app"
-        HELPER_PATH="$APP_PATH/Contents/Resources/bin/audiocapture-helper"
-        PYTHON_PATH="$APP_PATH/Contents/Resources/python/bin/python3"
-        FFMPEG_PATH="$APP_PATH/Contents/Resources/ffmpeg/ffmpeg"
-
-        test -d "$APP_PATH"
-        test -f "$HELPER_PATH"
-        test -x "$HELPER_PATH"
-        test -f "$PYTHON_PATH"
-        test -f "$FFMPEG_PATH"
-        test -x "$FFMPEG_PATH"
-        file "$FFMPEG_PATH" | grep -q "arm64"
-        codesign --verify --strict --verbose=2 "$FFMPEG_PATH"
-        "$FFMPEG_PATH" -version | grep -q "ffmpeg version"
-
-        codesign --verify --strict --verbose=2 "$HELPER_PATH"
-        codesign -d --entitlements :- "$HELPER_PATH" | grep -q "com.apple.security.inherit"
-
-        helper_output="$(
-        python - "$HELPER_PATH" 2>&1 <<'PY'
-        import subprocess
-        import sys
-
-        helper_path = sys.argv[1]
-
-        try:
-            result = subprocess.run(
-                [helper_path, "--help"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                check=False,
-            )
-            sys.stdout.write(result.stdout)
-            sys.stderr.write(result.stderr)
-            sys.exit(result.returncode)
-        except subprocess.TimeoutExpired as exc:
-            if exc.stdout:
-                sys.stdout.write(exc.stdout if isinstance(exc.stdout, str) else exc.stdout.decode(errors="replace"))
-            if exc.stderr:
-                sys.stderr.write(exc.stderr if isinstance(exc.stderr, str) else exc.stderr.decode(errors="replace"))
-            print("audiocapture-helper --help timed out", file=sys.stderr)
-            sys.exit(124)
-        PY
-        )"
-        echo "$helper_output"
-        echo "$helper_output" | grep -q "AudioCaptureHelper"
-
-        echo "✓ Packaged macOS app contains helper, Python, and arm64 ffmpeg"
+    - name: Verify packaged macOS app smoke checks
+      run: bash scripts/verify-macos-packaged-app.sh
 
   test-frontend:
     name: Test Electron Frontend & Build Smoke

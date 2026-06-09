@@ -18,7 +18,8 @@
     "build": "npm run prepare-build && electron-builder build --win --publish never",
     "build:dir": "npm run prepare-build && electron-builder build --win --dir",
     "build:mac": "npm run prepare-build && electron-builder build --mac --publish never",
-    "build:mac:dir": "npm run prepare-build && electron-builder build --mac --dir"
+    "build:mac:dir": "npm run prepare-build && electron-builder build --mac --dir",
+    "verify:mac:packaged": "bash scripts/verify-macos-packaged-app.sh"
   },
   "keywords": [
     "transcription",
@@ -66,6 +67,7 @@
       ],
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
+      "notarize": false,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.inherit.plist",
       "extendInfo": {

@@ -134,6 +134,7 @@ test('macOS bundled Mach-O signing paths match extraResources destinations', () 
     'Contents/Resources/bin/audiocapture-helper',
     'Contents/Resources/ffmpeg/ffmpeg',
   ]);
+  assert.equal(packageJson.build.mac.notarize, false);
 });
 
 
