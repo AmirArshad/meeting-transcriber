@@ -915,13 +915,17 @@ class MacOSAudioRecorder:
 
             # Mix: apply volumes with mic boost (match Windows behavior)
             # Mic boost of 2.0 (6dB) makes voice prominent over desktop audio
+            # MEMORY: build the mix in place to avoid holding mic, desktop and the
+            # result as separate full-size float buffers at the same time.
             MIC_BOOST = 2.0
-            final_audio = (mic_audio * self.mic_volume * MIC_BOOST) + (desktop_audio * self.desktop_volume)
+            final_audio = mic_audio * (self.mic_volume * MIC_BOOST)
+            final_audio += desktop_audio * self.desktop_volume
 
             # Soft limiting if clipping would occur (match Windows behavior)
-            max_val = np.max(np.abs(final_audio))
+            max_val = max(abs(float(final_audio.min())), abs(float(final_audio.max())))
             if max_val > 1.0:
-                final_audio = np.tanh(final_audio * 0.85)
+                final_audio *= 0.85
+                np.tanh(final_audio, out=final_audio)
 
             print(f"Mixed audio: {len(final_audio)} samples (mic boost: {MIC_BOOST}x)", file=sys.stderr)
 
@@ -1031,15 +1035,19 @@ class MacOSAudioRecorder:
         - Gentle normalization (preserves dynamics)
         - Soft limiting (prevents clipping)
         """
-        # Handle stereo by processing each channel separately
+        # MEMORY: process channels in place on column views to avoid building
+        # extra full-size copies (np.column_stack + per-channel copies). This
+        # mirrors the shared Windows processor and keeps peak memory low for long
+        # recordings, where each float buffer can be >1 GiB.
         if len(audio.shape) > 1 and audio.shape[1] == 2:
-            # Process left and right channels independently
-            left = self._process_channel(audio[:, 0])
-            right = self._process_channel(audio[:, 1])
-            return np.column_stack((left, right))
+            self._process_channel_inplace(audio[:, 0])
+            self._process_channel_inplace(audio[:, 1])
+            return audio
         else:
             # Mono audio
-            return self._process_channel(audio.flatten()).reshape(-1, 1)
+            flat = audio.flatten()
+            self._process_channel_inplace(flat)
+            return flat.reshape(-1, 1)
 
     def _process_channel(self, channel_data):
         """
@@ -1069,6 +1077,32 @@ class MacOSAudioRecorder:
             channel_data = np.tanh(channel_data * 0.9) * 0.85
 
         return channel_data
+
+    def _process_channel_inplace(self, channel):
+        """
+        In-place equivalent of ``_process_channel`` for memory-sensitive paths.
+
+        Mutates ``channel`` directly (which may be a non-contiguous strided column
+        view) so long recordings can be enhanced without allocating extra
+        full-size copies. Peak magnitudes use min/max instead of ``np.abs`` to
+        avoid a temporary array the size of the channel.
+        """
+        # 1. Remove DC offset (essential - prevents pops/clicks)
+        channel -= channel.mean()
+
+        # 2. Very gentle normalization to -3dB peak (preserves dynamics)
+        peak = max(abs(float(channel.min())), abs(float(channel.max())))
+        if peak > 0.7:  # Only normalize if too loud
+            channel *= 0.7 / peak
+        elif 0 < peak < 0.1:  # Boost very quiet audio
+            channel *= 0.3 / peak
+
+        # 3. Very soft limiting ONLY if clipping would occur
+        abs_max = max(abs(float(channel.min())), abs(float(channel.max())))
+        if abs_max > 0.95:
+            channel *= 0.9
+            np.tanh(channel, out=channel)
+            channel *= 0.85
 
     def _save_wav(self, audio, path):
         """Save audio as WAV file."""

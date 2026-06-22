@@ -688,13 +688,31 @@ class AudioRecorder:
         else:
             print(f"  DESKTOP first capture: NEVER (preroll never elapsed or no callbacks)", file=sys.stderr)
 
-        # KEY DIAGNOSTIC: Check if captures started at same time
+        # KEY DIAGNOSTIC: Compare when each stream first captured audio.
+        # NOTE: WASAPI loopback only delivers callbacks while desktop audio is
+        # actually playing, so a positive delta just means the desktop was silent
+        # for that long at the start. timeline.py reconstructs the desktop track
+        # relative to the mic's first capture and inserts exactly that much leading
+        # silence, so this offset is corrected during mixing (no overlap, no lost
+        # audio). A negative delta (desktop before mic) is also handled by the
+        # overlap-trim logic in timeline.reconstruct_desktop_timeline.
         if self.mic_first_capture_time is not None and self.desktop_first_capture_time is not None:
             capture_delta = self.desktop_first_capture_time - self.mic_first_capture_time
             print(f"", file=sys.stderr)
             print(f"  CAPTURE TIME DELTA: {capture_delta:.4f}s", file=sys.stderr)
-            if abs(capture_delta) > 0.1:
-                print(f"  *** WARNING: Captures started {abs(capture_delta):.4f}s apart! This will cause overlap! ***", file=sys.stderr)
+            if capture_delta > 0.1:
+                print(
+                    f"  Desktop audio started {capture_delta:.4f}s after the mic "
+                    f"(expected for loopback when the desktop is initially silent; "
+                    f"timeline reconstruction inserts matching leading silence).",
+                    file=sys.stderr,
+                )
+            elif capture_delta < -0.1:
+                print(
+                    f"  Desktop audio started {abs(capture_delta):.4f}s before the mic "
+                    f"(timeline reconstruction trims pre-reference frames).",
+                    file=sys.stderr,
+                )
             else:
                 print(f"  (Captures started within 100ms - timing looks OK)", file=sys.stderr)
 

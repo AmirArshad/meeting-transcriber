@@ -236,10 +236,9 @@ jobs:
 
           ### What's New
 
-          - **Smaller macOS installer:** Removed unused PyTorch from the Apple Silicon bundle after reproducible pip install, cutting the packaged app from ~1.3 GB to ~800 MB.
-          - **Native arm64 ffmpeg on macOS:** Replaced the Intel-only evermeet ffmpeg binary with a pinned shaka-project static arm64 build, signed in the bundle.
-          - **Release quality checks:** Added automated packaged-app smoke verification for macOS builds (arm64 ffmpeg, Opus encode, MLX import, torch absence) in CI and release workflows.
-          - **CI reliability:** Fixed a Windows-only NVIDIA DLL loader test that could crash pytest on macOS/Linux CI hosts.
+          - **Fix long recording failures:** Recordings around one hour (and longer) could fail at stop with `Unable to allocate 1.28 GiB` during mic enhancement and mixing because post-processing allocated several full-size float32 copies of the entire recording at once. Processing now uses in-place NumPy operations so peak memory stays near a single float buffer instead of multiple 1+ GiB allocations.
+          - **Clearer loopback timing logs:** WASAPI desktop capture starting after the mic when the desktop was initially silent is expected. Logs now explain that timeline reconstruction inserts matching leading silence instead of warning about overlap.
+          - **macOS parity:** Applied the same in-place enhancement and mixing optimizations on macOS for long recordings.
 
           ### Platform Support
 

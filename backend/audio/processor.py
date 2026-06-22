@@ -96,8 +96,13 @@ def enhance_microphone(audio_data: np.ndarray, sample_rate: int, target_channels
     if len(audio_data) == 0:
         return audio_data
 
-    # Convert to float for processing
-    audio_float = audio_data.astype(np.float32) / 32768.0
+    # MEMORY: process in place on a single float32 buffer. Long recordings (e.g. a
+    # 1h stereo meeting is hundreds of MB as int16) previously triggered MemoryError
+    # because the old path allocated several extra full-size copies at once
+    # (audio_float + per-channel copies + column_stack + flatten). Operating on
+    # strided channel views in place keeps peak memory to roughly one float buffer.
+    audio_float = audio_data.astype(np.float32)
+    audio_float /= 32768.0
 
     # Handle stereo by processing each channel separately
     # Use target_channels to determine layout, not array length guessing
@@ -108,21 +113,17 @@ def enhance_microphone(audio_data: np.ndarray, sample_rate: int, target_channels
             audio_float = audio_float[:-1]
 
         audio_stereo = audio_float.reshape(-1, 2)
-        left = audio_stereo[:, 0]
-        right = audio_stereo[:, 1]
-
-        # Process each channel
-        left_processed = _process_channel(left)
-        right_processed = _process_channel(right)
-
-        # Recombine to interleaved format
-        audio_processed = np.column_stack((left_processed, right_processed)).flatten()
+        # Strided views into audio_float; processing in place mutates audio_float
+        # directly so it stays interleaved without any recombination copy.
+        _process_channel_inplace(audio_stereo[:, 0])
+        _process_channel_inplace(audio_stereo[:, 1])
     else:
         # Mono
-        audio_processed = _process_channel(audio_float)
+        _process_channel_inplace(audio_float)
 
-    # Convert back to int16
-    return (audio_processed * 32767.0).astype(np.int16)
+    # Convert back to int16 (in-place scale, single output copy)
+    audio_float *= 32767.0
+    return audio_float.astype(np.int16)
 
 
 def _process_channel(channel_data: np.ndarray) -> np.ndarray:
@@ -161,6 +162,37 @@ def _process_channel(channel_data: np.ndarray) -> np.ndarray:
         channel_data = np.tanh(channel_data * 0.9) * 0.85
 
     return channel_data
+
+
+def _process_channel_inplace(channel: np.ndarray) -> None:
+    """
+    In-place equivalent of ``_process_channel`` for memory-sensitive paths.
+
+    Mutates ``channel`` directly (which may be a non-contiguous strided view into
+    a larger interleaved buffer) so long recordings can be enhanced without
+    allocating extra full-size copies. Peak magnitudes are computed from
+    min/max instead of ``np.abs`` to avoid a temporary array the size of the
+    channel.
+
+    Args:
+        channel: Single channel audio as a float32 array/view (-1.0 to 1.0)
+    """
+    # 1. Remove DC offset (essential - prevents pops/clicks)
+    channel -= channel.mean()
+
+    # 2. Very gentle normalization to -3dB peak (preserves dynamics)
+    peak = max(abs(float(channel.min())), abs(float(channel.max())))
+    if peak > NORMALIZATION_HIGH_THRESHOLD:
+        channel *= NORMALIZATION_HIGH_THRESHOLD / peak
+    elif 0 < peak < NORMALIZATION_LOW_THRESHOLD:
+        channel *= NORMALIZATION_BOOST_TARGET / peak
+
+    # 3. Very soft limiting ONLY if clipping would occur
+    abs_max = max(abs(float(channel.min())), abs(float(channel.max())))
+    if abs_max > SOFT_LIMIT_THRESHOLD:
+        channel *= 0.9
+        np.tanh(channel, out=channel)
+        channel *= 0.85
 
 
 def downmix_to_stereo(audio_data: np.ndarray, num_channels: int) -> np.ndarray:
@@ -225,18 +257,25 @@ def mix_audio(
     Returns:
         Mixed audio as int16 numpy array
     """
-    # Convert to float
-    mic_float = mic_audio.astype(np.float32) / 32768.0 * mic_volume * mic_boost
-    desktop_float = desktop_audio.astype(np.float32) / 32768.0 * desktop_volume
+    # MEMORY: build the mix in place to avoid holding mic_float, desktop_float and
+    # the result as separate full-size float buffers simultaneously (this matters
+    # for long recordings where each buffer can be >1 GiB).
+    mixed = mic_audio.astype(np.float32)
+    mixed *= (mic_volume * mic_boost) / 32768.0
 
-    mixed = mic_float + desktop_float
+    desktop_float = desktop_audio.astype(np.float32)
+    desktop_float *= desktop_volume / 32768.0
+    mixed += desktop_float
+    del desktop_float
 
     # Soft limiting if clipping would occur
-    max_val = np.max(np.abs(mixed))
+    max_val = max(abs(float(mixed.min())), abs(float(mixed.max())))
     if max_val > 1.0:
-        mixed = np.tanh(mixed * 0.85)
+        mixed *= 0.85
+        np.tanh(mixed, out=mixed)
 
-    return (mixed * 32767.0).astype(np.int16)
+    mixed *= 32767.0
+    return mixed.astype(np.int16)
 
 
 def align_audio_lengths(audio1: np.ndarray, audio2: np.ndarray) -> tuple:
