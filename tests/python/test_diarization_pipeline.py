@@ -136,16 +136,48 @@ def test_build_audio_conversion_command_targets_16khz_mono(tmp_path):
     ]
 
 
-def test_load_prepared_audio_for_pipeline_uses_torchaudio(monkeypatch, tmp_path):
+def test_load_prepared_audio_for_pipeline_reads_pcm_wav(monkeypatch, tmp_path):
     audio_path = tmp_path / 'meeting.diarization.16k.wav'
-    audio_path.write_bytes(b'wav')
-    calls = []
+    write_wav(audio_path, seconds=1, sample_rate=16000)
 
-    fake_torchaudio = types.SimpleNamespace(load=lambda path: calls.append(path) or ('waveform', 16000))
-    monkeypatch.setitem(sys.modules, 'torchaudio', fake_torchaudio)
+    class FakeTensor:
+        def __init__(self, length: int):
+            self.shape = (length,)
+            self.dtype = types.SimpleNamespace(name='float32')
 
-    assert pipeline.load_prepared_audio_for_pipeline(audio_path) == {'waveform': 'waveform', 'sample_rate': 16000}
-    assert calls == [str(audio_path)]
+        def to(self, _dtype):
+            return self
+
+        def view(self, *_shape):
+            return self
+
+        def mean(self, _dim):
+            return self
+
+        def unsqueeze(self, _dim):
+            self.shape = (1, self.shape[0])
+            return self
+
+        def __truediv__(self, _value):
+            return self
+
+        def __sub__(self, _value):
+            return self
+
+    fake_torch = types.SimpleNamespace(
+        frombuffer=lambda raw, dtype: FakeTensor(len(raw) // 2),
+        float32=object(),
+        int16=object(),
+        int32=object(),
+        uint8=object(),
+    )
+    monkeypatch.setitem(sys.modules, 'torch', fake_torch)
+
+    loaded = pipeline.load_prepared_audio_for_pipeline(audio_path)
+
+    assert loaded['sample_rate'] == 16000
+    assert loaded['waveform'].shape == (1, 16000)
+    assert loaded['waveform'].dtype.name == 'float32'
 
 
 def write_wav(path: Path, *, seconds: int, sample_rate: int = 16000) -> None:
@@ -179,7 +211,6 @@ def test_run_pyannote_diarization_passes_audio_from_memory(monkeypatch, tmp_path
     monkeypatch.setattr(pipeline, 'assert_required_device_available', lambda _device: object())
     monkeypatch.setattr(pipeline, 'load_pyannote_pipeline', lambda _model_ref, _token, **_kwargs: FakePipeline())
     monkeypatch.setattr(pipeline, 'move_pipeline_to_best_device', lambda _pipeline, required_device=None: required_device or 'cuda')
-    monkeypatch.setattr(pipeline, 'should_load_audio_in_memory', lambda _path: True)
     monkeypatch.setattr(pipeline, 'load_prepared_audio_for_pipeline', lambda path: {'waveform': str(path), 'sample_rate': 16000})
 
     speaker_segments, annotation_source, device = pipeline.run_pyannote_diarization(
@@ -196,7 +227,7 @@ def test_run_pyannote_diarization_passes_audio_from_memory(monkeypatch, tmp_path
     assert calls == [({'waveform': str(audio_path), 'sample_rate': 16000}, {'num_speakers': 2})]
 
 
-def test_run_pyannote_diarization_uses_file_path_for_long_audio(monkeypatch, tmp_path):
+def test_run_pyannote_diarization_always_passes_in_memory_audio(monkeypatch, tmp_path):
     audio_path = tmp_path / 'meeting.wav'
     audio_path.write_text('audio', encoding='utf-8')
     calls = []
@@ -210,6 +241,7 @@ def test_run_pyannote_diarization_uses_file_path_for_long_audio(monkeypatch, tmp
     monkeypatch.setattr(pipeline, 'load_pyannote_pipeline', lambda _model_ref, _token, **_kwargs: FakePipeline())
     monkeypatch.setattr(pipeline, 'move_pipeline_to_best_device', lambda _pipeline, required_device=None: required_device or 'cuda')
     monkeypatch.setattr(pipeline, 'should_load_audio_in_memory', lambda _path: False)
+    monkeypatch.setattr(pipeline, 'load_prepared_audio_for_pipeline', lambda path: {'waveform': f'loaded:{path}', 'sample_rate': 16000})
 
     pipeline.run_pyannote_diarization(
         audio_path,
@@ -218,7 +250,7 @@ def test_run_pyannote_diarization_uses_file_path_for_long_audio(monkeypatch, tmp
         required_device='cuda',
     )
 
-    assert calls == [(str(audio_path), {})]
+    assert calls == [({'waveform': f'loaded:{audio_path}', 'sample_rate': 16000}, {})]
 
 
 def test_run_pyannote_diarization_loads_cached_model_without_token(monkeypatch, tmp_path):
@@ -237,7 +269,7 @@ def test_run_pyannote_diarization_loads_cached_model_without_token(monkeypatch, 
     monkeypatch.setattr(pipeline, 'assert_required_device_available', lambda _device: object())
     monkeypatch.setattr(pipeline, 'load_pyannote_pipeline', fake_load)
     monkeypatch.setattr(pipeline, 'move_pipeline_to_best_device', lambda _pipeline, required_device=None: required_device or 'mps')
-    monkeypatch.setattr(pipeline, 'should_load_audio_in_memory', lambda _path: False)
+    monkeypatch.setattr(pipeline, 'load_prepared_audio_for_pipeline', lambda _path: {'waveform': 'waveform', 'sample_rate': 16000})
 
     speaker_segments, _annotation_source, device = pipeline.run_pyannote_diarization(
         audio_path,

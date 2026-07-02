@@ -219,15 +219,48 @@ def should_load_audio_in_memory(audio_path: Path, *, max_seconds: int = MAX_IN_M
     return duration > 0 and duration <= max_seconds
 
 
-def load_prepared_audio_for_pipeline(audio_path: Path) -> Any:
-    """Load prepared 16 kHz mono WAV into memory for pyannote inference."""
-    try:
-        import torchaudio  # type: ignore[import-not-found]
-    except ImportError as exc:
-        raise RuntimeError("torchaudio is not installed for speaker diarization.") from exc
+def load_prepared_audio_for_pipeline(audio_path: Path) -> Dict[str, Any]:
+    """Load prepared 16 kHz mono WAV into memory for pyannote inference.
 
-    waveform, sample_rate = torchaudio.load(str(audio_path))
-    return {"waveform": waveform, "sample_rate": sample_rate}
+    Uses the stdlib ``wave`` module so diarization does not depend on torchcodec
+    or torchaudio file decoders. pyannote 4.x only defines ``AudioDecoder`` when
+    torchcodec loads successfully; passing a file path crashes with
+    ``NameError: name 'AudioDecoder' is not defined`` when it does not.
+    """
+    import wave
+
+    try:
+        import torch  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise RuntimeError("PyTorch is not installed for speaker diarization.") from exc
+
+    try:
+        with wave.open(str(audio_path), "rb") as handle:
+            sample_rate = handle.getframerate()
+            channels = handle.getnchannels()
+            sample_width = handle.getsampwidth()
+            n_frames = handle.getnframes()
+            raw = handle.readframes(n_frames)
+    except (wave.Error, OSError) as exc:
+        raise RuntimeError(f"Could not read prepared diarization WAV: {audio_path}") from exc
+
+    if sample_rate <= 0 or n_frames <= 0:
+        raise RuntimeError("Prepared diarization WAV is empty or has an invalid sample rate.")
+
+    if sample_width == 2:
+        samples = torch.frombuffer(bytearray(raw), dtype=torch.int16).to(torch.float32) / 32768.0
+    elif sample_width == 4:
+        samples = torch.frombuffer(bytearray(raw), dtype=torch.int32).to(torch.float32) / 2147483648.0
+    elif sample_width == 1:
+        samples = torch.frombuffer(bytearray(raw), dtype=torch.uint8).to(torch.float32)
+        samples = (samples - 128.0) / 128.0
+    else:
+        raise RuntimeError(f"Unsupported diarization WAV sample width: {sample_width} bytes.")
+
+    if channels > 1:
+        samples = samples.view(-1, channels).mean(dim=1)
+
+    return {"waveform": samples.unsqueeze(0), "sample_rate": int(sample_rate)}
 
 
 def load_transcript_segments(segments_json_path: str) -> List[Dict[str, Any]]:
@@ -385,7 +418,10 @@ def run_pyannote_diarization(
     if speaker_count is not None:
         kwargs["num_speakers"] = speaker_count
 
-    audio_input = load_prepared_audio_for_pipeline(audio_path) if should_load_audio_in_memory(audio_path) else str(audio_path)
+    # Always pass in-memory waveform dict. pyannote file-path input requires a
+    # working torchcodec AudioDecoder, which often fails on macOS even when pip
+    # reports torchcodec as installed.
+    audio_input = load_prepared_audio_for_pipeline(audio_path)
     result = pipeline(audio_input, **kwargs)
     annotation, annotation_source = select_annotation(result)
 
