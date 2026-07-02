@@ -270,7 +270,10 @@ jobs:
       if: matrix.kind == 'pip-macos'
       run: |
         python -m pip install pip-audit
-        python -m pip_audit -r requirements-macos-build.txt
+        # torch==2.12.0 is installed only for reproducible pip resolution during
+        # macOS packaging, then removed before the app ships (see prepare-resources.js).
+        # CVE-2025-3000 (torch.jit.script) has no PyPI fix version yet.
+        python -m pip_audit -r requirements-macos-build.txt --ignore-vuln CVE-2025-3000
 
     - name: Audit pinned Windows Python dependencies
       if: matrix.kind == 'pip-windows'
