@@ -236,9 +236,8 @@ jobs:
 
           ### What's New
 
-          - **Fix long recording failures:** Recordings around one hour (and longer) could fail at stop with `Unable to allocate 1.28 GiB` during mic enhancement and mixing because post-processing allocated several full-size float32 copies of the entire recording at once. Processing now uses in-place NumPy operations so peak memory stays near a single float buffer instead of multiple 1+ GiB allocations.
-          - **Clearer loopback timing logs:** WASAPI desktop capture starting after the mic when the desktop was initially silent is expected. Logs now explain that timeline reconstruction inserts matching leading silence instead of warning about overlap.
-          - **macOS parity:** Applied the same in-place enhancement and mixing optimizations on macOS for long recordings.
+          - **Fix speaker diarization failures:** Speaker-guided transcription could fail with `NameError: name 'AudioDecoder' is not defined` on macOS and Windows when pyannote's torchcodec dependency did not load correctly (common with broken FFmpeg/native library paths). Diarization now loads the prepared 16 kHz WAV in memory with Python's built-in `wave` module and always passes waveform tensors to pyannote, bypassing torchcodec file decoding entirely.
+          - **Long-meeting speaker labels:** Meetings longer than 45 minutes previously fell back to file-path audio input, which triggered the same torchcodec failure. All meeting lengths now use the in-memory path.
 
           ### Platform Support
 
