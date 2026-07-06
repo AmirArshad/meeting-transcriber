@@ -30,7 +30,7 @@
   "author": "AvaNevis",
   "license": "MIT",
   "dependencies": {
-    "adm-zip": "^0.5.17"
+    "adm-zip": "^0.5.18"
   },
   "devDependencies": {
     "electron": "^42.2.0",
