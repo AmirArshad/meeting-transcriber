@@ -82,10 +82,10 @@ test('getTranscriptionComputeTimeoutMs scales within the documented 30–120 min
   assert.match(formatComputeTimeoutLabel(small), /minute/);
 });
 
-test('Phase 3b note: behavioral fake-queue test is deferred until DI exists', () => {
-  // Characterization-only gate for Phase 0.2. This scan is intentionally textual:
-  // it will loud-fail if a Phase 3 extraction moves enqueue out of the handler body
-  // into a delegate (safe direction). When that happens, do not weaken this scan —
-  // replace/supplement it with the Phase 3b injected fake-queue behavioral test.
+test('Phase 3b behavioral fake-queue test supplements this source-scan', () => {
+  // Characterization gate for Phase 0.2 remains the relocation-safe baseline.
+  // The injected fake-queue behavioral suite lives in
+  // tests/js/ai-compute-queue.behavioral.test.js and must stay green alongside
+  // this scan — do not weaken either gate.
   assert.equal(typeof extractIpcHandlerSource, 'function');
 });
