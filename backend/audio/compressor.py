@@ -112,6 +112,8 @@ def compress_and_report(
 
     input_size = Path(input_path).stat().st_size
     output_size = Path(final_path).stat().st_size
+    # Intentional guard: a real WAV always has a header (≥44 bytes), so
+    # zero-size input is unreachable in production. Master would ZeroDivisionError.
     ratio = (1 - output_size / input_size) * 100 if input_size else 0.0
 
     stats = {

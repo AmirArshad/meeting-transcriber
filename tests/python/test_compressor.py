@@ -119,3 +119,31 @@ def test_compress_and_report_returns_stats_and_optional_verify(tmp_path, monkeyp
     assert stats['output_size'] == 250
     assert stats['ratio'] == 75.0
     assert verified['called'] is True
+
+
+def test_compress_and_report_skips_verify_when_verify_again_false(tmp_path, monkeypatch):
+    """Windows path: verify_again defaults False and must not re-check integrity."""
+    input_path = tmp_path / 'input.wav'
+    output_path = tmp_path / 'meeting.opus'
+    final_path = tmp_path / 'meeting.opus'
+    input_path.write_bytes(b'x' * 1000)
+    final_path.write_bytes(b'y' * 250)
+
+    monkeypatch.setattr(compressor, 'compress_to_opus', lambda *args, **kwargs: str(final_path))
+    verified = {'called': False}
+    monkeypatch.setattr(
+        compressor,
+        'verify_recording_integrity',
+        lambda path: verified.__setitem__('called', True) or True,
+    )
+
+    result, stats = compressor.compress_and_report(
+        str(input_path),
+        str(output_path),
+        sample_rate=48000,
+        verify_again=False,
+    )
+
+    assert result == str(final_path)
+    assert stats['ratio'] == 75.0
+    assert verified['called'] is False
