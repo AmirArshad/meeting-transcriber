@@ -134,6 +134,7 @@ def save_transcript_markdown(
         include_speakers=include_speakers,
         dated_at=dated_at,
     )
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as handle:
         handle.write(markdown_content)
     if log:
