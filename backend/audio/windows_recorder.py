@@ -20,7 +20,6 @@ Module structure:
 """
 
 import sys
-import wave
 import json
 import threading
 import time
@@ -90,8 +89,9 @@ from .processor import (
     mix_audio,
     align_audio_lengths,
 )
-from .compressor import compress_to_opus
+from .compressor import compress_and_report
 from .timeline import reconstruct_desktop_timeline
+from .wav_io import write_int16_pcm_wav
 from .windows_callback_health import evaluate_callback_stalls
 
 # Store final output path for meeting manager (legacy interface)
@@ -887,23 +887,28 @@ class AudioRecorder:
         # Save to temporary WAV first
         temp_wav = str(Path(self.output_path).with_suffix('.temp.wav'))
         print(f"Saving temporary WAV...", file=sys.stderr)
-        with wave.open(temp_wav, 'wb') as wf:
-            wf.setnchannels(self.target_channels)
-            wf.setsampwidth(self.pa.get_sample_size(pyaudio.paInt16))
-            wf.setframerate(self.target_sample_rate)
-            wf.writeframes(final_audio.tobytes())
-
-        temp_size = Path(temp_wav).stat().st_size
+        write_int16_pcm_wav(
+            temp_wav,
+            final_audio,
+            channels=self.target_channels,
+            sample_rate=self.target_sample_rate,
+            sample_width=self.pa.get_sample_size(pyaudio.paInt16),
+        )
 
         # Compress with ffmpeg (using compressor module)
-        print(f"Compressing with ffmpeg (128 kbps Opus)...", file=sys.stderr)
-        final_path = compress_to_opus(temp_wav, self.output_path, self.target_sample_rate)
+        final_path, stats = compress_and_report(
+            temp_wav,
+            self.output_path,
+            self.target_sample_rate,
+            progress_message="Compressing with ffmpeg (128 kbps Opus)...",
+        )
 
         # Clean up temp file
         Path(temp_wav).unlink()
 
-        file_size = Path(final_path).stat().st_size
-        compression_ratio = (1 - file_size / temp_size) * 100
+        file_size = stats['output_size']
+        temp_size = stats['input_size']
+        compression_ratio = stats['ratio']
 
         print(f"Audio saved!", file=sys.stderr)
         print(f"  File: {Path(final_path).name}", file=sys.stderr)

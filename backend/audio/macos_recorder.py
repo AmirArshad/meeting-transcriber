@@ -6,7 +6,6 @@ Implements the same post-processing mix approach as Windows for consistency.
 """
 
 import sys
-import wave
 import json
 import threading
 import time
@@ -16,8 +15,9 @@ from pathlib import Path
 from typing import Any, Optional
 import numpy as np
 
-from .compressor import compress_to_opus, verify_recording_integrity
+from .compressor import compress_and_report, verify_recording_integrity
 from .chunked_audio_buffer import ChunkedAudioBuffer
+from .wav_io import write_float_stereo_wav
 
 try:
     # pyright: ignore[reportMissingImports]
@@ -1106,38 +1106,22 @@ class MacOSAudioRecorder:
 
     def _save_wav(self, audio, path):
         """Save audio as WAV file."""
-        # Ensure audio is in correct format
-        if len(audio.shape) == 1:
-            audio = np.column_stack([audio, audio])  # Mono to stereo
-
-        # Convert to int16
-        audio_int = np.clip(audio * 32767, -32768, 32767).astype(np.int16)
-
-        # Save WAV
-        with wave.open(path, 'wb') as wf:
-            wf.setnchannels(2)
-            wf.setsampwidth(2)  # 16-bit
-            wf.setframerate(self.sample_rate)
-            wf.writeframes(audio_int.tobytes())
-
-        print(f"Saved WAV: {path}", file=sys.stderr)
+        write_float_stereo_wav(path, audio, sample_rate=self.sample_rate)
 
     def _compress_with_ffmpeg(self, input_path, output_path):
         """Compress WAV to Opus using the shared compressor helper."""
-        print(f"Compressing with ffmpeg (Opus codec)...", file=sys.stderr)
-        final_path = compress_to_opus(input_path, output_path, self.sample_rate)
-
-        input_size = Path(input_path).stat().st_size
-        output_size = Path(final_path).stat().st_size
-        ratio = (1 - output_size / input_size) * 100
+        final_path, stats = compress_and_report(
+            input_path,
+            output_path,
+            self.sample_rate,
+            verify_again=True,
+            progress_message="Compressing with ffmpeg (Opus codec)...",
+        )
 
         print(f"Compression complete!", file=sys.stderr)
-        print(f"  Original: {input_size / 1024 / 1024:.1f} MB", file=sys.stderr)
-        print(f"  Output: {output_size / 1024 / 1024:.1f} MB", file=sys.stderr)
-        print(f"  Savings: {ratio:.1f}%", file=sys.stderr)
-
-        if not verify_recording_integrity(final_path):
-            print(f"WARNING: Recording integrity check failed", file=sys.stderr)
+        print(f"  Original: {stats['input_size'] / 1024 / 1024:.1f} MB", file=sys.stderr)
+        print(f"  Output: {stats['output_size'] / 1024 / 1024:.1f} MB", file=sys.stderr)
+        print(f"  Savings: {stats['ratio']:.1f}%", file=sys.stderr)
 
         return final_path
 

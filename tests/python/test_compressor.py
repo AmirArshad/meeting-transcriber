@@ -87,3 +87,35 @@ def test_get_file_info_returns_empty_when_ffprobe_is_unavailable(monkeypatch):
     monkeypatch.setattr(compressor.shutil, 'which', lambda _: None)
 
     assert compressor.get_file_info('unused-file-path.opus') == {}
+
+
+def test_compress_and_report_returns_stats_and_optional_verify(tmp_path, monkeypatch):
+    input_path = tmp_path / 'input.wav'
+    output_path = tmp_path / 'meeting.opus'
+    final_path = tmp_path / 'meeting.opus'
+    input_path.write_bytes(b'x' * 1000)
+    final_path.write_bytes(b'y' * 250)
+
+    monkeypatch.setattr(compressor, 'compress_to_opus', lambda *args, **kwargs: str(final_path))
+    verified = {'called': False}
+
+    def fake_verify(path):
+        verified['called'] = True
+        assert path == str(final_path)
+        return True
+
+    monkeypatch.setattr(compressor, 'verify_recording_integrity', fake_verify)
+
+    result, stats = compressor.compress_and_report(
+        str(input_path),
+        str(output_path),
+        sample_rate=48000,
+        verify_again=True,
+        progress_message='Compressing...',
+    )
+
+    assert result == str(final_path)
+    assert stats['input_size'] == 1000
+    assert stats['output_size'] == 250
+    assert stats['ratio'] == 75.0
+    assert verified['called'] is True
