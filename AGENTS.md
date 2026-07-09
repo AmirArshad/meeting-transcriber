@@ -61,6 +61,7 @@ AvaNevis is a privacy-first Electron desktop app for recording microphone audio 
 - `src/renderer/canvas-helpers.js`: pure canvas path helpers used by the audio visualizer
 - `src/renderer/history-detail-helpers.js`: extracted History tab and AI add-on prompt helpers with JS regression coverage
 - `src/renderer/update-notification-helpers.js`: extracted update-banner helpers with JS regression coverage
+- `src/renderer/recording-state-helpers.js`: pure recording/transcription UI state helpers with JS regression coverage
 - `src/renderer/index.html`: renderer markup
 - `src/renderer/styles.css`: renderer styles
 - `src/updater.js`: GitHub Releases update checker
@@ -74,6 +75,7 @@ AvaNevis is a privacy-first Electron desktop app for recording microphone audio 
 
 - `backend/device_manager.py`: enumerate audio devices for UI (CLI/JSON contract unchanged)
 - `backend/device_helpers.py`: Phase 5 pure device enumeration helpers (blocklist, record shaping, dedupe, sort, macOS virtual loopback)
+- `backend/common/`: shared Python helpers (currently `sensitive_text.py` redaction); Phase 5 medium-risk `events` / `hf_runtime` extractions remain deferred
 - `backend/meeting_manager.py`: persistent meeting history CLI/orchestration (`python -m meeting_manager`); public methods remain instance-method monkeypatch seams
 - `backend/meetings/`: Phase 6 helpers — `normalization.py` (status/error/hash/text/metadata parse), `scan_import.py` (scannable audio selection, duration/id parsing), `paths.py` (recordings-path/sidecar safety), `store.py` (FileLock + atomic JSON), `delete_tx.py` (tombstone/rollback delete helpers)
 - `backend/check_permissions.py`: macOS permission checks
@@ -375,7 +377,8 @@ npm run test:all
 
 - `npm test`: JS regression tests plus `test:syntax` glob (`node --check` over all `.js` under `src/`)
 - `npm run test:python`: cross-platform Python unit-test wrapper for `tests/python`
-- `npm run test:all`: runs both JS and Python suites
+- `npm run test:python-syntax`: recursive `compileall` over `backend/` (covers `meetings/`, `summaries/`, `diarization/`, `common/`, …)
+- `npm run test:all`: JS + Python unit tests + Python syntax check
 - Characterization gates for the codebase refactor: IPC/compute-queue source-scan and facade export snapshots under `tests/js/`; recorder stdout contracts under `tests/js/recorder-event-contract.test.js` and `tests/python/test_recorder_event_contract.py`
 - Manual recorder validation checklist lives in `tests/manual/recording-smoke-checklist.md`
 - Setup instructions for new machines live in `docs/development/TESTING.md`
@@ -385,7 +388,7 @@ npm run test:all
 ```bash
 npm test
 npm run test:python
-python -m py_compile backend/*.py backend/audio/*.py backend/transcription/*.py
+npm run test:python-syntax
 python backend/device_manager.py
 ```
 

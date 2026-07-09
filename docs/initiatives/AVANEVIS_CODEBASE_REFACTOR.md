@@ -629,7 +629,7 @@ Validation:
 
 ```bash
 npm run test:python
-python -m py_compile backend/*.py backend/audio/*.py backend/transcription/*.py
+npm run test:python-syntax
 ```
 
 ## Phase 6: Decompose `backend/meeting_manager.py`
@@ -723,7 +723,7 @@ npm run build:mac:dir
 
 ## Phase 8: Build, CI, And Documentation Cleanup
 
-Risk: Medium.
+Risk: Medium. **Done** (branch `refactor/codebase-phase-8`).
 
 Purpose: make the new layout first-class in local and CI validation.
 
@@ -731,12 +731,12 @@ Note: converting `test:syntax` to a glob is **no longer** part of this phase —
 
 Steps:
 
-1. Confirm `test:syntax` glob still covers all new JS entry files; fix CI parity if needed.
-2. Update CI syntax checks if new backend directories need explicit compilation.
-3. Update `AGENTS.md` whenever invariants, validation expectations, or the Architecture Map file paths change.
-4. Update design docs and `todo.md` after each completed phase.
-5. Consider adding a lightweight architecture map after the refactor stabilizes.
-6. Optionally add a lean project skill `refactor-extraction` containing Patterns A/B/C + the exit checklist **only if** an implementing agent is observed skipping the recipe; otherwise this doc is enough.
+1. Confirm `test:syntax` glob still covers all new JS entry files; fix CI parity if needed. — Confirmed: `scripts/check-js-syntax.js` recursively checks all `.js` under `src/` (including `src/main/`, `src/main-process/`, `src/ai-addon/`, renderer helpers).
+2. Update CI syntax checks if new backend directories need explicit compilation. — Replaced hardcoded `backend/*.py` / `audio/` / `transcription/` `py_compile` lists with recursive `scripts/check_python_syntax.py` (`compileall` over `backend/`), wired as `npm run test:python-syntax` and used by Windows + macOS CI jobs (direct `python scripts/check_python_syntax.py`, no Node). Active manual checklist updated to match.
+3. Update `AGENTS.md` whenever invariants, validation expectations, or the Architecture Map file paths change. — Architecture Map + CI-style validation commands updated for Phases 1–7 layout and recursive Python syntax.
+4. Update design docs and `todo.md` after each completed phase. — Done for Phase 8.
+5. Consider adding a lightweight architecture map after the refactor stabilizes. — Skipped: root `AGENTS.md` Architecture Map already lists landed modules; no separate map doc.
+6. Optionally add a lean project skill `refactor-extraction` containing Patterns A/B/C + the exit checklist **only if** an implementing agent is observed skipping the recipe; otherwise this doc is enough. — Skipped: initiative doc remained sufficient through Phases 1–7.
 
 Validation:
 

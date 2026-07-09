@@ -45,7 +45,7 @@ Replaced Intel-only evermeet.cx ffmpeg with a pinned Apple Silicon static build 
 ## Next: AvaNevis Codebase Refactor
 
 Design doc: `docs/initiatives/AVANEVIS_CODEBASE_REFACTOR.md` (amended 2026-07-09 after Fable review).
-Branch: `refactor/codebase-phase-8` (Phase 8: CI/docs/architecture cleanup; after merged Phase 7 #43/#44).
+Branch: `refactor/codebase-phase-8` (Phase 8 CI/docs cleanup; Phases 0–7 merged through #44).
 
 Execution rule: one phase per PR unless the change is purely mechanical and tightly coupled. Prefer Pattern A/B for pure facade moves; use Pattern C (state container + DI) for Phase 3. Move code first, preserve behavior, then improve internals in later PRs. Revert (do not fix forward) any phase that breaks a preserved contract or a manual smoke check. Convert `test:syntax` to a glob in Phase 0; keep new renderer globals uniquely named; target ≤1,500 lines after owning phase (`app.js` soft-cap ~2,000 if helpers alone cannot hit 1,500).
 
@@ -72,4 +72,5 @@ Parallel tracks after Phase 0: main-process JS (1→3), renderer helpers (2), ai
   - [x] PR A: shared `wav_io.py` + `compress_and_report` wrapper (Medium); defer macOS diagnostics/stereo repair and Swift alignment/status to PR B (#43).
   - [x] PR B: `macos_stereo_repair.py`, `macos_desktop_diagnostics.py`, `swift_pcm_alignment.py`, `swift_helper_status.py` behind thin re-exports/delegates (thresholds + stdout contracts unchanged) (#44).
   - Manual macOS capture smoke for Phase 7B: **explicitly deferred** (no Mac hardware in this session). Code approved as verbatim; run `tests/manual/recording-smoke-checklist.md` + `recording-transcription-regression-checklist.md` when a Mac is available — confirm desktop/browser speech in transcript (not only meters) and sensible `helperCaptureBackend` (expect `coreaudio_tap` on macOS 14.2+). Track in `docs/initiatives/phase-0-smoke-baseline.md`.
-- [ ] [Risk: Medium] Phase 8: CI/docs/architecture cleanup (`test:syntax` glob already done in Phase 0). Optional `refactor-extraction` skill only if agents skip the recipe.
+- [x] [Risk: Medium] Phase 8: CI/docs/architecture cleanup. Confirmed `test:syntax` glob still covers all `src/**/*.js`. Replaced CI `py_compile` one-liners with recursive `scripts/check_python_syntax.py` (`npm run test:python-syntax`; Windows + macOS CI aligned). Updated `AGENTS.md` Architecture Map + validation commands, `BACKEND.md`, scoped Cursor rules, and the active manual regression checklist. Skipped optional separate architecture-map doc (AGENTS map sufficient) and `refactor-extraction` skill (initiative doc was enough through Phases 1–7). Phase 7B macOS capture smoke remains **explicitly deferred** (no Mac hardware).
+- Codebase refactor Phases 0–8 complete. Remaining deferred refactor follow-ups (not new numbered phases): Phase 2 controller extraction (prefer soft-cap), Phase 5 medium-risk Python helpers (`events`/`hf_runtime`/`audio_prep`), Phase 7B macOS hardware smoke.

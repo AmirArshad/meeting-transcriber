@@ -25,9 +25,10 @@ Canonical architecture and invariants: root `AGENTS.md` (shared with OpenCode an
 
 ```bash
 npm start | npm run dev
-npm test              # JS helpers + syntax (--check main, preload, app, history-detail-helpers)
+npm test              # JS helpers + syntax (glob node --check over all src/**/*.js)
 npm run test:python
-npm run test:all      # before PRs
+npm run test:python-syntax  # recursive compileall under backend/
+npm run test:all      # before PRs (JS + Python tests + Python syntax)
 npm run prepare-build # before packaged builds
 ```
 
@@ -50,7 +51,7 @@ Windows: `py -3.11`; macOS: `python3.11`. Dev Python: repo `.venv` (auto-detecte
 
 ## Agent maintenance
 
-- After JS helper or Python backend changes: run `npm test` and `npm run test:python` when relevant.
+- After JS helper or Python backend changes: run `npm test`, `npm run test:python`, and `npm run test:python-syntax` when relevant.
 - Update `AGENTS.md` when changing cross-process contracts, AI catalog pins, build inputs, or validation expectations.
 - Keep root `CLAUDE.md` as a thin `@AGENTS.md` bridge only; do not duplicate this guide into it.
 - Shared Claude rules/skills may live under `.claude/rules/` or `.claude/skills/`; keep `.claude/settings.local.json` and `CLAUDE.local.md` gitignored.
