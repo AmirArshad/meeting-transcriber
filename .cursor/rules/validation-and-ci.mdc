@@ -10,7 +10,7 @@ alwaysApply: false
 
 | Command | Covers |
 |---------|--------|
-| `npm test` | `node --test` on `tests/js/**` + syntax `--check` on main, preload, `app.js`, `history-detail-helpers.js` |
+| `npm test` | `node --test` on `tests/js/**` + `npm run test:syntax` (glob `node --check` over all `.js` under `src/`) |
 | `npm run test:python` | `tests/python/**` via `scripts/run-python-tests.js` |
 | `npm run test:all` | Both — run before opening a PR |
 

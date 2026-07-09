@@ -44,20 +44,22 @@ Replaced Intel-only evermeet.cx ffmpeg with a pinned Apple Silicon static build 
 
 ## Next: AvaNevis Codebase Refactor
 
-Design doc: `docs/initiatives/AVANEVIS_CODEBASE_REFACTOR.md`.
+Design doc: `docs/initiatives/AVANEVIS_CODEBASE_REFACTOR.md` (amended 2026-07-09 after Fable review).
 Branch: `refactor/codebase-phase-0` (Phase 0 characterization tests).
 
-Execution rule: one phase per PR unless the change is purely mechanical and tightly coupled. Move code first, preserve behavior, then improve internals in later PRs. Revert (do not fix forward) any phase that breaks a preserved contract or a manual smoke check. Add every new JS entry file to `test:syntax`, keep new renderer globals uniquely named, and target no source file over 1,500 lines after its owning phase.
+Execution rule: one phase per PR unless the change is purely mechanical and tightly coupled. Prefer Pattern A/B for pure facade moves; use Pattern C (state container + DI) for Phase 3. Move code first, preserve behavior, then improve internals in later PRs. Revert (do not fix forward) any phase that breaks a preserved contract or a manual smoke check. Convert `test:syntax` to a glob in Phase 0; keep new renderer globals uniquely named; target ≤1,500 lines after owning phase (`app.js` soft-cap ~2,000 if helpers alone cannot hit 1,500).
 
-- [ ] [Risk: Medium] Phase 0: add characterization tests for IPC contracts, compute queue membership, renderer helper behavior, and recorder stdout event shapes. Compute-queue tests (0.2) block Phase 3; recorder-event tests (0.4) block Phase 7. (In progress)
-- [ ] [Risk: Low] Phase 1: split `src/main-process-helpers.js` into smaller domain modules behind the existing facade. May run in parallel with the Phase 5 low-risk subset.
-- [ ] [Risk: Medium] Phase 2: extract low-risk helpers from `src/renderer/app.js`, including visualizer, formatters, DOM helpers, settings helpers, transcript rendering, summary UI, AI add-on UI, and GPU UI helpers. Extend existing `recording-state-helpers.js` / `history-detail-helpers.js` / `update-notification-helpers.js` rather than duplicating.
-- [ ] [Risk: High] Phase 2 follow-up: extract renderer recording and transcription controllers only after helper coverage is in place.
-- [ ] [Risk: High] Phase 3a: split lower-risk `src/main.js` handlers (Python runtime, meeting manager client, device IPC, file export IPC) into services with explicit dependency injection.
-- [ ] [Risk: High] Phase 3b: split AI/GPU surface (GPU runtime, AI compute queue, AI add-on IPC) into services; depends on Phase 3a.
-- [ ] [Risk: High] Phase 3c: split recorder/transcription lifecycle (transcription, summary, recorder) into services last; gated on Phase 0.2 and 0.4 tests.
-- [ ] [Risk: Medium] Phase 4: split `src/ai-addon-setup.js` into manifest, progress, download, archive, diarization setup, and summary setup modules while preserving the exported facade.
-- [ ] [Risk: Medium] Phase 5: extract Python common helpers for transcription formatting, structured events, device normalization, diarization audio prep, and summary sidecar IO. The low-risk subset (formatting, sidecar IO, device normalization) may start early alongside Phase 1.
-- [ ] [Risk: High] Phase 6: decompose `backend/meeting_manager.py` into metadata normalization, safe paths, scan/import, locked JSON storage, and delete transaction helpers.
-- [ ] [Risk: High] Phase 7: clean recorder and Swift helper internals only through narrow behavior-preserving extractions.
-- [ ] [Risk: Medium] Phase 8: update build, CI, syntax checks (convert `test:syntax` to a glob), architecture docs, and validation docs for the new module layout.
+Parallel tracks after Phase 0: main-process JS (1→3), renderer helpers (2), ai-addon-setup (4, may follow Phase 1 immediately), Python (5→6).
+
+- [x] [Risk: Medium] Phase 0: characterization tests + `test:syntax` glob + Windows smoke baseline note. Mechanics: source-scan IPC/compute-queue over `src/main.js` + `src/main/**` (survives Phase 3 moves); facade export snapshots; send-channel snapshot; recorder `audioPath`/`outputPath` emitter asserts; pure-only renderer helper tests (no jsdom). Compute-queue scan (0.2) blocks Phase 3; recorder-event tests (0.4) block Phase 7. Smoke baseline tracker: `docs/initiatives/phase-0-smoke-baseline.md` (Windows run still to date-stamp; macOS scheduled).
+- [ ] [Risk: Low] Phase 1: split `src/main-process-helpers.js` into domain modules behind the existing facade. May run in parallel with Phase 5 low-risk subset.
+- [ ] [Risk: Medium] Phase 2: extract low-risk **pure** helpers from `src/renderer/app.js` in 2–3 PRs (formatters/dom → settings/transcript after DOM decision → summary/AI/GPU predicates). Corrected inventory: `getSummaryButtonMeetingId` and DOM creators are not pure. Controllers deferred.
+- [ ] [Risk: High] Phase 2 follow-up (deferred past Phase 3c): extract renderer recording/transcription controllers only if still needed after measuring `app.js` size; prefer soft-cap ~2,000 over a forced controller move.
+- [ ] [Risk: High] Phase 3a: Pattern C split of lower-risk `src/main.js` services (Python runtime, meeting manager client, device IPC, file export). Extra gate: Windows dev smoke + `build:dir` packaged launch.
+- [ ] [Risk: High] Phase 3b: AI/GPU services + behavioral fake-queue compute test; depends on 3a.
+- [ ] [Risk: High] Phase 3c: recorder/transcription/summary lifecycle last; gated on Phase 0.2 and 0.4; batch macOS smoke with Phase 7 when needed.
+- [ ] [Risk: Medium] Phase 4: split `src/ai-addon-setup.js` behind facade (may start right after Phase 1). Prefer two PRs: manifest/progress/download/archive, then diarization/summary setup.
+- [ ] [Risk: Medium] Phase 5: Python common helpers. Low-risk subset may start early alongside Phase 1.
+- [ ] [Risk: High] Phase 6: decompose `meeting_manager.py`; keep `MeetingManager` instance methods as monkeypatch seams.
+- [ ] [Risk: High] Phase 7: narrow recorder/Swift helper extractions only.
+- [ ] [Risk: Medium] Phase 8: CI/docs/architecture cleanup (`test:syntax` glob already done in Phase 0). Optional `refactor-extraction` skill only if agents skip the recipe.

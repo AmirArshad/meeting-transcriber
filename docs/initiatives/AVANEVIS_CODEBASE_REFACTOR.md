@@ -2,7 +2,16 @@
 
 ## Status
 
-Proposed. Execute as small, behavior-preserving PRs. Do not combine broad refactors with feature work, dependency upgrades, IPC changes, recorder contract changes, or build packaging changes unless a phase explicitly calls for it.
+Amended after Fable plan review (2026-07-09). Execute as small, behavior-preserving PRs. Do not combine broad refactors with feature work, dependency upgrades, IPC changes, recorder contract changes, or build packaging changes unless a phase explicitly calls for it.
+
+Key amendments from that review (details inline below):
+
+- Phase 0.1/0.2 use **source-scan** (and a preload Electron stub), scoped to survive Phase 3 file moves — not `require()` of Electron entrypoints under `node --test`.
+- Add **Pattern C** (service + shared state container) for Phase 3; Patterns A/B remain for pure/facade moves.
+- Correct Phase 2 purity inventory; defer controller extraction past Phase 3c; soft-cap `app.js` at ~2,000 lines if helpers alone cannot hit 1,500.
+- Convert `test:syntax` to a glob in Phase 0 (not Phase 8).
+- Phase 4 may run right after Phase 1; Phase 6 must keep `MeetingManager` methods as monkeypatch seams.
+- Strengthen Phase 3a validation (dev smoke + packaged `build:dir` launch) and batch macOS smoke when Mac access is scarce.
 
 ## Context
 
@@ -32,7 +41,7 @@ The goal is to reduce file size and coupling without changing user-visible behav
 
 These are objective, verifiable exit conditions for the initiative as a whole. "Easier to maintain" is otherwise unmeasurable, so each phase must move toward these targets, not away from them.
 
-- No single source file exceeds 1,500 lines after its owning phase completes. Current offenders to bring under the limit: `src/main.js` (~5,074), `src/renderer/app.js` (~5,063), `src/ai-addon-setup.js` (~3,066), `src/main-process-helpers.js` (~1,729). Recorder and `backend/meeting_manager.py` files should trend down even where a hard 1,500 cap is impractical for hardware-sensitive loops.
+- No single source file exceeds 1,500 lines after its owning phase completes, **except** `src/renderer/app.js`, which may soft-cap at ~2,000 lines if helper extraction alone cannot reach 1,500 without a High-risk controller move. Current offenders: `src/main.js` (~5,074), `src/renderer/app.js` (~5,063), `src/ai-addon-setup.js` (~3,066), `src/main-process-helpers.js` (~1,729). Recorder and `backend/meeting_manager.py` files should trend down even where a hard 1,500 cap is impractical for hardware-sensitive loops.
 - No net loss of automated test coverage; every phase adds or preserves the characterization tests that gate it.
 - Zero changes to public IPC names, recorder stdout/stderr contracts, Python CLI/JSON outputs, meeting metadata shape, or AI add-on setup semantics, as enforced by the Phase Exit Checklist.
 - Every new JS entry file is covered by `node --check` (see Execution Rules) so syntax validation cannot silently drift.
@@ -78,9 +87,10 @@ These are objective, verifiable exit conditions for the initiative as a whole. "
 5. Keep script loading order explicit for renderer helper files.
 6. Run the validation gate listed for each phase before moving on.
 7. Update `todo.md` when a phase starts, completes, or is intentionally deferred.
-8. Every new JS entry file that is not exercised by `node --test` must be added to the `test:syntax` chain in `package.json` in the same PR that introduces it. The `test:syntax` script is currently a hardcoded list (`src/main.js`, `src/preload.js`, `src/renderer/app.js`, `src/renderer/history-detail-helpers.js`) and will silently miss new files — treat keeping it current as a non-optional exit-checklist item. Prefer converting `test:syntax` to a directory glob during Phase 8 so it cannot drift.
-9. Renderer helpers attach to the global scope (for example `root.recordingStateHelpers = ...`). Every new renderer module must attach under a unique, descriptive global name, must not overwrite an existing global, and must be added to `src/renderer/index.html` before any file that consumes it. Verify uniqueness when adding each file.
+8. Convert `test:syntax` to a directory glob over `src/` and `src/renderer/` in **Phase 0** (before adding ~25 new files). Until that lands, every new JS entry file that is not exercised by `node --test` must still be added to the hardcoded chain in the same PR. The current list already misses `recording-state-helpers.js` and `update-notification-helpers.js` — the glob fixes that drift hazard.
+9. Renderer helpers attach to the global scope (for example `root.recordingStateHelpers = ...`). Every new renderer module must attach under a unique, descriptive global name, must not overwrite an existing global, and must be added to `src/renderer/index.html` before any file that consumes it. Enforce with a Phase 0/2 test that parses `index.html` for script order and unique globals.
 10. Each renderer/main split must keep `AGENTS.md` accurate. If a phase moves files referenced by the Architecture Map or changes any invariant, update `AGENTS.md` in the same PR — not only when an invariant changes.
+11. macOS manual smoke is scarce when developing on Windows. Batch Mac validation across phases that touch macOS paths (especially 3c and 7) rather than shipping Windows-only smoke for Swift-helper / one-sided-stereo / packaged-macOS concerns. Document which sub-steps are Windows-only-safe.
 
 ### Abort conditions
 
@@ -94,18 +104,22 @@ Re-attempt the phase as a fresh, smaller PR after diagnosing the cause. Do not s
 
 ## How To Implement Each Extraction (Read This First)
 
-This section is the mechanical recipe. Every extraction in this doc follows one of two patterns below. Do not invent a third pattern. Copy these templates verbatim and only change the names.
+This section is the mechanical recipe. Every extraction in this doc follows one of the patterns below. Prefer Pattern A or B when they apply. Use Pattern C only for stateful Electron main-process (and later renderer controller) splits where verbatim cut/paste is impossible because of module-level `let` closures.
 
 ### Definition: what "behavior-preserving extraction" means here
+
+For Patterns A and B:
 
 1. Cut a group of declarations out of the large source file.
 2. Paste them into a new module, unchanged (same names, same signatures, same logic — character for character).
 3. Re-export them from the original file (the "facade") so every existing caller keeps working with zero changes.
 4. Do not edit any call site, IPC channel, CLI argument, or test in the same PR. If a caller needs to change, the extraction is wrong — stop and reconsider the grouping.
 
-A correct extraction PR has this shape: one new file added, one source file shrunk, the new file's symbols re-exported from the old path, and (for new standalone JS files) one `package.json` / `index.html` line added. Tests are unchanged and still pass because the public surface is identical.
+A correct Pattern A/B PR has this shape: one new file added, one source file shrunk, the new file's symbols re-exported from the old path, and (for new standalone JS files) one `package.json` / `index.html` line added. Tests are unchanged and still pass because the public surface is identical.
 
-### Pattern A — Node/CommonJS module (everything under `src/main-process/`, `src/main/`, `src/ai-addon/`, and Python)
+For Pattern C (stateful services), behavior preservation means: same IPC channel names/payloads/returns, same spawn args/env, same shared mutable state semantics (one shared reference, not a copied snapshot), and characterization tests still pass. Call sites inside `main.js` may change to `register*(ipcMain, deps)` wiring — that is expected and required.
+
+### Pattern A — Node/CommonJS module (everything under `src/main-process/`, `src/ai-addon/`, and Python; also pure helpers under `src/main/` when no module `let`s are involved)
 
 Used for files loaded with `require(...)` in the main process, and for Python modules imported normally.
 
@@ -132,7 +146,7 @@ module.exports = {
 };
 ```
 
-Rule: the keys of the facade's `module.exports` object must stay byte-for-byte identical before and after the PR. Diff the export list to confirm nothing was added or removed.
+Rule: the keys of the facade's `module.exports` object must stay byte-for-byte identical before and after the PR. Diff the export list to confirm nothing was added or removed. Prefer an automated export-snapshot test (Phase 0) over a manual diff.
 
 ### Pattern B — Renderer browser global (everything under `src/renderer/`)
 
@@ -157,9 +171,38 @@ Then, in this exact order:
 
 1. Add `<script src="example-helpers.js"></script>` to `src/renderer/index.html` BEFORE the `<script src="app.js"></script>` line and before any other file that uses it.
 2. In `src/renderer/app.js`, near the top where the other helpers are destructured (see app.js line 10 `const { getRecordButtonAction } = window.recordingStateHelpers;`), add `const { formatThing } = window.exampleHelpers;` and delete the original in-file definition of `formatThing`.
-3. Add the new file to the `test:syntax` chain in `package.json` (see Execution Rule 8).
+3. Ensure the new file is covered by `test:syntax` (glob after Phase 0, or hardcoded until then).
 
 Global names already taken (do not reuse): `recordingStateHelpers`, `historyDetailHelpers`, `updateNotificationHelpers`.
+
+### Pattern C — Stateful Electron service + shared state container (Phase 3; later optional for renderer controllers)
+
+Use when the code closes over module-level mutable `let`s, registers `ipcMain` handlers, or shares process/lifecycle state across services. Verbatim Pattern A cut/paste is **impossible** here without changing semantics.
+
+Recipe:
+
+1. Introduce a small shared state object (or per-service state object with explicit cross-service accessors) owned by one module. Prefer one shared reference — never copy a `let` into a local that can go stale.
+2. Move handler bodies into `src/main/<service>.js` as `register<Service>(ipcMain, deps)` (or plain functions that receive `deps`).
+3. Pass dependencies explicitly: `pythonRuntime`, `computeQueue`, `getState`/`setState` accessors, `BrowserWindow` getters, etc.
+4. Keep `src/main.js` as the composition root: construct state, wire `deps`, call `register*` once at startup.
+5. Do not rename IPC channels or change payload/return shapes in the same PR.
+6. After Phase 3b exists, add a behavioral compute-queue test with an injected fake queue; keep the Phase 0.2 source-scan as the relocation-safe baseline.
+
+#### Main-process state ownership table (planning-time; reconcile against `src/main.js` before Phase 3a)
+
+| Variable | Likely owner | Notes |
+| --- | --- | --- |
+| `activeProcesses` | `python-runtime.js` | Shared by every spawn path and quit-drain; expose `trackProcess` / `untrackProcess` |
+| `pythonProcess` | `recorder-service.js` | Active recorder child |
+| `recordingStopPromise`, `stopCommandSent`, `recordingStartTime`, `recordingHeartbeat`, `lastLevelUpdate`, `recordingSessionCounter`, `powerSaveId` | `recorder-service.js` | Recording lifecycle |
+| `quitWorkflowPromise`, `allowImmediateQuit`, `isQuitting` | `main.js` composition root (app lifecycle) | Recorder-service may read via deps; lifecycle writes |
+| `mainWindow`, `tray` | `main.js` composition root | Pass getters into services that need UI |
+| `pendingUpdateInfo` | `main.js` or tiny updater helper | Low risk; may stay |
+| `cachedCudaStatus`, `gpuRuntimeActionPromise` | `gpu-runtime-service.js` | GPU install/probe serialization |
+| `diarizationDependencySitePackagesCache` | `ai-addon-ipc.js` or setup facade | Cache only |
+| `activeSummaryGeneration` | `summary-service.js` | Cancellation handle |
+
+If ownership is unclear during extraction, keep the variable in `main.js` and pass accessors through `deps` rather than guessing. Wrong ownership is worse than a slightly fatter composition root.
 
 ### Test pattern for any extracted pure helper
 
@@ -177,22 +220,48 @@ test('formatThing preserves existing behavior', () => {
 
 For Python, add a `tests/python/test_<module>.py` using the existing `unittest`/pytest style already present in that directory.
 
+### DOM testing decision (Phase 0.3 / Phase 2)
+
+There is no `jsdom` in this repo today, and the suite is plain `node --test`. Do **not** add jsdom during the refactor unless a later phase explicitly needs it (dependency changes are otherwise out of scope).
+
+Default approach:
+
+- Extract and unit-test only helpers that are pure under the grep heuristic below (no `document.` / module `let`).
+- For DOM-building helpers (`populateSelect`, `renderMarkdownInto`, `renderInline`, etc.), either (a) leave them in `app.js` until a dedicated DOM-test decision, or (b) refactor them in a **separate** PR to accept an element/document argument so tests can pass a hand-rolled stub — that is a call-site edit, so it is **not** a Pattern B verbatim move and must not be mixed into a pure extraction PR.
+
 ### What is "pure" vs "stateful" (decides Low vs High risk)
 
 - **Pure / safe to move first:** functions that only use their arguments and return a value — formatters, parsers, validators, path builders, math/alignment helpers. They never touch `document`, `window` DOM nodes, module-level mutable state, `ipcMain`, child processes, or files.
-- **Stateful / move last:** functions that read or write DOM nodes, module-scoped variables (e.g. `currentMeeting`, `recordingState`, queue objects), spawn processes, register IPC handlers, or perform file IO. These keep their behavior only if the shared state moves with them or is passed in explicitly.
+- **Stateful / move last:** functions that read or write DOM nodes, module-scoped variables (e.g. `currentMeeting`, `recordingState`, queue objects), spawn processes, register IPC handlers, or perform file IO. These keep their behavior only if the shared state moves with them or is passed in explicitly (Pattern C).
 
-When unsure whether a function is pure, grep its body for `document.`, `window.` (other than `window.electronAPI` calls which are allowed in controllers), a module-level `let`, `ipcMain`, `spawn`, or `fs.`. Any hit means treat it as stateful.
+When unsure whether a function is pure, grep its body for `document.`, `window.` (other than `window.electronAPI` calls which are allowed in controllers), a module-level `let`, `ipcMain`, `spawn`, or `fs.`. Any hit means treat it as stateful. Re-audit inventories against this heuristic before each extraction PR — planning-time tables drift.
 
 ## Phase 0: Characterization Tests
 
 Risk: Medium overall, with high-risk coverage targets.
 
-Purpose: lock down current behavior before splitting stateful modules.
+Purpose: lock down current behavior before splitting stateful modules, and remove known validation drift hazards before new files land.
 
 The compute-queue-membership tests (0.2) are a mandatory blocker for Phase 3, and the recorder-event-contract tests (0.4) are a mandatory blocker for Phase 7. Those two suites must exist and pass before the dependent phase begins; do not treat them as optional "where feasible" work.
 
 Existing infrastructure to build on (do not reinvent): `tests/js/main-process-helpers.test.js` and `tests/js/recording-state-helpers.test.js` already characterize recorder-output parsing and record-button state — extend these rather than starting fresh. The recorder stdout/stderr contract is documented in `AGENTS.md` ("Recorder startup and progress use structured stdout JSON"). The compute-queue membership is documented in `AGENTS.md` ("GPU compute serialization and timeouts"). Use those sections as the source of truth for the assertions.
+
+**Mechanics constraint:** `src/main.js` and `src/preload.js` cannot be `require()`d under plain `node --test` (Electron APIs at module load). Phase 0.1/0.2 therefore use **source-scan** (regex/AST over files) and, for preload, an Electron stub injected into the require cache if an import-style test is preferred. Source-scan paths must include `src/main.js` **and** `src/main/**/*.js` so Phase 3 relocation does not break the gate. A real behavioral compute-queue test with an injected fake queue is added in Phase 3b once DI exists; it supplements, not replaces, the scan.
+
+### 0.0 Syntax-check glob + baseline smoke record
+
+Risk: Low (syntax) / High (smoke baseline).
+
+Steps:
+
+1. Convert `package.json` `test:syntax` from a hardcoded file list to a glob over `src/` and `src/renderer/` (and keep CI in parity). Confirm it covers `recording-state-helpers.js` and `update-notification-helpers.js`.
+2. Run and date-stamp one full pass of `tests/manual/recording-smoke-checklist.md` on Windows before Phase 1. Schedule the macOS baseline when Mac access is next available. Abort conditions need a documented baseline, not memory.
+
+Validation:
+
+```bash
+npm test
+```
 
 ### 0.1 IPC contract snapshot
 
@@ -200,10 +269,11 @@ Risk: Medium.
 
 Steps:
 
-1. Add a JS test that extracts or imports the preload API mapping from `src/preload.js`.
-2. Assert every `window.electronAPI` invoke wrapper maps to a known `ipcMain.handle` channel.
-3. Assert renderer-used event listener helpers are exposed by preload.
-4. Assert all existing channel names remain unchanged.
+1. Source-scan (or stub-import) `src/preload.js` for `ipcRenderer.invoke` / listener wrappers exposed on `window.electronAPI`.
+2. Source-scan `src/main.js` + `src/main/**/*.js` for `ipcMain.handle` channel names.
+3. Assert every preload invoke wrapper maps to a known handle channel and that channel sets remain unchanged.
+4. Snapshot preload event listener helpers **and** main-process `webContents.send` / equivalent push channel names (`audio-levels`, `recording-progress`, `ai-addon-progress`, etc.) — the other half of the IPC contract.
+5. Add facade export-snapshot tests: sorted `Object.keys(require('../src/main-process-helpers'))` and the same for `src/ai-addon-setup.js`.
 
 Validation:
 
@@ -217,9 +287,10 @@ Risk: High.
 
 Steps:
 
-1. Characterize that `transcribe-audio`, `transcribe-audio-with-speakers`, `diarize-transcript`, and `generate-summary` run through the compute queue.
-2. Characterize that `download-model` and AI add-on setup downloads do not use the compute queue.
-3. Characterize timeout behavior for active child registration and cleanup if a helper can be tested without spawning real Python work.
+1. Source-scan `src/main.js` + `src/main/**/*.js` and assert that handlers for `transcribe-audio`, `transcribe-audio-with-speakers`, `diarize-transcript`, and `generate-summary` call `enqueueAiComputeAction` (or the equivalent queue entry helper after renames inside the scanned set).
+2. Assert that `download-model` and AI add-on setup download paths do **not** enqueue on the compute queue.
+3. Characterize timeout helper behavior (`runWallClockComputeAction` / active-child registration) via existing pure helpers where possible without spawning real Python work.
+4. Document that Phase 3b should add a behavioral fake-queue test once services take injected deps.
 
 Validation:
 
@@ -233,9 +304,10 @@ Risk: Medium.
 
 Steps:
 
-1. Add focused tests for pure renderer state/render helpers before extracting them from `src/renderer/app.js`.
-2. Cover recording button states, summary button states, AI add-on prompt gating, transcript rendering, and settings persistence where feasible.
-3. Prefer tests around pure functions rather than full DOM integration unless the DOM behavior is the contract.
+1. Re-audit candidate helpers with the purity grep heuristic before writing tests.
+2. Add focused tests only for **genuinely pure** helpers (formatters, status/gating predicates that take arguments). Do not label DOM creators or module-state readers as pure.
+3. Cover recording button states via existing `recording-state-helpers` tests; extend similarly for summary/AI gating predicates where they are argument-driven.
+4. Defer DOM-integration characterization until the DOM testing decision in "How To Implement" is revisited; do not block Phase 0 on jsdom.
 
 Validation:
 
@@ -249,9 +321,10 @@ Risk: High.
 
 Steps:
 
-1. Add Python or JS characterization tests for recorder stdout event shapes if recorder emitters will be extracted.
-2. Confirm startup events, warning events, error events, level events, and final result payloads remain parseable by existing JS helpers.
-3. Confirm stderr text is not used as recorder control flow.
+1. Add Python and/or JS characterization tests for recorder stdout event shapes (`levels`, `event`, `warning`, `error`).
+2. Confirm startup/warning/error/level events and final result payloads remain parseable by existing JS helpers.
+3. Assert **both** final-result key spellings against emitters: Windows `audioPath`, macOS `outputPath` — do not only assert JS parser tolerance.
+4. Confirm stderr text is not used as recorder control flow.
 
 Validation:
 
@@ -260,6 +333,12 @@ npm test
 npm run test:python
 ```
 
+### Phase 0 definition of done
+
+- `test:syntax` is a glob and covers existing renderer helpers.
+- Facade export snapshots, IPC invoke+send snapshots, compute-queue source-scan, and recorder event contracts exist and pass.
+- Windows smoke baseline is recorded (macOS scheduled if not available). Tracker: `docs/initiatives/phase-0-smoke-baseline.md`.
+- `todo.md` Phase 0 entry references these amended mechanics.
 ## Phase 1: Split `src/main-process-helpers.js`
 
 Risk: Low.
@@ -320,61 +399,65 @@ npm test
 
 ## Phase 2: Slim `src/renderer/app.js`
 
-Risk: Medium overall. Individual recording/transcription flow extraction is High.
+Risk: Medium overall. Individual recording/transcription controller extraction is High and **deferred**.
 
 Purpose: reduce renderer file size without changing UI behavior or adding a build step.
 
 Steps:
 
 1. Keep the current plain HTML/script architecture.
-2. Extract low-risk pure helpers first.
-3. Add new files to `src/renderer/index.html` in dependency order.
-4. Update `package.json` syntax checks as new standalone files are added (see Execution Rule 8).
-5. Leave highly stateful recording/transcription orchestration until the end.
+2. Extract low-risk pure helpers first (Pattern B), in 2–3 PRs rather than one mega-PR:
+   - PR A: formatters + genuinely argument-driven DOM utilities that do not call `document.*` internally beyond an injected element (if any)
+   - PR B: settings helpers + transcript/Markdown helpers only after the DOM testing decision allows it
+   - PR C: summary / AI-addon / GPU UI **predicates** that are pure
+3. Add new files to `src/renderer/index.html` in dependency order; enforce with the script-order/global-uniqueness test.
+4. Rely on the Phase 0 `test:syntax` glob for new files.
+5. **Do not** extract recording/transcription controllers in this phase. Re-evaluate after Phase 3c once Pattern C experience exists on the main process and helper extraction has been measured against the size target.
+6. Soft-cap: if helpers alone leave `app.js` above 1,500 but under ~2,000 lines, accept the soft-cap rather than forcing a High-risk controller move to hit a number.
+7. Leave `init`, `setupEventListeners`, and any `setup*`/`wire*` bootstrap in `app.js`.
 
-Prior extractions already exist and follow the target pattern: `src/renderer/recording-state-helpers.js`, `src/renderer/history-detail-helpers.js`, and `src/renderer/update-notification-helpers.js` (each with its own test under `tests/js/`). Extend these where a new helper belongs to an existing module instead of creating a duplicate. Note that `recording-state-helpers.js` and `update-notification-helpers.js` are loaded in `index.html` but are not currently in the `test:syntax` chain — add them when touching that script.
+Prior extractions already exist and follow the target pattern: `src/renderer/recording-state-helpers.js`, `src/renderer/history-detail-helpers.js`, and `src/renderer/update-notification-helpers.js` (each with its own test under `tests/js/`). Extend these where a new helper belongs to an existing module instead of creating a duplicate.
 
 Suggested extraction order:
 
 | Change | New file | Risk |
 | --- | --- | --- |
 | Move `AudioVisualizer` class | `src/renderer/audio-visualizer.js` | Low |
-| Move common DOM helpers | `src/renderer/dom-helpers.js` | Low |
+| Move common DOM helpers that are pure or element-injected | `src/renderer/dom-helpers.js` | Low |
 | Move date, duration, status, and filename formatters | `src/renderer/formatters.js` | Low |
 | Move settings load/save/apply helpers | `src/renderer/settings-helpers.js` | Medium |
-| Move transcript/Markdown rendering helpers | `src/renderer/transcript-rendering-helpers.js` | Medium |
+| Move transcript/Markdown rendering helpers | `src/renderer/transcript-rendering-helpers.js` | Medium (DOM decision) |
 | Move meeting list/detail pure helpers | extend `src/renderer/history-detail-helpers.js` or add `history-list-helpers.js` | Medium |
-| Move summary UI state helpers | `src/renderer/summary-ui-helpers.js` | Medium |
-| Move AI add-on settings UI helpers | `src/renderer/ai-addon-ui-helpers.js` | Medium |
+| Move summary UI **pure** predicates | `src/renderer/summary-ui-helpers.js` | Medium |
+| Move AI add-on settings UI **pure** predicates | `src/renderer/ai-addon-ui-helpers.js` | Medium |
 | Move GPU settings UI helpers | `src/renderer/gpu-settings-helpers.js` | Medium |
-| Extract recording controller | `src/renderer/recording-controller.js` | High |
-| Extract transcription/history save controller | `src/renderer/transcription-controller.js` | High |
+| Extract recording controller | `src/renderer/recording-controller.js` | High — **deferred past Phase 3c** |
+| Extract transcription/history save controller | `src/renderer/transcription-controller.js` | High — **deferred past Phase 3c** |
 
 ### Exact function inventory for Phase 2 (from `src/renderer/app.js`)
 
-Line numbers are approximate (planning-time snapshot); locate by function name, not by line. Move the pure functions first using Pattern B. Leave everything in the "stateful — extract last" list inside `app.js` until the controller extractions.
+Line numbers are approximate (planning-time snapshot); locate by function name, not by line. **Re-audit with the purity grep before each PR.** Move only pure functions with Pattern B.
 
 **Pure / safe (move first, in this rough grouping):**
 
 | Destination | Functions to move from `app.js` |
 | --- | --- |
 | `formatters.js` | `formatTimestamp`, `formatDate`, `formatRelativeDate`, `formatStatusLabel`, `formatBytes`, `formatAiAddonProgressText` |
-| `dom-helpers.js` | `clearElement`, `setPlaceholder`, `createSvgElement`, `createDeleteIcon`, `populateSelect` |
-| `transcript-rendering-helpers.js` | `renderInline`, `isHr`, `renderMarkdownInto`, `renderSummaryMarkdown` (the pure markdown→DOM-fragment parts; keep any function that reads module state in app.js) |
-| `summary-ui-helpers.js` (pure parts) | `getSummaryButtonMeetingId`, `isMeetingTranscriptionRetryable`, `getMeetingTranscriptionStatusMessage` |
-| `ai-addon-ui-helpers.js` (pure parts) | `isAiAddonTerminalStatus`, `isAiAddonProgressPhase`, `setStatusBadge` |
+| `dom-helpers.js` | `clearElement`, `setPlaceholder`, `createSvgElement`, `createDeleteIcon` — only if they operate on an injected element argument. `populateSelect` uses `document`/`createElement` and is **not** pure under the heuristic; leave it or refactor in a separate non-verbatim PR |
+| `transcript-rendering-helpers.js` | defer `renderInline` / `renderMarkdownInto` / `renderSummaryMarkdown` until the DOM testing decision; they call `document.*` today |
+| `summary-ui-helpers.js` (pure parts) | `isMeetingTranscriptionRetryable`, `getMeetingTranscriptionStatusMessage`. **`getSummaryButtonMeetingId` is stateful** (reads `currentRecordingMeeting` / `currentMeetingId`) — leave in `app.js` or refactor to take state args in a separate PR |
+| `ai-addon-ui-helpers.js` (pure parts) | `isAiAddonTerminalStatus`, `isAiAddonProgressPhase`. `setStatusBadge` is DOM-touching — treat as stateful/DOM-decision |
 
-**Stateful — extract last (these read/write module state or DOM and belong to the High-risk controllers):** `startRecording`, `stopRecording`, `handleRecordButtonClick`, `setRecordingState`, `updateButtonUI`, `updateControlsState`, `startCountdown`, `cancelActiveCountdown`, `runRecordingPreflightChecks`, `startTimer`, `stopTimer` → `recording-controller.js`; `transcribeAudio`, `retryMeetingTranscription`, `maybeRunDiarizationAfterTranscription`, `saveGuidedDiarizationMetadata`, `saveDiarizationFailureMetadata`, `generateSummaryForMeeting`, `cancelSummaryGeneration`, `writeTranscriptMarkdown` → `transcription-controller.js`.
+**Stateful — leave in `app.js` for now (controller extraction deferred):** `startRecording`, `stopRecording`, `handleRecordButtonClick`, `setRecordingState`, `updateButtonUI`, `updateControlsState`, `startCountdown`, `cancelActiveCountdown`, `runRecordingPreflightChecks`, `startTimer`, `stopTimer`, `transcribeAudio`, `retryMeetingTranscription`, `maybeRunDiarizationAfterTranscription`, `saveGuidedDiarizationMetadata`, `saveDiarizationFailureMetadata`, `generateSummaryForMeeting`, `cancelSummaryGeneration`, `writeTranscriptMarkdown`, `getSummaryButtonMeetingId`, and all `init`/`setup*`/`wire*` bootstrap.
 
-Do not move `init`, `setupEventListeners`, or any `setup*`/`wire*` function — these are the app bootstrap and must stay in `app.js`.
+### Phase 2 definition of done (per helper PR)
 
-### Phase 2 definition of done (per sub-step)
-
-- The moved function's body is byte-identical to the original.
+- The moved function's body is byte-identical to the original (Pattern B).
 - `app.js` destructures it from the new global at the top and no longer defines it.
-- The new file is in `index.html` (before `app.js`) and in `test:syntax`.
-- A `tests/js/<file>.test.js` covers at least the previously-implicit behavior of each moved pure function.
-- `npm test` is green; for the High-risk controller steps, the recording smoke checklist is also run.
+- The new file is in `index.html` (before `app.js`) and covered by `test:syntax`.
+- A `tests/js/<file>.test.js` covers each moved pure function.
+- `npm test` is green.
+- Controllers are **not** required for Phase 2 exit; measure `app.js` line count and apply the soft-cap if needed.
 
 Validation:
 
@@ -382,7 +465,7 @@ Validation:
 npm test
 ```
 
-Manual validation for high-risk renderer phases:
+Manual validation only if a later deferred controller PR is attempted:
 
 ```text
 tests/manual/recording-smoke-checklist.md
@@ -396,16 +479,17 @@ Purpose: isolate IPC registration and process orchestration while preserving the
 
 Steps:
 
-1. Introduce registration functions that receive dependencies explicitly.
-2. Keep channel names, payloads, return shapes, and renderer API names stable.
-3. Start with lower-risk handlers and leave recorder lifecycle last.
-4. Avoid changing Python spawn args/env while moving code.
+1. Use **Pattern C** (service + shared state container). Do not attempt verbatim Pattern A cut/paste for handlers that close over module `let`s.
+2. Introduce registration functions that receive dependencies explicitly; reconcile the ownership table in Pattern C before moving variables.
+3. Keep channel names, payloads, return shapes, and renderer API names stable.
+4. Start with lower-risk handlers and leave recorder lifecycle last.
+5. Avoid changing Python spawn args/env while moving code.
 
 Because eight of the ten services below are High risk, run this phase as three sequential sub-phases rather than one PR. Each sub-phase is its own PR with its own validation gate:
 
-- **Phase 3a (foundation):** `python-runtime.js`, `meeting-manager-client.js`, `device-ipc.js`, `file-export-ipc.js`. Establishes the dependency-injection pattern on the least dangerous handlers.
-- **Phase 3b (AI/GPU surface):** `gpu-runtime-service.js`, `ai-compute-queue.js`, `ai-addon-ipc.js`. Depends on 3a's `python-runtime.js`.
-- **Phase 3c (recorder/transcription lifecycle):** `transcription-service.js`, `summary-service.js`, `recorder-service.js`. Highest risk; recorder lifecycle is extracted last and gated on the Phase 0.2 compute-queue and 0.4 recorder-event tests.
+- **Phase 3a (foundation):** `python-runtime.js`, `meeting-manager-client.js`, `device-ipc.js`, `file-export-ipc.js`. Establishes Pattern C on the least dangerous handlers. **Extra gate:** packaged path resolution has little automated coverage — run a Windows dev smoke (record + short transcription via `npm start`) and `npm run build:dir` + launch the unpackaged app to exercise packaged Python/ffmpeg path resolution.
+- **Phase 3b (AI/GPU surface):** `gpu-runtime-service.js`, `ai-compute-queue.js`, `ai-addon-ipc.js`. Depends on 3a's `python-runtime.js`. Add the behavioral fake-queue compute membership test here.
+- **Phase 3c (recorder/transcription lifecycle):** `transcription-service.js`, `summary-service.js`, `recorder-service.js`. Highest risk; recorder lifecycle is extracted last and gated on the Phase 0.2 compute-queue and 0.4 recorder-event tests. Batch macOS smoke with Phase 7 when Mac access is scarce.
 
 Suggested services:
 
@@ -447,8 +531,11 @@ Critical rule for Phase 3: `download-model` lives in `transcription-service.js` 
 
 - Every channel above is registered exactly once, with an unchanged name/payload/return shape.
 - `src/preload.js` and `src/renderer/app.js` are NOT edited (the IPC surface is identical).
-- `npm test` and `npm run test:python` are green; the Phase 0.1 IPC snapshot and 0.2 compute-queue tests pass.
-- For 3c: the recording and recording-transcription manual checklists are run on the affected platform.
+- Shared mutable state uses one shared reference per the ownership table (no stale copied `let`s).
+- `npm test` and `npm run test:python` are green; the Phase 0.1 IPC snapshot and 0.2 compute-queue **source-scan** still pass after file moves.
+- For 3a: Windows dev smoke + `build:dir` packaged launch completed.
+- For 3b: behavioral fake-queue test added.
+- For 3c: the recording and recording-transcription manual checklists are run on the affected platform(s); macOS batched if needed.
 
 Validation:
 
@@ -469,6 +556,8 @@ tests/manual/recording-transcription-regression-checklist.md
 Risk: Medium.
 
 Purpose: make AI add-on setup easier to update without changing catalog-driven behavior.
+
+**Scheduling note:** Phase 4 does **not** depend on Phase 3. `ai-addon-setup.js` is already a required module with a black-box test suite. It may run immediately after Phase 1 (or in parallel with Phase 2) to bank Pattern A experience at medium scale before High-risk Phase 3. Prefer two PRs: (1) manifest/progress/download/archive, (2) diarization-setup + summary-setup.
 
 Steps:
 
@@ -572,7 +661,11 @@ Suggested order:
 | `backend/meetings/store.py` | `_metadata_guard`, `_load_meetings_unlocked`, `_save_meetings_unlocked`, `_save_meetings`, `_list_meetings_locked`, `_backup_corrupt_metadata` | High |
 | `backend/meetings/delete_tx.py` | `delete_file_with_retry`, `tombstone_path_for`, `move_file_to_tombstone`, `restore_moved_files`, `_wait_for_file` | High |
 
-`MeetingManager` keeps its public methods (`add_meeting`, `list_meetings`, `scan_and_sync_recordings`, `get_meeting`, `update_meeting`, `update_transcription`, `update_meeting_ai`, `delete_meeting`) and `main()` as the thin orchestration/CLI layer, delegating to the extracted helpers. The CLI JSON output shape and argument names must not change. Run `tests/python/test_meeting_manager.py` after every extraction.
+`MeetingManager` keeps its public methods (`add_meeting`, `list_meetings`, `scan_and_sync_recordings`, `get_meeting`, `update_meeting`, `update_transcription`, `update_meeting_ai`, `delete_meeting`) and `main()` as the thin orchestration/CLI layer, delegating to the extracted helpers.
+
+**Monkeypatch seam rule (mandatory):** `tests/python/test_meeting_manager.py` patches **instance methods** such as `manager._save_meetings_unlocked`. Public methods must keep calling those methods on `self` (even as one-line delegates into `backend/meetings/store.py`). Do **not** rewire `add_meeting` / `delete_meeting` to import and call store functions directly in a way that bypasses the instance attribute — that silently breaks the transactional characterization tests. If a helper is extracted, the instance method remains the call seam.
+
+The CLI JSON output shape and argument names must not change. Run `tests/python/test_meeting_manager.py` after every extraction.
 
 Validation:
 
@@ -634,13 +727,16 @@ Risk: Medium.
 
 Purpose: make the new layout first-class in local and CI validation.
 
+Note: converting `test:syntax` to a glob is **no longer** part of this phase — it moved to Phase 0.0 so drift cannot accumulate across Phases 1–7.
+
 Steps:
 
-1. Update `package.json` syntax checks for any new JS entry files that are not covered by `node --test`. Prefer converting the hardcoded `test:syntax` list into a directory glob over `src/` and `src/renderer/` so it can no longer drift as files are added.
-2. Update CI syntax checks if new backend directories need explicit compilation, and keep CI's JS syntax coverage in parity with `test:syntax`.
+1. Confirm `test:syntax` glob still covers all new JS entry files; fix CI parity if needed.
+2. Update CI syntax checks if new backend directories need explicit compilation.
 3. Update `AGENTS.md` whenever invariants, validation expectations, or the Architecture Map file paths change.
 4. Update design docs and `todo.md` after each completed phase.
 5. Consider adding a lightweight architecture map after the refactor stabilizes.
+6. Optionally add a lean project skill `refactor-extraction` containing Patterns A/B/C + the exit checklist **only if** an implementing agent is observed skipping the recipe; otherwise this doc is enough.
 
 Validation:
 
@@ -667,7 +763,9 @@ Each phase should answer yes to these questions before merge:
 - Are token values still kept out of logs, metadata, transcripts, progress events, and manifests?
 - Did the relevant automated tests pass?
 - Was the manual smoke checklist run for high-risk recorder, transcription, GPU, or packaging changes?
-- Were any new JS entry files added to the `test:syntax` chain (and CI syntax checks) in the same PR?
-- Does every new renderer global use a unique name and load before its consumers in `index.html`?
-- Is the owning file now within the 1,500-line target (or, for hardware-sensitive recorder loops, measurably smaller)?
+- Were any new JS entry files covered by the `test:syntax` glob (and CI syntax checks) in the same PR?
+- Does every new renderer global use a unique name and load before its consumers in `index.html` (enforced by test when present)?
+- Is the owning file now within the 1,500-line target (or the `app.js` ~2,000 soft-cap), or for hardware-sensitive recorder loops measurably smaller?
 - Was `AGENTS.md` updated if the phase moved files referenced by its Architecture Map?
+- If Phase 3: was Pattern C used with an explicit state ownership decision (no stale copied `let`s)?
+- If Phase 6: do `MeetingManager` instance methods remain the monkeypatch seams?
