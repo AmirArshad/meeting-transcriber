@@ -2,6 +2,8 @@
 
 ## Status
 
+**Complete** (2026-07-09). Phases 0–8 landed, plus Phase 5B (`hf_runtime` / `audio_prep`) and shared `backend/audio/recorder_stdout.py` (#47). Soft-cap accepted for `src/renderer/app.js` (~4.3k); Phase 2 controllers stay deferred until a DOM-testing decision and a written Pattern C state-ownership plan exist. Residual non-blocking debt: Phase 7B macOS capture smoke when Mac hardware is available (`docs/initiatives/phase-0-smoke-baseline.md`).
+
 Amended after Fable plan review (2026-07-09). Execute as small, behavior-preserving PRs. Do not combine broad refactors with feature work, dependency upgrades, IPC changes, recorder contract changes, or build packaging changes unless a phase explicitly calls for it.
 
 Key amendments from that review (details inline below):
