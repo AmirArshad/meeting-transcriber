@@ -45,7 +45,7 @@ Replaced Intel-only evermeet.cx ffmpeg with a pinned Apple Silicon static build 
 ## Next: AvaNevis Codebase Refactor
 
 Design doc: `docs/initiatives/AVANEVIS_CODEBASE_REFACTOR.md` (amended 2026-07-09 after Fable review).
-Branch: `refactor/codebase-phase-5` (Phase 5 low-risk Python helpers; after merged Phase 4 PR B #39).
+Branch: `refactor/codebase-phase-6` (Phase 6 PR A: meeting normalization + scan_import; after merged Phase 5 #40).
 
 Execution rule: one phase per PR unless the change is purely mechanical and tightly coupled. Prefer Pattern A/B for pure facade moves; use Pattern C (state container + DI) for Phase 3. Move code first, preserve behavior, then improve internals in later PRs. Revert (do not fix forward) any phase that breaks a preserved contract or a manual smoke check. Convert `test:syntax` to a glob in Phase 0; keep new renderer globals uniquely named; target ≤1,500 lines after owning phase (`app.js` soft-cap ~2,000 if helpers alone cannot hit 1,500).
 
@@ -63,8 +63,9 @@ Parallel tracks after Phase 0: main-process JS (1→3), renderer helpers (2), ai
 - [x] [Risk: Medium] Phase 4: split `src/ai-addon-setup.js` behind facade. Prefer two PRs: (1) manifest/progress/download/archive, (2) diarization-setup + summary-setup. Keep `src/ai-addon-setup.js` as Pattern A facade; preserve export keys + `AI_ADDON_PROGRESS_CHANNEL` / `AI_ADDON_CANCEL_CODE` string values.
   - [x] PR A: `src/ai-addon/{progress-events,download-helpers,manifest-store,archive-install}.js` behind Pattern A facade (#38).
   - [x] PR B: `src/ai-addon/{diarization-setup,summary-setup}.js`; facade thinned to re-exports only; shared `createValidation`/`buildFeatureUpdates` live in `manifest-store.js`.
-- [ ] [Risk: Medium] Phase 5: Python common helpers. Low-risk subset may start early alongside Phase 1.
-  - [x] Low-risk PR: `backend/transcription/formatting.py`, `backend/summaries/sidecar_io.py`, `backend/device_helpers.py` (medium-risk events/HF/audio_prep deferred).
+- [x] [Risk: Medium] Phase 5: Python common helpers. Low-risk subset may start early alongside Phase 1.
+  - [x] Low-risk PR: `backend/transcription/formatting.py`, `backend/summaries/sidecar_io.py`, `backend/device_helpers.py` (medium-risk events/HF/audio_prep deferred) (#40).
 - [ ] [Risk: High] Phase 6: decompose `meeting_manager.py`; keep `MeetingManager` instance methods as monkeypatch seams.
+  - [x] PR A: `backend/meetings/{normalization,scan_import}.py` behind thin `MeetingManager` staticmethod delegates; paths/store/delete deferred.
 - [ ] [Risk: High] Phase 7: narrow recorder/Swift helper extractions only.
 - [ ] [Risk: Medium] Phase 8: CI/docs/architecture cleanup (`test:syntax` glob already done in Phase 0). Optional `refactor-extraction` skill only if agents skip the recipe.

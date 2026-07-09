@@ -17,16 +17,17 @@ import shutil
 import tempfile
 import threading
 import re
-import hashlib
 
 from filelock import FileLock
 
 from common.sensitive_text import redact_sensitive_text
+from meetings import normalization as meeting_norm
+from meetings import scan_import as meeting_scan
 
 
 _UNSET = object()
-_MAX_AI_METADATA_STRING_LENGTH = 300
-_VALID_TRANSCRIPTION_STATUSES = {"pending", "failed", "completed"}
+_MAX_AI_METADATA_STRING_LENGTH = meeting_norm.MAX_AI_METADATA_STRING_LENGTH
+_VALID_TRANSCRIPTION_STATUSES = meeting_norm.VALID_TRANSCRIPTION_STATUSES
 
 
 class MeetingManager:
@@ -168,74 +169,35 @@ class MeetingManager:
 
     @staticmethod
     def _read_text_file(file_path: Optional[Path], label: str) -> str:
-        if file_path is None or not file_path.exists():
-            return ""
-
-        try:
-            return file_path.read_text(encoding='utf-8', errors='replace')
-        except Exception as exc:
-            print(f"Warning: Could not read {label}: {exc}", file=sys.stderr)
-            return ""
+        return meeting_norm.read_text_file(file_path, label)
 
     @staticmethod
     def _read_transcript_text(transcript_path: Optional[Path]) -> str:
-        return MeetingManager._read_text_file(transcript_path, 'transcript')
+        return meeting_norm.read_transcript_text(transcript_path)
 
     @staticmethod
     def _hash_text(text: str) -> str:
-        return f"sha256:{hashlib.sha256(str(text or '').encode('utf-8')).hexdigest()}"
+        return meeting_norm.hash_text(text)
 
     @staticmethod
     def _normalize_transcription_status(value: object, default: str = "completed") -> str:
-        candidate = str(value or "").strip().lower()
-        if candidate in _VALID_TRANSCRIPTION_STATUSES:
-            return candidate
-        return default
+        return meeting_norm.normalize_transcription_status(value, default=default)
 
     @staticmethod
     def _normalize_transcription_error(value: object) -> Optional[str]:
-        if value in (None, ""):
-            return None
-        text = redact_sensitive_text(value)
-        text = re.sub(r"\s+", " ", str(text)).strip()
-        return text[:_MAX_AI_METADATA_STRING_LENGTH] if text else None
+        return meeting_norm.normalize_transcription_error(value)
 
     @staticmethod
     def _build_pending_transcript_placeholder(audio_file_name: str) -> str:
-        return "\n".join([
-            "# Recording Awaiting Transcription",
-            "",
-            f"**File:** {audio_file_name}",
-            f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-            "**Status:** Transcription pending",
-            "",
-            "The recording was saved successfully, but a transcript is not available yet.",
-            "Use Retry transcription in AvaNevis to generate a transcript.",
-            "",
-        ])
+        return meeting_norm.build_pending_transcript_placeholder(audio_file_name)
 
     @staticmethod
     def _select_scannable_audio_files(recordings_dir: Path) -> List[Path]:
-        preferred_files = {}
-
-        for audio_file in list(recordings_dir.glob('*.opus')) + list(recordings_dir.glob('*.wav')):
-            stem = audio_file.stem
-            current = preferred_files.get(stem)
-
-            if current is None:
-                preferred_files[stem] = audio_file
-                continue
-
-            if current.suffix == '.opus' and audio_file.suffix == '.wav':
-                preferred_files[stem] = audio_file
-
-        return sorted(preferred_files.values(), key=lambda item: item.name)
+        return meeting_scan.select_scannable_audio_files(recordings_dir)
 
     @staticmethod
     def _strip_inline_transcript(meeting: Dict) -> Dict:
-        stripped = dict(meeting)
-        stripped.pop('transcript', None)
-        return stripped
+        return meeting_norm.strip_inline_transcript(meeting)
 
     def _is_recordings_path(self, file_path: Path) -> bool:
         try:
@@ -317,10 +279,6 @@ class MeetingManager:
         if not isinstance(metadata, dict):
             raise ValueError(f"AI metadata for {feature} must be an object")
 
-        def normalize_text(value: object) -> str:
-            text = re.sub(r"\s+", " ", str(value or "")).strip()
-            return text[:_MAX_AI_METADATA_STRING_LENGTH]
-
         normalized = {}
         for field in allowed_fields[feature]:
             if field not in metadata:
@@ -343,14 +301,14 @@ class MeetingManager:
                 if normalized_path is not None:
                     normalized[field] = normalized_path
             elif field == 'sourceTranscriptHash':
-                text = normalize_text(value)
+                text = meeting_norm.normalize_text(value)
                 if re.fullmatch(r"sha256:[a-fA-F0-9]{64}", text):
                     normalized[field] = text
             else:
                 if field == 'error':
                     normalized[field] = redact_sensitive_text(value)
                 else:
-                    normalized[field] = normalize_text(value)
+                    normalized[field] = meeting_norm.normalize_text(value)
 
         return normalized
 
@@ -710,53 +668,10 @@ class MeetingManager:
                     continue
 
             # Try to extract duration from transcript
-            duration = 0.0
-            try:
-                content = transcript_file.read_text(encoding='utf-8', errors='replace')
-                # Look for "Duration: HH:MM:SS" or "Duration: MM:SS"
-                duration_match = re.search(r'\*\*Duration:\*\*\s*(\d+):(\d+):(\d+)', content)
-                if duration_match:
-                    hours, mins, secs = map(int, duration_match.groups())
-                    duration = hours * 3600 + mins * 60 + secs
-                else:
-                    duration_match = re.search(r'\*\*Duration:\*\*\s*(\d+):(\d+)', content)
-                    if duration_match:
-                        mins, secs = map(int, duration_match.groups())
-                        duration = mins * 60 + secs
-            except Exception as e:
-                print(f"Warning: Could not extract duration from {transcript_file.name}: {e}", file=sys.stderr)
-                duration = 0.0
+            duration = meeting_scan.extract_duration_from_transcript_file(transcript_file)
 
             # Extract ID and title from filename
-            # Files can be: meeting_YYYYMMDD_HHMMSS.opus or recording_YYYY-MM-DDTHH-MM-SS.opus
-            filename_base = audio_file.stem
-            meeting_id = None
-            title = None
-
-            # Check if it's already a meeting_* file (extract existing ID, including suffixes)
-            meeting_match = re.match(r'meeting_(\d{8}_\d{6}(?:_\d+)?)$', filename_base)
-            if meeting_match:
-                meeting_id = meeting_match.group(1)
-                # Parse ID to create title: 20251208_170225 -> 2025-12-08 17:02
-                try:
-                    parts = meeting_id.split('_')
-                    base_id = f"{parts[0]}_{parts[1]}" if len(parts) >= 2 else meeting_id
-                    dt = datetime.strptime(base_id, "%Y%m%d_%H%M%S")
-                    title = f"Meeting {dt.strftime('%Y-%m-%d %H:%M')}"
-                except ValueError:
-                    title = f"Meeting {meeting_id}"
-            else:
-                # Try recording_* format: recording_2025-12-01T13-31-43.opus
-                recording_match = re.search(r'(\d{4}-\d{2}-\d{2})T(\d{2}-\d{2}-\d{2})', filename_base)
-                if recording_match:
-                    date_str, time_str = recording_match.groups()
-                    # Generate ID from the timestamp
-                    meeting_id = date_str.replace('-', '') + '_' + time_str.replace('-', '')
-                    title = f"Meeting {date_str} {time_str.replace('-', ':')}"
-                else:
-                    # Fallback: generate new ID
-                    meeting_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    title = f"Meeting {audio_file.stem}"
+            meeting_id, title = meeting_scan.parse_scan_meeting_id_and_title(audio_file.stem)
 
             # Check if this ID already exists in database
             existing_ids = {m['id'] for m in existing_meetings}
@@ -1217,19 +1132,16 @@ def main():
             sys.exit(1)
 
     elif args.command == 'update-ai':
-        def parse_metadata(raw_value: Optional[str], label: str):
-            if raw_value is None:
-                return _UNSET
-            try:
-                parsed = json.loads(raw_value)
-            except json.JSONDecodeError as exc:
-                raise SystemExit(f"Invalid {label} metadata JSON: {exc}")
-            if not isinstance(parsed, dict):
-                raise SystemExit(f"Invalid {label} metadata JSON: expected object")
-            return parsed
-
-        diarization_metadata = None if args.clear_diarization else parse_metadata(args.diarization_json, 'diarization')
-        summary_metadata = None if args.clear_summary else parse_metadata(args.summary_json, 'summary')
+        diarization_metadata = None if args.clear_diarization else meeting_norm.parse_metadata(
+            args.diarization_json,
+            'diarization',
+            unset=_UNSET,
+        )
+        summary_metadata = None if args.clear_summary else meeting_norm.parse_metadata(
+            args.summary_json,
+            'summary',
+            unset=_UNSET,
+        )
         meeting = manager.update_meeting_ai(
             args.id,
             diarization=diarization_metadata,
