@@ -8,12 +8,13 @@ Supports all Whisper languages with English as default.
 import sys
 import os
 import contextlib
-from datetime import datetime, timedelta
+from datetime import datetime
 from inspect import Parameter, signature
 from typing import Optional, List, Dict, Any
 from pathlib import Path
 
 from .base_transcriber import BaseTranscriber
+from .formatting import format_timestamp, merge_segments, save_transcript_markdown
 from .nvidia_dll_loader import add_python_nvidia_bin_dirs_to_path
 
 
@@ -529,52 +530,8 @@ class TranscriberService(BaseTranscriber):
         segments: List[Dict[str, Any]],
         target_duration: float = 20.0
     ) -> List[Dict[str, Any]]:
-        """
-        Merge consecutive segments into larger chunks for better readability.
-
-        Args:
-            segments: List of segment dicts with 'start', 'end', 'text'
-            target_duration: Target duration in seconds for each merged chunk (default: 20s)
-
-        Returns:
-            List of merged segments
-        """
-        if not segments:
-            return []
-
-        merged = []
-        current_chunk = None
-
-        for segment in segments:
-            if current_chunk is None:
-                # Start new chunk
-                current_chunk = {
-                    'start': segment['start'],
-                    'end': segment['end'],
-                    'text': segment['text']
-                }
-            else:
-                chunk_duration = current_chunk['end'] - current_chunk['start']
-
-                # If adding this segment would exceed target duration, save current chunk
-                if chunk_duration >= target_duration:
-                    merged.append(current_chunk)
-                    current_chunk = {
-                        'start': segment['start'],
-                        'end': segment['end'],
-                        'text': segment['text']
-                    }
-                else:
-                    # Merge into current chunk
-                    current_chunk['end'] = segment['end']
-                    current_chunk['text'] += ' ' + segment['text']
-
-        # Don't forget the last chunk
-        if current_chunk is not None:
-            merged.append(current_chunk)
-
-        print(f"  Merged into {len(merged)} chunks (target: {target_duration}s each)", file=sys.stderr)
-        return merged
+        """Merge consecutive segments into larger chunks for better readability."""
+        return merge_segments(segments, target_duration=target_duration)
 
     def _save_markdown(
         self,
@@ -583,54 +540,18 @@ class TranscriberService(BaseTranscriber):
         output_path: str
     ):
         """Save transcription results to a markdown file with timestamps."""
-        audio_file = Path(audio_path)
-
-        # Format duration
-        duration = timedelta(seconds=int(results['duration']))
-
-        # Build markdown content
-        lines = [
-            "# Meeting Transcription",
-            "",
-            f"**File:** {audio_file.name}",
-            f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-            f"**Duration:** {duration}",
-            f"**Language:** {self.SUPPORTED_LANGUAGES.get(results['language'], results['language'])}",
-            "",
-            "---",
-            "",
-            "## Transcript",
-            ""
-        ]
-
-        # Add segments with timestamps
-        for segment in results['segments']:
-            start_time = self._format_timestamp(segment['start'])
-            end_time = self._format_timestamp(segment['end'])
-            text = segment['text']
-
-            lines.append(f"**[{start_time} - {end_time}]**  ")
-            lines.append(f"{text}")
-            lines.append("")
-
-        # Write to file
-        markdown_content = '\n'.join(lines)
-
-        with open(output_path, 'w', encoding='utf-8') as f:
-            f.write(markdown_content)
-
-        print(f"\nTranscript saved to: {output_path}", file=sys.stderr)
+        language = self.SUPPORTED_LANGUAGES.get(results['language'], results['language'])
+        save_transcript_markdown(
+            output_path,
+            audio_path=audio_path,
+            language_label=language,
+            duration=results['duration'],
+            segments=results['segments'],
+        )
 
     def _format_timestamp(self, seconds: float) -> str:
         """Format seconds as HH:MM:SS timestamp."""
-        hours = int(seconds // 3600)
-        minutes = int((seconds % 3600) // 60)
-        secs = int(seconds % 60)
-
-        if hours > 0:
-            return f"{hours:02d}:{minutes:02d}:{secs:02d}"
-        else:
-            return f"{minutes:02d}:{secs:02d}"
+        return format_timestamp(seconds)
 
     def cleanup(self):
         """Clean up resources."""

@@ -16,7 +16,7 @@ import re
 import subprocess
 import sys
 import tempfile
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -30,6 +30,7 @@ from .diarization_pipeline import (
     run_pyannote_diarization,
     save_diarization_result,
 )
+from transcription.formatting import save_transcript_markdown
 
 
 DEFAULT_TURN_PADDING_SECONDS = 0.35
@@ -318,16 +319,6 @@ def transcribe_full_audio(transcriber: Any, audio_path: Path) -> List[Dict[str, 
     return [{"start": 0.0, "end": duration, "text": text}]
 
 
-def _format_timestamp(seconds: float) -> str:
-    total_seconds = max(0, int(seconds))
-    hours = total_seconds // 3600
-    minutes = (total_seconds % 3600) // 60
-    secs = total_seconds % 60
-    if hours > 0:
-        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
-    return f"{minutes:02d}:{secs:02d}"
-
-
 def save_guided_markdown(
     *,
     output_path: str,
@@ -336,30 +327,24 @@ def save_guided_markdown(
     duration: float,
     segments: List[Dict[str, Any]],
 ) -> None:
-    duration_text = str(timedelta(seconds=max(0, int(duration))))
-    lines = [
-        "# Meeting Transcription",
-        "",
-        f"**File:** {Path(audio_path).name}",
-        f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-        f"**Duration:** {duration_text}",
-        f"**Language:** {language}",
-        f"**Transcribed with:** Diarization-guided Whisper",
-        "",
-        "---",
-        "",
-        "## Transcript",
-        "",
-    ]
-    for segment in segments:
-        speaker = f" **{segment.get('speaker')}:**" if segment.get("speaker") else ""
-        lines.append(f"**[{_format_timestamp(_to_float(segment.get('start')))} - {_format_timestamp(_to_float(segment.get('end')))}]**{speaker}")
-        lines.append(str(segment.get("text", "") or ""))
-        lines.append("")
-
-    target = Path(output_path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text("\n".join(lines), encoding="utf-8")
+    save_transcript_markdown(
+        output_path,
+        audio_path=audio_path,
+        language_label=language,
+        duration=duration,
+        segments=[
+            {
+                **segment,
+                "start": _to_float(segment.get("start")),
+                "end": _to_float(segment.get("end")),
+                "text": str(segment.get("text", "") or ""),
+            }
+            for segment in segments
+        ],
+        engine_label="Diarization-guided Whisper",
+        include_speakers=True,
+        log=False,
+    )
 
 
 def transcribe_with_diarization_guidance(

@@ -11,6 +11,14 @@ import sys
 import platform
 from typing import Dict, List, Any, Optional
 
+from device_helpers import (
+    build_device_record,
+    dedupe_device_by_name,
+    is_blocked_windows_device_name,
+    macos_virtual_loopback_devices,
+    sort_devices_by_name,
+)
+
 # Platform detection
 IS_WINDOWS = platform.system() == 'Windows'
 IS_MACOS = platform.system() == 'Darwin'
@@ -87,12 +95,6 @@ class DeviceManager:
 
     def _list_devices_windows(self) -> Dict[str, List[Dict[str, Any]]]:
         """Windows-specific device enumeration using pyaudiowpatch."""
-        input_devices = []
-        output_devices = []
-        loopback_devices = []
-
-        # Track seen devices to remove duplicates
-        # Map name -> device_data
         seen_inputs = {}
         seen_outputs = {}
         seen_loopbacks = {}
@@ -104,96 +106,51 @@ class DeviceManager:
                 device_info = self.pa.get_device_info_by_index(i)
                 name = device_info.get("name", "Unknown")
 
-                # Filter out system mappers/drivers which are usually duplicates
-                # Check if name contains blocked terms (handles "[Loopback]" suffix)
-                if any(blocked in name for blocked in [
-                    "Microsoft Sound Mapper",
-                    "Primary Sound Capture Driver",
-                    "Primary Sound Driver"
-                ]):
+                if is_blocked_windows_device_name(name):
                     continue
 
-                device_data = {
-                    "id": i,
-                    "name": name,
-                    "channels": device_info.get("maxInputChannels", 0),
-                    "sample_rate": int(device_info.get("defaultSampleRate", 44100)),
-                    "host_api": self.pa.get_host_api_info_by_index(
+                device_data = build_device_record(
+                    device_id=i,
+                    name=name,
+                    channels=device_info.get("maxInputChannels", 0),
+                    sample_rate=int(device_info.get("defaultSampleRate", 44100)),
+                    host_api=self.pa.get_host_api_info_by_index(
                         device_info.get("hostApi", 0)
-                    ).get("name", "Unknown")
-                }
+                    ).get("name", "Unknown"),
+                )
 
-                # Check if device is a loopback device (WASAPI specific)
                 is_loopback = device_info.get("isLoopbackDevice", False)
 
                 if is_loopback:
-                    # For loopback, we want unique names
-                    if name not in seen_loopbacks:
-                        seen_loopbacks[name] = device_data
-                    else:
-                        # If duplicate, keep the one with higher sample rate
-                        if device_data["sample_rate"] > seen_loopbacks[name]["sample_rate"]:
-                            seen_loopbacks[name] = device_data
-
+                    dedupe_device_by_name(seen_loopbacks, device_data)
                 elif device_info.get("maxInputChannels", 0) > 0:
-                    # For inputs, we want unique names
-                    # MME is usually the most compatible host API on Windows, but WASAPI is better quality
-                    # For now, we'll just deduplicate by name and prefer higher sample rate
-                    if name not in seen_inputs:
-                        seen_inputs[name] = device_data
-                    else:
-                        if device_data["sample_rate"] > seen_inputs[name]["sample_rate"]:
-                            seen_inputs[name] = device_data
-
+                    dedupe_device_by_name(seen_inputs, device_data)
                 elif device_info.get("maxOutputChannels", 0) > 0:
-                    if name not in seen_outputs:
-                        seen_outputs[name] = device_data
-                    else:
-                        if device_data["sample_rate"] > seen_outputs[name]["sample_rate"]:
-                            seen_outputs[name] = device_data
+                    dedupe_device_by_name(seen_outputs, device_data)
 
             except Exception as e:
                 print(f"Warning: Could not read device {i}: {e}", file=sys.stderr)
                 continue
 
-        # Convert dict values back to lists
-        input_devices = list(seen_inputs.values())
-        output_devices = list(seen_outputs.values())
-        loopback_devices = list(seen_loopbacks.values())
-
-        # Sort by name for cleaner UI
-        input_devices.sort(key=lambda x: x['name'])
-        output_devices.sort(key=lambda x: x['name'])
-        loopback_devices.sort(key=lambda x: x['name'])
-
         return {
-            "input_devices": input_devices,
-            "output_devices": output_devices,
-            "loopback_devices": loopback_devices
+            "input_devices": sort_devices_by_name(seen_inputs.values()),
+            "output_devices": sort_devices_by_name(seen_outputs.values()),
+            "loopback_devices": sort_devices_by_name(seen_loopbacks.values()),
         }
 
     def _list_devices_macos(self) -> Dict[str, List[Dict[str, Any]]]:
         """macOS-specific device enumeration using sounddevice."""
         input_devices = []
         output_devices = []
-        # macOS doesn't have native loopback, so we provide a virtual one for ScreenCaptureKit
-        loopback_devices = [{
-            "id": -1,
-            "name": "System Audio (ScreenCaptureKit)",
-            "channels": 2,
-            "sample_rate": 48000,
-            "host_api": "ScreenCaptureKit"
-        }]
+        loopback_devices = macos_virtual_loopback_devices()
 
         try:
             devices = sd.query_devices()
         except Exception as e:
-            # If we can't query devices, it's likely a permission issue
             print(f"ERROR: Could not enumerate audio devices: {e}", file=sys.stderr)
             print(f"Microphone permission may not be granted.", file=sys.stderr)
             print(f"Grant permission in: System Settings > Privacy & Security > Microphone", file=sys.stderr)
 
-            # Return empty lists so the app can still launch and show the permission error
             return {
                 "input_devices": [],
                 "output_devices": [],
@@ -201,17 +158,16 @@ class DeviceManager:
             }
 
         for i, device in enumerate(devices):
-            # Skip devices with no channels
             if device['max_input_channels'] == 0 and device['max_output_channels'] == 0:
                 continue
 
-            device_data = {
-                "id": i,
-                "name": device['name'],
-                "channels": device['max_input_channels'],
-                "sample_rate": int(device['default_samplerate']),
-                "host_api": sd.query_hostapis(device['hostapi'])['name']
-            }
+            device_data = build_device_record(
+                device_id=i,
+                name=device['name'],
+                channels=device['max_input_channels'],
+                sample_rate=int(device['default_samplerate']),
+                host_api=sd.query_hostapis(device['hostapi'])['name'],
+            )
 
             if device['max_input_channels'] > 0:
                 input_devices.append(device_data)
@@ -221,14 +177,10 @@ class DeviceManager:
                 output_device['channels'] = device['max_output_channels']
                 output_devices.append(output_device)
 
-        # Sort by name
-        input_devices.sort(key=lambda x: x['name'])
-        output_devices.sort(key=lambda x: x['name'])
-
         return {
-            "input_devices": input_devices,
-            "output_devices": output_devices,
-            "loopback_devices": loopback_devices  # Empty for now, will use ScreenCaptureKit
+            "input_devices": sort_devices_by_name(input_devices),
+            "output_devices": sort_devices_by_name(output_devices),
+            "loopback_devices": loopback_devices,
         }
 
     def validate_input_device(self, device_id: int, *, label: str = "Microphone") -> None:
