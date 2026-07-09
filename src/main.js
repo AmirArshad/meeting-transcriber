@@ -499,6 +499,8 @@ gpuRuntimeService = createGpuRuntimeService({
   terminateProcessBestEffort,
   assertTrustedRendererSender,
   getDiarizationDependencySitePackagesPath,
+  waitForAiComputeQueueIdle,
+  hasPendingAiComputeWork: () => aiComputeActionQueue.hasPendingWork(),
 });
 gpuRuntimeService.registerIpc(ipcMain);
 const {
@@ -545,6 +547,12 @@ transcriptionService = createTranscriptionService({
   getBackendModuleArgs,
   enqueueAiComputeAction,
   waitForAiComputeQueueIdle,
+  hasInFlightGpuRuntimeAction: () => (
+    gpuRuntimeService ? gpuRuntimeService.hasInFlightGpuRuntimeAction() : false
+  ),
+  waitForGpuRuntimeIdle: () => (
+    gpuRuntimeService ? gpuRuntimeService.waitForGpuRuntimeIdle() : Promise.resolve()
+  ),
   getCachedCudaStatus,
   buildCudaRuntimeEnv,
   getAiAddonRuntimeOptions,

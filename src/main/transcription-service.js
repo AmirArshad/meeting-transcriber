@@ -29,6 +29,7 @@ const {
   redactSensitiveText,
   AI_COMPUTE_TIMEOUT_MS,
   getTranscriptionComputeTimeoutMs,
+  getGuidedTranscriptionComputeTimeoutMs,
   runWallClockComputeAction,
   runGuidedTranscriptionProcess,
 } = require('../main-process-helpers');
@@ -83,6 +84,8 @@ function createTranscriptionService(deps) {
     getBackendModuleArgs,
     enqueueAiComputeAction,
     waitForAiComputeQueueIdle = async () => {},
+    hasInFlightGpuRuntimeAction = () => false,
+    waitForGpuRuntimeIdle = async () => {},
     getCachedCudaStatus,
     buildCudaRuntimeEnv,
     getAiAddonRuntimeOptions,
@@ -339,6 +342,20 @@ function createTranscriptionService(deps) {
     });
   }
 
+  // Single in-flight Whisper download (FTUE / Settings). Cancel clears this ref.
+  let activeModelDownload = null;
+
+  async function waitForGpuRuntimeBeforeCompute(label = 'Transcription') {
+    if (!hasInFlightGpuRuntimeAction()) {
+      return;
+    }
+    sendToRenderer(
+      'transcription-progress',
+      `Waiting for GPU runtime setup to finish before starting ${label.toLowerCase()}...\n`,
+    );
+    await waitForGpuRuntimeIdle();
+  }
+
   function registerIpc(ipcMain) {
     /**
      * Check if Whisper model is downloaded
@@ -372,39 +389,88 @@ function createTranscriptionService(deps) {
      * Download Whisper model (preload)
      */
     ipcMain.handle('download-model', async (event, modelSize) => {
+      assertTrustedRendererSender(event);
       const model = requireAllowedModelSize(modelSize);
+      if (activeModelDownload) {
+        throw new Error('A Whisper model download is already in progress. Cancel it or wait for it to finish.');
+      }
       // Stay off the compute queue (downloads must not block transcription),
       // but wait for idle GPU compute first to avoid VRAM contention/OOM.
       // Bound the wait so a long transcription queue cannot hang the UI forever.
-      await waitForAiComputeQueueIdle({
-        cancelMessage: 'Model download was canceled while waiting for local AI work to finish.',
-        timeoutMs: AI_COMPUTE_TIMEOUT_MS.modelDownloadIdleWait,
-        timeoutMessage: 'Timed out waiting for local AI work to finish before downloading the Whisper model. Try again when transcription is idle.',
-        onWaiting: () => {
-          sendToRenderer(
-            'model-download-progress',
-            'Waiting for local AI work to finish before downloading the Whisper model...\n',
-          );
-        },
-      });
+      const idleController = new AbortController();
+      activeModelDownload = { process: null, controller: idleController, model };
+      try {
+        await waitForAiComputeQueueIdle({
+          cancelSignal: idleController.signal,
+          cancelMessage: 'Model download was canceled while waiting for local AI work to finish.',
+          timeoutMs: AI_COMPUTE_TIMEOUT_MS.modelDownloadIdleWait,
+          timeoutMessage: 'Timed out waiting for local AI work to finish before downloading the Whisper model. Try again when transcription is idle.',
+          onWaiting: () => {
+            sendToRenderer(
+              'model-download-progress',
+              'Waiting for local AI work to finish before downloading the Whisper model...\n',
+            );
+          },
+        });
+      } catch (error) {
+        if (activeModelDownload && activeModelDownload.controller === idleController) {
+          activeModelDownload = null;
+        }
+        throw error;
+      }
+
+      if (idleController.signal.aborted) {
+        if (activeModelDownload && activeModelDownload.controller === idleController) {
+          activeModelDownload = null;
+        }
+        throw new Error('Model download was canceled.');
+      }
+
       return new Promise((resolve, reject) => {
         console.log(`Downloading Whisper model: ${model}`);
 
         const downloadCheck = getTranscriptionModelDownloadCheck(model);
-        const python = spawnTrackedPython(getTranscriberArgs([
-          '--preload',
-          '--model', model
-        ]), {
-          cwd: pythonConfig.backendPath,
-          env: buildTranscriptionRuntimeEnv({
-            cacheDir: downloadCheck.cacheDir,
-            modelCached: false,
-            baseEnv: buildCudaRuntimeEnv(),
-          }),
-        });
+        let settled = false;
+        const finish = (callback, value) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          if (activeModelDownload && activeModelDownload.controller === idleController) {
+            activeModelDownload = null;
+          }
+          callback(value);
+        };
+
+        let python;
+        try {
+          python = spawnTrackedPython(getTranscriberArgs([
+            '--preload',
+            '--model', model
+          ]), {
+            cwd: pythonConfig.backendPath,
+            env: buildTranscriptionRuntimeEnv({
+              cacheDir: downloadCheck.cacheDir,
+              modelCached: false,
+              baseEnv: buildCudaRuntimeEnv(),
+            }),
+          });
+        } catch (error) {
+          finish(reject, error);
+          return;
+        }
+
+        if (activeModelDownload && activeModelDownload.controller === idleController) {
+          activeModelDownload.process = python;
+        }
 
         let hasError = false;
         const progressRedactor = createLineChunkRedactor();
+
+        const handleAbort = () => {
+          terminateProcessBestEffort(python);
+        };
+        idleController.signal.addEventListener('abort', handleAbort, { once: true });
 
         python.stderr.on('data', (data) => {
           const output = data.toString();
@@ -419,19 +485,48 @@ function createTranscriptionService(deps) {
         });
 
         python.on('close', (code) => {
+          idleController.signal.removeEventListener('abort', handleAbort);
           flushRedactedProgress('model-download-progress', progressRedactor);
+          if (idleController.signal.aborted) {
+            finish(reject, new Error('Model download was canceled.'));
+            return;
+          }
           if (code === 0) {
             console.log('Model downloaded successfully');
-            resolve({ success: true });
-          } else if (!hasError) {
-            // Non-zero exit but no explicit error - might be OK
-            console.log('Model download completed with warnings');
-            resolve({ success: true });
-          } else {
-            reject(new Error('Failed to download model'));
+            finish(resolve, { success: true });
+            return;
           }
+          // Non-zero exit (taskkill/quit/partial): only report success if the cache is complete.
+          if (!hasError && isTranscriptionModelCached(model, downloadCheck)) {
+            console.log('Model download completed with warnings; cache is complete');
+            finish(resolve, { success: true });
+            return;
+          }
+          finish(reject, new Error(
+            hasError
+              ? 'Failed to download model'
+              : `Model download exited with code ${code} before the cache was complete.`,
+          ));
+        });
+
+        python.on('error', (error) => {
+          idleController.signal.removeEventListener('abort', handleAbort);
+          flushRedactedProgress('model-download-progress', progressRedactor);
+          finish(reject, idleController.signal.aborted
+            ? new Error('Model download was canceled.')
+            : error);
         });
       });
+    });
+
+    ipcMain.handle('cancel-download-model', async (event) => {
+      assertTrustedRendererSender(event);
+      if (!activeModelDownload) {
+        return { canceled: false, message: 'No Whisper model download is currently running.' };
+      }
+      activeModelDownload.controller.abort();
+      terminateProcessBestEffort(activeModelDownload.process);
+      return { canceled: true };
     });
 
     /**
@@ -452,46 +547,51 @@ function createTranscriptionService(deps) {
       });
       audioFile = assertSafeExistingRecordingAudioPath(audioFile);
 
-      const shouldPreemptiveCpuRetry = process.platform === 'win32'
-        && shouldForceCpuTranscriptionFromCudaStatus(getCachedCudaStatus());
-
-      return enqueueAiComputeAction(() => runWallClockComputeAction({
-        timeoutMs: getTranscriptionComputeTimeoutMs(modelSize),
-        label: 'Transcription',
-        terminateProcess: terminateProcessBestEffort,
-        action: async (registerProcess) => {
-          if (shouldPreemptiveCpuRetry) {
-            sendToRenderer(
-              'transcription-progress',
-              'CUDA runtime is not loadable on this system. Starting transcription on CPU.\n',
-            );
-          }
-          try {
-            return await runTranscriptionProcess({
-              audioFile,
-              language,
-              modelSize,
-              device: shouldPreemptiveCpuRetry ? 'cpu' : 'auto',
-              registerProcess,
-            });
-          } catch (error) {
-            if (!isRetryableCudaTranscriptionError(error && error.message)) {
-              throw error;
+      // GPU wait stays inside the enqueue (serialized) but outside the wall clock
+      // so a long pip install cannot burn a tiny/base transcription budget.
+      return enqueueAiComputeAction(async () => {
+        await waitForGpuRuntimeBeforeCompute('Transcription');
+        return runWallClockComputeAction({
+          timeoutMs: getTranscriptionComputeTimeoutMs(modelSize),
+          label: 'Transcription',
+          terminateProcess: terminateProcessBestEffort,
+          action: async (registerProcess) => {
+            // Decide CPU preemption when the job starts, not at enqueue (CUDA may have been repaired).
+            const shouldPreemptiveCpuRetry = process.platform === 'win32'
+              && shouldForceCpuTranscriptionFromCudaStatus(getCachedCudaStatus());
+            if (shouldPreemptiveCpuRetry) {
+              sendToRenderer(
+                'transcription-progress',
+                'CUDA runtime is not loadable on this system. Starting transcription on CPU.\n',
+              );
             }
-            sendToRenderer(
-              'transcription-progress',
-              'GPU transcription failed because CUDA runtime libraries could not be loaded. Retrying on CPU; this may take significantly longer.\n',
-            );
-            return runTranscriptionProcess({
-              audioFile,
-              language,
-              modelSize,
-              device: 'cpu',
-              registerProcess,
-            });
-          }
-        },
-      }));
+            try {
+              return await runTranscriptionProcess({
+                audioFile,
+                language,
+                modelSize,
+                device: shouldPreemptiveCpuRetry ? 'cpu' : 'auto',
+                registerProcess,
+              });
+            } catch (error) {
+              if (!isRetryableCudaTranscriptionError(error && error.message)) {
+                throw error;
+              }
+              sendToRenderer(
+                'transcription-progress',
+                'GPU transcription failed because CUDA runtime libraries could not be loaded. Retrying on CPU; this may take significantly longer.\n',
+              );
+              return runTranscriptionProcess({
+                audioFile,
+                language,
+                modelSize,
+                device: 'cpu',
+                registerProcess,
+              });
+            }
+          },
+        });
+      });
     });
 
     ipcMain.handle('transcribe-audio-with-speakers', async (event, options = {}) => {
@@ -542,46 +642,49 @@ function createTranscriptionService(deps) {
         throw new Error('Temporary speaker-guided transcript path is invalid.');
       }
 
-      return enqueueAiComputeAction(() => runWallClockComputeAction({
-        timeoutMs: AI_COMPUTE_TIMEOUT_MS.guidedTranscription,
-        label: 'Speaker-guided transcription',
-        terminateProcess: terminateProcessBestEffort,
-        action: (registerProcess) => runGuidedTranscriptionProcess({
-        spawnProcess: spawnTrackedPython,
-        args: buildManagedDiarizationGuidedTranscriptionArgs({
-          audioPath: resolvedAudioPath,
-          outputTranscript: tempTranscriptPath,
-          language,
-          modelSize,
-          modelRef: catalogModelRef,
-          speakerCount: speakerCount || diarizationStatus.speakerCount || 'auto',
-          requiredDevice,
-        }),
-        cwd: pythonConfig.backendPath,
-        env: {
-          ...getDiarizationDependencyEnv(),
-          ...getDiarizationCacheEnv(),
-          ...getTranscriptionRuntimeEnv(modelSize, { includeManagedDiarization: true }),
-          HF_TOKEN: '',
-          HUGGINGFACE_HUB_TOKEN: '',
-        },
-        finalTranscriptPath,
-        tempTranscriptPath,
-        modelSize,
-        fsPromises: fs.promises,
-        registerProcess,
-        terminateProcess: terminateProcessBestEffort,
-        summarizeError: summarizeDiarizationError,
-        onProgressLine: (line) => {
-          const progressEvent = parseAiBackendProgressLine(line, 'diarization');
-          if (progressEvent) {
-            sendToRenderer('diarization-progress', progressEvent);
-          } else if (line.trim()) {
-            sendToRenderer('transcription-progress', `${redactSensitiveText(line)}\n`);
-          }
-        },
-      }),
-      }));
+      return enqueueAiComputeAction(async () => {
+        await waitForGpuRuntimeBeforeCompute('Speaker-guided transcription');
+        return runWallClockComputeAction({
+          timeoutMs: getGuidedTranscriptionComputeTimeoutMs(modelSize),
+          label: 'Speaker-guided transcription',
+          terminateProcess: terminateProcessBestEffort,
+          action: (registerProcess) => runGuidedTranscriptionProcess({
+            spawnProcess: spawnTrackedPython,
+            args: buildManagedDiarizationGuidedTranscriptionArgs({
+              audioPath: resolvedAudioPath,
+              outputTranscript: tempTranscriptPath,
+              language,
+              modelSize,
+              modelRef: catalogModelRef,
+              speakerCount: speakerCount || diarizationStatus.speakerCount || 'auto',
+              requiredDevice,
+            }),
+            cwd: pythonConfig.backendPath,
+            env: {
+              ...getDiarizationDependencyEnv(),
+              ...getDiarizationCacheEnv(),
+              ...getTranscriptionRuntimeEnv(modelSize, { includeManagedDiarization: true }),
+              HF_TOKEN: '',
+              HUGGINGFACE_HUB_TOKEN: '',
+            },
+            finalTranscriptPath,
+            tempTranscriptPath,
+            modelSize,
+            fsPromises: fs.promises,
+            registerProcess,
+            terminateProcess: terminateProcessBestEffort,
+            summarizeError: summarizeDiarizationError,
+            onProgressLine: (line) => {
+              const progressEvent = parseAiBackendProgressLine(line, 'diarization');
+              if (progressEvent) {
+                sendToRenderer('diarization-progress', progressEvent);
+              } else if (line.trim()) {
+                sendToRenderer('transcription-progress', `${redactSensitiveText(line)}\n`);
+              }
+            },
+          }),
+        });
+      });
     });
 
     ipcMain.handle('diarize-transcript', async (event, options = {}) => {
@@ -632,80 +735,83 @@ function createTranscriptionService(deps) {
       if (!isSafeRecordingsJsonPath({ filePath: resolvedOutputPath, recordingsDir: getRecordingsDir() })) {
         throw new Error('Speaker labels output must be a JSON file in the recordings directory.');
       }
-      return enqueueAiComputeAction(() => runWallClockComputeAction({
-        timeoutMs: AI_COMPUTE_TIMEOUT_MS.diarization,
-        label: 'Speaker identification',
-        terminateProcess: terminateProcessBestEffort,
-        action: (registerProcess) => new Promise((resolve, reject) => {
-        const python = spawnTrackedPython(buildManagedDiarizationArgs({
-          audioPath: resolvedAudioPath,
-          segmentsJsonPath: resolvedSegmentsJsonPath,
-          outputPath: resolvedOutputPath,
-          modelRef: catalogModelRef,
-          speakerCount,
-          requiredDevice,
-        }), {
-          cwd: pythonConfig.backendPath,
-          env: {
-            ...getDiarizationDependencyEnv(),
-            ...getDiarizationCacheEnv(),
-            ...buildCudaRuntimeEnv({}, { includeManagedDiarization: true }),
-            HF_TOKEN: '',
-            HUGGINGFACE_HUB_TOKEN: '',
-          },
+      return enqueueAiComputeAction(async () => {
+        await waitForGpuRuntimeBeforeCompute('Speaker identification');
+        return runWallClockComputeAction({
+          timeoutMs: AI_COMPUTE_TIMEOUT_MS.diarization,
+          label: 'Speaker identification',
+          terminateProcess: terminateProcessBestEffort,
+          action: (registerProcess) => new Promise((resolve, reject) => {
+            const python = spawnTrackedPython(buildManagedDiarizationArgs({
+              audioPath: resolvedAudioPath,
+              segmentsJsonPath: resolvedSegmentsJsonPath,
+              outputPath: resolvedOutputPath,
+              modelRef: catalogModelRef,
+              speakerCount,
+              requiredDevice,
+            }), {
+              cwd: pythonConfig.backendPath,
+              env: {
+                ...getDiarizationDependencyEnv(),
+                ...getDiarizationCacheEnv(),
+                ...buildCudaRuntimeEnv({}, { includeManagedDiarization: true }),
+                HF_TOKEN: '',
+                HUGGINGFACE_HUB_TOKEN: '',
+              },
+            });
+            registerProcess(python);
+
+            let output = '';
+            let errorOutput = '';
+            const stdoutOverflow = { overflowed: false };
+
+            python.stdout.on('data', (data) => {
+              output = appendSpawnJsonStdout(output, data, stdoutOverflow);
+            });
+
+            python.stderr.on('data', (data) => {
+              const stderrChunk = data.toString();
+              errorOutput = appendSpawnLogBuffer(errorOutput, stderrChunk);
+              for (const line of stderrChunk.split(/\r?\n/)) {
+                const progressEvent = parseAiBackendProgressLine(line, 'diarization');
+                if (progressEvent) {
+                  sendToRenderer('diarization-progress', progressEvent);
+                }
+              }
+            });
+
+            python.on('close', (code) => {
+              if (tempSegmentsPath) {
+                fs.promises.rm(path.dirname(tempSegmentsPath), { recursive: true, force: true }).catch(() => {});
+              }
+
+              if (stdoutOverflow.overflowed) {
+                reject(new Error('Speaker diarization output exceeded the maximum allowed size.'));
+                return;
+              }
+
+              if (code === 0) {
+                try {
+                  resolve(JSON.parse(output));
+                } catch (error) {
+                  reject(new Error(`Failed to parse diarization result: ${error.message}`));
+                }
+                return;
+              }
+
+              const reason = summarizeDiarizationError(errorOutput);
+              reject(new Error(reason || 'Speaker diarization failed.'));
+            });
+
+            python.on('error', (error) => {
+              if (tempSegmentsPath) {
+                fs.promises.rm(path.dirname(tempSegmentsPath), { recursive: true, force: true }).catch(() => {});
+              }
+              reject(error);
+            });
+          }),
         });
-        registerProcess(python);
-
-        let output = '';
-        let errorOutput = '';
-        const stdoutOverflow = { overflowed: false };
-
-        python.stdout.on('data', (data) => {
-          output = appendSpawnJsonStdout(output, data, stdoutOverflow);
-        });
-
-        python.stderr.on('data', (data) => {
-          const stderrChunk = data.toString();
-          errorOutput = appendSpawnLogBuffer(errorOutput, stderrChunk);
-          for (const line of stderrChunk.split(/\r?\n/)) {
-            const progressEvent = parseAiBackendProgressLine(line, 'diarization');
-            if (progressEvent) {
-              sendToRenderer('diarization-progress', progressEvent);
-            }
-          }
-        });
-
-        python.on('close', (code) => {
-          if (tempSegmentsPath) {
-            fs.promises.rm(path.dirname(tempSegmentsPath), { recursive: true, force: true }).catch(() => {});
-          }
-
-          if (stdoutOverflow.overflowed) {
-            reject(new Error('Speaker diarization output exceeded the maximum allowed size.'));
-            return;
-          }
-
-          if (code === 0) {
-            try {
-              resolve(JSON.parse(output));
-            } catch (error) {
-              reject(new Error(`Failed to parse diarization result: ${error.message}`));
-            }
-            return;
-          }
-
-          const reason = summarizeDiarizationError(errorOutput);
-          reject(new Error(reason || 'Speaker diarization failed.'));
-        });
-
-        python.on('error', (error) => {
-          if (tempSegmentsPath) {
-            fs.promises.rm(path.dirname(tempSegmentsPath), { recursive: true, force: true }).catch(() => {});
-          }
-          reject(error);
-        });
-      }),
-      }));
+      });
     });
 
     ipcMain.handle('retry-transcription', async (event, options = {}) => {
@@ -785,12 +891,11 @@ function createTranscriptionService(deps) {
         }
       }
 
-      const shouldPreemptiveCpuRetry = process.platform === 'win32'
-        && shouldForceCpuTranscriptionFromCudaStatus(getCachedCudaStatus());
-
-      const result = await enqueueAiComputeAction(() => runWallClockComputeAction({
+      const result = await enqueueAiComputeAction(async () => {
+        await waitForGpuRuntimeBeforeCompute('Transcription retry');
+        return runWallClockComputeAction({
         timeoutMs: guidedDiarizationStatus
-          ? AI_COMPUTE_TIMEOUT_MS.guidedTranscription
+          ? getGuidedTranscriptionComputeTimeoutMs(normalizedModel)
           : getTranscriptionComputeTimeoutMs(normalizedModel),
         label: 'Transcription retry',
         terminateProcess: terminateProcessBestEffort,
@@ -843,6 +948,8 @@ function createTranscriptionService(deps) {
             }
           }
 
+          const shouldPreemptiveCpuRetry = process.platform === 'win32'
+            && shouldForceCpuTranscriptionFromCudaStatus(getCachedCudaStatus());
           if (shouldPreemptiveCpuRetry) {
             sendToRenderer(
               'transcription-progress',
@@ -874,7 +981,8 @@ function createTranscriptionService(deps) {
             });
           }
         },
-      }));
+        });
+      });
 
       const transcribedPath = assertSafeExistingTranscriptPath(result.output_file || transcriptPath);
       if (path.resolve(transcribedPath) !== path.resolve(transcriptPath)) {

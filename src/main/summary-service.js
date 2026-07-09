@@ -106,9 +106,17 @@ function createSummaryService(deps) {
   }
 
   function abortActiveSummaryForQuit(message = 'Summary generation was canceled because the app is quitting.') {
-    if (canAbortActiveSummaryGeneration()) {
-      activeSummaryGeneration.controller.abort(createAiAddonCancelError(message));
-      terminateProcessBestEffort(activeSummaryGeneration.process);
+    if (!canAbortActiveSummaryGeneration()) {
+      return;
+    }
+    const processRef = activeSummaryGeneration.process;
+    activeSummaryGeneration.controller.abort(createAiAddonCancelError(message));
+    terminateProcessBestEffort(processRef);
+    // Clear immediately when no subprocess is registered (queued / between phases)
+    // so quit cannot leave a sticky "already running" lock on the compute queue.
+    // When a child is live, leave the slot until finish() clears it.
+    if (!processRef) {
+      activeSummaryGeneration = null;
     }
   }
 
@@ -208,6 +216,11 @@ function createSummaryService(deps) {
         throw error;
       });
 
+      // Preflight child is done; clear so cancel can treat this as "queued / not running".
+      if (activeSummaryGeneration && activeSummaryGeneration.controller === controller) {
+        activeSummaryGeneration.process = null;
+      }
+
       if (controller.signal.aborted) {
         clearActiveSummaryGeneration();
         throw createAiAddonCancelError('Summary generation was canceled.');
@@ -224,7 +237,12 @@ function createSummaryService(deps) {
 
       let aiStatus;
       try {
-        aiStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions({ verifyChecksums: true }));
+        // Skip full GGUF re-hash on every generate; setup/validate already pin checksums.
+        // Re-verify only when the artifact mtime/size changed since the last match.
+        aiStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions({
+          verifyChecksums: true,
+          verifyChecksumsIfChanged: true,
+        }));
       } catch (error) {
         clearActiveSummaryGeneration();
         throw error;
@@ -279,7 +297,16 @@ function createSummaryService(deps) {
       return enqueueAiComputeAction(() => runWallClockComputeAction({
         timeoutMs: AI_COMPUTE_TIMEOUT_MS.summary,
         label: 'Summary generation',
-        terminateProcess: terminateProcessBestEffort,
+        terminateProcess: (proc) => {
+          // Mirror quit kill-loop: never terminate update-ai during metadata finalization
+          // after meetings.json may already reference the sidecars.
+          if (activeSummaryGeneration
+            && activeSummaryGeneration.controller === controller
+            && activeSummaryGeneration.phase === 'metadata') {
+            return Promise.resolve();
+          }
+          return terminateProcessBestEffort(proc);
+        },
         action: (registerProcess) => new Promise((resolve, reject) => {
         if (!activeSummaryGeneration || activeSummaryGeneration.controller !== controller || controller.signal.aborted) {
           clearActiveSummaryGeneration();
@@ -489,10 +516,21 @@ function createSummaryService(deps) {
           finish(reject, controller.signal.aborted ? createAiAddonCancelError('Summary generation was canceled.') : error);
         });
       }),
+      }).catch((error) => {
+        // Metadata-phase terminate is skipped so a hung update-ai can outlive the
+        // wall-clock reject + settle grace. finish() never runs in that case and
+        // would leave a sticky "already running" lock. Sidecars are already
+        // committed — clearing the slot is safe and mirrors the quit invariant.
+        if (activeSummaryGeneration && activeSummaryGeneration.controller === controller) {
+          activeSummaryGeneration = null;
+        }
+        throw error;
       }));
     });
 
     ipcMain.handle('cancel-summary-generation', async (event, options = {}) => {
+      assertTrustedRendererSender(event);
+
       if (!activeSummaryGeneration) {
         return { canceled: false, message: 'No summary generation is currently running.' };
       }
@@ -508,8 +546,16 @@ function createSummaryService(deps) {
         return { canceled: false, message: 'Summary output is being saved and can no longer be canceled.' };
       }
 
+      const processRef = activeSummaryGeneration.process;
       activeSummaryGeneration.controller.abort(createAiAddonCancelError('Summary generation was canceled.'));
-      terminateProcessBestEffort(activeSummaryGeneration.process);
+      terminateProcessBestEffort(processRef);
+      // Clear immediately when no subprocess is registered yet (queued behind other
+      // compute, or between preflight and enqueue) so cancel cannot leave a sticky
+      // "already running" lock. The enqueued closure self-rejects when it runs.
+      // When a child is live, keep the slot until finish() clears it.
+      if (!processRef) {
+        activeSummaryGeneration = null;
+      }
       return { canceled: true };
     });
   }

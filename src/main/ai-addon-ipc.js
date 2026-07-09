@@ -35,7 +35,11 @@ const {
   isTokenEncryptionAvailable,
   storeAiAddonToken,
 } = require('../ai-addon-token-store');
-const { parseAiBackendProgressLine } = require('../main-process-helpers');
+const {
+  parseAiBackendProgressLine,
+  AI_COMPUTE_TIMEOUT_MS,
+  runWallClockComputeAction,
+} = require('../main-process-helpers');
 const { createAsyncActionQueue } = require('./ai-compute-queue');
 
 /**
@@ -218,84 +222,89 @@ function createAiAddonIpc(deps) {
     return createAbortableComputeAction({
       cancelSignal,
       cancelMessage: 'Speaker identification setup was canceled.',
-      action: () => new Promise((resolve, reject) => {
-        if (cancelSignal && cancelSignal.aborted) {
-          reject(createAiAddonCancelError('Speaker identification setup was canceled.'));
-          return;
-        }
+      action: () => runWallClockComputeAction({
+        timeoutMs: AI_COMPUTE_TIMEOUT_MS.addonValidation,
+        label: 'Speaker identification validation',
+        terminateProcess: terminateProcessBestEffort,
+        action: (registerProcess) => new Promise((resolve, reject) => {
+          if (cancelSignal && cancelSignal.aborted) {
+            reject(createAiAddonCancelError('Speaker identification setup was canceled.'));
+            return;
+          }
 
-        const python = spawnTrackedPython(buildManagedDiarizationValidationArgs(modelRef, requiredDevice), {
-          cwd: pythonConfig.backendPath,
-          env: {
-            ...getDiarizationDependencyEnv(),
-            ...getDiarizationCacheEnv(),
-            ...buildCudaRuntimeEnv({}, { includeManagedDiarization: true }),
-            // Prefer stdin token delivery; keep env empty so process tables cannot scrape HF tokens.
-            HF_TOKEN: '',
-            HUGGINGFACE_HUB_TOKEN: '',
-          },
-        });
+          const python = registerProcess(spawnTrackedPython(buildManagedDiarizationValidationArgs(modelRef, requiredDevice), {
+            cwd: pythonConfig.backendPath,
+            env: {
+              ...getDiarizationDependencyEnv(),
+              ...getDiarizationCacheEnv(),
+              ...buildCudaRuntimeEnv({}, { includeManagedDiarization: true }),
+              // Prefer stdin token delivery; keep env empty so process tables cannot scrape HF tokens.
+              HF_TOKEN: '',
+              HUGGINGFACE_HUB_TOKEN: '',
+            },
+          }));
 
-        let output = '';
-        let errorOutput = '';
-        let settled = false;
-        const cleanupCancel = cancelSignal && typeof cancelSignal.addEventListener === 'function'
-          ? (() => {
-            const handleAbort = () => {
-              if (settled) {
-                return;
+          let output = '';
+          let errorOutput = '';
+          let settled = false;
+          const cleanupCancel = cancelSignal && typeof cancelSignal.addEventListener === 'function'
+            ? (() => {
+              const handleAbort = () => {
+                if (settled) {
+                  return;
+                }
+                settled = true;
+                terminateProcessBestEffort(python);
+                reject(createAiAddonCancelError('Speaker identification setup was canceled.'));
+              };
+              cancelSignal.addEventListener('abort', handleAbort, { once: true });
+              return () => cancelSignal.removeEventListener('abort', handleAbort);
+            })()
+            : () => {};
+          const finish = (callback, value) => {
+            if (settled) {
+              return;
+            }
+            settled = true;
+            cleanupCancel();
+            callback(value);
+          };
+          // Async EPIPE if the child dies before reading stdin is not caught by try/catch.
+          python.stdin.on('error', (error) => {
+            finish(reject, new Error(`Failed to deliver Hugging Face token: ${error.message}`));
+          });
+          try {
+            python.stdin.write(resolvedToken ? `${resolvedToken}\n` : '\n');
+            python.stdin.end();
+          } catch (error) {
+            finish(reject, new Error(`Failed to deliver Hugging Face token to validation process: ${error.message}`));
+            return;
+          }
+          python.stdout.on('data', (data) => { output = appendSpawnLogBuffer(output, data); });
+          python.stderr.on('data', (data) => {
+            const stderrChunk = data.toString();
+            errorOutput = appendSpawnLogBuffer(errorOutput, stderrChunk);
+            for (const line of stderrChunk.split(/\r?\n/)) {
+              const progressEvent = parseAiBackendProgressLine(line, 'diarization');
+              if (progressEvent) {
+                emitAiAddonProgress(progressEvent);
               }
-              settled = true;
-              terminateProcessBestEffort(python);
-              reject(createAiAddonCancelError('Speaker identification setup was canceled.'));
-            };
-            cancelSignal.addEventListener('abort', handleAbort, { once: true });
-            return () => cancelSignal.removeEventListener('abort', handleAbort);
-          })()
-          : () => {};
-        const finish = (callback, value) => {
-          if (settled) {
-            return;
-          }
-          settled = true;
-          cleanupCancel();
-          callback(value);
-        };
-        // Async EPIPE if the child dies before reading stdin is not caught by try/catch.
-        python.stdin.on('error', (error) => {
-          finish(reject, new Error(`Failed to deliver Hugging Face token: ${error.message}`));
-        });
-        try {
-          python.stdin.write(resolvedToken ? `${resolvedToken}\n` : '\n');
-          python.stdin.end();
-        } catch (error) {
-          finish(reject, new Error(`Failed to deliver Hugging Face token to validation process: ${error.message}`));
-          return;
-        }
-        python.stdout.on('data', (data) => { output = appendSpawnLogBuffer(output, data); });
-        python.stderr.on('data', (data) => {
-          const stderrChunk = data.toString();
-          errorOutput = appendSpawnLogBuffer(errorOutput, stderrChunk);
-          for (const line of stderrChunk.split(/\r?\n/)) {
-            const progressEvent = parseAiBackendProgressLine(line, 'diarization');
-            if (progressEvent) {
-              emitAiAddonProgress(progressEvent);
             }
-          }
-        });
-        python.on('close', (code) => {
-          if (code === 0) {
-            try {
-              finish(resolve, JSON.parse(output));
-            } catch (error) {
-              finish(reject, new Error(`Failed to parse diarization setup validation: ${error.message}`));
+          });
+          python.on('close', (code) => {
+            if (code === 0) {
+              try {
+                finish(resolve, JSON.parse(output));
+              } catch (error) {
+                finish(reject, new Error(`Failed to parse diarization setup validation: ${error.message}`));
+              }
+              return;
             }
-            return;
-          }
-          const reason = summarizeDiarizationError(errorOutput);
-          finish(reject, new Error(reason || 'Speaker identification runtime validation failed.'));
-        });
-        python.on('error', (error) => finish(reject, error));
+            const reason = summarizeDiarizationError(errorOutput);
+            finish(reject, new Error(reason || 'Speaker identification runtime validation failed.'));
+          });
+          python.on('error', (error) => finish(reject, error));
+        }),
       }),
     });
   }
@@ -312,63 +321,68 @@ function createAiAddonIpc(deps) {
     return createAbortableComputeAction({
       cancelSignal,
       cancelMessage: 'Summary model setup was canceled.',
-      action: () => new Promise((resolve, reject) => {
-        if (cancelSignal && cancelSignal.aborted) {
-          reject(createAiAddonCancelError('Summary model setup was canceled.'));
-          return;
-        }
-
-        const python = spawnTrackedPython(buildSummaryArgs({
-          meetingId: 'setup-validation',
-          runtimeDir,
-          modelPath,
-          validateRuntime: true,
-          modelLabel: artifact.modelLabel || artifact.modelId,
-        }), { cwd: pythonConfig.backendPath });
-
-        let output = '';
-        let errorOutput = '';
-        let settled = false;
-        const cleanupCancel = cancelSignal && typeof cancelSignal.addEventListener === 'function'
-          ? (() => {
-            const handleAbort = () => {
-              if (settled) {
-                return;
-              }
-              settled = true;
-              terminateProcessBestEffort(python);
-              reject(createAiAddonCancelError('Summary model setup was canceled.'));
-            };
-            cancelSignal.addEventListener('abort', handleAbort, { once: true });
-            return () => cancelSignal.removeEventListener('abort', handleAbort);
-          })()
-          : () => {};
-        const finish = (callback, value) => {
-          if (settled) {
+      action: () => runWallClockComputeAction({
+        timeoutMs: AI_COMPUTE_TIMEOUT_MS.addonValidation,
+        label: 'Summary model validation',
+        terminateProcess: terminateProcessBestEffort,
+        action: (registerProcess) => new Promise((resolve, reject) => {
+          if (cancelSignal && cancelSignal.aborted) {
+            reject(createAiAddonCancelError('Summary model setup was canceled.'));
             return;
           }
-          settled = true;
-          cleanupCancel();
-          callback(value);
-        };
-        python.stdout.on('data', (data) => { output = appendSpawnLogBuffer(output, data); });
-        python.stderr.on('data', (data) => { errorOutput = appendSpawnLogBuffer(errorOutput, data); });
-        python.on('close', (code) => {
-          if (code === 0) {
-            try {
-              finish(resolve, JSON.parse(output));
-            } catch (error) {
-              finish(reject, new Error(`Failed to parse summary runtime validation: ${error.message}`));
+
+          const python = registerProcess(spawnTrackedPython(buildSummaryArgs({
+            meetingId: 'setup-validation',
+            runtimeDir,
+            modelPath,
+            validateRuntime: true,
+            modelLabel: artifact.modelLabel || artifact.modelId,
+          }), { cwd: pythonConfig.backendPath }));
+
+          let output = '';
+          let errorOutput = '';
+          let settled = false;
+          const cleanupCancel = cancelSignal && typeof cancelSignal.addEventListener === 'function'
+            ? (() => {
+              const handleAbort = () => {
+                if (settled) {
+                  return;
+                }
+                settled = true;
+                terminateProcessBestEffort(python);
+                reject(createAiAddonCancelError('Summary model setup was canceled.'));
+              };
+              cancelSignal.addEventListener('abort', handleAbort, { once: true });
+              return () => cancelSignal.removeEventListener('abort', handleAbort);
+            })()
+            : () => {};
+          const finish = (callback, value) => {
+            if (settled) {
+              return;
             }
-            return;
-          }
-          const reason = summarizeSummaryValidationError(errorOutput);
-          const message = reason && /^local summary runtime validation failed/i.test(reason)
-            ? reason
-            : `Local summary runtime validation failed${reason ? `: ${reason}` : '.'}`;
-          finish(reject, new Error(message));
-        });
-        python.on('error', (error) => finish(reject, error));
+            settled = true;
+            cleanupCancel();
+            callback(value);
+          };
+          python.stdout.on('data', (data) => { output = appendSpawnLogBuffer(output, data); });
+          python.stderr.on('data', (data) => { errorOutput = appendSpawnLogBuffer(errorOutput, data); });
+          python.on('close', (code) => {
+            if (code === 0) {
+              try {
+                finish(resolve, JSON.parse(output));
+              } catch (error) {
+                finish(reject, new Error(`Failed to parse summary runtime validation: ${error.message}`));
+              }
+              return;
+            }
+            const reason = summarizeSummaryValidationError(errorOutput);
+            const message = reason && /^local summary runtime validation failed/i.test(reason)
+              ? reason
+              : `Local summary runtime validation failed${reason ? `: ${reason}` : '.'}`;
+            finish(reject, new Error(message));
+          });
+          python.on('error', (error) => finish(reject, error));
+        }),
       }),
     });
   }

@@ -22,6 +22,7 @@ const PRELOAD_PATH = path.join(ROOT, 'src', 'preload.js');
 const EXPECTED_INVOKE_CHANNELS = [
   'add-meeting',
   'cancel-diarization-setup',
+  'cancel-download-model',
   'cancel-summary-generation',
   'cancel-summary-model-setup',
   'check-audio-output',
@@ -139,6 +140,7 @@ const EXPECTED_MAIN_PROCESS_HELPER_EXPORTS = [
   'getCudaRuntimeProfile',
   'getCudaRuntimeProfiles',
   'getGpuRuntimeEnsurePlan',
+  'getGuidedTranscriptionComputeTimeoutMs',
   'getGuidedTranscriptionTimeoutMinutes',
   'getLegalNoticesPath',
   'getMacMLXCacheDir',

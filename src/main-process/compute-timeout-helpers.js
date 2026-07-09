@@ -2,11 +2,18 @@
 
 const AI_COMPUTE_TIMEOUT_MS = Object.freeze({
   diarization: 30 * 60 * 1000,
+  // Floor / documentation default; live guided jobs use getGuidedTranscriptionComputeTimeoutMs.
   guidedTranscription: 120 * 60 * 1000,
   summary: 90 * 60 * 1000,
   meetingPreflight: 60 * 1000,
   // Max time download-model may block waiting for GPU compute to go idle.
   modelDownloadIdleWait: 15 * 60 * 1000,
+  // Max time GPU install/repair/uninstall may wait for compute-queue idle.
+  gpuRuntimeComputeIdleWait: 15 * 60 * 1000,
+  // Diarization / summary setup smoke validation on the compute queue.
+  addonValidation: 15 * 60 * 1000,
+  // After terminateProcess on timeout, release the queue even if the child never exits.
+  wallClockSettleGraceMs: 30 * 1000,
 });
 
 /** Labels for compute jobs that cannot be aborted and routinely exceed quit-drain budgets. */
@@ -88,9 +95,11 @@ function runWallClockComputeAction({
   timeoutMs,
   label = 'Local AI job',
   terminateProcess = () => {},
+  settleGraceMs = AI_COMPUTE_TIMEOUT_MS.wallClockSettleGraceMs,
 }) {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    return Promise.resolve().then(() => action(() => {}));
+    // Identity registerProcess so callers can still use the return value.
+    return Promise.resolve().then(() => action((proc) => proc));
   }
 
   let activeProcess = null;
@@ -139,6 +148,19 @@ function runWallClockComputeAction({
     callback(value);
   };
 
+  const waitForActionOrGrace = (actionPromise) => {
+    const graceMs = Number.isFinite(settleGraceMs) && settleGraceMs > 0
+      ? settleGraceMs
+      : AI_COMPUTE_TIMEOUT_MS.wallClockSettleGraceMs;
+    return Promise.race([
+      actionPromise.catch(() => undefined),
+      new Promise((resolve) => {
+        const graceHandle = setTimeout(resolve, graceMs);
+        graceHandle.unref?.();
+      }),
+    ]);
+  };
+
   return new Promise((resolve, reject) => {
     // Assign settleReject before registering the job so a concurrent quit
     // terminate can never land on a null settleReject (N2).
@@ -155,8 +177,8 @@ function runWallClockComputeAction({
       timedOut = true;
       const timeoutError = new Error(`${label} timed out after ${formatComputeTimeoutLabel(timeoutMs)}.`);
       Promise.resolve(terminateProcess(activeProcess))
-        .then(() => actionPromise)
         .catch(() => undefined)
+        .then(() => waitForActionOrGrace(actionPromise))
         .finally(() => settle(reject, timeoutError));
     }, timeoutMs);
     timeoutHandle.unref?.();
@@ -188,6 +210,11 @@ function getGuidedTranscriptionTimeoutMinutes(modelSize) {
   return modelTimeouts[modelSize] || 90;
 }
 
+/** Outer compute-queue wall clock: model budget + small margin so the inner timer can fire first. */
+function getGuidedTranscriptionComputeTimeoutMs(modelSize) {
+  return (getGuidedTranscriptionTimeoutMinutes(modelSize) * 60 * 1000) + (30 * 1000);
+}
+
 module.exports = {
   AI_COMPUTE_TIMEOUT_MS,
   getTranscriptionComputeTimeoutMs,
@@ -199,4 +226,5 @@ module.exports = {
   isNonAbortableLongComputeJob,
   shouldSkipQuitComputeDrain,
   getGuidedTranscriptionTimeoutMinutes,
+  getGuidedTranscriptionComputeTimeoutMs,
 };

@@ -1048,6 +1048,25 @@ async function showFirstTimeSetup(modelSize) {
   modal.classList.remove('hidden');
   progressText.textContent = 'Downloading Whisper AI model...';
 
+  const cancelBtn = document.getElementById('ftue-cancel-download-btn');
+  let downloadCanceled = false;
+  const onCancelClick = async () => {
+    downloadCanceled = true;
+    if (cancelBtn) {
+      cancelBtn.disabled = true;
+    }
+    progressText.textContent = 'Canceling download...';
+    try {
+      await window.electronAPI.cancelDownloadModel();
+    } catch (_error) {
+      // Best-effort; the download promise will settle with a cancel error.
+    }
+  };
+  if (cancelBtn) {
+    cancelBtn.disabled = false;
+    cancelBtn.addEventListener('click', onCancelClick);
+  }
+
   // Listen for progress updates
   const cleanupModelDownloadProgress = registerCleanup(window.electronAPI.onModelDownloadProgress((data) => {
     logOutput.textContent += data;
@@ -1088,15 +1107,27 @@ async function showFirstTimeSetup(modelSize) {
     modal.classList.add('hidden');
   } catch (error) {
     clearInterval(progressInterval);
-    progressText.textContent = 'Setup failed!';
+    const canceled = downloadCanceled
+      || /canceled|cancelled/i.test(String(error && error.message ? error.message : error));
+    progressText.textContent = canceled ? 'Download canceled' : 'Setup failed!';
     logOutput.textContent += `\nERROR: ${error.message}`;
 
-    addLog('Model download failed. You can try again from Settings.', 'error');
+    addLog(
+      canceled
+        ? 'Model download was canceled. You can download it later from Settings.'
+        : 'Model download failed. You can try again from Settings.',
+      canceled ? 'warning' : 'error',
+    );
 
     // Wait for user to see error, then continue anyway
     await new Promise(resolve => setTimeout(resolve, 3000));
     modal.classList.add('hidden');
   } finally {
+    clearInterval(progressInterval);
+    if (cancelBtn) {
+      cancelBtn.removeEventListener('click', onCancelClick);
+      cancelBtn.disabled = false;
+    }
     cleanupModelDownloadProgress();
   }
 }

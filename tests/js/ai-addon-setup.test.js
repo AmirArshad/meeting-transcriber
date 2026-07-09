@@ -138,6 +138,7 @@ function createMemoryFs() {
       return {
         isDirectory: () => pathVariants(targetPath).some((variant) => dirs.has(variant)),
         size: resolvedFilePath ? files.get(resolvedFilePath).length : 0,
+        mtimeMs: 1_700_000_000_000,
       };
     },
     createReadStream(filePath) {
@@ -1611,6 +1612,46 @@ test('summary cache validation accepts pinned catalog artifact checksums', async
   });
   assert.equal(verifiedCache.valid, false);
   assert.equal(verifiedCache.checksumStatus, 'mismatch');
+});
+
+test('summary checksum verifyChecksumIfChanged skips re-hash when fingerprint matches', async () => {
+  const fsModule = createMemoryFs();
+  const catalog = createCatalogWithPinnedSummaryArtifact({
+    sha256: CHECKSUM_TARGET_SHA256,
+  });
+  const userDataDir = '/tmp/AvaNevis-checksum-skip';
+  const artifact = getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog);
+  const artifactPath = getSummaryArtifactPath(userDataDir, artifact);
+  fsModule.mkdirSync(path.dirname(artifactPath));
+  fsModule.writeFileSync(artifactPath, 'checksum target\n');
+
+  const first = await checkSummaryModelCache({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    modelId: 'summary-model',
+    fsModule,
+    catalog,
+    verifyChecksum: true,
+    verifyChecksumIfChanged: true,
+  });
+  assert.equal(first.checksumStatus, 'match');
+  assert.equal(first.valid, true);
+  assert.equal(first.checksumSkippedUnchanged, undefined);
+
+  const second = await checkSummaryModelCache({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    modelId: 'summary-model',
+    fsModule,
+    catalog,
+    verifyChecksum: true,
+    verifyChecksumIfChanged: true,
+  });
+  assert.equal(second.checksumStatus, 'match');
+  assert.equal(second.valid, true);
+  assert.equal(second.checksumSkippedUnchanged, true);
 });
 
 test('summary runtime cache stays in userData and requires llama-cli', () => {

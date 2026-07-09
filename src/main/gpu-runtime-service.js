@@ -23,6 +23,7 @@ const {
   getTranscriptionCudaPackages,
   createLineChunkRedactor,
   GPU_RUNTIME_ACTION_TIMEOUT_MS,
+  AI_COMPUTE_TIMEOUT_MS,
   runWallClockComputeAction,
 } = require('../main-process-helpers');
 
@@ -40,6 +41,8 @@ const {
  * @param {Function} deps.terminateProcessBestEffort
  * @param {Function} deps.assertTrustedRendererSender
  * @param {Function} deps.getDiarizationDependencySitePackagesPath
+ * @param {Function} [deps.waitForAiComputeQueueIdle]
+ * @param {Function} [deps.hasPendingAiComputeWork]
  */
 function createGpuRuntimeService(deps) {
   const {
@@ -56,6 +59,8 @@ function createGpuRuntimeService(deps) {
     terminateProcessBestEffort,
     assertTrustedRendererSender,
     getDiarizationDependencySitePackagesPath,
+    waitForAiComputeQueueIdle = async () => {},
+    hasPendingAiComputeWork = () => false,
   } = deps;
 
   // Single shared CUDA status cache + GPU runtime lock. Never copy these lets
@@ -116,7 +121,39 @@ function createGpuRuntimeService(deps) {
     return getTranscriptionCudaPackages();
   }
 
-  function runGpuRuntimeAction(actionFn) {
+  async function runGpuRuntimeAction(actionFn) {
+    if (gpuRuntimeActionPromise) {
+      const error = new Error('A GPU runtime action is already in progress. Please wait for it to finish.');
+      error.code = 'GPU_RUNTIME_ACTION_BUSY';
+      return Promise.reject(error);
+    }
+
+    // Reject immediately when compute is busy so pip cannot race loaded CUDA DLLs.
+    // Also bound-wait in case a short job is finishing (mirrors download-model).
+    if (hasPendingAiComputeWork()) {
+      try {
+        await waitForAiComputeQueueIdle({
+          timeoutMs: AI_COMPUTE_TIMEOUT_MS.gpuRuntimeComputeIdleWait,
+          timeoutMessage: 'Timed out waiting for local AI work to finish before changing the GPU runtime. Try again when transcription is idle.',
+        });
+      } catch (error) {
+        const busyError = new Error(
+          error && error.message
+            ? error.message
+            : 'Local AI work is still running. Wait for transcription to finish before installing or repairing the GPU runtime.',
+        );
+        busyError.code = 'GPU_RUNTIME_COMPUTE_BUSY';
+        throw busyError;
+      }
+      if (hasPendingAiComputeWork()) {
+        const busyError = new Error(
+          'Local AI work is still running. Wait for transcription to finish before installing or repairing the GPU runtime.',
+        );
+        busyError.code = 'GPU_RUNTIME_COMPUTE_BUSY';
+        throw busyError;
+      }
+    }
+
     if (gpuRuntimeActionPromise) {
       const error = new Error('A GPU runtime action is already in progress. Please wait for it to finish.');
       error.code = 'GPU_RUNTIME_ACTION_BUSY';
@@ -457,6 +494,31 @@ function createGpuRuntimeService(deps) {
             unsupportedDetectedProfiles: [],
             recommendedInstallProfile: getSupportedTranscriptionCudaProfileIds()[0] || 'cuda12',
             error: 'CUDA runtime checks are only supported on Windows.',
+          });
+        }
+        // Avoid caching a transient "not loadable" probe while pip is rewriting DLLs.
+        // When no cache exists yet (first-run install), still defer — return a
+        // probe-deferred placeholder instead of racing the install.
+        if (hasInFlightGpuRuntimeAction()) {
+          const cached = getCachedCudaStatus();
+          if (cached) {
+            return {
+              ...cached,
+              probeDeferredDuringGpuAction: true,
+            };
+          }
+          return enrichCheckCudaStatus({
+            installed: false,
+            deviceAvailable: false,
+            runtimeLoadable: false,
+            missingLibraries: [],
+            runtime: 'ctranslate2',
+            statusCode: 'probeDeferredDuringGpuAction',
+            supportedProfiles: getSupportedTranscriptionCudaProfileIds(),
+            unsupportedDetectedProfiles: [],
+            recommendedInstallProfile: getSupportedTranscriptionCudaProfileIds()[0] || 'cuda12',
+            error: 'CUDA status check is deferred while a GPU runtime install or repair is in progress.',
+            probeDeferredDuringGpuAction: true,
           });
         }
         const status = await enrichCheckCudaStatus(await checkCudaRuntimeStatus());

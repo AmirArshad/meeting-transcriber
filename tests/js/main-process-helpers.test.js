@@ -54,6 +54,7 @@ const {
   getMacMLXCacheDir,
   getMacMLXModelStorageDirs,
   getGuidedTranscriptionTimeoutMinutes,
+  getGuidedTranscriptionComputeTimeoutMs,
   getModelDownloadPatterns,
   getRecordingStopTimeout,
   getTranscriberModule,
@@ -207,6 +208,25 @@ test('getGuidedTranscriptionTimeoutMinutes scales by model size', () => {
   assert.equal(getGuidedTranscriptionTimeoutMinutes('medium'), 135);
   assert.equal(getGuidedTranscriptionTimeoutMinutes('large-v3'), 180);
   assert.equal(getGuidedTranscriptionTimeoutMinutes('custom'), 90);
+});
+
+test('getGuidedTranscriptionComputeTimeoutMs is model budget plus margin (outer > inner)', () => {
+  assert.equal(
+    getGuidedTranscriptionComputeTimeoutMs('medium'),
+    (135 * 60 * 1000) + (30 * 1000),
+  );
+  assert.equal(
+    getGuidedTranscriptionComputeTimeoutMs('large-v3'),
+    (180 * 60 * 1000) + (30 * 1000),
+  );
+  assert.ok(
+    getGuidedTranscriptionComputeTimeoutMs('large')
+      > getGuidedTranscriptionTimeoutMinutes('large') * 60 * 1000,
+  );
+  assert.ok(
+    getGuidedTranscriptionComputeTimeoutMs('large')
+      > AI_COMPUTE_TIMEOUT_MS.guidedTranscription,
+  );
 });
 
 
@@ -687,6 +707,7 @@ test('runWallClockComputeAction waits for action settlement before rejecting on 
   const actionPromise = runWallClockComputeAction({
     timeoutMs: 1000,
     label: 'Test job',
+    settleGraceMs: 5000,
     terminateProcess: () => {
       events.push('terminate');
       rejectAction?.();
@@ -705,6 +726,42 @@ test('runWallClockComputeAction waits for action settlement before rejecting on 
   t.mock.timers.tick(1000);
   await assert.rejects(actionPromise, /timed out/);
   assert.deepEqual(events, ['terminate', 'action-settled']);
+});
+
+test('runWallClockComputeAction releases after settle grace when the child never exits', async () => {
+  // Production timers are unref()'d so they do not keep the app alive; hold a
+  // ref'd keepalive so the test runner waits for the outer reject.
+  const keepAlive = setInterval(() => {}, 1000);
+  try {
+    const actionPromise = runWallClockComputeAction({
+      timeoutMs: 30,
+      settleGraceMs: 40,
+      label: 'Stuck job',
+      terminateProcess: () => Promise.resolve(),
+      action: (registerProcess) => new Promise(() => {
+        registerProcess({ pid: 99 });
+        // Never settles — simulates an unkillable child.
+      }),
+    });
+
+    await assert.rejects(actionPromise, /Stuck job timed out/);
+  } finally {
+    clearInterval(keepAlive);
+  }
+});
+
+test('runWallClockComputeAction no-timeout path passes an identity registerProcess', async () => {
+  let seen = null;
+  const proc = { pid: 7 };
+  const result = await runWallClockComputeAction({
+    timeoutMs: 0,
+    action: (registerProcess) => {
+      seen = registerProcess(proc);
+      return 'ok';
+    },
+  });
+  assert.equal(result, 'ok');
+  assert.equal(seen, proc);
 });
 
 

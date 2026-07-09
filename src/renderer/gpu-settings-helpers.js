@@ -8,7 +8,10 @@
 }(typeof globalThis !== 'undefined' ? globalThis : this, function buildGpuSettingsHelpers() {
   function isGpuRuntimeActionBusyError(error) {
     const message = String(error && error.message ? error.message : '').toUpperCase();
-    return message.includes('GPU_RUNTIME_ACTION_BUSY') || message.includes('ALREADY IN PROGRESS');
+    return message.includes('GPU_RUNTIME_ACTION_BUSY')
+      || message.includes('GPU_RUNTIME_COMPUTE_BUSY')
+      || message.includes('ALREADY IN PROGRESS')
+      || message.includes('WAIT FOR TRANSCRIPTION TO FINISH BEFORE');
   }
 
   return {

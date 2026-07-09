@@ -569,6 +569,25 @@ function checkSummaryRuntimeCache({
   };
 }
 
+/** In-memory fingerprint → sha256 for skip-rehash when artifact mtime/size unchanged. */
+const summaryChecksumFingerprintCache = new Map();
+
+function getSummaryArtifactFingerprint(artifactPath, fsModule = fs) {
+  try {
+    const statSync = bindFsMethod(fsModule, 'statSync');
+    if (!statSync) {
+      return null;
+    }
+    const stat = statSync(artifactPath);
+    if (!stat) {
+      return null;
+    }
+    return `${artifactPath}\0${Number(stat.size)}\0${Number(stat.mtimeMs)}`;
+  } catch (_error) {
+    return null;
+  }
+}
+
 async function checkSummaryModelCache({
   userDataDir,
   platform = process.platform,
@@ -577,6 +596,7 @@ async function checkSummaryModelCache({
   fsModule = fs,
   catalog = AI_MODEL_CATALOG,
   verifyChecksum = false,
+  verifyChecksumIfChanged = false,
 } = {}) {
   const artifact = getSummaryArtifactForPlatform(modelId, platform, arch, catalog);
   if (!artifact) {
@@ -646,8 +666,29 @@ async function checkSummaryModelCache({
     };
   }
 
+  const fingerprint = verifyChecksumIfChanged
+    ? getSummaryArtifactFingerprint(artifactPath, fsModule)
+    : null;
+  if (fingerprint) {
+    const cached = summaryChecksumFingerprintCache.get(fingerprint);
+    if (cached && cached.expectedSha256 === artifact.sha256 && cached.actualSha256 === artifact.sha256) {
+      return {
+        ...base,
+        actualSha256: cached.actualSha256,
+        valid: true,
+        checksumStatus: 'match',
+        validationStatus: 'ready',
+        reason: null,
+        checksumSkippedUnchanged: true,
+      };
+    }
+  }
+
   const actualSha256 = await hashFileSha256(artifactPath, fsModule);
   if (actualSha256 !== artifact.sha256) {
+    if (fingerprint) {
+      summaryChecksumFingerprintCache.delete(fingerprint);
+    }
     return {
       ...base,
       actualSha256,
@@ -655,6 +696,13 @@ async function checkSummaryModelCache({
       validationStatus: 'error',
       reason: 'Summary model artifact checksum does not match the pinned checksum.',
     };
+  }
+
+  if (fingerprint) {
+    summaryChecksumFingerprintCache.set(fingerprint, {
+      expectedSha256: artifact.sha256,
+      actualSha256,
+    });
   }
 
   return {
@@ -717,6 +765,7 @@ async function checkAiAddonSetupStatus({
   fsModule = fs,
   catalog = AI_MODEL_CATALOG,
   verifyChecksums = false,
+  verifyChecksumsIfChanged = false,
   includeStorageSizes = false,
   checkTokenEncryption = false,
 } = {}) {
@@ -742,6 +791,7 @@ async function checkAiAddonSetupStatus({
     fsModule,
     catalog,
     verifyChecksum: verifyChecksums,
+    verifyChecksumIfChanged: Boolean(verifyChecksums && verifyChecksumsIfChanged),
   });
   const summaryValidationText = [
     status.features.summary.error,

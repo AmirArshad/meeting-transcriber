@@ -11,6 +11,7 @@ const {
   isNonAbortableLongComputeJob,
   shouldSkipQuitComputeDrain,
   getGuidedTranscriptionTimeoutMinutes,
+  getGuidedTranscriptionComputeTimeoutMs,
 } = require('./main-process/compute-timeout-helpers');
 
 const {
@@ -194,6 +195,7 @@ module.exports = {
   normalizeRecordingStopPayload,
   parseRecordingStopResult,
   getGuidedTranscriptionTimeoutMinutes,
+  getGuidedTranscriptionComputeTimeoutMs,
   getMacMLXModelStorageDirs,
   getTranscriberModule,
   getModelDownloadCacheDir,

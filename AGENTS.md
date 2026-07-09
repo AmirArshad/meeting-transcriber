@@ -248,21 +248,28 @@ Heavy local AI work runs through a single main-process compute queue (`aiCompute
 
 **Not on the compute queue**
 
-- Whisper model download / preload (`download-model`) — stays **off** the compute queue (must not enqueue), but waits for the compute queue to go idle first (bounded by `AI_COMPUTE_TIMEOUT_MS.modelDownloadIdleWait`) to avoid VRAM contention with transcription/diarization/summary; do not merge downloads onto the compute queue.
+- Whisper model download / preload (`download-model`) — stays **off** the compute queue (must not enqueue), but waits for the compute queue to go idle first (bounded by `AI_COMPUTE_TIMEOUT_MS.modelDownloadIdleWait`) to avoid VRAM contention with transcription/diarization/summary; do not merge downloads onto the compute queue. `cancel-download-model` aborts an in-flight preload (including the idle wait). Non-zero preload exits must re-check cache completeness before reporting success.
 - AI add-on setup downloads (`aiAddonActionQueue`) — separate serialization from compute.
+- GPU runtime install/repair/uninstall (`gpuRuntimeActionPromise`) — separate lock from the compute queue, but **mutually exclusive with active compute**: `runGpuRuntimeAction` waits for compute-queue idle (bounded by `AI_COMPUTE_TIMEOUT_MS.gpuRuntimeComputeIdleWait`) before pip, and transcription/diarization/guided jobs wait for `waitForGpuRuntimeIdle()` before spawning so pip cannot race loaded CUDA DLLs. The GPU wait runs **inside the enqueued closure but outside** `runWallClockComputeAction`, so a long pip install cannot burn a tiny/base transcription budget.
 
 **Wall-clock timeouts**
 
-Each enqueued compute job is wrapped with `runWallClockComputeAction` in `src/main-process-helpers.js`, which kills the active child via `terminateProcessBestEffort` when a per-job limit is exceeded. On timeout, the wrapper waits for the child process to exit and for the job promise to settle before releasing the compute queue.
+Each enqueued compute job is wrapped with `runWallClockComputeAction` in `src/main-process-helpers.js`, which kills the active child via `terminateProcessBestEffort` when a per-job limit is exceeded. On timeout, the wrapper waits for the child process to exit and for the job promise to settle before releasing the compute queue, with a bounded settle grace (`AI_COMPUTE_TIMEOUT_MS.wallClockSettleGraceMs`) so an unkillable child cannot hold the queue forever.
 
 - Transcription: model-size limits via `getTranscriptionComputeTimeoutMs` (30–120 minutes)
 - Speaker identification (diarization): 30 minutes (`AI_COMPUTE_TIMEOUT_MS.diarization`)
-- Speaker-guided transcription: 120 minutes (`AI_COMPUTE_TIMEOUT_MS.guidedTranscription`)
-- Summary generation: 90 minutes (`AI_COMPUTE_TIMEOUT_MS.summary`)
+- Speaker-guided transcription: `getGuidedTranscriptionComputeTimeoutMs(modelSize)` (model budget from `getGuidedTranscriptionTimeoutMinutes` + 30s margin; the flat `AI_COMPUTE_TIMEOUT_MS.guidedTranscription` is documentation/floor only)
+- Summary generation: 90 minutes (`AI_COMPUTE_TIMEOUT_MS.summary`); wall-clock terminate skips the child while `activeSummaryGeneration.phase === 'metadata'` (same exemption as quit). If the outer wall clock still rejects during metadata (hung `update-ai`), clear `activeSummaryGeneration` so later generates are not sticky-locked — sidecars are already committed; never delete them.
 - Meeting lookup preflight (`retry-transcription`): 60 seconds (`AI_COMPUTE_TIMEOUT_MS.meetingPreflight`)
 - Whisper `download-model` idle wait (off-queue): 15 minutes (`AI_COMPUTE_TIMEOUT_MS.modelDownloadIdleWait`)
+- GPU runtime vs compute idle wait: 15 minutes (`AI_COMPUTE_TIMEOUT_MS.gpuRuntimeComputeIdleWait`)
+- Add-on setup validation (diarization / summary smoke): 15 minutes (`AI_COMPUTE_TIMEOUT_MS.addonValidation`)
 
-Hung children must not stall the queue indefinitely.
+Hung children must not stall the queue indefinitely. Preemptive CUDA→CPU decisions for transcription must be evaluated when the queued job **starts**, not at enqueue time.
+
+**Summary checksum skip (accepted tradeoff)**
+
+`generate-summary` calls `checkAiAddonSetupStatus({ verifyChecksums: true, verifyChecksumsIfChanged: true })`. After the first full SHA-256 match in a process, subsequent generates skip re-hashing when the artifact `path`/`size`/`mtimeMs` fingerprint is unchanged. Setup/validate paths still full-hash. This is a per-session integrity relaxation on an already-locally-trusted file (not a remote vector); a local attacker who replaces the GGUF while preserving size and mtime could bypass the skip. Do not weaken setup/validate full-hash gates.
 
 **Setup validation vs compute**
 
@@ -270,8 +277,9 @@ Diarization and summary setup smoke tests use `createAbortableComputeAction`, wh
 
 1. Blocks on `waitForAiComputeQueueIdle` until `aiComputeActionQueue.hasPendingWork()` is false (no 15s false-failure)
 2. Enqueues the validation subprocess on the compute queue so validation cannot overlap transcription, diarization, or summary runs
+3. Wraps the validation child in `runWallClockComputeAction` with `AI_COMPUTE_TIMEOUT_MS.addonValidation` so a hung pyannote/llama smoke test cannot wedge the queue
 
-Validation remains user-triggered setup work, not automatic post-transcription behavior.
+Validation remains user-triggered setup work, not automatic post-transcription behavior. Canceling a summary that is still in preflight or queued (no metadata phase) must clear `activeSummaryGeneration` immediately so the UI is not locked behind a dead queue slot.
 
 ## High-Risk Areas
 

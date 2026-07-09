@@ -62,6 +62,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   warmUpAudioSystem: () => ipcRenderer.invoke('warm-up-audio-system'),
   checkModelDownloaded: (modelSize) => ipcRenderer.invoke('check-model-downloaded', modelSize),
   downloadModel: (modelSize) => ipcRenderer.invoke('download-model', modelSize),
+  cancelDownloadModel: () => ipcRenderer.invoke('cancel-download-model'),
 
   // Pre-recording safety checks
   validateDevices: (options) => ipcRenderer.invoke('validate-devices', options),
