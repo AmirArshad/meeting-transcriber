@@ -45,7 +45,7 @@ Replaced Intel-only evermeet.cx ffmpeg with a pinned Apple Silicon static build 
 ## Next: AvaNevis Codebase Refactor
 
 Design doc: `docs/initiatives/AVANEVIS_CODEBASE_REFACTOR.md` (amended 2026-07-09 after Fable review).
-Branch: `refactor/codebase-phase-2b` (Phase 2 remaining Pattern-B-safe helpers after PR A).
+Branch: `refactor/codebase-phase-3a` (Pattern C split of lower-risk `src/main.js` services).
 
 Execution rule: one phase per PR unless the change is purely mechanical and tightly coupled. Prefer Pattern A/B for pure facade moves; use Pattern C (state container + DI) for Phase 3. Move code first, preserve behavior, then improve internals in later PRs. Revert (do not fix forward) any phase that breaks a preserved contract or a manual smoke check. Convert `test:syntax` to a glob in Phase 0; keep new renderer globals uniquely named; target ≤1,500 lines after owning phase (`app.js` soft-cap ~2,000 if helpers alone cannot hit 1,500).
 
@@ -57,7 +57,7 @@ Parallel tracks after Phase 0: main-process JS (1→3), renderer helpers (2), ai
   - [x] PR A: `formatters.js` + `summary-ui-helpers.js` + `ai-addon-ui-helpers.js` (#33).
   - [x] PR B: remaining Pattern-B-safe helpers — `dom-helpers.js` (`clearElement` only), `meeting-helpers.js`, `gpu-settings-helpers.js`, `canvas-helpers.js`. Still deferred (DOM/`document.*`/module state; not verbatim Pattern B without call-site edits): `AudioVisualizer`, `setPlaceholder`/`populateSelect`/`createSvg*`, settings `localStorage` helpers, transcript Markdown renderers, `getSummaryButtonMeetingId`, `setStatusBadge`, `shouldLogAiAddonProgress`.
 - [ ] [Risk: High] Phase 2 follow-up (deferred past Phase 3c): extract renderer recording/transcription controllers only if still needed after measuring `app.js` size; prefer soft-cap ~2,000 over a forced controller move.
-- [ ] [Risk: High] Phase 3a: Pattern C split of lower-risk `src/main.js` services (Python runtime, meeting manager client, device IPC, file export). Extra gate: Windows dev smoke + `build:dir` packaged launch.
+- [x] [Risk: High] Phase 3a: Pattern C split of lower-risk `src/main.js` services (Python runtime, meeting manager client, device IPC, file export). Created `src/main/python-runtime.js` (owns shared `activeProcesses`), `meeting-manager-client.js`, `device-ipc.js`, `file-export-ipc.js`; `src/main.js` is composition root. Channels/payloads unchanged; preload/renderer untouched. `run-recording-preflight` stays in `main.js`. `main.js` ~5,074 → ~4,156 lines. Automated: `npm test` + `npm run test:python` green. Extra gate still owed before merge: Windows `npm start` smoke + `npm run build:dir` packaged launch (record→transcribe manual).
 - [ ] [Risk: High] Phase 3b: AI/GPU services + behavioral fake-queue compute test; depends on 3a.
 - [ ] [Risk: High] Phase 3c: recorder/transcription/summary lifecycle last; gated on Phase 0.2 and 0.4; batch macOS smoke with Phase 7 when needed.
 - [ ] [Risk: Medium] Phase 4: split `src/ai-addon-setup.js` behind facade (may start right after Phase 1). Prefer two PRs: manifest/progress/download/archive, then diarization/summary setup.

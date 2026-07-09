@@ -104,6 +104,10 @@ const {
   isTokenEncryptionAvailable,
   storeAiAddonToken,
 } = require('./ai-addon-token-store');
+const { createPythonRuntime } = require('./main/python-runtime');
+const { registerMeetingManagerClient } = require('./main/meeting-manager-client');
+const { registerDeviceIpc } = require('./main/device-ipc');
+const { registerFileExportIpc } = require('./main/file-export-ipc');
 
 // Use Electron's default userData path, which handles packaging correctly
 // This is typically: C:\Users\<username>\AppData\Roaming\AvaNevis
@@ -112,7 +116,6 @@ const {
 let mainWindow;
 let pythonProcess;
 let recordingStartTime = null;
-let activeProcesses = []; // Track all spawned Python processes for cleanup
 let tray = null;
 let isQuitting = false;
 let powerSaveId = null; // Power save blocker ID for preventing system suspension during recording
@@ -127,6 +130,16 @@ let diarizationDependencySitePackagesCache = null;
 let recordingSessionCounter = 0;
 let cachedCudaStatus = null;
 let gpuRuntimeActionPromise = null;
+
+// ============================================================================
+// Python runtime service (owns the shared activeProcesses tracking array)
+// ============================================================================
+const pythonRuntime = createPythonRuntime({ app, spawn, path, fs, dirname: __dirname });
+const {
+  pythonConfig,
+  buildPythonProcessArgs,
+  spawnTrackedPython,
+} = pythonRuntime;
 
 function getSafeStorage() {
   // On macOS, Electron safeStorage can prompt Keychain access. Keep this lazy
@@ -610,173 +623,65 @@ function buildTranscriptionPlaceholderMarkdown({
   return lines.join('\n');
 }
 
-function addMeetingToHistory(meetingData) {
-  let resolvedAudioPath;
-  let resolvedTranscriptPath;
-
-  try {
-    resolvedAudioPath = assertSafeExistingRecordingAudioPath(meetingData.audioPath);
-    resolvedTranscriptPath = assertSafeExistingTranscriptPath(meetingData.transcriptPath);
-  } catch (error) {
-    return Promise.reject(error);
-  }
-
-  return new Promise((resolve, reject) => {
-    const { duration, language, model, title, transcriptionStatus, transcriptionError } = meetingData;
-    const recordingsDir = getRecordingsDir();
-    const args = getBackendModuleArgs('meeting_manager', [
-      '--recordings-dir', recordingsDir,
-      'add',
-      '--audio', resolvedAudioPath,
-      '--transcript', resolvedTranscriptPath,
-      '--duration', String(duration || 0),
-      '--language', language || 'en',
-      '--model', model || 'unknown'
-    ]);
-
-    if (title) {
-      args.push('--title', title);
-    }
-    if (transcriptionStatus) {
-      args.push('--transcription-status', String(transcriptionStatus));
-    }
-    if (transcriptionError) {
-      args.push('--transcription-error', sanitizeTranscriptionError(transcriptionError));
-    }
-
-    const python = spawnTrackedPython(args, { cwd: pythonConfig.backendPath });
-
-    const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
-
-    python.on('close', (code) => {
-      try {
-        processOutput.assertStdoutWithinLimit();
-      } catch (error) {
-        reject(error);
-        return;
-      }
-
-      if (code === 0) {
-        try {
-          resolve(JSON.parse(processOutput.getStdout()));
-        } catch (error) {
-          reject(new Error(`Failed to parse saved meeting: ${error.message}`));
-        }
-        return;
-      }
-
-      reject(new Error(`Failed to save meeting: ${processOutput.getStderr().trim() || 'Unknown error'}`));
-    });
-
-    python.on('error', reject);
-  });
-}
-
 // ============================================================================
-// Python Process Management
+// Composition root: register extracted main-process IPC services
+// ----------------------------------------------------------------------------
+// These register* calls run once at module load (same timing as the inline
+// ipcMain.handle registrations they replaced). Handler bodies live in
+// src/main/*.js; cross-module helpers are injected via dependency objects.
+// Hoisted function-declaration deps (getBackendModuleArgs, getRecordingsDir,
+// assertSafe*, etc.) are safe to pass here even though they are defined lower in
+// this file.
 // ============================================================================
+const meetingManagerClient = registerMeetingManagerClient(ipcMain, {
+  app,
+  path,
+  spawnTrackedPython,
+  pythonConfig,
+  getBackendModuleArgs,
+  collectPythonProcessOutput,
+  appendSpawnLogBuffer,
+  assertTrustedRendererSender,
+  sanitizeTranscriptionError,
+  getRecordingsDir,
+  assertSafeExistingRecordingAudioPath,
+  assertSafeExistingTranscriptPath,
+  validateAiMetadataPaths,
+});
+const { addMeetingToHistory } = meetingManagerClient;
 
-/**
- * Helper to spawn and track Python processes for cleanup
- * 
- * NOTE: Sets PYTHONPATH environment variable for development mode where system
- * Python is used. For production builds with embedded Python, the .pth file is
- * modified in build/prepare-resources.js to include the backend path, as embedded
- * Python ignores the PYTHONPATH environment variable.
- */
-function spawnTrackedPython(args, options = {}) {
-  // Merge our environment with any options.env provided by caller
-  const mergedOptions = {
-    ...options,
-    env: buildPythonEnv(options.env || {})
-  };
-  
-  const proc = spawn(pythonConfig.pythonExe, buildPythonProcessArgs(args), mergedOptions);
-  activeProcesses.push(proc);
+const deviceIpc = registerDeviceIpc(ipcMain, {
+  app,
+  path,
+  fs,
+  spawn,
+  spawnTrackedPython,
+  pythonConfig,
+  getBackendModuleArgs,
+  appendSpawnLogBuffer,
+  runProcessWithTimeout,
+  buildMacOSPermissionCheckFailureStatus,
+  MACOS_PERMISSION_CHECK_TIMEOUT_MS,
+});
+const {
+  checkDiskSpace,
+  validateSelectedDevices,
+  checkAudioOutputSupport,
+  getMacOSPermissionStatus,
+} = deviceIpc;
 
-  // Auto-remove from tracking when process exits
-  proc.on('close', () => {
-    const index = activeProcesses.indexOf(proc);
-    if (index > -1) {
-      activeProcesses.splice(index, 1);
-    }
-  });
-
-  return proc;
-}
-
-// ============================================================================
-// Python Runtime Configuration
-// ============================================================================
-
-/**
- * Determine the correct Python executable and backend path based on environment
- * In production (packaged app), use bundled Python
- * In development, use system Python
- */
-function getPythonConfig() {
-  const isDev = !app.isPackaged;
-  const isMac = process.platform === 'darwin';
-
-  if (isDev) {
-    const explicitPython = process.env.AVANEVIS_PYTHON || null;
-    const venvPython = process.env.VIRTUAL_ENV
-      ? path.join(process.env.VIRTUAL_ENV, isMac ? 'bin' : 'Scripts', isMac ? 'python3' : 'python.exe')
-      : null;
-    const repoVenvPython = path.join(__dirname, '..', '.venv', isMac ? 'bin' : 'Scripts', isMac ? 'python3' : 'python.exe');
-    const detectedVenvPython = venvPython || (fs.existsSync(repoVenvPython) ? repoVenvPython : null);
-
-    // Development mode - use system Python
-    return {
-      pythonExe: explicitPython || detectedVenvPython || (isMac ? 'python3' : 'python'),
-      pythonArgsPrefix: [],
-      backendPath: path.join(__dirname, '../backend'),
-      ffmpegPath: 'ffmpeg' // Assume in PATH
-    };
-  } else {
-    // Production mode - use bundled Python
-    const resourcesPath = process.resourcesPath;
-
-    if (isMac) {
-      // macOS: Use bundled Python from resources/python/bin/
-      return {
-        pythonExe: path.join(resourcesPath, 'python', 'bin', 'python3'),
-        pythonArgsPrefix: [],
-        backendPath: path.join(resourcesPath, 'backend'),
-        ffmpegPath: path.join(resourcesPath, 'ffmpeg', 'ffmpeg')
-      };
-    } else {
-      // Windows: Use bundled Python from resources/python/
-      return {
-        pythonExe: path.join(resourcesPath, 'python', 'python.exe'),
-        pythonArgsPrefix: [],
-        backendPath: path.join(resourcesPath, 'backend'),
-        ffmpegPath: path.join(resourcesPath, 'ffmpeg', 'ffmpeg.exe')
-      };
-    }
-  }
-}
-
-const pythonConfig = getPythonConfig();
-
-function buildPythonProcessArgs(args = []) {
-  return [...(pythonConfig.pythonArgsPrefix || []), ...args];
-}
-
-function buildPythonEnv(extra = {}) {
-  const { PYTHONPATH: extraPythonPath, ...restExtra } = extra || {};
-  const basePythonPath = pythonConfig.backendPath + (process.env.PYTHONPATH ?
-    (process.platform === 'win32' ? ';' : ':') + process.env.PYTHONPATH : '');
-  const separator = process.platform === 'win32' ? ';' : ':';
-  const packagedEnv = app.isPackaged ? { AVANEVIS_PACKAGED: '1' } : {};
-
-  return {
-    ...process.env,
-    ...packagedEnv,
-    ...restExtra,
-    PYTHONPATH: extraPythonPath ? `${extraPythonPath}${separator}${basePythonPath}` : basePythonPath,
-  };
-}
+registerFileExportIpc(ipcMain, {
+  app,
+  path,
+  fs,
+  dialog,
+  BrowserWindow,
+  shell,
+  isSafeRecordingsMarkdownPath,
+  isSafeRecordingsJsonPath,
+  getLegalNoticesPath,
+  dirname: __dirname,
+});
 
 function clearDiarizationDependencySitePackagesCache() {
   diarizationDependencySitePackagesCache = null;
@@ -1472,75 +1377,6 @@ async function verifyFFmpegInstallation() {
  * Returns object with available space in bytes and warnings.
  * GRACEFUL: Always returns success (with unknown space) if check fails.
  */
-async function checkDiskSpace() {
-  try {
-    const recordingsDir = path.join(app.getPath('userData'), 'recordings');
-
-    // Ensure directory exists
-    if (!fs.existsSync(recordingsDir)) {
-      try {
-        fs.mkdirSync(recordingsDir, { recursive: true });
-      } catch (e) {
-        // Non-fatal - directory will be created later when needed
-        console.warn('Could not create recordings directory:', e.message);
-        return { success: true, availableBytes: -1, warning: null };
-      }
-    }
-
-    if (process.platform === 'win32') {
-      // Windows: Use wmic to get free space
-      const drive = recordingsDir.split(':')[0] + ':';
-      const result = await runProcessWithTimeout(
-        'wmic',
-        ['logicaldisk', 'where', `DeviceID="${drive}"`, 'get', 'FreeSpace', '/value'],
-        5000
-      );
-
-      if (result.code === 0 && !result.timedOut) {
-        const match = result.stdout.match(/FreeSpace=(\d+)/);
-        if (match) {
-          const freeBytes = parseInt(match[1], 10);
-          const freeGB = freeBytes / (1024 * 1024 * 1024);
-          return {
-            success: true,
-            availableBytes: freeBytes,
-            availableGB: freeGB.toFixed(2),
-            warning: freeBytes < 500 * 1024 * 1024 ? 'Low disk space (< 500MB)' : null
-          };
-        }
-      }
-      // Fall through to return unknown
-    } else {
-      // macOS/Linux: Use df command
-      const result = await runProcessWithTimeout('df', ['-k', recordingsDir], 5000);
-
-      if (result.code === 0 && !result.timedOut) {
-        const lines = result.stdout.trim().split('\n');
-        if (lines.length >= 2) {
-          const parts = lines[1].split(/\s+/);
-          if (parts.length >= 4) {
-            const freeKB = parseInt(parts[3], 10);
-            const freeBytes = freeKB * 1024;
-            const freeGB = freeBytes / (1024 * 1024 * 1024);
-            return {
-              success: true,
-              availableBytes: freeBytes,
-              availableGB: freeGB.toFixed(2),
-              warning: freeBytes < 500 * 1024 * 1024 ? 'Low disk space (< 500MB)' : null
-            };
-          }
-        }
-      }
-    }
-
-    // Unknown disk space - assume OK
-    return { success: true, availableBytes: -1, warning: null };
-  } catch (e) {
-    console.error('Unexpected error in checkDiskSpace:', e);
-    return { success: true, availableBytes: -1, warning: null };
-  }
-}
-
 /**
  * Run all startup verification checks.
  * Shows dialog if critical checks fail in packaged app.
@@ -1917,88 +1753,6 @@ function checkMacOSPermissions() {
   });
 }
 
-function getMacOSPermissionStatus(micId = null) {
-  if (process.platform !== 'darwin') {
-    return Promise.resolve({
-      platform: process.platform,
-      all_granted: true,
-      microphone: { granted: true },
-      screen_recording: { granted: true },
-    });
-  }
-
-  return new Promise((resolve) => {
-    let settled = false;
-    let timeoutHandle = null;
-    const args = Number.isInteger(micId)
-      ? getBackendModuleArgs('check_permissions', ['--mic-device-id', String(micId), '--skip-screen-recording-check'])
-      : getBackendModuleArgs('check_permissions', ['--skip-screen-recording-check']);
-
-    const proc = spawnTrackedPython(args, {
-      cwd: pythonConfig.backendPath,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    let stdout = '';
-    let stderr = '';
-
-    const settle = (status) => {
-      if (settled) {
-        return;
-      }
-
-      settled = true;
-      if (timeoutHandle) {
-        clearTimeout(timeoutHandle);
-      }
-      resolve(status);
-    };
-
-    timeoutHandle = setTimeout(() => {
-      console.warn('macOS permission status check timed out');
-      try {
-        proc.kill();
-      } catch (error) {
-        console.warn('Failed to kill timed-out macOS permission check:', error.message);
-      }
-      settle(buildMacOSPermissionCheckFailureStatus('macOS permission checks timed out before recording.'));
-    }, MACOS_PERMISSION_CHECK_TIMEOUT_MS);
-
-    proc.stdout.on('data', (data) => {
-      stdout = appendSpawnLogBuffer(stdout, data);
-    });
-
-    proc.stderr.on('data', (data) => {
-      stderr = appendSpawnLogBuffer(stderr, data);
-    });
-
-    proc.on('close', () => {
-      if (settled) {
-        return;
-      }
-
-      try {
-        settle(JSON.parse(stdout));
-      } catch (error) {
-        console.warn('Failed to parse permission status:', error.message);
-        if (stderr.trim()) {
-          console.warn('Permission status stderr:', stderr.trim());
-        }
-        settle(buildMacOSPermissionCheckFailureStatus('Could not verify macOS permissions before recording.'));
-      }
-    });
-
-    proc.on('error', (error) => {
-      if (settled) {
-        return;
-      }
-
-      console.warn('Permission status check failed:', error.message);
-      settle(buildMacOSPermissionCheckFailureStatus('Could not run macOS permission checks before recording.'));
-    });
-  });
-}
-
 // Initialize app
 app.whenReady().then(async () => {
   // IMPORTANT: Log all app paths for debugging
@@ -2095,7 +1849,7 @@ app.on('before-quit', (event) => {
   }
 
   // Kill all other spawned Python processes
-  activeProcesses.forEach(proc => {
+  pythonRuntime.getActiveProcesses().forEach(proc => {
     try {
       if (!proc.killed) {
         proc.kill();
@@ -2105,7 +1859,7 @@ app.on('before-quit', (event) => {
     }
   });
 
-  activeProcesses = [];
+  pythonRuntime.drainActiveProcesses();
 
   // Clean up tray
   if (tray) {
@@ -2118,231 +1872,11 @@ app.on('before-quit', (event) => {
 // IPC Handlers - Communication between UI and Python backend
 // ============================================================================
 
-/**
- * Validate audio devices before recording.
- * Checks that selected devices exist and are accessible.
- * GRACEFUL: Returns valid=true with warning if check fails, allowing recording to proceed.
- */
-function validateSelectedDevices({ micId, loopbackId }) {
-  const TIMEOUT_MS = 10000; // 10 second timeout
-
-  return new Promise((resolve) => {
-    let resolved = false;
-    let output = '';
-    let errorOutput = '';
-
-    // Timeout handler
-    const timeout = setTimeout(() => {
-      if (!resolved) {
-        resolved = true;
-        try { python.kill(); } catch (e) { /* ignore */ }
-        console.warn('validate-devices timed out - allowing recording to proceed');
-        resolve({
-          valid: true, // Allow recording to proceed
-          warnings: ['Device validation timed out - proceeding anyway'],
-          errors: []
-        });
-      }
-    }, TIMEOUT_MS);
-
-    let python;
-    try {
-      python = spawnTrackedPython(getBackendModuleArgs('device_manager'), { cwd: pythonConfig.backendPath });
-    } catch (e) {
-      clearTimeout(timeout);
-      console.error('Failed to spawn device_manager module:', e);
-      resolve({
-        valid: true, // Allow recording to proceed
-        warnings: ['Could not validate devices - proceeding anyway'],
-        errors: []
-      });
-      return;
-    }
-
-    python.stdout.on('data', (data) => { output = appendSpawnLogBuffer(output, data); });
-    python.stderr.on('data', (data) => { errorOutput = appendSpawnLogBuffer(errorOutput, data); });
-
-    python.on('close', (code) => {
-      if (resolved) return;
-      resolved = true;
-      clearTimeout(timeout);
-
-      if (code !== 0) {
-        console.warn('validate-devices failed with code', code);
-        resolve({
-          valid: true, // Allow recording to proceed
-          warnings: ['Device enumeration failed - proceeding anyway'],
-          errors: []
-        });
-        return;
-      }
-
-      try {
-        const data = JSON.parse(output);
-        const errors = [];
-        const warnings = [];
-
-        // Check microphone device
-        const micDevice = data.input_devices.find(d => d.id === micId);
-        if (!micDevice) {
-          errors.push(`Microphone device (ID: ${micId}) not found. It may have been disconnected.`);
-        }
-
-        // Check loopback device (platform-specific)
-        if (process.platform === 'darwin') {
-          // macOS: loopbackId -1 means ScreenCaptureKit (virtual)
-          if (loopbackId !== -1) {
-            warnings.push('Non-standard loopback device selected on macOS.');
-          }
-        } else {
-          // Windows: Check loopback device exists
-          const loopbackDevice = data.loopback_devices.find(d => d.id === loopbackId);
-          if (loopbackId >= 0 && !loopbackDevice) {
-            errors.push(`Desktop audio device (ID: ${loopbackId}) not found. It may have been disconnected.`);
-          }
-        }
-
-        resolve({
-          valid: errors.length === 0,
-          errors,
-          warnings,
-          devices: {
-            mic: micDevice || null,
-            loopback: loopbackId === -1 ? { name: 'System Audio (ScreenCaptureKit)', id: -1 } :
-                      data.loopback_devices.find(d => d.id === loopbackId) || null
-          }
-        });
-      } catch (e) {
-        console.warn('Failed to parse device list:', e);
-        resolve({
-          valid: true, // Allow recording to proceed
-          warnings: ['Could not parse device list - proceeding anyway'],
-          errors: []
-        });
-      }
-    });
-
-    python.on('error', (err) => {
-      if (resolved) return;
-      resolved = true;
-      clearTimeout(timeout);
-      console.error('validate-devices error:', err);
-      resolve({
-        valid: true, // Allow recording to proceed
-        warnings: ['Device validation error - proceeding anyway'],
-        errors: []
-      });
-    });
-  });
-}
-
-ipcMain.handle('validate-devices', async (event, options) => {
-  return validateSelectedDevices(options);
-});
-
-/**
- * Check disk space before recording.
- * Returns available space and warnings.
- */
-ipcMain.handle('check-disk-space', async () => {
-  return await checkDiskSpace();
-});
-
-/**
- * Inspect the current macOS audio output device for diagnostics only.
- *
- * ScreenCaptureKit is expected to capture system audio before routing to the
- * active output device, but we still surface the current output target so
- * manual validation can confirm behavior on real hardware.
- */
-function checkAudioOutputSupport() {
-  if (process.platform !== 'darwin') {
-    // Windows WASAPI loopback works with all devices
-    return { supported: true, warning: null };
-  }
-
-  const TIMEOUT_MS = 5000; // 5 second timeout
-
-  return new Promise((resolve) => {
-    let resolved = false;
-    let output = '';
-
-    // Timeout handler
-    const timeout = setTimeout(() => {
-      if (!resolved) {
-        resolved = true;
-        try { proc.kill(); } catch (e) { /* ignore */ }
-        console.warn('check-audio-output timed out');
-        resolve({ supported: true, warning: null }); // Assume OK
-      }
-    }, TIMEOUT_MS);
-
-    let proc;
-    try {
-      // Use system_profiler to get audio output info
-      proc = spawn('system_profiler', ['SPAudioDataType', '-json']);
-    } catch (e) {
-      clearTimeout(timeout);
-      console.error('Failed to spawn system_profiler:', e);
-      resolve({ supported: true, warning: null }); // Assume OK
-      return;
-    }
-
-    proc.stdout.on('data', (data) => { output = appendSpawnLogBuffer(output, data); });
-
-    proc.on('close', (code) => {
-      if (resolved) return;
-      resolved = true;
-      clearTimeout(timeout);
-
-      if (code !== 0) {
-        resolve({ supported: true, warning: null }); // Unknown, assume OK
-        return;
-      }
-
-      try {
-        const data = JSON.parse(output);
-        const audioData = data.SPAudioDataType || [];
-
-        let deviceName = null;
-        let deviceTransport = null;
-
-        for (const section of audioData) {
-          const items = section._items || [];
-          for (const item of items) {
-            // Check for default output device
-            if (item.coreaudio_default_audio_output_device === 'spaudio_yes') {
-              deviceName = item._name;
-              deviceTransport = item.coreaudio_device_transport || null;
-            }
-          }
-        }
-
-        resolve({
-          supported: true,
-          warning: null,
-          deviceName,
-          deviceTransport,
-        });
-      } catch (e) {
-        resolve({ supported: true, warning: null }); // Parse error, assume OK
-      }
-    });
-
-    proc.on('error', (err) => {
-      if (resolved) return;
-      resolved = true;
-      clearTimeout(timeout);
-      console.error('check-audio-output error:', err);
-      resolve({ supported: true, warning: null });
-    });
-  });
-}
-
-ipcMain.handle('check-audio-output', async () => {
-  return checkAudioOutputSupport();
-});
-
+// Device probes (validate-devices, check-disk-space, check-audio-output,
+// get-audio-devices, warm-up-audio-system, get-macos-permission-status) are
+// registered by registerDeviceIpc above. run-recording-preflight stays here and
+// calls the exported probe helpers (checkDiskSpace, validateSelectedDevices,
+// checkAudioOutputSupport, getMacOSPermissionStatus).
 ipcMain.handle('run-recording-preflight', async (event, { micId, loopbackId }) => {
   const [deviceCheck, diskCheck, audioOutputCheck, permissionCheck] = await Promise.all([
     validateSelectedDevices({ micId, loopbackId }),
@@ -2358,10 +1892,6 @@ ipcMain.handle('run-recording-preflight', async (event, { micId, loopbackId }) =
     audioOutputCheck,
     permissionCheck,
   });
-});
-
-ipcMain.handle('get-macos-permission-status', async () => {
-  return getMacOSPermissionStatus();
 });
 
 ipcMain.handle('get-pending-update-info', async () => pendingUpdateInfo);
@@ -2973,77 +2503,8 @@ ipcMain.handle('remove-summary-model', async (event, options = {}) => {
 /**
  * Get list of available audio devices
  */
-ipcMain.handle('get-audio-devices', async () => {
-  return new Promise((resolve, reject) => {
-    const python = spawnTrackedPython(getBackendModuleArgs('device_manager'), { cwd: pythonConfig.backendPath });
-
-    let output = '';
-    let errorOutput = '';
-
-    python.stdout.on('data', (data) => {
-      output = appendSpawnLogBuffer(output, data);
-    });
-
-    python.stderr.on('data', (data) => {
-      errorOutput = appendSpawnLogBuffer(errorOutput, data);
-    });
-
-    python.on('close', (code) => {
-      if (code === 0) {
-        try {
-          const data = JSON.parse(output);
-          // Reformat to match UI expectations
-          resolve({
-            inputs: data.input_devices,
-            loopbacks: data.loopback_devices,
-            defaults: data.defaults
-          });
-        } catch (e) {
-          reject(new Error(`Failed to parse device list: ${e.message}`));
-        }
-      } else {
-        reject(new Error(`Python process exited with code ${code}: ${errorOutput}`));
-      }
-    });
-  });
-});
-
-/**
- * Warm up audio system (enumerate devices and test streams)
- * This should be called on app startup to initialize audio drivers
- */
-ipcMain.handle('warm-up-audio-system', async () => {
-  return new Promise((resolve) => {
-    // Step 1: Enumerate devices (forces driver initialization)
-    const python = spawnTrackedPython(getBackendModuleArgs('device_manager'), { cwd: pythonConfig.backendPath });
-
-    let output = '';
-
-    python.stdout.on('data', (data) => {
-      output = appendSpawnLogBuffer(output, data);
-    });
-
-    python.on('close', (code) => {
-      if (code === 0) {
-        try {
-          const data = JSON.parse(output);
-          console.log('Audio system warmed up successfully');
-          console.log(`  Found ${data.input_devices.length} input devices`);
-          console.log(`  Found ${data.loopback_devices.length} loopback devices`);
-          resolve({ success: true, deviceCount: data.input_devices.length + data.loopback_devices.length });
-        } catch (e) {
-          // Even if parsing fails, enumeration happened so drivers are warm
-          console.log('Audio system enumeration completed (with parsing error)');
-          resolve({ success: true, deviceCount: 0 });
-        }
-      } else {
-        // Even if it failed, we tried to initialize
-        console.log('Audio system warm-up completed (with error)');
-        resolve({ success: true, deviceCount: 0 });
-      }
-    });
-  });
-});
+// get-audio-devices and warm-up-audio-system are registered by
+// registerDeviceIpc above.
 
 /**
  * Check if Whisper model is downloaded
@@ -4293,162 +3754,8 @@ ipcMain.handle('cancel-summary-generation', async (event, options = {}) => {
   return { canceled: true };
 });
 
-/**
- * List all meetings
- */
-ipcMain.handle('list-meetings', async () => {
-  return new Promise((resolve, reject) => {
-    const recordingsDir = path.join(app.getPath('userData'), 'recordings');
-    const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
-      '--recordings-dir', recordingsDir,
-      'list'
-    ]), { cwd: pythonConfig.backendPath });
-
-    const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
-
-    python.on('close', (code) => {
-      try {
-        processOutput.assertStdoutWithinLimit();
-      } catch (error) {
-        reject(error);
-        return;
-      }
-
-      if (code === 0) {
-        try {
-          const meetings = JSON.parse(processOutput.getStdout());
-          resolve(meetings);
-        } catch (e) {
-          reject(new Error(`Failed to parse meetings: ${e.message}`));
-        }
-      } else {
-        const errorMsg = processOutput.getStderr().trim() || 'Unknown error';
-        reject(new Error(`Failed to list meetings: ${errorMsg}`));
-      }
-    });
-
-    python.on('error', reject);
-  });
-});
-
-/**
- * Get a single meeting
- */
-ipcMain.handle('get-meeting', async (event, meetingId) => {
-  return new Promise((resolve, reject) => {
-    const recordingsDir = path.join(app.getPath('userData'), 'recordings');
-    const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
-      '--recordings-dir', recordingsDir,
-      'get',
-      meetingId
-    ]), { cwd: pythonConfig.backendPath });
-
-    const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
-
-    python.on('close', (code) => {
-      try {
-        processOutput.assertStdoutWithinLimit();
-      } catch (error) {
-        reject(error);
-        return;
-      }
-
-      if (code === 0) {
-        try {
-          const meeting = JSON.parse(processOutput.getStdout());
-          resolve(meeting);
-        } catch (e) {
-          reject(new Error(`Failed to parse meeting: ${e.message}`));
-        }
-      } else {
-        const errorMsg = processOutput.getStderr().trim() || 'Meeting not found';
-        reject(new Error(errorMsg));
-      }
-    });
-  });
-});
-
-/**
- * Delete a meeting
- */
-ipcMain.handle('delete-meeting', async (event, meetingId) => {
-  assertTrustedRendererSender(event);
-
-  const recordingsDir = path.join(app.getPath('userData'), 'recordings');
-
-  return new Promise((resolve, reject) => {
-    const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
-      '--recordings-dir', recordingsDir,
-      'delete',
-      meetingId
-    ]), { cwd: pythonConfig.backendPath });
-
-    let errorOutput = '';
-
-    python.stderr.on('data', (data) => {
-      errorOutput = appendSpawnLogBuffer(errorOutput, data);
-    });
-
-    python.on('close', (code) => {
-      if (code === 0) {
-        resolve({ success: true });
-      } else {
-        const errorMsg = errorOutput.trim() || 'Unknown error';
-        reject(new Error(`Failed to delete meeting: ${errorMsg}`));
-      }
-    });
-
-    python.on('error', (err) => {
-      reject(err);
-    });
-  });
-});
-
-/**
- * Scan recordings directory and sync with database
- */
-ipcMain.handle('scan-recordings', async () => {
-  return new Promise((resolve, reject) => {
-    const recordingsDir = path.join(app.getPath('userData'), 'recordings');
-    const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
-      '--recordings-dir', recordingsDir,
-      'scan'
-    ]), { cwd: pythonConfig.backendPath });
-
-    const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
-
-    python.on('close', (code) => {
-      try {
-        processOutput.assertStdoutWithinLimit();
-      } catch (error) {
-        reject(error);
-        return;
-      }
-
-      if (code === 0) {
-        try {
-          const result = JSON.parse(processOutput.getStdout());
-          resolve(result);
-        } catch (e) {
-          reject(new Error(`Failed to parse scan result: ${e.message}`));
-        }
-      } else {
-        const errorMsg = processOutput.getStderr().trim() || 'Unknown error';
-        reject(new Error(`Failed to scan recordings: ${errorMsg}`));
-      }
-    });
-
-    python.on('error', reject);
-  });
-});
-
-/**
- * Add a meeting (called after transcription)
- */
-ipcMain.handle('add-meeting', async (event, meetingData) => {
-  assertTrustedRendererSender(event);
-  return addMeetingToHistory(meetingData);
-});
+// list-meetings, get-meeting, delete-meeting, scan-recordings, and add-meeting
+// are registered by registerMeetingManagerClient above.
 
 ipcMain.handle('retry-transcription', async (event, options = {}) => {
   assertTrustedRendererSender(event);
@@ -4668,210 +3975,10 @@ ipcMain.handle('retry-transcription', async (event, options = {}) => {
  * Audio/transcript filenames stay anchored to the meeting ID; only the
  * label that the UI shows changes.
  */
-ipcMain.handle('update-meeting', async (event, payload) => {
-  assertTrustedRendererSender(event);
-
-  const meetingId = payload && payload.meetingId;
-  const updates = (payload && payload.updates) || {};
-  if (!meetingId) {
-    throw new Error('update-meeting requires a meetingId');
-  }
-
-  const recordingsDir = path.join(app.getPath('userData'), 'recordings');
-  const args = [
-    '--recordings-dir', recordingsDir,
-    'update',
-    String(meetingId),
-  ];
-  if (typeof updates.title === 'string') {
-    args.push('--title', updates.title);
-  }
-
-  return new Promise((resolve, reject) => {
-    const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', args), {
-      cwd: pythonConfig.backendPath,
-    });
-
-    const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
-
-    python.on('close', (code) => {
-      try {
-        processOutput.assertStdoutWithinLimit();
-      } catch (error) {
-        reject(error);
-        return;
-      }
-
-      if (code === 0) {
-        try {
-          const updatedMeeting = JSON.parse(processOutput.getStdout());
-          if (!updatedMeeting) {
-            reject(new Error('Meeting was not found.'));
-            return;
-          }
-          resolve(updatedMeeting);
-        } catch (e) {
-          reject(new Error(`Failed to parse updated meeting: ${e.message}`));
-        }
-      } else {
-        reject(new Error(processOutput.getStderr().trim() || 'Failed to update meeting'));
-      }
-    });
-
-    python.on('error', (err) => reject(err));
-  });
-});
-
-ipcMain.handle('update-meeting-ai', async (event, payload) => {
-  assertTrustedRendererSender(event);
-
-  const meetingId = payload && payload.meetingId;
-  const updates = validateAiMetadataPaths((payload && payload.updates) || {});
-  if (!meetingId) {
-    throw new Error('update-meeting-ai requires a meetingId');
-  }
-
-  const recordingsDir = path.join(app.getPath('userData'), 'recordings');
-  const args = [
-    '--recordings-dir', recordingsDir,
-    'update-ai',
-    String(meetingId),
-  ];
-
-  if (Object.prototype.hasOwnProperty.call(updates, 'diarization')) {
-    if (updates.diarization === null) {
-      args.push('--clear-diarization');
-    } else {
-      args.push('--diarization-json', JSON.stringify(updates.diarization));
-    }
-  }
-
-  if (Object.prototype.hasOwnProperty.call(updates, 'summary')) {
-    if (updates.summary === null) {
-      args.push('--clear-summary');
-    } else {
-      args.push('--summary-json', JSON.stringify(updates.summary));
-    }
-  }
-
-  return new Promise((resolve, reject) => {
-    const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', args), {
-      cwd: pythonConfig.backendPath,
-    });
-
-    const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
-
-    python.on('close', (code) => {
-      try {
-        processOutput.assertStdoutWithinLimit();
-      } catch (error) {
-        reject(error);
-        return;
-      }
-
-      if (code === 0) {
-        try {
-          resolve(JSON.parse(processOutput.getStdout()));
-        } catch (e) {
-          reject(new Error(`Failed to parse updated AI meeting metadata: ${e.message}`));
-        }
-      } else {
-        reject(new Error(processOutput.getStderr().trim() || 'Failed to update AI meeting metadata'));
-      }
-    });
-
-    python.on('error', (err) => reject(err));
-  });
-});
-
-ipcMain.handle('save-transcript-file', async (event, options = {}) => {
-  const { filePath, content } = options;
-  if (!filePath || typeof content !== 'string') {
-    throw new Error('save-transcript-file requires filePath and content');
-  }
-
-  const recordingsDir = path.join(app.getPath('userData'), 'recordings');
-  if (!isSafeRecordingsMarkdownPath({ filePath, recordingsDir })) {
-    throw new Error('Transcript file must be a Markdown file in the recordings directory.');
-  }
-
-  const resolvedPath = path.resolve(filePath);
-  await fs.promises.writeFile(resolvedPath, content, 'utf8');
-  return { success: true, filePath: resolvedPath };
-});
-
-ipcMain.handle('save-speaker-segments-file', async (event, options = {}) => {
-  const { filePath, content } = options;
-  if (!filePath || typeof content !== 'string') {
-    throw new Error('save-speaker-segments-file requires filePath and content');
-  }
-
-  const recordingsDir = path.join(app.getPath('userData'), 'recordings');
-  if (!isSafeRecordingsJsonPath({ filePath, recordingsDir })) {
-    throw new Error('Speaker segment file must be a JSON file in the recordings directory.');
-  }
-
-  const resolvedPath = path.resolve(filePath);
-  const parsed = JSON.parse(content);
-  await fs.promises.writeFile(resolvedPath, `${JSON.stringify(parsed, null, 2)}\n`, 'utf8');
-  return { success: true, filePath: resolvedPath };
-});
-
-const WINDOWS_RESERVED_FILE_BASENAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i;
-
-function buildSafeSaveDialogDefaultPath(suggestedName) {
-  let safeName = suggestedName
-    .replace(/[<>:"/\\|?*\x00-\x1f]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 120)
-    .replace(/[. ]+$/g, '');
-
-  if (!safeName) {
-    safeName = 'transcript';
-  }
-
-  const defaultName = safeName.toLowerCase().endsWith('.md') ? safeName : `${safeName}.md`;
-  const parsed = path.parse(defaultName);
-  let baseName = (parsed.name || 'transcript').replace(/[. ]+$/g, '') || 'transcript';
-
-  if (WINDOWS_RESERVED_FILE_BASENAME.test(baseName)) {
-    baseName = `file ${baseName}`;
-  }
-
-  return `${baseName}${parsed.ext || '.md'}`;
-}
-
-/**
- * Show a Save dialog and write the supplied transcript text to disk.
- *
- * The renderer chooses the suggested filename (typically derived from the
- * meeting's display label) so users get a meaningful default name.
- */
-ipcMain.handle('save-transcript-as', async (event, options) => {
-  const opts = options || {};
-  const suggestedName = (opts.suggestedName || 'transcript').toString();
-  const content = typeof opts.content === 'string' ? opts.content : '';
-  const title = typeof opts.title === 'string' && opts.title.trim() ? opts.title.trim() : 'Save Transcript';
-
-  const window = BrowserWindow.fromWebContents(event.sender);
-  const result = await dialog.showSaveDialog(window, {
-    title,
-    defaultPath: buildSafeSaveDialogDefaultPath(suggestedName),
-    filters: [
-      { name: 'Markdown', extensions: ['md'] },
-      { name: 'Text', extensions: ['txt'] },
-      { name: 'All Files', extensions: ['*'] },
-    ],
-  });
-
-  if (result.canceled || !result.filePath) {
-    return { canceled: true };
-  }
-
-  await fs.promises.writeFile(result.filePath, content, 'utf8');
-  return { canceled: false, filePath: result.filePath };
-});
+// update-meeting and update-meeting-ai are registered by
+// registerMeetingManagerClient above. save-transcript-file,
+// save-speaker-segments-file, and save-transcript-as are registered by
+// registerFileExportIpc above.
 
 /**
  * Check GPU availability (detect NVIDIA GPU)
@@ -5029,33 +4136,7 @@ ipcMain.handle('get-system-info', async () => {
   });
 });
 
-ipcMain.handle('open-legal-notices', async () => {
-  const noticesPath = getLegalNoticesPath({
-    resourcesPath: app.isPackaged ? process.resourcesPath : null,
-    devRoot: path.join(__dirname, '..'),
-  });
-
-  if (!noticesPath) {
-    return {
-      success: false,
-      error: 'Third-party notices file is not available.',
-    };
-  }
-
-  const openError = await shell.openPath(noticesPath);
-  if (openError) {
-    return {
-      success: false,
-      path: noticesPath,
-      error: openError,
-    };
-  }
-
-  return {
-    success: true,
-    path: noticesPath,
-  };
-});
+// open-legal-notices is registered by registerFileExportIpc above.
 
 /**
  * Open update download page in browser

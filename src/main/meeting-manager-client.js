@@ -1,0 +1,392 @@
+'use strict';
+
+/**
+ * Meeting-manager IPC client for the AvaNevis main process.
+ *
+ * Wraps the Python `meeting_manager` module behind the meeting-history IPC
+ * channels and the `addMeetingToHistory` helper (also used by the quit flow).
+ * Handler bodies are moved verbatim from `src/main.js`; only cross-module
+ * dependencies are injected via `deps`.
+ */
+
+/**
+ * @param {object} deps
+ * @param {import('electron').App} deps.app
+ * @param {typeof import('path')} deps.path
+ * @param {Function} deps.spawnTrackedPython
+ * @param {object} deps.pythonConfig
+ * @param {Function} deps.getBackendModuleArgs
+ * @param {Function} deps.collectPythonProcessOutput
+ * @param {Function} deps.appendSpawnLogBuffer
+ * @param {Function} deps.assertTrustedRendererSender
+ * @param {Function} deps.sanitizeTranscriptionError
+ * @param {Function} deps.getRecordingsDir
+ * @param {Function} deps.assertSafeExistingRecordingAudioPath
+ * @param {Function} deps.assertSafeExistingTranscriptPath
+ * @param {Function} deps.validateAiMetadataPaths
+ */
+function createMeetingManagerClient(deps) {
+  const {
+    app,
+    path,
+    spawnTrackedPython,
+    pythonConfig,
+    getBackendModuleArgs,
+    collectPythonProcessOutput,
+    appendSpawnLogBuffer,
+    assertTrustedRendererSender,
+    sanitizeTranscriptionError,
+    getRecordingsDir,
+    assertSafeExistingRecordingAudioPath,
+    assertSafeExistingTranscriptPath,
+    validateAiMetadataPaths,
+  } = deps;
+
+  function addMeetingToHistory(meetingData) {
+    let resolvedAudioPath;
+    let resolvedTranscriptPath;
+
+    try {
+      resolvedAudioPath = assertSafeExistingRecordingAudioPath(meetingData.audioPath);
+      resolvedTranscriptPath = assertSafeExistingTranscriptPath(meetingData.transcriptPath);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+
+    return new Promise((resolve, reject) => {
+      const { duration, language, model, title, transcriptionStatus, transcriptionError } = meetingData;
+      const recordingsDir = getRecordingsDir();
+      const args = getBackendModuleArgs('meeting_manager', [
+        '--recordings-dir', recordingsDir,
+        'add',
+        '--audio', resolvedAudioPath,
+        '--transcript', resolvedTranscriptPath,
+        '--duration', String(duration || 0),
+        '--language', language || 'en',
+        '--model', model || 'unknown'
+      ]);
+
+      if (title) {
+        args.push('--title', title);
+      }
+      if (transcriptionStatus) {
+        args.push('--transcription-status', String(transcriptionStatus));
+      }
+      if (transcriptionError) {
+        args.push('--transcription-error', sanitizeTranscriptionError(transcriptionError));
+      }
+
+      const python = spawnTrackedPython(args, { cwd: pythonConfig.backendPath });
+
+      const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
+
+      python.on('close', (code) => {
+        try {
+          processOutput.assertStdoutWithinLimit();
+        } catch (error) {
+          reject(error);
+          return;
+        }
+
+        if (code === 0) {
+          try {
+            resolve(JSON.parse(processOutput.getStdout()));
+          } catch (error) {
+            reject(new Error(`Failed to parse saved meeting: ${error.message}`));
+          }
+          return;
+        }
+
+        reject(new Error(`Failed to save meeting: ${processOutput.getStderr().trim() || 'Unknown error'}`));
+      });
+
+      python.on('error', reject);
+    });
+  }
+
+  function registerIpc(ipcMain) {
+    ipcMain.handle('list-meetings', async () => {
+      return new Promise((resolve, reject) => {
+        const recordingsDir = path.join(app.getPath('userData'), 'recordings');
+        const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
+          '--recordings-dir', recordingsDir,
+          'list'
+        ]), { cwd: pythonConfig.backendPath });
+
+        const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
+
+        python.on('close', (code) => {
+          try {
+            processOutput.assertStdoutWithinLimit();
+          } catch (error) {
+            reject(error);
+            return;
+          }
+
+          if (code === 0) {
+            try {
+              const meetings = JSON.parse(processOutput.getStdout());
+              resolve(meetings);
+            } catch (e) {
+              reject(new Error(`Failed to parse meetings: ${e.message}`));
+            }
+          } else {
+            const errorMsg = processOutput.getStderr().trim() || 'Unknown error';
+            reject(new Error(`Failed to list meetings: ${errorMsg}`));
+          }
+        });
+
+        python.on('error', reject);
+      });
+    });
+
+    /**
+     * Get a single meeting
+     */
+    ipcMain.handle('get-meeting', async (event, meetingId) => {
+      return new Promise((resolve, reject) => {
+        const recordingsDir = path.join(app.getPath('userData'), 'recordings');
+        const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
+          '--recordings-dir', recordingsDir,
+          'get',
+          meetingId
+        ]), { cwd: pythonConfig.backendPath });
+
+        const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
+
+        python.on('close', (code) => {
+          try {
+            processOutput.assertStdoutWithinLimit();
+          } catch (error) {
+            reject(error);
+            return;
+          }
+
+          if (code === 0) {
+            try {
+              const meeting = JSON.parse(processOutput.getStdout());
+              resolve(meeting);
+            } catch (e) {
+              reject(new Error(`Failed to parse meeting: ${e.message}`));
+            }
+          } else {
+            const errorMsg = processOutput.getStderr().trim() || 'Meeting not found';
+            reject(new Error(errorMsg));
+          }
+        });
+      });
+    });
+
+    /**
+     * Delete a meeting
+     */
+    ipcMain.handle('delete-meeting', async (event, meetingId) => {
+      assertTrustedRendererSender(event);
+
+      const recordingsDir = path.join(app.getPath('userData'), 'recordings');
+
+      return new Promise((resolve, reject) => {
+        const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
+          '--recordings-dir', recordingsDir,
+          'delete',
+          meetingId
+        ]), { cwd: pythonConfig.backendPath });
+
+        let errorOutput = '';
+
+        python.stderr.on('data', (data) => {
+          errorOutput = appendSpawnLogBuffer(errorOutput, data);
+        });
+
+        python.on('close', (code) => {
+          if (code === 0) {
+            resolve({ success: true });
+          } else {
+            const errorMsg = errorOutput.trim() || 'Unknown error';
+            reject(new Error(`Failed to delete meeting: ${errorMsg}`));
+          }
+        });
+
+        python.on('error', (err) => {
+          reject(err);
+        });
+      });
+    });
+
+    /**
+     * Scan recordings directory and sync with database
+     */
+    ipcMain.handle('scan-recordings', async () => {
+      return new Promise((resolve, reject) => {
+        const recordingsDir = path.join(app.getPath('userData'), 'recordings');
+        const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
+          '--recordings-dir', recordingsDir,
+          'scan'
+        ]), { cwd: pythonConfig.backendPath });
+
+        const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
+
+        python.on('close', (code) => {
+          try {
+            processOutput.assertStdoutWithinLimit();
+          } catch (error) {
+            reject(error);
+            return;
+          }
+
+          if (code === 0) {
+            try {
+              const result = JSON.parse(processOutput.getStdout());
+              resolve(result);
+            } catch (e) {
+              reject(new Error(`Failed to parse scan result: ${e.message}`));
+            }
+          } else {
+            const errorMsg = processOutput.getStderr().trim() || 'Unknown error';
+            reject(new Error(`Failed to scan recordings: ${errorMsg}`));
+          }
+        });
+
+        python.on('error', reject);
+      });
+    });
+
+    /**
+     * Add a meeting (called after transcription)
+     */
+    ipcMain.handle('add-meeting', async (event, meetingData) => {
+      assertTrustedRendererSender(event);
+      return addMeetingToHistory(meetingData);
+    });
+
+    ipcMain.handle('update-meeting', async (event, payload) => {
+      assertTrustedRendererSender(event);
+
+      const meetingId = payload && payload.meetingId;
+      const updates = (payload && payload.updates) || {};
+      if (!meetingId) {
+        throw new Error('update-meeting requires a meetingId');
+      }
+
+      const recordingsDir = path.join(app.getPath('userData'), 'recordings');
+      const args = [
+        '--recordings-dir', recordingsDir,
+        'update',
+        String(meetingId),
+      ];
+      if (typeof updates.title === 'string') {
+        args.push('--title', updates.title);
+      }
+
+      return new Promise((resolve, reject) => {
+        const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', args), {
+          cwd: pythonConfig.backendPath,
+        });
+
+        const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
+
+        python.on('close', (code) => {
+          try {
+            processOutput.assertStdoutWithinLimit();
+          } catch (error) {
+            reject(error);
+            return;
+          }
+
+          if (code === 0) {
+            try {
+              const updatedMeeting = JSON.parse(processOutput.getStdout());
+              if (!updatedMeeting) {
+                reject(new Error('Meeting was not found.'));
+                return;
+              }
+              resolve(updatedMeeting);
+            } catch (e) {
+              reject(new Error(`Failed to parse updated meeting: ${e.message}`));
+            }
+          } else {
+            reject(new Error(processOutput.getStderr().trim() || 'Failed to update meeting'));
+          }
+        });
+
+        python.on('error', (err) => reject(err));
+      });
+    });
+
+    ipcMain.handle('update-meeting-ai', async (event, payload) => {
+      assertTrustedRendererSender(event);
+
+      const meetingId = payload && payload.meetingId;
+      const updates = validateAiMetadataPaths((payload && payload.updates) || {});
+      if (!meetingId) {
+        throw new Error('update-meeting-ai requires a meetingId');
+      }
+
+      const recordingsDir = path.join(app.getPath('userData'), 'recordings');
+      const args = [
+        '--recordings-dir', recordingsDir,
+        'update-ai',
+        String(meetingId),
+      ];
+
+      if (Object.prototype.hasOwnProperty.call(updates, 'diarization')) {
+        if (updates.diarization === null) {
+          args.push('--clear-diarization');
+        } else {
+          args.push('--diarization-json', JSON.stringify(updates.diarization));
+        }
+      }
+
+      if (Object.prototype.hasOwnProperty.call(updates, 'summary')) {
+        if (updates.summary === null) {
+          args.push('--clear-summary');
+        } else {
+          args.push('--summary-json', JSON.stringify(updates.summary));
+        }
+      }
+
+      return new Promise((resolve, reject) => {
+        const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', args), {
+          cwd: pythonConfig.backendPath,
+        });
+
+        const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
+
+        python.on('close', (code) => {
+          try {
+            processOutput.assertStdoutWithinLimit();
+          } catch (error) {
+            reject(error);
+            return;
+          }
+
+          if (code === 0) {
+            try {
+              resolve(JSON.parse(processOutput.getStdout()));
+            } catch (e) {
+              reject(new Error(`Failed to parse updated AI meeting metadata: ${e.message}`));
+            }
+          } else {
+            reject(new Error(processOutput.getStderr().trim() || 'Failed to update AI meeting metadata'));
+          }
+        });
+
+        python.on('error', (err) => reject(err));
+      });
+    });
+  }
+
+  return { addMeetingToHistory, registerIpc };
+}
+
+/**
+ * Convenience wiring helper: build the client and register its IPC handlers.
+ * Returns the client so callers can reach `addMeetingToHistory`.
+ */
+function registerMeetingManagerClient(ipcMain, deps) {
+  const client = createMeetingManagerClient(deps);
+  client.registerIpc(ipcMain);
+  return client;
+}
+
+module.exports = { createMeetingManagerClient, registerMeetingManagerClient };

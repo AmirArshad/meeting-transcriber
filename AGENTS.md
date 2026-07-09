@@ -36,7 +36,12 @@ AvaNevis is a privacy-first Electron desktop app for recording microphone audio 
 
 ### Electron
 
-- `src/main.js`: app lifecycle, tray, startup checks, Python process management, IPC handlers, update checks
+- `src/main.js`: app lifecycle, tray, startup checks, recorder/transcription/GPU/AI-addon IPC, compute-queue wiring, update checks, and the composition root that instantiates the `src/main/` services
+- `src/main/`: extracted lower-risk main-process services wired from `src/main.js` (Phase 3a). The Phase 0 source-scan tests treat `src/main.js` + `src/main/**/*.js` as one combined main-process surface, so IPC channel names/payloads stay pinned across the split:
+  - `src/main/python-runtime.js`: `createPythonRuntime({ app, spawn, path, fs, dirname })` factory that owns the single shared `activeProcesses` tracking array and exposes `getPythonConfig` (aliased `resolvePythonPath`), `pythonConfig`, `buildPythonProcessArgs`, `buildPythonEnv`, `spawnTrackedPython`, `getActiveProcesses`, `drainActiveProcesses`
+  - `src/main/meeting-manager-client.js`: `registerMeetingManagerClient(ipcMain, deps)` / `createMeetingManagerClient(deps)`; owns `addMeetingToHistory` (used by the quit flow and `add-meeting`) and registers `list-meetings`, `get-meeting`, `delete-meeting`, `scan-recordings`, `add-meeting`, `update-meeting`, `update-meeting-ai`
+  - `src/main/device-ipc.js`: `registerDeviceIpc(ipcMain, deps)` / `createDeviceIpc(deps)`; exports `checkDiskSpace`, `validateSelectedDevices`, `checkAudioOutputSupport`, `getMacOSPermissionStatus` (used by the `run-recording-preflight` handler that stays in `src/main.js`) and registers `validate-devices`, `check-disk-space`, `check-audio-output`, `get-audio-devices`, `warm-up-audio-system`, `get-macos-permission-status`
+  - `src/main/file-export-ipc.js`: `registerFileExportIpc(ipcMain, deps)` / `createFileExportIpc(deps)`; owns `buildSafeSaveDialogDefaultPath` + `WINDOWS_RESERVED_FILE_BASENAME` and registers `save-transcript-file`, `save-speaker-segments-file`, `save-transcript-as`, `open-legal-notices`
 - `src/main-process/`: domain helper modules (compute timeouts, URL/legal, transcription model/runtime, CUDA, AI progress, path safety, recorder output, recording preflight)
 - `src/main-process-helpers.js`: facade re-exporting `src/main-process/` helpers; keep the public `module.exports` key set stable for callers and characterization tests
 - `src/preload.js`: safe API bridge exposed as `window.electronAPI`
