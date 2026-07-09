@@ -74,7 +74,8 @@ AvaNevis is a privacy-first Electron desktop app for recording microphone audio 
 
 - `backend/device_manager.py`: enumerate audio devices for UI (CLI/JSON contract unchanged)
 - `backend/device_helpers.py`: Phase 5 pure device enumeration helpers (blocklist, record shaping, dedupe, sort, macOS virtual loopback)
-- `backend/meeting_manager.py`: persistent meeting history in `meetings.json`, dedupe, scan/import, delete with retry
+- `backend/meeting_manager.py`: persistent meeting history CLI/orchestration (`python -m meeting_manager`); public methods remain instance-method monkeypatch seams
+- `backend/meetings/`: Phase 6 helpers — `normalization.py` (status/error/hash/text/metadata parse) and `scan_import.py` (scannable audio selection, duration/id parsing); paths/store/delete deferred
 - `backend/check_permissions.py`: macOS permission checks
 - `backend/audio/windows_recorder.py`: Windows recording pipeline using `pyaudiowpatch` WASAPI loopback
 - `backend/audio/macos_recorder.py`: macOS recording pipeline using `sounddevice` + Swift helper desktop capture with PyObjC fallback
