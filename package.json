@@ -10,7 +10,7 @@
     "test:js": "node --test",
     "test:python": "node scripts/run-python-tests.js",
     "test:all": "npm test && npm run test:python",
-    "test:syntax": "node --check src/main.js && node --check src/preload.js && node --check src/renderer/app.js && node --check src/renderer/history-detail-helpers.js",
+    "test:syntax": "node scripts/check-js-syntax.js",
     "clean": "node scripts/clean-dist.js",
     "prepare-build": "npm run clean && node build/prepare-resources.js",
     "legal:sbom": "node scripts/generate-python-sbom.js",

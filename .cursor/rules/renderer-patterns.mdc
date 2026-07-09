@@ -12,4 +12,4 @@ alwaysApply: false
 - Meeting rename updates metadata by meeting ID — does not rename audio/transcript files on disk.
 - Styles: `src/renderer/styles.css`; keep DPR-aware canvas/scrubber patterns when touching visualizer or playback UI.
 
-After helper extraction or IPC/UI contract changes: `npm test` (includes syntax check on `app.js` and `history-detail-helpers.js`).
+After helper extraction or IPC/UI contract changes: `npm test` (includes the `test:syntax` glob over all `.js` under `src/`).

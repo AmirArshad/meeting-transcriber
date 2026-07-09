@@ -188,14 +188,8 @@ jobs:
     - name: Install dependencies
       run: npm ci
 
-    - name: Validate main process syntax
-      run: node --check src/main.js
-
-    - name: Validate preload syntax
-      run: node --check src/preload.js
-
-    - name: Validate renderer syntax
-      run: node --check src/renderer/app.js
+    - name: Validate JavaScript syntax under src/
+      run: npm run test:syntax
 
     - name: Run frontend regression tests
       run: npm run test:js
