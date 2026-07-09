@@ -30,6 +30,11 @@ const {
   isAiAddonTerminalStatus,
 } = require('../../src/renderer/ai-addon-ui-helpers');
 
+const { clearElement } = require('../../src/renderer/dom-helpers');
+const { meetingIdsEqual } = require('../../src/renderer/meeting-helpers');
+const { isGpuRuntimeActionBusyError } = require('../../src/renderer/gpu-settings-helpers');
+const { roundedBar } = require('../../src/renderer/canvas-helpers');
+
 const APP_JS = path.join(ROOT, 'src', 'renderer', 'app.js');
 const INDEX_HTML = path.join(ROOT, 'src', 'renderer', 'index.html');
 
@@ -40,6 +45,10 @@ const EXPECTED_RENDERER_GLOBALS = [
   'formatters',
   'summaryUiHelpers',
   'aiAddonUiHelpers',
+  'domHelpers',
+  'meetingHelpers',
+  'gpuSettingsHelpers',
+  'canvasHelpers',
 ];
 
 const EXPECTED_SCRIPT_ORDER = [
@@ -49,6 +58,10 @@ const EXPECTED_SCRIPT_ORDER = [
   'formatters.js',
   'summary-ui-helpers.js',
   'ai-addon-ui-helpers.js',
+  'dom-helpers.js',
+  'meeting-helpers.js',
+  'gpu-settings-helpers.js',
+  'canvas-helpers.js',
   'app.js',
 ];
 
@@ -63,6 +76,10 @@ const EXTRACTED_PURE_HELPER_NAMES = [
   'isAiAddonTerminalStatus',
   'isAiAddonProgressPhase',
   'formatAiAddonProgressText',
+  'clearElement',
+  'meetingIdsEqual',
+  'isGpuRuntimeActionBusyError',
+  'roundedBar',
 ];
 
 test('recording-state-helpers remain characterized for record-button gating', () => {
@@ -131,6 +148,35 @@ test('app.js no longer defines extracted pure helpers inline', () => {
   assert.match(appSource, /window\.formatters/);
   assert.match(appSource, /window\.summaryUiHelpers/);
   assert.match(appSource, /window\.aiAddonUiHelpers/);
+  assert.match(appSource, /window\.domHelpers/);
+  assert.match(appSource, /window\.meetingHelpers/);
+  assert.match(appSource, /window\.gpuSettingsHelpers/);
+  assert.match(appSource, /window\.canvasHelpers/);
+});
+
+test('phase 2b pure helpers remain argument-driven', () => {
+  const removed = [];
+  clearElement({
+    replaceChildren(...nodes) {
+      removed.push(nodes);
+    },
+  });
+  assert.deepEqual(removed, [[]]);
+
+  assert.equal(meetingIdsEqual('1', 1), true);
+  assert.equal(meetingIdsEqual(null, '1'), false);
+  assert.equal(isGpuRuntimeActionBusyError({ message: 'GPU_RUNTIME_ACTION_BUSY' }), true);
+  assert.equal(isGpuRuntimeActionBusyError({ message: 'other' }), false);
+
+  const calls = [];
+  roundedBar({
+    moveTo(...args) { calls.push(['moveTo', ...args]); },
+    lineTo() {},
+    quadraticCurveTo() {},
+    closePath() { calls.push(['closePath']); },
+  }, 0, 0, 10, 4, 2);
+  assert.equal(calls[0][0], 'moveTo');
+  assert.equal(calls[calls.length - 1][0], 'closePath');
 });
 
 test('index.html loads renderer helpers before app.js with unique globals', () => {

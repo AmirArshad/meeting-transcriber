@@ -38,6 +38,10 @@ const {
   isAiAddonProgressPhase,
   isAiAddonTerminalStatus,
 } = window.aiAddonUiHelpers;
+const { clearElement } = window.domHelpers;
+const { meetingIdsEqual } = window.meetingHelpers;
+const { isGpuRuntimeActionBusyError } = window.gpuSettingsHelpers;
+const { roundedBar } = window.canvasHelpers;
 
 // UI Elements
 const micSelect = document.getElementById('mic-select');
@@ -138,10 +142,6 @@ function runCleanup() {
   }
 }
 
-function clearElement(element) {
-  element.replaceChildren();
-}
-
 function setPlaceholder(container, message, className = 'placeholder') {
   const node = document.createElement('p');
   node.className = className;
@@ -159,13 +159,6 @@ function showSummaryMessage(message, isError = false) {
   delete summaryEl.dataset.markdown;
   setPlaceholder(summaryEl, message, isError ? 'placeholder error' : 'placeholder');
   updateSummaryActionState();
-}
-
-function meetingIdsEqual(left, right) {
-  if (left == null || right == null) {
-    return false;
-  }
-  return String(left) === String(right);
 }
 
 function findMeetingById(meetingId) {
@@ -4295,11 +4288,6 @@ function appendGPULog(text) {
   logOutput.scrollTop = logOutput.scrollHeight;
 }
 
-function isGpuRuntimeActionBusyError(error) {
-  const message = String(error && error.message ? error.message : '').toUpperCase();
-  return message.includes('GPU_RUNTIME_ACTION_BUSY') || message.includes('ALREADY IN PROGRESS');
-}
-
 // ============================================================================
 // Update Notification
 // ============================================================================
@@ -4678,21 +4666,6 @@ class AudioVisualizer {
       ctx.fill();
     }
   }
-}
-
-// Helper: rounded bar path (does not fill — caller decides batch fill)
-function roundedBar(ctx, x, y, w, h, r) {
-  const rr = Math.min(r, w / 2, h / 2);
-  ctx.moveTo(x + rr, y);
-  ctx.lineTo(x + w - rr, y);
-  ctx.quadraticCurveTo(x + w, y, x + w, y + rr);
-  ctx.lineTo(x + w, y + h - rr);
-  ctx.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
-  ctx.lineTo(x + rr, y + h);
-  ctx.quadraticCurveTo(x, y + h, x, y + h - rr);
-  ctx.lineTo(x, y + rr);
-  ctx.quadraticCurveTo(x, y, x + rr, y);
-  ctx.closePath();
 }
 
 // Handle page visibility changes (for debugging backgrounded recording)
