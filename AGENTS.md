@@ -124,7 +124,7 @@ AvaNevis is a privacy-first Electron desktop app for recording microphone audio 
 
 ### Recorder startup and progress use structured stdout JSON
 
-`src/main.js` parses structured stdout messages such as `levels`, `event`, `warning`, and `error` for recorder control flow. stderr is debug-only and must not drive startup stages, warnings/errors, or recording-start state.
+`src/main/recorder-service.js` parses structured stdout messages such as `levels`, `event`, `warning`, and `error` for recorder control flow (via `parseRecorderStdoutChunk`). Helpers live in `src/main-process/recorder-output-helpers.js` (re-exported by `src/main-process-helpers.js`). stderr is debug-only and must not drive startup stages, warnings/errors, or recording-start state.
 
 If you change recorder startup/progress behavior in either recorder:
 
@@ -133,18 +133,19 @@ If you change recorder startup/progress behavior in either recorder:
 
 you must update all of:
 
-- `src/main.js`
-- `src/main-process-helpers.js`
+- `src/main/recorder-service.js`
+- `src/main-process-helpers.js` / `src/main-process/recorder-output-helpers.js`
 - `tests/js/main-process-helpers.test.js`
+- `tests/js/recorder-event-contract.test.js`
 
 The JSON-event migration in `docs/completed/json-based-events.md` is complete for recorder control flow. Preserve the stdout JSON control contract unless you update both sides together.
 
 ### Keep recorder output contracts stable
 
-- Structured stdout messages now include `levels`, `event`, `warning`, and `error`, and `src/main.js` consumes them line-by-line.
+- Structured stdout messages now include `levels`, `event`, `warning`, and `error`, and `src/main/recorder-service.js` consumes them line-by-line.
 - Windows final JSON uses `audioPath`
 - macOS final JSON uses `outputPath`
-- `src/main.js` currently supports both for backward compatibility
+- Stop parsing accepts both for backward compatibility
 
 Do not casually break this contract unless you update all call sites together.
 
@@ -461,7 +462,9 @@ swift build -c release --arch arm64
 Update all of:
 
 - recorder stdout/stderr output
-- `src/main.js` parser logic
+- `src/main/recorder-service.js` parser / stop-result logic
+- `src/main-process/recorder-output-helpers.js` (and facade re-exports)
+- `tests/js/recorder-event-contract.test.js` and related helper tests
 - any renderer UI states that depend on that progress
 
 ### If you change saved meeting file names or locations

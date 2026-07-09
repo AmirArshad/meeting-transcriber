@@ -99,6 +99,7 @@ let mainWindow;
 let tray = null;
 let isQuitting = false;
 let quitWorkflowPromise = null;
+let aiQuitDrainPromise = null;
 let allowImmediateQuit = false;
 let pendingUpdateInfo = null;
 // Assigned at composition root after services are constructed.
@@ -1238,11 +1239,17 @@ app.on('before-quit', (event) => {
 
   if (!immediateQuitArmed && hasInFlightAiWork()) {
     event.preventDefault();
-    void (async () => {
-      await drainAiWorkBeforeQuit();
-      allowImmediateQuit = true;
-      app.quit();
-    })();
+    if (!aiQuitDrainPromise) {
+      aiQuitDrainPromise = (async () => {
+        try {
+          await drainAiWorkBeforeQuit();
+        } finally {
+          aiQuitDrainPromise = null;
+        }
+        allowImmediateQuit = true;
+        app.quit();
+      })();
+    }
     return;
   }
 
