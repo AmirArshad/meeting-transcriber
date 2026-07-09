@@ -1,6 +1,6 @@
 ---
 description: Meeting history persistence — locks, atomic writes, import IDs
-globs: backend/meeting_manager.py,tests/python/**/test*meeting*,src/main.js,src/renderer/**
+globs: backend/meeting_manager.py,backend/meetings/**,tests/python/**/test*meeting*,src/main.js,src/renderer/**
 alwaysApply: false
 ---
 
