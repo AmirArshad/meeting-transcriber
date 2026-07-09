@@ -12,6 +12,7 @@ Checklist: `tests/manual/recording-smoke-checklist.md`
 
 ## macOS
 
-- Status: **scheduled when Mac access is next available**
+- Status: **explicitly deferred** (no Mac hardware available during Phase 7B merge)
 - Date: _
 - Notes: Batch with later macOS-sensitive phases (especially 3c / 7) if access remains scarce. Do not block Phase 0 merge solely on missing Mac hardware.
+- Phase 7 PR B (#44) gate: when a Mac is available, run `tests/manual/recording-smoke-checklist.md` and `tests/manual/recording-transcription-regression-checklist.md`. Confirm desktop/browser speech appears in the transcript (not only meters/saved stereo channel) and `helperCaptureBackend` reports sensibly (`coreaudio_tap` expected on macOS 14.2+). Date-stamp this section after the run.

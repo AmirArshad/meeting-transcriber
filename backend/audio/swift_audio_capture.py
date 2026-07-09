@@ -21,6 +21,12 @@ import numpy as np
 from pathlib import Path
 from typing import Optional, Callable
 
+from .swift_helper_status import apply_helper_error, process_helper_status_line
+from .swift_pcm_alignment import SwiftPcmAligner
+
+# Re-export for characterization tests that import swift_audio_capture._apply_helper_error
+_apply_helper_error = apply_helper_error
+
 
 def _log_helper_search_miss(possible_paths: list[Path], *, packaged: bool) -> None:
     if packaged:
@@ -112,18 +118,6 @@ def _parse_permission_check_output(stderr_output: str, returncode: int) -> tuple
     return returncode == 0, None if returncode == 0 else "Screen Recording permission check failed"
 
 
-def _apply_helper_error(capture, payload: dict):
-    """Store the first actionable helper error for startup reporting."""
-    error = payload.get('error', '')
-    code = payload.get('code', 'unknown')
-
-    if not capture.error_event.is_set():
-        capture.last_error = error
-        if code == 'permission_denied':
-            capture.last_error = f"PERMISSION_DENIED: {error}"
-    capture.error_event.set()
-
-
 class SwiftAudioCapture:
     """
     Captures desktop audio using the native Swift audiocapture-helper.
@@ -162,10 +156,8 @@ class SwiftAudioCapture:
         self._stderr_thread: Optional[threading.Thread] = None
 
         # Separate buffers for handling chunk boundaries at different alignment stages
-        # _partial_bytes: leftover bytes not aligned to float32 (4-byte) boundary
-        # _partial_samples: leftover samples not aligned to frame (channel count) boundary
-        self._partial_bytes: bytes = b''
-        self._partial_samples: Optional[np.ndarray] = None
+        # (byte alignment to float32, then frame alignment to channel count)
+        self._pcm_aligner = SwiftPcmAligner(self.channels)
 
         # Error signaling
         self.error_event = threading.Event()
@@ -282,8 +274,7 @@ class SwiftAudioCapture:
             # Clear buffer and error state
             with self.buffer_lock:
                 self.audio_buffer = []
-            self._partial_bytes = b''  # Clear byte alignment buffer
-            self._partial_samples = None  # Clear sample alignment buffer
+            self._pcm_aligner.reset()
             self.error_event.clear()
             self._ready_event.clear()
             self.last_error = None
@@ -373,9 +364,8 @@ class SwiftAudioCapture:
         # Buffer size: ~100ms of audio at a time
         # float32 = 4 bytes per sample, stereo = 2 channels
         # Swift sends interleaved samples: L R L R L R ...
-        bytes_per_sample = 4  # float32
         chunk_frames = int(self.sample_rate * 0.1)  # 100ms worth of frames
-        chunk_bytes = chunk_frames * bytes_per_sample * self.channels
+        chunk_bytes = chunk_frames * self._pcm_aligner.bytes_per_sample * self.channels
 
         # Track samples for debugging
         total_samples = 0
@@ -387,71 +377,7 @@ class SwiftAudioCapture:
             return
 
         stdout_fd = process.stdout.fileno()
-
-        def bytes_to_samples(data: bytes) -> Optional[np.ndarray]:
-            """
-            Convert raw bytes to float32 samples, handling byte alignment.
-
-            Stage 1: Byte alignment (4 bytes per float32 sample)
-            Leftover bytes are stored in self._partial_bytes
-            """
-            # Prepend any leftover bytes from previous read
-            if self._partial_bytes:
-                data = self._partial_bytes + data
-                self._partial_bytes = b''
-
-            if not data:
-                return None
-
-            # Ensure byte alignment to float32 (4 bytes per sample)
-            leftover_bytes = len(data) % bytes_per_sample
-            if leftover_bytes:
-                self._partial_bytes = data[-leftover_bytes:]
-                data = data[:-leftover_bytes]
-
-            if not data:
-                return None
-
-            # Convert bytes to float32 numpy array
-            return np.frombuffer(data, dtype=np.float32)
-
-        def samples_to_frames(samples: np.ndarray) -> Optional[np.ndarray]:
-            """
-            Reshape samples into frames, handling frame alignment.
-
-            Stage 2: Frame alignment (channels samples per frame)
-            Leftover samples are stored in self._partial_samples
-            """
-            # Prepend any leftover samples from previous read
-            if self._partial_samples is not None:
-                samples = np.concatenate([self._partial_samples, samples])
-                self._partial_samples = None
-
-            if len(samples) == 0:
-                return None
-
-            # For mono, no frame alignment needed
-            if self.channels == 1:
-                return samples.reshape(-1, 1)
-
-            # Ensure frame alignment (all channels present for each frame)
-            leftover_samples = len(samples) % self.channels
-            if leftover_samples:
-                self._partial_samples = samples[-leftover_samples:].copy()
-                samples = samples[:-leftover_samples]
-
-            if len(samples) == 0:
-                return None
-
-            # Reshape to (frames, channels); keep float32 from helper stdout (matches mic path)
-            return samples.reshape(-1, self.channels)
-
-        def process_audio_bytes(data: bytes) -> Optional[np.ndarray]:
-            """Process raw bytes into audio frames through both alignment stages."""
-            samples = bytes_to_samples(data)
-            if samples is None:
-                return None
-            return samples_to_frames(samples)
+        process_audio_bytes = self._pcm_aligner.process_audio_bytes
 
         # Track time for "no audio" warning
         import time
@@ -575,143 +501,7 @@ class SwiftAudioCapture:
 
     def _process_status_line(self, line: str) -> None:
         """Handle one stderr status line from the Swift helper."""
-        try:
-            msg = json.loads(line)
-            msg_type = msg.get('type', '')
-
-            if msg_type == 'ready':
-                self._ready_event.set()
-                print("Swift helper: READY", file=sys.stderr)
-
-            elif msg_type == 'status':
-                status = msg.get('status', '')
-                message = msg.get('message', '')
-                timestamp = msg.get('timestamp')
-
-                if status == 'first_sample' and isinstance(timestamp, (int, float)):
-                    helper_timestamp = float(timestamp)
-                    if self.first_audio_time is None or helper_timestamp < self.first_audio_time:
-                        self.first_audio_time = helper_timestamp
-                elif status == 'screen_sample':
-                    screen_frames = msg.get('screenFrames')
-                    if isinstance(screen_frames, int):
-                        self.helper_screen_frames = screen_frames
-                capture_backend = msg.get('captureBackend')
-                if isinstance(capture_backend, str) and capture_backend:
-                    self.helper_capture_backend = capture_backend
-
-                print(f"Swift helper: {status} - {message}", file=sys.stderr)
-
-            elif msg_type == 'warning':
-                code = msg.get('code', 'warning')
-                message = msg.get('message', 'Swift helper warning')
-                warning_payload = {
-                    'type': 'warning',
-                    'code': code,
-                    'message': message,
-                }
-
-                for key in ('help', 'droppedChunks', 'queuedBytes'):
-                    if key in msg:
-                        warning_payload[key] = msg[key]
-
-                with self.warning_lock:
-                    self.warning_messages.append(warning_payload)
-                    self.warning_event.set()
-                print(f"Swift helper WARNING [{code}]: {message}", file=sys.stderr)
-
-            elif msg_type == 'error':
-                error = msg.get('error', '')
-                code = msg.get('code', 'unknown')
-                help_text = msg.get('help', '')
-
-                print(f"Swift helper ERROR [{code}]: {error}", file=sys.stderr)
-                if help_text:
-                    print(f"  Help: {help_text}", file=sys.stderr)
-
-                msg['error'] = error
-                msg['code'] = code
-                _apply_helper_error(self, msg)
-
-            elif msg_type == 'config':
-                print(f"Swift helper config: {msg}", file=sys.stderr)
-
-            elif msg_type == 'content_info':
-                self.helper_content_info = dict(msg)
-                capture_backend = msg.get('captureBackend')
-                if isinstance(capture_backend, str) and capture_backend:
-                    self.helper_capture_backend = capture_backend
-                print(
-                    "Swift helper: content - "
-                    f"displays={msg.get('displayCount', 'unknown')}, "
-                    f"apps={msg.get('applicationCount', 'unknown')}, "
-                    f"windows={msg.get('windowCount', 'unknown')}",
-                    file=sys.stderr,
-                )
-
-            elif msg_type == 'stream_config':
-                self.helper_stream_config = dict(msg)
-                capture_backend = msg.get('captureBackend')
-                if isinstance(capture_backend, str) and capture_backend:
-                    self.helper_capture_backend = capture_backend
-                print(f"Swift helper stream config: {msg}", file=sys.stderr)
-
-            elif msg_type == 'capture_backend':
-                capture_backend = msg.get('backend')
-                if isinstance(capture_backend, str) and capture_backend:
-                    self.helper_capture_backend = capture_backend
-                print(f"Swift helper backend: {capture_backend or 'unknown'}", file=sys.stderr)
-
-            elif msg_type == 'audio_format':
-                rate = msg.get('sampleRate', 'unknown')
-                channels = msg.get('channels', 'unknown')
-                self.helper_audio_format = dict(msg)
-                capture_backend = msg.get('captureBackend')
-                if isinstance(capture_backend, str) and capture_backend:
-                    self.helper_capture_backend = capture_backend
-                print(f"Swift helper: Audio format - {rate}Hz, {channels} channels", file=sys.stderr)
-
-            elif msg_type == 'extraction_error':
-                error = msg.get('error', 'unknown')
-                count = msg.get('count', 0)
-                print(f"Swift helper: Audio extraction error #{count}: {error}", file=sys.stderr)
-
-            elif msg_type == 'silence_detected':
-                message = msg.get('message', 'Silence detected')
-                print(f"Swift helper: {message}", file=sys.stderr)
-
-            elif msg_type == 'audio_resumed':
-                message = msg.get('message', 'Audio resumed')
-                print(f"Swift helper: {message}", file=sys.stderr)
-
-            elif msg_type == 'progress':
-                samples = msg.get('samples', 0)
-                bytes_written = msg.get('bytesWritten', 0)
-                print(f"Swift helper: Progress - {samples} samples, {bytes_written / 1024:.1f} KB", file=sys.stderr)
-
-            elif msg_type == 'capture_stats':
-                total_samples = msg.get('totalSamples', 0)
-                total_bytes = msg.get('totalBytes', 0)
-                capture_backend = msg.get('captureBackend')
-                if isinstance(capture_backend, str) and capture_backend:
-                    self.helper_capture_backend = capture_backend
-                self.helper_total_sample_buffers = int(total_samples) if isinstance(total_samples, int) else 0
-                self.helper_total_bytes = int(total_bytes) if isinstance(total_bytes, int) else 0
-                self.helper_screen_frames = int(msg.get('screenFrames', 0) or 0)
-                self.helper_dropped_chunks = int(msg.get('droppedChunks', 0) or 0)
-                self.helper_queued_bytes_remaining = int(msg.get('queuedBytesRemaining', 0) or 0)
-                first_audio_timestamp = msg.get('firstAudioTimestamp')
-                last_audio_timestamp = msg.get('lastAudioTimestamp')
-                if isinstance(first_audio_timestamp, (int, float)):
-                    helper_timestamp = float(first_audio_timestamp)
-                    if self.first_audio_time is None or helper_timestamp < self.first_audio_time:
-                        self.first_audio_time = helper_timestamp
-                if isinstance(last_audio_timestamp, (int, float)):
-                    self.last_audio_time = float(last_audio_timestamp)
-                print(f"Swift helper: Final stats - {total_samples} samples, {total_bytes / 1024:.1f} KB", file=sys.stderr)
-
-        except json.JSONDecodeError:
-            print(f"Swift helper: {line}", file=sys.stderr)
+        process_helper_status_line(self, line)
 
     def _read_status_messages(self):
         """Read JSON status messages from stderr."""
