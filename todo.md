@@ -45,7 +45,7 @@ Replaced Intel-only evermeet.cx ffmpeg with a pinned Apple Silicon static build 
 ## Next: AvaNevis Codebase Refactor
 
 Design doc: `docs/initiatives/AVANEVIS_CODEBASE_REFACTOR.md` (amended 2026-07-09 after Fable review).
-Branch: `refactor/codebase-phase-3a` (Pattern C split of lower-risk `src/main.js` services).
+Branch: `refactor/codebase-phase-3b` (Phase 3b: GPU runtime + AI compute queue + AI-addon IPC; depends on merged 3a).
 
 Execution rule: one phase per PR unless the change is purely mechanical and tightly coupled. Prefer Pattern A/B for pure facade moves; use Pattern C (state container + DI) for Phase 3. Move code first, preserve behavior, then improve internals in later PRs. Revert (do not fix forward) any phase that breaks a preserved contract or a manual smoke check. Convert `test:syntax` to a glob in Phase 0; keep new renderer globals uniquely named; target ≤1,500 lines after owning phase (`app.js` soft-cap ~2,000 if helpers alone cannot hit 1,500).
 
@@ -58,7 +58,7 @@ Parallel tracks after Phase 0: main-process JS (1→3), renderer helpers (2), ai
   - [x] PR B: remaining Pattern-B-safe helpers — `dom-helpers.js` (`clearElement` only), `meeting-helpers.js`, `gpu-settings-helpers.js`, `canvas-helpers.js`. Still deferred (DOM/`document.*`/module state; not verbatim Pattern B without call-site edits): `AudioVisualizer`, `setPlaceholder`/`populateSelect`/`createSvg*`, settings `localStorage` helpers, transcript Markdown renderers, `getSummaryButtonMeetingId`, `setStatusBadge`, `shouldLogAiAddonProgress`.
 - [ ] [Risk: High] Phase 2 follow-up (deferred past Phase 3c): extract renderer recording/transcription controllers only if still needed after measuring `app.js` size; prefer soft-cap ~2,000 over a forced controller move.
 - [x] [Risk: High] Phase 3a: Pattern C split of lower-risk `src/main.js` services (Python runtime, meeting manager client, device IPC, file export). Created `src/main/python-runtime.js` (owns shared `activeProcesses`), `meeting-manager-client.js`, `device-ipc.js`, `file-export-ipc.js`; `src/main.js` is composition root. Channels/payloads unchanged; preload/renderer untouched. `run-recording-preflight` stays in `main.js`. `main.js` ~5,074 → ~4,156 lines. Automated: `npm test` + `npm run test:python` green. Extra gate (2026-07-09): `build:dir` + path checks + brief packaged launch OK; Windows `npm start` record→transcribe smoke OK. Note (pre-existing UX, not 3a regression): mic/desktop selects stay `disabled` while `isInitializing` until after warm-up + second `device_manager` enum + history scan + CUDA — feels like a slow dropdown; follow-up: enable after `loadAudioDevices` and/or reuse warm-up output to skip the second spawn.
-- [ ] [Risk: High] Phase 3b: AI/GPU services + behavioral fake-queue compute test; depends on 3a.
+- [ ] [Risk: High] Phase 3b: AI/GPU services + behavioral fake-queue compute test; depends on 3a. Extract `gpu-runtime-service.js`, `ai-compute-queue.js`, `ai-addon-ipc.js` via Pattern C. Do not move recorder/transcription/summary lifecycle (3c).
 - [ ] [Risk: High] Phase 3c: recorder/transcription/summary lifecycle last; gated on Phase 0.2 and 0.4; batch macOS smoke with Phase 7 when needed.
 - [ ] [Risk: Medium] Phase 4: split `src/ai-addon-setup.js` behind facade (may start right after Phase 1). Prefer two PRs: manifest/progress/download/archive, then diarization/summary setup.
 - [ ] [Risk: Medium] Phase 5: Python common helpers. Low-risk subset may start early alongside Phase 1.
