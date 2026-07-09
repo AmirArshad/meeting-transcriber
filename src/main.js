@@ -26,12 +26,6 @@ const {
   buildTranscriberArgs,
   buildHuggingFaceOfflineEnv,
   buildTranscriptionRuntimeEnv,
-  buildTranscriptionCudaInstallArgs,
-  buildTranscriptionCudaUninstallArgs,
-  buildUnsupportedCudaPythonMessage,
-  getGpuRuntimeEnsurePlan,
-  getPythonSitePackagesCandidates,
-  getPyTorchCudaBinCandidates,
   cacheContainsCompleteTranscriptionModel,
   getQuitInterceptState,
   getRecorderCloseAction,
@@ -46,11 +40,9 @@ const {
   isSafeRecordingsAudioPath,
   isSafeRecordingsJsonPath,
   isSafeRecordingsMarkdownPath,
-  isSupportedCudaInstallPythonVersion,
   parseRecorderStdoutChunk,
   parsePythonVersion,
   parseAiBackendProgressLine,
-  parseCheckCudaStatus,
   resolveExternalUrl,
   getLegalNoticesPath,
   resolveTranscriptionAudioFile,
@@ -63,51 +55,37 @@ const {
   isRecorderBusy,
   isRetryableCudaTranscriptionError,
   shouldForceCpuTranscriptionFromCudaStatus,
-  getCudaRuntimeProfiles,
-  getSupportedTranscriptionCudaProfileIds,
-  getTranscriptionCudaPackages,
   SPAWN_LOG_BUFFER_MAX_CHARS,
   SPAWN_JSON_RESULT_BUFFER_MAX_CHARS,
   redactSensitiveText,
   MACOS_PERMISSION_CHECK_TIMEOUT_MS,
   AI_COMPUTE_TIMEOUT_MS,
-  GPU_RUNTIME_ACTION_TIMEOUT_MS,
   getTranscriptionComputeTimeoutMs,
   runWallClockComputeAction,
 } = require('./main-process-helpers');
 const { checkForUpdates, openDownloadPage } = require('./updater');
 const {
-  AI_ADDON_PROGRESS_CHANNEL,
-  AI_ADDON_CANCEL_CODE,
   checkAiAddonSetupStatus,
-  checkDiarizationDependencyCache,
   getSummaryArtifactPath,
   getSummaryRuntimeDir,
-  removeDiarizationSetup,
-  removeSummaryModel,
-  setupDiarizationAddon,
-  setupSummaryModel,
-  validateDiarizationSetup,
-  validateSummaryModel,
-  isLikelyHuggingFaceToken,
 } = require('./ai-addon-setup');
 const {
   getDiarizationAvailability,
   getDiarizationModelRef,
   getSummaryArtifactForPlatform,
 } = require('./ai-addon-state');
-const {
-  TOKEN_KEYS,
-  deleteAiAddonToken,
-  getAiAddonToken,
-  hasAiAddonToken,
-  isTokenEncryptionAvailable,
-  storeAiAddonToken,
-} = require('./ai-addon-token-store');
 const { createPythonRuntime } = require('./main/python-runtime');
 const { registerMeetingManagerClient } = require('./main/meeting-manager-client');
 const { registerDeviceIpc } = require('./main/device-ipc');
 const { registerFileExportIpc } = require('./main/file-export-ipc');
+const {
+  createAiComputeQueue,
+} = require('./main/ai-compute-queue');
+const { createGpuRuntimeService } = require('./main/gpu-runtime-service');
+const {
+  createAiAddonIpc,
+  createAiAddonCancelErrorStandalone,
+} = require('./main/ai-addon-ipc');
 
 // Use Electron's default userData path, which handles packaging correctly
 // This is typically: C:\Users\<username>\AppData\Roaming\AvaNevis
@@ -126,10 +104,12 @@ let stopCommandSent = false;
 let quitWorkflowPromise = null;
 let allowImmediateQuit = false;
 let pendingUpdateInfo = null;
-let diarizationDependencySitePackagesCache = null;
 let recordingSessionCounter = 0;
-let cachedCudaStatus = null;
-let gpuRuntimeActionPromise = null;
+// Summary generation cancellation handle stays in main.js until Phase 3c.
+let activeSummaryGeneration = null;
+// Assigned at composition root after GPU + AI-addon services are constructed.
+let aiAddonIpc = null;
+let gpuRuntimeService = null;
 
 // ============================================================================
 // Python runtime service (owns the shared activeProcesses tracking array)
@@ -140,6 +120,19 @@ const {
   buildPythonProcessArgs,
   spawnTrackedPython,
 } = pythonRuntime;
+
+// ============================================================================
+// AI compute queue (no IPC — consumed by transcription/summary/ai-addon)
+// ============================================================================
+const aiComputeQueue = createAiComputeQueue({
+  createAiAddonCancelError: createAiAddonCancelErrorStandalone,
+  runWallClockComputeAction,
+});
+const {
+  aiComputeActionQueue,
+  enqueueAiComputeAction,
+  createAbortableComputeAction,
+} = aiComputeQueue;
 
 function getSafeStorage() {
   // On macOS, Electron safeStorage can prompt Keychain access. Keep this lazy
@@ -242,9 +235,8 @@ function assertTrustedRendererSender(event) {
 }
 
 function hasInFlightAiWork() {
-  return aiAddonSetupAbortControllers.size > 0
+  return (aiAddonIpc ? aiAddonIpc.hasInFlightAiAddonSetup() : false)
     || Boolean(activeSummaryGeneration)
-    || aiAddonActionQueue.hasPendingWork()
     || aiComputeActionQueue.hasPendingWork();
 }
 
@@ -257,12 +249,8 @@ function canAbortActiveSummaryGeneration() {
 }
 
 function abortInFlightAiSetup() {
-  for (const controller of aiAddonSetupAbortControllers.values()) {
-    try {
-      controller.abort(createAiAddonCancelError('Local AI work was canceled because the app is quitting.'));
-    } catch (error) {
-      // Best effort abort.
-    }
+  if (aiAddonIpc) {
+    aiAddonIpc.abortInFlightAiSetup();
   }
 }
 
@@ -270,7 +258,7 @@ function abortInFlightAiWork() {
   abortInFlightAiSetup();
 
   if (canAbortActiveSummaryGeneration()) {
-    activeSummaryGeneration.controller.abort(createAiAddonCancelError('Summary generation was canceled because the app is quitting.'));
+    activeSummaryGeneration.controller.abort(createAiAddonCancelErrorStandalone('Summary generation was canceled because the app is quitting.'));
     terminateProcessBestEffort(activeSummaryGeneration.process);
   }
 }
@@ -281,17 +269,18 @@ async function drainAiWorkBeforeQuit() {
   abortInFlightAiSetup();
 
   if (canAbortActiveSummaryGeneration()) {
-    activeSummaryGeneration.controller.abort(createAiAddonCancelError('Summary generation was canceled because the app is quitting.'));
+    activeSummaryGeneration.controller.abort(createAiAddonCancelErrorStandalone('Summary generation was canceled because the app is quitting.'));
     terminateProcessBestEffort(activeSummaryGeneration.process);
   }
 
   const drainTimeoutMs = metadataPhaseActive ? 15000 : 30000;
   try {
+    const drains = [aiComputeActionQueue.drain()];
+    if (aiAddonIpc) {
+      drains.push(aiAddonIpc.aiAddonActionQueue.drain());
+    }
     await Promise.race([
-      Promise.all([
-        aiAddonActionQueue.drain(),
-        aiComputeActionQueue.drain(),
-      ]),
+      Promise.all(drains),
       new Promise((_, reject) => {
         setTimeout(() => reject(new Error('Timed out waiting for local AI work to finish.')), drainTimeoutMs);
       }),
@@ -683,55 +672,63 @@ registerFileExportIpc(ipcMain, {
   dirname: __dirname,
 });
 
-function clearDiarizationDependencySitePackagesCache() {
-  diarizationDependencySitePackagesCache = null;
+// ============================================================================
+// Phase 3b: GPU runtime + AI add-on IPC (Pattern C)
+// Depends on python-runtime + ai-compute-queue constructed above.
+// Transcription/summary/recorder lifecycle handlers stay in this file (Phase 3c).
+// ============================================================================
+
+// Forward-declared helpers used by GPU/AI services (function declarations are hoisted).
+function getDiarizationDependencySitePackagesPath(userDataDir) {
+  return aiAddonIpc.getDiarizationDependencySitePackagesPath(userDataDir);
 }
 
-function getDiarizationDependencySitePackagesCacheKey(userDataDir) {
-  return [userDataDir, process.platform, process.arch].join('\0');
-}
+gpuRuntimeService = createGpuRuntimeService({
+  path,
+  fs,
+  pythonConfig,
+  spawnTrackedPython,
+  getBackendModuleArgs,
+  appendSpawnLogBuffer,
+  sendRedactedProgress,
+  flushRedactedProgress,
+  getActivePythonVersion,
+  terminateProcessBestEffort,
+  assertTrustedRendererSender,
+  getDiarizationDependencySitePackagesPath,
+});
+gpuRuntimeService.registerIpc(ipcMain);
+const {
+  getCachedCudaStatus,
+  buildCudaRuntimeEnv,
+} = gpuRuntimeService;
 
-function getDiarizationDependencyEnv(userDataDir = app.getPath('userData')) {
-  const sitePackagesDir = getDiarizationDependencySitePackagesPath(userDataDir);
-  return sitePackagesDir ? { PYTHONPATH: sitePackagesDir } : {};
-}
+aiAddonIpc = createAiAddonIpc({
+  app,
+  path,
+  fs,
+  pythonConfig,
+  spawnTrackedPython,
+  appendSpawnLogBuffer,
+  sendToRenderer,
+  getSafeStorage,
+  assertTrustedRendererSender,
+  buildCudaRuntimeEnv,
+  createAbortableComputeAction,
+  terminateProcessBestEffort,
+  buildManagedDiarizationValidationArgs,
+  buildSummaryArgs,
+  summarizeDiarizationError,
+  summarizeSummaryValidationError,
+});
+aiAddonIpc.registerIpc(ipcMain);
+const {
+  createAiAddonCancelError,
+  getDiarizationDependencyEnv,
+  getDiarizationCacheEnv,
+  getAiAddonRuntimeOptions,
+} = aiAddonIpc;
 
-function getDiarizationDependencySitePackagesPath(userDataDir = app.getPath('userData')) {
-  if (process.env.AVANEVIS_SKIP_MANAGED_DIARIZATION_DEPS === '1') {
-    return null;
-  }
-
-  const cacheKey = getDiarizationDependencySitePackagesCacheKey(userDataDir);
-  if (diarizationDependencySitePackagesCache && diarizationDependencySitePackagesCache.key === cacheKey) {
-    const cachedPath = diarizationDependencySitePackagesCache.sitePackagesDir;
-    if (!cachedPath || fs.existsSync(cachedPath)) {
-      return cachedPath;
-    }
-    clearDiarizationDependencySitePackagesCache();
-  }
-
-  const cache = checkDiarizationDependencyCache({
-    userDataDir,
-    platform: process.platform,
-    arch: process.arch,
-  });
-
-  const sitePackagesDir = cache.valid ? cache.sitePackagesDir : null;
-  diarizationDependencySitePackagesCache = { key: cacheKey, sitePackagesDir };
-  return sitePackagesDir;
-}
-
-function getDiarizationCacheEnv(userDataDir = app.getPath('userData')) {
-  const cacheRoot = path.join(userDataDir, 'ai-addons', 'models', 'diarization');
-  const hubCache = path.join(cacheRoot, 'hub');
-  return {
-    HF_HOME: cacheRoot,
-    HF_HUB_CACHE: hubCache,
-    HUGGINGFACE_HUB_CACHE: hubCache,
-    TRANSFORMERS_CACHE: hubCache,
-    PYANNOTE_METRICS_ENABLED: '0',
-  };
-}
 
 function getTranscriptionModelDownloadCheck(modelSize) {
   return buildModelDownloadCheck({
@@ -763,262 +760,6 @@ function getTranscriptionRuntimeEnv(modelSize, cudaOptions = {}) {
     modelCached: isTranscriptionModelCached(modelSize, downloadCheck),
     baseEnv: buildCudaRuntimeEnv({}, cudaOptions),
   });
-}
-
-function updateCachedCudaStatus(status) {
-  if (!status || typeof status !== 'object') {
-    return;
-  }
-  cachedCudaStatus = {
-    ...status,
-    checkedAt: Date.now(),
-  };
-}
-
-function getCachedCudaStatus() {
-  if (!cachedCudaStatus || typeof cachedCudaStatus !== 'object') {
-    return null;
-  }
-  const maxAgeMs = 5 * 60 * 1000;
-  if (!Number.isFinite(cachedCudaStatus.checkedAt) || Date.now() - cachedCudaStatus.checkedAt > maxAgeMs) {
-    return null;
-  }
-  return cachedCudaStatus;
-}
-
-function buildCudaRuntimeEnv(extra = {}, { includeManagedDiarization = false } = {}) {
-  if (process.platform !== 'win32') {
-    return extra;
-  }
-
-  const candidateSitePackagesDirs = [
-    ...getPythonSitePackagesCandidates({
-      pythonExe: pythonConfig.pythonExe,
-      virtualEnv: process.env.VIRTUAL_ENV,
-      appData: process.env.APPDATA,
-      platform: process.platform,
-    }),
-    includeManagedDiarization ? getDiarizationDependencySitePackagesPath() : null,
-  ].filter(Boolean);
-
-  const cudaBinDirs = getPyTorchCudaBinCandidates(candidateSitePackagesDirs)
-    .filter((candidate, index, candidates) => fs.existsSync(candidate) && candidates.indexOf(candidate) === index);
-
-  if (!cudaBinDirs.length) {
-    return extra;
-  }
-
-  return {
-    ...extra,
-    PATH: `${cudaBinDirs.join(path.delimiter)}${path.delimiter}${extra.PATH || process.env.PATH || ''}`,
-  };
-}
-
-function getDefaultTranscriptionCudaPackages() {
-  return getTranscriptionCudaPackages();
-}
-
-function runGpuRuntimeAction(actionFn) {
-  if (gpuRuntimeActionPromise) {
-    const error = new Error('A GPU runtime action is already in progress. Please wait for it to finish.');
-    error.code = 'GPU_RUNTIME_ACTION_BUSY';
-    return Promise.reject(error);
-  }
-
-  gpuRuntimeActionPromise = runWallClockComputeAction({
-    action: (registerProcess) => actionFn(registerProcess),
-    timeoutMs: GPU_RUNTIME_ACTION_TIMEOUT_MS,
-    label: 'GPU runtime setup',
-    terminateProcess: terminateProcessBestEffort,
-  })
-    .finally(() => {
-      gpuRuntimeActionPromise = null;
-    });
-  return gpuRuntimeActionPromise;
-}
-
-function checkNvidiaGpuAvailability({ registerProcess = (proc) => proc } = {}) {
-  return new Promise((resolve) => {
-    const python = registerProcess(spawnTrackedPython([
-      '-c',
-      'import subprocess; result = subprocess.run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"], capture_output=True, text=True); print(result.stdout.strip() if result.returncode == 0 else "None")'
-    ]));
-
-    let output = '';
-    python.stdout.on('data', (data) => {
-      output = appendSpawnLogBuffer(output, data);
-    });
-    python.on('close', () => {
-      const gpuName = output.trim();
-      resolve({
-        hasGPU: gpuName !== 'None' && gpuName !== '',
-        gpuName: gpuName !== 'None' ? gpuName : null,
-      });
-    });
-    python.on('error', () => {
-      resolve({
-        hasGPU: false,
-        gpuName: null,
-      });
-    });
-  });
-}
-
-async function enrichCheckCudaStatus(parsedStatus) {
-  try {
-    const pythonVersion = await getActivePythonVersion();
-    return {
-      ...parsedStatus,
-      version: null,
-      packages: getDefaultTranscriptionCudaPackages(),
-      pythonVersion: pythonVersion.parsed ? pythonVersion.parsed.version : pythonVersion.output,
-      pythonSupportedForInstall: isSupportedCudaInstallPythonVersion(pythonVersion.parsed),
-      pythonExecutable: pythonConfig.pythonExe,
-    };
-  } catch (error) {
-    return {
-      ...parsedStatus,
-      version: null,
-      packages: getDefaultTranscriptionCudaPackages(),
-      pythonVersion: null,
-      pythonSupportedForInstall: false,
-      pythonExecutable: pythonConfig.pythonExe,
-    };
-  }
-}
-
-function runGpuPackageInstall({ mode = 'install', registerProcess = (proc) => proc } = {}) {
-  const normalizedMode = String(mode || 'install').trim().toLowerCase() === 'repair' ? 'repair' : 'install';
-  const isRepairMode = normalizedMode === 'repair';
-
-  return new Promise((resolve, reject) => {
-    const python = registerProcess(spawnTrackedPython(buildTranscriptionCudaInstallArgs({
-      forceReinstall: isRepairMode,
-      noCache: isRepairMode,
-    })));
-
-    let errorOutput = '';
-    const progressRedactor = createLineChunkRedactor();
-
-    python.stdout.on('data', (data) => {
-      const text = data.toString();
-      sendRedactedProgress('gpu-install-progress', text, progressRedactor);
-    });
-
-    python.stderr.on('data', (data) => {
-      const text = data.toString();
-      errorOutput = appendSpawnLogBuffer(errorOutput, text);
-      sendRedactedProgress('gpu-install-progress', text, progressRedactor);
-    });
-
-    python.on('close', (code) => {
-      flushRedactedProgress('gpu-install-progress', progressRedactor);
-      if (code === 0) {
-        resolve({
-          success: true,
-          mode: normalizedMode,
-          message: isRepairMode
-            ? 'GPU runtime repair completed successfully.'
-            : 'GPU acceleration installed successfully.',
-        });
-        return;
-      }
-      reject(new Error(`Failed to install CUDA libraries: ${errorOutput}`));
-    });
-
-    python.on('error', (error) => {
-      flushRedactedProgress('gpu-install-progress', progressRedactor);
-      reject(error);
-    });
-  });
-}
-
-async function ensureCompatibleGpuRuntime(options = {}) {
-  const skipInstallIfReady = options.skipInstallIfReady !== false;
-  const forceRepair = Boolean(options.forceRepair);
-  const registerProcess = typeof options.registerProcess === 'function'
-    ? options.registerProcess
-    : (proc) => proc;
-
-  if (process.platform !== 'win32') {
-    const finalStatus = await enrichCheckCudaStatus({
-      installed: false,
-      deviceAvailable: false,
-      runtimeLoadable: false,
-      missingLibraries: [],
-      runtime: 'ctranslate2',
-      statusCode: 'unsupportedPlatform',
-      supportedProfiles: getSupportedTranscriptionCudaProfileIds(),
-      unsupportedDetectedProfiles: [],
-      recommendedInstallProfile: getSupportedTranscriptionCudaProfileIds()[0] || 'cuda12',
-      error: 'CUDA runtime checks are only supported on Windows.',
-    });
-    return {
-      success: false,
-      action: 'none',
-      initialStatus: finalStatus,
-      finalStatus,
-      message: finalStatus.error,
-    };
-  }
-
-  const initialStatus = await enrichCheckCudaStatus(await checkCudaRuntimeStatus({ registerProcess }));
-  const gpuInfo = await checkNvidiaGpuAvailability({ registerProcess });
-
-  const ensurePlan = getGpuRuntimeEnsurePlan(initialStatus, { forceRepair, skipInstallIfReady });
-  if (!ensurePlan.shouldInstall && ensurePlan.success) {
-    return {
-      success: true,
-      action: ensurePlan.action,
-      initialStatus,
-      finalStatus: initialStatus,
-      message: ensurePlan.message,
-    };
-  }
-
-  if (!initialStatus.pythonSupportedForInstall) {
-    return {
-      success: false,
-      action: 'none',
-      initialStatus,
-      finalStatus: initialStatus,
-      message: buildUnsupportedCudaPythonMessage(initialStatus.pythonVersion || ''),
-    };
-  }
-
-  if (!gpuInfo.hasGPU) {
-    return {
-      success: false,
-      action: 'none',
-      initialStatus,
-      finalStatus: initialStatus,
-      message: 'No NVIDIA GPU was detected on this system. GPU acceleration cannot be enabled.',
-    };
-  }
-
-  if (!ensurePlan.shouldInstall) {
-    return {
-      success: false,
-      action: ensurePlan.action,
-      initialStatus,
-      finalStatus: initialStatus,
-      message: ensurePlan.message,
-    };
-  }
-
-  const installMode = ensurePlan.action;
-  await runGpuPackageInstall({ mode: installMode, registerProcess });
-  const finalStatus = await enrichCheckCudaStatus(await checkCudaRuntimeStatus({ registerProcess }));
-
-  return {
-    success: Boolean(finalStatus.installed),
-    action: installMode,
-    initialStatus,
-    finalStatus,
-    message: finalStatus.installed
-      ? 'CUDA runtime is installed and loadable.'
-      : `CUDA runtime is still not loadable (${finalStatus.statusCode || 'unknown'}).`,
-  };
 }
 
 const transcriberModule = buildTranscriberArgs({
@@ -1896,137 +1637,6 @@ ipcMain.handle('run-recording-preflight', async (event, { micId, loopbackId }) =
 
 ipcMain.handle('get-pending-update-info', async () => pendingUpdateInfo);
 
-function emitAiAddonProgress(payload) {
-  sendToRenderer(AI_ADDON_PROGRESS_CHANNEL, payload);
-}
-
-function createAiAddonCancelError(message = 'AI add-on setup was canceled.') {
-  const error = new Error(message);
-  error.name = 'AbortError';
-  error.code = AI_ADDON_CANCEL_CODE;
-  return error;
-}
-
-function runCancellableAiAddonSetup(feature, action) {
-  if (aiAddonSetupAbortControllers.has(feature)) {
-    return Promise.reject(new Error(`${feature === 'summary' ? 'Summary model' : 'Speaker identification'} setup is already running.`));
-  }
-
-  const controller = new AbortController();
-  aiAddonSetupAbortControllers.set(feature, controller);
-
-  return enqueueAiAddonAction(async () => {
-    try {
-      return await action(controller.signal);
-    } finally {
-      if (aiAddonSetupAbortControllers.get(feature) === controller) {
-        aiAddonSetupAbortControllers.delete(feature);
-      }
-    }
-  });
-}
-
-function cancelAiAddonSetup(feature) {
-  const controller = aiAddonSetupAbortControllers.get(feature);
-  if (!controller) {
-    return { canceled: false, message: 'No setup download is currently running.' };
-  }
-
-  controller.abort(createAiAddonCancelError());
-  return { canceled: true };
-}
-
-function createAsyncActionQueue() {
-  let tail = Promise.resolve();
-  let pendingWorkCount = 0;
-
-  function enqueue(action) {
-    pendingWorkCount += 1;
-    const run = tail.then(() => action()).finally(() => {
-      pendingWorkCount -= 1;
-    });
-    tail = run.catch(() => {});
-    return run;
-  }
-
-  function drain() {
-    return tail;
-  }
-
-  function hasPendingWork() {
-    return pendingWorkCount > 0;
-  }
-
-  return { enqueue, drain, hasPendingWork };
-}
-
-const aiAddonActionQueue = createAsyncActionQueue();
-const aiComputeActionQueue = createAsyncActionQueue();
-const enqueueAiAddonAction = aiAddonActionQueue.enqueue;
-const enqueueAiComputeAction = aiComputeActionQueue.enqueue;
-const aiAddonSetupAbortControllers = new Map();
-let activeSummaryGeneration = null;
-
-function waitForAiComputeQueueIdle({ cancelSignal, cancelMessage, pollIntervalMs = 250 }) {
-  return new Promise((resolve, reject) => {
-    if (cancelSignal && cancelSignal.aborted) {
-      reject(createAiAddonCancelError(cancelMessage));
-      return;
-    }
-
-    let timer = null;
-    let settled = false;
-    const cleanupAbort = cancelSignal && typeof cancelSignal.addEventListener === 'function'
-      ? (() => {
-        const handleAbort = () => {
-          if (settled) {
-            return;
-          }
-          settled = true;
-          if (timer) {
-            clearInterval(timer);
-            timer = null;
-          }
-          reject(createAiAddonCancelError(cancelMessage));
-        };
-        cancelSignal.addEventListener('abort', handleAbort, { once: true });
-        return () => cancelSignal.removeEventListener('abort', handleAbort);
-      })()
-      : () => {};
-
-    const finish = (callback, value) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (timer) {
-        clearInterval(timer);
-        timer = null;
-      }
-      cleanupAbort();
-      callback(value);
-    };
-
-    const checkIdle = () => {
-      if (cancelSignal && cancelSignal.aborted) {
-        finish(reject, createAiAddonCancelError(cancelMessage));
-        return;
-      }
-      if (!aiComputeActionQueue.hasPendingWork()) {
-        finish(resolve);
-      }
-    };
-
-    checkIdle();
-    if (settled) {
-      return;
-    }
-
-    timer = setInterval(checkIdle, pollIntervalMs);
-    timer.unref?.();
-  });
-}
-
 async function removeSummarySidecarFiles(filePaths = []) {
   await Promise.all(filePaths.filter(Boolean).map((filePath) => (
     fs.promises.rm(filePath, { force: true }).catch(() => {})
@@ -2132,87 +1742,6 @@ function validateAiMetadataPaths(updates = {}) {
   return validated;
 }
 
-function validateDiarizationRuntime({ modelRef, token, requiredDevice, cancelSignal }) {
-  clearDiarizationDependencySitePackagesCache();
-  const resolvedToken = token || getAiAddonToken({
-    userDataDir: app.getPath('userData'),
-    tokenKey: TOKEN_KEYS.diarizationHuggingFace,
-    safeStorage: getSafeStorage(),
-  });
-
-  return createAbortableComputeAction({
-    cancelSignal,
-    cancelMessage: 'Speaker identification setup was canceled.',
-    action: () => new Promise((resolve, reject) => {
-      if (cancelSignal && cancelSignal.aborted) {
-        reject(createAiAddonCancelError('Speaker identification setup was canceled.'));
-        return;
-      }
-
-      const python = spawnTrackedPython(buildManagedDiarizationValidationArgs(modelRef, requiredDevice), {
-        cwd: pythonConfig.backendPath,
-        env: {
-          ...getDiarizationDependencyEnv(),
-          ...getDiarizationCacheEnv(),
-          ...buildCudaRuntimeEnv({}, { includeManagedDiarization: true }),
-          HF_TOKEN: resolvedToken || '',
-          HUGGINGFACE_HUB_TOKEN: resolvedToken || '',
-        },
-      });
-
-      let output = '';
-      let errorOutput = '';
-      let settled = false;
-      const cleanupCancel = cancelSignal && typeof cancelSignal.addEventListener === 'function'
-        ? (() => {
-          const handleAbort = () => {
-            if (settled) {
-              return;
-            }
-            settled = true;
-            terminateProcessBestEffort(python);
-            reject(createAiAddonCancelError('Speaker identification setup was canceled.'));
-          };
-          cancelSignal.addEventListener('abort', handleAbort, { once: true });
-          return () => cancelSignal.removeEventListener('abort', handleAbort);
-        })()
-        : () => {};
-      const finish = (callback, value) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        cleanupCancel();
-        callback(value);
-      };
-      python.stdout.on('data', (data) => { output = appendSpawnLogBuffer(output, data); });
-      python.stderr.on('data', (data) => {
-        const stderrChunk = data.toString();
-        errorOutput = appendSpawnLogBuffer(errorOutput, stderrChunk);
-        for (const line of stderrChunk.split(/\r?\n/)) {
-          const progressEvent = parseAiBackendProgressLine(line, 'diarization');
-          if (progressEvent) {
-            emitAiAddonProgress(progressEvent);
-          }
-        }
-      });
-      python.on('close', (code) => {
-        if (code === 0) {
-          try {
-            finish(resolve, JSON.parse(output));
-          } catch (error) {
-            finish(reject, new Error(`Failed to parse diarization setup validation: ${error.message}`));
-          }
-          return;
-        }
-        const reason = summarizeDiarizationError(errorOutput);
-        finish(reject, new Error(reason || 'Speaker identification runtime validation failed.'));
-      });
-      python.on('error', (error) => finish(reject, error));
-    }),
-  });
-}
-
 function summarizeDiarizationError(errorOutput) {
   return summarizeAiBackendError({
     errorOutput,
@@ -2276,235 +1805,6 @@ function terminateProcessBestEffort(proc) {
     }
   });
 }
-
-function createAbortableComputeAction({ cancelSignal, cancelMessage, action }) {
-  return waitForAiComputeQueueIdle({ cancelSignal, cancelMessage })
-    .then(() => {
-      if (cancelSignal && cancelSignal.aborted) {
-        throw createAiAddonCancelError(cancelMessage);
-      }
-      return enqueueAiComputeAction(() => action());
-    });
-}
-
-function validateSummaryRuntimeSmoke({ modelId, cache, cancelSignal }) {
-  const artifact = getSummaryArtifactForPlatform(modelId, process.platform, process.arch);
-  if (!artifact) {
-    return Promise.reject(new Error('No summary model artifact is available for this platform.'));
-  }
-
-  const modelPath = cache && cache.artifactPath ? cache.artifactPath : getSummaryArtifactPath(app.getPath('userData'), artifact);
-  const runtimeDir = getSummaryRuntimeDir(app.getPath('userData'), artifact);
-
-  return createAbortableComputeAction({
-    cancelSignal,
-    cancelMessage: 'Summary model setup was canceled.',
-    action: () => new Promise((resolve, reject) => {
-      if (cancelSignal && cancelSignal.aborted) {
-        reject(createAiAddonCancelError('Summary model setup was canceled.'));
-        return;
-      }
-
-      const python = spawnTrackedPython(buildSummaryArgs({
-        meetingId: 'setup-validation',
-        runtimeDir,
-        modelPath,
-        validateRuntime: true,
-        modelLabel: artifact.modelLabel || artifact.modelId,
-      }), { cwd: pythonConfig.backendPath });
-
-      let output = '';
-      let errorOutput = '';
-      let settled = false;
-      const cleanupCancel = cancelSignal && typeof cancelSignal.addEventListener === 'function'
-        ? (() => {
-          const handleAbort = () => {
-            if (settled) {
-              return;
-            }
-            settled = true;
-            terminateProcessBestEffort(python);
-            reject(createAiAddonCancelError('Summary model setup was canceled.'));
-          };
-          cancelSignal.addEventListener('abort', handleAbort, { once: true });
-          return () => cancelSignal.removeEventListener('abort', handleAbort);
-        })()
-        : () => {};
-      const finish = (callback, value) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        cleanupCancel();
-        callback(value);
-      };
-      python.stdout.on('data', (data) => { output = appendSpawnLogBuffer(output, data); });
-      python.stderr.on('data', (data) => { errorOutput = appendSpawnLogBuffer(errorOutput, data); });
-      python.on('close', (code) => {
-        if (code === 0) {
-          try {
-            finish(resolve, JSON.parse(output));
-          } catch (error) {
-            finish(reject, new Error(`Failed to parse summary runtime validation: ${error.message}`));
-          }
-          return;
-        }
-        const reason = summarizeSummaryValidationError(errorOutput);
-        const message = reason && /^local summary runtime validation failed/i.test(reason)
-          ? reason
-          : `Local summary runtime validation failed${reason ? `: ${reason}` : '.'}`;
-        finish(reject, new Error(message));
-      });
-      python.on('error', (error) => finish(reject, error));
-    }),
-  });
-}
-
-function getAiAddonRuntimeOptions(extra = {}) {
-  const options = {
-    userDataDir: app.getPath('userData'),
-    platform: process.platform,
-    arch: process.arch,
-    emitProgress: emitAiAddonProgress,
-    ...extra,
-  };
-
-  if (extra.includeSafeStorage) {
-    options.safeStorage = getSafeStorage();
-    delete options.includeSafeStorage;
-  }
-
-  return options;
-}
-
-ipcMain.handle('get-ai-addon-status', async (event, options = {}) => checkAiAddonSetupStatus({
-  userDataDir: app.getPath('userData'),
-  platform: process.platform,
-  arch: process.arch,
-  includeStorageSizes: Boolean(options && options.includeStorageSizes),
-  verifyChecksums: Boolean(options && options.verifyChecksums),
-  checkTokenEncryption: false,
-}));
-
-ipcMain.handle('store-diarization-token', async (event, token) => {
-  assertTrustedRendererSender(event);
-
-  const trimmedToken = typeof token === 'string' ? token.trim() : '';
-  if (!trimmedToken) {
-    return { success: false, code: 'EMPTY_TOKEN', message: 'Token must not be empty.' };
-  }
-  if (!isLikelyHuggingFaceToken(trimmedToken)) {
-    return {
-      success: false,
-      code: 'INVALID_TOKEN',
-      message: 'Hugging Face token does not match the expected token format.',
-    };
-  }
-
-  try {
-    return await storeAiAddonToken({
-      userDataDir: app.getPath('userData'),
-      tokenKey: TOKEN_KEYS.diarizationHuggingFace,
-      token: trimmedToken,
-      safeStorage: getSafeStorage(),
-    });
-  } catch (error) {
-    return {
-      success: false,
-      code: 'STORAGE_ERROR',
-      message: error.message || 'Secure token storage is unavailable.',
-    };
-  }
-});
-
-ipcMain.handle('get-diarization-token-status', async () => ({
-  hasToken: hasAiAddonToken({
-    userDataDir: app.getPath('userData'),
-    tokenKey: TOKEN_KEYS.diarizationHuggingFace,
-  }),
-  encryptionAvailable: isTokenEncryptionAvailable({ safeStorage: getSafeStorage() }),
-}));
-
-ipcMain.handle('delete-diarization-token', async () => deleteAiAddonToken({
-  userDataDir: app.getPath('userData'),
-  tokenKey: TOKEN_KEYS.diarizationHuggingFace,
-}));
-
-ipcMain.handle('setup-diarization', async (event, options = {}) => runCancellableAiAddonSetup('diarization', (cancelSignal) => setupDiarizationAddon(getAiAddonRuntimeOptions({
-  includeSafeStorage: true,
-  modelId: options.modelId,
-  speakerCount: options.speakerCount,
-  token: options.token,
-  pythonExe: pythonConfig.pythonExe,
-  runtimeValidator: validateDiarizationRuntime,
-  cancelSignal,
-}))));
-
-ipcMain.handle('cancel-diarization-setup', async () => cancelAiAddonSetup('diarization'));
-
-ipcMain.handle('validate-diarization-setup', async () => {
-  if (aiAddonSetupAbortControllers.has('diarization')) {
-    throw new Error('Speaker identification setup is already running. Cancel it or wait for it to finish before validating.');
-  }
-
-  return enqueueAiAddonAction(() => validateDiarizationSetup(getAiAddonRuntimeOptions({
-    includeSafeStorage: true,
-    runtimeValidator: validateDiarizationRuntime,
-  })));
-});
-
-ipcMain.handle('remove-diarization-setup', async () => {
-  if (aiAddonSetupAbortControllers.has('diarization')) {
-    throw new Error('Speaker identification setup is already running. Cancel it before removing setup.');
-  }
-
-  return enqueueAiAddonAction(async () => {
-    try {
-      return await removeDiarizationSetup(getAiAddonRuntimeOptions());
-    } finally {
-      clearDiarizationDependencySitePackagesCache();
-    }
-  });
-});
-
-ipcMain.handle('setup-summary-model', async (event, options = {}) => runCancellableAiAddonSetup('summary', (cancelSignal) => setupSummaryModel(getAiAddonRuntimeOptions({
-  modelId: options.modelId,
-  profile: options.profile,
-  pythonExe: pythonConfig.pythonExe,
-  backendPath: pythonConfig.backendPath,
-  runtimeValidator: validateSummaryRuntimeSmoke,
-  cancelSignal,
-}))));
-
-ipcMain.handle('cancel-summary-model-setup', async () => cancelAiAddonSetup('summary'));
-
-ipcMain.handle('validate-summary-model', async (event, options = {}) => {
-  if (aiAddonSetupAbortControllers.has('summary')) {
-    throw new Error('Summary model setup is already running. Cancel it or wait for it to finish before validating.');
-  }
-
-  return enqueueAiAddonAction(() => validateSummaryModel(getAiAddonRuntimeOptions({
-    modelId: options.modelId,
-    profile: options.profile,
-    runtimeValidator: validateSummaryRuntimeSmoke,
-  })));
-});
-
-ipcMain.handle('remove-summary-model', async (event, options = {}) => {
-  if (aiAddonSetupAbortControllers.has('summary')) {
-    throw new Error('Summary model setup is already running. Cancel it before removing the model.');
-  }
-
-  return enqueueAiAddonAction(() => removeSummaryModel(getAiAddonRuntimeOptions({
-    modelId: options.modelId,
-  })));
-});
-
-/**
- * Get list of available audio devices
- */
-// get-audio-devices and warm-up-audio-system are registered by
-// registerDeviceIpc above.
 
 /**
  * Check if Whisper model is downloaded
@@ -3044,71 +2344,6 @@ function runTranscriptionProcess({
       }
       hasCompleted = true;
       reject(error);
-    });
-  });
-}
-
-function checkCudaRuntimeStatus({ registerProcess = (proc) => proc } = {}) {
-  return new Promise((resolve) => {
-    if (process.platform !== 'win32') {
-      resolve({
-        installed: false,
-        deviceAvailable: false,
-        runtimeLoadable: false,
-        missingLibraries: [],
-        runtime: 'ctranslate2',
-        statusCode: 'unsupportedPlatform',
-        supportedProfiles: getSupportedTranscriptionCudaProfileIds(),
-        unsupportedDetectedProfiles: [],
-        recommendedInstallProfile: getSupportedTranscriptionCudaProfileIds()[0] || 'cuda12',
-        error: 'CUDA runtime checks are only supported on Windows.',
-      });
-      return;
-    }
-
-    const knownProfiles = getCudaRuntimeProfiles();
-    const supportedProfileIds = getSupportedTranscriptionCudaProfileIds();
-    const supportedProfiles = knownProfiles.filter((profile) => supportedProfileIds.includes(profile.id));
-    const unsupportedProfiles = knownProfiles.filter((profile) => !supportedProfileIds.includes(profile.id));
-    const probeProfiles = supportedProfiles.map((profile) => ({
-      id: profile.id,
-      requiredDlls: profile.requiredDlls,
-    }));
-    const unsupportedDllHints = unsupportedProfiles.map((profile) => ({
-      id: profile.id,
-      expectedDllPrefixes: Array.isArray(profile.expectedDllPrefixes) ? profile.expectedDllPrefixes : [],
-    }));
-
-    const python = registerProcess(spawnTrackedPython(getBackendModuleArgs('transcription.cuda_probe', [
-      '--profiles-json', JSON.stringify(probeProfiles),
-      '--supported-profiles', supportedProfileIds.join(','),
-      '--unsupported-hints-json', JSON.stringify(unsupportedDllHints),
-    ]), { env: buildCudaRuntimeEnv() }));
-
-    let output = '';
-    python.stdout.on('data', (data) => {
-      output = appendSpawnLogBuffer(output, data);
-    });
-    python.on('close', () => {
-      const status = parseCheckCudaStatus(output);
-      updateCachedCudaStatus(status);
-      resolve(status);
-    });
-    python.on('error', (error) => {
-      const status = {
-        installed: false,
-        deviceAvailable: false,
-        runtimeLoadable: false,
-        missingLibraries: [],
-        runtime: 'ctranslate2',
-        statusCode: 'probeError',
-        supportedProfiles: getSupportedTranscriptionCudaProfileIds(),
-        unsupportedDetectedProfiles: [],
-        recommendedInstallProfile: getSupportedTranscriptionCudaProfileIds()[0] || 'cuda12',
-        error: String(error && error.message ? error.message : error),
-      };
-      updateCachedCudaStatus(status);
-      resolve(status);
     });
   });
 }
@@ -3981,107 +3216,6 @@ ipcMain.handle('retry-transcription', async (event, options = {}) => {
 // registerFileExportIpc above.
 
 /**
- * Check GPU availability (detect NVIDIA GPU)
- */
-ipcMain.handle('check-gpu', async (event) => {
-  assertTrustedRendererSender(event);
-  return checkNvidiaGpuAvailability();
-});
-
-/**
- * Check CUDA installation status
- */
-ipcMain.handle('check-cuda', async (event) => {
-  assertTrustedRendererSender(event);
-  try {
-    if (process.platform !== 'win32') {
-      return enrichCheckCudaStatus({
-        installed: false,
-        deviceAvailable: false,
-        runtimeLoadable: false,
-        missingLibraries: [],
-        runtime: 'ctranslate2',
-        statusCode: 'unsupportedPlatform',
-        supportedProfiles: getSupportedTranscriptionCudaProfileIds(),
-        unsupportedDetectedProfiles: [],
-        recommendedInstallProfile: getSupportedTranscriptionCudaProfileIds()[0] || 'cuda12',
-        error: 'CUDA runtime checks are only supported on Windows.',
-      });
-    }
-    return enrichCheckCudaStatus(await checkCudaRuntimeStatus());
-  } catch (error) {
-    return enrichCheckCudaStatus({
-      installed: false,
-      deviceAvailable: false,
-      runtimeLoadable: false,
-      missingLibraries: [],
-      runtime: 'ctranslate2',
-      statusCode: 'probeError',
-      supportedProfiles: getSupportedTranscriptionCudaProfileIds(),
-      unsupportedDetectedProfiles: [],
-      recommendedInstallProfile: getSupportedTranscriptionCudaProfileIds()[0] || 'cuda12',
-      error: String(error && error.message ? error.message : error),
-    });
-  }
-});
-
-/**
- * Install GPU acceleration packages
- */
-ipcMain.handle('install-gpu', async (event, options = {}) => {
-  assertTrustedRendererSender(event);
-  return runGpuRuntimeAction(async (registerProcess) => {
-    const requestedMode = String(options && options.mode ? options.mode : 'install').trim().toLowerCase();
-    const ensureResult = await ensureCompatibleGpuRuntime({
-      skipInstallIfReady: false,
-      forceRepair: requestedMode === 'repair',
-      registerProcess,
-    });
-    if (!ensureResult.success) {
-      throw new Error(ensureResult.message || 'GPU runtime is still not loadable.');
-    }
-    return ensureResult;
-  });
-});
-
-ipcMain.handle('ensure-compatible-gpu-runtime', async (event, options = {}) => {
-  assertTrustedRendererSender(event);
-  return runGpuRuntimeAction((registerProcess) => ensureCompatibleGpuRuntime({
-    ...options,
-    registerProcess,
-  }));
-});
-
-/**
- * Uninstall GPU packages
- */
-ipcMain.handle('uninstall-gpu', async (event) => {
-  assertTrustedRendererSender(event);
-  return runGpuRuntimeAction((registerProcess) => new Promise((resolve, reject) => {
-    const python = registerProcess(spawnTrackedPython(buildTranscriptionCudaUninstallArgs()));
-
-    let errorOutput = '';
-
-    python.stderr.on('data', (data) => {
-      errorOutput = appendSpawnLogBuffer(errorOutput, data);
-    });
-
-    python.on('close', (code) => {
-      if (code === 0) {
-        resolve({ success: true });
-      } else {
-        const errorMsg = errorOutput.trim() || 'Unknown error';
-        reject(new Error(`Failed to uninstall GPU packages: ${errorMsg}`));
-      }
-    });
-
-    python.on('error', (error) => {
-      reject(error);
-    });
-  }));
-});
-
-/**
  * Get platform information (for UI platform detection)
  */
 ipcMain.handle('get-platform', async () => {
@@ -4137,6 +3271,8 @@ ipcMain.handle('get-system-info', async () => {
 });
 
 // open-legal-notices is registered by registerFileExportIpc above.
+// check-gpu / check-cuda / install-gpu / ensure-compatible-gpu-runtime /
+// uninstall-gpu are registered by createGpuRuntimeService above.
 
 /**
  * Open update download page in browser
