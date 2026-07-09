@@ -99,6 +99,12 @@ Cross-platform wrapper:
 npm run test:python
 ```
 
+Recursive Python syntax check (all packages under `backend/`, including `meetings/`, `summaries/`, `diarization/`, `common/`):
+
+```bash
+npm run test:python-syntax
+```
+
 Direct commands are still useful when debugging interpreter-specific issues.
 
 macOS:

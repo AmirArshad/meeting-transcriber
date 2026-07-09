@@ -17,7 +17,7 @@ Quick validation after edits:
 
 ```bash
 npm run test:python
-python -m py_compile backend/*.py backend/audio/*.py backend/transcription/*.py
+npm run test:python-syntax
 ```
 
 Device smoke (manual): `python backend/device_manager.py`.

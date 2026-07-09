@@ -34,12 +34,8 @@ jobs:
     - name: Run Python unit tests
       run: python -m pytest tests/python
 
-    - name: Validate Python syntax
-      shell: pwsh
-      run: |
-        Get-ChildItem backend/*.py | ForEach-Object { python -m py_compile $_.FullName }
-        Get-ChildItem backend/audio/*.py | ForEach-Object { python -m py_compile $_.FullName }
-        Get-ChildItem backend/transcription/*.py | ForEach-Object { python -m py_compile $_.FullName }
+    - name: Validate Python syntax (recursive under backend/)
+      run: python scripts/check_python_syntax.py
 
     - name: Smoke-check device manager
       shell: pwsh
@@ -76,13 +72,8 @@ jobs:
     - name: Run Python unit tests
       run: python -m pytest tests/python
 
-    - name: Validate Python syntax (all backend files)
-      run: |
-        echo "Validating Python syntax..."
-        python -m py_compile backend/*.py
-        python -m py_compile backend/audio/*.py
-        python -m py_compile backend/transcription/*.py
-        echo "✓ All Python files have valid syntax"
+    - name: Validate Python syntax (recursive under backend/)
+      run: python scripts/check_python_syntax.py
 
     - name: Test PyObjC imports
       run: |

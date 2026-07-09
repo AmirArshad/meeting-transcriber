@@ -43,10 +43,11 @@ Python tests:
 npm run test:python
 ```
 
-Syntax checks:
+Syntax checks (recursive under `backend/`, including `meetings/`, `summaries/`, `diarization/`, `common/`):
 
 ```bash
-python -m py_compile backend/*.py backend/audio/*.py backend/transcription/*.py
+npm run test:python-syntax
+# or: python scripts/check_python_syntax.py
 ```
 
 ## Important Contracts

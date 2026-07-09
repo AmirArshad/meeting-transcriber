@@ -12,9 +12,10 @@ alwaysApply: false
 |---------|--------|
 | `npm test` | `node --test` on `tests/js/**` + `npm run test:syntax` (glob `node --check` over all `.js` under `src/`) |
 | `npm run test:python` | `tests/python/**` via `scripts/run-python-tests.js` |
-| `npm run test:all` | Both — run before opening a PR |
+| `npm run test:python-syntax` | Recursive `compileall` over `backend/` via `scripts/check_python_syntax.py` |
+| `npm run test:all` | JS + Python unit tests + Python syntax — run before opening a PR |
 
-CI (`.github/workflows/ci.yml`): JS + Python tests, `py_compile`, syntax checks, manifest tests, packaged-build smoke — not full E2E with real audio devices.
+CI (`.github/workflows/ci.yml`): JS + Python tests, recursive backend `compileall`, JS syntax checks, manifest tests, packaged-build smoke — not full E2E with real audio devices.
 
 ## When to add tests
 
