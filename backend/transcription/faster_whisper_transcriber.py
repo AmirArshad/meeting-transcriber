@@ -7,7 +7,6 @@ Supports all Whisper languages with English as default.
 
 import sys
 import os
-from datetime import datetime
 from inspect import Parameter, signature
 from typing import Optional, List, Dict, Any
 from pathlib import Path

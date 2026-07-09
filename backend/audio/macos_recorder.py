@@ -23,6 +23,7 @@ from .macos_desktop_diagnostics import (
 )
 from .macos_stereo_repair import repair_one_sided_stereo
 from .wav_io import write_float_stereo_wav
+from . import recorder_stdout as _recorder_stdout
 
 # Re-export for characterization tests that import macos_recorder._repair_one_sided_stereo
 _repair_one_sided_stereo = repair_one_sided_stereo
@@ -41,15 +42,18 @@ _configuring_devices_event_sent = False
 
 def _send_json_message(message: dict):
     """Send a JSON message to stdout in a thread-safe manner."""
-    with _stdout_lock:
-        print(json.dumps(message), flush=True)
+    _recorder_stdout.send_json_message(message, lock=_stdout_lock)
 
 
 def _send_event_message(event: str, message: str, **extra):
     """Send a structured recorder event to stdout."""
-    payload = {"type": "event", "event": event, "message": message}
-    payload.update(extra)
-    _send_json_message(payload)
+    _recorder_stdout.send_event_message(
+        event,
+        message,
+        lock=_stdout_lock,
+        send_json=_send_json_message,
+        **extra,
+    )
 
 
 def _send_configuring_devices_event():
@@ -63,16 +67,24 @@ def _send_configuring_devices_event():
 
 def _send_warning_message(code: str, message: str, **extra):
     """Send a structured warning to stdout."""
-    payload = {"type": "warning", "code": code, "message": message}
-    payload.update(extra)
-    _send_json_message(payload)
+    _recorder_stdout.send_warning_message(
+        code,
+        message,
+        lock=_stdout_lock,
+        send_json=_send_json_message,
+        **extra,
+    )
 
 
 def _send_error_message(code: str, message: str, **extra):
     """Send a structured error to stdout."""
-    payload = {"type": "error", "code": code, "message": message}
-    payload.update(extra)
-    _send_json_message(payload)
+    _recorder_stdout.send_error_message(
+        code,
+        message,
+        lock=_stdout_lock,
+        send_json=_send_json_message,
+        **extra,
+    )
 
 
 # Audio processing constants
