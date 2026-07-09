@@ -5,3 +5,6 @@ dist/
 out/
 release/
 swift/**/.build/
+
+# Claude Code entry imports AGENTS.md; ignore root only so Cursor does not double-load it
+/CLAUDE.md

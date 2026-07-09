@@ -1,12 +1,18 @@
 # AvaNevis Agent Guide
 
-Canonical agent instructions for **OpenCode** and **Cursor**. Update this file when project invariants, architecture, or validation expectations change.
+Canonical agent instructions for **Cursor**, **OpenCode**, and **Claude Code**. Update this file when project invariants, architecture, or validation expectations change.
 
 | Tool | How it loads guidance |
 |------|------------------------|
-| OpenCode | Root `AGENTS.md` |
-| Cursor | Root `AGENTS.md` plus scoped rules in `.cursor/rules/` |
-| Claude Code | Not in use; archived snapshot at `docs/completed/archive/CLAUDE.md` (not auto-loaded). To re-enable, copy `AGENTS.md` to repo-root `CLAUDE.md` only if that tool requires it. |
+| OpenCode | Root `AGENTS.md`, plus scoped Cursor rules via `opencode.json` `instructions` (`.cursor/rules/*.mdc`). Project skills in `.agents/skills/`. |
+| Cursor | Root `AGENTS.md` plus scoped rules in `.cursor/rules/`. Root `CLAUDE.md` is listed in `.cursorignore` so it is not double-loaded. Project skills in `.agents/skills/` (also discovers `.cursor/skills/` / `.claude/skills/` if present). |
+| Claude Code | Thin root `CLAUDE.md` imports this file with `@AGENTS.md`. Optional path-scoped rules may live under `.claude/rules/`. Project skills: prefer `.agents/skills/` (also reads `.claude/skills/`). |
+
+### Project skills
+
+Reusable Agent Skills live under `.agents/skills/*/SKILL.md` (open standard). They are ordinary markdown folders checked into git — “install” only means copying a skill into that path (see `skills-lock.json` for provenance). Prefer one shared `.agents/skills/` tree over duplicating into per-tool skill directories.
+
+Keep the skill set lean. Do not re-add auto-router skills that claim to run on every conversation (for example Superpowers `using-superpowers` / forced brainstorming / blanket TDD) — they burn tokens and fight this repo’s characterization-first refactor style. Prefer manual or narrowly triggered skills.
 
 ## Product Summary
 
@@ -280,7 +286,7 @@ If you change artifact naming in `package.json` or `.github/workflows/build-rele
 
 ## Important Repo Facts
 
-- Root `AGENTS.md` is the single source of truth for agent guidance; do not add repo-root `CLAUDE.md` while using Cursor (it auto-loads and duplicates context).
+- Root `AGENTS.md` is the single source of truth for agent guidance. Root `CLAUDE.md` is a thin Claude Code bridge (`@AGENTS.md` only); keep it out of Cursor context via `.cursorignore`. Do not paste a full duplicate of this file into `CLAUDE.md`.
 - CI now includes backend tests, build/download-manifest tests, main-process and renderer helper JS tests, plus Windows/macOS packaged-build smoke checks, but it is still not full end-to-end product coverage.
 - Root `README.md` is broadly useful, but some product docs may still lag code changes.
 - `backend/meeting_manager.py` now uses locked atomic metadata writes, transactional add behavior, and corrupt-file backups.

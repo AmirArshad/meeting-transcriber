@@ -16,9 +16,9 @@ Replaced Intel-only evermeet.cx ffmpeg with a pinned Apple Silicon static build 
 
 ## Remaining Dependency And Release Hygiene
 
-- [ ] [Risk: Low] Close superseded Dependabot PRs that were absorbed by the dependency-upgrade branch: #12 and #20.
-- [ ] [Risk: Low] Close deferred high-risk Dependabot PRs with explicit comments: #15, #18, and #19.
-- [ ] [Risk: Medium] Decide whether optional follow-up dependency PRs #13, #14, #16, #17, and #21 should ship as small separate PRs or stay deferred.
+- [x] [Risk: Low] Close superseded Dependabot PRs that were absorbed by the dependency-upgrade branch: #12 and #20.
+- [x] [Risk: Low] Close deferred high-risk Dependabot PRs with explicit comments: #15, #18, and #19.
+- [x] [Risk: Medium] Decide whether optional follow-up dependency PRs #13, #14, #16, #17, and #21 should ship as small separate PRs or stay deferred. (Closed; revisit only if Dependabot reopens with newer bumps.)
 - [ ] [Risk: Low] Trial dropping explicit transitive-only pins in a follow-up trim pass; keep any pin needed for reproducible packaged builds.
 - [ ] [Risk: High] Evaluate whether macOS PyObjC `Cocoa` / `Quartz` pins are removable; requires `pip check`, PyObjC import checks, packaged `build:mac:dir`, and ScreenCaptureKit fallback smoke.
 - [x] [Risk: Medium] Remove bundled macOS `torch` after pip install (MLX path does not import it; diarization installs its own torch into userData).
@@ -45,10 +45,11 @@ Replaced Intel-only evermeet.cx ffmpeg with a pinned Apple Silicon static build 
 ## Next: AvaNevis Codebase Refactor
 
 Design doc: `docs/initiatives/AVANEVIS_CODEBASE_REFACTOR.md`.
+Branch: `refactor/codebase-phase-0` (Phase 0 characterization tests).
 
 Execution rule: one phase per PR unless the change is purely mechanical and tightly coupled. Move code first, preserve behavior, then improve internals in later PRs. Revert (do not fix forward) any phase that breaks a preserved contract or a manual smoke check. Add every new JS entry file to `test:syntax`, keep new renderer globals uniquely named, and target no source file over 1,500 lines after its owning phase.
 
-- [ ] [Risk: Medium] Phase 0: add characterization tests for IPC contracts, compute queue membership, renderer helper behavior, and recorder stdout event shapes. Compute-queue tests (0.2) block Phase 3; recorder-event tests (0.4) block Phase 7.
+- [ ] [Risk: Medium] Phase 0: add characterization tests for IPC contracts, compute queue membership, renderer helper behavior, and recorder stdout event shapes. Compute-queue tests (0.2) block Phase 3; recorder-event tests (0.4) block Phase 7. (In progress)
 - [ ] [Risk: Low] Phase 1: split `src/main-process-helpers.js` into smaller domain modules behind the existing facade. May run in parallel with the Phase 5 low-risk subset.
 - [ ] [Risk: Medium] Phase 2: extract low-risk helpers from `src/renderer/app.js`, including visualizer, formatters, DOM helpers, settings helpers, transcript rendering, summary UI, AI add-on UI, and GPU UI helpers. Extend existing `recording-state-helpers.js` / `history-detail-helpers.js` / `update-notification-helpers.js` rather than duplicating.
 - [ ] [Risk: High] Phase 2 follow-up: extract renderer recording and transcription controllers only after helper coverage is in place.

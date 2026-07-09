@@ -5,7 +5,7 @@ alwaysApply: true
 
 # Cursor workspace
 
-Canonical architecture and invariants: root `AGENTS.md` (shared with OpenCode). Scoped rules below add file-targeted checklists; they do not replace `AGENTS.md`.
+Canonical architecture and invariants: root `AGENTS.md` (shared with OpenCode and Claude Code). Scoped rules below add file-targeted checklists; they do not replace `AGENTS.md`. OpenCode also loads these `.mdc` files via `opencode.json`. Claude Code enters through thin root `CLAUDE.md` (`@AGENTS.md`); that file is `.cursorignore`d here to avoid double-loading.
 
 ## When to read which doc
 
@@ -52,4 +52,5 @@ Windows: `py -3.11`; macOS: `python3.11`. Dev Python: repo `.venv` (auto-detecte
 
 - After JS helper or Python backend changes: run `npm test` and `npm run test:python` when relevant.
 - Update `AGENTS.md` when changing cross-process contracts, AI catalog pins, build inputs, or validation expectations.
-- Do not add repo-root `CLAUDE.md` (duplicates context with `AGENTS.md`).
+- Keep root `CLAUDE.md` as a thin `@AGENTS.md` bridge only; do not duplicate this guide into it.
+- Shared Claude rules/skills may live under `.claude/rules/` or `.claude/skills/`; keep `.claude/settings.local.json` and `CLAUDE.local.md` gitignored.

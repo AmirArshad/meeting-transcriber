@@ -65,8 +65,9 @@ logs/
 .env.local
 nul
 
-# Claude Code
-.claude/
+# Claude Code — keep shared rules/skills commit-able; ignore local-only files
+.claude/settings.local.json
+CLAUDE.local.md
 
 # Agent
 .agent/

@@ -1,10 +1,10 @@
 # AvaNevis Agent Guide (archived)
 
-> **Archived 2026-05-18.** This file is kept for Claude Code only. Cursor and OpenCode do **not** load it.
+> **Archived 2026-05-18.** Historical snapshot only — not auto-loaded by any tool.
 >
-> **Canonical guide:** [`AGENTS.md`](../../../AGENTS.md) at the repo root. Edit that file; sync here only if you resume Claude Code and need a root `CLAUDE.md` copy.
->
-> Do not move this file back to the repo root while using Cursor — root `CLAUDE.md` is auto-injected and duplicates `AGENTS.md` context.
+> **Canonical guide:** root [`AGENTS.md`](../../../AGENTS.md).
+> **Claude Code entry:** root [`CLAUDE.md`](../../../CLAUDE.md) (thin `@AGENTS.md` bridge).
+> Do not restore this archive to the repo root.
 
 ## Product Summary
 
