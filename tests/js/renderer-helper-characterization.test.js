@@ -3,43 +3,66 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const fs = require('node:fs');
 
 const {
   ROOT,
   readUtf8,
-  loadExtractedFunctions,
 } = require('./source-scan-helpers');
 
 const {
   getRecordButtonAction,
 } = require('../../src/renderer/recording-state-helpers');
 
+const {
+  formatAiAddonProgressText,
+  formatBytes,
+  formatStatusLabel,
+  formatTimestamp,
+} = require('../../src/renderer/formatters');
+
+const {
+  getMeetingTranscriptionStatusMessage,
+  isMeetingTranscriptionRetryable,
+} = require('../../src/renderer/summary-ui-helpers');
+
+const {
+  isAiAddonProgressPhase,
+  isAiAddonTerminalStatus,
+} = require('../../src/renderer/ai-addon-ui-helpers');
+
 const APP_JS = path.join(ROOT, 'src', 'renderer', 'app.js');
 const INDEX_HTML = path.join(ROOT, 'src', 'renderer', 'index.html');
-
-const PURE_HELPER_NAMES = [
-  'isMeetingTranscriptionRetryable',
-  'getMeetingTranscriptionStatusMessage',
-  'formatTimestamp',
-  'formatStatusLabel',
-  'formatBytes',
-  'isAiAddonTerminalStatus',
-  'isAiAddonProgressPhase',
-  'formatAiAddonProgressText',
-];
 
 const EXPECTED_RENDERER_GLOBALS = [
   'recordingStateHelpers',
   'updateNotificationHelpers',
   'historyDetailHelpers',
+  'formatters',
+  'summaryUiHelpers',
+  'aiAddonUiHelpers',
 ];
 
 const EXPECTED_SCRIPT_ORDER = [
   'recording-state-helpers.js',
   'update-notification-helpers.js',
   'history-detail-helpers.js',
+  'formatters.js',
+  'summary-ui-helpers.js',
+  'ai-addon-ui-helpers.js',
   'app.js',
+];
+
+const EXTRACTED_PURE_HELPER_NAMES = [
+  'isMeetingTranscriptionRetryable',
+  'getMeetingTranscriptionStatusMessage',
+  'formatTimestamp',
+  'formatDate',
+  'formatRelativeDate',
+  'formatStatusLabel',
+  'formatBytes',
+  'isAiAddonTerminalStatus',
+  'isAiAddonProgressPhase',
+  'formatAiAddonProgressText',
 ];
 
 test('recording-state-helpers remain characterized for record-button gating', () => {
@@ -48,47 +71,44 @@ test('recording-state-helpers remain characterized for record-button gating', ()
   assert.equal(getRecordButtonAction('transcribing'), 'ignore');
 });
 
-test('pure app.js helpers characterize summary/AI gating without DOM access', () => {
-  const appSource = readUtf8(APP_JS);
-  const helpers = loadExtractedFunctions(appSource, PURE_HELPER_NAMES);
-
-  assert.equal(helpers.isMeetingTranscriptionRetryable({ transcriptionStatus: 'failed' }), true);
-  assert.equal(helpers.isMeetingTranscriptionRetryable({ transcriptionStatus: 'pending' }), true);
-  assert.equal(helpers.isMeetingTranscriptionRetryable({ transcriptionStatus: 'completed' }), false);
-  assert.equal(helpers.isMeetingTranscriptionRetryable(null), false);
+test('extracted pure helpers characterize summary/AI gating without DOM access', () => {
+  assert.equal(isMeetingTranscriptionRetryable({ transcriptionStatus: 'failed' }), true);
+  assert.equal(isMeetingTranscriptionRetryable({ transcriptionStatus: 'pending' }), true);
+  assert.equal(isMeetingTranscriptionRetryable({ transcriptionStatus: 'completed' }), false);
+  assert.equal(isMeetingTranscriptionRetryable(null), false);
 
   assert.equal(
-    helpers.getMeetingTranscriptionStatusMessage({ transcriptionStatus: 'failed', transcriptionError: 'boom' }),
+    getMeetingTranscriptionStatusMessage({ transcriptionStatus: 'failed', transcriptionError: 'boom' }),
     'Transcription failed: boom',
   );
   assert.equal(
-    helpers.getMeetingTranscriptionStatusMessage({ transcriptionStatus: 'pending' }),
+    getMeetingTranscriptionStatusMessage({ transcriptionStatus: 'pending' }),
     'This recording has not been transcribed yet.',
   );
-  assert.equal(helpers.getMeetingTranscriptionStatusMessage({ transcriptionStatus: 'completed' }), '');
+  assert.equal(getMeetingTranscriptionStatusMessage({ transcriptionStatus: 'completed' }), '');
 
-  assert.equal(helpers.formatTimestamp(65), '01:05');
-  assert.equal(helpers.formatTimestamp(0), '00:00');
+  assert.equal(formatTimestamp(65), '01:05');
+  assert.equal(formatTimestamp(0), '00:00');
 
-  assert.equal(helpers.formatStatusLabel('ready'), 'Ready');
-  assert.equal(helpers.formatStatusLabel('needsAccount'), 'Needs account');
-  assert.equal(helpers.formatStatusLabel('nope'), 'Unknown');
+  assert.equal(formatStatusLabel('ready'), 'Ready');
+  assert.equal(formatStatusLabel('needsAccount'), 'Needs account');
+  assert.equal(formatStatusLabel('nope'), 'Unknown');
 
-  assert.equal(helpers.formatBytes(0), '0 MB');
-  assert.equal(helpers.formatBytes(1024), '1 KB');
-  assert.equal(helpers.formatBytes(5 * 1024 * 1024), '5 MB');
+  assert.equal(formatBytes(0), '0 MB');
+  assert.equal(formatBytes(1024), '1 KB');
+  assert.equal(formatBytes(5 * 1024 * 1024), '5 MB');
 
-  assert.equal(helpers.isAiAddonTerminalStatus('ready'), true);
-  assert.equal(helpers.isAiAddonTerminalStatus('downloading'), false);
-  assert.equal(helpers.isAiAddonProgressPhase({ phase: 'downloading' }), true);
-  assert.equal(helpers.isAiAddonProgressPhase({ phase: 'idle' }), false);
+  assert.equal(isAiAddonTerminalStatus('ready'), true);
+  assert.equal(isAiAddonTerminalStatus('downloading'), false);
+  assert.equal(isAiAddonProgressPhase({ phase: 'downloading' }), true);
+  assert.equal(isAiAddonProgressPhase({ phase: 'idle' }), false);
 
   assert.equal(
-    helpers.formatAiAddonProgressText({ message: 'Downloading', percent: 42 }),
+    formatAiAddonProgressText({ message: 'Downloading', percent: 42 }),
     'Downloading 42%',
   );
   assert.match(
-    helpers.formatAiAddonProgressText({
+    formatAiAddonProgressText({
       message: 'Downloading',
       downloadedBytes: 1024,
       totalBytes: 2048,
@@ -96,6 +116,21 @@ test('pure app.js helpers characterize summary/AI gating without DOM access', ()
     }),
     /Downloading 1 KB of 2 KB \(50%\)/,
   );
+});
+
+test('app.js no longer defines extracted pure helpers inline', () => {
+  const appSource = readUtf8(APP_JS);
+  for (const name of EXTRACTED_PURE_HELPER_NAMES) {
+    assert.equal(
+      appSource.includes(`function ${name}`),
+      false,
+      `expected ${name} to be removed from app.js after Pattern B extraction`,
+    );
+  }
+
+  assert.match(appSource, /window\.formatters/);
+  assert.match(appSource, /window\.summaryUiHelpers/);
+  assert.match(appSource, /window\.aiAddonUiHelpers/);
 });
 
 test('index.html loads renderer helpers before app.js with unique globals', () => {
