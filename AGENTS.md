@@ -184,7 +184,7 @@ Key quality assumptions to preserve:
 ### Local AI add-ons remain explicit and catalog-driven
 
 - Speaker diarization uses `pyannote/speaker-diarization-community-1` with the user's own Hugging Face token only. Do not embed, proxy, log, or persist a maintainer-owned token.
-- Tokens must stay in Electron `safeStorage`; do not write token values to manifests, meeting metadata, transcripts, summaries, progress events, or logs. Diarization setup validation delivers the token via stdin (`--token-stdin`), not `HF_TOKEN` / `HUGGINGFACE_HUB_TOKEN` in the child environment.
+- Tokens must stay in Electron `safeStorage`; do not write token values to manifests, meeting metadata, transcripts, summaries, progress events, or logs. Diarization setup validation delivers the token via stdin (`--token-stdin`) and clears `HF_TOKEN`, `HUGGINGFACE_HUB_TOKEN`, the deprecated `HUGGING_FACE_HUB_TOKEN` alias, and `HF_TOKEN_PATH` in the child environment so shell-exported tokens cannot leak through `huggingface_hub`.
 - Diarization runs automatically only after transcription when setup is complete and platform policy allows it.
 - For new recordings with diarization ready, prefer the diarization-guided transcription path: run pyannote first, build padded speaker windows, transcribe those windows, then save speaker-labeled transcript chunks. If that guided path fails, save a normal transcript and persist diarization error metadata.
 - Diarization model refs must be resolved from the catalog in the main process, not trusted from renderer input.
@@ -300,7 +300,7 @@ The generated `build/resources/resource-manifest.json` should continue to invali
 
 Windows packaged Python relies on `python311._pth` containing `../backend`. Dev mode relies on `PYTHONPATH` setup in `src/main.js`.
 
-Packaged apps set `AVANEVIS_PACKAGED=1` in `buildPythonEnv()` (`src/main.js`) for all spawned Python children. `backend/audio/swift_audio_capture.py` must not call `shutil.which("audiocapture-helper")` when that env var is set — only bundled `Resources/bin/audiocapture-helper` (or explicit dev build paths) are valid. Dev/`npm start` leaves the var unset so PATH lookup still works.
+Packaged apps set `process.env.AVANEVIS_PACKAGED=1` at main-process startup when `app.isPackaged` (so worker threads inherit it) and also inject it via `buildPythonEnv()` for all spawned Python children. `backend/audio/swift_audio_capture.py` must not call `shutil.which("audiocapture-helper")` when that env var is set — only bundled `Resources/bin/audiocapture-helper` (or explicit dev build paths) are valid. Summary runtime tar extraction (`resolvePreferredTarExecutable`) likewise prefers absolute system tar over PATH when the flag is set. Dev/`npm start` leaves the var unset so PATH lookup still works.
 
 ### Meeting metadata persistence
 

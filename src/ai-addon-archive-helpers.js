@@ -1,6 +1,35 @@
+const fs = require('fs');
 const path = require('path');
 
 const UNIX_SYMLINK_MODE = 0o120000;
+
+/**
+ * Prefer a well-known system tar so a poisoned PATH cannot substitute an
+ * attacker binary in packaged builds (same principle as AVANEVIS_PACKAGED
+ * for the Swift helper). Dev still falls back to PATH when the system
+ * binary is missing.
+ */
+function resolvePreferredTarExecutable({
+  platform = process.platform,
+  env = process.env,
+  existsSync = fs.existsSync,
+} = {}) {
+  const packaged = env.AVANEVIS_PACKAGED === '1';
+  let preferred = null;
+
+  if (platform === 'win32') {
+    const systemRoot = env.SystemRoot || env.WINDIR || 'C:\\Windows';
+    preferred = path.join(systemRoot, 'System32', 'tar.exe');
+  } else if (platform === 'darwin' || platform === 'linux') {
+    preferred = '/usr/bin/tar';
+  }
+
+  if (preferred && (packaged || existsSync(preferred))) {
+    return preferred;
+  }
+
+  return 'tar';
+}
 
 function isZipSymlinkEntry(entry) {
   const attr = entry && entry.header && typeof entry.header.attr === 'number'
@@ -118,4 +147,5 @@ module.exports = {
   validateTarEntryName,
   parseTarListingLine,
   validateTarListing,
+  resolvePreferredTarExecutable,
 };

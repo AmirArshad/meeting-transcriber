@@ -13,6 +13,14 @@ const { pathToFileURL } = require('url');
 const { spawn, execFile } = require('child_process');
 const fs = require('fs');
 const os = require('os');
+
+// Packaged signal for the main process and any worker_threads it spawns (tar
+// extractor, etc.). Python children also receive this via buildPythonEnv();
+// without setting it here, workers inherit a flagless process.env and cannot
+// prefer the absolute system tar over PATH lookup.
+if (app.isPackaged) {
+  process.env.AVANEVIS_PACKAGED = '1';
+}
 const {
   buildRecordingPreflightReport,
   buildMacOSPermissionCheckFailureStatus,

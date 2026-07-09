@@ -39,6 +39,7 @@ const {
   parseAiBackendProgressLine,
   AI_COMPUTE_TIMEOUT_MS,
   runWallClockComputeAction,
+  splitBufferedLines,
 } = require('../main-process-helpers');
 const { createAsyncActionQueue } = require('./ai-compute-queue');
 
@@ -238,14 +239,18 @@ function createAiAddonIpc(deps) {
               ...getDiarizationDependencyEnv(),
               ...getDiarizationCacheEnv(),
               ...buildCudaRuntimeEnv({}, { includeManagedDiarization: true }),
-              // Prefer stdin token delivery; keep env empty so process tables cannot scrape HF tokens.
+              // Prefer stdin token delivery; keep env empty so process tables / huggingface_hub
+              // cannot scrape shell tokens (including the deprecated underscored alias and token-path).
               HF_TOKEN: '',
               HUGGINGFACE_HUB_TOKEN: '',
+              HUGGING_FACE_HUB_TOKEN: '',
+              HF_TOKEN_PATH: '',
             },
           }));
 
           let output = '';
           let errorOutput = '';
+          let stderrRemainder = '';
           let settled = false;
           const cleanupCancel = cancelSignal && typeof cancelSignal.addEventListener === 'function'
             ? (() => {
@@ -269,22 +274,34 @@ function createAiAddonIpc(deps) {
             cleanupCancel();
             callback(value);
           };
+          const failTokenDelivery = (error, messagePrefix) => {
+            // Late EPIPE after a successful close must not taskkill a recycled PID.
+            if (settled) {
+              return;
+            }
+            // Stdin failure settles the job; wall-clock timeout will not fire, so kill the
+            // child that is otherwise blocked forever on sys.stdin.readline().
+            terminateProcessBestEffort(python);
+            finish(reject, new Error(`${messagePrefix}: ${error.message}`));
+          };
           // Async EPIPE if the child dies before reading stdin is not caught by try/catch.
           python.stdin.on('error', (error) => {
-            finish(reject, new Error(`Failed to deliver Hugging Face token: ${error.message}`));
+            failTokenDelivery(error, 'Failed to deliver Hugging Face token');
           });
           try {
             python.stdin.write(resolvedToken ? `${resolvedToken}\n` : '\n');
             python.stdin.end();
           } catch (error) {
-            finish(reject, new Error(`Failed to deliver Hugging Face token to validation process: ${error.message}`));
+            failTokenDelivery(error, 'Failed to deliver Hugging Face token to validation process');
             return;
           }
           python.stdout.on('data', (data) => { output = appendSpawnLogBuffer(output, data); });
           python.stderr.on('data', (data) => {
             const stderrChunk = data.toString();
             errorOutput = appendSpawnLogBuffer(errorOutput, stderrChunk);
-            for (const line of stderrChunk.split(/\r?\n/)) {
+            const { lines, remainder } = splitBufferedLines(stderrChunk, stderrRemainder);
+            stderrRemainder = remainder;
+            for (const line of lines) {
               const progressEvent = parseAiBackendProgressLine(line, 'diarization');
               if (progressEvent) {
                 emitAiAddonProgress(progressEvent);
@@ -292,6 +309,13 @@ function createAiAddonIpc(deps) {
             }
           });
           python.on('close', (code) => {
+            if (stderrRemainder) {
+              const progressEvent = parseAiBackendProgressLine(stderrRemainder, 'diarization');
+              if (progressEvent) {
+                emitAiAddonProgress(progressEvent);
+              }
+              stderrRemainder = '';
+            }
             if (code === 0) {
               try {
                 finish(resolve, JSON.parse(output));
@@ -436,24 +460,34 @@ function createAiAddonIpc(deps) {
       encryptionAvailable: isTokenEncryptionAvailable({ safeStorage: getSafeStorage() }),
     }));
 
-    ipcMain.handle('delete-diarization-token', async () => deleteAiAddonToken({
-      userDataDir: app.getPath('userData'),
-      tokenKey: TOKEN_KEYS.diarizationHuggingFace,
-    }));
+    ipcMain.handle('delete-diarization-token', async (event) => {
+      assertTrustedRendererSender(event);
+      return deleteAiAddonToken({
+        userDataDir: app.getPath('userData'),
+        tokenKey: TOKEN_KEYS.diarizationHuggingFace,
+      });
+    });
 
-    ipcMain.handle('setup-diarization', async (event, options = {}) => runCancellableAiAddonSetup('diarization', (cancelSignal) => setupDiarizationAddon(getAiAddonRuntimeOptions({
-      includeSafeStorage: true,
-      modelId: options.modelId,
-      speakerCount: options.speakerCount,
-      token: options.token,
-      pythonExe: pythonConfig.pythonExe,
-      runtimeValidator: validateDiarizationRuntime,
-      cancelSignal,
-    }))));
+    ipcMain.handle('setup-diarization', async (event, options = {}) => {
+      assertTrustedRendererSender(event);
+      return runCancellableAiAddonSetup('diarization', (cancelSignal) => setupDiarizationAddon(getAiAddonRuntimeOptions({
+        includeSafeStorage: true,
+        modelId: options.modelId,
+        speakerCount: options.speakerCount,
+        token: options.token,
+        pythonExe: pythonConfig.pythonExe,
+        runtimeValidator: validateDiarizationRuntime,
+        cancelSignal,
+      })));
+    });
 
-    ipcMain.handle('cancel-diarization-setup', async () => cancelAiAddonSetup('diarization'));
+    ipcMain.handle('cancel-diarization-setup', async (event) => {
+      assertTrustedRendererSender(event);
+      return cancelAiAddonSetup('diarization');
+    });
 
-    ipcMain.handle('validate-diarization-setup', async () => {
+    ipcMain.handle('validate-diarization-setup', async (event) => {
+      assertTrustedRendererSender(event);
       if (aiAddonSetupAbortControllers.has('diarization')) {
         throw new Error('Speaker identification setup is already running. Cancel it or wait for it to finish before validating.');
       }
@@ -464,7 +498,8 @@ function createAiAddonIpc(deps) {
       })));
     });
 
-    ipcMain.handle('remove-diarization-setup', async () => {
+    ipcMain.handle('remove-diarization-setup', async (event) => {
+      assertTrustedRendererSender(event);
       if (aiAddonSetupAbortControllers.has('diarization')) {
         throw new Error('Speaker identification setup is already running. Cancel it before removing setup.');
       }
@@ -478,18 +513,25 @@ function createAiAddonIpc(deps) {
       });
     });
 
-    ipcMain.handle('setup-summary-model', async (event, options = {}) => runCancellableAiAddonSetup('summary', (cancelSignal) => setupSummaryModel(getAiAddonRuntimeOptions({
-      modelId: options.modelId,
-      profile: options.profile,
-      pythonExe: pythonConfig.pythonExe,
-      backendPath: pythonConfig.backendPath,
-      runtimeValidator: validateSummaryRuntimeSmoke,
-      cancelSignal,
-    }))));
+    ipcMain.handle('setup-summary-model', async (event, options = {}) => {
+      assertTrustedRendererSender(event);
+      return runCancellableAiAddonSetup('summary', (cancelSignal) => setupSummaryModel(getAiAddonRuntimeOptions({
+        modelId: options.modelId,
+        profile: options.profile,
+        pythonExe: pythonConfig.pythonExe,
+        backendPath: pythonConfig.backendPath,
+        runtimeValidator: validateSummaryRuntimeSmoke,
+        cancelSignal,
+      })));
+    });
 
-    ipcMain.handle('cancel-summary-model-setup', async () => cancelAiAddonSetup('summary'));
+    ipcMain.handle('cancel-summary-model-setup', async (event) => {
+      assertTrustedRendererSender(event);
+      return cancelAiAddonSetup('summary');
+    });
 
     ipcMain.handle('validate-summary-model', async (event, options = {}) => {
+      assertTrustedRendererSender(event);
       if (aiAddonSetupAbortControllers.has('summary')) {
         throw new Error('Summary model setup is already running. Cancel it or wait for it to finish before validating.');
       }
@@ -502,6 +544,7 @@ function createAiAddonIpc(deps) {
     });
 
     ipcMain.handle('remove-summary-model', async (event, options = {}) => {
+      assertTrustedRendererSender(event);
       if (aiAddonSetupAbortControllers.has('summary')) {
         throw new Error('Summary model setup is already running. Cancel it before removing the model.');
       }

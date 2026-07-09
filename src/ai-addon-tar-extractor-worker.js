@@ -2,11 +2,11 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const { parentPort, workerData } = require('worker_threads');
-const { validateTarListing } = require('./ai-addon-archive-helpers');
+const { validateTarListing, resolvePreferredTarExecutable } = require('./ai-addon-archive-helpers');
 
 function runTarCommand(args) {
   return new Promise((resolve, reject) => {
-    const tar = spawn('tar', args, { windowsHide: true });
+    const tar = spawn(resolvePreferredTarExecutable(), args, { windowsHide: true });
     let stdout = '';
     let errorOutput = '';
     tar.stdout.on('data', (data) => { stdout += data.toString(); });

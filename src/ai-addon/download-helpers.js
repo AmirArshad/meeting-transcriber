@@ -55,13 +55,22 @@ const DOWNLOAD_REDIRECT_HOSTS = new Set([
   'transfer.xethub.huggingface.co',
 ]);
 
-function collectConfiguredDownloadHosts(value, hosts = new Set()) {
+function collectConfiguredDownloadHosts(value, hosts = new Set(), keyHint = null) {
   if (!value) {
     return hosts;
   }
 
+  // Only collect from download-related keys. licenseUrl / releaseUrl / docs links must
+  // not silently expand the download allowlist when a future catalog edit adds a new host.
+  const DOWNLOAD_HOST_KEYS = new Set([
+    'downloadurl',
+    'url',
+    'indexurl',
+    'extraindexurls',
+  ]);
+
   if (typeof value === 'string') {
-    if (value.startsWith('https://')) {
+    if (keyHint && DOWNLOAD_HOST_KEYS.has(keyHint) && value.startsWith('https://')) {
       try {
         hosts.add(new URL(value).hostname.toLowerCase());
       } catch (error) {
@@ -73,14 +82,14 @@ function collectConfiguredDownloadHosts(value, hosts = new Set()) {
 
   if (Array.isArray(value)) {
     for (const item of value) {
-      collectConfiguredDownloadHosts(item, hosts);
+      collectConfiguredDownloadHosts(item, hosts, keyHint);
     }
     return hosts;
   }
 
   if (typeof value === 'object') {
-    for (const item of Object.values(value)) {
-      collectConfiguredDownloadHosts(item, hosts);
+    for (const [key, item] of Object.entries(value)) {
+      collectConfiguredDownloadHosts(item, hosts, String(key || '').toLowerCase());
     }
   }
 
@@ -495,4 +504,6 @@ module.exports = {
   isHuggingFaceSummaryArtifact,
   isAllowedDownloadHost,
   getDownloadHost,
+  // Exported for characterization tests (host allowlist key filtering).
+  collectConfiguredDownloadHosts,
 };

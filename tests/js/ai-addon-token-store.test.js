@@ -15,14 +15,30 @@ const {
 function createMemoryFs() {
   const files = new Map();
   const dirs = new Set();
+  const writeModes = new Map();
 
   return {
     files,
+    writeModes,
     mkdirSync(dirPath) {
       dirs.add(dirPath);
     },
-    writeFileSync(filePath, data) {
+    writeFileSync(filePath, data, options) {
       files.set(filePath, Buffer.isBuffer(data) ? data : Buffer.from(String(data)));
+      if (options && typeof options.mode === 'number') {
+        writeModes.set(filePath, options.mode);
+      }
+    },
+    renameSync(fromPath, toPath) {
+      if (!files.has(fromPath)) {
+        throw new Error(`Missing file for rename: ${fromPath}`);
+      }
+      files.set(toPath, files.get(fromPath));
+      files.delete(fromPath);
+      if (writeModes.has(fromPath)) {
+        writeModes.set(toPath, writeModes.get(fromPath));
+        writeModes.delete(fromPath);
+      }
     },
     readFileSync(filePath) {
       if (!files.has(filePath)) {
@@ -33,8 +49,15 @@ function createMemoryFs() {
     existsSync(filePath) {
       return files.has(filePath) || dirs.has(filePath);
     },
+    statSync(filePath) {
+      if (!files.has(filePath)) {
+        throw new Error(`Missing file: ${filePath}`);
+      }
+      return { size: files.get(filePath).length };
+    },
     unlinkSync(filePath) {
       files.delete(filePath);
+      writeModes.delete(filePath);
     },
   };
 }
@@ -47,7 +70,7 @@ function createSafeStorage() {
   };
 }
 
-test('stores and retrieves an encrypted AI add-on token', () => {
+test('stores and retrieves an encrypted AI add-on token via atomic rename', () => {
   const fsModule = createMemoryFs();
   const safeStorage = createSafeStorage();
   const userDataDir = '/tmp/AvaNevis';
@@ -64,7 +87,49 @@ test('stores and retrieves an encrypted AI add-on token', () => {
   assert.deepEqual(result, { success: true, hasToken: true });
   assert.equal(hasAiAddonToken({ userDataDir, tokenKey: TOKEN_KEYS.diarizationHuggingFace, fsModule }), true);
   assert.equal(fsModule.files.get(tokenPath).toString('utf8'), 'encrypted:hf_secret');
+  assert.equal(
+    [...fsModule.files.keys()].some((filePath) => String(filePath).endsWith('.tmp')),
+    false,
+  );
   assert.equal(getAiAddonToken({ userDataDir, tokenKey: TOKEN_KEYS.diarizationHuggingFace, safeStorage, fsModule }), 'hf_secret');
+});
+
+test('token writes use restrictive mode on POSIX platforms', () => {
+  if (process.platform === 'win32') {
+    return;
+  }
+
+  const fsModule = createMemoryFs();
+  const userDataDir = '/tmp/AvaNevis';
+  const tokenPath = getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace);
+
+  storeAiAddonToken({
+    userDataDir,
+    tokenKey: TOKEN_KEYS.diarizationHuggingFace,
+    token: 'hf_secret',
+    safeStorage: createSafeStorage(),
+    fsModule,
+  });
+
+  assert.equal(fsModule.writeModes.get(tokenPath), 0o600);
+});
+
+test('empty token files are not treated as a stored token', () => {
+  const fsModule = createMemoryFs();
+  const userDataDir = '/tmp/AvaNevis';
+  const tokenPath = getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace);
+  fsModule.writeFileSync(tokenPath, Buffer.alloc(0));
+
+  assert.equal(hasAiAddonToken({ userDataDir, tokenKey: TOKEN_KEYS.diarizationHuggingFace, fsModule }), false);
+  assert.equal(
+    getAiAddonToken({
+      userDataDir,
+      tokenKey: TOKEN_KEYS.diarizationHuggingFace,
+      safeStorage: createSafeStorage(),
+      fsModule,
+    }),
+    null,
+  );
 });
 
 test('does not store tokens when encryption is unavailable', () => {

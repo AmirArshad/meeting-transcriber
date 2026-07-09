@@ -6,7 +6,11 @@ const path = require('path');
 const { Worker } = require('worker_threads');
 const AdmZip = require('adm-zip');
 
-const { validateZipEntries, validateTarListing } = require('../ai-addon-archive-helpers');
+const {
+  validateZipEntries,
+  validateTarListing,
+  resolvePreferredTarExecutable,
+} = require('../ai-addon-archive-helpers');
 const {
   bindFsMethod,
   findRuntimeExecutablePath,
@@ -86,7 +90,7 @@ function extractTarGzArchiveInWorker(archivePath, destinationDir) {
 
 function runTarCommand(args) {
   return new Promise((resolve, reject) => {
-    const tar = spawn('tar', args, { windowsHide: true });
+    const tar = spawn(resolvePreferredTarExecutable(), args, { windowsHide: true });
     let stdout = '';
     let errorOutput = '';
     tar.stdout.on('data', (data) => { stdout += data.toString(); });

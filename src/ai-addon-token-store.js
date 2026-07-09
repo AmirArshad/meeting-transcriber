@@ -39,6 +39,31 @@ function isTokenEncryptionAvailable({ safeStorage, checkAvailability = true } = 
   return safeStorage.isEncryptionAvailable();
 }
 
+function writeTokenFileAtomicSync(fsModule, tokenPath, encryptedBuffer) {
+  const tempPath = `${tokenPath}.${process.pid}.${Date.now()}.tmp`;
+  const writeOptions = process.platform === 'win32' ? undefined : { mode: 0o600 };
+
+  try {
+    fsModule.writeFileSync(tempPath, encryptedBuffer, writeOptions);
+    if (typeof fsModule.renameSync === 'function') {
+      fsModule.renameSync(tempPath, tokenPath);
+    } else {
+      fsModule.writeFileSync(tokenPath, encryptedBuffer, writeOptions);
+      if (typeof fsModule.unlinkSync === 'function') {
+        fsModule.unlinkSync(tempPath);
+      }
+    }
+  } finally {
+    if (typeof fsModule.existsSync === 'function' && typeof fsModule.unlinkSync === 'function' && fsModule.existsSync(tempPath)) {
+      try {
+        fsModule.unlinkSync(tempPath);
+      } catch (error) {
+        // Best effort cleanup only.
+      }
+    }
+  }
+}
+
 function storeAiAddonToken({ userDataDir, tokenKey, token, safeStorage, fsModule = fs } = {}) {
   const normalizedToken = typeof token === 'string' ? token.trim() : '';
   if (!normalizedToken) {
@@ -48,18 +73,37 @@ function storeAiAddonToken({ userDataDir, tokenKey, token, safeStorage, fsModule
   requireEncryption(safeStorage);
   const tokenPath = getTokenPath(userDataDir, tokenKey);
   fsModule.mkdirSync(path.dirname(tokenPath), { recursive: true });
-  fsModule.writeFileSync(tokenPath, safeStorage.encryptString(normalizedToken));
+  writeTokenFileAtomicSync(fsModule, tokenPath, safeStorage.encryptString(normalizedToken));
 
   return { success: true, hasToken: true };
 }
 
 function hasAiAddonToken({ userDataDir, tokenKey, fsModule = fs } = {}) {
-  return fsModule.existsSync(getTokenPath(userDataDir, tokenKey));
+  const tokenPath = getTokenPath(userDataDir, tokenKey);
+  if (!fsModule.existsSync(tokenPath)) {
+    return false;
+  }
+
+  // Existence alone is not enough: a crash mid-write can leave a zero-length
+  // file that would otherwise push users into a decrypt-error path. Non-empty
+  // corrupt blobs still report hasToken (atomic rename makes truncation rare).
+  try {
+    const stats = typeof fsModule.statSync === 'function'
+      ? fsModule.statSync(tokenPath)
+      : null;
+    if (stats && typeof stats.size === 'number' && stats.size <= 0) {
+      return false;
+    }
+  } catch (error) {
+    return false;
+  }
+
+  return true;
 }
 
 function getAiAddonToken({ userDataDir, tokenKey, safeStorage, fsModule = fs } = {}) {
   const tokenPath = getTokenPath(userDataDir, tokenKey);
-  if (!fsModule.existsSync(tokenPath)) {
+  if (!hasAiAddonToken({ userDataDir, tokenKey, fsModule })) {
     return null;
   }
 
