@@ -80,7 +80,18 @@ function extractIpcMainHandleChannels(source) {
   );
 }
 
-function extractWebContentsSendChannels(source) {
+function resolveAiAddonProgressChannelLiteral() {
+  // Resolve from the exported constant so preload↔main divergence cannot hide
+  // behind a hardcoded heuristic string (Phase 0.1 / Phase 4 pin).
+  // Lazy require keeps this helper usable from pure source-scan unit tests.
+  // eslint-disable-next-line global-require
+  const { AI_ADDON_PROGRESS_CHANNEL } = require('../../src/ai-addon-setup');
+  return AI_ADDON_PROGRESS_CHANNEL;
+}
+
+function extractWebContentsSendChannels(source, {
+  resolveAiAddonProgressChannel = resolveAiAddonProgressChannelLiteral,
+} = {}) {
   // Direct sends plus sendToRenderer('channel', ...) used throughout main.js.
   const channels = new Set([
     ...extractQuotedStrings(source, /webContents\.send\(\s*['"]([a-z0-9-]+)['"]/g),
@@ -89,10 +100,10 @@ function extractWebContentsSendChannels(source) {
     ...extractQuotedStrings(source, /flushRedactedProgress\(\s*['"]([a-z0-9-]+)['"]/g),
   ]);
 
-  // AI_ADDON_PROGRESS_CHANNEL is imported as a constant; resolve its literal.
+  // AI_ADDON_PROGRESS_CHANNEL is imported as a constant; resolve its live value.
   if (/sendToRenderer\(\s*AI_ADDON_PROGRESS_CHANNEL\b/.test(source)
     || /webContents\.send\(\s*AI_ADDON_PROGRESS_CHANNEL\b/.test(source)) {
-    channels.add('ai-addon-progress');
+    channels.add(resolveAiAddonProgressChannel());
   }
 
   return [...channels].sort();
@@ -115,18 +126,18 @@ function extractPreloadListenerChannels(preloadSource) {
 /**
  * Extract the source body of an ipcMain.handle('channel', ...) callback.
  * Scans until the matching closing paren/brace for the handle call.
+ * Tolerates whitespace after `handle(` so Phase 3 reformats do not spuriously fail.
  */
 function extractIpcHandlerSource(combinedSource, channel) {
-  const needle = `ipcMain.handle('${channel}'`;
-  const altNeedle = `ipcMain.handle("${channel}"`;
-  let start = combinedSource.indexOf(needle);
-  if (start < 0) {
-    start = combinedSource.indexOf(altNeedle);
-  }
-  if (start < 0) {
+  const escapedChannel = channel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = new RegExp(
+    `ipcMain\\.handle\\(\\s*['"]${escapedChannel}['"]`,
+  ).exec(combinedSource);
+  if (!match) {
     return null;
   }
 
+  const start = match.index;
   const openParen = combinedSource.indexOf('(', start);
   if (openParen < 0) {
     return null;
@@ -346,6 +357,7 @@ module.exports = {
   readCombinedMainProcessSource,
   extractIpcMainHandleChannels,
   extractWebContentsSendChannels,
+  resolveAiAddonProgressChannelLiteral,
   extractPreloadInvokeChannels,
   extractPreloadListenerChannels,
   extractIpcHandlerSource,

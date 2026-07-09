@@ -256,6 +256,27 @@ test('ai-addon-setup facade export keys stay stable', () => {
   assert.deepEqual(Object.keys(setup).sort(), EXPECTED_AI_ADDON_SETUP_EXPORTS);
 });
 
+test('AI_ADDON_PROGRESS_CHANNEL and AI_ADDON_CANCEL_CODE keep their pinned string values', () => {
+  // Phase 4 requires these exact values; pin them here so preload literals cannot
+  // diverge from the exported constants without failing Phase 0.1.
+  const {
+    AI_ADDON_PROGRESS_CHANNEL,
+    AI_ADDON_CANCEL_CODE,
+  } = require('../../src/ai-addon-setup');
+
+  assert.equal(AI_ADDON_PROGRESS_CHANNEL, 'ai-addon-progress');
+  assert.equal(AI_ADDON_CANCEL_CODE, 'AI_ADDON_SETUP_CANCELLED');
+
+  const preloadSource = readUtf8(PRELOAD_PATH);
+  assert.match(
+    preloadSource,
+    new RegExp(`addListener\\(\\s*['"]${AI_ADDON_PROGRESS_CHANNEL}['"]`),
+  );
+
+  const sendChannels = extractWebContentsSendChannels(readCombinedMainProcessSource());
+  assert.ok(sendChannels.includes(AI_ADDON_PROGRESS_CHANNEL));
+});
+
 test('Phase 0.1 scan roots include main.js and survive a future src/main/ tree', () => {
   const mainEntry = path.join(ROOT, 'src', 'main.js');
   assert.equal(fs.existsSync(mainEntry), true);
