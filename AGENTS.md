@@ -64,6 +64,11 @@ AvaNevis is a privacy-first Electron desktop app for recording microphone audio 
 - `src/renderer/index.html`: renderer markup
 - `src/renderer/styles.css`: renderer styles
 - `src/updater.js`: GitHub Releases update checker
+- `src/ai-addon-setup.js`: Pattern A facade for local AI add-on setup (manifest, downloads, archives, diarization/summary setup); keep the public `module.exports` key set and `AI_ADDON_PROGRESS_CHANNEL` / `AI_ADDON_CANCEL_CODE` string values stable
+- `src/ai-addon/`: Phase 4 domain modules re-exported by the facade — `progress-events.js`, `download-helpers.js`, `manifest-store.js`, `archive-install.js` (PR A); diarization/summary setup flows still live in the facade until PR B
+- `src/ai-addon-state.js`: catalog pins, paths, manifest normalize/load, availability helpers
+- `src/ai-addon-token-store.js`: Hugging Face token in Electron `safeStorage`
+- `src/ai-addon-archive-helpers.js`: zip/tar path-traversal guards shared with extractor workers
 
 ### Python backend
 
