@@ -1,6 +1,6 @@
 ---
 description: Whisper cache locations, completeness checks, and offline spawn policy
-globs: src/main-process-helpers.js,src/main.js,backend/transcription/**,tests/js/main-process-helpers.test.js,tests/python/test_transcriber_helpers.py
+globs: src/main-process-helpers.js,src/main-process/transcription-*.js,src/main.js,src/main/transcription-service.js,backend/transcription/**,tests/js/main-process-helpers.test.js,tests/python/test_transcriber_helpers.py
 alwaysApply: false
 ---
 
@@ -20,7 +20,7 @@ Whisper caches are **separate** from diarization under `userData/ai-addons/model
 
 ## Implementation map
 
-- UI / spawn: `cacheContainsCompleteTranscriptionModel`, `buildTranscriptionRuntimeEnv` in `src/main-process-helpers.js`; `getTranscriptionRuntimeEnv` in `src/main.js`.
+- UI / spawn: `cacheContainsCompleteTranscriptionModel`, `buildTranscriptionRuntimeEnv` in `src/main-process-helpers.js` / `src/main-process/`; `getTranscriptionRuntimeEnv` / download-model in `src/main/transcription-service.js` (wired from `src/main.js`).
 - Python: `has_cached_faster_whisper_model`, `AVANEVIS_TRANSCRIPTION_HF_CACHE_DIR`, `AVANEVIS_TRANSCRIPTION_LOCAL_FILES_ONLY` in `backend/transcription/faster_whisper_transcriber.py`; `_required_model_files_cached` in `backend/transcription/mlx_whisper_transcriber.py`.
 
 ## Offline behavior

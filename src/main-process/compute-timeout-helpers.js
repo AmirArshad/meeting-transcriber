@@ -4,6 +4,9 @@ const AI_COMPUTE_TIMEOUT_MS = Object.freeze({
   diarization: 30 * 60 * 1000,
   guidedTranscription: 120 * 60 * 1000,
   summary: 90 * 60 * 1000,
+  meetingPreflight: 60 * 1000,
+  // Max time download-model may block waiting for GPU compute to go idle.
+  modelDownloadIdleWait: 15 * 60 * 1000,
 });
 
 function getTranscriptionComputeTimeoutMs(modelSize) {

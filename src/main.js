@@ -61,6 +61,7 @@ const {
   MACOS_PERMISSION_CHECK_TIMEOUT_MS,
   AI_COMPUTE_TIMEOUT_MS,
   getTranscriptionComputeTimeoutMs,
+  getTranscriberModule,
   runWallClockComputeAction,
 } = require('./main-process-helpers');
 const { checkForUpdates, openDownloadPage } = require('./updater');
@@ -128,6 +129,7 @@ const {
   aiComputeActionQueue,
   enqueueAiComputeAction,
   createAbortableComputeAction,
+  waitForAiComputeQueueIdle,
 } = aiComputeQueue;
 
 function getSafeStorage() {
@@ -233,7 +235,16 @@ function assertTrustedRendererSender(event) {
 function hasInFlightAiWork() {
   return (aiAddonIpc ? aiAddonIpc.hasInFlightAiAddonSetup() : false)
     || (summaryService ? summaryService.hasActiveSummaryGeneration() : false)
-    || aiComputeActionQueue.hasPendingWork();
+    || aiComputeActionQueue.hasPendingWork()
+    || (gpuRuntimeService ? gpuRuntimeService.hasInFlightGpuRuntimeAction() : false);
+}
+
+function consumeAllowImmediateQuit() {
+  if (!allowImmediateQuit) {
+    return false;
+  }
+  allowImmediateQuit = false;
+  return true;
 }
 
 function abortInFlightAiSetup() {
@@ -252,17 +263,23 @@ function abortInFlightAiWork() {
 async function drainAiWorkBeforeQuit() {
   const metadataPhaseActive = summaryService
     && summaryService.getActiveSummaryPhase() === 'metadata';
+  const gpuRuntimeBusy = gpuRuntimeService
+    && gpuRuntimeService.hasInFlightGpuRuntimeAction();
 
   abortInFlightAiSetup();
   if (summaryService) {
     summaryService.abortActiveSummaryForQuit('Summary generation was canceled because the app is quitting.');
   }
 
-  const drainTimeoutMs = metadataPhaseActive ? 15000 : 30000;
+  // Metadata writes and GPU pip installs need longer than cancelable compute jobs.
+  const drainTimeoutMs = metadataPhaseActive || gpuRuntimeBusy ? 90000 : 30000;
   try {
     const drains = [aiComputeActionQueue.drain()];
     if (aiAddonIpc) {
       drains.push(aiAddonIpc.aiAddonActionQueue.drain());
+    }
+    if (gpuRuntimeService) {
+      drains.push(gpuRuntimeService.waitForGpuRuntimeIdle());
     }
     await Promise.race([
       Promise.all(drains),
@@ -464,6 +481,7 @@ transcriptionService = createTranscriptionService({
   spawnTrackedPython,
   getBackendModuleArgs,
   enqueueAiComputeAction,
+  waitForAiComputeQueueIdle,
   getCachedCudaStatus,
   buildCudaRuntimeEnv,
   getAiAddonRuntimeOptions,
@@ -530,6 +548,8 @@ recorderService = createRecorderService({
   setAllowImmediateQuit: (value) => { allowImmediateQuit = value; },
   getQuitWorkflowPromise: () => quitWorkflowPromise,
   setQuitWorkflowPromise: (value) => { quitWorkflowPromise = value; },
+  hasInFlightAiWork,
+  drainAiWorkBeforeQuit,
   validateSelectedDevices,
   checkDiskSpace,
   checkAudioOutputSupport,
@@ -547,6 +567,7 @@ function getBackendModuleArgs(moduleName, extraArgs = []) {
 function buildManagedDiarizationValidationArgs(modelRef, requiredDevice) {
   const args = [
     '--validate-setup',
+    '--token-stdin',
     '--model-ref', modelRef || 'pyannote/speaker-diarization-community-1',
   ];
 
@@ -625,7 +646,7 @@ process.env.PYTHONWARNINGS = 'ignore::DeprecationWarning,ignore::UserWarning';
 console.log('Python Configuration:', pythonConfig);
 console.log('userData path:', app.getPath('userData'));
 console.log('Recordings will be saved to:', path.join(app.getPath('userData'), 'recordings'));
-console.log('Transcriber module:', transcriberModule);
+console.log('Transcriber module:', getTranscriberModule(process.platform, process.arch));
 
 // ============================================================================
 // Safety Checks and Verification Functions
@@ -1200,19 +1221,22 @@ app.on('window-all-closed', () => {
 
 // Clean up on quit
 app.on('before-quit', (event) => {
+  // One-shot: a prior graceful quit path may arm this for a single pass only.
+  const immediateQuitArmed = consumeAllowImmediateQuit();
+
   const quitState = getQuitInterceptState(
     recorderService
       ? recorderService.getQuitInterceptInputs()
       : { hasRecordingProcess: false, recordingStartTime: null, stopInProgress: false },
   );
 
-  if (!allowImmediateQuit && quitState.interceptQuit) {
+  if (!immediateQuitArmed && quitState.interceptQuit) {
     event.preventDefault();
     void recorderService.handleQuitDuringRecording(quitState);
     return;
   }
 
-  if (!allowImmediateQuit && hasInFlightAiWork()) {
+  if (!immediateQuitArmed && hasInFlightAiWork()) {
     event.preventDefault();
     void (async () => {
       await drainAiWorkBeforeQuit();
@@ -1255,12 +1279,10 @@ app.on('before-quit', (event) => {
 
 // Device probes (validate-devices, check-disk-space, check-audio-output,
 // get-audio-devices, warm-up-audio-system, get-macos-permission-status) are
-// registered by registerDeviceIpc above. run-recording-preflight stays here and
-// calls the exported probe helpers (checkDiskSpace, validateSelectedDevices,
-// checkAudioOutputSupport, getMacOSPermissionStatus).
-// run-recording-preflight is registered by createRecorderService above.
+// registered by registerDeviceIpc above. run-recording-preflight is registered
+// by createRecorderService.
 
-ipcMain.handle('get-pending-update-info', async () => pendingUpdateInfo);ipcMain.handle('get-pending-update-info', async () => pendingUpdateInfo);
+ipcMain.handle('get-pending-update-info', async () => pendingUpdateInfo);
 
 function getRecordingsDir() {
   return path.join(app.getPath('userData'), 'recordings');
@@ -1420,14 +1442,6 @@ function terminateProcessBestEffort(proc) {
 
 // retry-transcription is registered by createTranscriptionService above.
 
-/**
- * Update editable meeting metadata (currently: display title).
-/**
- * Update editable meeting metadata (currently: display title).
- *
- * Audio/transcript filenames stay anchored to the meeting ID; only the
- * label that the UI shows changes.
- */
 // update-meeting and update-meeting-ai are registered by
 // registerMeetingManagerClient above. save-transcript-file,
 // save-speaker-segments-file, and save-transcript-as are registered by

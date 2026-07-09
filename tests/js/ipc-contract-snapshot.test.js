@@ -10,6 +10,7 @@ const {
   readUtf8,
   readCombinedMainProcessSource,
   extractIpcMainHandleChannels,
+  findDuplicateIpcMainHandleChannels,
   extractWebContentsSendChannels,
   extractPreloadInvokeChannels,
   extractPreloadListenerChannels,
@@ -226,6 +227,11 @@ const EXPECTED_AI_ADDON_SETUP_EXPORTS = [
 test('ipcMain.handle channels match the Phase 0 invoke snapshot', () => {
   const combined = readCombinedMainProcessSource();
   assert.deepEqual(extractIpcMainHandleChannels(combined), EXPECTED_INVOKE_CHANNELS);
+});
+
+test('ipcMain.handle channels are registered at most once', () => {
+  const combined = readCombinedMainProcessSource();
+  assert.deepEqual(findDuplicateIpcMainHandleChannels(combined), []);
 });
 
 test('preload invoke channels match main handle channels', () => {

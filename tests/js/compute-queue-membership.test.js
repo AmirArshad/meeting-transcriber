@@ -56,6 +56,13 @@ test('download-model and AI add-on setup handlers stay off the compute queue', (
       `${channel} must not enqueue on aiComputeActionQueue`,
     );
   }
+
+  const downloadModelSource = extractIpcHandlerSource(combined, 'download-model');
+  assert.match(
+    downloadModelSource,
+    /waitForAiComputeQueueIdle/,
+    'download-model must wait for compute-queue idle before spawning preload',
+  );
 });
 
 test('retry-transcription also enqueues on the compute queue', () => {
@@ -66,10 +73,12 @@ test('retry-transcription also enqueues on the compute queue', () => {
   assert.equal(handlerEnqueuesComputeAction(handlerSource), true);
 });
 
-test('AI_COMPUTE_TIMEOUT_MS pins diarization, guided transcription, and summary limits', () => {
+test('AI_COMPUTE_TIMEOUT_MS pins diarization, guided transcription, summary, meeting preflight, and model-download idle wait', () => {
   assert.equal(AI_COMPUTE_TIMEOUT_MS.diarization, 30 * 60 * 1000);
   assert.equal(AI_COMPUTE_TIMEOUT_MS.guidedTranscription, 120 * 60 * 1000);
   assert.equal(AI_COMPUTE_TIMEOUT_MS.summary, 90 * 60 * 1000);
+  assert.equal(AI_COMPUTE_TIMEOUT_MS.meetingPreflight, 60 * 1000);
+  assert.equal(AI_COMPUTE_TIMEOUT_MS.modelDownloadIdleWait, 15 * 60 * 1000);
 });
 
 test('getTranscriptionComputeTimeoutMs scales within the documented 30–120 minute band', () => {

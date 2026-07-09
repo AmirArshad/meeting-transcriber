@@ -1747,8 +1747,10 @@ function setupEventListeners() {
     }));
   }
 
-  // Listen for audio levels
   registerCleanup(window.electronAPI.onAudioLevels((levels) => {
+    if (levels?.sessionId != null && activeRecordingSessionId != null && levels.sessionId !== activeRecordingSessionId) {
+      return;
+    }
     if (audioVisualizer && recordingState === 'recording') {
       audioVisualizer.updateLevels(levels);
     }
@@ -1756,6 +1758,10 @@ function setupEventListeners() {
 
   // FIX 3 & 4: Listen for recording warnings (heartbeat lost)
   registerCleanup(window.electronAPI.onRecordingWarning((warning) => {
+    if (warning?.sessionId != null && activeRecordingSessionId != null && warning.sessionId !== activeRecordingSessionId) {
+      console.warn('Ignoring stale recording warning:', warning);
+      return;
+    }
     console.error('Recording warning:', warning);
     addLog(`⚠️ ${warning.message}`, warning.level === 'error' ? 'error' : 'warning');
 
@@ -2032,11 +2038,12 @@ async function startRecording() {
         throw new Error(recordingResult.message || 'Recording failed to start.');
       }
 
-      await countdownPromise;
-
+      // Bind session ID before countdown so stale events from a prior attempt are ignored.
       if (recordingResult?.sessionId != null) {
         activeRecordingSessionId = recordingResult.sessionId;
       }
+
+      await countdownPromise;
 
       // After first successful recording, set flag to false
       if (isFirstRecording) {
@@ -2174,6 +2181,17 @@ async function stopRecording() {
     const result = await window.electronAPI.stopRecording();
 
     if (result?.success === false) {
+      // Windows may still return a recoverable audioPath after a processing failure.
+      if (result.audioPath) {
+        currentAudioFile = result.audioPath;
+        currentRecordingDurationSeconds = Number(result.duration || 0);
+        addLog(`Recording saved with errors: ${currentAudioFile}`, 'warning');
+        addLog(`Recording failed: ${result.message || result.code}`, 'error');
+        setTranscriptMessage(result.message || 'Recording failed.', true);
+        addLog('Starting transcription for recovered recording...');
+        await transcribeAudio();
+        return;
+      }
       addLog(`Recording failed: ${result.message || result.code}`, 'error');
       setTranscriptMessage(result.message || 'Recording failed.', true);
       setRecordingState('idle');

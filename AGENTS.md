@@ -173,7 +173,7 @@ Key quality assumptions to preserve:
 ### Local AI add-ons remain explicit and catalog-driven
 
 - Speaker diarization uses `pyannote/speaker-diarization-community-1` with the user's own Hugging Face token only. Do not embed, proxy, log, or persist a maintainer-owned token.
-- Tokens must stay in Electron `safeStorage`; do not write token values to manifests, meeting metadata, transcripts, summaries, progress events, or logs.
+- Tokens must stay in Electron `safeStorage`; do not write token values to manifests, meeting metadata, transcripts, summaries, progress events, or logs. Diarization setup validation delivers the token via stdin (`--token-stdin`), not `HF_TOKEN` / `HUGGINGFACE_HUB_TOKEN` in the child environment.
 - Diarization runs automatically only after transcription when setup is complete and platform policy allows it.
 - For new recordings with diarization ready, prefer the diarization-guided transcription path: run pyannote first, build padded speaker windows, transcribe those windows, then save speaker-labeled transcript chunks. If that guided path fails, save a normal transcript and persist diarization error metadata.
 - Diarization model refs must be resolved from the catalog in the main process, not trusted from renderer input.
@@ -235,7 +235,7 @@ Heavy local AI work runs through a single main-process compute queue (`aiCompute
 
 **Not on the compute queue**
 
-- Whisper model download / preload (`download-model`) — must remain off-queue so downloads can proceed while transcription is idle or blocked behind other work; do not merge with the compute queue.
+- Whisper model download / preload (`download-model`) — stays **off** the compute queue (must not enqueue), but waits for the compute queue to go idle first (bounded by `AI_COMPUTE_TIMEOUT_MS.modelDownloadIdleWait`) to avoid VRAM contention with transcription/diarization/summary; do not merge downloads onto the compute queue.
 - AI add-on setup downloads (`aiAddonActionQueue`) — separate serialization from compute.
 
 **Wall-clock timeouts**
@@ -246,6 +246,8 @@ Each enqueued compute job is wrapped with `runWallClockComputeAction` in `src/ma
 - Speaker identification (diarization): 30 minutes (`AI_COMPUTE_TIMEOUT_MS.diarization`)
 - Speaker-guided transcription: 120 minutes (`AI_COMPUTE_TIMEOUT_MS.guidedTranscription`)
 - Summary generation: 90 minutes (`AI_COMPUTE_TIMEOUT_MS.summary`)
+- Meeting lookup preflight (`retry-transcription`): 60 seconds (`AI_COMPUTE_TIMEOUT_MS.meetingPreflight`)
+- Whisper `download-model` idle wait (off-queue): 15 minutes (`AI_COMPUTE_TIMEOUT_MS.modelDownloadIdleWait`)
 
 Hung children must not stall the queue indefinitely.
 

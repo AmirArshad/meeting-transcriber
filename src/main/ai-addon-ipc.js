@@ -230,8 +230,9 @@ function createAiAddonIpc(deps) {
             ...getDiarizationDependencyEnv(),
             ...getDiarizationCacheEnv(),
             ...buildCudaRuntimeEnv({}, { includeManagedDiarization: true }),
-            HF_TOKEN: resolvedToken || '',
-            HUGGINGFACE_HUB_TOKEN: resolvedToken || '',
+            // Prefer stdin token delivery; keep env empty so process tables cannot scrape HF tokens.
+            HF_TOKEN: '',
+            HUGGINGFACE_HUB_TOKEN: '',
           },
         });
 
@@ -260,6 +261,17 @@ function createAiAddonIpc(deps) {
           cleanupCancel();
           callback(value);
         };
+        // Async EPIPE if the child dies before reading stdin is not caught by try/catch.
+        python.stdin.on('error', (error) => {
+          finish(reject, new Error(`Failed to deliver Hugging Face token: ${error.message}`));
+        });
+        try {
+          python.stdin.write(resolvedToken ? `${resolvedToken}\n` : '\n');
+          python.stdin.end();
+        } catch (error) {
+          finish(reject, new Error(`Failed to deliver Hugging Face token to validation process: ${error.message}`));
+          return;
+        }
         python.stdout.on('data', (data) => { output = appendSpawnLogBuffer(output, data); });
         python.stderr.on('data', (data) => {
           const stderrChunk = data.toString();

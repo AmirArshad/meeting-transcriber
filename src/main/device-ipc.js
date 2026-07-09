@@ -4,9 +4,10 @@
  * Device + preflight IPC service for the AvaNevis main process.
  *
  * Owns the audio-device, disk-space, audio-output, and macOS-permission probes
- * plus their IPC channels. The `run-recording-preflight` handler stays in
- * `src/main.js` but calls the exported helpers. Handler/helper bodies are moved
- * verbatim; cross-module dependencies are injected via `deps`.
+ * plus their IPC channels. `run-recording-preflight` is registered by
+ * `src/main/recorder-service.js` and calls the exported probe helpers.
+ * Handler/helper bodies are moved verbatim; cross-module dependencies are
+ * injected via `deps`.
  */
 
 /**

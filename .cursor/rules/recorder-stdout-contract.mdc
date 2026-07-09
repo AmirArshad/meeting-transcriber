@@ -1,6 +1,6 @@
 ---
 description: Recorder stdout JSON contract and Electron parser coupling
-globs: backend/audio/**,src/main.js,src/main-process-helpers.js,tests/js/main-process-helpers.test.js
+globs: backend/audio/**,src/main.js,src/main/recorder-service.js,src/main-process-helpers.js,src/main-process/recorder-output-helpers.js,tests/js/main-process-helpers.test.js,tests/js/recorder-event-contract.test.js
 alwaysApply: false
 ---
 
@@ -9,8 +9,8 @@ alwaysApply: false
 Reference: `docs/completed/json-based-events.md` (migration complete — preserve contract unless updating both sides).
 
 - Recorder **control flow** uses structured **stdout** JSON: `levels`, `event`, `warning`, `error`. stderr is debug-only; do not drive startup or errors from stderr.
-- Electron parses via `parseRecorderStdoutChunk` in `src/main.js` (line-by-line stdout).
-- If you change startup/progress in `backend/audio/windows_recorder.py` or `backend/audio/macos_recorder.py`, update together: both recorders (if applicable), `src/main.js`, `src/main-process-helpers.js`, `tests/js/main-process-helpers.test.js`.
-- Final result JSON: Windows uses `audioPath`; macOS uses `outputPath` — `src/main.js` supports both.
+- Electron parses via `parseRecorderStdoutChunk` in `src/main/recorder-service.js` (line-by-line stdout). Helpers live in `src/main-process/recorder-output-helpers.js` (re-exported by `src/main-process-helpers.js`).
+- If you change startup/progress in `backend/audio/windows_recorder.py` or `backend/audio/macos_recorder.py`, update together: both recorders (if applicable), `src/main/recorder-service.js`, `src/main-process-helpers.js` / recorder-output helpers, `tests/js/main-process-helpers.test.js`, and `tests/js/recorder-event-contract.test.js`.
+- Final result JSON: Windows uses `audioPath`; macOS uses `outputPath` — stop parsing accepts both. Prefer structured `success` / `success:false` payloads; non-zero exit may still carry a recoverable `audioPath`.
 - Preserve post-processing mix: record mic and desktop separately; mix after stop. Do not reintroduce real-time mixing without an intentional redesign.
 - Audio output assumptions: 48 kHz stereo, mono-compatible stereo for transcription downmixes, Opus via ffmpeg, gentle mic processing, faithful desktop audio.

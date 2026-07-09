@@ -151,12 +151,17 @@ function normalizeRecordingStopPayload(recordingInfo, { existsSync = () => false
   }
 
   if (recordingInfo.success === false) {
+    const failedPath = getRecorderResultAudioPath(recordingInfo);
+    const recoveredPath = failedPath && existsSync(failedPath) ? failedPath : null;
     return {
       success: false,
       code: recordingInfo.code || 'RECORDING_FAILED',
       message: recordingInfo.message || 'Recording failed.',
       duration: recordingInfo.duration,
       desktopDiagnostics: recordingInfo.desktopDiagnostics,
+      // Windows may still emit audioPath after a processing failure; preserve it
+      // so quit/stop can save the recording when the file exists on disk.
+      ...(recoveredPath ? { audioPath: recoveredPath } : {}),
     };
   }
 

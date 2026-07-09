@@ -1366,6 +1366,42 @@ test('findRecorderResultPayload accepts Windows audioPath payloads', () => {
 });
 
 
+test('findRecorderResultPayload accepts Windows audioPath without success key', () => {
+  const output = [
+    '{"type":"levels","mic":0.1,"desktop":0}',
+    '{"audioPath":"C:\\\\Users\\\\me\\\\recordings\\\\meeting.opus","duration":8.25}',
+  ].join('\n');
+
+  assert.deepEqual(findRecorderResultPayload(output), {
+    audioPath: 'C:\\Users\\me\\recordings\\meeting.opus',
+    duration: 8.25,
+  });
+});
+
+
+test('normalizeRecordingStopPayload recovers audioPath from structured Windows failures', () => {
+  const exists = (filePath) => filePath === 'C:\\recordings\\meeting.opus';
+
+  assert.deepEqual(
+    normalizeRecordingStopPayload({
+      success: false,
+      code: 'RECORDER_FAILED',
+      message: 'Recorder failed: post-process error',
+      audioPath: 'C:\\recordings\\meeting.opus',
+      duration: 8.25,
+    }, { existsSync: exists }),
+    {
+      success: false,
+      code: 'RECORDER_FAILED',
+      message: 'Recorder failed: post-process error',
+      duration: 8.25,
+      desktopDiagnostics: undefined,
+      audioPath: 'C:\\recordings\\meeting.opus',
+    },
+  );
+});
+
+
 test('getRecorderResultAudioPath normalizes Windows and macOS recorder payloads', () => {
   assert.equal(
     getRecorderResultAudioPath({

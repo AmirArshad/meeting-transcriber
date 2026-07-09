@@ -32,6 +32,10 @@ const MAX_DOWNLOAD_REDIRECTS = 5;
 
 const LATE_DOWNLOAD_ABORT_CODES = new Set(['ECONNABORTED', 'ECONNRESET']);
 
+// Explicit redirect/CDN hosts for JS downloadFile fallbacks. HF summary models
+// normally use bundled Python huggingface_hub/hf_xet (bypassing this list) and
+// remain SHA-256 pinned. When HF/Xet rotates CDN subdomains, add the new host
+// here — do not reintroduce *.hf.co / *.huggingface.co wildcards.
 const DOWNLOAD_REDIRECT_HOSTS = new Set([
   'objects.githubusercontent.com',
   'release-assets.githubusercontent.com',
@@ -114,11 +118,9 @@ function isAllowedDownloadUrl(url) {
 
 function isAllowedDownloadHost(hostname) {
   const normalizedHostname = String(hostname || '').toLowerCase();
-  // Hugging Face/Xet redirects rotate among CDN subdomains. Artifact downloads
-  // that rely on this wildcard must still pass pinned SHA-256 validation.
-  return ALLOWED_DOWNLOAD_HOSTS.has(normalizedHostname)
-    || normalizedHostname.endsWith('.hf.co')
-    || normalizedHostname.endsWith('.huggingface.co');
+  // Explicit allowlist only (catalog hosts + known HF/Xet/GitHub redirect hosts).
+  // Do not wildcard *.hf.co — pin mistakes should not expand blast radius.
+  return ALLOWED_DOWNLOAD_HOSTS.has(normalizedHostname);
 }
 
 function getDownloadHost(url) {

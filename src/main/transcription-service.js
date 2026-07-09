@@ -82,6 +82,7 @@ function createTranscriptionService(deps) {
     spawnTrackedPython,
     getBackendModuleArgs,
     enqueueAiComputeAction,
+    waitForAiComputeQueueIdle = async () => {},
     getCachedCudaStatus,
     buildCudaRuntimeEnv,
     getAiAddonRuntimeOptions,
@@ -372,6 +373,20 @@ function createTranscriptionService(deps) {
      */
     ipcMain.handle('download-model', async (event, modelSize) => {
       const model = requireAllowedModelSize(modelSize);
+      // Stay off the compute queue (downloads must not block transcription),
+      // but wait for idle GPU compute first to avoid VRAM contention/OOM.
+      // Bound the wait so a long transcription queue cannot hang the UI forever.
+      await waitForAiComputeQueueIdle({
+        cancelMessage: 'Model download was canceled while waiting for local AI work to finish.',
+        timeoutMs: AI_COMPUTE_TIMEOUT_MS.modelDownloadIdleWait,
+        timeoutMessage: 'Timed out waiting for local AI work to finish before downloading the Whisper model. Try again when transcription is idle.',
+        onWaiting: () => {
+          sendToRenderer(
+            'model-download-progress',
+            'Waiting for local AI work to finish before downloading the Whisper model...\n',
+          );
+        },
+      });
       return new Promise((resolve, reject) => {
         console.log(`Downloading Whisper model: ${model}`);
 
@@ -702,32 +717,37 @@ function createTranscriptionService(deps) {
       }
 
       const recordingsDir = getRecordingsDir();
-      const meeting = await new Promise((resolve, reject) => {
-        const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
-          '--recordings-dir', recordingsDir,
-          'get',
-          meetingId,
-        ]), { cwd: pythonConfig.backendPath });
-        const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
+      const meeting = await runWallClockComputeAction({
+        timeoutMs: AI_COMPUTE_TIMEOUT_MS.meetingPreflight,
+        label: 'Meeting lookup',
+        terminateProcess: terminateProcessBestEffort,
+        action: (registerProcess) => new Promise((resolve, reject) => {
+          const python = registerProcess(spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
+            '--recordings-dir', recordingsDir,
+            'get',
+            meetingId,
+          ]), { cwd: pythonConfig.backendPath }));
+          const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
 
-        python.on('close', (code) => {
-          try {
-            processOutput.assertStdoutWithinLimit();
-          } catch (error) {
-            reject(error);
-            return;
-          }
-          if (code !== 0) {
-            reject(new Error(processOutput.getStderr().trim() || 'Meeting not found.'));
-            return;
-          }
-          try {
-            resolve(JSON.parse(processOutput.getStdout()));
-          } catch (error) {
-            reject(new Error(`Failed to parse meeting details: ${error.message}`));
-          }
-        });
-        python.on('error', reject);
+          python.on('close', (code) => {
+            try {
+              processOutput.assertStdoutWithinLimit();
+            } catch (error) {
+              reject(error);
+              return;
+            }
+            if (code !== 0) {
+              reject(new Error(processOutput.getStderr().trim() || 'Meeting not found.'));
+              return;
+            }
+            try {
+              resolve(JSON.parse(processOutput.getStdout()));
+            } catch (error) {
+              reject(new Error(`Failed to parse meeting details: ${error.message}`));
+            }
+          });
+          python.on('error', reject);
+        }),
       });
 
       if (!meeting || !meeting.audioPath || !meeting.transcriptPath) {

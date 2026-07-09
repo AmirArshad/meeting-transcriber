@@ -64,7 +64,14 @@ function createAiComputeQueue(deps = {}) {
   const aiComputeActionQueue = actionQueue;
   const enqueueAiComputeAction = aiComputeActionQueue.enqueue;
 
-  function waitForAiComputeQueueIdle({ cancelSignal, cancelMessage, pollIntervalMs = 250 }) {
+  function waitForAiComputeQueueIdle({
+    cancelSignal,
+    cancelMessage,
+    pollIntervalMs = 250,
+    timeoutMs = null,
+    timeoutMessage = 'Timed out waiting for local AI work to finish.',
+    onWaiting = null,
+  } = {}) {
     return new Promise((resolve, reject) => {
       if (cancelSignal && cancelSignal.aborted) {
         reject(createAiAddonCancelError(cancelMessage));
@@ -72,7 +79,9 @@ function createAiComputeQueue(deps = {}) {
       }
 
       let timer = null;
+      let timeoutHandle = null;
       let settled = false;
+      let waitingNotified = false;
       const cleanupAbort = cancelSignal && typeof cancelSignal.addEventListener === 'function'
         ? (() => {
           const handleAbort = () => {
@@ -83,6 +92,10 @@ function createAiComputeQueue(deps = {}) {
             if (timer) {
               clearInterval(timer);
               timer = null;
+            }
+            if (timeoutHandle) {
+              clearTimeout(timeoutHandle);
+              timeoutHandle = null;
             }
             reject(createAiAddonCancelError(cancelMessage));
           };
@@ -100,6 +113,10 @@ function createAiComputeQueue(deps = {}) {
           clearInterval(timer);
           timer = null;
         }
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+          timeoutHandle = null;
+        }
         cleanupAbort();
         callback(value);
       };
@@ -111,12 +128,28 @@ function createAiComputeQueue(deps = {}) {
         }
         if (!aiComputeActionQueue.hasPendingWork()) {
           finish(resolve);
+          return;
+        }
+        if (!waitingNotified && typeof onWaiting === 'function') {
+          waitingNotified = true;
+          try {
+            onWaiting();
+          } catch (error) {
+            // Progress callbacks must not break the idle wait.
+          }
         }
       };
 
       checkIdle();
       if (settled) {
         return;
+      }
+
+      if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+        timeoutHandle = setTimeout(() => {
+          finish(reject, new Error(timeoutMessage));
+        }, timeoutMs);
+        timeoutHandle.unref?.();
       }
 
       timer = setInterval(checkIdle, pollIntervalMs);

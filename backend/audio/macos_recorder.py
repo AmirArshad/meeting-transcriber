@@ -1243,8 +1243,7 @@ def main():
             'duration': recorder.recording_duration,
             'desktopDiagnostics': recorder.desktop_diagnostics,
         }
-    with _stdout_lock:
-        print(json.dumps(result), flush=True)
+    _send_json_message(result)
     sys.exit(0)
 
 
