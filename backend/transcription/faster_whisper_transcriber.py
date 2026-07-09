@@ -7,7 +7,6 @@ Supports all Whisper languages with English as default.
 
 import sys
 import os
-import contextlib
 from datetime import datetime
 from inspect import Parameter, signature
 from typing import Optional, List, Dict, Any
@@ -16,6 +15,7 @@ from pathlib import Path
 from .base_transcriber import BaseTranscriber
 from .formatting import format_timestamp, merge_segments, save_transcript_markdown
 from .nvidia_dll_loader import add_python_nvidia_bin_dirs_to_path
+from common.hf_runtime import hugging_face_offline_mode
 
 
 # Keep aligned with cacheContainsCompleteFasterWhisperModel in src/main-process-helpers.js (AGENTS.md).
@@ -30,23 +30,6 @@ _RETRYABLE_CUDA_ERROR_PATTERNS = (
     "cuda failed",
     "cuda error",
 )
-
-
-@contextlib.contextmanager
-def hugging_face_offline_mode(enabled: bool):
-    keys = ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE")
-    previous = {key: os.environ.get(key) for key in keys}
-    if enabled:
-        for key in keys:
-            os.environ[key] = "1"
-    try:
-        yield
-    finally:
-        for key, value in previous.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
 
 
 def get_hugging_face_hub_cache_dir() -> Path:

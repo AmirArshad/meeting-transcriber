@@ -619,10 +619,10 @@ Suggested changes:
 | Change | New module | Risk |
 | --- | --- | --- |
 | Extract transcript timestamp/segment/Markdown helpers | `backend/transcription/formatting.py` | Low |
-| Extract shared structured event emitters | `backend/common/events.py` | Medium |
-| Extract Hugging Face env/cache primitives carefully | `backend/common/hf_runtime.py` | Medium |
+| Extract shared structured event emitters | `backend/common/events.py` | Medium — **still deferred** (recorder stdout vs AI stderr contracts differ) |
+| Extract Hugging Face env/cache primitives carefully | `backend/common/hf_runtime.py` | Medium — **done** (Phase 5B: shared `hugging_face_offline_mode`) |
 | Extract device enumeration normalization helpers | `backend/device_platforms.py` or `backend/device_helpers.py` | Low |
-| Extract diarization/audio prep helpers | `backend/diarization/audio_prep.py` | Medium |
+| Extract diarization/audio prep helpers | `backend/diarization/audio_prep.py` | Medium — **done** (Phase 5B) |
 | Extract summary sidecar writer helpers | `backend/summaries/sidecar_io.py` | Low |
 
 Validation:
