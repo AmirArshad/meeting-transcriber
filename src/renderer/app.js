@@ -22,6 +22,22 @@ const {
   replayPendingUpdateNotification,
   showUpdateNotificationBanner,
 } = window.updateNotificationHelpers;
+const {
+  formatAiAddonProgressText,
+  formatBytes,
+  formatDate,
+  formatRelativeDate,
+  formatStatusLabel,
+  formatTimestamp,
+} = window.formatters;
+const {
+  getMeetingTranscriptionStatusMessage,
+  isMeetingTranscriptionRetryable,
+} = window.summaryUiHelpers;
+const {
+  isAiAddonProgressPhase,
+  isAiAddonTerminalStatus,
+} = window.aiAddonUiHelpers;
 
 // UI Elements
 const micSelect = document.getElementById('mic-select');
@@ -570,26 +586,6 @@ function createMeetingListItem(meeting) {
   });
 
   return item;
-}
-
-function isMeetingTranscriptionRetryable(meeting) {
-  const status = meeting && meeting.transcriptionStatus;
-  return status === 'failed' || status === 'pending';
-}
-
-function getMeetingTranscriptionStatusMessage(meeting) {
-  if (!meeting) {
-    return '';
-  }
-  if (meeting.transcriptionStatus === 'failed') {
-    return meeting.transcriptionError
-      ? `Transcription failed: ${meeting.transcriptionError}`
-      : 'Transcription failed for this recording.';
-  }
-  if (meeting.transcriptionStatus === 'pending') {
-    return 'This recording has not been transcribed yet.';
-  }
-  return '';
 }
 
 function setTranscriptMessage(message, isError = false) {
@@ -2228,13 +2224,6 @@ async function stopRecording() {
   }
 }
 
-// Helper function to format seconds into MM:SS
-function formatTimestamp(seconds) {
-  const mins = Math.floor(seconds / 60);
-  const secs = Math.floor(seconds % 60);
-  return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
-}
-
 function renderTranscriptSegments(segments) {
   clearElement(transcriptOutput);
 
@@ -3143,41 +3132,6 @@ function addLog(message, type = 'info') {
   progressLog.scrollTop = progressLog.scrollHeight;
 }
 
-// Format date helper
-function formatDate(dateString) {
-  const date = new Date(dateString);
-  return date.toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
-  });
-}
-
-// Compact, Notion-style relative date for the meeting list
-function formatRelativeDate(dateString) {
-  const date = new Date(dateString);
-  if (Number.isNaN(date.getTime())) return '';
-  const now = new Date();
-  const diffMs = now - date;
-  const diffSec = Math.floor(diffMs / 1000);
-  const diffMin = Math.floor(diffSec / 60);
-  const diffHr = Math.floor(diffMin / 60);
-  const diffDay = Math.floor(diffHr / 24);
-
-  if (diffSec < 60) return 'just now';
-  if (diffMin < 60) return `${diffMin}m ago`;
-  if (diffHr < 24) return `${diffHr}h ago`;
-  if (diffDay < 7) return `${diffDay}d ago`;
-
-  const sameYear = date.getFullYear() === now.getFullYear();
-  return date.toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    ...(sameYear ? {} : { year: 'numeric' }),
-  });
-}
-
 // Tab switching
 function setupTabs() {
   const tabButtons = document.querySelectorAll('.tab-btn');
@@ -3189,19 +3143,6 @@ function setupTabs() {
       activateTab(button.dataset.tab);
     });
   });
-}
-
-function formatStatusLabel(status) {
-  const labels = {
-    notConfigured: 'Not configured',
-    needsAccount: 'Needs account',
-    downloading: 'Downloading',
-    validating: 'Validating',
-    ready: 'Ready',
-    error: 'Error',
-    unsupported: 'Unsupported',
-  };
-  return labels[status] || 'Unknown';
 }
 
 function setStatusBadge(badge, status) {
@@ -3218,58 +3159,6 @@ function setStatusBadge(badge, status) {
   } else {
     badge.classList.add('disabled');
   }
-}
-
-function isAiAddonTerminalStatus(status) {
-  return status === 'ready'
-    || status === 'error'
-    || status === 'notConfigured'
-    || status === 'needsAccount'
-    || status === 'unsupported';
-}
-
-function formatBytes(bytes) {
-  const value = Number(bytes) || 0;
-  if (value <= 0) {
-    return '0 MB';
-  }
-
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let size = value;
-  let unitIndex = 0;
-  while (size >= 1024 && unitIndex < units.length - 1) {
-    size /= 1024;
-    unitIndex += 1;
-  }
-
-  const precision = unitIndex >= 3 ? 1 : 0;
-  return `${size.toFixed(precision)} ${units[unitIndex]}`;
-}
-
-function isAiAddonProgressPhase(progress) {
-  const phase = progress && progress.phase;
-  return phase === 'downloading'
-    || phase === 'downloading-runtime'
-    || phase === 'downloading-dependencies'
-    || phase === 'extracting-runtime'
-    || phase === 'validating';
-}
-
-function formatAiAddonProgressText(progress) {
-  const message = progress && progress.message ? progress.message : 'Working...';
-  const percent = Number.isFinite(progress && progress.percent)
-    ? Math.max(0, Math.min(100, progress.percent))
-    : null;
-  const downloaded = Number(progress && progress.downloadedBytes) || 0;
-  const total = Number(progress && progress.totalBytes) || 0;
-
-  if (downloaded > 0 && total > 0) {
-    return `${message} ${formatBytes(downloaded)} of ${formatBytes(total)} (${Math.round(percent || ((downloaded / total) * 100))}%)`;
-  }
-  if (percent !== null) {
-    return `${message} ${Math.round(percent)}%`;
-  }
-  return message;
 }
 
 function renderAiAddonProgress(feature) {

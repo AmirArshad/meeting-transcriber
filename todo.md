@@ -45,7 +45,7 @@ Replaced Intel-only evermeet.cx ffmpeg with a pinned Apple Silicon static build 
 ## Next: AvaNevis Codebase Refactor
 
 Design doc: `docs/initiatives/AVANEVIS_CODEBASE_REFACTOR.md` (amended 2026-07-09 after Fable review).
-Branch: `refactor/codebase-phase-1` (Phase 1 main-process helper split; Phase 0 characterization tests landed earlier).
+Branch: `refactor/codebase-phase-2` (Phase 2 PR A: pure formatters + summary/AI predicates from `app.js`).
 
 Execution rule: one phase per PR unless the change is purely mechanical and tightly coupled. Prefer Pattern A/B for pure facade moves; use Pattern C (state container + DI) for Phase 3. Move code first, preserve behavior, then improve internals in later PRs. Revert (do not fix forward) any phase that breaks a preserved contract or a manual smoke check. Convert `test:syntax` to a glob in Phase 0; keep new renderer globals uniquely named; target ≤1,500 lines after owning phase (`app.js` soft-cap ~2,000 if helpers alone cannot hit 1,500).
 
@@ -54,6 +54,7 @@ Parallel tracks after Phase 0: main-process JS (1→3), renderer helpers (2), ai
 - [x] [Risk: Medium] Phase 0: characterization tests + `test:syntax` glob + Windows smoke baseline note. Mechanics: source-scan IPC/compute-queue over `src/main.js` + `src/main/**` (survives Phase 3 moves); facade export snapshots; send-channel snapshot; recorder `audioPath`/`outputPath` emitter asserts; pure-only renderer helper tests (no jsdom). Compute-queue scan (0.2) blocks Phase 3; recorder-event tests (0.4) block Phase 7. Smoke baseline tracker: `docs/initiatives/phase-0-smoke-baseline.md` (Windows run still to date-stamp; macOS scheduled).
 - [x] [Risk: Low] Phase 1: split `src/main-process-helpers.js` into domain modules under `src/main-process/` behind the existing facade (Pattern A). May run in parallel with Phase 5 low-risk subset.
 - [ ] [Risk: Medium] Phase 2: extract low-risk **pure** helpers from `src/renderer/app.js` in 2–3 PRs (formatters/dom → settings/transcript after DOM decision → summary/AI/GPU predicates). Corrected inventory: `getSummaryButtonMeetingId` and DOM creators are not pure. Controllers deferred.
+  - [x] PR A: `formatters.js` + `summary-ui-helpers.js` + `ai-addon-ui-helpers.js` (pure only; Pattern B). Deferred: `AudioVisualizer` (DOM), `dom-helpers.js`, settings/transcript Markdown, GPU UI.
 - [ ] [Risk: High] Phase 2 follow-up (deferred past Phase 3c): extract renderer recording/transcription controllers only if still needed after measuring `app.js` size; prefer soft-cap ~2,000 over a forced controller move.
 - [ ] [Risk: High] Phase 3a: Pattern C split of lower-risk `src/main.js` services (Python runtime, meeting manager client, device IPC, file export). Extra gate: Windows dev smoke + `build:dir` packaged launch.
 - [ ] [Risk: High] Phase 3b: AI/GPU services + behavioral fake-queue compute test; depends on 3a.
