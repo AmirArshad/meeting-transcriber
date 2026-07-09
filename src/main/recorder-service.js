@@ -12,18 +12,13 @@
 const {
   buildRecordingPreflightReport,
   buildQuitRecordingDialogOptions,
-  getQuitInterceptState,
   getRecorderCloseAction,
   getRecorderEventAction,
   getRecordingStopTimeout,
-  findRecorderResultPayload,
-  getRecorderResultAudioPath,
-  normalizeRecordingStopPayload,
   parseRecordingStopResult,
   resolveStopTimeoutAction,
   parseRecorderStdoutChunk,
   appendCappedSpawnLogBuffer,
-  SPAWN_LOG_BUFFER_MAX_CHARS,
   SPAWN_JSON_RESULT_BUFFER_MAX_CHARS,
   buildRecorderBusyResponse,
   isRecorderBusy,
@@ -31,6 +26,7 @@ const {
 
 /**
  * @param {object} deps
+ * @param {Function} deps.getRecordingsDir - Required for successful stop-result parsing.
  */
 function createRecorderService(deps) {
   const {
@@ -41,12 +37,9 @@ function createRecorderService(deps) {
     powerSaveBlocker,
     pythonConfig,
     spawnTrackedPython,
-    appendSpawnLogBuffer,
-    appendSpawnJsonStdout,
     sendToRenderer,
     assertTrustedRendererSender,
     getMainWindow,
-    getIsQuitting,
     setIsQuitting,
     getAllowImmediateQuit,
     setAllowImmediateQuit,
@@ -58,7 +51,12 @@ function createRecorderService(deps) {
     getMacOSPermissionStatus,
     addMeetingToHistory,
     formatDurationForTranscript,
+    getRecordingsDir,
   } = deps;
+
+  if (typeof getRecordingsDir !== 'function') {
+    throw new Error('createRecorderService requires getRecordingsDir');
+  }
 
   // Single shared recording lifecycle state — never copy these lets into main.js.
   let pythonProcess = null;
@@ -767,6 +765,7 @@ function createRecorderService(deps) {
     clearRecordingRuntimeState,
     stopRecordingProcess,
     waitForRecordingStop,
+    parseRecordingStopResultFromStdout,
     registerIpc,
   };
 }

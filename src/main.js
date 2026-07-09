@@ -523,12 +523,9 @@ recorderService = createRecorderService({
   powerSaveBlocker,
   pythonConfig,
   spawnTrackedPython,
-  appendSpawnLogBuffer,
-  appendSpawnJsonStdout,
   sendToRenderer,
   assertTrustedRendererSender,
   getMainWindow: () => mainWindow,
-  getIsQuitting: () => isQuitting,
   setIsQuitting: (value) => { isQuitting = value; },
   getAllowImmediateQuit: () => allowImmediateQuit,
   setAllowImmediateQuit: (value) => { allowImmediateQuit = value; },
@@ -540,6 +537,7 @@ recorderService = createRecorderService({
   getMacOSPermissionStatus,
   addMeetingToHistory,
   formatDurationForTranscript,
+  getRecordingsDir,
 });
 recorderService.registerIpc(ipcMain);
 

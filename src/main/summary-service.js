@@ -42,7 +42,6 @@ const {
  * @param {Function} deps.appendSpawnLogBuffer
  * @param {Function} deps.appendSpawnJsonStdout
  * @param {Function} deps.assertTrustedRendererSender
- * @param {Function} deps.getRecordingsDir
  * @param {Function} deps.assertSafeExistingTranscriptPath
  * @param {Function} deps.assertSafeExistingSegmentsPath
  * @param {Function} deps.terminateProcessBestEffort
