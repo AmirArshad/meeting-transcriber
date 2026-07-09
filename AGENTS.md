@@ -72,17 +72,20 @@ AvaNevis is a privacy-first Electron desktop app for recording microphone audio 
 
 ### Python backend
 
-- `backend/device_manager.py`: enumerate audio devices for UI
+- `backend/device_manager.py`: enumerate audio devices for UI (CLI/JSON contract unchanged)
+- `backend/device_helpers.py`: Phase 5 pure device enumeration helpers (blocklist, record shaping, dedupe, sort, macOS virtual loopback)
 - `backend/meeting_manager.py`: persistent meeting history in `meetings.json`, dedupe, scan/import, delete with retry
 - `backend/check_permissions.py`: macOS permission checks
 - `backend/audio/windows_recorder.py`: Windows recording pipeline using `pyaudiowpatch` WASAPI loopback
 - `backend/audio/macos_recorder.py`: macOS recording pipeline using `sounddevice` + Swift helper desktop capture with PyObjC fallback
 - `backend/audio/swift_audio_capture.py`: Python bridge to bundled Swift helper; preserves raw PCM stdout and JSON stderr helper contract
 - `backend/audio/processor.py`, `backend/audio/compressor.py`, `backend/audio/timeline.py`, `backend/audio/constants.py`: Windows audio processing modules
+- `backend/transcription/formatting.py`: Phase 5 shared transcript timestamp/segment-merge/Markdown helpers used by faster-whisper, MLX, and guided transcription
 - `backend/transcription/faster_whisper_transcriber.py`: Windows/default transcriber
 - `backend/transcription/mlx_whisper_transcriber.py`: Apple Silicon transcriber
 - `backend/diarization/diarization_pipeline.py`: local pyannote diarization runner and timestamp/speaker merge output
 - `backend/diarization/guided_transcription.py`: diarization-first speaker-guided transcription flow using padded speaker turns
+- `backend/summaries/sidecar_io.py`: Phase 5 summary sidecar path helpers and atomic JSON/Markdown writers (re-exported by `summary_runner`)
 - `backend/summaries/summary_pipeline.py`, `backend/summaries/summary_runner.py`, `backend/summaries/llama_runtime.py`, `backend/summaries/hf_model_downloader.py`: local summary chunking, prompts, JSON validation/repair, Markdown rendering, pinned `llama.cpp` execution, and Hugging Face/Xet-backed summary model downloads
 
 ### Native macOS helper
