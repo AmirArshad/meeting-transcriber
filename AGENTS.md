@@ -75,7 +75,7 @@ AvaNevis is a privacy-first Electron desktop app for recording microphone audio 
 
 - `backend/device_manager.py`: enumerate audio devices for UI (CLI/JSON contract unchanged)
 - `backend/device_helpers.py`: Phase 5 pure device enumeration helpers (blocklist, record shaping, dedupe, sort, macOS virtual loopback)
-- `backend/common/`: shared Python helpers (currently `sensitive_text.py` redaction); Phase 5 medium-risk `events` / `hf_runtime` extractions remain deferred
+- `backend/common/`: shared Python helpers — `sensitive_text.py` (redaction), `hf_runtime.py` (shared `hugging_face_offline_mode`); Phase 5 medium-risk shared recorder `events` extraction remains deferred (stdout contracts differ by consumer)
 - `backend/meeting_manager.py`: persistent meeting history CLI/orchestration (`python -m meeting_manager`); public methods remain instance-method monkeypatch seams
 - `backend/meetings/`: Phase 6 helpers — `normalization.py` (status/error/hash/text/metadata parse), `scan_import.py` (scannable audio selection, duration/id parsing), `paths.py` (recordings-path/sidecar safety), `store.py` (FileLock + atomic JSON), `delete_tx.py` (tombstone/rollback delete helpers)
 - `backend/check_permissions.py`: macOS permission checks
@@ -88,6 +88,7 @@ AvaNevis is a privacy-first Electron desktop app for recording microphone audio 
 - `backend/transcription/formatting.py`: Phase 5 shared transcript timestamp/segment-merge/Markdown helpers used by faster-whisper, MLX, and guided transcription
 - `backend/transcription/faster_whisper_transcriber.py`: Windows/default transcriber
 - `backend/transcription/mlx_whisper_transcriber.py`: Apple Silicon transcriber
+- `backend/diarization/audio_prep.py`: Phase 5B diarization ffmpeg 16 kHz mono prep + in-memory WAV load helpers (re-exported by `diarization_pipeline`)
 - `backend/diarization/diarization_pipeline.py`: local pyannote diarization runner and timestamp/speaker merge output
 - `backend/diarization/guided_transcription.py`: diarization-first speaker-guided transcription flow using padded speaker turns
 - `backend/summaries/sidecar_io.py`: Phase 5 summary sidecar path helpers and atomic JSON/Markdown writers (re-exported by `summary_runner`)
