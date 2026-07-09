@@ -1024,9 +1024,22 @@ def main():
             recorder.stop_recording()
 
     except Exception as e:
+        global _final_output_path
         message = f"Recorder failed: {e}"
         print(f"Error: {e}", file=sys.stderr)
         _send_error_message("RECORDER_FAILED", message)
+        # Prefer a structured stop payload when post-processing already produced
+        # an output file, so Electron can recover audioPath even on exit 1.
+        if _final_output_path:
+            _send_json_message({
+                "success": False,
+                "code": "RECORDER_FAILED",
+                "message": message,
+                "audioPath": str(_final_output_path),
+                "duration": _recording_duration,
+            })
+            # Prevent finally from emitting a conflicting success payload.
+            _final_output_path = None
         sys.exit(1)
     finally:
         if recorder is not None:
@@ -1035,8 +1048,9 @@ def main():
         # Output recording info as JSON for Electron to capture
         if _final_output_path:
             recording_info = {
+                "success": True,
                 "audioPath": str(_final_output_path),
-                "duration": _recording_duration
+                "duration": _recording_duration,
             }
             _send_json_message(recording_info)
 

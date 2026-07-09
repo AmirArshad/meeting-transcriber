@@ -184,3 +184,33 @@ test('behavioral: createAsyncActionQueue serializes work', async () => {
   assert.deepEqual(order, ['a-start', 'a-end', 'b-start', 'b-end']);
   assert.equal(q.hasPendingWork(), false);
 });
+
+test('behavioral: waitForAiComputeQueueIdle times out and notifies onWaiting', async () => {
+  const fakeQueue = createFakeQueue();
+  const queue = createAiComputeQueue({
+    createAiAddonCancelError: (message) => {
+      const error = new Error(message || 'canceled');
+      error.name = 'AbortError';
+      return error;
+    },
+    actionQueue: fakeQueue,
+  });
+
+  // Keep the queue busy for longer than the idle-wait timeout.
+  const blocker = fakeQueue.enqueue(async () => {
+    await new Promise((r) => setTimeout(r, 200));
+  });
+
+  let waitingCalls = 0;
+  await assert.rejects(
+    () => queue.waitForAiComputeQueueIdle({
+      timeoutMs: 40,
+      timeoutMessage: 'idle wait timed out',
+      pollIntervalMs: 10,
+      onWaiting: () => { waitingCalls += 1; },
+    }),
+    (error) => error && error.message === 'idle wait timed out',
+  );
+  assert.ok(waitingCalls >= 1);
+  await blocker;
+});

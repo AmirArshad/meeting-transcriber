@@ -85,6 +85,11 @@ def validate_pyannote_setup(
     }
 
 
+def _read_hf_token_from_stdin() -> str:
+    """Read a one-line HF token from stdin (preferred over process env)."""
+    return sys.stdin.readline().strip()
+
+
 def _safe_message(message: Any) -> str:
     return redact_sensitive_text(message)
 
@@ -402,6 +407,11 @@ def diarize_transcript(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run local speaker diarization for an AvaNevis transcript")
     parser.add_argument("--validate-setup", action="store_true", help="Validate pyannote runtime and model access without diarizing audio")
+    parser.add_argument(
+        "--token-stdin",
+        action="store_true",
+        help="Read Hugging Face token from stdin (preferred over process env for setup validation)",
+    )
     parser.add_argument("--audio", help="Source audio file path")
     parser.add_argument("--segments-json", help="Transcript segments JSON path")
     parser.add_argument("--output-json", help="Output speakers JSON path")
@@ -413,7 +423,12 @@ def main() -> None:
 
     try:
         if args.validate_setup:
-            result = validate_pyannote_setup(model_ref=args.model_ref, required_device=args.require_device)
+            token = _read_hf_token_from_stdin() if args.token_stdin else None
+            result = validate_pyannote_setup(
+                model_ref=args.model_ref,
+                hf_token=token,
+                required_device=args.require_device,
+            )
             emit_progress("ready", "Speaker diarization setup is ready.", percent=100)
             print(json.dumps(result, ensure_ascii=True))
             return

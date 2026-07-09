@@ -134,6 +134,14 @@ function createGpuRuntimeService(deps) {
     return gpuRuntimeActionPromise;
   }
 
+  function hasInFlightGpuRuntimeAction() {
+    return Boolean(gpuRuntimeActionPromise);
+  }
+
+  function waitForGpuRuntimeIdle() {
+    return gpuRuntimeActionPromise ? gpuRuntimeActionPromise.catch(() => {}) : Promise.resolve();
+  }
+
   function checkNvidiaGpuAvailability({ registerProcess = (proc) => proc } = {}) {
     return new Promise((resolve) => {
       const python = registerProcess(spawnTrackedPython([
@@ -480,6 +488,8 @@ function createGpuRuntimeService(deps) {
     buildCudaRuntimeEnv,
     getDefaultTranscriptionCudaPackages,
     runGpuRuntimeAction,
+    hasInFlightGpuRuntimeAction,
+    waitForGpuRuntimeIdle,
     checkNvidiaGpuAvailability,
     enrichCheckCudaStatus,
     runGpuPackageInstall,

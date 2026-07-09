@@ -1,12 +1,12 @@
 ---
 description: Electron IPC — keep main, preload, and renderer in sync
-globs: src/main.js,src/preload.js,src/renderer/**,src/main-process-helpers.js,src/ai-addon*.js
+globs: src/main.js,src/main/**/*.js,src/preload.js,src/renderer/**,src/main-process-helpers.js,src/ai-addon*.js
 alwaysApply: false
 ---
 
 # Electron IPC surface
 
-- Renderer uses `window.electronAPI` from `src/preload.js` → `ipcMain.handle` / `ipcMain.on` in `src/main.js`.
-- Renaming or changing a handler: update `src/main.js`, `src/preload.js`, and **every** renderer call site (`app.js`, `history-detail-helpers.js`, etc.).
-- Main-process business logic: prefer `src/main-process-helpers.js` (+ `tests/js/main-process-helpers.test.js`) over growing `src/main.js`.
+- Renderer uses `window.electronAPI` from `src/preload.js` → `ipcMain.handle` / `ipcMain.on` in `src/main.js` and Pattern C services under `src/main/`.
+- Renaming or changing a handler: update the owning service (or `src/main.js`), `src/preload.js`, and **every** renderer call site (`app.js`, `history-detail-helpers.js`, etc.).
+- Main-process business logic: prefer `src/main-process-helpers.js` / `src/main-process/` (+ `tests/js/main-process-helpers.test.js`) and Pattern C services over growing `src/main.js`.
 - AI add-on IPC and catalog resolution stay in main process (`src/ai-addon-state.js`); renderer must not supply trusted model refs for diarization.

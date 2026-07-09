@@ -375,6 +375,8 @@ test('download URL validation allows configured HTTPS hosts and expected redirec
   assert.equal(isAllowedDownloadUrl('https://files.pythonhosted.org/packages/example.whl'), true);
   assert.equal(isAllowedDownloadUrl('http://github.com/ggml-org/llama.cpp/releases/download/b9173/runtime.zip'), false);
   assert.equal(isAllowedDownloadUrl('https://example.test/model.gguf'), false);
+  assert.equal(isAllowedDownloadUrl('https://evil.hf.co/model.gguf'), false);
+  assert.equal(isAllowedDownloadUrl('https://attacker.huggingface.co/model.gguf'), false);
 });
 
 test('downloadFile removes partial destination when request fails', async () => {

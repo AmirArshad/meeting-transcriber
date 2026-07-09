@@ -45,6 +45,8 @@ function createRecorderService(deps) {
     setAllowImmediateQuit,
     getQuitWorkflowPromise,
     setQuitWorkflowPromise,
+    hasInFlightAiWork = () => false,
+    drainAiWorkBeforeQuit = async () => {},
     validateSelectedDevices,
     checkDiskSpace,
     checkAudioOutputSupport,
@@ -157,12 +159,24 @@ function createRecorderService(deps) {
         cleanupListeners();
         finalizeState();
 
-        if (code === 0) {
-          try {
-            resolve(parseRecordingStopResultFromStdout(stdoutData));
-          } catch (error) {
-            reject(error);
+        // Prefer a structured stdout result when present, including non-zero
+        // exits where Windows may still emit audioPath from finally.
+        try {
+          const parsed = parseRecordingStopResultFromStdout(stdoutData);
+          if (parsed) {
+            resolve(parsed);
+            return;
           }
+        } catch (error) {
+          if (code === 0) {
+            reject(error);
+            return;
+          }
+          // Fall through to exit-code rejection when stdout is unusable.
+        }
+
+        if (code === 0) {
+          reject(new Error('Recording completed but output file not found.'));
           return;
         }
 
@@ -265,6 +279,12 @@ function createRecorderService(deps) {
           await persistStoppedRecordingForQuit(result);
         }
 
+        // Recording quit previously armed allowImmediateQuit and skipped AI drain.
+        // Drain in-flight transcription/summary/GPU work before the final quit pass.
+        if (hasInFlightAiWork()) {
+          await drainAiWorkBeforeQuit();
+        }
+
         setAllowImmediateQuit(true);
         setIsQuitting(true);
         app.quit();
@@ -274,6 +294,9 @@ function createRecorderService(deps) {
         const response = await promptForForcedQuit(quitState.state, error);
 
         if (response.response === 1) {
+          if (hasInFlightAiWork()) {
+            await drainAiWorkBeforeQuit();
+          }
           setAllowImmediateQuit(true);
           setIsQuitting(true);
           app.quit();
@@ -488,6 +511,7 @@ function createRecorderService(deps) {
             message: warning.message,
             help: warning.help,
             level: warning.level || 'error',
+            sessionId,
           };
 
           if (pythonProcess === proc) {
@@ -515,6 +539,7 @@ function createRecorderService(deps) {
             message,
             help: warning.help,
             level,
+            sessionId,
           };
 
           sendToRenderer('recording-warning', payload);
@@ -544,6 +569,7 @@ function createRecorderService(deps) {
               console.error(`Recording heartbeat lost - no audio levels for ${timeSinceUpdate / 1000}s`);
               sendToRenderer('recording-warning', {
                 type: 'heartbeat_lost',
+                sessionId,
                 message: 'Recording may have stopped unexpectedly. No audio data received for 10+ seconds.'
               });
 
@@ -575,7 +601,7 @@ function createRecorderService(deps) {
 
                 const levelsWindow = getMainWindow();
                 if (shouldSendUpdate && levelsWindow && !levelsWindow.isMinimized() && levelsWindow.isVisible()) {
-                  sendToRenderer('audio-levels', message.payload);
+                  sendToRenderer('audio-levels', { ...message.payload, sessionId });
                   lastLevelSentTime = now;
                 }
                 break;

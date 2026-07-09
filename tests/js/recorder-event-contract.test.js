@@ -20,7 +20,7 @@ const {
 
 const WINDOWS_RECORDER = path.join(ROOT, 'backend', 'audio', 'windows_recorder.py');
 const MACOS_RECORDER = path.join(ROOT, 'backend', 'audio', 'macos_recorder.py');
-const MAIN_JS = path.join(ROOT, 'src', 'main.js');
+const RECORDER_SERVICE_JS = path.join(ROOT, 'src', 'main', 'recorder-service.js');
 
 function assertEmitterDefinesFinalKey(source, keyName) {
   // Match dict/object literals that emit the platform final-result key.
@@ -125,16 +125,16 @@ test('structured stdout events drive control actions; stderr text is not a contr
   );
   assert.ok(classified.messages.some((message) => message.kind === 'event'));
 
-  const mainSource = readUtf8(MAIN_JS);
+  const recorderServiceSource = readUtf8(RECORDER_SERVICE_JS);
   // stderr chunks append to debug/log buffers; they must not call getRecorderEventAction.
-  assert.match(mainSource, /stderr\.on\(\s*['"]data['"]/);
+  assert.match(recorderServiceSource, /stderr\.on\(\s*['"]data['"]/);
   assert.equal(
-    /stderr\.on\(\s*['"]data['"][\s\S]{0,400}getRecorderEventAction/.test(mainSource),
+    /stderr\.on\(\s*['"]data['"][\s\S]{0,400}getRecorderEventAction/.test(recorderServiceSource),
     false,
     'stderr data handler must not drive getRecorderEventAction',
   );
   assert.equal(
-    /stderr\.on\(\s*['"]data['"][\s\S]{0,400}parseRecorderMessageLine/.test(mainSource),
+    /stderr\.on\(\s*['"]data['"][\s\S]{0,400}parseRecorderMessageLine/.test(recorderServiceSource),
     false,
     'stderr data handler must not parse structured recorder control messages',
   );

@@ -390,6 +390,11 @@ def test_validate_pyannote_setup_requires_token(monkeypatch):
         pipeline.validate_pyannote_setup()
 
 
+def test_read_hf_token_from_stdin(monkeypatch):
+    monkeypatch.setattr(pipeline.sys.stdin, 'readline', lambda: 'hf_stdin_token_value\n')
+    assert pipeline._read_hf_token_from_stdin() == 'hf_stdin_token_value'
+
+
 def test_validate_pyannote_setup_loads_model_and_moves_device(monkeypatch):
     calls = {}
 

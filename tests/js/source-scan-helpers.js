@@ -80,6 +80,22 @@ function extractIpcMainHandleChannels(source) {
   );
 }
 
+function extractIpcMainHandleChannelOccurrences(source) {
+  const counts = new Map();
+  for (const match of String(source || '').matchAll(/ipcMain\.handle\(\s*['"]([a-z0-9-]+)['"]/g)) {
+    const channel = match[1];
+    counts.set(channel, (counts.get(channel) || 0) + 1);
+  }
+  return counts;
+}
+
+function findDuplicateIpcMainHandleChannels(source) {
+  return [...extractIpcMainHandleChannelOccurrences(source).entries()]
+    .filter(([, count]) => count > 1)
+    .map(([channel]) => channel)
+    .sort();
+}
+
 function resolveAiAddonProgressChannelLiteral() {
   // Resolve from the exported constant so preload↔main divergence cannot hide
   // behind a hardcoded heuristic string (Phase 0.1 / Phase 4 pin).
@@ -356,6 +372,8 @@ module.exports = {
   readMainProcessSources,
   readCombinedMainProcessSource,
   extractIpcMainHandleChannels,
+  extractIpcMainHandleChannelOccurrences,
+  findDuplicateIpcMainHandleChannels,
   extractWebContentsSendChannels,
   resolveAiAddonProgressChannelLiteral,
   extractPreloadInvokeChannels,
