@@ -507,7 +507,6 @@ summaryService = createSummaryService({
   appendSpawnLogBuffer,
   appendSpawnJsonStdout,
   assertTrustedRendererSender,
-  getRecordingsDir,
   assertSafeExistingTranscriptPath,
   assertSafeExistingSegmentsPath,
   terminateProcessBestEffort,
