@@ -86,30 +86,26 @@ const {
   createAiAddonIpc,
   createAiAddonCancelErrorStandalone,
 } = require('./main/ai-addon-ipc');
+const { createTranscriptionService } = require('./main/transcription-service');
+const { createSummaryService } = require('./main/summary-service');
+const { createRecorderService } = require('./main/recorder-service');
 
 // Use Electron's default userData path, which handles packaging correctly
 // This is typically: C:\Users\<username>\AppData\Roaming\AvaNevis
 // No need to set a custom path - Electron manages this properly
 
 let mainWindow;
-let pythonProcess;
-let recordingStartTime = null;
 let tray = null;
 let isQuitting = false;
-let powerSaveId = null; // Power save blocker ID for preventing system suspension during recording
-let recordingHeartbeat = null; // Heartbeat monitor to detect recording failures
-let lastLevelUpdate = null; // Timestamp of last audio level update
-let recordingStopPromise = null;
-let stopCommandSent = false;
 let quitWorkflowPromise = null;
 let allowImmediateQuit = false;
 let pendingUpdateInfo = null;
-let recordingSessionCounter = 0;
-// Summary generation cancellation handle stays in main.js until Phase 3c.
-let activeSummaryGeneration = null;
-// Assigned at composition root after GPU + AI-addon services are constructed.
+// Assigned at composition root after services are constructed.
 let aiAddonIpc = null;
 let gpuRuntimeService = null;
+let summaryService = null;
+let transcriptionService = null;
+let recorderService = null;
 
 // ============================================================================
 // Python runtime service (owns the shared activeProcesses tracking array)
@@ -236,16 +232,8 @@ function assertTrustedRendererSender(event) {
 
 function hasInFlightAiWork() {
   return (aiAddonIpc ? aiAddonIpc.hasInFlightAiAddonSetup() : false)
-    || Boolean(activeSummaryGeneration)
+    || (summaryService ? summaryService.hasActiveSummaryGeneration() : false)
     || aiComputeActionQueue.hasPendingWork();
-}
-
-function canAbortActiveSummaryGeneration() {
-  return Boolean(
-    activeSummaryGeneration?.controller
-    && !activeSummaryGeneration.controller.signal.aborted
-    && activeSummaryGeneration.phase !== 'metadata'
-  );
 }
 
 function abortInFlightAiSetup() {
@@ -256,21 +244,18 @@ function abortInFlightAiSetup() {
 
 function abortInFlightAiWork() {
   abortInFlightAiSetup();
-
-  if (canAbortActiveSummaryGeneration()) {
-    activeSummaryGeneration.controller.abort(createAiAddonCancelErrorStandalone('Summary generation was canceled because the app is quitting.'));
-    terminateProcessBestEffort(activeSummaryGeneration.process);
+  if (summaryService) {
+    summaryService.abortActiveSummaryForQuit('Summary generation was canceled because the app is quitting.');
   }
 }
 
 async function drainAiWorkBeforeQuit() {
-  const metadataPhaseActive = activeSummaryGeneration?.phase === 'metadata';
+  const metadataPhaseActive = summaryService
+    && summaryService.getActiveSummaryPhase() === 'metadata';
 
   abortInFlightAiSetup();
-
-  if (canAbortActiveSummaryGeneration()) {
-    activeSummaryGeneration.controller.abort(createAiAddonCancelErrorStandalone('Summary generation was canceled because the app is quitting.'));
-    terminateProcessBestEffort(activeSummaryGeneration.process);
+  if (summaryService) {
+    summaryService.abortActiveSummaryForQuit('Summary generation was canceled because the app is quitting.');
   }
 
   const drainTimeoutMs = metadataPhaseActive ? 15000 : 30000;
@@ -302,268 +287,6 @@ function openTrustedExternalUrl(url) {
   }
 
   return shell.openExternal(trustedUrl);
-}
-
-function clearRecordingRuntimeState(reason) {
-  if (recordingHeartbeat) {
-    clearInterval(recordingHeartbeat);
-    recordingHeartbeat = null;
-    console.log(`Recording heartbeat monitor stopped (${reason})`);
-  }
-
-  pythonProcess = null;
-  recordingStartTime = null;
-  disableRecordingPowerSaveBlocker(reason);
-  resetStopWorkflowState();
-}
-
-function disableRecordingPowerSaveBlocker(reason = 'recording stopped') {
-  if (powerSaveId !== null) {
-    powerSaveBlocker.stop(powerSaveId);
-    powerSaveId = null;
-    console.log(`Power save blocker disabled (${reason})`);
-  }
-}
-
-function resetStopWorkflowState() {
-  recordingStopPromise = null;
-  stopCommandSent = false;
-}
-
-function parseRecordingStopResultFromStdout(stdoutData) {
-  return parseRecordingStopResult(stdoutData, {
-    existsSync: fs.existsSync,
-    getRecordingsDir,
-  });
-}
-
-function stopRecordingProcess() {
-  if (!pythonProcess) {
-    return Promise.resolve({ success: true });
-  }
-
-  if (recordingStopPromise) {
-    return recordingStopPromise;
-  }
-
-  if (recordingHeartbeat) {
-    clearInterval(recordingHeartbeat);
-    recordingHeartbeat = null;
-    console.log('Recording heartbeat monitor stopped');
-  }
-
-  const currentProcess = pythonProcess;
-
-  recordingStopPromise = new Promise((resolve, reject) => {
-    let stdoutData = '';
-    let stderrData = '';
-    let settled = false;
-
-    const stdoutHandler = (data) => {
-      stdoutData = appendCappedSpawnLogBuffer(stdoutData, data, SPAWN_JSON_RESULT_BUFFER_MAX_CHARS);
-    };
-
-    const stderrHandler = (data) => {
-      const output = data.toString();
-      stderrData = appendCappedSpawnLogBuffer(stderrData, output);
-      console.log(`Python status: ${output}`);
-    };
-
-    const cleanupListeners = () => {
-      currentProcess.stdout.removeListener('data', stdoutHandler);
-      currentProcess.stderr.removeListener('data', stderrHandler);
-      currentProcess.removeListener('close', closeHandler);
-    };
-
-    const finalizeState = () => {
-      if (pythonProcess === currentProcess) {
-        clearRecordingRuntimeState('recording completed');
-        return;
-      }
-
-      resetStopWorkflowState();
-    };
-
-    const closeHandler = (code) => {
-      if (settled) {
-        return;
-      }
-
-      settled = true;
-      cleanupListeners();
-      finalizeState();
-
-      if (code === 0) {
-        try {
-          resolve(parseRecordingStopResultFromStdout(stdoutData));
-        } catch (error) {
-          reject(error);
-        }
-        return;
-      }
-
-      reject(new Error(`Recording stopped with exit code ${code}: ${stderrData}`));
-    };
-
-    currentProcess.stdout.on('data', stdoutHandler);
-    currentProcess.stderr.on('data', stderrHandler);
-    currentProcess.once('close', closeHandler);
-
-    try {
-      if (stopCommandSent) {
-        return;
-      }
-
-      currentProcess.stdin.write('stop\n');
-      stopCommandSent = true;
-    } catch (error) {
-      settled = true;
-      cleanupListeners();
-      resetStopWorkflowState();
-      reject(new Error(`Could not send stop command to recorder: ${error.message}`));
-    }
-  });
-
-  return recordingStopPromise;
-}
-
-async function waitForRecordingStop({ forceKillOnTimeout, timeoutMessage }) {
-  const stopPromise = stopRecordingProcess();
-  const timeoutMs = getRecordingStopTimeout(recordingStartTime);
-
-  let timeoutHandle;
-
-  try {
-    return await Promise.race([
-      stopPromise,
-      new Promise((_, reject) => {
-        timeoutHandle = setTimeout(() => {
-          reject(new Error(timeoutMessage));
-        }, timeoutMs);
-      }),
-    ]);
-  } catch (error) {
-    const timeoutAction = resolveStopTimeoutAction({
-      forceKillOnTimeout,
-      errorMessage: error.message,
-      timeoutMessage,
-      hasRecordingProcess: Boolean(pythonProcess),
-    });
-
-    if (timeoutAction.shouldKillProcess && pythonProcess) {
-      try {
-        pythonProcess.kill();
-        resetStopWorkflowState();
-      } catch (killError) {
-        console.warn('Failed to kill recorder after timeout:', killError.message);
-      }
-    }
-
-    throw error;
-  } finally {
-    clearTimeout(timeoutHandle);
-  }
-}
-
-async function promptForForcedQuit(quitState, stopError) {
-  const options = buildQuitRecordingDialogOptions({
-    quitState,
-    stopErrorMessage: stopError?.message,
-  });
-
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    return dialog.showMessageBox(mainWindow, options);
-  }
-
-  return dialog.showMessageBox(options);
-}
-
-async function handleQuitDuringRecording(quitState) {
-  if (quitWorkflowPromise) {
-    return quitWorkflowPromise;
-  }
-
-  isQuitting = false;
-
-  quitWorkflowPromise = (async () => {
-    if (quitState.progressMessage) {
-      sendToRenderer('recording-progress', quitState.progressMessage);
-    }
-
-    try {
-      const result = await waitForRecordingStop({
-        forceKillOnTimeout: false,
-        timeoutMessage: 'Recorder stop is taking longer than expected.',
-      });
-
-      if (result?.audioPath) {
-        await persistStoppedRecordingForQuit(result);
-      }
-
-      allowImmediateQuit = true;
-      isQuitting = true;
-      app.quit();
-      return;
-    } catch (error) {
-      console.warn('Graceful quit stop failed:', error.message);
-      const response = await promptForForcedQuit(quitState.state, error);
-
-      if (response.response === 1) {
-        allowImmediateQuit = true;
-        isQuitting = true;
-        app.quit();
-        return;
-      }
-
-      isQuitting = false;
-      const canceledMessage = quitState.state === 'stopping'
-        ? 'Quit canceled. Saving continues.'
-        : 'Quit canceled. Recording continues.';
-      sendToRenderer('recording-progress', canceledMessage);
-    }
-  })();
-
-  try {
-    await quitWorkflowPromise;
-  } finally {
-    if (!allowImmediateQuit) {
-      quitWorkflowPromise = null;
-    }
-  }
-}
-
-async function persistStoppedRecordingForQuit(recordingInfo) {
-  const audioPath = recordingInfo.audioPath;
-  const audioFile = path.basename(audioPath);
-  const recordingsDir = path.dirname(audioPath);
-  const transcriptPath = path.join(
-    recordingsDir,
-    `${path.basename(audioFile, path.extname(audioFile))}.md`
-  );
-
-  if (!fs.existsSync(transcriptPath)) {
-    const transcriptContent = [
-      '# Recording Saved Before Quit',
-      '',
-      `**Date:** ${new Date().toISOString()}`,
-      `**Duration:** ${formatDurationForTranscript(recordingInfo.duration || 0)}`,
-      '',
-      'Transcription was not completed because the app quit while recording was active.',
-      'Open AvaNevis again to keep this recording in history.',
-      '',
-    ].join('\n');
-
-    fs.writeFileSync(transcriptPath, transcriptContent, 'utf8');
-  }
-
-  await addMeetingToHistory({
-    audioPath,
-    transcriptPath,
-    duration: recordingInfo.duration || 0,
-    language: 'unknown',
-    model: 'not-transcribed',
-    title: 'Recording saved before quit',
-  });
 }
 
 function formatDurationForTranscript(durationSeconds) {
@@ -729,102 +452,96 @@ const {
   getAiAddonRuntimeOptions,
 } = aiAddonIpc;
 
+// ============================================================================
+// Phase 3c: transcription + summary + recorder lifecycle (Pattern C)
+// ============================================================================
+transcriptionService = createTranscriptionService({
+  app,
+  path,
+  fs,
+  os,
+  pythonConfig,
+  spawnTrackedPython,
+  getBackendModuleArgs,
+  enqueueAiComputeAction,
+  getCachedCudaStatus,
+  buildCudaRuntimeEnv,
+  getAiAddonRuntimeOptions,
+  getDiarizationDependencyEnv,
+  getDiarizationCacheEnv,
+  getDiarizationDependencySitePackagesPath,
+  requireAllowedModelSize,
+  collectPythonProcessOutput,
+  sendToRenderer,
+  sendRedactedProgress,
+  flushRedactedProgress,
+  appendSpawnLogBuffer,
+  appendSpawnJsonStdout,
+  assertTrustedRendererSender,
+  getRecordingsDir,
+  assertSafeExistingRecordingAudioPath,
+  assertSafeExistingSegmentsPath,
+  assertSafeExistingTranscriptPath,
+  terminateProcessBestEffort,
+  summarizeDiarizationError,
+  sanitizeTranscriptionError,
+  buildTranscriptionPlaceholderMarkdown,
+  formatDurationForTranscript,
+});
+transcriptionService.registerIpc(ipcMain);
+const { cleanupGuidedTranscriptTempFiles, preloadWhisperModel } = transcriptionService;
 
-function getTranscriptionModelDownloadCheck(modelSize) {
-  return buildModelDownloadCheck({
-    platform: process.platform,
-    arch: process.arch,
-    homeDir: os.homedir(),
-    modelSize,
-  });
-}
+summaryService = createSummaryService({
+  app,
+  path,
+  fs,
+  pythonConfig,
+  spawnTrackedPython,
+  getBackendModuleArgs,
+  enqueueAiComputeAction,
+  createAiAddonCancelError,
+  getAiAddonRuntimeOptions,
+  buildSummaryArgs,
+  collectPythonProcessOutput,
+  sendToRenderer,
+  appendSpawnLogBuffer,
+  appendSpawnJsonStdout,
+  assertTrustedRendererSender,
+  assertSafeExistingTranscriptPath,
+  assertSafeExistingSegmentsPath,
+  terminateProcessBestEffort,
+  summarizeSummaryValidationError,
+});
+summaryService.registerIpc(ipcMain);
 
-function isTranscriptionModelCached(modelSize, downloadCheck = getTranscriptionModelDownloadCheck(modelSize)) {
-  const { cacheDir, modelPatterns } = downloadCheck;
-  try {
-    return cacheContainsCompleteTranscriptionModel({
-      cacheDir,
-      modelPatterns,
-      platform: process.platform,
-      arch: process.arch,
-    });
-  } catch (error) {
-    return false;
-  }
-}
-
-function getTranscriptionRuntimeEnv(modelSize, cudaOptions = {}) {
-  const downloadCheck = getTranscriptionModelDownloadCheck(modelSize);
-  return buildTranscriptionRuntimeEnv({
-    cacheDir: downloadCheck.cacheDir,
-    modelCached: isTranscriptionModelCached(modelSize, downloadCheck),
-    baseEnv: buildCudaRuntimeEnv({}, cudaOptions),
-  });
-}
-
-const transcriberModule = buildTranscriberArgs({
-  platform: process.platform,
-  arch: process.arch,
-}).at(1);
-
-function getTranscriberArgs(extraArgs = []) {
-  return buildTranscriberArgs({
-    platform: process.platform,
-    arch: process.arch,
-    extraArgs,
-  });
-}
+recorderService = createRecorderService({
+  app,
+  path,
+  fs,
+  dialog,
+  powerSaveBlocker,
+  pythonConfig,
+  spawnTrackedPython,
+  sendToRenderer,
+  assertTrustedRendererSender,
+  getMainWindow: () => mainWindow,
+  setIsQuitting: (value) => { isQuitting = value; },
+  getAllowImmediateQuit: () => allowImmediateQuit,
+  setAllowImmediateQuit: (value) => { allowImmediateQuit = value; },
+  getQuitWorkflowPromise: () => quitWorkflowPromise,
+  setQuitWorkflowPromise: (value) => { quitWorkflowPromise = value; },
+  validateSelectedDevices,
+  checkDiskSpace,
+  checkAudioOutputSupport,
+  getMacOSPermissionStatus,
+  addMeetingToHistory,
+  formatDurationForTranscript,
+  getRecordingsDir,
+});
+recorderService.registerIpc(ipcMain);
 
 function getBackendModuleArgs(moduleName, extraArgs = []) {
   return buildPythonModuleArgs(moduleName, extraArgs);
-}
-
-function buildDiarizationArgs({ audioPath, segmentsJsonPath, outputPath, modelRef, speakerCount, requiredDevice }) {
-  const args = [
-    '--audio', audioPath,
-    '--segments-json', segmentsJsonPath,
-    '--output-json', outputPath,
-    '--model-ref', modelRef || 'pyannote/speaker-diarization-community-1',
-    '--speaker-count', speakerCount === undefined || speakerCount === null ? 'auto' : String(speakerCount),
-    '--ffmpeg', pythonConfig.ffmpegPath,
-  ];
-
-  if (requiredDevice) {
-    args.push('--require-device', requiredDevice);
-  }
-
-  return getBackendModuleArgs('diarization.diarization_pipeline', args);
-}
-
-function buildDiarizationValidationArgs(modelRef, requiredDevice) {
-  const args = [
-    '--validate-setup',
-    '--model-ref', modelRef || 'pyannote/speaker-diarization-community-1',
-  ];
-
-  if (requiredDevice) {
-    args.push('--require-device', requiredDevice);
-  }
-
-  return getBackendModuleArgs('diarization.diarization_pipeline', args);
-}
-
-function buildManagedModuleShim() {
-  return 'import runpy, sys; sys.path.insert(0, sys.argv[1]); sys.argv = [sys.argv[2]] + sys.argv[3:]; runpy.run_module(sys.argv[0], run_name="__main__", alter_sys=False)';
-}
-
-function buildManagedPythonModuleArgs(moduleName, extraArgs = [], managedSitePackagesPath = null) {
-  if (!managedSitePackagesPath) {
-    return getBackendModuleArgs(moduleName, extraArgs);
-  }
-
-  return [
-    '-c',
-    buildManagedModuleShim(),
-    managedSitePackagesPath,
-    moduleName,
-    ...extraArgs,
-  ];
 }
 
 function buildManagedDiarizationValidationArgs(modelRef, requiredDevice) {
@@ -844,52 +561,22 @@ function buildManagedDiarizationValidationArgs(modelRef, requiredDevice) {
   );
 }
 
-function buildManagedDiarizationArgs({ audioPath, segmentsJsonPath, outputPath, modelRef, speakerCount, requiredDevice }) {
-  const args = [
-    '--audio', audioPath,
-    '--segments-json', segmentsJsonPath,
-    '--output-json', outputPath,
-    '--model-ref', modelRef || 'pyannote/speaker-diarization-community-1',
-    '--speaker-count', speakerCount === undefined || speakerCount === null ? 'auto' : String(speakerCount),
-    '--ffmpeg', pythonConfig.ffmpegPath,
-  ];
-
-  if (requiredDevice) {
-    args.push('--require-device', requiredDevice);
-  }
-
-  return buildManagedPythonModuleArgs('diarization.diarization_pipeline', args, getDiarizationDependencySitePackagesPath());
+function buildManagedModuleShim() {
+  return 'import runpy, sys; sys.path.insert(0, sys.argv[1]); sys.argv = [sys.argv[2]] + sys.argv[3:]; runpy.run_module(sys.argv[0], run_name="__main__", alter_sys=False)';
 }
 
-function getTranscriberBackendName() {
-  // Keep aligned with backend/diarization/guided_transcription.py resolve_transcriber_backend.
-  if (process.platform === 'darwin' && process.arch === 'arm64') {
-    return 'mlx';
+function buildManagedPythonModuleArgs(moduleName, extraArgs = [], managedSitePackagesPath = null) {
+  if (!managedSitePackagesPath) {
+    return getBackendModuleArgs(moduleName, extraArgs);
   }
-  return 'faster';
-}
 
-function buildManagedDiarizationGuidedTranscriptionArgs({ audioPath, outputTranscript, outputJson, language, modelSize, modelRef, speakerCount, requiredDevice }) {
-  const args = [
-    '--audio', audioPath,
-    '--output-transcript', outputTranscript,
-    '--language', language || 'en',
-    '--model', modelSize || 'small',
-    '--transcriber-backend', getTranscriberBackendName(),
-    '--model-ref', modelRef || 'pyannote/speaker-diarization-community-1',
-    '--speaker-count', speakerCount === undefined || speakerCount === null ? 'auto' : String(speakerCount),
-    '--ffmpeg', pythonConfig.ffmpegPath,
+  return [
+    '-c',
+    buildManagedModuleShim(),
+    managedSitePackagesPath,
+    moduleName,
+    ...extraArgs,
   ];
-
-  if (outputJson) {
-    args.push('--output-json', outputJson);
-  }
-
-  if (requiredDevice) {
-    args.push('--require-device', requiredDevice);
-  }
-
-  return buildManagedPythonModuleArgs('diarization.guided_transcription', args, getDiarizationDependencySitePackagesPath());
 }
 
 function buildSummaryArgs({ meetingId, transcriptPath, runtimeDir, modelPath, outputJson, outputMarkdown, speakersJsonPath, profile, modelLabel, validateRuntime = false }) {
@@ -1405,43 +1092,6 @@ function createApplicationMenu() {
  * Preload Whisper model in background to improve first-time experience
  * Uses 'small' model by default as it balances quality and speed
  */
-function preloadWhisperModel() {
-  const modelSize = 'small'; // Default model size
-  console.log(`Preloading Whisper model (${modelSize})...`);
-
-  const downloadCheck = getTranscriptionModelDownloadCheck(modelSize);
-  const preloadProcess = spawnTrackedPython(getTranscriberArgs([
-    '--preload',
-    '--model', modelSize
-  ]), {
-    cwd: pythonConfig.backendPath,
-    env: buildTranscriptionRuntimeEnv({
-      cacheDir: downloadCheck.cacheDir,
-      modelCached: false,
-      baseEnv: buildCudaRuntimeEnv(),
-    }),
-  });
-
-  preloadProcess.stderr.on('data', (data) => {
-    console.log(`[Model Preload] ${data.toString().trim()}`);
-  });
-
-  preloadProcess.on('close', (code) => {
-    if (code === 0) {
-      console.log('Whisper model preloaded successfully');
-    } else {
-      console.warn(`Model preload failed with code ${code} (non-critical)`);
-    }
-  });
-}
-
-/**
- * Check macOS permissions (microphone and screen recording).
- *
- * This runs asynchronously in the background and shows a notification
- * if permissions are missing. The permission prompts will be triggered
- * when the user first tries to record.
- */
 function checkMacOSPermissions() {
   console.log('Checking macOS permissions...');
 
@@ -1550,15 +1200,15 @@ app.on('window-all-closed', () => {
 
 // Clean up on quit
 app.on('before-quit', (event) => {
-  const quitState = getQuitInterceptState({
-    hasRecordingProcess: Boolean(pythonProcess),
-    recordingStartTime,
-    stopInProgress: Boolean(recordingStopPromise),
-  });
+  const quitState = getQuitInterceptState(
+    recorderService
+      ? recorderService.getQuitInterceptInputs()
+      : { hasRecordingProcess: false, recordingStartTime: null, stopInProgress: false },
+  );
 
   if (!allowImmediateQuit && quitState.interceptQuit) {
     event.preventDefault();
-    void handleQuitDuringRecording(quitState);
+    void recorderService.handleQuitDuringRecording(quitState);
     return;
   }
 
@@ -1575,18 +1225,8 @@ app.on('before-quit', (event) => {
   isQuitting = true;
   abortInFlightAiWork();
 
-  if (recordingHeartbeat) {
-    clearInterval(recordingHeartbeat);
-    recordingHeartbeat = null;
-  }
-
-  // Kill the main recording process
-  if (pythonProcess) {
-    try {
-      pythonProcess.kill();
-    } catch (e) {
-      // Process might already be dead, ignore
-    }
+  if (recorderService) {
+    recorderService.forceKillRecordingOnShutdown();
   }
 
   // Kill all other spawned Python processes
@@ -1618,47 +1258,12 @@ app.on('before-quit', (event) => {
 // registered by registerDeviceIpc above. run-recording-preflight stays here and
 // calls the exported probe helpers (checkDiskSpace, validateSelectedDevices,
 // checkAudioOutputSupport, getMacOSPermissionStatus).
-ipcMain.handle('run-recording-preflight', async (event, { micId, loopbackId }) => {
-  const [deviceCheck, diskCheck, audioOutputCheck, permissionCheck] = await Promise.all([
-    validateSelectedDevices({ micId, loopbackId }),
-    checkDiskSpace(),
-    checkAudioOutputSupport(),
-    getMacOSPermissionStatus(Number.isInteger(micId) ? micId : null),
-  ]);
+// run-recording-preflight is registered by createRecorderService above.
 
-  return buildRecordingPreflightReport({
-    platform: process.platform,
-    deviceCheck,
-    diskCheck,
-    audioOutputCheck,
-    permissionCheck,
-  });
-});
-
-ipcMain.handle('get-pending-update-info', async () => pendingUpdateInfo);
-
-async function removeSummarySidecarFiles(filePaths = []) {
-  await Promise.all(filePaths.filter(Boolean).map((filePath) => (
-    fs.promises.rm(filePath, { force: true }).catch(() => {})
-  )));
-}
+ipcMain.handle('get-pending-update-info', async () => pendingUpdateInfo);ipcMain.handle('get-pending-update-info', async () => pendingUpdateInfo);
 
 function getRecordingsDir() {
   return path.join(app.getPath('userData'), 'recordings');
-}
-
-async function cleanupGuidedTranscriptTempFiles() {
-  const recordingsDir = getRecordingsDir();
-  try {
-    const entries = await fs.promises.readdir(recordingsDir, { withFileTypes: true });
-    await Promise.all(entries
-      .filter((entry) => entry.isFile() && /^\..+\.guided\.\d+\.tmp\.md$/i.test(entry.name))
-      .map((entry) => fs.promises.rm(path.join(recordingsDir, entry.name), { force: true })));
-  } catch (error) {
-    if (error && error.code !== 'ENOENT') {
-      console.warn('Could not clean up stale speaker-guided transcript temp files:', error.message);
-    }
-  }
 }
 
 function assertSafeExistingRecordingAudioPath(audioPath) {
@@ -1806,1404 +1411,17 @@ function terminateProcessBestEffort(proc) {
   });
 }
 
-/**
- * Check if Whisper model is downloaded
- */
-ipcMain.handle('check-model-downloaded', async (event, modelSize) => {
-  const size = requireAllowedModelSize(modelSize);
-  return new Promise((resolve) => {
-    const { cacheDir, modelPatterns } = buildModelDownloadCheck({
-      platform: process.platform,
-      arch: process.arch,
-      homeDir: os.homedir(),
-      modelSize: size,
-    });
+// check-model-downloaded / download-model / start-recording / stop-recording are registered by
+// createTranscriptionService / createRecorderService above.
 
-    try {
-      const modelExists = cacheContainsCompleteTranscriptionModel({
-        cacheDir,
-        modelPatterns,
-        platform: process.platform,
-        arch: process.arch,
-      });
-      resolve({ downloaded: modelExists, modelSize: size });
-    } catch (e) {
-      // If we can't check, assume not downloaded
-      resolve({ downloaded: false, modelSize: size });
-    }
-  });
-});
+// Transcription / diarization IPC handlers are registered by createTranscriptionService above.
+
+// generate-summary / cancel-summary-generation are registered by createSummaryService above.
+
+// retry-transcription is registered by createTranscriptionService above.
 
 /**
- * Download Whisper model (preload)
- */
-ipcMain.handle('download-model', async (event, modelSize) => {
-  const model = requireAllowedModelSize(modelSize);
-  return new Promise((resolve, reject) => {
-    console.log(`Downloading Whisper model: ${model}`);
-
-    const downloadCheck = getTranscriptionModelDownloadCheck(model);
-    const python = spawnTrackedPython(getTranscriberArgs([
-      '--preload',
-      '--model', model
-    ]), {
-      cwd: pythonConfig.backendPath,
-      env: buildTranscriptionRuntimeEnv({
-        cacheDir: downloadCheck.cacheDir,
-        modelCached: false,
-        baseEnv: buildCudaRuntimeEnv(),
-      }),
-    });
-
-    let hasError = false;
-    const progressRedactor = createLineChunkRedactor();
-
-    python.stderr.on('data', (data) => {
-      const output = data.toString();
-      console.log(`[Model Download] ${output}`);
-
-      sendRedactedProgress('model-download-progress', output, progressRedactor);
-
-      // Check for errors
-      if (isModelDownloadErrorOutput(output)) {
-        hasError = true;
-      }
-    });
-
-    python.on('close', (code) => {
-      flushRedactedProgress('model-download-progress', progressRedactor);
-      if (code === 0) {
-        console.log('Model downloaded successfully');
-        resolve({ success: true });
-      } else if (!hasError) {
-        // Non-zero exit but no explicit error - might be OK
-        console.log('Model download completed with warnings');
-        resolve({ success: true });
-      } else {
-        reject(new Error('Failed to download model'));
-      }
-    });
-  });
-});
-
-/**
- * Start recording with improved timeout and progress feedback
- */
-ipcMain.handle('start-recording', async (event, options) => {
-  assertTrustedRendererSender(event);
-
-  if (isRecorderBusy({ pythonProcess, recordingStopPromise })) {
-    return buildRecorderBusyResponse();
-  }
-
-  const sessionId = ++recordingSessionCounter;
-
-  return new Promise((resolve, reject) => {
-    const { micId, loopbackId, isFirstRecording } = options;
-
-    // Generate unique filename with timestamp
-    const timestamp = new Date().toISOString()
-      .replace(/:/g, '-')  // Replace : with - for Windows compatibility
-      .replace(/\..+/, ''); // Remove milliseconds
-    const filename = `recording_${timestamp}.wav`;
-
-    // Note: audio_recorder.py will compress and save as .opus, not .wav
-    // But we pass .wav as the base path - the recorder will change extension
-    // Use userData path which is always writable (in AppData/Roaming)
-    const recordingsDir = path.join(app.getPath('userData'), 'recordings');
-    if (!fs.existsSync(recordingsDir)) {
-      fs.mkdirSync(recordingsDir, { recursive: true });
-    }
-    const outputPath = path.join(recordingsDir, filename);
-
-    // FIX 1: Enable power save blocker to keep recording running
-    // Platform-specific approach:
-    // - macOS: Use 'prevent-app-suspension' to prevent App Nap from pausing recording
-    // - Windows: Use 'prevent-display-sleep' for better battery life (Python process is separate)
-    if (powerSaveId === null) {
-      const isMacForPower = process.platform === 'darwin';
-      const blockerType = isMacForPower ? 'prevent-app-suspension' : 'prevent-display-sleep';
-
-      powerSaveId = powerSaveBlocker.start(blockerType);
-      console.log(
-        `Power save blocker enabled (${blockerType}) - recording will continue in background`
-      );
-    }
-
-    // Start Python recording process (platform-specific recorder)
-    // Run as module (-m) to support relative imports within the audio package
-    const isMac = process.platform === 'darwin';
-    const recorderModule = isMac ? 'audio.macos_recorder' : 'audio.windows_recorder';
-
-    const proc = spawnTrackedPython([
-      '-m', recorderModule,
-      '--mic', micId.toString(),
-      '--loopback', loopbackId.toString(),
-      '--output', outputPath
-    ], { cwd: pythonConfig.backendPath });
-    pythonProcess = proc;
-
-    // FIX 2 (REFINED): Set high priority for Python recording process on Windows
-    // Use small delay to ensure process is fully initialized before setting priority
-    if (process.platform === 'win32' && proc.pid) {
-      const procPid = proc.pid;
-      setTimeout(() => {
-        if (pythonProcess !== proc || !procPid) {
-          return;
-        }
-
-        try {
-          const { exec } = require('child_process');
-          exec(`wmic process where processid="${procPid}" CALL setpriority "high priority"`, (error) => {
-            if (error) {
-              console.warn('Failed to set high priority:', error.message);
-            } else {
-              console.log('Recording process set to HIGH priority');
-            }
-          });
-        } catch (e) {
-          console.warn('Could not set process priority:', e.message);
-        }
-      }, 100); // 100ms delay to ensure process initialization
-    }
-
-    let recordingStarted = false;
-    let progressStage = 'initializing';
-    let stdoutRemainder = '';
-    let startupFailureMessage = null;
-    let startupSettled = false;
-
-    const sendInitProgress = (stage, message) => {
-      progressStage = stage;
-      mainWindow.webContents.send('recording-init-progress', { stage, message });
-    };
-
-    const settleStartupFailure = (errorMessage) => {
-      if (startupSettled) {
-        return;
-      }
-
-      startupSettled = true;
-      if (pythonProcess === proc) {
-        clearRecordingRuntimeState('recording startup failure');
-      }
-
-      resolve({
-        success: false,
-        code: 'STARTUP_FAILED',
-        sessionId,
-        message: errorMessage,
-      });
-    };
-
-    const failActiveRecording = (warning) => {
-      const payload = {
-        type: warning.type || 'recorder_exited',
-        code: warning.code || 'RECORDER_EXITED',
-        message: warning.message,
-        help: warning.help,
-        level: warning.level || 'error',
-      };
-
-      if (pythonProcess === proc) {
-        clearRecordingRuntimeState('recording failed');
-      }
-
-      sendToRenderer('recording-warning', payload);
-      sendToRenderer('recording-failed', {
-        sessionId,
-        message: payload.message,
-        code: payload.code,
-        help: payload.help,
-      });
-      sendToRenderer('recording-progress', payload.message);
-      if (payload.help) {
-        sendToRenderer('recording-progress', payload.help);
-      }
-    };
-
-    const sendStructuredWarning = (warning, level = 'warning') => {
-      const message = warning.message || warning.error || 'Recorder warning';
-      const payload = {
-        type: warning.type || (warning.code ? warning.code.toLowerCase() : level),
-        code: warning.code,
-        message,
-        help: warning.help,
-        level,
-      };
-
-      mainWindow.webContents.send('recording-warning', payload);
-      mainWindow.webContents.send('recording-progress', message);
-      if (payload.help) {
-        mainWindow.webContents.send('recording-progress', payload.help);
-      }
-
-      return payload;
-    };
-
-    const markRecordingStarted = (message = 'Recording started!') => {
-      if (recordingStarted) {
-        return;
-      }
-
-      recordingStarted = true;
-      recordingStartTime = Date.now();
-
-      // FIX 3: Start heartbeat monitor to detect recording failures
-      lastLevelUpdate = Date.now();
-      recordingHeartbeat = setInterval(() => {
-        const timeSinceUpdate = Date.now() - lastLevelUpdate;
-
-        // If no audio level updates for 10 seconds, something is wrong
-        if (timeSinceUpdate > 10000 && pythonProcess === proc && !proc.killed) {
-          console.error(`Recording heartbeat lost - no audio levels for ${timeSinceUpdate / 1000}s`);
-          mainWindow.webContents.send('recording-warning', {
-            type: 'heartbeat_lost',
-            message: 'Recording may have stopped unexpectedly. No audio data received for 10+ seconds.'
-          });
-
-          // Continue monitoring - don't auto-kill, let user decide
-        }
-      }, 5000);
-
-      sendInitProgress('started', message);
-      startupSettled = true;
-      resolve({ success: true, message: 'Recording started', sessionId });
-    };
-
-    // PERFORMANCE FIX: Throttle audio level updates to reduce IPC overhead
-    // Only send updates if window is visible AND we haven't sent one recently
-    let lastLevelSentTime = 0;
-    const LEVEL_UPDATE_THROTTLE_MS = 100; // Max 10 updates/sec instead of 20
-
-    proc.stdout.on('data', (data) => {
-      const parsedChunk = parseRecorderStdoutChunk(data.toString(), stdoutRemainder);
-      stdoutRemainder = parsedChunk.remainder;
-
-      for (const message of parsedChunk.messages) {
-        switch (message.kind) {
-          case 'levels': {
-            lastLevelUpdate = Date.now();
-
-            const now = Date.now();
-            const shouldSendUpdate = (now - lastLevelSentTime) >= LEVEL_UPDATE_THROTTLE_MS;
-
-            if (shouldSendUpdate && mainWindow && !mainWindow.isMinimized() && mainWindow.isVisible()) {
-              mainWindow.webContents.send('audio-levels', message.payload);
-              lastLevelSentTime = now;
-            }
-            break;
-          }
-
-          case 'event': {
-            const eventAction = getRecorderEventAction(message.payload);
-
-            if (eventAction.initProgress) {
-              sendInitProgress(eventAction.initProgress.stage, eventAction.initProgress.message);
-            }
-
-            if (eventAction.warning) {
-              sendStructuredWarning(eventAction.warning);
-            }
-
-            if (eventAction.recordingStartedMessage) {
-              markRecordingStarted(eventAction.recordingStartedMessage);
-            } else if (eventAction.progressMessage) {
-              mainWindow.webContents.send('recording-progress', eventAction.progressMessage);
-            }
-            break;
-          }
-
-          case 'warning':
-            sendStructuredWarning(message.payload, 'warning');
-            break;
-
-          case 'error': {
-            const errorPayload = sendStructuredWarning({
-              code: message.payload.code,
-              message: message.payload.message || message.payload.error,
-              help: message.payload.help,
-              type: message.payload.type,
-            }, 'error');
-
-            if (!recordingStarted && !startupFailureMessage) {
-              startupFailureMessage = errorPayload.message;
-            }
-            progressStage = 'error';
-            break;
-          }
-
-          case 'status':
-            if (message.payload.message) {
-              mainWindow.webContents.send('recording-progress', message.payload.message);
-            }
-            break;
-
-          case 'text':
-            mainWindow.webContents.send('recording-progress', message.payload.message);
-            break;
-
-          case 'result':
-            break;
-
-          case 'json':
-            if (message.payload.message) {
-              mainWindow.webContents.send('recording-progress', message.payload.message);
-            }
-            break;
-
-          default:
-            break;
-        }
-      }
-    });
-
-    proc.stderr.on('data', (data) => {
-      const output = data.toString();
-      console.log(`Python status: ${output}`);
-    });
-
-    const handleProcessClosed = (code) => {
-      clearTimeout(timeoutHandle);
-
-      const closeAction = getRecorderCloseAction({
-        recordingStarted,
-        stopInProgress: Boolean(recordingStopPromise),
-        startupSettled,
-        startupFailureMessage,
-        progressStage,
-        exitCode: code,
-      });
-
-      if (closeAction.type === 'stop_in_progress') {
-        return;
-      }
-
-      if (closeAction.type === 'startup_already_settled') {
-        if (pythonProcess === proc) {
-          clearRecordingRuntimeState('recording startup already settled');
-        }
-        return;
-      }
-
-      clearRecordingRuntimeState(
-        closeAction.type === 'unexpected_exit'
-          ? 'recorder exited unexpectedly'
-          : 'recording failed'
-      );
-      recordingStarted = false;
-
-      if (closeAction.warning) {
-        failActiveRecording(closeAction.warning);
-        startupSettled = true;
-        return;
-      }
-
-      if (closeAction.errorMessage) {
-        settleStartupFailure(closeAction.errorMessage);
-      }
-    };
-
-    proc.on('close', handleProcessClosed);
-
-    proc.on('error', (spawnError) => {
-      if (proc !== pythonProcess) {
-        return;
-      }
-
-      clearTimeout(timeoutHandle);
-
-      if (recordingStopPromise) {
-        return;
-      }
-
-      const wasRecording = recordingStarted;
-      recordingStarted = false;
-      clearRecordingRuntimeState(spawnError?.message || 'recorder process error');
-
-      if (wasRecording) {
-        failActiveRecording({
-          type: 'recorder_error',
-          code: 'RECORDER_PROCESS_ERROR',
-          message: spawnError?.message || 'Recorder process failed.',
-        });
-        return;
-      }
-
-      settleStartupFailure(spawnError?.message || 'Recorder process failed to start.');
-    });
-
-    // Longer timeout for first recording (15s), shorter for subsequent (10s)
-    const timeout = isFirstRecording ? 15000 : 10000;
-    const timeoutHandle = setTimeout(() => {
-      if (!recordingStarted) {
-        let errorMessage = startupFailureMessage || `Recording failed to start within ${timeout / 1000} seconds.`;
-
-        // Provide specific guidance based on what stage failed
-        if (!startupFailureMessage && progressStage === 'initializing') {
-          errorMessage += '\n\nThe audio system is taking longer than expected to initialize.';
-          errorMessage += '\nThis can happen on first launch. Please try again.';
-        } else if (!startupFailureMessage && progressStage === 'configuring') {
-          errorMessage += '\n\nAudio device configuration is taking too long.';
-          errorMessage += '\nCheck that your devices are properly connected and not in use.';
-        } else if (!startupFailureMessage && (progressStage === 'mic_opened' || progressStage === 'desktop_opened')) {
-          errorMessage += '\n\nAudio streams are opening but not fully ready.';
-          errorMessage += '\nTry selecting different audio devices or restarting the app.';
-        }
-
-        if (pythonProcess === proc && !proc.killed) {
-          proc.kill();
-        }
-        settleStartupFailure(errorMessage);
-      }
-    }, timeout);
-  });
-});
-
-/**
- * Stop recording
- */
-ipcMain.handle('stop-recording', async (event) => {
-  assertTrustedRendererSender(event);
-  return waitForRecordingStop({
-    forceKillOnTimeout: true,
-    timeoutMessage: 'Recording stop timeout - process took too long to finish',
-  });
-});
-
-function runTranscriptionProcess({
-  audioFile,
-  language,
-  modelSize,
-  device = 'auto',
-  registerProcess,
-} = {}) {
-  return new Promise((resolve, reject) => {
-    const python = spawnTrackedPython(buildTranscriptionCliArgs({
-      platform: process.platform,
-      arch: process.arch,
-      audioFile,
-      language: language || 'en',
-      modelSize,
-      device,
-    }), { cwd: pythonConfig.backendPath, env: getTranscriptionRuntimeEnv(modelSize) });
-
-    if (typeof registerProcess === 'function') {
-      registerProcess(python);
-    }
-
-    let output = '';
-    let errorOutput = '';
-    let hasCompleted = false;
-    const stdoutOverflow = { overflowed: false };
-    const progressRedactor = createLineChunkRedactor();
-
-    python.stdout.on('data', (data) => {
-      output = appendSpawnJsonStdout(output, data, stdoutOverflow);
-    });
-
-    python.stderr.on('data', (data) => {
-      const stderrChunk = data.toString();
-      errorOutput = appendSpawnLogBuffer(errorOutput, stderrChunk);
-      sendRedactedProgress('transcription-progress', stderrChunk, progressRedactor);
-    });
-
-    python.on('close', (code) => {
-      if (hasCompleted) return;
-      hasCompleted = true;
-      flushRedactedProgress('transcription-progress', progressRedactor);
-
-      if (stdoutOverflow.overflowed) {
-        reject(new Error('Transcription output exceeded the maximum allowed size.'));
-        return;
-      }
-
-      if (output.trim()) {
-        try {
-          const result = JSON.parse(output);
-          if (result.text !== undefined || result.segments !== undefined) {
-            resolve({ ...result, transcriptionDevice: device });
-            return;
-          }
-        } catch (error) {
-          // Continue to stderr/error classification.
-        }
-      }
-
-      if (code === 0) {
-        reject(new Error('Transcription produced no valid output'));
-        return;
-      }
-
-      reject(new Error(`Transcription failed: ${errorOutput || 'Unknown error'}`));
-    });
-
-    python.on('error', (error) => {
-      if (hasCompleted) {
-        return;
-      }
-      hasCompleted = true;
-      reject(error);
-    });
-  });
-}
-
-/**
- * Transcribe audio file
- */
-ipcMain.handle('transcribe-audio', async (event, options) => {
-  assertTrustedRendererSender(event);
-
-  let { audioFile, language, modelSize } = options;
-
-  modelSize = requireAllowedModelSize(modelSize);
-
-  const recordingsDir = getRecordingsDir();
-  audioFile = resolveTranscriptionAudioFile({
-    audioFile,
-    recordingsDir,
-    existsSync: fs.existsSync,
-  });
-  audioFile = assertSafeExistingRecordingAudioPath(audioFile);
-
-  const shouldPreemptiveCpuRetry = process.platform === 'win32'
-    && shouldForceCpuTranscriptionFromCudaStatus(getCachedCudaStatus());
-
-  return enqueueAiComputeAction(() => runWallClockComputeAction({
-    timeoutMs: getTranscriptionComputeTimeoutMs(modelSize),
-    label: 'Transcription',
-    terminateProcess: terminateProcessBestEffort,
-    action: async (registerProcess) => {
-      if (shouldPreemptiveCpuRetry) {
-        sendToRenderer(
-          'transcription-progress',
-          'CUDA runtime is not loadable on this system. Starting transcription on CPU.\n',
-        );
-      }
-      try {
-        return await runTranscriptionProcess({
-          audioFile,
-          language,
-          modelSize,
-          device: shouldPreemptiveCpuRetry ? 'cpu' : 'auto',
-          registerProcess,
-        });
-      } catch (error) {
-        if (!isRetryableCudaTranscriptionError(error && error.message)) {
-          throw error;
-        }
-        sendToRenderer(
-          'transcription-progress',
-          'GPU transcription failed because CUDA runtime libraries could not be loaded. Retrying on CPU; this may take significantly longer.\n',
-        );
-        return runTranscriptionProcess({
-          audioFile,
-          language,
-          modelSize,
-          device: 'cpu',
-          registerProcess,
-        });
-      }
-    },
-  }));
-});
-
-ipcMain.handle('transcribe-audio-with-speakers', async (event, options = {}) => {
-  assertTrustedRendererSender(event);
-
-  let { audioFile, language, modelSize, speakerCount } = options;
-  modelSize = requireAllowedModelSize(modelSize);
-
-  if (!audioFile) {
-    throw new Error('transcribe-audio-with-speakers requires an audioFile');
-  }
-
-  audioFile = resolveTranscriptionAudioFile({
-    audioFile,
-    recordingsDir: getRecordingsDir(),
-    existsSync: fs.existsSync,
-  });
-
-  const resolvedAudioPath = assertSafeExistingRecordingAudioPath(audioFile);
-  const availability = getDiarizationAvailability(process.platform, process.arch);
-  if (!availability.supported) {
-    throw new Error(availability.reason || 'Speaker identification is not supported on this platform.');
-  }
-  const requiredDevice = availability.runtimeDevice;
-  if (!requiredDevice) {
-    throw new Error('Speaker identification accelerator policy is not configured for this platform.');
-  }
-
-  const aiStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions());
-  const diarizationStatus = aiStatus && aiStatus.features && aiStatus.features.diarization;
-  if (!diarizationStatus || diarizationStatus.status !== 'ready' || !diarizationStatus.setupComplete) {
-    throw new Error('Speaker identification setup is not ready.');
-  }
-  const catalogModelRef = getDiarizationModelRef(diarizationStatus.modelId);
-  if (!catalogModelRef) {
-    throw new Error('Speaker identification model is not configured.');
-  }
-
-  const recordingsDir = getRecordingsDir();
-  const finalTranscriptPath = resolvedAudioPath.replace(/\.[^/.]+$/, '.md');
-  if (!isSafeRecordingsMarkdownPath({ filePath: finalTranscriptPath, recordingsDir })) {
-    throw new Error('Speaker-guided transcript must be a Markdown file in the recordings directory.');
-  }
-  // The temporary file keeps a .md suffix so the existing Markdown path guard can
-  // validate it; startup cleanup removes orphaned hidden guided temp files.
-  const tempTranscriptPath = buildGuidedTranscriptTempPath({ finalTranscriptPath });
-  if (!isSafeRecordingsMarkdownPath({ filePath: tempTranscriptPath, recordingsDir })) {
-    throw new Error('Temporary speaker-guided transcript path is invalid.');
-  }
-
-  return enqueueAiComputeAction(() => runWallClockComputeAction({
-    timeoutMs: AI_COMPUTE_TIMEOUT_MS.guidedTranscription,
-    label: 'Speaker-guided transcription',
-    terminateProcess: terminateProcessBestEffort,
-    action: (registerProcess) => runGuidedTranscriptionProcess({
-    spawnProcess: spawnTrackedPython,
-    args: buildManagedDiarizationGuidedTranscriptionArgs({
-      audioPath: resolvedAudioPath,
-      outputTranscript: tempTranscriptPath,
-      language,
-      modelSize,
-      modelRef: catalogModelRef,
-      speakerCount: speakerCount || diarizationStatus.speakerCount || 'auto',
-      requiredDevice,
-    }),
-    cwd: pythonConfig.backendPath,
-    env: {
-      ...getDiarizationDependencyEnv(),
-      ...getDiarizationCacheEnv(),
-      ...getTranscriptionRuntimeEnv(modelSize, { includeManagedDiarization: true }),
-      HF_TOKEN: '',
-      HUGGINGFACE_HUB_TOKEN: '',
-    },
-    finalTranscriptPath,
-    tempTranscriptPath,
-    modelSize,
-    fsPromises: fs.promises,
-    registerProcess,
-    terminateProcess: terminateProcessBestEffort,
-    summarizeError: summarizeDiarizationError,
-    onProgressLine: (line) => {
-      const progressEvent = parseAiBackendProgressLine(line, 'diarization');
-      if (progressEvent) {
-        sendToRenderer('diarization-progress', progressEvent);
-      } else if (line.trim()) {
-        sendToRenderer('transcription-progress', `${redactSensitiveText(line)}\n`);
-      }
-    },
-  }),
-  }));
-});
-
-ipcMain.handle('diarize-transcript', async (event, options = {}) => {
-  assertTrustedRendererSender(event);
-
-  const { audioPath, segments, segmentsJsonPath, speakerCount } = options;
-
-  if (!audioPath) {
-    throw new Error('diarize-transcript requires an audioPath');
-  }
-
-  const availability = getDiarizationAvailability(process.platform, process.arch);
-  if (!availability.supported) {
-    throw new Error(availability.reason || 'Speaker identification is not supported on this platform.');
-  }
-  const requiredDevice = availability.runtimeDevice;
-  if (!requiredDevice) {
-    throw new Error('Speaker identification accelerator policy is not configured for this platform.');
-  }
-
-  const aiStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions());
-  const diarizationStatus = aiStatus && aiStatus.features && aiStatus.features.diarization;
-  if (!diarizationStatus || diarizationStatus.status !== 'ready' || !diarizationStatus.setupComplete) {
-    throw new Error('Speaker identification setup is not ready.');
-  }
-  const catalogModelRef = getDiarizationModelRef(diarizationStatus.modelId);
-  if (!catalogModelRef) {
-    throw new Error('Speaker identification model is not configured.');
-  }
-
-  const resolvedAudioPath = assertSafeExistingRecordingAudioPath(audioPath);
-
-  let tempSegmentsPath = null;
-  let resolvedSegmentsJsonPath = segmentsJsonPath;
-  if (!resolvedSegmentsJsonPath) {
-    if (!Array.isArray(segments)) {
-      throw new Error('diarize-transcript requires transcript segments');
-    }
-    const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'avanevis-diarization-segments-'));
-    tempSegmentsPath = path.join(tempDir, 'segments.json');
-    await fs.promises.writeFile(tempSegmentsPath, JSON.stringify({ segments }, null, 2), 'utf8');
-    resolvedSegmentsJsonPath = tempSegmentsPath;
-  } else {
-    resolvedSegmentsJsonPath = assertSafeExistingSegmentsPath(resolvedSegmentsJsonPath);
-  }
-
-  const resolvedOutputPath = buildDiarizationOutputPath({ audioPath: resolvedAudioPath });
-  if (!isSafeRecordingsJsonPath({ filePath: resolvedOutputPath, recordingsDir: getRecordingsDir() })) {
-    throw new Error('Speaker labels output must be a JSON file in the recordings directory.');
-  }
-  return enqueueAiComputeAction(() => runWallClockComputeAction({
-    timeoutMs: AI_COMPUTE_TIMEOUT_MS.diarization,
-    label: 'Speaker identification',
-    terminateProcess: terminateProcessBestEffort,
-    action: (registerProcess) => new Promise((resolve, reject) => {
-    const python = spawnTrackedPython(buildManagedDiarizationArgs({
-      audioPath: resolvedAudioPath,
-      segmentsJsonPath: resolvedSegmentsJsonPath,
-      outputPath: resolvedOutputPath,
-      modelRef: catalogModelRef,
-      speakerCount,
-      requiredDevice,
-    }), {
-      cwd: pythonConfig.backendPath,
-      env: {
-        ...getDiarizationDependencyEnv(),
-        ...getDiarizationCacheEnv(),
-        ...buildCudaRuntimeEnv({}, { includeManagedDiarization: true }),
-        HF_TOKEN: '',
-        HUGGINGFACE_HUB_TOKEN: '',
-      },
-    });
-    registerProcess(python);
-
-    let output = '';
-    let errorOutput = '';
-    const stdoutOverflow = { overflowed: false };
-
-    python.stdout.on('data', (data) => {
-      output = appendSpawnJsonStdout(output, data, stdoutOverflow);
-    });
-
-    python.stderr.on('data', (data) => {
-      const stderrChunk = data.toString();
-      errorOutput = appendSpawnLogBuffer(errorOutput, stderrChunk);
-      for (const line of stderrChunk.split(/\r?\n/)) {
-        const progressEvent = parseAiBackendProgressLine(line, 'diarization');
-        if (progressEvent) {
-          sendToRenderer('diarization-progress', progressEvent);
-        }
-      }
-    });
-
-    python.on('close', (code) => {
-      if (tempSegmentsPath) {
-        fs.promises.rm(path.dirname(tempSegmentsPath), { recursive: true, force: true }).catch(() => {});
-      }
-
-      if (stdoutOverflow.overflowed) {
-        reject(new Error('Speaker diarization output exceeded the maximum allowed size.'));
-        return;
-      }
-
-      if (code === 0) {
-        try {
-          resolve(JSON.parse(output));
-        } catch (error) {
-          reject(new Error(`Failed to parse diarization result: ${error.message}`));
-        }
-        return;
-      }
-
-      const reason = summarizeDiarizationError(errorOutput);
-      reject(new Error(reason || 'Speaker diarization failed.'));
-    });
-
-    python.on('error', (error) => {
-      if (tempSegmentsPath) {
-        fs.promises.rm(path.dirname(tempSegmentsPath), { recursive: true, force: true }).catch(() => {});
-      }
-      reject(error);
-    });
-  }),
-  }));
-});
-
-ipcMain.handle('generate-summary', async (event, options = {}) => {
-  assertTrustedRendererSender(event);
-
-  const { meetingId, profile, modelId } = options;
-  if (!meetingId) {
-    throw new Error('generate-summary requires a meetingId');
-  }
-  const normalizedMeetingId = String(meetingId);
-
-  if (activeSummaryGeneration) {
-    throw new Error('Summary generation is already running. Cancel it or wait for it to finish.');
-  }
-
-  const controller = new AbortController();
-  activeSummaryGeneration = {
-    meetingId: normalizedMeetingId,
-    controller,
-    phase: 'preflight',
-    process: null,
-  };
-
-  const clearActiveSummaryGeneration = () => {
-    if (activeSummaryGeneration && activeSummaryGeneration.controller === controller) {
-      activeSummaryGeneration = null;
-    }
-  };
-
-  const meeting = await new Promise((resolve, reject) => {
-    let preflightSettled = false;
-    let cleanupPreflightCancel = () => {};
-    const finishPreflight = (callback, value) => {
-      if (preflightSettled) {
-        return;
-      }
-      preflightSettled = true;
-      cleanupPreflightCancel();
-      callback(value);
-    };
-    const cleanupCancel = (() => {
-      const handleAbort = () => {
-        finishPreflight(reject, createAiAddonCancelError('Summary generation was canceled.'));
-      };
-      controller.signal.addEventListener('abort', handleAbort, { once: true });
-      return () => controller.signal.removeEventListener('abort', handleAbort);
-    })();
-    cleanupPreflightCancel = cleanupCancel;
-
-    if (controller.signal.aborted) {
-      finishPreflight(reject, createAiAddonCancelError('Summary generation was canceled.'));
-      return;
-    }
-
-    const recordingsDir = path.join(app.getPath('userData'), 'recordings');
-    const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
-      '--recordings-dir', recordingsDir,
-      'get',
-      normalizedMeetingId,
-    ]), { cwd: pythonConfig.backendPath });
-    activeSummaryGeneration.process = python;
-    const preflightOutput = collectPythonProcessOutput(python, { jsonResult: true });
-    python.on('close', (code) => {
-      if (controller.signal.aborted) {
-        finishPreflight(reject, createAiAddonCancelError('Summary generation was canceled.'));
-        return;
-      }
-      try {
-        preflightOutput.assertStdoutWithinLimit();
-      } catch (error) {
-        finishPreflight(reject, error);
-        return;
-      }
-      if (code === 0) {
-        try {
-          finishPreflight(resolve, JSON.parse(preflightOutput.getStdout()));
-        } catch (error) {
-          finishPreflight(reject, new Error(`Failed to parse meeting before summary generation: ${error.message}`));
-        }
-        return;
-      }
-      finishPreflight(reject, new Error(preflightOutput.getStderr().trim() || 'Meeting not found'));
-    });
-    python.on('error', (error) => finishPreflight(reject, controller.signal.aborted ? createAiAddonCancelError('Summary generation was canceled.') : error));
-  }).catch((error) => {
-    clearActiveSummaryGeneration();
-    throw error;
-  });
-
-  if (controller.signal.aborted) {
-    clearActiveSummaryGeneration();
-    throw createAiAddonCancelError('Summary generation was canceled.');
-  }
-
-  if (!meeting || !meeting.transcriptPath) {
-    clearActiveSummaryGeneration();
-    throw new Error('Meeting transcript is not available for summary generation.');
-  }
-  if (meeting.transcriptionStatus && meeting.transcriptionStatus !== 'completed') {
-    clearActiveSummaryGeneration();
-    throw new Error('Summary generation is available after transcription completes. Retry transcription from History first.');
-  }
-
-  let aiStatus;
-  try {
-    aiStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions({ verifyChecksums: true }));
-  } catch (error) {
-    clearActiveSummaryGeneration();
-    throw error;
-  }
-
-  if (controller.signal.aborted) {
-    clearActiveSummaryGeneration();
-    throw createAiAddonCancelError('Summary generation was canceled.');
-  }
-  if (aiStatus.features.summary.status !== 'ready' || !aiStatus.features.summary.setupComplete) {
-    clearActiveSummaryGeneration();
-    throw new Error('Summary model setup is not ready.');
-  }
-
-  const selectedModelId = aiStatus.features.summary.modelId;
-  if (modelId && modelId !== selectedModelId) {
-    clearActiveSummaryGeneration();
-    throw new Error('Summary model selection is managed by local setup. Validate or reinstall the selected model in Settings.');
-  }
-  const artifact = getSummaryArtifactForPlatform(selectedModelId, process.platform, process.arch);
-  if (!artifact) {
-    clearActiveSummaryGeneration();
-    throw new Error('No summary model artifact is available for this platform.');
-  }
-
-  let modelPath;
-  let runtimeDir;
-  let transcriptPath;
-  try {
-    modelPath = getSummaryArtifactPath(app.getPath('userData'), artifact);
-    runtimeDir = getSummaryRuntimeDir(app.getPath('userData'), artifact);
-    transcriptPath = assertSafeExistingTranscriptPath(meeting.transcriptPath);
-  } catch (error) {
-    clearActiveSummaryGeneration();
-    throw error;
-  }
-
-  const transcriptBase = transcriptPath.replace(/\.md$/i, '');
-  const outputJson = `${transcriptBase}.summary.json`;
-  const outputMarkdown = `${transcriptBase}.summary.md`;
-  const outputJsonTemp = `${outputJson}.tmp`;
-  const outputMarkdownTemp = `${outputMarkdown}.tmp`;
-  const speakerMetadataPath = meeting.ai && meeting.ai.diarization && meeting.ai.diarization.segmentsPath;
-  let speakersJsonPath;
-  try {
-    speakersJsonPath = speakerMetadataPath ? assertSafeExistingSegmentsPath(speakerMetadataPath) : null;
-  } catch (error) {
-    clearActiveSummaryGeneration();
-    throw error;
-  }
-
-  return enqueueAiComputeAction(() => runWallClockComputeAction({
-    timeoutMs: AI_COMPUTE_TIMEOUT_MS.summary,
-    label: 'Summary generation',
-    terminateProcess: terminateProcessBestEffort,
-    action: (registerProcess) => new Promise((resolve, reject) => {
-    if (!activeSummaryGeneration || activeSummaryGeneration.controller !== controller || controller.signal.aborted) {
-      clearActiveSummaryGeneration();
-      reject(createAiAddonCancelError('Summary generation was canceled.'));
-      return;
-    }
-
-    let summarySettled = false;
-    activeSummaryGeneration.phase = 'summary';
-    // While assigning the actual subprocess, cancellation relies on the shared
-    // AbortController. terminateProcessBestEffort is best-effort for null.
-    activeSummaryGeneration.process = null;
-    const python = spawnTrackedPython(buildSummaryArgs({
-      meetingId: normalizedMeetingId,
-      transcriptPath,
-      runtimeDir,
-      modelPath,
-      outputJson: outputJsonTemp,
-      outputMarkdown: outputMarkdownTemp,
-      speakersJsonPath,
-      profile: profile || 'balanced',
-      modelLabel: artifact.modelLabel || artifact.modelId,
-    }), { cwd: pythonConfig.backendPath, env: buildHuggingFaceOfflineEnv() });
-    activeSummaryGeneration.process = python;
-    registerProcess(python);
-
-    let output = '';
-    let errorOutput = '';
-    const stdoutOverflow = { overflowed: false };
-    const cleanupCancel = (() => {
-      const handleAbort = () => {
-        if (summarySettled) {
-          return;
-        }
-        terminateProcessBestEffort(python);
-      };
-      controller.signal.addEventListener('abort', handleAbort, { once: true });
-      return () => controller.signal.removeEventListener('abort', handleAbort);
-    })();
-    const finish = (callback, value) => {
-      if (summarySettled) {
-        return;
-      }
-      summarySettled = true;
-      cleanupCancel();
-      clearActiveSummaryGeneration();
-      callback(value);
-    };
-
-    python.stdout.on('data', (data) => {
-      output = appendSpawnJsonStdout(output, data, stdoutOverflow);
-    });
-
-    python.stderr.on('data', (data) => {
-      const stderrChunk = data.toString();
-      errorOutput = appendSpawnLogBuffer(errorOutput, stderrChunk);
-      for (const line of stderrChunk.split(/\r?\n/)) {
-        const progressEvent = parseAiBackendProgressLine(line, 'summary');
-        if (progressEvent) {
-          sendToRenderer('summary-progress', progressEvent);
-        }
-      }
-    });
-
-    python.on('close', async (code) => {
-      const cleanupSummarySidecars = () => removeSummarySidecarFiles([
-        outputJsonTemp,
-        outputMarkdownTemp,
-        outputJson,
-        outputMarkdown,
-      ]);
-
-      try {
-        if (controller.signal.aborted) {
-          await cleanupSummarySidecars();
-          finish(reject, createAiAddonCancelError('Summary generation was canceled.'));
-          return;
-        }
-        if (stdoutOverflow.overflowed) {
-          await cleanupSummarySidecars();
-          finish(reject, new Error('Summary generation output exceeded the maximum allowed size.'));
-          return;
-        }
-        if (code !== 0) {
-          await cleanupSummarySidecars();
-          finish(reject, new Error(summarizeSummaryValidationError(errorOutput)));
-          return;
-        }
-
-        const result = JSON.parse(output);
-        if (!result || typeof result !== 'object' || !result.metadata || typeof result.metadata !== 'object') {
-          throw new Error('Summary generation returned an invalid result payload.');
-        }
-        if (controller.signal.aborted) {
-          await cleanupSummarySidecars();
-          finish(reject, createAiAddonCancelError('Summary generation was canceled.'));
-          return;
-        }
-
-        await fs.promises.rename(outputJsonTemp, outputJson);
-        try {
-          await fs.promises.rename(outputMarkdownTemp, outputMarkdown);
-        } catch (renameError) {
-          await cleanupSummarySidecars();
-          throw renameError;
-        }
-
-        activeSummaryGeneration.phase = 'metadata';
-        const summaryMetadata = {
-          status: 'completed',
-          modelProfile: result.metadata.profile,
-          model: result.metadata.model,
-          generatedAt: result.metadata.generatedAt,
-          sourceTranscriptHash: result.metadata.sourceTranscriptHash,
-          jsonPath: outputJson,
-          markdownPath: outputMarkdown,
-          error: null,
-        };
-
-        const updatedMeeting = await new Promise((metadataResolve, metadataReject) => {
-          const recordingsDir = path.join(app.getPath('userData'), 'recordings');
-          const pythonUpdate = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
-            '--recordings-dir', recordingsDir,
-            'update-ai',
-            normalizedMeetingId,
-            '--summary-json', JSON.stringify(summaryMetadata),
-          ]), { cwd: pythonConfig.backendPath });
-          activeSummaryGeneration.process = pythonUpdate;
-          registerProcess(pythonUpdate);
-
-          let metadataOutput = '';
-          let metadataErrorOutput = '';
-          const metadataStdoutOverflow = { overflowed: false };
-          pythonUpdate.stdout.on('data', (data) => {
-            metadataOutput = appendSpawnJsonStdout(metadataOutput, data, metadataStdoutOverflow);
-          });
-          pythonUpdate.stderr.on('data', (data) => { metadataErrorOutput = appendSpawnLogBuffer(metadataErrorOutput, data); });
-          pythonUpdate.on('close', (updateCode) => {
-            if (controller.signal.aborted) {
-              metadataReject(createAiAddonCancelError('Summary generation was canceled.'));
-              return;
-            }
-            if (metadataStdoutOverflow.overflowed) {
-              metadataReject(new Error('Summary metadata update output exceeded the maximum allowed size.'));
-              return;
-            }
-            if (updateCode === 0) {
-              try {
-                metadataResolve(JSON.parse(metadataOutput));
-              } catch (error) {
-                metadataReject(new Error(`Failed to parse summary metadata update: ${error.message}`));
-              }
-              return;
-            }
-            metadataReject(new Error(summarizeSummaryValidationError(metadataErrorOutput) || 'Failed to update summary metadata'));
-          });
-          pythonUpdate.on('error', (error) => metadataReject(controller.signal.aborted ? createAiAddonCancelError('Summary generation was canceled.') : error));
-        });
-
-        finish(resolve, {
-          ...result,
-          jsonPath: outputJson,
-          markdownPath: outputMarkdown,
-          meeting: updatedMeeting,
-        });
-      } catch (error) {
-        await cleanupSummarySidecars();
-        finish(reject, error);
-      }
-    });
-
-    python.on('error', async (error) => {
-      if (summarySettled) {
-        return;
-      }
-      await removeSummarySidecarFiles([
-        outputJsonTemp,
-        outputMarkdownTemp,
-        outputJson,
-        outputMarkdown,
-      ]);
-      finish(reject, controller.signal.aborted ? createAiAddonCancelError('Summary generation was canceled.') : error);
-    });
-  }),
-  }));
-});
-
-ipcMain.handle('cancel-summary-generation', async (event, options = {}) => {
-  if (!activeSummaryGeneration) {
-    return { canceled: false, message: 'No summary generation is currently running.' };
-  }
-
-  const requestedMeetingId = options && options.meetingId ? String(options.meetingId) : null;
-  if (requestedMeetingId && requestedMeetingId !== activeSummaryGeneration.meetingId) {
-    return { canceled: false, message: 'A different meeting summary is currently running.' };
-  }
-
-  // The preflight/summary phases are safe to terminate. Once sidecars are
-  // written, let the quick metadata update finish so summary files are tracked.
-  if (activeSummaryGeneration.phase === 'metadata') {
-    return { canceled: false, message: 'Summary output is being saved and can no longer be canceled.' };
-  }
-
-  activeSummaryGeneration.controller.abort(createAiAddonCancelError('Summary generation was canceled.'));
-  terminateProcessBestEffort(activeSummaryGeneration.process);
-  return { canceled: true };
-});
-
-// list-meetings, get-meeting, delete-meeting, scan-recordings, and add-meeting
-// are registered by registerMeetingManagerClient above.
-
-ipcMain.handle('retry-transcription', async (event, options = {}) => {
-  assertTrustedRendererSender(event);
-
-  const meetingId = String(options.meetingId || '').trim();
-  if (!meetingId) {
-    throw new Error('retry-transcription requires a meetingId');
-  }
-
-  const recordingsDir = getRecordingsDir();
-  const meeting = await new Promise((resolve, reject) => {
-    const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
-      '--recordings-dir', recordingsDir,
-      'get',
-      meetingId,
-    ]), { cwd: pythonConfig.backendPath });
-    const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
-
-    python.on('close', (code) => {
-      try {
-        processOutput.assertStdoutWithinLimit();
-      } catch (error) {
-        reject(error);
-        return;
-      }
-      if (code !== 0) {
-        reject(new Error(processOutput.getStderr().trim() || 'Meeting not found.'));
-        return;
-      }
-      try {
-        resolve(JSON.parse(processOutput.getStdout()));
-      } catch (error) {
-        reject(new Error(`Failed to parse meeting details: ${error.message}`));
-      }
-    });
-    python.on('error', reject);
-  });
-
-  if (!meeting || !meeting.audioPath || !meeting.transcriptPath) {
-    throw new Error('Meeting is missing audio or transcript path.');
-  }
-
-  const normalizedModel = requireAllowedModelSize(options.modelSize || meeting.model || 'small');
-  const normalizedLanguage = String(options.language || meeting.language || 'en');
-  const audioFile = assertSafeExistingRecordingAudioPath(meeting.audioPath);
-  const transcriptPath = assertSafeExistingTranscriptPath(meeting.transcriptPath);
-  const preferredSpeakerCount = String(options.speakerCount || '').trim();
-  let guidedDiarizationStatus = null;
-  let guidedDiarizationResult = null;
-  let guidedTranscriptionError = null;
-
-  const diarizationAvailability = getDiarizationAvailability(process.platform, process.arch);
-  if (diarizationAvailability.supported && diarizationAvailability.runtimeDevice) {
-    try {
-      const aiStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions());
-      const diarizationStatus = aiStatus && aiStatus.features && aiStatus.features.diarization;
-      const catalogModelRef = diarizationStatus ? getDiarizationModelRef(diarizationStatus.modelId) : null;
-      if (diarizationStatus && diarizationStatus.status === 'ready' && diarizationStatus.setupComplete && catalogModelRef) {
-        guidedDiarizationStatus = {
-          modelId: diarizationStatus.modelId,
-          speakerCount: diarizationStatus.speakerCount || 'auto',
-          modelRef: catalogModelRef,
-          requiredDevice: diarizationAvailability.runtimeDevice,
-        };
-      }
-    } catch (error) {
-      sendToRenderer(
-        'transcription-progress',
-        `Speaker identification status unavailable; continuing with normal retry transcription. ${error.message}\n`,
-      );
-    }
-  }
-
-  const shouldPreemptiveCpuRetry = process.platform === 'win32'
-    && shouldForceCpuTranscriptionFromCudaStatus(getCachedCudaStatus());
-
-  const result = await enqueueAiComputeAction(() => runWallClockComputeAction({
-    timeoutMs: guidedDiarizationStatus
-      ? AI_COMPUTE_TIMEOUT_MS.guidedTranscription
-      : getTranscriptionComputeTimeoutMs(normalizedModel),
-    label: 'Transcription retry',
-    terminateProcess: terminateProcessBestEffort,
-    action: async (registerProcess) => {
-      if (guidedDiarizationStatus) {
-        try {
-          const tempTranscriptPath = buildGuidedTranscriptTempPath({ finalTranscriptPath: transcriptPath });
-          guidedDiarizationResult = await runGuidedTranscriptionProcess({
-            spawnProcess: spawnTrackedPython,
-            args: buildManagedDiarizationGuidedTranscriptionArgs({
-              audioPath: audioFile,
-              outputTranscript: tempTranscriptPath,
-              language: normalizedLanguage,
-              modelSize: normalizedModel,
-              modelRef: guidedDiarizationStatus.modelRef,
-              speakerCount: preferredSpeakerCount || guidedDiarizationStatus.speakerCount || 'auto',
-              requiredDevice: guidedDiarizationStatus.requiredDevice,
-            }),
-            cwd: pythonConfig.backendPath,
-            env: {
-              ...getDiarizationDependencyEnv(),
-              ...getDiarizationCacheEnv(),
-              ...getTranscriptionRuntimeEnv(normalizedModel, { includeManagedDiarization: true }),
-              HF_TOKEN: '',
-              HUGGINGFACE_HUB_TOKEN: '',
-            },
-            finalTranscriptPath: transcriptPath,
-            tempTranscriptPath,
-            modelSize: normalizedModel,
-            fsPromises: fs.promises,
-            registerProcess,
-            terminateProcess: terminateProcessBestEffort,
-            summarizeError: summarizeDiarizationError,
-            onProgressLine: (line) => {
-              const progressEvent = parseAiBackendProgressLine(line, 'diarization');
-              if (progressEvent) {
-                sendToRenderer('diarization-progress', progressEvent);
-              } else if (line.trim()) {
-                sendToRenderer('transcription-progress', `${redactSensitiveText(line)}\n`);
-              }
-            },
-          });
-          return guidedDiarizationResult;
-        } catch (error) {
-          guidedTranscriptionError = error;
-          sendToRenderer(
-            'transcription-progress',
-            `Speaker-guided transcription failed; retrying with standard transcription. ${error.message}\n`,
-          );
-        }
-      }
-
-      if (shouldPreemptiveCpuRetry) {
-        sendToRenderer(
-          'transcription-progress',
-          'CUDA runtime is not loadable on this system. Starting transcription retry on CPU.\n',
-        );
-      }
-      try {
-        return await runTranscriptionProcess({
-          audioFile,
-          language: normalizedLanguage,
-          modelSize: normalizedModel,
-          device: shouldPreemptiveCpuRetry ? 'cpu' : 'auto',
-          registerProcess,
-        });
-      } catch (error) {
-        if (!isRetryableCudaTranscriptionError(error && error.message)) {
-          throw error;
-        }
-        sendToRenderer(
-          'transcription-progress',
-          'GPU transcription failed because CUDA runtime libraries could not be loaded. Retrying on CPU; this may take significantly longer.\n',
-        );
-        return runTranscriptionProcess({
-          audioFile,
-          language: normalizedLanguage,
-          modelSize: normalizedModel,
-          device: 'cpu',
-          registerProcess,
-        });
-      }
-    },
-  }));
-
-  const transcribedPath = assertSafeExistingTranscriptPath(result.output_file || transcriptPath);
-  if (path.resolve(transcribedPath) !== path.resolve(transcriptPath)) {
-    const transcriptContent = await fs.promises.readFile(transcribedPath, 'utf8');
-    await fs.promises.writeFile(transcriptPath, transcriptContent, 'utf8');
-  }
-
-  const updatedMeeting = await new Promise((resolve, reject) => {
-    const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
-      '--recordings-dir', recordingsDir,
-      'update-transcription',
-      meetingId,
-      '--status', 'completed',
-      '--language', normalizedLanguage,
-      '--model', normalizedModel,
-      '--duration', String(result.duration || 0),
-      '--clear-error',
-    ]), { cwd: pythonConfig.backendPath });
-    const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
-    python.on('close', (code) => {
-      try {
-        processOutput.assertStdoutWithinLimit();
-      } catch (error) {
-        reject(error);
-        return;
-      }
-      if (code !== 0) {
-        reject(new Error(processOutput.getStderr().trim() || 'Failed to update meeting status.'));
-        return;
-      }
-      try {
-        resolve(JSON.parse(processOutput.getStdout()));
-      } catch (error) {
-        reject(new Error(`Failed to parse updated meeting: ${error.message}`));
-      }
-    });
-    python.on('error', reject);
-  });
-
-  return {
-    ...result,
-    output_file: transcriptPath,
-    transcriptPath,
-    diarization: guidedDiarizationResult,
-    diarizationStatus: guidedDiarizationStatus,
-    diarizationError: guidedTranscriptionError ? guidedTranscriptionError.message : null,
-    meeting: updatedMeeting,
-  };
-});
-
+ * Update editable meeting metadata (currently: display title).
 /**
  * Update editable meeting metadata (currently: display title).
  *
