@@ -6,23 +6,25 @@ operations for listing, retrieving, and deleting meetings.
 """
 
 import json
-import os
-import time
+# Kept as module attributes so characterization tests can monkeypatch
+# ``meeting_manager.os.replace`` / ``meeting_manager.time.sleep``.
+import os  # noqa: F401
+import time  # noqa: F401
 from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional
 import sys
 import shutil
-import tempfile
 import threading
-import re
 
 from filelock import FileLock
 
-from common.sensitive_text import redact_sensitive_text
+from meetings import delete_tx as meeting_delete
 from meetings import normalization as meeting_norm
+from meetings import paths as meeting_paths
 from meetings import scan_import as meeting_scan
+from meetings import store as meeting_store
 
 
 _UNSET = object()
@@ -59,113 +61,24 @@ class MeetingManager:
     @contextmanager
     def _metadata_guard(self):
         """Serialize metadata operations across threads and processes."""
-        with self._metadata_thread_lock:
-            with self._metadata_file_lock:
-                yield
+        with meeting_store.metadata_guard(self):
+            yield
 
     def _load_meetings_unlocked(self) -> List[Dict]:
         """Load meetings without acquiring the metadata guard."""
-        try:
-            with open(self.metadata_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except FileNotFoundError:
-            return []
-        except json.JSONDecodeError as exc:
-            backup_path = self._backup_corrupt_metadata(exc)
-            warning_path = backup_path.name if backup_path else self.metadata_file.name
-            print(
-                f"Warning: meetings metadata was corrupt and has been backed up to {warning_path}",
-                file=sys.stderr,
-            )
-            return []
+        return meeting_store.load_meetings_unlocked(self)
 
     def _backup_corrupt_metadata(self, error: json.JSONDecodeError) -> Optional[Path]:
         """Back up a corrupt metadata file before continuing with an empty in-memory list."""
-        if not self.metadata_file.exists():
-            return None
-
-        try:
-            stat = self.metadata_file.stat()
-            signature = (stat.st_mtime_ns, stat.st_size)
-        except OSError:
-            signature = None
-
-        if (
-            signature is not None
-            and self._corrupt_metadata_signature == signature
-            and self._corrupt_metadata_backup_path is not None
-            and self._corrupt_metadata_backup_path.exists()
-        ):
-            return self._corrupt_metadata_backup_path
-
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_path = self.recordings_dir / f"meetings.corrupt.{timestamp}.json"
-        counter = 1
-        while backup_path.exists():
-            backup_path = self.recordings_dir / f"meetings.corrupt.{timestamp}_{counter}.json"
-            counter += 1
-
-        shutil.copy2(self.metadata_file, backup_path)
-        self._corrupt_metadata_backup_path = backup_path
-        self._corrupt_metadata_signature = signature
-        print(
-            f"Warning: Backed up corrupt meetings metadata after JSON decode failure at line {error.lineno}, column {error.colno}",
-            file=sys.stderr,
-        )
-        return backup_path
+        return meeting_store.backup_corrupt_metadata(self, error)
 
     def _save_meetings_unlocked(self, meetings: List[Dict]):
         """Atomically save meetings without acquiring the metadata guard."""
-        temp_fd, temp_path = tempfile.mkstemp(
-            prefix='meetings.',
-            suffix='.tmp',
-            dir=str(self.recordings_dir),
-        )
-
-        try:
-            with os.fdopen(temp_fd, 'w', encoding='utf-8') as f:
-                json.dump(meetings, f, indent=2, ensure_ascii=False)
-                f.flush()
-                os.fsync(f.fileno())
-
-            os.replace(temp_path, self.metadata_file)
-            self._corrupt_metadata_backup_path = None
-            self._corrupt_metadata_signature = None
-
-            try:
-                dir_fd = os.open(self.recordings_dir, os.O_RDONLY)
-                try:
-                    os.fsync(dir_fd)
-                finally:
-                    os.close(dir_fd)
-            except (AttributeError, OSError):
-                pass
-        finally:
-            if os.path.exists(temp_path):
-                os.unlink(temp_path)
+        meeting_store.save_meetings_unlocked(self, meetings)
 
     def _list_meetings_locked(self) -> List[Dict]:
         """Load and deduplicate meetings while already holding the metadata guard."""
-        meetings = self._load_meetings_unlocked()
-
-        seen_ids = set()
-        unique_meetings = []
-        duplicates_found = 0
-
-        for meeting in meetings:
-            meeting_id = meeting.get('id')
-            if meeting_id not in seen_ids:
-                seen_ids.add(meeting_id)
-                unique_meetings.append(meeting)
-            else:
-                duplicates_found += 1
-
-        if duplicates_found > 0:
-            print(f"Warning: Found and removed {duplicates_found} duplicate meeting(s) from database", file=sys.stderr)
-            self._save_meetings_unlocked(unique_meetings)
-
-        unique_meetings.sort(key=lambda m: m.get('date', ''), reverse=True)
-        return unique_meetings
+        return meeting_store.list_meetings_locked(self)
 
     @staticmethod
     def _read_text_file(file_path: Optional[Path], label: str) -> str:
@@ -200,11 +113,7 @@ class MeetingManager:
         return meeting_norm.strip_inline_transcript(meeting)
 
     def _is_recordings_path(self, file_path: Path) -> bool:
-        try:
-            file_path.resolve(strict=False).relative_to(self.recordings_dir.resolve(strict=False))
-            return True
-        except ValueError:
-            return False
+        return meeting_paths.is_recordings_path(self, file_path)
 
     def _resolve_accessible_recordings_file(
         self,
@@ -214,179 +123,28 @@ class MeetingManager:
         must_exist: bool = True,
         label: str = 'file',
     ) -> Optional[Path]:
-        candidate = Path(str(file_path))
-        if candidate.is_symlink():
-            print(f"Warning: Ignoring symlink {label}: {candidate}", file=sys.stderr)
-            return None
-
-        resolved = candidate.resolve(strict=False)
-        if not self._is_recordings_path(resolved):
-            print(f"Warning: Ignoring unsafe {label} path: {candidate}", file=sys.stderr)
-            return None
-
-        if allowed_suffixes is not None:
-            normalized_suffixes = tuple(suffix.lower() for suffix in allowed_suffixes)
-            if resolved.suffix.lower() not in normalized_suffixes:
-                print(
-                    f"Warning: Ignoring {label} path with unsupported extension: {candidate}",
-                    file=sys.stderr,
-                )
-                return None
-
-        if must_exist and not resolved.is_file():
-            return None
-
-        return resolved
-
-    def _normalize_sidecar_path(self, value: object, allowed_suffixes: tuple[str, ...]) -> Optional[str]:
-        if value in (None, ''):
-            return None
-
-        file_path = Path(str(value))
-        if file_path.is_symlink():
-            raise ValueError('AI artifact path must not be a symlink')
-        file_path = file_path.resolve(strict=False)
-        if file_path.suffix.lower() not in allowed_suffixes:
-            raise ValueError('AI artifact path has an unsupported file extension')
-        if not self._is_recordings_path(file_path):
-            raise ValueError('AI artifact path must stay inside the recordings directory')
-        return str(file_path)
-
-    def _normalize_ai_feature_metadata(self, feature: str, metadata: Dict) -> Dict:
-        allowed_fields = {
-            'diarization': (
-                'status',
-                'model',
-                'completedAt',
-                'speakerCount',
-                'segmentsPath',
-                'error',
-            ),
-            'summary': (
-                'status',
-                'modelProfile',
-                'model',
-                'generatedAt',
-                'sourceTranscriptHash',
-                'jsonPath',
-                'markdownPath',
-                'error',
-            ),
-        }
-
-        if feature not in allowed_fields:
-            raise ValueError(f"Unsupported AI metadata feature: {feature}")
-        if not isinstance(metadata, dict):
-            raise ValueError(f"AI metadata for {feature} must be an object")
-
-        normalized = {}
-        for field in allowed_fields[feature]:
-            if field not in metadata:
-                continue
-
-            value = metadata[field]
-            if value is None:
-                normalized[field] = None
-            elif field == 'speakerCount':
-                try:
-                    normalized[field] = int(value)
-                except (TypeError, ValueError):
-                    continue
-            elif field in ('segmentsPath', 'jsonPath'):
-                normalized_path = self._normalize_sidecar_path(value, ('.json',))
-                if normalized_path is not None:
-                    normalized[field] = normalized_path
-            elif field == 'markdownPath':
-                normalized_path = self._normalize_sidecar_path(value, ('.md',))
-                if normalized_path is not None:
-                    normalized[field] = normalized_path
-            elif field == 'sourceTranscriptHash':
-                text = meeting_norm.normalize_text(value)
-                if re.fullmatch(r"sha256:[a-fA-F0-9]{64}", text):
-                    normalized[field] = text
-            else:
-                if field == 'error':
-                    normalized[field] = redact_sensitive_text(value)
-                else:
-                    normalized[field] = meeting_norm.normalize_text(value)
-
-        return normalized
-
-    def _iter_ai_file_references(self, meeting: Dict) -> List[tuple[str, Path]]:
-        ai = meeting.get('ai')
-        if not isinstance(ai, dict):
-            return []
-
-        references: List[tuple[str, Path]] = []
-        feature_file_fields = {
-            'diarization': (
-                ('speaker labels', 'segmentsPath', ('.json',)),
-            ),
-            'summary': (
-                ('summary JSON', 'jsonPath', ('.json',)),
-                ('summary Markdown', 'markdownPath', ('.md',)),
-            ),
-        }
-
-        for feature, fields in feature_file_fields.items():
-            feature_metadata = ai.get(feature)
-            if not isinstance(feature_metadata, dict):
-                continue
-
-            for label, field, allowed_suffixes in fields:
-                file_path = feature_metadata.get(field)
-                if not file_path:
-                    continue
-                safe_path = self._resolve_accessible_recordings_file(
-                    Path(str(file_path)),
-                    allowed_suffixes=allowed_suffixes,
-                    must_exist=True,
-                    label=label,
-                )
-                if safe_path is not None:
-                    references.append((label, safe_path))
-
-        return references
-
-    def _meeting_file_references(self, meeting: Dict) -> List[tuple[str, Path]]:
-        references: List[tuple[str, Path]] = []
-        core_file_fields = (
-            ('audio', meeting.get('audioPath'), ('.opus', '.wav', '.m4a', '.mp3', '.flac')),
-            ('transcript', meeting.get('transcriptPath'), ('.md',)),
+        return meeting_paths.resolve_accessible_recordings_file(
+            self,
+            file_path,
+            allowed_suffixes=allowed_suffixes,
+            must_exist=must_exist,
+            label=label,
         )
 
-        for label, raw_path, allowed_suffixes in core_file_fields:
-            if not raw_path:
-                continue
-            safe_path = self._resolve_accessible_recordings_file(
-                Path(str(raw_path)),
-                allowed_suffixes=allowed_suffixes,
-                must_exist=True,
-                label=label,
-            )
-            if safe_path is not None:
-                references.append((label, safe_path))
+    def _normalize_sidecar_path(self, value: object, allowed_suffixes: tuple[str, ...]) -> Optional[str]:
+        return meeting_paths.normalize_sidecar_path(self, value, allowed_suffixes)
 
-        references.extend(self._iter_ai_file_references(meeting))
+    def _normalize_ai_feature_metadata(self, feature: str, metadata: Dict) -> Dict:
+        return meeting_paths.normalize_ai_feature_metadata(self, feature, metadata)
 
-        unique_references: List[tuple[str, Path]] = []
-        seen_paths = set()
-        for label, file_path in references:
-            path_key = str(file_path.resolve(strict=False))
-            if path_key in seen_paths:
-                continue
-            seen_paths.add(path_key)
-            unique_references.append((label, file_path))
+    def _iter_ai_file_references(self, meeting: Dict) -> List[tuple[str, Path]]:
+        return meeting_paths.iter_ai_file_references(self, meeting)
 
-        return unique_references
+    def _meeting_file_references(self, meeting: Dict) -> List[tuple[str, Path]]:
+        return meeting_paths.meeting_file_references(self, meeting)
 
     def _wait_for_file(self, file_path: Path, attempts: int = 5, delay_seconds: float = 0.1) -> bool:
-        for attempt in range(attempts):
-            if file_path.is_file():
-                return True
-            if attempt < attempts - 1:
-                time.sleep(delay_seconds)
-        return False
+        return meeting_delete.wait_for_file(file_path, attempts=attempts, delay_seconds=delay_seconds)
 
     def add_meeting(
         self,
@@ -924,8 +682,6 @@ class MeetingManager:
         Returns:
             True if deleted, False if not found
         """
-        import time
-
         with self._metadata_guard():
             meetings = self._list_meetings_locked()
             meeting = next((m for m in meetings if m['id'] == meeting_id), None)
@@ -938,67 +694,15 @@ class MeetingManager:
             max_retries = 3
             retry_delay = 0.5  # 500ms
 
-            def delete_file_with_retry(file_path: Path, label: str):
-                if not file_path.exists():
-                    return
-
-                for attempt in range(max_retries):
-                    try:
-                        file_path.unlink()
-                        print(f"Deleted {label}: {file_path}", file=sys.stderr)
-                        return
-                    except PermissionError as e:
-                        if attempt < max_retries - 1:
-                            print(f"File locked (attempt {attempt + 1}/{max_retries}), retrying... ({e})", file=sys.stderr)
-                            time.sleep(retry_delay)
-                        else:
-                            raise RuntimeError(f"Failed to delete {label} file after {max_retries} attempts: {e}")
-                    except Exception as e:
-                        raise RuntimeError(f"Failed to delete {label} file: {e}")
-
-            def tombstone_path_for(file_path: Path) -> Path:
-                base_name = f".{file_path.name}.deleting.{os.getpid()}"
-                candidate = file_path.with_name(base_name)
-                counter = 1
-                while candidate.exists():
-                    candidate = file_path.with_name(f"{base_name}.{counter}")
-                    counter += 1
-                return candidate
-
-            def move_file_to_tombstone(file_path: Path, label: str) -> Optional[Path]:
-                if not file_path.exists():
-                    return None
-
-                tombstone_path = tombstone_path_for(file_path)
-                for attempt in range(max_retries):
-                    try:
-                        file_path.replace(tombstone_path)
-                        print(f"Prepared {label} for deletion: {file_path}", file=sys.stderr)
-                        return tombstone_path
-                    except PermissionError as e:
-                        if attempt < max_retries - 1:
-                            print(f"File locked (attempt {attempt + 1}/{max_retries}), retrying... ({e})", file=sys.stderr)
-                            time.sleep(retry_delay)
-                        else:
-                            raise RuntimeError(f"Failed to prepare {label} file for deletion after {max_retries} attempts: {e}")
-                    except Exception as e:
-                        raise RuntimeError(f"Failed to prepare {label} file for deletion: {e}")
-
-                return None
-
-            def restore_moved_files(moved_files: List[tuple[Path, Path, str]]):
-                for tombstone_path, original_path, label in reversed(moved_files):
-                    if tombstone_path.exists() and not original_path.exists():
-                        try:
-                            tombstone_path.replace(original_path)
-                            print(f"Restored {label} after delete rollback: {original_path}", file=sys.stderr)
-                        except Exception as restore_error:
-                            print(f"Warning: Could not restore {label} after delete rollback: {restore_error}", file=sys.stderr)
-
             moved_files: List[tuple[Path, Path, str]] = []
             try:
                 for label, file_path in self._meeting_file_references(meeting):
-                    tombstone_path = move_file_to_tombstone(file_path, label)
+                    tombstone_path = meeting_delete.move_file_to_tombstone(
+                        file_path,
+                        label,
+                        max_retries=max_retries,
+                        retry_delay=retry_delay,
+                    )
                     if tombstone_path is not None:
                         moved_files.append((tombstone_path, file_path, label))
 
@@ -1007,12 +711,17 @@ class MeetingManager:
                 meetings = [m for m in meetings if m['id'] != meeting_id]
                 self._save_meetings_unlocked(meetings)
             except Exception:
-                restore_moved_files(moved_files)
+                meeting_delete.restore_moved_files(moved_files)
                 raise
 
             for tombstone_path, _original_path, label in moved_files:
                 try:
-                    delete_file_with_retry(tombstone_path, label)
+                    meeting_delete.delete_file_with_retry(
+                        tombstone_path,
+                        label,
+                        max_retries=max_retries,
+                        retry_delay=retry_delay,
+                    )
                 except RuntimeError as deletion_error:
                     print(f"Warning: {deletion_error}", file=sys.stderr)
 
@@ -1021,8 +730,7 @@ class MeetingManager:
 
     def _save_meetings(self, meetings: List[Dict]):
         """Save meetings list to JSON file."""
-        with self._metadata_guard():
-            self._save_meetings_unlocked(meetings)
+        meeting_store.save_meetings(self, meetings)
 
 
 # CLI interface for testing
