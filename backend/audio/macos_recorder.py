@@ -17,7 +17,15 @@ import numpy as np
 
 from .compressor import compress_and_report, verify_recording_integrity
 from .chunked_audio_buffer import ChunkedAudioBuffer
+from .macos_desktop_diagnostics import (
+    build_desktop_diagnostics,
+    format_desktop_diagnostics_summary,
+)
+from .macos_stereo_repair import repair_one_sided_stereo
 from .wav_io import write_float_stereo_wav
+
+# Re-export for characterization tests that import macos_recorder._repair_one_sided_stereo
+_repair_one_sided_stereo = repair_one_sided_stereo
 
 try:
     # pyright: ignore[reportMissingImports]
@@ -116,37 +124,6 @@ def _downmix_to_stereo(audio: np.ndarray, num_channels: int) -> np.ndarray:
 
     return np.column_stack([left, right])
 
-
-def _repair_one_sided_stereo(audio: np.ndarray, stream_name: str) -> np.ndarray:
-    """Duplicate a dominant stereo channel so transcription downmixes do not lose speech."""
-    if len(audio.shape) != 2 or audio.shape[1] != 2 or len(audio) == 0:
-        return audio
-
-    left = audio[:, 0]
-    right = audio[:, 1]
-    left_rms = float(np.sqrt(np.mean(np.square(left)))) if left.size else 0.0
-    right_rms = float(np.sqrt(np.mean(np.square(right)))) if right.size else 0.0
-    left_peak = float(np.max(np.abs(left))) if left.size else 0.0
-    right_peak = float(np.max(np.abs(right))) if right.size else 0.0
-
-    max_rms = max(left_rms, right_rms)
-    min_rms = min(left_rms, right_rms)
-    max_peak = max(left_peak, right_peak)
-    min_peak = min(left_peak, right_peak)
-
-    if max_rms < 1e-5 or max_peak < 1e-4:
-        return audio
-
-    if min_rms > max_rms * 0.20 or min_peak > max_peak * 0.35:
-        return audio
-
-    dominant = left if left_rms >= right_rms else right
-    print(
-        f"  Repairing one-sided {stream_name} stereo for mono-compatible transcription "
-        f"(left_rms={left_rms:.6f}, right_rms={right_rms:.6f})",
-        file=sys.stderr,
-    )
-    return np.column_stack([dominant, dominant])
 
 # Import Swift audio capture helper (preferred for macOS 13+)
 # Falls back to PyObjC ScreenCaptureKit if Swift helper not available
@@ -327,79 +304,12 @@ class MacOSAudioRecorder:
         return warning_codes
 
     def _build_desktop_diagnostics(self):
-        capture = self.desktop_capture
-        diagnostics = {
-            'captureType': self.desktop_capture_type or 'none',
-            'available': capture is not None,
-            'bufferChunks': 0,
-            'bufferSamples': 0,
-            'peakLevel': 0.0,
-            'firstAudioTime': None,
-            'lastAudioTime': None,
-            'helperSampleBuffers': 0,
-            'helperBytes': 0,
-            'helperScreenFrames': 0,
-            'helperDroppedChunks': 0,
-            'helperQueuedBytesRemaining': 0,
-            'helperCaptureBackend': None,
-            'helperAudioFormat': None,
-            'helperContentInfo': None,
-            'helperStreamConfig': None,
-        }
-
-        if capture is None:
-            return diagnostics
-
-        read_chunks = int(getattr(capture, 'read_chunk_count', 0) or 0)
-        read_samples = int(getattr(capture, 'read_sample_count', 0) or 0)
-        try:
-            with capture.buffer_lock:
-                live_buffer = getattr(capture, 'audio_buffer', []) or []
-                buffer_chunks = int(
-                    getattr(capture, 'last_captured_chunk_count', 0) or len(live_buffer)
-                )
-                buffer_samples = int(
-                    getattr(capture, 'last_captured_sample_count', 0) or sum(len(chunk) for chunk in live_buffer)
-                )
-                diagnostics['bufferChunks'] = buffer_chunks if buffer_chunks > 0 else read_chunks
-                diagnostics['bufferSamples'] = buffer_samples if buffer_samples > 0 else read_samples
-                diagnostics['peakLevel'] = float(getattr(capture, 'read_peak_level', 0.0) or 0.0)
-        except Exception as error:
-            diagnostics['error'] = f'Could not read desktop buffer diagnostics: {error}'
-
-        diagnostics['firstAudioTime'] = getattr(capture, 'first_audio_time', None)
-        diagnostics['lastAudioTime'] = getattr(capture, 'last_audio_time', None)
-        diagnostics['readChunks'] = read_chunks
-        diagnostics['readSamples'] = read_samples
-        diagnostics['helperSampleBuffers'] = int(
-            getattr(capture, 'helper_total_sample_buffers', 0)
-            or getattr(capture, 'last_helper_sample_buffers', 0)
-            or 0
-        )
-        diagnostics['helperBytes'] = int(
-            getattr(capture, 'helper_total_bytes', 0)
-            or getattr(capture, 'last_helper_bytes', 0)
-            or 0
-        )
-        diagnostics['helperScreenFrames'] = int(getattr(capture, 'helper_screen_frames', 0) or 0)
-        diagnostics['helperDroppedChunks'] = int(getattr(capture, 'helper_dropped_chunks', 0) or 0)
-        diagnostics['helperQueuedBytesRemaining'] = int(getattr(capture, 'helper_queued_bytes_remaining', 0) or 0)
-        diagnostics['helperCaptureBackend'] = getattr(capture, 'helper_capture_backend', None)
-        diagnostics['helperAudioFormat'] = getattr(capture, 'helper_audio_format', None)
-        diagnostics['helperContentInfo'] = getattr(capture, 'helper_content_info', None)
-        diagnostics['helperStreamConfig'] = getattr(capture, 'helper_stream_config', None)
-        return diagnostics
+        return build_desktop_diagnostics(self.desktop_capture, self.desktop_capture_type)
 
     def _emit_desktop_diagnostics_warning(self, emit_warning: bool = True):
         diagnostics = self._build_desktop_diagnostics()
         self.desktop_diagnostics = diagnostics
-        summary = (
-            f"Desktop capture diagnostics: type={diagnostics['captureType']}, "
-            f"backend={diagnostics['helperCaptureBackend'] or 'unknown'}, "
-            f"chunks={diagnostics['bufferChunks']}, samples={diagnostics['bufferSamples']}, "
-            f"peak={diagnostics['peakLevel']:.6f}, helperBuffers={diagnostics['helperSampleBuffers']}, "
-            f"helperBytes={diagnostics['helperBytes']}, helperScreenFrames={diagnostics['helperScreenFrames']}"
-        )
+        summary = format_desktop_diagnostics_summary(diagnostics)
         print(summary, file=sys.stderr)
         if emit_warning:
             _send_warning_message(
