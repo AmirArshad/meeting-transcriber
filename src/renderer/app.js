@@ -1717,6 +1717,35 @@ function setupEventListeners() {
     }
   }));
 
+  if (typeof window.electronAPI.onAppQuitProgress === 'function') {
+    registerCleanup(window.electronAPI.onAppQuitProgress((payload) => {
+      const message = typeof payload === 'string' ? payload : payload && payload.message;
+      if (!message) {
+        return;
+      }
+      addLog(message);
+      statusText.textContent = message;
+    }));
+  }
+
+  if (typeof window.electronAPI.onRecordingSavedDuringQuit === 'function') {
+    registerCleanup(window.electronAPI.onRecordingSavedDuringQuit((payload) => {
+      const message = payload && payload.message
+        ? payload.message
+        : 'Recording saved during quit attempt. Open History to continue.';
+      addLog(message, 'warning');
+      stopTimer();
+      if (audioVisualizer) {
+        audioVisualizer.stop();
+      }
+      setTranscriptMessage(message, false);
+      setRecordingState('idle');
+      loadMeetingHistory({ scan: true }).catch((error) => {
+        console.warn('Could not refresh history after quit-saved recording:', error);
+      });
+    }));
+  }
+
   registerCleanup(window.electronAPI.onRecordingInitProgress((progress) => {
     if (progress.stage === 'started') {
       return;
@@ -3979,7 +4008,10 @@ async function checkGPUStatus() {
         resetInstallButton();
       } else {
         const statusCode = String(cudaInfo.statusCode || '').trim();
-        if (statusCode === 'unsupportedRuntimeMajor') {
+        if (cudaInfo.repairRecommendedAfterQuit) {
+          setRepairInstallButton();
+          gpuValue2.textContent = 'Repair recommended (previous quit interrupted GPU setup)';
+        } else if (statusCode === 'unsupportedRuntimeMajor') {
           setRepairInstallButton();
           const unsupportedProfiles = Array.isArray(cudaInfo.unsupportedDetectedProfiles)
             ? cudaInfo.unsupportedDetectedProfiles.filter(Boolean)
@@ -4006,6 +4038,10 @@ async function checkGPUStatus() {
           : '~1 GB';
         if (gpuValue4) {
           const diagnostics = [];
+          if (cudaInfo.repairRecommendedAfterQuit) {
+            diagnostics.push(cudaInfo.repairRecommendedReason
+              || 'GPU runtime setup was interrupted by a previous quit. Repair before relying on CUDA.');
+          }
           if (statusCode === 'unsupportedRuntimeMajor') {
             const unsupportedProfiles = Array.isArray(cudaInfo.unsupportedDetectedProfiles)
               ? cudaInfo.unsupportedDetectedProfiles.filter(Boolean)
@@ -4101,8 +4137,10 @@ function updateCudaRuntimeWarning({ platform, gpuInfo, cudaInfo }) {
     && gpuInfo
     && gpuInfo.hasGPU
     && cudaInfo
-    && cudaInfo.deviceAvailable
-    && cudaInfo.runtimeLoadable === false;
+    && (
+      cudaInfo.repairRecommendedAfterQuit === true
+      || (cudaInfo.deviceAvailable && cudaInfo.runtimeLoadable === false)
+    );
 
   if (!hasBrokenRuntime) {
     warning.style.display = 'none';
@@ -4111,7 +4149,10 @@ function updateCudaRuntimeWarning({ platform, gpuInfo, cudaInfo }) {
 
   const missing = Array.isArray(cudaInfo.missingLibraries) ? cudaInfo.missingLibraries.filter(Boolean) : [];
   const statusCode = String(cudaInfo.statusCode || '').trim();
-  if (statusCode === 'unsupportedRuntimeMajor') {
+  if (cudaInfo.repairRecommendedAfterQuit) {
+    warningSub.textContent = cudaInfo.repairRecommendedReason
+      || 'GPU runtime setup was interrupted by a previous quit. Repair GPU compatibility in Settings before relying on CUDA transcription.';
+  } else if (statusCode === 'unsupportedRuntimeMajor') {
     const unsupportedProfiles = Array.isArray(cudaInfo.unsupportedDetectedProfiles)
       ? cudaInfo.unsupportedDetectedProfiles.filter(Boolean)
       : [];

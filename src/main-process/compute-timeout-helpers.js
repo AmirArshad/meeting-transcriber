@@ -9,6 +9,12 @@ const AI_COMPUTE_TIMEOUT_MS = Object.freeze({
   modelDownloadIdleWait: 15 * 60 * 1000,
 });
 
+/** Labels for compute jobs that cannot be aborted and routinely exceed quit-drain budgets. */
+const NON_ABORTABLE_LONG_COMPUTE_LABEL_PATTERN = /^(Transcription|Speaker-guided transcription|Speaker identification|Transcription retry)(\b|$)/i;
+
+/** All in-flight wall-clock jobs (compute queue + GPU can overlap). */
+const activeWallClockComputeJobs = new Set();
+
 function getTranscriptionComputeTimeoutMs(modelSize) {
   const modelTimeouts = {
     tiny: 30,
@@ -26,6 +32,57 @@ function formatComputeTimeoutLabel(timeoutMs) {
   return `${minutes} minute${minutes === 1 ? '' : 's'}`;
 }
 
+function getActiveWallClockComputeJobs() {
+  return [...activeWallClockComputeJobs];
+}
+
+/**
+ * Prefer a non-abortable transcription-class job when present (quit-drain skip),
+ * otherwise the most recently started job.
+ */
+function getActiveWallClockComputeJob() {
+  const jobs = getActiveWallClockComputeJobs();
+  if (jobs.length === 0) {
+    return null;
+  }
+  const nonAbortable = jobs.find((job) => isNonAbortableLongComputeJob(job));
+  return nonAbortable || jobs[jobs.length - 1];
+}
+
+function isNonAbortableLongComputeJob(job) {
+  if (!job || typeof job.label !== 'string') {
+    return false;
+  }
+  return NON_ABORTABLE_LONG_COMPUTE_LABEL_PATTERN.test(job.label.trim());
+}
+
+/**
+ * Quit drain should not burn the full 30s budget waiting on transcription-class
+ * jobs that have no abort path and will be force-killed anyway.
+ */
+function shouldSkipQuitComputeDrain(job) {
+  return isNonAbortableLongComputeJob(job);
+}
+
+/**
+ * Terminate every active non-abortable long compute job (transcription-class).
+ * Used by quit drain so hasPendingWork() can clear instead of looping forever.
+ */
+async function terminateNonAbortableQuitComputeJobs() {
+  const jobs = getActiveWallClockComputeJobs().filter(shouldSkipQuitComputeDrain);
+  await Promise.all(jobs.map(async (job) => {
+    if (typeof job.terminate !== 'function') {
+      return;
+    }
+    try {
+      await job.terminate();
+    } catch (_error) {
+      // Best-effort — force-kill loop is the backstop.
+    }
+  }));
+  return jobs.length;
+}
+
 function runWallClockComputeAction({
   action,
   timeoutMs,
@@ -40,10 +97,33 @@ function runWallClockComputeAction({
   let timeoutHandle = null;
   let settled = false;
   let timedOut = false;
+  let quitTerminated = false;
+  let settleReject = null;
 
   const registerProcess = (proc) => {
     activeProcess = proc;
     return proc;
+  };
+
+  const job = {
+    label,
+    timeoutMs,
+    startedAt: Date.now(),
+    terminate: async () => {
+      quitTerminated = true;
+      try {
+        await Promise.resolve(terminateProcess(activeProcess));
+      } catch (_error) {
+        // Best-effort terminate.
+      }
+      if (typeof settleReject === 'function') {
+        settleReject(new Error(`${label} was terminated because the app is quitting.`));
+      }
+    },
+  };
+
+  const clearActiveJob = () => {
+    activeWallClockComputeJobs.delete(job);
   };
 
   const settle = (callback, value) => {
@@ -55,10 +135,16 @@ function runWallClockComputeAction({
       clearTimeout(timeoutHandle);
       timeoutHandle = null;
     }
+    clearActiveJob();
     callback(value);
   };
 
   return new Promise((resolve, reject) => {
+    // Assign settleReject before registering the job so a concurrent quit
+    // terminate can never land on a null settleReject (N2).
+    settleReject = (error) => settle(reject, error);
+    activeWallClockComputeJobs.add(job);
+
     const actionPromise = Promise.resolve()
       .then(() => action(registerProcess));
 
@@ -77,13 +163,19 @@ function runWallClockComputeAction({
 
     actionPromise
       .then((result) => {
-        if (timedOut) {
+        if (timedOut || quitTerminated) {
           return;
         }
         settle(resolve, result);
       })
       .catch((error) => {
         if (timedOut) {
+          return;
+        }
+        if (quitTerminated) {
+          // Prefer the explicit quit-terminate rejection if settleReject already ran;
+          // otherwise surface the action error.
+          settle(reject, error);
           return;
         }
         settle(reject, error);
@@ -101,5 +193,10 @@ module.exports = {
   getTranscriptionComputeTimeoutMs,
   formatComputeTimeoutLabel,
   runWallClockComputeAction,
+  getActiveWallClockComputeJob,
+  getActiveWallClockComputeJobs,
+  terminateNonAbortableQuitComputeJobs,
+  isNonAbortableLongComputeJob,
+  shouldSkipQuitComputeDrain,
   getGuidedTranscriptionTimeoutMinutes,
 };

@@ -43,6 +43,7 @@ const {
  */
 function createGpuRuntimeService(deps) {
   const {
+    app,
     path,
     fs,
     pythonConfig,
@@ -140,6 +141,50 @@ function createGpuRuntimeService(deps) {
 
   function waitForGpuRuntimeIdle() {
     return gpuRuntimeActionPromise ? gpuRuntimeActionPromise.catch(() => {}) : Promise.resolve();
+  }
+
+  function getGpuRepairRecommendedMarkerPath() {
+    return path.join(app.getPath('userData'), 'gpu-runtime-repair-recommended.json');
+  }
+
+  function markGpuRepairRecommendedAfterQuitKill(reason = 'GPU runtime setup was interrupted because the app quit.') {
+    try {
+      const markerPath = getGpuRepairRecommendedMarkerPath();
+      fs.writeFileSync(markerPath, JSON.stringify({
+        recommended: true,
+        reason: String(reason || '').slice(0, 500),
+        markedAt: new Date().toISOString(),
+      }), 'utf8');
+    } catch (error) {
+      console.warn('Failed to persist GPU repair-recommended marker:', error.message);
+    }
+  }
+
+  function consumeGpuRepairRecommendedMarker() {
+    const markerPath = getGpuRepairRecommendedMarkerPath();
+    try {
+      if (!fs.existsSync(markerPath)) {
+        return null;
+      }
+      const raw = fs.readFileSync(markerPath, 'utf8');
+      fs.rmSync(markerPath, { force: true });
+      const parsed = JSON.parse(raw);
+      if (!parsed || parsed.recommended !== true) {
+        return null;
+      }
+      return {
+        recommended: true,
+        reason: parsed.reason || 'GPU runtime setup was interrupted by a previous quit.',
+        markedAt: parsed.markedAt || null,
+      };
+    } catch (error) {
+      try {
+        fs.rmSync(markerPath, { force: true });
+      } catch (_cleanupError) {
+        // ignore
+      }
+      return null;
+    }
   }
 
   function checkNvidiaGpuAvailability({ registerProcess = (proc) => proc } = {}) {
@@ -414,7 +459,17 @@ function createGpuRuntimeService(deps) {
             error: 'CUDA runtime checks are only supported on Windows.',
           });
         }
-        return enrichCheckCudaStatus(await checkCudaRuntimeStatus());
+        const status = await enrichCheckCudaStatus(await checkCudaRuntimeStatus());
+        const quitInterrupted = consumeGpuRepairRecommendedMarker();
+        if (quitInterrupted && !status.runtimeLoadable) {
+          return {
+            ...status,
+            repairRecommendedAfterQuit: true,
+            repairRecommendedReason: quitInterrupted.reason,
+            statusCode: status.statusCode === 'ok' ? 'repairRecommendedAfterQuit' : status.statusCode,
+          };
+        }
+        return status;
       } catch (error) {
         return enrichCheckCudaStatus({
           installed: false,
@@ -490,6 +545,8 @@ function createGpuRuntimeService(deps) {
     runGpuRuntimeAction,
     hasInFlightGpuRuntimeAction,
     waitForGpuRuntimeIdle,
+    markGpuRepairRecommendedAfterQuitKill,
+    consumeGpuRepairRecommendedMarker,
     checkNvidiaGpuAvailability,
     enrichCheckCudaStatus,
     runGpuPackageInstall,

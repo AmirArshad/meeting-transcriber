@@ -82,6 +82,13 @@ const {
   AI_COMPUTE_TIMEOUT_MS,
   getTranscriptionComputeTimeoutMs,
   runWallClockComputeAction,
+  getActiveWallClockComputeJob,
+  getActiveWallClockComputeJobs,
+  shouldSkipQuitComputeDrain,
+  isNonAbortableLongComputeJob,
+  terminateNonAbortableQuitComputeJobs,
+  resolveBeforeQuitAction,
+  shouldKillProcessOnQuit,
   matchesFasterWhisperCacheFolderName,
 } = mainProcessHelpers;
 
@@ -705,6 +712,65 @@ test('getTranscriptionComputeTimeoutMs scales by model size', () => {
   assert.equal(getTranscriptionComputeTimeoutMs('small'), 60 * 60 * 1000);
   assert.equal(getTranscriptionComputeTimeoutMs('large-v3'), 120 * 60 * 1000);
   assert.equal(getTranscriptionComputeTimeoutMs('unknown'), 60 * 60 * 1000);
+});
+
+test('shouldSkipQuitComputeDrain covers non-abortable transcription-class jobs', () => {
+  assert.equal(shouldSkipQuitComputeDrain({ label: 'Transcription' }), true);
+  assert.equal(shouldSkipQuitComputeDrain({ label: 'Summary generation' }), false);
+  assert.equal(isNonAbortableLongComputeJob(null), false);
+});
+
+test('resolveBeforeQuitAction never re-drains AI on the armed pass', () => {
+  assert.deepEqual(
+    resolveBeforeQuitAction({ immediateQuitArmed: true, hasInFlightAiWork: true }),
+    { action: 'force_quit' },
+  );
+  assert.deepEqual(
+    resolveBeforeQuitAction({ immediateQuitArmed: true, interceptQuit: true, hasInFlightAiWork: true }),
+    { action: 'intercept_recording' },
+  );
+});
+
+test('shouldKillProcessOnQuit spares the protected process', () => {
+  const protectedProc = { killed: false };
+  assert.equal(shouldKillProcessOnQuit(protectedProc, protectedProc), false);
+  assert.equal(shouldKillProcessOnQuit({ killed: false }, protectedProc), true);
+});
+
+test('getActiveWallClockComputeJob prefers transcription over concurrent GPU jobs', async () => {
+  assert.equal(getActiveWallClockComputeJobs().length, 0);
+  let releaseGpu;
+  let releaseTx;
+  const gpuPromise = runWallClockComputeAction({
+    timeoutMs: 5000,
+    label: 'GPU runtime setup',
+    action: () => new Promise((resolve) => { releaseGpu = resolve; }),
+  });
+  const txPromise = runWallClockComputeAction({
+    timeoutMs: 5000,
+    label: 'Transcription',
+    action: () => new Promise((resolve) => { releaseTx = resolve; }),
+  });
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(getActiveWallClockComputeJob()?.label, 'Transcription');
+  releaseGpu('g');
+  releaseTx('t');
+  await Promise.all([gpuPromise, txPromise]);
+  assert.equal(getActiveWallClockComputeJob(), null);
+});
+
+test('getActiveWallClockComputeJob clears after the action settles', async () => {
+  assert.equal(getActiveWallClockComputeJob(), null);
+  await runWallClockComputeAction({
+    timeoutMs: 5000,
+    label: 'Transcription',
+    action: async () => {
+      assert.equal(getActiveWallClockComputeJob()?.label, 'Transcription');
+      return true;
+    },
+  });
+  assert.equal(getActiveWallClockComputeJob(), null);
 });
 
 

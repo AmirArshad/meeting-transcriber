@@ -130,6 +130,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Event listeners
   onRecordingProgress: (callback) => addListener('recording-progress', callback),
   onRecordingInitProgress: (callback) => addListener('recording-init-progress', callback),
+  onRecordingSavedDuringQuit: (callback) => addListener('recording-saved-during-quit', callback),
+  onAppQuitProgress: (callback) => addListener('app-quit-progress', callback),
   onTranscriptionProgress: (callback) => addListener('transcription-progress', callback),
   onGPUInstallProgress: (callback) => addListener('gpu-install-progress', callback),
   onModelDownloadProgress: (callback) => addListener('model-download-progress', callback),

@@ -5,8 +5,20 @@ const {
   getTranscriptionComputeTimeoutMs,
   formatComputeTimeoutLabel,
   runWallClockComputeAction,
+  getActiveWallClockComputeJob,
+  getActiveWallClockComputeJobs,
+  terminateNonAbortableQuitComputeJobs,
+  isNonAbortableLongComputeJob,
+  shouldSkipQuitComputeDrain,
   getGuidedTranscriptionTimeoutMinutes,
 } = require('./main-process/compute-timeout-helpers');
+
+const {
+  resolveBeforeQuitAction,
+  shouldKillProcessOnQuit,
+  collectProcessesToKillOnQuit,
+  dispatchBeforeQuitAction,
+} = require('./main-process/quit-lifecycle-helpers');
 
 const {
   buildFileUrl,
@@ -135,6 +147,15 @@ module.exports = {
   getTranscriptionComputeTimeoutMs,
   formatComputeTimeoutLabel,
   runWallClockComputeAction,
+  getActiveWallClockComputeJob,
+  getActiveWallClockComputeJobs,
+  terminateNonAbortableQuitComputeJobs,
+  isNonAbortableLongComputeJob,
+  shouldSkipQuitComputeDrain,
+  resolveBeforeQuitAction,
+  shouldKillProcessOnQuit,
+  collectProcessesToKillOnQuit,
+  dispatchBeforeQuitAction,
   matchesFasterWhisperCacheFolderName,
   buildFileUrl,
   buildDesktopAudioAvailabilityError,

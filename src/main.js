@@ -63,6 +63,12 @@ const {
   getTranscriptionComputeTimeoutMs,
   getTranscriberModule,
   runWallClockComputeAction,
+  getActiveWallClockComputeJob,
+  shouldSkipQuitComputeDrain,
+  terminateNonAbortableQuitComputeJobs,
+  resolveBeforeQuitAction,
+  collectProcessesToKillOnQuit,
+  dispatchBeforeQuitAction,
 } = require('./main-process-helpers');
 const { checkForUpdates, openDownloadPage } = require('./updater');
 const {
@@ -101,6 +107,8 @@ let isQuitting = false;
 let quitWorkflowPromise = null;
 let aiQuitDrainPromise = null;
 let allowImmediateQuit = false;
+/** Once a quit drain begins, reject new recording/summary work until quit completes or is canceled. */
+let quitCommitted = false;
 let pendingUpdateInfo = null;
 // Assigned at composition root after services are constructed.
 let aiAddonIpc = null;
@@ -248,6 +256,18 @@ function consumeAllowImmediateQuit() {
   return true;
 }
 
+function isQuitCommitted() {
+  return quitCommitted;
+}
+
+function markQuitCommitted() {
+  quitCommitted = true;
+}
+
+function clearQuitCommitted() {
+  quitCommitted = false;
+}
+
 function abortInFlightAiSetup() {
   if (aiAddonIpc) {
     aiAddonIpc.abortInFlightAiSetup();
@@ -261,26 +281,60 @@ function abortInFlightAiWork() {
   }
 }
 
+function getProtectedQuitProcess() {
+  if (!summaryService || summaryService.getActiveSummaryPhase() !== 'metadata') {
+    return null;
+  }
+  return summaryService.getActiveSummaryProcess();
+}
+
 async function drainAiWorkBeforeQuit() {
+  markQuitCommitted();
+  sendToRenderer('app-quit-progress', {
+    message: 'Finishing local AI work before quit…',
+    code: 'QUIT_DRAIN_AI',
+  });
+
   const metadataPhaseActive = summaryService
     && summaryService.getActiveSummaryPhase() === 'metadata';
   const gpuRuntimeBusy = gpuRuntimeService
     && gpuRuntimeService.hasInFlightGpuRuntimeAction();
+  const activeComputeJob = getActiveWallClockComputeJob();
+  const skipComputeDrain = shouldSkipQuitComputeDrain(activeComputeJob);
 
   abortInFlightAiSetup();
   if (summaryService) {
     summaryService.abortActiveSummaryForQuit('Summary generation was canceled because the app is quitting.');
   }
 
+  if (skipComputeDrain) {
+    console.warn(
+      `Quit drain terminating non-abortable compute job: ${activeComputeJob?.label || 'unknown'}`,
+    );
+    sendToRenderer('app-quit-progress', {
+      message: 'Stopping local transcription before quit…',
+      code: 'QUIT_DRAIN_SKIP_TRANSCRIPTION',
+    });
+    // F4: actually kill — skipping the wait without terminate left hasPendingWork()
+    // true and the armed pass re-drained forever.
+    await terminateNonAbortableQuitComputeJobs();
+  }
+
   // Metadata writes and GPU pip installs need longer than cancelable compute jobs.
   const drainTimeoutMs = metadataPhaseActive || gpuRuntimeBusy ? 90000 : 30000;
   try {
-    const drains = [aiComputeActionQueue.drain()];
+    const drains = [];
+    if (!skipComputeDrain) {
+      drains.push(aiComputeActionQueue.drain());
+    }
     if (aiAddonIpc) {
       drains.push(aiAddonIpc.aiAddonActionQueue.drain());
     }
     if (gpuRuntimeService) {
       drains.push(gpuRuntimeService.waitForGpuRuntimeIdle());
+    }
+    if (drains.length === 0) {
+      return;
     }
     await Promise.race([
       Promise.all(drains),
@@ -290,6 +344,13 @@ async function drainAiWorkBeforeQuit() {
     ]);
   } catch (error) {
     console.warn('Quit drain for local AI work did not finish cleanly:', error.message);
+    // Only mark repair when we are about to force-kill an in-flight GPU action.
+    // (Armed pass falls through to force-quit, which also writes the marker.)
+    if (gpuRuntimeBusy && gpuRuntimeService && gpuRuntimeService.hasInFlightGpuRuntimeAction()) {
+      gpuRuntimeService.markGpuRepairRecommendedAfterQuitKill(
+        'GPU runtime setup was interrupted because the app quit.',
+      );
+    }
   }
 }
 
@@ -425,6 +486,7 @@ function getDiarizationDependencySitePackagesPath(userDataDir) {
 }
 
 gpuRuntimeService = createGpuRuntimeService({
+  app,
   path,
   fs,
   pythonConfig,
@@ -530,6 +592,7 @@ summaryService = createSummaryService({
   assertSafeExistingSegmentsPath,
   terminateProcessBestEffort,
   summarizeSummaryValidationError,
+  isQuitCommitted,
 });
 summaryService.registerIpc(ipcMain);
 
@@ -551,6 +614,8 @@ recorderService = createRecorderService({
   setQuitWorkflowPromise: (value) => { quitWorkflowPromise = value; },
   hasInFlightAiWork,
   drainAiWorkBeforeQuit,
+  isQuitCommitted,
+  clearQuitCommitted,
   validateSelectedDevices,
   checkDiskSpace,
   checkAudioOutputSupport,
@@ -1231,53 +1296,75 @@ app.on('before-quit', (event) => {
       : { hasRecordingProcess: false, recordingStartTime: null, stopInProgress: false },
   );
 
-  if (!immediateQuitArmed && quitState.interceptQuit) {
-    event.preventDefault();
-    void recorderService.handleQuitDuringRecording(quitState);
-    return;
-  }
-
-  if (!immediateQuitArmed && hasInFlightAiWork()) {
-    event.preventDefault();
-    if (!aiQuitDrainPromise) {
-      aiQuitDrainPromise = (async () => {
-        try {
-          await drainAiWorkBeforeQuit();
-        } finally {
-          aiQuitDrainPromise = null;
-        }
-        allowImmediateQuit = true;
-        app.quit();
-      })();
-    }
-    return;
-  }
-
-  isQuitting = true;
-  abortInFlightAiWork();
-
-  if (recorderService) {
-    recorderService.forceKillRecordingOnShutdown();
-  }
-
-  // Kill all other spawned Python processes
-  pythonRuntime.getActiveProcesses().forEach(proc => {
-    try {
-      if (!proc.killed) {
-        proc.kill();
-      }
-    } catch (e) {
-      // Process might already be dead, ignore
-    }
+  const quitAction = resolveBeforeQuitAction({
+    immediateQuitArmed,
+    interceptQuit: Boolean(quitState.interceptQuit),
+    hasInFlightAiWork: hasInFlightAiWork(),
   });
 
-  pythonRuntime.drainActiveProcesses();
+  // Armed pass: re-check recording only (new recording during drain needs graceful
+  // stop). Do NOT re-drain AI — that looped forever when transcription/GPU outlived
+  // the drain budget. Fall through to force-kill instead.
+  dispatchBeforeQuitAction(quitAction, {
+    onInterceptRecording: () => {
+      event.preventDefault();
+      markQuitCommitted();
+      void recorderService.handleQuitDuringRecording(quitState);
+    },
+    onDrainAi: () => {
+      event.preventDefault();
+      markQuitCommitted();
+      if (!aiQuitDrainPromise) {
+        aiQuitDrainPromise = (async () => {
+          try {
+            await drainAiWorkBeforeQuit();
+          } finally {
+            aiQuitDrainPromise = null;
+            allowImmediateQuit = true;
+            app.quit();
+          }
+        })();
+      }
+    },
+    onForceQuit: () => {
+      isQuitting = true;
+      markQuitCommitted();
+      abortInFlightAiWork();
 
-  // Clean up tray
-  if (tray) {
-    tray.destroy();
-    tray = null;
-  }
+      if (recorderService) {
+        recorderService.forceKillRecordingOnShutdown();
+      }
+
+      const protectedProcess = getProtectedQuitProcess();
+
+      // Kill all other spawned Python processes, but spare the summary metadata
+      // update-ai child that abortActiveSummaryForQuit deliberately left running.
+      for (const proc of collectProcessesToKillOnQuit(
+        pythonRuntime.getActiveProcesses(),
+        protectedProcess,
+      )) {
+        try {
+          proc.kill();
+        } catch (e) {
+          // Process might already be dead, ignore
+        }
+      }
+
+      if (gpuRuntimeService && gpuRuntimeService.hasInFlightGpuRuntimeAction()) {
+        gpuRuntimeService.markGpuRepairRecommendedAfterQuitKill(
+          'GPU runtime setup was interrupted because the app quit.',
+        );
+      }
+
+      pythonRuntime.drainActiveProcesses();
+
+      // Clean up tray
+      if (tray) {
+        tray.destroy();
+        tray = null;
+      }
+    },
+  });
 });
 
 // ============================================================================

@@ -47,6 +47,8 @@ function createRecorderService(deps) {
     setQuitWorkflowPromise,
     hasInFlightAiWork = () => false,
     drainAiWorkBeforeQuit = async () => {},
+    isQuitCommitted = () => false,
+    clearQuitCommitted = () => {},
     validateSelectedDevices,
     checkDiskSpace,
     checkAudioOutputSupport,
@@ -54,6 +56,7 @@ function createRecorderService(deps) {
     addMeetingToHistory,
     formatDurationForTranscript,
     getRecordingsDir,
+    getRecordingStopTimeoutMs = getRecordingStopTimeout,
   } = deps;
 
   if (typeof getRecordingsDir !== 'function') {
@@ -207,7 +210,7 @@ function createRecorderService(deps) {
 
   async function waitForRecordingStop({ forceKillOnTimeout, timeoutMessage }) {
     const stopPromise = stopRecordingProcess();
-    const timeoutMs = getRecordingStopTimeout(recordingStartTime);
+    const timeoutMs = getRecordingStopTimeoutMs(recordingStartTime);
 
     let timeoutHandle;
 
@@ -257,6 +260,84 @@ function createRecorderService(deps) {
     return dialog.showMessageBox(options);
   }
 
+  async function finishQuitAfterRecordingSaved(result) {
+    if (result?.audioPath) {
+      await persistStoppedRecordingForQuit(result);
+      sendToRenderer('recording-saved-during-quit', {
+        audioPath: result.audioPath,
+        duration: result.duration || 0,
+        message: 'Recording saved during quit attempt. Open History to continue.',
+      });
+    }
+
+    // Recording quit previously armed allowImmediateQuit and skipped AI drain.
+    // Drain in-flight transcription/summary/GPU work before the final quit pass.
+    if (hasInFlightAiWork()) {
+      await drainAiWorkBeforeQuit();
+    }
+
+    setAllowImmediateQuit(true);
+    setIsQuitting(true);
+    app.quit();
+  }
+
+  async function recoverRecordingAfterQuitCanceled(outstandingStopPromise = null) {
+    // Stop was already sent (or the recorder finished while the dialog was open).
+    // Do not claim recording continues — await the outstanding stop and persist.
+    sendToRenderer('recording-progress', {
+      message: 'Quit canceled. Finishing the recording that was already stopping…',
+      code: 'QUIT_CANCELED_STOP_IN_PROGRESS',
+    });
+
+    try {
+      // Prefer a captured stop promise (may already be settled if the recorder
+      // finished while the forced-quit dialog was open). Fall back to the live
+      // promise, then to a fresh wait only if stop was never attached.
+      let result;
+      if (outstandingStopPromise) {
+        result = await outstandingStopPromise;
+      } else if (recordingStopPromise) {
+        result = await recordingStopPromise;
+      } else {
+        result = await waitForRecordingStop({
+          forceKillOnTimeout: false,
+          timeoutMessage: 'Recorder stop is taking longer than expected after quit was canceled.',
+        });
+      }
+
+      if (result?.audioPath) {
+        await persistStoppedRecordingForQuit(result);
+        sendToRenderer('recording-saved-during-quit', {
+          audioPath: result.audioPath,
+          duration: result.duration || 0,
+          message: 'Recording finished and saved after quit was canceled. Open History to continue.',
+        });
+        sendToRenderer('recording-progress', {
+          message: 'Recording finished and saved. Open History to continue.',
+          code: 'RECORDING_SAVED_AFTER_QUIT_CANCEL',
+        });
+        return;
+      }
+
+      sendToRenderer('recording-progress', {
+        message: 'Recording stop finished but no audio file was found.',
+        code: 'RECORDING_STOP_NO_AUDIO',
+      });
+    } catch (recoverError) {
+      console.warn('Post-quit-cancel recording recovery failed:', recoverError.message);
+      sendToRenderer('recording-progress', {
+        message: `Recording stop did not finish cleanly: ${recoverError.message}`,
+        code: 'RECORDING_STOP_RECOVERY_FAILED',
+      });
+      sendToRenderer('recording-warning', {
+        type: 'quit_cancel_stop_failed',
+        code: 'QUIT_CANCEL_STOP_FAILED',
+        message: 'Quit was canceled, but the recorder had already been told to stop and did not finish saving. Check History after relaunch, or try Stop again if the recorder is still running.',
+        level: 'warning',
+      });
+    }
+  }
+
   async function handleQuitDuringRecording(quitState) {
     if (getQuitWorkflowPromise()) {
       return getQuitWorkflowPromise();
@@ -269,27 +350,24 @@ function createRecorderService(deps) {
         sendToRenderer('recording-progress', quitState.progressMessage);
       }
 
+      // Captured across the dialog so F7 still recovers if closeHandler clears
+      // stopCommandSent / recordingStopPromise while the dialog is open.
+      let stopWasAttempted = Boolean(stopCommandSent || recordingStopPromise);
+      let outstandingStopPromise = recordingStopPromise;
+
       try {
         const result = await waitForRecordingStop({
           forceKillOnTimeout: false,
           timeoutMessage: 'Recorder stop is taking longer than expected.',
         });
 
-        if (result?.audioPath) {
-          await persistStoppedRecordingForQuit(result);
-        }
-
-        // Recording quit previously armed allowImmediateQuit and skipped AI drain.
-        // Drain in-flight transcription/summary/GPU work before the final quit pass.
-        if (hasInFlightAiWork()) {
-          await drainAiWorkBeforeQuit();
-        }
-
-        setAllowImmediateQuit(true);
-        setIsQuitting(true);
-        app.quit();
+        await finishQuitAfterRecordingSaved(result);
         return;
       } catch (error) {
+        // waitForRecordingStop always sends stop (or reuses an in-flight stop).
+        stopWasAttempted = true;
+        outstandingStopPromise = outstandingStopPromise || recordingStopPromise;
+
         console.warn('Graceful quit stop failed:', error.message);
         const response = await promptForForcedQuit(quitState.state, error);
 
@@ -304,6 +382,16 @@ function createRecorderService(deps) {
         }
 
         setIsQuitting(false);
+
+        // F1/F7: stop was already sent (or may have completed while the dialog
+        // was open). Never claim "recording continues" in that case.
+        if (stopWasAttempted) {
+          await recoverRecordingAfterQuitCanceled(outstandingStopPromise);
+          clearQuitCommitted();
+          return;
+        }
+
+        clearQuitCommitted();
         const canceledMessage = quitState.state === 'stopping'
           ? 'Quit canceled. Saving continues.'
           : 'Quit canceled. Recording continues.';
@@ -399,6 +487,14 @@ function createRecorderService(deps) {
      */
     ipcMain.handle('start-recording', async (event, options) => {
       assertTrustedRendererSender(event);
+
+      if (isQuitCommitted()) {
+        return {
+          success: false,
+          code: 'QUIT_IN_PROGRESS',
+          message: 'Cannot start recording while the app is quitting.',
+        };
+      }
 
       if (isRecorderBusy({ pythonProcess, recordingStopPromise })) {
         return buildRecorderBusyResponse();

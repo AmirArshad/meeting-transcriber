@@ -17,12 +17,12 @@ const {
   runWallClockComputeAction,
 } = require('../main-process-helpers');
 const {
-  checkAiAddonSetupStatus,
-  getSummaryArtifactPath,
-  getSummaryRuntimeDir,
+  checkAiAddonSetupStatus: defaultCheckAiAddonSetupStatus,
+  getSummaryArtifactPath: defaultGetSummaryArtifactPath,
+  getSummaryRuntimeDir: defaultGetSummaryRuntimeDir,
 } = require('../ai-addon-setup');
 const {
-  getSummaryArtifactForPlatform,
+  getSummaryArtifactForPlatform: defaultGetSummaryArtifactForPlatform,
 } = require('../ai-addon-state');
 
 /**
@@ -46,6 +46,11 @@ const {
  * @param {Function} deps.assertSafeExistingSegmentsPath
  * @param {Function} deps.terminateProcessBestEffort
  * @param {Function} deps.summarizeSummaryValidationError
+ * @param {Function} [deps.isQuitCommitted]
+ * @param {Function} [deps.checkAiAddonSetupStatus]
+ * @param {Function} [deps.getSummaryArtifactForPlatform]
+ * @param {Function} [deps.getSummaryArtifactPath]
+ * @param {Function} [deps.getSummaryRuntimeDir]
  */
 function createSummaryService(deps) {
   // Single shared reference — never duplicate this let in main.js.
@@ -71,6 +76,11 @@ function createSummaryService(deps) {
     assertSafeExistingSegmentsPath,
     terminateProcessBestEffort,
     summarizeSummaryValidationError,
+    isQuitCommitted = () => false,
+    checkAiAddonSetupStatus = defaultCheckAiAddonSetupStatus,
+    getSummaryArtifactForPlatform = defaultGetSummaryArtifactForPlatform,
+    getSummaryArtifactPath = defaultGetSummaryArtifactPath,
+    getSummaryRuntimeDir = defaultGetSummaryRuntimeDir,
   } = deps;
 
   async function removeSummarySidecarFiles(filePaths = []) {
@@ -102,6 +112,10 @@ function createSummaryService(deps) {
     }
   }
 
+  function getActiveSummaryProcess() {
+    return activeSummaryGeneration?.process || null;
+  }
+
   function registerIpc(ipcMain) {
     ipcMain.handle('generate-summary', async (event, options = {}) => {
       assertTrustedRendererSender(event);
@@ -111,6 +125,10 @@ function createSummaryService(deps) {
         throw new Error('generate-summary requires a meetingId');
       }
       const normalizedMeetingId = String(meetingId);
+
+      if (isQuitCommitted()) {
+        throw new Error('Cannot generate a summary while the app is quitting.');
+      }
 
       if (activeSummaryGeneration) {
         throw new Error('Summary generation is already running. Cancel it or wait for it to finish.');
@@ -355,6 +373,14 @@ function createSummaryService(deps) {
             if (!result || typeof result !== 'object' || !result.metadata || typeof result.metadata !== 'object') {
               throw new Error('Summary generation returned an invalid result payload.');
             }
+
+            // Enter metadata phase before renames so quit/cancel cannot abort
+            // during finalization and then delete sidecars after meetings.json
+            // has already been updated (or leave inconsistent state).
+            if (activeSummaryGeneration && activeSummaryGeneration.controller === controller) {
+              activeSummaryGeneration.phase = 'metadata';
+            }
+
             if (controller.signal.aborted) {
               await cleanupSummarySidecars();
               finish(reject, createAiAddonCancelError('Summary generation was canceled.'));
@@ -369,7 +395,14 @@ function createSummaryService(deps) {
               throw renameError;
             }
 
-            activeSummaryGeneration.phase = 'metadata';
+            // Bail before spawning update-ai if cancel landed after renames.
+            // Sidecars exist on disk; meetings.json is still untouched.
+            if (controller.signal.aborted) {
+              await cleanupSummarySidecars();
+              finish(reject, createAiAddonCancelError('Summary generation was canceled.'));
+              return;
+            }
+
             const summaryMetadata = {
               status: 'completed',
               modelProfile: result.metadata.profile,
@@ -389,7 +422,9 @@ function createSummaryService(deps) {
                 normalizedMeetingId,
                 '--summary-json', JSON.stringify(summaryMetadata),
               ]), { cwd: pythonConfig.backendPath });
-              activeSummaryGeneration.process = pythonUpdate;
+              if (activeSummaryGeneration && activeSummaryGeneration.controller === controller) {
+                activeSummaryGeneration.process = pythonUpdate;
+              }
               registerProcess(pythonUpdate);
 
               let metadataOutput = '';
@@ -400,10 +435,8 @@ function createSummaryService(deps) {
               });
               pythonUpdate.stderr.on('data', (data) => { metadataErrorOutput = appendSpawnLogBuffer(metadataErrorOutput, data); });
               pythonUpdate.on('close', (updateCode) => {
-                if (controller.signal.aborted) {
-                  metadataReject(createAiAddonCancelError('Summary generation was canceled.'));
-                  return;
-                }
+                // Once update-ai exits 0, meetings.json already references the
+                // sidecars — never treat a late abort as failure that deletes them.
                 if (metadataStdoutOverflow.overflowed) {
                   metadataReject(new Error('Summary metadata update output exceeded the maximum allowed size.'));
                   return;
@@ -416,9 +449,19 @@ function createSummaryService(deps) {
                   }
                   return;
                 }
+                if (controller.signal.aborted) {
+                  metadataReject(createAiAddonCancelError('Summary generation was canceled.'));
+                  return;
+                }
                 metadataReject(new Error(summarizeSummaryValidationError(metadataErrorOutput) || 'Failed to update summary metadata'));
               });
-              pythonUpdate.on('error', (error) => metadataReject(controller.signal.aborted ? createAiAddonCancelError('Summary generation was canceled.') : error));
+              pythonUpdate.on('error', (error) => {
+                if (controller.signal.aborted) {
+                  metadataReject(createAiAddonCancelError('Summary generation was canceled.'));
+                  return;
+                }
+                metadataReject(error);
+              });
             });
 
             finish(resolve, {
@@ -476,6 +519,7 @@ function createSummaryService(deps) {
     canAbortActiveSummaryGeneration,
     abortActiveSummaryForQuit,
     getActiveSummaryPhase,
+    getActiveSummaryProcess,
     registerIpc,
   };
 }
