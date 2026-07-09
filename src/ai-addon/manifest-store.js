@@ -832,6 +832,37 @@ function validatePinnedSummarySetup({ artifact, runtimeArtifact }) {
   return validateSummarySetupArtifact(artifact) || validateSummaryRuntimeArtifact(runtimeArtifact);
 }
 
+function createValidation(status, message, now = () => new Date().toISOString()) {
+  return {
+    status,
+    checkedAt: now(),
+    message,
+  };
+}
+
+function buildFeatureUpdates({ status, modelId, speakerCount, artifactId, profile, validation, error }) {
+  const updates = {
+    status,
+    lastValidation: validation,
+    error: error || null,
+  };
+
+  if (modelId) {
+    updates.modelId = modelId;
+  }
+  if (speakerCount !== undefined) {
+    updates.speakerCount = speakerCount;
+  }
+  if (artifactId !== undefined) {
+    updates.artifactId = artifactId;
+  }
+  if (profile !== undefined) {
+    updates.profile = profile;
+  }
+
+  return updates;
+}
+
 module.exports = {
   saveAiAddonManifest,
   checkAiAddonSetupStatus,
@@ -862,4 +893,6 @@ module.exports = {
   validateSummaryRuntimeArtifact,
   validateSummarySetupArtifact,
   validatePinnedSummarySetup,
+  createValidation,
+  buildFeatureUpdates,
 };
