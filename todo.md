@@ -45,7 +45,7 @@ Replaced Intel-only evermeet.cx ffmpeg with a pinned Apple Silicon static build 
 ## Next: AvaNevis Codebase Refactor
 
 Design doc: `docs/initiatives/AVANEVIS_CODEBASE_REFACTOR.md` (amended 2026-07-09 after Fable review).
-Branch: `refactor/codebase-phase-6b` (Phase 6 PR B: paths/store/delete_tx; after merged Phase 6 PR A #41).
+Branch: `refactor/codebase-phase-7` (Phase 7 PR A: shared WAV I/O + Opus compress/report wrapper; after merged Phase 6 #41/#42).
 
 Execution rule: one phase per PR unless the change is purely mechanical and tightly coupled. Prefer Pattern A/B for pure facade moves; use Pattern C (state container + DI) for Phase 3. Move code first, preserve behavior, then improve internals in later PRs. Revert (do not fix forward) any phase that breaks a preserved contract or a manual smoke check. Convert `test:syntax` to a glob in Phase 0; keep new renderer globals uniquely named; target ≤1,500 lines after owning phase (`app.js` soft-cap ~2,000 if helpers alone cannot hit 1,500).
 
@@ -69,4 +69,5 @@ Parallel tracks after Phase 0: main-process JS (1→3), renderer helpers (2), ai
   - [x] PR A: `backend/meetings/{normalization,scan_import}.py` behind thin `MeetingManager` staticmethod delegates; paths/store/delete deferred (#41).
   - [x] PR B: `backend/meetings/{paths,store,delete_tx}.py` behind thin instance-method delegates (monkeypatch seams preserved).
 - [ ] [Risk: High] Phase 7: narrow recorder/Swift helper extractions only.
+  - [x] PR A: shared `wav_io.py` + `compress_and_report` wrapper (Medium); defer macOS diagnostics/stereo repair and Swift alignment/status to PR B.
 - [ ] [Risk: Medium] Phase 8: CI/docs/architecture cleanup (`test:syntax` glob already done in Phase 0). Optional `refactor-extraction` skill only if agents skip the recipe.

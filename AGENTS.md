@@ -80,7 +80,7 @@ AvaNevis is a privacy-first Electron desktop app for recording microphone audio 
 - `backend/audio/windows_recorder.py`: Windows recording pipeline using `pyaudiowpatch` WASAPI loopback
 - `backend/audio/macos_recorder.py`: macOS recording pipeline using `sounddevice` + Swift helper desktop capture with PyObjC fallback
 - `backend/audio/swift_audio_capture.py`: Python bridge to bundled Swift helper; preserves raw PCM stdout and JSON stderr helper contract
-- `backend/audio/processor.py`, `backend/audio/compressor.py`, `backend/audio/timeline.py`, `backend/audio/constants.py`: Windows audio processing modules
+- `backend/audio/processor.py`, `backend/audio/compressor.py`, `backend/audio/wav_io.py`, `backend/audio/timeline.py`, `backend/audio/constants.py`: shared audio processing / compression / WAV I/O helpers used by the platform recorders
 - `backend/transcription/formatting.py`: Phase 5 shared transcript timestamp/segment-merge/Markdown helpers used by faster-whisper, MLX, and guided transcription
 - `backend/transcription/faster_whisper_transcriber.py`: Windows/default transcriber
 - `backend/transcription/mlx_whisper_transcriber.py`: Apple Silicon transcriber

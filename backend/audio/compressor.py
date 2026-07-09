@@ -93,6 +93,43 @@ def compress_to_opus(
         return wav_path
 
 
+def compress_and_report(
+    input_path: str,
+    output_path: str,
+    sample_rate: int,
+    *,
+    verify_again: bool = False,
+    progress_message: str = "Compressing with ffmpeg (Opus codec)...",
+) -> tuple[str, dict]:
+    """
+    Compress a WAV to Opus and return the final path plus size stats.
+
+    Shared by Windows and macOS recorders after the temporary WAV is written.
+    ``verify_again`` preserves the macOS post-compress integrity log when True.
+    """
+    print(progress_message, file=sys.stderr)
+    final_path = compress_to_opus(input_path, output_path, sample_rate)
+
+    input_size = Path(input_path).stat().st_size
+    output_size = Path(final_path).stat().st_size
+    # Intentional guard: a real WAV always has a header (≥44 bytes), so
+    # zero-size input is unreachable in production. Master would ZeroDivisionError.
+    ratio = (1 - output_size / input_size) * 100 if input_size else 0.0
+
+    stats = {
+        'input_path': input_path,
+        'final_path': final_path,
+        'input_size': input_size,
+        'output_size': output_size,
+        'ratio': ratio,
+    }
+
+    if verify_again and not verify_recording_integrity(final_path):
+        print(f"WARNING: Recording integrity check failed", file=sys.stderr)
+
+    return final_path, stats
+
+
 def verify_recording_integrity(file_path: str) -> bool:
     """
     Verify the recording file is valid and playable using ffprobe.
