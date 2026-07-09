@@ -20,6 +20,7 @@ Canonical architecture and invariants: root `AGENTS.md` (shared with OpenCode an
 | macOS capture (shipped vs planned) | `docs/initiatives/MACOS_AUDIO_ARCHITECTURE.md` |
 | Manual recorder QA | `tests/manual/recording-smoke-checklist.md` |
 | Manual AI add-ons QA | `tests/manual/local-ai-addons-checklist.md` |
+| Targeted adversarial review prompts (Fable/etc.) | `docs/development/ADVERSARIAL_REVIEW_PROMPTS.md` |
 
 ## Commands (repo root)
 

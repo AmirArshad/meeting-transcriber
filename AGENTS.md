@@ -387,6 +387,7 @@ npm run test:all
 - Characterization gates for the codebase refactor: IPC/compute-queue source-scan and facade export snapshots under `tests/js/`; recorder stdout contracts under `tests/js/recorder-event-contract.test.js` and `tests/python/test_recorder_event_contract.py`
 - Manual recorder validation checklist lives in `tests/manual/recording-smoke-checklist.md`
 - Setup instructions for new machines live in `docs/development/TESTING.md`
+- Targeted adversarial review prompts (one risk area per session): `docs/development/ADVERSARIAL_REVIEW_PROMPTS.md`
 
 ### CI-style validation
 
