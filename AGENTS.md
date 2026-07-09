@@ -75,12 +75,13 @@ AvaNevis is a privacy-first Electron desktop app for recording microphone audio 
 
 - `backend/device_manager.py`: enumerate audio devices for UI (CLI/JSON contract unchanged)
 - `backend/device_helpers.py`: Phase 5 pure device enumeration helpers (blocklist, record shaping, dedupe, sort, macOS virtual loopback)
-- `backend/common/`: shared Python helpers — `sensitive_text.py` (redaction), `hf_runtime.py` (shared `hugging_face_offline_mode`); Phase 5 medium-risk shared recorder `events` extraction remains deferred (stdout contracts differ by consumer)
+- `backend/common/`: shared Python helpers — `sensitive_text.py` (redaction), `hf_runtime.py` (shared `hugging_face_offline_mode`)
 - `backend/meeting_manager.py`: persistent meeting history CLI/orchestration (`python -m meeting_manager`); public methods remain instance-method monkeypatch seams
 - `backend/meetings/`: Phase 6 helpers — `normalization.py` (status/error/hash/text/metadata parse), `scan_import.py` (scannable audio selection, duration/id parsing), `paths.py` (recordings-path/sidecar safety), `store.py` (FileLock + atomic JSON), `delete_tx.py` (tombstone/rollback delete helpers)
 - `backend/check_permissions.py`: macOS permission checks
 - `backend/audio/windows_recorder.py`: Windows recording pipeline using `pyaudiowpatch` WASAPI loopback
 - `backend/audio/macos_recorder.py`: macOS recording pipeline using `sounddevice` + Swift helper desktop capture with PyObjC fallback
+- `backend/audio/recorder_stdout.py`: shared structured stdout emitters (`send_json_message` / `send_event_message` / `send_warning_message` / `send_error_message`); platform recorders keep thin `_send_*` wrappers so Electron contracts stay stable
 - `backend/audio/swift_audio_capture.py`: Python bridge to bundled Swift helper; preserves raw PCM stdout and JSON stderr helper contract
 - `backend/audio/macos_stereo_repair.py`, `backend/audio/macos_desktop_diagnostics.py`: Phase 7 macOS one-sided stereo repair + desktop diagnostics payload helpers
 - `backend/audio/swift_pcm_alignment.py`, `backend/audio/swift_helper_status.py`: Phase 7 Swift helper float32 alignment + stderr status application

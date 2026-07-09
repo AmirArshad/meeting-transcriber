@@ -28,44 +28,45 @@ from pathlib import Path
 import numpy as np
 import pyaudiowpatch as pyaudio
 
+from . import recorder_stdout as _recorder_stdout
+
 
 # Lock for thread-safe JSON output to stdout
 _stdout_lock = threading.Lock()
 
 
 def _send_json_message(message):
-    with _stdout_lock:
-        print(json.dumps(message), flush=True)
+    _recorder_stdout.send_json_message(message, lock=_stdout_lock)
 
 
 def _send_event_message(event: str, message: str, **extra):
-    payload = {
-        "type": "event",
-        "event": event,
-        "message": message,
-    }
-    payload.update(extra)
-    _send_json_message(payload)
+    _recorder_stdout.send_event_message(
+        event,
+        message,
+        lock=_stdout_lock,
+        send_json=_send_json_message,
+        **extra,
+    )
 
 
 def _send_warning_message(code: str, message: str, **extra):
-    payload = {
-        "type": "warning",
-        "code": code,
-        "message": message,
-    }
-    payload.update(extra)
-    _send_json_message(payload)
+    _recorder_stdout.send_warning_message(
+        code,
+        message,
+        lock=_stdout_lock,
+        send_json=_send_json_message,
+        **extra,
+    )
 
 
 def _send_error_message(code: str, message: str, **extra):
-    payload = {
-        "type": "error",
-        "code": code,
-        "message": message,
-    }
-    payload.update(extra)
-    _send_json_message(payload)
+    _recorder_stdout.send_error_message(
+        code,
+        message,
+        lock=_stdout_lock,
+        send_json=_send_json_message,
+        **extra,
+    )
 
 # Import from our modular components
 from .constants import (

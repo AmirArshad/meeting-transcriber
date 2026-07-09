@@ -619,7 +619,7 @@ Suggested changes:
 | Change | New module | Risk |
 | --- | --- | --- |
 | Extract transcript timestamp/segment/Markdown helpers | `backend/transcription/formatting.py` | Low |
-| Extract shared structured event emitters | `backend/common/events.py` | Medium — **still deferred** (recorder stdout vs AI stderr contracts differ) |
+| Extract shared structured event emitters | `backend/audio/recorder_stdout.py` (not `common/events.py`) | Medium — **done** (shared stdout emitters; AI stderr progress stays feature-local) |
 | Extract Hugging Face env/cache primitives carefully | `backend/common/hf_runtime.py` | Medium — **done** (Phase 5B: shared `hugging_face_offline_mode`) |
 | Extract device enumeration normalization helpers | `backend/device_platforms.py` or `backend/device_helpers.py` | Low |
 | Extract diarization/audio prep helpers | `backend/diarization/audio_prep.py` | Medium — **done** (Phase 5B) |
