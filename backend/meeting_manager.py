@@ -391,6 +391,21 @@ class MeetingManager:
         added = 0
         skipped = 0
 
+        # Promote orphaned recorder temps (.pcm.tmp / legacy *.temp.wav) to
+        # scannable WAVs, or delete temps when a final Opus/WAV already exists.
+        try:
+            temp_recovery = meeting_scan.recover_or_cleanup_recorder_temps(self.recordings_dir)
+            if temp_recovery.get("recovered") or temp_recovery.get("cleaned"):
+                print(
+                    "Recorder temp recovery: "
+                    f"recovered={temp_recovery.get('recovered', 0)} "
+                    f"cleaned={temp_recovery.get('cleaned', 0)} "
+                    f"skipped={temp_recovery.get('skipped', 0)}",
+                    file=sys.stderr,
+                )
+        except Exception as temp_err:
+            print(f"Warning: Recorder temp recovery failed: {temp_err}", file=sys.stderr)
+
         # Find all .opus and .wav audio files, preferring one candidate per stem
         audio_files = self._select_scannable_audio_files(self.recordings_dir)
 

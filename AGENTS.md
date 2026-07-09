@@ -146,6 +146,13 @@ The JSON-event migration in `docs/completed/json-based-events.md` is complete fo
 - Windows final JSON uses `audioPath`
 - macOS final JSON uses `outputPath`
 - Stop parsing accepts both for backward compatibility
+- Stop/finalize failures must still emit a structured `success:false` result payload (with recoverable `audioPath`/`outputPath` when a final or temp file exists). Do not exit with only a stderr traceback.
+- Windows must set `_final_output_path` immediately after compress succeeds, guard temp unlink with `OSError`, and emit the success JSON **before** `cleanup()` (`pa.terminate()`).
+- macOS late desktop-capture failures (after a successful start) must warn and continue to mic-only processing; only mic-thread failures are hard stop failures.
+- Post-processing temps use a non-scanned `.pcm.tmp` extension (`backend/audio/recorder_temp_paths.py`). Scan-import recovers orphan temps into `{stem}.wav` or deletes them when a final Opus/WAV already exists (`meetings.scan_import.recover_or_cleanup_recorder_temps`). Truncated temps (≤ WAV header size) are dropped, not promoted.
+- macOS recovery must promote a leftover `.pcm.tmp` to a stable `{stem}.wav` before emitting `outputPath` — never hand Electron the volatile temp path.
+- Live stdout may stash a `result` payload for unexpected-exit recovery; there is no legacy `temp.opus` stop fallback.
+- Quit-cancel recovery and a still-pending Stop IPC share one stop result: stop awaits the quit workflow before returning so `alreadyPersistedForQuit` closes the dialog-open race.
 
 Do not casually break this contract unless you update all call sites together.
 
@@ -155,6 +162,8 @@ The app intentionally records mic and desktop audio separately, then mixes after
 
 Do not reintroduce real-time mixing unless you are deliberately redesigning the audio pipeline.
 
+**Known constraint:** both platform recorders buffer raw capture in RAM for the post-processing mix. Long meetings (≈2h of 48 kHz stereo) can peak at several GB during stop-time join/convert on Windows; a `MemoryError` on that path should still emit structured failure JSON, but there is no incremental disk spill yet.
+
 Key quality assumptions to preserve:
 
 - 48 kHz target output
@@ -163,6 +172,7 @@ Key quality assumptions to preserve:
 - Opus compression via ffmpeg
 - gentle mic enhancement instead of aggressive processing
 - desktop audio preserved as faithfully as possible
+- desktop capture may degrade to mic-only without discarding the microphone recording
 
 ### Preserve local-only/privacy-first behavior
 
@@ -293,6 +303,7 @@ If you change `backend/meeting_manager.py`, preserve:
 - transactional add behavior that removes originals only after metadata is saved
 - corrupt metadata backups named `meetings.corrupt.*.json`
 - scan/import preservation of suffixed IDs like `meeting_20260107_104555_1`
+- scan/import recorder-temp recovery/cleanup before selecting scannable `.opus`/`.wav` files (never import `.pcm.tmp` / legacy `*.temp.wav` as meetings)
 
 ### macOS desktop audio capture
 
@@ -474,11 +485,12 @@ Update all of:
 
 Update all of:
 
-- recorder output path logic
+- recorder output path logic (`recorder_temp_paths.py`, both platform recorders, compressor input-format handling)
 - `backend/meeting_manager.py`
-- scan/import logic
+- scan/import logic (`meetings/scan_import.py` temp recovery + scannable selection)
 - delete logic
 - any renderer assumptions about playback paths
+- `tests/python/test_recorder_temp_and_scan_recovery.py` and related meeting-manager scan tests
 
 ### If you change model download behavior
 

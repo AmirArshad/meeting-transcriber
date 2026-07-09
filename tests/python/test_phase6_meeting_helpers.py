@@ -25,6 +25,7 @@ from meetings.paths import (
 from meetings.scan_import import (
     extract_duration_seconds_from_transcript,
     parse_scan_meeting_id_and_title,
+    recover_or_cleanup_recorder_temps,
     select_scannable_audio_files,
 )
 
@@ -60,6 +61,27 @@ class MeetingScanImportTests(unittest.TestCase):
             (recordings_dir / "meeting_20260101_120000.wav").write_bytes(b"wav")
             selected = select_scannable_audio_files(recordings_dir)
             self.assertEqual([path.name for path in selected], ["meeting_20260101_120000.wav"])
+
+    def test_recover_or_cleanup_recorder_temps_promotes_orphan_pcm_tmp(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            recordings_dir = Path(temp_dir)
+            temp_pcm = recordings_dir / "recording_2026-01-01T12-00-00.pcm.tmp"
+            # Must exceed the WAV-header size gate used by scan-import recovery.
+            temp_pcm.write_bytes(b"R" * 45)
+            result = recover_or_cleanup_recorder_temps(recordings_dir)
+            self.assertEqual(result["recovered"], 1)
+            self.assertTrue((recordings_dir / "recording_2026-01-01T12-00-00.wav").exists())
+            self.assertFalse(temp_pcm.exists())
+
+    def test_recover_or_cleanup_recorder_temps_drops_truncated_pcm_tmp(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            recordings_dir = Path(temp_dir)
+            temp_pcm = recordings_dir / "recording_2026-01-01T12-00-00.pcm.tmp"
+            temp_pcm.write_bytes(b"RIFF")
+            result = recover_or_cleanup_recorder_temps(recordings_dir)
+            self.assertEqual(result["dropped"], 1)
+            self.assertFalse(temp_pcm.exists())
+            self.assertFalse((recordings_dir / "recording_2026-01-01T12-00-00.wav").exists())
 
     def test_duration_and_id_parsing(self):
         self.assertEqual(

@@ -66,9 +66,92 @@ def test_windows_final_result_uses_audio_path_key():
 def test_macos_final_result_uses_output_path_key():
     source = _read(MACOS_RECORDER)
     assert '"outputPath"' in source or "'outputPath'" in source
-    success_block_marker = "'outputPath': recorder.final_output_path"
-    alt_marker = '"outputPath": recorder.final_output_path'
-    assert success_block_marker in source or alt_marker in source
+    # Success and recoverable-failure payloads both use the macOS spelling.
+    assert "result['outputPath'] = recovered_path" in source or 'result["outputPath"] = recovered_path' in source
+    assert "'outputPath': recovered_path or args.output" in source
+
+
+def test_windows_emits_result_json_before_cleanup():
+    """Stop recovery requires success JSON before pa.terminate()-prone cleanup."""
+    source = _read(WINDOWS_RECORDER)
+    # Use the main() finally block (last occurrence), not an earlier stream finally.
+    finally_block = source.rsplit("finally:", 1)[1]
+    json_pos = finally_block.find("_send_json_message(recording_info)")
+    cleanup_pos = finally_block.find("recorder.cleanup()")
+    assert json_pos != -1, "finally must emit recording_info JSON"
+    assert cleanup_pos != -1, "finally must still call cleanup"
+    assert json_pos < cleanup_pos, "success JSON must be emitted before cleanup"
+
+
+def test_windows_sets_final_path_before_temp_unlink():
+    source = _read(WINDOWS_RECORDER)
+    mix = source.split("def _mix_and_save", 1)[1].split("def cleanup", 1)[0]
+    path_pos = mix.find("_final_output_path = final_path")
+    unlink_pos = mix.find("Path(temp_wav).unlink()")
+    assert path_pos != -1
+    assert unlink_pos != -1
+    assert path_pos < unlink_pos
+    assert "except OSError" in mix[unlink_pos - 80 : unlink_pos + 120]
+
+
+def test_macos_stop_path_guards_processing_exceptions():
+    source = _read(MACOS_RECORDER)
+    stop = source.split("def stop_recording", 1)[1].split("def _process_and_save", 1)[0]
+    assert "except Exception as process_err" in stop
+    assert "RECORDER_FAILED" in stop
+    assert "_resolve_recoverable_output_path" in stop
+
+
+def test_macos_late_desktop_failure_does_not_hard_fail_stop():
+    source = _read(MACOS_RECORDER)
+    assert "def _note_desktop_runtime_failure" in source
+    resolve = source.split("def _resolve_async_recording_failure", 1)[1].split(
+        "def _finalize_recording_failure", 1
+    )[0]
+    assert "DESKTOP_AUDIO_FAILED" not in resolve
+    assert "_consume_desktop_helper_failure" in resolve
+    desktop_except = source.split("ERROR in desktop recording", 1)[1].split(
+        "def _note_desktop_runtime_failure", 1
+    )[0]
+    assert "_note_desktop_runtime_failure" in desktop_except
+    assert "_error_event.set()" not in desktop_except
+
+
+def test_macos_recoverable_path_promotes_temp_not_returns_pcm_tmp():
+    source = _read(MACOS_RECORDER)
+    resolve = source.split("def _resolve_recoverable_output_path", 1)[1].split(
+        "def stop_recording", 1
+    )[0]
+    assert "promote_recorder_temp_to_wav" in resolve
+    assert "build_stable_wav_path_for_output" in resolve
+    assert "endswith('.pcm.tmp')" in resolve or 'endswith(".pcm.tmp")' in resolve
+    # Volatile temp must be promoted, never returned raw.
+    assert "promote_recorder_temp_to_wav(temp_path" in resolve
+
+
+def test_macos_generic_except_does_not_toast_before_best_effort_stop():
+    source = _read(MACOS_RECORDER)
+    # Use the recording-loop except (last in main), not the startup except.
+    main_src = source.split("def main(", 1)[1]
+    except_block = main_src.rsplit("except Exception as e:", 1)[1].split("emit_final_result()", 1)[0]
+    # Error toast must come after best-effort stop, and only when recovery failed.
+    stop_pos = except_block.find("recorder.stop_recording()")
+    toast_pos = except_block.find('_send_error_message("RECORDER_FAILED"')
+    assert stop_pos != -1
+    assert toast_pos != -1
+    assert stop_pos < toast_pos
+    assert "Recovered recording after error" in except_block
+    assert "no error toast" in except_block
+
+
+def test_recorders_use_non_scanned_temp_pcm_extension():
+    for path in (WINDOWS_RECORDER, MACOS_RECORDER):
+        source = _read(path)
+        assert "build_recorder_temp_pcm_path" in source
+        # Active write path must not use scannable .temp.wav / _temp.wav.
+        assert "with_suffix('.temp.wav')" not in source
+        assert "'_temp.wav'" not in source
+        assert '"_temp.wav"' not in source
 
 
 def test_structured_message_helpers_emit_expected_stdout_shapes(capsys):

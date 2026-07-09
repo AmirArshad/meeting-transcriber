@@ -1,6 +1,5 @@
 'use strict';
 
-const path = require('path');
 const { splitBufferedLines } = require('./ai-progress-helpers');
 
 const SPAWN_LOG_BUFFER_MAX_CHARS = 512 * 1024;
@@ -195,18 +194,13 @@ function parseRecordingStopResult(stdoutData, { existsSync = () => false, getRec
     return normalized;
   }
 
-  const recordingsDir = typeof getRecordingsDirFn === 'function'
-    ? getRecordingsDirFn()
-    : null;
-
-  if (!recordingsDir) {
-    throw new Error('Recording completed but output file not found.');
-  }
-
-  const opusPath = path.join(recordingsDir, 'temp.opus');
-
-  if (existsSync(opusPath)) {
-    return { success: true, audioPath: opusPath };
+  // Intentionally no legacy temp.opus fallback: neither recorder writes that
+  // path today, and a stale file from an old install would be reported as a
+  // successful stop with the wrong audio.
+  if (typeof getRecordingsDirFn === 'function') {
+    // Keep the DI seam so callers/tests can still inject getRecordingsDir
+    // without a ReferenceError; the directory is no longer used for recovery.
+    getRecordingsDirFn();
   }
 
   throw new Error('Recording completed but output file not found.');
@@ -291,6 +285,8 @@ function getRecorderCloseAction({
   startupFailureMessage,
   progressStage,
   exitCode,
+  suppressUnexpectedExitWarning = false,
+  recoveredStopResult = null,
 } = {}) {
   if (stopInProgress) {
     return { type: 'stop_in_progress', errorMessage: null, warning: null };
@@ -301,6 +297,31 @@ function getRecorderCloseAction({
   }
 
   if (recordingStarted) {
+    if (suppressUnexpectedExitWarning) {
+      return {
+        type: 'unexpected_exit_suppressed',
+        errorMessage: null,
+        warning: null,
+        recoveredStopResult: recoveredStopResult || null,
+      };
+    }
+
+    const recoveredPath = recoveredStopResult?.audioPath || null;
+    if (recoveredPath) {
+      return {
+        type: 'unexpected_exit_recovered',
+        errorMessage: null,
+        warning: {
+          type: 'recorder_exited_with_audio',
+          code: 'RECORDER_EXITED_WITH_AUDIO',
+          level: 'warning',
+          message: 'Recorder exited unexpectedly, but a recording file was recovered.',
+          help: 'Open History to continue with the recovered recording.',
+        },
+        recoveredStopResult,
+      };
+    }
+
     const message = exitCode === 0
       ? 'Recorder exited unexpectedly after startup.'
       : `Recorder exited unexpectedly after startup with code ${exitCode}.`;
@@ -315,6 +336,7 @@ function getRecorderCloseAction({
         message,
         help: 'The recording process stopped unexpectedly. Start a new recording when ready.',
       },
+      recoveredStopResult: null,
     };
   }
 

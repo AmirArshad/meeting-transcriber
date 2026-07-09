@@ -240,6 +240,136 @@ test('N1: armed AI decision dispatches force_quit (not drain) and kill list spar
   assert.deepEqual(calls, ['force']);
 });
 
+test('quit-cancel persist marks stop IPC result alreadyPersistedForQuit (no double save/transcribe)', async () => {
+  let dialogOpened = null;
+  // Mutable timeout: stop IPC starts with a long race; quit then shortens so
+  // the forced-quit dialog opens while the shared stop promise is still open.
+  let stopTimeoutMs = 5000;
+  const liveCtx = createRecorderDeps({
+    dialog: {
+      showMessageBox: async () => {
+        dialogOpened = true;
+        return { response: 0 };
+      },
+    },
+    getRecordingStopTimeoutMs: () => stopTimeoutMs,
+  });
+  const liveAudio = path.join(liveCtx.recordingsDir, 'recording_double.opus');
+  fs.writeFileSync(liveAudio, 'audio');
+
+  const longProc = createLongLivedProcess();
+  liveCtx.deps.spawnTrackedPython = () => longProc;
+  liveCtx.deps.isQuitCommitted = () => false;
+
+  const liveService = createRecorderService(liveCtx.deps);
+  const handlers = {};
+  liveService.registerIpc({
+    handle(channel, handler) {
+      handlers[channel] = handler;
+    },
+  });
+
+  await startFakeRecording(liveService, handlers, longProc);
+
+  // Renderer already awaiting stop when quit begins (shared stop promise).
+  const stopIpcPromise = handlers['stop-recording']({ sender: {} });
+  stopTimeoutMs = 40;
+
+  setTimeout(() => {
+    longProc.stdout.emit('data', Buffer.from(`${JSON.stringify({
+      success: true,
+      audioPath: liveAudio,
+      duration: 9,
+    })}\n`));
+    longProc.emit('close', 0);
+  }, 120);
+
+  await liveService.handleQuitDuringRecording({
+    interceptQuit: true,
+    state: 'stopping',
+    progressMessage: 'Finishing the current recording before quitting...',
+  });
+
+  assert.equal(dialogOpened, true);
+  assert.ok(liveCtx.historyAdds.length >= 1, 'expected quit-cancel persist');
+
+  const stopResult = await stopIpcPromise;
+  assert.equal(stopResult.audioPath, liveAudio);
+  assert.equal(stopResult.alreadyPersistedForQuit, true);
+  assert.equal(
+    liveCtx.historyAdds.length,
+    1,
+    'stop IPC must not persist a second meeting after quit-cancel recovery',
+  );
+});
+
+test('quit-cancel: stop result before cancel still yields alreadyPersistedForQuit (ordering hole)', async () => {
+  // Stop finishes while the forced-quit dialog is still open; stop IPC must
+  // await the quit workflow so cancel recovery can mark the path first.
+  let resolveDialog;
+  const dialogPromise = new Promise((resolve) => {
+    resolveDialog = resolve;
+  });
+  let stopTimeoutMs = 5000;
+  const liveCtx = createRecorderDeps({
+    dialog: {
+      showMessageBox: async () => dialogPromise,
+    },
+    getRecordingStopTimeoutMs: () => stopTimeoutMs,
+  });
+  const liveAudio = path.join(liveCtx.recordingsDir, 'recording_before_cancel.opus');
+  fs.writeFileSync(liveAudio, 'audio');
+
+  const longProc = createLongLivedProcess();
+  liveCtx.deps.spawnTrackedPython = () => longProc;
+  liveCtx.deps.isQuitCommitted = () => false;
+
+  const liveService = createRecorderService(liveCtx.deps);
+  const handlers = {};
+  liveService.registerIpc({
+    handle(channel, handler) {
+      handlers[channel] = handler;
+    },
+  });
+
+  await startFakeRecording(liveService, handlers, longProc);
+
+  const stopIpcPromise = handlers['stop-recording']({ sender: {} });
+  stopTimeoutMs = 40;
+
+  const quitPromise = liveService.handleQuitDuringRecording({
+    interceptQuit: true,
+    state: 'stopping',
+    progressMessage: 'Finishing...',
+  });
+
+  // Wait until quit timed out and dialog is pending, then finish the recorder
+  // *before* the user cancels (the previously uncovered ordering).
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  longProc.stdout.emit('data', Buffer.from(`${JSON.stringify({
+    success: true,
+    audioPath: liveAudio,
+    duration: 11,
+  })}\n`));
+  longProc.emit('close', 0);
+
+  // Give stop IPC a beat to resolve waitForRecordingStop and park on quitWorkflow.
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  resolveDialog({ response: 0 }); // Keep App Open / cancel quit
+
+  await quitPromise;
+  const stopResult = await stopIpcPromise;
+
+  assert.equal(stopResult.audioPath, liveAudio);
+  assert.equal(stopResult.alreadyPersistedForQuit, true);
+  assert.equal(
+    liveCtx.historyAdds.length,
+    1,
+    'expected exactly one History persist when stop finishes before cancel',
+  );
+  assert.equal(liveCtx.historyAdds[0].title, 'Recording saved before quit');
+});
+
 test('F1: quit cancel after stop was sent awaits stop and persists instead of claiming recording continues', async () => {
   let dialogOpened = null;
   const liveCtx = createRecorderDeps({

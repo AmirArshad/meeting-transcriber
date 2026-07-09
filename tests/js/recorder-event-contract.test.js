@@ -75,10 +75,12 @@ test('macOS recorder emitter uses outputPath in the final result payload', () =>
   const source = readUtf8(MACOS_RECORDER);
   assertEmitterDefinesFinalKey(source, 'outputPath');
 
+  // Success and recoverable-failure payloads both use the macOS spelling.
   assert.match(
     source,
-    /['"]outputPath['"]\s*:\s*recorder\.final_output_path/,
+    /['"]outputPath['"]\s*:\s*recovered_path(?:\s+or\s+args\.output)?/,
   );
+  assert.match(source, /result\[['\"]outputPath['\"]\]\s*=\s*recovered_path/);
 });
 
 test('JS stop-result helpers accept both audioPath and outputPath spellings', () => {

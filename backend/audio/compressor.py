@@ -51,8 +51,15 @@ def compress_to_opus(
             except OSError:
                 pass
 
+    # Recorder temps use a non-scanned .pcm.tmp extension; force WAV demux.
+    input_format_args = []
+    lowered = str(input_path).lower()
+    if lowered.endswith('.pcm.tmp') or lowered.endswith('.tmp'):
+        input_format_args = ['-f', 'wav']
+
     cmd = [
         'ffmpeg',
+        *input_format_args,
         '-i', input_path,
         '-c:a', 'libopus',
         '-b:a', bitrate,

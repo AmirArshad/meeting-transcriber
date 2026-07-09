@@ -1573,6 +1573,17 @@ test('parseRecordingStopResult returns structured failure without requiring outp
 });
 
 
+test('parseRecordingStopResult does not recover stale legacy temp.opus', () => {
+  assert.throws(
+    () => parseRecordingStopResult('', {
+      existsSync: (filePath) => String(filePath).endsWith('temp.opus'),
+      getRecordingsDir: () => '/tmp/recordings',
+    }),
+    /output file not found/,
+  );
+});
+
+
 test('findRecorderResultPayload ignores non-result JSON lines', () => {
   const output = [
     '{"type":"levels","mic":0.1,"desktop":0}',
@@ -1771,6 +1782,48 @@ test('getRecorderCloseAction clears active recording after unexpected recorder e
       message: 'Recorder exited unexpectedly after startup with code 1.',
       help: 'The recording process stopped unexpectedly. Start a new recording when ready.',
     },
+    recoveredStopResult: null,
+  });
+});
+
+
+test('getRecorderCloseAction suppresses unexpected_exit after stop-timeout force-kill', () => {
+  assert.deepEqual(getRecorderCloseAction({
+    recordingStarted: true,
+    stopInProgress: false,
+    exitCode: null,
+    suppressUnexpectedExitWarning: true,
+  }), {
+    type: 'unexpected_exit_suppressed',
+    errorMessage: null,
+    warning: null,
+    recoveredStopResult: null,
+  });
+});
+
+
+test('getRecorderCloseAction recovers live result payload on unexpected exit', () => {
+  const recovered = {
+    success: true,
+    audioPath: 'C:\\recordings\\meeting.opus',
+    duration: 12,
+  };
+  assert.deepEqual(getRecorderCloseAction({
+    recordingStarted: true,
+    stopInProgress: false,
+    exitCode: 1,
+    recoveredStopResult: recovered,
+  }), {
+    type: 'unexpected_exit_recovered',
+    errorMessage: null,
+    warning: {
+      type: 'recorder_exited_with_audio',
+      code: 'RECORDER_EXITED_WITH_AUDIO',
+      level: 'warning',
+      message: 'Recorder exited unexpectedly, but a recording file was recovered.',
+      help: 'Open History to continue with the recovered recording.',
+    },
+    recoveredStopResult: recovered,
   });
 });
 

@@ -3,6 +3,10 @@ macOS audio recorder implementation using sounddevice and ScreenCaptureKit.
 
 Uses sounddevice for microphone input and ScreenCaptureKit for desktop audio capture.
 Implements the same post-processing mix approach as Windows for consistency.
+
+Known constraint: mic frames are buffered in RAM (ChunkedAudioBuffer) for the
+post-processing mix. Very long meetings can still peak high during stop-time
+concatenate/mix; processing exceptions must emit structured failure JSON.
 """
 
 import sys
@@ -22,6 +26,11 @@ from .macos_desktop_diagnostics import (
     format_desktop_diagnostics_summary,
 )
 from .macos_stereo_repair import repair_one_sided_stereo
+from .recorder_temp_paths import (
+    build_recorder_temp_pcm_path,
+    build_stable_wav_path_for_output,
+    promote_recorder_temp_to_wav,
+)
 from .wav_io import write_float_stereo_wav
 from . import recorder_stdout as _recorder_stdout
 
@@ -288,6 +297,9 @@ class MacOSAudioRecorder:
         self.final_output_path = None
         self.recording_duration = 0.0
         self.desktop_diagnostics = {}
+        # Late desktop failures degrade to mic-only; mic failures remain hard errors.
+        self._desktop_runtime_failure = None
+        self._desktop_runtime_warning_sent = False
 
         print(f"Initialized macOS audio recorder", file=sys.stderr)
         print(f"  Mic device: {mic_device_id}", file=sys.stderr)
@@ -355,6 +367,8 @@ class MacOSAudioRecorder:
         self._error_event.clear()
         with self._error_lock:
             self._last_error = None
+        self._desktop_runtime_failure = None
+        self._desktop_runtime_warning_sent = False
 
         self._mic_started_event.clear()
         self._desktop_started_event.clear()
@@ -645,27 +659,55 @@ class MacOSAudioRecorder:
             traceback.print_exc(file=sys.stderr)
 
             error_message = f"Desktop audio recording failed: {str(e)}"
-            with self._error_lock:
-                self._last_error = error_message
-            self._error_event.set()
 
             if not capture_started:
+                # Startup failures still abort the whole recording.
+                with self._error_lock:
+                    self._last_error = error_message
                 self._desktop_start_error = error_message
                 self._desktop_started_event.set()
                 _send_error_message("DESKTOP_START_FAILED", error_message)
+                self._set_running(False)
             else:
-                _send_error_message("DESKTOP_RECORDING_FAILED", error_message)
+                # After a successful start, keep mic capture running and degrade
+                # to mic-only at stop (matches Windows warn-and-continue policy).
+                self._note_desktop_runtime_failure(error_message, code="DESKTOP_RECORDING_FAILED")
 
-            self._set_running(False)
+    def _note_desktop_runtime_failure(self, message: str, *, code: str = "DESKTOP_RECORDING_FAILED") -> None:
+        """Record a late desktop failure without discarding microphone audio."""
+        if not self._desktop_runtime_failure:
+            self._desktop_runtime_failure = message
+        if self._desktop_runtime_warning_sent:
+            return
+        self._desktop_runtime_warning_sent = True
+        print(f"WARNING: {message}", file=sys.stderr)
+        _send_warning_message(
+            code,
+            f"{message} Continuing with microphone audio only.",
+            help="Desktop audio capture failed after recording started. The saved file will contain microphone audio only.",
+        )
+
+    def _consume_desktop_helper_failure(self) -> Optional[str]:
+        """If the Swift/PyObjC helper failed mid-session, warn once and continue mic-only."""
+        if not self.desktop_capture or not hasattr(self.desktop_capture, 'error_event'):
+            return None
+        if not self.desktop_capture.error_event.is_set():
+            return None
+        error_msg = getattr(self.desktop_capture, 'last_error', None) or "Unknown desktop capture error"
+        message = f"Desktop audio capture failed: {error_msg}"
+        self._note_desktop_runtime_failure(message, code="DESKTOP_AUDIO_FAILED")
+        return message
 
     def _has_async_recording_error(self) -> bool:
-        if self._error_event.is_set():
-            return True
-        if self.desktop_capture and hasattr(self.desktop_capture, 'error_event'):
-            return self.desktop_capture.error_event.is_set()
-        return False
+        """True only for hard (microphone) failures that must stop the session."""
+        return self._error_event.is_set()
 
     def _resolve_async_recording_failure(self) -> Optional[dict]:
+        """Return a hard failure for mic-thread errors only.
+
+        Late desktop failures are converted to warnings so stop can still
+        process whatever microphone audio was captured.
+        """
         if self._error_event.is_set():
             with self._error_lock:
                 error_msg = self._last_error or "Unknown recording error"
@@ -674,25 +716,47 @@ class MacOSAudioRecorder:
                 'message': error_msg,
             }
 
-        if self.desktop_capture and hasattr(self.desktop_capture, 'error_event'):
-            if self.desktop_capture.error_event.is_set():
-                error_msg = getattr(self.desktop_capture, 'last_error', None) or "Unknown desktop capture error"
-                return {
-                    'code': 'DESKTOP_AUDIO_FAILED',
-                    'message': f"Desktop audio capture failed: {error_msg}",
-                }
-
+        self._consume_desktop_helper_failure()
         return None
 
     def _finalize_recording_failure(self, failure: dict) -> None:
         self.recording_failure = failure
-        self.final_output_path = None
-        self.recording_duration = 0.0
+        # Keep any already-produced output path so Electron can recover it.
+        if not self.final_output_path:
+            self.recording_duration = self.recording_duration or 0.0
+
+    def _resolve_recoverable_output_path(self) -> Optional[str]:
+        """Prefer the final Opus/WAV; promote a temp PCM to a stable .wav if needed.
+
+        Never return a volatile ``.pcm.tmp`` path to Electron — scan-import would
+        later rename it to ``{stem}.wav`` and orphan any meeting that stored the
+        temp path.
+        """
+        if self.final_output_path and Path(self.final_output_path).exists():
+            return self.final_output_path
+        preferred = self.output_path.replace('.wav', '.opus')
+        for candidate in (preferred, self.output_path):
+            if candidate and Path(candidate).exists() and not str(candidate).lower().endswith('.pcm.tmp'):
+                return candidate
+
+        temp_path = build_recorder_temp_pcm_path(self.output_path)
+        if Path(temp_path).exists():
+            stable_wav = build_stable_wav_path_for_output(self.output_path)
+            promoted = promote_recorder_temp_to_wav(temp_path, stable_wav)
+            if promoted:
+                self.final_output_path = promoted
+                return promoted
+        return None
 
     def stop_recording(self):
         """Stop recording and process audio."""
         pending_error = self._has_async_recording_error()
-        if not self._get_running() and not pending_error:
+        desktop_degraded = bool(self._desktop_runtime_failure) or (
+            self.desktop_capture is not None
+            and hasattr(self.desktop_capture, 'error_event')
+            and self.desktop_capture.error_event.is_set()
+        )
+        if not self._get_running() and not pending_error and not desktop_degraded:
             print("Not recording!", file=sys.stderr)
             return
 
@@ -710,8 +774,16 @@ class MacOSAudioRecorder:
         if self.desktop_capture:
             capture_type = self.desktop_capture_type or 'unknown'
             print(f"Stopping {capture_type} desktop capture...", file=sys.stderr)
-            desktop_audio = self.desktop_capture.stop_recording()
-            warning_codes = self._drain_desktop_warnings(capture_type)
+            desktop_audio = None
+            warning_codes = set()
+            try:
+                desktop_audio = self.desktop_capture.stop_recording()
+                warning_codes = self._drain_desktop_warnings(capture_type)
+            except Exception as stop_err:
+                self._note_desktop_runtime_failure(
+                    f"Desktop audio stop failed: {stop_err}",
+                    code="DESKTOP_STOP_FAILED",
+                )
             if desktop_audio is not None and len(desktop_audio) > 0:
                 diagnostics = self._emit_desktop_diagnostics_warning(emit_warning=False)
                 if diagnostics.get('bufferSamples', 0) <= 0:
@@ -732,9 +804,13 @@ class MacOSAudioRecorder:
                     file=sys.stderr,
                 )
             else:
+                self._consume_desktop_helper_failure()
                 self._emit_desktop_diagnostics_warning()
                 print(f"No desktop audio captured from {capture_type}", file=sys.stderr)
-                if "NO_DESKTOP_AUDIO_CAPTURED" not in warning_codes:
+                if self._desktop_runtime_failure:
+                    # Already warned via _note_desktop_runtime_failure.
+                    self.desktop_frames = []
+                elif "NO_DESKTOP_AUDIO_CAPTURED" not in warning_codes:
                     helper_backend = self.desktop_diagnostics.get('helperCaptureBackend') if self.desktop_diagnostics else None
                     if helper_backend == 'coreaudio_tap':
                         help_text = (
@@ -764,9 +840,23 @@ class MacOSAudioRecorder:
                 self._finalize_recording_failure(async_failure)
             return
 
-        # Process and save audio
+        # Process and save audio (mic-only when desktop failed late)
         print(f"Processing audio...", file=sys.stderr)
-        if not self._process_and_save():
+        try:
+            if not self._process_and_save():
+                return
+        except Exception as process_err:
+            message = f"Recorder failed during post-processing: {process_err}"
+            print(message, file=sys.stderr)
+            import traceback
+            traceback.print_exc(file=sys.stderr)
+            recovered = self._resolve_recoverable_output_path()
+            self.recording_failure = {
+                'code': 'RECORDER_FAILED',
+                'message': message,
+            }
+            if recovered:
+                self.final_output_path = recovered
             return
 
         print(f"Recording complete!", file=sys.stderr)
@@ -870,26 +960,28 @@ class MacOSAudioRecorder:
         # Enhance microphone audio (same as Windows)
         final_audio = self._enhance_microphone(final_audio)
 
-        # Save as temporary WAV file
-        temp_wav_path = self.output_path.replace('.opus', '_temp.wav').replace('.wav', '_temp.wav')
+        # Save as temporary PCM WAV with a non-scanned extension (.pcm.tmp).
+        # Leftover .wav temps were previously imported as duplicate meetings.
+        temp_wav_path = build_recorder_temp_pcm_path(self.output_path)
         self._save_wav(final_audio, temp_wav_path)
 
         # Determine preferred final output path (shared compressor may return .wav fallback)
         preferred_output_path = self.output_path.replace('.wav', '.opus')
+        duration_seconds = len(final_audio) / self.sample_rate
+        self.recording_duration = duration_seconds
 
         # Compress with ffmpeg (same shared helper as Windows)
         final_output_path = self._compress_with_ffmpeg(temp_wav_path, preferred_output_path)
+
+        # Publish the final path before temp cleanup so unlink failures still
+        # leave Electron with a recoverable success/failure payload.
+        self.final_output_path = final_output_path
 
         # Clean up temp file
         try:
             Path(temp_wav_path).unlink()
         except OSError:
             pass  # File may already be deleted or locked
-
-        # Set instance variables for meeting manager
-        self.final_output_path = final_output_path
-        duration_seconds = len(final_audio) / self.sample_rate
-        self.recording_duration = duration_seconds
 
         print(f"Final file: {final_output_path}", file=sys.stderr)
         print(f"Duration: {duration_seconds:.1f} seconds", file=sys.stderr)
@@ -1153,50 +1245,87 @@ def main():
             recorder._abort_startup()
         sys.exit(1)
 
-    if args.duration > 0:
-        # Fixed duration
-        print(f"Recording for {args.duration} seconds...", file=sys.stderr)
-        time.sleep(args.duration)
-        recorder.stop_recording()
-    else:
-        # Manual stop (wait for stdin command from Electron)
-        print(f"Recording... (send 'stop' to stdin to stop)", file=sys.stderr)
+    result_emitted = False
 
-        # Thread to listen for stop command from stdin
-        stop_event = threading.Event()
-        
-        def input_listener():
-            """Listen for stop command from Electron via stdin."""
-            try:
-                for line in sys.stdin:
-                    if "stop" in line.strip().lower():
-                        stop_event.set()
-                        break
-            except Exception as e:
-                print(f"Error in command listener: {e}", file=sys.stderr)
+    def emit_final_result(*, exit_code: int = 0) -> None:
+        nonlocal result_emitted
+        if result_emitted or recorder is None:
+            return
+        result_emitted = True
 
-        input_thread = threading.Thread(target=input_listener, daemon=True)
-        input_thread.start()
+        failure = getattr(recorder, 'recording_failure', None)
+        recovered_path = None
+        if hasattr(recorder, '_resolve_recoverable_output_path'):
+            recovered_path = recorder._resolve_recoverable_output_path()
+        elif getattr(recorder, 'final_output_path', None):
+            recovered_path = recorder.final_output_path
 
-        # Main loop - continuously send audio levels for visualization
-        # PERFORMANCE: 5 FPS updates to minimize CPU/IPC overhead (matches Windows)
-        try:
+        if not failure and not recovered_path:
+            failure = {
+                'code': 'RECORDING_FAILED',
+                'message': 'Recording did not produce an output file.',
+            }
+
+        if failure:
+            result = {
+                'success': False,
+                'code': failure.get('code', 'RECORDING_FAILED'),
+                'message': failure.get('message', 'Recording failed.'),
+                'duration': recorder.recording_duration or 0,
+                'desktopDiagnostics': recorder.desktop_diagnostics,
+            }
+            if recovered_path:
+                result['outputPath'] = recovered_path
+            _send_json_message(result)
+            sys.exit(1 if exit_code == 0 else exit_code)
+
+        result = {
+            'success': True,
+            'outputPath': recovered_path or args.output,
+            'duration': recorder.recording_duration,
+            'desktopDiagnostics': recorder.desktop_diagnostics,
+        }
+        _send_json_message(result)
+        sys.exit(exit_code)
+
+    try:
+        if args.duration > 0:
+            # Fixed duration
+            print(f"Recording for {args.duration} seconds...", file=sys.stderr)
+            time.sleep(args.duration)
+            recorder.stop_recording()
+        else:
+            # Manual stop (wait for stdin command from Electron)
+            print(f"Recording... (send 'stop' to stdin to stop)", file=sys.stderr)
+
+            # Thread to listen for stop command from stdin
+            stop_event = threading.Event()
+
+            def input_listener():
+                """Listen for stop command from Electron via stdin."""
+                try:
+                    for line in sys.stdin:
+                        if "stop" in line.strip().lower():
+                            stop_event.set()
+                            break
+                except Exception as e:
+                    print(f"Error in command listener: {e}", file=sys.stderr)
+
+            input_thread = threading.Thread(target=input_listener, daemon=True)
+            input_thread.start()
+
+            # Main loop - continuously send audio levels for visualization
+            # PERFORMANCE: 5 FPS updates to minimize CPU/IPC overhead (matches Windows)
             while not stop_event.is_set():
                 if recorder._has_async_recording_error():
                     with recorder._error_lock:
                         error_msg = recorder._last_error or "Unknown recording error"
-                    if recorder._error_event.is_set():
-                        print(f"CRITICAL: Recording thread error: {error_msg}", file=sys.stderr)
-                        _send_error_message("RECORDING_THREAD_FAILED", error_msg)
-                    elif recorder.desktop_capture and hasattr(recorder.desktop_capture, 'error_event'):
-                        if recorder.desktop_capture.error_event.is_set():
-                            helper_error = recorder.desktop_capture.last_error or "Unknown desktop capture error"
-                            print(f"CRITICAL: Swift capture failed: {helper_error}", file=sys.stderr)
-                            _send_error_message(
-                                "DESKTOP_AUDIO_FAILED",
-                                f"Desktop audio capture failed: {helper_error}",
-                            )
+                    print(f"CRITICAL: Recording thread error: {error_msg}", file=sys.stderr)
+                    _send_error_message("RECORDING_THREAD_FAILED", error_msg)
                     break
+
+                # Late desktop helper failures degrade to mic-only; keep recording.
+                recorder._consume_desktop_helper_failure()
 
                 if not recorder.is_recording():
                     break
@@ -1217,34 +1346,59 @@ def main():
 
             print(f"\nStopping recording...", file=sys.stderr)
             recorder.stop_recording()
-        except KeyboardInterrupt:
-            print(f"\nCtrl+C received", file=sys.stderr)
+    except KeyboardInterrupt:
+        print(f"\nCtrl+C received", file=sys.stderr)
+        try:
             recorder.stop_recording()
+        except Exception as stop_err:
+            message = f"Recorder failed during stop: {stop_err}"
+            print(message, file=sys.stderr)
+            recorder.recording_failure = {
+                'code': 'RECORDER_FAILED',
+                'message': message,
+            }
+    except Exception as e:
+        # Best-effort finalize first. Do not emit a structured error toast yet —
+        # stop_recording() may still produce a successful mic-only/mixed file
+        # (recording_failure cleared). Only toast when recovery failed.
+        #
+        # Guard: do not set recording_failure after a successful stop_recording()
+        # just because this outer handler caught an earlier exception. Anything
+        # added after stop_recording() in the try block must not convert a
+        # finished save into RECORDER_FAILED.
+        message = f"Recorder failed: {e}"
+        print(message, file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        if recorder is not None:
+            try:
+                if recorder._get_running() or recorder.mic_frames:
+                    recorder.stop_recording()
+            except Exception as stop_err:
+                print(f"Stop after failure also failed: {stop_err}", file=sys.stderr)
 
-    # Output result as JSON for Electron
-    failure = getattr(recorder, 'recording_failure', None)
-    if not failure and not getattr(recorder, 'final_output_path', None):
-        failure = {
-            'code': 'RECORDING_FAILED',
-            'message': 'Recording did not produce an output file.',
-        }
-    if failure:
-        result = {
-            'success': False,
-            'code': failure.get('code', 'RECORDING_FAILED'),
-            'message': failure.get('message', 'Recording failed.'),
-            'duration': recorder.recording_duration or 0,
-            'desktopDiagnostics': recorder.desktop_diagnostics,
-        }
-    else:
-        result = {
-            'success': True,
-            'outputPath': recorder.final_output_path or args.output,
-            'duration': recorder.recording_duration,
-            'desktopDiagnostics': recorder.desktop_diagnostics,
-        }
-    _send_json_message(result)
-    sys.exit(0)
+            recovered = None
+            if hasattr(recorder, '_resolve_recoverable_output_path'):
+                recovered = recorder._resolve_recoverable_output_path()
+            elif getattr(recorder, 'final_output_path', None):
+                recovered = recorder.final_output_path
+
+            if recovered and not getattr(recorder, 'recording_failure', None):
+                print(
+                    f"Recovered recording after error (no error toast): {recovered}",
+                    file=sys.stderr,
+                )
+            else:
+                if not getattr(recorder, 'recording_failure', None):
+                    recorder.recording_failure = {
+                        'code': 'RECORDER_FAILED',
+                        'message': message,
+                    }
+                _send_error_message("RECORDER_FAILED", message)
+        else:
+            _send_error_message("RECORDER_FAILED", message)
+
+    emit_final_result()
 
 
 if __name__ == "__main__":

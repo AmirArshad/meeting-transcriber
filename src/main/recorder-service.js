@@ -9,6 +9,8 @@
  * before-quit handler. Handler bodies are moved verbatim; deps are injected.
  */
 
+const os = require('os');
+
 const {
   buildRecordingPreflightReport,
   buildQuitRecordingDialogOptions,
@@ -16,6 +18,7 @@ const {
   getRecorderEventAction,
   getRecordingStopTimeout,
   parseRecordingStopResult,
+  normalizeRecordingStopPayload,
   resolveStopTimeoutAction,
   parseRecorderStdoutChunk,
   appendCappedSpawnLogBuffer,
@@ -69,9 +72,19 @@ function createRecorderService(deps) {
   let powerSaveId = null;
   let recordingHeartbeat = null;
   let lastLevelUpdate = null;
+  let heartbeatLostWarningActive = false;
   let recordingStopPromise = null;
   let stopCommandSent = false;
   let recordingSessionCounter = 0;
+  // Last structured result seen by the live stdout listener (not only stop buffer).
+  let lastLiveRecorderResult = null;
+  // Suppress unexpected_exit UI after a stop-timeout force-kill (renderer already failed).
+  let suppressUnexpectedExitAfterStopTimeout = false;
+  // Audio paths persisted by quit-cancel recovery; stop IPC should not re-save/transcribe.
+  const quitPersistedAudioPaths = new Set();
+  // In-flight quit-cancel persist; stop IPC awaits this before returning so the
+  // alreadyPersistedForQuit flag is visible (avoids double transcribe/save).
+  let quitStopRecoveryPromise = null;
 
   function clearRecordingRuntimeState(reason) {
     if (recordingHeartbeat) {
@@ -82,8 +95,33 @@ function createRecorderService(deps) {
 
     pythonProcess = null;
     recordingStartTime = null;
+    lastLevelUpdate = null;
+    heartbeatLostWarningActive = false;
+    lastLiveRecorderResult = null;
+    suppressUnexpectedExitAfterStopTimeout = false;
     disableRecordingPowerSaveBlocker(reason);
     resetStopWorkflowState();
+  }
+
+  function markQuitPersistedAudioPath(audioPath) {
+    if (audioPath) {
+      quitPersistedAudioPaths.add(String(audioPath));
+    }
+  }
+
+  function consumeQuitPersistedFlag(result) {
+    if (!result?.audioPath) {
+      return result;
+    }
+    const key = String(result.audioPath);
+    if (!quitPersistedAudioPaths.has(key)) {
+      return result;
+    }
+    quitPersistedAudioPaths.delete(key);
+    return {
+      ...result,
+      alreadyPersistedForQuit: true,
+    };
   }
 
   function disableRecordingPowerSaveBlocker(reason = 'recording stopped') {
@@ -233,8 +271,11 @@ function createRecorderService(deps) {
 
       if (timeoutAction.shouldKillProcess && pythonProcess) {
         try {
+          // Keep recordingStopPromise set so the subsequent close is classified as
+          // stop_in_progress (not unexpected_exit). Also arm an explicit suppress
+          // flag in case close ordering clears the stop promise first.
+          suppressUnexpectedExitAfterStopTimeout = true;
           pythonProcess.kill();
-          resetStopWorkflowState();
         } catch (killError) {
           console.warn('Failed to kill recorder after timeout:', killError.message);
         }
@@ -263,6 +304,7 @@ function createRecorderService(deps) {
   async function finishQuitAfterRecordingSaved(result) {
     if (result?.audioPath) {
       await persistStoppedRecordingForQuit(result);
+      markQuitPersistedAudioPath(result.audioPath);
       sendToRenderer('recording-saved-during-quit', {
         audioPath: result.audioPath,
         duration: result.duration || 0,
@@ -289,7 +331,7 @@ function createRecorderService(deps) {
       code: 'QUIT_CANCELED_STOP_IN_PROGRESS',
     });
 
-    try {
+    const recoveryWork = (async () => {
       // Prefer a captured stop promise (may already be settled if the recorder
       // finished while the forced-quit dialog was open). Fall back to the live
       // promise, then to a fresh wait only if stop was never attached.
@@ -307,6 +349,7 @@ function createRecorderService(deps) {
 
       if (result?.audioPath) {
         await persistStoppedRecordingForQuit(result);
+        markQuitPersistedAudioPath(result.audioPath);
         sendToRenderer('recording-saved-during-quit', {
           audioPath: result.audioPath,
           duration: result.duration || 0,
@@ -323,6 +366,11 @@ function createRecorderService(deps) {
         message: 'Recording stop finished but no audio file was found.',
         code: 'RECORDING_STOP_NO_AUDIO',
       });
+    })();
+
+    quitStopRecoveryPromise = recoveryWork;
+    try {
+      await recoveryWork;
     } catch (recoverError) {
       console.warn('Post-quit-cancel recording recovery failed:', recoverError.message);
       sendToRenderer('recording-progress', {
@@ -335,6 +383,10 @@ function createRecorderService(deps) {
         message: 'Quit was canceled, but the recorder had already been told to stop and did not finish saving. Check History after relaunch, or try Stop again if the recorder is still running.',
         level: 'warning',
       });
+    } finally {
+      if (quitStopRecoveryPromise === recoveryWork) {
+        quitStopRecoveryPromise = null;
+      }
     }
   }
 
@@ -408,7 +460,11 @@ function createRecorderService(deps) {
     }
   }
 
-  async function persistStoppedRecordingForQuit(recordingInfo) {
+  async function persistRecoveredRecording(recordingInfo, {
+    title = 'Recording saved before quit',
+    heading = 'Recording Saved Before Quit',
+    body = 'Transcription was not completed because the app quit while recording was active.\nOpen AvaNevis again to keep this recording in history.',
+  } = {}) {
     const audioPath = recordingInfo.audioPath;
     const audioFile = path.basename(audioPath);
     const recordingsDir = path.dirname(audioPath);
@@ -419,13 +475,12 @@ function createRecorderService(deps) {
 
     if (!fs.existsSync(transcriptPath)) {
       const transcriptContent = [
-        '# Recording Saved Before Quit',
+        `# ${heading}`,
         '',
         `**Date:** ${new Date().toISOString()}`,
         `**Duration:** ${formatDurationForTranscript(recordingInfo.duration || 0)}`,
         '',
-        'Transcription was not completed because the app quit while recording was active.',
-        'Open AvaNevis again to keep this recording in history.',
+        body,
         '',
       ].join('\n');
 
@@ -438,7 +493,29 @@ function createRecorderService(deps) {
       duration: recordingInfo.duration || 0,
       language: 'unknown',
       model: 'not-transcribed',
+      title,
+    });
+  }
+
+  async function persistStoppedRecordingForQuit(recordingInfo) {
+    return persistRecoveredRecording(recordingInfo, {
       title: 'Recording saved before quit',
+      heading: 'Recording Saved Before Quit',
+      body: [
+        'Transcription was not completed because the app quit while recording was active.',
+        'Open AvaNevis again to keep this recording in history.',
+      ].join('\n'),
+    });
+  }
+
+  async function persistRecoveredRecordingAfterUnexpectedExit(recordingInfo) {
+    return persistRecoveredRecording(recordingInfo, {
+      title: 'Recording recovered after unexpected exit',
+      heading: 'Recording Recovered After Unexpected Exit',
+      body: [
+        'The recorder exited unexpectedly, but the audio file was recovered.',
+        'Open History to continue with this recording.',
+      ].join('\n'),
     });
   }
 
@@ -547,8 +624,8 @@ function createRecorderService(deps) {
         ], { cwd: pythonConfig.backendPath });
         pythonProcess = proc;
 
-        // FIX 2 (REFINED): Set high priority for Python recording process on Windows
-        // Use small delay to ensure process is fully initialized before setting priority
+        // Set high priority for the Python recording process on Windows.
+        // Prefer Node's os.setPriority (WMIC was removed on Windows 11 24H2+).
         if (process.platform === 'win32' && proc.pid) {
           const procPid = proc.pid;
           setTimeout(() => {
@@ -557,14 +634,13 @@ function createRecorderService(deps) {
             }
 
             try {
-              const { exec } = require('child_process');
-              exec(`wmic process where processid="${procPid}" CALL setpriority "high priority"`, (error) => {
-                if (error) {
-                  console.warn('Failed to set high priority:', error.message);
-                } else {
-                  console.log('Recording process set to HIGH priority');
-                }
-              });
+              const highPriority = os.constants?.priority?.PRIORITY_HIGH;
+              if (typeof highPriority === 'number') {
+                os.setPriority(procPid, highPriority);
+                console.log('Recording process set to HIGH priority');
+              } else {
+                console.warn('Could not set process priority: PRIORITY_HIGH unavailable');
+              }
             } catch (e) {
               console.warn('Could not set process priority:', e.message);
             }
@@ -576,6 +652,9 @@ function createRecorderService(deps) {
         let stdoutRemainder = '';
         let startupFailureMessage = null;
         let startupSettled = false;
+        lastLiveRecorderResult = null;
+        suppressUnexpectedExitAfterStopTimeout = false;
+        heartbeatLostWarningActive = false;
 
         const sendInitProgress = (stage, message) => {
           progressStage = stage;
@@ -655,20 +734,23 @@ function createRecorderService(deps) {
           recordingStarted = true;
           recordingStartTime = Date.now();
 
-          // FIX 3: Start heartbeat monitor to detect recording failures
+          // Heartbeat monitor: warn once per stall episode (not every 5s).
           lastLevelUpdate = Date.now();
+          heartbeatLostWarningActive = false;
           recordingHeartbeat = setInterval(() => {
             const timeSinceUpdate = Date.now() - lastLevelUpdate;
 
             // If no audio level updates for 10 seconds, something is wrong
             if (timeSinceUpdate > 10000 && pythonProcess === proc && !proc.killed) {
-              console.error(`Recording heartbeat lost - no audio levels for ${timeSinceUpdate / 1000}s`);
-              sendToRenderer('recording-warning', {
-                type: 'heartbeat_lost',
-                sessionId,
-                message: 'Recording may have stopped unexpectedly. No audio data received for 10+ seconds.'
-              });
-
+              if (!heartbeatLostWarningActive) {
+                heartbeatLostWarningActive = true;
+                console.error(`Recording heartbeat lost - no audio levels for ${timeSinceUpdate / 1000}s`);
+                sendToRenderer('recording-warning', {
+                  type: 'heartbeat_lost',
+                  sessionId,
+                  message: 'Recording may have stopped unexpectedly. No audio data received for 10+ seconds.'
+                });
+              }
               // Continue monitoring - don't auto-kill, let user decide
             }
           }, 5000);
@@ -691,6 +773,8 @@ function createRecorderService(deps) {
             switch (message.kind) {
               case 'levels': {
                 lastLevelUpdate = Date.now();
+                // Levels resumed — allow a fresh warning if the stall returns.
+                heartbeatLostWarningActive = false;
 
                 const now = Date.now();
                 const shouldSendUpdate = (now - lastLevelSentTime) >= LEVEL_UPDATE_THROTTLE_MS;
@@ -751,8 +835,16 @@ function createRecorderService(deps) {
                 sendToRenderer('recording-progress', message.payload.message);
                 break;
 
-              case 'result':
+              case 'result': {
+                // Stash for unexpected_exit recovery when stop buffer is absent.
+                const normalizedLive = normalizeRecordingStopPayload(message.payload, {
+                  existsSync: fs.existsSync,
+                });
+                if (normalizedLive && !normalizedLive.error) {
+                  lastLiveRecorderResult = normalizedLive;
+                }
                 break;
+              }
 
               case 'json':
                 if (message.payload.message) {
@@ -774,6 +866,7 @@ function createRecorderService(deps) {
         const handleProcessClosed = (code) => {
           clearTimeout(timeoutHandle);
 
+          const recoveredStopResult = lastLiveRecorderResult;
           const closeAction = getRecorderCloseAction({
             recordingStarted,
             stopInProgress: Boolean(recordingStopPromise),
@@ -781,6 +874,8 @@ function createRecorderService(deps) {
             startupFailureMessage,
             progressStage,
             exitCode: code,
+            suppressUnexpectedExitWarning: suppressUnexpectedExitAfterStopTimeout,
+            recoveredStopResult,
           });
 
           if (closeAction.type === 'stop_in_progress') {
@@ -794,12 +889,53 @@ function createRecorderService(deps) {
             return;
           }
 
+          if (closeAction.type === 'unexpected_exit_suppressed') {
+            if (pythonProcess === proc) {
+              clearRecordingRuntimeState('recorder stop timeout force-kill');
+            }
+            recordingStarted = false;
+            startupSettled = true;
+            return;
+          }
+
           clearRecordingRuntimeState(
             closeAction.type === 'unexpected_exit'
+              || closeAction.type === 'unexpected_exit_recovered'
               ? 'recorder exited unexpectedly'
               : 'recording failed'
           );
           recordingStarted = false;
+
+          if (closeAction.type === 'unexpected_exit_recovered' && closeAction.recoveredStopResult?.audioPath) {
+            const recovered = closeAction.recoveredStopResult;
+            // Do not mark quitPersistedAudioPaths here — no stop IPC is waiting
+            // to consume the flag (that Set is only for quit-cancel ↔ stop races).
+            Promise.resolve()
+              .then(() => persistRecoveredRecordingAfterUnexpectedExit(recovered))
+              .then(() => {
+                sendToRenderer('recording-saved-during-quit', {
+                  audioPath: recovered.audioPath,
+                  duration: recovered.duration || 0,
+                  message: 'Recorder exited unexpectedly, but the recording file was recovered. Open History to continue.',
+                });
+                if (closeAction.warning) {
+                  sendStructuredWarning(closeAction.warning, closeAction.warning.level || 'warning');
+                }
+              })
+              .catch((persistError) => {
+                console.warn('Failed to persist recovered recording after unexpected exit:', persistError.message);
+                failActiveRecording({
+                  type: 'recorder_exited',
+                  code: 'RECORDER_EXITED',
+                  level: 'error',
+                  message: recovered.message
+                    || 'Recorder exited unexpectedly after startup.',
+                  help: 'A recording file may still exist on disk. Open History or scan recordings after relaunch.',
+                });
+              });
+            startupSettled = true;
+            return;
+          }
 
           if (closeAction.warning) {
             failActiveRecording(closeAction.warning);
@@ -873,10 +1009,34 @@ function createRecorderService(deps) {
      */
     ipcMain.handle('stop-recording', async (event) => {
       assertTrustedRendererSender(event);
-      return waitForRecordingStop({
+      const result = await waitForRecordingStop({
         forceKillOnTimeout: true,
         timeoutMessage: 'Recording stop timeout - process took too long to finish',
       });
+      // Close the quit-cancel race: the shared stop promise can resolve while
+      // the forced-quit dialog is still open (before recoverRecordingAfterQuitCanceled
+      // assigns quitStopRecoveryPromise). Await the whole quit workflow so cancel
+      // recovery can mark the path before we return to the renderer.
+      const quitWorkflow = typeof getQuitWorkflowPromise === 'function'
+        ? getQuitWorkflowPromise()
+        : null;
+      if (quitWorkflow) {
+        try {
+          await quitWorkflow;
+        } catch (_) {
+          // Quit workflow errors are already reported on the quit path.
+        }
+      }
+      if (quitStopRecoveryPromise) {
+        try {
+          await quitStopRecoveryPromise;
+        } catch (_) {
+          // Recovery errors are already reported on the quit path.
+        }
+      }
+      // Quit-cancel recovery may already have persisted this path; tell the
+      // renderer to skip the normal transcribe-and-save flow for the same file.
+      return consumeQuitPersistedFlag(result);
     });
   }
 

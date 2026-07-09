@@ -91,6 +91,7 @@ from .processor import (
     align_audio_lengths,
 )
 from .compressor import compress_and_report
+from .recorder_temp_paths import build_recorder_temp_pcm_path
 from .timeline import reconstruct_desktop_timeline
 from .wav_io import write_int16_pcm_wav
 from .windows_callback_health import evaluate_callback_stalls
@@ -98,6 +99,10 @@ from .windows_callback_health import evaluate_callback_stalls
 # Store final output path for meeting manager (legacy interface)
 _final_output_path = None
 _recording_duration = 0.0
+
+# Known constraint: mic/desktop frames are buffered in RAM for the post-processing
+# mix. Long meetings (≈2h stereo 48 kHz) can peak at several GB during stop-time
+# join/convert; MemoryError on that path should still emit structured failure JSON.
 
 
 class AudioRecorder:
@@ -885,8 +890,9 @@ class AudioRecorder:
         duration = len(final_audio) / (self.target_sample_rate * self.target_channels)
         print(f"  Final audio length: {len(final_audio)} samples ({duration:.2f} seconds)", file=sys.stderr)
 
-        # Save to temporary WAV first
-        temp_wav = str(Path(self.output_path).with_suffix('.temp.wav'))
+        # Save to temporary PCM with a non-scanned extension (.pcm.tmp).
+        # Leftover .temp.wav files were previously imported as duplicate meetings.
+        temp_wav = build_recorder_temp_pcm_path(self.output_path)
         print(f"Saving temporary WAV...", file=sys.stderr)
         write_int16_pcm_wav(
             temp_wav,
@@ -904,8 +910,18 @@ class AudioRecorder:
             progress_message="Compressing with ffmpeg (128 kbps Opus)...",
         )
 
-        # Clean up temp file
-        Path(temp_wav).unlink()
+        # Publish the final path before temp cleanup so antivirus/OneDrive
+        # PermissionError on unlink still leaves Electron a recoverable payload.
+        self.output_path = final_path
+        global _final_output_path, _recording_duration
+        _final_output_path = final_path
+        _recording_duration = duration
+
+        # Clean up temp file (best-effort; locked temps are cleaned by scan-import)
+        try:
+            Path(temp_wav).unlink()
+        except OSError as unlink_err:
+            print(f"Warning: Could not remove temp recording file: {unlink_err}", file=sys.stderr)
 
         file_size = stats['output_size']
         temp_size = stats['input_size']
@@ -916,12 +932,6 @@ class AudioRecorder:
         print(f"  Size: {file_size / 1024 / 1024:.2f} MB (was {temp_size / 1024 / 1024:.2f} MB, {compression_ratio:.1f}% smaller)", file=sys.stderr)
         print(f"  Duration: {duration:.2f} seconds", file=sys.stderr)
         print(f"  Sample rate: {self.target_sample_rate} Hz", file=sys.stderr)
-
-        # Update output path for caller and store globally for main()
-        self.output_path = final_path
-        global _final_output_path, _recording_duration
-        _final_output_path = final_path
-        _recording_duration = duration
 
     def cleanup(self):
         """Clean up resources."""
@@ -1040,12 +1050,20 @@ def main():
             })
             # Prevent finally from emitting a conflicting success payload.
             _final_output_path = None
+        else:
+            # Still emit a structured failure so Electron never sees exit≠0
+            # with an empty stop buffer (e.g. MemoryError before compress).
+            _send_json_message({
+                "success": False,
+                "code": "RECORDER_FAILED",
+                "message": message,
+                "duration": _recording_duration,
+            })
         sys.exit(1)
     finally:
-        if recorder is not None:
-            recorder.cleanup()
-
-        # Output recording info as JSON for Electron to capture
+        # Emit the success payload BEFORE cleanup. pa.terminate() has historically
+        # been crash-prone; a raise there must not convert a finished save into
+        # exit-1-with-no-payload.
         if _final_output_path:
             recording_info = {
                 "success": True,
@@ -1053,6 +1071,13 @@ def main():
                 "duration": _recording_duration,
             }
             _send_json_message(recording_info)
+            _final_output_path = None
+
+        if recorder is not None:
+            try:
+                recorder.cleanup()
+            except Exception as cleanup_err:
+                print(f"Warning: Recorder cleanup failed: {cleanup_err}", file=sys.stderr)
 
 
 if __name__ == "__main__":

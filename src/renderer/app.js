@@ -2209,8 +2209,20 @@ async function stopRecording() {
 
     const result = await window.electronAPI.stopRecording();
 
+    // Quit-cancel recovery already persisted this recording into History.
+    // Do not run the normal transcribe-and-save path on the same stop result.
+    if (result?.alreadyPersistedForQuit) {
+      addLog('Recording was already saved during quit cancel. Open History to continue.', 'warning');
+      setTranscriptMessage('Recording finished and saved. Open History to continue.', false);
+      setRecordingState('idle');
+      loadMeetingHistory({ scan: true }).catch((error) => {
+        console.warn('Could not refresh history after quit-persisted stop:', error);
+      });
+      return;
+    }
+
     if (result?.success === false) {
-      // Windows may still return a recoverable audioPath after a processing failure.
+      // Windows/macOS may still return a recoverable audioPath/outputPath after a processing failure.
       if (result.audioPath) {
         currentAudioFile = result.audioPath;
         currentRecordingDurationSeconds = Number(result.duration || 0);
