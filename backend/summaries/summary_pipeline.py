@@ -13,6 +13,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 
 SUMMARY_ARRAY_FIELDS = ("topics", "decisions", "action_items", "risks", "open_questions")
+SCHEMA_PLACEHOLDER_SUMMARY = "short grounded overview"
 TRANSCRIPT_TIMESTAMP_RE = re.compile(
     r"^(?:\*\*)?\[(?P<start>\d{1,2}:\d{2}(?::\d{2})?)\s+-\s+(?P<end>\d{1,2}:\d{2}(?::\d{2})?)\](?:\*\*)?\s*(?P<tail>.*)$"
 )
@@ -109,8 +110,36 @@ def _split_speaker_prefix(text: str) -> Dict[str, str]:
     }
 
 
+def _next_nonempty_line(lines: List[str], start_index: int) -> tuple[int, str]:
+    """Return (index, cleaned text) for the next non-empty line, or (-1, "")."""
+    next_index = start_index
+    while next_index < len(lines) and not lines[next_index].strip():
+        next_index += 1
+    if next_index >= len(lines):
+        return -1, ""
+    return next_index, _clean_text(lines[next_index])
+
+
+def _pull_following_body_line(lines: List[str], index: int) -> tuple[int, str]:
+    """Pull the next body line, refusing to consume a following timestamp header."""
+    next_index, next_text = _next_nonempty_line(lines, index + 1)
+    if next_index < 0:
+        return index, ""
+    if TRANSCRIPT_TIMESTAMP_RE.match(lines[next_index].strip()):
+        return index, ""
+    return next_index, next_text
+
+
 def parse_markdown_transcript(markdown_text: str) -> List[Dict[str, Any]]:
-    """Parse AvaNevis Markdown transcripts back into timestamped segments."""
+    """Parse AvaNevis Markdown transcripts back into timestamped segments.
+
+    Supports both common shapes produced by the app:
+
+    - ``**[00:01 - 00:03]**`` then body text on the following line
+    - ``**[00:01 - 00:03]** **Speaker 1:**`` then body text on the following line
+      (guided / diarization-labeled transcripts)
+    - ``[00:01 - 00:03] **Speaker 2:** Follow up`` on one line
+    """
     lines = str(markdown_text or "").splitlines()
     segments: List[Dict[str, Any]] = []
     index = 0
@@ -124,14 +153,23 @@ def parse_markdown_transcript(markdown_text: str) -> List[Dict[str, Any]]:
 
         tail = _clean_text(match.group("tail"))
         if not tail:
-            next_index = index + 1
-            while next_index < len(lines) and not lines[next_index].strip():
-                next_index += 1
-            if next_index < len(lines):
-                tail = _clean_text(lines[next_index])
+            next_index, next_text = _pull_following_body_line(lines, index)
+            if next_text:
+                tail = next_text
                 index = next_index
 
         speaker_text = _split_speaker_prefix(tail)
+        # Guided transcripts put only the speaker label on the timestamp line and
+        # the spoken text on the following line. Pull that body in when needed.
+        if not speaker_text["text"]:
+            next_index, next_text = _pull_following_body_line(lines, index)
+            if next_text:
+                speaker_text = {
+                    "speaker": speaker_text["speaker"],
+                    "text": next_text,
+                }
+                index = next_index
+
         if speaker_text["text"]:
             segments.append({
                 "start": parse_timestamp(match.group("start")),
@@ -143,7 +181,6 @@ def parse_markdown_transcript(markdown_text: str) -> List[Dict[str, Any]]:
         index += 1
 
     return segments
-
 
 def normalize_transcript_segments(segments: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Normalize transcript segments into prompt-safe timestamped text lines."""
@@ -259,15 +296,15 @@ def chunk_transcript(
 
 
 def summary_json_schema_instruction() -> str:
-    return """Return only valid JSON with this exact shape:
-{
-  "summary": "short grounded overview",
-  "topics": [{"title": "topic", "summary": "what was discussed", "timestamps": ["MM:SS"]}],
-  "decisions": [{"decision": "decision made", "owner": "Speaker or Unknown", "timestamp": "MM:SS"}],
-  "action_items": [{"task": "task", "owner": "Speaker or Unknown", "due": "date or null", "timestamp": "MM:SS"}],
-  "risks": [{"risk": "risk or blocker", "timestamp": "MM:SS"}],
-  "open_questions": [{"question": "question", "timestamp": "MM:SS"}]
-}
+    return f"""Return only valid JSON with this exact shape:
+{{
+  "summary": "{SCHEMA_PLACEHOLDER_SUMMARY}",
+  "topics": [{{"title": "topic", "summary": "what was discussed", "timestamps": ["MM:SS"]}}],
+  "decisions": [{{"decision": "decision made", "owner": "Speaker or Unknown", "timestamp": "MM:SS"}}],
+  "action_items": [{{"task": "task", "owner": "Speaker or Unknown", "due": "date or null", "timestamp": "MM:SS"}}],
+  "risks": [{{"risk": "risk or blocker", "timestamp": "MM:SS"}}],
+  "open_questions": [{{"question": "question", "timestamp": "MM:SS"}}]
+}}
 Use only evidence from the transcript. If an owner is not explicit, use "Unknown". Do not include markdown."""
 
 
@@ -283,6 +320,8 @@ def build_chunk_summary_prompt(chunk: Dict[str, Any], *, profile: str = "balance
         no_thinking_instruction(),
         profile_config["instructions"],
         summary_json_schema_instruction(),
+        "The transcript chunk below is the only meeting content. Summarize that speech.",
+        "Do not claim the transcript is missing, empty, or only system/CLI status.",
         f"Chunk {chunk.get('index', 1)} transcript:",
         str(chunk.get("text", "")),
     ])
@@ -323,6 +362,8 @@ def extract_json_object(raw_output: str) -> Dict[str, Any]:
 
     if not isinstance(parsed, dict):
         raise SummaryValidationError("model output must be a JSON object")
+    if _clean_text(parsed.get("summary")) == SCHEMA_PLACEHOLDER_SUMMARY:
+        raise SummaryValidationError("model output echoed the schema example")
     return parsed
 
 
@@ -359,6 +400,48 @@ def validate_summary_json(summary: Any) -> Dict[str, Any]:
     for field in SUMMARY_ARRAY_FIELDS:
         normalized[field] = _require_list(summary, field)
 
+    return normalized
+
+
+# Match only clear denials that the transcript/content was absent. Do not match
+# affirmative phrases like "the transcript provided by the vendor".
+UNGROUNDED_SUMMARY_RE = re.compile(
+    r"(?i)\b(?:"
+    r"no meeting content|"
+    r"no (?:meeting )?transcript(?:\s+was)?(?:\s+provided)?|"
+    r"(?:transcript|content)\s+(?:was\s+|were\s+)?not\s+(?:provided|found|available)|"
+    r"(?:transcript|content)\s+(?:is|was|were)\s+(?:missing|empty)|"
+    r"only\s+.{0,80}?(?:system\s+status|exit\s+commands?)"
+    r")\b",
+)
+
+
+def transcript_chunk_has_speech(chunk_text: str) -> bool:
+    """Return True when a chunk looks like real spoken transcript content."""
+    cleaned = _clean_text(chunk_text)
+    if len(cleaned) < 24:
+        return False
+    # Require at least one alphabetic token beyond timestamps/speaker labels.
+    # Use Unicode letters so non-Latin transcripts still enable grounding checks.
+    without_labels = re.sub(
+        r"\[\d{1,2}:\d{2}(?::\d{2})?\s+-\s+\d{1,2}:\d{2}(?::\d{2})?\]|"
+        r"\bSpeaker\s+\d+\b|\bUnknown\b",
+        " ",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    return bool(re.search(r"[^\W\d_]{3,}", without_labels))
+
+
+def assert_summary_grounded_in_transcript(summary: Dict[str, Any], chunk_text: str) -> Dict[str, Any]:
+    """Reject summaries that deny transcript content when speech was provided."""
+    normalized = validate_summary_json(summary)
+    if not transcript_chunk_has_speech(chunk_text):
+        return normalized
+    if UNGROUNDED_SUMMARY_RE.search(normalized["summary"]):
+        raise SummaryValidationError(
+            "summary denied transcript content even though speech was provided"
+        )
     return normalized
 
 

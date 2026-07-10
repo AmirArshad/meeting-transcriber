@@ -14,6 +14,7 @@ from backend.summaries.llama_runtime import (
     resolve_llama_runtime,
     run_llama_prompt,
     smoke_test_llama_runtime,
+    strip_llama_cli_chrome,
     strip_llama_prompt_echo,
 )
 
@@ -100,6 +101,7 @@ def test_build_llama_cli_args_uses_json_prompt_file(tmp_path):
     assert '4096' in args
     assert '--no-display-prompt' in args
     assert '--no-warmup' in args
+    assert '--no-conversation' in args
     assert '--single-turn' in args
     assert '--simple-io' in args
     assert args[args.index('--reasoning') + 1] == 'off'
@@ -213,8 +215,9 @@ def test_run_llama_prompt_strips_echoed_prompt(monkeypatch, tmp_path):
         timeout_seconds=5,
     )
 
-    assert output == f'{generated}\n\nExiting...'
+    assert output == generated
     assert 'schema' not in output
+    assert 'Exiting' not in output
 
 
 def test_run_llama_prompt_replaces_invalid_utf8_output(monkeypatch, tmp_path):
@@ -260,6 +263,78 @@ def test_strip_llama_prompt_echo_handles_crlf_echo():
     raw_output = 'Loading model...\n> Line one\r\nLine two\n\n{"summary":"ok"}'
 
     assert strip_llama_prompt_echo(raw_output, prompt_text) == '{"summary":"ok"}'
+
+
+def test_strip_llama_cli_chrome_removes_interactive_help():
+    raw_output = (
+        'available commands:\n'
+        '  /exit or Ctrl+C     stop or exit\n'
+        '  /regen              regenerate the last response\n'
+        '\n'
+        '{"summary":"ok","topics":[]}\n'
+        '\n'
+        '[ Prompt: 10.0 t/s | Generation: 20.0 t/s ]\n'
+        'Exiting...\n'
+    )
+
+    assert strip_llama_cli_chrome(raw_output) == '{"summary":"ok","topics":[]}'
+
+
+def test_strip_llama_prompt_echo_handles_truncated_prompt_echo():
+    prompt_text = 'You are AvaNevis, a local-only meeting summarizer.\n\nChunk 1 transcript:\nHello world'
+    raw_output = (
+        'available commands:\n'
+        '  /exit or Ctrl+C     stop or exit\n'
+        '\n'
+        '> You are AvaNevis, a local-only meeting summarizer.\n'
+        'Chunk 1 transcript:\n'
+        'Hello ... (truncated)\n'
+        '\n'
+        '{"summary":"ok","topics":[]}\n'
+    )
+
+    assert strip_llama_prompt_echo(raw_output, prompt_text) == '{"summary":"ok","topics":[]}'
+
+
+def test_strip_llama_prompt_echo_skips_schema_brace_inside_truncated_echo():
+    prompt_text = (
+        'You are AvaNevis, a local-only meeting summarizer.\n\n'
+        'Return only valid JSON with this exact shape:\n'
+        '{\n'
+        '  "summary": "short grounded overview",\n'
+        '  "topics": []\n'
+        '}\n\n'
+        'Chunk 1 transcript:\n'
+        'Hello world and more speech content'
+    )
+    raw_output = (
+        '> You are AvaNevis, a local-only meeting summarizer.\n\n'
+        'Return only valid JSON with this exact shape:\n'
+        '{\n'
+        '  "summary": "short grounded overview",\n'
+        '  "topics": []\n'
+        '}\n'
+        'Chunk 1 transcript:\n'
+        'Hello ... (truncated)\n'
+        '\n'
+        '{"summary":"Speakers tested audio.","topics":[]}\n'
+    )
+
+    assert strip_llama_prompt_echo(raw_output, prompt_text) == '{"summary":"Speakers tested audio.","topics":[]}'
+
+
+def test_strip_llama_cli_chrome_handles_crlf_windows_stdout():
+    raw_output = (
+        'available commands:\r\n'
+        '  /exit or Ctrl+C     stop or exit\r\n'
+        '  /regen              regenerate the last response\r\n'
+        '\r\n'
+        '{"summary":"ok","topics":[]}\r\n'
+        '\r\n'
+        'Exiting...\r\n'
+    )
+
+    assert strip_llama_cli_chrome(raw_output) == '{"summary":"ok","topics":[]}'
 
 
 def test_smoke_test_llama_runtime_rejects_failed_help(monkeypatch, tmp_path):

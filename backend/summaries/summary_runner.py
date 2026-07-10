@@ -17,6 +17,7 @@ from .llama_runtime import build_summary_progress_event, resolve_llama_runtime, 
 from .sidecar_io import save_summary_outputs, sidecar_paths
 from .summary_pipeline import (
     SummaryValidationError,
+    assert_summary_grounded_in_transcript,
     build_chunk_summary_prompt,
     build_final_merge_prompt,
     chunk_transcript,
@@ -97,23 +98,37 @@ def run_summary_prompt_with_repair(
     run_prompt: Callable[[Dict[str, Any], str, int], str],
     work_path: Path,
     repair_name: str,
+    chunk_text: str = "",
 ) -> Dict[str, Any]:
     raw_output = run_prompt(runtime, str(prompt_path), max_tokens)
-    try:
-        return repair_summary_json(raw_output)
-    except SummaryValidationError:
-        emit_progress(meeting_id, "json-repair", "Repairing malformed summary JSON.")
-
     last_error: Optional[SummaryValidationError] = None
-    for attempt in range(1, MAX_SUMMARY_REPAIR_ATTEMPTS + 1):
-        repair_prompt_path = work_path / f"{repair_name}-repair-{attempt}.prompt.txt"
-        write_prompt(repair_prompt_path, build_json_repair_prompt(raw_output))
-        repaired_output = run_prompt(runtime, str(repair_prompt_path), max_tokens)
+
+    for attempt in range(0, MAX_SUMMARY_REPAIR_ATTEMPTS + 1):
         try:
-            return repair_summary_json(repaired_output)
+            summary = repair_summary_json(raw_output)
+            return assert_summary_grounded_in_transcript(summary, chunk_text)
         except SummaryValidationError as exc:
-            raw_output = repaired_output
             last_error = exc
+            if attempt >= MAX_SUMMARY_REPAIR_ATTEMPTS:
+                break
+
+            denied_transcript = "denied transcript content" in str(exc)
+            emit_progress(
+                meeting_id,
+                "json-repair",
+                "Regenerating summary after ungrounded model output."
+                if denied_transcript
+                else "Repairing malformed summary JSON.",
+            )
+            if denied_transcript:
+                # Re-run the original grounded prompt; repairing the denial JSON
+                # just teaches the model to polish an empty summary.
+                raw_output = run_prompt(runtime, str(prompt_path), max_tokens)
+                continue
+
+            repair_prompt_path = work_path / f"{repair_name}-repair-{attempt + 1}.prompt.txt"
+            write_prompt(repair_prompt_path, build_json_repair_prompt(raw_output))
+            raw_output = run_prompt(runtime, str(repair_prompt_path), max_tokens)
 
     raise last_error or SummaryValidationError("summary JSON repair failed")
 
@@ -159,6 +174,7 @@ def generate_summary_from_segments(
                 run_prompt=run_prompt,
                 work_path=work_path,
                 repair_name=f"chunk-{chunk['index']}",
+                chunk_text=str(chunk.get("text") or ""),
             ))
 
         if len(chunk_summaries) == 1:
@@ -175,6 +191,9 @@ def generate_summary_from_segments(
             run_prompt=run_prompt,
             work_path=work_path,
             repair_name="final-merge",
+            chunk_text="\n".join(
+                str((item or {}).get("summary") or "") for item in chunk_summaries
+            ),
         )
 
     return validate_summary_json(final_summary)

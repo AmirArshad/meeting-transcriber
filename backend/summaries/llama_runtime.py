@@ -140,12 +140,15 @@ def build_llama_cli_args(
         str(max_tokens),
         "--no-display-prompt",
         "--no-warmup",
+        # Chat-template models default to conversation/interactive mode, which
+        # prints "/exit" help chrome and can make the model treat CLI status as
+        # the "transcript". Force a non-interactive single completion instead.
+        "--no-conversation",
         "--single-turn",
         "--simple-io",
         "--reasoning",
         "off",
     ]
-
 
 def build_llama_smoke_test_args(runtime: Dict[str, Any], *, prompt_path: str) -> List[str]:
     smoke_runtime = {
@@ -182,6 +185,26 @@ def summarize_llama_failure(result: subprocess.CompletedProcess[str], runtime: O
     return sanitize_runtime_error_line(lines[-1], runtime) if lines else "llama.cpp exited without output."
 
 
+_LLAMA_CLI_HELP_RE = re.compile(
+    r"(?im)^available commands:[ \t]*(?:\r?\n[ \t]*/[^\r\n]*)*",
+)
+_LLAMA_CLI_EXITING_RE = re.compile(r"(?im)^\s*Exiting\.\.\.\s*$")
+_LLAMA_CLI_PERF_RE = re.compile(
+    r"(?im)^\s*\[\s*Prompt:.*?Generation:.*?\]\s*$",
+)
+
+
+def strip_llama_cli_chrome(raw_output: str) -> str:
+    """Remove llama-cli banners/help/perf footers that are not model output."""
+    output = str(raw_output or "")
+    if not output:
+        return ""
+    output = _LLAMA_CLI_HELP_RE.sub("", output)
+    output = _LLAMA_CLI_EXITING_RE.sub("", output)
+    output = _LLAMA_CLI_PERF_RE.sub("", output)
+    return output.strip()
+
+
 def strip_llama_prompt_echo(raw_output: str, prompt_text: str) -> str:
     """Remove llama-cli's interactive prompt echo when it is clearly present.
 
@@ -189,9 +212,11 @@ def strip_llama_prompt_echo(raw_output: str, prompt_text: str) -> str:
     echo the prompt after a leading ">" marker even with --no-display-prompt.
     Avoid stripping arbitrary generated text that happens to contain the prompt.
     """
-    output = str(raw_output or "")
+    output = strip_llama_cli_chrome(raw_output)
     prompt = str(prompt_text or "")
-    if not output or not prompt:
+    if not output:
+        return ""
+    if not prompt:
         return output.strip()
 
     prompt_variants = [prompt]
@@ -210,8 +235,28 @@ def strip_llama_prompt_echo(raw_output: str, prompt_text: str) -> str:
         if prefix.endswith(">"):
             return output[prompt_index + len(prompt_variant):].strip()
 
-    return output.strip()
+    # Some builds truncate long --file echoes ("... (truncated)"), so the full
+    # prompt never appears in stdout. Prefer slicing after that sentinel so we
+    # do not land on the schema example `{` embedded earlier in the echoed prompt.
+    first_line = next((line.strip() for line in prompt.splitlines() if line.strip()), "")
+    if first_line:
+        marker = f"> {first_line}"
+        marker_index = output.find(marker)
+        if 0 <= marker_index <= 8192:
+            after_marker = output[marker_index:]
+            trunc_match = re.search(r"\.\.\.\s*\(truncated\)", after_marker, flags=re.IGNORECASE)
+            search_region = after_marker[trunc_match.end():] if trunc_match else after_marker
+            # Prefer the last top-level JSON object: generation output comes after
+            # any echoed schema example that also starts with `\n{`.
+            json_index = search_region.rfind("\n{")
+            if json_index != -1:
+                return search_region[json_index + 1:].strip()
+            if trunc_match:
+                brace_index = search_region.find("{")
+                if brace_index != -1:
+                    return search_region[brace_index:].strip()
 
+    return output.strip()
 
 def run_llama_prompt(
     runtime: Dict[str, Any],

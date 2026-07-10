@@ -2,6 +2,7 @@ import pytest
 
 from backend.summaries.summary_pipeline import (
     SummaryValidationError,
+    assert_summary_grounded_in_transcript,
     build_chunk_summary_prompt,
     build_final_merge_prompt,
     chunk_transcript,
@@ -45,6 +46,48 @@ Hello world
     assert segments == [
         {'start': 1.0, 'end': 3.0, 'speaker': 'Unknown', 'text': 'Hello world'},
         {'start': 4.0, 'end': 6.0, 'speaker': 'Speaker 2', 'text': 'Follow up'},
+    ]
+
+
+def test_parse_markdown_transcript_handles_guided_speaker_header_lines():
+    segments = parse_markdown_transcript('''# Meeting Transcription
+
+## Transcript
+
+**[00:03 - 00:10]** **Speaker 1:**
+Hello, hello, this is another test.
+
+**[00:10 - 00:12]** **Speaker 2:**
+Hello, I'm his friend
+''')
+
+    assert segments == [
+        {
+            'start': 3.0,
+            'end': 10.0,
+            'speaker': 'Speaker 1',
+            'text': 'Hello, hello, this is another test.',
+        },
+        {
+            'start': 10.0,
+            'end': 12.0,
+            'speaker': 'Speaker 2',
+            'text': "Hello, I'm his friend",
+        },
+    ]
+
+
+def test_parse_markdown_transcript_skips_empty_body_without_eating_next_header():
+    segments = parse_markdown_transcript('''## Transcript
+
+**[00:01 - 00:03]**
+
+**[00:03 - 00:05]**
+Hello world
+''')
+
+    assert segments == [
+        {'start': 3.0, 'end': 5.0, 'speaker': 'Unknown', 'text': 'Hello world'},
     ]
 
 
@@ -169,6 +212,57 @@ def test_build_chunk_summary_prompt_includes_schema_and_transcript_chunk():
     assert 'Speaker 1: Ship it' in prompt
     assert 'local-only' in prompt
     assert 'Do not output <think> tags' in prompt
+    assert 'Do not claim the transcript is missing' in prompt
+
+
+def test_assert_summary_grounded_rejects_cli_chrome_denials():
+    chunk = '[00:03 - 00:10] Speaker 1: Hello, this is a speaker test with real dialogue.'
+    grounded = assert_summary_grounded_in_transcript(
+        {'summary': 'Speakers tested audio capture.', 'topics': []},
+        chunk,
+    )
+    assert grounded['summary'] == 'Speakers tested audio capture.'
+
+    with pytest.raises(SummaryValidationError, match='denied transcript content'):
+        assert_summary_grounded_in_transcript(
+            {
+                'summary': 'No meeting content was provided in the input transcript; only system status and exit commands were observed.',
+                'topics': [],
+            },
+            chunk,
+        )
+
+
+def test_assert_summary_grounded_allows_affirmative_transcript_phrasing():
+    chunk = '[00:03 - 00:10] Speaker 1: Hello, this is a speaker test with real dialogue.'
+    for overview in (
+        'The team reviewed the transcript provided by the vendor and approved it.',
+        'Speaker 1 confirmed the transcript was available for the audit.',
+        'They agreed to add an exit command to the CLI tool.',
+        'Content was found to be duplicated across two slides.',
+    ):
+        grounded = assert_summary_grounded_in_transcript(
+            {'summary': overview, 'topics': []},
+            chunk,
+        )
+        assert grounded['summary'] == overview
+
+
+def test_assert_summary_grounded_applies_to_non_latin_transcripts():
+    chunk = '[00:03 - 00:10] Speaker 1: این یک متن آزمایشی فارسی برای خلاصه‌سازی جلسه است.'
+    with pytest.raises(SummaryValidationError, match='denied transcript content'):
+        assert_summary_grounded_in_transcript(
+            {
+                'summary': 'No meeting content was provided; only exit commands were observed.',
+                'topics': [],
+            },
+            chunk,
+        )
+
+
+def test_repair_summary_json_rejects_schema_placeholder_echo():
+    with pytest.raises(SummaryValidationError, match='schema example'):
+        repair_summary_json('{"summary":"short grounded overview","topics":[]}')
 
 
 def test_build_final_merge_prompt_validates_chunk_summaries():

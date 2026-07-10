@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from backend.summaries.summary_pipeline import SummaryValidationError
 from backend.summaries.summary_runner import (
     generate_summary_from_segments,
     hash_transcript_text,
@@ -137,6 +138,70 @@ def test_generate_summary_from_segments_retries_malformed_json_once():
 
     assert summary['summary'] == 'Final summary'
     assert any('repair' in call for call in calls)
+
+
+def test_generate_summary_from_segments_regenerates_ungrounded_denial():
+    calls = []
+    responses = iter([
+        json.dumps({
+            'summary': 'No meeting content was provided; only system status and exit commands were observed.',
+            'topics': [],
+        }),
+        json.dumps({
+            'summary': 'Speakers tested audio and discussed a league win.',
+            'topics': [{'title': 'Audio test'}],
+        }),
+    ])
+
+    def run_prompt(_runtime, prompt_path, _max_tokens):
+        calls.append(prompt_path)
+        return next(responses)
+
+    summary = generate_summary_from_segments(
+        meeting_id='20260710_165125',
+        segments=[{
+            'start': 3,
+            'end': 10,
+            'speaker': 'Speaker 1',
+            'text': 'Hello, hello, this is another test of the speakers.',
+        }],
+        runtime={'runtime': 'llama.cpp'},
+        profile='balanced',
+        run_prompt=run_prompt,
+    )
+
+    assert summary['summary'] == 'Speakers tested audio and discussed a league win.'
+    assert len(calls) == 2
+    assert calls[0] == calls[1]
+    assert all('repair' not in call for call in calls)
+
+
+def test_generate_summary_from_segments_raises_after_second_ungrounded_denial():
+    calls = []
+
+    def run_prompt(_runtime, prompt_path, _max_tokens):
+        calls.append(prompt_path)
+        return json.dumps({
+            'summary': 'No meeting content was provided; only system status and exit commands were observed.',
+            'topics': [],
+        })
+
+    with pytest.raises(SummaryValidationError, match='denied transcript content'):
+        generate_summary_from_segments(
+            meeting_id='20260710_165125',
+            segments=[{
+                'start': 3,
+                'end': 10,
+                'speaker': 'Speaker 1',
+                'text': 'Hello, hello, this is another test of the speakers.',
+            }],
+            runtime={'runtime': 'llama.cpp'},
+            profile='balanced',
+            run_prompt=run_prompt,
+        )
+
+    assert len(calls) == 2
+    assert calls[0] == calls[1]
 
 
 def test_save_summary_outputs_writes_json_and_markdown(tmp_path):
