@@ -57,7 +57,8 @@ def process_helper_status_line(capture: Any, line: str) -> None:
                 'message': message,
             }
 
-            for key in ('help', 'droppedChunks', 'queuedBytes'):
+            for key in ('help', 'droppedChunks', 'queuedBytes', 'permissionLikely',
+                        'nsErrorCode', 'nsErrorDomain', 'error'):
                 if key in msg:
                     warning_payload[key] = msg[key]
 
@@ -125,6 +126,15 @@ def process_helper_status_line(capture: Any, line: str) -> None:
         elif msg_type == 'silence_detected':
             message = msg.get('message', 'Silence detected')
             print(f"Swift helper: {message}", file=sys.stderr)
+
+        elif msg_type == 'silence_gap_filled':
+            message = msg.get('message', 'Silence gap filled')
+            duration = msg.get('duration')
+            print(
+                f"Swift helper: {message}"
+                + (f" (duration={duration}s)" if duration is not None else ""),
+                file=sys.stderr,
+            )
 
         elif msg_type == 'audio_resumed':
             message = msg.get('message', 'Audio resumed')

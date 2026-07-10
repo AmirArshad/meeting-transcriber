@@ -27,6 +27,9 @@ from .swift_pcm_alignment import SwiftPcmAligner
 # Re-export for characterization tests that import swift_audio_capture._apply_helper_error
 _apply_helper_error = apply_helper_error
 
+# First packaged launch pays Gatekeeper + SCShareableContent / TCC registration.
+SWIFT_HELPER_READY_TIMEOUT_SECONDS = 15.0
+
 
 def _log_helper_search_miss(possible_paths: list[Path], *, packaged: bool) -> None:
     if packaged:
@@ -324,8 +327,8 @@ class SwiftAudioCapture:
             self._stderr_thread = threading.Thread(target=self._read_status_messages, daemon=True)
             self._stderr_thread.start()
 
-            # Wait for ready signal (max 5 seconds) using Event.wait()
-            if self._ready_event.wait(timeout=5.0):
+            # Wait for ready signal (covers Gatekeeper + first TCC registration)
+            if self._ready_event.wait(timeout=SWIFT_HELPER_READY_TIMEOUT_SECONDS):
                 print("Swift audio capture ready!", file=sys.stderr)
                 return True
 
@@ -341,7 +344,10 @@ class SwiftAudioCapture:
                 self.cleanup()
                 return False
 
-            self.last_error = "Swift helper did not send ready signal within 5 seconds"
+            self.last_error = (
+                f"Swift helper did not send ready signal within "
+                f"{SWIFT_HELPER_READY_TIMEOUT_SECONDS:g} seconds"
+            )
             self.error_event.set()
             print(f"ERROR: {self.last_error}", file=sys.stderr)
             self.cleanup()
@@ -598,13 +604,28 @@ class SwiftAudioCapture:
                 exit_code = self.process.wait(timeout=5.0)
             except subprocess.TimeoutExpired:
                 print("  Swift helper did not exit gracefully, terminating...", file=sys.stderr)
-                self.process.terminate()
+                try:
+                    self.process.terminate()
+                except OSError as e:
+                    print(f"  Could not terminate Swift helper: {e}", file=sys.stderr)
                 try:
                     exit_code = self.process.wait(timeout=2.0)
                 except subprocess.TimeoutExpired:
                     print("  Swift helper did not respond to terminate, killing...", file=sys.stderr)
-                    self.process.kill()
-                    exit_code = self.process.wait(timeout=1.0)
+                    try:
+                        self.process.kill()
+                    except OSError as e:
+                        print(f"  Could not kill Swift helper: {e}", file=sys.stderr)
+                    try:
+                        exit_code = self.process.wait(timeout=1.0)
+                    except subprocess.TimeoutExpired:
+                        # Keep buffered desktop audio even if the child is unreaped.
+                        print(
+                            "  Swift helper still unreaped after kill; "
+                            "continuing with buffered desktop audio",
+                            file=sys.stderr,
+                        )
+                        exit_code = None
         elif self.process:
             exit_code = self.process.poll()
 

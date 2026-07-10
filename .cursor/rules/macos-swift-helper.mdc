@@ -10,7 +10,7 @@ Preferred capture: bundled `audiocapture-helper` with **CoreAudio process tap** 
 
 ## stdout / stderr contract
 
-- **stdout:** raw interleaved float32 PCM only (Electron does not parse helper stdout).
+- **stdout:** raw interleaved float32 PCM only (Electron does not parse helper stdout). Mid-recording delivery gaps are zero-filled into the same FIFO as real PCM (capped; before the resuming buffer) so silence does not collapse the timeline and writer starvation cannot reorder fill.
 - **stderr:** JSON status, diagnostics, warnings, errors — parsed by `backend/audio/swift_audio_capture.py`.
 
 CoreAudio may expose multi-channel buffers; preserve helper interleaved normalization and Python mixer **one-sided stereo repair** so desktop speech survives MLX/ffmpeg mono downmix.
@@ -19,6 +19,7 @@ CoreAudio may expose multi-channel buffers; preserve helper interleaved normaliz
 
 - CoreAudio tap → System Audio Recording for `com.avanevis.app.audiocapture-helper`.
 - ScreenCaptureKit fallback → Screen Recording.
+- Preflight skips proactive Screen Recording and must report `skipped` / `granted: null`, not a false grant.
 - Inspect `helperCaptureBackend` and helper diagnostics before blaming “missing desktop audio” on generic screen-recording issues.
 
 ## Packaging checklist

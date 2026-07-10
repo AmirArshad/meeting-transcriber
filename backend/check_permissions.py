@@ -235,7 +235,12 @@ def main():
     parser.add_argument(
         "--skip-screen-recording-check",
         action="store_true",
-        help="Skip the proactive Screen Recording check and let the recorder surface runtime ScreenCaptureKit errors.",
+        help=(
+            "Skip the proactive Screen Recording check. Preferred CoreAudio tap uses "
+            "System Audio Recording (probed at capture start); ScreenCaptureKit errors "
+            "still surface at runtime. Payload reports screen_recording.skipped=true "
+            "and granted=null instead of asserting a grant."
+        ),
     )
     args = parser.parse_args()
 
@@ -244,6 +249,7 @@ def main():
             "platform": platform.system(),
             "microphone": {"granted": True},
             "screen_recording": {"granted": True},
+            "system_audio_recording": {"granted": None, "probed": False},
             "desktop_audio": {"available": True, "backend": "native"},
             "all_granted": True,
             "message": "Permission checks only needed on macOS"
@@ -264,13 +270,16 @@ def main():
         desktop_backend = None
         desktop_error = version_warning
 
-    # Check screen recording permission (only if macOS version supports it)
+    # Screen Recording: only probe when explicitly requested. Preflight always skips
+    # because the preferred tap path needs System Audio Recording, not Screen Recording.
+    screen_skipped = False
     if not version_compatible:
         screen_granted = False
         screen_error = version_warning
     elif args.skip_screen_recording_check:
-        screen_granted = True
+        screen_granted = None
         screen_error = ""
+        screen_skipped = True
     elif desktop_available:
         screen_granted, screen_error = check_screen_recording_permission()
     else:
@@ -279,6 +288,23 @@ def main():
         # privacy settings for a packaging/runtime failure.
         screen_granted = True
         screen_error = ""
+
+    # System Audio Recording is not probed proactively (no stable public API);
+    # the helper requests it when starting the CoreAudio tap on macOS 14.2+.
+    system_audio_recording = {
+        "granted": None,
+        "probed": False,
+        "note": (
+            "Not probed proactively; CoreAudio process tap requests System Audio "
+            "Recording at capture start on macOS 14.2+."
+        ),
+    }
+
+    # When Screen Recording was skipped, all_granted is mic + desktop backend only.
+    if screen_skipped:
+        all_granted = bool(mic_granted and desktop_available)
+    else:
+        all_granted = bool(mic_granted and screen_granted and desktop_available)
 
     # Prepare result
     result = {
@@ -294,14 +320,16 @@ def main():
         },
         "screen_recording": {
             "granted": screen_granted,
-            "error": screen_error if not screen_granted else None
+            "skipped": screen_skipped,
+            "error": screen_error if screen_granted is False else None
         },
+        "system_audio_recording": system_audio_recording,
         "desktop_audio": {
             "available": desktop_available,
             "backend": desktop_backend,
             "error": desktop_error if not desktop_available else None
         },
-        "all_granted": mic_granted and screen_granted and desktop_available
+        "all_granted": all_granted
     }
 
     # Add helpful messages
@@ -311,7 +339,13 @@ def main():
             "System Settings > Privacy & Security > Microphone"
         )
 
-    if not screen_granted and version_compatible:
+    if screen_skipped:
+        result["screen_recording"]["note"] = (
+            "Proactive Screen Recording check skipped; preferred CoreAudio tap uses "
+            "System Audio Recording (checked at capture start). ScreenCaptureKit "
+            "fallback still requires Screen Recording at runtime."
+        )
+    elif screen_granted is False and version_compatible:
         result["screen_recording"]["help"] = (
             "Grant Screen Recording permission in: "
             "System Settings > Privacy & Security > Screen Recording"

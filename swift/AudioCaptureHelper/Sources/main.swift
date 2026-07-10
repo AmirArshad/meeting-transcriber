@@ -90,6 +90,59 @@ func makeCoreAudioError(_ message: String, status: OSStatus) -> NSError {
     )
 }
 
+// Delivery-gap silence fill: SCK (and sometimes the CoreAudio tap) stops delivering
+// buffers when no system audio plays. Without zero-fill, mid-recording gaps collapse
+// and desync desktop speech from the mic timeline. Cap fill length to bound pressure;
+// gaps longer than the cap still shift subsequent desktop audio earlier by (gap − cap).
+// Silence is enqueued into the same FIFO as real PCM (before the resuming buffer) so
+// writer starvation cannot reorder fill relative to surrounding audio.
+let audioGapFillMinThresholdSeconds: TimeInterval = 0.05
+let audioGapFillIntervalMultiplier: Double = 2.0
+let maxAudioGapFillSeconds: TimeInterval = 180.0  // 3 minutes
+let silenceGapLogThresholdSeconds: TimeInterval = 1.0
+
+/// Compute how many seconds of zero-fill to insert for a delivery gap.
+/// Uses the previous buffer's duration as the expected cadence (not a flat 0.1s),
+/// and subtracts that duration from the wall-clock delta to avoid +1-buffer over-fill.
+func deliveryGapFillSeconds(
+    wallClockSinceLastBuffer: TimeInterval,
+    lastBufferFrames: Int,
+    sampleRate: Int
+) -> TimeInterval {
+    guard lastBufferFrames > 0, sampleRate > 0 else { return 0 }
+    let lastBufferDuration = Double(lastBufferFrames) / Double(sampleRate)
+    let missing = wallClockSinceLastBuffer - lastBufferDuration
+    let threshold = max(
+        audioGapFillMinThresholdSeconds,
+        lastBufferDuration * audioGapFillIntervalMultiplier
+    )
+    guard missing > threshold else { return 0 }
+    return min(missing, maxAudioGapFillSeconds)
+}
+
+/// kAudioHardwareIllegalOperationError ('nope') — common TCC denial shape for process taps.
+func isSystemAudioPermissionOSStatus(_ status: OSStatus) -> Bool {
+    status == OSStatus(bitPattern: 0x6E6F7065)
+}
+
+func isLikelySystemAudioPermissionFailure(_ error: Error) -> Bool {
+    let nsError = error as NSError
+    if nsError.domain == "AudioCaptureHelper.CoreAudio",
+       isSystemAudioPermissionOSStatus(OSStatus(truncatingIfNeeded: nsError.code)) {
+        return true
+    }
+    let desc = nsError.localizedDescription.lowercased()
+    return desc.contains("permission")
+        || desc.contains("denied")
+        || desc.contains("not authorized")
+        || desc.contains("tcc")
+        || desc.contains("'nope'")
+}
+
+func systemAudioRecordingHelpText() -> String {
+    "Grant System Audio Recording in System Settings > Privacy & Security > System Audio Recording for AvaNevis (and audiocapture-helper). Falling back to ScreenCaptureKit uses Screen Recording instead; re-grant System Audio Recording to restore the preferred CoreAudio tap."
+}
+
 protocol SystemAudioCaptureBackend: AnyObject {
     var running: Bool { get }
     func start() throws
@@ -102,6 +155,7 @@ protocol SystemAudioCaptureBackend: AnyObject {
 @available(macOS 13.0, *)
 class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
     private let expectedChannels: Int
+    private let sampleRate: Int
     private var isCapturing = false
     private let outputLock = NSLock()
     private let queueLock = NSLock()
@@ -119,6 +173,7 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
     private var pendingAudioChunks: [Data] = []
     private var pendingChunkStartIndex = 0
     private var pendingChunkBytes = 0
+    private var lastBufferFrames = 0
     private var droppedChunkCount = 0
     private let maxQueuedBytes = 4 * 1024 * 1024
     private let queueDropWarningInterval = 25
@@ -134,8 +189,9 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
         let droppedDuringEnqueue: Bool
     }
 
-    init(expectedChannels: Int) {
+    init(expectedChannels: Int, sampleRate: Int = 48000) {
         self.expectedChannels = expectedChannels
+        self.sampleRate = max(sampleRate, 1)
         super.init()
     }
 
@@ -147,6 +203,7 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
         screenFrameCount = 0
         firstAudioTime = nil
         lastAudioTime = nil
+        lastBufferFrames = 0
         silencePeriodLogged = false
         hasLoggedAudioFormat = false
         extractionErrorCount = 0
@@ -236,8 +293,11 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
 
         // Check for audio resuming after silence (important for meetings where audio starts late)
         let now = Date()
+        let bytesPerFrame = expectedChannels * MemoryLayout<Float>.size
+        let currentFrames = bytesPerFrame > 0 ? audioData.count / bytesPerFrame : 0
         var shouldLogAudioResumed = false
         var silenceDuration: TimeInterval = 0
+        var gapToFill: TimeInterval = 0
 
         // Single lock region for state updates
         outputLock.lock()
@@ -246,13 +306,25 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
         }
         if let lastTime = lastAudioTime {
             silenceDuration = now.timeIntervalSince(lastTime)
+            gapToFill = deliveryGapFillSeconds(
+                wallClockSinceLastBuffer: silenceDuration,
+                lastBufferFrames: lastBufferFrames,
+                sampleRate: sampleRate
+            )
             if silenceDuration > silenceThreshold && silencePeriodLogged {
                 shouldLogAudioResumed = true
                 silencePeriodLogged = false
             }
         }
         lastAudioTime = now
+        lastBufferFrames = currentFrames
         outputLock.unlock()
+
+        // Enqueue silence into the same FIFO *before* the resuming buffer so order
+        // is correct even if the writer is still draining prior audio.
+        if gapToFill > 0 {
+            enqueueSilenceGap(duration: gapToFill, captureBackend: nil)
+        }
 
         // Log outside of lock to avoid holding lock during I/O
         if shouldLogAudioResumed {
@@ -361,33 +433,75 @@ class AudioCaptureDelegate: NSObject, SCStreamDelegate, SCStreamOutput {
             }
 
             if shouldStopWriterLoop() {
+                while let chunk = dequeueAudioChunk() {
+                    FileHandle.standardOutput.write(chunk)
+                    outputLock.lock()
+                    totalBytesWritten += chunk.count
+                    outputLock.unlock()
+                }
                 break
             }
         }
     }
 
-    private func enqueueAudioData(_ data: Data) -> EnqueueResult {
+    /// Insert zero-fill into the same FIFO as real PCM, before the resuming buffer.
+    /// Allows temporary growth past maxQueuedBytes so gap fills are not dropped ahead
+    /// of prior audio under writer starvation (timeline order > backpressure here).
+    private func enqueueSilenceGap(duration: TimeInterval, captureBackend: String?) {
+        let capped = min(duration, maxAudioGapFillSeconds)
+        let frames = Int((capped * Double(sampleRate)).rounded())
+        guard frames > 0 else { return }
+
+        let chunkFrames = max(1, sampleRate / 10)
+        var remaining = frames
+        while remaining > 0 {
+            let n = min(remaining, chunkFrames)
+            let byteCount = n * expectedChannels * MemoryLayout<Float>.size
+            _ = enqueueAudioData(Data(count: byteCount), allowGrowthBeyondCap: true)
+            remaining -= n
+        }
+
+        if capped >= silenceGapLogThresholdSeconds {
+            var payload: [String: Any] = [
+                "type": "silence_gap_filled",
+                "duration": capped,
+                "requestedDuration": duration,
+                "frames": frames,
+                "sampleRate": sampleRate,
+                "channels": expectedChannels,
+                "message": "Inserted \(String(format: "%.2f", capped))s of silence for delivery gap",
+            ]
+            if let captureBackend {
+                payload["captureBackend"] = captureBackend
+            }
+            sendJSON(payload)
+        }
+    }
+
+    private func enqueueAudioData(_ data: Data, allowGrowthBeyondCap: Bool = false) -> EnqueueResult {
         queueLock.lock()
         var droppedDuringEnqueue = false
 
-        while pendingChunkBytes + data.count > maxQueuedBytes && pendingChunkStartIndex < pendingAudioChunks.count {
-            let dropped = pendingAudioChunks[pendingChunkStartIndex]
-            pendingChunkStartIndex += 1
-            pendingChunkBytes -= dropped.count
-            droppedChunkCount += 1
-            droppedDuringEnqueue = true
-        }
-        compactPendingAudioChunksIfNeededLocked()
+        if !allowGrowthBeyondCap {
+            while pendingChunkBytes + data.count > maxQueuedBytes && pendingChunkStartIndex < pendingAudioChunks.count {
+                let dropped = pendingAudioChunks[pendingChunkStartIndex]
+                pendingChunkStartIndex += 1
+                pendingChunkBytes -= dropped.count
+                droppedChunkCount += 1
+                droppedDuringEnqueue = true
+            }
+            compactPendingAudioChunksIfNeededLocked()
 
-        if pendingChunkBytes + data.count > maxQueuedBytes {
-            droppedChunkCount += 1
-            let result = EnqueueResult(
-                queuedBytes: pendingChunkBytes,
-                droppedChunkCount: droppedChunkCount,
-                droppedDuringEnqueue: true
-            )
-            queueLock.unlock()
-            return result
+            if pendingChunkBytes + data.count > maxQueuedBytes {
+                droppedChunkCount += 1
+                let result = EnqueueResult(
+                    queuedBytes: pendingChunkBytes,
+                    droppedChunkCount: droppedChunkCount,
+                    droppedDuringEnqueue: true
+                )
+                queueLock.unlock()
+                return result
+            }
         }
 
         pendingAudioChunks.append(data)
@@ -707,6 +821,7 @@ class CoreAudioTapCapture: SystemAudioCaptureBackend {
     private var pendingAudioChunks: [Data] = []
     private var pendingChunkStartIndex = 0
     private var pendingChunkBytes = 0
+    private var lastBufferFrames = 0
     private var droppedChunkCount = 0
     private var totalBuffers = 0
     private var totalBytesWritten = 0
@@ -747,6 +862,7 @@ class CoreAudioTapCapture: SystemAudioCaptureBackend {
         totalBytesWritten = 0
         firstAudioTime = nil
         lastAudioTime = nil
+        lastBufferFrames = 0
         silencePeriodLogged = false
         audioFormatLogged = false
         extractionErrorCount = 0
@@ -947,8 +1063,13 @@ class CoreAudioTapCapture: SystemAudioCaptureBackend {
         }
 
         let now = Date()
+        let sampleRate = max(config.sampleRate, 1)
+        let channels = max(config.channels, 1)
+        let bytesPerFrame = channels * MemoryLayout<Float>.size
+        let currentFrames = bytesPerFrame > 0 ? audioData.count / bytesPerFrame : 0
         var shouldLogAudioResumed = false
         var silenceDuration: TimeInterval = 0
+        var gapToFill: TimeInterval = 0
 
         outputLock.lock()
         if firstAudioTime == nil {
@@ -956,13 +1077,23 @@ class CoreAudioTapCapture: SystemAudioCaptureBackend {
         }
         if let lastTime = lastAudioTime {
             silenceDuration = now.timeIntervalSince(lastTime)
+            gapToFill = deliveryGapFillSeconds(
+                wallClockSinceLastBuffer: silenceDuration,
+                lastBufferFrames: lastBufferFrames,
+                sampleRate: sampleRate
+            )
             if silenceDuration > silenceThreshold && silencePeriodLogged {
                 shouldLogAudioResumed = true
                 silencePeriodLogged = false
             }
         }
         lastAudioTime = now
+        lastBufferFrames = currentFrames
         outputLock.unlock()
+
+        if gapToFill > 0 {
+            enqueueSilenceGap(duration: gapToFill)
+        }
 
         if shouldLogAudioResumed {
             sendJSON([
@@ -1312,33 +1443,71 @@ class CoreAudioTapCapture: SystemAudioCaptureBackend {
             }
 
             if shouldStopWriterLoop() {
+                while let chunk = dequeueAudioChunk() {
+                    FileHandle.standardOutput.write(chunk)
+                    outputLock.lock()
+                    totalBytesWritten += chunk.count
+                    outputLock.unlock()
+                }
                 break
             }
         }
     }
 
-    private func enqueueAudioData(_ data: Data) -> EnqueueResult {
+    private func enqueueSilenceGap(duration: TimeInterval) {
+        let sampleRate = max(config.sampleRate, 1)
+        let channels = max(config.channels, 1)
+        let capped = min(duration, maxAudioGapFillSeconds)
+        let frames = Int((capped * Double(sampleRate)).rounded())
+        guard frames > 0 else { return }
+
+        let chunkFrames = max(1, sampleRate / 10)
+        var remaining = frames
+        while remaining > 0 {
+            let n = min(remaining, chunkFrames)
+            let byteCount = n * channels * MemoryLayout<Float>.size
+            _ = enqueueAudioData(Data(count: byteCount), allowGrowthBeyondCap: true)
+            remaining -= n
+        }
+
+        if capped >= silenceGapLogThresholdSeconds {
+            sendJSON([
+                "type": "silence_gap_filled",
+                "captureBackend": "coreaudio_tap",
+                "duration": capped,
+                "requestedDuration": duration,
+                "frames": frames,
+                "sampleRate": sampleRate,
+                "channels": channels,
+                "message": "Inserted \(String(format: "%.2f", capped))s of silence for CoreAudio tap delivery gap",
+            ])
+        }
+    }
+
+    private func enqueueAudioData(_ data: Data, allowGrowthBeyondCap: Bool = false) -> EnqueueResult {
         queueLock.lock()
         var droppedDuringEnqueue = false
 
-        while pendingChunkBytes + data.count > maxQueuedBytes && pendingChunkStartIndex < pendingAudioChunks.count {
-            let dropped = pendingAudioChunks[pendingChunkStartIndex]
-            pendingChunkStartIndex += 1
-            pendingChunkBytes -= dropped.count
-            droppedChunkCount += 1
-            droppedDuringEnqueue = true
-        }
-        compactPendingAudioChunksIfNeededLocked()
+        if !allowGrowthBeyondCap {
+            while pendingChunkBytes + data.count > maxQueuedBytes && pendingChunkStartIndex < pendingAudioChunks.count {
+                let dropped = pendingAudioChunks[pendingChunkStartIndex]
+                pendingChunkStartIndex += 1
+                pendingChunkBytes -= dropped.count
+                droppedChunkCount += 1
+                droppedDuringEnqueue = true
+            }
+            compactPendingAudioChunksIfNeededLocked()
 
-        if pendingChunkBytes + data.count > maxQueuedBytes {
-            droppedChunkCount += 1
-            let result = EnqueueResult(
-                queuedBytes: pendingChunkBytes,
-                droppedChunkCount: droppedChunkCount,
-                droppedDuringEnqueue: true
-            )
-            queueLock.unlock()
-            return result
+            if pendingChunkBytes + data.count > maxQueuedBytes {
+                droppedChunkCount += 1
+                let result = EnqueueResult(
+                    queuedBytes: pendingChunkBytes,
+                    droppedChunkCount: droppedChunkCount,
+                    droppedDuringEnqueue: true
+                )
+                queueLock.unlock()
+                return result
+            }
         }
 
         pendingAudioChunks.append(data)
@@ -1521,14 +1690,20 @@ class AudioCapture {
                     return
                 } catch {
                     let nsError = error as NSError
-                    sendJSON([
+                    var warning: [String: Any] = [
                         "type": "warning",
                         "code": "coreaudio_tap_start_failed",
                         "message": "CoreAudio process tap failed to start; falling back to ScreenCaptureKit",
                         "error": error.localizedDescription,
                         "nsErrorCode": nsError.code,
                         "nsErrorDomain": nsError.domain,
-                    ])
+                    ]
+                    if isLikelySystemAudioPermissionFailure(error) {
+                        warning["permissionLikely"] = true
+                        warning["help"] = systemAudioRecordingHelpText()
+                        warning["message"] = "CoreAudio process tap failed to start (System Audio Recording may be denied); falling back to ScreenCaptureKit"
+                    }
+                    sendJSON(warning)
                 }
             } else {
                 sendJSON([
@@ -1643,7 +1818,7 @@ class AudioCapture {
         ])
 
         // Create delegate
-        delegate = AudioCaptureDelegate(expectedChannels: config.channels)
+        delegate = AudioCaptureDelegate(expectedChannels: config.channels, sampleRate: config.sampleRate)
 
         // Create stream
         stream = SCStream(filter: filter, configuration: streamConfig, delegate: delegate)
@@ -1898,16 +2073,24 @@ func main() async {
         exit(1)
     }
 
-    // Listen for "stop" command on stdin
+    // Listen for "stop" command on stdin; treat EOF as stop so orphans do not busy-spin.
     let stdinSource = DispatchSource.makeReadSource(fileDescriptor: FileHandle.standardInput.fileDescriptor, queue: .global())
     stdinSource.setEventHandler {
         let data = FileHandle.standardInput.availableData
-        if let str = String(data: data, encoding: .utf8)?.lowercased() {
-            if str.contains("stop") {
-                Task {
-                    await capture.stop()
-                    exit(0)
-                }
+        if data.isEmpty {
+            stdinSource.cancel()
+            Task {
+                await capture.stop()
+                exit(0)
+            }
+            return
+        }
+        if let str = String(data: data, encoding: .utf8)?.lowercased(),
+           str.contains("stop") {
+            stdinSource.cancel()
+            Task {
+                await capture.stop()
+                exit(0)
             }
         }
     }

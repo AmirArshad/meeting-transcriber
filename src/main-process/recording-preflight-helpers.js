@@ -69,7 +69,8 @@ function buildMacOSPermissionCheckFailureStatus(warning) {
     all_granted: false,
     warning,
     microphone: { granted: true },
-    screen_recording: { granted: true },
+    screen_recording: { granted: null, skipped: true },
+    system_audio_recording: { granted: null, probed: false },
     desktop_audio: {
       available: false,
       error: 'macOS recording permission and desktop-audio preflight could not be verified.',

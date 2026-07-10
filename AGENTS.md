@@ -83,7 +83,7 @@ AvaNevis is a privacy-first Electron desktop app for recording microphone audio 
 - `backend/audio/macos_recorder.py`: macOS recording pipeline using `sounddevice` + Swift helper desktop capture with PyObjC fallback
 - `backend/audio/recorder_stdout.py`: shared structured stdout emitters (`send_json_message` / `send_event_message` / `send_warning_message` / `send_error_message`); platform recorders keep thin `_send_*` wrappers so Electron contracts stay stable
 - `backend/audio/swift_audio_capture.py`: Python bridge to bundled Swift helper; preserves raw PCM stdout and JSON stderr helper contract
-- `backend/audio/macos_stereo_repair.py`, `backend/audio/macos_desktop_diagnostics.py`: Phase 7 macOS one-sided stereo repair + desktop diagnostics payload helpers
+- `backend/audio/macos_stereo_repair.py`, `backend/audio/macos_desktop_diagnostics.py`, `backend/audio/macos_stream_alignment.py`: Phase 7 macOS one-sided stereo repair, desktop diagnostics, and mic/desktop start-time alignment (including preroll trim)
 - `backend/audio/swift_pcm_alignment.py`, `backend/audio/swift_helper_status.py`: Phase 7 Swift helper float32 alignment + stderr status application
 - `backend/audio/processor.py`, `backend/audio/compressor.py`, `backend/audio/wav_io.py`, `backend/audio/timeline.py`, `backend/audio/constants.py`: shared audio processing / compression / WAV I/O helpers used by the platform recorders
 - `backend/transcription/formatting.py`: Phase 5 shared transcript timestamp/segment-merge/Markdown helpers used by faster-whisper, MLX, and guided transcription
@@ -317,7 +317,7 @@ If you change `backend/meeting_manager.py`, preserve:
 
 Preferred path is the bundled Swift helper using CoreAudio process taps on macOS 14.2+. The helper falls back to Swift ScreenCaptureKit when CoreAudio tap startup fails or macOS is older; PyObjC ScreenCaptureKit is only a final fallback.
 
-The Swift helper stdout contract is raw interleaved float32 PCM. `swift_audio_capture.py` must keep desktop frames as float32 through `samples_to_frames` (no float64 upcast); mixing and one-sided stereo repair in `macos_recorder.py` expect float32-compatible numpy arrays. Helper JSON status, diagnostics, warnings, and errors go to stderr and are parsed by `backend/audio/swift_audio_capture.py`, not directly by Electron.
+The Swift helper stdout contract is raw interleaved float32 PCM. When a delivery gap is detected after silence (SCK pauses; tap may pause), the helper zero-fills the PCM stream into the **same FIFO** as real audio (before the resuming buffer; capped at 3 minutes) so mid-meeting silence does not collapse and writer starvation cannot reorder fill relative to surrounding samples. Gaps longer than the cap still shift subsequent desktop audio earlier by `(gap − 180s)` — a bounded tradeoff. Gap detection uses the previous buffer's frame count as the expected cadence (not a flat 100ms threshold) and subtracts that duration to avoid +1-buffer over-fill drift. `swift_audio_capture.py` must keep desktop frames as float32 through `samples_to_frames` (no float64 upcast); mixing and one-sided stereo repair in `macos_recorder.py` expect float32-compatible numpy arrays. Helper JSON status, diagnostics, warnings, and errors go to stderr and are parsed by `backend/audio/swift_audio_capture.py`, not directly by Electron. Helper ready wait is 15 seconds; the outer desktop start wait is 20 seconds so a boundary race still surfaces specific helper errors. Stdin EOF stops the helper (no busy-spin orphan). CoreAudio tap start failures that look like System Audio Recording denial include that help string before falling back to ScreenCaptureKit.
 
 CoreAudio can expose tap input as multiple channel buffers even when the stream format is not explicitly marked non-interleaved. Preserve the helper's interleaved stdout normalization and the Python mixer one-sided stereo repair so desktop speech survives MLX/ffmpeg mono transcription downmixing.
 
@@ -325,6 +325,7 @@ Permission behavior differs by backend:
 
 - CoreAudio process tap can require macOS System Audio Recording permission for `com.avanevis.app.audiocapture-helper`.
 - ScreenCaptureKit fallback can require Screen Recording permission.
+- Preflight (`check_permissions --skip-screen-recording-check`) reports `screen_recording.skipped` / `granted: null` and an unprobed `system_audio_recording` field — it must not claim Screen Recording was granted.
 - Do not assume missing desktop audio is a generic Screen Recording issue; inspect `helperCaptureBackend`, helper diagnostics, and unified logs.
 
 If you touch the helper pipeline, verify:

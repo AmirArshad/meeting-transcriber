@@ -26,6 +26,7 @@ from .macos_desktop_diagnostics import (
     format_desktop_diagnostics_summary,
 )
 from .macos_stereo_repair import repair_one_sided_stereo
+from .macos_stream_alignment import align_streams_by_start_time
 from .recorder_temp_paths import (
     build_recorder_temp_pcm_path,
     build_stable_wav_path_for_output,
@@ -36,6 +37,12 @@ from . import recorder_stdout as _recorder_stdout
 
 # Re-export for characterization tests that import macos_recorder._repair_one_sided_stereo
 _repair_one_sided_stereo = repair_one_sided_stereo
+
+# Desktop helper ready budget must cover Gatekeeper + first TCC registration.
+# Outer wait exceeds the inner Swift ready wait so a boundary race still surfaces
+# the specific helper error (e.g. permission-denied) instead of a generic timeout.
+DESKTOP_START_TIMEOUT_SECONDS = 20.0
+MIC_START_TIMEOUT_SECONDS = 5.0
 
 try:
     # pyright: ignore[reportMissingImports]
@@ -322,6 +329,7 @@ class MacOSAudioRecorder:
                 help=warning.get('help'),
                 droppedChunks=warning.get('droppedChunks'),
                 queuedBytes=warning.get('queuedBytes'),
+                permissionLikely=warning.get('permissionLikely'),
                 captureType=resolved_capture_type,
             )
 
@@ -431,8 +439,8 @@ class MacOSAudioRecorder:
             self._abort_startup()
             return False
 
-        if not self._mic_started_event.wait(timeout=5.0):
-            message = "Microphone stream did not become ready within 5 seconds."
+        if not self._mic_started_event.wait(timeout=MIC_START_TIMEOUT_SECONDS):
+            message = f"Microphone stream did not become ready within {MIC_START_TIMEOUT_SECONDS:g} seconds."
             print(f"ERROR: {message}", file=sys.stderr)
             _send_error_message("MIC_START_TIMEOUT", message)
             self._abort_startup()
@@ -443,9 +451,12 @@ class MacOSAudioRecorder:
             return False
 
         if self.desktop_capture:
-            if not self._desktop_started_event.wait(timeout=5.0):
+            if not self._desktop_started_event.wait(timeout=DESKTOP_START_TIMEOUT_SECONDS):
                 capture_type = self.desktop_capture_type or 'unknown'
-                message = f"{capture_type} desktop audio did not become ready within 5 seconds."
+                message = (
+                    f"{capture_type} desktop audio did not become ready within "
+                    f"{DESKTOP_START_TIMEOUT_SECONDS:g} seconds."
+                )
                 print(f"ERROR: {message}", file=sys.stderr)
                 _send_error_message("DESKTOP_START_TIMEOUT", message)
                 self._abort_startup()
@@ -1001,43 +1012,15 @@ class MacOSAudioRecorder:
 
     def _align_streams_by_start_time(self, mic_audio: np.ndarray, desktop_audio: np.ndarray):
         """Align mic and desktop streams by observed first-audio timestamps."""
-        if (
-            self.recording_start_time is None
-            or self.mic_capture_start_time is None
-            or self.desktop_capture_start_time is None
-        ):
-            print("Stream alignment: missing first-audio timestamp, falling back to length padding only", file=sys.stderr)
-            return mic_audio, desktop_audio
-
-        reference_start = self.recording_start_time + self.preroll_seconds
-        mic_reference = max(self.mic_capture_start_time, reference_start)
-        desktop_reference = max(self.desktop_capture_start_time, reference_start)
-
-        offset_seconds = desktop_reference - mic_reference
-        offset_samples = int(round(offset_seconds * self.sample_rate))
-
-        if offset_samples == 0:
-            return mic_audio, desktop_audio
-
-        if offset_samples > 0:
-            padding = np.zeros((offset_samples, desktop_audio.shape[1]), dtype=desktop_audio.dtype)
-            desktop_audio = np.concatenate([padding, desktop_audio], axis=0)
-            print(
-                f"Aligned desktop stream with {offset_samples} leading silence samples "
-                f"({offset_seconds:.3f}s startup lag)",
-                file=sys.stderr,
-            )
-        else:
-            mic_padding = abs(offset_samples)
-            padding = np.zeros((mic_padding, mic_audio.shape[1]), dtype=mic_audio.dtype)
-            mic_audio = np.concatenate([padding, mic_audio], axis=0)
-            print(
-                f"Aligned mic stream with {mic_padding} leading silence samples "
-                f"({abs(offset_seconds):.3f}s startup lag)",
-                file=sys.stderr,
-            )
-
-        return mic_audio, desktop_audio
+        return align_streams_by_start_time(
+            mic_audio,
+            desktop_audio,
+            sample_rate=self.sample_rate,
+            recording_start_time=self.recording_start_time,
+            mic_capture_start_time=self.mic_capture_start_time,
+            desktop_capture_start_time=self.desktop_capture_start_time,
+            preroll_seconds=self.preroll_seconds,
+        )
 
     def _enhance_microphone(self, audio):
         """

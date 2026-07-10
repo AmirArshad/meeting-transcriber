@@ -324,6 +324,7 @@ function createDeviceIpc(deps) {
         all_granted: true,
         microphone: { granted: true },
         screen_recording: { granted: true },
+        system_audio_recording: { granted: null, probed: false },
       });
     }
 

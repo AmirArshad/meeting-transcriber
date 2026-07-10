@@ -1235,8 +1235,10 @@ function checkMacOSPermissions() {
           console.warn('Microphone permission:', result.microphone.error);
         }
 
-        if (!result.screen_recording.granted) {
+        if (result.screen_recording?.granted === false) {
           console.warn('Screen Recording permission:', result.screen_recording.error);
+        } else if (result.screen_recording?.skipped) {
+          console.log('Screen Recording proactive check skipped (System Audio Recording probed at capture start)');
         }
       } else {
         console.log('All permissions granted!');

@@ -2039,7 +2039,9 @@ test('buildMacOSPermissionCheckFailureStatus fails closed for recording prefligh
   assert.equal(result.all_granted, false);
   assert.equal(result.warning, 'Permission check timed out');
   assert.equal(result.microphone.granted, true);
-  assert.equal(result.screen_recording.granted, true);
+  assert.equal(result.screen_recording.granted, null);
+  assert.equal(result.screen_recording.skipped, true);
+  assert.equal(result.system_audio_recording.probed, false);
   assert.equal(result.desktop_audio.available, false);
   assert.match(result.desktop_audio.error, /preflight could not be verified/);
 });
@@ -2140,7 +2142,8 @@ test('buildRecordingPreflightReport allows macOS start when proactive screen che
     permissionCheck: {
       all_granted: true,
       microphone: { granted: true },
-      screen_recording: { granted: true },
+      screen_recording: { granted: null, skipped: true },
+      system_audio_recording: { granted: null, probed: false },
       desktop_audio: { available: true, backend: 'swift' },
     },
   });

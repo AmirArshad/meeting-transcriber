@@ -3,6 +3,8 @@ import backend.audio.macos_recorder as macos_recorder_module
 import backend.audio.swift_audio_capture as swift_capture_module
 import backend.check_permissions as check_permissions_module
 from pathlib import Path
+from types import SimpleNamespace
+import subprocess
 import pytest
 
 
@@ -151,6 +153,70 @@ def test_swift_helper_uses_coreaudio_tap_before_screencapturekit():
     assert 'verifyAggregateNominalSampleRate' in contents
     assert 'usleep(useconds_t((attempt + 1) * 10_000))' in contents
     assert '--screencapturekit' in contents
+    # Delivery-gap zero-fill into the same FIFO as PCM + orphan stdin EOF stop
+    assert 'silence_gap_filled' in contents
+    assert 'enqueueSilenceGap' in contents
+    assert 'allowGrowthBeyondCap' in contents
+    assert 'deliveryGapFillSeconds' in contents
+    assert 'maxAudioGapFillSeconds' in contents
+    assert 'systemAudioRecordingHelpText' in contents
+    assert 'data.isEmpty' in contents
+    assert 'permissionLikely' in contents
+    assert 'pendingSilenceFrames' not in contents
+
+
+def test_swift_audio_capture_ready_timeout_covers_first_launch():
+    assert swift_capture_module.SWIFT_HELPER_READY_TIMEOUT_SECONDS >= 15.0
+    # Outer desktop wait must exceed the inner ready wait so specific helper
+    # errors are not masked by a tied DESKTOP_START_TIMEOUT race.
+    assert (
+        macos_recorder_module.DESKTOP_START_TIMEOUT_SECONDS
+        > swift_capture_module.SWIFT_HELPER_READY_TIMEOUT_SECONDS
+    )
+
+
+def test_swift_audio_capture_stop_preserves_buffer_when_kill_wait_times_out(monkeypatch):
+    import numpy as np
+
+    class FakeProcess:
+        def __init__(self):
+            self.stdin = SimpleNamespace(write=lambda *_: None, flush=lambda: None)
+            self._waits = 0
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            return None
+
+        def kill(self):
+            return None
+
+        def wait(self, timeout=None):
+            self._waits += 1
+            raise subprocess.TimeoutExpired(cmd='audiocapture-helper', timeout=timeout or 0)
+
+    capture = swift_capture_module.SwiftAudioCapture.__new__(swift_capture_module.SwiftAudioCapture)
+    capture._recording_event = swift_capture_module.threading.Event()
+    capture._recording_event.set()
+    capture.buffer_lock = swift_capture_module.threading.Lock()
+    capture.warning_lock = swift_capture_module.threading.Lock()
+    capture.warning_event = swift_capture_module.threading.Event()
+    capture.warning_messages = []
+    capture._warning_codes_sent = set()
+    capture.audio_buffer = [np.ones((8, 2), dtype=np.float32)]
+    capture.process = FakeProcess()
+    capture._stdout_thread = None
+    capture._stderr_thread = None
+    capture.helper_total_sample_buffers = 1
+    capture.helper_total_bytes = 64
+    capture.helper_capture_backend = 'screencapturekit'
+
+    audio = capture.stop_recording()
+
+    assert audio is not None
+    assert audio.shape == (8, 2)
+    assert capture.process is None
 
 
 def test_check_permissions_uses_swift_helper_before_pyobjc(monkeypatch):
@@ -188,9 +254,13 @@ def test_check_permissions_can_skip_proactive_screen_recording_check(monkeypatch
     output = capsys.readouterr().out
     assert exc_info.value.code == 0
     assert '"all_granted": true' in output
-
-
-
+    assert '"skipped": true' in output
+    # Must not assert a Screen Recording grant that was never probed.
+    parsed = __import__('json').loads(output)
+    assert parsed['screen_recording']['granted'] is None
+    assert parsed['screen_recording']['skipped'] is True
+    assert parsed['system_audio_recording']['probed'] is False
+    assert parsed['system_audio_recording']['granted'] is None
 def test_swift_audio_capture_preserves_first_startup_error():
     capture = swift_capture_module.SwiftAudioCapture.__new__(swift_capture_module.SwiftAudioCapture)
     capture.error_event = swift_capture_module.threading.Event()
