@@ -13,7 +13,6 @@ const FFMPEG_DIR = path.join(BUILD_DIR, 'ffmpeg');
 const LEGAL_DIR = path.join(BUILD_DIR, 'legal');
 const BIN_DIR = path.join(BUILD_DIR, 'bin');
 const REPO_ROOT = path.join(__dirname, '..');
-const MODELS_DIR = path.join(BUILD_DIR, 'whisper-models');
 const RESOURCE_MANIFEST_PATH = path.join(BUILD_DIR, 'resource-manifest.json');
 const RESOURCE_MANIFEST_VERSION = 5;
 const REQUIREMENTS_MACOS_BUILD = path.join(__dirname, '..', 'requirements-macos-build.txt');
@@ -510,12 +509,36 @@ function writeResourceManifest(manifest) {
 }
 
 // Helper function to download files
-async function downloadFile(download, destination) {
+async function downloadFile(download, destination, { redirectDepth = 0 } = {}) {
+  const maxRedirects = 5;
+  const connectTimeoutMs = 30000;
+  const idleTimeoutMs = 60000;
+
   return new Promise((resolve, reject) => {
     console.log(`Downloading: ${download.url}`);
     const file = fs.createWriteStream(destination);
+    let settled = false;
+    let clearIdleTimer = () => {};
 
-    https.get(download.url, { timeout: 30000 }, (response) => {
+    const fail = (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearIdleTimer();
+      file.close(() => {
+        if (fs.existsSync(destination)) {
+          try {
+            fs.unlinkSync(destination);
+          } catch (_unlinkError) {
+            // Best-effort cleanup.
+          }
+        }
+        reject(error);
+      });
+    };
+
+    const req = https.get(download.url, { timeout: connectTimeoutMs }, (response) => {
       // Handle redirects (301, 302, 303, 307, 308)
       if (response.statusCode >= 300 && response.statusCode < 400) {
         file.close();
@@ -523,61 +546,109 @@ async function downloadFile(download, destination) {
           fs.unlinkSync(destination);
         }
 
+        if (redirectDepth >= maxRedirects) {
+          return fail(new Error(`Too many redirects (max ${maxRedirects}) while downloading ${download.url}`));
+        }
+
         // Handle both absolute and relative redirect URLs
         let redirectUrl = response.headers.location;
+        if (!redirectUrl) {
+          return fail(new Error(`Redirect response missing Location header for ${download.url}`));
+        }
         if (redirectUrl.startsWith('/')) {
           // Relative URL - construct absolute URL from original request
           const parsedUrl = new URL(download.url);
           redirectUrl = `${parsedUrl.protocol}//${parsedUrl.host}${redirectUrl}`;
         }
 
-        return downloadFile({ ...download, url: redirectUrl }, destination).then(resolve).catch(reject);
+        settled = true;
+        return downloadFile({ ...download, url: redirectUrl }, destination, {
+          redirectDepth: redirectDepth + 1,
+        }).then(resolve).catch(reject);
       }
 
       if (response.statusCode !== 200) {
-        file.close();
-        if (fs.existsSync(destination)) {
-          fs.unlinkSync(destination);
-        }
-        return reject(new Error(`Failed to download: ${response.statusCode}`));
+        return fail(new Error(`Failed to download: ${response.statusCode}`));
       }
 
       const totalSize = parseInt(response.headers['content-length'], 10);
+      const hasTotalSize = Number.isFinite(totalSize) && totalSize > 0;
       let downloadedSize = 0;
       let lastPercent = 0;
+      let lastByteLog = 0;
+      let idleTimer = null;
+
+      clearIdleTimer = () => {
+        if (idleTimer) {
+          clearTimeout(idleTimer);
+          idleTimer = null;
+        }
+      };
+
+      const armIdleTimer = () => {
+        clearIdleTimer();
+        idleTimer = setTimeout(() => {
+          req.destroy();
+          fail(new Error(`Download stalled after ${idleTimeoutMs}ms with no data: ${download.url}`));
+        }, idleTimeoutMs);
+      };
+
+      armIdleTimer();
 
       response.on('data', (chunk) => {
+        armIdleTimer();
         downloadedSize += chunk.length;
-        const percent = Math.floor((downloadedSize / totalSize) * 100);
-        if (percent > lastPercent && percent % 10 === 0) {
-          console.log(`  Progress: ${percent}%`);
-          lastPercent = percent;
+        if (hasTotalSize) {
+          const percent = Math.floor((downloadedSize / totalSize) * 100);
+          if (percent > lastPercent && percent % 10 === 0) {
+            console.log(`  Progress: ${percent}%`);
+            lastPercent = percent;
+          }
+        } else if (downloadedSize - lastByteLog >= 5 * 1024 * 1024) {
+          console.log(`  Progress: ${(downloadedSize / (1024 * 1024)).toFixed(1)} MB`);
+          lastByteLog = downloadedSize;
         }
+      });
+
+      response.on('error', (err) => {
+        clearIdleTimer();
+        fail(err);
       });
 
       response.pipe(file);
 
       file.on('finish', () => {
+        clearIdleTimer();
         file.close(async () => {
+          if (settled) {
+            return;
+          }
           try {
             const verifiedHash = await verifyFileChecksum(destination, download);
             console.log(`  Verified SHA-256: ${verifiedHash}`);
             console.log('  Download complete!\n');
+            settled = true;
             resolve();
           } catch (error) {
-            if (fs.existsSync(destination)) {
-              fs.unlinkSync(destination);
-            }
-            reject(error);
+            fail(error);
           }
         });
       });
-    }).on('error', (err) => {
-      file.close();
-      if (fs.existsSync(destination)) {
-        fs.unlinkSync(destination);
-      }
-      reject(err);
+    });
+
+    file.on('error', (err) => {
+      clearIdleTimer();
+      req.destroy();
+      fail(err);
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      fail(new Error(`Download timed out after ${connectTimeoutMs}ms connecting to ${download.url}`));
+    });
+
+    req.on('error', (err) => {
+      fail(err);
     });
   });
 }
@@ -631,14 +702,13 @@ function checkExistingResources() {
 
   const pythonExists = fs.existsSync(pythonPath);
   const ffmpegExists = fs.existsSync(path.join(FFMPEG_DIR, ffmpegExe));
-  const modelsExist = fs.existsSync(MODELS_DIR) && fs.readdirSync(MODELS_DIR).length > 0;
 
   // Check for Swift helper binary (macOS only)
   const swiftHelperExists = IS_MAC
     ? fs.existsSync(path.join(BIN_DIR, SWIFT_HELPER_BINARY))
     : true; // Not needed on Windows
 
-  return { pythonExists, ffmpegExists, modelsExist, swiftHelperExists };
+  return { pythonExists, ffmpegExists, swiftHelperExists };
 }
 
 // Build Swift AudioCaptureHelper (macOS only)
@@ -730,59 +800,6 @@ function buildSwiftHelper() {
 
   console.log(`  ✓ Built and copied to ${destBinary}`);
   console.log('✓ Swift AudioCaptureHelper ready!\n');
-}
-
-// Download Whisper models
-async function downloadWhisperModels() {
-  console.log('[1/3] Downloading Whisper models (optional components)...');
-
-  if (!fs.existsSync(MODELS_DIR)) {
-    fs.mkdirSync(MODELS_DIR, { recursive: true });
-  }
-
-  const pythonExe = path.join(PYTHON_DIR, 'python.exe');
-
-  // Create a Python script to download models using faster-whisper
-  const downloadScript = `
-import sys
-import os
-from faster_whisper import WhisperModel
-
-models = ['tiny', 'small', 'medium']
-cache_dir = r'${MODELS_DIR.replace(/\\/g, '\\\\')}'
-
-for model_size in models:
-    print(f'\\nDownloading {model_size} model...', file=sys.stderr)
-    try:
-        # This will download the model to the cache directory
-        model = WhisperModel(
-            model_size,
-            device='cpu',
-            compute_type='int8',
-            download_root=cache_dir
-        )
-        print(f'✓ {model_size} model downloaded successfully', file=sys.stderr)
-    except Exception as e:
-        print(f'⚠️ Warning: Failed to download {model_size} model: {e}', file=sys.stderr)
-        continue
-
-print('\\nModel download complete!', file=sys.stderr)
-`;
-
-  const scriptPath = path.join(BUILD_DIR, 'download_models.py');
-  fs.writeFileSync(scriptPath, downloadScript);
-
-  try {
-    console.log('  This may take 5-10 minutes depending on your connection...');
-    execSync(`"${pythonExe}" "${scriptPath}"`, { stdio: 'inherit' });
-    fs.unlinkSync(scriptPath);
-    console.log('✓ Whisper models downloaded!\n');
-  } catch (error) {
-    console.log('⚠️ Warning: Model download failed. Models will be downloaded on first use.\n');
-    if (fs.existsSync(scriptPath)) {
-      fs.unlinkSync(scriptPath);
-    }
-  }
 }
 
 // Main preparation function
@@ -999,26 +1016,9 @@ async function prepareResources() {
   assertNoWindowsOnlyStaleHelper();
   ensureWindowsEmptyBinDirectory();
 
-  // Download Whisper models (optional, Windows only)
-  // macOS uses MLX-format models from mlx-community/* which are incompatible with
-  // the CTranslate2 models downloaded by faster-whisper. The macOS app downloads
-  // MLX models on first use to ~/.cache/huggingface/hub, so bundling is skipped.
-  if (IS_MAC) {
-    console.log('ℹ️ Skipping model bundling on macOS (uses MLX models from HuggingFace cache)\n');
-  } else if (existing.modelsExist) {
-    console.log('✓ Whisper models already prepared\n');
-  } else {
-    const shouldDownloadModels = process.env.DOWNLOAD_MODELS === 'true';
-
-    if (shouldDownloadModels) {
-      console.log('Preparing Whisper models for installation...');
-      console.log('(Set DOWNLOAD_MODELS=true was specified)\n');
-      await downloadWhisperModels();
-    } else {
-      console.log('ℹ️ Skipping model bundling (models download on first use)\n');
-      console.log('  Set DOWNLOAD_MODELS=true to pre-bundle models in the installer.\n');
-    }
-  }
+  // Whisper models are downloaded on first use into the user cache
+  // (~/.cache/huggingface/hub or MLX cache). They are not bundled in the installer.
+  console.log('ℹ️ Whisper models download on first use (not bundled)\n');
 
   stageLegalBundle();
   writeFfmpegBinaryInfo();

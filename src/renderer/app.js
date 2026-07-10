@@ -2716,6 +2716,10 @@ async function transcribeAudio() {
       guidedDiarizationResult = null;
     }
 
+    if (result && result.transcriptionDevice) {
+      addLog(`Transcription device: ${String(result.transcriptionDevice).toUpperCase()}`);
+    }
+
     currentRecordingTranscriptMarkdown = typeof result.transcriptContent === 'string' && result.transcriptContent.trim()
       ? result.transcriptContent
       : writeTranscriptMarkdown({

@@ -4,7 +4,7 @@ Short log of bundled Python size changes from phased dependency work. Measure on
 
 ## macOS vs Windows installer gap (2026-06-09 analysis)
 
-Packaged builds do **not** bundle Whisper models by default (`DOWNLOAD_MODELS` is off). The ~800 MB macOS DMG vs ~200 MB Windows installer gap is almost entirely the **bundled Python runtime**, not Electron or ffmpeg.
+Packaged builds do **not** bundle Whisper models (they download on first use into the user cache). The ~800 MB macOS DMG vs ~200 MB Windows installer gap is almost entirely the **bundled Python runtime**, not Electron or ffmpeg.
 
 | Component | Windows | macOS | Notes |
 |-----------|---------|-------|-------|

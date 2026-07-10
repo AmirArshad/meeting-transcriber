@@ -107,6 +107,29 @@ def test_get_audiocapture_helper_path_finds_repo_local_swift_build(tmp_path, mon
     assert swift_capture_module.get_audiocapture_helper_path() == helper_path
 
 
+def test_get_audiocapture_helper_path_prefers_repo_swift_build_over_parent_bin(tmp_path, monkeypatch):
+    """Stale <repo-parent>/bin must not shadow a fresh in-repo Swift build."""
+    repo_root = tmp_path / 'meeting-transcriber'
+    swift_build = (
+        repo_root / 'swift' / 'AudioCaptureHelper' / '.build' / 'release' / 'audiocapture-helper'
+    )
+    swift_build.parent.mkdir(parents=True)
+    swift_build.write_text('fresh')
+
+    stale_parent = tmp_path / 'bin' / 'audiocapture-helper'
+    stale_parent.parent.mkdir(parents=True)
+    stale_parent.write_text('stale')
+
+    monkeypatch.setattr(
+        swift_capture_module,
+        '__file__',
+        str(repo_root / 'backend' / 'audio' / 'swift_audio_capture.py'),
+    )
+    monkeypatch.delenv('AVANEVIS_PACKAGED', raising=False)
+
+    assert swift_capture_module.get_audiocapture_helper_path() == swift_build
+
+
 def test_swift_helper_info_plist_declares_audio_capture_usage():
     info_plist = Path(__file__).resolve().parents[2] / 'swift' / 'AudioCaptureHelper' / 'Info.plist'
     contents = info_plist.read_text(encoding='utf-8')

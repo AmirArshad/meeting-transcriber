@@ -1,6 +1,7 @@
 import tempfile
 import types
 import os
+import json
 from typing import Any, cast
 from pathlib import Path
 import builtins
@@ -104,6 +105,31 @@ def test_cuda_probe_reports_ready_supported_runtime():
     assert report['matchedProfile'] == 'cuda12'
     assert report['installedProfile'] == 'cuda12'
     assert report['statusCode'] == 'ready'
+
+
+def test_cuda_probe_print_report_emits_single_json_object(capsys):
+    from backend.transcription.cuda_probe import _print_report
+
+    report = {
+        'deviceAvailable': True,
+        'runtimeLoadable': False,
+        'missingLibraries': ['cublas64_12.dll'],
+        'runtime': 'ctranslate2',
+        'matchedProfile': '',
+        'installedProfile': '',
+        'unsupportedDetectedProfiles': [],
+        'supportedProfiles': ['cuda12'],
+        'recommendedInstallProfile': 'cuda12',
+        'statusCode': 'missingLibraries',
+        'error': 'line1\ndeviceAvailable:True',
+    }
+    _print_report(report)
+    captured = capsys.readouterr()
+    parsed = json.loads(captured.out.strip())
+    assert parsed['deviceAvailable'] is True
+    assert parsed['runtimeLoadable'] is False
+    assert parsed['error'] == 'line1\ndeviceAvailable:True'
+    assert '\n' not in captured.out.strip() or captured.out.count('{') == 1
 
 
 def test_cuda_probe_prefers_ready_supported_runtime_even_with_cuda13_on_path(tmp_path):
@@ -714,6 +740,54 @@ def test_get_model_info_for_faster_whisper_includes_runtime_state():
     assert info['backend'] == 'faster-whisper'
     assert info['model_size'] == 'base'
     assert info['device'] == 'cpu'
+
+
+def test_load_model_internal_persists_cpu_fallback_device(monkeypatch):
+    service = TranscriberService(model_size='small', device='cuda', compute_type='float16')
+    calls = {'n': 0}
+
+    def fake_create(_WhisperModel, *, device, compute_type, local_files_only):
+        calls['n'] += 1
+        if calls['n'] == 1:
+            raise RuntimeError('Library cublas64_12.dll is not found or cannot be loaded')
+        return object()
+
+    monkeypatch.setitem(__import__('sys').modules, 'faster_whisper', types.SimpleNamespace(WhisperModel=object))
+    monkeypatch.setattr(service, '_create_whisper_model', fake_create)
+    monkeypatch.setattr(service, '_should_use_local_files_only', lambda: True)
+
+    service._load_model_internal()
+
+    assert service.device == 'cpu'
+    assert service.compute_type == 'int8'
+    assert calls['n'] == 2
+
+
+def test_transcribe_file_includes_resolved_device_in_result(monkeypatch, tmp_path):
+    audio_path = tmp_path / 'sample.opus'
+    audio_path.write_bytes(b'audio')
+    service = TranscriberService(model_size='small', language='en', device='cpu', compute_type='int8')
+
+    class Segment:
+        def __init__(self, start, end, text):
+            self.start = start
+            self.end = end
+            self.text = text
+
+    class Info:
+        language = 'en'
+        duration = 1.0
+
+    class Model:
+        def transcribe(self, *_args, **_kwargs):
+            return [Segment(0.0, 1.0, 'hello')], Info()
+
+    service.model = Model()
+    result = service.transcribe_file(str(audio_path), save_markdown=False)
+
+    assert result['device'] == 'cpu'
+    assert result['computeType'] == 'int8'
+    assert 'hello' in result['text']
 
 
 def test_transcribe_file_retries_on_retryable_cuda_runtime_error(monkeypatch, tmp_path):

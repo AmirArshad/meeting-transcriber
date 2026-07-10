@@ -67,6 +67,7 @@ function createGpuRuntimeService(deps) {
   // into a local that can go stale — mutate the closed-over bindings only.
   let cachedCudaStatus = null;
   let gpuRuntimeActionPromise = null;
+  let cachedActivePythonVersion = null;
 
   function updateCachedCudaStatus(status) {
     if (!status || typeof status !== 'object') {
@@ -76,6 +77,10 @@ function createGpuRuntimeService(deps) {
       ...status,
       checkedAt: Date.now(),
     };
+  }
+
+  function invalidateCachedCudaStatus() {
+    cachedCudaStatus = null;
   }
 
   function getCachedCudaStatus() {
@@ -89,6 +94,31 @@ function createGpuRuntimeService(deps) {
     return cachedCudaStatus;
   }
 
+  /**
+   * Fresh CUDA probe for transcription preemption. UI `check-cuda` keeps a
+   * 5-minute TTL; compute jobs must not silently skip preemptive CPU when that
+   * cache has expired. After waitForGpuRuntimeBeforeCompute, GPU actions are idle
+   * so a ~1–2s probe is safe relative to a 30–120 min transcription budget.
+   */
+  async function resolveCudaStatusForTranscription({ registerProcess } = {}) {
+    if (process.platform !== 'win32') {
+      return null;
+    }
+    if (hasInFlightGpuRuntimeAction()) {
+      // Prefer any in-memory status (even TTL-expired) over racing pip DLL rewrites.
+      return cachedCudaStatus && typeof cachedCudaStatus === 'object' ? cachedCudaStatus : null;
+    }
+    return checkCudaRuntimeStatus({ registerProcess });
+  }
+
+  async function getCachedActivePythonVersion() {
+    if (cachedActivePythonVersion) {
+      return cachedActivePythonVersion;
+    }
+    cachedActivePythonVersion = await getActivePythonVersion();
+    return cachedActivePythonVersion;
+  }
+
   function buildCudaRuntimeEnv(extra = {}, { includeManagedDiarization = false } = {}) {
     if (process.platform !== 'win32') {
       return extra;
@@ -97,7 +127,7 @@ function createGpuRuntimeService(deps) {
     const candidateSitePackagesDirs = [
       ...getPythonSitePackagesCandidates({
         pythonExe: pythonConfig.pythonExe,
-        virtualEnv: process.env.VIRTUAL_ENV,
+        virtualEnv: pythonConfig.virtualEnv || process.env.VIRTUAL_ENV,
         appData: process.env.APPDATA,
         platform: process.platform,
       }),
@@ -253,7 +283,7 @@ function createGpuRuntimeService(deps) {
 
   async function enrichCheckCudaStatus(parsedStatus) {
     try {
-      const pythonVersion = await getActivePythonVersion();
+      const pythonVersion = await getCachedActivePythonVersion();
       return {
         ...parsedStatus,
         version: null,
@@ -310,11 +340,13 @@ function createGpuRuntimeService(deps) {
           });
           return;
         }
+        invalidateCachedCudaStatus();
         reject(new Error(`Failed to install CUDA libraries: ${errorOutput}`));
       });
 
       python.on('error', (error) => {
         flushRedactedProgress('gpu-install-progress', progressRedactor);
+        invalidateCachedCudaStatus();
         reject(error);
       });
     });
@@ -584,6 +616,9 @@ function createGpuRuntimeService(deps) {
         });
 
         python.on('close', (code) => {
+          // Always drop the cache: a successful uninstall leaves a stale
+          // "loadable" status, and a failed uninstall may have partially removed packages.
+          invalidateCachedCudaStatus();
           if (code === 0) {
             resolve({ success: true });
           } else {
@@ -593,6 +628,7 @@ function createGpuRuntimeService(deps) {
         });
 
         python.on('error', (error) => {
+          invalidateCachedCudaStatus();
           reject(error);
         });
       }));
@@ -601,7 +637,9 @@ function createGpuRuntimeService(deps) {
 
   return {
     updateCachedCudaStatus,
+    invalidateCachedCudaStatus,
     getCachedCudaStatus,
+    resolveCudaStatusForTranscription,
     buildCudaRuntimeEnv,
     getDefaultTranscriptionCudaPackages,
     runGpuRuntimeAction,
@@ -611,6 +649,7 @@ function createGpuRuntimeService(deps) {
     consumeGpuRepairRecommendedMarker,
     checkNvidiaGpuAvailability,
     enrichCheckCudaStatus,
+    getCachedActivePythonVersion,
     runGpuPackageInstall,
     checkCudaRuntimeStatus,
     ensureCompatibleGpuRuntime,

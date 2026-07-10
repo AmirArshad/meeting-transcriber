@@ -11,6 +11,29 @@
  */
 
 /**
+ * Infer a virtualenv root from a resolved interpreter path (…/bin/python3 or
+ * …/Scripts/python.exe) when pyvenv.cfg is present.
+ */
+function resolveVirtualEnvFromPythonExe(pythonExe, { path, fs }) {
+  if (!pythonExe || typeof pythonExe !== 'string') {
+    return null;
+  }
+  if (pythonExe === 'python' || pythonExe === 'python3' || !path.isAbsolute(pythonExe)) {
+    return null;
+  }
+  const exeDir = path.dirname(pythonExe);
+  const baseName = path.basename(exeDir).toLowerCase();
+  if (baseName !== 'bin' && baseName !== 'scripts') {
+    return null;
+  }
+  const venvRoot = path.dirname(exeDir);
+  if (fs.existsSync(path.join(venvRoot, 'pyvenv.cfg'))) {
+    return venvRoot;
+  }
+  return null;
+}
+
+/**
  * Create a Python runtime bound to injected Electron/Node primitives.
  *
  * @param {object} deps
@@ -36,15 +59,48 @@ function createPythonRuntime({ app, spawn, path, fs, dirname }) {
 
     if (isDev) {
       const explicitPython = process.env.AVANEVIS_PYTHON || null;
-      const venvPython = process.env.VIRTUAL_ENV
+      const venvPythonCandidate = process.env.VIRTUAL_ENV
         ? path.join(process.env.VIRTUAL_ENV, isMac ? 'bin' : 'Scripts', isMac ? 'python3' : 'python.exe')
         : null;
+      // Stale VIRTUAL_ENV must not win over a working repo .venv (ENOENT on every spawn).
+      const venvPython = venvPythonCandidate && fs.existsSync(venvPythonCandidate)
+        ? venvPythonCandidate
+        : null;
       const repoVenvPython = path.join(dirname, '..', '.venv', isMac ? 'bin' : 'Scripts', isMac ? 'python3' : 'python.exe');
-      const detectedVenvPython = venvPython || (fs.existsSync(repoVenvPython) ? repoVenvPython : null);
+      const repoVenvExists = fs.existsSync(repoVenvPython);
+      const systemPython = isMac ? 'python3' : 'python';
 
-      // Development mode - use system Python
+      let pythonExe;
+      let pythonSource;
+      if (explicitPython) {
+        pythonExe = explicitPython;
+        pythonSource = 'AVANEVIS_PYTHON';
+      } else if (venvPython) {
+        pythonExe = venvPython;
+        pythonSource = 'VIRTUAL_ENV';
+      } else if (repoVenvExists) {
+        pythonExe = repoVenvPython;
+        pythonSource = '.venv';
+      } else {
+        pythonExe = systemPython;
+        pythonSource = 'system';
+      }
+
+      // Only attach a virtualEnv that belongs to the chosen interpreter. Do not
+      // inherit process.env.VIRTUAL_ENV when AVANEVIS_PYTHON selected a different exe.
+      let virtualEnv = resolveVirtualEnvFromPythonExe(pythonExe, { path, fs });
+      if (!virtualEnv) {
+        if (pythonSource === 'VIRTUAL_ENV' && process.env.VIRTUAL_ENV) {
+          virtualEnv = process.env.VIRTUAL_ENV;
+        } else if (pythonSource === '.venv' && repoVenvExists) {
+          virtualEnv = path.join(dirname, '..', '.venv');
+        }
+      }
+
       return {
-        pythonExe: explicitPython || detectedVenvPython || (isMac ? 'python3' : 'python'),
+        pythonExe,
+        pythonSource,
+        virtualEnv,
         pythonArgsPrefix: [],
         backendPath: path.join(dirname, '../backend'),
         ffmpegPath: 'ffmpeg' // Assume in PATH
@@ -57,6 +113,8 @@ function createPythonRuntime({ app, spawn, path, fs, dirname }) {
         // macOS: Use bundled Python from resources/python/bin/
         return {
           pythonExe: path.join(resourcesPath, 'python', 'bin', 'python3'),
+          pythonSource: 'packaged',
+          virtualEnv: null,
           pythonArgsPrefix: [],
           backendPath: path.join(resourcesPath, 'backend'),
           ffmpegPath: path.join(resourcesPath, 'ffmpeg', 'ffmpeg')
@@ -65,6 +123,8 @@ function createPythonRuntime({ app, spawn, path, fs, dirname }) {
         // Windows: Use bundled Python from resources/python/
         return {
           pythonExe: path.join(resourcesPath, 'python', 'python.exe'),
+          pythonSource: 'packaged',
+          virtualEnv: null,
           pythonArgsPrefix: [],
           backendPath: path.join(resourcesPath, 'backend'),
           ffmpegPath: path.join(resourcesPath, 'ffmpeg', 'ffmpeg.exe')
@@ -147,4 +207,4 @@ function createPythonRuntime({ app, spawn, path, fs, dirname }) {
   };
 }
 
-module.exports = { createPythonRuntime };
+module.exports = { createPythonRuntime, resolveVirtualEnvFromPythonExe };

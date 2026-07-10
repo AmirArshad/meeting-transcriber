@@ -156,8 +156,6 @@ jobs:
         ulimit -n 10240 || true
         echo "Open file limit after: $(ulimit -n)"
         npm run build:mac:dir
-      env:
-        DOWNLOAD_MODELS: "false"
 
     - name: Verify packaged macOS app smoke checks
       run: bash scripts/verify-macos-packaged-app.sh
@@ -187,8 +185,6 @@ jobs:
 
     - name: Build packaged app smoke test
       run: npm run build:dir
-      env:
-        DOWNLOAD_MODELS: "false"
 
     - name: Verify packaged build output
       shell: pwsh

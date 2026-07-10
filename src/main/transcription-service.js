@@ -49,7 +49,7 @@ const {
  * @param {Function} deps.spawnTrackedPython
  * @param {Function} deps.getBackendModuleArgs
  * @param {Function} deps.enqueueAiComputeAction
- * @param {Function} deps.getCachedCudaStatus
+ * @param {Function} deps.resolveCudaStatusForTranscription
  * @param {Function} deps.buildCudaRuntimeEnv
  * @param {Function} deps.getAiAddonRuntimeOptions
  * @param {Function} deps.getDiarizationDependencyEnv
@@ -87,6 +87,7 @@ function createTranscriptionService(deps) {
     hasInFlightGpuRuntimeAction = () => false,
     waitForGpuRuntimeIdle = async () => {},
     getCachedCudaStatus,
+    resolveCudaStatusForTranscription = null,
     buildCudaRuntimeEnv,
     getAiAddonRuntimeOptions,
     getDiarizationDependencyEnv,
@@ -268,7 +269,25 @@ function createTranscriptionService(deps) {
           try {
             const result = JSON.parse(output);
             if (result.text !== undefined || result.segments !== undefined) {
-              resolve({ ...result, transcriptionDevice: device });
+              const actualDevice = typeof result.device === 'string' && result.device.trim()
+                ? result.device.trim().toLowerCase()
+                : device;
+              if (actualDevice !== device) {
+                sendToRenderer(
+                  'transcription-progress',
+                  `Transcription ran on ${actualDevice.toUpperCase()} (requested ${device}).\n`,
+                );
+              } else if (actualDevice === 'cpu' && device === 'auto') {
+                sendToRenderer(
+                  'transcription-progress',
+                  'Transcription completed on CPU.\n',
+                );
+              }
+              resolve({
+                ...result,
+                transcriptionDevice: actualDevice,
+                requestedDevice: device,
+              });
               return;
             }
           } catch (error) {
@@ -308,38 +327,17 @@ function createTranscriptionService(deps) {
     }
   }
 
-  /**
-   * Preload Whisper model in background to improve first-time experience
-   * Uses 'small' model by default as it balances quality and speed
-   */
-  function preloadWhisperModel() {
-    const modelSize = 'small'; // Default model size
-    console.log(`Preloading Whisper model (${modelSize})...`);
-
-    const downloadCheck = getTranscriptionModelDownloadCheck(modelSize);
-    const preloadProcess = spawnTrackedPython(getTranscriberArgs([
-      '--preload',
-      '--model', modelSize
-    ]), {
-      cwd: pythonConfig.backendPath,
-      env: buildTranscriptionRuntimeEnv({
-        cacheDir: downloadCheck.cacheDir,
-        modelCached: false,
-        baseEnv: buildCudaRuntimeEnv(),
-      }),
-    });
-
-    preloadProcess.stderr.on('data', (data) => {
-      console.log(`[Model Preload] ${data.toString().trim()}`);
-    });
-
-    preloadProcess.on('close', (code) => {
-      if (code === 0) {
-        console.log('Whisper model preloaded successfully');
-      } else {
-        console.warn(`Model preload failed with code ${code} (non-critical)`);
-      }
-    });
+  async function shouldPreemptiveCpuAtJobStart(registerProcess) {
+    if (process.platform !== 'win32') {
+      return false;
+    }
+    let status = null;
+    if (typeof resolveCudaStatusForTranscription === 'function') {
+      status = await resolveCudaStatusForTranscription({ registerProcess });
+    } else if (typeof getCachedCudaStatus === 'function') {
+      status = getCachedCudaStatus();
+    }
+    return shouldForceCpuTranscriptionFromCudaStatus(status);
   }
 
   // Single in-flight Whisper download (FTUE / Settings). Cancel clears this ref.
@@ -557,8 +555,8 @@ function createTranscriptionService(deps) {
           terminateProcess: terminateProcessBestEffort,
           action: async (registerProcess) => {
             // Decide CPU preemption when the job starts, not at enqueue (CUDA may have been repaired).
-            const shouldPreemptiveCpuRetry = process.platform === 'win32'
-              && shouldForceCpuTranscriptionFromCudaStatus(getCachedCudaStatus());
+            // Re-probe when the UI cache is stale so broken-CUDA boxes get the CPU UX message.
+            const shouldPreemptiveCpuRetry = await shouldPreemptiveCpuAtJobStart(registerProcess);
             if (shouldPreemptiveCpuRetry) {
               sendToRenderer(
                 'transcription-progress',
@@ -948,8 +946,7 @@ function createTranscriptionService(deps) {
             }
           }
 
-          const shouldPreemptiveCpuRetry = process.platform === 'win32'
-            && shouldForceCpuTranscriptionFromCudaStatus(getCachedCudaStatus());
+          const shouldPreemptiveCpuRetry = await shouldPreemptiveCpuAtJobStart(registerProcess);
           if (shouldPreemptiveCpuRetry) {
             sendToRenderer(
               'transcription-progress',
@@ -1046,7 +1043,6 @@ function createTranscriptionService(deps) {
     buildManagedDiarizationGuidedTranscriptionArgs,
     runTranscriptionProcess,
     cleanupGuidedTranscriptTempFiles,
-    preloadWhisperModel,
     registerIpc,
   };
 }

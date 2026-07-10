@@ -513,6 +513,7 @@ gpuRuntimeService = createGpuRuntimeService({
 gpuRuntimeService.registerIpc(ipcMain);
 const {
   getCachedCudaStatus,
+  resolveCudaStatusForTranscription,
   buildCudaRuntimeEnv,
 } = gpuRuntimeService;
 
@@ -562,6 +563,7 @@ transcriptionService = createTranscriptionService({
     gpuRuntimeService ? gpuRuntimeService.waitForGpuRuntimeIdle() : Promise.resolve()
   ),
   getCachedCudaStatus,
+  resolveCudaStatusForTranscription,
   buildCudaRuntimeEnv,
   getAiAddonRuntimeOptions,
   getDiarizationDependencyEnv,
@@ -586,7 +588,7 @@ transcriptionService = createTranscriptionService({
   formatDurationForTranscript,
 });
 transcriptionService.registerIpc(ipcMain);
-const { cleanupGuidedTranscriptTempFiles, preloadWhisperModel } = transcriptionService;
+const { cleanupGuidedTranscriptTempFiles } = transcriptionService;
 
 summaryService = createSummaryService({
   app,
@@ -725,7 +727,10 @@ if (!app.isPackaged) {
 // Suppress Python warnings to reduce console noise
 process.env.PYTHONWARNINGS = 'ignore::DeprecationWarning,ignore::UserWarning';
 
-console.log('Python Configuration:', pythonConfig);
+console.log('Python Configuration:', {
+  ...pythonConfig,
+  pythonSource: pythonConfig.pythonSource || 'unknown',
+});
 console.log('userData path:', app.getPath('userData'));
 console.log('Recordings will be saved to:', path.join(app.getPath('userData'), 'recordings'));
 console.log('Transcriber module:', getTranscriberModule(process.platform, process.arch));
@@ -1276,9 +1281,8 @@ app.whenReady().then(async () => {
   // macOS Screen Recording checks can trigger OS prompts, so they run only as
   // part of recording preflight when the user explicitly starts recording.
 
-  // Don't preload model in background anymore - the renderer will handle it during init
-  // This prevents double-downloading and gives better UX with progress feedback
-  // preloadWhisperModel(); // REMOVED
+  // Whisper model download is renderer-driven via download-model IPC (with
+  // compute-queue idle wait) so FTUE gets progress feedback without VRAM contention.
 
   // Check for updates after app loads (5 second delay to not slow startup)
   setTimeout(async () => {

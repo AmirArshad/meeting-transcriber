@@ -273,19 +273,75 @@ function getGpuRuntimeEnsurePlan(status = {}, { forceRepair = false, skipInstall
 }
 
 function parseCheckCudaStatus(output = '') {
-  const lines = String(output || '')
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const values = {};
-  for (const line of lines) {
-    const separator = line.indexOf(':');
-    if (separator <= 0) {
-      continue;
+  const raw = String(output || '').trim();
+  if (!raw) {
+    return {
+      installed: false,
+      deviceAvailable: false,
+      runtimeLoadable: false,
+      missingLibraries: [],
+      runtime: 'ctranslate2',
+      error: '',
+      statusCode: 'deviceUnavailable',
+      matchedProfile: '',
+      installedProfile: '',
+      supportedProfiles: getSupportedTranscriptionCudaProfileIds(),
+      unsupportedDetectedProfiles: [],
+      recommendedInstallProfile: DEFAULT_TRANSCRIPTION_CUDA_PROFILE_ID,
+    };
+  }
+
+  // Prefer a single JSON object (current probe format). Fall back to legacy
+  // key:value lines for older probe builds / hand-crafted test fixtures.
+  let values = null;
+  const jsonCandidate = raw.split(/\r?\n/).map((line) => line.trim()).find((line) => line.startsWith('{'));
+  if (jsonCandidate) {
+    try {
+      const parsed = JSON.parse(jsonCandidate);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        values = {
+          deviceAvailable: parsed.deviceAvailable === true || parsed.deviceAvailable === 'True' || parsed.deviceAvailable === 'true'
+            ? 'True'
+            : 'False',
+          runtimeLoadable: parsed.runtimeLoadable === true || parsed.runtimeLoadable === 'True' || parsed.runtimeLoadable === 'true'
+            ? 'True'
+            : 'False',
+          missingLibraries: Array.isArray(parsed.missingLibraries)
+            ? parsed.missingLibraries.join(',')
+            : String(parsed.missingLibraries || ''),
+          runtime: parsed.runtime || 'ctranslate2',
+          error: parsed.error == null ? '' : String(parsed.error),
+          matchedProfile: parsed.matchedProfile || '',
+          installedProfile: parsed.installedProfile || '',
+          unsupportedDetectedProfiles: Array.isArray(parsed.unsupportedDetectedProfiles)
+            ? parsed.unsupportedDetectedProfiles.join(',')
+            : String(parsed.unsupportedDetectedProfiles || ''),
+          supportedProfiles: Array.isArray(parsed.supportedProfiles)
+            ? parsed.supportedProfiles.join(',')
+            : String(parsed.supportedProfiles || ''),
+          recommendedInstallProfile: parsed.recommendedInstallProfile || DEFAULT_TRANSCRIPTION_CUDA_PROFILE_ID,
+        };
+      }
+    } catch (_error) {
+      values = null;
     }
-    const key = line.slice(0, separator).trim();
-    const value = line.slice(separator + 1).trim();
-    values[key] = value;
+  }
+
+  if (!values) {
+    values = {};
+    const lines = raw
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    for (const line of lines) {
+      const separator = line.indexOf(':');
+      if (separator <= 0) {
+        continue;
+      }
+      const key = line.slice(0, separator).trim();
+      const value = line.slice(separator + 1).trim();
+      values[key] = value;
+    }
   }
 
   const deviceAvailable = values.deviceAvailable === 'True' || values.deviceAvailable === 'true';

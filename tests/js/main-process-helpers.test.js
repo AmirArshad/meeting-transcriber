@@ -1323,6 +1323,49 @@ test('parseCheckCudaStatus prefers matched profile over raw installed profile', 
   assert.equal(status.installedProfile, 'cuda12');
 });
 
+test('parseCheckCudaStatus accepts JSON probe output', () => {
+  const status = parseCheckCudaStatus(JSON.stringify({
+    deviceAvailable: true,
+    runtimeLoadable: false,
+    missingLibraries: ['cublas64_12.dll', 'cudnn64_9.dll'],
+    runtime: 'ctranslate2',
+    matchedProfile: '',
+    installedProfile: '',
+    unsupportedDetectedProfiles: [],
+    supportedProfiles: ['cuda12'],
+    recommendedInstallProfile: 'cuda12',
+    statusCode: 'missingLibraries',
+    error: 'DLL load failed:\ncublas64_12.dll not found',
+  }));
+
+  assert.equal(status.installed, false);
+  assert.equal(status.deviceAvailable, true);
+  assert.equal(status.runtimeLoadable, false);
+  assert.deepEqual(status.missingLibraries, ['cublas64_12.dll', 'cudnn64_9.dll']);
+  assert.equal(status.statusCode, 'missingLibraries');
+  assert.match(status.error, /cublas64_12\.dll not found/);
+});
+
+test('parseCheckCudaStatus JSON ignores multiline error without inventing keys', () => {
+  const status = parseCheckCudaStatus(`${JSON.stringify({
+    deviceAvailable: false,
+    runtimeLoadable: false,
+    missingLibraries: [],
+    runtime: 'ctranslate2',
+    matchedProfile: '',
+    installedProfile: '',
+    unsupportedDetectedProfiles: [],
+    supportedProfiles: ['cuda12'],
+    recommendedInstallProfile: 'cuda12',
+    statusCode: 'deviceUnavailable',
+    error: 'boom\ndeviceAvailable:True\nruntimeLoadable:True',
+  })}\n`);
+
+  assert.equal(status.deviceAvailable, false);
+  assert.equal(status.runtimeLoadable, false);
+  assert.match(status.error, /deviceAvailable:True/);
+});
+
 test('shouldForceCpuTranscriptionFromCudaStatus only when runtime is broken', () => {
   assert.equal(shouldForceCpuTranscriptionFromCudaStatus(null), false);
   assert.equal(shouldForceCpuTranscriptionFromCudaStatus({

@@ -326,6 +326,10 @@ class TranscriberService(BaseTranscriber):
                 compute_type=compute_type,
                 local_files_only=local_files_only,
             )
+            # Persist the resolved device so result JSON / get_model_info reflect reality
+            # (including auto→cuda/cpu and load-time GPU→CPU fallback).
+            self.device = device
+            self.compute_type = compute_type
             print(f"Model loaded successfully!", file=sys.stderr)
             print(f"  Device: {device.upper()}", file=sys.stderr)
             print(f"  Compute type: {compute_type}", file=sys.stderr)
@@ -366,6 +370,8 @@ class TranscriberService(BaseTranscriber):
                     compute_type=compute_type,
                     local_files_only=local_files_only,
                 )
+                self.device = device
+                self.compute_type = compute_type
                 print(f"Model loaded successfully on CPU!", file=sys.stderr)
                 print(f"  Note: CPU is 4-5x slower than GPU. Consider setting up CUDA for faster transcription.", file=sys.stderr)
             else:
@@ -502,8 +508,10 @@ class TranscriberService(BaseTranscriber):
             self._save_markdown(results, audio_path, output_path)
             results['output_file'] = output_path
 
-        # Add audio path to results for meeting manager
+        # Add audio path and resolved device to results for meeting manager / Electron
         results['audioPath'] = str(audio_path)
+        results['device'] = self.device
+        results['computeType'] = self.compute_type
 
         return results
 

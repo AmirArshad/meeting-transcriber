@@ -460,6 +460,8 @@ class MLXWhisperTranscriber(BaseTranscriber):
             'duration': duration,
             'output_file': None,
             'audioPath': str(audio_path),
+            'device': self.device,
+            'computeType': getattr(self, 'compute_type', None),
         }
 
     def load_model(self):

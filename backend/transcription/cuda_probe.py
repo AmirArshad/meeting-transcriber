@@ -173,17 +173,9 @@ def build_probe_report(
 
 
 def _print_report(report: dict[str, Any]) -> None:
-    print(f"deviceAvailable:{report['deviceAvailable']}")
-    print(f"runtimeLoadable:{report['runtimeLoadable']}")
-    print(f"missingLibraries:{','.join(report['missingLibraries'])}")
-    print(f"runtime:{report['runtime']}")
-    print(f"matchedProfile:{report['matchedProfile']}")
-    print(f"installedProfile:{report['installedProfile']}")
-    print(f"unsupportedDetectedProfiles:{','.join(report['unsupportedDetectedProfiles'])}")
-    print(f"supportedProfiles:{','.join(report['supportedProfiles'])}")
-    print(f"recommendedInstallProfile:{report['recommendedInstallProfile']}")
-    print(f"statusCode:{report['statusCode']}")
-    print(f"error:{report['error']}")
+    # Single JSON object — avoids fragile key:value line parsing when error
+    # messages contain newlines or look like probe keys.
+    print(json.dumps(report, separators=(",", ":")), flush=True)
 
 
 def main(argv: list[str] | None = None) -> int:

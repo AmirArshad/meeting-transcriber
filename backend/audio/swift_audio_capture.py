@@ -45,9 +45,9 @@ def get_audiocapture_helper_path() -> Optional[Path]:
     Find the audiocapture-helper binary.
 
     Searches in order:
-    1. Bundled in Electron app resources
-    2. Development path (swift/AudioCaptureHelper/.build/release)
-    3. System PATH
+    1. Bundled in Electron app resources (…/Resources/bin)
+    2. Development Swift Package Manager build outputs
+    3. System PATH (dev only; skipped when AVANEVIS_PACKAGED=1)
 
     Returns:
         Path to the binary, or None if not found
@@ -58,11 +58,10 @@ def get_audiocapture_helper_path() -> Optional[Path]:
     # When running in Electron, __file__ is in resources/backend/audio/
     current_dir = Path(__file__).parent
     possible_paths = [
-        # Bundled in Electron app (macOS .app bundle)
-        current_dir.parent.parent.parent / "bin" / "audiocapture-helper",
-        # Bundled in resources
+        # Bundled in resources (packaged: Contents/Resources/bin; also repo/bin in some layouts)
         current_dir.parent.parent / "bin" / "audiocapture-helper",
-        # Development path (Swift Package Manager build)
+        # Development path (Swift Package Manager build) — prefer fresh local builds
+        # over any stale binary outside the checkout.
         current_dir.parent.parent / "swift" / "AudioCaptureHelper" / ".build" / "release" / "audiocapture-helper",
         current_dir.parent.parent / "swift" / "AudioCaptureHelper" / ".build" / "arm64-apple-macosx" / "release" / "audiocapture-helper",
         current_dir.parent.parent.parent / "swift" / "AudioCaptureHelper" / ".build" / "release" / "audiocapture-helper",
