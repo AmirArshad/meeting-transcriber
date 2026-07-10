@@ -104,6 +104,7 @@ const EXPECTED_MAIN_PROCESS_HELPER_EXPORTS = [
   'UPDATER_HTTP_RESPONSE_MAX_CHARS',
   'appendCappedSpawnLogBuffer',
   'appendSpawnJsonResultBuffer',
+  'buildClearedHuggingFaceTokenEnv',
   'buildDesktopAudioAvailabilityError',
   'buildDiarizationOutputPath',
   'buildFileUrl',

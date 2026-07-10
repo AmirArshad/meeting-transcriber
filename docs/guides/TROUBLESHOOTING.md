@@ -190,9 +190,9 @@ If you still see "faster-whisper (CPU fallback)", report an issue on GitHub.
 
 **Symptom:** Speaker identification fails with "model cache is missing or incomplete" after setup previously completed.
 
-**Cause:** Actual speaker-identification runs use the local pyannote model cache populated during setup. AvaNevis does not implicitly re-download the gated model during meeting processing.
+**Cause:** Actual speaker-identification runs use the local pyannote model cache populated during setup. AvaNevis does not implicitly re-download the gated model during meeting processing. A related bug (fixed) could also misreport Hugging Face auth-path probe failures as a missing cache when `HF_TOKEN_PATH` was cleared to an empty string.
 
-**What to do:** Open Settings > AI Add-ons and run speaker identification setup or Validate again. If it still fails, remove speaker setup and set it up again after confirming the Hugging Face token still has access to `pyannote/speaker-diarization-community-1`.
+**What to do:** First update to the latest app build and retry — do **not** remove CUDA or pyannote setup unless Settings still shows speaker identification as not ready. If it still fails after updating, open Settings > AI Add-ons and run Validate (or setup again) only after confirming the Hugging Face token still has access to `pyannote/speaker-diarization-community-1`.
 
 ---
 

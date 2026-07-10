@@ -1,5 +1,6 @@
 'use strict';
 
+const os = require('os');
 const path = require('path');
 const { getGuidedTranscriptionTimeoutMinutes } = require('./compute-timeout-helpers');
 const {
@@ -54,6 +55,25 @@ function buildHuggingFaceOfflineEnv(extra = {}) {
     HF_HUB_OFFLINE: '1',
     TRANSFORMERS_OFFLINE: '1',
     HF_HUB_VERBOSITY: 'error',
+  };
+}
+
+/**
+ * Clear Hugging Face token discovery for spawned Python children.
+ *
+ * Important: do NOT set HF_TOKEN_PATH to "". huggingface_hub treats that as
+ * Path(".") and raises PermissionError while probing auth — which our offline
+ * pyannote loader used to misreport as a missing model cache, pushing users to
+ * reinstall. Use os.devNull so shell-exported token files and the default
+ * ~/.cache/huggingface/token cannot leak; read_text() yields "" → cleaned to None.
+ */
+function buildClearedHuggingFaceTokenEnv(extra = {}) {
+  return {
+    ...extra,
+    HF_TOKEN: '',
+    HUGGINGFACE_HUB_TOKEN: '',
+    HUGGING_FACE_HUB_TOKEN: '',
+    HF_TOKEN_PATH: os.devNull,
   };
 }
 
@@ -201,6 +221,7 @@ module.exports = {
   buildGuidedTranscriptTempPath,
   runGuidedTranscriptionProcess,
   buildHuggingFaceOfflineEnv,
+  buildClearedHuggingFaceTokenEnv,
   buildTranscriptionRuntimeEnv,
   buildDiarizationOutputPath,
 };

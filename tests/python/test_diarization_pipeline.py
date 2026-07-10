@@ -622,11 +622,50 @@ def test_load_pyannote_pipeline_omits_token_for_offline_cached_execution(monkeyp
     assert loaded == {'loaded': 'pyannote/test-model'}
     assert calls == [{
         'model_ref': 'pyannote/test-model',
-        'token': None,
+        'token': False,
         'local_files_only': True,
         'offline': '1',
     }]
     assert 'HF_HUB_OFFLINE' not in os.environ
+
+
+def test_load_pyannote_pipeline_reports_auth_probe_failure_without_reinstall_prompt(monkeypatch):
+    class FakePipeline:
+        @staticmethod
+        def from_pretrained(*_args, **_kwargs):
+            raise PermissionError('[Errno 13] Permission denied: \'.\'')
+
+    fake_pyannote_audio = types.SimpleNamespace(Pipeline=FakePipeline)
+    monkeypatch.setitem(sys.modules, 'pyannote', types.SimpleNamespace(audio=fake_pyannote_audio))
+    monkeypatch.setitem(sys.modules, 'pyannote.audio', fake_pyannote_audio)
+
+    with pytest.raises(RuntimeError, match='auth settings') as exc_info:
+        pipeline.load_pyannote_pipeline('pyannote/test-model', local_files_only=True)
+
+    message = str(exc_info.value)
+    assert 'Existing speaker setup was not removed' in message
+    assert 'Re-run speaker identification setup' not in message
+    assert '\n' not in message
+
+
+def test_load_pyannote_pipeline_offline_error_message_is_single_line(monkeypatch):
+    class FakePipeline:
+        @staticmethod
+        def from_pretrained(*_args, **_kwargs):
+            raise OSError('not found in cache\nGatedRepoError: access required\nhf_secret_token_value')
+
+    fake_pyannote_audio = types.SimpleNamespace(Pipeline=FakePipeline)
+    monkeypatch.setitem(sys.modules, 'pyannote', types.SimpleNamespace(audio=fake_pyannote_audio))
+    monkeypatch.setitem(sys.modules, 'pyannote.audio', fake_pyannote_audio)
+
+    with pytest.raises(RuntimeError, match='model cache is missing or incomplete') as exc_info:
+        pipeline.load_pyannote_pipeline('pyannote/test-model', local_files_only=True)
+
+    message = str(exc_info.value)
+    assert '\n' not in message
+    assert 'hf_secret_token_value' not in message
+    assert '[redacted-token]' in message
+    assert 'Re-run speaker identification setup' in message
 
 
 def test_load_pyannote_pipeline_reports_missing_offline_cache(monkeypatch):

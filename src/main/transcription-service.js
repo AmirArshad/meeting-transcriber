@@ -32,6 +32,7 @@ const {
   getGuidedTranscriptionComputeTimeoutMs,
   runWallClockComputeAction,
   runGuidedTranscriptionProcess,
+  buildClearedHuggingFaceTokenEnv,
 } = require('../main-process-helpers');
 const { checkAiAddonSetupStatus } = require('../ai-addon-setup');
 const {
@@ -679,10 +680,7 @@ function createTranscriptionService(deps) {
               ...getDiarizationDependencyEnv(),
               ...getDiarizationCacheEnv(),
               ...getTranscriptionRuntimeEnv(modelSize, { includeManagedDiarization: true }),
-              HF_TOKEN: '',
-              HUGGINGFACE_HUB_TOKEN: '',
-              HUGGING_FACE_HUB_TOKEN: '',
-              HF_TOKEN_PATH: '',
+              ...buildClearedHuggingFaceTokenEnv(),
             },
             finalTranscriptPath,
             tempTranscriptPath,
@@ -772,10 +770,7 @@ function createTranscriptionService(deps) {
                 ...getDiarizationDependencyEnv(),
                 ...getDiarizationCacheEnv(),
                 ...buildCudaRuntimeEnv({}, { includeManagedDiarization: true }),
-                HF_TOKEN: '',
-                HUGGINGFACE_HUB_TOKEN: '',
-                HUGGING_FACE_HUB_TOKEN: '',
-                HF_TOKEN_PATH: '',
+                ...buildClearedHuggingFaceTokenEnv(),
               },
             });
             registerProcess(python);
@@ -938,10 +933,7 @@ function createTranscriptionService(deps) {
                   ...getDiarizationDependencyEnv(),
                   ...getDiarizationCacheEnv(),
                   ...getTranscriptionRuntimeEnv(normalizedModel, { includeManagedDiarization: true }),
-                  HF_TOKEN: '',
-                  HUGGINGFACE_HUB_TOKEN: '',
-                  HUGGING_FACE_HUB_TOKEN: '',
-                  HF_TOKEN_PATH: '',
+                  ...buildClearedHuggingFaceTokenEnv(),
                 },
                 finalTranscriptPath: transcriptPath,
                 tempTranscriptPath,

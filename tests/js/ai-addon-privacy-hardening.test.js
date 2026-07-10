@@ -131,7 +131,10 @@ test('validateDiarizationRuntime delivers token on stdin and clears all HF token
   assert.equal(options.env.HF_TOKEN, '');
   assert.equal(options.env.HUGGINGFACE_HUB_TOKEN, '');
   assert.equal(options.env.HUGGING_FACE_HUB_TOKEN, '');
-  assert.equal(options.env.HF_TOKEN_PATH, '');
+  assert.ok(options.env.HF_TOKEN_PATH, 'HF_TOKEN_PATH must be set to a non-empty sentinel path');
+  assert.notEqual(options.env.HF_TOKEN_PATH, '');
+  assert.notEqual(options.env.HF_TOKEN_PATH, '.');
+  assert.equal(options.env.HF_TOKEN_PATH, require('node:os').devNull);
 
   child.stdout.emit('data', Buffer.from(JSON.stringify({ ok: true })));
   child.emit('close', 0);
@@ -444,5 +447,36 @@ test('main.js sets process.env.AVANEVIS_PACKAGED when app.isPackaged (worker inh
   assert.match(
     mainSource,
     /if\s*\(\s*app\.isPackaged\s*\)\s*\{\s*process\.env\.AVANEVIS_PACKAGED\s*=\s*['"]1['"]\s*;?\s*\}/s,
+  );
+});
+
+test('main-process sources never assign HF_TOKEN_PATH to an empty string', () => {
+  const {
+    collectJsFiles,
+    readUtf8,
+    ROOT,
+    SRC_ROOT,
+    toPosix,
+  } = require('./source-scan-helpers');
+
+  const scanRoots = [
+    path.join(SRC_ROOT, 'main.js'),
+    ...collectJsFiles(path.join(SRC_ROOT, 'main')),
+    ...collectJsFiles(path.join(SRC_ROOT, 'main-process')),
+  ];
+  const emptyTokenPath = /HF_TOKEN_PATH\s*:\s*['"]['"]/;
+  const offenders = [];
+
+  for (const filePath of scanRoots) {
+    const source = readUtf8(filePath);
+    if (emptyTokenPath.test(source)) {
+      offenders.push(toPosix(path.relative(ROOT, filePath)));
+    }
+  }
+
+  assert.deepEqual(
+    offenders,
+    [],
+    `HF_TOKEN_PATH: '' breaks offline pyannote loads; use buildClearedHuggingFaceTokenEnv(). Offenders: ${offenders.join(', ')}`,
   );
 });

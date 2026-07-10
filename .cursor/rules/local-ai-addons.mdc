@@ -6,7 +6,7 @@ alwaysApply: false
 
 # Local AI add-ons
 
-- Privacy-first: no cloud transcription, no telemetry, no background uploads. HF token is user-owned only; store in `safeStorage`, never in logs, metadata, transcripts, or progress events. Setup validation prefers `--token-stdin` and clears `HF_TOKEN`, `HUGGINGFACE_HUB_TOKEN`, deprecated `HUGGING_FACE_HUB_TOKEN`, and `HF_TOKEN_PATH` in the child environment.
+- Privacy-first: no cloud transcription, no telemetry, no background uploads. HF token is user-owned only; store in `safeStorage`, never in logs, metadata, transcripts, or progress events. Setup validation prefers `--token-stdin` and clears `HF_TOKEN`, `HUGGINGFACE_HUB_TOKEN`, deprecated `HUGGING_FACE_HUB_TOKEN`, and `HF_TOKEN_PATH` via `buildClearedHuggingFaceTokenEnv()` — never `HF_TOKEN_PATH=""`.
 - Catalog-driven pins live in `src/ai-addon-state.js` — do not hard-code URLs, checksums, or runtime names in renderer logic.
 - Diarization: auto after transcription when ready; prefer guided transcription (pyannote → padded windows → transcribe). macOS diarization is Apple Silicon MPS-only.
 - Summaries: always user-triggered; explicit setup only; HTTPS + explicit host allowlist (`DOWNLOAD_REDIRECT_HOSTS` in `src/ai-addon/download-helpers.js` — maintain when HF/Xet CDNs rotate; no `*.hf.co` wildcards); ZIP/tar.gz runtime extraction uses `src/ai-addon-archive-helpers.js` plus worker threads; verify SHA-256 after download. HF-hosted summary models prefer bundled Python `hf_xet` and still pin SHA-256.

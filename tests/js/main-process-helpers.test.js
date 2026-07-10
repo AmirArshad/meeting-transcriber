@@ -18,6 +18,7 @@ const {
   buildDiarizationOutputPath,
   buildGuidedTranscriptTempPath,
   buildHuggingFaceOfflineEnv,
+  buildClearedHuggingFaceTokenEnv,
   buildTranscriptionRuntimeEnv,
   buildModelDownloadCheck,
   runGuidedTranscriptionProcess,
@@ -1051,6 +1052,18 @@ test('buildHuggingFaceOfflineEnv enables offline runtime model loading', () => {
       HF_HUB_VERBOSITY: 'error',
     },
   );
+});
+
+test('buildClearedHuggingFaceTokenEnv clears token aliases without empty HF_TOKEN_PATH', () => {
+  const env = buildClearedHuggingFaceTokenEnv({ PATH: 'existing-path' });
+  assert.equal(env.PATH, 'existing-path');
+  assert.equal(env.HF_TOKEN, '');
+  assert.equal(env.HUGGINGFACE_HUB_TOKEN, '');
+  assert.equal(env.HUGGING_FACE_HUB_TOKEN, '');
+  assert.ok(env.HF_TOKEN_PATH);
+  assert.notEqual(env.HF_TOKEN_PATH, '');
+  assert.notEqual(env.HF_TOKEN_PATH, '.');
+  assert.equal(env.HF_TOKEN_PATH, os.devNull);
 });
 
 

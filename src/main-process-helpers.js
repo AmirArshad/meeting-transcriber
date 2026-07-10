@@ -52,6 +52,7 @@ const {
   buildGuidedTranscriptTempPath,
   runGuidedTranscriptionProcess,
   buildHuggingFaceOfflineEnv,
+  buildClearedHuggingFaceTokenEnv,
   buildTranscriptionRuntimeEnv,
   buildDiarizationOutputPath,
 } = require('./main-process/transcription-runtime-helpers');
@@ -174,6 +175,7 @@ module.exports = {
   runGuidedTranscriptionProcess,
   buildTranscriberArgs,
   buildHuggingFaceOfflineEnv,
+  buildClearedHuggingFaceTokenEnv,
   buildTranscriptionRuntimeEnv,
   buildTranscriptionCudaInstallArgs,
   buildTranscriptionCudaUninstallArgs,

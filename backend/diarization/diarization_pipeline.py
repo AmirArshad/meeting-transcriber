@@ -236,8 +236,14 @@ def build_pyannote_from_pretrained_kwargs(from_pretrained: Any, hf_token: str = 
 
     accepts_kwargs = any(parameter.kind == Parameter.VAR_KEYWORD for parameter in parameters.values())
     kwargs: Dict[str, Any] = {}
-    if (accepts_kwargs or "token" in parameters) and hf_token:
+    supports_token = accepts_kwargs or "token" in parameters
+    if supports_token and hf_token:
         kwargs["token"] = hf_token
+    elif supports_token and local_files_only and not hf_token:
+        # token=False disables huggingface_hub env/file token discovery. Without this,
+        # an empty HF_TOKEN_PATH (Path(".")) can raise PermissionError and get misreported
+        # as a missing model cache — forcing unnecessary reinstalls of working setups.
+        kwargs["token"] = False
     elif "use_auth_token" in parameters:
         if local_files_only:
             raise RuntimeError("Installed pyannote.audio is too old to enforce offline cached execution. Re-run speaker identification setup in Settings.")
@@ -262,7 +268,19 @@ def load_pyannote_pipeline(model_ref: str, hf_token: str = "", *, local_files_on
             return Pipeline.from_pretrained(model_ref, **kwargs)
     except Exception as exc:
         if local_files_only:
-            raise RuntimeError("Speaker diarization model cache is missing or incomplete. Re-run speaker identification setup in Settings.") from exc
+            # Collapse/redact so guided_transcription's raw `ERROR: {exc}` stderr stays a
+            # single line for summarizeAiBackendError (last non-empty line wins).
+            cause = redact_sensitive_text(exc) or exc.__class__.__name__
+            # Auth/path probe failures are not missing caches — do not tell users to reinstall.
+            if isinstance(exc, PermissionError) or "Permission denied" in cause:
+                raise RuntimeError(
+                    "Speaker diarization failed while reading Hugging Face auth settings "
+                    f"({cause}). Existing speaker setup was not removed; update the app and retry."
+                ) from exc
+            raise RuntimeError(
+                "Speaker diarization model cache is missing or incomplete. "
+                f"Re-run speaker identification setup in Settings. ({cause})"
+            ) from exc
         raise
 
 

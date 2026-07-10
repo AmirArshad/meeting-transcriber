@@ -40,6 +40,7 @@ const {
   AI_COMPUTE_TIMEOUT_MS,
   runWallClockComputeAction,
   splitBufferedLines,
+  buildClearedHuggingFaceTokenEnv,
 } = require('../main-process-helpers');
 const { createAsyncActionQueue } = require('./ai-compute-queue');
 
@@ -273,12 +274,9 @@ function createAiAddonIpc(deps) {
               ...getDiarizationDependencyEnv(),
               ...getDiarizationCacheEnv(),
               ...buildCudaRuntimeEnv({}, { includeManagedDiarization: true }),
-              // Prefer stdin token delivery; keep env empty so process tables / huggingface_hub
-              // cannot scrape shell tokens (including the deprecated underscored alias and token-path).
-              HF_TOKEN: '',
-              HUGGINGFACE_HUB_TOKEN: '',
-              HUGGING_FACE_HUB_TOKEN: '',
-              HF_TOKEN_PATH: '',
+              // Prefer stdin token delivery; clear shell-exported HF token discovery
+              // without setting HF_TOKEN_PATH="" (that becomes Path(".") and breaks offline loads).
+              ...buildClearedHuggingFaceTokenEnv(),
             },
           }));
 
