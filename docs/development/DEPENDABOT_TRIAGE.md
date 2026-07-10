@@ -1,8 +1,10 @@
 # Dependabot PR triage (Phase 5)
 
+> **Historical triage (2026-05-27).** The phased dependency-upgrade branch work and the “Close now” / “Defer” PR actions below are complete. For current dependency and release hygiene, use root `todo.md`. Keep this file as background for why pins and Dependabot ignores look the way they do.
+
 Last reviewed: 2026-05-27 on branch `chore/phased-dependency-upgrades` after Phases 1–4 and packaged smoke.
 
-Use this when closing or scheduling follow-up dependency work. **Do not merge Dependabot PRs blindly** into `master`; prefer this branch or a small follow-up PR with tests + smoke.
+Use this when closing or scheduling follow-up dependency work. **Do not merge Dependabot PRs blindly** into `master`; prefer a small follow-up PR with tests + smoke.
 
 ## Already closed on GitHub (superseded by phased work)
 

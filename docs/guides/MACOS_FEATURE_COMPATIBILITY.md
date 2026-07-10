@@ -58,8 +58,12 @@ These areas have code coverage and smoke coverage, but still need real-hardware 
 
 ## Related Files
 
-- `src/main.js`
+- `src/main.js` (composition root)
+- `src/main/recorder-service.js`
+- `src/main/device-ipc.js`
 - `src/renderer/app.js`
 - `backend/audio/macos_recorder.py`
 - `backend/audio/swift_audio_capture.py`
+- `backend/audio/macos_stereo_repair.py`
+- `backend/audio/macos_stream_alignment.py`
 - `swift/AudioCaptureHelper/Sources/main.swift`

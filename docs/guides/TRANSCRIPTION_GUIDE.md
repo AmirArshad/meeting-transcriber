@@ -12,7 +12,7 @@ This design keeps the recording pipeline reliable while still producing a single
 
 - Windows: `faster-whisper`
 - macOS Apple Silicon: `lightning-whisper-mlx`
-- Intel Mac development fallback: `faster-whisper` CPU path in `src/main.js`
+- Intel Mac development fallback: `faster-whisper` CPU path (selected via `getTranscriberModule` in `src/main-process/transcription-runtime-helpers.js`; packaged macOS builds are Apple Silicon only)
 
 ## Best Results
 

@@ -29,7 +29,7 @@ stderr logs still exist for human visibility during development and manual diagn
 ### Current Status
 
 - ✅ Structured `event`, `warning`, `error`, and `levels` messages are implemented in the active recorder contract
-- ✅ `src/main.js` parses recorder `stdout` line-by-line via `parseRecorderStdoutChunk(...)`
+- ✅ `src/main/recorder-service.js` parses recorder `stdout` line-by-line via `parseRecorderStdoutChunk(...)` (helpers in `src/main-process/recorder-output-helpers.js`)
 - ✅ Startup state no longer depends on brittle stderr string matching
 - ✅ `stderr` is debug-only and is not part of recorder control flow
 - ⚠️ Any change to recorder startup/progress behavior still requires coordinated updates across Electron, recorder scripts, and regression tests
@@ -43,14 +43,14 @@ const parsed = parseRecorderStdoutChunk(chunk, pendingBuffer)
 
 ### Failed recordings (`success: false`)
 
-When capture fails (for example no microphone audio), recorders emit a final stdout JSON object with `success: false`, a `code`, and a `message` instead of a file path. The main process uses `parseRecordingStopResult` in `src/main-process-helpers.js` to normalize that payload for the renderer.
+When capture fails (for example no microphone audio), recorders emit a final stdout JSON object with `success: false`, a `code`, and a `message` instead of a file path. `src/main/recorder-service.js` uses `parseRecordingStopResult` (from `src/main-process/recorder-output-helpers.js`, re-exported by `src/main-process-helpers.js`) to normalize that payload for the renderer.
 
-On success, final result keys remain platform-specific: Windows uses `audioPath`; macOS uses `outputPath`. Electron normalizes both to a single `audioPath` for the UI.
+On success, final result keys remain platform-specific by design: Windows uses `audioPath`; macOS uses `outputPath`. Electron normalizes both to a single `audioPath` for the UI.
 
 ### Known Issues
 
-1. **Cross-file coordination required**: recorder output changes still affect `backend/audio/*_recorder.py`, `src/main.js`, `src/main-process-helpers.js`, and tests
-2. **Final result keys remain platform-specific on the Python side** until both recorders are updated together; Electron already accepts both success shapes
+1. **Cross-file coordination required**: recorder output changes still affect `backend/audio/*_recorder.py`, `src/main/recorder-service.js`, `src/main-process/recorder-output-helpers.js` (and the `src/main-process-helpers.js` facade), and tests
+2. **Final result keys remain platform-specific on the Python side** (`audioPath` vs `outputPath`) — intentional; Electron accepts both. Do not unify casually without updating all call sites together.
 
 ## Direction
 
@@ -157,15 +157,19 @@ If you change recorder output behavior, update all of:
 
 - `backend/audio/windows_recorder.py`
 - `backend/audio/macos_recorder.py`
-- `src/main.js`
-- `src/main-process-helpers.js`
+- `backend/audio/recorder_stdout.py` (shared emitters)
+- `src/main/recorder-service.js`
+- `src/main-process/recorder-output-helpers.js` / `src/main-process-helpers.js`
 - `tests/js/main-process-helpers.test.js`
+- `tests/js/recorder-event-contract.test.js`
 
 ## Related Files
 
 - `backend/audio/windows_recorder.py` - Windows recorder implementation
 - `backend/audio/macos_recorder.py` - macOS recorder implementation
-- `src/main.js` - Electron main process (event parser)
+- `backend/audio/recorder_stdout.py` - shared structured stdout emitters
+- `src/main/recorder-service.js` - Electron recorder lifecycle and stdout parser
+- `src/main-process/recorder-output-helpers.js` - parse helpers (facade: `src/main-process-helpers.js`)
 - `docs/completed/json-based-events.md` - This document
 
 ## References

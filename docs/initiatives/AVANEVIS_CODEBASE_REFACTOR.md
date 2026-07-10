@@ -17,9 +17,11 @@ Key amendments from that review (details inline below):
 
 ## Context
 
-The codebase has accumulated several large orchestration files that are difficult to maintain safely:
+> **Historical baseline (pre-refactor).** The table below describes the hotspots *before* Phases 0–8. Post-refactor sizes (approx., 2026-07): `src/main.js` ~1.7k (composition root), `src/ai-addon-setup.js` ~94 (facade), `src/main-process-helpers.js` ~240 (facade), `backend/meeting_manager.py` ~900 (facade over `backend/meetings/`). Remaining soft-cap hotspot: `src/renderer/app.js` (~5k; Phase 2 controllers deferred). See Status above.
 
-| Area | Current hotspot | Main issue | Refactor risk |
+The codebase had accumulated several large orchestration files that were difficult to maintain safely:
+
+| Area | Pre-refactor hotspot | Main issue | Refactor risk |
 | --- | --- | --- | --- |
 | Renderer | `src/renderer/app.js` | UI state, recording, transcription, history, settings, AI add-ons, GPU controls, summaries, and updates are in one file. | High |
 | Main process | `src/main.js` | Electron lifecycle, IPC, Python process control, recorder/transcriber orchestration, AI queues, GPU setup, file export, updates, and meeting management are coupled. | High |
@@ -29,7 +31,7 @@ The codebase has accumulated several large orchestration files that are difficul
 | Recorders | `backend/audio/windows_recorder.py`, `backend/audio/macos_recorder.py`, `backend/audio/swift_audio_capture.py` | Platform-specific capture and post-processing are operationally sensitive and hardware-dependent. | High |
 | Transcribers | `backend/transcription/faster_whisper_transcriber.py`, `backend/transcription/mlx_whisper_transcriber.py` | Formatting, timestamp, cache, model, and CLI concerns overlap. | Medium |
 
-The goal is to reduce file size and coupling without changing user-visible behavior.
+The goal was to reduce file size and coupling without changing user-visible behavior.
 
 ## Goals
 
@@ -41,12 +43,14 @@ The goal is to reduce file size and coupling without changing user-visible behav
 
 ## Success Metrics
 
-These are objective, verifiable exit conditions for the initiative as a whole. "Easier to maintain" is otherwise unmeasurable, so each phase must move toward these targets, not away from them.
+These were the objective exit conditions for the initiative. Post-completion status:
 
-- No single source file exceeds 1,500 lines after its owning phase completes, **except** `src/renderer/app.js`, which may soft-cap at ~2,000 lines if helper extraction alone cannot reach 1,500 without a High-risk controller move. Current offenders: `src/main.js` (~5,074), `src/renderer/app.js` (~5,063), `src/ai-addon-setup.js` (~3,066), `src/main-process-helpers.js` (~1,729). Recorder and `backend/meeting_manager.py` files should trend down even where a hard 1,500 cap is impractical for hardware-sensitive loops.
-- No net loss of automated test coverage; every phase adds or preserves the characterization tests that gate it.
-- Zero changes to public IPC names, recorder stdout/stderr contracts, Python CLI/JSON outputs, meeting metadata shape, or AI add-on setup semantics, as enforced by the Phase Exit Checklist.
-- Every new JS entry file is covered by `node --check` (see Execution Rules) so syntax validation cannot silently drift.
+- **Met for extracted domains:** `src/main.js` (~1.7k composition root), `src/ai-addon-setup.js` (~94 facade), `src/main-process-helpers.js` (~240 facade) are under the 1,500-line hard cap after their owning phases.
+- **Accepted soft-cap:** `src/renderer/app.js` remains ~5k (Phase 2 controllers deferred; soft-cap was ~2,000 if helpers alone could not hit 1,500).
+- **Historical pre-refactor offenders** (for comparison only): `src/main.js` (~5,074), `src/renderer/app.js` (~5,063), `src/ai-addon-setup.js` (~3,066), `src/main-process-helpers.js` (~1,729).
+- No net loss of automated test coverage; characterization gates under `tests/js/` remain.
+- Zero intentional changes to public IPC names, recorder stdout/stderr contracts, Python CLI/JSON outputs, meeting metadata shape, or AI add-on setup semantics.
+- Every new JS entry file is covered by the Phase 0 `test:syntax` glob over `src/**/*.js`.
 
 ## Non-goals
 
@@ -89,7 +93,7 @@ These are objective, verifiable exit conditions for the initiative as a whole. "
 5. Keep script loading order explicit for renderer helper files.
 6. Run the validation gate listed for each phase before moving on.
 7. Update `todo.md` when a phase starts, completes, or is intentionally deferred.
-8. Convert `test:syntax` to a directory glob over `src/` and `src/renderer/` in **Phase 0** (before adding ~25 new files). Until that lands, every new JS entry file that is not exercised by `node --test` must still be added to the hardcoded chain in the same PR. The current list already misses `recording-state-helpers.js` and `update-notification-helpers.js` — the glob fixes that drift hazard.
+8. **Done (Phase 0):** Convert `test:syntax` to a directory glob over `src/` (`scripts/check-js-syntax.js`). Historical note: until that landed, every new JS entry file not exercised by `node --test` had to be added to a hardcoded chain; the glob removed that drift hazard.
 9. Renderer helpers attach to the global scope (for example `root.recordingStateHelpers = ...`). Every new renderer module must attach under a unique, descriptive global name, must not overwrite an existing global, and must be added to `src/renderer/index.html` before any file that consumes it. Enforce with a Phase 0/2 test that parses `index.html` for script order and unique globals.
 10. Each renderer/main split must keep `AGENTS.md` accurate. If a phase moves files referenced by the Architecture Map or changes any invariant, update `AGENTS.md` in the same PR — not only when an invariant changes.
 11. macOS manual smoke is scarce when developing on Windows. Batch Mac validation across phases that touch macOS paths (especially 3c and 7) rather than shipping Windows-only smoke for Swift-helper / one-sided-stereo / packaged-macOS concerns. Document which sub-steps are Windows-only-safe.

@@ -184,7 +184,7 @@ Add a helper in `src/main-process-helpers.js`, for example:
 function isRetryableCudaTranscriptionError(errorOutput) { ... }
 ```
 
-In `src/main.js`:
+In `src/main/transcription-service.js` (wired from the composition root in `src/main.js`):
 
 - Keep the existing `transcribe-audio` IPC surface.
 - Internally run `runTranscriptionProcess({ device: 'auto' })`.
@@ -351,7 +351,9 @@ Manual packaging smoke:
 ## Related Files
 
 - `backend/transcription/faster_whisper_transcriber.py`
-- `src/main.js`
+- `src/main/transcription-service.js`
+- `src/main/gpu-runtime-service.js`
+- `src/main.js` (composition root / quit drain)
 - `src/main-process-helpers.js`
 - `src/preload.js`
 - `src/renderer/app.js`

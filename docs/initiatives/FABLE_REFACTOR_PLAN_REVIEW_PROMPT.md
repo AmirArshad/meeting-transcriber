@@ -1,13 +1,15 @@
 Review the AvaNevis codebase refactor plan and approach. Be critical: look for missing risks, over-scoping, wrong phase order, weak gates, and places where “behavior-preserving extraction” is likely to fail in practice.
 
+> **Historical prompt (pre-merge).** Captured for the Fable review before Phase 0 on branch `refactor/codebase-phase-0`. The refactor is **complete** (2026-07-09); see `docs/initiatives/AVANEVIS_CODEBASE_REFACTOR.md` Status and root `todo.md`. Do not treat the branch/line-count context below as current.
+
 ## Context
-AvaNevis is a privacy-first Electron + Python desktop app (Windows + Apple Silicon macOS) for local meeting recording/transcription. Hotspots are huge orchestration files (~5k-line main.js / app.js, ~3k ai-addon-setup.js, ~1.7k main-process-helpers.js). We want safer maintainability without changing product behavior.
+AvaNevis is a privacy-first Electron + Python desktop app (Windows + Apple Silicon macOS) for local meeting recording/transcription. Hotspots *at review time* were huge orchestration files (~5k-line main.js / app.js, ~3k ai-addon-setup.js, ~1.7k main-process-helpers.js). We want safer maintainability without changing product behavior.
 
 We are on branch `refactor/codebase-phase-0`. Next intended work is Phase 0 characterization tests, then phased extractions. Multi-tool agent guidance is wired via root `AGENTS.md` (Cursor / OpenCode / Claude Code via thin `CLAUDE.md` `@AGENTS.md`).
 
 ## Primary docs to read
 1. `docs/initiatives/AVANEVIS_CODEBASE_REFACTOR.md` — full design (goals, non-goals, invariants, extraction patterns, Phases 0–8, exit checklist)
-2. `todo.md` — active sequencing under “Next: AvaNevis Codebase Refactor”
+2. `todo.md` — at review time, active sequencing under “Next: AvaNevis Codebase Refactor” (now marked complete; residual smoke debt remains)
 3. `AGENTS.md` — especially invariants for recorder stdout JSON, IPC, compute queue membership/timeouts, AI add-ons, meeting metadata, packaging
 
 Skim only as needed for risk judgment: `src/main.js`, `src/renderer/app.js`, `src/preload.js`, `src/main-process-helpers.js`, `src/ai-addon-setup.js`, `backend/meeting_manager.py`.

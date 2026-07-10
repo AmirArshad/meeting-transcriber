@@ -6,12 +6,13 @@ alwaysApply: false
 
 # Python backend
 
-- Invoked by Electron (`src/main.js`), not a long-running server. Dev: `PYTHONPATH` / packaged `python311._pth` includes `../backend`.
+- Invoked by Electron Pattern C services under `src/main/` (wired from `src/main.js`), not a long-running server. Dev: `PYTHONPATH` / packaged `python311._pth` includes `../backend`.
 - **Platform split:** `backend/audio/windows_recorder.py` vs `macos_recorder.py`; transcription: `faster_whisper_transcriber.py` vs `mlx_whisper_transcriber.py`.
-- **stdout JSON** drives recorder control (`levels`, `event`, `warning`, `error`); stderr is debug-only. See `recorder-stdout-contract.mdc`.
+- **stdout JSON** drives recorder control (`levels`, `event`, `warning`, `error`); stderr is debug-only. See `recorder-stdout-contract.mdc`. Shared emitters: `backend/audio/recorder_stdout.py`.
 - **Post-processing mix:** record mic + desktop separately; mix after stop at 48 kHz stereo, Opus via ffmpeg.
-- Meeting persistence: `backend/meeting_manager.py` — see `meeting-metadata.mdc`.
+- Meeting persistence: `backend/meeting_manager.py` + `backend/meetings/` — see `meeting-metadata.mdc`.
 - Diarization / summaries: `backend/diarization/**`, `backend/summaries/**` — see `local-ai-addons.mdc`.
+- Layout details: `docs/development/BACKEND.md`.
 
 Quick validation after edits:
 

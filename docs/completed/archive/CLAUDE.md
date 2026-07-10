@@ -2,6 +2,8 @@
 
 > **Archived 2026-05-18.** Historical snapshot only — not auto-loaded by any tool.
 >
+> **DO NOT USE for current architecture.** This archive predates the Phase 3 main-process service split (`src/main/*`), AI-addon facades, and Python `meetings/` extraction. File paths and “parse in `src/main.js`” guidance here are obsolete.
+>
 > **Canonical guide:** root [`AGENTS.md`](../../../AGENTS.md).
 > **Claude Code entry:** root [`CLAUDE.md`](../../../CLAUDE.md) (thin `@AGENTS.md` bridge).
 > Do not restore this archive to the repo root.

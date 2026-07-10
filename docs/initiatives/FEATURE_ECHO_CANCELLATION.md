@@ -26,7 +26,7 @@ Avoid calling post-processing "offline mode" to reduce confusion.
 ## Architecture constraints to preserve
 
 - Keep the current product invariant: mic and desktop are still recorded separately and mixed after stop.
-- Preserve structured recorder stdout JSON contracts consumed by `src/main.js`.
+- Preserve structured recorder stdout JSON contracts consumed by `src/main/recorder-service.js`.
 - Keep post-stop compression/transcription flows unchanged.
 
 ## Refined strategy (cross-platform)

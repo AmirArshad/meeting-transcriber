@@ -1,5 +1,7 @@
 # Feature: Speaker Diarization (Who Spoke When)
 
+> **Historical design doc.** Speaker diarization shipped as an optional local AI add-on. Implementation lives under `src/main/ai-addon-ipc.js`, `src/ai-addon-setup.js` / `src/ai-addon/`, `src/ai-addon-token-store.js`, and `backend/diarization/`. Do not treat “add handlers to `src/main.js`” sections below as the current layout — see root `AGENTS.md` and `docs/development/LOCAL_AI_MODEL_CATALOG.md`.
+
 ## Overview
 
 Add speaker identification to transcripts so users can see which person said what during meetings with multiple participants.

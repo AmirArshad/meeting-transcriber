@@ -126,9 +126,10 @@ The macOS build also signs and bundles the native `audiocapture-helper` Swift bi
 ### Test
 
 ```bash
-npm test            # JS regression suite + syntax checks (Node test runner)
-npm run test:python # Python regression suite (pytest via cross-platform wrapper)
-npm run test:all    # both
+npm test                 # JS regression suite + syntax checks (all src/**/*.js)
+npm run test:python      # Python regression suite (pytest via cross-platform wrapper)
+npm run test:python-syntax  # recursive compileall under backend/
+npm run test:all         # JS + Python tests + Python syntax (run before PRs)
 ```
 
 For recorder changes, also run the manual smoke checklist in `tests/manual/recording-smoke-checklist.md`.
@@ -198,7 +199,8 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
   - [Code review remediation (May 2026)](docs/completed/CODE_REVIEW_REMEDIATION_2026-05.md)
 - **Roadmap & features**
   - [Roadmap](docs/initiatives/ROADMAP.md)
-  - [AvaNevis codebase refactor](docs/initiatives/AVANEVIS_CODEBASE_REFACTOR.md)
+  - [AvaNevis codebase refactor](docs/initiatives/AVANEVIS_CODEBASE_REFACTOR.md) (complete — reference)
+  - [Adversarial review prompts](docs/development/ADVERSARIAL_REVIEW_PROMPTS.md)
   - [Acoustic echo cancellation](docs/initiatives/FEATURE_ECHO_CANCELLATION.md)
   - [Linux support](docs/initiatives/LINUX_SUPPORT.md)
   - [Speaker diarization](docs/completed/FEATURE_SPEAKER_DIARIZATION.md)
@@ -212,6 +214,7 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
 ## Roadmap (short version)
 
 **Shipped recently**
+- Codebase refactor (July 2026): main-process Pattern C services under `src/main/`, AI-addon and main-process helper facades, Python `meetings/` / shared recorder stdout helpers, characterization gates. Soft-cap accepted for `src/renderer/app.js`; see [AVANEVIS_CODEBASE_REFACTOR.md](docs/initiatives/AVANEVIS_CODEBASE_REFACTOR.md).
 - Security and reliability hardening (May 2026): IPC path guards, sensitive-text redaction, trusted update downloads, single GPU compute queue with wall-clock timeouts, recording lifecycle guards (`RECORDER_BUSY`, session-aware failures), recorder `success: false` results, summary sidecar staging, and expanded regression tests. See [docs/completed/CODE_REVIEW_REMEDIATION_2026-05.md](docs/completed/CODE_REVIEW_REMEDIATION_2026-05.md).
 - Optional local AI add-on foundations: Settings setup cards, pinned summary model/runtime catalog, secure diarization token storage, automatic post-transcription speaker labels when setup is ready, and user-triggered summary generation with History Transcript/Summary tabs.
 - Premium dark UI overhaul: vertical icon rail, top-bar pane, expressive dual-channel waveform with peak-hold and interpolation, custom rAF-driven audio scrubber, multi-select with bulk delete, sidebar search, relative-time meeting timestamps, developer console drawer.

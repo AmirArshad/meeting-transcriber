@@ -15,12 +15,12 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 - **Opus compression** — ~95% size reduction vs WAV (≈ 23 MB for a 40-minute meeting), with WAV fallback if ffmpeg fails or output verification fails.
 - **Model preloading** — improves first-time experience by warming the model in the background.
 - **Auto-aware updater** — checks GitHub Releases on launch and surfaces an in-app banner; clicking opens the release page in the user's browser.
-- **macOS feature parity** — full parity with Windows including 48 kHz / soxr VHQ resampling.
+- **macOS feature parity** — full parity with Windows including 48 kHz target sample rate (Windows uses soxr VHQ; macOS uses separate mix/align paths in `macos_recorder.py`).
 
 ### Audio quality
 
 - 48 kHz target sample rate end-to-end on both platforms.
-- soxr VHQ resampling everywhere it matters.
+- soxr VHQ resampling on Windows (`backend/audio/processor.py`); macOS uses separate mix/align paths (not soxr).
 - Gentle mic enhancement (DC-offset removal, light normalization). Desktop audio is left untouched.
 - Stereo output with per-channel processing.
 
@@ -49,11 +49,12 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 
 ### Historical milestones
 
+- **July 2026** — Codebase refactor complete (Phases 0–8 + 5B): Pattern C services under `src/main/`, AI-addon and main-process helper facades, Python `meetings/` package, shared `recorder_stdout.py`. Soft-cap accepted for `src/renderer/app.js`. See [AVANEVIS_CODEBASE_REFACTOR.md](AVANEVIS_CODEBASE_REFACTOR.md).
 - **May 2026** — Code review remediation merged to `master`: Phases 1–6 (security, recording lifecycle, local AI queue/timeouts, performance). Phase 7 backlog tracked in root `todo.md` and [TODO_ARCHIVE_2026-05-20_CODE_REVIEW_REMEDIATION.md](../completed/todo-archives/TODO_ARCHIVE_2026-05-20_CODE_REVIEW_REMEDIATION.md).
 - **v2.2.0** — Recording reliability and macOS desktop audio fixes in packaged builds, plus May 2026 security/stability remediation (lifecycle guards, path safety, compute queue timeouts, license notices in releases).
 - **v2.1.0** — Local AI add-on reliability hardening: setup/install resilience, cancellation/recovery improvements, offline/cache behavior tightening, and archive extraction performance/safety updates.
 - **v2.0.0** — AvaNevis rebrand and local AI add-ons delivered: optional speaker diarization, optional transcript summaries, History transcript/summary experience, and setup/validation flows.
-- **v1.7.0** — macOS support with Metal GPU acceleration, cross-platform 48 kHz / soxr VHQ parity, Intel Mac CPU fallback (`faster-whisper` int8), 100% feature parity across platforms.
+- **v1.7.0** — macOS support with Metal GPU acceleration, cross-platform 48 kHz parity (Windows soxr VHQ; macOS mix/align paths), Intel Mac CPU fallback (`faster-whisper` int8), 100% feature parity across platforms.
 - **v1.6.1** — Transcription reliability fixes, automatic meeting recovery via filesystem scan, Cantonese added to UI.
 - **v1.6.0** — Background recording stability for 60+ minute sessions, ~75% less CPU when minimized, Google-Meet-quality audio improvements.
 - Earlier — Combined Start/Stop/Transcribe button, audio visualizer first version, Opus compression, professional installer, model preloading.

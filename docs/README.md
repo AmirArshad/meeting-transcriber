@@ -20,7 +20,8 @@ This directory separates current guides, maintainer references, completed implem
 - [macOS icon notes](development/MACOS_ICONS.md)
 - [Local AI model catalog](development/LOCAL_AI_MODEL_CATALOG.md)
 - [Release compliance](development/RELEASE_COMPLIANCE.md)
-- [Dependabot triage](development/DEPENDABOT_TRIAGE.md)
+- [Adversarial review prompts](development/ADVERSARIAL_REVIEW_PROMPTS.md)
+- [Dependabot triage](development/DEPENDABOT_TRIAGE.md) (historical May 2026)
 
 ## Validation Checklists
 
@@ -36,14 +37,18 @@ This directory separates current guides, maintainer references, completed implem
 ## New Initiatives
 
 - [Roadmap](initiatives/ROADMAP.md)
-- [AvaNevis codebase refactor](initiatives/AVANEVIS_CODEBASE_REFACTOR.md)
 - [Acoustic echo cancellation](initiatives/FEATURE_ECHO_CANCELLATION.md)
 - [Linux support](initiatives/LINUX_SUPPORT.md)
 - [Audio setup wizard](initiatives/FEATURE_SETUP_WIZARD.md)
 - [macOS audio architecture improvements](initiatives/MACOS_AUDIO_ARCHITECTURE.md)
+
+## Completed Reference (kept under initiatives/)
+
+- [AvaNevis codebase refactor](initiatives/AVANEVIS_CODEBASE_REFACTOR.md) — **complete** (2026-07-09); design + phase history for maintainers
 
 ## Completed Work And Historical Notes
 
 - [Completed implementation docs](completed/)
 - [Completed audits](completed/audits/)
 - [Completed TODO archives](completed/todo-archives/)
+- [Dependabot triage (May 2026)](development/DEPENDABOT_TRIAGE.md) — historical; see root `todo.md` for current dependency hygiene

@@ -111,14 +111,14 @@ AvaNevis is a privacy-first Electron desktop app for recording microphone audio 
 ## End-to-End Flow
 
 1. Renderer calls `window.electronAPI` from `src/renderer/app.js`.
-2. `src/preload.js` forwards calls to `ipcMain.handle(...)` handlers in `src/main.js`.
-3. `src/main.js` spawns Python recorder/transcriber processes.
+2. `src/preload.js` forwards calls to `ipcMain.handle(...)` handlers. Most handlers live in Pattern C services under `src/main/` (wired from the composition root in `src/main.js`); a few platform/update channels remain registered directly in `src/main.js`.
+3. The owning service (for example `recorder-service.js`, `transcription-service.js`) spawns Python via `python-runtime.js`.
 4. Recorder emits:
    - JSON audio level events on stdout
    - structured recorder events/warnings/errors on stdout
    - human-readable debug logs on stderr
    - final JSON result on stdout when recording stops
-5. Electron parses those outputs, updates UI, then saves finished meetings through `backend/meeting_manager.py`.
+5. `src/main/recorder-service.js` parses those outputs (helpers in `src/main-process/recorder-output-helpers.js`), updates UI, then saves finished meetings through `backend/meeting_manager.py`.
 
 ## Critical Invariants
 
@@ -217,7 +217,7 @@ Whisper transcription caches are separate from diarization’s Hugging Face cach
 
 **Implementation map**
 
-- UI / spawn policy: `cacheContainsCompleteTranscriptionModel` and `buildTranscriptionRuntimeEnv` in `src/main-process-helpers.js`; `getTranscriptionRuntimeEnv` in `src/main.js`.
+- UI / spawn policy: `cacheContainsCompleteTranscriptionModel` and `buildTranscriptionRuntimeEnv` in `src/main-process-helpers.js`; `getTranscriptionRuntimeEnv` in `src/main/transcription-service.js`.
 - Python faster-whisper: `has_cached_faster_whisper_model`, `AVANEVIS_TRANSCRIPTION_HF_CACHE_DIR`, `AVANEVIS_TRANSCRIPTION_LOCAL_FILES_ONLY` in `backend/transcription/faster_whisper_transcriber.py`.
 - Python MLX: `_required_model_files_cached` in `backend/transcription/mlx_whisper_transcriber.py`.
 
@@ -237,7 +237,7 @@ If you change required cache files or env var names, update all of the files abo
 
 ### GPU compute serialization and timeouts
 
-Heavy local AI work runs through a single main-process compute queue (`aiComputeActionQueue` in `src/main.js`) so only one GPU-heavy job runs at a time.
+Heavy local AI work runs through a single main-process compute queue (`aiComputeActionQueue` from `src/main/ai-compute-queue.js`, instantiated in `src/main.js`) so only one GPU-heavy job runs at a time.
 
 **Handlers on the compute queue**
 
@@ -286,7 +286,7 @@ Validation remains user-triggered setup work, not automatic post-transcription b
 
 ### IPC surface
 
-If you rename or change an IPC handler in `src/main.js`, update `src/preload.js` and every renderer call site in `src/renderer/app.js`.
+If you rename or change an IPC handler in the owning `src/main/` service or in `src/main.js`, update `src/preload.js` and every renderer call site in `src/renderer/app.js`.
 
 ### Build packaging
 
@@ -349,9 +349,9 @@ If you change artifact naming in `package.json` or `.github/workflows/build-rele
 
 - Root `AGENTS.md` is the single source of truth for agent guidance. Root `CLAUDE.md` is a thin Claude Code bridge (`@AGENTS.md` only); keep it out of Cursor context via `.cursorignore`. Do not paste a full duplicate of this file into `CLAUDE.md`.
 - CI now includes backend tests, build/download-manifest tests, main-process and renderer helper JS tests, plus Windows/macOS packaged-build smoke checks, but it is still not full end-to-end product coverage.
-- Root `README.md` is broadly useful, but some product docs may still lag code changes.
+- Root `README.md` and `docs/development/` are kept aligned with the post-refactor layout; prefer this file for cross-process invariants when docs disagree.
 - `backend/meeting_manager.py` now uses locked atomic metadata writes, transactional add behavior, and corrupt-file backups.
-- `src/renderer/app.js` still has a TODO for saving transcripts through a file dialog.
+- Transcript Save As is shipped (`save-transcript-as` IPC via `src/main/file-export-ipc.js`); the renderer uses Electron's native save dialog for `.md` / `.txt` export.
 
 ## Commands That Reflect The Actual Repo
 
@@ -524,8 +524,9 @@ Update all of:
 
 ## Known Maintenance Hotspots
 
-- `src/main.js`: very large, many responsibilities, easy to regress via small output-contract changes
-- `src/renderer/app.js`: large stateful UI file with many implicit assumptions
+- `src/main.js`: composition root (~1.7k lines) for lifecycle, quit drain, tray, and service wiring — still easy to regress via quit/compute-queue or path-resolution changes
+- `src/renderer/app.js`: still the largest hotspot (~5k lines); UI state machine with many implicit assumptions (Phase 2 controller extraction deferred)
+- `src/main/recorder-service.js` / `transcription-service.js` / related services: own most IPC and subprocess orchestration after the Phase 3 split
 - `backend/audio/windows_recorder.py`: timing-sensitive, sample-rate-sensitive, callback-sensitive
 - `backend/audio/macos_recorder.py`: threading plus native helper integration plus permission edge cases
 - `build/prepare-resources.js`: packaging-critical and platform-specific

@@ -39,7 +39,7 @@ Windows: `py -3.11`; macOS: `python3.11`. Dev Python: repo `.venv` (auto-detecte
 
 | Rule | Triggers on |
 |------|-------------|
-| `recorder-stdout-contract` | Recorders, `src/main.js`, main-process helpers |
+| `recorder-stdout-contract` | Recorders, `src/main/recorder-service.js`, `src/main.js`, main-process helpers |
 | `electron-ipc` | Main, preload, renderer |
 | `transcription-model-cache` | Transcription cache / Whisper spawn env |
 | `local-ai-addons` | AI add-on catalog, diarization, summaries |
