@@ -185,6 +185,36 @@ test('behavioral: createAsyncActionQueue serializes work', async () => {
   assert.equal(q.hasPendingWork(), false);
 });
 
+test('behavioral: shared GPU resource queue prevents preload, runtime mutation, and compute overlap', async () => {
+  const computeQueue = createAsyncActionQueue();
+  const resourceQueue = createAsyncActionQueue();
+  const active = new Set();
+  const observed = [];
+
+  const runExclusive = (label, delayMs) => resourceQueue.enqueue(async () => {
+    active.add(label);
+    observed.push({ label, active: [...active] });
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    active.delete(label);
+  });
+  const enqueueCompute = (label) => computeQueue.enqueue(() => runExclusive(label, 5));
+
+  await Promise.all([
+    runExclusive('preload', 15),
+    runExclusive('gpu-runtime', 10),
+    enqueueCompute('transcription'),
+  ]);
+
+  assert.deepEqual(observed.map((entry) => entry.label), [
+    'preload',
+    'gpu-runtime',
+    'transcription',
+  ]);
+  assert.ok(observed.every((entry) => entry.active.length === 1));
+  assert.equal(resourceQueue.hasPendingWork(), false);
+  assert.equal(computeQueue.hasPendingWork(), false);
+});
+
 test('behavioral: waitForAiComputeQueueIdle times out and notifies onWaiting', async () => {
   const fakeQueue = createFakeQueue();
   const queue = createAiComputeQueue({

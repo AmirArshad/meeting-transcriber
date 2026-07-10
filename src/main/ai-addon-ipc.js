@@ -62,6 +62,12 @@ const { createAsyncActionQueue } = require('./ai-compute-queue');
  * @param {Function} deps.summarizeDiarizationError
  * @param {Function} deps.summarizeSummaryValidationError
  * @param {{ enqueue: Function, drain: Function, hasPendingWork: Function }} [deps.aiAddonActionQueue]
+ * @param {Function} [deps.hasInFlightGpuRuntimeAction]
+ * @param {Function} [deps.waitForGpuRuntimeIdle]
+ * @param {Function} [deps.hasPendingAiComputeWork]
+ * @param {Function} [deps.hasPendingGpuResourceWork]
+ * @param {Function} [deps.enqueueGpuExclusiveRemovalAction]
+ * @param {Function} [deps.isQuitCommitted]
  */
 function createAiAddonIpc(deps) {
   const {
@@ -82,6 +88,12 @@ function createAiAddonIpc(deps) {
     summarizeDiarizationError,
     summarizeSummaryValidationError,
     aiAddonActionQueue: injectedAiAddonActionQueue,
+    hasInFlightGpuRuntimeAction = () => false,
+    waitForGpuRuntimeIdle = async () => {},
+    hasPendingAiComputeWork = () => false,
+    hasPendingGpuResourceWork = () => false,
+    enqueueGpuExclusiveRemovalAction = (action) => action(),
+    isQuitCommitted = () => false,
   } = deps;
 
   // Single shared cache reference — never copy this let into a stale local.
@@ -212,6 +224,24 @@ function createAiAddonIpc(deps) {
     return options;
   }
 
+  function createRemovalBusyError(feature) {
+    const label = feature === 'summary' ? 'summary model' : 'speaker identification setup';
+    const error = new Error(`Wait for local AI work to finish before removing the ${label}.`);
+    error.code = 'AI_ADDON_REMOVE_COMPUTE_BUSY';
+    return error;
+  }
+
+  function assertRemovalCanRun(feature) {
+    if (isQuitCommitted()) {
+      const error = new Error('Cannot remove local AI files while the app is quitting.');
+      error.code = 'QUIT_IN_PROGRESS';
+      throw error;
+    }
+    if (hasPendingAiComputeWork() || hasPendingGpuResourceWork()) {
+      throw createRemovalBusyError(feature);
+    }
+  }
+
   function validateDiarizationRuntime({ modelRef, token, requiredDevice, cancelSignal }) {
     clearDiarizationDependencySitePackagesCache();
     const resolvedToken = token || getAiAddonToken({
@@ -223,7 +253,11 @@ function createAiAddonIpc(deps) {
     return createAbortableComputeAction({
       cancelSignal,
       cancelMessage: 'Speaker identification setup was canceled.',
-      action: () => runWallClockComputeAction({
+      action: async () => {
+        if (hasInFlightGpuRuntimeAction()) {
+          await waitForGpuRuntimeIdle();
+        }
+        return runWallClockComputeAction({
         timeoutMs: AI_COMPUTE_TIMEOUT_MS.addonValidation,
         label: 'Speaker identification validation',
         terminateProcess: terminateProcessBestEffort,
@@ -329,7 +363,8 @@ function createAiAddonIpc(deps) {
           });
           python.on('error', (error) => finish(reject, error));
         }),
-      }),
+        });
+      },
     });
   }
 
@@ -345,7 +380,11 @@ function createAiAddonIpc(deps) {
     return createAbortableComputeAction({
       cancelSignal,
       cancelMessage: 'Summary model setup was canceled.',
-      action: () => runWallClockComputeAction({
+      action: async () => {
+        if (hasInFlightGpuRuntimeAction()) {
+          await waitForGpuRuntimeIdle();
+        }
+        return runWallClockComputeAction({
         timeoutMs: AI_COMPUTE_TIMEOUT_MS.addonValidation,
         label: 'Summary model validation',
         terminateProcess: terminateProcessBestEffort,
@@ -407,7 +446,8 @@ function createAiAddonIpc(deps) {
           });
           python.on('error', (error) => finish(reject, error));
         }),
-      }),
+        });
+      },
     });
   }
 
@@ -503,13 +543,20 @@ function createAiAddonIpc(deps) {
       if (aiAddonSetupAbortControllers.has('diarization')) {
         throw new Error('Speaker identification setup is already running. Cancel it before removing setup.');
       }
+      assertRemovalCanRun('diarization');
 
-      return enqueueAiAddonAction(async () => {
-        try {
-          return await removeDiarizationSetup(getAiAddonRuntimeOptions());
-        } finally {
-          clearDiarizationDependencySitePackagesCache();
-        }
+      return enqueueAiAddonAction(() => {
+        // Re-check after earlier add-on setup work releases this queue slot.
+        // Do not wait behind compute: removals have no cancel UI and must not
+        // begin later during quit teardown.
+        assertRemovalCanRun('diarization');
+        return enqueueGpuExclusiveRemovalAction(async () => {
+          try {
+            return await removeDiarizationSetup(getAiAddonRuntimeOptions());
+          } finally {
+            clearDiarizationDependencySitePackagesCache();
+          }
+        });
       });
     });
 
@@ -548,10 +595,14 @@ function createAiAddonIpc(deps) {
       if (aiAddonSetupAbortControllers.has('summary')) {
         throw new Error('Summary model setup is already running. Cancel it before removing the model.');
       }
+      assertRemovalCanRun('summary');
 
-      return enqueueAiAddonAction(() => removeSummaryModel(getAiAddonRuntimeOptions({
-        modelId: options.modelId,
-      })));
+      return enqueueAiAddonAction(() => {
+        assertRemovalCanRun('summary');
+        return enqueueGpuExclusiveRemovalAction(() => removeSummaryModel(getAiAddonRuntimeOptions({
+          modelId: options.modelId,
+        })));
+      });
     });
   }
 

@@ -72,6 +72,7 @@ const {
  * @param {Function} deps.sanitizeTranscriptionError
  * @param {Function} deps.buildTranscriptionPlaceholderMarkdown
  * @param {Function} deps.formatDurationForTranscript
+ * @param {Function} [deps.enqueueGpuResourceAction]
  */
 function createTranscriptionService(deps) {
   const {
@@ -86,6 +87,7 @@ function createTranscriptionService(deps) {
     waitForAiComputeQueueIdle = async () => {},
     hasInFlightGpuRuntimeAction = () => false,
     waitForGpuRuntimeIdle = async () => {},
+    enqueueGpuResourceAction = (action) => action(),
     getCachedCudaStatus,
     resolveCudaStatusForTranscription = null,
     buildCudaRuntimeEnv,
@@ -424,7 +426,15 @@ function createTranscriptionService(deps) {
         throw new Error('Model download was canceled.');
       }
 
-      return new Promise((resolve, reject) => {
+      return enqueueGpuResourceAction(() => {
+        if (idleController.signal.aborted) {
+          throw new Error('Model download was canceled.');
+        }
+        return runWallClockComputeAction({
+        timeoutMs: AI_COMPUTE_TIMEOUT_MS.modelDownload,
+        label: 'Whisper model download',
+        terminateProcess: terminateProcessBestEffort,
+        action: (registerProcess) => new Promise((resolve, reject) => {
         console.log(`Downloading Whisper model: ${model}`);
 
         const downloadCheck = getTranscriptionModelDownloadCheck(model);
@@ -461,6 +471,7 @@ function createTranscriptionService(deps) {
         if (activeModelDownload && activeModelDownload.controller === idleController) {
           activeModelDownload.process = python;
         }
+        registerProcess(python);
 
         let hasError = false;
         const progressRedactor = createLineChunkRedactor();
@@ -514,6 +525,12 @@ function createTranscriptionService(deps) {
             ? new Error('Model download was canceled.')
             : error);
         });
+        }),
+        });
+      }).finally(() => {
+        if (activeModelDownload && activeModelDownload.controller === idleController) {
+          activeModelDownload = null;
+        }
       });
     });
 
@@ -664,6 +681,8 @@ function createTranscriptionService(deps) {
               ...getTranscriptionRuntimeEnv(modelSize, { includeManagedDiarization: true }),
               HF_TOKEN: '',
               HUGGINGFACE_HUB_TOKEN: '',
+              HUGGING_FACE_HUB_TOKEN: '',
+              HF_TOKEN_PATH: '',
             },
             finalTranscriptPath,
             tempTranscriptPath,
@@ -755,6 +774,8 @@ function createTranscriptionService(deps) {
                 ...buildCudaRuntimeEnv({}, { includeManagedDiarization: true }),
                 HF_TOKEN: '',
                 HUGGINGFACE_HUB_TOKEN: '',
+                HUGGING_FACE_HUB_TOKEN: '',
+                HF_TOKEN_PATH: '',
               },
             });
             registerProcess(python);
@@ -919,6 +940,8 @@ function createTranscriptionService(deps) {
                   ...getTranscriptionRuntimeEnv(normalizedModel, { includeManagedDiarization: true }),
                   HF_TOKEN: '',
                   HUGGINGFACE_HUB_TOKEN: '',
+                  HUGGING_FACE_HUB_TOKEN: '',
+                  HF_TOKEN_PATH: '',
                 },
                 finalTranscriptPath: transcriptPath,
                 tempTranscriptPath,

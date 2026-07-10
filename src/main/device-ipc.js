@@ -453,6 +453,7 @@ function createDeviceIpc(deps) {
             reject(new Error(`Python process exited with code ${code}: ${errorOutput}`));
           }
         });
+        python.on('error', reject);
       });
     });
 
@@ -489,6 +490,10 @@ function createDeviceIpc(deps) {
             console.log('Audio system warm-up completed (with error)');
             resolve({ success: true, deviceCount: 0 });
           }
+        });
+        python.on('error', () => {
+          console.log('Audio system warm-up completed (spawn error)');
+          resolve({ success: true, deviceCount: 0 });
         });
       });
     });

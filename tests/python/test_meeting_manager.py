@@ -923,6 +923,43 @@ def test_update_meeting_ai_merges_partial_feature_updates(tmp_path):
     assert meeting['ai']['summary']['error'] == 'later warning'
 
 
+def test_update_meeting_ai_clears_stale_diarization_path_on_terminal_error(tmp_path):
+    recordings_dir = tmp_path / 'recordings'
+    manager = MeetingManager(recordings_dir=str(recordings_dir))
+
+    audio_path = recordings_dir / 'meeting_20260107_104555.opus'
+    transcript_path = recordings_dir / 'meeting_20260107_104555.md'
+    speakers_path = recordings_dir / 'meeting_20260107_104555.speakers.json'
+    audio_path.write_bytes(b'audio')
+    transcript_path.write_text('transcript', encoding='utf-8')
+    speakers_path.write_text('{}', encoding='utf-8')
+    manager._save_meetings([{
+        'id': '20260107_104555',
+        'title': 'Meeting',
+        'date': '2026-01-07T10:45:55',
+        'duration': '0:05',
+        'durationSeconds': 5.0,
+        'audioPath': str(audio_path),
+        'transcriptPath': str(transcript_path),
+        'language': 'en',
+        'model': 'small',
+        'ai': {
+            'diarization': {
+                'status': 'completed',
+                'segmentsPath': str(speakers_path),
+            },
+        },
+    }])
+
+    meeting = manager.update_meeting_ai(
+        '20260107_104555',
+        diarization={'status': 'error', 'error': 'retry failed'},
+    )
+
+    assert meeting['ai']['diarization']['status'] == 'error'
+    assert meeting['ai']['diarization']['segmentsPath'] is None
+
+
 def test_get_meeting_falls_back_to_inline_transcript_when_file_is_missing(tmp_path):
     recordings_dir = tmp_path / 'recordings'
     manager = MeetingManager(recordings_dir=str(recordings_dir))

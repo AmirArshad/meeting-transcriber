@@ -93,6 +93,7 @@ test('AI_COMPUTE_TIMEOUT_MS pins diarization, guided transcription, summary, mee
   assert.equal(AI_COMPUTE_TIMEOUT_MS.summary, 90 * 60 * 1000);
   assert.equal(AI_COMPUTE_TIMEOUT_MS.meetingPreflight, 60 * 1000);
   assert.equal(AI_COMPUTE_TIMEOUT_MS.modelDownloadIdleWait, 15 * 60 * 1000);
+  assert.equal(AI_COMPUTE_TIMEOUT_MS.modelDownload, 30 * 60 * 1000);
   assert.equal(AI_COMPUTE_TIMEOUT_MS.gpuRuntimeComputeIdleWait, 15 * 60 * 1000);
   assert.equal(AI_COMPUTE_TIMEOUT_MS.addonValidation, 15 * 60 * 1000);
   assert.equal(AI_COMPUTE_TIMEOUT_MS.wallClockSettleGraceMs, 30 * 1000);
@@ -140,6 +141,40 @@ test('GPU runtime wait runs outside the wall-clock timer (inside enqueue)', () =
     /waitForGpuRuntimeBeforeCompute/,
     'GPU wait must not be charged against the transcription wall-clock budget',
   );
+});
+
+test('post-refactor GPU resource gate covers compute, preload, and GPU runtime actions', () => {
+  const combined = readCombinedMainProcessSource();
+  assert.match(
+    combined,
+    /enqueueGpuExclusiveComputeAction[\s\S]*gpuResourceActionQueue\.enqueue/,
+    'compute admission must share the GPU resource queue',
+  );
+
+  const downloadModel = extractIpcHandlerSource(combined, 'download-model');
+  assert.match(
+    downloadModel,
+    /enqueueGpuResourceAction/,
+    'Whisper preload must share the GPU resource queue',
+  );
+  assert.match(
+    combined,
+    /gpuRuntimeActionPromise\s*=\s*enqueueGpuResourceAction/,
+    'GPU runtime mutation must share the GPU resource queue',
+  );
+});
+
+test('destructive AI add-on removal reserves the shared GPU resource queue', () => {
+  const combined = readCombinedMainProcessSource();
+  for (const channel of ['remove-diarization-setup', 'remove-summary-model']) {
+    const handlerSource = extractIpcHandlerSource(combined, channel);
+    assert.ok(handlerSource, `missing ipcMain.handle for ${channel}`);
+    assert.match(
+      handlerSource,
+      /enqueueGpuExclusiveRemovalAction/,
+      `${channel} must reserve GPU resources before deleting files`,
+    );
+  }
 });
 
 test('Phase 3b behavioral fake-queue test supplements this source-scan', () => {

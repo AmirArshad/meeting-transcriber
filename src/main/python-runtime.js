@@ -163,13 +163,16 @@ function createPythonRuntime({ app, spawn, path, fs, dirname }) {
    * Python ignores the PYTHONPATH environment variable.
    */
   function spawnTrackedPython(args, options = {}) {
+    const usePosixProcessGroup = process.platform !== 'win32' && options.detached !== false;
     // Merge our environment with any options.env provided by caller
     const mergedOptions = {
       ...options,
+      detached: usePosixProcessGroup,
       env: buildPythonEnv(options.env || {})
     };
 
     const proc = spawn(pythonConfig.pythonExe, buildPythonProcessArgs(args), mergedOptions);
+    proc.avanevisProcessGroup = usePosixProcessGroup;
     activeProcesses.push(proc);
 
     // Auto-remove from tracking when process exits

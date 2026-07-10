@@ -672,6 +672,12 @@ class MeetingManager:
 
                 existing_feature = ai.get(feature) if isinstance(ai.get(feature), dict) else {}
                 normalized = self._normalize_ai_feature_metadata(feature, value)
+                if (
+                    feature == 'diarization'
+                    and normalized.get('status')
+                    and normalized.get('status') != 'completed'
+                ):
+                    normalized['segmentsPath'] = None
                 merged = {**existing_feature, **normalized}
                 if ai.get(feature) != merged:
                     ai[feature] = merged

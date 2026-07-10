@@ -43,6 +43,7 @@ const {
  * @param {Function} deps.getDiarizationDependencySitePackagesPath
  * @param {Function} [deps.waitForAiComputeQueueIdle]
  * @param {Function} [deps.hasPendingAiComputeWork]
+ * @param {Function} [deps.enqueueGpuResourceAction]
  */
 function createGpuRuntimeService(deps) {
   const {
@@ -61,6 +62,7 @@ function createGpuRuntimeService(deps) {
     getDiarizationDependencySitePackagesPath,
     waitForAiComputeQueueIdle = async () => {},
     hasPendingAiComputeWork = () => false,
+    enqueueGpuResourceAction = (action) => action(),
   } = deps;
 
   // Single shared CUDA status cache + GPU runtime lock. Never copy these lets
@@ -190,12 +192,12 @@ function createGpuRuntimeService(deps) {
       return Promise.reject(error);
     }
 
-    gpuRuntimeActionPromise = runWallClockComputeAction({
+    gpuRuntimeActionPromise = enqueueGpuResourceAction(() => runWallClockComputeAction({
       action: (registerProcess) => actionFn(registerProcess),
       timeoutMs: GPU_RUNTIME_ACTION_TIMEOUT_MS,
       label: 'GPU runtime setup',
       terminateProcess: terminateProcessBestEffort,
-    })
+    }))
       .finally(() => {
         gpuRuntimeActionPromise = null;
       });

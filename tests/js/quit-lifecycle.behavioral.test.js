@@ -496,6 +496,38 @@ test('F7: recorder finishing while forced-quit dialog is open still persists (no
   );
 });
 
+test('forced quit retires a recorder that did not stop before re-entering before-quit', async () => {
+  const liveCtx = createRecorderDeps({
+    dialog: {
+      showMessageBox: async () => ({ response: 1 }),
+    },
+    getRecordingStopTimeoutMs: () => 30,
+  });
+  const longProc = createLongLivedProcess();
+  liveCtx.deps.spawnTrackedPython = () => longProc;
+  liveCtx.deps.isQuitCommitted = () => false;
+
+  const liveService = createRecorderService(liveCtx.deps);
+  const handlers = {};
+  liveService.registerIpc({
+    handle(channel, handler) {
+      handlers[channel] = handler;
+    },
+  });
+  await startFakeRecording(liveService, handlers, longProc);
+
+  await liveService.handleQuitDuringRecording({
+    interceptQuit: true,
+    state: 'recording',
+    progressMessage: 'Stopping...',
+  });
+
+  assert.equal(longProc.killed, true);
+  assert.equal(liveService.getQuitInterceptInputs().hasRecordingProcess, false);
+  assert.equal(liveCtx.getAllowImmediateQuit(), true);
+  assert.equal(liveCtx.deps._quitCalled, true);
+});
+
 test('F3: start-recording rejects when quit is committed', async () => {
   const ctx = createRecorderDeps({
     isQuitCommitted: () => true,
@@ -514,6 +546,23 @@ test('F3: start-recording rejects when quit is committed', async () => {
   );
   assert.equal(result.success, false);
   assert.equal(result.code, 'QUIT_IN_PROGRESS');
+});
+
+test('start-recording rejects while filesystem recovery scan owns admission', async () => {
+  const ctx = createRecorderDeps({
+    isQuitCommitted: () => false,
+    isRecordingsScanInProgress: () => true,
+  });
+  const service = createRecorderService(ctx.deps);
+  const handlers = {};
+  service.registerIpc({ handle(channel, handler) { handlers[channel] = handler; } });
+
+  const result = await handlers['start-recording'](
+    { sender: {} },
+    { micId: 0, loopbackId: 1, isFirstRecording: false },
+  );
+  assert.equal(result.success, false);
+  assert.equal(result.code, 'RECORDING_SCAN_IN_PROGRESS');
 });
 
 test('F2: generate-summary enters metadata before update-ai; quit abort cannot kill it; sidecars survive', async () => {
@@ -576,8 +625,10 @@ test('F2: generate-summary enters metadata before update-ai; quit abort cannot k
         return proc;
       }
       setTimeout(() => {
-        fs.writeFileSync(outputJsonTemp, '{"ok":true}');
-        fs.writeFileSync(outputMarkdownTemp, '# Summary\n');
+        const outputJsonIndex = args.indexOf('--output-json');
+        const outputMarkdownIndex = args.indexOf('--output-markdown');
+        fs.writeFileSync(args[outputJsonIndex + 1], '{"ok":true}');
+        fs.writeFileSync(args[outputMarkdownIndex + 1], '# Summary\n');
         proc.stdout.emit('data', Buffer.from(JSON.stringify(summaryResult)));
         proc.emit('close', 0);
       }, 10);
@@ -587,7 +638,11 @@ test('F2: generate-summary enters metadata before update-ai; quit abort cannot k
     enqueueAiComputeAction: (action) => action(),
     createAiAddonCancelError: createAiAddonCancelErrorStandalone,
     getAiAddonRuntimeOptions: () => ({}),
-    buildSummaryArgs: () => ['-m', 'summaries.summary_runner'],
+    buildSummaryArgs: (options) => [
+      '-m', 'summaries.summary_runner',
+      '--output-json', options.outputJson,
+      '--output-markdown', options.outputMarkdown,
+    ],
     collectPythonProcessOutput: (python) => {
       let stdout = '';
       python.stdout.on('data', (data) => { stdout += data.toString(); });
@@ -658,9 +713,9 @@ test('F2: generate-summary enters metadata before update-ai; quit abort cannot k
   releaseUpdate();
   const result = await resultPromise;
 
-  assert.equal(result.jsonPath, outputJson);
-  assert.ok(fs.existsSync(outputJson), 'final summary json must exist after successful update-ai');
-  assert.ok(fs.existsSync(outputMarkdown), 'final summary md must exist after successful update-ai');
+  assert.match(result.jsonPath, /\.summary\.json$/);
+  assert.ok(fs.existsSync(result.jsonPath), 'final summary json must exist after successful update-ai');
+  assert.ok(fs.existsSync(result.markdownPath), 'final summary md must exist after successful update-ai');
 });
 
 test('F4: terminateNonAbortableQuitComputeJobs terminates tracked transcription jobs', async () => {

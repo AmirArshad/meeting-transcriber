@@ -252,6 +252,77 @@ test('mutating token, setup, cancel, and validate IPC channels assert trusted re
   assert.equal(trustedSenderCalls.length, mutatingChannels.length);
 });
 
+test('destructive add-on removal rejects immediately while compute is pending', async () => {
+  let removalAdmissionCalls = 0;
+  const { deps } = createValidationDeps({
+    hasPendingAiComputeWork: () => true,
+    enqueueGpuExclusiveRemovalAction: () => {
+      removalAdmissionCalls += 1;
+      return Promise.resolve();
+    },
+  });
+  const service = createAiAddonIpc(deps);
+  const handlers = new Map();
+  service.registerIpc({ handle(channel, handler) { handlers.set(channel, handler); } });
+
+  for (const channel of ['remove-diarization-setup', 'remove-summary-model']) {
+    await assert.rejects(
+      handlers.get(channel)({ sender: {} }, {}),
+      (error) => error && error.code === 'AI_ADDON_REMOVE_COMPUTE_BUSY',
+    );
+  }
+  assert.equal(removalAdmissionCalls, 0);
+  assert.equal(service.aiAddonActionQueue.hasPendingWork(), false);
+});
+
+test('queued destructive removal re-checks quit before deleting files', async () => {
+  let releaseAddonQueue;
+  let quitCommitted = false;
+  let removalAdmissionCalls = 0;
+  const { deps } = createValidationDeps({
+    isQuitCommitted: () => quitCommitted,
+    enqueueGpuExclusiveRemovalAction: (action) => {
+      removalAdmissionCalls += 1;
+      return action();
+    },
+  });
+  const service = createAiAddonIpc(deps);
+  const handlers = new Map();
+  service.registerIpc({ handle(channel, handler) { handlers.set(channel, handler); } });
+
+  const blocker = service.enqueueAiAddonAction(() => new Promise((resolve) => {
+    releaseAddonQueue = resolve;
+  }));
+  const removal = handlers.get('remove-summary-model')({ sender: {} }, {});
+  await new Promise((resolve) => setImmediate(resolve));
+  quitCommitted = true;
+  releaseAddonQueue();
+  await blocker;
+
+  await assert.rejects(removal, (error) => error && error.code === 'QUIT_IN_PROGRESS');
+  assert.equal(removalAdmissionCalls, 0);
+});
+
+test('destructive removal rejects while preload or GPU runtime owns resources', async () => {
+  let removalAdmissionCalls = 0;
+  const { deps } = createValidationDeps({
+    hasPendingGpuResourceWork: () => true,
+    enqueueGpuExclusiveRemovalAction: () => {
+      removalAdmissionCalls += 1;
+      return Promise.resolve();
+    },
+  });
+  const service = createAiAddonIpc(deps);
+  const handlers = new Map();
+  service.registerIpc({ handle(channel, handler) { handlers.set(channel, handler); } });
+
+  await assert.rejects(
+    handlers.get('remove-summary-model')({ sender: {} }, {}),
+    (error) => error && error.code === 'AI_ADDON_REMOVE_COMPUTE_BUSY',
+  );
+  assert.equal(removalAdmissionCalls, 0);
+});
+
 test('collectConfiguredDownloadHosts ignores licenseUrl and releaseUrl', () => {
   const hosts = collectConfiguredDownloadHosts({
     releaseUrl: 'https://evil-docs.example/releases',

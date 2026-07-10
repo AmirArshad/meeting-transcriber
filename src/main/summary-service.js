@@ -1,5 +1,7 @@
 'use strict';
 
+const pathModule = require('path');
+
 /**
  * Summary generation IPC service for the AvaNevis main process.
  *
@@ -24,6 +26,28 @@ const {
 const {
   getSummaryArtifactForPlatform: defaultGetSummaryArtifactForPlatform,
 } = require('../ai-addon-state');
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function isSameMeetingSummarySidecar({ filePath, recordingsDir, transcriptBase }) {
+  if (!filePath) {
+    return false;
+  }
+  const resolved = pathModule.resolve(String(filePath));
+  const relative = pathModule.relative(recordingsDir, resolved);
+  if (!relative || relative.startsWith('..') || pathModule.isAbsolute(relative) || relative.includes(pathModule.sep)) {
+    return false;
+  }
+
+  const transcriptStem = pathModule.basename(transcriptBase);
+  const basename = pathModule.basename(resolved);
+  const escapedStem = escapeRegExp(transcriptStem);
+  return basename === `${transcriptStem}.summary.json`
+    || basename === `${transcriptStem}.summary.md`
+    || new RegExp(`^${escapedStem}\\.\\d+-\\d+-\\d+\\.summary\\.(?:json|md)$`, 'i').test(basename);
+}
 
 /**
  * @param {object} deps
@@ -51,10 +75,13 @@ const {
  * @param {Function} [deps.getSummaryArtifactForPlatform]
  * @param {Function} [deps.getSummaryArtifactPath]
  * @param {Function} [deps.getSummaryRuntimeDir]
+ * @param {Function} [deps.hasInFlightGpuRuntimeAction]
+ * @param {Function} [deps.waitForGpuRuntimeIdle]
  */
 function createSummaryService(deps) {
   // Single shared reference — never duplicate this let in main.js.
   let activeSummaryGeneration = null;
+  let summaryAttemptCounter = 0;
 
   const {
     app,
@@ -81,6 +108,8 @@ function createSummaryService(deps) {
     getSummaryArtifactForPlatform = defaultGetSummaryArtifactForPlatform,
     getSummaryArtifactPath = defaultGetSummaryArtifactPath,
     getSummaryRuntimeDir = defaultGetSummaryRuntimeDir,
+    hasInFlightGpuRuntimeAction = () => false,
+    waitForGpuRuntimeIdle = async () => {},
   } = deps;
 
   async function removeSummarySidecarFiles(filePaths = []) {
@@ -281,11 +310,19 @@ function createSummaryService(deps) {
       }
 
       const transcriptBase = transcriptPath.replace(/\.md$/i, '');
-      const outputJson = `${transcriptBase}.summary.json`;
-      const outputMarkdown = `${transcriptBase}.summary.md`;
+      const attemptId = `${Date.now()}-${process.pid}-${++summaryAttemptCounter}`;
+      const outputJson = `${transcriptBase}.${attemptId}.summary.json`;
+      const outputMarkdown = `${transcriptBase}.${attemptId}.summary.md`;
       const outputJsonTemp = `${outputJson}.tmp`;
       const outputMarkdownTemp = `${outputMarkdown}.tmp`;
-      const speakerMetadataPath = meeting.ai && meeting.ai.diarization && meeting.ai.diarization.segmentsPath;
+      const previousSummaryMetadata = meeting.ai && meeting.ai.summary;
+      const previousSummaryPaths = previousSummaryMetadata
+        ? [previousSummaryMetadata.jsonPath, previousSummaryMetadata.markdownPath].filter(Boolean)
+        : [];
+      const diarizationMetadata = meeting.ai && meeting.ai.diarization;
+      const speakerMetadataPath = diarizationMetadata
+        && diarizationMetadata.status === 'completed'
+        && diarizationMetadata.segmentsPath;
       let speakersJsonPath;
       try {
         speakersJsonPath = speakerMetadataPath ? assertSafeExistingSegmentsPath(speakerMetadataPath) : null;
@@ -294,7 +331,16 @@ function createSummaryService(deps) {
         throw error;
       }
 
-      return enqueueAiComputeAction(() => runWallClockComputeAction({
+      return enqueueAiComputeAction(async () => {
+        if (hasInFlightGpuRuntimeAction()) {
+          sendToRenderer('summary-progress', {
+            feature: 'summary',
+            phase: 'waiting',
+            message: 'Waiting for GPU runtime setup to finish before generating the summary.',
+          });
+          await waitForGpuRuntimeIdle();
+        }
+        return runWallClockComputeAction({
         timeoutMs: AI_COMPUTE_TIMEOUT_MS.summary,
         label: 'Summary generation',
         terminateProcess: (proc) => {
@@ -372,26 +418,40 @@ function createSummaryService(deps) {
         });
 
         python.on('close', async (code) => {
-          const cleanupSummarySidecars = () => removeSummarySidecarFiles([
+          let metadataCommitted = false;
+          const cleanupTempFiles = () => removeSummarySidecarFiles([
+            outputJsonTemp,
+            outputMarkdownTemp,
+          ]);
+          const cleanupAttemptFiles = () => removeSummarySidecarFiles([
             outputJsonTemp,
             outputMarkdownTemp,
             outputJson,
             outputMarkdown,
           ]);
+          const installFinalSidecars = async () => {
+            try {
+              await fs.promises.rename(outputJsonTemp, outputJson);
+              await fs.promises.rename(outputMarkdownTemp, outputMarkdown);
+            } catch (error) {
+              await cleanupAttemptFiles();
+              throw error;
+            }
+          };
 
           try {
             if (controller.signal.aborted) {
-              await cleanupSummarySidecars();
+              await cleanupAttemptFiles();
               finish(reject, createAiAddonCancelError('Summary generation was canceled.'));
               return;
             }
             if (stdoutOverflow.overflowed) {
-              await cleanupSummarySidecars();
+              await cleanupAttemptFiles();
               finish(reject, new Error('Summary generation output exceeded the maximum allowed size.'));
               return;
             }
             if (code !== 0) {
-              await cleanupSummarySidecars();
+              await cleanupAttemptFiles();
               finish(reject, new Error(summarizeSummaryValidationError(errorOutput)));
               return;
             }
@@ -409,23 +469,17 @@ function createSummaryService(deps) {
             }
 
             if (controller.signal.aborted) {
-              await cleanupSummarySidecars();
+              await cleanupAttemptFiles();
               finish(reject, createAiAddonCancelError('Summary generation was canceled.'));
               return;
             }
 
-            await fs.promises.rename(outputJsonTemp, outputJson);
-            try {
-              await fs.promises.rename(outputMarkdownTemp, outputMarkdown);
-            } catch (renameError) {
-              await cleanupSummarySidecars();
-              throw renameError;
-            }
+            await installFinalSidecars();
 
             // Bail before spawning update-ai if cancel landed after renames.
             // Sidecars exist on disk; meetings.json is still untouched.
             if (controller.signal.aborted) {
-              await cleanupSummarySidecars();
+              await cleanupAttemptFiles();
               finish(reject, createAiAddonCancelError('Summary generation was canceled.'));
               return;
             }
@@ -464,15 +518,22 @@ function createSummaryService(deps) {
               pythonUpdate.on('close', (updateCode) => {
                 // Once update-ai exits 0, meetings.json already references the
                 // sidecars — never treat a late abort as failure that deletes them.
-                if (metadataStdoutOverflow.overflowed) {
-                  metadataReject(new Error('Summary metadata update output exceeded the maximum allowed size.'));
-                  return;
-                }
                 if (updateCode === 0) {
+                  metadataCommitted = true;
+                  if (metadataStdoutOverflow.overflowed) {
+                    metadataResolve({
+                      ...meeting,
+                      ai: { ...(meeting.ai || {}), summary: summaryMetadata },
+                    });
+                    return;
+                  }
                   try {
                     metadataResolve(JSON.parse(metadataOutput));
                   } catch (error) {
-                    metadataReject(new Error(`Failed to parse summary metadata update: ${error.message}`));
+                    metadataResolve({
+                      ...meeting,
+                      ai: { ...(meeting.ai || {}), summary: summaryMetadata },
+                    });
                   }
                   return;
                 }
@@ -491,6 +552,40 @@ function createSummaryService(deps) {
               });
             });
 
+            const recordingsDir = path.join(app.getPath('userData'), 'recordings');
+            const currentMeeting = updatedMeeting && typeof updatedMeeting === 'object'
+              ? updatedMeeting
+              : meeting;
+            const referencedSummary = currentMeeting.ai && currentMeeting.ai.summary;
+            const keepPaths = new Set([
+              outputJson,
+              outputMarkdown,
+              referencedSummary && referencedSummary.jsonPath,
+              referencedSummary && referencedSummary.markdownPath,
+            ].filter(Boolean).map((filePath) => path.resolve(String(filePath))));
+            const sameMeetingCandidates = new Set(
+              previousSummaryPaths
+                .filter((filePath) => isSameMeetingSummarySidecar({ filePath, recordingsDir, transcriptBase }))
+                .map((filePath) => path.resolve(String(filePath))),
+            );
+            try {
+              const entries = await fs.promises.readdir(recordingsDir, { withFileTypes: true });
+              for (const entry of entries) {
+                if (!entry.isFile()) {
+                  continue;
+                }
+                const candidate = path.join(recordingsDir, entry.name);
+                if (isSameMeetingSummarySidecar({ filePath: candidate, recordingsDir, transcriptBase })) {
+                  sameMeetingCandidates.add(path.resolve(candidate));
+                }
+              }
+            } catch (error) {
+              if (!error || error.code !== 'ENOENT') {
+                console.warn('Could not scan for orphaned summary sidecars:', error.message);
+              }
+            }
+            await removeSummarySidecarFiles([...sameMeetingCandidates].filter((filePath) => !keepPaths.has(filePath)));
+
             finish(resolve, {
               ...result,
               jsonPath: outputJson,
@@ -498,7 +593,9 @@ function createSummaryService(deps) {
               meeting: updatedMeeting,
             });
           } catch (error) {
-            await cleanupSummarySidecars();
+            await (metadataCommitted ? cleanupTempFiles() : cleanupAttemptFiles());
+            // After update-ai exits 0, metadata references this attempt's unique
+            // paths. Never remove those files because of a later parse/cleanup error.
             finish(reject, error);
           }
         });
@@ -510,12 +607,11 @@ function createSummaryService(deps) {
           await removeSummarySidecarFiles([
             outputJsonTemp,
             outputMarkdownTemp,
-            outputJson,
-            outputMarkdown,
           ]);
           finish(reject, controller.signal.aborted ? createAiAddonCancelError('Summary generation was canceled.') : error);
         });
       }),
+        });
       }).catch((error) => {
         // Metadata-phase terminate is skipped so a hung update-ai can outlive the
         // wall-clock reject + settle grace. finish() never runs in that case and
@@ -525,7 +621,7 @@ function createSummaryService(deps) {
           activeSummaryGeneration = null;
         }
         throw error;
-      }));
+      });
     });
 
     ipcMain.handle('cancel-summary-generation', async (event, options = {}) => {
@@ -581,4 +677,8 @@ function registerSummaryService(ipcMain, deps) {
   return service;
 }
 
-module.exports = { createSummaryService, registerSummaryService };
+module.exports = {
+  createSummaryService,
+  registerSummaryService,
+  isSameMeetingSummarySidecar,
+};

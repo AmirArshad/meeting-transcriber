@@ -69,6 +69,36 @@ function collectProcessesToKillOnQuit(activeProcesses = [], protectedProcess = n
   return activeProcesses.filter((proc) => shouldKillProcessOnQuit(proc, protectedProcess));
 }
 
+/** Signal a spawned Python process and its POSIX descendants when it owns a group. */
+function signalProcessTree(proc, signal = 'SIGTERM', killProcess = process.kill) {
+  if (!proc || typeof proc.kill !== 'function') {
+    return false;
+  }
+
+  if (proc.avanevisProcessGroup === true && Number.isInteger(proc.pid) && proc.pid > 0) {
+    try {
+      killProcess(-proc.pid, signal);
+      return true;
+    } catch (error) {
+      // The group may already be gone while the direct child handle is still live.
+    }
+  }
+
+  return proc.kill(signal);
+}
+
+function signalOwnedProcessGroup(proc, signal = 'SIGKILL', killProcess = process.kill) {
+  if (!proc || proc.avanevisProcessGroup !== true || !Number.isInteger(proc.pid) || proc.pid <= 0) {
+    return false;
+  }
+  try {
+    killProcess(-proc.pid, signal);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
 /**
  * Dispatch a resolved before-quit action to injected handlers.
  * Keeps `app.on('before-quit')` thin and lets tests assert wiring without Electron.
@@ -94,5 +124,7 @@ module.exports = {
   resolveBeforeQuitAction,
   shouldKillProcessOnQuit,
   collectProcessesToKillOnQuit,
+  signalProcessTree,
+  signalOwnedProcessGroup,
   dispatchBeforeQuitAction,
 };

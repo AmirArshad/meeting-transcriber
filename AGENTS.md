@@ -224,7 +224,7 @@ Whisper transcription caches are separate from diarization’s Hugging Face cach
 **Offline behavior**
 
 - Enable HF offline / `local_files_only` only when the cache is **complete** (main sets `AVANEVIS_TRANSCRIPTION_LOCAL_FILES_ONLY=1`; Python may also auto-detect).
-- Model download / `--preload` must keep `modelCached: false` so incomplete caches can still download.
+- Model download / `--preload` must keep `modelCached: false` so incomplete caches can still download. Preload remains off the compute queue, but shares the composition-root `gpuResourceActionQueue` with admitted compute and GPU package mutation so model loading cannot overlap inference or pip DLL changes.
 - Diarization loads pyannote with `local_files_only=True`; summary generation uses `buildHuggingFaceOfflineEnv()` when artifacts are installed.
 
 **Windows CUDA runtime profile**
@@ -250,7 +250,7 @@ Heavy local AI work runs through a single main-process compute queue (`aiCompute
 
 - Whisper model download / preload (`download-model`) — stays **off** the compute queue (must not enqueue), but waits for the compute queue to go idle first (bounded by `AI_COMPUTE_TIMEOUT_MS.modelDownloadIdleWait`) to avoid VRAM contention with transcription/diarization/summary; do not merge downloads onto the compute queue. `cancel-download-model` aborts an in-flight preload (including the idle wait). Non-zero preload exits must re-check cache completeness before reporting success.
 - AI add-on setup downloads (`aiAddonActionQueue`) — separate serialization from compute.
-- GPU runtime install/repair/uninstall (`gpuRuntimeActionPromise`) — separate lock from the compute queue, but **mutually exclusive with active compute**: `runGpuRuntimeAction` waits for compute-queue idle (bounded by `AI_COMPUTE_TIMEOUT_MS.gpuRuntimeComputeIdleWait`) before pip, and transcription/diarization/guided jobs wait for `waitForGpuRuntimeIdle()` before spawning so pip cannot race loaded CUDA DLLs. The GPU wait runs **inside the enqueued closure but outside** `runWallClockComputeAction`, so a long pip install cannot burn a tiny/base transcription budget.
+- GPU runtime install/repair/uninstall (`gpuRuntimeActionPromise`) — separate lock from the compute queue, but **mutually exclusive with active compute and Whisper preload** through the composition-root `gpuResourceActionQueue`: `runGpuRuntimeAction` waits for compute-queue idle (bounded by `AI_COMPUTE_TIMEOUT_MS.gpuRuntimeComputeIdleWait`) before pip, and admitted compute/preload/runtime actions serialize on the resource queue so pip cannot race loaded CUDA DLLs. The GPU wait runs **inside the enqueued closure but outside** `runWallClockComputeAction`, so a long pip install cannot burn a tiny/base transcription budget. Destructive AI add-on removal rejects while compute/preload/runtime work is pending, then synchronously reserves the same resource queue before deleting files; it must not wait unbounded behind active work or begin later during quit teardown.
 
 **Wall-clock timeouts**
 
@@ -262,6 +262,7 @@ Each enqueued compute job is wrapped with `runWallClockComputeAction` in `src/ma
 - Summary generation: 90 minutes (`AI_COMPUTE_TIMEOUT_MS.summary`); wall-clock terminate skips the child while `activeSummaryGeneration.phase === 'metadata'` (same exemption as quit). If the outer wall clock still rejects during metadata (hung `update-ai`), clear `activeSummaryGeneration` so later generates are not sticky-locked — sidecars are already committed; never delete them.
 - Meeting lookup preflight (`retry-transcription`): 60 seconds (`AI_COMPUTE_TIMEOUT_MS.meetingPreflight`)
 - Whisper `download-model` idle wait (off-queue): 15 minutes (`AI_COMPUTE_TIMEOUT_MS.modelDownloadIdleWait`)
+- Whisper model preload after admission: 30 minutes (`AI_COMPUTE_TIMEOUT_MS.modelDownload`); slow large-model downloads may need retrying, and partial Hugging Face cache downloads remain resumable.
 - GPU runtime vs compute idle wait: 15 minutes (`AI_COMPUTE_TIMEOUT_MS.gpuRuntimeComputeIdleWait`)
 - Add-on setup validation (diarization / summary smoke): 15 minutes (`AI_COMPUTE_TIMEOUT_MS.addonValidation`)
 
@@ -335,6 +336,7 @@ If you touch the helper pipeline, verify:
 - codesign/entitlement steps still happen
 - `electron-builder` still bundles and signs `Contents/Resources/bin/audiocapture-helper`
 - a packaged macOS recording with active Chrome/system audio captures desktop audio and reports `helperCaptureBackend=coreaudio_tap` on macOS 14.2+
+- packaged macOS microphone/System Audio Recording permission attribution remains correct with Python recorder children running as POSIX process-group leaders
 - browser/YouTube speech appears in the transcript, not only in the desktop audio meter or saved stereo channel
 
 ### Release asset naming

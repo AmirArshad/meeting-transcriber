@@ -304,3 +304,15 @@ test('Phase 0.1 scan roots include main.js and survive a future src/main/ tree',
   const combined = readCombinedMainProcessSource();
   assert.match(combined, /\/\* FILE: src\/main\.js \*\//);
 });
+
+test('main.js Python spawn sites consume asynchronous child errors', () => {
+  const source = readUtf8(path.join(ROOT, 'src', 'main.js'));
+  const permissionFunction = source.match(/function checkMacOSPermissions\(\)[\s\S]*?\n\}/);
+  assert.ok(permissionFunction, 'expected checkMacOSPermissions function');
+  assert.match(permissionFunction[0], /proc\.on\(['"]error['"]/);
+
+  const systemInfoHandler = source.match(/ipcMain\.handle\(['"]get-system-info['"][\s\S]*?\n\}\);/);
+  assert.ok(systemInfoHandler, 'expected get-system-info handler');
+  assert.match(systemInfoHandler[0], /python\.on\(['"]error['"]/);
+  assert.match(systemInfoHandler[0], /python:\s*version/);
+});

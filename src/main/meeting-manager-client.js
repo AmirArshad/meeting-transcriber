@@ -24,8 +24,12 @@
  * @param {Function} deps.assertSafeExistingRecordingAudioPath
  * @param {Function} deps.assertSafeExistingTranscriptPath
  * @param {Function} deps.validateAiMetadataPaths
+ * @param {Function} [deps.isRecorderBusy]
+ * @param {Function} [deps.terminateProcessBestEffort]
+ * @param {number} [deps.recordingsScanTimeoutMs]
  */
 function createMeetingManagerClient(deps) {
+  let recordingsScanInProgress = false;
   const {
     app,
     path,
@@ -40,6 +44,9 @@ function createMeetingManagerClient(deps) {
     assertSafeExistingRecordingAudioPath,
     assertSafeExistingTranscriptPath,
     validateAiMetadataPaths,
+    isRecorderBusy = () => false,
+    terminateProcessBestEffort = async (proc) => proc.kill(),
+    recordingsScanTimeoutMs = 60 * 1000,
   } = deps;
 
   function addMeetingToHistory(meetingData) {
@@ -102,6 +109,10 @@ function createMeetingManagerClient(deps) {
 
       python.on('error', reject);
     });
+  }
+
+  function isRecordingsScanInProgress() {
+    return recordingsScanInProgress;
   }
 
   function registerIpc(ipcMain) {
@@ -174,6 +185,7 @@ function createMeetingManagerClient(deps) {
             reject(new Error(errorMsg));
           }
         });
+        python.on('error', reject);
       });
     });
 
@@ -217,7 +229,30 @@ function createMeetingManagerClient(deps) {
      * Scan recordings directory and sync with database
      */
     ipcMain.handle('scan-recordings', async () => {
+      if (isRecorderBusy()) {
+        const error = new Error('Recording recovery scan is unavailable while a recording is active or being saved.');
+        error.code = 'RECORDING_IN_PROGRESS';
+        throw error;
+      }
+      if (recordingsScanInProgress) {
+        const error = new Error('Recording recovery scan is already running.');
+        error.code = 'RECORDING_SCAN_IN_PROGRESS';
+        throw error;
+      }
+      recordingsScanInProgress = true;
       return new Promise((resolve, reject) => {
+        let settled = false;
+        let scanTimeout = null;
+        const finish = (callback, value) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          if (scanTimeout) {
+            clearTimeout(scanTimeout);
+          }
+          callback(value);
+        };
         const recordingsDir = path.join(app.getPath('userData'), 'recordings');
         const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
           '--recordings-dir', recordingsDir,
@@ -230,24 +265,31 @@ function createMeetingManagerClient(deps) {
           try {
             processOutput.assertStdoutWithinLimit();
           } catch (error) {
-            reject(error);
+            finish(reject, error);
             return;
           }
 
           if (code === 0) {
             try {
               const result = JSON.parse(processOutput.getStdout());
-              resolve(result);
+              finish(resolve, result);
             } catch (e) {
-              reject(new Error(`Failed to parse scan result: ${e.message}`));
+              finish(reject, new Error(`Failed to parse scan result: ${e.message}`));
             }
           } else {
             const errorMsg = processOutput.getStderr().trim() || 'Unknown error';
-            reject(new Error(`Failed to scan recordings: ${errorMsg}`));
+            finish(reject, new Error(`Failed to scan recordings: ${errorMsg}`));
           }
         });
 
-        python.on('error', reject);
+        python.on('error', (error) => finish(reject, error));
+        scanTimeout = setTimeout(async () => {
+          await terminateProcessBestEffort(python);
+          finish(reject, new Error('Recording recovery scan timed out.'));
+        }, recordingsScanTimeoutMs);
+        scanTimeout.unref?.();
+      }).finally(() => {
+        recordingsScanInProgress = false;
       });
     });
 
@@ -376,7 +418,7 @@ function createMeetingManagerClient(deps) {
     });
   }
 
-  return { addMeetingToHistory, registerIpc };
+  return { addMeetingToHistory, isRecordingsScanInProgress, registerIpc };
 }
 
 /**

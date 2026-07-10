@@ -78,6 +78,7 @@ const {
   collectProcessesToKillOnQuit,
   dispatchBeforeQuitAction,
 } = require('./main-process-helpers');
+const { signalProcessTree, signalOwnedProcessGroup } = require('./main-process/quit-lifecycle-helpers');
 const { checkForUpdates, openDownloadPage } = require('./updater');
 const {
   checkAiAddonSetupStatus,
@@ -94,6 +95,7 @@ const { registerMeetingManagerClient } = require('./main/meeting-manager-client'
 const { registerDeviceIpc } = require('./main/device-ipc');
 const { registerFileExportIpc } = require('./main/file-export-ipc');
 const {
+  createAsyncActionQueue,
   createAiComputeQueue,
 } = require('./main/ai-compute-queue');
 const { createGpuRuntimeService } = require('./main/gpu-runtime-service');
@@ -148,6 +150,44 @@ const {
   createAbortableComputeAction,
   waitForAiComputeQueueIdle,
 } = aiComputeQueue;
+// Model preload and GPU package mutation both touch CUDA/loaded model state but
+// deliberately stay outside the compute queue. Serialize only those resource
+// actions so neither can begin while the other is active.
+const gpuResourceActionQueue = createAsyncActionQueue();
+const enqueueGpuExclusiveComputeAction = (action) => (
+  enqueueAiComputeAction(() => gpuResourceActionQueue.enqueue(action))
+);
+const createGpuExclusiveAbortableComputeAction = ({ cancelSignal, cancelMessage, action }) => (
+  waitForAiComputeQueueIdle({ cancelSignal, cancelMessage })
+    .then(() => {
+      if (cancelSignal && cancelSignal.aborted) {
+        throw createAiAddonCancelErrorStandalone(cancelMessage);
+      }
+      return enqueueGpuExclusiveComputeAction(action);
+    })
+);
+const enqueueGpuExclusiveRemovalAction = (action) => {
+  if (quitCommitted) {
+    const error = new Error('Cannot remove local AI files while the app is quitting.');
+    error.code = 'QUIT_IN_PROGRESS';
+    throw error;
+  }
+  if (aiComputeActionQueue.hasPendingWork() || gpuResourceActionQueue.hasPendingWork()) {
+    const error = new Error('Wait for local AI work to finish before removing local AI files.');
+    error.code = 'AI_ADDON_REMOVE_COMPUTE_BUSY';
+    throw error;
+  }
+  // Reserve the resource queue synchronously. New compute/preload/runtime work
+  // queues behind this deletion instead of racing files that are being removed.
+  return gpuResourceActionQueue.enqueue(() => {
+    if (quitCommitted) {
+      const error = new Error('Cannot remove local AI files while the app is quitting.');
+      error.code = 'QUIT_IN_PROGRESS';
+      throw error;
+    }
+    return action();
+  });
+};
 
 function getSafeStorage() {
   // On macOS, Electron safeStorage can prompt Keychain access. Keep this lazy
@@ -446,8 +486,13 @@ const meetingManagerClient = registerMeetingManagerClient(ipcMain, {
   assertSafeExistingRecordingAudioPath,
   assertSafeExistingTranscriptPath,
   validateAiMetadataPaths,
+  terminateProcessBestEffort,
+  isRecorderBusy: () => {
+    const state = recorderService && recorderService.getQuitInterceptInputs();
+    return Boolean(state && (state.hasRecordingProcess || state.stopInProgress));
+  },
 });
-const { addMeetingToHistory } = meetingManagerClient;
+const { addMeetingToHistory, isRecordingsScanInProgress } = meetingManagerClient;
 
 const deviceIpc = registerDeviceIpc(ipcMain, {
   app,
@@ -509,6 +554,7 @@ gpuRuntimeService = createGpuRuntimeService({
   getDiarizationDependencySitePackagesPath,
   waitForAiComputeQueueIdle,
   hasPendingAiComputeWork: () => aiComputeActionQueue.hasPendingWork(),
+  enqueueGpuResourceAction: gpuResourceActionQueue.enqueue,
 });
 gpuRuntimeService.registerIpc(ipcMain);
 const {
@@ -528,12 +574,22 @@ aiAddonIpc = createAiAddonIpc({
   getSafeStorage,
   assertTrustedRendererSender,
   buildCudaRuntimeEnv,
-  createAbortableComputeAction,
+  createAbortableComputeAction: createGpuExclusiveAbortableComputeAction,
   terminateProcessBestEffort,
   buildManagedDiarizationValidationArgs,
   buildSummaryArgs,
   summarizeDiarizationError,
   summarizeSummaryValidationError,
+  hasInFlightGpuRuntimeAction: () => (
+    gpuRuntimeService ? gpuRuntimeService.hasInFlightGpuRuntimeAction() : false
+  ),
+  waitForGpuRuntimeIdle: () => (
+    gpuRuntimeService ? gpuRuntimeService.waitForGpuRuntimeIdle() : Promise.resolve()
+  ),
+  hasPendingAiComputeWork: () => aiComputeActionQueue.hasPendingWork(),
+  hasPendingGpuResourceWork: () => gpuResourceActionQueue.hasPendingWork(),
+  enqueueGpuExclusiveRemovalAction,
+  isQuitCommitted,
 });
 aiAddonIpc.registerIpc(ipcMain);
 const {
@@ -554,7 +610,7 @@ transcriptionService = createTranscriptionService({
   pythonConfig,
   spawnTrackedPython,
   getBackendModuleArgs,
-  enqueueAiComputeAction,
+  enqueueAiComputeAction: enqueueGpuExclusiveComputeAction,
   waitForAiComputeQueueIdle,
   hasInFlightGpuRuntimeAction: () => (
     gpuRuntimeService ? gpuRuntimeService.hasInFlightGpuRuntimeAction() : false
@@ -562,6 +618,7 @@ transcriptionService = createTranscriptionService({
   waitForGpuRuntimeIdle: () => (
     gpuRuntimeService ? gpuRuntimeService.waitForGpuRuntimeIdle() : Promise.resolve()
   ),
+  enqueueGpuResourceAction: gpuResourceActionQueue.enqueue,
   getCachedCudaStatus,
   resolveCudaStatusForTranscription,
   buildCudaRuntimeEnv,
@@ -597,7 +654,7 @@ summaryService = createSummaryService({
   pythonConfig,
   spawnTrackedPython,
   getBackendModuleArgs,
-  enqueueAiComputeAction,
+  enqueueAiComputeAction: enqueueGpuExclusiveComputeAction,
   createAiAddonCancelError,
   getAiAddonRuntimeOptions,
   buildSummaryArgs,
@@ -611,6 +668,12 @@ summaryService = createSummaryService({
   terminateProcessBestEffort,
   summarizeSummaryValidationError,
   isQuitCommitted,
+  hasInFlightGpuRuntimeAction: () => (
+    gpuRuntimeService ? gpuRuntimeService.hasInFlightGpuRuntimeAction() : false
+  ),
+  waitForGpuRuntimeIdle: () => (
+    gpuRuntimeService ? gpuRuntimeService.waitForGpuRuntimeIdle() : Promise.resolve()
+  ),
 });
 summaryService.registerIpc(ipcMain);
 
@@ -633,6 +696,7 @@ recorderService = createRecorderService({
   hasInFlightAiWork,
   drainAiWorkBeforeQuit,
   isQuitCommitted,
+  isRecordingsScanInProgress,
   clearQuitCommitted,
   validateSelectedDevices,
   checkDiskSpace,
@@ -641,6 +705,7 @@ recorderService = createRecorderService({
   addMeetingToHistory,
   formatDurationForTranscript,
   getRecordingsDir,
+  signalProcessTree,
 });
 recorderService.registerIpc(ipcMain);
 
@@ -1252,6 +1317,9 @@ function checkMacOSPermissions() {
       }
     }
   });
+  proc.on('error', (error) => {
+    console.warn('Permission check unavailable:', error.message);
+  });
 }
 
 // Initialize app
@@ -1366,7 +1434,7 @@ app.on('before-quit', (event) => {
         protectedProcess,
       )) {
         try {
-          proc.kill();
+          signalProcessTree(proc, 'SIGKILL');
         } catch (e) {
           // Process might already be dead, ignore
         }
@@ -1504,7 +1572,13 @@ function summarizeSummaryValidationError(errorOutput) {
 }
 
 function terminateProcessBestEffort(proc) {
-  if (!proc || proc.killed) {
+  if (!proc) {
+    return Promise.resolve();
+  }
+  if (proc.exitCode !== null && proc.exitCode !== undefined || proc.signalCode) {
+    if (process.platform !== 'win32') {
+      signalOwnedProcessGroup(proc, 'SIGKILL');
+    }
     return Promise.resolve();
   }
 
@@ -1516,6 +1590,9 @@ function terminateProcessBestEffort(proc) {
       }
       settled = true;
       clearTimeout(waitTimeout);
+      if (process.platform !== 'win32') {
+        signalOwnedProcessGroup(proc, 'SIGKILL');
+      }
       resolve();
     };
 
@@ -1533,11 +1610,11 @@ function terminateProcessBestEffort(proc) {
         return;
       }
 
-      proc.kill('SIGTERM');
+      signalProcessTree(proc, 'SIGTERM');
       setTimeout(() => {
-        if (!settled && proc && !proc.killed && typeof proc.kill === 'function') {
+        if (!settled && proc && typeof proc.kill === 'function') {
           try {
-            proc.kill('SIGKILL');
+            signalProcessTree(proc, 'SIGKILL');
           } catch (error) {
             // Best effort cleanup.
           }
@@ -1599,6 +1676,18 @@ ipcMain.handle('get-system-info', async () => {
     const python = spawnTrackedPython(['--version']);
 
     let pythonVersion = '';
+    let settled = false;
+    const finish = (version) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve({
+        app: app.getVersion(),
+        electron: process.versions.electron,
+        python: version,
+      });
+    };
 
     python.stdout.on('data', (data) => {
       pythonVersion += data.toString();
@@ -1609,11 +1698,11 @@ ipcMain.handle('get-system-info', async () => {
     });
 
     python.on('close', () => {
-      resolve({
-        app: app.getVersion(),
-        electron: process.versions.electron,
-        python: pythonVersion.replace('Python ', '').trim()
-      });
+      finish(pythonVersion.replace('Python ', '').trim() || 'unavailable');
+    });
+    python.on('error', (error) => {
+      console.warn('Python version unavailable:', error.message);
+      finish('unavailable');
     });
   });
 });

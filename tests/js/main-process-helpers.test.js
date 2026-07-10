@@ -92,6 +92,55 @@ const {
   shouldKillProcessOnQuit,
   matchesFasterWhisperCacheFolderName,
 } = mainProcessHelpers;
+const { signalProcessTree, signalOwnedProcessGroup } = require('../../src/main-process/quit-lifecycle-helpers');
+
+test('signalProcessTree signals a POSIX process group and falls back to the child', () => {
+  const groupSignals = [];
+  const proc = {
+    pid: 4321,
+    avanevisProcessGroup: true,
+    kill() {
+      throw new Error('direct child should not be signaled when group signal succeeds');
+    },
+  };
+  assert.equal(signalProcessTree(proc, 'SIGTERM', (pid, signal) => {
+    groupSignals.push({ pid, signal });
+  }), true);
+  assert.deepEqual(groupSignals, [{ pid: -4321, signal: 'SIGTERM' }]);
+
+  const childSignals = [];
+  const fallbackProc = {
+    pid: 4322,
+    avanevisProcessGroup: true,
+    kill(signal) {
+      childSignals.push(signal);
+      return true;
+    },
+  };
+  assert.equal(signalProcessTree(fallbackProc, 'SIGKILL', () => {
+    throw new Error('group already gone');
+  }), true);
+  assert.deepEqual(childSignals, ['SIGKILL']);
+});
+
+test('signalOwnedProcessGroup escalates descendants after the direct child closes', () => {
+  const signals = [];
+  assert.equal(signalOwnedProcessGroup({
+    pid: 9876,
+    avanevisProcessGroup: true,
+  }, 'SIGKILL', (pid, signal) => signals.push({ pid, signal })), true);
+  assert.deepEqual(signals, [{ pid: -9876, signal: 'SIGKILL' }]);
+});
+
+test('terminateProcessBestEffort source escalates an owned group for an already-exited child', () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, '../../src/main.js'), 'utf8');
+  const helperSource = mainSource.match(/function terminateProcessBestEffort\(proc\)[\s\S]*?\n\}/);
+  assert.ok(helperSource, 'expected terminateProcessBestEffort');
+  assert.match(
+    helperSource[0],
+    /exitCode[\s\S]*signalOwnedProcessGroup\(proc, 'SIGKILL'\)/,
+  );
+});
 
 
 test('buildModelDownloadCheck returns Windows faster-whisper cache settings', () => {

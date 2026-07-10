@@ -51,6 +51,7 @@ function createRecorderService(deps) {
     hasInFlightAiWork = () => false,
     drainAiWorkBeforeQuit = async () => {},
     isQuitCommitted = () => false,
+    isRecordingsScanInProgress = () => false,
     clearQuitCommitted = () => {},
     validateSelectedDevices,
     checkDiskSpace,
@@ -59,6 +60,7 @@ function createRecorderService(deps) {
     addMeetingToHistory,
     formatDurationForTranscript,
     getRecordingsDir,
+    signalProcessTree = (proc, signal) => proc.kill(signal),
     getRecordingStopTimeoutMs = getRecordingStopTimeout,
   } = deps;
 
@@ -427,6 +429,11 @@ function createRecorderService(deps) {
           if (hasInFlightAiWork()) {
             await drainAiWorkBeforeQuit();
           }
+          // The armed before-quit pass re-checks recorder state. Retire the
+          // process explicitly so a hung recorder cannot intercept forced quit
+          // again and strand the app after the dialog closes.
+          forceKillRecordingOnShutdown();
+          clearRecordingRuntimeState('forced quit');
           setAllowImmediateQuit(true);
           setIsQuitting(true);
           app.quit();
@@ -534,7 +541,7 @@ function createRecorderService(deps) {
     }
     if (pythonProcess) {
       try {
-        pythonProcess.kill();
+        signalProcessTree(pythonProcess, 'SIGKILL');
       } catch (e) {
         // Process might already be dead, ignore
       }
@@ -570,6 +577,14 @@ function createRecorderService(deps) {
           success: false,
           code: 'QUIT_IN_PROGRESS',
           message: 'Cannot start recording while the app is quitting.',
+        };
+      }
+
+      if (isRecordingsScanInProgress()) {
+        return {
+          success: false,
+          code: 'RECORDING_SCAN_IN_PROGRESS',
+          message: 'Wait for recording recovery scan to finish before starting a new recording.',
         };
       }
 

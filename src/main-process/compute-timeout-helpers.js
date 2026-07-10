@@ -8,6 +8,8 @@ const AI_COMPUTE_TIMEOUT_MS = Object.freeze({
   meetingPreflight: 60 * 1000,
   // Max time download-model may block waiting for GPU compute to go idle.
   modelDownloadIdleWait: 15 * 60 * 1000,
+  // Full preload/model-download wall clock once admitted to GPU resources.
+  modelDownload: 30 * 60 * 1000,
   // Max time GPU install/repair/uninstall may wait for compute-queue idle.
   gpuRuntimeComputeIdleWait: 15 * 60 * 1000,
   // Diarization / summary setup smoke validation on the compute queue.
