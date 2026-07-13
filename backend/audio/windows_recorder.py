@@ -97,7 +97,16 @@ from .wav_io import write_int16_pcm_wav
 from .windows_callback_health import evaluate_callback_stalls
 from .capture_spool_runtime import capture_spool_enabled, load_track_segment_bytes
 from .capture_manifest import CaptureManifestCoordinator
-from .track_spool import TrackSpool
+from .track_spool import (
+    DEFAULT_MAX_QUEUE_BYTES,
+    DEFAULT_STALL_TIMEOUT_S,
+    TrackSpool,
+)
+
+# Bound desktop PCM deferred until mic_first_capture_time exists (matches spool queue).
+DEFERRED_DESKTOP_MAX_BYTES = DEFAULT_MAX_QUEUE_BYTES
+# Hard-fail if the mic never produces a first capture while desktop is deferred.
+DEFERRED_DESKTOP_MAX_WAIT_S = DEFAULT_STALL_TIMEOUT_S
 
 # Store final output path for meeting manager (legacy interface)
 _final_output_path = None
@@ -253,8 +262,13 @@ class AudioRecorder:
         self._spool_desktop_pcm = None  # loaded int16 samples when spool path used
         self._spool_error_lock = threading.Lock()
         # Desktop chunks that arrived before mic_first_capture_time was known.
+        # Serialized with direct desktop appends via `_desktop_spool_lock`.
         self._deferred_desktop_chunks = []
+        self._deferred_desktop_bytes = 0
+        self._deferred_desktop_started_at = None
+        self._desktop_spool_lock = threading.Lock()
         self._desktop_spool_accepted_any = False
+        self._desktop_spool_warning = None
 
         # Pre-roll: discard first N seconds for device warm-up
         # In production, the 3-second countdown handles warm-up, so preroll can be 0
@@ -402,7 +416,7 @@ class AudioRecorder:
 
             if elapsed >= self.preroll_seconds:
                 # DEBUG: Track first capture time
-                if self.mic_first_capture_time is None:
+                if self.mic_first_capture_time is None and not self._use_capture_spool:
                     self.mic_first_capture_time = current_time
                     print(f"DEBUG MIC: First CAPTURE at {elapsed:.4f}s elapsed (preroll={self.preroll_seconds}s)", file=sys.stderr)
 
@@ -420,8 +434,17 @@ class AudioRecorder:
                         return (in_data, pyaudio.paComplete)
                     with self.lock:
                         self.mic_total_bytes += len(in_data)
-                    # Mic reference is now known; place any deferred desktop chunks.
-                    self._flush_deferred_desktop_spool()
+                    # Set mic reference and flush deferred desktop under one lock so a
+                    # concurrent desktop callback cannot append ahead of older deferred PCM.
+                    with self._desktop_spool_lock:
+                        if self.mic_first_capture_time is None:
+                            self.mic_first_capture_time = current_time
+                            print(
+                                f"DEBUG MIC: First CAPTURE at {elapsed:.4f}s elapsed "
+                                f"(preroll={self.preroll_seconds}s)",
+                                file=sys.stderr,
+                            )
+                        self._flush_deferred_desktop_spool_locked()
                 else:
                     with self.lock:
                         self.mic_frames.append(in_data)
@@ -465,18 +488,22 @@ class AudioRecorder:
                     print(f"DEBUG DESKTOP: First CAPTURE at {elapsed:.4f}s elapsed (preroll={self.preroll_seconds}s)", file=sys.stderr)
 
                 if self._use_capture_spool:
-                    if self._desktop_spool is None:
-                        self._note_async_capture_error(
-                            "Capture spool was not ready when desktop audio arrived."
-                        )
-                        return (in_data, pyaudio.paComplete)
-                    reference = self.mic_first_capture_time
-                    if reference is None:
-                        # Defer until mic reference exists (do not silently drop).
-                        self._deferred_desktop_chunks.append((current_time, in_data))
-                        return (in_data, pyaudio.paContinue)
-                    if not self._append_desktop_spool_chunk(current_time, in_data, reference):
-                        return (in_data, pyaudio.paComplete)
+                    with self._desktop_spool_lock:
+                        if self._desktop_spool is None:
+                            self._note_async_capture_error(
+                                "Capture spool was not ready when desktop audio arrived."
+                            )
+                            return (in_data, pyaudio.paComplete)
+                        reference = self.mic_first_capture_time
+                        if reference is None:
+                            # Defer until mic reference exists (do not silently drop).
+                            if not self._enqueue_deferred_desktop_locked(current_time, in_data):
+                                return (in_data, pyaudio.paComplete)
+                            return (in_data, pyaudio.paContinue)
+                        # Flush any leftover deferred chunks before accepting live audio.
+                        self._flush_deferred_desktop_spool_locked()
+                        if not self._append_desktop_spool_chunk(current_time, in_data, reference):
+                            return (in_data, pyaudio.paComplete)
                 else:
                     with self.lock:
                         # Store timestamp with audio data to preserve gaps
@@ -497,7 +524,10 @@ class AudioRecorder:
             return self._async_capture_error
 
     def _append_desktop_spool_chunk(self, timestamp: float, in_data: bytes, reference: float) -> bool:
-        """Place one desktop chunk on the spool. Returns False on hard spool failure."""
+        """Place one desktop chunk on the spool. Returns False on hard spool failure.
+
+        Caller must hold ``_desktop_spool_lock``.
+        """
         frame_pos = timestamp_to_frame_position(
             timestamp,
             reference,
@@ -515,8 +545,36 @@ class AudioRecorder:
         self._desktop_spool_accepted_any = True
         return True
 
+    def _enqueue_deferred_desktop_locked(self, timestamp: float, in_data: bytes) -> bool:
+        """Queue desktop PCM until mic reference exists. Caller holds ``_desktop_spool_lock``."""
+        payload = bytes(in_data)
+        if self._deferred_desktop_started_at is None:
+            self._deferred_desktop_started_at = timestamp
+        waited = timestamp - self._deferred_desktop_started_at
+        if waited > DEFERRED_DESKTOP_MAX_WAIT_S:
+            self._note_async_capture_error(
+                "Microphone capture did not start while desktop audio was deferred; "
+                "recording was stopped to bound memory use."
+            )
+            return False
+        next_bytes = self._deferred_desktop_bytes + len(payload)
+        if next_bytes > DEFERRED_DESKTOP_MAX_BYTES:
+            self._note_async_capture_error(
+                "Deferred desktop audio exceeded the capture memory bound while waiting "
+                "for microphone capture; recording was stopped to preserve committed audio."
+            )
+            return False
+        self._deferred_desktop_chunks.append((timestamp, payload))
+        self._deferred_desktop_bytes = next_bytes
+        return True
+
     def _flush_deferred_desktop_spool(self) -> None:
         """Write desktop chunks that arrived before the mic reference existed."""
+        with self._desktop_spool_lock:
+            self._flush_deferred_desktop_spool_locked()
+
+    def _flush_deferred_desktop_spool_locked(self) -> None:
+        """Flush deferred desktop PCM. Caller must hold ``_desktop_spool_lock``."""
         if not self._deferred_desktop_chunks or self._desktop_spool is None:
             return
         reference = self.mic_first_capture_time
@@ -524,6 +582,8 @@ class AudioRecorder:
             return
         deferred = self._deferred_desktop_chunks
         self._deferred_desktop_chunks = []
+        self._deferred_desktop_bytes = 0
+        self._deferred_desktop_started_at = None
         for timestamp, payload in deferred:
             if not self._append_desktop_spool_chunk(timestamp, payload, reference):
                 return
@@ -611,11 +671,13 @@ class AudioRecorder:
             if mic_spool is not None:
                 mic_result = mic_spool.close()
             if desk_spool is not None:
-                # Never materialize an empty desktop track as full-duration silence.
+                # Never materialize an empty or failed desktop track as full-duration silence.
+                desktop_failed = bool(desk_spool.fail_reason)
                 pad_to = None
                 mic_frames = 0 if mic_result is None else mic_result.committed_frames
                 if (
-                    self._desktop_spool_accepted_any
+                    not desktop_failed
+                    and self._desktop_spool_accepted_any
                     and mic_frames > 0
                     and self.mic_sample_rate > 0
                     and (mic_result is None or not mic_result.fail_reason)
@@ -638,10 +700,6 @@ class AudioRecorder:
             raise RuntimeError(
                 f"Microphone capture spool failed: {mic_result.fail_reason}"
             )
-        if desk_result is not None and desk_result.fail_reason:
-            raise RuntimeError(
-                f"Desktop capture spool failed: {desk_result.fail_reason}"
-            )
 
         mic_frames = 0 if mic_result is None else mic_result.committed_frames
         if mic_result is not None:
@@ -653,7 +711,25 @@ class AudioRecorder:
             self.mic_frames = [mic_bytes] if mic_bytes else []
             self.mic_total_bytes = len(mic_bytes)
 
-        if desk_result is not None:
+        if desk_result is not None and desk_result.fail_reason:
+            # Late desktop spool failure: warn and continue mic-only (do not hard-fail).
+            warning = (
+                f"Desktop capture spool failed; continuing with microphone only. "
+                f"({desk_result.fail_reason})"
+            )
+            self._desktop_spool_warning = warning
+            print(f"WARNING: {warning}", file=sys.stderr)
+            try:
+                _send_warning_message(
+                    "DESKTOP_SPOOL_FAILED",
+                    warning,
+                    help="The meeting audio was saved from the microphone. Desktop/system audio may be missing.",
+                )
+            except Exception:
+                pass
+            self._spool_desktop_pcm = np.array([], dtype=np.int16)
+            self.desktop_frames = []
+        elif desk_result is not None:
             track = self._capture_manifest.get_track("desktop")
             if (
                 self._desktop_spool_accepted_any
@@ -721,7 +797,10 @@ class AudioRecorder:
         self._spool_desktop_pcm = None
         self._use_capture_spool = capture_spool_enabled()
         self._deferred_desktop_chunks = []
+        self._deferred_desktop_bytes = 0
+        self._deferred_desktop_started_at = None
         self._desktop_spool_accepted_any = False
+        self._desktop_spool_warning = None
 
         # Increase chunk size on Windows for better resilience to backgrounding
         # Larger buffers = more tolerance for process scheduling delays
@@ -744,21 +823,11 @@ class AudioRecorder:
         self.mic_first_callback_time = None
         self.desktop_first_callback_time = None
 
-        # Open durable spools BEFORE starting streams so the first callbacks
-        # cannot fall through to the RAM path and be discarded at stop.
-        if self._use_capture_spool:
-            try:
-                self._open_capture_spools()
-                print("Capture spool path enabled (AVANEVIS_CAPTURE_SPOOL=1)", file=sys.stderr)
-            except Exception as spool_err:
-                self._abort_start_recording()
-                raise RuntimeError(f"Failed to open capture spools: {spool_err}") from spool_err
-
         # NOTE: Thread priority boost removed - it only affects main thread, not audio callbacks
         # PyAudio's internal callback threads cannot be easily accessed from Python
 
-        # Open mic stream with error handling
-        # AUDIO QUALITY FIX: Try requested sample rate first, fall back to default if unsupported
+        # Open streams with start=False so sample-rate fallback can settle before
+        # capture spools/manifests are created with the final rates.
         try:
             self.mic_stream = self.pa.open(
                 format=pyaudio.paInt16,
@@ -767,7 +836,8 @@ class AudioRecorder:
                 input=True,
                 input_device_index=self.mic_device_id,
                 frames_per_buffer=self.chunk_size,
-                stream_callback=self._mic_callback
+                stream_callback=self._mic_callback,
+                start=False,
             )
             print(f"✓ Microphone stream opened at {self.mic_sample_rate} Hz", file=sys.stderr)
             _send_event_message("mic_stream_opened", "Microphone stream opened")
@@ -785,7 +855,8 @@ class AudioRecorder:
                         input=True,
                         input_device_index=self.mic_device_id,
                         frames_per_buffer=self.chunk_size,
-                        stream_callback=self._mic_callback
+                        stream_callback=self._mic_callback,
+                        start=False,
                     )
                     print(f"✓ Microphone stream opened at {self.mic_sample_rate} Hz (fallback)", file=sys.stderr)
                     _send_event_message("mic_stream_opened", "Microphone stream opened")
@@ -806,13 +877,24 @@ class AudioRecorder:
                     input=True,
                     input_device_index=self.loopback_device_id,
                     frames_per_buffer=self.chunk_size,
-                    stream_callback=self._desktop_callback
+                    stream_callback=self._desktop_callback,
+                    start=False,
                 )
                 print(f"✓ Desktop audio stream opened successfully", file=sys.stderr)
                 _send_event_message("desktop_stream_opened", "Desktop audio stream opened")
             except Exception as e:
                 self._abort_start_recording()
                 raise RuntimeError(f"Failed to open desktop audio stream (device {self.loopback_device_id}): {e}")
+
+        # Open durable spools AFTER rates settle and BEFORE streams start so the
+        # first callbacks cannot fall through to the RAM path and be discarded at stop.
+        if self._use_capture_spool:
+            try:
+                self._open_capture_spools()
+                print("Capture spool path enabled (AVANEVIS_CAPTURE_SPOOL=1)", file=sys.stderr)
+            except Exception as spool_err:
+                self._abort_start_recording()
+                raise RuntimeError(f"Failed to open capture spools: {spool_err}") from spool_err
 
         # Start streams
         try:

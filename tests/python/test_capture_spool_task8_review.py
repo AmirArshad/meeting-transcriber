@@ -80,7 +80,11 @@ def _make_windows_spool_recorder(tmp_path, *, sample_rate=4, channels=2):
     recorder._spool_desktop_pcm = None
     recorder._spool_error_lock = threading.Lock()
     recorder._deferred_desktop_chunks = []
+    recorder._deferred_desktop_bytes = 0
+    recorder._deferred_desktop_started_at = None
+    recorder._desktop_spool_lock = threading.Lock()
     recorder._desktop_spool_accepted_any = False
+    recorder._desktop_spool_warning = None
     recorder._open_capture_spools()
     recorder.is_recording = True
     return recorder
@@ -587,3 +591,243 @@ def test_abort_startup_awaits_helper_reader_before_spool_release(tmp_path):
     assert recorder._desktop_spool is None
     assert recorder._capture_manifest is None
     assert sink_after_release == []
+
+
+def test_windows_desktop_spool_close_fail_reason_is_mic_only_warning(tmp_path, monkeypatch):
+    """High 1: desktop close fail_reason must not hard-fail or pad-to-mic."""
+    warnings = []
+    monkeypatch.setattr(
+        windows_mod,
+        "_send_warning_message",
+        lambda code, message, **extra: warnings.append((code, message)),
+    )
+    recorder = _make_windows_spool_recorder(tmp_path)
+    try:
+        t0 = 20.0
+        mic = _stereo_i2([1] * 16)  # 8 frames
+        desk = _stereo_i2([5] * 8)  # 4 frames
+        with mock.patch("backend.audio.windows_recorder.time.time", return_value=t0):
+            recorder.recording_start_time = t0
+            recorder._mic_callback(mic, 8, None, None)
+            recorder._desktop_callback(desk, 4, None, None)
+
+        # Inject writer failure after some desktop PCM was accepted.
+        recorder._desktop_spool._test_raise_on_write = True
+        assert recorder._desktop_spool.append(_stereo_i2([6] * 8), frame_position=4) is True
+        assert _wait_until(lambda: recorder._desktop_spool.fail_reason is not None)
+
+        close_calls = []
+        original_close = recorder._desktop_spool.close
+
+        def tracking_close(final_frame_count=None):
+            close_calls.append(final_frame_count)
+            return original_close(final_frame_count=final_frame_count)
+
+        recorder._desktop_spool.close = tracking_close
+        recorder.is_recording = False
+        recorder._close_capture_spools_for_mix()
+
+        assert close_calls == [None], "failed desktop spool must not pad to mic duration"
+        assert recorder.mic_frames and b"".join(recorder.mic_frames)
+        assert len(recorder._spool_desktop_pcm) == 0
+        assert recorder.desktop_frames == []
+        assert recorder._desktop_spool_warning
+        assert warnings and warnings[0][0] == "DESKTOP_SPOOL_FAILED"
+        assert recorder.get_async_capture_error() is None
+    finally:
+        recorder._release_capture_spools()
+
+
+def test_windows_start_recording_opens_spools_after_sample_rate_fallback(tmp_path, monkeypatch):
+    """High 2: settle rates with start=False streams before creating spool manifests."""
+    monkeypatch.setenv("AVANEVIS_CAPTURE_SPOOL", "1")
+    open_calls = []
+    start_calls = []
+    spool_rates = []
+
+    class FakeStream:
+        def __init__(self, rate):
+            self.rate = rate
+            self._active = False
+
+        def start_stream(self):
+            start_calls.append(self.rate)
+            self._active = True
+
+        def is_active(self):
+            return self._active
+
+        def stop_stream(self):
+            self._active = False
+
+        def close(self):
+            self._active = False
+
+    class FakePa:
+        def open(self, **kwargs):
+            open_calls.append(dict(kwargs))
+            rate = kwargs["rate"]
+            if rate == 48000 and kwargs.get("input_device_index") == 0:
+                raise OSError("48 kHz unsupported")
+            assert kwargs.get("start") is False
+            return FakeStream(rate)
+
+        def get_device_info_by_index(self, index):
+            assert index == 0
+            return {"defaultSampleRate": 44100.0}
+
+    recorder = windows_mod.AudioRecorder.__new__(windows_mod.AudioRecorder)
+    recorder.output_path = str(tmp_path / "meeting.opus")
+    recorder.mic_device_id = 0
+    recorder.loopback_device_id = 1
+    recorder.mic_sample_rate = 48000
+    recorder.mic_requested_higher_rate = True
+    recorder.mic_channels = 2
+    recorder.loopback_sample_rate = 48000
+    recorder.loopback_channels = 2
+    recorder.mixing_mode = True
+    recorder.preroll_seconds = 0
+    recorder.chunk_size = 256
+    recorder.original_chunk_size = 256
+    recorder.is_windows = False
+    recorder.pa = FakePa()
+    recorder.lock = threading.Lock()
+    recorder.mic_frames = []
+    recorder.desktop_frames = []
+    recorder.mic_stream = None
+    recorder.desktop_stream = None
+    recorder.callback_watchdog = None
+    recorder.watchdog_running = False
+    recorder._use_capture_spool = True
+    recorder._capture_manifest = None
+    recorder._mic_spool = None
+    recorder._desktop_spool = None
+    recorder._async_capture_error = None
+    recorder._spool_desktop_pcm = None
+    recorder._spool_error_lock = threading.Lock()
+    recorder._deferred_desktop_chunks = []
+    recorder._deferred_desktop_bytes = 0
+    recorder._deferred_desktop_started_at = None
+    recorder._desktop_spool_lock = threading.Lock()
+    recorder._desktop_spool_accepted_any = False
+    recorder._desktop_spool_warning = None
+    recorder.mic_watchdog_warning_shown = False
+    recorder.desktop_watchdog_warning_shown = False
+
+    real_open = recorder._open_capture_spools
+
+    def tracking_open():
+        spool_rates.append(recorder.mic_sample_rate)
+        return real_open()
+
+    recorder._open_capture_spools = tracking_open
+    monkeypatch.setattr(windows_mod.threading.Thread, "start", lambda self: None)
+    monkeypatch.setattr(windows_mod, "_send_event_message", lambda *a, **k: None)
+
+    try:
+        recorder.start_recording()
+        assert recorder.mic_sample_rate == 44100
+        assert spool_rates == [44100]
+        assert all(call.get("start") is False for call in open_calls)
+        assert start_calls == [44100, 48000]
+        mic_track = recorder._capture_manifest.get_track("mic")
+        assert mic_track["sampleRate"] == 44100
+    finally:
+        recorder.is_recording = False
+        recorder._abort_start_recording()
+
+
+def test_windows_deferred_flush_serializes_ahead_of_live_desktop_append(tmp_path):
+    """Medium 3: live desktop append must not leapfrog deferred flush."""
+    recorder = _make_windows_spool_recorder(tmp_path)
+    t0 = 100.0
+    early = _stereo_i2([9, 9, 9, 9])  # 2 frames at t0
+    live = _stereo_i2([2, 2, 2, 2])  # 2 frames at t0+1
+    mic = _stereo_i2([1, 1, 1, 1])
+
+    with mock.patch("backend.audio.windows_recorder.time.time", return_value=t0):
+        recorder.recording_start_time = t0
+        recorder._desktop_callback(early, 2, None, None)
+        assert len(recorder._deferred_desktop_chunks) == 1
+
+    append_order = []
+    original_append = recorder._append_desktop_spool_chunk
+
+    def tracking_append(timestamp, in_data, reference):
+        append_order.append((timestamp, in_data))
+        # While mic holds the desktop lock during flush, a concurrent live desktop
+        # callback must block — simulate that by attempting a nested desktop write.
+        return original_append(timestamp, in_data, reference)
+
+    recorder._append_desktop_spool_chunk = tracking_append
+
+    barrier = threading.Barrier(2)
+    results = {}
+
+    def mic_thread():
+        barrier.wait(timeout=2.0)
+        with mock.patch("backend.audio.windows_recorder.time.time", return_value=t0):
+            recorder._mic_callback(mic, 2, None, None)
+        results["mic"] = True
+
+    def desktop_thread():
+        barrier.wait(timeout=2.0)
+        # Brief yield so mic can acquire the lock first when scheduling allows.
+        time.sleep(0.01)
+        with mock.patch("backend.audio.windows_recorder.time.time", return_value=t0 + 1.0):
+            recorder._desktop_callback(live, 2, None, None)
+        results["desk"] = True
+
+    threads = [
+        threading.Thread(target=mic_thread),
+        threading.Thread(target=desktop_thread),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=3.0)
+
+    assert results == {"mic": True, "desk": True}
+    assert recorder._deferred_desktop_chunks == []
+    assert append_order[0][0] == t0
+    assert append_order[0][1] == early
+    assert append_order[-1][0] == t0 + 1.0
+    assert append_order[-1][1] == live
+    recorder.is_recording = False
+    recorder._release_capture_spools()
+
+
+def test_windows_deferred_desktop_bytes_bound_hard_fails(tmp_path):
+    """Medium 4: deferred desktop PCM must not grow unbounded without mic capture."""
+    recorder = _make_windows_spool_recorder(tmp_path)
+    t0 = 5.0
+    chunk = _stereo_i2([7, 7])  # 1 stereo frame = 4 bytes
+    with mock.patch("backend.audio.windows_recorder.time.time", return_value=t0):
+        recorder.recording_start_time = t0
+        # Fill just under the bound, then one more chunk must hard-fail.
+        max_bytes = windows_mod.DEFERRED_DESKTOP_MAX_BYTES
+        while recorder._deferred_desktop_bytes + len(chunk) <= max_bytes:
+            status = recorder._desktop_callback(chunk, 1, None, None)[1]
+            assert status == windows_mod.pyaudio.paContinue
+        status = recorder._desktop_callback(chunk, 1, None, None)[1]
+        assert status == windows_mod.pyaudio.paComplete
+    err = recorder.get_async_capture_error()
+    assert err and "Deferred desktop audio exceeded" in err
+    recorder._release_capture_spools()
+
+
+def test_windows_deferred_desktop_wait_bound_hard_fails(tmp_path):
+    """Medium 4: prolonged missing mic capture while deferring desktop hard-fails."""
+    recorder = _make_windows_spool_recorder(tmp_path)
+    t0 = 5.0
+    chunk = _stereo_i2([8, 8])
+    with mock.patch("backend.audio.windows_recorder.time.time", return_value=t0):
+        recorder.recording_start_time = t0
+        assert recorder._desktop_callback(chunk, 1, None, None)[1] == windows_mod.pyaudio.paContinue
+    late = t0 + windows_mod.DEFERRED_DESKTOP_MAX_WAIT_S + 0.1
+    with mock.patch("backend.audio.windows_recorder.time.time", return_value=late):
+        status = recorder._desktop_callback(chunk, 1, None, None)[1]
+        assert status == windows_mod.pyaudio.paComplete
+    err = recorder.get_async_capture_error()
+    assert err and "Microphone capture did not start" in err
+    recorder._release_capture_spools()
