@@ -51,3 +51,43 @@ test('main process pins a stable Windows toast activator CLSID', () => {
   assert.match(mainSource, /setAppUserModelId\('com\.avanevis\.app'\)|AVANEVIS_APP_USER_MODEL_ID/);
   assert.match(mainSource, /requestSingleInstanceLock/);
 });
+
+test('installer artifactName stays aligned with updater INSTALLER_NAME_TOKEN', () => {
+  assert.equal(pkg.build.productName, 'AvaNevis');
+  assert.equal(pkg.build.artifactName, '${productName}-Setup-${version}.${ext}');
+
+  const updaterSource = fs.readFileSync(path.join(ROOT, 'src', 'updater.js'), 'utf8');
+  const tokenMatch = updaterSource.match(/INSTALLER_NAME_TOKEN\s*=\s*'([^']+)'/);
+  assert.ok(tokenMatch, 'expected INSTALLER_NAME_TOKEN in src/updater.js');
+  assert.equal(tokenMatch[1], 'AvaNevis-Setup-');
+  assert.equal(`${pkg.build.productName}-Setup-`, tokenMatch[1]);
+});
+
+test('createWindow refreshes presence after window recreation', () => {
+  const mainSource = fs.readFileSync(path.join(ROOT, 'src', 'main.js'), 'utf8');
+
+  // showMainWindow must recreate a destroyed BrowserWindow before show/focus.
+  assert.match(
+    mainSource,
+    /function showMainWindow\(\) \{[\s\S]*?if \(!mainWindow \|\| mainWindow\.isDestroyed\(\)\) \{\s*createWindow\(\);/,
+  );
+
+  // createWindow itself must re-apply overlay/Dock for an in-progress capture.
+  assert.match(
+    mainSource,
+    /function createWindow\(\) \{[\s\S]*?recordingPresenceService\.refreshPresentation\(\);/,
+  );
+});
+
+test('renderer init finally hydrates recording state after partial init failure', () => {
+  const appSource = fs.readFileSync(path.join(ROOT, 'src', 'renderer', 'app.js'), 'utf8');
+
+  assert.match(
+    appSource,
+    /const ensureRecordingHydration = async \(\) => \{[\s\S]*?await hydrateRecordingStateFromMain\(\);/,
+  );
+  assert.match(
+    appSource,
+    /async function init\(\) \{[\s\S]*?\} finally \{\s*(?:\/\/[^\n]*\n\s*)*isInitializing = false;\s*await ensureRecordingHydration\(\);\s*\}/,
+  );
+});
