@@ -33,24 +33,44 @@ Replaced Intel-only evermeet.cx ffmpeg with a pinned Apple Silicon static build 
 - [ ] [Risk: High] Optional extended pass: `tests/manual/recording-transcription-regression-checklist.md`.
 - [ ] [Risk: High] Optional local AI add-ons smoke if models are installed: diarization and summary subset from `tests/manual/local-ai-addons-checklist.md`.
 
-## Next: decide product / validation priority
+## Next Priorities
 
-Codebase refactor initiative is **complete** (Phases 0–8 + Phase 5B + shared `recorder_stdout`; see section below). Pick the next project from remaining smoke debt or the product backlog.
+Codebase refactor initiative is **complete** (Phases 0–8 + Phase 5B + shared `recorder_stdout`; see section below). The next product initiative is recording awareness and long-recording safety, based on user feedback about a forgotten 550-minute recording and difficulty rediscovering the app by name.
 
 Recommended order when choosing:
 
 1. **Hardware smoke debt** (when a Mac / CUDA Windows box is available) — Phase 7B macOS capture smoke; Windows CUDA GPU + CPU-fallback packaged smokes.
-2. **Product feature** — decide among upload-audio, history chat, AEC, or stream-to-disk (see Deferred Product backlog).
+2. **Product feature** — ship Release 1 of the recording awareness plan, then execute Release 2 progressive disk capture and bounded finalization.
 3. **Release hygiene** — notarization when enrolled; optional transitive pin / PyObjC trim (needs capture smoke).
 
 Do **not** force Phase 2 renderer controllers now. Revisit only if `app.js` grows materially or a feature forces controller-level changes — and only after (1) a DOM-testing decision and (2) a written Pattern C shared-state ownership plan.
+
+## Next Product Initiative: Recording Awareness And Long-Recording Safety
+
+Implementation plan: `docs/superpowers/plans/2026-07-13-recording-awareness-and-long-recording-safety.md`.
+
+### Release 1: Recording awareness and discoverability
+
+- [ ] [Risk: Medium] Add one main-process recording-presence service with a restrained glowing macOS menu-bar recording icon, `REC` text, supplemental Dock badge, Windows taskbar overlay, and hourly native reminders.
+- [ ] [Risk: Medium] Publish authoritative `starting` / `recording` / `stopping` / `idle` lifecycle state from `recorder-service.js`, add renderer state hydration, and base elapsed time/reminders on the backend `recording_started` timestamp.
+- [ ] [Risk: Low] Add an always-visible in-app recording pill and `H:MM:SS` elapsed clock across Record, History, and Settings.
+- [ ] [Risk: Medium] Add single-instance reveal/focus behavior and recording-specific minimize-to-tray copy; keep the existing graceful quit/save path.
+- [ ] [Risk: Low] Improve descriptive app metadata and validate installed searches for "meeting" or "transcriber" without changing `productName`, Windows shortcut identity, `appId`, `userData`, or release artifacts.
+- [ ] [Risk: High] Run packaged macOS and Windows presence checks, including notifications disabled, stop/failure cleanup, display scaling, and installed-app search.
+
+### Release 2: Progressive capture and bounded finalization
+
+- [ ] [Risk: Medium] Measure 15-minute and 60-minute capture/stop RSS, duration, and disk baselines; expose structured stop-processing stages, replace shell disk probes, and warn periodically when recording space becomes low.
+- [ ] [Risk: High] Add versioned atomic capture manifests and bounded segmented mic/desktop track spools that cannot be scan-imported as meetings.
+- [ ] [Risk: High] Integrate Windows timestamp-aware and macOS float32 capture spools behind a temporary rollout flag while preserving desktop-failure behavior.
+- [ ] [Risk: High] Replace whole-recording joins/resampling/mixing with bounded multi-pass finalization and recoverable WAV/RF64-to-Opus output.
+- [ ] [Risk: High] Recover interrupted capture manifests on relaunch, complete 2-hour/4-hour hardware evidence on both platforms, then remove the RAM path and rollout flag.
 
 ## Deferred Product And Architecture Backlog
 
 - [ ] [Risk: High] Acoustic echo cancellation / echo suppression for speaker-use scenarios on Windows and macOS.
 - [ ] [Risk: Medium] Upload audio files (`.mp3`, `.wav`, `.opus`) and process them through the transcription, summary, and history flow.
 - [ ] [Risk: Medium] History chat over past meetings using the installed local summary runtime/model.
-- [ ] [Risk: High] Stream-to-disk during capture to reduce long-recording memory pressure.
 - [ ] [Risk: Medium] Verify the archived "packaged Swift helper skips `which()` when `AVANEVIS_PACKAGED=1`" item is fully implemented and tested; close if redundant with current `test_screencapture_helper.py` coverage.
 
 ## Completed: AvaNevis Codebase Refactor

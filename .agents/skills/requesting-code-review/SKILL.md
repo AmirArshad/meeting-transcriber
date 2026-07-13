@@ -5,18 +5,17 @@ description: Use when completing tasks, implementing major features, or before m
 
 # Requesting Code Review
 
-Dispatch a code reviewer subagent to catch issues before they cascade. The reviewer gets precisely crafted context for evaluation — never your session's history. This keeps the reviewer focused on the work product, not your thought process, and preserves your own context for continued work.
+Use one targeted code review when it can materially reduce risk. Do not use reviewer subagents for routine edits or as a repeated replacement for focused tests and direct inspection.
 
-**Core principle:** Review early, review often.
+**Core principle:** Review proportionately.
 
 ## When to Request Review
 
-**Mandatory:**
-- After each task in subagent-driven development
-- After completing major feature
-- Before merge to main
+**Recommended:**
+- After a major feature or a high-risk change to cross-process contracts, persistence, packaging, security, or concurrency
+- Before merge when the user requests review
 
-**Optional but valuable:**
+**Optional:**
 - When stuck (fresh perspective)
 - Before refactoring (baseline check)
 - After fixing complex bug
@@ -31,7 +30,7 @@ HEAD_SHA=$(git rev-parse HEAD)
 
 **2. Dispatch code reviewer subagent:**
 
-Dispatch a `general-purpose` subagent, filling the template at [code-reviewer.md](code-reviewer.md)
+Ask the user before dispatching a `general-purpose` reviewer subagent, then use the template at [code-reviewer.md](code-reviewer.md).
 
 **Placeholders:**
 - `{DESCRIPTION}` - Brief summary of what you built
@@ -75,13 +74,10 @@ You: [Fix progress indicators]
 ## Integration with Workflows
 
 **Subagent-Driven Development:**
-- Review after EACH task
-- Catch issues before they compound
-- Fix before moving to next task
+- Review at natural high-risk checkpoints, not after every task
 
 **Executing Plans:**
-- Review after each task or at natural checkpoints
-- Get feedback, apply, continue
+- Review only at a major boundary or when a test/design concern warrants it
 
 **Ad-Hoc Development:**
 - Review before merge
@@ -90,7 +86,7 @@ You: [Fix progress indicators]
 ## Red Flags
 
 **Never:**
-- Skip review because "it's simple"
+- Skip a clearly needed high-risk review because "it's simple"
 - Ignore Critical issues
 - Proceed with unfixed Important issues
 - Argue with valid technical feedback

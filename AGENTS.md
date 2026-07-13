@@ -539,6 +539,14 @@ Update all of:
 - When simplifying code, preserve the current operational behavior first, then reduce complexity.
 - Keep `todo.md` updated whenever task status changes, major progress is made, or execution order is adjusted.
 
+## Agent Efficiency Defaults
+
+- Work inline by default. Do not delegate routine inspection, small edits, focused tests, or plan self-review to subagents.
+- Ask before launching a subagent. Use one only for an explicitly requested independent review or a high-risk cross-process, concurrency, persistence, packaging, security, or platform boundary.
+- Do not re-review the same work after feedback unless a material design or implementation change introduces a new risk.
+- Keep plans concise and file-level by default. Add per-step TDD scripts, commit instructions, or handoff workflow only when explicitly requested or needed for high-risk behavior.
+- Start validation with the smallest relevant test command. Run the full suite only for cross-cutting, recorder, persistence, packaging, security, or explicitly requested validation.
+
 ## When In Doubt
 
 - Trust the current runtime scripts and CI over stale docs.
