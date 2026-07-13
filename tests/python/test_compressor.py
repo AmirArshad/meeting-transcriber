@@ -78,10 +78,26 @@ def test_compress_to_opus_falls_back_to_wav_when_integrity_check_fails(tmp_path,
     assert not output_path.exists()
 
 
-def test_verify_recording_integrity_returns_true_when_ffprobe_is_unavailable(monkeypatch):
+def test_verify_recording_integrity_returns_false_when_ffprobe_and_ffmpeg_unavailable(monkeypatch):
     monkeypatch.setattr(compressor.shutil, 'which', lambda _: None)
 
-    assert compressor.verify_recording_integrity('unused-file-path.opus') is True
+    assert compressor.verify_recording_integrity('unused-file-path.opus', ffmpeg_path=None) is False
+
+
+def test_verify_recording_integrity_falls_back_to_ffmpeg_decode(tmp_path, monkeypatch):
+    audio = tmp_path / 'clip.wav'
+    audio.write_bytes(b'RIFF' + b'\x00' * 40)
+    monkeypatch.setattr(compressor, 'resolve_ffprobe_path', lambda *_a, **_k: None)
+    seen = {}
+
+    def fake_run(cmd, capture_output=True, timeout=600):
+        seen['cmd'] = list(cmd)
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=b'', stderr=b'')
+
+    monkeypatch.setattr(compressor.subprocess, 'run', fake_run)
+    assert compressor.verify_recording_integrity(str(audio), ffmpeg_path='/bin/ffmpeg') is True
+    assert seen['cmd'][0] == '/bin/ffmpeg'
+    assert '-i' in seen['cmd']
 
 
 def test_get_file_info_returns_empty_when_ffprobe_is_unavailable(monkeypatch):

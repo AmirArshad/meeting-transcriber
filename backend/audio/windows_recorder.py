@@ -780,6 +780,7 @@ class AudioRecorder:
         print(f"Audio saved!", file=sys.stderr)
         print(f"  File: {Path(result.final_path).name}", file=sys.stderr)
         print(f"  Duration: {result.duration:.2f} seconds", file=sys.stderr)
+
     def _release_capture_spools(self) -> None:
         for spool in (self._mic_spool, self._desktop_spool):
             if spool is None:

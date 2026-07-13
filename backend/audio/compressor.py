@@ -159,72 +159,95 @@ def resolve_ffprobe_path(ffmpeg_path: str | None = None) -> str | None:
 
 def verify_recording_integrity(file_path: str, *, ffmpeg_path: str | None = None) -> bool:
     """
-    Verify the recording file is valid and playable using ffprobe.
+    Verify the recording file is valid and playable.
 
-    Args:
-        file_path: Path to audio file to verify
-        ffmpeg_path: Optional ffmpeg path used to locate a sibling ffprobe
-
-    Returns:
-        True if file is valid, False otherwise
+    Prefers ffprobe when available. When ffprobe is missing (packaged apps only
+    stage ffmpeg), fall back to an ffmpeg null-decode. Never treat "cannot
+    check" as success when ffmpeg is also unavailable.
     """
     ffprobe_path = resolve_ffprobe_path(ffmpeg_path)
-    if not ffprobe_path:
-        print(f"  Skipping integrity check (ffprobe not found)", file=sys.stderr)
-        return True  # Assume OK if we can't check
+    if ffprobe_path:
+        try:
+            cmd = [
+                ffprobe_path,
+                '-v', 'error',
+                '-show_format',
+                '-show_streams',
+                '-of', 'json',
+                file_path
+            ]
+
+            result = subprocess.run(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=30
+            )
+
+            if result.returncode != 0:
+                print(f"  Integrity check FAILED: {result.stderr}", file=sys.stderr)
+                return False
+
+            probe_data = json.loads(result.stdout)
+
+            # Check for valid format
+            if 'format' not in probe_data:
+                print(f"  Integrity check FAILED: No format info", file=sys.stderr)
+                return False
+
+            # Check for audio stream
+            streams = probe_data.get('streams', [])
+            audio_streams = [s for s in streams if s.get('codec_type') == 'audio']
+
+            if not audio_streams:
+                print(f"  Integrity check FAILED: No audio streams", file=sys.stderr)
+                return False
+
+            # Check duration is positive
+            duration = float(probe_data['format'].get('duration', 0))
+            if duration <= 0:
+                print(f"  Integrity check FAILED: Invalid duration ({duration}s)", file=sys.stderr)
+                return False
+
+            print(f"  Integrity check: OK ({duration:.1f}s, {audio_streams[0].get('codec_name', 'unknown')})", file=sys.stderr)
+            return True
+
+        except subprocess.TimeoutExpired:
+            print(f"  Integrity check TIMEOUT", file=sys.stderr)
+            return False
+        except Exception as e:
+            print(f"  Integrity check ERROR: {e}", file=sys.stderr)
+            return False
+
+    ffmpeg_exe = ffmpeg_path or shutil.which('ffmpeg')
+    if not ffmpeg_exe:
+        print(f"  Integrity check FAILED: ffprobe and ffmpeg unavailable", file=sys.stderr)
+        return False
 
     try:
-        cmd = [
-            ffprobe_path,
-            '-v', 'error',
-            '-show_format',
-            '-show_streams',
-            '-of', 'json',
-            file_path
-        ]
-
         result = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=30
+            [
+                ffmpeg_exe,
+                '-v', 'error',
+                '-i', file_path,
+                '-f', 'null',
+                '-',
+            ],
+            capture_output=True,
+            timeout=600,
         )
-
-        if result.returncode != 0:
-            print(f"  Integrity check FAILED: {result.stderr}", file=sys.stderr)
-            return False
-
-        probe_data = json.loads(result.stdout)
-
-        # Check for valid format
-        if 'format' not in probe_data:
-            print(f"  Integrity check FAILED: No format info", file=sys.stderr)
-            return False
-
-        # Check for audio stream
-        streams = probe_data.get('streams', [])
-        audio_streams = [s for s in streams if s.get('codec_type') == 'audio']
-
-        if not audio_streams:
-            print(f"  Integrity check FAILED: No audio streams", file=sys.stderr)
-            return False
-
-        # Check duration is positive
-        duration = float(probe_data['format'].get('duration', 0))
-        if duration <= 0:
-            print(f"  Integrity check FAILED: Invalid duration ({duration}s)", file=sys.stderr)
-            return False
-
-        print(f"  Integrity check: OK ({duration:.1f}s, {audio_streams[0].get('codec_name', 'unknown')})", file=sys.stderr)
-        return True
-
-    except subprocess.TimeoutExpired:
-        print(f"  Integrity check TIMEOUT", file=sys.stderr)
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
+        print(f"  Integrity check ERROR: {exc}", file=sys.stderr)
         return False
-    except Exception as e:
-        print(f"  Integrity check ERROR: {e}", file=sys.stderr)
+
+    if result.returncode != 0:
+        detail = (result.stderr or b'').decode('utf-8', errors='replace')
+        print(f"  Integrity check FAILED (ffmpeg decode): {detail}", file=sys.stderr)
         return False
+
+    print(f"  Integrity check: OK (ffmpeg decode)", file=sys.stderr)
+    return True
 
 
 def get_file_info(file_path: str, *, ffmpeg_path: str | None = None) -> dict:

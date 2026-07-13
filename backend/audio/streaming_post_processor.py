@@ -86,7 +86,11 @@ class _TrackStats:
 
 
 class TrackFrameReader:
-    """Sequential frame reader over capture segment files (bounded reads only)."""
+    """Sequential frame reader over capture segment files (bounded reads only).
+
+    When ``committed_frames`` is set, reading stops at that durable manifest
+    boundary even if segment files contain a longer uncommitted tail.
+    """
 
     def __init__(
         self,
@@ -97,11 +101,14 @@ class TrackFrameReader:
         dtype: str,
         chunk_frames: int = DEFAULT_FINALIZATION_CHUNK_FRAMES,
         max_chunk_frames: Optional[int] = None,
+        committed_frames: Optional[int] = None,
     ) -> None:
         if channels <= 0:
             raise ValueError("channels must be positive")
         if chunk_frames <= 0:
             raise ValueError("chunk_frames must be positive")
+        if committed_frames is not None and committed_frames < 0:
+            raise ValueError("committed_frames must be non-negative")
         self._session_dir = Path(session_dir)
         self._segments = list(segments)
         self._channels = int(channels)
@@ -109,6 +116,10 @@ class TrackFrameReader:
         self._frame_bytes = self._channels * self._dtype.itemsize
         self._chunk_frames = int(chunk_frames)
         self._max_chunk_frames = int(max_chunk_frames or chunk_frames)
+        self._committed_frames = (
+            None if committed_frames is None else int(committed_frames)
+        )
+        self._frames_read = 0
         self._seg_index = 0
         self._seg_offset = 0
         self._handle: Optional[Any] = None
@@ -142,9 +153,15 @@ class TrackFrameReader:
                 f"Rejecting oversize chunk read: requested {requested} frames "
                 f"exceeds max_chunk_frames={self._max_chunk_frames}"
             )
+        if self._committed_frames is not None:
+            remaining_frames = self._committed_frames - self._frames_read
+            if remaining_frames <= 0:
+                return np.zeros((0, self._channels), dtype=self._dtype)
+            requested = min(requested, remaining_frames)
 
         remaining = requested * self._frame_bytes
-        parts: List[bytes] = []
+        # Prefer a single preallocated buffer over joining byte fragments.
+        buffer = bytearray()
         while remaining > 0:
             handle = self._ensure_handle()
             if handle is None:
@@ -158,21 +175,21 @@ class TrackFrameReader:
                 self._seg_offset = 0
                 continue
             if len(chunk) % self._frame_bytes != 0:
-                # Drop a trailing partial frame rather than corrupt the stream.
                 usable = (len(chunk) // self._frame_bytes) * self._frame_bytes
                 chunk = chunk[:usable]
                 if not chunk:
                     break
-            parts.append(chunk)
+            buffer.extend(chunk)
             remaining -= len(chunk)
             self._seg_offset += len(chunk)
 
-        if not parts:
+        if not buffer:
             return np.zeros((0, self._channels), dtype=self._dtype)
 
-        payload = b"".join(parts)
-        samples = np.frombuffer(payload, dtype=self._dtype)
-        return samples.reshape(-1, self._channels).copy()
+        samples = np.frombuffer(buffer, dtype=self._dtype)
+        frames = samples.reshape(-1, self._channels).copy()
+        self._frames_read += int(frames.shape[0])
+        return frames
 
     def iter_chunks(self) -> Iterator[np.ndarray]:
         while True:
@@ -314,6 +331,7 @@ def _normalize_track_to_stereo_file(
         dtype=dtype,
         chunk_frames=chunk_frames,
         max_chunk_frames=chunk_frames,
+        committed_frames=int(track.get("committedFrames") or 0),
     ) as reader:
         first = True
         pending_flush = False
@@ -375,12 +393,98 @@ def _mix_soft_limit_inplace(mixed: np.ndarray, *, apply: bool) -> None:
         np.tanh(mixed, out=mixed)
 
 
-def _compute_mix_peak(
+def _iter_aligned_mix_chunks(
+    *,
     mic_path: Path,
     desk_path: Optional[Path],
-    *,
-    frames: int,
+    mic_frames: int,
+    desk_frames: int,
+    total_frames: int,
     chunk_frames: int,
+    mic_pad: int,
+    desk_pad: int,
+    desk_trim: int,
+    include_desktop: bool,
+    profile: str,
+    mic_volume: float,
+    desktop_volume: float,
+    mic_boost: float,
+    mic_one_sided: _OneSidedDecision,
+    desk_one_sided: _OneSidedDecision,
+    mic_enhance: Optional[tuple[ChannelEnhancePlan, ChannelEnhancePlan]],
+    apply_mix_limit: bool,
+    post_mix_enhance: Optional[tuple[ChannelEnhancePlan, ChannelEnhancePlan]] = None,
+) -> Iterator[np.ndarray]:
+    """Yield aligned mixed float32 stereo chunks (same geometry as final output)."""
+    mic_pos = 0
+    desk_pos = desk_trim
+    out_pos = 0
+    desk_kept = max(0, desk_frames - desk_trim) if include_desktop else 0
+    while out_pos < total_frames:
+        n = min(chunk_frames, total_frames - out_pos)
+        if n > chunk_frames:
+            raise ValueError("Rejecting oversize aligned mix chunk")
+        mic_chunk = np.zeros((n, 2), dtype=np.float32)
+        local = 0
+        if out_pos < mic_pad:
+            local = min(n, mic_pad - out_pos)
+        take = n - local
+        if take > 0 and mic_pos < mic_frames:
+            got = _read_float32_stereo_chunk(
+                mic_path, mic_pos, min(take, mic_frames - mic_pos)
+            )
+            if got.shape[0] > chunk_frames:
+                raise ValueError("Rejecting oversize mic chunk read")
+            mic_chunk[local : local + got.shape[0]] = got
+            mic_pos += got.shape[0]
+        mic_chunk = _apply_one_sided(mic_chunk, mic_one_sided)
+        if mic_enhance is not None:
+            apply_stereo_enhance_inplace(mic_chunk, mic_enhance[0], mic_enhance[1])
+
+        if include_desktop and desk_path is not None:
+            desk_chunk = np.zeros((n, 2), dtype=np.float32)
+            dlocal = 0
+            if out_pos < desk_pad:
+                dlocal = min(n, desk_pad - out_pos)
+            dtake = n - dlocal
+            if dtake > 0 and desk_pos < desk_trim + desk_kept:
+                got = _read_float32_stereo_chunk(
+                    desk_path,
+                    desk_pos,
+                    min(dtake, desk_trim + desk_kept - desk_pos),
+                )
+                if got.shape[0] > chunk_frames:
+                    raise ValueError("Rejecting oversize desktop chunk read")
+                desk_chunk[dlocal : dlocal + got.shape[0]] = got
+                desk_pos += got.shape[0]
+            desk_chunk = _apply_one_sided(desk_chunk, desk_one_sided)
+            mixed = mic_chunk * (mic_volume * mic_boost) + desk_chunk * desktop_volume
+            _mix_soft_limit_inplace(mixed, apply=apply_mix_limit)
+        elif profile == "windows-v1":
+            # Windows mic-only: enhance already applied; no extra volume multiply.
+            mixed = mic_chunk
+        else:
+            mixed = mic_chunk * mic_volume
+
+        if post_mix_enhance is not None:
+            apply_stereo_enhance_inplace(mixed, post_mix_enhance[0], post_mix_enhance[1])
+        yield mixed
+        out_pos += n
+
+
+def _compute_mix_peak_aligned(
+    *,
+    mic_path: Path,
+    desk_path: Optional[Path],
+    mic_frames: int,
+    desk_frames: int,
+    total_frames: int,
+    chunk_frames: int,
+    mic_pad: int,
+    desk_pad: int,
+    desk_trim: int,
+    include_desktop: bool,
+    profile: str,
     mic_volume: float,
     desktop_volume: float,
     mic_boost: float,
@@ -388,26 +492,35 @@ def _compute_mix_peak(
     desk_one_sided: _OneSidedDecision,
     mic_enhance: Optional[tuple[ChannelEnhancePlan, ChannelEnhancePlan]],
 ) -> float:
+    """Peak of the aligned mix *before* soft limiting (to decide whether to limit)."""
     peak = 0.0
-    offset = 0
-    while offset < frames:
-        n = min(chunk_frames, frames - offset)
-        mic = _read_float32_stereo_chunk(mic_path, offset, n)
-        if mic.shape[0] == 0:
-            break
-        mic = _apply_one_sided(mic, mic_one_sided)
-        if mic_enhance is not None:
-            apply_stereo_enhance_inplace(mic, mic_enhance[0], mic_enhance[1])
-        mixed = mic * (mic_volume * mic_boost)
-        if desk_path is not None:
-            desk = _read_float32_stereo_chunk(desk_path, offset, mic.shape[0])
-            if desk.shape[0] < mic.shape[0]:
-                pad = np.zeros((mic.shape[0] - desk.shape[0], 2), dtype=np.float32)
-                desk = np.concatenate([desk, pad], axis=0)
-            desk = _apply_one_sided(desk, desk_one_sided)
-            mixed = mixed + desk * desktop_volume
-        peak = max(peak, abs(float(mixed.min())) if mixed.size else 0.0, abs(float(mixed.max())) if mixed.size else 0.0)
-        offset += mic.shape[0]
+    for mixed in _iter_aligned_mix_chunks(
+        mic_path=mic_path,
+        desk_path=desk_path,
+        mic_frames=mic_frames,
+        desk_frames=desk_frames,
+        total_frames=total_frames,
+        chunk_frames=chunk_frames,
+        mic_pad=mic_pad,
+        desk_pad=desk_pad,
+        desk_trim=desk_trim,
+        include_desktop=include_desktop,
+        profile=profile,
+        mic_volume=mic_volume,
+        desktop_volume=desktop_volume,
+        mic_boost=mic_boost,
+        mic_one_sided=mic_one_sided,
+        desk_one_sided=desk_one_sided,
+        mic_enhance=mic_enhance,
+        apply_mix_limit=False,
+        post_mix_enhance=None,
+    ):
+        if mixed.size:
+            peak = max(
+                peak,
+                abs(float(mixed.min())),
+                abs(float(mixed.max())),
+            )
     return peak
 
 
@@ -455,6 +568,8 @@ def _stream_final_wav_via_ffmpeg(
         "2",
         "-rf64",
         "auto",
+        "-f",
+        "wav",
         "-y",
         "-loglevel",
         "error",
@@ -475,7 +590,7 @@ def _stream_final_wav_via_ffmpeg(
             proc.stdin.write(np.ascontiguousarray(chunk, dtype=np.float32).tobytes())
             written += int(chunk.shape[0])
         proc.stdin.close()
-        stdout, stderr = proc.communicate(timeout=600)
+        _stdout, stderr = proc.communicate(timeout=600)
     except Exception:
         try:
             proc.kill()
@@ -484,30 +599,21 @@ def _stream_final_wav_via_ffmpeg(
         raise
     if proc.returncode != 0:
         detail = (stderr or b"").decode("utf-8", errors="replace")
-        raise FinalizationError(f"ffmpeg failed writing final PCM temp: {detail}")
+        raise FinalizationError(
+            f"ffmpeg failed writing final PCM temp: {detail}",
+            recoverable_path=None,
+        )
     return written
 
 
-def _verify_final_temp(path: Path, *, expected_frames: int, ffmpeg_path: str) -> None:
-    geometry = probe_wav_pcm_geometry(path)
-    if geometry is None:
-        raise FinalizationError(f"Could not probe final PCM temp: {path}")
-    if geometry["channels"] != 2 or geometry["sample_rate"] != TARGET_RATE or geometry["sample_width"] != 2:
-        raise FinalizationError(
-            f"Unexpected final PCM geometry: {geometry}"
-        )
-    # Allow one-frame codec/header rounding.
-    if abs(int(geometry["frames"]) - int(expected_frames)) > 1:
-        raise FinalizationError(
-            f"Final PCM frame count mismatch: got {geometry['frames']}, expected {expected_frames}"
-        )
-    # Best-effort full decode when ffmpeg is available.
+def ffmpeg_can_decode(path: PathLike, ffmpeg_path: str) -> bool:
+    """True when ffmpeg can fully demux/decode ``path`` (ffprobe-free)."""
     try:
         result = subprocess.run(
             [
                 ffmpeg_path,
-                "-f",
-                "wav",
+                "-v",
+                "error",
                 "-i",
                 str(path),
                 "-f",
@@ -517,11 +623,61 @@ def _verify_final_temp(path: Path, *, expected_frames: int, ffmpeg_path: str) ->
             capture_output=True,
             timeout=600,
         )
-    except FileNotFoundError as exc:
-        raise FinalizationError(f"ffmpeg not found for final PCM verify: {exc}") from exc
-    if result.returncode != 0:
-        detail = (result.stderr or b"").decode("utf-8", errors="replace")
-        raise FinalizationError(f"ffmpeg could not decode final PCM temp: {detail}")
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return False
+    return result.returncode == 0
+
+
+def _verify_final_temp(
+    path: Path,
+    *,
+    expected_frames: int,
+    ffmpeg_path: str,
+) -> None:
+    geometry = probe_wav_pcm_geometry(path)
+    if geometry is None:
+        raise FinalizationError(
+            f"Could not probe final PCM temp: {path}",
+            recoverable_path=None,
+        )
+    if geometry["channels"] != 2 or geometry["sample_rate"] != TARGET_RATE or geometry["sample_width"] != 2:
+        raise FinalizationError(
+            f"Unexpected final PCM geometry: {geometry}",
+            recoverable_path=None,
+        )
+    # Allow one-frame codec/header rounding.
+    if abs(int(geometry["frames"]) - int(expected_frames)) > 1:
+        raise FinalizationError(
+            f"Final PCM frame count mismatch: got {geometry['frames']}, expected {expected_frames}",
+            recoverable_path=None,
+        )
+    if not ffmpeg_can_decode(path, ffmpeg_path):
+        raise FinalizationError(
+            f"ffmpeg could not decode final PCM temp: {path}",
+            recoverable_path=None,
+        )
+
+
+def _copy_recoverable_wav(final_temp: Path, output_path: PathLike) -> Optional[str]:
+    """Copy a verified-looking capture temp to a stable meeting-dir WAV (leave capture intact)."""
+    from .recorder_temp_paths import (
+        MIN_RECOVERABLE_PCM_BYTES,
+        build_stable_wav_path_for_output,
+    )
+
+    try:
+        if not final_temp.is_file() or final_temp.stat().st_size <= MIN_RECOVERABLE_PCM_BYTES:
+            return None
+    except OSError:
+        return None
+    if probe_wav_pcm_geometry(final_temp) is None:
+        return None
+    stable = Path(build_stable_wav_path_for_output(output_path))
+    try:
+        shutil.copy2(final_temp, stable)
+        return str(stable)
+    except OSError:
+        return None
 
 
 def cleanup_completed_capture_session(session_dir: PathLike) -> None:
@@ -696,7 +852,8 @@ def finalize_capture(
                 # Idempotent complete cleanup path for Task 10.
                 final_name = data["finalRelativePath"]
                 final_candidate = Path(output_path).with_name(final_name)
-                if final_candidate.is_file():
+                ffmpeg_exe = ffmpeg_path or "ffmpeg"
+                if final_candidate.is_file() and ffmpeg_can_decode(final_candidate, ffmpeg_exe):
                     cleanup_completed_capture_session(coordinator.session_dir)
                     return FinalizationResult(
                         final_path=str(final_candidate),
@@ -705,6 +862,9 @@ def finalize_capture(
                         recovered=recovered,
                         stats={"idempotentComplete": True},
                     )
+                raise FinalizationError(
+                    f"Complete capture final output is missing or undecodable: {final_candidate}"
+                )
 
         coordinator.set_state("finalizing")
         _emit_progress(progress_callback, "post_processing_started", "Finishing recording...")
@@ -832,11 +992,18 @@ def finalize_capture(
             mic_enhance = (left_plan, right_plan)
 
         _emit_progress(progress_callback, "audio_mixing", "Mixing audio...")
-        mix_peak = _compute_mix_peak(
-            mic_path,
-            desk_path if include_desktop else None,
-            frames=total_frames,
+        mix_peak = _compute_mix_peak_aligned(
+            mic_path=mic_path,
+            desk_path=desk_path if include_desktop else None,
+            mic_frames=mic_frames,
+            desk_frames=desk_frames,
+            total_frames=total_frames,
             chunk_frames=chunk_frames,
+            mic_pad=mic_pad,
+            desk_pad=desk_pad,
+            desk_trim=desk_trim,
+            include_desktop=include_desktop,
+            profile=profile,
             mic_volume=mic_volume,
             desktop_volume=desktop_volume,
             mic_boost=mic_boost if include_desktop else 1.0,
@@ -844,60 +1011,38 @@ def finalize_capture(
             desk_one_sided=desk_one_sided,
             mic_enhance=mic_enhance,
         )
-        # For peak pass over padded timeline, approximate using unpadded mix then
-        # recompute with alignment pads inside the generator below when needed.
         apply_mix_limit = include_desktop and mix_peak > 1.0
 
         post_mix_enhance = None
         if profile == "macos-v1":
-            # Bounded stats over the globally limited mixed signal.
+            # Bounded stats over the globally limited aligned mixed signal.
             left_sums = right_sums = 0.0
             count = 0
             min_l = max_l = min_r = max_r = 0.0
             first = True
-            mean_pass_values: List[tuple[float, float]] = []
 
             def _iter_mixed_for_stats() -> Iterator[np.ndarray]:
-                mic_pos = 0
-                desk_pos = desk_trim
-                out_pos = 0
-                while out_pos < total_frames:
-                    n = min(chunk_frames, total_frames - out_pos)
-                    chunk = np.zeros((n, 2), dtype=np.float32)
-                    # mic leading pad
-                    local = 0
-                    if out_pos < mic_pad:
-                        skip = min(n, mic_pad - out_pos)
-                        local += skip
-                    take = n - local
-                    if take > 0 and mic_pos < mic_frames:
-                        got = _read_float32_stereo_chunk(mic_path, mic_pos, min(take, mic_frames - mic_pos))
-                        chunk[local : local + got.shape[0]] = got
-                        mic_pos += got.shape[0]
-                    mic_chunk = _apply_one_sided(chunk, mic_one_sided)
-                    if include_desktop and desk_path is not None:
-                        desk_chunk = np.zeros((n, 2), dtype=np.float32)
-                        dlocal = 0
-                        if out_pos < desk_pad:
-                            dskip = min(n, desk_pad - out_pos)
-                            dlocal += dskip
-                        dtake = n - dlocal
-                        desk_kept = max(0, desk_frames - desk_trim)
-                        if dtake > 0 and desk_pos < desk_trim + desk_kept:
-                            got = _read_float32_stereo_chunk(
-                                desk_path,
-                                desk_pos,
-                                min(dtake, desk_trim + desk_kept - desk_pos),
-                            )
-                            desk_chunk[dlocal : dlocal + got.shape[0]] = got
-                            desk_pos += got.shape[0]
-                        desk_chunk = _apply_one_sided(desk_chunk, desk_one_sided)
-                        mixed = mic_chunk * (mic_volume * mic_boost) + desk_chunk * desktop_volume
-                    else:
-                        mixed = mic_chunk * mic_volume
-                    _mix_soft_limit_inplace(mixed, apply=apply_mix_limit)
-                    yield mixed
-                    out_pos += n
+                return _iter_aligned_mix_chunks(
+                    mic_path=mic_path,
+                    desk_path=desk_path if include_desktop else None,
+                    mic_frames=mic_frames,
+                    desk_frames=desk_frames,
+                    total_frames=total_frames,
+                    chunk_frames=chunk_frames,
+                    mic_pad=mic_pad,
+                    desk_pad=desk_pad,
+                    desk_trim=desk_trim,
+                    include_desktop=include_desktop,
+                    profile=profile,
+                    mic_volume=mic_volume,
+                    desktop_volume=desktop_volume,
+                    mic_boost=mic_boost if include_desktop else 1.0,
+                    mic_one_sided=mic_one_sided,
+                    desk_one_sided=desk_one_sided,
+                    mic_enhance=None,
+                    apply_mix_limit=apply_mix_limit,
+                    post_mix_enhance=None,
+                )
 
             for mixed in _iter_mixed_for_stats():
                 left_sums += float(mixed[:, 0].sum())
@@ -941,65 +1086,41 @@ def finalize_capture(
         final_temp = coordinator.session_dir / FINAL_CAPTURE_PCM_NAME
         if final_temp.exists():
             final_temp.unlink()
-        recoverable = str(final_temp)
-
-        def _iter_final_float_chunks() -> Iterator[np.ndarray]:
-            mic_pos = 0
-            desk_pos = desk_trim
-            out_pos = 0
-            while out_pos < total_frames:
-                n = min(chunk_frames, total_frames - out_pos)
-                if n > chunk_frames:
-                    raise ValueError("Rejecting oversize final chunk")
-                mic_chunk = np.zeros((n, 2), dtype=np.float32)
-                local = 0
-                if out_pos < mic_pad:
-                    local = min(n, mic_pad - out_pos)
-                take = n - local
-                if take > 0 and mic_pos < mic_frames:
-                    got = _read_float32_stereo_chunk(mic_path, mic_pos, min(take, mic_frames - mic_pos))
-                    mic_chunk[local : local + got.shape[0]] = got
-                    mic_pos += got.shape[0]
-                mic_chunk = _apply_one_sided(mic_chunk, mic_one_sided)
-                if profile == "windows-v1" and mic_enhance is not None:
-                    apply_stereo_enhance_inplace(mic_chunk, mic_enhance[0], mic_enhance[1])
-
-                if include_desktop and desk_path is not None:
-                    desk_chunk = np.zeros((n, 2), dtype=np.float32)
-                    dlocal = 0
-                    if out_pos < desk_pad:
-                        dlocal = min(n, desk_pad - out_pos)
-                    dtake = n - dlocal
-                    desk_kept = max(0, desk_frames - desk_trim)
-                    if dtake > 0 and desk_pos < desk_trim + desk_kept:
-                        got = _read_float32_stereo_chunk(
-                            desk_path,
-                            desk_pos,
-                            min(dtake, desk_trim + desk_kept - desk_pos),
-                        )
-                        desk_chunk[dlocal : dlocal + got.shape[0]] = got
-                        desk_pos += got.shape[0]
-                    desk_chunk = _apply_one_sided(desk_chunk, desk_one_sided)
-                    mixed = mic_chunk * (mic_volume * mic_boost) + desk_chunk * desktop_volume
-                    _mix_soft_limit_inplace(mixed, apply=apply_mix_limit)
-                else:
-                    if profile == "windows-v1":
-                        mixed = mic_chunk
-                    else:
-                        mixed = mic_chunk * mic_volume
-
-                if profile == "macos-v1" and post_mix_enhance is not None:
-                    apply_stereo_enhance_inplace(mixed, post_mix_enhance[0], post_mix_enhance[1])
-                yield mixed
-                out_pos += n
+        capture_temp_written = False
+        recoverable = None
 
         written_frames = _stream_final_wav_via_ffmpeg(
             ffmpeg_path=ffmpeg_path,
             output_path=final_temp,
-            frame_iter=_iter_final_float_chunks(),
+            frame_iter=_iter_aligned_mix_chunks(
+                mic_path=mic_path,
+                desk_path=desk_path if include_desktop else None,
+                mic_frames=mic_frames,
+                desk_frames=desk_frames,
+                total_frames=total_frames,
+                chunk_frames=chunk_frames,
+                mic_pad=mic_pad,
+                desk_pad=desk_pad,
+                desk_trim=desk_trim,
+                include_desktop=include_desktop,
+                profile=profile,
+                mic_volume=mic_volume,
+                desktop_volume=desktop_volume,
+                mic_boost=mic_boost if include_desktop else 1.0,
+                mic_one_sided=mic_one_sided,
+                desk_one_sided=desk_one_sided,
+                mic_enhance=mic_enhance,
+                apply_mix_limit=apply_mix_limit,
+                post_mix_enhance=post_mix_enhance if profile == "macos-v1" else None,
+            ),
         )
-        # ffmpeg may add/drop a sample of delay; prefer probe geometry.
-        _verify_final_temp(final_temp, expected_frames=written_frames, ffmpeg_path=ffmpeg_path)
+        capture_temp_written = True
+        try:
+            _verify_final_temp(final_temp, expected_frames=written_frames, ffmpeg_path=ffmpeg_path)
+        except FinalizationError as verify_exc:
+            promoted = _copy_recoverable_wav(final_temp, output_path)
+            raise FinalizationError(str(verify_exc), recoverable_path=promoted) from verify_exc
+
         geometry = probe_wav_pcm_geometry(final_temp) or {}
         duration = float(geometry.get("frames", written_frames)) / float(TARGET_RATE)
 
@@ -1011,6 +1132,13 @@ def finalize_capture(
             ffmpeg_path=ffmpeg_path,
             progress_message="Compressing with ffmpeg (Opus codec)...",
         )
+        # Require a real decode of the meeting output before deleting recovery inputs.
+        if not ffmpeg_can_decode(final_path, ffmpeg_path):
+            promoted = _copy_recoverable_wav(final_temp, output_path)
+            raise FinalizationError(
+                f"Final output failed decode verification: {final_path}",
+                recoverable_path=promoted or (final_path if Path(final_path).is_file() else None),
+            )
         recoverable = final_path
 
         # Mark complete + store basename only (same directory as output).
@@ -1055,10 +1183,23 @@ def finalize_capture(
                 "compress": compress_stats,
             },
         )
-    except FinalizationError:
+    except FinalizationError as exc:
+        # Never hand Electron a manifest-owned .capture/final.pcm.tmp path.
+        if exc.recoverable_path and FINAL_CAPTURE_PCM_NAME in Path(exc.recoverable_path).name:
+            promoted = _copy_recoverable_wav(Path(exc.recoverable_path), output_path)
+            if promoted:
+                raise FinalizationError(str(exc), recoverable_path=promoted) from exc
+            raise FinalizationError(str(exc), recoverable_path=None) from exc
         raise
     except Exception as exc:
-        raise FinalizationError(str(exc), recoverable_path=recoverable) from exc
+        promoted = None
+        try:
+            final_candidate = Path(session_dir) / FINAL_CAPTURE_PCM_NAME
+            if final_candidate.is_file():
+                promoted = _copy_recoverable_wav(final_candidate, output_path)
+        except Exception:
+            promoted = None
+        raise FinalizationError(str(exc), recoverable_path=promoted or recoverable) from exc
     finally:
         if owns_coordinator and coordinator is not None and not getattr(coordinator, "_closed", False):
             try:

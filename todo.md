@@ -67,7 +67,7 @@ Implementation plan: `docs/superpowers/plans/2026-07-13-recording-awareness-and-
 - [x] [Risk: High] Integrate Windows timestamp-aware and macOS float32 capture spools behind a temporary rollout flag while preserving desktop-failure behavior.
   - `AVANEVIS_CAPTURE_SPOOL` default off; Windows + macOS write durable tracks when enabled; stdin EOF stops cleanly; RAM mix path still hydrates at stop until Task 9.
 - [x] [Risk: High] Replace whole-recording joins/resampling/mixing with bounded multi-pass finalization and recoverable WAV/RF64-to-Opus output.
-  - Spool stop path uses `finalize_capture` (`windows-v1` / `macos-v1`); RAM path remains behind the flag until Task 10.
+  - Spool stop path uses `finalize_capture` (`windows-v1` / `macos-v1`); explicit wav muxer for `final.pcm.tmp`; committedFrames boundary; ffmpeg decode verify before cleanup; stable-wav recovery paths. RAM path remains behind the flag until Task 10.
 - [ ] [Risk: High] Discover interrupted captures async after window creation, offer `Recover Now` / `Later`, serialize accepted recovery with scan/start through one maintenance gate, complete 2-hour/4-hour hardware evidence, then remove the RAM path and rollout flag.
 
 ## Deferred Product And Architecture Backlog
