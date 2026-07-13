@@ -64,7 +64,8 @@ Implementation plan: `docs/superpowers/plans/2026-07-13-recording-awareness-and-
 - [x] [Risk: Medium] Measure 15-minute and 60-minute capture/stop RSS, duration, and disk baselines; expose structured stop-processing stages, replace shell disk probes (verify Windows `statfs`), and warn periodically when recording space becomes low.
   - Guardrails landed on `feature/long-recording-safety-r2` (statfs probe, 5-minute disk monitor, stdout stop stages, initiative doc). **Hardware 15/60 baselines still pending** in `docs/initiatives/LONG_RECORDING_SAFETY.md`.
 - [x] [Risk: High] Add versioned atomic capture manifests and bounded segmented mic/desktop track spools (8 MiB hard cap, soft warning, sustained-stall detection) that cannot be scan-imported as meetings.
-- [ ] [Risk: High] Integrate Windows timestamp-aware and macOS float32 capture spools behind a temporary rollout flag while preserving desktop-failure behavior.
+- [x] [Risk: High] Integrate Windows timestamp-aware and macOS float32 capture spools behind a temporary rollout flag while preserving desktop-failure behavior.
+  - `AVANEVIS_CAPTURE_SPOOL` default off; Windows + macOS write durable tracks when enabled; stdin EOF stops cleanly; RAM mix path still hydrates at stop until Task 9.
 - [ ] [Risk: High] Replace whole-recording joins/resampling/mixing with bounded multi-pass finalization and recoverable WAV/RF64-to-Opus output.
 - [ ] [Risk: High] Discover interrupted captures async after window creation, offer `Recover Now` / `Later`, serialize accepted recovery with scan/start through one maintenance gate, complete 2-hour/4-hour hardware evidence, then remove the RAM path and rollout flag.
 

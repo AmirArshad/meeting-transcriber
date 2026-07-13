@@ -1,4 +1,9 @@
-"""Compact audio chunk buffering helpers for long recordings."""
+"""Compact audio chunk buffering helpers for long recordings.
+
+When ``AVANEVIS_CAPTURE_SPOOL`` is enabled, platform recorders write durable
+track spools instead of retaining full-session chunks here. Level meters may
+still keep only the latest chunk.
+"""
 
 from __future__ import annotations
 
