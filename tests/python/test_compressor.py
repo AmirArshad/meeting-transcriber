@@ -98,6 +98,7 @@ def test_verify_recording_integrity_falls_back_to_ffmpeg_decode(tmp_path, monkey
     assert compressor.verify_recording_integrity(str(audio), ffmpeg_path='/bin/ffmpeg') is True
     assert seen['cmd'][0] == '/bin/ffmpeg'
     assert '-i' in seen['cmd']
+    assert '-xerror' in seen['cmd']
 
 
 def test_get_file_info_returns_empty_when_ffprobe_is_unavailable(monkeypatch):

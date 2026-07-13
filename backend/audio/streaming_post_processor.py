@@ -129,6 +129,10 @@ class TrackFrameReader:
     def chunk_frames(self) -> int:
         return self._chunk_frames
 
+    @property
+    def frames_read(self) -> int:
+        return self._frames_read
+
     def close(self) -> None:
         if self._handle is not None:
             try:
@@ -323,6 +327,7 @@ def _normalize_track_to_stereo_file(
         if profile == "windows-v1"
         else downmix_macos_frames_to_stereo
     )
+    committed = int(track.get("committedFrames") or 0)
 
     with TrackFrameReader(
         session_dir,
@@ -331,7 +336,7 @@ def _normalize_track_to_stereo_file(
         dtype=dtype,
         chunk_frames=chunk_frames,
         max_chunk_frames=chunk_frames,
-        committed_frames=int(track.get("committedFrames") or 0),
+        committed_frames=committed,
     ) as reader:
         first = True
         pending_flush = False
@@ -362,6 +367,12 @@ def _normalize_track_to_stereo_file(
                 written += int(stereo.shape[0])
             if last:
                 break
+
+        if reader.frames_read != committed:
+            raise FinalizationError(
+                f"Track short of committed frames for {output_name}: "
+                f"read {reader.frames_read}, expected {committed}"
+            )
 
     if written == 0:
         _write_float32_chunk(out_path, np.zeros((0, 2), dtype=np.float32), append=False)
@@ -435,11 +446,16 @@ def _iter_aligned_mix_chunks(
             )
             if got.shape[0] > chunk_frames:
                 raise ValueError("Rejecting oversize mic chunk read")
+            # One-sided + Windows enhance only on real mic samples — never on
+            # alignment silence (RAM path enhances before padding).
+            got = _apply_one_sided(got, mic_one_sided)
+            if mic_enhance is not None:
+                apply_stereo_enhance_inplace(got, mic_enhance[0], mic_enhance[1])
             mic_chunk[local : local + got.shape[0]] = got
             mic_pos += got.shape[0]
-        mic_chunk = _apply_one_sided(mic_chunk, mic_one_sided)
-        if mic_enhance is not None:
-            apply_stereo_enhance_inplace(mic_chunk, mic_enhance[0], mic_enhance[1])
+        elif mic_one_sided.repair:
+            # Pad-only chunk: zeros stay zeros under one-sided repair.
+            mic_chunk = _apply_one_sided(mic_chunk, mic_one_sided)
 
         if include_desktop and desk_path is not None:
             desk_chunk = np.zeros((n, 2), dtype=np.float32)
@@ -607,13 +623,18 @@ def _stream_final_wav_via_ffmpeg(
 
 
 def ffmpeg_can_decode(path: PathLike, ffmpeg_path: str) -> bool:
-    """True when ffmpeg can fully demux/decode ``path`` (ffprobe-free)."""
+    """True when ffmpeg can fully demux/decode ``path`` (ffprobe-free).
+
+    Uses ``-xerror`` so decode errors on truncated/corrupt PCM fail the check
+    even when ffmpeg would otherwise exit 0 after printing stderr diagnostics.
+    """
     try:
         result = subprocess.run(
             [
                 ffmpeg_path,
                 "-v",
                 "error",
+                "-xerror",
                 "-i",
                 str(path),
                 "-f",
@@ -658,8 +679,13 @@ def _verify_final_temp(
         )
 
 
-def _copy_recoverable_wav(final_temp: Path, output_path: PathLike) -> Optional[str]:
-    """Copy a verified-looking capture temp to a stable meeting-dir WAV (leave capture intact)."""
+def _copy_recoverable_wav(
+    final_temp: Path,
+    output_path: PathLike,
+    *,
+    ffmpeg_path: str,
+) -> Optional[str]:
+    """Copy a decodable capture temp to a stable meeting-dir WAV (leave capture intact)."""
     from .recorder_temp_paths import (
         MIN_RECOVERABLE_PCM_BYTES,
         build_stable_wav_path_for_output,
@@ -671,6 +697,8 @@ def _copy_recoverable_wav(final_temp: Path, output_path: PathLike) -> Optional[s
     except OSError:
         return None
     if probe_wav_pcm_geometry(final_temp) is None:
+        return None
+    if not ffmpeg_can_decode(final_temp, ffmpeg_path):
         return None
     stable = Path(build_stable_wav_path_for_output(output_path))
     try:
@@ -1118,7 +1146,9 @@ def finalize_capture(
         try:
             _verify_final_temp(final_temp, expected_frames=written_frames, ffmpeg_path=ffmpeg_path)
         except FinalizationError as verify_exc:
-            promoted = _copy_recoverable_wav(final_temp, output_path)
+            promoted = _copy_recoverable_wav(
+                final_temp, output_path, ffmpeg_path=ffmpeg_path
+            )
             raise FinalizationError(str(verify_exc), recoverable_path=promoted) from verify_exc
 
         geometry = probe_wav_pcm_geometry(final_temp) or {}
@@ -1134,7 +1164,9 @@ def finalize_capture(
         )
         # Require a real decode of the meeting output before deleting recovery inputs.
         if not ffmpeg_can_decode(final_path, ffmpeg_path):
-            promoted = _copy_recoverable_wav(final_temp, output_path)
+            promoted = _copy_recoverable_wav(
+                final_temp, output_path, ffmpeg_path=ffmpeg_path
+            )
             raise FinalizationError(
                 f"Final output failed decode verification: {final_path}",
                 recoverable_path=promoted or (final_path if Path(final_path).is_file() else None),
@@ -1186,7 +1218,9 @@ def finalize_capture(
     except FinalizationError as exc:
         # Never hand Electron a manifest-owned .capture/final.pcm.tmp path.
         if exc.recoverable_path and FINAL_CAPTURE_PCM_NAME in Path(exc.recoverable_path).name:
-            promoted = _copy_recoverable_wav(Path(exc.recoverable_path), output_path)
+            promoted = _copy_recoverable_wav(
+                Path(exc.recoverable_path), output_path, ffmpeg_path=ffmpeg_path
+            )
             if promoted:
                 raise FinalizationError(str(exc), recoverable_path=promoted) from exc
             raise FinalizationError(str(exc), recoverable_path=None) from exc
@@ -1196,7 +1230,9 @@ def finalize_capture(
         try:
             final_candidate = Path(session_dir) / FINAL_CAPTURE_PCM_NAME
             if final_candidate.is_file():
-                promoted = _copy_recoverable_wav(final_candidate, output_path)
+                promoted = _copy_recoverable_wav(
+                    final_candidate, output_path, ffmpeg_path=ffmpeg_path
+                )
         except Exception:
             promoted = None
         raise FinalizationError(str(exc), recoverable_path=promoted or recoverable) from exc

@@ -230,6 +230,7 @@ def verify_recording_integrity(file_path: str, *, ffmpeg_path: str | None = None
             [
                 ffmpeg_exe,
                 '-v', 'error',
+                '-xerror',
                 '-i', file_path,
                 '-f', 'null',
                 '-',

@@ -533,6 +533,109 @@ def test_finalize_honors_committed_frames_not_segment_tail(tmp_path, monkeypatch
     assert got.shape[0] // 2 == 100
 
 
+def test_finalize_rejects_short_committed_track_and_preserves_capture(
+    tmp_path, monkeypatch
+):
+    """P1: over-claimed committedFrames must fail; never delete .capture."""
+    from backend.audio.streaming_post_processor import FinalizationError
+
+    mic = np.full((480, 2), 0.1, dtype=np.float32)
+    coordinator, output = _build_session(
+        tmp_path,
+        profile="macos-v1",
+        mic=mic,
+        desktop=None,
+        dtype="<f4",
+        include_desktop=False,
+    )
+    # Manifest claims 960 but only 480 frames exist on disk.
+    coordinator.commit_track("mic", ["mic_0000.pcm.part"], committed_frames=960)
+    session_dir = coordinator.session_dir
+    _patch_finalize_io(monkeypatch)
+    with pytest.raises(FinalizationError, match="short of committed"):
+        finalize_capture(
+            session_dir / MANIFEST_FILENAME,
+            output,
+            chunk_frames=120,
+            coordinator=coordinator,
+        )
+    assert session_dir.is_dir()
+    assert (session_dir / MANIFEST_FILENAME).is_file()
+    assert (session_dir / "mic_0000.pcm.part").is_file()
+    assert coordinator.get_track("mic")["committedFrames"] == 960
+
+
+def test_ffmpeg_can_decode_rejects_truncated_wav(tmp_path):
+    """P1: geometry-readable truncated WAVs must fail decode with -xerror."""
+    import shutil
+
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        pytest.skip("ffmpeg not available")
+
+    path = tmp_path / "truncated.wav"
+    pcm = np.zeros(2000 * 2, dtype=np.int16)
+    write_int16_pcm_wav(path, pcm, channels=2, sample_rate=48000)
+    data = path.read_bytes()
+    # Keep RIFF header + only a fraction of PCM so ffmpeg hits Invalid PCM packet.
+    path.write_bytes(data[:44 + 200 * 4])
+    assert probe_wav_pcm_geometry(path) is not None
+    assert spp.ffmpeg_can_decode(path, ffmpeg) is False
+    assert (
+        spp._copy_recoverable_wav(path, tmp_path / "meeting.opus", ffmpeg_path=ffmpeg)
+        is None
+    )
+
+
+def test_windows_enhance_skips_alignment_silence(tmp_path):
+    """P1: Windows mic enhance must not DC-shift zero-padded alignment silence."""
+    from backend.audio.processor import plan_channel_enhance
+    from backend.audio.streaming_post_processor import _OneSidedDecision
+
+    mic = np.full((100, 2), 0.2, dtype=np.float32)
+    desk = np.full((200, 2), 0.05, dtype=np.float32)
+    mic_path = tmp_path / "norm_mic.f32"
+    desk_path = tmp_path / "norm_desk.f32"
+    spp._write_float32_chunk(mic_path, mic, append=False)
+    spp._write_float32_chunk(desk_path, desk, append=False)
+    left = plan_channel_enhance(mic[:, 0])
+    right = plan_channel_enhance(mic[:, 1])
+    assert abs(left.mean - 0.2) < 1e-5
+
+    # Leading mic pad + longer desktop (desktop-only tail).
+    mixed = np.concatenate(
+        list(
+            spp._iter_aligned_mix_chunks(
+                mic_path=mic_path,
+                desk_path=desk_path,
+                mic_frames=100,
+                desk_frames=200,
+                total_frames=220,
+                chunk_frames=50,
+                mic_pad=20,
+                desk_pad=0,
+                desk_trim=0,
+                include_desktop=True,
+                profile="windows-v1",
+                mic_volume=1.0,
+                desktop_volume=0.0,
+                mic_boost=1.0,
+                mic_one_sided=_OneSidedDecision(False),
+                desk_one_sided=_OneSidedDecision(False),
+                mic_enhance=(left, right),
+                apply_mix_limit=False,
+            )
+        ),
+        axis=0,
+    )
+    assert mixed.shape == (220, 2)
+    # Buggy path subtracted mic mean from pads → ~-0.2; correct path keeps true zeros.
+    leading = mixed[:20]
+    trailing = mixed[120:]
+    assert float(np.max(np.abs(leading))) < 1e-6
+    assert float(np.max(np.abs(trailing))) < 1e-6
+
+
 def test_finalize_never_requests_oversize_chunks(tmp_path, monkeypatch):
     mic = np.full((64, 2), 0.1, dtype=np.float32)
     coordinator, output = _build_session(
