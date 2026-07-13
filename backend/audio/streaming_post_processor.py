@@ -848,11 +848,17 @@ def finalize_capture(
     *,
     coordinator: Optional[CaptureManifestCoordinator] = None,
     recovered: bool = False,
+    promote_to_path: Optional[PathLike] = None,
 ) -> FinalizationResult:
     """Finalize a capture session with bounded memory.
 
     When ``coordinator`` is provided (live recorder path), the existing session
     lock is reused. Recovery (Task 10) passes only ``manifest_path``.
+
+    When ``promote_to_path`` is set (recovery staging), the verified meeting
+    output is atomically renamed to that canonical path **before** the manifest
+    is marked complete and the capture session is deleted. Promotion failure
+    retains the ``.capture`` session for retry.
     """
     if chunk_frames <= 0:
         raise ValueError("chunk_frames must be positive")
@@ -1176,6 +1182,24 @@ def finalize_capture(
                 recoverable_path=promoted or (final_path if Path(final_path).is_file() else None),
             )
         recoverable = final_path
+
+        # Recovery staging: promote to the canonical meeting path before any
+        # irreversible complete/cleanup so a kill/replace failure keeps .capture.
+        if promote_to_path is not None:
+            staged = Path(final_path)
+            dest = Path(promote_to_path)
+            if staged.suffix.lower() != dest.suffix.lower():
+                dest = dest.with_suffix(staged.suffix)
+            try:
+                if dest.resolve(strict=False) != staged.resolve(strict=False):
+                    os.replace(staged, dest)
+                final_path = str(dest)
+                recoverable = final_path
+            except OSError as exc:
+                raise FinalizationError(
+                    f"Failed to promote recovered audio to canonical path: {exc}",
+                    recoverable_path=str(staged) if staged.is_file() else None,
+                ) from exc
 
         # Mark complete + store basename only (same directory as output).
         coordinator.set_final_relative_path(Path(final_path).name)

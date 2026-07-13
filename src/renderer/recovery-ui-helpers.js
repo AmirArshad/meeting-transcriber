@@ -236,11 +236,48 @@
     return hidden;
   }
 
+  /**
+   * Preserve a once-claimed prompt across queued recovery-state refreshes.
+   */
+  function mergeClaimedPromptIntoState(state, claimedPrompt) {
+    if (!state || typeof state !== 'object') {
+      return state;
+    }
+    if (claimedPrompt && state.status === 'available') {
+      return { ...state, promptEligible: true };
+    }
+    return state;
+  }
+
+  /**
+   * Pure focus-trap decision for the recovery modal.
+   * @returns {{ preventDefault: boolean, focusIndex: number|null }}
+   */
+  function resolveRecoveryFocusTrapAction(focusableCount, activeIndex, shiftKey) {
+    const count = Number(focusableCount) || 0;
+    if (count <= 0) {
+      return { preventDefault: true, focusIndex: null };
+    }
+    const index = Number.isInteger(activeIndex) ? activeIndex : -1;
+    if (shiftKey) {
+      if (index <= 0) {
+        return { preventDefault: true, focusIndex: count - 1 };
+      }
+      return { preventDefault: false, focusIndex: null };
+    }
+    if (index < 0 || index >= count - 1) {
+      return { preventDefault: true, focusIndex: 0 };
+    }
+    return { preventDefault: false, focusIndex: null };
+  }
+
   const helpers = {
     FINISHING_RECORDING_LABEL,
     RECOVERING_BANNER_LABEL,
     getRecoveryPromptView,
     getRecoveryBannerView,
+    mergeClaimedPromptIntoState,
+    resolveRecoveryFocusTrapAction,
   };
 
   if (typeof module === 'object' && module.exports) {

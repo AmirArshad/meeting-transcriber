@@ -8,7 +8,12 @@ const MAX_PROGRESS_LOG_ENTRIES = 250;
 const AI_ADDON_PROGRESS_LOG_INTERVAL_MS = 1000;
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const { getRecordButtonAction, getRecordingPresenceView, canHydratedRendererStopRecording } = window.recordingStateHelpers;
-const { getRecoveryPromptView, getRecoveryBannerView } = window.recoveryUiHelpers;
+const {
+  getRecoveryPromptView,
+  getRecoveryBannerView,
+  mergeClaimedPromptIntoState,
+  resolveRecoveryFocusTrapAction,
+} = window.recoveryUiHelpers;
 const {
   buildAiAddonControlState,
   buildHomeAiAddonPrompt,
@@ -2139,21 +2144,14 @@ function trapRecoveryModalFocus(event) {
     return;
   }
   const focusables = getRecoveryModalFocusables();
-  if (focusables.length === 0) {
-    event.preventDefault();
+  const activeIndex = focusables.indexOf(document.activeElement);
+  const action = resolveRecoveryFocusTrapAction(focusables.length, activeIndex, event.shiftKey);
+  if (!action.preventDefault) {
     return;
   }
-  const first = focusables[0];
-  const last = focusables[focusables.length - 1];
-  const active = document.activeElement;
-  if (event.shiftKey) {
-    if (active === first || !recoveryModalEl.contains(active)) {
-      event.preventDefault();
-      last.focus();
-    }
-  } else if (active === last || !recoveryModalEl.contains(active)) {
-    event.preventDefault();
-    first.focus();
+  event.preventDefault();
+  if (Number.isInteger(action.focusIndex) && focusables[action.focusIndex]) {
+    focusables[action.focusIndex].focus();
   }
 }
 
@@ -2196,8 +2194,9 @@ async function queryRecordingRecoveryState() {
   if (!window.electronAPI?.getRecordingRecoveryState) {
     return recoveryState;
   }
-  // Single-flight coalesce: concurrent callers share one in-flight query so an
-  // older generation cannot discard a promptEligible claim.
+  // Single-flight coalesce: concurrent callers share one in-flight query.
+  // Only apply the final response, preserving a claimed prompt across refreshes
+  // while status remains available.
   if (recoveryQueryPromise) {
     recoveryQueryNeedsRefresh = true;
     return recoveryQueryPromise;
@@ -2205,11 +2204,18 @@ async function queryRecordingRecoveryState() {
 
   recoveryQueryPromise = (async () => {
     try {
+      let claimedPrompt = false;
+      let latest = null;
       do {
         recoveryQueryNeedsRefresh = false;
-        const state = await window.electronAPI.getRecordingRecoveryState();
-        applyRecoveryState(state);
+        // eslint-disable-next-line no-await-in-loop
+        latest = await window.electronAPI.getRecordingRecoveryState();
+        if (latest && latest.promptEligible) {
+          claimedPrompt = true;
+        }
       } while (recoveryQueryNeedsRefresh);
+
+      applyRecoveryState(mergeClaimedPromptIntoState(latest, claimedPrompt));
       return recoveryState;
     } finally {
       recoveryQueryPromise = null;

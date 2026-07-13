@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -461,3 +462,63 @@ def test_recovering_opus_staging_not_scannable(tmp_path):
     staging.write_bytes(b"partial")
     selected = select_scannable_audio_files(tmp_path)
     assert [path.name for path in selected] == [meeting.name]
+
+
+def test_recovering_wav_staging_not_scannable(tmp_path):
+    meeting = tmp_path / "meeting_20260101_120000.opus"
+    meeting.write_bytes(b"opus")
+    staging = tmp_path / "recording_x.recovering.wav"
+    staging.write_bytes(b"RIFF")
+    selected = select_scannable_audio_files(tmp_path)
+    assert [path.name for path in selected] == [meeting.name]
+
+
+def test_promote_failure_retains_capture_session(tmp_path, monkeypatch):
+    """Promotion must happen before complete/cleanup; failure keeps .capture."""
+    _patch_finalize_io(monkeypatch)
+    session = _build_interrupted_session(
+        tmp_path,
+        stem="recording_promote_fail",
+        started_at_iso="2026-07-13T10:00:00.000Z",
+        desktop_frames=None,
+        mic_frames=4800,
+    )
+
+    real_replace = os.replace
+
+    def boom_replace(src, dst):
+        src_path = Path(src)
+        dst_path = Path(dst)
+        if src_path.name.endswith(".recovering.opus") or src_path.name.endswith(".recovering.wav"):
+            raise OSError("simulated promote failure")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", boom_replace)
+
+    with pytest.raises((spp.FinalizationError, CaptureRecoveryError)):
+        recover_capture(tmp_path, session, ffmpeg_path="ffmpeg")
+
+    assert session.is_dir()
+    assert (session / MANIFEST_FILENAME).is_file()
+    # Canonical meeting file must not appear without a durable capture cleanup.
+    assert not (tmp_path / "recording_promote_fail.opus").exists() or session.exists()
+    data = json.loads((session / MANIFEST_FILENAME).read_text(encoding="utf-8"))
+    assert data["state"] != "complete"
+
+
+def test_successful_recovery_promotes_before_cleanup(tmp_path, monkeypatch):
+    _patch_finalize_io(monkeypatch)
+    session = _build_interrupted_session(
+        tmp_path,
+        stem="recording_promote_ok",
+        started_at_iso="2026-07-13T10:00:00.000Z",
+        desktop_frames=None,
+        mic_frames=4800,
+    )
+    result = recover_capture(tmp_path, session, ffmpeg_path="ffmpeg")
+    assert Path(result["audioPath"]).name == "recording_promote_ok.wav" or Path(result["audioPath"]).name.endswith(
+        (".opus", ".wav")
+    )
+    assert not (tmp_path / "recording_promote_ok.recovering.opus").exists()
+    assert not (tmp_path / "recording_promote_ok.recovering.wav").exists()
+    assert not session.exists() or not (session / MANIFEST_FILENAME).exists()

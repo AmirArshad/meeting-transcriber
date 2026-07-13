@@ -347,3 +347,96 @@ test('failed recovery messages strip Windows paths with spaces', async () => {
   assert.doesNotMatch(state.failed[0].message, /Jane Doe/);
   assert.match(state.failed[0].message, /\[path\]/);
 });
+
+test('failed recovery messages strip UNC paths with spaces', async () => {
+  const { service } = createRecoveryService({
+    spawnTrackedPython: (args) => {
+      if (args.includes('--list')) {
+        return createProc({ success: true, candidates: [sampleCandidate] });
+      }
+      return createProc({
+        success: false,
+        recovered: [],
+        failed: [{
+          captureDir: sampleCandidate.captureDir,
+          code: 'RECOVERY_FAILED',
+          message: 'Failed at \\\\server\\share name\\Jane Doe\\recordings\\file.wav',
+        }],
+      }, { exitCode: 1 });
+    },
+  });
+  await service.discoverInterruptedCaptures();
+  await service.recoverInterruptedCaptures();
+  const state = service.getRecordingRecoveryState();
+  assert.doesNotMatch(state.failed[0].message, /Jane Doe|share name/);
+  assert.match(state.failed[0].message, /\[path\]/);
+});
+
+test('recovery waiting for scan refuses after capture starts', async () => {
+  const { EventEmitter: EE } = require('node:events');
+  const recorderProc = new EE();
+  recorderProc.stdout = new EE();
+  recorderProc.stderr = new EE();
+  recorderProc.stdin = { write() {} };
+  recorderProc.kill = () => {};
+
+  const { service, gate } = createRecoveryService({
+    spawnTrackedPython: (args) => {
+      const joined = args.map(String).join(' ');
+      if (joined.includes('--list')) {
+        return createProc({ success: true, candidates: [sampleCandidate] });
+      }
+      if (joined.includes('capture_recovery') || joined.includes('--recover')) {
+        return createProc({
+          success: true,
+          recovered: [{ captureDir: sampleCandidate.captureDir, audioPath: '/tmp/a.wav', duration: 1 }],
+          failed: [],
+        }, { delayMs: 40 });
+      }
+      return recorderProc;
+    },
+  });
+  await service.discoverInterruptedCaptures();
+
+  const handlers = {};
+  service.registerIpc({ handle(channel, handler) { handlers[channel] = handler; } });
+
+  await gate.acquire('scan');
+  const recoverPromise = service.recoverInterruptedCaptures();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const startPromise = handlers['start-recording'](
+    { sender: {} },
+    { micId: 0, loopbackId: 1, isFirstRecording: false },
+  );
+
+  gate.release('scan');
+  await new Promise((resolve) => setImmediate(resolve));
+
+  recorderProc.stdout.emit('data', Buffer.from(`${JSON.stringify({
+    type: 'event',
+    event: 'recording_started',
+    message: 'Recording started!',
+  })}\n`));
+
+  const [startResult, recoverResult] = await Promise.all([startPromise, recoverPromise]);
+
+  const startOk = Boolean(startResult && startResult.success);
+  const recoverOk = Boolean(recoverResult && recoverResult.success);
+  assert.equal(startOk && recoverOk, false);
+
+  if (startOk) {
+    assert.equal(service.getCaptureState().state, 'recording');
+    assert.equal(recoverResult.success, false);
+    assert.equal(recoverResult.code, 'RECORDING_IN_PROGRESS');
+  } else {
+    assert.ok(
+      startResult.code === 'RECORDING_RECOVERY_IN_PROGRESS'
+      || startResult.code === 'RECORDING_START_IN_PROGRESS',
+    );
+  }
+  assert.equal(gate.getOwner(), 'idle');
+
+  recorderProc.emit('close', 1);
+  await new Promise((resolve) => setImmediate(resolve));
+});

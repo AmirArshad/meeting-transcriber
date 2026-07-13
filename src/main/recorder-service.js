@@ -225,9 +225,10 @@ function createRecorderService(deps) {
 
   function sanitizeRecoveryMessage(message) {
     const text = String(message || '').trim() || 'Recovery failed';
-    // Strip absolute paths (including Windows paths with spaces) and capture dirs.
+    // Strip absolute paths (drive-letter, UNC with spaces, POSIX) and capture dirs.
     return text
       .replace(/[A-Za-z]:\\(?:[^\\/:*?"<>|\r\n]+\\)*[^\\/:*?"<>|\r\n]*/g, '[path]')
+      .replace(/\\\\[^\\\r\n]+(?:\\[^\\\r\n]+)*/g, '[path]')
       .replace(/\/(?:[^\/\r\n]+\/)+[^\/:\r\n]*/g, '[path]')
       .replace(/[^\s/\\]+\.capture/gi, '[capture]')
       .slice(0, 240);

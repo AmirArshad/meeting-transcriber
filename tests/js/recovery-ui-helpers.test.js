@@ -8,6 +8,8 @@ const {
   RECOVERING_BANNER_LABEL,
   getRecoveryPromptView,
   getRecoveryBannerView,
+  mergeClaimedPromptIntoState,
+  resolveRecoveryFocusTrapAction,
 } = require('../../src/renderer/recovery-ui-helpers');
 
 function formatBytes(bytes) {
@@ -171,4 +173,38 @@ test('prompt omits unknown disk usage instead of showing 0 MB', () => {
   assert.equal(view.visible, true);
   assert.doesNotMatch(view.detail, /0 MB/);
   assert.match(view.detail, /Interrupted recordings: 1$/);
+});
+
+test('mergeClaimedPromptIntoState preserves prompt across refresh while available', () => {
+  const claimed = mergeClaimedPromptIntoState({
+    status: 'available',
+    promptEligible: false,
+    totals: { count: 1 },
+  }, true);
+  assert.equal(claimed.promptEligible, true);
+
+  const idle = mergeClaimedPromptIntoState({
+    status: 'idle',
+    promptEligible: false,
+  }, true);
+  assert.equal(idle.promptEligible, false);
+});
+
+test('resolveRecoveryFocusTrapAction cycles Tab and Shift+Tab', () => {
+  assert.deepEqual(
+    resolveRecoveryFocusTrapAction(2, 1, false),
+    { preventDefault: true, focusIndex: 0 },
+  );
+  assert.deepEqual(
+    resolveRecoveryFocusTrapAction(2, 0, true),
+    { preventDefault: true, focusIndex: 1 },
+  );
+  assert.deepEqual(
+    resolveRecoveryFocusTrapAction(2, 0, false),
+    { preventDefault: false, focusIndex: null },
+  );
+  assert.deepEqual(
+    resolveRecoveryFocusTrapAction(0, -1, false),
+    { preventDefault: true, focusIndex: null },
+  );
 });

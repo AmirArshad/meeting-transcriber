@@ -321,8 +321,8 @@ def recover_capture(
             "duration": duration,
         }
 
-    # Stage to a non-meeting name so a failed compress cannot delete a sibling final
-    # and scan-import cannot promote a partial recovering artifact.
+    # Stage to a non-meeting name so a failed compress cannot delete a sibling
+    # final. Promote atomically inside finalize_capture before complete/cleanup.
     staging_path = _resolve_output_beside_root(root, stem, ".recovering.opus")
     try:
         result = finalize_capture(
@@ -331,6 +331,7 @@ def recover_capture(
             ffmpeg_path=ffmpeg_exe,
             progress_callback=progress_callback,
             recovered=True,
+            promote_to_path=output_opus,
         )
     except Timeout as exc:
         raise CaptureRecoveryError(
@@ -338,38 +339,21 @@ def recover_capture(
         ) from exc
     except FinalizationError:
         # Leave any pre-existing finals alone; remove failed staging only.
-        try:
-            if staging_path.is_file():
-                staging_path.unlink()
-        except OSError:
-            pass
-        raise
-
-    final_path = Path(result.final_path)
-    # Promote staging → canonical meeting name when finalize wrote the staging path.
-    if final_path.resolve(strict=False) == staging_path.resolve(strict=False):
-        try:
-            os.replace(staging_path, output_opus)
-            final_path = output_opus
-        except OSError as exc:
-            raise CaptureRecoveryError(
-                f"Failed to promote recovered audio into the recordings directory: {exc}"
-            ) from exc
-    else:
-        # finalize may have fallen back to .wav beside the staging stem.
-        wav_staging = staging_path.with_suffix(".wav")
-        if final_path.resolve(strict=False) == wav_staging.resolve(strict=False):
+        for leftover in (
+            staging_path,
+            staging_path.with_suffix(".wav"),
+            _resolve_output_beside_root(root, stem, ".recovering.wav"),
+        ):
             try:
-                os.replace(wav_staging, output_wav)
-                final_path = output_wav
-            except OSError as exc:
-                raise CaptureRecoveryError(
-                    f"Failed to promote recovered WAV into the recordings directory: {exc}"
-                ) from exc
+                if leftover.is_file():
+                    leftover.unlink()
+            except OSError:
+                pass
+        raise
 
     return {
         "captureDir": str(session_dir),
-        "audioPath": str(final_path),
+        "audioPath": result.final_path,
         "duration": float(result.duration),
     }
 
