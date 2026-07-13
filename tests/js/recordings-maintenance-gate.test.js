@@ -83,7 +83,7 @@ test('recovery waits briefly for scan then acquires', async () => {
   assert.equal(gate.getOwner(), 'recovery');
 });
 
-test('start-recording waits briefly behind scan then admits', async () => {
+test('start-recording reserves start after scan releases', async () => {
   const timers = createFakeTimers();
   const gate = createRecordingsMaintenanceGate({
     scanWaitMs: 2000,
@@ -104,6 +104,9 @@ test('start-recording waits briefly behind scan then admits', async () => {
   timers.advance(0);
   const result = await pending;
   assert.equal(result.ok, true);
+  assert.equal(result.owner, 'start');
+  assert.equal(gate.getOwner(), 'start');
+  gate.release('start');
 });
 
 test('start-recording rejects immediately while recovery holds the gate', async () => {
@@ -125,7 +128,6 @@ test('start-recording times out when scan never releases', async () => {
   await gate.acquire('scan');
 
   const pending = gate.admitStartRecording();
-  // Drive the wait timeout without releasing scan.
   for (let i = 0; i < 5; i += 1) {
     timers.advance(50);
     // eslint-disable-next-line no-await-in-loop
@@ -134,4 +136,57 @@ test('start-recording times out when scan never releases', async () => {
   const denied = await pending;
   assert.equal(denied.ok, false);
   assert.equal(denied.code, 'RECORDING_SCAN_IN_PROGRESS');
+});
+
+test('start reservation blocks recovery until released after capture publish', async () => {
+  const gate = createRecordingsMaintenanceGate();
+  const start = await gate.admitStartRecording();
+  assert.equal(start.ok, true);
+  assert.equal(gate.getOwner(), 'start');
+
+  const recoveryDenied = await gate.acquire('recovery');
+  assert.equal(recoveryDenied.ok, false);
+
+  gate.release('start');
+  const recovery = await gate.acquire('recovery');
+  assert.equal(recovery.ok, true);
+});
+
+test('transfer moves recovery to scan without admitting start', async () => {
+  const gate = createRecordingsMaintenanceGate();
+  await gate.acquire('recovery');
+  assert.equal(gate.transfer('recovery', 'scan'), true);
+  assert.equal(gate.getOwner(), 'scan');
+  const startDenied = await gate.admitStartRecording({ waitForScanMs: 0 });
+  assert.equal(startDenied.ok, false);
+  gate.release('scan');
+});
+
+test('capture beginning while recovery waits for scan refuses after re-check', async () => {
+  const timers = createFakeTimers();
+  const gate = createRecordingsMaintenanceGate({
+    scanWaitMs: 1000,
+    setTimeoutFn: timers.setTimeoutFn,
+    clearTimeoutFn: timers.clearTimeoutFn,
+    nowFn: timers.nowFn,
+  });
+  await gate.acquire('scan');
+
+  const recoveryPending = gate.acquire('recovery', { waitForScanMs: 1000 });
+  const startPending = gate.admitStartRecording({ waitForScanMs: 1000 });
+
+  gate.release('scan');
+  timers.advance(0);
+
+  const [recovery, start] = await Promise.all([recoveryPending, startPending]);
+  // Exactly one may win the idle race; the other must fail.
+  const winners = [recovery, start].filter((result) => result.ok);
+  assert.equal(winners.length, 1);
+  if (start.ok) {
+    assert.equal(gate.getOwner(), 'start');
+    assert.equal(recovery.ok, false);
+  } else {
+    assert.equal(gate.getOwner(), 'recovery');
+    assert.equal(start.ok, false);
+  }
 });

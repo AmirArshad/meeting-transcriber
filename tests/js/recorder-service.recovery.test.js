@@ -262,3 +262,88 @@ test('quitCommitted refuses recovery before acquiring gate', async () => {
   assert.equal(result.code, 'QUIT_IN_PROGRESS');
   assert.equal(gate.getOwner(), 'idle');
 });
+
+test('successful recovery transfers to scan and releases gate', async () => {
+  let scanCalls = 0;
+  let sawAlreadyHolding = false;
+  const { service, gate } = createRecoveryService({
+    spawnTrackedPython: (args) => {
+      if (args.includes('--list')) {
+        return createProc({ success: true, candidates: [sampleCandidate] });
+      }
+      return createProc({
+        success: true,
+        recovered: [{ captureDir: sampleCandidate.captureDir, audioPath: '/tmp/a.wav', duration: 1 }],
+        failed: [],
+      });
+    },
+    async scanRecordings(options = {}) {
+      scanCalls += 1;
+      sawAlreadyHolding = Boolean(options.alreadyHoldingScan);
+      assert.equal(gate.getOwner(), 'scan');
+      return { scanned: 1, added: 1, skipped: 0 };
+    },
+  });
+  await service.discoverInterruptedCaptures();
+  const result = await service.recoverInterruptedCaptures();
+  assert.equal(result.success, true);
+  assert.equal(scanCalls, 1);
+  assert.equal(sawAlreadyHolding, true);
+  assert.equal(gate.getOwner(), 'idle');
+  assert.equal(service.getRecordingRecoveryState().status, 'idle');
+});
+
+test('Dismiss after scan-import-only failure keeps banner-visible available state', async () => {
+  const { service } = createRecoveryService({
+    spawnTrackedPython: (args) => {
+      if (args.includes('--list')) {
+        return createProc({ success: true, candidates: [sampleCandidate] });
+      }
+      return createProc({
+        success: true,
+        recovered: [{ captureDir: sampleCandidate.captureDir, audioPath: '/tmp/a.wav', duration: 1 }],
+        failed: [],
+      });
+    },
+    async scanRecordings() {
+      throw new Error('scan blew up');
+    },
+  });
+  await service.discoverInterruptedCaptures();
+  const first = await service.recoverInterruptedCaptures();
+  assert.equal(first.success, false);
+  const errorState = service.getRecordingRecoveryState();
+  assert.equal(errorState.status, 'error');
+  assert.equal(errorState.scanImportPending, true);
+
+  const deferred = service.deferRecordingRecovery();
+  assert.equal(deferred.status, 'available');
+  assert.equal(deferred.scanImportPending, true);
+  assert.ok(deferred.totals.count >= 1);
+});
+
+test('failed recovery messages strip Windows paths with spaces', async () => {
+  const { service } = createRecoveryService({
+    spawnTrackedPython: (args) => {
+      if (args.includes('--list')) {
+        return createProc({ success: true, candidates: [sampleCandidate] });
+      }
+      return createProc({
+        success: false,
+        recovered: [],
+        failed: [{
+          captureDir: sampleCandidate.captureDir,
+          code: 'RECOVERY_FAILED',
+          message: 'Failed at C:\\Users\\Jane Doe\\AppData\\recordings\\file.wav after compress',
+        }],
+      }, { exitCode: 1 });
+    },
+  });
+  await service.discoverInterruptedCaptures();
+  await service.recoverInterruptedCaptures();
+  const state = service.getRecordingRecoveryState();
+  assert.equal(state.status, 'error');
+  assert.equal(state.failed.length, 1);
+  assert.doesNotMatch(state.failed[0].message, /Jane Doe/);
+  assert.match(state.failed[0].message, /\[path\]/);
+});

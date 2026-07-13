@@ -144,6 +144,15 @@ def validate_manifest_data(data: Any) -> Dict[str, Any]:
         raise CaptureManifestError(f"Invalid capture state: {data['state']!r}")
     if not isinstance(data["outputStem"], str) or not data["outputStem"]:
         raise CaptureManifestError("outputStem must be a non-empty string")
+    stem = data["outputStem"]
+    if (
+        os.path.isabs(stem)
+        or "/" in stem
+        or "\\" in stem
+        or ".." in stem
+        or not _SAFE_RELATIVE_FILE_RE.match(stem)
+    ):
+        raise CaptureManifestError(f"Unsafe outputStem: {stem!r}")
     _validate_frame_count(data["startedAtMonotonicNs"], field_name="startedAtMonotonicNs")
     # Malformed ISO is discovery-safe as null via validate_started_at_iso; keep the
     # raw string in the payload so recovery can report it without blocking open.

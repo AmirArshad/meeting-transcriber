@@ -3,10 +3,11 @@
 /**
  * Shared gate that serializes recordings-directory mutations.
  *
- * Owners: idle | scan | recovery
- * - start-recording waits briefly when the gate is held as scan
+ * Owners: idle | scan | recovery | start
+ * - start-recording waits briefly when the gate is held as scan, then reserves `start`
  * - start-recording rejects immediately while recovery holds the gate
- * - recovery waits briefly for an in-flight scan, then re-checks capture state
+ * - recovery waits briefly for an in-flight scan/start, then re-checks capture state
+ * - transfer() moves ownership without releasing to idle (recovery → scan for import)
  */
 
 function createRecordingsMaintenanceGate(options = {}) {
@@ -17,6 +18,7 @@ function createRecordingsMaintenanceGate(options = {}) {
     nowFn = () => Date.now(),
   } = options;
 
+  const VALID_OWNERS = new Set(['scan', 'recovery', 'start']);
   let owner = 'idle';
   /** @type {Set<() => void>} */
   const idleWaiters = new Set();
@@ -41,7 +43,7 @@ function createRecordingsMaintenanceGate(options = {}) {
   }
 
   function tryAcquire(kind) {
-    if (kind !== 'scan' && kind !== 'recovery') {
+    if (!VALID_OWNERS.has(kind)) {
       throw new Error(`Invalid recordings maintenance owner: ${kind}`);
     }
     if (owner !== 'idle') {
@@ -57,6 +59,21 @@ function createRecordingsMaintenanceGate(options = {}) {
     }
     owner = 'idle';
     notifyIdleWaiters();
+    return true;
+  }
+
+  /**
+   * Atomically move ownership without passing through idle.
+   * Used so recovery can hand off to scan/import without admitting start.
+   */
+  function transfer(fromKind, toKind) {
+    if (!VALID_OWNERS.has(toKind)) {
+      throw new Error(`Invalid recordings maintenance owner: ${toKind}`);
+    }
+    if (owner !== fromKind) {
+      return false;
+    }
+    owner = toKind;
     return true;
   }
 
@@ -97,6 +114,14 @@ function createRecordingsMaintenanceGate(options = {}) {
         message: 'Interrupted-recording recovery is in progress.',
       };
     }
+    if (currentOwner === 'start') {
+      return {
+        ok: false,
+        code: 'RECORDING_START_IN_PROGRESS',
+        owner: 'start',
+        message: 'A recording is starting.',
+      };
+    }
     return {
       ok: false,
       code: 'RECORDING_SCAN_IN_PROGRESS',
@@ -114,7 +139,8 @@ function createRecordingsMaintenanceGate(options = {}) {
       return busyResult('recovery');
     }
 
-    if (owner === 'scan' && waitForScanMs > 0) {
+    // Wait behind scan or a brief start reservation.
+    if ((owner === 'scan' || owner === 'start') && waitForScanMs > 0) {
       const deadline = nowFn() + waitForScanMs;
       while (nowFn() < deadline) {
         const remaining = deadline - nowFn();
@@ -133,12 +159,10 @@ function createRecordingsMaintenanceGate(options = {}) {
   }
 
   /**
-   * Admission for start-recording: brief wait behind scan, immediate reject for recovery.
+   * Admission for start-recording: brief wait behind scan, then reserve `start`
+   * so recovery cannot race in before capture state becomes non-idle.
    */
   async function admitStartRecording({ waitForScanMs = scanWaitMs } = {}) {
-    if (owner === 'idle') {
-      return { ok: true };
-    }
     if (owner === 'recovery') {
       return {
         ok: false,
@@ -149,12 +173,9 @@ function createRecordingsMaintenanceGate(options = {}) {
     }
 
     const deadline = nowFn() + Math.max(0, waitForScanMs);
-    while (nowFn() < deadline) {
-      const remaining = deadline - nowFn();
-      // eslint-disable-next-line no-await-in-loop
-      await waitForIdle(remaining);
-      if (owner === 'idle') {
-        return { ok: true };
+    while (true) {
+      if (tryAcquire('start')) {
+        return { ok: true, owner: 'start' };
       }
       if (owner === 'recovery') {
         return {
@@ -164,14 +185,27 @@ function createRecordingsMaintenanceGate(options = {}) {
           message: 'Finish or wait for interrupted-recording recovery before starting a new recording.',
         };
       }
+      if (owner === 'start') {
+        // Another start already reserved.
+        return {
+          ok: false,
+          code: 'RECORDING_START_IN_PROGRESS',
+          owner: 'start',
+          message: 'A recording is starting.',
+        };
+      }
+      if (nowFn() >= deadline) {
+        return {
+          ok: false,
+          code: 'RECORDING_SCAN_IN_PROGRESS',
+          owner: 'scan',
+          message: 'Wait for recording recovery scan to finish before starting a new recording.',
+        };
+      }
+      const remaining = deadline - nowFn();
+      // eslint-disable-next-line no-await-in-loop
+      await waitForIdle(remaining);
     }
-
-    return {
-      ok: false,
-      code: 'RECORDING_SCAN_IN_PROGRESS',
-      owner: 'scan',
-      message: 'Wait for recording recovery scan to finish before starting a new recording.',
-    };
   }
 
   return {
@@ -180,6 +214,7 @@ function createRecordingsMaintenanceGate(options = {}) {
     tryAcquire,
     acquire,
     release,
+    transfer,
     admitStartRecording,
     waitForIdle,
     scanWaitMs,

@@ -148,3 +148,27 @@ test('error banner partial-failure copy distinguishes finished vs remaining', ()
   assert.match(view.text, /1 still needs another try/);
   assert.match(view.text, /kept safe/);
 });
+
+test('available banner with scanImportPending stays visible without candidates', () => {
+  const view = getRecoveryBannerView({
+    status: 'available',
+    promptEligible: false,
+    totals: { count: 1, approxBytes: null },
+    candidates: [],
+    failed: [],
+    scanImportPending: true,
+  }, 'idle', formatBytes);
+  assert.equal(view.visible, true);
+  assert.match(view.text, /still need to be added to History/);
+  assert.equal(view.primaryAction, 'Recover');
+});
+
+test('prompt omits unknown disk usage instead of showing 0 MB', () => {
+  const view = getRecoveryPromptView({
+    ...oneCandidate,
+    totals: { count: 1, approxBytes: null },
+  }, formatBytes);
+  assert.equal(view.visible, true);
+  assert.doesNotMatch(view.detail, /0 MB/);
+  assert.match(view.detail, /Interrupted recordings: 1$/);
+});

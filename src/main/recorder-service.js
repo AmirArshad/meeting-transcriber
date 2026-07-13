@@ -225,10 +225,10 @@ function createRecorderService(deps) {
 
   function sanitizeRecoveryMessage(message) {
     const text = String(message || '').trim() || 'Recovery failed';
-    // Strip absolute paths and capture-dir names so renderer never sees filesystem paths.
+    // Strip absolute paths (including Windows paths with spaces) and capture dirs.
     return text
-      .replace(/\/[^\s:]+/g, '[path]')
-      .replace(/[A-Za-z]:\\[^\s:]+/g, '[path]')
+      .replace(/[A-Za-z]:\\(?:[^\\/:*?"<>|\r\n]+\\)*[^\\/:*?"<>|\r\n]*/g, '[path]')
+      .replace(/\/(?:[^\/\r\n]+\/)+[^\/:\r\n]*/g, '[path]')
       .replace(/[^\s/\\]+\.capture/gi, '[capture]')
       .slice(0, 240);
   }
@@ -247,22 +247,32 @@ function createRecorderService(deps) {
 
   function computeRecoveryTotals(candidates) {
     const list = Array.isArray(candidates) ? candidates : [];
-    let approxBytes = 0;
+    let approxBytes = null;
+    let sawBytes = false;
     for (const item of list) {
       if (Number.isFinite(item?.approxBytes)) {
-        approxBytes += item.approxBytes;
+        approxBytes = (approxBytes || 0) + item.approxBytes;
+        sawBytes = true;
       }
     }
-    return { count: list.length, approxBytes };
+    return { count: list.length, approxBytes: sawBytes ? approxBytes : null };
   }
 
   function buildRecoveryStateSnapshot({ claimPrompt = false } = {}) {
     const displayCandidates = recoveryInternalCandidates.map(toDisplayCandidate);
+    let totals = computeRecoveryTotals(displayCandidates);
+    // Scan-import-only pending: keep a non-zero count so Dismiss cannot hide the banner.
+    if (totals.count === 0 && recoveryScanImportPending && recoveryLastSuccessCount > 0) {
+      totals = {
+        count: recoveryLastSuccessCount,
+        approxBytes: null,
+      };
+    }
     let promptEligible = false;
     if (
       claimPrompt
       && recoveryStatus === 'available'
-      && displayCandidates.length > 0
+      && (displayCandidates.length > 0 || recoveryScanImportPending)
       && !recoveryPromptClaimed
     ) {
       recoveryPromptClaimed = true;
@@ -271,7 +281,7 @@ function createRecorderService(deps) {
     return {
       status: recoveryStatus,
       candidates: displayCandidates,
-      totals: computeRecoveryTotals(displayCandidates),
+      totals,
       activeCandidateIndex: recoveryActiveCandidateIndex,
       failed: recoveryFailed.map((entry) => ({
         candidateIndex: entry.candidateIndex,
@@ -282,6 +292,7 @@ function createRecorderService(deps) {
       progressMessage: recoveryProgressMessage,
       lastBatchSize: recoveryLastBatchSize || null,
       lastSuccessCount: recoveryLastSuccessCount || null,
+      scanImportPending: Boolean(recoveryScanImportPending),
     };
   }
 
@@ -387,7 +398,7 @@ function createRecorderService(deps) {
 
   function deferRecordingRecovery() {
     if (recoveryStatus === 'error') {
-      // Dismiss: error → available over unresolved candidates; banner stays visible.
+      // Dismiss: error → available over unresolved work; banner stays visible.
       recoveryFailed = [];
       recoveryActiveCandidateIndex = null;
       recoveryProgressMessage = null;
@@ -485,14 +496,16 @@ function createRecorderService(deps) {
     recoveryFailed = [];
     recoveryActiveCandidateIndex = 0;
     recoveryProgressMessage = null;
-    recoveryLastBatchSize = batch.length;
-    recoveryLastSuccessCount = 0;
+    recoveryLastBatchSize = batch.length || recoveryLastBatchSize || recoveryLastSuccessCount || 0;
+    if (batch.length > 0) {
+      recoveryLastSuccessCount = 0;
+    }
 
     const unresolved = [];
+    let heldOwner = 'recovery';
     try {
       for (let index = 0; index < batch.length; index += 1) {
         if (isQuitCommitted()) {
-          // Quit may kill the child; leave remaining candidates for next launch.
           for (let rest = index; rest < batch.length; rest += 1) {
             unresolved.push({
               candidate: batch[rest],
@@ -542,12 +555,31 @@ function createRecorderService(deps) {
       const anySucceeded = unresolved.length < batch.length;
       let scanOk = true;
       if ((anySucceeded || recoveryScanImportPending) && typeof scanRecordings === 'function') {
-        try {
-          await scanRecordings();
-          recoveryScanImportPending = false;
-        } catch (error) {
-          scanOk = false;
-          recoveryScanImportPending = true;
+        // Hand off recovery → scan without releasing to idle (blocks start).
+        if (heldOwner === 'recovery' && recordingsMaintenanceGate.transfer('recovery', 'scan')) {
+          heldOwner = 'scan';
+        } else if (heldOwner === 'recovery') {
+          recordingsMaintenanceGate.release('recovery');
+          heldOwner = null;
+          const scanAdmission = await recordingsMaintenanceGate.acquire('scan', {
+            waitForScanMs: recordingsMaintenanceGate.scanWaitMs || 5000,
+          });
+          if (scanAdmission.ok) {
+            heldOwner = 'scan';
+          } else {
+            scanOk = false;
+            recoveryScanImportPending = true;
+          }
+        }
+
+        if (heldOwner === 'scan') {
+          try {
+            await scanRecordings({ alreadyHoldingScan: true });
+            recoveryScanImportPending = false;
+          } catch (error) {
+            scanOk = false;
+            recoveryScanImportPending = true;
+          }
         }
       }
 
@@ -558,12 +590,14 @@ function createRecorderService(deps) {
         recoveryProgressMessage = null;
         recoveryLastBatchSize = 0;
         recoveryLastSuccessCount = 0;
+        recoveryScanImportPending = false;
         setRecoveryStatus('idle');
         return { success: true, recovered: batch.length, failed: 0 };
       }
 
-      // Keep only unresolved candidates so Retry never re-runs successes.
-      recoveryLastSuccessCount = batch.length - unresolved.length;
+      recoveryLastSuccessCount = batch.length > 0
+        ? batch.length - unresolved.length
+        : recoveryLastSuccessCount;
       recoveryInternalCandidates = unresolved.map((entry) => entry.candidate);
       recoveryFailed = unresolved.map((entry, index) => ({
         candidateIndex: index,
@@ -582,11 +616,13 @@ function createRecorderService(deps) {
       setRecoveryStatus('error');
       return {
         success: false,
-        recovered: batch.length - unresolved.length,
+        recovered: batch.length > 0 ? batch.length - unresolved.length : recoveryLastSuccessCount,
         failed: unresolved.length || (scanOk ? 0 : 1),
       };
     } finally {
-      recordingsMaintenanceGate.release('recovery');
+      if (heldOwner) {
+        recordingsMaintenanceGate.release(heldOwner);
+      }
       recoveryProcess = null;
     }
   }
@@ -1140,6 +1176,7 @@ function createRecorderService(deps) {
         };
       }
 
+      let startGateHeld = false;
       if (recordingsMaintenanceGate) {
         const admission = await recordingsMaintenanceGate.admitStartRecording();
         if (!admission.ok) {
@@ -1150,6 +1187,7 @@ function createRecorderService(deps) {
               || 'Wait for recording recovery scan to finish before starting a new recording.',
           };
         }
+        startGateHeld = admission.owner === 'start';
       } else if (isRecordingsScanInProgress()) {
         return {
           success: false,
@@ -1159,12 +1197,21 @@ function createRecorderService(deps) {
       }
 
       if (isRecorderBusy({ pythonProcess, recordingStopPromise })) {
+        if (startGateHeld) {
+          recordingsMaintenanceGate.release('start');
+        }
         return buildRecorderBusyResponse();
       }
 
       const sessionId = ++recordingSessionCounter;
       activeRecordingSessionId = sessionId;
+      // Publish non-idle before releasing the start reservation so recovery
+      // cannot race in between admission and capture-state publication.
       publishCaptureState('starting', sessionId, null);
+      if (startGateHeld) {
+        recordingsMaintenanceGate.release('start');
+        startGateHeld = false;
+      }
 
       return new Promise((resolve) => {
         let proc = null;

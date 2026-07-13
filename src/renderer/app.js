@@ -99,7 +99,7 @@ let recoveryState = {
   promptEligible: false,
 };
 let recoveryQueryPromise = null;
-let recoveryQueryGeneration = 0;
+let recoveryQueryNeedsRefresh = false;
 let recoveryPromptQueued = false;
 let recoveryPromptOpen = false;
 let recoveryFocusRestoreEl = null;
@@ -2124,6 +2124,39 @@ function openRecoveryPrompt(view) {
   recoveryModalNowBtn?.focus();
 }
 
+function getRecoveryModalFocusables() {
+  if (!recoveryModalEl) {
+    return [];
+  }
+  return [
+    recoveryModalLaterBtn,
+    recoveryModalNowBtn,
+  ].filter((el) => el && !el.disabled && el.offsetParent !== null);
+}
+
+function trapRecoveryModalFocus(event) {
+  if (!recoveryPromptOpen || event.key !== 'Tab') {
+    return;
+  }
+  const focusables = getRecoveryModalFocusables();
+  if (focusables.length === 0) {
+    event.preventDefault();
+    return;
+  }
+  const first = focusables[0];
+  const last = focusables[focusables.length - 1];
+  const active = document.activeElement;
+  if (event.shiftKey) {
+    if (active === first || !recoveryModalEl.contains(active)) {
+      event.preventDefault();
+      last.focus();
+    }
+  } else if (active === last || !recoveryModalEl.contains(active)) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
 function closeRecoveryPrompt({ deferred = false } = {}) {
   if (!recoveryModalEl) {
     return;
@@ -2163,26 +2196,25 @@ async function queryRecordingRecoveryState() {
   if (!window.electronAPI?.getRecordingRecoveryState) {
     return recoveryState;
   }
-  const generation = ++recoveryQueryGeneration;
+  // Single-flight coalesce: concurrent callers share one in-flight query so an
+  // older generation cannot discard a promptEligible claim.
   if (recoveryQueryPromise) {
-    try {
-      await recoveryQueryPromise;
-    } catch (_) {
-      // Prior query errors should not block a fresh fetch.
-    }
+    recoveryQueryNeedsRefresh = true;
+    return recoveryQueryPromise;
   }
-  recoveryQueryPromise = window.electronAPI.getRecordingRecoveryState()
-    .then((state) => {
-      if (generation === recoveryQueryGeneration) {
+
+  recoveryQueryPromise = (async () => {
+    try {
+      do {
+        recoveryQueryNeedsRefresh = false;
+        const state = await window.electronAPI.getRecordingRecoveryState();
         applyRecoveryState(state);
-      }
-      return state;
-    })
-    .finally(() => {
-      if (generation === recoveryQueryGeneration) {
-        recoveryQueryPromise = null;
-      }
-    });
+      } while (recoveryQueryNeedsRefresh);
+      return recoveryState;
+    } finally {
+      recoveryQueryPromise = null;
+    }
+  })();
   return recoveryQueryPromise;
 }
 
@@ -2255,10 +2287,15 @@ function setupRecordingRecoveryUi() {
     }
   });
   document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && recoveryPromptOpen) {
+    if (!recoveryPromptOpen) {
+      return;
+    }
+    if (event.key === 'Escape') {
       event.preventDefault();
       void handleDeferRecordingRecoveryAction();
+      return;
     }
+    trapRecoveryModalFocus(event);
   });
   if (window.electronAPI?.onRecordingRecoveryStateChanged) {
     window.electronAPI.onRecordingRecoveryStateChanged(() => {

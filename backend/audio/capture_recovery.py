@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -24,6 +25,7 @@ from .capture_manifest import (
     CAPTURE_DIR_SUFFIX,
     MANIFEST_FILENAME,
     SESSION_LOCK_FILENAME,
+    CaptureManifestCoordinator,
     CaptureManifestError,
     validate_manifest_data,
     validate_started_at_iso,
@@ -33,7 +35,12 @@ from .constants import (
     NORMALIZED_DESKTOP_NAME,
     NORMALIZED_MIC_NAME,
 )
-from .streaming_post_processor import FinalizationError, finalize_capture
+from .streaming_post_processor import (
+    FinalizationError,
+    cleanup_completed_capture_session,
+    ffmpeg_can_decode,
+    finalize_capture,
+)
 
 PathLike = Union[str, Path]
 
@@ -134,7 +141,33 @@ def _approx_bytes(session_dir: Path, data: Dict[str, Any]) -> Optional[int]:
                 saw_any = True
         except OSError:
             continue
-    return total if saw_any else (0 if tracks else None)
+    return total if saw_any else None
+
+
+def _safe_output_stem(stem: Any) -> str:
+    """Require a basename-only stem that cannot escape the recordings root."""
+    if not isinstance(stem, str) or not stem.strip():
+        raise CaptureRecoveryError("Capture manifest missing outputStem")
+    text = stem.strip()
+    if (
+        os.path.isabs(text)
+        or "/" in text
+        or "\\" in text
+        or ".." in text
+        or text in (".", "")
+    ):
+        raise CaptureRecoveryError(f"Unsafe outputStem: {stem!r}")
+    # Keep aligned with capture_manifest._SAFE_RELATIVE_FILE_RE.
+    if not re.match(r"^[A-Za-z0-9._-]+$", text):
+        raise CaptureRecoveryError(f"Unsafe outputStem: {stem!r}")
+    return text
+
+
+def _resolve_output_beside_root(root: Path, stem: str, suffix: str) -> Path:
+    candidate = (root / f"{stem}{suffix}").resolve(strict=False)
+    if candidate.parent != root.resolve(strict=False):
+        raise CaptureRecoveryError("Resolved output path escapes the recordings root")
+    return candidate
 
 
 def _candidate_from_manifest(
@@ -234,30 +267,68 @@ def recover_capture(
     if not manifest_path.is_file():
         raise CaptureRecoveryError(f"Missing capture manifest: {manifest_path}")
 
+    ffmpeg_exe = ffmpeg_path or "ffmpeg"
+
     # Peek outputStem without holding the lock across finalize (finalize opens it).
     try:
         peek = json.loads(manifest_path.read_text(encoding="utf-8"))
         validate_manifest_data(peek)
-        stem = peek.get("outputStem")
-        if not isinstance(stem, str) or not stem:
-            raise CaptureRecoveryError("Capture manifest missing outputStem")
+        stem = _safe_output_stem(peek.get("outputStem"))
     except (OSError, json.JSONDecodeError, CaptureManifestError) as exc:
         raise CaptureRecoveryError(f"Invalid capture manifest: {exc}") from exc
 
-    # Prefer .opus beside the recordings root (same as live recorder output_path).
-    output_path = root / f"{stem}.opus"
-    # Preserve an already-verified final if present (never delete on fail).
+    output_opus = _resolve_output_beside_root(root, stem, ".opus")
+    output_wav = _resolve_output_beside_root(root, stem, ".wav")
+
+    # If a verified final already exists, never overwrite it with ffmpeg -y.
     preexisting_final: Optional[Path] = None
-    for candidate in (root / f"{stem}.opus", root / f"{stem}.wav"):
-        if candidate.is_file():
+    for candidate in (output_opus, output_wav):
+        if candidate.is_file() and ffmpeg_can_decode(candidate, ffmpeg_exe):
             preexisting_final = candidate
             break
 
+    if preexisting_final is not None:
+        duration = 0.0
+        try:
+            coordinator = CaptureManifestCoordinator.open_existing(
+                session_dir, lock_timeout=0
+            )
+        except Timeout as exc:
+            raise CaptureRecoveryError(
+                f"Capture session is locked (recording may still be active): {session_dir}"
+            ) from exc
+        try:
+            try:
+                coordinator.set_final_relative_path(preexisting_final.name)
+                coordinator.set_state("complete")
+            except CaptureManifestError:
+                pass
+            session_path = coordinator.session_dir
+            try:
+                coordinator.close()
+            except Exception:
+                pass
+            cleanup_completed_capture_session(session_path)
+        finally:
+            if not getattr(coordinator, "_closed", False):
+                try:
+                    coordinator.close()
+                except Exception:
+                    pass
+        return {
+            "captureDir": str(session_dir),
+            "audioPath": str(preexisting_final),
+            "duration": duration,
+        }
+
+    # Stage to a non-meeting name so a failed compress cannot delete a sibling final
+    # and scan-import cannot promote a partial recovering artifact.
+    staging_path = _resolve_output_beside_root(root, stem, ".recovering.opus")
     try:
         result = finalize_capture(
             manifest_path,
-            output_path,
-            ffmpeg_path=ffmpeg_path or "ffmpeg",
+            staging_path,
+            ffmpeg_path=ffmpeg_exe,
             progress_callback=progress_callback,
             recovered=True,
         )
@@ -266,16 +337,39 @@ def recover_capture(
             f"Capture session is locked (recording may still be active): {session_dir}"
         ) from exc
     except FinalizationError:
-        # Failure never deletes a verified final that already existed.
-        if preexisting_final is not None and not preexisting_final.is_file():
-            raise CaptureRecoveryError(
-                f"Finalization failed and verified output disappeared: {preexisting_final}"
-            )
+        # Leave any pre-existing finals alone; remove failed staging only.
+        try:
+            if staging_path.is_file():
+                staging_path.unlink()
+        except OSError:
+            pass
         raise
+
+    final_path = Path(result.final_path)
+    # Promote staging → canonical meeting name when finalize wrote the staging path.
+    if final_path.resolve(strict=False) == staging_path.resolve(strict=False):
+        try:
+            os.replace(staging_path, output_opus)
+            final_path = output_opus
+        except OSError as exc:
+            raise CaptureRecoveryError(
+                f"Failed to promote recovered audio into the recordings directory: {exc}"
+            ) from exc
+    else:
+        # finalize may have fallen back to .wav beside the staging stem.
+        wav_staging = staging_path.with_suffix(".wav")
+        if final_path.resolve(strict=False) == wav_staging.resolve(strict=False):
+            try:
+                os.replace(wav_staging, output_wav)
+                final_path = output_wav
+            except OSError as exc:
+                raise CaptureRecoveryError(
+                    f"Failed to promote recovered WAV into the recordings directory: {exc}"
+                ) from exc
 
     return {
         "captureDir": str(session_dir),
-        "audioPath": result.final_path,
+        "audioPath": str(final_path),
         "duration": float(result.duration),
     }
 

@@ -125,7 +125,8 @@ function createMeetingManagerClient(deps) {
    * Scan recordings directory and sync with database.
    * Acquires the shared recordings-maintenance gate as `scan` when provided.
    */
-  async function scanRecordings() {
+  async function scanRecordings(options = {}) {
+    const alreadyHoldingScan = Boolean(options && options.alreadyHoldingScan);
     if (isRecorderBusy()) {
       const error = new Error('Recording recovery scan is unavailable while a recording is active or being saved.');
       error.code = 'RECORDING_IN_PROGRESS';
@@ -137,13 +138,21 @@ function createMeetingManagerClient(deps) {
       throw error;
     }
 
-    if (recordingsMaintenanceGate) {
+    if (recordingsMaintenanceGate && !alreadyHoldingScan) {
       const admission = await recordingsMaintenanceGate.acquire('scan');
       if (!admission.ok) {
         const error = new Error(admission.message || 'Recordings maintenance is in progress.');
         error.code = admission.code || 'RECORDINGS_MAINTENANCE_IN_PROGRESS';
         throw error;
       }
+    } else if (
+      alreadyHoldingScan
+      && recordingsMaintenanceGate
+      && recordingsMaintenanceGate.getOwner() !== 'scan'
+    ) {
+      const error = new Error('Scan was requested without holding the recordings maintenance gate.');
+      error.code = 'RECORDINGS_MAINTENANCE_IN_PROGRESS';
+      throw error;
     }
 
     recordingsScanInProgress = true;
@@ -201,7 +210,8 @@ function createMeetingManagerClient(deps) {
       });
     } finally {
       recordingsScanInProgress = false;
-      if (recordingsMaintenanceGate) {
+      // Caller that transferred recovery→scan owns release of the scan hold.
+      if (recordingsMaintenanceGate && !alreadyHoldingScan) {
         recordingsMaintenanceGate.release('scan');
       }
     }

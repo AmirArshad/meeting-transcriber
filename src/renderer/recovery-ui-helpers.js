@@ -157,6 +157,17 @@
     const sizeText = formatBytesSafe(formatBytes, recoveryState.totals?.approxBytes);
 
     if (status === 'available') {
+      if (recoveryState.scanImportPending && count > 0) {
+        const noun = count === 1 ? 'recovered recording' : 'recovered recordings';
+        return {
+          visible: true,
+          text: `${count} ${noun} still need to be added to History`,
+          showSpinner: false,
+          primaryAction: 'Recover',
+          secondaryAction: null,
+          modifier: 'available',
+        };
+      }
       if (count <= 0) {
         return hidden;
       }

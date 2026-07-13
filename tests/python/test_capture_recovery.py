@@ -363,3 +363,101 @@ def test_cli_list_and_recover_roundtrip(tmp_path, monkeypatch):
         "--recover", str(session),
     ]) == 0
     assert list_interrupted_captures(tmp_path) == []
+
+
+def test_unsafe_output_stem_rejected(tmp_path):
+    from backend.audio.capture_manifest import CaptureManifestError, validate_manifest_data
+
+    with pytest.raises(CaptureManifestError, match="Unsafe outputStem"):
+        validate_manifest_data({
+            "schemaVersion": 1,
+            "state": "recording",
+            "outputStem": "../escape",
+            "startedAtMonotonicNs": 1,
+            "startedAtIso": "2026-07-13T10:00:00.000Z",
+            "tracks": {
+                "mic": {
+                    "sampleRate": 48000,
+                    "channels": 2,
+                    "dtype": "<i2",
+                    "committedFrames": 0,
+                    "segments": [],
+                }
+            },
+        })
+
+    with pytest.raises(CaptureManifestError, match="Unsafe outputStem"):
+        validate_manifest_data({
+            "schemaVersion": 1,
+            "state": "recording",
+            "outputStem": "/tmp/evil",
+            "startedAtMonotonicNs": 1,
+            "startedAtIso": "2026-07-13T10:00:00.000Z",
+            "tracks": {
+                "mic": {
+                    "sampleRate": 48000,
+                    "channels": 2,
+                    "dtype": "<i2",
+                    "committedFrames": 0,
+                    "segments": [],
+                }
+            },
+        })
+
+
+def test_preexisting_verified_opus_is_not_overwritten(tmp_path, monkeypatch):
+    session = _build_interrupted_session(
+        tmp_path,
+        stem="recording_keep",
+        started_at_iso="2026-07-13T10:00:00.000Z",
+        state="finalizing",
+        desktop_frames=None,
+        mic_frames=4800,
+    )
+    verified = tmp_path / "recording_keep.opus"
+    verified.write_bytes(b"verified-final-bytes")
+
+    monkeypatch.setattr(
+        "backend.audio.capture_recovery.ffmpeg_can_decode",
+        lambda *a, **k: True,
+    )
+
+    called = {"finalize": False}
+
+    def boom(*args, **kwargs):
+        called["finalize"] = True
+        raise spp.FinalizationError("should not run")
+
+    monkeypatch.setattr("backend.audio.capture_recovery.finalize_capture", boom)
+
+    result = recover_capture(tmp_path, session, ffmpeg_path="ffmpeg")
+    assert called["finalize"] is False
+    assert verified.read_bytes() == b"verified-final-bytes"
+    assert Path(result["audioPath"]) == verified
+    assert not session.exists() or not (session / MANIFEST_FILENAME).exists()
+
+
+def test_approx_bytes_none_when_no_segments(tmp_path):
+    session = _build_interrupted_session(
+        tmp_path,
+        stem="recording_empty_bytes",
+        started_at_iso="2026-07-13T10:00:00.000Z",
+        mic_frames=0,
+        desktop_frames=None,
+    )
+    # Remove segment file so byte estimate is unknown.
+    part = session / "mic_0000.pcm.part"
+    if part.exists():
+        part.unlink()
+    candidates = list_interrupted_captures(tmp_path)
+    assert len(candidates) == 1
+    assert candidates[0]["approxBytes"] is None
+
+
+def test_recovering_opus_staging_not_scannable(tmp_path):
+    meeting = tmp_path / "meeting_20260101_120000.opus"
+    meeting.write_bytes(b"opus")
+    staging = tmp_path / "recording_x.recovering.opus"
+    staging.write_bytes(b"partial")
+    selected = select_scannable_audio_files(tmp_path)
+    assert [path.name for path in selected] == [meeting.name]

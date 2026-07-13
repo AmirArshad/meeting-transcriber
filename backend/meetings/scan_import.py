@@ -15,6 +15,7 @@ _LEGACY_TEMP_WAV_SUFFIXES = (".temp.wav", "_temp.wav")
 _RECORDER_TEMP_PCM_SUFFIX = ".pcm.tmp"
 _CAPTURE_SESSION_DIR_SUFFIX = ".capture"
 _CAPTURE_SEGMENT_SUFFIX = ".pcm.part"
+_RECOVERY_STAGING_OPUS_SUFFIX = ".recovering.opus"
 
 # RIFF/WAVE header is 44 bytes. Keep aligned with audio.recorder_temp_paths.
 _MIN_RECOVERABLE_PCM_BYTES = 44
@@ -42,6 +43,9 @@ def is_capture_session_path(path: Path) -> bool:
     """True for durable capture-session dirs or files inside them / raw track segments."""
     lowered_name = path.name.lower()
     if lowered_name.endswith(_CAPTURE_SEGMENT_SUFFIX):
+        return True
+    if lowered_name.endswith(_RECOVERY_STAGING_OPUS_SUFFIX):
+        # Recovery staging must never be imported as a meeting.
         return True
     if path.is_dir() and lowered_name.endswith(_CAPTURE_SESSION_DIR_SUFFIX):
         return True
