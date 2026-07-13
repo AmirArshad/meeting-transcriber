@@ -28,6 +28,10 @@ SUPPORTED_DTYPES = frozenset({"<i2", "<f4"})
 VALID_PROCESSING_PROFILES = frozenset({"windows-v1", "macos-v1"})
 _SAFE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9._-]+\.pcm\.part$")
 _SAFE_RELATIVE_FILE_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+_WINDOWS_RESERVED_STEM_RE = re.compile(
+    r"^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)",
+    re.IGNORECASE,
+)
 _REQUIRED_TOP_LEVEL = (
     "schemaVersion",
     "state",
@@ -153,6 +157,8 @@ def validate_manifest_data(data: Any) -> Dict[str, Any]:
         or not _SAFE_RELATIVE_FILE_RE.match(stem)
     ):
         raise CaptureManifestError(f"Unsafe outputStem: {stem!r}")
+    if _WINDOWS_RESERVED_STEM_RE.match(stem):
+        raise CaptureManifestError(f"Unsafe outputStem (Windows reserved): {stem!r}")
     _validate_frame_count(data["startedAtMonotonicNs"], field_name="startedAtMonotonicNs")
     # Malformed ISO is discovery-safe as null via validate_started_at_iso; keep the
     # raw string in the payload so recovery can report it without blocking open.

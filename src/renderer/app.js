@@ -107,6 +107,7 @@ let recoveryQueryPromise = null;
 let recoveryQueryNeedsRefresh = false;
 let recoveryPromptQueued = false;
 let recoveryPromptOpen = false;
+let recoveryPromptClaimHeld = false;
 let recoveryFocusRestoreEl = null;
 let recoveryActionBusy = false;
 let currentAudioFile = null;
@@ -2037,6 +2038,7 @@ function updateRecordingPresenceUI(elapsedTextOverride = null) {
   }
 
   updateRecordingRecoveryBanner();
+  applyRecoveryPromptView();
 }
 
 function isFtueModalOpen() {
@@ -2091,8 +2093,12 @@ function applyRecoveryPromptView() {
     }
     return;
   }
-  if (isFtueModalOpen()) {
+  // Queue behind FTUE or live capture — do not burn/show a blocking modal mid-recording.
+  if (isFtueModalOpen() || recordingState !== 'idle') {
     recoveryPromptQueued = true;
+    if (recoveryPromptOpen) {
+      closeRecoveryPrompt({ deferred: true });
+    }
     return;
   }
   openRecoveryPrompt(view);
@@ -2126,7 +2132,8 @@ function openRecoveryPrompt(view) {
     recoveryModalLaterBtn.disabled = recoveryActionBusy;
   }
   recoveryModalEl.classList.remove('hidden');
-  recoveryModalNowBtn?.focus();
+  const focusables = getRecoveryModalFocusables();
+  (focusables[0] || recoveryModalLaterBtn || recoveryModalNowBtn)?.focus();
 }
 
 function getRecoveryModalFocusables() {
@@ -2204,18 +2211,17 @@ async function queryRecordingRecoveryState() {
 
   recoveryQueryPromise = (async () => {
     try {
-      let claimedPrompt = false;
       let latest = null;
       do {
         recoveryQueryNeedsRefresh = false;
         // eslint-disable-next-line no-await-in-loop
         latest = await window.electronAPI.getRecordingRecoveryState();
         if (latest && latest.promptEligible) {
-          claimedPrompt = true;
+          recoveryPromptClaimHeld = true;
         }
       } while (recoveryQueryNeedsRefresh);
 
-      applyRecoveryState(mergeClaimedPromptIntoState(latest, claimedPrompt));
+      applyRecoveryState(mergeClaimedPromptIntoState(latest, recoveryPromptClaimHeld));
       return recoveryState;
     } finally {
       recoveryQueryPromise = null;
@@ -2234,15 +2240,26 @@ async function handleRecoverRecordingAction() {
     return;
   }
   recoveryActionBusy = true;
+  recoveryPromptClaimHeld = false;
   updateRecordingRecoveryBanner();
   if (recoveryModalNowBtn) recoveryModalNowBtn.disabled = true;
   if (recoveryPromptOpen) {
     closeRecoveryPrompt();
   }
   try {
-    await window.electronAPI.recoverRecording();
+    const result = await window.electronAPI.recoverRecording();
+    if (result && result.success === false) {
+      const message = result.message || result.code || 'Recovery could not start.';
+      console.warn('Recover recording refused:', message);
+      if (typeof addLog === 'function') {
+        addLog(message, 'warning');
+      }
+    }
   } catch (error) {
     console.warn('Recover recording failed:', error);
+    if (typeof addLog === 'function') {
+      addLog(error?.message || 'Recovery failed', 'warning');
+    }
   } finally {
     recoveryActionBusy = false;
     await queryRecordingRecoveryState();
@@ -2259,6 +2276,7 @@ async function handleDeferRecordingRecoveryAction() {
     return;
   }
   recoveryActionBusy = true;
+  recoveryPromptClaimHeld = false;
   if (recoveryPromptOpen) {
     closeRecoveryPrompt();
   }
@@ -2287,9 +2305,10 @@ function setupRecordingRecoveryUi() {
   recoveryModalLaterBtn?.addEventListener('click', () => {
     void handleDeferRecordingRecoveryAction();
   });
+  // Backdrop clicks do not consume the once-per-launch prompt (require Later).
   recoveryModalEl?.addEventListener('click', (event) => {
     if (event.target === recoveryModalEl) {
-      void handleDeferRecordingRecoveryAction();
+      event.stopPropagation();
     }
   });
   document.addEventListener('keydown', (event) => {

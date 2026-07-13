@@ -55,6 +55,18 @@ def is_capture_session_path(path: Path) -> bool:
     return False
 
 
+def has_sibling_capture_session(audio_file: Path) -> bool:
+    """True when a root ``{stem}.opus/.wav`` still has a live ``{stem}.capture`` dir."""
+    parent = audio_file.parent
+    stem = audio_file.stem
+    capture_dir = parent / f"{stem}{_CAPTURE_SESSION_DIR_SUFFIX}"
+    if not capture_dir.is_dir():
+        return False
+    # Only block when a manifest exists — empty aborted dirs should not hide finals forever.
+    manifest = capture_dir / "manifest.json"
+    return manifest.is_file()
+
+
 def iter_recorder_temp_audio_files(recordings_dir: Path) -> List[Path]:
     """List leftover recorder temp PCM/WAV files in the recordings directory."""
     temps: List[Path] = []
@@ -161,6 +173,9 @@ def select_scannable_audio_files(recordings_dir: Path) -> List[Path]:
             continue
         if is_capture_session_path(audio_file):
             # Durable capture dirs / raw track segments are never meetings.
+            continue
+        if has_sibling_capture_session(audio_file):
+            # Crash-orphaned partial canonical finals must wait for recovery.
             continue
 
         stem = audio_file.stem

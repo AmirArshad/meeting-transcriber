@@ -71,6 +71,18 @@ function createRecorderService(deps) {
     getBackendModuleArgs = null,
     collectPythonProcessOutput = null,
     scanRecordings = null,
+    terminateProcessBestEffort = async (proc) => {
+      try {
+        signalProcessTree(proc, 'SIGTERM');
+      } catch (_) {
+        try {
+          proc.kill('SIGTERM');
+        } catch (__) {
+          // Best-effort.
+        }
+      }
+    },
+    resolveRecoveryCandidateTimeoutMsFn = null,
   } = deps;
 
   if (typeof getRecordingsDir !== 'function') {
@@ -225,9 +237,11 @@ function createRecorderService(deps) {
 
   function sanitizeRecoveryMessage(message) {
     const text = String(message || '').trim() || 'Recovery failed';
-    // Strip absolute paths (drive-letter, UNC with spaces, POSIX) and capture dirs.
+    // Strip absolute paths (drive-letter, forward-slash Windows, UNC with spaces, POSIX)
+    // and capture dirs.
     return text
       .replace(/[A-Za-z]:\\(?:[^\\/:*?"<>|\r\n]+\\)*[^\\/:*?"<>|\r\n]*/g, '[path]')
+      .replace(/[A-Za-z]:\/(?:[^\/\r\n]+\/)*[^\/\r\n]*/g, '[path]')
       .replace(/\\\\[^\\\r\n]+(?:\\[^\\\r\n]+)*/g, '[path]')
       .replace(/\/(?:[^\/\r\n]+\/)+[^\/:\r\n]*/g, '[path]')
       .replace(/[^\s/\\]+\.capture/gi, '[capture]')
@@ -270,8 +284,10 @@ function createRecorderService(deps) {
       };
     }
     let promptEligible = false;
+    const captureIdle = getCaptureState().state === 'idle';
     if (
       claimPrompt
+      && captureIdle
       && recoveryStatus === 'available'
       && (displayCandidates.length > 0 || recoveryScanImportPending)
       && !recoveryPromptClaimed
@@ -312,7 +328,27 @@ function createRecorderService(deps) {
     }
   }
 
-  function runCaptureRecoveryPython(extraArgs) {
+  function resolveRecoveryCandidateTimeoutMs(candidate) {
+    if (typeof resolveRecoveryCandidateTimeoutMsFn === 'function') {
+      return resolveRecoveryCandidateTimeoutMsFn(candidate);
+    }
+    const BASE_MS = 15 * 60 * 1000;
+    const PER_MINUTE_MS = 30 * 1000;
+    const MAX_MS = 2 * 60 * 60 * 1000;
+    const duration = Number(candidate?.approxDurationSeconds);
+    if (Number.isFinite(duration) && duration > 0) {
+      return Math.min(MAX_MS, BASE_MS + Math.ceil(duration / 60) * PER_MINUTE_MS);
+    }
+    const bytes = Number(candidate?.approxBytes);
+    if (Number.isFinite(bytes) && bytes > 0) {
+      // Rough stereo int16 @ 48 kHz ≈ 192 KiB/s.
+      const approxSec = bytes / (48000 * 2 * 2);
+      return Math.min(MAX_MS, BASE_MS + Math.ceil(approxSec / 60) * PER_MINUTE_MS);
+    }
+    return BASE_MS;
+  }
+
+  function runCaptureRecoveryPython(extraArgs, { timeoutMs = null } = {}) {
     if (typeof getBackendModuleArgs !== 'function' || typeof collectPythonProcessOutput !== 'function') {
       return Promise.reject(new Error('Capture recovery Python wiring is unavailable.'));
     }
@@ -326,6 +362,20 @@ function createRecorderService(deps) {
     const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
 
     return new Promise((resolve, reject) => {
+      let settled = false;
+      let timeoutHandle = null;
+      const finish = (fn, value) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+          timeoutHandle = null;
+        }
+        fn(value);
+      };
+
       python.on('close', (code) => {
         if (recoveryProcess === python) {
           recoveryProcess = null;
@@ -333,23 +383,40 @@ function createRecorderService(deps) {
         try {
           processOutput.assertStdoutWithinLimit();
         } catch (error) {
-          reject(error);
+          finish(reject, error);
           return;
         }
         const stdout = processOutput.getStdout().trim();
         try {
           const parsed = stdout ? JSON.parse(stdout) : null;
-          resolve({ code, result: parsed, stderr: processOutput.getStderr() });
+          finish(resolve, { code, result: parsed, stderr: processOutput.getStderr() });
         } catch (error) {
-          reject(new Error(`Failed to parse capture recovery output: ${error.message}`));
+          finish(reject, new Error(`Failed to parse capture recovery output: ${error.message}`));
         }
       });
       python.on('error', (error) => {
         if (recoveryProcess === python) {
           recoveryProcess = null;
         }
-        reject(error);
+        finish(reject, error);
       });
+
+      if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+        timeoutHandle = setTimeout(() => {
+          void (async () => {
+            try {
+              await terminateProcessBestEffort(python);
+            } catch (_) {
+              // Best-effort terminate.
+            }
+            if (recoveryProcess === python) {
+              recoveryProcess = null;
+            }
+            finish(reject, new Error('Capture recovery timed out.'));
+          })();
+        }, timeoutMs);
+        timeoutHandle.unref?.();
+      }
     });
   }
 
@@ -359,7 +426,9 @@ function createRecorderService(deps) {
     }
     setRecoveryStatus('discovering');
     try {
-      const { result } = await runCaptureRecoveryPython(['--list']);
+      const { result } = await runCaptureRecoveryPython(['--list'], {
+        timeoutMs: 60 * 1000,
+      });
       const candidates = Array.isArray(result?.candidates) ? result.candidates : [];
       recoveryInternalCandidates = candidates
         .filter((item) => item && typeof item.captureDir === 'string' && item.captureDir)
@@ -385,15 +454,41 @@ function createRecorderService(deps) {
     } catch (error) {
       console.warn('Interrupted capture discovery failed:', error?.message || error);
       recoveryInternalCandidates = [];
-      recoveryFailed = [];
+      recoveryFailed = [{
+        candidateIndex: null,
+        code: 'DISCOVERY_FAILED',
+        message: sanitizeRecoveryMessage(error?.message || 'Discovery failed'),
+      }];
       recoveryActiveCandidateIndex = null;
-      setRecoveryStatus('idle');
+      recoveryProgressMessage = null;
+      setRecoveryStatus('error');
     }
     return buildRecoveryStateSnapshot();
   }
 
+  function notifyScanImportSucceeded() {
+    if (!recoveryScanImportPending) {
+      return;
+    }
+    recoveryScanImportPending = false;
+    if (
+      recoveryStatus === 'error'
+      && recoveryInternalCandidates.length === 0
+      && recoveryFailed.every((entry) => entry.code === 'SCAN_IMPORT_FAILED')
+    ) {
+      recoveryFailed = [];
+      setRecoveryStatus('idle');
+      return;
+    }
+    if (recoveryStatus === 'available' && recoveryInternalCandidates.length === 0) {
+      setRecoveryStatus('idle');
+      return;
+    }
+    publishRecoveryStateInvalidation();
+  }
+
   function getRecordingRecoveryState() {
-    // First trusted query that observes available claims the one-per-launch prompt.
+    // First trusted query that observes available (while idle) claims the one-per-launch prompt.
     return buildRecoveryStateSnapshot({ claimPrompt: true });
   }
 
@@ -423,21 +518,33 @@ function createRecorderService(deps) {
 
   async function recoverOneCapture(candidate) {
     const ffmpegPath = pythonConfig?.ffmpegPath || 'ffmpeg';
-    const { code, result } = await runCaptureRecoveryPython([
-      '--ffmpeg', ffmpegPath,
-      '--recover', candidate.captureDir,
-    ]);
-    if (result?.success && Array.isArray(result.recovered) && result.recovered.length > 0) {
-      return { ok: true, recovered: result.recovered[0] };
+    try {
+      const { code, result } = await runCaptureRecoveryPython([
+        '--ffmpeg', ffmpegPath,
+        '--recover', candidate.captureDir,
+      ], {
+        timeoutMs: resolveRecoveryCandidateTimeoutMs(candidate),
+      });
+      if (result?.success && Array.isArray(result.recovered) && result.recovered.length > 0) {
+        return { ok: true, recovered: result.recovered[0] };
+      }
+      const failed = Array.isArray(result?.failed) && result.failed[0]
+        ? result.failed[0]
+        : { code: 'RECOVERY_FAILED', message: `Recovery exited with code ${code}` };
+      return {
+        ok: false,
+        code: failed.code || 'RECOVERY_FAILED',
+        message: failed.message || 'Recovery failed',
+      };
+    } catch (error) {
+      const message = error?.message || 'Recovery failed';
+      const timedOut = /timed out/i.test(message);
+      return {
+        ok: false,
+        code: timedOut ? 'RECOVERY_TIMEOUT' : 'RECOVERY_FAILED',
+        message,
+      };
     }
-    const failed = Array.isArray(result?.failed) && result.failed[0]
-      ? result.failed[0]
-      : { code: 'RECOVERY_FAILED', message: `Recovery exited with code ${code}` };
-    return {
-      ok: false,
-      code: failed.code || 'RECOVERY_FAILED',
-      message: failed.message || 'Recovery failed',
-    };
   }
 
   async function runRecoveryBatch() {
@@ -609,15 +716,18 @@ function createRecorderService(deps) {
         recoveryFailed.push({
           candidateIndex: null,
           code: 'SCAN_IMPORT_FAILED',
-          message: 'Scan/import after recovery failed',
+          message: 'Recovered audio still needs to be added to History.',
         });
       }
       recoveryActiveCandidateIndex = null;
       recoveryProgressMessage = null;
       setRecoveryStatus('error');
+      const recoveredThisCall = batch.length > 0
+        ? Math.max(0, batch.length - unresolved.length)
+        : 0;
       return {
         success: false,
-        recovered: batch.length > 0 ? batch.length - unresolved.length : recoveryLastSuccessCount,
+        recovered: recoveredThisCall,
         failed: unresolved.length || (scanOk ? 0 : 1),
       };
     } finally {
@@ -630,6 +740,15 @@ function createRecorderService(deps) {
 
   function recoverInterruptedCaptures() {
     if (recoveryActionPromise) {
+      return recoveryActionPromise;
+    }
+
+    const discoveryFailed = recoveryStatus === 'error'
+      && recoveryFailed.some((entry) => entry.code === 'DISCOVERY_FAILED');
+    if (discoveryFailed) {
+      recoveryActionPromise = discoverInterruptedCaptures().finally(() => {
+        recoveryActionPromise = null;
+      });
       return recoveryActionPromise;
     }
 
@@ -1594,6 +1713,19 @@ function createRecorderService(deps) {
           );
           recordingStarted = false;
 
+          if (
+            closeAction.type === 'unexpected_exit'
+            || closeAction.type === 'unexpected_exit_recovered'
+          ) {
+            // A crash mid-session may leave a recoverable .capture — rediscover.
+            void discoverInterruptedCaptures().catch((error) => {
+              console.warn(
+                'Post-exit capture discovery failed:',
+                error?.message || error,
+              );
+            });
+          }
+
           if (closeAction.type === 'unexpected_exit_recovered' && closeAction.recoveredStopResult?.audioPath) {
             const recovered = closeAction.recoveredStopResult;
             // Do not mark quitPersistedAudioPaths here — no stop IPC is waiting
@@ -1750,6 +1882,7 @@ function createRecorderService(deps) {
     getRecordingRecoveryState,
     recoverInterruptedCaptures,
     deferRecordingRecovery,
+    notifyScanImportSucceeded,
     registerIpc,
   };
 }

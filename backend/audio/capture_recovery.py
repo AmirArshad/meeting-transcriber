@@ -40,6 +40,8 @@ from .streaming_post_processor import (
     cleanup_completed_capture_session,
     ffmpeg_can_decode,
     finalize_capture,
+    final_duration_matches_expectation,
+    probe_audio_duration_seconds,
 )
 
 PathLike = Union[str, Path]
@@ -144,6 +146,12 @@ def _approx_bytes(session_dir: Path, data: Dict[str, Any]) -> Optional[int]:
     return total if saw_any else None
 
 
+_WINDOWS_RESERVED_STEM_RE = re.compile(
+    r"^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)",
+    re.IGNORECASE,
+)
+
+
 def _safe_output_stem(stem: Any) -> str:
     """Require a basename-only stem that cannot escape the recordings root."""
     if not isinstance(stem, str) or not stem.strip():
@@ -160,7 +168,23 @@ def _safe_output_stem(stem: Any) -> str:
     # Keep aligned with capture_manifest._SAFE_RELATIVE_FILE_RE.
     if not re.match(r"^[A-Za-z0-9._-]+$", text):
         raise CaptureRecoveryError(f"Unsafe outputStem: {stem!r}")
+    if _WINDOWS_RESERVED_STEM_RE.match(text):
+        raise CaptureRecoveryError(f"Unsafe outputStem (Windows reserved): {stem!r}")
     return text
+
+
+def _unlink_recovery_staging(root: Path, stem: str) -> None:
+    """Best-effort sweep of leftover ``.recovering.*`` staging beside the root."""
+    for suffix in (".recovering.opus", ".recovering.wav"):
+        try:
+            path = _resolve_output_beside_root(root, stem, suffix)
+        except CaptureRecoveryError:
+            continue
+        try:
+            if path.is_file():
+                path.unlink()
+        except OSError:
+            pass
 
 
 def _resolve_output_beside_root(root: Path, stem: str, suffix: str) -> Path:
@@ -280,15 +304,22 @@ def recover_capture(
     output_opus = _resolve_output_beside_root(root, stem, ".opus")
     output_wav = _resolve_output_beside_root(root, stem, ".wav")
 
-    # If a verified final already exists, never overwrite it with ffmpeg -y.
+    # If a verified, duration-complete final already exists, never overwrite it
+    # with ffmpeg -y — and never delete the capture when the final is truncated.
+    expected_duration = _approx_duration_seconds(peek)
     preexisting_final: Optional[Path] = None
+    preexisting_duration: Optional[float] = None
     for candidate in (output_opus, output_wav):
-        if candidate.is_file() and ffmpeg_can_decode(candidate, ffmpeg_exe):
+        if not candidate.is_file() or not ffmpeg_can_decode(candidate, ffmpeg_exe):
+            continue
+        actual = probe_audio_duration_seconds(candidate, ffmpeg_exe)
+        if final_duration_matches_expectation(actual, expected_duration):
             preexisting_final = candidate
+            preexisting_duration = actual
             break
 
     if preexisting_final is not None:
-        duration = 0.0
+        duration = float(preexisting_duration) if preexisting_duration is not None else 0.0
         try:
             coordinator = CaptureManifestCoordinator.open_existing(
                 session_dir, lock_timeout=0
@@ -309,6 +340,7 @@ def recover_capture(
             except Exception:
                 pass
             cleanup_completed_capture_session(session_path)
+            _unlink_recovery_staging(root, stem)
         finally:
             if not getattr(coordinator, "_closed", False):
                 try:
@@ -351,6 +383,7 @@ def recover_capture(
                 pass
         raise
 
+    _unlink_recovery_staging(root, stem)
     return {
         "captureDir": str(session_dir),
         "audioPath": result.final_path,
@@ -371,10 +404,13 @@ def recover_captures(
             recovered.append(item)
         except (CaptureRecoveryError, FinalizationError, Timeout, OSError) as exc:
             code = "RECOVERY_FAILED"
-            if isinstance(exc, Timeout) or "locked" in str(exc).lower():
+            if isinstance(exc, Timeout):
                 code = "SESSION_LOCKED"
             elif isinstance(exc, CaptureRecoveryError):
-                code = "INVALID_CAPTURE"
+                if "locked (recording may still be active)" in str(exc).lower():
+                    code = "SESSION_LOCKED"
+                else:
+                    code = "INVALID_CAPTURE"
             failed.append(
                 {
                     "captureDir": str(capture_dir),

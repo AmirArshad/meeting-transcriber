@@ -694,8 +694,28 @@ class MacOSAudioRecorder:
                         "mic_leading_pad_frames": alignment["micLeadingPadFrames"],
                     })
                 self._capture_manifest.set_state("finalizing")
-            except Exception:
-                pass
+            except Exception as exc:
+                if include_desktop:
+                    # Prefer failing stop (mic committed + recoverable) over silent
+                    # mic-only finalize that deletes desktop segments, or unaligned mix.
+                    raise RuntimeError(
+                        f"Failed to persist desktop mix settings before finalization: {exc}"
+                    ) from exc
+                try:
+                    _send_warning_message(
+                        "DESKTOP_MANIFEST_UPDATE_FAILED",
+                        f"Could not update capture manifest ({exc}); continuing with microphone only.",
+                        help="The meeting audio was saved from the microphone. Desktop/system audio may be missing.",
+                    )
+                except Exception:
+                    pass
+                try:
+                    self._capture_manifest.set_include_desktop(False)
+                    self._capture_manifest.set_state("finalizing")
+                except Exception as retry_exc:
+                    raise RuntimeError(
+                        f"Failed to update capture manifest before finalization: {retry_exc}"
+                    ) from retry_exc
 
     def _finalize_from_capture_spools(self) -> bool:
         """Run bounded multi-pass finalization for the spool path."""

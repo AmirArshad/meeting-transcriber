@@ -562,6 +562,11 @@ const meetingManagerClient = registerMeetingManagerClient(ipcMain, {
     const state = recorderService && recorderService.getQuitInterceptInputs();
     return Boolean(state && (state.hasRecordingProcess || state.stopInProgress));
   },
+  onScanSucceeded: () => {
+    if (recorderService && typeof recorderService.notifyScanImportSucceeded === 'function') {
+      recorderService.notifyScanImportSucceeded();
+    }
+  },
 });
 const { addMeetingToHistory, isRecordingsScanInProgress, scanRecordings } = meetingManagerClient;
 
@@ -781,6 +786,7 @@ recorderService = createRecorderService({
   getBackendModuleArgs,
   collectPythonProcessOutput,
   scanRecordings,
+  terminateProcessBestEffort,
   onCaptureStateChanged: (state) => {
     if (recordingPresenceService) {
       recordingPresenceService.updateCaptureState(state);

@@ -153,6 +153,11 @@ function createRecordingsMaintenanceGate(options = {}) {
           return busyResult('recovery');
         }
       }
+      // One last attempt before attributing the blocker — owner may have flipped
+      // in the final milliseconds after waitForIdle returned.
+      if (tryAcquire(kind)) {
+        return { ok: true, owner: kind };
+      }
     }
 
     return busyResult(owner === 'idle' ? 'scan' : owner);

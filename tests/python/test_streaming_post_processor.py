@@ -690,3 +690,45 @@ def test_probe_wav_pcm_geometry_roundtrip(tmp_path):
 
 def test_default_chunk_frames_constant():
     assert DEFAULT_FINALIZATION_CHUNK_FRAMES == 48000
+
+
+def test_windows_aligned_frame_count_caps_at_mic():
+    from audio.streaming_post_processor import _aligned_frame_count
+
+    mic_pad, desk_pad, total = _aligned_frame_count(
+        1000,
+        5000,
+        include_desktop=True,
+        alignment={
+            "micLeadingPadFrames": 0,
+            "desktopTrimFrames": 0,
+            "desktopLeadingPadFrames": 0,
+        },
+        profile="windows-v1",
+    )
+    assert total == 1000
+    assert mic_pad == 0
+    assert desk_pad == 0
+
+    _, _, macos_total = _aligned_frame_count(
+        1000,
+        5000,
+        include_desktop=True,
+        alignment={
+            "micLeadingPadFrames": 0,
+            "desktopTrimFrames": 0,
+            "desktopLeadingPadFrames": 0,
+        },
+        profile="macos-v1",
+    )
+    assert macos_total == 5000
+
+
+def test_final_duration_matches_expectation():
+    from audio.streaming_post_processor import final_duration_matches_expectation
+
+    assert final_duration_matches_expectation(120.0, 120.0) is True
+    assert final_duration_matches_expectation(110.0, 120.0) is True  # within 10%
+    assert final_duration_matches_expectation(12.0, 120.0) is False
+    assert final_duration_matches_expectation(None, 120.0) is False
+    assert final_duration_matches_expectation(120.0, None) is False

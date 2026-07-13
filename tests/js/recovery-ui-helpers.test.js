@@ -110,6 +110,40 @@ test('banner hidden while capture state is not idle', () => {
   }
 });
 
+test('banner remains visible during transcription', () => {
+  const view = getRecoveryBannerView(oneCandidate, 'transcribing', formatBytes);
+  assert.equal(view.visible, true);
+  assert.equal(view.primaryAction, 'Recover');
+});
+
+test('scan-import-only error uses History copy', () => {
+  const view = getRecoveryBannerView({
+    status: 'error',
+    totals: { count: 1, approxBytes: null },
+    candidates: [],
+    failed: [{ candidateIndex: null, code: 'SCAN_IMPORT_FAILED', message: 'x' }],
+    scanImportPending: true,
+    lastSuccessCount: 1,
+    lastBatchSize: 1,
+  }, 'idle', formatBytes);
+  assert.equal(view.visible, true);
+  assert.match(view.text, /History/);
+  assert.doesNotMatch(view.text, /Couldn't finish recovering/);
+});
+
+test('candidate size renders alongside other fields', () => {
+  const view = getRecoveryPromptView({
+    ...oneCandidate,
+    promptEligible: true,
+    candidates: [{
+      startedAtIso: '2026-07-13T10:00:00.000Z',
+      approxDurationSeconds: 90,
+      approxBytes: 5 * 1024 * 1024,
+    }],
+  }, formatBytes);
+  assert.ok(view.candidateLines.some((line) => /MB|MiB|B/.test(line)));
+});
+
 test('recovering banner shows spinner and progress index', () => {
   const view = getRecoveryBannerView({
     status: 'recovering',

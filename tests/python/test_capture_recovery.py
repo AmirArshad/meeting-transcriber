@@ -422,6 +422,10 @@ def test_preexisting_verified_opus_is_not_overwritten(tmp_path, monkeypatch):
         "backend.audio.capture_recovery.ffmpeg_can_decode",
         lambda *a, **k: True,
     )
+    monkeypatch.setattr(
+        "backend.audio.capture_recovery.probe_audio_duration_seconds",
+        lambda *a, **k: 4800 / 48000.0,
+    )
 
     called = {"finalize": False}
 
@@ -435,7 +439,50 @@ def test_preexisting_verified_opus_is_not_overwritten(tmp_path, monkeypatch):
     assert called["finalize"] is False
     assert verified.read_bytes() == b"verified-final-bytes"
     assert Path(result["audioPath"]) == verified
+    assert abs(float(result["duration"]) - (4800 / 48000.0)) < 1e-6
     assert not session.exists() or not (session / MANIFEST_FILENAME).exists()
+
+
+def test_truncated_preexisting_opus_does_not_delete_capture(tmp_path, monkeypatch):
+    session = _build_interrupted_session(
+        tmp_path,
+        stem="recording_short",
+        started_at_iso="2026-07-13T10:00:00.000Z",
+        state="finalizing",
+        desktop_frames=None,
+        mic_frames=48000 * 120,  # 2 minutes expected
+    )
+    truncated = tmp_path / "recording_short.opus"
+    truncated.write_bytes(b"OggS-truncated-but-decodable")
+
+    monkeypatch.setattr(
+        "backend.audio.capture_recovery.ffmpeg_can_decode",
+        lambda *a, **k: True,
+    )
+    monkeypatch.setattr(
+        "backend.audio.capture_recovery.probe_audio_duration_seconds",
+        lambda *a, **k: 12.0,  # far shorter than manifest
+    )
+
+    called = {"finalize": 0}
+
+    def fake_finalize(*args, **kwargs):
+        called["finalize"] += 1
+        return spp.FinalizationResult(
+            final_path=str(tmp_path / "recording_short.opus"),
+            duration=120.0,
+            temp_wav_path=None,
+            recovered=True,
+            stats={},
+        )
+
+    monkeypatch.setattr("backend.audio.capture_recovery.finalize_capture", fake_finalize)
+
+    result = recover_capture(tmp_path, session, ffmpeg_path="ffmpeg")
+    assert called["finalize"] == 1
+    assert Path(result["audioPath"]).name == "recording_short.opus"
+    # Capture may be cleaned by fake finalize; the key is we did not accept the short final.
+    assert called["finalize"] == 1
 
 
 def test_approx_bytes_none_when_no_segments(tmp_path):

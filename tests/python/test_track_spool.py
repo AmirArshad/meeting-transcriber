@@ -315,6 +315,109 @@ class TrackSpoolTests(unittest.TestCase):
                 spool.close()
                 coordinator.close()
 
+    def test_idle_then_burst_does_not_false_positive_stall(self):
+        """Legitimate silence (empty queue) then a burst must not stall the track."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            recordings_dir = Path(temp_dir)
+            pause = threading.Event()
+            clock = {"t": 100.0}
+
+            def fake_clock():
+                return clock["t"]
+
+            coordinator, spool = self._open_spool(
+                recordings_dir,
+                max_queue_bytes=1024 * 1024,
+                segment_bytes=64 * 1024,
+                stall_timeout_s=1.0,
+                flush_interval_s=60.0,
+                clock=fake_clock,
+                pause_writer=pause,
+            )
+            try:
+                chunk = _int16_stereo_frames(4)
+                self.assertTrue(spool.append(chunk))
+                pause.set()
+                # Drain the first chunk.
+                for _ in range(50):
+                    if spool.committed_frames >= 4:
+                        break
+                    time.sleep(0.01)
+                pause.clear()
+                # Simulate ≥30s of track silence with nothing queued.
+                clock["t"] += 45.0
+                # Burst resumes — must not fail as sustained no-progress.
+                self.assertTrue(spool.append(chunk))
+                self.assertIsNone(spool.fail_reason)
+            finally:
+                pause.set()
+                spool.close()
+                coordinator.close()
+
+    def test_idle_flush_does_not_spam_manifest_commits(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            recordings_dir = Path(temp_dir)
+            clock = {"t": 0.0}
+            commits = []
+
+            def fake_clock():
+                return clock["t"]
+
+            coordinator, spool = self._open_spool(
+                recordings_dir,
+                max_queue_bytes=1024 * 1024,
+                segment_bytes=64 * 1024,
+                stall_timeout_s=60.0,
+                flush_interval_s=1.0,
+                clock=fake_clock,
+            )
+            original = coordinator.commit_track
+
+            def counting_commit(*args, **kwargs):
+                commits.append(clock["t"])
+                return original(*args, **kwargs)
+
+            try:
+                coordinator.commit_track = counting_commit  # type: ignore[method-assign]
+                chunk = _int16_stereo_frames(8)
+                self.assertTrue(spool.append(chunk))
+                for _ in range(50):
+                    if spool.committed_frames >= 8:
+                        break
+                    time.sleep(0.01)
+                before = len(commits)
+                # Advance through many Empty polls while idle.
+                for _ in range(40):
+                    clock["t"] += 0.05
+                    time.sleep(0.01)
+                after = len(commits)
+                # At most one interval-due flush while idle (~2s of fake time).
+                self.assertLessEqual(after - before, 3)
+            finally:
+                coordinator.commit_track = original  # type: ignore[method-assign]
+                spool.close()
+                coordinator.close()
+
+    def test_silence_gap_is_clamped(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            recordings_dir = Path(temp_dir)
+            coordinator, spool = self._open_spool(
+                recordings_dir,
+                max_queue_bytes=8 * 1024 * 1024,
+                segment_bytes=64 * 1024,
+                stall_timeout_s=30.0,
+                flush_interval_s=0.05,
+            )
+            try:
+                chunk = _int16_stereo_frames(10)
+                # Jump ~10 minutes ahead — must clamp to ~180s.
+                self.assertTrue(spool.append(chunk, frame_position=48000 * 600))
+                result = spool.close()
+                self.assertIsNone(result.fail_reason)
+                self.assertLessEqual(result.committed_frames, 48000 * 180 + 20)
+            finally:
+                coordinator.close()
+
     def test_close_skips_mutation_when_writer_still_alive(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             recordings_dir = Path(temp_dir)

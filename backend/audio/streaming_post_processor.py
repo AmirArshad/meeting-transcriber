@@ -10,6 +10,7 @@ Task 10 recovery.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -546,8 +547,13 @@ def _aligned_frame_count(
     *,
     include_desktop: bool,
     alignment: Dict[str, int],
+    profile: str = "macos-v1",
 ) -> tuple[int, int, int]:
-    """Return (mic_start_pad, desk_start_pad_after_trim, total_frames)."""
+    """Return (mic_start_pad, desk_start_pad_after_trim, total_frames).
+
+    ``windows-v1`` hard-caps at mic duration (matches the RAM-path reconstruct
+    that never extends past the mic timeline). ``macos-v1`` max-pads.
+    """
     mic_pad = int(alignment.get("micLeadingPadFrames") or 0)
     desk_trim = int(alignment.get("desktopTrimFrames") or 0)
     desk_pad = int(alignment.get("desktopLeadingPadFrames") or 0)
@@ -556,6 +562,8 @@ def _aligned_frame_count(
         return mic_pad, 0, mic_total
     desk_kept = max(0, desk_frames - desk_trim)
     desk_total = desk_kept + desk_pad
+    if profile == "windows-v1":
+        return mic_pad, desk_pad, mic_total
     return mic_pad, desk_pad, max(mic_total, desk_total)
 
 
@@ -591,30 +599,61 @@ def _stream_final_wav_via_ffmpeg(
         "error",
         str(output_path),
     ]
+    # Drain stderr to a temp file so a multi-GB stdin write cannot deadlock
+    # when ffmpeg emits more than a pipe buffer of diagnostics.
+    stderr_path = Path(str(output_path) + ".ffmpeg.stderr")
+    stderr_handle = open(stderr_path, "wb")
     proc = subprocess.Popen(
         cmd,
         stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=stderr_handle,
     )
     assert proc.stdin is not None
     written = 0
+    stderr_bytes = b""
     try:
-        for chunk in frame_iter:
-            if chunk.size == 0:
-                continue
-            proc.stdin.write(np.ascontiguousarray(chunk, dtype=np.float32).tobytes())
-            written += int(chunk.shape[0])
-        proc.stdin.close()
-        _stdout, stderr = proc.communicate(timeout=600)
-    except Exception:
         try:
-            proc.kill()
+            for chunk in frame_iter:
+                if chunk.size == 0:
+                    continue
+                proc.stdin.write(np.ascontiguousarray(chunk, dtype=np.float32).tobytes())
+                written += int(chunk.shape[0])
+            proc.stdin.close()
+            proc.wait(timeout=600)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            try:
+                proc.wait(timeout=30)
+            except Exception:
+                pass
+            raise
+        try:
+            stderr_handle.flush()
+            stderr_handle.close()
+            stderr_bytes = stderr_path.read_bytes()
+        except Exception:
+            stderr_bytes = b""
+    finally:
+        try:
+            stderr_handle.close()
         except Exception:
             pass
-        raise
+        try:
+            stderr_path.unlink(missing_ok=True)
+        except TypeError:
+            try:
+                if stderr_path.exists():
+                    stderr_path.unlink()
+            except Exception:
+                pass
+        except Exception:
+            pass
     if proc.returncode != 0:
-        detail = (stderr or b"").decode("utf-8", errors="replace")
+        detail = stderr_bytes.decode("utf-8", errors="replace")
         raise FinalizationError(
             f"ffmpeg failed writing final PCM temp: {detail}",
             recoverable_path=None,
@@ -647,6 +686,50 @@ def ffmpeg_can_decode(path: PathLike, ffmpeg_path: str) -> bool:
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return False
     return result.returncode == 0
+
+
+def probe_audio_duration_seconds(path: PathLike, ffmpeg_path: str) -> Optional[float]:
+    """Best-effort decoded duration in seconds (ffprobe, then ffmpeg stderr)."""
+    from .compressor import get_file_info
+
+    info = get_file_info(str(path), ffmpeg_path=ffmpeg_path)
+    duration = info.get("duration")
+    if isinstance(duration, (int, float)) and duration > 0:
+        return float(duration)
+
+    try:
+        result = subprocess.run(
+            [ffmpeg_path, "-i", str(path), "-f", "null", "-"],
+            capture_output=True,
+            timeout=120,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return None
+    stderr = (result.stderr or b"").decode("utf-8", errors="replace")
+    # Prefer the last Duration: HH:MM:SS.xx in the container header.
+    matches = re.findall(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", stderr)
+    if not matches:
+        return None
+    hours, minutes, seconds = matches[-1]
+    return float(hours) * 3600.0 + float(minutes) * 60.0 + float(seconds)
+
+
+# Accept preexisting finals that are within 10% or 2s of the manifest expectation.
+_PREEXISTING_DURATION_RATIO = 0.90
+_PREEXISTING_DURATION_SLACK_S = 2.0
+
+
+def final_duration_matches_expectation(
+    actual_seconds: Optional[float],
+    expected_seconds: Optional[float],
+) -> bool:
+    """True when a preexisting final is complete enough to accept without re-finalize."""
+    if actual_seconds is None or expected_seconds is None:
+        return False
+    if actual_seconds <= 0 or expected_seconds <= 0:
+        return False
+    slack = max(_PREEXISTING_DURATION_SLACK_S, expected_seconds * (1.0 - _PREEXISTING_DURATION_RATIO))
+    return actual_seconds + 1e-3 >= expected_seconds - slack
 
 
 def _verify_final_temp(
@@ -891,17 +974,48 @@ def finalize_capture(
                 final_name = data["finalRelativePath"]
                 final_candidate = Path(output_path).with_name(final_name)
                 ffmpeg_exe = ffmpeg_path or "ffmpeg"
-                if final_candidate.is_file() and ffmpeg_can_decode(final_candidate, ffmpeg_exe):
-                    cleanup_completed_capture_session(coordinator.session_dir)
+                expected = None
+                tracks = data.get("tracks") or {}
+                for track in tracks.values():
+                    if not isinstance(track, dict):
+                        continue
+                    try:
+                        frames = int(track.get("committedFrames") or 0)
+                        rate = int(track.get("sampleRate") or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    if frames > 0 and rate > 0:
+                        seconds = float(frames) / float(rate)
+                        if expected is None or seconds > expected:
+                            expected = seconds
+                actual = (
+                    probe_audio_duration_seconds(final_candidate, ffmpeg_exe)
+                    if final_candidate.is_file()
+                    else None
+                )
+                if (
+                    final_candidate.is_file()
+                    and ffmpeg_can_decode(final_candidate, ffmpeg_exe)
+                    and final_duration_matches_expectation(actual, expected)
+                ):
+                    duration = float(actual) if actual is not None else 0.0
+                    session_path = coordinator.session_dir
+                    # Close/release the lock before cleanup so Windows can unlink.
+                    if owns_coordinator:
+                        try:
+                            coordinator.close()
+                        except Exception:
+                            pass
+                    cleanup_completed_capture_session(session_path)
                     return FinalizationResult(
                         final_path=str(final_candidate),
-                        duration=0.0,
+                        duration=duration,
                         temp_wav_path=None,
                         recovered=recovered,
                         stats={"idempotentComplete": True},
                     )
                 raise FinalizationError(
-                    f"Complete capture final output is missing or undecodable: {final_candidate}"
+                    f"Complete capture final output is missing, undecodable, or truncated: {final_candidate}"
                 )
 
         coordinator.set_state("finalizing")
@@ -959,6 +1073,7 @@ def finalize_capture(
                 "desktopTrimFrames": int(alignment.get("desktopTrimFrames") or 0),
                 "desktopLeadingPadFrames": int(alignment.get("desktopLeadingPadFrames") or 0),
             },
+            profile=profile,
         )
         desk_trim = int(alignment.get("desktopTrimFrames") or 0)
 

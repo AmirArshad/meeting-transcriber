@@ -33,6 +33,9 @@ SOFT_HIGH_WATER_RATIO = 0.75
 # Bound silence-fill allocations independently of segment size (64 MiB segments
 # must not imply 64 MiB zero buffers for long Windows desktop gaps).
 MAX_SILENCE_CHUNK_BYTES = 1 * 1024 * 1024
+# Match the macOS helper gap-fill policy: clamp single position jumps so an
+# NTP/suspend skew cannot materialize unbounded zeros mid-capture.
+MAX_SILENCE_GAP_SECONDS = 180.0
 
 
 class TrackSpoolBackpressureError(RuntimeError):
@@ -117,10 +120,14 @@ class TrackSpool:
         self._queue: queue.Queue[Optional[tuple[bytes, Optional[int]]]] = queue.Queue()
         self._queued_bytes = 0
         self._queued_lock = threading.Lock()
+        # Set when the queue transitions empty→nonempty; cleared when drained.
+        # Stall detection uses this (writer stuck with pending work), not idle gaps.
+        self._pending_since: Optional[float] = None
         self._soft_warning_emitted = False
         self._failed = False
         self._fail_reason: Optional[str] = None
         self._closed = False
+        self._silence_gap_warning_emitted = False
 
         self._written_frames = 0
         self._committed_frames = 0
@@ -129,7 +136,11 @@ class TrackSpool:
         self._current_segment_name: Optional[str] = None
         self._current_segment_bytes = 0
         self._segment_index = 0
+        # Advances only when committedFrames increase (or forced commit).
         self._last_commit_advance_at = self._clock()
+        # Advances on every executed flush — used for interval_due so idle tracks
+        # do not fsync+rewrite the manifest on every Empty poll.
+        self._last_flush_at = self._clock()
         self._commit_lock = threading.Lock()
 
         # Test seams (optional).
@@ -187,7 +198,10 @@ class TrackSpool:
             if self._queued_bytes + len(payload) > self._max_queue_bytes:
                 self._mark_failed("hard queue cap exceeded")
                 return False
+            was_empty = self._queued_bytes <= 0
             self._queued_bytes += len(payload)
+            if was_empty and self._queued_bytes > 0:
+                self._pending_since = self._clock()
             queued_after = self._queued_bytes
 
         soft_limit = int(self._max_queue_bytes * SOFT_HIGH_WATER_RATIO)
@@ -211,6 +225,8 @@ class TrackSpool:
         except queue.Full:
             with self._queued_lock:
                 self._queued_bytes = max(0, self._queued_bytes - len(payload))
+                if self._queued_bytes <= 0:
+                    self._pending_since = None
             self._mark_failed("queue put failed")
             return False
 
@@ -272,13 +288,18 @@ class TrackSpool:
         )
 
     def _is_stalled(self) -> bool:
+        """True only when work has been pending longer than the stall timeout.
+
+        Idle tracks (empty queue / legitimate silence with nothing queued) are
+        never stalled. ``_pending_since`` marks when the queue last became
+        nonempty; it clears when the writer drains to empty.
+        """
         with self._queued_lock:
             pending = self._queued_bytes
-        if pending <= 0:
+            pending_since = self._pending_since
+        if pending <= 0 or pending_since is None:
             return False
-        with self._commit_lock:
-            last_advance = self._last_commit_advance_at
-        return (self._clock() - last_advance) >= self._stall_timeout_s
+        return (self._clock() - pending_since) >= self._stall_timeout_s
 
     def _mark_failed(self, reason: str) -> None:
         self._failed = True
@@ -306,6 +327,8 @@ class TrackSpool:
                 payload, frame_position = item
                 with self._queued_lock:
                     self._queued_bytes = max(0, self._queued_bytes - len(payload))
+                    if self._queued_bytes <= 0:
+                        self._pending_since = None
 
                 if self._test_raise_on_write:
                     raise RuntimeError("injected writer failure")
@@ -329,8 +352,25 @@ class TrackSpool:
             frame_position = self._written_frames
 
         if frame_position > self._written_frames:
-            self._write_silence(frame_position - self._written_frames)
-            self._written_frames = frame_position
+            gap = frame_position - self._written_frames
+            max_gap = max(1, int(self._sample_rate * MAX_SILENCE_GAP_SECONDS))
+            fill = min(gap, max_gap)
+            if gap > max_gap and not self._silence_gap_warning_emitted:
+                self._silence_gap_warning_emitted = True
+                try:
+                    import sys
+
+                    print(
+                        f"Track spool {self._track_name}: clamped {gap} frame silence gap "
+                        f"to {max_gap} frames (~{MAX_SILENCE_GAP_SECONDS:.0f}s)",
+                        file=sys.stderr,
+                    )
+                except Exception:
+                    pass
+            self._write_silence(fill)
+            self._written_frames += fill
+            # Excess gap is dropped from the timeline (matches macOS helper policy).
+            frame_position = self._written_frames
         elif frame_position < self._written_frames:
             overlap_frames = self._written_frames - frame_position
             overlap_bytes = overlap_frames * self._frame_bytes
@@ -408,15 +448,12 @@ class TrackSpool:
         """Fsync + manifest commit at most once per flush_interval unless forced.
 
         ``writtenFrames`` may be ahead of ``committedFrames`` between intervals.
-        Stall detection uses ``_last_commit_advance_at``, which advances only when
-        committed frames actually increase (or on a forced finalization).
+        Stall detection uses ``_pending_since`` (queued work age), not idle gaps.
+        Interval pacing uses ``_last_flush_at`` so idle tracks do not rewrite the
+        manifest on every Empty poll.
         """
         now = self._clock()
-        with self._commit_lock:
-            elapsed = now - self._last_commit_advance_at
-            interval_due = elapsed >= self._flush_interval_s
-
-        if not force and not interval_due:
+        if not force and (now - self._last_flush_at) < self._flush_interval_s:
             return
 
         if self._current_handle is not None:
@@ -435,5 +472,6 @@ class TrackSpool:
                 self._mark_failed(f"manifest commit failed: {exc}")
                 return
             self._committed_frames = self._written_frames
+            self._last_flush_at = self._clock()
             if self._committed_frames != previous or force:
-                self._last_commit_advance_at = self._clock()
+                self._last_commit_advance_at = self._last_flush_at

@@ -440,3 +440,77 @@ test('recovery waiting for scan refuses after capture starts', async () => {
   recorderProc.emit('close', 1);
   await new Promise((resolve) => setImmediate(resolve));
 });
+
+test('failed recovery messages strip forward-slash Windows paths', async () => {
+  const { service } = createRecoveryService({
+    spawnTrackedPython: (args) => {
+      if (args.includes('--list')) {
+        return createProc({ success: true, candidates: [sampleCandidate] });
+      }
+      return createProc({
+        success: false,
+        recovered: [],
+        failed: [{
+          captureDir: sampleCandidate.captureDir,
+          code: 'RECOVERY_FAILED',
+          message: 'Failed at C:/Users/Jane Doe/AppData/recordings/file.opus',
+        }],
+      }, { exitCode: 1 });
+    },
+  });
+  await service.discoverInterruptedCaptures();
+  await service.recoverInterruptedCaptures();
+  const state = service.getRecordingRecoveryState();
+  assert.doesNotMatch(state.failed[0].message, /Jane Doe/);
+  assert.match(state.failed[0].message, /\[path\]/);
+});
+
+test('hung recovery child times out and releases the gate', async () => {
+  const { EventEmitter: EE } = require('node:events');
+  const hung = new EE();
+  hung.stdout = new EE();
+  hung.stderr = new EE();
+  hung.kill = () => {
+    setImmediate(() => hung.emit('close', 1));
+  };
+
+  let terminated = false;
+  const { service, gate } = createRecoveryService({
+    spawnTrackedPython: (args) => {
+      if (args.includes('--list')) {
+        return createProc({ success: true, candidates: [sampleCandidate] });
+      }
+      return hung;
+    },
+    resolveRecoveryCandidateTimeoutMsFn: () => 40,
+    terminateProcessBestEffort: async (proc) => {
+      terminated = true;
+      proc.kill('SIGTERM');
+    },
+  });
+
+  await service.discoverInterruptedCaptures();
+  const result = await service.recoverInterruptedCaptures();
+  assert.equal(result.success, false);
+  assert.equal(terminated, true);
+  assert.equal(gate.getOwner(), 'idle');
+  const state = service.getRecordingRecoveryState();
+  assert.equal(state.status, 'error');
+  assert.ok(state.failed.some((entry) => entry.code === 'RECOVERY_TIMEOUT'));
+});
+
+test('discovery failure surfaces as error with Retry', async () => {
+  const { service } = createRecoveryService({
+    spawnTrackedPython: () => {
+      const proc = new EventEmitter();
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      setImmediate(() => proc.emit('error', new Error('spawn failed')));
+      return proc;
+    },
+  });
+  await service.discoverInterruptedCaptures();
+  const state = service.getRecordingRecoveryState();
+  assert.equal(state.status, 'error');
+  assert.ok(state.failed.some((entry) => entry.code === 'DISCOVERY_FAILED'));
+});

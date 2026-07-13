@@ -63,7 +63,7 @@
       parts.push(duration);
     }
     const size = formatBytesSafe(formatBytes, candidate.approxBytes);
-    if (size && !duration && !started) {
+    if (size) {
       parts.push(size);
     }
     if (parts.length === 0) {
@@ -137,10 +137,11 @@
       modifier: null,
     };
 
+    const CAPTURE_BUSY_STATES = new Set(['starting', 'recording', 'stopping']);
     const capture = captureState && typeof captureState === 'object'
       ? captureState.state
       : captureState;
-    if (capture && capture !== 'idle') {
+    if (CAPTURE_BUSY_STATES.has(capture)) {
       return hidden;
     }
 
@@ -206,9 +207,32 @@
     }
 
     if (status === 'error') {
-      const failedCount = Array.isArray(recoveryState.failed)
-        ? recoveryState.failed.filter((entry) => Number.isInteger(entry?.candidateIndex)).length
-        : 0;
+      const failedEntries = Array.isArray(recoveryState.failed) ? recoveryState.failed : [];
+      const failedCount = failedEntries.filter((entry) => Number.isInteger(entry?.candidateIndex)).length;
+      const scanImportOnly = recoveryState.scanImportPending
+        && failedCount === 0
+        && failedEntries.some((entry) => entry?.code === 'SCAN_IMPORT_FAILED');
+      if (scanImportOnly) {
+        return {
+          visible: true,
+          text: 'Recovered audio still needs to be added to History.',
+          showSpinner: false,
+          primaryAction: 'Retry',
+          secondaryAction: 'Dismiss',
+          modifier: 'error',
+        };
+      }
+      const discoveryFailed = failedEntries.some((entry) => entry?.code === 'DISCOVERY_FAILED');
+      if (discoveryFailed && failedCount === 0) {
+        return {
+          visible: true,
+          text: "Couldn't check for interrupted recordings. Your audio files were kept safe.",
+          showSpinner: false,
+          primaryAction: 'Retry',
+          secondaryAction: 'Dismiss',
+          modifier: 'error',
+        };
+      }
       const batchSize = Number(recoveryState.lastBatchSize) > 0
         ? Number(recoveryState.lastBatchSize)
         : Math.max(count, failedCount);

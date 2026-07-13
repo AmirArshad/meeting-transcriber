@@ -491,11 +491,14 @@ class AudioRecorder:
 
                 if self._use_capture_spool:
                     with self._desktop_spool_lock:
+                        if self._desktop_spool_warning:
+                            # Already degraded to mic-only; ignore further desktop PCM.
+                            return (in_data, pyaudio.paContinue)
                         if self._desktop_spool is None:
-                            self._note_async_capture_error(
+                            self._note_desktop_spool_failure(
                                 "Capture spool was not ready when desktop audio arrived."
                             )
-                            return (in_data, pyaudio.paComplete)
+                            return (in_data, pyaudio.paContinue)
                         reference = self.mic_first_capture_time
                         if reference is None:
                             # Defer until mic reference exists (do not silently drop).
@@ -505,7 +508,7 @@ class AudioRecorder:
                         # Flush any leftover deferred chunks before accepting live audio.
                         self._flush_deferred_desktop_spool_locked()
                         if not self._append_desktop_spool_chunk(current_time, in_data, reference):
-                            return (in_data, pyaudio.paComplete)
+                            return (in_data, pyaudio.paContinue)
                 else:
                     with self.lock:
                         # Store timestamp with audio data to preserve gaps
@@ -521,14 +524,33 @@ class AudioRecorder:
                 self._async_capture_error = message
         self.is_recording = False
 
+    def _note_desktop_spool_failure(self, message: str) -> None:
+        """Degrade to mic-only without stopping the meeting (desktop may fail mid-capture)."""
+        if self._desktop_spool_warning:
+            return
+        self._desktop_spool_warning = message
+        print(f"WARNING: {message}", file=sys.stderr)
+        try:
+            _send_warning_message(
+                "DESKTOP_SPOOL_FAILED",
+                message,
+                help=(
+                    "The meeting continues with microphone audio. "
+                    "Desktop/system audio may be missing."
+                ),
+            )
+        except Exception:
+            pass
+
     def get_async_capture_error(self):
         with self._spool_error_lock:
             return self._async_capture_error
 
     def _append_desktop_spool_chunk(self, timestamp: float, in_data: bytes, reference: float) -> bool:
-        """Place one desktop chunk on the spool. Returns False on hard spool failure.
+        """Place one desktop chunk on the spool. Returns False on desktop-only failure.
 
-        Caller must hold ``_desktop_spool_lock``.
+        Caller must hold ``_desktop_spool_lock``. Desktop spool failures degrade to
+        mic-only; they must not hard-stop the whole recording.
         """
         frame_pos = timestamp_to_frame_position(
             timestamp,
@@ -540,8 +562,8 @@ class AudioRecorder:
             return True
         accepted = self._desktop_spool.append(in_data, frame_position=frame_pos)
         if not accepted:
-            self._note_async_capture_error(
-                "Audio capture writer stalled; recording was stopped to preserve committed audio."
+            self._note_desktop_spool_failure(
+                "Desktop audio capture writer stalled; continuing with microphone only."
             )
             return False
         self._desktop_spool_accepted_any = True
@@ -714,16 +736,19 @@ class AudioRecorder:
                 f"Desktop capture spool failed; continuing with microphone only. "
                 f"({desk_result.fail_reason})"
             )
-            self._desktop_spool_warning = warning
-            print(f"WARNING: {warning}", file=sys.stderr)
-            try:
-                _send_warning_message(
-                    "DESKTOP_SPOOL_FAILED",
-                    warning,
-                    help="The meeting audio was saved from the microphone. Desktop/system audio may be missing.",
-                )
-            except Exception:
-                pass
+            if not self._desktop_spool_warning:
+                self._desktop_spool_warning = warning
+                print(f"WARNING: {warning}", file=sys.stderr)
+                try:
+                    _send_warning_message(
+                        "DESKTOP_SPOOL_FAILED",
+                        warning,
+                        help="The meeting audio was saved from the microphone. Desktop/system audio may be missing.",
+                    )
+                except Exception:
+                    pass
+            include_desktop = False
+        elif self._desktop_spool_warning:
             include_desktop = False
         elif desk_result is not None:
             include_desktop = bool(
@@ -744,8 +769,29 @@ class AudioRecorder:
             try:
                 self._capture_manifest.set_include_desktop(include_desktop)
                 self._capture_manifest.set_state("finalizing")
-            except Exception:
-                pass
+            except Exception as exc:
+                # Never silently finalize mic-only after a failed includeDesktop write
+                # when desktop audio was expected — fail stop so capture stays recoverable.
+                if include_desktop:
+                    raise RuntimeError(
+                        f"Failed to persist includeDesktop=True before finalization: {exc}"
+                    ) from exc
+                try:
+                    _send_warning_message(
+                        "DESKTOP_MANIFEST_UPDATE_FAILED",
+                        f"Could not update capture manifest for desktop mix ({exc}); "
+                        "continuing with microphone only.",
+                        help="The meeting audio was saved from the microphone. Desktop/system audio may be missing.",
+                    )
+                except Exception:
+                    pass
+                try:
+                    self._capture_manifest.set_include_desktop(False)
+                    self._capture_manifest.set_state("finalizing")
+                except Exception as retry_exc:
+                    raise RuntimeError(
+                        f"Failed to update capture manifest before finalization: {retry_exc}"
+                    ) from retry_exc
 
     def _finalize_from_capture_spools(self) -> None:
         """Run bounded multi-pass finalization for the spool path."""

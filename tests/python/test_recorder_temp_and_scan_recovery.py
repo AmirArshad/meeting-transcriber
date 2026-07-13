@@ -144,6 +144,20 @@ class ScanImportTempRecoveryTests(unittest.TestCase):
             selected = select_scannable_audio_files(recordings_dir)
             self.assertEqual([path.name for path in selected], [meeting.name])
 
+    def test_select_scannable_skips_same_stem_opus_beside_live_capture(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            recordings_dir = Path(temp_dir)
+            stem = "meeting_20260101_120000"
+            partial = recordings_dir / f"{stem}.opus"
+            partial.write_bytes(b"truncated-opus")
+            capture_dir = recordings_dir / f"{stem}.capture"
+            capture_dir.mkdir()
+            (capture_dir / "manifest.json").write_text("{}", encoding="utf-8")
+            other = recordings_dir / "meeting_20260101_130000.opus"
+            other.write_bytes(b"ok")
+            selected = select_scannable_audio_files(recordings_dir)
+            self.assertEqual([path.name for path in selected], [other.name])
+
 
 if __name__ == "__main__":
     unittest.main()

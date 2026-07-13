@@ -50,6 +50,7 @@ function createMeetingManagerClient(deps) {
     recordingsScanTimeoutMs = 60 * 1000,
     unrefRecordingsScanTimeout = true,
     recordingsMaintenanceGate = null,
+    onScanSucceeded = () => {},
   } = deps;
 
   function addMeetingToHistory(meetingData) {
@@ -189,6 +190,11 @@ function createMeetingManagerClient(deps) {
           if (code === 0) {
             try {
               const result = JSON.parse(processOutput.getStdout());
+              try {
+                onScanSucceeded();
+              } catch (_) {
+                // Best-effort recovery banner cleanup.
+              }
               finish(resolve, result);
             } catch (e) {
               finish(reject, new Error(`Failed to parse scan result: ${e.message}`));
