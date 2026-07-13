@@ -24,8 +24,8 @@
 - Keep `productName`, `appId`, the Electron `userData` identity, artifact names, and updater matching stable. Descriptive display/shortcut labels may change without renaming storage.
 - Release 2 must not reintroduce real-time mixing. Mic and desktop tracks remain separate until bounded post-processing.
 - Release 2 must not expose raw capture-track files as meeting audio or let scan-import treat them as meetings.
-- Release 2 spool backpressure must not hard-stop a live meeting on a brief disk stall. Use an 8 MiB per-track queue, warn at a soft high-water mark, and stop only on writer exception, sustained no-progress, or the hard queue cap. Never block or silently drop callback audio.
-- Interrupted-capture discovery must not block first paint or a new recording start. Discover asynchronously, prompt `Recover Now` / `Later`, and acquire one shared recordings-maintenance gate only while scan or recovery is actively mutating files. `Later` preserves capture files and permits a new recording.
+- Release 2 spool backpressure must not hard-stop a live meeting on a brief disk stall. Use a bounded per-track queue sized for tens of seconds of headroom (exact bytes are a Task 7 tunable, not an invariant), warn at a soft high-water mark, and stop only on writer exception, sustained no-progress, or the hard queue cap. Never block or silently drop callback audio.
+- Interrupted-capture discovery must not block first paint or a new recording start. Discover asynchronously, prompt `Recover Now` / `Later`, and acquire one shared recordings-maintenance gate only while scan or recovery is actively mutating files. `Later` preserves capture files and permits a new recording. Recovery admission is refused while capture state is not `idle`; an active recording always wins over recovery.
 
 ---
 
@@ -97,7 +97,7 @@ Native notifications are best-effort because Focus modes and OS settings can sup
 - Create `backend/audio/streaming_post_processor.py`: bounded normalization, repair, mix, recoverable WAV/RF64 output, and Opus finalization.
 - Create `backend/audio/capture_recovery.py`: validate and finalize interrupted capture manifests.
 - Create `src/main/recordings-maintenance-gate.js`: serialize scan and accepted recovery, expose busy state to recording admission.
-- Create `tests/js/recordings-maintenance-gate.test.js`: gate ownership, release, and busy-response coverage.
+- Create `tests/js/recordings-maintenance-gate.test.js`: gate ownership, release, brief start-wait behind `scan`, immediate recovery-busy rejection, and recovery-refused-while-recording coverage.
 - Create `tests/python/test_capture_manifest.py`, `test_track_spool.py`, `test_streaming_post_processor.py`, and `test_capture_recovery.py`.
 - Modify both platform recorders and macOS desktop helper bridges to send chunks to track spools instead of retaining complete recordings.
 - Modify `src/main/device-ipc.js`: replace shell disk probes with Node filesystem stats and use a realistic recording reserve warning.
@@ -722,6 +722,8 @@ git commit -m "feat: add long recording guardrails"
 
 Default `max_queue_bytes=8 MiB` per track gives roughly 22 seconds of stereo float32 headroom on macOS and roughly 44 seconds of stereo int16 headroom on Windows. Native multichannel input has proportionally less headroom. Calculate and expose queue headroom from the track's declared sample rate, channels, and dtype rather than assuming stereo. The hard cap is non-negotiable: if the next chunk would exceed it, `append` returns `False` immediately and the recorder stops cleanly with committed tracks preserved.
 
+The 8 MiB default is a tunable, not an invariant: Task 10's hardware evidence (real Windows AV scans, disk spin-up) decides whether it stays, within the Global Constraint of tens-of-seconds headroom. Note that with the defaults the hard cap fires before `stall_timeout_s=30` on macOS stereo float32 (~22 s of queue); the stall timeout only triggers on slow-trickle writers that keep making partial commit progress, so do not expect it to be the common stop path.
+
 - [ ] **Step 1: Write manifest atomicity and scan-exclusion tests**
 
 Use a session directory named `{output_stem}.capture` and manifest `{session_dir}/manifest.json`. Assert atomic replace leaves valid JSON, schema version is `1`, committed frame counts survive reload, and neither the directory nor `*.pcm.part` segments are returned by `select_scannable_audio_files()`. Add a concurrent mic/desktop commit test that repeatedly updates both tracks and proves neither track state is lost.
@@ -941,7 +943,8 @@ git commit -m "feat: finalize recordings with bounded memory"
 - CLI recovery: `python -m audio.capture_recovery --recordings-dir <dir> --ffmpeg <path> --recover <capture-dir>`.
 - JSON result: `{ success, recovered: [{ captureDir, audioPath, duration }], failed: [{ captureDir, code, message }] }`.
 - Main service: `discoverInterruptedCaptures() -> Promise<RecoveryCandidate[]>` starts after window creation and persists replayable status; `recoverInterruptedCapture(captureDir) -> Promise<RecoveryResult>` runs only after user approval.
-- Shared gate: `createRecordingsMaintenanceGate()` owns `idle|'scan'|'recovery'`; both `meeting-manager-client` scan and recorder recovery acquire it, and `start-recording` rejects only while the gate is actively held.
+- Shared gate: `createRecordingsMaintenanceGate()` owns `idle|'scan'|'recovery'`; both `meeting-manager-client` scan and recorder recovery acquire it. `start-recording` waits briefly (a few seconds) for a `scan`-held gate to release before rejecting — scans are short, and a hard rejection from an invisible startup-scan race is bad UX — but rejects immediately with a recovery-busy response while the gate is held as `recovery`.
+- Recovery admission: `recover-recording` is refused while recorder capture state is not `idle` (an active recording always wins; recovery ffmpeg finalization must not contend with live capture on the recordings directory). The renderer disables `Recover Now` while recording; main enforces it regardless.
 - Renderer: `get-recording-recovery-state` returns `{ status: 'idle'|'discovering'|'available'|'recovering'|'error', candidates, message }`; `recover-recording` and `defer-recording-recovery` handle the user's choice.
 
 Add all three invoke channels to the IPC snapshot. Validate `captureDir` in main against the latest discovered candidate set; never trust an arbitrary renderer path.
@@ -961,8 +964,8 @@ Instantiate one `recordingsMaintenanceGate` in `src/main.js` and inject it into 
 1. Create window and tray/presence.
 2. Register renderer listeners and recovery-state replay before the renderer's initial history scan.
 3. Run read-only discovery in the background without taking the maintenance gate. Persist the latest recovery state in main so a late/reloaded renderer can query it.
-4. If candidates exist, show `Recover interrupted recording now?` with `Recover Now` and `Later`. `Later` records only an in-process dismissal, leaves files untouched, and allows recording immediately.
-5. `Recover Now` acquires the shared gate as `recovery`; `scan-recordings` returns `RECORDINGS_MAINTENANCE_IN_PROGRESS`, and `start-recording` returns a clear recovery-busy response until recovery releases the gate.
+4. If candidates exist, show `Recover interrupted recording now?` with `Recover Now` and `Later`. `Later` records only an in-process dismissal, leaves files untouched, and allows recording immediately; the next launch re-prompts. Because repeated `Later` accumulates `.capture` directories invisibly, the prompt must state the candidate count and approximate disk usage (from manifest segment sizes) so deferred captures are never a silent disk cost. A persistent recovery entry point beyond the startup prompt is deferred (see Deferred Ideas).
+5. `Recover Now` is refused while capture state is not `idle`; otherwise it acquires the shared gate as `recovery`. While held, `scan-recordings` returns `RECORDINGS_MAINTENANCE_IN_PROGRESS` and `start-recording` returns a clear recovery-busy response until recovery releases the gate. While the gate is held as `scan`, `start-recording` waits briefly for release instead of hard-rejecting.
 6. The existing startup `loadMeetingHistory({ scan: true })` acquires the same gate as `scan`; if recovery is selected first, defer/retry scan after recovery. If scan starts first, recovery waits for scan and revalidates its candidate before mutation.
 7. After successful recovery, invoke the normal scan/import path so recovered audio becomes a History entry, then refresh History.
 
@@ -980,7 +983,8 @@ Pass criteria:
 - recovered recording includes audio through the last fsynced interval; measured loss does not exceed each track's byte-derived queue duration plus one commit interval (stereo examples at 48 kHz: about 23 seconds float32 macOS, 45 seconds int16 Windows; multichannel bounds are calculated from the manifest)
 - no raw track or capture directory appears as a meeting
 - startup with a large interrupted capture still shows the main window promptly
-- choosing `Later` permits a new recording without modifying the interrupted capture
+- choosing `Later` permits a new recording without modifying the interrupted capture, and the prompt showed candidate count plus approximate disk usage
+- `Recover Now` is refused while a recording is active; `start-recording` during the startup scan waits for gate release instead of surfacing a busy error
 - scan, accepted recovery, and new recording never overlap file mutation; busy responses are replayable and user-facing
 
 - [ ] **Step 5: Remove the RAM path and rollout flag**
@@ -1014,6 +1018,7 @@ These ideas are intentionally outside this initiative:
 - Real-time transcription or real-time mic/desktop mixing.
 - Continuous Dock bounce, taskbar flashing, menu-bar icon animation, or notification sounds every few minutes. The static saturated recording-status icon + `REC` is the intentional macOS signal.
 - Canceling recovery after finalization begins. V1 supports deferring before recovery starts; once accepted, recovery owns the maintenance gate until its current finalization completes or fails.
+- A persistent recovery-management surface (History/Settings list of deferred captures with per-item recover/delete). V1 relies on the relaunch prompt, which must show candidate count and approximate disk usage so deferrals are never silent.
 - Cloud-based reminders, account identity, or telemetry measuring recording duration.
 
 ## Rollback Boundaries
