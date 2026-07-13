@@ -728,7 +728,30 @@ def test_final_duration_matches_expectation():
     from audio.streaming_post_processor import final_duration_matches_expectation
 
     assert final_duration_matches_expectation(120.0, 120.0) is True
-    assert final_duration_matches_expectation(110.0, 120.0) is True  # within 10%
+    assert final_duration_matches_expectation(118.0, 120.0) is True  # within 3s slack
+    assert final_duration_matches_expectation(110.0, 120.0) is False  # 10% short is NOT ok
     assert final_duration_matches_expectation(12.0, 120.0) is False
     assert final_duration_matches_expectation(None, 120.0) is False
     assert final_duration_matches_expectation(120.0, None) is False
+
+
+def test_expected_output_duration_windows_caps_at_mic():
+    from audio.streaming_post_processor import expected_output_duration_seconds
+
+    data = {
+        "processingProfile": "windows-v1",
+        "includeDesktop": True,
+        "alignment": {
+            "micLeadingPadFrames": 0,
+            "desktopTrimFrames": 0,
+            "desktopLeadingPadFrames": 0,
+        },
+        "tracks": {
+            "mic": {"committedFrames": 48000 * 60, "sampleRate": 48000},
+            "desktop": {"committedFrames": 48000 * 120, "sampleRate": 48000},
+        },
+    }
+    assert expected_output_duration_seconds(data) == 60.0
+
+    data["processingProfile"] = "macos-v1"
+    assert expected_output_duration_seconds(data) == 120.0

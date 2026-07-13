@@ -1982,6 +1982,7 @@ function cancelActiveCountdown() {
 }
 
 function setRecordingState(state) {
+  const previousState = recordingState;
   if (state === 'idle') {
     cancelActiveCountdown();
     activeRecordingSessionId = null;
@@ -1997,6 +1998,14 @@ function setRecordingState(state) {
   updateButtonUI();
   updateControlsState();
   updateRecordingPresenceUI();
+
+  // Capture returned to idle: re-query so a deferred once-per-launch prompt can claim.
+  const wasCaptureBusy = previousState === 'starting'
+    || previousState === 'recording'
+    || previousState === 'stopping';
+  if (state === 'idle' && wasCaptureBusy) {
+    void queryRecordingRecoveryState();
+  }
 }
 
 function updateRecordingPresenceUI(elapsedTextOverride = null) {

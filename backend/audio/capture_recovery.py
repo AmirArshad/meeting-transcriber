@@ -38,6 +38,7 @@ from .constants import (
 from .streaming_post_processor import (
     FinalizationError,
     cleanup_completed_capture_session,
+    expected_output_duration_seconds,
     ffmpeg_can_decode,
     finalize_capture,
     final_duration_matches_expectation,
@@ -245,8 +246,10 @@ def list_interrupted_captures(recordings_dir: PathLike) -> List[Dict[str, Any]]:
 
     try:
         entries = list(root.iterdir())
-    except OSError:
-        return []
+    except OSError as exc:
+        raise CaptureRecoveryError(
+            f"Cannot list recordings directory: {exc}"
+        ) from exc
 
     for entry in entries:
         if not entry.is_dir() or not _is_capture_dir_name(entry.name):
@@ -306,7 +309,7 @@ def recover_capture(
 
     # If a verified, duration-complete final already exists, never overwrite it
     # with ffmpeg -y — and never delete the capture when the final is truncated.
-    expected_duration = _approx_duration_seconds(peek)
+    expected_duration = expected_output_duration_seconds(peek)
     preexisting_final: Optional[Path] = None
     preexisting_duration: Optional[float] = None
     for candidate in (output_opus, output_wav):

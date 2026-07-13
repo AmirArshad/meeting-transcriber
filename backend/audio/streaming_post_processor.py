@@ -714,9 +714,57 @@ def probe_audio_duration_seconds(path: PathLike, ffmpeg_path: str) -> Optional[f
     return float(hours) * 3600.0 + float(minutes) * 60.0 + float(seconds)
 
 
-# Accept preexisting finals that are within 10% or 2s of the manifest expectation.
-_PREEXISTING_DURATION_RATIO = 0.90
-_PREEXISTING_DURATION_SLACK_S = 2.0
+# Accept preexisting finals within a small absolute slack of the expected
+# output duration (codec rounding + one flush interval), never a percentage of
+# meeting length — a 10% short 2h meeting would silently lose 12 minutes.
+_PREEXISTING_DURATION_SLACK_S = 3.0
+
+
+def expected_output_duration_seconds(data: Dict[str, Any]) -> Optional[float]:
+    """Expected final meeting duration using the same profile/alignment rules as finalize.
+
+    Uses track ``committedFrames``/``sampleRate`` and alignment pads/trims in the
+    seconds domain. ``windows-v1`` caps at the mic timeline; ``macos-v1`` max-pads.
+    """
+    tracks = data.get("tracks") or {}
+    mic = tracks.get("mic")
+    if not isinstance(mic, dict):
+        return None
+    try:
+        mic_frames = int(mic.get("committedFrames") or 0)
+        mic_rate = int(mic.get("sampleRate") or 0)
+    except (TypeError, ValueError):
+        return None
+    if mic_frames <= 0 or mic_rate <= 0:
+        return None
+
+    alignment = data.get("alignment") if isinstance(data.get("alignment"), dict) else {}
+    mic_pad = int(alignment.get("micLeadingPadFrames") or 0)
+    mic_seconds = (mic_frames + max(0, mic_pad)) / float(mic_rate)
+
+    profile = data.get("processingProfile") or "macos-v1"
+    include_desktop = bool(data.get("includeDesktop", False)) and isinstance(
+        tracks.get("desktop"), dict
+    )
+    if not include_desktop:
+        return mic_seconds
+
+    desk = tracks["desktop"]
+    try:
+        desk_frames = int(desk.get("committedFrames") or 0)
+        desk_rate = int(desk.get("sampleRate") or 0)
+    except (TypeError, ValueError):
+        return mic_seconds
+    if desk_frames <= 0 or desk_rate <= 0:
+        return mic_seconds
+
+    desk_trim = int(alignment.get("desktopTrimFrames") or 0)
+    desk_pad = int(alignment.get("desktopLeadingPadFrames") or 0)
+    desk_seconds = (max(0, desk_frames - desk_trim) + max(0, desk_pad)) / float(desk_rate)
+
+    if profile == "windows-v1":
+        return mic_seconds
+    return max(mic_seconds, desk_seconds)
 
 
 def final_duration_matches_expectation(
@@ -728,8 +776,7 @@ def final_duration_matches_expectation(
         return False
     if actual_seconds <= 0 or expected_seconds <= 0:
         return False
-    slack = max(_PREEXISTING_DURATION_SLACK_S, expected_seconds * (1.0 - _PREEXISTING_DURATION_RATIO))
-    return actual_seconds + 1e-3 >= expected_seconds - slack
+    return actual_seconds + 1e-3 >= expected_seconds - _PREEXISTING_DURATION_SLACK_S
 
 
 def _verify_final_temp(
@@ -974,20 +1021,7 @@ def finalize_capture(
                 final_name = data["finalRelativePath"]
                 final_candidate = Path(output_path).with_name(final_name)
                 ffmpeg_exe = ffmpeg_path or "ffmpeg"
-                expected = None
-                tracks = data.get("tracks") or {}
-                for track in tracks.values():
-                    if not isinstance(track, dict):
-                        continue
-                    try:
-                        frames = int(track.get("committedFrames") or 0)
-                        rate = int(track.get("sampleRate") or 0)
-                    except (TypeError, ValueError):
-                        continue
-                    if frames > 0 and rate > 0:
-                        seconds = float(frames) / float(rate)
-                        if expected is None or seconds > expected:
-                            expected = seconds
+                expected = expected_output_duration_seconds(data)
                 actual = (
                     probe_audio_duration_seconds(final_candidate, ffmpeg_exe)
                     if final_candidate.is_file()

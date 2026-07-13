@@ -219,6 +219,7 @@ function createRecorderService(deps) {
   }
 
   function publishCaptureState(state, sessionId = activeRecordingSessionId, startedAt = recordingStartTime) {
+    const previousState = publishedCaptureState.state;
     publishedCaptureState = {
       state,
       sessionId: Number.isInteger(sessionId) ? sessionId : null,
@@ -228,6 +229,10 @@ function createRecorderService(deps) {
       onCaptureStateChanged({ ...publishedCaptureState });
     } catch (error) {
       console.warn('onCaptureStateChanged failed:', error?.message || error);
+    }
+    // When capture returns to idle, re-push recovery so a deferred prompt claim can fire.
+    if (previousState !== 'idle' && state === 'idle' && recoveryStatus === 'available') {
+      publishRecoveryStateInvalidation();
     }
   }
 
@@ -363,6 +368,7 @@ function createRecorderService(deps) {
 
     return new Promise((resolve, reject) => {
       let settled = false;
+      let timedOut = false;
       let timeoutHandle = null;
       const finish = (fn, value) => {
         if (settled) {
@@ -379,6 +385,10 @@ function createRecorderService(deps) {
       python.on('close', (code) => {
         if (recoveryProcess === python) {
           recoveryProcess = null;
+        }
+        if (timedOut) {
+          finish(reject, new Error('Capture recovery timed out.'));
+          return;
         }
         try {
           processOutput.assertStdoutWithinLimit();
@@ -398,11 +408,16 @@ function createRecorderService(deps) {
         if (recoveryProcess === python) {
           recoveryProcess = null;
         }
+        if (timedOut) {
+          finish(reject, new Error('Capture recovery timed out.'));
+          return;
+        }
         finish(reject, error);
       });
 
       if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
         timeoutHandle = setTimeout(() => {
+          timedOut = true;
           void (async () => {
             try {
               await terminateProcessBestEffort(python);
@@ -426,10 +441,16 @@ function createRecorderService(deps) {
     }
     setRecoveryStatus('discovering');
     try {
-      const { result } = await runCaptureRecoveryPython(['--list'], {
+      const { code, result } = await runCaptureRecoveryPython(['--list'], {
         timeoutMs: 60 * 1000,
       });
-      const candidates = Array.isArray(result?.candidates) ? result.candidates : [];
+      if (code !== 0 || !result || result.success !== true) {
+        throw new Error(
+          (result && result.error)
+            || `Discovery exited with code ${code}`,
+        );
+      }
+      const candidates = Array.isArray(result.candidates) ? result.candidates : [];
       recoveryInternalCandidates = candidates
         .filter((item) => item && typeof item.captureDir === 'string' && item.captureDir)
         .map((item) => ({
