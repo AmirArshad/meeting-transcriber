@@ -63,7 +63,7 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 
 ## In progress
 
-Nothing actively in development right now.
+- **Recording awareness (Release 1)** — implementation plan `docs/superpowers/plans/2026-07-13-recording-awareness-and-long-recording-safety.md`. Before Coding Gates A–E evidence lives in `tests/manual/recording-smoke-checklist.md` (2026-07-13). Locked: Windows recording close **minimizes** (taskbar overlay); macOS uses a static saturated recording-status icon + `REC` (no animation). Windows Gate C spike proved minimize keeps the taskbar button while hide removes it; stable Toast Activator CLSID must be set in-app (current NSIS script does not bake one). Full installed Action Center + macOS Gate E menu-bar salience remain packaged QA after Tasks 1–5.
 
 ---
 
