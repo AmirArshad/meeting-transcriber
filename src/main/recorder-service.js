@@ -62,6 +62,7 @@ function createRecorderService(deps) {
     getRecordingsDir,
     signalProcessTree = (proc, signal) => proc.kill(signal),
     getRecordingStopTimeoutMs = getRecordingStopTimeout,
+    onCaptureStateChanged = () => {},
   } = deps;
 
   if (typeof getRecordingsDir !== 'function') {
@@ -78,6 +79,8 @@ function createRecorderService(deps) {
   let recordingStopPromise = null;
   let stopCommandSent = false;
   let recordingSessionCounter = 0;
+  let activeRecordingSessionId = null;
+  let publishedCaptureState = { state: 'idle', sessionId: null, startedAt: null };
   // Last structured result seen by the live stdout listener (not only stop buffer).
   let lastLiveRecorderResult = null;
   // Suppress unexpected_exit UI after a stop-timeout force-kill (renderer already failed).
@@ -88,7 +91,37 @@ function createRecorderService(deps) {
   // alreadyPersistedForQuit flag is visible (avoids double transcribe/save).
   let quitStopRecoveryPromise = null;
 
-  function clearRecordingRuntimeState(reason) {
+  function publishCaptureState(state, sessionId = activeRecordingSessionId, startedAt = recordingStartTime) {
+    publishedCaptureState = {
+      state,
+      sessionId: Number.isInteger(sessionId) ? sessionId : null,
+      startedAt: Number.isFinite(startedAt) ? startedAt : null,
+    };
+    try {
+      onCaptureStateChanged({ ...publishedCaptureState });
+    } catch (error) {
+      console.warn('onCaptureStateChanged failed:', error?.message || error);
+    }
+  }
+
+  function getCaptureState() {
+    return { ...publishedCaptureState };
+  }
+
+  function clearRecordingRuntimeState(reason, options = {}) {
+    const {
+      expectedProcess = null,
+      expectedSessionId = undefined,
+      publishIdle = true,
+    } = options;
+
+    if (expectedProcess && pythonProcess && pythonProcess !== expectedProcess) {
+      return false;
+    }
+    if (expectedSessionId !== undefined && activeRecordingSessionId !== expectedSessionId) {
+      return false;
+    }
+
     if (recordingHeartbeat) {
       clearInterval(recordingHeartbeat);
       recordingHeartbeat = null;
@@ -97,12 +130,18 @@ function createRecorderService(deps) {
 
     pythonProcess = null;
     recordingStartTime = null;
+    activeRecordingSessionId = null;
     lastLevelUpdate = null;
     heartbeatLostWarningActive = false;
     lastLiveRecorderResult = null;
     suppressUnexpectedExitAfterStopTimeout = false;
     disableRecordingPowerSaveBlocker(reason);
     resetStopWorkflowState();
+
+    if (publishIdle) {
+      publishCaptureState('idle', null, null);
+    }
+    return true;
   }
 
   function markQuitPersistedAudioPath(audioPath) {
@@ -186,7 +225,9 @@ function createRecorderService(deps) {
 
       const finalizeState = () => {
         if (pythonProcess === currentProcess) {
-          clearRecordingRuntimeState('recording completed');
+          clearRecordingRuntimeState('recording completed', {
+            expectedProcess: currentProcess,
+          });
           return;
         }
 
@@ -237,6 +278,7 @@ function createRecorderService(deps) {
 
         currentProcess.stdin.write('stop\n');
         stopCommandSent = true;
+        publishCaptureState('stopping');
       } catch (error) {
         settled = true;
         cleanupListeners();
@@ -549,6 +591,11 @@ function createRecorderService(deps) {
   }
 
   function registerIpc(ipcMain) {
+    ipcMain.handle('get-recording-state', async (event) => {
+      assertTrustedRendererSender(event);
+      return getCaptureState();
+    });
+
     ipcMain.handle('run-recording-preflight', async (event, { micId, loopbackId }) => {
       const [deviceCheck, diskCheck, audioOutputCheck, permissionCheck] = await Promise.all([
         validateSelectedDevices({ micId, loopbackId }),
@@ -593,6 +640,8 @@ function createRecorderService(deps) {
       }
 
       const sessionId = ++recordingSessionCounter;
+      activeRecordingSessionId = sessionId;
+      publishCaptureState('starting', sessionId, null);
 
       return new Promise((resolve, reject) => {
         const { micId, loopbackId, isFirstRecording } = options;
@@ -683,7 +732,10 @@ function createRecorderService(deps) {
 
           startupSettled = true;
           if (pythonProcess === proc) {
-            clearRecordingRuntimeState('recording startup failure');
+            clearRecordingRuntimeState('recording startup failure', {
+              expectedProcess: proc,
+              expectedSessionId: sessionId,
+            });
           }
 
           resolve({
@@ -705,7 +757,10 @@ function createRecorderService(deps) {
           };
 
           if (pythonProcess === proc) {
-            clearRecordingRuntimeState('recording failed');
+            clearRecordingRuntimeState('recording failed', {
+              expectedProcess: proc,
+              expectedSessionId: sessionId,
+            });
           }
 
           sendToRenderer('recording-warning', payload);
@@ -748,6 +803,7 @@ function createRecorderService(deps) {
 
           recordingStarted = true;
           recordingStartTime = Date.now();
+          publishCaptureState('recording', sessionId, recordingStartTime);
 
           // Heartbeat monitor: warn once per stall episode (not every 5s).
           lastLevelUpdate = Date.now();
@@ -772,7 +828,12 @@ function createRecorderService(deps) {
 
           sendInitProgress('started', message);
           startupSettled = true;
-          resolve({ success: true, message: 'Recording started', sessionId });
+          resolve({
+            success: true,
+            message: 'Recording started',
+            sessionId,
+            startedAt: recordingStartTime,
+          });
         };
 
         // PERFORMANCE FIX: Throttle audio level updates to reduce IPC overhead
@@ -881,6 +942,14 @@ function createRecorderService(deps) {
         const handleProcessClosed = (code) => {
           clearTimeout(timeoutHandle);
 
+          // Stale close from an older child must not clear a newer session.
+          if (pythonProcess && pythonProcess !== proc) {
+            return;
+          }
+          if (activeRecordingSessionId != null && activeRecordingSessionId !== sessionId) {
+            return;
+          }
+
           const recoveredStopResult = lastLiveRecorderResult;
           const closeAction = getRecorderCloseAction({
             recordingStarted,
@@ -897,17 +966,18 @@ function createRecorderService(deps) {
             return;
           }
 
+          const clearOpts = {
+            expectedProcess: proc,
+            expectedSessionId: sessionId,
+          };
+
           if (closeAction.type === 'startup_already_settled') {
-            if (pythonProcess === proc) {
-              clearRecordingRuntimeState('recording startup already settled');
-            }
+            clearRecordingRuntimeState('recording startup already settled', clearOpts);
             return;
           }
 
           if (closeAction.type === 'unexpected_exit_suppressed') {
-            if (pythonProcess === proc) {
-              clearRecordingRuntimeState('recorder stop timeout force-kill');
-            }
+            clearRecordingRuntimeState('recorder stop timeout force-kill', clearOpts);
             recordingStarted = false;
             startupSettled = true;
             return;
@@ -917,7 +987,8 @@ function createRecorderService(deps) {
             closeAction.type === 'unexpected_exit'
               || closeAction.type === 'unexpected_exit_recovered'
               ? 'recorder exited unexpectedly'
-              : 'recording failed'
+              : 'recording failed',
+            clearOpts,
           );
           recordingStarted = false;
 
@@ -969,6 +1040,9 @@ function createRecorderService(deps) {
           if (proc !== pythonProcess) {
             return;
           }
+          if (activeRecordingSessionId != null && activeRecordingSessionId !== sessionId) {
+            return;
+          }
 
           clearTimeout(timeoutHandle);
 
@@ -978,7 +1052,10 @@ function createRecorderService(deps) {
 
           const wasRecording = recordingStarted;
           recordingStarted = false;
-          clearRecordingRuntimeState(spawnError?.message || 'recorder process error');
+          clearRecordingRuntimeState(spawnError?.message || 'recorder process error', {
+            expectedProcess: proc,
+            expectedSessionId: sessionId,
+          });
 
           if (wasRecording) {
             failActiveRecording({
@@ -1060,6 +1137,7 @@ function createRecorderService(deps) {
     handleQuitDuringRecording,
     forceKillRecordingOnShutdown,
     clearRecordingRuntimeState,
+    getCaptureState,
     stopRecordingProcess,
     waitForRecordingStop,
     parseRecordingStopResultFromStdout,

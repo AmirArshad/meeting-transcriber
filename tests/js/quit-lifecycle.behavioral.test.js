@@ -123,8 +123,45 @@ async function startFakeRecording(service, handlers, proc) {
 
   const startResult = await startPromise;
   assert.equal(startResult.success, true);
+  assert.equal(Number.isFinite(startResult.startedAt), true);
   return startResult;
 }
+
+test('startFakeRecording publishes capture lifecycle through onCaptureStateChanged', async () => {
+  const captureStates = [];
+  const liveCtx = createRecorderDeps({
+    onCaptureStateChanged: (state) => captureStates.push(state),
+    isQuitCommitted: () => false,
+  });
+  const longProc = createLongLivedProcess();
+  liveCtx.deps.spawnTrackedPython = () => longProc;
+  const liveService = createRecorderService(liveCtx.deps);
+  const handlers = {};
+  liveService.registerIpc({
+    handle(channel, handler) {
+      handlers[channel] = handler;
+    },
+  });
+
+  await startFakeRecording(liveService, handlers, longProc);
+  assert.equal(captureStates[0].state, 'starting');
+  assert.equal(captureStates.at(-1).state, 'recording');
+  assert.equal(Number.isFinite(captureStates.at(-1).startedAt), true);
+
+  const stopPromise = handlers['stop-recording']({ sender: {} });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(captureStates.at(-1).state, 'stopping');
+  const audioPath = path.join(liveCtx.recordingsDir, 'lifecycle_publish.wav');
+  fs.writeFileSync(audioPath, 'audio');
+  longProc.stdout.emit('data', Buffer.from(`${JSON.stringify({
+    success: true,
+    audioPath,
+    duration: 1,
+  })}\n`));
+  longProc.emit('close', 0);
+  await stopPromise;
+  assert.equal(captureStates.at(-1).state, 'idle');
+});
 
 test('resolveBeforeQuitAction: armed AI pass force-quits instead of re-draining', () => {
   assert.deepEqual(

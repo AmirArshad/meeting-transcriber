@@ -45,6 +45,7 @@ const EXPECTED_INVOKE_CHANNELS = [
   'get-meeting',
   'get-pending-update-info',
   'get-platform',
+  'get-recording-state',
   'get-system-info',
   'install-gpu',
   'list-meetings',

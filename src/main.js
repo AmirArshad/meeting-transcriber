@@ -7,7 +7,7 @@
  * - Handles application lifecycle
  */
 
-const { app, BrowserWindow, ipcMain, Tray, Menu, dialog, powerSaveBlocker, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, dialog, powerSaveBlocker, shell, Notification, nativeImage } = require('electron');
 const path = require('path');
 const { pathToFileURL } = require('url');
 const { spawn, execFile } = require('child_process');
@@ -106,6 +106,10 @@ const {
 const { createTranscriptionService } = require('./main/transcription-service');
 const { createSummaryService } = require('./main/summary-service');
 const { createRecorderService } = require('./main/recorder-service');
+const {
+  createRecordingPresenceService,
+  buildWindowCloseDialogOptions,
+} = require('./main/recording-presence-service');
 
 // Use Electron's default userData path, which handles packaging correctly
 // This is typically: C:\Users\<username>\AppData\Roaming\AvaNevis
@@ -126,6 +130,9 @@ let gpuRuntimeService = null;
 let summaryService = null;
 let transcriptionService = null;
 let recorderService = null;
+let recordingPresenceService = null;
+let appStartupComplete = false;
+let revealWindowWhenReady = false;
 
 // ============================================================================
 // Python runtime service (owns the shared activeProcesses tracking array)
@@ -706,8 +713,55 @@ recorderService = createRecorderService({
   formatDurationForTranscript,
   getRecordingsDir,
   signalProcessTree,
+  onCaptureStateChanged: (state) => {
+    if (recordingPresenceService) {
+      recordingPresenceService.updateCaptureState(state);
+    }
+  },
 });
 recorderService.registerIpc(ipcMain);
+
+function showMainWindow() {
+  if (!appStartupComplete || !mainWindow || mainWindow.isDestroyed()) {
+    revealWindowWhenReady = true;
+    return;
+  }
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function toggleMainWindow() {
+  if (mainWindow && mainWindow.isVisible() && !mainWindow.isMinimized()) {
+    if (
+      process.platform === 'win32'
+      && recordingPresenceService
+      && recordingPresenceService.getCaptureState().state !== 'idle'
+    ) {
+      mainWindow.minimize();
+      return;
+    }
+    mainWindow.hide();
+    return;
+  }
+  showMainWindow();
+}
+
+// Presence may be constructed before ready; tray/Dock/taskbar mutations wait for createTray().
+recordingPresenceService = createRecordingPresenceService({
+  app,
+  path,
+  Tray,
+  Menu,
+  Notification,
+  nativeImage,
+  getMainWindow: () => mainWindow,
+  showMainWindow,
+  toggleMainWindow,
+  quitApp: () => app.quit(),
+});
 
 function getBackendModuleArgs(moduleName, extraArgs = []) {
   return buildPythonModuleArgs(moduleName, extraArgs);

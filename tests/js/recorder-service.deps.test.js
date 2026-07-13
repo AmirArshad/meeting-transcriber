@@ -82,3 +82,166 @@ test('parseRecordingStopResultFromStdout does not throw ReferenceError for getRe
     (error) => error instanceof Error && error.name !== 'ReferenceError',
   );
 });
+
+test('recorder publishes starting/recording/stopping/idle lifecycle and returns startedAt', async () => {
+  const { EventEmitter } = require('node:events');
+  const captureStates = [];
+  const { deps } = createMinimalDeps({
+    onCaptureStateChanged: (state) => captureStates.push(state),
+    isQuitCommitted: () => false,
+  });
+
+  const proc = new EventEmitter();
+  proc.stdout = new EventEmitter();
+  proc.stderr = new EventEmitter();
+  proc.stdin = { write() {} };
+  proc.killed = false;
+  proc.pid = 4242;
+  proc.kill = () => { proc.killed = true; };
+  deps.spawnTrackedPython = () => proc;
+
+  const service = createRecorderService(deps);
+  const handlers = {};
+  service.registerIpc({
+    handle(channel, handler) {
+      handlers[channel] = handler;
+    },
+  });
+
+  const startPromise = handlers['start-recording'](
+    { sender: {} },
+    { micId: 0, loopbackId: 1, isFirstRecording: false },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(captureStates[0].state, 'starting');
+  assert.equal(typeof captureStates[0].sessionId, 'number');
+
+  proc.stdout.emit('data', Buffer.from(`${JSON.stringify({
+    type: 'event',
+    event: 'recording_started',
+    message: 'Recording started!',
+  })}\n`));
+  const startResult = await startPromise;
+  assert.equal(startResult.success, true);
+  assert.equal(Number.isFinite(startResult.startedAt), true);
+  assert.equal(captureStates.at(-1).state, 'recording');
+  assert.equal(captureStates.at(-1).startedAt, startResult.startedAt);
+
+  const hydrated = await handlers['get-recording-state']({ sender: {} });
+  assert.equal(hydrated.state, 'recording');
+  assert.equal(hydrated.startedAt, startResult.startedAt);
+
+  const stopPromise = handlers['stop-recording']({ sender: {} });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(captureStates.at(-1).state, 'stopping');
+
+  const audioPath = path.join(deps.getRecordingsDir(), 'lifecycle.wav');
+  fs.writeFileSync(audioPath, 'x');
+  proc.stdout.emit('data', Buffer.from(`${JSON.stringify({
+    success: true,
+    audioPath,
+    duration: 1,
+  })}\n`));
+  proc.emit('close', 0);
+  await stopPromise;
+  assert.equal(captureStates.at(-1).state, 'idle');
+  assert.equal(captureStates.at(-1).sessionId, null);
+});
+
+test('stale process close cannot publish idle over a newer recording session', async () => {
+  const { EventEmitter } = require('node:events');
+  const captureStates = [];
+  const { deps } = createMinimalDeps({
+    onCaptureStateChanged: (state) => captureStates.push(state),
+    isQuitCommitted: () => false,
+  });
+
+  function makeProc() {
+    const proc = new EventEmitter();
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.stdin = { write() {} };
+    proc.killed = false;
+    proc.pid = Math.floor(Math.random() * 100000) + 1;
+    proc.kill = () => { proc.killed = true; };
+    return proc;
+  }
+
+  const firstProc = makeProc();
+  const secondProc = makeProc();
+  let spawnCount = 0;
+  deps.spawnTrackedPython = () => {
+    spawnCount += 1;
+    return spawnCount === 1 ? firstProc : secondProc;
+  };
+
+  const service = createRecorderService(deps);
+  const handlers = {};
+  service.registerIpc({
+    handle(channel, handler) {
+      handlers[channel] = handler;
+    },
+  });
+
+  // Start first session then force-clear runtime without going idle through stop,
+  // simulating a replacement start after the first child is abandoned.
+  const firstStart = handlers['start-recording'](
+    { sender: {} },
+    { micId: 0, loopbackId: 1, isFirstRecording: false },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  firstProc.stdout.emit('data', Buffer.from(`${JSON.stringify({
+    type: 'event',
+    event: 'recording_started',
+    message: 'Recording started!',
+  })}\n`));
+  await firstStart;
+
+  // Simulate busy check bypass by clearing process pointer is not allowed;
+  // instead stop the first session to idle, then start second, then emit stale close.
+  const stopFirst = handlers['stop-recording']({ sender: {} });
+  await new Promise((resolve) => setImmediate(resolve));
+  const audioPath = path.join(deps.getRecordingsDir(), 'first.wav');
+  fs.writeFileSync(audioPath, 'x');
+  firstProc.stdout.emit('data', Buffer.from(`${JSON.stringify({
+    success: true,
+    audioPath,
+    duration: 1,
+  })}\n`));
+  firstProc.emit('close', 0);
+  await stopFirst;
+
+  const secondStart = handlers['start-recording'](
+    { sender: {} },
+    { micId: 0, loopbackId: 1, isFirstRecording: false },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  secondProc.stdout.emit('data', Buffer.from(`${JSON.stringify({
+    type: 'event',
+    event: 'recording_started',
+    message: 'Recording started!',
+  })}\n`));
+  const secondResult = await secondStart;
+  assert.equal(secondResult.success, true);
+  const statesBeforeStale = captureStates.length;
+
+  // Stale close from the first process must not clear the second session.
+  firstProc.emit('close', 1);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(captureStates.length, statesBeforeStale);
+  assert.equal(service.getCaptureState().state, 'recording');
+  assert.equal(service.getCaptureState().sessionId, secondResult.sessionId);
+
+  const stopSecond = handlers['stop-recording']({ sender: {} });
+  await new Promise((resolve) => setImmediate(resolve));
+  const secondAudio = path.join(deps.getRecordingsDir(), 'second.wav');
+  fs.writeFileSync(secondAudio, 'x');
+  secondProc.stdout.emit('data', Buffer.from(`${JSON.stringify({
+    success: true,
+    audioPath: secondAudio,
+    duration: 1,
+  })}\n`));
+  secondProc.emit('close', 0);
+  await stopSecond;
+  assert.equal(service.getCaptureState().state, 'idle');
+});

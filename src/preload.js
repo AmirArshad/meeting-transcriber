@@ -73,6 +73,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Recording controls
   startRecording: (options) => ipcRenderer.invoke('start-recording', options),
   stopRecording: () => ipcRenderer.invoke('stop-recording'),
+  getRecordingState: () => ipcRenderer.invoke('get-recording-state'),
 
   // Transcription
   transcribeAudio: (options) => ipcRenderer.invoke('transcribe-audio', options),
