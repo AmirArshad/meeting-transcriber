@@ -7,6 +7,7 @@ const {
   formatAiAddonProgressText,
   formatBytes,
   formatDate,
+  formatElapsedDuration,
   formatRelativeDate,
   formatStatusLabel,
   formatTimestamp,
@@ -16,6 +17,18 @@ test('formatTimestamp formats seconds as MM:SS', () => {
   assert.equal(formatTimestamp(65), '01:05');
   assert.equal(formatTimestamp(0), '00:00');
   assert.equal(formatTimestamp(125), '02:05');
+});
+
+test('formatElapsedDuration switches to hours after 60 minutes', () => {
+  assert.equal(formatElapsedDuration(0), '00:00');
+  assert.equal(formatElapsedDuration(3599), '59:59');
+  assert.equal(formatElapsedDuration(3600), '1:00:00');
+  assert.equal(formatElapsedDuration(33000), '9:10:00');
+});
+
+test('formatTimestamp stays unbounded MM:SS for transcript timestamps', () => {
+  assert.equal(formatTimestamp(3600), '60:00');
+  assert.equal(formatTimestamp(3661), '61:01');
 });
 
 test('formatDate formats locale short date-time', () => {

@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' file:; media-src 'self' file:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AvaNevis</title>
+    <title>AvaNevis Meeting Recorder &amp; Transcriber</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -97,9 +97,14 @@
         <div class="top-bar">
           <div class="top-bar-title">
             <h1>AvaNevis</h1>
-            <span class="subtitle">Local AI &middot; Privacy-first</span>
+            <span class="subtitle">Meeting Recorder &amp; Transcriber</span>
           </div>
           <div class="top-bar-spacer"></div>
+          <div id="recording-presence" class="top-bar-status recording-presence" hidden aria-live="polite">
+            <span class="recording-presence-dot" aria-hidden="true"></span>
+            <span id="recording-presence-label">Recording</span>
+            <span id="recording-presence-time" class="recording-presence-time">00:00</span>
+          </div>
         </div>
 
       <!-- Legacy header retained for compatibility but hidden via CSS -->

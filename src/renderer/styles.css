@@ -385,6 +385,36 @@ h5 {
   border: 1px solid var(--hairline);
 }
 
+.recording-presence[hidden] {
+  display: none !important;
+}
+
+.recording-presence.recording {
+  color: #fecaca;
+  border-color: rgba(239, 68, 68, 0.45);
+  background: rgba(239, 68, 68, 0.12);
+}
+
+.recording-presence.stopping {
+  color: #fde68a;
+  border-color: rgba(245, 158, 11, 0.45);
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.recording-presence-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.recording-presence-time {
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  opacity: 0.92;
+}
+
 /* ---- Content area (scroll context) ---- */
 .app-content {
   flex: 1;

@@ -7,7 +7,7 @@ const DEFAULT_SUMMARY_PROFILE = 'balanced';
 const MAX_PROGRESS_LOG_ENTRIES = 250;
 const AI_ADDON_PROGRESS_LOG_INTERVAL_MS = 1000;
 const SVG_NS = 'http://www.w3.org/2000/svg';
-const { getRecordButtonAction } = window.recordingStateHelpers;
+const { getRecordButtonAction, getRecordingPresenceView, canHydratedRendererStopRecording } = window.recordingStateHelpers;
 const {
   buildAiAddonControlState,
   buildHomeAiAddonPrompt,
@@ -26,6 +26,7 @@ const {
   formatAiAddonProgressText,
   formatBytes,
   formatDate,
+  formatElapsedDuration,
   formatRelativeDate,
   formatStatusLabel,
   formatTimestamp,
@@ -55,6 +56,9 @@ const saveBtn = document.getElementById('save-btn');
 const statusIndicator = document.getElementById('status-indicator');
 const statusText = document.getElementById('status-text');
 const timer = document.getElementById('timer');
+const recordingPresenceEl = document.getElementById('recording-presence');
+const recordingPresenceLabel = document.getElementById('recording-presence-label');
+const recordingPresenceTime = document.getElementById('recording-presence-time');
 const progressLog = document.getElementById('progress-log');
 const transcriptOutput = document.getElementById('transcript-output');
 const transcriptActions = document.getElementById('transcript-actions');
@@ -70,6 +74,8 @@ let recordingStartTime = null;
 let activeRecordingSessionId = null;
 let activeCountdownCancel = null;
 let timerInterval = null;
+let recordingPresencePollTimer = null;
+let frozenPresenceElapsedText = null;
 let currentAudioFile = null;
 let currentRecordingDurationSeconds = 0;
 let currentMeetingId = null;
@@ -1012,11 +1018,14 @@ async function init() {
 
     setupEventListeners();
 
-    // Mark initialization complete
+    // Mark initialization complete, then hydrate any in-progress capture from main.
     isInitializing = false;
     setRecordingState('idle');
-    addLog('Ready to record!');
-    statusText.textContent = 'Ready';
+    await hydrateRecordingStateFromMain();
+    if (recordingState === 'idle') {
+      addLog('Ready to record!');
+      statusText.textContent = 'Ready';
+    }
     console.log('App initialized');
 
   } catch (error) {
@@ -1906,11 +1915,53 @@ function setRecordingState(state) {
   if (state === 'idle') {
     cancelActiveCountdown();
     activeRecordingSessionId = null;
+    recordingStartTime = null;
+    frozenPresenceElapsedText = null;
+    stopTimer();
+    if (timer) {
+      timer.textContent = '00:00';
+    }
   }
 
   recordingState = state;
   updateButtonUI();
   updateControlsState();
+  updateRecordingPresenceUI();
+}
+
+function updateRecordingPresenceUI(elapsedTextOverride = null) {
+  if (!recordingPresenceEl) {
+    return;
+  }
+
+  let elapsedText = elapsedTextOverride;
+  if (elapsedText == null) {
+    if (recordingState === 'stopping' && frozenPresenceElapsedText) {
+      elapsedText = frozenPresenceElapsedText;
+    } else if (recordingState === 'recording' && Number.isFinite(recordingStartTime)) {
+      elapsedText = formatElapsedDuration((Date.now() - recordingStartTime) / 1000);
+    } else {
+      elapsedText = '00:00';
+    }
+  }
+
+  const view = getRecordingPresenceView(recordingState, elapsedText);
+  recordingPresenceEl.hidden = !view.visible;
+  recordingPresenceEl.classList.remove('recording', 'stopping');
+  if (view.modifier) {
+    recordingPresenceEl.classList.add(view.modifier);
+  }
+  if (recordingPresenceLabel) {
+    recordingPresenceLabel.textContent = view.label;
+  }
+  if (recordingPresenceTime) {
+    if (view.timeText) {
+      recordingPresenceTime.hidden = false;
+      recordingPresenceTime.textContent = view.timeText;
+    } else {
+      recordingPresenceTime.hidden = true;
+    }
+  }
 }
 
 // Update button appearance based on state
@@ -2111,8 +2162,8 @@ async function startRecording() {
         saveSettings({ hasRecordedBefore: true });
       }
 
+      recordingStartTime = Number(recordingResult.startedAt) || Date.now();
       setRecordingState('recording');
-      recordingStartTime = Date.now();
 
       // Update UI
       startTimer();
@@ -2234,6 +2285,9 @@ async function stopRecording() {
     addLog('Stopping recording...');
 
     // Immediately update UI to show we're stopping
+    if (Number.isFinite(recordingStartTime)) {
+      frozenPresenceElapsedText = formatElapsedDuration((Date.now() - recordingStartTime) / 1000);
+    }
     setRecordingState('stopping');
     stopTimer(); // Stop timer immediately
     audioVisualizer.stop();
@@ -3191,12 +3245,19 @@ async function deleteMeetingHandler(meetingId) {
 
 // Timer functions
 function startTimer() {
-  timerInterval = setInterval(() => {
-    const elapsed = Date.now() - recordingStartTime;
-    const minutes = Math.floor(elapsed / 60000);
-    const seconds = Math.floor((elapsed % 60000) / 1000);
-    timer.textContent = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-  }, 1000);
+  stopTimer();
+  const renderElapsed = () => {
+    const elapsedMs = Math.max(0, Date.now() - (recordingStartTime || Date.now()));
+    const elapsedText = formatElapsedDuration(elapsedMs / 1000);
+    if (timer) {
+      timer.textContent = elapsedText;
+    }
+    if (recordingState === 'recording') {
+      updateRecordingPresenceUI(elapsedText);
+    }
+  };
+  renderElapsed();
+  timerInterval = setInterval(renderElapsed, 1000);
 }
 
 function stopTimer() {
@@ -3204,6 +3265,110 @@ function stopTimer() {
     clearInterval(timerInterval);
     timerInterval = null;
   }
+}
+
+function stopRecordingPresencePoll() {
+  if (recordingPresencePollTimer) {
+    clearInterval(recordingPresencePollTimer);
+    recordingPresencePollTimer = null;
+  }
+}
+
+async function hydrateRecordingStateFromMain() {
+  if (!window.electronAPI?.getRecordingState) {
+    return;
+  }
+
+  let mainState;
+  try {
+    mainState = await window.electronAPI.getRecordingState();
+  } catch (error) {
+    console.error('Failed to hydrate recording state from main:', error);
+    return;
+  }
+
+  if (!mainState || mainState.state === 'idle') {
+    return;
+  }
+
+  if (mainState.state === 'recording' && canHydratedRendererStopRecording(mainState)) {
+    activeRecordingSessionId = mainState.sessionId;
+    recordingStartTime = Number(mainState.startedAt) || Date.now();
+    setRecordingState('recording');
+    startTimer();
+    if (audioVisualizer) {
+      audioVisualizer.start();
+    }
+    addLog('Resumed an in-progress recording after window reload.');
+    return;
+  }
+
+  if (mainState.state === 'starting' || mainState.state === 'stopping') {
+    activeRecordingSessionId = Number.isInteger(mainState.sessionId) ? mainState.sessionId : null;
+    recordingStartTime = Number.isFinite(mainState.startedAt) ? mainState.startedAt : null;
+    if (mainState.state === 'stopping' && Number.isFinite(recordingStartTime)) {
+      frozenPresenceElapsedText = formatElapsedDuration((Date.now() - recordingStartTime) / 1000);
+    }
+    setRecordingState(mainState.state === 'starting' ? 'starting' : 'stopping');
+    startRecordingPresencePoll();
+  }
+}
+
+function startRecordingPresencePoll() {
+  stopRecordingPresencePoll();
+  recordingPresencePollTimer = setInterval(async () => {
+    if (!window.electronAPI?.getRecordingState) {
+      stopRecordingPresencePoll();
+      return;
+    }
+    if (recordingState !== 'starting' && recordingState !== 'stopping') {
+      stopRecordingPresencePoll();
+      return;
+    }
+
+    let mainState;
+    try {
+      mainState = await window.electronAPI.getRecordingState();
+    } catch (error) {
+      console.warn('Recording state poll failed:', error);
+      return;
+    }
+
+    if (!mainState) {
+      return;
+    }
+
+    if (mainState.state === 'recording') {
+      stopRecordingPresencePoll();
+      activeRecordingSessionId = mainState.sessionId;
+      recordingStartTime = Number(mainState.startedAt) || Date.now();
+      frozenPresenceElapsedText = null;
+      setRecordingState('recording');
+      startTimer();
+      if (audioVisualizer) {
+        audioVisualizer.start();
+      }
+      addLog('Recording became active after window reload.');
+      return;
+    }
+
+    if (mainState.state === 'idle' && recordingState === 'stopping') {
+      stopRecordingPresencePoll();
+      setRecordingState('idle');
+      addLog('Recording finished while this window was reloading. Refreshing History...');
+      try {
+        await loadMeetingHistory({ scan: true });
+      } catch (error) {
+        console.warn('History refresh after hydrated stop failed:', error);
+      }
+      return;
+    }
+
+    if (mainState.state === 'idle' && recordingState === 'starting') {
+      stopRecordingPresencePoll();
+      setRecordingState('idle');
+    }
+  }, 1000);
 }
 
 // Add log message

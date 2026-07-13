@@ -109,7 +109,6 @@ const { createRecorderService } = require('./main/recorder-service');
 const {
   createRecordingPresenceService,
   buildWindowCloseDialogOptions,
-  isActiveCaptureState,
 } = require('./main/recording-presence-service');
 
 // Stable Windows toast activator (never use Electron's per-run generated CLSID in packaged builds).

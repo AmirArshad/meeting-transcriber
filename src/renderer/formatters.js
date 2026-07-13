@@ -13,6 +13,18 @@
     return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
   }
 
+  // Elapsed recording clock: MM:SS until one hour, then H:MM:SS.
+  function formatElapsedDuration(totalSeconds) {
+    const secondsTotal = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+    const hours = Math.floor(secondsTotal / 3600);
+    const minutes = Math.floor((secondsTotal % 3600) / 60);
+    const seconds = secondsTotal % 60;
+    if (hours > 0) {
+      return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    }
+    return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  }
+
   // Format date helper
   function formatDate(dateString) {
     const date = new Date(dateString);
@@ -100,6 +112,7 @@
     formatAiAddonProgressText,
     formatBytes,
     formatDate,
+    formatElapsedDuration,
     formatRelativeDate,
     formatStatusLabel,
     formatTimestamp,
