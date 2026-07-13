@@ -1,12 +1,14 @@
 # Recording Awareness And Long-Recording Safety Implementation Plan
 
-> **For agentic workers:** Execute inline by default. Use one independent review only for high-risk cross-process, persistence, packaging, or platform work.
+> **For agentic workers:** Execute inline by default. Do **not** launch Task/subagent reviewers for plan self-check or routine implementation — that burns tokens without adding value. If an independent review is needed, ask the user first and run it in a separate session (for example Fable), not as nested agents.
 
 **Goal:** Make an active AvaNevis recording impossible to overlook, make the app easier to rediscover by purpose, and remove the duration-proportional RAM and crash-loss risk exposed by a forgotten 550-minute recording.
 
 **Architecture:** Ship this through two release gates. Release 1 keeps recording truth in `src/main/recorder-service.js` and feeds a new main-process presence service that owns tray, Dock/taskbar, reminder, and window-presence behavior; the renderer mirrors that state with an always-visible status pill. Release 2 builds on Release 1's lifecycle/presence seams and preserves separate mic/desktop capture and post-recording mixing while replacing unbounded RAM buffers and whole-recording finalization arrays with durable segmented track spools and bounded multi-pass processing.
 
 **Tech Stack:** Electron 42 main process and native notifications, plain HTML/CSS/JavaScript renderer, Python 3.11, NumPy, ffmpeg, Node `node:test`, pytest.
+
+**Plan status:** Revised after Fable approach review (2026-07-13). Key decisions locked below: Windows recording close **minimizes** (keeps taskbar + overlay); macOS uses a **static** red active icon + `REC` (no halo pulse); spool backpressure uses a **larger queue + sustained-stall** policy; interrupted-capture recovery is **async after window creation** and mutually exclusive with starting a new recording.
 
 ## Global Constraints
 
@@ -15,12 +17,15 @@
 - Remind after 60 minutes and every 60 minutes thereafter, based on the authoritative backend start timestamp rather than renderer interval ticks.
 - Never automatically stop a recording because of duration; an automatic cutoff can destroy a legitimate long meeting.
 - Do not add a tray `Stop Recording` action in Release 1. The renderer currently owns stop, transcription, and history persistence as one flow.
-- Do not use taskbar flashing or Dock bouncing. Use persistent state: a macOS active menu-bar icon with a restrained halo pulse plus `REC` text, a supplemental Dock badge when permitted, a Windows taskbar overlay, tray copy, and an in-app pill.
+- Do not use taskbar flashing, Dock bouncing, or animated menu-bar frames. Use persistent state only: a static macOS red active menu-bar icon plus `REC` text, a supplemental Dock badge when permitted, a Windows taskbar overlay (requires a visible taskbar button), tray copy, and an in-app pill.
+- While recording on Windows, the recording-aware close action must **minimize** the window (not `hide()`), so the taskbar button and overlay remain visible. Idle close may still hide to tray as today. macOS may continue to hide to the menu bar while recording.
 - Preserve 48 kHz stereo output, mono-compatible downmix behavior, gentle mic enhancement, desktop fidelity, Windows timestamp-gap semantics, macOS one-sided stereo repair, and late desktop-failure degradation to mic-only.
 - Preserve the structured recorder stdout JSON contract. stderr remains debug-only.
 - Keep `productName`, `appId`, the Electron `userData` identity, artifact names, and updater matching stable. Descriptive display/shortcut labels may change without renaming storage.
 - Release 2 must not reintroduce real-time mixing. Mic and desktop tracks remain separate until bounded post-processing.
 - Release 2 must not expose raw capture-track files as meeting audio or let scan-import treat them as meetings.
+- Release 2 spool backpressure must not hard-stop a live meeting on a brief disk stall. Prefer a larger bounded queue and error only after sustained writer stall; document the larger kill-loss window.
+- Interrupted-capture recovery must not block first paint or a new recording start: run it async after window creation, surface progress through the presence service, and reject or queue new `start-recording` while recovery owns the recordings directory.
 
 ---
 
@@ -36,45 +41,49 @@ The best response is layered:
 
 | Layer | Shipped behavior |
 |---|---|
-| Persistent OS presence | macOS red active menu-bar icon with a restrained glow plus `REC` text and a supplemental Dock badge when permitted; Windows red recording overlay; recording-aware tray tooltip/menu on both platforms |
+| Persistent OS presence | macOS static red active menu-bar icon plus `REC` text and a supplemental Dock badge when permitted; Windows red recording overlay on a still-visible taskbar button; recording-aware tray tooltip/menu on both platforms |
 | Periodic interruption | Native reminder at 1 hour, then every hour, with elapsed time and click-to-open behavior |
 | In-app presence | Recording pill and elapsed clock in the top bar on Record, History, and Settings |
-| Accidental-hide protection | Recording-specific close dialog that says capture will continue in the tray |
+| Accidental-close protection | Recording-specific close dialog: Windows default keeps capture going via **minimize** (taskbar + overlay stay); macOS default keeps capture going via hide-to-menu-bar |
 | Rediscovery | Purpose-based renderer and package descriptions plus packaged Spotlight/Start search experiments, while retaining AvaNevis product/storage/Windows shortcut identity |
 | Duplicate-instance protection | Relaunching AvaNevis reveals the existing window instead of creating a second process/tray icon |
 | Underlying safety | Progressive separate-track disk capture, bounded finalization, and interrupted-session recovery |
 
-Native notifications are best-effort because Focus modes and OS settings can suppress them. The permission-independent menu-bar/tray/taskbar and in-app indicators are therefore required; the macOS Dock badge is supplemental.
+Native notifications are best-effort because Focus modes and OS settings can suppress them. On Windows, a fully hidden window has no taskbar button, so `setOverlayIcon` disappears and the tray icon often sits in the overflow flyout — that is not a sufficient sole signal. Release 1 therefore **minimizes while recording on Windows** so overlay + taskbar remain, and still uses tray copy plus best-effort toasts as secondary signals. The permission-independent macOS menu-bar indicator and in-app pill remain required; the macOS Dock badge is supplemental.
 
 ## Success Criteria
 
-- Hiding AvaNevis during a recording leaves an unmistakable recording signal on both supported platforms.
+- Hiding or minimizing AvaNevis during a recording leaves an unmistakable recording signal on both supported platforms: macOS menu-bar red icon + `REC`; Windows taskbar overlay on a still-present taskbar button (minimize-while-recording), plus tray status copy on both.
 - While the machine is awake, one reminder is generated at each 60-minute milestone; after sleep, missed milestones are coalesced into one current reminder instead of a burst.
 - Clicking a reminder or relaunching the app restores, shows, and focuses the existing window.
 - The elapsed time comes from the recorder's `recording_started` event and renders as `H:MM:SS` after one hour.
 - Stopping or failure clears reminder timers, menu-bar text, any permitted Dock badge, Windows overlay, tray recording copy, and in-app capture presence.
-- Release 1 changes no recorder audio output and passes `npm test` plus the platform presence checklist.
+- Release 1 changes no recorder audio output and passes `npm test` plus the platform presence checklist, including a Windows packaged spike for overlay-when-minimized, tray overflow reality, and toast CLSID on the installed shortcut.
 - After Release 2, capture RAM and stop-time RAM remain bounded for a 4-hour recording, and killing the recorder during capture leaves tracks that can be finalized after relaunch.
+- Release 2 recovery never blocks first window paint; a new recording cannot start while recovery owns the recordings directory.
 - Release 2's short-fixture outputs remain equivalent to the existing path within the documented sample/timing tolerances before the RAM path is removed.
 
 ## File Structure
 
+### Pre-Release 1 gates
+
+- Modify plan evidence / checklist notes only until gates pass: snapshot current tray/close behavior; Windows packaged presence + toast CLSID spike; confirm `requestSingleInstanceLock` behavior with `npm start` alongside an installed build.
+
 ### Release 1: Recording Awareness
 
-- Create `src/main/recording-presence-service.js`: tray state, macOS active-icon animation, Dock/taskbar state, hourly reminder scheduling, and pure presentation builders.
+- Create `src/main/recording-presence-service.js`: tray state, macOS static active icon, Dock/taskbar state, hourly reminder scheduling, and pure presentation builders.
 - Create `tests/js/recording-presence-service.test.js`: dependency-injected service behavior and timer tests.
 - Create `tests/js/recording-presence-packaging.test.js`: app identity labels and Windows overlay resource assertions.
 - Create `build/recording-overlay.png`: transparent 16x16 Windows taskbar overlay with a solid red record dot and a one-pixel light border.
-- Create `build/iconRecording.png` and `build/iconRecording@2x.png`: macOS non-template active-state menu-bar icons with a red recording dot and soft outer halo.
-- Create `build/iconRecordingGlow.png` and `build/iconRecordingGlow@2x.png`: matching low-intensity halo frame for the active menu-bar pulse.
+- Create `build/iconRecording.png` and `build/iconRecording@2x.png`: macOS non-template active-state menu-bar icons with a red recording dot (static; no glow frames).
 - Modify `src/main/recorder-service.js`: publish authoritative lifecycle changes and return `startedAt` from start.
-- Modify `src/main.js`: compose the presence service, enforce one instance, restore/focus the window, set Windows AppUserModelID, and use recording-aware close copy.
+- Modify `src/main.js`: compose the presence service, enforce one instance, restore/focus the window, set Windows AppUserModelID, and use recording-aware close copy (Windows minimize while recording).
 - Modify `src/renderer/index.html`: top-bar recording pill, descriptive subtitle/title.
 - Modify `src/renderer/styles.css`: recording/stopping pill states.
 - Modify `src/renderer/app.js`: use authoritative start time and render global presence.
 - Modify `src/renderer/formatters.js`: add elapsed-clock formatting without changing transcript timestamp formatting.
 - Modify `src/preload.js`: expose recorder-state hydration after renderer reload/recreation.
-- Modify `package.json`: bundle the overlay, improve the purpose-based description, and test a macOS display label without changing `productName`, Windows shortcut identity, or `appId`.
+- Modify `package.json`: bundle the overlay and active icons, improve the purpose-based description, and test a macOS display label without changing `productName`, Windows shortcut identity, or `appId`.
 - Modify `tests/js/quit-lifecycle.behavioral.test.js`, `tests/js/recording-state-helpers.test.js`, and `tests/js/formatters.test.js`: lifecycle and renderer regression coverage.
 - Modify `tests/js/ipc-contract-snapshot.test.js`: pin the new `get-recording-state` hydration channel.
 - Modify `tests/manual/recording-smoke-checklist.md`: supported-platform presence/reminder checks.
@@ -90,13 +99,53 @@ Native notifications are best-effort because Focus modes and OS settings can sup
 - Create `tests/python/test_capture_manifest.py`, `test_track_spool.py`, `test_streaming_post_processor.py`, and `test_capture_recovery.py`.
 - Modify both platform recorders and macOS desktop helper bridges to send chunks to track spools instead of retaining complete recordings.
 - Modify `src/main/device-ipc.js`: replace shell disk probes with Node filesystem stats and use a realistic recording reserve warning.
-- Modify `src/main/recorder-service.js`: structured stop stages and interrupted-capture recovery orchestration.
+- Modify `src/main/recorder-service.js`: structured stop stages and interrupted-capture recovery orchestration (async, mutually exclusive with new recording).
 - Modify meeting scan/recovery code so capture directories are never imported as meeting audio.
 - Modify recorder contract, timeline, processor, temp-recovery, and manual long-recording tests.
 
 ---
 
+## Before Coding Release 1
+
+Complete these gates before Task 1 implementation. They change dialog copy, assets, and overlay claims.
+
+- [ ] **Gate A — Snapshot current tray/close behavior.** Read `createTray()` and `mainWindow.on('close')` in `src/main.js` (~1037–1163). Record preserved labels and semantics:
+  - Tray menu today: `Show/Hide Window`, separator, `Quit`; tooltip `AvaNevis`; click toggles show/hide.
+  - Idle close dialog today: title `Minimize to Tray`; buttons `Minimize to Tray` / `Close App` / `Cancel` (default minimize → `hide()`).
+  - Diff the presence-service takeover against this snapshot so items are not silently dropped.
+- [ ] **Gate B — Windows hidden vs minimized (locked).** While `state === 'recording'|'starting'|'stopping'`, Windows close default is **Minimize** (`mainWindow.minimize()`), not hide, so the taskbar button and overlay remain. Idle/generic close may still hide to tray. Dialog button copy: `Keep Recording Minimized`, `Stop and Quit`, `Cancel`.
+- [ ] **Gate C — Windows packaged spike (before Task 3 asset/work completion).** On an installed NSIS build, verify: overlay visible when minimized; overlay gone when fully hidden (documents why Gate B exists); tray overflow default behavior; toast CLSID present on the installed shortcut / toast registration; `setAppUserModelId('com.avanevis.app')` matches the shortcut. Do not treat package.json source assertions alone as proof of Action Center delivery.
+- [ ] **Gate D — Single-instance collision.** Confirm `requestSingleInstanceLock` behavior when `npm start` runs alongside an installed packaged build; document which instance wins and that the secondary exits without a second tray.
+- [ ] **Gate E — macOS icon (locked).** Ship static `iconRecording.png` / `@2x` only. No glow frames, no 1,200 ms `setImage` interval, no reduced-transparency animation branch beyond showing the same static red icon.
+
+---
+
 ## Release 1: Recording Awareness
+
+### Task 0: Presence Baseline Snapshot And Windows Spike Evidence
+
+**Files:**
+- Modify: `tests/manual/recording-smoke-checklist.md` (add Gate C evidence section)
+- Optionally note findings in `docs/initiatives/ROADMAP.md` if the spike changes packaging assumptions
+
+**Interfaces:**
+- Consumes: current `src/main.js` tray/close behavior and one Windows packaged build.
+- Produces: checklist evidence that Gate A–E are satisfied before Tasks 1–3 land.
+
+- [ ] **Step 1: Write the tray/close snapshot into the manual checklist**
+
+Paste the Gate A labels so implementers can diff against them during the service takeover.
+
+- [ ] **Step 2: Run the Windows packaged spike**
+
+Build with `npm run build:dir` (or full NSIS when toast registration must be inspected). Record overlay-minimized vs overlay-hidden, tray overflow, and toast CLSID results.
+
+- [ ] **Step 3: Commit checklist evidence only**
+
+```bash
+git add tests/manual/recording-smoke-checklist.md docs/initiatives/ROADMAP.md
+git commit -m "docs: record recording presence baseline gates"
+```
 
 ### Task 1: Recording Presence Service
 
@@ -183,21 +232,26 @@ When a reminder timer fires, re-read current state and `now()`. Show at most one
 
 Apply the view as follows:
 
-- macOS: load the active icon with `nativeImage.createFromPath()`, call `tray.setImage(activeImage)`, then `activeImage.setTemplateImage(false)` so macOS preserves the red dot/halo instead of tinting it as a template. Keep `tray.setTitle('REC', { fontType: 'monospacedDigit' })` as the readable fallback.
-- macOS glow: alternate only `iconRecording.png` and `iconRecordingGlow.png` every 1,200 ms while recording. Stop the interval and restore the existing monochrome template icon with `setTemplateImage(true)` on stopping, idle, failure, and service destruction. The halo frame must differ only in outer-alpha intensity, not shape, so the animation remains calm rather than flashing.
-- macOS accessibility: if `nativeTheme.prefersReducedTransparency` or `nativeTheme.shouldUseHighContrastColors` is true, do not animate; show the static red active icon plus `REC`. Listen to `nativeTheme.updated` and apply the current policy immediately. Attempt `app.dock.setBadge('REC')` as a supplemental signal only; Electron documents that it depends on notification permission, so the menu-bar signal is the reliable indicator.
-- Windows: `mainWindow.setOverlayIcon(recordingOverlay, 'AvaNevis is recording')` only while recording; clear with `setOverlayIcon(null, '')`.
-- Both: rebuild the tray menu with a disabled status row, `Show AvaNevis`, a separator, and `Quit AvaNevis`.
+- macOS: load the static active icon with `nativeImage.createFromPath()`, call `tray.setImage(activeImage)`, then `activeImage.setTemplateImage(false)` so macOS preserves the red dot instead of tinting it as a template. Keep `tray.setTitle('REC', { fontType: 'monospacedDigit' })` as the readable fallback. Do **not** animate or alternate icons.
+- macOS idle restore: on stopping, idle, failure, and service destruction, restore the existing monochrome template icon with `setTemplateImage(true)` and clear the title.
+- macOS Dock: attempt `app.dock.setBadge('REC')` as a supplemental signal only; Electron documents that it depends on notification permission, so the menu-bar signal is the reliable indicator.
+- Windows: `mainWindow.setOverlayIcon(recordingOverlay, 'AvaNevis is recording')` only while recording/stopping and the window still has a taskbar button; clear with `setOverlayIcon(null, '')`. Overlay requires minimize-not-hide while recording (Gate B).
+- `starting` presentation: use the same recording tray/overlay markers as `recording` (red icon / overlay / REC) with tooltip/status copy `Starting recording...` so the brief pre-`recording_started` window is not visually idle.
+- Both: rebuild the tray menu with a disabled status row, `Show AvaNevis`, a separator, and `Quit AvaNevis`. Diff against Gate A's `Show/Hide Window` / `Quit` snapshot so behavior is intentionally replaced, not accidentally dropped.
 - While recording: refresh elapsed tooltip/menu copy every 60 seconds from `startedAt`; this interval updates presentation only and never decides reminder milestones.
 - Give reminders stable IDs such as `recording-reminder-<sessionId>-<hour>` and group `avanevis-recording-reminders`.
 - Retain active notification objects until their `click`, `close`, or `failed` event. Instance click calls `showMainWindow()`; on Windows also register `Notification.handleActivation()` once so Action Center/cold activation does not depend on object lifetime.
 - Check `Notification.isSupported()`, handle synchronous constructor/show failures, and listen for asynchronous `failed`. Log a concise warning and keep all permission-independent indicators active.
-- Stopping: cancel reminders immediately, show finishing copy, and clear the active-capture Dock/taskbar marker.
+- Stopping: cancel reminders immediately, show finishing copy, keep Windows overlay until idle if the window is still minimized, and clear the active-capture Dock badge.
 - Idle/failure: clear all state and presentation.
 
 - [ ] **Step 5: Add close-dialog copy tests**
 
-Assert recording copy contains `AvaNevis is still recording`, uses buttons `Keep Recording in Tray`, `Stop and Quit`, and `Cancel`, and makes `Keep Recording in Tray` the default. Assert idle state preserves the existing generic minimize/close/cancel choice.
+Assert recording-state dialog options are platform-aware:
+
+- Windows recording: title/body say AvaNevis is still recording; buttons `Keep Recording Minimized`, `Stop and Quit`, `Cancel`; default is minimize (not hide).
+- macOS recording: buttons `Keep Recording in Menu Bar`, `Stop and Quit`, `Cancel`; default hides to menu bar.
+- Idle state preserves the existing generic minimize-to-tray / close / cancel choice from Gate A (`Minimize to Tray`, `Close App`, `Cancel`).
 
 - [ ] **Step 6: Run the focused tests**
 
@@ -317,19 +371,17 @@ git commit -m "feat: publish authoritative recording state"
 - Create: `build/recording-overlay.png`
 - Create: `build/iconRecording.png`
 - Create: `build/iconRecording@2x.png`
-- Create: `build/iconRecordingGlow.png`
-- Create: `build/iconRecordingGlow@2x.png`
 - Create: `tests/js/recording-presence-packaging.test.js`
 
 **Interfaces:**
-- Consumes: Task 1 service and Task 2 lifecycle callback.
+- Consumes: Task 1 service, Task 2 lifecycle callback, and Gate C Windows spike evidence.
 - Produces: `showMainWindow()` and `toggleMainWindow()` composition-root helpers.
 
-- [ ] **Step 1: Create the Windows overlay asset**
+- [ ] **Step 1: Create the Windows overlay and macOS static active icons**
 
 Create `build/recording-overlay.png` as a transparent 16x16 PNG. Draw a centered 10px `#ef4444` circle with a 1px `#fee2e2` outline. Do not put letters in the 16px asset. Add it to `build.extraResources` at runtime path `recording-overlay.png`.
 
-Create two 18x18 macOS active icons and matching 36x36 `@2x` versions. Both use a red `#ef4444` 8px record dot with a light 1px inner ring. `iconRecording` has a 2px soft red halo; `iconRecordingGlow` has a 4px halo at roughly 55% alpha. They must not be template images. Include all four in `extraResources` so dev and packaged paths resolve identically.
+Create two 18x18 macOS active icons and matching 36x36 `@2x` versions. Both use a red `#ef4444` 8px record dot with a light 1px inner ring and a soft outer halo baked into the static asset (not animated). They must not be template images. Include both in `extraResources` so dev and packaged paths resolve identically. Do **not** create glow/pulse frames.
 
 - [ ] **Step 2: Add packaging assertions**
 
@@ -341,9 +393,13 @@ test('recording presence resources preserve app identity', () => {
   assert.match(pkg.description, /meeting recorder.*transcriber/i);
   assert.match(pkg.build.mac.extendInfo.CFBundleDisplayName, /AvaNevis.*Meeting/i);
   assert.ok(pkg.build.extraResources.some((entry) => entry.to === 'recording-overlay.png'));
-  for (const name of ['iconRecording.png', 'iconRecording@2x.png', 'iconRecordingGlow.png', 'iconRecordingGlow@2x.png']) {
+  for (const name of ['iconRecording.png', 'iconRecording@2x.png']) {
     assert.ok(pkg.build.extraResources.some((entry) => entry.to === name));
   }
+  assert.equal(
+    pkg.build.extraResources.some((entry) => String(entry.to || '').includes('Glow')),
+    false
+  );
 });
 ```
 
@@ -364,6 +420,11 @@ function showMainWindow() {
 
 function toggleMainWindow() {
   if (mainWindow && mainWindow.isVisible() && !mainWindow.isMinimized()) {
+    // Idle toggle may hide; while capturing on Windows prefer minimize (Gate B).
+    if (process.platform === 'win32' && recordingPresenceService.getCaptureState().state !== 'idle') {
+      mainWindow.minimize();
+      return;
+    }
     mainWindow.hide();
     return;
   }
@@ -379,15 +440,21 @@ Make `createWindow()` idempotent: if a live window exists, call `showMainWindow(
 
 Call `app.requestSingleInstanceLock()` before readiness. A secondary instance calls `app.quit()` and does not create a window or tray. The primary registers `second-instance` and calls `showMainWindow()`.
 
-On Windows, call `app.setAppUserModelId('com.avanevis.app')` before creating notifications so process identity matches the NSIS shortcut. Also set one checked-in stable Toast Activator GUID with `app.setToastActivatorCLSID()` before readiness; never use Electron's per-run generated CLSID in packaged builds. Packaged validation must inspect the installed shortcut and toast registration, because a package JSON source assertion alone cannot prove Windows delivery.
+On Windows, call `app.setAppUserModelId('com.avanevis.app')` before creating notifications so process identity matches the NSIS shortcut. Also set one checked-in stable Toast Activator GUID with `app.setToastActivatorCLSID()` before readiness; never use Electron's per-run generated CLSID in packaged builds. Packaged validation must inspect the installed shortcut and toast registration (Gate C), because a package JSON source assertion alone cannot prove Windows delivery.
 
 - [ ] **Step 5: Replace inline tray ownership**
 
-Remove `createTray()` from `src/main.js`. Instantiate Task 1's service with Electron dependencies and call `recordingPresenceService.createTray()` after startup checks and before `createWindow()`. Call `recordingPresenceService.destroy()` on the force/final quit path.
+Remove `createTray()` from `src/main.js`. Instantiate Task 1's service with Electron dependencies and call `recordingPresenceService.createTray()` after startup checks and before `createWindow()`. Call `recordingPresenceService.destroy()` on the force/final quit path. Diff the new menu against Gate A before deleting the inline implementation.
 
 - [ ] **Step 6: Make close behavior recording-aware**
 
-Use `recordingPresenceService.getCaptureState()` to select Task 1's dialog options. `Keep Recording in Tray` hides the window. `Stop and Quit` calls the existing `app.quit()` flow so the established graceful stop/persist logic remains authoritative. `Cancel` makes no change.
+Use `recordingPresenceService.getCaptureState()` and `buildWindowCloseDialogOptions(state)` to select dialog options.
+
+- Recording on Windows: default `Keep Recording Minimized` → `mainWindow.minimize()` (taskbar button + overlay persist).
+- Recording on macOS: default `Keep Recording in Menu Bar` → `mainWindow.hide()`.
+- `Stop and Quit` calls the existing `app.quit()` flow so the established graceful stop/persist logic remains authoritative.
+- `Cancel` makes no change.
+- Idle: preserve Gate A buttons and `hide()` minimize-to-tray behavior.
 
 - [ ] **Step 7: Add purpose-based discoverability without splitting Windows identity**
 
@@ -417,7 +484,7 @@ Expected: PASS.
 - [ ] **Step 9: Commit OS presence**
 
 ```bash
-git add src/main.js package.json build/recording-overlay.png build/iconRecording.png build/iconRecording@2x.png build/iconRecordingGlow.png build/iconRecordingGlow@2x.png tests/js/recording-presence-packaging.test.js
+git add src/main.js package.json build/recording-overlay.png build/iconRecording.png build/iconRecording@2x.png tests/js/recording-presence-packaging.test.js
 git commit -m "feat: show recording state across desktop surfaces"
 ```
 
@@ -493,6 +560,8 @@ Implement the table as the pure `getRecordingPresenceView()` helper and let `app
 
 During renderer initialization, call `getRecordingState()` before enabling the record controls. If main reports `recording`, set `activeRecordingSessionId`, `recordingStartTime`, renderer state `recording`, start the timer/visualizer, and allow the existing Stop & Transcribe workflow. If main reports `starting` or `stopping`, show the matching busy state without enabling a second start and start the bounded one-second re-query described in Task 2. On transition to `recording`, start the timer. On transition from `stopping` to `idle`, return controls to idle and run `loadMeetingHistory({ scan: true })` because the original renderer's transcription continuation no longer exists; preserve the audio in History for explicit retry. If hydration fails, log the error and leave the UI idle; main-process `REC` presence remains authoritative.
 
+Assert explicitly that hydrated Stop & Transcribe needs nothing from the dead renderer's in-memory state beyond the stop IPC result and settings already in `localStorage` (model size, language, device selection, etc.). Add a focused helper/regression test or checklist item that Stop after hydration uses the same IPC path as a live renderer and does not read transient fields that only the original renderer held.
+
 - [ ] **Step 7: Run renderer tests**
 
 Run: `node --test tests/js/formatters.test.js tests/js/recording-state-helpers.test.js tests/js/renderer-helper-characterization.test.js && npm run test:syntax`
@@ -522,15 +591,17 @@ git commit -m "feat: add persistent in-app recording status"
 Add checks for:
 
 - recording on Record, History, and Settings tabs
-- hidden and minimized windows
+- Windows: minimized window keeps overlay; fully hidden window loses overlay (documents why recording close minimizes)
+- macOS: hidden window keeps static red menu-bar icon + `REC` (no pulse)
 - reminder at a test-overridden one-minute interval, then production 60-minute configuration
-- notification click restoring a minimized window
+- notification click restoring a minimized/hidden window
 - notifications disabled/Focus enabled while permission-independent indicators remain; on macOS, menu-bar `REC` is required even if the supplemental Dock badge is unavailable
 - stop, failure, and quit clearing every indicator
-- relaunch revealing the existing instance with no second tray icon
-- macOS light/dark menu bar, active red icon/halo, static reduced-transparency/high-contrast fallback, and Dock badge when notification permission allows it
-- Windows taskbar overlay at 100%, 150%, and 200% scaling
+- relaunch revealing the existing instance with no second tray icon; document `npm start` vs installed-build single-instance behavior (Gate D)
+- macOS light/dark menu bar and Dock badge when notification permission allows it
+- Windows taskbar overlay at 100%, 150%, and 200% scaling while minimized
 - installed Spotlight/Start search for `AvaNevis`, `meeting`, and `transcriber`, recording actual OS behavior rather than assuming descriptive metadata is indexed
+- Gate C toast CLSID / Action Center click-to-open on an installed Windows build
 
 - [ ] **Step 2: Document architecture**
 
@@ -600,7 +671,7 @@ const level = availableBytes < (2 * 1024 * 1024 * 1024)
   : (warning ? 'warning' : null);
 ```
 
-Return unknown space only when `statfs` fails, with a logged warning. Add injected-filesystem tests for known free space, low free space, critical free space, and probe failure. During recording, check every five minutes from the main-process recorder lifecycle, emit `recording-warning` only when crossing into warning/critical state, and use the presence service to show a best-effort native safety notification while the window may be hidden. Never auto-stop solely because a threshold was crossed; a track-spool write failure must stop accepting new audio and preserve committed segments for recovery.
+Before deleting shell probes, verify Electron 42 `statfs` `bavail`/`bsize` semantics on Windows (Gate: treat unknown space as non-blocking warning if the API is wrong or missing). Return unknown space only when `statfs` fails, with a logged warning. Add injected-filesystem tests for known free space, low free space, critical free space, and probe failure. During recording, check every five minutes from the main-process recorder lifecycle, emit `recording-warning` only when crossing into warning/critical state, and use the presence service to show a best-effort native safety notification while the window may be minimized/hidden. Never auto-stop solely because a threshold was crossed; a track-spool sustained-stall failure must stop accepting new audio and preserve committed segments for recovery.
 
 - [ ] **Step 3: Emit structured stop stages from both recorders**
 
@@ -638,11 +709,13 @@ git commit -m "feat: add long recording guardrails"
 - `manifest.add_track(name, sample_rate, channels, dtype) -> None`
 - `manifest.commit_track(name, segments, committed_frames) -> None`
 - `manifest.set_state('recording'|'finalizing'|'complete'|'error') -> None`
-- `TrackSpool(manifest_coordinator, session_dir, track_name, sample_rate, channels, dtype, max_queue_bytes=2*1024*1024, segment_bytes=64*1024*1024)`
+- `TrackSpool(manifest_coordinator, session_dir, track_name, sample_rate, channels, dtype, max_queue_bytes=32*1024*1024, segment_bytes=64*1024*1024, stall_timeout_s=30)`
 - `TrackSpool.append(pcm, frame_position=None) -> bool`
 - `TrackSpool.close(final_frame_count=None) -> TrackSpoolResult`
 
 `frame_position`, `writtenFrames`, `committedFrames`, and `final_frame_count` always count per-channel audio frames, never interleaved scalar samples. For `channels=2`, one frame contains two samples and `frame_position * channels * dtype.itemsize` gives its byte offset.
+
+Default `max_queue_bytes=32 MiB` (~80–90 s of stereo float32 headroom) absorbs transient Windows AV scans and disk spin-up without killing a live meeting. Document that a forced kill may lose up to roughly `stall_timeout_s` of uncommitted audio plus the in-flight queue — larger than a tiny-queue design, and accepted over mid-meeting hard-stops.
 
 - [ ] **Step 1: Write manifest atomicity and scan-exclusion tests**
 
@@ -652,21 +725,28 @@ Use a session directory named `{output_stem}.capture` and manifest `{session_dir
 
 Cover sequential writes, per-channel `frame_position` silence insertion, overlap trimming, 64 MiB segment rollover with a small injected test threshold, queue-byte rejection, writer exceptions, flush/close, and a final frame count that pads the shorter track with silence. Assert that PCM byte lengths are divisible by `channels * dtype.itemsize`; do not test frame counts for channel divisibility.
 
-The overflow contract is explicit:
+The overflow / stall contract is explicit:
 
 ```python
 accepted = spool.append(chunk, frame_position=position)
 if not accepted:
+    # append returns False only after sustained writer stall (no committedFrames
+    # progress for stall_timeout_s) or hard writer exception — not on a brief
+    # queue bulge that later drains.
     raise TrackSpoolBackpressureError(
-        "Audio capture writer could not keep up; recording was stopped to avoid silent data loss."
+        "Audio capture writer stalled; recording was stopped to preserve committed audio."
     )
 ```
 
-Do not silently drop audio and do not block a real-time callback on disk I/O.
+While the queue is above a soft high-water mark, `append` may still accept until `max_queue_bytes` if the writer is making commit progress. Only after `stall_timeout_s` with no `committedFrames` advance (or a writer exception) does capture stop. Do not silently drop audio and do not block a real-time callback on disk I/O.
 
 - [ ] **Step 3: Implement atomic manifests**
 
-Write JSON to `manifest.json.tmp`, flush and `os.fsync()`, then `os.replace()`. One `CaptureManifestCoordinator` owns a process-wide thread lock and serializes read-modify-write commits from both track-writer threads so they cannot race on the temp path or overwrite sibling track state. It also acquires an OS-visible `session.lock` for the recorder process's entire capture/finalization lifetime. Recovery acquires that same lock non-blocking and skips any session still owned by a live recorder. Store only relative segment names under the capture directory. Reject absolute paths, `..`, unknown schema versions, unsupported dtypes, negative/non-integral frame counts, and PCM byte lengths not aligned to the declared frame size.
+Write JSON to `manifest.json.tmp`, flush and `os.fsync()`, then `os.replace()`. One `CaptureManifestCoordinator` owns a process-wide thread lock and serializes read-modify-write commits from both track-writer threads so they cannot race on the temp path or overwrite sibling track state. It also acquires an OS-visible `session.lock` for the recorder process's entire capture/finalization lifetime. Recovery acquires that same lock non-blocking and skips any session still owned by a live recorder.
+
+Because portable advisory locks differ (POSIX flock vs Windows `msvcrt` / lockfile+PID), implement a small cross-platform helper with explicit crash semantics: stale lock files from dead PIDs must be reclaimable; live-PID locks must be skipped. Add tests that simulate a stale lock and a live lock on both platforms (or with injected lock backends). The recovery skip-if-live guard is only as good as this primitive.
+
+Store only relative segment names under the capture directory. Reject absolute paths, `..`, unknown schema versions, unsupported dtypes, negative/non-integral frame counts, and PCM byte lengths not aligned to the declared frame size.
 
 Required manifest fields:
 
@@ -691,7 +771,7 @@ Required manifest fields:
 
 - [ ] **Step 4: Implement the spool writer thread**
 
-Callbacks copy contiguous PCM bytes into a byte-counted bounded queue and return immediately. The writer owns files, rolls segments at the configured threshold, flushes and fsyncs at least once per second, then atomically advances `committedFrames`; in-memory `writtenFrames` may be newer. The default 2 MiB queue plus one-second commit cadence bounds worst-case uncommitted stereo-float32 audio below 7 seconds per track under normal writer progress. Close performs a final fsync plus manifest commit. Measure actual kill loss in Task 10 and reduce queue/cadence if the 10-second target is missed.
+Callbacks copy contiguous PCM bytes into a byte-counted bounded queue and return immediately. The writer owns files, rolls segments at the configured threshold, flushes and fsyncs at least once per second, then atomically advances `committedFrames`; in-memory `writtenFrames` may be newer. The default 32 MiB queue plus sustained-stall detection bounds uncommitted loss to roughly `stall_timeout_s` under a hung writer while tolerating multi-second AV/disk stalls. Close performs a final fsync plus manifest commit. Measure actual kill loss in Task 10; if the 30-second target is missed, tighten flush cadence rather than shrinking the queue back to a few seconds of headroom.
 
 - [ ] **Step 5: Run focused Python tests**
 
@@ -849,7 +929,7 @@ git commit -m "feat: finalize recordings with bounded memory"
 **Interfaces:**
 - CLI: `python -m audio.capture_recovery --recordings-dir <dir> --ffmpeg <path>`.
 - JSON result: `{ success, recovered: [{ captureDir, audioPath, duration }], failed: [{ captureDir, code, message }] }`.
-- Main service: `recoverInterruptedCaptures() -> Promise<RecoveryResult>` runs before renderer history scan.
+- Main service: `recoverInterruptedCaptures() -> Promise<RecoveryResult>` starts **after** window creation (never blocks first paint), reports progress through the presence service / `recording-progress`, and is mutually exclusive with `start-recording`.
 
 - [ ] **Step 1: Add kill-point recovery tests**
 
@@ -859,9 +939,16 @@ Create fixture manifests representing interruption during capture, concurrent mi
 
 Acquire the same OS-visible `session.lock` used by the live recorder in non-blocking mode. Skip locked sessions instead of mutating them. For acquired sessions, validate every relative segment and frame alignment, mark stale `recording` sessions as `finalizing`, and call `finalize_capture()`. Emit one final JSON result on stdout; diagnostics stay on stderr. Do not trust paths outside the requested recordings directory.
 
-- [ ] **Step 3: Run recovery before normal scan-import**
+- [ ] **Step 3: Run recovery async after window creation, mutually exclusive with new recording**
 
-Add `recoverInterruptedCaptures()` to the recorder service and invoke it during startup after runtime checks but before the renderer's history scan can run. Successful recovered files are imported by the existing meeting scan path, preserving one source of truth for meeting IDs and metadata.
+Add `recoverInterruptedCaptures()` to the recorder service. Invoke it from `src/main.js` **after** `createWindow()` / startup UI is up, not before the history scan blocks first paint. Preferred order:
+
+1. Create window and tray/presence.
+2. Kick off recovery in the background; presence/status copy may show `Recovering interrupted recording...` when work is found.
+3. When recovery finishes successfully, trigger or allow the normal meeting scan/import path so recovered files become History entries (one source of truth for meeting IDs).
+4. While recovery is in flight (`recoveryInProgress === true`), `start-recording` must reject with a clear user-facing message (recovery yields to no new capture; the user waits or cancels recovery only if a future cancel IPC is added — v1: no cancel, just wait). Do not start a second recorder that could race the same recordings directory or `session.lock` reclaim path.
+
+Do not await multi-hour finalization inside `app.whenReady()` before showing the window.
 
 - [ ] **Step 4: Validate real long recordings**
 
@@ -872,8 +959,9 @@ Pass criteria:
 - capture RSS does not grow linearly with duration after warm-up
 - peak Python RSS remains below 512 MiB during capture and below 1 GiB during finalization on the measured machines
 - tail audio is present within 100 ms of the requested stop point
-- recovered recording includes audio through the last fsynced interval, losing no more than 10 seconds under forced kill
+- recovered recording includes audio through the last fsynced interval, losing no more than about `stall_timeout_s` (default 30s) under forced kill — document the measured window in `LONG_RECORDING_SAFETY.md`
 - no raw track or capture directory appears as a meeting
+- startup with a large interrupted capture still shows the main window promptly; new recording remains blocked until recovery completes
 
 - [ ] **Step 5: Remove the RAM path and rollout flag**
 
@@ -904,7 +992,8 @@ These ideas are intentionally outside this initiative:
 - Automatic stop based on calendar events, silence, duration, RAM, or meeting-app presence.
 - Tray-level Stop, global stop hotkeys, or remote controls until stop/transcribe/history orchestration has one main-process owner.
 - Real-time transcription or real-time mic/desktop mixing.
-- Continuous Dock bounce, taskbar flashing, rapid/high-contrast animation, or notification sounds every few minutes. The macOS recording icon's 1,200 ms low-intensity halo pulse is the sole intentional animation.
+- Continuous Dock bounce, taskbar flashing, menu-bar icon animation/halo pulse, or notification sounds every few minutes. Static red active icon + `REC` is the intentional macOS signal.
+- Cancelable interrupted-capture recovery UI (v1 blocks new recording until recovery finishes; add cancel only if long recoveries prove painful).
 - Cloud-based reminders, account identity, or telemetry measuring recording duration.
 
 ## Rollback Boundaries
@@ -919,11 +1008,13 @@ These ideas are intentionally outside this initiative:
 | Scenario | macOS | Windows | Automated | Manual |
 |---|---:|---:|---:|---:|
 | Recording visible in app on every tab | Yes | Yes | Yes | Yes |
-| Hidden-window persistent OS indicator | Menu bar; Dock badge if permitted | Tray + overlay | Service fakes | Packaged |
-| Hourly reminder and click-to-open | Yes | Yes | Timer/notification fakes | Packaged |
-| Notifications disabled | Menu-bar signal remains | Tray + overlay remain | Failure fake | Packaged |
+| Hidden/minimized persistent OS indicator | Menu bar static red + `REC`; Dock badge if permitted | Taskbar overlay while **minimized** (not fully hidden) + tray status | Service fakes | Packaged |
+| Hourly reminder and click-to-open | Yes | Yes | Timer/notification fakes | Packaged (+ toast CLSID) |
+| Notifications disabled | Menu-bar signal remains | Overlay (minimized) + tray remain | Failure fake | Packaged |
 | Relaunch focuses existing session | Yes | Yes | Main helper/service | Packaged |
 | Stop/failure clears state | Yes | Yes | Recorder lifecycle | Packaged |
+| Startup recovery does not block first paint | Yes | Yes | Service fake + long fixture | Packaged |
+| New recording blocked during recovery | Yes | Yes | Recorder service | Manual |
 | 4-hour bounded capture/finalization | Yes | Yes | Synthetic chunks | Hardware |
-| Kill/relaunch recovery | Yes | Yes | Kill-point fixtures | Hardware |
+| Kill/relaunch recovery (≤ ~stall_timeout_s loss) | Yes | Yes | Kill-point fixtures | Hardware |
 | Audio quality/timing parity | Yes | Yes | Short fixtures | Listening/transcript |

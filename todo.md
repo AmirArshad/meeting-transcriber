@@ -47,24 +47,25 @@ Do **not** force Phase 2 renderer controllers now. Revisit only if `app.js` grow
 
 ## Next Product Initiative: Recording Awareness And Long-Recording Safety
 
-Implementation plan: `docs/superpowers/plans/2026-07-13-recording-awareness-and-long-recording-safety.md`.
+Implementation plan: `docs/superpowers/plans/2026-07-13-recording-awareness-and-long-recording-safety.md` (revised after Fable approach review 2026-07-13).
 
 ### Release 1: Recording awareness and discoverability
 
-- [ ] [Risk: Medium] Add one main-process recording-presence service with a restrained glowing macOS menu-bar recording icon, `REC` text, supplemental Dock badge, Windows taskbar overlay, and hourly native reminders.
+- [ ] [Risk: Medium] Complete Before Coding gates: tray/close snapshot, Windows minimize-while-recording decision (locked), Windows packaged overlay/toast CLSID spike, single-instance collision check, static macOS icon (no halo pulse).
+- [ ] [Risk: Medium] Add one main-process recording-presence service with a static macOS red menu-bar recording icon + `REC` text, supplemental Dock badge, Windows taskbar overlay (minimize while recording so the button remains), and hourly native reminders.
 - [ ] [Risk: Medium] Publish authoritative `starting` / `recording` / `stopping` / `idle` lifecycle state from `recorder-service.js`, add renderer state hydration, and base elapsed time/reminders on the backend `recording_started` timestamp.
 - [ ] [Risk: Low] Add an always-visible in-app recording pill and `H:MM:SS` elapsed clock across Record, History, and Settings.
-- [ ] [Risk: Medium] Add single-instance reveal/focus behavior and recording-specific minimize-to-tray copy; keep the existing graceful quit/save path.
+- [ ] [Risk: Medium] Add single-instance reveal/focus behavior and recording-specific close copy (Windows: keep recording minimized; macOS: keep in menu bar); keep the existing graceful quit/save path.
 - [ ] [Risk: Low] Improve descriptive app metadata and validate installed searches for "meeting" or "transcriber" without changing `productName`, Windows shortcut identity, `appId`, `userData`, or release artifacts.
-- [ ] [Risk: High] Run packaged macOS and Windows presence checks, including notifications disabled, stop/failure cleanup, display scaling, and installed-app search.
+- [ ] [Risk: High] Run packaged macOS and Windows presence checks, including notifications disabled, stop/failure cleanup, display scaling, toast CLSID click-to-open, and installed-app search.
 
 ### Release 2: Progressive capture and bounded finalization
 
-- [ ] [Risk: Medium] Measure 15-minute and 60-minute capture/stop RSS, duration, and disk baselines; expose structured stop-processing stages, replace shell disk probes, and warn periodically when recording space becomes low.
-- [ ] [Risk: High] Add versioned atomic capture manifests and bounded segmented mic/desktop track spools that cannot be scan-imported as meetings.
+- [ ] [Risk: Medium] Measure 15-minute and 60-minute capture/stop RSS, duration, and disk baselines; expose structured stop-processing stages, replace shell disk probes (verify Windows `statfs`), and warn periodically when recording space becomes low.
+- [ ] [Risk: High] Add versioned atomic capture manifests and bounded segmented mic/desktop track spools (32 MiB queue + sustained-stall backpressure) that cannot be scan-imported as meetings.
 - [ ] [Risk: High] Integrate Windows timestamp-aware and macOS float32 capture spools behind a temporary rollout flag while preserving desktop-failure behavior.
 - [ ] [Risk: High] Replace whole-recording joins/resampling/mixing with bounded multi-pass finalization and recoverable WAV/RF64-to-Opus output.
-- [ ] [Risk: High] Recover interrupted capture manifests on relaunch, complete 2-hour/4-hour hardware evidence on both platforms, then remove the RAM path and rollout flag.
+- [ ] [Risk: High] Recover interrupted capture manifests async after window creation (mutually exclusive with new recording), complete 2-hour/4-hour hardware evidence on both platforms, then remove the RAM path and rollout flag.
 
 ## Deferred Product And Architecture Backlog
 
