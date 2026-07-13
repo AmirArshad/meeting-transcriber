@@ -131,6 +131,19 @@ class ScanImportTempRecoveryTests(unittest.TestCase):
         )
         self.assertTrue(is_recorder_temp_audio_file(Path("recording_x_temp.wav")))
 
+    def test_select_scannable_skips_capture_session_artifacts(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            recordings_dir = Path(temp_dir)
+            meeting = recordings_dir / "meeting_20260101_120000.opus"
+            meeting.write_bytes(b"opus")
+            capture_dir = recordings_dir / "recording_x.capture"
+            capture_dir.mkdir()
+            (capture_dir / "mic_0000.pcm.part").write_bytes(b"\x00" * 16)
+            (capture_dir / "inside.wav").write_bytes(b"RIFF")
+            (recordings_dir / "loose.pcm.part").write_bytes(b"\x00" * 8)
+            selected = select_scannable_audio_files(recordings_dir)
+            self.assertEqual([path.name for path in selected], [meeting.name])
+
 
 if __name__ == "__main__":
     unittest.main()

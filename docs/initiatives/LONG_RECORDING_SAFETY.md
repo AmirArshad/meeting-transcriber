@@ -51,6 +51,7 @@ Record 15-minute and 60-minute mic+desktop sessions on one supported Mac and one
 - Session directory: `{output_stem}.capture/` with atomic `manifest.json` (schema version 1).
 - Segments: relative `*.pcm.part` under the capture directory (never scan-imported as meetings).
 - Manifest stores explicit UTC `startedAtIso` alongside `startedAtMonotonicNs`.
+- Primitives landed: `backend/audio/capture_manifest.py`, `backend/audio/track_spool.py` (bounded queue, soft 75% warn, hard cap, stall timeout, writer-thread fsync commits).
 - Rollout flag: `AVANEVIS_CAPTURE_SPOOL` (off for first integration PRs; do not ship schema v1 packaged until Task 10 recovery exists).
 
 ## Recovery contract (Task 10; summary)
