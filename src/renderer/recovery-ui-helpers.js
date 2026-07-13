@@ -273,6 +273,11 @@
     return state;
   }
 
+  function shouldRequeryRecoveryAfterCaptureIdle(previousState, nextState) {
+    const captureBusyStates = new Set(['starting', 'recording', 'stopping']);
+    return nextState === 'idle' && captureBusyStates.has(previousState);
+  }
+
   /**
    * Pure focus-trap decision for the recovery modal.
    * @returns {{ preventDefault: boolean, focusIndex: number|null }}
@@ -301,6 +306,7 @@
     getRecoveryPromptView,
     getRecoveryBannerView,
     mergeClaimedPromptIntoState,
+    shouldRequeryRecoveryAfterCaptureIdle,
     resolveRecoveryFocusTrapAction,
   };
 

@@ -12,6 +12,7 @@ const {
   getRecoveryPromptView,
   getRecoveryBannerView,
   mergeClaimedPromptIntoState,
+  shouldRequeryRecoveryAfterCaptureIdle,
   resolveRecoveryFocusTrapAction,
 } = window.recoveryUiHelpers;
 const {
@@ -2000,10 +2001,7 @@ function setRecordingState(state) {
   updateRecordingPresenceUI();
 
   // Capture returned to idle: re-query so a deferred once-per-launch prompt can claim.
-  const wasCaptureBusy = previousState === 'starting'
-    || previousState === 'recording'
-    || previousState === 'stopping';
-  if (state === 'idle' && wasCaptureBusy) {
+  if (shouldRequeryRecoveryAfterCaptureIdle(previousState, state)) {
     void queryRecordingRecoveryState();
   }
 }

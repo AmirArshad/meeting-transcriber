@@ -514,3 +514,52 @@ test('discovery failure surfaces as error with Retry', async () => {
   assert.equal(state.status, 'error');
   assert.ok(state.failed.some((entry) => entry.code === 'DISCOVERY_FAILED'));
 });
+
+test('structured unsuccessful discovery response surfaces as error', async () => {
+  const { service } = createRecoveryService({
+    spawnTrackedPython: () => createProc({
+      success: false,
+      candidates: [],
+      error: 'Cannot list recordings directory',
+    }, { exitCode: 1 }),
+  });
+
+  await service.discoverInterruptedCaptures();
+
+  const state = service.getRecordingRecoveryState();
+  assert.equal(state.status, 'error');
+  assert.ok(state.failed.some((entry) => entry.code === 'DISCOVERY_FAILED'));
+  assert.match(state.failed[0].message, /Cannot list recordings directory/);
+});
+
+test('recovery timeout remains classified when terminator waits for child close', async () => {
+  const { EventEmitter: EE } = require('node:events');
+  const hung = new EE();
+  hung.stdout = new EE();
+  hung.stderr = new EE();
+  hung.kill = () => {
+    setImmediate(() => hung.emit('close', 1));
+  };
+
+  const { service, gate } = createRecoveryService({
+    spawnTrackedPython: (args) => {
+      if (args.includes('--list')) {
+        return createProc({ success: true, candidates: [sampleCandidate] });
+      }
+      return hung;
+    },
+    resolveRecoveryCandidateTimeoutMsFn: () => 40,
+    terminateProcessBestEffort: (proc) => new Promise((resolve) => {
+      proc.once('close', resolve);
+      proc.kill('SIGTERM');
+    }),
+  });
+
+  await service.discoverInterruptedCaptures();
+  const result = await service.recoverInterruptedCaptures();
+
+  assert.equal(result.success, false);
+  assert.equal(gate.getOwner(), 'idle');
+  const state = service.getRecordingRecoveryState();
+  assert.ok(state.failed.some((entry) => entry.code === 'RECOVERY_TIMEOUT'));
+});

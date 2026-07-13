@@ -714,10 +714,12 @@ def probe_audio_duration_seconds(path: PathLike, ffmpeg_path: str) -> Optional[f
     return float(hours) * 3600.0 + float(minutes) * 60.0 + float(seconds)
 
 
-# Accept preexisting finals within a small absolute slack of the expected
-# output duration (codec rounding + one flush interval), never a percentage of
-# meeting length — a 10% short 2h meeting would silently lose 12 minutes.
+# Accept preexisting finals within a small symmetric slack of the expected
+# output duration. The absolute cap protects long meetings, while the relative
+# cap prevents a short capture from accepting an almost-empty final.
 _PREEXISTING_DURATION_SLACK_S = 3.0
+_PREEXISTING_DURATION_MIN_SLACK_S = 0.1
+_PREEXISTING_DURATION_RATIO_SLACK = 0.05
 
 
 def expected_output_duration_seconds(data: Dict[str, Any]) -> Optional[float]:
@@ -776,7 +778,15 @@ def final_duration_matches_expectation(
         return False
     if actual_seconds <= 0 or expected_seconds <= 0:
         return False
-    return actual_seconds + 1e-3 >= expected_seconds - _PREEXISTING_DURATION_SLACK_S
+    slack = min(
+        _PREEXISTING_DURATION_SLACK_S,
+        expected_seconds,
+        max(
+            _PREEXISTING_DURATION_MIN_SLACK_S,
+            expected_seconds * _PREEXISTING_DURATION_RATIO_SLACK,
+        ),
+    )
+    return abs(actual_seconds - expected_seconds) <= slack + 1e-3
 
 
 def _verify_final_temp(

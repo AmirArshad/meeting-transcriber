@@ -9,6 +9,7 @@ const {
   getRecoveryPromptView,
   getRecoveryBannerView,
   mergeClaimedPromptIntoState,
+  shouldRequeryRecoveryAfterCaptureIdle,
   resolveRecoveryFocusTrapAction,
 } = require('../../src/renderer/recovery-ui-helpers');
 
@@ -222,6 +223,21 @@ test('mergeClaimedPromptIntoState preserves prompt across refresh while availabl
     promptEligible: false,
   }, true);
   assert.equal(idle.promptEligible, false);
+});
+
+test('capture returning idle reclaims a deferred available prompt after refresh', () => {
+  const deferred = { ...oneCandidate, promptEligible: false };
+  assert.equal(getRecoveryPromptView(deferred, formatBytes).visible, false);
+
+  for (const state of ['starting', 'recording', 'stopping']) {
+    assert.equal(shouldRequeryRecoveryAfterCaptureIdle(state, 'idle'), true);
+  }
+  const reclaimed = mergeClaimedPromptIntoState(deferred, true);
+  assert.equal(getRecoveryPromptView(reclaimed, formatBytes).visible, true);
+
+  assert.equal(shouldRequeryRecoveryAfterCaptureIdle('transcribing', 'idle'), false);
+  assert.equal(shouldRequeryRecoveryAfterCaptureIdle('idle', 'idle'), false);
+  assert.equal(shouldRequeryRecoveryAfterCaptureIdle('recording', 'stopping'), false);
 });
 
 test('resolveRecoveryFocusTrapAction cycles Tab and Shift+Tab', () => {

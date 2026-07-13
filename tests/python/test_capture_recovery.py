@@ -468,21 +468,85 @@ def test_truncated_preexisting_opus_does_not_delete_capture(tmp_path, monkeypatc
 
     def fake_finalize(*args, **kwargs):
         called["finalize"] += 1
-        return spp.FinalizationResult(
-            final_path=str(tmp_path / "recording_short.opus"),
-            duration=120.0,
-            temp_wav_path=None,
-            recovered=True,
-            stats={},
-        )
+        raise spp.FinalizationError("capture must remain recoverable")
 
     monkeypatch.setattr("backend.audio.capture_recovery.finalize_capture", fake_finalize)
 
+    with pytest.raises(spp.FinalizationError, match="capture must remain recoverable"):
+        recover_capture(tmp_path, session, ffmpeg_path="ffmpeg")
+    assert called["finalize"] == 1
+    assert session.is_dir()
+    assert (session / MANIFEST_FILENAME).is_file()
+    assert truncated.is_file()
+
+
+@pytest.mark.parametrize("actual_duration", [0.01, 600.0])
+def test_wrong_duration_preexisting_final_does_not_delete_capture(
+    tmp_path, monkeypatch, actual_duration
+):
+    session = _build_interrupted_session(
+        tmp_path,
+        stem="recording_wrong_duration",
+        started_at_iso="2026-07-13T10:00:00.000Z",
+        state="finalizing",
+        desktop_frames=None,
+        mic_frames=48000 * 2,
+    )
+    candidate = tmp_path / "recording_wrong_duration.opus"
+    candidate.write_bytes(b"OggS-decodable-wrong-duration")
+
+    monkeypatch.setattr(
+        "backend.audio.capture_recovery.ffmpeg_can_decode",
+        lambda *a, **k: True,
+    )
+    monkeypatch.setattr(
+        "backend.audio.capture_recovery.probe_audio_duration_seconds",
+        lambda *a, **k: actual_duration,
+    )
+    monkeypatch.setattr(
+        "backend.audio.capture_recovery.finalize_capture",
+        lambda *a, **k: (_ for _ in ()).throw(spp.FinalizationError("retry capture")),
+    )
+
+    with pytest.raises(spp.FinalizationError, match="retry capture"):
+        recover_capture(tmp_path, session, ffmpeg_path="ffmpeg")
+
+    assert session.is_dir()
+    assert (session / MANIFEST_FILENAME).is_file()
+    assert candidate.is_file()
+
+
+def test_preexisting_windows_mic_capped_final_is_accepted(tmp_path, monkeypatch):
+    session = _build_interrupted_session(
+        tmp_path,
+        stem="recording_windows_capped",
+        started_at_iso="2026-07-13T10:00:00.000Z",
+        state="finalizing",
+        mic_frames=48000 * 60,
+        desktop_frames=48000 * 120,
+        profile="windows-v1",
+    )
+    final = tmp_path / "recording_windows_capped.opus"
+    final.write_bytes(b"OggS-mic-capped-final")
+
+    monkeypatch.setattr(
+        "backend.audio.capture_recovery.ffmpeg_can_decode",
+        lambda *a, **k: True,
+    )
+    monkeypatch.setattr(
+        "backend.audio.capture_recovery.probe_audio_duration_seconds",
+        lambda *a, **k: 60.0,
+    )
+    monkeypatch.setattr(
+        "backend.audio.capture_recovery.finalize_capture",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not re-finalize")),
+    )
+
     result = recover_capture(tmp_path, session, ffmpeg_path="ffmpeg")
-    assert called["finalize"] == 1
-    assert Path(result["audioPath"]).name == "recording_short.opus"
-    # Capture may be cleaned by fake finalize; the key is we did not accept the short final.
-    assert called["finalize"] == 1
+
+    assert Path(result["audioPath"]) == final
+    assert result["duration"] == 60.0
+    assert not session.exists()
 
 
 def test_approx_bytes_none_when_no_segments(tmp_path):

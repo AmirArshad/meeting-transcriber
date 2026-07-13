@@ -731,6 +731,9 @@ def test_final_duration_matches_expectation():
     assert final_duration_matches_expectation(118.0, 120.0) is True  # within 3s slack
     assert final_duration_matches_expectation(110.0, 120.0) is False  # 10% short is NOT ok
     assert final_duration_matches_expectation(12.0, 120.0) is False
+    assert final_duration_matches_expectation(0.01, 2.0) is False
+    assert final_duration_matches_expectation(2.0, 5.0) is False
+    assert final_duration_matches_expectation(600.0, 60.0) is False
     assert final_duration_matches_expectation(None, 120.0) is False
     assert final_duration_matches_expectation(120.0, None) is False
 
