@@ -47,6 +47,7 @@ function createMeetingManagerClient(deps) {
     isRecorderBusy = () => false,
     terminateProcessBestEffort = async (proc) => proc.kill(),
     recordingsScanTimeoutMs = 60 * 1000,
+    unrefRecordingsScanTimeout = true,
   } = deps;
 
   function addMeetingToHistory(meetingData) {
@@ -287,7 +288,9 @@ function createMeetingManagerClient(deps) {
           await terminateProcessBestEffort(python);
           finish(reject, new Error('Recording recovery scan timed out.'));
         }, recordingsScanTimeoutMs);
-        scanTimeout.unref?.();
+        if (unrefRecordingsScanTimeout) {
+          scanTimeout.unref?.();
+        }
       }).finally(() => {
         recordingsScanInProgress = false;
       });

@@ -34,6 +34,7 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 - **Save Transcript As** via Electron's native save dialog with sanitized default filenames and `.md` / `.txt` / All Files filters, available from history detail and the post-recording view.
 - **Multi-select + bulk delete** for the history list, plus a sidebar search filter, relative-time meeting timestamps, and a developer console drawer for inspecting backend logs.
 - **Slimmer waveform container** (28 px high, denser buffer, gentler glow and peak cap) for a less-dominant visualizer.
+- **Recording awareness (Release 1)** — always-visible top-bar recording pill; macOS static saturated menu-bar recording-status icon + `REC`; Windows taskbar overlay while minimized during capture; hourly best-effort native reminders (no auto-stop on duration); single-instance relaunch reveal; recording-aware close (Windows minimize / macOS hide). Native reminders remain best-effort under Focus/notification settings.
 
 ### Reliability / data integrity
 
@@ -63,9 +64,8 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 
 ## In progress
 
-- **Recording awareness (Release 1)** — implementation plan `docs/superpowers/plans/2026-07-13-recording-awareness-and-long-recording-safety.md`. Before Coding Gates A–E evidence lives in `tests/manual/recording-smoke-checklist.md` (2026-07-13). Locked: Windows recording close **minimizes** (taskbar overlay); macOS uses a static saturated recording-status icon + `REC` (no animation). Windows Gate C spike proved minimize keeps the taskbar button while hide removes it; stable Toast Activator CLSID must be set in-app (current NSIS script does not bake one). Full installed Action Center + macOS Gate E menu-bar salience remain packaged QA after Tasks 1–5.
-
----
+- **Long-recording safety (Release 2)** — progressive disk capture / bounded finalization (`docs/superpowers/plans/2026-07-13-recording-awareness-and-long-recording-safety.md`). Release 1 recording awareness is implemented on `feature/recording-awareness-r1`.
+- Packaged QA still open after Release 1: installed Windows Action Center toast CLSID click-to-open, tray overflow, overlay scaling; macOS Gate E menu-bar salience on light/dark wallpaper; Spotlight/Start search for `meeting` / `transcriber`.
 
 ## Planned
 

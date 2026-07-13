@@ -51,12 +51,12 @@ Implementation plan: `docs/superpowers/plans/2026-07-13-recording-awareness-and-
 
 ### Release 1: Recording awareness and discoverability
 
-- [ ] [Risk: Medium] Complete Before Coding gates: tray/close snapshot, Windows minimize-while-recording decision, Windows packaged overlay/toast CLSID spike, single-instance collision check, and static saturated macOS recording-status icon validation.
-- [ ] [Risk: Medium] Add one main-process recording-presence service with a static saturated macOS recording-status icon + `REC` text, supplemental Dock badge, Windows taskbar overlay (minimize while recording so the button remains), and hourly native reminders.
-- [ ] [Risk: Medium] Publish authoritative `starting` / `recording` / `stopping` / `idle` lifecycle state from `recorder-service.js`, add renderer state hydration, and base elapsed time/reminders on the backend `recording_started` timestamp.
-- [ ] [Risk: Low] Add an always-visible in-app recording pill and `H:MM:SS` elapsed clock across Record, History, and Settings.
-- [ ] [Risk: Medium] Add single-instance reveal/focus behavior and recording-specific close copy (Windows: keep recording minimized; macOS: keep in menu bar); keep the existing graceful quit/save path.
-- [ ] [Risk: Low] Improve descriptive app metadata and validate installed searches for "meeting" or "transcriber" without changing `productName`, Windows shortcut identity, `appId`, `userData`, or release artifacts.
+- [x] [Risk: Medium] Complete Before Coding gates: tray/close snapshot, Windows minimize-while-recording decision, Windows packaged overlay/toast CLSID spike, single-instance collision check, and static saturated macOS recording-status icon validation.
+- [x] [Risk: Medium] Add one main-process recording-presence service with a static saturated macOS recording-status icon + `REC` text, supplemental Dock badge, Windows taskbar overlay (minimize while recording so the button remains), and hourly native reminders.
+- [x] [Risk: Medium] Publish authoritative `starting` / `recording` / `stopping` / `idle` lifecycle state from `recorder-service.js`, add renderer state hydration, and base elapsed time/reminders on the backend `recording_started` timestamp.
+- [x] [Risk: Low] Add an always-visible in-app recording pill and `H:MM:SS` elapsed clock across Record, History, and Settings.
+- [x] [Risk: Medium] Add single-instance reveal/focus behavior and recording-specific close copy (Windows: keep recording minimized; macOS: keep in menu bar); keep the existing graceful quit/save path.
+- [x] [Risk: Low] Improve descriptive app metadata and validate installed searches for "meeting" or "transcriber" without changing `productName`, Windows shortcut identity, `appId`, `userData`, or release artifacts.
 - [ ] [Risk: High] Run packaged macOS and Windows presence checks, including notifications disabled, stop/failure cleanup, display scaling, toast CLSID click-to-open, and installed-app search.
 
 ### Release 2: Progressive capture and bounded finalization

@@ -94,6 +94,7 @@ test('scan-recordings timeout terminates the scanner and releases admission', as
     validateAiMetadataPaths: (value) => value,
     isRecorderBusy: () => false,
     recordingsScanTimeoutMs: 5,
+    unrefRecordingsScanTimeout: false,
     terminateProcessBestEffort: async () => { terminated = true; },
   });
   const handlers = {};

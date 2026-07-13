@@ -51,7 +51,23 @@ Spike script: `scripts/gate-c-overlay-spike.js` (`npx electron scripts/gate-c-ov
 
 Ship static `build/iconRecording.png` (18×18) and `build/iconRecording@2x.png` (36×36) only — saturated `#ef4444` recording dot with a subtle light edge so it stays obvious on light and dark menu-bar/wallpaper backgrounds. Call `setTemplateImage(false)` **before** `tray.setImage(activeImage)`. Title `REC` with `fontType: 'monospacedDigit'`. No animation/glow frames.
 
-**This Windows session:** assets are created in Task 3; menu-bar salience on light/dark wallpaper must be validated on a Mac (packaged checklist below). Gate E is icon salience, not merely “no pulse.”
+**This Windows session:** assets created in Task 3 (`build/iconRecording.png`, `@2x`, `recording-overlay.png`); code calls `setTemplateImage(false)` before `tray.setImage(activeImage)`. Menu-bar salience on light/dark wallpaper must still be validated on a Mac (packaged checklist below). Gate E is icon salience, not merely “no pulse.”
+
+## Recording presence — Release 1 manual checks
+
+- [ ] Recording pill visible on Record, History, and Settings tabs while recording; hidden when idle/transcribing
+- [ ] Windows: minimized window keeps taskbar overlay; fully hidden window loses overlay (documents why recording close minimizes)
+- [ ] macOS: hidden window keeps static red menu-bar icon + `REC` (no pulse/animation)
+- [ ] Reminder with a test-overridden one-minute interval, then confirm production uses 60 minutes
+- [ ] Notification click restores a minimized/hidden window
+- [ ] Notifications disabled / Focus enabled: permission-independent indicators remain; on macOS menu-bar `REC` is required even if Dock badge is unavailable
+- [ ] Stop, failure, and quit clear tray/`REC`/overlay/Dock badge/in-app pill
+- [ ] Relaunch reveals the existing instance with no second tray icon; document `npm start` vs installed-build single-instance behavior (Gate D)
+- [ ] macOS light/dark menu bar and Dock badge when notification permission allows
+- [ ] Windows taskbar overlay at 100%, 150%, and 200% scaling while minimized
+- [ ] Installed Spotlight/Start search for `AvaNevis`, `meeting`, and `transcriber` — record actual OS behavior
+- [ ] Gate C toast CLSID / Action Center click-to-open on an installed Windows NSIS build
+- [ ] Hydrated Stop & Transcribe after renderer reload uses stop IPC + localStorage settings only (no dead-renderer transient state)
 
 ## macOS
 
