@@ -178,10 +178,7 @@ class ScreenCaptureAudioRecorder:
                                 recorder.first_audio_time = now
                             recorder.last_audio_time = now
                             recorder._latest_chunk = audio_data
-                            if recorder.audio_sink is not None:
-                                recorder._sink_chunk_count += 1
-                                recorder._sink_sample_count += len(audio_data)
-                            else:
+                            if recorder.audio_sink is None:
                                 recorder.audio_buffer.append(audio_data)
                         if recorder.audio_sink is not None:
                             try:
@@ -194,6 +191,9 @@ class ScreenCaptureAudioRecorder:
                                 recorder.last_error = "Desktop audio sink rejected audio (writer backpressure)"
                                 recorder.error_event.set()
                                 return
+                            with recorder.buffer_lock:
+                                recorder._sink_chunk_count += 1
+                                recorder._sink_sample_count += len(audio_data)
                         self.sample_count += 1
 
                         # Log first few samples

@@ -72,6 +72,8 @@ def test_swift_ingest_sink_rejection_sets_helper_error_event():
     assert capture._ingest_audio_chunk(chunk, chunk_peak=0.0) is False
     assert capture.error_event.is_set()
     assert "sink rejected" in (capture.last_error or "").lower()
+    assert capture._sink_chunk_count == 0
+    assert capture._sink_sample_count == 0
 
 
 def test_swift_stop_sink_mode_preserves_diagnostics_without_returning_buffer():

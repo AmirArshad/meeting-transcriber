@@ -230,6 +230,8 @@ class MacOSAudioRecorder:
         self._mic_spool = None
         self._desktop_spool = None
         self._mic_spool_channels = None
+        self._desktop_spool_accepted_any = False
+        self._spool_close_fail_reason = None
 
         # Audio levels for visualization
         self.mic_level = 0.0
@@ -503,6 +505,11 @@ class MacOSAudioRecorder:
         """Stop any partially started streams without saving output."""
         self._set_running(False)
 
+        # Clear the sink before tearing down the helper so late reader callbacks
+        # cannot write into a spool we are about to release.
+        if self.desktop_capture is not None:
+            self.desktop_capture.audio_sink = None
+
         if self.desktop_capture and hasattr(self.desktop_capture, 'cleanup'):
             try:
                 self.desktop_capture.cleanup()
@@ -517,8 +524,6 @@ class MacOSAudioRecorder:
 
         self.mic_frames.clear()
         self.desktop_frames = []
-        if self.desktop_capture is not None:
-            self.desktop_capture.audio_sink = None
         self._release_capture_spools()
 
     def _desktop_audio_sink(self, chunk: np.ndarray) -> bool:
@@ -526,12 +531,17 @@ class MacOSAudioRecorder:
         if self._desktop_spool is None:
             return False
         pcm = np.ascontiguousarray(chunk, dtype=np.float32).tobytes()
-        return bool(self._desktop_spool.append(pcm))
+        accepted = bool(self._desktop_spool.append(pcm))
+        if accepted:
+            self._desktop_spool_accepted_any = True
+        return accepted
 
     def _open_capture_spools(self, *, mic_channels: int) -> None:
         started_ns = time.time_ns()
         started_iso = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + ".000Z"
         self._mic_spool_channels = int(mic_channels)
+        self._desktop_spool_accepted_any = False
+        self._spool_close_fail_reason = None
         self._capture_manifest = CaptureManifestCoordinator.create(
             self.output_path,
             started_at_ns=started_ns,
@@ -575,42 +585,70 @@ class MacOSAudioRecorder:
         mic_frames = 0
         if self._mic_spool is not None:
             mic_result = self._mic_spool.close()
-            mic_frames = mic_result.committed_frames
-            track = self._capture_manifest.get_track("mic")
-            mic_arr = load_track_pcm_array(
-                self._capture_manifest.session_dir,
-                track["segments"],
-                dtype="<f4",
-                channels=self._mic_spool_channels or self.channels,
-            )
-            self.mic_frames = ChunkedAudioBuffer()
-            if mic_arr.size:
-                self.mic_frames.append(mic_arr)
-
-        if self._desktop_spool is not None:
-            desk_result = self._desktop_spool.close(
-                final_frame_count=mic_frames if mic_frames > 0 else None
-            )
-            track = self._capture_manifest.get_track("desktop")
-            if desk_result.committed_frames > 0 and track.get("segments"):
-                desk_arr = load_track_pcm_array(
+            self._mic_spool = None
+            if mic_result.fail_reason:
+                self._spool_close_fail_reason = (
+                    f"Microphone capture spool failed: {mic_result.fail_reason}"
+                )
+                with self._error_lock:
+                    self._last_error = self._spool_close_fail_reason
+                self._error_event.set()
+            else:
+                mic_frames = mic_result.committed_frames
+                track = self._capture_manifest.get_track("mic")
+                mic_arr = load_track_pcm_array(
                     self._capture_manifest.session_dir,
                     track["segments"],
                     dtype="<f4",
-                    channels=self.channels,
+                    channels=self._mic_spool_channels or self.channels,
                 )
-                self.desktop_frames = [desk_arr] if desk_arr.size else []
-            else:
+                self.mic_frames = ChunkedAudioBuffer()
+                if mic_arr.size:
+                    self.mic_frames.append(mic_arr)
+
+        if self._desktop_spool is not None:
+            desktop_failed = bool(self._desktop_runtime_failure) or bool(
+                self._spool_close_fail_reason
+            )
+            # Late desktop failure: close at last valid frame (no mic-length pad)
+            # and discard desktop for mic-only mix. Empty desktop: never pad silence.
+            pad_to = None
+            if (
+                not desktop_failed
+                and self._desktop_spool_accepted_any
+                and mic_frames > 0
+            ):
+                pad_to = mic_frames
+            desk_result = self._desktop_spool.close(final_frame_count=pad_to)
+            self._desktop_spool = None
+            if desk_result.fail_reason and not desktop_failed:
+                # Treat close-time desktop writer failure like a late helper failure.
+                self._note_desktop_runtime_failure(
+                    f"Desktop capture spool failed: {desk_result.fail_reason}",
+                    code="DESKTOP_SPOOL_FAILED",
+                )
+                desktop_failed = True
+
+            if desktop_failed or not self._desktop_spool_accepted_any:
                 self.desktop_frames = []
+            else:
+                track = self._capture_manifest.get_track("desktop")
+                if desk_result.committed_frames > 0 and track.get("segments"):
+                    desk_arr = load_track_pcm_array(
+                        self._capture_manifest.session_dir,
+                        track["segments"],
+                        dtype="<f4",
+                        channels=self.channels,
+                    )
+                    self.desktop_frames = [desk_arr] if desk_arr.size else []
+                else:
+                    self.desktop_frames = []
 
         if self._capture_manifest is not None:
             try:
                 self._capture_manifest.set_state("finalizing")
             except Exception:
                 pass
-
-        self._mic_spool = None
-        self._desktop_spool = None
 
     def _release_capture_spools(self) -> None:
         for spool in (self._mic_spool, self._desktop_spool):
@@ -1132,8 +1170,8 @@ class MacOSAudioRecorder:
 
         print(f"Mic audio: {len(mic_audio)} samples, {mic_channels} channel(s)", file=sys.stderr)
 
-        # Mix desktop audio if available
-        if self.desktop_frames:
+        # Mix desktop audio if available (late desktop failures stay mic-only)
+        if self.desktop_frames and not self._desktop_runtime_failure:
             desktop_audio = np.concatenate(self.desktop_frames, axis=0)
             desktop_channels = desktop_audio.shape[1] if len(desktop_audio.shape) > 1 else 1
 
@@ -1513,9 +1551,19 @@ def main():
 
     try:
         if args.duration > 0:
-            # Fixed duration
+            # Fixed duration (interruptible on hard mic spool / thread errors)
             print(f"Recording for {args.duration} seconds...", file=sys.stderr)
-            time.sleep(args.duration)
+            for _ in range(int(args.duration)):
+                if recorder._has_async_recording_error():
+                    with recorder._error_lock:
+                        error_msg = recorder._last_error or "Unknown recording error"
+                    print(f"CRITICAL: Recording thread error: {error_msg}", file=sys.stderr)
+                    _send_error_message("RECORDING_THREAD_FAILED", error_msg)
+                    break
+                recorder._consume_desktop_helper_failure()
+                if not recorder.is_recording():
+                    break
+                time.sleep(1)
             recorder.stop_recording()
         else:
             # Manual stop (wait for stdin command from Electron)

@@ -701,10 +701,7 @@ class SwiftAudioCapture:
             self.read_peak_level = max(self.read_peak_level, chunk_peak)
             self._latest_chunk = audio_data
 
-            if self.audio_sink is not None:
-                self._sink_chunk_count += 1
-                self._sink_sample_count += len(audio_data)
-            else:
+            if self.audio_sink is None:
                 self.audio_buffer.append(audio_data)
 
         if self.audio_sink is not None:
@@ -718,6 +715,9 @@ class SwiftAudioCapture:
                 self.last_error = "Desktop audio sink rejected audio (writer backpressure)"
                 self.error_event.set()
                 return False
+            with self.buffer_lock:
+                self._sink_chunk_count += 1
+                self._sink_sample_count += len(audio_data)
         return True
 
     @property
@@ -734,7 +734,7 @@ class SwiftAudioCapture:
             return warnings
 
     def cleanup(self):
-        """Clean up resources."""
+        """Clean up resources, joining reader threads before returning."""
         self._recording_event.clear()
         self._ready_event.clear()
 
@@ -748,6 +748,12 @@ class SwiftAudioCapture:
                     self.process.wait(timeout=0.5)
                 except OSError:
                     pass  # Process already dead
+
+        # Await readers so startup abort cannot race a live sink callback.
+        if self._stdout_thread and self._stdout_thread.is_alive():
+            self._stdout_thread.join(timeout=4.0)
+        if self._stderr_thread and self._stderr_thread.is_alive():
+            self._stderr_thread.join(timeout=4.0)
 
         self.process = None
         self._stdout_thread = None
