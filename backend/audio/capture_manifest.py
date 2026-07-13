@@ -25,7 +25,9 @@ SESSION_LOCK_FILENAME = "session.lock"
 CAPTURE_DIR_SUFFIX = ".capture"
 VALID_STATES = frozenset({"recording", "finalizing", "complete", "error"})
 SUPPORTED_DTYPES = frozenset({"<i2", "<f4"})
+VALID_PROCESSING_PROFILES = frozenset({"windows-v1", "macos-v1"})
 _SAFE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9._-]+\.pcm\.part$")
+_SAFE_RELATIVE_FILE_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 _REQUIRED_TOP_LEVEL = (
     "schemaVersion",
     "state",
@@ -152,6 +154,38 @@ def validate_manifest_data(data: Any) -> Dict[str, Any]:
         raise CaptureManifestError("tracks must be an object")
     for name, track in tracks.items():
         _validate_track_dict(name, track)
+    if "processingProfile" in data and data["processingProfile"] is not None:
+        if data["processingProfile"] not in VALID_PROCESSING_PROFILES:
+            raise CaptureManifestError(
+                f"Invalid processingProfile: {data['processingProfile']!r}"
+            )
+    if "finalRelativePath" in data and data["finalRelativePath"] is not None:
+        rel = data["finalRelativePath"]
+        if not isinstance(rel, str) or not rel or "/" in rel or "\\" in rel or ".." in rel:
+            raise CaptureManifestError(f"Unsafe finalRelativePath: {rel!r}")
+        if not _SAFE_RELATIVE_FILE_RE.match(rel):
+            raise CaptureManifestError(f"Invalid finalRelativePath: {rel!r}")
+    if "mix" in data and data["mix"] is not None:
+        mix = data["mix"]
+        if not isinstance(mix, dict):
+            raise CaptureManifestError("mix must be an object")
+        for key in ("micVolume", "desktopVolume", "micBoost"):
+            if key in mix and not isinstance(mix[key], (int, float)):
+                raise CaptureManifestError(f"mix.{key} must be a number")
+    if "alignment" in data and data["alignment"] is not None:
+        alignment = data["alignment"]
+        if not isinstance(alignment, dict):
+            raise CaptureManifestError("alignment must be an object")
+        for key in (
+            "desktopTrimFrames",
+            "desktopLeadingPadFrames",
+            "micLeadingPadFrames",
+        ):
+            if key in alignment and alignment[key] is not None:
+                _validate_frame_count(alignment[key], field_name=key)
+    if "includeDesktop" in data and data["includeDesktop"] is not None:
+        if not isinstance(data["includeDesktop"], bool):
+            raise CaptureManifestError("includeDesktop must be a bool")
     return data
 
 
@@ -328,12 +362,85 @@ class CaptureManifestCoordinator:
             self._data["state"] = state
             self._write_atomic_unlocked()
 
+    def set_processing_profile(self, profile: str) -> None:
+        with self._thread_lock:
+            self._ensure_open()
+            if profile not in VALID_PROCESSING_PROFILES:
+                raise CaptureManifestError(f"Invalid processingProfile: {profile!r}")
+            self._data["processingProfile"] = profile
+            self._write_atomic_unlocked()
+
+    def set_mix_params(
+        self,
+        *,
+        mic_volume: float = 1.0,
+        desktop_volume: float = 1.0,
+        mic_boost: float = 2.0,
+    ) -> None:
+        with self._thread_lock:
+            self._ensure_open()
+            self._data["mix"] = {
+                "micVolume": float(mic_volume),
+                "desktopVolume": float(desktop_volume),
+                "micBoost": float(mic_boost),
+            }
+            self._write_atomic_unlocked()
+
+    def set_alignment(
+        self,
+        *,
+        desktop_trim_frames: int = 0,
+        desktop_leading_pad_frames: int = 0,
+        mic_leading_pad_frames: int = 0,
+    ) -> None:
+        with self._thread_lock:
+            self._ensure_open()
+            self._data["alignment"] = {
+                "desktopTrimFrames": _validate_frame_count(
+                    int(desktop_trim_frames), field_name="desktopTrimFrames"
+                ),
+                "desktopLeadingPadFrames": _validate_frame_count(
+                    int(desktop_leading_pad_frames),
+                    field_name="desktopLeadingPadFrames",
+                ),
+                "micLeadingPadFrames": _validate_frame_count(
+                    int(mic_leading_pad_frames), field_name="micLeadingPadFrames"
+                ),
+            }
+            self._write_atomic_unlocked()
+
+    def set_include_desktop(self, include: bool) -> None:
+        with self._thread_lock:
+            self._ensure_open()
+            self._data["includeDesktop"] = bool(include)
+            self._write_atomic_unlocked()
+
+    def set_final_relative_path(self, relative_path: str) -> None:
+        with self._thread_lock:
+            self._ensure_open()
+            if (
+                not isinstance(relative_path, str)
+                or not relative_path
+                or "/" in relative_path
+                or "\\" in relative_path
+                or ".." in relative_path
+            ):
+                raise CaptureManifestError(f"Unsafe finalRelativePath: {relative_path!r}")
+            if not _SAFE_RELATIVE_FILE_RE.match(relative_path):
+                raise CaptureManifestError(f"Invalid finalRelativePath: {relative_path!r}")
+            self._data["finalRelativePath"] = relative_path
+            self._write_atomic_unlocked()
+
     def get_track(self, name: str) -> Dict[str, Any]:
         with self._thread_lock:
             track = self._data["tracks"].get(name)
             if track is None:
                 raise CaptureManifestError(f"Unknown track: {name}")
             return dict(track)
+
+    def has_track(self, name: str) -> bool:
+        with self._thread_lock:
+            return name in self._data["tracks"]
 
     def to_dict(self) -> Dict[str, Any]:
         with self._thread_lock:

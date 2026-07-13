@@ -40,3 +40,17 @@ def test_write_float_stereo_wav_duplicates_mono_and_clips(tmp_path):
     assert frames[1, 1] == 32767
     assert frames[2, 0] == -32768
     assert frames[2, 1] == -32768
+
+
+def test_probe_wav_pcm_geometry_reads_standard_wav(tmp_path):
+    from backend.audio.wav_io import probe_wav_pcm_geometry
+
+    path = tmp_path / "probe.wav"
+    pcm = np.array([1, 2, 3, 4, 5, 6], dtype=np.int16)
+    write_int16_pcm_wav(path, pcm, channels=2, sample_rate=48000)
+    assert probe_wav_pcm_geometry(path) == {
+        "channels": 2,
+        "sample_rate": 48000,
+        "sample_width": 2,
+        "frames": 3,
+    }

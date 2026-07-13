@@ -57,7 +57,7 @@ Record 15-minute and 60-minute mic+desktop sessions on one supported Mac and one
 
 - Mic and desktop stay separate until post-processing mix (no real-time mixing).
 - ~2 h of 48 kHz stereo can peak at several GB during stop-time join/convert on Windows; `MemoryError` must still emit structured failure JSON.
-- There is no incremental disk spill yet — Tasks 7–10 add manifests, bounded track spools, streaming finalization, and interrupted-capture recovery.
+- There is no incremental disk spill on the default RAM path — Tasks 7–9 add manifests, bounded track spools, and streaming finalization behind `AVANEVIS_CAPTURE_SPOOL`; Task 10 adds interrupted-capture recovery and removes the RAM path after hardware evidence.
 
 ## Selected spool format (Tasks 7+)
 

@@ -22,6 +22,7 @@ sys.modules.setdefault("pyaudiowpatch", _fake_pyaudio)
 from backend.audio.chunked_audio_buffer import ChunkedAudioBuffer
 from backend.audio.timeline import reconstruct_desktop_timeline
 from backend.audio.swift_audio_capture import SwiftAudioCapture
+from backend.audio.capture_spool_runtime import load_track_pcm_array, load_track_segment_bytes
 import backend.audio.macos_recorder as macos_mod
 import backend.audio.windows_recorder as windows_mod
 
@@ -129,11 +130,25 @@ def test_windows_startup_callbacks_reach_spool_and_deferred_desktop_matches_reco
         loopback_sample_rate=4,
         loopback_channels=2,
     )
-    assert recorder._spool_desktop_pcm is not None
-    assert np.array_equal(recorder._spool_desktop_pcm, expected)
     assert recorder.get_async_capture_error() is None
-    mic_bytes = b"".join(recorder.mic_frames)
+    desk_track = recorder._capture_manifest.get_track("desktop")
+    desk_pcm = np.frombuffer(
+        load_track_segment_bytes(
+            recorder._capture_manifest.session_dir,
+            desk_track["segments"],
+        ),
+        dtype=np.int16,
+    )
+    assert np.array_equal(desk_pcm, expected)
+    mic_track = recorder._capture_manifest.get_track("mic")
+    mic_bytes = load_track_segment_bytes(
+        recorder._capture_manifest.session_dir,
+        mic_track["segments"],
+    )
     assert mic_payload in mic_bytes or mic_bytes.startswith(mic_payload)
+    assert recorder._capture_manifest.to_dict().get("includeDesktop") is True
+    assert recorder._capture_manifest.to_dict().get("processingProfile") == "windows-v1"
+    recorder._release_capture_spools()
 
 
 def test_windows_empty_desktop_spool_does_not_become_silence_track(tmp_path):
@@ -146,8 +161,9 @@ def test_windows_empty_desktop_spool_does_not_become_silence_track(tmp_path):
     recorder.is_recording = False
     recorder._close_capture_spools_for_mix()
     assert recorder._desktop_spool_accepted_any is False
-    assert len(recorder._spool_desktop_pcm) == 0
+    assert recorder._capture_manifest.to_dict().get("includeDesktop") is False
     assert recorder.desktop_frames == []
+    recorder._release_capture_spools()
 
 
 def test_windows_mic_spool_close_fail_reason_is_hard_failure(tmp_path):
@@ -342,7 +358,16 @@ def test_macos_empty_desktop_spool_stays_mic_only(tmp_path):
     recorder._close_capture_spools_for_mix()
     assert recorder.desktop_frames == []
     assert recorder._desktop_spool_accepted_any is False
-    assert recorder.mic_frames
+    assert recorder._capture_manifest.to_dict().get("includeDesktop") is False
+    mic_track = recorder._capture_manifest.get_track("mic")
+    loaded = load_track_pcm_array(
+        recorder._capture_manifest.session_dir,
+        mic_track["segments"],
+        dtype="<f4",
+        channels=2,
+    )
+    assert loaded.shape[0] == 4
+    recorder._release_capture_spools()
 
 
 def test_macos_desktop_sink_failure_closes_without_pad_and_uses_mic_only(tmp_path, monkeypatch):
@@ -372,8 +397,9 @@ def test_macos_desktop_sink_failure_closes_without_pad_and_uses_mic_only(tmp_pat
     recorder._close_capture_spools_for_mix()
     assert recorder.desktop_frames == []
     assert recorder._desktop_runtime_failure is not None
+    assert recorder._capture_manifest.to_dict().get("includeDesktop") is False
 
-    # Mic still hydrates; process path must choose mic-only.
+    # Mic remains committed on disk; process path must choose mic-only.
     mic = np.ones((8, 2), dtype=np.float32) * 0.2
     recorder.mic_frames = ChunkedAudioBuffer()
     recorder.mic_frames.append(mic)
@@ -628,7 +654,12 @@ def test_windows_desktop_spool_close_fail_reason_is_mic_only_warning(tmp_path, m
         recorder._close_capture_spools_for_mix()
 
         assert close_calls == [None], "failed desktop spool must not pad to mic duration"
-        assert recorder.mic_frames and b"".join(recorder.mic_frames)
+        assert recorder._capture_manifest.to_dict().get("includeDesktop") is False
+        mic_track = recorder._capture_manifest.get_track("mic")
+        assert load_track_segment_bytes(
+            recorder._capture_manifest.session_dir,
+            mic_track["segments"],
+        )
         assert len(recorder._spool_desktop_pcm) == 0
         assert recorder.desktop_frames == []
         assert recorder._desktop_spool_warning

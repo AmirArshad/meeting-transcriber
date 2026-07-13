@@ -37,6 +37,16 @@ SOFT_LIMIT_THRESHOLD = 0.95  # Apply soft limiting if abs max > 0.95
 MIC_BOOST_DB = 6  # 6 dB boost (2x linear) to make voice more prominent
 MIC_BOOST_LINEAR = 2.0
 
+# macOS multichannel → stereo fold (matches macos_recorder._downmix_to_stereo)
+CENTER_CHANNEL_ATTENUATION = 0.707  # -3dB, equivalent to 1/sqrt(2)
+SURROUND_CHANNEL_ATTENUATION = 0.5  # -6dB for extra surround channels
+
+# Bounded finalization (Task 9)
+DEFAULT_FINALIZATION_CHUNK_FRAMES = 48000  # 1 second at 48 kHz
+FINAL_CAPTURE_PCM_NAME = "final.pcm.tmp"
+NORMALIZED_MIC_NAME = "normalized_mic.f32.part"
+NORMALIZED_DESKTOP_NAME = "normalized_desktop.f32.part"
+
 # Compression (ffmpeg)
 OPUS_BITRATE = '128k'  # Higher bitrate for archival/transcription quality
 OPUS_COMPRESSION_LEVEL = 10  # Maximum quality (0-10)

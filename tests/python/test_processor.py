@@ -111,3 +111,40 @@ def test_enhance_microphone_truncates_odd_stereo_input_to_even_length():
     assert result.dtype == np.int16
     assert len(result) == 4
     assert len(result) % 2 == 0
+
+
+def test_stateful_resampler_passthrough_and_stereo_shape():
+    from backend.audio.processor import StatefulResampler
+
+    frames = np.ones((8, 2), dtype=np.float32)
+    stream = StatefulResampler(48000, 48000, 2)
+    out = stream.process(frames, last=True)
+    assert out.shape == (8, 2)
+
+
+def test_downmix_helpers_reject_misaligned_lengths():
+    from backend.audio.processor import downmix_windows_frames_to_stereo
+
+    try:
+        downmix_windows_frames_to_stereo(np.array([1, 2, 3], dtype=np.float32), 2)
+    except ValueError as exc:
+        assert "not divisible" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError")
+
+
+def test_channel_enhance_plan_matches_inplace_process():
+    from backend.audio.processor import (
+        apply_channel_enhance_inplace,
+        plan_channel_enhance,
+        _process_channel_inplace,
+    )
+
+    rng = np.random.default_rng(1)
+    original = rng.standard_normal(2000).astype(np.float32) * 0.05
+    planned = original.copy()
+    reference = original.copy()
+    plan = plan_channel_enhance(original)
+    apply_channel_enhance_inplace(planned, plan)
+    _process_channel_inplace(reference)
+    assert np.allclose(planned, reference, atol=1e-6)

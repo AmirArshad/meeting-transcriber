@@ -21,6 +21,7 @@ Module structure:
 
 import sys
 import json
+import os
 import threading
 import time
 import platform
@@ -95,13 +96,14 @@ from .recorder_temp_paths import build_recorder_temp_pcm_path
 from .timeline import reconstruct_desktop_timeline, timestamp_to_frame_position
 from .wav_io import write_int16_pcm_wav
 from .windows_callback_health import evaluate_callback_stalls
-from .capture_spool_runtime import capture_spool_enabled, load_track_segment_bytes
-from .capture_manifest import CaptureManifestCoordinator
+from .capture_spool_runtime import capture_spool_enabled
+from .capture_manifest import CaptureManifestCoordinator, MANIFEST_FILENAME
 from .track_spool import (
     DEFAULT_MAX_QUEUE_BYTES,
     DEFAULT_STALL_TIMEOUT_S,
     TrackSpool,
 )
+from .streaming_post_processor import FinalizationError, finalize_capture
 
 # Bound desktop PCM deferred until mic_first_capture_time exists (matches spool queue).
 DEFERRED_DESKTOP_MAX_BYTES = DEFAULT_MAX_QUEUE_BYTES
@@ -114,8 +116,8 @@ _recording_duration = 0.0
 
 # Known constraint: mic/desktop frames are buffered in RAM for the post-processing
 # mix unless AVANEVIS_CAPTURE_SPOOL=1 (segmented track spools during capture;
-# Task 9 replaces whole-array finalization). Long meetings (≈2h stereo 48 kHz)
-# can still peak at several GB during stop-time join/convert on the RAM path;
+# Task 9 bounded finalization avoids whole-array hydration on the spool path).
+# Long meetings (≈2h stereo 48 kHz) can still peak at several GB on the RAM path;
 # MemoryError on that path should still emit structured failure JSON.
 
 
@@ -622,6 +624,12 @@ class AudioRecorder:
             started_at_ns=started_ns,
             started_at_iso=started_iso,
         )
+        self._capture_manifest.set_processing_profile("windows-v1")
+        self._capture_manifest.set_mix_params(
+            mic_volume=float(getattr(self, "mic_volume", 1.0)),
+            desktop_volume=float(getattr(self, "desktop_volume", 1.0)),
+            mic_boost=MIC_BOOST_LINEAR,
+        )
         self._capture_manifest.add_track(
             "mic",
             sample_rate=self.mic_sample_rate,
@@ -653,7 +661,7 @@ class AudioRecorder:
             )
 
     def _close_capture_spools_for_mix(self) -> None:
-        """Close spools and hydrate RAM buffers for the existing mix path (Task 9 replaces this)."""
+        """Close/commit spools and prepare the manifest for bounded finalization."""
         if not self._use_capture_spool:
             return
 
@@ -666,6 +674,7 @@ class AudioRecorder:
         desk_spool = self._desktop_spool
         self._mic_spool = None
         self._desktop_spool = None
+        include_desktop = False
 
         try:
             if mic_spool is not None:
@@ -686,7 +695,6 @@ class AudioRecorder:
                     pad_to = int(mic_duration * self.loopback_sample_rate)
                 desk_result = desk_spool.close(final_frame_count=pad_to)
         except Exception:
-            # Best-effort second close if the first raised unexpectedly.
             for leftover in (mic_spool, desk_spool):
                 if leftover is None:
                     continue
@@ -701,18 +709,7 @@ class AudioRecorder:
                 f"Microphone capture spool failed: {mic_result.fail_reason}"
             )
 
-        mic_frames = 0 if mic_result is None else mic_result.committed_frames
-        if mic_result is not None:
-            track = self._capture_manifest.get_track("mic")
-            mic_bytes = load_track_segment_bytes(
-                self._capture_manifest.session_dir,
-                track["segments"],
-            )
-            self.mic_frames = [mic_bytes] if mic_bytes else []
-            self.mic_total_bytes = len(mic_bytes)
-
         if desk_result is not None and desk_result.fail_reason:
-            # Late desktop spool failure: warn and continue mic-only (do not hard-fail).
             warning = (
                 f"Desktop capture spool failed; continuing with microphone only. "
                 f"({desk_result.fail_reason})"
@@ -727,31 +724,62 @@ class AudioRecorder:
                 )
             except Exception:
                 pass
-            self._spool_desktop_pcm = np.array([], dtype=np.int16)
-            self.desktop_frames = []
+            include_desktop = False
         elif desk_result is not None:
-            track = self._capture_manifest.get_track("desktop")
-            if (
+            include_desktop = bool(
                 self._desktop_spool_accepted_any
                 and desk_result.committed_frames > 0
-                and track["segments"]
-            ):
-                desk_bytes = load_track_segment_bytes(
-                    self._capture_manifest.session_dir,
-                    track["segments"],
-                )
-                self._spool_desktop_pcm = np.frombuffer(desk_bytes, dtype=np.int16)
-            else:
-                self._spool_desktop_pcm = np.array([], dtype=np.int16)
-            # Keep desktop_frames empty so reconstruct is skipped.
-            self.desktop_frames = []
+            )
+
+        # Spool path no longer hydrates whole tracks into RAM (Task 9).
+        self.mic_frames = []
+        self.desktop_frames = []
+        self._spool_desktop_pcm = np.array([], dtype=np.int16)
+        if mic_result is not None:
+            self.mic_total_bytes = (
+                mic_result.committed_frames * self.mic_channels * 2
+            )
 
         if self._capture_manifest is not None:
             try:
+                self._capture_manifest.set_include_desktop(include_desktop)
                 self._capture_manifest.set_state("finalizing")
             except Exception:
                 pass
 
+    def _finalize_from_capture_spools(self) -> None:
+        """Run bounded multi-pass finalization for the spool path."""
+        global _final_output_path, _recording_duration
+        if self._capture_manifest is None:
+            raise RuntimeError("Capture manifest missing for spool finalization")
+
+        def _progress(stage: str, message: str) -> None:
+            try:
+                _send_event_message(stage, message)
+            except Exception:
+                pass
+
+        manifest_path = self._capture_manifest.session_dir / MANIFEST_FILENAME
+        try:
+            result = finalize_capture(
+                manifest_path,
+                self.output_path,
+                ffmpeg_path=os.environ.get("AVANEVIS_FFMPEG") or "ffmpeg",
+                progress_callback=_progress,
+                coordinator=self._capture_manifest,
+            )
+        except FinalizationError as exc:
+            if exc.recoverable_path:
+                _final_output_path = exc.recoverable_path
+                self.output_path = exc.recoverable_path
+            raise
+
+        self.output_path = result.final_path
+        _final_output_path = result.final_path
+        _recording_duration = float(result.duration)
+        print(f"Audio saved!", file=sys.stderr)
+        print(f"  File: {Path(result.final_path).name}", file=sys.stderr)
+        print(f"  Duration: {result.duration:.2f} seconds", file=sys.stderr)
     def _release_capture_spools(self) -> None:
         for spool in (self._mic_spool, self._desktop_spool):
             if spool is None:
@@ -992,8 +1020,10 @@ class AudioRecorder:
                 self._release_capture_spools()
                 raise
             print(f"  Mic spool bytes: {self.mic_total_bytes}", file=sys.stderr)
-            desk_len = 0 if self._spool_desktop_pcm is None else len(self._spool_desktop_pcm)
-            print(f"  Desktop spool samples: {desk_len}", file=sys.stderr)
+            include = False
+            if self._capture_manifest is not None:
+                include = bool(self._capture_manifest.to_dict().get("includeDesktop"))
+            print(f"  Desktop spool included: {include}", file=sys.stderr)
         else:
             print(f"  Mic frames: {len(self.mic_frames)}", file=sys.stderr)
             print(f"  Desktop frames: {len(self.desktop_frames)}", file=sys.stderr)
@@ -1071,7 +1101,10 @@ class AudioRecorder:
 
         # Mix and save with detailed error handling
         try:
-            self._mix_and_save()
+            if self._use_capture_spool:
+                self._finalize_from_capture_spools()
+            else:
+                self._mix_and_save()
         except Exception as e:
             print(f"ERROR in audio processing: {e}", file=sys.stderr)
             import traceback
@@ -1082,6 +1115,10 @@ class AudioRecorder:
         # Clear buffers
         self.mic_frames = []
         self.desktop_frames = []
+        if self._use_capture_spool:
+            # Manifest lock released after successful finalize cleanup; best-effort
+            # close if finalize left the coordinator open after a partial failure.
+            self._release_capture_spools()
 
         print("Recording stopped!", file=sys.stderr)
 

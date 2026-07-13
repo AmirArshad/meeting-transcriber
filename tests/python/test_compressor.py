@@ -1,4 +1,5 @@
 import subprocess
+from pathlib import Path
 
 import backend.audio.compressor as compressor
 
@@ -9,7 +10,7 @@ def test_compress_to_opus_returns_real_wav_fallback_path_for_transcription(tmp_p
     input_path.write_bytes(b'wav fallback bytes')
     output_path.write_bytes(b'bad opus bytes')
 
-    monkeypatch.setattr(compressor, 'verify_recording_integrity', lambda _: False)
+    monkeypatch.setattr(compressor, 'verify_recording_integrity', lambda *a, **k: False)
     monkeypatch.setattr(
         compressor.subprocess,
         'run',
@@ -63,7 +64,7 @@ def test_compress_to_opus_falls_back_to_wav_when_integrity_check_fails(tmp_path,
     input_path.write_bytes(b'fake wav data')
     output_path.write_bytes(b'bad opus data')
 
-    monkeypatch.setattr(compressor, 'verify_recording_integrity', lambda _: False)
+    monkeypatch.setattr(compressor, 'verify_recording_integrity', lambda *a, **k: False)
 
     def successful_ffmpeg(*args, **kwargs):
         return subprocess.CompletedProcess(args=['ffmpeg'], returncode=0, stdout=b'', stderr=b'')
@@ -99,7 +100,7 @@ def test_compress_and_report_returns_stats_and_optional_verify(tmp_path, monkeyp
     monkeypatch.setattr(compressor, 'compress_to_opus', lambda *args, **kwargs: str(final_path))
     verified = {'called': False}
 
-    def fake_verify(path):
+    def fake_verify(path, **kwargs):
         verified['called'] = True
         assert path == str(final_path)
         return True
@@ -134,7 +135,7 @@ def test_compress_and_report_skips_verify_when_verify_again_false(tmp_path, monk
     monkeypatch.setattr(
         compressor,
         'verify_recording_integrity',
-        lambda path: verified.__setitem__('called', True) or True,
+        lambda path, **kwargs: verified.__setitem__('called', True) or True,
     )
 
     result, stats = compressor.compress_and_report(
@@ -147,3 +148,27 @@ def test_compress_and_report_skips_verify_when_verify_again_false(tmp_path, monk
     assert result == str(final_path)
     assert stats['ratio'] == 75.0
     assert verified['called'] is False
+
+
+def test_compress_to_opus_passes_explicit_ffmpeg_path(tmp_path, monkeypatch):
+    input_path = tmp_path / 'input.wav'
+    output_path = tmp_path / 'meeting.opus'
+    input_path.write_bytes(b'fake wav')
+    seen = {}
+
+    def fake_run(cmd, check=True, capture_output=True):
+        seen['cmd'] = list(cmd)
+        Path(cmd[-1]).write_bytes(b'opus')
+        return subprocess.CompletedProcess(args=cmd, returncode=0)
+
+    monkeypatch.setattr(compressor.subprocess, 'run', fake_run)
+    monkeypatch.setattr(compressor, 'verify_recording_integrity', lambda *a, **k: True)
+
+    result = compressor.compress_to_opus(
+        str(input_path),
+        str(output_path),
+        sample_rate=48000,
+        ffmpeg_path='/custom/bin/ffmpeg',
+    )
+    assert result.endswith('.opus')
+    assert seen['cmd'][0] == '/custom/bin/ffmpeg'

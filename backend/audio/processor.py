@@ -6,6 +6,8 @@ Designed for minimal processing to preserve natural sound quality (like Google M
 """
 
 import sys
+from dataclasses import dataclass
+
 import numpy as np
 import soxr
 
@@ -14,6 +16,8 @@ from .constants import (
     NORMALIZATION_LOW_THRESHOLD,
     NORMALIZATION_BOOST_TARGET,
     SOFT_LIMIT_THRESHOLD,
+    CENTER_CHANNEL_ATTENUATION,
+    SURROUND_CHANNEL_ATTENUATION,
 )
 
 
@@ -301,3 +305,180 @@ def align_audio_lengths(audio1: np.ndarray, audio2: np.ndarray) -> tuple:
         audio2 = np.concatenate([audio2, padding])
 
     return audio1, audio2
+
+
+class StatefulResampler:
+    """Chunked soxr.ResampleStream wrapper that keeps filter state across chunks.
+
+    Input/output are float32 frames shaped ``(n, channels)`` or mono ``(n,)``.
+    Quality defaults to ``VHQ`` to match the whole-array ``resample()`` path.
+    """
+
+    def __init__(
+        self,
+        original_rate: int,
+        target_rate: int,
+        num_channels: int = 1,
+        *,
+        quality: str = "VHQ",
+    ) -> None:
+        if num_channels < 1:
+            raise ValueError("num_channels must be at least 1")
+        self.original_rate = int(original_rate)
+        self.target_rate = int(target_rate)
+        self.num_channels = int(num_channels)
+        self._passthrough = self.original_rate == self.target_rate
+        self._stream = None
+        if not self._passthrough:
+            self._stream = soxr.ResampleStream(
+                self.original_rate,
+                self.target_rate,
+                self.num_channels,
+                dtype="float32",
+                quality=quality,
+            )
+
+    def process(self, frames: np.ndarray, *, last: bool = False) -> np.ndarray:
+        if frames.size == 0 and not last:
+            return np.zeros((0, self.num_channels), dtype=np.float32) if self.num_channels > 1 else np.zeros(0, dtype=np.float32)
+
+        if self.num_channels == 1:
+            mono = np.asarray(frames, dtype=np.float32).reshape(-1)
+            if self._passthrough:
+                return mono
+            assert self._stream is not None
+            return np.asarray(self._stream.resample_chunk(mono, last=last), dtype=np.float32)
+
+        shaped = np.asarray(frames, dtype=np.float32)
+        if shaped.ndim == 1:
+            if shaped.size % self.num_channels != 0:
+                raise ValueError(
+                    f"Audio length {shaped.size} is not divisible by num_channels={self.num_channels}"
+                )
+            shaped = shaped.reshape(-1, self.num_channels)
+        elif shaped.shape[1] != self.num_channels:
+            raise ValueError(
+                f"Expected {self.num_channels} channels, got shape {shaped.shape}"
+            )
+        if self._passthrough:
+            return shaped
+        assert self._stream is not None
+        return np.asarray(self._stream.resample_chunk(shaped, last=last), dtype=np.float32)
+
+
+def downmix_windows_frames_to_stereo(frames: np.ndarray, num_channels: int) -> np.ndarray:
+    """Windows profile: keep front left/right (channels 0/1); duplicate mono."""
+    if num_channels <= 0:
+        raise ValueError("num_channels must be positive")
+    data = np.asarray(frames)
+    if data.size == 0:
+        return np.zeros((0, 2), dtype=np.float32)
+    if data.ndim == 1:
+        if data.size % num_channels != 0:
+            raise ValueError(
+                f"Audio length {data.size} is not divisible by num_channels={num_channels}"
+            )
+        data = data.reshape(-1, num_channels)
+    if num_channels == 1:
+        mono = data.reshape(-1)
+        return np.column_stack([mono, mono]).astype(np.float32, copy=False)
+    if num_channels == 2:
+        return data[:, :2].astype(np.float32, copy=False)
+    return data[:, :2].astype(np.float32, copy=False)
+
+
+def downmix_macos_frames_to_stereo(frames: np.ndarray, num_channels: int) -> np.ndarray:
+    """macOS profile: fold center/surround with the shipped attenuation constants."""
+    if num_channels <= 0:
+        raise ValueError("num_channels must be positive")
+    data = np.asarray(frames)
+    if data.size == 0:
+        return np.zeros((0, 2), dtype=np.float32)
+    if data.ndim == 1:
+        if data.size % num_channels != 0:
+            raise ValueError(
+                f"Audio length {data.size} is not divisible by num_channels={num_channels}"
+            )
+        data = data.reshape(-1, num_channels)
+    if num_channels == 1:
+        mono = data.reshape(-1).astype(np.float32, copy=False)
+        return np.column_stack([mono, mono])
+    if num_channels == 2:
+        return data[:, :2].astype(np.float32, copy=False)
+
+    left = data[:, 0].astype(np.float32, copy=True)
+    right = data[:, 1].astype(np.float32, copy=True)
+    if num_channels >= 3:
+        center = data[:, 2].astype(np.float32) * CENTER_CHANNEL_ATTENUATION
+        left += center
+        right += center
+    if num_channels > 3:
+        for index in range(3, num_channels):
+            ch = data[:, index].astype(np.float32) * SURROUND_CHANNEL_ATTENUATION
+            left += ch
+            right += ch
+    return np.column_stack([left, right])
+
+
+@dataclass
+class ChannelEnhancePlan:
+    """Global DC/normalize/soft-limit decisions for one float channel."""
+
+    mean: float = 0.0
+    scale: float = 1.0
+    soft_limit: bool = False
+
+
+def plan_channel_enhance(samples: np.ndarray) -> ChannelEnhancePlan:
+    """Compute the same decisions ``_process_channel_inplace`` would apply globally."""
+    if samples.size == 0:
+        return ChannelEnhancePlan()
+    channel = np.asarray(samples, dtype=np.float32)
+    mean = float(channel.mean())
+    centered = channel - mean
+    peak = max(abs(float(centered.min())), abs(float(centered.max()))) if centered.size else 0.0
+    scale = 1.0
+    if peak > NORMALIZATION_HIGH_THRESHOLD:
+        scale = NORMALIZATION_HIGH_THRESHOLD / peak
+    elif 0 < peak < NORMALIZATION_LOW_THRESHOLD:
+        scale = NORMALIZATION_BOOST_TARGET / peak
+    scaled = centered * scale
+    abs_max = max(abs(float(scaled.min())), abs(float(scaled.max()))) if scaled.size else 0.0
+    return ChannelEnhancePlan(mean=mean, scale=scale, soft_limit=abs_max > SOFT_LIMIT_THRESHOLD)
+
+
+def apply_channel_enhance_inplace(channel: np.ndarray, plan: ChannelEnhancePlan) -> None:
+    """Apply a precomputed enhance plan to a float32 channel view (chunk-safe)."""
+    if channel.size == 0:
+        return
+    channel -= plan.mean
+    if plan.scale != 1.0:
+        channel *= plan.scale
+    if plan.soft_limit:
+        channel *= 0.9
+        np.tanh(channel, out=channel)
+        channel *= 0.85
+
+
+def plan_stereo_enhance(frames: np.ndarray) -> tuple[ChannelEnhancePlan, ChannelEnhancePlan]:
+    """Plan left/right enhance from stereo float frames shaped ``(n, 2)``."""
+    data = np.asarray(frames, dtype=np.float32)
+    if data.size == 0:
+        return ChannelEnhancePlan(), ChannelEnhancePlan()
+    if data.ndim == 1:
+        data = data.reshape(-1, 2)
+    return plan_channel_enhance(data[:, 0]), plan_channel_enhance(data[:, 1])
+
+
+def apply_stereo_enhance_inplace(
+    frames: np.ndarray,
+    left_plan: ChannelEnhancePlan,
+    right_plan: ChannelEnhancePlan,
+) -> None:
+    data = np.asarray(frames, dtype=np.float32)
+    if data.size == 0:
+        return
+    if data.ndim == 1:
+        data = data.reshape(-1, 2)
+    apply_channel_enhance_inplace(data[:, 0], left_plan)
+    apply_channel_enhance_inplace(data[:, 1], right_plan)

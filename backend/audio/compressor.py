@@ -19,7 +19,9 @@ def compress_to_opus(
     sample_rate: int,
     bitrate: str | None = None,
     compression_level: int | None = None,
-    application: str | None = None
+    application: str | None = None,
+    *,
+    ffmpeg_path: str | None = None,
 ) -> str:
     """
     Compress audio to Opus format using ffmpeg.
@@ -31,6 +33,7 @@ def compress_to_opus(
         bitrate: Opus bitrate (e.g., '128k'). Defaults to OPUS_BITRATE
         compression_level: 0-10, higher = better quality. Defaults to OPUS_COMPRESSION_LEVEL
         application: 'audio', 'voip', or 'lowdelay'. Defaults to OPUS_APPLICATION
+        ffmpeg_path: Explicit ffmpeg executable. Defaults to ``ffmpeg`` on PATH.
 
     Returns:
         Path to the output file (`.opus` on success, `.wav` fallback on failure)
@@ -38,6 +41,7 @@ def compress_to_opus(
     bitrate = bitrate or OPUS_BITRATE
     compression_level = compression_level if compression_level is not None else OPUS_COMPRESSION_LEVEL
     application = application or OPUS_APPLICATION
+    ffmpeg_exe = ffmpeg_path or 'ffmpeg'
 
     # Change extension to .opus
     opus_path = str(Path(output_path).with_suffix('.opus'))
@@ -58,7 +62,7 @@ def compress_to_opus(
         input_format_args = ['-f', 'wav']
 
     cmd = [
-        'ffmpeg',
+        ffmpeg_exe,
         *input_format_args,
         '-i', input_path,
         '-c:a', 'libopus',
@@ -73,10 +77,10 @@ def compress_to_opus(
     ]
 
     try:
-        result = subprocess.run(cmd, check=True, capture_output=True)
+        subprocess.run(cmd, check=True, capture_output=True)
 
         # Verify recording integrity
-        if not verify_recording_integrity(opus_path):
+        if not verify_recording_integrity(opus_path, ffmpeg_path=ffmpeg_exe):
             print(f"WARNING: Recording integrity check failed", file=sys.stderr)
             print(f"Falling back to WAV format...", file=sys.stderr)
             _cleanup_bad_opus_file()
@@ -107,6 +111,7 @@ def compress_and_report(
     *,
     verify_again: bool = False,
     progress_message: str = "Compressing with ffmpeg (Opus codec)...",
+    ffmpeg_path: str | None = None,
 ) -> tuple[str, dict]:
     """
     Compress a WAV to Opus and return the final path plus size stats.
@@ -115,7 +120,12 @@ def compress_and_report(
     ``verify_again`` preserves the macOS post-compress integrity log when True.
     """
     print(progress_message, file=sys.stderr)
-    final_path = compress_to_opus(input_path, output_path, sample_rate)
+    final_path = compress_to_opus(
+        input_path,
+        output_path,
+        sample_rate,
+        ffmpeg_path=ffmpeg_path,
+    )
 
     input_size = Path(input_path).stat().st_size
     output_size = Path(final_path).stat().st_size
@@ -131,23 +141,34 @@ def compress_and_report(
         'ratio': ratio,
     }
 
-    if verify_again and not verify_recording_integrity(final_path):
+    if verify_again and not verify_recording_integrity(final_path, ffmpeg_path=ffmpeg_path):
         print(f"WARNING: Recording integrity check failed", file=sys.stderr)
 
     return final_path, stats
 
 
-def verify_recording_integrity(file_path: str) -> bool:
+def resolve_ffprobe_path(ffmpeg_path: str | None = None) -> str | None:
+    """Resolve ffprobe beside an explicit ffmpeg, then fall back to PATH."""
+    if ffmpeg_path:
+        candidate = Path(ffmpeg_path)
+        sibling = candidate.with_name('ffprobe' + candidate.suffix)
+        if sibling.is_file():
+            return str(sibling)
+    return shutil.which('ffprobe')
+
+
+def verify_recording_integrity(file_path: str, *, ffmpeg_path: str | None = None) -> bool:
     """
     Verify the recording file is valid and playable using ffprobe.
 
     Args:
         file_path: Path to audio file to verify
+        ffmpeg_path: Optional ffmpeg path used to locate a sibling ffprobe
 
     Returns:
         True if file is valid, False otherwise
     """
-    ffprobe_path = shutil.which('ffprobe')
+    ffprobe_path = resolve_ffprobe_path(ffmpeg_path)
     if not ffprobe_path:
         print(f"  Skipping integrity check (ffprobe not found)", file=sys.stderr)
         return True  # Assume OK if we can't check
@@ -206,17 +227,18 @@ def verify_recording_integrity(file_path: str) -> bool:
         return False
 
 
-def get_file_info(file_path: str) -> dict:
+def get_file_info(file_path: str, *, ffmpeg_path: str | None = None) -> dict:
     """
     Get audio file information using ffprobe.
 
     Args:
         file_path: Path to audio file
+        ffmpeg_path: Optional ffmpeg path used to locate a sibling ffprobe
 
     Returns:
         Dict with 'duration', 'codec', 'sample_rate', 'channels', or empty dict on error
     """
-    ffprobe_path = shutil.which('ffprobe')
+    ffprobe_path = resolve_ffprobe_path(ffmpeg_path)
     if not ffprobe_path:
         return {}
 

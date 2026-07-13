@@ -4,8 +4,10 @@ macOS audio recorder implementation using sounddevice and ScreenCaptureKit.
 Uses sounddevice for microphone input and ScreenCaptureKit for desktop audio capture.
 Implements the same post-processing mix approach as Windows for consistency.
 
-Known constraint: mic frames are buffered in RAM (ChunkedAudioBuffer) for the
-post-processing mix. Very long meetings can still peak high during stop-time
+Known constraint: with ``AVANEVIS_CAPTURE_SPOOL`` off (default), mic frames are
+buffered in RAM (ChunkedAudioBuffer) for the post-processing mix. The spool path
+finalizes with bounded multi-pass processing (Task 9) and does not hydrate whole
+tracks. Very long meetings on the RAM path can still peak high during stop-time
 concatenate/mix; processing exceptions must emit structured failure JSON.
 """
 
@@ -21,9 +23,10 @@ import numpy as np
 
 from .compressor import compress_and_report, verify_recording_integrity
 from .chunked_audio_buffer import ChunkedAudioBuffer
-from .capture_spool_runtime import capture_spool_enabled, load_track_pcm_array
-from .capture_manifest import CaptureManifestCoordinator
+from .capture_spool_runtime import capture_spool_enabled
+from .capture_manifest import CaptureManifestCoordinator, MANIFEST_FILENAME
 from .track_spool import TrackSpool
+from .streaming_post_processor import FinalizationError, finalize_capture
 from .macos_desktop_diagnostics import (
     build_desktop_diagnostics,
     format_desktop_diagnostics_summary,
@@ -106,9 +109,12 @@ def _send_error_message(code: str, message: str, **extra):
     )
 
 
-# Audio processing constants
-CENTER_CHANNEL_ATTENUATION = 0.707  # -3dB, equivalent to 1/sqrt(2)
-SURROUND_CHANNEL_ATTENUATION = 0.5  # -6dB for extra surround channels
+# Audio processing constants (kept for local callers; shared values live in constants.py)
+from .constants import (
+    CENTER_CHANNEL_ATTENUATION,
+    SURROUND_CHANNEL_ATTENUATION,
+    MIC_BOOST_LINEAR,
+)
 
 
 def _downmix_to_stereo(audio: np.ndarray, num_channels: int) -> np.ndarray:
@@ -547,6 +553,12 @@ class MacOSAudioRecorder:
             started_at_ns=started_ns,
             started_at_iso=started_iso,
         )
+        self._capture_manifest.set_processing_profile("macos-v1")
+        self._capture_manifest.set_mix_params(
+            mic_volume=self.mic_volume,
+            desktop_volume=self.desktop_volume,
+            mic_boost=MIC_BOOST_LINEAR,
+        )
         self._capture_manifest.add_track(
             "mic",
             sample_rate=self.sample_rate,
@@ -577,12 +589,55 @@ class MacOSAudioRecorder:
                 dtype="<f4",
             )
 
+    def _compute_spool_alignment_frames(self) -> dict:
+        """Derive start-alignment frame pads/trims without loading PCM."""
+        if (
+            self.recording_start_time is None
+            or self.mic_capture_start_time is None
+            or self.desktop_capture_start_time is None
+            or self.sample_rate <= 0
+        ):
+            return {
+                "desktopTrimFrames": 0,
+                "desktopLeadingPadFrames": 0,
+                "micLeadingPadFrames": 0,
+            }
+
+        reference_start = self.recording_start_time + max(float(self.preroll_seconds), 0.0)
+        desktop_trim = 0
+        desktop_capture_start = self.desktop_capture_start_time
+        if desktop_capture_start < reference_start:
+            desktop_trim = int(round((reference_start - desktop_capture_start) * self.sample_rate))
+            desktop_capture_start = reference_start
+
+        mic_reference = max(self.mic_capture_start_time, reference_start)
+        desktop_reference = max(desktop_capture_start, reference_start)
+        offset_samples = int(round((desktop_reference - mic_reference) * self.sample_rate))
+        if offset_samples > 0:
+            return {
+                "desktopTrimFrames": max(0, desktop_trim),
+                "desktopLeadingPadFrames": offset_samples,
+                "micLeadingPadFrames": 0,
+            }
+        if offset_samples < 0:
+            return {
+                "desktopTrimFrames": max(0, desktop_trim),
+                "desktopLeadingPadFrames": 0,
+                "micLeadingPadFrames": abs(offset_samples),
+            }
+        return {
+            "desktopTrimFrames": max(0, desktop_trim),
+            "desktopLeadingPadFrames": 0,
+            "micLeadingPadFrames": 0,
+        }
+
     def _close_capture_spools_for_mix(self) -> None:
-        """Close spools and hydrate RAM buffers for the existing mix path (Task 9 replaces this)."""
+        """Close/commit spools and prepare the manifest for bounded finalization."""
         if not self._use_capture_spool:
             return
 
         mic_frames = 0
+        include_desktop = False
         if self._mic_spool is not None:
             mic_result = self._mic_spool.close()
             self._mic_spool = None
@@ -595,16 +650,6 @@ class MacOSAudioRecorder:
                 self._error_event.set()
             else:
                 mic_frames = mic_result.committed_frames
-                track = self._capture_manifest.get_track("mic")
-                mic_arr = load_track_pcm_array(
-                    self._capture_manifest.session_dir,
-                    track["segments"],
-                    dtype="<f4",
-                    channels=self._mic_spool_channels or self.channels,
-                )
-                self.mic_frames = ChunkedAudioBuffer()
-                if mic_arr.size:
-                    self.mic_frames.append(mic_arr)
 
         if self._desktop_spool is not None:
             desktop_failed = bool(self._desktop_runtime_failure) or bool(
@@ -622,33 +667,80 @@ class MacOSAudioRecorder:
             desk_result = self._desktop_spool.close(final_frame_count=pad_to)
             self._desktop_spool = None
             if desk_result.fail_reason and not desktop_failed:
-                # Treat close-time desktop writer failure like a late helper failure.
                 self._note_desktop_runtime_failure(
                     f"Desktop capture spool failed: {desk_result.fail_reason}",
                     code="DESKTOP_SPOOL_FAILED",
                 )
                 desktop_failed = True
 
-            if desktop_failed or not self._desktop_spool_accepted_any:
-                self.desktop_frames = []
-            else:
-                track = self._capture_manifest.get_track("desktop")
-                if desk_result.committed_frames > 0 and track.get("segments"):
-                    desk_arr = load_track_pcm_array(
-                        self._capture_manifest.session_dir,
-                        track["segments"],
-                        dtype="<f4",
-                        channels=self.channels,
-                    )
-                    self.desktop_frames = [desk_arr] if desk_arr.size else []
-                else:
-                    self.desktop_frames = []
+            include_desktop = (
+                not desktop_failed
+                and self._desktop_spool_accepted_any
+                and desk_result.committed_frames > 0
+            )
+
+        # Spool path no longer hydrates whole tracks into RAM (Task 9).
+        self.mic_frames = ChunkedAudioBuffer()
+        self.desktop_frames = []
 
         if self._capture_manifest is not None:
             try:
+                self._capture_manifest.set_include_desktop(include_desktop)
+                if include_desktop:
+                    alignment = self._compute_spool_alignment_frames()
+                    self._capture_manifest.set_alignment(**{
+                        "desktop_trim_frames": alignment["desktopTrimFrames"],
+                        "desktop_leading_pad_frames": alignment["desktopLeadingPadFrames"],
+                        "mic_leading_pad_frames": alignment["micLeadingPadFrames"],
+                    })
                 self._capture_manifest.set_state("finalizing")
             except Exception:
                 pass
+
+    def _finalize_from_capture_spools(self) -> bool:
+        """Run bounded multi-pass finalization for the spool path."""
+        if self._capture_manifest is None:
+            message = "Capture manifest missing for spool finalization"
+            self.recording_failure = {
+                "code": "CAPTURE_FINALIZE_FAILED",
+                "message": message,
+            }
+            return False
+
+        import os
+
+        def _progress(stage: str, message: str) -> None:
+            try:
+                _send_event_message(stage, message)
+            except Exception:
+                pass
+
+        manifest_path = self._capture_manifest.session_dir / MANIFEST_FILENAME
+        try:
+            result = finalize_capture(
+                manifest_path,
+                self.output_path,
+                ffmpeg_path=os.environ.get("AVANEVIS_FFMPEG") or "ffmpeg",
+                progress_callback=_progress,
+                coordinator=self._capture_manifest,
+            )
+        except FinalizationError as exc:
+            message = str(exc)
+            print(f"ERROR: {message}", file=sys.stderr)
+            if exc.recoverable_path:
+                self.final_output_path = exc.recoverable_path
+            self.recording_failure = {
+                "code": "CAPTURE_FINALIZE_FAILED",
+                "message": message,
+            }
+            return False
+
+        self.final_output_path = result.final_path
+        self.recording_duration = float(result.duration)
+        self.recording_failure = None
+        print(f"Final file: {result.final_path}", file=sys.stderr)
+        print(f"Duration: {result.duration:.1f} seconds", file=sys.stderr)
+        return True
 
     def _release_capture_spools(self) -> None:
         for spool in (self._mic_spool, self._desktop_spool):
@@ -1064,21 +1156,11 @@ class MacOSAudioRecorder:
                 self._release_capture_spools()
                 return
 
-            if self.desktop_frames:
-                desk = self.desktop_frames[0]
-                desktop_peak = float(np.max(np.abs(desk))) if desk.size else 0.0
-                desktop_rms = float(np.sqrt(np.mean(np.square(desk)))) if desk.size else 0.0
-                print(
-                    f"Hydrated {len(desk)} desktop samples from capture spool "
-                    f"(peak={desktop_peak:.6f}, rms={desktop_rms:.6f})",
-                    file=sys.stderr,
-                )
-                diagnostics = self.desktop_diagnostics or {}
-                if diagnostics.get('bufferSamples', 0) <= 0:
-                    diagnostics = dict(diagnostics)
-                    diagnostics['bufferChunks'] = max(int(diagnostics.get('bufferChunks', 0) or 0), 1)
-                    diagnostics['bufferSamples'] = int(len(desk))
-                    self.desktop_diagnostics = diagnostics
+            include_desktop = False
+            if self._capture_manifest is not None:
+                include_desktop = bool(self._capture_manifest.to_dict().get("includeDesktop"))
+            if include_desktop:
+                print("Desktop track committed for bounded finalization", file=sys.stderr)
             elif not self._desktop_runtime_failure:
                 capture_type = self.desktop_capture_type or 'unknown'
                 self._emit_desktop_diagnostics_warning()
@@ -1116,15 +1198,16 @@ class MacOSAudioRecorder:
         # Process and save audio (mic-only when desktop failed late)
         print(f"Processing audio...", file=sys.stderr)
         try:
-            if not self._process_and_save():
+            if self._use_capture_spool:
+                ok = self._finalize_from_capture_spools()
+                self._capture_manifest = None  # closed inside finalize on success
+                if not ok:
+                    self._release_capture_spools()
+                    return
                 self._release_capture_spools()
-                return
-            if self._capture_manifest is not None:
-                try:
-                    self._capture_manifest.set_state("complete")
-                except Exception:
-                    pass
-                self._release_capture_spools()
+            else:
+                if not self._process_and_save():
+                    return
         except Exception as process_err:
             message = f"Recorder failed during post-processing: {process_err}"
             print(message, file=sys.stderr)
