@@ -4,7 +4,7 @@
 # (nvidia-cublas-cu12 + nvidia-cudnn-cu12) until upstream CTranslate2/faster-whisper
 # wheels for newer CUDA majors are validated in packaged regression testing.
 pyaudiowpatch==0.2.12.8
-numpy==2.4.6
+numpy==2.5.1
 soxr==1.1.0
 faster-whisper==1.2.1
 filelock==3.29.0

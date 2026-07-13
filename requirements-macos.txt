@@ -1,6 +1,6 @@
 # Audio Recording Dependencies (macOS)
 sounddevice>=0.4.6       # Cross-platform audio I/O (for microphone)
-numpy>=2.4.0            # For audio processing and mixing
+numpy>=2.5.1            # For audio processing and mixing
 pyobjc-framework-ScreenCaptureKit>=10.0  # macOS ScreenCaptureKit for desktop audio (fallback)
 pyobjc-framework-CoreAudio>=10.0         # macOS CoreAudio support
 pyobjc-framework-AVFoundation>=10.0      # macOS AVFoundation for audio
