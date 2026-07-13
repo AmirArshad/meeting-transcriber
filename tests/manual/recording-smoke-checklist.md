@@ -65,7 +65,7 @@ Ship static `build/iconRecording.png` (18×18) and `build/iconRecording@2x.png` 
 - [ ] Relaunch reveals the existing instance with no second tray icon; document `npm start` vs installed-build single-instance behavior (Gate D)
 - [ ] macOS light/dark menu bar and Dock badge when notification permission allows
 - [ ] Windows taskbar overlay at 100%, 150%, and 200% scaling while minimized
-- [ ] Installed Spotlight/Start search for `AvaNevis`, `meeting`, and `transcriber` — record actual OS behavior
+- [ ] Installed Spotlight/Start search for `AvaNevis`, `meeting`, `recorder`, and `transcriber` — Start Menu shortcut / macOS display name is `AvaNevis Meeting Recorder & Transcriber` (`productName`/`appId` stay `AvaNevis`); record actual OS behavior
 - [ ] Gate C toast CLSID / Action Center delivery on an installed Windows NSIS build (delivery only; cold click-to-open remains an Electron API gap)
 - [ ] Hydrated Stop & Transcribe after renderer reload uses stop IPC + localStorage settings only (no dead-renderer transient state)
 

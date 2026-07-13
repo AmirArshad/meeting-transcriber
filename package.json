@@ -72,7 +72,7 @@
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.inherit.plist",
       "extendInfo": {
-        "CFBundleDisplayName": "AvaNevis Meeting Transcriber",
+        "CFBundleDisplayName": "AvaNevis Meeting Recorder & Transcriber",
         "NSMicrophoneUsageDescription": "AvaNevis needs microphone access to record your voice during meetings.",
         "NSAudioCaptureUsageDescription": "AvaNevis needs system audio access to capture desktop audio locally for meeting transcription.",
         "NSAppleMusicUsageDescription": "AvaNevis does not access your music library.",
@@ -103,7 +103,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "AvaNevis",
+      "shortcutName": "AvaNevis Meeting Recorder & Transcriber",
       "installerIcon": "build/icon.ico",
       "uninstallerIcon": "build/icon.ico",
       "installerHeaderIcon": "build/icon.ico",

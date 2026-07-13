@@ -11,9 +11,13 @@ const ROOT = path.join(__dirname, '..', '..');
 test('recording presence resources preserve app identity', () => {
   assert.equal(pkg.build.productName, 'AvaNevis');
   assert.equal(pkg.build.appId, 'com.avanevis.app');
-  assert.equal(pkg.build.nsis.shortcutName, 'AvaNevis');
+  // Start/Spotlight search labels may be descriptive; storage/installer identity stays AvaNevis.
+  assert.equal(pkg.build.nsis.shortcutName, 'AvaNevis Meeting Recorder & Transcriber');
   assert.match(pkg.description, /meeting recorder.*transcriber/i);
-  assert.match(pkg.build.mac.extendInfo.CFBundleDisplayName, /AvaNevis.*Meeting/i);
+  assert.match(
+    pkg.build.mac.extendInfo.CFBundleDisplayName,
+    /AvaNevis.*Meeting.*Recorder.*Transcriber/i,
+  );
   assert.ok(pkg.build.extraResources.some((entry) => entry.to === 'recording-overlay.png'));
   for (const name of ['iconRecording.png', 'iconRecording@2x.png']) {
     assert.ok(pkg.build.extraResources.some((entry) => entry.to === name));
@@ -33,6 +37,11 @@ test('recording presence PNG assets exist and are non-empty', () => {
     assert.equal(bytes[0], 0x89);
     assert.equal(bytes.toString('ascii', 1, 4), 'PNG');
   }
+  // Overlay must be HiDPI-friendly (not a 16x16 upscale source).
+  const overlay = fs.readFileSync(path.join(ROOT, 'build', 'recording-overlay.png'));
+  const overlayWidth = overlay.readUInt32BE(16);
+  const overlayHeight = overlay.readUInt32BE(20);
+  assert.ok(overlayWidth >= 32 && overlayHeight >= 32, `overlay too small: ${overlayWidth}x${overlayHeight}`);
 });
 
 test('main process pins a stable Windows toast activator CLSID', () => {
