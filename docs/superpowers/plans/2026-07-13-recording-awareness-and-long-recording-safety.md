@@ -8,7 +8,7 @@
 
 **Tech Stack:** Electron 42 main process and native notifications, plain HTML/CSS/JavaScript renderer, Python 3.11, NumPy, ffmpeg, Node `node:test`, pytest.
 
-**Plan status:** Revised after Fable approach review (2026-07-13). Key decisions locked below: Windows recording close **minimizes** (keeps taskbar + overlay); macOS uses a **static** red active icon + `REC` (no halo pulse); spool backpressure uses a **larger queue + sustained-stall** policy; interrupted-capture recovery is **async after window creation** and mutually exclusive with starting a new recording.
+**Plan status:** Revised after Fable approach review (2026-07-13) and follow-up review. Key decisions locked below: Windows recording close **minimizes** (keeps taskbar + overlay); macOS uses a **static, saturated recording-status icon + `REC`**, analogous to the obvious conferencing/privacy status treatment in the menu bar but app-owned and non-animated; spool backpressure uses a bounded queue with explicit hard-cap behavior; interrupted-capture discovery is async, recovery is user-approved, and scan/recovery/start share one maintenance gate.
 
 ## Global Constraints
 
@@ -17,15 +17,15 @@
 - Remind after 60 minutes and every 60 minutes thereafter, based on the authoritative backend start timestamp rather than renderer interval ticks.
 - Never automatically stop a recording because of duration; an automatic cutoff can destroy a legitimate long meeting.
 - Do not add a tray `Stop Recording` action in Release 1. The renderer currently owns stop, transcription, and history persistence as one flow.
-- Do not use taskbar flashing, Dock bouncing, or animated menu-bar frames. Use persistent state only: a static macOS red active menu-bar icon plus `REC` text, a supplemental Dock badge when permitted, a Windows taskbar overlay (requires a visible taskbar button), tray copy, and an in-app pill.
+- Do not use taskbar flashing, Dock bouncing, or animated menu-bar frames. Use persistent state only: replace the normal monochrome macOS icon with a static, saturated red recording-status icon plus `REC` text, a supplemental Dock badge when permitted, a Windows taskbar overlay (requires a visible taskbar button), tray copy, and an in-app pill.
 - While recording on Windows, the recording-aware close action must **minimize** the window (not `hide()`), so the taskbar button and overlay remain visible. Idle close may still hide to tray as today. macOS may continue to hide to the menu bar while recording.
 - Preserve 48 kHz stereo output, mono-compatible downmix behavior, gentle mic enhancement, desktop fidelity, Windows timestamp-gap semantics, macOS one-sided stereo repair, and late desktop-failure degradation to mic-only.
 - Preserve the structured recorder stdout JSON contract. stderr remains debug-only.
 - Keep `productName`, `appId`, the Electron `userData` identity, artifact names, and updater matching stable. Descriptive display/shortcut labels may change without renaming storage.
 - Release 2 must not reintroduce real-time mixing. Mic and desktop tracks remain separate until bounded post-processing.
 - Release 2 must not expose raw capture-track files as meeting audio or let scan-import treat them as meetings.
-- Release 2 spool backpressure must not hard-stop a live meeting on a brief disk stall. Prefer a larger bounded queue and error only after sustained writer stall; document the larger kill-loss window.
-- Interrupted-capture recovery must not block first paint or a new recording start: run it async after window creation, surface progress through the presence service, and reject or queue new `start-recording` while recovery owns the recordings directory.
+- Release 2 spool backpressure must not hard-stop a live meeting on a brief disk stall. Use an 8 MiB per-track queue, warn at a soft high-water mark, and stop only on writer exception, sustained no-progress, or the hard queue cap. Never block or silently drop callback audio.
+- Interrupted-capture discovery must not block first paint or a new recording start. Discover asynchronously, prompt `Recover Now` / `Later`, and acquire one shared recordings-maintenance gate only while scan or recovery is actively mutating files. `Later` preserves capture files and permits a new recording.
 
 ---
 
@@ -41,7 +41,7 @@ The best response is layered:
 
 | Layer | Shipped behavior |
 |---|---|
-| Persistent OS presence | macOS static red active menu-bar icon plus `REC` text and a supplemental Dock badge when permitted; Windows red recording overlay on a still-visible taskbar button; recording-aware tray tooltip/menu on both platforms |
+| Persistent OS presence | macOS static saturated-red recording-status icon plus `REC` text and a supplemental Dock badge when permitted; Windows red recording overlay on a still-visible taskbar button; recording-aware tray tooltip/menu on both platforms |
 | Periodic interruption | Native reminder at 1 hour, then every hour, with elapsed time and click-to-open behavior |
 | In-app presence | Recording pill and elapsed clock in the top bar on Record, History, and Settings |
 | Accidental-close protection | Recording-specific close dialog: Windows default keeps capture going via **minimize** (taskbar + overlay stay); macOS default keeps capture going via hide-to-menu-bar |
@@ -60,7 +60,7 @@ Native notifications are best-effort because Focus modes and OS settings can sup
 - Stopping or failure clears reminder timers, menu-bar text, any permitted Dock badge, Windows overlay, tray recording copy, and in-app capture presence.
 - Release 1 changes no recorder audio output and passes `npm test` plus the platform presence checklist, including a Windows packaged spike for overlay-when-minimized, tray overflow reality, and toast CLSID on the installed shortcut.
 - After Release 2, capture RAM and stop-time RAM remain bounded for a 4-hour recording, and killing the recorder during capture leaves tracks that can be finalized after relaunch.
-- Release 2 recovery never blocks first window paint; a new recording cannot start while recovery owns the recordings directory.
+- Release 2 discovery never blocks first window paint. `Later` leaves the interrupted session recoverable and allows recording; a new recording is blocked only while an accepted recovery or scan holds the shared maintenance gate.
 - Release 2's short-fixture outputs remain equivalent to the existing path within the documented sample/timing tolerances before the RAM path is removed.
 
 ## File Structure
@@ -96,10 +96,15 @@ Native notifications are best-effort because Focus modes and OS settings can sup
 - Create `backend/audio/track_spool.py`: bounded callback queue, segmented raw PCM writer, timeline-aware writes, flush, and close.
 - Create `backend/audio/streaming_post_processor.py`: bounded normalization, repair, mix, recoverable WAV/RF64 output, and Opus finalization.
 - Create `backend/audio/capture_recovery.py`: validate and finalize interrupted capture manifests.
+- Create `src/main/recordings-maintenance-gate.js`: serialize scan and accepted recovery, expose busy state to recording admission.
+- Create `tests/js/recordings-maintenance-gate.test.js`: gate ownership, release, and busy-response coverage.
 - Create `tests/python/test_capture_manifest.py`, `test_track_spool.py`, `test_streaming_post_processor.py`, and `test_capture_recovery.py`.
 - Modify both platform recorders and macOS desktop helper bridges to send chunks to track spools instead of retaining complete recordings.
 - Modify `src/main/device-ipc.js`: replace shell disk probes with Node filesystem stats and use a realistic recording reserve warning.
-- Modify `src/main/recorder-service.js`: structured stop stages and interrupted-capture recovery orchestration (async, mutually exclusive with new recording).
+- Modify `src/main/recorder-service.js`: structured stop stages, async interrupted-capture discovery, user-approved recovery, and shared maintenance-gate admission.
+- Modify `src/main/meeting-manager-client.js`: run `scan-recordings` through the same recordings-maintenance gate as recovery.
+- Modify `src/preload.js` and `src/renderer/app.js`: query replayable recovery state and choose `Recover Now` / `Later`.
+- Modify `tests/js/ipc-contract-snapshot.test.js`, `tests/js/meeting-manager-client.behavioral.test.js`, and `tests/js/recorder-service.deps.test.js`: pin recovery IPC and shared-gate behavior.
 - Modify meeting scan/recovery code so capture directories are never imported as meeting audio.
 - Modify recorder contract, timeline, processor, temp-recovery, and manual long-recording tests.
 
@@ -116,7 +121,7 @@ Complete these gates before Task 1 implementation. They change dialog copy, asse
 - [ ] **Gate B — Windows hidden vs minimized (locked).** While `state === 'recording'|'starting'|'stopping'`, Windows close default is **Minimize** (`mainWindow.minimize()`), not hide, so the taskbar button and overlay remain. Idle/generic close may still hide to tray. Dialog button copy: `Keep Recording Minimized`, `Stop and Quit`, `Cancel`.
 - [ ] **Gate C — Windows packaged spike (before Task 3 asset/work completion).** On an installed NSIS build, verify: overlay visible when minimized; overlay gone when fully hidden (documents why Gate B exists); tray overflow default behavior; toast CLSID present on the installed shortcut / toast registration; `setAppUserModelId('com.avanevis.app')` matches the shortcut. Do not treat package.json source assertions alone as proof of Action Center delivery.
 - [ ] **Gate D — Single-instance collision.** Confirm `requestSingleInstanceLock` behavior when `npm start` runs alongside an installed packaged build; document which instance wins and that the secondary exits without a second tray.
-- [ ] **Gate E — macOS icon (locked).** Ship static `iconRecording.png` / `@2x` only. No glow frames, no 1,200 ms `setImage` interval, no reduced-transparency animation branch beyond showing the same static red icon.
+- [ ] **Gate E — macOS icon (locked).** Ship static `iconRecording.png` / `@2x` only. It must be saturated and unmistakably recording-active at menu-bar size, analogous in salience to conferencing/privacy status indicators, but it remains an app-owned icon rather than an imitation of Apple's system indicator. No flashing or alternating frames. Validate against light/dark wallpaper/menu-bar backgrounds.
 
 ---
 
@@ -232,7 +237,7 @@ When a reminder timer fires, re-read current state and `now()`. Show at most one
 
 Apply the view as follows:
 
-- macOS: load the static active icon with `nativeImage.createFromPath()`, call `tray.setImage(activeImage)`, then `activeImage.setTemplateImage(false)` so macOS preserves the red dot instead of tinting it as a template. Keep `tray.setTitle('REC', { fontType: 'monospacedDigit' })` as the readable fallback. Do **not** animate or alternate icons.
+- macOS: load the static active icon with `nativeImage.createFromPath()`, call `activeImage.setTemplateImage(false)` before `tray.setImage(activeImage)` so macOS preserves its saturated red status treatment instead of tinting it as a template. Keep `tray.setTitle('REC', { fontType: 'monospacedDigit' })` as the readable, non-color-only cue. Do **not** animate or alternate icons.
 - macOS idle restore: on stopping, idle, failure, and service destruction, restore the existing monochrome template icon with `setTemplateImage(true)` and clear the title.
 - macOS Dock: attempt `app.dock.setBadge('REC')` as a supplemental signal only; Electron documents that it depends on notification permission, so the menu-bar signal is the reliable indicator.
 - Windows: `mainWindow.setOverlayIcon(recordingOverlay, 'AvaNevis is recording')` only while recording/stopping and the window still has a taskbar button; clear with `setOverlayIcon(null, '')`. Overlay requires minimize-not-hide while recording (Gate B).
@@ -381,7 +386,7 @@ git commit -m "feat: publish authoritative recording state"
 
 Create `build/recording-overlay.png` as a transparent 16x16 PNG. Draw a centered 10px `#ef4444` circle with a 1px `#fee2e2` outline. Do not put letters in the 16px asset. Add it to `build.extraResources` at runtime path `recording-overlay.png`.
 
-Create two 18x18 macOS active icons and matching 36x36 `@2x` versions. Both use a red `#ef4444` 8px record dot with a light 1px inner ring and a soft outer halo baked into the static asset (not animated). They must not be template images. Include both in `extraResources` so dev and packaged paths resolve identically. Do **not** create glow/pulse frames.
+Create one 18x18 macOS active icon and its 36x36 `@2x` version. Use a saturated red `#ef4444` recording dot with enough opaque area and a subtle static edge/halo to remain obvious at menu-bar size on light and dark backgrounds. It must not be a template image. Include both files in `extraResources` so dev and packaged paths resolve identically. Do **not** create animation frames.
 
 - [ ] **Step 2: Add packaging assertions**
 
@@ -709,13 +714,13 @@ git commit -m "feat: add long recording guardrails"
 - `manifest.add_track(name, sample_rate, channels, dtype) -> None`
 - `manifest.commit_track(name, segments, committed_frames) -> None`
 - `manifest.set_state('recording'|'finalizing'|'complete'|'error') -> None`
-- `TrackSpool(manifest_coordinator, session_dir, track_name, sample_rate, channels, dtype, max_queue_bytes=32*1024*1024, segment_bytes=64*1024*1024, stall_timeout_s=30)`
+- `TrackSpool(manifest_coordinator, session_dir, track_name, sample_rate, channels, dtype, max_queue_bytes=8*1024*1024, segment_bytes=64*1024*1024, stall_timeout_s=30)`
 - `TrackSpool.append(pcm, frame_position=None) -> bool`
 - `TrackSpool.close(final_frame_count=None) -> TrackSpoolResult`
 
 `frame_position`, `writtenFrames`, `committedFrames`, and `final_frame_count` always count per-channel audio frames, never interleaved scalar samples. For `channels=2`, one frame contains two samples and `frame_position * channels * dtype.itemsize` gives its byte offset.
 
-Default `max_queue_bytes=32 MiB` (~80–90 s of stereo float32 headroom) absorbs transient Windows AV scans and disk spin-up without killing a live meeting. Document that a forced kill may lose up to roughly `stall_timeout_s` of uncommitted audio plus the in-flight queue — larger than a tiny-queue design, and accepted over mid-meeting hard-stops.
+Default `max_queue_bytes=8 MiB` per track gives roughly 22 seconds of stereo float32 headroom on macOS and roughly 44 seconds of stereo int16 headroom on Windows. Native multichannel input has proportionally less headroom. Calculate and expose queue headroom from the track's declared sample rate, channels, and dtype rather than assuming stereo. The hard cap is non-negotiable: if the next chunk would exceed it, `append` returns `False` immediately and the recorder stops cleanly with committed tracks preserved.
 
 - [ ] **Step 1: Write manifest atomicity and scan-exclusion tests**
 
@@ -723,28 +728,25 @@ Use a session directory named `{output_stem}.capture` and manifest `{session_dir
 
 - [ ] **Step 2: Write bounded spool tests**
 
-Cover sequential writes, per-channel `frame_position` silence insertion, overlap trimming, 64 MiB segment rollover with a small injected test threshold, queue-byte rejection, writer exceptions, flush/close, and a final frame count that pads the shorter track with silence. Assert that PCM byte lengths are divisible by `channels * dtype.itemsize`; do not test frame counts for channel divisibility.
+Cover sequential writes, per-channel `frame_position` silence insertion, overlap trimming, 64 MiB segment rollover with a small injected test threshold, exact hard-cap rejection, sustained no-progress, writer exceptions, flush/close, and a final frame count that pads the shorter track with silence. Assert that PCM byte lengths are divisible by `channels * dtype.itemsize`; do not test frame counts for channel divisibility.
 
 The overflow / stall contract is explicit:
 
 ```python
 accepted = spool.append(chunk, frame_position=position)
 if not accepted:
-    # append returns False only after sustained writer stall (no committedFrames
-    # progress for stall_timeout_s) or hard writer exception — not on a brief
-    # queue bulge that later drains.
+    # append returns False on hard-cap overflow, sustained no-progress, or a
+    # writer exception. It never blocks and never silently drops the chunk.
     raise TrackSpoolBackpressureError(
         "Audio capture writer stalled; recording was stopped to preserve committed audio."
     )
 ```
 
-While the queue is above a soft high-water mark, `append` may still accept until `max_queue_bytes` if the writer is making commit progress. Only after `stall_timeout_s` with no `committedFrames` advance (or a writer exception) does capture stop. Do not silently drop audio and do not block a real-time callback on disk I/O.
+Emit one structured warning when queued bytes cross the 75% soft high-water mark, but continue accepting while the next complete chunk fits. Return `False` immediately when the next chunk would exceed `max_queue_bytes`, after `stall_timeout_s` with no `committedFrames` advance, or after a writer exception. Do not block, dynamically expand, partially enqueue, or silently drop callback audio.
 
 - [ ] **Step 3: Implement atomic manifests**
 
-Write JSON to `manifest.json.tmp`, flush and `os.fsync()`, then `os.replace()`. One `CaptureManifestCoordinator` owns a process-wide thread lock and serializes read-modify-write commits from both track-writer threads so they cannot race on the temp path or overwrite sibling track state. It also acquires an OS-visible `session.lock` for the recorder process's entire capture/finalization lifetime. Recovery acquires that same lock non-blocking and skips any session still owned by a live recorder.
-
-Because portable advisory locks differ (POSIX flock vs Windows `msvcrt` / lockfile+PID), implement a small cross-platform helper with explicit crash semantics: stale lock files from dead PIDs must be reclaimable; live-PID locks must be skipped. Add tests that simulate a stale lock and a live lock on both platforms (or with injected lock backends). The recovery skip-if-live guard is only as good as this primitive.
+Write JSON to `manifest.json.tmp`, flush and `os.fsync()`, then `os.replace()`. One `CaptureManifestCoordinator` owns a process-wide thread lock and serializes read-modify-write commits from both track-writer threads so they cannot race on the temp path or overwrite sibling track state. It also holds `filelock.FileLock(session.lock)` for the recorder process's entire capture/finalization lifetime. Recovery attempts the same lock with `timeout=0` and skips on `filelock.Timeout`. Reuse the already-pinned `filelock` dependency and its OS-backed stale-lock behavior; do not create a second PID-lock abstraction.
 
 Store only relative segment names under the capture directory. Reject absolute paths, `..`, unknown schema versions, unsupported dtypes, negative/non-integral frame counts, and PCM byte lengths not aligned to the declared frame size.
 
@@ -771,7 +773,7 @@ Required manifest fields:
 
 - [ ] **Step 4: Implement the spool writer thread**
 
-Callbacks copy contiguous PCM bytes into a byte-counted bounded queue and return immediately. The writer owns files, rolls segments at the configured threshold, flushes and fsyncs at least once per second, then atomically advances `committedFrames`; in-memory `writtenFrames` may be newer. The default 32 MiB queue plus sustained-stall detection bounds uncommitted loss to roughly `stall_timeout_s` under a hung writer while tolerating multi-second AV/disk stalls. Close performs a final fsync plus manifest commit. Measure actual kill loss in Task 10; if the 30-second target is missed, tighten flush cadence rather than shrinking the queue back to a few seconds of headroom.
+Callbacks copy contiguous PCM bytes into the byte-counted bounded queue and return immediately. The writer owns files, rolls segments at the configured threshold, flushes and fsyncs at least once per second, then atomically advances `committedFrames`; in-memory `writtenFrames` may be newer. Close performs a final fsync plus manifest commit. Forced-kill loss is bounded by queued audio plus the current commit interval, not merely `stall_timeout_s`; assert the byte-derived bound and record measured loss in Task 10.
 
 - [ ] **Step 5: Run focused Python tests**
 
@@ -916,39 +918,55 @@ git commit -m "feat: finalize recordings with bounded memory"
 **Files:**
 - Create: `backend/audio/capture_recovery.py`
 - Create: `tests/python/test_capture_recovery.py`
+- Create: `src/main/recordings-maintenance-gate.js`
+- Create: `tests/js/recordings-maintenance-gate.test.js`
 - Modify: `src/main/recorder-service.js`
+- Modify: `src/main/meeting-manager-client.js`
 - Modify: `src/main.js:1341-1349`
+- Modify: `src/preload.js`
+- Modify: `src/renderer/app.js`
 - Modify: `backend/meetings/scan_import.py`
 - Modify: `backend/meeting_manager.py`
 - Modify: `tests/python/test_recorder_temp_and_scan_recovery.py`
 - Modify: `tests/python/test_meeting_manager.py`
+- Modify: `tests/js/ipc-contract-snapshot.test.js`
+- Modify: `tests/js/meeting-manager-client.behavioral.test.js`
+- Modify: `tests/js/recorder-service.deps.test.js`
 - Modify: `tests/manual/recording-smoke-checklist.md`
 - Modify: `AGENTS.md`
 - Modify: `docs/initiatives/LONG_RECORDING_SAFETY.md`
 
 **Interfaces:**
-- CLI: `python -m audio.capture_recovery --recordings-dir <dir> --ffmpeg <path>`.
+- CLI discovery: `python -m audio.capture_recovery --recordings-dir <dir> --list`.
+- CLI recovery: `python -m audio.capture_recovery --recordings-dir <dir> --ffmpeg <path> --recover <capture-dir>`.
 - JSON result: `{ success, recovered: [{ captureDir, audioPath, duration }], failed: [{ captureDir, code, message }] }`.
-- Main service: `recoverInterruptedCaptures() -> Promise<RecoveryResult>` starts **after** window creation (never blocks first paint), reports progress through the presence service / `recording-progress`, and is mutually exclusive with `start-recording`.
+- Main service: `discoverInterruptedCaptures() -> Promise<RecoveryCandidate[]>` starts after window creation and persists replayable status; `recoverInterruptedCapture(captureDir) -> Promise<RecoveryResult>` runs only after user approval.
+- Shared gate: `createRecordingsMaintenanceGate()` owns `idle|'scan'|'recovery'`; both `meeting-manager-client` scan and recorder recovery acquire it, and `start-recording` rejects only while the gate is actively held.
+- Renderer: `get-recording-recovery-state` returns `{ status: 'idle'|'discovering'|'available'|'recovering'|'error', candidates, message }`; `recover-recording` and `defer-recording-recovery` handle the user's choice.
+
+Add all three invoke channels to the IPC snapshot. Validate `captureDir` in main against the latest discovered candidate set; never trust an arbitrary renderer path.
 
 - [ ] **Step 1: Add kill-point recovery tests**
 
-Create fixture manifests representing interruption during capture, concurrent mic/desktop commit, segment flush, normalization, mix, Opus encode, and after final output verification but before manifest completion. Assert recovery resumes from committed per-channel frame extents, never imports an individual track or manifest-owned temp, never deletes a verified final output, and leaves failed sessions available for retry.
+Create fixture manifests representing interruption during capture, concurrent mic/desktop commit, segment flush, normalization, mix, Opus encode, and after final output verification but before manifest completion. Assert discovery is read-only, recovery resumes from committed per-channel frame extents, never imports an individual track or manifest-owned temp, never deletes a verified final output, and leaves deferred/failed sessions available for retry.
 
 - [ ] **Step 2: Implement recovery CLI**
 
-Acquire the same OS-visible `session.lock` used by the live recorder in non-blocking mode. Skip locked sessions instead of mutating them. For acquired sessions, validate every relative segment and frame alignment, mark stale `recording` sessions as `finalizing`, and call `finalize_capture()`. Emit one final JSON result on stdout; diagnostics stay on stderr. Do not trust paths outside the requested recordings directory.
+Use the same `filelock.FileLock(session.lock)` as the live recorder with `timeout=0`. Skip sessions that raise `filelock.Timeout`. `--list` validates paths/manifests without changing state. `--recover` accepts only a discovered capture directory under the recordings root, marks it `finalizing`, and calls `finalize_capture()`. Emit one final JSON result on stdout; diagnostics stay on stderr.
 
-- [ ] **Step 3: Run recovery async after window creation, mutually exclusive with new recording**
+- [ ] **Step 3: Discover async, replay state, and coordinate scan/recovery/start**
 
-Add `recoverInterruptedCaptures()` to the recorder service. Invoke it from `src/main.js` **after** `createWindow()` / startup UI is up, not before the history scan blocks first paint. Preferred order:
+Instantiate one `recordingsMaintenanceGate` in `src/main.js` and inject it into both `meeting-manager-client` and `recorder-service`. Preferred order:
 
 1. Create window and tray/presence.
-2. Kick off recovery in the background; presence/status copy may show `Recovering interrupted recording...` when work is found.
-3. When recovery finishes successfully, trigger or allow the normal meeting scan/import path so recovered files become History entries (one source of truth for meeting IDs).
-4. While recovery is in flight (`recoveryInProgress === true`), `start-recording` must reject with a clear user-facing message (recovery yields to no new capture; the user waits or cancels recovery only if a future cancel IPC is added — v1: no cancel, just wait). Do not start a second recorder that could race the same recordings directory or `session.lock` reclaim path.
+2. Register renderer listeners and recovery-state replay before the renderer's initial history scan.
+3. Run read-only discovery in the background without taking the maintenance gate. Persist the latest recovery state in main so a late/reloaded renderer can query it.
+4. If candidates exist, show `Recover interrupted recording now?` with `Recover Now` and `Later`. `Later` records only an in-process dismissal, leaves files untouched, and allows recording immediately.
+5. `Recover Now` acquires the shared gate as `recovery`; `scan-recordings` returns `RECORDINGS_MAINTENANCE_IN_PROGRESS`, and `start-recording` returns a clear recovery-busy response until recovery releases the gate.
+6. The existing startup `loadMeetingHistory({ scan: true })` acquires the same gate as `scan`; if recovery is selected first, defer/retry scan after recovery. If scan starts first, recovery waits for scan and revalidates its candidate before mutation.
+7. After successful recovery, invoke the normal scan/import path so recovered audio becomes a History entry, then refresh History.
 
-Do not await multi-hour finalization inside `app.whenReady()` before showing the window.
+Do not emit one-shot-only progress before renderer listeners exist. Every transition updates replayable recovery state first, then optionally sends a push event. Do not await discovery or finalization inside `app.whenReady()`.
 
 - [ ] **Step 4: Validate real long recordings**
 
@@ -959,9 +977,11 @@ Pass criteria:
 - capture RSS does not grow linearly with duration after warm-up
 - peak Python RSS remains below 512 MiB during capture and below 1 GiB during finalization on the measured machines
 - tail audio is present within 100 ms of the requested stop point
-- recovered recording includes audio through the last fsynced interval, losing no more than about `stall_timeout_s` (default 30s) under forced kill — document the measured window in `LONG_RECORDING_SAFETY.md`
+- recovered recording includes audio through the last fsynced interval; measured loss does not exceed each track's byte-derived queue duration plus one commit interval (stereo examples at 48 kHz: about 23 seconds float32 macOS, 45 seconds int16 Windows; multichannel bounds are calculated from the manifest)
 - no raw track or capture directory appears as a meeting
-- startup with a large interrupted capture still shows the main window promptly; new recording remains blocked until recovery completes
+- startup with a large interrupted capture still shows the main window promptly
+- choosing `Later` permits a new recording without modifying the interrupted capture
+- scan, accepted recovery, and new recording never overlap file mutation; busy responses are replayable and user-facing
 
 - [ ] **Step 5: Remove the RAM path and rollout flag**
 
@@ -978,7 +998,7 @@ Expected: PASS, followed by both platform manual evidence tables completed in `L
 - [ ] **Step 7: Commit recovery and rollout completion**
 
 ```bash
-git add backend/audio/capture_recovery.py backend/audio src/main/recorder-service.js src/main.js backend/meetings backend/meeting_manager.py tests AGENTS.md docs/initiatives/LONG_RECORDING_SAFETY.md
+git add backend/audio/capture_recovery.py backend/audio src/main/recordings-maintenance-gate.js src/main/recorder-service.js src/main/meeting-manager-client.js src/main.js src/preload.js src/renderer/app.js backend/meetings backend/meeting_manager.py tests AGENTS.md docs/initiatives/LONG_RECORDING_SAFETY.md
 git commit -m "feat: recover interrupted long recordings"
 ```
 
@@ -992,8 +1012,8 @@ These ideas are intentionally outside this initiative:
 - Automatic stop based on calendar events, silence, duration, RAM, or meeting-app presence.
 - Tray-level Stop, global stop hotkeys, or remote controls until stop/transcribe/history orchestration has one main-process owner.
 - Real-time transcription or real-time mic/desktop mixing.
-- Continuous Dock bounce, taskbar flashing, menu-bar icon animation/halo pulse, or notification sounds every few minutes. Static red active icon + `REC` is the intentional macOS signal.
-- Cancelable interrupted-capture recovery UI (v1 blocks new recording until recovery finishes; add cancel only if long recoveries prove painful).
+- Continuous Dock bounce, taskbar flashing, menu-bar icon animation, or notification sounds every few minutes. The static saturated recording-status icon + `REC` is the intentional macOS signal.
+- Canceling recovery after finalization begins. V1 supports deferring before recovery starts; once accepted, recovery owns the maintenance gate until its current finalization completes or fails.
 - Cloud-based reminders, account identity, or telemetry measuring recording duration.
 
 ## Rollback Boundaries
@@ -1013,8 +1033,8 @@ These ideas are intentionally outside this initiative:
 | Notifications disabled | Menu-bar signal remains | Overlay (minimized) + tray remain | Failure fake | Packaged |
 | Relaunch focuses existing session | Yes | Yes | Main helper/service | Packaged |
 | Stop/failure clears state | Yes | Yes | Recorder lifecycle | Packaged |
-| Startup recovery does not block first paint | Yes | Yes | Service fake + long fixture | Packaged |
-| New recording blocked during recovery | Yes | Yes | Recorder service | Manual |
+| Startup discovery does not block first paint | Yes | Yes | Service fake + long fixture | Packaged |
+| `Later` allows recording; accepted recovery blocks until release | Yes | Yes | Shared-gate services | Manual |
 | 4-hour bounded capture/finalization | Yes | Yes | Synthetic chunks | Hardware |
-| Kill/relaunch recovery (≤ ~stall_timeout_s loss) | Yes | Yes | Kill-point fixtures | Hardware |
+| Kill/relaunch recovery (bounded by queue duration + commit interval) | Yes | Yes | Kill-point fixtures | Hardware |
 | Audio quality/timing parity | Yes | Yes | Short fixtures | Listening/transcript |
