@@ -67,6 +67,10 @@ function createRecorderService(deps) {
     diskSpaceCheckIntervalMs = 5 * 60 * 1000,
     setIntervalFn = setInterval,
     clearIntervalFn = clearInterval,
+    recordingsMaintenanceGate = null,
+    getBackendModuleArgs = null,
+    collectPythonProcessOutput = null,
+    scanRecordings = null,
   } = deps;
 
   if (typeof getRecordingsDir !== 'function') {
@@ -96,6 +100,21 @@ function createRecorderService(deps) {
   let quitStopRecoveryPromise = null;
   let diskSpaceMonitor = null;
   let lastEmittedDiskSpaceLevel = null;
+
+  // Interrupted-capture recovery (Task 10). Process-owned; push is invalidation only.
+  let recoveryStatus = 'idle'; // idle|discovering|available|recovering|error
+  /** @type {Array<object>} */
+  let recoveryInternalCandidates = [];
+  /** @type {Array<object>} */
+  let recoveryFailed = [];
+  let recoveryActiveCandidateIndex = null;
+  let recoveryPromptClaimed = false;
+  let recoveryActionPromise = null;
+  let recoveryProcess = null;
+  let recoveryScanImportPending = false;
+  let recoveryProgressMessage = null;
+  let recoveryLastBatchSize = 0;
+  let recoveryLastSuccessCount = 0;
 
   function diskSpaceLevelSeverity(level) {
     if (level === 'critical') {
@@ -202,6 +221,387 @@ function createRecorderService(deps) {
 
   function getCaptureState() {
     return { ...publishedCaptureState };
+  }
+
+  function sanitizeRecoveryMessage(message) {
+    const text = String(message || '').trim() || 'Recovery failed';
+    // Strip absolute paths and capture-dir names so renderer never sees filesystem paths.
+    return text
+      .replace(/\/[^\s:]+/g, '[path]')
+      .replace(/[A-Za-z]:\\[^\s:]+/g, '[path]')
+      .replace(/[^\s/\\]+\.capture/gi, '[capture]')
+      .slice(0, 240);
+  }
+
+  function toDisplayCandidate(candidate) {
+    return {
+      outputStem: candidate?.outputStem ?? null,
+      startedAtIso: candidate?.startedAtIso ?? null,
+      approxDurationSeconds: Number.isFinite(candidate?.approxDurationSeconds)
+        ? candidate.approxDurationSeconds
+        : null,
+      approxBytes: Number.isFinite(candidate?.approxBytes) ? candidate.approxBytes : null,
+      state: candidate?.state ?? null,
+    };
+  }
+
+  function computeRecoveryTotals(candidates) {
+    const list = Array.isArray(candidates) ? candidates : [];
+    let approxBytes = 0;
+    for (const item of list) {
+      if (Number.isFinite(item?.approxBytes)) {
+        approxBytes += item.approxBytes;
+      }
+    }
+    return { count: list.length, approxBytes };
+  }
+
+  function buildRecoveryStateSnapshot({ claimPrompt = false } = {}) {
+    const displayCandidates = recoveryInternalCandidates.map(toDisplayCandidate);
+    let promptEligible = false;
+    if (
+      claimPrompt
+      && recoveryStatus === 'available'
+      && displayCandidates.length > 0
+      && !recoveryPromptClaimed
+    ) {
+      recoveryPromptClaimed = true;
+      promptEligible = true;
+    }
+    return {
+      status: recoveryStatus,
+      candidates: displayCandidates,
+      totals: computeRecoveryTotals(displayCandidates),
+      activeCandidateIndex: recoveryActiveCandidateIndex,
+      failed: recoveryFailed.map((entry) => ({
+        candidateIndex: entry.candidateIndex,
+        code: entry.code || 'RECOVERY_FAILED',
+        message: sanitizeRecoveryMessage(entry.message),
+      })),
+      promptEligible,
+      progressMessage: recoveryProgressMessage,
+      lastBatchSize: recoveryLastBatchSize || null,
+      lastSuccessCount: recoveryLastSuccessCount || null,
+    };
+  }
+
+  function publishRecoveryStateInvalidation() {
+    try {
+      sendToRenderer('recording-recovery-state-changed', {});
+    } catch (error) {
+      console.warn('Failed to push recovery invalidation:', error?.message || error);
+    }
+  }
+
+  function setRecoveryStatus(nextStatus, { invalidate = true } = {}) {
+    recoveryStatus = nextStatus;
+    if (invalidate) {
+      publishRecoveryStateInvalidation();
+    }
+  }
+
+  function runCaptureRecoveryPython(extraArgs) {
+    if (typeof getBackendModuleArgs !== 'function' || typeof collectPythonProcessOutput !== 'function') {
+      return Promise.reject(new Error('Capture recovery Python wiring is unavailable.'));
+    }
+    const recordingsDir = getRecordingsDir();
+    const args = getBackendModuleArgs('audio.capture_recovery', [
+      '--recordings-dir', recordingsDir,
+      ...extraArgs,
+    ]);
+    const python = spawnTrackedPython(args, { cwd: pythonConfig.backendPath });
+    recoveryProcess = python;
+    const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
+
+    return new Promise((resolve, reject) => {
+      python.on('close', (code) => {
+        if (recoveryProcess === python) {
+          recoveryProcess = null;
+        }
+        try {
+          processOutput.assertStdoutWithinLimit();
+        } catch (error) {
+          reject(error);
+          return;
+        }
+        const stdout = processOutput.getStdout().trim();
+        try {
+          const parsed = stdout ? JSON.parse(stdout) : null;
+          resolve({ code, result: parsed, stderr: processOutput.getStderr() });
+        } catch (error) {
+          reject(new Error(`Failed to parse capture recovery output: ${error.message}`));
+        }
+      });
+      python.on('error', (error) => {
+        if (recoveryProcess === python) {
+          recoveryProcess = null;
+        }
+        reject(error);
+      });
+    });
+  }
+
+  async function discoverInterruptedCaptures() {
+    if (recoveryStatus === 'recovering') {
+      return buildRecoveryStateSnapshot();
+    }
+    setRecoveryStatus('discovering');
+    try {
+      const { result } = await runCaptureRecoveryPython(['--list']);
+      const candidates = Array.isArray(result?.candidates) ? result.candidates : [];
+      recoveryInternalCandidates = candidates
+        .filter((item) => item && typeof item.captureDir === 'string' && item.captureDir)
+        .map((item) => ({
+          captureDir: item.captureDir,
+          outputStem: item.outputStem ?? null,
+          startedAtIso: item.startedAtIso ?? null,
+          approxDurationSeconds: Number.isFinite(item.approxDurationSeconds)
+            ? item.approxDurationSeconds
+            : null,
+          approxBytes: Number.isFinite(item.approxBytes) ? item.approxBytes : null,
+          state: item.state ?? null,
+        }));
+      recoveryFailed = [];
+      recoveryActiveCandidateIndex = null;
+      recoveryProgressMessage = null;
+      recoveryScanImportPending = false;
+      if (recoveryInternalCandidates.length > 0) {
+        setRecoveryStatus('available');
+      } else {
+        setRecoveryStatus('idle');
+      }
+    } catch (error) {
+      console.warn('Interrupted capture discovery failed:', error?.message || error);
+      recoveryInternalCandidates = [];
+      recoveryFailed = [];
+      recoveryActiveCandidateIndex = null;
+      setRecoveryStatus('idle');
+    }
+    return buildRecoveryStateSnapshot();
+  }
+
+  function getRecordingRecoveryState() {
+    // First trusted query that observes available claims the one-per-launch prompt.
+    return buildRecoveryStateSnapshot({ claimPrompt: true });
+  }
+
+  function deferRecordingRecovery() {
+    if (recoveryStatus === 'error') {
+      // Dismiss: error → available over unresolved candidates; banner stays visible.
+      recoveryFailed = [];
+      recoveryActiveCandidateIndex = null;
+      recoveryProgressMessage = null;
+      if (recoveryInternalCandidates.length > 0 || recoveryScanImportPending) {
+        setRecoveryStatus('available');
+      } else {
+        setRecoveryStatus('idle');
+      }
+      return buildRecoveryStateSnapshot();
+    }
+
+    if (recoveryStatus === 'available') {
+      // Later: stay available; consume prompt eligibility for this launch.
+      recoveryPromptClaimed = true;
+      publishRecoveryStateInvalidation();
+      return buildRecoveryStateSnapshot();
+    }
+
+    return buildRecoveryStateSnapshot();
+  }
+
+  async function recoverOneCapture(candidate) {
+    const ffmpegPath = pythonConfig?.ffmpegPath || 'ffmpeg';
+    const { code, result } = await runCaptureRecoveryPython([
+      '--ffmpeg', ffmpegPath,
+      '--recover', candidate.captureDir,
+    ]);
+    if (result?.success && Array.isArray(result.recovered) && result.recovered.length > 0) {
+      return { ok: true, recovered: result.recovered[0] };
+    }
+    const failed = Array.isArray(result?.failed) && result.failed[0]
+      ? result.failed[0]
+      : { code: 'RECOVERY_FAILED', message: `Recovery exited with code ${code}` };
+    return {
+      ok: false,
+      code: failed.code || 'RECOVERY_FAILED',
+      message: failed.message || 'Recovery failed',
+    };
+  }
+
+  async function runRecoveryBatch() {
+    if (isQuitCommitted()) {
+      return {
+        success: false,
+        code: 'QUIT_IN_PROGRESS',
+        message: 'Cannot recover recordings while the app is quitting.',
+      };
+    }
+    if (getCaptureState().state !== 'idle') {
+      return {
+        success: false,
+        code: 'RECORDING_IN_PROGRESS',
+        message: 'Cannot recover recordings while a recording is active.',
+      };
+    }
+    if (!recordingsMaintenanceGate) {
+      return {
+        success: false,
+        code: 'RECOVERY_UNAVAILABLE',
+        message: 'Recordings maintenance gate is unavailable.',
+      };
+    }
+
+    const admission = await recordingsMaintenanceGate.acquire('recovery', {
+      waitForScanMs: recordingsMaintenanceGate.scanWaitMs || 5000,
+    });
+    if (!admission.ok) {
+      return {
+        success: false,
+        code: admission.code || 'RECORDINGS_MAINTENANCE_IN_PROGRESS',
+        message: admission.message || 'Recordings maintenance is in progress.',
+      };
+    }
+
+    // Re-check after any scan wait.
+    if (isQuitCommitted() || getCaptureState().state !== 'idle') {
+      recordingsMaintenanceGate.release('recovery');
+      return {
+        success: false,
+        code: getCaptureState().state !== 'idle' ? 'RECORDING_IN_PROGRESS' : 'QUIT_IN_PROGRESS',
+        message: getCaptureState().state !== 'idle'
+          ? 'Cannot recover recordings while a recording is active.'
+          : 'Cannot recover recordings while the app is quitting.',
+      };
+    }
+
+    const batch = recoveryInternalCandidates.slice();
+    if (batch.length === 0 && !recoveryScanImportPending) {
+      recordingsMaintenanceGate.release('recovery');
+      setRecoveryStatus('idle');
+      return { success: true, recovered: 0, failed: 0 };
+    }
+
+    setRecoveryStatus('recovering');
+    recoveryFailed = [];
+    recoveryActiveCandidateIndex = 0;
+    recoveryProgressMessage = null;
+    recoveryLastBatchSize = batch.length;
+    recoveryLastSuccessCount = 0;
+
+    const unresolved = [];
+    try {
+      for (let index = 0; index < batch.length; index += 1) {
+        if (isQuitCommitted()) {
+          // Quit may kill the child; leave remaining candidates for next launch.
+          for (let rest = index; rest < batch.length; rest += 1) {
+            unresolved.push({
+              candidate: batch[rest],
+              code: 'QUIT_IN_PROGRESS',
+              message: 'Recovery interrupted because the app is quitting.',
+            });
+          }
+          break;
+        }
+
+        recoveryActiveCandidateIndex = index;
+        publishRecoveryStateInvalidation();
+        const candidate = batch[index];
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          const outcome = await recoverOneCapture(candidate);
+          if (!outcome.ok) {
+            const failure = {
+              candidate,
+              code: outcome.code || 'RECOVERY_FAILED',
+              message: outcome.message || 'Recovery failed',
+            };
+            unresolved.push(failure);
+            recoveryFailed.push({
+              candidateIndex: index,
+              code: failure.code,
+              message: failure.message,
+            });
+            publishRecoveryStateInvalidation();
+          }
+        } catch (error) {
+          const failure = {
+            candidate,
+            code: 'RECOVERY_FAILED',
+            message: error?.message || 'Recovery failed',
+          };
+          unresolved.push(failure);
+          recoveryFailed.push({
+            candidateIndex: index,
+            code: failure.code,
+            message: failure.message,
+          });
+          publishRecoveryStateInvalidation();
+        }
+      }
+
+      const anySucceeded = unresolved.length < batch.length;
+      let scanOk = true;
+      if ((anySucceeded || recoveryScanImportPending) && typeof scanRecordings === 'function') {
+        try {
+          await scanRecordings();
+          recoveryScanImportPending = false;
+        } catch (error) {
+          scanOk = false;
+          recoveryScanImportPending = true;
+        }
+      }
+
+      if (unresolved.length === 0 && scanOk) {
+        recoveryInternalCandidates = [];
+        recoveryFailed = [];
+        recoveryActiveCandidateIndex = null;
+        recoveryProgressMessage = null;
+        recoveryLastBatchSize = 0;
+        recoveryLastSuccessCount = 0;
+        setRecoveryStatus('idle');
+        return { success: true, recovered: batch.length, failed: 0 };
+      }
+
+      // Keep only unresolved candidates so Retry never re-runs successes.
+      recoveryLastSuccessCount = batch.length - unresolved.length;
+      recoveryInternalCandidates = unresolved.map((entry) => entry.candidate);
+      recoveryFailed = unresolved.map((entry, index) => ({
+        candidateIndex: index,
+        code: entry.code || 'RECOVERY_FAILED',
+        message: entry.message || 'Recovery failed',
+      }));
+      if (!scanOk) {
+        recoveryFailed.push({
+          candidateIndex: null,
+          code: 'SCAN_IMPORT_FAILED',
+          message: 'Scan/import after recovery failed',
+        });
+      }
+      recoveryActiveCandidateIndex = null;
+      recoveryProgressMessage = null;
+      setRecoveryStatus('error');
+      return {
+        success: false,
+        recovered: batch.length - unresolved.length,
+        failed: unresolved.length || (scanOk ? 0 : 1),
+      };
+    } finally {
+      recordingsMaintenanceGate.release('recovery');
+      recoveryProcess = null;
+    }
+  }
+
+  function recoverInterruptedCaptures() {
+    if (recoveryActionPromise) {
+      return recoveryActionPromise;
+    }
+
+    // Retry from error already has candidates narrowed to unresolved failures.
+    // Scan-import-only Retry keeps an empty candidate list with the pending flag.
+    recoveryActionPromise = runRecoveryBatch().finally(() => {
+      recoveryActionPromise = null;
+    });
+    return recoveryActionPromise;
   }
 
   function clearRecordingRuntimeState(reason, options = {}) {
@@ -694,6 +1094,21 @@ function createRecorderService(deps) {
       return getCaptureState();
     });
 
+    ipcMain.handle('get-recording-recovery-state', async (event) => {
+      assertTrustedRendererSender(event);
+      return getRecordingRecoveryState();
+    });
+
+    ipcMain.handle('recover-recording', async (event) => {
+      assertTrustedRendererSender(event);
+      return recoverInterruptedCaptures();
+    });
+
+    ipcMain.handle('defer-recording-recovery', async (event) => {
+      assertTrustedRendererSender(event);
+      return deferRecordingRecovery();
+    });
+
     ipcMain.handle('run-recording-preflight', async (event, { micId, loopbackId }) => {
       const [deviceCheck, diskCheck, audioOutputCheck, permissionCheck] = await Promise.all([
         validateSelectedDevices({ micId, loopbackId }),
@@ -725,7 +1140,17 @@ function createRecorderService(deps) {
         };
       }
 
-      if (isRecordingsScanInProgress()) {
+      if (recordingsMaintenanceGate) {
+        const admission = await recordingsMaintenanceGate.admitStartRecording();
+        if (!admission.ok) {
+          return {
+            success: false,
+            code: admission.code || 'RECORDING_SCAN_IN_PROGRESS',
+            message: admission.message
+              || 'Wait for recording recovery scan to finish before starting a new recording.',
+          };
+        }
+      } else if (isRecordingsScanInProgress()) {
         return {
           success: false,
           code: 'RECORDING_SCAN_IN_PROGRESS',
@@ -1273,6 +1698,10 @@ function createRecorderService(deps) {
     stopRecordingProcess,
     waitForRecordingStop,
     parseRecordingStopResultFromStdout,
+    discoverInterruptedCaptures,
+    getRecordingRecoveryState,
+    recoverInterruptedCaptures,
+    deferRecordingRecovery,
     registerIpc,
   };
 }

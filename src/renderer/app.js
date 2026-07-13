@@ -8,6 +8,7 @@ const MAX_PROGRESS_LOG_ENTRIES = 250;
 const AI_ADDON_PROGRESS_LOG_INTERVAL_MS = 1000;
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const { getRecordButtonAction, getRecordingPresenceView, canHydratedRendererStopRecording } = window.recordingStateHelpers;
+const { getRecoveryPromptView, getRecoveryBannerView } = window.recoveryUiHelpers;
 const {
   buildAiAddonControlState,
   buildHomeAiAddonPrompt,
@@ -59,6 +60,19 @@ const timer = document.getElementById('timer');
 const recordingPresenceEl = document.getElementById('recording-presence');
 const recordingPresenceLabel = document.getElementById('recording-presence-label');
 const recordingPresenceTime = document.getElementById('recording-presence-time');
+const recoveryBannerEl = document.getElementById('recording-recovery-banner');
+const recoveryBannerText = document.getElementById('recording-recovery-banner-text');
+const recoveryBannerSpinner = document.getElementById('recording-recovery-banner-spinner');
+const recoveryBannerPrimary = document.getElementById('recording-recovery-banner-primary');
+const recoveryBannerSecondary = document.getElementById('recording-recovery-banner-secondary');
+const recoveryModalEl = document.getElementById('recording-recovery-modal');
+const recoveryModalTitle = document.getElementById('recording-recovery-title');
+const recoveryModalBody = document.getElementById('recording-recovery-body');
+const recoveryModalDetail = document.getElementById('recording-recovery-detail');
+const recoveryModalCandidateList = document.getElementById('recording-recovery-candidate-list');
+const recoveryModalFooter = document.getElementById('recording-recovery-footer');
+const recoveryModalNowBtn = document.getElementById('recording-recovery-now-btn');
+const recoveryModalLaterBtn = document.getElementById('recording-recovery-later-btn');
 const progressLog = document.getElementById('progress-log');
 const transcriptOutput = document.getElementById('transcript-output');
 const transcriptActions = document.getElementById('transcript-actions');
@@ -76,6 +90,20 @@ let activeCountdownCancel = null;
 let timerInterval = null;
 let recordingPresencePollTimer = null;
 let frozenPresenceElapsedText = null;
+let recoveryState = {
+  status: 'idle',
+  candidates: [],
+  totals: { count: 0, approxBytes: 0 },
+  activeCandidateIndex: null,
+  failed: [],
+  promptEligible: false,
+};
+let recoveryQueryPromise = null;
+let recoveryQueryGeneration = 0;
+let recoveryPromptQueued = false;
+let recoveryPromptOpen = false;
+let recoveryFocusRestoreEl = null;
+let recoveryActionBusy = false;
 let currentAudioFile = null;
 let currentRecordingDurationSeconds = 0;
 let currentMeetingId = null;
@@ -968,7 +996,9 @@ async function init() {
         audioVisualizer = new AudioVisualizer();
       }
       setupEventListeners();
+      setupRecordingRecoveryUi();
       await hydrateRecordingStateFromMain();
+      await queryRecordingRecoveryState();
     } catch (hydrateError) {
       console.error('Failed to hydrate recording state:', hydrateError);
       hydratedCaptureState = false;
@@ -1137,6 +1167,9 @@ async function showFirstTimeSetup(modelSize) {
     // Wait a moment then remove overlay
     await new Promise(resolve => setTimeout(resolve, 1500));
     modal.classList.add('hidden');
+    if (recoveryPromptQueued) {
+      applyRecoveryPromptView();
+    }
   } catch (error) {
     clearInterval(progressInterval);
     const canceled = downloadCanceled
@@ -1154,6 +1187,9 @@ async function showFirstTimeSetup(modelSize) {
     // Wait for user to see error, then continue anyway
     await new Promise(resolve => setTimeout(resolve, 3000));
     modal.classList.add('hidden');
+    if (recoveryPromptQueued) {
+      applyRecoveryPromptView();
+    }
   } finally {
     clearInterval(progressInterval);
     if (cancelBtn) {
@@ -1993,6 +2029,241 @@ function updateRecordingPresenceUI(elapsedTextOverride = null) {
     } else {
       recordingPresenceTime.hidden = true;
     }
+  }
+
+  updateRecordingRecoveryBanner();
+}
+
+function isFtueModalOpen() {
+  const modal = document.getElementById('ftue-modal');
+  return Boolean(modal && !modal.classList.contains('hidden'));
+}
+
+function updateRecordingRecoveryBanner() {
+  if (!recoveryBannerEl) {
+    return;
+  }
+  const view = getRecoveryBannerView(recoveryState, recordingState, formatBytes);
+  recoveryBannerEl.hidden = !view.visible;
+  recoveryBannerEl.classList.remove('available', 'recovering', 'error');
+  if (view.modifier) {
+    recoveryBannerEl.classList.add(view.modifier);
+  }
+  if (recoveryBannerText) {
+    recoveryBannerText.textContent = view.text || '';
+  }
+  if (recoveryBannerSpinner) {
+    recoveryBannerSpinner.hidden = !view.showSpinner;
+  }
+  if (recoveryBannerPrimary) {
+    if (view.primaryAction) {
+      recoveryBannerPrimary.hidden = false;
+      recoveryBannerPrimary.textContent = view.primaryAction;
+      recoveryBannerPrimary.disabled = recoveryActionBusy || recordingState !== 'idle';
+    } else {
+      recoveryBannerPrimary.hidden = true;
+    }
+  }
+  if (recoveryBannerSecondary) {
+    if (view.secondaryAction) {
+      recoveryBannerSecondary.hidden = false;
+      recoveryBannerSecondary.textContent = view.secondaryAction;
+      recoveryBannerSecondary.disabled = recoveryActionBusy;
+    } else {
+      recoveryBannerSecondary.hidden = true;
+    }
+  }
+}
+
+function applyRecoveryPromptView() {
+  if (!recoveryModalEl) {
+    return;
+  }
+  const view = getRecoveryPromptView(recoveryState, formatBytes);
+  if (!view.visible) {
+    if (recoveryPromptOpen) {
+      closeRecoveryPrompt({ deferred: false });
+    }
+    return;
+  }
+  if (isFtueModalOpen()) {
+    recoveryPromptQueued = true;
+    return;
+  }
+  openRecoveryPrompt(view);
+}
+
+function openRecoveryPrompt(view) {
+  if (!recoveryModalEl || recoveryPromptOpen) {
+    return;
+  }
+  recoveryPromptQueued = false;
+  recoveryPromptOpen = true;
+  recoveryFocusRestoreEl = document.activeElement;
+  if (recoveryModalTitle) recoveryModalTitle.textContent = view.title || '';
+  if (recoveryModalBody) recoveryModalBody.textContent = view.body || '';
+  if (recoveryModalDetail) recoveryModalDetail.textContent = view.detail || '';
+  if (recoveryModalFooter) recoveryModalFooter.textContent = view.footer || '';
+  if (recoveryModalCandidateList) {
+    recoveryModalCandidateList.replaceChildren();
+    (view.candidateLines || []).forEach((line) => {
+      const item = document.createElement('li');
+      item.textContent = line;
+      recoveryModalCandidateList.appendChild(item);
+    });
+  }
+  if (recoveryModalNowBtn) {
+    recoveryModalNowBtn.textContent = view.primaryLabel || 'Recover Now';
+    recoveryModalNowBtn.disabled = recoveryActionBusy || recordingState !== 'idle';
+  }
+  if (recoveryModalLaterBtn) {
+    recoveryModalLaterBtn.textContent = view.secondaryLabel || 'Later';
+    recoveryModalLaterBtn.disabled = recoveryActionBusy;
+  }
+  recoveryModalEl.classList.remove('hidden');
+  recoveryModalNowBtn?.focus();
+}
+
+function closeRecoveryPrompt({ deferred = false } = {}) {
+  if (!recoveryModalEl) {
+    return;
+  }
+  recoveryModalEl.classList.add('hidden');
+  recoveryPromptOpen = false;
+  if (!deferred) {
+    recoveryPromptQueued = false;
+  }
+  const restore = recoveryFocusRestoreEl;
+  recoveryFocusRestoreEl = null;
+  if (restore && typeof restore.focus === 'function') {
+    try {
+      restore.focus();
+    } catch (_) {
+      // Element may be gone after navigation.
+    }
+  }
+}
+
+function applyRecoveryState(nextState) {
+  recoveryState = nextState && typeof nextState === 'object'
+    ? nextState
+    : {
+      status: 'idle',
+      candidates: [],
+      totals: { count: 0, approxBytes: 0 },
+      activeCandidateIndex: null,
+      failed: [],
+      promptEligible: false,
+    };
+  updateRecordingRecoveryBanner();
+  applyRecoveryPromptView();
+}
+
+async function queryRecordingRecoveryState() {
+  if (!window.electronAPI?.getRecordingRecoveryState) {
+    return recoveryState;
+  }
+  const generation = ++recoveryQueryGeneration;
+  if (recoveryQueryPromise) {
+    try {
+      await recoveryQueryPromise;
+    } catch (_) {
+      // Prior query errors should not block a fresh fetch.
+    }
+  }
+  recoveryQueryPromise = window.electronAPI.getRecordingRecoveryState()
+    .then((state) => {
+      if (generation === recoveryQueryGeneration) {
+        applyRecoveryState(state);
+      }
+      return state;
+    })
+    .finally(() => {
+      if (generation === recoveryQueryGeneration) {
+        recoveryQueryPromise = null;
+      }
+    });
+  return recoveryQueryPromise;
+}
+
+function invalidateRecordingRecoveryState() {
+  // Push payloads are ignored; treat as invalidation only.
+  void queryRecordingRecoveryState();
+}
+
+async function handleRecoverRecordingAction() {
+  if (recoveryActionBusy || recordingState !== 'idle') {
+    return;
+  }
+  recoveryActionBusy = true;
+  updateRecordingRecoveryBanner();
+  if (recoveryModalNowBtn) recoveryModalNowBtn.disabled = true;
+  if (recoveryPromptOpen) {
+    closeRecoveryPrompt();
+  }
+  try {
+    await window.electronAPI.recoverRecording();
+  } catch (error) {
+    console.warn('Recover recording failed:', error);
+  } finally {
+    recoveryActionBusy = false;
+    await queryRecordingRecoveryState();
+    try {
+      await loadMeetingHistory();
+    } catch (_) {
+      // History refresh is best-effort after recovery.
+    }
+  }
+}
+
+async function handleDeferRecordingRecoveryAction() {
+  if (recoveryActionBusy) {
+    return;
+  }
+  recoveryActionBusy = true;
+  if (recoveryPromptOpen) {
+    closeRecoveryPrompt();
+  }
+  try {
+    const state = await window.electronAPI.deferRecordingRecovery();
+    applyRecoveryState(state);
+  } catch (error) {
+    console.warn('Defer recording recovery failed:', error);
+    await queryRecordingRecoveryState();
+  } finally {
+    recoveryActionBusy = false;
+    updateRecordingRecoveryBanner();
+  }
+}
+
+function setupRecordingRecoveryUi() {
+  recoveryBannerPrimary?.addEventListener('click', () => {
+    void handleRecoverRecordingAction();
+  });
+  recoveryBannerSecondary?.addEventListener('click', () => {
+    void handleDeferRecordingRecoveryAction();
+  });
+  recoveryModalNowBtn?.addEventListener('click', () => {
+    void handleRecoverRecordingAction();
+  });
+  recoveryModalLaterBtn?.addEventListener('click', () => {
+    void handleDeferRecordingRecoveryAction();
+  });
+  recoveryModalEl?.addEventListener('click', (event) => {
+    if (event.target === recoveryModalEl) {
+      void handleDeferRecordingRecoveryAction();
+    }
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && recoveryPromptOpen) {
+      event.preventDefault();
+      void handleDeferRecordingRecoveryAction();
+    }
+  });
+  if (window.electronAPI?.onRecordingRecoveryStateChanged) {
+    window.electronAPI.onRecordingRecoveryStateChanged(() => {
+      invalidateRecordingRecoveryState();
+    });
   }
 }
 

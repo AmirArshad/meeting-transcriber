@@ -415,6 +415,89 @@ h5 {
   opacity: 0.92;
 }
 
+/* Interrupted-capture recovery banner (never uses live-capture red treatment) */
+.recording-recovery-banner[hidden] {
+  display: none !important;
+}
+
+.recording-recovery-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 22px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(180, 140, 60, 0.35);
+  background: rgba(245, 200, 90, 0.12);
+  color: var(--text-primary, #1c1917);
+  font-size: 0.92rem;
+  line-height: 1.35;
+}
+
+.recording-recovery-banner.recovering {
+  border-color: rgba(160, 140, 80, 0.4);
+  background: rgba(245, 200, 90, 0.08);
+}
+
+.recording-recovery-banner.error {
+  border-color: rgba(180, 140, 60, 0.45);
+  background: rgba(245, 200, 90, 0.14);
+}
+
+.recording-recovery-banner-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.recording-recovery-banner-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.recording-recovery-spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid rgba(120, 100, 40, 0.25);
+  border-top-color: rgba(120, 100, 40, 0.85);
+  animation: recording-recovery-spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+.recording-recovery-spinner[hidden] {
+  display: none !important;
+}
+
+@keyframes recording-recovery-spin {
+  to { transform: rotate(360deg); }
+}
+
+.recording-recovery-detail {
+  margin: 0.75rem 0 0.35rem;
+  color: var(--text-secondary, #57534e);
+  font-size: 0.92rem;
+}
+
+.recording-recovery-candidate-list {
+  margin: 0.35rem 0 0.75rem;
+  padding-left: 1.1rem;
+  color: var(--text-secondary, #57534e);
+  font-size: 0.9rem;
+}
+
+.recording-recovery-footer {
+  margin: 0.75rem 0 0;
+  color: var(--text-secondary, #78716c);
+  font-size: 0.85rem;
+}
+
+.recording-recovery-modal-content .modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
 /* ---- Content area (scroll context) ---- */
 .app-content {
   flex: 1;

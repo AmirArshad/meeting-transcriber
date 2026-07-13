@@ -74,6 +74,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   startRecording: (options) => ipcRenderer.invoke('start-recording', options),
   stopRecording: () => ipcRenderer.invoke('stop-recording'),
   getRecordingState: () => ipcRenderer.invoke('get-recording-state'),
+  getRecordingRecoveryState: () => ipcRenderer.invoke('get-recording-recovery-state'),
+  recoverRecording: () => ipcRenderer.invoke('recover-recording'),
+  deferRecordingRecovery: () => ipcRenderer.invoke('defer-recording-recovery'),
 
   // Transcription
   transcribeAudio: (options) => ipcRenderer.invoke('transcribe-audio', options),
@@ -143,5 +146,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onAudioLevels: (callback) => addListener('audio-levels', callback),
   onRecordingWarning: (callback) => addListener('recording-warning', callback),
   onRecordingFailed: (callback) => addListener('recording-failed', callback),
+  onRecordingRecoveryStateChanged: (callback) => addListener('recording-recovery-state-changed', callback),
   onUpdateAvailable: (callback) => addListener('update-available', callback),
 });

@@ -96,6 +96,19 @@ Ship static `build/iconRecording.png` (18×18) and `build/iconRecording@2x.png` 
 - [ ] **Stop stages (Release 2 Task 6):** same as macOS — visible stage changes during stop; capture (`REC`) vs finalization (`Finishing recording...`) distinguishable.
 - [ ] **Disk reserve (Release 2 Task 6):** with free space below 10 GB (or a test double), confirm a single `recording-warning` / native safety toast when crossing warning, and escalation to critical below 2 GB; recording must **not** auto-stop.
 
+## Interrupted capture recovery (Release 2 Task 10)
+
+- [ ] Startup with unfinished `.capture` session(s): main window appears promptly; discovery is silent until results exist (no banner flash during `discovering`).
+- [ ] Prompt copy shows candidate count + approximate disk usage; singular/plural matches count; no filesystem paths in UI.
+- [ ] `Later` → status stays `available`, prompt does not reappear this launch, banner remains on every tab with count/size; new recording still starts.
+- [ ] Reload renderer during `available` or `recovering`: banner restores; prompt does **not** show a second time (`promptEligible` already claimed).
+- [ ] Accepted recovery: banner shows `Recovering interrupted recording… (n of m)` (distinct from stopping pill `Finishing recording...`); app does not look frozen.
+- [ ] Forced failure (corrupt fixture): error banner with `Retry`; all capture files kept; next launch re-prompts.
+- [ ] Partial failure: copy distinguishes finished vs remaining; `Retry` excludes already-successful candidates; `Dismiss` returns to `available` with unresolved set still banner-visible.
+- [ ] Quit during active recovery: unfinished candidates recoverable next launch; no quit-triggered capture deletion.
+- [ ] `Recover Now` refused while recording; recovery banner hidden while capture state ≠ `idle`; concurrent Recover activations join one action.
+- [ ] `start-recording` during startup scan waits briefly for gate release instead of hard busy error; scan and accepted recovery never overlap file mutation.
+
 ## Cross-platform
 
 - [ ] Verify model preload/download state is reported correctly in the UI.

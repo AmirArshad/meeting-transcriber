@@ -69,7 +69,7 @@ Implementation plan: `docs/superpowers/plans/2026-07-13-recording-awareness-and-
 - [x] [Risk: High] Replace whole-recording joins/resampling/mixing with bounded multi-pass finalization and recoverable WAV/RF64-to-Opus output.
   - Spool stop path uses `finalize_capture` (`windows-v1` / `macos-v1`); explicit wav muxer for `final.pcm.tmp`; committedFrames boundary; ffmpeg decode verify before cleanup; stable-wav recovery paths. RAM path remains behind the flag until Task 10.
 - [ ] [Risk: High] Discover interrupted captures async after window creation, offer `Recover Now` / `Later`, serialize accepted recovery with scan/start through one maintenance gate, complete 2-hour/4-hour hardware evidence, then remove the RAM path and rollout flag.
-  - **Task 10 in progress** on `feature/long-recording-safety-r2`: Steps 1–4 (CLI + main gate/IPC + renderer) before Step 5 hardware evidence; do not remove `AVANEVIS_CAPTURE_SPOOL` / RAM path until Step 5 passes.
+  - **Task 10 Steps 1–4 landed** (CLI + maintenance gate + IPC + renderer prompt/banner). **Stopped before Step 5** hardware evidence (2h/4h + forced-kill recovery). Do not remove `AVANEVIS_CAPTURE_SPOOL` / RAM path until Step 5 passes or explicit approval.
 
 ## Deferred Product And Architecture Backlog
 
