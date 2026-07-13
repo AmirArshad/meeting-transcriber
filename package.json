@@ -1,7 +1,7 @@
 {
   "name": "avanevis",
   "version": "2.4.3",
-  "description": "AI-powered meeting transcription with desktop audio capture",
+  "description": "AvaNevis private meeting recorder and local AI transcriber",
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
@@ -72,6 +72,7 @@
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.inherit.plist",
       "extendInfo": {
+        "CFBundleDisplayName": "AvaNevis Meeting Transcriber",
         "NSMicrophoneUsageDescription": "AvaNevis needs microphone access to record your voice during meetings.",
         "NSAudioCaptureUsageDescription": "AvaNevis needs system audio access to capture desktop audio locally for meeting transcription.",
         "NSAppleMusicUsageDescription": "AvaNevis does not access your music library.",
@@ -177,6 +178,18 @@
       {
         "from": "build/iconTemplate@2x.png",
         "to": "iconTemplate@2x.png"
+      },
+      {
+        "from": "build/iconRecording.png",
+        "to": "iconRecording.png"
+      },
+      {
+        "from": "build/iconRecording@2x.png",
+        "to": "iconRecording@2x.png"
+      },
+      {
+        "from": "build/recording-overlay.png",
+        "to": "recording-overlay.png"
       },
       {
         "from": "build/resources/legal",

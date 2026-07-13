@@ -109,7 +109,33 @@ const { createRecorderService } = require('./main/recorder-service');
 const {
   createRecordingPresenceService,
   buildWindowCloseDialogOptions,
+  isActiveCaptureState,
 } = require('./main/recording-presence-service');
+
+// Stable Windows toast activator (never use Electron's per-run generated CLSID in packaged builds).
+const AVANEVIS_TOAST_ACTIVATOR_CLSID = '{A7E2C4F1-9B83-4D2E-8F61-1C0A9E5B7D33}';
+const AVANEVIS_APP_USER_MODEL_ID = 'com.avanevis.app';
+
+// Single-instance lock before readiness. Secondary instances exit without tray/window.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    showMainWindow();
+  });
+}
+
+if (process.platform === 'win32') {
+  app.setAppUserModelId(AVANEVIS_APP_USER_MODEL_ID);
+  if (typeof app.setToastActivatorCLSID === 'function') {
+    try {
+      app.setToastActivatorCLSID(AVANEVIS_TOAST_ACTIVATOR_CLSID);
+    } catch (error) {
+      console.warn('Failed to set Toast Activator CLSID:', error.message);
+    }
+  }
+}
 
 // Use Electron's default userData path, which handles packaging correctly
 // This is typically: C:\Users\<username>\AppData\Roaming\AvaNevis
@@ -133,6 +159,34 @@ let recorderService = null;
 let recordingPresenceService = null;
 let appStartupComplete = false;
 let revealWindowWhenReady = false;
+
+function showMainWindow() {
+  if (!appStartupComplete || !mainWindow || mainWindow.isDestroyed()) {
+    revealWindowWhenReady = true;
+    return;
+  }
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function toggleMainWindow() {
+  if (mainWindow && mainWindow.isVisible() && !mainWindow.isMinimized()) {
+    if (
+      process.platform === 'win32'
+      && recordingPresenceService
+      && recordingPresenceService.getCaptureState().state !== 'idle'
+    ) {
+      mainWindow.minimize();
+      return;
+    }
+    mainWindow.hide();
+    return;
+  }
+  showMainWindow();
+}
 
 // ============================================================================
 // Python runtime service (owns the shared activeProcesses tracking array)
@@ -721,34 +775,6 @@ recorderService = createRecorderService({
 });
 recorderService.registerIpc(ipcMain);
 
-function showMainWindow() {
-  if (!appStartupComplete || !mainWindow || mainWindow.isDestroyed()) {
-    revealWindowWhenReady = true;
-    return;
-  }
-  if (mainWindow.isMinimized()) {
-    mainWindow.restore();
-  }
-  mainWindow.show();
-  mainWindow.focus();
-}
-
-function toggleMainWindow() {
-  if (mainWindow && mainWindow.isVisible() && !mainWindow.isMinimized()) {
-    if (
-      process.platform === 'win32'
-      && recordingPresenceService
-      && recordingPresenceService.getCaptureState().state !== 'idle'
-    ) {
-      mainWindow.minimize();
-      return;
-    }
-    mainWindow.hide();
-    return;
-  }
-  showMainWindow();
-}
-
 // Presence may be constructed before ready; tray/Dock/taskbar mutations wait for createTray().
 recordingPresenceService = createRecordingPresenceService({
   app,
@@ -1087,71 +1113,21 @@ async function runStartupChecks() {
   }
 }
 
-// Create the system tray
+// Create the system tray via the recording presence service (Gate A menu intentionally replaced).
 function createTray() {
-  // Platform-specific icon paths
-  // macOS: Uses template PNG images that adapt to light/dark mode
-  // Windows: Uses ICO file
-  let iconPath;
-
-  if (process.platform === 'darwin') {
-    // macOS: Use template image for menu bar
-    iconPath = app.isPackaged
-      ? path.join(process.resourcesPath, 'iconTemplate.png')
-      : path.join(__dirname, '../build/iconTemplate.png');
-  } else {
-    // Windows/Linux: Use ICO file
-    iconPath = app.isPackaged
-      ? path.join(process.resourcesPath, 'icon.ico')
-      : path.join(__dirname, '../build/icon.ico');
+  if (!recordingPresenceService) {
+    return;
   }
-
-  tray = new Tray(iconPath);
-
-  // macOS: Mark as template image for automatic dark mode support
-  if (process.platform === 'darwin') {
-    tray.setImage(iconPath);  // Ensure template image is used
-  }
-
-  const contextMenu = Menu.buildFromTemplate([
-    {
-      label: 'Show/Hide Window',
-      click: () => {
-        if (mainWindow.isVisible()) {
-          mainWindow.hide();
-        } else {
-          mainWindow.show();
-          mainWindow.focus();
-        }
-      }
-    },
-    {
-      type: 'separator'
-    },
-    {
-      label: 'Quit',
-      click: () => {
-        app.quit();
-      }
-    }
-  ]);
-
-  tray.setToolTip('AvaNevis');
-  tray.setContextMenu(contextMenu);
-
-  // Show/hide window on tray icon click
-  tray.on('click', () => {
-    if (mainWindow.isVisible()) {
-      mainWindow.hide();
-    } else {
-      mainWindow.show();
-      mainWindow.focus();
-    }
-  });
+  tray = recordingPresenceService.createTray();
 }
 
 // Create the main application window
 function createWindow() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    showMainWindow();
+    return;
+  }
+
   const windowIcon = getWindowIconPath();
   const rendererEntryPath = path.join(__dirname, 'renderer', 'index.html');
   const rendererEntryUrl = pathToFileURL(rendererEntryPath).toString();
@@ -1197,26 +1173,25 @@ function createWindow() {
     mainWindow.webContents.openDevTools();
   }
 
-  // Prevent window from closing, minimize to tray instead
+  // Prevent window from closing; recording-aware minimize/hide vs quit.
   mainWindow.on('close', (event) => {
     if (!isQuitting) {
       event.preventDefault();
 
-      // Show dialog to ask user what they want to do
-      dialog.showMessageBox(mainWindow, {
-        type: 'question',
-        title: 'Minimize to Tray',
-        message: 'Would you like to close the app or minimize it to the system tray?',
-        detail: 'Minimizing to tray keeps the app running in the background.',
-        buttons: ['Minimize to Tray', 'Close App', 'Cancel'],
-        defaultId: 0,
-        cancelId: 2
-      }).then(result => {
+      const captureState = recordingPresenceService
+        ? recordingPresenceService.getCaptureState()
+        : { state: 'idle', sessionId: null, startedAt: null };
+      const dialogOptions = buildWindowCloseDialogOptions(captureState, process.platform);
+      const { keepRecordingAction, ...messageBoxOptions } = dialogOptions;
+
+      dialog.showMessageBox(mainWindow, messageBoxOptions).then(result => {
         if (result.response === 0) {
-          // Minimize to tray
-          mainWindow.hide();
+          if (keepRecordingAction === 'minimize') {
+            mainWindow.minimize();
+          } else {
+            mainWindow.hide();
+          }
         } else if (result.response === 1) {
-          // Close app
           app.quit();
         }
         // Cancel does nothing
@@ -1378,6 +1353,10 @@ function checkMacOSPermissions() {
 
 // Initialize app
 app.whenReady().then(async () => {
+  if (!gotSingleInstanceLock) {
+    return;
+  }
+
   // IMPORTANT: Log all app paths for debugging
   console.log('=== App Path Configuration ===');
   console.log('app.getPath("userData"):', app.getPath('userData'));
@@ -1401,6 +1380,11 @@ app.whenReady().then(async () => {
 
   createTray();
   createWindow();
+  appStartupComplete = true;
+  if (revealWindowWhenReady) {
+    revealWindowWhenReady = false;
+    showMainWindow();
+  }
 
   // macOS Screen Recording checks can trigger OS prompts, so they run only as
   // part of recording preflight when the user explicitly starts recording.
@@ -1417,6 +1401,7 @@ app.whenReady().then(async () => {
   }, 5000);
 
   app.on('activate', () => {
+    showMainWindow();
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
     }
@@ -1502,8 +1487,11 @@ app.on('before-quit', (event) => {
 
       pythonRuntime.drainActiveProcesses();
 
-      // Clean up tray
-      if (tray) {
+      // Clean up tray / presence
+      if (recordingPresenceService) {
+        recordingPresenceService.destroy();
+        tray = null;
+      } else if (tray) {
         tray.destroy();
         tray = null;
       }
