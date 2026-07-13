@@ -430,6 +430,11 @@ function createRecordingPresenceService(deps) {
     syncPlatformPresence();
   }
 
+  /** Re-apply tray/Dock/overlay for the current capture state (e.g. after window recreate). */
+  function refreshPresentation() {
+    syncPlatformPresence();
+  }
+
   function createTray() {
     if (tray) {
       return tray;
@@ -471,6 +476,7 @@ function createRecordingPresenceService(deps) {
     createTray,
     updateCaptureState,
     getCaptureState,
+    refreshPresentation,
     destroy,
     // Test seams
     _applyTrayPresentation: applyTrayPresentation,

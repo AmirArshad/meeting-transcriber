@@ -245,3 +245,128 @@ test('stale process close cannot publish idle over a newer recording session', a
   await stopSecond;
   assert.equal(service.getCaptureState().state, 'idle');
 });
+
+test('synchronous start setup failure clears starting state and power-save blocker', async () => {
+  const captureStates = [];
+  let powerSaveStopped = false;
+  const { deps } = createMinimalDeps({
+    onCaptureStateChanged: (state) => captureStates.push(state),
+    isQuitCommitted: () => false,
+    powerSaveBlocker: {
+      start: () => 7,
+      stop() {
+        powerSaveStopped = true;
+      },
+    },
+    spawnTrackedPython() {
+      throw new Error('spawn exploded');
+    },
+  });
+
+  const service = createRecorderService(deps);
+  const handlers = {};
+  service.registerIpc({
+    handle(channel, handler) {
+      handlers[channel] = handler;
+    },
+  });
+
+  const result = await handlers['start-recording'](
+    { sender: {} },
+    { micId: 0, loopbackId: 1, isFirstRecording: false },
+  );
+  assert.equal(result.success, false);
+  assert.equal(result.code, 'STARTUP_FAILED');
+  assert.equal(captureStates[0].state, 'starting');
+  assert.equal(captureStates.at(-1).state, 'idle');
+  assert.equal(service.getCaptureState().state, 'idle');
+  assert.equal(powerSaveStopped, true);
+});
+
+test('late recording_started from a timed-out startup cannot overwrite a newer session', async () => {
+  const { EventEmitter } = require('node:events');
+  const captureStates = [];
+  const { deps } = createMinimalDeps({
+    onCaptureStateChanged: (state) => captureStates.push(state),
+    isQuitCommitted: () => false,
+  });
+
+  function makeProc() {
+    const proc = new EventEmitter();
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+    proc.stdin = { write() {} };
+    proc.killed = false;
+    proc.pid = Math.floor(Math.random() * 100000) + 1;
+    proc.kill = () => { proc.killed = true; };
+    return proc;
+  }
+
+  const firstProc = makeProc();
+  const secondProc = makeProc();
+  let spawnCount = 0;
+  deps.spawnTrackedPython = () => {
+    spawnCount += 1;
+    return spawnCount === 1 ? firstProc : secondProc;
+  };
+
+  const service = createRecorderService(deps);
+  const handlers = {};
+  service.registerIpc({
+    handle(channel, handler) {
+      handlers[channel] = handler;
+    },
+  });
+
+  const firstStart = handlers['start-recording'](
+    { sender: {} },
+    { micId: 0, loopbackId: 1, isFirstRecording: false },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+
+  // Force-settle the first attempt as a startup failure (timeout path).
+  firstProc.kill();
+  firstProc.emit('close', 1);
+  const firstResult = await firstStart;
+  assert.equal(firstResult.success, false);
+  assert.equal(service.getCaptureState().state, 'idle');
+
+  const secondStart = handlers['start-recording'](
+    { sender: {} },
+    { micId: 0, loopbackId: 1, isFirstRecording: false },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  secondProc.stdout.emit('data', Buffer.from(`${JSON.stringify({
+    type: 'event',
+    event: 'recording_started',
+    message: 'Recording started!',
+  })}\n`));
+  const secondResult = await secondStart;
+  assert.equal(secondResult.success, true);
+  const secondSessionId = secondResult.sessionId;
+  const statesBeforeStale = captureStates.length;
+
+  // Late stdout from the abandoned first child must not republish its session.
+  firstProc.stdout.emit('data', Buffer.from(`${JSON.stringify({
+    type: 'event',
+    event: 'recording_started',
+    message: 'Recording started!',
+  })}\n`));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(captureStates.length, statesBeforeStale);
+  assert.equal(service.getCaptureState().state, 'recording');
+  assert.equal(service.getCaptureState().sessionId, secondSessionId);
+
+  const stopSecond = handlers['stop-recording']({ sender: {} });
+  await new Promise((resolve) => setImmediate(resolve));
+  const secondAudio = path.join(deps.getRecordingsDir(), 'stale-stdout.wav');
+  fs.writeFileSync(secondAudio, 'x');
+  secondProc.stdout.emit('data', Buffer.from(`${JSON.stringify({
+    success: true,
+    audioPath: secondAudio,
+    duration: 1,
+  })}\n`));
+  secondProc.emit('close', 0);
+  await stopSecond;
+});

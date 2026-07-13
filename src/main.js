@@ -1211,6 +1211,12 @@ function createWindow() {
 
   // Set up application menu
   createApplicationMenu();
+
+  // Replacement windows must regain the taskbar overlay / Dock badge for an
+  // in-progress capture (presence only reapplies on state transitions otherwise).
+  if (recordingPresenceService) {
+    recordingPresenceService.refreshPresentation();
+  }
 }
 
 /**

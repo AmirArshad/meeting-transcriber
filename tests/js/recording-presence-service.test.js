@@ -327,6 +327,39 @@ test('Windows overlay is set while recording and cleared on idle', () => {
   assert.equal(harness.getOverlayDescription(), '');
 });
 
+test('refreshPresentation reapplies Windows overlay for a replacement window', () => {
+  let overlayDescription = null;
+  const firstWindow = {
+    isDestroyed: () => false,
+    isMinimized: () => false,
+    setOverlayIcon(_image, description) {
+      overlayDescription = description;
+    },
+  };
+  let currentWindow = firstWindow;
+
+  const harness = createDeps({
+    platform: 'win32',
+    getMainWindow: () => currentWindow,
+  });
+  const service = createRecordingPresenceService(harness.deps);
+  service.createTray();
+  service.updateCaptureState({ state: 'recording', sessionId: 3, startedAt: 1_000 });
+  assert.equal(overlayDescription, 'AvaNevis is recording');
+
+  // Simulate a recreated BrowserWindow with a fresh overlay slot.
+  overlayDescription = null;
+  currentWindow = {
+    isDestroyed: () => false,
+    isMinimized: () => false,
+    setOverlayIcon(_image, description) {
+      overlayDescription = description;
+    },
+  };
+  service.refreshPresentation();
+  assert.equal(overlayDescription, 'AvaNevis is recording');
+});
+
 test('destroy clears timers and tray', () => {
   const harness = createDeps();
   const service = createRecordingPresenceService(harness.deps);

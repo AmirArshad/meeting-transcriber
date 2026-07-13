@@ -957,6 +957,24 @@ async function init() {
   setRecordingState('initializing');
   statusText.textContent = 'Initializing...';
 
+  let hydratedCaptureState = false;
+  const ensureRecordingHydration = async () => {
+    if (hydratedCaptureState) {
+      return;
+    }
+    hydratedCaptureState = true;
+    try {
+      if (!audioVisualizer) {
+        audioVisualizer = new AudioVisualizer();
+      }
+      setupEventListeners();
+      await hydrateRecordingStateFromMain();
+    } catch (hydrateError) {
+      console.error('Failed to hydrate recording state:', hydrateError);
+      hydratedCaptureState = false;
+    }
+  };
+
   try {
     startupCudaCheckPromise = checkGPUStatus().catch((error) => {
       console.warn('Startup CUDA/GPU check failed:', error);
@@ -1002,6 +1020,14 @@ async function init() {
     addLog('Loading audio devices...');
     await loadAudioDevices();
 
+    // Resume an in-progress capture before slower history/AI work so a reload
+    // mid-init still exposes Stop & Transcribe.
+    isInitializing = false;
+    if (recordingState === 'initializing') {
+      setRecordingState('idle');
+    }
+    await ensureRecordingHydration();
+
     // Step 4: Load meeting history
     await loadMeetingHistory({ scan: true });
 
@@ -1013,15 +1039,6 @@ async function init() {
     }
     await refreshHomeAiAddonPrompt();
 
-    // Initialize visualizer
-    audioVisualizer = new AudioVisualizer();
-
-    setupEventListeners();
-
-    // Mark initialization complete, then hydrate any in-progress capture from main.
-    isInitializing = false;
-    setRecordingState('idle');
-    await hydrateRecordingStateFromMain();
     if (recordingState === 'idle') {
       addLog('Ready to record!');
       statusText.textContent = 'Ready';
@@ -1032,13 +1049,19 @@ async function init() {
     console.error('Initialization error:', error);
     addLog(`Initialization error: ${error.message}`, 'error');
     isInitializing = false;
-    setRecordingState('idle');
+    if (recordingState === 'initializing') {
+      setRecordingState('idle');
+    }
 
     // Hide loading screen on error
     if (loadingScreen) {
       loadingScreen.classList.add('hidden');
       setTimeout(() => loadingScreen.remove(), 300);
     }
+  } finally {
+    // Never leave a recreated renderer idle while main is still capturing.
+    isInitializing = false;
+    await ensureRecordingHydration();
   }
 }
 
@@ -1636,6 +1659,11 @@ function setupTitleEditors() {
 
 // Setup event listeners
 function setupEventListeners() {
+  if (setupEventListeners._bound) {
+    return;
+  }
+  setupEventListeners._bound = true;
+
   refreshBtn.addEventListener('click', () => {
     refreshBtn.classList.add('spinning');
     setTimeout(() => refreshBtn.classList.remove('spinning'), 600);

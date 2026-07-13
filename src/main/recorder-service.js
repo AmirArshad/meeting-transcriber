@@ -643,8 +643,54 @@ function createRecorderService(deps) {
       activeRecordingSessionId = sessionId;
       publishCaptureState('starting', sessionId, null);
 
-      return new Promise((resolve, reject) => {
-        const { micId, loopbackId, isFirstRecording } = options;
+      return new Promise((resolve) => {
+        let proc = null;
+        let recordingStarted = false;
+        let progressStage = 'initializing';
+        let stdoutRemainder = '';
+        let startupFailureMessage = null;
+        let startupSettled = false;
+        let onStdoutData = null;
+        let timeoutHandle = null;
+
+        const detachLiveStdout = () => {
+          if (!proc?.stdout || typeof onStdoutData !== 'function') {
+            return;
+          }
+          try {
+            proc.stdout.removeListener('data', onStdoutData);
+          } catch (_) {
+            // Listener may already be gone.
+          }
+          onStdoutData = null;
+        };
+
+        const settleStartupFailure = (errorMessage) => {
+          if (startupSettled) {
+            return;
+          }
+
+          startupSettled = true;
+          detachLiveStdout();
+          if (timeoutHandle) {
+            clearTimeout(timeoutHandle);
+            timeoutHandle = null;
+          }
+          // Clear only if this session is still current (never wipe a newer retry).
+          clearRecordingRuntimeState('recording startup failure', {
+            expectedSessionId: sessionId,
+          });
+
+          resolve({
+            success: false,
+            code: 'STARTUP_FAILED',
+            sessionId,
+            message: errorMessage,
+          });
+        };
+
+        try {
+          const { micId, loopbackId, isFirstRecording } = options;
 
         // Generate unique filename with timestamp
         const timestamp = new Date().toISOString()
@@ -680,7 +726,7 @@ function createRecorderService(deps) {
         const isMac = process.platform === 'darwin';
         const recorderModule = isMac ? 'audio.macos_recorder' : 'audio.windows_recorder';
 
-        const proc = spawnTrackedPython([
+        proc = spawnTrackedPython([
           '-m', recorderModule,
           '--mic', micId.toString(),
           '--loopback', loopbackId.toString(),
@@ -711,11 +757,6 @@ function createRecorderService(deps) {
           }, 100); // 100ms delay to ensure process initialization
         }
 
-        let recordingStarted = false;
-        let progressStage = 'initializing';
-        let stdoutRemainder = '';
-        let startupFailureMessage = null;
-        let startupSettled = false;
         lastLiveRecorderResult = null;
         suppressUnexpectedExitAfterStopTimeout = false;
         heartbeatLostWarningActive = false;
@@ -723,27 +764,6 @@ function createRecorderService(deps) {
         const sendInitProgress = (stage, message) => {
           progressStage = stage;
           sendToRenderer('recording-init-progress', { stage, message });
-        };
-
-        const settleStartupFailure = (errorMessage) => {
-          if (startupSettled) {
-            return;
-          }
-
-          startupSettled = true;
-          if (pythonProcess === proc) {
-            clearRecordingRuntimeState('recording startup failure', {
-              expectedProcess: proc,
-              expectedSessionId: sessionId,
-            });
-          }
-
-          resolve({
-            success: false,
-            code: 'STARTUP_FAILED',
-            sessionId,
-            message: errorMessage,
-          });
         };
 
         const failActiveRecording = (warning) => {
@@ -797,7 +817,14 @@ function createRecorderService(deps) {
         };
 
         const markRecordingStarted = (message = 'Recording started!') => {
-          if (recordingStarted) {
+          // Ignore late stdout after this attempt settled, and ignore events from
+          // a superseded child/session (startup timeout then retry).
+          if (
+            recordingStarted
+            || startupSettled
+            || pythonProcess !== proc
+            || activeRecordingSessionId !== sessionId
+          ) {
             return;
           }
 
@@ -841,7 +868,7 @@ function createRecorderService(deps) {
         let lastLevelSentTime = 0;
         const LEVEL_UPDATE_THROTTLE_MS = 100; // Max 10 updates/sec instead of 20
 
-        proc.stdout.on('data', (data) => {
+        onStdoutData = (data) => {
           const parsedChunk = parseRecorderStdoutChunk(data.toString(), stdoutRemainder);
           stdoutRemainder = parsedChunk.remainder;
 
@@ -932,7 +959,8 @@ function createRecorderService(deps) {
                 break;
             }
           }
-        });
+        };
+        proc.stdout.on('data', onStdoutData);
 
         proc.stderr.on('data', (data) => {
           const output = data.toString();
@@ -1071,7 +1099,7 @@ function createRecorderService(deps) {
 
         // Longer timeout for first recording (15s), shorter for subsequent (10s)
         const timeout = isFirstRecording ? 15000 : 10000;
-        const timeoutHandle = setTimeout(() => {
+        timeoutHandle = setTimeout(() => {
           if (!recordingStarted) {
             let errorMessage = startupFailureMessage || `Recording failed to start within ${timeout / 1000} seconds.`;
 
@@ -1093,6 +1121,9 @@ function createRecorderService(deps) {
             settleStartupFailure(errorMessage);
           }
         }, timeout);
+        } catch (error) {
+          settleStartupFailure(error?.message || 'Failed to start recording.');
+        }
       });
     });
 

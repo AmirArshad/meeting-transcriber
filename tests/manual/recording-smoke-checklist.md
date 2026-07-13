@@ -45,7 +45,7 @@ Spike script: `scripts/gate-c-overlay-spike.js` (`npx electron scripts/gate-c-ov
 
 **Before Task 3:** `src/main.js` does **not** call `requestSingleInstanceLock()`. Dev (`npm start`) and an installed packaged build can both run and create separate trays.
 
-**After Task 3 (expected):** Primary that holds the lock wins; secondary calls `app.quit()` without creating a window/tray and the primary `second-instance` handler reveals/focuses the existing window. Dev and packaged share the same `userData` identity (`AvaNevis` / `com.avanevis.app`), so they contend for one lock — document which process was started first when validating.
+**After Task 3 (expected):** Primary that holds the lock wins; secondary calls `app.exit(0)` without creating a window/tray/services and the primary `second-instance` handler reveals/focuses the existing window. Dev and packaged share the same `userData` identity (`AvaNevis` / `com.avanevis.app`), so they contend for one lock — document which process was started first when validating.
 
 ### Gate E — macOS recording-status icon (locked design; visual QA on Mac)
 
