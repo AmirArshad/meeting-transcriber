@@ -861,7 +861,11 @@ def finalize_capture(
     manifest_file = Path(manifest_path)
     session_dir = manifest_file.parent if manifest_file.name == MANIFEST_FILENAME else manifest_file
     if owns_coordinator:
-        coordinator = CaptureManifestCoordinator.open_existing(session_dir)
+        # Recovery must not block on a live recorder's session.lock.
+        coordinator = CaptureManifestCoordinator.open_existing(
+            session_dir,
+            lock_timeout=0 if recovered else None,
+        )
     assert coordinator is not None
 
     recoverable: Optional[str] = None
