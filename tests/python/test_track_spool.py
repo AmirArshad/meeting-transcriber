@@ -242,6 +242,149 @@ class TrackSpoolTests(unittest.TestCase):
         )
         self.assertIn("preserve committed audio", str(err))
 
+    def test_flush_interval_throttles_manifest_commits(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            recordings_dir = Path(temp_dir)
+            coordinator, spool = self._open_spool(
+                recordings_dir,
+                max_queue_bytes=8 * 1024 * 1024,
+                segment_bytes=8 * 1024 * 1024,
+                stall_timeout_s=30,
+                flush_interval_s=0.2,
+            )
+            commits = []
+            original = coordinator.commit_track
+
+            def counting_commit(*args, **kwargs):
+                commits.append(time.monotonic())
+                return original(*args, **kwargs)
+
+            coordinator.commit_track = counting_commit  # type: ignore[method-assign]
+            try:
+                started = time.monotonic()
+                # ~100 callbacks over ~0.55s — without throttling this would be ~100 commits.
+                for i in range(100):
+                    self.assertTrue(spool.append(_int16_stereo_frames(10), frame_position=i * 10))
+                    time.sleep(0.005)
+                elapsed = time.monotonic() - started
+                result = spool.close()
+                self.assertEqual(result.committed_frames, 1000)
+                # Expect roughly elapsed/flush_interval (+ close force + optional rolls).
+                expected_upper = int(elapsed / 0.2) + 5
+                self.assertLessEqual(
+                    len(commits),
+                    expected_upper,
+                    f"commit_track called {len(commits)} times over {elapsed:.2f}s "
+                    f"(upper bound {expected_upper}); flush_interval throttling is broken",
+                )
+                self.assertGreaterEqual(len(commits), 1)
+            finally:
+                coordinator.commit_track = original  # type: ignore[method-assign]
+                coordinator.close()
+
+    def test_sustained_no_progress_stall_rejects_append(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            recordings_dir = Path(temp_dir)
+            pause = threading.Event()
+            clock = {"t": 100.0}
+
+            def fake_clock():
+                return clock["t"]
+
+            coordinator, spool = self._open_spool(
+                recordings_dir,
+                max_queue_bytes=1024 * 1024,
+                segment_bytes=64 * 1024,
+                stall_timeout_s=1.0,
+                flush_interval_s=60.0,
+                clock=fake_clock,
+                pause_writer=pause,
+            )
+            try:
+                chunk = _int16_stereo_frames(4)
+                self.assertTrue(spool.append(chunk))
+                # Still below stall timeout.
+                clock["t"] += 0.5
+                self.assertTrue(spool.append(chunk))
+                # Past stall_timeout with queued bytes and no commit progress.
+                clock["t"] += 1.0
+                self.assertFalse(spool.append(chunk))
+                self.assertEqual(spool.fail_reason, "sustained no-progress")
+            finally:
+                pause.set()
+                spool.close()
+                coordinator.close()
+
+    def test_close_skips_mutation_when_writer_still_alive(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            recordings_dir = Path(temp_dir)
+            pause = threading.Event()
+            coordinator, spool = self._open_spool(
+                recordings_dir,
+                max_queue_bytes=1024 * 1024,
+                segment_bytes=64 * 1024,
+                stall_timeout_s=0.2,
+                flush_interval_s=60.0,
+                pause_writer=pause,
+                close_join_timeout_s=0.3,
+            )
+            try:
+                self.assertTrue(spool.append(_int16_stereo_frames(20)))
+                # Keep writer paused so join times out; close must not pad/write.
+                result = spool.close(final_frame_count=5000)
+                self.assertEqual(result.fail_reason, "writer did not exit at close")
+                self.assertLess(result.committed_frames, 5000)
+                track = coordinator.get_track("mic")
+                total_bytes = sum(
+                    (coordinator.session_dir / name).stat().st_size
+                    for name in track["segments"]
+                ) if track["segments"] else 0
+                self.assertLess(total_bytes, 5000 * 4)
+            finally:
+                pause.set()
+                try:
+                    spool._queue.put(None)
+                except Exception:
+                    pass
+                spool._worker.join(timeout=2.0)
+                coordinator.close()
+
+    def test_float32_stereo_spool_round_trip(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            recordings_dir = Path(temp_dir)
+            coordinator = CaptureManifestCoordinator.create(
+                recordings_dir / "recording_f4.opus",
+                started_at_ns=1,
+                started_at_iso="2026-07-13T15:00:00.000Z",
+            )
+            try:
+                coordinator.add_track("mic", sample_rate=48000, channels=2, dtype="<f4")
+                spool = TrackSpool(
+                    coordinator,
+                    coordinator.session_dir,
+                    "mic",
+                    sample_rate=48000,
+                    channels=2,
+                    dtype="<f4",
+                    max_queue_bytes=1024 * 1024,
+                    segment_bytes=64 * 1024,
+                    stall_timeout_s=5,
+                    flush_interval_s=0.05,
+                )
+                samples = np.full((80, 2), 0.25, dtype="<f4")
+                self.assertTrue(spool.append(samples.tobytes()))
+                result = spool.close()
+                self.assertEqual(result.committed_frames, 80)
+                pcm = b"".join(
+                    (coordinator.session_dir / name).read_bytes()
+                    for name in coordinator.get_track("mic")["segments"]
+                )
+                out = np.frombuffer(pcm, dtype="<f4").reshape(-1, 2)
+                self.assertEqual(len(out), 80)
+                self.assertTrue(np.allclose(out, 0.25))
+            finally:
+                coordinator.close()
+
 
 if __name__ == "__main__":
     unittest.main()

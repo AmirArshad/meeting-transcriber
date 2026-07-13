@@ -14,6 +14,8 @@ const DISK_WARNING_BYTES = 10 * 1024 * 1024 * 1024;
 const DISK_CRITICAL_BYTES = 2 * 1024 * 1024 * 1024;
 const DISK_SPACE_WARNING_MESSAGE =
   'Less than 10 GB is available. Long recordings may run out of space.';
+const DISK_SPACE_CRITICAL_MESSAGE =
+  'Less than 2 GB is available. Long recordings may run out of space.';
 
 /**
  * Pure disk-space classification used by checkDiskSpace and unit tests.
@@ -23,10 +25,15 @@ const DISK_SPACE_WARNING_MESSAGE =
 function buildDiskSpaceResult(availableBytes) {
   const freeBytes = Number(availableBytes);
   const freeGB = freeBytes / (1024 * 1024 * 1024);
-  const warning = freeBytes < DISK_WARNING_BYTES ? DISK_SPACE_WARNING_MESSAGE : null;
-  const level = freeBytes < DISK_CRITICAL_BYTES
-    ? 'critical'
-    : (warning ? 'warning' : null);
+  let warning = null;
+  let level = null;
+  if (freeBytes < DISK_CRITICAL_BYTES) {
+    warning = DISK_SPACE_CRITICAL_MESSAGE;
+    level = 'critical';
+  } else if (freeBytes < DISK_WARNING_BYTES) {
+    warning = DISK_SPACE_WARNING_MESSAGE;
+    level = 'warning';
+  }
 
   return {
     success: true,
@@ -546,4 +553,5 @@ module.exports = {
   DISK_WARNING_BYTES,
   DISK_CRITICAL_BYTES,
   DISK_SPACE_WARNING_MESSAGE,
+  DISK_SPACE_CRITICAL_MESSAGE,
 };

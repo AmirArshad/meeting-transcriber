@@ -147,7 +147,9 @@ function createRecorderService(deps) {
 
     lastEmittedDiskSpaceLevel = level;
     const message = result.warning
-      || 'Less than 10 GB is available. Long recordings may run out of space.';
+      || (level === 'critical'
+        ? 'Less than 2 GB is available. Long recordings may run out of space.'
+        : 'Less than 10 GB is available. Long recordings may run out of space.');
     const payload = {
       type: 'disk_space',
       level,

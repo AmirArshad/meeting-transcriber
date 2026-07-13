@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -25,6 +26,21 @@ CAPTURE_DIR_SUFFIX = ".capture"
 VALID_STATES = frozenset({"recording", "finalizing", "complete", "error"})
 SUPPORTED_DTYPES = frozenset({"<i2", "<f4"})
 _SAFE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9._-]+\.pcm\.part$")
+_REQUIRED_TOP_LEVEL = (
+    "schemaVersion",
+    "state",
+    "outputStem",
+    "startedAtMonotonicNs",
+    "startedAtIso",
+    "tracks",
+)
+_REQUIRED_TRACK_FIELDS = (
+    "sampleRate",
+    "channels",
+    "dtype",
+    "committedFrames",
+    "segments",
+)
 
 
 class CaptureManifestError(ValueError):
@@ -84,6 +100,61 @@ def validate_started_at_iso(value: Any) -> Optional[str]:
     return text
 
 
+def _validate_track_dict(name: str, track: Any) -> Dict[str, Any]:
+    if not isinstance(name, str) or not name:
+        raise CaptureManifestError(f"Invalid track name: {name!r}")
+    if not isinstance(track, dict):
+        raise CaptureManifestError(f"Track {name!r} must be an object")
+    for field in _REQUIRED_TRACK_FIELDS:
+        if field not in track:
+            raise CaptureManifestError(f"Track {name!r} missing field: {field}")
+    if not isinstance(track["sampleRate"], int) or track["sampleRate"] <= 0:
+        raise CaptureManifestError(f"Track {name!r} has invalid sampleRate")
+    if not isinstance(track["channels"], int) or track["channels"] <= 0:
+        raise CaptureManifestError(f"Track {name!r} has invalid channels")
+    _normalize_dtype(track["dtype"])
+    _validate_frame_count(track["committedFrames"], field_name="committedFrames")
+    segments = track["segments"]
+    if not isinstance(segments, list):
+        raise CaptureManifestError(f"Track {name!r} segments must be a list")
+    for item in segments:
+        _validate_segment_name(item)
+    if "firstFrameMonotonicNs" in track and track["firstFrameMonotonicNs"] is not None:
+        _validate_frame_count(
+            track["firstFrameMonotonicNs"],
+            field_name="firstFrameMonotonicNs",
+        )
+    return track
+
+
+def validate_manifest_data(data: Any) -> Dict[str, Any]:
+    """Validate a loaded manifest payload (used by open/reload and Task 10 discovery)."""
+    if not isinstance(data, dict):
+        raise CaptureManifestError("Capture manifest must be a JSON object")
+    for field in _REQUIRED_TOP_LEVEL:
+        if field not in data:
+            raise CaptureManifestError(f"Missing capture manifest field: {field}")
+    if data.get("schemaVersion") != MANIFEST_SCHEMA_VERSION:
+        raise CaptureManifestError(
+            f"Unsupported capture manifest schemaVersion: {data.get('schemaVersion')!r}"
+        )
+    if data["state"] not in VALID_STATES:
+        raise CaptureManifestError(f"Invalid capture state: {data['state']!r}")
+    if not isinstance(data["outputStem"], str) or not data["outputStem"]:
+        raise CaptureManifestError("outputStem must be a non-empty string")
+    _validate_frame_count(data["startedAtMonotonicNs"], field_name="startedAtMonotonicNs")
+    # Malformed ISO is discovery-safe as null via validate_started_at_iso; keep the
+    # raw string in the payload so recovery can report it without blocking open.
+    if not isinstance(data["startedAtIso"], str):
+        raise CaptureManifestError("startedAtIso must be a string")
+    tracks = data["tracks"]
+    if not isinstance(tracks, dict):
+        raise CaptureManifestError("tracks must be an object")
+    for name, track in tracks.items():
+        _validate_track_dict(name, track)
+    return data
+
+
 class CaptureManifestCoordinator:
     """Process-owned capture manifest with thread-serialized RMW commits.
 
@@ -132,24 +203,34 @@ class CaptureManifestCoordinator:
         session_dir = capture_session_dir_for_output(output)
         session_dir.mkdir(parents=True, exist_ok=False)
 
-        iso = validate_started_at_iso(started_at_iso)
-        if iso is None:
-            raise CaptureManifestError(f"Invalid startedAtIso: {started_at_iso!r}")
-        started_ns = _validate_frame_count(started_at_ns, field_name="startedAtMonotonicNs")
+        lock: Optional[FileLock] = None
+        try:
+            iso = validate_started_at_iso(started_at_iso)
+            if iso is None:
+                raise CaptureManifestError(f"Invalid startedAtIso: {started_at_iso!r}")
+            started_ns = _validate_frame_count(started_at_ns, field_name="startedAtMonotonicNs")
 
-        data = {
-            "schemaVersion": MANIFEST_SCHEMA_VERSION,
-            "state": "recording",
-            "outputStem": output.stem,
-            "startedAtMonotonicNs": started_ns,
-            "startedAtIso": iso,
-            "tracks": {},
-        }
-        lock = FileLock(str(session_dir / SESSION_LOCK_FILENAME))
-        lock.acquire()
-        coordinator = cls(session_dir, data, file_lock=lock)
-        coordinator._write_atomic_unlocked()
-        return coordinator
+            data = {
+                "schemaVersion": MANIFEST_SCHEMA_VERSION,
+                "state": "recording",
+                "outputStem": output.stem,
+                "startedAtMonotonicNs": started_ns,
+                "startedAtIso": iso,
+                "tracks": {},
+            }
+            lock = FileLock(str(session_dir / SESSION_LOCK_FILENAME))
+            lock.acquire()
+            coordinator = cls(session_dir, data, file_lock=lock)
+            coordinator._write_atomic_unlocked()
+            return coordinator
+        except Exception:
+            if lock is not None:
+                try:
+                    lock.release()
+                except Exception:
+                    pass
+            shutil.rmtree(session_dir, ignore_errors=True)
+            raise
 
     @classmethod
     def open_existing(
@@ -174,15 +255,14 @@ class CaptureManifestCoordinator:
 
         try:
             data = json.loads(manifest_path.read_text(encoding="utf-8"))
+            validate_manifest_data(data)
         except Exception:
-            lock.release()
+            try:
+                lock.release()
+            except Exception:
+                pass
             raise
 
-        if data.get("schemaVersion") != MANIFEST_SCHEMA_VERSION:
-            lock.release()
-            raise CaptureManifestError(
-                f"Unsupported capture manifest schemaVersion: {data.get('schemaVersion')!r}"
-            )
         return cls(session_path, data, file_lock=lock)
 
     def add_track(

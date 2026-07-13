@@ -13,6 +13,7 @@ const {
   DISK_WARNING_BYTES,
   DISK_CRITICAL_BYTES,
   DISK_SPACE_WARNING_MESSAGE,
+  DISK_SPACE_CRITICAL_MESSAGE,
 } = require('../../src/main/device-ipc');
 
 test('buildDiskSpaceResult reports healthy space without warning', () => {
@@ -30,7 +31,7 @@ test('buildDiskSpaceResult warns below 10 GB and marks critical below 2 GB', () 
   assert.equal(warning.level, 'warning');
 
   const critical = buildDiskSpaceResult(DISK_CRITICAL_BYTES - 1);
-  assert.equal(critical.warning, DISK_SPACE_WARNING_MESSAGE);
+  assert.equal(critical.warning, DISK_SPACE_CRITICAL_MESSAGE);
   assert.equal(critical.level, 'critical');
 });
 
@@ -113,7 +114,7 @@ test('checkDiskSpace reports critical free space from statfs', async () => {
 
     const result = await service.checkDiskSpace();
     assert.equal(result.level, 'critical');
-    assert.equal(result.warning, DISK_SPACE_WARNING_MESSAGE);
+    assert.equal(result.warning, DISK_SPACE_CRITICAL_MESSAGE);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

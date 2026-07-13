@@ -10,9 +10,22 @@ Both platform recorders keep mic and desktop capture in RAM for the full session
 ## Guardrails shipped in Task 6 (this document’s first revision)
 
 - Disk free-space probe uses Node `fs.promises.statfs` (no `wmic` / `df`).
-- Thresholds: **warning** below 10 GB free; **critical** below 2 GB free. Never auto-stop solely because a threshold was crossed.
+- Thresholds: **warning** below 10 GB free; **critical** below 2 GB free (distinct toast/body copy). Never auto-stop solely because a threshold was crossed.
 - During an active recording, main checks free space every five minutes and emits `recording-warning` only when crossing into warning or escalating to critical, plus a best-effort native safety notification via the presence service.
 - Both platform recorders emit structured stdout stop stages: `post_processing_started`, `audio_normalizing`, `audio_mixing`, `audio_encoding`, `post_processing_complete`. stderr remains diagnostics-only.
+
+### Windows `statfs` gate evidence (Task 6)
+
+Recorded 2026-07-13 on Windows 10/11 (`feature/long-recording-safety-r2` development machine):
+
+| Source | Value |
+|---|---|
+| `fs.promises.statfs(cwd).bavail` | `384069146` |
+| `fs.promises.statfs(cwd).bsize` | `4096` |
+| Computed free bytes | `bavail × bsize` = **1,465.11 GB** |
+| PowerShell free-space cross-check (`D:`) | Matches the same free-space figure |
+
+Conclusion: Electron/Node `statfs` `bavail`/`bsize` semantics are correct on this Windows host; shell `wmic`/`df` probes were safe to remove.
 
 ## Measured baseline (pending hardware)
 
@@ -51,7 +64,7 @@ Record 15-minute and 60-minute mic+desktop sessions on one supported Mac and one
 - Session directory: `{output_stem}.capture/` with atomic `manifest.json` (schema version 1).
 - Segments: relative `*.pcm.part` under the capture directory (never scan-imported as meetings).
 - Manifest stores explicit UTC `startedAtIso` alongside `startedAtMonotonicNs`.
-- Primitives landed: `backend/audio/capture_manifest.py`, `backend/audio/track_spool.py` (bounded queue, soft 75% warn, hard cap, stall timeout, writer-thread fsync commits).
+- Primitives landed: `backend/audio/capture_manifest.py`, `backend/audio/track_spool.py` (bounded queue, soft 75% warn, hard cap, stall timeout, writer-thread fsync commits **throttled to `flush_interval_s`** so `writtenFrames` may lead `committedFrames`).
 - Rollout flag: `AVANEVIS_CAPTURE_SPOOL` (off for first integration PRs; do not ship schema v1 packaged until Task 10 recovery exists).
 
 ## Recovery contract (Task 10; summary)

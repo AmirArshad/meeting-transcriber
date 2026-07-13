@@ -3,6 +3,7 @@
 Callbacks copy contiguous PCM into a byte-counted queue and return immediately.
 A writer thread owns segment files, rolls at ``segment_bytes``, fsyncs at least
 once per ``flush_interval_s``, then atomically advances ``committedFrames``.
+In-memory ``writtenFrames`` may be newer between commits.
 
 ``append`` returns ``False`` on hard-cap overflow, sustained no-progress, or a
 writer exception. It never blocks and never silently drops the chunk.
@@ -16,7 +17,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, List, Optional, Union
+from typing import Callable, List, Optional, Union
 
 import numpy as np
 
@@ -29,6 +30,9 @@ DEFAULT_SEGMENT_BYTES = 64 * 1024 * 1024
 DEFAULT_STALL_TIMEOUT_S = 30.0
 DEFAULT_FLUSH_INTERVAL_S = 1.0
 SOFT_HIGH_WATER_RATIO = 0.75
+# Bound silence-fill allocations independently of segment size (64 MiB segments
+# must not imply 64 MiB zero buffers for long Windows desktop gaps).
+MAX_SILENCE_CHUNK_BYTES = 1 * 1024 * 1024
 
 
 class TrackSpoolBackpressureError(RuntimeError):
@@ -41,6 +45,7 @@ class TrackSpoolResult:
     committed_frames: int
     segments: List[str]
     soft_warning_emitted: bool
+    fail_reason: Optional[str] = None
 
 
 def _dtype_itemsize(dtype: str) -> int:
@@ -83,6 +88,7 @@ class TrackSpool:
         on_soft_warning: Optional[Callable[..., None]] = None,
         clock: Callable[[], float] = time.monotonic,
         pause_writer: Optional[threading.Event] = None,
+        close_join_timeout_s: Optional[float] = None,
     ) -> None:
         if max_queue_bytes <= 0:
             raise ValueError("max_queue_bytes must be positive")
@@ -106,6 +112,7 @@ class TrackSpool:
         self._flush_interval_s = float(flush_interval_s)
         self._on_soft_warning = on_soft_warning
         self._clock = clock
+        self._close_join_timeout_s = close_join_timeout_s
 
         self._queue: queue.Queue[Optional[tuple[bytes, Optional[int]]]] = queue.Queue()
         self._queued_bytes = 0
@@ -153,6 +160,10 @@ class TrackSpool:
     def committed_frames(self) -> int:
         with self._commit_lock:
             return self._committed_frames
+
+    @property
+    def fail_reason(self) -> Optional[str]:
+        return self._fail_reason
 
     def append(self, pcm: bytes, frame_position: Optional[int] = None) -> bool:
         if self._closed or self._failed:
@@ -209,12 +220,7 @@ class TrackSpool:
 
     def close(self, final_frame_count: Optional[int] = None) -> TrackSpoolResult:
         if self._closed:
-            return TrackSpoolResult(
-                written_frames=self._written_frames,
-                committed_frames=self.committed_frames,
-                segments=list(self._segments),
-                soft_warning_emitted=self._soft_warning_emitted,
-            )
+            return self._result()
 
         if final_frame_count is not None:
             if (
@@ -225,22 +231,44 @@ class TrackSpool:
                 raise ValueError("final_frame_count must be a non-negative int")
 
         self._closed = True
-        self._queue.put(None)
-        self._worker.join(timeout=max(5.0, self._stall_timeout_s + 1.0))
+        try:
+            self._queue.put(None)
+        except Exception:
+            pass
 
-        if final_frame_count is not None and final_frame_count > self._written_frames:
-            pad_frames = final_frame_count - self._written_frames
-            self._write_silence(pad_frames)
-            self._written_frames = final_frame_count
+        if self._close_join_timeout_s is not None:
+            join_timeout = float(self._close_join_timeout_s)
+        else:
+            join_timeout = max(5.0, self._stall_timeout_s + 1.0)
+        self._worker.join(timeout=join_timeout)
 
-        self._flush_and_commit(force=True)
-        self._close_current_segment()
+        # If the writer is still hung (slow fsync/disk), do not mutate segment
+        # handles or frame counters from this thread — last committed state is
+        # the durable contract.
+        if self._worker.is_alive():
+            self._mark_failed("writer did not exit at close")
+            return self._result()
 
+        try:
+            if final_frame_count is not None and final_frame_count > self._written_frames:
+                pad_frames = final_frame_count - self._written_frames
+                self._write_silence(pad_frames)
+                self._written_frames = final_frame_count
+
+            self._flush_and_commit(force=True)
+            self._close_current_segment()
+        except Exception as exc:  # noqa: BLE001 - close must not raise into stop path
+            self._mark_failed(f"close failed: {exc}")
+
+        return self._result()
+
+    def _result(self) -> TrackSpoolResult:
         return TrackSpoolResult(
             written_frames=self._written_frames,
             committed_frames=self.committed_frames,
             segments=list(self._segments),
             soft_warning_emitted=self._soft_warning_emitted,
+            fail_reason=self._fail_reason,
         )
 
     def _is_stalled(self) -> bool:
@@ -254,7 +282,8 @@ class TrackSpool:
 
     def _mark_failed(self, reason: str) -> None:
         self._failed = True
-        self._fail_reason = reason
+        if self._fail_reason is None:
+            self._fail_reason = reason
 
     def _writer_loop(self) -> None:
         try:
@@ -289,6 +318,11 @@ class TrackSpool:
                 self._flush_and_commit(force=True)
             except Exception:
                 pass
+        finally:
+            try:
+                self._close_current_segment()
+            except Exception:
+                pass
 
     def _apply_chunk(self, payload: bytes, frame_position: Optional[int]) -> None:
         if frame_position is None:
@@ -314,8 +348,7 @@ class TrackSpool:
     def _write_silence(self, frame_count: int) -> None:
         if frame_count <= 0:
             return
-        # Write in chunks to avoid large temporary allocations.
-        max_chunk_frames = max(1, self._segment_bytes // self._frame_bytes)
+        max_chunk_frames = max(1, MAX_SILENCE_CHUNK_BYTES // self._frame_bytes)
         remaining = frame_count
         while remaining > 0:
             chunk_frames = min(remaining, max_chunk_frames)
@@ -372,15 +405,18 @@ class TrackSpool:
             self._current_segment_bytes = 0
 
     def _flush_and_commit(self, *, force: bool) -> None:
+        """Fsync + manifest commit at most once per flush_interval unless forced.
+
+        ``writtenFrames`` may be ahead of ``committedFrames`` between intervals.
+        Stall detection uses ``_last_commit_advance_at``, which advances only when
+        committed frames actually increase (or on a forced finalization).
+        """
         now = self._clock()
         with self._commit_lock:
             elapsed = now - self._last_commit_advance_at
             interval_due = elapsed >= self._flush_interval_s
-            frames_changed = self._written_frames != self._committed_frames
 
-        if not force and not interval_due and not frames_changed:
-            return
-        if not force and not interval_due and self._current_handle is None:
+        if not force and not interval_due:
             return
 
         if self._current_handle is not None:
@@ -397,7 +433,7 @@ class TrackSpool:
                 )
             except CaptureManifestError as exc:
                 self._mark_failed(f"manifest commit failed: {exc}")
-                raise
+                return
             self._committed_frames = self._written_frames
-            if self._committed_frames != previous or force or interval_due:
+            if self._committed_frames != previous or force:
                 self._last_commit_advance_at = self._clock()

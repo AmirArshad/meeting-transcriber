@@ -467,7 +467,7 @@ test('disk space monitor warns once on escalation and never auto-stops', async (
     success: true,
     availableBytes: 1 * 1024 * 1024 * 1024,
     availableGB: '1.00',
-    warning: 'Less than 10 GB is available. Long recordings may run out of space.',
+    warning: 'Less than 2 GB is available. Long recordings may run out of space.',
     level: 'critical',
   };
   await diskInterval.fn();

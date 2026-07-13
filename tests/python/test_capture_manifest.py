@@ -176,6 +176,79 @@ class CaptureManifestTests(unittest.TestCase):
             selected = select_scannable_audio_files(recordings_dir)
             self.assertEqual([path.name for path in selected], [meeting.name])
 
+    def test_open_existing_rejects_unknown_schema(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            recordings_dir = Path(temp_dir)
+            coordinator = CaptureManifestCoordinator.create(
+                recordings_dir / "recording_schema.opus",
+                started_at_ns=1,
+                started_at_iso="2026-07-13T16:00:00.000Z",
+            )
+            session_dir = coordinator.session_dir
+            data = coordinator.to_dict()
+            coordinator.close()
+
+            data["schemaVersion"] = 99
+            (session_dir / "manifest.json").write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaises(CaptureManifestError):
+                CaptureManifestCoordinator.open_existing(session_dir, lock_timeout=0)
+
+    def test_open_existing_rejects_malformed_tracks(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            recordings_dir = Path(temp_dir)
+            coordinator = CaptureManifestCoordinator.create(
+                recordings_dir / "recording_bad_tracks.opus",
+                started_at_ns=1,
+                started_at_iso="2026-07-13T16:30:00.000Z",
+            )
+            session_dir = coordinator.session_dir
+            data = coordinator.to_dict()
+            coordinator.close()
+
+            data["tracks"] = {"mic": {"sampleRate": 48000}}  # missing required fields
+            (session_dir / "manifest.json").write_text(json.dumps(data), encoding="utf-8")
+            with self.assertRaises(CaptureManifestError):
+                CaptureManifestCoordinator.open_existing(session_dir, lock_timeout=0)
+
+    def test_open_existing_times_out_while_live_coordinator_holds_lock(self):
+        from filelock import Timeout
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            recordings_dir = Path(temp_dir)
+            live = CaptureManifestCoordinator.create(
+                recordings_dir / "recording_locked.opus",
+                started_at_ns=1,
+                started_at_iso="2026-07-13T17:00:00.000Z",
+            )
+            try:
+                with self.assertRaises(Timeout):
+                    CaptureManifestCoordinator.open_existing(live.session_dir, lock_timeout=0)
+            finally:
+                live.close()
+
+    def test_create_cleans_up_session_dir_when_initial_write_fails(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            recordings_dir = Path(temp_dir)
+            output_path = recordings_dir / "recording_fail_create.opus"
+            session_dir = recordings_dir / "recording_fail_create.capture"
+
+            original = CaptureManifestCoordinator._write_atomic_unlocked
+
+            def boom(self):
+                raise OSError("injected write failure")
+
+            CaptureManifestCoordinator._write_atomic_unlocked = boom  # type: ignore[method-assign]
+            try:
+                with self.assertRaises(OSError):
+                    CaptureManifestCoordinator.create(
+                        output_path,
+                        started_at_ns=1,
+                        started_at_iso="2026-07-13T18:00:00.000Z",
+                    )
+                self.assertFalse(session_dir.exists())
+            finally:
+                CaptureManifestCoordinator._write_atomic_unlocked = original  # type: ignore[method-assign]
+
 
 if __name__ == "__main__":
     unittest.main()
