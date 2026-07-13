@@ -8,7 +8,6 @@
 
 const RECORDING_REMINDER_INTERVAL_MS = 60 * 60 * 1000;
 const TRAY_ELAPSED_REFRESH_MS = 60 * 1000;
-const AVANEVIS_TOAST_GROUP = 'avanevis-recording-reminders';
 
 function getNextReminderAt(startedAt, now, intervalMs = RECORDING_REMINDER_INTERVAL_MS) {
   const completedIntervals = Math.floor(Math.max(0, now - startedAt) / intervalMs);
@@ -172,7 +171,6 @@ function createRecordingPresenceService(deps) {
   let captureState = { state: 'idle', sessionId: null, startedAt: null };
   let reminderTimer = null;
   let elapsedRefreshTimer = null;
-  let notificationActivationRegistered = false;
   const retainedNotifications = new Set();
 
   function getCaptureState() {
@@ -217,27 +215,6 @@ function createRecordingPresenceService(deps) {
     });
   }
 
-  function ensureNotificationActivationHandler() {
-    if (notificationActivationRegistered || platform !== 'win32') {
-      return;
-    }
-    if (typeof Notification?.handleActivation !== 'function') {
-      return;
-    }
-    try {
-      Notification.handleActivation(() => {
-        try {
-          showMainWindow();
-        } catch (error) {
-          logWarn('Toast activation failed to show window:', error?.message || error);
-        }
-      });
-      notificationActivationRegistered = true;
-    } catch (error) {
-      logWarn('Could not register toast activation handler:', error?.message || error);
-    }
-  }
-
   function showRecordingReminder() {
     const current = getCaptureState();
     if (current.state !== 'recording' || !Number.isInteger(current.sessionId) || !Number.isFinite(current.startedAt)) {
@@ -251,9 +228,7 @@ function createRecordingPresenceService(deps) {
       return;
     }
 
-    const hours = Math.max(1, Math.floor(elapsedMs / reminderIntervalMs));
     const copy = buildReminderCopy(elapsedMs);
-    const toastId = `recording-reminder-${current.sessionId}-${hours}`;
 
     if (typeof Notification?.isSupported === 'function' && !Notification.isSupported()) {
       logWarn('Native notifications are not supported; keeping tray/Dock/taskbar indicators.');
@@ -262,18 +237,16 @@ function createRecordingPresenceService(deps) {
     }
 
     try {
-      ensureNotificationActivationHandler();
+      // Electron has no Notification.handleActivation / toastId / group APIs.
+      // Click-to-open works only while we retain this Notification instance and
+      // listen for its `click` event. Action Center / cold activation after the
+      // object is released (or after relaunch) is an acknowledged gap — tray,
+      // overlay/Dock, and in-app presence remain the permission-independent signals.
       const notification = new Notification({
         title: copy.title,
         body: copy.body,
         silent: false,
       });
-      try {
-        notification.toastId = toastId;
-        notification.group = AVANEVIS_TOAST_GROUP;
-      } catch (_) {
-        // Optional identity only.
-      }
 
       retainNotification(notification);
       notification.show();
@@ -462,14 +435,8 @@ function createRecordingPresenceService(deps) {
       return tray;
     }
 
-    const idleImage = loadTrayNativeImage('idle');
-    tray = new Tray(idleImage);
-
-    if (platform === 'darwin') {
-      // Ensure idle starts as a template image.
-      const image = loadTrayNativeImage('idle');
-      tray.setImage(image);
-    }
+    // loadTrayNativeImage already applies setTemplateImage for darwin idle/recording.
+    tray = new Tray(loadTrayNativeImage('idle'));
 
     tray.on('click', () => {
       try {
@@ -489,9 +456,7 @@ function createRecordingPresenceService(deps) {
     applyOverlay(false);
     applyDockBadge('');
     captureState = { state: 'idle', sessionId: null, startedAt: null };
-    for (const notification of retainedNotifications) {
-      retainedNotifications.delete(notification);
-    }
+    retainedNotifications.clear();
     if (tray) {
       try {
         tray.destroy();

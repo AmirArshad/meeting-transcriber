@@ -59,14 +59,14 @@ Ship static `build/iconRecording.png` (18×18) and `build/iconRecording@2x.png` 
 - [ ] Windows: minimized window keeps taskbar overlay; fully hidden window loses overlay (documents why recording close minimizes)
 - [ ] macOS: hidden window keeps static red menu-bar icon + `REC` (no pulse/animation)
 - [ ] Reminder with a test-overridden one-minute interval, then confirm production uses 60 minutes
-- [ ] Notification click restores a minimized/hidden window
+- [ ] Notification click restores a minimized/hidden window (via retained `Notification` `click` while the object lives; Electron has no Action Center cold-activation API — treat tray/overlay/`REC` as the reliable reopen path)
 - [ ] Notifications disabled / Focus enabled: permission-independent indicators remain; on macOS menu-bar `REC` is required even if Dock badge is unavailable
 - [ ] Stop, failure, and quit clear tray/`REC`/overlay/Dock badge/in-app pill
 - [ ] Relaunch reveals the existing instance with no second tray icon; document `npm start` vs installed-build single-instance behavior (Gate D)
 - [ ] macOS light/dark menu bar and Dock badge when notification permission allows
 - [ ] Windows taskbar overlay at 100%, 150%, and 200% scaling while minimized
 - [ ] Installed Spotlight/Start search for `AvaNevis`, `meeting`, and `transcriber` — record actual OS behavior
-- [ ] Gate C toast CLSID / Action Center click-to-open on an installed Windows NSIS build
+- [ ] Gate C toast CLSID / Action Center delivery on an installed Windows NSIS build (delivery only; cold click-to-open remains an Electron API gap)
 - [ ] Hydrated Stop & Transcribe after renderer reload uses stop IPC + localStorage settings only (no dead-renderer transient state)
 
 ## macOS

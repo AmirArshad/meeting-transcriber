@@ -37,6 +37,12 @@ test('getRecordingPresenceView shows recording and stopping pills only', () => {
     timeText: '1:02:03',
     modifier: 'stopping',
   });
+  assert.deepEqual(getRecordingPresenceView('stopping', null), {
+    visible: true,
+    label: 'Finishing recording...',
+    timeText: null,
+    modifier: 'stopping',
+  });
   for (const state of ['starting', 'initializing', 'countdown', 'transcribing', 'idle']) {
     assert.equal(getRecordingPresenceView(state, '00:10').visible, false);
   }

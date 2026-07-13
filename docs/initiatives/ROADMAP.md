@@ -34,7 +34,6 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 - **Save Transcript As** via Electron's native save dialog with sanitized default filenames and `.md` / `.txt` / All Files filters, available from history detail and the post-recording view.
 - **Multi-select + bulk delete** for the history list, plus a sidebar search filter, relative-time meeting timestamps, and a developer console drawer for inspecting backend logs.
 - **Slimmer waveform container** (28 px high, denser buffer, gentler glow and peak cap) for a less-dominant visualizer.
-- **Recording awareness (Release 1)** — always-visible top-bar recording pill; macOS static saturated menu-bar recording-status icon + `REC`; Windows taskbar overlay while minimized during capture; hourly best-effort native reminders (no auto-stop on duration); single-instance relaunch reveal; recording-aware close (Windows minimize / macOS hide). Native reminders remain best-effort under Focus/notification settings.
 
 ### Reliability / data integrity
 
@@ -64,8 +63,8 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 
 ## In progress
 
-- **Long-recording safety (Release 2)** — progressive disk capture / bounded finalization (`docs/superpowers/plans/2026-07-13-recording-awareness-and-long-recording-safety.md`). Release 1 recording awareness is implemented on `feature/recording-awareness-r1`.
-- Packaged QA still open after Release 1: installed Windows Action Center toast CLSID click-to-open, tray overflow, overlay scaling; macOS Gate E menu-bar salience on light/dark wallpaper; Spotlight/Start search for `meeting` / `transcriber`.
+- **Recording awareness (Release 1)** — implemented on `feature/recording-awareness-r1` (top-bar pill; macOS static saturated menu-bar icon + `REC`; Windows taskbar overlay while minimized; hourly best-effort native reminders with click-to-open via retained notification objects only — Electron has no Action Center cold-activation API; single-instance relaunch; recording-aware close). Packaged QA still open before treating as shipped: installed toast CLSID click-to-open, tray overflow, overlay scaling; macOS Gate E menu-bar salience on light/dark wallpaper; Spotlight/Start search for `meeting` / `transcriber`.
+- **Long-recording safety (Release 2)** — progressive disk capture / bounded finalization (`docs/superpowers/plans/2026-07-13-recording-awareness-and-long-recording-safety.md`).
 
 ## Planned
 

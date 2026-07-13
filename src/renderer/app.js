@@ -1936,12 +1936,16 @@ function updateRecordingPresenceUI(elapsedTextOverride = null) {
 
   let elapsedText = elapsedTextOverride;
   if (elapsedText == null) {
-    if (recordingState === 'stopping' && frozenPresenceElapsedText) {
-      elapsedText = frozenPresenceElapsedText;
+    if (recordingState === 'stopping') {
+      // Prefer a frozen clock; omit the time entirely when startedAt is unknown
+      // so hydration does not invent a cosmetic 00:00.
+      elapsedText = frozenPresenceElapsedText || null;
     } else if (recordingState === 'recording' && Number.isFinite(recordingStartTime)) {
       elapsedText = formatElapsedDuration((Date.now() - recordingStartTime) / 1000);
-    } else {
+    } else if (recordingState === 'recording') {
       elapsedText = '00:00';
+    } else {
+      elapsedText = null;
     }
   }
 

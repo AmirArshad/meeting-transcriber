@@ -115,10 +115,11 @@ const {
 const AVANEVIS_TOAST_ACTIVATOR_CLSID = '{A7E2C4F1-9B83-4D2E-8F61-1C0A9E5B7D33}';
 const AVANEVIS_APP_USER_MODEL_ID = 'com.avanevis.app';
 
-// Single-instance lock before readiness. Secondary instances exit without tray/window.
+// Single-instance lock before readiness. Secondary instances exit immediately
+// via app.exit (does not return) so they never construct services / tray / window.
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
-  app.quit();
+  app.exit(0);
 } else {
   app.on('second-instance', () => {
     showMainWindow();
@@ -160,9 +161,15 @@ let appStartupComplete = false;
 let revealWindowWhenReady = false;
 
 function showMainWindow() {
-  if (!appStartupComplete || !mainWindow || mainWindow.isDestroyed()) {
+  if (!appStartupComplete) {
     revealWindowWhenReady = true;
     return;
+  }
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow();
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      return;
+    }
   }
   if (mainWindow.isMinimized()) {
     mainWindow.restore();
