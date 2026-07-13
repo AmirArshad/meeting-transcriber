@@ -874,6 +874,8 @@ class MacOSAudioRecorder:
 
     def _process_and_save(self):
         """Process recorded audio and save to file."""
+        _send_event_message("post_processing_started", "Finishing recording...")
+
         if not self.mic_frames:
             message = "No audio was captured from the microphone."
             print(f"ERROR: {message}", file=sys.stderr)
@@ -889,6 +891,8 @@ class MacOSAudioRecorder:
             self.final_output_path = None
             self.recording_duration = 0.0
             return False
+
+        _send_event_message("audio_normalizing", "Normalizing audio...")
 
         # Convert mic chunks to numpy array once at stop time
         mic_audio = self.mic_frames.to_array()
@@ -940,6 +944,7 @@ class MacOSAudioRecorder:
             # Mic boost of 2.0 (6dB) makes voice prominent over desktop audio
             # MEMORY: build the mix in place to avoid holding mic, desktop and the
             # result as separate full-size float buffers at the same time.
+            _send_event_message("audio_mixing", "Mixing audio...")
             MIC_BOOST = 2.0
             final_audio = mic_audio * (self.mic_volume * MIC_BOOST)
             final_audio += desktop_audio * self.desktop_volume
@@ -966,6 +971,7 @@ class MacOSAudioRecorder:
             final_audio = _repair_one_sided_stereo(final_audio, 'microphone')
 
             # Apply mic volume
+            _send_event_message("audio_mixing", "Preparing microphone audio...")
             final_audio = final_audio * self.mic_volume
 
         # Enhance microphone audio (same as Windows)
@@ -982,6 +988,7 @@ class MacOSAudioRecorder:
         self.recording_duration = duration_seconds
 
         # Compress with ffmpeg (same shared helper as Windows)
+        _send_event_message("audio_encoding", "Encoding audio...")
         final_output_path = self._compress_with_ffmpeg(temp_wav_path, preferred_output_path)
 
         # Publish the final path before temp cleanup so unlink failures still
@@ -997,6 +1004,7 @@ class MacOSAudioRecorder:
         print(f"Final file: {final_output_path}", file=sys.stderr)
         print(f"Duration: {duration_seconds:.1f} seconds", file=sys.stderr)
         self.recording_failure = None
+        _send_event_message("post_processing_complete", "Recording saved.")
         return True
 
     def _resolve_desktop_capture_start_time(self):

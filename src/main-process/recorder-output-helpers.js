@@ -268,6 +268,46 @@ function getRecorderEventAction(eventPayload = {}) {
         progressMessage: null,
       };
 
+    case 'post_processing_started':
+      return {
+        initProgress: null,
+        warning: null,
+        recordingStartedMessage: null,
+        progressMessage: eventMessage || 'Finishing recording...',
+      };
+
+    case 'audio_normalizing':
+      return {
+        initProgress: null,
+        warning: null,
+        recordingStartedMessage: null,
+        progressMessage: eventMessage || 'Normalizing audio...',
+      };
+
+    case 'audio_mixing':
+      return {
+        initProgress: null,
+        warning: null,
+        recordingStartedMessage: null,
+        progressMessage: eventMessage || 'Mixing audio...',
+      };
+
+    case 'audio_encoding':
+      return {
+        initProgress: null,
+        warning: null,
+        recordingStartedMessage: null,
+        progressMessage: eventMessage || 'Encoding audio...',
+      };
+
+    case 'post_processing_complete':
+      return {
+        initProgress: null,
+        warning: null,
+        recordingStartedMessage: null,
+        progressMessage: eventMessage || 'Recording saved.',
+      };
+
     default:
       return {
         initProgress: null,

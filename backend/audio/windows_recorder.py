@@ -761,6 +761,7 @@ class AudioRecorder:
 
     def _mix_and_save(self):
         """Mix the two audio sources and save to file."""
+        _send_event_message("post_processing_started", "Finishing recording...")
         print("Mixing audio...", file=sys.stderr)
 
         # Validate that we captured audio
@@ -777,6 +778,8 @@ class AudioRecorder:
         print(f"  Captured {len(self.mic_frames)} mic frames", file=sys.stderr)
         if self.mixing_mode:
             print(f"  Captured {len(self.desktop_frames)} desktop frames", file=sys.stderr)
+
+        _send_event_message("audio_normalizing", "Normalizing audio...")
 
         # Convert to numpy arrays
         mic_audio = np.frombuffer(b''.join(self.mic_frames), dtype=np.int16)
@@ -848,6 +851,7 @@ class AudioRecorder:
                 print(f"  Padded desktop END with {len(desktop_audio) - desktop_len} samples of silence", file=sys.stderr)
 
             # Mix (using processor module)
+            _send_event_message("audio_mixing", "Mixing audio...")
             print("  Mixing mic + desktop...", file=sys.stderr)
             final_audio = mix_audio(
                 mic_audio, desktop_audio,
@@ -878,6 +882,8 @@ class AudioRecorder:
             print(f"  Applying noise reduction to mic...", file=sys.stderr)
             mic_audio = enhance_microphone(mic_audio, self.target_sample_rate, self.target_channels)
 
+            # Mic-only still reports the mixing stage so Electron progress stays aligned.
+            _send_event_message("audio_mixing", "Preparing microphone audio...")
             final_audio = mic_audio
 
         # Validate final audio is not empty
@@ -903,6 +909,7 @@ class AudioRecorder:
         )
 
         # Compress with ffmpeg (using compressor module)
+        _send_event_message("audio_encoding", "Encoding audio...")
         final_path, stats = compress_and_report(
             temp_wav,
             self.output_path,
@@ -932,6 +939,7 @@ class AudioRecorder:
         print(f"  Size: {file_size / 1024 / 1024:.2f} MB (was {temp_size / 1024 / 1024:.2f} MB, {compression_ratio:.1f}% smaller)", file=sys.stderr)
         print(f"  Duration: {duration:.2f} seconds", file=sys.stderr)
         print(f"  Sample rate: {self.target_sample_rate} Hz", file=sys.stderr)
+        _send_event_message("post_processing_complete", "Recording saved.")
 
     def cleanup(self):
         """Clean up resources."""

@@ -370,3 +370,127 @@ test('late recording_started from a timed-out startup cannot overwrite a newer s
   secondProc.emit('close', 0);
   await stopSecond;
 });
+
+test('disk space monitor warns once on escalation and never auto-stops', async () => {
+  const { EventEmitter } = require('node:events');
+  const rendererEvents = [];
+  const safetyNotifications = [];
+  const intervals = [];
+  let diskProbe = {
+    success: true,
+    availableBytes: 20 * 1024 * 1024 * 1024,
+    availableGB: '20.00',
+    warning: null,
+    level: null,
+  };
+
+  const { deps } = createMinimalDeps({
+    isQuitCommitted: () => false,
+    sendToRenderer: (channel, payload) => {
+      rendererEvents.push({ channel, payload });
+    },
+    checkDiskSpace: async () => diskProbe,
+    notifyRecordingSafety: (copy) => {
+      safetyNotifications.push(copy);
+    },
+    diskSpaceCheckIntervalMs: 1,
+    setIntervalFn: (fn, delay) => {
+      const timer = { fn, delay, cleared: false };
+      intervals.push(timer);
+      return timer;
+    },
+    clearIntervalFn: (timer) => {
+      if (timer) {
+        timer.cleared = true;
+      }
+    },
+  });
+
+  const proc = new EventEmitter();
+  proc.stdout = new EventEmitter();
+  proc.stderr = new EventEmitter();
+  proc.stdin = { write() {} };
+  proc.killed = false;
+  proc.pid = 9001;
+  proc.kill = () => { proc.killed = true; };
+  deps.spawnTrackedPython = () => proc;
+
+  const service = createRecorderService(deps);
+  const handlers = {};
+  service.registerIpc({
+    handle(channel, handler) {
+      handlers[channel] = handler;
+    },
+  });
+
+  const startPromise = handlers['start-recording'](
+    { sender: {} },
+    { micId: 0, loopbackId: 1, isFirstRecording: false },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  proc.stdout.emit('data', Buffer.from(`${JSON.stringify({
+    type: 'event',
+    event: 'recording_started',
+    message: 'Recording started!',
+  })}\n`));
+  await startPromise;
+
+  const diskInterval = intervals.find((timer) => timer.delay === 1);
+  assert.ok(diskInterval, 'disk space monitor interval should be scheduled');
+
+  // Healthy → no warning.
+  await diskInterval.fn();
+  assert.equal(
+    rendererEvents.filter((event) => event.payload?.type === 'disk_space').length,
+    0,
+  );
+
+  // Cross into warning once.
+  diskProbe = {
+    success: true,
+    availableBytes: 5 * 1024 * 1024 * 1024,
+    availableGB: '5.00',
+    warning: 'Less than 10 GB is available. Long recordings may run out of space.',
+    level: 'warning',
+  };
+  await diskInterval.fn();
+  await diskInterval.fn(); // same level — no duplicate
+  const warningEvents = rendererEvents.filter(
+    (event) => event.channel === 'recording-warning' && event.payload?.type === 'disk_space',
+  );
+  assert.equal(warningEvents.length, 1);
+  assert.equal(warningEvents[0].payload.level, 'warning');
+  assert.equal(safetyNotifications.length, 1);
+
+  // Escalate to critical once.
+  diskProbe = {
+    success: true,
+    availableBytes: 1 * 1024 * 1024 * 1024,
+    availableGB: '1.00',
+    warning: 'Less than 10 GB is available. Long recordings may run out of space.',
+    level: 'critical',
+  };
+  await diskInterval.fn();
+  await diskInterval.fn();
+  const diskWarnings = rendererEvents.filter(
+    (event) => event.channel === 'recording-warning' && event.payload?.type === 'disk_space',
+  );
+  assert.equal(diskWarnings.length, 2);
+  assert.equal(diskWarnings[1].payload.level, 'critical');
+  assert.equal(safetyNotifications.length, 2);
+  assert.equal(service.getCaptureState().state, 'recording');
+  assert.equal(proc.killed, false);
+
+  const stopPromise = handlers['stop-recording']({ sender: {} });
+  await new Promise((resolve) => setImmediate(resolve));
+  const audioPath = path.join(deps.getRecordingsDir(), 'disk-monitor.wav');
+  fs.writeFileSync(audioPath, 'x');
+  proc.stdout.emit('data', Buffer.from(`${JSON.stringify({
+    success: true,
+    audioPath,
+    duration: 1,
+  })}\n`));
+  proc.emit('close', 0);
+  await stopPromise;
+  assert.equal(diskInterval.cleared, true);
+});

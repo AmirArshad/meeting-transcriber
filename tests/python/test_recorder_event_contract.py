@@ -154,6 +154,27 @@ def test_recorders_use_non_scanned_temp_pcm_extension():
         assert '"_temp.wav"' not in source
 
 
+def test_recorders_emit_structured_stop_stage_events():
+    required_stages = (
+        "post_processing_started",
+        "audio_normalizing",
+        "audio_mixing",
+        "audio_encoding",
+        "post_processing_complete",
+    )
+    for path in (WINDOWS_RECORDER, MACOS_RECORDER):
+        source = _read(path)
+        positions = []
+        for stage in required_stages:
+            token = f'_send_event_message("{stage}"'
+            pos = source.find(token)
+            assert pos != -1, f"{path.name} missing stop stage {stage}"
+            positions.append(pos)
+        assert positions == sorted(positions), (
+            f"{path.name} stop stages must appear in processing order"
+        )
+
+
 def test_structured_message_helpers_emit_expected_stdout_shapes(capsys):
     recorder_stdout.send_event_message("recording_started", "Recording started")
     recorder_stdout.send_warning_message("DESKTOP_AUDIO_DEGRADED", "Desktop audio weak")

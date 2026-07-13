@@ -778,6 +778,11 @@ recorderService = createRecorderService({
       recordingPresenceService.updateCaptureState(state);
     }
   },
+  notifyRecordingSafety: (copy) => {
+    if (recordingPresenceService && typeof recordingPresenceService.showSafetyNotification === 'function') {
+      recordingPresenceService.showSafetyNotification(copy);
+    }
+  },
 });
 recorderService.registerIpc(ipcMain);
 

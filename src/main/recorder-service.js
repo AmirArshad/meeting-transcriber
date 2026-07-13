@@ -63,6 +63,10 @@ function createRecorderService(deps) {
     signalProcessTree = (proc, signal) => proc.kill(signal),
     getRecordingStopTimeoutMs = getRecordingStopTimeout,
     onCaptureStateChanged = () => {},
+    notifyRecordingSafety = () => {},
+    diskSpaceCheckIntervalMs = 5 * 60 * 1000,
+    setIntervalFn = setInterval,
+    clearIntervalFn = clearInterval,
   } = deps;
 
   if (typeof getRecordingsDir !== 'function') {
@@ -90,6 +94,96 @@ function createRecorderService(deps) {
   // In-flight quit-cancel persist; stop IPC awaits this before returning so the
   // alreadyPersistedForQuit flag is visible (avoids double transcribe/save).
   let quitStopRecoveryPromise = null;
+  let diskSpaceMonitor = null;
+  let lastEmittedDiskSpaceLevel = null;
+
+  function diskSpaceLevelSeverity(level) {
+    if (level === 'critical') {
+      return 2;
+    }
+    if (level === 'warning') {
+      return 1;
+    }
+    return 0;
+  }
+
+  function stopDiskSpaceMonitor() {
+    if (diskSpaceMonitor) {
+      clearIntervalFn(diskSpaceMonitor);
+      diskSpaceMonitor = null;
+    }
+    lastEmittedDiskSpaceLevel = null;
+  }
+
+  async function evaluateDiskSpaceDuringRecording(sessionId) {
+    if (
+      publishedCaptureState.state !== 'recording'
+      || activeRecordingSessionId !== sessionId
+    ) {
+      return;
+    }
+
+    let result;
+    try {
+      result = await checkDiskSpace();
+    } catch (error) {
+      console.warn('Recording disk-space check failed:', error?.message || error);
+      return;
+    }
+
+    if (
+      publishedCaptureState.state !== 'recording'
+      || activeRecordingSessionId !== sessionId
+    ) {
+      return;
+    }
+
+    const level = result?.level || null;
+    const nextSeverity = diskSpaceLevelSeverity(level);
+    const previousSeverity = diskSpaceLevelSeverity(lastEmittedDiskSpaceLevel);
+    if (nextSeverity <= previousSeverity) {
+      return;
+    }
+
+    lastEmittedDiskSpaceLevel = level;
+    const message = result.warning
+      || 'Less than 10 GB is available. Long recordings may run out of space.';
+    const payload = {
+      type: 'disk_space',
+      level,
+      code: level === 'critical' ? 'DISK_SPACE_CRITICAL' : 'DISK_SPACE_LOW',
+      message,
+      availableBytes: result.availableBytes,
+      availableGB: result.availableGB,
+      sessionId,
+    };
+
+    sendToRenderer('recording-warning', payload);
+    sendToRenderer('recording-progress', message);
+
+    try {
+      notifyRecordingSafety({
+        title: level === 'critical'
+          ? 'AvaNevis disk space is critically low'
+          : 'AvaNevis disk space is running low',
+        body: message,
+      });
+    } catch (error) {
+      console.warn('Recording safety notification failed:', error?.message || error);
+    }
+  }
+
+  function startDiskSpaceMonitor(sessionId) {
+    stopDiskSpaceMonitor();
+    const intervalMs = Number.isFinite(diskSpaceCheckIntervalMs) && diskSpaceCheckIntervalMs > 0
+      ? diskSpaceCheckIntervalMs
+      : 5 * 60 * 1000;
+    diskSpaceMonitor = setIntervalFn(() => {
+      evaluateDiskSpaceDuringRecording(sessionId).catch((error) => {
+        console.warn('Recording disk-space monitor error:', error?.message || error);
+      });
+    }, intervalMs);
+  }
 
   function publishCaptureState(state, sessionId = activeRecordingSessionId, startedAt = recordingStartTime) {
     publishedCaptureState = {
@@ -127,6 +221,8 @@ function createRecorderService(deps) {
       recordingHeartbeat = null;
       console.log(`Recording heartbeat monitor stopped (${reason})`);
     }
+
+    stopDiskSpaceMonitor();
 
     pythonProcess = null;
     recordingStartTime = null;
@@ -852,6 +948,9 @@ function createRecorderService(deps) {
               // Continue monitoring - don't auto-kill, let user decide
             }
           }, 5000);
+
+          // Periodic free-space checks; warn only on threshold escalation.
+          startDiskSpaceMonitor(sessionId);
 
           sendInitProgress('started', message);
           startupSettled = true;

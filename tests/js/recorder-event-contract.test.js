@@ -152,3 +152,37 @@ test('Windows and macOS recorders emit structured stdout helpers for levels/even
     assert.match(source, /print\(.*file=sys\.stderr/);
   }
 });
+
+test('Windows and macOS recorders emit structured stop-stage stdout events', () => {
+  const requiredStages = [
+    'post_processing_started',
+    'audio_normalizing',
+    'audio_mixing',
+    'audio_encoding',
+    'post_processing_complete',
+  ];
+
+  for (const filePath of [WINDOWS_RECORDER, MACOS_RECORDER]) {
+    const source = readUtf8(filePath);
+    for (const stage of requiredStages) {
+      assert.match(
+        source,
+        new RegExp(`_send_event_message\\(\\s*["']${stage}["']`),
+        `${path.basename(filePath)} must emit ${stage}`,
+      );
+    }
+
+    // Stage names must reach stdout JSON, not only stderr diagnostics.
+    assert.match(source, /_send_event_message\("post_processing_started"/);
+  }
+
+  for (const stage of requiredStages) {
+    const action = getRecorderEventAction({
+      event: stage,
+      message: `stage:${stage}`,
+    });
+    assert.equal(action.progressMessage, `stage:${stage}`);
+    assert.equal(action.recordingStartedMessage, null);
+    assert.equal(action.initProgress, null);
+  }
+});
