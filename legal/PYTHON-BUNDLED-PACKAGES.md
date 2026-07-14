@@ -57,7 +57,7 @@ Generated: 2026-05-27T18:48:43.979Z
 | requests | 2.34.2 | requirements-macos-build.txt |
 | rich | 15.0.0 | requirements-windows-build.txt, requirements-macos-build.txt |
 | scipy | 1.17.1 | requirements-macos-build.txt |
-| setuptools | platform-specific (82.0.1 vs 81.0.0) | requirements-windows-build.txt, requirements-macos-build.txt |
+| setuptools | platform-specific (83.0.0 Windows / 81.0.0 macOS) | requirements-windows-build.txt, requirements-macos-build.txt |
 | shellingham | 1.5.4 | requirements-windows-build.txt, requirements-macos-build.txt |
 | sounddevice | 0.4.6 | requirements-macos-build.txt |
 | soxr | 1.1.0 | requirements-windows-build.txt |
