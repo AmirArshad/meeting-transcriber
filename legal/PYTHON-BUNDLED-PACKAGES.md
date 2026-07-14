@@ -11,14 +11,14 @@ Generated: 2026-05-27T18:48:43.979Z
 | annotated-doc | 0.0.4 | requirements-windows-build.txt, requirements-macos-build.txt |
 | anyio | 4.13.0 | requirements-windows-build.txt, requirements-macos-build.txt |
 | av | 17.0.1 | requirements-windows-build.txt |
-| certifi | 2026.5.20 | requirements-windows-build.txt, requirements-macos-build.txt |
+| certifi | 2026.6.17 | requirements-windows-build.txt, requirements-macos-build.txt |
 | cffi | 2.0.0 | requirements-macos-build.txt |
 | charset-normalizer | 3.4.7 | requirements-macos-build.txt |
 | click | 8.4.1 | requirements-windows-build.txt, requirements-macos-build.txt |
 | colorama | 0.4.6 | requirements-windows-build.txt, requirements-macos-build.txt |
 | ctranslate2 | 4.7.2 | requirements-windows-build.txt |
 | faster-whisper | 1.2.1 | requirements-windows-build.txt |
-| filelock | 3.29.0 | requirements-windows-build.txt, requirements-macos-build.txt |
+| filelock | 3.29.7 | requirements-windows-build.txt, requirements-macos-build.txt |
 | flatbuffers | 25.12.19 | requirements-windows-build.txt |
 | fsspec | 2026.4.0 | requirements-windows-build.txt, requirements-macos-build.txt |
 | h11 | 0.16.0 | requirements-windows-build.txt, requirements-macos-build.txt |
@@ -41,7 +41,7 @@ Generated: 2026-05-27T18:48:43.979Z
 | numpy | 2.4.6 | requirements-windows-build.txt, requirements-macos-build.txt |
 | onnxruntime | 1.26.0 | requirements-windows-build.txt |
 | packaging | 26.2 | requirements-windows-build.txt, requirements-macos-build.txt |
-| protobuf | 7.35.0 | requirements-windows-build.txt |
+| protobuf | 7.35.1 | requirements-windows-build.txt |
 | pyaudiowpatch | 0.2.12.8 | requirements-windows-build.txt |
 | pycparser | 3.0 | requirements-macos-build.txt |
 | Pygments | 2.20.0 | requirements-windows-build.txt, requirements-macos-build.txt |
@@ -53,7 +53,7 @@ Generated: 2026-05-27T18:48:43.979Z
 | pyobjc-framework-Quartz | 12.1 | requirements-macos-build.txt |
 | pyobjc-framework-ScreenCaptureKit | 10.0 | requirements-macos-build.txt |
 | PyYAML | 6.0.3 | requirements-windows-build.txt, requirements-macos-build.txt |
-| regex | 2026.5.9 | requirements-macos-build.txt |
+| regex | 2026.7.10 | requirements-macos-build.txt |
 | requests | 2.34.2 | requirements-macos-build.txt |
 | rich | 15.0.0 | requirements-windows-build.txt, requirements-macos-build.txt |
 | scipy | 1.17.1 | requirements-macos-build.txt |
