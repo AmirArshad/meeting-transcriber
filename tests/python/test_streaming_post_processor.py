@@ -14,6 +14,7 @@ from backend.audio.processor import (
     StatefulResampler,
     downmix_macos_frames_to_stereo,
     downmix_windows_frames_to_stereo,
+    plan_stereo_enhance,
 )
 from backend.audio.streaming_post_processor import (
     TrackFrameReader,
@@ -452,6 +453,41 @@ def test_windows_multichannel_and_resample_fixture(tmp_path, monkeypatch):
     assert _mae_int16(got[:n], ref[:n]) <= 2.0
 
 
+def test_windows_default_chunk_resample_fixture_crosses_chunk_boundary(
+    tmp_path, monkeypatch
+):
+    frames = DEFAULT_FINALIZATION_CHUNK_FRAMES + 321
+    phase = np.linspace(0, 120, frames, dtype=np.float32)
+    mic = (np.sin(phase) * 0.25 * 32767).astype(np.int16)
+    ref = reference_windows_v1_process(
+        mic,
+        None,
+        mic_rate=44100,
+        mic_channels=1,
+    )
+    coordinator, output = _build_session(
+        tmp_path,
+        profile="windows-v1",
+        mic=mic,
+        desktop=None,
+        mic_rate=44100,
+        mic_channels=1,
+        dtype="<i2",
+        include_desktop=False,
+    )
+    _patch_finalize_io(monkeypatch)
+
+    result = finalize_capture(
+        coordinator.session_dir / MANIFEST_FILENAME,
+        output,
+        coordinator=coordinator,
+    )
+    got = _read_wav_int16(Path(result.final_path))
+    assert abs(len(got) // 2 - len(ref) // 2) <= 8
+    n = min(len(got), len(ref))
+    assert _mae_int16(got[:n], ref[:n]) <= 2.0
+
+
 def test_finalize_leaves_manifest_on_failure_and_promotes_stable_wav(tmp_path, monkeypatch):
     mic = np.full((480, 2), 0.1, dtype=np.float32)
     coordinator, output = _build_session(
@@ -658,9 +694,9 @@ def test_finalize_never_requests_oversize_chunks(tmp_path, monkeypatch):
 
     original_float_read = spp._read_float32_stereo_chunk
 
-    def spy_float_read(path, start_frame, frame_count):
+    def spy_float_read(source, start_frame, frame_count):
         assert frame_count <= chunk_frames
-        return original_float_read(path, start_frame, frame_count)
+        return original_float_read(source, start_frame, frame_count)
 
     monkeypatch.setattr(TrackFrameReader, "read_frames", spy_reader)
     monkeypatch.setattr(spp, "_read_float32_stereo_chunk", spy_float_read)
@@ -690,6 +726,89 @@ def test_probe_wav_pcm_geometry_roundtrip(tmp_path):
 
 def test_default_chunk_frames_constant():
     assert DEFAULT_FINALIZATION_CHUNK_FRAMES == 48000
+
+
+def test_stats_enhance_plan_matches_whole_array_planner():
+    rng = np.random.default_rng(17)
+    frames = rng.normal(0.03, 0.24, size=(1001, 2)).astype(np.float32)
+    stats = spp._TrackStats()
+    for start in range(0, len(frames), 137):
+        spp._accumulate_stereo_stats(stats, frames[start : start + 137])
+
+    expected = plan_stereo_enhance(frames)
+    actual = spp._plan_stereo_enhance_from_stats(stats)
+    for got, want in zip(actual, expected):
+        assert got.mean == pytest.approx(want.mean, abs=1e-7)
+        assert got.scale == pytest.approx(want.scale, abs=1e-7)
+        assert got.soft_limit is want.soft_limit
+
+
+@pytest.mark.parametrize("threshold", [0.1, 0.7, 0.95])
+def test_stats_enhance_plan_matches_at_float32_threshold_boundaries(threshold):
+    exact = np.float32(threshold)
+    for magnitude in (
+        np.nextafter(exact, np.float32(0.0)),
+        exact,
+        np.nextafter(exact, np.float32(np.inf)),
+    ):
+        channel = np.tile(
+            np.array([-magnitude, magnitude], dtype=np.float32),
+            DEFAULT_FINALIZATION_CHUNK_FRAMES // 2 + 1,
+        )[: DEFAULT_FINALIZATION_CHUNK_FRAMES + 1]
+        frames = np.column_stack([channel, -channel])
+        stats = spp._TrackStats()
+        for start in range(0, len(frames), 48000):
+            spp._accumulate_stereo_stats(stats, frames[start : start + 48000])
+
+        expected = plan_stereo_enhance(frames)
+        actual = spp._plan_stereo_enhance_from_stats(stats)
+        for got, want in zip(actual, expected):
+            assert got.mean == want.mean
+            assert got.scale == pytest.approx(want.scale, rel=1e-7)
+            assert got.soft_limit is want.soft_limit
+
+
+def test_aligned_mix_opens_each_normalized_input_once_per_pass(tmp_path, monkeypatch):
+    from backend.audio.streaming_post_processor import _OneSidedDecision
+
+    mic_path = tmp_path / "mic.f32"
+    desk_path = tmp_path / "desk.f32"
+    spp._write_float32_chunk(mic_path, np.full((65, 2), 0.1, dtype=np.float32), append=False)
+    spp._write_float32_chunk(desk_path, np.full((65, 2), 0.2, dtype=np.float32), append=False)
+    real_open = open
+    open_counts = {mic_path: 0, desk_path: 0}
+
+    def counting_open(path, *args, **kwargs):
+        candidate = Path(path)
+        if candidate in open_counts:
+            open_counts[candidate] += 1
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(spp, "open", counting_open, raising=False)
+    chunks = list(
+        spp._iter_aligned_mix_chunks(
+            mic_path=mic_path,
+            desk_path=desk_path,
+            mic_frames=65,
+            desk_frames=65,
+            total_frames=65,
+            chunk_frames=16,
+            mic_pad=0,
+            desk_pad=0,
+            desk_trim=0,
+            include_desktop=True,
+            profile="macos-v1",
+            mic_volume=1.0,
+            desktop_volume=1.0,
+            mic_boost=1.0,
+            mic_one_sided=_OneSidedDecision(False),
+            desk_one_sided=_OneSidedDecision(False),
+            mic_enhance=None,
+            apply_mix_limit=False,
+        )
+    )
+    assert sum(chunk.shape[0] for chunk in chunks) == 65
+    assert open_counts == {mic_path: 1, desk_path: 1}
 
 
 def test_windows_aligned_frame_count_caps_at_mic():

@@ -54,6 +54,37 @@ Record 15-minute and 60-minute mic+desktop sessions on one supported Mac and one
 4. Note mic and desktop sample rate / channel counts from recorder stderr device config lines.
 5. Record temp/raw size if visible and final Opus size from the recordings folder.
 
+### Synthetic finalization benchmark
+
+`npm run benchmark:finalization -- --duration 60 --profile windows-v1 --desktop`
+runs the real spool finalizer, ffmpeg WAV/RF64 writer, verification, and Opus encoder
+against incrementally generated synthetic tracks. It reports JSON with wall time,
+real-time factor, raw/final bytes, baseline RSS, and sampled peak Python RSS during
+finalization. Use `--profile macos-v1`, `--no-desktop`, or `--chunk-seconds 5` for
+comparison runs.
+
+This benchmark is repeatable and does not require audio hardware, but it is not a
+replacement for the 15/60-minute capture tables or 2/4-hour hardware evidence. It
+does not measure live callback behavior, capture RSS, device sample formats, audio
+integrity, or child ffmpeg RSS. Do not compare wall times across different machines.
+
+#### 2026-07-14 synthetic evidence (Windows development host)
+
+Windows 10/11 build `26200`, Python `3.11.9`, synthetic 60-second tracks, real
+ffmpeg WAV verification and Opus encoding:
+
+| Profile | Desktop | Chunk | Wall time | Real-time factor | Sampled Python RSS increase |
+|---|---:|---:|---:|---:|---:|
+| `windows-v1` | yes | 1 s | 4.842 s | 0.0807 | 5.30 MiB |
+| `windows-v1` | yes | 5 s | 4.859 s | 0.0810 | 11.71 MiB |
+| `windows-v1` | no | 5 s | 4.629 s | 0.0772 | 12.34 MiB |
+| `macos-v1` | yes | 5 s | 4.584 s | 0.0764 | 15.67 MiB |
+
+The paired Windows mic+desktop run showed no speed benefit from five-second
+chunks and increased sampled Python RSS, so the production default remains one
+second. The benchmark validates bounded finalization instrumentation and provides
+a reproducible measurement path; longer hardware recording evidence remains open.
+
 ### Architecture notes (current RAM path)
 
 - Mic and desktop stay separate until post-processing mix (no real-time mixing).

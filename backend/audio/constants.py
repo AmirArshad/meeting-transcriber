@@ -42,7 +42,7 @@ CENTER_CHANNEL_ATTENUATION = 0.707  # -3dB, equivalent to 1/sqrt(2)
 SURROUND_CHANNEL_ATTENUATION = 0.5  # -6dB for extra surround channels
 
 # Bounded finalization (Task 9)
-DEFAULT_FINALIZATION_CHUNK_FRAMES = 48000  # 1 second at 48 kHz
+DEFAULT_FINALIZATION_CHUNK_FRAMES = DEFAULT_SAMPLE_RATE  # 1 second at 48 kHz
 FINAL_CAPTURE_PCM_NAME = "final.pcm.tmp"
 NORMALIZED_MIC_NAME = "normalized_mic.f32.part"
 NORMALIZED_DESKTOP_NAME = "normalized_desktop.f32.part"

@@ -14,6 +14,7 @@ import re
 import shutil
 import subprocess
 import sys
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Union
@@ -32,8 +33,12 @@ from .constants import (
     DEFAULT_SAMPLE_RATE,
     FINAL_CAPTURE_PCM_NAME,
     MIC_BOOST_LINEAR,
+    NORMALIZATION_BOOST_TARGET,
+    NORMALIZATION_HIGH_THRESHOLD,
+    NORMALIZATION_LOW_THRESHOLD,
     NORMALIZED_DESKTOP_NAME,
     NORMALIZED_MIC_NAME,
+    SOFT_LIMIT_THRESHOLD,
 )
 from .macos_stereo_repair import repair_one_sided_stereo
 from .processor import (
@@ -80,10 +85,16 @@ class _OneSidedDecision:
 class _TrackStats:
     frames: int = 0
     channels: int = 0
+    sum_left: float = 0.0
+    sum_right: float = 0.0
     sum_sq_left: float = 0.0
     sum_sq_right: float = 0.0
     peak_left: float = 0.0
     peak_right: float = 0.0
+    min_left: float = float("inf")
+    max_left: float = float("-inf")
+    min_right: float = float("inf")
+    max_right: float = float("-inf")
 
 
 class TrackFrameReader:
@@ -237,7 +248,12 @@ def _float_stereo_to_int16_interleaved(frames: np.ndarray) -> np.ndarray:
     return (clipped * 32767.0).astype(np.int16).reshape(-1)
 
 
-def _accumulate_stereo_stats(stats: _TrackStats, frames: np.ndarray) -> None:
+def _accumulate_stereo_stats(
+    stats: _TrackStats,
+    frames: np.ndarray,
+    *,
+    include_energy: bool = True,
+) -> None:
     if frames.size == 0:
         return
     data = frames if frames.ndim == 2 else frames.reshape(-1, frames.shape[-1] if frames.ndim else 1)
@@ -249,10 +265,49 @@ def _accumulate_stereo_stats(stats: _TrackStats, frames: np.ndarray) -> None:
         right = data[:, 1]
     stats.frames += int(data.shape[0])
     stats.channels = 2
-    stats.sum_sq_left += float(np.dot(left, left))
-    stats.sum_sq_right += float(np.dot(right, right))
-    stats.peak_left = max(stats.peak_left, abs(float(left.min())) if left.size else 0.0, abs(float(left.max())) if left.size else 0.0)
-    stats.peak_right = max(stats.peak_right, abs(float(right.min())) if right.size else 0.0, abs(float(right.max())) if right.size else 0.0)
+    stats.sum_left += float(left.sum())
+    stats.sum_right += float(right.sum())
+    if include_energy:
+        stats.sum_sq_left += float(np.dot(left, left))
+        stats.sum_sq_right += float(np.dot(right, right))
+    left_min = float(left.min())
+    left_max = float(left.max())
+    right_min = float(right.min())
+    right_max = float(right.max())
+    stats.min_left = min(stats.min_left, left_min)
+    stats.max_left = max(stats.max_left, left_max)
+    stats.min_right = min(stats.min_right, right_min)
+    stats.max_right = max(stats.max_right, right_max)
+    stats.peak_left = max(stats.peak_left, abs(left_min), abs(left_max))
+    stats.peak_right = max(stats.peak_right, abs(right_min), abs(right_max))
+
+
+def _plan_stereo_enhance_from_stats(
+    stats: _TrackStats,
+) -> tuple[ChannelEnhancePlan, ChannelEnhancePlan]:
+    if stats.frames <= 0:
+        return ChannelEnhancePlan(), ChannelEnhancePlan()
+
+    def _plan(total: float, minimum: float, maximum: float) -> ChannelEnhancePlan:
+        # NumPy's existing whole-array planner subtracts the scalar from a
+        # float32 channel, so preserve that rounding before deriving extrema.
+        mean = float(np.float32(total / stats.frames))
+        peak = max(abs(minimum - mean), abs(maximum - mean))
+        scale = 1.0
+        if peak > NORMALIZATION_HIGH_THRESHOLD:
+            scale = NORMALIZATION_HIGH_THRESHOLD / peak
+        elif 0 < peak < NORMALIZATION_LOW_THRESHOLD:
+            scale = NORMALIZATION_BOOST_TARGET / peak
+        return ChannelEnhancePlan(
+            mean=mean,
+            scale=scale,
+            soft_limit=(peak * scale) > SOFT_LIMIT_THRESHOLD,
+        )
+
+    return (
+        _plan(stats.sum_left, stats.min_left, stats.max_left),
+        _plan(stats.sum_right, stats.min_right, stats.max_right),
+    )
 
 
 def _decide_one_sided(stats: _TrackStats) -> _OneSidedDecision:
@@ -286,13 +341,20 @@ def _write_float32_chunk(path: Path, frames: np.ndarray, *, append: bool) -> Non
         handle.write(np.ascontiguousarray(frames, dtype=np.float32).tobytes())
 
 
-def _read_float32_stereo_chunk(path: Path, start_frame: int, frame_count: int) -> np.ndarray:
+def _read_float32_stereo_chunk(source: Any, start_frame: int, frame_count: int) -> np.ndarray:
     if frame_count <= 0:
         return np.zeros((0, 2), dtype=np.float32)
     frame_bytes = 2 * 4
-    with open(path, "rb") as handle:
-        handle.seek(start_frame * frame_bytes)
+    owns_handle = not hasattr(source, "read")
+    handle = open(source, "rb") if owns_handle else source
+    try:
+        byte_offset = start_frame * frame_bytes
+        if handle.tell() != byte_offset:
+            handle.seek(byte_offset)
         payload = handle.read(frame_count * frame_bytes)
+    finally:
+        if owns_handle:
+            handle.close()
     if not payload:
         return np.zeros((0, 2), dtype=np.float32)
     samples = np.frombuffer(payload, dtype=np.float32)
@@ -308,7 +370,7 @@ def _normalize_track_to_stereo_file(
     output_name: str,
     chunk_frames: int,
     target_rate: int = TARGET_RATE,
-) -> int:
+) -> tuple[int, _TrackStats]:
     sample_rate = int(track["sampleRate"])
     channels = int(track["channels"])
     dtype = str(track["dtype"])
@@ -322,6 +384,7 @@ def _normalize_track_to_stereo_file(
         out_path.unlink()
 
     written = 0
+    stats = _TrackStats()
     resampler = StatefulResampler(sample_rate, target_rate, channels, quality="VHQ")
     downmix = (
         downmix_windows_frames_to_stereo
@@ -330,16 +393,18 @@ def _normalize_track_to_stereo_file(
     )
     committed = int(track.get("committedFrames") or 0)
 
-    with TrackFrameReader(
-        session_dir,
-        track.get("segments") or [],
-        channels=channels,
-        dtype=dtype,
-        chunk_frames=chunk_frames,
-        max_chunk_frames=chunk_frames,
-        committed_frames=committed,
-    ) as reader:
-        first = True
+    with (
+        TrackFrameReader(
+            session_dir,
+            track.get("segments") or [],
+            channels=channels,
+            dtype=dtype,
+            chunk_frames=chunk_frames,
+            max_chunk_frames=chunk_frames,
+            committed_frames=committed,
+        ) as reader,
+        open(out_path, "wb") as output_handle,
+    ):
         pending_flush = False
         while True:
             raw = reader.read_frames()
@@ -363,8 +428,10 @@ def _normalize_track_to_stereo_file(
             resampled = resampler.process(float_in, last=last)
             if resampled.size:
                 stereo = downmix(resampled, channels)
-                _write_float32_chunk(out_path, stereo, append=not first)
-                first = False
+                output_handle.write(
+                    np.ascontiguousarray(stereo, dtype=np.float32).tobytes()
+                )
+                _accumulate_stereo_stats(stats, stereo)
                 written += int(stereo.shape[0])
             if last:
                 break
@@ -375,28 +442,7 @@ def _normalize_track_to_stereo_file(
                 f"read {reader.frames_read}, expected {committed}"
             )
 
-    if written == 0:
-        _write_float32_chunk(out_path, np.zeros((0, 2), dtype=np.float32), append=False)
-    return written
-
-
-def _scan_normalized_stats(path: Path, chunk_frames: int) -> _TrackStats:
-    stats = _TrackStats()
-    if not path.is_file():
-        return stats
-    total_bytes = path.stat().st_size
-    frame_bytes = 8
-    total_frames = total_bytes // frame_bytes
-    offset = 0
-    while offset < total_frames:
-        chunk = _read_float32_stereo_chunk(path, offset, min(chunk_frames, total_frames - offset))
-        if chunk.shape[0] == 0:
-            break
-        if chunk.shape[0] > chunk_frames:
-            raise ValueError("Rejecting oversize normalized chunk read")
-        _accumulate_stereo_stats(stats, chunk)
-        offset += chunk.shape[0]
-    return stats
+    return written, stats
 
 
 def _mix_soft_limit_inplace(mixed: np.ndarray, *, apply: bool) -> None:
@@ -432,61 +478,68 @@ def _iter_aligned_mix_chunks(
     desk_pos = desk_trim
     out_pos = 0
     desk_kept = max(0, desk_frames - desk_trim) if include_desktop else 0
-    while out_pos < total_frames:
-        n = min(chunk_frames, total_frames - out_pos)
-        if n > chunk_frames:
-            raise ValueError("Rejecting oversize aligned mix chunk")
-        mic_chunk = np.zeros((n, 2), dtype=np.float32)
-        local = 0
-        if out_pos < mic_pad:
-            local = min(n, mic_pad - out_pos)
-        take = n - local
-        if take > 0 and mic_pos < mic_frames:
-            got = _read_float32_stereo_chunk(
-                mic_path, mic_pos, min(take, mic_frames - mic_pos)
-            )
-            if got.shape[0] > chunk_frames:
-                raise ValueError("Rejecting oversize mic chunk read")
-            # One-sided + Windows enhance only on real mic samples — never on
-            # alignment silence (RAM path enhances before padding).
-            got = _apply_one_sided(got, mic_one_sided)
-            if mic_enhance is not None:
-                apply_stereo_enhance_inplace(got, mic_enhance[0], mic_enhance[1])
-            mic_chunk[local : local + got.shape[0]] = got
-            mic_pos += got.shape[0]
-        elif mic_one_sided.repair:
-            # Pad-only chunk: zeros stay zeros under one-sided repair.
-            mic_chunk = _apply_one_sided(mic_chunk, mic_one_sided)
-
-        if include_desktop and desk_path is not None:
-            desk_chunk = np.zeros((n, 2), dtype=np.float32)
-            dlocal = 0
-            if out_pos < desk_pad:
-                dlocal = min(n, desk_pad - out_pos)
-            dtake = n - dlocal
-            if dtake > 0 and desk_pos < desk_trim + desk_kept:
+    with ExitStack() as stack:
+        mic_handle = stack.enter_context(open(mic_path, "rb"))
+        desk_handle = (
+            stack.enter_context(open(desk_path, "rb"))
+            if include_desktop and desk_path is not None
+            else None
+        )
+        while out_pos < total_frames:
+            n = min(chunk_frames, total_frames - out_pos)
+            if n > chunk_frames:
+                raise ValueError("Rejecting oversize aligned mix chunk")
+            mic_chunk = np.zeros((n, 2), dtype=np.float32)
+            local = 0
+            if out_pos < mic_pad:
+                local = min(n, mic_pad - out_pos)
+            take = n - local
+            if take > 0 and mic_pos < mic_frames:
                 got = _read_float32_stereo_chunk(
-                    desk_path,
-                    desk_pos,
-                    min(dtake, desk_trim + desk_kept - desk_pos),
+                    mic_handle, mic_pos, min(take, mic_frames - mic_pos)
                 )
                 if got.shape[0] > chunk_frames:
-                    raise ValueError("Rejecting oversize desktop chunk read")
-                desk_chunk[dlocal : dlocal + got.shape[0]] = got
-                desk_pos += got.shape[0]
-            desk_chunk = _apply_one_sided(desk_chunk, desk_one_sided)
-            mixed = mic_chunk * (mic_volume * mic_boost) + desk_chunk * desktop_volume
-            _mix_soft_limit_inplace(mixed, apply=apply_mix_limit)
-        elif profile == "windows-v1":
-            # Windows mic-only: enhance already applied; no extra volume multiply.
-            mixed = mic_chunk
-        else:
-            mixed = mic_chunk * mic_volume
+                    raise ValueError("Rejecting oversize mic chunk read")
+                # One-sided + Windows enhance only on real mic samples — never on
+                # alignment silence (RAM path enhances before padding).
+                got = _apply_one_sided(got, mic_one_sided)
+                if mic_enhance is not None:
+                    apply_stereo_enhance_inplace(got, mic_enhance[0], mic_enhance[1])
+                mic_chunk[local : local + got.shape[0]] = got
+                mic_pos += got.shape[0]
+            elif mic_one_sided.repair:
+                # Pad-only chunk: zeros stay zeros under one-sided repair.
+                mic_chunk = _apply_one_sided(mic_chunk, mic_one_sided)
 
-        if post_mix_enhance is not None:
-            apply_stereo_enhance_inplace(mixed, post_mix_enhance[0], post_mix_enhance[1])
-        yield mixed
-        out_pos += n
+            if include_desktop and desk_handle is not None:
+                desk_chunk = np.zeros((n, 2), dtype=np.float32)
+                dlocal = 0
+                if out_pos < desk_pad:
+                    dlocal = min(n, desk_pad - out_pos)
+                dtake = n - dlocal
+                if dtake > 0 and desk_pos < desk_trim + desk_kept:
+                    got = _read_float32_stereo_chunk(
+                        desk_handle,
+                        desk_pos,
+                        min(dtake, desk_trim + desk_kept - desk_pos),
+                    )
+                    if got.shape[0] > chunk_frames:
+                        raise ValueError("Rejecting oversize desktop chunk read")
+                    desk_chunk[dlocal : dlocal + got.shape[0]] = got
+                    desk_pos += got.shape[0]
+                desk_chunk = _apply_one_sided(desk_chunk, desk_one_sided)
+                mixed = mic_chunk * (mic_volume * mic_boost) + desk_chunk * desktop_volume
+                _mix_soft_limit_inplace(mixed, apply=apply_mix_limit)
+            elif profile == "windows-v1":
+                # Windows mic-only: enhance already applied; no extra volume multiply.
+                mixed = mic_chunk
+            else:
+                mixed = mic_chunk * mic_volume
+
+            if post_mix_enhance is not None:
+                apply_stereo_enhance_inplace(mixed, post_mix_enhance[0], post_mix_enhance[1])
+            yield mixed
+            out_pos += n
 
 
 def _compute_mix_peak_aligned(
@@ -1077,7 +1130,7 @@ def finalize_capture(
         if int(mic_track.get("committedFrames") or 0) <= 0:
             raise FinalizationError("No microphone audio was captured")
 
-        mic_frames = _normalize_track_to_stereo_file(
+        mic_frames, mic_stats = _normalize_track_to_stereo_file(
             session_dir=coordinator.session_dir,
             track=mic_track,
             profile=profile,
@@ -1088,7 +1141,7 @@ def finalize_capture(
         desk_path: Optional[Path] = None
         if include_desktop:
             desk_track = coordinator.get_track("desktop")
-            desk_frames = _normalize_track_to_stereo_file(
+            desk_frames, desk_stats = _normalize_track_to_stereo_file(
                 session_dir=coordinator.session_dir,
                 track=desk_track,
                 profile=profile,
@@ -1096,10 +1149,10 @@ def finalize_capture(
                 chunk_frames=chunk_frames,
             )
             desk_path = coordinator.session_dir / NORMALIZED_DESKTOP_NAME
+        else:
+            desk_stats = _TrackStats()
 
         mic_path = coordinator.session_dir / NORMALIZED_MIC_NAME
-        mic_stats = _scan_normalized_stats(mic_path, chunk_frames)
-        desk_stats = _scan_normalized_stats(desk_path, chunk_frames) if desk_path else _TrackStats()
 
         mic_one_sided = (
             _decide_one_sided(mic_stats) if profile == "macos-v1" else _OneSidedDecision(False)
@@ -1124,99 +1177,37 @@ def finalize_capture(
         # Windows enhances mic before mix; macOS enhances after global mix limiting.
         mic_enhance = None
         if profile == "windows-v1":
-            # Plan enhance from normalized mic (optionally after one-sided — Windows has none).
-            # Read mic in bounded chunks to build plans without loading whole file.
-            left_sums = 0.0
-            right_sums = 0.0
-            count = 0
-            offset = 0
-            while offset < mic_frames:
-                chunk = _read_float32_stereo_chunk(mic_path, offset, min(chunk_frames, mic_frames - offset))
-                if chunk.shape[0] == 0:
-                    break
-                left_sums += float(chunk[:, 0].sum())
-                right_sums += float(chunk[:, 1].sum())
-                count += chunk.shape[0]
-                offset += chunk.shape[0]
-            # Re-scan with means for peak/scale decisions via plan_channel_enhance on
-            # a synthetic pass: accumulate min/max after subtracting running means.
-            mean_l = left_sums / count if count else 0.0
-            mean_r = right_sums / count if count else 0.0
-            min_l = min_r = 0.0
-            max_l = max_r = 0.0
-            offset = 0
-            first = True
-            while offset < mic_frames:
-                chunk = _read_float32_stereo_chunk(mic_path, offset, min(chunk_frames, mic_frames - offset))
-                if chunk.shape[0] == 0:
-                    break
-                left = chunk[:, 0] - mean_l
-                right = chunk[:, 1] - mean_r
-                if first:
-                    min_l = float(left.min())
-                    max_l = float(left.max())
-                    min_r = float(right.min())
-                    max_r = float(right.max())
-                    first = False
-                else:
-                    min_l = min(min_l, float(left.min()))
-                    max_l = max(max_l, float(left.max()))
-                    min_r = min(min_r, float(right.min()))
-                    max_r = max(max_r, float(right.max()))
-                offset += chunk.shape[0]
-            left_plan = ChannelEnhancePlan(mean=mean_l)
-            right_plan = ChannelEnhancePlan(mean=mean_r)
-            peak_l = max(abs(min_l), abs(max_l))
-            peak_r = max(abs(min_r), abs(max_r))
-            from .constants import (
-                NORMALIZATION_HIGH_THRESHOLD,
-                NORMALIZATION_LOW_THRESHOLD,
-                NORMALIZATION_BOOST_TARGET,
-                SOFT_LIMIT_THRESHOLD,
-            )
-
-            def _scale_and_limit(peak: float) -> tuple[float, bool]:
-                scale = 1.0
-                if peak > NORMALIZATION_HIGH_THRESHOLD:
-                    scale = NORMALIZATION_HIGH_THRESHOLD / peak
-                elif 0 < peak < NORMALIZATION_LOW_THRESHOLD:
-                    scale = NORMALIZATION_BOOST_TARGET / peak
-                abs_max = peak * scale
-                return scale, abs_max > SOFT_LIMIT_THRESHOLD
-
-            left_plan.scale, left_plan.soft_limit = _scale_and_limit(peak_l)
-            right_plan.scale, right_plan.soft_limit = _scale_and_limit(peak_r)
-            mic_enhance = (left_plan, right_plan)
+            mic_enhance = _plan_stereo_enhance_from_stats(mic_stats)
 
         _emit_progress(progress_callback, "audio_mixing", "Mixing audio...")
-        mix_peak = _compute_mix_peak_aligned(
-            mic_path=mic_path,
-            desk_path=desk_path if include_desktop else None,
-            mic_frames=mic_frames,
-            desk_frames=desk_frames,
-            total_frames=total_frames,
-            chunk_frames=chunk_frames,
-            mic_pad=mic_pad,
-            desk_pad=desk_pad,
-            desk_trim=desk_trim,
-            include_desktop=include_desktop,
-            profile=profile,
-            mic_volume=mic_volume,
-            desktop_volume=desktop_volume,
-            mic_boost=mic_boost if include_desktop else 1.0,
-            mic_one_sided=mic_one_sided,
-            desk_one_sided=desk_one_sided,
-            mic_enhance=mic_enhance,
-        )
+        mix_peak = 0.0
+        if include_desktop:
+            mix_peak = _compute_mix_peak_aligned(
+                mic_path=mic_path,
+                desk_path=desk_path,
+                mic_frames=mic_frames,
+                desk_frames=desk_frames,
+                total_frames=total_frames,
+                chunk_frames=chunk_frames,
+                mic_pad=mic_pad,
+                desk_pad=desk_pad,
+                desk_trim=desk_trim,
+                include_desktop=True,
+                profile=profile,
+                mic_volume=mic_volume,
+                desktop_volume=desktop_volume,
+                mic_boost=mic_boost,
+                mic_one_sided=mic_one_sided,
+                desk_one_sided=desk_one_sided,
+                mic_enhance=mic_enhance,
+            )
         apply_mix_limit = include_desktop and mix_peak > 1.0
 
         post_mix_enhance = None
         if profile == "macos-v1":
-            # Bounded stats over the globally limited aligned mixed signal.
-            left_sums = right_sums = 0.0
-            count = 0
-            min_l = max_l = min_r = max_r = 0.0
-            first = True
+            # One bounded stats pass over the globally limited aligned mix is
+            # sufficient: centered extrema derive from global sum/min/max.
+            mixed_stats = _TrackStats()
 
             def _iter_mixed_for_stats() -> Iterator[np.ndarray]:
                 return _iter_aligned_mix_chunks(
@@ -1242,43 +1233,8 @@ def finalize_capture(
                 )
 
             for mixed in _iter_mixed_for_stats():
-                left_sums += float(mixed[:, 0].sum())
-                right_sums += float(mixed[:, 1].sum())
-                count += mixed.shape[0]
-            mean_l = left_sums / count if count else 0.0
-            mean_r = right_sums / count if count else 0.0
-            for mixed in _iter_mixed_for_stats():
-                left = mixed[:, 0] - mean_l
-                right = mixed[:, 1] - mean_r
-                if first:
-                    min_l, max_l = float(left.min()), float(left.max())
-                    min_r, max_r = float(right.min()), float(right.max())
-                    first = False
-                else:
-                    min_l = min(min_l, float(left.min()))
-                    max_l = max(max_l, float(left.max()))
-                    min_r = min(min_r, float(right.min()))
-                    max_r = max(max_r, float(right.max()))
-            from .constants import (
-                NORMALIZATION_HIGH_THRESHOLD,
-                NORMALIZATION_LOW_THRESHOLD,
-                NORMALIZATION_BOOST_TARGET,
-                SOFT_LIMIT_THRESHOLD,
-            )
-
-            def _scale_and_limit(peak: float) -> tuple[float, bool]:
-                scale = 1.0
-                if peak > NORMALIZATION_HIGH_THRESHOLD:
-                    scale = NORMALIZATION_HIGH_THRESHOLD / peak
-                elif 0 < peak < NORMALIZATION_LOW_THRESHOLD:
-                    scale = NORMALIZATION_BOOST_TARGET / peak
-                return scale, (peak * scale) > SOFT_LIMIT_THRESHOLD
-
-            left_plan = ChannelEnhancePlan(mean=mean_l)
-            right_plan = ChannelEnhancePlan(mean=mean_r)
-            left_plan.scale, left_plan.soft_limit = _scale_and_limit(max(abs(min_l), abs(max_l)))
-            right_plan.scale, right_plan.soft_limit = _scale_and_limit(max(abs(min_r), abs(max_r)))
-            post_mix_enhance = (left_plan, right_plan)
+                _accumulate_stereo_stats(mixed_stats, mixed, include_energy=False)
+            post_mix_enhance = _plan_stereo_enhance_from_stats(mixed_stats)
 
         final_temp = coordinator.session_dir / FINAL_CAPTURE_PCM_NAME
         if final_temp.exists():

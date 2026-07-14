@@ -11,6 +11,7 @@
     "test:python": "node scripts/run-python-tests.js",
     "test:python-syntax": "node scripts/check-python-syntax.js",
     "test:all": "npm test && npm run test:python && npm run test:python-syntax",
+    "benchmark:finalization": "node scripts/run-finalization-benchmark.js",
     "test:syntax": "node scripts/check-js-syntax.js",
     "clean": "node scripts/clean-dist.js",
     "prepare-build": "npm run clean && node build/prepare-resources.js",
