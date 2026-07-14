@@ -2,29 +2,28 @@
 macOS audio recorder implementation using sounddevice and ScreenCaptureKit.
 
 Uses sounddevice for microphone input and ScreenCaptureKit for desktop audio capture.
-Implements the same post-processing mix approach as Windows for consistency.
+Implements the same durable-spool + post-processing mix approach as Windows.
 
-Known constraint: with ``AVANEVIS_CAPTURE_SPOOL`` off (default), mic frames are
-buffered in RAM (ChunkedAudioBuffer) for the post-processing mix. The spool path
-finalizes with bounded multi-pass processing (Task 9) and does not hydrate whole
-tracks. Very long meetings on the RAM path can still peak high during stop-time
-concatenate/mix; processing exceptions must emit structured failure JSON.
+Capture always spills to ``{stem}.capture/`` track spools during recording.
+Stop finalizes with bounded multi-pass processing (``finalize_capture``) and
+does not hydrate whole tracks into RAM. Interrupted sessions recover via
+``audio.capture_recovery``. Processing exceptions must emit structured failure JSON.
 """
 
 import sys
-import json
 import threading
 import time
 from types import SimpleNamespace
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 import numpy as np
 
-from .compressor import compress_and_report, verify_recording_integrity
-from .chunked_audio_buffer import ChunkedAudioBuffer
-from .capture_spool_runtime import capture_spool_enabled
-from .capture_manifest import CaptureManifestCoordinator, MANIFEST_FILENAME
+from .compressor import verify_recording_integrity
+from .capture_manifest import (
+    CaptureManifestCoordinator,
+    MANIFEST_FILENAME,
+    discard_capture_session,
+)
 from .track_spool import TrackSpool
 from .streaming_post_processor import FinalizationError, finalize_capture
 from .macos_desktop_diagnostics import (
@@ -32,13 +31,11 @@ from .macos_desktop_diagnostics import (
     format_desktop_diagnostics_summary,
 )
 from .macos_stereo_repair import repair_one_sided_stereo
-from .macos_stream_alignment import align_streams_by_start_time
 from .recorder_temp_paths import (
     build_recorder_temp_pcm_path,
     build_stable_wav_path_for_output,
     promote_recorder_temp_to_wav,
 )
-from .wav_io import write_float_stereo_wav
 from . import recorder_stdout as _recorder_stdout
 
 # Re-export for characterization tests that import macos_recorder._repair_one_sided_stereo
@@ -109,57 +106,10 @@ def _send_error_message(code: str, message: str, **extra):
     )
 
 
-# Audio processing constants (kept for local callers; shared values live in constants.py)
+# Audio processing constants (shared values live in constants.py; MIC_BOOST used for spool mix params)
 from .constants import (
-    CENTER_CHANNEL_ATTENUATION,
-    SURROUND_CHANNEL_ATTENUATION,
     MIC_BOOST_LINEAR,
 )
-
-
-def _downmix_to_stereo(audio: np.ndarray, num_channels: int) -> np.ndarray:
-    """
-    Downmix multi-channel audio to stereo.
-
-    Uses standard downmix coefficients:
-    - Center channel at -3dB (0.707) mixed equally to L and R
-    - Surround channels at -6dB (0.5) mixed equally to L and R
-
-    Args:
-        audio: numpy array with shape (samples, channels)
-        num_channels: number of channels in the audio
-
-    Returns:
-        numpy array with shape (samples, 2) for stereo output
-    """
-    if num_channels <= 2:
-        if num_channels == 1:
-            # Mono to stereo: duplicate the channel
-            if len(audio.shape) == 1:
-                return np.column_stack([audio, audio])
-            return np.column_stack([audio[:, 0], audio[:, 0]])
-        # Already stereo
-        return audio
-
-    # Multi-channel downmix to stereo
-    # Standard layout: L, R, C, LFE, SL, SR, ...
-    left = audio[:, 0].copy()
-    right = audio[:, 1].copy()
-
-    # Add Center (channel 2) if available - at -3dB to both L and R
-    if num_channels >= 3:
-        center = audio[:, 2] * CENTER_CHANNEL_ATTENUATION
-        left = left + center
-        right = right + center
-
-    # Add remaining channels (surround, etc.) at -6dB
-    if num_channels > 3:
-        for i in range(3, num_channels):
-            ch = audio[:, i] * SURROUND_CHANNEL_ATTENUATION
-            left = left + ch
-            right = right + ch
-
-    return np.column_stack([left, right])
 
 
 # Import Swift audio capture helper (preferred for macOS 13+)
@@ -194,10 +144,10 @@ class MacOSAudioRecorder:
     """
     macOS audio recorder with sounddevice (microphone) and ScreenCaptureKit (desktop).
 
-    Uses post-processing mix approach:
-    - Records mic and desktop to separate buffers
-    - Mixes them after recording completes
-    - Applies audio enhancement and compression
+    Uses durable capture spools and post-processing mix:
+    - Records mic and desktop to ``{stem}.capture/`` track spools
+    - Finalizes with bounded multi-pass processing after stop
+    - Applies audio enhancement and compression during finalization
     """
 
     def __init__(
@@ -226,12 +176,9 @@ class MacOSAudioRecorder:
         # Recording state
         self.is_running = False
         self._running_lock = threading.Lock()  # Protects is_running access
-        self.mic_frames = ChunkedAudioBuffer()
-        self.desktop_frames = []
         self.recording_failure = None
 
-        # Optional durable spool path (AVANEVIS_CAPTURE_SPOOL=1). Default off.
-        self._use_capture_spool = False
+        # Durable capture spools ({stem}.capture/) — no whole-session RAM buffers.
         self._capture_manifest = None
         self._mic_spool = None
         self._desktop_spool = None
@@ -386,8 +333,6 @@ class MacOSAudioRecorder:
             return True
 
         self._set_running(True)
-        self.mic_frames.clear()
-        self.desktop_frames = []
 
         # Clear error state
         self._error_event.clear()
@@ -409,7 +354,6 @@ class MacOSAudioRecorder:
         # This is the single reference point for preroll timing
         self.recording_start_time = time.time()
 
-        self._use_capture_spool = capture_spool_enabled()
         if self.desktop_capture is not None:
             self.desktop_capture.audio_sink = None
 
@@ -441,19 +385,18 @@ class MacOSAudioRecorder:
             self._set_running(False)
             return False
 
-        if self._use_capture_spool:
-            try:
-                mic_channels = min(int(self.mic_info.get('max_input_channels', 1) or 1), 2)
-                self._open_capture_spools(mic_channels=mic_channels)
-            except Exception as spool_err:
-                message = f"Failed to open capture spools: {spool_err}"
-                print(f"ERROR: {message}", file=sys.stderr)
-                _send_error_message("CAPTURE_SPOOL_OPEN_FAILED", message)
-                self._set_running(False)
-                self._release_capture_spools()
-                return False
-            if self.desktop_capture is not None:
-                self.desktop_capture.audio_sink = self._desktop_audio_sink
+        try:
+            mic_channels = min(int(self.mic_info.get('max_input_channels', 1) or 1), 2)
+            self._open_capture_spools(mic_channels=mic_channels)
+        except Exception as spool_err:
+            message = f"Failed to open capture spools: {spool_err}"
+            print(f"ERROR: {message}", file=sys.stderr)
+            _send_error_message("CAPTURE_SPOOL_OPEN_FAILED", message)
+            self._set_running(False)
+            self._release_and_discard_startup_capture()
+            return False
+        if self.desktop_capture is not None:
+            self.desktop_capture.audio_sink = self._desktop_audio_sink
 
         # Start microphone recording thread
         self.mic_thread = threading.Thread(target=self._record_microphone)
@@ -528,9 +471,7 @@ class MacOSAudioRecorder:
         if self.desktop_thread and self.desktop_thread.is_alive():
             self.desktop_thread.join(timeout=1.0)
 
-        self.mic_frames.clear()
-        self.desktop_frames = []
-        self._release_capture_spools()
+        self._release_and_discard_startup_capture()
 
     def _desktop_audio_sink(self, chunk: np.ndarray) -> bool:
         """Forward helper float32 chunks to the desktop spool (sink mode)."""
@@ -633,9 +574,6 @@ class MacOSAudioRecorder:
 
     def _close_capture_spools_for_mix(self) -> None:
         """Close/commit spools and prepare the manifest for bounded finalization."""
-        if not self._use_capture_spool:
-            return
-
         mic_frames = 0
         include_desktop = False
         if self._mic_spool is not None:
@@ -678,10 +616,6 @@ class MacOSAudioRecorder:
                 and self._desktop_spool_accepted_any
                 and desk_result.committed_frames > 0
             )
-
-        # Spool path no longer hydrates whole tracks into RAM (Task 9).
-        self.mic_frames = ChunkedAudioBuffer()
-        self.desktop_frames = []
 
         if self._capture_manifest is not None:
             try:
@@ -779,7 +713,15 @@ class MacOSAudioRecorder:
                 pass
             self._capture_manifest = None
         self._mic_spool_channels = None
-        self._use_capture_spool = False
+
+    def _release_and_discard_startup_capture(self) -> None:
+        """Close spool handles, then delete a never-started capture directory."""
+        session_dir = None
+        if self._capture_manifest is not None:
+            session_dir = self._capture_manifest.session_dir
+        self._release_capture_spools()
+        if session_dir is not None:
+            discard_capture_session(session_dir)
 
     def _record_microphone(self):
         """Record from microphone using sounddevice."""
@@ -817,8 +759,8 @@ class MacOSAudioRecorder:
                 if self.mic_capture_start_time is None:
                     self.mic_capture_start_time = time.time()
 
-                # Store audio data (RAM path) or durable spool (flagged path)
-                if self._use_capture_spool and self._mic_spool is not None:
+                # Write durable mic spool
+                if self._mic_spool is not None:
                     pcm = np.ascontiguousarray(indata, dtype=np.float32).tobytes()
                     if not self._mic_spool.append(pcm):
                         message = (
@@ -830,8 +772,6 @@ class MacOSAudioRecorder:
                         self._error_event.set()
                         self._set_running(False)
                         return
-                else:
-                    self.mic_frames.append(indata)
 
                 # Calculate audio level (for visualization)
                 # Subsample by 8 for performance
@@ -861,9 +801,11 @@ class MacOSAudioRecorder:
                 while self._get_running():
                     time.sleep(0.1)
 
+            committed = 0
+            if self._mic_spool is not None:
+                committed = int(getattr(self._mic_spool, "committed_frames", 0) or 0)
             print(
-                f"Mic recording stopped. Chunks captured: {len(self.mic_frames)} "
-                f"({self.mic_frames.nbytes / 1024 / 1024:.2f} MB)",
+                f"Mic recording stopped. Committed spool frames: {committed}",
                 file=sys.stderr,
             )
 
@@ -1087,16 +1029,14 @@ class MacOSAudioRecorder:
         if self.desktop_thread:
             self.desktop_thread.join(timeout=2.0)
 
-        # Stop desktop capture and get desktop audio (RAM path). Sink mode returns None;
-        # committed desktop PCM is hydrated from the spool below.
+        # Stop desktop capture. Sink mode returns None; committed desktop PCM
+        # lives on the spool and is finalized via finalize_capture.
         if self.desktop_capture:
             capture_type = self.desktop_capture_type or 'unknown'
             print(f"Stopping {capture_type} desktop capture...", file=sys.stderr)
-            desktop_audio = None
-            warning_codes = set()
             try:
-                desktop_audio = self.desktop_capture.stop_recording()
-                warning_codes = self._drain_desktop_warnings(capture_type)
+                self.desktop_capture.stop_recording()
+                self._drain_desktop_warnings(capture_type)
             except Exception as stop_err:
                 self._note_desktop_runtime_failure(
                     f"Desktop audio stop failed: {stop_err}",
@@ -1105,108 +1045,57 @@ class MacOSAudioRecorder:
             if self.desktop_capture is not None:
                 self.desktop_capture.audio_sink = None
 
-            if desktop_audio is not None and len(desktop_audio) > 0:
-                diagnostics = self._emit_desktop_diagnostics_warning(emit_warning=False)
-                if diagnostics.get('bufferSamples', 0) <= 0:
-                    diagnostics['bufferChunks'] = max(int(diagnostics.get('bufferChunks', 0) or 0), 1)
-                    diagnostics['bufferSamples'] = int(len(desktop_audio))
-                    self.desktop_diagnostics = diagnostics
-                # Convert to list of frames for consistency
-                self.desktop_frames = [desktop_audio]
-                self.desktop_capture_start_time = self._resolve_desktop_capture_start_time()
-                self.desktop_capture_end_time = getattr(self.desktop_capture, 'last_audio_time', None)
-                if self.desktop_capture_start_time is None and self.recording_start_time is not None:
-                    self.desktop_capture_start_time = self.recording_start_time + self.preroll_seconds
-                desktop_peak = float(np.max(np.abs(desktop_audio))) if desktop_audio.size else 0.0
-                desktop_rms = float(np.sqrt(np.mean(np.square(desktop_audio)))) if desktop_audio.size else 0.0
-                print(
-                    f"Retrieved {len(desktop_audio)} desktop audio samples from {capture_type} "
-                    f"(peak={desktop_peak:.6f}, rms={desktop_rms:.6f})",
-                    file=sys.stderr,
+            # Sink mode: timestamps still come from the helper; PCM loads from spool.
+            self._consume_desktop_helper_failure()
+            self.desktop_capture_start_time = self._resolve_desktop_capture_start_time()
+            self.desktop_capture_end_time = getattr(self.desktop_capture, 'last_audio_time', None)
+            if self.desktop_capture_start_time is None and self.recording_start_time is not None:
+                self.desktop_capture_start_time = self.recording_start_time + self.preroll_seconds
+            self._emit_desktop_diagnostics_warning(emit_warning=False)
+
+        try:
+            self._close_capture_spools_for_mix()
+        except Exception as spool_err:
+            message = f"Failed to close capture spools: {spool_err}"
+            print(f"ERROR: {message}", file=sys.stderr)
+            self.recording_failure = {
+                'code': 'CAPTURE_SPOOL_CLOSE_FAILED',
+                'message': message,
+            }
+            self._release_capture_spools()
+            return
+
+        include_desktop = False
+        if self._capture_manifest is not None:
+            include_desktop = bool(self._capture_manifest.to_dict().get("includeDesktop"))
+        if include_desktop:
+            print("Desktop track committed for bounded finalization", file=sys.stderr)
+        elif not self._desktop_runtime_failure:
+            capture_type = self.desktop_capture_type or 'unknown'
+            self._emit_desktop_diagnostics_warning()
+            print(f"No desktop audio captured from {capture_type}", file=sys.stderr)
+            helper_backend = self.desktop_diagnostics.get('helperCaptureBackend') if self.desktop_diagnostics else None
+            if helper_backend == 'coreaudio_tap':
+                help_text = (
+                    "If system audio was playing, check macOS System Audio Recording permission, "
+                    "restart AvaNevis, and try another short recording."
                 )
-            elif not self._use_capture_spool:
-                self._consume_desktop_helper_failure()
-                self._emit_desktop_diagnostics_warning()
-                print(f"No desktop audio captured from {capture_type}", file=sys.stderr)
-                if self._desktop_runtime_failure:
-                    # Already warned via _note_desktop_runtime_failure.
-                    self.desktop_frames = []
-                elif "NO_DESKTOP_AUDIO_CAPTURED" not in warning_codes:
-                    helper_backend = self.desktop_diagnostics.get('helperCaptureBackend') if self.desktop_diagnostics else None
-                    if helper_backend == 'coreaudio_tap':
-                        help_text = (
-                            "If system audio was playing, check macOS System Audio Recording permission, "
-                            "restart AvaNevis, and try another short recording."
-                        )
-                    elif helper_backend == 'screencapturekit':
-                        help_text = (
-                            "If system audio was playing, check Screen Recording permission, restart AvaNevis, "
-                            "and try another short recording."
-                        )
-                    else:
-                        help_text = (
-                            "If system audio was playing, check macOS System Audio Recording and Screen Recording "
-                            "permissions, restart AvaNevis, and try another short recording."
-                        )
-                    _send_warning_message(
-                        "NO_DESKTOP_AUDIO_CAPTURED",
-                        "No desktop audio was captured; saved recording contains microphone audio only.",
-                        help=help_text,
-                        captureType=capture_type,
-                    )
+            elif helper_backend == 'screencapturekit':
+                help_text = (
+                    "If system audio was playing, check Screen Recording permission, restart AvaNevis, "
+                    "and try another short recording."
+                )
             else:
-                # Sink mode: timestamps still come from the helper; PCM loads from spool.
-                self._consume_desktop_helper_failure()
-                self.desktop_capture_start_time = self._resolve_desktop_capture_start_time()
-                self.desktop_capture_end_time = getattr(self.desktop_capture, 'last_audio_time', None)
-                if self.desktop_capture_start_time is None and self.recording_start_time is not None:
-                    self.desktop_capture_start_time = self.recording_start_time + self.preroll_seconds
-                self._emit_desktop_diagnostics_warning(emit_warning=False)
-
-        if self._use_capture_spool:
-            try:
-                self._close_capture_spools_for_mix()
-            except Exception as spool_err:
-                message = f"Failed to close capture spools: {spool_err}"
-                print(f"ERROR: {message}", file=sys.stderr)
-                self.recording_failure = {
-                    'code': 'CAPTURE_SPOOL_CLOSE_FAILED',
-                    'message': message,
-                }
-                self._release_capture_spools()
-                return
-
-            include_desktop = False
-            if self._capture_manifest is not None:
-                include_desktop = bool(self._capture_manifest.to_dict().get("includeDesktop"))
-            if include_desktop:
-                print("Desktop track committed for bounded finalization", file=sys.stderr)
-            elif not self._desktop_runtime_failure:
-                capture_type = self.desktop_capture_type or 'unknown'
-                self._emit_desktop_diagnostics_warning()
-                print(f"No desktop audio captured from {capture_type}", file=sys.stderr)
-                helper_backend = self.desktop_diagnostics.get('helperCaptureBackend') if self.desktop_diagnostics else None
-                if helper_backend == 'coreaudio_tap':
-                    help_text = (
-                        "If system audio was playing, check macOS System Audio Recording permission, "
-                        "restart AvaNevis, and try another short recording."
-                    )
-                elif helper_backend == 'screencapturekit':
-                    help_text = (
-                        "If system audio was playing, check Screen Recording permission, restart AvaNevis, "
-                        "and try another short recording."
-                    )
-                else:
-                    help_text = (
-                        "If system audio was playing, check macOS System Audio Recording and Screen Recording "
-                        "permissions, restart AvaNevis, and try another short recording."
-                    )
-                _send_warning_message(
-                    "NO_DESKTOP_AUDIO_CAPTURED",
-                    "No desktop audio was captured; saved recording contains microphone audio only.",
-                    help=help_text,
-                    captureType=capture_type,
+                help_text = (
+                    "If system audio was playing, check macOS System Audio Recording and Screen Recording "
+                    "permissions, restart AvaNevis, and try another short recording."
                 )
+            _send_warning_message(
+                "NO_DESKTOP_AUDIO_CAPTURED",
+                "No desktop audio was captured; saved recording contains microphone audio only.",
+                help=help_text,
+                captureType=capture_type,
+            )
 
         async_failure = self._resolve_async_recording_failure()
         if async_failure:
@@ -1218,16 +1107,12 @@ class MacOSAudioRecorder:
         # Process and save audio (mic-only when desktop failed late)
         print(f"Processing audio...", file=sys.stderr)
         try:
-            if self._use_capture_spool:
-                ok = self._finalize_from_capture_spools()
-                self._capture_manifest = None  # closed inside finalize on success
-                if not ok:
-                    self._release_capture_spools()
-                    return
+            ok = self._finalize_from_capture_spools()
+            self._capture_manifest = None  # closed inside finalize on success
+            if not ok:
                 self._release_capture_spools()
-            else:
-                if not self._process_and_save():
-                    return
+                return
+            self._release_capture_spools()
         except Exception as process_err:
             message = f"Recorder failed during post-processing: {process_err}"
             print(message, file=sys.stderr)
@@ -1245,141 +1130,6 @@ class MacOSAudioRecorder:
 
         print(f"Recording complete!", file=sys.stderr)
 
-    def _process_and_save(self):
-        """Process recorded audio and save to file."""
-        _send_event_message("post_processing_started", "Finishing recording...")
-
-        if not self.mic_frames:
-            message = "No audio was captured from the microphone."
-            print(f"ERROR: {message}", file=sys.stderr)
-            _send_error_message(
-                "NO_MIC_AUDIO_CAPTURED",
-                message,
-                help="Check Microphone permission and confirm the selected input device is still connected.",
-            )
-            self.recording_failure = {
-                'code': 'NO_MIC_AUDIO_CAPTURED',
-                'message': message,
-            }
-            self.final_output_path = None
-            self.recording_duration = 0.0
-            return False
-
-        _send_event_message("audio_normalizing", "Normalizing audio...")
-
-        # Convert mic chunks to numpy array once at stop time
-        mic_audio = self.mic_frames.to_array()
-        mic_channels = mic_audio.shape[1] if len(mic_audio.shape) > 1 else 1
-
-        print(f"Mic audio: {len(mic_audio)} samples, {mic_channels} channel(s)", file=sys.stderr)
-
-        # Mix desktop audio if available (late desktop failures stay mic-only)
-        if self.desktop_frames and not self._desktop_runtime_failure:
-            desktop_audio = np.concatenate(self.desktop_frames, axis=0)
-            desktop_channels = desktop_audio.shape[1] if len(desktop_audio.shape) > 1 else 1
-
-            print(f"Desktop audio: {len(desktop_audio)} samples, {desktop_channels} channel(s)", file=sys.stderr)
-
-            # Downmix to stereo if needed
-            if mic_channels != 2:
-                print(f"  Downmixing mic audio from {mic_channels} channel(s) to stereo...", file=sys.stderr)
-                mic_audio = _downmix_to_stereo(mic_audio, mic_channels)
-
-            if desktop_channels != 2:
-                print(f"  Downmixing desktop audio from {desktop_channels} channel(s) to stereo...", file=sys.stderr)
-                desktop_audio = _downmix_to_stereo(desktop_audio, desktop_channels)
-
-            mic_audio = _repair_one_sided_stereo(mic_audio, 'microphone')
-            desktop_audio = _repair_one_sided_stereo(desktop_audio, 'desktop')
-
-            mic_audio, desktop_audio = self._align_streams_by_start_time(mic_audio, desktop_audio)
-
-            # Match lengths by padding shorter stream with silence (NOT resampling)
-            # Resampling would change pitch/speed - we just need to align the streams
-            if len(mic_audio) != len(desktop_audio):
-                print(f"Aligning stream lengths: mic={len(mic_audio)}, desktop={len(desktop_audio)}", file=sys.stderr)
-
-                target_length = max(len(mic_audio), len(desktop_audio))
-
-                # Pad shorter stream with silence (zeros)
-                if len(mic_audio) < target_length:
-                    padding_length = target_length - len(mic_audio)
-                    padding = np.zeros((padding_length, mic_audio.shape[1]), dtype=mic_audio.dtype)
-                    mic_audio = np.concatenate([mic_audio, padding], axis=0)
-                    print(f"  Padded mic audio with {padding_length} samples of silence", file=sys.stderr)
-                elif len(desktop_audio) < target_length:
-                    padding_length = target_length - len(desktop_audio)
-                    padding = np.zeros((padding_length, desktop_audio.shape[1]), dtype=desktop_audio.dtype)
-                    desktop_audio = np.concatenate([desktop_audio, padding], axis=0)
-                    print(f"  Padded desktop audio with {padding_length} samples of silence", file=sys.stderr)
-
-            # Mix: apply volumes with mic boost (match Windows behavior)
-            # Mic boost of 2.0 (6dB) makes voice prominent over desktop audio
-            # MEMORY: build the mix in place to avoid holding mic, desktop and the
-            # result as separate full-size float buffers at the same time.
-            _send_event_message("audio_mixing", "Mixing audio...")
-            MIC_BOOST = 2.0
-            final_audio = mic_audio * (self.mic_volume * MIC_BOOST)
-            final_audio += desktop_audio * self.desktop_volume
-
-            # Soft limiting if clipping would occur (match Windows behavior)
-            max_val = max(abs(float(final_audio.min())), abs(float(final_audio.max())))
-            if max_val > 1.0:
-                final_audio *= 0.85
-                np.tanh(final_audio, out=final_audio)
-
-            print(f"Mixed audio: {len(final_audio)} samples (mic boost: {MIC_BOOST}x)", file=sys.stderr)
-
-        else:
-            # Mic-only mode
-            print(f"No desktop audio captured, using mic-only", file=sys.stderr)
-
-            # Downmix to stereo if needed
-            if mic_channels != 2:
-                print(f"  Converting mic audio from {mic_channels} channel(s) to stereo...", file=sys.stderr)
-                final_audio = _downmix_to_stereo(mic_audio, mic_channels)
-            else:
-                final_audio = mic_audio
-
-            final_audio = _repair_one_sided_stereo(final_audio, 'microphone')
-
-            # Apply mic volume
-            _send_event_message("audio_mixing", "Preparing microphone audio...")
-            final_audio = final_audio * self.mic_volume
-
-        # Enhance microphone audio (same as Windows)
-        final_audio = self._enhance_microphone(final_audio)
-
-        # Save as temporary PCM WAV with a non-scanned extension (.pcm.tmp).
-        # Leftover .wav temps were previously imported as duplicate meetings.
-        temp_wav_path = build_recorder_temp_pcm_path(self.output_path)
-        self._save_wav(final_audio, temp_wav_path)
-
-        # Determine preferred final output path (shared compressor may return .wav fallback)
-        preferred_output_path = self.output_path.replace('.wav', '.opus')
-        duration_seconds = len(final_audio) / self.sample_rate
-        self.recording_duration = duration_seconds
-
-        # Compress with ffmpeg (same shared helper as Windows)
-        _send_event_message("audio_encoding", "Encoding audio...")
-        final_output_path = self._compress_with_ffmpeg(temp_wav_path, preferred_output_path)
-
-        # Publish the final path before temp cleanup so unlink failures still
-        # leave Electron with a recoverable success/failure payload.
-        self.final_output_path = final_output_path
-
-        # Clean up temp file
-        try:
-            Path(temp_wav_path).unlink()
-        except OSError:
-            pass  # File may already be deleted or locked
-
-        print(f"Final file: {final_output_path}", file=sys.stderr)
-        print(f"Duration: {duration_seconds:.1f} seconds", file=sys.stderr)
-        self.recording_failure = None
-        _send_event_message("post_processing_complete", "Recording saved.")
-        return True
-
     def _resolve_desktop_capture_start_time(self):
         """Prefer helper-provided capture timestamps over Python receive times."""
         if self.desktop_capture is None:
@@ -1390,118 +1140,6 @@ class MacOSAudioRecorder:
             return first_audio_time
 
         return getattr(self.desktop_capture, 'last_audio_time', None)
-
-    def _align_streams_by_start_time(self, mic_audio: np.ndarray, desktop_audio: np.ndarray):
-        """Align mic and desktop streams by observed first-audio timestamps."""
-        return align_streams_by_start_time(
-            mic_audio,
-            desktop_audio,
-            sample_rate=self.sample_rate,
-            recording_start_time=self.recording_start_time,
-            mic_capture_start_time=self.mic_capture_start_time,
-            desktop_capture_start_time=self.desktop_capture_start_time,
-            preroll_seconds=self.preroll_seconds,
-        )
-
-    def _enhance_microphone(self, audio):
-        """
-        Apply minimal audio enhancement to microphone (Google Meet style).
-
-        MATCHES WINDOWS IMPLEMENTATION:
-        - Per-channel processing for stereo
-        - Remove DC offset (prevents pops/clicks)
-        - Gentle normalization (preserves dynamics)
-        - Soft limiting (prevents clipping)
-        """
-        # MEMORY: process channels in place on column views to avoid building
-        # extra full-size copies (np.column_stack + per-channel copies). This
-        # mirrors the shared Windows processor and keeps peak memory low for long
-        # recordings, where each float buffer can be >1 GiB.
-        if len(audio.shape) > 1 and audio.shape[1] == 2:
-            self._process_channel_inplace(audio[:, 0])
-            self._process_channel_inplace(audio[:, 1])
-            return audio
-        else:
-            # Mono audio
-            flat = audio.flatten()
-            self._process_channel_inplace(flat)
-            return flat.reshape(-1, 1)
-
-    def _process_channel(self, channel_data):
-        """
-        MINIMAL processing for natural sound quality (matches Windows).
-
-        - Only DC offset removal (essential)
-        - Light normalization (preserve dynamics)
-        - NO aggressive filtering, gating, or compression
-        """
-        # 1. Remove DC offset (essential - prevents pops/clicks)
-        channel_data = channel_data - np.mean(channel_data)
-
-        # 2. Very gentle normalization to -3dB peak
-        # This preserves dynamics while ensuring good levels
-        peak = np.max(np.abs(channel_data))
-        if peak > 0.7:  # Only normalize if too loud
-            # Target -3dB (0.7) to leave headroom
-            channel_data = channel_data * (0.7 / peak)
-        elif peak < 0.1 and peak > 0:  # Boost very quiet audio
-            # Gentle boost for quiet mics
-            channel_data = channel_data * (0.3 / peak)
-
-        # 3. Very soft limiting ONLY if clipping would occur
-        # Uses tanh for smooth clipping prevention
-        abs_max = np.max(np.abs(channel_data))
-        if abs_max > 0.95:
-            channel_data = np.tanh(channel_data * 0.9) * 0.85
-
-        return channel_data
-
-    def _process_channel_inplace(self, channel):
-        """
-        In-place equivalent of ``_process_channel`` for memory-sensitive paths.
-
-        Mutates ``channel`` directly (which may be a non-contiguous strided column
-        view) so long recordings can be enhanced without allocating extra
-        full-size copies. Peak magnitudes use min/max instead of ``np.abs`` to
-        avoid a temporary array the size of the channel.
-        """
-        # 1. Remove DC offset (essential - prevents pops/clicks)
-        channel -= channel.mean()
-
-        # 2. Very gentle normalization to -3dB peak (preserves dynamics)
-        peak = max(abs(float(channel.min())), abs(float(channel.max())))
-        if peak > 0.7:  # Only normalize if too loud
-            channel *= 0.7 / peak
-        elif 0 < peak < 0.1:  # Boost very quiet audio
-            channel *= 0.3 / peak
-
-        # 3. Very soft limiting ONLY if clipping would occur
-        abs_max = max(abs(float(channel.min())), abs(float(channel.max())))
-        if abs_max > 0.95:
-            channel *= 0.9
-            np.tanh(channel, out=channel)
-            channel *= 0.85
-
-    def _save_wav(self, audio, path):
-        """Save audio as WAV file."""
-        write_float_stereo_wav(path, audio, sample_rate=self.sample_rate)
-
-    def _compress_with_ffmpeg(self, input_path, output_path):
-        """Compress WAV to Opus using the shared compressor helper."""
-        final_path, stats = compress_and_report(
-            input_path,
-            output_path,
-            self.sample_rate,
-            verify_again=True,
-            progress_message="Compressing with ffmpeg (Opus codec)...",
-        )
-
-        print(f"Compression complete!", file=sys.stderr)
-        print(f"  Original: {stats['input_size'] / 1024 / 1024:.1f} MB", file=sys.stderr)
-        print(f"  Output: {stats['output_size'] / 1024 / 1024:.1f} MB", file=sys.stderr)
-        print(f"  Savings: {stats['ratio']:.1f}%", file=sys.stderr)
-
-        return final_path
 
     def _verify_recording_integrity(self, file_path):
         """
@@ -1750,7 +1388,12 @@ def main():
         traceback.print_exc(file=sys.stderr)
         if recorder is not None:
             try:
-                if recorder._get_running() or recorder.mic_frames:
+                if (
+                    recorder._get_running()
+                    or recorder._capture_manifest is not None
+                    or recorder._mic_spool is not None
+                    or getattr(recorder, "recording_failure", None)
+                ):
                     recorder.stop_recording()
             except Exception as stop_err:
                 print(f"Stop after failure also failed: {stop_err}", file=sys.stderr)

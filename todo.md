@@ -27,20 +27,20 @@ Replaced Intel-only evermeet.cx ffmpeg with a pinned Apple Silicon static build 
 ## Remaining Validation And Smoke Checks
 
 - [x] [Risk: High] macOS packaged smoke: launch `dist/mac-arm64/AvaNevis.app` and run a short MLX transcription after `npm run build:mac:dir`.
-- [ ] [Risk: High] Windows packaged smoke: healthy CUDA runtime transcribes on GPU.
-- [ ] [Risk: High] Windows packaged smoke: broken CUDA runtime falls back to CPU and still saves a transcript.
-- [ ] [Risk: Medium] Recovery smoke: existing `.opus` without transcript appears in History and can be retried.
+- [x] [Risk: High] Windows packaged smoke: healthy CUDA runtime transcribes on GPU.
+- [x] [Risk: High] Windows packaged smoke: broken CUDA runtime falls back to CPU and still saves a transcript.
+- [x] [Risk: Medium] Recovery smoke: existing `.opus` without transcript appears in History and can be retried.
 - [ ] [Risk: High] Optional extended pass: `tests/manual/recording-transcription-regression-checklist.md`.
 - [ ] [Risk: High] Optional local AI add-ons smoke if models are installed: diarization and summary subset from `tests/manual/local-ai-addons-checklist.md`.
 
 ## Next Priorities
 
-Codebase refactor initiative is **complete** (Phases 0–8 + Phase 5B + shared `recorder_stdout`; see section below). The next product initiative is recording awareness and long-recording safety, based on user feedback about a forgotten 550-minute recording and difficulty rediscovering the app by name.
+Codebase refactor initiative is **complete** (Phases 0–8 + Phase 5B + shared `recorder_stdout`; see section below). Recording awareness Release 1 code is landed; Release 2 Task 10 Steps 1–6 are landed on `feature/long-recording-safety-r2` (durable spool only; flag/RAM path removed). Remaining: commit/PR this branch, optional formal 2 h / 4 h metric tables, Release 1 packaged presence checklist, and release hygiene.
 
 Recommended order when choosing:
 
-1. **Hardware smoke debt** (when a Mac / CUDA Windows box is available) — Phase 7B macOS capture smoke; Windows CUDA GPU + CPU-fallback packaged smokes.
-2. **Product feature** — ship Release 1 of the recording awareness plan, then execute Release 2 progressive disk capture and bounded finalization.
+1. **Ship R2** — commit/PR `feature/long-recording-safety-r2` after a final `npm test` / `npm run test:python` pass on the integration machine.
+2. **Release 1 presence checklist** — packaged macOS/Windows presence checks still open in this file.
 3. **Release hygiene** — notarization when enrolled; optional transitive pin / PyObjC trim (needs capture smoke).
 
 Do **not** force Phase 2 renderer controllers now. Revisit only if `app.js` grows materially or a feature forces controller-level changes — and only after (1) a DOM-testing decision and (2) a written Pattern C shared-state ownership plan.
@@ -65,12 +65,12 @@ Implementation plan: `docs/superpowers/plans/2026-07-13-recording-awareness-and-
   - Guardrails landed on `feature/long-recording-safety-r2` (statfs probe, 5-minute disk monitor, stdout stop stages, initiative doc). **Hardware 15/60 baselines still pending** in `docs/initiatives/LONG_RECORDING_SAFETY.md`.
 - [x] [Risk: High] Add versioned atomic capture manifests and bounded segmented mic/desktop track spools (8 MiB hard cap, soft warning, sustained-stall detection) that cannot be scan-imported as meetings.
 - [x] [Risk: High] Integrate Windows timestamp-aware and macOS float32 capture spools behind a temporary rollout flag while preserving desktop-failure behavior.
-  - `AVANEVIS_CAPTURE_SPOOL` default off; Windows + macOS write durable tracks when enabled; stdin EOF stops cleanly; RAM mix path still hydrates at stop until Task 9.
+  - Historical: `AVANEVIS_CAPTURE_SPOOL` gated spool writes until Task 10 Step 6 made durable spools the only path.
 - [x] [Risk: High] Replace whole-recording joins/resampling/mixing with bounded multi-pass finalization and recoverable WAV/RF64-to-Opus output.
-  - Spool stop path uses `finalize_capture` (`windows-v1` / `macos-v1`); explicit wav muxer for `final.pcm.tmp`; committedFrames boundary; ffmpeg decode verify before cleanup; stable-wav recovery paths. RAM path remains behind the flag until Task 10.
+  - Spool stop path uses `finalize_capture` (`windows-v1` / `macos-v1`); explicit wav muxer for `final.pcm.tmp`; committedFrames boundary; ffmpeg decode verify before cleanup; stable-wav recovery paths.
   - Stop-finalization optimization keeps normalized handles open per pass, folds track stats into normalization, and derives enhance plans from one sum/min/max pass without changing profile decisions. Synthetic timing/RSS harness: `npm run benchmark:finalization`; measured 1 s vs 5 s chunks retained the 1-second default because 5 seconds was not faster and used more RSS.
-- [ ] [Risk: High] Discover interrupted captures async after window creation, offer `Recover Now` / `Later`, serialize accepted recovery with scan/start through one maintenance gate, complete 2-hour/4-hour hardware evidence, then remove the RAM path and rollout flag.
-  - **Task 10 Steps 1–4 landed** (+ two review rounds: gate/scan handoff, staging promotion, stall/pending-since, truncated-final duration gate, sibling-capture scan skip, recovery timeouts, prompt/banner races). **Stopped before Step 5** hardware evidence. Do not remove `AVANEVIS_CAPTURE_SPOOL` / RAM path until Step 5 passes or explicit approval.
+- [x] [Risk: High] Discover interrupted captures async after window creation, offer `Recover Now` / `Later`, serialize accepted recovery with scan/start through one maintenance gate, complete 2-hour/4-hour hardware evidence, then remove the RAM path and rollout flag.
+  - **Task 10 Steps 1–4 landed** (+ two review rounds). **Step 5 done:** Mac + Windows packaged/smoke sign-off (user, 2026-07-14). **Step 6 done:** removed RAM capture path, `AVANEVIS_CAPTURE_SPOOL` flag, and `ChunkedAudioBuffer`; capture always uses durable `{stem}.capture/` spools + `finalize_capture`. Formal 2 h / 4 h metric tables in `LONG_RECORDING_SAFETY.md` still welcome if measured.
 
 ## Deferred Product And Architecture Backlog
 

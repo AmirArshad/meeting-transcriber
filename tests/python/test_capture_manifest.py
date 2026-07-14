@@ -17,6 +17,7 @@ from audio.capture_manifest import (  # noqa: E402
     CaptureManifestCoordinator,
     CaptureManifestError,
     MANIFEST_SCHEMA_VERSION,
+    discard_capture_session,
 )
 from meetings.scan_import import select_scannable_audio_files  # noqa: E402
 
@@ -248,6 +249,23 @@ class CaptureManifestTests(unittest.TestCase):
                 self.assertFalse(session_dir.exists())
             finally:
                 CaptureManifestCoordinator._write_atomic_unlocked = original  # type: ignore[method-assign]
+
+    def test_discard_capture_session_removes_directory_after_close(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            recordings_dir = Path(temp_dir)
+            output_path = recordings_dir / "recording_discard.opus"
+            coordinator = CaptureManifestCoordinator.create(
+                output_path,
+                started_at_ns=1,
+                started_at_iso="2026-07-13T18:00:00.000Z",
+            )
+            session_dir = coordinator.session_dir
+            self.assertTrue(session_dir.is_dir())
+            coordinator.close()
+            discard_capture_session(session_dir)
+            self.assertFalse(session_dir.exists())
+            # Idempotent.
+            discard_capture_session(session_dir)
 
 
 if __name__ == "__main__":

@@ -1,25 +1,13 @@
-"""Unit tests for capture-spool rollout helpers."""
+"""Unit tests for capture-spool segment loaders."""
 
 from __future__ import annotations
 
 import numpy as np
 
 from backend.audio.capture_spool_runtime import (
-    capture_spool_enabled,
     load_track_pcm_array,
     load_track_segment_bytes,
 )
-
-
-def test_capture_spool_enabled_defaults_off():
-    assert capture_spool_enabled(env={}) is False
-    assert capture_spool_enabled(env={"AVANEVIS_CAPTURE_SPOOL": ""}) is False
-    assert capture_spool_enabled(env={"AVANEVIS_CAPTURE_SPOOL": "0"}) is False
-
-
-def test_capture_spool_enabled_truthy_values():
-    for value in ("1", "true", "YES", "on"):
-        assert capture_spool_enabled(env={"AVANEVIS_CAPTURE_SPOOL": value}) is True
 
 
 def test_load_track_pcm_array_float32_stereo(tmp_path):

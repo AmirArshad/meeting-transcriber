@@ -19,7 +19,6 @@ _fake_pyaudio.paContinue = 0
 _fake_pyaudio.paComplete = 1
 sys.modules.setdefault("pyaudiowpatch", _fake_pyaudio)
 
-from backend.audio.chunked_audio_buffer import ChunkedAudioBuffer
 from backend.audio.timeline import reconstruct_desktop_timeline
 from backend.audio.swift_audio_capture import SwiftAudioCapture
 from backend.audio.capture_spool_runtime import load_track_pcm_array, load_track_segment_bytes
@@ -54,8 +53,6 @@ def _make_windows_spool_recorder(tmp_path, *, sample_rate=4, channels=2):
     recorder.is_windows = False
     recorder.is_recording = False
     recorder.lock = threading.Lock()
-    recorder.mic_frames = []
-    recorder.desktop_frames = []
     recorder.mic_total_bytes = 0
     recorder.mic_frame_count = 0
     recorder.desktop_frame_count = 0
@@ -73,12 +70,10 @@ def _make_windows_spool_recorder(tmp_path, *, sample_rate=4, channels=2):
     recorder.mic_stream = None
     recorder.desktop_stream = None
     recorder.pa = None
-    recorder._use_capture_spool = True
     recorder._capture_manifest = None
     recorder._mic_spool = None
     recorder._desktop_spool = None
     recorder._async_capture_error = None
-    recorder._spool_desktop_pcm = None
     recorder._spool_error_lock = threading.Lock()
     recorder._deferred_desktop_chunks = []
     recorder._deferred_desktop_bytes = 0
@@ -162,7 +157,6 @@ def test_windows_empty_desktop_spool_does_not_become_silence_track(tmp_path):
     recorder._close_capture_spools_for_mix()
     assert recorder._desktop_spool_accepted_any is False
     assert recorder._capture_manifest.to_dict().get("includeDesktop") is False
-    assert recorder.desktop_frames == []
     recorder._release_capture_spools()
 
 
@@ -309,13 +303,10 @@ def _make_macos_spool_recorder(tmp_path, *, channels=2):
     recorder.mic_volume = 1.0
     recorder.desktop_volume = 1.0
     recorder.preroll_seconds = 0
-    recorder.mic_frames = ChunkedAudioBuffer()
-    recorder.desktop_frames = []
     recorder.recording_failure = None
     recorder.final_output_path = None
     recorder.recording_duration = 0.0
     recorder.desktop_diagnostics = {}
-    recorder._use_capture_spool = True
     recorder._capture_manifest = None
     recorder._mic_spool = None
     recorder._desktop_spool = None
@@ -356,7 +347,6 @@ def test_macos_empty_desktop_spool_stays_mic_only(tmp_path):
     mic = np.ones((4, 2), dtype=np.float32) * 0.25
     assert recorder._mic_spool.append(mic.tobytes())
     recorder._close_capture_spools_for_mix()
-    assert recorder.desktop_frames == []
     assert recorder._desktop_spool_accepted_any is False
     assert recorder._capture_manifest.to_dict().get("includeDesktop") is False
     mic_track = recorder._capture_manifest.get_track("mic")
@@ -382,8 +372,13 @@ def test_macos_desktop_sink_failure_closes_without_pad_and_uses_mic_only(tmp_pat
     monkeypatch.setattr(macos_mod, "_send_event_message", lambda *a, **k: None)
     monkeypatch.setattr(macos_mod, "_send_error_message", lambda *a, **k: None)
 
+    # Commit mic first so pad_to would otherwise equal mic length.
+    mic = np.ones((8, 2), dtype=np.float32) * 0.2
+    assert recorder._mic_spool.append(mic.tobytes())
+
     good = np.ones((2, 2), dtype=np.float32) * 0.5
     assert recorder._desktop_audio_sink(good) is True
+    assert _wait_until(lambda: recorder._desktop_spool.committed_frames > 0)
     committed_before = recorder._desktop_spool.committed_frames
     # Force a sink rejection path via helper error + rejected further appends.
     recorder._desktop_spool._mark_failed("injected desktop stall")
@@ -393,37 +388,21 @@ def test_macos_desktop_sink_failure_closes_without_pad_and_uses_mic_only(tmp_pat
     recorder._consume_desktop_helper_failure()
     assert any(code == "DESKTOP_AUDIO_FAILED" for code, _ in warnings)
 
-    before_close_written = recorder._desktop_spool._written_frames
+    close_calls = []
+    original_close = recorder._desktop_spool.close
+
+    def tracking_close(final_frame_count=None):
+        close_calls.append(final_frame_count)
+        return original_close(final_frame_count=final_frame_count)
+
+    recorder._desktop_spool.close = tracking_close
     recorder._close_capture_spools_for_mix()
-    assert recorder.desktop_frames == []
     assert recorder._desktop_runtime_failure is not None
     assert recorder._capture_manifest.to_dict().get("includeDesktop") is False
-
-    # Mic remains committed on disk; process path must choose mic-only.
-    mic = np.ones((8, 2), dtype=np.float32) * 0.2
-    recorder.mic_frames = ChunkedAudioBuffer()
-    recorder.mic_frames.append(mic)
-
-    mix_branch = {"mixed": False}
-
-    original_process = recorder._process_and_save
-
-    def wrapped():
-        # Observe branch selection without compressing.
-        if recorder.desktop_frames and not recorder._desktop_runtime_failure:
-            mix_branch["mixed"] = True
-        else:
-            mix_branch["mixed"] = False
-        recorder.recording_failure = None
-        recorder.final_output_path = str(tmp_path / "out.opus")
-        recorder.recording_duration = 1.0
-        return True
-
-    recorder._process_and_save = wrapped
-    assert recorder._process_and_save() is True
-    assert mix_branch["mixed"] is False
     # Close must not pad desktop to mic length after failure.
-    assert before_close_written >= committed_before
+    assert close_calls == [None]
+    assert committed_before > 0
+    recorder._release_capture_spools()
 
 
 def test_macos_mic_spool_close_fail_reason_sets_hard_error(tmp_path):
@@ -617,6 +596,50 @@ def test_abort_startup_awaits_helper_reader_before_spool_release(tmp_path):
     assert recorder._desktop_spool is None
     assert recorder._capture_manifest is None
     assert sink_after_release == []
+    assert not (tmp_path / "meeting.capture").exists()
+
+
+def test_macos_abort_startup_deletes_empty_capture_directory(tmp_path):
+    """Startup abort must not leave an unrecoverable empty .capture for discovery."""
+    recorder = _make_macos_spool_recorder(tmp_path)
+    session_dir = recorder._capture_manifest.session_dir
+    assert session_dir.is_dir()
+    assert (session_dir / "manifest.json").is_file()
+
+    recorder._abort_startup()
+
+    assert recorder._capture_manifest is None
+    assert not session_dir.exists()
+    from backend.audio.capture_recovery import list_interrupted_captures
+
+    assert list_interrupted_captures(tmp_path) == []
+
+
+def test_windows_abort_start_deletes_empty_capture_directory(tmp_path):
+    """Windows startup abort must discard the capture dir after streams/handles close."""
+    recorder = _make_windows_spool_recorder(tmp_path)
+    session_dir = recorder._capture_manifest.session_dir
+    assert session_dir.is_dir()
+    assert (session_dir / "manifest.json").is_file()
+
+    closed = {"streams": False}
+    original_close = recorder._close_streams
+
+    def tracking_close():
+        # Spools must still be open while streams close (no discard race).
+        assert recorder._capture_manifest is not None
+        closed["streams"] = True
+        return original_close()
+
+    recorder._close_streams = tracking_close
+    recorder._abort_start_recording()
+
+    assert closed["streams"] is True
+    assert recorder._capture_manifest is None
+    assert not session_dir.exists()
+    from backend.audio.capture_recovery import list_interrupted_captures
+
+    assert list_interrupted_captures(tmp_path) == []
 
 
 def test_windows_desktop_spool_close_fail_reason_is_mic_only_warning(tmp_path, monkeypatch):
@@ -660,8 +683,6 @@ def test_windows_desktop_spool_close_fail_reason_is_mic_only_warning(tmp_path, m
             recorder._capture_manifest.session_dir,
             mic_track["segments"],
         )
-        assert len(recorder._spool_desktop_pcm) == 0
-        assert recorder.desktop_frames == []
         assert recorder._desktop_spool_warning
         assert warnings and warnings[0][0] == "DESKTOP_SPOOL_FAILED"
         assert recorder.get_async_capture_error() is None
@@ -671,7 +692,6 @@ def test_windows_desktop_spool_close_fail_reason_is_mic_only_warning(tmp_path, m
 
 def test_windows_start_recording_opens_spools_after_sample_rate_fallback(tmp_path, monkeypatch):
     """High 2: settle rates with start=False streams before creating spool manifests."""
-    monkeypatch.setenv("AVANEVIS_CAPTURE_SPOOL", "1")
     open_calls = []
     start_calls = []
     spool_rates = []
@@ -723,18 +743,14 @@ def test_windows_start_recording_opens_spools_after_sample_rate_fallback(tmp_pat
     recorder.is_windows = False
     recorder.pa = FakePa()
     recorder.lock = threading.Lock()
-    recorder.mic_frames = []
-    recorder.desktop_frames = []
     recorder.mic_stream = None
     recorder.desktop_stream = None
     recorder.callback_watchdog = None
     recorder.watchdog_running = False
-    recorder._use_capture_spool = True
     recorder._capture_manifest = None
     recorder._mic_spool = None
     recorder._desktop_spool = None
     recorder._async_capture_error = None
-    recorder._spool_desktop_pcm = None
     recorder._spool_error_lock = threading.Lock()
     recorder._deferred_desktop_chunks = []
     recorder._deferred_desktop_bytes = 0

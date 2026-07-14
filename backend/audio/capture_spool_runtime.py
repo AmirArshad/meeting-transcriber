@@ -1,25 +1,17 @@
-"""Rollout helpers for durable capture-spool recording paths.
+"""Helpers for reading durable capture-spool PCM segments.
 
-``AVANEVIS_CAPTURE_SPOOL=1`` selects segmented track spools during capture.
-Default is off until Task 10 recovery exists and hardware evidence passes.
+Capture always uses segmented track spools during recording. These loaders are
+for tests and tooling that need to inspect on-disk segment bytes.
 """
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Union
 
 import numpy as np
 
 PathLike = Union[str, Path]
-
-
-def capture_spool_enabled(env: Optional[dict] = None) -> bool:
-    """True when the temporary spool rollout flag is explicitly enabled."""
-    source = env if env is not None else os.environ
-    raw = str(source.get("AVANEVIS_CAPTURE_SPOOL", "") or "").strip().lower()
-    return raw in {"1", "true", "yes", "on"}
 
 
 def load_track_segment_bytes(session_dir: PathLike, segments: List[str]) -> bytes:

@@ -58,6 +58,19 @@ def capture_session_dir_for_output(output_path: PathLike) -> Path:
     return output.with_name(f"{output.stem}{CAPTURE_DIR_SUFFIX}")
 
 
+def discard_capture_session(session_dir: PathLike) -> None:
+    """Best-effort removal of a capture directory that never became recoverable.
+
+    Used after a failed recording start so empty/partial ``*.capture`` dirs are
+    not later offered as interrupted-recording recovery candidates.
+    Caller must close spool handles and release ``session.lock`` first.
+    """
+    root = Path(session_dir)
+    if not root.exists():
+        return
+    shutil.rmtree(root, ignore_errors=True)
+
+
 def _normalize_dtype(dtype: str) -> str:
     raw = str(dtype).strip()
     aliases = {

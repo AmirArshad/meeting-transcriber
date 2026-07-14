@@ -17,13 +17,13 @@
 - Never scan-import `.capture/` directories or `*.pcm.part` as meetings.
 - Spool callbacks must never block or silently drop audio; fail only on hard queue cap, sustained stall, or writer exception.
 - Recovery is user-approved; never auto-delete interrupted captures on dismiss/failure.
-- Rollout flag `AVANEVIS_CAPTURE_SPOOL=1` selects the new path; default remains off until Task 10 removes the RAM path after hardware evidence.
+- Spool path is always on (Task 10 Step 6 removed `AVANEVIS_CAPTURE_SPOOL` and the RAM mix path).
 
 ---
 
-## Core change vs `master`
+## Core change vs pre-R2 RAM path
 
-| Layer | `master` / default | This branch (`AVANEVIS_CAPTURE_SPOOL=1`) |
+| Layer | Pre-R2 (removed) | Current (only path) |
 |---|---|---|
 | During capture | Append every frame into Python RAM lists / `ChunkedAudioBuffer` | Append into `TrackSpool` → disk segments + manifest |
 | Peak RAM | Grows with meeting length (+ more on stop) | Bounded by spool queue (~8 MiB/track) + finalization chunk size (~1 s) |
@@ -107,7 +107,7 @@ There is **no** step that concatenates many Opus/WAV meeting files. Segment file
 - **Stop is multi-pass disk I/O** (normalize + stats + mix). Wall-clock stop can be longer than the old in-RAM path for the same duration; peak RAM is the win.
 - **Disk usage during capture** is ~raw PCM (large) until cleanup after verified Opus.
 - **Forced-kill loss window** is roughly queued audio + last uncommitted flush interval (~1 s), not “whole meeting.”
-- Flag still defaults **off** until 2 h / 4 h hardware evidence and RAM-path removal (Task 10).
+- Spool path is always on; the temporary rollout flag and RAM mix path are removed (Task 10 Step 6).
 
 So: optimal for **safe long local meetings with preserved mix quality**, not optimal for **minimum stop latency** or **minimum temporary disk**.
 
@@ -119,18 +119,18 @@ So: optimal for **safe long local meetings with preserved mix quality**, not opt
 | Bounded live spool writer | `backend/audio/track_spool.py` |
 | Streaming finalize | `backend/audio/streaming_post_processor.py` |
 | Interrupted recovery CLI/helpers | `backend/audio/capture_recovery.py` |
-| Platform wiring + flag | `backend/audio/windows_recorder.py`, `macos_recorder.py` |
+| Platform wiring (spool-only) | `backend/audio/windows_recorder.py`, `macos_recorder.py` |
 | Disk warnings / stop stages / recovery IPC | `src/main/device-ipc.js`, `recorder-service.js` |
 | Scan/recovery serialization | `src/main/recordings-maintenance-gate.js` |
 | Initiative notes + baselines | `docs/initiatives/LONG_RECORDING_SAFETY.md` |
 | Full task plan | `docs/superpowers/plans/2026-07-13-recording-awareness-and-long-recording-safety.md` |
 
-## Remaining rollout (not claimed done)
+## Remaining rollout (optional)
 
 - [ ] Fill Windows/macOS 15–60 min baselines in `LONG_RECORDING_SAFETY.md`
-- [ ] 2 h / 4 h bounded-memory hardware evidence
-- [ ] Default spool on for packaged QA, then delete RAM path + `AVANEVIS_CAPTURE_SPOOL`
-- [ ] Update `AGENTS.md` RAM constraint to the new spool/recovery invariant after removal
+- [ ] Optional formal 2 h / 4 h metric tables (smoke already signed off 2026-07-14)
+- [x] Delete RAM path + `AVANEVIS_CAPTURE_SPOOL` (Task 10 Step 6)
+- [x] Update `AGENTS.md` capture invariant to spool/recovery
 
 ## Validation focus
 
@@ -142,4 +142,4 @@ py -3.11 -m pytest tests/python/test_track_spool.py tests/python/test_streaming_
 node --test tests/js/recorder-service.recovery.test.js tests/js/recordings-maintenance-gate.test.js
 ```
 
-Manual: enable `AVANEVIS_CAPTURE_SPOOL=1`, record mic+desktop, confirm `{stem}.capture/` appears during capture, stop stages in UI, final Opus, then kill-mid-capture recovery prompt on relaunch.
+Manual: record mic+desktop (no flag), confirm `{stem}.capture/` appears during capture, stop stages in UI, final Opus, then kill-mid-capture recovery prompt on relaunch.

@@ -6,7 +6,7 @@ Architecture before/after (SVG + explanation): `docs/architecture/long-recording
 
 ## Problem
 
-Both platform recorders keep mic and desktop capture in RAM for the full session, then allocate additional whole-recording arrays during stop-time join / resample / mix. A forgotten multi-hour session can peak at several GB and leave no recoverable capture file if the process is killed before post-processing finishes.
+Before Release 2, both platform recorders kept mic and desktop capture in RAM for the full session, then allocated additional whole-recording arrays during stop-time join / resample / mix. A forgotten multi-hour session could peak at several GB and leave no recoverable capture file if the process was killed before post-processing finished. Task 10 Step 6 removed that RAM path; capture now always spills to durable `{stem}.capture/` spools.
 
 ## Guardrails shipped in Task 6 (this document’s first revision)
 
@@ -85,11 +85,17 @@ chunks and increased sampled Python RSS, so the production default remains one
 second. The benchmark validates bounded finalization instrumentation and provides
 a reproducible measurement path; longer hardware recording evidence remains open.
 
-### Architecture notes (current RAM path)
+### Architecture notes (durable spool path)
 
 - Mic and desktop stay separate until post-processing mix (no real-time mixing).
-- ~2 h of 48 kHz stereo can peak at several GB during stop-time join/convert on Windows; `MemoryError` must still emit structured failure JSON.
-- There is no incremental disk spill on the default RAM path — Tasks 7–9 add manifests, bounded track spools, and streaming finalization behind `AVANEVIS_CAPTURE_SPOOL`; Task 10 adds interrupted-capture recovery and removes the RAM path after hardware evidence.
+- Capture **always** spills to durable `{stem}.capture/` track spools; the
+  `AVANEVIS_CAPTURE_SPOOL` rollout flag and whole-session RAM mix path are removed
+  (Task 10 Step 6).
+- Stop finalizes via bounded `finalize_capture`; interrupted sessions recover via
+  `audio.capture_recovery`. Whole-session RAM mix / `MemoryError` on that path is
+  obsolete.
+- **Hardware smoke:** Mac + Windows packaged/smoke signed off (user, 2026-07-14).
+  Formal 2 h / 4 h metric tables below can remain pending if not filled.
 
 ## Selected spool format (Tasks 7+)
 
@@ -97,7 +103,7 @@ a reproducible measurement path; longer hardware recording evidence remains open
 - Segments: relative `*.pcm.part` under the capture directory (never scan-imported as meetings).
 - Manifest stores explicit UTC `startedAtIso` alongside `startedAtMonotonicNs`.
 - Primitives landed: `backend/audio/capture_manifest.py`, `backend/audio/track_spool.py` (bounded queue, soft 75% warn, hard cap, stall timeout, writer-thread fsync commits **throttled to `flush_interval_s`** so `writtenFrames` may lead `committedFrames`).
-- Rollout flag: `AVANEVIS_CAPTURE_SPOOL` (off for first integration PRs; do not ship schema v1 packaged until Task 10 recovery exists).
+- Spool path is the only capture path (flag removed in Task 10 Step 6).
 
 ## Recovery contract (Task 10; summary)
 

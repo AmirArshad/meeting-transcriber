@@ -164,7 +164,7 @@ The app intentionally records mic and desktop audio separately, then mixes after
 
 Do not reintroduce real-time mixing unless you are deliberately redesigning the audio pipeline.
 
-**Known constraint:** both platform recorders buffer raw capture in RAM for the post-processing mix. Long meetings (≈2h of 48 kHz stereo) can peak at several GB during stop-time join/convert on Windows; a `MemoryError` on that path should still emit structured failure JSON, but there is no incremental disk spill yet.
+**Capture invariant:** both platform recorders always spill raw capture to durable `{stem}.capture/` track spools during recording. Stop finalizes via bounded `finalize_capture` (no whole-session RAM mix). Interrupted sessions recover through `audio.capture_recovery`. Whole-session RAM mix / `MemoryError` on that path is obsolete.
 
 Key quality assumptions to preserve:
 
