@@ -65,7 +65,16 @@ function createMeetingManagerClient(deps) {
     }
 
     return new Promise((resolve, reject) => {
-      const { duration, language, model, title, transcriptionStatus, transcriptionError } = meetingData;
+      const {
+        duration,
+        language,
+        model,
+        title,
+        transcriptionStatus,
+        transcriptionError,
+        transcriptionDevice,
+        transcriptionComputeType,
+      } = meetingData;
       const recordingsDir = getRecordingsDir();
       const args = getBackendModuleArgs('meeting_manager', [
         '--recordings-dir', recordingsDir,
@@ -85,6 +94,12 @@ function createMeetingManagerClient(deps) {
       }
       if (transcriptionError) {
         args.push('--transcription-error', sanitizeTranscriptionError(transcriptionError));
+      }
+      if (transcriptionDevice) {
+        args.push('--transcription-device', String(transcriptionDevice));
+      }
+      if (transcriptionComputeType) {
+        args.push('--transcription-compute-type', String(transcriptionComputeType));
       }
 
       const python = spawnTrackedPython(args, { cwd: pythonConfig.backendPath });

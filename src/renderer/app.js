@@ -3185,6 +3185,8 @@ async function transcribeAudio() {
         language: language,
         model: modelSize,
         transcriptionStatus: 'completed',
+        transcriptionDevice: result.transcriptionDevice,
+        transcriptionComputeType: result.transcriptionComputeType || result.computeType,
       });
       if (savedMeeting && savedMeeting.audioPath) {
         currentAudioFile = savedMeeting.audioPath;

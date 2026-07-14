@@ -200,6 +200,7 @@ Key quality assumptions to preserve:
 - Hugging Face-hosted public summary models download through bundled Python `huggingface_hub`/`hf_xet` when available, without reusing the diarization token, and still require pinned SHA-256 verification after download.
 - Summary generation and diarization execution must remain serialized through a main-process compute queue to avoid concurrent GPU-heavy local AI runs.
 - Meeting AI metadata must accept only `diarization` and `summary`, keep sidecar paths under recordings, and store only concise sanitized strings.
+- Completed transcription metadata records the resolved Whisper runtime as `transcriptionDevice` and `transcriptionComputeType`. Guided transcription must report the Whisper runtime separately from `diarization.device`, which describes pyannote.
 - AI add-on model/runtime caches live under Electron `userData` (`ai-addons/models/...`) so app updates preserve installed artifacts.
 - Pinned summary runtime archives extract off the main thread: ZIP via `src/ai-addon-zip-extractor-worker.js`, `tar.gz` via `src/ai-addon-tar-extractor-worker.js`, with shared traversal checks in `src/ai-addon-archive-helpers.js`.
 

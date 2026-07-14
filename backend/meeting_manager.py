@@ -156,6 +156,8 @@ class MeetingManager:
         title: Optional[str] = None,
         transcription_status: str = "completed",
         transcription_error: Optional[str] = None,
+        transcription_device: Optional[str] = None,
+        transcription_compute_type: Optional[str] = None,
     ) -> Dict:
         """
         Add a new meeting to the history.
@@ -255,6 +257,12 @@ class MeetingManager:
                     "transcriptionStatus": self._normalize_transcription_status(transcription_status),
                     "transcriptionError": self._normalize_transcription_error(transcription_error),
                 }
+                normalized_device = meeting_norm.normalize_transcription_device(transcription_device)
+                normalized_compute_type = meeting_norm.normalize_transcription_compute_type(transcription_compute_type)
+                if normalized_device:
+                    meeting["transcriptionDevice"] = normalized_device
+                if normalized_compute_type:
+                    meeting["transcriptionComputeType"] = normalized_compute_type
 
                 # Add to beginning of existing meetings (most recent first)
                 meetings.insert(0, meeting)
@@ -582,6 +590,8 @@ class MeetingManager:
         language: Optional[str] = None,
         model: Optional[str] = None,
         duration: Optional[float] = None,
+        device: Optional[str] = None,
+        compute_type: Optional[str] = None,
     ) -> Optional[Dict]:
         with self._metadata_guard():
             meetings = self._list_meetings_locked()
@@ -628,6 +638,18 @@ class MeetingManager:
                     changed = True
                 if meeting.get('duration') != duration_str:
                     meeting['duration'] = duration_str
+                    changed = True
+
+            if device is not None:
+                normalized_device = meeting_norm.normalize_transcription_device(device)
+                if meeting.get('transcriptionDevice') != normalized_device:
+                    meeting['transcriptionDevice'] = normalized_device
+                    changed = True
+
+            if compute_type is not None:
+                normalized_compute_type = meeting_norm.normalize_transcription_compute_type(compute_type)
+                if meeting.get('transcriptionComputeType') != normalized_compute_type:
+                    meeting['transcriptionComputeType'] = normalized_compute_type
                     changed = True
 
             if changed:
@@ -790,6 +812,8 @@ def main():
     update_transcription_parser.add_argument('--language', help='Updated language code')
     update_transcription_parser.add_argument('--model', help='Updated model name')
     update_transcription_parser.add_argument('--duration', type=float, help='Updated duration in seconds')
+    update_transcription_parser.add_argument('--device', choices=['cpu', 'cuda', 'mps'], help='Resolved transcription device')
+    update_transcription_parser.add_argument('--compute-type', help='Resolved transcription compute type')
 
     update_ai_parser = subparsers.add_parser('update-ai', help='Update derived local AI metadata')
     update_ai_parser.add_argument('id', help='Meeting ID')
@@ -808,6 +832,8 @@ def main():
     add_parser.add_argument('--title', help='Custom title')
     add_parser.add_argument('--transcription-status', choices=sorted(_VALID_TRANSCRIPTION_STATUSES), default='completed', help='Transcription status')
     add_parser.add_argument('--transcription-error', help='Sanitized transcription error')
+    add_parser.add_argument('--transcription-device', choices=['cpu', 'cuda', 'mps'], help='Resolved transcription device')
+    add_parser.add_argument('--transcription-compute-type', help='Resolved transcription compute type')
 
     args = parser.parse_args()
 
@@ -853,6 +879,8 @@ def main():
             language=args.language,
             model=args.model,
             duration=args.duration,
+            device=args.device,
+            compute_type=args.compute_type,
         )
         if meeting:
             print(json.dumps(meeting, indent=2))
@@ -892,6 +920,8 @@ def main():
             title=args.title,
             transcription_status=args.transcription_status,
             transcription_error=args.transcription_error,
+            transcription_device=args.transcription_device,
+            transcription_compute_type=args.transcription_compute_type,
         )
         print(json.dumps(meeting, indent=2))
 

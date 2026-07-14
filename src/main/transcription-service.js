@@ -1011,6 +1011,12 @@ function createTranscriptionService(deps) {
           '--language', normalizedLanguage,
           '--model', normalizedModel,
           '--duration', String(result.duration || 0),
+          ...(result.transcriptionDevice || result.device
+            ? ['--device', String(result.transcriptionDevice || result.device)]
+            : []),
+          ...(result.transcriptionComputeType || result.computeType
+            ? ['--compute-type', String(result.transcriptionComputeType || result.computeType)]
+            : []),
           '--clear-error',
         ]), { cwd: pythonConfig.backendPath });
         const processOutput = collectPythonProcessOutput(python, { jsonResult: true });

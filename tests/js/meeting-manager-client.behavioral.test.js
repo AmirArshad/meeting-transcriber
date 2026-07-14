@@ -7,6 +7,53 @@ const { EventEmitter } = require('node:events');
 
 const { createMeetingManagerClient } = require('../../src/main/meeting-manager-client');
 
+test('add-meeting forwards resolved transcription runtime metadata', async () => {
+  const proc = new EventEmitter();
+  proc.stdout = new EventEmitter();
+  proc.stderr = new EventEmitter();
+  let spawnedArgs = null;
+  const client = createMeetingManagerClient({
+    app: { getPath: () => '/tmp/avanevis-test' },
+    path,
+    spawnTrackedPython(args) {
+      spawnedArgs = args;
+      return proc;
+    },
+    pythonConfig: { backendPath: '/tmp/backend' },
+    getBackendModuleArgs: (moduleName, args) => [moduleName, ...args],
+    collectPythonProcessOutput(python) {
+      let stdout = '';
+      python.stdout.on('data', (data) => { stdout += data.toString(); });
+      return { getStdout: () => stdout, getStderr: () => '', assertStdoutWithinLimit() {} };
+    },
+    appendSpawnLogBuffer: (buffer, chunk) => buffer + String(chunk),
+    assertTrustedRendererSender() {},
+    sanitizeTranscriptionError: (value) => value,
+    getRecordingsDir: () => '/tmp/avanevis-test/recordings',
+    assertSafeExistingRecordingAudioPath: (value) => value,
+    assertSafeExistingTranscriptPath: (value) => value,
+    validateAiMetadataPaths: (value) => value,
+  });
+
+  const resultPromise = client.addMeetingToHistory({
+    audioPath: '/tmp/avanevis-test/recordings/meeting.opus',
+    transcriptPath: '/tmp/avanevis-test/recordings/meeting.md',
+    duration: 5,
+    language: 'en',
+    model: 'medium',
+    transcriptionDevice: 'cuda',
+    transcriptionComputeType: 'float16',
+  });
+  proc.stdout.emit('data', Buffer.from('{"id":"meeting"}'));
+  proc.emit('close', 0);
+
+  assert.deepEqual(await resultPromise, { id: 'meeting' });
+  assert.deepEqual(spawnedArgs.slice(-4), [
+    '--transcription-device', 'cuda',
+    '--transcription-compute-type', 'float16',
+  ]);
+});
+
 test('scan-recordings rejects before spawning while recorder work is active', async () => {
   let spawned = false;
   const client = createMeetingManagerClient({
