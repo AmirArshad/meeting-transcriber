@@ -35,13 +35,12 @@ Replaced Intel-only evermeet.cx ffmpeg with a pinned Apple Silicon static build 
 
 ## Next Priorities
 
-Codebase refactor, Release 1 presence, and Release 2 long-recording safety are **complete** on `feature/long-recording-safety-r2` (awaiting PR/merge). Next focus is **release hygiene**.
+Codebase refactor, Release 1 presence, and Release 2 long-recording safety shipped in **v2.5.0** (merged to `master`). Next focus is **release hygiene**.
 
 Recommended order when choosing:
 
-1. **Ship R2** — open/merge PR for `feature/long-recording-safety-r2` if not already merged.
-2. **Release hygiene** — notarization when enrolled; trial transitive pin trim; PyObjC Cocoa/Quartz evaluation; Windows faster-whisper transitive investigation.
-3. **Optional extended checklists** — full transcription regression / local AI add-ons smoke when convenient.
+1. **Release hygiene** — notarization when enrolled; trial other transitive pin trim (not `onnxruntime`/`tokenizers`/`av`); PyObjC Cocoa/Quartz evaluation.
+2. **Optional extended checklists** — full transcription regression / local AI add-ons smoke when convenient.
 
 Do **not** force Phase 2 renderer controllers now. Revisit only if `app.js` grows materially or a feature forces controller-level changes — and only after (1) a DOM-testing decision and (2) a written Pattern C shared-state ownership plan.
 

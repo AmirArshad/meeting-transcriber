@@ -42,8 +42,18 @@ The recovery scan now:
 - skips duplicates already represented in metadata
 - preserves suffixed meeting IDs like `meeting_20260107_104555_1`
 - prefers the healthy `.wav` fallback if both `.opus` and `.wav` exist for the same recording stem
+- recovers or cleans orphan recorder temps (`.pcm.tmp`) before selecting scannable audio; never imports `.pcm.tmp`, legacy `*.temp.wav`, or `{stem}.capture/` spool files as meetings
 
-That last rule matters when Opus compression failed but left behind a bad `.opus` file before the recorder fell back to `.wav`.
+That Opus/WAV preference matters when Opus compression failed but left behind a bad `.opus` file before the recorder fell back to `.wav`.
+
+## Interrupted Capture Recovery (v2.5.0+)
+
+If the app or recorder process dies mid-recording, durable `{stem}.capture/` track spools may remain on disk. On the next launch AvaNevis discovers those sessions asynchronously (after the first window paints) and offers:
+
+- **Recover Now** — finalize the capture into meeting audio, then run the normal scan/import path so the meeting appears in History
+- **Later** — dismiss the prompt; a banner keeps the deferred count/disk estimate visible; recovery remains available next launch
+
+Recovery never auto-runs, never deletes capture files on dismiss or failure, and shares one maintenance gate with scan/start so an active recording always wins. Failed recoveries keep all capture files and offer **Retry**.
 
 ## Metadata Safety
 

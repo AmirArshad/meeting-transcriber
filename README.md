@@ -17,6 +17,8 @@ Online meetings are a tax on memory. The good options for getting transcripts ba
 ## Highlights
 
 - **Dual capture** — microphone + desktop audio recorded in parallel, then mixed after the recording stops to keep both streams intact.
+- **Durable long recordings** — capture spills to on-disk track spools (not whole-session RAM). Stop uses bounded multi-pass finalization; interrupted sessions can be recovered after relaunch.
+- **Recording awareness** — always-visible in-app recording pill + elapsed clock; macOS menu-bar `REC` / Dock badge; Windows taskbar overlay; hourly best-effort reminders; single-instance relaunch focuses the existing window.
 - **Local transcription** — `faster-whisper` on Windows (CUDA when available), `lightning-whisper-mlx` on Apple Silicon (Metal). CPU fallback path exists for non-GPU machines.
 - **Premium dark UI** — vertical icon rail, top-bar app pane, dense waveform visualizer with peak-hold and DPR-aware rendering, and a stutter-free custom audio scrubber driven by `requestAnimationFrame`.
 - **Markdown transcripts** — saved transcripts are real Markdown (timestamps, headings, lists), and the in-app viewer renders them inline with chip-style timestamp pills.
@@ -199,6 +201,7 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
   - [Code review remediation (May 2026)](docs/completed/CODE_REVIEW_REMEDIATION_2026-05.md)
 - **Roadmap & features**
   - [Roadmap](docs/initiatives/ROADMAP.md)
+  - [Long-recording safety](docs/initiatives/LONG_RECORDING_SAFETY.md) (shipped in v2.5.0)
   - [AvaNevis codebase refactor](docs/initiatives/AVANEVIS_CODEBASE_REFACTOR.md) (complete — reference)
   - [Adversarial review prompts](docs/development/ADVERSARIAL_REVIEW_PROMPTS.md)
   - [Acoustic echo cancellation](docs/initiatives/FEATURE_ECHO_CANCELLATION.md)
@@ -214,6 +217,7 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
 ## Roadmap (short version)
 
 **Shipped recently**
+- **v2.5.0 (July 2026)** — Recording awareness (presence pill, tray/Dock/taskbar indicators, hourly reminders, single-instance focus) and long-recording safety (durable capture spools, bounded stop finalization, interrupted-session recovery, low-disk warnings). See [LONG_RECORDING_SAFETY.md](docs/initiatives/LONG_RECORDING_SAFETY.md) and [release notes](docs/releases/v2.5.0.md).
 - Codebase refactor (July 2026): main-process Pattern C services under `src/main/`, AI-addon and main-process helper facades, Python `meetings/` / shared recorder stdout helpers, characterization gates. Soft-cap accepted for `src/renderer/app.js`; see [AVANEVIS_CODEBASE_REFACTOR.md](docs/initiatives/AVANEVIS_CODEBASE_REFACTOR.md).
 - Security and reliability hardening (May 2026): IPC path guards, sensitive-text redaction, trusted update downloads, single GPU compute queue with wall-clock timeouts, recording lifecycle guards (`RECORDER_BUSY`, session-aware failures), recorder `success: false` results, summary sidecar staging, and expanded regression tests. See [docs/completed/CODE_REVIEW_REMEDIATION_2026-05.md](docs/completed/CODE_REVIEW_REMEDIATION_2026-05.md).
 - Optional local AI add-on foundations: Settings setup cards, pinned summary model/runtime catalog, secure diarization token storage, automatic post-transcription speaker labels when setup is ready, and user-triggered summary generation with History Transcript/Summary tabs.

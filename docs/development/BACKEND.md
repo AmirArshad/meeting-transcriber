@@ -28,6 +28,7 @@ For cross-process invariants (recorder stdout JSON, compute queue, AI add-ons, p
 | Meetings | `backend/meetings/normalization.py`, `scan_import.py`, `paths.py`, `store.py`, `delete_tx.py` |
 | Recorder stdout | `backend/audio/recorder_stdout.py` — structured `send_*` emitters; platform recorders keep thin wrappers |
 | Recorder temps | `backend/audio/recorder_temp_paths.py` — non-scanned `.pcm.tmp` paths |
+| Durable capture | `backend/audio/capture_manifest.py`, `track_spool.py`, `capture_spool_runtime.py`, `streaming_post_processor.py`, `capture_recovery.py` — on-disk spools, bounded finalize, interrupted-session recovery |
 | Audio processing | `backend/audio/processor.py`, `compressor.py`, `wav_io.py`, `timeline.py`, `constants.py` |
 | macOS capture | `backend/audio/swift_audio_capture.py`, `macos_stereo_repair.py`, `macos_desktop_diagnostics.py`, `macos_stream_alignment.py`, `swift_pcm_alignment.py`, `swift_helper_status.py` |
 | Transcription | `backend/transcription/formatting.py` — shared timestamp/segment-merge/Markdown helpers |
@@ -77,6 +78,8 @@ npm run test:python-syntax
 - Recorder stderr is debug-only.
 - Windows recorder final JSON uses `audioPath`; macOS uses `outputPath`. Electron accepts both (intentional; not a pending unification).
 - Stop/finalize failures must emit structured `success: false` JSON (with recoverable paths when a final or temp file exists), not only a stderr traceback.
+- Both platform recorders always spill mic/desktop capture to durable `{stem}.capture/` track spools during recording. Stop finalizes via bounded `finalize_capture` (no whole-session RAM mix). Interrupted sessions recover through `audio.capture_recovery`.
+- Capture spool segments (`.pcm.part`) and session dirs must never be scan-imported as meetings.
 - Meeting metadata writes must preserve file locks, atomic temp-file writes, corrupt backups, and transactional add/delete behavior.
 - Optional AI add-ons must never write Hugging Face tokens to logs, metadata, transcripts, summaries, or progress events.
 

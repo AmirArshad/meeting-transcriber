@@ -42,6 +42,8 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 - **Filesystem rescan / import** — on launch the app rescans the recordings folder and re-imports any meetings present on disk but missing from metadata, preserving suffixed IDs like `meeting_20260107_104555_1`. History search filters metadata only until you refresh.
 - **Structured stdout JSON event contract** — recorder startup, levels, warnings, errors, and completion are emitted as JSON on stdout; stderr is debug-only. The Electron parser is fully migrated to the JSON contract. Failed captures return `success: false` without a bogus output path.
 - **Security and compute hardening (May 2026)** — IPC path guards, sensitive-text redaction, trusted update downloads, single GPU compute queue with wall-clock timeouts, recording lifecycle guards (`RECORDER_BUSY`), and expanded regression tests. See [CODE_REVIEW_REMEDIATION_2026-05.md](../completed/CODE_REVIEW_REMEDIATION_2026-05.md) and root [`AGENTS.md`](../../AGENTS.md).
+- **Recording awareness (v2.5.0)** — authoritative `starting` / `recording` / `stopping` / `idle` lifecycle from the recorder service; always-visible in-app pill + elapsed clock; macOS static saturated menu-bar icon + `REC` + Dock badge; Windows taskbar overlay while minimized; hourly best-effort native reminders (click-to-open via retained notification objects — Electron has no Action Center cold-activation API); single-instance relaunch focuses the running app; recording-aware close copy.
+- **Long-recording safety (v2.5.0)** — durable `{stem}.capture/` track spools (not whole-session RAM); bounded multi-pass stop finalization; interrupted-session recovery (`Recover Now` / `Later`); Node `statfs` disk probes with periodic low-space warnings (never auto-stop); structured stop stages in the UI. See [LONG_RECORDING_SAFETY.md](LONG_RECORDING_SAFETY.md).
 
 ### Branding
 
@@ -49,6 +51,7 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 
 ### Historical milestones
 
+- **v2.5.0 (July 2026)** — Recording awareness (Release 1) and long-recording safety (Release 2) shipped: presence indicators, durable capture spools, bounded finalization, interrupted-session recovery. Hardware smoke signed off on Windows and macOS.
 - **July 2026** — Codebase refactor complete (Phases 0–8 + 5B): Pattern C services under `src/main/`, AI-addon and main-process helper facades, Python `meetings/` package, shared `recorder_stdout.py`. Soft-cap accepted for `src/renderer/app.js`. See [AVANEVIS_CODEBASE_REFACTOR.md](AVANEVIS_CODEBASE_REFACTOR.md).
 - **May 2026** — Code review remediation merged to `master`: Phases 1–6 (security, recording lifecycle, local AI queue/timeouts, performance). Phase 7 backlog tracked in root `todo.md` and [TODO_ARCHIVE_2026-05-20_CODE_REVIEW_REMEDIATION.md](../completed/todo-archives/TODO_ARCHIVE_2026-05-20_CODE_REVIEW_REMEDIATION.md).
 - **v2.2.0** — Recording reliability and macOS desktop audio fixes in packaged builds, plus May 2026 security/stability remediation (lifecycle guards, path safety, compute queue timeouts, license notices in releases).
@@ -63,8 +66,7 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 
 ## In progress
 
-- **Recording awareness (Release 1)** — implemented on `feature/recording-awareness-r1` (top-bar pill; macOS static saturated menu-bar icon + `REC`; Windows taskbar overlay while minimized; hourly best-effort native reminders with click-to-open via retained notification objects only — Electron has no Action Center cold-activation API; single-instance relaunch; recording-aware close). Packaged QA still open before treating as shipped: installed toast CLSID click-to-open, tray overflow, overlay scaling; macOS Gate E menu-bar salience on light/dark wallpaper; Spotlight/Start search for `meeting` / `transcriber`.
-- **Long-recording safety (Release 2)** — Task 6 guardrails in progress on `feature/long-recording-safety-r2` (`docs/initiatives/LONG_RECORDING_SAFETY.md`): `statfs` disk probe, periodic low-space warnings, structured stop stages. Progressive disk capture / bounded finalization still open (`docs/superpowers/plans/2026-07-13-recording-awareness-and-long-recording-safety.md`).
+_(None — Release 1 / Release 2 shipped in v2.5.0.)_
 
 ## Planned
 
