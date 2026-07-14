@@ -5,7 +5,7 @@ Planned or active future work lives here. Completed designs should move to `../c
 ## Active / planned
 
 - [Roadmap](ROADMAP.md)
-- [Long-recording safety](LONG_RECORDING_SAFETY.md) — Release 2 progressive capture / bounded finalization
+- [Long-recording safety](LONG_RECORDING_SAFETY.md) — Release 2 progressive capture / bounded finalization ([before/after SVG](../architecture/long-recording-safety-before-after.svg))
 - [Acoustic echo cancellation](FEATURE_ECHO_CANCELLATION.md)
 - [Linux support](LINUX_SUPPORT.md)
 - [Audio setup wizard](FEATURE_SETUP_WIZARD.md)

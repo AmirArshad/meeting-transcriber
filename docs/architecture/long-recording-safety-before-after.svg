@@ -1,0 +1,168 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 920" width="1180" height="920" role="img" aria-labelledby="title desc">
+  <title id="title">Long-recording safety: before vs after architecture</title>
+  <desc id="desc">Comparison of the master RAM-buffered capture path against the branch disk-spool capture and bounded multi-pass finalization path.</desc>
+
+  <defs>
+    <style type="text/css"><![CDATA[
+      .bg { fill: #f7f5f1; }
+      .panel { fill: #ffffff; stroke: #d6d0c6; stroke-width: 1.5; }
+      .panel-before { fill: #fff8f5; stroke: #e0b4a6; }
+      .panel-after { fill: #f4faf7; stroke: #9fc4b5; }
+      .title { font: 700 22px "Segoe UI", system-ui, sans-serif; fill: #1c1b19; }
+      .subtitle { font: 500 13px "Segoe UI", system-ui, sans-serif; fill: #5c574f; }
+      .panel-h { font: 700 16px "Segoe UI", system-ui, sans-serif; fill: #1c1b19; }
+      .panel-sub { font: 400 12px "Segoe UI", system-ui, sans-serif; fill: #5c574f; }
+      .box { fill: #ffffff; stroke: #2f2c28; stroke-width: 1.25; }
+      .box-ram { fill: #fde8e2; stroke: #b5472c; }
+      .box-disk { fill: #e6f3ee; stroke: #1f6b52; }
+      .box-proc { fill: #eef2f7; stroke: #3a4f66; }
+      .box-warn { fill: #fff1cc; stroke: #9a6b00; }
+      .box-ok { fill: #dff3e8; stroke: #1f6b52; }
+      .label { font: 600 12px "Segoe UI", system-ui, sans-serif; fill: #1c1b19; }
+      .small { font: 400 11px "Segoe UI", system-ui, sans-serif; fill: #3f3b35; }
+      .tiny { font: 400 10px "Segoe UI", system-ui, sans-serif; fill: #5c574f; }
+      .arrow { stroke: #3f3b35; stroke-width: 1.6; fill: none; marker-end: url(#arrowHead); }
+      .arrow-danger { stroke: #b5472c; stroke-width: 1.6; fill: none; marker-end: url(#arrowDanger); }
+      .arrow-ok { stroke: #1f6b52; stroke-width: 1.6; fill: none; marker-end: url(#arrowOk); }
+      .note { font: 500 11px "Segoe UI", system-ui, sans-serif; fill: #7a2e1a; }
+      .note-ok { font: 500 11px "Segoe UI", system-ui, sans-serif; fill: #14523e; }
+      .footer { font: 400 11px "Segoe UI", system-ui, sans-serif; fill: #5c574f; }
+      .badge { font: 700 10px "Segoe UI", system-ui, sans-serif; fill: #ffffff; }
+    ]]></style>
+    <marker id="arrowHead" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#3f3b35"/>
+    </marker>
+    <marker id="arrowDanger" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#b5472c"/>
+    </marker>
+    <marker id="arrowOk" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#1f6b52"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" width="1180" height="920"/>
+
+  <text class="title" x="40" y="42">Long-recording safety - before vs after</text>
+  <text class="subtitle" x="40" y="64">Branch <tspan font-weight="600">feature/long-recording-safety-r2</tspan> vs <tspan font-weight="600">master</tspan>: same mic/desktop separation and post-stop mix; capture moves from RAM lists to durable segmented spools.</text>
+
+  <!-- BEFORE PANEL -->
+  <rect class="panel panel-before" x="28" y="88" width="552" height="760" rx="10"/>
+  <rect x="28" y="88" width="552" height="44" rx="10" fill="#b5472c"/>
+  <rect x="28" y="118" width="552" height="14" fill="#b5472c"/>
+  <text class="badge" x="48" y="116">BEFORE - master / default RAM path</text>
+  <text class="panel-sub" x="48" y="150">Duration-proportional RAM. Kill before stop = little or nothing recoverable.</text>
+
+  <!-- Capture sources -->
+  <rect class="box box-proc" x="56" y="172" width="150" height="54" rx="6"/>
+  <text class="label" x="70" y="195">Mic capture</text>
+  <text class="tiny" x="70" y="212">WASAPI / sounddevice</text>
+
+  <rect class="box box-proc" x="232" y="172" width="150" height="54" rx="6"/>
+  <text class="label" x="246" y="195">Desktop capture</text>
+  <text class="tiny" x="246" y="212">loopback / Swift helper</text>
+
+  <path class="arrow" d="M131 226 V250"/>
+  <path class="arrow" d="M307 226 V250"/>
+
+  <!-- RAM buffers -->
+  <rect class="box box-ram" x="56" y="250" width="326" height="92" rx="6"/>
+  <text class="label" x="70" y="274">In-memory frame lists / ChunkedAudioBuffer</text>
+  <text class="small" x="70" y="294">Entire meeting kept in Python process RAM</text>
+  <text class="small" x="70" y="312">~2 h @ 48 kHz stereo - multi-GB peak risk</text>
+  <text class="note" x="70" y="330">No durable capture file during recording</text>
+
+  <path class="arrow-danger" d="M219 342 V372"/>
+
+  <!-- Stop -->
+  <rect class="box box-warn" x="56" y="372" width="326" height="70" rx="6"/>
+  <text class="label" x="70" y="396">Stop - whole-array post-processing</text>
+  <text class="small" x="70" y="416">join / resample / enhance / mix in large arrays</text>
+  <text class="tiny" x="70" y="434">extra allocations on top of capture buffers</text>
+
+  <path class="arrow" d="M219 442 V472"/>
+
+  <rect class="box box-proc" x="56" y="472" width="326" height="54" rx="6"/>
+  <text class="label" x="70" y="495">Write temp WAV - ffmpeg Opus</text>
+  <text class="tiny" x="70" y="512">meeting audio only after successful finalize</text>
+
+  <path class="arrow" d="M219 526 V556"/>
+
+  <rect class="box box-ok" x="56" y="556" width="326" height="48" rx="6"/>
+  <text class="label" x="70" y="585">Final meeting .opus / .wav</text>
+
+  <!-- Failure callout -->
+  <rect class="box box-ram" x="56" y="630" width="480" height="96" rx="6"/>
+  <text class="label" x="70" y="654">Failure modes</text>
+  <text class="small" x="70" y="674">- Forgotten long session - OOM / MemoryError</text>
+  <text class="small" x="70" y="692">- Kill / crash mid-capture - no recoverable tracks</text>
+  <text class="small" x="70" y="710">- Kill mid-finalize - may lose everything still only in RAM</text>
+
+  <text class="tiny" x="48" y="760">Invariant kept: mic + desktop stay separate until post-stop mix (no real-time mix).</text>
+  <text class="tiny" x="48" y="778">Still the default unless AVANEVIS_CAPTURE_SPOOL=1.</text>
+
+  <!-- AFTER PANEL -->
+  <rect class="panel panel-after" x="600" y="88" width="552" height="760" rx="10"/>
+  <rect x="600" y="88" width="552" height="44" rx="10" fill="#1f6b52"/>
+  <rect x="600" y="118" width="552" height="14" fill="#1f6b52"/>
+  <text class="badge" x="620" y="116">AFTER - spool path (this branch)</text>
+  <text class="panel-sub" x="620" y="150">Bounded RAM + durable segments. Crash leaves recoverables.</text>
+
+  <rect class="box box-proc" x="628" y="172" width="150" height="54" rx="6"/>
+  <text class="label" x="642" y="195">Mic capture</text>
+  <text class="tiny" x="642" y="212">same device APIs</text>
+
+  <rect class="box box-proc" x="804" y="172" width="150" height="54" rx="6"/>
+  <text class="label" x="818" y="195">Desktop capture</text>
+  <text class="tiny" x="818" y="212">same helper bridges</text>
+
+  <path class="arrow-ok" d="M703 226 V250"/>
+  <path class="arrow-ok" d="M879 226 V250"/>
+
+  <!-- Spools -->
+  <rect class="box box-disk" x="628" y="250" width="150" height="100" rx="6"/>
+  <text class="label" x="642" y="274">TrackSpool mic</text>
+  <text class="tiny" x="642" y="292">8 MiB queue - writer</text>
+  <text class="tiny" x="642" y="308">64 MiB .pcm.part rolls</text>
+  <text class="tiny" x="642" y="324">fsync ~1s commits</text>
+  <text class="tiny" x="642" y="340">never drop audio</text>
+
+  <rect class="box box-disk" x="804" y="250" width="150" height="100" rx="6"/>
+  <text class="label" x="818" y="274">TrackSpool desktop</text>
+  <text class="tiny" x="818" y="292">same backpressure</text>
+  <text class="tiny" x="818" y="308">silence gaps on disk</text>
+  <text class="tiny" x="818" y="324">timeline positions</text>
+  <text class="tiny" x="818" y="340">late fail - mic-only</text>
+
+  <path class="arrow-ok" d="M703 350 V372"/>
+  <path class="arrow-ok" d="M879 350 V372"/>
+
+  <rect class="box box-disk" x="628" y="372" width="326" height="70" rx="6"/>
+  <text class="label" x="642" y="396">{stem}.capture/ session</text>
+  <text class="small" x="642" y="416">manifest.json + mic_*.pcm.part + desk_*.pcm.part</text>
+  <text class="tiny" x="642" y="434">atomic commits of committedFrames (not scan-imported)</text>
+
+  <path class="arrow-ok" d="M791 442 V472"/>
+
+  <rect class="box box-proc" x="628" y="472" width="326" height="88" rx="6"/>
+  <text class="label" x="642" y="496">Stop - streaming_post_processor</text>
+  <text class="small" x="642" y="514">Read segments in ~1 s windows (not whole file)</text>
+  <text class="small" x="642" y="532">normalize - stats/mix passes - final.pcm.tmp</text>
+  <text class="tiny" x="642" y="550">then Opus; cleanup only after verified complete</text>
+
+  <path class="arrow-ok" d="M791 560 V580"/>
+
+  <rect class="box box-ok" x="628" y="580" width="326" height="48" rx="6"/>
+  <text class="label" x="642" y="609">Final meeting .opus / .wav</text>
+
+  <rect class="box box-disk" x="628" y="650" width="480" height="96" rx="6"/>
+  <text class="label" x="642" y="674">Recovery (Task 10)</text>
+  <text class="small" x="642" y="694">- Kill mid-capture - committed segments + manifest remain</text>
+  <text class="small" x="642" y="712">- User-approved Recover Now / Later (no auto-delete)</text>
+  <text class="small" x="642" y="730">- Same finalize_capture path resumes from committed extents</text>
+
+  <text class="tiny" x="620" y="760">Not &quot;record Opus chunks then concat.&quot; Segments are raw PCM continuity;</text>
+  <text class="tiny" x="620" y="778">finalization streams them. Flag: AVANEVIS_CAPTURE_SPOOL=1 (default still off).</text>
+
+  <text class="footer" x="40" y="880">AvaNevis docs/architecture - see docs/superpowers/plans/2026-07-14-capture-spool-architecture.md and docs/initiatives/LONG_RECORDING_SAFETY.md</text>
+  <text class="footer" x="40" y="898">RAM stays bounded by queue + chunk size; disk holds duration. Multi-pass stop trades I/O for quality-preserving offline mix.</text>
+</svg>

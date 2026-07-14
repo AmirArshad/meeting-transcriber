@@ -2,6 +2,7 @@
 
 Initiative for Release 2 of the recording awareness / long-recording safety plan.
 Implementation plan: `docs/superpowers/plans/2026-07-13-recording-awareness-and-long-recording-safety.md`.
+Architecture before/after (SVG + explanation): `docs/architecture/long-recording-safety-before-after.svg`, `docs/superpowers/plans/2026-07-14-capture-spool-architecture.md`.
 
 ## Problem
 
