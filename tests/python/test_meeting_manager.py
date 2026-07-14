@@ -49,6 +49,26 @@ def test_add_meeting_persists_files_and_removes_originals(tmp_path):
     assert 'transcript' not in meeting
 
 
+def test_add_meeting_maps_mlx_metal_device_to_mps(tmp_path):
+    recordings_dir = tmp_path / 'recordings'
+    source_audio, source_transcript = _create_source_files(recordings_dir, 'temp_mlx')
+    manager = MeetingManager(recordings_dir=str(recordings_dir))
+
+    meeting = manager.add_meeting(
+        audio_path=str(source_audio),
+        transcript_path=str(source_transcript),
+        duration=12.0,
+        language='en',
+        model='base',
+        transcription_device='metal',
+    )
+
+    assert meeting['transcriptionDevice'] == 'mps'
+    assert Path(meeting['audioPath']).exists()
+    assert not source_audio.exists()
+    assert not source_transcript.exists()
+
+
 def test_add_meeting_rejects_paths_outside_recordings_dir(tmp_path):
     recordings_dir = tmp_path / 'recordings'
     recordings_dir.mkdir()

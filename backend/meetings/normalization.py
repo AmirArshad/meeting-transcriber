@@ -15,6 +15,12 @@ from common.sensitive_text import redact_sensitive_text
 MAX_AI_METADATA_STRING_LENGTH = 300
 VALID_TRANSCRIPTION_STATUSES = {"pending", "failed", "completed"}
 VALID_TRANSCRIPTION_DEVICES = {"cpu", "cuda", "mps"}
+# MLX reports "metal"; meeting metadata stores the Apple GPU as "mps".
+TRANSCRIPTION_DEVICE_ALIASES = {"metal": "mps"}
+# CLI argparse accepts aliases, then normalize_transcription_device maps to canonical.
+TRANSCRIPTION_DEVICE_CLI_CHOICES = sorted(
+    VALID_TRANSCRIPTION_DEVICES | set(TRANSCRIPTION_DEVICE_ALIASES.keys())
+)
 
 
 def read_text_file(file_path: Optional[Path], label: str) -> str:
@@ -53,6 +59,7 @@ def normalize_transcription_error(value: object) -> Optional[str]:
 
 def normalize_transcription_device(value: object) -> Optional[str]:
     candidate = str(value or "").strip().lower()
+    candidate = TRANSCRIPTION_DEVICE_ALIASES.get(candidate, candidate)
     return candidate if candidate in VALID_TRANSCRIPTION_DEVICES else None
 
 

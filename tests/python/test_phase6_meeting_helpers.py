@@ -11,6 +11,7 @@ from meeting_manager import MeetingManager
 from meetings.normalization import (
     hash_text,
     normalize_text,
+    normalize_transcription_device,
     normalize_transcription_error,
     normalize_transcription_status,
     parse_metadata,
@@ -36,6 +37,13 @@ class MeetingNormalizationTests(unittest.TestCase):
         self.assertEqual(normalize_transcription_status("nope", default="pending"), "pending")
         self.assertIsNone(normalize_transcription_error(""))
         self.assertEqual(normalize_transcription_error("  boom  "), "boom")
+
+    def test_normalize_transcription_device_maps_metal_alias_to_mps(self):
+        self.assertEqual(normalize_transcription_device("metal"), "mps")
+        self.assertEqual(normalize_transcription_device("METAL"), "mps")
+        self.assertEqual(normalize_transcription_device("mps"), "mps")
+        self.assertEqual(normalize_transcription_device("cuda"), "cuda")
+        self.assertIsNone(normalize_transcription_device("gpu"))
 
     def test_hash_and_strip_and_normalize_text(self):
         digest = hash_text("hello")

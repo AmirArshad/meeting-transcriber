@@ -30,6 +30,7 @@ from meetings import store as meeting_store
 _UNSET = object()
 _MAX_AI_METADATA_STRING_LENGTH = meeting_norm.MAX_AI_METADATA_STRING_LENGTH
 _VALID_TRANSCRIPTION_STATUSES = meeting_norm.VALID_TRANSCRIPTION_STATUSES
+_TRANSCRIPTION_DEVICE_CLI_CHOICES = meeting_norm.TRANSCRIPTION_DEVICE_CLI_CHOICES
 
 
 class MeetingManager:
@@ -812,7 +813,11 @@ def main():
     update_transcription_parser.add_argument('--language', help='Updated language code')
     update_transcription_parser.add_argument('--model', help='Updated model name')
     update_transcription_parser.add_argument('--duration', type=float, help='Updated duration in seconds')
-    update_transcription_parser.add_argument('--device', choices=['cpu', 'cuda', 'mps'], help='Resolved transcription device')
+    update_transcription_parser.add_argument(
+        '--device',
+        choices=_TRANSCRIPTION_DEVICE_CLI_CHOICES,
+        help='Resolved transcription device (metal accepted as mps alias)',
+    )
     update_transcription_parser.add_argument('--compute-type', help='Resolved transcription compute type')
 
     update_ai_parser = subparsers.add_parser('update-ai', help='Update derived local AI metadata')
@@ -832,7 +837,11 @@ def main():
     add_parser.add_argument('--title', help='Custom title')
     add_parser.add_argument('--transcription-status', choices=sorted(_VALID_TRANSCRIPTION_STATUSES), default='completed', help='Transcription status')
     add_parser.add_argument('--transcription-error', help='Sanitized transcription error')
-    add_parser.add_argument('--transcription-device', choices=['cpu', 'cuda', 'mps'], help='Resolved transcription device')
+    add_parser.add_argument(
+        '--transcription-device',
+        choices=_TRANSCRIPTION_DEVICE_CLI_CHOICES,
+        help='Resolved transcription device (metal accepted as mps alias)',
+    )
     add_parser.add_argument('--transcription-compute-type', help='Resolved transcription compute type')
 
     args = parser.parse_args()
