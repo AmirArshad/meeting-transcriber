@@ -12,16 +12,16 @@ pyobjc-framework-Quartz==12.1
 lightning-whisper-mlx==0.0.10
 # Pinned for reproducibility; also installed transitively via lightning-whisper-mlx (not used by backend/).
 scipy==1.17.1
-filelock==3.29.0
+filelock==3.29.7
 cffi==2.0.0
 pycparser==3.0
 tiktoken==0.3.3
-regex==2026.5.9
+regex==2026.7.10
 requests==2.34.2
 charset-normalizer==3.4.7
 idna==3.16
 urllib3==2.7.0
-certifi==2026.5.20
+certifi==2026.6.17
 huggingface-hub==1.16.1
 hf-xet==1.5.0
 httpx==0.28.1

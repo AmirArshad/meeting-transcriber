@@ -19,10 +19,10 @@ Replaced Intel-only evermeet.cx ffmpeg with a pinned Apple Silicon static build 
 - [x] [Risk: Low] Close superseded Dependabot PRs that were absorbed by the dependency-upgrade branch: #12 and #20.
 - [x] [Risk: Low] Close deferred high-risk Dependabot PRs with explicit comments: #15, #18, and #19.
 - [x] [Risk: Medium] Decide whether optional follow-up dependency PRs #13, #14, #16, #17, and #21 should ship as small separate PRs or stay deferred. (Closed; revisit only if Dependabot reopens with newer bumps.)
-- [ ] [Risk: Low] Trial dropping explicit transitive-only pins in a follow-up trim pass; keep any pin needed for reproducible packaged builds.
+- [ ] [Risk: Low] Trial dropping *other* explicit transitive-only pins in a follow-up trim pass (not `onnxruntime`/`tokenizers`/`av` — those stay); keep any pin needed for reproducible packaged builds.
 - [ ] [Risk: High] Evaluate whether macOS PyObjC `Cocoa` / `Quartz` pins are removable; requires `pip check`, PyObjC import checks, packaged `build:mac:dir`, and ScreenCaptureKit fallback smoke.
 - [x] [Risk: Medium] Remove bundled macOS `torch` after pip install (MLX path does not import it; diarization installs its own torch into userData).
-- [ ] [Risk: Medium] Investigate Windows faster-whisper transitive packages such as `onnxruntime`, `tokenizers`, and `av`; remove only if the packaged transcription graph remains valid.
+- [x] [Risk: Medium] Investigate Windows faster-whisper transitive packages `onnxruntime`, `tokenizers`, and `av`: **keep explicit pins** in `requirements-windows-build.txt`. All three are hard deps of `faster-whisper==1.2.1`; AvaNevis uses `vad_filter=True` (onnxruntime/Silero), path-based decode (PyAV/`av`), and Whisper tokenization (`tokenizers`). Do not remove from packaged Windows builds. See 2026-07-14 note in `docs/development/DEPENDABOT_TRIAGE.md`.
 
 ## Remaining Validation And Smoke Checks
 

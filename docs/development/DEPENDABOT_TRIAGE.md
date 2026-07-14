@@ -2,7 +2,31 @@
 
 > **Historical triage (2026-05-27).** The phased dependency-upgrade branch work and the “Close now” / “Defer” PR actions below are complete. For current dependency and release hygiene, use root `todo.md`. Keep this file as background for why pins and Dependabot ignores look the way they do.
 
-Last reviewed: 2026-05-27 on branch `chore/phased-dependency-upgrades` after Phases 1–4 and packaged smoke.
+Last reviewed: 2026-07-14 on branch `chore/dependency-hygiene` (Track A Windows pins + open Dependabot set #52–#58). Prior phased review: 2026-05-27.
+
+## Current open set (2026-07-14)
+
+| PR | Bump | Risk | Action | Why / validation |
+|----|------|------|--------|------------------|
+| #52 | filelock 3.29.0→3.29.7, certifi 2026.5.20→2026.6.17 | Low | **Absorbed** on `chore/dependency-hygiene` | Close Dependabot PR after hygiene PR merges. |
+| #54 | protobuf 7.35.0→7.35.1 | Low | **Absorbed** on `chore/dependency-hygiene` | Close after hygiene PR merges. |
+| #56 | regex 2026.5.9→2026.7.10 | Low | **Absorbed** on `chore/dependency-hygiene` | Close after hygiene PR merges. |
+| #55 | adm-zip 0.5.17→0.6.0 | Medium | **Absorbed** on `chore/dependency-hygiene` | Security bump; AvaNevis uses `extractAllTo`. Close after hygiene PR merges. |
+| #58 | ctranslate2 4.7.2→4.8.1 | Medium | **Defer** → dedicated Windows ML PR | Still CUDA 12 wheels; includes Whisper `align()` zero-div fix + security harden. Needs Windows CPU transcription + CUDA path if available; do not merge Dependabot branch raw. Official GPU target remains `nvidia-cublas-cu12` / `nvidia-cudnn-cu12`. |
+| #53 | electron 42.2.0→43.1.0 | High | **Defer** | Nice-to-have (startup perf, Chromium security, macOS Notification APIs). No product blocker on 42.x; separate Win/mac packaged smoke required. Not a drive-by. |
+| #57 | numpy 2.4.6→2.5.1 | High (broken) | **Closed 2026-07-14** | numpy 2.5.x requires **Python ≥3.12**; AvaNevis is Python **3.11**. CI fails install. Stay on `numpy==2.4.6` until a coordinated Python upgrade. |
+
+### Track A — Windows `onnxruntime` / `tokenizers` / `av` (2026-07-14)
+
+| Package | Role in AvaNevis graph | Verdict |
+|---------|------------------------|---------|
+| `onnxruntime` | Hard dep of `faster-whisper==1.2.1`; Silero VAD for `vad_filter=True` in `faster_whisper_transcriber.py` | **Keep pin** (`==1.26.0`). Removal → VAD/import failure. (macOS build prunes onnxruntime after pip; Windows must keep it.) |
+| `tokenizers` | Hard dep of faster-whisper Whisper tokenization | **Keep pin** (`==0.23.1`). Removal → model/tokenize failure. |
+| `av` (PyAV) | Hard dep of faster-whisper path-based audio decode | **Keep pin** (`==17.0.1`). Removal → decode failure on `transcribe(audio_path)`. Bundled ffmpeg does not replace this path. |
+
+These are not “reproducibility-only” optional pins: pip declares them required, and AvaNevis hits all three at runtime. Explicit `==` pins stay for reproducible packaged builds / installer size control. Dev `requirements-windows.txt` may continue to leave them transitive under `faster-whisper>=1.0.0`.
+
+Do **not** remove from packaged Windows without a full experiment: temp venv install without the three → `pip check` → `import faster_whisper` → short CPU transcription with `vad_filter=True`. Expect failure; do not ship that build.
 
 Use this when closing or scheduling follow-up dependency work. **Do not merge Dependabot PRs blindly** into `master`; prefer a small follow-up PR with tests + smoke.
 
