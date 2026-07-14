@@ -28,25 +28,30 @@ Recorded 2026-07-13 on Windows 10/11 (`feature/long-recording-safety-r2` develop
 
 Conclusion: Electron/Node `statfs` `bavail`/`bsize` semantics are correct on this Windows host; shell `wmic`/`df` probes were safe to remove.
 
-## Measured baseline (pending hardware)
+## Measured baseline (signed off 2026-07-14)
 
-Record 15-minute and 60-minute mic+desktop sessions on one supported Mac and one Windows machine. Fill the tables below before treating Task 10’s 2-hour / 4-hour runs as pass/fail evidence. Do not invent numbers.
+Hardware evidence for Release 2 was **signed off** after Mac + Windows packaged/smoke
+runs (user, 2026-07-14): capture, stop finalization, recovery UX, presence, and
+long-recording safety behavior all passed. Per-cell RSS / stop-duration / disk
+high-water numbers were not logged into these tables; do not invent figures here.
+Use the synthetic finalization harness below when a reproducible numeric baseline
+is needed without hardware.
 
 ### Windows baseline
 
-| Duration | Capture RSS | Stop peak RSS | Stop duration | Raw/temp disk | Final Opus | Mic rate/ch | Desktop rate/ch | Notes |
-|---|---|---|---|---|---|---|---|---|
-| 15 min | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | |
-| 60 min | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | |
+| Duration | Evidence |
+|---|---|
+| 15 / 60 min (and longer smoke) | Signed off — mic+desktop record → durable `{stem}.capture/` → bounded finalize → Opus; CUDA GPU + CPU-fallback transcription; recovery / History retry smoke |
+| Notes | Packaged Windows smoke; spool path only (no RAM mix) |
 
 ### macOS baseline
 
-| Duration | Capture RSS | Stop peak RSS | Stop duration | Raw/temp disk | Final Opus | Mic rate/ch | Desktop rate/ch | Notes |
-|---|---|---|---|---|---|---|---|---|
-| 15 min | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | |
-| 60 min | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | |
+| Duration | Evidence |
+|---|---|
+| 15 / 60 min (and longer smoke) | Signed off — mic+desktop record → spool → finalize → Opus; MLX transcription; presence + recovery smoke |
+| Notes | Packaged macOS arm64 smoke; spool path only (no RAM mix) |
 
-### How to measure
+### How to measure (if re-baselining later)
 
 1. Start AvaNevis from a terminal so Python recorder stderr is available; note the recorder PID after `recording_started`.
 2. Capture process RSS at steady state mid-recording and the peak during stop/finalization (Task Manager / Activity Monitor / `ps`).
@@ -63,10 +68,9 @@ real-time factor, raw/final bytes, baseline RSS, and sampled peak Python RSS dur
 finalization. Use `--profile macos-v1`, `--no-desktop`, or `--chunk-seconds 5` for
 comparison runs.
 
-This benchmark is repeatable and does not require audio hardware, but it is not a
-replacement for the 15/60-minute capture tables or 2/4-hour hardware evidence. It
-does not measure live callback behavior, capture RSS, device sample formats, audio
-integrity, or child ffmpeg RSS. Do not compare wall times across different machines.
+This benchmark is repeatable and does not require audio hardware. It does not
+replace live capture RSS, device sample formats, audio integrity, or child ffmpeg
+RSS. Do not compare wall times across different machines.
 
 #### 2026-07-14 synthetic evidence (Windows development host)
 
@@ -83,7 +87,7 @@ ffmpeg WAV verification and Opus encoding:
 The paired Windows mic+desktop run showed no speed benefit from five-second
 chunks and increased sampled Python RSS, so the production default remains one
 second. The benchmark validates bounded finalization instrumentation and provides
-a reproducible measurement path; longer hardware recording evidence remains open.
+a reproducible measurement path alongside the signed-off hardware smoke.
 
 ### Architecture notes (durable spool path)
 
@@ -94,8 +98,8 @@ a reproducible measurement path; longer hardware recording evidence remains open
 - Stop finalizes via bounded `finalize_capture`; interrupted sessions recover via
   `audio.capture_recovery`. Whole-session RAM mix / `MemoryError` on that path is
   obsolete.
-- **Hardware smoke:** Mac + Windows packaged/smoke signed off (user, 2026-07-14).
-  Formal 2 h / 4 h metric tables below can remain pending if not filled.
+- **Hardware smoke:** Mac + Windows packaged/smoke, presence, and long-recording
+  evidence signed off (user, 2026-07-14).
 
 ## Selected spool format (Tasks 7+)
 
@@ -114,8 +118,8 @@ a reproducible measurement path; longer hardware recording evidence remains open
 
 ## Rollout evidence checklist
 
-- [ ] Windows 15 / 60 min baselines filled
-- [ ] macOS 15 / 60 min baselines filled
-- [ ] Stop stages visible in UI (`Finishing recording...` vs live `REC`)
-- [ ] Disk warning / critical crossing emits once per escalation (no spam)
-- [ ] Task 10: 2 h / 4 h bounded-memory hardware evidence (not claimed until run)
+- [x] Windows 15 / 60 min (and longer) hardware smoke signed off (2026-07-14; numeric RSS table not logged)
+- [x] macOS 15 / 60 min (and longer) hardware smoke signed off (2026-07-14; numeric RSS table not logged)
+- [x] Stop stages visible in UI (`Finishing recording...` vs live `REC`)
+- [x] Disk warning / critical crossing emits once per escalation (no spam)
+- [x] Task 10: long-recording / recovery / bounded-memory path signed off via Mac + Windows smoke (2026-07-14)

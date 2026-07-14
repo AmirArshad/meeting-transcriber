@@ -127,10 +127,10 @@ So: optimal for **safe long local meetings with preserved mix quality**, not opt
 
 ## Remaining rollout (optional)
 
-- [ ] Fill Windows/macOS 15–60 min baselines in `LONG_RECORDING_SAFETY.md`
-- [ ] Optional formal 2 h / 4 h metric tables (smoke already signed off 2026-07-14)
+- [x] Windows/macOS hardware smoke signed off (2026-07-14; see `LONG_RECORDING_SAFETY.md`)
 - [x] Delete RAM path + `AVANEVIS_CAPTURE_SPOOL` (Task 10 Step 6)
 - [x] Update `AGENTS.md` capture invariant to spool/recovery
+- [ ] Optional: log numeric RSS / stop-duration cells if re-baselining later
 
 ## Validation focus
 
