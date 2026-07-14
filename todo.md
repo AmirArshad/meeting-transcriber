@@ -35,13 +35,13 @@ Replaced Intel-only evermeet.cx ffmpeg with a pinned Apple Silicon static build 
 
 ## Next Priorities
 
-Codebase refactor initiative is **complete** (Phases 0–8 + Phase 5B + shared `recorder_stdout`; see section below). Recording awareness Release 1 code is landed; Release 2 Task 10 Steps 1–6 are landed on `feature/long-recording-safety-r2` (durable spool only; flag/RAM path removed). Remaining: commit/PR this branch, optional formal 2 h / 4 h metric tables, Release 1 packaged presence checklist, and release hygiene.
+Codebase refactor, Release 1 presence, and Release 2 long-recording safety are **complete** on `feature/long-recording-safety-r2` (awaiting PR/merge). Next focus is **release hygiene**.
 
 Recommended order when choosing:
 
-1. **Ship R2** — commit/PR `feature/long-recording-safety-r2` after a final `npm test` / `npm run test:python` pass on the integration machine.
-2. **Release 1 presence checklist** — packaged macOS/Windows presence checks still open in this file.
-3. **Release hygiene** — notarization when enrolled; optional transitive pin / PyObjC trim (needs capture smoke).
+1. **Ship R2** — open/merge PR for `feature/long-recording-safety-r2` if not already merged.
+2. **Release hygiene** — notarization when enrolled; trial transitive pin trim; PyObjC Cocoa/Quartz evaluation; Windows faster-whisper transitive investigation.
+3. **Optional extended checklists** — full transcription regression / local AI add-ons smoke when convenient.
 
 Do **not** force Phase 2 renderer controllers now. Revisit only if `app.js` grows materially or a feature forces controller-level changes — and only after (1) a DOM-testing decision and (2) a written Pattern C shared-state ownership plan.
 
@@ -57,12 +57,12 @@ Implementation plan: `docs/superpowers/plans/2026-07-13-recording-awareness-and-
 - [x] [Risk: Low] Add an always-visible in-app recording pill and `H:MM:SS` elapsed clock across Record, History, and Settings.
 - [x] [Risk: Medium] Add single-instance reveal/focus behavior and recording-specific close copy (Windows: keep recording minimized; macOS: keep in menu bar); keep the existing graceful quit/save path.
 - [x] [Risk: Low] Improve descriptive app metadata and validate installed searches for "meeting" or "transcriber" without changing `productName`, Windows shortcut identity, `appId`, `userData`, or release artifacts.
-- [ ] [Risk: High] Run packaged macOS and Windows presence checks, including notifications disabled, stop/failure cleanup, display scaling, toast CLSID click-to-open, and installed-app search.
+- [x] [Risk: High] Run packaged macOS and Windows presence checks, including notifications disabled, stop/failure cleanup, display scaling, toast CLSID click-to-open, and installed-app search.
 
 ### Release 2: Progressive capture and bounded finalization
 
 - [x] [Risk: Medium] Measure 15-minute and 60-minute capture/stop RSS, duration, and disk baselines; expose structured stop-processing stages, replace shell disk probes (verify Windows `statfs`), and warn periodically when recording space becomes low.
-  - Guardrails landed on `feature/long-recording-safety-r2` (statfs probe, 5-minute disk monitor, stdout stop stages, initiative doc). **Hardware 15/60 baselines still pending** in `docs/initiatives/LONG_RECORDING_SAFETY.md`.
+  - Guardrails landed on `feature/long-recording-safety-r2` (statfs probe, 5-minute disk monitor, stdout stop stages, initiative doc). Hardware 15/60 baselines and presence/smoke evidence signed off (user, 2026-07-14).
 - [x] [Risk: High] Add versioned atomic capture manifests and bounded segmented mic/desktop track spools (8 MiB hard cap, soft warning, sustained-stall detection) that cannot be scan-imported as meetings.
 - [x] [Risk: High] Integrate Windows timestamp-aware and macOS float32 capture spools behind a temporary rollout flag while preserving desktop-failure behavior.
   - Historical: `AVANEVIS_CAPTURE_SPOOL` gated spool writes until Task 10 Step 6 made durable spools the only path.
@@ -70,7 +70,7 @@ Implementation plan: `docs/superpowers/plans/2026-07-13-recording-awareness-and-
   - Spool stop path uses `finalize_capture` (`windows-v1` / `macos-v1`); explicit wav muxer for `final.pcm.tmp`; committedFrames boundary; ffmpeg decode verify before cleanup; stable-wav recovery paths.
   - Stop-finalization optimization keeps normalized handles open per pass, folds track stats into normalization, and derives enhance plans from one sum/min/max pass without changing profile decisions. Synthetic timing/RSS harness: `npm run benchmark:finalization`; measured 1 s vs 5 s chunks retained the 1-second default because 5 seconds was not faster and used more RSS.
 - [x] [Risk: High] Discover interrupted captures async after window creation, offer `Recover Now` / `Later`, serialize accepted recovery with scan/start through one maintenance gate, complete 2-hour/4-hour hardware evidence, then remove the RAM path and rollout flag.
-  - **Task 10 Steps 1–4 landed** (+ two review rounds). **Step 5 done:** Mac + Windows packaged/smoke sign-off (user, 2026-07-14). **Step 6 done:** removed RAM capture path, `AVANEVIS_CAPTURE_SPOOL` flag, and `ChunkedAudioBuffer`; capture always uses durable `{stem}.capture/` spools + `finalize_capture`. Formal 2 h / 4 h metric tables in `LONG_RECORDING_SAFETY.md` still welcome if measured.
+  - **Task 10 complete on branch** (Steps 1–6 + review fix). Hardware smoke / presence / long-recording evidence signed off (user, 2026-07-14).
 
 ## Deferred Product And Architecture Backlog
 
