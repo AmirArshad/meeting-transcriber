@@ -215,25 +215,14 @@ function createRecordingPresenceService(deps) {
     });
   }
 
-  function showRecordingReminder() {
-    const current = getCaptureState();
-    if (current.state !== 'recording' || !Number.isInteger(current.sessionId) || !Number.isFinite(current.startedAt)) {
-      return;
+  function showNativeNotification(copy, { logLabel = 'notification' } = {}) {
+    if (!copy?.title || !copy?.body) {
+      return false;
     }
-
-    const currentNow = now();
-    const elapsedMs = Math.max(0, currentNow - current.startedAt);
-    if (elapsedMs < reminderIntervalMs) {
-      scheduleReminder();
-      return;
-    }
-
-    const copy = buildReminderCopy(elapsedMs);
 
     if (typeof Notification?.isSupported === 'function' && !Notification.isSupported()) {
-      logWarn('Native notifications are not supported; keeping tray/Dock/taskbar indicators.');
-      scheduleReminder();
-      return;
+      logWarn(`Native notifications are not supported; skipping ${logLabel}.`);
+      return false;
     }
 
     try {
@@ -250,11 +239,36 @@ function createRecordingPresenceService(deps) {
 
       retainNotification(notification);
       notification.show();
+      return true;
     } catch (error) {
-      logWarn('Failed to show recording reminder:', error?.message || error);
+      logWarn(`Failed to show ${logLabel}:`, error?.message || error);
+      return false;
+    }
+  }
+
+  function showRecordingReminder() {
+    const current = getCaptureState();
+    if (current.state !== 'recording' || !Number.isInteger(current.sessionId) || !Number.isFinite(current.startedAt)) {
+      return;
     }
 
+    const currentNow = now();
+    const elapsedMs = Math.max(0, currentNow - current.startedAt);
+    if (elapsedMs < reminderIntervalMs) {
+      scheduleReminder();
+      return;
+    }
+
+    showNativeNotification(buildReminderCopy(elapsedMs), { logLabel: 'recording reminder' });
     scheduleReminder();
+  }
+
+  /**
+   * Best-effort safety toast (disk space, etc.) while the window may be
+   * minimized/hidden. Never auto-stops capture.
+   */
+  function showSafetyNotification(copy) {
+    return showNativeNotification(copy, { logLabel: 'recording safety notification' });
   }
 
   function scheduleReminder() {
@@ -477,6 +491,7 @@ function createRecordingPresenceService(deps) {
     updateCaptureState,
     getCaptureState,
     refreshPresentation,
+    showSafetyNotification,
     destroy,
     // Test seams
     _applyTrayPresentation: applyTrayPresentation,

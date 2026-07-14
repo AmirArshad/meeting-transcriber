@@ -1879,6 +1879,57 @@ test('getRecorderEventAction maps required stdout startup events to renderer act
   );
 });
 
+test('getRecorderEventAction maps structured stop stages to progress messages', () => {
+  const stopStages = [
+    {
+      event: 'post_processing_started',
+      message: 'Finishing recording...',
+      fallback: 'Finishing recording...',
+    },
+    {
+      event: 'audio_normalizing',
+      message: 'Normalizing audio...',
+      fallback: 'Normalizing audio...',
+    },
+    {
+      event: 'audio_mixing',
+      message: 'Mixing audio...',
+      fallback: 'Mixing audio...',
+    },
+    {
+      event: 'audio_encoding',
+      message: 'Encoding audio...',
+      fallback: 'Encoding audio...',
+    },
+    {
+      event: 'post_processing_complete',
+      message: 'Recording saved.',
+      fallback: 'Recording saved.',
+    },
+  ];
+
+  for (const stage of stopStages) {
+    assert.deepEqual(
+      getRecorderEventAction({ event: stage.event, message: stage.message }),
+      {
+        initProgress: null,
+        warning: null,
+        recordingStartedMessage: null,
+        progressMessage: stage.message,
+      },
+    );
+    assert.deepEqual(
+      getRecorderEventAction({ event: stage.event }),
+      {
+        initProgress: null,
+        warning: null,
+        recordingStartedMessage: null,
+        progressMessage: stage.fallback,
+      },
+    );
+  }
+});
+
 
 test('isModelDownloadErrorOutput ignores non-critical warnings but flags actual errors', () => {
   assert.equal(isModelDownloadErrorOutput('ERROR: failed to download model'), true);
@@ -2146,8 +2197,9 @@ test('buildRecordingPreflightReport combines disk and audio output warnings', ()
     },
     diskCheck: {
       success: true,
-      warning: 'Low disk space (< 500MB)',
+      warning: 'Less than 10 GB is available. Long recordings may run out of space.',
       availableGB: '0.42',
+      level: 'critical',
     },
     audioOutputCheck: {
       supported: true,

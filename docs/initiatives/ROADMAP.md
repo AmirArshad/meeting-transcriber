@@ -64,7 +64,7 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 ## In progress
 
 - **Recording awareness (Release 1)** — implemented on `feature/recording-awareness-r1` (top-bar pill; macOS static saturated menu-bar icon + `REC`; Windows taskbar overlay while minimized; hourly best-effort native reminders with click-to-open via retained notification objects only — Electron has no Action Center cold-activation API; single-instance relaunch; recording-aware close). Packaged QA still open before treating as shipped: installed toast CLSID click-to-open, tray overflow, overlay scaling; macOS Gate E menu-bar salience on light/dark wallpaper; Spotlight/Start search for `meeting` / `transcriber`.
-- **Long-recording safety (Release 2)** — progressive disk capture / bounded finalization (`docs/superpowers/plans/2026-07-13-recording-awareness-and-long-recording-safety.md`).
+- **Long-recording safety (Release 2)** — Task 6 guardrails in progress on `feature/long-recording-safety-r2` (`docs/initiatives/LONG_RECORDING_SAFETY.md`): `statfs` disk probe, periodic low-space warnings, structured stop stages. Progressive disk capture / bounded finalization still open (`docs/superpowers/plans/2026-07-13-recording-awareness-and-long-recording-safety.md`).
 
 ## Planned
 

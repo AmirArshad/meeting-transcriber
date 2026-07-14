@@ -1,26 +1,27 @@
 """
 Windows Audio Recorder (v2).
 
-Records microphone and desktop audio to separate buffers, then mixes them
-after recording completes (post-processing). This avoids real-time buffer
-synchronization issues that cause choppy audio.
+Records microphone and desktop audio to durable ``{stem}.capture/`` track
+spools during capture, then finalizes with bounded multi-pass post-processing
+(``finalize_capture``). This avoids real-time buffer synchronization issues
+and whole-session RAM buffers.
 
 Key features:
 - Separate mic and desktop audio capture using WASAPI
-- Timestamp-based gap preservation for desktop audio (WASAPI loopback only
-  sends callbacks when audio is playing)
-- Post-processing mix with minimal enhancement for natural sound quality
+- Timestamp-aware desktop spool writes (WASAPI loopback only sends callbacks
+  when audio is playing; silence is materialized on disk)
+- Bounded post-processing mix with minimal enhancement for natural sound quality
 - High-quality Opus compression via ffmpeg
 
 Module structure:
 - constants.py: Configuration values
-- processor.py: Audio processing (resampling, enhancement, mixing)
-- compressor.py: ffmpeg compression wrapper
-- timeline.py: WASAPI gap reconstruction
+- streaming_post_processor.py: Bounded finalization (resample/enhance/mix/encode)
+- track_spool.py / capture_manifest.py: Durable capture segments
+- timeline.py: timestamp_to_frame_position for desktop placement
 """
 
 import sys
-import json
+import os
 import threading
 import time
 import platform
@@ -79,39 +80,43 @@ from .constants import (
     WATCHDOG_CHECK_INTERVAL,
     WATCHDOG_STALL_THRESHOLD,
     LEVEL_SUBSAMPLE_FACTOR,
-    LEVEL_UPDATE_FPS,
     MIC_BOOST_LINEAR,
 )
-from .processor import (
-    resample,
-    enhance_microphone,
-    downmix_to_stereo,
-    mono_to_stereo,
-    mix_audio,
-    align_audio_lengths,
-)
-from .compressor import compress_and_report
-from .recorder_temp_paths import build_recorder_temp_pcm_path
-from .timeline import reconstruct_desktop_timeline
-from .wav_io import write_int16_pcm_wav
+from .timeline import timestamp_to_frame_position
 from .windows_callback_health import evaluate_callback_stalls
+from .capture_manifest import (
+    CaptureManifestCoordinator,
+    MANIFEST_FILENAME,
+    discard_capture_session,
+)
+from .track_spool import (
+    DEFAULT_MAX_QUEUE_BYTES,
+    DEFAULT_STALL_TIMEOUT_S,
+    TrackSpool,
+)
+from .streaming_post_processor import FinalizationError, finalize_capture
+
+# Bound desktop PCM deferred until mic_first_capture_time exists (matches spool queue).
+DEFERRED_DESKTOP_MAX_BYTES = DEFAULT_MAX_QUEUE_BYTES
+# Hard-fail if the mic never produces a first capture while desktop is deferred.
+DEFERRED_DESKTOP_MAX_WAIT_S = DEFAULT_STALL_TIMEOUT_S
 
 # Store final output path for meeting manager (legacy interface)
 _final_output_path = None
 _recording_duration = 0.0
 
-# Known constraint: mic/desktop frames are buffered in RAM for the post-processing
-# mix. Long meetings (≈2h stereo 48 kHz) can peak at several GB during stop-time
-# join/convert; MemoryError on that path should still emit structured failure JSON.
+# Capture always spills to durable ``{stem}.capture/`` track spools during
+# recording. Stop finalizes via bounded ``finalize_capture`` (no whole-session
+# RAM mix). Interrupted sessions recover via ``audio.capture_recovery``.
 
 
 class AudioRecorder:
     """
-    Audio recorder with post-processing mix.
+    Audio recorder with durable capture spools and post-processing mix.
 
-    Records mic and desktop simultaneously to separate buffers,
-    then mixes them after recording completes. This approach
-    avoids real-time buffer synchronization issues.
+    Records mic and desktop simultaneously to segmented track spools,
+    then finalizes after recording completes. This approach avoids
+    real-time buffer synchronization issues and whole-session RAM buffers.
     """
 
     def __init__(
@@ -229,15 +234,23 @@ class AudioRecorder:
             print(f"  Loopback: {self.loopback_sample_rate} Hz, {self.loopback_channels} channel(s)", file=sys.stderr)
         print(f"  Target output: {self.target_sample_rate} Hz, {self.target_channels} channel(s) (stereo)", file=sys.stderr)
 
-        # Separate frame buffers
-        # Mic frames: just audio data (continuous callbacks even during silence)
-        # Desktop frames: (timestamp, audio_data) tuples to preserve gaps
-        # WASAPI loopback only sends callbacks when audio is playing, so we need
-        # timestamps to reconstruct the timeline with proper silence gaps
-        self.mic_frames = []
-        self.desktop_frames = []  # List of (timestamp, audio_data) tuples
+        # Durable capture spools ({stem}.capture/) — no whole-session RAM buffers.
         self.is_recording = False
         self.lock = threading.Lock()
+
+        self._capture_manifest = None
+        self._mic_spool = None
+        self._desktop_spool = None
+        self._async_capture_error = None
+        self._spool_error_lock = threading.Lock()
+        # Desktop chunks that arrived before mic_first_capture_time was known.
+        # Serialized with direct desktop appends via `_desktop_spool_lock`.
+        self._deferred_desktop_chunks = []
+        self._deferred_desktop_bytes = 0
+        self._deferred_desktop_started_at = None
+        self._desktop_spool_lock = threading.Lock()
+        self._desktop_spool_accepted_any = False
+        self._desktop_spool_warning = None
 
         # Pre-roll: discard first N seconds for device warm-up
         # In production, the 3-second countdown handles warm-up, so preroll can be 0
@@ -384,14 +397,30 @@ class AudioRecorder:
                 self.mic_level = 0.0
 
             if elapsed >= self.preroll_seconds:
-                # DEBUG: Track first capture time
-                if self.mic_first_capture_time is None:
-                    self.mic_first_capture_time = current_time
-                    print(f"DEBUG MIC: First CAPTURE at {elapsed:.4f}s elapsed (preroll={self.preroll_seconds}s)", file=sys.stderr)
-
+                if self._mic_spool is None:
+                    self._note_async_capture_error(
+                        "Capture spool was not ready when microphone audio arrived."
+                    )
+                    return (in_data, pyaudio.paComplete)
+                accepted = self._mic_spool.append(in_data)
+                if not accepted:
+                    self._note_async_capture_error(
+                        "Audio capture writer stalled; recording was stopped to preserve committed audio."
+                    )
+                    return (in_data, pyaudio.paComplete)
                 with self.lock:
-                    self.mic_frames.append(in_data)
                     self.mic_total_bytes += len(in_data)
+                # Set mic reference and flush deferred desktop under one lock so a
+                # concurrent desktop callback cannot append ahead of older deferred PCM.
+                with self._desktop_spool_lock:
+                    if self.mic_first_capture_time is None:
+                        self.mic_first_capture_time = current_time
+                        print(
+                            f"DEBUG MIC: First CAPTURE at {elapsed:.4f}s elapsed "
+                            f"(preroll={self.preroll_seconds}s)",
+                            file=sys.stderr,
+                        )
+                    self._flush_deferred_desktop_spool_locked()
 
         return (in_data, pyaudio.paContinue)
 
@@ -430,13 +459,121 @@ class AudioRecorder:
                     self.desktop_first_capture_time = current_time
                     print(f"DEBUG DESKTOP: First CAPTURE at {elapsed:.4f}s elapsed (preroll={self.preroll_seconds}s)", file=sys.stderr)
 
-                with self.lock:
-                    # Store timestamp with audio data to preserve gaps
-                    # WASAPI loopback only sends callbacks when audio is playing
-                    # We need timestamps to reconstruct timeline with proper silence
-                    self.desktop_frames.append((current_time, in_data))
+                with self._desktop_spool_lock:
+                    if self._desktop_spool_warning:
+                        # Already degraded to mic-only; ignore further desktop PCM.
+                        return (in_data, pyaudio.paContinue)
+                    if self._desktop_spool is None:
+                        self._note_desktop_spool_failure(
+                            "Capture spool was not ready when desktop audio arrived."
+                        )
+                        return (in_data, pyaudio.paContinue)
+                    reference = self.mic_first_capture_time
+                    if reference is None:
+                        # Defer until mic reference exists (do not silently drop).
+                        if not self._enqueue_deferred_desktop_locked(current_time, in_data):
+                            return (in_data, pyaudio.paComplete)
+                        return (in_data, pyaudio.paContinue)
+                    # Flush any leftover deferred chunks before accepting live audio.
+                    self._flush_deferred_desktop_spool_locked()
+                    if not self._append_desktop_spool_chunk(current_time, in_data, reference):
+                        return (in_data, pyaudio.paContinue)
 
         return (in_data, pyaudio.paContinue)
+
+    def _note_async_capture_error(self, message: str) -> None:
+        with self._spool_error_lock:
+            if self._async_capture_error is None:
+                self._async_capture_error = message
+        self.is_recording = False
+
+    def _note_desktop_spool_failure(self, message: str) -> None:
+        """Degrade to mic-only without stopping the meeting (desktop may fail mid-capture)."""
+        if self._desktop_spool_warning:
+            return
+        self._desktop_spool_warning = message
+        print(f"WARNING: {message}", file=sys.stderr)
+        try:
+            _send_warning_message(
+                "DESKTOP_SPOOL_FAILED",
+                message,
+                help=(
+                    "The meeting continues with microphone audio. "
+                    "Desktop/system audio may be missing."
+                ),
+            )
+        except Exception:
+            pass
+
+    def get_async_capture_error(self):
+        with self._spool_error_lock:
+            return self._async_capture_error
+
+    def _append_desktop_spool_chunk(self, timestamp: float, in_data: bytes, reference: float) -> bool:
+        """Place one desktop chunk on the spool. Returns False on desktop-only failure.
+
+        Caller must hold ``_desktop_spool_lock``. Desktop spool failures degrade to
+        mic-only; they must not hard-stop the whole recording.
+        """
+        frame_pos = timestamp_to_frame_position(
+            timestamp,
+            reference,
+            self.loopback_sample_rate,
+        )
+        if frame_pos < 0:
+            # Pre-mic-reference frames are trimmed (matches reconstruct_desktop_timeline).
+            return True
+        accepted = self._desktop_spool.append(in_data, frame_position=frame_pos)
+        if not accepted:
+            self._note_desktop_spool_failure(
+                "Desktop audio capture writer stalled; continuing with microphone only."
+            )
+            return False
+        self._desktop_spool_accepted_any = True
+        return True
+
+    def _enqueue_deferred_desktop_locked(self, timestamp: float, in_data: bytes) -> bool:
+        """Queue desktop PCM until mic reference exists. Caller holds ``_desktop_spool_lock``."""
+        payload = bytes(in_data)
+        if self._deferred_desktop_started_at is None:
+            self._deferred_desktop_started_at = timestamp
+        waited = timestamp - self._deferred_desktop_started_at
+        if waited > DEFERRED_DESKTOP_MAX_WAIT_S:
+            self._note_async_capture_error(
+                "Microphone capture did not start while desktop audio was deferred; "
+                "recording was stopped to bound memory use."
+            )
+            return False
+        next_bytes = self._deferred_desktop_bytes + len(payload)
+        if next_bytes > DEFERRED_DESKTOP_MAX_BYTES:
+            self._note_async_capture_error(
+                "Deferred desktop audio exceeded the capture memory bound while waiting "
+                "for microphone capture; recording was stopped to preserve committed audio."
+            )
+            return False
+        self._deferred_desktop_chunks.append((timestamp, payload))
+        self._deferred_desktop_bytes = next_bytes
+        return True
+
+    def _flush_deferred_desktop_spool(self) -> None:
+        """Write desktop chunks that arrived before the mic reference existed."""
+        with self._desktop_spool_lock:
+            self._flush_deferred_desktop_spool_locked()
+
+    def _flush_deferred_desktop_spool_locked(self) -> None:
+        """Flush deferred desktop PCM. Caller must hold ``_desktop_spool_lock``."""
+        if not self._deferred_desktop_chunks or self._desktop_spool is None:
+            return
+        reference = self.mic_first_capture_time
+        if reference is None:
+            return
+        deferred = self._deferred_desktop_chunks
+        self._deferred_desktop_chunks = []
+        self._deferred_desktop_bytes = 0
+        self._deferred_desktop_started_at = None
+        for timestamp, payload in deferred:
+            if not self._append_desktop_spool_chunk(timestamp, payload, reference):
+                return
 
     def _close_streams(self):
         """Stop and close any partially opened PyAudio streams."""
@@ -464,21 +601,229 @@ class AudioRecorder:
                 pass
             self.desktop_stream = None
 
+    def _open_capture_spools(self) -> None:
+        started_ns = time.time_ns()
+        started_iso = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + ".000Z"
+        self._capture_manifest = CaptureManifestCoordinator.create(
+            self.output_path,
+            started_at_ns=started_ns,
+            started_at_iso=started_iso,
+        )
+        self._capture_manifest.set_processing_profile("windows-v1")
+        self._capture_manifest.set_mix_params(
+            mic_volume=float(getattr(self, "mic_volume", 1.0)),
+            desktop_volume=float(getattr(self, "desktop_volume", 1.0)),
+            mic_boost=MIC_BOOST_LINEAR,
+        )
+        self._capture_manifest.add_track(
+            "mic",
+            sample_rate=self.mic_sample_rate,
+            channels=self.mic_channels,
+            dtype="<i2",
+        )
+        self._mic_spool = TrackSpool(
+            self._capture_manifest,
+            self._capture_manifest.session_dir,
+            "mic",
+            sample_rate=self.mic_sample_rate,
+            channels=self.mic_channels,
+            dtype="<i2",
+        )
+        if self.mixing_mode:
+            self._capture_manifest.add_track(
+                "desktop",
+                sample_rate=self.loopback_sample_rate,
+                channels=self.loopback_channels,
+                dtype="<i2",
+            )
+            self._desktop_spool = TrackSpool(
+                self._capture_manifest,
+                self._capture_manifest.session_dir,
+                "desktop",
+                sample_rate=self.loopback_sample_rate,
+                channels=self.loopback_channels,
+                dtype="<i2",
+            )
+
+    def _close_capture_spools_for_mix(self) -> None:
+        """Close/commit spools and prepare the manifest for bounded finalization."""
+        # Place any remaining deferred desktop audio before closing.
+        self._flush_deferred_desktop_spool()
+
+        mic_result = None
+        desk_result = None
+        mic_spool = self._mic_spool
+        desk_spool = self._desktop_spool
+        self._mic_spool = None
+        self._desktop_spool = None
+        include_desktop = False
+
+        try:
+            if mic_spool is not None:
+                mic_result = mic_spool.close()
+            if desk_spool is not None:
+                # Never materialize an empty or failed desktop track as full-duration silence.
+                desktop_failed = bool(desk_spool.fail_reason)
+                pad_to = None
+                mic_frames = 0 if mic_result is None else mic_result.committed_frames
+                if (
+                    not desktop_failed
+                    and self._desktop_spool_accepted_any
+                    and mic_frames > 0
+                    and self.mic_sample_rate > 0
+                    and (mic_result is None or not mic_result.fail_reason)
+                ):
+                    mic_duration = mic_frames / float(self.mic_sample_rate)
+                    pad_to = int(mic_duration * self.loopback_sample_rate)
+                desk_result = desk_spool.close(final_frame_count=pad_to)
+        except Exception:
+            for leftover in (mic_spool, desk_spool):
+                if leftover is None:
+                    continue
+                try:
+                    leftover.close()
+                except Exception:
+                    pass
+            raise
+
+        if mic_result is not None and mic_result.fail_reason:
+            raise RuntimeError(
+                f"Microphone capture spool failed: {mic_result.fail_reason}"
+            )
+
+        if desk_result is not None and desk_result.fail_reason:
+            warning = (
+                f"Desktop capture spool failed; continuing with microphone only. "
+                f"({desk_result.fail_reason})"
+            )
+            if not self._desktop_spool_warning:
+                self._desktop_spool_warning = warning
+                print(f"WARNING: {warning}", file=sys.stderr)
+                try:
+                    _send_warning_message(
+                        "DESKTOP_SPOOL_FAILED",
+                        warning,
+                        help="The meeting audio was saved from the microphone. Desktop/system audio may be missing.",
+                    )
+                except Exception:
+                    pass
+            include_desktop = False
+        elif self._desktop_spool_warning:
+            include_desktop = False
+        elif desk_result is not None:
+            include_desktop = bool(
+                self._desktop_spool_accepted_any
+                and desk_result.committed_frames > 0
+            )
+
+        if mic_result is not None:
+            self.mic_total_bytes = (
+                mic_result.committed_frames * self.mic_channels * 2
+            )
+
+        if self._capture_manifest is not None:
+            try:
+                self._capture_manifest.set_include_desktop(include_desktop)
+                self._capture_manifest.set_state("finalizing")
+            except Exception as exc:
+                # Never silently finalize mic-only after a failed includeDesktop write
+                # when desktop audio was expected — fail stop so capture stays recoverable.
+                if include_desktop:
+                    raise RuntimeError(
+                        f"Failed to persist includeDesktop=True before finalization: {exc}"
+                    ) from exc
+                try:
+                    _send_warning_message(
+                        "DESKTOP_MANIFEST_UPDATE_FAILED",
+                        f"Could not update capture manifest for desktop mix ({exc}); "
+                        "continuing with microphone only.",
+                        help="The meeting audio was saved from the microphone. Desktop/system audio may be missing.",
+                    )
+                except Exception:
+                    pass
+                try:
+                    self._capture_manifest.set_include_desktop(False)
+                    self._capture_manifest.set_state("finalizing")
+                except Exception as retry_exc:
+                    raise RuntimeError(
+                        f"Failed to update capture manifest before finalization: {retry_exc}"
+                    ) from retry_exc
+
+    def _finalize_from_capture_spools(self) -> None:
+        """Run bounded multi-pass finalization for the spool path."""
+        global _final_output_path, _recording_duration
+        if self._capture_manifest is None:
+            raise RuntimeError("Capture manifest missing for spool finalization")
+
+        def _progress(stage: str, message: str) -> None:
+            try:
+                _send_event_message(stage, message)
+            except Exception:
+                pass
+
+        manifest_path = self._capture_manifest.session_dir / MANIFEST_FILENAME
+        try:
+            result = finalize_capture(
+                manifest_path,
+                self.output_path,
+                ffmpeg_path=os.environ.get("AVANEVIS_FFMPEG") or "ffmpeg",
+                progress_callback=_progress,
+                coordinator=self._capture_manifest,
+            )
+        except FinalizationError as exc:
+            if exc.recoverable_path:
+                _final_output_path = exc.recoverable_path
+                self.output_path = exc.recoverable_path
+            raise
+
+        self.output_path = result.final_path
+        _final_output_path = result.final_path
+        _recording_duration = float(result.duration)
+        print(f"Audio saved!", file=sys.stderr)
+        print(f"  File: {Path(result.final_path).name}", file=sys.stderr)
+        print(f"  Duration: {result.duration:.2f} seconds", file=sys.stderr)
+
+    def _release_capture_spools(self) -> None:
+        for spool in (self._mic_spool, self._desktop_spool):
+            if spool is None:
+                continue
+            try:
+                spool.close()
+            except Exception:
+                pass
+        self._mic_spool = None
+        self._desktop_spool = None
+        if self._capture_manifest is not None:
+            try:
+                self._capture_manifest.close()
+            except Exception:
+                pass
+            self._capture_manifest = None
+
+    def _release_and_discard_startup_capture(self) -> None:
+        """Close spool handles, then delete a never-started capture directory."""
+        session_dir = None
+        if self._capture_manifest is not None:
+            session_dir = self._capture_manifest.session_dir
+        self._release_capture_spools()
+        if session_dir is not None:
+            discard_capture_session(session_dir)
+
     def _abort_start_recording(self):
         """Reset recording state and close any streams opened during a failed start."""
         self.is_recording = False
         self.watchdog_running = False
         if self.callback_watchdog and self.callback_watchdog.is_alive():
             self.callback_watchdog.join(timeout=1.0)
+        # Stop streams before releasing writers so callbacks cannot race discard.
         self._close_streams()
+        self._release_and_discard_startup_capture()
 
     def start_recording(self):
         """Start recording from both sources."""
         print("Starting recording...", file=sys.stderr)
 
-        # Reset buffers and counters
-        self.mic_frames = []
-        self.desktop_frames = []
+        # Reset counters
         self.mic_frame_count = 0
         self.desktop_frame_count = 0
         self.mic_total_bytes = 0
@@ -487,6 +832,12 @@ class AudioRecorder:
         self.desktop_watchdog_warning_shown = False
         self.last_mic_callback_time = None
         self.last_desktop_callback_time = None
+        self._async_capture_error = None
+        self._deferred_desktop_chunks = []
+        self._deferred_desktop_bytes = 0
+        self._deferred_desktop_started_at = None
+        self._desktop_spool_accepted_any = False
+        self._desktop_spool_warning = None
 
         # Increase chunk size on Windows for better resilience to backgrounding
         # Larger buffers = more tolerance for process scheduling delays
@@ -512,8 +863,8 @@ class AudioRecorder:
         # NOTE: Thread priority boost removed - it only affects main thread, not audio callbacks
         # PyAudio's internal callback threads cannot be easily accessed from Python
 
-        # Open mic stream with error handling
-        # AUDIO QUALITY FIX: Try requested sample rate first, fall back to default if unsupported
+        # Open streams with start=False so sample-rate fallback can settle before
+        # capture spools/manifests are created with the final rates.
         try:
             self.mic_stream = self.pa.open(
                 format=pyaudio.paInt16,
@@ -522,7 +873,8 @@ class AudioRecorder:
                 input=True,
                 input_device_index=self.mic_device_id,
                 frames_per_buffer=self.chunk_size,
-                stream_callback=self._mic_callback
+                stream_callback=self._mic_callback,
+                start=False,
             )
             print(f"✓ Microphone stream opened at {self.mic_sample_rate} Hz", file=sys.stderr)
             _send_event_message("mic_stream_opened", "Microphone stream opened")
@@ -540,7 +892,8 @@ class AudioRecorder:
                         input=True,
                         input_device_index=self.mic_device_id,
                         frames_per_buffer=self.chunk_size,
-                        stream_callback=self._mic_callback
+                        stream_callback=self._mic_callback,
+                        start=False,
                     )
                     print(f"✓ Microphone stream opened at {self.mic_sample_rate} Hz (fallback)", file=sys.stderr)
                     _send_event_message("mic_stream_opened", "Microphone stream opened")
@@ -561,13 +914,22 @@ class AudioRecorder:
                     input=True,
                     input_device_index=self.loopback_device_id,
                     frames_per_buffer=self.chunk_size,
-                    stream_callback=self._desktop_callback
+                    stream_callback=self._desktop_callback,
+                    start=False,
                 )
                 print(f"✓ Desktop audio stream opened successfully", file=sys.stderr)
                 _send_event_message("desktop_stream_opened", "Desktop audio stream opened")
             except Exception as e:
                 self._abort_start_recording()
                 raise RuntimeError(f"Failed to open desktop audio stream (device {self.loopback_device_id}): {e}")
+
+        # Open durable spools AFTER rates settle and BEFORE streams start so the
+        # first callbacks cannot miss the capture writers.
+        try:
+            self._open_capture_spools()
+        except Exception as spool_err:
+            self._abort_start_recording()
+            raise RuntimeError(f"Failed to open capture spools: {spool_err}") from spool_err
 
         # Start streams
         try:
@@ -656,8 +1018,23 @@ class AudioRecorder:
         self._close_streams()
 
         print(f"Streams stopped", file=sys.stderr)
-        print(f"  Mic frames: {len(self.mic_frames)}", file=sys.stderr)
-        print(f"  Desktop frames: {len(self.desktop_frames)}", file=sys.stderr)
+        try:
+            self._close_capture_spools_for_mix()
+        except Exception as spool_err:
+            self._note_async_capture_error(f"Failed to close capture spools: {spool_err}")
+            # Still release handles; caller / CLI treats async error as failure.
+            self._release_capture_spools()
+            raise
+        print(f"  Mic spool bytes: {self.mic_total_bytes}", file=sys.stderr)
+        include = False
+        if self._capture_manifest is not None:
+            include = bool(self._capture_manifest.to_dict().get("includeDesktop"))
+        print(f"  Desktop spool included: {include}", file=sys.stderr)
+
+        # Async spool failures discovered at close must not continue into mix/success.
+        async_err = self.get_async_capture_error()
+        if async_err:
+            raise RuntimeError(async_err)
 
         # DEBUG: Print timing diagnostics
         print(f"", file=sys.stderr)
@@ -697,11 +1074,9 @@ class AudioRecorder:
         # KEY DIAGNOSTIC: Compare when each stream first captured audio.
         # NOTE: WASAPI loopback only delivers callbacks while desktop audio is
         # actually playing, so a positive delta just means the desktop was silent
-        # for that long at the start. timeline.py reconstructs the desktop track
-        # relative to the mic's first capture and inserts exactly that much leading
-        # silence, so this offset is corrected during mixing (no overlap, no lost
-        # audio). A negative delta (desktop before mic) is also handled by the
-        # overlap-trim logic in timeline.reconstruct_desktop_timeline.
+        # for that long at the start. Desktop spool writes place silence on disk
+        # relative to the mic's first capture (via timestamp_to_frame_position),
+        # so this offset is corrected during capture (no overlap, no lost audio).
         if self.mic_first_capture_time is not None and self.desktop_first_capture_time is not None:
             capture_delta = self.desktop_first_capture_time - self.mic_first_capture_time
             print(f"", file=sys.stderr)
@@ -710,13 +1085,13 @@ class AudioRecorder:
                 print(
                     f"  Desktop audio started {capture_delta:.4f}s after the mic "
                     f"(expected for loopback when the desktop is initially silent; "
-                    f"timeline reconstruction inserts matching leading silence).",
+                    f"spool placement inserts matching leading silence).",
                     file=sys.stderr,
                 )
             elif capture_delta < -0.1:
                 print(
                     f"  Desktop audio started {abs(capture_delta):.4f}s before the mic "
-                    f"(timeline reconstruction trims pre-reference frames).",
+                    f"(pre-reference frames are trimmed at spool write).",
                     file=sys.stderr,
                 )
             else:
@@ -725,9 +1100,9 @@ class AudioRecorder:
         print(f"=" * 60, file=sys.stderr)
         print(f"", file=sys.stderr)
 
-        # Mix and save with detailed error handling
+        # Finalize with detailed error handling
         try:
-            self._mix_and_save()
+            self._finalize_from_capture_spools()
         except Exception as e:
             print(f"ERROR in audio processing: {e}", file=sys.stderr)
             import traceback
@@ -735,203 +1110,11 @@ class AudioRecorder:
             # Re-raise so caller knows it failed
             raise
 
-        # Clear buffers
-        self.mic_frames = []
-        self.desktop_frames = []
+        # Manifest lock released after successful finalize cleanup; best-effort
+        # close if finalize left the coordinator open after a partial failure.
+        self._release_capture_spools()
 
         print("Recording stopped!", file=sys.stderr)
-
-    def _reconstruct_desktop_timeline(self):
-        """
-        Reconstruct desktop audio timeline from timestamped frames.
-
-        Delegates to the timeline module for the actual reconstruction.
-        See timeline.py for implementation details.
-        """
-        return reconstruct_desktop_timeline(
-            desktop_frames=self.desktop_frames,
-            mic_frames=self.mic_frames,
-            mic_first_capture_time=self.mic_first_capture_time,
-            mic_sample_rate=self.mic_sample_rate,
-            mic_channels=self.mic_channels,
-            loopback_sample_rate=self.loopback_sample_rate,
-            loopback_channels=self.loopback_channels,
-            mic_total_bytes=self.mic_total_bytes,
-        )
-
-    def _mix_and_save(self):
-        """Mix the two audio sources and save to file."""
-        print("Mixing audio...", file=sys.stderr)
-
-        # Validate that we captured audio
-        if len(self.mic_frames) == 0:
-            raise RuntimeError(
-                "No audio captured from microphone! "
-                "This may be due to:\n"
-                "  - Microphone permissions not granted\n"
-                "  - Microphone is muted or disabled\n"
-                "  - Device driver issues\n"
-                "  - Wrong device selected"
-            )
-
-        print(f"  Captured {len(self.mic_frames)} mic frames", file=sys.stderr)
-        if self.mixing_mode:
-            print(f"  Captured {len(self.desktop_frames)} desktop frames", file=sys.stderr)
-
-        # Convert to numpy arrays
-        mic_audio = np.frombuffer(b''.join(self.mic_frames), dtype=np.int16)
-        mic_duration = len(mic_audio) / self.mic_sample_rate / self.mic_channels
-        print(f"  Raw mic audio: {len(mic_audio)} samples ({mic_duration:.2f} seconds at {self.mic_sample_rate} Hz, {self.mic_channels} ch)", file=sys.stderr)
-
-        if self.mixing_mode and self.desktop_frames:
-            # TIMELINE RECONSTRUCTION: Desktop frames have timestamps to preserve gaps
-            # WASAPI loopback only sends callbacks when audio is playing, so we need
-            # to reconstruct the full timeline with silence where there was no audio
-            desktop_audio = self._reconstruct_desktop_timeline()
-            desktop_duration = len(desktop_audio) / self.loopback_sample_rate / self.loopback_channels
-            print(f"  Reconstructed desktop audio: {len(desktop_audio)} samples ({desktop_duration:.2f} seconds at {self.loopback_sample_rate} Hz, {self.loopback_channels} ch)", file=sys.stderr)
-
-            # Resample both to target rate (using processor module)
-            if self.mic_sample_rate != self.target_sample_rate:
-                print(f"  Resampling mic: {self.mic_sample_rate} Hz → {self.target_sample_rate} Hz", file=sys.stderr)
-                mic_audio = resample(
-                    mic_audio,
-                    self.mic_sample_rate,
-                    self.target_sample_rate,
-                    num_channels=self.mic_channels,
-                )
-
-            # CHANNEL FIX: Handle multi-channel mic (some USB mics have 4+ channels)
-            if self.mic_channels > 2:
-                mic_audio = downmix_to_stereo(mic_audio, self.mic_channels)
-            elif self.mic_channels == 1 and self.target_channels == 2:
-                print(f"  Converting mic from mono to stereo...", file=sys.stderr)
-                mic_audio = mono_to_stereo(mic_audio)
-
-            # Apply noise reduction to microphone audio only (using processor module)
-            print(f"  Applying noise reduction to mic...", file=sys.stderr)
-            mic_audio = enhance_microphone(mic_audio, self.target_sample_rate, self.target_channels)
-
-            if self.loopback_sample_rate != self.target_sample_rate:
-                print(f"  Resampling desktop: {self.loopback_sample_rate} Hz → {self.target_sample_rate} Hz", file=sys.stderr)
-                desktop_audio = resample(
-                    desktop_audio,
-                    self.loopback_sample_rate,
-                    self.target_sample_rate,
-                    num_channels=self.loopback_channels,
-                )
-
-            # CHANNEL FIX: Downmix multi-channel audio to stereo (using processor module)
-            if self.loopback_channels > 2:
-                desktop_audio = downmix_to_stereo(desktop_audio, self.loopback_channels)
-            elif self.loopback_channels == 1 and self.target_channels == 2:
-                print(f"  Converting desktop audio from mono to stereo...", file=sys.stderr)
-                desktop_audio = mono_to_stereo(desktop_audio)
-
-            # Align audio lengths (using processor module)
-            mic_len = len(mic_audio)
-            desktop_len = len(desktop_audio)
-
-            # Safety check: ensure we have valid audio data
-            if max(mic_len, desktop_len) == 0:
-                raise RuntimeError(
-                    "Audio alignment failed - both audio tracks are empty after resampling. "
-                    "This may be due to audio buffer corruption or device issues."
-                )
-
-            print(f"  Aligning audio lengths: mic={mic_len} samples, desktop={desktop_len} samples", file=sys.stderr)
-            mic_audio, desktop_audio = align_audio_lengths(mic_audio, desktop_audio)
-
-            if len(mic_audio) != mic_len:
-                print(f"  Padded mic END with {len(mic_audio) - mic_len} samples of silence", file=sys.stderr)
-            if len(desktop_audio) != desktop_len:
-                print(f"  Padded desktop END with {len(desktop_audio) - desktop_len} samples of silence", file=sys.stderr)
-
-            # Mix (using processor module)
-            print("  Mixing mic + desktop...", file=sys.stderr)
-            final_audio = mix_audio(
-                mic_audio, desktop_audio,
-                mic_volume=self.mic_volume,
-                desktop_volume=self.desktop_volume,
-                mic_boost=MIC_BOOST_LINEAR
-            )
-
-        else:
-            # Mic-only
-            if self.mic_sample_rate != self.target_sample_rate:
-                print(f"  Resampling mic: {self.mic_sample_rate} Hz → {self.target_sample_rate} Hz", file=sys.stderr)
-                mic_audio = resample(
-                    mic_audio,
-                    self.mic_sample_rate,
-                    self.target_sample_rate,
-                    num_channels=self.mic_channels,
-                )
-
-            # CHANNEL FIX: Handle multi-channel mic (some USB mics have 4+ channels)
-            if self.mic_channels > 2:
-                mic_audio = downmix_to_stereo(mic_audio, self.mic_channels)
-            elif self.mic_channels == 1 and self.target_channels == 2:
-                print(f"  Converting mic from mono to stereo...", file=sys.stderr)
-                mic_audio = mono_to_stereo(mic_audio)
-
-            # Apply noise reduction to microphone audio (using processor module)
-            print(f"  Applying noise reduction to mic...", file=sys.stderr)
-            mic_audio = enhance_microphone(mic_audio, self.target_sample_rate, self.target_channels)
-
-            final_audio = mic_audio
-
-        # Validate final audio is not empty
-        if len(final_audio) == 0:
-            raise RuntimeError(
-                "Audio processing resulted in empty output. "
-                "This may be due to audio buffer corruption or processing errors."
-            )
-
-        duration = len(final_audio) / (self.target_sample_rate * self.target_channels)
-        print(f"  Final audio length: {len(final_audio)} samples ({duration:.2f} seconds)", file=sys.stderr)
-
-        # Save to temporary PCM with a non-scanned extension (.pcm.tmp).
-        # Leftover .temp.wav files were previously imported as duplicate meetings.
-        temp_wav = build_recorder_temp_pcm_path(self.output_path)
-        print(f"Saving temporary WAV...", file=sys.stderr)
-        write_int16_pcm_wav(
-            temp_wav,
-            final_audio,
-            channels=self.target_channels,
-            sample_rate=self.target_sample_rate,
-            sample_width=self.pa.get_sample_size(pyaudio.paInt16),
-        )
-
-        # Compress with ffmpeg (using compressor module)
-        final_path, stats = compress_and_report(
-            temp_wav,
-            self.output_path,
-            self.target_sample_rate,
-            progress_message="Compressing with ffmpeg (128 kbps Opus)...",
-        )
-
-        # Publish the final path before temp cleanup so antivirus/OneDrive
-        # PermissionError on unlink still leaves Electron a recoverable payload.
-        self.output_path = final_path
-        global _final_output_path, _recording_duration
-        _final_output_path = final_path
-        _recording_duration = duration
-
-        # Clean up temp file (best-effort; locked temps are cleaned by scan-import)
-        try:
-            Path(temp_wav).unlink()
-        except OSError as unlink_err:
-            print(f"Warning: Could not remove temp recording file: {unlink_err}", file=sys.stderr)
-
-        file_size = stats['output_size']
-        temp_size = stats['input_size']
-        compression_ratio = stats['ratio']
-
-        print(f"Audio saved!", file=sys.stderr)
-        print(f"  File: {Path(final_path).name}", file=sys.stderr)
-        print(f"  Size: {file_size / 1024 / 1024:.2f} MB (was {temp_size / 1024 / 1024:.2f} MB, {compression_ratio:.1f}% smaller)", file=sys.stderr)
-        print(f"  Duration: {duration:.2f} seconds", file=sys.stderr)
-        print(f"  Sample rate: {self.target_sample_rate} Hz", file=sys.stderr)
 
     def cleanup(self):
         """Clean up resources."""
@@ -940,6 +1123,9 @@ class AudioRecorder:
         if self.callback_watchdog and self.callback_watchdog.is_alive():
             self.callback_watchdog.join(timeout=1.0)
         self._close_streams()
+        # Safety net when stop_recording did not run (should be rare after CLI fix).
+        if self._mic_spool is not None or self._desktop_spool is not None or self._capture_manifest is not None:
+            self._release_capture_spools()
         if self.pa:
             self.pa.terminate()
             self.pa = None
@@ -989,8 +1175,11 @@ def main():
                 if "stop" in line.lower():
                     stop_event.set()
                     break
-        except:
-            pass
+            else:
+                # stdin EOF while capture is active — stop cleanly (no orphan).
+                stop_event.set()
+        except Exception:
+            stop_event.set()
 
     input_thread = threading.Thread(target=input_listener, daemon=True)
     input_thread.start()
@@ -1006,12 +1195,15 @@ def main():
         recorder.start_recording()
         
         if args.duration > 0:
-            # Record for fixed duration
+            # Record for fixed duration (interruptible on async spool / stop)
             for i in range(args.duration):
-                if not recorder.is_recording or stop_event.is_set():
+                if not recorder.is_recording or stop_event.is_set() or recorder.get_async_capture_error():
                     break
                 time.sleep(1)
             recorder.stop_recording()
+            async_err = recorder.get_async_capture_error()
+            if async_err:
+                raise RuntimeError(async_err)
         else:
             # Record until interrupted
             print("Recording... Send 'stop' to stdin or Press Ctrl+C to stop", file=sys.stderr)
@@ -1020,6 +1212,9 @@ def main():
             # PERFORMANCE: Reduced from 20 FPS to 5 FPS to minimize CPU/IPC overhead
             # Visualization still looks smooth, but uses 75% less resources
             while not stop_event.is_set():
+                async_err = recorder.get_async_capture_error()
+                if async_err or not recorder.is_recording:
+                    break
                 # Print levels as JSON to stdout (buffered)
                 # Electron will parse this
                 levels = {
@@ -1031,7 +1226,11 @@ def main():
                 time.sleep(0.2) # 5 FPS updates (was 0.05 = 20 FPS)
             
             print("\nStopping recording...", file=sys.stderr)
+            # Always close/commit spools before emitting structured failure.
             recorder.stop_recording()
+            async_err = recorder.get_async_capture_error()
+            if async_err:
+                raise RuntimeError(async_err)
 
     except Exception as e:
         global _final_output_path

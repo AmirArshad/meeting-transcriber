@@ -29,6 +29,8 @@ def test_add_meeting_persists_files_and_removes_originals(tmp_path):
         language='en',
         model='small',
         title='Test Meeting',
+        transcription_device='CUDA',
+        transcription_compute_type='float16',
     )
 
     persisted_audio = Path(meeting['audioPath'])
@@ -36,6 +38,8 @@ def test_add_meeting_persists_files_and_removes_originals(tmp_path):
 
     assert meeting['title'] == 'Test Meeting'
     assert meeting['duration'] == '1:05'
+    assert meeting['transcriptionDevice'] == 'cuda'
+    assert meeting['transcriptionComputeType'] == 'float16'
     assert persisted_audio.exists()
     assert persisted_transcript.exists()
     assert persisted_audio.name.startswith('meeting_')
@@ -43,6 +47,26 @@ def test_add_meeting_persists_files_and_removes_originals(tmp_path):
     assert not source_audio.exists()
     assert not source_transcript.exists()
     assert 'transcript' not in meeting
+
+
+def test_add_meeting_maps_mlx_metal_device_to_mps(tmp_path):
+    recordings_dir = tmp_path / 'recordings'
+    source_audio, source_transcript = _create_source_files(recordings_dir, 'temp_mlx')
+    manager = MeetingManager(recordings_dir=str(recordings_dir))
+
+    meeting = manager.add_meeting(
+        audio_path=str(source_audio),
+        transcript_path=str(source_transcript),
+        duration=12.0,
+        language='en',
+        model='base',
+        transcription_device='metal',
+    )
+
+    assert meeting['transcriptionDevice'] == 'mps'
+    assert Path(meeting['audioPath']).exists()
+    assert not source_audio.exists()
+    assert not source_transcript.exists()
 
 
 def test_add_meeting_rejects_paths_outside_recordings_dir(tmp_path):
@@ -1021,6 +1045,8 @@ def test_update_transcription_updates_status_fields_and_duration(tmp_path):
         language='fa',
         model='medium',
         duration=125.0,
+        device='CUDA',
+        compute_type='float16',
     )
 
     assert updated is not None
@@ -1030,6 +1056,8 @@ def test_update_transcription_updates_status_fields_and_duration(tmp_path):
     assert updated['model'] == 'medium'
     assert updated['durationSeconds'] == 125.0
     assert updated['duration'] == '2:05'
+    assert updated['transcriptionDevice'] == 'cuda'
+    assert updated['transcriptionComputeType'] == 'float16'
 
 
 def test_scan_and_sync_recordings_prefers_single_audio_candidate_per_stem(tmp_path):

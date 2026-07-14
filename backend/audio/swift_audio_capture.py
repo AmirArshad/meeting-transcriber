@@ -17,6 +17,7 @@ import sys
 import subprocess
 import threading
 import json
+import time
 import numpy as np
 from pathlib import Path
 from typing import Optional, Callable
@@ -132,7 +133,8 @@ class SwiftAudioCapture:
         self,
         sample_rate: int = 48000,
         channels: int = 2,
-        helper_path: Optional[Path] = None
+        helper_path: Optional[Path] = None,
+        audio_sink: Optional[Callable[[np.ndarray], bool]] = None,
     ):
         """
         Initialize the Swift audio capture.
@@ -141,14 +143,20 @@ class SwiftAudioCapture:
             sample_rate: Sample rate in Hz (default: 48000)
             channels: Number of audio channels (default: 2)
             helper_path: Optional path to audiocapture-helper binary
+            audio_sink: Optional callback ``(chunk) -> bool``. When set, chunks are
+                forwarded to the sink and are not retained in ``audio_buffer``.
         """
         self.sample_rate = sample_rate
         self.channels = channels
         self.helper_path = helper_path or get_audiocapture_helper_path()
+        self.audio_sink = audio_sink
 
         self.process: Optional[subprocess.Popen] = None
         self.audio_buffer: list = []
         self.buffer_lock = threading.Lock()
+        self._latest_chunk: Optional[np.ndarray] = None
+        self._sink_chunk_count = 0
+        self._sink_sample_count = 0
 
         # Thread-safe state signaling using Events
         self._recording_event = threading.Event()  # Set when recording is active
@@ -436,17 +444,10 @@ class SwiftAudioCapture:
                 if audio_data is None:
                     continue
 
-                # Add to buffer (thread-safe)
+                # Add to buffer or optional sink (thread-safe)
                 chunk_peak = float(np.max(np.abs(audio_data))) if audio_data.size else 0.0
-                with self.buffer_lock:
-                    now = time.time()
-                    if self.first_audio_time is None:
-                        self.first_audio_time = now
-                    self.last_audio_time = now
-                    self.audio_buffer.append(audio_data)
-                    self.read_chunk_count += 1
-                    self.read_sample_count += len(audio_data)
-                    self.read_peak_level = max(self.read_peak_level, chunk_peak)
+                if not self._ingest_audio_chunk(audio_data, chunk_peak=chunk_peak):
+                    break
 
                 total_samples += len(audio_data)
                 chunk_count += 1
@@ -479,15 +480,8 @@ class SwiftAudioCapture:
                             continue
 
                         chunk_peak = float(np.max(np.abs(audio_data))) if audio_data.size else 0.0
-                        with self.buffer_lock:
-                            now = time.time()
-                            if self.first_audio_time is None:
-                                self.first_audio_time = now
-                            self.last_audio_time = now
-                            self.audio_buffer.append(audio_data)
-                            self.read_chunk_count += 1
-                            self.read_sample_count += len(audio_data)
-                            self.read_peak_level = max(self.read_peak_level, chunk_peak)
+                        if not self._ingest_audio_chunk(audio_data, chunk_peak=chunk_peak):
+                            break
                         total_samples += len(audio_data)
 
                     if drained_total > 0:
@@ -645,15 +639,30 @@ class SwiftAudioCapture:
             print(f"  Swift helper exited with code {exit_code}", file=sys.stderr)
 
         # Concatenate all audio buffers while preserving final diagnostics after
-        # the buffer is cleared for mixing.
+        # the buffer is cleared for mixing. Sink mode keeps data out of RAM.
         desktop_audio = None
+        audio_sink = getattr(self, "audio_sink", None)
         with self.buffer_lock:
-            self.last_captured_chunk_count = len(self.audio_buffer)
-            self.last_captured_sample_count = int(sum(len(chunk) for chunk in self.audio_buffer))
+            if audio_sink is not None:
+                self.last_captured_chunk_count = self._sink_chunk_count
+                self.last_captured_sample_count = self._sink_sample_count
+            else:
+                self.last_captured_chunk_count = len(self.audio_buffer)
+                self.last_captured_sample_count = int(sum(len(chunk) for chunk in self.audio_buffer))
             self.last_helper_sample_buffers = self.helper_total_sample_buffers
             self.last_helper_bytes = self.helper_total_bytes
 
-            if not self.audio_buffer:
+            if audio_sink is not None:
+                if self._sink_sample_count <= 0:
+                    message = "Desktop audio stream produced no samples; saved recording will contain microphone audio only."
+                    print("No desktop audio captured", file=sys.stderr)
+                    self._queue_warning(
+                        'NO_DESKTOP_AUDIO_CAPTURED',
+                        message,
+                        help=self._missing_audio_help(),
+                    )
+                desktop_audio = None
+            elif not self.audio_buffer:
                 message = "Desktop audio stream produced no samples; saved recording will contain microphone audio only."
                 print("No desktop audio captured", file=sys.stderr)
                 self._queue_warning(
@@ -680,6 +689,42 @@ class SwiftAudioCapture:
         self.process = None
         return desktop_audio
 
+    def _ingest_audio_chunk(self, audio_data: np.ndarray, *, chunk_peak: float) -> bool:
+        """Store one float32 chunk in RAM or forward it to an optional sink."""
+        with self.buffer_lock:
+            now = time.time()
+            if self.first_audio_time is None:
+                self.first_audio_time = now
+            self.last_audio_time = now
+            self.read_chunk_count += 1
+            self.read_sample_count += len(audio_data)
+            self.read_peak_level = max(self.read_peak_level, chunk_peak)
+            self._latest_chunk = audio_data
+
+            if self.audio_sink is None:
+                self.audio_buffer.append(audio_data)
+
+        if self.audio_sink is not None:
+            try:
+                accepted = bool(self.audio_sink(audio_data))
+            except Exception as sink_err:
+                self.last_error = f"Desktop audio sink failed: {sink_err}"
+                self.error_event.set()
+                return False
+            if not accepted:
+                self.last_error = "Desktop audio sink rejected audio (writer backpressure)"
+                self.error_event.set()
+                return False
+            with self.buffer_lock:
+                self._sink_chunk_count += 1
+                self._sink_sample_count += len(audio_data)
+        return True
+
+    @property
+    def latest_audio_chunk(self) -> Optional[np.ndarray]:
+        with self.buffer_lock:
+            return None if self._latest_chunk is None else self._latest_chunk
+
     def drain_warnings(self) -> list[dict]:
         """Return and clear any queued helper warnings."""
         with self.warning_lock:
@@ -689,7 +734,7 @@ class SwiftAudioCapture:
             return warnings
 
     def cleanup(self):
-        """Clean up resources."""
+        """Clean up resources, joining reader threads before returning."""
         self._recording_event.clear()
         self._ready_event.clear()
 
@@ -703,6 +748,12 @@ class SwiftAudioCapture:
                     self.process.wait(timeout=0.5)
                 except OSError:
                     pass  # Process already dead
+
+        # Await readers so startup abort cannot race a live sink callback.
+        if self._stdout_thread and self._stdout_thread.is_alive():
+            self._stdout_thread.join(timeout=4.0)
+        if self._stderr_thread and self._stderr_thread.is_alive():
+            self._stderr_thread.join(timeout=4.0)
 
         self.process = None
         self._stdout_thread = None

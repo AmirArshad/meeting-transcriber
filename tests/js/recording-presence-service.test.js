@@ -374,3 +374,16 @@ test('destroy clears timers and tray', () => {
     startedAt: null,
   });
 });
+
+test('showSafetyNotification shows a best-effort native toast', () => {
+  const harness = createDeps();
+  const service = createRecordingPresenceService(harness.deps);
+  const shown = service.showSafetyNotification({
+    title: 'AvaNevis disk space is running low',
+    body: 'Less than 10 GB is available. Long recordings may run out of space.',
+  });
+  assert.equal(shown, true);
+  assert.equal(harness.notifications.length, 1);
+  assert.equal(harness.notifications[0].shown, true);
+  assert.equal(harness.notifications[0].options.title, 'AvaNevis disk space is running low');
+});

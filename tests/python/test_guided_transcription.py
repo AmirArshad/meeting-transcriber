@@ -118,6 +118,9 @@ def test_guided_transcription_runs_diarization_without_token(monkeypatch, tmp_pa
         def transcribe_file(self, audio_path, save_markdown=False):
             return {'segments': [{'start': 0.0, 'end': 1.0, 'text': 'hello'}]}
 
+        def get_model_info(self):
+            return {'device': 'cuda', 'compute_type': 'float16'}
+
         def cleanup(self):
             pass
 
@@ -137,6 +140,8 @@ def test_guided_transcription_runs_diarization_without_token(monkeypatch, tmp_pa
     )
 
     assert result['text'] == 'hello'
+    assert result['transcriptionDevice'] == 'cuda'
+    assert result['transcriptionComputeType'] == 'float16'
     assert output_path.exists()
     assert calls == [(audio_path, {
         'model_ref': 'pyannote/test-model',

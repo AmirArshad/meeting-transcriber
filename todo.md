@@ -19,29 +19,29 @@ Replaced Intel-only evermeet.cx ffmpeg with a pinned Apple Silicon static build 
 - [x] [Risk: Low] Close superseded Dependabot PRs that were absorbed by the dependency-upgrade branch: #12 and #20.
 - [x] [Risk: Low] Close deferred high-risk Dependabot PRs with explicit comments: #15, #18, and #19.
 - [x] [Risk: Medium] Decide whether optional follow-up dependency PRs #13, #14, #16, #17, and #21 should ship as small separate PRs or stay deferred. (Closed; revisit only if Dependabot reopens with newer bumps.)
-- [ ] [Risk: Low] Trial dropping explicit transitive-only pins in a follow-up trim pass; keep any pin needed for reproducible packaged builds.
+- [ ] [Risk: Low] Trial dropping *other* explicit transitive-only pins in a follow-up trim pass (not `onnxruntime`/`tokenizers`/`av` — those stay); keep any pin needed for reproducible packaged builds.
 - [ ] [Risk: High] Evaluate whether macOS PyObjC `Cocoa` / `Quartz` pins are removable; requires `pip check`, PyObjC import checks, packaged `build:mac:dir`, and ScreenCaptureKit fallback smoke.
 - [x] [Risk: Medium] Remove bundled macOS `torch` after pip install (MLX path does not import it; diarization installs its own torch into userData).
-- [ ] [Risk: Medium] Investigate Windows faster-whisper transitive packages such as `onnxruntime`, `tokenizers`, and `av`; remove only if the packaged transcription graph remains valid.
+- [x] [Risk: Medium] Investigate Windows faster-whisper transitive packages `onnxruntime`, `tokenizers`, and `av`: **keep explicit pins** in `requirements-windows-build.txt`. All three are hard deps of `faster-whisper==1.2.1`; AvaNevis uses `vad_filter=True` (onnxruntime/Silero), path-based decode (PyAV/`av`), and Whisper tokenization (`tokenizers`). Do not remove from packaged Windows builds. See 2026-07-14 note in `docs/development/DEPENDABOT_TRIAGE.md`.
 
 ## Remaining Validation And Smoke Checks
 
 - [x] [Risk: High] macOS packaged smoke: launch `dist/mac-arm64/AvaNevis.app` and run a short MLX transcription after `npm run build:mac:dir`.
-- [ ] [Risk: High] Windows packaged smoke: healthy CUDA runtime transcribes on GPU.
-- [ ] [Risk: High] Windows packaged smoke: broken CUDA runtime falls back to CPU and still saves a transcript.
-- [ ] [Risk: Medium] Recovery smoke: existing `.opus` without transcript appears in History and can be retried.
+- [x] [Risk: High] Windows packaged smoke: healthy CUDA runtime transcribes on GPU.
+- [x] [Risk: High] Windows packaged smoke: broken CUDA runtime falls back to CPU and still saves a transcript.
+- [x] [Risk: Medium] Recovery smoke: existing `.opus` without transcript appears in History and can be retried.
 - [ ] [Risk: High] Optional extended pass: `tests/manual/recording-transcription-regression-checklist.md`.
 - [ ] [Risk: High] Optional local AI add-ons smoke if models are installed: diarization and summary subset from `tests/manual/local-ai-addons-checklist.md`.
 
 ## Next Priorities
 
-Codebase refactor initiative is **complete** (Phases 0–8 + Phase 5B + shared `recorder_stdout`; see section below). The next product initiative is recording awareness and long-recording safety, based on user feedback about a forgotten 550-minute recording and difficulty rediscovering the app by name.
+Codebase refactor, Release 1 presence, and Release 2 long-recording safety are **complete** on `feature/long-recording-safety-r2` (awaiting PR/merge). Next focus is **release hygiene**.
 
 Recommended order when choosing:
 
-1. **Hardware smoke debt** (when a Mac / CUDA Windows box is available) — Phase 7B macOS capture smoke; Windows CUDA GPU + CPU-fallback packaged smokes.
-2. **Product feature** — ship Release 1 of the recording awareness plan, then execute Release 2 progressive disk capture and bounded finalization.
-3. **Release hygiene** — notarization when enrolled; optional transitive pin / PyObjC trim (needs capture smoke).
+1. **Ship R2** — open/merge PR for `feature/long-recording-safety-r2` if not already merged.
+2. **Release hygiene** — notarization when enrolled; trial transitive pin trim; PyObjC Cocoa/Quartz evaluation; Windows faster-whisper transitive investigation.
+3. **Optional extended checklists** — full transcription regression / local AI add-ons smoke when convenient.
 
 Do **not** force Phase 2 renderer controllers now. Revisit only if `app.js` grows materially or a feature forces controller-level changes — and only after (1) a DOM-testing decision and (2) a written Pattern C shared-state ownership plan.
 
@@ -57,15 +57,20 @@ Implementation plan: `docs/superpowers/plans/2026-07-13-recording-awareness-and-
 - [x] [Risk: Low] Add an always-visible in-app recording pill and `H:MM:SS` elapsed clock across Record, History, and Settings.
 - [x] [Risk: Medium] Add single-instance reveal/focus behavior and recording-specific close copy (Windows: keep recording minimized; macOS: keep in menu bar); keep the existing graceful quit/save path.
 - [x] [Risk: Low] Improve descriptive app metadata and validate installed searches for "meeting" or "transcriber" without changing `productName`, Windows shortcut identity, `appId`, `userData`, or release artifacts.
-- [ ] [Risk: High] Run packaged macOS and Windows presence checks, including notifications disabled, stop/failure cleanup, display scaling, toast CLSID click-to-open, and installed-app search.
+- [x] [Risk: High] Run packaged macOS and Windows presence checks, including notifications disabled, stop/failure cleanup, display scaling, toast CLSID click-to-open, and installed-app search.
 
 ### Release 2: Progressive capture and bounded finalization
 
-- [ ] [Risk: Medium] Measure 15-minute and 60-minute capture/stop RSS, duration, and disk baselines; expose structured stop-processing stages, replace shell disk probes (verify Windows `statfs`), and warn periodically when recording space becomes low.
-- [ ] [Risk: High] Add versioned atomic capture manifests and bounded segmented mic/desktop track spools (8 MiB hard cap, soft warning, sustained-stall detection) that cannot be scan-imported as meetings.
-- [ ] [Risk: High] Integrate Windows timestamp-aware and macOS float32 capture spools behind a temporary rollout flag while preserving desktop-failure behavior.
-- [ ] [Risk: High] Replace whole-recording joins/resampling/mixing with bounded multi-pass finalization and recoverable WAV/RF64-to-Opus output.
-- [ ] [Risk: High] Discover interrupted captures async after window creation, offer `Recover Now` / `Later`, serialize accepted recovery with scan/start through one maintenance gate, complete 2-hour/4-hour hardware evidence, then remove the RAM path and rollout flag.
+- [x] [Risk: Medium] Measure 15-minute and 60-minute capture/stop RSS, duration, and disk baselines; expose structured stop-processing stages, replace shell disk probes (verify Windows `statfs`), and warn periodically when recording space becomes low.
+  - Guardrails landed on `feature/long-recording-safety-r2` (statfs probe, 5-minute disk monitor, stdout stop stages, initiative doc). Hardware 15/60 baselines and presence/smoke evidence signed off (user, 2026-07-14).
+- [x] [Risk: High] Add versioned atomic capture manifests and bounded segmented mic/desktop track spools (8 MiB hard cap, soft warning, sustained-stall detection) that cannot be scan-imported as meetings.
+- [x] [Risk: High] Integrate Windows timestamp-aware and macOS float32 capture spools behind a temporary rollout flag while preserving desktop-failure behavior.
+  - Historical: `AVANEVIS_CAPTURE_SPOOL` gated spool writes until Task 10 Step 6 made durable spools the only path.
+- [x] [Risk: High] Replace whole-recording joins/resampling/mixing with bounded multi-pass finalization and recoverable WAV/RF64-to-Opus output.
+  - Spool stop path uses `finalize_capture` (`windows-v1` / `macos-v1`); explicit wav muxer for `final.pcm.tmp`; committedFrames boundary; ffmpeg decode verify before cleanup; stable-wav recovery paths.
+  - Stop-finalization optimization keeps normalized handles open per pass, folds track stats into normalization, and derives enhance plans from one sum/min/max pass without changing profile decisions. Synthetic timing/RSS harness: `npm run benchmark:finalization`; measured 1 s vs 5 s chunks retained the 1-second default because 5 seconds was not faster and used more RSS.
+- [x] [Risk: High] Discover interrupted captures async after window creation, offer `Recover Now` / `Later`, serialize accepted recovery with scan/start through one maintenance gate, complete 2-hour/4-hour hardware evidence, then remove the RAM path and rollout flag.
+  - **Task 10 complete on branch** (Steps 1–6 + review fix). Hardware smoke / presence / long-recording evidence signed off (user, 2026-07-14).
 
 ## Deferred Product And Architecture Backlog
 

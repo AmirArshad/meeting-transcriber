@@ -27,6 +27,7 @@
  * @param {Function} [deps.isRecorderBusy]
  * @param {Function} [deps.terminateProcessBestEffort]
  * @param {number} [deps.recordingsScanTimeoutMs]
+ * @param {object} [deps.recordingsMaintenanceGate]
  */
 function createMeetingManagerClient(deps) {
   let recordingsScanInProgress = false;
@@ -48,6 +49,8 @@ function createMeetingManagerClient(deps) {
     terminateProcessBestEffort = async (proc) => proc.kill(),
     recordingsScanTimeoutMs = 60 * 1000,
     unrefRecordingsScanTimeout = true,
+    recordingsMaintenanceGate = null,
+    onScanSucceeded = () => {},
   } = deps;
 
   function addMeetingToHistory(meetingData) {
@@ -62,7 +65,16 @@ function createMeetingManagerClient(deps) {
     }
 
     return new Promise((resolve, reject) => {
-      const { duration, language, model, title, transcriptionStatus, transcriptionError } = meetingData;
+      const {
+        duration,
+        language,
+        model,
+        title,
+        transcriptionStatus,
+        transcriptionError,
+        transcriptionDevice,
+        transcriptionComputeType,
+      } = meetingData;
       const recordingsDir = getRecordingsDir();
       const args = getBackendModuleArgs('meeting_manager', [
         '--recordings-dir', recordingsDir,
@@ -82,6 +94,12 @@ function createMeetingManagerClient(deps) {
       }
       if (transcriptionError) {
         args.push('--transcription-error', sanitizeTranscriptionError(transcriptionError));
+      }
+      if (transcriptionDevice) {
+        args.push('--transcription-device', String(transcriptionDevice));
+      }
+      if (transcriptionComputeType) {
+        args.push('--transcription-compute-type', String(transcriptionComputeType));
       }
 
       const python = spawnTrackedPython(args, { cwd: pythonConfig.backendPath });
@@ -113,7 +131,111 @@ function createMeetingManagerClient(deps) {
   }
 
   function isRecordingsScanInProgress() {
+    if (recordingsMaintenanceGate && typeof recordingsMaintenanceGate.getOwner === 'function') {
+      return recordingsMaintenanceGate.getOwner() === 'scan' || recordingsScanInProgress;
+    }
     return recordingsScanInProgress;
+  }
+
+  /**
+   * Scan recordings directory and sync with database.
+   * Acquires the shared recordings-maintenance gate as `scan` when provided.
+   */
+  async function scanRecordings(options = {}) {
+    const alreadyHoldingScan = Boolean(options && options.alreadyHoldingScan);
+    if (isRecorderBusy()) {
+      const error = new Error('Recording recovery scan is unavailable while a recording is active or being saved.');
+      error.code = 'RECORDING_IN_PROGRESS';
+      throw error;
+    }
+    if (recordingsScanInProgress) {
+      const error = new Error('Recording recovery scan is already running.');
+      error.code = 'RECORDING_SCAN_IN_PROGRESS';
+      throw error;
+    }
+
+    if (recordingsMaintenanceGate && !alreadyHoldingScan) {
+      const admission = await recordingsMaintenanceGate.acquire('scan');
+      if (!admission.ok) {
+        const error = new Error(admission.message || 'Recordings maintenance is in progress.');
+        error.code = admission.code || 'RECORDINGS_MAINTENANCE_IN_PROGRESS';
+        throw error;
+      }
+    } else if (
+      alreadyHoldingScan
+      && recordingsMaintenanceGate
+      && recordingsMaintenanceGate.getOwner() !== 'scan'
+    ) {
+      const error = new Error('Scan was requested without holding the recordings maintenance gate.');
+      error.code = 'RECORDINGS_MAINTENANCE_IN_PROGRESS';
+      throw error;
+    }
+
+    recordingsScanInProgress = true;
+    try {
+      return await new Promise((resolve, reject) => {
+        let settled = false;
+        let scanTimeout = null;
+        const finish = (callback, value) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          if (scanTimeout) {
+            clearTimeout(scanTimeout);
+          }
+          callback(value);
+        };
+        const recordingsDir = path.join(app.getPath('userData'), 'recordings');
+        const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
+          '--recordings-dir', recordingsDir,
+          'scan'
+        ]), { cwd: pythonConfig.backendPath });
+
+        const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
+
+        python.on('close', (code) => {
+          try {
+            processOutput.assertStdoutWithinLimit();
+          } catch (error) {
+            finish(reject, error);
+            return;
+          }
+
+          if (code === 0) {
+            try {
+              const result = JSON.parse(processOutput.getStdout());
+              try {
+                onScanSucceeded();
+              } catch (_) {
+                // Best-effort recovery banner cleanup.
+              }
+              finish(resolve, result);
+            } catch (e) {
+              finish(reject, new Error(`Failed to parse scan result: ${e.message}`));
+            }
+          } else {
+            const errorMsg = processOutput.getStderr().trim() || 'Unknown error';
+            finish(reject, new Error(`Failed to scan recordings: ${errorMsg}`));
+          }
+        });
+
+        python.on('error', (error) => finish(reject, error));
+        scanTimeout = setTimeout(async () => {
+          await terminateProcessBestEffort(python);
+          finish(reject, new Error('Recording recovery scan timed out.'));
+        }, recordingsScanTimeoutMs);
+        if (unrefRecordingsScanTimeout) {
+          scanTimeout.unref?.();
+        }
+      });
+    } finally {
+      recordingsScanInProgress = false;
+      // Caller that transferred recovery→scan owns release of the scan hold.
+      if (recordingsMaintenanceGate && !alreadyHoldingScan) {
+        recordingsMaintenanceGate.release('scan');
+      }
+    }
   }
 
   function registerIpc(ipcMain) {
@@ -229,72 +351,7 @@ function createMeetingManagerClient(deps) {
     /**
      * Scan recordings directory and sync with database
      */
-    ipcMain.handle('scan-recordings', async () => {
-      if (isRecorderBusy()) {
-        const error = new Error('Recording recovery scan is unavailable while a recording is active or being saved.');
-        error.code = 'RECORDING_IN_PROGRESS';
-        throw error;
-      }
-      if (recordingsScanInProgress) {
-        const error = new Error('Recording recovery scan is already running.');
-        error.code = 'RECORDING_SCAN_IN_PROGRESS';
-        throw error;
-      }
-      recordingsScanInProgress = true;
-      return new Promise((resolve, reject) => {
-        let settled = false;
-        let scanTimeout = null;
-        const finish = (callback, value) => {
-          if (settled) {
-            return;
-          }
-          settled = true;
-          if (scanTimeout) {
-            clearTimeout(scanTimeout);
-          }
-          callback(value);
-        };
-        const recordingsDir = path.join(app.getPath('userData'), 'recordings');
-        const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
-          '--recordings-dir', recordingsDir,
-          'scan'
-        ]), { cwd: pythonConfig.backendPath });
-
-        const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
-
-        python.on('close', (code) => {
-          try {
-            processOutput.assertStdoutWithinLimit();
-          } catch (error) {
-            finish(reject, error);
-            return;
-          }
-
-          if (code === 0) {
-            try {
-              const result = JSON.parse(processOutput.getStdout());
-              finish(resolve, result);
-            } catch (e) {
-              finish(reject, new Error(`Failed to parse scan result: ${e.message}`));
-            }
-          } else {
-            const errorMsg = processOutput.getStderr().trim() || 'Unknown error';
-            finish(reject, new Error(`Failed to scan recordings: ${errorMsg}`));
-          }
-        });
-
-        python.on('error', (error) => finish(reject, error));
-        scanTimeout = setTimeout(async () => {
-          await terminateProcessBestEffort(python);
-          finish(reject, new Error('Recording recovery scan timed out.'));
-        }, recordingsScanTimeoutMs);
-        if (unrefRecordingsScanTimeout) {
-          scanTimeout.unref?.();
-        }
-      }).finally(() => {
-        recordingsScanInProgress = false;
-      });
-    });
+    ipcMain.handle('scan-recordings', async () => scanRecordings());
 
     /**
      * Add a meeting (called after transcription)
@@ -421,7 +478,7 @@ function createMeetingManagerClient(deps) {
     });
   }
 
-  return { addMeetingToHistory, isRecordingsScanInProgress, registerIpc };
+  return { addMeetingToHistory, isRecordingsScanInProgress, scanRecordings, registerIpc };
 }
 
 /**

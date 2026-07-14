@@ -50,6 +50,25 @@
       </div>
     </div>
 
+    <!-- Interrupted recording recovery prompt (once per launch when eligible) -->
+    <div id="recording-recovery-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="recording-recovery-title" aria-describedby="recording-recovery-body">
+      <div class="modal-content recording-recovery-modal-content">
+        <div class="modal-header">
+          <h2 id="recording-recovery-title">Finish an interrupted recording?</h2>
+        </div>
+        <div class="modal-body">
+          <p id="recording-recovery-body" class="setting-description"></p>
+          <p id="recording-recovery-detail" class="recording-recovery-detail"></p>
+          <ul id="recording-recovery-candidate-list" class="recording-recovery-candidate-list"></ul>
+          <p id="recording-recovery-footer" class="recording-recovery-footer"></p>
+          <div class="modal-actions" style="margin-top: 1rem">
+            <button type="button" id="recording-recovery-later-btn" class="btn btn-secondary">Later</button>
+            <button type="button" id="recording-recovery-now-btn" class="btn btn-primary">Recover Now</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="container">
       <!-- Vertical icon rail -->
       <nav class="icon-rail" aria-label="Primary">
@@ -104,6 +123,21 @@
             <span class="recording-presence-dot" aria-hidden="true"></span>
             <span id="recording-presence-label" aria-live="polite">Recording</span>
             <span id="recording-presence-time" class="recording-presence-time">00:00</span>
+          </div>
+        </div>
+
+        <div
+          id="recording-recovery-banner"
+          class="recording-recovery-banner"
+          hidden
+          role="status"
+          aria-live="polite"
+        >
+          <span id="recording-recovery-banner-spinner" class="recording-recovery-spinner" hidden aria-hidden="true"></span>
+          <span id="recording-recovery-banner-text" class="recording-recovery-banner-text"></span>
+          <div class="recording-recovery-banner-actions">
+            <button type="button" id="recording-recovery-banner-primary" class="btn btn-secondary btn-small" hidden>Recover</button>
+            <button type="button" id="recording-recovery-banner-secondary" class="btn btn-secondary btn-small" hidden>Dismiss</button>
           </div>
         </div>
 
@@ -941,6 +975,7 @@
     </div>
 
     <script src="recording-state-helpers.js"></script>
+    <script src="recovery-ui-helpers.js"></script>
     <script src="update-notification-helpers.js"></script>
     <script src="history-detail-helpers.js"></script>
     <script src="formatters.js"></script>

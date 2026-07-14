@@ -40,6 +40,7 @@ const INDEX_HTML = path.join(ROOT, 'src', 'renderer', 'index.html');
 
 const EXPECTED_RENDERER_GLOBALS = [
   'recordingStateHelpers',
+  'recoveryUiHelpers',
   'updateNotificationHelpers',
   'historyDetailHelpers',
   'formatters',
@@ -53,6 +54,7 @@ const EXPECTED_RENDERER_GLOBALS = [
 
 const EXPECTED_SCRIPT_ORDER = [
   'recording-state-helpers.js',
+  'recovery-ui-helpers.js',
   'update-notification-helpers.js',
   'history-detail-helpers.js',
   'formatters.js',

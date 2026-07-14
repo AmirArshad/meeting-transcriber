@@ -13,6 +13,9 @@ from typing import Dict, List, Optional, Tuple
 # Legacy recorder temps (pre-.pcm.tmp) plus the current non-scanned extension.
 _LEGACY_TEMP_WAV_SUFFIXES = (".temp.wav", "_temp.wav")
 _RECORDER_TEMP_PCM_SUFFIX = ".pcm.tmp"
+_CAPTURE_SESSION_DIR_SUFFIX = ".capture"
+_CAPTURE_SEGMENT_SUFFIX = ".pcm.part"
+_RECOVERY_STAGING_SUFFIXES = (".recovering.opus", ".recovering.wav")
 
 # RIFF/WAVE header is 44 bytes. Keep aligned with audio.recorder_temp_paths.
 _MIN_RECOVERABLE_PCM_BYTES = 44
@@ -34,6 +37,34 @@ def is_recorder_temp_audio_file(path: Path) -> bool:
     return lowered.endswith(_RECORDER_TEMP_PCM_SUFFIX) or any(
         lowered.endswith(suffix) for suffix in _LEGACY_TEMP_WAV_SUFFIXES
     )
+
+
+def is_capture_session_path(path: Path) -> bool:
+    """True for durable capture-session dirs or files inside them / raw track segments."""
+    lowered_name = path.name.lower()
+    if lowered_name.endswith(_CAPTURE_SEGMENT_SUFFIX):
+        return True
+    if any(lowered_name.endswith(suffix) for suffix in _RECOVERY_STAGING_SUFFIXES):
+        # Recovery staging must never be imported as a meeting.
+        return True
+    if path.is_dir() and lowered_name.endswith(_CAPTURE_SESSION_DIR_SUFFIX):
+        return True
+    for parent in path.parents:
+        if parent.name.lower().endswith(_CAPTURE_SESSION_DIR_SUFFIX):
+            return True
+    return False
+
+
+def has_sibling_capture_session(audio_file: Path) -> bool:
+    """True when a root ``{stem}.opus/.wav`` still has a live ``{stem}.capture`` dir."""
+    parent = audio_file.parent
+    stem = audio_file.stem
+    capture_dir = parent / f"{stem}{_CAPTURE_SESSION_DIR_SUFFIX}"
+    if not capture_dir.is_dir():
+        return False
+    # Only block when a manifest exists — empty aborted dirs should not hide finals forever.
+    manifest = capture_dir / "manifest.json"
+    return manifest.is_file()
 
 
 def iter_recorder_temp_audio_files(recordings_dir: Path) -> List[Path]:
@@ -139,6 +170,12 @@ def select_scannable_audio_files(recordings_dir: Path) -> List[Path]:
     for audio_file in list(recordings_dir.glob("*.opus")) + list(recordings_dir.glob("*.wav")):
         if is_recorder_temp_audio_file(audio_file):
             # Defense in depth for any legacy *.temp.wav that still matches *.wav.
+            continue
+        if is_capture_session_path(audio_file):
+            # Durable capture dirs / raw track segments are never meetings.
+            continue
+        if has_sibling_capture_session(audio_file):
+            # Crash-orphaned partial canonical finals must wait for recovery.
             continue
 
         stem = audio_file.stem

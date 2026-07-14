@@ -10,6 +10,50 @@
  * injected via `deps`.
  */
 
+const DISK_WARNING_BYTES = 10 * 1024 * 1024 * 1024;
+const DISK_CRITICAL_BYTES = 2 * 1024 * 1024 * 1024;
+const DISK_SPACE_WARNING_MESSAGE =
+  'Less than 10 GB is available. Long recordings may run out of space.';
+const DISK_SPACE_CRITICAL_MESSAGE =
+  'Less than 2 GB is available. Long recordings may run out of space.';
+
+/**
+ * Pure disk-space classification used by checkDiskSpace and unit tests.
+ * @param {number} availableBytes
+ * @returns {{ success: true, availableBytes: number, availableGB: string, warning: string|null, level: 'warning'|'critical'|null }}
+ */
+function buildDiskSpaceResult(availableBytes) {
+  const freeBytes = Number(availableBytes);
+  const freeGB = freeBytes / (1024 * 1024 * 1024);
+  let warning = null;
+  let level = null;
+  if (freeBytes < DISK_CRITICAL_BYTES) {
+    warning = DISK_SPACE_CRITICAL_MESSAGE;
+    level = 'critical';
+  } else if (freeBytes < DISK_WARNING_BYTES) {
+    warning = DISK_SPACE_WARNING_MESSAGE;
+    level = 'warning';
+  }
+
+  return {
+    success: true,
+    availableBytes: freeBytes,
+    availableGB: freeGB.toFixed(2),
+    warning,
+    level,
+  };
+}
+
+function buildUnknownDiskSpaceResult() {
+  return {
+    success: true,
+    availableBytes: -1,
+    availableGB: null,
+    warning: null,
+    level: null,
+  };
+}
+
 /**
  * @param {object} deps
  * @param {import('electron').App} deps.app
@@ -23,6 +67,8 @@
  * @param {Function} deps.runProcessWithTimeout
  * @param {Function} deps.buildMacOSPermissionCheckFailureStatus
  * @param {number} deps.MACOS_PERMISSION_CHECK_TIMEOUT_MS
+ * @param {Function} [deps.statfs] optional injectable `fs.promises.statfs`
+ * @param {Function} [deps.logWarn]
  */
 function createDeviceIpc(deps) {
   const {
@@ -37,7 +83,14 @@ function createDeviceIpc(deps) {
     runProcessWithTimeout,
     buildMacOSPermissionCheckFailureStatus,
     MACOS_PERMISSION_CHECK_TIMEOUT_MS,
+    logWarn = (...args) => console.warn(...args),
   } = deps;
+
+  const statfs = typeof deps.statfs === 'function'
+    ? deps.statfs
+    : (typeof fs?.promises?.statfs === 'function'
+      ? (...args) => fs.promises.statfs(...args)
+      : null);
 
   async function checkDiskSpace() {
     try {
@@ -49,62 +102,35 @@ function createDeviceIpc(deps) {
           fs.mkdirSync(recordingsDir, { recursive: true });
         } catch (e) {
           // Non-fatal - directory will be created later when needed
-          console.warn('Could not create recordings directory:', e.message);
-          return { success: true, availableBytes: -1, warning: null };
+          logWarn('Could not create recordings directory:', e.message);
+          return buildUnknownDiskSpaceResult();
         }
       }
 
-      if (process.platform === 'win32') {
-        // Windows: Use wmic to get free space
-        const drive = recordingsDir.split(':')[0] + ':';
-        const result = await runProcessWithTimeout(
-          'wmic',
-          ['logicaldisk', 'where', `DeviceID="${drive}"`, 'get', 'FreeSpace', '/value'],
-          5000
-        );
-
-        if (result.code === 0 && !result.timedOut) {
-          const match = result.stdout.match(/FreeSpace=(\d+)/);
-          if (match) {
-            const freeBytes = parseInt(match[1], 10);
-            const freeGB = freeBytes / (1024 * 1024 * 1024);
-            return {
-              success: true,
-              availableBytes: freeBytes,
-              availableGB: freeGB.toFixed(2),
-              warning: freeBytes < 500 * 1024 * 1024 ? 'Low disk space (< 500MB)' : null
-            };
-          }
-        }
-        // Fall through to return unknown
-      } else {
-        // macOS/Linux: Use df command
-        const result = await runProcessWithTimeout('df', ['-k', recordingsDir], 5000);
-
-        if (result.code === 0 && !result.timedOut) {
-          const lines = result.stdout.trim().split('\n');
-          if (lines.length >= 2) {
-            const parts = lines[1].split(/\s+/);
-            if (parts.length >= 4) {
-              const freeKB = parseInt(parts[3], 10);
-              const freeBytes = freeKB * 1024;
-              const freeGB = freeBytes / (1024 * 1024 * 1024);
-              return {
-                success: true,
-                availableBytes: freeBytes,
-                availableGB: freeGB.toFixed(2),
-                warning: freeBytes < 500 * 1024 * 1024 ? 'Low disk space (< 500MB)' : null
-              };
-            }
-          }
-        }
+      if (typeof statfs !== 'function') {
+        logWarn('Disk space probe unavailable: fs.promises.statfs is missing');
+        return buildUnknownDiskSpaceResult();
       }
 
-      // Unknown disk space - assume OK
-      return { success: true, availableBytes: -1, warning: null };
+      let stats;
+      try {
+        stats = await statfs(recordingsDir);
+      } catch (probeError) {
+        logWarn('Disk space probe failed:', probeError?.message || probeError);
+        return buildUnknownDiskSpaceResult();
+      }
+
+      const bavail = Number(stats?.bavail);
+      const bsize = Number(stats?.bsize);
+      if (!Number.isFinite(bavail) || !Number.isFinite(bsize) || bsize <= 0) {
+        logWarn('Disk space probe returned invalid bavail/bsize; treating space as unknown');
+        return buildUnknownDiskSpaceResult();
+      }
+
+      return buildDiskSpaceResult(bavail * bsize);
     } catch (e) {
       console.error('Unexpected error in checkDiskSpace:', e);
-      return { success: true, availableBytes: -1, warning: null };
+      return buildUnknownDiskSpaceResult();
     }
   }
 
@@ -519,4 +545,13 @@ function registerDeviceIpc(ipcMain, deps) {
   return service;
 }
 
-module.exports = { createDeviceIpc, registerDeviceIpc };
+module.exports = {
+  createDeviceIpc,
+  registerDeviceIpc,
+  buildDiskSpaceResult,
+  buildUnknownDiskSpaceResult,
+  DISK_WARNING_BYTES,
+  DISK_CRITICAL_BYTES,
+  DISK_SPACE_WARNING_MESSAGE,
+  DISK_SPACE_CRITICAL_MESSAGE,
+};

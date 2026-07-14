@@ -1,6 +1,6 @@
 {
   "name": "avanevis",
-  "version": "2.4.3",
+  "version": "2.5.0",
   "description": "AvaNevis private meeting recorder and local AI transcriber",
   "main": "src/main.js",
   "scripts": {
@@ -11,6 +11,7 @@
     "test:python": "node scripts/run-python-tests.js",
     "test:python-syntax": "node scripts/check-python-syntax.js",
     "test:all": "npm test && npm run test:python && npm run test:python-syntax",
+    "benchmark:finalization": "node scripts/run-finalization-benchmark.js",
     "test:syntax": "node scripts/check-js-syntax.js",
     "clean": "node scripts/clean-dist.js",
     "prepare-build": "npm run clean && node build/prepare-resources.js",
@@ -31,7 +32,7 @@
   "author": "AvaNevis",
   "license": "MIT",
   "dependencies": {
-    "adm-zip": "^0.5.17"
+    "adm-zip": "0.6.0"
   },
   "devDependencies": {
     "electron": "^42.2.0",

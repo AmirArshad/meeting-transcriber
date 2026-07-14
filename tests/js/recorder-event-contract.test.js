@@ -152,3 +152,41 @@ test('Windows and macOS recorders emit structured stdout helpers for levels/even
     assert.match(source, /print\(.*file=sys\.stderr/);
   }
 });
+
+test('Windows and macOS recorders emit structured stop-stage stdout events', () => {
+  const requiredStages = [
+    'post_processing_started',
+    'audio_normalizing',
+    'audio_mixing',
+    'audio_encoding',
+    'post_processing_complete',
+  ];
+
+  // Bounded finalization owns the stage sequence; recorders forward via progress_callback.
+  const sppPath = path.join(ROOT, 'backend', 'audio', 'streaming_post_processor.py');
+  const spp = readUtf8(sppPath);
+  let lastPos = -1;
+  for (const stage of requiredStages) {
+    const pos = spp.indexOf(`"${stage}"`);
+    assert.notEqual(pos, -1, `streaming_post_processor.py must emit ${stage}`);
+    assert.ok(pos > lastPos, `streaming_post_processor.py stages must stay ordered (${stage})`);
+    lastPos = pos;
+  }
+
+  for (const filePath of [WINDOWS_RECORDER, MACOS_RECORDER]) {
+    const source = readUtf8(filePath);
+    assert.match(source, /finalize_capture/);
+    assert.match(source, /progress_callback/);
+    assert.match(source, /_send_event_message\(stage/);
+  }
+
+  for (const stage of requiredStages) {
+    const action = getRecorderEventAction({
+      event: stage,
+      message: `stage:${stage}`,
+    });
+    assert.equal(action.progressMessage, `stage:${stage}`);
+    assert.equal(action.recordingStartedMessage, null);
+    assert.equal(action.initProgress, null);
+  }
+});

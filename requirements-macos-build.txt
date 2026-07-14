@@ -12,16 +12,16 @@ pyobjc-framework-Quartz==12.1
 lightning-whisper-mlx==0.0.10
 # Pinned for reproducibility; also installed transitively via lightning-whisper-mlx (not used by backend/).
 scipy==1.17.1
-filelock==3.29.0
+filelock==3.29.7
 cffi==2.0.0
 pycparser==3.0
 tiktoken==0.3.3
-regex==2026.5.9
+regex==2026.7.10
 requests==2.34.2
 charset-normalizer==3.4.7
 idna==3.16
 urllib3==2.7.0
-certifi==2026.5.20
+certifi==2026.6.17
 huggingface-hub==1.16.1
 hf-xet==1.5.0
 httpx==0.28.1
@@ -48,8 +48,10 @@ numba==0.65.1
 llvmlite==0.47.0
 # Pinned for reproducible pip resolution; lightning-whisper-mlx requires torch but MLX inference
 # never imports torch_whisper.py, so prepare-resources removes torch after install.
-# torch==2.12.0 requires setuptools<82 (Windows build pin stays at 82.0.1).
+# torch==2.12.0 requires setuptools<82 (Windows build pin is 83.0.0; no torch there).
 # pip-audit: CVE-2025-3000 has no fix version; CI ignores it because torch is not shipped.
+# pip-audit: PYSEC-2026-3447 (setuptools<83) is ignored on macOS for the same torch pin;
+# setuptools is pruned from the packaged macOS runtime after install.
 torch==2.12.0
 setuptools==81.0.0
 networkx==3.6.1

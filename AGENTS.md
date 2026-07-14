@@ -40,7 +40,7 @@ AvaNevis is a privacy-first Electron desktop app for recording microphone audio 
 - `src/main/`: extracted main-process services wired from `src/main.js` (Phase 3a–3c). The Phase 0 source-scan tests treat `src/main.js` + `src/main/**/*.js` as one combined main-process surface, so IPC channel names/payloads stay pinned across the split:
   - `src/main/python-runtime.js`: `createPythonRuntime({ app, spawn, path, fs, dirname })` factory that owns the single shared `activeProcesses` tracking array and exposes `getPythonConfig` (aliased `resolvePythonPath`), `pythonConfig` (includes `pythonSource` + resolved `virtualEnv`), `buildPythonProcessArgs`, `buildPythonEnv`, `spawnTrackedPython`, `getActiveProcesses`, `drainActiveProcesses`. Dev resolution: `AVANEVIS_PYTHON` → existing `VIRTUAL_ENV` interpreter → repo `.venv` → system; stale `VIRTUAL_ENV` paths are skipped.
   - `src/main/meeting-manager-client.js`: `registerMeetingManagerClient(ipcMain, deps)` / `createMeetingManagerClient(deps)`; owns `addMeetingToHistory` (used by the quit flow and `add-meeting`) and registers `list-meetings`, `get-meeting`, `delete-meeting`, `scan-recordings`, `add-meeting`, `update-meeting`, `update-meeting-ai`
-  - `src/main/device-ipc.js`: `registerDeviceIpc(ipcMain, deps)` / `createDeviceIpc(deps)`; exports `checkDiskSpace`, `validateSelectedDevices`, `checkAudioOutputSupport`, `getMacOSPermissionStatus` and registers `validate-devices`, `check-disk-space`, `check-audio-output`, `get-audio-devices`, `warm-up-audio-system`, `get-macos-permission-status`
+  - `src/main/device-ipc.js`: `registerDeviceIpc(ipcMain, deps)` / `createDeviceIpc(deps)`; exports `checkDiskSpace` (Node `fs.promises.statfs`; warning <10 GB / critical <2 GB; never auto-stop), `validateSelectedDevices`, `checkAudioOutputSupport`, `getMacOSPermissionStatus` and registers `validate-devices`, `check-disk-space`, `check-audio-output`, `get-audio-devices`, `warm-up-audio-system`, `get-macos-permission-status`
   - `src/main/file-export-ipc.js`: `registerFileExportIpc(ipcMain, deps)` / `createFileExportIpc(deps)`; owns `buildSafeSaveDialogDefaultPath` + `WINDOWS_RESERVED_FILE_BASENAME` and registers `save-transcript-file`, `save-speaker-segments-file`, `save-transcript-as`, `open-legal-notices`
   - `src/main/gpu-runtime-service.js`: `registerGpuRuntimeService(ipcMain, deps)` / `createGpuRuntimeService(deps)`; owns `cachedCudaStatus` / `gpuRuntimeActionPromise` and registers `check-gpu`, `check-cuda`, `install-gpu`, `ensure-compatible-gpu-runtime`, `uninstall-gpu`. Exports `resolveCudaStatusForTranscription` (fresh probe at compute-job start) and `invalidateCachedCudaStatus` (uninstall / failed install).
   - `src/main/ai-compute-queue.js`: `createAiComputeQueue(deps)` (no IPC); owns `aiComputeActionQueue`, `enqueueAiComputeAction`, `waitForAiComputeQueueIdle`, `createAbortableComputeAction`; also exports `createAsyncActionQueue` for the separate `aiAddonActionQueue`
@@ -144,6 +144,7 @@ The JSON-event migration in `docs/completed/json-based-events.md` is complete fo
 ### Keep recorder output contracts stable
 
 - Structured stdout messages now include `levels`, `event`, `warning`, and `error`, and `src/main/recorder-service.js` consumes them line-by-line.
+- Stop-stage events on both platforms: `post_processing_started`, `audio_normalizing`, `audio_mixing`, `audio_encoding`, `post_processing_complete` (human-readable `message`; forwarded as `recording-progress`). stderr remains diagnostics-only.
 - Windows final JSON uses `audioPath`
 - macOS final JSON uses `outputPath`
 - Stop parsing accepts both for backward compatibility
@@ -163,7 +164,7 @@ The app intentionally records mic and desktop audio separately, then mixes after
 
 Do not reintroduce real-time mixing unless you are deliberately redesigning the audio pipeline.
 
-**Known constraint:** both platform recorders buffer raw capture in RAM for the post-processing mix. Long meetings (≈2h of 48 kHz stereo) can peak at several GB during stop-time join/convert on Windows; a `MemoryError` on that path should still emit structured failure JSON, but there is no incremental disk spill yet.
+**Capture invariant:** both platform recorders always spill raw capture to durable `{stem}.capture/` track spools during recording. Stop finalizes via bounded `finalize_capture` (no whole-session RAM mix). Interrupted sessions recover through `audio.capture_recovery`. Whole-session RAM mix / `MemoryError` on that path is obsolete.
 
 Key quality assumptions to preserve:
 
@@ -199,6 +200,7 @@ Key quality assumptions to preserve:
 - Hugging Face-hosted public summary models download through bundled Python `huggingface_hub`/`hf_xet` when available, without reusing the diarization token, and still require pinned SHA-256 verification after download.
 - Summary generation and diarization execution must remain serialized through a main-process compute queue to avoid concurrent GPU-heavy local AI runs.
 - Meeting AI metadata must accept only `diarization` and `summary`, keep sidecar paths under recordings, and store only concise sanitized strings.
+- Completed transcription metadata records the resolved Whisper runtime as `transcriptionDevice` and `transcriptionComputeType` (`cpu`/`cuda`/`mps`). MLX may report `metal` in result JSON; `meeting_manager` accepts that CLI alias and normalizes it to `mps` for persistence. Guided transcription must report the Whisper runtime separately from `diarization.device`, which describes pyannote.
 - AI add-on model/runtime caches live under Electron `userData` (`ai-addons/models/...`) so app updates preserve installed artifacts.
 - Pinned summary runtime archives extract off the main thread: ZIP via `src/ai-addon-zip-extractor-worker.js`, `tar.gz` via `src/ai-addon-tar-extractor-worker.js`, with shared traversal checks in `src/ai-addon-archive-helpers.js`.
 

@@ -12,6 +12,35 @@ import numpy as np
 from .constants import MAX_SILENCE_CHUNK_SECONDS, GAP_THRESHOLD_SECONDS
 
 
+def timestamp_to_frame_position(
+    timestamp: float,
+    reference_time: float,
+    sample_rate: int,
+) -> int:
+    """Convert a wall-clock timestamp to a per-channel frame index.
+
+    Frame positions count audio frames (one sample per channel), never
+    interleaved scalar samples. Negative means the timestamp is before the
+    capture reference and should be skipped.
+    """
+    if sample_rate <= 0:
+        raise ValueError("sample_rate must be positive")
+    time_offset = float(timestamp) - float(reference_time)
+    if time_offset < 0:
+        return -1
+    return int(time_offset * sample_rate)
+
+
+def interleaved_sample_position_to_frame_position(
+    sample_position: int,
+    channels: int,
+) -> int:
+    """Convert legacy timeline interleaved-sample positions to per-channel frames."""
+    if channels <= 0:
+        raise ValueError("channels must be positive")
+    return int(sample_position) // int(channels)
+
+
 def reconstruct_desktop_timeline(
     desktop_frames: list,
     mic_frames: list,
@@ -98,6 +127,8 @@ def reconstruct_desktop_timeline(
             continue
 
         # Calculate target sample position for this frame
+        # NOTE: This is an interleaved sample index. Spool writers must convert
+        # with interleaved_sample_position_to_frame_position(..., channels).
         target_position = int(time_offset * loopback_sample_rate * loopback_channels)
 
         # Convert frame data to numpy array

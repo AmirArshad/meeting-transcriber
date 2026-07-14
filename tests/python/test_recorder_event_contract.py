@@ -84,22 +84,29 @@ def test_windows_emits_result_json_before_cleanup():
 
 
 def test_windows_sets_final_path_before_temp_unlink():
-    source = _read(WINDOWS_RECORDER)
-    mix = source.split("def _mix_and_save", 1)[1].split("def cleanup", 1)[0]
-    path_pos = mix.find("_final_output_path = final_path")
-    unlink_pos = mix.find("Path(temp_wav).unlink()")
-    assert path_pos != -1
+    """Final path / recoverable is set before segment/temp unlink (spool finalize)."""
+    source = _read(ROOT / "backend" / "audio" / "streaming_post_processor.py")
+    # compress_and_report → recoverable = final_path → cleanup unlinks with except OSError
+    compress_pos = source.find("final_path, compress_stats = compress_and_report(")
+    assert compress_pos != -1
+    after_compress = source[compress_pos:]
+    recoverable_pos = after_compress.find("recoverable = final_path")
+    unlink_pos = after_compress.find("path.unlink()")
+    assert recoverable_pos != -1
     assert unlink_pos != -1
-    assert path_pos < unlink_pos
-    assert "except OSError" in mix[unlink_pos - 80 : unlink_pos + 120]
+    assert recoverable_pos < unlink_pos
+    assert "except OSError" in after_compress[unlink_pos - 80 : unlink_pos + 120]
 
 
 def test_macos_stop_path_guards_processing_exceptions():
     source = _read(MACOS_RECORDER)
-    stop = source.split("def stop_recording", 1)[1].split("def _process_and_save", 1)[0]
+    stop = source.split("def stop_recording", 1)[1].split(
+        "def _resolve_desktop_capture_start_time", 1
+    )[0]
     assert "except Exception as process_err" in stop
     assert "RECORDER_FAILED" in stop
     assert "_resolve_recoverable_output_path" in stop
+    assert "_finalize_from_capture_spools" in stop
 
 
 def test_macos_late_desktop_failure_does_not_hard_fail_stop():
@@ -145,13 +152,44 @@ def test_macos_generic_except_does_not_toast_before_best_effort_stop():
 
 
 def test_recorders_use_non_scanned_temp_pcm_extension():
+    # Active finalize path uses non-scanned .pcm.tmp under the capture session.
+    spp = _read(ROOT / "backend" / "audio" / "streaming_post_processor.py")
+    assert "FINAL_CAPTURE_PCM_NAME" in spp
+    assert ".pcm.tmp" in spp or "pcm.tmp" in spp
+    # macOS recovery still promotes orphan recorder temps via the shared helper.
+    macos = _read(MACOS_RECORDER)
+    assert "build_recorder_temp_pcm_path" in macos
     for path in (WINDOWS_RECORDER, MACOS_RECORDER):
         source = _read(path)
-        assert "build_recorder_temp_pcm_path" in source
         # Active write path must not use scannable .temp.wav / _temp.wav.
         assert "with_suffix('.temp.wav')" not in source
         assert "'_temp.wav'" not in source
         assert '"_temp.wav"' not in source
+
+
+def test_recorders_emit_structured_stop_stage_events():
+    required_stages = (
+        "post_processing_started",
+        "audio_normalizing",
+        "audio_mixing",
+        "audio_encoding",
+        "post_processing_complete",
+    )
+    # Bounded finalization owns the stage sequence; recorders forward via progress_callback.
+    spp = _read(ROOT / "backend" / "audio" / "streaming_post_processor.py")
+    positions = []
+    for stage in required_stages:
+        token = f'"{stage}"'
+        pos = spp.find(token)
+        assert pos != -1, f"streaming_post_processor missing stop stage {stage}"
+        positions.append(pos)
+    assert positions == sorted(positions), (
+        "streaming_post_processor stop stages must appear in processing order"
+    )
+    for path in (WINDOWS_RECORDER, MACOS_RECORDER):
+        source = _read(path)
+        assert "finalize_capture" in source
+        assert "progress_callback" in source
 
 
 def test_structured_message_helpers_emit_expected_stdout_shapes(capsys):

@@ -106,6 +106,7 @@ const {
 const { createTranscriptionService } = require('./main/transcription-service');
 const { createSummaryService } = require('./main/summary-service');
 const { createRecorderService } = require('./main/recorder-service');
+const { createRecordingsMaintenanceGate } = require('./main/recordings-maintenance-gate');
 const {
   createRecordingPresenceService,
   buildWindowCloseDialogOptions,
@@ -539,6 +540,8 @@ function buildTranscriptionPlaceholderMarkdown({
 // assertSafe*, etc.) are safe to pass here even though they are defined lower in
 // this file.
 // ============================================================================
+const recordingsMaintenanceGate = createRecordingsMaintenanceGate();
+
 const meetingManagerClient = registerMeetingManagerClient(ipcMain, {
   app,
   path,
@@ -554,12 +557,18 @@ const meetingManagerClient = registerMeetingManagerClient(ipcMain, {
   assertSafeExistingTranscriptPath,
   validateAiMetadataPaths,
   terminateProcessBestEffort,
+  recordingsMaintenanceGate,
   isRecorderBusy: () => {
     const state = recorderService && recorderService.getQuitInterceptInputs();
     return Boolean(state && (state.hasRecordingProcess || state.stopInProgress));
   },
+  onScanSucceeded: () => {
+    if (recorderService && typeof recorderService.notifyScanImportSucceeded === 'function') {
+      recorderService.notifyScanImportSucceeded();
+    }
+  },
 });
-const { addMeetingToHistory, isRecordingsScanInProgress } = meetingManagerClient;
+const { addMeetingToHistory, isRecordingsScanInProgress, scanRecordings } = meetingManagerClient;
 
 const deviceIpc = registerDeviceIpc(ipcMain, {
   app,
@@ -773,9 +782,19 @@ recorderService = createRecorderService({
   formatDurationForTranscript,
   getRecordingsDir,
   signalProcessTree,
+  recordingsMaintenanceGate,
+  getBackendModuleArgs,
+  collectPythonProcessOutput,
+  scanRecordings,
+  terminateProcessBestEffort,
   onCaptureStateChanged: (state) => {
     if (recordingPresenceService) {
       recordingPresenceService.updateCaptureState(state);
+    }
+  },
+  notifyRecordingSafety: (copy) => {
+    if (recordingPresenceService && typeof recordingPresenceService.showSafetyNotification === 'function') {
+      recordingPresenceService.showSafetyNotification(copy);
     }
   },
 });
@@ -1396,6 +1415,13 @@ app.whenReady().then(async () => {
   if (revealWindowWhenReady) {
     revealWindowWhenReady = false;
     showMainWindow();
+  }
+
+  // Discover interrupted captures after first paint — never await inside whenReady.
+  if (recorderService && typeof recorderService.discoverInterruptedCaptures === 'function') {
+    void recorderService.discoverInterruptedCaptures().catch((error) => {
+      console.warn('Interrupted capture discovery failed:', error?.message || error);
+    });
   }
 
   // macOS Screen Recording checks can trigger OS prompts, so they run only as

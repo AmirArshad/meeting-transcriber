@@ -45,19 +45,27 @@ class ScreenCaptureAudioRecorder:
     Requires Screen Recording permission.
     """
 
-    def __init__(self, sample_rate: int = 48000, channels: int = 2):
+    def __init__(self, sample_rate: int = 48000, channels: int = 2, audio_sink: Optional[Callable[[np.ndarray], bool]] = None):
         """
         Initialize the ScreenCaptureKit audio recorder.
 
         Args:
             sample_rate: Target sample rate (default: 48000 Hz - matches Windows)
             channels: Number of audio channels (default: 2 for stereo)
+            audio_sink: Optional callback ``(chunk) -> bool``. When set, chunks are
+                forwarded to the sink and are not retained in ``audio_buffer``.
         """
         self.sample_rate = sample_rate
         self.channels = channels
+        self.audio_sink = audio_sink
         self.is_recording = False
         self.audio_buffer = []
         self.buffer_lock = threading.Lock()  # Protects audio_buffer access
+        self._latest_chunk = None
+        self._sink_chunk_count = 0
+        self._sink_sample_count = 0
+        self.last_captured_chunk_count = 0
+        self.last_captured_sample_count = 0
         self.stream = None
         self.content_filter = None
         self.stream_config = None
@@ -163,13 +171,29 @@ class ScreenCaptureAudioRecorder:
                     audio_data = self._extract_audio_from_sample_buffer_(sample_buffer)
 
                     if audio_data is not None and len(audio_data) > 0:
-                        # Thread-safe append to audio buffer
+                        # Thread-safe append to audio buffer or optional sink
                         with recorder.buffer_lock:
                             now = time.time()
                             if recorder.first_audio_time is None:
                                 recorder.first_audio_time = now
                             recorder.last_audio_time = now
-                            recorder.audio_buffer.append(audio_data)
+                            recorder._latest_chunk = audio_data
+                            if recorder.audio_sink is None:
+                                recorder.audio_buffer.append(audio_data)
+                        if recorder.audio_sink is not None:
+                            try:
+                                accepted = bool(recorder.audio_sink(audio_data))
+                            except Exception as sink_err:
+                                recorder.last_error = f"Desktop audio sink failed: {sink_err}"
+                                recorder.error_event.set()
+                                return
+                            if not accepted:
+                                recorder.last_error = "Desktop audio sink rejected audio (writer backpressure)"
+                                recorder.error_event.set()
+                                return
+                            with recorder.buffer_lock:
+                                recorder._sink_chunk_count += 1
+                                recorder._sink_sample_count += len(audio_data)
                         self.sample_count += 1
 
                         # Log first few samples
@@ -513,8 +537,22 @@ class ScreenCaptureAudioRecorder:
                 self.last_error = "PyObjC ScreenCaptureKit stream stop timed out"
                 self.error_event.set()
 
-        # Concatenate all audio buffers (thread-safe)
+        # Concatenate all audio buffers (thread-safe). Sink mode keeps data out of RAM.
         with self.buffer_lock:
+            if self.audio_sink is not None:
+                self.last_captured_chunk_count = self._sink_chunk_count
+                self.last_captured_sample_count = self._sink_sample_count
+                if self._sink_sample_count <= 0:
+                    print("No desktop audio captured", file=sys.stderr)
+                    print("", file=sys.stderr)
+                    print("⚠️  If you just granted Screen Recording permission, please restart the app.", file=sys.stderr)
+                    print("   macOS requires an app restart after granting this permission.", file=sys.stderr)
+                    print("", file=sys.stderr)
+                    if self.last_error is None:
+                        self.last_error = "PyObjC ScreenCaptureKit captured no desktop audio"
+                    return None
+                return None
+
             if not self.audio_buffer:
                 print("No desktop audio captured", file=sys.stderr)
                 print("", file=sys.stderr)
@@ -537,6 +575,11 @@ class ScreenCaptureAudioRecorder:
             except Exception as e:
                 print(f"Error concatenating audio buffers: {e}", file=sys.stderr)
                 return None
+
+    @property
+    def latest_audio_chunk(self):
+        with self.buffer_lock:
+            return None if self._latest_chunk is None else self._latest_chunk
 
     def cleanup(self):
         """Clean up resources."""

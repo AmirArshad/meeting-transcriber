@@ -392,6 +392,8 @@ def transcribe_with_diarization_guidance(
             language=language,
         )
         transcriber.load_model()
+        transcription_device = None
+        transcription_compute_type = None
         try:
             if windows:
                 transcript_segments = transcribe_speaker_windows(
@@ -407,6 +409,9 @@ def transcribe_with_diarization_guidance(
             if not transcript_segments:
                 emit_progress("fallback-transcription", "No usable speaker windows were transcribed; transcribing the full audio.", percent=94)
                 transcript_segments = transcribe_full_audio(transcriber, prepared_audio)
+            model_info = transcriber.get_model_info()
+            transcription_device = model_info.get("device")
+            transcription_compute_type = model_info.get("compute_type")
         finally:
             try:
                 transcriber.cleanup()
@@ -434,6 +439,8 @@ def transcribe_with_diarization_guidance(
         "duration": audio_duration,
         "output_file": transcript_path,
         "audioPath": str(source_audio),
+        "transcriptionDevice": transcription_device,
+        "transcriptionComputeType": transcription_compute_type,
         "diarization": diarization_result,
     }
 
