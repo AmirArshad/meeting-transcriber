@@ -571,6 +571,9 @@ def main():
     import json
     import sys
 
+    from common.process_priority import lower_process_priority
+    lower_process_priority()
+
     parser = argparse.ArgumentParser(description="AvaNevis CLI")
     parser.add_argument("audio_file", nargs="?", help="Path to audio file")
     parser.add_argument("--file", dest="file_arg", help="Path to audio file (alternative)")

@@ -56,17 +56,19 @@ Diagram: `docs/architecture/background-transcription-queue-before-after.svg`
 
 **Phase 1 (MVP) — ship as two PRs: PR 1 = main-owned job behind current blocking UI (behavior-identical); PR 2 = unlock + Activity UI. Cancel recording is an independent companion PR (PR 3).**
 
-- [ ] [Risk: High] Stop → `addMeeting(pending)` + placeholder transcript (incl. recoverable-failure path); snapshot language/model; use post-add `audioPath`. If pending persist itself fails: surface error, stay idle, rely on scan-import recovery (audio already in recordings dir).
-- [ ] [Risk: High] Main-owned per-meeting composite job on `aiComputeActionQueue` (`retry-transcription` shape: transcribe → optional diarize → persist). Renderer becomes a view — do not “just remove the await.” **Includes moving guided-sidecar / `update-meeting-ai` persistence into the main job** (today the renderer persists sidecars after retry returns — background completion during reload/quit would lose speaker metadata).
-- [ ] [Risk: Medium] Durable statuses only: `pending` | `failed` | `completed`. Never persist `processing` (would coerce to completed). User cancel → `failed` + "Cancelled by user" (never left `pending` — resume must not nag).
-- [ ] [Risk: Medium] `transcription-queue-state` channel; **leave `transcription-progress` payload unchanged** (pinned IPC contract) — renderer attributes lines via `activeMeetingId`. Home Activity list (Queued / Transcribing / Failed+Retry / Cancel pending / session-only Ready → History).
-- [ ] [Risk: Medium] Unlock Start immediately after pending persist; button copy → **Stop** / Saving… (stop-stage messages); status pill `Ready · N transcribing`.
-- [ ] [Risk: Medium] Quit: terminate active job; meetings stay `pending`; quit copy says they finish next launch (never “quit will wait”). **Two job-level guards:** every job checks `quitCommitted`/cancel flag at head-of-queue (else chained queue starts the next Whisper run mid-quit); quit-killed jobs skip the write-`failed` path (`isQuitCommitted()` in catch) so they stay resumable and don’t spawn `meeting_manager` during teardown.
-- [ ] [Risk: Low] Explicit “Resume N pending transcriptions” banner (no auto-resume in Phase 1).
-- [ ] [Risk: High] Recording-while-CPU-transcribe contention: transcription/diarization children **self-lower to below-normal priority unconditionally at startup** (ctypes `SetPriorityClass` / `os.nice` — not spawn-time, not capture-conditional); optional `cpu_threads` cap / defer past `starting`; manual smoke item.
-- [ ] [Risk: Medium] GPU install / model preload: fail-fast when queue non-idle (15-minute idle waits become routinely exceedable).
-- [ ] [Risk: Medium] Delete/cancel-while-queued: cancel flag at head (same primitive as the quit check); no artifact write after tombstone; active-job delete policy documented.
-- [ ] [Risk: High] Characterization + targeted tests; Windows/macOS smoke: back-to-back Start while previous job transcribes.
+**PR1 in progress** on `feature/transcription-queue-pr1` (architecture move; Start still blocked until PR2).
+
+- [ ] [Risk: High] Stop → `addMeeting(pending)` + placeholder transcript (incl. recoverable-failure path); snapshot language/model; use post-add `audioPath`. If pending persist itself fails: surface error, stay idle, rely on scan-import recovery (audio already in recordings dir). *(PR1)*
+- [ ] [Risk: High] Main-owned per-meeting composite job on `aiComputeActionQueue` (`retry-transcription` shape: transcribe → optional diarize → persist). Renderer becomes a view — do not “just remove the await.” **Includes moving guided-sidecar / `update-meeting-ai` persistence into the main job** (today the renderer persists sidecars after retry returns — background completion during reload/quit would lose speaker metadata). *(PR1)*
+- [ ] [Risk: Medium] Durable statuses only: `pending` | `failed` | `completed`. Never persist `processing` (would coerce to completed). User cancel → `failed` + "Cancelled by user" (never left `pending` — resume must not nag). *(PR1 guards; cancel UX in PR2)*
+- [ ] [Risk: Medium] `transcription-queue-state` channel; **leave `transcription-progress` payload unchanged** (pinned IPC contract) — renderer attributes lines via `activeMeetingId`. Home Activity list (Queued / Transcribing / Failed+Retry / Cancel pending / session-only Ready → History). *(channel in PR1; Activity UI in PR2)*
+- [ ] [Risk: Medium] Unlock Start immediately after pending persist; button copy → **Stop** / Saving… (stop-stage messages); status pill `Ready · N transcribing`. *(PR2)*
+- [ ] [Risk: Medium] Quit: terminate active job; meetings stay `pending`; quit copy says they finish next launch (never “quit will wait”). **Two job-level guards:** every job checks `quitCommitted`/cancel flag at head-of-queue (else chained queue starts the next Whisper run mid-quit); quit-killed jobs skip the write-`failed` path (`isQuitCommitted()` in catch) so they stay resumable and don’t spawn `meeting_manager` during teardown. *(job guards PR1; quit copy PR2)*
+- [ ] [Risk: Low] Explicit “Resume N pending transcriptions” banner (no auto-resume in Phase 1). *(PR2)*
+- [ ] [Risk: High] Recording-while-CPU-transcribe contention: transcription/diarization children **self-lower to below-normal priority unconditionally at startup** (ctypes `SetPriorityClass` / `os.nice` — not spawn-time, not capture-conditional); optional `cpu_threads` cap / defer past `starting`; manual smoke item. *(priority self-lower in PR1)*
+- [ ] [Risk: Medium] GPU install / model preload: fail-fast when queue non-idle (15-minute idle waits become routinely exceedable). *(PR2)*
+- [ ] [Risk: Medium] Delete/cancel-while-queued: cancel flag at head (same primitive as the quit check); no artifact write after tombstone; active-job delete policy documented. *(cancel flag PR1; delete UX PR2)*
+- [ ] [Risk: High] Characterization + targeted tests; Windows/macOS smoke: back-to-back Start while previous job transcribes. *(PR1 tests; smoke with PR2 unlock)*
 
 **Companion PR — Cancel recording (discard); see design doc “Companion feature” section**
 

@@ -252,14 +252,32 @@ function handlerEnqueuesComputeAction(handlerSource) {
  * Used only for Phase 0.3 characterization before Pattern B extraction.
  */
 function extractTopLevelFunctionSource(source, functionName) {
-  const pattern = new RegExp(`^function ${functionName}\\s*\\(`, 'm');
+  // Also matches indented and `async` declarations so service-internal
+  // functions (e.g. runMeetingTranscriptionJob) can be scanned brace-balanced.
+  const pattern = new RegExp(`^[ \\t]*(?:async\\s+)?function ${functionName}\\s*\\(`, 'm');
   const match = pattern.exec(source);
   if (!match) {
     return null;
   }
 
   const start = match.index;
-  const openBrace = source.indexOf('{', start);
+  // Find the BODY brace: the first `{` after the parameter parens balance.
+  // A naive indexOf('{') grabs a destructured-parameter brace (e.g.
+  // `function job({ meetingId })`) and truncates the extraction at the
+  // parameter list, silently weakening any assertion on the body.
+  let openBrace = -1;
+  let parenDepth = 0;
+  for (let i = start; i < source.length; i += 1) {
+    const ch = source[i];
+    if (ch === '(') {
+      parenDepth += 1;
+    } else if (ch === ')') {
+      parenDepth -= 1;
+    } else if (ch === '{' && parenDepth === 0) {
+      openBrace = i;
+      break;
+    }
+  }
   if (openBrace < 0) {
     return null;
   }

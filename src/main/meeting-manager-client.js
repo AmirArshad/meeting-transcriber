@@ -419,66 +419,77 @@ function createMeetingManagerClient(deps) {
       assertTrustedRendererSender(event);
 
       const meetingId = payload && payload.meetingId;
-      const updates = validateAiMetadataPaths((payload && payload.updates) || {});
-      if (!meetingId) {
-        throw new Error('update-meeting-ai requires a meetingId');
-      }
-
-      const recordingsDir = path.join(app.getPath('userData'), 'recordings');
-      const args = [
-        '--recordings-dir', recordingsDir,
-        'update-ai',
-        String(meetingId),
-      ];
-
-      if (Object.prototype.hasOwnProperty.call(updates, 'diarization')) {
-        if (updates.diarization === null) {
-          args.push('--clear-diarization');
-        } else {
-          args.push('--diarization-json', JSON.stringify(updates.diarization));
-        }
-      }
-
-      if (Object.prototype.hasOwnProperty.call(updates, 'summary')) {
-        if (updates.summary === null) {
-          args.push('--clear-summary');
-        } else {
-          args.push('--summary-json', JSON.stringify(updates.summary));
-        }
-      }
-
-      return new Promise((resolve, reject) => {
-        const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', args), {
-          cwd: pythonConfig.backendPath,
-        });
-
-        const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
-
-        python.on('close', (code) => {
-          try {
-            processOutput.assertStdoutWithinLimit();
-          } catch (error) {
-            reject(error);
-            return;
-          }
-
-          if (code === 0) {
-            try {
-              resolve(JSON.parse(processOutput.getStdout()));
-            } catch (e) {
-              reject(new Error(`Failed to parse updated AI meeting metadata: ${e.message}`));
-            }
-          } else {
-            reject(new Error(processOutput.getStderr().trim() || 'Failed to update AI meeting metadata'));
-          }
-        });
-
-        python.on('error', (err) => reject(err));
-      });
+      const updates = (payload && payload.updates) || {};
+      return updateMeetingAiMetadata(meetingId, updates);
     });
   }
 
-  return { addMeetingToHistory, isRecordingsScanInProgress, scanRecordings, registerIpc };
+  function updateMeetingAiMetadata(meetingId, rawUpdates = {}) {
+    const updates = validateAiMetadataPaths(rawUpdates || {});
+    if (!meetingId) {
+      return Promise.reject(new Error('update-meeting-ai requires a meetingId'));
+    }
+
+    const recordingsDir = path.join(app.getPath('userData'), 'recordings');
+    const args = [
+      '--recordings-dir', recordingsDir,
+      'update-ai',
+      String(meetingId),
+    ];
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'diarization')) {
+      if (updates.diarization === null) {
+        args.push('--clear-diarization');
+      } else {
+        args.push('--diarization-json', JSON.stringify(updates.diarization));
+      }
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'summary')) {
+      if (updates.summary === null) {
+        args.push('--clear-summary');
+      } else {
+        args.push('--summary-json', JSON.stringify(updates.summary));
+      }
+    }
+
+    return new Promise((resolve, reject) => {
+      const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', args), {
+        cwd: pythonConfig.backendPath,
+      });
+
+      const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
+
+      python.on('close', (code) => {
+        try {
+          processOutput.assertStdoutWithinLimit();
+        } catch (error) {
+          reject(error);
+          return;
+        }
+
+        if (code === 0) {
+          try {
+            resolve(JSON.parse(processOutput.getStdout()));
+          } catch (e) {
+            reject(new Error(`Failed to parse updated AI meeting metadata: ${e.message}`));
+          }
+        } else {
+          reject(new Error(processOutput.getStderr().trim() || 'Failed to update AI meeting metadata'));
+        }
+      });
+
+      python.on('error', (err) => reject(err));
+    });
+  }
+
+  return {
+    addMeetingToHistory,
+    updateMeetingAiMetadata,
+    isRecordingsScanInProgress,
+    scanRecordings,
+    registerIpc,
+  };
 }
 
 /**

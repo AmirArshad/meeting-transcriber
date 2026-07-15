@@ -457,6 +457,9 @@ def transcribe_with_diarization_guidance(
 
 
 def main() -> None:
+    from common.process_priority import lower_process_priority
+    lower_process_priority()
+
     parser = argparse.ArgumentParser(description="Run speaker-guided local transcription")
     parser.add_argument("--audio", required=True, help="Source audio file path")
     parser.add_argument("--output-transcript", help="Output transcript Markdown path")

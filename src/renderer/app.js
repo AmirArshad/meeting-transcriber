@@ -2687,7 +2687,9 @@ async function stopRecording() {
         addLog(`Recording failed: ${result.message || result.code}`, 'error');
         setTranscriptMessage(result.message || 'Recording failed.', true);
         addLog('Starting transcription for recovered recording...');
-        await transcribeAudio();
+        await transcribeAudio({
+          stopErrorNote: result.message || result.code || 'Recording saved with processing errors.',
+        });
         return;
       }
       addLog(`Recording failed: ${result.message || result.code}`, 'error');
@@ -2810,144 +2812,6 @@ function renderMeetingDiarizationStatus(meeting, container) {
   message.className = 'placeholder error';
   message.textContent = `Speaker identification failed for this recording. ${diarization.error || 'The transcript was saved without speaker-guided chunks.'}`;
   container.appendChild(message);
-}
-
-async function maybeRunDiarizationAfterTranscription(savedMeeting, transcriptionResult) {
-  if (!savedMeeting || !savedMeeting.id || !savedMeeting.audioPath || !transcriptionResult.segments || transcriptionResult.segments.length === 0) {
-    return null;
-  }
-
-  let aiStatus;
-  try {
-    aiStatus = await window.electronAPI.getAiAddonStatus();
-  } catch (error) {
-    addLog(`Speaker identification status unavailable: ${error.message}`, 'warning');
-    return null;
-  }
-
-  const diarizationStatus = aiStatus && aiStatus.features && aiStatus.features.diarization;
-  if (!diarizationStatus || !diarizationStatus.setupComplete || diarizationStatus.status !== 'ready') {
-    return null;
-  }
-
-  addLog('Running speaker identification...');
-  try {
-    const result = await window.electronAPI.diarizeTranscript({
-      audioPath: savedMeeting.audioPath,
-      segments: transcriptionResult.segments,
-      speakerCount: diarizationStatus.speakerCount || 'auto',
-    });
-
-    if (result && Array.isArray(result.segments) && result.segments.length > 0) {
-      const updatedTranscriptMarkdown = writeTranscriptMarkdown({ meeting: savedMeeting, transcriptionResult, diarizationResult: result });
-      currentRecordingTranscriptMarkdown = updatedTranscriptMarkdown;
-      renderTranscriptSegments(result.segments);
-      if (savedMeeting.transcriptPath) {
-        await window.electronAPI.saveTranscriptFile({
-          filePath: savedMeeting.transcriptPath,
-          content: updatedTranscriptMarkdown,
-        });
-      }
-    }
-
-    await window.electronAPI.updateMeetingAi(savedMeeting.id, {
-      diarization: {
-        status: 'completed',
-        model: result.model || diarizationStatus.modelId,
-        completedAt: result.completedAt,
-        speakerCount: result.speakerCount,
-        segmentsPath: result.segmentsPath,
-        error: null,
-      },
-    });
-    addLog('Speaker identification complete!');
-    return result;
-  } catch (error) {
-    addLog(`Speaker identification failed; saved normal transcript. ${error.message}`, 'warning');
-    try {
-      await window.electronAPI.updateMeetingAi(savedMeeting.id, {
-        diarization: {
-          status: 'error',
-          model: diarizationStatus.modelId,
-          completedAt: new Date().toISOString(),
-          error: error.message,
-        },
-      });
-    } catch (metadataError) {
-      addLog(`Could not save speaker identification failure state: ${metadataError.message}`, 'warning');
-    }
-    return null;
-  }
-}
-
-async function getReadyDiarizationStatusForRecording() {
-  if (!window.electronAPI.transcribeAudioWithSpeakers) {
-    return null;
-  }
-
-  try {
-    const aiStatus = await window.electronAPI.getAiAddonStatus();
-    const diarizationStatus = aiStatus && aiStatus.features && aiStatus.features.diarization;
-    if (diarizationStatus && diarizationStatus.setupComplete && diarizationStatus.status === 'ready') {
-      return diarizationStatus;
-    }
-  } catch (error) {
-    const message = `Speaker identification temporarily unavailable; recording will be transcribed without speaker-guided chunks. ${error.message}`;
-    addLog(message, 'warning');
-    setTranscriptMessage(message, true);
-  }
-
-  return null;
-}
-
-async function saveGuidedDiarizationMetadata(savedMeeting, diarizationStatus, diarizationResult) {
-  if (!savedMeeting || !savedMeeting.id || !savedMeeting.audioPath || !diarizationResult) {
-    return null;
-  }
-
-  const speakerSidecarPath = savedMeeting.audioPath.replace(/\.[^/.]+$/, '.speakers.json');
-  const sidecarContent = JSON.stringify({
-    ...diarizationResult,
-    audioPath: savedMeeting.audioPath,
-    segmentsPath: speakerSidecarPath,
-  }, null, 2);
-
-  await window.electronAPI.saveSpeakerSegmentsFile({
-    filePath: speakerSidecarPath,
-    content: sidecarContent,
-  });
-
-  await window.electronAPI.updateMeetingAi(savedMeeting.id, {
-    diarization: {
-      status: 'completed',
-      model: diarizationResult.model || (diarizationStatus && diarizationStatus.modelId),
-      completedAt: diarizationResult.completedAt,
-      speakerCount: diarizationResult.speakerCount,
-      segmentsPath: speakerSidecarPath,
-      error: null,
-    },
-  });
-
-  return speakerSidecarPath;
-}
-
-async function saveDiarizationFailureMetadata(savedMeeting, diarizationStatus, error) {
-  if (!savedMeeting || !savedMeeting.id) {
-    return;
-  }
-
-  try {
-    await window.electronAPI.updateMeetingAi(savedMeeting.id, {
-      diarization: {
-        status: 'error',
-        model: diarizationStatus && diarizationStatus.modelId,
-        completedAt: new Date().toISOString(),
-        error: error && error.message ? error.message : 'Speaker-guided transcription failed.',
-      },
-    });
-  } catch (metadataError) {
-    addLog(`Could not save speaker identification failure state: ${metadataError.message}`, 'warning');
-  }
 }
 
 function syncMeetingInList(updatedMeeting) {
@@ -3080,12 +2944,13 @@ async function generateSummaryForMeeting(meetingId) {
   }
 }
 
-// Transcribe audio (auto-called after stop)
-async function transcribeAudio() {
+// Transcribe audio (auto-called after stop). PR1: main owns pending persist +
+// composite job; renderer still awaits and keeps the blocking `transcribing` UI.
+async function transcribeAudio(options = {}) {
   const language = languageSelect.value;
   const modelSize = modelSelect.value;
+  const stopErrorNote = typeof options.stopErrorNote === 'string' ? options.stopErrorNote : '';
 
-  // Validate we have an audio file
   if (!currentAudioFile) {
     addLog('Error: No audio file to transcribe', 'error');
     setTranscriptMessage('No audio file available for transcription.', true);
@@ -3094,68 +2959,61 @@ async function transcribeAudio() {
   }
 
   try {
-    const diarizationStatus = await getReadyDiarizationStatusForRecording();
-    const useGuidedTranscription = Boolean(diarizationStatus);
-
     setRecordingState('transcribing');
-    setTranscriptMessage(useGuidedTranscription
-      ? 'Identifying speakers and transcribing... This may take a moment.'
-      : 'Transcribing... This may take a moment.');
-
+    setTranscriptMessage('Transcribing... This may take a moment.');
     addLog(`Language: ${language}, Model: ${modelSize}`);
     addLog(`File: ${currentAudioFile}`);
 
-    let result;
-    let guidedDiarizationStatus = diarizationStatus;
-    let guidedDiarizationResult = null;
-    let guidedTranscriptionError = null;
-    try {
-      if (useGuidedTranscription) {
-        addLog('Speaker identification is ready; using speaker-guided transcription.');
-        result = await window.electronAPI.transcribeAudioWithSpeakers({
-          audioFile: currentAudioFile,
-          language,
-          modelSize,
-          speakerCount: diarizationStatus.speakerCount || 'auto',
-        });
-        guidedDiarizationResult = result.diarization || null;
-      } else {
-        result = await window.electronAPI.transcribeAudio({
-          audioFile: currentAudioFile,
-          language,
-          modelSize
-        });
-      }
-    } catch (guidedError) {
-      if (!useGuidedTranscription) {
-        throw guidedError;
-      }
-      addLog(`Speaker-guided transcription failed; falling back to normal transcription. ${guidedError.message}`, 'warning');
-      setTranscriptMessage(`Speaker-guided transcription failed; saving a normal transcript instead. ${guidedError.message}`, true);
-      guidedTranscriptionError = guidedError;
-      result = await window.electronAPI.transcribeAudio({
-        audioFile: currentAudioFile,
-        language,
-        modelSize
+    const result = await window.electronAPI.finalizeRecordingTranscription({
+      audioPath: currentAudioFile,
+      duration: currentRecordingDurationSeconds || 0,
+      language,
+      modelSize,
+      transcriptionErrorNote: stopErrorNote,
+    });
+
+    if (result && result.success === false) {
+      // Main returns failures as structured values because custom error
+      // properties do not survive ipcRenderer.invoke rejection.
+      throw Object.assign(new Error(result.error || 'Transcription failed.'), {
+        code: result.code || 'TRANSCRIPTION_FAILED',
+        meeting: result.meeting || result.pendingMeeting || null,
       });
-      guidedDiarizationStatus = null;
-      guidedDiarizationResult = null;
     }
 
     if (result && result.transcriptionDevice) {
       addLog(`Transcription device: ${String(result.transcriptionDevice).toUpperCase()}`);
     }
 
+    const meeting = result && result.meeting;
+    if (meeting && meeting.audioPath) {
+      currentAudioFile = meeting.audioPath;
+    }
+    if (meeting && meeting.id) {
+      currentRecordingMeeting = meeting;
+      applyCurrentRecordingTitle();
+      try {
+        const fullMeeting = await window.electronAPI.getMeeting(meeting.id);
+        if (fullMeeting && fullMeeting.transcript) {
+          currentRecordingTranscriptMarkdown = fullMeeting.transcript;
+        }
+      } catch (loadTranscriptError) {
+        console.warn('Could not load persisted transcript markdown after save:', loadTranscriptError);
+      }
+    }
+
     currentRecordingTranscriptMarkdown = typeof result.transcriptContent === 'string' && result.transcriptContent.trim()
       ? result.transcriptContent
-      : writeTranscriptMarkdown({
-        meeting: { audioPath: result.audioPath || currentAudioFile },
+      : (currentRecordingTranscriptMarkdown || writeTranscriptMarkdown({
+        meeting: { audioPath: (meeting && meeting.audioPath) || currentAudioFile },
         transcriptionResult: result,
-      });
+        diarizationResult: result.diarization || null,
+      }));
 
-    // Display transcript with timestamps
     if (result.segments && result.segments.length > 0) {
       renderTranscriptSegments(result.segments);
+    } else if (result.diarization && Array.isArray(result.diarization.segments) && result.diarization.segments.length > 0) {
+      renderTranscriptSegments(result.diarization.segments);
     } else {
       clearElement(transcriptOutput);
       const transcriptText = document.createElement('div');
@@ -3163,7 +3021,6 @@ async function transcribeAudio() {
       transcriptOutput.appendChild(transcriptText);
     }
 
-    // Enable actions
     transcriptActions.style.display = 'flex';
 
     const transcriptTextForStats = typeof result.text === 'string'
@@ -3174,107 +3031,52 @@ async function transcribeAudio() {
       : 0;
     addLog('Transcription complete!');
     addLog(`Word count: ${wordCount}`);
-
-    // Save meeting to history
-    try {
-      addLog('Saving meeting to history...');
-      const savedMeeting = await window.electronAPI.addMeeting({
-        audioPath: result.audioPath || currentAudioFile,
-        transcriptPath: result.output_file,
-        duration: result.duration || 0,
-        language: language,
-        model: modelSize,
-        transcriptionStatus: 'completed',
-        transcriptionDevice: result.transcriptionDevice,
-        transcriptionComputeType: result.transcriptionComputeType || result.computeType,
-      });
-      if (savedMeeting && savedMeeting.audioPath) {
-        currentAudioFile = savedMeeting.audioPath;
-      }
-      if (savedMeeting && savedMeeting.id) {
-        currentRecordingMeeting = savedMeeting;
-        applyCurrentRecordingTitle();
-        // Guided transcription can rewrite the persisted transcript during save;
-        // reload it so Save As uses the exact markdown stored in history.
-        try {
-          const fullMeeting = await window.electronAPI.getMeeting(savedMeeting.id);
-          if (fullMeeting && fullMeeting.transcript) {
-            currentRecordingTranscriptMarkdown = fullMeeting.transcript;
-          }
-        } catch (loadTranscriptError) {
-          console.warn('Could not load persisted transcript markdown after save:', loadTranscriptError);
-        }
-        if (guidedDiarizationResult) {
-          const speakerSidecarPath = await saveGuidedDiarizationMetadata(savedMeeting, guidedDiarizationStatus, guidedDiarizationResult);
-          if (speakerSidecarPath && savedMeeting.ai) {
-            savedMeeting.ai.diarization = {
-              status: 'completed',
-              model: guidedDiarizationResult.model || (guidedDiarizationStatus && guidedDiarizationStatus.modelId),
-              completedAt: guidedDiarizationResult.completedAt,
-              speakerCount: guidedDiarizationResult.speakerCount,
-              segmentsPath: speakerSidecarPath,
-              error: null,
-            };
-          }
-          addLog('Speaker-guided transcript saved!');
-        } else {
-          if (guidedTranscriptionError) {
-            await saveDiarizationFailureMetadata(savedMeeting, diarizationStatus, guidedTranscriptionError);
-          } else {
-            await maybeRunDiarizationAfterTranscription(savedMeeting, result);
-          }
-        }
-      }
-      addLog('Meeting saved!');
-    } catch (saveError) {
-      console.error('Failed to save meeting:', saveError);
-      addLog(`Warning: Could not save to history: ${saveError.message}`, 'warning');
+    if (result.diarization) {
+      addLog('Speaker-guided transcript saved!');
+    } else if (result.diarizationError) {
+      addLog(`Speaker identification noted an error; transcript was saved. ${result.diarizationError}`, 'warning');
     }
+    addLog('Meeting saved!');
 
-    // Reload meeting history
     await loadMeetingHistory();
-    
     setRecordingState('idle');
-
   } catch (error) {
     console.error('Failed to transcribe:', error);
     addLog(`Error: ${error.message}`, 'error');
-    setTranscriptMessage(`Recording saved, but transcription failed. You can retry from History. ${error.message}`, true);
+
+    if (error && error.code === 'PENDING_MEETING_PERSIST_FAILED') {
+      setTranscriptMessage(
+        `Recording was saved on disk, but could not be added to History yet. Scanning for it now. ${error.message}`,
+        true,
+      );
+      loadMeetingHistory({ scan: true }).catch((scanError) => {
+        console.warn('Could not scan recordings after pending persist failure:', scanError);
+      });
+      setRecordingState('idle');
+      return;
+    }
+
+    if (error && error.code === 'TRANSCRIPTION_QUIT_SKIPPED') {
+      addLog('Transcription will resume the next time AvaNevis opens.', 'warning');
+      setTranscriptMessage('The app is quitting; this recording will transcribe on the next launch.');
+      setRecordingState('idle');
+      return;
+    }
+
+    setTranscriptMessage(
+      error && error.code === 'TRANSCRIPTION_CANCELLED'
+        ? 'Transcription was cancelled. You can retry from History.'
+        : `Recording saved, but transcription failed. You can retry from History. ${error.message}`,
+      true,
+    );
+    if (error && error.meeting) {
+      currentRecordingMeeting = error.meeting;
+      applyCurrentRecordingTitle();
+    }
     try {
-      if (currentAudioFile) {
-        const placeholderTranscriptPath = currentAudioFile.replace(/\.[^/.]+$/, '.md');
-        const placeholderMarkdown = [
-          '# Recording Awaiting Transcription',
-          '',
-          `**Date:** ${new Date().toISOString().replace('T', ' ').slice(0, 19)}`,
-          `**Duration:** ${formatTimestamp(currentRecordingDurationSeconds || 0)}`,
-          '**Status:** Transcription failed',
-          '',
-          'The recording was saved successfully, but transcription failed.',
-          'Use Retry transcription in AvaNevis History to generate a transcript.',
-          '',
-        ].join('\n');
-        await window.electronAPI.saveTranscriptFile({
-          filePath: placeholderTranscriptPath,
-          content: placeholderMarkdown,
-        });
-        const savedMeeting = await window.electronAPI.addMeeting({
-          audioPath: currentAudioFile,
-          transcriptPath: placeholderTranscriptPath,
-          duration: currentRecordingDurationSeconds || 0,
-          language,
-          model: modelSize,
-          transcriptionStatus: 'failed',
-          transcriptionError: error.message,
-        });
-        if (savedMeeting) {
-          currentRecordingMeeting = savedMeeting;
-          applyCurrentRecordingTitle();
-          await loadMeetingHistory();
-        }
-      }
-    } catch (saveFailedMeetingError) {
-      addLog(`Warning: Could not save failed transcription entry to history: ${saveFailedMeetingError.message}`, 'warning');
+      await loadMeetingHistory();
+    } catch (historyError) {
+      console.warn('Could not refresh history after transcription failure:', historyError);
     }
     setRecordingState('idle');
   }
@@ -3305,41 +3107,12 @@ async function retryMeetingTranscription() {
       modelSize: modelSelect.value,
     });
     addLog('Transcription retry completed.');
+    if (result && result.diarization) {
+      addLog('Speaker-guided transcript saved!');
+    } else if (result && result.diarizationError) {
+      addLog(`Speaker identification noted an error; transcript was saved. ${result.diarizationError}`, 'warning');
+    }
     if (result && result.meeting) {
-      if (result.diarization) {
-        const speakerSidecarPath = await saveGuidedDiarizationMetadata(
-          result.meeting,
-          result.diarizationStatus,
-          result.diarization,
-        );
-        if (speakerSidecarPath && result.meeting.ai) {
-          result.meeting.ai.diarization = {
-            status: 'completed',
-            model: result.diarization.model || (result.diarizationStatus && result.diarizationStatus.modelId),
-            completedAt: result.diarization.completedAt,
-            speakerCount: result.diarization.speakerCount,
-            segmentsPath: speakerSidecarPath,
-            error: null,
-          };
-        }
-        addLog('Speaker-guided transcript saved!');
-      } else if (result.diarizationError) {
-        await saveDiarizationFailureMetadata(result.meeting, result.diarizationStatus, {
-          message: result.diarizationError,
-        });
-      } else {
-        // Retry produced a non-speaker transcript; clear stale speaker metadata
-        // before optionally re-running diarization for this fresh transcript.
-        try {
-          await window.electronAPI.updateMeetingAi(result.meeting.id, { diarization: null });
-          if (result.meeting.ai && result.meeting.ai.diarization) {
-            delete result.meeting.ai.diarization;
-          }
-        } catch (metadataError) {
-          addLog(`Could not clear previous speaker identification metadata: ${metadataError.message}`, 'warning');
-        }
-        await maybeRunDiarizationAfterTranscription(result.meeting, result);
-      }
       syncMeetingInList(result.meeting);
     }
     await loadMeetingHistory();

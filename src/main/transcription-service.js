@@ -33,6 +33,21 @@ const {
   runWallClockComputeAction,
   runGuidedTranscriptionProcess,
   buildClearedHuggingFaceTokenEnv,
+  USER_CANCELLED_TRANSCRIPTION_ERROR,
+  QUEUE_JOB_STATUSES,
+  QUEUE_JOB_PHASES,
+  createTranscriptionQueueState,
+  upsertQueueJob,
+  removeQueueJob,
+  setActiveQueueMeeting,
+  markTranscriptionJobCancelled,
+  isTranscriptionJobCancelled,
+  clearTranscriptionJobCancelFlag,
+  shouldSkipJobAtHead,
+  buildTranscriptionQueueStatePayload,
+  buildMeetingTranscriptMarkdown,
+  buildSpeakerSidecarPayload,
+  buildGuidedDiarizationAiMetadata,
 } = require('../main-process-helpers');
 const { checkAiAddonSetupStatus } = require('../ai-addon-setup');
 const {
@@ -74,6 +89,10 @@ const {
  * @param {Function} deps.buildTranscriptionPlaceholderMarkdown
  * @param {Function} deps.formatDurationForTranscript
  * @param {Function} [deps.enqueueGpuResourceAction]
+ * @param {Function} [deps.addMeetingToHistory]
+ * @param {Function} [deps.updateMeetingAiMetadata]
+ * @param {Function} [deps.isQuitCommitted]
+ * @param {Function} [deps.validateAiMetadataPaths]
  */
 function createTranscriptionService(deps) {
   const {
@@ -113,6 +132,9 @@ function createTranscriptionService(deps) {
     sanitizeTranscriptionError,
     buildTranscriptionPlaceholderMarkdown,
     formatDurationForTranscript,
+    addMeetingToHistory = null,
+    updateMeetingAiMetadata = null,
+    isQuitCommitted = () => false,
   } = deps;
 
   function getTranscriptionModelDownloadCheck(modelSize) {
@@ -355,6 +377,863 @@ function createTranscriptionService(deps) {
       `Waiting for GPU runtime setup to finish before starting ${label.toLowerCase()}...\n`,
     );
     await waitForGpuRuntimeIdle();
+  }
+
+  const transcriptionQueueState = createTranscriptionQueueState();
+
+  function publishTranscriptionQueueState() {
+    // String literal keeps Phase 0 push-channel source scans honest.
+    sendToRenderer(
+      'transcription-queue-state',
+      buildTranscriptionQueueStatePayload(transcriptionQueueState),
+    );
+  }
+
+  function getMeetingDetails(meetingId, registerProcess = null) {
+    const recordingsDir = getRecordingsDir();
+    return new Promise((resolve, reject) => {
+      let python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
+        '--recordings-dir', recordingsDir,
+        'get',
+        meetingId,
+      ]), { cwd: pythonConfig.backendPath });
+      if (typeof registerProcess === 'function') {
+        python = registerProcess(python);
+      }
+      const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
+
+      python.on('close', (code) => {
+        try {
+          processOutput.assertStdoutWithinLimit();
+        } catch (error) {
+          reject(error);
+          return;
+        }
+        if (code !== 0) {
+          reject(new Error(processOutput.getStderr().trim() || 'Meeting not found.'));
+          return;
+        }
+        try {
+          resolve(JSON.parse(processOutput.getStdout()));
+        } catch (error) {
+          reject(new Error(`Failed to parse meeting details: ${error.message}`));
+        }
+      });
+      python.on('error', reject);
+    });
+  }
+
+  /**
+   * Bounded meeting lookup. Every meeting_manager child spawned inside the
+   * compute-queue slot must be wall-clocked so a hung child cannot wedge the
+   * queue (AGENTS.md compute-queue invariant).
+   */
+  function lookupMeetingById(meetingId) {
+    return runWallClockComputeAction({
+      timeoutMs: AI_COMPUTE_TIMEOUT_MS.meetingPreflight,
+      label: 'Meeting lookup',
+      terminateProcess: terminateProcessBestEffort,
+      action: (registerProcess) => getMeetingDetails(meetingId, registerProcess),
+    });
+  }
+
+  function updateMeetingTranscriptionStatus(meetingId, {
+    status,
+    language,
+    model,
+    duration,
+    transcriptionDevice,
+    transcriptionComputeType,
+    transcriptionError,
+    clearError = false,
+  } = {}, registerProcess = null) {
+    const recordingsDir = getRecordingsDir();
+    const args = [
+      '--recordings-dir', recordingsDir,
+      'update-transcription',
+      meetingId,
+      '--status', status,
+    ];
+    if (language) {
+      args.push('--language', String(language));
+    }
+    if (model) {
+      args.push('--model', String(model));
+    }
+    if (duration !== undefined && duration !== null) {
+      args.push('--duration', String(duration || 0));
+    }
+    if (transcriptionDevice) {
+      args.push('--device', String(transcriptionDevice));
+    }
+    if (transcriptionComputeType) {
+      args.push('--compute-type', String(transcriptionComputeType));
+    }
+    if (clearError) {
+      args.push('--clear-error');
+    } else if (transcriptionError) {
+      args.push('--error', sanitizeTranscriptionError(transcriptionError));
+    }
+
+    return new Promise((resolve, reject) => {
+      let python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', args), {
+        cwd: pythonConfig.backendPath,
+      });
+      if (typeof registerProcess === 'function') {
+        python = registerProcess(python);
+      }
+      const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
+      python.on('close', (code) => {
+        try {
+          processOutput.assertStdoutWithinLimit();
+        } catch (error) {
+          reject(error);
+          return;
+        }
+        if (code !== 0) {
+          reject(new Error(processOutput.getStderr().trim() || 'Failed to update meeting status.'));
+          return;
+        }
+        try {
+          resolve(JSON.parse(processOutput.getStdout()));
+        } catch (error) {
+          reject(new Error(`Failed to parse updated meeting: ${error.message}`));
+        }
+      });
+      python.on('error', reject);
+    });
+  }
+
+  /**
+   * Bounded durable-status write for use inside the compute-queue slot.
+   * Same invariant as lookupMeetingById: no unbounded meeting_manager child
+   * may run while holding the queue.
+   */
+  function updateMeetingTranscriptionStatusBounded(meetingId, updates) {
+    return runWallClockComputeAction({
+      timeoutMs: AI_COMPUTE_TIMEOUT_MS.meetingPreflight,
+      label: 'Meeting status update',
+      terminateProcess: terminateProcessBestEffort,
+      action: (registerProcess) => updateMeetingTranscriptionStatus(meetingId, updates, registerProcess),
+    });
+  }
+
+  async function resolveGuidedDiarizationStatus() {
+    const diarizationAvailability = getDiarizationAvailability(process.platform, process.arch);
+    if (!diarizationAvailability.supported || !diarizationAvailability.runtimeDevice) {
+      return null;
+    }
+    try {
+      const aiStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions());
+      const diarizationStatus = aiStatus && aiStatus.features && aiStatus.features.diarization;
+      const catalogModelRef = diarizationStatus ? getDiarizationModelRef(diarizationStatus.modelId) : null;
+      if (diarizationStatus && diarizationStatus.status === 'ready' && diarizationStatus.setupComplete && catalogModelRef) {
+        return {
+          modelId: diarizationStatus.modelId,
+          speakerCount: diarizationStatus.speakerCount || 'auto',
+          modelRef: catalogModelRef,
+          requiredDevice: diarizationAvailability.runtimeDevice,
+        };
+      }
+    } catch (error) {
+      sendToRenderer(
+        'transcription-progress',
+        `Speaker identification status unavailable; continuing with normal transcription. ${error.message}\n`,
+      );
+    }
+    return null;
+  }
+
+  async function persistGuidedDiarizationArtifacts(meeting, diarizationStatus, diarizationResult) {
+    if (!meeting || !meeting.id || !meeting.audioPath || !diarizationResult || typeof updateMeetingAiMetadata !== 'function') {
+      return null;
+    }
+
+    const speakerSidecarPath = meeting.audioPath.replace(/\.[^/.]+$/, '.speakers.json');
+    if (!isSafeRecordingsJsonPath({ filePath: speakerSidecarPath, recordingsDir: getRecordingsDir() })) {
+      throw new Error('Speaker segment file must be a JSON file in the recordings directory.');
+    }
+
+    const sidecarPayload = buildSpeakerSidecarPayload({
+      diarizationResult,
+      audioPath: meeting.audioPath,
+      segmentsPath: speakerSidecarPath,
+    });
+    await fs.promises.writeFile(
+      path.resolve(speakerSidecarPath),
+      `${JSON.stringify(sidecarPayload, null, 2)}\n`,
+      'utf8',
+    );
+
+    const updatedMeeting = await updateMeetingAiMetadata(meeting.id, {
+      diarization: buildGuidedDiarizationAiMetadata({
+        diarizationResult,
+        diarizationStatus,
+        segmentsPath: speakerSidecarPath,
+        status: 'completed',
+      }),
+    });
+    return { speakerSidecarPath, meeting: updatedMeeting };
+  }
+
+  async function persistDiarizationFailureArtifacts(meeting, diarizationStatus, errorMessage) {
+    if (!meeting || !meeting.id || typeof updateMeetingAiMetadata !== 'function') {
+      return meeting;
+    }
+    return updateMeetingAiMetadata(meeting.id, {
+      diarization: buildGuidedDiarizationAiMetadata({
+        diarizationStatus,
+        status: 'error',
+        error: errorMessage,
+      }),
+    });
+  }
+
+  function runPostPassDiarizationProcess({
+    audioPath,
+    segments,
+    outputPath,
+    modelRef,
+    speakerCount,
+    requiredDevice,
+    registerProcess,
+  }) {
+    return new Promise(async (resolve, reject) => {
+      let tempSegmentsPath = null;
+      try {
+        const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'avanevis-diarization-segments-'));
+        tempSegmentsPath = path.join(tempDir, 'segments.json');
+        await fs.promises.writeFile(tempSegmentsPath, JSON.stringify({ segments }, null, 2), 'utf8');
+
+        const python = spawnTrackedPython(buildManagedDiarizationArgs({
+          audioPath,
+          segmentsJsonPath: tempSegmentsPath,
+          outputPath,
+          modelRef,
+          speakerCount,
+          requiredDevice,
+        }), {
+          cwd: pythonConfig.backendPath,
+          env: {
+            ...getDiarizationDependencyEnv(),
+            ...getDiarizationCacheEnv(),
+            ...buildCudaRuntimeEnv({}, { includeManagedDiarization: true }),
+            ...buildClearedHuggingFaceTokenEnv(),
+          },
+        });
+        registerProcess(python);
+
+        let output = '';
+        let errorOutput = '';
+        const stdoutOverflow = { overflowed: false };
+
+        python.stdout.on('data', (data) => {
+          output = appendSpawnJsonStdout(output, data, stdoutOverflow);
+        });
+
+        python.stderr.on('data', (data) => {
+          const stderrChunk = data.toString();
+          errorOutput = appendSpawnLogBuffer(errorOutput, stderrChunk);
+          for (const line of stderrChunk.split(/\r?\n/)) {
+            const progressEvent = parseAiBackendProgressLine(line, 'diarization');
+            if (progressEvent) {
+              sendToRenderer('diarization-progress', progressEvent);
+            }
+          }
+        });
+
+        python.on('close', (code) => {
+          if (tempSegmentsPath) {
+            fs.promises.rm(path.dirname(tempSegmentsPath), { recursive: true, force: true }).catch(() => {});
+          }
+          if (stdoutOverflow.overflowed) {
+            reject(new Error('Speaker diarization output exceeded the maximum allowed size.'));
+            return;
+          }
+          if (code === 0) {
+            try {
+              resolve(JSON.parse(output));
+            } catch (error) {
+              reject(new Error(`Failed to parse diarization result: ${error.message}`));
+            }
+            return;
+          }
+          const reason = summarizeDiarizationError(errorOutput);
+          reject(new Error(reason || 'Speaker diarization failed.'));
+        });
+
+        python.on('error', (error) => {
+          if (tempSegmentsPath) {
+            fs.promises.rm(path.dirname(tempSegmentsPath), { recursive: true, force: true }).catch(() => {});
+          }
+          reject(error);
+        });
+      } catch (error) {
+        if (tempSegmentsPath) {
+          fs.promises.rm(path.dirname(tempSegmentsPath), { recursive: true, force: true }).catch(() => {});
+        }
+        reject(error);
+      }
+    });
+  }
+
+  async function runNormalTranscriptionWithCudaFallback({
+    audioFile,
+    language,
+    modelSize,
+    registerProcess,
+  }) {
+    const shouldPreemptiveCpuRetry = await shouldPreemptiveCpuAtJobStart(registerProcess);
+    if (shouldPreemptiveCpuRetry) {
+      sendToRenderer(
+        'transcription-progress',
+        'CUDA runtime is not loadable on this system. Starting transcription on CPU.\n',
+      );
+    }
+    try {
+      return await runTranscriptionProcess({
+        audioFile,
+        language,
+        modelSize,
+        device: shouldPreemptiveCpuRetry ? 'cpu' : 'auto',
+        registerProcess,
+      });
+    } catch (error) {
+      if (!isRetryableCudaTranscriptionError(error && error.message)) {
+        throw error;
+      }
+      sendToRenderer(
+        'transcription-progress',
+        'GPU transcription failed because CUDA runtime libraries could not be loaded. Retrying on CPU; this may take significantly longer.\n',
+      );
+      return runTranscriptionProcess({
+        audioFile,
+        language,
+        modelSize,
+        device: 'cpu',
+        registerProcess,
+      });
+    }
+  }
+
+  /**
+   * Per-meeting composite job: guided-or-normal Whisper → optional post-pass
+   * diarization → persist transcript + AI sidecars. Owned by main (queue Phase 1).
+   */
+  async function runMeetingTranscriptionJob({
+    meetingId,
+    language,
+    modelSize,
+    speakerCount = '',
+    clearPriorDiarization = false,
+    jobLabel = 'Transcription',
+  }) {
+    const preferredSpeakerCount = String(speakerCount || '').trim();
+    let guidedDiarizationStatus = null;
+    let guidedDiarizationResult = null;
+    let guidedTranscriptionError = null;
+    let postPassDiarizationResult = null;
+    let result = null;
+    let updatedMeeting = null;
+    // Once durable `completed` is written, the job must never downgrade the
+    // meeting to `failed` — the transcript on disk is already good.
+    let completedPersisted = false;
+
+    upsertQueueJob(transcriptionQueueState, {
+      meetingId,
+      status: QUEUE_JOB_STATUSES.queued,
+      phase: QUEUE_JOB_PHASES.queued,
+    });
+    publishTranscriptionQueueState();
+
+    try {
+      result = await enqueueAiComputeAction(async () => {
+        if (shouldSkipJobAtHead({
+          isQuitCommitted: isQuitCommitted(),
+          isCancelled: isTranscriptionJobCancelled(transcriptionQueueState, meetingId),
+        })) {
+          const cancelled = isTranscriptionJobCancelled(transcriptionQueueState, meetingId);
+          if (cancelled && !isQuitCommitted()) {
+            // Consume the flag — a leaked flag would make every future job for
+            // this meeting (e.g. Retry from History) self-cancel.
+            clearTranscriptionJobCancelFlag(transcriptionQueueState, meetingId);
+            updatedMeeting = await updateMeetingTranscriptionStatusBounded(meetingId, {
+              status: 'failed',
+              language,
+              model: modelSize,
+              transcriptionError: USER_CANCELLED_TRANSCRIPTION_ERROR,
+            });
+            upsertQueueJob(transcriptionQueueState, {
+              meetingId,
+              status: QUEUE_JOB_STATUSES.failed,
+              phase: QUEUE_JOB_PHASES.cancelled,
+            });
+            publishTranscriptionQueueState();
+            const cancelError = new Error(USER_CANCELLED_TRANSCRIPTION_ERROR);
+            cancelError.code = 'TRANSCRIPTION_CANCELLED';
+            throw cancelError;
+          }
+          // Quit: leave durable pending; do not spawn Whisper.
+          removeQueueJob(transcriptionQueueState, meetingId);
+          publishTranscriptionQueueState();
+          const quitError = new Error('Transcription was skipped because the app is quitting.');
+          quitError.code = 'TRANSCRIPTION_QUIT_SKIPPED';
+          throw quitError;
+        }
+
+        // Gate passed: consume any stale cancel flag so it cannot leak into a
+        // later job for the same meeting.
+        clearTranscriptionJobCancelFlag(transcriptionQueueState, meetingId);
+        setActiveQueueMeeting(transcriptionQueueState, meetingId);
+        upsertQueueJob(transcriptionQueueState, {
+          meetingId,
+          status: QUEUE_JOB_STATUSES.active,
+          phase: QUEUE_JOB_PHASES.waiting_resource,
+        });
+        publishTranscriptionQueueState();
+
+        await waitForGpuRuntimeBeforeCompute(jobLabel);
+
+        // Fresh get inside the queue slot so post-add audioPath / title stay
+        // current. Bounded: a hung meeting_manager child must not wedge the queue.
+        const meeting = await lookupMeetingById(meetingId);
+        if (!meeting || !meeting.audioPath || !meeting.transcriptPath) {
+          throw new Error('Meeting is missing audio or transcript path.');
+        }
+
+        const audioFile = assertSafeExistingRecordingAudioPath(meeting.audioPath);
+        const transcriptPath = assertSafeExistingTranscriptPath(meeting.transcriptPath);
+        upsertQueueJob(transcriptionQueueState, {
+          meetingId,
+          title: meeting.title || '',
+          durationSeconds: Number(meeting.duration) || 0,
+        });
+        publishTranscriptionQueueState();
+
+        guidedDiarizationStatus = await resolveGuidedDiarizationStatus();
+        const timeoutMs = guidedDiarizationStatus
+          ? getGuidedTranscriptionComputeTimeoutMs(modelSize)
+          : getTranscriptionComputeTimeoutMs(modelSize);
+
+        // Wall clock #1: transcription only (guided path includes pyannote and
+        // budgets for it). Persistence and any post-pass run after this with
+        // their own bounds so a slow speaker pass cannot burn the transcript's
+        // budget or downgrade a finished transcript to `failed`.
+        let transcriptionResult = await runWallClockComputeAction({
+          timeoutMs,
+          label: jobLabel,
+          terminateProcess: terminateProcessBestEffort,
+          action: async (registerProcess) => {
+            upsertQueueJob(transcriptionQueueState, {
+              meetingId,
+              status: QUEUE_JOB_STATUSES.active,
+              phase: guidedDiarizationStatus
+                ? QUEUE_JOB_PHASES.identifying_speakers
+                : QUEUE_JOB_PHASES.transcribing,
+            });
+            publishTranscriptionQueueState();
+
+            if (guidedDiarizationStatus) {
+              try {
+                const tempTranscriptPath = buildGuidedTranscriptTempPath({ finalTranscriptPath: transcriptPath });
+                guidedDiarizationResult = await runGuidedTranscriptionProcess({
+                  spawnProcess: spawnTrackedPython,
+                  args: buildManagedDiarizationGuidedTranscriptionArgs({
+                    audioPath: audioFile,
+                    outputTranscript: tempTranscriptPath,
+                    language,
+                    modelSize,
+                    modelRef: guidedDiarizationStatus.modelRef,
+                    speakerCount: preferredSpeakerCount || guidedDiarizationStatus.speakerCount || 'auto',
+                    requiredDevice: guidedDiarizationStatus.requiredDevice,
+                  }),
+                  cwd: pythonConfig.backendPath,
+                  env: {
+                    ...getDiarizationDependencyEnv(),
+                    ...getDiarizationCacheEnv(),
+                    ...getTranscriptionRuntimeEnv(modelSize, { includeManagedDiarization: true }),
+                    ...buildClearedHuggingFaceTokenEnv(),
+                  },
+                  finalTranscriptPath: transcriptPath,
+                  tempTranscriptPath,
+                  modelSize,
+                  fsPromises: fs.promises,
+                  registerProcess,
+                  terminateProcess: terminateProcessBestEffort,
+                  summarizeError: summarizeDiarizationError,
+                  onProgressLine: (line) => {
+                    const progressEvent = parseAiBackendProgressLine(line, 'diarization');
+                    if (progressEvent) {
+                      sendToRenderer('diarization-progress', progressEvent);
+                    } else if (line.trim()) {
+                      sendToRenderer('transcription-progress', `${redactSensitiveText(line)}\n`);
+                    }
+                  },
+                });
+              } catch (error) {
+                guidedTranscriptionError = error;
+                guidedDiarizationResult = null;
+                sendToRenderer(
+                  'transcription-progress',
+                  `Speaker-guided transcription failed; retrying with standard transcription. ${error.message}\n`,
+                );
+                upsertQueueJob(transcriptionQueueState, {
+                  meetingId,
+                  phase: QUEUE_JOB_PHASES.transcribing,
+                });
+                publishTranscriptionQueueState();
+              }
+            }
+
+            const innerResult = guidedDiarizationResult || await runNormalTranscriptionWithCudaFallback({
+              audioFile,
+              language,
+              modelSize,
+              registerProcess,
+            });
+
+            const transcribedPath = assertSafeExistingTranscriptPath(
+              innerResult.output_file || transcriptPath,
+            );
+            if (path.resolve(transcribedPath) !== path.resolve(transcriptPath)) {
+              const transcriptContent = await fs.promises.readFile(transcribedPath, 'utf8');
+              await fs.promises.writeFile(transcriptPath, transcriptContent, 'utf8');
+            }
+
+            return innerResult;
+          },
+        });
+
+        // Persist durable `completed` BEFORE the optional post-pass: the
+        // transcript on disk is final here, and a failed or timed-out speaker
+        // pass must never convert a finished transcript into durable `failed`.
+        upsertQueueJob(transcriptionQueueState, {
+          meetingId,
+          phase: QUEUE_JOB_PHASES.persisting,
+        });
+        publishTranscriptionQueueState();
+        updatedMeeting = await updateMeetingTranscriptionStatusBounded(meetingId, {
+          status: 'completed',
+          language,
+          model: modelSize,
+          duration: transcriptionResult.duration || 0,
+          transcriptionDevice: transcriptionResult.transcriptionDevice || transcriptionResult.device,
+          transcriptionComputeType: transcriptionResult.transcriptionComputeType || transcriptionResult.computeType,
+          clearError: true,
+        });
+        completedPersisted = true;
+
+        // Optional post-pass speaker labels: guided failed at head, or
+        // diarization became ready while the job was queued. Runs on its own
+        // wall clock with the diarization budget (like the pre-queue design),
+        // and failures degrade to diarization error metadata.
+        if (!guidedDiarizationResult) {
+          const postPassStatus = guidedDiarizationStatus || await resolveGuidedDiarizationStatus();
+          if (
+            postPassStatus
+            && Array.isArray(transcriptionResult.segments)
+            && transcriptionResult.segments.length > 0
+          ) {
+            upsertQueueJob(transcriptionQueueState, {
+              meetingId,
+              phase: QUEUE_JOB_PHASES.identifying_speakers,
+            });
+            publishTranscriptionQueueState();
+            try {
+              const outputPath = buildDiarizationOutputPath({ audioPath: audioFile });
+              postPassDiarizationResult = await runWallClockComputeAction({
+                timeoutMs: AI_COMPUTE_TIMEOUT_MS.diarization,
+                label: 'Speaker identification',
+                terminateProcess: terminateProcessBestEffort,
+                action: (registerProcess) => runPostPassDiarizationProcess({
+                  audioPath: audioFile,
+                  segments: transcriptionResult.segments,
+                  outputPath,
+                  modelRef: postPassStatus.modelRef,
+                  speakerCount: preferredSpeakerCount || postPassStatus.speakerCount || 'auto',
+                  requiredDevice: postPassStatus.requiredDevice,
+                  registerProcess,
+                }),
+              });
+              guidedDiarizationStatus = postPassStatus;
+              if (postPassDiarizationResult && Array.isArray(postPassDiarizationResult.segments)) {
+                const updatedMarkdown = buildMeetingTranscriptMarkdown({
+                  audioPath: audioFile,
+                  language,
+                  duration: transcriptionResult.duration || meeting.duration || 0,
+                  transcriptionResult,
+                  diarizationResult: postPassDiarizationResult,
+                });
+                await fs.promises.writeFile(transcriptPath, updatedMarkdown, 'utf8');
+                transcriptionResult = {
+                  ...transcriptionResult,
+                  segments: postPassDiarizationResult.segments,
+                  transcriptContent: updatedMarkdown,
+                };
+              }
+            } catch (postPassError) {
+              postPassDiarizationResult = null;
+              guidedDiarizationStatus = postPassStatus;
+              if (!isQuitCommitted()) {
+                guidedTranscriptionError = guidedTranscriptionError || postPassError;
+                sendToRenderer(
+                  'transcription-progress',
+                  `Speaker identification failed; saved normal transcript. ${postPassError.message}\n`,
+                );
+              }
+            }
+          }
+        }
+
+        // Sidecar / AI-metadata persistence. Contained: the transcript is
+        // already durable `completed`, so metadata problems degrade to error
+        // metadata + progress warnings instead of failing the job. Skipped on
+        // quit so teardown never spawns fresh meeting_manager children.
+        upsertQueueJob(transcriptionQueueState, {
+          meetingId,
+          phase: QUEUE_JOB_PHASES.persisting,
+        });
+        publishTranscriptionQueueState();
+
+        if (clearPriorDiarization && typeof updateMeetingAiMetadata === 'function' && !guidedDiarizationResult && !postPassDiarizationResult && !isQuitCommitted()) {
+          try {
+            await updateMeetingAiMetadata(meetingId, { diarization: null });
+          } catch (clearError) {
+            sendToRenderer(
+              'transcription-progress',
+              `Could not clear previous speaker identification metadata: ${clearError.message}\n`,
+            );
+          }
+        }
+
+        try {
+          if (guidedDiarizationResult) {
+            const persisted = await persistGuidedDiarizationArtifacts(
+              updatedMeeting,
+              guidedDiarizationStatus,
+              guidedDiarizationResult.diarization || guidedDiarizationResult,
+            );
+            if (persisted && persisted.meeting) {
+              updatedMeeting = persisted.meeting;
+            }
+          } else if (postPassDiarizationResult) {
+            const persisted = await persistGuidedDiarizationArtifacts(
+              updatedMeeting,
+              guidedDiarizationStatus,
+              postPassDiarizationResult,
+            );
+            if (persisted && persisted.meeting) {
+              updatedMeeting = persisted.meeting;
+            }
+          } else if (guidedTranscriptionError && guidedDiarizationStatus && !isQuitCommitted()) {
+            updatedMeeting = await persistDiarizationFailureArtifacts(
+              updatedMeeting,
+              guidedDiarizationStatus,
+              guidedTranscriptionError.message,
+            ) || updatedMeeting;
+          }
+        } catch (sidecarError) {
+          if (!isQuitCommitted()) {
+            guidedTranscriptionError = guidedTranscriptionError || sidecarError;
+            sendToRenderer(
+              'transcription-progress',
+              `Could not save speaker identification metadata; the transcript itself is saved. ${sidecarError.message}\n`,
+            );
+            try {
+              updatedMeeting = await persistDiarizationFailureArtifacts(
+                updatedMeeting,
+                guidedDiarizationStatus,
+                sidecarError.message,
+              ) || updatedMeeting;
+            } catch (metadataError) {
+              // Best-effort only; the meeting is already completed.
+            }
+          }
+        }
+
+        return {
+          ...transcriptionResult,
+          output_file: transcriptPath,
+          transcriptPath,
+          meeting: updatedMeeting,
+          audioPath: audioFile,
+        };
+      });
+
+      clearTranscriptionJobCancelFlag(transcriptionQueueState, meetingId);
+      upsertQueueJob(transcriptionQueueState, {
+        meetingId,
+        status: QUEUE_JOB_STATUSES.ready,
+        phase: QUEUE_JOB_PHASES.completed,
+      });
+      setActiveQueueMeeting(transcriptionQueueState, null);
+      publishTranscriptionQueueState();
+
+      return {
+        ...result,
+        output_file: result.transcriptPath || result.output_file,
+        transcriptPath: result.transcriptPath || result.output_file,
+        diarization: guidedDiarizationResult
+          ? (guidedDiarizationResult.diarization || guidedDiarizationResult)
+          : postPassDiarizationResult,
+        diarizationStatus: guidedDiarizationStatus,
+        diarizationError: guidedTranscriptionError ? guidedTranscriptionError.message : null,
+        meeting: result.meeting || updatedMeeting,
+      };
+    } catch (error) {
+      setActiveQueueMeeting(transcriptionQueueState, null);
+
+      if (isQuitCommitted() || (error && error.code === 'TRANSCRIPTION_QUIT_SKIPPED')) {
+        // Quit-killed or head-of-queue quit skip: keep durable pending.
+        removeQueueJob(transcriptionQueueState, meetingId);
+        publishTranscriptionQueueState();
+        throw error;
+      }
+
+      if (error && error.code === 'TRANSCRIPTION_CANCELLED') {
+        throw error;
+      }
+
+      clearTranscriptionJobCancelFlag(transcriptionQueueState, meetingId);
+
+      if (completedPersisted) {
+        // The transcript is durable `completed`; a late metadata/post-pass
+        // error must not downgrade it. Report the job as ready with the error
+        // carried as a diarization-level warning.
+        upsertQueueJob(transcriptionQueueState, {
+          meetingId,
+          status: QUEUE_JOB_STATUSES.ready,
+          phase: QUEUE_JOB_PHASES.completed,
+        });
+        publishTranscriptionQueueState();
+        return {
+          output_file: null,
+          transcriptPath: null,
+          diarization: null,
+          diarizationStatus: guidedDiarizationStatus,
+          diarizationError: (error && error.message) || null,
+          meeting: updatedMeeting,
+        };
+      }
+
+      try {
+        updatedMeeting = await updateMeetingTranscriptionStatus(meetingId, {
+          status: 'failed',
+          language,
+          model: modelSize,
+          transcriptionError: (error && error.message) || 'Transcription failed.',
+        });
+      } catch (statusError) {
+        sendToRenderer(
+          'transcription-progress',
+          `Could not persist transcription failure status: ${statusError.message}\n`,
+        );
+      }
+
+      upsertQueueJob(transcriptionQueueState, {
+        meetingId,
+        status: QUEUE_JOB_STATUSES.failed,
+        phase: QUEUE_JOB_PHASES.failed,
+      });
+      publishTranscriptionQueueState();
+      if (updatedMeeting) {
+        error.meeting = updatedMeeting;
+      }
+      throw error;
+    }
+  }
+
+  async function finalizeRecordingTranscription({
+    audioPath,
+    duration = 0,
+    language = 'en',
+    modelSize = 'small',
+    transcriptionErrorNote = '',
+    title = '',
+  } = {}) {
+    if (typeof addMeetingToHistory !== 'function') {
+      throw new Error('finalize-recording-transcription requires addMeetingToHistory');
+    }
+
+    const normalizedModel = requireAllowedModelSize(modelSize);
+    const normalizedLanguage = String(language || 'en');
+    const resolvedAudioPath = assertSafeExistingRecordingAudioPath(audioPath);
+    const transcriptPath = resolvedAudioPath.replace(/\.[^/.]+$/, '.md');
+    if (!isSafeRecordingsMarkdownPath({ filePath: transcriptPath, recordingsDir: getRecordingsDir() })) {
+      throw new Error('Transcript must be a Markdown file in the recordings directory.');
+    }
+
+    const placeholderMarkdown = buildTranscriptionPlaceholderMarkdown({
+      audioPath: resolvedAudioPath,
+      duration,
+      status: 'pending',
+      errorMessage: transcriptionErrorNote,
+    });
+    await fs.promises.writeFile(transcriptPath, placeholderMarkdown, 'utf8');
+
+    let savedMeeting;
+    try {
+      savedMeeting = await addMeetingToHistory({
+        audioPath: resolvedAudioPath,
+        transcriptPath,
+        duration: Number(duration) || 0,
+        language: normalizedLanguage,
+        model: normalizedModel,
+        title: title || undefined,
+        transcriptionStatus: 'pending',
+        transcriptionError: transcriptionErrorNote || undefined,
+      });
+    } catch (persistError) {
+      return {
+        success: false,
+        code: 'PENDING_MEETING_PERSIST_FAILED',
+        error: (persistError && persistError.message) || 'Failed to save pending meeting.',
+      };
+    }
+
+    if (!savedMeeting || !savedMeeting.id || !savedMeeting.audioPath) {
+      return {
+        success: false,
+        code: 'PENDING_MEETING_PERSIST_FAILED',
+        error: 'Pending meeting save returned an incomplete meeting record.',
+      };
+    }
+
+    upsertQueueJob(transcriptionQueueState, {
+      meetingId: savedMeeting.id,
+      status: QUEUE_JOB_STATUSES.queued,
+      phase: QUEUE_JOB_PHASES.queued,
+      title: savedMeeting.title || '',
+      durationSeconds: Number(savedMeeting.duration) || Number(duration) || 0,
+    });
+    publishTranscriptionQueueState();
+
+    let jobResult;
+    try {
+      jobResult = await runMeetingTranscriptionJob({
+        meetingId: savedMeeting.id,
+        language: normalizedLanguage,
+        modelSize: normalizedModel,
+        jobLabel: 'Transcription',
+      });
+    } catch (jobError) {
+      // Custom error properties (code/meeting) do not survive
+      // ipcRenderer.invoke rejection, so return a structured value instead.
+      return {
+        success: false,
+        code: (jobError && jobError.code) || 'TRANSCRIPTION_FAILED',
+        error: (jobError && jobError.message) || 'Transcription failed.',
+        meeting: (jobError && jobError.meeting) || null,
+        pendingMeeting: savedMeeting,
+      };
+    }
+
+    return {
+      success: true,
+      ...jobResult,
+      meeting: jobResult.meeting || savedMeeting,
+      pendingMeeting: savedMeeting,
+    };
   }
 
   function registerIpc(ipcMain) {
@@ -828,6 +1707,46 @@ function createTranscriptionService(deps) {
       });
     });
 
+    ipcMain.handle('finalize-recording-transcription', async (event, options = {}) => {
+      assertTrustedRendererSender(event);
+      return finalizeRecordingTranscription(options || {});
+    });
+
+    ipcMain.handle('cancel-pending-transcription', async (event, options = {}) => {
+      assertTrustedRendererSender(event);
+      const meetingId = String((options && options.meetingId) || '').trim();
+      if (!meetingId) {
+        throw new Error('cancel-pending-transcription requires a meetingId');
+      }
+      const job = transcriptionQueueState.jobsByMeetingId.get(meetingId);
+      if (!job) {
+        // Refuse unknown meetings: a flag with no job would leak and make a
+        // future job for this meeting self-cancel.
+        return {
+          success: false,
+          cancelled: false,
+          code: 'NO_SUCH_JOB',
+          message: 'No queued transcription job exists for that meeting.',
+        };
+      }
+      markTranscriptionJobCancelled(transcriptionQueueState, meetingId);
+      if (job.status === QUEUE_JOB_STATUSES.queued) {
+        const updatedMeeting = await updateMeetingTranscriptionStatus(meetingId, {
+          status: 'failed',
+          transcriptionError: USER_CANCELLED_TRANSCRIPTION_ERROR,
+        });
+        upsertQueueJob(transcriptionQueueState, {
+          meetingId,
+          status: QUEUE_JOB_STATUSES.failed,
+          phase: QUEUE_JOB_PHASES.cancelled,
+        });
+        publishTranscriptionQueueState();
+        return { success: true, cancelled: true, meeting: updatedMeeting };
+      }
+      publishTranscriptionQueueState();
+      return { success: true, cancelled: true, active: job && job.status === QUEUE_JOB_STATUSES.active };
+    });
+
     ipcMain.handle('retry-transcription', async (event, options = {}) => {
       assertTrustedRendererSender(event);
 
@@ -836,219 +1755,33 @@ function createTranscriptionService(deps) {
         throw new Error('retry-transcription requires a meetingId');
       }
 
-      const recordingsDir = getRecordingsDir();
-      const meeting = await runWallClockComputeAction({
-        timeoutMs: AI_COMPUTE_TIMEOUT_MS.meetingPreflight,
-        label: 'Meeting lookup',
-        terminateProcess: terminateProcessBestEffort,
-        action: (registerProcess) => new Promise((resolve, reject) => {
-          const python = registerProcess(spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
-            '--recordings-dir', recordingsDir,
-            'get',
-            meetingId,
-          ]), { cwd: pythonConfig.backendPath }));
-          const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
-
-          python.on('close', (code) => {
-            try {
-              processOutput.assertStdoutWithinLimit();
-            } catch (error) {
-              reject(error);
-              return;
-            }
-            if (code !== 0) {
-              reject(new Error(processOutput.getStderr().trim() || 'Meeting not found.'));
-              return;
-            }
-            try {
-              resolve(JSON.parse(processOutput.getStdout()));
-            } catch (error) {
-              reject(new Error(`Failed to parse meeting details: ${error.message}`));
-            }
-          });
-          python.on('error', reject);
-        }),
-      });
-
+      const meeting = await lookupMeetingById(meetingId);
       if (!meeting || !meeting.audioPath || !meeting.transcriptPath) {
         throw new Error('Meeting is missing audio or transcript path.');
       }
 
       const normalizedModel = requireAllowedModelSize(options.modelSize || meeting.model || 'small');
       const normalizedLanguage = String(options.language || meeting.language || 'en');
-      const audioFile = assertSafeExistingRecordingAudioPath(meeting.audioPath);
-      const transcriptPath = assertSafeExistingTranscriptPath(meeting.transcriptPath);
-      const preferredSpeakerCount = String(options.speakerCount || '').trim();
-      let guidedDiarizationStatus = null;
-      let guidedDiarizationResult = null;
-      let guidedTranscriptionError = null;
+      assertSafeExistingRecordingAudioPath(meeting.audioPath);
+      assertSafeExistingTranscriptPath(meeting.transcriptPath);
 
-      const diarizationAvailability = getDiarizationAvailability(process.platform, process.arch);
-      if (diarizationAvailability.supported && diarizationAvailability.runtimeDevice) {
-        try {
-          const aiStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions());
-          const diarizationStatus = aiStatus && aiStatus.features && aiStatus.features.diarization;
-          const catalogModelRef = diarizationStatus ? getDiarizationModelRef(diarizationStatus.modelId) : null;
-          if (diarizationStatus && diarizationStatus.status === 'ready' && diarizationStatus.setupComplete && catalogModelRef) {
-            guidedDiarizationStatus = {
-              modelId: diarizationStatus.modelId,
-              speakerCount: diarizationStatus.speakerCount || 'auto',
-              modelRef: catalogModelRef,
-              requiredDevice: diarizationAvailability.runtimeDevice,
-            };
-          }
-        } catch (error) {
-          sendToRenderer(
-            'transcription-progress',
-            `Speaker identification status unavailable; continuing with normal retry transcription. ${error.message}\n`,
-          );
-        }
-      }
-
-      const result = await enqueueAiComputeAction(async () => {
-        await waitForGpuRuntimeBeforeCompute('Transcription retry');
-        return runWallClockComputeAction({
-        timeoutMs: guidedDiarizationStatus
-          ? getGuidedTranscriptionComputeTimeoutMs(normalizedModel)
-          : getTranscriptionComputeTimeoutMs(normalizedModel),
-        label: 'Transcription retry',
-        terminateProcess: terminateProcessBestEffort,
-        action: async (registerProcess) => {
-          if (guidedDiarizationStatus) {
-            try {
-              const tempTranscriptPath = buildGuidedTranscriptTempPath({ finalTranscriptPath: transcriptPath });
-              guidedDiarizationResult = await runGuidedTranscriptionProcess({
-                spawnProcess: spawnTrackedPython,
-                args: buildManagedDiarizationGuidedTranscriptionArgs({
-                  audioPath: audioFile,
-                  outputTranscript: tempTranscriptPath,
-                  language: normalizedLanguage,
-                  modelSize: normalizedModel,
-                  modelRef: guidedDiarizationStatus.modelRef,
-                  speakerCount: preferredSpeakerCount || guidedDiarizationStatus.speakerCount || 'auto',
-                  requiredDevice: guidedDiarizationStatus.requiredDevice,
-                }),
-                cwd: pythonConfig.backendPath,
-                env: {
-                  ...getDiarizationDependencyEnv(),
-                  ...getDiarizationCacheEnv(),
-                  ...getTranscriptionRuntimeEnv(normalizedModel, { includeManagedDiarization: true }),
-                  ...buildClearedHuggingFaceTokenEnv(),
-                },
-                finalTranscriptPath: transcriptPath,
-                tempTranscriptPath,
-                modelSize: normalizedModel,
-                fsPromises: fs.promises,
-                registerProcess,
-                terminateProcess: terminateProcessBestEffort,
-                summarizeError: summarizeDiarizationError,
-                onProgressLine: (line) => {
-                  const progressEvent = parseAiBackendProgressLine(line, 'diarization');
-                  if (progressEvent) {
-                    sendToRenderer('diarization-progress', progressEvent);
-                  } else if (line.trim()) {
-                    sendToRenderer('transcription-progress', `${redactSensitiveText(line)}\n`);
-                  }
-                },
-              });
-              return guidedDiarizationResult;
-            } catch (error) {
-              guidedTranscriptionError = error;
-              sendToRenderer(
-                'transcription-progress',
-                `Speaker-guided transcription failed; retrying with standard transcription. ${error.message}\n`,
-              );
-            }
-          }
-
-          const shouldPreemptiveCpuRetry = await shouldPreemptiveCpuAtJobStart(registerProcess);
-          if (shouldPreemptiveCpuRetry) {
-            sendToRenderer(
-              'transcription-progress',
-              'CUDA runtime is not loadable on this system. Starting transcription retry on CPU.\n',
-            );
-          }
-          try {
-            return await runTranscriptionProcess({
-              audioFile,
-              language: normalizedLanguage,
-              modelSize: normalizedModel,
-              device: shouldPreemptiveCpuRetry ? 'cpu' : 'auto',
-              registerProcess,
-            });
-          } catch (error) {
-            if (!isRetryableCudaTranscriptionError(error && error.message)) {
-              throw error;
-            }
-            sendToRenderer(
-              'transcription-progress',
-              'GPU transcription failed because CUDA runtime libraries could not be loaded. Retrying on CPU; this may take significantly longer.\n',
-            );
-            return runTranscriptionProcess({
-              audioFile,
-              language: normalizedLanguage,
-              modelSize: normalizedModel,
-              device: 'cpu',
-              registerProcess,
-            });
-          }
-        },
-        });
+      upsertQueueJob(transcriptionQueueState, {
+        meetingId,
+        status: QUEUE_JOB_STATUSES.queued,
+        phase: QUEUE_JOB_PHASES.queued,
+        title: meeting.title || '',
+        durationSeconds: Number(meeting.duration) || 0,
       });
+      publishTranscriptionQueueState();
 
-      const transcribedPath = assertSafeExistingTranscriptPath(result.output_file || transcriptPath);
-      if (path.resolve(transcribedPath) !== path.resolve(transcriptPath)) {
-        const transcriptContent = await fs.promises.readFile(transcribedPath, 'utf8');
-        await fs.promises.writeFile(transcriptPath, transcriptContent, 'utf8');
-      }
-
-      const updatedMeeting = await new Promise((resolve, reject) => {
-        const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
-          '--recordings-dir', recordingsDir,
-          'update-transcription',
-          meetingId,
-          '--status', 'completed',
-          '--language', normalizedLanguage,
-          '--model', normalizedModel,
-          '--duration', String(result.duration || 0),
-          ...(result.transcriptionDevice || result.device
-            ? ['--device', String(result.transcriptionDevice || result.device)]
-            : []),
-          ...(result.transcriptionComputeType || result.computeType
-            ? ['--compute-type', String(result.transcriptionComputeType || result.computeType)]
-            : []),
-          '--clear-error',
-        ]), { cwd: pythonConfig.backendPath });
-        const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
-        python.on('close', (code) => {
-          try {
-            processOutput.assertStdoutWithinLimit();
-          } catch (error) {
-            reject(error);
-            return;
-          }
-          if (code !== 0) {
-            reject(new Error(processOutput.getStderr().trim() || 'Failed to update meeting status.'));
-            return;
-          }
-          try {
-            resolve(JSON.parse(processOutput.getStdout()));
-          } catch (error) {
-            reject(new Error(`Failed to parse updated meeting: ${error.message}`));
-          }
-        });
-        python.on('error', reject);
+      return runMeetingTranscriptionJob({
+        meetingId,
+        language: normalizedLanguage,
+        modelSize: normalizedModel,
+        speakerCount: options.speakerCount,
+        clearPriorDiarization: true,
+        jobLabel: 'Transcription retry',
       });
-
-      return {
-        ...result,
-        output_file: transcriptPath,
-        transcriptPath,
-        diarization: guidedDiarizationResult,
-        diarizationStatus: guidedDiarizationStatus,
-        diarizationError: guidedTranscriptionError ? guidedTranscriptionError.message : null,
-        meeting: updatedMeeting,
-      };
     });
   }
 
@@ -1064,6 +1797,9 @@ function createTranscriptionService(deps) {
     buildManagedDiarizationGuidedTranscriptionArgs,
     runTranscriptionProcess,
     cleanupGuidedTranscriptTempFiles,
+    runMeetingTranscriptionJob,
+    finalizeRecordingTranscription,
+    publishTranscriptionQueueState,
     registerIpc,
   };
 }
