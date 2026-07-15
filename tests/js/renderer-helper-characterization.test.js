@@ -40,6 +40,7 @@ const INDEX_HTML = path.join(ROOT, 'src', 'renderer', 'index.html');
 
 const EXPECTED_RENDERER_GLOBALS = [
   'recordingStateHelpers',
+  'transcriptionActivityHelpers',
   'recoveryUiHelpers',
   'updateNotificationHelpers',
   'historyDetailHelpers',
@@ -54,6 +55,7 @@ const EXPECTED_RENDERER_GLOBALS = [
 
 const EXPECTED_SCRIPT_ORDER = [
   'recording-state-helpers.js',
+  'transcription-activity-helpers.js',
   'recovery-ui-helpers.js',
   'update-notification-helpers.js',
   'history-detail-helpers.js',
@@ -82,6 +84,9 @@ const EXTRACTED_PURE_HELPER_NAMES = [
   'meetingIdsEqual',
   'isGpuRuntimeActionBusyError',
   'roundedBar',
+  'getIdleStatusPillText',
+  'buildActivityRows',
+  'buildResumePendingBannerView',
 ];
 
 test('recording-state-helpers remain characterized for record-button gating', () => {

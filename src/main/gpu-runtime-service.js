@@ -43,6 +43,8 @@ const {
  * @param {Function} deps.getDiarizationDependencySitePackagesPath
  * @param {Function} [deps.waitForAiComputeQueueIdle]
  * @param {Function} [deps.hasPendingAiComputeWork]
+ * @param {Function} [deps.getBusyTranscriptionJobCount]
+ * @param {Function} [deps.formatQueuedTranscriptionBusyMessage]
  * @param {Function} [deps.enqueueGpuResourceAction]
  */
 function createGpuRuntimeService(deps) {
@@ -62,6 +64,10 @@ function createGpuRuntimeService(deps) {
     getDiarizationDependencySitePackagesPath,
     waitForAiComputeQueueIdle = async () => {},
     hasPendingAiComputeWork = () => false,
+    getBusyTranscriptionJobCount = () => 0,
+    formatQueuedTranscriptionBusyMessage = (count, action) => (
+      `Local AI work is still running. Finish or cancel it before ${action}.`
+    ),
     enqueueGpuResourceAction = (action) => action(),
   } = deps;
 
@@ -161,29 +167,15 @@ function createGpuRuntimeService(deps) {
     }
 
     // Reject immediately when compute is busy so pip cannot race loaded CUDA DLLs.
-    // Also bound-wait in case a short job is finishing (mirrors download-model).
+    // With a real transcription queue, a 15-minute idle wait is routinely exceedable (PR2).
     if (hasPendingAiComputeWork()) {
-      try {
-        await waitForAiComputeQueueIdle({
-          timeoutMs: AI_COMPUTE_TIMEOUT_MS.gpuRuntimeComputeIdleWait,
-          timeoutMessage: 'Timed out waiting for local AI work to finish before changing the GPU runtime. Try again when transcription is idle.',
-        });
-      } catch (error) {
-        const busyError = new Error(
-          error && error.message
-            ? error.message
-            : 'Local AI work is still running. Wait for transcription to finish before installing or repairing the GPU runtime.',
-        );
-        busyError.code = 'GPU_RUNTIME_COMPUTE_BUSY';
-        throw busyError;
-      }
-      if (hasPendingAiComputeWork()) {
-        const busyError = new Error(
-          'Local AI work is still running. Wait for transcription to finish before installing or repairing the GPU runtime.',
-        );
-        busyError.code = 'GPU_RUNTIME_COMPUTE_BUSY';
-        throw busyError;
-      }
+      const busyCount = getBusyTranscriptionJobCount();
+      const busyError = new Error(formatQueuedTranscriptionBusyMessage(
+        busyCount,
+        'installing or repairing the GPU runtime',
+      ));
+      busyError.code = 'GPU_RUNTIME_COMPUTE_BUSY';
+      throw busyError;
     }
 
     if (gpuRuntimeActionPromise) {

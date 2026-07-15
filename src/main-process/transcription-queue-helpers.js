@@ -117,6 +117,49 @@ function shouldSkipJobAtHead({ isQuitCommitted = false, isCancelled = false } = 
   return Boolean(isQuitCommitted) || Boolean(isCancelled);
 }
 
+const SESSION_READY_JOB_CAP = 5;
+
+function countBusyTranscriptionJobs(state) {
+  let count = 0;
+  for (const meetingId of state.jobOrder) {
+    const job = state.jobsByMeetingId.get(meetingId);
+    if (!job) {
+      continue;
+    }
+    if (job.status === QUEUE_JOB_STATUSES.queued || job.status === QUEUE_JOB_STATUSES.active) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+/**
+ * Keep only the newest session-only Ready rows (cap) so Home Activity stays lean.
+ */
+function trimSessionReadyJobs(state, maxReady = SESSION_READY_JOB_CAP) {
+  const readyIds = state.jobOrder.filter((meetingId) => {
+    const job = state.jobsByMeetingId.get(meetingId);
+    return job && job.status === QUEUE_JOB_STATUSES.ready;
+  });
+  const overflow = readyIds.length - Math.max(0, Number(maxReady) || 0);
+  if (overflow <= 0) {
+    return 0;
+  }
+  // jobOrder is enqueue order; oldest Ready entries are first among readyIds.
+  const toRemove = readyIds.slice(0, overflow);
+  toRemove.forEach((meetingId) => removeQueueJob(state, meetingId));
+  return toRemove.length;
+}
+
+function formatQueuedTranscriptionBusyMessage(queuedCount, actionLabel = 'continuing') {
+  const count = Math.max(0, Number(queuedCount) || 0);
+  if (count <= 0) {
+    return `Local AI work is still running. Finish or cancel it before ${actionLabel}.`;
+  }
+  const noun = count === 1 ? 'recording is' : 'recordings are';
+  return `${count} ${noun} queued for transcription — finish or cancel them before ${actionLabel}.`;
+}
+
 function buildTranscriptionQueueStatePayload(state) {
   const jobs = state.jobOrder
     .map((meetingId) => state.jobsByMeetingId.get(meetingId))
@@ -132,6 +175,7 @@ function buildTranscriptionQueueStatePayload(state) {
   return {
     jobs,
     activeMeetingId: state.activeMeetingId,
+    busyCount: countBusyTranscriptionJobs(state),
   };
 }
 
@@ -226,6 +270,7 @@ function buildGuidedDiarizationAiMetadata({
 module.exports = {
   TRANSCRIPTION_QUEUE_STATE_CHANNEL,
   USER_CANCELLED_TRANSCRIPTION_ERROR,
+  SESSION_READY_JOB_CAP,
   QUEUE_JOB_STATUSES,
   QUEUE_JOB_PHASES,
   createTranscriptionQueueState,
@@ -236,6 +281,9 @@ module.exports = {
   isTranscriptionJobCancelled,
   clearTranscriptionJobCancelFlag,
   shouldSkipJobAtHead,
+  countBusyTranscriptionJobs,
+  trimSessionReadyJobs,
+  formatQueuedTranscriptionBusyMessage,
   buildTranscriptionQueueStatePayload,
   formatTranscriptSegmentTimestamp,
   buildMeetingTranscriptMarkdown,

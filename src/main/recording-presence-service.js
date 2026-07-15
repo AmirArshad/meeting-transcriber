@@ -89,7 +89,11 @@ function isActiveCaptureState(state) {
  *   keepRecordingAction: 'minimize'|'hide',
  * }}
  */
-function buildWindowCloseDialogOptions(captureState, platform = process.platform) {
+function buildWindowCloseDialogOptions(
+  captureState,
+  platform = process.platform,
+  { pendingTranscriptionCount = 0 } = {},
+) {
   const state = captureState?.state || 'idle';
 
   if (isActiveCaptureState(state)) {
@@ -112,6 +116,21 @@ function buildWindowCloseDialogOptions(captureState, platform = process.platform
       message: 'AvaNevis is still recording.',
       detail: 'Keep recording in the menu bar, or stop and quit.',
       buttons: ['Keep Recording in Menu Bar', 'Stop and Quit', 'Cancel'],
+      defaultId: 0,
+      cancelId: 2,
+      keepRecordingAction: 'hide',
+    };
+  }
+
+  const pendingCount = Math.max(0, Number(pendingTranscriptionCount) || 0);
+  if (pendingCount > 0) {
+    const noun = pendingCount === 1 ? 'recording' : 'recordings';
+    return {
+      type: 'question',
+      title: 'Minimize to Tray',
+      message: 'Would you like to close the app or minimize it to the system tray?',
+      detail: `${pendingCount} ${noun} will finish transcribing next time you open AvaNevis. Minimizing keeps the app running in the background.`,
+      buttons: ['Minimize to Tray', 'Close App', 'Cancel'],
       defaultId: 0,
       cancelId: 2,
       keepRecordingAction: 'hide',

@@ -20,6 +20,10 @@ const {
   buildMeetingTranscriptMarkdown,
   buildSpeakerSidecarPayload,
   buildGuidedDiarizationAiMetadata,
+  countBusyTranscriptionJobs,
+  trimSessionReadyJobs,
+  formatQueuedTranscriptionBusyMessage,
+  SESSION_READY_JOB_CAP,
 } = require('../../src/main-process/transcription-queue-helpers');
 
 test('queue state channel and cancel copy stay pinned', () => {
@@ -34,7 +38,7 @@ test('shouldSkipJobAtHead gates quit and cancel', () => {
   assert.equal(shouldSkipJobAtHead({ isQuitCommitted: true, isCancelled: true }), true);
 });
 
-test('queue upsert/publish payload tracks active meeting and order', () => {
+test('queue upsert/publish payload tracks active meeting, order, and busyCount', () => {
   const state = createTranscriptionQueueState();
   upsertQueueJob(state, {
     meetingId: 'meeting_a',
@@ -58,6 +62,7 @@ test('queue upsert/publish payload tracks active meeting and order', () => {
 
   const payload = buildTranscriptionQueueStatePayload(state);
   assert.equal(payload.activeMeetingId, 'meeting_a');
+  assert.equal(payload.busyCount, 2);
   assert.equal(payload.jobs.length, 2);
   assert.equal(payload.jobs[0].meetingId, 'meeting_a');
   assert.equal(payload.jobs[0].status, 'active');
@@ -144,4 +149,27 @@ test('sidecar and AI metadata helpers shape durable diarization fields', () => {
   });
   assert.equal(failed.status, 'error');
   assert.equal(failed.error, 'boom');
+});
+
+test('countBusyTranscriptionJobs and trimSessionReadyJobs keep Activity lean', () => {
+  const state = createTranscriptionQueueState();
+  for (let i = 0; i < SESSION_READY_JOB_CAP + 3; i += 1) {
+    upsertQueueJob(state, {
+      meetingId: `ready_${i}`,
+      status: QUEUE_JOB_STATUSES.ready,
+      phase: QUEUE_JOB_PHASES.completed,
+    });
+  }
+  upsertQueueJob(state, {
+    meetingId: 'busy',
+    status: QUEUE_JOB_STATUSES.active,
+    phase: QUEUE_JOB_PHASES.transcribing,
+  });
+  assert.equal(countBusyTranscriptionJobs(state), 1);
+  assert.equal(trimSessionReadyJobs(state), 3);
+  assert.equal(
+    [...state.jobsByMeetingId.values()].filter((job) => job.status === QUEUE_JOB_STATUSES.ready).length,
+    SESSION_READY_JOB_CAP,
+  );
+  assert.match(formatQueuedTranscriptionBusyMessage(2, 'installing'), /2 recordings are queued/);
 });

@@ -61,8 +61,12 @@ test('download-model and AI add-on setup handlers stay off the compute queue', (
   const downloadModelSource = extractIpcHandlerSource(combined, 'download-model');
   assert.match(
     downloadModelSource,
-    /waitForAiComputeQueueIdle/,
-    'download-model must wait for compute-queue idle before spawning preload',
+    /MODEL_DOWNLOAD_COMPUTE_BUSY|formatQueuedTranscriptionBusyMessage|hasPendingAiComputeWork/,
+    'download-model must fail fast when compute queue is busy',
+  );
+  assert.ok(
+    !/waitForAiComputeQueueIdle/.test(downloadModelSource),
+    'download-model must not use the 15-minute compute idle wait (PR2 fail-fast)',
   );
   assert.match(
     downloadModelSource,
@@ -129,8 +133,7 @@ test('addon validation and guided transcription wall-clock wrappers appear in so
   assert.match(combined, /Speaker identification validation/);
   assert.match(combined, /Summary model validation/);
   assert.match(combined, /getGuidedTranscriptionComputeTimeoutMs/);
-  assert.match(combined, /waitForAiComputeQueueIdle/);
-  assert.match(combined, /GPU_RUNTIME_COMPUTE_BUSY|gpuRuntimeComputeIdleWait/);
+  assert.match(combined, /GPU_RUNTIME_COMPUTE_BUSY|formatQueuedTranscriptionBusyMessage/);
   assert.ok(diarizationValidate);
 });
 

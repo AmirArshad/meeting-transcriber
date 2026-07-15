@@ -9,6 +9,14 @@ const AI_ADDON_PROGRESS_LOG_INTERVAL_MS = 1000;
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const { getRecordButtonAction, getRecordingPresenceView, canHydratedRendererStopRecording } = window.recordingStateHelpers;
 const {
+  getIdleStatusPillText,
+  getRecordButtonLabel,
+  buildResumePendingBannerView,
+  countResumablePendingMeetings,
+  buildActivityRows,
+  getActivityEmptyStateText,
+} = window.transcriptionActivityHelpers;
+const {
   getRecoveryPromptView,
   getRecoveryBannerView,
   mergeClaimedPromptIntoState,
@@ -58,8 +66,6 @@ const languageSelect = document.getElementById('language-select');
 const modelSelect = document.getElementById('model-select');
 const refreshBtn = document.getElementById('refresh-devices');
 const recordBtn = document.getElementById('record-btn');
-const copyBtn = document.getElementById('copy-btn');
-const saveBtn = document.getElementById('save-btn');
 const statusIndicator = document.getElementById('status-indicator');
 const statusText = document.getElementById('status-text');
 const timer = document.getElementById('timer');
@@ -80,15 +86,20 @@ const recoveryModalFooter = document.getElementById('recording-recovery-footer')
 const recoveryModalNowBtn = document.getElementById('recording-recovery-now-btn');
 const recoveryModalLaterBtn = document.getElementById('recording-recovery-later-btn');
 const progressLog = document.getElementById('progress-log');
-const transcriptOutput = document.getElementById('transcript-output');
-const transcriptActions = document.getElementById('transcript-actions');
+const activityListEl = document.getElementById('activity-list');
+const resumePendingBannerEl = document.getElementById('resume-pending-banner');
+const resumePendingBannerText = document.getElementById('resume-pending-banner-text');
+const resumePendingBtn = document.getElementById('resume-pending-btn');
 const meetingList = document.getElementById('meeting-list');
 const meetingDetails = document.getElementById('meeting-details');
 const refreshHistory = document.getElementById('refresh-history');
 const deleteMeeting = document.getElementById('delete-meeting');
 
 // State
-let recordingState = 'idle'; // idle, starting, recording, stopping, transcribing, countdown
+let recordingState = 'idle'; // idle, starting, recording, stopping, countdown (transcribing no longer blocks capture)
+let lastStopProgressMessage = '';
+let transcriptionQueueState = { jobs: [], activeMeetingId: null, busyCount: 0 };
+let activityActionBusyMeetingId = null;
 let countdownValue = 3;
 let recordingStartTime = null;
 let activeRecordingSessionId = null;
@@ -623,7 +634,230 @@ function createMeetingListItem(meeting) {
 }
 
 function setTranscriptMessage(message, isError = false) {
-  setPlaceholder(transcriptOutput, message, isError ? 'placeholder error' : 'placeholder');
+  // Home Activity replaced the inline transcript panel; keep messages in the log.
+  addLog(message, isError ? 'error' : 'info');
+}
+
+function refreshIdleStatusPill() {
+  if (recordingState !== 'idle') {
+    return;
+  }
+  statusIndicator.classList.remove('recording');
+  statusText.textContent = getIdleStatusPillText(transcriptionQueueState);
+}
+
+function updateResumePendingBanner() {
+  if (!resumePendingBannerEl || !resumePendingBtn) {
+    return;
+  }
+  const count = countResumablePendingMeetings(meetings, transcriptionQueueState);
+  const view = buildResumePendingBannerView(count);
+  resumePendingBannerEl.style.display = view.visible ? 'flex' : 'none';
+  if (resumePendingBannerText) {
+    resumePendingBannerText.textContent = view.label;
+  }
+  resumePendingBtn.textContent = view.buttonLabel || 'Resume pending transcriptions';
+  resumePendingBtn.disabled = !view.visible || recordingState === 'recording'
+    || recordingState === 'starting' || recordingState === 'stopping';
+}
+
+function renderActivityList() {
+  if (!activityListEl) {
+    return;
+  }
+  const rows = buildActivityRows({
+    queueState: transcriptionQueueState,
+    meetings,
+  });
+  clearElement(activityListEl);
+  if (!rows.length) {
+    const empty = document.createElement('p');
+    empty.className = 'placeholder';
+    empty.id = 'activity-empty';
+    empty.textContent = getActivityEmptyStateText();
+    activityListEl.appendChild(empty);
+    updateResumePendingBanner();
+    refreshIdleStatusPill();
+    return;
+  }
+
+  rows.forEach((row) => {
+    const item = document.createElement('div');
+    item.className = 'activity-row';
+    item.setAttribute('role', 'listitem');
+    item.dataset.meetingId = row.meetingId;
+    if (row.status === 'active') item.classList.add('is-active');
+    if (row.status === 'failed' || row.status === 'cancelled') item.classList.add('is-failed');
+    if (row.status === 'ready') item.classList.add('is-ready');
+
+    const main = document.createElement('div');
+    main.className = 'activity-row-main';
+
+    const title = document.createElement('div');
+    title.className = 'activity-row-title';
+    title.textContent = row.title;
+    main.appendChild(title);
+
+    const meta = document.createElement('div');
+    meta.className = 'activity-row-meta';
+    const chip = document.createElement('span');
+    chip.className = `activity-chip ${row.status === 'active' ? (row.phase || 'transcribing') : row.status}`;
+    chip.textContent = row.chip;
+    meta.appendChild(chip);
+    if (row.durationLabel) {
+      const duration = document.createElement('span');
+      duration.className = 'activity-row-duration';
+      duration.textContent = row.durationLabel;
+      meta.appendChild(duration);
+    }
+    main.appendChild(meta);
+    item.appendChild(main);
+
+    const actions = document.createElement('div');
+    actions.className = 'activity-row-actions';
+    const busy = activityActionBusyMeetingId === row.meetingId;
+
+    if (row.actions.includes('cancel')) {
+      const cancelBtn = document.createElement('button');
+      cancelBtn.type = 'button';
+      cancelBtn.className = 'btn btn-small';
+      cancelBtn.textContent = busy ? 'Cancelling…' : 'Cancel';
+      cancelBtn.disabled = busy;
+      cancelBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        void cancelActivityTranscription(row.meetingId);
+      });
+      actions.appendChild(cancelBtn);
+    }
+    if (row.actions.includes('retry')) {
+      const retryBtn = document.createElement('button');
+      retryBtn.type = 'button';
+      retryBtn.className = 'btn btn-small btn-primary';
+      retryBtn.textContent = busy ? 'Retrying…' : 'Retry';
+      retryBtn.disabled = busy;
+      retryBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        void retryActivityTranscription(row.meetingId);
+      });
+      actions.appendChild(retryBtn);
+    }
+    if (row.actions.includes('open')) {
+      const openBtn = document.createElement('button');
+      openBtn.type = 'button';
+      openBtn.className = 'btn btn-small';
+      openBtn.textContent = 'Open in History';
+      openBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        openMeetingInHistory(row.meetingId);
+      });
+      actions.appendChild(openBtn);
+    }
+    item.appendChild(actions);
+
+    if (row.actions.includes('open') && !row.actions.includes('cancel')) {
+      item.style.cursor = 'pointer';
+      item.addEventListener('click', () => openMeetingInHistory(row.meetingId));
+    }
+
+    activityListEl.appendChild(item);
+  });
+
+  updateResumePendingBanner();
+  refreshIdleStatusPill();
+}
+
+function applyTranscriptionQueueState(payload) {
+  transcriptionQueueState = {
+    jobs: Array.isArray(payload && payload.jobs) ? payload.jobs : [],
+    activeMeetingId: payload && payload.activeMeetingId ? String(payload.activeMeetingId) : null,
+    busyCount: Number(payload && payload.busyCount) || 0,
+  };
+  renderActivityList();
+}
+
+function openMeetingInHistory(meetingId) {
+  activateTab('history');
+  void selectMeeting(meetingId);
+}
+
+async function cancelActivityTranscription(meetingId) {
+  const id = String(meetingId || '').trim();
+  if (!id || activityActionBusyMeetingId) {
+    return;
+  }
+  activityActionBusyMeetingId = id;
+  renderActivityList();
+  try {
+    const result = await window.electronAPI.cancelPendingTranscription({ meetingId: id });
+    if (!result || result.success === false) {
+      addLog((result && result.message) || 'Could not cancel transcription.', 'warning');
+    } else {
+      addLog('Transcription cancelled.', 'warning');
+    }
+    await loadMeetingHistory();
+  } catch (error) {
+    addLog(`Cancel failed: ${error.message}`, 'error');
+  } finally {
+    activityActionBusyMeetingId = null;
+    renderActivityList();
+  }
+}
+
+async function retryActivityTranscription(meetingId) {
+  const id = String(meetingId || '').trim();
+  if (!id || activityActionBusyMeetingId) {
+    return;
+  }
+  activityActionBusyMeetingId = id;
+  renderActivityList();
+  addLog(`Retrying transcription for ${id}...`);
+  try {
+    // Fire-and-forget from Home: do not block Start. Retry IPC still awaits in main;
+    // we intentionally do not await here beyond enqueue acknowledgment if available.
+    const resultPromise = window.electronAPI.retryTranscription({
+      meetingId: id,
+      language: languageSelect.value,
+      modelSize: modelSelect.value,
+    });
+    // Mark busy briefly then clear so Start stays usable; queue-state drives chips.
+    activityActionBusyMeetingId = null;
+    renderActivityList();
+    const result = await resultPromise;
+    if (result && result.meeting) {
+      syncMeetingInList(result.meeting);
+    }
+    await loadMeetingHistory();
+    addLog('Transcription retry completed.');
+  } catch (error) {
+    addLog(`Retry failed: ${error.message}`, 'error');
+    await loadMeetingHistory().catch(() => {});
+  } finally {
+    activityActionBusyMeetingId = null;
+    renderActivityList();
+  }
+}
+
+async function resumePendingTranscriptionsFromBanner() {
+  if (!resumePendingBtn) {
+    return;
+  }
+  resumePendingBtn.disabled = true;
+  resumePendingBtn.textContent = 'Resuming…';
+  try {
+    const result = await window.electronAPI.resumePendingTranscriptions({
+      language: languageSelect.value,
+      modelSize: modelSelect.value,
+    });
+    const count = result && result.enqueuedCount ? result.enqueuedCount : 0;
+    addLog(count
+      ? `Resumed ${count} pending transcription${count === 1 ? '' : 's'}.`
+      : 'No pending transcriptions to resume.');
+    await loadMeetingHistory();
+  } catch (error) {
+    addLog(`Resume failed: ${error.message}`, 'error');
+  } finally {
+    updateResumePendingBanner();
+  }
 }
 
 function setMeetingAudioSource(audioPath) {
@@ -766,7 +1000,6 @@ function getSummaryButtonMeetingId(button) {
 
 function getSummaryGenerationButtons() {
   return [
-    document.getElementById('generate-current-summary-btn'),
     document.getElementById('generate-summary-btn'),
     document.getElementById('regenerate-summary-btn'),
   ].filter(Boolean);
@@ -1065,8 +1298,19 @@ async function init() {
     }
     await ensureRecordingHydration();
 
-    // Step 4: Load meeting history
+    // Step 4: Load meeting history + Activity queue snapshot
     await loadMeetingHistory({ scan: true });
+    if (typeof window.electronAPI.getTranscriptionQueueState === 'function') {
+      try {
+        const queueState = await window.electronAPI.getTranscriptionQueueState();
+        applyTranscriptionQueueState(queueState);
+      } catch (queueError) {
+        console.warn('Could not load transcription queue state:', queueError);
+        renderActivityList();
+      }
+    } else {
+      renderActivityList();
+    }
 
     if (startupCudaCheckPromise) {
       await startupCudaCheckPromise;
@@ -1078,7 +1322,7 @@ async function init() {
 
     if (recordingState === 'idle') {
       addLog('Ready to record!');
-      statusText.textContent = 'Ready';
+      refreshIdleStatusPill();
     }
     console.log('App initialized');
 
@@ -1273,10 +1517,12 @@ async function loadMeetingHistory({ scan = false } = {}) {
     // Load the meeting list
     meetings = await window.electronAPI.listMeetings();
     renderMeetingList();
+    renderActivityList();
   } catch (error) {
     console.error('Failed to load meeting history:', error);
     meetings = [];
     renderMeetingList();
+    renderActivityList();
   }
 }
 
@@ -1532,29 +1778,9 @@ async function selectMeeting(meetingId) {
 // Inline rename: meeting title (history detail + post-recording transcript)
 // ============================================================================
 
-// Reflects currentRecordingMeeting onto the post-recording transcript card.
-// When no meeting has been saved yet, the heading reads "Transcript" and the
-// pencil button is hidden. After save, it shows the meeting label and lets
-// the user rename it in place.
+// Reflects currentRecordingMeeting (kept for summary/history sync after enqueue).
 function applyCurrentRecordingTitle() {
-  const heading = document.getElementById('current-meeting-title');
-  const editBtn = document.getElementById('current-meeting-title-edit');
-  if (!heading) return;
-
-  closeInlineTitleEditor({
-    headingId: 'current-meeting-title',
-    editBtnId: 'current-meeting-title-edit',
-    formId: 'current-meeting-title-form',
-    editBtnDisplay: currentRecordingMeeting && currentRecordingMeeting.title ? 'inline-flex' : 'none',
-  });
-
-  if (currentRecordingMeeting && currentRecordingMeeting.title) {
-    heading.textContent = currentRecordingMeeting.title;
-    if (editBtn) editBtn.style.display = 'inline-flex';
-  } else {
-    heading.textContent = 'Transcript';
-    if (editBtn) editBtn.style.display = 'none';
-  }
+  // Home Activity replaced the post-recording transcript title card.
 }
 
 // Wires an inline-rename UI for a heading + pencil button + form trio.
@@ -1670,31 +1896,8 @@ function setupTitleEditors() {
         meetings[idx] = { ...meetings[idx], title: updated.title };
       }
       renderMeetingList();
-      // Mirror onto the post-recording card if the same meeting is shown there
       if (currentRecordingMeeting && meetingIdsEqual(currentRecordingMeeting.id, updated.id)) {
         currentRecordingMeeting = { ...currentRecordingMeeting, title: updated.title };
-        applyCurrentRecordingTitle();
-      }
-    },
-  });
-
-  // Post-recording transcript card
-  wireInlineTitleEditor({
-    rowId: 'current-transcript-title-row',
-    headingId: 'current-meeting-title',
-    editBtnId: 'current-meeting-title-edit',
-    formId: 'current-meeting-title-form',
-    inputId: 'current-meeting-title-input',
-    cancelBtnId: 'current-meeting-title-cancel',
-    getMeeting: () => currentRecordingMeeting,
-    onSaved: (updated) => {
-      currentRecordingMeeting = { ...currentRecordingMeeting, title: updated.title };
-      applyCurrentRecordingTitle();
-      // Also update the cached history list so the sidebar reflects the change
-      const idx = findMeetingIndexById(updated.id);
-      if (idx !== -1) {
-        meetings[idx] = { ...meetings[idx], title: updated.title };
-        renderMeetingList();
       }
     },
   });
@@ -1718,8 +1921,11 @@ function setupEventListeners() {
     loadMeetingHistory({ scan: true });
   });
   recordBtn.addEventListener('click', handleRecordButtonClick);
-  copyBtn.addEventListener('click', copyTranscript);
-  saveBtn.addEventListener('click', saveTranscript);
+  if (resumePendingBtn) {
+    resumePendingBtn.addEventListener('click', () => {
+      void resumePendingTranscriptionsFromBanner();
+    });
+  }
   if (deleteMeeting) {
     deleteMeeting.addEventListener('click', () => deleteMeetingHandler(currentMeetingId));
   }
@@ -1739,11 +1945,6 @@ function setupEventListeners() {
   const retryTranscriptionBtn = document.getElementById('retry-transcription-btn');
   if (retryTranscriptionBtn) {
     retryTranscriptionBtn.addEventListener('click', retryMeetingTranscription);
-  }
-
-  const generateCurrentSummaryBtn = document.getElementById('generate-current-summary-btn');
-  if (generateCurrentSummaryBtn) {
-    generateCurrentSummaryBtn.addEventListener('click', () => handleSummaryGenerationButtonClick(currentRecordingMeeting && currentRecordingMeeting.id, generateCurrentSummaryBtn));
   }
 
   const generateSummaryBtn = document.getElementById('generate-summary-btn');
@@ -1816,14 +2017,13 @@ function setupEventListeners() {
 
     addLog(message);
 
-    // Update status text during post-processing (stopping state)
+    // Update status + button honesty during post-processing (stopping state)
     if (recordingState === 'stopping') {
-      if (message.includes('Resampling')) {
-        statusText.textContent = 'Processing: Resampling audio...';
-      } else if (message.includes('noise reduction')) {
-        statusText.textContent = 'Processing: Applying noise reduction...';
-      } else if (message.includes('Mixing')) {
-        statusText.textContent = 'Processing: Mixing audio tracks...';
+      lastStopProgressMessage = message;
+      statusText.textContent = message;
+      const textEl = recordBtn && recordBtn.querySelector('.button-text');
+      if (textEl) {
+        textEl.textContent = getRecordButtonLabel('stopping', message);
       }
     }
   }));
@@ -1835,7 +2035,9 @@ function setupEventListeners() {
         return;
       }
       addLog(message);
-      statusText.textContent = message;
+      if (recordingState === 'idle' || recordingState === 'stopping') {
+        statusText.textContent = message;
+      }
     }));
   }
 
@@ -1868,8 +2070,31 @@ function setupEventListeners() {
   }));
 
   registerCleanup(window.electronAPI.onTranscriptionProgress((data) => {
-    addLog(data);
+    // Payload remains a raw string (IPC contract). Attribute via activeMeetingId.
+    const activeId = transcriptionQueueState.activeMeetingId;
+    if (activeId) {
+      addLog(`[${activeId}] ${data}`);
+    } else {
+      addLog(data);
+    }
   }));
+
+  if (typeof window.electronAPI.onTranscriptionQueueState === 'function') {
+    registerCleanup(window.electronAPI.onTranscriptionQueueState((payload) => {
+      applyTranscriptionQueueState(payload);
+      // Refresh history when jobs reach a terminal state so History badges stay current.
+      const jobs = payload && Array.isArray(payload.jobs) ? payload.jobs : [];
+      const terminal = jobs.some((job) => {
+        const status = String(job && job.status || '');
+        return status === 'ready' || status === 'failed' || status === 'cancelled';
+      });
+      if (terminal) {
+        loadMeetingHistory().catch((error) => {
+          console.warn('Could not refresh history after queue-state update:', error);
+        });
+      }
+    }));
+  }
 
   if (window.electronAPI.onDiarizationProgress) {
     registerCleanup(window.electronAPI.onDiarizationProgress((progress) => {
@@ -1923,8 +2148,8 @@ function setupEventListeners() {
       return;
     }
 
-    if (recordingState === 'stopping' || recordingState === 'transcribing') {
-      console.warn('Ignoring recording failure during stop/transcribe flow:', failure);
+    if (recordingState === 'stopping') {
+      console.warn('Ignoring recording failure during stop flow:', failure);
       return;
     }
 
@@ -2350,7 +2575,7 @@ function updateButtonUI() {
       button.classList.add('processing');
       button.disabled = true;
       icon.textContent = '⏳';
-      text.textContent = 'Initializing...';
+      text.textContent = getRecordButtonLabel('initializing') || 'Initializing...';
       statusIndicator.classList.remove('recording');
       statusText.textContent = 'Initializing...';
       break;
@@ -2359,7 +2584,7 @@ function updateButtonUI() {
       button.classList.add('processing');
       button.disabled = true;
       icon.textContent = '⏳';
-      text.textContent = 'Starting...';
+      text.textContent = getRecordButtonLabel('starting') || 'Starting...';
       statusIndicator.classList.remove('recording');
       statusText.textContent = 'Running checks...';
       break;
@@ -2368,36 +2593,28 @@ function updateButtonUI() {
       button.classList.add('idle');
       button.disabled = false;
       icon.textContent = '▶';
-      text.textContent = 'Start Recording';
+      text.textContent = getRecordButtonLabel('idle');
       statusIndicator.classList.remove('recording');
-      statusText.textContent = 'Ready';
+      statusText.textContent = getIdleStatusPillText(transcriptionQueueState);
       break;
 
     case 'recording':
       button.classList.add('recording');
       button.disabled = false;
       icon.textContent = '■';
-      text.textContent = 'Stop & Transcribe';
+      text.textContent = getRecordButtonLabel('recording');
       statusIndicator.classList.add('recording');
       statusText.textContent = 'Recording...';
+      lastStopProgressMessage = '';
       break;
 
     case 'stopping':
       button.classList.add('processing');
       button.disabled = true;
       icon.textContent = '⏳';
-      text.textContent = 'Stopping...';
+      text.textContent = getRecordButtonLabel('stopping', lastStopProgressMessage);
       statusIndicator.classList.remove('recording');
-      statusText.textContent = 'Stopping...';
-      break;
-
-    case 'transcribing':
-      button.classList.add('processing');
-      button.disabled = true;
-      icon.textContent = '⏳';
-      text.textContent = 'Transcribing...';
-      statusIndicator.classList.remove('recording');
-      statusText.textContent = 'Transcribing...';
+      statusText.textContent = lastStopProgressMessage || 'Saving recording…';
       break;
 
     case 'countdown':
@@ -2407,6 +2624,16 @@ function updateButtonUI() {
       text.textContent = `Starting in ${countdownValue}...`;
       statusIndicator.classList.remove('recording');
       statusText.textContent = 'Preparing...';
+      break;
+
+    default:
+      // Legacy `transcribing` must not block Start (PR2 unlock).
+      button.classList.add('idle');
+      button.disabled = false;
+      icon.textContent = '▶';
+      text.textContent = getRecordButtonLabel('idle');
+      statusIndicator.classList.remove('recording');
+      statusText.textContent = getIdleStatusPillText(transcriptionQueueState);
       break;
   }
 }
@@ -2541,14 +2768,11 @@ async function startRecording() {
       startTimer();
       audioVisualizer.start();
 
-      // Clear previous transcript
+      // Clear previous session meeting pointer; Activity shows queue rows.
       currentRecordingMeeting = null;
       currentRecordingTranscriptMarkdown = '';
       currentRecordingDurationSeconds = 0;
       applyCurrentRecordingTitle();
-      setTranscriptMessage('Recording in progress...');
-      transcriptActions.style.display = 'none';
-
       addLog('Recording started!');
       return; // Success! Exit the retry loop
 
@@ -2735,36 +2959,8 @@ async function stopRecording() {
   }
 }
 
-function renderTranscriptSegments(segments) {
-  clearElement(transcriptOutput);
-
-  if (segments && segments.length > 0) {
-    segments.forEach(segment => {
-      const segmentDiv = document.createElement('div');
-      segmentDiv.style.marginBottom = '12px';
-
-      const timestamp = document.createElement('div');
-      timestamp.style.fontSize = '11px';
-      timestamp.style.color = '#888';
-      timestamp.style.marginBottom = '4px';
-      const startTime = formatTimestamp(segment.start);
-      const endTime = formatTimestamp(segment.end);
-      timestamp.textContent = `[${startTime} - ${endTime}]${segment.speaker ? ` ${segment.speaker}` : ''}`;
-
-      const text = document.createElement('div');
-      text.textContent = segment.text;
-      text.style.lineHeight = '1.5';
-
-      segmentDiv.appendChild(timestamp);
-      segmentDiv.appendChild(text);
-      transcriptOutput.appendChild(segmentDiv);
-    });
-    return;
-  }
-
-  const transcriptText = document.createElement('div');
-  transcriptText.textContent = 'No transcription available';
-  transcriptOutput.appendChild(transcriptText);
+function renderTranscriptSegments(_segments) {
+  // Home Activity replaced the inline transcript panel (PR2).
 }
 
 function writeTranscriptMarkdown({ meeting, transcriptionResult, diarizationResult }) {
@@ -2944,8 +3140,8 @@ async function generateSummaryForMeeting(meetingId) {
   }
 }
 
-// Transcribe audio (auto-called after stop). PR1: main owns pending persist +
-// composite job; renderer still awaits and keeps the blocking `transcribing` UI.
+// Enqueue transcription after stop. PR2: unlock Start as soon as pending persist
+// succeeds; main owns the composite job and Activity is driven by queue-state.
 async function transcribeAudio(options = {}) {
   const language = languageSelect.value;
   const modelSize = modelSelect.value;
@@ -2959,9 +3155,7 @@ async function transcribeAudio(options = {}) {
   }
 
   try {
-    setRecordingState('transcribing');
-    setTranscriptMessage('Transcribing... This may take a moment.');
-    addLog(`Language: ${language}, Model: ${modelSize}`);
+    addLog(`Saving recording and queuing transcription (${language}, ${modelSize})…`);
     addLog(`File: ${currentAudioFile}`);
 
     const result = await window.electronAPI.finalizeRecordingTranscription({
@@ -2973,16 +3167,10 @@ async function transcribeAudio(options = {}) {
     });
 
     if (result && result.success === false) {
-      // Main returns failures as structured values because custom error
-      // properties do not survive ipcRenderer.invoke rejection.
-      throw Object.assign(new Error(result.error || 'Transcription failed.'), {
+      throw Object.assign(new Error(result.error || 'Could not save pending meeting.'), {
         code: result.code || 'TRANSCRIPTION_FAILED',
         meeting: result.meeting || result.pendingMeeting || null,
       });
-    }
-
-    if (result && result.transcriptionDevice) {
-      addLog(`Transcription device: ${String(result.transcriptionDevice).toUpperCase()}`);
     }
 
     const meeting = result && result.meeting;
@@ -2992,56 +3180,15 @@ async function transcribeAudio(options = {}) {
     if (meeting && meeting.id) {
       currentRecordingMeeting = meeting;
       applyCurrentRecordingTitle();
-      try {
-        const fullMeeting = await window.electronAPI.getMeeting(meeting.id);
-        if (fullMeeting && fullMeeting.transcript) {
-          currentRecordingTranscriptMarkdown = fullMeeting.transcript;
-        }
-      } catch (loadTranscriptError) {
-        console.warn('Could not load persisted transcript markdown after save:', loadTranscriptError);
-      }
-    }
-
-    currentRecordingTranscriptMarkdown = typeof result.transcriptContent === 'string' && result.transcriptContent.trim()
-      ? result.transcriptContent
-      : (currentRecordingTranscriptMarkdown || writeTranscriptMarkdown({
-        meeting: { audioPath: (meeting && meeting.audioPath) || currentAudioFile },
-        transcriptionResult: result,
-        diarizationResult: result.diarization || null,
-      }));
-
-    if (result.segments && result.segments.length > 0) {
-      renderTranscriptSegments(result.segments);
-    } else if (result.diarization && Array.isArray(result.diarization.segments) && result.diarization.segments.length > 0) {
-      renderTranscriptSegments(result.diarization.segments);
+      addLog(`Queued transcription for ${meeting.title || meeting.id}`);
     } else {
-      clearElement(transcriptOutput);
-      const transcriptText = document.createElement('div');
-      transcriptText.textContent = result.text || 'No transcription available';
-      transcriptOutput.appendChild(transcriptText);
+      addLog('Recording saved; transcription queued.');
     }
-
-    transcriptActions.style.display = 'flex';
-
-    const transcriptTextForStats = typeof result.text === 'string'
-      ? result.text
-      : (result.segments || []).map((segment) => segment && segment.text ? segment.text : '').join(' ');
-    const wordCount = transcriptTextForStats.trim()
-      ? transcriptTextForStats.trim().split(/\s+/).length
-      : 0;
-    addLog('Transcription complete!');
-    addLog(`Word count: ${wordCount}`);
-    if (result.diarization) {
-      addLog('Speaker-guided transcript saved!');
-    } else if (result.diarizationError) {
-      addLog(`Speaker identification noted an error; transcript was saved. ${result.diarizationError}`, 'warning');
-    }
-    addLog('Meeting saved!');
 
     await loadMeetingHistory();
     setRecordingState('idle');
   } catch (error) {
-    console.error('Failed to transcribe:', error);
+    console.error('Failed to enqueue transcription:', error);
     addLog(`Error: ${error.message}`, 'error');
 
     if (error && error.code === 'PENDING_MEETING_PERSIST_FAILED') {
@@ -3056,19 +3203,6 @@ async function transcribeAudio(options = {}) {
       return;
     }
 
-    if (error && error.code === 'TRANSCRIPTION_QUIT_SKIPPED') {
-      addLog('Transcription will resume the next time AvaNevis opens.', 'warning');
-      setTranscriptMessage('The app is quitting; this recording will transcribe on the next launch.');
-      setRecordingState('idle');
-      return;
-    }
-
-    setTranscriptMessage(
-      error && error.code === 'TRANSCRIPTION_CANCELLED'
-        ? 'Transcription was cancelled. You can retry from History.'
-        : `Recording saved, but transcription failed. You can retry from History. ${error.message}`,
-      true,
-    );
     if (error && error.meeting) {
       currentRecordingMeeting = error.meeting;
       applyCurrentRecordingTitle();
@@ -3076,7 +3210,7 @@ async function transcribeAudio(options = {}) {
     try {
       await loadMeetingHistory();
     } catch (historyError) {
-      console.warn('Could not refresh history after transcription failure:', historyError);
+      console.warn('Could not refresh history after enqueue failure:', historyError);
     }
     setRecordingState('idle');
   }
@@ -3127,20 +3261,9 @@ async function retryMeetingTranscription() {
   }
 }
 
-// Copy transcript to clipboard (current recording)
+// Copy transcript to clipboard (legacy Home panel removed)
 function copyTranscript() {
-  const text = transcriptOutput.textContent;
-  if (!text || !text.trim()) {
-    addLog('No transcript available to copy.', 'warning');
-    return;
-  }
-
-  navigator.clipboard.writeText(text).then(() => {
-    addLog('Transcript copied to clipboard!');
-  }).catch((err) => {
-    console.error('Failed to copy:', err);
-    addLog('Failed to copy transcript to clipboard', 'error');
-  });
+  addLog('Open the meeting in History to copy its transcript.', 'warning');
 }
 
 // Copy meeting transcript to clipboard
@@ -3275,18 +3398,8 @@ async function saveMeetingTranscriptToFile() {
 }
 
 function getRenderedTranscriptFallbackText() {
-  if (!transcriptOutput) {
-    return '';
-  }
-
-  const blocks = Array.from(transcriptOutput.children || []).map((child) => {
-    const childLines = Array.from(child.children || [])
-      .map((node) => (node.textContent || '').trim())
-      .filter(Boolean);
-    return childLines.length ? childLines.join('\n') : (child.textContent || '').trim();
-  }).filter(Boolean);
-
-  return blocks.length ? blocks.join('\n\n') : ((transcriptOutput.textContent || '').trim());
+  // Home Activity replaced the inline transcript panel (PR2).
+  return '';
 }
 
 // Save transcript via native Save dialog. Default filename uses the

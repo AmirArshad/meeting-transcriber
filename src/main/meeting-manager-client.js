@@ -26,6 +26,7 @@
  * @param {Function} deps.validateAiMetadataPaths
  * @param {Function} [deps.isRecorderBusy]
  * @param {Function} [deps.terminateProcessBestEffort]
+ * @param {Function} [deps.beforeDeleteMeeting] - cancel/terminate queued transcription before delete
  * @param {number} [deps.recordingsScanTimeoutMs]
  * @param {object} [deps.recordingsMaintenanceGate]
  */
@@ -47,6 +48,7 @@ function createMeetingManagerClient(deps) {
     validateAiMetadataPaths,
     isRecorderBusy = () => false,
     terminateProcessBestEffort = async (proc) => proc.kill(),
+    beforeDeleteMeeting = async () => {},
     recordingsScanTimeoutMs = 60 * 1000,
     unrefRecordingsScanTimeout = true,
     recordingsMaintenanceGate = null,
@@ -238,41 +240,42 @@ function createMeetingManagerClient(deps) {
     }
   }
 
-  function registerIpc(ipcMain) {
-    ipcMain.handle('list-meetings', async () => {
-      return new Promise((resolve, reject) => {
-        const recordingsDir = path.join(app.getPath('userData'), 'recordings');
-        const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
-          '--recordings-dir', recordingsDir,
-          'list'
-        ]), { cwd: pythonConfig.backendPath });
+  function listMeetings() {
+    return new Promise((resolve, reject) => {
+      const recordingsDir = path.join(app.getPath('userData'), 'recordings');
+      const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
+        '--recordings-dir', recordingsDir,
+        'list'
+      ]), { cwd: pythonConfig.backendPath });
 
-        const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
+      const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
 
-        python.on('close', (code) => {
+      python.on('close', (code) => {
+        try {
+          processOutput.assertStdoutWithinLimit();
+        } catch (error) {
+          reject(error);
+          return;
+        }
+
+        if (code === 0) {
           try {
-            processOutput.assertStdoutWithinLimit();
-          } catch (error) {
-            reject(error);
-            return;
+            const meetings = JSON.parse(processOutput.getStdout());
+            resolve(meetings);
+          } catch (e) {
+            reject(new Error(`Failed to parse meetings: ${e.message}`));
           }
-
-          if (code === 0) {
-            try {
-              const meetings = JSON.parse(processOutput.getStdout());
-              resolve(meetings);
-            } catch (e) {
-              reject(new Error(`Failed to parse meetings: ${e.message}`));
-            }
-          } else {
-            const errorMsg = processOutput.getStderr().trim() || 'Unknown error';
-            reject(new Error(`Failed to list meetings: ${errorMsg}`));
-          }
-        });
-
-        python.on('error', reject);
+        } else {
+          const errorMsg = processOutput.getStderr().trim() || 'Unknown error';
+          reject(new Error(`Failed to list meetings: ${errorMsg}`));
+        }
       });
+      python.on('error', reject);
     });
+  }
+
+  function registerIpc(ipcMain) {
+    ipcMain.handle('list-meetings', async () => listMeetings());
 
     /**
      * Get a single meeting
@@ -318,13 +321,26 @@ function createMeetingManagerClient(deps) {
     ipcMain.handle('delete-meeting', async (event, meetingId) => {
       assertTrustedRendererSender(event);
 
+      const id = String(meetingId || '').trim();
+      if (!id) {
+        throw new Error('delete-meeting requires a meetingId');
+      }
+
+      // Terminate+cancel any in-memory transcription job first so the compute
+      // queue cannot write artifacts after the tombstone (PR2 delete-while-queued).
+      try {
+        await beforeDeleteMeeting(id);
+      } catch (cancelError) {
+        console.warn('Could not cancel transcription before delete:', cancelError && cancelError.message);
+      }
+
       const recordingsDir = path.join(app.getPath('userData'), 'recordings');
 
       return new Promise((resolve, reject) => {
         const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
           '--recordings-dir', recordingsDir,
           'delete',
-          meetingId
+          id
         ]), { cwd: pythonConfig.backendPath });
 
         let errorOutput = '';
@@ -488,6 +504,7 @@ function createMeetingManagerClient(deps) {
     updateMeetingAiMetadata,
     isRecordingsScanInProgress,
     scanRecordings,
+    listMeetings,
     registerIpc,
   };
 }

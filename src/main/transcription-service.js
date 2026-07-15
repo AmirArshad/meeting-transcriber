@@ -31,6 +31,7 @@ const {
   getTranscriptionComputeTimeoutMs,
   getGuidedTranscriptionComputeTimeoutMs,
   runWallClockComputeAction,
+  getActiveWallClockComputeJobs,
   runGuidedTranscriptionProcess,
   buildClearedHuggingFaceTokenEnv,
   USER_CANCELLED_TRANSCRIPTION_ERROR,
@@ -44,6 +45,9 @@ const {
   isTranscriptionJobCancelled,
   clearTranscriptionJobCancelFlag,
   shouldSkipJobAtHead,
+  countBusyTranscriptionJobs,
+  trimSessionReadyJobs,
+  formatQueuedTranscriptionBusyMessage,
   buildTranscriptionQueueStatePayload,
   buildMeetingTranscriptMarkdown,
   buildSpeakerSidecarPayload,
@@ -91,6 +95,8 @@ const {
  * @param {Function} [deps.enqueueGpuResourceAction]
  * @param {Function} [deps.addMeetingToHistory]
  * @param {Function} [deps.updateMeetingAiMetadata]
+ * @param {Function} [deps.listMeetings]
+ * @param {Function} [deps.hasPendingAiComputeWork]
  * @param {Function} [deps.isQuitCommitted]
  * @param {Function} [deps.validateAiMetadataPaths]
  */
@@ -108,6 +114,7 @@ function createTranscriptionService(deps) {
     hasInFlightGpuRuntimeAction = () => false,
     waitForGpuRuntimeIdle = async () => {},
     enqueueGpuResourceAction = (action) => action(),
+    hasPendingAiComputeWork = () => false,
     getCachedCudaStatus,
     resolveCudaStatusForTranscription = null,
     buildCudaRuntimeEnv,
@@ -134,6 +141,7 @@ function createTranscriptionService(deps) {
     formatDurationForTranscript,
     addMeetingToHistory = null,
     updateMeetingAiMetadata = null,
+    listMeetings = async () => [],
     isQuitCommitted = () => false,
   } = deps;
 
@@ -387,6 +395,58 @@ function createTranscriptionService(deps) {
       'transcription-queue-state',
       buildTranscriptionQueueStatePayload(transcriptionQueueState),
     );
+  }
+
+  function getBusyTranscriptionJobCount() {
+    return countBusyTranscriptionJobs(transcriptionQueueState);
+  }
+
+  function getTranscriptionQueueStatePayload() {
+    return buildTranscriptionQueueStatePayload(transcriptionQueueState);
+  }
+
+  async function terminateActiveTranscriptionComputeJobs() {
+    const jobs = getActiveWallClockComputeJobs().filter((job) => {
+      if (!job || typeof job.label !== 'string') {
+        return false;
+      }
+      return /^(Transcription|Speaker-guided transcription|Speaker identification|Transcription retry)(\b|$)/i
+        .test(job.label.trim());
+    });
+    await Promise.all(jobs.map(async (job) => {
+      if (typeof job.terminate !== 'function') {
+        return;
+      }
+      try {
+        await job.terminate();
+      } catch (_error) {
+        // Best-effort.
+      }
+    }));
+    return jobs.length;
+  }
+
+  /**
+   * Cancel a queued/active job without writing durable failed status.
+   * Used before delete so tombstone cannot race a late transcript write.
+   */
+  async function cancelJobForDelete(meetingId) {
+    const id = String(meetingId || '').trim();
+    if (!id) {
+      return { cancelled: false };
+    }
+    const job = transcriptionQueueState.jobsByMeetingId.get(id);
+    if (!job) {
+      return { cancelled: false };
+    }
+    markTranscriptionJobCancelled(transcriptionQueueState, id);
+    if (job.status === QUEUE_JOB_STATUSES.active
+      || transcriptionQueueState.activeMeetingId === id) {
+      await terminateActiveTranscriptionComputeJobs();
+    }
+    removeQueueJob(transcriptionQueueState, id);
+    publishTranscriptionQueueState();
+    return { cancelled: true };
   }
 
   function getMeetingDetails(meetingId, registerProcess = null) {
@@ -1066,6 +1126,7 @@ function createTranscriptionService(deps) {
         status: QUEUE_JOB_STATUSES.ready,
         phase: QUEUE_JOB_PHASES.completed,
       });
+      trimSessionReadyJobs(transcriptionQueueState);
       setActiveQueueMeeting(transcriptionQueueState, null);
       publishTranscriptionQueueState();
 
@@ -1092,6 +1153,38 @@ function createTranscriptionService(deps) {
 
       if (error && error.code === 'TRANSCRIPTION_CANCELLED') {
         throw error;
+      }
+
+      // Active cancel: terminate kills the child; remap to user-cancelled failed.
+      if (isTranscriptionJobCancelled(transcriptionQueueState, meetingId)) {
+        clearTranscriptionJobCancelFlag(transcriptionQueueState, meetingId);
+        if (!completedPersisted) {
+          try {
+            updatedMeeting = await updateMeetingTranscriptionStatus(meetingId, {
+              status: 'failed',
+              language,
+              model: modelSize,
+              transcriptionError: USER_CANCELLED_TRANSCRIPTION_ERROR,
+            });
+          } catch (statusError) {
+            sendToRenderer(
+              'transcription-progress',
+              `Could not persist cancellation status: ${statusError.message}\n`,
+            );
+          }
+        }
+        upsertQueueJob(transcriptionQueueState, {
+          meetingId,
+          status: QUEUE_JOB_STATUSES.failed,
+          phase: QUEUE_JOB_PHASES.cancelled,
+        });
+        publishTranscriptionQueueState();
+        const cancelError = new Error(USER_CANCELLED_TRANSCRIPTION_ERROR);
+        cancelError.code = 'TRANSCRIPTION_CANCELLED';
+        if (updatedMeeting) {
+          cancelError.meeting = updatedMeeting;
+        }
+        throw cancelError;
       }
 
       clearTranscriptionJobCancelFlag(transcriptionQueueState, meetingId);
@@ -1208,31 +1301,84 @@ function createTranscriptionService(deps) {
     });
     publishTranscriptionQueueState();
 
-    let jobResult;
-    try {
-      jobResult = await runMeetingTranscriptionJob({
-        meetingId: savedMeeting.id,
+    // PR2: return as soon as pending persist succeeds so Start unlocks.
+    // The composite job continues in main; failures update durable status + queue-state.
+    void runMeetingTranscriptionJob({
+      meetingId: savedMeeting.id,
+      language: normalizedLanguage,
+      modelSize: normalizedModel,
+      jobLabel: 'Transcription',
+    }).catch((jobError) => {
+      if (jobError && (jobError.code === 'TRANSCRIPTION_QUIT_SKIPPED' || jobError.code === 'TRANSCRIPTION_CANCELLED')) {
+        return;
+      }
+      console.warn(
+        'Background transcription job failed:',
+        (jobError && jobError.message) || jobError,
+      );
+    });
+
+    return {
+      success: true,
+      enqueued: true,
+      meeting: savedMeeting,
+      pendingMeeting: savedMeeting,
+    };
+  }
+
+  async function resumePendingTranscriptions({ language = null, modelSize = null } = {}) {
+    const meetings = await listMeetings();
+    const pending = (Array.isArray(meetings) ? meetings : []).filter((meeting) => (
+      meeting
+      && meeting.id
+      && String(meeting.transcriptionStatus || '') === 'pending'
+    ));
+
+    const enqueued = [];
+    for (const meeting of pending) {
+      const meetingId = String(meeting.id);
+      const existing = transcriptionQueueState.jobsByMeetingId.get(meetingId);
+      if (existing && (existing.status === QUEUE_JOB_STATUSES.queued
+        || existing.status === QUEUE_JOB_STATUSES.active)) {
+        continue;
+      }
+
+      const normalizedModel = requireAllowedModelSize(modelSize || meeting.model || 'small');
+      const normalizedLanguage = String(language || meeting.language || 'en');
+
+      upsertQueueJob(transcriptionQueueState, {
+        meetingId,
+        status: QUEUE_JOB_STATUSES.queued,
+        phase: QUEUE_JOB_PHASES.queued,
+        title: meeting.title || '',
+        durationSeconds: Number(meeting.duration) || 0,
+      });
+      enqueued.push(meetingId);
+
+      void runMeetingTranscriptionJob({
+        meetingId,
         language: normalizedLanguage,
         modelSize: normalizedModel,
         jobLabel: 'Transcription',
+      }).catch((jobError) => {
+        if (jobError && (jobError.code === 'TRANSCRIPTION_QUIT_SKIPPED' || jobError.code === 'TRANSCRIPTION_CANCELLED')) {
+          return;
+        }
+        console.warn(
+          'Resumed transcription job failed:',
+          (jobError && jobError.message) || jobError,
+        );
       });
-    } catch (jobError) {
-      // Custom error properties (code/meeting) do not survive
-      // ipcRenderer.invoke rejection, so return a structured value instead.
-      return {
-        success: false,
-        code: (jobError && jobError.code) || 'TRANSCRIPTION_FAILED',
-        error: (jobError && jobError.message) || 'Transcription failed.',
-        meeting: (jobError && jobError.meeting) || null,
-        pendingMeeting: savedMeeting,
-      };
+    }
+
+    if (enqueued.length) {
+      publishTranscriptionQueueState();
     }
 
     return {
       success: true,
-      ...jobResult,
-      meeting: jobResult.meeting || savedMeeting,
-      pendingMeeting: savedMeeting,
+      enqueuedCount: enqueued.length,
+      meetingIds: enqueued,
     };
   }
 
@@ -1274,37 +1420,20 @@ function createTranscriptionService(deps) {
       if (activeModelDownload) {
         throw new Error('A Whisper model download is already in progress. Cancel it or wait for it to finish.');
       }
-      // Stay off the compute queue (downloads must not block transcription),
-      // but wait for idle GPU compute first to avoid VRAM contention/OOM.
-      // Bound the wait so a long transcription queue cannot hang the UI forever.
-      const idleController = new AbortController();
-      activeModelDownload = { process: null, controller: idleController, model };
-      try {
-        await waitForAiComputeQueueIdle({
-          cancelSignal: idleController.signal,
-          cancelMessage: 'Model download was canceled while waiting for local AI work to finish.',
-          timeoutMs: AI_COMPUTE_TIMEOUT_MS.modelDownloadIdleWait,
-          timeoutMessage: 'Timed out waiting for local AI work to finish before downloading the Whisper model. Try again when transcription is idle.',
-          onWaiting: () => {
-            sendToRenderer(
-              'model-download-progress',
-              'Waiting for local AI work to finish before downloading the Whisper model...\n',
-            );
-          },
-        });
-      } catch (error) {
-        if (activeModelDownload && activeModelDownload.controller === idleController) {
-          activeModelDownload = null;
-        }
+      // Stay off the compute queue. Fail fast when transcription/compute is busy —
+      // a 15-minute idle wait is routinely exceedable with a real queue (PR2).
+      if (hasPendingAiComputeWork()) {
+        const busyCount = getBusyTranscriptionJobCount();
+        const error = new Error(formatQueuedTranscriptionBusyMessage(
+          busyCount,
+          'downloading the Whisper model',
+        ));
+        error.code = 'MODEL_DOWNLOAD_COMPUTE_BUSY';
         throw error;
       }
 
-      if (idleController.signal.aborted) {
-        if (activeModelDownload && activeModelDownload.controller === idleController) {
-          activeModelDownload = null;
-        }
-        throw new Error('Model download was canceled.');
-      }
+      const idleController = new AbortController();
+      activeModelDownload = { process: null, controller: idleController, model };
 
       return enqueueGpuResourceAction(() => {
         if (idleController.signal.aborted) {
@@ -1720,8 +1849,20 @@ function createTranscriptionService(deps) {
       }
       const job = transcriptionQueueState.jobsByMeetingId.get(meetingId);
       if (!job) {
-        // Refuse unknown meetings: a flag with no job would leak and make a
-        // future job for this meeting self-cancel.
+        // Durable pending from a prior session may not have an in-memory job yet.
+        // Mark failed so resume banner does not keep offering cancelled work.
+        try {
+          const meeting = await lookupMeetingById(meetingId);
+          if (meeting && String(meeting.transcriptionStatus || '') === 'pending') {
+            const updatedMeeting = await updateMeetingTranscriptionStatus(meetingId, {
+              status: 'failed',
+              transcriptionError: USER_CANCELLED_TRANSCRIPTION_ERROR,
+            });
+            return { success: true, cancelled: true, meeting: updatedMeeting, durableOnly: true };
+          }
+        } catch (_lookupError) {
+          // Fall through to NO_SUCH_JOB.
+        }
         return {
           success: false,
           cancelled: false,
@@ -1743,8 +1884,23 @@ function createTranscriptionService(deps) {
         publishTranscriptionQueueState();
         return { success: true, cancelled: true, meeting: updatedMeeting };
       }
+      // Active: terminate the compute child; catch path writes durable failed.
+      if (job.status === QUEUE_JOB_STATUSES.active
+        || transcriptionQueueState.activeMeetingId === meetingId) {
+        await terminateActiveTranscriptionComputeJobs();
+      }
       publishTranscriptionQueueState();
-      return { success: true, cancelled: true, active: job && job.status === QUEUE_JOB_STATUSES.active };
+      return { success: true, cancelled: true, active: true };
+    });
+
+    ipcMain.handle('resume-pending-transcriptions', async (event, options = {}) => {
+      assertTrustedRendererSender(event);
+      return resumePendingTranscriptions(options || {});
+    });
+
+    ipcMain.handle('get-transcription-queue-state', async (event) => {
+      assertTrustedRendererSender(event);
+      return getTranscriptionQueueStatePayload();
     });
 
     ipcMain.handle('retry-transcription', async (event, options = {}) => {
@@ -1799,6 +1955,10 @@ function createTranscriptionService(deps) {
     cleanupGuidedTranscriptTempFiles,
     runMeetingTranscriptionJob,
     finalizeRecordingTranscription,
+    resumePendingTranscriptions,
+    cancelJobForDelete,
+    getBusyTranscriptionJobCount,
+    getTranscriptionQueueStatePayload,
     publishTranscriptionQueueState,
     registerIpc,
   };
