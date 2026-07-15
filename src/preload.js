@@ -81,6 +81,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Transcription
   transcribeAudio: (options) => ipcRenderer.invoke('transcribe-audio', options),
   retryTranscription: (options) => ipcRenderer.invoke('retry-transcription', options),
+  finalizeRecordingTranscription: (options) => ipcRenderer.invoke('finalize-recording-transcription', options),
+  cancelPendingTranscription: (options) => ipcRenderer.invoke('cancel-pending-transcription', options),
   transcribeAudioWithSpeakers: (options) => ipcRenderer.invoke('transcribe-audio-with-speakers', options),
   diarizeTranscript: (options) => ipcRenderer.invoke('diarize-transcript', options),
   generateSummary: (options) => ipcRenderer.invoke('generate-summary', options),
@@ -138,6 +140,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onRecordingSavedDuringQuit: (callback) => addListener('recording-saved-during-quit', callback),
   onAppQuitProgress: (callback) => addListener('app-quit-progress', callback),
   onTranscriptionProgress: (callback) => addListener('transcription-progress', callback),
+  onTranscriptionQueueState: (callback) => addListener('transcription-queue-state', callback),
   onGPUInstallProgress: (callback) => addListener('gpu-install-progress', callback),
   onModelDownloadProgress: (callback) => addListener('model-download-progress', callback),
   onAiAddonProgress: (callback) => addListener('ai-addon-progress', callback),

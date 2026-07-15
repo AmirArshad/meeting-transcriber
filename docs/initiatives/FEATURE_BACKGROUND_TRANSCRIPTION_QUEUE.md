@@ -1,6 +1,6 @@
 # Feature: Back-to-Back Recording & Transcription Queue
 
-**Status:** Next big feature — design locked (adversarial review + second-pass review incorporated); Phase 1 not started  
+**Status:** PR1 in progress (`feature/transcription-queue-pr1`) — main-owned pending persist + composite job behind blocking UI; unlock / Activity UI are PR2  
 **Working title:** Background transcription queue (+ cancel recording)  
 **Primary pain:** After Stop, users wait through encode + full Whisper (and optional diarization) before they can start the next meeting. There is also no way to discard a recording — Stop always processes.  
 **Review input:** Adversarial design review (2026-07-15) and second-pass review (2026-07-15) — findings below are incorporated as product/architecture decisions, not open questions.  

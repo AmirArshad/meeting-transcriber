@@ -568,7 +568,7 @@ const meetingManagerClient = registerMeetingManagerClient(ipcMain, {
     }
   },
 });
-const { addMeetingToHistory, isRecordingsScanInProgress, scanRecordings } = meetingManagerClient;
+const { addMeetingToHistory, updateMeetingAiMetadata, isRecordingsScanInProgress, scanRecordings } = meetingManagerClient;
 
 const deviceIpc = registerDeviceIpc(ipcMain, {
   app,
@@ -719,6 +719,9 @@ transcriptionService = createTranscriptionService({
   sanitizeTranscriptionError,
   buildTranscriptionPlaceholderMarkdown,
   formatDurationForTranscript,
+  addMeetingToHistory,
+  updateMeetingAiMetadata,
+  isQuitCommitted,
 });
 transcriptionService.registerIpc(ipcMain);
 const { cleanupGuidedTranscriptTempFiles } = transcriptionService;

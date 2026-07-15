@@ -7,6 +7,7 @@ const {
   readCombinedMainProcessSource,
   extractIpcHandlerSource,
   handlerEnqueuesComputeAction,
+  extractTopLevelFunctionSource,
 } = require('./source-scan-helpers');
 
 const {
@@ -79,12 +80,23 @@ test('download-model and AI add-on setup handlers stay off the compute queue', (
   );
 });
 
-test('retry-transcription also enqueues on the compute queue', () => {
-  // Documented as transcription compute work; keep the scan honest after Phase 3 moves.
+test('retry-transcription and finalize-recording-transcription enqueue via shared meeting job', () => {
   const combined = readCombinedMainProcessSource();
-  const handlerSource = extractIpcHandlerSource(combined, 'retry-transcription');
-  assert.ok(handlerSource, 'missing ipcMain.handle for retry-transcription');
-  assert.equal(handlerEnqueuesComputeAction(handlerSource), true);
+  const retrySource = extractIpcHandlerSource(combined, 'retry-transcription');
+  const finalizeSource = extractIpcHandlerSource(combined, 'finalize-recording-transcription');
+  assert.ok(retrySource, 'missing ipcMain.handle for retry-transcription');
+  assert.ok(finalizeSource, 'missing ipcMain.handle for finalize-recording-transcription');
+  assert.match(retrySource, /runMeetingTranscriptionJob/);
+  assert.match(finalizeSource, /finalizeRecordingTranscription/);
+  // Brace-balanced extraction: the enqueue call must be INSIDE the job
+  // function body, not merely somewhere later in the combined source.
+  const jobSource = extractTopLevelFunctionSource(combined, 'runMeetingTranscriptionJob');
+  assert.ok(jobSource, 'missing runMeetingTranscriptionJob function');
+  assert.equal(
+    handlerEnqueuesComputeAction(jobSource),
+    true,
+    'runMeetingTranscriptionJob must enqueue on the compute queue',
+  );
 });
 
 test('AI_COMPUTE_TIMEOUT_MS pins diarization, guided transcription, summary, meeting preflight, model-download idle wait, GPU idle wait, and addon validation', () => {

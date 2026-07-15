@@ -423,6 +423,9 @@ def diarize_transcript(
 
 
 def main() -> None:
+    from common.process_priority import lower_process_priority
+    lower_process_priority()
+
     parser = argparse.ArgumentParser(description="Run local speaker diarization for an AvaNevis transcript")
     parser.add_argument("--validate-setup", action="store_true", help="Validate pyannote runtime and model access without diarizing audio")
     parser.add_argument(
