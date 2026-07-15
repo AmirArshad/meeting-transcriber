@@ -574,6 +574,11 @@ test('isRecorderBusy detects active recorder or stop workflow', () => {
   assert.equal(isRecorderBusy({ pythonProcess: null, recordingStopPromise: null }), false);
   assert.equal(isRecorderBusy({ pythonProcess: {}, recordingStopPromise: null }), true);
   assert.equal(isRecorderBusy({ pythonProcess: null, recordingStopPromise: Promise.resolve() }), true);
+  assert.equal(isRecorderBusy({
+    pythonProcess: null,
+    recordingStopPromise: null,
+    recordingCancelPromise: Promise.resolve(),
+  }), true);
 });
 
 test('buildRecorderBusyResponse returns structured busy error', () => {
@@ -1663,6 +1668,21 @@ test('findRecorderResultPayload accepts structured success false recorder result
     message: 'No audio was captured from the microphone.',
     duration: 0,
   });
+});
+
+test('findRecorderResultPayload and normalize accept cancelled discard results', () => {
+  const payload = findRecorderResultPayload('{"success":true,"cancelled":true}');
+  assert.deepEqual(payload, { success: true, cancelled: true });
+  assert.deepEqual(
+    normalizeRecordingStopPayload(payload, { existsSync: () => false }),
+    { success: true, cancelled: true },
+  );
+  assert.deepEqual(
+    parseRecordingStopResult('{"success":true,"cancelled":true}\n', {
+      existsSync: () => false,
+    }),
+    { success: true, cancelled: true },
+  );
 });
 
 

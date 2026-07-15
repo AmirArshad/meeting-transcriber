@@ -24,6 +24,7 @@ const EXPECTED_INVOKE_CHANNELS = [
   'cancel-diarization-setup',
   'cancel-download-model',
   'cancel-pending-transcription',
+  'cancel-recording',
   'cancel-summary-generation',
   'cancel-summary-model-setup',
   'check-audio-output',

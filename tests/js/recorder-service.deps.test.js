@@ -494,3 +494,113 @@ test('disk space monitor warns once on escalation and never auto-stops', async (
   await stopPromise;
   assert.equal(diskInterval.cleared, true);
 });
+
+test('cancel-recording publishes cancelling and returns cancelled without audio', async () => {
+  const { EventEmitter } = require('node:events');
+  const captureStates = [];
+  const { deps } = createMinimalDeps({
+    onCaptureStateChanged: (state) => captureStates.push(state),
+    isQuitCommitted: () => false,
+  });
+
+  const proc = new EventEmitter();
+  proc.stdout = new EventEmitter();
+  proc.stderr = new EventEmitter();
+  const stdinWrites = [];
+  proc.stdin = {
+    write(chunk) {
+      stdinWrites.push(String(chunk));
+    },
+  };
+  proc.killed = false;
+  proc.pid = 4242;
+  proc.kill = () => { proc.killed = true; };
+  deps.spawnTrackedPython = () => proc;
+
+  const service = createRecorderService(deps);
+  const handlers = {};
+  service.registerIpc({
+    handle(channel, handler) {
+      handlers[channel] = handler;
+    },
+  });
+
+  const startPromise = handlers['start-recording'](
+    { sender: {} },
+    { micId: 0, loopbackId: 1, isFirstRecording: false },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  proc.stdout.emit('data', Buffer.from(`${JSON.stringify({
+    type: 'event',
+    event: 'recording_started',
+    message: 'Recording started!',
+  })}\n`));
+  await startPromise;
+
+  const cancelPromise = handlers['cancel-recording']({ sender: {} });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(captureStates.at(-1).state, 'cancelling');
+  assert.deepEqual(stdinWrites, ['cancel\n']);
+
+  proc.stdout.emit('data', Buffer.from(`${JSON.stringify({
+    success: true,
+    cancelled: true,
+  })}\n`));
+  proc.emit('close', 0);
+  const cancelResult = await cancelPromise;
+  assert.deepEqual(cancelResult, { success: true, cancelled: true });
+  assert.equal(captureStates.at(-1).state, 'idle');
+});
+
+test('cancel-recording rejects when stop is already in progress', async () => {
+  const { EventEmitter } = require('node:events');
+  const { deps } = createMinimalDeps({
+    isQuitCommitted: () => false,
+  });
+
+  const proc = new EventEmitter();
+  proc.stdout = new EventEmitter();
+  proc.stderr = new EventEmitter();
+  proc.stdin = { write() {} };
+  proc.killed = false;
+  proc.pid = 4243;
+  proc.kill = () => { proc.killed = true; };
+  deps.spawnTrackedPython = () => proc;
+
+  const service = createRecorderService(deps);
+  const handlers = {};
+  service.registerIpc({
+    handle(channel, handler) {
+      handlers[channel] = handler;
+    },
+  });
+
+  const startPromise = handlers['start-recording'](
+    { sender: {} },
+    { micId: 0, loopbackId: 1, isFirstRecording: false },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  proc.stdout.emit('data', Buffer.from(`${JSON.stringify({
+    type: 'event',
+    event: 'recording_started',
+    message: 'Recording started!',
+  })}\n`));
+  await startPromise;
+
+  const stopPromise = handlers['stop-recording']({ sender: {} });
+  await new Promise((resolve) => setImmediate(resolve));
+  await assert.rejects(
+    () => handlers['cancel-recording']({ sender: {} }),
+    (error) => error && error.code === 'RECORDING_STOP_IN_PROGRESS',
+  );
+
+  const audioPath = path.join(deps.getRecordingsDir(), 'cancel-after-stop.wav');
+  fs.writeFileSync(audioPath, 'x');
+  proc.stdout.emit('data', Buffer.from(`${JSON.stringify({
+    success: true,
+    audioPath,
+    duration: 1,
+  })}\n`));
+  proc.emit('close', 0);
+  await stopPromise;
+});

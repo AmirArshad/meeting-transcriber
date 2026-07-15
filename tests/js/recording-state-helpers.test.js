@@ -19,12 +19,22 @@ test('getRecordButtonAction stops from recording', () => {
 
 
 test('getRecordButtonAction ignores busy renderer states', () => {
-  for (const state of ['starting', 'initializing', 'countdown', 'stopping']) {
+  for (const state of ['starting', 'initializing', 'countdown', 'stopping', 'cancelling']) {
     assert.equal(getRecordButtonAction(state), 'ignore');
   }
 });
 
-test('getRecordingPresenceView shows recording and stopping pills only', () => {
+test('shouldShowDiscardRecordingControl only while capturing or countdown', () => {
+  const { shouldShowDiscardRecordingControl } = require('../../src/renderer/recording-state-helpers');
+  assert.equal(shouldShowDiscardRecordingControl('recording'), true);
+  assert.equal(shouldShowDiscardRecordingControl('countdown'), true);
+  assert.equal(shouldShowDiscardRecordingControl('starting'), true);
+  assert.equal(shouldShowDiscardRecordingControl('stopping'), false);
+  assert.equal(shouldShowDiscardRecordingControl('cancelling'), false);
+  assert.equal(shouldShowDiscardRecordingControl('idle'), false);
+});
+
+test('getRecordingPresenceView shows recording, stopping, and cancelling pills', () => {
   assert.deepEqual(getRecordingPresenceView('recording', '1:02:03'), {
     visible: true,
     label: 'Recording',
@@ -36,6 +46,12 @@ test('getRecordingPresenceView shows recording and stopping pills only', () => {
     label: 'Finishing recording...',
     timeText: '1:02:03',
     modifier: 'stopping',
+  });
+  assert.deepEqual(getRecordingPresenceView('cancelling', '1:02:03'), {
+    visible: true,
+    label: 'Discarding recording...',
+    timeText: '1:02:03',
+    modifier: 'cancelling',
   });
   assert.deepEqual(getRecordingPresenceView('stopping', null), {
     visible: true,

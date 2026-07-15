@@ -137,7 +137,7 @@
       modifier: null,
     };
 
-    const CAPTURE_BUSY_STATES = new Set(['starting', 'recording', 'stopping']);
+    const CAPTURE_BUSY_STATES = new Set(['starting', 'recording', 'stopping', 'cancelling']);
     const capture = captureState && typeof captureState === 'object'
       ? captureState.state
       : captureState;
@@ -274,7 +274,7 @@
   }
 
   function shouldRequeryRecoveryAfterCaptureIdle(previousState, nextState) {
-    const captureBusyStates = new Set(['starting', 'recording', 'stopping']);
+    const captureBusyStates = new Set(['starting', 'recording', 'stopping', 'cancelling']);
     return nextState === 'idle' && captureBusyStates.has(previousState);
   }
 

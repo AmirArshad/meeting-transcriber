@@ -7,7 +7,7 @@ const DEFAULT_SUMMARY_PROFILE = 'balanced';
 const MAX_PROGRESS_LOG_ENTRIES = 250;
 const AI_ADDON_PROGRESS_LOG_INTERVAL_MS = 1000;
 const SVG_NS = 'http://www.w3.org/2000/svg';
-const { getRecordButtonAction, getRecordingPresenceView, canHydratedRendererStopRecording } = window.recordingStateHelpers;
+const { getRecordButtonAction, getRecordingPresenceView, shouldShowDiscardRecordingControl, canHydratedRendererStopRecording } = window.recordingStateHelpers;
 const {
   getIdleStatusPillText,
   getRecordButtonLabel,
@@ -66,6 +66,7 @@ const languageSelect = document.getElementById('language-select');
 const modelSelect = document.getElementById('model-select');
 const refreshBtn = document.getElementById('refresh-devices');
 const recordBtn = document.getElementById('record-btn');
+const discardRecordingBtn = document.getElementById('discard-recording-btn');
 const statusIndicator = document.getElementById('status-indicator');
 const statusText = document.getElementById('status-text');
 const timer = document.getElementById('timer');
@@ -96,7 +97,7 @@ const refreshHistory = document.getElementById('refresh-history');
 const deleteMeeting = document.getElementById('delete-meeting');
 
 // State
-let recordingState = 'idle'; // idle, starting, recording, stopping, countdown (transcribing no longer blocks capture)
+let recordingState = 'idle'; // idle, starting, recording, stopping, cancelling, countdown (transcribing no longer blocks capture)
 let lastStopProgressMessage = '';
 let transcriptionQueueState = { jobs: [], activeMeetingId: null, busyCount: 0 };
 let activityActionBusyMeetingId = null;
@@ -658,7 +659,8 @@ function updateResumePendingBanner() {
   }
   resumePendingBtn.textContent = view.buttonLabel || 'Resume pending transcriptions';
   resumePendingBtn.disabled = !view.visible || recordingState === 'recording'
-    || recordingState === 'starting' || recordingState === 'stopping';
+    || recordingState === 'starting' || recordingState === 'stopping'
+    || recordingState === 'cancelling';
 }
 
 function renderActivityList() {
@@ -1918,6 +1920,11 @@ function setupEventListeners() {
     loadMeetingHistory({ scan: true });
   });
   recordBtn.addEventListener('click', handleRecordButtonClick);
+  if (discardRecordingBtn) {
+    discardRecordingBtn.addEventListener('click', () => {
+      void discardRecording();
+    });
+  }
   if (resumePendingBtn) {
     resumePendingBtn.addEventListener('click', () => {
       void resumePendingTranscriptionsFromBanner();
@@ -2235,7 +2242,7 @@ function updateRecordingPresenceUI(elapsedTextOverride = null) {
 
   let elapsedText = elapsedTextOverride;
   if (elapsedText == null) {
-    if (recordingState === 'stopping') {
+    if (recordingState === 'stopping' || recordingState === 'cancelling') {
       // Prefer a frozen clock; omit the time entirely when startedAt is unknown
       // so hydration does not invent a cosmetic 00:00.
       elapsedText = frozenPresenceElapsedText || null;
@@ -2250,7 +2257,7 @@ function updateRecordingPresenceUI(elapsedTextOverride = null) {
 
   const view = getRecordingPresenceView(recordingState, elapsedText);
   recordingPresenceEl.hidden = !view.visible;
-  recordingPresenceEl.classList.remove('recording', 'stopping');
+  recordingPresenceEl.classList.remove('recording', 'stopping', 'cancelling');
   if (view.modifier) {
     recordingPresenceEl.classList.add(view.modifier);
   }
@@ -2559,6 +2566,15 @@ function setupRecordingRecoveryUi() {
 }
 
 // Update button appearance based on state
+function updateDiscardRecordingButtonVisibility() {
+  if (!discardRecordingBtn) {
+    return;
+  }
+  const show = shouldShowDiscardRecordingControl(recordingState);
+  discardRecordingBtn.hidden = !show;
+  discardRecordingBtn.disabled = !show;
+}
+
 function updateButtonUI() {
   const button = recordBtn;
   const icon = button.querySelector('.button-icon');
@@ -2614,6 +2630,15 @@ function updateButtonUI() {
       statusText.textContent = lastStopProgressMessage || 'Saving recording…';
       break;
 
+    case 'cancelling':
+      button.classList.add('processing');
+      button.disabled = true;
+      icon.textContent = '⏳';
+      text.textContent = 'Discarding...';
+      statusIndicator.classList.remove('recording');
+      statusText.textContent = 'Discarding recording…';
+      break;
+
     case 'countdown':
       button.classList.add('processing'); // Use processing style (grey)
       button.disabled = true;
@@ -2633,6 +2658,8 @@ function updateButtonUI() {
       statusText.textContent = getIdleStatusPillText(transcriptionQueueState);
       break;
   }
+
+  updateDiscardRecordingButtonVisibility();
 }
 
 // Update other controls based on state
@@ -2952,6 +2979,57 @@ async function stopRecording() {
     
     stopTimer();
     audioVisualizer.stop();
+    setRecordingState('idle');
+  }
+}
+
+async function discardRecording() {
+  if (!shouldShowDiscardRecordingControl(recordingState)) {
+    return;
+  }
+
+  const confirmed = window.confirm(
+    'Discard this recording? The audio will not be saved.',
+  );
+  if (!confirmed) {
+    return;
+  }
+
+  try {
+    addLog('Discarding recording...');
+    cancelActiveCountdown();
+    if (Number.isFinite(recordingStartTime)) {
+      frozenPresenceElapsedText = formatElapsedDuration((Date.now() - recordingStartTime) / 1000);
+    }
+    setRecordingState('cancelling');
+    stopTimer();
+    if (audioVisualizer) {
+      audioVisualizer.stop();
+    }
+
+    const result = await window.electronAPI.cancelRecording();
+    if (result?.cancelled || result?.success) {
+      addLog('Recording discarded. Nothing was saved.', 'warning');
+      setTranscriptMessage('Recording discarded. Nothing was saved.', false);
+      currentAudioFile = null;
+      currentRecordingDurationSeconds = 0;
+      setRecordingState('idle');
+      return;
+    }
+
+    addLog('Discard finished without a cancel confirmation from the recorder.', 'warning');
+    setRecordingState('idle');
+  } catch (error) {
+    console.error('Failed to discard recording:', error);
+    addLog(`Discard failed: ${error.message}`, 'error');
+    if (error?.code === 'RECORDING_STOP_IN_PROGRESS') {
+      setTranscriptMessage('Recording is already stopping and cannot be discarded.', true);
+      return;
+    }
+    stopTimer();
+    if (audioVisualizer) {
+      audioVisualizer.stop();
+    }
     setRecordingState('idle');
   }
 }
@@ -3572,13 +3650,16 @@ async function hydrateRecordingStateFromMain() {
     return;
   }
 
-  if (mainState.state === 'starting' || mainState.state === 'stopping') {
+  if (mainState.state === 'starting' || mainState.state === 'stopping' || mainState.state === 'cancelling') {
     activeRecordingSessionId = Number.isInteger(mainState.sessionId) ? mainState.sessionId : null;
     recordingStartTime = Number.isFinite(mainState.startedAt) ? mainState.startedAt : null;
-    if (mainState.state === 'stopping' && Number.isFinite(recordingStartTime)) {
+    if (
+      (mainState.state === 'stopping' || mainState.state === 'cancelling')
+      && Number.isFinite(recordingStartTime)
+    ) {
       frozenPresenceElapsedText = formatElapsedDuration((Date.now() - recordingStartTime) / 1000);
     }
-    setRecordingState(mainState.state === 'starting' ? 'starting' : 'stopping');
+    setRecordingState(mainState.state);
     startRecordingPresencePoll();
   }
 }
@@ -3590,7 +3671,11 @@ function startRecordingPresencePoll() {
       stopRecordingPresencePoll();
       return;
     }
-    if (recordingState !== 'starting' && recordingState !== 'stopping') {
+    if (
+      recordingState !== 'starting'
+      && recordingState !== 'stopping'
+      && recordingState !== 'cancelling'
+    ) {
       stopRecordingPresencePoll();
       return;
     }
@@ -3621,9 +3706,14 @@ function startRecordingPresencePoll() {
       return;
     }
 
-    if (mainState.state === 'idle' && recordingState === 'stopping') {
+    if (mainState.state === 'idle' && (recordingState === 'stopping' || recordingState === 'cancelling')) {
+      const wasCancelling = recordingState === 'cancelling';
       stopRecordingPresencePoll();
       setRecordingState('idle');
+      if (wasCancelling) {
+        addLog('Recording discard finished while this window was reloading.');
+        return;
+      }
       addLog('Recording finished while this window was reloading. Refreshing History...');
       try {
         await loadMeetingHistory({ scan: true });

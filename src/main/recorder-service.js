@@ -97,7 +97,9 @@ function createRecorderService(deps) {
   let lastLevelUpdate = null;
   let heartbeatLostWarningActive = false;
   let recordingStopPromise = null;
+  let recordingCancelPromise = null;
   let stopCommandSent = false;
+  let cancelCommandSent = false;
   let recordingSessionCounter = 0;
   let activeRecordingSessionId = null;
   let publishedCaptureState = { state: 'idle', sessionId: null, startedAt: null };
@@ -857,7 +859,9 @@ function createRecorderService(deps) {
 
   function resetStopWorkflowState() {
     recordingStopPromise = null;
+    recordingCancelPromise = null;
     stopCommandSent = false;
+    cancelCommandSent = false;
   }
 
   function parseRecordingStopResultFromStdout(stdoutData) {
@@ -868,6 +872,10 @@ function createRecorderService(deps) {
   }
 
   function stopRecordingProcess() {
+    if (recordingCancelPromise || cancelCommandSent) {
+      return recordingCancelPromise || Promise.resolve({ success: true, cancelled: true });
+    }
+
     if (!pythonProcess) {
       return Promise.resolve({ success: true });
     }
@@ -970,6 +978,129 @@ function createRecorderService(deps) {
     });
 
     return recordingStopPromise;
+  }
+
+  function cancelRecordingProcess() {
+    if (stopCommandSent || recordingStopPromise) {
+      const error = new Error('Recording is already stopping and cannot be discarded.');
+      error.code = 'RECORDING_STOP_IN_PROGRESS';
+      return Promise.reject(error);
+    }
+
+    if (recordingCancelPromise) {
+      return recordingCancelPromise;
+    }
+
+    const captureState = getCaptureState().state;
+    if (captureState === 'idle') {
+      return Promise.resolve({ success: true, cancelled: true });
+    }
+
+    if (recordingHeartbeat) {
+      clearInterval(recordingHeartbeat);
+      recordingHeartbeat = null;
+      console.log('Recording heartbeat monitor stopped (cancel)');
+    }
+
+    const currentProcess = pythonProcess;
+    if (!currentProcess) {
+      clearRecordingRuntimeState('cancel with no recorder process');
+      return Promise.resolve({ success: true, cancelled: true });
+    }
+
+    recordingCancelPromise = new Promise((resolve, reject) => {
+      let stdoutData = '';
+      let stderrData = '';
+      let settled = false;
+
+      const stdoutHandler = (data) => {
+        stdoutData = appendCappedSpawnLogBuffer(stdoutData, data, SPAWN_JSON_RESULT_BUFFER_MAX_CHARS);
+      };
+
+      const stderrHandler = (data) => {
+        const output = data.toString();
+        stderrData = appendCappedSpawnLogBuffer(stderrData, output);
+        console.log(`Python status: ${output}`);
+      };
+
+      const cleanupListeners = () => {
+        currentProcess.stdout.removeListener('data', stdoutHandler);
+        currentProcess.stderr.removeListener('data', stderrHandler);
+        currentProcess.removeListener('close', closeHandler);
+      };
+
+      const finalizeState = () => {
+        if (pythonProcess === currentProcess) {
+          clearRecordingRuntimeState('recording cancelled', {
+            expectedProcess: currentProcess,
+          });
+          return;
+        }
+        resetStopWorkflowState();
+      };
+
+      const closeHandler = (code) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanupListeners();
+        finalizeState();
+
+        try {
+          const parsed = parseRecordingStopResultFromStdout(stdoutData);
+          if (parsed?.cancelled) {
+            resolve({ success: true, cancelled: true });
+            return;
+          }
+          if (parsed) {
+            // Unexpected non-cancel result after cancel command — still treat as discarded.
+            resolve({ success: true, cancelled: true });
+            return;
+          }
+        } catch (_) {
+          // Fall through — cancel still succeeded if the process exited after cancel.
+        }
+
+        if (cancelCommandSent) {
+          resolve({ success: true, cancelled: true });
+          return;
+        }
+
+        reject(new Error(
+          `Recording cancel failed with exit code ${code}: ${stderrData || 'no recorder output'}`,
+        ));
+      };
+
+      currentProcess.stdout.on('data', stdoutHandler);
+      currentProcess.stderr.on('data', stderrHandler);
+      currentProcess.once('close', closeHandler);
+
+      try {
+        if (cancelCommandSent) {
+          return;
+        }
+        currentProcess.stdin.write('cancel\n');
+        cancelCommandSent = true;
+        publishCaptureState('cancelling');
+      } catch (writeError) {
+        // Starting/hung child may not accept stdin — terminate and clear spools via kill.
+        console.warn('Could not send cancel to recorder; terminating child:', writeError.message);
+        cancelCommandSent = true;
+        publishCaptureState('cancelling');
+        Promise.resolve()
+          .then(() => terminateProcessBestEffort(currentProcess))
+          .catch(() => {
+            try {
+              currentProcess.kill();
+            } catch (_) {
+              // Ignore.
+            }
+          });
+      }
+    });
+
+    return recordingCancelPromise;
   }
 
   async function waitForRecordingStop({ forceKillOnTimeout, timeoutMessage }) {
@@ -1255,6 +1386,7 @@ function createRecorderService(deps) {
       hasRecordingProcess: Boolean(pythonProcess),
       recordingStartTime,
       stopInProgress: Boolean(recordingStopPromise),
+      cancelInProgress: Boolean(recordingCancelPromise),
     };
   }
 
@@ -1344,7 +1476,7 @@ function createRecorderService(deps) {
         };
       }
 
-      if (isRecorderBusy({ pythonProcess, recordingStopPromise })) {
+      if (isRecorderBusy({ pythonProcess, recordingStopPromise, recordingCancelPromise })) {
         if (startGateHeld) {
           recordingsMaintenanceGate.release('start');
         }
@@ -1702,7 +1834,7 @@ function createRecorderService(deps) {
           const recoveredStopResult = lastLiveRecorderResult;
           const closeAction = getRecorderCloseAction({
             recordingStarted,
-            stopInProgress: Boolean(recordingStopPromise),
+            stopInProgress: Boolean(recordingStopPromise || recordingCancelPromise),
             startupSettled,
             startupFailureMessage,
             progressStage,
@@ -1896,6 +2028,11 @@ function createRecorderService(deps) {
       // renderer to skip the normal transcribe-and-save flow for the same file.
       return consumeQuitPersistedFlag(result);
     });
+
+    ipcMain.handle('cancel-recording', async (event) => {
+      assertTrustedRendererSender(event);
+      return cancelRecordingProcess();
+    });
   }
 
   return {
@@ -1905,6 +2042,7 @@ function createRecorderService(deps) {
     clearRecordingRuntimeState,
     getCaptureState,
     stopRecordingProcess,
+    cancelRecordingProcess,
     waitForRecordingStop,
     parseRecordingStopResultFromStdout,
     discoverInterruptedCaptures,

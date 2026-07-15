@@ -15,6 +15,7 @@ const {
   findRecorderResultPayload,
   getRecorderResultAudioPath,
   normalizeRecordingStopPayload,
+  parseRecordingStopResult,
   getRecorderEventAction,
 } = require('../../src/main-process-helpers');
 
@@ -112,6 +113,21 @@ test('JS stop-result helpers accept both audioPath and outputPath spellings', ()
       duration: 12.5,
       desktopDiagnostics: undefined,
     },
+  );
+});
+
+test('JS stop-result helpers accept cancelled discard payloads without audioPath', () => {
+  const cancelled = findRecorderResultPayload('{"success":true,"cancelled":true}');
+  assert.deepEqual(cancelled, { success: true, cancelled: true });
+  assert.deepEqual(
+    normalizeRecordingStopPayload(cancelled, { existsSync: () => false }),
+    { success: true, cancelled: true },
+  );
+  assert.deepEqual(
+    parseRecordingStopResult('{"success":true,"cancelled":true}\n', {
+      existsSync: () => false,
+    }),
+    { success: true, cancelled: true },
   );
 });
 

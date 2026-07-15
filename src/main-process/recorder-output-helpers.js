@@ -30,8 +30,12 @@ function appendSpawnJsonResultBuffer(buffer, chunk, maxChars = SPAWN_JSON_RESULT
   };
 }
 
-function isRecorderBusy({ pythonProcess = null, recordingStopPromise = null } = {}) {
-  return Boolean(pythonProcess || recordingStopPromise);
+function isRecorderBusy({
+  pythonProcess = null,
+  recordingStopPromise = null,
+  recordingCancelPromise = null,
+} = {}) {
+  return Boolean(pythonProcess || recordingStopPromise || recordingCancelPromise);
 }
 
 function buildRecorderBusyResponse() {
@@ -95,6 +99,10 @@ function parseRecorderMessageLine(line) {
       return { kind: 'result', payload: parsed };
     }
 
+    if (parsed.success === true && parsed.cancelled === true) {
+      return { kind: 'result', payload: parsed };
+    }
+
     return { kind: 'json', payload: parsed };
   } catch (error) {
     return { kind: 'text', payload: { message: trimmed } };
@@ -132,6 +140,7 @@ function findRecorderResultPayload(stdoutData) {
       const parsed = JSON.parse(lines[index]);
       if (parsed && typeof parsed === 'object' && (
         parsed.success === false ||
+        parsed.cancelled === true ||
         getRecorderResultAudioPath(parsed)
       )) {
         return parsed;
@@ -161,6 +170,13 @@ function normalizeRecordingStopPayload(recordingInfo, { existsSync = () => false
       // Windows may still emit audioPath after a processing failure; preserve it
       // so quit/stop can save the recording when the file exists on disk.
       ...(recoveredPath ? { audioPath: recoveredPath } : {}),
+    };
+  }
+
+  if (recordingInfo.success === true && recordingInfo.cancelled === true) {
+    return {
+      success: true,
+      cancelled: true,
     };
   }
 

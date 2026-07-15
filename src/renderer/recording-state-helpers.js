@@ -12,6 +12,16 @@
   }
 
   /**
+   * Discard is offered only while actively capturing or during countdown.
+   * Once Stop is pressed (`stopping`) or discard is in flight (`cancelling`), hide it.
+   */
+  function shouldShowDiscardRecordingControl(recordingState) {
+    return recordingState === 'recording'
+      || recordingState === 'countdown'
+      || recordingState === 'starting';
+  }
+
+  /**
    * Pure view model for the always-visible top-bar recording presence pill.
    * @returns {{ visible: boolean, label: string, timeText: string|null, modifier: string|null }}
    */
@@ -31,6 +41,15 @@
         label: 'Finishing recording...',
         timeText: elapsedText || null,
         modifier: 'stopping',
+      };
+    }
+
+    if (recordingState === 'cancelling') {
+      return {
+        visible: true,
+        label: 'Discarding recording...',
+        timeText: elapsedText || null,
+        modifier: 'cancelling',
       };
     }
 
@@ -59,6 +78,7 @@
   const helpers = {
     getRecordButtonAction,
     getRecordingPresenceView,
+    shouldShowDiscardRecordingControl,
     canHydratedRendererStopRecording,
   };
 

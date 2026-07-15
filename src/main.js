@@ -588,7 +588,9 @@ const meetingManagerClient = registerMeetingManagerClient(ipcMain, {
   },
   isRecorderBusy: () => {
     const state = recorderService && recorderService.getQuitInterceptInputs();
-    return Boolean(state && (state.hasRecordingProcess || state.stopInProgress));
+    return Boolean(state && (
+      state.hasRecordingProcess || state.stopInProgress || state.cancelInProgress
+    ));
   },
   onScanSucceeded: () => {
     if (recorderService && typeof recorderService.notifyScanImportSucceeded === 'function') {

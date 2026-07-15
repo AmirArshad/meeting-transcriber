@@ -72,10 +72,10 @@ Diagram: `docs/architecture/background-transcription-queue-before-after.svg`
 
 **Companion PR — Cancel recording (discard); see design doc “Companion feature” section**
 
-- [ ] [Risk: High] New `cancel` stdin command in both recorders; tighten stdin parse to exact-token (current `"stop" in line.lower()` is substring match); skip Stage A entirely; emit structured `{success: true, cancelled: true}` final JSON (never stderr-only exit).
-- [ ] [Risk: High] Tombstone-ordered spool discard: write `discarded` marker to capture manifest **first**, then best-effort delete spools/temps; `capture_recovery` + scan-import treat marked captures as cleanup-only (no resurrection). Crash before marker → recovers as normal interrupted recording (safe default).
-- [ ] [Risk: Medium] `recorder-service.js` cancel path: publishes capture state, resolves to idle, never calls `addMeetingToHistory`/enqueue; stop/cancel mutually exclusive (first command wins; cancel after `stop` rejected). Discard UI only while `recording`/countdown (never during `stopping`), always confirms, not adjacent-clickable with Stop.
-- [ ] [Risk: High] Recorder contract test updates per AGENTS.md list (JS + Python event-contract tests, `recorder-output-helpers`, manual smoke: cancel mid-recording both platforms; relaunch shows no recovered meeting).
+- [x] [Risk: High] New `cancel` stdin command in both recorders; tighten stdin parse to exact-token (current `"stop" in line.lower()` is substring match); skip Stage A entirely; emit structured `{success: true, cancelled: true}` final JSON (never stderr-only exit).
+- [x] [Risk: High] Tombstone-ordered spool discard: write `discarded` marker to capture manifest **first**, then best-effort delete spools/temps; `capture_recovery` + scan-import treat marked captures as cleanup-only (no resurrection). Crash before marker → recovers as normal interrupted recording (safe default).
+- [x] [Risk: Medium] `recorder-service.js` cancel path: publishes capture state, resolves to idle, never calls `addMeetingToHistory`/enqueue; stop/cancel mutually exclusive (first command wins; cancel after `stop` rejected). Discard UI only while `recording`/countdown (never during `stopping`), always confirms, not adjacent-clickable with Stop.
+- [x] [Risk: High] Recorder contract test updates per AGENTS.md list (JS + Python event-contract tests, `recorder-output-helpers`, manual smoke: cancel mid-recording both platforms; relaunch shows no recovered meeting).
 
 **Phase 2 (polish) — after Phase 1 ships**
 

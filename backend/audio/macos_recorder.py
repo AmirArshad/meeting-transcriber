@@ -23,6 +23,7 @@ from .capture_manifest import (
     CaptureManifestCoordinator,
     MANIFEST_FILENAME,
     discard_capture_session,
+    mark_capture_discarded_and_cleanup,
 )
 from .track_spool import TrackSpool
 from .streaming_post_processor import FinalizationError, finalize_capture
@@ -723,6 +724,39 @@ class MacOSAudioRecorder:
         if session_dir is not None:
             discard_capture_session(session_dir)
 
+    def _close_spool_handles_for_discard(self) -> None:
+        """Close track spool writers without entering the finalize path."""
+        for spool in (self._mic_spool, self._desktop_spool):
+            if spool is None:
+                continue
+            try:
+                spool.close()
+            except Exception:
+                pass
+        self._mic_spool = None
+        self._desktop_spool = None
+
+    def cancel_recording(self) -> None:
+        """Stop capture, skip Stage A, tombstone-discard spools (no meeting audio)."""
+        print("Cancelling recording (discard)...", file=sys.stderr)
+        if self._get_running():
+            self._set_running(False)
+        if self.mic_thread:
+            self.mic_thread.join(timeout=2.0)
+        if self.desktop_thread:
+            self.desktop_thread.join(timeout=2.0)
+        if self.desktop_capture:
+            try:
+                self.desktop_capture.stop_recording()
+            except Exception as stop_err:
+                print(f"Desktop audio stop during cancel failed: {stop_err}", file=sys.stderr)
+            if self.desktop_capture is not None:
+                self.desktop_capture.audio_sink = None
+        self._close_spool_handles_for_discard()
+        mark_capture_discarded_and_cleanup(self._capture_manifest)
+        self._capture_manifest = None
+        print("Recording cancelled; capture discarded.", file=sys.stderr)
+
     def _record_microphone(self):
         """Record from microphone using sounddevice."""
         stream_opened = False
@@ -1248,12 +1282,21 @@ def main():
         sys.exit(1)
 
     result_emitted = False
+    recording_cancelled = False
 
     def emit_final_result(*, exit_code: int = 0) -> None:
         nonlocal result_emitted
         if result_emitted or recorder is None:
             return
         result_emitted = True
+
+        if recording_cancelled:
+            _send_json_message({
+                'success': True,
+                'cancelled': True,
+            })
+            sys.exit(exit_code)
+            return
 
         failure = getattr(recorder, 'recording_failure', None)
         recovered_path = None
@@ -1307,24 +1350,33 @@ def main():
                 time.sleep(1)
             recorder.stop_recording()
         else:
-            # Manual stop (wait for stdin command from Electron)
-            print(f"Recording... (send 'stop' to stdin to stop)", file=sys.stderr)
+            # Manual stop/cancel (wait for stdin command from Electron)
+            from .recorder_stdin import (
+                RECORDER_STDIN_CANCEL,
+                parse_recorder_stdin_command,
+            )
 
-            # Thread to listen for stop command from stdin
+            print(f"Recording... (send 'stop' or 'cancel' to stdin)", file=sys.stderr)
+
             stop_event = threading.Event()
+            stdin_command = {"cmd": "stop"}
 
             def input_listener():
-                """Listen for stop command from Electron via stdin."""
+                """Listen for stop/cancel from Electron via stdin (exact-token)."""
                 try:
                     for line in sys.stdin:
-                        if "stop" in line.strip().lower():
+                        cmd = parse_recorder_stdin_command(line)
+                        if cmd is not None:
+                            stdin_command["cmd"] = cmd
                             stop_event.set()
                             break
                     else:
                         # stdin EOF while capture is active — stop cleanly (no orphan).
+                        stdin_command["cmd"] = "stop"
                         stop_event.set()
                 except Exception as e:
                     print(f"Error in command listener: {e}", file=sys.stderr)
+                    stdin_command["cmd"] = "stop"
                     stop_event.set()
 
             input_thread = threading.Thread(target=input_listener, daemon=True)
@@ -1360,8 +1412,13 @@ def main():
 
                 time.sleep(0.2)  # 5 FPS updates (200ms interval)
 
-            print(f"\nStopping recording...", file=sys.stderr)
-            recorder.stop_recording()
+            if stdin_command["cmd"] == RECORDER_STDIN_CANCEL:
+                print(f"\nCancelling recording...", file=sys.stderr)
+                recorder.cancel_recording()
+                recording_cancelled = True
+            else:
+                print(f"\nStopping recording...", file=sys.stderr)
+                recorder.stop_recording()
     except KeyboardInterrupt:
         print(f"\nCtrl+C received", file=sys.stderr)
         try:

@@ -262,3 +262,21 @@ def test_stderr_debug_prints_are_not_structured_control_messages():
         send_json_wrapper = source.split("def _send_json_message", 1)[1].split("def ", 1)[0]
         assert "sys.stderr" not in send_json_wrapper
         assert "print(" not in send_json_wrapper or "_recorder_stdout" in send_json_wrapper
+
+
+def test_recorder_stdin_uses_exact_token_matching():
+    from audio.recorder_stdin import parse_recorder_stdin_command
+
+    assert parse_recorder_stdin_command("stop\n") == "stop"
+    assert parse_recorder_stdin_command("  CANCEL  ") == "cancel"
+    assert parse_recorder_stdin_command("stopgap") is None
+    assert parse_recorder_stdin_command("please stop") is None
+    assert parse_recorder_stdin_command("cancelation") is None
+
+    for path in (WINDOWS_RECORDER, MACOS_RECORDER):
+        source = _read(path)
+        assert "parse_recorder_stdin_command" in source
+        assert '"stop" in line' not in source
+        assert "cancel_recording" in source
+        assert '"cancelled": True' in source or "'cancelled': True" in source
+        assert "mark_capture_discarded_and_cleanup" in source

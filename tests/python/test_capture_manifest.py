@@ -18,6 +18,7 @@ from audio.capture_manifest import (  # noqa: E402
     CaptureManifestError,
     MANIFEST_SCHEMA_VERSION,
     discard_capture_session,
+    mark_capture_discarded_and_cleanup,
 )
 from meetings.scan_import import select_scannable_audio_files  # noqa: E402
 
@@ -266,6 +267,21 @@ class CaptureManifestTests(unittest.TestCase):
             self.assertFalse(session_dir.exists())
             # Idempotent.
             discard_capture_session(session_dir)
+
+    def test_mark_capture_discarded_writes_marker_then_deletes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            recordings_dir = Path(temp_dir)
+            output_path = recordings_dir / "recording_cancel.opus"
+            coordinator = CaptureManifestCoordinator.create(
+                output_path,
+                started_at_ns=1,
+                started_at_iso="2026-07-13T18:00:00.000Z",
+            )
+            session_dir = coordinator.session_dir
+            segment = session_dir / "mic_0000.pcm.part"
+            segment.write_bytes(b"\x00\x01")
+            mark_capture_discarded_and_cleanup(coordinator)
+            self.assertFalse(session_dir.exists())
 
 
 if __name__ == "__main__":
