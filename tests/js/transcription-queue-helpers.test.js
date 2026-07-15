@@ -20,6 +20,7 @@ const {
   clearTranscriptionJobDeleteTombstone,
   isTranscriptionJobBlocked,
   shouldSkipJobAtHead,
+  shouldTerminateComputeJobsForMeeting,
   buildTranscriptionQueueStatePayload,
   buildMeetingTranscriptMarkdown,
   buildSpeakerSidecarPayload,
@@ -41,6 +42,17 @@ test('shouldSkipJobAtHead gates quit, cancel, and delete', () => {
   assert.equal(shouldSkipJobAtHead({ isCancelled: true }), true);
   assert.equal(shouldSkipJobAtHead({ isDeleted: true }), true);
   assert.equal(shouldSkipJobAtHead({ isQuitCommitted: true, isCancelled: true }), true);
+});
+
+test('shouldTerminateComputeJobsForMeeting scopes kill to the active meeting only', () => {
+  assert.equal(shouldTerminateComputeJobsForMeeting({
+    activeMeetingId: 'a',
+    targetMeetingId: 'a',
+  }), true);
+  assert.equal(shouldTerminateComputeJobsForMeeting({
+    activeMeetingId: 'a',
+    targetMeetingId: 'b',
+  }), false);
 });
 
 test('queue upsert/publish payload tracks active meeting, order, and busyCount', () => {

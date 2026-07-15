@@ -155,6 +155,16 @@ function isTranscriptionJobBlocked(state, meetingId, { isQuitCommitted = false }
     || isTranscriptionJobDeleted(state, id);
 }
 
+/**
+ * Delete/cancel of meeting B must not terminate meeting A's active Whisper child.
+ * Only the meeting that currently owns activeMeetingId may kill wall-clock jobs.
+ */
+function shouldTerminateComputeJobsForMeeting({ activeMeetingId, targetMeetingId } = {}) {
+  const active = String(activeMeetingId || '').trim();
+  const target = String(targetMeetingId || '').trim();
+  return Boolean(active) && Boolean(target) && active === target;
+}
+
 const SESSION_READY_JOB_CAP = 5;
 
 function countBusyTranscriptionJobs(state) {
@@ -323,6 +333,7 @@ module.exports = {
   clearTranscriptionJobDeleteTombstone,
   shouldSkipJobAtHead,
   isTranscriptionJobBlocked,
+  shouldTerminateComputeJobsForMeeting,
   countBusyTranscriptionJobs,
   trimSessionReadyJobs,
   formatQueuedTranscriptionBusyMessage,

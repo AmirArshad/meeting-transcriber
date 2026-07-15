@@ -160,6 +160,7 @@ const {
   isTranscriptionJobDeleted,
   clearTranscriptionJobDeleteTombstone,
   isTranscriptionJobBlocked,
+  shouldTerminateComputeJobsForMeeting,
 } = require('./main-process/transcription-queue-helpers');
 
 module.exports = {
@@ -283,6 +284,7 @@ module.exports = {
   isTranscriptionJobDeleted,
   clearTranscriptionJobDeleteTombstone,
   isTranscriptionJobBlocked,
+  shouldTerminateComputeJobsForMeeting,
   TRANSCRIPTION_QUEUE_STATE_CHANNEL,
   USER_CANCELLED_TRANSCRIPTION_ERROR,
   summarizeAiBackendError,

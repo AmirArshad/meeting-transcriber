@@ -227,6 +227,7 @@ const EXPECTED_MAIN_PROCESS_HELPER_EXPORTS = [
   'shouldKillProcessOnQuit',
   'shouldSkipJobAtHead',
   'shouldSkipQuitComputeDrain',
+  'shouldTerminateComputeJobsForMeeting',
   'splitBufferedLines',
   'summarizeAiBackendError',
   'terminateNonAbortableQuitComputeJobs',

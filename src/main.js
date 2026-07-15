@@ -575,7 +575,13 @@ const meetingManagerClient = registerMeetingManagerClient(ipcMain, {
     if (transcriptionService && typeof transcriptionService.cancelJobForDelete === 'function') {
       return transcriptionService.cancelJobForDelete(meetingId);
     }
-    return { cancelled: false };
+    return { cancelled: false, tombstoned: false };
+  },
+  afterDeleteMeeting: async (meetingId) => {
+    if (transcriptionService && typeof transcriptionService.clearMeetingDeleteGuard === 'function') {
+      return transcriptionService.clearMeetingDeleteGuard(meetingId);
+    }
+    return false;
   },
   isRecorderBusy: () => {
     const state = recorderService && recorderService.getQuitInterceptInputs();

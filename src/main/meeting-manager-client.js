@@ -27,6 +27,7 @@
  * @param {Function} [deps.isRecorderBusy]
  * @param {Function} [deps.terminateProcessBestEffort]
  * @param {Function} [deps.beforeDeleteMeeting] - cancel/terminate queued transcription before delete
+ * @param {Function} [deps.afterDeleteMeeting] - clear delete tombstone after meeting_manager delete settles
  * @param {number} [deps.recordingsScanTimeoutMs]
  * @param {object} [deps.recordingsMaintenanceGate]
  */
@@ -49,6 +50,7 @@ function createMeetingManagerClient(deps) {
     isRecorderBusy = () => false,
     terminateProcessBestEffort = async (proc) => proc.kill(),
     beforeDeleteMeeting = async () => {},
+    afterDeleteMeeting = async () => {},
     recordingsScanTimeoutMs = 60 * 1000,
     unrefRecordingsScanTimeout = true,
     recordingsMaintenanceGate = null,
@@ -330,36 +332,49 @@ function createMeetingManagerClient(deps) {
       // queue cannot write artifacts after the tombstone (PR2 delete-while-queued).
       // Failures must surface — swallowing would let delete proceed while a job
       // can still recreate transcript/sidecar files.
+      // Tombstone stays until afterDeleteMeeting in finally (covers delete success
+      // and failure) so Retry cannot admit mid-delete.
       await beforeDeleteMeeting(id);
 
       const recordingsDir = path.join(app.getPath('userData'), 'recordings');
 
-      return new Promise((resolve, reject) => {
-        const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
-          '--recordings-dir', recordingsDir,
-          'delete',
-          id
-        ]), { cwd: pythonConfig.backendPath });
+      try {
+        return await new Promise((resolve, reject) => {
+          const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
+            '--recordings-dir', recordingsDir,
+            'delete',
+            id
+          ]), { cwd: pythonConfig.backendPath });
 
-        let errorOutput = '';
+          let errorOutput = '';
 
-        python.stderr.on('data', (data) => {
-          errorOutput = appendSpawnLogBuffer(errorOutput, data);
+          python.stderr.on('data', (data) => {
+            errorOutput = appendSpawnLogBuffer(errorOutput, data);
+          });
+
+          python.on('close', (code) => {
+            if (code === 0) {
+              resolve({ success: true });
+            } else {
+              const errorMsg = errorOutput.trim() || 'Unknown error';
+              reject(new Error(`Failed to delete meeting: ${errorMsg}`));
+            }
+          });
+
+          python.on('error', (err) => {
+            reject(err);
+          });
         });
-
-        python.on('close', (code) => {
-          if (code === 0) {
-            resolve({ success: true });
-          } else {
-            const errorMsg = errorOutput.trim() || 'Unknown error';
-            reject(new Error(`Failed to delete meeting: ${errorMsg}`));
-          }
-        });
-
-        python.on('error', (err) => {
-          reject(err);
-        });
-      });
+      } finally {
+        try {
+          await afterDeleteMeeting(id);
+        } catch (clearError) {
+          console.warn(
+            'Could not clear transcription delete guard:',
+            clearError && clearError.message,
+          );
+        }
+      }
     });
 
     /**
