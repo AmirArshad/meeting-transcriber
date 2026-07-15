@@ -105,6 +105,10 @@ let countdownValue = 3;
 let recordingStartTime = null;
 let activeRecordingSessionId = null;
 let activeCountdownCancel = null;
+/** Bumped to invalidate an in-flight startRecording() when Discard wins during starting/countdown. */
+let startRecordingEpoch = 0;
+/** Set when the user confirms Discard during starting/countdown/preflight. */
+let discardRequestedForStart = false;
 let timerInterval = null;
 let recordingPresencePollTimer = null;
 let frozenPresenceElapsedText = null;
@@ -2715,14 +2719,29 @@ async function startRecording() {
 
   setRecordingState('starting');
 
+  const epoch = ++startRecordingEpoch;
+  discardRequestedForStart = false;
+  const startWasDiscarded = () => (
+    discardRequestedForStart || epoch !== startRecordingEpoch
+  );
+
   try {
     const preflightPassed = await runRecordingPreflightChecks({ micId, desktopId });
+    if (startWasDiscarded()) {
+      addLog('Recording discarded during startup checks.', 'warning');
+      setRecordingState('idle');
+      return;
+    }
     if (!preflightPassed) {
       addLog('Recording canceled by preflight checks.', 'warning');
       setRecordingState('idle');
       return;
     }
   } catch (error) {
+    if (startWasDiscarded()) {
+      setRecordingState('idle');
+      return;
+    }
     console.error('Preflight checks failed:', error);
     addLog(`Preflight checks failed: ${error.message}`, 'error');
     setRecordingState('idle');
@@ -2737,10 +2756,20 @@ async function startRecording() {
     attempt++;
 
     try {
+      if (startWasDiscarded()) {
+        addLog('Recording discarded before start.', 'warning');
+        setRecordingState('idle');
+        return;
+      }
+
       if (attempt > 1) {
         addLog(`Retrying recording (attempt ${attempt}/${maxAttempts})...`);
         // Wait a moment before retrying
         await new Promise(resolve => setTimeout(resolve, 1000));
+        if (startWasDiscarded()) {
+          setRecordingState('idle');
+          return;
+        }
       } else {
         addLog('Starting recording...');
       }
@@ -2756,6 +2785,15 @@ async function startRecording() {
       });
 
       const recordingResult = await recordingPromise;
+
+      if (startWasDiscarded() || recordingResult?.cancelled || recordingResult?.code === 'RECORDING_CANCELLED') {
+        cancelCountdown();
+        addLog('Recording discarded during startup.', 'warning');
+        currentAudioFile = null;
+        currentRecordingDurationSeconds = 0;
+        setRecordingState('idle');
+        return;
+      }
 
       if (recordingResult?.code === 'RECORDER_BUSY') {
         cancelCountdown();
@@ -2777,7 +2815,19 @@ async function startRecording() {
         activeRecordingSessionId = recordingResult.sessionId;
       }
 
-      await countdownPromise;
+      const countdownResult = await countdownPromise;
+      if (startWasDiscarded() || countdownResult?.cancelled) {
+        addLog('Recording discarded during countdown.', 'warning');
+        try {
+          await window.electronAPI.cancelRecording();
+        } catch (_) {
+          // Main may already be idle / cancelling.
+        }
+        currentAudioFile = null;
+        currentRecordingDurationSeconds = 0;
+        setRecordingState('idle');
+        return;
+      }
 
       // After first successful recording, set flag to false
       if (isFirstRecording) {
@@ -2803,6 +2853,11 @@ async function startRecording() {
     } catch (error) {
       console.error(`Failed to start recording (attempt ${attempt}):`, error);
       cancelActiveCountdown();
+
+      if (startWasDiscarded()) {
+        setRecordingState('idle');
+        return;
+      }
 
       if (attempt >= maxAttempts) {
         // All attempts failed
@@ -2864,8 +2919,10 @@ async function startRecording() {
 function startCountdown() {
   let interval = null;
   let settled = false;
+  let resolveCountdown = null;
 
   const promise = new Promise((resolve) => {
+    resolveCountdown = resolve;
     countdownValue = 3;
     updateButtonUI();
 
@@ -2879,7 +2936,7 @@ function startCountdown() {
         clearInterval(interval);
         interval = null;
         activeCountdownCancel = null;
-        resolve();
+        resolve({ cancelled: false });
       }
     }, 1000);
   });
@@ -2891,6 +2948,9 @@ function startCountdown() {
     }
     if (!settled) {
       settled = true;
+      if (typeof resolveCountdown === 'function') {
+        resolveCountdown({ cancelled: true });
+      }
     }
     activeCountdownCancel = null;
   };
@@ -2997,6 +3057,8 @@ async function discardRecording() {
 
   try {
     addLog('Discarding recording...');
+    discardRequestedForStart = true;
+    startRecordingEpoch += 1;
     cancelActiveCountdown();
     if (Number.isFinite(recordingStartTime)) {
       frozenPresenceElapsedText = formatElapsedDuration((Date.now() - recordingStartTime) / 1000);
@@ -3008,7 +3070,7 @@ async function discardRecording() {
     }
 
     const result = await window.electronAPI.cancelRecording();
-    if (result?.cancelled || result?.success) {
+    if (result?.cancelled === true && result?.success !== false) {
       addLog('Recording discarded. Nothing was saved.', 'warning');
       setTranscriptMessage('Recording discarded. Nothing was saved.', false);
       currentAudioFile = null;
@@ -3024,6 +3086,12 @@ async function discardRecording() {
     addLog(`Discard failed: ${error.message}`, 'error');
     if (error?.code === 'RECORDING_STOP_IN_PROGRESS') {
       setTranscriptMessage('Recording is already stopping and cannot be discarded.', true);
+      // First-wins: stop owns the UI — move to stopping and poll until idle.
+      if (Number.isFinite(recordingStartTime)) {
+        frozenPresenceElapsedText = formatElapsedDuration((Date.now() - recordingStartTime) / 1000);
+      }
+      setRecordingState('stopping');
+      startRecordingPresencePoll();
       return;
     }
     stopTimer();

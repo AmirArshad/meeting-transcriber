@@ -283,6 +283,26 @@ class CaptureManifestTests(unittest.TestCase):
             mark_capture_discarded_and_cleanup(coordinator)
             self.assertFalse(session_dir.exists())
 
+    def test_mark_capture_discarded_does_not_delete_when_marker_write_fails(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            recordings_dir = Path(temp_dir)
+            output_path = recordings_dir / "recording_marker_fail.opus"
+            coordinator = CaptureManifestCoordinator.create(
+                output_path,
+                started_at_ns=1,
+                started_at_iso="2026-07-13T18:00:00.000Z",
+            )
+            session_dir = coordinator.session_dir
+            segment = session_dir / "mic_0000.pcm.part"
+            segment.write_bytes(b"\x00\x01")
+            coordinator.close()
+            with self.assertRaises(CaptureManifestError):
+                mark_capture_discarded_and_cleanup(coordinator)
+            self.assertTrue(session_dir.is_dir())
+            self.assertTrue(segment.is_file())
+            data = json.loads((session_dir / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(data["state"], "recording")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -81,6 +81,26 @@ class MeetingScanImportTests(unittest.TestCase):
             self.assertTrue((recordings_dir / "recording_2026-01-01T12-00-00.wav").exists())
             self.assertFalse(temp_pcm.exists())
 
+    def test_recover_or_cleanup_sweeps_discarded_capture_without_promoting(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            recordings_dir = Path(temp_dir)
+            capture_dir = recordings_dir / "meeting_discarded.capture"
+            capture_dir.mkdir()
+            (capture_dir / "manifest.json").write_text(
+                '{\n  "schemaVersion": 1,\n  "state": "discarded",\n'
+                '  "outputStem": "meeting_discarded",\n'
+                '  "startedAtMonotonicNs": 1,\n'
+                '  "startedAtIso": "2026-07-13T18:00:00.000Z",\n'
+                '  "tracks": {}\n}\n',
+                encoding="utf-8",
+            )
+            (capture_dir / "mic_0000.pcm.part").write_bytes(b"\x00\x01")
+            result = recover_or_cleanup_recorder_temps(recordings_dir)
+            self.assertGreaterEqual(result.get("discardedCleaned", 0), 1)
+            self.assertFalse(capture_dir.exists())
+            scannable = select_scannable_audio_files(recordings_dir)
+            self.assertEqual(scannable, [])
+
     def test_recover_or_cleanup_recorder_temps_drops_truncated_pcm_tmp(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             recordings_dir = Path(temp_dir)

@@ -280,3 +280,33 @@ def test_recorder_stdin_uses_exact_token_matching():
         assert "cancel_recording" in source
         assert '"cancelled": True' in source or "'cancelled': True" in source
         assert "mark_capture_discarded_and_cleanup" in source
+
+
+def test_cancel_recording_methods_skip_finalize_capture():
+    for path in (WINDOWS_RECORDER, MACOS_RECORDER):
+        source = _read(path)
+        cancel_fn = source.split("def cancel_recording", 1)[1].split("\n    def ", 1)[0]
+        assert "finalize_capture" not in cancel_fn
+        assert "mark_capture_discarded_and_cleanup" in cancel_fn
+        assert "set_state(\"finalizing\")" not in cancel_fn
+        assert "set_state('finalizing')" not in cancel_fn
+
+
+def test_macos_duration_mode_shares_stdin_cancel_listener():
+    source = _read(MACOS_RECORDER)
+    # Stdin listener must be started before the duration/manual branch so
+    # --duration recordings can still honor cancel.
+    listener_pos = source.find("def input_listener")
+    duration_pos = source.find("if args.duration > 0:")
+    assert listener_pos != -1
+    assert duration_pos != -1
+    assert listener_pos < duration_pos
+    finish_helper = source.split("def finish_capture_from_stdin_or_duration", 1)[1].split(
+        "\n    try:", 1
+    )[0]
+    assert "RECORDER_STDIN_CANCEL" in finish_helper
+    assert "cancel_recording" in finish_helper
+    # Cancel intent must not fall through to stop_recording on exception.
+    except_block = source.rsplit("except Exception as e:", 1)[1]
+    assert "cancel_requested" in except_block
+    assert "cancel_recording()" in except_block

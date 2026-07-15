@@ -604,3 +604,101 @@ test('cancel-recording rejects when stop is already in progress', async () => {
   proc.emit('close', 0);
   await stopPromise;
 });
+
+test('cancel-recording rejects failure or finalized results instead of claiming discard', async () => {
+  const { EventEmitter } = require('node:events');
+  const { deps } = createMinimalDeps({
+    isQuitCommitted: () => false,
+  });
+
+  const proc = new EventEmitter();
+  proc.stdout = new EventEmitter();
+  proc.stderr = new EventEmitter();
+  proc.stdin = { write() {} };
+  proc.killed = false;
+  proc.pid = 4244;
+  proc.kill = () => { proc.killed = true; };
+  deps.spawnTrackedPython = () => proc;
+
+  const service = createRecorderService(deps);
+  const handlers = {};
+  service.registerIpc({
+    handle(channel, handler) {
+      handlers[channel] = handler;
+    },
+  });
+
+  const startPromise = handlers['start-recording'](
+    { sender: {} },
+    { micId: 0, loopbackId: 1, isFirstRecording: false },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  proc.stdout.emit('data', Buffer.from(`${JSON.stringify({
+    type: 'event',
+    event: 'recording_started',
+    message: 'Recording started!',
+  })}\n`));
+  await startPromise;
+
+  const cancelPromise = handlers['cancel-recording']({ sender: {} });
+  await new Promise((resolve) => setImmediate(resolve));
+  proc.stdout.emit('data', Buffer.from(`${JSON.stringify({
+    success: false,
+    code: 'RECORDING_CANCEL_FAILED',
+    message: 'Cancel failed',
+  })}\n`));
+  proc.emit('close', 1);
+  await assert.rejects(
+    () => cancelPromise,
+    (error) => error && error.code === 'RECORDING_CANCEL_FAILED',
+  );
+});
+
+test('cancel during starting settles start IPC as cancelled', async () => {
+  const { EventEmitter } = require('node:events');
+  const captureStates = [];
+  const { deps } = createMinimalDeps({
+    onCaptureStateChanged: (state) => captureStates.push(state),
+    isQuitCommitted: () => false,
+  });
+
+  const proc = new EventEmitter();
+  proc.stdout = new EventEmitter();
+  proc.stderr = new EventEmitter();
+  proc.stdin = { write() {} };
+  proc.killed = false;
+  proc.pid = 4245;
+  proc.kill = () => { proc.killed = true; };
+  deps.spawnTrackedPython = () => proc;
+
+  const service = createRecorderService(deps);
+  const handlers = {};
+  service.registerIpc({
+    handle(channel, handler) {
+      handlers[channel] = handler;
+    },
+  });
+
+  const startPromise = handlers['start-recording'](
+    { sender: {} },
+    { micId: 0, loopbackId: 1, isFirstRecording: false },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(captureStates.at(-1).state, 'starting');
+
+  const cancelPromise = handlers['cancel-recording']({ sender: {} });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(captureStates.some((s) => s.state === 'cancelling'), true);
+
+  proc.stdout.emit('data', Buffer.from(`${JSON.stringify({
+    success: true,
+    cancelled: true,
+  })}\n`));
+  proc.emit('close', 0);
+
+  const [startResult, cancelResult] = await Promise.all([startPromise, cancelPromise]);
+  assert.equal(startResult.cancelled, true);
+  assert.equal(startResult.code, 'RECORDING_CANCELLED');
+  assert.deepEqual(cancelResult, { success: true, cancelled: true });
+  assert.equal(captureStates.at(-1).state, 'idle');
+});

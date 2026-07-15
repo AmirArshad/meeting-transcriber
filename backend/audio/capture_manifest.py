@@ -80,6 +80,9 @@ def mark_capture_discarded_and_cleanup(
     manifest replace), closes the coordinator, then removes the session dir.
     If deletion partially fails, the marker still prevents resurrection.
 
+    If the marker cannot be written, raises and does **not** delete — leaving
+    the session recoverable (safe default).
+
     Returns the session directory path when a coordinator was provided, else None.
     """
     if coordinator is None:
@@ -87,11 +90,8 @@ def mark_capture_discarded_and_cleanup(
     session_dir = Path(coordinator.session_dir)
     try:
         coordinator.set_state("discarded")
-    except CaptureManifestError:
-        # Coordinator may already be closed; fall through to best-effort delete.
-        pass
     except Exception:
-        # Marker write failed — leave the session recoverable (safe default).
+        # Marker write failed — never delete without a persisted discarded marker.
         try:
             coordinator.close()
         except Exception:
