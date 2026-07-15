@@ -267,15 +267,21 @@ test('admitMeetingTranscriptionJob rejects duplicate in-flight without overwriti
   await service.clearMeetingDeleteGuard('meeting_dup', deleted.generation);
 });
 
-test('cancel queued B persists durable failed even after row flips to cancelled', async () => {
+test('cancel queued B persists durable failed and quit/head neither spawns nor overwrites it', async () => {
   const statusUpdates = [];
+  const spawnCommands = [];
+  let quitCommitted = false;
+  let transcriptionWallClocks = 0;
+
   const harness = createServiceHarness({
+    isQuitCommitted: () => quitCommitted,
     spawnTrackedPython: (args) => {
       const proc = new EventEmitter();
       proc.stdout = new EventEmitter();
       proc.stderr = new EventEmitter();
       proc.kill = () => {};
       const argList = Array.isArray(args) ? args.map(String) : [];
+      spawnCommands.push(argList);
       if (argList.includes('update-transcription')) {
         const statusIdx = argList.indexOf('--status');
         statusUpdates.push({
@@ -286,7 +292,9 @@ test('cancel queued B persists durable failed even after row flips to cancelled'
       queueMicrotask(() => {
         proc.stdout.emit('data', Buffer.from(JSON.stringify({
           id: 'meeting_b',
-          transcriptionStatus: 'failed',
+          transcriptionStatus: statusUpdates.length
+            ? statusUpdates[statusUpdates.length - 1].status
+            : 'failed',
           transcriptionError: 'Cancelled by user',
         })));
         proc.emit('close', 0);
@@ -303,6 +311,15 @@ test('cancel queued B persists durable failed even after row flips to cancelled'
         getStderr: () => '',
         assertStdoutWithinLimit() {},
       };
+    },
+    runWallClockComputeAction: async ({ label, action }) => {
+      const labelText = String(label || '');
+      if (/^Transcription(\b|$)/i.test(labelText)
+        || /^Transcription retry(\b|$)/i.test(labelText)
+        || /^Speaker-guided transcription(\b|$)/i.test(labelText)) {
+        transcriptionWallClocks += 1;
+      }
+      return action((proc) => proc);
     },
   });
 
@@ -328,8 +345,46 @@ test('cancel queued B persists durable failed even after row flips to cancelled'
     QUEUE_JOB_STATUSES.failed,
   );
 
-  harness.computeQueue.rejectAll(new Error('test teardown'));
-  await jobB.catch(() => {});
+  const statusesAfterCancel = statusUpdates.map((entry) => entry.status);
+  const spawnsAfterCancel = spawnCommands.length;
+  const wallClocksAfterCancel = transcriptionWallClocks;
+
+  // Simulate quit immediately after cancel, then let B's parked FIFO closure run.
+  quitCommitted = true;
+  await harness.computeQueue.flush();
+  await jobB.catch((error) => {
+    assert.ok(
+      error && (error.code === 'TRANSCRIPTION_QUIT_SKIPPED' || error.code === 'TRANSCRIPTION_CANCELLED'),
+      `expected quit/cancel skip, got ${(error && error.code) || error}`,
+    );
+  });
+
+  assert.equal(
+    transcriptionWallClocks,
+    wallClocksAfterCancel,
+    'quit/head must not start a transcription wall-clock job for cancelled B',
+  );
+  assert.equal(
+    spawnCommands.filter((args) => args.some((arg) => /whisper|transcrib/i.test(String(arg)))).length,
+    0,
+    'quit/head must not spawn a Whisper/transcription process for cancelled B',
+  );
+  assert.deepEqual(
+    statusUpdates.map((entry) => entry.status).slice(statusesAfterCancel.length),
+    [],
+    'quit/head must not overwrite durable failed with pending/completed',
+  );
+  assert.equal(
+    statusUpdates.every((entry) => entry.status === 'failed'),
+    true,
+  );
+  assert.equal(
+    harness.getQueueState().jobs.some(
+      (job) => job.meetingId === 'meeting_b' && job.status === QUEUE_JOB_STATUSES.ready,
+    ),
+    false,
+  );
+  assert.equal(spawnsAfterCancel, spawnCommands.length);
 });
 
 test('stale delete clear after recycle cannot drop a newer tombstone', async () => {
