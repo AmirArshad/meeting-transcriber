@@ -332,9 +332,9 @@ function createMeetingManagerClient(deps) {
       // queue cannot write artifacts after the tombstone (PR2 delete-while-queued).
       // Failures must surface — swallowing would let delete proceed while a job
       // can still recreate transcript/sidecar files.
-      // Tombstone stays until afterDeleteMeeting in finally (covers delete success
-      // and failure) so Retry cannot admit mid-delete.
-      await beforeDeleteMeeting(id);
+      // Tombstone stays until afterDeleteMeeting in finally (generation-owned;
+      // may defer clear until in-flight settlement so delete IPC does not hang).
+      const deletePrep = await beforeDeleteMeeting(id);
 
       const recordingsDir = path.join(app.getPath('userData'), 'recordings');
 
@@ -367,7 +367,7 @@ function createMeetingManagerClient(deps) {
         });
       } finally {
         try {
-          await afterDeleteMeeting(id);
+          await afterDeleteMeeting(id, deletePrep);
         } catch (clearError) {
           console.warn(
             'Could not clear transcription delete guard:',

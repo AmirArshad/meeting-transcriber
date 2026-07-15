@@ -577,11 +577,14 @@ const meetingManagerClient = registerMeetingManagerClient(ipcMain, {
     }
     return { cancelled: false, tombstoned: false };
   },
-  afterDeleteMeeting: async (meetingId) => {
+  afterDeleteMeeting: async (meetingId, prep = null) => {
     if (transcriptionService && typeof transcriptionService.clearMeetingDeleteGuard === 'function') {
-      return transcriptionService.clearMeetingDeleteGuard(meetingId);
+      return transcriptionService.clearMeetingDeleteGuard(
+        meetingId,
+        prep && prep.generation != null ? prep.generation : null,
+      );
     }
-    return false;
+    return { cleared: false, deferred: false };
   },
   isRecorderBusy: () => {
     const state = recorderService && recorderService.getQuitInterceptInputs();

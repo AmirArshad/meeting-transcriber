@@ -98,6 +98,7 @@ function runWallClockComputeAction({
   label = 'Local AI job',
   terminateProcess = () => {},
   settleGraceMs = AI_COMPUTE_TIMEOUT_MS.wallClockSettleGraceMs,
+  meetingId = null,
 }) {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     // Identity registerProcess so callers can still use the return value.
@@ -116,8 +117,11 @@ function runWallClockComputeAction({
     return proc;
   };
 
+  const normalizedMeetingId = meetingId == null ? null : String(meetingId).trim() || null;
+
   const job = {
     label,
+    meetingId: normalizedMeetingId,
     timeoutMs,
     startedAt: Date.now(),
     terminate: async () => {

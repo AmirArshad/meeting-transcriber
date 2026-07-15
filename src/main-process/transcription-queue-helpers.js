@@ -37,6 +37,9 @@ function createTranscriptionQueueState() {
     cancelFlags: new Set(),
     // Survives removeQueueJob until the in-flight closure settles (delete-while-queued).
     deleteTombstones: new Set(),
+    // Generation tokens so a stale clear cannot drop a newer cancel/delete reservation.
+    cancelGuardGenerations: new Map(),
+    deleteGuardGenerations: new Map(),
   };
 }
 
@@ -92,8 +95,10 @@ function setActiveQueueMeeting(state, meetingId) {
 function markTranscriptionJobCancelled(state, meetingId) {
   const id = String(meetingId || '').trim();
   if (!id) {
-    return false;
+    return null;
   }
+  const nextGeneration = (state.cancelGuardGenerations.get(id) || 0) + 1;
+  state.cancelGuardGenerations.set(id, nextGeneration);
   state.cancelFlags.add(id);
   const job = state.jobsByMeetingId.get(id);
   if (job && job.status === QUEUE_JOB_STATUSES.queued) {
@@ -103,16 +108,19 @@ function markTranscriptionJobCancelled(state, meetingId) {
       phase: QUEUE_JOB_PHASES.cancelled,
     });
   }
-  return true;
+  return nextGeneration;
 }
 
 function markTranscriptionJobDeleted(state, meetingId) {
   const id = String(meetingId || '').trim();
   if (!id) {
-    return false;
+    return null;
   }
+  const nextGeneration = (state.deleteGuardGenerations.get(id) || 0) + 1;
+  state.deleteGuardGenerations.set(id, nextGeneration);
   state.deleteTombstones.add(id);
-  return markTranscriptionJobCancelled(state, id);
+  markTranscriptionJobCancelled(state, id);
+  return nextGeneration;
 }
 
 function isTranscriptionJobCancelled(state, meetingId) {
@@ -123,18 +131,45 @@ function isTranscriptionJobDeleted(state, meetingId) {
   return state.deleteTombstones.has(String(meetingId || '').trim());
 }
 
+function getTranscriptionCancelGuardGeneration(state, meetingId) {
+  return state.cancelGuardGenerations.get(String(meetingId || '').trim()) || null;
+}
+
+function getTranscriptionDeleteGuardGeneration(state, meetingId) {
+  return state.deleteGuardGenerations.get(String(meetingId || '').trim()) || null;
+}
+
 /**
  * Clear a consumed cancel flag. Must be called whenever a job reaches a
  * terminal state — a leaked flag would make every future job for that meeting
  * (e.g. Retry from History) self-cancel. Do not clear at head-of-queue admit;
  * mid-job cancel must remain visible through GPU wait / lookup / setup.
+ * When expectedGeneration is set, a newer reservation wins and this is a no-op.
  */
-function clearTranscriptionJobCancelFlag(state, meetingId) {
-  return state.cancelFlags.delete(String(meetingId || '').trim());
+function clearTranscriptionJobCancelFlag(state, meetingId, expectedGeneration = null) {
+  const id = String(meetingId || '').trim();
+  if (!id) {
+    return false;
+  }
+  if (expectedGeneration != null
+    && state.cancelGuardGenerations.get(id) !== expectedGeneration) {
+    return false;
+  }
+  state.cancelGuardGenerations.delete(id);
+  return state.cancelFlags.delete(id);
 }
 
-function clearTranscriptionJobDeleteTombstone(state, meetingId) {
-  return state.deleteTombstones.delete(String(meetingId || '').trim());
+function clearTranscriptionJobDeleteTombstone(state, meetingId, expectedGeneration = null) {
+  const id = String(meetingId || '').trim();
+  if (!id) {
+    return false;
+  }
+  if (expectedGeneration != null
+    && state.deleteGuardGenerations.get(id) !== expectedGeneration) {
+    return false;
+  }
+  state.deleteGuardGenerations.delete(id);
+  return state.deleteTombstones.delete(id);
 }
 
 /**
@@ -329,6 +364,8 @@ module.exports = {
   markTranscriptionJobDeleted,
   isTranscriptionJobCancelled,
   isTranscriptionJobDeleted,
+  getTranscriptionCancelGuardGeneration,
+  getTranscriptionDeleteGuardGeneration,
   clearTranscriptionJobCancelFlag,
   clearTranscriptionJobDeleteTombstone,
   shouldSkipJobAtHead,

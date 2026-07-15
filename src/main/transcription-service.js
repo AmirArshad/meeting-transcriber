@@ -30,7 +30,7 @@ const {
   AI_COMPUTE_TIMEOUT_MS,
   getTranscriptionComputeTimeoutMs,
   getGuidedTranscriptionComputeTimeoutMs,
-  runWallClockComputeAction,
+  runWallClockComputeAction: defaultRunWallClockComputeAction,
   getActiveWallClockComputeJobs,
   runGuidedTranscriptionProcess,
   buildClearedHuggingFaceTokenEnv,
@@ -55,6 +55,8 @@ const {
   markTranscriptionJobDeleted,
   isTranscriptionJobDeleted,
   clearTranscriptionJobDeleteTombstone,
+  getTranscriptionCancelGuardGeneration,
+  getTranscriptionDeleteGuardGeneration,
   isTranscriptionJobBlocked,
   shouldTerminateComputeJobsForMeeting,
 } = require('../main-process-helpers');
@@ -149,7 +151,20 @@ function createTranscriptionService(deps) {
     listMeetings = async () => [],
     isQuitCommitted = () => false,
     getActiveWallClockComputeJobs: getActiveWallClockJobs = getActiveWallClockComputeJobs,
+    runWallClockComputeAction = defaultRunWallClockComputeAction,
   } = deps;
+
+  // Serialize cancel/delete control ops per meeting so concurrent clears cannot
+  // drop a newer reservation while an older status write is still in flight.
+  const meetingControlTailById = new Map();
+
+  function enqueueMeetingControl(meetingId, fn) {
+    const id = String(meetingId || '').trim();
+    const previous = meetingControlTailById.get(id) || Promise.resolve();
+    const run = previous.catch(() => {}).then(fn);
+    meetingControlTailById.set(id, run.catch(() => {}));
+    return run;
+  }
 
   function getTranscriptionModelDownloadCheck(modelSize) {
     return buildModelDownloadCheck({
@@ -447,12 +462,19 @@ function createTranscriptionService(deps) {
     }
   }
 
-  async function terminateActiveTranscriptionComputeJobs() {
+  async function terminateActiveTranscriptionComputeJobs(meetingId) {
+    const targetMeetingId = String(meetingId || '').trim();
+    if (!targetMeetingId) {
+      return 0;
+    }
     const jobs = getActiveWallClockJobs().filter((job) => {
       if (!job || typeof job.label !== 'string') {
         return false;
       }
-      return /^(Transcription|Speaker-guided transcription|Speaker identification|Transcription retry|Meeting lookup)(\b|$)/i
+      if (String(job.meetingId || '').trim() !== targetMeetingId) {
+        return false;
+      }
+      return /^(Transcription|Speaker-guided transcription|Speaker identification|Transcription retry|Meeting lookup|Meeting status update)(\b|$)/i
         .test(job.label.trim());
     });
     await Promise.all(jobs.map(async (job) => {
@@ -481,53 +503,114 @@ function createTranscriptionService(deps) {
   }
 
   /**
-   * Establish a delete tombstone and wait for any in-flight closure to stop writing.
-   * Tombstone stays until clearMeetingDeleteGuard (after meeting_manager delete settles).
+   * Establish a delete tombstone. Active jobs are terminated and awaited;
+   * queued jobs retain the guard asynchronously so delete IPC cannot hang
+   * behind an unrelated FIFO head (30–120 minute transcription).
+   * Tombstone stays until clearMeetingDeleteGuard (generation-owned).
    */
   async function cancelJobForDelete(meetingId) {
     const id = String(meetingId || '').trim();
     if (!id) {
-      return { cancelled: false, tombstoned: false };
-    }
-    // Unconditional — even with no in-memory job — so concurrent Retry/Resume
-    // cannot admit while meeting_manager delete is still running.
-    markTranscriptionJobDeleted(transcriptionQueueState, id);
-    bumpJobEpoch(id);
-
-    const job = transcriptionQueueState.jobsByMeetingId.get(id);
-    const hasInflight = inFlightJobsByMeetingId.has(id);
-
-    // Only kill wall-clock children owned by THIS meeting. Deleting queued B
-    // must not terminate active meeting A's Whisper process.
-    if (shouldTerminateComputeJobsForMeeting({
-      activeMeetingId: transcriptionQueueState.activeMeetingId,
-      targetMeetingId: id,
-    })) {
-      await terminateActiveTranscriptionComputeJobs();
+      return { cancelled: false, tombstoned: false, generation: null };
     }
 
-    if (job) {
-      // Keep cancel flag until clearMeetingDeleteGuard.
-      removeQueueJob(transcriptionQueueState, id, { clearCancelFlag: false });
+    return enqueueMeetingControl(id, async () => {
+      // Unconditional — even with no in-memory job — so concurrent Retry/Resume
+      // cannot admit while meeting_manager delete is still running.
+      const generation = markTranscriptionJobDeleted(transcriptionQueueState, id);
+      bumpJobEpoch(id);
+
+      const job = transcriptionQueueState.jobsByMeetingId.get(id);
+      const hasInflight = inFlightJobsByMeetingId.has(id);
+      const isActiveTarget = shouldTerminateComputeJobsForMeeting({
+        activeMeetingId: transcriptionQueueState.activeMeetingId,
+        targetMeetingId: id,
+      });
+
+      if (isActiveTarget) {
+        await terminateActiveTranscriptionComputeJobs(id);
+      }
+
+      if (job) {
+        removeQueueJob(transcriptionQueueState, id, { clearCancelFlag: false });
+        publishTranscriptionQueueState();
+      }
+
+      if (isActiveTarget) {
+        // Active: await settlement so artifact writes stop before meeting_manager delete.
+        await awaitInFlightJobSettlement(id);
+        publishTranscriptionQueueState();
+        return {
+          cancelled: Boolean(job || hasInflight),
+          tombstoned: true,
+          generation,
+          deferredSettlement: false,
+        };
+      }
+
+      // Queued / no active slot: return immediately. Guard stays until
+      // clearMeetingDeleteGuard after delete (and deferred settlement if needed).
       publishTranscriptionQueueState();
-    }
-
-    await awaitInFlightJobSettlement(id);
-    publishTranscriptionQueueState();
-    return { cancelled: Boolean(job || hasInflight), tombstoned: true };
+      return {
+        cancelled: Boolean(job || hasInflight),
+        tombstoned: true,
+        generation,
+        deferredSettlement: hasInflight,
+      };
+    });
   }
 
-  function clearMeetingDeleteGuard(meetingId) {
+  function clearMeetingDeleteGuard(meetingId, expectedGeneration = null) {
     const id = String(meetingId || '').trim();
     if (!id) {
-      return false;
+      return Promise.resolve({ cleared: false, deferred: false });
     }
-    const clearedCancel = clearTranscriptionJobCancelFlag(transcriptionQueueState, id);
-    const clearedTombstone = clearTranscriptionJobDeleteTombstone(transcriptionQueueState, id);
-    if (clearedCancel || clearedTombstone) {
-      publishTranscriptionQueueState();
-    }
-    return clearedCancel || clearedTombstone;
+
+    return enqueueMeetingControl(id, async () => {
+      const currentGeneration = getTranscriptionDeleteGuardGeneration(
+        transcriptionQueueState,
+        id,
+      );
+      if (expectedGeneration != null && currentGeneration !== expectedGeneration) {
+        return { cleared: false, deferred: false, stale: true };
+      }
+      if (currentGeneration == null && !isTranscriptionJobDeleted(transcriptionQueueState, id)) {
+        return { cleared: false, deferred: false };
+      }
+
+      const generationToClear = expectedGeneration != null
+        ? expectedGeneration
+        : currentGeneration;
+
+      const finishClear = () => {
+        if (generationToClear != null
+          && getTranscriptionDeleteGuardGeneration(transcriptionQueueState, id) !== generationToClear) {
+          return false;
+        }
+        const clearedTombstone = clearTranscriptionJobDeleteTombstone(
+          transcriptionQueueState,
+          id,
+          generationToClear,
+        );
+        const clearedCancel = clearTranscriptionJobCancelFlag(transcriptionQueueState, id);
+        if (clearedTombstone || clearedCancel) {
+          publishTranscriptionQueueState();
+        }
+        return clearedTombstone || clearedCancel;
+      };
+
+      if (inFlightJobsByMeetingId.has(id)) {
+        // Do not block delete IPC on FIFO wait — clear after the closure settles.
+        void awaitInFlightJobSettlement(id).then(() => {
+          void enqueueMeetingControl(id, async () => {
+            finishClear();
+          });
+        });
+        return { cleared: false, deferred: true, generation: generationToClear };
+      }
+
+      return { cleared: finishClear(), deferred: false, generation: generationToClear };
+    });
   }
 
   /**
@@ -622,6 +705,7 @@ function createTranscriptionService(deps) {
     return runWallClockComputeAction({
       timeoutMs: AI_COMPUTE_TIMEOUT_MS.meetingPreflight,
       label: 'Meeting lookup',
+      meetingId,
       terminateProcess: terminateProcessBestEffort,
       action: (registerProcess) => getMeetingDetails(meetingId, registerProcess),
     });
@@ -703,6 +787,7 @@ function createTranscriptionService(deps) {
     return runWallClockComputeAction({
       timeoutMs: AI_COMPUTE_TIMEOUT_MS.meetingPreflight,
       label: 'Meeting status update',
+      meetingId,
       terminateProcess: terminateProcessBestEffort,
       action: (registerProcess) => updateMeetingTranscriptionStatus(meetingId, updates, registerProcess),
     });
@@ -1012,6 +1097,7 @@ function createTranscriptionService(deps) {
         let transcriptionResult = await runWallClockComputeAction({
           timeoutMs,
           label: jobLabel,
+          meetingId,
           terminateProcess: terminateProcessBestEffort,
           action: async (registerProcess) => {
             throwIfJobBlocked(meetingId, epoch);
@@ -1147,6 +1233,7 @@ function createTranscriptionService(deps) {
               postPassDiarizationResult = await runWallClockComputeAction({
                 timeoutMs: AI_COMPUTE_TIMEOUT_MS.diarization,
                 label: 'Speaker identification',
+                meetingId,
                 terminateProcess: terminateProcessBestEffort,
                 action: (registerProcess) => {
                   throwIfJobBlocked(meetingId, epoch);
@@ -1276,6 +1363,7 @@ function createTranscriptionService(deps) {
           }
         }
 
+        throwIfJobBlocked(meetingId, epoch);
         return {
           ...transcriptionResult,
           output_file: transcriptPath,
@@ -1284,6 +1372,9 @@ function createTranscriptionService(deps) {
           audioPath: audioFile,
         };
       });
+
+      // Final gate: delete/cancel during sidecar persistence must not mark Ready.
+      throwIfJobBlocked(meetingId, epoch);
 
       if (!isTranscriptionJobDeleted(transcriptionQueueState, meetingId)) {
         clearTranscriptionJobCancelFlag(transcriptionQueueState, meetingId);
@@ -2061,97 +2152,159 @@ function createTranscriptionService(deps) {
         throw new Error('cancel-pending-transcription requires a meetingId');
       }
 
-      let job = transcriptionQueueState.jobsByMeetingId.get(meetingId);
-      let hasInflight = inFlightJobsByMeetingId.has(meetingId);
+      return enqueueMeetingControl(meetingId, async () => {
+        let job = transcriptionQueueState.jobsByMeetingId.get(meetingId);
+        let hasInflight = inFlightJobsByMeetingId.has(meetingId);
+        let cancelGeneration = getTranscriptionCancelGuardGeneration(
+          transcriptionQueueState,
+          meetingId,
+        );
 
-      if (!job && !hasInflight) {
-        // Reserve cancellation BEFORE lookup so concurrent Resume/Retry cannot
-        // admit cleanly during the await, then write completed over failed.
-        markTranscriptionJobCancelled(transcriptionQueueState, meetingId);
-        bumpJobEpoch(meetingId);
-        try {
-          const meeting = await lookupMeetingById(meetingId);
-          hasInflight = inFlightJobsByMeetingId.has(meetingId);
-          job = transcriptionQueueState.jobsByMeetingId.get(meetingId);
-          if (!hasInflight && !job) {
-            if (meeting && String(meeting.transcriptionStatus || '') === 'pending') {
-              const updatedMeeting = await updateMeetingTranscriptionStatus(meetingId, {
-                status: 'failed',
-                transcriptionError: USER_CANCELLED_TRANSCRIPTION_ERROR,
-              });
-              // A job may have admitted during the status write — settle it.
-              if (inFlightJobsByMeetingId.has(meetingId)) {
-                if (shouldTerminateComputeJobsForMeeting({
-                  activeMeetingId: transcriptionQueueState.activeMeetingId,
-                  targetMeetingId: meetingId,
-                })) {
-                  await terminateActiveTranscriptionComputeJobs();
+        if (!job && !hasInflight) {
+          // Reserve cancellation BEFORE lookup so concurrent Resume/Retry cannot
+          // admit cleanly during the await, then write completed over failed.
+          cancelGeneration = markTranscriptionJobCancelled(transcriptionQueueState, meetingId);
+          bumpJobEpoch(meetingId);
+          try {
+            const meeting = await lookupMeetingById(meetingId);
+            hasInflight = inFlightJobsByMeetingId.has(meetingId);
+            job = transcriptionQueueState.jobsByMeetingId.get(meetingId);
+            if (!hasInflight && !job) {
+              if (meeting && String(meeting.transcriptionStatus || '') === 'pending') {
+                const updatedMeeting = await updateMeetingTranscriptionStatus(meetingId, {
+                  status: 'failed',
+                  transcriptionError: USER_CANCELLED_TRANSCRIPTION_ERROR,
+                });
+                if (inFlightJobsByMeetingId.has(meetingId)) {
+                  const racedActive = shouldTerminateComputeJobsForMeeting({
+                    activeMeetingId: transcriptionQueueState.activeMeetingId,
+                    targetMeetingId: meetingId,
+                  });
+                  if (racedActive) {
+                    await terminateActiveTranscriptionComputeJobs(meetingId);
+                    await awaitInFlightJobSettlement(meetingId);
+                    clearTranscriptionJobCancelFlag(
+                      transcriptionQueueState,
+                      meetingId,
+                      cancelGeneration,
+                    );
+                  }
+                  // Queued race: keep generation-owned cancel until the closure settles.
+                  return {
+                    success: true,
+                    cancelled: true,
+                    meeting: updatedMeeting,
+                    durableOnly: true,
+                    deferredSettlement: !racedActive,
+                    generation: cancelGeneration,
+                  };
                 }
-                await awaitInFlightJobSettlement(meetingId);
-              } else {
-                clearTranscriptionJobCancelFlag(transcriptionQueueState, meetingId);
+                clearTranscriptionJobCancelFlag(
+                  transcriptionQueueState,
+                  meetingId,
+                  cancelGeneration,
+                );
+                return {
+                  success: true,
+                  cancelled: true,
+                  meeting: updatedMeeting,
+                  durableOnly: true,
+                  generation: cancelGeneration,
+                };
               }
-              return { success: true, cancelled: true, meeting: updatedMeeting, durableOnly: true };
+              clearTranscriptionJobCancelFlag(
+                transcriptionQueueState,
+                meetingId,
+                cancelGeneration,
+              );
+              return {
+                success: false,
+                cancelled: false,
+                code: 'NO_SUCH_JOB',
+                message: 'No queued transcription job exists for that meeting.',
+              };
             }
-            clearTranscriptionJobCancelFlag(transcriptionQueueState, meetingId);
-            return {
-              success: false,
-              cancelled: false,
-              code: 'NO_SUCH_JOB',
-              message: 'No queued transcription job exists for that meeting.',
-            };
-          }
-          // Fall through — concurrent admission raced the durable-only path.
-        } catch (_lookupError) {
-          hasInflight = inFlightJobsByMeetingId.has(meetingId);
-          job = transcriptionQueueState.jobsByMeetingId.get(meetingId);
-          if (!hasInflight && !job) {
-            clearTranscriptionJobCancelFlag(transcriptionQueueState, meetingId);
-            return {
-              success: false,
-              cancelled: false,
-              code: 'NO_SUCH_JOB',
-              message: 'No queued transcription job exists for that meeting.',
-            };
+            // Fall through — concurrent admission raced the durable-only path.
+          } catch (_lookupError) {
+            hasInflight = inFlightJobsByMeetingId.has(meetingId);
+            job = transcriptionQueueState.jobsByMeetingId.get(meetingId);
+            if (!hasInflight && !job) {
+              clearTranscriptionJobCancelFlag(
+                transcriptionQueueState,
+                meetingId,
+                cancelGeneration,
+              );
+              return {
+                success: false,
+                cancelled: false,
+                code: 'NO_SUCH_JOB',
+                message: 'No queued transcription job exists for that meeting.',
+              };
+            }
           }
         }
-      }
 
-      if (!isTranscriptionJobCancelled(transcriptionQueueState, meetingId)) {
-        markTranscriptionJobCancelled(transcriptionQueueState, meetingId);
-        bumpJobEpoch(meetingId);
-      }
+        if (!isTranscriptionJobCancelled(transcriptionQueueState, meetingId)) {
+          cancelGeneration = markTranscriptionJobCancelled(transcriptionQueueState, meetingId);
+          bumpJobEpoch(meetingId);
+        } else if (cancelGeneration == null) {
+          cancelGeneration = getTranscriptionCancelGuardGeneration(
+            transcriptionQueueState,
+            meetingId,
+          );
+        }
 
-      job = transcriptionQueueState.jobsByMeetingId.get(meetingId);
-      hasInflight = inFlightJobsByMeetingId.has(meetingId);
-      const isActiveTarget = shouldTerminateComputeJobsForMeeting({
-        activeMeetingId: transcriptionQueueState.activeMeetingId,
-        targetMeetingId: meetingId,
-      });
-
-      // Queued (not yet active): persist failed without killing another meeting's child.
-      if (job && job.status === QUEUE_JOB_STATUSES.queued && !isActiveTarget) {
-        const updatedMeeting = await updateMeetingTranscriptionStatus(meetingId, {
-          status: 'failed',
-          transcriptionError: USER_CANCELLED_TRANSCRIPTION_ERROR,
+        job = transcriptionQueueState.jobsByMeetingId.get(meetingId);
+        hasInflight = inFlightJobsByMeetingId.has(meetingId);
+        const isActiveTarget = shouldTerminateComputeJobsForMeeting({
+          activeMeetingId: transcriptionQueueState.activeMeetingId,
+          targetMeetingId: meetingId,
         });
-        upsertQueueJob(transcriptionQueueState, {
-          meetingId,
-          status: QUEUE_JOB_STATUSES.failed,
-          phase: QUEUE_JOB_PHASES.cancelled,
-        });
+
+        // Queued (not yet active): persist failed without hanging behind FIFO head A.
+        if (job && job.status === QUEUE_JOB_STATUSES.queued && !isActiveTarget) {
+          const updatedMeeting = await updateMeetingTranscriptionStatus(meetingId, {
+            status: 'failed',
+            transcriptionError: USER_CANCELLED_TRANSCRIPTION_ERROR,
+          });
+          upsertQueueJob(transcriptionQueueState, {
+            meetingId,
+            status: QUEUE_JOB_STATUSES.failed,
+            phase: QUEUE_JOB_PHASES.cancelled,
+          });
+          publishTranscriptionQueueState();
+          // Do not await settlement — cancel/epoch guards stop later writes.
+          return {
+            success: true,
+            cancelled: true,
+            meeting: updatedMeeting,
+            deferredSettlement: hasInflight,
+            generation: cancelGeneration,
+          };
+        }
+
+        // Active for this meeting only: terminate its wall-clock child, then await settle.
+        if (isActiveTarget) {
+          await terminateActiveTranscriptionComputeJobs(meetingId);
+          publishTranscriptionQueueState();
+          await awaitInFlightJobSettlement(meetingId);
+          return {
+            success: true,
+            cancelled: true,
+            active: true,
+            generation: cancelGeneration,
+          };
+        }
+
         publishTranscriptionQueueState();
-        await awaitInFlightJobSettlement(meetingId);
-        return { success: true, cancelled: true, meeting: updatedMeeting };
-      }
-
-      // Active for this meeting only: terminate its wall-clock child, then await settle.
-      if (isActiveTarget) {
-        await terminateActiveTranscriptionComputeJobs();
-      }
-      publishTranscriptionQueueState();
-      await awaitInFlightJobSettlement(meetingId);
-      return { success: true, cancelled: true, active: isActiveTarget || hasInflight };
+        return {
+          success: true,
+          cancelled: true,
+          active: false,
+          deferredSettlement: hasInflight,
+          generation: cancelGeneration,
+        };
+      });
     });
 
     ipcMain.handle('resume-pending-transcriptions', async (event, options = {}) => {

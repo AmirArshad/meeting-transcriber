@@ -90,12 +90,34 @@ test('queue upsert/publish payload tracks active meeting, order, and busyCount',
 test('cancel flag marks queued jobs cancelled and is readable at head', () => {
   const state = createTranscriptionQueueState();
   upsertQueueJob(state, { meetingId: 'meeting_c', status: QUEUE_JOB_STATUSES.queued });
-  assert.equal(markTranscriptionJobCancelled(state, 'meeting_c'), true);
+  assert.equal(markTranscriptionJobCancelled(state, 'meeting_c'), 1);
   assert.equal(isTranscriptionJobCancelled(state, 'meeting_c'), true);
   assert.equal(state.jobsByMeetingId.get('meeting_c').status, QUEUE_JOB_STATUSES.cancelled);
   assert.equal(shouldSkipJobAtHead({
     isCancelled: isTranscriptionJobCancelled(state, 'meeting_c'),
   }), true);
+});
+
+test('generation-owned cancel clear ignores stale clear from an older reservation', () => {
+  const state = createTranscriptionQueueState();
+  const first = markTranscriptionJobCancelled(state, 'meeting_gen');
+  const second = markTranscriptionJobCancelled(state, 'meeting_gen');
+  assert.equal(first, 1);
+  assert.equal(second, 2);
+  assert.equal(clearTranscriptionJobCancelFlag(state, 'meeting_gen', first), false);
+  assert.equal(isTranscriptionJobCancelled(state, 'meeting_gen'), true);
+  assert.equal(clearTranscriptionJobCancelFlag(state, 'meeting_gen', second), true);
+  assert.equal(isTranscriptionJobCancelled(state, 'meeting_gen'), false);
+});
+
+test('generation-owned delete tombstone clear ignores stale clear', () => {
+  const state = createTranscriptionQueueState();
+  const first = markTranscriptionJobDeleted(state, 'meeting_del');
+  const second = markTranscriptionJobDeleted(state, 'meeting_del');
+  assert.equal(clearTranscriptionJobDeleteTombstone(state, 'meeting_del', first), false);
+  assert.equal(isTranscriptionJobDeleted(state, 'meeting_del'), true);
+  assert.equal(clearTranscriptionJobDeleteTombstone(state, 'meeting_del', second), true);
+  assert.equal(isTranscriptionJobDeleted(state, 'meeting_del'), false);
 });
 
 test('clearTranscriptionJobCancelFlag consumes the flag so later jobs do not self-cancel', () => {
