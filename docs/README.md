@@ -37,6 +37,7 @@ This directory separates current guides, maintainer references, completed implem
 ## New Initiatives
 
 - [Roadmap](initiatives/ROADMAP.md)
+- **[Back-to-back recording & transcription queue](initiatives/FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md)** — next big feature · [before/after SVG](architecture/background-transcription-queue-before-after.svg)
 - [Acoustic echo cancellation](initiatives/FEATURE_ECHO_CANCELLATION.md)
 - [Linux support](initiatives/LINUX_SUPPORT.md)
 - [Audio setup wizard](initiatives/FEATURE_SETUP_WIZARD.md)

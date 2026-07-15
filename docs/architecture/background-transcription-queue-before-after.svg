@@ -1,0 +1,242 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 1180" width="1180" height="1180" role="img" aria-labelledby="title desc">
+  <title id="title">Background transcription queue: before vs after</title>
+  <desc id="desc">Architecture and Home UX comparison. Before: renderer blocks Start until Whisper finishes and only then creates a completed meeting. After: stop saves a pending meeting, main owns a per-meeting compute job, Start unlocks immediately, Home shows an Activity queue.</desc>
+
+  <defs>
+    <style type="text/css"><![CDATA[
+      .bg { fill: #f7f5f1; }
+      .panel-before { fill: #fff8f5; stroke: #e0b4a6; stroke-width: 1.5; }
+      .panel-after { fill: #f4faf7; stroke: #9fc4b5; stroke-width: 1.5; }
+      .title { font: 700 22px "Segoe UI", system-ui, sans-serif; fill: #1c1b19; }
+      .subtitle { font: 500 12.5px "Segoe UI", system-ui, sans-serif; fill: #5c574f; }
+      .panel-sub { font: 400 11.5px "Segoe UI", system-ui, sans-serif; fill: #5c574f; }
+      .section { font: 700 11px "Segoe UI", system-ui, sans-serif; fill: #5c574f; letter-spacing: 0.04em; }
+      .box { fill: #ffffff; stroke: #2f2c28; stroke-width: 1.25; }
+      .box-ram { fill: #fde8e2; stroke: #b5472c; }
+      .box-disk { fill: #e6f3ee; stroke: #1f6b52; }
+      .box-proc { fill: #eef2f7; stroke: #3a4f66; }
+      .box-warn { fill: #fff1cc; stroke: #9a6b00; }
+      .box-ok { fill: #dff3e8; stroke: #1f6b52; }
+      .box-ui { fill: #ffffff; stroke: #8a847a; stroke-width: 1.25; }
+      .box-main { fill: #e8eef8; stroke: #3a4f66; }
+      .label { font: 600 12px "Segoe UI", system-ui, sans-serif; fill: #1c1b19; }
+      .small { font: 400 11px "Segoe UI", system-ui, sans-serif; fill: #3f3b35; }
+      .tiny { font: 400 10px "Segoe UI", system-ui, sans-serif; fill: #5c574f; }
+      .mono { font: 500 10px "Cascadia Mono", "Consolas", monospace; fill: #3f3b35; }
+      .arrow { stroke: #3f3b35; stroke-width: 1.6; fill: none; marker-end: url(#arrowHead); }
+      .arrow-danger { stroke: #b5472c; stroke-width: 1.6; fill: none; marker-end: url(#arrowDanger); }
+      .arrow-ok { stroke: #1f6b52; stroke-width: 1.6; fill: none; marker-end: url(#arrowOk); }
+      .arrow-dash { stroke: #3a4f66; stroke-width: 1.4; fill: none; stroke-dasharray: 4 3; marker-end: url(#arrowHead); }
+      .note { font: 500 11px "Segoe UI", system-ui, sans-serif; fill: #7a2e1a; }
+      .footer { font: 400 11px "Segoe UI", system-ui, sans-serif; fill: #5c574f; }
+      .badge { font: 700 10px "Segoe UI", system-ui, sans-serif; fill: #ffffff; }
+      .chip { font: 700 9px "Segoe UI", system-ui, sans-serif; fill: #ffffff; }
+      .ui-title { font: 700 13px "Segoe UI", system-ui, sans-serif; fill: #1c1b19; }
+      .ui-muted { font: 400 10px "Segoe UI", system-ui, sans-serif; fill: #6b6560; }
+      .ui-btn { font: 600 11px "Segoe UI", system-ui, sans-serif; fill: #ffffff; }
+      .ui-row { font: 500 11px "Segoe UI", system-ui, sans-serif; fill: #1c1b19; }
+    ]]></style>
+    <marker id="arrowHead" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#3f3b35"/>
+    </marker>
+    <marker id="arrowDanger" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#b5472c"/>
+    </marker>
+    <marker id="arrowOk" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#1f6b52"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" width="1180" height="1180"/>
+
+  <text class="title" x="40" y="40">Back-to-back recording - before vs after</text>
+  <text class="subtitle" x="40" y="62">Encode still blocks Start. Transcription moves to a main-owned queue so Meeting 2 can record while Meeting 1 transcribes. Home becomes an Activity list.</text>
+
+  <!-- ===================== BEFORE ===================== -->
+  <rect class="panel-before" x="28" y="84" width="552" height="1030" rx="10"/>
+  <rect x="28" y="84" width="552" height="44" rx="10" fill="#b5472c"/>
+  <rect x="28" y="114" width="552" height="14" fill="#b5472c"/>
+  <text class="badge" x="48" y="112">BEFORE - coupled stop to transcribe to unlock</text>
+  <text class="panel-sub" x="48" y="146">No meeting until Whisper finishes. Renderer globals own the job.</text>
+
+  <text class="section" x="48" y="172">ARCHITECTURE</text>
+
+  <rect class="box box-proc" x="56" y="184" width="220" height="44" rx="6"/>
+  <text class="label" x="70" y="204">1. Stop recording</text>
+  <text class="tiny" x="70" y="218">Stage A encode/mix (exclusive)</text>
+
+  <path class="arrow" d="M166 228 V248"/>
+
+  <rect class="box box-warn" x="56" y="248" width="220" height="52" rx="6"/>
+  <text class="label" x="70" y="268">2. Keep audioPath in renderer</text>
+  <text class="tiny" x="70" y="284">currentAudioFile global - no meeting yet</text>
+
+  <path class="arrow-danger" d="M166 300 V320"/>
+
+  <rect class="box box-ram" x="56" y="320" width="220" height="68" rx="6"/>
+  <text class="label" x="70" y="340">3. await transcribeAudio()</text>
+  <text class="tiny" x="70" y="356">Reads live model/language dropdowns</text>
+  <text class="tiny" x="70" y="372">Guided / diarize from renderer</text>
+
+  <path class="arrow" d="M166 388 V408"/>
+
+  <rect class="box box-proc" x="56" y="408" width="220" height="52" rx="6"/>
+  <text class="label" x="70" y="428">4. addMeeting(completed)</text>
+  <text class="tiny" x="70" y="444">First persistence of the meeting</text>
+
+  <path class="arrow" d="M166 460 V480"/>
+
+  <rect class="box box-ok" x="56" y="480" width="220" height="44" rx="6"/>
+  <text class="label" x="70" y="500">5. Start unlocked</text>
+  <text class="tiny" x="70" y="514">Only after full Whisper (+ speakers)</text>
+
+  <rect class="box box-ram" x="296" y="184" width="260" height="340" rx="6"/>
+  <text class="label" x="310" y="208">Start button timeline</text>
+  <text class="small" x="310" y="232">Recording ........................ busy</text>
+  <text class="small" x="310" y="252">Stopping / Saving ................ busy</text>
+  <text class="note" x="310" y="280">Transcribing ..................... busy</text>
+  <text class="tiny" x="310" y="298">(minutes - GPU or CPU Whisper)</text>
+  <text class="note" x="310" y="326">Optional diarize ................. busy</text>
+  <text class="small" x="310" y="352">Idle / Start ..................... free</text>
+  <line x1="310" y1="372" x2="536" y2="372" stroke="#e0b4a6"/>
+  <text class="note" x="310" y="396">Pain: Meeting 2 cannot start</text>
+  <text class="note" x="310" y="414">until Meeting 1 finishes AI.</text>
+  <text class="tiny" x="310" y="440">Main never blocked Start -</text>
+  <text class="tiny" x="310" y="456">renderer recordingState did</text>
+  <text class="tiny" x="310" y="472">(transcribing disables button)</text>
+  <text class="tiny" x="310" y="500">Reload mid-job: compute may</text>
+  <text class="tiny" x="310" y="516">finish with nobody writing completed</text>
+
+  <rect class="box box-ram" x="56" y="544" width="500" height="72" rx="6"/>
+  <text class="label" x="70" y="566">If Meeting 2 starts while Meeting 1's promise is in flight</text>
+  <text class="small" x="70" y="586">Start clobbers currentAudioFile - wrong path / wrong meeting attribution</text>
+  <text class="tiny" x="70" y="604">Cannot &quot;just remove the await&quot; without moving ownership to main</text>
+
+  <text class="section" x="48" y="650">HOME UX (mock)</text>
+
+  <rect class="box box-ui" x="56" y="662" width="500" height="420" rx="8"/>
+  <rect x="56" y="662" width="500" height="36" rx="8" fill="#2a2927"/>
+  <rect x="56" y="686" width="500" height="12" fill="#2a2927"/>
+  <text class="chip" x="72" y="684">Home / Record</text>
+  <text x="400" y="684" fill="#a8a29a" font-size="10" font-family="Segoe UI, system-ui, sans-serif">status: Transcribing...</text>
+
+  <rect x="76" y="716" width="200" height="26" rx="13" fill="#f59e0b"/>
+  <text class="chip" x="96" y="733">Transcribing...</text>
+
+  <rect x="76" y="756" width="460" height="48" rx="8" fill="#9ca3af"/>
+  <text class="ui-btn" x="230" y="785">Transcribing...</text>
+
+  <text class="ui-muted" x="76" y="824">Visualizer idle / devices locked</text>
+
+  <rect x="76" y="840" width="460" height="210" rx="6" fill="#f3f1ec" stroke="#d6d0c6"/>
+  <text class="ui-title" x="92" y="866">Transcript</text>
+  <text class="ui-muted" x="92" y="888">Single meeting surface</text>
+  <rect x="92" y="908" width="428" height="120" rx="4" fill="#ffffff" stroke="#e5e0d8"/>
+  <text class="ui-muted" x="108" y="940">Identifying speakers and transcribing...</text>
+  <text class="ui-muted" x="108" y="960">This may take a moment.</text>
+  <text class="ui-muted" x="108" y="990">(No queue / no second meeting / Start blocked)</text>
+
+  <!-- ===================== AFTER ===================== -->
+  <rect class="panel-after" x="600" y="84" width="552" height="1030" rx="10"/>
+  <rect x="600" y="84" width="552" height="44" rx="10" fill="#1f6b52"/>
+  <rect x="600" y="114" width="552" height="14" fill="#1f6b52"/>
+  <text class="badge" x="620" y="112">AFTER - save pending to main queue to unlock</text>
+  <text class="panel-sub" x="620" y="146">Meeting exists immediately. Renderer is a view of queue state.</text>
+
+  <text class="section" x="620" y="172">ARCHITECTURE</text>
+
+  <rect class="box box-proc" x="628" y="184" width="240" height="40" rx="6"/>
+  <text class="label" x="642" y="202">1. Stop / Stage A encode</text>
+  <text class="tiny" x="642" y="216">Still exclusive - &quot;Saving...&quot;</text>
+
+  <path class="arrow-ok" d="M748 224 V240"/>
+
+  <rect class="box box-disk" x="628" y="240" width="240" height="56" rx="6"/>
+  <text class="label" x="642" y="260">2. addMeeting(pending)</text>
+  <text class="tiny" x="642" y="276">Placeholder transcript / snapshot model+lang</text>
+  <text class="tiny" x="642" y="290">audioPath = post-add path</text>
+
+  <path class="arrow-ok" d="M748 296 V312"/>
+
+  <rect class="box box-main" x="628" y="312" width="240" height="56" rx="6"/>
+  <text class="label" x="642" y="332">3. Main enqueues job</text>
+  <text class="tiny" x="642" y="348">meetingId-keyed composite</text>
+  <text class="tiny" x="642" y="362">(retry-transcription shape)</text>
+
+  <path class="arrow-ok" d="M748 368 V384"/>
+
+  <rect class="box box-ok" x="628" y="384" width="240" height="40" rx="6"/>
+  <text class="label" x="642" y="402">4. Start unlocked now</text>
+  <text class="tiny" x="642" y="416">Capture idle - Meeting 2 can record</text>
+
+  <rect class="box box-main" x="888" y="184" width="240" height="240" rx="6"/>
+  <text class="label" x="902" y="208">aiComputeActionQueue</text>
+  <text class="tiny" x="902" y="226">FIFO / one GPU-heavy job</text>
+  <rect x="902" y="240" width="212" height="36" rx="4" fill="#dff3e8" stroke="#1f6b52"/>
+  <text class="mono" x="912" y="262">M1 active / transcribing</text>
+  <rect x="902" y="284" width="212" height="28" rx="4" fill="#ffffff" stroke="#3a4f66"/>
+  <text class="mono" x="912" y="302">M3 queued</text>
+  <text class="tiny" x="902" y="336">Durable status: pending only</text>
+  <text class="tiny" x="902" y="352">(no persisted &quot;processing&quot;)</text>
+  <text class="tiny" x="902" y="376">Quit kills active - stays pending</text>
+  <text class="tiny" x="902" y="392">Resume via banner (Phase 1)</text>
+  <text class="tiny" x="902" y="408">Priority down while capturing</text>
+
+  <path class="arrow-dash" d="M868 340 H888"/>
+
+  <rect class="box box-ok" x="628" y="444" width="500" height="52" rx="6"/>
+  <text class="label" x="642" y="464">transcription-queue-state -&gt; renderer</text>
+  <text class="tiny" x="642" y="482">jobs[{meetingId, status, phase}] / progress tagged with meetingId</text>
+
+  <rect class="box box-disk" x="628" y="512" width="500" height="72" rx="6"/>
+  <text class="label" x="642" y="534">Invariants kept</text>
+  <text class="small" x="642" y="554">One live capture / compute still serialized / no cloud / summaries manual</text>
+  <text class="tiny" x="642" y="572">Composite job = transcribe -&gt; optional diarize -&gt; persist (no interleave)</text>
+
+  <text class="section" x="620" y="620">HOME UX (mock)</text>
+
+  <rect class="box box-ui" x="628" y="632" width="500" height="450" rx="8"/>
+  <rect x="628" y="632" width="500" height="36" rx="8" fill="#2a2927"/>
+  <rect x="628" y="656" width="500" height="12" fill="#2a2927"/>
+  <text class="chip" x="644" y="654">Home / Record</text>
+  <text x="1040" y="654" fill="#a8a29a" font-size="10" font-family="Segoe UI, system-ui, sans-serif">Ready</text>
+
+  <rect x="648" y="686" width="240" height="26" rx="13" fill="#1f6b52"/>
+  <text class="chip" x="668" y="703">Ready / 1 transcribing</text>
+
+  <rect x="648" y="726" width="460" height="44" rx="8" fill="#1f6b52"/>
+  <text class="ui-btn" x="820" y="753">Start Recording</text>
+
+  <text class="ui-muted" x="648" y="790">Visualizer ready / Meeting 2 can start now</text>
+
+  <rect x="648" y="808" width="460" height="250" rx="6" fill="#f3f1ec" stroke="#d6d0c6"/>
+  <text class="ui-title" x="664" y="834">Activity</text>
+  <text class="ui-muted" x="920" y="834">operations / not History</text>
+
+  <rect x="664" y="850" width="428" height="44" rx="5" fill="#ffffff" stroke="#9fc4b5"/>
+  <text class="ui-row" x="678" y="868">Standup / 42 min</text>
+  <rect x="678" y="876" width="78" height="14" rx="7" fill="#3a4f66"/>
+  <text class="chip" x="688" y="886">Transcribing</text>
+  <text class="ui-muted" x="770" y="886">phase from main / meetingId tagged</text>
+
+  <rect x="664" y="902" width="428" height="40" rx="5" fill="#ffffff" stroke="#d6d0c6"/>
+  <text class="ui-row" x="678" y="920">Client call / 18 min</text>
+  <rect x="678" y="926" width="52" height="12" rx="6" fill="#9a6b00"/>
+  <text class="chip" x="688" y="935">Queued</text>
+  <text class="ui-muted" x="800" y="935">Cancel</text>
+
+  <rect x="664" y="950" width="428" height="40" rx="5" fill="#ffffff" stroke="#1f6b52"/>
+  <text class="ui-row" x="678" y="968">Board sync / 55 min</text>
+  <rect x="678" y="974" width="44" height="12" rx="6" fill="#1f6b52"/>
+  <text class="chip" x="688" y="983">Ready</text>
+  <text class="ui-muted" x="800" y="983">open History detail</text>
+
+  <rect x="664" y="998" width="428" height="40" rx="5" fill="#fff8f5" stroke="#e0b4a6"/>
+  <text class="ui-row" x="678" y="1016">Test clip / 2 min</text>
+  <rect x="678" y="1022" width="44" height="12" rx="6" fill="#b5472c"/>
+  <text class="chip" x="688" y="1031">Failed</text>
+  <text class="ui-muted" x="800" y="1031">Retry / Open</text>
+
+  <text class="footer" x="40" y="1140">AvaNevis docs/architecture - see docs/initiatives/FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md</text>
+  <text class="footer" x="40" y="1158">Stage A encode still blocks Start. Unlock is after pending persist. Queue owner is main; durable statuses are pending | failed | completed only.</text>
+</svg>

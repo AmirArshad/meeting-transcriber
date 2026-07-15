@@ -66,7 +66,13 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 
 ## In progress
 
-_(None — Release 1 / Release 2 shipped in v2.5.0.)_
+### Back-to-back recording & transcription queue
+
+**Next big product initiative** after v2.5.0. Unlock Start as soon as a recording is saved as a `pending` meeting; main owns per-meeting transcription jobs (`retry-transcription` shape) on the existing compute queue; Home Activity list replaces the single transcript box. Encode still blocks Start; transcription must not.
+
+- Design (post-review): [FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md](FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md)
+- Before/after: [background-transcription-queue-before-after.svg](../architecture/background-transcription-queue-before-after.svg)
+- Active checklist: root [`todo.md`](../../todo.md)
 
 ## Planned
 
@@ -76,7 +82,7 @@ _(None — Release 1 / Release 2 shipped in v2.5.0.)_
 
 ### Transcription
 
-- **Upload existing audio files.** Import user-provided `.mp3`, `.wav`, and `.opus` files, normalize them into the app's processing format, run transcription/summaries with the same local pipeline, and save results into Meeting History as first-class meetings.
+- **Upload existing audio files.** Import user-provided `.mp3`, `.wav`, and `.opus` files, normalize them into the app's processing format, run transcription/summaries with the same local pipeline, and save results into Meeting History as first-class meetings. Should reuse the Activity / transcription queue once that ships.
 - **History chat over meetings.** Use the installed local summary runtime/model to ask questions about historical meetings, with responses grounded in saved transcript and summary artifacts.
 - **Real-time transcription.** Live captions during the recording itself. Trade-off: requires a streaming Whisper implementation, raises CPU/GPU usage during capture, and accuracy is below post-processing.
 - **Export formats.** SRT, VTT, DOCX, PDF, JSON in addition to today's Markdown + plain-text Save As.

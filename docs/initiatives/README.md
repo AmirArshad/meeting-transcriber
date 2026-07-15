@@ -5,6 +5,7 @@ Planned or active future work lives here. Completed designs should move to `../c
 ## Active / planned
 
 - [Roadmap](ROADMAP.md)
+- **[Back-to-back recording & transcription queue](FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md)** — **next big feature** (design locked; Phase 1 not started) · [before/after SVG](../architecture/background-transcription-queue-before-after.svg)
 - [Acoustic echo cancellation](FEATURE_ECHO_CANCELLATION.md)
 - [Linux support](LINUX_SUPPORT.md)
 - [Audio setup wizard](FEATURE_SETUP_WIZARD.md)

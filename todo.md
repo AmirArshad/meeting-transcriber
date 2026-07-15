@@ -35,18 +35,51 @@ Replaced Intel-only evermeet.cx ffmpeg with a pinned Apple Silicon static build 
 
 ## Next Priorities
 
-Codebase refactor, Release 1 presence, and Release 2 long-recording safety shipped in **v2.5.0** (merged to `master`). Next focus is **release hygiene**.
+Codebase refactor, Release 1 presence, and Release 2 long-recording safety shipped in **v2.5.0** (merged to `master`).
+
+**Next big product initiative:** [Back-to-back recording & transcription queue](docs/initiatives/FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md) (design locked after adversarial review; [before/after SVG](docs/architecture/background-transcription-queue-before-after.svg)).
 
 Recommended order when choosing:
 
-1. **Release hygiene** — notarization when enrolled; trial other transitive pin trim (not `onnxruntime`/`tokenizers`/`av`); PyObjC Cocoa/Quartz evaluation.
-2. **Optional extended checklists** — full transcription regression / local AI add-ons smoke when convenient.
+1. **Back-to-back recording & transcription queue (Phase 1)** — main-owned pending persist + compute jobs; Home Activity list; Start unlocks after save. See section below.
+2. **Release hygiene** — notarization when enrolled; trial other transitive pin trim (not `onnxruntime`/`tokenizers`/`av`); PyObjC Cocoa/Quartz evaluation.
+3. **Optional extended checklists** — full transcription regression / local AI add-ons smoke when convenient.
 
-Do **not** force Phase 2 renderer controllers now. Revisit only if `app.js` grows materially or a feature forces controller-level changes — and only after (1) a DOM-testing decision and (2) a written Pattern C shared-state ownership plan.
+Do **not** force Phase 2 renderer controllers now. Revisit only if `app.js` grows materially or a feature forces controller-level changes — and only after (1) a DOM-testing decision and (2) a written Pattern C shared-state ownership plan. The transcription-queue work will touch `app.js` but should extract helpers / keep main owning the job — not a full controller rewrite.
 
-## Next Product Initiative: Recording Awareness And Long-Recording Safety
+## Next Product Initiative: Back-to-Back Recording & Transcription Queue
 
-Implementation plan: `docs/superpowers/plans/2026-07-13-recording-awareness-and-long-recording-safety.md` (revised after Fable and follow-up review 2026-07-13).
+Design: `docs/initiatives/FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md`  
+Diagram: `docs/architecture/background-transcription-queue-before-after.svg`
+
+**Problem:** After Stop, Start stays blocked through encode *and* full Whisper (renderer `transcribing` state), so consecutive meetings wait minutes. Encode must stay exclusive; transcription must not block capture.
+
+**Phase 1 (MVP) — ship this first**
+
+- [ ] [Risk: High] Stop → `addMeeting(pending)` + placeholder transcript (incl. recoverable-failure path); snapshot language/model; use post-add `audioPath`.
+- [ ] [Risk: High] Main-owned per-meeting composite job on `aiComputeActionQueue` (`retry-transcription` shape: transcribe → optional diarize → persist). Renderer becomes a view — do not “just remove the await.”
+- [ ] [Risk: Medium] Durable statuses only: `pending` | `failed` | `completed`. Never persist `processing` (would coerce to completed).
+- [ ] [Risk: Medium] `transcription-queue-state` channel + meetingId-tagged progress; Home Activity list (Queued / Transcribing / Failed+Retry / Cancel pending / session-only Ready → History).
+- [ ] [Risk: Medium] Unlock Start immediately after pending persist; button copy → **Stop** / Saving… (stop-stage messages); status pill `Ready · N transcribing`.
+- [ ] [Risk: Medium] Quit: terminate active job; meetings stay `pending`; quit copy says they finish next launch (never “quit will wait”).
+- [ ] [Risk: Low] Explicit “Resume N pending transcriptions” banner (no auto-resume in Phase 1).
+- [ ] [Risk: High] Recording-while-CPU-transcribe contention: below-normal child priority (+ optional `cpu_threads` cap / defer past `starting`); manual smoke item.
+- [ ] [Risk: Medium] GPU install / model preload: fail-fast when queue non-idle (15-minute idle waits become routinely exceedable).
+- [ ] [Risk: Medium] Delete/cancel-while-queued: cancel flag at head; no artifact write after tombstone; active-job delete policy documented.
+- [ ] [Risk: High] Characterization + targeted tests; Windows/macOS smoke: back-to-back Start while previous job transcribes.
+
+**Phase 2 (polish) — after Phase 1 ships**
+
+- [ ] [Risk: Medium] Auto-resume `pending` post recordings-maintenance scan (never auto-resume `failed`).
+- [ ] [Risk: Low] Completion toasts (duration-based copy); first-run tip; soft queue-depth warning.
+- [ ] [Risk: Medium] Between-job GPU/preload admission if fail-fast is too painful.
+- [ ] [Risk: Low] Richer phase text / optional percent on active row.
+
+**Cut until asked:** tray “Transcribing N”; inline Home transcript drawer; teaching button label; encode time estimates.
+
+## Completed: Recording Awareness And Long-Recording Safety (v2.5.0)
+
+Implementation plan: `docs/superpowers/plans/2026-07-13-recording-awareness-and-long-recording-safety.md`. Shipped in **v2.5.0**.
 
 ### Release 1: Recording awareness and discoverability
 
@@ -74,7 +107,7 @@ Implementation plan: `docs/superpowers/plans/2026-07-13-recording-awareness-and-
 ## Deferred Product And Architecture Backlog
 
 - [ ] [Risk: High] Acoustic echo cancellation / echo suppression for speaker-use scenarios on Windows and macOS.
-- [ ] [Risk: Medium] Upload audio files (`.mp3`, `.wav`, `.opus`) and process them through the transcription, summary, and history flow.
+- [ ] [Risk: Medium] Upload audio files (`.mp3`, `.wav`, `.opus`) and process them through the transcription, summary, and history flow (should reuse the transcription queue / Activity UI once that ships).
 - [ ] [Risk: Medium] History chat over past meetings using the installed local summary runtime/model.
 - [ ] [Risk: Medium] Verify the archived "packaged Swift helper skips `which()` when `AVANEVIS_PACKAGED=1`" item is fully implemented and tested; close if redundant with current `test_screencapture_helper.py` coverage.
 

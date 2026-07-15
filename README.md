@@ -201,6 +201,7 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
   - [Code review remediation (May 2026)](docs/completed/CODE_REVIEW_REMEDIATION_2026-05.md)
 - **Roadmap & features**
   - [Roadmap](docs/initiatives/ROADMAP.md)
+  - [Back-to-back recording & transcription queue](docs/initiatives/FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md) (next big feature)
   - [Long-recording safety](docs/initiatives/LONG_RECORDING_SAFETY.md) (shipped in v2.5.0)
   - [AvaNevis codebase refactor](docs/initiatives/AVANEVIS_CODEBASE_REFACTOR.md) (complete — reference)
   - [Adversarial review prompts](docs/development/ADVERSARIAL_REVIEW_PROMPTS.md)
@@ -230,8 +231,9 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
 - Rebrand from Meeting Transcriber to AvaNevis (display name, installers, Info.plist descriptions, slug paths). GitHub repo slug stays `meeting-transcriber`.
 
 **Next up**
+- **Back-to-back recording & transcription queue** (next big feature) — unlock Start as soon as a recording is saved; main owns background Whisper jobs; Home Activity list replaces the single transcript box. Design: [FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md](docs/initiatives/FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md) · [before/after SVG](docs/architecture/background-transcription-queue-before-after.svg).
 - True silent auto-install updater (today's updater detects the new release and opens the download page).
-- Hardware validation for Windows CUDA speaker identification and long local summaries.
+- Upload existing audio files (reuses the same transcription queue once it ships).
 - Real-time / streaming transcription.
 - Export to SRT, VTT, DOCX, JSON.
 - Acoustic echo cancellation when desktop audio bleeds into the mic.
