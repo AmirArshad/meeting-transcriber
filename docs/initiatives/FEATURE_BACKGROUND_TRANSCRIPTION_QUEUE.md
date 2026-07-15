@@ -1,9 +1,9 @@
 # Feature: Back-to-Back Recording & Transcription Queue
 
-**Status:** Next big feature — design locked (adversarial review incorporated); Phase 1 not started  
-**Working title:** Background transcription queue  
-**Primary pain:** After Stop, users wait through encode + full Whisper (and optional diarization) before they can start the next meeting.  
-**Review input:** Adversarial design review (2026-07-15) — findings below are incorporated as product/architecture decisions, not open questions.  
+**Status:** Next big feature — design locked (adversarial review + second-pass review incorporated); Phase 1 not started  
+**Working title:** Background transcription queue (+ cancel recording)  
+**Primary pain:** After Stop, users wait through encode + full Whisper (and optional diarization) before they can start the next meeting. There is also no way to discard a recording — Stop always processes.  
+**Review input:** Adversarial design review (2026-07-15) and second-pass review (2026-07-15) — findings below are incorporated as product/architecture decisions, not open questions.  
 **Diagram:** [Architecture + Home UX before/after](../architecture/background-transcription-queue-before-after.svg)  
 **Tracking:** Root [`todo.md`](../../todo.md) · [Roadmap (In progress)](ROADMAP.md)
 
@@ -32,6 +32,7 @@ Do not promise “instant next recording” across encode. Promise **“record a
 2. Persist finished recordings immediately with durable `transcriptionStatus: pending|failed|completed` only (see status model). Process jobs FIFO on the existing compute queue, owned by main.
 3. Replace the Home “current transcript” panel with an **Activity** surface driven by a structured main→renderer queue-state channel.
 4. Preserve privacy-first local-only behavior, quit-terminate + durable-pending semantics, single-GPU serialization, and recording quality under concurrent CPU transcription.
+5. **Companion:** let users cancel (discard) an in-progress recording — today Stop always finalizes and processes; there is no escape hatch for false starts.
 
 ## Non-goals
 
@@ -66,6 +67,10 @@ Do not promise “instant next recording” across encode. Promise **“record a
 | Quit | Matches AGENTS.md: quit **terminates** non-abortable transcription-class jobs; meetings stay `pending`. Dialog copy: “N recordings will finish transcribing next time you open AvaNevis.” Never “quit will wait.” |
 | Max queue depth | Soft guidance later; do not hard-block Start for depth in Phase 1. |
 | Cancel pending | Supported from Home (and needed): cancel queued/pending job without quitting. |
+| Cancel semantics (durable) | Cancel → durable `failed` with `transcriptionError: "Cancelled by user"`. Never leave a user-cancelled job `pending` — the resume banner (and Phase 2 auto-resume) would keep offering work the user explicitly declined. Still retryable from History. |
+| Progress attribution | **Do not change the `transcription-progress` payload** (string; pinned by Phase 0 IPC characterization tests). The compute queue guarantees one active job, so the renderer attributes all progress lines to `activeMeetingId` from the new queue-state channel. The queue-state channel is the only new IPC surface. |
+| Child priority | Transcription/diarization children lower their **own** priority to below-normal unconditionally at startup (ctypes `SetPriorityClass` on Windows / `os.nice` on macOS). No dynamic capture-state check: Node `spawn` has no priority option on Windows, and capture can become active after a job spawned at normal priority. Batch work has no interactivity to protect — always-low is simpler and covers the mid-job Start case. |
+| Sidecar persistence | Guided diarization sidecar + `update-meeting-ai` writes move **into the main job** for queue jobs. Today `retry-transcription` returns the diarization result and the *renderer* persists sidecars (`saveGuidedDiarizationMetadata` in `src/renderer/app.js`) — a background job completing during renderer reload/quit would silently lose speaker metadata. This is the one place where "reuse the retry shape" is misleading; it is a genuine scope item, not a doc line. |
 | Disk pressure | Unchanged free-space policy. |
 
 ## Status model
@@ -73,7 +78,7 @@ Do not promise “instant next recording” across encode. Promise **“record a
 | Layer | Values | Notes |
 |-------|--------|-------|
 | Meeting metadata (durable) | `pending`, `failed`, `completed` | Unknown values coerce via `normalize_transcription_status` — never write `processing`. |
-| Main queue state (in-memory) | `queued`, `active`, phases (`transcribing`, `identifying_speakers`, …), `cancelled` | Source of truth for Home chips while app is running. |
+| Main queue state (in-memory) | `queued`, `active`, phases (`transcribing`, `identifying_speakers`, …), `cancelled` | Source of truth for Home chips while app is running. Durable mapping: `cancelled` → `failed` ("Cancelled by user"); quit-killed → stays `pending`. |
 | Home chips | Queued / Transcribing / Identifying speakers / Waiting for GPU or model setup / Ready / Failed | Ready = session-only completed; Failed/Queued backed by durable metadata. |
 
 ## User stories
@@ -82,7 +87,8 @@ Do not promise “instant next recording” across encode. Promise **“record a
 2. **Queue visibility:** Home shows Meeting 1 “Transcribing…” and Meeting 2 “Queued” with correct identity; I click Ready rows to open History detail.
 3. **Failure without blocking:** Meeting 1 failing does not block Meeting 2; Retry from the row or History.
 4. **Cancel unwanted work:** I can cancel a pending/queued job (test clip) without quitting.
-5. **Quit safety:** Quit kills the active job; audio + `pending` metadata survive; I resume via banner (Phase 1) or auto (Phase 2).
+5. **Discard a bad recording:** I started recording by mistake (wrong device, false start); I hit Discard, confirm, and nothing is saved or transcribed — no meeting, no queue entry, no recovered file on relaunch.
+6. **Quit safety:** Quit kills the active job; audio + `pending` metadata survive; I resume via banner (Phase 1) or auto (Phase 2).
 
 ## UX touchpoints
 
@@ -111,7 +117,7 @@ Do not promise “instant next recording” across encode. Promise **“record a
 ### Cut / defer
 
 - Tray “Transcribing N” (presence-service regress risk).
-- Inline Home transcript drawer.
+- Inline Home transcript drawer. **Known tradeoff to watch:** today the most common flow is a *single* recording whose transcript appears inline on Home; deep-link-only means first-time users click a Ready row instead of seeing words appear. Treat first-release feedback on this as expected (Phase 3 inline preview is the hedge), not a surprise regression.
 - Teaching button label “Stop · Transcribe in background”.
 - Time estimates for encode (“~30s”) — use phase text only.
 - History badge parity called out as “delight” (table stakes; keep consistent copy, don’t treat as a feature beat).
@@ -178,7 +184,7 @@ Add a structured channel (name illustrative): `transcription-queue-state`
 ```
 
 - Push on every transition (enqueue, start, phase change, complete, fail, cancel).
-- Tag `transcription-progress` (and related) events with `meetingId` of the active job. Percent can wait; **identity cannot**.
+- **Leave `transcription-progress` untouched** (raw string; payload pinned by Phase 0 IPC characterization tests). One active compute job at a time means the renderer attributes every progress line to `activeMeetingId` from this channel — identity without contract breakage. Percent can wait; **identity cannot**.
 - Home Activity is a pure projection of this channel + session Ready ring buffer.
 
 ### Persistence helpers to reuse
@@ -205,8 +211,8 @@ Premise of the feature is capture concurrent with Whisper. CPU-fallback Whisper 
 
 **Phase 1 mitigations (required, small):**
 
-- When capture state is non-idle, spawn/reduce the transcription child at **below-normal process priority**.
-- Consider capping faster-whisper `cpu_threads` when capture is active.
+- Transcription/diarization children lower their **own** priority to below-normal unconditionally at startup (ctypes `SetPriorityClass` on Windows, `os.nice` on macOS). Not spawn-time, not capture-conditional — Node `spawn` has no Windows priority option, and capture can start *after* the job spawned. Always-low is simpler and covers the mid-job Start case at zero cost when idle.
+- Consider capping faster-whisper `cpu_threads` when capture is active (optional; measure first).
 - Optionally defer starting the next queue job until capture leaves `starting`.
 - Manual smoke checklist item: **record while a CPU transcription runs**.
 
@@ -227,17 +233,58 @@ Align with AGENTS.md / `drainAiWorkBeforeQuit`:
 - Queued-but-not-started jobs: drop from in-memory queue; durable `pending` remains.
 - Renderer quit copy must not claim the app will wait for transcriptions to finish.
 
+**Two job-level guards (required — latent bug becomes routine with queue depth > 1):**
+
+1. **Head-of-queue quit check.** `createAsyncActionQueue` is chained promises: after quit terminates the *active* job, the queue advances and the next closure would start a fresh Whisper run mid-quit. Every job must check `quitCommitted` (and its cancel flag) as its first act at head-of-queue and no-op. This is the **same primitive** as delete-while-queued cancellation — implement once.
+2. **Skip the write-`failed` path on quit-kill.** A job killed by quit must not run its failure handler's `update-transcription --status failed` write: it would spawn a `meeting_manager` Python child during quit teardown (racing the force-kill loop) and mark a perfectly resumable meeting as failed. Check `isQuitCommitted()` in the job's catch: quit-killed → leave durable `pending`; real failure → write `failed`.
+
 ### Resume-on-launch
 
 - **Owner:** main, after recordings maintenance / scan-import completes (scan can create `pending` from recovered temps).
 - **Phase 1:** do not auto-enqueue; show banner with count + Resume action → enqueue through the same per-meeting job path.
 - **Phase 2:** auto-enqueue all `pending` once post-scan; never auto-enqueue `failed`.
 
+## Companion feature: Cancel recording (discard)
+
+Today Stop always finalizes and processes — there is no way to throw away an in-progress recording (test clip, false start, wrong device). This initiative adds **Cancel recording**: stop capture, discard everything, create no meeting. It is separable from the queue (own PR; touches the recorder contract, not the compute queue) but shares the Activity/Home surface and copy work.
+
+### Locked decisions
+
+| Area | Decision |
+|------|----------|
+| Availability | Cancel is offered only while `recording` (and during countdown, which already has cancel). **Not** during `stopping`: once `stop` is sent, finalize is committed — same rule as the quit-cancel invariant ("stop was sent must await/persist the stop result"). |
+| Confirmation | Destructive → always confirm: "Discard this recording? The audio will not be saved." No "don't ask again" in v1. |
+| UI | Secondary/tertiary affordance near the Stop button (small "Discard" link/button). Must not be adjacent-clickable with Stop. New renderer state `cancelling` → `idle`. |
+| Outcome | No meeting is created. Nothing appears in Activity or History. Status pill returns to Ready. |
+| Quit dialog | Unchanged in v1 — quit-during-recording keeps its existing persist semantics. (A "Discard and quit" option is a possible later addition, not in scope.) |
+
+### Recorder contract (both platforms, update together per AGENTS.md)
+
+- **New stdin command `cancel`** alongside `stop`. ⚠️ The current parser is a substring match (`"stop" in line.lower()` — `backend/audio/windows_recorder.py` `input_listener`); the command word must not contain "stop", and the parser should be tightened to exact-token matching while touched (a `cancel` line must never trigger finalize).
+- On `cancel`: stop capture threads, **skip all Stage A post-processing** (no normalize/mix/encode), discard spools, and emit a structured final JSON result on stdout, e.g. `{ "success": true, "cancelled": true }` — never exit with only a stderr traceback (existing invariant).
+- **Tombstone-ordered spool discard.** Durable `{stem}.capture/` spools are intentionally crash-recoverable via `audio.capture_recovery`; a cancelled session must not be resurrected as a recording on next launch. Order: write a `discarded` marker into the capture manifest **first**, then delete spool dirs / `.pcm.tmp` temps (best-effort). Recovery and scan-import must treat a `discarded`-marked capture as cleanup-only, never promote it. Mirrors the `delete_tx` tombstone pattern.
+- If spool deletion partially fails, the marker still prevents resurrection; leftover files are removed by the existing recovery/cleanup sweep.
+- `src/main/recorder-service.js`: new cancel path publishes capture state (`stopping`-equivalent or a distinct `cancelling`) and resolves to idle without invoking `addMeetingToHistory` or the transcription enqueue. Stop/cancel are mutually exclusive: first command wins; a cancel arriving after `stop` was written is rejected (recording is already finalizing).
+- Contract test updates required (AGENTS.md recorder invariant list): `src/main-process/recorder-output-helpers.js`, `tests/js/recorder-event-contract.test.js`, `tests/python/test_recorder_event_contract.py`, `tests/js/main-process-helpers.test.js`, plus the manual smoke checklist (cancel mid-recording on both platforms; relaunch after cancel shows no recovered meeting).
+
+### Edge cases (cancel)
+
+| Case | Behavior |
+|------|----------|
+| Cancel while `starting` | Allowed: abort startup, kill recorder child, clean spools if any were created. |
+| Cancel while `stopping` | Rejected — finalize already committed; UI hides Discard once Stop is pressed. |
+| Quit during recording | Unchanged existing persist rules; cancel plays no role. |
+| Recorder crashes mid-cancel (marker written, spools remain) | Next-launch recovery sees `discarded` marker → cleanup-only, no resurrection. |
+| Recorder crashes mid-cancel (before marker) | Session recovers as a normal interrupted recording — safe default (never silently lose audio on ambiguity). |
+
 ## Edge cases
 
 | Case | Behavior |
 |------|----------|
 | Stop fails with recoverable audio | Save pending meeting first (incl. error note), enqueue, unlock. |
+| `addMeeting(pending)` itself fails (lock timeout, disk full) | Surface the error, stay idle, do **not** enqueue. Audio is already in the recordings dir, so existing `scan-recordings` / scan-import recovery creates the pending meeting with placeholder on next scan — "zero lost audio" holds even when persistence hiccups. |
+| Cancelled job (user) | Durable `failed` + "Cancelled by user"; never resurfaces in resume banner; retryable from History. |
+| Quit-killed job | Durable stays `pending`; no failure-status write during quit (see Quit guards). |
 | Quit during Stage A | Existing quit-during-recording / persist rules unchanged. |
 | Quit during queued/active | Terminate active; all unfinished stay `pending`; no wait. |
 | Delete while queued | Cancel flag / skip at head; no artifact write after tombstone. |
@@ -252,6 +299,13 @@ Align with AGENTS.md / `drainAiWorkBeforeQuit`:
 
 ### Phase 1 — Main-owned unlock (MVP)
 
+**Ship as two PRs** (bisectable risk, fits characterization-first style):
+
+- **PR 1 — architecture move, behavior-identical:** main-owned composite job + `transcription-queue-state` channel behind the *current* blocking UI (renderer still waits). Includes moving guided-sidecar / `update-meeting-ai` persistence into main. Characterization tests pin that behavior is unchanged.
+- **PR 2 — visible flip:** unlock Start, Activity UI, resume banner, quit copy.
+
+**PR 3 (companion, independent):** Cancel recording (discard) — recorder `cancel` stdin command + tombstoned spool discard + Discard UI. Can land before, between, or after PR 1/2.
+
 Minimum shippable:
 
 1. Stop → `addMeeting(pending)` + placeholder transcript (including recoverable-failure path).
@@ -260,8 +314,11 @@ Minimum shippable:
 4. `transcription-queue-state` channel + meetingId-tagged progress; Home Activity: Queued / Transcribing / Failed (Retry) / Cancel pending + session-only Ready → History.
 5. Quit: terminate active; stay `pending`; corrected quit copy.
 6. Explicit “Resume N pending transcriptions” banner (no auto-resume).
-7. Contention mitigation: below-normal priority (and related) when recording while transcribing.
+7. Contention mitigation: children self-lower to below-normal priority unconditionally.
 8. GPU/preload: fail-fast copy when queue non-idle (no 15-minute false hope).
+9. Guided-sidecar / `update-meeting-ai` persistence moved into the main job (PR 1 scope item).
+10. Quit guards: head-of-queue `quitCommitted`/cancel check; no failure-status write on quit-kill.
+11. Cancel recording (companion PR): `cancel` stdin command, tombstoned spool discard, Discard UI with confirm.
 
 **Cut from Phase 1:** percent progress, completion toasts, tray hints, soft depth warning, first-run tip, auto-resume, dismiss-from-Home-only-for-completed archival rows (cancel pending is in).
 
@@ -284,13 +341,14 @@ Minimum shippable:
 | Area | Files / symbols |
 |------|-----------------|
 | Stop → pending persist | `src/renderer/app.js` `stopRecording`; new main helper or extend meeting-manager client |
-| Main job | `src/main/transcription-service.js` (`retry-transcription` pattern); composite diarization |
-| Queue + cancel | `src/main/ai-compute-queue.js` / transcription service cancel flags |
-| Queue state IPC | New channel + `src/preload.js` + renderer Activity UI |
-| Placeholder / statuses | `backend/meeting_manager.py`, `backend/meetings/normalization.py` — do **not** add `processing` |
+| Main job | `src/main/transcription-service.js` (`retry-transcription` pattern); composite diarization; **move guided-sidecar / `update-meeting-ai` persistence into the job** (today the renderer persists sidecars after retry returns) |
+| Queue + cancel/quit guards | `src/main/ai-compute-queue.js` / transcription service cancel flags; head-of-queue `quitCommitted` check; skip `failed` write on quit-kill |
+| Queue state IPC | New channel + `src/preload.js` + renderer Activity UI. `transcription-progress` payload unchanged; attribute via `activeMeetingId` |
+| Placeholder / statuses | `backend/meeting_manager.py`, `backend/meetings/normalization.py` — do **not** add `processing`; cancel → `failed` + "Cancelled by user" |
 | Quit copy | `src/main.js` / presence close-dialog helpers |
-| Priority / smoke | Transcription spawn path; `tests/manual/recording-smoke-checklist.md` |
-| Characterization | JS tests for queue-state helpers; meeting status normalization tests |
+| Priority / smoke | Priority self-lowering inside `faster_whisper_transcriber.py` / MLX / diarization entry points; `tests/manual/recording-smoke-checklist.md` |
+| Cancel recording | Both recorders' stdin listeners (exact-token parse), capture manifest `discarded` marker, `audio/capture_recovery.py`, `src/main/recorder-service.js` cancel path, recorder contract tests (JS + Python), Discard UI in `src/renderer/app.js` |
+| Characterization | JS tests for queue-state helpers; meeting status normalization tests; recorder event-contract tests for `cancel` |
 
 No recorder stdout JSON contract changes. No second compute scheduler.
 
@@ -301,6 +359,8 @@ No recorder stdout JSON contract changes. No second compute scheduler.
 - Quit never claims transcriptions will finish in-process; relaunch can resume pending audio.
 - Recording-while-CPU-transcribe smoke does not produce obviously glitched capture.
 - Cancel pending works without quitting the app.
+- Discarding a recording leaves no meeting, no queue entry, and no resurrected recording after relaunch.
+- A user-cancelled job never reappears in the resume banner.
 
 ## Relationship to roadmap
 

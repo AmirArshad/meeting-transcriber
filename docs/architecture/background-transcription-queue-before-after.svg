@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 1180" width="1180" height="1180" role="img" aria-labelledby="title desc">
   <title id="title">Background transcription queue: before vs after</title>
-  <desc id="desc">Architecture and Home UX comparison. Before: renderer blocks Start until Whisper finishes and only then creates a completed meeting. After: stop saves a pending meeting, main owns a per-meeting compute job, Start unlocks immediately, Home shows an Activity queue.</desc>
+  <desc id="desc">Architecture and Home UX comparison. Before: renderer blocks Start until Whisper finishes and only then creates a completed meeting; there is no way to discard a recording. After: stop saves a pending meeting, main owns a per-meeting compute job, Start unlocks immediately, Home shows an Activity queue, and an in-progress recording can be discarded (cancel) without creating a meeting.</desc>
 
   <defs>
     <style type="text/css"><![CDATA[
@@ -135,6 +135,7 @@
   <text class="ui-muted" x="108" y="940">Identifying speakers and transcribing...</text>
   <text class="ui-muted" x="108" y="960">This may take a moment.</text>
   <text class="ui-muted" x="108" y="990">(No queue / no second meeting / Start blocked)</text>
+  <text class="note" x="108" y="1012">No Discard: Stop always encodes + transcribes</text>
 
   <!-- ===================== AFTER ===================== -->
   <rect class="panel-after" x="600" y="84" width="552" height="1030" rx="10"/>
@@ -180,18 +181,20 @@
   <text class="tiny" x="902" y="352">(no persisted &quot;processing&quot;)</text>
   <text class="tiny" x="902" y="376">Quit kills active - stays pending</text>
   <text class="tiny" x="902" y="392">Resume via banner (Phase 1)</text>
-  <text class="tiny" x="902" y="408">Priority down while capturing</text>
+  <text class="tiny" x="902" y="408">Children always below-normal priority</text>
 
   <path class="arrow-dash" d="M868 340 H888"/>
 
   <rect class="box box-ok" x="628" y="444" width="500" height="52" rx="6"/>
   <text class="label" x="642" y="464">transcription-queue-state -&gt; renderer</text>
-  <text class="tiny" x="642" y="482">jobs[{meetingId, status, phase}] / progress tagged with meetingId</text>
+  <text class="tiny" x="642" y="482">jobs[{meetingId, status, phase}] / progress attributed via activeMeetingId (payload unchanged)</text>
 
-  <rect class="box box-disk" x="628" y="512" width="500" height="72" rx="6"/>
-  <text class="label" x="642" y="534">Invariants kept</text>
+  <rect class="box box-disk" x="628" y="512" width="500" height="94" rx="6"/>
+  <text class="label" x="642" y="534">Invariants kept + new escape hatches</text>
   <text class="small" x="642" y="554">One live capture / compute still serialized / no cloud / summaries manual</text>
   <text class="tiny" x="642" y="572">Composite job = transcribe -&gt; optional diarize -&gt; persist (no interleave)</text>
+  <text class="tiny" x="642" y="586">User cancel job -&gt; failed (&quot;Cancelled by user&quot;) / quit-kill -&gt; stays pending</text>
+  <text class="tiny" x="642" y="600">Discard recording: stdin cancel -&gt; skip encode, tombstone spools, no meeting</text>
 
   <text class="section" x="620" y="620">HOME UX (mock)</text>
 
@@ -203,6 +206,9 @@
 
   <rect x="648" y="686" width="240" height="26" rx="13" fill="#1f6b52"/>
   <text class="chip" x="668" y="703">Ready / 1 transcribing</text>
+
+  <rect x="904" y="686" width="204" height="26" rx="13" fill="#ffffff" stroke="#8a847a"/>
+  <text class="ui-muted" x="920" y="703">While recording: Stop / Discard</text>
 
   <rect x="648" y="726" width="460" height="44" rx="8" fill="#1f6b52"/>
   <text class="ui-btn" x="820" y="753">Start Recording</text>
@@ -217,7 +223,7 @@
   <text class="ui-row" x="678" y="868">Standup / 42 min</text>
   <rect x="678" y="876" width="78" height="14" rx="7" fill="#3a4f66"/>
   <text class="chip" x="688" y="886">Transcribing</text>
-  <text class="ui-muted" x="770" y="886">phase from main / meetingId tagged</text>
+  <text class="ui-muted" x="770" y="886">phase via activeMeetingId</text>
 
   <rect x="664" y="902" width="428" height="40" rx="5" fill="#ffffff" stroke="#d6d0c6"/>
   <text class="ui-row" x="678" y="920">Client call / 18 min</text>
@@ -239,4 +245,5 @@
 
   <text class="footer" x="40" y="1140">AvaNevis docs/architecture - see docs/initiatives/FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md</text>
   <text class="footer" x="40" y="1158">Stage A encode still blocks Start. Unlock is after pending persist. Queue owner is main; durable statuses are pending | failed | completed only.</text>
+  <text class="footer" x="40" y="1176">Companion: Discard while recording (confirmed) sends stdin cancel - skips encode, tombstones capture spools, creates no meeting. Not available once stopping.</text>
 </svg>
