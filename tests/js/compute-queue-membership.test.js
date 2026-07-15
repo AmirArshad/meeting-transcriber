@@ -61,8 +61,12 @@ test('download-model and AI add-on setup handlers stay off the compute queue', (
   const downloadModelSource = extractIpcHandlerSource(combined, 'download-model');
   assert.match(
     downloadModelSource,
-    /waitForAiComputeQueueIdle/,
-    'download-model must wait for compute-queue idle before spawning preload',
+    /MODEL_DOWNLOAD_COMPUTE_BUSY|formatQueuedTranscriptionBusyMessage|hasPendingAiComputeWork/,
+    'download-model must fail fast when compute queue is busy',
+  );
+  assert.ok(
+    !/waitForAiComputeQueueIdle/.test(downloadModelSource),
+    'download-model must not use the 15-minute compute idle wait (PR2 fail-fast)',
   );
   assert.match(
     downloadModelSource,
@@ -86,10 +90,14 @@ test('retry-transcription and finalize-recording-transcription enqueue via share
   const finalizeSource = extractIpcHandlerSource(combined, 'finalize-recording-transcription');
   assert.ok(retrySource, 'missing ipcMain.handle for retry-transcription');
   assert.ok(finalizeSource, 'missing ipcMain.handle for finalize-recording-transcription');
-  assert.match(retrySource, /runMeetingTranscriptionJob/);
+  assert.match(retrySource, /admitMeetingTranscriptionJob/);
   assert.match(finalizeSource, /finalizeRecordingTranscription/);
   // Brace-balanced extraction: the enqueue call must be INSIDE the job
   // function body, not merely somewhere later in the combined source.
+  const admitSource = extractTopLevelFunctionSource(combined, 'admitMeetingTranscriptionJob');
+  assert.ok(admitSource, 'missing admitMeetingTranscriptionJob function');
+  assert.match(admitSource, /runMeetingTranscriptionJob/);
+  assert.match(admitSource, /inFlightJobsByMeetingId/);
   const jobSource = extractTopLevelFunctionSource(combined, 'runMeetingTranscriptionJob');
   assert.ok(jobSource, 'missing runMeetingTranscriptionJob function');
   assert.equal(
@@ -129,8 +137,7 @@ test('addon validation and guided transcription wall-clock wrappers appear in so
   assert.match(combined, /Speaker identification validation/);
   assert.match(combined, /Summary model validation/);
   assert.match(combined, /getGuidedTranscriptionComputeTimeoutMs/);
-  assert.match(combined, /waitForAiComputeQueueIdle/);
-  assert.match(combined, /GPU_RUNTIME_COMPUTE_BUSY|gpuRuntimeComputeIdleWait/);
+  assert.match(combined, /GPU_RUNTIME_COMPUTE_BUSY|formatQueuedTranscriptionBusyMessage/);
   assert.ok(diarizationValidate);
 });
 

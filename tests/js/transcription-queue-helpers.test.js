@@ -15,11 +15,20 @@ const {
   markTranscriptionJobCancelled,
   isTranscriptionJobCancelled,
   clearTranscriptionJobCancelFlag,
+  markTranscriptionJobDeleted,
+  isTranscriptionJobDeleted,
+  clearTranscriptionJobDeleteTombstone,
+  isTranscriptionJobBlocked,
   shouldSkipJobAtHead,
+  shouldTerminateComputeJobsForMeeting,
   buildTranscriptionQueueStatePayload,
   buildMeetingTranscriptMarkdown,
   buildSpeakerSidecarPayload,
   buildGuidedDiarizationAiMetadata,
+  countBusyTranscriptionJobs,
+  trimSessionReadyJobs,
+  formatQueuedTranscriptionBusyMessage,
+  SESSION_READY_JOB_CAP,
 } = require('../../src/main-process/transcription-queue-helpers');
 
 test('queue state channel and cancel copy stay pinned', () => {
@@ -27,14 +36,26 @@ test('queue state channel and cancel copy stay pinned', () => {
   assert.equal(USER_CANCELLED_TRANSCRIPTION_ERROR, 'Cancelled by user');
 });
 
-test('shouldSkipJobAtHead gates quit and cancel', () => {
+test('shouldSkipJobAtHead gates quit, cancel, and delete', () => {
   assert.equal(shouldSkipJobAtHead({}), false);
   assert.equal(shouldSkipJobAtHead({ isQuitCommitted: true }), true);
   assert.equal(shouldSkipJobAtHead({ isCancelled: true }), true);
+  assert.equal(shouldSkipJobAtHead({ isDeleted: true }), true);
   assert.equal(shouldSkipJobAtHead({ isQuitCommitted: true, isCancelled: true }), true);
 });
 
-test('queue upsert/publish payload tracks active meeting and order', () => {
+test('shouldTerminateComputeJobsForMeeting scopes kill to the active meeting only', () => {
+  assert.equal(shouldTerminateComputeJobsForMeeting({
+    activeMeetingId: 'a',
+    targetMeetingId: 'a',
+  }), true);
+  assert.equal(shouldTerminateComputeJobsForMeeting({
+    activeMeetingId: 'a',
+    targetMeetingId: 'b',
+  }), false);
+});
+
+test('queue upsert/publish payload tracks active meeting, order, and busyCount', () => {
   const state = createTranscriptionQueueState();
   upsertQueueJob(state, {
     meetingId: 'meeting_a',
@@ -58,6 +79,7 @@ test('queue upsert/publish payload tracks active meeting and order', () => {
 
   const payload = buildTranscriptionQueueStatePayload(state);
   assert.equal(payload.activeMeetingId, 'meeting_a');
+  assert.equal(payload.busyCount, 2);
   assert.equal(payload.jobs.length, 2);
   assert.equal(payload.jobs[0].meetingId, 'meeting_a');
   assert.equal(payload.jobs[0].status, 'active');
@@ -68,12 +90,59 @@ test('queue upsert/publish payload tracks active meeting and order', () => {
 test('cancel flag marks queued jobs cancelled and is readable at head', () => {
   const state = createTranscriptionQueueState();
   upsertQueueJob(state, { meetingId: 'meeting_c', status: QUEUE_JOB_STATUSES.queued });
-  assert.equal(markTranscriptionJobCancelled(state, 'meeting_c'), true);
+  assert.equal(markTranscriptionJobCancelled(state, 'meeting_c'), 1);
   assert.equal(isTranscriptionJobCancelled(state, 'meeting_c'), true);
   assert.equal(state.jobsByMeetingId.get('meeting_c').status, QUEUE_JOB_STATUSES.cancelled);
   assert.equal(shouldSkipJobAtHead({
     isCancelled: isTranscriptionJobCancelled(state, 'meeting_c'),
   }), true);
+});
+
+test('generation-owned cancel clear ignores stale clear from an older reservation', () => {
+  const state = createTranscriptionQueueState();
+  const first = markTranscriptionJobCancelled(state, 'meeting_gen');
+  const second = markTranscriptionJobCancelled(state, 'meeting_gen');
+  assert.equal(first, 1);
+  assert.equal(second, 2);
+  assert.equal(clearTranscriptionJobCancelFlag(state, 'meeting_gen', first), false);
+  assert.equal(isTranscriptionJobCancelled(state, 'meeting_gen'), true);
+  assert.equal(clearTranscriptionJobCancelFlag(state, 'meeting_gen', second), true);
+  assert.equal(isTranscriptionJobCancelled(state, 'meeting_gen'), false);
+});
+
+test('generation-owned delete tombstone clear ignores stale clear', () => {
+  const state = createTranscriptionQueueState();
+  const first = markTranscriptionJobDeleted(state, 'meeting_del');
+  const second = markTranscriptionJobDeleted(state, 'meeting_del');
+  assert.equal(clearTranscriptionJobDeleteTombstone(state, 'meeting_del', first), false);
+  assert.equal(isTranscriptionJobDeleted(state, 'meeting_del'), true);
+  assert.equal(clearTranscriptionJobDeleteTombstone(state, 'meeting_del', second), true);
+  assert.equal(isTranscriptionJobDeleted(state, 'meeting_del'), false);
+});
+
+test('delete guard generations stay monotonic after clear so stale clears cannot recycle', () => {
+  const state = createTranscriptionQueueState();
+  const first = markTranscriptionJobDeleted(state, 'meeting_mono');
+  assert.equal(first, 1);
+  assert.equal(clearTranscriptionJobDeleteTombstone(state, 'meeting_mono', first), true);
+  assert.equal(isTranscriptionJobDeleted(state, 'meeting_mono'), false);
+
+  const second = markTranscriptionJobDeleted(state, 'meeting_mono');
+  assert.equal(second, 2, 'sequence must continue after clear, not restart at 1');
+  assert.equal(clearTranscriptionJobDeleteTombstone(state, 'meeting_mono', first), false);
+  assert.equal(isTranscriptionJobDeleted(state, 'meeting_mono'), true);
+  assert.equal(clearTranscriptionJobDeleteTombstone(state, 'meeting_mono', second), true);
+});
+
+test('cancel guard generations stay monotonic after clear so stale clears cannot recycle', () => {
+  const state = createTranscriptionQueueState();
+  const first = markTranscriptionJobCancelled(state, 'meeting_mono_c');
+  assert.equal(clearTranscriptionJobCancelFlag(state, 'meeting_mono_c', first), true);
+  const second = markTranscriptionJobCancelled(state, 'meeting_mono_c');
+  assert.equal(second, 2);
+  assert.equal(clearTranscriptionJobCancelFlag(state, 'meeting_mono_c', first), false);
+  assert.equal(isTranscriptionJobCancelled(state, 'meeting_mono_c'), true);
+  assert.equal(clearTranscriptionJobCancelFlag(state, 'meeting_mono_c', second), true);
 });
 
 test('clearTranscriptionJobCancelFlag consumes the flag so later jobs do not self-cancel', () => {
@@ -94,7 +163,7 @@ test('clearTranscriptionJobCancelFlag consumes the flag so later jobs do not sel
   assert.equal(clearTranscriptionJobCancelFlag(state, 'meeting_e'), false);
 });
 
-test('removeQueueJob clears active id and cancel flag', () => {
+test('removeQueueJob clears active id and cancel flag by default', () => {
   const state = createTranscriptionQueueState();
   upsertQueueJob(state, { meetingId: 'meeting_d' });
   setActiveQueueMeeting(state, 'meeting_d');
@@ -103,6 +172,24 @@ test('removeQueueJob clears active id and cancel flag', () => {
   assert.equal(state.jobsByMeetingId.has('meeting_d'), false);
   assert.equal(state.activeMeetingId, null);
   assert.equal(isTranscriptionJobCancelled(state, 'meeting_d'), false);
+});
+
+test('removeQueueJob can preserve cancel flag for delete-while-queued settlement', () => {
+  const state = createTranscriptionQueueState();
+  upsertQueueJob(state, { meetingId: 'meeting_tomb' });
+  markTranscriptionJobDeleted(state, 'meeting_tomb');
+  assert.equal(isTranscriptionJobDeleted(state, 'meeting_tomb'), true);
+  assert.equal(isTranscriptionJobCancelled(state, 'meeting_tomb'), true);
+  assert.equal(isTranscriptionJobBlocked(state, 'meeting_tomb'), true);
+
+  removeQueueJob(state, 'meeting_tomb', { clearCancelFlag: false });
+  assert.equal(state.jobsByMeetingId.has('meeting_tomb'), false);
+  assert.equal(isTranscriptionJobCancelled(state, 'meeting_tomb'), true);
+  assert.equal(isTranscriptionJobDeleted(state, 'meeting_tomb'), true);
+
+  clearTranscriptionJobCancelFlag(state, 'meeting_tomb');
+  clearTranscriptionJobDeleteTombstone(state, 'meeting_tomb');
+  assert.equal(isTranscriptionJobBlocked(state, 'meeting_tomb'), false);
 });
 
 test('buildMeetingTranscriptMarkdown includes speaker labels when present', () => {
@@ -144,4 +231,27 @@ test('sidecar and AI metadata helpers shape durable diarization fields', () => {
   });
   assert.equal(failed.status, 'error');
   assert.equal(failed.error, 'boom');
+});
+
+test('countBusyTranscriptionJobs and trimSessionReadyJobs keep Activity lean', () => {
+  const state = createTranscriptionQueueState();
+  for (let i = 0; i < SESSION_READY_JOB_CAP + 3; i += 1) {
+    upsertQueueJob(state, {
+      meetingId: `ready_${i}`,
+      status: QUEUE_JOB_STATUSES.ready,
+      phase: QUEUE_JOB_PHASES.completed,
+    });
+  }
+  upsertQueueJob(state, {
+    meetingId: 'busy',
+    status: QUEUE_JOB_STATUSES.active,
+    phase: QUEUE_JOB_PHASES.transcribing,
+  });
+  assert.equal(countBusyTranscriptionJobs(state), 1);
+  assert.equal(trimSessionReadyJobs(state), 3);
+  assert.equal(
+    [...state.jobsByMeetingId.values()].filter((job) => job.status === QUEUE_JOB_STATUSES.ready).length,
+    SESSION_READY_JOB_CAP,
+  );
+  assert.match(formatQueuedTranscriptionBusyMessage(2, 'installing'), /2 recordings are queued/);
 });

@@ -32,7 +32,7 @@ const {
 
 const { clearElement } = require('../../src/renderer/dom-helpers');
 const { meetingIdsEqual } = require('../../src/renderer/meeting-helpers');
-const { isGpuRuntimeActionBusyError } = require('../../src/renderer/gpu-settings-helpers');
+const { isGpuRuntimeActionBusyError, formatGpuRuntimeBusyAlertMessage } = require('../../src/renderer/gpu-settings-helpers');
 const { roundedBar } = require('../../src/renderer/canvas-helpers');
 
 const APP_JS = path.join(ROOT, 'src', 'renderer', 'app.js');
@@ -40,6 +40,7 @@ const INDEX_HTML = path.join(ROOT, 'src', 'renderer', 'index.html');
 
 const EXPECTED_RENDERER_GLOBALS = [
   'recordingStateHelpers',
+  'transcriptionActivityHelpers',
   'recoveryUiHelpers',
   'updateNotificationHelpers',
   'historyDetailHelpers',
@@ -54,6 +55,7 @@ const EXPECTED_RENDERER_GLOBALS = [
 
 const EXPECTED_SCRIPT_ORDER = [
   'recording-state-helpers.js',
+  'transcription-activity-helpers.js',
   'recovery-ui-helpers.js',
   'update-notification-helpers.js',
   'history-detail-helpers.js',
@@ -81,7 +83,11 @@ const EXTRACTED_PURE_HELPER_NAMES = [
   'clearElement',
   'meetingIdsEqual',
   'isGpuRuntimeActionBusyError',
+  'formatGpuRuntimeBusyAlertMessage',
   'roundedBar',
+  'getIdleStatusPillText',
+  'buildActivityRows',
+  'buildResumePendingBannerView',
 ];
 
 test('recording-state-helpers remain characterized for record-button gating', () => {
@@ -169,6 +175,13 @@ test('phase 2b pure helpers remain argument-driven', () => {
   assert.equal(meetingIdsEqual(null, '1'), false);
   assert.equal(isGpuRuntimeActionBusyError({ message: 'GPU_RUNTIME_ACTION_BUSY' }), true);
   assert.equal(isGpuRuntimeActionBusyError({ message: 'other' }), false);
+  assert.match(
+    formatGpuRuntimeBusyAlertMessage({
+      code: 'GPU_RUNTIME_COMPUTE_BUSY',
+      message: '1 recording is queued for transcription — finish or cancel them before installing or repairing the GPU runtime.',
+    }),
+    /queued for transcription/,
+  );
 
   const calls = [];
   roundedBar({

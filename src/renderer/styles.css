@@ -998,9 +998,147 @@ select.device-select:disabled {
 }
 
 /* ============================================================================
-   Live transcript
+   Home Activity (transcription queue)
    ============================================================================ */
 
+.home-activity {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface-2);
+  border-radius: var(--r-md);
+  border: 1px solid var(--hairline);
+  overflow: hidden;
+}
+
+.resume-pending-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.resume-pending-banner-text {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.activity-header {
+  padding: 9px 14px;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--hairline);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.activity-header h3 {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin: 0;
+}
+
+.activity-header-hint {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.activity-list {
+  padding: 12px 14px 18px;
+  overflow-y: auto;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.activity-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--surface-1);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-sm);
+}
+
+.activity-row.is-active {
+  border-color: color-mix(in srgb, var(--accent, #1f6b52) 45%, var(--hairline));
+}
+
+.activity-row.is-failed {
+  border-color: color-mix(in srgb, var(--crimson) 35%, var(--hairline));
+  background: color-mix(in srgb, var(--crimson) 6%, var(--surface-1));
+}
+
+.activity-row.is-ready {
+  border-color: color-mix(in srgb, var(--accent, #1f6b52) 35%, var(--hairline));
+}
+
+.activity-row-main {
+  min-width: 0;
+  flex: 1;
+}
+
+.activity-row-title {
+  font-size: 13.5px;
+  font-weight: 550;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.activity-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+
+.activity-chip {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #3a4f66;
+  color: #fff;
+}
+
+.activity-chip.queued { background: #9a6b00; }
+.activity-chip.transcribing,
+.activity-chip.identifying_speakers,
+.activity-chip.waiting_resource,
+.activity-chip.persisting { background: #3a4f66; }
+.activity-chip.ready { background: #1f6b52; }
+.activity-chip.failed,
+.activity-chip.cancelled { background: #b5472c; }
+
+.activity-row-duration {
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.activity-row-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* Legacy transcript panel selectors kept for History / copy helpers */
 .current-transcript {
   flex: 1;
   display: flex;

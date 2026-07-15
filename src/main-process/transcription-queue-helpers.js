@@ -35,6 +35,15 @@ function createTranscriptionQueueState() {
     jobOrder: [],
     activeMeetingId: null,
     cancelFlags: new Set(),
+    // Survives removeQueueJob until the in-flight closure settles (delete-while-queued).
+    deleteTombstones: new Set(),
+    // Active reservation generation currently held for the meeting.
+    cancelGuardGenerations: new Map(),
+    deleteGuardGenerations: new Map(),
+    // Monotonic counters — never reset on clear — so a stale clear from an
+    // earlier reservation cannot match a recycled generation number.
+    cancelGuardSequences: new Map(),
+    deleteGuardSequences: new Map(),
   };
 }
 
@@ -63,7 +72,12 @@ function upsertQueueJob(state, jobPatch = {}) {
   return next;
 }
 
-function removeQueueJob(state, meetingId) {
+/**
+ * @param {{ clearCancelFlag?: boolean }} [options]
+ *   clearCancelFlag defaults true. Delete-while-queued passes false so the
+ *   in-flight closure still observes cancellation after the Activity row is gone.
+ */
+function removeQueueJob(state, meetingId, { clearCancelFlag = true } = {}) {
   const id = String(meetingId || '').trim();
   if (!id) {
     return;
@@ -73,7 +87,9 @@ function removeQueueJob(state, meetingId) {
   if (state.activeMeetingId === id) {
     state.activeMeetingId = null;
   }
-  state.cancelFlags.delete(id);
+  if (clearCancelFlag) {
+    state.cancelFlags.delete(id);
+  }
 }
 
 function setActiveQueueMeeting(state, meetingId) {
@@ -83,8 +99,11 @@ function setActiveQueueMeeting(state, meetingId) {
 function markTranscriptionJobCancelled(state, meetingId) {
   const id = String(meetingId || '').trim();
   if (!id) {
-    return false;
+    return null;
   }
+  const nextGeneration = (state.cancelGuardSequences.get(id) || 0) + 1;
+  state.cancelGuardSequences.set(id, nextGeneration);
+  state.cancelGuardGenerations.set(id, nextGeneration);
   state.cancelFlags.add(id);
   const job = state.jobsByMeetingId.get(id);
   if (job && job.status === QUEUE_JOB_STATUSES.queued) {
@@ -94,27 +113,141 @@ function markTranscriptionJobCancelled(state, meetingId) {
       phase: QUEUE_JOB_PHASES.cancelled,
     });
   }
-  return true;
+  return nextGeneration;
+}
+
+function markTranscriptionJobDeleted(state, meetingId) {
+  const id = String(meetingId || '').trim();
+  if (!id) {
+    return null;
+  }
+  const nextGeneration = (state.deleteGuardSequences.get(id) || 0) + 1;
+  state.deleteGuardSequences.set(id, nextGeneration);
+  state.deleteGuardGenerations.set(id, nextGeneration);
+  state.deleteTombstones.add(id);
+  markTranscriptionJobCancelled(state, id);
+  return nextGeneration;
 }
 
 function isTranscriptionJobCancelled(state, meetingId) {
   return state.cancelFlags.has(String(meetingId || '').trim());
 }
 
-/**
- * Clear a consumed cancel flag. Must be called whenever a job passes the
- * head-of-queue gate or reaches a terminal state — a leaked flag would make
- * every future job for that meeting (e.g. Retry from History) self-cancel.
- */
-function clearTranscriptionJobCancelFlag(state, meetingId) {
-  return state.cancelFlags.delete(String(meetingId || '').trim());
+function isTranscriptionJobDeleted(state, meetingId) {
+  return state.deleteTombstones.has(String(meetingId || '').trim());
+}
+
+function getTranscriptionCancelGuardGeneration(state, meetingId) {
+  return state.cancelGuardGenerations.get(String(meetingId || '').trim()) || null;
+}
+
+function getTranscriptionDeleteGuardGeneration(state, meetingId) {
+  return state.deleteGuardGenerations.get(String(meetingId || '').trim()) || null;
 }
 
 /**
- * Head-of-queue gate: skip spawning Whisper when quit has begun or the user cancelled.
+ * Clear a consumed cancel flag. Must be called whenever a job reaches a
+ * terminal state — a leaked flag would make every future job for that meeting
+ * (e.g. Retry from History) self-cancel. Do not clear at head-of-queue admit;
+ * mid-job cancel must remain visible through GPU wait / lookup / setup.
+ * When expectedGeneration is set, a newer reservation wins and this is a no-op.
+ * Sequences stay monotonic across clears.
  */
-function shouldSkipJobAtHead({ isQuitCommitted = false, isCancelled = false } = {}) {
-  return Boolean(isQuitCommitted) || Boolean(isCancelled);
+function clearTranscriptionJobCancelFlag(state, meetingId, expectedGeneration = null) {
+  const id = String(meetingId || '').trim();
+  if (!id) {
+    return false;
+  }
+  if (expectedGeneration != null
+    && state.cancelGuardGenerations.get(id) !== expectedGeneration) {
+    return false;
+  }
+  state.cancelGuardGenerations.delete(id);
+  return state.cancelFlags.delete(id);
+}
+
+function clearTranscriptionJobDeleteTombstone(state, meetingId, expectedGeneration = null) {
+  const id = String(meetingId || '').trim();
+  if (!id) {
+    return false;
+  }
+  if (expectedGeneration != null
+    && state.deleteGuardGenerations.get(id) !== expectedGeneration) {
+    return false;
+  }
+  state.deleteGuardGenerations.delete(id);
+  return state.deleteTombstones.delete(id);
+}
+
+/**
+ * Head-of-queue / mid-job gate: skip Whisper when quit, user cancel, or delete tombstone.
+ */
+function shouldSkipJobAtHead({
+  isQuitCommitted = false,
+  isCancelled = false,
+  isDeleted = false,
+} = {}) {
+  return Boolean(isQuitCommitted) || Boolean(isCancelled) || Boolean(isDeleted);
+}
+
+function isTranscriptionJobBlocked(state, meetingId, { isQuitCommitted = false } = {}) {
+  const id = String(meetingId || '').trim();
+  return Boolean(isQuitCommitted)
+    || isTranscriptionJobCancelled(state, id)
+    || isTranscriptionJobDeleted(state, id);
+}
+
+/**
+ * Delete/cancel of meeting B must not terminate meeting A's active Whisper child.
+ * Only the meeting that currently owns activeMeetingId may kill wall-clock jobs.
+ */
+function shouldTerminateComputeJobsForMeeting({ activeMeetingId, targetMeetingId } = {}) {
+  const active = String(activeMeetingId || '').trim();
+  const target = String(targetMeetingId || '').trim();
+  return Boolean(active) && Boolean(target) && active === target;
+}
+
+const SESSION_READY_JOB_CAP = 5;
+
+function countBusyTranscriptionJobs(state) {
+  let count = 0;
+  for (const meetingId of state.jobOrder) {
+    const job = state.jobsByMeetingId.get(meetingId);
+    if (!job) {
+      continue;
+    }
+    if (job.status === QUEUE_JOB_STATUSES.queued || job.status === QUEUE_JOB_STATUSES.active) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+/**
+ * Keep only the newest session-only Ready rows (cap) so Home Activity stays lean.
+ */
+function trimSessionReadyJobs(state, maxReady = SESSION_READY_JOB_CAP) {
+  const readyIds = state.jobOrder.filter((meetingId) => {
+    const job = state.jobsByMeetingId.get(meetingId);
+    return job && job.status === QUEUE_JOB_STATUSES.ready;
+  });
+  const overflow = readyIds.length - Math.max(0, Number(maxReady) || 0);
+  if (overflow <= 0) {
+    return 0;
+  }
+  // jobOrder is enqueue order; oldest Ready entries are first among readyIds.
+  const toRemove = readyIds.slice(0, overflow);
+  toRemove.forEach((meetingId) => removeQueueJob(state, meetingId));
+  return toRemove.length;
+}
+
+function formatQueuedTranscriptionBusyMessage(queuedCount, actionLabel = 'continuing') {
+  const count = Math.max(0, Number(queuedCount) || 0);
+  if (count <= 0) {
+    return `Local AI work is still running. Finish or cancel it before ${actionLabel}.`;
+  }
+  const noun = count === 1 ? 'recording is' : 'recordings are';
+  return `${count} ${noun} queued for transcription — finish or cancel them before ${actionLabel}.`;
 }
 
 function buildTranscriptionQueueStatePayload(state) {
@@ -132,6 +265,7 @@ function buildTranscriptionQueueStatePayload(state) {
   return {
     jobs,
     activeMeetingId: state.activeMeetingId,
+    busyCount: countBusyTranscriptionJobs(state),
   };
 }
 
@@ -226,6 +360,7 @@ function buildGuidedDiarizationAiMetadata({
 module.exports = {
   TRANSCRIPTION_QUEUE_STATE_CHANNEL,
   USER_CANCELLED_TRANSCRIPTION_ERROR,
+  SESSION_READY_JOB_CAP,
   QUEUE_JOB_STATUSES,
   QUEUE_JOB_PHASES,
   createTranscriptionQueueState,
@@ -233,9 +368,19 @@ module.exports = {
   removeQueueJob,
   setActiveQueueMeeting,
   markTranscriptionJobCancelled,
+  markTranscriptionJobDeleted,
   isTranscriptionJobCancelled,
+  isTranscriptionJobDeleted,
+  getTranscriptionCancelGuardGeneration,
+  getTranscriptionDeleteGuardGeneration,
   clearTranscriptionJobCancelFlag,
+  clearTranscriptionJobDeleteTombstone,
   shouldSkipJobAtHead,
+  isTranscriptionJobBlocked,
+  shouldTerminateComputeJobsForMeeting,
+  countBusyTranscriptionJobs,
+  trimSessionReadyJobs,
+  formatQueuedTranscriptionBusyMessage,
   buildTranscriptionQueueStatePayload,
   formatTranscriptSegmentTimestamp,
   buildMeetingTranscriptMarkdown,

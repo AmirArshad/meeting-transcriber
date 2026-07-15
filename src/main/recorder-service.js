@@ -353,7 +353,7 @@ function createRecorderService(deps) {
     return BASE_MS;
   }
 
-  function runCaptureRecoveryPython(extraArgs, { timeoutMs = null } = {}) {
+  function runCaptureRecoveryPython(extraArgs, { timeoutMs = null, unrefTimeout = false } = {}) {
     if (typeof getBackendModuleArgs !== 'function' || typeof collectPythonProcessOutput !== 'function') {
       return Promise.reject(new Error('Capture recovery Python wiring is unavailable.'));
     }
@@ -430,12 +430,18 @@ function createRecorderService(deps) {
             finish(reject, new Error('Capture recovery timed out.'));
           })();
         }, timeoutMs);
-        timeoutHandle.unref?.();
+        // Background (fire-and-forget) discovery may unref so a hung child does not
+        // pin process exit. Awaited recover/discover must keep the timer ref'd —
+        // otherwise the event loop drains while the caller is still awaiting
+        // (unit tests cancel; user-triggered recover would never time out).
+        if (unrefTimeout) {
+          timeoutHandle.unref?.();
+        }
       }
     });
   }
 
-  async function discoverInterruptedCaptures() {
+  async function discoverInterruptedCaptures({ unrefTimeout = false } = {}) {
     if (recoveryStatus === 'recovering') {
       return buildRecoveryStateSnapshot();
     }
@@ -443,6 +449,7 @@ function createRecorderService(deps) {
     try {
       const { code, result } = await runCaptureRecoveryPython(['--list'], {
         timeoutMs: 60 * 1000,
+        unrefTimeout,
       });
       if (code !== 0 || !result || result.success !== true) {
         throw new Error(
@@ -1739,7 +1746,8 @@ function createRecorderService(deps) {
             || closeAction.type === 'unexpected_exit_recovered'
           ) {
             // A crash mid-session may leave a recoverable .capture — rediscover.
-            void discoverInterruptedCaptures().catch((error) => {
+            // Fire-and-forget: unref the timeout so a hung list cannot pin quit.
+            void discoverInterruptedCaptures({ unrefTimeout: true }).catch((error) => {
               console.warn(
                 'Post-exit capture discovery failed:',
                 error?.message || error,

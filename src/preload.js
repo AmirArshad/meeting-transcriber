@@ -83,6 +83,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   retryTranscription: (options) => ipcRenderer.invoke('retry-transcription', options),
   finalizeRecordingTranscription: (options) => ipcRenderer.invoke('finalize-recording-transcription', options),
   cancelPendingTranscription: (options) => ipcRenderer.invoke('cancel-pending-transcription', options),
+  resumePendingTranscriptions: (options) => ipcRenderer.invoke('resume-pending-transcriptions', options),
+  getTranscriptionQueueState: () => ipcRenderer.invoke('get-transcription-queue-state'),
   transcribeAudioWithSpeakers: (options) => ipcRenderer.invoke('transcribe-audio-with-speakers', options),
   diarizeTranscript: (options) => ipcRenderer.invoke('diarize-transcript', options),
   generateSummary: (options) => ipcRenderer.invoke('generate-summary', options),

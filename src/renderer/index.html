@@ -368,55 +368,27 @@
                 </div>
               </div>
 
-              <!-- Current Transcript -->
-              <div class="current-transcript" id="current-transcript">
-                <div class="transcript-header">
-                  <div class="current-transcript-title" id="current-transcript-title-row">
-                    <h3 id="current-meeting-title">Transcript</h3>
-                    <button
-                      type="button"
-                      id="current-meeting-title-edit"
-                      class="title-edit-btn"
-                      title="Rename meeting"
-                      aria-label="Rename meeting"
-                      style="display: none"
-                    >
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M12 20h9"/>
-                        <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/>
-                      </svg>
-                    </button>
-                    <form
-                      id="current-meeting-title-form"
-                      class="title-edit-form"
-                      style="display: none"
-                    >
-                      <input
-                        type="text"
-                        id="current-meeting-title-input"
-                        class="title-edit-input"
-                        maxlength="120"
-                        autocomplete="off"
-                      />
-                      <button type="submit" class="btn btn-small btn-primary">Rename</button>
-                      <button type="button" id="current-meeting-title-cancel" class="btn btn-small">Cancel</button>
-                    </form>
-                  </div>
-                  <div
-                    class="transcript-actions"
-                    id="transcript-actions"
-                    style="display: none"
-                  >
-                    <button id="generate-current-summary-btn" class="btn btn-small">
-                      Generate Summary
-                    </button>
-                    <button id="copy-btn" class="btn btn-small">Copy</button>
-                    <button id="save-btn" class="btn btn-small">Save</button>
-                  </div>
+              <!-- Activity (transcription queue) -->
+              <div class="home-activity" id="home-activity">
+                <div
+                  id="resume-pending-banner"
+                  class="resume-pending-banner"
+                  style="display: none"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <span id="resume-pending-banner-text" class="resume-pending-banner-text"></span>
+                  <button type="button" id="resume-pending-btn" class="btn btn-small btn-primary">
+                    Resume pending transcriptions
+                  </button>
                 </div>
-                <div class="transcript-output" id="transcript-output">
-                  <p class="placeholder">
-                    Transcript will appear here after recording&hellip;
+                <div class="activity-header">
+                  <h3>Activity</h3>
+                  <span class="activity-header-hint">Operations · open Ready in History</span>
+                </div>
+                <div class="activity-list" id="activity-list" role="list">
+                  <p class="placeholder" id="activity-empty">
+                    Recordings you finish will appear here while they transcribe.
                   </p>
                 </div>
               </div>
@@ -975,6 +947,7 @@
     </div>
 
     <script src="recording-state-helpers.js"></script>
+    <script src="transcription-activity-helpers.js"></script>
     <script src="recovery-ui-helpers.js"></script>
     <script src="update-notification-helpers.js"></script>
     <script src="history-detail-helpers.js"></script>

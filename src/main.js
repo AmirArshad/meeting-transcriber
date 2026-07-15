@@ -77,6 +77,7 @@ const {
   resolveBeforeQuitAction,
   collectProcessesToKillOnQuit,
   dispatchBeforeQuitAction,
+  formatQueuedTranscriptionBusyMessage,
 } = require('./main-process-helpers');
 const { signalProcessTree, signalOwnedProcessGroup } = require('./main-process/quit-lifecycle-helpers');
 const { checkForUpdates, openDownloadPage } = require('./updater');
@@ -406,9 +407,19 @@ function getProtectedQuitProcess() {
 
 async function drainAiWorkBeforeQuit() {
   markQuitCommitted();
+  const busyTranscriptionCount = transcriptionService
+    && typeof transcriptionService.getBusyTranscriptionJobCount === 'function'
+    ? transcriptionService.getBusyTranscriptionJobCount()
+    : 0;
+  const quitPendingDetail = busyTranscriptionCount > 0
+    ? `${busyTranscriptionCount} recording${busyTranscriptionCount === 1 ? '' : 's'} will finish transcribing next time you open AvaNevis.`
+    : null;
+
   sendToRenderer('app-quit-progress', {
-    message: 'Finishing local AI work before quit…',
+    message: quitPendingDetail
+      || 'Stopping local AI work before quit…',
     code: 'QUIT_DRAIN_AI',
+    pendingTranscriptionCount: busyTranscriptionCount,
   });
 
   const metadataPhaseActive = summaryService
@@ -428,8 +439,10 @@ async function drainAiWorkBeforeQuit() {
       `Quit drain terminating non-abortable compute job: ${activeComputeJob?.label || 'unknown'}`,
     );
     sendToRenderer('app-quit-progress', {
-      message: 'Stopping local transcription before quit…',
+      message: quitPendingDetail
+        || 'Stopping local transcription before quit. Unfinished recordings stay pending for next launch.',
       code: 'QUIT_DRAIN_SKIP_TRANSCRIPTION',
+      pendingTranscriptionCount: busyTranscriptionCount,
     });
     // F4: actually kill — skipping the wait without terminate left hasPendingWork()
     // true and the armed pass re-drained forever.
@@ -558,6 +571,21 @@ const meetingManagerClient = registerMeetingManagerClient(ipcMain, {
   validateAiMetadataPaths,
   terminateProcessBestEffort,
   recordingsMaintenanceGate,
+  beforeDeleteMeeting: async (meetingId) => {
+    if (transcriptionService && typeof transcriptionService.cancelJobForDelete === 'function') {
+      return transcriptionService.cancelJobForDelete(meetingId);
+    }
+    return { cancelled: false, tombstoned: false };
+  },
+  afterDeleteMeeting: async (meetingId, prep = null) => {
+    if (transcriptionService && typeof transcriptionService.clearMeetingDeleteGuard === 'function') {
+      return transcriptionService.clearMeetingDeleteGuard(
+        meetingId,
+        prep && prep.generation != null ? prep.generation : null,
+      );
+    }
+    return { cleared: false, deferred: false };
+  },
   isRecorderBusy: () => {
     const state = recorderService && recorderService.getQuitInterceptInputs();
     return Boolean(state && (state.hasRecordingProcess || state.stopInProgress));
@@ -568,7 +596,13 @@ const meetingManagerClient = registerMeetingManagerClient(ipcMain, {
     }
   },
 });
-const { addMeetingToHistory, updateMeetingAiMetadata, isRecordingsScanInProgress, scanRecordings } = meetingManagerClient;
+const {
+  addMeetingToHistory,
+  updateMeetingAiMetadata,
+  isRecordingsScanInProgress,
+  scanRecordings,
+  listMeetings,
+} = meetingManagerClient;
 
 const deviceIpc = registerDeviceIpc(ipcMain, {
   app,
@@ -630,6 +664,12 @@ gpuRuntimeService = createGpuRuntimeService({
   getDiarizationDependencySitePackagesPath,
   waitForAiComputeQueueIdle,
   hasPendingAiComputeWork: () => aiComputeActionQueue.hasPendingWork(),
+  getBusyTranscriptionJobCount: () => (
+    transcriptionService && typeof transcriptionService.getBusyTranscriptionJobCount === 'function'
+      ? transcriptionService.getBusyTranscriptionJobCount()
+      : 0
+  ),
+  formatQueuedTranscriptionBusyMessage,
   enqueueGpuResourceAction: gpuResourceActionQueue.enqueue,
 });
 gpuRuntimeService.registerIpc(ipcMain);
@@ -695,6 +735,7 @@ transcriptionService = createTranscriptionService({
     gpuRuntimeService ? gpuRuntimeService.waitForGpuRuntimeIdle() : Promise.resolve()
   ),
   enqueueGpuResourceAction: gpuResourceActionQueue.enqueue,
+  hasPendingAiComputeWork: () => aiComputeActionQueue.hasPendingWork(),
   getCachedCudaStatus,
   resolveCudaStatusForTranscription,
   buildCudaRuntimeEnv,
@@ -721,6 +762,7 @@ transcriptionService = createTranscriptionService({
   formatDurationForTranscript,
   addMeetingToHistory,
   updateMeetingAiMetadata,
+  listMeetings,
   isQuitCommitted,
 });
 transcriptionService.registerIpc(ipcMain);
@@ -1209,7 +1251,13 @@ function createWindow() {
       const captureState = recordingPresenceService
         ? recordingPresenceService.getCaptureState()
         : { state: 'idle', sessionId: null, startedAt: null };
-      const dialogOptions = buildWindowCloseDialogOptions(captureState, process.platform);
+      const pendingTranscriptionCount = transcriptionService
+        && typeof transcriptionService.getBusyTranscriptionJobCount === 'function'
+        ? transcriptionService.getBusyTranscriptionJobCount()
+        : 0;
+      const dialogOptions = buildWindowCloseDialogOptions(captureState, process.platform, {
+        pendingTranscriptionCount,
+      });
       const { keepRecordingAction, ...messageBoxOptions } = dialogOptions;
 
       dialog.showMessageBox(mainWindow, messageBoxOptions).then(result => {
@@ -1422,7 +1470,7 @@ app.whenReady().then(async () => {
 
   // Discover interrupted captures after first paint — never await inside whenReady.
   if (recorderService && typeof recorderService.discoverInterruptedCaptures === 'function') {
-    void recorderService.discoverInterruptedCaptures().catch((error) => {
+    void recorderService.discoverInterruptedCaptures({ unrefTimeout: true }).catch((error) => {
       console.warn('Interrupted capture discovery failed:', error?.message || error);
     });
   }
