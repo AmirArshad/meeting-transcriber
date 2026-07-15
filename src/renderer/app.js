@@ -56,7 +56,7 @@ const {
 } = window.aiAddonUiHelpers;
 const { clearElement } = window.domHelpers;
 const { meetingIdsEqual } = window.meetingHelpers;
-const { isGpuRuntimeActionBusyError } = window.gpuSettingsHelpers;
+const { isGpuRuntimeActionBusyError, formatGpuRuntimeBusyAlertMessage } = window.gpuSettingsHelpers;
 const { roundedBar } = window.canvasHelpers;
 
 // UI Elements
@@ -844,10 +844,7 @@ async function resumePendingTranscriptionsFromBanner() {
   resumePendingBtn.disabled = true;
   resumePendingBtn.textContent = 'Resuming…';
   try {
-    const result = await window.electronAPI.resumePendingTranscriptions({
-      language: languageSelect.value,
-      modelSize: modelSelect.value,
-    });
+    const result = await window.electronAPI.resumePendingTranscriptions();
     const count = result && result.enqueuedCount ? result.enqueuedCount : 0;
     addLog(count
       ? `Resumed ${count} pending transcription${count === 1 ? '' : 's'}.`
@@ -3181,12 +3178,24 @@ async function transcribeAudio(options = {}) {
       currentRecordingMeeting = meeting;
       applyCurrentRecordingTitle();
       addLog(`Queued transcription for ${meeting.title || meeting.id}`);
+      // Merge locally so History/Activity update without blocking Start on list-meetings.
+      const existingIdx = meetings.findIndex((entry) => meetingIdsEqual(entry.id, meeting.id));
+      if (existingIdx >= 0) {
+        meetings[existingIdx] = { ...meetings[existingIdx], ...meeting };
+      } else {
+        meetings = [meeting, ...meetings];
+      }
+      renderMeetingList();
+      renderActivityList();
     } else {
       addLog('Recording saved; transcription queued.');
     }
 
-    await loadMeetingHistory();
+    // Unlock Start immediately after pending persist; refresh History in the background.
     setRecordingState('idle');
+    void loadMeetingHistory().catch((historyError) => {
+      console.warn('Background history refresh after enqueue failed:', historyError);
+    });
   } catch (error) {
     console.error('Failed to enqueue transcription:', error);
     addLog(`Error: ${error.message}`, 'error');
@@ -4761,10 +4770,7 @@ async function installGPUAcceleration() {
     installBtn.classList.remove('is-loading');
 
     if (isGpuRuntimeActionBusyError(error)) {
-      alert(
-        'Another GPU setup operation is already running.\n\n' +
-        'Please wait for it to finish and then try again.',
-      );
+      alert(formatGpuRuntimeBusyAlertMessage(error));
     } else {
       alert(`GPU installation failed.\n\n${error.message}`);
     }
@@ -4800,10 +4806,7 @@ async function uninstallGPUAcceleration() {
   } catch (error) {
     console.error('Uninstall failed:', error);
     if (isGpuRuntimeActionBusyError(error)) {
-      alert(
-        'Another GPU setup operation is already running.\n\n' +
-        'Please wait for it to finish and then try again.',
-      );
+      alert(formatGpuRuntimeBusyAlertMessage(error));
     } else {
       alert(
         'Failed to uninstall AvaNevis GPU acceleration libraries.\n\n' +

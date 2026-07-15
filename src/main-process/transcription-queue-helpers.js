@@ -35,6 +35,8 @@ function createTranscriptionQueueState() {
     jobOrder: [],
     activeMeetingId: null,
     cancelFlags: new Set(),
+    // Survives removeQueueJob until the in-flight closure settles (delete-while-queued).
+    deleteTombstones: new Set(),
   };
 }
 
@@ -63,7 +65,12 @@ function upsertQueueJob(state, jobPatch = {}) {
   return next;
 }
 
-function removeQueueJob(state, meetingId) {
+/**
+ * @param {{ clearCancelFlag?: boolean }} [options]
+ *   clearCancelFlag defaults true. Delete-while-queued passes false so the
+ *   in-flight closure still observes cancellation after the Activity row is gone.
+ */
+function removeQueueJob(state, meetingId, { clearCancelFlag = true } = {}) {
   const id = String(meetingId || '').trim();
   if (!id) {
     return;
@@ -73,7 +80,9 @@ function removeQueueJob(state, meetingId) {
   if (state.activeMeetingId === id) {
     state.activeMeetingId = null;
   }
-  state.cancelFlags.delete(id);
+  if (clearCancelFlag) {
+    state.cancelFlags.delete(id);
+  }
 }
 
 function setActiveQueueMeeting(state, meetingId) {
@@ -97,24 +106,53 @@ function markTranscriptionJobCancelled(state, meetingId) {
   return true;
 }
 
+function markTranscriptionJobDeleted(state, meetingId) {
+  const id = String(meetingId || '').trim();
+  if (!id) {
+    return false;
+  }
+  state.deleteTombstones.add(id);
+  return markTranscriptionJobCancelled(state, id);
+}
+
 function isTranscriptionJobCancelled(state, meetingId) {
   return state.cancelFlags.has(String(meetingId || '').trim());
 }
 
+function isTranscriptionJobDeleted(state, meetingId) {
+  return state.deleteTombstones.has(String(meetingId || '').trim());
+}
+
 /**
- * Clear a consumed cancel flag. Must be called whenever a job passes the
- * head-of-queue gate or reaches a terminal state — a leaked flag would make
- * every future job for that meeting (e.g. Retry from History) self-cancel.
+ * Clear a consumed cancel flag. Must be called whenever a job reaches a
+ * terminal state — a leaked flag would make every future job for that meeting
+ * (e.g. Retry from History) self-cancel. Do not clear at head-of-queue admit;
+ * mid-job cancel must remain visible through GPU wait / lookup / setup.
  */
 function clearTranscriptionJobCancelFlag(state, meetingId) {
   return state.cancelFlags.delete(String(meetingId || '').trim());
 }
 
+function clearTranscriptionJobDeleteTombstone(state, meetingId) {
+  return state.deleteTombstones.delete(String(meetingId || '').trim());
+}
+
 /**
- * Head-of-queue gate: skip spawning Whisper when quit has begun or the user cancelled.
+ * Head-of-queue / mid-job gate: skip Whisper when quit, user cancel, or delete tombstone.
  */
-function shouldSkipJobAtHead({ isQuitCommitted = false, isCancelled = false } = {}) {
-  return Boolean(isQuitCommitted) || Boolean(isCancelled);
+function shouldSkipJobAtHead({
+  isQuitCommitted = false,
+  isCancelled = false,
+  isDeleted = false,
+} = {}) {
+  return Boolean(isQuitCommitted) || Boolean(isCancelled) || Boolean(isDeleted);
+}
+
+function isTranscriptionJobBlocked(state, meetingId, { isQuitCommitted = false } = {}) {
+  const id = String(meetingId || '').trim();
+  return Boolean(isQuitCommitted)
+    || isTranscriptionJobCancelled(state, id)
+    || isTranscriptionJobDeleted(state, id);
 }
 
 const SESSION_READY_JOB_CAP = 5;
@@ -278,9 +316,13 @@ module.exports = {
   removeQueueJob,
   setActiveQueueMeeting,
   markTranscriptionJobCancelled,
+  markTranscriptionJobDeleted,
   isTranscriptionJobCancelled,
+  isTranscriptionJobDeleted,
   clearTranscriptionJobCancelFlag,
+  clearTranscriptionJobDeleteTombstone,
   shouldSkipJobAtHead,
+  isTranscriptionJobBlocked,
   countBusyTranscriptionJobs,
   trimSessionReadyJobs,
   formatQueuedTranscriptionBusyMessage,

@@ -328,11 +328,9 @@ function createMeetingManagerClient(deps) {
 
       // Terminate+cancel any in-memory transcription job first so the compute
       // queue cannot write artifacts after the tombstone (PR2 delete-while-queued).
-      try {
-        await beforeDeleteMeeting(id);
-      } catch (cancelError) {
-        console.warn('Could not cancel transcription before delete:', cancelError && cancelError.message);
-      }
+      // Failures must surface — swallowing would let delete proceed while a job
+      // can still recreate transcript/sidecar files.
+      await beforeDeleteMeeting(id);
 
       const recordingsDir = path.join(app.getPath('userData'), 'recordings');
 

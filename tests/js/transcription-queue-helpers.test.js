@@ -15,6 +15,10 @@ const {
   markTranscriptionJobCancelled,
   isTranscriptionJobCancelled,
   clearTranscriptionJobCancelFlag,
+  markTranscriptionJobDeleted,
+  isTranscriptionJobDeleted,
+  clearTranscriptionJobDeleteTombstone,
+  isTranscriptionJobBlocked,
   shouldSkipJobAtHead,
   buildTranscriptionQueueStatePayload,
   buildMeetingTranscriptMarkdown,
@@ -31,10 +35,11 @@ test('queue state channel and cancel copy stay pinned', () => {
   assert.equal(USER_CANCELLED_TRANSCRIPTION_ERROR, 'Cancelled by user');
 });
 
-test('shouldSkipJobAtHead gates quit and cancel', () => {
+test('shouldSkipJobAtHead gates quit, cancel, and delete', () => {
   assert.equal(shouldSkipJobAtHead({}), false);
   assert.equal(shouldSkipJobAtHead({ isQuitCommitted: true }), true);
   assert.equal(shouldSkipJobAtHead({ isCancelled: true }), true);
+  assert.equal(shouldSkipJobAtHead({ isDeleted: true }), true);
   assert.equal(shouldSkipJobAtHead({ isQuitCommitted: true, isCancelled: true }), true);
 });
 
@@ -99,7 +104,7 @@ test('clearTranscriptionJobCancelFlag consumes the flag so later jobs do not sel
   assert.equal(clearTranscriptionJobCancelFlag(state, 'meeting_e'), false);
 });
 
-test('removeQueueJob clears active id and cancel flag', () => {
+test('removeQueueJob clears active id and cancel flag by default', () => {
   const state = createTranscriptionQueueState();
   upsertQueueJob(state, { meetingId: 'meeting_d' });
   setActiveQueueMeeting(state, 'meeting_d');
@@ -108,6 +113,24 @@ test('removeQueueJob clears active id and cancel flag', () => {
   assert.equal(state.jobsByMeetingId.has('meeting_d'), false);
   assert.equal(state.activeMeetingId, null);
   assert.equal(isTranscriptionJobCancelled(state, 'meeting_d'), false);
+});
+
+test('removeQueueJob can preserve cancel flag for delete-while-queued settlement', () => {
+  const state = createTranscriptionQueueState();
+  upsertQueueJob(state, { meetingId: 'meeting_tomb' });
+  markTranscriptionJobDeleted(state, 'meeting_tomb');
+  assert.equal(isTranscriptionJobDeleted(state, 'meeting_tomb'), true);
+  assert.equal(isTranscriptionJobCancelled(state, 'meeting_tomb'), true);
+  assert.equal(isTranscriptionJobBlocked(state, 'meeting_tomb'), true);
+
+  removeQueueJob(state, 'meeting_tomb', { clearCancelFlag: false });
+  assert.equal(state.jobsByMeetingId.has('meeting_tomb'), false);
+  assert.equal(isTranscriptionJobCancelled(state, 'meeting_tomb'), true);
+  assert.equal(isTranscriptionJobDeleted(state, 'meeting_tomb'), true);
+
+  clearTranscriptionJobCancelFlag(state, 'meeting_tomb');
+  clearTranscriptionJobDeleteTombstone(state, 'meeting_tomb');
+  assert.equal(isTranscriptionJobBlocked(state, 'meeting_tomb'), false);
 });
 
 test('buildMeetingTranscriptMarkdown includes speaker labels when present', () => {

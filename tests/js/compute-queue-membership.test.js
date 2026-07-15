@@ -90,10 +90,14 @@ test('retry-transcription and finalize-recording-transcription enqueue via share
   const finalizeSource = extractIpcHandlerSource(combined, 'finalize-recording-transcription');
   assert.ok(retrySource, 'missing ipcMain.handle for retry-transcription');
   assert.ok(finalizeSource, 'missing ipcMain.handle for finalize-recording-transcription');
-  assert.match(retrySource, /runMeetingTranscriptionJob/);
+  assert.match(retrySource, /admitMeetingTranscriptionJob/);
   assert.match(finalizeSource, /finalizeRecordingTranscription/);
   // Brace-balanced extraction: the enqueue call must be INSIDE the job
   // function body, not merely somewhere later in the combined source.
+  const admitSource = extractTopLevelFunctionSource(combined, 'admitMeetingTranscriptionJob');
+  assert.ok(admitSource, 'missing admitMeetingTranscriptionJob function');
+  assert.match(admitSource, /runMeetingTranscriptionJob/);
+  assert.match(admitSource, /inFlightJobsByMeetingId/);
   const jobSource = extractTopLevelFunctionSource(combined, 'runMeetingTranscriptionJob');
   assert.ok(jobSource, 'missing runMeetingTranscriptionJob function');
   assert.equal(

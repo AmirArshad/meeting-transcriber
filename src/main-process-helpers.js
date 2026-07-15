@@ -156,6 +156,10 @@ const {
   buildMeetingTranscriptMarkdown,
   buildSpeakerSidecarPayload,
   buildGuidedDiarizationAiMetadata,
+  markTranscriptionJobDeleted,
+  isTranscriptionJobDeleted,
+  clearTranscriptionJobDeleteTombstone,
+  isTranscriptionJobBlocked,
 } = require('./main-process/transcription-queue-helpers');
 
 module.exports = {
@@ -275,6 +279,10 @@ module.exports = {
   buildMeetingTranscriptMarkdown,
   buildSpeakerSidecarPayload,
   buildGuidedDiarizationAiMetadata,
+  markTranscriptionJobDeleted,
+  isTranscriptionJobDeleted,
+  clearTranscriptionJobDeleteTombstone,
+  isTranscriptionJobBlocked,
   TRANSCRIPTION_QUEUE_STATE_CHANNEL,
   USER_CANCELLED_TRANSCRIPTION_ERROR,
   summarizeAiBackendError,
