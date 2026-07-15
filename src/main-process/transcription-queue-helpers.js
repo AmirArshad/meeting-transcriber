@@ -37,9 +37,13 @@ function createTranscriptionQueueState() {
     cancelFlags: new Set(),
     // Survives removeQueueJob until the in-flight closure settles (delete-while-queued).
     deleteTombstones: new Set(),
-    // Generation tokens so a stale clear cannot drop a newer cancel/delete reservation.
+    // Active reservation generation currently held for the meeting.
     cancelGuardGenerations: new Map(),
     deleteGuardGenerations: new Map(),
+    // Monotonic counters — never reset on clear — so a stale clear from an
+    // earlier reservation cannot match a recycled generation number.
+    cancelGuardSequences: new Map(),
+    deleteGuardSequences: new Map(),
   };
 }
 
@@ -97,7 +101,8 @@ function markTranscriptionJobCancelled(state, meetingId) {
   if (!id) {
     return null;
   }
-  const nextGeneration = (state.cancelGuardGenerations.get(id) || 0) + 1;
+  const nextGeneration = (state.cancelGuardSequences.get(id) || 0) + 1;
+  state.cancelGuardSequences.set(id, nextGeneration);
   state.cancelGuardGenerations.set(id, nextGeneration);
   state.cancelFlags.add(id);
   const job = state.jobsByMeetingId.get(id);
@@ -116,7 +121,8 @@ function markTranscriptionJobDeleted(state, meetingId) {
   if (!id) {
     return null;
   }
-  const nextGeneration = (state.deleteGuardGenerations.get(id) || 0) + 1;
+  const nextGeneration = (state.deleteGuardSequences.get(id) || 0) + 1;
+  state.deleteGuardSequences.set(id, nextGeneration);
   state.deleteGuardGenerations.set(id, nextGeneration);
   state.deleteTombstones.add(id);
   markTranscriptionJobCancelled(state, id);
@@ -145,6 +151,7 @@ function getTranscriptionDeleteGuardGeneration(state, meetingId) {
  * (e.g. Retry from History) self-cancel. Do not clear at head-of-queue admit;
  * mid-job cancel must remain visible through GPU wait / lookup / setup.
  * When expectedGeneration is set, a newer reservation wins and this is a no-op.
+ * Sequences stay monotonic across clears.
  */
 function clearTranscriptionJobCancelFlag(state, meetingId, expectedGeneration = null) {
   const id = String(meetingId || '').trim();

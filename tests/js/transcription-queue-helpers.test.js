@@ -120,6 +120,31 @@ test('generation-owned delete tombstone clear ignores stale clear', () => {
   assert.equal(isTranscriptionJobDeleted(state, 'meeting_del'), false);
 });
 
+test('delete guard generations stay monotonic after clear so stale clears cannot recycle', () => {
+  const state = createTranscriptionQueueState();
+  const first = markTranscriptionJobDeleted(state, 'meeting_mono');
+  assert.equal(first, 1);
+  assert.equal(clearTranscriptionJobDeleteTombstone(state, 'meeting_mono', first), true);
+  assert.equal(isTranscriptionJobDeleted(state, 'meeting_mono'), false);
+
+  const second = markTranscriptionJobDeleted(state, 'meeting_mono');
+  assert.equal(second, 2, 'sequence must continue after clear, not restart at 1');
+  assert.equal(clearTranscriptionJobDeleteTombstone(state, 'meeting_mono', first), false);
+  assert.equal(isTranscriptionJobDeleted(state, 'meeting_mono'), true);
+  assert.equal(clearTranscriptionJobDeleteTombstone(state, 'meeting_mono', second), true);
+});
+
+test('cancel guard generations stay monotonic after clear so stale clears cannot recycle', () => {
+  const state = createTranscriptionQueueState();
+  const first = markTranscriptionJobCancelled(state, 'meeting_mono_c');
+  assert.equal(clearTranscriptionJobCancelFlag(state, 'meeting_mono_c', first), true);
+  const second = markTranscriptionJobCancelled(state, 'meeting_mono_c');
+  assert.equal(second, 2);
+  assert.equal(clearTranscriptionJobCancelFlag(state, 'meeting_mono_c', first), false);
+  assert.equal(isTranscriptionJobCancelled(state, 'meeting_mono_c'), true);
+  assert.equal(clearTranscriptionJobCancelFlag(state, 'meeting_mono_c', second), true);
+});
+
 test('clearTranscriptionJobCancelFlag consumes the flag so later jobs do not self-cancel', () => {
   const state = createTranscriptionQueueState();
   upsertQueueJob(state, { meetingId: 'meeting_e', status: QUEUE_JOB_STATUSES.queued });

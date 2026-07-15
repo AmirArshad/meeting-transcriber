@@ -2244,6 +2244,22 @@ function createTranscriptionService(deps) {
           }
         }
 
+        job = transcriptionQueueState.jobsByMeetingId.get(meetingId);
+        hasInflight = inFlightJobsByMeetingId.has(meetingId);
+        const isActiveTarget = shouldTerminateComputeJobsForMeeting({
+          activeMeetingId: transcriptionQueueState.activeMeetingId,
+          targetMeetingId: meetingId,
+        });
+
+        // Capture before markTranscriptionJobCancelled flips queued → cancelled.
+        // Also treat already-cancelled rows (durable-path fallthrough) as queued-cancel.
+        const wasNonActiveQueued = Boolean(
+          job
+          && !isActiveTarget
+          && (job.status === QUEUE_JOB_STATUSES.queued
+            || job.status === QUEUE_JOB_STATUSES.cancelled)
+        );
+
         if (!isTranscriptionJobCancelled(transcriptionQueueState, meetingId)) {
           cancelGeneration = markTranscriptionJobCancelled(transcriptionQueueState, meetingId);
           bumpJobEpoch(meetingId);
@@ -2256,13 +2272,10 @@ function createTranscriptionService(deps) {
 
         job = transcriptionQueueState.jobsByMeetingId.get(meetingId);
         hasInflight = inFlightJobsByMeetingId.has(meetingId);
-        const isActiveTarget = shouldTerminateComputeJobsForMeeting({
-          activeMeetingId: transcriptionQueueState.activeMeetingId,
-          targetMeetingId: meetingId,
-        });
 
-        // Queued (not yet active): persist failed without hanging behind FIFO head A.
-        if (job && job.status === QUEUE_JOB_STATUSES.queued && !isActiveTarget) {
+        // Queued (not yet active): persist durable failed so quit/relaunch cannot
+        // resurface this meeting as resumable pending.
+        if (wasNonActiveQueued) {
           const updatedMeeting = await updateMeetingTranscriptionStatus(meetingId, {
             status: 'failed',
             transcriptionError: USER_CANCELLED_TRANSCRIPTION_ERROR,

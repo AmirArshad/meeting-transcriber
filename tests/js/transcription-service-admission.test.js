@@ -267,6 +267,96 @@ test('admitMeetingTranscriptionJob rejects duplicate in-flight without overwriti
   await service.clearMeetingDeleteGuard('meeting_dup', deleted.generation);
 });
 
+test('cancel queued B persists durable failed even after row flips to cancelled', async () => {
+  const statusUpdates = [];
+  const harness = createServiceHarness({
+    spawnTrackedPython: (args) => {
+      const proc = new EventEmitter();
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      proc.kill = () => {};
+      const argList = Array.isArray(args) ? args.map(String) : [];
+      if (argList.includes('update-transcription')) {
+        const statusIdx = argList.indexOf('--status');
+        statusUpdates.push({
+          meetingId: argList[argList.indexOf('update-transcription') + 1],
+          status: statusIdx >= 0 ? argList[statusIdx + 1] : null,
+        });
+      }
+      queueMicrotask(() => {
+        proc.stdout.emit('data', Buffer.from(JSON.stringify({
+          id: 'meeting_b',
+          transcriptionStatus: 'failed',
+          transcriptionError: 'Cancelled by user',
+        })));
+        proc.emit('close', 0);
+      });
+      return proc;
+    },
+    collectPythonProcessOutput: (python) => {
+      let stdout = '';
+      if (python && python.stdout && typeof python.stdout.on === 'function') {
+        python.stdout.on('data', (data) => { stdout += String(data); });
+      }
+      return {
+        getStdout: () => stdout,
+        getStderr: () => '',
+        assertStdoutWithinLimit() {},
+      };
+    },
+  });
+
+  const handlers = {};
+  harness.service.registerIpc({ handle(channel, handler) { handlers[channel] = handler; } });
+
+  const jobB = harness.service.admitMeetingTranscriptionJob({
+    meetingId: 'meeting_b',
+    language: 'en',
+    modelSize: 'small',
+  });
+  assert.equal(harness.getQueueState().jobs[0].status, QUEUE_JOB_STATUSES.queued);
+
+  const result = await handlers['cancel-pending-transcription']({}, { meetingId: 'meeting_b' });
+  assert.equal(result.success, true);
+  assert.equal(result.cancelled, true);
+  assert.ok(
+    statusUpdates.some((entry) => entry.meetingId === 'meeting_b' && entry.status === 'failed'),
+    'queued cancel must persist durable failed before quit can leave pending',
+  );
+  assert.equal(
+    harness.getQueueState().jobs.find((job) => job.meetingId === 'meeting_b').status,
+    QUEUE_JOB_STATUSES.failed,
+  );
+
+  harness.computeQueue.rejectAll(new Error('test teardown'));
+  await jobB.catch(() => {});
+});
+
+test('stale delete clear after recycle cannot drop a newer tombstone', async () => {
+  const harness = createServiceHarness();
+  const first = await harness.service.cancelJobForDelete('meeting_recycle');
+  await harness.service.clearMeetingDeleteGuard('meeting_recycle', first.generation);
+
+  const second = await harness.service.cancelJobForDelete('meeting_recycle');
+  assert.ok(second.generation > first.generation);
+
+  const stale = await harness.service.clearMeetingDeleteGuard('meeting_recycle', first.generation);
+  assert.equal(stale.cleared, false);
+  assert.equal(stale.stale, true);
+
+  assert.throws(
+    () => harness.service.admitMeetingTranscriptionJob({
+      meetingId: 'meeting_recycle',
+      language: 'en',
+      modelSize: 'small',
+    }),
+    (error) => error && error.code === 'TRANSCRIPTION_DELETED',
+  );
+
+  const cleared = await harness.service.clearMeetingDeleteGuard('meeting_recycle', second.generation);
+  assert.equal(cleared.cleared, true);
+});
+
 test('delete during final AI metadata persistence does not mark Ready', async () => {
   let releaseMetadata;
   const metadataGate = new Promise((resolve) => {
