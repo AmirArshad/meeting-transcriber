@@ -7,7 +7,7 @@ const DEFAULT_SUMMARY_PROFILE = 'balanced';
 const MAX_PROGRESS_LOG_ENTRIES = 250;
 const AI_ADDON_PROGRESS_LOG_INTERVAL_MS = 1000;
 const SVG_NS = 'http://www.w3.org/2000/svg';
-const { getRecordButtonAction, getRecordingPresenceView, shouldShowDiscardRecordingControl, canHydratedRendererStopRecording } = window.recordingStateHelpers;
+const { getRecordButtonAction, getRecordingPresenceView, shouldShowDiscardRecordingControl, isStartRecordingResultDiscarded, shouldIssueCompensatingCancelAfterStart, shouldAbortStartAfterCountdown, canHydratedRendererStopRecording } = window.recordingStateHelpers;
 const {
   getIdleStatusPillText,
   getRecordButtonLabel,
@@ -2786,8 +2786,25 @@ async function startRecording() {
 
       const recordingResult = await recordingPromise;
 
-      if (startWasDiscarded() || recordingResult?.cancelled || recordingResult?.code === 'RECORDING_CANCELLED') {
+      if (isStartRecordingResultDiscarded({
+        discardRequested: discardRequestedForStart,
+        startEpoch: epoch,
+        currentEpoch: startRecordingEpoch,
+        result: recordingResult,
+      })) {
         cancelCountdown();
+        // Compensating cancel: Discard may have won while main was still idle
+        // (gate wait), then start later returned success before seeing the flag.
+        if (shouldIssueCompensatingCancelAfterStart({
+          discardRequested: discardRequestedForStart,
+          result: recordingResult,
+        })) {
+          try {
+            await window.electronAPI.cancelRecording();
+          } catch (_) {
+            // Main may already be cancelling/idle.
+          }
+        }
         addLog('Recording discarded during startup.', 'warning');
         currentAudioFile = null;
         currentRecordingDurationSeconds = 0;
@@ -2816,7 +2833,10 @@ async function startRecording() {
       }
 
       const countdownResult = await countdownPromise;
-      if (startWasDiscarded() || countdownResult?.cancelled) {
+      if (shouldAbortStartAfterCountdown({
+        discardRequested: startWasDiscarded(),
+        countdownResult,
+      })) {
         addLog('Recording discarded during countdown.', 'warning');
         try {
           await window.electronAPI.cancelRecording();

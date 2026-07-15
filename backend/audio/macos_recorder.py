@@ -1337,6 +1337,7 @@ def main():
     from .recorder_stdin import (
         RECORDER_STDIN_CANCEL,
         parse_recorder_stdin_command,
+        resolve_post_exception_capture_action,
     )
 
     stop_event = threading.Event()
@@ -1457,7 +1458,11 @@ def main():
         traceback.print_exc(file=sys.stderr)
         if recorder is not None:
             cancel_requested = stdin_command.get("cmd") == RECORDER_STDIN_CANCEL
-            if cancel_requested and not recording_cancelled:
+            action = resolve_post_exception_capture_action(
+                cancel_requested=cancel_requested,
+                recording_cancelled=recording_cancelled,
+            )
+            if action == "cancel":
                 try:
                     recorder.cancel_recording()
                     recording_cancelled = True
@@ -1469,7 +1474,7 @@ def main():
                             'message': f'{message}; cancel also failed: {cancel_err}',
                         }
                     _send_error_message("RECORDING_CANCEL_FAILED", recorder.recording_failure['message'])
-            elif not recording_cancelled:
+            elif action == "stop":
                 try:
                     if (
                         recorder._get_running()

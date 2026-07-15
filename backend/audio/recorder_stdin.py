@@ -22,3 +22,22 @@ def parse_recorder_stdin_command(line: str) -> Optional[str]:
     if token in _VALID_COMMANDS:
         return token
     return None
+
+
+def resolve_post_exception_capture_action(
+    *,
+    cancel_requested: bool,
+    recording_cancelled: bool,
+) -> str:
+    """Decide capture cleanup after an outer recorder exception.
+
+    Returns:
+      - ``\"cancel\"``: attempt discard (never finalize)
+      - ``\"stop\"``: best-effort finalize / recover audio
+      - ``\"noop\"``: cancel already completed; do not finalize
+    """
+    if recording_cancelled:
+        return "noop"
+    if cancel_requested:
+        return "cancel"
+    return "stop"

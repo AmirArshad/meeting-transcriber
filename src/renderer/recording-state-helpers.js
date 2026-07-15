@@ -22,6 +22,49 @@
   }
 
   /**
+   * True when an in-flight startRecording() should abort after start IPC returns.
+   */
+  function isStartRecordingResultDiscarded({
+    discardRequested = false,
+    startEpoch = 0,
+    currentEpoch = 0,
+    result = null,
+  } = {}) {
+    return Boolean(
+      discardRequested
+      || startEpoch !== currentEpoch
+      || (result && result.cancelled)
+      || (result && result.code === 'RECORDING_CANCELLED')
+    );
+  }
+
+  /**
+   * When Discard won during a main idle gate wait, start may still return success.
+   * Issue a compensating cancel so a late spawn cannot become a hidden recording.
+   */
+  function shouldIssueCompensatingCancelAfterStart({
+    discardRequested = false,
+    result = null,
+  } = {}) {
+    return Boolean(
+      discardRequested
+      && result
+      && result.success
+      && !result.cancelled
+    );
+  }
+
+  /**
+   * After countdown settles, abort into cancel when Discard won or countdown was cancelled.
+   */
+  function shouldAbortStartAfterCountdown({
+    discardRequested = false,
+    countdownResult = null,
+  } = {}) {
+    return Boolean(discardRequested || countdownResult?.cancelled);
+  }
+
+  /**
    * Pure view model for the always-visible top-bar recording presence pill.
    * @returns {{ visible: boolean, label: string, timeText: string|null, modifier: string|null }}
    */
@@ -79,6 +122,9 @@
     getRecordButtonAction,
     getRecordingPresenceView,
     shouldShowDiscardRecordingControl,
+    isStartRecordingResultDiscarded,
+    shouldIssueCompensatingCancelAfterStart,
+    shouldAbortStartAfterCountdown,
     canHydratedRendererStopRecording,
   };
 

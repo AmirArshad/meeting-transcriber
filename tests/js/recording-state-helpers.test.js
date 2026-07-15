@@ -34,6 +34,67 @@ test('shouldShowDiscardRecordingControl only while capturing or countdown', () =
   assert.equal(shouldShowDiscardRecordingControl('idle'), false);
 });
 
+test('isStartRecordingResultDiscarded covers epoch, flag, and cancelled IPC results', () => {
+  const {
+    isStartRecordingResultDiscarded,
+    shouldIssueCompensatingCancelAfterStart,
+  } = require('../../src/renderer/recording-state-helpers');
+
+  assert.equal(isStartRecordingResultDiscarded({
+    discardRequested: true,
+    startEpoch: 1,
+    currentEpoch: 1,
+    result: { success: true },
+  }), true);
+  assert.equal(isStartRecordingResultDiscarded({
+    discardRequested: false,
+    startEpoch: 1,
+    currentEpoch: 2,
+    result: { success: true },
+  }), true);
+  assert.equal(isStartRecordingResultDiscarded({
+    discardRequested: false,
+    startEpoch: 1,
+    currentEpoch: 1,
+    result: { success: false, cancelled: true, code: 'RECORDING_CANCELLED' },
+  }), true);
+  assert.equal(isStartRecordingResultDiscarded({
+    discardRequested: false,
+    startEpoch: 1,
+    currentEpoch: 1,
+    result: { success: true, sessionId: 3 },
+  }), false);
+
+  assert.equal(shouldIssueCompensatingCancelAfterStart({
+    discardRequested: true,
+    result: { success: true },
+  }), true);
+  assert.equal(shouldIssueCompensatingCancelAfterStart({
+    discardRequested: true,
+    result: { success: false, cancelled: true },
+  }), false);
+  assert.equal(shouldIssueCompensatingCancelAfterStart({
+    discardRequested: false,
+    result: { success: true },
+  }), false);
+});
+
+test('shouldAbortStartAfterCountdown covers discard and cancelled countdown', () => {
+  const { shouldAbortStartAfterCountdown } = require('../../src/renderer/recording-state-helpers');
+  assert.equal(shouldAbortStartAfterCountdown({
+    discardRequested: true,
+    countdownResult: { cancelled: false },
+  }), true);
+  assert.equal(shouldAbortStartAfterCountdown({
+    discardRequested: false,
+    countdownResult: { cancelled: true },
+  }), true);
+  assert.equal(shouldAbortStartAfterCountdown({
+    discardRequested: false,
+    countdownResult: { cancelled: false },
+  }), false);
+});
+
 test('getRecordingPresenceView shows recording, stopping, and cancelling pills', () => {
   assert.deepEqual(getRecordingPresenceView('recording', '1:02:03'), {
     visible: true,

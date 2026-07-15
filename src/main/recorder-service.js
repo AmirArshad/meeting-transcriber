@@ -1009,6 +1009,10 @@ function createRecorderService(deps) {
       return recordingCancelPromise;
     }
 
+    // Arm before any early return so a start still waiting on maintenance
+    // admission cannot spawn after Discard reported success.
+    startupCancelRequested = true;
+
     const captureState = getCaptureState().state;
     if (captureState === 'idle' && !activeStartupCancelSettle) {
       return Promise.resolve({ success: true, cancelled: true });
@@ -1020,7 +1024,6 @@ function createRecorderService(deps) {
       console.log('Recording heartbeat monitor stopped (cancel)');
     }
 
-    startupCancelRequested = true;
     publishCaptureState('cancelling');
 
     const currentProcess = pythonProcess;
@@ -1108,9 +1111,13 @@ function createRecorderService(deps) {
             return;
           }
         } catch (error) {
+          // Stop-oriented parse errors (empty stdout / missing file) still mean
+          // cancel did not confirm discard — do not surface as a successful stop.
           rejectCancel(
-            error.message || 'Recording cancel result could not be parsed.',
-            'RECORDING_CANCEL_PARSE_FAILED',
+            `Recording cancel did not return a cancelled result (exit ${code}): ${
+              error.message || stderrData || 'no recorder output'
+            }`,
+            'RECORDING_CANCEL_FAILED',
           );
           return;
         }
@@ -1503,6 +1510,10 @@ function createRecorderService(deps) {
         };
       }
 
+      // Fresh start attempt — clear a stale cancel from a prior discarded attempt.
+      // A Discard during this attempt's gate wait re-arms startupCancelRequested.
+      startupCancelRequested = false;
+
       let startGateHeld = false;
       if (recordingsMaintenanceGate) {
         const admission = await recordingsMaintenanceGate.admitStartRecording();
@@ -1520,6 +1531,19 @@ function createRecorderService(deps) {
           success: false,
           code: 'RECORDING_SCAN_IN_PROGRESS',
           message: 'Wait for recording recovery scan to finish before starting a new recording.',
+        };
+      }
+
+      if (startupCancelRequested || cancelCommandSent || recordingCancelPromise) {
+        if (startGateHeld) {
+          recordingsMaintenanceGate.release('start');
+          startGateHeld = false;
+        }
+        return {
+          success: false,
+          cancelled: true,
+          code: 'RECORDING_CANCELLED',
+          message: 'Recording was discarded before it finished starting.',
         };
       }
 
