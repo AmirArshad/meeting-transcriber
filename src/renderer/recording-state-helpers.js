@@ -39,19 +39,40 @@
   }
 
   /**
-   * When Discard won during a main idle gate wait, start may still return success.
-   * Issue a compensating cancel so a late spawn cannot become a hidden recording.
+   * When Cancel won during a main idle gate wait, start may still return success.
+   * Issue a compensating cancel for discard flag OR a stale start epoch so a late
+   * spawn cannot become a hidden recording after a newer Start reset renderer state.
    */
   function shouldIssueCompensatingCancelAfterStart({
     discardRequested = false,
+    startEpoch = 0,
+    currentEpoch = 0,
     result = null,
   } = {}) {
+    const staleEpoch = startEpoch !== currentEpoch;
     return Boolean(
-      discardRequested
+      (discardRequested || staleEpoch)
       && result
       && result.success
       && !result.cancelled
     );
+  }
+
+  /**
+   * Compensating cancel must confirm discard; rejection/false success is not "discarded".
+   */
+  function resolveCompensatingCancelOutcome(cancelResult) {
+    if (cancelResult?.cancelled === true && cancelResult?.success !== false) {
+      return { ok: true, confirmed: true };
+    }
+    return {
+      ok: false,
+      confirmed: false,
+      message: cancelResult?.message
+        || cancelResult?.error
+        || 'Cancel did not confirm that the recording was discarded.',
+      code: cancelResult?.code || null,
+    };
   }
 
   /**
@@ -90,7 +111,7 @@
     if (recordingState === 'cancelling') {
       return {
         visible: true,
-        label: 'Discarding recording...',
+        label: 'Cancelling recording...',
         timeText: elapsedText || null,
         modifier: 'cancelling',
       };
@@ -124,6 +145,7 @@
     shouldShowDiscardRecordingControl,
     isStartRecordingResultDiscarded,
     shouldIssueCompensatingCancelAfterStart,
+    resolveCompensatingCancelOutcome,
     shouldAbortStartAfterCountdown,
     canHydratedRendererStopRecording,
   };

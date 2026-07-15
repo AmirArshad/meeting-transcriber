@@ -70,13 +70,35 @@ test('isStartRecordingResultDiscarded covers epoch, flag, and cancelled IPC resu
     result: { success: true },
   }), true);
   assert.equal(shouldIssueCompensatingCancelAfterStart({
+    discardRequested: false,
+    startEpoch: 1,
+    currentEpoch: 2,
+    result: { success: true },
+  }), true);
+  assert.equal(shouldIssueCompensatingCancelAfterStart({
     discardRequested: true,
     result: { success: false, cancelled: true },
   }), false);
   assert.equal(shouldIssueCompensatingCancelAfterStart({
     discardRequested: false,
+    startEpoch: 1,
+    currentEpoch: 1,
     result: { success: true },
   }), false);
+});
+
+test('resolveCompensatingCancelOutcome only confirms cancelled success', () => {
+  const { resolveCompensatingCancelOutcome } = require('../../src/renderer/recording-state-helpers');
+  assert.deepEqual(
+    resolveCompensatingCancelOutcome({ success: true, cancelled: true }),
+    { ok: true, confirmed: true },
+  );
+  assert.equal(resolveCompensatingCancelOutcome({ success: false }).ok, false);
+  assert.equal(resolveCompensatingCancelOutcome(null).ok, false);
+  assert.match(
+    resolveCompensatingCancelOutcome({ message: 'finalized' }).message,
+    /finalized/,
+  );
 });
 
 test('shouldAbortStartAfterCountdown covers discard and cancelled countdown', () => {
@@ -110,7 +132,7 @@ test('getRecordingPresenceView shows recording, stopping, and cancelling pills',
   });
   assert.deepEqual(getRecordingPresenceView('cancelling', '1:02:03'), {
     visible: true,
-    label: 'Discarding recording...',
+    label: 'Cancelling recording...',
     timeText: '1:02:03',
     modifier: 'cancelling',
   });

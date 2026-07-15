@@ -744,6 +744,91 @@ test('cancel while awaiting maintenance admission aborts start before spawn', as
   assert.equal(service.getCaptureState().state, 'idle');
 });
 
+test('cancel Start A then Start B before gate release only admits the newer start', async () => {
+  const { EventEmitter } = require('node:events');
+  const { createRecordingsMaintenanceGate } = require('../../src/main/recordings-maintenance-gate');
+  let spawnCount = 0;
+  const gate = createRecordingsMaintenanceGate({ scanWaitMs: 5000 });
+  assert.equal((await gate.acquire('scan')).ok, true);
+
+  const procB = new EventEmitter();
+  procB.stdout = new EventEmitter();
+  procB.stderr = new EventEmitter();
+  procB.stdin = { write() {} };
+  procB.killed = false;
+  procB.pid = 5150;
+  procB.kill = () => { procB.killed = true; };
+
+  const { deps } = createMinimalDeps({
+    isQuitCommitted: () => false,
+    recordingsMaintenanceGate: gate,
+    spawnTrackedPython() {
+      spawnCount += 1;
+      return procB;
+    },
+  });
+
+  const service = createRecorderService(deps);
+  const handlers = {};
+  service.registerIpc({
+    handle(channel, handler) {
+      handlers[channel] = handler;
+    },
+  });
+
+  const startA = handlers['start-recording'](
+    { sender: {} },
+    { micId: 0, loopbackId: 1, isFirstRecording: false },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const cancelResult = await handlers['cancel-recording']({ sender: {} });
+  assert.deepEqual(cancelResult, { success: true, cancelled: true });
+
+  // Start B begins after cancel and clears renderer-style "fresh start" semantics,
+  // but must not clear Start A's cancel ownership (generation snapshot).
+  const startB = handlers['start-recording'](
+    { sender: {} },
+    { micId: 0, loopbackId: 1, isFirstRecording: false },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+
+  gate.release('scan');
+
+  const [resultA, resultB] = await Promise.all([startA, (async () => {
+    // Allow admission scheduling, then finish Start B startup.
+    for (let i = 0; i < 20 && spawnCount === 0; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    if (spawnCount > 0) {
+      procB.stdout.emit('data', Buffer.from(`${JSON.stringify({
+        type: 'event',
+        event: 'recording_started',
+        message: 'Recording started!',
+      })}\n`));
+    }
+    return startB;
+  })()]);
+
+  assert.equal(resultA.cancelled, true);
+  assert.equal(resultA.code, 'RECORDING_CANCELLED');
+  assert.equal(resultB.success, true);
+  assert.equal(spawnCount, 1);
+  assert.equal(service.getCaptureState().state, 'recording');
+
+  // Tear down the live session so heartbeat/disk monitors do not keep the test alive.
+  const cancelLive = handlers['cancel-recording']({ sender: {} });
+  await new Promise((resolve) => setImmediate(resolve));
+  procB.stdout.emit('data', Buffer.from(`${JSON.stringify({
+    success: true,
+    cancelled: true,
+  })}\n`));
+  procB.emit('close', 0);
+  await cancelLive;
+  assert.equal(service.getCaptureState().state, 'idle');
+});
+
 test('cancel-recording rejects finalized audio and missing cancelled JSON', async () => {
   const { EventEmitter } = require('node:events');
   // createRecorderService closes over spawnTrackedPython at construction time.

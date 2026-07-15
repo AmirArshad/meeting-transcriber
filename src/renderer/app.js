@@ -7,7 +7,7 @@ const DEFAULT_SUMMARY_PROFILE = 'balanced';
 const MAX_PROGRESS_LOG_ENTRIES = 250;
 const AI_ADDON_PROGRESS_LOG_INTERVAL_MS = 1000;
 const SVG_NS = 'http://www.w3.org/2000/svg';
-const { getRecordButtonAction, getRecordingPresenceView, shouldShowDiscardRecordingControl, isStartRecordingResultDiscarded, shouldIssueCompensatingCancelAfterStart, shouldAbortStartAfterCountdown, canHydratedRendererStopRecording } = window.recordingStateHelpers;
+const { getRecordButtonAction, getRecordingPresenceView, shouldShowDiscardRecordingControl, isStartRecordingResultDiscarded, shouldIssueCompensatingCancelAfterStart, resolveCompensatingCancelOutcome, shouldAbortStartAfterCountdown, canHydratedRendererStopRecording } = window.recordingStateHelpers;
 const {
   getIdleStatusPillText,
   getRecordButtonLabel,
@@ -2638,9 +2638,9 @@ function updateButtonUI() {
       button.classList.add('processing');
       button.disabled = true;
       icon.textContent = '⏳';
-      text.textContent = 'Discarding...';
+      text.textContent = 'Cancelling...';
       statusIndicator.classList.remove('recording');
-      statusText.textContent = 'Discarding recording…';
+      statusText.textContent = 'Cancelling recording…';
       break;
 
     case 'countdown':
@@ -2793,19 +2793,52 @@ async function startRecording() {
         result: recordingResult,
       })) {
         cancelCountdown();
-        // Compensating cancel: Discard may have won while main was still idle
-        // (gate wait), then start later returned success before seeing the flag.
+        // Compensating cancel: Cancel may have won while main was still idle
+        // (gate wait), then start later returned success — including when a newer
+        // Start B reset discardRequestedForStart (use stale epoch).
         if (shouldIssueCompensatingCancelAfterStart({
           discardRequested: discardRequestedForStart,
+          startEpoch: epoch,
+          currentEpoch: startRecordingEpoch,
           result: recordingResult,
         })) {
           try {
-            await window.electronAPI.cancelRecording();
-          } catch (_) {
-            // Main may already be cancelling/idle.
+            const cancelResult = await window.electronAPI.cancelRecording();
+            const cancelOutcome = resolveCompensatingCancelOutcome(cancelResult);
+            if (!cancelOutcome.ok) {
+              addLog(
+                `Could not confirm cancel after a discarded start: ${cancelOutcome.message}`,
+                'error',
+              );
+              setTranscriptMessage(cancelOutcome.message, true);
+              currentAudioFile = null;
+              currentRecordingDurationSeconds = 0;
+              setRecordingState('cancelling');
+              startRecordingPresencePoll();
+              return;
+            }
+          } catch (error) {
+            addLog(
+              `Could not confirm cancel after a discarded start: ${error.message}`,
+              'error',
+            );
+            setTranscriptMessage(
+              error.message || 'Could not confirm that the recording was cancelled.',
+              true,
+            );
+            currentAudioFile = null;
+            currentRecordingDurationSeconds = 0;
+            if (error?.code === 'RECORDING_STOP_IN_PROGRESS') {
+              setRecordingState('stopping');
+              startRecordingPresencePoll();
+              return;
+            }
+            setRecordingState('cancelling');
+            startRecordingPresencePoll();
+            return;
           }
         }
-        addLog('Recording discarded during startup.', 'warning');
+        addLog('Recording cancelled during startup.', 'warning');
         currentAudioFile = null;
         currentRecordingDurationSeconds = 0;
         setRecordingState('idle');
@@ -3069,14 +3102,14 @@ async function discardRecording() {
   }
 
   const confirmed = window.confirm(
-    'Discard this recording? The audio will not be saved.',
+    'Cancel this recording? The audio will not be saved.',
   );
   if (!confirmed) {
     return;
   }
 
   try {
-    addLog('Discarding recording...');
+    addLog('Cancelling recording...');
     discardRequestedForStart = true;
     startRecordingEpoch += 1;
     cancelActiveCountdown();
@@ -3091,21 +3124,21 @@ async function discardRecording() {
 
     const result = await window.electronAPI.cancelRecording();
     if (result?.cancelled === true && result?.success !== false) {
-      addLog('Recording discarded. Nothing was saved.', 'warning');
-      setTranscriptMessage('Recording discarded. Nothing was saved.', false);
+      addLog('Recording cancelled. Nothing was saved.', 'warning');
+      setTranscriptMessage('Recording cancelled. Nothing was saved.', false);
       currentAudioFile = null;
       currentRecordingDurationSeconds = 0;
       setRecordingState('idle');
       return;
     }
 
-    addLog('Discard finished without a cancel confirmation from the recorder.', 'warning');
+    addLog('Cancel finished without a confirmation from the recorder.', 'warning');
     setRecordingState('idle');
   } catch (error) {
     console.error('Failed to discard recording:', error);
-    addLog(`Discard failed: ${error.message}`, 'error');
+    addLog(`Cancel failed: ${error.message}`, 'error');
     if (error?.code === 'RECORDING_STOP_IN_PROGRESS') {
-      setTranscriptMessage('Recording is already stopping and cannot be discarded.', true);
+      setTranscriptMessage('Recording is already stopping and cannot be cancelled.', true);
       // First-wins: stop owns the UI — move to stopping and poll until idle.
       if (Number.isFinite(recordingStartTime)) {
         frozenPresenceElapsedText = formatElapsedDuration((Date.now() - recordingStartTime) / 1000);

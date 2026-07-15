@@ -103,8 +103,12 @@ function createRecorderService(deps) {
   let cancelCommandSent = false;
   /** Settles an in-flight start-recording Promise when cancel wins during starting. */
   let activeStartupCancelSettle = null;
-  /** Set when cancel is requested while starting, before/without a child process. */
-  let startupCancelRequested = false;
+  /**
+   * Monotonic cancel generation for start attempts.
+   * Each start snapshots the value before admission; cancel bumps it so a discarded
+   * waiter cannot spawn even if a later Start clears other renderer state.
+   */
+  let startupCancelGeneration = 0;
   let recordingSessionCounter = 0;
   let activeRecordingSessionId = null;
   let publishedCaptureState = { state: 'idle', sessionId: null, startedAt: null };
@@ -867,7 +871,6 @@ function createRecorderService(deps) {
     recordingCancelPromise = null;
     stopCommandSent = false;
     cancelCommandSent = false;
-    startupCancelRequested = false;
   }
 
   function settleActiveStartupAsCancelled() {
@@ -1009,9 +1012,10 @@ function createRecorderService(deps) {
       return recordingCancelPromise;
     }
 
-    // Arm before any early return so a start still waiting on maintenance
-    // admission cannot spawn after Discard reported success.
-    startupCancelRequested = true;
+    // Bump before any early return so a start still waiting on maintenance
+    // admission cannot spawn after Cancel reported success — including when a
+    // later Start B begins before the gate releases (attempt-scoped via generation).
+    startupCancelGeneration += 1;
 
     const captureState = getCaptureState().state;
     if (captureState === 'idle' && !activeStartupCancelSettle) {
@@ -1510,9 +1514,10 @@ function createRecorderService(deps) {
         };
       }
 
-      // Fresh start attempt — clear a stale cancel from a prior discarded attempt.
-      // A Discard during this attempt's gate wait re-arms startupCancelRequested.
-      startupCancelRequested = false;
+      // Snapshot cancel generation before admission. Do not reset it — a Cancel
+      // that armed while this attempt waited must still abort this attempt even if
+      // a newer Start B began afterward.
+      const attemptCancelGeneration = startupCancelGeneration;
 
       let startGateHeld = false;
       if (recordingsMaintenanceGate) {
@@ -1534,7 +1539,13 @@ function createRecorderService(deps) {
         };
       }
 
-      if (startupCancelRequested || cancelCommandSent || recordingCancelPromise) {
+      const startCancelledDuringAdmission = () => (
+        attemptCancelGeneration !== startupCancelGeneration
+        || cancelCommandSent
+        || Boolean(recordingCancelPromise)
+      );
+
+      if (startCancelledDuringAdmission()) {
         if (startGateHeld) {
           recordingsMaintenanceGate.release('start');
           startGateHeld = false;
@@ -1573,6 +1584,12 @@ function createRecorderService(deps) {
         let startupSettled = false;
         let onStdoutData = null;
         let timeoutHandle = null;
+
+        const startCancelled = () => (
+          attemptCancelGeneration !== startupCancelGeneration
+          || cancelCommandSent
+          || Boolean(recordingCancelPromise)
+        );
 
         const detachLiveStdout = () => {
           if (!proc?.stdout || typeof onStdoutData !== 'function') {
@@ -1640,7 +1657,7 @@ function createRecorderService(deps) {
 
         activeStartupCancelSettle = settleStartupCancelled;
 
-        if (startupCancelRequested || cancelCommandSent || recordingCancelPromise) {
+        if (startCancelled()) {
           settleStartupCancelled();
           return;
         }
@@ -1690,7 +1707,7 @@ function createRecorderService(deps) {
         ], { cwd: pythonConfig.backendPath });
         pythonProcess = proc;
 
-        if (startupCancelRequested || cancelCommandSent || recordingCancelPromise) {
+        if (startCancelled()) {
           // Discard won the race against spawn — cancel/kill the child and settle.
           Promise.resolve()
             .then(() => cancelRecordingProcess())
@@ -1794,7 +1811,7 @@ function createRecorderService(deps) {
             return;
           }
 
-          if (startupCancelRequested || cancelCommandSent || recordingCancelPromise) {
+          if (startCancelled()) {
             // Discard won during startup — do not publish recording / resolve success.
             return;
           }
