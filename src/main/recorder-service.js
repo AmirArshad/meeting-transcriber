@@ -941,8 +941,8 @@ function createRecorderService(deps) {
           });
           return;
         }
-
-        resetStopWorkflowState();
+        // Stale stop close after a newer session replaced pythonProcess — do not
+        // wipe the new session's stop/cancel flags.
       };
 
       const closeHandler = (code) => {
@@ -1061,14 +1061,15 @@ function createRecorderService(deps) {
       };
 
       const finalizeState = () => {
-        settleActiveStartupAsCancelled();
         if (pythonProcess === currentProcess) {
+          settleActiveStartupAsCancelled();
           clearRecordingRuntimeState('recording cancelled', {
             expectedProcess: currentProcess,
           });
           return;
         }
-        resetStopWorkflowState();
+        // Stale cancel close after a newer session replaced pythonProcess — do not
+        // settle a newer start's cancel callback or wipe stop/cancel flags.
       };
 
       const rejectCancel = (message, code = 'RECORDING_CANCEL_FAILED', extra = {}) => {

@@ -110,7 +110,9 @@ const deleteMeeting = document.getElementById('delete-meeting');
 // State
 let recordingState = 'idle'; // idle, starting, recording, stopping, cancelling, countdown (transcribing no longer blocks capture)
 let lastStopProgressMessage = '';
-let transcriptionQueueState = { jobs: [], activeMeetingId: null, busyCount: 0 };
+let transcriptionQueueState = { jobs: [], activeMeetingId: null, busyCount: 0, seq: 0 };
+/** Last applied queue-state seq; ignore stale init snapshots / out-of-order pushes. */
+let lastAppliedTranscriptionQueueSeq = 0;
 /** meetingId → last-seen terminal status; used to reload History only on new transitions. */
 let lastSeenTerminalTranscriptionStatuses = new Map();
 let activityActionBusyMeetingId = null;
@@ -786,12 +788,22 @@ function renderActivityList() {
 }
 
 function applyTranscriptionQueueState(payload) {
+  const seq = Number(payload && payload.seq) || 0;
+  // Reject stale snapshots (e.g. init await completing after a fresher push).
+  if (seq > 0 && seq <= lastAppliedTranscriptionQueueSeq) {
+    return false;
+  }
+  if (seq > 0) {
+    lastAppliedTranscriptionQueueSeq = seq;
+  }
   transcriptionQueueState = {
     jobs: Array.isArray(payload && payload.jobs) ? payload.jobs : [],
     activeMeetingId: payload && payload.activeMeetingId ? String(payload.activeMeetingId) : null,
     busyCount: Number(payload && payload.busyCount) || 0,
+    seq,
   };
   renderActivityList();
+  return true;
 }
 
 function openMeetingInHistory(meetingId) {

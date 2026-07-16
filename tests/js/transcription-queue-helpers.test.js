@@ -85,6 +85,9 @@ test('queue upsert/publish payload tracks active meeting, order, and busyCount',
   assert.equal(payload.jobs[0].status, 'active');
   assert.equal(payload.jobs[0].phase, 'transcribing');
   assert.equal(payload.jobs[1].meetingId, 'meeting_b');
+  assert.equal(payload.seq, 1);
+  const payload2 = buildTranscriptionQueueStatePayload(state);
+  assert.equal(payload2.seq, 2, 'payload seq must be monotonic across publishes');
 });
 
 test('cancel flag marks queued jobs cancelled and is readable at head', () => {

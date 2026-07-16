@@ -242,9 +242,18 @@ def list_interrupted_captures(recordings_dir: PathLike) -> List[Dict[str, Any]]:
 
     Skips sessions whose ``session.lock`` cannot be acquired with ``timeout=0``.
     Orders valid candidates oldest-first by ``startedAtIso`` (nulls last).
+    Also best-effort sweeps manifest-less orphan capture dirs (never promotes).
     """
     root = resolve_recordings_root(recordings_dir)
     candidates: List[Dict[str, Any]] = []
+
+    # Sweep Windows cancel leftovers that lost their discarded marker.
+    try:
+        from meetings.scan_import import cleanup_orphan_capture_sessions
+
+        cleanup_orphan_capture_sessions(root)
+    except Exception:
+        pass
 
     try:
         entries = list(root.iterdir())

@@ -1443,21 +1443,17 @@ function createTranscriptionService(deps) {
       }
 
       if (isQuitCommitted() || (error && error.code === 'TRANSCRIPTION_QUIT_SKIPPED')) {
-        // Quit-killed or head-of-queue quit skip: keep durable pending.
-        removeQueueJob(transcriptionQueueState, meetingId);
-        publishTranscriptionQueueState();
-        throw error;
-      }
-
-      // User cancel (preflight gate, head skip, or child terminate): durable failed.
-      if (
-        (error && error.code === 'TRANSCRIPTION_CANCELLED')
-        || isTranscriptionJobCancelled(transcriptionQueueState, meetingId)
-        || getJobEpoch(meetingId) !== epoch
-      ) {
-        if (!completedPersisted) {
+        // Quit-killed or head-of-queue quit skip: keep durable pending — unless
+        // the user already cancelled this job (cancel flag still set, or the
+        // child/error is explicitly TRANSCRIPTION_CANCELLED). Do not treat epoch
+        // mismatch alone as cancel here: queued cancel already stamped durable
+        // failed and cleared the flag, and a second write would race the test
+        // contract / overwrite History unnecessarily.
+        const userCancelled = isTranscriptionJobCancelled(transcriptionQueueState, meetingId)
+          || (error && error.code === 'TRANSCRIPTION_CANCELLED');
+        if (userCancelled && !completedPersisted) {
           try {
-            updatedMeeting = await updateMeetingTranscriptionStatus(meetingId, {
+            await updateMeetingTranscriptionStatus(meetingId, {
               status: 'failed',
               language,
               model: modelSize,
@@ -1466,9 +1462,53 @@ function createTranscriptionService(deps) {
           } catch (statusError) {
             sendToRenderer(
               'transcription-progress',
-              `Could not persist cancellation status: ${statusError.message}\n`,
+              `Could not persist cancellation status before quit: ${statusError.message}\n`,
             );
           }
+        }
+        removeQueueJob(transcriptionQueueState, meetingId);
+        publishTranscriptionQueueState();
+        throw error;
+      }
+
+      // User cancel (preflight gate, head skip, or child terminate): durable failed
+      // unless the transcript is already durable completed — then Activity must
+      // stay ready to match History (same as other post-completed error paths).
+      if (
+        (error && error.code === 'TRANSCRIPTION_CANCELLED')
+        || isTranscriptionJobCancelled(transcriptionQueueState, meetingId)
+        || getJobEpoch(meetingId) !== epoch
+      ) {
+        if (completedPersisted) {
+          clearTranscriptionJobCancelFlag(transcriptionQueueState, meetingId);
+          upsertQueueJob(transcriptionQueueState, {
+            meetingId,
+            status: QUEUE_JOB_STATUSES.ready,
+            phase: QUEUE_JOB_PHASES.completed,
+          });
+          publishTranscriptionQueueState();
+          return {
+            output_file: null,
+            transcriptPath: null,
+            diarization: null,
+            diarizationStatus: guidedDiarizationStatus,
+            diarizationError: null,
+            meeting: updatedMeeting,
+            cancelledAfterCompleted: true,
+          };
+        }
+        try {
+          updatedMeeting = await updateMeetingTranscriptionStatus(meetingId, {
+            status: 'failed',
+            language,
+            model: modelSize,
+            transcriptionError: USER_CANCELLED_TRANSCRIPTION_ERROR,
+          });
+        } catch (statusError) {
+          sendToRenderer(
+            'transcription-progress',
+            `Could not persist cancellation status: ${statusError.message}\n`,
+          );
         }
         upsertQueueJob(transcriptionQueueState, {
           meetingId,

@@ -101,6 +101,17 @@ class MeetingScanImportTests(unittest.TestCase):
             scannable = select_scannable_audio_files(recordings_dir)
             self.assertEqual(scannable, [])
 
+    def test_recover_or_cleanup_recorder_temps_removes_manifestless_orphan_capture(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            recordings_dir = Path(temp_dir)
+            capture_dir = recordings_dir / "meeting_orphan.capture"
+            capture_dir.mkdir()
+            (capture_dir / "mic_0000.pcm.part").write_bytes(b"\x00\x01")
+            # No manifest.json — Windows locked-file rmtree leftover.
+            result = recover_or_cleanup_recorder_temps(recordings_dir)
+            self.assertGreaterEqual(result.get("orphanCleaned", 0), 1)
+            self.assertFalse(capture_dir.exists())
+
     def test_recover_or_cleanup_recorder_temps_drops_truncated_pcm_tmp(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             recordings_dir = Path(temp_dir)
