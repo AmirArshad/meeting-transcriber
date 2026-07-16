@@ -111,13 +111,13 @@ Ship static `build/iconRecording.png` (18×18) and `build/iconRecording@2x.png` 
 
 ## Cross-platform
 
-- [ ] Verify model preload/download state is reported correctly in the UI.
-- [ ] Verify meeting history save/delete/scan still behaves correctly.
-- [ ] Verify the app can be launched, record, stop, transcribe, and save a meeting end to end.
-- [ ] **Background transcription queue (PR2):** Stop Meeting 1 → Start unlocks as soon as the file is saved (status pill `Ready · 1 transcribing`); start Meeting 2 while Meeting 1 is still Whispering. Activity shows Meeting 1 Transcribing / Meeting 2 Queued with correct titles. Include a **CPU transcription** run (no CUDA / force CPU) and confirm Meeting 2 capture is not obviously glitched.
-- [ ] **Cancel recording / Discard (PR3):** While recording (and during countdown), Discard is visible and spaced away from Stop. Confirm dialog always says “Discard this recording? The audio will not be saved.” After confirm: capture stops, no meeting in History/Activity, status returns to Ready. Discard is hidden once Stop is pressed. Cancel mid-recording on Windows and macOS; relaunch after discard shows no recovered meeting for that session.
-- [ ] Resume banner: quit mid-transcription → relaunch shows “Resume N pending transcriptions” (no auto-resume); Resume enqueues; Cancel from Activity marks failed “Cancelled by user” and drops from resume count.
-- [ ] GPU install / model download while a job is queued: fail-fast with “N recordings are queued…” (no multi-minute wait).
+- [x] Verify model preload/download state is reported correctly in the UI.
+- [x] Verify meeting history save/delete/scan still behaves correctly.
+- [x] Verify the app can be launched, record, stop, transcribe, and save a meeting end to end.
+- [x] **Background transcription queue (PR2):** Stop Meeting 1 → Start unlocks as soon as the file is saved (status pill `Ready · 1 transcribing`); start Meeting 2 while Meeting 1 is still Whispering. Activity shows Meeting 1 Transcribing / Meeting 2 Queued with correct titles. Include a **CPU transcription** run (no CUDA / force CPU) and confirm Meeting 2 capture is not obviously glitched.
+- [x] **Cancel recording / Discard (PR3):** While recording (and during countdown), Discard is visible and spaced away from Stop. Confirm dialog always says “Discard this recording? The audio will not be saved.” After confirm: capture stops, no meeting in History/Activity, status returns to Ready. Discard is hidden once Stop is pressed. Cancel mid-recording on Windows and macOS; relaunch after discard shows no recovered meeting for that session.
+- [x] Resume banner: quit mid-transcription → relaunch shows “Resume N pending transcriptions” (no auto-resume); Resume enqueues; Cancel from Activity marks failed “Cancelled by user” and drops from resume count.
+- [x] GPU install / model download while a job is queued: fail-fast with “N recordings are queued…” (no multi-minute wait).
 - [ ] With speaker identification ready, verify a new recording uses speaker-guided transcription and does not leave hidden `.*.guided.*.tmp.md` files after success, failure, or relaunch.
 - [ ] Start summary generation, immediately hover/click the active Generate Summary button, and verify cancellation leaves the transcript unchanged and no summary sidecars are orphaned without metadata.
 - [ ] Fill 15/60-minute RSS/disk baselines in `docs/initiatives/LONG_RECORDING_SAFETY.md` before claiming Task 10 2h/4h evidence.

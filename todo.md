@@ -56,7 +56,7 @@ Diagram: `docs/architecture/background-transcription-queue-before-after.svg`
 
 **Phase 1 (MVP) — ship as two PRs: PR 1 = main-owned job behind current blocking UI (behavior-identical); PR 2 = unlock + Activity UI. Cancel recording is an independent companion PR (PR 3).**
 
-**PR2 in progress** on `feature/transcription-queue-pr2` (unlock + Activity UI; PR1 merged).
+**PR1 + PR2 merged.** Companion **PR3** (cancel/discard recording) on `feature/transcription-queue-pr3`.
 
 - [x] [Risk: High] Stop → `addMeeting(pending)` + placeholder transcript (incl. recoverable-failure path); snapshot language/model; use post-add `audioPath`. If pending persist itself fails: surface error, stay idle, rely on scan-import recovery (audio already in recordings dir). *(PR1)*
 - [x] [Risk: High] Main-owned per-meeting composite job on `aiComputeActionQueue` (`retry-transcription` shape: transcribe → optional diarize → persist). Renderer becomes a view — do not “just remove the await.” **Includes moving guided-sidecar / `update-meeting-ai` persistence into the main job** (today the renderer persists sidecars after retry returns — background completion during reload/quit would lose speaker metadata). *(PR1)*
