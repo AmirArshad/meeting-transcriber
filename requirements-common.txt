@@ -2,7 +2,7 @@
 
 # Audio processing
 numpy>=2.4.0            # For audio processing and mixing
-# soxr is Windows-only (backend/audio/processor.py); see requirements-windows*.txt
+# soxr: Windows + macOS packaged builds (processor.py / streaming_post_processor.py)
 
 # Transcription
 filelock>=3.29.7         # Prevent race conditions during model downloads (CVE-2025-68146, CVE-2026-22701)

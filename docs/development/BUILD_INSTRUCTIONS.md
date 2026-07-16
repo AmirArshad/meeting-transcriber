@@ -107,7 +107,7 @@ The installer includes:
 
 - ✅ Electron application (UI)
 - ✅ Embedded Python 3.11.9 runtime
-- ✅ Platform Python stack from `requirements-*-build.txt` (Windows: `faster-whisper`, `soxr`, `numpy`, …; macOS: `lightning-whisper-mlx`, `scipy`, `mlx`, …; `torch` is installed during build then removed). See [installer size notes](../completed/INSTALLER_SIZE_NOTES.md).
+- ✅ Platform Python stack from `requirements-*-build.txt` (Windows: `faster-whisper`, `soxr`, `numpy`, …; macOS: `lightning-whisper-mlx`, `soxr`, `scipy`, `mlx`, …; `torch` is installed during build then removed). See [installer size notes](../completed/INSTALLER_SIZE_NOTES.md).
 - ✅ ffmpeg binary
 - ✅ Backend Python scripts
 

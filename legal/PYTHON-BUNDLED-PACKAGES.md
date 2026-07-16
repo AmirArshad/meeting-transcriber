@@ -60,7 +60,7 @@ Generated: 2026-05-27T18:48:43.979Z
 | setuptools | platform-specific (83.0.0 Windows / 81.0.0 macOS) | requirements-windows-build.txt, requirements-macos-build.txt |
 | shellingham | 1.5.4 | requirements-windows-build.txt, requirements-macos-build.txt |
 | sounddevice | 0.4.6 | requirements-macos-build.txt |
-| soxr | 1.1.0 | requirements-windows-build.txt |
+| soxr | 1.1.0 | requirements-windows-build.txt, requirements-macos-build.txt |
 | sympy | 1.14.0 | requirements-macos-build.txt |
 | tiktoken | 0.3.3 | requirements-macos-build.txt |
 | tokenizers | 0.23.1 | requirements-windows-build.txt |
