@@ -113,7 +113,7 @@ function runWallClockComputeAction({
   let settleReject = null;
 
   const registerProcess = (proc) => {
-    if (settled || quitTerminated) {
+    if (settled || timedOut || quitTerminated) {
       try {
         Promise.resolve(terminateProcess(proc)).catch(() => undefined);
       } catch (_error) {

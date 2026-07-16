@@ -7,6 +7,7 @@ const {
   SESSION_READY_CAP,
   getActivityChipLabel,
   countBusyTranscriptionJobs,
+  shouldApplyTranscriptionQueueState,
   getIdleStatusPillText,
   getRecordButtonLabel,
   buildResumePendingBannerView,
@@ -16,6 +17,13 @@ const {
   formatQueuedTranscriptionBusyMessage,
   formatQuitPendingTranscriptionDetail,
 } = require('../../src/renderer/transcription-activity-helpers');
+
+test('queue state sequence rejects stale init snapshots and duplicate pushes', () => {
+  assert.equal(shouldApplyTranscriptionQueueState({ seq: 4 }, 3), true);
+  assert.equal(shouldApplyTranscriptionQueueState({ seq: 4 }, 4), false);
+  assert.equal(shouldApplyTranscriptionQueueState({ seq: 3 }, 4), false);
+  assert.equal(shouldApplyTranscriptionQueueState({ jobs: [] }, 4), false);
+});
 
 test('status pill shows Ready or Ready · N transcribing', () => {
   assert.equal(getIdleStatusPillText({ jobs: [] }), 'Ready');

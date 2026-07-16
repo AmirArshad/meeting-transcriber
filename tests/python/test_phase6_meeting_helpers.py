@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from unittest import mock
 from datetime import datetime
 from pathlib import Path
 
@@ -24,6 +25,7 @@ from meetings.paths import (
     resolve_accessible_recordings_file,
 )
 from meetings.scan_import import (
+    cleanup_orphan_capture_sessions,
     extract_duration_seconds_from_transcript,
     parse_scan_meeting_id_and_title,
     recover_or_cleanup_recorder_temps,
@@ -110,6 +112,42 @@ class MeetingScanImportTests(unittest.TestCase):
             # No manifest.json — Windows locked-file rmtree leftover.
             result = recover_or_cleanup_recorder_temps(recordings_dir)
             self.assertGreaterEqual(result.get("orphanCleaned", 0), 1)
+            self.assertFalse(capture_dir.exists())
+
+    def test_orphan_cleanup_does_not_rmtree_root_while_session_lock_is_open(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            recordings_dir = Path(temp_dir)
+            capture_dir = recordings_dir / "meeting_windows_orphan.capture"
+            capture_dir.mkdir()
+            (capture_dir / "mic_0000.pcm.part").write_bytes(b"\x00\x01")
+
+            real_rmtree = __import__("shutil").rmtree
+            lock_open = False
+
+            class WindowsStyleLock:
+                def __init__(self, _path):
+                    pass
+
+                def acquire(self, timeout=0):
+                    nonlocal lock_open
+                    lock_open = True
+
+                def release(self):
+                    nonlocal lock_open
+                    lock_open = False
+
+            def windows_style_rmtree(path, *args, **kwargs):
+                if Path(path) == capture_dir and lock_open:
+                    raise PermissionError("open session.lock prevents root rmtree")
+                return real_rmtree(path, *args, **kwargs)
+
+            with mock.patch("meetings.scan_import.FileLock", WindowsStyleLock), mock.patch(
+                "meetings.scan_import.shutil.rmtree",
+                side_effect=windows_style_rmtree,
+            ):
+                cleaned = cleanup_orphan_capture_sessions(recordings_dir)
+
+            self.assertEqual(cleaned, 1)
             self.assertFalse(capture_dir.exists())
 
     def test_recover_or_cleanup_recorder_temps_drops_truncated_pcm_tmp(self):

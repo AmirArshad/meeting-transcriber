@@ -26,6 +26,7 @@ const {
   countResumablePendingMeetings,
   buildActivityRows,
   getActivityEmptyStateText,
+  shouldApplyTranscriptionQueueState,
 } = window.transcriptionActivityHelpers;
 const {
   getRecoveryPromptView,
@@ -790,7 +791,7 @@ function renderActivityList() {
 function applyTranscriptionQueueState(payload) {
   const seq = Number(payload && payload.seq) || 0;
   // Reject stale snapshots (e.g. init await completing after a fresher push).
-  if (seq > 0 && seq <= lastAppliedTranscriptionQueueSeq) {
+  if (!shouldApplyTranscriptionQueueState(payload, lastAppliedTranscriptionQueueSeq)) {
     return false;
   }
   if (seq > 0) {
@@ -2114,7 +2115,9 @@ function setupEventListeners() {
 
   if (typeof window.electronAPI.onTranscriptionQueueState === 'function') {
     registerCleanup(window.electronAPI.onTranscriptionQueueState((payload) => {
-      applyTranscriptionQueueState(payload);
+      if (!applyTranscriptionQueueState(payload)) {
+        return;
+      }
       // Reload History only when a job newly reaches a terminal status — main
       // keeps terminal rows in the session payload, so a naive "any terminal"
       // check reloads on every publish after the first completion.
@@ -2858,7 +2861,9 @@ async function startRecording() {
           result: recordingResult,
         })) {
           try {
-            const cancelResult = await window.electronAPI.cancelRecording();
+            const cancelResult = await window.electronAPI.cancelRecording({
+              sessionId: recordingResult.sessionId,
+            });
             const cancelOutcome = resolveCompensatingCancelOutcome(cancelResult);
             if (!cancelOutcome.ok) {
               if (!isCurrentStartAttempt()) {
@@ -2938,7 +2943,9 @@ async function startRecording() {
         if (isCurrentStartAttempt()) {
           addLog('Recording discarded during countdown.', 'warning');
           try {
-            await window.electronAPI.cancelRecording();
+            await window.electronAPI.cancelRecording({
+              sessionId: recordingResult.sessionId,
+            });
           } catch (_) {
             // Main may already be idle / cancelling.
           }
@@ -3195,7 +3202,9 @@ async function discardRecording() {
       audioVisualizer.stop();
     }
 
-    const result = await window.electronAPI.cancelRecording();
+    const result = await window.electronAPI.cancelRecording({
+      sessionId: activeRecordingSessionId,
+    });
     if (result?.cancelled === true && result?.success !== false) {
       addLog('Recording cancelled. Nothing was saved.', 'warning');
       setTranscriptMessage('Recording cancelled. Nothing was saved.', false);

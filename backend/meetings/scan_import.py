@@ -149,20 +149,27 @@ def cleanup_orphan_capture_sessions(recordings_dir: Path) -> int:
         except OSError:
             continue
 
+        should_delete = False
         try:
             # Re-check after lock — a live session may have written the manifest.
-            if (entry / "manifest.json").is_file():
-                continue
-            shutil.rmtree(entry, ignore_errors=True)
-            if not entry.exists():
-                cleaned += 1
-        except OSError:
-            pass
+            should_delete = not (entry / "manifest.json").is_file()
         finally:
             try:
                 lock.release()
             except Exception:
                 pass
+
+        if not should_delete:
+            continue
+        try:
+            # Windows cannot remove session.lock while FileLock still has it open.
+            # No recorder can newly adopt this existing directory: manifest create
+            # uses mkdir(exist_ok=False), so releasing after a successful probe is safe.
+            shutil.rmtree(entry, ignore_errors=True)
+            if not entry.exists():
+                cleaned += 1
+        except OSError:
+            pass
     return cleaned
 
 

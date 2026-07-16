@@ -73,7 +73,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Recording controls
   startRecording: (options) => ipcRenderer.invoke('start-recording', options),
   stopRecording: () => ipcRenderer.invoke('stop-recording'),
-  cancelRecording: () => ipcRenderer.invoke('cancel-recording'),
+  cancelRecording: (options = {}) => ipcRenderer.invoke('cancel-recording', options),
   getRecordingState: () => ipcRenderer.invoke('get-recording-state'),
   getRecordingRecoveryState: () => ipcRenderer.invoke('get-recording-recovery-state'),
   recoverRecording: () => ipcRenderer.invoke('recover-recording'),

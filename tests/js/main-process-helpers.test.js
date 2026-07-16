@@ -855,6 +855,36 @@ test('runWallClockComputeAction kills late registerProcess after quit terminate'
   assert.equal(lateProc && lateProc.pid, 999);
 });
 
+test('runWallClockComputeAction kills a process registered after wall-clock timeout', async () => {
+  const terminated = [];
+  let releaseProbe;
+  const probeGate = new Promise((resolve) => {
+    releaseProbe = resolve;
+  });
+
+  const actionPromise = runWallClockComputeAction({
+    timeoutMs: 10,
+    settleGraceMs: 100,
+    label: 'Late timeout register',
+    terminateProcess: async (proc) => {
+      terminated.push(proc || null);
+    },
+    action: async (registerProcess) => {
+      await probeGate;
+      registerProcess({ pid: 1001 });
+      await new Promise(() => {});
+    },
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  releaseProbe();
+  await assert.rejects(actionPromise, /Late timeout register timed out/);
+  assert.ok(
+    terminated.some((proc) => proc && proc.pid === 1001),
+    'a process spawned during timeout settle grace must be terminated',
+  );
+});
+
 
 test('getTranscriptionComputeTimeoutMs scales by model size', () => {
   assert.equal(getTranscriptionComputeTimeoutMs('small'), 60 * 60 * 1000);

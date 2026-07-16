@@ -68,6 +68,8 @@ function createRecorderService(deps) {
     diskSpaceCheckIntervalMs = 5 * 60 * 1000,
     setIntervalFn = setInterval,
     clearIntervalFn = clearInterval,
+    recordingStartupTimeoutMs = null,
+    recordingCancelSettleGraceMs = 2000,
     recordingsMaintenanceGate = null,
     getBackendModuleArgs = null,
     collectPythonProcessOutput = null,
@@ -101,6 +103,7 @@ function createRecorderService(deps) {
   let recordingCancelPromise = null;
   let stopCommandSent = false;
   let cancelCommandSent = false;
+  let retireActiveCancelAttempt = null;
   /** Settles an in-flight start-recording Promise when cancel wins during starting. */
   let activeStartupCancelSettle = null;
   /**
@@ -869,6 +872,7 @@ function createRecorderService(deps) {
   function resetStopWorkflowState() {
     recordingStopPromise = null;
     recordingCancelPromise = null;
+    retireActiveCancelAttempt = null;
     stopCommandSent = false;
     cancelCommandSent = false;
   }
@@ -1001,7 +1005,18 @@ function createRecorderService(deps) {
     return recordingStopPromise;
   }
 
-  function cancelRecordingProcess() {
+  function cancelRecordingProcess(expectedSessionId = null) {
+    if (
+      Number.isInteger(expectedSessionId)
+      && activeRecordingSessionId !== expectedSessionId
+    ) {
+      const error = new Error(
+        'Recording session changed before cancel could run. (RECORDING_SESSION_MISMATCH)',
+      );
+      error.code = 'RECORDING_SESSION_MISMATCH';
+      return Promise.reject(error);
+    }
+
     if (stopCommandSent || recordingStopPromise) {
       const error = new Error(
         'Recording is already stopping and cannot be discarded. (RECORDING_STOP_IN_PROGRESS)',
@@ -1039,7 +1054,8 @@ function createRecorderService(deps) {
       return Promise.resolve({ success: true, cancelled: true });
     }
 
-    recordingCancelPromise = new Promise((resolve, reject) => {
+    let cancelAttemptPromise = null;
+    cancelAttemptPromise = new Promise((resolve, reject) => {
       let stdoutData = '';
       let stderrData = '';
       let settled = false;
@@ -1058,6 +1074,19 @@ function createRecorderService(deps) {
         currentProcess.stdout.removeListener('data', stdoutHandler);
         currentProcess.stderr.removeListener('data', stderrHandler);
         currentProcess.removeListener('close', closeHandler);
+      };
+
+      retireActiveCancelAttempt = (error) => {
+        if (settled || recordingCancelPromise !== cancelAttemptPromise) {
+          return false;
+        }
+        settled = true;
+        cleanupListeners();
+        recordingCancelPromise = null;
+        retireActiveCancelAttempt = null;
+        cancelCommandSent = false;
+        reject(error);
+        return true;
       };
 
       const finalizeState = () => {
@@ -1084,6 +1113,7 @@ function createRecorderService(deps) {
           return;
         }
         settled = true;
+        retireActiveCancelAttempt = null;
         cleanupListeners();
         finalizeState();
 
@@ -1160,6 +1190,8 @@ function createRecorderService(deps) {
           });
       }
     });
+
+    recordingCancelPromise = cancelAttemptPromise;
 
     return recordingCancelPromise;
   }
@@ -1253,11 +1285,16 @@ function createRecorderService(deps) {
           return await Promise.race([
             recordingCancelPromise,
             new Promise((_, reject) => {
-              setTimeout(() => reject(error), 2000);
+              setTimeout(() => reject(error), recordingCancelSettleGraceMs);
             }),
           ]);
         } catch (_) {
-          throw error;
+          const timeoutError = new Error(timeoutMessage);
+          timeoutError.code = 'RECORDING_CANCEL_TIMEOUT';
+          if (typeof retireActiveCancelAttempt === 'function') {
+            retireActiveCancelAttempt(timeoutError);
+          }
+          throw timeoutError;
         }
       }
 
@@ -2170,7 +2207,10 @@ function createRecorderService(deps) {
         });
 
         // Longer timeout for first recording (15s), shorter for subsequent (10s)
-        const timeout = isFirstRecording ? 15000 : 10000;
+        const timeout = Number.isFinite(recordingStartupTimeoutMs)
+          && recordingStartupTimeoutMs > 0
+          ? recordingStartupTimeoutMs
+          : (isFirstRecording ? 15000 : 10000);
         timeoutHandle = setTimeout(() => {
           if (recordingStarted) {
             return;
@@ -2180,7 +2220,6 @@ function createRecorderService(deps) {
           if (
             recordingCancelPromise
             || cancelCommandSent
-            || activeStartupCancelSettle
             || attemptCancelGeneration !== startupCancelGeneration
           ) {
             return;
@@ -2246,8 +2285,21 @@ function createRecorderService(deps) {
       return consumeQuitPersistedFlag(result);
     });
 
-    ipcMain.handle('cancel-recording', async (event) => {
+    ipcMain.handle('cancel-recording', async (event, options = {}) => {
       assertTrustedRendererSender(event);
+      const expectedSessionId = Number.isInteger(options?.sessionId)
+        ? options.sessionId
+        : null;
+      if (
+        expectedSessionId != null
+        && activeRecordingSessionId !== expectedSessionId
+      ) {
+        const error = new Error(
+          'Recording session changed before cancel could run. (RECORDING_SESSION_MISMATCH)',
+        );
+        error.code = 'RECORDING_SESSION_MISMATCH';
+        throw error;
+      }
       return waitForRecordingCancel({
         forceKillOnTimeout: true,
         timeoutMessage: 'Recording cancel timeout - process took too long to discard',

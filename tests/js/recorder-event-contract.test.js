@@ -22,6 +22,7 @@ const {
 const WINDOWS_RECORDER = path.join(ROOT, 'backend', 'audio', 'windows_recorder.py');
 const MACOS_RECORDER = path.join(ROOT, 'backend', 'audio', 'macos_recorder.py');
 const RECORDER_SERVICE_JS = path.join(ROOT, 'src', 'main', 'recorder-service.js');
+const RENDERER_APP_JS = path.join(ROOT, 'src', 'renderer', 'app.js');
 
 function assertEmitterDefinesFinalKey(source, keyName) {
   // Match dict/object literals that emit the platform final-result key.
@@ -58,6 +59,19 @@ test('recorder stdout message shapes parse as levels/event/warning/error', () =>
   );
   assert.equal(error.kind, 'error');
   assert.equal(error.payload.code, 'RECORDER_FAILED');
+});
+
+test('renderer scopes recording cancel calls to the known session', () => {
+  const source = readUtf8(RENDERER_APP_JS);
+  assert.equal(source.includes('window.electronAPI.cancelRecording()'), false);
+  assert.match(
+    source,
+    /cancelRecording\(\{\s*sessionId:\s*recordingResult\.sessionId,?\s*\}\)/,
+  );
+  assert.match(
+    source,
+    /cancelRecording\(\{\s*sessionId:\s*activeRecordingSessionId,?\s*\}\)/,
+  );
 });
 
 test('Windows recorder emitter uses audioPath in the final result payload', () => {
