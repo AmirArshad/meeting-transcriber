@@ -114,6 +114,9 @@ Do not promise “instant next recording” across encode. Promise **“record a
 | 8 | First-run tip | “You can start another recording while this one transcribes.” |
 | — | Soft queue-depth warning | |
 | — | Auto-resume pending post-scan | |
+| — | Activity duration label | Prefer `durationSeconds` over display `duration` string (`1:23` → `Number` → `0s` bug from smoke) |
+| — | Bidirectional title sync | Rename from History **or** Activity → shared metadata + queue-job title patch + both UIs refresh |
+| — | Activity rename + delete | Same `update-meeting` / `delete-meeting` as History; delete drops History entry + Activity row; keep delete-while-busy guards |
 
 ### Cut / defer
 
@@ -333,6 +336,8 @@ Minimum shippable:
 - First-run tip; soft queue-depth warning.
 - Richer phase text / optional percent.
 - Between-job GPU/preload admission if still painful.
+- Activity duration fix + bidirectional rename sync (History ↔ Activity; shared metadata).
+- Activity rename + delete via same IPC as History (both surfaces stay consistent; same busy-delete guards).
 
 ### Phase 3 — Optional
 
