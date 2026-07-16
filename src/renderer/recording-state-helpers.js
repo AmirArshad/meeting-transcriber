@@ -86,6 +86,26 @@
   }
 
   /**
+   * Electron ipcRenderer.invoke strips custom Error.code; match message text
+   * (same pattern as isGpuRuntimeActionBusyError).
+   */
+  function isRecordingStopInProgressError(error) {
+    const code = String(error && error.code ? error.code : '').toUpperCase();
+    const message = String(error && error.message ? error.message : '').toUpperCase();
+    return code === 'RECORDING_STOP_IN_PROGRESS'
+      || message.includes('RECORDING_STOP_IN_PROGRESS')
+      || message.includes('ALREADY STOPPING AND CANNOT BE DISCARDED');
+  }
+
+  function isRecordingCancelFinalizedError(error) {
+    const code = String(error && error.code ? error.code : '').toUpperCase();
+    const message = String(error && error.message ? error.message : '').toUpperCase();
+    return code === 'RECORDING_CANCEL_FINALIZED'
+      || message.includes('RECORDING_CANCEL_FINALIZED')
+      || message.includes('PRODUCED A SAVED AUDIO FILE INSTEAD OF DISCARDING');
+  }
+
+  /**
    * Pure view model for the always-visible top-bar recording presence pill.
    * @returns {{ visible: boolean, label: string, timeText: string|null, modifier: string|null }}
    */
@@ -147,6 +167,8 @@
     shouldIssueCompensatingCancelAfterStart,
     resolveCompensatingCancelOutcome,
     shouldAbortStartAfterCountdown,
+    isRecordingStopInProgressError,
+    isRecordingCancelFinalizedError,
     canHydratedRendererStopRecording,
   };
 

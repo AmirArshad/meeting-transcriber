@@ -449,12 +449,25 @@ function resolveStopTimeoutAction({ forceKillOnTimeout, errorMessage, timeoutMes
   };
 }
 
-function getQuitInterceptState({ hasRecordingProcess, recordingStartTime, stopInProgress = false }) {
+function getQuitInterceptState({
+  hasRecordingProcess,
+  recordingStartTime,
+  stopInProgress = false,
+  cancelInProgress = false,
+}) {
   if (!hasRecordingProcess) {
     return {
       interceptQuit: false,
       state: 'idle',
       progressMessage: null,
+    };
+  }
+
+  if (cancelInProgress) {
+    return {
+      interceptQuit: true,
+      state: 'cancelling',
+      progressMessage: 'Cancelling the current recording before quitting...',
     };
   }
 

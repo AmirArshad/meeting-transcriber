@@ -336,6 +336,11 @@ test('cancel queued B persists durable failed and quit/head neither spawns nor o
   const result = await handlers['cancel-pending-transcription']({}, { meetingId: 'meeting_b' });
   assert.equal(result.success, true);
   assert.equal(result.cancelled, true);
+  assert.equal(
+    result.deferredSettlement,
+    false,
+    'queued cancel must clear inFlight so Retry can re-admit immediately',
+  );
   assert.ok(
     statusUpdates.some((entry) => entry.meetingId === 'meeting_b' && entry.status === 'failed'),
     'queued cancel must persist durable failed before quit can leave pending',
@@ -385,6 +390,45 @@ test('cancel queued B persists durable failed and quit/head neither spawns nor o
     false,
   );
   assert.equal(spawnsAfterCancel, spawnCommands.length);
+});
+
+test('queued cancel clears inFlight so Retry can re-admit immediately', async () => {
+  const harness = createServiceHarness();
+  const handlers = {};
+  harness.service.registerIpc({ handle(channel, handler) { handlers[channel] = handler; } });
+
+  const jobA = harness.service.admitMeetingTranscriptionJob({
+    meetingId: 'meeting_a',
+    language: 'en',
+    modelSize: 'small',
+  });
+  const jobB = harness.service.admitMeetingTranscriptionJob({
+    meetingId: 'meeting_b',
+    language: 'en',
+    modelSize: 'small',
+  });
+
+  const cancelResult = await handlers['cancel-pending-transcription']({}, { meetingId: 'meeting_b' });
+  assert.equal(cancelResult.success, true);
+  assert.equal(cancelResult.deferredSettlement, false);
+
+  // Retry must succeed immediately without waiting for A's FIFO slot.
+  const retryPromise = harness.service.admitMeetingTranscriptionJob({
+    meetingId: 'meeting_b',
+    language: 'en',
+    modelSize: 'small',
+  });
+  assert.equal(
+    harness.getQueueState().jobs.find((job) => job.meetingId === 'meeting_b').status,
+    QUEUE_JOB_STATUSES.queued,
+  );
+
+  const cancelError = Object.assign(new Error('Cancelled by user'), { code: 'TRANSCRIPTION_CANCELLED' });
+  for (const pending of [jobA, jobB, retryPromise]) {
+    pending.catch(() => {});
+  }
+  harness.computeQueue.rejectAll(cancelError);
+  await Promise.allSettled([jobA, jobB, retryPromise]);
 });
 
 test('stale delete clear after recycle cannot drop a newer tombstone', async () => {

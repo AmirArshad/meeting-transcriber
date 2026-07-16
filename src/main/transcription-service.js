@@ -793,6 +793,23 @@ function createTranscriptionService(deps) {
     });
   }
 
+  /**
+   * Bounded AI-metadata write for use inside the compute-queue slot.
+   * Same invariant as lookupMeetingById / updateMeetingTranscriptionStatusBounded.
+   */
+  function updateMeetingAiMetadataBounded(meetingId, updates) {
+    if (typeof updateMeetingAiMetadata !== 'function') {
+      return Promise.resolve(null);
+    }
+    return runWallClockComputeAction({
+      timeoutMs: AI_COMPUTE_TIMEOUT_MS.meetingPreflight,
+      label: 'Meeting AI metadata update',
+      meetingId,
+      terminateProcess: terminateProcessBestEffort,
+      action: (registerProcess) => updateMeetingAiMetadata(meetingId, updates, registerProcess),
+    });
+  }
+
   async function resolveGuidedDiarizationStatus() {
     const diarizationAvailability = getDiarizationAvailability(process.platform, process.arch);
     if (!diarizationAvailability.supported || !diarizationAvailability.runtimeDevice) {
@@ -840,7 +857,7 @@ function createTranscriptionService(deps) {
       'utf8',
     );
 
-    const updatedMeeting = await updateMeetingAiMetadata(meeting.id, {
+    const updatedMeeting = await updateMeetingAiMetadataBounded(meeting.id, {
       diarization: buildGuidedDiarizationAiMetadata({
         diarizationResult,
         diarizationStatus,
@@ -855,7 +872,7 @@ function createTranscriptionService(deps) {
     if (!meeting || !meeting.id || typeof updateMeetingAiMetadata !== 'function') {
       return meeting;
     }
-    return updateMeetingAiMetadata(meeting.id, {
+    return updateMeetingAiMetadataBounded(meeting.id, {
       diarization: buildGuidedDiarizationAiMetadata({
         diarizationStatus,
         status: 'error',
@@ -957,6 +974,7 @@ function createTranscriptionService(deps) {
     language,
     modelSize,
     registerProcess,
+    beforeSpawn = null,
   }) {
     const shouldPreemptiveCpuRetry = await shouldPreemptiveCpuAtJobStart(registerProcess);
     if (shouldPreemptiveCpuRetry) {
@@ -964,6 +982,9 @@ function createTranscriptionService(deps) {
         'transcription-progress',
         'CUDA runtime is not loadable on this system. Starting transcription on CPU.\n',
       );
+    }
+    if (typeof beforeSpawn === 'function') {
+      beforeSpawn();
     }
     try {
       return await runTranscriptionProcess({
@@ -981,6 +1002,9 @@ function createTranscriptionService(deps) {
         'transcription-progress',
         'GPU transcription failed because CUDA runtime libraries could not be loaded. Retrying on CPU; this may take significantly longer.\n',
       );
+      if (typeof beforeSpawn === 'function') {
+        beforeSpawn();
+      }
       return runTranscriptionProcess({
         audioFile,
         language,
@@ -1173,6 +1197,7 @@ function createTranscriptionService(deps) {
               language,
               modelSize,
               registerProcess,
+              beforeSpawn: () => throwIfJobBlocked(meetingId, epoch),
             });
             throwIfJobBlocked(meetingId, epoch);
 
@@ -1298,7 +1323,7 @@ function createTranscriptionService(deps) {
         if (clearPriorDiarization && typeof updateMeetingAiMetadata === 'function' && !guidedDiarizationResult && !postPassDiarizationResult && !isQuitCommitted()) {
           try {
             throwIfJobBlocked(meetingId, epoch);
-            await updateMeetingAiMetadata(meetingId, { diarization: null });
+            await updateMeetingAiMetadataBounded(meetingId, { diarization: null });
           } catch (clearError) {
             if (clearError && (clearError.code === 'TRANSCRIPTION_CANCELLED'
               || clearError.code === 'TRANSCRIPTION_DELETED'
@@ -1418,21 +1443,17 @@ function createTranscriptionService(deps) {
       }
 
       if (isQuitCommitted() || (error && error.code === 'TRANSCRIPTION_QUIT_SKIPPED')) {
-        // Quit-killed or head-of-queue quit skip: keep durable pending.
-        removeQueueJob(transcriptionQueueState, meetingId);
-        publishTranscriptionQueueState();
-        throw error;
-      }
-
-      // User cancel (preflight gate, head skip, or child terminate): durable failed.
-      if (
-        (error && error.code === 'TRANSCRIPTION_CANCELLED')
-        || isTranscriptionJobCancelled(transcriptionQueueState, meetingId)
-        || getJobEpoch(meetingId) !== epoch
-      ) {
-        if (!completedPersisted) {
+        // Quit-killed or head-of-queue quit skip: keep durable pending — unless
+        // the user already cancelled this job (cancel flag still set, or the
+        // child/error is explicitly TRANSCRIPTION_CANCELLED). Do not treat epoch
+        // mismatch alone as cancel here: queued cancel already stamped durable
+        // failed and cleared the flag, and a second write would race the test
+        // contract / overwrite History unnecessarily.
+        const userCancelled = isTranscriptionJobCancelled(transcriptionQueueState, meetingId)
+          || (error && error.code === 'TRANSCRIPTION_CANCELLED');
+        if (userCancelled && !completedPersisted) {
           try {
-            updatedMeeting = await updateMeetingTranscriptionStatus(meetingId, {
+            await updateMeetingTranscriptionStatus(meetingId, {
               status: 'failed',
               language,
               model: modelSize,
@@ -1441,9 +1462,53 @@ function createTranscriptionService(deps) {
           } catch (statusError) {
             sendToRenderer(
               'transcription-progress',
-              `Could not persist cancellation status: ${statusError.message}\n`,
+              `Could not persist cancellation status before quit: ${statusError.message}\n`,
             );
           }
+        }
+        removeQueueJob(transcriptionQueueState, meetingId);
+        publishTranscriptionQueueState();
+        throw error;
+      }
+
+      // User cancel (preflight gate, head skip, or child terminate): durable failed
+      // unless the transcript is already durable completed — then Activity must
+      // stay ready to match History (same as other post-completed error paths).
+      if (
+        (error && error.code === 'TRANSCRIPTION_CANCELLED')
+        || isTranscriptionJobCancelled(transcriptionQueueState, meetingId)
+        || getJobEpoch(meetingId) !== epoch
+      ) {
+        if (completedPersisted) {
+          clearTranscriptionJobCancelFlag(transcriptionQueueState, meetingId);
+          upsertQueueJob(transcriptionQueueState, {
+            meetingId,
+            status: QUEUE_JOB_STATUSES.ready,
+            phase: QUEUE_JOB_PHASES.completed,
+          });
+          publishTranscriptionQueueState();
+          return {
+            output_file: null,
+            transcriptPath: null,
+            diarization: null,
+            diarizationStatus: guidedDiarizationStatus,
+            diarizationError: null,
+            meeting: updatedMeeting,
+            cancelledAfterCompleted: true,
+          };
+        }
+        try {
+          updatedMeeting = await updateMeetingTranscriptionStatus(meetingId, {
+            status: 'failed',
+            language,
+            model: modelSize,
+            transcriptionError: USER_CANCELLED_TRANSCRIPTION_ERROR,
+          });
+        } catch (statusError) {
+          sendToRenderer(
+            'transcription-progress',
+            `Could not persist cancellation status: ${statusError.message}\n`,
+          );
         }
         upsertQueueJob(transcriptionQueueState, {
           meetingId,
@@ -1640,10 +1705,9 @@ function createTranscriptionService(deps) {
         continue;
       }
 
-      const normalizedModel = requireAllowedModelSize(meeting.model || 'small');
-      const normalizedLanguage = String(meeting.language || 'en');
-
       try {
+        const normalizedModel = requireAllowedModelSize(meeting.model || 'small');
+        const normalizedLanguage = String(meeting.language || 'en');
         const jobPromise = admitMeetingTranscriptionJob({
           meetingId,
           language: normalizedLanguage,
@@ -1675,7 +1739,11 @@ function createTranscriptionService(deps) {
         )) {
           continue;
         }
-        throw admitError;
+        console.warn(
+          `Skipping resume for meeting ${meetingId}:`,
+          (admitError && admitError.message) || admitError,
+        );
+        continue;
       }
     }
 
@@ -2285,13 +2353,22 @@ function createTranscriptionService(deps) {
             status: QUEUE_JOB_STATUSES.failed,
             phase: QUEUE_JOB_PHASES.cancelled,
           });
+          // Drop the in-flight map entry and cancel flag so Retry can re-admit
+          // immediately. The parked FIFO closure's .finally is identity-guarded
+          // (`=== promise`) and the bumped epoch self-cancels when it reaches head.
+          inFlightJobsByMeetingId.delete(meetingId);
+          clearTranscriptionJobCancelFlag(
+            transcriptionQueueState,
+            meetingId,
+            cancelGeneration,
+          );
           publishTranscriptionQueueState();
           // Do not await settlement — cancel/epoch guards stop later writes.
           return {
             success: true,
             cancelled: true,
             meeting: updatedMeeting,
-            deferredSettlement: hasInflight,
+            deferredSettlement: false,
             generation: cancelGeneration,
           };
         }

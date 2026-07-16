@@ -10,6 +10,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from filelock import FileLock, Timeout
+
 
 # Legacy recorder temps (pre-.pcm.tmp) plus the current non-scanned extension.
 _LEGACY_TEMP_WAV_SUFFIXES = (".temp.wav", "_temp.wav")
@@ -113,6 +115,64 @@ def cleanup_discarded_capture_sessions(recordings_dir: Path) -> int:
     return cleaned
 
 
+def cleanup_orphan_capture_sessions(recordings_dir: Path) -> int:
+    """Best-effort remove ``*.capture`` dirs that have no ``manifest.json``.
+
+    Windows cancel cleanup can leave partial trees after ``rmtree(ignore_errors)``
+    when files are locked (AV/Explorer). Those dirs are invisible to discarded
+    and recovery discovery. Only remove when ``session.lock`` can be acquired
+    with ``timeout=0`` so a live recorder is never deleted.
+
+    Returns the number of directories removed. Never promotes audio.
+    """
+    cleaned = 0
+    if not recordings_dir.is_dir():
+        return cleaned
+    try:
+        entries = list(recordings_dir.iterdir())
+    except OSError:
+        return cleaned
+
+    for entry in entries:
+        if not entry.is_dir() or not entry.name.lower().endswith(_CAPTURE_SESSION_DIR_SUFFIX):
+            continue
+        manifest = entry / "manifest.json"
+        if manifest.is_file():
+            continue
+
+        lock_path = entry / "session.lock"
+        lock = FileLock(str(lock_path))
+        try:
+            lock.acquire(timeout=0)
+        except Timeout:
+            continue
+        except OSError:
+            continue
+
+        should_delete = False
+        try:
+            # Re-check after lock — a live session may have written the manifest.
+            should_delete = not (entry / "manifest.json").is_file()
+        finally:
+            try:
+                lock.release()
+            except Exception:
+                pass
+
+        if not should_delete:
+            continue
+        try:
+            # Windows cannot remove session.lock while FileLock still has it open.
+            # No recorder can newly adopt this existing directory: manifest create
+            # uses mkdir(exist_ok=False), so releasing after a successful probe is safe.
+            shutil.rmtree(entry, ignore_errors=True)
+            if not entry.exists():
+                cleaned += 1
+        except OSError:
+            pass
+    return cleaned
+
+
 def iter_recorder_temp_audio_files(recordings_dir: Path) -> List[Path]:
     """List leftover recorder temp PCM/WAV files in the recordings directory."""
     temps: List[Path] = []
@@ -140,10 +200,12 @@ def recover_or_cleanup_recorder_temps(recordings_dir: Path) -> Dict[str, int]:
     - Otherwise promote the temp to ``{stem}.wav`` so the next scan can import
       a kill-mid-compress recording instead of leaving it orphaned.
 
-    Also sweeps discarded-marked ``*.capture`` dirs (cancel tombstones) so they
-    never resurrect via recovery.
+    Also sweeps discarded-marked ``*.capture`` dirs (cancel tombstones) and
+    manifest-less orphan capture dirs (Windows locked-file rmtree survivors)
+    so they never resurrect via recovery.
     """
     discarded_cleaned = cleanup_discarded_capture_sessions(recordings_dir)
+    orphan_cleaned = cleanup_orphan_capture_sessions(recordings_dir)
 
     recovered = 0
     cleaned = 0
@@ -213,6 +275,7 @@ def recover_or_cleanup_recorder_temps(recordings_dir: Path) -> Dict[str, int]:
         "dropped": dropped,
         "skipped": skipped,
         "discardedCleaned": discarded_cleaned,
+        "orphanCleaned": orphan_cleaned,
     }
 
 

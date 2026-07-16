@@ -56,7 +56,7 @@
   - Cancel while `starting`: abort startup, terminate child best-effort, clean any spools created; resolve idle; no meeting.
   - On cancelled result: clear runtime → `idle`; **never** `addMeetingToHistory` / transcription enqueue.
   - Quit path untouched (no discard-and-quit).
-- Modify: `src/preload.js` — `cancelRecording: () => ipcRenderer.invoke('cancel-recording')`.
+- Modify: `src/preload.js` — `cancelRecording: (options) => ipcRenderer.invoke('cancel-recording', options)`; pass the known `sessionId` so stale renderer continuations cannot cancel a newer recording.
 - Test: `tests/js/recorder-event-contract.test.js`, `tests/js/main-process-helpers.test.js`, plus a focused `recorder-service` deps/recovery-style test for stop-vs-cancel mutual exclusion and “no addMeeting on cancel” if DI seams allow.
 
 **Validation:** `node --test tests/js/recorder-event-contract.test.js tests/js/main-process-helpers.test.js` (and any new recorder-service cancel test)

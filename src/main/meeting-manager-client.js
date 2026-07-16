@@ -453,7 +453,7 @@ function createMeetingManagerClient(deps) {
     });
   }
 
-  function updateMeetingAiMetadata(meetingId, rawUpdates = {}) {
+  function updateMeetingAiMetadata(meetingId, rawUpdates = {}, registerProcess = null) {
     const updates = validateAiMetadataPaths(rawUpdates || {});
     if (!meetingId) {
       return Promise.reject(new Error('update-meeting-ai requires a meetingId'));
@@ -483,9 +483,12 @@ function createMeetingManagerClient(deps) {
     }
 
     return new Promise((resolve, reject) => {
-      const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', args), {
+      let python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', args), {
         cwd: pythonConfig.backendPath,
       });
+      if (typeof registerProcess === 'function') {
+        python = registerProcess(python);
+      }
 
       const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
 

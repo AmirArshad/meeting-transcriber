@@ -63,6 +63,11 @@
     }).length;
   }
 
+  function shouldApplyTranscriptionQueueState(payload, lastAppliedSeq = 0) {
+    const seq = Number(payload && payload.seq) || 0;
+    return seq > (Number(lastAppliedSeq) || 0);
+  }
+
   /**
    * Home status pill while capture is idle.
    * @returns {string}
@@ -264,6 +269,7 @@
     formatDurationLabel,
     getActivityChipLabel,
     countBusyTranscriptionJobs,
+    shouldApplyTranscriptionQueueState,
     getIdleStatusPillText,
     getRecordButtonLabel,
     buildResumePendingBannerView,

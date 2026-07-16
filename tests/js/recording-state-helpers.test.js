@@ -158,3 +158,36 @@ test('hydrated Stop & Transcribe only needs main recording session state', () =>
   );
   assert.equal(canHydratedRendererStopRecording({ state: 'recording', sessionId: null }), false);
 });
+
+test('isRecordingStopInProgressError matches IPC-stripped errors by message', () => {
+  const {
+    isRecordingStopInProgressError,
+    isRecordingCancelFinalizedError,
+  } = require('../../src/renderer/recording-state-helpers');
+
+  assert.equal(
+    isRecordingStopInProgressError({
+      message: 'Recording is already stopping and cannot be discarded. (RECORDING_STOP_IN_PROGRESS)',
+    }),
+    true,
+  );
+  assert.equal(
+    isRecordingStopInProgressError({
+      message: 'Recording is already stopping and cannot be discarded.',
+    }),
+    true,
+  );
+  assert.equal(
+    isRecordingStopInProgressError({ code: 'RECORDING_STOP_IN_PROGRESS', message: 'x' }),
+    true,
+  );
+  assert.equal(isRecordingStopInProgressError({ message: 'something else' }), false);
+
+  assert.equal(
+    isRecordingCancelFinalizedError({
+      message: 'Recording cancel produced a saved audio file instead of discarding. (RECORDING_CANCEL_FINALIZED)',
+    }),
+    true,
+  );
+  assert.equal(isRecordingCancelFinalizedError({ message: 'Cancel failed' }), false);
+});

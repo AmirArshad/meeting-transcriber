@@ -344,3 +344,11 @@ def test_macos_duration_mode_shares_stdin_cancel_listener():
     except_block = source.rsplit("except Exception as e:", 1)[1]
     assert "resolve_post_exception_capture_action" in except_block
     assert "cancel_recording()" in except_block
+
+
+def test_windows_outer_except_honors_cancel_intent():
+    source = _read(WINDOWS_RECORDER)
+    except_block = source.rsplit("except Exception as e:", 1)[1]
+    assert "resolve_post_exception_capture_action" in except_block
+    assert "cancel_recording()" in except_block
+    assert "RECORDING_CANCEL_FAILED" in except_block

@@ -44,6 +44,8 @@ function createTranscriptionQueueState() {
     // earlier reservation cannot match a recycled generation number.
     cancelGuardSequences: new Map(),
     deleteGuardSequences: new Map(),
+    // Monotonic payload revision for renderer stale-snapshot rejection.
+    stateSeq: 0,
   };
 }
 
@@ -262,10 +264,14 @@ function buildTranscriptionQueueStatePayload(state) {
       durationSeconds: Number(job.durationSeconds) || 0,
     }));
 
+  const nextSeq = (Number(state.stateSeq) || 0) + 1;
+  state.stateSeq = nextSeq;
+
   return {
     jobs,
     activeMeetingId: state.activeMeetingId,
     busyCount: countBusyTranscriptionJobs(state),
+    seq: nextSeq,
   };
 }
 

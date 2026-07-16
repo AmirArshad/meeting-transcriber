@@ -33,6 +33,15 @@ Replaced Intel-only evermeet.cx ffmpeg with a pinned Apple Silicon static build 
 - [ ] [Risk: High] Optional extended pass: `tests/manual/recording-transcription-regression-checklist.md`.
 - [ ] [Risk: High] Optional local AI add-ons smoke if models are installed: diarization and summary subset from `tests/manual/local-ai-addons-checklist.md`.
 
+## Completed: Pre-2.6.0 Adversarial Race Hardening
+
+- [x] [Risk: High] Restore recorder startup timeout while cancel settlement is armed; session-scope stale compensating cancels.
+- [x] [Risk: High] Retire timed-out cancel attempts after bounded force-kill grace without claiming the process is idle.
+- [x] [Risk: High] Terminate compute subprocesses registered after wall-clock timeout, including post-CUDA-probe spawns.
+- [x] [Risk: Medium] Reject stale queue snapshots before Activity or History terminal-transition side effects.
+- [x] [Risk: Medium] Release orphan `session.lock` before Windows directory deletion and retain the non-blocking live-lock probe.
+- [ ] [Risk: High] Run the targeted adversarial recorder/queue/Windows orphan manual checks in `tests/manual/recording-smoke-checklist.md` before the 2.6.0 tag.
+
 ## Next Priorities
 
 Codebase refactor, Release 1 presence, and Release 2 long-recording safety shipped in **v2.5.0** (merged to `master`).
