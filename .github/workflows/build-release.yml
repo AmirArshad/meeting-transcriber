@@ -220,14 +220,20 @@ jobs:
         run: |
           VERSION="${{ steps.collect_assets.outputs.version }}"
           NOTES_FILE="docs/releases/v${VERSION}.md"
+          WINDOWS_NAME="${{ steps.collect_assets.outputs.windows_name }}"
+          WINDOWS_SIZE="${{ steps.collect_assets.outputs.windows_size }}"
+          MACOS_NAME="${{ steps.collect_assets.outputs.macos_name }}"
+          MACOS_SIZE="${{ steps.collect_assets.outputs.macos_size }}"
+          REPO="${{ github.repository }}"
 
+          # Escaped backticks so installer filenames are not executed by the shell.
           cat <<EOF > release-notes.md
           ## AvaNevis v${VERSION}
 
           ### Downloads
 
-          - Windows installer: `${{ steps.collect_assets.outputs.windows_name }}` (${{ steps.collect_assets.outputs.windows_size }})
-          - macOS installer: `${{ steps.collect_assets.outputs.macos_name }}` (${{ steps.collect_assets.outputs.macos_size }})
+          - Windows installer: \`${WINDOWS_NAME}\` (${WINDOWS_SIZE})
+          - macOS installer: \`${MACOS_NAME}\` (${MACOS_SIZE})
 
           EOF
 
@@ -239,7 +245,7 @@ jobs:
             cat <<EOF >> release-notes.md
           ### What's New
 
-          - See \`docs/releases/v${VERSION}.md\` (add this file before tagging) or the [README](https://github.com/${{ github.repository }}/blob/master/README.md) Highlights for this release.
+          - See \`docs/releases/v${VERSION}.md\` (add this file before tagging) or the [README](https://github.com/${REPO}/blob/master/README.md) Highlights for this release.
 
           ### Platform Support
 
@@ -273,9 +279,9 @@ jobs:
 
           ### Help
 
-          - Documentation: https://github.com/${{ github.repository }}/blob/master/README.md
-          - Security audit: https://github.com/${{ github.repository }}/blob/master/docs/completed/audits/SECURITY_AUDIT.md
-          - Third-party notices: https://github.com/${{ github.repository }}/blob/master/THIRD_PARTY_NOTICES.md
+          - Documentation: https://github.com/${REPO}/blob/master/README.md
+          - Security audit: https://github.com/${REPO}/blob/master/docs/completed/audits/SECURITY_AUDIT.md
+          - Third-party notices: https://github.com/${REPO}/blob/master/THIRD_PARTY_NOTICES.md
           EOF
           fi
 

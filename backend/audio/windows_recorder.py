@@ -1195,6 +1195,7 @@ def main():
     from .recorder_stdin import (
         RECORDER_STDIN_CANCEL,
         parse_recorder_stdin_command,
+        resolve_post_exception_capture_action,
     )
 
     stop_event = threading.Event()
@@ -1281,29 +1282,81 @@ def main():
         global _final_output_path
         message = f"Recorder failed: {e}"
         print(f"Error: {e}", file=sys.stderr)
-        _send_error_message("RECORDER_FAILED", message)
-        # Prefer a structured stop payload when post-processing already produced
-        # an output file, so Electron can recover audioPath even on exit 1.
-        if _final_output_path:
-            _send_json_message({
-                "success": False,
-                "code": "RECORDER_FAILED",
-                "message": message,
-                "audioPath": str(_final_output_path),
-                "duration": _recording_duration,
-            })
-            # Prevent finally from emitting a conflicting success payload.
-            _final_output_path = None
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+
+        # Cancel intent must never fall through to stop/finalize (would resurrect
+        # audio the user asked to discard). Mirror macOS dispatch.
+        if recorder is not None:
+            cancel_requested = stdin_command.get("cmd") == RECORDER_STDIN_CANCEL
+            action = resolve_post_exception_capture_action(
+                cancel_requested=cancel_requested,
+                recording_cancelled=recording_cancelled,
+            )
+            if action == "cancel":
+                try:
+                    recorder.cancel_recording()
+                    recording_cancelled = True
+                except Exception as cancel_err:
+                    print(f"Cancel after failure also failed: {cancel_err}", file=sys.stderr)
+                    cancel_message = f"{message}; cancel also failed: {cancel_err}"
+                    _send_error_message("RECORDING_CANCEL_FAILED", cancel_message)
+                    _send_json_message({
+                        "success": False,
+                        "code": "RECORDING_CANCEL_FAILED",
+                        "message": cancel_message,
+                        "duration": _recording_duration,
+                    })
+                    sys.exit(1)
+                # Successful discard: finally emits cancelled:true.
+            elif action == "noop":
+                # Cancel already completed; finally emits cancelled:true.
+                pass
+            else:
+                # Best-effort stop/finalize recovery (same structured failure as before).
+                try:
+                    if getattr(recorder, "is_recording", False) and not _final_output_path:
+                        recorder.stop_recording()
+                except Exception as stop_err:
+                    print(f"Stop after failure also failed: {stop_err}", file=sys.stderr)
+
+                _send_error_message("RECORDER_FAILED", message)
+                if _final_output_path:
+                    _send_json_message({
+                        "success": False,
+                        "code": "RECORDER_FAILED",
+                        "message": message,
+                        "audioPath": str(_final_output_path),
+                        "duration": _recording_duration,
+                    })
+                    _final_output_path = None
+                else:
+                    _send_json_message({
+                        "success": False,
+                        "code": "RECORDER_FAILED",
+                        "message": message,
+                        "duration": _recording_duration,
+                    })
+                sys.exit(1)
         else:
-            # Still emit a structured failure so Electron never sees exit≠0
-            # with an empty stop buffer (e.g. MemoryError before compress).
-            _send_json_message({
-                "success": False,
-                "code": "RECORDER_FAILED",
-                "message": message,
-                "duration": _recording_duration,
-            })
-        sys.exit(1)
+            _send_error_message("RECORDER_FAILED", message)
+            if _final_output_path:
+                _send_json_message({
+                    "success": False,
+                    "code": "RECORDER_FAILED",
+                    "message": message,
+                    "audioPath": str(_final_output_path),
+                    "duration": _recording_duration,
+                })
+                _final_output_path = None
+            else:
+                _send_json_message({
+                    "success": False,
+                    "code": "RECORDER_FAILED",
+                    "message": message,
+                    "duration": _recording_duration,
+                })
+            sys.exit(1)
     finally:
         # Emit the success payload BEFORE cleanup. pa.terminate() has historically
         # been crash-prone; a raise there must not convert a finished save into

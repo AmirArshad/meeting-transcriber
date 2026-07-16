@@ -208,6 +208,13 @@ test('buildTrayView returns idle, starting, recording, and stopping labels', () 
     statusLabel: 'Finishing recording...',
     trayImage: 'idle',
   });
+
+  assert.deepEqual(buildTrayView({ state: 'cancelling', startedAt: 1_000 }, 3_724_000), {
+    title: '',
+    tooltip: 'AvaNevis - Cancelling recording',
+    statusLabel: 'Cancelling recording...',
+    trayImage: 'idle',
+  });
 });
 
 test('recording state schedules one reminder and clears it on stopping', () => {

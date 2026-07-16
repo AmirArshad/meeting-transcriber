@@ -21,6 +21,10 @@ function buildQuitRecordingDialogOptions({ quitState, stopErrorMessage }) {
     title = 'Recording Save Still Running';
     message = 'AvaNevis is still finishing the current recording.';
     detail = 'Quitting now may interrupt post-processing before the recording is fully saved. Keep the app open and let it finish, or quit anyway and risk losing the recording.';
+  } else if (quitState === 'cancelling') {
+    title = 'Recording Cancel Still Running';
+    message = 'AvaNevis is still cancelling the current recording.';
+    detail = 'Quitting now may interrupt discard cleanup. Keep the app open and let cancel finish, or quit anyway.';
   }
 
   return {

@@ -113,6 +113,14 @@ function runWallClockComputeAction({
   let settleReject = null;
 
   const registerProcess = (proc) => {
+    if (settled || quitTerminated) {
+      try {
+        Promise.resolve(terminateProcess(proc)).catch(() => undefined);
+      } catch (_error) {
+        // Best-effort terminate of a late-registered orphan.
+      }
+      return proc;
+    }
     activeProcess = proc;
     return proc;
   };

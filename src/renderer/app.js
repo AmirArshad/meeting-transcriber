@@ -7,7 +7,18 @@ const DEFAULT_SUMMARY_PROFILE = 'balanced';
 const MAX_PROGRESS_LOG_ENTRIES = 250;
 const AI_ADDON_PROGRESS_LOG_INTERVAL_MS = 1000;
 const SVG_NS = 'http://www.w3.org/2000/svg';
-const { getRecordButtonAction, getRecordingPresenceView, shouldShowDiscardRecordingControl, isStartRecordingResultDiscarded, shouldIssueCompensatingCancelAfterStart, resolveCompensatingCancelOutcome, shouldAbortStartAfterCountdown, canHydratedRendererStopRecording } = window.recordingStateHelpers;
+const {
+  getRecordButtonAction,
+  getRecordingPresenceView,
+  shouldShowDiscardRecordingControl,
+  isStartRecordingResultDiscarded,
+  shouldIssueCompensatingCancelAfterStart,
+  resolveCompensatingCancelOutcome,
+  shouldAbortStartAfterCountdown,
+  isRecordingStopInProgressError,
+  isRecordingCancelFinalizedError,
+  canHydratedRendererStopRecording,
+} = window.recordingStateHelpers;
 const {
   getIdleStatusPillText,
   getRecordButtonLabel,
@@ -100,6 +111,8 @@ const deleteMeeting = document.getElementById('delete-meeting');
 let recordingState = 'idle'; // idle, starting, recording, stopping, cancelling, countdown (transcribing no longer blocks capture)
 let lastStopProgressMessage = '';
 let transcriptionQueueState = { jobs: [], activeMeetingId: null, busyCount: 0 };
+/** meetingId → last-seen terminal status; used to reload History only on new transitions. */
+let lastSeenTerminalTranscriptionStatuses = new Map();
 let activityActionBusyMeetingId = null;
 let countdownValue = 3;
 let recordingStartTime = null;
@@ -2090,13 +2103,35 @@ function setupEventListeners() {
   if (typeof window.electronAPI.onTranscriptionQueueState === 'function') {
     registerCleanup(window.electronAPI.onTranscriptionQueueState((payload) => {
       applyTranscriptionQueueState(payload);
-      // Refresh history when jobs reach a terminal state so History badges stay current.
+      // Reload History only when a job newly reaches a terminal status — main
+      // keeps terminal rows in the session payload, so a naive "any terminal"
+      // check reloads on every publish after the first completion.
       const jobs = payload && Array.isArray(payload.jobs) ? payload.jobs : [];
-      const terminal = jobs.some((job) => {
+      const seenIds = new Set();
+      let hasNewTerminalTransition = false;
+      for (const job of jobs) {
+        const meetingId = String(job && job.meetingId || '').trim();
         const status = String(job && job.status || '');
-        return status === 'ready' || status === 'failed' || status === 'cancelled';
-      });
-      if (terminal) {
+        if (!meetingId) {
+          continue;
+        }
+        seenIds.add(meetingId);
+        const isTerminal = status === 'ready' || status === 'failed' || status === 'cancelled';
+        if (!isTerminal) {
+          lastSeenTerminalTranscriptionStatuses.delete(meetingId);
+          continue;
+        }
+        if (lastSeenTerminalTranscriptionStatuses.get(meetingId) !== status) {
+          hasNewTerminalTransition = true;
+          lastSeenTerminalTranscriptionStatuses.set(meetingId, status);
+        }
+      }
+      for (const meetingId of [...lastSeenTerminalTranscriptionStatuses.keys()]) {
+        if (!seenIds.has(meetingId)) {
+          lastSeenTerminalTranscriptionStatuses.delete(meetingId);
+        }
+      }
+      if (hasNewTerminalTransition) {
         loadMeetingHistory().catch((error) => {
           console.warn('Could not refresh history after queue-state update:', error);
         });
@@ -2156,8 +2191,8 @@ function setupEventListeners() {
       return;
     }
 
-    if (recordingState === 'stopping') {
-      console.warn('Ignoring recording failure during stop flow:', failure);
+    if (recordingState === 'stopping' || recordingState === 'cancelling') {
+      console.warn('Ignoring recording failure during stop/cancel flow:', failure);
       return;
     }
 
@@ -2721,30 +2756,38 @@ async function startRecording() {
 
   const epoch = ++startRecordingEpoch;
   discardRequestedForStart = false;
+  const isCurrentStartAttempt = () => epoch === startRecordingEpoch;
   const startWasDiscarded = () => (
-    discardRequestedForStart || epoch !== startRecordingEpoch
+    discardRequestedForStart || !isCurrentStartAttempt()
   );
+  // Stale start continuations must not touch shared UI (countdown / session
+  // owned by a newer Start B). Main scopes cancel by generation; mirror that.
+  const setIdleIfCurrentStart = () => {
+    if (isCurrentStartAttempt()) {
+      setRecordingState('idle');
+    }
+  };
 
   try {
     const preflightPassed = await runRecordingPreflightChecks({ micId, desktopId });
     if (startWasDiscarded()) {
       addLog('Recording discarded during startup checks.', 'warning');
-      setRecordingState('idle');
+      setIdleIfCurrentStart();
       return;
     }
     if (!preflightPassed) {
       addLog('Recording canceled by preflight checks.', 'warning');
-      setRecordingState('idle');
+      setIdleIfCurrentStart();
       return;
     }
   } catch (error) {
     if (startWasDiscarded()) {
-      setRecordingState('idle');
+      setIdleIfCurrentStart();
       return;
     }
     console.error('Preflight checks failed:', error);
     addLog(`Preflight checks failed: ${error.message}`, 'error');
-    setRecordingState('idle');
+    setIdleIfCurrentStart();
     return;
   }
 
@@ -2758,7 +2801,7 @@ async function startRecording() {
     try {
       if (startWasDiscarded()) {
         addLog('Recording discarded before start.', 'warning');
-        setRecordingState('idle');
+        setIdleIfCurrentStart();
         return;
       }
 
@@ -2767,7 +2810,7 @@ async function startRecording() {
         // Wait a moment before retrying
         await new Promise(resolve => setTimeout(resolve, 1000));
         if (startWasDiscarded()) {
-          setRecordingState('idle');
+          setIdleIfCurrentStart();
           return;
         }
       } else {
@@ -2806,6 +2849,9 @@ async function startRecording() {
             const cancelResult = await window.electronAPI.cancelRecording();
             const cancelOutcome = resolveCompensatingCancelOutcome(cancelResult);
             if (!cancelOutcome.ok) {
+              if (!isCurrentStartAttempt()) {
+                return;
+              }
               addLog(
                 `Could not confirm cancel after a discarded start: ${cancelOutcome.message}`,
                 'error',
@@ -2818,6 +2864,9 @@ async function startRecording() {
               return;
             }
           } catch (error) {
+            if (!isCurrentStartAttempt()) {
+              return;
+            }
             addLog(
               `Could not confirm cancel after a discarded start: ${error.message}`,
               'error',
@@ -2828,7 +2877,7 @@ async function startRecording() {
             );
             currentAudioFile = null;
             currentRecordingDurationSeconds = 0;
-            if (error?.code === 'RECORDING_STOP_IN_PROGRESS') {
+            if (isRecordingStopInProgressError(error)) {
               setRecordingState('stopping');
               startRecordingPresencePoll();
               return;
@@ -2838,17 +2887,20 @@ async function startRecording() {
             return;
           }
         }
+        if (!isCurrentStartAttempt()) {
+          return;
+        }
         addLog('Recording cancelled during startup.', 'warning');
         currentAudioFile = null;
         currentRecordingDurationSeconds = 0;
-        setRecordingState('idle');
+        setIdleIfCurrentStart();
         return;
       }
 
       if (recordingResult?.code === 'RECORDER_BUSY') {
         cancelCountdown();
         addLog('Recording start ignored because the recorder is already busy.', 'warning');
-        setRecordingState('idle');
+        setIdleIfCurrentStart();
         return;
       }
 
@@ -2870,15 +2922,22 @@ async function startRecording() {
         discardRequested: startWasDiscarded(),
         countdownResult,
       })) {
-        addLog('Recording discarded during countdown.', 'warning');
-        try {
-          await window.electronAPI.cancelRecording();
-        } catch (_) {
-          // Main may already be idle / cancelling.
+        // Only cancel/tear down UI for this attempt — never a newer Start B.
+        if (isCurrentStartAttempt()) {
+          addLog('Recording discarded during countdown.', 'warning');
+          try {
+            await window.electronAPI.cancelRecording();
+          } catch (_) {
+            // Main may already be idle / cancelling.
+          }
+          currentAudioFile = null;
+          currentRecordingDurationSeconds = 0;
+          setIdleIfCurrentStart();
         }
-        currentAudioFile = null;
-        currentRecordingDurationSeconds = 0;
-        setRecordingState('idle');
+        return;
+      }
+
+      if (!isCurrentStartAttempt()) {
         return;
       }
 
@@ -2905,10 +2964,12 @@ async function startRecording() {
 
     } catch (error) {
       console.error(`Failed to start recording (attempt ${attempt}):`, error);
-      cancelActiveCountdown();
+      if (isCurrentStartAttempt()) {
+        cancelActiveCountdown();
+      }
 
       if (startWasDiscarded()) {
-        setRecordingState('idle');
+        setIdleIfCurrentStart();
         return;
       }
 
@@ -2958,7 +3019,7 @@ async function startRecording() {
           );
         }
 
-        setRecordingState('idle');
+        setIdleIfCurrentStart();
         return; // Give up
       } else {
         // Try again
@@ -3137,7 +3198,7 @@ async function discardRecording() {
   } catch (error) {
     console.error('Failed to discard recording:', error);
     addLog(`Cancel failed: ${error.message}`, 'error');
-    if (error?.code === 'RECORDING_STOP_IN_PROGRESS') {
+    if (isRecordingStopInProgressError(error)) {
       setTranscriptMessage('Recording is already stopping and cannot be cancelled.', true);
       // First-wins: stop owns the UI — move to stopping and poll until idle.
       if (Number.isFinite(recordingStartTime)) {
@@ -3145,6 +3206,24 @@ async function discardRecording() {
       }
       setRecordingState('stopping');
       startRecordingPresencePoll();
+      return;
+    }
+    if (isRecordingCancelFinalizedError(error)) {
+      // Stop-vs-cancel race saved audio instead of discarding — surface it and refresh History.
+      const result = error && error.result;
+      const audioPath = result && (result.audioPath || result.outputPath);
+      setTranscriptMessage(
+        'Cancel could not discard the recording because a file was already saved. Check History.',
+        true,
+      );
+      if (audioPath) {
+        currentAudioFile = audioPath;
+        currentRecordingDurationSeconds = Number(result.duration || 0);
+      }
+      setRecordingState('idle');
+      loadMeetingHistory({ scan: true }).catch((historyError) => {
+        console.warn('Could not refresh history after cancel-finalized race:', historyError);
+      });
       return;
     }
     stopTimer();

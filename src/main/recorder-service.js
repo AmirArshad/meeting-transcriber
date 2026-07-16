@@ -1003,7 +1003,9 @@ function createRecorderService(deps) {
 
   function cancelRecordingProcess() {
     if (stopCommandSent || recordingStopPromise) {
-      const error = new Error('Recording is already stopping and cannot be discarded.');
+      const error = new Error(
+        'Recording is already stopping and cannot be discarded. (RECORDING_STOP_IN_PROGRESS)',
+      );
       error.code = 'RECORDING_STOP_IN_PROGRESS';
       return Promise.reject(error);
     }
@@ -1100,7 +1102,7 @@ function createRecorderService(deps) {
           }
           if (parsed && getRecorderResultAudioPath(parsed)) {
             rejectCancel(
-              'Recording cancel produced a saved audio file instead of discarding.',
+              'Recording cancel produced a saved audio file instead of discarding. (RECORDING_CANCEL_FINALIZED)',
               'RECORDING_CANCEL_FINALIZED',
               { result: parsed },
             );
@@ -1193,6 +1195,68 @@ function createRecorderService(deps) {
           pythonProcess.kill();
         } catch (killError) {
           console.warn('Failed to kill recorder after timeout:', killError.message);
+        }
+      }
+
+      throw error;
+    } finally {
+      clearTimeout(timeoutHandle);
+    }
+  }
+
+  /**
+   * Cancel with the same wall-clock budget as stop. A hung discard (Swift helper
+   * stop, spool close, slow rmtree) must not leave the app stuck in `cancelling`.
+   * Force-killing a pre-tombstone child stays recoverable per the discard contract.
+   */
+  async function waitForRecordingCancel({ forceKillOnTimeout, timeoutMessage }) {
+    const cancelPromise = cancelRecordingProcess();
+    const timeoutMs = getRecordingStopTimeoutMs(recordingStartTime);
+
+    let timeoutHandle;
+
+    try {
+      return await Promise.race([
+        cancelPromise,
+        new Promise((_, reject) => {
+          timeoutHandle = setTimeout(() => {
+            reject(new Error(timeoutMessage));
+          }, timeoutMs);
+        }),
+      ]);
+    } catch (error) {
+      const timeoutAction = resolveStopTimeoutAction({
+        forceKillOnTimeout,
+        errorMessage: error.message,
+        timeoutMessage,
+        hasRecordingProcess: Boolean(pythonProcess),
+      });
+
+      if (timeoutAction.shouldKillProcess && pythonProcess) {
+        try {
+          await terminateProcessBestEffort(pythonProcess);
+        } catch (killError) {
+          console.warn('Failed to kill recorder after cancel timeout:', killError.message);
+          try {
+            pythonProcess.kill();
+          } catch (_) {
+            // Ignore.
+          }
+        }
+      }
+
+      // Prefer the cancel promise settlement when the child exits after kill;
+      // otherwise surface the timeout (or the original stop-in-progress reject).
+      if (recordingCancelPromise && error.message === timeoutMessage) {
+        try {
+          return await Promise.race([
+            recordingCancelPromise,
+            new Promise((_, reject) => {
+              setTimeout(() => reject(error), 2000);
+            }),
+          ]);
+        } catch (_) {
+          throw error;
         }
       }
 
@@ -1539,10 +1603,11 @@ function createRecorderService(deps) {
         };
       }
 
+      // Only generation mismatch means *this* start was discarded. An unrelated
+      // in-flight cancel (matching generation) must surface as RECORDER_BUSY so
+      // the renderer does not treat it as a successful discard of a new Start.
       const startCancelledDuringAdmission = () => (
         attemptCancelGeneration !== startupCancelGeneration
-        || cancelCommandSent
-        || Boolean(recordingCancelPromise)
       );
 
       if (startCancelledDuringAdmission()) {
@@ -2106,26 +2171,38 @@ function createRecorderService(deps) {
         // Longer timeout for first recording (15s), shorter for subsequent (10s)
         const timeout = isFirstRecording ? 15000 : 10000;
         timeoutHandle = setTimeout(() => {
-          if (!recordingStarted) {
-            let errorMessage = startupFailureMessage || `Recording failed to start within ${timeout / 1000} seconds.`;
-
-            // Provide specific guidance based on what stage failed
-            if (!startupFailureMessage && progressStage === 'initializing') {
-              errorMessage += '\n\nThe audio system is taking longer than expected to initialize.';
-              errorMessage += '\nThis can happen on first launch. Please try again.';
-            } else if (!startupFailureMessage && progressStage === 'configuring') {
-              errorMessage += '\n\nAudio device configuration is taking too long.';
-              errorMessage += '\nCheck that your devices are properly connected and not in use.';
-            } else if (!startupFailureMessage && (progressStage === 'mic_opened' || progressStage === 'desktop_opened')) {
-              errorMessage += '\n\nAudio streams are opening but not fully ready.';
-              errorMessage += '\nTry selecting different audio devices or restarting the app.';
-            }
-
-            if (pythonProcess === proc && !proc.killed) {
-              proc.kill();
-            }
-            settleStartupFailure(errorMessage);
+          if (recordingStarted) {
+            return;
           }
+          // Discard already owns teardown — do not kill mid-tombstone or
+          // surface STARTUP_FAILED for a user-initiated cancel.
+          if (
+            recordingCancelPromise
+            || cancelCommandSent
+            || activeStartupCancelSettle
+            || attemptCancelGeneration !== startupCancelGeneration
+          ) {
+            return;
+          }
+
+          let errorMessage = startupFailureMessage || `Recording failed to start within ${timeout / 1000} seconds.`;
+
+          // Provide specific guidance based on what stage failed
+          if (!startupFailureMessage && progressStage === 'initializing') {
+            errorMessage += '\n\nThe audio system is taking longer than expected to initialize.';
+            errorMessage += '\nThis can happen on first launch. Please try again.';
+          } else if (!startupFailureMessage && progressStage === 'configuring') {
+            errorMessage += '\n\nAudio device configuration is taking too long.';
+            errorMessage += '\nCheck that your devices are properly connected and not in use.';
+          } else if (!startupFailureMessage && (progressStage === 'mic_opened' || progressStage === 'desktop_opened')) {
+            errorMessage += '\n\nAudio streams are opening but not fully ready.';
+            errorMessage += '\nTry selecting different audio devices or restarting the app.';
+          }
+
+          if (pythonProcess === proc && !proc.killed) {
+            proc.kill();
+          }
+          settleStartupFailure(errorMessage);
         }, timeout);
         } catch (error) {
           settleStartupFailure(error?.message || 'Failed to start recording.');
@@ -2170,7 +2247,10 @@ function createRecorderService(deps) {
 
     ipcMain.handle('cancel-recording', async (event) => {
       assertTrustedRendererSender(event);
-      return cancelRecordingProcess();
+      return waitForRecordingCancel({
+        forceKillOnTimeout: true,
+        timeoutMessage: 'Recording cancel timeout - process took too long to discard',
+      });
     });
   }
 
@@ -2183,6 +2263,7 @@ function createRecorderService(deps) {
     stopRecordingProcess,
     cancelRecordingProcess,
     waitForRecordingStop,
+    waitForRecordingCancel,
     parseRecordingStopResultFromStdout,
     discoverInterruptedCaptures,
     getRecordingRecoveryState,

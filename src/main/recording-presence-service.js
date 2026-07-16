@@ -65,6 +65,15 @@ function buildTrayView(captureState, now = Date.now()) {
     };
   }
 
+  if (state === 'cancelling') {
+    return {
+      title: '',
+      tooltip: 'AvaNevis - Cancelling recording',
+      statusLabel: 'Cancelling recording...',
+      trayImage: 'idle',
+    };
+  }
+
   return {
     title: '',
     tooltip: 'AvaNevis - Private meeting recorder and transcriber',
@@ -74,7 +83,10 @@ function buildTrayView(captureState, now = Date.now()) {
 }
 
 function isActiveCaptureState(state) {
-  return state === 'starting' || state === 'recording' || state === 'stopping';
+  return state === 'starting'
+    || state === 'recording'
+    || state === 'stopping'
+    || state === 'cancelling';
 }
 
 /**
@@ -418,7 +430,9 @@ function createRecordingPresenceService(deps) {
   function syncPlatformPresence() {
     const state = captureState.state;
     const showRecordingMarkers = state === 'starting' || state === 'recording';
-    const keepWindowsOverlay = showRecordingMarkers || state === 'stopping';
+    const keepWindowsOverlay = showRecordingMarkers
+      || state === 'stopping'
+      || state === 'cancelling';
 
     applyTrayPresentation();
 
