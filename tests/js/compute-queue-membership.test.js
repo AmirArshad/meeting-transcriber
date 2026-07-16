@@ -59,14 +59,18 @@ test('download-model and AI add-on setup handlers stay off the compute queue', (
   }
 
   const downloadModelSource = extractIpcHandlerSource(combined, 'download-model');
-  assert.match(
-    downloadModelSource,
-    /MODEL_DOWNLOAD_COMPUTE_BUSY|formatQueuedTranscriptionBusyMessage|hasPendingAiComputeWork/,
-    'download-model must fail fast when compute queue is busy',
+  assert.ok(
+    !/MODEL_DOWNLOAD_COMPUTE_BUSY/.test(downloadModelSource),
+    'download-model admits between jobs via gpuResourceActionQueue (Phase 2; no fail-fast busy reject)',
   );
   assert.ok(
     !/waitForAiComputeQueueIdle/.test(downloadModelSource),
-    'download-model must not use the 15-minute compute idle wait (PR2 fail-fast)',
+    'download-model must not use the 15-minute compute idle wait',
+  );
+  assert.match(
+    downloadModelSource,
+    /enqueueGpuResourceAction/,
+    'download-model must serialize on gpuResourceActionQueue between transcription jobs',
   );
   assert.match(
     downloadModelSource,
@@ -137,29 +141,26 @@ test('addon validation and guided transcription wall-clock wrappers appear in so
   assert.match(combined, /Speaker identification validation/);
   assert.match(combined, /Summary model validation/);
   assert.match(combined, /getGuidedTranscriptionComputeTimeoutMs/);
-  assert.match(combined, /GPU_RUNTIME_COMPUTE_BUSY|formatQueuedTranscriptionBusyMessage/);
+  // GPU/preload serialize on gpuResourceActionQueue between jobs (Phase 2).
+  // Busy fail-fast codes remain in renderer helpers for older error surfaces.
+  assert.match(combined, /enqueueGpuResourceAction/);
   assert.ok(diarizationValidate);
 });
 
-test('GPU runtime wait runs outside the wall-clock timer (inside enqueue)', () => {
-  // N1: waitForGpuRuntimeBeforeCompute must not burn transcription budgets.
+test('GPU-exclusive compute does not wait on a runtime action while holding the resource queue', () => {
   const combined = readCombinedMainProcessSource();
-  const transcribe = extractIpcHandlerSource(combined, 'transcribe-audio');
-  assert.ok(transcribe, 'missing transcribe-audio handler');
-  // Pattern: enqueue → await GPU wait → then runWallClockComputeAction
-  assert.match(
-    transcribe,
-    /enqueueAiComputeAction\(\s*async\s*\(\)\s*=>\s*\{[\s\S]*waitForGpuRuntimeBeforeCompute[\s\S]*runWallClockComputeAction/,
-    'transcribe-audio must await GPU idle before starting the wall-clock timer',
-  );
-  // GPU wait must not appear inside the wall-clock action body for transcribe-audio.
-  const wallClockBody = transcribe.match(/runWallClockComputeAction\(\{[\s\S]*?\n\s*\}\)/);
-  assert.ok(wallClockBody, 'expected runWallClockComputeAction call in transcribe-audio');
-  assert.doesNotMatch(
-    wallClockBody[0],
-    /waitForGpuRuntimeBeforeCompute/,
-    'GPU wait must not be charged against the transcription wall-clock budget',
-  );
+  for (const channel of ['transcribe-audio', 'transcribe-audio-with-speakers', 'diarize-transcript']) {
+    const handler = extractIpcHandlerSource(combined, channel);
+    assert.ok(handler, `missing ${channel} handler`);
+    assert.doesNotMatch(
+      handler,
+      /waitForGpuRuntimeBeforeCompute/,
+      `${channel} must rely on gpuResourceActionQueue ordering instead of waiting on a later queue owner`,
+    );
+  }
+
+  const meetingJob = extractTopLevelFunctionSource(combined, 'runMeetingTranscriptionJob');
+  assert.doesNotMatch(meetingJob, /waitForGpuRuntimeBeforeCompute/);
 });
 
 test('post-refactor GPU resource gate covers compute, preload, and GPU runtime actions', () => {
@@ -181,6 +182,15 @@ test('post-refactor GPU resource gate covers compute, preload, and GPU runtime a
     /gpuRuntimeActionPromise\s*=\s*enqueueGpuResourceAction/,
     'GPU runtime mutation must share the GPU resource queue',
   );
+});
+
+test('parked preload and GPU runtime actions re-check quit at resource admission', () => {
+  const combined = readCombinedMainProcessSource();
+  const downloadModel = extractIpcHandlerSource(combined, 'download-model');
+  const runGpuRuntimeAction = extractTopLevelFunctionSource(combined, 'runGpuRuntimeAction');
+  assert.match(downloadModel, /isQuitCommitted\(\)/);
+  assert.match(runGpuRuntimeAction, /isQuitCommitted\(\)/);
+  assert.match(combined, /gpuResourceActionQueue\.drain\(\)/);
 });
 
 test('destructive AI add-on removal reserves the shared GPU resource queue', () => {

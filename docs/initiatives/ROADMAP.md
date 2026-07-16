@@ -68,7 +68,7 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 
 ### Back-to-back recording & transcription queue
 
-**Next big product initiative** after v2.5.0. Unlock Start as soon as a recording is saved as a `pending` meeting; main owns per-meeting transcription jobs (`retry-transcription` shape) on the existing compute queue; Home Activity list replaces the single transcript box. Encode still blocks Start; transcription must not. **PR1 merged; PR2 (unlock + Activity) in progress on `feature/transcription-queue-pr2`.**
+**Next big product initiative** after v2.5.0. Unlock Start as soon as a recording is saved as a `pending` meeting; main owns per-meeting transcription jobs (`retry-transcription` shape) on the existing compute queue; Home Activity list replaces the single transcript box. Encode still blocks Start; transcription must not. **Phase 1 (PR1–PR3) and Phase 2 polish shipped** (Activity rename/delete + duration fix, auto-resume, toasts/tips, between-job GPU/preload).
 
 - Design (post-review): [FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md](FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md)
 - Before/after: [background-transcription-queue-before-after.svg](../architecture/background-transcription-queue-before-after.svg)

@@ -394,11 +394,37 @@
                 <div class="activity-header">
                   <h3>Activity</h3>
                 </div>
+                <div
+                  id="background-transcription-tip"
+                  class="background-transcription-tip"
+                  style="display: none"
+                  hidden
+                  role="status"
+                >
+                  <span id="background-transcription-tip-text"></span>
+                  <button type="button" id="background-transcription-tip-dismiss" class="btn btn-small">
+                    Got it
+                  </button>
+                </div>
+                <div
+                  id="soft-queue-depth-warning"
+                  class="soft-queue-depth-warning"
+                  style="display: none"
+                  hidden
+                  role="status"
+                ></div>
                 <div class="activity-list" id="activity-list" role="list">
                   <p class="placeholder" id="activity-empty">
                     Recordings you finish will appear here while they transcribe.
                   </p>
                 </div>
+                <div
+                  id="activity-completion-toast"
+                  class="activity-completion-toast"
+                  hidden
+                  role="status"
+                  aria-live="polite"
+                ></div>
               </div>
 
               <!-- Developer Console (collapsible drawer) -->

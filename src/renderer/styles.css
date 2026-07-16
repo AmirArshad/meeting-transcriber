@@ -1062,6 +1062,7 @@ select.device-select:disabled {
   border-radius: var(--r-md);
   border: 1px solid var(--hairline);
   overflow: hidden;
+  position: relative;
 }
 
 .resume-pending-banner {
@@ -1183,6 +1184,48 @@ select.device-select:disabled {
   display: flex;
   gap: 6px;
   flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.background-transcription-tip,
+.soft-queue-depth-warning {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 14px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.soft-queue-depth-warning {
+  display: block;
+  color: var(--text-primary);
+}
+
+.activity-completion-toast {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 14px;
+  padding: 10px 12px;
+  border-radius: var(--r-sm);
+  background: #1f6b52;
+  color: #fff;
+  font-size: 13px;
+  opacity: 0;
+  transform: translateY(8px);
+  pointer-events: none;
+  transition: opacity 160ms ease, transform 160ms ease;
+  z-index: 2;
+}
+
+.activity-completion-toast.is-visible {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 /* Legacy transcript panel selectors kept for History / copy helpers */

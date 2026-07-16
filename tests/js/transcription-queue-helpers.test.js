@@ -8,6 +8,7 @@ const {
   USER_CANCELLED_TRANSCRIPTION_ERROR,
   QUEUE_JOB_STATUSES,
   QUEUE_JOB_PHASES,
+  resolveMeetingDurationSeconds,
   createTranscriptionQueueState,
   upsertQueueJob,
   removeQueueJob,
@@ -55,6 +56,13 @@ test('shouldTerminateComputeJobsForMeeting scopes kill to the active meeting onl
   }), false);
 });
 
+test('resolveMeetingDurationSeconds prefers durationSeconds over display duration strings', () => {
+  assert.equal(resolveMeetingDurationSeconds({ durationSeconds: 95, duration: '1:35' }), 95);
+  assert.equal(resolveMeetingDurationSeconds({ duration: '1:35' }, 40), 40);
+  assert.equal(resolveMeetingDurationSeconds({ duration: 42 }), 42);
+  assert.equal(resolveMeetingDurationSeconds({}, 7), 7);
+});
+
 test('queue upsert/publish payload tracks active meeting, order, and busyCount', () => {
   const state = createTranscriptionQueueState();
   upsertQueueJob(state, {
@@ -84,10 +92,17 @@ test('queue upsert/publish payload tracks active meeting, order, and busyCount',
   assert.equal(payload.jobs[0].meetingId, 'meeting_a');
   assert.equal(payload.jobs[0].status, 'active');
   assert.equal(payload.jobs[0].phase, 'transcribing');
+  assert.equal(payload.jobs[0].percent, null);
   assert.equal(payload.jobs[1].meetingId, 'meeting_b');
   assert.equal(payload.seq, 1);
+  upsertQueueJob(state, { meetingId: 'meeting_a', percent: 42.6 });
+  const withPercent = buildTranscriptionQueueStatePayload(state);
+  assert.equal(withPercent.jobs[0].percent, 42.6);
+  upsertQueueJob(state, { meetingId: 'meeting_a', phase: 'transcribing', percent: null });
+  assert.equal(buildTranscriptionQueueStatePayload(state).jobs[0].percent, null);
+  assert.equal(withPercent.seq, 2);
   const payload2 = buildTranscriptionQueueStatePayload(state);
-  assert.equal(payload2.seq, 2, 'payload seq must be monotonic across publishes');
+  assert.equal(payload2.seq, 4, 'payload seq must be monotonic across publishes');
 });
 
 test('cancel flag marks queued jobs cancelled and is readable at head', () => {

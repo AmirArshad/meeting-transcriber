@@ -27,6 +27,9 @@ const {
   buildActivityRows,
   getActivityEmptyStateText,
   shouldApplyTranscriptionQueueState,
+  buildCompletionToastView,
+  buildBackgroundTranscriptionTipView,
+  buildSoftQueueDepthWarningView,
 } = window.transcriptionActivityHelpers;
 const {
   getRecoveryPromptView,
@@ -700,6 +703,8 @@ function renderActivityList() {
     activityListEl.appendChild(empty);
     updateResumePendingBanner();
     refreshIdleStatusPill();
+    updateSoftQueueDepthWarning();
+    updateBackgroundTranscriptionTip();
     return;
   }
 
@@ -739,6 +744,30 @@ function renderActivityList() {
     actions.className = 'activity-row-actions';
     const busy = activityActionBusyMeetingId === row.meetingId;
 
+    if (row.actions.includes('rename')) {
+      const renameBtn = document.createElement('button');
+      renameBtn.type = 'button';
+      renameBtn.className = 'btn btn-small';
+      renameBtn.textContent = 'Rename';
+      renameBtn.disabled = busy;
+      renameBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        void renameActivityMeeting(row.meetingId, row.title);
+      });
+      actions.appendChild(renameBtn);
+    }
+    if (row.actions.includes('delete')) {
+      const deleteBtn = document.createElement('button');
+      deleteBtn.type = 'button';
+      deleteBtn.className = 'btn btn-small';
+      deleteBtn.textContent = busy ? 'Deleting…' : 'Delete';
+      deleteBtn.disabled = busy;
+      deleteBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        void deleteActivityMeeting(row.meetingId, row.title);
+      });
+      actions.appendChild(deleteBtn);
+    }
     if (row.actions.includes('cancel')) {
       const cancelBtn = document.createElement('button');
       cancelBtn.type = 'button';
@@ -786,6 +815,135 @@ function renderActivityList() {
 
   updateResumePendingBanner();
   refreshIdleStatusPill();
+  updateSoftQueueDepthWarning();
+  updateBackgroundTranscriptionTip();
+}
+
+function applyMeetingTitleLocally(updated) {
+  if (!updated || !updated.id) {
+    return;
+  }
+  const idx = findMeetingIndexById(updated.id);
+  if (idx !== -1) {
+    meetings[idx] = { ...meetings[idx], title: updated.title };
+  }
+  if (currentRecordingMeeting && meetingIdsEqual(currentRecordingMeeting.id, updated.id)) {
+    currentRecordingMeeting = { ...currentRecordingMeeting, title: updated.title };
+  }
+  const queueJobs = Array.isArray(transcriptionQueueState.jobs) ? transcriptionQueueState.jobs : [];
+  transcriptionQueueState = {
+    ...transcriptionQueueState,
+    jobs: queueJobs.map((job) => (
+      String(job.meetingId) === String(updated.id)
+        ? { ...job, title: updated.title }
+        : job
+    )),
+  };
+  renderMeetingList();
+  renderActivityList();
+}
+
+async function renameActivityMeeting(meetingId, currentTitle = '') {
+  const id = String(meetingId || '').trim();
+  if (!id || activityActionBusyMeetingId) {
+    return;
+  }
+  const meeting = findMeetingById(id);
+  const initial = (meeting && meeting.title) || currentTitle || '';
+  const nextTitle = window.prompt('Rename meeting', initial);
+  if (nextTitle == null) {
+    return;
+  }
+  const cleaned = String(nextTitle).trim();
+  if (!cleaned || cleaned === initial) {
+    return;
+  }
+  activityActionBusyMeetingId = id;
+  renderActivityList();
+  try {
+    const updated = await window.electronAPI.updateMeeting(id, { title: cleaned });
+    if (!updated || !updated.title) {
+      throw new Error('Meeting was not found.');
+    }
+    applyMeetingTitleLocally(updated);
+    addLog(`Renamed meeting to "${updated.title}"`);
+  } catch (error) {
+    addLog(`Failed to rename meeting: ${error.message}`, 'error');
+    alert(`Failed to rename meeting: ${error.message}`);
+  } finally {
+    activityActionBusyMeetingId = null;
+    renderActivityList();
+  }
+}
+
+async function deleteActivityMeeting(meetingId, currentTitle = '') {
+  const id = String(meetingId || '').trim();
+  if (!id || activityActionBusyMeetingId) {
+    return;
+  }
+  activityActionBusyMeetingId = id;
+  renderActivityList();
+  try {
+    await deleteMeetingHandler(id, currentTitle);
+  } finally {
+    activityActionBusyMeetingId = null;
+    renderActivityList();
+  }
+}
+
+function showCompletionToast(job) {
+  const toastEl = document.getElementById('activity-completion-toast');
+  if (!toastEl || !job) {
+    return;
+  }
+  const view = buildCompletionToastView({
+    title: job.title,
+    durationSeconds: job.durationSeconds,
+  });
+  if (!view.visible) {
+    return;
+  }
+  toastEl.textContent = view.message;
+  toastEl.hidden = false;
+  toastEl.classList.add('is-visible');
+  clearTimeout(showCompletionToast._timer);
+  showCompletionToast._timer = setTimeout(() => {
+    toastEl.classList.remove('is-visible');
+    toastEl.hidden = true;
+  }, 4500);
+}
+
+function updateBackgroundTranscriptionTip() {
+  const tipEl = document.getElementById('background-transcription-tip');
+  const tipText = document.getElementById('background-transcription-tip-text');
+  const dismissBtn = document.getElementById('background-transcription-tip-dismiss');
+  if (!tipEl || !tipText) {
+    return;
+  }
+  const busy = Number(transcriptionQueueState.busyCount) || 0;
+  const view = buildBackgroundTranscriptionTipView(loadSettings());
+  const shouldShow = view.visible && busy > 0;
+  tipEl.hidden = !shouldShow;
+  tipEl.style.display = shouldShow ? 'flex' : 'none';
+  tipText.textContent = view.message;
+  if (dismissBtn && !dismissBtn.dataset.bound) {
+    dismissBtn.dataset.bound = '1';
+    dismissBtn.addEventListener('click', () => {
+      saveSettings({ backgroundTranscriptionTipSeen: true });
+      updateBackgroundTranscriptionTip();
+    });
+  }
+}
+
+function updateSoftQueueDepthWarning() {
+  const warningEl = document.getElementById('soft-queue-depth-warning');
+  if (!warningEl) {
+    return;
+  }
+  const view = buildSoftQueueDepthWarningView(transcriptionQueueState.busyCount);
+  warningEl.hidden = !view.visible;
+  warningEl.style.display = view.visible ? 'block' : 'none';
+  warningEl.textContent = view.message || '';
 }
 
 function applyTranscriptionQueueState(payload) {
@@ -1919,14 +2077,10 @@ function setupTitleEditors() {
     cancelBtnId: 'meeting-title-cancel',
     getMeeting: () => findMeetingById(currentMeetingId),
     onSaved: (updated) => {
-      // Update local cache and re-render meeting list to reflect the new title
-      const idx = findMeetingIndexById(updated.id);
-      if (idx !== -1) {
-        meetings[idx] = { ...meetings[idx], title: updated.title };
-      }
-      renderMeetingList();
-      if (currentRecordingMeeting && meetingIdsEqual(currentRecordingMeeting.id, updated.id)) {
-        currentRecordingMeeting = { ...currentRecordingMeeting, title: updated.title };
+      applyMeetingTitleLocally(updated);
+      const titleEl = document.getElementById('meeting-title');
+      if (titleEl && meetingIdsEqual(currentMeetingId, updated.id)) {
+        titleEl.textContent = updated.title;
       }
     },
   });
@@ -2139,6 +2293,9 @@ function setupEventListeners() {
         if (lastSeenTerminalTranscriptionStatuses.get(meetingId) !== status) {
           hasNewTerminalTransition = true;
           lastSeenTerminalTranscriptionStatuses.set(meetingId, status);
+          if (status === 'ready') {
+            showCompletionToast(job);
+          }
         }
       }
       for (const meetingId of [...lastSeenTerminalTranscriptionStatuses.keys()]) {
@@ -3760,7 +3917,7 @@ async function saveTranscript() {
 }
 
 // Delete meeting
-async function deleteMeetingHandler(meetingId) {
+async function deleteMeetingHandler(meetingId, fallbackTitle = '') {
   const idToDelete = meetingId != null ? String(meetingId) : currentMeetingId;
   if (!idToDelete) {
     console.error('No meeting ID to delete');
@@ -3768,12 +3925,9 @@ async function deleteMeetingHandler(meetingId) {
   }
 
   const meeting = findMeetingById(idToDelete);
-  if (!meeting) {
-    console.error('Meeting not found:', idToDelete);
-    return;
-  }
+  const displayTitle = (meeting && meeting.title) || String(fallbackTitle || '').trim() || idToDelete;
 
-  if (confirm(`Are you sure you want to delete "${meeting.title}"?`)) {
+  if (confirm(`Are you sure you want to delete "${displayTitle}"?`)) {
     try {
       // Release audio player file lock before deleting (Windows issue)
       const audioPlayer = document.getElementById('audio-player');
@@ -3783,7 +3937,7 @@ async function deleteMeetingHandler(meetingId) {
         audioPlayer.load();
       }
 
-      addLog(`Deleting meeting: ${meeting.title}...`);
+      addLog(`Deleting meeting: ${displayTitle}...`);
 
       // Small delay to ensure OS releases the file handle
       await new Promise(resolve => setTimeout(resolve, 300));

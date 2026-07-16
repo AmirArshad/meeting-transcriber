@@ -28,11 +28,13 @@
  * @param {Function} [deps.terminateProcessBestEffort]
  * @param {Function} [deps.beforeDeleteMeeting] - cancel/terminate queued transcription before delete
  * @param {Function} [deps.afterDeleteMeeting] - clear delete tombstone after meeting_manager delete settles
+ * @param {Function} [deps.afterUpdateMeeting] - sync queue job title after rename
  * @param {number} [deps.recordingsScanTimeoutMs]
  * @param {object} [deps.recordingsMaintenanceGate]
  */
 function createMeetingManagerClient(deps) {
   let recordingsScanInProgress = false;
+  const meetingUpdateTailById = new Map();
   const {
     app,
     path,
@@ -51,6 +53,7 @@ function createMeetingManagerClient(deps) {
     terminateProcessBestEffort = async (proc) => proc.kill(),
     beforeDeleteMeeting = async () => {},
     afterDeleteMeeting = async () => {},
+    afterUpdateMeeting = async () => {},
     recordingsScanTimeoutMs = 60 * 1000,
     unrefRecordingsScanTimeout = true,
     recordingsMaintenanceGate = null,
@@ -139,6 +142,20 @@ function createMeetingManagerClient(deps) {
       return recordingsMaintenanceGate.getOwner() === 'scan' || recordingsScanInProgress;
     }
     return recordingsScanInProgress;
+  }
+
+  function enqueueMeetingUpdate(meetingId, action) {
+    const id = String(meetingId);
+    const previous = meetingUpdateTailById.get(id) || Promise.resolve();
+    const run = previous.catch(() => {}).then(action);
+    const tail = run.catch(() => {});
+    meetingUpdateTailById.set(id, tail);
+    void tail.finally(() => {
+      if (meetingUpdateTailById.get(id) === tail) {
+        meetingUpdateTailById.delete(id);
+      }
+    });
+    return run;
   }
 
   /**
@@ -409,14 +426,14 @@ function createMeetingManagerClient(deps) {
         args.push('--title', updates.title);
       }
 
-      return new Promise((resolve, reject) => {
+      return enqueueMeetingUpdate(meetingId, () => new Promise((resolve, reject) => {
         const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', args), {
           cwd: pythonConfig.backendPath,
         });
 
         const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
 
-        python.on('close', (code) => {
+        python.on('close', async (code) => {
           try {
             processOutput.assertStdoutWithinLimit();
           } catch (error) {
@@ -431,6 +448,11 @@ function createMeetingManagerClient(deps) {
                 reject(new Error('Meeting was not found.'));
                 return;
               }
+              try {
+                await afterUpdateMeeting(updatedMeeting);
+              } catch (syncError) {
+                console.warn('afterUpdateMeeting failed:', syncError && syncError.message);
+              }
               resolve(updatedMeeting);
             } catch (e) {
               reject(new Error(`Failed to parse updated meeting: ${e.message}`));
@@ -441,7 +463,7 @@ function createMeetingManagerClient(deps) {
         });
 
         python.on('error', (err) => reject(err));
-      });
+      }));
     });
 
     ipcMain.handle('update-meeting-ai', async (event, payload) => {

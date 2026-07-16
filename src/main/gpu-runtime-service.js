@@ -46,6 +46,7 @@ const {
  * @param {Function} [deps.getBusyTranscriptionJobCount]
  * @param {Function} [deps.formatQueuedTranscriptionBusyMessage]
  * @param {Function} [deps.enqueueGpuResourceAction]
+ * @param {Function} [deps.isQuitCommitted]
  */
 function createGpuRuntimeService(deps) {
   const {
@@ -69,6 +70,7 @@ function createGpuRuntimeService(deps) {
       `Local AI work is still running. Finish or cancel it before ${action}.`
     ),
     enqueueGpuResourceAction = (action) => action(),
+    isQuitCommitted = () => false,
   } = deps;
 
   // Single shared CUDA status cache + GPU runtime lock. Never copy these lets
@@ -105,17 +107,15 @@ function createGpuRuntimeService(deps) {
   /**
    * Fresh CUDA probe for transcription preemption. UI `check-cuda` keeps a
    * 5-minute TTL; compute jobs must not silently skip preemptive CPU when that
-   * cache has expired. After waitForGpuRuntimeBeforeCompute, GPU actions are idle
-   * so a ~1–2s probe is safe relative to a 30–120 min transcription budget.
+   * cache has expired. The composition-root resource queue keeps GPU actions idle
+   * while this probe runs, so a ~1–2s probe is safe relative to the job budget.
    */
   async function resolveCudaStatusForTranscription({ registerProcess } = {}) {
     if (process.platform !== 'win32') {
       return null;
     }
-    if (hasInFlightGpuRuntimeAction()) {
-      // Prefer any in-memory status (even TTL-expired) over racing pip DLL rewrites.
-      return cachedCudaStatus && typeof cachedCudaStatus === 'object' ? cachedCudaStatus : null;
-    }
+    // Transcription enters through gpuResourceActionQueue, so any runtime action
+    // is either already finished or parked behind this probe. Always re-probe.
     return checkCudaRuntimeStatus({ registerProcess });
   }
 
@@ -160,36 +160,33 @@ function createGpuRuntimeService(deps) {
   }
 
   async function runGpuRuntimeAction(actionFn) {
+    // Transcription jobs serialize through gpuResourceActionQueue, so installs
+    // run between compute jobs (Phase 2) without overlapping loaded CUDA DLLs.
     if (gpuRuntimeActionPromise) {
       const error = new Error('A GPU runtime action is already in progress. Please wait for it to finish.');
       error.code = 'GPU_RUNTIME_ACTION_BUSY';
       return Promise.reject(error);
     }
 
-    // Reject immediately when compute is busy so pip cannot race loaded CUDA DLLs.
-    // With a real transcription queue, a 15-minute idle wait is routinely exceedable (PR2).
-    if (hasPendingAiComputeWork()) {
-      const busyCount = getBusyTranscriptionJobCount();
-      const busyError = new Error(formatQueuedTranscriptionBusyMessage(
-        busyCount,
-        'installing or repairing the GPU runtime',
-      ));
-      busyError.code = 'GPU_RUNTIME_COMPUTE_BUSY';
-      throw busyError;
-    }
-
-    if (gpuRuntimeActionPromise) {
-      const error = new Error('A GPU runtime action is already in progress. Please wait for it to finish.');
-      error.code = 'GPU_RUNTIME_ACTION_BUSY';
+    if (isQuitCommitted()) {
+      const error = new Error('Cannot change the GPU runtime while the app is quitting.');
+      error.code = 'QUIT_IN_PROGRESS';
       return Promise.reject(error);
     }
 
-    gpuRuntimeActionPromise = enqueueGpuResourceAction(() => runWallClockComputeAction({
-      action: (registerProcess) => actionFn(registerProcess),
-      timeoutMs: GPU_RUNTIME_ACTION_TIMEOUT_MS,
-      label: 'GPU runtime setup',
-      terminateProcess: terminateProcessBestEffort,
-    }))
+    gpuRuntimeActionPromise = enqueueGpuResourceAction(() => {
+      if (isQuitCommitted()) {
+        const error = new Error('GPU runtime setup was skipped because the app is quitting.');
+        error.code = 'QUIT_IN_PROGRESS';
+        throw error;
+      }
+      return runWallClockComputeAction({
+        action: (registerProcess) => actionFn(registerProcess),
+        timeoutMs: GPU_RUNTIME_ACTION_TIMEOUT_MS,
+        label: 'GPU runtime setup',
+        terminateProcess: terminateProcessBestEffort,
+      });
+    })
       .finally(() => {
         gpuRuntimeActionPromise = null;
       });

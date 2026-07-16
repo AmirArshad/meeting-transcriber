@@ -362,6 +362,7 @@ function hasInFlightAiWork() {
   return (aiAddonIpc ? aiAddonIpc.hasInFlightAiAddonSetup() : false)
     || (summaryService ? summaryService.hasActiveSummaryGeneration() : false)
     || aiComputeActionQueue.hasPendingWork()
+    || gpuResourceActionQueue.hasPendingWork()
     || (gpuRuntimeService ? gpuRuntimeService.hasInFlightGpuRuntimeAction() : false);
 }
 
@@ -393,6 +394,9 @@ function abortInFlightAiSetup() {
 
 function abortInFlightAiWork() {
   abortInFlightAiSetup();
+  if (transcriptionService && typeof transcriptionService.abortModelDownloadForQuit === 'function') {
+    transcriptionService.abortModelDownloadForQuit();
+  }
   if (summaryService) {
     summaryService.abortActiveSummaryForQuit('Summary generation was canceled because the app is quitting.');
   }
@@ -462,6 +466,7 @@ async function drainAiWorkBeforeQuit() {
     if (gpuRuntimeService) {
       drains.push(gpuRuntimeService.waitForGpuRuntimeIdle());
     }
+    drains.push(gpuResourceActionQueue.drain());
     if (drains.length === 0) {
       return;
     }
@@ -586,6 +591,17 @@ const meetingManagerClient = registerMeetingManagerClient(ipcMain, {
     }
     return { cleared: false, deferred: false };
   },
+  afterUpdateMeeting: async (updatedMeeting) => {
+    if (
+      transcriptionService
+      && typeof transcriptionService.syncMeetingTitleToQueue === 'function'
+      && updatedMeeting
+      && updatedMeeting.id
+    ) {
+      return transcriptionService.syncMeetingTitleToQueue(updatedMeeting.id, updatedMeeting.title);
+    }
+    return { updated: false };
+  },
   isRecorderBusy: () => {
     const state = recorderService && recorderService.getQuitInterceptInputs();
     return Boolean(state && (
@@ -595,6 +611,15 @@ const meetingManagerClient = registerMeetingManagerClient(ipcMain, {
   onScanSucceeded: () => {
     if (recorderService && typeof recorderService.notifyScanImportSucceeded === 'function') {
       recorderService.notifyScanImportSucceeded();
+    }
+    // Phase 2: auto-resume durable pending after scan/import (never failed).
+    if (transcriptionService && typeof transcriptionService.resumePendingTranscriptions === 'function') {
+      void transcriptionService.resumePendingTranscriptions({ reason: 'post-scan' }).catch((error) => {
+        console.warn(
+          'Auto-resume after scan failed:',
+          (error && error.message) || error,
+        );
+      });
     }
   },
 });
@@ -673,6 +698,7 @@ gpuRuntimeService = createGpuRuntimeService({
   ),
   formatQueuedTranscriptionBusyMessage,
   enqueueGpuResourceAction: gpuResourceActionQueue.enqueue,
+  isQuitCommitted,
 });
 gpuRuntimeService.registerIpc(ipcMain);
 const {
@@ -698,12 +724,6 @@ aiAddonIpc = createAiAddonIpc({
   buildSummaryArgs,
   summarizeDiarizationError,
   summarizeSummaryValidationError,
-  hasInFlightGpuRuntimeAction: () => (
-    gpuRuntimeService ? gpuRuntimeService.hasInFlightGpuRuntimeAction() : false
-  ),
-  waitForGpuRuntimeIdle: () => (
-    gpuRuntimeService ? gpuRuntimeService.waitForGpuRuntimeIdle() : Promise.resolve()
-  ),
   hasPendingAiComputeWork: () => aiComputeActionQueue.hasPendingWork(),
   hasPendingGpuResourceWork: () => gpuResourceActionQueue.hasPendingWork(),
   enqueueGpuExclusiveRemovalAction,
@@ -730,12 +750,6 @@ transcriptionService = createTranscriptionService({
   getBackendModuleArgs,
   enqueueAiComputeAction: enqueueGpuExclusiveComputeAction,
   waitForAiComputeQueueIdle,
-  hasInFlightGpuRuntimeAction: () => (
-    gpuRuntimeService ? gpuRuntimeService.hasInFlightGpuRuntimeAction() : false
-  ),
-  waitForGpuRuntimeIdle: () => (
-    gpuRuntimeService ? gpuRuntimeService.waitForGpuRuntimeIdle() : Promise.resolve()
-  ),
   enqueueGpuResourceAction: gpuResourceActionQueue.enqueue,
   hasPendingAiComputeWork: () => aiComputeActionQueue.hasPendingWork(),
   getCachedCudaStatus,
@@ -791,12 +805,6 @@ summaryService = createSummaryService({
   terminateProcessBestEffort,
   summarizeSummaryValidationError,
   isQuitCommitted,
-  hasInFlightGpuRuntimeAction: () => (
-    gpuRuntimeService ? gpuRuntimeService.hasInFlightGpuRuntimeAction() : false
-  ),
-  waitForGpuRuntimeIdle: () => (
-    gpuRuntimeService ? gpuRuntimeService.waitForGpuRuntimeIdle() : Promise.resolve()
-  ),
 });
 summaryService.registerIpc(ipcMain);
 
