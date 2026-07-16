@@ -94,7 +94,7 @@ _No major product initiative in flight after v2.6.0. See Planned below and root 
 
 Longer horizon, lower priority:
 
-- **Linux support.** Native build for Linux desktops. Reference: [LINUX_SUPPORT.md](LINUX_SUPPORT.md).
+- **Linux support.** Native Linux desktop build (AppImage + `.deb`); plan refreshed post-v2.6.0 for spool capture, Activity transcription queue, and local AI catalog pins. Reference: [LINUX_SUPPORT.md](LINUX_SUPPORT.md).
 - **Setup wizard.** Guided first-time configuration. Reference: [FEATURE_SETUP_WIZARD.md](FEATURE_SETUP_WIZARD.md).
 - **Optional cloud sync** to user-owned cloud storage (never to a hosted backend).
 - **Companion mobile apps** (iOS / Android) for remote review.
