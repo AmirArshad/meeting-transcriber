@@ -49,6 +49,7 @@ const {
   trimSessionReadyJobs,
   formatQueuedTranscriptionBusyMessage,
   buildTranscriptionQueueStatePayload,
+  resolveMeetingDurationSeconds,
   buildMeetingTranscriptMarkdown,
   buildSpeakerSidecarPayload,
   buildGuidedDiarizationAiMetadata,
@@ -428,6 +429,23 @@ function createTranscriptionService(deps) {
 
   function getTranscriptionQueueStatePayload() {
     return buildTranscriptionQueueStatePayload(transcriptionQueueState);
+  }
+
+  /**
+   * Patch an in-memory Activity job title after History/Activity rename.
+   * Metadata remains source of truth; queue title is a cache for Home.
+   */
+  function syncMeetingTitleToQueue(meetingId, title) {
+    const id = String(meetingId || '').trim();
+    if (!id || !transcriptionQueueState.jobsByMeetingId.has(id)) {
+      return { updated: false };
+    }
+    upsertQueueJob(transcriptionQueueState, {
+      meetingId: id,
+      title: String(title || '').trim(),
+    });
+    publishTranscriptionQueueState();
+    return { updated: true };
   }
 
   function getJobEpoch(meetingId) {
@@ -1103,7 +1121,7 @@ function createTranscriptionService(deps) {
         upsertQueueJob(transcriptionQueueState, {
           meetingId,
           title: meeting.title || '',
-          durationSeconds: Number(meeting.duration) || 0,
+          durationSeconds: resolveMeetingDurationSeconds(meeting),
         });
         publishTranscriptionQueueState();
 
@@ -1165,6 +1183,14 @@ function createTranscriptionService(deps) {
                   onProgressLine: (line) => {
                     const progressEvent = parseAiBackendProgressLine(line, 'diarization');
                     if (progressEvent) {
+                      if (Number.isFinite(Number(progressEvent.percent))) {
+                        upsertQueueJob(transcriptionQueueState, {
+                          meetingId,
+                          percent: progressEvent.percent,
+                          phase: QUEUE_JOB_PHASES.identifying_speakers,
+                        });
+                        publishTranscriptionQueueState();
+                      }
                       sendToRenderer('diarization-progress', progressEvent);
                     } else if (line.trim()) {
                       sendToRenderer('transcription-progress', `${redactSensitiveText(line)}\n`);
@@ -1637,7 +1663,7 @@ function createTranscriptionService(deps) {
         language: normalizedLanguage,
         modelSize: normalizedModel,
         title: savedMeeting.title || '',
-        durationSeconds: Number(savedMeeting.duration) || Number(duration) || 0,
+        durationSeconds: resolveMeetingDurationSeconds(savedMeeting, duration),
         jobLabel: 'Transcription',
       });
       void jobPromise.catch((jobError) => {
@@ -1713,7 +1739,7 @@ function createTranscriptionService(deps) {
           language: normalizedLanguage,
           modelSize: normalizedModel,
           title: meeting.title || '',
-          durationSeconds: Number(meeting.duration) || 0,
+          durationSeconds: resolveMeetingDurationSeconds(meeting),
           jobLabel: 'Transcription',
         });
         enqueued.push(meetingId);
@@ -1792,18 +1818,9 @@ function createTranscriptionService(deps) {
       if (activeModelDownload) {
         throw new Error('A Whisper model download is already in progress. Cancel it or wait for it to finish.');
       }
-      // Stay off the compute queue. Fail fast when transcription/compute is busy —
-      // a 15-minute idle wait is routinely exceedable with a real queue (PR2).
-      if (hasPendingAiComputeWork()) {
-        const busyCount = getBusyTranscriptionJobCount();
-        const error = new Error(formatQueuedTranscriptionBusyMessage(
-          busyCount,
-          'downloading the Whisper model',
-        ));
-        error.code = 'MODEL_DOWNLOAD_COMPUTE_BUSY';
-        throw error;
-      }
-
+      // Stay off the compute queue. Serialize with active transcription via
+      // gpuResourceActionQueue so downloads run between jobs (Phase 2) without
+      // overlapping loaded CUDA DLLs or using a multi-minute idle wait.
       const idleController = new AbortController();
       activeModelDownload = { process: null, controller: idleController, model };
 
@@ -2454,7 +2471,7 @@ function createTranscriptionService(deps) {
         language: normalizedLanguage,
         modelSize: normalizedModel,
         title: meeting.title || '',
-        durationSeconds: Number(meeting.duration) || 0,
+        durationSeconds: resolveMeetingDurationSeconds(meeting),
         speakerCount: options.speakerCount,
         clearPriorDiarization: true,
         jobLabel: 'Transcription retry',
@@ -2483,6 +2500,7 @@ function createTranscriptionService(deps) {
     getBusyTranscriptionJobCount,
     getTranscriptionQueueStatePayload,
     publishTranscriptionQueueState,
+    syncMeetingTitleToQueue,
     registerIpc,
   };
 }

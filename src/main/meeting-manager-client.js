@@ -28,6 +28,7 @@
  * @param {Function} [deps.terminateProcessBestEffort]
  * @param {Function} [deps.beforeDeleteMeeting] - cancel/terminate queued transcription before delete
  * @param {Function} [deps.afterDeleteMeeting] - clear delete tombstone after meeting_manager delete settles
+ * @param {Function} [deps.afterUpdateMeeting] - sync queue job title after rename
  * @param {number} [deps.recordingsScanTimeoutMs]
  * @param {object} [deps.recordingsMaintenanceGate]
  */
@@ -51,6 +52,7 @@ function createMeetingManagerClient(deps) {
     terminateProcessBestEffort = async (proc) => proc.kill(),
     beforeDeleteMeeting = async () => {},
     afterDeleteMeeting = async () => {},
+    afterUpdateMeeting = async () => {},
     recordingsScanTimeoutMs = 60 * 1000,
     unrefRecordingsScanTimeout = true,
     recordingsMaintenanceGate = null,
@@ -416,7 +418,7 @@ function createMeetingManagerClient(deps) {
 
         const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
 
-        python.on('close', (code) => {
+        python.on('close', async (code) => {
           try {
             processOutput.assertStdoutWithinLimit();
           } catch (error) {
@@ -430,6 +432,11 @@ function createMeetingManagerClient(deps) {
               if (!updatedMeeting) {
                 reject(new Error('Meeting was not found.'));
                 return;
+              }
+              try {
+                await afterUpdateMeeting(updatedMeeting);
+              } catch (syncError) {
+                console.warn('afterUpdateMeeting failed:', syncError && syncError.message);
               }
               resolve(updatedMeeting);
             } catch (e) {

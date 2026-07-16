@@ -88,13 +88,13 @@ Diagram: `docs/architecture/background-transcription-queue-before-after.svg`
 
 **Phase 2 (polish) — after Phase 1 ships**
 
-- [ ] [Risk: Medium] Auto-resume `pending` post recordings-maintenance scan (never auto-resume `failed`).
-- [ ] [Risk: Low] Completion toasts (duration-based copy); first-run tip; soft queue-depth warning.
-- [ ] [Risk: Medium] Between-job GPU/preload admission if fail-fast is too painful.
-- [ ] [Risk: Low] Richer phase text / optional percent on active row.
-- [ ] [Risk: Medium] Activity duration: use `durationSeconds` (not the display `duration` string like `1:23`) when projecting queue/durable rows — smoke showed every row as `0s`.
-- [ ] [Risk: Medium] Bidirectional title sync: rename from History **or** Activity updates shared meeting metadata, patches in-memory queue job titles, and re-renders both surfaces (today queue rows keep the admit-time snapshot).
-- [ ] [Risk: Medium] Activity row actions: rename + delete from Home Activity via the same `update-meeting` / `delete-meeting` paths as History (same delete-while-queued/active guards). Delete removes the meeting from History and drops/cancels the Activity row; rename is visible in both places immediately.
+- [x] [Risk: Medium] Auto-resume `pending` post recordings-maintenance scan (never auto-resume `failed`).
+- [x] [Risk: Low] Completion toasts (duration-based copy); first-run tip; soft queue-depth warning.
+- [x] [Risk: Medium] Between-job GPU/preload admission if fail-fast is too painful.
+- [x] [Risk: Low] Richer phase text / optional percent on active row.
+- [x] [Risk: Medium] Activity duration: use `durationSeconds` (not the display `duration` string like `1:23`) when projecting queue/durable rows — smoke showed every row as `0s`.
+- [x] [Risk: Medium] Bidirectional title sync: rename from History **or** Activity updates shared meeting metadata, patches in-memory queue job titles, and re-renders both surfaces (today queue rows keep the admit-time snapshot).
+- [x] [Risk: Medium] Activity row actions: rename + delete from Home Activity via the same `update-meeting` / `delete-meeting` paths as History (same delete-while-queued/active guards). Delete removes the meeting from History and drops/cancels the Activity row; rename is visible in both places immediately.
 
 **Cut until asked:** tray “Transcribing N”; inline Home transcript drawer; teaching button label; encode time estimates.
 

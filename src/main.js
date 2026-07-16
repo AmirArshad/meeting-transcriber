@@ -586,6 +586,17 @@ const meetingManagerClient = registerMeetingManagerClient(ipcMain, {
     }
     return { cleared: false, deferred: false };
   },
+  afterUpdateMeeting: async (updatedMeeting) => {
+    if (
+      transcriptionService
+      && typeof transcriptionService.syncMeetingTitleToQueue === 'function'
+      && updatedMeeting
+      && updatedMeeting.id
+    ) {
+      return transcriptionService.syncMeetingTitleToQueue(updatedMeeting.id, updatedMeeting.title);
+    }
+    return { updated: false };
+  },
   isRecorderBusy: () => {
     const state = recorderService && recorderService.getQuitInterceptInputs();
     return Boolean(state && (
@@ -595,6 +606,15 @@ const meetingManagerClient = registerMeetingManagerClient(ipcMain, {
   onScanSucceeded: () => {
     if (recorderService && typeof recorderService.notifyScanImportSucceeded === 'function') {
       recorderService.notifyScanImportSucceeded();
+    }
+    // Phase 2: auto-resume durable pending after scan/import (never failed).
+    if (transcriptionService && typeof transcriptionService.resumePendingTranscriptions === 'function') {
+      void transcriptionService.resumePendingTranscriptions({ reason: 'post-scan' }).catch((error) => {
+        console.warn(
+          'Auto-resume after scan failed:',
+          (error && error.message) || error,
+        );
+      });
     }
   },
 });

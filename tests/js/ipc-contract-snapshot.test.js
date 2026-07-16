@@ -220,6 +220,7 @@ const EXPECTED_MAIN_PROCESS_HELPER_EXPORTS = [
   'resolveCudaInstalledProfile',
   'resolveExistingRealPath',
   'resolveExternalUrl',
+  'resolveMeetingDurationSeconds',
   'resolveStopTimeoutAction',
   'resolveTranscriptionAudioFile',
   'runGuidedTranscriptionProcess',

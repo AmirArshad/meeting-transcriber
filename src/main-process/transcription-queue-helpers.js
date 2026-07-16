@@ -49,6 +49,23 @@ function createTranscriptionQueueState() {
   };
 }
 
+/**
+ * Prefer numeric `durationSeconds` from meeting metadata. Never coerce the
+ * display `duration` string (`"1:23"`) via Number() — that becomes NaN → 0s.
+ */
+function resolveMeetingDurationSeconds(meeting = {}, fallback = 0) {
+  const fromSeconds = Number(meeting && meeting.durationSeconds);
+  if (Number.isFinite(fromSeconds) && fromSeconds >= 0) {
+    return fromSeconds;
+  }
+  const rawDuration = meeting && meeting.duration;
+  if (typeof rawDuration === 'number' && Number.isFinite(rawDuration) && rawDuration >= 0) {
+    return rawDuration;
+  }
+  const fallbackNum = Number(fallback);
+  return Number.isFinite(fallbackNum) && fallbackNum >= 0 ? fallbackNum : 0;
+}
+
 function upsertQueueJob(state, jobPatch = {}) {
   const meetingId = String(jobPatch.meetingId || '').trim();
   if (!meetingId) {
@@ -61,12 +78,17 @@ function upsertQueueJob(state, jobPatch = {}) {
     phase: QUEUE_JOB_PHASES.queued,
     title: '',
     durationSeconds: 0,
+    percent: null,
   };
   const next = {
     ...existing,
     ...jobPatch,
     meetingId,
   };
+  if (Object.prototype.hasOwnProperty.call(jobPatch, 'percent')) {
+    const pct = Number(jobPatch.percent);
+    next.percent = Number.isFinite(pct) ? Math.max(0, Math.min(100, pct)) : null;
+  }
   state.jobsByMeetingId.set(meetingId, next);
   if (!state.jobOrder.includes(meetingId)) {
     state.jobOrder.push(meetingId);
@@ -256,13 +278,23 @@ function buildTranscriptionQueueStatePayload(state) {
   const jobs = state.jobOrder
     .map((meetingId) => state.jobsByMeetingId.get(meetingId))
     .filter(Boolean)
-    .map((job) => ({
-      meetingId: job.meetingId,
-      status: job.status,
-      phase: job.phase || null,
-      title: job.title || '',
-      durationSeconds: Number(job.durationSeconds) || 0,
-    }));
+    .map((job) => {
+      let percent = null;
+      if (job.percent != null && job.percent !== '') {
+        const pct = Number(job.percent);
+        if (Number.isFinite(pct)) {
+          percent = pct;
+        }
+      }
+      return {
+        meetingId: job.meetingId,
+        status: job.status,
+        phase: job.phase || null,
+        title: job.title || '',
+        durationSeconds: Number(job.durationSeconds) || 0,
+        percent,
+      };
+    });
 
   const nextSeq = (Number(state.stateSeq) || 0) + 1;
   state.stateSeq = nextSeq;
@@ -369,6 +401,7 @@ module.exports = {
   SESSION_READY_JOB_CAP,
   QUEUE_JOB_STATUSES,
   QUEUE_JOB_PHASES,
+  resolveMeetingDurationSeconds,
   createTranscriptionQueueState,
   upsertQueueJob,
   removeQueueJob,

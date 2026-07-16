@@ -1,5 +1,7 @@
 (function attachTranscriptionActivityHelpers(root) {
   const SESSION_READY_CAP = 5;
+  const SOFT_QUEUE_DEPTH_WARNING = 3;
+  const DEFAULT_MEETING_TITLE_RE = /^Meeting \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/;
 
   const ACTIVITY_CHIP_LABELS = Object.freeze({
     queued: 'Queued',
@@ -11,6 +13,19 @@
     failed: 'Failed',
     cancelled: 'Cancelled',
   });
+
+  function resolveMeetingDurationSeconds(meeting = {}, fallback = 0) {
+    const fromSeconds = Number(meeting && meeting.durationSeconds);
+    if (Number.isFinite(fromSeconds) && fromSeconds >= 0) {
+      return fromSeconds;
+    }
+    const rawDuration = meeting && meeting.duration;
+    if (typeof rawDuration === 'number' && Number.isFinite(rawDuration) && rawDuration >= 0) {
+      return rawDuration;
+    }
+    const fallbackNum = Number(fallback);
+    return Number.isFinite(fallbackNum) && fallbackNum >= 0 ? fallbackNum : 0;
+  }
 
   function formatDurationLabel(durationSeconds) {
     const total = Math.max(0, Math.floor(Number(durationSeconds) || 0));
@@ -26,9 +41,18 @@
     return `${seconds}s`;
   }
 
+  function formatPercentLabel(percent) {
+    const pct = Number(percent);
+    if (!Number.isFinite(pct)) {
+      return '';
+    }
+    return `${Math.round(Math.max(0, Math.min(100, pct)))}%`;
+  }
+
   function getActivityChipLabel(job = {}) {
     const status = String(job.status || '');
     const phase = String(job.phase || '');
+    const percentLabel = formatPercentLabel(job.percent);
     if (status === 'queued' || phase === 'queued') {
       return ACTIVITY_CHIP_LABELS.queued;
     }
@@ -42,7 +66,9 @@
       return ACTIVITY_CHIP_LABELS.ready;
     }
     if (phase === 'identifying_speakers') {
-      return ACTIVITY_CHIP_LABELS.identifying_speakers;
+      return percentLabel
+        ? `${ACTIVITY_CHIP_LABELS.identifying_speakers} · ${percentLabel}`
+        : ACTIVITY_CHIP_LABELS.identifying_speakers;
     }
     if (phase === 'waiting_resource') {
       return ACTIVITY_CHIP_LABELS.waiting_resource;
@@ -51,7 +77,9 @@
       return ACTIVITY_CHIP_LABELS.persisting;
     }
     if (status === 'active' || phase === 'transcribing') {
-      return ACTIVITY_CHIP_LABELS.transcribing;
+      return percentLabel
+        ? `${ACTIVITY_CHIP_LABELS.transcribing} · ${percentLabel}`
+        : ACTIVITY_CHIP_LABELS.transcribing;
     }
     return ACTIVITY_CHIP_LABELS.queued;
   }
@@ -139,6 +167,58 @@
     }).length;
   }
 
+  function looksLikeDefaultMeetingTitle(title) {
+    return DEFAULT_MEETING_TITLE_RE.test(String(title || '').trim());
+  }
+
+  function buildCompletionToastView({ title = '', durationSeconds = 0 } = {}) {
+    const cleanTitle = String(title || '').trim();
+    if (cleanTitle && !looksLikeDefaultMeetingTitle(cleanTitle)) {
+      return {
+        visible: true,
+        message: `"${cleanTitle}" is ready`,
+      };
+    }
+    const durationLabel = formatDurationLabel(durationSeconds);
+    if (Number(durationSeconds) > 0) {
+      return {
+        visible: true,
+        message: `Your ${durationLabel} recording is ready`,
+      };
+    }
+    return {
+      visible: true,
+      message: cleanTitle ? `"${cleanTitle}" is ready` : 'Recording is ready',
+    };
+  }
+
+  function shouldShowBackgroundTranscriptionTip(settings = {}) {
+    return !settings.backgroundTranscriptionTipSeen;
+  }
+
+  function buildBackgroundTranscriptionTipView(settings = {}) {
+    if (!shouldShowBackgroundTranscriptionTip(settings)) {
+      return { visible: false, message: '', dismissLabel: '' };
+    }
+    return {
+      visible: true,
+      message: 'You can start another recording while this one transcribes.',
+      dismissLabel: 'Got it',
+    };
+  }
+
+  function buildSoftQueueDepthWarningView(busyCount, threshold = SOFT_QUEUE_DEPTH_WARNING) {
+    const count = Math.max(0, Number(busyCount) || 0);
+    const limit = Math.max(1, Number(threshold) || SOFT_QUEUE_DEPTH_WARNING);
+    if (count < limit) {
+      return { visible: false, message: '' };
+    }
+    return {
+      visible: true,
+      message: `${count} recordings are queued for transcription. You can keep recording — or cancel some from Activity.`,
+    };
+  }
+
   function activityRowFromQueueJob(job) {
     if (!job || !job.meetingId) {
       return null;
@@ -147,7 +227,7 @@
     const chip = getActivityChipLabel(job);
     const title = String(job.title || 'Untitled meeting').trim() || 'Untitled meeting';
     const durationLabel = formatDurationLabel(job.durationSeconds);
-    const actions = [];
+    const actions = ['rename', 'delete'];
     if (status === 'queued' || status === 'active') {
       actions.push('cancel');
     }
@@ -164,6 +244,7 @@
       chip,
       status,
       phase: job.phase || null,
+      percent: Number.isFinite(Number(job.percent)) ? Number(job.percent) : null,
       source: 'queue',
       actions,
     };
@@ -178,14 +259,17 @@
       return null;
     }
     const chip = status === 'failed' ? ACTIVITY_CHIP_LABELS.failed : ACTIVITY_CHIP_LABELS.queued;
-    const actions = status === 'failed' ? ['retry', 'open'] : ['cancel', 'open'];
+    const actions = status === 'failed'
+      ? ['rename', 'delete', 'retry', 'open']
+      : ['rename', 'delete', 'cancel', 'open'];
     return {
       meetingId: String(meeting.id),
       title: String(meeting.title || 'Untitled meeting').trim() || 'Untitled meeting',
-      durationLabel: formatDurationLabel(meeting.duration),
+      durationLabel: formatDurationLabel(resolveMeetingDurationSeconds(meeting)),
       chip,
       status: status === 'failed' ? 'failed' : 'queued',
       phase: status === 'pending' ? 'queued' : 'failed',
+      percent: null,
       source: 'durable',
       actions,
     };
@@ -265,8 +349,11 @@
 
   const helpers = {
     SESSION_READY_CAP,
+    SOFT_QUEUE_DEPTH_WARNING,
     ACTIVITY_CHIP_LABELS,
+    resolveMeetingDurationSeconds,
     formatDurationLabel,
+    formatPercentLabel,
     getActivityChipLabel,
     countBusyTranscriptionJobs,
     shouldApplyTranscriptionQueueState,
@@ -274,6 +361,11 @@
     getRecordButtonLabel,
     buildResumePendingBannerView,
     countResumablePendingMeetings,
+    looksLikeDefaultMeetingTitle,
+    buildCompletionToastView,
+    shouldShowBackgroundTranscriptionTip,
+    buildBackgroundTranscriptionTipView,
+    buildSoftQueueDepthWarningView,
     buildActivityRows,
     getActivityEmptyStateText,
     formatQueuedTranscriptionBusyMessage,

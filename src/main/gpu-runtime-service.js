@@ -160,24 +160,8 @@ function createGpuRuntimeService(deps) {
   }
 
   async function runGpuRuntimeAction(actionFn) {
-    if (gpuRuntimeActionPromise) {
-      const error = new Error('A GPU runtime action is already in progress. Please wait for it to finish.');
-      error.code = 'GPU_RUNTIME_ACTION_BUSY';
-      return Promise.reject(error);
-    }
-
-    // Reject immediately when compute is busy so pip cannot race loaded CUDA DLLs.
-    // With a real transcription queue, a 15-minute idle wait is routinely exceedable (PR2).
-    if (hasPendingAiComputeWork()) {
-      const busyCount = getBusyTranscriptionJobCount();
-      const busyError = new Error(formatQueuedTranscriptionBusyMessage(
-        busyCount,
-        'installing or repairing the GPU runtime',
-      ));
-      busyError.code = 'GPU_RUNTIME_COMPUTE_BUSY';
-      throw busyError;
-    }
-
+    // Transcription jobs serialize through gpuResourceActionQueue, so installs
+    // run between compute jobs (Phase 2) without overlapping loaded CUDA DLLs.
     if (gpuRuntimeActionPromise) {
       const error = new Error('A GPU runtime action is already in progress. Please wait for it to finish.');
       error.code = 'GPU_RUNTIME_ACTION_BUSY';
