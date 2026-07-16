@@ -96,6 +96,8 @@ Diagram: `docs/architecture/background-transcription-queue-before-after.svg`
 - [x] [Risk: Medium] Bidirectional title sync: rename from History **or** Activity updates shared meeting metadata, patches in-memory queue job titles, and re-renders both surfaces (today queue rows keep the admit-time snapshot).
 - [x] [Risk: Medium] Activity row actions: rename + delete from Home Activity via the same `update-meeting` / `delete-meeting` paths as History (same delete-while-queued/active guards). Delete removes the meeting from History and drops/cancels the Activity row; rename is visible in both places immediately.
 
+Phase 2 review remediation completed: resource-queue lock inversion removed; parked preload/runtime work now re-checks quit; per-meeting renames serialize; Activity delete tolerates History-cache lag; empty-state notices and diarization percent reset correctly.
+
 **Cut until asked:** tray “Transcribing N”; inline Home transcript drawer; teaching button label; encode time estimates.
 
 ## Completed: Recording Awareness And Long-Recording Safety (v2.5.0)

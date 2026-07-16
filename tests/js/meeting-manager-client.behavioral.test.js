@@ -151,3 +151,52 @@ test('scan-recordings timeout terminates the scanner and releases admission', as
   assert.equal(terminated, true);
   assert.equal(client.isRecordingsScanInProgress(), false);
 });
+
+test('update-meeting serializes concurrent renames for the same meeting', async () => {
+  const processes = [];
+  const syncedTitles = [];
+  const client = createMeetingManagerClient({
+    app: { getPath: () => '/tmp/avanevis-test' },
+    path,
+    spawnTrackedPython() {
+      const proc = new EventEmitter();
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      processes.push(proc);
+      return proc;
+    },
+    pythonConfig: { backendPath: '/tmp/backend' },
+    getBackendModuleArgs: (moduleName, args) => [moduleName, ...args],
+    collectPythonProcessOutput(python) {
+      let stdout = '';
+      python.stdout.on('data', (data) => { stdout += data.toString(); });
+      return { getStdout: () => stdout, getStderr: () => '', assertStdoutWithinLimit() {} };
+    },
+    appendSpawnLogBuffer: (buffer, chunk) => buffer + String(chunk),
+    assertTrustedRendererSender() {},
+    sanitizeTranscriptionError: (value) => value,
+    getRecordingsDir: () => '/tmp/avanevis-test/recordings',
+    assertSafeExistingRecordingAudioPath: (value) => value,
+    assertSafeExistingTranscriptPath: (value) => value,
+    validateAiMetadataPaths: (value) => value,
+    afterUpdateMeeting: async (meeting) => { syncedTitles.push(meeting.title); },
+  });
+  const handlers = {};
+  client.registerIpc({ handle(channel, handler) { handlers[channel] = handler; } });
+
+  const first = handlers['update-meeting']({}, { meetingId: 'meeting', updates: { title: 'First' } });
+  const second = handlers['update-meeting']({}, { meetingId: 'meeting', updates: { title: 'Second' } });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(processes.length, 1, 'second rename must wait for the first subprocess');
+
+  processes[0].stdout.emit('data', Buffer.from('{"id":"meeting","title":"First"}'));
+  processes[0].emit('close', 0);
+  assert.deepEqual(await first, { id: 'meeting', title: 'First' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(processes.length, 2);
+
+  processes[1].stdout.emit('data', Buffer.from('{"id":"meeting","title":"Second"}'));
+  processes[1].emit('close', 0);
+  assert.deepEqual(await second, { id: 'meeting', title: 'Second' });
+  assert.deepEqual(syncedTitles, ['First', 'Second']);
+});

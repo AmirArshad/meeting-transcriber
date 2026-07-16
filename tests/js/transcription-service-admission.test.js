@@ -171,6 +171,23 @@ test('shouldTerminateComputeJobsForMeeting only matches the active meeting', () 
   }), false);
 });
 
+test('resumePendingTranscriptions skips discovery and admission after quit commits', async () => {
+  let listCalls = 0;
+  const harness = createServiceHarness({
+    isQuitCommitted: () => true,
+    listMeetings: async () => {
+      listCalls += 1;
+      return [{ id: 'pending', transcriptionStatus: 'pending' }];
+    },
+  });
+
+  const result = await harness.service.resumePendingTranscriptions({ reason: 'post-scan' });
+  assert.equal(result.quitSkipped, true);
+  assert.equal(result.enqueuedCount, 0);
+  assert.equal(listCalls, 0);
+  assert.equal(harness.computeQueue.pendingCount, 0);
+});
+
 test('deleting queued B does not hang behind parked FIFO work and does not terminate A', async () => {
   const harness = createServiceHarness();
   harness.addActiveWallClockJob('Transcription', 'meeting_a');

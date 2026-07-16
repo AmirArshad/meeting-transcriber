@@ -86,8 +86,12 @@ function upsertQueueJob(state, jobPatch = {}) {
     meetingId,
   };
   if (Object.prototype.hasOwnProperty.call(jobPatch, 'percent')) {
-    const pct = Number(jobPatch.percent);
-    next.percent = Number.isFinite(pct) ? Math.max(0, Math.min(100, pct)) : null;
+    if (jobPatch.percent == null || jobPatch.percent === '') {
+      next.percent = null;
+    } else {
+      const pct = Number(jobPatch.percent);
+      next.percent = Number.isFinite(pct) ? Math.max(0, Math.min(100, pct)) : null;
+    }
   }
   state.jobsByMeetingId.set(meetingId, next);
   if (!state.jobOrder.includes(meetingId)) {

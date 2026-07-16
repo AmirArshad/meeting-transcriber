@@ -362,6 +362,7 @@ function hasInFlightAiWork() {
   return (aiAddonIpc ? aiAddonIpc.hasInFlightAiAddonSetup() : false)
     || (summaryService ? summaryService.hasActiveSummaryGeneration() : false)
     || aiComputeActionQueue.hasPendingWork()
+    || gpuResourceActionQueue.hasPendingWork()
     || (gpuRuntimeService ? gpuRuntimeService.hasInFlightGpuRuntimeAction() : false);
 }
 
@@ -393,6 +394,9 @@ function abortInFlightAiSetup() {
 
 function abortInFlightAiWork() {
   abortInFlightAiSetup();
+  if (transcriptionService && typeof transcriptionService.abortModelDownloadForQuit === 'function') {
+    transcriptionService.abortModelDownloadForQuit();
+  }
   if (summaryService) {
     summaryService.abortActiveSummaryForQuit('Summary generation was canceled because the app is quitting.');
   }
@@ -462,6 +466,7 @@ async function drainAiWorkBeforeQuit() {
     if (gpuRuntimeService) {
       drains.push(gpuRuntimeService.waitForGpuRuntimeIdle());
     }
+    drains.push(gpuResourceActionQueue.drain());
     if (drains.length === 0) {
       return;
     }
@@ -693,6 +698,7 @@ gpuRuntimeService = createGpuRuntimeService({
   ),
   formatQueuedTranscriptionBusyMessage,
   enqueueGpuResourceAction: gpuResourceActionQueue.enqueue,
+  isQuitCommitted,
 });
 gpuRuntimeService.registerIpc(ipcMain);
 const {
@@ -718,12 +724,6 @@ aiAddonIpc = createAiAddonIpc({
   buildSummaryArgs,
   summarizeDiarizationError,
   summarizeSummaryValidationError,
-  hasInFlightGpuRuntimeAction: () => (
-    gpuRuntimeService ? gpuRuntimeService.hasInFlightGpuRuntimeAction() : false
-  ),
-  waitForGpuRuntimeIdle: () => (
-    gpuRuntimeService ? gpuRuntimeService.waitForGpuRuntimeIdle() : Promise.resolve()
-  ),
   hasPendingAiComputeWork: () => aiComputeActionQueue.hasPendingWork(),
   hasPendingGpuResourceWork: () => gpuResourceActionQueue.hasPendingWork(),
   enqueueGpuExclusiveRemovalAction,
@@ -750,12 +750,6 @@ transcriptionService = createTranscriptionService({
   getBackendModuleArgs,
   enqueueAiComputeAction: enqueueGpuExclusiveComputeAction,
   waitForAiComputeQueueIdle,
-  hasInFlightGpuRuntimeAction: () => (
-    gpuRuntimeService ? gpuRuntimeService.hasInFlightGpuRuntimeAction() : false
-  ),
-  waitForGpuRuntimeIdle: () => (
-    gpuRuntimeService ? gpuRuntimeService.waitForGpuRuntimeIdle() : Promise.resolve()
-  ),
   enqueueGpuResourceAction: gpuResourceActionQueue.enqueue,
   hasPendingAiComputeWork: () => aiComputeActionQueue.hasPendingWork(),
   getCachedCudaStatus,
@@ -811,12 +805,6 @@ summaryService = createSummaryService({
   terminateProcessBestEffort,
   summarizeSummaryValidationError,
   isQuitCommitted,
-  hasInFlightGpuRuntimeAction: () => (
-    gpuRuntimeService ? gpuRuntimeService.hasInFlightGpuRuntimeAction() : false
-  ),
-  waitForGpuRuntimeIdle: () => (
-    gpuRuntimeService ? gpuRuntimeService.waitForGpuRuntimeIdle() : Promise.resolve()
-  ),
 });
 summaryService.registerIpc(ipcMain);
 

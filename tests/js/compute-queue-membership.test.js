@@ -147,25 +147,20 @@ test('addon validation and guided transcription wall-clock wrappers appear in so
   assert.ok(diarizationValidate);
 });
 
-test('GPU runtime wait runs outside the wall-clock timer (inside enqueue)', () => {
-  // N1: waitForGpuRuntimeBeforeCompute must not burn transcription budgets.
+test('GPU-exclusive compute does not wait on a runtime action while holding the resource queue', () => {
   const combined = readCombinedMainProcessSource();
-  const transcribe = extractIpcHandlerSource(combined, 'transcribe-audio');
-  assert.ok(transcribe, 'missing transcribe-audio handler');
-  // Pattern: enqueue → await GPU wait → then runWallClockComputeAction
-  assert.match(
-    transcribe,
-    /enqueueAiComputeAction\(\s*async\s*\(\)\s*=>\s*\{[\s\S]*waitForGpuRuntimeBeforeCompute[\s\S]*runWallClockComputeAction/,
-    'transcribe-audio must await GPU idle before starting the wall-clock timer',
-  );
-  // GPU wait must not appear inside the wall-clock action body for transcribe-audio.
-  const wallClockBody = transcribe.match(/runWallClockComputeAction\(\{[\s\S]*?\n\s*\}\)/);
-  assert.ok(wallClockBody, 'expected runWallClockComputeAction call in transcribe-audio');
-  assert.doesNotMatch(
-    wallClockBody[0],
-    /waitForGpuRuntimeBeforeCompute/,
-    'GPU wait must not be charged against the transcription wall-clock budget',
-  );
+  for (const channel of ['transcribe-audio', 'transcribe-audio-with-speakers', 'diarize-transcript']) {
+    const handler = extractIpcHandlerSource(combined, channel);
+    assert.ok(handler, `missing ${channel} handler`);
+    assert.doesNotMatch(
+      handler,
+      /waitForGpuRuntimeBeforeCompute/,
+      `${channel} must rely on gpuResourceActionQueue ordering instead of waiting on a later queue owner`,
+    );
+  }
+
+  const meetingJob = extractTopLevelFunctionSource(combined, 'runMeetingTranscriptionJob');
+  assert.doesNotMatch(meetingJob, /waitForGpuRuntimeBeforeCompute/);
 });
 
 test('post-refactor GPU resource gate covers compute, preload, and GPU runtime actions', () => {
@@ -187,6 +182,15 @@ test('post-refactor GPU resource gate covers compute, preload, and GPU runtime a
     /gpuRuntimeActionPromise\s*=\s*enqueueGpuResourceAction/,
     'GPU runtime mutation must share the GPU resource queue',
   );
+});
+
+test('parked preload and GPU runtime actions re-check quit at resource admission', () => {
+  const combined = readCombinedMainProcessSource();
+  const downloadModel = extractIpcHandlerSource(combined, 'download-model');
+  const runGpuRuntimeAction = extractTopLevelFunctionSource(combined, 'runGpuRuntimeAction');
+  assert.match(downloadModel, /isQuitCommitted\(\)/);
+  assert.match(runGpuRuntimeAction, /isQuitCommitted\(\)/);
+  assert.match(combined, /gpuResourceActionQueue\.drain\(\)/);
 });
 
 test('destructive AI add-on removal reserves the shared GPU resource queue', () => {

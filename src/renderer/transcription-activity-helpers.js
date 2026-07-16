@@ -42,6 +42,9 @@
   }
 
   function formatPercentLabel(percent) {
+    if (percent == null || percent === '') {
+      return '';
+    }
     const pct = Number(percent);
     if (!Number.isFinite(pct)) {
       return '';
@@ -244,7 +247,9 @@
       chip,
       status,
       phase: job.phase || null,
-      percent: Number.isFinite(Number(job.percent)) ? Number(job.percent) : null,
+      percent: job.percent != null && job.percent !== '' && Number.isFinite(Number(job.percent))
+        ? Number(job.percent)
+        : null,
       source: 'queue',
       actions,
     };

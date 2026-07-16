@@ -34,6 +34,7 @@
  */
 function createMeetingManagerClient(deps) {
   let recordingsScanInProgress = false;
+  const meetingUpdateTailById = new Map();
   const {
     app,
     path,
@@ -141,6 +142,20 @@ function createMeetingManagerClient(deps) {
       return recordingsMaintenanceGate.getOwner() === 'scan' || recordingsScanInProgress;
     }
     return recordingsScanInProgress;
+  }
+
+  function enqueueMeetingUpdate(meetingId, action) {
+    const id = String(meetingId);
+    const previous = meetingUpdateTailById.get(id) || Promise.resolve();
+    const run = previous.catch(() => {}).then(action);
+    const tail = run.catch(() => {});
+    meetingUpdateTailById.set(id, tail);
+    void tail.finally(() => {
+      if (meetingUpdateTailById.get(id) === tail) {
+        meetingUpdateTailById.delete(id);
+      }
+    });
+    return run;
   }
 
   /**
@@ -411,7 +426,7 @@ function createMeetingManagerClient(deps) {
         args.push('--title', updates.title);
       }
 
-      return new Promise((resolve, reject) => {
+      return enqueueMeetingUpdate(meetingId, () => new Promise((resolve, reject) => {
         const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', args), {
           cwd: pythonConfig.backendPath,
         });
@@ -448,7 +463,7 @@ function createMeetingManagerClient(deps) {
         });
 
         python.on('error', (err) => reject(err));
-      });
+      }));
     });
 
     ipcMain.handle('update-meeting-ai', async (event, payload) => {

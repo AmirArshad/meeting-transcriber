@@ -46,6 +46,7 @@ const {
  * @param {Function} [deps.getBusyTranscriptionJobCount]
  * @param {Function} [deps.formatQueuedTranscriptionBusyMessage]
  * @param {Function} [deps.enqueueGpuResourceAction]
+ * @param {Function} [deps.isQuitCommitted]
  */
 function createGpuRuntimeService(deps) {
   const {
@@ -69,6 +70,7 @@ function createGpuRuntimeService(deps) {
       `Local AI work is still running. Finish or cancel it before ${action}.`
     ),
     enqueueGpuResourceAction = (action) => action(),
+    isQuitCommitted = () => false,
   } = deps;
 
   // Single shared CUDA status cache + GPU runtime lock. Never copy these lets
@@ -105,17 +107,15 @@ function createGpuRuntimeService(deps) {
   /**
    * Fresh CUDA probe for transcription preemption. UI `check-cuda` keeps a
    * 5-minute TTL; compute jobs must not silently skip preemptive CPU when that
-   * cache has expired. After waitForGpuRuntimeBeforeCompute, GPU actions are idle
-   * so a ~1–2s probe is safe relative to a 30–120 min transcription budget.
+   * cache has expired. The composition-root resource queue keeps GPU actions idle
+   * while this probe runs, so a ~1–2s probe is safe relative to the job budget.
    */
   async function resolveCudaStatusForTranscription({ registerProcess } = {}) {
     if (process.platform !== 'win32') {
       return null;
     }
-    if (hasInFlightGpuRuntimeAction()) {
-      // Prefer any in-memory status (even TTL-expired) over racing pip DLL rewrites.
-      return cachedCudaStatus && typeof cachedCudaStatus === 'object' ? cachedCudaStatus : null;
-    }
+    // Transcription enters through gpuResourceActionQueue, so any runtime action
+    // is either already finished or parked behind this probe. Always re-probe.
     return checkCudaRuntimeStatus({ registerProcess });
   }
 
@@ -168,12 +168,25 @@ function createGpuRuntimeService(deps) {
       return Promise.reject(error);
     }
 
-    gpuRuntimeActionPromise = enqueueGpuResourceAction(() => runWallClockComputeAction({
-      action: (registerProcess) => actionFn(registerProcess),
-      timeoutMs: GPU_RUNTIME_ACTION_TIMEOUT_MS,
-      label: 'GPU runtime setup',
-      terminateProcess: terminateProcessBestEffort,
-    }))
+    if (isQuitCommitted()) {
+      const error = new Error('Cannot change the GPU runtime while the app is quitting.');
+      error.code = 'QUIT_IN_PROGRESS';
+      return Promise.reject(error);
+    }
+
+    gpuRuntimeActionPromise = enqueueGpuResourceAction(() => {
+      if (isQuitCommitted()) {
+        const error = new Error('GPU runtime setup was skipped because the app is quitting.');
+        error.code = 'QUIT_IN_PROGRESS';
+        throw error;
+      }
+      return runWallClockComputeAction({
+        action: (registerProcess) => actionFn(registerProcess),
+        timeoutMs: GPU_RUNTIME_ACTION_TIMEOUT_MS,
+        label: 'GPU runtime setup',
+        terminateProcess: terminateProcessBestEffort,
+      });
+    })
       .finally(() => {
         gpuRuntimeActionPromise = null;
       });

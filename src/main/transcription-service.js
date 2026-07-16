@@ -119,8 +119,6 @@ function createTranscriptionService(deps) {
     getBackendModuleArgs,
     enqueueAiComputeAction,
     waitForAiComputeQueueIdle = async () => {},
-    hasInFlightGpuRuntimeAction = () => false,
-    waitForGpuRuntimeIdle = async () => {},
     enqueueGpuResourceAction = (action) => action(),
     hasPendingAiComputeWork = () => false,
     getCachedCudaStatus,
@@ -398,17 +396,6 @@ function createTranscriptionService(deps) {
   // Single in-flight Whisper download (FTUE / Settings). Cancel clears this ref.
   let activeModelDownload = null;
 
-  async function waitForGpuRuntimeBeforeCompute(label = 'Transcription') {
-    if (!hasInFlightGpuRuntimeAction()) {
-      return;
-    }
-    sendToRenderer(
-      'transcription-progress',
-      `Waiting for GPU runtime setup to finish before starting ${label.toLowerCase()}...\n`,
-    );
-    await waitForGpuRuntimeIdle();
-  }
-
   const transcriptionQueueState = createTranscriptionQueueState();
   // meetingId → in-flight job promise (admission lock; reject duplicate retry/resume).
   const inFlightJobsByMeetingId = new Map();
@@ -662,6 +649,7 @@ function createTranscriptionService(deps) {
       phase: QUEUE_JOB_PHASES.queued,
       title: options.title || '',
       durationSeconds: Number(options.durationSeconds) || 0,
+      percent: null,
     });
     publishTranscriptionQueueState();
 
@@ -1102,10 +1090,10 @@ function createTranscriptionService(deps) {
           meetingId,
           status: QUEUE_JOB_STATUSES.active,
           phase: QUEUE_JOB_PHASES.waiting_resource,
+          percent: null,
         });
         publishTranscriptionQueueState();
 
-        await waitForGpuRuntimeBeforeCompute(jobLabel);
         throwIfJobBlocked(meetingId, epoch);
 
         // Fresh get inside the queue slot so post-add audioPath / title stay
@@ -1149,6 +1137,7 @@ function createTranscriptionService(deps) {
               phase: guidedDiarizationStatus
                 ? QUEUE_JOB_PHASES.identifying_speakers
                 : QUEUE_JOB_PHASES.transcribing,
+              percent: null,
             });
             publishTranscriptionQueueState();
 
@@ -1184,12 +1173,24 @@ function createTranscriptionService(deps) {
                     const progressEvent = parseAiBackendProgressLine(line, 'diarization');
                     if (progressEvent) {
                       if (Number.isFinite(Number(progressEvent.percent))) {
-                        upsertQueueJob(transcriptionQueueState, {
-                          meetingId,
-                          percent: progressEvent.percent,
-                          phase: QUEUE_JOB_PHASES.identifying_speakers,
-                        });
-                        publishTranscriptionQueueState();
+                        const nextPercent = Math.round(Math.max(
+                          0,
+                          Math.min(100, Number(progressEvent.percent)),
+                        ));
+                        const currentJob = transcriptionQueueState.jobsByMeetingId.get(meetingId);
+                        const currentPercent = currentJob && currentJob.percent != null
+                          ? Math.round(Number(currentJob.percent))
+                          : null;
+                        if (currentPercent !== nextPercent
+                          || !currentJob
+                          || currentJob.phase !== QUEUE_JOB_PHASES.identifying_speakers) {
+                          upsertQueueJob(transcriptionQueueState, {
+                            meetingId,
+                            percent: nextPercent,
+                            phase: QUEUE_JOB_PHASES.identifying_speakers,
+                          });
+                          publishTranscriptionQueueState();
+                        }
                       }
                       sendToRenderer('diarization-progress', progressEvent);
                     } else if (line.trim()) {
@@ -1212,6 +1213,7 @@ function createTranscriptionService(deps) {
                 upsertQueueJob(transcriptionQueueState, {
                   meetingId,
                   phase: QUEUE_JOB_PHASES.transcribing,
+                  percent: null,
                 });
                 publishTranscriptionQueueState();
               }
@@ -1248,6 +1250,7 @@ function createTranscriptionService(deps) {
         upsertQueueJob(transcriptionQueueState, {
           meetingId,
           phase: QUEUE_JOB_PHASES.persisting,
+          percent: null,
         });
         publishTranscriptionQueueState();
         updatedMeeting = await updateMeetingTranscriptionStatusBounded(meetingId, {
@@ -1277,6 +1280,7 @@ function createTranscriptionService(deps) {
             upsertQueueJob(transcriptionQueueState, {
               meetingId,
               phase: QUEUE_JOB_PHASES.identifying_speakers,
+              percent: null,
             });
             publishTranscriptionQueueState();
             try {
@@ -1343,6 +1347,7 @@ function createTranscriptionService(deps) {
         upsertQueueJob(transcriptionQueueState, {
           meetingId,
           phase: QUEUE_JOB_PHASES.persisting,
+          percent: null,
         });
         publishTranscriptionQueueState();
 
@@ -1706,6 +1711,9 @@ function createTranscriptionService(deps) {
   }
 
   async function resumePendingTranscriptions(_options = {}) {
+    if (isQuitCommitted()) {
+      return { success: true, enqueuedCount: 0, meetingIds: [], quitSkipped: true };
+    }
     // Locked snapshot contract: always use each meeting's persisted language/model.
     // Renderer must not send Settings overrides (changing dropdowns must not rewrite old jobs).
     const meetings = await listMeetings();
@@ -1717,6 +1725,9 @@ function createTranscriptionService(deps) {
 
     const enqueued = [];
     for (const meeting of pending) {
+      if (isQuitCommitted()) {
+        break;
+      }
       const meetingId = String(meeting.id);
       if (inFlightJobsByMeetingId.has(meetingId)) {
         continue;
@@ -1815,6 +1826,11 @@ function createTranscriptionService(deps) {
     ipcMain.handle('download-model', async (event, modelSize) => {
       assertTrustedRendererSender(event);
       const model = requireAllowedModelSize(modelSize);
+      if (isQuitCommitted()) {
+        const error = new Error('Cannot download a Whisper model while the app is quitting.');
+        error.code = 'QUIT_IN_PROGRESS';
+        throw error;
+      }
       if (activeModelDownload) {
         throw new Error('A Whisper model download is already in progress. Cancel it or wait for it to finish.');
       }
@@ -1825,6 +1841,11 @@ function createTranscriptionService(deps) {
       activeModelDownload = { process: null, controller: idleController, model };
 
       return enqueueGpuResourceAction(() => {
+        if (isQuitCommitted()) {
+          const error = new Error('Whisper model download was skipped because the app is quitting.');
+          error.code = 'QUIT_IN_PROGRESS';
+          throw error;
+        }
         if (idleController.signal.aborted) {
           throw new Error('Model download was canceled.');
         }
@@ -1960,10 +1981,7 @@ function createTranscriptionService(deps) {
       });
       audioFile = assertSafeExistingRecordingAudioPath(audioFile);
 
-      // GPU wait stays inside the enqueue (serialized) but outside the wall clock
-      // so a long pip install cannot burn a tiny/base transcription budget.
       return enqueueAiComputeAction(async () => {
-        await waitForGpuRuntimeBeforeCompute('Transcription');
         return runWallClockComputeAction({
           timeoutMs: getTranscriptionComputeTimeoutMs(modelSize),
           label: 'Transcription',
@@ -2056,7 +2074,6 @@ function createTranscriptionService(deps) {
       }
 
       return enqueueAiComputeAction(async () => {
-        await waitForGpuRuntimeBeforeCompute('Speaker-guided transcription');
         return runWallClockComputeAction({
           timeoutMs: getGuidedTranscriptionComputeTimeoutMs(modelSize),
           label: 'Speaker-guided transcription',
@@ -2148,7 +2165,6 @@ function createTranscriptionService(deps) {
         throw new Error('Speaker labels output must be a JSON file in the recordings directory.');
       }
       return enqueueAiComputeAction(async () => {
-        await waitForGpuRuntimeBeforeCompute('Speaker identification');
         return runWallClockComputeAction({
           timeoutMs: AI_COMPUTE_TIMEOUT_MS.diarization,
           label: 'Speaker identification',
@@ -2501,6 +2517,14 @@ function createTranscriptionService(deps) {
     getTranscriptionQueueStatePayload,
     publishTranscriptionQueueState,
     syncMeetingTitleToQueue,
+    abortModelDownloadForQuit: () => {
+      if (!activeModelDownload) {
+        return false;
+      }
+      activeModelDownload.controller.abort();
+      terminateProcessBestEffort(activeModelDownload.process);
+      return true;
+    },
     registerIpc,
   };
 }

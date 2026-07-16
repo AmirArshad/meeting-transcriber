@@ -98,9 +98,11 @@ test('queue upsert/publish payload tracks active meeting, order, and busyCount',
   upsertQueueJob(state, { meetingId: 'meeting_a', percent: 42.6 });
   const withPercent = buildTranscriptionQueueStatePayload(state);
   assert.equal(withPercent.jobs[0].percent, 42.6);
+  upsertQueueJob(state, { meetingId: 'meeting_a', phase: 'transcribing', percent: null });
+  assert.equal(buildTranscriptionQueueStatePayload(state).jobs[0].percent, null);
   assert.equal(withPercent.seq, 2);
   const payload2 = buildTranscriptionQueueStatePayload(state);
-  assert.equal(payload2.seq, 3, 'payload seq must be monotonic across publishes');
+  assert.equal(payload2.seq, 4, 'payload seq must be monotonic across publishes');
 });
 
 test('cancel flag marks queued jobs cancelled and is readable at head', () => {

@@ -703,6 +703,8 @@ function renderActivityList() {
     activityListEl.appendChild(empty);
     updateResumePendingBanner();
     refreshIdleStatusPill();
+    updateSoftQueueDepthWarning();
+    updateBackgroundTranscriptionTip();
     return;
   }
 
@@ -762,7 +764,7 @@ function renderActivityList() {
       deleteBtn.disabled = busy;
       deleteBtn.addEventListener('click', (event) => {
         event.stopPropagation();
-        void deleteActivityMeeting(row.meetingId);
+        void deleteActivityMeeting(row.meetingId, row.title);
       });
       actions.appendChild(deleteBtn);
     }
@@ -874,7 +876,7 @@ async function renameActivityMeeting(meetingId, currentTitle = '') {
   }
 }
 
-async function deleteActivityMeeting(meetingId) {
+async function deleteActivityMeeting(meetingId, currentTitle = '') {
   const id = String(meetingId || '').trim();
   if (!id || activityActionBusyMeetingId) {
     return;
@@ -882,7 +884,7 @@ async function deleteActivityMeeting(meetingId) {
   activityActionBusyMeetingId = id;
   renderActivityList();
   try {
-    await deleteMeetingHandler(id);
+    await deleteMeetingHandler(id, currentTitle);
   } finally {
     activityActionBusyMeetingId = null;
     renderActivityList();
@@ -3915,7 +3917,7 @@ async function saveTranscript() {
 }
 
 // Delete meeting
-async function deleteMeetingHandler(meetingId) {
+async function deleteMeetingHandler(meetingId, fallbackTitle = '') {
   const idToDelete = meetingId != null ? String(meetingId) : currentMeetingId;
   if (!idToDelete) {
     console.error('No meeting ID to delete');
@@ -3923,12 +3925,9 @@ async function deleteMeetingHandler(meetingId) {
   }
 
   const meeting = findMeetingById(idToDelete);
-  if (!meeting) {
-    console.error('Meeting not found:', idToDelete);
-    return;
-  }
+  const displayTitle = (meeting && meeting.title) || String(fallbackTitle || '').trim() || idToDelete;
 
-  if (confirm(`Are you sure you want to delete "${meeting.title}"?`)) {
+  if (confirm(`Are you sure you want to delete "${displayTitle}"?`)) {
     try {
       // Release audio player file lock before deleting (Windows issue)
       const audioPlayer = document.getElementById('audio-player');
@@ -3938,7 +3937,7 @@ async function deleteMeetingHandler(meetingId) {
         audioPlayer.load();
       }
 
-      addLog(`Deleting meeting: ${meeting.title}...`);
+      addLog(`Deleting meeting: ${displayTitle}...`);
 
       // Small delay to ensure OS releases the file handle
       await new Promise(resolve => setTimeout(resolve, 300));
