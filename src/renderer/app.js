@@ -30,6 +30,7 @@ const {
   buildCompletionToastView,
   buildBackgroundTranscriptionTipView,
   buildSoftQueueDepthWarningView,
+  resolveActivityRenameCommit,
 } = window.transcriptionActivityHelpers;
 const {
   getRecoveryPromptView,
@@ -120,6 +121,10 @@ let lastAppliedTranscriptionQueueSeq = 0;
 /** meetingId → last-seen terminal status; used to reload History only on new transitions. */
 let lastSeenTerminalTranscriptionStatuses = new Map();
 let activityActionBusyMeetingId = null;
+/** Activity-row inline rename (Electron does not support window.prompt). */
+let activityRenameMeetingId = null;
+let activityRenameDraft = '';
+let activityRenameOriginal = '';
 let countdownValue = 3;
 let recordingStartTime = null;
 let activeRecordingSessionId = null;
@@ -719,11 +724,63 @@ function renderActivityList() {
 
     const main = document.createElement('div');
     main.className = 'activity-row-main';
+    const busy = activityActionBusyMeetingId === row.meetingId;
+    const isRenaming = activityRenameMeetingId === row.meetingId;
 
-    const title = document.createElement('div');
-    title.className = 'activity-row-title';
-    title.textContent = row.title;
-    main.appendChild(title);
+    if (isRenaming) {
+      const form = document.createElement('form');
+      form.className = 'activity-rename-form';
+      form.addEventListener('click', (event) => event.stopPropagation());
+      form.addEventListener('submit', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        void commitActivityRename(row.meetingId);
+      });
+
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'activity-rename-input';
+      input.value = activityRenameDraft;
+      input.maxLength = 120;
+      input.setAttribute('aria-label', 'Meeting title');
+      input.disabled = busy;
+      input.addEventListener('input', () => {
+        activityRenameDraft = input.value;
+      });
+      input.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          cancelActivityRename();
+        }
+      });
+
+      const saveBtn = document.createElement('button');
+      saveBtn.type = 'submit';
+      saveBtn.className = 'btn btn-small btn-primary';
+      saveBtn.textContent = busy ? 'Saving…' : 'Save';
+      saveBtn.disabled = busy;
+
+      const cancelBtn = document.createElement('button');
+      cancelBtn.type = 'button';
+      cancelBtn.className = 'btn btn-small';
+      cancelBtn.textContent = 'Cancel';
+      cancelBtn.disabled = busy;
+      cancelBtn.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        cancelActivityRename();
+      });
+
+      form.appendChild(input);
+      form.appendChild(saveBtn);
+      form.appendChild(cancelBtn);
+      main.appendChild(form);
+    } else {
+      const title = document.createElement('div');
+      title.className = 'activity-row-title';
+      title.textContent = row.title;
+      main.appendChild(title);
+    }
 
     const meta = document.createElement('div');
     meta.className = 'activity-row-meta';
@@ -742,9 +799,8 @@ function renderActivityList() {
 
     const actions = document.createElement('div');
     actions.className = 'activity-row-actions';
-    const busy = activityActionBusyMeetingId === row.meetingId;
 
-    if (row.actions.includes('rename')) {
+    if (row.actions.includes('rename') && !isRenaming) {
       const renameBtn = document.createElement('button');
       renameBtn.type = 'button';
       renameBtn.className = 'btn btn-small';
@@ -752,7 +808,7 @@ function renderActivityList() {
       renameBtn.disabled = busy;
       renameBtn.addEventListener('click', (event) => {
         event.stopPropagation();
-        void renameActivityMeeting(row.meetingId, row.title);
+        beginActivityRename(row.meetingId, row.title);
       });
       actions.appendChild(renameBtn);
     }
@@ -761,7 +817,7 @@ function renderActivityList() {
       deleteBtn.type = 'button';
       deleteBtn.className = 'btn btn-small';
       deleteBtn.textContent = busy ? 'Deleting…' : 'Delete';
-      deleteBtn.disabled = busy;
+      deleteBtn.disabled = busy || isRenaming;
       deleteBtn.addEventListener('click', (event) => {
         event.stopPropagation();
         void deleteActivityMeeting(row.meetingId, row.title);
@@ -773,7 +829,7 @@ function renderActivityList() {
       cancelBtn.type = 'button';
       cancelBtn.className = 'btn btn-small';
       cancelBtn.textContent = busy ? 'Cancelling…' : 'Cancel';
-      cancelBtn.disabled = busy;
+      cancelBtn.disabled = busy || isRenaming;
       cancelBtn.addEventListener('click', (event) => {
         event.stopPropagation();
         void cancelActivityTranscription(row.meetingId);
@@ -785,7 +841,7 @@ function renderActivityList() {
       retryBtn.type = 'button';
       retryBtn.className = 'btn btn-small btn-primary';
       retryBtn.textContent = busy ? 'Retrying…' : 'Retry';
-      retryBtn.disabled = busy;
+      retryBtn.disabled = busy || isRenaming;
       retryBtn.addEventListener('click', (event) => {
         event.stopPropagation();
         void retryActivityTranscription(row.meetingId);
@@ -797,6 +853,7 @@ function renderActivityList() {
       openBtn.type = 'button';
       openBtn.className = 'btn btn-small';
       openBtn.textContent = 'Open in History';
+      openBtn.disabled = isRenaming;
       openBtn.addEventListener('click', (event) => {
         event.stopPropagation();
         openMeetingInHistory(row.meetingId);
@@ -805,7 +862,7 @@ function renderActivityList() {
     }
     item.appendChild(actions);
 
-    if (row.actions.includes('open') && !row.actions.includes('cancel')) {
+    if (row.actions.includes('open') && !row.actions.includes('cancel') && !isRenaming) {
       item.style.cursor = 'pointer';
       item.addEventListener('click', () => openMeetingInHistory(row.meetingId));
     }
@@ -843,28 +900,59 @@ function applyMeetingTitleLocally(updated) {
   renderActivityList();
 }
 
-async function renameActivityMeeting(meetingId, currentTitle = '') {
+function beginActivityRename(meetingId, currentTitle = '') {
   const id = String(meetingId || '').trim();
   if (!id || activityActionBusyMeetingId) {
     return;
   }
   const meeting = findMeetingById(id);
-  const initial = (meeting && meeting.title) || currentTitle || '';
-  const nextTitle = window.prompt('Rename meeting', initial);
-  if (nextTitle == null) {
+  activityRenameMeetingId = id;
+  activityRenameDraft = (meeting && meeting.title) || currentTitle || '';
+  activityRenameOriginal = activityRenameDraft;
+  renderActivityList();
+  requestAnimationFrame(() => {
+    const selector = `.activity-row[data-meeting-id="${CSS.escape(id)}"] .activity-rename-input`;
+    const input = activityListEl && activityListEl.querySelector(selector);
+    if (input) {
+      input.focus();
+      input.select();
+    }
+  });
+}
+
+function cancelActivityRename() {
+  if (activityActionBusyMeetingId && activityActionBusyMeetingId === activityRenameMeetingId) {
     return;
   }
-  const cleaned = String(nextTitle).trim();
-  if (!cleaned || cleaned === initial) {
+  activityRenameMeetingId = null;
+  activityRenameDraft = '';
+  activityRenameOriginal = '';
+  renderActivityList();
+}
+
+async function commitActivityRename(meetingId) {
+  const id = String(meetingId || '').trim();
+  if (!id || activityActionBusyMeetingId) {
+    return;
+  }
+  const decision = resolveActivityRenameCommit({
+    draft: activityRenameDraft,
+    original: activityRenameOriginal,
+  });
+  if (decision.action !== 'save') {
+    cancelActivityRename();
     return;
   }
   activityActionBusyMeetingId = id;
   renderActivityList();
   try {
-    const updated = await window.electronAPI.updateMeeting(id, { title: cleaned });
+    const updated = await window.electronAPI.updateMeeting(id, { title: decision.title });
     if (!updated || !updated.title) {
       throw new Error('Meeting was not found.');
     }
+    activityRenameMeetingId = null;
+    activityRenameDraft = '';
+    activityRenameOriginal = '';
     applyMeetingTitleLocally(updated);
     addLog(`Renamed meeting to "${updated.title}"`);
   } catch (error) {

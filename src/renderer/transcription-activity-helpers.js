@@ -222,6 +222,19 @@
     };
   }
 
+  /**
+   * Activity rename must be inline — Electron throws on window.prompt().
+   * @returns {{ action: 'cancel' } | { action: 'save', title: string }}
+   */
+  function resolveActivityRenameCommit({ draft = '', original = '' } = {}) {
+    const cleaned = String(draft || '').trim();
+    const baseline = String(original || '').trim();
+    if (!cleaned || cleaned === baseline) {
+      return { action: 'cancel' };
+    }
+    return { action: 'save', title: cleaned };
+  }
+
   function activityRowFromQueueJob(job) {
     if (!job || !job.meetingId) {
       return null;
@@ -371,6 +384,7 @@
     shouldShowBackgroundTranscriptionTip,
     buildBackgroundTranscriptionTipView,
     buildSoftQueueDepthWarningView,
+    resolveActivityRenameCommit,
     buildActivityRows,
     getActivityEmptyStateText,
     formatQueuedTranscriptionBusyMessage,

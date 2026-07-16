@@ -1,6 +1,6 @@
 # Feature: Back-to-Back Recording & Transcription Queue
 
-**Status:** Phase 1 queue + cancel/discard shipped; Phase 2 polish (Activity hygiene, auto-resume, toasts/tips, between-job GPU/preload) implemented on `feature/transcription-queue-phase2`
+**Status:** Shipped in **v2.6.0** (Phase 1 queue + cancel/discard; Phase 2 polish — Activity hygiene, auto-resume, toasts/tips, between-job GPU/preload)
 **Working title:** Background transcription queue (+ cancel recording)  
 **Primary pain:** After Stop, users wait through encode + full Whisper (and optional diarization) before they can start the next meeting. There is also no way to discard a recording — Stop always processes.  
 **Review input:** Adversarial design review (2026-07-15) and second-pass review (2026-07-15) — findings below are incorporated as product/architecture decisions, not open questions.  

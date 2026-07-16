@@ -201,7 +201,7 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
   - [Code review remediation (May 2026)](docs/completed/CODE_REVIEW_REMEDIATION_2026-05.md)
 - **Roadmap & features**
   - [Roadmap](docs/initiatives/ROADMAP.md)
-  - [Back-to-back recording & transcription queue](docs/initiatives/FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md) (next big feature)
+  - [Back-to-back recording & transcription queue](docs/initiatives/FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md) (shipped in v2.6.0)
   - [Long-recording safety](docs/initiatives/LONG_RECORDING_SAFETY.md) (shipped in v2.5.0)
   - [AvaNevis codebase refactor](docs/initiatives/AVANEVIS_CODEBASE_REFACTOR.md) (complete — reference)
   - [Adversarial review prompts](docs/development/ADVERSARIAL_REVIEW_PROMPTS.md)
@@ -218,6 +218,7 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
 ## Roadmap (short version)
 
 **Shipped recently**
+- **v2.6.0 (July 2026)** — Back-to-back recording and background transcription queue: Start unlocks after save; Home Activity list; discard in-progress recordings; cancel/resume pending jobs. See [FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md](docs/initiatives/FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md) and [release notes](docs/releases/v2.6.0.md).
 - **v2.5.0 (July 2026)** — Recording awareness (presence pill, tray/Dock/taskbar indicators, hourly reminders, single-instance focus) and long-recording safety (durable capture spools, bounded stop finalization, interrupted-session recovery, low-disk warnings). See [LONG_RECORDING_SAFETY.md](docs/initiatives/LONG_RECORDING_SAFETY.md) and [release notes](docs/releases/v2.5.0.md).
 - Codebase refactor (July 2026): main-process Pattern C services under `src/main/`, AI-addon and main-process helper facades, Python `meetings/` / shared recorder stdout helpers, characterization gates. Soft-cap accepted for `src/renderer/app.js`; see [AVANEVIS_CODEBASE_REFACTOR.md](docs/initiatives/AVANEVIS_CODEBASE_REFACTOR.md).
 - Security and reliability hardening (May 2026): IPC path guards, sensitive-text redaction, trusted update downloads, single GPU compute queue with wall-clock timeouts, recording lifecycle guards (`RECORDER_BUSY`, session-aware failures), recorder `success: false` results, summary sidecar staging, and expanded regression tests. See [docs/completed/CODE_REVIEW_REMEDIATION_2026-05.md](docs/completed/CODE_REVIEW_REMEDIATION_2026-05.md).
@@ -231,9 +232,8 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
 - Rebrand from Meeting Transcriber to AvaNevis (display name, installers, Info.plist descriptions, slug paths). GitHub repo slug stays `meeting-transcriber`.
 
 **Next up**
-- **Back-to-back recording & transcription queue** (next big feature) — unlock Start as soon as a recording is saved; main owns background Whisper jobs; Home Activity list replaces the single transcript box. Design: [FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md](docs/initiatives/FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md) · [before/after SVG](docs/architecture/background-transcription-queue-before-after.svg).
 - True silent auto-install updater (today's updater detects the new release and opens the download page).
-- Upload existing audio files (reuses the same transcription queue once it ships).
+- Upload existing audio files (reuses the transcription queue / Activity UI).
 - Real-time / streaming transcription.
 - Export to SRT, VTT, DOCX, JSON.
 - Acoustic echo cancellation when desktop audio bleeds into the mic.

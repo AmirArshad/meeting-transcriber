@@ -44,6 +44,7 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 - **Security and compute hardening (May 2026)** — IPC path guards, sensitive-text redaction, trusted update downloads, single GPU compute queue with wall-clock timeouts, recording lifecycle guards (`RECORDER_BUSY`), and expanded regression tests. See [CODE_REVIEW_REMEDIATION_2026-05.md](../completed/CODE_REVIEW_REMEDIATION_2026-05.md) and root [`AGENTS.md`](../../AGENTS.md).
 - **Recording awareness (v2.5.0)** — authoritative `starting` / `recording` / `stopping` / `idle` lifecycle from the recorder service; always-visible in-app pill + elapsed clock; macOS static saturated menu-bar icon + `REC` + Dock badge; Windows taskbar overlay while minimized; hourly best-effort native reminders (click-to-open via retained notification objects — Electron has no Action Center cold-activation API); single-instance relaunch focuses the running app; recording-aware close copy.
 - **Long-recording safety (v2.5.0)** — durable `{stem}.capture/` track spools (not whole-session RAM); bounded multi-pass stop finalization; interrupted-session recovery (`Recover Now` / `Later`); Node `statfs` disk probes with periodic low-space warnings (never auto-stop); structured stop stages in the UI. See [LONG_RECORDING_SAFETY.md](LONG_RECORDING_SAFETY.md).
+- **Back-to-back recording & transcription queue (v2.6.0)** — Start unlocks after pending persist; main-owned FIFO transcription jobs; Home Activity list; discard capture; cancel/resume pending work; between-job GPU/preload admission. See [FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md](FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md).
 
 ### Branding
 
@@ -51,6 +52,7 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 
 ### Historical milestones
 
+- **v2.6.0 (July 2026)** — Back-to-back recording and background transcription queue shipped (Phase 1 + Phase 2 polish). Hardware smoke signed off on macOS; Windows queue/recorder smoke covered in pre-tag checks.
 - **v2.5.0 (July 2026)** — Recording awareness (Release 1) and long-recording safety (Release 2) shipped: presence indicators, durable capture spools, bounded finalization, interrupted-session recovery. Hardware smoke signed off on Windows and macOS.
 - **July 2026** — Codebase refactor complete (Phases 0–8 + 5B): Pattern C services under `src/main/`, AI-addon and main-process helper facades, Python `meetings/` package, shared `recorder_stdout.py`. Soft-cap accepted for `src/renderer/app.js`. See [AVANEVIS_CODEBASE_REFACTOR.md](AVANEVIS_CODEBASE_REFACTOR.md).
 - **May 2026** — Code review remediation merged to `master`: Phases 1–6 (security, recording lifecycle, local AI queue/timeouts, performance). Phase 7 backlog tracked in root `todo.md` and [TODO_ARCHIVE_2026-05-20_CODE_REVIEW_REMEDIATION.md](../completed/todo-archives/TODO_ARCHIVE_2026-05-20_CODE_REVIEW_REMEDIATION.md).
@@ -66,13 +68,7 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 
 ## In progress
 
-### Back-to-back recording & transcription queue
-
-**Next big product initiative** after v2.5.0. Unlock Start as soon as a recording is saved as a `pending` meeting; main owns per-meeting transcription jobs (`retry-transcription` shape) on the existing compute queue; Home Activity list replaces the single transcript box. Encode still blocks Start; transcription must not. **Phase 1 (PR1–PR3) and Phase 2 polish shipped** (Activity rename/delete + duration fix, auto-resume, toasts/tips, between-job GPU/preload).
-
-- Design (post-review): [FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md](FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md)
-- Before/after: [background-transcription-queue-before-after.svg](../architecture/background-transcription-queue-before-after.svg)
-- Active checklist: root [`todo.md`](../../todo.md)
+_No major product initiative in flight after v2.6.0. See Planned below and root [`todo.md`](../../todo.md)._
 
 ## Planned
 

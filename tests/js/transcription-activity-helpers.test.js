@@ -22,6 +22,7 @@ const {
   buildCompletionToastView,
   buildBackgroundTranscriptionTipView,
   buildSoftQueueDepthWarningView,
+  resolveActivityRenameCommit,
 } = require('../../src/renderer/transcription-activity-helpers');
 
 test('queue state sequence rejects stale init snapshots and duplicate pushes', () => {
@@ -153,6 +154,21 @@ test('first-run tip and soft queue-depth warning helpers', () => {
   assert.equal(buildBackgroundTranscriptionTipView({ backgroundTranscriptionTipSeen: true }).visible, false);
   assert.equal(buildSoftQueueDepthWarningView(SOFT_QUEUE_DEPTH_WARNING - 1).visible, false);
   assert.equal(buildSoftQueueDepthWarningView(SOFT_QUEUE_DEPTH_WARNING).visible, true);
+});
+
+test('activity rename commit skips empty/unchanged titles (no window.prompt)', () => {
+  assert.deepEqual(
+    resolveActivityRenameCommit({ draft: '  ', original: 'Old' }),
+    { action: 'cancel' },
+  );
+  assert.deepEqual(
+    resolveActivityRenameCommit({ draft: 'Old', original: 'Old' }),
+    { action: 'cancel' },
+  );
+  assert.deepEqual(
+    resolveActivityRenameCommit({ draft: '  Sprint planning  ', original: 'Old' }),
+    { action: 'save', title: 'Sprint planning' },
+  );
 });
 
 test('empty state and fail-fast / quit copy helpers', () => {

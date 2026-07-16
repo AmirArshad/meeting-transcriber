@@ -40,32 +40,31 @@ Replaced Intel-only evermeet.cx ffmpeg with a pinned Apple Silicon static build 
 - [x] [Risk: High] Terminate compute subprocesses registered after wall-clock timeout, including post-CUDA-probe spawns.
 - [x] [Risk: Medium] Reject stale queue snapshots before Activity or History terminal-transition side effects.
 - [x] [Risk: Medium] Release orphan `session.lock` before Windows directory deletion and retain the non-blocking live-lock probe.
-- [ ] [Risk: High] Run the targeted adversarial recorder/queue/Windows orphan manual checks in `tests/manual/recording-smoke-checklist.md` before the 2.6.0 tag.
+- [x] [Risk: High] Run the targeted adversarial recorder/queue/Windows orphan manual checks in `tests/manual/recording-smoke-checklist.md` before the 2.6.0 tag.
 
 ## Next Priorities
 
-Codebase refactor, Release 1 presence, and Release 2 long-recording safety shipped in **v2.5.0** (merged to `master`).
+**v2.6.0 shipped:** [Back-to-back recording & transcription queue](docs/initiatives/FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md) (Phase 1 + Phase 2 polish; [release notes](docs/releases/v2.6.0.md)).
 
-**Next big product initiative:** [Back-to-back recording & transcription queue](docs/initiatives/FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md) (design locked after adversarial review; [before/after SVG](docs/architecture/background-transcription-queue-before-after.svg)).
+Earlier: codebase refactor, Release 1 presence, and Release 2 long-recording safety shipped in **v2.5.0**.
 
 Recommended order when choosing:
 
-1. **Back-to-back recording & transcription queue (Phase 1)** — main-owned pending persist + compute jobs; Home Activity list; Start unlocks after save. See section below.
-2. **Release hygiene** — notarization when enrolled; trial other transitive pin trim (not `onnxruntime`/`tokenizers`/`av`); PyObjC Cocoa/Quartz evaluation.
-3. **Optional extended checklists** — full transcription regression / local AI add-ons smoke when convenient.
+1. **Release hygiene** — notarization when enrolled; trial other transitive pin trim (not `onnxruntime`/`tokenizers`/`av`); PyObjC Cocoa/Quartz evaluation.
+2. **Optional extended checklists** — full transcription regression / local AI add-ons smoke when convenient.
+3. **Next product features** — silent auto-install updater; upload existing audio (reuse Activity queue); see [ROADMAP.md](docs/initiatives/ROADMAP.md).
 
-Do **not** force Phase 2 renderer controllers now. Revisit only if `app.js` grows materially or a feature forces controller-level changes — and only after (1) a DOM-testing decision and (2) a written Pattern C shared-state ownership plan. The transcription-queue work will touch `app.js` but should extract helpers / keep main owning the job — not a full controller rewrite.
+Do **not** force Phase 2 renderer controllers now. Revisit only if `app.js` grows materially or a feature forces controller-level changes — and only after (1) a DOM-testing decision and (2) a written Pattern C shared-state ownership plan.
 
-## Next Product Initiative: Back-to-Back Recording & Transcription Queue
+## Completed: Back-to-Back Recording & Transcription Queue (v2.6.0)
 
 Design: `docs/initiatives/FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md`  
-Diagram: `docs/architecture/background-transcription-queue-before-after.svg`
+Diagram: `docs/architecture/background-transcription-queue-before-after.svg`  
+Release notes: `docs/releases/v2.6.0.md`
 
 **Problem:** After Stop, Start stays blocked through encode *and* full Whisper (renderer `transcribing` state), so consecutive meetings wait minutes. Encode must stay exclusive; transcription must not block capture.
 
-**Phase 1 (MVP) — ship as two PRs: PR 1 = main-owned job behind current blocking UI (behavior-identical); PR 2 = unlock + Activity UI. Cancel recording is an independent companion PR (PR 3).**
-
-**PR1 + PR2 merged.** Companion **PR3** (cancel/discard recording) on `feature/transcription-queue-pr3`.
+**Shipped in v2.6.0** — Phase 1 (PR1–PR3) + Phase 2 polish.
 
 - [x] [Risk: High] Stop → `addMeeting(pending)` + placeholder transcript (incl. recoverable-failure path); snapshot language/model; use post-add `audioPath`. If pending persist itself fails: surface error, stay idle, rely on scan-import recovery (audio already in recordings dir). *(PR1)*
 - [x] [Risk: High] Main-owned per-meeting composite job on `aiComputeActionQueue` (`retry-transcription` shape: transcribe → optional diarize → persist). Renderer becomes a view — do not “just remove the await.” **Includes moving guided-sidecar / `update-meeting-ai` persistence into the main job** (today the renderer persists sidecars after retry returns — background completion during reload/quit would lose speaker metadata). *(PR1)*
