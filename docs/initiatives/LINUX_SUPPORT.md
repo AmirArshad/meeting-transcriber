@@ -1,522 +1,369 @@
-# Linux Support - Implementation Plan
+# Linux Support — Implementation Plan
 
-**Status:** 📋 Planned (v1.8.0)  
-**Target Platforms:** Arch Linux / SteamOS, Ubuntu / Linux Mint  
-**Minimum Requirements:** Ubuntu 20.04+ / Arch Linux (current)
+**Status:** Planned (post-v2.6.0)  
+**Target platforms (v1):** Ubuntu 22.04+/24.04, Linux Mint, Debian (bookworm+), Fedora (PipeWire)  
+**Stretch / later:** Arch, SteamOS (Steam Deck), Flatpak  
+**Minimum viable arch:** `linux-x64` (Intel/AMD). ARM64 deferred.  
+**Related shipped work:** [LONG_RECORDING_SAFETY.md](LONG_RECORDING_SAFETY.md) (v2.5.0 spools) · [FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md](FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md) (v2.6.0) · [LOCAL_AI_MODEL_CATALOG.md](../development/LOCAL_AI_MODEL_CATALOG.md) · root [`AGENTS.md`](../../AGENTS.md)
 
 ---
 
-## Overview
+## Why this plan was rewritten
 
-This document outlines the plan for adding native Linux support to AvaNevis while maintaining existing Windows and macOS versions in a single repository. The approach follows the established pattern of platform-specific optimizations with maximum code sharing.
+The previous Linux plan (late 2025 / “v1.8.0”) assumed whole-session RAM mix, no local AI add-ons catalog, and a single “stop then transcribe” UI. Since then AvaNevis shipped:
 
-## Key Features (Linux)
+| Shipped capability | Implication for Linux |
+|---|---|
+| Durable `{stem}.capture/` track spools + bounded `finalize_capture` (v2.5.0) | Linux recorder **must** use the spool path from day one — no RAM-mix prototype that later gets rewritten |
+| Recording presence, discard/`cancel`, structured stdout JSON | Linux must emit the same `levels` / `event` / `warning` / `error` / stop-stage / final-result contract |
+| Background transcription queue + Home Activity (v2.6.0) | Mostly shared Electron/Python; Linux must not introduce a second lifecycle. Capture exclusive during encode; Start unlocks after pending persist |
+| Optional local AI add-ons (diarization + Qwen summaries via llama.cpp) | Need `linux-x64` catalog pins for llama.cpp runtime + (CUDA) pyannote/torch dependency artifacts |
+| Pattern C main services + compute / GPU resource queues | Wire Linux through existing `recorder-service`, `transcription-service`, `ai-addon-ipc`, `gpu-runtime-service` — do not fork orchestration |
 
-- ✅ **Native Desktop Audio Capture** via PulseAudio/PipeWire Monitor
-- ✅ **Microphone Recording** via sounddevice (PortAudio)
-- ✅ **GPU-Accelerated Transcription** using NVIDIA CUDA (optional)
-- ✅ **Universal Packaging** via AppImage (runs everywhere)
-- ✅ **No Third-Party Software Required** (uses system audio daemon)
+This document replaces the old phase/week schedule with a dependency-ordered plan aligned to current invariants.
 
-## Architecture Decisions
+---
 
-### 1. Repository Structure
+## Product goals (Linux v1)
 
-**Single monorepo** containing Windows, macOS, and Linux versions:
+Ship a privacy-first Linux desktop build that matches Windows/macOS on the core loop:
 
-- ~75% code shared (UI, database, business logic, transcription)
-- Platform-specific modules only for audio capture
-- Clean abstraction layer already established from macOS work
+1. Dual capture (mic + desktop) → durable spools → Opus/WAV finalize  
+2. Stop → pending meeting → background transcription (Activity queue) → History  
+3. Optional: local speaker labels + user-triggered local summaries  
+4. Installer: **AppImage primary**, `.deb` secondary  
+5. No account, no cloud transcription, no telemetry  
 
-### 2. Audio Capture Strategy
+### Explicit non-goals for v1
 
-#### Windows (Unchanged)
+- Parallel / overlapping live recordings (still one capture session)  
+- Skipping Stage A encode before the next Start  
+- Flatpak/Snap sandbox distribution (host Pulse access is harder; revisit later)  
+- AMD ROCm transcription/diarization  
+- Linux ARM64 packaged builds  
+- Steam Deck as a launch gate (nice stretch smoke only)  
+- Replacing History or inventing a Linux-only UX  
 
-- **Library:** pyaudiowpatch (WASAPI loopback)
-- **Desktop Audio:** WASAPI loopback devices
-- **Microphone:** Standard input devices
-- **Status:** ✅ Existing implementation preserved
+---
 
-#### macOS (Unchanged)
+## Architecture decisions
 
-- **Library:** sounddevice + ScreenCaptureKit
-- **Desktop Audio:** ScreenCaptureKit API
-- **Microphone:** sounddevice (PortAudio)
-- **Status:** ✅ Existing implementation preserved
+### 1. Monorepo, same factories
 
-#### Linux (New)
+Keep one repo. Platform forks stay where they already are:
 
-- **Library:** sounddevice (PortAudio)
-- **Desktop Audio:** PulseAudio/PipeWire Monitor Source
-- **Microphone:** sounddevice (PortAudio)
-- **Fallback:** Mic-only mode if monitor source not found
+| Concern | Windows | macOS | Linux (new) |
+|---|---|---|---|
+| Recorder | `windows_recorder.py` | `macos_recorder.py` | `linux_recorder.py` |
+| Devices | WASAPI / `pyaudiowpatch` | sounddevice + virtual loopback helpers | sounddevice + Pulse/PipeWire monitor |
+| Transcription | `faster-whisper` | MLX (arm64) / faster-whisper fallback | **`faster-whisper` (same as Windows)** |
+| Diarization | CUDA pyannote | MPS pyannote | CUDA pyannote when ready; else unsupported |
+| Summaries | llama.cpp CUDA | llama.cpp Metal | llama.cpp CUDA (CPU fallback later if needed) |
+| Packaging | NSIS | DMG | AppImage + `.deb` |
 
-**Why PulseAudio Monitor?**
+Shared and unchanged by design: meeting metadata (`meeting_manager` / `meetings/`), compute queue, Activity/`transcription-queue-state`, renderer History/Activity, summary JSON schema, capture recovery / scan-import.
 
-- Works on **both** PulseAudio (Ubuntu/Mint) and PipeWire (Arch/SteamOS)
-- PipeWire includes `pipewire-pulse` compatibility layer
-- No kernel modules or virtual cables required
-- Standard on all modern Linux distributions
-- Zero additional software installation
+### 2. Audio capture: PulseAudio / PipeWire monitor
 
-### 3. Transcription Strategy: Shared Backend
+**Approach:** mic + desktop as separate tracks into `{stem}.capture/` spools (same invariant as Win/mac). Desktop = monitor source of the default (or user-selected) sink via PortAudio/`sounddevice`, optionally assisted by `pulsectl` for naming/default resolution.
 
-#### Linux: faster-whisper (SAME AS WINDOWS)
+**Why this works**
 
-```python
-# backend/transcription/faster_whisper_transcriber.py
-# Existing Windows implementation - zero changes needed
-- CUDA GPU acceleration (NVIDIA GPUs)
-- CPU fallback (Intel/AMD CPUs, AMD APUs like Steam Deck)
-- CTranslate2 models (already cached)
-```
+- PipeWire ships `pipewire-pulse`; Ubuntu/Mint/Fedora all expose monitor sources  
+- No kernel modules, no VB-Cable, no native helper binary  
+- Late desktop failure → warn + continue mic-only (match macOS policy)  
 
-**Why Shared Backend?**
-| Aspect | Benefit |
-|--------|---------|
-| **Code Reuse** | 100% transcription code shared with Windows |
-| **Maintenance** | No new transcriber to maintain |
-| **Quality** | Proven implementation, no new bugs |
-| **GPU Support** | Native CUDA support for NVIDIA users |
+**Known flakiness to design for (not ignore)**
 
-### 4. Performance Expectations
+- Default sink changes mid-session (Bluetooth connect/disconnect)  
+- Multiple sinks / HDMI / USB docks → wrong monitor  
+- Odd sample rates → resample into shared 48 kHz spool finalize path  
+- Headless / SSH sessions with no audio graph  
 
-#### Desktop PCs (NVIDIA GPU + CUDA)
+v1 mitigation: resolve monitor at start; if missing, offer mic-only; on desktop stream death after start, warn and continue mic-only.
 
-- **Same as Windows** - Identical performance
-- Medium model: 4-5x realtime
+### 3. Spool + finalize (hard requirement)
 
-#### Steam Deck (AMD Zen2 APU + CPU)
+Linux must implement the **current** capture contract from day one. Do not prototype a whole-session RAM mixer.
 
-- Tiny model: 1-2x realtime
-- Base model: 0.5-1x realtime (slightly slower than realtime)
-- Small model: 0.3-0.5x realtime
-- **Note:** Steam Deck runs on CPU (no AMD GPU support). Base/Tiny models recommended.
+Required behaviors (see `AGENTS.md` + `LONG_RECORDING_SAFETY.md`):
 
-#### AMD Desktop (ROCm - Future)
+- Spill mic and desktop to durable `{stem}.capture/` track spools during recording  
+- Stop uses bounded `finalize_capture` (platform profile `linux-v1` or reuse shared passes where possible)  
+- Stdin exact-token `stop` / `cancel`; `cancel` tombstones `discarded` then cleanup — never resurrect as a meeting  
+- Structured stdout: startup events, `levels`, warnings/errors, stop stages  
+  (`post_processing_started`, `audio_normalizing`, `audio_mixing`, `audio_encoding`, `post_processing_complete`)  
+- Final success JSON must include a recoverable path (`audioPath` and/or `outputPath`; Electron already accepts both)  
+- Failures emit structured `success: false` (not stderr-only exit)  
+- Post-processing temps use non-scanned `.pcm.tmp`; recovery promotes to stable `{stem}.wav` before handing Electron a path  
+- Interrupted sessions recover through `audio.capture_recovery` + scan-import rules  
 
-- ROCm (AMD GPU support) possible but complex
-- Not in initial release
-- Can be added in v1.9.0+ if user demand exists
+Shared helpers to reuse: `recorder_stdout.py`, `recorder_stdin.py`, `recorder_temp_paths.py`, `finalize_capture` / streaming post-processor, compressor, wav_io, timeline.
 
-## Implementation Phases
+### 4. Sequential recording & transcription queue (mostly free)
 
-### Phase 1: Audio Implementation (Week 1)
+v2.6.0 already owns:
 
-**Goal:** Implement Linux audio recorder using existing abstraction
+- Capture exclusive during encode  
+- `addMeeting(pending)` + main-owned composite job on `aiComputeActionQueue`  
+- Home Activity list, cancel pending, auto-resume pending after maintenance  
+- Recording-while-transcribe priority self-lower in Python children  
+- Between-job `gpuResourceActionQueue` admission for preload / GPU runtime  
 
-**Tasks:**
+**Linux work:** ensure the Linux recorder integrates with `recorder-service.js` the same way Win/mac do (session IDs, cancel mismatch, quit-during-recording). Do **not** add a Linux-specific queue. Smoke: Start → Stop → Start again while Meeting 1 is still transcribing.
 
-1. Create `backend/audio/linux_recorder.py`
-2. Implement PulseAudio monitor detection via `sounddevice`
-3. Handle both PulseAudio and PipeWire scenarios
-4. Match interface with Windows/macOS recorders
-5. Test on Ubuntu 22.04 and Arch Linux
+### 5. Local AI add-ons on Linux
 
-**Deliverables:**
+Catalog today pins only `win32-x64` and `darwin-arm64` for summary runtime and diarization dependency artifacts (`src/ai-addon-state.js`). Linux needs new pins.
 
-- Working Linux recorder
-- Windows/macOS unchanged
-- Device enumeration shows monitor sources
+| Feature | Linux v1 policy |
+|---|---|
+| Whisper transcription | `faster-whisper`; CUDA when probe passes; else CPU. Reuse Windows cache completeness + `AVANEVIS_TRANSCRIPTION_*` env contract |
+| GPU runtime install/repair | Port or narrow `gpu-runtime-service` for Linux CUDA wheels **or** document “system CUDA + pip profile” for v1; keep mutual exclusion via `gpuResourceActionQueue` |
+| Speaker diarization | Enable only when CUDA-ready + catalog Linux artifacts + user HF token (same privacy rules). No CPU-only Linux diarization in v1 (same spirit as refusing CPU macOS diarization) |
+| Summaries | Pin `linux-x64` llama.cpp runtime (+ CUDA build if practical); same default model (`qwen3.5-9b-q4-k-m`) and JSON schema; user-triggered only |
+| Setup validation | Stay on `createAbortableComputeAction` + `AI_COMPUTE_TIMEOUT_MS.addonValidation` |
 
-### Phase 2: Device Management (Week 1)
+Checksum / HTTPS / host-allowlist / HF xet download rules unchanged. Update `LOCAL_AI_MODEL_CATALOG.md` and `tests/js/ai-addon-*.test.js` when pins land.
 
-**Goal:** Update device manager to support Linux
+### 6. Packaging
 
-**Tasks:**
+| Artifact | Role |
+|---|---|
+| **AppImage** | Primary — widest distro reach, fewer glibc fights |
+| **`.deb`** | Secondary — Ubuntu/Debian convenience |
+| Flatpak/Snap | Deferred (sandbox ↔ Pulse monitor friction) |
 
-1. Add `_list_devices_linux()` to `device_manager.py`
-2. Detect PulseAudio/PipeWire monitor sources
-3. Create virtual "System Audio (Monitor)" entry
-4. Handle edge cases (no monitor, multiple monitors)
+Build notes:
 
-### Phase 3: Build System (Week 2)
+- Extend `build/download-manifest.js` + `build/prepare-resources.js` for Linux Python standalone + static ffmpeg  
+- Build AppImage on an older Ubuntu runner for glibc compatibility (evaluate current GitHub `ubuntu-22.04` vs older image; document the chosen floor)  
+- `package.json` `build.linux` targets; artifact names must stay compatible with `src/updater.js` patterns  
+- Set `AVANEVIS_PACKAGED=1` for packaged children (same as other platforms)  
+- Bundle/link `libportaudio`; rely on host Pulse/PipeWire  
 
-**Goal:** Create AppImage and .deb packages
+---
 
-**Tasks:**
+## Implementation phases (dependency order)
 
-1. Add Linux build targets to `package.json`
-2. Extend the unified `build/prepare-resources.js` flow for Linux
-3. Bundle Python runtime for Linux (x64)
-4. Bundle ffmpeg static binary for Linux
-5. Test AppImage on Ubuntu and Arch
+No calendar estimates — order is technical.
 
-**Build Configuration:**
+### Phase 0 — Characterization gates
 
-```json
-"linux": {
-  "target": [
-    {
-      "target": "AppImage",
-      "arch": ["x64"]
-    },
-    {
-      "target": "deb",
-      "arch": ["x64"]
-    }
-  ],
-  "category": "Office",
-  "maintainer": "avanevis@example.com"
-}
-```
+Before coding the recorder:
 
-### Phase 4: CI/CD Pipeline (Week 2)
+1. Confirm shared spool finalize APIs that Linux can call without forking Win/mac semantics  
+2. Spike: list Pulse/PipeWire monitor sources on Ubuntu 24.04 + one PipeWire-native distro; capture 30s mic+monitor via `sounddevice`  
+3. Decide Linux final JSON field (`audioPath` vs `outputPath` — either is fine; pick one and document)  
+4. Inventory `process.platform === 'win32'|'darwin'` branches in `src/main/**`, presence service, GPU service, AI catalog that need `linux` arms or safe no-ops  
 
-**Goal:** Automate Linux builds
+### Phase 1 — Device enumeration
 
-**Tasks:**
+- Add Linux path in `backend/device_manager.py` / `device_helpers.py`  
+- Expose mic inputs + monitor sources as desktop/loopback choices  
+- Prefer monitor of default sink; label clearly in UI  
+- Mic-only when no monitor  
+- Extend device IPC / preflight so Linux is not “unsupported platform”  
 
-1. Create `.github/workflows/build-linux.yml`
-2. Use `ubuntu-20.04` runner (for glibc compatibility)
-3. Build both AppImage and .deb
-4. Upload to GitHub Releases
-5. Test installers on multiple distros
+### Phase 2 — Linux recorder (spool-first)
 
-### Phase 5: Testing (Week 3)
+- Add `backend/audio/linux_recorder.py` implementing `BaseAudioRecorder`  
+- Wire factory in `backend/audio/__init__.py`  
+- Dual-track spool writes; `linux-v1` finalize (or shared passes + Linux capture adapters)  
+- Full stdout JSON + stdin `stop`/`cancel` contract  
+- Desktop-late-failure → warn + mic-only  
+- Unit/contract tests: extend `tests/js/recorder-event-contract.test.js` and `tests/python/test_recorder_event_contract.py` (+ new Linux-focused Python tests for monitor selection / cancel discard)  
 
-**Goal:** Verify compatibility across Linux distributions
+### Phase 3 — Electron / presence / preflight
 
-**Testing Matrix:**
+- `recorder-service.js`: treat Linux like other POSIX platforms for process groups; keep session/cancel/quit semantics  
+- `recording-presence-service.js`: tray + notifications; no Dock badge / Windows overlay (no-op those)  
+- Disk `statfs` warnings already Node-based — verify on Linux filesystems  
+- Close-dialog / single-instance copy for Linux window managers  
+- Preflight: skip macOS permission probes; optional Pulse/PipeWire reachability check  
 
-- Ubuntu 20.04, 22.04, 24.04
-- Linux Mint 21
-- Arch Linux (current)
-- SteamOS 3.x (Steam Deck)
-- Fedora 39+ (PipeWire test)
+### Phase 4 — Transcription + sequential queue smoke
 
-## File Organization
+- Confirm `get_transcriber()` → faster-whisper on Linux  
+- CUDA probe path: either reuse/adapt Windows CUDA status helpers or Linux-specific probe that still feeds `resolveCudaStatusForTranscription`  
+- Priority self-lower already uses `os.nice` on non-Windows — verify under concurrent record+transcribe  
+- Manual smoke matrix (must pass before calling Linux “feature complete” for core loop):  
+  - Record mic+desktop → History playback  
+  - Discard mid-recording → no meeting  
+  - Stop → Start immediately while transcription runs (Activity queue)  
+  - Quit with pending job → pending survives; resume banner / auto-resume after maintenance  
+  - Interrupted kill → recover spool  
 
-```
-avanevis/
-├── backend/
-│   ├── audio/
-│   │   ├── __init__.py              # Factory: get_audio_recorder()
-│   │   ├── base_recorder.py         # Abstract base class
-│   │   ├── windows_recorder.py      # Windows (pyaudiowpatch)
-│   │   ├── macos_recorder.py        # macOS (ScreenCaptureKit)
-│   │   └── linux_recorder.py        # 🆕 Linux (PulseAudio/PipeWire)
-│   ├── transcription/
-│   │   ├── __init__.py              # Factory: get_transcriber()
-│   │   ├── base_transcriber.py      # Abstract base class
-│   │   ├── faster_whisper_transcriber.py  # Windows + Linux (CUDA/CPU)
-│   │   └── mlx_whisper_transcriber.py     # macOS (MLX Metal)
-│   ├── device_manager.py            # Platform detection + Linux support
-│   ├── meeting_manager.py           # Shared (no changes)
-│   └── platform_utils.py            # Platform detection utilities
-├── build/
-│   ├── resources/
-│   │   ├── python/                  # staged current-platform Python runtime
-│   │   ├── ffmpeg/                  # staged current-platform ffmpeg
-│   │   └── bin/                     # staged helper binaries when needed
-│   ├── prepare-resources.js         # unified resource preparation entrypoint
-│   ├── icon.ico                     # Windows
-│   ├── icon.icns                    # macOS
-│   └── icon.png                     # 🆕 Linux (256x256)
-└── .github/workflows/
-    ├── build-windows.yml            # Windows CI/CD
-    ├── build-macos.yml              # macOS CI/CD
-    ├── build-linux.yml              # 🆕 Linux CI/CD
-    └── build-release.yml            # Combined release for all platforms
-```
+### Phase 5 — Local AI add-ons (Linux catalog)
 
-## Dependencies
+1. Pin `linux-x64` llama.cpp runtime artifact (checksum + URL)  
+2. Pin Linux CUDA diarization dependency artifact (or staged install recipe matching Windows privacy rules: user token, `--token-stdin`, cleared HF token env via `buildClearedHuggingFaceTokenEnv`)  
+3. Extend `getSummaryRuntimeArtifactForPlatform` / diarization dependency helpers for `linux` + `x64`  
+4. UI: show setup only when platform status is `enabled`; otherwise `unsupported` with clear copy  
+5. Validate: summary generate → `*.summary.json` / `*.summary.md`; guided transcription when diarization ready  
 
-### Common (All Platforms)
+Can ship core Linux **without** Phase 5 if Settings marks add-ons unsupported — but document that as an intentional v1 cut.
 
-```
-requirements-common.txt:
-numpy>=1.24.0
-scipy>=1.11.0
-soxr>=0.3.0
-filelock>=3.20.3
-```
+### Phase 6 — Packaging + CI
 
-### Windows-Specific (Unchanged)
+1. `requirements-linux.txt`  
+2. Linux pins in `download-manifest.js`; `prepare-resources.js` `IS_LINUX` path  
+3. `package.json` scripts: `build:linux`, `build:linux:dir`  
+4. electron-builder `linux` targets (AppImage + deb)  
+5. CI workflow on Ubuntu for prepare-build + packaged smoke (launch + import check + short faster-whisper if feasible in CI)  
+6. Release asset naming + `updater.js` recognition  
+7. README install section (AppImage chmod + `.deb`)  
+
+### Phase 7 — Distro QA / docs
+
+Manual matrix (host installs, not Flatpak):
+
+| Distro | Audio stack | Priority |
+|---|---|---|
+| Ubuntu 24.04 | PipeWire + pulse compat | **P0** |
+| Ubuntu 22.04 | Pulse/PipeWire | **P0** |
+| Linux Mint (Ubuntu base) | Pulse/PipeWire | P1 |
+| Debian bookworm+ | Pulse/PipeWire | P1 |
+| Fedora (current) | PipeWire | P1 |
+| Arch (current) | PipeWire | P2 |
+| SteamOS | PipeWire | P2 stretch |
+
+Also update: `AGENTS.md` platform targets, `ROADMAP.md` status when work starts/ships, `tests/manual/recording-smoke-checklist.md` Linux section, legal/THIRD_PARTY as needed.
+
+---
+
+## File touch map (expected)
 
 ```
-requirements-windows.txt:
--r requirements-common.txt
-pyaudiowpatch>=0.2.12.4    # WASAPI loopback
-faster-whisper>=1.0.0      # CUDA transcription
+backend/audio/
+  __init__.py                 # Linux factory branch
+  linux_recorder.py           # NEW — spool-first recorder
+  (shared finalize / stdout / temp helpers — extend, don't fork)
+
+backend/device_manager.py
+backend/device_helpers.py     # monitor detection / dedupe / sort
+
+src/ai-addon-state.js         # linux-x64 runtime + diarization dependency pins
+src/main/recorder-service.js  # only if Linux-specific spawn/presence edges appear
+src/main/recording-presence-service.js
+src/main/device-ipc.js
+src/main/gpu-runtime-service.js   # Linux CUDA story
+src/main/python-runtime.js        # already mostly POSIX-ready
+src/updater.js                    # Linux asset patterns
+
+build/download-manifest.js
+build/prepare-resources.js
+package.json                      # linux targets + scripts
+requirements-linux.txt            # NEW
+
+.github/workflows/…               # linux build / smoke
+tests/js/recorder-event-contract.test.js
+tests/python/test_recorder_event_contract.py
+tests/js/ai-addon-*.test.js
+tests/manual/recording-smoke-checklist.md
+docs/development/LOCAL_AI_MODEL_CATALOG.md
+AGENTS.md
 ```
 
-### macOS-Specific (Unchanged)
+Meeting persistence, Activity queue, and summary pipeline should need **little or no** Linux-only logic if the recorder + catalog pins are correct.
+
+---
+
+## Dependencies (planned)
+
+### `requirements-linux.txt` (sketch)
 
 ```
-requirements-macos.txt:
--r requirements-common.txt
+-r requirements-common.txt   # or equivalent shared pins used by Win/mac today
 sounddevice>=0.4.6
-pyobjc-framework-ScreenCaptureKit>=10.0
-lightning-whisper-mlx>=0.0.10
+pulsectl>=23.5.0             # monitor / default-sink resolution (optional but useful)
+faster-whisper==<pin matching Windows>
+# plus existing shared pins: numpy, soxr, filelock, etc.
 ```
 
-### Linux-Specific (New)
+System / bundle:
 
-```
-requirements-linux.txt:
--r requirements-common.txt
-sounddevice>=0.4.6         # Microphone + Monitor
-faster-whisper>=1.0.0      # Transcription (CUDA/CPU)
-pulsectl>=23.5.0           # Optional: PulseAudio monitor detection
-```
+- `libportaudio2` (bundle or declare)  
+- Host `pipewire-pulse` or PulseAudio  
+- Bundled static `ffmpeg`  
+- Bundled CPython standalone (same prepare-resources pattern)  
 
-**System Dependencies (AppImage includes these):**
+---
 
-- `libportaudio2` - PortAudio library
-- `pulseaudio` or `pipewire-pulse` - Audio daemon
-- `ffmpeg` (bundled in AppImage)
+## Feasibility notes
 
-## User Experience Changes
+| Area | Assessment |
+|---|---|
+| Mic + monitor capture | Feasible; mature pattern (OBS-class). Moderate edge-case QA |
+| Spool/finalize parity | Medium engineering — reuse shared finalize; don’t invent a second pipeline |
+| Transcription queue | Low incremental cost — already main-owned and platform-agnostic |
+| Summaries on Linux | Medium — mostly catalog + llama.cpp Linux pin |
+| Diarization on Linux | Medium/hard — CUDA artifact story + VRAM; keep unsupported until ready |
+| Packaging | Medium — AppImage well-trodden; `.deb` secondary |
+| “Works on every distro” | Ongoing — constrain v1 to Ubuntu/Debian desktop first |
 
-### Windows Users
+Linux capture is generally **less permission-hostile than macOS** and **similar in spirit to Windows loopback**. Flakiness is mostly environment variance (sinks/Bluetooth), not a missing OS API.
 
-- **Zero changes** - Everything works exactly as before
+---
 
-### macOS Users
-
-- **Zero changes** - Everything works exactly as before
-
-### Linux Users (New)
-
-#### Installation
-
-**AppImage (Recommended):**
+## Development workflow
 
 ```bash
-# Download from GitHub Releases
-chmod +x avanevis-1.8.0.AppImage
-./avanevis-1.8.0.AppImage
-```
-
-**Debian/Ubuntu (.deb):**
-
-```bash
-sudo dpkg -i avanevis_1.8.0_amd64.deb
-sudo apt-get install -f  # Fix dependencies
-```
-
-#### First Launch
-
-1. **Permissions (if using Flatpak/Snap later):**
-
-   - Grant PulseAudio/PipeWire access
-   - Standard Linux permissions (no special prompts)
-
-2. **Device Selection:**
-
-   - Microphone: Standard input devices
-   - Desktop Audio: "Monitor of [Output Device]" or "System Audio (Monitor)"
-   - Fallback to mic-only if monitor not detected
-
-3. **Transcription:**
-   - Models auto-download (~500MB–1.5GB)
-   - CUDA auto-detected (NVIDIA GPUs)
-   - CPU fallback (AMD/Intel)
-
-## Technical Considerations
-
-### PulseAudio vs PipeWire
-
-**Strategy:** Target PulseAudio API, which PipeWire emulates via `pipewire-pulse`.
-
-**Detection Logic:**
-
-```python
-# Check if PipeWire is running
-pipewire_running = subprocess.run(['pidof', 'pipewire'],
-                                   capture_output=True).returncode == 0
-
-# Use same API for both (PulseAudio compatibility layer)
-monitor_device = find_monitor_source()
-```
-
-### Monitor Source Detection
-
-```python
-import sounddevice as sd
-
-# List all devices
-devices = sd.query_devices()
-
-# Find monitor sources (contain "monitor" in name)
-monitors = [d for d in devices if 'monitor' in d['name'].lower()]
-
-# Prefer: "Monitor of [default output]"
-default_monitor = [m for m in monitors if 'default' in m['name'].lower()]
-```
-
-### AppImage Compatibility
-
-- **Build on Ubuntu 20.04** (glibc 2.31) for maximum compatibility
-- **Static ffmpeg** bundled (no system dependencies)
-- **Portable Python** using PyInstaller or standalone build
-- **PortAudio** bundled in AppImage
-
-### Steam Deck Specifics
-
-- **SteamOS 3.x:** Arch Linux with PipeWire
-- **File System:** Read-only root partition
-- **Solution:** AppImage runs from `~/Downloads` or SD card
-- **Performance:** CPU-only transcription (Base/Tiny models recommended)
-- **UI Scaling:** 1280x800 resolution, touch-friendly buttons
-
-## Build Pipeline
-
-### Linux Build Workflow (`.github/workflows/build-linux.yml`)
-
-```yaml
-name: Build Linux Installer
-
-on:
-  push:
-    tags:
-      - "v*"
-
-jobs:
-  build-linux:
-    runs-on: ubuntu-20.04 # Old glibc for compatibility
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: 18
-
-      - name: Install Dependencies
-        run: npm install
-
-      - name: Prepare Linux Resources
-        run: npm run prepare-build
-
-      - name: Build AppImage & DEB
-        run: npm run build:linux
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v3
-        with:
-          name: linux-installers
-          path: |
-            dist/*.AppImage
-            dist/*.deb
-```
-
-### Resource Preparation (`build/prepare-resources.js`)
-
-```javascript
-// 1. Download portable Python for Linux
-// 2. Install Python dependencies via pip
-// 3. Download static ffmpeg binary
-// 4. Stage build/resources/python/
-// 5. Stage build/resources/ffmpeg/
-```
-
-### Package.json Updates
-
-```json
-{
-  "scripts": {
-    "build:linux": "electron-builder build --linux --publish never",
-    "build:linux:dir": "electron-builder build --linux --dir"
-  },
-  "build": {
-    "linux": {
-      "target": ["AppImage", "deb"],
-      "category": "Office",
-      "icon": "build/icon.png",
-      "artifactName": "${productName}-${version}.${ext}"
-    }
-  }
-}
-```
-
-## Development Workflow
-
-### Testing Locally
-
-**On Linux:**
-
-```bash
-# Install dependencies
+# On a Linux desktop with PipeWire/Pulse
 npm install
-pip install -r requirements-linux.txt
-
-# Run in development
+python3.11 -m venv .venv
+./.venv/bin/python -m pip install -r requirements-linux.txt -r requirements-dev.txt
 npm start
 
-# Build AppImage
-npm run build:linux
+# Packaged
+npm run prepare-build
+npm run build:linux        # once scripts exist
 ```
 
-**On Windows/macOS (via VM):**
+Branch naming when implementation starts: follow repo convention (`feature/linux-support` or cloud `cursor/…` branches). Keep Win/mac green; Linux lands behind factory/platform checks until smoke-signed.
 
-- Use VirtualBox/VMware with Ubuntu 22.04
-- Or use GitHub Actions for testing
+---
 
-### Branch Strategy
+## Distribution (when shipping)
+
+GitHub Releases assets (versions illustrative):
+
+- `AvaNevis-Setup-<version>.exe`  
+- `AvaNevis-Setup-<version>.dmg`  
+- `AvaNevis-<version>.AppImage`  
+- `avanevis_<version>_amd64.deb`  
+
+README install blurb:
 
 ```bash
-git checkout -b feature/linux-support
-# Develop incrementally
-# Test on Ubuntu + Arch
-# Merge to main when stable
+chmod +x AvaNevis-<version>.AppImage
+./AvaNevis-<version>.AppImage
+
+# or
+sudo dpkg -i avanevis_<version>_amd64.deb
+sudo apt-get install -f
 ```
 
-## Distribution Strategy
+---
 
-### GitHub Releases
+## Future (post-Linux-v1)
 
-**v1.8.0 Release Assets:**
+1. Flatpak with explicit Pulse/PipeWire portal story  
+2. AMD ROCm faster-whisper / diarization (demand-driven)  
+3. `linux-arm64`  
+4. Steam Deck-oriented defaults (tiny/base model hints, UI scaling)  
+5. Optional system-package ffmpeg/Python for distro maintainers (not the primary support path)
 
-- `AvaNevis-Setup-1.8.0.exe` (Windows)
-- `AvaNevis-Setup-1.8.0.dmg` (macOS)
-- `AvaNevis-1.8.0.AppImage` (Linux Universal)
-- `avanevis_1.8.0_amd64.deb` (Ubuntu/Debian)
-
-### Installation Instructions (README)
-
-```markdown
-## Linux Installation
-
-### AppImage (All Distros)
-
-1. Download `AvaNevis-1.8.0.AppImage`
-2. Make executable: `chmod +x "AvaNevis-1.8.0.AppImage"`
-3. Run: `./Meeting\ Transcriber-1.8.0.AppImage`
-
-### Ubuntu/Debian (.deb)
-
-1. Download `avanevis_1.8.0_amd64.deb`
-2. Install: `sudo dpkg -i avanevis_1.8.0_amd64.deb`
-3. Fix dependencies: `sudo apt-get install -f`
-```
-
-## Future Enhancements (Post-v1.8.0)
-
-1. **AMD ROCm Support** (GPU acceleration for AMD GPUs)
-2. **Flatpak Package** (if wider sandboxed distribution needed)
-3. **Snap Package** (for Ubuntu Software Center)
-4. **ARM64 Support** (Raspberry Pi, Linux phones)
+---
 
 ## References
 
-### Documentation
-
-- [PulseAudio Monitor Sources](https://www.freedesktop.org/wiki/Software/PulseAudio/)
-- [PipeWire PulseAudio Compatibility](https://docs.pipewire.org/page_man_pipewire-pulse_1.html)
-- [electron-builder Linux](https://www.electron.build/configuration/linux)
-
-### Examples
-
-- [AppImage Best Practices](https://docs.appimage.org/packaging-guide/index.html)
-- [PortAudio on Linux](http://portaudio.com/docs/v19-doxydocs/compile_linux.html)
+- PulseAudio monitor sources — https://www.freedesktop.org/wiki/Software/PulseAudio/  
+- PipeWire pulse compatibility — https://docs.pipewire.org/  
+- electron-builder Linux — https://www.electron.build/configuration/linux  
+- In-repo: `AGENTS.md` recorder/AI invariants · `docs/completed/json-based-events.md` · `docs/development/LOCAL_AI_MODEL_CATALOG.md`
 
 ---
 
-**Last Updated:** December 2025  
-**Status:** Planning Complete - Ready for Implementation
+**Last updated:** 2026-07-16  
+**Status:** Planning refreshed for spool capture, sequential transcription queue, and local AI add-ons — ready to implement when prioritized
