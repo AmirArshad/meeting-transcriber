@@ -843,7 +843,6 @@ select.device-select:disabled {
    Same chrome as .record-button; neutral grey instead of crimson. */
 .discard-recording-btn {
   margin-left: 0;
-  min-width: 140px;
   background: linear-gradient(180deg, #5c6575 0%, #454c59 100%);
   color: #fff;
   box-shadow:
@@ -851,6 +850,14 @@ select.device-select:disabled {
     0 0 0 1px rgba(255, 255, 255, 0.04),
     0 6px 16px -8px rgba(0, 0, 0, 0.55);
   animation: none;
+}
+
+/* Beat .record-button min-width (same element has both classes). */
+.record-button.discard-recording-btn {
+  min-width: 0;
+  width: auto;
+  padding-left: 14px;
+  padding-right: 14px;
 }
 
 .discard-recording-btn:hover {
@@ -894,7 +901,7 @@ select.device-select:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: 6px;
   padding: 11px 22px;
   font-size: 13.5px;
   font-weight: 600;
@@ -1088,11 +1095,6 @@ select.device-select:disabled {
   text-transform: uppercase;
   letter-spacing: 0.08em;
   margin: 0;
-}
-
-.activity-header-hint {
-  font-size: 11px;
-  color: var(--text-tertiary);
 }
 
 .activity-list {
