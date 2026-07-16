@@ -164,8 +164,13 @@ function createRecordingsMaintenanceGate(options = {}) {
   }
 
   /**
-   * Admission for start-recording: brief wait behind scan, then reserve `start`
-   * so recovery cannot race in before capture state becomes non-idle.
+   * Admission for start-recording: brief wait behind scan (or a brief rival
+   * start reservation), then reserve `start` so recovery cannot race in before
+   * capture state becomes non-idle.
+   *
+   * Waiting behind `start` matters for Cancel during gate wait: a discarded
+   * Start A may briefly acquire after scan release, abort, and release — Start B
+   * must be allowed to admit afterward instead of fail-fast.
    */
   async function admitStartRecording({ waitForScanMs = scanWaitMs } = {}) {
     if (owner === 'recovery') {
@@ -190,16 +195,15 @@ function createRecordingsMaintenanceGate(options = {}) {
           message: 'Finish or wait for interrupted-recording recovery before starting a new recording.',
         };
       }
-      if (owner === 'start') {
-        // Another start already reserved.
-        return {
-          ok: false,
-          code: 'RECORDING_START_IN_PROGRESS',
-          owner: 'start',
-          message: 'A recording is starting.',
-        };
-      }
       if (nowFn() >= deadline) {
+        if (owner === 'start') {
+          return {
+            ok: false,
+            code: 'RECORDING_START_IN_PROGRESS',
+            owner: 'start',
+            message: 'A recording is starting.',
+          };
+        }
         return {
           ok: false,
           code: 'RECORDING_SCAN_IN_PROGRESS',

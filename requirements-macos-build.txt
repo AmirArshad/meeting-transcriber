@@ -2,6 +2,8 @@
 # Keep local development requirements in requirements-macos.txt.
 sounddevice==0.4.6
 numpy==2.4.6
+# Shared spool finalization imports processor.StatefulResampler (soxr).
+soxr==1.1.0
 pyobjc-framework-ScreenCaptureKit==10.0
 pyobjc-framework-CoreAudio==10.0
 pyobjc-framework-AVFoundation==10.0

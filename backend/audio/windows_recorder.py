@@ -88,6 +88,7 @@ from .capture_manifest import (
     CaptureManifestCoordinator,
     MANIFEST_FILENAME,
     discard_capture_session,
+    mark_capture_discarded_and_cleanup,
 )
 from .track_spool import (
     DEFAULT_MAX_QUEUE_BYTES,
@@ -809,6 +810,31 @@ class AudioRecorder:
         if session_dir is not None:
             discard_capture_session(session_dir)
 
+    def _close_spool_handles_for_discard(self) -> None:
+        """Close track spool writers without entering the finalize path."""
+        for spool in (self._mic_spool, self._desktop_spool):
+            if spool is None:
+                continue
+            try:
+                spool.close()
+            except Exception:
+                pass
+        self._mic_spool = None
+        self._desktop_spool = None
+
+    def cancel_recording(self) -> None:
+        """Stop capture, skip Stage A, tombstone-discard spools (no meeting audio)."""
+        print("Cancelling recording (discard)...", file=sys.stderr)
+        self.is_recording = False
+        self.watchdog_running = False
+        if self.callback_watchdog:
+            self.callback_watchdog.join(timeout=1.0)
+        self._close_streams()
+        self._close_spool_handles_for_discard()
+        mark_capture_discarded_and_cleanup(self._capture_manifest)
+        self._capture_manifest = None
+        print("Recording cancelled; capture discarded.", file=sys.stderr)
+
     def _abort_start_recording(self):
         """Reset recording state and close any streams opened during a failed start."""
         self.is_recording = False
@@ -1165,20 +1191,30 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     # signal.signal(signal.SIGTERM, signal_handler) # SIGTERM not supported gracefully on Windows
 
-    # Start a thread to listen for stop command from stdin (for Electron)
+    # Start a thread to listen for stop/cancel from stdin (for Electron)
+    from .recorder_stdin import (
+        RECORDER_STDIN_CANCEL,
+        parse_recorder_stdin_command,
+    )
+
     stop_event = threading.Event()
-    
+    stdin_command = {"cmd": "stop"}
+    recording_cancelled = False
+
     def input_listener():
         try:
-            # Read lines from stdin
             for line in sys.stdin:
-                if "stop" in line.lower():
+                cmd = parse_recorder_stdin_command(line)
+                if cmd is not None:
+                    stdin_command["cmd"] = cmd
                     stop_event.set()
                     break
             else:
                 # stdin EOF while capture is active — stop cleanly (no orphan).
+                stdin_command["cmd"] = "stop"
                 stop_event.set()
         except Exception:
+            stdin_command["cmd"] = "stop"
             stop_event.set()
 
     input_thread = threading.Thread(target=input_listener, daemon=True)
@@ -1200,13 +1236,17 @@ def main():
                 if not recorder.is_recording or stop_event.is_set() or recorder.get_async_capture_error():
                     break
                 time.sleep(1)
-            recorder.stop_recording()
-            async_err = recorder.get_async_capture_error()
-            if async_err:
-                raise RuntimeError(async_err)
+            if stdin_command["cmd"] == RECORDER_STDIN_CANCEL:
+                recorder.cancel_recording()
+                recording_cancelled = True
+            else:
+                recorder.stop_recording()
+                async_err = recorder.get_async_capture_error()
+                if async_err:
+                    raise RuntimeError(async_err)
         else:
             # Record until interrupted
-            print("Recording... Send 'stop' to stdin or Press Ctrl+C to stop", file=sys.stderr)
+            print("Recording... Send 'stop' or 'cancel' to stdin or Press Ctrl+C to stop", file=sys.stderr)
             
             # Main loop - print audio levels for visualization
             # PERFORMANCE: Reduced from 20 FPS to 5 FPS to minimize CPU/IPC overhead
@@ -1225,12 +1265,17 @@ def main():
                 _send_json_message(levels)
                 time.sleep(0.2) # 5 FPS updates (was 0.05 = 20 FPS)
             
-            print("\nStopping recording...", file=sys.stderr)
-            # Always close/commit spools before emitting structured failure.
-            recorder.stop_recording()
-            async_err = recorder.get_async_capture_error()
-            if async_err:
-                raise RuntimeError(async_err)
+            if stdin_command["cmd"] == RECORDER_STDIN_CANCEL:
+                print("\nCancelling recording...", file=sys.stderr)
+                recorder.cancel_recording()
+                recording_cancelled = True
+            else:
+                print("\nStopping recording...", file=sys.stderr)
+                # Always close/commit spools before emitting structured failure.
+                recorder.stop_recording()
+                async_err = recorder.get_async_capture_error()
+                if async_err:
+                    raise RuntimeError(async_err)
 
     except Exception as e:
         global _final_output_path
@@ -1263,7 +1308,12 @@ def main():
         # Emit the success payload BEFORE cleanup. pa.terminate() has historically
         # been crash-prone; a raise there must not convert a finished save into
         # exit-1-with-no-payload.
-        if _final_output_path:
+        if recording_cancelled:
+            _send_json_message({
+                "success": True,
+                "cancelled": True,
+            })
+        elif _final_output_path:
             recording_info = {
                 "success": True,
                 "audioPath": str(_final_output_path),

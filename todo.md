@@ -56,7 +56,7 @@ Diagram: `docs/architecture/background-transcription-queue-before-after.svg`
 
 **Phase 1 (MVP) — ship as two PRs: PR 1 = main-owned job behind current blocking UI (behavior-identical); PR 2 = unlock + Activity UI. Cancel recording is an independent companion PR (PR 3).**
 
-**PR2 in progress** on `feature/transcription-queue-pr2` (unlock + Activity UI; PR1 merged).
+**PR1 + PR2 merged.** Companion **PR3** (cancel/discard recording) on `feature/transcription-queue-pr3`.
 
 - [x] [Risk: High] Stop → `addMeeting(pending)` + placeholder transcript (incl. recoverable-failure path); snapshot language/model; use post-add `audioPath`. If pending persist itself fails: surface error, stay idle, rely on scan-import recovery (audio already in recordings dir). *(PR1)*
 - [x] [Risk: High] Main-owned per-meeting composite job on `aiComputeActionQueue` (`retry-transcription` shape: transcribe → optional diarize → persist). Renderer becomes a view — do not “just remove the await.” **Includes moving guided-sidecar / `update-meeting-ai` persistence into the main job** (today the renderer persists sidecars after retry returns — background completion during reload/quit would lose speaker metadata). *(PR1)*
@@ -72,10 +72,10 @@ Diagram: `docs/architecture/background-transcription-queue-before-after.svg`
 
 **Companion PR — Cancel recording (discard); see design doc “Companion feature” section**
 
-- [ ] [Risk: High] New `cancel` stdin command in both recorders; tighten stdin parse to exact-token (current `"stop" in line.lower()` is substring match); skip Stage A entirely; emit structured `{success: true, cancelled: true}` final JSON (never stderr-only exit).
-- [ ] [Risk: High] Tombstone-ordered spool discard: write `discarded` marker to capture manifest **first**, then best-effort delete spools/temps; `capture_recovery` + scan-import treat marked captures as cleanup-only (no resurrection). Crash before marker → recovers as normal interrupted recording (safe default).
-- [ ] [Risk: Medium] `recorder-service.js` cancel path: publishes capture state, resolves to idle, never calls `addMeetingToHistory`/enqueue; stop/cancel mutually exclusive (first command wins; cancel after `stop` rejected). Discard UI only while `recording`/countdown (never during `stopping`), always confirms, not adjacent-clickable with Stop.
-- [ ] [Risk: High] Recorder contract test updates per AGENTS.md list (JS + Python event-contract tests, `recorder-output-helpers`, manual smoke: cancel mid-recording both platforms; relaunch shows no recovered meeting).
+- [x] [Risk: High] New `cancel` stdin command in both recorders; tighten stdin parse to exact-token (current `"stop" in line.lower()` is substring match); skip Stage A entirely; emit structured `{success: true, cancelled: true}` final JSON (never stderr-only exit).
+- [x] [Risk: High] Tombstone-ordered spool discard: write `discarded` marker to capture manifest **first**, then best-effort delete spools/temps; `capture_recovery` + scan-import treat marked captures as cleanup-only (no resurrection). Crash before marker → recovers as normal interrupted recording (safe default).
+- [x] [Risk: Medium] `recorder-service.js` cancel path: publishes capture state, resolves to idle, never calls `addMeetingToHistory`/enqueue; stop/cancel mutually exclusive (first command wins; cancel after `stop` rejected). Discard UI only while `recording`/countdown (never during `stopping`), always confirms, not adjacent-clickable with Stop.
+- [x] [Risk: High] Recorder contract test updates per AGENTS.md list (JS + Python event-contract tests, `recorder-output-helpers`, manual smoke: cancel mid-recording both platforms; relaunch shows no recovered meeting).
 
 **Phase 2 (polish) — after Phase 1 ships**
 

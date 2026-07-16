@@ -23,7 +23,7 @@ MANIFEST_SCHEMA_VERSION = 1
 MANIFEST_FILENAME = "manifest.json"
 SESSION_LOCK_FILENAME = "session.lock"
 CAPTURE_DIR_SUFFIX = ".capture"
-VALID_STATES = frozenset({"recording", "finalizing", "complete", "error"})
+VALID_STATES = frozenset({"recording", "finalizing", "complete", "error", "discarded"})
 SUPPORTED_DTYPES = frozenset({"<i2", "<f4"})
 VALID_PROCESSING_PROFILES = frozenset({"windows-v1", "macos-v1"})
 _SAFE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9._-]+\.pcm\.part$")
@@ -69,6 +69,45 @@ def discard_capture_session(session_dir: PathLike) -> None:
     if not root.exists():
         return
     shutil.rmtree(root, ignore_errors=True)
+
+
+def mark_capture_discarded_and_cleanup(
+    coordinator: Optional["CaptureManifestCoordinator"],
+) -> Optional[Path]:
+    """Tombstone-ordered cancel discard: marker first, then best-effort delete.
+
+    Writes ``state: discarded`` while the coordinator is still open (atomic
+    manifest replace), closes the coordinator, then removes the session dir.
+    If deletion partially fails, the marker still prevents resurrection.
+
+    If the marker cannot be written, raises and does **not** delete — leaving
+    the session recoverable (safe default).
+
+    Returns the session directory path when a coordinator was provided, else None.
+    """
+    if coordinator is None:
+        return None
+    session_dir = Path(coordinator.session_dir)
+    try:
+        coordinator.set_state("discarded")
+    except Exception:
+        # Marker write failed — never delete without a persisted discarded marker.
+        try:
+            coordinator.close()
+        except Exception:
+            pass
+        raise
+    try:
+        coordinator.close()
+    except Exception:
+        pass
+    discard_capture_session(session_dir)
+    return session_dir
+
+
+def is_discarded_manifest_data(data: Any) -> bool:
+    """True when a loaded manifest payload is marked discarded."""
+    return isinstance(data, dict) and data.get("state") == "discarded"
 
 
 def _normalize_dtype(dtype: str) -> str:

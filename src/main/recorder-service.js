@@ -19,6 +19,7 @@ const {
   getRecordingStopTimeout,
   parseRecordingStopResult,
   normalizeRecordingStopPayload,
+  getRecorderResultAudioPath,
   resolveStopTimeoutAction,
   parseRecorderStdoutChunk,
   appendCappedSpawnLogBuffer,
@@ -97,7 +98,17 @@ function createRecorderService(deps) {
   let lastLevelUpdate = null;
   let heartbeatLostWarningActive = false;
   let recordingStopPromise = null;
+  let recordingCancelPromise = null;
   let stopCommandSent = false;
+  let cancelCommandSent = false;
+  /** Settles an in-flight start-recording Promise when cancel wins during starting. */
+  let activeStartupCancelSettle = null;
+  /**
+   * Monotonic cancel generation for start attempts.
+   * Each start snapshots the value before admission; cancel bumps it so a discarded
+   * waiter cannot spawn even if a later Start clears other renderer state.
+   */
+  let startupCancelGeneration = 0;
   let recordingSessionCounter = 0;
   let activeRecordingSessionId = null;
   let publishedCaptureState = { state: 'idle', sessionId: null, startedAt: null };
@@ -857,7 +868,21 @@ function createRecorderService(deps) {
 
   function resetStopWorkflowState() {
     recordingStopPromise = null;
+    recordingCancelPromise = null;
     stopCommandSent = false;
+    cancelCommandSent = false;
+  }
+
+  function settleActiveStartupAsCancelled() {
+    if (typeof activeStartupCancelSettle === 'function') {
+      const settle = activeStartupCancelSettle;
+      activeStartupCancelSettle = null;
+      try {
+        settle();
+      } catch (error) {
+        console.warn('Failed to settle cancelled startup:', error?.message || error);
+      }
+    }
   }
 
   function parseRecordingStopResultFromStdout(stdoutData) {
@@ -868,6 +893,10 @@ function createRecorderService(deps) {
   }
 
   function stopRecordingProcess() {
+    if (recordingCancelPromise || cancelCommandSent) {
+      return recordingCancelPromise || Promise.resolve({ success: true, cancelled: true });
+    }
+
     if (!pythonProcess) {
       return Promise.resolve({ success: true });
     }
@@ -970,6 +999,166 @@ function createRecorderService(deps) {
     });
 
     return recordingStopPromise;
+  }
+
+  function cancelRecordingProcess() {
+    if (stopCommandSent || recordingStopPromise) {
+      const error = new Error('Recording is already stopping and cannot be discarded.');
+      error.code = 'RECORDING_STOP_IN_PROGRESS';
+      return Promise.reject(error);
+    }
+
+    if (recordingCancelPromise) {
+      return recordingCancelPromise;
+    }
+
+    // Bump before any early return so a start still waiting on maintenance
+    // admission cannot spawn after Cancel reported success — including when a
+    // later Start B begins before the gate releases (attempt-scoped via generation).
+    startupCancelGeneration += 1;
+
+    const captureState = getCaptureState().state;
+    if (captureState === 'idle' && !activeStartupCancelSettle) {
+      return Promise.resolve({ success: true, cancelled: true });
+    }
+
+    if (recordingHeartbeat) {
+      clearInterval(recordingHeartbeat);
+      recordingHeartbeat = null;
+      console.log('Recording heartbeat monitor stopped (cancel)');
+    }
+
+    publishCaptureState('cancelling');
+
+    const currentProcess = pythonProcess;
+    if (!currentProcess) {
+      settleActiveStartupAsCancelled();
+      clearRecordingRuntimeState('cancel with no recorder process');
+      return Promise.resolve({ success: true, cancelled: true });
+    }
+
+    recordingCancelPromise = new Promise((resolve, reject) => {
+      let stdoutData = '';
+      let stderrData = '';
+      let settled = false;
+
+      const stdoutHandler = (data) => {
+        stdoutData = appendCappedSpawnLogBuffer(stdoutData, data, SPAWN_JSON_RESULT_BUFFER_MAX_CHARS);
+      };
+
+      const stderrHandler = (data) => {
+        const output = data.toString();
+        stderrData = appendCappedSpawnLogBuffer(stderrData, output);
+        console.log(`Python status: ${output}`);
+      };
+
+      const cleanupListeners = () => {
+        currentProcess.stdout.removeListener('data', stdoutHandler);
+        currentProcess.stderr.removeListener('data', stderrHandler);
+        currentProcess.removeListener('close', closeHandler);
+      };
+
+      const finalizeState = () => {
+        settleActiveStartupAsCancelled();
+        if (pythonProcess === currentProcess) {
+          clearRecordingRuntimeState('recording cancelled', {
+            expectedProcess: currentProcess,
+          });
+          return;
+        }
+        resetStopWorkflowState();
+      };
+
+      const rejectCancel = (message, code = 'RECORDING_CANCEL_FAILED', extra = {}) => {
+        const error = new Error(message);
+        error.code = code;
+        Object.assign(error, extra);
+        reject(error);
+      };
+
+      const closeHandler = (code) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanupListeners();
+        finalizeState();
+
+        try {
+          const parsed = parseRecordingStopResultFromStdout(stdoutData);
+          if (parsed?.cancelled === true && parsed?.success !== false) {
+            resolve({ success: true, cancelled: true });
+            return;
+          }
+          if (parsed?.success === false) {
+            rejectCancel(
+              parsed.message || 'Recording cancel failed.',
+              parsed.code || 'RECORDING_CANCEL_FAILED',
+              { result: parsed },
+            );
+            return;
+          }
+          if (parsed && getRecorderResultAudioPath(parsed)) {
+            rejectCancel(
+              'Recording cancel produced a saved audio file instead of discarding.',
+              'RECORDING_CANCEL_FINALIZED',
+              { result: parsed },
+            );
+            return;
+          }
+          if (parsed) {
+            rejectCancel(
+              'Recording cancel returned an unexpected result.',
+              'RECORDING_CANCEL_UNEXPECTED_RESULT',
+              { result: parsed },
+            );
+            return;
+          }
+        } catch (error) {
+          // Stop-oriented parse errors (empty stdout / missing file) still mean
+          // cancel did not confirm discard — do not surface as a successful stop.
+          rejectCancel(
+            `Recording cancel did not return a cancelled result (exit ${code}): ${
+              error.message || stderrData || 'no recorder output'
+            }`,
+            'RECORDING_CANCEL_FAILED',
+          );
+          return;
+        }
+
+        rejectCancel(
+          `Recording cancel did not return a cancelled result (exit ${code}): ${stderrData || 'no recorder output'}`,
+        );
+      };
+
+      currentProcess.stdout.on('data', stdoutHandler);
+      currentProcess.stderr.on('data', stderrHandler);
+      currentProcess.once('close', closeHandler);
+
+      try {
+        if (cancelCommandSent) {
+          return;
+        }
+        currentProcess.stdin.write('cancel\n');
+        cancelCommandSent = true;
+      } catch (writeError) {
+        // Starting/hung child may not accept stdin — terminate. Do not claim
+        // success unless the child emits a cancelled result (closeHandler).
+        console.warn('Could not send cancel to recorder; terminating child:', writeError.message);
+        cancelCommandSent = true;
+        Promise.resolve()
+          .then(() => terminateProcessBestEffort(currentProcess))
+          .catch(() => {
+            try {
+              currentProcess.kill();
+            } catch (_) {
+              // Ignore.
+            }
+          });
+      }
+    });
+
+    return recordingCancelPromise;
   }
 
   async function waitForRecordingStop({ forceKillOnTimeout, timeoutMessage }) {
@@ -1255,6 +1444,7 @@ function createRecorderService(deps) {
       hasRecordingProcess: Boolean(pythonProcess),
       recordingStartTime,
       stopInProgress: Boolean(recordingStopPromise),
+      cancelInProgress: Boolean(recordingCancelPromise),
     };
   }
 
@@ -1324,6 +1514,11 @@ function createRecorderService(deps) {
         };
       }
 
+      // Snapshot cancel generation before admission. Do not reset it — a Cancel
+      // that armed while this attempt waited must still abort this attempt even if
+      // a newer Start B began afterward.
+      const attemptCancelGeneration = startupCancelGeneration;
+
       let startGateHeld = false;
       if (recordingsMaintenanceGate) {
         const admission = await recordingsMaintenanceGate.admitStartRecording();
@@ -1344,7 +1539,26 @@ function createRecorderService(deps) {
         };
       }
 
-      if (isRecorderBusy({ pythonProcess, recordingStopPromise })) {
+      const startCancelledDuringAdmission = () => (
+        attemptCancelGeneration !== startupCancelGeneration
+        || cancelCommandSent
+        || Boolean(recordingCancelPromise)
+      );
+
+      if (startCancelledDuringAdmission()) {
+        if (startGateHeld) {
+          recordingsMaintenanceGate.release('start');
+          startGateHeld = false;
+        }
+        return {
+          success: false,
+          cancelled: true,
+          code: 'RECORDING_CANCELLED',
+          message: 'Recording was discarded before it finished starting.',
+        };
+      }
+
+      if (isRecorderBusy({ pythonProcess, recordingStopPromise, recordingCancelPromise })) {
         if (startGateHeld) {
           recordingsMaintenanceGate.release('start');
         }
@@ -1371,6 +1585,12 @@ function createRecorderService(deps) {
         let onStdoutData = null;
         let timeoutHandle = null;
 
+        const startCancelled = () => (
+          attemptCancelGeneration !== startupCancelGeneration
+          || cancelCommandSent
+          || Boolean(recordingCancelPromise)
+        );
+
         const detachLiveStdout = () => {
           if (!proc?.stdout || typeof onStdoutData !== 'function') {
             return;
@@ -1389,6 +1609,9 @@ function createRecorderService(deps) {
           }
 
           startupSettled = true;
+          if (activeStartupCancelSettle) {
+            activeStartupCancelSettle = null;
+          }
           detachLiveStdout();
           if (timeoutHandle) {
             clearTimeout(timeoutHandle);
@@ -1406,6 +1629,38 @@ function createRecorderService(deps) {
             message: errorMessage,
           });
         };
+
+        const settleStartupCancelled = () => {
+          if (startupSettled) {
+            return;
+          }
+
+          startupSettled = true;
+          activeStartupCancelSettle = null;
+          detachLiveStdout();
+          if (timeoutHandle) {
+            clearTimeout(timeoutHandle);
+            timeoutHandle = null;
+          }
+          clearRecordingRuntimeState('recording startup cancelled', {
+            expectedSessionId: sessionId,
+          });
+
+          resolve({
+            success: false,
+            cancelled: true,
+            code: 'RECORDING_CANCELLED',
+            sessionId,
+            message: 'Recording was discarded before it finished starting.',
+          });
+        };
+
+        activeStartupCancelSettle = settleStartupCancelled;
+
+        if (startCancelled()) {
+          settleStartupCancelled();
+          return;
+        }
 
         try {
           const { micId, loopbackId, isFirstRecording } = options;
@@ -1451,6 +1706,16 @@ function createRecorderService(deps) {
           '--output', outputPath
         ], { cwd: pythonConfig.backendPath });
         pythonProcess = proc;
+
+        if (startCancelled()) {
+          // Discard won the race against spawn — cancel/kill the child and settle.
+          Promise.resolve()
+            .then(() => cancelRecordingProcess())
+            .catch((error) => {
+              console.warn('Post-spawn cancel failed:', error?.message || error);
+              settleStartupCancelled();
+            });
+        }
 
         // Set high priority for the Python recording process on Windows.
         // Prefer Node's os.setPriority (WMIC was removed on Windows 11 24H2+).
@@ -1546,6 +1811,11 @@ function createRecorderService(deps) {
             return;
           }
 
+          if (startCancelled()) {
+            // Discard won during startup — do not publish recording / resolve success.
+            return;
+          }
+
           recordingStarted = true;
           recordingStartTime = Date.now();
           publishCaptureState('recording', sessionId, recordingStartTime);
@@ -1576,6 +1846,7 @@ function createRecorderService(deps) {
 
           sendInitProgress('started', message);
           startupSettled = true;
+          activeStartupCancelSettle = null;
           resolve({
             success: true,
             message: 'Recording started',
@@ -1702,7 +1973,7 @@ function createRecorderService(deps) {
           const recoveredStopResult = lastLiveRecorderResult;
           const closeAction = getRecorderCloseAction({
             recordingStarted,
-            stopInProgress: Boolean(recordingStopPromise),
+            stopInProgress: Boolean(recordingStopPromise || recordingCancelPromise),
             startupSettled,
             startupFailureMessage,
             progressStage,
@@ -1896,6 +2167,11 @@ function createRecorderService(deps) {
       // renderer to skip the normal transcribe-and-save flow for the same file.
       return consumeQuitPersistedFlag(result);
     });
+
+    ipcMain.handle('cancel-recording', async (event) => {
+      assertTrustedRendererSender(event);
+      return cancelRecordingProcess();
+    });
   }
 
   return {
@@ -1905,6 +2181,7 @@ function createRecorderService(deps) {
     clearRecordingRuntimeState,
     getCaptureState,
     stopRecordingProcess,
+    cancelRecordingProcess,
     waitForRecordingStop,
     parseRecordingStopResultFromStdout,
     discoverInterruptedCaptures,

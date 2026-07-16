@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import sys
@@ -64,7 +65,52 @@ def has_sibling_capture_session(audio_file: Path) -> bool:
         return False
     # Only block when a manifest exists — empty aborted dirs should not hide finals forever.
     manifest = capture_dir / "manifest.json"
-    return manifest.is_file()
+    if not manifest.is_file():
+        return False
+    # Discarded (cancelled) captures are cleanup-only and must not block finals.
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and data.get("state") == "discarded":
+            return False
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError, TypeError):
+        # Unreadable/corrupt: keep the existing conservative block.
+        pass
+    return True
+
+
+def cleanup_discarded_capture_sessions(recordings_dir: Path) -> int:
+    """Best-effort remove ``*.capture`` dirs whose manifest is marked discarded.
+
+    Returns the number of directories removed. Safe to call from scan-import;
+    never promotes audio.
+    """
+    cleaned = 0
+    if not recordings_dir.is_dir():
+        return cleaned
+    try:
+        entries = list(recordings_dir.iterdir())
+    except OSError:
+        return cleaned
+
+    for entry in entries:
+        if not entry.is_dir() or not entry.name.lower().endswith(_CAPTURE_SESSION_DIR_SUFFIX):
+            continue
+        manifest = entry / "manifest.json"
+        if not manifest.is_file():
+            continue
+        try:
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError, TypeError):
+            continue
+        if not isinstance(data, dict) or data.get("state") != "discarded":
+            continue
+        try:
+            shutil.rmtree(entry, ignore_errors=True)
+            if not entry.exists():
+                cleaned += 1
+        except OSError:
+            pass
+    return cleaned
 
 
 def iter_recorder_temp_audio_files(recordings_dir: Path) -> List[Path]:
@@ -93,7 +139,12 @@ def recover_or_cleanup_recorder_temps(recordings_dir: Path) -> Dict[str, int]:
     - If the temp is truncated (≤ WAV header size), delete it — do not import junk.
     - Otherwise promote the temp to ``{stem}.wav`` so the next scan can import
       a kill-mid-compress recording instead of leaving it orphaned.
+
+    Also sweeps discarded-marked ``*.capture`` dirs (cancel tombstones) so they
+    never resurrect via recovery.
     """
+    discarded_cleaned = cleanup_discarded_capture_sessions(recordings_dir)
+
     recovered = 0
     cleaned = 0
     skipped = 0
@@ -161,6 +212,7 @@ def recover_or_cleanup_recorder_temps(recordings_dir: Path) -> Dict[str, int]:
         "cleaned": cleaned,
         "dropped": dropped,
         "skipped": skipped,
+        "discardedCleaned": discarded_cleaned,
     }
 
 

@@ -27,6 +27,8 @@ from .capture_manifest import (
     SESSION_LOCK_FILENAME,
     CaptureManifestCoordinator,
     CaptureManifestError,
+    discard_capture_session,
+    is_discarded_manifest_data,
     validate_manifest_data,
     validate_started_at_iso,
 )
@@ -262,6 +264,10 @@ def list_interrupted_captures(recordings_dir: PathLike) -> List[Dict[str, Any]]:
         data = _try_read_manifest_readonly(resolved)
         if data is None:
             continue
+        # Cancelled sessions are cleanup-only — never offer for recovery/promote.
+        if is_discarded_manifest_data(data):
+            discard_capture_session(resolved)
+            continue
         # Complete sessions with a missing directory are already cleaned; a
         # remaining complete dir is still recoverable (idempotent finalize).
         candidates.append(_candidate_from_manifest(resolved, data))
@@ -303,6 +309,15 @@ def recover_capture(
         stem = _safe_output_stem(peek.get("outputStem"))
     except (OSError, json.JSONDecodeError, CaptureManifestError) as exc:
         raise CaptureRecoveryError(f"Invalid capture manifest: {exc}") from exc
+
+    if is_discarded_manifest_data(peek):
+        discard_capture_session(session_dir)
+        return {
+            "success": True,
+            "cancelled": True,
+            "captureDir": str(session_dir),
+            "cleaned": True,
+        }
 
     output_opus = _resolve_output_beside_root(root, stem, ".opus")
     output_wav = _resolve_output_beside_root(root, stem, ".wav")

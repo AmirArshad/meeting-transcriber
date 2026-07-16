@@ -15,12 +15,12 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 - **Opus compression** — ~95% size reduction vs WAV (≈ 23 MB for a 40-minute meeting), with WAV fallback if ffmpeg fails or output verification fails.
 - **Model preloading** — improves first-time experience by warming the model in the background.
 - **Auto-aware updater** — checks GitHub Releases on launch and surfaces an in-app banner; clicking opens the release page in the user's browser.
-- **macOS feature parity** — full parity with Windows including 48 kHz target sample rate (Windows uses soxr VHQ; macOS uses separate mix/align paths in `macos_recorder.py`).
+- **macOS feature parity** — full parity with Windows including 48 kHz target sample rate (shared soxr VHQ in spool finalization; macOS capture still uses separate mix/align paths in `macos_recorder.py`).
 
 ### Audio quality
 
 - 48 kHz target sample rate end-to-end on both platforms.
-- soxr VHQ resampling on Windows (`backend/audio/processor.py`); macOS uses separate mix/align paths (not soxr).
+- soxr VHQ resampling via shared `backend/audio/processor.py` (Windows capture rates and shared spool finalization); macOS capture uses separate mix/align paths.
 - Gentle mic enhancement (DC-offset removal, light normalization). Desktop audio is left untouched.
 - Stereo output with per-channel processing.
 

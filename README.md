@@ -147,7 +147,7 @@ For recorder changes, also run the manual smoke checklist in `tests/manual/recor
 ## Audio quality
 
 - 48 kHz target sample rate end-to-end (Windows + macOS parity).
-- soxr VHQ resampling on Windows (`backend/audio/processor.py`); macOS uses separate mix/align paths in `macos_recorder.py`.
+- soxr VHQ resampling via shared `backend/audio/processor.py` (Windows capture rates and shared spool finalization on both platforms); macOS capture remains separate mix/align paths in `macos_recorder.py`.
 - Gentle mic enhancement (DC-offset removal, light normalization) — no aggressive denoising or compression. Desktop audio is left untouched.
 - Stereo output, Opus-compressed (≈ 95% size reduction vs WAV — a 40-minute meeting is roughly 23 MB).
 
@@ -179,7 +179,7 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
 - **Transcription:** `faster-whisper` (Windows, CUDA optional), `lightning-whisper-mlx` (macOS, Metal)
 - **Local AI add-ons:** `pyannote.audio` for Windows CUDA and macOS Apple Silicon MPS speaker identification, pinned `llama.cpp` + GGUF for user-triggered summaries
 - **Audio capture:** `pyaudiowpatch` WASAPI loopback (Windows), `sounddevice` + native Swift `AudioCaptureHelper` using CoreAudio process taps on macOS 14.2+ with ScreenCaptureKit fallback
-- **Audio processing:** NumPy, soxr + ffmpeg (Opus) on Windows; NumPy + scipy (MLX stack) + ffmpeg on macOS
+- **Audio processing:** NumPy, soxr + ffmpeg (Opus) on Windows and macOS packaged builds; macOS also keeps scipy for the MLX stack
 - **Updater:** GitHub Releases API + in-app banner (release page opens in browser)
 
 ## Documentation

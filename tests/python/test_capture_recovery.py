@@ -140,6 +140,42 @@ def test_discovery_lists_kill_point_states(tmp_path, state):
     assert candidates[0]["state"] == state
 
 
+def test_discovery_cleans_discarded_and_does_not_list(tmp_path):
+    session = _build_interrupted_session(
+        tmp_path,
+        stem="recording_discarded",
+        started_at_iso="2026-07-13T12:00:00.000Z",
+        state="discarded",
+    )
+    assert session.is_dir()
+    candidates = list_interrupted_captures(tmp_path)
+    assert candidates == []
+    assert not session.exists()
+
+
+def test_recover_discarded_is_cleanup_only(tmp_path, monkeypatch):
+    session = _build_interrupted_session(
+        tmp_path,
+        stem="recording_discarded_recover",
+        started_at_iso="2026-07-13T12:30:00.000Z",
+        state="discarded",
+    )
+    called = {"finalize": False}
+
+    def boom(*_args, **_kwargs):
+        called["finalize"] = True
+        raise AssertionError("finalize_capture must not run for discarded")
+
+    monkeypatch.setattr(
+        "backend.audio.capture_recovery.finalize_capture",
+        boom,
+    )
+    result = recover_capture(tmp_path, session, ffmpeg_path="ffmpeg")
+    assert result["cancelled"] is True
+    assert called["finalize"] is False
+    assert not session.exists()
+
+
 def test_discovery_orders_oldest_first_by_started_at_iso(tmp_path):
     _build_interrupted_session(
         tmp_path,

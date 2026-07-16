@@ -43,14 +43,14 @@ du -sh dist/mac-arm64/AvaNevis.app
 "{0:N1} MB" -f ((Get-ChildItem dist\win-unpacked -Recurse -File | Measure-Object Length -Sum).Sum / 1MB)
 ```
 
-## Bundled Python by platform (after Phases 1b + 2)
+## Bundled Python by platform (current)
 
 | Package | Windows installer | macOS installer | Notes |
 |---------|-------------------|-----------------|-------|
-| **soxr** | `1.1.0` (direct pin) | Not bundled | Resampling only in `backend/audio/processor.py` (Windows recorder). |
-| **scipy** | Not bundled | `1.11.4` (direct pin) | Windows dropped in 1b. macOS kept: `lightning-whisper-mlx==0.0.10` requires `scipy`; no app `import scipy` in `backend/`. |
+| **soxr** | `1.1.0` (direct pin) | `1.1.0` (direct pin) | Shared `StatefulResampler` / spool finalization (`processor.py`, `streaming_post_processor.py`). Re-added to macOS after long-recording spool work; Phase 1b had removed it when only the Windows recorder used soxr. |
+| **scipy** | Not bundled | `1.17.1` (direct pin) | Windows dropped in 1b. macOS kept: `lightning-whisper-mlx==0.0.10` requires `scipy`; no app `import scipy` in `backend/`. |
 
-**Dev / CI:** `requirements-dev.txt` includes `soxr>=1.1.0` so macOS and Windows can run `tests/python/test_processor.py` without bundling soxr in the mac app.
+**Dev / CI:** `requirements-dev.txt` includes `soxr>=1.1.0` so local macOS/Windows can run `tests/python/test_processor.py` without installing the full packaged build pins.
 
 ## Phase 1b + 2 (2026-05-27)
 
@@ -81,4 +81,4 @@ Compatibility notes:
 | Platform | Phase 1b + 2 packaged smoke |
 |----------|----------------------------|
 | **Windows** | Passed (2026-05-27): `dist\win-unpacked\AvaNevis.exe` — launch, record, transcribe, save with `soxr==1.1.0` and no bundled `scipy`. |
-| **macOS** | Re-verify on a Mac after `npm run build:mac:dir`: launch + short MLX transcribe (soxr removed from bundle; scipy unchanged). |
+| **macOS** | Re-verify on a Mac after `npm run build:mac:dir`: launch + short MLX transcribe (soxr is bundled again for shared finalization; scipy unchanged). |

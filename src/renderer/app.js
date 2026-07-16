@@ -7,7 +7,7 @@ const DEFAULT_SUMMARY_PROFILE = 'balanced';
 const MAX_PROGRESS_LOG_ENTRIES = 250;
 const AI_ADDON_PROGRESS_LOG_INTERVAL_MS = 1000;
 const SVG_NS = 'http://www.w3.org/2000/svg';
-const { getRecordButtonAction, getRecordingPresenceView, canHydratedRendererStopRecording } = window.recordingStateHelpers;
+const { getRecordButtonAction, getRecordingPresenceView, shouldShowDiscardRecordingControl, isStartRecordingResultDiscarded, shouldIssueCompensatingCancelAfterStart, resolveCompensatingCancelOutcome, shouldAbortStartAfterCountdown, canHydratedRendererStopRecording } = window.recordingStateHelpers;
 const {
   getIdleStatusPillText,
   getRecordButtonLabel,
@@ -66,6 +66,7 @@ const languageSelect = document.getElementById('language-select');
 const modelSelect = document.getElementById('model-select');
 const refreshBtn = document.getElementById('refresh-devices');
 const recordBtn = document.getElementById('record-btn');
+const discardRecordingBtn = document.getElementById('discard-recording-btn');
 const statusIndicator = document.getElementById('status-indicator');
 const statusText = document.getElementById('status-text');
 const timer = document.getElementById('timer');
@@ -96,7 +97,7 @@ const refreshHistory = document.getElementById('refresh-history');
 const deleteMeeting = document.getElementById('delete-meeting');
 
 // State
-let recordingState = 'idle'; // idle, starting, recording, stopping, countdown (transcribing no longer blocks capture)
+let recordingState = 'idle'; // idle, starting, recording, stopping, cancelling, countdown (transcribing no longer blocks capture)
 let lastStopProgressMessage = '';
 let transcriptionQueueState = { jobs: [], activeMeetingId: null, busyCount: 0 };
 let activityActionBusyMeetingId = null;
@@ -104,6 +105,10 @@ let countdownValue = 3;
 let recordingStartTime = null;
 let activeRecordingSessionId = null;
 let activeCountdownCancel = null;
+/** Bumped to invalidate an in-flight startRecording() when Discard wins during starting/countdown. */
+let startRecordingEpoch = 0;
+/** Set when the user confirms Discard during starting/countdown/preflight. */
+let discardRequestedForStart = false;
 let timerInterval = null;
 let recordingPresencePollTimer = null;
 let frozenPresenceElapsedText = null;
@@ -658,7 +663,8 @@ function updateResumePendingBanner() {
   }
   resumePendingBtn.textContent = view.buttonLabel || 'Resume pending transcriptions';
   resumePendingBtn.disabled = !view.visible || recordingState === 'recording'
-    || recordingState === 'starting' || recordingState === 'stopping';
+    || recordingState === 'starting' || recordingState === 'stopping'
+    || recordingState === 'cancelling';
 }
 
 function renderActivityList() {
@@ -1918,6 +1924,11 @@ function setupEventListeners() {
     loadMeetingHistory({ scan: true });
   });
   recordBtn.addEventListener('click', handleRecordButtonClick);
+  if (discardRecordingBtn) {
+    discardRecordingBtn.addEventListener('click', () => {
+      void discardRecording();
+    });
+  }
   if (resumePendingBtn) {
     resumePendingBtn.addEventListener('click', () => {
       void resumePendingTranscriptionsFromBanner();
@@ -2235,7 +2246,7 @@ function updateRecordingPresenceUI(elapsedTextOverride = null) {
 
   let elapsedText = elapsedTextOverride;
   if (elapsedText == null) {
-    if (recordingState === 'stopping') {
+    if (recordingState === 'stopping' || recordingState === 'cancelling') {
       // Prefer a frozen clock; omit the time entirely when startedAt is unknown
       // so hydration does not invent a cosmetic 00:00.
       elapsedText = frozenPresenceElapsedText || null;
@@ -2250,7 +2261,7 @@ function updateRecordingPresenceUI(elapsedTextOverride = null) {
 
   const view = getRecordingPresenceView(recordingState, elapsedText);
   recordingPresenceEl.hidden = !view.visible;
-  recordingPresenceEl.classList.remove('recording', 'stopping');
+  recordingPresenceEl.classList.remove('recording', 'stopping', 'cancelling');
   if (view.modifier) {
     recordingPresenceEl.classList.add(view.modifier);
   }
@@ -2559,6 +2570,15 @@ function setupRecordingRecoveryUi() {
 }
 
 // Update button appearance based on state
+function updateDiscardRecordingButtonVisibility() {
+  if (!discardRecordingBtn) {
+    return;
+  }
+  const show = shouldShowDiscardRecordingControl(recordingState);
+  discardRecordingBtn.hidden = !show;
+  discardRecordingBtn.disabled = !show;
+}
+
 function updateButtonUI() {
   const button = recordBtn;
   const icon = button.querySelector('.button-icon');
@@ -2614,6 +2634,15 @@ function updateButtonUI() {
       statusText.textContent = lastStopProgressMessage || 'Saving recording…';
       break;
 
+    case 'cancelling':
+      button.classList.add('processing');
+      button.disabled = true;
+      icon.textContent = '⏳';
+      text.textContent = 'Cancelling...';
+      statusIndicator.classList.remove('recording');
+      statusText.textContent = 'Cancelling recording…';
+      break;
+
     case 'countdown':
       button.classList.add('processing'); // Use processing style (grey)
       button.disabled = true;
@@ -2633,6 +2662,8 @@ function updateButtonUI() {
       statusText.textContent = getIdleStatusPillText(transcriptionQueueState);
       break;
   }
+
+  updateDiscardRecordingButtonVisibility();
 }
 
 // Update other controls based on state
@@ -2688,14 +2719,29 @@ async function startRecording() {
 
   setRecordingState('starting');
 
+  const epoch = ++startRecordingEpoch;
+  discardRequestedForStart = false;
+  const startWasDiscarded = () => (
+    discardRequestedForStart || epoch !== startRecordingEpoch
+  );
+
   try {
     const preflightPassed = await runRecordingPreflightChecks({ micId, desktopId });
+    if (startWasDiscarded()) {
+      addLog('Recording discarded during startup checks.', 'warning');
+      setRecordingState('idle');
+      return;
+    }
     if (!preflightPassed) {
       addLog('Recording canceled by preflight checks.', 'warning');
       setRecordingState('idle');
       return;
     }
   } catch (error) {
+    if (startWasDiscarded()) {
+      setRecordingState('idle');
+      return;
+    }
     console.error('Preflight checks failed:', error);
     addLog(`Preflight checks failed: ${error.message}`, 'error');
     setRecordingState('idle');
@@ -2710,10 +2756,20 @@ async function startRecording() {
     attempt++;
 
     try {
+      if (startWasDiscarded()) {
+        addLog('Recording discarded before start.', 'warning');
+        setRecordingState('idle');
+        return;
+      }
+
       if (attempt > 1) {
         addLog(`Retrying recording (attempt ${attempt}/${maxAttempts})...`);
         // Wait a moment before retrying
         await new Promise(resolve => setTimeout(resolve, 1000));
+        if (startWasDiscarded()) {
+          setRecordingState('idle');
+          return;
+        }
       } else {
         addLog('Starting recording...');
       }
@@ -2729,6 +2785,65 @@ async function startRecording() {
       });
 
       const recordingResult = await recordingPromise;
+
+      if (isStartRecordingResultDiscarded({
+        discardRequested: discardRequestedForStart,
+        startEpoch: epoch,
+        currentEpoch: startRecordingEpoch,
+        result: recordingResult,
+      })) {
+        cancelCountdown();
+        // Compensating cancel: Cancel may have won while main was still idle
+        // (gate wait), then start later returned success — including when a newer
+        // Start B reset discardRequestedForStart (use stale epoch).
+        if (shouldIssueCompensatingCancelAfterStart({
+          discardRequested: discardRequestedForStart,
+          startEpoch: epoch,
+          currentEpoch: startRecordingEpoch,
+          result: recordingResult,
+        })) {
+          try {
+            const cancelResult = await window.electronAPI.cancelRecording();
+            const cancelOutcome = resolveCompensatingCancelOutcome(cancelResult);
+            if (!cancelOutcome.ok) {
+              addLog(
+                `Could not confirm cancel after a discarded start: ${cancelOutcome.message}`,
+                'error',
+              );
+              setTranscriptMessage(cancelOutcome.message, true);
+              currentAudioFile = null;
+              currentRecordingDurationSeconds = 0;
+              setRecordingState('cancelling');
+              startRecordingPresencePoll();
+              return;
+            }
+          } catch (error) {
+            addLog(
+              `Could not confirm cancel after a discarded start: ${error.message}`,
+              'error',
+            );
+            setTranscriptMessage(
+              error.message || 'Could not confirm that the recording was cancelled.',
+              true,
+            );
+            currentAudioFile = null;
+            currentRecordingDurationSeconds = 0;
+            if (error?.code === 'RECORDING_STOP_IN_PROGRESS') {
+              setRecordingState('stopping');
+              startRecordingPresencePoll();
+              return;
+            }
+            setRecordingState('cancelling');
+            startRecordingPresencePoll();
+            return;
+          }
+        }
+        addLog('Recording cancelled during startup.', 'warning');
+        currentAudioFile = null;
+        currentRecordingDurationSeconds = 0;
+        setRecordingState('idle');
+        return;
+      }
 
       if (recordingResult?.code === 'RECORDER_BUSY') {
         cancelCountdown();
@@ -2750,7 +2865,22 @@ async function startRecording() {
         activeRecordingSessionId = recordingResult.sessionId;
       }
 
-      await countdownPromise;
+      const countdownResult = await countdownPromise;
+      if (shouldAbortStartAfterCountdown({
+        discardRequested: startWasDiscarded(),
+        countdownResult,
+      })) {
+        addLog('Recording discarded during countdown.', 'warning');
+        try {
+          await window.electronAPI.cancelRecording();
+        } catch (_) {
+          // Main may already be idle / cancelling.
+        }
+        currentAudioFile = null;
+        currentRecordingDurationSeconds = 0;
+        setRecordingState('idle');
+        return;
+      }
 
       // After first successful recording, set flag to false
       if (isFirstRecording) {
@@ -2776,6 +2906,11 @@ async function startRecording() {
     } catch (error) {
       console.error(`Failed to start recording (attempt ${attempt}):`, error);
       cancelActiveCountdown();
+
+      if (startWasDiscarded()) {
+        setRecordingState('idle');
+        return;
+      }
 
       if (attempt >= maxAttempts) {
         // All attempts failed
@@ -2837,8 +2972,10 @@ async function startRecording() {
 function startCountdown() {
   let interval = null;
   let settled = false;
+  let resolveCountdown = null;
 
   const promise = new Promise((resolve) => {
+    resolveCountdown = resolve;
     countdownValue = 3;
     updateButtonUI();
 
@@ -2852,7 +2989,7 @@ function startCountdown() {
         clearInterval(interval);
         interval = null;
         activeCountdownCancel = null;
-        resolve();
+        resolve({ cancelled: false });
       }
     }, 1000);
   });
@@ -2864,6 +3001,9 @@ function startCountdown() {
     }
     if (!settled) {
       settled = true;
+      if (typeof resolveCountdown === 'function') {
+        resolveCountdown({ cancelled: true });
+      }
     }
     activeCountdownCancel = null;
   };
@@ -2952,6 +3092,65 @@ async function stopRecording() {
     
     stopTimer();
     audioVisualizer.stop();
+    setRecordingState('idle');
+  }
+}
+
+async function discardRecording() {
+  if (!shouldShowDiscardRecordingControl(recordingState)) {
+    return;
+  }
+
+  const confirmed = window.confirm(
+    'Cancel this recording? The audio will not be saved.',
+  );
+  if (!confirmed) {
+    return;
+  }
+
+  try {
+    addLog('Cancelling recording...');
+    discardRequestedForStart = true;
+    startRecordingEpoch += 1;
+    cancelActiveCountdown();
+    if (Number.isFinite(recordingStartTime)) {
+      frozenPresenceElapsedText = formatElapsedDuration((Date.now() - recordingStartTime) / 1000);
+    }
+    setRecordingState('cancelling');
+    stopTimer();
+    if (audioVisualizer) {
+      audioVisualizer.stop();
+    }
+
+    const result = await window.electronAPI.cancelRecording();
+    if (result?.cancelled === true && result?.success !== false) {
+      addLog('Recording cancelled. Nothing was saved.', 'warning');
+      setTranscriptMessage('Recording cancelled. Nothing was saved.', false);
+      currentAudioFile = null;
+      currentRecordingDurationSeconds = 0;
+      setRecordingState('idle');
+      return;
+    }
+
+    addLog('Cancel finished without a confirmation from the recorder.', 'warning');
+    setRecordingState('idle');
+  } catch (error) {
+    console.error('Failed to discard recording:', error);
+    addLog(`Cancel failed: ${error.message}`, 'error');
+    if (error?.code === 'RECORDING_STOP_IN_PROGRESS') {
+      setTranscriptMessage('Recording is already stopping and cannot be cancelled.', true);
+      // First-wins: stop owns the UI — move to stopping and poll until idle.
+      if (Number.isFinite(recordingStartTime)) {
+        frozenPresenceElapsedText = formatElapsedDuration((Date.now() - recordingStartTime) / 1000);
+      }
+      setRecordingState('stopping');
+      startRecordingPresencePoll();
+      return;
+    }
+    stopTimer();
+    if (audioVisualizer) {
+      audioVisualizer.stop();
+    }
     setRecordingState('idle');
   }
 }
@@ -3572,13 +3771,16 @@ async function hydrateRecordingStateFromMain() {
     return;
   }
 
-  if (mainState.state === 'starting' || mainState.state === 'stopping') {
+  if (mainState.state === 'starting' || mainState.state === 'stopping' || mainState.state === 'cancelling') {
     activeRecordingSessionId = Number.isInteger(mainState.sessionId) ? mainState.sessionId : null;
     recordingStartTime = Number.isFinite(mainState.startedAt) ? mainState.startedAt : null;
-    if (mainState.state === 'stopping' && Number.isFinite(recordingStartTime)) {
+    if (
+      (mainState.state === 'stopping' || mainState.state === 'cancelling')
+      && Number.isFinite(recordingStartTime)
+    ) {
       frozenPresenceElapsedText = formatElapsedDuration((Date.now() - recordingStartTime) / 1000);
     }
-    setRecordingState(mainState.state === 'starting' ? 'starting' : 'stopping');
+    setRecordingState(mainState.state);
     startRecordingPresencePoll();
   }
 }
@@ -3590,7 +3792,11 @@ function startRecordingPresencePoll() {
       stopRecordingPresencePoll();
       return;
     }
-    if (recordingState !== 'starting' && recordingState !== 'stopping') {
+    if (
+      recordingState !== 'starting'
+      && recordingState !== 'stopping'
+      && recordingState !== 'cancelling'
+    ) {
       stopRecordingPresencePoll();
       return;
     }
@@ -3621,9 +3827,14 @@ function startRecordingPresencePoll() {
       return;
     }
 
-    if (mainState.state === 'idle' && recordingState === 'stopping') {
+    if (mainState.state === 'idle' && (recordingState === 'stopping' || recordingState === 'cancelling')) {
+      const wasCancelling = recordingState === 'cancelling';
       stopRecordingPresencePoll();
       setRecordingState('idle');
+      if (wasCancelling) {
+        addLog('Recording discard finished while this window was reloading.');
+        return;
+      }
       addLog('Recording finished while this window was reloading. Refreshing History...');
       try {
         await loadMeetingHistory({ scan: true });

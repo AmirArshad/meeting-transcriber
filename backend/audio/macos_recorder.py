@@ -23,6 +23,7 @@ from .capture_manifest import (
     CaptureManifestCoordinator,
     MANIFEST_FILENAME,
     discard_capture_session,
+    mark_capture_discarded_and_cleanup,
 )
 from .track_spool import TrackSpool
 from .streaming_post_processor import FinalizationError, finalize_capture
@@ -723,6 +724,39 @@ class MacOSAudioRecorder:
         if session_dir is not None:
             discard_capture_session(session_dir)
 
+    def _close_spool_handles_for_discard(self) -> None:
+        """Close track spool writers without entering the finalize path."""
+        for spool in (self._mic_spool, self._desktop_spool):
+            if spool is None:
+                continue
+            try:
+                spool.close()
+            except Exception:
+                pass
+        self._mic_spool = None
+        self._desktop_spool = None
+
+    def cancel_recording(self) -> None:
+        """Stop capture, skip Stage A, tombstone-discard spools (no meeting audio)."""
+        print("Cancelling recording (discard)...", file=sys.stderr)
+        if self._get_running():
+            self._set_running(False)
+        if self.mic_thread:
+            self.mic_thread.join(timeout=2.0)
+        if self.desktop_thread:
+            self.desktop_thread.join(timeout=2.0)
+        if self.desktop_capture:
+            try:
+                self.desktop_capture.stop_recording()
+            except Exception as stop_err:
+                print(f"Desktop audio stop during cancel failed: {stop_err}", file=sys.stderr)
+            if self.desktop_capture is not None:
+                self.desktop_capture.audio_sink = None
+        self._close_spool_handles_for_discard()
+        mark_capture_discarded_and_cleanup(self._capture_manifest)
+        self._capture_manifest = None
+        print("Recording cancelled; capture discarded.", file=sys.stderr)
+
     def _record_microphone(self):
         """Record from microphone using sounddevice."""
         stream_opened = False
@@ -1248,12 +1282,22 @@ def main():
         sys.exit(1)
 
     result_emitted = False
+    recording_cancelled = False
+    stdin_command = {"cmd": "stop"}
 
     def emit_final_result(*, exit_code: int = 0) -> None:
         nonlocal result_emitted
         if result_emitted or recorder is None:
             return
         result_emitted = True
+
+        if recording_cancelled:
+            _send_json_message({
+                'success': True,
+                'cancelled': True,
+            })
+            sys.exit(exit_code)
+            return
 
         failure = getattr(recorder, 'recording_failure', None)
         recovered_path = None
@@ -1290,11 +1334,52 @@ def main():
         _send_json_message(result)
         sys.exit(exit_code)
 
+    from .recorder_stdin import (
+        RECORDER_STDIN_CANCEL,
+        parse_recorder_stdin_command,
+        resolve_post_exception_capture_action,
+    )
+
+    stop_event = threading.Event()
+
+    def input_listener():
+        """Listen for stop/cancel from Electron via stdin (exact-token)."""
+        try:
+            for line in sys.stdin:
+                cmd = parse_recorder_stdin_command(line)
+                if cmd is not None:
+                    stdin_command["cmd"] = cmd
+                    stop_event.set()
+                    break
+            else:
+                # stdin EOF while capture is active — stop cleanly (no orphan).
+                stdin_command["cmd"] = "stop"
+                stop_event.set()
+        except Exception as e:
+            print(f"Error in command listener: {e}", file=sys.stderr)
+            stdin_command["cmd"] = "stop"
+            stop_event.set()
+
+    input_thread = threading.Thread(target=input_listener, daemon=True)
+    input_thread.start()
+
+    def finish_capture_from_stdin_or_duration():
+        nonlocal recording_cancelled
+        if stdin_command["cmd"] == RECORDER_STDIN_CANCEL:
+            print(f"\nCancelling recording...", file=sys.stderr)
+            recorder.cancel_recording()
+            recording_cancelled = True
+        else:
+            print(f"\nStopping recording...", file=sys.stderr)
+            recorder.stop_recording()
+
     try:
         if args.duration > 0:
-            # Fixed duration (interruptible on hard mic spool / thread errors)
+            # Fixed duration (interruptible on hard mic spool / stop / cancel)
             print(f"Recording for {args.duration} seconds...", file=sys.stderr)
             for _ in range(int(args.duration)):
+                if stop_event.is_set():
+                    break
                 if recorder._has_async_recording_error():
                     with recorder._error_lock:
                         error_msg = recorder._last_error or "Unknown recording error"
@@ -1305,30 +1390,9 @@ def main():
                 if not recorder.is_recording():
                     break
                 time.sleep(1)
-            recorder.stop_recording()
+            finish_capture_from_stdin_or_duration()
         else:
-            # Manual stop (wait for stdin command from Electron)
-            print(f"Recording... (send 'stop' to stdin to stop)", file=sys.stderr)
-
-            # Thread to listen for stop command from stdin
-            stop_event = threading.Event()
-
-            def input_listener():
-                """Listen for stop command from Electron via stdin."""
-                try:
-                    for line in sys.stdin:
-                        if "stop" in line.strip().lower():
-                            stop_event.set()
-                            break
-                    else:
-                        # stdin EOF while capture is active — stop cleanly (no orphan).
-                        stop_event.set()
-                except Exception as e:
-                    print(f"Error in command listener: {e}", file=sys.stderr)
-                    stop_event.set()
-
-            input_thread = threading.Thread(target=input_listener, daemon=True)
-            input_thread.start()
+            print(f"Recording... (send 'stop' or 'cancel' to stdin)", file=sys.stderr)
 
             # Main loop - continuously send audio levels for visualization
             # PERFORMANCE: 5 FPS updates to minimize CPU/IPC overhead (matches Windows)
@@ -1360,12 +1424,15 @@ def main():
 
                 time.sleep(0.2)  # 5 FPS updates (200ms interval)
 
-            print(f"\nStopping recording...", file=sys.stderr)
-            recorder.stop_recording()
+            finish_capture_from_stdin_or_duration()
     except KeyboardInterrupt:
         print(f"\nCtrl+C received", file=sys.stderr)
         try:
-            recorder.stop_recording()
+            if stdin_command["cmd"] == RECORDER_STDIN_CANCEL:
+                recorder.cancel_recording()
+                recording_cancelled = True
+            else:
+                recorder.stop_recording()
         except Exception as stop_err:
             message = f"Recorder failed during stop: {stop_err}"
             print(message, file=sys.stderr)
@@ -1382,40 +1449,64 @@ def main():
         # just because this outer handler caught an earlier exception. Anything
         # added after stop_recording() in the try block must not convert a
         # finished save into RECORDER_FAILED.
+        #
+        # Cancel intent must never fall through to stop/finalize (would resurrect
+        # audio the user asked to discard).
         message = f"Recorder failed: {e}"
         print(message, file=sys.stderr)
         import traceback
         traceback.print_exc(file=sys.stderr)
         if recorder is not None:
-            try:
-                if (
-                    recorder._get_running()
-                    or recorder._capture_manifest is not None
-                    or recorder._mic_spool is not None
-                    or getattr(recorder, "recording_failure", None)
-                ):
-                    recorder.stop_recording()
-            except Exception as stop_err:
-                print(f"Stop after failure also failed: {stop_err}", file=sys.stderr)
+            cancel_requested = stdin_command.get("cmd") == RECORDER_STDIN_CANCEL
+            action = resolve_post_exception_capture_action(
+                cancel_requested=cancel_requested,
+                recording_cancelled=recording_cancelled,
+            )
+            if action == "cancel":
+                try:
+                    recorder.cancel_recording()
+                    recording_cancelled = True
+                except Exception as cancel_err:
+                    print(f"Cancel after failure also failed: {cancel_err}", file=sys.stderr)
+                    if not getattr(recorder, 'recording_failure', None):
+                        recorder.recording_failure = {
+                            'code': 'RECORDING_CANCEL_FAILED',
+                            'message': f'{message}; cancel also failed: {cancel_err}',
+                        }
+                    _send_error_message("RECORDING_CANCEL_FAILED", recorder.recording_failure['message'])
+            elif action == "stop":
+                try:
+                    if (
+                        recorder._get_running()
+                        or recorder._capture_manifest is not None
+                        or recorder._mic_spool is not None
+                        or getattr(recorder, "recording_failure", None)
+                    ):
+                        recorder.stop_recording()
+                except Exception as stop_err:
+                    print(f"Stop after failure also failed: {stop_err}", file=sys.stderr)
 
-            recovered = None
-            if hasattr(recorder, '_resolve_recoverable_output_path'):
-                recovered = recorder._resolve_recoverable_output_path()
-            elif getattr(recorder, 'final_output_path', None):
-                recovered = recorder.final_output_path
+                recovered = None
+                if hasattr(recorder, '_resolve_recoverable_output_path'):
+                    recovered = recorder._resolve_recoverable_output_path()
+                elif getattr(recorder, 'final_output_path', None):
+                    recovered = recorder.final_output_path
 
-            if recovered and not getattr(recorder, 'recording_failure', None):
-                print(
-                    f"Recovered recording after error (no error toast): {recovered}",
-                    file=sys.stderr,
-                )
+                if recovered and not getattr(recorder, 'recording_failure', None):
+                    print(
+                        f"Recovered recording after error (no error toast): {recovered}",
+                        file=sys.stderr,
+                    )
+                else:
+                    if not getattr(recorder, 'recording_failure', None):
+                        recorder.recording_failure = {
+                            'code': 'RECORDER_FAILED',
+                            'message': message,
+                        }
+                    _send_error_message("RECORDER_FAILED", message)
             else:
-                if not getattr(recorder, 'recording_failure', None):
-                    recorder.recording_failure = {
-                        'code': 'RECORDER_FAILED',
-                        'message': message,
-                    }
-                _send_error_message("RECORDER_FAILED", message)
+                # Cancel already completed; do not finalize.
+                pass
         else:
             _send_error_message("RECORDER_FAILED", message)
 

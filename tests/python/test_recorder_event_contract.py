@@ -262,3 +262,85 @@ def test_stderr_debug_prints_are_not_structured_control_messages():
         send_json_wrapper = source.split("def _send_json_message", 1)[1].split("def ", 1)[0]
         assert "sys.stderr" not in send_json_wrapper
         assert "print(" not in send_json_wrapper or "_recorder_stdout" in send_json_wrapper
+
+
+def test_resolve_post_exception_capture_action_never_finalizes_on_cancel_intent():
+    from audio.recorder_stdin import resolve_post_exception_capture_action
+
+    # Cancel requested but not yet completed → discard path only.
+    assert resolve_post_exception_capture_action(
+        cancel_requested=True, recording_cancelled=False
+    ) == "cancel"
+    # Cancel already completed → do not finalize or re-cancel.
+    assert resolve_post_exception_capture_action(
+        cancel_requested=True, recording_cancelled=True
+    ) == "noop"
+    # No cancel intent → best-effort stop/finalize.
+    assert resolve_post_exception_capture_action(
+        cancel_requested=False, recording_cancelled=False
+    ) == "stop"
+    # recording_cancelled alone still means noop (cancel finished).
+    assert resolve_post_exception_capture_action(
+        cancel_requested=False, recording_cancelled=True
+    ) == "noop"
+
+
+def test_recorder_stdin_uses_exact_token_matching():
+    from audio.recorder_stdin import (
+        parse_recorder_stdin_command,
+        resolve_post_exception_capture_action,
+    )
+
+    assert parse_recorder_stdin_command("stop\n") == "stop"
+    assert parse_recorder_stdin_command("  CANCEL  ") == "cancel"
+    assert parse_recorder_stdin_command("stopgap") is None
+    assert parse_recorder_stdin_command("please stop") is None
+    assert parse_recorder_stdin_command("cancelation") is None
+
+    assert resolve_post_exception_capture_action(
+        cancel_requested=True, recording_cancelled=False
+    ) == "cancel"
+    assert resolve_post_exception_capture_action(
+        cancel_requested=True, recording_cancelled=True
+    ) == "noop"
+    assert resolve_post_exception_capture_action(
+        cancel_requested=False, recording_cancelled=False
+    ) == "stop"
+
+    for path in (WINDOWS_RECORDER, MACOS_RECORDER):
+        source = _read(path)
+        assert "parse_recorder_stdin_command" in source
+        assert '"stop" in line' not in source
+        assert "cancel_recording" in source
+        assert '"cancelled": True' in source or "'cancelled': True" in source
+        assert "mark_capture_discarded_and_cleanup" in source
+
+
+def test_cancel_recording_methods_skip_finalize_capture():
+    for path in (WINDOWS_RECORDER, MACOS_RECORDER):
+        source = _read(path)
+        cancel_fn = source.split("def cancel_recording", 1)[1].split("\n    def ", 1)[0]
+        assert "finalize_capture" not in cancel_fn
+        assert "mark_capture_discarded_and_cleanup" in cancel_fn
+        assert "set_state(\"finalizing\")" not in cancel_fn
+        assert "set_state('finalizing')" not in cancel_fn
+
+
+def test_macos_duration_mode_shares_stdin_cancel_listener():
+    source = _read(MACOS_RECORDER)
+    # Stdin listener must be started before the duration/manual branch so
+    # --duration recordings can still honor cancel.
+    listener_pos = source.find("def input_listener")
+    duration_pos = source.find("if args.duration > 0:")
+    assert listener_pos != -1
+    assert duration_pos != -1
+    assert listener_pos < duration_pos
+    finish_helper = source.split("def finish_capture_from_stdin_or_duration", 1)[1].split(
+        "\n    try:", 1
+    )[0]
+    assert "RECORDER_STDIN_CANCEL" in finish_helper
+    assert "cancel_recording" in finish_helper
+    # Cancel intent must not fall through to stop_recording on exception.
+    except_block = source.rsplit("except Exception as e:", 1)[1]
+    assert "resolve_post_exception_capture_action" in except_block
+    assert "cancel_recording()" in except_block
