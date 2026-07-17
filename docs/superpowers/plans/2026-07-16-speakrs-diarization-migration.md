@@ -200,6 +200,7 @@ Manifest shape gains one field; `manifestVersion` stays `1` (additive, old build
 - stderr: human diagnostics only; Python never parses it for control flow.
 - Exit promptly on SIGTERM/CTRL-BREAK (no orphaned inference).
 - Implementation: decode 16-bit PCM WAV → f32, `OwnedDiarizationPipeline::from_dir(models, mode)`, `run()`, clone `discrete_diarization`, `make_exclusive()` when `SPEAKRS_EXCLUSIVE=1`, `to_segments()`, serialize.
+- **Network policy: the CLI must be incapable of downloading.** Build with `default-features = false` so speakrs' default `online` auto-download feature (fetches from Hugging Face on first use) is compiled out; enable only the platform features (`coreml` / `cuda` + `load-dynamic` / `cpu`). Model loading is `from_dir` + `SPEAKRS_MODELS_DIR` only; a missing/incomplete models dir is a structured `success:false` error telling the user to re-run speaker setup — never a download. Verify with a test that the binary has no HF host strings baked in (`strings` grep in CI is acceptable).
 
 **Validation:** `cargo test` + `cargo clippy -D warnings` in the crate; `npm run test:python` (contract fixture tests); manual run against the spike models.
 
