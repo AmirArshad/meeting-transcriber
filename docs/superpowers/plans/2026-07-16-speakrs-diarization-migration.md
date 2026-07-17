@@ -40,6 +40,19 @@ Everything below was re-verified against crates.io, docs.rs, the speakrs GitHub 
 5. **Accelerator-only policy is unchanged in this migration.** `cpu` mode exists in the CLI for CI smoke tests only; product setup still requires CUDA (win32) / Apple Silicon (darwin-arm64). Relaxing that is a separate product decision the CLI makes cheap later.
 6. **Dual-engine soak via catalog constant.** `DIARIZATION_ENGINE` default `'speakrs'` in `src/ai-addon-state.js`, dev/QA override via `AVANEVIS_DIARIZATION_ENGINE` env. pyannote code paths are retained untouched until Task 8. Rollback = flip the constant in a patch release.
 
+### Execution guardrails (binding on the implementing agent)
+
+1. **One task per branch/PR, in plan order.** Finish a task's validation commands green before starting the next. Never combine Task 8 (deletions) with anything else.
+2. **Characterization first (Task 1 pre-step, before ANY app code changes):** add golden tests pinning today's behavior so the engine swap is diff-checked, not eyeballed —
+   - a Python golden test asserting the exact `*.speakers.json` top-level schema + `segments`/`speakerSegments` field sets from `build_diarization_result` (extend `tests/python/test_diarization_pipeline.py`);
+   - a Python test snapshotting the ordered `emit_progress` phase strings for a mocked full run;
+   - a JS test pinning that `diarize-transcript` / `transcribe-audio-with-speakers` payload handling is engine-agnostic.
+   These must stay green through Tasks 3–7 **unchanged**.
+3. **Additive until Task 8.** Until then: no IPC channel renames/removals, no status-value removals, no `preload.js` API removals, no deletion of pyannote code/catalog/tests, no edits to `AI_ADDON_STATUS_STATES`. If a pinned snapshot test (ipc-contract, privacy-hardening trusted-sender list, status array) fails before Task 8, the change is wrong — fix the change, not the snapshot.
+4. **Out of scope entirely, every task:** recorder services, capture/spool code, quit-drain/compute-queue internals (`ai-compute-queue.js`, `runWallClockComputeAction` — *use* them, never modify), meeting_manager persistence, summary feature code, updater/build download-manifest entries not listed in Task 6.
+5. **After every task:** `npm test && npm run test:python` (plus `npm run prepare-build` for Task 6). A task is not done with red tests, skipped tests, or "TODO: fix later".
+6. **Stop and ask the maintainer** instead of improvising when: a pinned sha256/revision doesn't match, a contract in this plan conflicts with current code, `cargo`/toolchain isn't available, or a change seems to require touching anything in guardrail 4.
+
 ---
 
 ## Threats to v1 assumptions — review outcomes
@@ -116,7 +129,7 @@ needsAccount  (LEGACY: reachable only when engine=pyannote; hidden for speakrs)
 ```
 
 - `downloading` = model pack (+ Windows ORT runtime archive) download + extract, progress on `ai-addon-progress` with `downloadedBytes/totalBytes`.
-- `validating` = `speakrs-cli` smoke run on a bundled fixture WAV in the required mode, wrapped in `createAbortableComputeAction` + `AI_COMPUTE_TIMEOUT_MS.addonValidation` (same as today).
+- `validating` = one smoke diarization of the bundled fixture WAV in the required mode, invoked through the **same path as production runs**: `python -m diarization.diarization_pipeline --validate-setup --engine speakrs` (no `--token-stdin`), wrapped in `createAbortableComputeAction` + `AI_COMPUTE_TIMEOUT_MS.addonValidation` exactly like today's pyannote validation. Do **not** have JS spawn `speakrs-cli` directly — validating through Python proves the whole Python↔CLI integration and keeps a single spawn path.
 - `ready` derivation replaces the pip `dependencyCache` check with: CLI binary present + model pack manifest-complete (per-file existence/size always; full sha256 at setup/validate, fingerprint-skip on later status polls — mirror the summary checksum policy).
 
 After Task 8 (pyannote removal): `AI_ADDON_STATUS_STATES` becomes `['notConfigured','downloading','validating','ready','error','unsupported']` and every pinned consumer/test updates in the same commit.
@@ -196,7 +209,27 @@ Manifest shape gains one field; `manifestVersion` stays `1` (additive, old build
 
 **Files:**
 - Create: `scripts/build-speakrs-model-pack.js`
-- Modify: `src/ai-addon-state.js` — add `DIARIZATION_ENGINE` (default `'speakrs'`, env override), new catalog model entry (e.g. `id: 'speakrs-community1-vbx'`, `provider: 'github-release'`, `license` metadata, `gated: false`, `tokenRequired: false`, per-platform `runtimeArtifacts` with `url`/`sha256`/`sizeBytes` — llama.cpp pattern), keep the pyannote entry untouched behind the engine flag
+- Modify: `src/ai-addon-state.js` — add `DIARIZATION_ENGINE` (default `'speakrs'`, env override), new catalog model entry, keep the pyannote entry untouched behind the engine flag. Target shape (mirror `SUMMARY_RUNTIME_ARTIFACTS` field conventions; final sha256/size values come from the repack script):
+
+```js
+const SPEAKRS_MODEL_PACK_REVISION = '5d24ffe'; // upstream speakrs-models rev (short)
+// inside AI_MODEL_CATALOG.diarization.models[]:
+{
+  id: 'speakrs-community1-vbx',
+  engine: 'speakrs',
+  label: 'Speaker identification (speakrs)',
+  provider: 'github-release',
+  license: 'MIT + CC-BY-4.0 (see pack ATTRIBUTION.md)',
+  licenseUrl: 'https://huggingface.co/avencera/speakrs-models',
+  gated: false, tokenRequired: false, termsRequired: false,
+  runtime: { type: 'native-cli', executableName: 'speakrs-cli', modeByPlatform: { 'win32-x64': 'cuda', 'darwin-arm64': 'coreml' } },
+  packArtifacts: {
+    'win32-x64': [{ id, fileName, url, sha256, sizeBytes }, /* + ORT/CUDA runtime archive */],
+    'darwin-arm64': [{ id, fileName, url, sha256, sizeBytes }],
+  },
+  supportedPlatforms: { win32: { acceleration: 'cuda', status: 'enabled' }, darwin: { acceleration: 'coreml', arch: 'arm64', status: 'enabled' } },
+}
+```
 - Modify: `src/ai-addon/manifest-store.js` — `checkSpeakrsModelCache` (existence/size always, sha256 at setup/validate, fingerprint-skip later), engine-aware `deriveDiarizationStatus`
 - Modify: `src/ai-addon/diarization-setup.js` — engine branch: speakrs setup = download archives → extract via existing workers → validate; no token calls anywhere on this path
 - Modify: `src/ai-addon-state.js` `normalizeDiarizationState` — `engine` field + legacy detection (see Manifest migration)
