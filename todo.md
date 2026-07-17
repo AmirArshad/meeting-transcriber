@@ -1,142 +1,56 @@
 # Project TODO
 
-Active TODOs only. Completed dependency-upgrade phase history has been removed from this file; use git history and `docs/development/DEPENDABOT_TRIAGE.md` for background.
+Active TODOs only. Completed initiative history lives in git history, `docs/releases/`, and the linked design docs (see "Recently shipped" at the bottom).
 
-## Completed: macOS arm64 ffmpeg + bundle trim (merged)
+## Active: Speakrs Diarization Migration
 
-Replaced Intel-only evermeet.cx ffmpeg with a pinned Apple Silicon static build (fixes macOS 26.4+ Rosetta deprecation warnings). Trimmed the packaged macOS Python runtime by removing `torch` and other MLX-unused PyTorch baggage after `pip install`. Packaged app ~800 MB (down from ~1.3 GB); manual smoke passed (record, Opus encode, MLX transcription, playback).
+**Branch:** all implementation on a single branch `feature/speakrs-diarization`, one task at a time, one commit (series) per task prefixed `speakrs task N:`.
+**Plan (binding — read first):** [docs/superpowers/plans/2026-07-16-speakrs-diarization-migration.md](docs/superpowers/plans/2026-07-16-speakrs-diarization-migration.md) — frozen CLI contract, execution guardrails, per-task file lists and validation commands.
+**Rules that get the best result:** never start task N+1 with task N's validation red; `npm test && npm run test:python` green at every task boundary; everything stays additive until Task 8; if a pinned snapshot test fails before Task 8, the change is wrong — not the snapshot.
 
-- [x] [Risk: Low] Pin arm64 ffmpeg download (shaka-project/static-ffmpeg-binaries n8.0.1-1) with SHA-256 verification.
-- [x] [Risk: Low] CI: assert bundled `Contents/Resources/ffmpeg/ffmpeg` is arm64 via `file`.
-- [x] [Risk: Medium] Post-install removal of `torch` + transitive PyTorch-only packages; keep `scipy` (required by MLX).
-- [x] [Risk: Medium] CI packaged smoke: `scripts/verify-macos-packaged-app.sh` (arm64 ffmpeg, codesign, libopus encode, MLX imports, no bundled torch, `du -sh`).
-- [x] [Risk: High] Manual macOS smoke: record → Opus via packaged ffmpeg → short MLX transcription on a real Mac.
+- [ ] [Risk: Low] **Task 0a — macOS spike (gate part 1):** build `native/speakrs-cli` (coreml), benchmark 3 internal meetings vs current pyannote MPS, record per-mode model file lists/sizes in `docs/development/SPEAKRS_SPIKE_NOTES.md`. No app code touched.
+- [ ] [Risk: Medium] **Task 0b — Windows spike (gate part 2):** CUDA build + prove the full ORT DLL closure against the existing cuda12 profile on real hardware; finish spike tables. **Explicit GO/NO-GO line against the plan's criteria before any app work.**
+- [ ] [Risk: Low] **Task 1 pre-step — characterization golden tests first:** pin current `*.speakers.json` schema, `emit_progress` phase sequence, and engine-agnostic IPC handling; commit green against unmodified code. These stay green untouched through Task 7.
+- [ ] [Risk: Low] **Task 1 — `speakrs-cli` crate** to the frozen JSON contract + fixture WAV + contract tests. Validation: `cargo test`, `cargo clippy -- -D warnings`, `npm run test:python`.
+- [ ] [Risk: Medium] **Task 2 — model pack + catalog:** repack script, `DIARIZATION_ENGINE` constant, `speakrs-community1-vbx` catalog entry (shape sketched in plan), engine-aware status derivation; token-free setup reaches `ready`. Validation: `npm test`.
+- [ ] [Risk: Low] **Task 2b — license-compliance checklist** (ATTRIBUTION.md + LICENSES/ inside packs, `THIRD_PARTY_NOTICES.md`, `npm run legal:sbom`). Blocks public release only, not development.
+- [ ] [Risk: High] **Task 3 — Python engine dispatch:** `--engine` flag, `backend/diarization/speakrs_runner.py` with guaranteed grandchild kill, identical progress phases, redaction fix at `guided_transcription.py:492`. Validation: `npm run test:python` incl. kill-propagation test.
+- [ ] [Risk: High] **Task 4 — main-process plumbing:** spawn env/args, token-free validation path, packaged CLI resolution. Smallest possible diff in `transcription-service.js`; list every touched call site; review this commit extra carefully.
+- [ ] [Risk: Medium] **Task 5 — renderer UX + migration:** hide token UI for speakrs, legacy-pyannote migration prompt, explicit legacy cleanup (pip deps + old HF cache + token file, with dialog copy); update `tests/manual/local-ai-addons-checklist.md`.
+- [ ] [Risk: Medium] **Task 6 — build/CI/release packaging:** `buildSpeakrsCli` in prepare-resources, extraResources/codesign, CI Rust jobs + CPU-mode fixture smoke, release workflow. Validation: `npm run prepare-build`, packaged smokes, `npm run test:all`. **Merge the branch after this task.**
+- [ ] [Risk: High] **Task 7 — soak on merged builds:** benchmark matrix → `docs/development/SPEAKRS_BENCHMARKS.md`; cutover bar = ≥25 internal meetings across both platforms, zero engine crashes/hangs, manual checklist green on packaged Windows CUDA + macOS AS.
+- [ ] [Risk: High] **Task 8 — post-soak removal (separate PR, never on the feature branch):** delete pyannote catalog/deps/branches, `needsAccount`, token IPC channels, `--token-stdin`; update every pinned snapshot test in the same PR; rewrite `AGENTS.md` + `docs/development/LOCAL_AI_MODEL_CATALOG.md` diarization sections.
+
+## Release And Dependency Hygiene (carryover)
+
 - [ ] [Risk: Low] Apple Developer signing/notarization: enable when enrolled (`package.json` `mac.notarize`, release workflow secrets).
-- [ ] [Risk: High] Evaluate PyObjC `Cocoa` / `Quartz` pin removal (separate follow-up; needs capture smoke).
-
-## Remaining Dependency And Release Hygiene
-
-- [x] [Risk: Low] Close superseded Dependabot PRs that were absorbed by the dependency-upgrade branch: #12 and #20.
-- [x] [Risk: Low] Close deferred high-risk Dependabot PRs with explicit comments: #15, #18, and #19.
-- [x] [Risk: Medium] Decide whether optional follow-up dependency PRs #13, #14, #16, #17, and #21 should ship as small separate PRs or stay deferred. (Closed; revisit only if Dependabot reopens with newer bumps.)
-- [ ] [Risk: Low] Trial dropping *other* explicit transitive-only pins in a follow-up trim pass (not `onnxruntime`/`tokenizers`/`av` — those stay); keep any pin needed for reproducible packaged builds.
+- [ ] [Risk: Low] Trial dropping other explicit transitive-only pins in a follow-up trim pass (not `onnxruntime`/`tokenizers`/`av` — those stay; see `docs/development/DEPENDABOT_TRIAGE.md`).
 - [ ] [Risk: High] Evaluate whether macOS PyObjC `Cocoa` / `Quartz` pins are removable; requires `pip check`, PyObjC import checks, packaged `build:mac:dir`, and ScreenCaptureKit fallback smoke.
-- [x] [Risk: Medium] Remove bundled macOS `torch` after pip install (MLX path does not import it; diarization installs its own torch into userData).
-- [x] [Risk: Medium] Investigate Windows faster-whisper transitive packages `onnxruntime`, `tokenizers`, and `av`: **keep explicit pins** in `requirements-windows-build.txt`. All three are hard deps of `faster-whisper==1.2.1`; AvaNevis uses `vad_filter=True` (onnxruntime/Silero), path-based decode (PyAV/`av`), and Whisper tokenization (`tokenizers`). Do not remove from packaged Windows builds. See 2026-07-14 note in `docs/development/DEPENDABOT_TRIAGE.md`.
 
-## Remaining Validation And Smoke Checks
+## Optional Validation Passes
 
-- [x] [Risk: High] macOS packaged smoke: launch `dist/mac-arm64/AvaNevis.app` and run a short MLX transcription after `npm run build:mac:dir`.
-- [x] [Risk: High] Windows packaged smoke: healthy CUDA runtime transcribes on GPU.
-- [x] [Risk: High] Windows packaged smoke: broken CUDA runtime falls back to CPU and still saves a transcript.
-- [x] [Risk: Medium] Recovery smoke: existing `.opus` without transcript appears in History and can be retried.
-- [ ] [Risk: High] Optional extended pass: `tests/manual/recording-transcription-regression-checklist.md`.
-- [ ] [Risk: High] Optional local AI add-ons smoke if models are installed: diarization and summary subset from `tests/manual/local-ai-addons-checklist.md`.
-
-## Completed: Pre-2.6.0 Adversarial Race Hardening
-
-- [x] [Risk: High] Restore recorder startup timeout while cancel settlement is armed; session-scope stale compensating cancels.
-- [x] [Risk: High] Retire timed-out cancel attempts after bounded force-kill grace without claiming the process is idle.
-- [x] [Risk: High] Terminate compute subprocesses registered after wall-clock timeout, including post-CUDA-probe spawns.
-- [x] [Risk: Medium] Reject stale queue snapshots before Activity or History terminal-transition side effects.
-- [x] [Risk: Medium] Release orphan `session.lock` before Windows directory deletion and retain the non-blocking live-lock probe.
-- [x] [Risk: High] Run the targeted adversarial recorder/queue/Windows orphan manual checks in `tests/manual/recording-smoke-checklist.md` before the 2.6.0 tag.
+- [ ] [Risk: High] Extended pass: `tests/manual/recording-transcription-regression-checklist.md`.
+- [ ] [Risk: High] Local AI add-ons smoke from `tests/manual/local-ai-addons-checklist.md` (note: checklist gets speakrs rows in Task 5 — prefer running it then).
 
 ## Next Priorities
 
-**v2.6.0 shipped:** [Back-to-back recording & transcription queue](docs/initiatives/FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md) (Phase 1 + Phase 2 polish; [release notes](docs/releases/v2.6.0.md)).
-
-Earlier: codebase refactor, Release 1 presence, and Release 2 long-recording safety shipped in **v2.5.0**.
-
-Recommended order when choosing:
-
-1. **Release hygiene** — notarization when enrolled; trial other transitive pin trim (not `onnxruntime`/`tokenizers`/`av`); PyObjC Cocoa/Quartz evaluation.
-2. **Optional extended checklists** — full transcription regression / local AI add-ons smoke when convenient.
-3. **Next product features** — silent auto-install updater; upload existing audio (reuse Activity queue); see [ROADMAP.md](docs/initiatives/ROADMAP.md).
+1. **Speakrs diarization migration** (above) — zero-token speaker setup, ~4 GB→~hundreds of MB install, ~20× faster macOS diarization.
+2. **Release hygiene** — notarization when enrolled; transitive pin trim; PyObjC Cocoa/Quartz evaluation.
+3. **Optional extended checklists** — when convenient (add-ons checklist best after speakrs Task 5).
+4. **Next product features** — silent auto-install updater; upload existing audio (reuse Activity queue); see [ROADMAP.md](docs/initiatives/ROADMAP.md).
 
 Do **not** force Phase 2 renderer controllers now. Revisit only if `app.js` grows materially or a feature forces controller-level changes — and only after (1) a DOM-testing decision and (2) a written Pattern C shared-state ownership plan.
-
-## Completed: Back-to-Back Recording & Transcription Queue (v2.6.0)
-
-Design: `docs/initiatives/FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md`  
-Diagram: `docs/architecture/background-transcription-queue-before-after.svg`  
-Release notes: `docs/releases/v2.6.0.md`
-
-**Problem:** After Stop, Start stays blocked through encode *and* full Whisper (renderer `transcribing` state), so consecutive meetings wait minutes. Encode must stay exclusive; transcription must not block capture.
-
-**Shipped in v2.6.0** — Phase 1 (PR1–PR3) + Phase 2 polish.
-
-- [x] [Risk: High] Stop → `addMeeting(pending)` + placeholder transcript (incl. recoverable-failure path); snapshot language/model; use post-add `audioPath`. If pending persist itself fails: surface error, stay idle, rely on scan-import recovery (audio already in recordings dir). *(PR1)*
-- [x] [Risk: High] Main-owned per-meeting composite job on `aiComputeActionQueue` (`retry-transcription` shape: transcribe → optional diarize → persist). Renderer becomes a view — do not “just remove the await.” **Includes moving guided-sidecar / `update-meeting-ai` persistence into the main job** (today the renderer persists sidecars after retry returns — background completion during reload/quit would lose speaker metadata). *(PR1)*
-- [x] [Risk: Medium] Durable statuses only: `pending` | `failed` | `completed`. Never persist `processing` (would coerce to completed). User cancel → `failed` + "Cancelled by user" (never left `pending` — resume must not nag). *(PR1 guards; cancel UX in PR2)*
-- [x] [Risk: Medium] `transcription-queue-state` channel; **leave `transcription-progress` payload unchanged** (pinned IPC contract) — renderer attributes lines via `activeMeetingId`. Home Activity list (Queued / Transcribing / Failed+Retry / Cancel pending / session-only Ready → History). *(channel in PR1; Activity UI in PR2)*
-- [x] [Risk: Medium] Unlock Start immediately after pending persist; button copy → **Stop** / Saving… (stop-stage messages); status pill `Ready · N transcribing`. *(PR2)*
-- [x] [Risk: Medium] Quit: terminate active job; meetings stay `pending`; quit copy says they finish next launch (never “quit will wait”). **Two job-level guards:** every job checks `quitCommitted`/cancel flag at head-of-queue (else chained queue starts the next Whisper run mid-quit); quit-killed jobs skip the write-`failed` path (`isQuitCommitted()` in catch) so they stay resumable and don’t spawn `meeting_manager` during teardown. *(job guards PR1; quit copy PR2)*
-- [x] [Risk: Low] Explicit “Resume N pending transcriptions” banner (no auto-resume in Phase 1). *(PR2)*
-- [x] [Risk: High] Recording-while-CPU-transcribe contention: transcription/diarization children **self-lower to below-normal priority unconditionally at startup** (ctypes `SetPriorityClass` / `os.nice` — not spawn-time, not capture-conditional); optional `cpu_threads` cap / defer past `starting`; manual smoke item. *(priority self-lower in PR1)*
-- [x] [Risk: Medium] GPU install / model preload: fail-fast when queue non-idle (15-minute idle waits become routinely exceedable). *(PR2)*
-- [x] [Risk: Medium] Delete/cancel-while-queued: cancel flag at head (same primitive as the quit check); no artifact write after tombstone; active-job delete policy documented. *(cancel flag PR1; delete UX PR2)*
-- [x] [Risk: High] Characterization + targeted tests; Windows/macOS smoke: back-to-back Start while previous job transcribes. *(PR1 tests; smoke with PR2 unlock)*
-
-**Companion PR — Cancel recording (discard); see design doc “Companion feature” section**
-
-- [x] [Risk: High] New `cancel` stdin command in both recorders; tighten stdin parse to exact-token (current `"stop" in line.lower()` is substring match); skip Stage A entirely; emit structured `{success: true, cancelled: true}` final JSON (never stderr-only exit).
-- [x] [Risk: High] Tombstone-ordered spool discard: write `discarded` marker to capture manifest **first**, then best-effort delete spools/temps; `capture_recovery` + scan-import treat marked captures as cleanup-only (no resurrection). Crash before marker → recovers as normal interrupted recording (safe default).
-- [x] [Risk: Medium] `recorder-service.js` cancel path: publishes capture state, resolves to idle, never calls `addMeetingToHistory`/enqueue; stop/cancel mutually exclusive (first command wins; cancel after `stop` rejected). Discard UI only while `recording`/countdown (never during `stopping`), always confirms, not adjacent-clickable with Stop.
-- [x] [Risk: High] Recorder contract test updates per AGENTS.md list (JS + Python event-contract tests, `recorder-output-helpers`, manual smoke: cancel mid-recording both platforms; relaunch shows no recovered meeting).
-
-**Phase 2 (polish) — after Phase 1 ships**
-
-- [x] [Risk: Medium] Auto-resume `pending` post recordings-maintenance scan (never auto-resume `failed`).
-- [x] [Risk: Low] Completion toasts (duration-based copy); first-run tip; soft queue-depth warning.
-- [x] [Risk: Medium] Between-job GPU/preload admission if fail-fast is too painful.
-- [x] [Risk: Low] Richer phase text / optional percent on active row.
-- [x] [Risk: Medium] Activity duration: use `durationSeconds` (not the display `duration` string like `1:23`) when projecting queue/durable rows — smoke showed every row as `0s`.
-- [x] [Risk: Medium] Bidirectional title sync: rename from History **or** Activity updates shared meeting metadata, patches in-memory queue job titles, and re-renders both surfaces (today queue rows keep the admit-time snapshot).
-- [x] [Risk: Medium] Activity row actions: rename + delete from Home Activity via the same `update-meeting` / `delete-meeting` paths as History (same delete-while-queued/active guards). Delete removes the meeting from History and drops/cancels the Activity row; rename is visible in both places immediately.
-
-Phase 2 review remediation completed: resource-queue lock inversion removed; parked preload/runtime work now re-checks quit; per-meeting renames serialize; Activity delete tolerates History-cache lag; empty-state notices and diarization percent reset correctly.
-
-**Cut until asked:** tray “Transcribing N”; inline Home transcript drawer; teaching button label; encode time estimates.
-
-## Completed: Recording Awareness And Long-Recording Safety (v2.5.0)
-
-Implementation plan: `docs/superpowers/plans/2026-07-13-recording-awareness-and-long-recording-safety.md`. Shipped in **v2.5.0**.
-
-### Release 1: Recording awareness and discoverability
-
-- [x] [Risk: Medium] Complete Before Coding gates: tray/close snapshot, Windows minimize-while-recording decision, Windows packaged overlay/toast CLSID spike, single-instance collision check, and static saturated macOS recording-status icon validation.
-- [x] [Risk: Medium] Add one main-process recording-presence service with a static saturated macOS recording-status icon + `REC` text, supplemental Dock badge, Windows taskbar overlay (minimize while recording so the button remains), and hourly native reminders.
-- [x] [Risk: Medium] Publish authoritative `starting` / `recording` / `stopping` / `idle` lifecycle state from `recorder-service.js`, add renderer state hydration, and base elapsed time/reminders on the backend `recording_started` timestamp.
-- [x] [Risk: Low] Add an always-visible in-app recording pill and `H:MM:SS` elapsed clock across Record, History, and Settings.
-- [x] [Risk: Medium] Add single-instance reveal/focus behavior and recording-specific close copy (Windows: keep recording minimized; macOS: keep in menu bar); keep the existing graceful quit/save path.
-- [x] [Risk: Low] Improve descriptive app metadata and validate installed searches for "meeting" or "transcriber" without changing `productName`, Windows shortcut identity, `appId`, `userData`, or release artifacts.
-- [x] [Risk: High] Run packaged macOS and Windows presence checks, including notifications disabled, stop/failure cleanup, display scaling, toast CLSID click-to-open, and installed-app search.
-
-### Release 2: Progressive capture and bounded finalization
-
-- [x] [Risk: Medium] Measure 15-minute and 60-minute capture/stop RSS, duration, and disk baselines; expose structured stop-processing stages, replace shell disk probes (verify Windows `statfs`), and warn periodically when recording space becomes low.
-  - Guardrails landed on `feature/long-recording-safety-r2` (statfs probe, 5-minute disk monitor, stdout stop stages, initiative doc). Hardware 15/60 baselines and presence/smoke evidence signed off (user, 2026-07-14).
-- [x] [Risk: High] Add versioned atomic capture manifests and bounded segmented mic/desktop track spools (8 MiB hard cap, soft warning, sustained-stall detection) that cannot be scan-imported as meetings.
-- [x] [Risk: High] Integrate Windows timestamp-aware and macOS float32 capture spools behind a temporary rollout flag while preserving desktop-failure behavior.
-  - Historical: `AVANEVIS_CAPTURE_SPOOL` gated spool writes until Task 10 Step 6 made durable spools the only path.
-- [x] [Risk: High] Replace whole-recording joins/resampling/mixing with bounded multi-pass finalization and recoverable WAV/RF64-to-Opus output.
-  - Spool stop path uses `finalize_capture` (`windows-v1` / `macos-v1`); explicit wav muxer for `final.pcm.tmp`; committedFrames boundary; ffmpeg decode verify before cleanup; stable-wav recovery paths.
-  - Stop-finalization optimization keeps normalized handles open per pass, folds track stats into normalization, and derives enhance plans from one sum/min/max pass without changing profile decisions. Synthetic timing/RSS harness: `npm run benchmark:finalization`; measured 1 s vs 5 s chunks retained the 1-second default because 5 seconds was not faster and used more RSS.
-- [x] [Risk: High] Discover interrupted captures async after window creation, offer `Recover Now` / `Later`, serialize accepted recovery with scan/start through one maintenance gate, complete 2-hour/4-hour hardware evidence, then remove the RAM path and rollout flag.
-  - **Task 10 complete on branch** (Steps 1–6 + review fix). Hardware smoke / presence / long-recording evidence signed off (user, 2026-07-14).
 
 ## Deferred Product And Architecture Backlog
 
 - [ ] [Risk: High] Acoustic echo cancellation / echo suppression for speaker-use scenarios on Windows and macOS.
-- [ ] [Risk: Medium] Upload audio files (`.mp3`, `.wav`, `.opus`) and process them through the transcription, summary, and history flow (should reuse the transcription queue / Activity UI once that ships).
+- [ ] [Risk: Medium] Upload audio files (`.mp3`, `.wav`, `.opus`) and process them through the transcription, summary, and history flow (reuse the transcription queue / Activity UI).
 - [ ] [Risk: Medium] History chat over past meetings using the installed local summary runtime/model.
 - [ ] [Risk: Medium] Verify the archived "packaged Swift helper skips `which()` when `AVANEVIS_PACKAGED=1`" item is fully implemented and tested; close if redundant with current `test_screencapture_helper.py` coverage.
+- [ ] [Risk: High] Codebase refactor residual: Phase 7B macOS capture smoke when Mac hardware is available — `docs/initiatives/phase-0-smoke-baseline.md`.
 
-## Completed: AvaNevis Codebase Refactor
+## Recently shipped (details in git history / linked docs)
 
-Design doc: `docs/initiatives/AVANEVIS_CODEBASE_REFACTOR.md`. Merged through #47 (2026-07-09). Initiative complete; soft-cap accepted for `app.js`.
-
-- [x] Phases 0–8 (characterization → CI/docs), Phase 5B (`hf_runtime` + `audio_prep`), shared `backend/audio/recorder_stdout.py` (#47).
-- [x] Phase 2 pure helpers only; **controllers stay deferred** (re-measure: ~4.3k lines; ~600–900 line save still misses ~2k soft-cap; no DOM/controller behavioral tests). Soft-cap acceptance stands.
-- [ ] Residual (not blocking initiative exit): Phase 7B macOS capture smoke when Mac hardware is available — `docs/initiatives/phase-0-smoke-baseline.md`.
+- **v2.6.0** — back-to-back recording & transcription queue (Phase 1 + Phase 2 polish) + cancel-recording discard. Design: `docs/initiatives/FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md`; notes: `docs/releases/v2.6.0.md`.
+- **v2.5.0** — recording awareness/presence + progressive capture spools & bounded finalization. Plan: `docs/superpowers/plans/2026-07-13-recording-awareness-and-long-recording-safety.md`.
+- **Pre-2.6.0 adversarial race hardening**; **macOS arm64 ffmpeg + bundle trim** (~1.3 GB → ~800 MB); **AvaNevis codebase refactor** (merged through #47; soft-cap accepted for `app.js`); **dependency/Dependabot triage** (`docs/development/DEPENDABOT_TRIAGE.md`).

@@ -42,7 +42,7 @@ Everything below was re-verified against crates.io, docs.rs, the speakrs GitHub 
 
 ### Execution guardrails (binding on the implementing agent)
 
-1. **One task per branch/PR, in plan order.** Finish a task's validation commands green before starting the next. Never combine Task 8 (deletions) with anything else.
+1. **Single implementation branch: `feature/speakrs-diarization`, one task at a time, in plan order.** Each task lands as its own commit (or small commit series) prefixed `speakrs task N:`, with that task's validation commands green **before** the next task starts — the branch must be revertible task-by-task and reviewable per-task via commit diffs. Tasks 1–6 merge together after Task 6 validation; Task 7 (soak) runs on merged builds; Task 8 (deletions) is a separate later PR after soak and is never done on this branch.
 2. **Characterization first (Task 1 pre-step, before ANY app code changes):** add golden tests pinning today's behavior so the engine swap is diff-checked, not eyeballed —
    - a Python golden test asserting the exact `*.speakers.json` top-level schema + `segments`/`speakerSegments` field sets from `build_diarization_result` (extend `tests/python/test_diarization_pipeline.py`);
    - a Python test snapshotting the ordered `emit_progress` phase strings for a mocked full run;
