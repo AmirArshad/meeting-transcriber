@@ -41,7 +41,7 @@ Pygments==2.20.0
 markdown-it-py==4.2.0
 mdurl==0.1.2
 shellingham==1.5.4
-typing-extensions==4.15.0
+typing-extensions==4.16.0
 anyio==4.13.0
 colorama==0.4.6
 mlx==0.31.2
