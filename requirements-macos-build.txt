@@ -46,7 +46,7 @@ anyio==4.13.0
 colorama==0.4.6
 mlx==0.31.2
 more-itertools==11.1.0
-numba==0.65.1
+numba==0.66.0
 llvmlite==0.47.0
 # Pinned for reproducible pip resolution; lightning-whisper-mlx requires torch but MLX inference
 # never imports torch_whisper.py, so prepare-resources removes torch after install.
