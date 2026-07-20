@@ -5,4 +5,4 @@ numpy>=2.4.0            # For audio processing and mixing
 # soxr: Windows + macOS packaged builds (processor.py / streaming_post_processor.py)
 
 # Transcription
-filelock>=3.29.7         # Prevent race conditions during model downloads (CVE-2025-68146, CVE-2026-22701)
+filelock>=3.31.0         # Prevent race conditions during model downloads (CVE-2025-68146, CVE-2026-22701)

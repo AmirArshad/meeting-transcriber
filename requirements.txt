@@ -5,7 +5,7 @@ soxr>=1.1.0              # For high-quality audio resampling (Windows recorder p
 
 # Transcription Dependencies
 faster-whisper>=1.0.0    # Fast, accurate Whisper implementation (CPU + GPU)
-filelock>=3.29.7         # Prevent race conditions during model downloads
+filelock>=3.31.0         # Prevent race conditions during model downloads
 
 # GPU Acceleration (Optional but recommended for faster transcription)
 # For NVIDIA GPU users with CUDA installed:
