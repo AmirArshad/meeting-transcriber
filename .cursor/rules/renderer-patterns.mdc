@@ -6,10 +6,6 @@ alwaysApply: false
 
 # Renderer patterns
 
-- Stack: plain HTML/CSS/JS (no React/Vue). Main state machine: `src/renderer/app.js` — prefer **extracting** pure logic to `*-helpers.js` with `tests/js/*-helpers.test.js` over growing `app.js`.
-- IPC: only via `window.electronAPI` (`src/preload.js`). See `electron-ipc.mdc` when adding handlers.
-- Transcripts: saved `.md` is source of truth; viewer renders Markdown with timestamp chips. Save/export uses native dialog (`.md` / `.txt`).
-- Meeting rename updates metadata by meeting ID — does not rename audio/transcript files on disk.
-- Styles: `src/renderer/styles.css`; keep DPR-aware canvas/scrubber patterns when touching visualizer or playback UI.
+You are editing the renderer. In `AGENTS.md`, read **Critical invariants → Renderer conventions**, and **IPC channel ownership** if you are adding or changing a handler.
 
-After helper extraction or IPC/UI contract changes: `npm test` (includes the `test:syntax` glob over all `.js` under `src/`).
+Non-obvious items it carries: the saved `.md` transcript is the source of truth, meeting rename deliberately does not rename files on disk, and the DPR-aware canvas/scrubber patterns must survive visualizer edits.

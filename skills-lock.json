@@ -11,7 +11,8 @@
       "source": "obra/superpowers",
       "sourceType": "github",
       "skillPath": "skills/finishing-a-development-branch/SKILL.md",
-      "computedHash": "aa2632ed96df59c36348bd8f8ec1ff0fb0c5cc68b60691834687bf4cedc6be3f"
+      "computedHash": "aa2632ed96df59c36348bd8f8ec1ff0fb0c5cc68b60691834687bf4cedc6be3f",
+      "localModified": true
     },
     "gh-address-comments": {
       "source": "openai/skills",
@@ -71,7 +72,8 @@
       "source": "obra/superpowers",
       "sourceType": "github",
       "skillPath": "skills/systematic-debugging/SKILL.md",
-      "computedHash": "792a368e074981d7e3138edb439e138489b2ac247cd1e5739fab52af680fb17b"
+      "computedHash": "792a368e074981d7e3138edb439e138489b2ac247cd1e5739fab52af680fb17b",
+      "localModified": true
     },
     "to-spec": {
       "source": "mattpocock/skills",
@@ -89,7 +91,8 @@
       "source": "obra/superpowers",
       "sourceType": "github",
       "skillPath": "skills/writing-plans/SKILL.md",
-      "computedHash": "b73b59d43c34c3fc225bfae419c458bb216af80df25fc0c545dfa7fd2a161722"
+      "computedHash": "b73b59d43c34c3fc225bfae419c458bb216af80df25fc0c545dfa7fd2a161722",
+      "localModified": true
     }
   }
 }

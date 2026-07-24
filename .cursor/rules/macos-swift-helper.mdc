@@ -6,26 +6,6 @@ alwaysApply: false
 
 # macOS Swift audio helper
 
-Preferred capture: bundled `audiocapture-helper` with **CoreAudio process tap** on macOS 14.2+; falls back to Swift ScreenCaptureKit, then PyObjC ScreenCaptureKit.
+You are editing the macOS desktop-capture path. In `AGENTS.md`, read **Critical invariants → macOS desktop audio capture** in full — it is the densest set of gotchas in the repo.
 
-## stdout / stderr contract
-
-- **stdout:** raw interleaved float32 PCM only (Electron does not parse helper stdout). Mid-recording delivery gaps are zero-filled into the same FIFO as real PCM (capped; before the resuming buffer) so silence does not collapse the timeline and writer starvation cannot reorder fill.
-- **stderr:** JSON status, diagnostics, warnings, errors — parsed by `backend/audio/swift_audio_capture.py`.
-
-CoreAudio may expose multi-channel buffers; preserve helper interleaved normalization and Python mixer **one-sided stereo repair** so desktop speech survives MLX/ffmpeg mono downmix.
-
-## Permissions (do not conflate)
-
-- CoreAudio tap → System Audio Recording for `com.avanevis.app.audiocapture-helper`.
-- ScreenCaptureKit fallback → Screen Recording.
-- Preflight skips proactive Screen Recording and must report `skipped` / `granted: null`, not a false grant.
-- Inspect `helperCaptureBackend` and helper diagnostics before blaming “missing desktop audio” on generic screen-recording issues.
-
-## Packaging checklist
-
-- Build: `swift build -c release --arch arm64` in `swift/AudioCaptureHelper`.
-- Stage via `build/prepare-resources.js` → `build/resources/bin`.
-- Bundle/sign as `Contents/Resources/bin/audiocapture-helper` in electron-builder.
-
-`docs/initiatives/MACOS_AUDIO_ARCHITECTURE.md` describes **future** ideas (streaming to disk, app-specific capture); do not treat planned sections as shipped behavior.
+It covers the raw-float32-stdout / JSON-stderr split, gap zero-fill and its 3-minute cap, the no-float64-upcast rule, the multi-buffer interleaving trap, the System Audio Recording vs Screen Recording distinction, and the packaging/signing checklist.

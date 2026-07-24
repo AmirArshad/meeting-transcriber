@@ -11,7 +11,7 @@ Write concise, file-level implementation plans. Include the goal, design decisio
 
 **Announce at start:** "I'm using the writing-plans skill to create the implementation plan."
 
-**Context:** If working in an isolated worktree, it should have been created via the `superpowers:using-git-worktrees` skill at execution time.
+**Context:** If working in an isolated worktree, assume the harness created it. This repo has no worktree-creation skill — do not go looking for one.
 
 **Save plans to:** `docs/superpowers/plans/YYYY-MM-DD-<feature-name>.md`
 - (User preferences for plan location override this default)

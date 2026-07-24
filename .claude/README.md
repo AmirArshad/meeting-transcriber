@@ -1,12 +1,10 @@
 # Claude Code project config
 
-Shared, commit-able Claude Code artifacts can live here:
+Commit-able Claude Code artifacts live here:
 
-- `rules/` — path-scoped `.md` rules (optional mirrors of `.cursor/rules/`)
-- `skills/` — project skills (`*/SKILL.md`)
-- `CLAUDE.md` — optional alternate entry; prefer root `CLAUDE.md` with `@AGENTS.md`
+- `rules/` — `.md` rules. **A rule without a `paths:` frontmatter field loads on every request**; add `paths:` to scope it to matching files.
+- `skills/` — the only place Claude Code discovers project skills. This repo instead keeps skills in `.agents/skills/` and routes to them from root `CLAUDE.md`; see the table there.
 
-Local-only (gitignored):
+Local-only (gitignored): `settings.local.json`, and root `CLAUDE.local.md`.
 
-- `settings.local.json`
-- root `CLAUDE.local.md`
+Entry point is root `CLAUDE.md`, which imports `AGENTS.md`. Do not add a `.claude/CLAUDE.md` as well — both would load.

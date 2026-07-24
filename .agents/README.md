@@ -1,6 +1,8 @@
 # Project Agent Skills
 
-Skills are folders with a `SKILL.md` (Agent Skills open standard). Agents discover them from `.agents/skills/` — nothing else is required beyond having the files in the repo.
+Skills are folders with a `SKILL.md` (Agent Skills open standard).
+
+**Discovery is not uniform — verify before assuming.** Claude Code does **not** scan `.agents/skills/`; its skill paths are `.claude/skills/`, `~/.claude/skills/`, plugins, and enterprise locations (confirmed against its docs, and by the repo's skills being absent from a live session's skill list). Root `CLAUDE.md` therefore carries a small router table that names each skill file for Claude Code to Read. Cursor and OpenCode discovery of this path has **not** been verified in this repo — if a skill silently never fires in one of them, that is the first thing to check.
 
 This repo keeps a **lean** set on purpose: avoid skills that auto-invoke on every turn or force heavy workflows (those burn tokens hard, especially on large models).
 
@@ -23,4 +25,8 @@ Aggressive Superpowers routers (`using-superpowers`, `brainstorming`, forced TDD
 
 Provenance: root `skills-lock.json`. Refresh kept skills with `npx skills update` when desired.
 
-Do not duplicate this tree into `.claude/skills/` or `.cursor/skills/` unless a tool fails to see `.agents/skills/`.
+Do not duplicate this tree into `.claude/skills/` or `.cursor/skills/`. Duplicating ~10k words of skill bodies costs nothing in always-on context (bodies load on demand) but guarantees drift between two copies. The router table in root `CLAUDE.md` is the cheaper fix.
+
+## Local modifications vs upstream
+
+Every skill here is vendored, with an upstream `computedHash` in root `skills-lock.json`. Editing one breaks that hash and `npx skills update` will overwrite the edit. Locally modified skills are marked `"localModified": true` in the lock file — re-apply those changes by hand after any update.

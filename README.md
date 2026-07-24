@@ -134,6 +134,13 @@ npm run test:python-syntax  # recursive compileall under backend/
 npm run test:all         # JS + Python tests + Python syntax (run before PRs)
 ```
 
+Two extra checks that are not part of the npm scripts:
+
+```bash
+python backend/device_manager.py                 # device enumeration smoke test
+swift build -c release --arch arm64              # macOS helper; run inside swift/AudioCaptureHelper
+```
+
 For recorder changes, also run the manual smoke checklist in `tests/manual/recording-smoke-checklist.md`.
 
 ## How it works

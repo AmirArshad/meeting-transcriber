@@ -176,7 +176,7 @@ You MUST complete each phase before proceeding to the next.
    - Automated test if possible
    - One-off test script if no framework
    - MUST have before fixing
-   - Use the `superpowers:test-driven-development` skill for writing proper failing tests
+   - Write the failing test first and watch it fail for the expected reason before you fix anything
 
 2. **Implement Single Fix**
    - Address the root cause identified
@@ -283,9 +283,10 @@ These techniques are part of systematic debugging and available in this director
 - **`defense-in-depth.md`** - Add validation at multiple layers after finding root cause
 - **`condition-based-waiting.md`** - Replace arbitrary timeouts with condition polling
 
-**Related skills:**
-- **superpowers:test-driven-development** - For creating failing test case (Phase 4, Step 1)
-- **superpowers:verification-before-completion** - Verify fix worked before claiming success
+**Related skills in `.agents/skills/`:**
+- **`verification-before-completion/SKILL.md`** - Verify the fix worked before claiming success
+
+There is no TDD skill in this repo — a dedicated test-driven-development skill was deliberately not installed (see `.agents/README.md`). Write the Phase 4 failing test directly.
 
 ## Real-World Impact
 

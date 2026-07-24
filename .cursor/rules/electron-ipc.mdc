@@ -6,7 +6,6 @@ alwaysApply: false
 
 # Electron IPC surface
 
-- Renderer uses `window.electronAPI` from `src/preload.js` → `ipcMain.handle` / `ipcMain.on` in `src/main.js` and Pattern C services under `src/main/`.
-- Renaming or changing a handler: update the owning service (or `src/main.js`), `src/preload.js`, and **every** renderer call site (`app.js`, `history-detail-helpers.js`, etc.).
-- Main-process business logic: prefer `src/main-process-helpers.js` / `src/main-process/` (+ `tests/js/main-process-helpers.test.js`) and Pattern C services over growing `src/main.js`.
-- AI add-on IPC and catalog resolution stay in main process (`src/ai-addon-state.js`); renderer must not supply trusted model refs for diarization.
+You are editing the IPC surface. In `AGENTS.md`, read **IPC channel ownership** for the channel→service table, plus **Facades whose export shape is pinned**.
+
+Renaming or re-shaping a channel means updating the owning `src/main/` service, `src/preload.js`, and **every** renderer call site — source-scan tests pin the channel names. Prefer new logic in `src/main-process/` or a `src/main/` service over growing `src/main.js`.

@@ -6,10 +6,6 @@ alwaysApply: false
 
 # Meeting metadata persistence
 
-User-facing behavior: `docs/guides/MEETING_TRANSCRIPTION.md`.
+You are editing meeting persistence. In `AGENTS.md`, read **Critical invariants → Meeting metadata persistence**, plus the **Saved meeting filenames or locations** entry under **Cross-cutting change checklists**.
 
-- Use `FileLock` cross-process locking and atomic temp-file + `os.replace()` writes.
-- Transactional add: remove originals only after metadata is saved.
-- Corrupt file recovery: backup as `meetings.corrupt.*.json`.
-- Scan/import must preserve suffixed IDs (e.g. `meeting_20260107_104555_1`) and avoid duplicate IDs.
-- Delete must tolerate Windows file locking with retry.
+Locking, atomic writes, transactional add, corrupt-file backups, and suffixed-ID preservation are data-integrity constraints — preserve them. User-facing behavior: `docs/guides/MEETING_TRANSCRIPTION.md`.
