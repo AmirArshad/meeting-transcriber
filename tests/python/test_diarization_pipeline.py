@@ -715,3 +715,116 @@ def test_emit_progress_redacts_token_values(capsys):
 
 def test_pyannote_metrics_are_disabled_for_imported_module():
     assert os.environ['PYANNOTE_METRICS_ENABLED'] == '0'
+
+
+SPEAKERS_JSON_TOP_LEVEL_FIELDS = frozenset({
+    'status',
+    'model',
+    'completedAt',
+    'audioPath',
+    'speakerCount',
+    'annotationSource',
+    'device',
+    'speakerSegments',
+    'segments',
+})
+SPEAKER_SEGMENT_FIELDS = frozenset({'start', 'end', 'speaker'})
+MERGED_SEGMENT_FIELDS = frozenset({'start', 'end', 'text', 'speaker'})
+ANNOTATION_SOURCE_VALUES = frozenset({
+    'exclusive_speaker_diarization',
+    'speaker_diarization',
+})
+
+
+def _capture_progress_phases(monkeypatch, *modules):
+    phases = []
+    original = pipeline.emit_progress
+
+    def wrapped(phase, message, *, percent=None):
+        phases.append(str(phase))
+        return original(phase, message, percent=percent)
+
+    for module in modules:
+        monkeypatch.setattr(module, 'emit_progress', wrapped)
+    return phases
+
+
+def test_build_diarization_result_speakers_json_field_sets_are_pinned():
+    result = pipeline.build_diarization_result(
+        audio_path='meeting.opus',
+        transcript_segments=[{'start': 0, 'end': 2, 'text': 'hello'}],
+        speaker_segments=[{'start': 0, 'end': 2, 'speaker': 'SPEAKER_00'}],
+        model_ref='pyannote/speaker-diarization-community-1',
+        annotation_source='exclusive_speaker_diarization',
+        device='cuda',
+    )
+
+    assert set(result) == SPEAKERS_JSON_TOP_LEVEL_FIELDS
+    assert result['annotationSource'] in ANNOTATION_SOURCE_VALUES
+    assert result['annotationSource'] == 'exclusive_speaker_diarization'
+    assert all(set(segment) == SPEAKER_SEGMENT_FIELDS for segment in result['speakerSegments'])
+    assert all(MERGED_SEGMENT_FIELDS <= set(segment) for segment in result['segments'])
+
+
+def test_select_annotation_source_values_are_the_sidecar_contract():
+    exclusive, exclusive_source = pipeline.select_annotation({
+        'exclusive_speaker_diarization': [{'start': 0, 'end': 1, 'speaker': 'SPEAKER_00'}],
+        'speaker_diarization': [{'start': 0, 'end': 1, 'speaker': 'SPEAKER_01'}],
+    })
+    fallback, fallback_source = pipeline.select_annotation({
+        'speaker_diarization': [{'start': 0, 'end': 1, 'speaker': 'SPEAKER_01'}],
+    })
+
+    assert exclusive_source == 'exclusive_speaker_diarization'
+    assert fallback_source == 'speaker_diarization'
+    assert {exclusive_source, fallback_source} == ANNOTATION_SOURCE_VALUES
+    assert exclusive == [{'start': 0, 'end': 1, 'speaker': 'SPEAKER_00'}]
+    assert fallback == [{'start': 0, 'end': 1, 'speaker': 'SPEAKER_01'}]
+
+
+def test_diarize_transcript_progress_phases_are_pinned(monkeypatch, tmp_path):
+    audio_path = tmp_path / 'meeting.wav'
+    audio_path.write_text('audio', encoding='utf-8')
+    segments_path = tmp_path / 'segments.json'
+    segments_path.write_text(json.dumps([{'start': 0, 'end': 1, 'text': 'hello'}]), encoding='utf-8')
+    output_path = tmp_path / 'meeting.speakers.json'
+    phases = _capture_progress_phases(monkeypatch, pipeline)
+
+    class FakePipeline:
+        def __call__(self, _audio_input, **_kwargs):
+            return {'exclusive_speaker_diarization': [{'start': 0, 'end': 1, 'speaker': 'SPEAKER_00'}]}
+
+    monkeypatch.setattr(pipeline, 'prepare_diarization_audio', lambda *_args, **_kwargs: audio_path)
+    monkeypatch.setattr(pipeline, 'assert_required_device_available', lambda _device: object())
+    monkeypatch.setattr(pipeline, 'load_pyannote_pipeline', lambda *_args, **_kwargs: FakePipeline())
+    monkeypatch.setattr(pipeline, 'move_pipeline_to_best_device', lambda *_args, **_kwargs: 'mps')
+    monkeypatch.setattr(pipeline, 'load_prepared_audio_for_pipeline', lambda _path: {'waveform': 'waveform', 'sample_rate': 16000})
+
+    pipeline.diarize_transcript(
+        audio_path=str(audio_path),
+        segments_json_path=str(segments_path),
+        output_json=str(output_path),
+        required_device='mps',
+    )
+
+    assert phases == [
+        'loading-transcript',
+        'preparing-audio',
+        'validating-accelerator',
+        'loading-model',
+        'running-model',
+        'merging-speakers',
+        'completed',
+    ]
+
+
+def test_validate_pyannote_setup_progress_phases_are_pinned(monkeypatch):
+    phases = _capture_progress_phases(monkeypatch, pipeline)
+    monkeypatch.setenv('HF_TOKEN', 'hf_validtoken123')
+    monkeypatch.setattr(pipeline, 'assert_required_device_available', lambda _device: object())
+    monkeypatch.setattr(pipeline, 'load_pyannote_pipeline', lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(pipeline, 'move_pipeline_to_best_device', lambda *_args, **_kwargs: 'mps')
+
+    pipeline.validate_pyannote_setup(model_ref='pyannote/test-model', required_device='mps')
+
+    assert phases == ['validating-accelerator', 'validating-runtime']
