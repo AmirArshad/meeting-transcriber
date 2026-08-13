@@ -369,8 +369,9 @@ Until the checklist is merged: dev/QA builds may fetch packs from upstream HF di
 - Modify: `src/renderer/history-detail-helpers.js`, `src/renderer/ai-addon-ui-helpers.js` — hide token UI unless `engine === 'pyannote'`; hide speaker-count for speakrs; `shouldShowSpeakerSetupPrompt` Windows CUDA gate unchanged; new-user prompt sets up **speakrs**.
 - Modify: `src/renderer/formatters.js` — `needsAccount` label stays (pyannote path).
 - Modify: `src/main/ai-addon-ipc.js` + `src/ai-addon/diarization-setup.js` — `options.engine` on `setup-diarization`; exclusive delete of the other tree **before** download; `remove-diarization-setup` deletes the active engine only (lists in Dual-engine selector). Guards: reject while setup/compute/preload/runtime pending.
-- Modify: `tests/manual/local-ai-addons-checklist.md` — selector, switch (both directions), Remove, token-hidden-for-speakrs, shared CUDA survives switch.
-- Tests: `history-detail-helpers.test.js`, `ai-addon-ui-helpers.test.js`, setup tests for exclusive delete.
+- Modify: `src/main/transcription-service.js` and/or `src/ai-addon/manifest-store.js` — **packaged missing bundled CLI preflight.** Task 4 already fail-closes (pins `SPEAKRS_CLI_PATH` to `Resources/bin/speakrs-cli[.exe]`, no PATH fallback). If that file is absent, reject **before** Python spawn with a concise user-facing error: the app install is incomplete and they should reinstall AvaNevis. **Do not** tell them to re-run speaker setup (setup cannot restore the bundled binary). Do not surface a Python `FileNotFoundError` or traceback. Reuse the same copy from `cliPresent: false` / Speakrs card status. Task 6 still fails the **build** when the binary is missing; this is the in-app backstop for a broken packaged install.
+- Modify: `tests/manual/local-ai-addons-checklist.md` — selector, switch (both directions), Remove, token-hidden-for-speakrs, shared CUDA survives switch, packaged-missing-CLI copy (reinstall, not re-setup).
+- Tests: `history-detail-helpers.test.js`, `ai-addon-ui-helpers.test.js`, setup tests for exclusive delete; a focused test that packaged missing CLI yields the user-facing error (not a Python traceback).
 
 **Validation:** `npm test`; manual: install speakrs → switch to pyannote → speakrs dir gone, token prompt shown; reverse; Remove; `nvidia-cublas` still present.
 

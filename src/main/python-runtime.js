@@ -144,14 +144,25 @@ function createPythonRuntime({ app, spawn, path, fs, dirname }) {
     const basePythonPath = pythonConfig.backendPath + (process.env.PYTHONPATH ?
       (process.platform === 'win32' ? ';' : ':') + process.env.PYTHONPATH : '');
     const separator = process.platform === 'win32' ? ';' : ':';
-    const packagedEnv = app.isPackaged ? { AVANEVIS_PACKAGED: '1' } : {};
 
-    return {
+    // Caller keys set to `undefined` are explicit unsets and must not inherit
+    // from process.env after the merge (Speakrs must not see ambient HF caches).
+    const env = {
       ...process.env,
-      ...packagedEnv,
       ...restExtra,
       PYTHONPATH: extraPythonPath ? `${extraPythonPath}${separator}${basePythonPath}` : basePythonPath,
     };
+    for (const [key, value] of Object.entries(restExtra)) {
+      if (value === undefined) {
+        delete env[key];
+      }
+    }
+    // Packaged children always see AVANEVIS_PACKAGED=1; callers cannot override it.
+    if (app.isPackaged) {
+      env.AVANEVIS_PACKAGED = '1';
+    }
+
+    return env;
   }
 
   /**

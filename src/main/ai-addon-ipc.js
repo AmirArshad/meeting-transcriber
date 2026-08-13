@@ -43,6 +43,10 @@ const {
   buildClearedHuggingFaceTokenEnv,
 } = require('../main-process-helpers');
 const { createAsyncActionQueue } = require('./ai-compute-queue');
+const {
+  buildSpeakrsSpawnEnv,
+  resolveSpawnDiarizationEngine,
+} = require('../ai-addon/manifest-store');
 
 /**
  * @param {object} deps
@@ -95,6 +99,7 @@ function createAiAddonIpc(deps) {
     hasPendingGpuResourceWork = () => false,
     enqueueGpuExclusiveRemovalAction = (action) => action(),
     isQuitCommitted = () => false,
+    resolveSpeakrsCliPath = null,
   } = deps;
 
   // Single shared cache reference — never copy this let into a stale local.
@@ -243,13 +248,39 @@ function createAiAddonIpc(deps) {
     }
   }
 
-  function validateDiarizationRuntime({ modelRef, token, requiredDevice, cancelSignal }) {
+  function buildDiarizationValidationEnv(engine, requiredDevice) {
+    const clearedTokens = buildClearedHuggingFaceTokenEnv();
+    if (engine === 'speakrs') {
+      const cudaEnv = buildCudaRuntimeEnv({}, { includeManagedDiarization: false });
+      return {
+        ...buildSpeakrsSpawnEnv({
+          userDataDir: app.getPath('userData'),
+          requiredDevice,
+          extra: cudaEnv,
+          cliPath: typeof resolveSpeakrsCliPath === 'function' ? resolveSpeakrsCliPath() : null,
+        }),
+        ...clearedTokens,
+      };
+    }
+    return {
+      ...getDiarizationDependencyEnv(),
+      ...getDiarizationCacheEnv(),
+      ...buildCudaRuntimeEnv({}, { includeManagedDiarization: true }),
+      ...clearedTokens,
+    };
+  }
+
+  function validateDiarizationRuntime({ modelRef, token, requiredDevice, cancelSignal, engine } = {}) {
     clearDiarizationDependencySitePackagesCache();
-    const resolvedToken = token || getAiAddonToken({
-      userDataDir: app.getPath('userData'),
-      tokenKey: TOKEN_KEYS.diarizationHuggingFace,
-      safeStorage: getSafeStorage(),
-    });
+    const resolvedEngine = resolveSpawnDiarizationEngine(engine);
+    const isSpeakrs = resolvedEngine === 'speakrs';
+    const resolvedToken = isSpeakrs
+      ? null
+      : (token || getAiAddonToken({
+        userDataDir: app.getPath('userData'),
+        tokenKey: TOKEN_KEYS.diarizationHuggingFace,
+        safeStorage: getSafeStorage(),
+      }));
 
     return createAbortableComputeAction({
       cancelSignal,
@@ -268,17 +299,13 @@ function createAiAddonIpc(deps) {
             return;
           }
 
-          const python = registerProcess(spawnTrackedPython(buildManagedDiarizationValidationArgs(modelRef, requiredDevice), {
-            cwd: pythonConfig.backendPath,
-            env: {
-              ...getDiarizationDependencyEnv(),
-              ...getDiarizationCacheEnv(),
-              ...buildCudaRuntimeEnv({}, { includeManagedDiarization: true }),
-              // Prefer stdin token delivery; clear shell-exported HF token discovery
-              // without setting HF_TOKEN_PATH="" (that becomes Path(".") and breaks offline loads).
-              ...buildClearedHuggingFaceTokenEnv(),
+          const python = registerProcess(spawnTrackedPython(
+            buildManagedDiarizationValidationArgs(modelRef, requiredDevice, resolvedEngine),
+            {
+              cwd: pythonConfig.backendPath,
+              env: buildDiarizationValidationEnv(resolvedEngine, requiredDevice),
             },
-          }));
+          ));
 
           let output = '';
           let errorOutput = '';
@@ -316,16 +343,23 @@ function createAiAddonIpc(deps) {
             terminateProcessBestEffort(python);
             finish(reject, new Error(`${messagePrefix}: ${error.message}`));
           };
-          // Async EPIPE if the child dies before reading stdin is not caught by try/catch.
-          python.stdin.on('error', (error) => {
-            failTokenDelivery(error, 'Failed to deliver Hugging Face token');
-          });
-          try {
-            python.stdin.write(resolvedToken ? `${resolvedToken}\n` : '\n');
-            python.stdin.end();
-          } catch (error) {
-            failTokenDelivery(error, 'Failed to deliver Hugging Face token to validation process');
-            return;
+          if (isSpeakrs) {
+            try {
+              python.stdin.end();
+            } catch (_error) {
+            }
+          } else {
+            // Async EPIPE if the child dies before reading stdin is not caught by try/catch.
+            python.stdin.on('error', (error) => {
+              failTokenDelivery(error, 'Failed to deliver Hugging Face token');
+            });
+            try {
+              python.stdin.write(resolvedToken ? `${resolvedToken}\n` : '\n');
+              python.stdin.end();
+            } catch (error) {
+              failTokenDelivery(error, 'Failed to deliver Hugging Face token to validation process');
+              return;
+            }
           }
           python.stdout.on('data', (data) => { output = appendSpawnLogBuffer(output, data); });
           python.stderr.on('data', (data) => {

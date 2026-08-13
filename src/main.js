@@ -91,6 +91,11 @@ const {
   getDiarizationModelRef,
   getSummaryArtifactForPlatform,
 } = require('./ai-addon-state');
+const {
+  getBundledSpeakrsCliPath,
+  resolveSpeakrsCliPathForSpawn,
+  resolveSpawnDiarizationEngine,
+} = require('./ai-addon/manifest-store');
 const { createPythonRuntime } = require('./main/python-runtime');
 const { registerMeetingManagerClient } = require('./main/meeting-manager-client');
 const { registerDeviceIpc } = require('./main/device-ipc');
@@ -721,6 +726,7 @@ aiAddonIpc = createAiAddonIpc({
   createAbortableComputeAction: createGpuExclusiveAbortableComputeAction,
   terminateProcessBestEffort,
   buildManagedDiarizationValidationArgs,
+  resolveSpeakrsCliPath: resolveAppSpeakrsCliPath,
   buildSummaryArgs,
   summarizeDiarizationError,
   summarizeSummaryValidationError,
@@ -780,6 +786,7 @@ transcriptionService = createTranscriptionService({
   updateMeetingAiMetadata,
   listMeetings,
   isQuitCommitted,
+  resolveSpeakrsCliPath: resolveAppSpeakrsCliPath,
 });
 transcriptionService.registerIpc(ipcMain);
 const { cleanupGuidedTranscriptTempFiles } = transcriptionService;
@@ -873,12 +880,39 @@ function getBackendModuleArgs(moduleName, extraArgs = []) {
   return buildPythonModuleArgs(moduleName, extraArgs);
 }
 
-function buildManagedDiarizationValidationArgs(modelRef, requiredDevice) {
+function resolvePackagedSpeakrsCliPath() {
+  return getBundledSpeakrsCliPath({
+    platform: process.platform,
+    resourcesPath: process.resourcesPath,
+  });
+}
+
+function resolveAppSpeakrsCliPath() {
+  const env = app.isPackaged
+    ? { ...process.env, AVANEVIS_PACKAGED: '1' }
+    : process.env;
+  return resolveSpeakrsCliPathForSpawn({
+    platform: process.platform,
+    env,
+    resourcesPath: process.resourcesPath,
+  }) || resolvePackagedSpeakrsCliPath();
+}
+
+function buildManagedDiarizationValidationArgs(modelRef, requiredDevice, engine) {
+  const resolvedEngine = resolveSpawnDiarizationEngine(engine);
   const args = [
     '--validate-setup',
-    '--token-stdin',
-    '--model-ref', modelRef || 'pyannote/speaker-diarization-community-1',
   ];
+
+  if (resolvedEngine !== 'speakrs') {
+    args.push('--token-stdin');
+  }
+
+  args.push('--model-ref', modelRef || 'pyannote/speaker-diarization-community-1');
+
+  if (resolvedEngine) {
+    args.push('--engine', resolvedEngine);
+  }
 
   if (requiredDevice) {
     args.push('--require-device', requiredDevice);
@@ -887,7 +921,7 @@ function buildManagedDiarizationValidationArgs(modelRef, requiredDevice) {
   return buildManagedPythonModuleArgs(
     'diarization.diarization_pipeline',
     args,
-    getDiarizationDependencySitePackagesPath(),
+    resolvedEngine === 'speakrs' ? null : getDiarizationDependencySitePackagesPath(),
   );
 }
 

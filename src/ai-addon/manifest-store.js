@@ -17,6 +17,7 @@ const {
 } = require('../ai-addon-state');
 const {
   SPEAKRS_CUDA_RUNTIME_DLL_NAMES,
+  SPEAKRS_DIARIZATION_ENGINES,
   SPEAKRS_MODEL_PACK_REVISION,
   SPEAKRS_ORT_DLL_NAMES,
   resolveContainedSpeakrsPath,
@@ -101,6 +102,31 @@ function getSpeakrsSourceFilePath(userDataDir, file, revision = SPEAKRS_MODEL_PA
   return resolveContainedSpeakrsPath(getSpeakrsModelRevisionDir(userDataDir, revision), file.path);
 }
 
+function getSpeakrsCliExecutableName(platform = process.platform) {
+  return platform === 'win32' ? 'speakrs-cli.exe' : 'speakrs-cli';
+}
+
+function getBundledSpeakrsCliPath({
+  platform = process.platform,
+  resourcesPath = process.resourcesPath,
+} = {}) {
+  if (!resourcesPath) {
+    return null;
+  }
+  return path.join(resourcesPath, 'bin', getSpeakrsCliExecutableName(platform));
+}
+
+function isNativeSpeakrsCliPath(cliPath, platform = process.platform) {
+  if (!cliPath || typeof cliPath !== 'string') {
+    return false;
+  }
+  const baseName = path.basename(cliPath);
+  if (baseName.toLowerCase().endsWith('.py')) {
+    return false;
+  }
+  return baseName === getSpeakrsCliExecutableName(platform);
+}
+
 function resolveSpeakrsCliPath({
   platform = process.platform,
   env = process.env,
@@ -112,9 +138,9 @@ function resolveSpeakrsCliPath({
   if (!existsSync) {
     return null;
   }
-  const executableName = platform === 'win32' ? 'speakrs-cli.exe' : 'speakrs-cli';
+  const executableName = getSpeakrsCliExecutableName(platform);
   const packaged = env?.AVANEVIS_PACKAGED === '1';
-  const packagedCandidate = resourcesPath ? path.join(resourcesPath, 'bin', executableName) : null;
+  const packagedCandidate = getBundledSpeakrsCliPath({ platform, resourcesPath });
   if (packaged) {
     return packagedCandidate && existsSync(packagedCandidate) ? packagedCandidate : null;
   }
@@ -132,6 +158,128 @@ function resolveSpeakrsCliPath({
     candidates.push(path.join(pathDir, executableName));
   }
   return candidates.find((candidate) => existsSync(candidate)) || null;
+}
+
+function resolveSpeakrsCliPathForSpawn({
+  platform = process.platform,
+  env = process.env,
+  fsModule = fs,
+  resourcesPath = process.resourcesPath,
+  projectRoot = path.join(__dirname, '..', '..'),
+} = {}) {
+  const packaged = env?.AVANEVIS_PACKAGED === '1';
+  const bundled = getBundledSpeakrsCliPath({ platform, resourcesPath });
+  if (packaged) {
+    return bundled;
+  }
+  return resolveSpeakrsCliPath({ platform, env, fsModule, resourcesPath, projectRoot }) || bundled;
+}
+
+function resolveSpawnDiarizationEngine(manifestEngine, env = process.env) {
+  const qaEngine = String(env?.AVANEVIS_DIARIZATION_ENGINE || '').trim().toLowerCase();
+  if (SPEAKRS_DIARIZATION_ENGINES.includes(qaEngine)) {
+    return qaEngine;
+  }
+  const engine = String(manifestEngine || '').trim().toLowerCase();
+  return SPEAKRS_DIARIZATION_ENGINES.includes(engine) ? engine : null;
+}
+
+function resolveSpeakrsMode(requiredDevice, env = process.env) {
+  const raw = String(requiredDevice || '').trim().toLowerCase();
+  if (raw === 'cuda') {
+    return 'cuda';
+  }
+  if (raw === 'mps' || raw === 'coreml') {
+    return 'coreml';
+  }
+  const envMode = String(env?.SPEAKRS_MODE || '').trim().toLowerCase();
+  if (envMode === 'cpu' || envMode === 'coreml' || envMode === 'cuda') {
+    return envMode;
+  }
+  return null;
+}
+
+function canStartGuidedDiarization({
+  status,
+  setupComplete,
+  engine,
+  modelRef,
+  env = process.env,
+} = {}) {
+  if (status !== 'ready' || !setupComplete) {
+    return false;
+  }
+  const resolvedEngine = resolveSpawnDiarizationEngine(engine, env);
+  if (resolvedEngine === 'speakrs') {
+    return true;
+  }
+  return Boolean(modelRef);
+}
+
+function prependUniquePathEntry(currentPath, entry, delimiter = path.delimiter) {
+  if (!entry) {
+    return currentPath || '';
+  }
+  const parts = String(currentPath || '').split(delimiter).filter(Boolean);
+  const normalizedEntry = path.normalize(entry);
+  const filtered = parts.filter((part) => path.normalize(part) !== normalizedEntry);
+  return [entry, ...filtered].join(delimiter);
+}
+
+function buildSpeakrsSpawnEnv({
+  userDataDir,
+  requiredDevice,
+  platform = process.platform,
+  env = process.env,
+  fsModule = fs,
+  resourcesPath = process.resourcesPath,
+  projectRoot = path.join(__dirname, '..', '..'),
+  extra = {},
+  cliPath = null,
+} = {}) {
+  const packaged = env?.AVANEVIS_PACKAGED === '1';
+  const bundledCliPath = getBundledSpeakrsCliPath({ platform, resourcesPath });
+  // Packaged spawns pin Resources/bin exactly. Ignore cliPath, SPEAKRS_CLI_PATH,
+  // PATH lookup, and native-named decoys — including missing bundled files.
+  const resolvedCliPath = packaged
+    ? bundledCliPath
+    : (cliPath || resolveSpeakrsCliPathForSpawn({
+      platform,
+      env,
+      fsModule,
+      resourcesPath,
+      projectRoot,
+    }));
+  const modelsDir = getSpeakrsModelRevisionDir(userDataDir);
+  const mode = resolveSpeakrsMode(requiredDevice, env);
+  const speakrsEnv = {
+    ...extra,
+    SPEAKRS_EXCLUSIVE: '1',
+    HF_HOME: undefined,
+    HF_HUB_CACHE: undefined,
+    HUGGINGFACE_HUB_CACHE: undefined,
+    TRANSFORMERS_CACHE: undefined,
+  };
+  if (resolvedCliPath) {
+    speakrsEnv.SPEAKRS_CLI_PATH = resolvedCliPath;
+  } else if (packaged) {
+    speakrsEnv.SPEAKRS_CLI_PATH = undefined;
+  }
+  if (modelsDir) {
+    speakrsEnv.SPEAKRS_MODELS_DIR = modelsDir;
+  }
+  if (mode) {
+    speakrsEnv.SPEAKRS_MODE = mode;
+  }
+  if (packaged) {
+    speakrsEnv.AVANEVIS_PACKAGED = '1';
+  }
+  if (platform === 'win32') {
+    const ortDir = getSpeakrsOrtRuntimeDir(userDataDir);
+    const currentPath = extra.PATH || env.PATH || process.env.PATH || '';
+    speakrsEnv.PATH = prependUniquePathEntry(currentPath, ortDir);
+  }
+  return speakrsEnv;
 }
 
 function getDiarizationDependencyDir(userDataDir, artifact) {
@@ -1415,6 +1563,14 @@ module.exports = {
   hasSpeakrsLocalState,
   hasPyannoteLocalState,
   resolveSpeakrsCliPath,
+  resolveSpeakrsCliPathForSpawn,
+  getSpeakrsCliExecutableName,
+  getBundledSpeakrsCliPath,
+  isNativeSpeakrsCliPath,
+  resolveSpawnDiarizationEngine,
+  resolveSpeakrsMode,
+  canStartGuidedDiarization,
+  buildSpeakrsSpawnEnv,
   checkSpeakrsModelCache,
   checkSpeakrsRuntimeCache,
   getSummaryArtifactPath,

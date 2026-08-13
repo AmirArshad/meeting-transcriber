@@ -10,9 +10,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const os = require('node:os');
 const { EventEmitter } = require('node:events');
 
 const { createAiAddonIpc } = require('../../src/main/ai-addon-ipc');
+const { createPythonRuntime } = require('../../src/main/python-runtime');
 const { collectConfiguredDownloadHosts } = require('../../src/ai-addon/download-helpers');
 const { resolvePreferredTarExecutable } = require('../../src/ai-addon-archive-helpers');
 const { AI_MODEL_CATALOG } = require('../../src/ai-addon-state');
@@ -102,8 +104,16 @@ function createValidationDeps(overrides = {}) {
         proc.kill();
       }
     },
-    buildManagedDiarizationValidationArgs(modelRef, requiredDevice) {
-      return ['-m', 'diarization.diarization_pipeline', '--validate', '--token-stdin', modelRef, requiredDevice];
+    buildManagedDiarizationValidationArgs(modelRef, requiredDevice, engine) {
+      const args = ['-m', 'diarization.diarization_pipeline', '--validate-setup'];
+      if (engine !== 'speakrs') {
+        args.push('--token-stdin');
+      }
+      if (engine) {
+        args.push('--engine', engine);
+      }
+      args.push('--model-ref', modelRef, requiredDevice);
+      return args;
     },
     buildSummaryArgs: () => ['summary'],
     summarizeDiarizationError: () => 'validation failed',
@@ -142,6 +152,106 @@ test('validateDiarizationRuntime delivers token on stdin and clears all HF token
   await assert.doesNotReject(resultPromise);
   const result = await resultPromise;
   assert.deepEqual(result, { ok: true });
+});
+
+test('speakrs validation clears HF env and does not write a token to stdin', async () => {
+  const { deps, spawned } = createValidationDeps();
+  const service = createAiAddonIpc(deps);
+
+  const resultPromise = service.validateDiarizationRuntime({
+    engine: 'speakrs',
+    modelRef: 'speakrs-community1-vbx',
+    token: 'hf_should_not_be_written',
+    requiredDevice: 'cuda',
+  });
+
+  const { args, options, child } = await waitForSpawn(spawned);
+  assert.equal(args.includes('--token-stdin'), false);
+  assert.ok(args.includes('--engine'));
+  assert.equal(args[args.indexOf('--engine') + 1], 'speakrs');
+  assert.equal(child._stdinWritten, undefined);
+  assert.equal(options.env.HF_TOKEN, '');
+  assert.equal(options.env.HUGGINGFACE_HUB_TOKEN, '');
+  assert.equal(options.env.HUGGING_FACE_HUB_TOKEN, '');
+  assert.equal(options.env.HF_TOKEN_PATH, require('node:os').devNull);
+  assert.notEqual(options.env.HF_TOKEN_PATH, '');
+  assert.equal(options.env.HF_HOME, undefined);
+  assert.equal(options.env.HF_HUB_CACHE, undefined);
+  assert.equal(options.env.SPEAKRS_EXCLUSIVE, '1');
+  assert.equal(options.env.SPEAKRS_MODE, 'cuda');
+  assert.ok(String(options.env.SPEAKRS_MODELS_DIR || '').includes('speakrs'));
+
+  child.stdout.emit('data', Buffer.from(JSON.stringify({ ok: true })));
+  child.emit('close', 0);
+
+  await assert.doesNotReject(resultPromise);
+});
+
+test('Speakrs validation final spawn env drops ambient HF cache vars', async () => {
+  const previous = {
+    HF_HOME: process.env.HF_HOME,
+    HF_HUB_CACHE: process.env.HF_HUB_CACHE,
+    HUGGINGFACE_HUB_CACHE: process.env.HUGGINGFACE_HUB_CACHE,
+    TRANSFORMERS_CACHE: process.env.TRANSFORMERS_CACHE,
+    HF_TOKEN: process.env.HF_TOKEN,
+  };
+  process.env.HF_HOME = path.join(os.tmpdir(), 'hostile-hf-home');
+  process.env.HF_HUB_CACHE = path.join(os.tmpdir(), 'hostile-hf-hub');
+  process.env.HUGGINGFACE_HUB_CACHE = path.join(os.tmpdir(), 'hostile-hf-hub-alias');
+  process.env.TRANSFORMERS_CACHE = path.join(os.tmpdir(), 'hostile-transformers');
+  process.env.HF_TOKEN = 'hf_ambient_token';
+
+  const captured = [];
+  const runtime = createPythonRuntime({
+    app: { isPackaged: false },
+    spawn(_cmd, args, options) {
+      const child = createFakeValidationChild();
+      captured.push({ args, options, child });
+      return child;
+    },
+    path,
+    fs: require('node:fs'),
+    dirname: path.join(__dirname, '..', '..', 'src'),
+  });
+
+  try {
+    const { deps } = createValidationDeps({
+      spawnTrackedPython: (args, options) => runtime.spawnTrackedPython(args, options),
+    });
+    const service = createAiAddonIpc(deps);
+    const resultPromise = service.validateDiarizationRuntime({
+      engine: 'speakrs',
+      modelRef: 'speakrs-community1-vbx',
+      token: 'hf_should_not_be_written',
+      requiredDevice: 'cuda',
+    });
+
+    const { args, options, child } = await waitForSpawn(captured);
+    assert.equal(args.includes('--token-stdin'), false);
+    assert.equal(args[args.indexOf('--engine') + 1], 'speakrs');
+    assert.equal(Object.prototype.hasOwnProperty.call(options.env, 'HF_HOME'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(options.env, 'HF_HUB_CACHE'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(options.env, 'HUGGINGFACE_HUB_CACHE'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(options.env, 'TRANSFORMERS_CACHE'), false);
+    assert.equal(options.env.HF_TOKEN, '');
+    assert.equal(options.env.HUGGINGFACE_HUB_TOKEN, '');
+    assert.equal(options.env.HUGGING_FACE_HUB_TOKEN, '');
+    assert.equal(options.env.HF_TOKEN_PATH, os.devNull);
+    assert.notEqual(options.env.HF_TOKEN_PATH, '');
+    assert.equal(options.env.SPEAKRS_EXCLUSIVE, '1');
+
+    child.stdout.emit('data', Buffer.from(JSON.stringify({ ok: true })));
+    child.emit('close', 0);
+    await resultPromise;
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
 });
 
 test('validateDiarizationRuntime terminates the child when stdin write fails', async () => {
@@ -441,6 +551,14 @@ test('resolvePreferredTarExecutable reads process.env.AVANEVIS_PACKAGED by defau
     }
   }
 });
+test('main.js resolves packaged speakrs-cli under process.resourcesPath/bin', () => {
+  const fs = require('node:fs');
+  const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'main.js'), 'utf8');
+  assert.match(mainSource, /function resolvePackagedSpeakrsCliPath/);
+  assert.match(mainSource, /getBundledSpeakrsCliPath/);
+  assert.match(mainSource, /resourcesPath:\s*process\.resourcesPath/);
+});
+
 test('main.js sets process.env.AVANEVIS_PACKAGED when app.isPackaged (worker inheritance)', () => {
   const fs = require('node:fs');
   const mainSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'main.js'), 'utf8');

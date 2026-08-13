@@ -61,11 +61,16 @@ const {
   isTranscriptionJobBlocked,
   shouldTerminateComputeJobsForMeeting,
 } = require('../main-process-helpers');
-const { checkAiAddonSetupStatus } = require('../ai-addon-setup');
+const { checkAiAddonSetupStatus: defaultCheckAiAddonSetupStatus } = require('../ai-addon-setup');
 const {
   getDiarizationAvailability,
   getDiarizationModelRef,
 } = require('../ai-addon-state');
+const {
+  buildSpeakrsSpawnEnv,
+  canStartGuidedDiarization,
+  resolveSpawnDiarizationEngine,
+} = require('../ai-addon/manifest-store');
 
 /**
  * @param {object} deps
@@ -151,6 +156,8 @@ function createTranscriptionService(deps) {
     isQuitCommitted = () => false,
     getActiveWallClockComputeJobs: getActiveWallClockJobs = getActiveWallClockComputeJobs,
     runWallClockComputeAction = defaultRunWallClockComputeAction,
+    resolveSpeakrsCliPath = null,
+    checkAiAddonSetupStatus = defaultCheckAiAddonSetupStatus,
   } = deps;
 
   // Serialize cancel/delete control ops per meeting so concurrent clears cannot
@@ -223,7 +230,49 @@ function createTranscriptionService(deps) {
     ];
   }
 
-  function buildManagedDiarizationArgs({ audioPath, segmentsJsonPath, outputPath, modelRef, speakerCount, requiredDevice }) {
+  function appendDiarizationEngineArg(args, engine) {
+    const resolvedEngine = resolveSpawnDiarizationEngine(engine);
+    if (resolvedEngine) {
+      args.push('--engine', resolvedEngine);
+    }
+    return resolvedEngine;
+  }
+
+  function buildDiarizationChildEnv({
+    engine,
+    modelSize,
+    requiredDevice,
+    includeTranscriptionRuntime = false,
+  } = {}) {
+    const resolvedEngine = resolveSpawnDiarizationEngine(engine);
+    const clearedTokens = buildClearedHuggingFaceTokenEnv();
+    if (resolvedEngine === 'speakrs') {
+      const baseEnv = includeTranscriptionRuntime
+        ? getTranscriptionRuntimeEnv(modelSize, { includeManagedDiarization: false })
+        : buildCudaRuntimeEnv({}, { includeManagedDiarization: false });
+      return {
+        ...buildSpeakrsSpawnEnv({
+          userDataDir: app.getPath('userData'),
+          requiredDevice,
+          extra: baseEnv,
+          cliPath: typeof resolveSpeakrsCliPath === 'function' ? resolveSpeakrsCliPath() : null,
+        }),
+        ...clearedTokens,
+      };
+    }
+
+    const baseEnv = includeTranscriptionRuntime
+      ? getTranscriptionRuntimeEnv(modelSize, { includeManagedDiarization: true })
+      : buildCudaRuntimeEnv({}, { includeManagedDiarization: true });
+    return {
+      ...getDiarizationDependencyEnv(),
+      ...getDiarizationCacheEnv(),
+      ...baseEnv,
+      ...clearedTokens,
+    };
+  }
+
+  function buildManagedDiarizationArgs({ audioPath, segmentsJsonPath, outputPath, modelRef, speakerCount, requiredDevice, engine }) {
     const args = [
       '--audio', audioPath,
       '--segments-json', segmentsJsonPath,
@@ -237,7 +286,9 @@ function createTranscriptionService(deps) {
       args.push('--require-device', requiredDevice);
     }
 
-    return buildManagedPythonModuleArgs('diarization.diarization_pipeline', args, getDiarizationDependencySitePackagesPath());
+    const resolvedEngine = appendDiarizationEngineArg(args, engine);
+    const sitePackagesPath = resolvedEngine === 'speakrs' ? null : getDiarizationDependencySitePackagesPath();
+    return buildManagedPythonModuleArgs('diarization.diarization_pipeline', args, sitePackagesPath);
   }
 
   function getTranscriberBackendName() {
@@ -248,7 +299,7 @@ function createTranscriptionService(deps) {
     return 'faster';
   }
 
-  function buildManagedDiarizationGuidedTranscriptionArgs({ audioPath, outputTranscript, outputJson, language, modelSize, modelRef, speakerCount, requiredDevice }) {
+  function buildManagedDiarizationGuidedTranscriptionArgs({ audioPath, outputTranscript, outputJson, language, modelSize, modelRef, speakerCount, requiredDevice, engine }) {
     const args = [
       '--audio', audioPath,
       '--output-transcript', outputTranscript,
@@ -268,7 +319,9 @@ function createTranscriptionService(deps) {
       args.push('--require-device', requiredDevice);
     }
 
-    return buildManagedPythonModuleArgs('diarization.guided_transcription', args, getDiarizationDependencySitePackagesPath());
+    const resolvedEngine = appendDiarizationEngineArg(args, engine);
+    const sitePackagesPath = resolvedEngine === 'speakrs' ? null : getDiarizationDependencySitePackagesPath();
+    return buildManagedPythonModuleArgs('diarization.guided_transcription', args, sitePackagesPath);
   }
 
   function runTranscriptionProcess({
@@ -825,11 +878,18 @@ function createTranscriptionService(deps) {
       const aiStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions());
       const diarizationStatus = aiStatus && aiStatus.features && aiStatus.features.diarization;
       const catalogModelRef = diarizationStatus ? getDiarizationModelRef(diarizationStatus.modelId) : null;
-      if (diarizationStatus && diarizationStatus.status === 'ready' && diarizationStatus.setupComplete && catalogModelRef) {
+      const engine = resolveSpawnDiarizationEngine(diarizationStatus && diarizationStatus.engine);
+      if (canStartGuidedDiarization({
+        status: diarizationStatus && diarizationStatus.status,
+        setupComplete: diarizationStatus && diarizationStatus.setupComplete,
+        engine: diarizationStatus && diarizationStatus.engine,
+        modelRef: catalogModelRef,
+      })) {
         return {
+          engine: engine || (diarizationStatus && diarizationStatus.engine) || null,
           modelId: diarizationStatus.modelId,
           speakerCount: diarizationStatus.speakerCount || 'auto',
-          modelRef: catalogModelRef,
+          modelRef: catalogModelRef || diarizationStatus.modelId || null,
           requiredDevice: diarizationAvailability.runtimeDevice,
         };
       }
@@ -894,6 +954,7 @@ function createTranscriptionService(deps) {
     modelRef,
     speakerCount,
     requiredDevice,
+    engine,
     registerProcess,
   }) {
     return new Promise(async (resolve, reject) => {
@@ -910,14 +971,10 @@ function createTranscriptionService(deps) {
           modelRef,
           speakerCount,
           requiredDevice,
+          engine,
         }), {
           cwd: pythonConfig.backendPath,
-          env: {
-            ...getDiarizationDependencyEnv(),
-            ...getDiarizationCacheEnv(),
-            ...buildCudaRuntimeEnv({}, { includeManagedDiarization: true }),
-            ...buildClearedHuggingFaceTokenEnv(),
-          },
+          env: buildDiarizationChildEnv({ engine, requiredDevice }),
         });
         registerProcess(python);
 
@@ -1154,14 +1211,15 @@ function createTranscriptionService(deps) {
                     modelRef: guidedDiarizationStatus.modelRef,
                     speakerCount: preferredSpeakerCount || guidedDiarizationStatus.speakerCount || 'auto',
                     requiredDevice: guidedDiarizationStatus.requiredDevice,
+                    engine: guidedDiarizationStatus.engine,
                   }),
                   cwd: pythonConfig.backendPath,
-                  env: {
-                    ...getDiarizationDependencyEnv(),
-                    ...getDiarizationCacheEnv(),
-                    ...getTranscriptionRuntimeEnv(modelSize, { includeManagedDiarization: true }),
-                    ...buildClearedHuggingFaceTokenEnv(),
-                  },
+                  env: buildDiarizationChildEnv({
+                    engine: guidedDiarizationStatus.engine,
+                    modelSize,
+                    requiredDevice: guidedDiarizationStatus.requiredDevice,
+                    includeTranscriptionRuntime: true,
+                  }),
                   finalTranscriptPath: transcriptPath,
                   tempTranscriptPath,
                   modelSize,
@@ -1299,6 +1357,7 @@ function createTranscriptionService(deps) {
                     modelRef: postPassStatus.modelRef,
                     speakerCount: preferredSpeakerCount || postPassStatus.speakerCount || 'auto',
                     requiredDevice: postPassStatus.requiredDevice,
+                    engine: postPassStatus.engine,
                     registerProcess,
                   });
                 },
@@ -2053,13 +2112,20 @@ function createTranscriptionService(deps) {
 
       const aiStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions());
       const diarizationStatus = aiStatus && aiStatus.features && aiStatus.features.diarization;
-      if (!diarizationStatus || diarizationStatus.status !== 'ready' || !diarizationStatus.setupComplete) {
-        throw new Error('Speaker identification setup is not ready.');
+      const catalogModelRef = diarizationStatus ? getDiarizationModelRef(diarizationStatus.modelId) : null;
+      if (!canStartGuidedDiarization({
+        status: diarizationStatus && diarizationStatus.status,
+        setupComplete: diarizationStatus && diarizationStatus.setupComplete,
+        engine: diarizationStatus && diarizationStatus.engine,
+        modelRef: catalogModelRef,
+      })) {
+        throw new Error(
+          !diarizationStatus || diarizationStatus.status !== 'ready' || !diarizationStatus.setupComplete
+            ? 'Speaker identification setup is not ready.'
+            : 'Speaker identification model is not configured.',
+        );
       }
-      const catalogModelRef = getDiarizationModelRef(diarizationStatus.modelId);
-      if (!catalogModelRef) {
-        throw new Error('Speaker identification model is not configured.');
-      }
+      const guidedEngine = resolveSpawnDiarizationEngine(diarizationStatus.engine);
 
       const recordingsDir = getRecordingsDir();
       const finalTranscriptPath = resolvedAudioPath.replace(/\.[^/.]+$/, '.md');
@@ -2085,17 +2151,18 @@ function createTranscriptionService(deps) {
               outputTranscript: tempTranscriptPath,
               language,
               modelSize,
-              modelRef: catalogModelRef,
+              modelRef: catalogModelRef || diarizationStatus.modelId,
               speakerCount: speakerCount || diarizationStatus.speakerCount || 'auto',
               requiredDevice,
+              engine: guidedEngine,
             }),
             cwd: pythonConfig.backendPath,
-            env: {
-              ...getDiarizationDependencyEnv(),
-              ...getDiarizationCacheEnv(),
-              ...getTranscriptionRuntimeEnv(modelSize, { includeManagedDiarization: true }),
-              ...buildClearedHuggingFaceTokenEnv(),
-            },
+            env: buildDiarizationChildEnv({
+              engine: guidedEngine,
+              modelSize,
+              requiredDevice,
+              includeTranscriptionRuntime: true,
+            }),
             finalTranscriptPath,
             tempTranscriptPath,
             modelSize,
@@ -2136,13 +2203,20 @@ function createTranscriptionService(deps) {
 
       const aiStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions());
       const diarizationStatus = aiStatus && aiStatus.features && aiStatus.features.diarization;
-      if (!diarizationStatus || diarizationStatus.status !== 'ready' || !diarizationStatus.setupComplete) {
-        throw new Error('Speaker identification setup is not ready.');
+      const catalogModelRef = diarizationStatus ? getDiarizationModelRef(diarizationStatus.modelId) : null;
+      if (!canStartGuidedDiarization({
+        status: diarizationStatus && diarizationStatus.status,
+        setupComplete: diarizationStatus && diarizationStatus.setupComplete,
+        engine: diarizationStatus && diarizationStatus.engine,
+        modelRef: catalogModelRef,
+      })) {
+        throw new Error(
+          !diarizationStatus || diarizationStatus.status !== 'ready' || !diarizationStatus.setupComplete
+            ? 'Speaker identification setup is not ready.'
+            : 'Speaker identification model is not configured.',
+        );
       }
-      const catalogModelRef = getDiarizationModelRef(diarizationStatus.modelId);
-      if (!catalogModelRef) {
-        throw new Error('Speaker identification model is not configured.');
-      }
+      const diarizeEngine = resolveSpawnDiarizationEngine(diarizationStatus.engine);
 
       const resolvedAudioPath = assertSafeExistingRecordingAudioPath(audioPath);
 
@@ -2174,17 +2248,13 @@ function createTranscriptionService(deps) {
               audioPath: resolvedAudioPath,
               segmentsJsonPath: resolvedSegmentsJsonPath,
               outputPath: resolvedOutputPath,
-              modelRef: catalogModelRef,
+              modelRef: catalogModelRef || diarizationStatus.modelId,
               speakerCount,
               requiredDevice,
+              engine: diarizeEngine,
             }), {
               cwd: pythonConfig.backendPath,
-              env: {
-                ...getDiarizationDependencyEnv(),
-                ...getDiarizationCacheEnv(),
-                ...buildCudaRuntimeEnv({}, { includeManagedDiarization: true }),
-                ...buildClearedHuggingFaceTokenEnv(),
-              },
+              env: buildDiarizationChildEnv({ engine: diarizeEngine, requiredDevice }),
             });
             registerProcess(python);
 
@@ -2505,6 +2575,8 @@ function createTranscriptionService(deps) {
     buildManagedPythonModuleArgs,
     buildManagedDiarizationArgs,
     buildManagedDiarizationGuidedTranscriptionArgs,
+    buildDiarizationChildEnv,
+    canStartGuidedDiarization,
     runTranscriptionProcess,
     cleanupGuidedTranscriptTempFiles,
     runMeetingTranscriptionJob,

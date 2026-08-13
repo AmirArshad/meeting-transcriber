@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { EventEmitter } = require('node:events');
 
 const {
   AI_MODEL_CATALOG,
@@ -18,7 +19,12 @@ const {
   getSpeakrsModelRevisionDir,
   getSpeakrsOrtRuntimeDir,
   resolveSpeakrsCliPath,
+  resolveSpeakrsCliPathForSpawn,
+  buildSpeakrsSpawnEnv,
+  canStartGuidedDiarization,
+  resolveSpawnDiarizationEngine,
 } = require('../../src/ai-addon/manifest-store');
+const { createPythonRuntime } = require('../../src/main/python-runtime');
 const {
   setupDiarizationAddon,
   uninstallPyannoteLocalState,
@@ -187,6 +193,210 @@ test('packaged Speakrs CLI resolution accepts only Resources/bin', () => {
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('packaged buildSpeakrsSpawnEnv pins Resources/bin and ignores decoys', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-spawn-cli-'));
+  try {
+    const resourcesPath = path.join(root, 'Resources');
+    const bundled = path.join(resourcesPath, 'bin', 'speakrs-cli.exe');
+    const offBundleNative = path.join(root, 'override', 'speakrs-cli.exe');
+    const pythonWrapper = path.join(root, 'override', 'speakrs-cli.py');
+    const pathCandidate = path.join(root, 'path-bin', 'speakrs-cli.exe');
+    const userDataDir = path.join(root, 'userData');
+    for (const candidate of [bundled, offBundleNative, pythonWrapper, pathCandidate]) {
+      fs.mkdirSync(path.dirname(candidate), { recursive: true });
+      fs.writeFileSync(candidate, 'decoy');
+    }
+
+    const packagedEnv = {
+      AVANEVIS_PACKAGED: '1',
+      SPEAKRS_CLI_PATH: offBundleNative,
+      SPEAKRS_EXCLUSIVE: '0',
+      PATH: path.dirname(pathCandidate),
+    };
+    const spawned = buildSpeakrsSpawnEnv({
+      userDataDir,
+      requiredDevice: 'cuda',
+      platform: 'win32',
+      env: packagedEnv,
+      resourcesPath,
+      projectRoot: root,
+      cliPath: offBundleNative,
+      extra: {
+        PATH: packagedEnv.PATH,
+        SPEAKRS_CLI_PATH: pythonWrapper,
+      },
+    });
+
+    assert.equal(spawned.SPEAKRS_CLI_PATH, bundled);
+    assert.equal(path.basename(spawned.SPEAKRS_CLI_PATH), 'speakrs-cli.exe');
+    assert.equal(spawned.SPEAKRS_CLI_PATH.toLowerCase().endsWith('.py'), false);
+    assert.notEqual(spawned.SPEAKRS_CLI_PATH, offBundleNative);
+    assert.notEqual(spawned.SPEAKRS_CLI_PATH, pythonWrapper);
+    assert.notEqual(spawned.SPEAKRS_CLI_PATH, pathCandidate);
+    assert.equal(resolveSpeakrsCliPathForSpawn({
+      platform: 'win32',
+      env: packagedEnv,
+      resourcesPath,
+      projectRoot: root,
+    }), bundled);
+    assert.equal(spawned.SPEAKRS_EXCLUSIVE, '1');
+    assert.equal(spawned.AVANEVIS_PACKAGED, '1');
+    assert.equal(spawned.SPEAKRS_MODE, 'cuda');
+    assert.ok(spawned.PATH.startsWith(`${getSpeakrsOrtRuntimeDir(userDataDir)}${path.delimiter}`));
+    assert.equal(spawned.PATH.includes(path.dirname(pathCandidate)), true);
+
+    const pyDecoyEnv = buildSpeakrsSpawnEnv({
+      userDataDir,
+      requiredDevice: 'cuda',
+      platform: 'win32',
+      env: {
+        AVANEVIS_PACKAGED: '1',
+        SPEAKRS_CLI_PATH: pythonWrapper,
+        PATH: path.dirname(pathCandidate),
+      },
+      resourcesPath,
+      projectRoot: root,
+      cliPath: pythonWrapper,
+    });
+    assert.equal(pyDecoyEnv.SPEAKRS_CLI_PATH, bundled);
+
+    fs.rmSync(bundled);
+    const missingBundled = buildSpeakrsSpawnEnv({
+      userDataDir,
+      requiredDevice: 'cuda',
+      platform: 'win32',
+      env: packagedEnv,
+      resourcesPath,
+      projectRoot: root,
+      cliPath: offBundleNative,
+      extra: { SPEAKRS_CLI_PATH: offBundleNative, PATH: packagedEnv.PATH },
+    });
+    assert.equal(missingBundled.SPEAKRS_CLI_PATH, bundled);
+    assert.notEqual(missingBundled.SPEAKRS_CLI_PATH, offBundleNative);
+    assert.equal(resolveSpeakrsCliPath({
+      platform: 'win32',
+      env: packagedEnv,
+      resourcesPath,
+      projectRoot: root,
+    }), null);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Windows Speakrs PATH prepends speakrs-ort once', () => {
+  const userDataDir = path.join('C:', 'Users', 'tester', 'AvaNevis');
+  const ortDir = getSpeakrsOrtRuntimeDir(userDataDir);
+  const spawned = buildSpeakrsSpawnEnv({
+    userDataDir,
+    requiredDevice: 'cuda',
+    platform: 'win32',
+    extra: {
+      PATH: `${ortDir}${path.delimiter}${ortDir}${path.delimiter}C:\\Windows\\System32`,
+    },
+  });
+  const parts = spawned.PATH.split(path.delimiter);
+  assert.equal(parts[0], ortDir);
+  assert.equal(parts.filter((part) => path.normalize(part) === path.normalize(ortDir)).length, 1);
+});
+
+test('packaged buildPythonEnv applies AVANEVIS_PACKAGED after caller overrides', () => {
+  const previousDescriptor = Object.getOwnPropertyDescriptor(process, 'resourcesPath');
+  Object.defineProperty(process, 'resourcesPath', {
+    value: path.join(os.tmpdir(), 'avanevis-resources'),
+    configurable: true,
+    enumerable: true,
+    writable: true,
+  });
+  const previousPackaged = process.env.AVANEVIS_PACKAGED;
+  delete process.env.AVANEVIS_PACKAGED;
+  try {
+    const packagedRuntime = createPythonRuntime({
+      app: { isPackaged: true },
+      spawn: () => new EventEmitter(),
+      path,
+      fs,
+      dirname: path.join(__dirname, '..', '..', 'src'),
+    });
+    const packagedEnv = packagedRuntime.buildPythonEnv({
+      AVANEVIS_PACKAGED: '0',
+      FOO: 'bar',
+    });
+    assert.equal(packagedEnv.AVANEVIS_PACKAGED, '1');
+    assert.equal(packagedEnv.FOO, 'bar');
+
+    const devRuntime = createPythonRuntime({
+      app: { isPackaged: false },
+      spawn: () => new EventEmitter(),
+      path,
+      fs,
+      dirname: path.join(__dirname, '..', '..', 'src'),
+    });
+    const callerOverride = devRuntime.buildPythonEnv({ AVANEVIS_PACKAGED: '0' });
+    assert.equal(callerOverride.AVANEVIS_PACKAGED, '0');
+    const inheritedDev = devRuntime.buildPythonEnv({});
+    assert.equal(inheritedDev.AVANEVIS_PACKAGED, undefined);
+  } finally {
+    if (previousDescriptor) {
+      Object.defineProperty(process, 'resourcesPath', previousDescriptor);
+    } else {
+      delete process.resourcesPath;
+    }
+    if (previousPackaged === undefined) {
+      delete process.env.AVANEVIS_PACKAGED;
+    } else {
+      process.env.AVANEVIS_PACKAGED = previousPackaged;
+    }
+  }
+});
+
+test('buildPythonEnv unsets explicit undefined keys after merging process.env', () => {
+  const previousHome = process.env.HF_HOME;
+  const previousHub = process.env.HF_HUB_CACHE;
+  process.env.HF_HOME = path.join(os.tmpdir(), 'hostile-hf-home');
+  process.env.HF_HUB_CACHE = path.join(os.tmpdir(), 'hostile-hf-hub');
+  try {
+    const runtime = createPythonRuntime({
+      app: { isPackaged: false },
+      spawn: () => new EventEmitter(),
+      path,
+      fs,
+      dirname: path.join(__dirname, '..', '..', 'src'),
+    });
+    const merged = runtime.buildPythonEnv({
+      HF_HOME: undefined,
+      HF_HUB_CACHE: undefined,
+      SPEAKRS_MODE: 'cuda',
+    });
+    assert.equal(Object.prototype.hasOwnProperty.call(merged, 'HF_HOME'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(merged, 'HF_HUB_CACHE'), false);
+    assert.equal(merged.SPEAKRS_MODE, 'cuda');
+  } finally {
+    if (previousHome === undefined) {
+      delete process.env.HF_HOME;
+    } else {
+      process.env.HF_HOME = previousHome;
+    }
+    if (previousHub === undefined) {
+      delete process.env.HF_HUB_CACHE;
+    } else {
+      process.env.HF_HUB_CACHE = previousHub;
+    }
+  }
+});
+
+test('QA AVANEVIS_DIARIZATION_ENGINE overrides spawn dispatch only', () => {
+  assert.equal(resolveSpawnDiarizationEngine('pyannote', { AVANEVIS_DIARIZATION_ENGINE: 'speakrs' }), 'speakrs');
+  assert.equal(resolveSpawnDiarizationEngine('speakrs', { AVANEVIS_DIARIZATION_ENGINE: 'pyannote' }), 'pyannote');
+  assert.equal(resolveSpawnDiarizationEngine('speakrs', {}), 'speakrs');
+  assert.equal(canStartGuidedDiarization({
+    status: 'ready',
+    setupComplete: true,
+    engine: 'speakrs',
+    modelRef: null,
+  }), true);
 });
 
 test('Speakrs setup progress never exposes URLs tokens or filesystem paths', async () => {
