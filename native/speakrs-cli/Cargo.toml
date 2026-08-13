@@ -9,7 +9,15 @@ description = "Thin AvaNevis CLI wrapper around speakrs (Task 0 spike / Task 1 c
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
 speakrs = { version = "=0.5.0", default-features = false, features = ["default-linalg", "coreml"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+speakrs = { version = "=0.5.0", default-features = false, features = ["default-linalg", "cuda", "load-dynamic"] }
+
+[target.'cfg(not(any(target_os = "macos", target_os = "windows")))'.dependencies]
+speakrs = { version = "=0.5.0", default-features = false, features = ["default-linalg"] }
 
 [profile.release]
 lto = true

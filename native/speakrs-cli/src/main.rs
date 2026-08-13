@@ -108,6 +108,8 @@ fn parse_mode(value: &str) -> Result<ExecutionMode, String> {
         "cpu" => Ok(ExecutionMode::Cpu),
         "coreml" => Ok(ExecutionMode::CoreMl),
         "coreml-fast" => Ok(ExecutionMode::CoreMlFast),
+        "cuda" => Ok(ExecutionMode::Cuda),
+        "cuda-fast" => Ok(ExecutionMode::CudaFast),
         other => Err(format!("unsupported SPEAKRS_MODE: {other}")),
     }
 }
