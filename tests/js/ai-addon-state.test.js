@@ -7,6 +7,8 @@ const {
   AI_MODEL_CATALOG,
   CURATED_AI_MODELS,
   DEFAULT_DIARIZATION_MODEL_ID,
+  PYANNOTE_DIARIZATION_MODEL_ID,
+  SPEAKRS_DIARIZATION_MODEL_ID,
   DEFAULT_SUMMARY_MODEL_ID,
   DEFAULT_SUMMARY_PROFILE,
   PINNED_LLAMA_CPP_RUNTIME,
@@ -19,6 +21,7 @@ const {
   getDiarizationAvailability,
   getDiarizationDependencyArtifactForPlatform,
   getDiarizationModelRef,
+  getSpeakrsSetupArtifactsForPlatform,
   getModelById,
   getSummaryArtifactForPlatform,
   getSummaryRuntimeArtifactForPlatform,
@@ -31,7 +34,9 @@ test('normalizes an empty AI add-on manifest with safe defaults', () => {
 
   assert.equal(manifest.manifestVersion, 1);
   assert.equal(manifest.features.diarization.status, 'notConfigured');
+  assert.equal(manifest.features.diarization.engine, 'speakrs');
   assert.equal(manifest.features.diarization.modelId, DEFAULT_DIARIZATION_MODEL_ID);
+  assert.equal(manifest.features.diarization.modelId, SPEAKRS_DIARIZATION_MODEL_ID);
   assert.equal(manifest.features.diarization.speakerCount, 'auto');
   assert.equal(manifest.features.summary.status, 'notConfigured');
   assert.equal(manifest.features.summary.modelId, DEFAULT_SUMMARY_MODEL_ID);
@@ -85,6 +90,8 @@ test('returns AI add-on paths under Electron userData', () => {
   assert.equal(paths.manifestPath, path.join('/Users/tester/AppData/AvaNevis', 'ai-addons', 'manifest.json'));
   assert.equal(paths.modelCacheDir, path.join('/Users/tester/AppData/AvaNevis', 'ai-addons', 'models'));
   assert.equal(paths.diarizationModelCacheDir, path.join('/Users/tester/AppData/AvaNevis', 'ai-addons', 'models', 'diarization'));
+  assert.equal(paths.speakrsModelCacheDir, path.join('/Users/tester/AppData/AvaNevis', 'ai-addons', 'models', 'diarization', 'speakrs'));
+  assert.equal(paths.speakrsOrtRuntimeDir, path.join('/Users/tester/AppData/AvaNevis', 'ai-addons', 'runtimes', 'speakrs-ort'));
   assert.equal(paths.summaryModelCacheDir, path.join('/Users/tester/AppData/AvaNevis', 'ai-addons', 'models', 'summary'));
 });
 
@@ -156,12 +163,19 @@ test('model catalog exposes swappable v1 defaults', () => {
   assert.equal(getDefaultModelId('diarization'), DEFAULT_DIARIZATION_MODEL_ID);
   assert.equal(getDefaultModelId('summary'), DEFAULT_SUMMARY_MODEL_ID);
 
-  const diarizationModel = getModelById('diarization', DEFAULT_DIARIZATION_MODEL_ID);
+  const speakrsModel = getModelById('diarization', SPEAKRS_DIARIZATION_MODEL_ID);
+  const diarizationModel = getModelById('diarization', PYANNOTE_DIARIZATION_MODEL_ID);
   const summaryModel = getModelById('summary', DEFAULT_SUMMARY_MODEL_ID);
 
+  assert.equal(DEFAULT_DIARIZATION_MODEL_ID, SPEAKRS_DIARIZATION_MODEL_ID);
+  assert.equal(speakrsModel.engine, 'speakrs');
+  assert.equal(speakrsModel.runtime.type, 'native-cli');
+  assert.equal(speakrsModel.tokenRequired, false);
+  assert.equal(diarizationModel.engine, 'pyannote');
   assert.equal(diarizationModel.runtime.modelRef, 'pyannote/speaker-diarization-community-1');
   assert.equal(diarizationModel.license, 'cc-by-4.0');
-  assert.equal(getDiarizationModelRef('renderer-supplied-id'), 'pyannote/speaker-diarization-community-1');
+  assert.equal(getDiarizationModelRef('renderer-supplied-id'), SPEAKRS_DIARIZATION_MODEL_ID);
+  assert.equal(getDiarizationModelRef(PYANNOTE_DIARIZATION_MODEL_ID), 'pyannote/speaker-diarization-community-1');
   assert.equal(diarizationModel.supportedPlatforms.darwin.status, 'enabled');
   assert.equal(diarizationModel.supportedPlatforms.darwin.acceleration, 'mps');
   assert.equal(summaryModel.inference.runtime, 'llama.cpp');
@@ -314,6 +328,103 @@ test('reports corrupt manifest without exposing raw contents', () => {
   assert.equal(status.features.diarization.status, 'error');
   assert.equal(status.features.summary.status, 'error');
   assert.equal(JSON.stringify(status).includes('hf_secret'), false);
+});
+
+test('legacy pyannote manifests keep the pyannote engine', () => {
+  const manifest = normalizeAiAddonManifest({
+    features: {
+      diarization: {
+        status: 'ready',
+        modelId: PYANNOTE_DIARIZATION_MODEL_ID,
+      },
+    },
+  });
+
+  assert.equal(manifest.features.diarization.engine, 'pyannote');
+  assert.equal(manifest.features.diarization.modelId, PYANNOTE_DIARIZATION_MODEL_ID);
+});
+
+test('pyannote-only catalogs keep new and mismatched manifests internally consistent', () => {
+  const catalog = {
+    diarization: {
+      defaultModelId: PYANNOTE_DIARIZATION_MODEL_ID,
+      models: [{
+        id: PYANNOTE_DIARIZATION_MODEL_ID,
+        engine: 'pyannote',
+        runtime: { type: 'python-module', modelRef: PYANNOTE_DIARIZATION_MODEL_ID },
+      }],
+    },
+    summary: AI_MODEL_CATALOG.summary,
+  };
+
+  const emptyManifest = normalizeAiAddonManifest({}, catalog);
+  const mismatchedManifest = normalizeAiAddonManifest({
+    features: {
+      diarization: {
+        engine: 'speakrs',
+        modelId: PYANNOTE_DIARIZATION_MODEL_ID,
+      },
+    },
+  }, catalog);
+
+  assert.deepEqual(
+    {
+      engine: emptyManifest.features.diarization.engine,
+      modelId: emptyManifest.features.diarization.modelId,
+    },
+    { engine: 'pyannote', modelId: PYANNOTE_DIARIZATION_MODEL_ID },
+  );
+  assert.deepEqual(
+    {
+      engine: mismatchedManifest.features.diarization.engine,
+      modelId: mismatchedManifest.features.diarization.modelId,
+    },
+    { engine: 'pyannote', modelId: PYANNOTE_DIARIZATION_MODEL_ID },
+  );
+});
+
+test('manifest engine wins over a mismatched model and normalizes to that engine model', () => {
+  const manifest = normalizeAiAddonManifest({
+    features: {
+      diarization: {
+        engine: 'speakrs',
+        modelId: PYANNOTE_DIARIZATION_MODEL_ID,
+      },
+    },
+  });
+
+  assert.equal(manifest.features.diarization.engine, 'speakrs');
+  assert.equal(manifest.features.diarization.modelId, SPEAKRS_DIARIZATION_MODEL_ID);
+});
+
+test('catalog keeps both speakrs and pyannote diarization entries', () => {
+  const modelIds = AI_MODEL_CATALOG.diarization.models.map((model) => model.id);
+  assert.deepEqual(modelIds, [SPEAKRS_DIARIZATION_MODEL_ID, PYANNOTE_DIARIZATION_MODEL_ID]);
+  assert.equal(AI_MODEL_CATALOG.diarization.defaultModelId, SPEAKRS_DIARIZATION_MODEL_ID);
+
+  const windowsPack = getSpeakrsSetupArtifactsForPlatform('win32', 'x64');
+  const macPack = getSpeakrsSetupArtifactsForPlatform('darwin', 'arm64');
+  assert.equal(windowsPack.revision, '5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f');
+  assert.equal(windowsPack.modelPack.validationStatus, 'ready');
+  assert.equal(
+    windowsPack.modelPack.downloadUrl,
+    'https://github.com/AmirArshad/meeting-transcriber/releases/download/speakrs-models-5d24ffe-r1/speakrs-models-5d24ffe-win32-x64-cuda.tar.gz',
+  );
+  assert.equal(windowsPack.modelPack.sha256, 'a79973647cb787bf2aebd31acc2668d282735e41d451e244308bcf04ea77ad20');
+  assert.equal(windowsPack.modelPack.sizeBytes, 208765985);
+  assert.equal(windowsPack.modelFiles.length, 19);
+  assert.equal(windowsPack.runtimeArtifacts.length, 3);
+  assert.equal(macPack.modelPack.validationStatus, 'ready');
+  assert.equal(
+    macPack.modelPack.downloadUrl,
+    'https://github.com/AmirArshad/meeting-transcriber/releases/download/speakrs-models-5d24ffe-r1/speakrs-models-5d24ffe-darwin-arm64-coreml.tar.gz',
+  );
+  assert.equal(macPack.modelPack.sha256, '0677b5eee394402ddd4cbdb991afd0736c24e955b145d4b98f69d63523cc8d50');
+  assert.equal(macPack.modelPack.sizeBytes, 375813778);
+  assert.equal(macPack.modelFiles.length, 76);
+  assert.equal(macPack.runtimeArtifacts.length, 0);
+  assert.equal(windowsPack.runtime.modeByPlatform['win32-x64'], 'cuda');
+  assert.equal(macPack.runtime.modeByPlatform['darwin-arm64'], 'coreml');
 });
 
 test('status states include the design states', () => {

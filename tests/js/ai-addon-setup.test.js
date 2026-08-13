@@ -6,6 +6,7 @@ const { execFileSync } = require('node:child_process');
 const https = require('node:https');
 const { PassThrough } = require('node:stream');
 const { EventEmitter } = require('node:events');
+const crypto = require('node:crypto');
 
 const CHECKSUM_TARGET_SHA256 = 'a0700a1b17cb3f2328437cbc70a3ac543fab2c1e7d1d8014862d801e1eb11162';
 
@@ -38,7 +39,21 @@ const {
   getDiarizationTokenStatus,
 } = require('../../src/ai-addon-setup');
 const { TOKEN_KEYS, getTokenPath } = require('../../src/ai-addon-token-store');
-const { DEFAULT_SUMMARY_MODEL_ID, getDiarizationDependencyArtifactForPlatform, getSummaryArtifactForPlatform } = require('../../src/ai-addon-state');
+const {
+  DEFAULT_SUMMARY_MODEL_ID,
+  PYANNOTE_DIARIZATION_MODEL_ID,
+  SPEAKRS_DIARIZATION_MODEL_ID,
+  getDiarizationDependencyArtifactForPlatform,
+  getSummaryArtifactForPlatform,
+} = require('../../src/ai-addon-state');
+const {
+  resolveDiarizationSetupTarget,
+  uninstallSpeakrsLocalState,
+  uninstallPyannoteLocalState,
+} = require('../../src/ai-addon/diarization-setup');
+
+const SPEAKRS_TEST_BYTES = Buffer.from('speakrs-pack-bytes');
+const SPEAKRS_TEST_SHA256 = crypto.createHash('sha256').update(SPEAKRS_TEST_BYTES).digest('hex');
 
 function createMemoryFs() {
   const files = new Map();
@@ -77,10 +92,11 @@ function createMemoryFs() {
       files.set(filePath, Buffer.isBuffer(data) ? data : Buffer.from(String(data)));
     },
     readFileSync(filePath, encoding) {
-      if (!files.has(filePath)) {
+      const resolvedFilePath = pathVariants(filePath).find((variant) => files.has(variant));
+      if (!resolvedFilePath) {
         throw new Error(`Missing file: ${filePath}`);
       }
-      const data = files.get(filePath);
+      const data = files.get(resolvedFilePath);
       return encoding ? data.toString(encoding) : data;
     },
     existsSync(filePath) {
@@ -97,17 +113,44 @@ function createMemoryFs() {
       files.set(toPath, Buffer.from(files.get(fromPath)));
     },
     renameSync(fromPath, toPath) {
-      if (!files.has(fromPath)) {
-        throw new Error(`Missing file: ${fromPath}`);
+      if (files.has(fromPath)) {
+        this.mkdirSync(path.dirname(toPath));
+        files.set(toPath, files.get(fromPath));
+        files.delete(fromPath);
+        return;
       }
-      files.set(toPath, files.get(fromPath));
-      files.delete(fromPath);
+      if (!this.existsSync(fromPath)) {
+        throw new Error(`Missing path: ${fromPath}`);
+      }
+      this.mkdirSync(toPath);
+      const fromVariants = pathVariants(fromPath);
+      for (const [filePath, data] of [...files.entries()]) {
+        const matchingRoot = fromVariants.find((candidate) => filePath.startsWith(`${candidate}${path.sep}`));
+        if (matchingRoot) {
+          const renamedPath = path.resolve(toPath, path.relative(matchingRoot, filePath));
+          files.set(renamedPath, data);
+          files.delete(filePath);
+        }
+      }
+      for (const dirPath of [...dirs]) {
+        const matchingRoot = fromVariants.find((candidate) => dirPath === candidate || dirPath.startsWith(`${candidate}${path.sep}`));
+        if (matchingRoot) {
+          dirs.add(path.resolve(toPath, path.relative(matchingRoot, dirPath)));
+          dirs.delete(dirPath);
+        }
+      }
     },
     rmSync(targetPath) {
       removed.push(targetPath);
+      const targets = pathVariants(targetPath);
       for (const filePath of [...files.keys()]) {
-        if (filePath === targetPath || filePath.startsWith(`${targetPath}${path.sep}`)) {
+        if (targets.some((target) => filePath === target || filePath.startsWith(`${target}${path.sep}`))) {
           files.delete(filePath);
+        }
+      }
+      for (const dirPath of [...dirs]) {
+        if (targets.some((target) => dirPath === target || dirPath.startsWith(`${target}${path.sep}`))) {
+          dirs.delete(dirPath);
         }
       }
     },
@@ -364,7 +407,9 @@ test('progress events preserve bounded byte counters', () => {
 
 test('download URL validation allows configured HTTPS hosts and expected redirects', () => {
   assert.equal(isAllowedDownloadUrl('https://github.com/ggml-org/llama.cpp/releases/download/b9173/runtime.zip'), true);
+  assert.equal(isAllowedDownloadUrl('https://github.com/AmirArshad/meeting-transcriber/releases/download/speakrs-models-5d24ffe-r1/speakrs-models-5d24ffe-win32-x64-cuda.tar.gz'), true);
   assert.equal(isAllowedDownloadUrl('https://objects.githubusercontent.com/github-production-release-asset-2e65be/runtime.zip'), true);
+  assert.equal(isAllowedDownloadUrl('https://release-assets.githubusercontent.com/github-production-release-asset/runtime.tar.gz'), true);
   assert.equal(isAllowedDownloadUrl('https://huggingface.co/unsloth/model/resolve/main/model.gguf'), true);
   assert.equal(isAllowedDownloadUrl('https://cdn-lfs.hf.co/repos/model.gguf'), true);
   assert.equal(isAllowedDownloadUrl('https://cas-bridge.xethub.hf.co/xet-bridge-us/model.gguf'), true);
@@ -705,6 +750,65 @@ test('runtime zip extraction runs off the main thread worker path', async () => 
   }
 });
 
+test('selective runtime zip worker validates every archive entry before extraction', async () => {
+  const archivePath = path.join(__dirname, '..', 'tmp-runtime-worker-unsafe.zip');
+  const destinationDir = path.join(__dirname, '..', 'tmp-runtime-worker-unsafe-extract');
+  try {
+    fs.rmSync(destinationDir, { recursive: true, force: true });
+    fs.rmSync(archivePath, { force: true });
+    const AdmZip = require('adm-zip');
+    const zip = new AdmZip();
+    zip.addFile('bin/onnxruntime.dll', Buffer.from('runtime'));
+    zip.addFile('aa/escape.dll', Buffer.from('escape'));
+    zip.writeZip(archivePath);
+    const archiveBytes = fs.readFileSync(archivePath);
+    const safeName = Buffer.from('aa/escape.dll');
+    const unsafeName = Buffer.from('../escape.dll');
+    let offset = archiveBytes.indexOf(safeName);
+    while (offset >= 0) {
+      unsafeName.copy(archiveBytes, offset);
+      offset = archiveBytes.indexOf(safeName, offset + safeName.length);
+    }
+    fs.writeFileSync(archivePath, archiveBytes);
+
+    await assert.rejects(
+      () => extractRuntimeArchive(archivePath, destinationDir, 'zip', {
+        includeFileNames: ['onnxruntime.dll'],
+      }),
+      /unsafe path traversal/,
+    );
+    assert.equal(fs.existsSync(path.join(destinationDir, 'onnxruntime.dll')), false);
+  } finally {
+    fs.rmSync(destinationDir, { recursive: true, force: true });
+    fs.rmSync(archivePath, { force: true });
+  }
+});
+
+test('selective runtime zip worker extracts only requested DLL basenames', async () => {
+  const archivePath = path.join(__dirname, '..', 'tmp-runtime-worker-selected.zip');
+  const destinationDir = path.join(__dirname, '..', 'tmp-runtime-worker-selected-extract');
+  try {
+    fs.rmSync(destinationDir, { recursive: true, force: true });
+    fs.rmSync(archivePath, { force: true });
+    const AdmZip = require('adm-zip');
+    const zip = new AdmZip();
+    zip.addFile('ort/lib/onnxruntime.dll', Buffer.from('runtime'));
+    zip.addFile('ort/lib/unused-large.dll', Buffer.alloc(1024));
+    zip.writeZip(archivePath);
+
+    await extractRuntimeArchive(archivePath, destinationDir, 'zip', {
+      includeFileNames: ['onnxruntime.dll'],
+    });
+
+    assert.equal(fs.readFileSync(path.join(destinationDir, 'onnxruntime.dll'), 'utf8'), 'runtime');
+    assert.equal(fs.existsSync(path.join(destinationDir, 'unused-large.dll')), false);
+    assert.equal(fs.existsSync(path.join(destinationDir, 'ort')), false);
+  } finally {
+    fs.rmSync(destinationDir, { recursive: true, force: true });
+    fs.rmSync(archivePath, { force: true });
+  }
+});
+
 test('runtime tar.gz extraction runs off the main thread worker path', async (t) => {
   let tarAvailable = true;
   try {
@@ -779,6 +883,9 @@ test('check status includes token and summary cache state without exposing token
   const safeStorage = createSafeStorage();
   const userDataDir = '/tmp/AvaNevis';
   fsModule.writeFileSync(getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace), Buffer.from('encrypted:hf_secret'));
+  fsModule.writeFileSync(path.join(userDataDir, 'ai-addons', 'manifest.json'), JSON.stringify({
+    features: { diarization: { status: 'needsAccount', modelId: PYANNOTE_DIARIZATION_MODEL_ID } },
+  }));
 
   const status = await checkAiAddonSetupStatus({
     userDataDir,
@@ -802,6 +909,9 @@ test('passive add-on status does not query secure storage availability', async (
   const fsModule = createMemoryFs();
   const userDataDir = '/tmp/AvaNevis';
   fsModule.writeFileSync(getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace), Buffer.from('encrypted:hf_secret'));
+  fsModule.writeFileSync(path.join(userDataDir, 'ai-addons', 'manifest.json'), JSON.stringify({
+    features: { diarization: { status: 'needsAccount', modelId: PYANNOTE_DIARIZATION_MODEL_ID } },
+  }));
   let encryptionChecks = 0;
   const safeStorage = {
     isEncryptionAvailable: () => {
@@ -834,6 +944,7 @@ test('passive add-on status does not walk storage cache directories', async () =
     userDataDir: '/tmp/AvaNevis',
     platform: 'win32',
     arch: 'x64',
+    engine: 'pyannote',
     safeStorage: createSafeStorage(),
     fsModule,
   });
@@ -959,6 +1070,7 @@ test('diarization dependency cache uses managed userData path and pinned require
     userDataDir: '/tmp/AvaNevis',
     platform: 'win32',
     arch: 'x64',
+    engine: 'pyannote',
     fsModule,
   });
 
@@ -971,6 +1083,7 @@ test('diarization dependency cache uses managed userData path and pinned require
     userDataDir: '/tmp/AvaNevis',
     platform: 'win32',
     arch: 'x64',
+    engine: 'pyannote',
     fsModule,
   });
   assert.equal(partialCache.installed, false);
@@ -987,6 +1100,7 @@ test('diarization dependency cache invalidates stale pinned requirements', () =>
     userDataDir: '/tmp/AvaNevis',
     platform: 'win32',
     arch: 'x64',
+    engine: 'pyannote',
     fsModule,
   });
 
@@ -1009,6 +1123,7 @@ test('diarization dependency cache invalidates stale pinned requirements', () =>
     userDataDir: '/tmp/AvaNevis',
     platform: 'win32',
     arch: 'x64',
+    engine: 'pyannote',
     fsModule,
   });
 
@@ -1025,6 +1140,7 @@ test('macOS diarization dependency cache uses managed MPS artifact', () => {
     userDataDir: '/tmp/AvaNevis',
     platform: 'darwin',
     arch: 'arm64',
+    engine: 'pyannote',
     fsModule,
   });
 
@@ -1053,6 +1169,7 @@ test('diarization dependency cache rejects unallowed pip index hosts', () => {
     userDataDir: '/tmp/AvaNevis',
     platform: 'win32',
     arch: 'x64',
+    engine: 'pyannote',
     fsModule: createMemoryFs(),
     catalog,
   });
@@ -1125,6 +1242,7 @@ test('setup diarization stores token securely and writes ready manifest state', 
     userDataDir: '/tmp/AvaNevis',
     platform: 'win32',
     arch: 'x64',
+    engine: 'pyannote',
     token: 'hf_validtoken123',
     safeStorage: createSafeStorage(),
   fsModule,
@@ -1150,6 +1268,7 @@ test('setup diarization downloads pinned source artifacts before pip install', a
     userDataDir: '/tmp/AvaNevis',
     platform: 'win32',
     arch: 'x64',
+    engine: 'pyannote',
     token: 'hf_validtoken123',
     safeStorage: createSafeStorage(),
     fsModule,
@@ -1178,6 +1297,7 @@ test('macOS curated diarization source artifacts require compiler toolchain', as
     userDataDir: '/tmp/AvaNevis',
     platform: 'darwin',
     arch: 'arm64',
+    engine: 'pyannote',
     token: 'hf_validtoken123',
     safeStorage: createSafeStorage(),
     fsModule,
@@ -1202,6 +1322,7 @@ test('setup diarization installs dependencies before runtime validation', async 
     userDataDir: '/tmp/AvaNevis',
     platform: 'win32',
     arch: 'x64',
+    engine: 'pyannote',
     token: 'hf_validtoken123',
     safeStorage: createSafeStorage(),
     fsModule,
@@ -1224,6 +1345,7 @@ test('setup diarization reports dependency install failures before token validat
     userDataDir: '/tmp/AvaNevis',
     platform: 'win32',
     arch: 'x64',
+    engine: 'pyannote',
     token: 'hf_validtoken123',
     safeStorage: createSafeStorage(),
     fsModule: createMemoryFs(),
@@ -1259,6 +1381,7 @@ test('macOS diarization setup preflights broad source-build toolchain before pip
     userDataDir: '/tmp/AvaNevis',
     platform: 'darwin',
     arch: 'arm64',
+    engine: 'pyannote',
     token: 'hf_validtoken123',
     safeStorage: createSafeStorage(),
     fsModule,
@@ -1308,6 +1431,7 @@ test('setup diarization cancellation cleans managed dependencies', async () => {
     userDataDir: '/tmp/AvaNevis',
     platform: 'win32',
     arch: 'x64',
+    engine: 'pyannote',
     token: 'hf_validtoken123',
     safeStorage: createSafeStorage(),
     fsModule,
@@ -1329,6 +1453,7 @@ test('setup diarization requires token before installing dependencies', async ()
     userDataDir: '/tmp/AvaNevis',
     platform: 'win32',
     arch: 'x64',
+    engine: 'pyannote',
     safeStorage: createSafeStorage(),
     fsModule: createMemoryFs(),
     dependencyInstaller: async () => {
@@ -1347,6 +1472,7 @@ test('setup diarization reports unavailable secure token storage before installi
     userDataDir: '/tmp/AvaNevis',
     platform: 'win32',
     arch: 'x64',
+    engine: 'pyannote',
     token: 'hf_validtoken123',
     safeStorage: createUnavailableSafeStorage(),
     fsModule: createMemoryFs(),
@@ -1367,6 +1493,7 @@ test('setup diarization runs runtime validation before marking ready', async () 
     userDataDir: '/tmp/AvaNevis',
     platform: 'win32',
     arch: 'x64',
+    engine: 'pyannote',
     token: 'hf_validtoken123',
     safeStorage: createSafeStorage(),
     fsModule: createMemoryFs(),
@@ -1391,6 +1518,7 @@ test('setup diarization does not decrypt a newly entered token for runtime valid
     userDataDir: '/tmp/AvaNevis',
     platform: 'win32',
     arch: 'x64',
+    engine: 'pyannote',
     token: 'hf_validtoken123',
     safeStorage,
     fsModule: createMemoryFs(),
@@ -1416,6 +1544,7 @@ test('setup diarization decrypts an existing token once for runtime validation',
     userDataDir,
     platform: 'win32',
     arch: 'x64',
+    engine: 'pyannote',
     safeStorage,
     fsModule,
     dependencyInstaller: stubDiarizationDependencyInstaller,
@@ -1434,6 +1563,7 @@ test('setup diarization reports runtime validation failures before first run', a
     userDataDir: '/tmp/AvaNevis',
     platform: 'win32',
     arch: 'x64',
+    engine: 'pyannote',
     token: 'hf_validtoken123',
     safeStorage: createSafeStorage(),
     fsModule: createMemoryFs(),
@@ -1453,6 +1583,7 @@ test('invalid diarization token keeps setup in needsAccount', async () => {
     userDataDir: '/tmp/AvaNevis',
     platform: 'win32',
     arch: 'x64',
+    engine: 'pyannote',
     token: 'not-a-token',
     safeStorage: createSafeStorage(),
     fsModule: createMemoryFs(),
@@ -1468,6 +1599,7 @@ test('macOS diarization setup validates MPS before ready', async () => {
     userDataDir: '/tmp/AvaNevis',
     platform: 'darwin',
     arch: 'arm64',
+    engine: 'pyannote',
     token: 'hf_validtoken123',
     safeStorage: createSafeStorage(),
     fsModule: createMemoryFs(),
@@ -1489,6 +1621,7 @@ test('macOS diarization setup fails closed when MPS validation fails', async () 
     userDataDir: '/tmp/AvaNevis',
     platform: 'darwin',
     arch: 'arm64',
+    engine: 'pyannote',
     token: 'hf_validtoken123',
     safeStorage: createSafeStorage(),
     fsModule: createMemoryFs(),
@@ -1510,6 +1643,7 @@ test('Intel macOS diarization setup remains unsupported', async () => {
     userDataDir: '/tmp/AvaNevis',
     platform: 'darwin',
     arch: 'x64',
+    engine: 'pyannote',
     token: 'hf_validtoken123',
     safeStorage: createSafeStorage(),
     fsModule: createMemoryFs(),
@@ -1526,6 +1660,7 @@ test('remove diarization setup deletes token and managed cache reference', async
     userDataDir: '/tmp/AvaNevis',
     platform: 'win32',
     arch: 'x64',
+    engine: 'pyannote',
     token: 'hf_validtoken123',
     safeStorage: createSafeStorage(),
     fsModule,
@@ -1536,6 +1671,7 @@ test('remove diarization setup deletes token and managed cache reference', async
     userDataDir: '/tmp/AvaNevis',
     platform: 'win32',
     arch: 'x64',
+    engine: 'pyannote',
     safeStorage: createSafeStorage(),
     fsModule,
   });
@@ -1559,6 +1695,7 @@ test('diarization setup removes stale dependency artifact directories', async ()
     userDataDir,
     platform: 'win32',
     arch: 'x64',
+    engine: 'pyannote',
     token: 'hf_validtoken123',
     safeStorage: createSafeStorage(),
     fsModule,
@@ -1670,6 +1807,7 @@ test('summary runtime cache stays in userData and requires llama-cli', () => {
     userDataDir: '/tmp/AvaNevis',
     platform: 'win32',
     arch: 'x64',
+    engine: 'pyannote',
     modelId: DEFAULT_SUMMARY_MODEL_ID,
     fsModule,
   });
@@ -1682,6 +1820,7 @@ test('summary runtime cache stays in userData and requires llama-cli', () => {
     userDataDir: '/tmp/AvaNevis',
     platform: 'win32',
     arch: 'x64',
+    engine: 'pyannote',
     modelId: DEFAULT_SUMMARY_MODEL_ID,
     fsModule,
   });
@@ -1695,6 +1834,7 @@ test('summary runtime cache stays in userData and requires llama-cli', () => {
     userDataDir: '/tmp/AvaNevis',
     platform: 'win32',
     arch: 'x64',
+    engine: 'pyannote',
     modelId: DEFAULT_SUMMARY_MODEL_ID,
     fsModule,
   });
@@ -1869,6 +2009,7 @@ test('setup summary model uses pinned default metadata and fails if runtime inst
     userDataDir: '/tmp/AvaNevis',
     platform: 'win32',
     arch: 'x64',
+    engine: 'pyannote',
     safeStorage: createSafeStorage(),
     fsModule: createMemoryFs(),
     emitProgress: (event) => progress.push(event),
@@ -1895,6 +2036,7 @@ test('setup summary model downloads explicit runtime and model artifacts only wh
     userDataDir: '/tmp/AvaNevis',
     platform: 'win32',
     arch: 'x64',
+    engine: 'pyannote',
     modelId: 'summary-model',
     profile: 'detailed',
     safeStorage: createSafeStorage(),
@@ -1934,6 +2076,7 @@ test('setup summary model uses Hugging Face downloader for pinned Hugging Face m
     userDataDir: '/tmp/AvaNevis',
     platform: 'win32',
     arch: 'x64',
+    engine: 'pyannote',
     modelId: 'summary-model',
     safeStorage: createSafeStorage(),
     fsModule,
@@ -1975,6 +2118,7 @@ test('setup summary model records downloader failures and removes temp model dow
     userDataDir: '/tmp/AvaNevis',
     platform: 'win32',
     arch: 'x64',
+    engine: 'pyannote',
     modelId: 'summary-model',
     safeStorage: createSafeStorage(),
     fsModule,
@@ -2010,6 +2154,7 @@ test('setup summary model cancellation cleans partial cache and resets state', a
     userDataDir: '/tmp/AvaNevis',
     platform: 'win32',
     arch: 'x64',
+    engine: 'pyannote',
     modelId: 'summary-model',
     safeStorage: createSafeStorage(),
     fsModule,
@@ -2045,6 +2190,7 @@ test('summary validation failure removes runtime installed during failed setup',
     userDataDir: '/tmp/AvaNevis',
     platform: 'win32',
     arch: 'x64',
+    engine: 'pyannote',
     modelId: 'summary-model',
     safeStorage: createSafeStorage(),
     fsModule,
@@ -2079,6 +2225,7 @@ test('summary cancellation during validation preserves pre-existing ready cache'
     userDataDir: '/tmp/AvaNevis',
     platform: 'win32',
     arch: 'x64',
+    engine: 'pyannote',
     modelId: 'summary-model',
     safeStorage: createSafeStorage(),
     fsModule,
@@ -2108,6 +2255,7 @@ test('remove summary model clears cache and manifest state', async () => {
     userDataDir: '/tmp/AvaNevis',
     platform: 'win32',
     arch: 'x64',
+    engine: 'pyannote',
     modelId: 'summary-model',
     safeStorage: createSafeStorage(),
     fsModule,
@@ -2123,6 +2271,7 @@ test('remove summary model clears cache and manifest state', async () => {
     userDataDir: '/tmp/AvaNevis',
     platform: 'win32',
     arch: 'x64',
+    engine: 'pyannote',
     modelId: 'summary-model',
     safeStorage: createSafeStorage(),
     fsModule,
@@ -2132,4 +2281,372 @@ test('remove summary model clears cache and manifest state', async () => {
   assert.equal(status.features.summary.status, 'notConfigured');
   assert.equal(status.features.summary.setupComplete, false);
   assert.ok(fsModule.removed.some((targetPath) => targetPath.includes(path.join('models', 'summary'))));
+});
+
+function createSpeakrsTestCatalog({
+  platformKey = 'win32-x64',
+  fileName = 'model.bin',
+  sha256 = SPEAKRS_TEST_SHA256,
+  sizeBytes = SPEAKRS_TEST_BYTES.length,
+  downloadUrl = 'https://github.com/AmirArshad/meeting-transcriber/releases/download/speakrs-test/speakrs-models-test.tar.gz',
+} = {}) {
+  const [platform, arch] = platformKey.split('-');
+  const pyannoteArtifact = JSON.parse(JSON.stringify(getDiarizationDependencyArtifactForPlatform(platform, arch)));
+  return {
+    version: 1,
+    diarization: {
+      defaultModelId: SPEAKRS_DIARIZATION_MODEL_ID,
+      dependencyArtifacts: { [platformKey]: pyannoteArtifact },
+      models: [
+        {
+          id: SPEAKRS_DIARIZATION_MODEL_ID,
+          engine: 'speakrs',
+          tokenRequired: false,
+          runtime: {
+            type: 'native-cli',
+            executableName: 'speakrs-cli',
+            modeByPlatform: { [platformKey]: platform === 'win32' ? 'cuda' : 'coreml' },
+          },
+          packRevision: '5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f',
+          packArtifacts: {
+            [platformKey]: [
+              {
+                id: 'speakrs-models-test',
+                kind: 'model-pack',
+                fileName: 'speakrs-models-test.tar.gz',
+                archiveFormat: 'tar.gz',
+                sha256,
+                sizeBytes,
+                downloadUrl,
+                requiredFiles: [
+                  {
+                    path: fileName,
+                    fileName,
+                    sha256,
+                    sizeBytes,
+                  },
+                ],
+              },
+              ...(platform === 'win32' ? [{
+                id: 'speakrs-runtime-test',
+                kind: 'ort-archive',
+                fileName: 'speakrs-runtime-test.zip',
+                archiveFormat: 'zip',
+                sha256,
+                sizeBytes,
+                downloadUrl: 'https://github.com/AmirArshad/meeting-transcriber/releases/download/speakrs-test/speakrs-runtime-test.zip',
+                keepFileNames: [
+                  'onnxruntime.dll',
+                  'onnxruntime_providers_shared.dll',
+                  'onnxruntime_providers_cuda.dll',
+                  'cudart64_12.dll',
+                  'cufft64_11.dll',
+                ],
+              }] : []),
+            ],
+          },
+        },
+        {
+          id: PYANNOTE_DIARIZATION_MODEL_ID,
+          engine: 'pyannote',
+          tokenRequired: true,
+          runtime: { type: 'python-module', modelRef: PYANNOTE_DIARIZATION_MODEL_ID },
+        },
+      ],
+    },
+    summary: { defaultModelId: 'summary-model', runtimeArtifacts: {}, models: [{ id: 'summary-model' }] },
+  };
+}
+
+function createSpeakrsTestExtractor(fsModule, modelPath = 'model.bin') {
+  return async (_archivePath, destinationDir, _archiveFormat, options = {}) => {
+    if (Array.isArray(options.includeFileNames)) {
+      for (const fileName of options.includeFileNames) {
+        fsModule.writeFileSync(path.resolve(destinationDir, fileName), Buffer.from(`MZ-${fileName}`));
+      }
+      return;
+    }
+    fsModule.writeFileSync(path.resolve(destinationDir, modelPath), SPEAKRS_TEST_BYTES);
+  };
+}
+
+function writeSpeakrsCli(fsModule, userDataDir) {
+  const cliPath = path.join(userDataDir, 'bin', process.platform === 'win32' ? 'speakrs-cli.exe' : 'speakrs-cli');
+  fsModule.writeFileSync(cliPath, 'cli');
+  return cliPath;
+}
+
+function createProtectedSiblingFiles(fsModule, userDataDir) {
+  const cudaPip = path.join(userDataDir, 'Python', 'site-packages', 'nvidia-cublas-cu12', 'cublas64_12.dll');
+  const whisperCache = path.join(userDataDir, '.cache', 'huggingface', 'hub', 'models--Systran--faster-whisper-small', 'model.bin');
+  const bundledCli = path.join(userDataDir, 'resources', 'bin', 'speakrs-cli.exe');
+  fsModule.writeFileSync(cudaPip, 'cublas');
+  fsModule.writeFileSync(whisperCache, 'whisper');
+  fsModule.writeFileSync(bundledCli, 'bundled-cli');
+  return { cudaPip, whisperCache, bundledCli };
+}
+
+test('diarization setup target precedence is explicit request then manifest then catalog default', () => {
+  const catalog = createSpeakrsTestCatalog();
+  const legacyManifest = {
+    features: {
+      diarization: {
+        engine: 'pyannote',
+        modelId: PYANNOTE_DIARIZATION_MODEL_ID,
+      },
+    },
+  };
+
+  assert.deepEqual(
+    resolveDiarizationSetupTarget({ manifest: legacyManifest, catalog }),
+    { engine: 'pyannote', modelId: PYANNOTE_DIARIZATION_MODEL_ID },
+  );
+  assert.deepEqual(
+    resolveDiarizationSetupTarget({
+      engine: 'speakrs',
+      modelId: PYANNOTE_DIARIZATION_MODEL_ID,
+      manifest: legacyManifest,
+      catalog,
+    }),
+    { engine: 'speakrs', modelId: SPEAKRS_DIARIZATION_MODEL_ID },
+  );
+  assert.deepEqual(
+    resolveDiarizationSetupTarget({
+      modelId: SPEAKRS_DIARIZATION_MODEL_ID,
+      manifest: legacyManifest,
+      catalog,
+    }),
+    { engine: 'speakrs', modelId: SPEAKRS_DIARIZATION_MODEL_ID },
+  );
+  assert.deepEqual(
+    resolveDiarizationSetupTarget({ manifest: { features: { diarization: {} } }, catalog }),
+    { engine: 'speakrs', modelId: SPEAKRS_DIARIZATION_MODEL_ID },
+  );
+  assert.throws(
+    () => resolveDiarizationSetupTarget({ engine: 'unknown', manifest: legacyManifest, catalog }),
+    (error) => error.code === 'UNKNOWN_DIARIZATION_ENGINE',
+  );
+});
+
+test('diarization setup target remains consistent with a pyannote-only catalog', () => {
+  const catalog = createSpeakrsTestCatalog();
+  catalog.diarization.defaultModelId = PYANNOTE_DIARIZATION_MODEL_ID;
+  catalog.diarization.models = catalog.diarization.models.filter((model) => model.engine === 'pyannote');
+
+  assert.deepEqual(
+    resolveDiarizationSetupTarget({ manifest: { features: { diarization: {} } }, catalog }),
+    { engine: 'pyannote', modelId: PYANNOTE_DIARIZATION_MODEL_ID },
+  );
+});
+
+test('token-free speakrs setup reaches ready and setupComplete without token-store calls', async () => {
+  const fsModule = createMemoryFs();
+  const userDataDir = '/tmp/AvaNevis';
+  const catalog = createSpeakrsTestCatalog();
+  const safeStorage = createSafeStorage();
+  const cliPath = writeSpeakrsCli(fsModule, userDataDir);
+  const tokenAccess = { status: 0, read: 0, write: 0 };
+  const downloadUrls = [];
+
+  const status = await setupDiarizationAddon({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    engine: 'speakrs',
+    token: 'hf_must_be_ignored',
+    safeStorage,
+    fsModule,
+    catalog,
+    env: { SPEAKRS_CLI_PATH: cliPath },
+    downloader: async ({ destinationPath, url }) => {
+      downloadUrls.push(url);
+      fsModule.writeFileSync(destinationPath, SPEAKRS_TEST_BYTES);
+    },
+    extractor: createSpeakrsTestExtractor(fsModule),
+    tokenStatusReader: () => {
+      tokenAccess.status += 1;
+      throw new Error('Speakrs must not query token status.');
+    },
+    tokenReader: () => {
+      tokenAccess.read += 1;
+      throw new Error('Speakrs must not read tokens.');
+    },
+    tokenWriter: () => {
+      tokenAccess.write += 1;
+      throw new Error('Speakrs must not store tokens.');
+    },
+  });
+
+  assert.equal(status.features.diarization.engine, 'speakrs');
+  assert.equal(status.features.diarization.status, 'ready', JSON.stringify(status.features.diarization));
+  assert.equal(status.features.diarization.setupComplete, true);
+  assert.equal(status.features.diarization.cliPresent, true);
+  assert.equal(status.features.diarization.tokenStatus.hasToken, false);
+  assert.deepEqual(tokenAccess, { status: 0, read: 0, write: 0 });
+  assert.equal(downloadUrls.filter((url) => url.includes('speakrs-models-test.tar.gz')).length, 1);
+  assert.equal(downloadUrls.some((url) => url.includes('huggingface.co')), false);
+  assert.equal(fsModule.existsSync(getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace)), false);
+});
+
+test('speakrs status refresh never calls the token-status helper', async () => {
+  const fsModule = createMemoryFs();
+  let tokenStatusCalls = 0;
+  const status = await checkAiAddonSetupStatus({
+    userDataDir: '/tmp/AvaNevis',
+    platform: 'win32',
+    arch: 'x64',
+    fsModule,
+    catalog: createSpeakrsTestCatalog(),
+    tokenStatusReader: () => {
+      tokenStatusCalls += 1;
+      throw new Error('Speakrs status must not inspect token storage.');
+    },
+  });
+
+  assert.equal(status.features.diarization.engine, 'speakrs');
+  assert.equal(status.features.diarization.tokenStatus.hasToken, false);
+  assert.equal(tokenStatusCalls, 0);
+});
+
+test('speakrs setup cancellation removes partial downloads', async () => {
+  const fsModule = createMemoryFs();
+  const userDataDir = '/tmp/AvaNevis';
+  const catalog = createSpeakrsTestCatalog();
+  const controller = new AbortController();
+
+  const status = await setupDiarizationAddon({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    engine: 'speakrs',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog,
+    cancelSignal: controller.signal,
+    downloader: async ({ destinationPath }) => {
+      fsModule.writeFileSync(destinationPath, SPEAKRS_TEST_BYTES);
+      controller.abort();
+      const error = new Error('Speaker identification setup was canceled.');
+      error.name = 'AbortError';
+      throw error;
+    },
+  });
+
+  assert.equal(status.features.diarization.status, 'notConfigured');
+  assert.equal(status.features.diarization.setupComplete, false);
+  assert.equal(
+    [...fsModule.files.keys()].some((filePath) => String(filePath).endsWith('.download')),
+    false,
+  );
+});
+
+test('speakrs checksum mismatch never reaches ready', async () => {
+  const fsModule = createMemoryFs();
+  const userDataDir = '/tmp/AvaNevis';
+  const catalog = createSpeakrsTestCatalog();
+  const cliPath = writeSpeakrsCli(fsModule, userDataDir);
+
+  const status = await setupDiarizationAddon({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    engine: 'speakrs',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog,
+    env: { SPEAKRS_CLI_PATH: cliPath },
+    downloader: async ({ destinationPath }) => fsModule.writeFileSync(destinationPath, Buffer.from('tampered')),
+  });
+
+  assert.equal(status.features.diarization.status, 'error');
+  assert.equal(status.features.diarization.setupComplete, false);
+  assert.match(status.features.diarization.error, /checksum/i);
+});
+
+test('setup speakrs deletes an existing pyannote tree first and keeps shared CUDA and Whisper caches', async () => {
+  const fsModule = createMemoryFs();
+  const userDataDir = '/tmp/AvaNevis';
+  const catalog = createSpeakrsTestCatalog();
+  const cliPath = writeSpeakrsCli(fsModule, userDataDir);
+  const protectedFiles = createProtectedSiblingFiles(fsModule, userDataDir);
+  const artifact = getDiarizationDependencyArtifactForPlatform('win32', 'x64');
+  const pyannoteDir = path.join(userDataDir, 'ai-addons', 'dependencies', 'diarization', artifact.id, 'site-packages');
+  const pyannoteHub = path.join(userDataDir, 'ai-addons', 'models', 'diarization', 'hub', 'models--pyannote--speaker-diarization-community-1', 'config.json');
+  fsModule.writeFileSync(path.join(pyannoteDir, 'pyannote.txt'), 'deps');
+  fsModule.writeFileSync(pyannoteHub, 'hub');
+  fsModule.writeFileSync(getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace), Buffer.from('encrypted:hf_secret'));
+
+  const status = await setupDiarizationAddon({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    engine: 'speakrs',
+    token: 'hf_validtoken123',
+    safeStorage: createCountingSafeStorage(),
+    fsModule,
+    catalog,
+    env: { SPEAKRS_CLI_PATH: cliPath },
+    downloader: async ({ destinationPath }) => fsModule.writeFileSync(destinationPath, SPEAKRS_TEST_BYTES),
+    extractor: createSpeakrsTestExtractor(fsModule),
+  });
+
+  assert.equal(status.features.diarization.engine, 'speakrs');
+  assert.equal(status.features.diarization.status, 'ready');
+  assert.equal(status.features.diarization.setupComplete, true);
+  assert.equal(status.features.diarization.tokenStatus.hasToken, false);
+  assert.ok(fsModule.removed.some((targetPath) => targetPath.includes(path.join('dependencies', 'diarization'))));
+  assert.ok(fsModule.removed.some((targetPath) => targetPath.includes(path.join('models', 'diarization', 'hub'))));
+  assert.equal(fsModule.existsSync(protectedFiles.cudaPip), true);
+  assert.equal(fsModule.existsSync(protectedFiles.whisperCache), true);
+  assert.equal(fsModule.existsSync(protectedFiles.bundledCli), true);
+});
+
+test('setup pyannote deletes an existing speakrs pack first and keeps shared CUDA and Whisper caches', async () => {
+  const fsModule = createMemoryFs();
+  const userDataDir = '/tmp/AvaNevis';
+  const catalog = createSpeakrsTestCatalog();
+  const protectedFiles = createProtectedSiblingFiles(fsModule, userDataDir);
+  const speakrsFile = path.join(userDataDir, 'ai-addons', 'models', 'diarization', 'speakrs', '5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f', 'model.bin');
+  const ortFile = path.join(userDataDir, 'ai-addons', 'runtimes', 'speakrs-ort', 'onnxruntime.dll');
+  fsModule.writeFileSync(speakrsFile, SPEAKRS_TEST_BYTES);
+  fsModule.writeFileSync(ortFile, 'ort');
+
+  const status = await setupDiarizationAddon({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    engine: 'pyannote',
+    token: 'hf_validtoken123',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog,
+    downloader: createSourceArtifactDownloader(fsModule),
+    dependencyInstaller: stubAnyDiarizationDependencyInstaller,
+  });
+
+  assert.equal(status.features.diarization.engine, 'pyannote');
+  assert.equal(status.features.diarization.status, 'ready');
+  assert.ok(fsModule.removed.some((targetPath) => targetPath.includes(path.join('models', 'diarization', 'speakrs'))));
+  assert.ok(fsModule.removed.some((targetPath) => targetPath.includes(path.join('runtimes', 'speakrs-ort'))));
+  assert.equal(fsModule.existsSync(protectedFiles.cudaPip), true);
+  assert.equal(fsModule.existsSync(protectedFiles.whisperCache), true);
+  assert.equal(fsModule.existsSync(protectedFiles.bundledCli), true);
+});
+
+test('exclusive uninstall helpers never delete shared CUDA pip or Whisper caches', () => {
+  const fsModule = createMemoryFs();
+  const userDataDir = '/tmp/AvaNevis';
+  const protectedFiles = createProtectedSiblingFiles(fsModule, userDataDir);
+  fsModule.writeFileSync(path.join(userDataDir, 'ai-addons', 'models', 'diarization', 'speakrs', 'rev', 'model.bin'), 'pack');
+  fsModule.writeFileSync(path.join(userDataDir, 'ai-addons', 'runtimes', 'speakrs-ort', 'onnxruntime.dll'), 'ort');
+  fsModule.writeFileSync(path.join(userDataDir, 'ai-addons', 'dependencies', 'diarization', 'pyannote', 'site-packages', 'ok'), 'deps');
+  fsModule.writeFileSync(getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace), Buffer.from('encrypted:hf_secret'));
+
+  uninstallSpeakrsLocalState({ userDataDir, fsModule });
+  uninstallPyannoteLocalState({ userDataDir, modelId: PYANNOTE_DIARIZATION_MODEL_ID, fsModule });
+
+  assert.equal(fsModule.existsSync(protectedFiles.cudaPip), true);
+  assert.equal(fsModule.existsSync(protectedFiles.whisperCache), true);
+  assert.equal(fsModule.existsSync(protectedFiles.bundledCli), true);
+  assert.equal(fsModule.existsSync(getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace)), false);
 });

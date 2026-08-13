@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { EventEmitter } = require('node:events');
 const os = require('node:os');
 const path = require('node:path');
 
@@ -8,6 +9,7 @@ const {
   validateZipEntries,
   resolvePreferredTarExecutable,
 } = require('../../src/ai-addon-archive-helpers');
+const { runArchiveExtractionInWorker } = require('../../src/ai-addon/archive-install');
 
 test('validateZipEntries rejects symlink entries', () => {
   const destinationDir = path.join(os.tmpdir(), 'avanevis-zip-test');
@@ -73,4 +75,28 @@ test('resolvePreferredTarExecutable default args honor process.env.AVANEVIS_PACK
       process.env.SystemRoot = previousSystemRoot;
     }
   }
+});
+
+test('archive worker cancellation terminates extraction and rejects promptly', async () => {
+  const controller = new AbortController();
+  const worker = new EventEmitter();
+  worker.terminated = 0;
+  worker.terminate = async () => {
+    worker.terminated += 1;
+    return 0;
+  };
+  const extraction = runArchiveExtractionInWorker(
+    'unused-worker.js',
+    { archivePath: 'archive.zip', destinationDir: 'destination' },
+    'Test archive',
+    controller.signal,
+    () => worker,
+  );
+
+  controller.abort();
+
+  await assert.rejects(extraction, (error) => (
+    error.name === 'AbortError' && error.code === 'AI_ADDON_SETUP_CANCELLED'
+  ));
+  assert.equal(worker.terminated, 1);
 });

@@ -6,8 +6,8 @@ This app keeps optional local AI add-on artifacts catalog-driven in `src/ai-addo
 
 - Keep AvaNevis local-only: no cloud diarization, cloud summarization, telemetry, or background uploads.
 - Summary model and runtime downloads must be explicit user-triggered setup actions.
-- Speaker diarization dependency installs must be explicit user-triggered setup actions and stay under Electron `userData`.
-- Speaker diarization is accelerator-only: Windows uses CUDA, macOS uses Apple Silicon PyTorch Metal/MPS, and CPU-only fallback must not be enabled.
+- Speaker diarization setup must be explicit and stays under Electron `userData`. Speakrs uses a self-hosted model-pack archive plus a Windows ONNX Runtime closure; pyannote uses its managed Python dependencies and Hugging Face cache.
+- Speaker diarization is accelerator-only: Windows uses CUDA; macOS uses Apple Silicon CoreML for Speakrs or PyTorch Metal/MPS for pyannote. CPU-only fallback must not be enabled.
 - Setup downloads must emit redacted progress, support cancellation, clean partial `.download` files, and preserve any previously valid install when cancellation happens during validation. Redaction must cover bearer tokens, legacy `Authorization: token ...`, `token=` / `access_token=` / `api_key=` query parameters, `X-Api-Key`, and URL credentials.
 - Pin every downloadable summary model and runtime artifact by immutable URL, filename, and SHA-256 checksum.
 - Summary model/runtime download URLs must use HTTPS and an allowed artifact host. The allowlist is derived from catalog **download-related** keys only (`downloadUrl`, `url`, `indexUrl`, `extraIndexUrls`) plus known GitHub/Hugging Face/PyPI redirect hosts listed explicitly in `DOWNLOAD_REDIRECT_HOSTS` (`src/ai-addon/download-helpers.js`). `licenseUrl` / `releaseUrl` / docs links must not expand the allowlist. Do **not** wildcard `*.hf.co` / `*.huggingface.co`; when HF/Xet rotates CDN subdomains, add the new host to that set. HF-hosted summary models normally download via bundled Python `huggingface_hub`/`hf_xet` (bypassing the JS allowlist) and still require pinned SHA-256 verification. Arbitrary HTTPS hosts remain blocked.
@@ -15,12 +15,12 @@ This app keeps optional local AI add-on artifacts catalog-driven in `src/ai-addo
 - Prefer official model-owner GGUF artifacts. If unavailable, use established community quantizations with immutable revision URLs.
 - Keep summary runtime flags compatible with the selected catalog model. The current Qwen3.5/llama.cpp path runs with reasoning disabled; parameterize that before adding a non-Qwen3 model that needs different flags.
 - Store artifacts under Electron `userData` via the AI add-on cache helpers so app updates do not remove installed add-ons.
-- Speaker diarization must use the user's own Hugging Face token stored through Electron `safeStorage` only.
+- Pyannote diarization must use the user's own Hugging Face token stored through Electron `safeStorage` only. Speakrs is token-free and must not inspect, decrypt, or store Hugging Face tokens.
 
 ## Runtime Cache Locations
 
 - The canonical location is whatever `src/main.js` logs as `app.getPath("userData")` at startup. AI add-ons are stored below that path in `ai-addons/`.
-- On Windows `npm start`, local testing has placed the app-managed AI add-ons at `%APPDATA%\avanevis\Cache\avanevis\ai-addons`. In that tree, Qwen summaries live under `models\summary`, the llama.cpp runtime lives under the selected summary model's `runtime`, diarization model files live under `models\diarization`, and pyannote/PyTorch dependencies live under `dependencies\diarization`.
+- On Windows `npm start`, local testing has placed the app-managed AI add-ons at `%APPDATA%\avanevis\Cache\avanevis\ai-addons`. In that tree, Qwen summaries live under `models\summary`, the llama.cpp runtime lives under the selected summary model's `runtime`, Speakrs models live under `models\diarization\speakrs\<revision>`, its private ONNX Runtime closure lives under `runtimes\speakrs-ort`, and pyannote/PyTorch dependencies live under `dependencies\diarization`.
 - Packaged Windows installs may resolve the same physical profile path because Windows paths are case-insensitive. Do not delete `ai-addons` when you intend to preserve installed Qwen/diarization setup for the packaged app.
 - Safe cleanup candidates for duplicate downloads are transient caches such as `%LOCALAPPDATA%\pip\cache`, `%LOCALAPPDATA%\Temp\pip-*`, incomplete `*.download` files, and stale Hugging Face/Xet transfer staging directories. These are redownloadable and are not the installed model/runtime cache.
 
@@ -37,6 +37,20 @@ This app keeps optional local AI add-on artifacts catalog-driven in `src/ai-addo
 9. Confirm old artifact directories under `userData/ai-addons/dependencies/diarization` are cleaned when a new dependency artifact is installed.
 10. Confirm actual diarization runs load pyannote from the local Hugging Face cache only after setup; missing or incomplete cache should tell the user to re-run speaker setup.
 11. Run `npm test`, `npm run test:python`, and platform speaker setup smoke tests including cancel during dependency install.
+
+## Updating Speakrs Model-Pack Pins
+
+1. Pin the immutable `avencera/speakrs-models` revision in `src/ai-addon/speakrs-pack-spec.js`; keep `scripts/build-speakrs-model-pack.js`'s binding revision identical.
+2. Update `src/ai-addon/speakrs-model-files.json` only from the exact `speakrs` `required_files` lists and verify every source size and SHA-256.
+3. Build one archive per platform with:
+   - `node scripts/build-speakrs-model-pack.js --platform win32-x64 --source <snapshot-dir> --out <output-dir>`
+   - `node scripts/build-speakrs-model-pack.js --platform darwin-arm64 --source <snapshot-dir> --out <output-dir>`
+4. The builder must preserve nested `.mlmodelc` paths and inject `legal/speakrs-model-pack/ATTRIBUTION.md` plus every complete text under `LICENSES/`. Do not publish a pack if those files are missing.
+5. Publish packs only on a dedicated GitHub model-artifact release, not an AvaNevis application release. Record each exact public URL, byte size, and SHA-256 in `SPEAKRS_MODEL_PACK_ARTIFACTS`; absent metadata must keep production setup fail-closed.
+6. Keep the Windows runtime separate from the model pack. It must use the pinned ONNX Runtime 1.27.1 CUDA 12 archive and NVIDIA runtime/cuFFT wheels, extract only `onnxruntime.dll`, `onnxruntime_providers_shared.dll`, `onnxruntime_providers_cuda.dll`, `cudart64_12.dll`, and `cufft64_11.dll`, and write the integrity manifest used by validation.
+7. Never delete shared CUDA pip packages, Whisper caches, or the packaged `Resources/bin/speakrs-cli`. Speakrs uninstall owns only `models/diarization/speakrs` and `runtimes/speakrs-ort`.
+8. Keep `licenseUrl` / `licenseUrls` metadata accurate. These fields document the MIT, CC-BY-4.0, and Apache-2.0 constituents and must not expand the download allowlist.
+9. Validate archive traversal rejection, per-file model checksums, all five Windows DLLs, cancellation cleanup, token-store isolation, and redacted progress with `npm test`.
 
 ## Updating Summary Model Pins
 

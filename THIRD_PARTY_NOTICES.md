@@ -62,6 +62,24 @@ Users download these artifacts on first use or during explicit setup in Settings
 **Attribution (CC BY 4.0):** When using speaker diarization, credit the model, for example:  
 *Speaker diarization uses [pyannote Speaker Diarization Community-1](https://huggingface.co/pyannote/speaker-diarization-community-1) (CC BY 4.0).*
 
+### Optional speaker diarization — Speakrs model packs
+
+The token-free Speakrs engine downloads a platform model pack from a dedicated
+AvaNevis model-artifact release. The pack is not included in the application
+installer. Each pack contains `ATTRIBUTION.md` and complete license texts; the
+same source notices are installed under
+`Resources/legal/speakrs-model-pack/`.
+
+| Title | Author | Source | License | Changes |
+|-------|--------|--------|---------|---------|
+| `pyannote/segmentation-3.0` | pyannoteAI / CNRS | [original model](https://huggingface.co/pyannote/segmentation-3.0); [pinned repacked source](https://huggingface.co/avencera/speakrs-models/tree/5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f) | MIT; Copyright (c) 2020 CNRS | Converted upstream to ONNX/CoreML and repackaged; weights unmodified by AvaNevis |
+| `wespeaker-voxceleb-resnet34-LM` | WeSpeaker contributors; upstream pyannote/Speakrs conversion authors | [WeSpeaker](https://github.com/wenet-e2e/wespeaker); [pinned repacked source](https://huggingface.co/avencera/speakrs-models/tree/5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f) | CC BY 4.0 | Converted upstream to ONNX/CoreML and repackaged; weights unmodified by AvaNevis |
+| PLDA/VBx parameters from `speaker-diarization-community-1` | pyannoteAI | [original pipeline](https://huggingface.co/pyannote/speaker-diarization-community-1); [pinned repacked source](https://huggingface.co/avencera/speakrs-models/tree/5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f) | CC BY 4.0 | Extracted upstream and repackaged; parameters unmodified by AvaNevis |
+| `speakrs` 0.5.0 | avencera / Praveen Perera | [source](https://github.com/avencera/speakrs/tree/v0.5.0) | Apache-2.0; Copyright 2026 Praveen Perera | AvaNevis selects the offline platform file set and repackages it with notices |
+| ONNX Runtime 1.27.1 CUDA 12 | Microsoft Corporation | [release](https://github.com/microsoft/onnxruntime/releases/tag/v1.27.1) | MIT; Copyright (c) Microsoft Corporation | AvaNevis selectively extracts five required DLLs; binaries unmodified |
+
+Full pack attribution: [legal/speakrs-model-pack/ATTRIBUTION.md](legal/speakrs-model-pack/ATTRIBUTION.md).
+
 ### Optional meeting summaries — Qwen + llama.cpp
 
 | Item | License (typical) | Source |

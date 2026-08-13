@@ -108,6 +108,19 @@ function copyWindowsFfmpegUpstreamLicense(ffmpegExtractRoot) {
   return null;
 }
 
+function copyDirectoryContents(sourceDir, destinationDir) {
+  for (const entry of fs.readdirSync(sourceDir, { withFileTypes: true })) {
+    const sourcePath = path.join(sourceDir, entry.name);
+    const destinationPath = path.join(destinationDir, entry.name);
+    if (entry.isDirectory()) {
+      fs.mkdirSync(destinationPath, { recursive: true });
+      copyDirectoryContents(sourcePath, destinationPath);
+    } else if (entry.isFile()) {
+      copyFileIfExists(sourcePath, destinationPath);
+    }
+  }
+}
+
 function stageLegalBundle(targetDir = LEGAL_DIR) {
   fs.mkdirSync(targetDir, { recursive: true });
 
@@ -116,13 +129,7 @@ function stageLegalBundle(targetDir = LEGAL_DIR) {
 
   const repoLegalDir = path.join(REPO_ROOT, 'legal');
   if (fs.existsSync(repoLegalDir)) {
-    for (const entry of fs.readdirSync(repoLegalDir, { withFileTypes: true })) {
-      if (!entry.isFile()) {
-        continue;
-      }
-
-      copyFileIfExists(path.join(repoLegalDir, entry.name), path.join(targetDir, entry.name));
-    }
+    copyDirectoryContents(repoLegalDir, targetDir);
   }
 
   writeFfmpegComplianceManifest(targetDir);

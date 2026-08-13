@@ -9,11 +9,18 @@ const {
   buildAiAddonStatus,
   getAiAddonPaths,
   getDiarizationDependencyArtifactForPlatform,
+  getSpeakrsSetupArtifactsForPlatform,
   getSummaryArtifactForPlatform,
   getSummaryRuntimeArtifactForPlatform,
   loadAiAddonManifest,
   normalizeAiAddonManifest,
 } = require('../ai-addon-state');
+const {
+  SPEAKRS_CUDA_RUNTIME_DLL_NAMES,
+  SPEAKRS_MODEL_PACK_REVISION,
+  SPEAKRS_ORT_DLL_NAMES,
+  resolveContainedSpeakrsPath,
+} = require('./speakrs-pack-spec');
 const { getDiarizationTokenStatus, isAllowedDownloadUrl } = require('./download-helpers');
 
 const HASH_YIELD_BYTES = 8 * 1024 * 1024;
@@ -73,6 +80,58 @@ function getSummaryModelCacheDir(userDataDir, modelId) {
 
 function getDiarizationModelCacheDir(userDataDir, modelId) {
   return path.join(getAiAddonPaths(userDataDir).diarizationModelCacheDir, safePathSegment(modelId));
+}
+
+function getSpeakrsModelCacheDir(userDataDir) {
+  return getAiAddonPaths(userDataDir).speakrsModelCacheDir;
+}
+
+function getSpeakrsOrtRuntimeDir(userDataDir) {
+  return getAiAddonPaths(userDataDir).speakrsOrtRuntimeDir;
+}
+
+function getSpeakrsModelRevisionDir(userDataDir, revision = SPEAKRS_MODEL_PACK_REVISION) {
+  return path.join(getSpeakrsModelCacheDir(userDataDir), safePathSegment(revision));
+}
+
+function getSpeakrsSourceFilePath(userDataDir, file, revision = SPEAKRS_MODEL_PACK_REVISION) {
+  if (!file || !file.path) {
+    return null;
+  }
+  return resolveContainedSpeakrsPath(getSpeakrsModelRevisionDir(userDataDir, revision), file.path);
+}
+
+function resolveSpeakrsCliPath({
+  platform = process.platform,
+  env = process.env,
+  fsModule = fs,
+  resourcesPath = process.resourcesPath,
+  projectRoot = path.join(__dirname, '..', '..'),
+} = {}) {
+  const existsSync = bindFsMethod(fsModule, 'existsSync');
+  if (!existsSync) {
+    return null;
+  }
+  const executableName = platform === 'win32' ? 'speakrs-cli.exe' : 'speakrs-cli';
+  const packaged = env?.AVANEVIS_PACKAGED === '1';
+  const packagedCandidate = resourcesPath ? path.join(resourcesPath, 'bin', executableName) : null;
+  if (packaged) {
+    return packagedCandidate && existsSync(packagedCandidate) ? packagedCandidate : null;
+  }
+  const candidates = [];
+  if (env && typeof env.SPEAKRS_CLI_PATH === 'string' && env.SPEAKRS_CLI_PATH.trim()) {
+    candidates.push(env.SPEAKRS_CLI_PATH.trim());
+  }
+  if (packagedCandidate) {
+    candidates.push(packagedCandidate);
+  }
+  if (projectRoot) {
+    candidates.push(path.join(projectRoot, 'native', 'speakrs-cli', 'target', 'release', executableName));
+  }
+  for (const pathDir of String(env?.PATH || '').split(path.delimiter).filter(Boolean)) {
+    candidates.push(path.join(pathDir, executableName));
+  }
+  return candidates.find((candidate) => existsSync(candidate)) || null;
 }
 
 function getDiarizationDependencyDir(userDataDir, artifact) {
@@ -271,26 +330,53 @@ function checkDiarizationCache({ userDataDir, modelId }) {
   };
 }
 
-function buildDiarizationStorageFootprint({ userDataDir, dependencyCache, fsModule = fs, includeSizes = false } = {}) {
-  const modelCacheDir = getAiAddonPaths(userDataDir).diarizationModelCacheDir;
+function buildDiarizationStorageFootprint({
+  userDataDir,
+  dependencyCache,
+  packCache,
+  runtimeCache,
+  engine = 'pyannote',
+  fsModule = fs,
+  includeSizes = false,
+} = {}) {
+  const addonPaths = getAiAddonPaths(userDataDir);
+  const modelCacheDir = engine === 'speakrs'
+    ? addonPaths.speakrsModelCacheDir
+    : addonPaths.diarizationModelCacheDir;
   const dependencyDir = dependencyCache && dependencyCache.dependencyDir;
+  const runtimeDir = engine === 'speakrs' ? addonPaths.speakrsOrtRuntimeDir : null;
   const modelCacheBytes = includeSizes ? getDirectorySizeBytes(modelCacheDir, fsModule) : null;
   const dependencyBytes = includeSizes ? getDirectorySizeBytes(dependencyDir, fsModule) : null;
+  const runtimeBytes = includeSizes ? getDirectorySizeBytes(runtimeDir, fsModule) : null;
   const estimatedDependencyDownloadBytes = dependencyCache?.artifact?.estimatedDownloadBytes || null;
-  const runtimeFamilies = dependencyCache?.artifact?.runtimeFamilies || [];
-  const estimatedInstalledBytes = dependencyCache?.installed && estimatedDependencyDownloadBytes
-    ? estimatedDependencyDownloadBytes
+  const estimatedPackBytes = Array.isArray(packCache?.artifact?.modelFiles)
+    ? packCache.artifact.modelFiles.reduce((total, file) => total + (Number(file.sizeBytes) || 0), 0)
     : null;
+  const estimatedRuntimeBytes = Array.isArray(runtimeCache?.artifact?.runtimeArtifacts)
+    ? runtimeCache.artifact.runtimeArtifacts.reduce((total, file) => total + (Number(file.sizeBytes) || 0), 0)
+    : null;
+  const runtimeFamilies = engine === 'speakrs'
+    ? ['speakrs-ort']
+    : (dependencyCache?.artifact?.runtimeFamilies || []);
+  const estimatedInstalledBytes = engine === 'speakrs'
+    ? (estimatedPackBytes || 0) + (estimatedRuntimeBytes || 0) || null
+    : (dependencyCache?.installed && estimatedDependencyDownloadBytes ? estimatedDependencyDownloadBytes : null);
 
   return {
     modelCacheDir,
     dependencyDir,
+    runtimeDir,
     modelCacheBytes,
     dependencyBytes,
-    installedBytes: includeSizes ? (modelCacheBytes || 0) + (dependencyBytes || 0) : null,
+    runtimeBytes,
+    installedBytes: includeSizes
+      ? (modelCacheBytes || 0) + (dependencyBytes || 0) + (runtimeBytes || 0)
+      : null,
     installedBytesAccuracy: includeSizes ? 'actual' : 'notScanned',
     estimatedInstalledBytes,
-    estimatedDownloadBytes: estimatedDependencyDownloadBytes,
+    estimatedDownloadBytes: engine === 'speakrs'
+      ? (estimatedPackBytes || 0) + (estimatedRuntimeBytes || 0) || null
+      : estimatedDependencyDownloadBytes,
     runtimeFamilies,
   };
 }
@@ -468,6 +554,338 @@ function checkDiarizationDependencyCache({
     markerPath,
     marker,
   };
+}
+
+const speakrsChecksumFingerprintCache = new Map();
+
+function getArtifactFingerprint(filePath, fsModule = fs) {
+  try {
+    const statSync = bindFsMethod(fsModule, 'statSync');
+    if (!statSync) {
+      return null;
+    }
+    const stat = statSync(filePath);
+    if (!stat) {
+      return null;
+    }
+    return `${filePath}\0${Number(stat.size)}\0${Number(stat.mtimeMs)}`;
+  } catch (_error) {
+    return null;
+  }
+}
+
+async function checkSpeakrsModelCache({
+  userDataDir,
+  platform = process.platform,
+  arch = process.arch,
+  fsModule = fs,
+  catalog = AI_MODEL_CATALOG,
+  verifyChecksum = false,
+  verifyChecksumIfChanged = false,
+} = {}) {
+  const artifact = getSpeakrsSetupArtifactsForPlatform(platform, arch, catalog);
+  const modelPack = artifact?.modelPack;
+  const revision = artifact?.revision || SPEAKRS_MODEL_PACK_REVISION;
+  const modelCacheDir = getSpeakrsModelCacheDir(userDataDir);
+  const revisionDir = getSpeakrsModelRevisionDir(userDataDir, revision);
+  const existsSync = bindFsMethod(fsModule, 'existsSync');
+  const files = artifact?.modelFiles || [];
+  const missing = [];
+  const sizeMismatches = [];
+  let unsafePathError = null;
+  for (const file of files) {
+    let filePath;
+    try {
+      filePath = getSpeakrsSourceFilePath(userDataDir, file, revision);
+    } catch (error) {
+      unsafePathError = error;
+      break;
+    }
+    if (!filePath || !existsSync?.(filePath)) {
+      missing.push(file.path);
+      continue;
+    }
+    const actualSize = getFileSizeBytes(filePath, fsModule);
+    if (Number(file.sizeBytes) && actualSize !== Number(file.sizeBytes)) {
+      sizeMismatches.push(file.path);
+    }
+  }
+  const installed = !unsafePathError && files.length > 0 && missing.length === 0 && sizeMismatches.length === 0;
+  const partial = Boolean(revisionDir && existsSync && existsSync(revisionDir) && !installed);
+  const base = {
+    supported: Boolean(artifact),
+    installed,
+    partial,
+    valid: false,
+    checksumStatus: 'notChecked',
+    validationStatus: installed ? 'installed' : partial ? 'notConfigured' : 'notConfigured',
+    reason: unsafePathError?.message || (installed ? null : 'Speakrs model pack is not installed.'),
+    modelCacheDir,
+    revisionDir,
+    revision,
+    expectedFiles: files.length,
+    missingFiles: missing,
+    artifact,
+  };
+
+  if (unsafePathError) {
+    return {
+      ...base,
+      supported: false,
+      validationStatus: 'error',
+    };
+  }
+  const modelPackPinned = Boolean(
+    modelPack
+    && modelPack.fileName
+    && modelPack.archiveFormat
+    && modelPack.downloadUrl
+    && isAllowedDownloadUrl(modelPack.downloadUrl)
+    && isPinnedSha256(modelPack.sha256)
+    && Number(modelPack.sizeBytes) > 0,
+  );
+  if (!artifact || files.length === 0 || !modelPackPinned) {
+    return {
+      ...base,
+      supported: false,
+      valid: false,
+      reason: 'No complete pinned Speakrs model-pack archive is configured for this platform.',
+      validationStatus: 'unsupported',
+    };
+  }
+  if (!installed) {
+    return base;
+  }
+  if (!verifyChecksum) {
+    return {
+      ...base,
+      valid: true,
+      validationStatus: 'installed',
+    };
+  }
+
+  for (const file of files) {
+    const filePath = getSpeakrsSourceFilePath(userDataDir, file, revision);
+    const fingerprint = verifyChecksumIfChanged ? getArtifactFingerprint(filePath, fsModule) : null;
+    if (fingerprint) {
+      const cached = speakrsChecksumFingerprintCache.get(fingerprint);
+      if (cached && cached.expectedSha256 === file.sha256 && cached.actualSha256 === file.sha256) {
+        continue;
+      }
+    }
+    const actualSha256 = await hashFileSha256(filePath, fsModule);
+    if (actualSha256 !== file.sha256) {
+      if (fingerprint) {
+        speakrsChecksumFingerprintCache.delete(fingerprint);
+      }
+      return {
+        ...base,
+        valid: false,
+        checksumStatus: 'mismatch',
+        validationStatus: 'error',
+        reason: `Speakrs model file checksum does not match the pinned checksum: ${file.path}.`,
+        actualSha256,
+      };
+    }
+    if (fingerprint) {
+      speakrsChecksumFingerprintCache.set(fingerprint, {
+        expectedSha256: file.sha256,
+        actualSha256,
+      });
+    }
+  }
+
+  return {
+    ...base,
+    valid: true,
+    checksumStatus: 'match',
+    validationStatus: 'ready',
+    reason: null,
+  };
+}
+
+function findNamedFiles(rootDir, fileNames, fsModule = fs) {
+  const existsSync = bindFsMethod(fsModule, 'existsSync');
+  const readdirSync = bindFsMethod(fsModule, 'readdirSync');
+  const statSync = bindFsMethod(fsModule, 'statSync');
+  const wanted = new Set(fileNames);
+  const found = new Map();
+  if (!rootDir || !existsSync || !readdirSync || !statSync || !existsSync(rootDir) || wanted.size === 0) {
+    return found;
+  }
+  const queue = [rootDir];
+  while (queue.length && found.size < wanted.size) {
+    const currentDir = queue.shift();
+    for (const entry of readdirSync(currentDir, { withFileTypes: true })) {
+      const entryPath = path.join(currentDir, entry.name);
+      const isDirectory = typeof entry.isDirectory === 'function'
+        ? entry.isDirectory()
+        : statSync(entryPath).isDirectory();
+      if (isDirectory) {
+        queue.push(entryPath);
+      } else if (wanted.has(entry.name)) {
+        found.set(entry.name, entryPath);
+      }
+    }
+  }
+  return found;
+}
+
+async function checkSpeakrsRuntimeCache({
+  userDataDir,
+  platform = process.platform,
+  arch = process.arch,
+  fsModule = fs,
+  catalog = AI_MODEL_CATALOG,
+  verifyChecksum = false,
+} = {}) {
+  const artifact = getSpeakrsSetupArtifactsForPlatform(platform, arch, catalog);
+  const runtimeDir = getSpeakrsOrtRuntimeDir(userDataDir);
+  const existsSync = bindFsMethod(fsModule, 'existsSync');
+  const readFileSync = bindFsMethod(fsModule, 'readFileSync');
+  const runtimeArtifacts = artifact?.runtimeArtifacts || [];
+  const requiresWindowsRuntime = platform === 'win32' && arch === 'x64';
+  if (!requiresWindowsRuntime) {
+    return {
+      supported: true,
+      installed: true,
+      partial: false,
+      valid: true,
+      skipped: true,
+      validationStatus: 'ready',
+      reason: null,
+      runtimeDir,
+      artifact,
+    };
+  }
+  if (!artifact || runtimeArtifacts.length === 0 || runtimeArtifacts.some((entry) => (
+    !entry.id || !entry.fileName || !isPinnedSha256(entry.sha256) || !Number(entry.sizeBytes)
+  ))) {
+    return {
+      supported: false,
+      installed: false,
+      partial: Boolean(runtimeDir && existsSync?.(runtimeDir)),
+      valid: false,
+      skipped: false,
+      validationStatus: 'unsupported',
+      reason: 'No complete Speakrs ONNX Runtime artifact is configured for Windows.',
+      runtimeDir,
+      missingFiles: [...SPEAKRS_ORT_DLL_NAMES, ...SPEAKRS_CUDA_RUNTIME_DLL_NAMES],
+      artifact,
+    };
+  }
+
+  const expectedNames = [
+    ...SPEAKRS_ORT_DLL_NAMES,
+    ...SPEAKRS_CUDA_RUNTIME_DLL_NAMES,
+  ];
+  const runtimeManifestPath = path.join(runtimeDir, 'install.json');
+  let runtimeManifest = null;
+  try {
+    runtimeManifest = existsSync?.(runtimeManifestPath) && readFileSync
+      ? JSON.parse(readFileSync(runtimeManifestPath, 'utf8'))
+      : null;
+  } catch (_error) {
+    runtimeManifest = null;
+  }
+  const expectedArtifactPins = runtimeArtifacts.map((entry) => ({
+    id: entry.id,
+    sha256: entry.sha256,
+  }));
+  const manifestPinsMatch = JSON.stringify(runtimeManifest?.artifacts || null) === JSON.stringify(expectedArtifactPins);
+  const missing = [];
+  const invalid = [];
+  for (const name of expectedNames) {
+    const filePath = path.join(runtimeDir, name);
+    const expectedFile = runtimeManifest?.files?.[name];
+    if (!existsSync?.(filePath)) {
+      missing.push(name);
+      continue;
+    }
+    const actualSize = getFileSizeBytes(filePath, fsModule);
+    if (
+      actualSize <= 0
+      || !expectedFile
+      || Number(expectedFile.sizeBytes) <= 0
+      || actualSize !== Number(expectedFile.sizeBytes)
+      || !isPinnedSha256(expectedFile.sha256)
+    ) {
+      invalid.push(name);
+      continue;
+    }
+    if (verifyChecksum && await hashFileSha256(filePath, fsModule) !== expectedFile.sha256) {
+      invalid.push(name);
+    }
+  }
+  const installed = manifestPinsMatch && missing.length === 0 && invalid.length === 0;
+  const partial = Boolean(runtimeDir && existsSync && existsSync(runtimeDir) && !installed);
+  return {
+    supported: true,
+    installed,
+    partial,
+    valid: installed,
+    skipped: false,
+    validationStatus: installed ? 'ready' : (invalid.length || (runtimeManifest && !manifestPinsMatch)) ? 'error' : 'notConfigured',
+    reason: installed
+      ? null
+      : invalid.length || (runtimeManifest && !manifestPinsMatch)
+        ? 'Speakrs ONNX Runtime files failed integrity validation.'
+        : 'Speakrs ONNX Runtime is not installed.',
+    runtimeDir,
+    missingFiles: missing,
+    invalidFiles: invalid,
+    runtimeManifestPath,
+    runtimeManifest,
+    artifact,
+  };
+}
+
+function hasSpeakrsLocalState({ userDataDir, packCache, runtimeCache, fsModule = fs } = {}) {
+  if (packCache?.installed || packCache?.partial || runtimeCache?.installed || runtimeCache?.partial) {
+    return true;
+  }
+  const existsSync = bindFsMethod(fsModule, 'existsSync');
+  const modelDir = getSpeakrsModelCacheDir(userDataDir);
+  const runtimeDir = getSpeakrsOrtRuntimeDir(userDataDir);
+  return Boolean(existsSync && ((modelDir && existsSync(modelDir)) || (runtimeDir && existsSync(runtimeDir))));
+}
+
+function hasPyannoteLocalState({ userDataDir, dependencyCache, tokenStatus, fsModule = fs } = {}) {
+  if (dependencyCache?.installed || dependencyCache?.partial || tokenStatus?.hasToken) {
+    return true;
+  }
+  const existsSync = bindFsMethod(fsModule, 'existsSync');
+  const paths = getAiAddonPaths(userDataDir);
+  const cacheRoot = paths.diarizationModelCacheDir;
+  return Boolean(existsSync && [
+    paths.diarizationDependencyCacheDir,
+    path.join(cacheRoot, 'hub'),
+    path.join(cacheRoot, 'xet'),
+    path.join(cacheRoot, '.locks'),
+    getPyannoteTokenPath(userDataDir),
+  ].some((candidate) => candidate && existsSync(candidate)));
+}
+
+function getSpeakrsUninstallPaths(userDataDir) {
+  return [
+    getSpeakrsModelCacheDir(userDataDir),
+    getSpeakrsOrtRuntimeDir(userDataDir),
+  ];
+}
+
+function getPyannoteTokenPath(userDataDir) {
+  return path.join(getAiAddonPaths(userDataDir).rootDir, 'tokens', 'diarization-huggingface-token.bin');
+}
+
+function getPyannoteUninstallPaths(userDataDir) {
+  const paths = getAiAddonPaths(userDataDir);
+  const cacheRoot = paths.diarizationModelCacheDir;
+  return [
+    paths.diarizationDependencyCacheDir,
+    path.join(cacheRoot, 'hub'),
+    path.join(cacheRoot, 'xet'),
+    path.join(cacheRoot, '.locks'),
+  ];
 }
 
 async function hashFileSha256(filePath, fsModule = fs) {
@@ -715,9 +1133,19 @@ async function checkSummaryModelCache({
   };
 }
 
-function deriveDiarizationStatus(featureStatus, tokenStatus, dependencyCache) {
+function deriveDiarizationStatus(featureStatus, tokenStatus, dependencyCache, packCache, runtimeCache, cliPresent) {
   if (!featureStatus.availability.supported) {
     return { ...featureStatus, status: 'unsupported' };
+  }
+  if (featureStatus.engine === 'speakrs') {
+    if (featureStatus.status === 'ready' && (!packCache?.valid || !runtimeCache?.valid || !cliPresent)) {
+      return {
+        ...featureStatus,
+        status: 'error',
+        error: packCache?.reason || runtimeCache?.reason || 'Speakrs CLI is not available.',
+      };
+    }
+    return featureStatus;
   }
   if (featureStatus.status === 'ready' && (!dependencyCache.installed || dependencyCache.valid === false)) {
     return {
@@ -768,6 +1196,8 @@ async function checkAiAddonSetupStatus({
   verifyChecksumsIfChanged = false,
   includeStorageSizes = false,
   checkTokenEncryption = false,
+  env = process.env,
+  tokenStatusReader = getDiarizationTokenStatus,
 } = {}) {
   const { manifest, readError } = loadAiAddonManifest({
     userDataDir,
@@ -776,13 +1206,37 @@ async function checkAiAddonSetupStatus({
     catalog,
   });
   const status = buildAiAddonStatus({ userDataDir, platform, arch, manifest, readError, catalog });
-  const tokenStatus = getDiarizationTokenStatus({
-    userDataDir,
-    safeStorage,
-    fsModule,
-    checkEncryptionAvailability: checkTokenEncryption,
-  });
+  const tokenStatus = status.features.diarization.engine === 'pyannote'
+    ? tokenStatusReader({
+      userDataDir,
+      safeStorage,
+      fsModule,
+      checkEncryptionAvailability: checkTokenEncryption,
+    })
+    : {
+      hasToken: false,
+      encryptionAvailable: null,
+    };
   const diarizationDependencyCache = checkDiarizationDependencyCache({ userDataDir, platform, arch, fsModule, catalog });
+  const speakrsPackCache = await checkSpeakrsModelCache({
+    userDataDir,
+    platform,
+    arch,
+    fsModule,
+    catalog,
+    verifyChecksum: verifyChecksums,
+    verifyChecksumIfChanged: Boolean(verifyChecksums && verifyChecksumsIfChanged),
+  });
+  const speakrsRuntimeCache = await checkSpeakrsRuntimeCache({
+    userDataDir,
+    platform,
+    arch,
+    fsModule,
+    catalog,
+    verifyChecksum: verifyChecksums,
+  });
+  const speakrsCliPath = resolveSpeakrsCliPath({ platform, env, fsModule });
+  const speakrsCliPresent = Boolean(speakrsCliPath);
   let summaryCache = await checkSummaryModelCache({
     userDataDir,
     platform,
@@ -814,18 +1268,46 @@ async function checkAiAddonSetupStatus({
     fsModule,
     catalog,
   });
-  const diarization = deriveDiarizationStatus(status.features.diarization, tokenStatus, diarizationDependencyCache);
+  const diarization = deriveDiarizationStatus(
+    status.features.diarization,
+    tokenStatus,
+    diarizationDependencyCache,
+    speakrsPackCache,
+    speakrsRuntimeCache,
+    speakrsCliPresent,
+  );
   const summary = deriveSummaryStatus(status.features.summary, summaryCache, summaryRuntimeCache);
+  const speakrsReady = Boolean(
+    diarization.engine === 'speakrs'
+    && diarization.status === 'ready'
+    && speakrsPackCache.valid
+    && speakrsRuntimeCache.valid
+    && speakrsCliPresent,
+  );
+  const pyannoteReady = Boolean(
+    diarization.engine !== 'speakrs'
+    && diarization.status === 'ready'
+    && diarizationDependencyCache.valid,
+  );
   const diarizationWithStorage = {
     ...diarization,
+    engine: diarization.engine || 'speakrs',
+    recommended: diarization.engine === 'speakrs' && platform === 'darwin' && arch === 'arm64',
     tokenStatus,
     cache: checkDiarizationCache({ userDataDir, modelId: diarization.modelId }),
+    packCache: speakrsPackCache,
+    runtimeCache: speakrsRuntimeCache,
+    cliPresent: speakrsCliPresent,
+    cliPath: speakrsCliPath,
     dependencyCache: diarizationDependencyCache,
-    setupComplete: diarization.status === 'ready' && diarizationDependencyCache.valid,
+    setupComplete: speakrsReady || pyannoteReady,
   };
   diarizationWithStorage.storage = buildDiarizationStorageFootprint({
     userDataDir,
     dependencyCache: diarizationDependencyCache,
+    packCache: speakrsPackCache,
+    runtimeCache: speakrsRuntimeCache,
+    engine: diarizationWithStorage.engine,
     fsModule,
     includeSizes: includeStorageSizes,
   });
@@ -890,7 +1372,7 @@ function createValidation(status, message, now = () => new Date().toISOString())
   };
 }
 
-function buildFeatureUpdates({ status, modelId, speakerCount, artifactId, profile, validation, error }) {
+function buildFeatureUpdates({ status, modelId, engine, speakerCount, artifactId, profile, validation, error }) {
   const updates = {
     status,
     lastValidation: validation,
@@ -899,6 +1381,9 @@ function buildFeatureUpdates({ status, modelId, speakerCount, artifactId, profil
 
   if (modelId) {
     updates.modelId = modelId;
+  }
+  if (engine) {
+    updates.engine = engine;
   }
   if (speakerCount !== undefined) {
     updates.speakerCount = speakerCount;
@@ -921,6 +1406,17 @@ module.exports = {
   checkSummaryRuntimeCache,
   getDiarizationDependencySitePackagesDir,
   getDiarizationModelCacheDir,
+  getSpeakrsModelCacheDir,
+  getSpeakrsModelRevisionDir,
+  getSpeakrsOrtRuntimeDir,
+  getSpeakrsSourceFilePath,
+  getSpeakrsUninstallPaths,
+  getPyannoteUninstallPaths,
+  hasSpeakrsLocalState,
+  hasPyannoteLocalState,
+  resolveSpeakrsCliPath,
+  checkSpeakrsModelCache,
+  checkSpeakrsRuntimeCache,
   getSummaryArtifactPath,
   getSummaryModelCacheDir,
   getSummaryRuntimeArchivePath,

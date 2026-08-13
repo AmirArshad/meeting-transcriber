@@ -1,10 +1,22 @@
 const fs = require('fs');
 const path = require('path');
 
+const {
+  PYANNOTE_DIARIZATION_MODEL_ID,
+  SPEAKRS_DIARIZATION_ENGINES,
+  SPEAKRS_DIARIZATION_MODEL_ID,
+  SPEAKRS_MODEL_PACK_REVISION,
+  SPEAKRS_MODEL_PACK_REVISION_SHORT,
+  SPEAKRS_MODELS_REPO,
+  getSpeakrsModelPackArtifact,
+  getSpeakrsRuntimeArtifacts,
+} = require('./ai-addon/speakrs-pack-spec');
+
 const MANIFEST_VERSION = 1;
 const DEFAULT_SUMMARY_PROFILE = 'balanced';
-const DEFAULT_DIARIZATION_MODEL_ID = 'pyannote/speaker-diarization-community-1';
+const DEFAULT_DIARIZATION_MODEL_ID = SPEAKRS_DIARIZATION_MODEL_ID;
 const DEFAULT_SUMMARY_MODEL_ID = 'qwen3.5-9b-q4-k-m';
+const DIARIZATION_ENGINE_SET = new Set(SPEAKRS_DIARIZATION_ENGINES);
 
 const AI_ADDON_STATUS_STATES = Object.freeze([
   'notConfigured',
@@ -291,7 +303,53 @@ const AI_MODEL_CATALOG = deepFreeze({
     dependencyArtifacts: DIARIZATION_DEPENDENCY_ARTIFACTS,
     models: [
       {
-        id: DEFAULT_DIARIZATION_MODEL_ID,
+        id: SPEAKRS_DIARIZATION_MODEL_ID,
+        engine: 'speakrs',
+        label: 'Speaker identification (speakrs)',
+        provider: 'huggingface',
+        license: 'MIT + CC-BY-4.0 + Apache-2.0 (see pack ATTRIBUTION.md)',
+        licenseUrl: 'https://creativecommons.org/licenses/by/4.0/',
+        licenseUrls: {
+          segmentation: 'https://github.com/pyannote/pyannote-audio/blob/develop/LICENSE',
+          embeddingAndPlda: 'https://creativecommons.org/licenses/by/4.0/',
+          speakrs: 'https://github.com/avencera/speakrs/blob/v0.5.0/LICENSE',
+          onnxRuntime: 'https://github.com/microsoft/onnxruntime/blob/v1.27.1/LICENSE',
+        },
+        gated: false,
+        tokenRequired: false,
+        termsRequired: false,
+        runtime: {
+          type: 'native-cli',
+          executableName: 'speakrs-cli',
+          modeByPlatform: {
+            'win32-x64': 'cuda',
+            'darwin-arm64': 'coreml',
+          },
+        },
+        packRevision: SPEAKRS_MODEL_PACK_REVISION,
+        packRevisionShort: SPEAKRS_MODEL_PACK_REVISION_SHORT,
+        sourceRepo: SPEAKRS_MODELS_REPO,
+        packArtifacts: {
+          'win32-x64': [
+            {
+              ...getSpeakrsModelPackArtifact('win32-x64'),
+            },
+            ...getSpeakrsRuntimeArtifacts('win32-x64'),
+          ],
+          'darwin-arm64': [
+            {
+              ...getSpeakrsModelPackArtifact('darwin-arm64'),
+            },
+          ],
+        },
+        supportedPlatforms: {
+          win32: { acceleration: 'cuda', status: 'enabled' },
+          darwin: { acceleration: 'coreml', arch: 'arm64', status: 'enabled' },
+        },
+      },
+      {
+        id: PYANNOTE_DIARIZATION_MODEL_ID,
+        engine: 'pyannote',
         label: 'pyannote Speaker Diarization Community-1',
         provider: 'huggingface',
         license: 'cc-by-4.0',
@@ -414,7 +472,57 @@ function getModelById(feature, modelId, catalog = AI_MODEL_CATALOG) {
 function getDiarizationModelRef(modelId, catalog = AI_MODEL_CATALOG) {
   const resolvedModelId = resolveModelId('diarization', modelId, catalog);
   const model = getModelById('diarization', resolvedModelId, catalog);
-  return model && model.runtime && model.runtime.modelRef ? model.runtime.modelRef : null;
+  if (!model || !model.runtime) {
+    return null;
+  }
+  if (model.runtime.modelRef) {
+    return model.runtime.modelRef;
+  }
+  if (model.runtime.type === 'native-cli') {
+    return resolvedModelId;
+  }
+  return null;
+}
+
+function getSpeakrsModelFromCatalog(catalog = AI_MODEL_CATALOG) {
+  return getModelById('diarization', SPEAKRS_DIARIZATION_MODEL_ID, catalog)
+    || getModelList('diarization', catalog).find((model) => model.engine === 'speakrs' || model.runtime?.type === 'native-cli')
+    || null;
+}
+
+function getSpeakrsSetupArtifactsForPlatform(platform = process.platform, arch = process.arch, catalog = AI_MODEL_CATALOG) {
+  const model = getSpeakrsModelFromCatalog(catalog);
+  if (!model) {
+    return null;
+  }
+  const key = `${platform}-${arch}`;
+  const packEntries = Array.isArray(model.packArtifacts && model.packArtifacts[key])
+    ? model.packArtifacts[key]
+    : [];
+  const modelPack = packEntries.find((entry) => entry.kind === 'model-pack') || null;
+  const modelFiles = Array.isArray(modelPack?.requiredFiles)
+    ? modelPack.requiredFiles.map((file) => ({ ...file }))
+    : [];
+  const runtimeArtifacts = packEntries
+    .filter((entry) => entry.kind === 'ort-archive' || entry.kind === 'cuda-runtime-wheel' || entry.kind === 'cufft-wheel')
+    .map((entry) => ({
+      ...entry,
+      keepFileNames: Array.isArray(entry.keepFileNames) ? [...entry.keepFileNames] : [],
+    }));
+
+  return {
+    modelId: model.id,
+    engine: 'speakrs',
+    revision: model.packRevision || SPEAKRS_MODEL_PACK_REVISION,
+    runtime: model.runtime ? { ...model.runtime, modeByPlatform: { ...(model.runtime.modeByPlatform || {}) } } : null,
+    modelPack: modelPack ? {
+      ...modelPack,
+      requiredFiles: modelFiles.map((file) => ({ ...file })),
+    } : null,
+    modelFiles,
+    runtimeArtifacts,
+    packEntries: packEntries.map((entry) => ({ ...entry })),
+  };
 }
 
 function getSummaryArtifactForPlatform(modelId, platform = process.platform, arch = process.arch, catalog = AI_MODEL_CATALOG) {
@@ -530,12 +638,67 @@ function normalizeSummaryProfile(value) {
   return SUMMARY_PROFILE_IDS.has(value) ? value : DEFAULT_SUMMARY_PROFILE;
 }
 
+function getCatalogDiarizationEngine(model) {
+  if (!model) {
+    return null;
+  }
+  if (DIARIZATION_ENGINE_SET.has(model.engine)) {
+    return model.engine;
+  }
+  if (model.runtime?.type === 'native-cli') {
+    return 'speakrs';
+  }
+  return 'pyannote';
+}
+
+function getDiarizationModelForEngine(engine, catalog = AI_MODEL_CATALOG) {
+  return getModelList('diarization', catalog)
+    .find((model) => getCatalogDiarizationEngine(model) === engine) || null;
+}
+
+function normalizeDiarizationSelection(state, catalog = AI_MODEL_CATALOG) {
+  const requestedEngine = typeof state.engine === 'string' ? state.engine.trim().toLowerCase() : '';
+  const requestedModelId = typeof state.modelId === 'string' && state.modelId.trim()
+    ? state.modelId.trim()
+    : null;
+  const requestedModel = requestedModelId
+    ? getModelById('diarization', requestedModelId, catalog)
+    : null;
+  const requestedModelEngine = getCatalogDiarizationEngine(requestedModel);
+  const hasRequestedEngine = DIARIZATION_ENGINE_SET.has(requestedEngine)
+    && Boolean(getDiarizationModelForEngine(requestedEngine, catalog));
+
+  if (hasRequestedEngine) {
+    return {
+      engine: requestedEngine,
+      modelId: requestedModel && requestedModelEngine === requestedEngine
+        ? requestedModel.id
+        : getDiarizationModelForEngine(requestedEngine, catalog).id,
+    };
+  }
+  if (requestedModel && requestedModelEngine) {
+    return { engine: requestedModelEngine, modelId: requestedModel.id };
+  }
+
+  const defaultModelId = getDefaultModelId('diarization', catalog);
+  const defaultModel = getModelById('diarization', defaultModelId, catalog)
+    || getModelList('diarization', catalog)[0]
+    || null;
+  const defaultEngine = getCatalogDiarizationEngine(defaultModel) || 'speakrs';
+  return {
+    engine: defaultEngine,
+    modelId: defaultModel?.id || defaultModelId,
+  };
+}
+
 function normalizeDiarizationState(value, catalog = AI_MODEL_CATALOG) {
   const state = asPlainObject(value);
+  const selection = normalizeDiarizationSelection(state, catalog);
 
   return {
     status: normalizeStatus(state.status),
-    modelId: resolveModelId('diarization', state.modelId, catalog),
+    engine: selection.engine,
+    modelId: selection.modelId,
     speakerCount: normalizeSpeakerCount(state.speakerCount),
     lastValidation: normalizeLastValidation(state.lastValidation),
     error: normalizeNullableString(state.error),
@@ -580,6 +743,8 @@ function getAiAddonPaths(userDataDir) {
     dependencyCacheDir,
     diarizationModelCacheDir: path.join(modelCacheDir, 'diarization'),
     diarizationDependencyCacheDir: path.join(dependencyCacheDir, 'diarization'),
+    speakrsModelCacheDir: path.join(modelCacheDir, 'diarization', 'speakrs'),
+    speakrsOrtRuntimeDir: path.join(rootDir, 'runtimes', 'speakrs-ort'),
     summaryModelCacheDir: path.join(modelCacheDir, 'summary'),
   };
 }
@@ -734,6 +899,8 @@ module.exports = {
   AI_MODEL_CATALOG,
   CURATED_AI_MODELS,
   DEFAULT_DIARIZATION_MODEL_ID,
+  PYANNOTE_DIARIZATION_MODEL_ID,
+  SPEAKRS_DIARIZATION_MODEL_ID,
   DEFAULT_SUMMARY_MODEL_ID,
   DEFAULT_SUMMARY_PROFILE,
   DIARIZATION_DEPENDENCY_ARTIFACTS,
@@ -748,6 +915,7 @@ module.exports = {
   getDiarizationAvailability,
   getDiarizationDependencyArtifactForPlatform,
   getDiarizationModelRef,
+  getSpeakrsSetupArtifactsForPlatform,
   getModelById,
   getModelList,
   getSummaryArtifactForPlatform,

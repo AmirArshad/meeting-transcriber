@@ -27,27 +27,65 @@ function extractZipArchive(archivePath, destinationDir) {
   zip.extractAllTo(resolvedDestination, true);
 }
 
-function runArchiveExtractionInWorker(workerFileName, workerData, label = 'Runtime archive') {
+function runArchiveExtractionInWorker(
+  workerFileName,
+  workerData,
+  label = 'Runtime archive',
+  cancelSignal,
+  workerFactory = (workerPath, options) => new Worker(workerPath, options),
+) {
   return new Promise((resolve, reject) => {
     let settled = false;
+    let cancelRequested = false;
     let worker;
+    let removeAbortListener = () => {};
     const finish = (callback, value) => {
       if (settled) {
         return;
       }
       settled = true;
+      removeAbortListener();
       if (worker) {
-        worker.terminate().catch(() => {});
+        Promise.resolve(worker.terminate())
+          .catch(() => {})
+          .finally(() => callback(value));
+        return;
       }
       callback(value);
     };
     try {
-      worker = new Worker(path.join(__dirname, '..', workerFileName), { workerData });
+      worker = workerFactory(path.join(__dirname, '..', workerFileName), { workerData });
     } catch (error) {
       finish(reject, error);
       return;
     }
+    if (cancelSignal && typeof cancelSignal.addEventListener === 'function') {
+      const handleAbort = () => {
+        if (settled || cancelRequested) {
+          return;
+        }
+        cancelRequested = true;
+        const error = new Error('AI add-on setup was canceled.');
+        error.name = 'AbortError';
+        error.code = 'AI_ADDON_SETUP_CANCELLED';
+        try {
+          worker.postMessage?.({ type: 'cancel' });
+        } catch (_error) {
+          // Worker termination below remains the final cancellation boundary.
+        }
+        setTimeout(() => finish(reject, error), 25);
+      };
+      cancelSignal.addEventListener('abort', handleAbort, { once: true });
+      removeAbortListener = () => cancelSignal.removeEventListener('abort', handleAbort);
+      if (cancelSignal.aborted) {
+        handleAbort();
+        return;
+      }
+    }
     worker.once('message', (message) => {
+      if (cancelRequested) {
+        return;
+      }
       if (message && message.ok) {
         finish(resolve);
         return;
@@ -58,9 +96,13 @@ function runArchiveExtractionInWorker(workerFileName, workerData, label = 'Runti
       }
       finish(reject, error);
     });
-    worker.once('error', (error) => finish(reject, error));
+    worker.once('error', (error) => {
+      if (!cancelRequested) {
+        finish(reject, error);
+      }
+    });
     worker.once('exit', (code) => {
-      if (settled) {
+      if (settled || cancelRequested) {
         return;
       }
       if (code !== 0) {
@@ -72,19 +114,25 @@ function runArchiveExtractionInWorker(workerFileName, workerData, label = 'Runti
   });
 }
 
-function extractZipArchiveInWorker(archivePath, destinationDir) {
+function extractZipArchiveInWorker(archivePath, destinationDir, options = {}) {
   return runArchiveExtractionInWorker(
     'ai-addon-zip-extractor-worker.js',
-    { archivePath, destinationDir },
+    {
+      archivePath,
+      destinationDir,
+      includeFileNames: Array.isArray(options.includeFileNames) ? options.includeFileNames : null,
+    },
     'Runtime zip archive',
+    options.cancelSignal,
   );
 }
 
-function extractTarGzArchiveInWorker(archivePath, destinationDir) {
+function extractTarGzArchiveInWorker(archivePath, destinationDir, options = {}) {
   return runArchiveExtractionInWorker(
     'ai-addon-tar-extractor-worker.js',
     { archivePath, destinationDir },
     'Runtime tar.gz archive',
+    options.cancelSignal,
   );
 }
 
@@ -113,10 +161,10 @@ async function extractTarGzArchive(archivePath, destinationDir, tarRunner = runT
   await tarRunner(['-xzf', archivePath, '-C', destinationDir]);
 }
 
-async function extractRuntimeArchive(archivePath, destinationDir, archiveFormat) {
+async function extractRuntimeArchive(archivePath, destinationDir, archiveFormat, options = {}) {
   if (archiveFormat === 'zip') {
     if (typeof archivePath === 'string') {
-      await extractZipArchiveInWorker(archivePath, destinationDir);
+      await extractZipArchiveInWorker(archivePath, destinationDir, options);
       return;
     }
     extractZipArchive(archivePath, destinationDir);
@@ -124,7 +172,7 @@ async function extractRuntimeArchive(archivePath, destinationDir, archiveFormat)
   }
   if (archiveFormat === 'tar.gz') {
     if (typeof archivePath === 'string') {
-      await extractTarGzArchiveInWorker(archivePath, destinationDir);
+      await extractTarGzArchiveInWorker(archivePath, destinationDir, options);
       return;
     }
     fs.mkdirSync(destinationDir, { recursive: true });
@@ -160,4 +208,5 @@ module.exports = {
   validateTarListing,
   // Private helpers used by setup flows
   finalizeInstalledRuntimeExecutable,
+  runArchiveExtractionInWorker,
 };
