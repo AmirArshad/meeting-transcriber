@@ -66,6 +66,19 @@ Use this checklist when validating speaker identification or local summaries on 
 - [ ] Validate Concise, Balanced, Detailed, and Action items profiles reuse the installed model.
 - [ ] Record processing time, peak RAM/VRAM, model sizes, and quality notes.
 
+## Speakrs / Pyannote Selector
+
+- [ ] Settings shows two cards: Speakrs and Pyannote. Apple Silicon marks Speakrs as Recommended; Windows does not.
+- [ ] Keyboard: native radio group. Tab lands on the selected card, arrow keys move between Speakrs and Pyannote, and a visible focus ring appears. Mouse click still selects. Disabled cards skip keyboard navigation.
+- [ ] Cards stay equal height and aligned at 100–200% zoom; they stack on a narrow Settings pane rather than overflowing.
+- [ ] New-user Home speaker prompt shows the same two cards and Set Up starts Speakrs (no token field).
+- [ ] Token fields and speaker-count stay hidden while Speakrs is selected; they appear only for Pyannote. `needsAccount` still appears for Pyannote. Switching away from Pyannote clears typed tokens. Home and Settings never mix each other's token values.
+- [ ] Switch Speakrs → Pyannote: confirm copy appears, Speakrs pack/ORT is deleted, token prompt is shown, shared CUDA pip (`nvidia-cublas`) remains.
+- [ ] Switch Pyannote → Speakrs: confirm copy appears, pyannote deps/HF cache/token are deleted, token UI hides, shared CUDA pip remains. Token-only Pyannote (saved token, no model tree) still requires this confirm and still enables Remove.
+- [ ] Remove deletes only the active engine and leaves `engine` as the last choice so re-setup is one click.
+- [ ] Setup/Remove/Switch is rejected while setup is running or compute/preload/GPU-runtime work is pending. A job that starts after setup is queued must not begin exclusive deletion.
+- [ ] Packaged missing bundled `speakrs-cli`: Home and Settings show the incomplete-install / Reinstall AvaNevis copy. Set Up is disabled for Speakrs (it cannot restore the bundled binary). Do not tell the user to re-run speaker setup. No Python `FileNotFoundError` or traceback. Dev-mode missing CLI keeps the dev copy and does not show Reinstall AvaNevis.
+
 ## Failure Modes
 
 - [ ] Invalid Hugging Face token shows a clear setup error and does not store plaintext tokens.

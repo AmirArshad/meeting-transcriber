@@ -2,10 +2,25 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const {
+  SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE,
+  buildDiarizationEngineCards,
+  getDiarizationEngineCard,
+  getDiarizationRemoveConfirmMessage,
+  getDiarizationSwitchConfirmMessage,
   isAiAddonProgressPhase,
   isAiAddonTerminalStatus,
+  isSpeakrsPackagedCliMissingMessage,
+  readDiarizationSetupToken,
+  resolveDiarizationSetupSource,
+  resolveSelectedDiarizationEngine,
+  shouldClearDiarizationTokenFields,
+  shouldConfirmDiarizationEngineSwitch,
+  shouldShowDiarizationSpeakerCount,
+  shouldShowDiarizationTokenUi,
 } = require('../../src/renderer/ai-addon-ui-helpers');
 
 test('isAiAddonTerminalStatus recognizes terminal statuses', () => {
@@ -26,4 +41,126 @@ test('isAiAddonProgressPhase recognizes active progress phases', () => {
   assert.equal(isAiAddonProgressPhase({ phase: 'validating' }), true);
   assert.equal(isAiAddonProgressPhase({ phase: 'idle' }), false);
   assert.equal(isAiAddonProgressPhase(null), false);
+});
+
+test('Speakrs is Recommended only on Apple Silicon and uses selector copy', () => {
+  const macSpeakrs = getDiarizationEngineCard({ engine: 'speakrs', platform: 'darwin', arch: 'arm64' });
+  const winSpeakrs = getDiarizationEngineCard({ engine: 'speakrs', platform: 'win32', arch: 'x64' });
+  const macPyannote = getDiarizationEngineCard({ engine: 'pyannote', platform: 'darwin', arch: 'arm64' });
+  const winPyannote = getDiarizationEngineCard({ engine: 'pyannote', platform: 'win32', arch: 'x64' });
+
+  assert.equal(macSpeakrs.title, 'Speakrs');
+  assert.equal(macSpeakrs.subtitle, 'Faster. No Hugging Face account.');
+  assert.equal(macSpeakrs.recommended, true);
+  assert.equal(winSpeakrs.subtitle, 'No Hugging Face account.');
+  assert.equal(winSpeakrs.recommended, false);
+  assert.equal(macPyannote.title, 'Pyannote');
+  assert.equal(macPyannote.subtitle, 'Needs a Hugging Face account.');
+  assert.equal(macPyannote.recommended, false);
+  assert.equal(winPyannote.subtitle, 'More accurate and faster here. Needs a Hugging Face account.');
+  assert.equal(winPyannote.recommended, false);
+
+  const cards = buildDiarizationEngineCards({ platform: 'darwin', arch: 'arm64' });
+  assert.deepEqual(cards.map((card) => card.engine), ['speakrs', 'pyannote']);
+});
+
+test('token and speaker-count UI stay hidden unless pyannote is selected', () => {
+  assert.equal(shouldShowDiarizationTokenUi('speakrs'), false);
+  assert.equal(shouldShowDiarizationSpeakerCount('speakrs'), false);
+  assert.equal(shouldShowDiarizationTokenUi('pyannote'), true);
+  assert.equal(shouldShowDiarizationSpeakerCount('pyannote'), true);
+  assert.equal(shouldShowDiarizationTokenUi(null), false);
+});
+
+test('new users resolve to Speakrs and existing pyannote stays selected', () => {
+  assert.equal(resolveSelectedDiarizationEngine(null), 'speakrs');
+  assert.equal(resolveSelectedDiarizationEngine({}), 'speakrs');
+  assert.equal(resolveSelectedDiarizationEngine({ engine: 'speakrs' }), 'speakrs');
+  assert.equal(resolveSelectedDiarizationEngine({ engine: 'pyannote' }), 'pyannote');
+});
+
+test('switch confirm copy matches the exclusive selector table', () => {
+  assert.equal(
+    getDiarizationSwitchConfirmMessage({ targetEngine: 'speakrs', platform: 'win32' }),
+    'Switch to Speakrs? This removes the current speaker model, including your saved Hugging Face token and about 2–4 GB of files. Speakrs does not need an account.',
+  );
+  assert.equal(
+    getDiarizationSwitchConfirmMessage({ targetEngine: 'pyannote', platform: 'win32' }),
+    'Switch to Pyannote? This removes Speakrs (about 800 MB). Pyannote needs a Hugging Face account and a larger download. On this PC it is more accurate and faster.',
+  );
+  assert.equal(
+    getDiarizationSwitchConfirmMessage({ targetEngine: 'pyannote', platform: 'darwin' }),
+    'Switch to Pyannote? This removes Speakrs (about 800 MB). Pyannote needs a Hugging Face account and a larger download.',
+  );
+  assert.match(getDiarizationRemoveConfirmMessage({ engine: 'pyannote' }), /Pyannote.*token/i);
+  assert.match(getDiarizationRemoveConfirmMessage({ engine: 'speakrs' }), /Speakrs/);
+  assert.doesNotMatch(getDiarizationRemoveConfirmMessage({ engine: 'speakrs' }), /token/i);
+});
+
+test('switch confirm is required only when the other engine has local state', () => {
+  assert.equal(shouldConfirmDiarizationEngineSwitch({
+    selectedEngine: 'speakrs',
+    installedEngine: 'pyannote',
+    hasOtherEngineLocalState: true,
+  }), true);
+  assert.equal(shouldConfirmDiarizationEngineSwitch({
+    selectedEngine: 'pyannote',
+    installedEngine: 'speakrs',
+    hasOtherEngineLocalState: true,
+  }), true);
+  assert.equal(shouldConfirmDiarizationEngineSwitch({
+    selectedEngine: 'speakrs',
+    installedEngine: 'speakrs',
+    hasOtherEngineLocalState: true,
+  }), false);
+  assert.equal(shouldConfirmDiarizationEngineSwitch({
+    selectedEngine: 'pyannote',
+    installedEngine: 'speakrs',
+    hasOtherEngineLocalState: false,
+  }), false);
+});
+
+test('packaged missing CLI copy tells the user to reinstall, not re-run setup', () => {
+  assert.match(SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE, /incomplete/i);
+  assert.match(SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE, /Reinstall AvaNevis/);
+  assert.doesNotMatch(SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE, /re-run speaker setup|FileNotFoundError|traceback/i);
+  assert.equal(isSpeakrsPackagedCliMissingMessage(SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE), true);
+  assert.equal(isSpeakrsPackagedCliMissingMessage('Speakrs CLI is not available.'), false);
+});
+
+test('engine selector markup uses native radios in a radiogroup', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'renderer', 'index.html'), 'utf8');
+  assert.match(html, /role="radiogroup"/);
+  assert.match(html, /name="home-diarization-engine"/);
+  assert.match(html, /name="settings-diarization-engine"/);
+  assert.match(html, /type="radio"[^>]*value="speakrs"|value="speakrs"[^>]*type="radio"/);
+  assert.match(html, /type="radio"[^>]*value="pyannote"|value="pyannote"[^>]*type="radio"/);
+  assert.match(html, /class="diarization-engine-radio"/);
+  assert.doesNotMatch(html, /<button[^>]*class="diarization-engine-card"/);
+});
+
+test('setup reads only the initiating surface token and never sends Speakrs a token', () => {
+  assert.equal(resolveDiarizationSetupSource('home-setup-diarization-btn'), 'home');
+  assert.equal(resolveDiarizationSetupSource('setup-diarization-btn'), 'settings');
+  assert.equal(readDiarizationSetupToken({
+    engine: 'pyannote',
+    source: 'settings',
+    homeToken: 'hf_home_token_value',
+    settingsToken: 'hf_settings_token_value',
+  }), 'hf_settings_token_value');
+  assert.equal(readDiarizationSetupToken({
+    engine: 'pyannote',
+    source: 'home',
+    homeToken: 'hf_home_token_value',
+    settingsToken: 'hf_settings_token_value',
+  }), 'hf_home_token_value');
+  assert.equal(readDiarizationSetupToken({
+    engine: 'speakrs',
+    source: 'home',
+    homeToken: 'hf_home_token_value',
+    settingsToken: 'hf_settings_token_value',
+  }), '');
+  assert.equal(shouldClearDiarizationTokenFields({ selectedEngine: 'speakrs' }), true);
+  assert.equal(shouldClearDiarizationTokenFields({ selectedEngine: 'pyannote' }), false);
+  assert.equal(shouldClearDiarizationTokenFields({ selectedEngine: 'pyannote', setupAttemptEnded: true }), true);
 });

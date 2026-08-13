@@ -2551,6 +2551,112 @@ footer {
   margin: 0 0 3px;
 }
 
+.diarization-engine-selector {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: stretch;
+  gap: 8px;
+  margin: 4px 0 12px;
+}
+
+.diarization-engine-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 4px;
+  width: 100%;
+  min-height: 100%;
+  background: var(--surface-3);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  color: var(--text-primary);
+  cursor: pointer;
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.diarization-engine-radio {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.diarization-engine-card.selected,
+.diarization-engine-card:has(.diarization-engine-radio:checked) {
+  border-color: var(--accent-strong);
+  box-shadow: inset 0 0 0 1px rgba(139, 124, 246, 0.35);
+}
+
+.diarization-engine-card:has(.diarization-engine-radio:focus-visible) {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 2px;
+}
+
+.diarization-engine-card:has(.diarization-engine-radio:disabled) {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+@media (max-width: 560px) {
+  .diarization-engine-selector {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.diarization-engine-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.diarization-engine-card-sub {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.diarization-engine-recommended {
+  background: var(--accent-soft);
+  border-color: rgba(139, 124, 246, 0.30);
+  color: var(--accent-strong);
+}
+
+.diarization-engine-recommended::before {
+  display: none;
+}
+
+.diarization-setup-prompt {
+  background: var(--surface-2);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-md);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 0 14px;
+  padding: 14px;
+}
+
+.diarization-setup-prompt-copy h3 {
+  font-size: 14px;
+  margin: 0 0 4px;
+}
+
+.diarization-setup-prompt-copy p {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 0;
+}
+
 .ai-addon-card-header p,
 .ai-addon-status-text {
   color: var(--text-tertiary);

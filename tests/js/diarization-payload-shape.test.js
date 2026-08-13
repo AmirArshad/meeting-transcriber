@@ -10,7 +10,7 @@ const { EventEmitter } = require('node:events');
 const { createTranscriptionService } = require('../../src/main/transcription-service');
 const { createPythonRuntime } = require('../../src/main/python-runtime');
 const { getDiarizationAvailability } = require('../../src/ai-addon-state');
-const { getSpeakrsOrtRuntimeDir } = require('../../src/ai-addon/manifest-store');
+const { getSpeakrsOrtRuntimeDir, SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE } = require('../../src/ai-addon/manifest-store');
 
 const DIARIZE_REQUIRED_FLAGS = Object.freeze([
   '--audio',
@@ -52,7 +52,7 @@ function assertEngineAgnosticFlags(actualFlags, requiredFlags) {
   }
 }
 
-function createService() {
+function createService(overrides = {}) {
   return createTranscriptionService({
     app: { getPath: () => '/tmp/avanevis-test', isPackaged: false },
     path,
@@ -99,6 +99,7 @@ function createService() {
     formatDurationForTranscript: () => '0:00',
     listMeetings: async () => [],
     isQuitCommitted: () => false,
+    ...overrides,
   });
 }
 
@@ -192,6 +193,42 @@ test('speakrs child env skips HF cache vars and does not inherit exclusive=0', (
       delete process.env.SPEAKRS_EXCLUSIVE;
     } else {
       process.env.SPEAKRS_EXCLUSIVE = previousExclusive;
+    }
+  }
+});
+
+test('packaged missing Speakrs CLI rejects child env before Python spawn', () => {
+  const previous = process.env.AVANEVIS_PACKAGED;
+  process.env.AVANEVIS_PACKAGED = '1';
+  try {
+    const service = createService({
+      app: { getPath: () => '/tmp/avanevis-test', isPackaged: true },
+      fs: {
+        promises: {
+          readFile: async () => '',
+          writeFile: async () => {},
+          rm: async () => {},
+          mkdtemp: async (prefix) => `${prefix}test`,
+        },
+        existsSync: () => false,
+      },
+      spawnTrackedPython: () => {
+        throw new Error('Python must not spawn when the bundled Speakrs CLI is missing');
+      },
+      resourcesPath: path.join(os.tmpdir(), 'avanevis-missing-speakrs-bin'),
+    });
+    assert.throws(
+      () => service.buildDiarizationChildEnv({ engine: 'speakrs', requiredDevice: 'cuda' }),
+      (error) => error
+        && error.code === 'SPEAKRS_PACKAGED_CLI_MISSING'
+        && error.message === SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE
+        && !/FileNotFoundError|traceback|re-run speaker setup/i.test(error.message),
+    );
+  } finally {
+    if (previous === undefined) {
+      delete process.env.AVANEVIS_PACKAGED;
+    } else {
+      process.env.AVANEVIS_PACKAGED = previous;
     }
   }
 });
@@ -425,5 +462,102 @@ test('diarize-transcript Speakrs production spawn receives engine argv and isola
     }
     fs.rmSync(recordingsDir, { recursive: true, force: true });
     fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test('packaged missing Speakrs CLI diarize-transcript handler returns reinstall copy without spawning', async () => {
+  const availability = getDiarizationAvailability(process.platform, process.arch);
+  assert.equal(availability.supported, true, 'handler coverage requires a supported diarization platform');
+
+  const recordingsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-missing-cli-rec-'));
+  const audioPath = path.join(recordingsDir, 'meeting.opus');
+  fs.writeFileSync(audioPath, 'opus');
+  const previousPackaged = process.env.AVANEVIS_PACKAGED;
+  process.env.AVANEVIS_PACKAGED = '1';
+  const spawned = [];
+
+  try {
+    const service = createTranscriptionService({
+      app: { getPath: () => recordingsDir, isPackaged: true },
+      path,
+      fs,
+      os,
+      pythonConfig: { backendPath: '/tmp/backend', pythonPath: 'python', ffmpegPath: '/tmp/ffmpeg' },
+      spawnTrackedPython: (...args) => {
+        spawned.push(args);
+        throw new Error('Python must not spawn when the bundled Speakrs CLI is missing');
+      },
+      getBackendModuleArgs: (moduleName, extraArgs = []) => ['-m', moduleName, ...extraArgs],
+      enqueueAiComputeAction: (action) => action(),
+      getCachedCudaStatus: () => ({ available: false }),
+      buildCudaRuntimeEnv: (extra = {}) => extra || {},
+      getAiAddonRuntimeOptions: () => ({ userDataDir: recordingsDir }),
+      getDiarizationDependencyEnv: () => ({}),
+      getDiarizationCacheEnv: () => ({}),
+      getDiarizationDependencySitePackagesPath: () => null,
+      requireAllowedModelSize: (value) => value || 'small',
+      collectPythonProcessOutput: () => ({
+        getStdout: () => '',
+        getStderr: () => '',
+        assertStdoutWithinLimit() {},
+      }),
+      sendToRenderer() {},
+      sendRedactedProgress() {},
+      flushRedactedProgress() {},
+      appendSpawnLogBuffer: (buffer, chunk) => `${buffer || ''}${chunk}`,
+      appendSpawnJsonStdout: (buffer, data) => `${buffer || ''}${data}`,
+      assertTrustedRendererSender() {},
+      getRecordingsDir: () => recordingsDir,
+      assertSafeExistingRecordingAudioPath: (value) => value,
+      assertSafeExistingSegmentsPath: (value) => value,
+      assertSafeExistingTranscriptPath: (value) => value,
+      terminateProcessBestEffort: async () => {},
+      summarizeDiarizationError: (value) => value,
+      sanitizeTranscriptionError: (value) => value,
+      buildTranscriptionPlaceholderMarkdown: () => '# pending\n',
+      formatDurationForTranscript: () => '0:00',
+      listMeetings: async () => [],
+      isQuitCommitted: () => false,
+      resourcesPath: path.join(os.tmpdir(), 'avanevis-missing-speakrs-bin'),
+      checkAiAddonSetupStatus: async () => ({
+        features: {
+          diarization: {
+            status: 'ready',
+            setupComplete: true,
+            engine: 'speakrs',
+            modelId: 'speakrs-community1-vbx',
+            speakerCount: 'auto',
+            cliPresent: false,
+            cliMissingMessage: SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE,
+          },
+        },
+      }),
+    });
+
+    const handlers = new Map();
+    service.registerIpc({
+      handle(channel, handler) {
+        handlers.set(channel, handler);
+      },
+    });
+
+    await assert.rejects(
+      handlers.get('diarize-transcript')({ sender: {} }, {
+        audioPath,
+        segments: [{ start: 0, end: 1, text: 'hello' }],
+      }),
+      (error) => error
+        && error.code === 'SPEAKRS_PACKAGED_CLI_MISSING'
+        && error.message === SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE
+        && !/FileNotFoundError|traceback|re-run speaker setup/i.test(error.message),
+    );
+    assert.equal(spawned.length, 0);
+  } finally {
+    if (previousPackaged === undefined) {
+      delete process.env.AVANEVIS_PACKAGED;
+    } else {
+      process.env.AVANEVIS_PACKAGED = previousPackaged;
+    }
+    fs.rmSync(recordingsDir, { recursive: true, force: true });
   }
 });

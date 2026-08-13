@@ -298,6 +298,47 @@
               <span class="gpu-cta-arrow" aria-hidden="true">→</span>
             </button>
 
+            <section
+              id="diarization-setup-prompt"
+              class="diarization-setup-prompt"
+              style="display: none"
+            >
+              <div class="diarization-setup-prompt-copy">
+                <h3 id="diarization-setup-prompt-title">Add speaker labels to future transcripts</h3>
+                <p id="diarization-setup-prompt-message">Set up local speaker identification. Once ready, it will run automatically after transcription.</p>
+              </div>
+              <div class="diarization-engine-selector" role="radiogroup" aria-label="Speaker engine">
+                <label class="diarization-engine-card" data-engine="speakrs" data-prompt-engine="speakrs" id="home-diarization-engine-speakrs">
+                  <input type="radio" name="home-diarization-engine" value="speakrs" class="diarization-engine-radio" />
+                  <span class="diarization-engine-card-title">
+                    <span>Speakrs</span>
+                    <span class="setting-badge diarization-engine-recommended" data-speakrs-recommended hidden>Recommended</span>
+                  </span>
+                  <span class="diarization-engine-card-sub" data-engine-sub="speakrs">No Hugging Face account.</span>
+                </label>
+                <label class="diarization-engine-card" data-engine="pyannote" data-prompt-engine="pyannote" id="home-diarization-engine-pyannote">
+                  <input type="radio" name="home-diarization-engine" value="pyannote" class="diarization-engine-radio" />
+                  <span class="diarization-engine-card-title">
+                    <span>Pyannote</span>
+                  </span>
+                  <span class="diarization-engine-card-sub" data-engine-sub="pyannote">Needs a Hugging Face account.</span>
+                </label>
+              </div>
+              <div class="ai-addon-field" id="home-diarization-token-field" hidden>
+                <label for="home-diarization-token-input">Hugging Face token</label>
+                <input
+                  type="password"
+                  id="home-diarization-token-input"
+                  class="settings-input"
+                  placeholder="hf_..."
+                  autocomplete="off"
+                />
+              </div>
+              <div class="ai-addon-actions">
+                <button id="home-setup-diarization-btn" class="btn btn-primary btn-small">Set Up</button>
+              </div>
+            </section>
+
             <div id="cuda-runtime-warning" class="cuda-runtime-warning" style="display: none;" role="status" aria-live="polite">
               <div class="cuda-runtime-warning-text">
                 <strong>CUDA runtime issue detected</strong>
@@ -825,7 +866,25 @@
                         <span class="setting-badge" id="diarization-status-badge">Checking&hellip;</span>
                       </div>
 
-                      <div class="ai-addon-field">
+                      <div class="diarization-engine-selector" role="radiogroup" aria-label="Speaker engine">
+                        <label class="diarization-engine-card" data-engine="speakrs" id="diarization-engine-speakrs">
+                          <input type="radio" name="settings-diarization-engine" value="speakrs" class="diarization-engine-radio" />
+                          <span class="diarization-engine-card-title">
+                            <span>Speakrs</span>
+                            <span class="setting-badge diarization-engine-recommended" data-speakrs-recommended hidden>Recommended</span>
+                          </span>
+                          <span class="diarization-engine-card-sub" id="diarization-engine-speakrs-sub">No Hugging Face account.</span>
+                        </label>
+                        <label class="diarization-engine-card" data-engine="pyannote" id="diarization-engine-pyannote">
+                          <input type="radio" name="settings-diarization-engine" value="pyannote" class="diarization-engine-radio" />
+                          <span class="diarization-engine-card-title">
+                            <span>Pyannote</span>
+                          </span>
+                          <span class="diarization-engine-card-sub" id="diarization-engine-pyannote-sub">Needs a Hugging Face account.</span>
+                        </label>
+                      </div>
+
+                      <div class="ai-addon-field" id="diarization-token-field" hidden>
                         <label for="diarization-token-input">Hugging Face token</label>
                         <input
                           type="password"
@@ -841,7 +900,7 @@
                         </p>
                       </div>
 
-                      <div class="ai-addon-field compact">
+                      <div class="ai-addon-field compact" id="diarization-speaker-count-field" hidden>
                         <label for="diarization-speaker-count">Speakers</label>
                         <select id="diarization-speaker-count" class="device-select">
                           <option value="auto">Auto</option>

@@ -131,7 +131,15 @@
       || '';
   }
 
+  function isSpeakrsPackagedCliMissingMessage(value) {
+    const text = String(value || '');
+    return /incomplete/i.test(text) && /Reinstall AvaNevis/.test(text);
+  }
+
   function getDiarizationErrorRecoveryHint(reason) {
+    if (isSpeakrsPackagedCliMissingMessage(reason)) {
+      return '';
+    }
     const text = String(reason || '').toLowerCase();
     if (/\b(?:token|model terms|unauthorized|forbidden|gated|authenticated|authentication|permission)\b/.test(text)
       || /\b(?:model|repository) access\b/.test(text)
@@ -147,6 +155,9 @@
   function getDiarizationSetupMessage(feature) {
     const status = feature && feature.status;
     const reason = featureReason(feature);
+    if (isSpeakrsPackagedCliMissingMessage(reason) || (feature && feature.engine === 'speakrs' && feature.cliPresent === false && isSpeakrsPackagedCliMissingMessage(feature.cliMissingMessage))) {
+      return reason || feature.cliMissingMessage;
+    }
     if (status === 'ready' && feature && feature.setupComplete) {
       return 'Speaker labels will run automatically after transcription.';
     }
@@ -160,7 +171,8 @@
       return 'Validating local speaker identification setup.';
     }
     if (status === 'error') {
-      return `${reason || 'Speaker identification setup failed.'} ${getDiarizationErrorRecoveryHint(reason)}`;
+      const hint = getDiarizationErrorRecoveryHint(reason);
+      return `${reason || 'Speaker identification setup failed.'}${hint ? ` ${hint}` : ''}`;
     }
     return reason || 'Speaker identification setup is available only on supported platforms.';
   }
@@ -206,8 +218,11 @@
       || feature.status === 'ready'
       || feature.status === 'downloading'
       || feature.status === 'validating'
+      || (feature.tokenStatus && feature.tokenStatus.hasToken)
       || (feature.dependencyCache && feature.dependencyCache.installed)
       || (feature.dependencyCache && feature.dependencyCache.partial)
+      || (feature.packCache && (feature.packCache.installed || feature.packCache.partial))
+      || (feature.runtimeCache && (feature.runtimeCache.installed || feature.runtimeCache.partial))
       || (feature.storage && hasPositiveSize(feature.storage.dependencyBytes))
       || (feature.storage && hasPositiveSize(feature.storage.installedBytes))
     );
@@ -232,16 +247,27 @@
     );
   }
 
-  function buildAiAddonControlState({ feature, type, setupActive = false, unsupported = false } = {}) {
+  function buildAiAddonControlState({ feature, type, setupActive = false, unsupported = false, selectedEngine } = {}) {
     const hasLocalState = type === 'summary'
       ? hasSummaryLocalState(feature)
       : hasDiarizationLocalState(feature);
     const isBusy = Boolean(setupActive || (feature && (feature.status === 'downloading' || feature.status === 'validating')));
     const isUnsupported = Boolean(unsupported || (feature && feature.status === 'unsupported'));
-    const setupComplete = Boolean(feature && (feature.setupComplete || feature.status === 'ready'));
+    const activeEngine = feature && typeof feature.engine === 'string' ? feature.engine : null;
+    const effectiveEngine = selectedEngine || activeEngine;
+    const packagedCliUnrepairable = type !== 'summary'
+      && effectiveEngine === 'speakrs'
+      && feature
+      && feature.cliPresent === false
+      && isSpeakrsPackagedCliMissingMessage(feature.cliMissingMessage || feature.error);
+    const selectedIsReady = Boolean(
+      feature
+      && (feature.setupComplete || feature.status === 'ready')
+      && (!selectedEngine || selectedEngine === activeEngine),
+    );
 
     return {
-      canConfigure: !isUnsupported && !isBusy && !setupComplete,
+      canConfigure: !isUnsupported && !isBusy && !selectedIsReady && !packagedCliUnrepairable,
       canValidate: !isUnsupported && !isBusy && hasLocalState,
       canRemove: !isUnsupported && !isBusy && hasLocalState,
       hasLocalState,
@@ -298,10 +324,17 @@
     const summary = aiStatus && aiStatus.features && aiStatus.features.summary;
 
     if (shouldShowSpeakerSetupPrompt({ diarization, platform, cudaInstalled, hasNvidiaGpu })) {
+      const engine = diarization && diarization.engine === 'pyannote' ? 'pyannote' : 'speakrs';
+      const missingCliMessage = diarization
+        && engine === 'speakrs'
+        && diarization.cliPresent === false
+        && (diarization.cliMissingMessage || diarization.error);
       return {
         feature: 'diarization',
+        engine,
         title: 'Add speaker labels to future transcripts',
-        message: 'Set up local speaker identification in Settings. Once ready, it will run automatically after transcription.',
+        message: missingCliMessage
+          || 'Set up local speaker identification in Settings. Once ready, it will run automatically after transcription.',
       };
     }
 
@@ -320,6 +353,7 @@
     buildAiAddonControlState,
     buildHomeAiAddonPrompt,
     cleanMarkdownText,
+    hasDiarizationLocalState,
     getDiarizationSetupMessage,
     getSummaryGenerationButtonView,
     getSummarySetupMessage,

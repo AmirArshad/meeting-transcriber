@@ -50,6 +50,8 @@ const {
   hasSpeakrsLocalState,
   hasPyannoteLocalState,
   resolveSpeakrsCliPath,
+  getPackagedSpeakrsCliPreflightError,
+  getSpeakrsCliMissingMessage,
   bindFsMethod,
   loadManifest,
   writeFileAtomicSync,
@@ -140,30 +142,80 @@ function resolveDiarizationSetupTarget({
   return { engine: selectedEngine, modelId: selectedModel.id };
 }
 
-function removePathsStrict(targetPaths, fsModule = fs) {
+function assertAiAddonUninstallPath(targetPath, userDataDir) {
+  if (!targetPath || !userDataDir) {
+    throw new Error('Speaker engine uninstall path is not configured.');
+  }
+  const resolvedTarget = path.resolve(targetPath);
+  const allowedRoot = path.resolve(userDataDir, 'ai-addons');
+  const relative = path.relative(allowedRoot, resolvedTarget);
+  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error('Refusing to delete a path outside the local AI add-on directory.');
+  }
+}
+
+function bindFsRm(fsModule) {
+  if (fsModule?.promises && typeof fsModule.promises.rm === 'function') {
+    return (...args) => fsModule.promises.rm(...args);
+  }
+  if (typeof fsModule?.rm === 'function') {
+    return (...args) => {
+      const result = fsModule.rm(...args);
+      return result && typeof result.then === 'function' ? result : Promise.resolve(result);
+    };
+  }
   const rmSync = bindFsMethod(fsModule, 'rmSync');
-  const existsSync = bindFsMethod(fsModule, 'existsSync');
   if (!rmSync) {
+    return null;
+  }
+  return async (targetPath, options) => {
+    rmSync(targetPath, options);
+  };
+}
+
+async function removePathsStrict(targetPaths, { userDataDir, fsModule = fs } = {}) {
+  const rm = bindFsRm(fsModule);
+  const existsSync = bindFsMethod(fsModule, 'existsSync');
+  const lstatSync = bindFsMethod(fsModule, 'lstatSync');
+  const unlinkSync = bindFsMethod(fsModule, 'unlinkSync');
+  const unlink = fsModule?.promises && typeof fsModule.promises.unlink === 'function'
+    ? (...args) => fsModule.promises.unlink(...args)
+    : (unlinkSync ? async (targetPath) => unlinkSync(targetPath) : null);
+  if (!rm) {
     throw new Error('File system does not support removing the previous speaker engine.');
   }
   for (const targetPath of targetPaths) {
     if (!targetPath) {
       continue;
     }
-    rmSync(targetPath, { recursive: true, force: true });
+    assertAiAddonUninstallPath(targetPath, userDataDir);
+    let stat = null;
+    try {
+      stat = typeof lstatSync === 'function' ? lstatSync(targetPath) : null;
+    } catch (_error) {
+      stat = null;
+    }
+    if (stat && typeof stat.isSymbolicLink === 'function' && stat.isSymbolicLink()) {
+      if (!unlink) {
+        throw new Error('File system does not support removing a replaced speaker-engine path.');
+      }
+      await unlink(targetPath);
+    } else {
+      await rm(targetPath, { recursive: true, force: true });
+    }
     if (existsSync?.(targetPath)) {
       throw new Error('The previous speaker engine could not be removed completely.');
     }
   }
 }
 
-function uninstallSpeakrsLocalState({ userDataDir, fsModule = fs } = {}) {
-  removePathsStrict(getSpeakrsUninstallPaths(userDataDir), fsModule);
+async function uninstallSpeakrsLocalState({ userDataDir, fsModule = fs } = {}) {
+  await removePathsStrict(getSpeakrsUninstallPaths(userDataDir), { userDataDir, fsModule });
 }
 
-function uninstallPyannoteLocalState({ userDataDir, fsModule = fs } = {}) {
+async function uninstallPyannoteLocalState({ userDataDir, fsModule = fs } = {}) {
   deleteAiAddonToken({ userDataDir, tokenKey: TOKEN_KEYS.diarizationHuggingFace, fsModule });
-  removePathsStrict(getPyannoteUninstallPaths(userDataDir), fsModule);
+  await removePathsStrict(getPyannoteUninstallPaths(userDataDir), { userDataDir, fsModule });
 }
 
 function removePathBestEffort(targetPath, fsModule = fs) {
@@ -836,7 +888,7 @@ async function validateDiarizationSetup({
       error = message;
     } else if (!cliPath) {
       status = 'error';
-      message = 'Speakrs CLI is not available.';
+      message = getSpeakrsCliMissingMessage(env);
       error = message;
     } else if (typeof runtimeValidator === 'function') {
       try {
@@ -962,10 +1014,12 @@ async function setupDiarizationAddon({
   downloadSourceArtifacts,
   toolchainChecker,
   cancelSignal,
+  withExclusiveDiskMutation,
   env = process.env,
   tokenStatusReader = getDiarizationTokenStatus,
   tokenReader = getAiAddonToken,
   tokenWriter = storeAiAddonToken,
+  resourcesPath = process.resourcesPath,
 } = {}) {
   throwIfAiAddonCanceled(cancelSignal, 'Speaker identification setup was canceled.');
   emitSafeProgress(emitProgress, {
@@ -1058,6 +1112,20 @@ async function setupDiarizationAddon({
     return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, env });
   }
 
+  const packagedCliError = selectedEngine === 'speakrs'
+    ? getPackagedSpeakrsCliPreflightError({
+      engine: selectedEngine,
+      env,
+      platform,
+      resourcesPath,
+      fsModule,
+      applyQaOverride: false,
+    })
+    : null;
+  if (packagedCliError) {
+    return markDiarizationError(packagedCliError.message);
+  }
+
   const tokenStatus = selectedEngine === 'pyannote'
     ? tokenStatusReader({
       userDataDir,
@@ -1078,11 +1146,42 @@ async function setupDiarizationAddon({
     tokenStatus,
     fsModule,
   });
-  if (selectedEngine === 'speakrs' && pyannoteState) {
-    uninstallPyannoteLocalState({ userDataDir, fsModule });
-  }
-  if (selectedEngine === 'pyannote' && speakrsState) {
-    uninstallSpeakrsLocalState({ userDataDir, fsModule });
+  const needsExclusiveDelete = (selectedEngine === 'speakrs' && pyannoteState)
+    || (selectedEngine === 'pyannote' && speakrsState);
+  if (needsExclusiveDelete) {
+    const mutateExclusiveEngine = async () => {
+      if (selectedEngine === 'speakrs' && pyannoteState) {
+        await uninstallPyannoteLocalState({ userDataDir, fsModule });
+      }
+      if (selectedEngine === 'pyannote' && speakrsState) {
+        await uninstallSpeakrsLocalState({ userDataDir, fsModule });
+      }
+      updateManifestFeature({
+        userDataDir,
+        feature: 'diarization',
+        fsModule,
+        catalog,
+        updates: buildFeatureUpdates({
+          status: 'downloading',
+          modelId: selectedModelId,
+          engine: selectedEngine,
+          speakerCount,
+          validation: createValidation(
+            'downloading',
+            selectedEngine === 'speakrs'
+              ? 'Speakrs speaker model download started.'
+              : 'Pyannote speaker setup started.',
+            now,
+          ),
+          error: null,
+        }),
+      });
+    };
+    if (typeof withExclusiveDiskMutation === 'function') {
+      await withExclusiveDiskMutation(mutateExclusiveEngine);
+    } else {
+      await mutateExclusiveEngine();
+    }
   }
 
   if (selectedEngine === 'speakrs') {
@@ -1404,9 +1503,9 @@ async function removeDiarizationSetup({
   });
 
   if (engine === 'speakrs') {
-    uninstallSpeakrsLocalState({ userDataDir, fsModule });
+    await uninstallSpeakrsLocalState({ userDataDir, fsModule });
   } else {
-    uninstallPyannoteLocalState({ userDataDir, modelId, fsModule });
+    await uninstallPyannoteLocalState({ userDataDir, modelId, fsModule });
   }
 
   updateManifestFeature({

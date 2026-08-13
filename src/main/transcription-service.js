@@ -68,6 +68,7 @@ const {
 } = require('../ai-addon-state');
 const {
   buildSpeakrsSpawnEnv,
+  getPackagedSpeakrsCliPreflightError,
   canStartGuidedDiarization,
   resolveSpawnDiarizationEngine,
 } = require('../ai-addon/manifest-store');
@@ -158,6 +159,7 @@ function createTranscriptionService(deps) {
     runWallClockComputeAction = defaultRunWallClockComputeAction,
     resolveSpeakrsCliPath = null,
     checkAiAddonSetupStatus = defaultCheckAiAddonSetupStatus,
+    resourcesPath = process.resourcesPath,
   } = deps;
 
   // Serialize cancel/delete control ops per meeting so concurrent clears cannot
@@ -238,6 +240,19 @@ function createTranscriptionService(deps) {
     return resolvedEngine;
   }
 
+  function throwIfPackagedSpeakrsCliMissing(engine) {
+    const preflightError = getPackagedSpeakrsCliPreflightError({
+      engine,
+      env: process.env,
+      platform: process.platform,
+      resourcesPath,
+      fsModule: fs,
+    });
+    if (preflightError) {
+      throw preflightError;
+    }
+  }
+
   function buildDiarizationChildEnv({
     engine,
     modelSize,
@@ -245,6 +260,18 @@ function createTranscriptionService(deps) {
     includeTranscriptionRuntime = false,
   } = {}) {
     const resolvedEngine = resolveSpawnDiarizationEngine(engine);
+    if (resolvedEngine === 'speakrs') {
+      const preflightError = getPackagedSpeakrsCliPreflightError({
+        engine: resolvedEngine,
+        env: process.env,
+        platform: process.platform,
+        resourcesPath,
+        fsModule: fs,
+      });
+      if (preflightError) {
+        throw preflightError;
+      }
+    }
     const clearedTokens = buildClearedHuggingFaceTokenEnv();
     if (resolvedEngine === 'speakrs') {
       const baseEnv = includeTranscriptionRuntime
@@ -2126,6 +2153,7 @@ function createTranscriptionService(deps) {
         );
       }
       const guidedEngine = resolveSpawnDiarizationEngine(diarizationStatus.engine);
+      throwIfPackagedSpeakrsCliMissing(guidedEngine);
 
       const recordingsDir = getRecordingsDir();
       const finalTranscriptPath = resolvedAudioPath.replace(/\.[^/.]+$/, '.md');
@@ -2217,6 +2245,7 @@ function createTranscriptionService(deps) {
         );
       }
       const diarizeEngine = resolveSpawnDiarizationEngine(diarizationStatus.engine);
+      throwIfPackagedSpeakrsCliMissing(diarizeEngine);
 
       const resolvedAudioPath = assertSafeExistingRecordingAudioPath(audioPath);
 

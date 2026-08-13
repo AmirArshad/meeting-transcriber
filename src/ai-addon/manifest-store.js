@@ -25,6 +25,7 @@ const {
 const { getDiarizationTokenStatus, isAllowedDownloadUrl } = require('./download-helpers');
 
 const HASH_YIELD_BYTES = 8 * 1024 * 1024;
+const SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE = 'This AvaNevis install is incomplete. Reinstall AvaNevis.';
 
 function getDirectorySizeBytes(dirPath, fsModule = fs) {
   const existsSync = bindFsMethod(fsModule, 'existsSync');
@@ -158,6 +159,36 @@ function resolveSpeakrsCliPath({
     candidates.push(path.join(pathDir, executableName));
   }
   return candidates.find((candidate) => existsSync(candidate)) || null;
+}
+
+function getSpeakrsCliMissingMessage(env = process.env) {
+  return env?.AVANEVIS_PACKAGED === '1'
+    ? SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE
+    : 'Speakrs CLI is not available.';
+}
+
+function getPackagedSpeakrsCliPreflightError({
+  engine,
+  env = process.env,
+  platform = process.platform,
+  resourcesPath = process.resourcesPath,
+  fsModule = fs,
+  applyQaOverride = true,
+} = {}) {
+  const resolvedEngine = applyQaOverride
+    ? resolveSpawnDiarizationEngine(engine, env)
+    : (engine === 'speakrs' || engine === 'pyannote' ? engine : null);
+  if (resolvedEngine !== 'speakrs' || env?.AVANEVIS_PACKAGED !== '1') {
+    return null;
+  }
+  const bundled = getBundledSpeakrsCliPath({ platform, resourcesPath });
+  const existsSync = bindFsMethod(fsModule, 'existsSync');
+  if (bundled && existsSync?.(bundled)) {
+    return null;
+  }
+  const error = new Error(SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE);
+  error.code = 'SPEAKRS_PACKAGED_CLI_MISSING';
+  return error;
 }
 
 function resolveSpeakrsCliPathForSpawn({
@@ -1281,7 +1312,7 @@ async function checkSummaryModelCache({
   };
 }
 
-function deriveDiarizationStatus(featureStatus, tokenStatus, dependencyCache, packCache, runtimeCache, cliPresent) {
+function deriveDiarizationStatus(featureStatus, tokenStatus, dependencyCache, packCache, runtimeCache, cliPresent, env = process.env) {
   if (!featureStatus.availability.supported) {
     return { ...featureStatus, status: 'unsupported' };
   }
@@ -1290,7 +1321,7 @@ function deriveDiarizationStatus(featureStatus, tokenStatus, dependencyCache, pa
       return {
         ...featureStatus,
         status: 'error',
-        error: packCache?.reason || runtimeCache?.reason || 'Speakrs CLI is not available.',
+        error: packCache?.reason || runtimeCache?.reason || getSpeakrsCliMissingMessage(env),
       };
     }
     return featureStatus;
@@ -1423,6 +1454,7 @@ async function checkAiAddonSetupStatus({
     speakrsPackCache,
     speakrsRuntimeCache,
     speakrsCliPresent,
+    env,
   );
   const summary = deriveSummaryStatus(status.features.summary, summaryCache, summaryRuntimeCache);
   const speakrsReady = Boolean(
@@ -1447,6 +1479,7 @@ async function checkAiAddonSetupStatus({
     runtimeCache: speakrsRuntimeCache,
     cliPresent: speakrsCliPresent,
     cliPath: speakrsCliPath,
+    cliMissingMessage: speakrsCliPresent ? null : getSpeakrsCliMissingMessage(env),
     dependencyCache: diarizationDependencyCache,
     setupComplete: speakrsReady || pyannoteReady,
   };
@@ -1566,6 +1599,9 @@ module.exports = {
   resolveSpeakrsCliPathForSpawn,
   getSpeakrsCliExecutableName,
   getBundledSpeakrsCliPath,
+  getSpeakrsCliMissingMessage,
+  getPackagedSpeakrsCliPreflightError,
+  SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE,
   isNativeSpeakrsCliPath,
   resolveSpawnDiarizationEngine,
   resolveSpeakrsMode,

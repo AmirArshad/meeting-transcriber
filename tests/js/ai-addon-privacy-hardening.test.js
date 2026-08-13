@@ -365,6 +365,100 @@ test('mutating token, setup, cancel, and validate IPC channels assert trusted re
   assert.equal(trustedSenderCalls.length, mutatingChannels.length);
 });
 
+test('setup-diarization requires a known engine and does not start setup', async () => {
+  const { deps } = createValidationDeps();
+  const service = createAiAddonIpc(deps);
+  const handlers = new Map();
+  service.registerIpc({ handle(channel, handler) { handlers.set(channel, handler); } });
+
+  await assert.rejects(
+    handlers.get('setup-diarization')({ sender: {} }, {}),
+    (error) => error && error.code === 'UNKNOWN_DIARIZATION_ENGINE',
+  );
+  await assert.rejects(
+    handlers.get('setup-diarization')({ sender: {} }, { engine: 'unknown' }),
+    (error) => error && error.code === 'UNKNOWN_DIARIZATION_ENGINE',
+  );
+});
+
+test('setup-diarization rejects while compute or GPU-runtime work is pending', async () => {
+  for (const override of [
+    { hasPendingAiComputeWork: () => true },
+    { hasPendingGpuResourceWork: () => true },
+  ]) {
+    const { deps } = createValidationDeps(override);
+    const service = createAiAddonIpc(deps);
+    const handlers = new Map();
+    service.registerIpc({ handle(channel, handler) { handlers.set(channel, handler); } });
+    await assert.rejects(
+      handlers.get('setup-diarization')({ sender: {} }, { engine: 'speakrs' }),
+      (error) => error && error.code === 'AI_ADDON_SETUP_COMPUTE_BUSY',
+    );
+  }
+});
+
+test('queued setup-diarization re-checks compute activity and does not start deletion', async () => {
+  for (const kind of ['compute', 'gpu']) {
+    let pending = false;
+    let removalAdmissionCalls = 0;
+    const { deps } = createValidationDeps({
+      hasPendingAiComputeWork: () => kind === 'compute' && pending,
+      hasPendingGpuResourceWork: () => kind === 'gpu' && pending,
+      enqueueGpuExclusiveRemovalAction: () => {
+        removalAdmissionCalls += 1;
+        return Promise.resolve();
+      },
+    });
+    const service = createAiAddonIpc(deps);
+    const handlers = new Map();
+    service.registerIpc({ handle(channel, handler) { handlers.set(channel, handler); } });
+
+    let releaseAddonQueue;
+    const blocker = service.enqueueAiAddonAction(() => new Promise((resolve) => {
+      releaseAddonQueue = resolve;
+    }));
+    const setup = handlers.get('setup-diarization')({ sender: {} }, { engine: 'speakrs' });
+    await new Promise((resolve) => setImmediate(resolve));
+    pending = true;
+    releaseAddonQueue();
+    await blocker;
+
+    await assert.rejects(setup, (error) => error && error.code === 'AI_ADDON_SETUP_COMPUTE_BUSY');
+    assert.equal(removalAdmissionCalls, 0);
+    assert.equal(service.hasInFlightAiAddonSetup(), false);
+  }
+});
+
+test('packaged missing Speakrs CLI rejects validation before Python spawn', async () => {
+  const previous = process.env.AVANEVIS_PACKAGED;
+  process.env.AVANEVIS_PACKAGED = '1';
+  try {
+    const { deps, spawned } = createValidationDeps({
+      resourcesPath: path.join(os.tmpdir(), 'avanevis-missing-speakrs-bin'),
+    });
+    const service = createAiAddonIpc(deps);
+    await assert.rejects(
+      service.validateDiarizationRuntime({
+        engine: 'speakrs',
+        modelRef: 'speakrs-community1-vbx',
+        requiredDevice: 'cuda',
+      }),
+      (error) => error
+        && error.code === 'SPEAKRS_PACKAGED_CLI_MISSING'
+        && /incomplete/i.test(error.message)
+        && /Reinstall AvaNevis/.test(error.message)
+        && !/FileNotFoundError|traceback|re-run speaker setup/i.test(error.message),
+    );
+    assert.equal(spawned.length, 0);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.AVANEVIS_PACKAGED;
+    } else {
+      process.env.AVANEVIS_PACKAGED = previous;
+    }
+  }
+});
+
 test('destructive add-on removal rejects immediately while compute is pending', async () => {
   let removalAdmissionCalls = 0;
   const { deps } = createValidationDeps({

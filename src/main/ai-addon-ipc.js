@@ -45,8 +45,10 @@ const {
 const { createAsyncActionQueue } = require('./ai-compute-queue');
 const {
   buildSpeakrsSpawnEnv,
+  getPackagedSpeakrsCliPreflightError,
   resolveSpawnDiarizationEngine,
 } = require('../ai-addon/manifest-store');
+const { SPEAKRS_DIARIZATION_ENGINES } = require('../ai-addon/speakrs-pack-spec');
 
 /**
  * @param {object} deps
@@ -100,6 +102,7 @@ function createAiAddonIpc(deps) {
     enqueueGpuExclusiveRemovalAction = (action) => action(),
     isQuitCommitted = () => false,
     resolveSpeakrsCliPath = null,
+    resourcesPath = process.resourcesPath,
   } = deps;
 
   // Single shared cache reference — never copy this let into a stale local.
@@ -237,18 +240,62 @@ function createAiAddonIpc(deps) {
     return error;
   }
 
-  function assertRemovalCanRun(feature) {
+  function createSetupBusyError() {
+    const error = new Error('Wait for local AI work to finish before changing speaker identification setup.');
+    error.code = 'AI_ADDON_SETUP_COMPUTE_BUSY';
+    return error;
+  }
+
+  function createUnknownDiarizationEngineError() {
+    const error = new Error('Unknown speaker engine.');
+    error.code = 'UNKNOWN_DIARIZATION_ENGINE';
+    return error;
+  }
+
+  function resolveRequestedDiarizationEngine(options = {}) {
+    const engine = typeof options.engine === 'string' ? options.engine.trim().toLowerCase() : '';
+    if (!SPEAKRS_DIARIZATION_ENGINES.includes(engine)) {
+      throw createUnknownDiarizationEngineError();
+    }
+    return engine;
+  }
+
+  function assertAddonDiskMutationCanRun(feature, action = 'remove') {
     if (isQuitCommitted()) {
-      const error = new Error('Cannot remove local AI files while the app is quitting.');
+      const error = new Error(
+        action === 'setup'
+          ? 'Cannot change speaker identification setup while the app is quitting.'
+          : 'Cannot remove local AI files while the app is quitting.',
+      );
       error.code = 'QUIT_IN_PROGRESS';
       throw error;
     }
     if (hasPendingAiComputeWork() || hasPendingGpuResourceWork()) {
+      if (action === 'setup') {
+        throw createSetupBusyError();
+      }
       throw createRemovalBusyError(feature);
     }
   }
 
+  function assertRemovalCanRun(feature) {
+    assertAddonDiskMutationCanRun(feature, 'remove');
+  }
+
   function buildDiarizationValidationEnv(engine, requiredDevice) {
+    const resolvedEngine = resolveSpawnDiarizationEngine(engine);
+    if (resolvedEngine === 'speakrs') {
+      const preflightError = getPackagedSpeakrsCliPreflightError({
+        engine: resolvedEngine,
+        env: process.env,
+        platform: process.platform,
+        resourcesPath,
+        fsModule: fs,
+      });
+      if (preflightError) {
+        throw preflightError;
+      }
+    }
     const clearedTokens = buildClearedHuggingFaceTokenEnv();
     if (engine === 'speakrs') {
       const cudaEnv = buildCudaRuntimeEnv({}, { includeManagedDiarization: false });
@@ -273,6 +320,18 @@ function createAiAddonIpc(deps) {
   function validateDiarizationRuntime({ modelRef, token, requiredDevice, cancelSignal, engine } = {}) {
     clearDiarizationDependencySitePackagesCache();
     const resolvedEngine = resolveSpawnDiarizationEngine(engine);
+    if (resolvedEngine === 'speakrs') {
+      const preflightError = getPackagedSpeakrsCliPreflightError({
+        engine: resolvedEngine,
+        env: process.env,
+        platform: process.platform,
+        resourcesPath,
+        fsModule: fs,
+      });
+      if (preflightError) {
+        return Promise.reject(preflightError);
+      }
+    }
     const isSpeakrs = resolvedEngine === 'speakrs';
     const resolvedToken = isSpeakrs
       ? null
@@ -542,15 +601,40 @@ function createAiAddonIpc(deps) {
 
     ipcMain.handle('setup-diarization', async (event, options = {}) => {
       assertTrustedRendererSender(event);
-      return runCancellableAiAddonSetup('diarization', (cancelSignal) => setupDiarizationAddon(getAiAddonRuntimeOptions({
-        includeSafeStorage: true,
-        modelId: options.modelId,
-        speakerCount: options.speakerCount,
-        token: options.token,
-        pythonExe: pythonConfig.pythonExe,
-        runtimeValidator: validateDiarizationRuntime,
-        cancelSignal,
-      })));
+      const engine = resolveRequestedDiarizationEngine(options);
+      assertAddonDiskMutationCanRun('diarization', 'setup');
+      return runCancellableAiAddonSetup('diarization', async (cancelSignal) => {
+        // Re-check when the queued setup begins so a job that started after IPC
+        // admission cannot race exclusive deletion. Fail-fast: do not wait.
+        assertAddonDiskMutationCanRun('diarization', 'setup');
+        return setupDiarizationAddon(getAiAddonRuntimeOptions({
+          includeSafeStorage: true,
+          engine,
+          modelId: options.modelId,
+          speakerCount: options.speakerCount,
+          token: options.token,
+          pythonExe: pythonConfig.pythonExe,
+          runtimeValidator: validateDiarizationRuntime,
+          cancelSignal,
+          resourcesPath,
+          withExclusiveDiskMutation: (action) => {
+            assertAddonDiskMutationCanRun('diarization', 'setup');
+            try {
+              return enqueueGpuExclusiveRemovalAction(action);
+            } catch (error) {
+              if (error && error.code === 'AI_ADDON_REMOVE_COMPUTE_BUSY') {
+                throw createSetupBusyError();
+              }
+              if (error && error.code === 'QUIT_IN_PROGRESS') {
+                const mapped = new Error('Cannot change speaker identification setup while the app is quitting.');
+                mapped.code = 'QUIT_IN_PROGRESS';
+                throw mapped;
+              }
+              throw error;
+            }
+          },
+        }));
+      });
     });
 
     ipcMain.handle('cancel-diarization-setup', async (event) => {

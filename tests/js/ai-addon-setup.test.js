@@ -2633,7 +2633,149 @@ test('setup pyannote deletes an existing speakrs pack first and keeps shared CUD
   assert.equal(fsModule.existsSync(protectedFiles.bundledCli), true);
 });
 
-test('exclusive uninstall helpers never delete shared CUDA pip or Whisper caches', () => {
+test('exclusive switch reserves disk mutation only around delete and releases before download', async () => {
+  const fsModule = createMemoryFs();
+  const userDataDir = '/tmp/AvaNevis';
+  const catalog = createSpeakrsTestCatalog();
+  const cliPath = writeSpeakrsCli(fsModule, userDataDir);
+  const pyannoteHub = path.join(userDataDir, 'ai-addons', 'models', 'diarization', 'hub', 'config.json');
+  fsModule.writeFileSync(pyannoteHub, 'hub');
+  fsModule.writeFileSync(getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace), Buffer.from('encrypted:hf_secret'));
+
+  let reserved = false;
+  let reservationEntered = false;
+  let reservedDuringDownload = false;
+  let reservedDuringValidation = false;
+
+  const status = await setupDiarizationAddon({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    engine: 'speakrs',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog,
+    env: { SPEAKRS_CLI_PATH: cliPath },
+    withExclusiveDiskMutation: async (action) => {
+      reservationEntered = true;
+      reserved = true;
+      try {
+        return await action();
+      } finally {
+        reserved = false;
+      }
+    },
+    downloader: async ({ destinationPath }) => {
+      reservedDuringDownload = reserved;
+      fsModule.writeFileSync(destinationPath, SPEAKRS_TEST_BYTES);
+    },
+    extractor: createSpeakrsTestExtractor(fsModule),
+    runtimeValidator: async () => {
+      reservedDuringValidation = reserved;
+      return { ok: true };
+    },
+  });
+
+  assert.equal(reservationEntered, true);
+  assert.equal(reservedDuringDownload, false);
+  assert.equal(reservedDuringValidation, false);
+  assert.equal(reserved, false);
+  assert.equal(status.features.diarization.status, 'ready');
+  assert.equal(fsModule.existsSync(getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace)), false);
+});
+
+test('token-only Pyannote state is uninstalled when switching to Speakrs', async () => {
+  const fsModule = createMemoryFs();
+  const userDataDir = '/tmp/AvaNevis';
+  const catalog = createSpeakrsTestCatalog();
+  const cliPath = writeSpeakrsCli(fsModule, userDataDir);
+  const tokenPath = getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace);
+  fsModule.writeFileSync(tokenPath, Buffer.from('encrypted:hf_secret'));
+
+  const status = await setupDiarizationAddon({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    engine: 'speakrs',
+    token: 'hf_must_be_ignored',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog,
+    env: { SPEAKRS_CLI_PATH: cliPath },
+    downloader: async ({ destinationPath }) => fsModule.writeFileSync(destinationPath, SPEAKRS_TEST_BYTES),
+    extractor: createSpeakrsTestExtractor(fsModule),
+  });
+
+  assert.equal(status.features.diarization.engine, 'speakrs');
+  assert.equal(status.features.diarization.status, 'ready');
+  assert.equal(fsModule.existsSync(tokenPath), false);
+});
+
+test('remove speakrs setup leaves engine as the last choice', async () => {
+  const fsModule = createMemoryFs();
+  const userDataDir = '/tmp/AvaNevis';
+  const catalog = createSpeakrsTestCatalog();
+  const cliPath = writeSpeakrsCli(fsModule, userDataDir);
+
+  await setupDiarizationAddon({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    engine: 'speakrs',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog,
+    env: { SPEAKRS_CLI_PATH: cliPath },
+    downloader: async ({ destinationPath }) => fsModule.writeFileSync(destinationPath, SPEAKRS_TEST_BYTES),
+    extractor: createSpeakrsTestExtractor(fsModule),
+  });
+
+  const status = await removeDiarizationSetup({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog,
+    env: { SPEAKRS_CLI_PATH: cliPath },
+  });
+
+  assert.equal(status.features.diarization.status, 'notConfigured');
+  assert.equal(status.features.diarization.engine, 'speakrs');
+  assert.equal(status.features.diarization.setupComplete, false);
+});
+
+test('packaged Speakrs setup rejects a missing bundled CLI before download', async () => {
+  const fsModule = createMemoryFs();
+  const userDataDir = '/tmp/AvaNevis';
+  const catalog = createSpeakrsTestCatalog();
+  const downloadUrls = [];
+
+  const status = await setupDiarizationAddon({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    engine: 'speakrs',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog,
+    env: { AVANEVIS_PACKAGED: '1' },
+    resourcesPath: path.join(userDataDir, 'missing-resources'),
+    downloader: async ({ url }) => {
+      downloadUrls.push(url);
+      throw new Error('download should not start');
+    },
+  });
+
+  assert.equal(status.features.diarization.engine, 'speakrs');
+  assert.equal(status.features.diarization.status, 'error');
+  assert.match(status.features.diarization.error, /incomplete/i);
+  assert.match(status.features.diarization.error, /Reinstall AvaNevis/);
+  assert.doesNotMatch(status.features.diarization.error, /re-run speaker setup|FileNotFoundError|traceback/i);
+  assert.deepEqual(downloadUrls, []);
+});
+
+test('exclusive uninstall helpers never delete shared CUDA pip or Whisper caches', async () => {
   const fsModule = createMemoryFs();
   const userDataDir = '/tmp/AvaNevis';
   const protectedFiles = createProtectedSiblingFiles(fsModule, userDataDir);
@@ -2642,8 +2784,8 @@ test('exclusive uninstall helpers never delete shared CUDA pip or Whisper caches
   fsModule.writeFileSync(path.join(userDataDir, 'ai-addons', 'dependencies', 'diarization', 'pyannote', 'site-packages', 'ok'), 'deps');
   fsModule.writeFileSync(getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace), Buffer.from('encrypted:hf_secret'));
 
-  uninstallSpeakrsLocalState({ userDataDir, fsModule });
-  uninstallPyannoteLocalState({ userDataDir, modelId: PYANNOTE_DIARIZATION_MODEL_ID, fsModule });
+  await uninstallSpeakrsLocalState({ userDataDir, fsModule });
+  await uninstallPyannoteLocalState({ userDataDir, modelId: PYANNOTE_DIARIZATION_MODEL_ID, fsModule });
 
   assert.equal(fsModule.existsSync(protectedFiles.cudaPip), true);
   assert.equal(fsModule.existsSync(protectedFiles.whisperCache), true);

@@ -23,8 +23,14 @@ const {
   buildSpeakrsSpawnEnv,
   canStartGuidedDiarization,
   resolveSpawnDiarizationEngine,
+  getPackagedSpeakrsCliPreflightError,
+  SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE,
 } = require('../../src/ai-addon/manifest-store');
+const {
+  SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE: RENDERER_SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE,
+} = require('../../src/renderer/ai-addon-ui-helpers');
 const { createPythonRuntime } = require('../../src/main/python-runtime');
+const { TOKEN_KEYS, getTokenPath } = require('../../src/ai-addon-token-store');
 const {
   setupDiarizationAddon,
   uninstallPyannoteLocalState,
@@ -667,6 +673,15 @@ test('exclusive switch propagates real-filesystem deletion failures', async () =
       }
       return fs.rmSync(targetPath, options);
     },
+    promises: {
+      ...fs.promises,
+      rm(targetPath, options) {
+        if (path.resolve(targetPath) === path.resolve(speakrsRoot)) {
+          return Promise.reject(new Error('simulated locked directory'));
+        }
+        return fs.promises.rm(targetPath, options);
+      },
+    },
   };
   try {
     fs.mkdirSync(speakrsRoot, { recursive: true });
@@ -704,21 +719,21 @@ test('pyannote uninstall roots are exact and exclude sanitized model-id paths', 
   );
 });
 
-test('pyannote uninstall removes its exact roots even when they are empty directories', () => {
+test('pyannote uninstall removes its exact roots even when they are empty directories', async () => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pyannote-empty-roots-'));
   try {
     const roots = getPyannoteUninstallPaths(userDataDir);
     for (const root of roots) {
       fs.mkdirSync(root, { recursive: true });
     }
-    uninstallPyannoteLocalState({ userDataDir });
+    await uninstallPyannoteLocalState({ userDataDir });
     assert.ok(roots.every((root) => !fs.existsSync(root)));
   } finally {
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }
 });
 
-test('uninstalling Speakrs never reaches shared CUDA, Whisper, or bundled CLI roots', () => {
+test('uninstalling Speakrs never reaches shared CUDA, Whisper, or bundled CLI roots', async () => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-exact-delete-'));
   const sharedFiles = [
     path.join(userDataDir, 'Python', 'site-packages', 'nvidia', 'cublas', 'bin', 'cublas64_12.dll'),
@@ -732,9 +747,101 @@ test('uninstalling Speakrs never reaches shared CUDA, Whisper, or bundled CLI ro
     }
     fs.mkdirSync(getSpeakrsOrtRuntimeDir(userDataDir), { recursive: true });
     fs.mkdirSync(path.dirname(getSpeakrsModelRevisionDir(userDataDir)), { recursive: true });
-    uninstallSpeakrsLocalState({ userDataDir });
+    await uninstallSpeakrsLocalState({ userDataDir });
     assert.ok(sharedFiles.every((filePath) => fs.existsSync(filePath)));
   } finally {
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }
+});
+
+test('token-only Pyannote uninstall deletes the saved token and exact roots only', async () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pyannote-token-only-'));
+  const tokenPath = getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace);
+  const cudaPip = path.join(userDataDir, 'Python', 'site-packages', 'nvidia', 'cublas', 'bin', 'cublas64_12.dll');
+  try {
+    fs.mkdirSync(path.dirname(tokenPath), { recursive: true });
+    fs.writeFileSync(tokenPath, Buffer.from('encrypted:hf_secret'));
+    fs.mkdirSync(path.dirname(cudaPip), { recursive: true });
+    fs.writeFileSync(cudaPip, 'keep');
+    await uninstallPyannoteLocalState({ userDataDir });
+    assert.equal(fs.existsSync(tokenPath), false);
+    assert.equal(fs.existsSync(cudaPip), true);
+  } finally {
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test('Speakrs uninstall unlinks a replaced root without following the symlink', async (t) => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-symlink-delete-'));
+  const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-outside-target-'));
+  const speakrsRoot = path.join(userDataDir, 'ai-addons', 'models', 'diarization', 'speakrs');
+  const outsideFile = path.join(outsideDir, 'keep.bin');
+  try {
+    fs.mkdirSync(path.dirname(speakrsRoot), { recursive: true });
+    fs.writeFileSync(outsideFile, 'keep');
+    try {
+      fs.symlinkSync(outsideDir, speakrsRoot, 'dir');
+    } catch (_error) {
+      t.skip('Symlink path hardening test requires directory symlink support.');
+      return;
+    }
+    await uninstallSpeakrsLocalState({ userDataDir });
+    assert.equal(fs.existsSync(speakrsRoot), false);
+    assert.equal(fs.existsSync(outsideFile), true);
+  } finally {
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+    fs.rmSync(outsideDir, { recursive: true, force: true });
+  }
+});
+
+test('engine uninstall uses awaited fs.promises.rm on real trees', async () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-async-rm-'));
+  const speakrsRoot = path.join(userDataDir, 'ai-addons', 'models', 'diarization', 'speakrs');
+  const nested = path.join(speakrsRoot, 'rev', 'weights.bin');
+  const originalRm = fs.promises.rm;
+  const rmCalls = [];
+  fs.promises.rm = async (targetPath, options) => {
+    rmCalls.push({ targetPath, options });
+    return originalRm.call(fs.promises, targetPath, options);
+  };
+  try {
+    fs.mkdirSync(path.dirname(nested), { recursive: true });
+    fs.writeFileSync(nested, Buffer.alloc(64 * 1024, 7));
+    await uninstallSpeakrsLocalState({ userDataDir });
+    assert.equal(fs.existsSync(speakrsRoot), false);
+    assert.ok(rmCalls.some((call) => path.resolve(call.targetPath) === path.resolve(speakrsRoot)));
+    assert.equal(rmCalls[0].options.recursive, true);
+  } finally {
+    fs.promises.rm = originalRm;
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test('packaged missing Speakrs CLI preflight is a reinstall error, not a Python traceback', () => {
+  assert.equal(SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE, RENDERER_SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE);
+  const error = getPackagedSpeakrsCliPreflightError({
+    engine: 'speakrs',
+    env: { AVANEVIS_PACKAGED: '1' },
+    platform: 'win32',
+    resourcesPath: path.join(os.tmpdir(), 'avanevis-empty-resources'),
+    fsModule: { existsSync: () => false },
+  });
+  assert.ok(error);
+  assert.equal(error.code, 'SPEAKRS_PACKAGED_CLI_MISSING');
+  assert.equal(error.message, SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE);
+  assert.doesNotMatch(error.message, /FileNotFoundError|traceback|re-run speaker setup/i);
+  assert.equal(getPackagedSpeakrsCliPreflightError({
+    engine: 'pyannote',
+    env: { AVANEVIS_PACKAGED: '1' },
+    platform: 'win32',
+    resourcesPath: path.join(os.tmpdir(), 'avanevis-empty-resources'),
+    fsModule: { existsSync: () => false },
+  }), null);
+  assert.equal(getPackagedSpeakrsCliPreflightError({
+    engine: 'speakrs',
+    env: {},
+    platform: 'win32',
+    resourcesPath: path.join(os.tmpdir(), 'avanevis-empty-resources'),
+    fsModule: { existsSync: () => false },
+  }), null);
 });

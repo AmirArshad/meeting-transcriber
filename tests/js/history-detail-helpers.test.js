@@ -7,9 +7,12 @@ const {
   getSummaryGenerationButtonView,
   getSummarySetupMessage,
   buildHomeAiAddonPrompt,
+  hasDiarizationLocalState,
   normalizeHistoryDetailTab,
   parseTranscriptMarkdownSegments,
+  shouldShowSpeakerSetupPrompt,
 } = require('../../src/renderer/history-detail-helpers');
+const { SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE, shouldConfirmDiarizationEngineSwitch } = require('../../src/renderer/ai-addon-ui-helpers');
 
 test('parseTranscriptMarkdownSegments renders saved speaker labels from Markdown', () => {
   const segments = parseTranscriptMarkdownSegments(`# Meeting Transcription
@@ -270,4 +273,219 @@ test('buildHomeAiAddonPrompt offers macOS speaker setup when MPS policy is suppo
   });
 
   assert.equal(prompt.feature, 'diarization');
+});
+
+test('shouldShowSpeakerSetupPrompt keeps the Windows CUDA gate', () => {
+  const diarization = {
+    status: 'notConfigured',
+    setupComplete: false,
+    availability: { supported: true },
+  };
+  assert.equal(shouldShowSpeakerSetupPrompt({
+    diarization,
+    platform: 'win32',
+    hasNvidiaGpu: true,
+    cudaInstalled: true,
+  }), true);
+  assert.equal(shouldShowSpeakerSetupPrompt({
+    diarization,
+    platform: 'win32',
+    hasNvidiaGpu: true,
+    cudaInstalled: false,
+  }), false);
+  assert.equal(shouldShowSpeakerSetupPrompt({
+    diarization,
+    platform: 'win32',
+    hasNvidiaGpu: false,
+    cudaInstalled: true,
+  }), false);
+});
+
+test('new-user home speaker prompt selects Speakrs and existing pyannote stays', () => {
+  const newUser = buildHomeAiAddonPrompt({
+    platform: 'darwin',
+    aiStatus: {
+      features: {
+        diarization: {
+          status: 'notConfigured',
+          setupComplete: false,
+          availability: { supported: true },
+        },
+        summary: { status: 'ready', setupComplete: true },
+      },
+    },
+  });
+  assert.equal(newUser.feature, 'diarization');
+  assert.equal(newUser.engine, 'speakrs');
+
+  const existingPyannote = buildHomeAiAddonPrompt({
+    platform: 'win32',
+    cudaInstalled: true,
+    hasNvidiaGpu: true,
+    aiStatus: {
+      features: {
+        diarization: {
+          engine: 'pyannote',
+          status: 'needsAccount',
+          setupComplete: false,
+          availability: { supported: true },
+        },
+      },
+    },
+  });
+  assert.equal(existingPyannote.feature, 'diarization');
+  assert.equal(existingPyannote.engine, 'pyannote');
+});
+
+test('needsAccount copy stays for pyannote and is not used for Speakrs', () => {
+  assert.match(
+    getDiarizationSetupMessage({ engine: 'pyannote', status: 'needsAccount' }),
+    /own Hugging Face token.*model terms/i,
+  );
+  assert.doesNotMatch(
+    getDiarizationSetupMessage({
+      engine: 'speakrs',
+      status: 'notConfigured',
+      error: SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE,
+      cliPresent: false,
+    }),
+    /Hugging Face token|needs account/i,
+  );
+});
+
+test('packaged missing CLI status does not tell the user to re-run setup', () => {
+  const message = getDiarizationSetupMessage({
+    engine: 'speakrs',
+    status: 'error',
+    error: SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE,
+    cliPresent: false,
+  });
+  assert.equal(message, SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE);
+  assert.doesNotMatch(message, /re-run speaker setup|validate again or remove and reinstall/i);
+});
+
+test('Speakrs pack or runtime local state enables Remove', () => {
+  assert.equal(hasDiarizationLocalState({
+    status: 'error',
+    packCache: { installed: true },
+  }), true);
+  assert.equal(hasDiarizationLocalState({
+    status: 'notConfigured',
+    runtimeCache: { partial: true },
+  }), true);
+});
+
+test('token-only Pyannote state requires switch confirmation and enables Remove', () => {
+  const feature = {
+    engine: 'pyannote',
+    status: 'needsAccount',
+    tokenStatus: { hasToken: true },
+  };
+  assert.equal(hasDiarizationLocalState(feature), true);
+  assert.equal(shouldConfirmDiarizationEngineSwitch({
+    selectedEngine: 'speakrs',
+    installedEngine: 'pyannote',
+    hasOtherEngineLocalState: hasDiarizationLocalState(feature),
+  }), true);
+  const controls = buildAiAddonControlState({
+    type: 'diarization',
+    feature,
+    selectedEngine: 'pyannote',
+  });
+  assert.equal(controls.canRemove, true);
+  assert.equal(controls.canConfigure, true);
+  const switching = buildAiAddonControlState({
+    type: 'diarization',
+    feature,
+    selectedEngine: 'speakrs',
+  });
+  assert.equal(switching.canConfigure, true);
+  assert.equal(switching.canRemove, true);
+});
+
+test('packaged missing Speakrs CLI Home prompt uses the exact reinstall copy', () => {
+  const prompt = buildHomeAiAddonPrompt({
+    platform: 'win32',
+    hasNvidiaGpu: true,
+    cudaInstalled: true,
+    aiStatus: {
+      features: {
+        diarization: {
+          engine: 'speakrs',
+          status: 'error',
+          cliPresent: false,
+          cliMissingMessage: SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE,
+          error: SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE,
+          availability: { supported: true },
+        },
+      },
+    },
+  });
+  assert.equal(prompt.feature, 'diarization');
+  assert.equal(prompt.message, SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE);
+  assert.doesNotMatch(prompt.message, /Set up local speaker identification in Settings|re-run speaker setup/i);
+});
+
+test('dev-mode missing Speakrs CLI Home prompt keeps the dev copy', () => {
+  const prompt = buildHomeAiAddonPrompt({
+    platform: 'darwin',
+    aiStatus: {
+      features: {
+        diarization: {
+          engine: 'speakrs',
+          status: 'error',
+          cliPresent: false,
+          cliMissingMessage: 'Speakrs CLI is not available.',
+          error: 'Speakrs CLI is not available.',
+          availability: { supported: true },
+        },
+      },
+    },
+  });
+  assert.equal(prompt.message, 'Speakrs CLI is not available.');
+  assert.doesNotMatch(prompt.message, /Reinstall AvaNevis|Set up local speaker identification in Settings/i);
+});
+
+test('packaged missing Speakrs CLI disables Set Up that cannot repair the bundled binary', () => {
+  const feature = {
+    engine: 'speakrs',
+    status: 'error',
+    cliPresent: false,
+    cliMissingMessage: SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE,
+    error: SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE,
+  };
+  const speakrs = buildAiAddonControlState({
+    type: 'diarization',
+    feature,
+    selectedEngine: 'speakrs',
+  });
+  assert.equal(speakrs.canConfigure, false);
+  const pyannote = buildAiAddonControlState({
+    type: 'diarization',
+    feature,
+    selectedEngine: 'pyannote',
+  });
+  assert.equal(pyannote.canConfigure, true);
+});
+
+test('switching the selected engine re-enables Set Up while the other engine is ready', () => {
+  const readySpeakrs = {
+    engine: 'speakrs',
+    status: 'ready',
+    setupComplete: true,
+    packCache: { installed: true },
+  };
+  const sameEngine = buildAiAddonControlState({
+    type: 'diarization',
+    feature: readySpeakrs,
+    selectedEngine: 'speakrs',
+  });
+  assert.equal(sameEngine.canConfigure, false);
+  const switching = buildAiAddonControlState({
+    type: 'diarization',
+    feature: readySpeakrs,
+    selectedEngine: 'pyannote',
+  });
+  assert.equal(switching.canConfigure, true);
+  assert.equal(switching.canRemove, true);
 });

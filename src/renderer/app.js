@@ -43,6 +43,7 @@ const {
   buildAiAddonControlState,
   buildHomeAiAddonPrompt,
   getDiarizationSetupMessage,
+  hasDiarizationLocalState,
   getSummaryGenerationButtonView,
   getSummarySetupMessage,
   normalizeHistoryDetailTab,
@@ -67,8 +68,18 @@ const {
   isMeetingTranscriptionRetryable,
 } = window.summaryUiHelpers;
 const {
+  buildDiarizationEngineCards,
+  getDiarizationRemoveConfirmMessage,
+  getDiarizationSwitchConfirmMessage,
   isAiAddonProgressPhase,
   isAiAddonTerminalStatus,
+  readDiarizationSetupToken,
+  resolveDiarizationSetupSource,
+  resolveSelectedDiarizationEngine,
+  shouldClearDiarizationTokenFields,
+  shouldConfirmDiarizationEngineSwitch,
+  shouldShowDiarizationSpeakerCount,
+  shouldShowDiarizationTokenUi,
 } = window.aiAddonUiHelpers;
 const { clearElement } = window.domHelpers;
 const { meetingIdsEqual } = window.meetingHelpers;
@@ -163,7 +174,8 @@ let pendingMeetingTranscriptId = null;
 let summaryGenerationMeetingId = null;
 let summaryGenerationCancelling = false;
 let activeHistoryDetailTab = 'transcript';
-let homePromptContext = { platform: null, hasNvidiaGpu: false, cudaInstalled: false };
+let homePromptContext = { platform: null, arch: null, hasNvidiaGpu: false, cudaInstalled: false };
+let selectedDiarizationEngine = null;
 let startupCudaCheckPromise = null;
 let meetings = [];
 let audioVisualizer = null;
@@ -1390,12 +1402,61 @@ function openSettingsAtAiAddons() {
   }
 }
 
+function getSelectedDiarizationEngine(diarization) {
+  return selectedDiarizationEngine || resolveSelectedDiarizationEngine(diarization);
+}
+
+function applyDiarizationEngineCards({ selectedEngine, platform, arch }) {
+  const cards = buildDiarizationEngineCards({ platform, arch });
+  document.querySelectorAll('.diarization-engine-card').forEach((card) => {
+    const engine = card.dataset.engine;
+    const radio = card.querySelector('.diarization-engine-radio');
+    const selected = engine === selectedEngine;
+    const entry = cards.find((item) => item.engine === engine);
+    if (!entry) {
+      return;
+    }
+    card.classList.toggle('selected', selected);
+    if (radio) {
+      radio.checked = selected;
+    }
+    const subtitle = card.querySelector('[data-engine-sub], .diarization-engine-card-sub');
+    if (subtitle) {
+      subtitle.textContent = entry.subtitle;
+    }
+  });
+  document.querySelectorAll('[data-speakrs-recommended]').forEach((badge) => {
+    const speakrsCard = cards.find((entry) => entry.engine === 'speakrs');
+    badge.hidden = !(speakrsCard && speakrsCard.recommended);
+  });
+}
+
+function applyDiarizationEngineFields(selectedEngine) {
+  const showToken = shouldShowDiarizationTokenUi(selectedEngine);
+  const showSpeakerCount = shouldShowDiarizationSpeakerCount(selectedEngine);
+  ['diarization-token-field', 'home-diarization-token-field'].forEach((id) => {
+    const field = document.getElementById(id);
+    if (field) {
+      field.hidden = !showToken;
+    }
+  });
+  if (shouldClearDiarizationTokenFields({ selectedEngine })) {
+    ['diarization-token-input', 'home-diarization-token-input'].forEach((id) => {
+      const input = document.getElementById(id);
+      if (input) {
+        input.value = '';
+      }
+    });
+  }
+  const speakerCountField = document.getElementById('diarization-speaker-count-field');
+  if (speakerCountField) {
+    speakerCountField.hidden = !showSpeakerCount;
+  }
+}
+
 function updateHomeAiAddonCTA(aiStatus) {
   const cta = document.getElementById('ai-addon-cta');
-  if (!cta) {
-    return;
-  }
-
+  const speakerPrompt = document.getElementById('diarization-setup-prompt');
   const prompt = buildHomeAiAddonPrompt({
     aiStatus,
     platform: homePromptContext.platform,
@@ -1404,10 +1465,43 @@ function updateHomeAiAddonCTA(aiStatus) {
   });
 
   if (!prompt) {
-    cta.style.display = 'none';
+    if (cta) cta.style.display = 'none';
+    if (speakerPrompt) speakerPrompt.style.display = 'none';
     return;
   }
 
+  if (prompt.feature === 'diarization' && speakerPrompt) {
+    if (cta) cta.style.display = 'none';
+    const title = document.getElementById('diarization-setup-prompt-title');
+    const message = document.getElementById('diarization-setup-prompt-message');
+    if (title) title.textContent = prompt.title;
+    if (message) message.textContent = prompt.message;
+    const selectedEngine = getSelectedDiarizationEngine({ engine: prompt.engine });
+    applyDiarizationEngineCards({
+      selectedEngine,
+      platform: homePromptContext.platform,
+      arch: homePromptContext.arch,
+    });
+    applyDiarizationEngineFields(selectedEngine);
+    const diarization = aiStatus && aiStatus.features ? aiStatus.features.diarization : null;
+    applyAiAddonButtonState({
+      setupButton: document.getElementById('home-setup-diarization-btn'),
+      controlState: buildAiAddonControlState({
+        feature: diarization,
+        type: 'diarization',
+        setupActive: aiAddonDownloadState.diarization.active,
+        unsupported: diarization && diarization.status === 'unsupported',
+        selectedEngine,
+      }),
+    });
+    speakerPrompt.style.display = 'flex';
+    return;
+  }
+
+  if (speakerPrompt) speakerPrompt.style.display = 'none';
+  if (!cta) {
+    return;
+  }
   const title = document.getElementById('ai-addon-cta-title');
   const sub = document.getElementById('ai-addon-cta-sub');
   if (title) title.textContent = prompt.title;
@@ -1418,8 +1512,10 @@ function updateHomeAiAddonCTA(aiStatus) {
 
 function setupHomeAiAddonCTA() {
   const cta = document.getElementById('ai-addon-cta');
-  if (!cta) return;
-  cta.addEventListener('click', openSettingsAtAiAddons);
+  if (cta) {
+    cta.addEventListener('click', openSettingsAtAiAddons);
+  }
+  setupAiAddonSettingsListeners();
 }
 
 function closeInlineTitleEditor({ headingId, editBtnId, formId, editBtnDisplay = '' }) {
@@ -4381,12 +4477,19 @@ function updateDiarizationFootprint(diarization) {
   const estimatedDownload = storage && storage.estimatedDownloadBytes;
   const installed = storage && storage.installedBytes;
   const estimatedInstalled = storage && storage.estimatedInstalledBytes;
-  const runtimeLabel = diarization && diarization.availability && diarization.availability.acceleration === 'mps'
-    ? 'PyTorch Metal/MPS, isolated under user data'
-    : 'PyTorch CUDA, isolated under user data';
-  const downloadFallback = diarization && diarization.availability && diarization.availability.acceleration === 'mps'
-    ? 'depends on PyTorch MPS wheels'
-    : 'depends on PyTorch CUDA wheels';
+  const engine = resolveSelectedDiarizationEngine(diarization);
+  const runtimeLabel = engine === 'speakrs'
+    ? (diarization && diarization.availability && diarization.availability.acceleration === 'mps'
+      ? 'Apple Silicon (CoreML), isolated under user data'
+      : 'Speakrs CUDA, isolated under user data')
+    : (diarization && diarization.availability && diarization.availability.acceleration === 'mps'
+      ? 'PyTorch Metal/MPS, isolated under user data'
+      : 'PyTorch CUDA, isolated under user data');
+  const downloadFallback = engine === 'speakrs'
+    ? 'model pack download'
+    : (diarization && diarization.availability && diarization.availability.acceleration === 'mps'
+      ? 'depends on PyTorch MPS wheels'
+      : 'depends on PyTorch CUDA wheels');
   const downloadState = aiAddonDownloadState.diarization;
   renderFootprintRows(document.getElementById('diarization-footprint'), [
     { label: 'Download', value: estimatedDownload ? `up to ${formatBytes(estimatedDownload)}` : downloadFallback },
@@ -4438,8 +4541,10 @@ function updateAiAddonFootprintWarning(status) {
 function setAiAddonControlsDisabled(disabled) {
   [
     'diarization-token-input',
+    'home-diarization-token-input',
     'diarization-speaker-count',
     'setup-diarization-btn',
+    'home-setup-diarization-btn',
     'validate-diarization-btn',
     'remove-diarization-btn',
     'summary-profile-select',
@@ -4451,6 +4556,9 @@ function setAiAddonControlsDisabled(disabled) {
     if (element) {
       element.disabled = disabled;
     }
+  });
+  document.querySelectorAll('.diarization-engine-radio').forEach((radio) => {
+    radio.disabled = disabled;
   });
 }
 
@@ -4531,12 +4639,20 @@ function updateAiAddonSettings(status) {
 
   if (diarization) {
     setStatusBadge(document.getElementById('diarization-status-badge'), diarization.status);
+    const selectedEngine = getSelectedDiarizationEngine(diarization);
     const diarizationControlState = buildAiAddonControlState({
       feature: diarization,
       type: 'diarization',
       setupActive: aiAddonDownloadState.diarization.active,
       unsupported: diarizationUnsupported,
+      selectedEngine,
     });
+    applyDiarizationEngineCards({
+      selectedEngine,
+      platform: homePromptContext.platform,
+      arch: homePromptContext.arch,
+    });
+    applyDiarizationEngineFields(selectedEngine);
     const speakerCount = document.getElementById('diarization-speaker-count');
     if (speakerCount) {
       speakerCount.value = String(diarization.speakerCount || 'auto');
@@ -4548,11 +4664,20 @@ function updateAiAddonSettings(status) {
       tokenInput.disabled = !diarizationControlState.canConfigure;
       tokenInput.placeholder = diarizationUnsupported ? 'Unavailable on this platform' : 'hf_...';
     }
+    const homeTokenInput = document.getElementById('home-diarization-token-input');
+    if (homeTokenInput) {
+      homeTokenInput.disabled = !diarizationControlState.canConfigure;
+      homeTokenInput.placeholder = diarizationUnsupported ? 'Unavailable on this platform' : 'hf_...';
+    }
 
     applyAiAddonButtonState({
       setupButton: document.getElementById('setup-diarization-btn'),
       validateButton: document.getElementById('validate-diarization-btn'),
       removeButton: document.getElementById('remove-diarization-btn'),
+      controlState: diarizationControlState,
+    });
+    applyAiAddonButtonState({
+      setupButton: document.getElementById('home-setup-diarization-btn'),
       controlState: diarizationControlState,
     });
 
@@ -4708,8 +4833,15 @@ async function withAiAddonSetupAction(feature, button, label, startMessage, acti
   }
 }
 
+let aiAddonSettingsListenersBound = false;
+
 function setupAiAddonSettingsListeners() {
+  if (aiAddonSettingsListenersBound) {
+    return;
+  }
+  aiAddonSettingsListenersBound = true;
   const setupDiarizationBtn = document.getElementById('setup-diarization-btn');
+  const homeSetupDiarizationBtn = document.getElementById('home-setup-diarization-btn');
   const cancelDiarizationBtn = document.getElementById('cancel-diarization-btn');
   const validateDiarizationBtn = document.getElementById('validate-diarization-btn');
   const removeDiarizationBtn = document.getElementById('remove-diarization-btn');
@@ -4719,20 +4851,83 @@ function setupAiAddonSettingsListeners() {
   const removeSummaryBtn = document.getElementById('remove-summary-btn');
   const summaryProfileSelect = document.getElementById('summary-profile-select');
 
-  if (setupDiarizationBtn) {
-    setupDiarizationBtn.addEventListener('click', () => withAiAddonSetupAction('diarization', setupDiarizationBtn, 'Setting up...', 'Speaker identification setup', async () => {
-      const tokenInput = document.getElementById('diarization-token-input');
-      const speakerCount = document.getElementById('diarization-speaker-count');
-      const status = await window.electronAPI.setupDiarization({
-        token: tokenInput ? tokenInput.value.trim() : '',
-        speakerCount: speakerCount ? speakerCount.value : 'auto',
-      });
-      if (tokenInput) {
-        tokenInput.value = '';
+  function selectDiarizationEngine(engine) {
+    selectedDiarizationEngine = engine;
+    const diarization = aiAddonStatusSnapshot && aiAddonStatusSnapshot.features
+      ? aiAddonStatusSnapshot.features.diarization
+      : { engine };
+    applyDiarizationEngineCards({
+      selectedEngine: engine,
+      platform: homePromptContext.platform,
+      arch: homePromptContext.arch,
+    });
+    applyDiarizationEngineFields(engine);
+    if (aiAddonStatusSnapshot) {
+      updateAiAddonSettings(aiAddonStatusSnapshot);
+      updateHomeAiAddonCTA(aiAddonStatusSnapshot);
+    }
+  }
+
+  async function startDiarizationSetup(button) {
+    const diarization = aiAddonStatusSnapshot && aiAddonStatusSnapshot.features
+      ? aiAddonStatusSnapshot.features.diarization
+      : null;
+    const engine = getSelectedDiarizationEngine(diarization);
+    if (shouldConfirmDiarizationEngineSwitch({
+      selectedEngine: engine,
+      installedEngine: resolveSelectedDiarizationEngine(diarization),
+      hasOtherEngineLocalState: hasDiarizationLocalState(diarization),
+    })) {
+      if (!window.confirm(getDiarizationSwitchConfirmMessage({
+        targetEngine: engine,
+        platform: homePromptContext.platform,
+      }))) {
+        return null;
       }
-      addLog('Speaker identification setup checked.');
-      return status;
-    }));
+    }
+    return withAiAddonSetupAction('diarization', button, 'Setting up...', 'Speaker identification setup', async () => {
+      const settingsToken = document.getElementById('diarization-token-input');
+      const homeToken = document.getElementById('home-diarization-token-input');
+      const source = resolveDiarizationSetupSource(button && button.id);
+      const token = readDiarizationSetupToken({
+        engine,
+        source,
+        homeToken: homeToken ? homeToken.value : '',
+        settingsToken: settingsToken ? settingsToken.value : '',
+      });
+      const speakerCount = document.getElementById('diarization-speaker-count');
+      try {
+        const status = await window.electronAPI.setupDiarization({
+          engine,
+          token,
+          speakerCount: engine === 'pyannote' && speakerCount ? speakerCount.value : 'auto',
+        });
+        addLog('Speaker identification setup checked.');
+        return status;
+      } finally {
+        if (settingsToken) {
+          settingsToken.value = '';
+        }
+        if (homeToken) {
+          homeToken.value = '';
+        }
+      }
+    });
+  }
+
+  document.querySelectorAll('.diarization-engine-radio').forEach((radio) => {
+    radio.addEventListener('change', () => {
+      if (radio.checked) {
+        selectDiarizationEngine(radio.value);
+      }
+    });
+  });
+
+  if (setupDiarizationBtn) {
+    setupDiarizationBtn.addEventListener('click', () => startDiarizationSetup(setupDiarizationBtn));
+  }
+  if (homeSetupDiarizationBtn) {
+    homeSetupDiarizationBtn.addEventListener('click', () => startDiarizationSetup(homeSetupDiarizationBtn));
   }
 
   if (cancelDiarizationBtn) {
@@ -4761,7 +4956,12 @@ function setupAiAddonSettingsListeners() {
 
   if (removeDiarizationBtn) {
     removeDiarizationBtn.addEventListener('click', () => {
-      if (!confirm('Remove speaker identification setup and stored token?')) {
+      const diarization = aiAddonStatusSnapshot && aiAddonStatusSnapshot.features
+        ? aiAddonStatusSnapshot.features.diarization
+        : null;
+      if (!confirm(getDiarizationRemoveConfirmMessage({
+        engine: resolveSelectedDiarizationEngine(diarization),
+      }))) {
         return;
       }
       withAiAddonAction(removeDiarizationBtn, 'Removing...', async () => {
@@ -5118,8 +5318,15 @@ async function checkGPUStatus() {
   } finally {
     updateGPUCTA(ctaState);
     updateCudaRuntimeWarning(ctaState);
+    let arch = homePromptContext.arch;
+    try {
+      arch = await window.electronAPI.getArch();
+    } catch (_error) {
+      arch = homePromptContext.arch;
+    }
     homePromptContext = {
       platform: ctaState.platform,
+      arch,
       hasNvidiaGpu: Boolean(ctaState.gpuInfo && ctaState.gpuInfo.hasGPU),
       cudaInstalled: Boolean(ctaState.cudaInfo && ctaState.cudaInfo.installed),
     };
