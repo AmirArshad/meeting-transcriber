@@ -1,8 +1,8 @@
-# Speakrs Diarization Migration Plan (v2 — reviewed & hardened)
+# Speakrs Diarization Migration Plan (v3 — pre-Task-0 hardened)
 
-> **Revision history:** v1 drafted 2026-07-16. v2 (2026-07-18) is a production-viability review + execution-ready rewrite: external claims verified (crate, models, licenses, ORT), repo contracts inventoried, vague gates replaced with measurable criteria, and tasks re-sequenced characterization-first.
+> **Revision history:** v1 drafted 2026-07-16. v2 (2026-07-18) is a production-viability review + execution-ready rewrite. v3 (2026-08-13) is an adversarial pre-Task-0 review: **speakrs 0.5.0 is still the latest published crate** (crates.io `max_version` / GitHub release `v0.5.0`; master after that is docs-only). Binding corrections below; not a rewrite.
 >
-> **For agentic workers:** Execute inline by default. Use a subagent only when the user requests it or the task crosses high-risk platform/process boundaries. Do not cut over production until Task 0 spike criteria pass and the license-compliance checklist (Task 2b) is merged.
+> **For agentic workers:** Execute inline by default. Use a subagent only when the user requests it or the task crosses high-risk platform/process boundaries. Do not cut over production until Task 0 spike criteria pass and the license-compliance checklist (Task 2b) is merged. Do not flip `DIARIZATION_ENGINE` to `'speakrs'` until Task 7.
 
 **Verdict: CONDITIONAL GO (viability 3.5/5).** speakrs meets every product goal (zero tokens, OSS, offline, faster, Electron-shippable) and its deal-breakers are all engineering/process, not capability. Conditions: (1) license-compliance diligence on redistributing the model pack — the upstream `avencera/speakrs-models` repo has **no license file** even though every constituent model is MIT or CC-BY-4.0; we repack with our own LICENSES/attribution (self-serve checklist in Task 2b — this is the same posture as sherpa-onnx, Vibe, and OpenWhispr, which all redistribute these exact model families with attribution and no gate); (2) the Windows ONNX Runtime CUDA DLL closure must be proven against our existing CUDA 12 profile in the spike; (3) the crate is <4 months old with a single maintainer — we vendor-pin and keep pyannote behind a flag until soak completes.
 
@@ -12,43 +12,44 @@
 
 ---
 
-## Verified Research Snapshot (2026-07-18)
+## Verified Research Snapshot (2026-07-18, rechecked 2026-08-13)
 
-Everything below was re-verified against crates.io, docs.rs, the speakrs GitHub repo/examples/source, and the HF model repos. Corrections vs v1 are marked ⚠.
+Everything below was re-verified against crates.io, docs.rs, the speakrs GitHub repo/examples/source, and the HF model repos. Corrections vs v1/v2 are marked ⚠.
 
 | Item | Finding |
 |------|---------|
-| Crate | `speakrs` 0.5.0 (2026-07-07), Apache-2.0, MSRV 1.88. ⚠ Crate first published **2026-03-25**; single maintainer (avencera / Praveen Perera); ~2.5 k total downloads. Young. |
-| CLI | **None upstream** — library + examples only. We own `speakrs-cli`. |
+| Crate | `speakrs` **0.5.0 still latest** (published 2026-07-07; crates.io `max_version`/`newest_version` 0.5.0; GitHub latest release tag `v0.5.0`). Apache-2.0, MSRV 1.88, edition 2024. First published **2026-03-25**; single maintainer (avencera / Praveen Perera). Master after v0.5.0 is docs-only (`Why not pyannote-rs?`). Do not pin unreleased master. |
+| Features | ⚠ `default = ["online", "default-linalg"]`. No-default builds **must** enable exactly one BLAS: `default-linalg` / `intel-mkl` / `openblas-static` / `openblas-system`. x86_64 `default-linalg` = static Intel MKL (can be huge); arm64 = static OpenBLAS (needs a C toolchain). `online` gates `ModelManager` / `from_pretrained` / HF repo strings. |
+| CLI | **None upstream** — library + examples only. We own `speakrs-cli`. ⚠ `examples/diarize_wav.rs` hardcodes `ExecutionMode::Cpu` — never copy that as the product path. |
 | API (verified on docs.rs + examples) | `OwnedDiarizationPipeline::{from_pretrained, from_dir(Path, ExecutionMode), run(&[f32]) -> DiarizationResult}`; `result.discrete_diarization.clone()` → `make_exclusive()` → `to_segments()` → `Segment { start: f32, end: f32, speaker: String }`; `rttm(file_id)`. `make_exclusive()` confirmed in `examples/assign_transcript_speakers.rs`. |
-| Speaker-count hint | `PipelineConfig` exposes speaker-count bounds + clustering thresholds (`VbxConfig`/`AhcConfig`/`BinarizeConfig`). Spike confirms mapping from our `--speaker-count`. |
+| Speaker-count hint | ⚠ **No speaker-count API in 0.5.0.** `PipelineConfig` has binarize / `AhcConfig { threshold }` / VBx / merge_gap only. Expect **auto-only** unless Task 0 finds another knob. |
 | Modes | `cpu`, `coreml`, `coreml-fast`, `cuda`, `cuda-fast`, `migraphx`. `*-fast` = 2 s segmentation windows (coarser speaker-change boundaries). |
-| ORT | `ort 2.0.0-rc.12` wrapping **ONNX Runtime 1.24** (a stable Microsoft release). Upstream describes the rc as production-ready but API-unstable; speakrs pins it, so API churn is isolated from us. ⚠ Milder risk than v1 implied. |
-| ORT CUDA EP requirements | CUDA ≥ 12.8, cuDNN 9. DLL closure: `onnxruntime.dll`, `onnxruntime_providers_shared.dll`, `onnxruntime_providers_cuda.dll` (~250–300 MB), plus `cudart64_12.dll`, `cufft64_11.dll`, `cublas64_12.dll`/`cublasLt64_12.dll`, `cudnn64_9.dll`. Our cuda12 profile (`src/main-process/cuda-runtime-helpers.js:5-13`) already provides cublas/cudnn via pip; ⚠ **cudart/cufft/ORT itself are NOT provided today** — they ship in the new speakrs Windows runtime archive (Task 2). |
-| Models | ⚠ `avencera/speakrs-models` (pin `5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f`) is **not** a straight community-1 conversion. Actual contents (from `src/models.rs` constants): `segmentation-3.0.onnx` (+ b32/b64 batched variants, ~6 MB each), `wespeaker-voxceleb-resnet34.onnx` (+ `.data`, b64, split fbank/multimask variants), PLDA/VBx `.npy` params "extracted from the community-1 pipeline cache", and CoreML `.mlmodelc` bundles (CoreML mode needs ONNX **plus** mlmodelc). Whole repo ≈ 870 MB; per-mode subsets are smaller (exact lists recorded in Task 0). |
+| ORT | `ort 2.0.0-rc.12` wrapping **ONNX Runtime 1.24** (a stable Microsoft release). Upstream describes the rc as production-ready but API-unstable; speakrs pins it, so API churn is isolated from us. `ort` may download ORT artifacts at **compile** time — Task 6 must pin/vendor that, not via `download-manifest.js`. |
+| ORT CUDA EP requirements | ORT 1.24 GPU builds target CUDA 12.8 + cuDNN 9, and NVIDIA **minor-version compat** means those builds work with **any CUDA 12.x** user-mode libs. Our cuda12 profile already provides `cublas64_12` / `cublasLt64_12` / `cudnn64_9`; current pyannote win artifact is `torch==2.8.0+cu126`. ⚠ **cudart/cufft/ORT itself are NOT provided today** — they ship in the speakrs Windows runtime archive. Spike proves closure on a box that already runs pyannote CUDA; record the **driver** floor separately. Do not require users to install CUDA toolkit 12.8. |
+| Models | ⚠ `avencera/speakrs-models` (pin `5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f`) is **not** a straight community-1 conversion. `required_files(CoreMl)` (in `src/models.rs`, compiled only with `online`) is ONNX + `.onnx.data` + ~15 `.mlmodelc` trees, not just the three `from_dir` base names. Copy that list from **source** in Task 0 — do not enable `online` just to call `ModelManager`. Whole repo ≈ 870 MB. |
 | Model licenses | `pyannote/segmentation-3.0` = **MIT**. `wespeaker-voxceleb-resnet34-LM` = **CC-BY-4.0** (VoxCeleb dataset is CC-BY-4.0). community-1 pipeline (source of PLDA/VBx params) = **CC-BY-4.0**. The HF gate on pyannote repos is an access/marketing mechanism, **not a license term** — CC-BY-4.0/MIT permit redistribution with attribution. ⚠ `avencera/speakrs-models` itself ships **no LICENSE file** and defers to "upstream terms" → we repack with our own LICENSES manifest per the Task 2b self-serve compliance checklist. |
 | Claimed perf (VoxConverse dev, collar 0) | coreml 7.1 % DER @ 529× (M4 Pro) vs pyannote MPS 7.2 % @ 24×; cuda 7.0 % @ 59×, cuda-fast 7.4 % @ 121× vs pyannote CUDA 7.2 % @ 32×. |
-| Memory | `run(&[f32])` takes the whole mono-16k file in RAM (90 min ≈ 346 MB f32) — comparable to our current in-memory torch waveform path (`audio_prep.load_prepared_audio_for_pipeline`). Spike measures peak RSS. |
+| Memory | `run(&[f32])` takes the whole mono-16k file in RAM (90 min ≈ 346 MB f32). Python `load_prepared_audio_for_pipeline` holds another copy during the spawn. Spike measures **CLI RSS and Python+CLI RSS**. |
 | Input | Mono 16 kHz f32 — exactly what `prepare_diarization_audio` already produces (s16le WAV; CLI decodes s16→f32). |
 
 ### Locked decisions (do not relitigate during execution)
 
 1. **CLI, not PyO3.** Matches Swift-helper/llama-cli packaging, crash-isolates Rust panics, avoids maturin/ABI coupling to bundled Python. Spawn overhead is irrelevant at minutes-long job scale. PyO3 stays a non-goal.
 2. **Default modes: `coreml` (macOS) and `cuda` (Windows) — NOT the `-fast` variants.** Guided transcription consumes turn boundaries to cut padded Whisper windows; `-fast`'s 2 s segmentation windows coarsen exactly those boundaries, and its DER is worse (7.4 vs 7.0/7.1). Precise modes are already 2×+ faster than pyannote. `-fast` may become an opt-in later; never the default.
-3. **CLI is bundled in the installer (built in CI, both platforms); model packs + Windows ORT runtime archive are setup-time downloads.** Keeps the installer lean and the GPU stack out of non-diarization users' disk. Windows CLI builds with `cuda` + `load-dynamic` (small exe, ORT dylib resolved at runtime); macOS CLI builds with `coreml` (ort CPU statically linked). If the macOS binary exceeds 80 MB in Task 0, switch macOS to `load-dynamic` too and move the ort dylib into the model pack.
+3. **CLI is bundled in the installer (built in CI, both platforms); model packs + Windows ORT runtime archive are setup-time downloads.** Keeps the installer lean and the GPU stack out of non-diarization users' disk. **Feature flags (binding):** `default-features = false` plus **`default-linalg`** plus the platform features — never platform-only (that fails the crate's BLAS compile-time check). Mac: `["default-linalg", "coreml"]`. Windows: `["default-linalg", "cuda", "load-dynamic"]`. CI CPU smoke may use `["default-linalg"]` only. If the macOS binary exceeds 80 MB in Task 0 (OpenBLAS + static ort), switch macOS to `load-dynamic` too and move the ort dylib into the model pack. Record Windows exe size **with static MKL** — that can dwarf the “small exe” story.
 4. **Merge/labeling stays in Python.** `speaker_segments.py` (dominant-overlap merge, `Speaker N` relabeling, `Unknown`, 12 s coarse split) is pure Python with no torch dependency and is fully unit-tested. The CLI emits only raw turns.
 5. **Accelerator-only policy is unchanged in this migration.** `cpu` mode exists in the CLI for CI smoke tests only; product setup still requires CUDA (win32) / Apple Silicon (darwin-arm64). Relaxing that is a separate product decision the CLI makes cheap later.
-6. **Dual-engine soak via catalog constant.** `DIARIZATION_ENGINE` default `'speakrs'` in `src/ai-addon-state.js`, dev/QA override via `AVANEVIS_DIARIZATION_ENGINE` env. pyannote code paths are retained untouched until Task 8. Rollback = flip the constant in a patch release.
+6. **Dual-engine soak via catalog constant.** `DIARIZATION_ENGINE` is added in Task 2 with default **`'pyannote'`**. Dev/QA override via `AVANEVIS_DIARIZATION_ENGINE`. **Task 7 flips the default to `'speakrs'`** after soak. pyannote code paths stay until Task 8. Rollback after cutover = flip the constant in a patch release. Do not present existing pyannote users as `notConfigured` before that flip.
 
 ### Execution guardrails (binding on the implementing agent)
 
 1. **Single implementation branch: `feature/speakrs-diarization`, one task at a time, in plan order.** Each task lands as its own commit (or small commit series) prefixed `speakrs task N:`, with that task's validation commands green **before** the next task starts — the branch must be revertible task-by-task and reviewable per-task via commit diffs. Tasks 1–6 merge together after Task 6 validation; Task 7 (soak) runs on merged builds; Task 8 (deletions) is a separate later PR after soak and is never done on this branch.
-2. **Characterization first (Task 1 pre-step, before ANY app code changes):** add golden tests pinning today's behavior so the engine swap is diff-checked, not eyeballed —
-   - a Python golden test asserting the exact `*.speakers.json` top-level schema + `segments`/`speakerSegments` field sets from `build_diarization_result` (extend `tests/python/test_diarization_pipeline.py`);
-   - a Python test snapshotting the ordered `emit_progress` phase strings for a mocked full run;
-   - a JS test pinning that `diarize-transcript` / `transcribe-audio-with-speakers` payload handling is engine-agnostic.
-   These must stay green through Tasks 3–7 **unchanged**.
-3. **Additive until Task 8.** Until then: no IPC channel renames/removals, no status-value removals, no `preload.js` API removals, no deletion of pyannote code/catalog/tests, no edits to `AI_ADDON_STATUS_STATES`. If a pinned snapshot test (ipc-contract, privacy-hardening trusted-sender list, status array) fails before Task 8, the change is wrong — fix the change, not the snapshot.
+2. **Characterization first (Task 1 pre-step; may land in parallel with Task 0a — no hardware needed), before ANY app code changes:** add golden tests pinning today's behavior so the engine swap is diff-checked, not eyeballed —
+   - a Python golden test asserting the exact `*.speakers.json` **top-level field set** + `segments`/`speakerSegments` field sets from `build_diarization_result` (extend `tests/python/test_diarization_pipeline.py`); pin `annotationSource` **values** as today's `exclusive_speaker_diarization` / `speaker_diarization` (speakrs must map onto those);
+   - Python tests snapshotting the ordered `emit_progress` phase strings **per entry point** (`diarize_transcript`, `transcribe_with_diarization_guidance`, `validate_pyannote_setup`) — not one invented sequence;
+   - a JS test pinning that `diarize-transcript` / `transcribe-audio-with-speakers` **payload shape** is engine-agnostic. Pin schema / field sets, **not full argv** (Task 4 adds `--engine` additively).
+   These must stay green through Tasks 3–7 without weakening the pins. Adding `--engine` is allowed; changing field sets or phase names is not.
+3. **Additive until Task 8.** Until then: no IPC channel renames/removals, no status-value removals, no `preload.js` API removals, no deletion of pyannote code/catalog/tests, no edits to `AI_ADDON_STATUS_STATES`, **no new keys on the pinned facades** (`src/ai-addon-setup.js`, `src/main-process-helpers.js` — `ipc-contract-snapshot.test.js` pins `Object.keys`). New helpers stay internal to `manifest-store.js` / services. If a pinned snapshot test (ipc-contract, privacy-hardening trusted-sender list, status array, facade exports) fails before Task 8, the change is wrong — fix the change, not the snapshot. Exception: a genuine new IPC channel would require a snapshot edit in the same commit; this migration adds none until Task 8 removals.
 4. **Out of scope entirely, every task:** recorder services, capture/spool code, quit-drain/compute-queue internals (`ai-compute-queue.js`, `runWallClockComputeAction` — *use* them, never modify), meeting_manager persistence, summary feature code, updater/build download-manifest entries not listed in Task 6.
 5. **After every task:** `npm test && npm run test:python` (plus `npm run prepare-build` for Task 6). A task is not done with red tests, skipped tests, or "TODO: fix later".
 6. **Stop and ask the maintainer** instead of improvising when: a pinned sha256/revision doesn't match, a contract in this plan conflicts with current code, `cargo`/toolchain isn't available, or a change seems to require touching anything in guardrail 4.
@@ -62,25 +63,25 @@ Everything below was re-verified against crates.io, docs.rs, the speakrs GitHub 
 | "Models inherit CC-BY-4.0; cite pyannote/WeSpeaker" | Partially right, understated. Pack is mixed-provenance (MIT + CC-BY-4.0 + params extracted from a CC-BY-4.0 pipeline) and the upstream pack repo has **no license file**. Redistribution is permitted under the constituent licenses provided we attribute correctly; we ship our own LICENSES manifest inside a repacked archive (Task 2b self-serve checklist, modeled on how sherpa-onnx/Vibe/OpenWhispr already redistribute these exact model families). |
 | "No token survives legal reality" | **Yes.** The HF gate is access control + marketing-consent, not a license term; `avencera/speakrs-models` is public and ungated; CC-BY-4.0/MIT permit redistribution. Zero-token is real. |
 | "ort 2.0 RC = instability risk" | Downgraded. rc.12 wraps stable ONNX Runtime 1.24 and is used in production; speakrs pins it. Residual risk is ONNX Runtime 1.24 behavior on user GPUs — covered by setup validation smoke + CPU-fallback-free error surfacing. |
-| "Reuse existing GPU readiness probes" | Partially. cublas/cudnn come from the existing cuda12 pip profile (already gated by `check-cuda` and the renderer's `shouldShowSpeakerSetupPrompt`), but ORT needs CUDA ≥ 12.8 semantics plus cudart/cufft/ORT DLLs we don't ship. These go in the pinned speakrs runtime archive; **do not** mutate the shared transcription pip profile for diarization. Spike proves the closure with the Dependencies tool on a clean Windows box. |
+| "Reuse existing GPU readiness probes" | Partially. cublas/cudnn come from the existing cuda12 pip profile (already gated by `check-cuda` and the renderer's `shouldShowSpeakerSetupPrompt`). ORT 1.24 CUDA-12.8 builds are compatible with **any CUDA 12.x** user-mode libs; we still must ship cudart/cufft/ORT in the pinned archive. **Do not** mutate the shared transcription pip profile. Spike proves the closure with the Dependencies tool on a box that already runs pyannote CUDA. |
 | "CoreML vs current MPS copy/UX" | Strict improvement: no 2 GB torch download, no MPS probe. All user-facing "Metal/MPS" copy and the `LOCAL_AI_MODEL_CATALOG.md` MPS-only rules change at cutover. `.mlmodelc` bundles are precompiled (no first-run CoreML compile stall); macOS 13+ target is fine. |
 | "Young crate" | Confirmed and worse than v1 implied: first release 2026-03-25, bus factor 1. Mitigations: exact-version pin + `cargo vendor` the dependency tree into our build (or a fork under our org), our own thin CLI as the only API surface, pyannote behind the engine flag until soak, and the model pack self-hosted so upstream deletion cannot brick setup. |
-| "speakrs metrics module for DER" | Not found on docs.rs — benchmark DER with `pyannote.metrics` offline instead (Task 0 harness). |
+| "speakrs metrics module for DER" | Exists only behind the private `_metrics` feature. Still benchmark DER with `pyannote.metrics` offline (Task 0 harness) so numbers match today's pyannote path. |
 
 ## Repo-grounded gaps v1 under-specified (all addressed in tasks below)
 
 1. **Pinned contract tests that WILL break** and must be updated deliberately, not discovered: `tests/js/ipc-contract-snapshot.test.js` (full IPC channel snapshot incl. every diarization/token channel + `ai-addon-progress`), `tests/js/ai-addon-privacy-hardening.test.js` (trusted-sender list pins the 10 mutating channel names; source-scan asserts on `HF_TOKEN_PATH`), `tests/js/ai-addon-state.test.js:319` (pins the 7-value status array), `formatters.test.js` / `ai-addon-ui-helpers.test.js` / `history-detail-helpers.test.js` (`needsAccount` label/terminal/prompt copy).
 2. **`needsAccount` producers/consumers enumerated:** produced only in `src/ai-addon/diarization-setup.js` (L439, L451, L590-597, L629-636); consumed in `src/renderer/ai-addon-ui-helpers.js:13`, `formatters.js:66`, `app.js:4319/4499`, `history-detail-helpers.js:156-158/283`. Removal is Task 8 (post-soak), not Task 4.
 3. **Manifest has no migration mechanism today** (`manifestVersion: 1` unconditionally rewritten; legacy top-level fallback exists in `normalizeAiAddonManifest`). v2 defines a concrete `engine` field + legacy-pyannote detection instead of hand-waving "manifest migration".
-4. **`deriveDiarizationStatus` (`manifest-store.js:718-730`) downgrades `ready`→`error` from the pip `dependencyCache`** — a speakrs install has no pip dependency cache; status derivation must switch to model-pack + CLI presence checks per engine.
-5. **Progress contract specifics:** guided/diarization progress is parsed from **stderr** via `parseAiBackendProgressLine` (accepts only `{type:'progress'}`, sanitizes phase ≤ 80 chars, redacts message ≤ 300); valid diarization events go to `diarization-progress`, everything else to `transcription-progress`; setup progress goes to `ai-addon-progress`. The speakrs runner must reuse `emit_progress` with the **same phase strings** so zero renderer changes are needed for progress.
-6. **Pre-existing bug to fix during the port:** `backend/diarization/guided_transcription.py:492` prints the exception **unredacted** (`diarization_pipeline.py:472` redacts). Fix in Task 4 with a test.
-7. **Grandchild termination:** today pyannote runs inside the Python child, so `runWallClockComputeAction`'s kill works. With speakrs the Rust CLI is a **grandchild**; the Python runner must guarantee the CLI dies when Python is terminated (POSIX: process group / `preexec_fn`; Windows: Job-object semantics via `subprocess` kill in a `finally` + signal handler). Explicit test in Task 4.
-8. **`AVANEVIS_PACKAGED=1` PATH-skip rule** (Swift helper: `swift_audio_capture.py:82-84`; tar: `resolvePreferredTarExecutable`) must apply to `speakrs-cli` resolution, with a test mirroring `tests/js/ai-addon-archive-helpers.test.js:40-51`.
+4. **`deriveDiarizationStatus` (`manifest-store.js:718-730`) is not the only pip-cache trap.** It downgrades `ready`→`error` from pip `dependencyCache`. Worse: `setupComplete` is `status === 'ready' && diarizationDependencyCache.valid` (`manifest-store.js:824`) and `resolveGuidedDiarizationStatus` / `transcribe-audio-with-speakers` / `diarize-transcript` all require `setupComplete` (`transcription-service.js:828`, `:2056`, `:2139`). Speakrs has no pip cache → guided never starts. Independently, `getDiarizationModelRef` returns `runtime.modelRef` (`ai-addon-state.js:414-417`); the speakrs catalog entry has no `modelRef` → status resolves to null / "model is not configured". `hasDiarizationLocalState` and `buildDiarizationStorageFootprint` also key off pip `dependencyCache` — Remove + Settings bytes stay wrong unless Task 2 is engine-aware. Status derivation must switch to model-pack + CLI presence checks per engine **and** those two JS gates must not require pip/`modelRef`.
+5. **Progress contract specifics:** guided/diarization progress is parsed from **stderr** via `parseAiBackendProgressLine` (accepts only `{type:'progress'}`, sanitizes phase ≤ 80 chars, redacts message ≤ 300); valid diarization events go to `diarization-progress`, everything else to `transcription-progress`; setup progress goes to `ai-addon-progress`. Replace only `run_pyannote_diarization` (inner phases: `validating-accelerator` 30, `loading-model` 35, `running-model` 55, `merging-speakers` 80). Parents still emit `loading-transcript` / `preparing-audio` / guided `building-speaker-windows` / validate `validating-runtime` + `ready`. Do **not** re-emit parent phases from the runner. Do **not** call `assert_required_device_available` (torch) on the speakrs path — map `--require-device mps` → CoreML without importing torch.
+6. **Pre-existing bug to fix during the port:** `backend/diarization/guided_transcription.py:492` prints the exception **unredacted** (`diarization_pipeline.py:472` redacts). Fix in Task 3 with a test.
+7. **Grandchild termination:** today pyannote runs inside the Python child, so `runWallClockComputeAction`'s kill works. With speakrs the Rust CLI is a **grandchild**. POSIX Python is already a process-group leader (`spawnTrackedPython` `detached: true`, `avanevisProcessGroup`; `terminateProcessBestEffort` does `kill(-pid)`). **Do not `start_new_session` / new process group** — that detaches the CLI so SIGKILL skips Python `finally` and orphans inference. Spawn the CLI in the **same** group as Python. Windows already uses `taskkill /PID /T /F` — no Job object. Python `finally` is backup only. Test: POSIX group-kill of the Python pid must reap the CLI; Windows `taskkill /T` must reap the CLI.
+8. **`AVANEVIS_PACKAGED=1` PATH-skip rule** (Swift helper: `swift_audio_capture.py:82-84`; tar: `resolvePreferredTarExecutable`) must apply to `speakrs-cli` resolution, with a test mirroring `tests/js/ai-addon-archive-helpers.test.js:40-51`. Packaged validation needs a **bundled fixture WAV** under `backend/diarization/fixtures/` or `build/resources/` (Task 6 stages it). `tests/fixtures/` is not in `extraResources` and must not be the packaged path.
 9. **Legal Notices mechanics:** attribution lives in root `THIRD_PARTY_NOTICES.md`, staged via `stageLegalBundle` (`build/prepare-resources.js`) to `Resources/legal/`, opened by `open-legal-notices` (`src/main/file-export-ipc.js:129-155`). Plus `npm run legal:sbom` / `legal:release-assets` scripts. Concrete edits listed in Task 2b.
 10. **Host allowlist:** derived automatically from catalog `downloadUrl`/`url`/`indexUrl`/`extraIndexUrls` keys plus `DOWNLOAD_REDIRECT_HOSTS` (`src/ai-addon/download-helpers.js:39-102`). Self-hosting packs on GitHub Releases is already covered (`objects.githubusercontent.com` etc.); adding pins to the catalog auto-allowlists the host. `licenseUrl` never expands the allowlist.
 11. **Timeout budgets:** unchanged — `AI_COMPUTE_TIMEOUT_MS.diarization` 30 min and `addonValidation` 15 min are generous for an engine 2–20× faster; guided budget stays Whisper-model-driven (`getGuidedTranscriptionComputeTimeoutMs`). Only the model-pack **download** needs a budget: reuse `DOWNLOAD_TIMEOUT_MS` (5 min inactivity) per file like summary artifacts.
-12. **Windows setup gating stays behind CUDA readiness** (`shouldShowSpeakerSetupPrompt` requires `hasNvidiaGpu && cudaInstalled`) because speakrs reuses cublas/cudnn from the existing GPU runtime install.
+12. **Windows setup gating stays behind CUDA readiness** (`shouldShowSpeakerSetupPrompt` requires `hasNvidiaGpu && cudaInstalled`) because speakrs reuses cublas/cudnn from the existing GPU runtime install. Speakrs validation must use `buildCudaRuntimeEnv` and must **not** require `includeManagedDiarization` torch site-packages. `setupDiarizationAddon` (`diarization-setup.js:580-637`) currently requires a token **before** download — the speakrs branch must return before that check.
 
 ---
 
@@ -98,7 +99,7 @@ Python: diarization_pipeline.py / guided_transcription.py   (CLI args: + --engin
         ↓ prepare_diarization_audio → 16 kHz mono WAV        (unchanged)
         ↓ speakrs_runner.run_speakrs_diarization()
         ↓   spawn Resources/bin/speakrs-cli <wav>            (grandchild; killed with parent)
-        ↓   stdout: single JSON {success, device, annotationSource, segments[{start,end,speaker}]}
+        ↓   stdout: single JSON {success, device, annotationSource: exclusive_speaker_diarization|speaker_diarization, segments[{start,end,speaker}]}
         ↓   stderr: diagnostics only (never parsed for control flow)
         ↓ emit_progress(...) — SAME phases/JSON on Python stderr as today
         ↓ merge_speaker_labels / guided windows / Whisper    (unchanged)
@@ -155,7 +156,7 @@ Manifest shape gains one field; `manifestVersion` stays `1` (additive, old build
 - Repack script: `scripts/build-speakrs-model-pack.js` (or `.py`) — pulls `avencera/speakrs-models` at the pinned revision, selects the per-mode file set (from Task 0's recorded list), injects `LICENSES/` (MIT segmentation-3.0, CC-BY-4.0 wespeaker + community-1 params, Apache-2.0 speakrs) and `ATTRIBUTION.md`, produces `speakrs-models-<rev7>-win32-x64-cuda.tar.gz` and `speakrs-models-<rev7>-darwin-arm64-coreml.tar.gz`, prints sha256s for the catalog.
 - Hosting: our GitHub Releases (same trust surface as llama.cpp archives; hosts already allowlisted). Windows pack also carries `ort/` (onnxruntime.dll + providers + cudart64_12 + cufft64_11) — or as a separate pinned archive if > 1 GB combined; Task 0 decides on measured sizes.
 - Cache layout: `userData/ai-addons/models/diarization/speakrs/<revision>/` (extract root), validated like summary runtime caches; extraction through the existing zip/tar workers + `ai-addon-archive-helpers.js` traversal guards (verify guards accept `.mlmodelc` nested directories).
-- Size expectations (verify in Task 0): Windows ONNX pack ~120–250 MB + ORT/CUDA DLLs ~300–400 MB; macOS pack (ONNX + mlmodelc subset) ~300–500 MB. Anything > 600 MB per platform escalates the bundle-vs-download decision before Task 2 proceeds. Either way this replaces a 4 GB (win) / 2 GB (mac) pip install — strictly better.
+- Size expectations (verify in Task 0): Windows ONNX pack ~120–250 MB + ORT/CUDA DLLs ~300–400 MB; macOS pack (ONNX + ~15 mlmodelc trees) may land in the same band or higher. **> 600 MB per platform is a note, not a GO fail** — architecture is already setup-time download. Escalate only if a pack is so large you would rather bundle it in the installer. Either way this replaces a 4 GB (win) / 2 GB (mac) pip install — strictly better.
 
 ---
 
@@ -164,26 +165,31 @@ Manifest shape gains one field; `manifestVersion` stays `1` (additive, old build
 ### Task 0: Spike (go/no-go gate — measurable)
 
 **Files:**
-- Create: `native/speakrs-cli/` (Cargo project; may start as a copy of `examples/diarize_wav.rs` + `assign_transcript_speakers.rs` glue)
+- Create: `native/speakrs-cli/` (thin Cargo wrapper — **do not** copy `examples/diarize_wav.rs` as-is; that example is CPU-only)
 - Create: `docs/development/SPEAKRS_SPIKE_NOTES.md` (results tables only)
 
+Task 0a (Apple Silicon) and Task 0b (Windows CUDA) are sequential. **0a does not write GO/NO-GO.** Full GO waits on 0b.
+
 **Steps:**
-1. Build the CLI on one Apple Silicon Mac (`--features coreml`) and one Windows CUDA machine (`--features cuda,load-dynamic`). Record binary sizes and the exact link/runtime requirements.
-2. Windows: on a machine with ONLY the app's existing cuda12 pip DLLs (cublas/cudnn) on PATH plus a candidate ORT 1.24 GPU archive, enumerate the full DLL closure with the Dependencies tool until the CLI runs on GPU. Record every DLL and its source. Confirm driver floor (CUDA 12.8 minor-version compatibility).
-3. Record, per mode (`coreml`, `cuda`, and both `-fast` variants for comparison): the exact model file list `ModelManager` requires, per-file sizes, per-mode pack totals.
-4. Run ≥ 3 internal meetings (one ≥ 60 min, one with heavy overlap, one 2-speaker) + a 10-file VoxConverse dev subset through both speakrs (exclusive segments) and current pyannote on the same hardware.
-5. Confirm `PipelineConfig` speaker-count bounds map from our `--speaker-count`; if not, record "auto-only" as the shipped behavior.
-6. Measure peak RSS on the 60+ min meeting (CLI child), and cold-start latency (model load) per mode.
+1. rustup **1.88+** (edition 2024). Confirm a C toolchain (Xcode CLT on Mac). If `default-linalg` / OpenBLAS fails to compile, **stop and ask** — do not improvise a BLAS.
+2. Depend on speakrs **0.5.0** with `default-features = false` and `features = ["default-linalg", "coreml"]` (0a) / `["default-linalg", "cuda", "load-dynamic"]` (0b). Confirm `online` is off (`from_pretrained` / `ModelManager` must not compile).
+3. Build a thin CLI: decode 16-bit PCM WAV → f32, `OwnedDiarizationPipeline::from_dir`, **`ExecutionMode::CoreMl` on Mac / `Cuda` on Windows** (and the matching `-fast` mode for the info table only). Record binary sizes **with** static OpenBLAS/MKL and the exact link/runtime requirements.
+4. Windows (0b): on a machine that **already runs current pyannote CUDA**, with ONLY the app's existing cuda12 pip DLLs (cublas/cudnn) on PATH plus a candidate ORT 1.24 GPU archive, enumerate the full DLL closure with the Dependencies tool until the CLI runs on GPU. Record every DLL and its source. Record the NVIDIA **driver** version that worked. Do not mutate the cuda12 pip profile.
+5. Record, per mode (`coreml`, `cuda`, and both `-fast` variants for comparison): the exact file list from `src/models.rs` `required_files(...)` **copied from source**, per-file sizes, per-mode pack totals. Do not enable `online` to call `ModelManager`.
+6. Run ≥ 3 internal meetings (one ≥ 60 min, one with heavy overlap, one 2-speaker) + a **pinned** 10-file VoxConverse dev subset (write the IDs in the notes) through both speakrs (exclusive segments) and current pyannote on the same hardware. Private corpus stays out of git.
+7. Confirm there is no speaker-count API; record **auto-only** unless a real knob is found.
+8. Measure cold-start latency (model load) per mode. Measure peak RSS of the **CLI child** and of **Python+CLI combined** on the 60+ min meeting.
 
-**Go criteria (ALL must hold):**
-- DER within **+1.0 absolute** of pyannote on the VoxConverse subset AND blind A/B on the internal meetings shows wrong-speaker rate not worse than **5 % relative** (2 reviewers, 50 sampled turns each).
-- Diarization RTFx ≥ **2×** pyannote on the same hardware for the medium meeting, per platform.
-- Peak RSS ≤ **4 GB** for the 60+ min meeting.
-- Windows GPU run succeeds with cublas/cudnn from the existing pip profile + the candidate ORT archive (documented closure, no pip profile mutation).
-- Per-platform pack total ≤ **600 MB** (else escalate before Task 2).
-- 60+ min meeting completes well inside `AI_COMPUTE_TIMEOUT_MS.diarization` (30 min).
+**Go criteria (ALL must hold after 0b; 0a only fills Mac columns):**
+- DER within **+1.0 absolute** of pyannote on the pinned VoxConverse subset (collar 0 **and** 250 ms). This is a smoke gate, not a publishable claim (n=10).
+- Human A/B: 0a may use **1 reviewer × 50 turns**. Wrong-speaker count vs pyannote on those turns must be **≤ +2**. Two-reviewer A/B is a **Task 7** cutover bar, not a 0a blocker.
+- Diarization RTFx ≥ **2×** pyannote on the same hardware for the medium meeting, per platform. Exclude cold-start from RTFx; record cold-start separately.
+- Peak **CLI** RSS ≤ **4 GB** for the 60+ min meeting **and** combined Python+CLI RSS recorded (combined OOM is a NO-GO even if CLI-only is under 4 GB).
+- Windows GPU run succeeds with cublas/cudnn from the existing pip profile + the candidate ORT archive (documented closure, no pip profile mutation) on a box that already runs pyannote CUDA.
+- 60+ min meeting completes well inside `AI_COMPUTE_TIMEOUT_MS.diarization` (30 min) — sanity only.
+- Pack totals are recorded. > 600 MB does **not** fail GO; write the escalate-or-not decision in the notes.
 
-**Validation:** `SPEAKRS_SPIKE_NOTES.md` contains the tables (file, duration, speakers, engine, mode, DER, seconds, RTFx, peak RSS) + DLL closure + pack lists, and an explicit GO/NO-GO line.
+**Validation:** `SPEAKRS_SPIKE_NOTES.md` contains the tables (file, duration, speakers, engine, mode, DER both collars, seconds, RTFx, cold-start, CLI RSS, combined RSS) + DLL closure + pack lists. Explicit GO/NO-GO line only after 0b.
 
 ---
 
@@ -195,12 +201,12 @@ Manifest shape gains one field; `manifestVersion` stays `1` (additive, old build
 - Create: `tests/fixtures/` short 2-speaker WAV (~15 s, self-recorded or synthetic TTS — no third-party license)
 
 **Contract (frozen here):**
-- argv: `speakrs-cli <wav-path>`; env: `SPEAKRS_MODELS_DIR` (required), `SPEAKRS_MODE` (`cpu|coreml|cuda`, required), `SPEAKRS_EXCLUSIVE` (`1` default), `SPEAKRS_NUM_SPEAKERS` (optional int, if Task 0 confirmed the knob).
-- stdout: exactly one JSON object: `{"success": true, "device": "<mode>", "annotationSource": "exclusive"|"discrete", "segments": [{"start": f, "end": f, "speaker": "SPEAKER_00"}, ...]}` — speaker labels keep the `SPEAKER_NN` convention so `speaker_segments._speaker_label_map` works unchanged. Failure: `{"success": false, "error": "<single-line message>"}` + non-zero exit.
+- argv: `speakrs-cli <wav-path>`; env: `SPEAKRS_MODELS_DIR` (required), `SPEAKRS_MODE` (`cpu|coreml|cuda`, required), `SPEAKRS_EXCLUSIVE` (`1` default), `SPEAKRS_NUM_SPEAKERS` (optional int; omit unless Task 0 found a real knob — default is auto-only).
+- stdout: exactly one JSON object: `{"success": true, "device": "<mode>", "annotationSource": "exclusive_speaker_diarization"|"speaker_diarization", "segments": [{"start": f, "end": f, "speaker": "SPEAKER_00"}, ...]}` — map exclusive → `exclusive_speaker_diarization` (today's sidecar value; do not invent `"exclusive"`/`"discrete"`). Speaker labels keep the `SPEAKER_NN` convention so `speaker_segments._speaker_label_map` works unchanged. Failure: `{"success": false, "error": "<single-line message>"}` + non-zero exit.
 - stderr: human diagnostics only; Python never parses it for control flow.
 - Exit promptly on SIGTERM/CTRL-BREAK (no orphaned inference).
 - Implementation: decode 16-bit PCM WAV → f32, `OwnedDiarizationPipeline::from_dir(models, mode)`, `run()`, clone `discrete_diarization`, `make_exclusive()` when `SPEAKRS_EXCLUSIVE=1`, `to_segments()`, serialize.
-- **Network policy: the CLI must be incapable of downloading.** Build with `default-features = false` so speakrs' default `online` auto-download feature (fetches from Hugging Face on first use) is compiled out; enable only the platform features (`coreml` / `cuda` + `load-dynamic` / `cpu`). Model loading is `from_dir` + `SPEAKRS_MODELS_DIR` only; a missing/incomplete models dir is a structured `success:false` error telling the user to re-run speaker setup — never a download. Verify with a test that the binary has no HF host strings baked in (`strings` grep in CI is acceptable).
+- **Network policy: the CLI must be incapable of downloading.** Build with `default-features = false` so `online` is compiled out, **and keep `default-linalg`**. Mac features: `["default-linalg", "coreml"]`. Windows: `["default-linalg", "cuda", "load-dynamic"]`. Model loading is `from_dir` + `SPEAKRS_MODELS_DIR` only; a missing/incomplete models dir is a structured `success:false` error telling the user to re-run speaker setup — never a download. Verify with a test that the binary has no HF host strings (`huggingface`, `avencera/speakrs-models`) baked in (`strings` grep in CI is acceptable).
 
 **Validation:** `cargo test` + `cargo clippy -D warnings` in the crate; `npm run test:python` (contract fixture tests); manual run against the spike models.
 
@@ -210,7 +216,7 @@ Manifest shape gains one field; `manifestVersion` stays `1` (additive, old build
 
 **Files:**
 - Create: `scripts/build-speakrs-model-pack.js`
-- Modify: `src/ai-addon-state.js` — add `DIARIZATION_ENGINE` (default `'speakrs'`, env override), new catalog model entry, keep the pyannote entry untouched behind the engine flag. Target shape (mirror `SUMMARY_RUNTIME_ARTIFACTS` field conventions; final sha256/size values come from the repack script):
+- Modify: `src/ai-addon-state.js` — add `DIARIZATION_ENGINE` (default **`'pyannote'`**, env override `AVANEVIS_DIARIZATION_ENGINE`), new catalog model entry, keep the pyannote entry untouched. Do **not** flip the default here. Target shape (mirror `SUMMARY_RUNTIME_ARTIFACTS` field conventions; final sha256/size values come from the repack script):
 
 ```js
 const SPEAKRS_MODEL_PACK_REVISION = '5d24ffe'; // upstream speakrs-models rev (short)
@@ -231,10 +237,10 @@ const SPEAKRS_MODEL_PACK_REVISION = '5d24ffe'; // upstream speakrs-models rev (s
   supportedPlatforms: { win32: { acceleration: 'cuda', status: 'enabled' }, darwin: { acceleration: 'coreml', arch: 'arm64', status: 'enabled' } },
 }
 ```
-- Modify: `src/ai-addon/manifest-store.js` — `checkSpeakrsModelCache` (existence/size always, sha256 at setup/validate, fingerprint-skip later), engine-aware `deriveDiarizationStatus`
-- Modify: `src/ai-addon/diarization-setup.js` — engine branch: speakrs setup = download archives → extract via existing workers → validate; no token calls anywhere on this path
-- Modify: `src/ai-addon-state.js` `normalizeDiarizationState` — `engine` field + legacy detection (see Manifest migration)
-- Tests: `tests/js/ai-addon-state.test.js`, `ai-addon-setup.test.js` (new: token-free happy path reaches `ready` with zero token-store calls; cancel during download removes partials, preserves prior valid install; checksum mismatch → never `ready`; legacy manifest → migration-needed state)
+- Modify: `src/ai-addon/manifest-store.js` — engine-aware cache/status **inside existing functions** (`checkAiAddonSetupStatus`, `deriveDiarizationStatus`). Do **not** export a new `checkSpeakrsModelCache` from `src/ai-addon-setup.js` (facade key set is pinned). Existence/size always, sha256 at setup/validate, fingerprint-skip later. **`setupComplete` must be engine-aware:** speakrs ready = CLI present + pack checksum valid, not `dependencyCache.valid`.
+- Modify: `src/ai-addon/diarization-setup.js` — engine branch **before** the token required check at L580–637: speakrs setup = download archives → extract via existing workers → validate; no token calls anywhere on this path. `hasDiarizationLocalState` / `buildDiarizationStorageFootprint` must see speakrs pack bytes (not only pip `dependencyCache`) so Remove and Settings sizes work.
+- Modify: `src/ai-addon-state.js` `normalizeDiarizationState` — `engine` field + legacy detection (see Manifest migration). Speakrs catalog `runtime` has no `modelRef`; `getDiarizationModelRef` / guided gates must accept `runtime.type === 'native-cli'` (or the model id) so Task 4 is not dead on arrival.
+- Tests: `tests/js/ai-addon-state.test.js`, `ai-addon-setup.test.js` (new: token-free happy path reaches `ready` **and `setupComplete: true`** with zero token-store calls; cancel during download removes partials, preserves prior valid install; checksum mismatch → never `ready`; legacy manifest → migration-needed state only when engine is already speakrs — not while default is pyannote)
 
 **Validation:** `npm test`. Setup on a dev machine reaches `ready` offline-after-download with `HF_TOKEN` absent and token store empty.
 
@@ -262,14 +268,14 @@ Until the checklist is merged: dev/QA builds may fetch packs from upstream HF di
 
 **Files:**
 - Create: `backend/diarization/speakrs_runner.py`
-- Modify: `backend/diarization/diarization_pipeline.py` — add `--engine speakrs|pyannote` (default pyannote for backward compat; JS always passes it explicitly); route `run_pyannote_diarization` call sites through an engine dispatch; speakrs validate-setup path = runner smoke without `--token-stdin`
+- Modify: `backend/diarization/diarization_pipeline.py` — add `--engine speakrs|pyannote` (default pyannote for backward compat; JS always passes it explicitly); route `run_pyannote_diarization` call sites through an engine dispatch **before** `assert_required_device_available`; speakrs validate-setup path = runner smoke of the **bundled** fixture WAV without `--token-stdin` and without importing torch
 - Modify: `backend/diarization/guided_transcription.py` — same dispatch; **fix the unredacted `ERROR:` print (L492) with `redact_sensitive_text`**
 - Tests: extend `tests/python/test_diarization_pipeline.py`, `test_guided_transcription.py`; new `test_speakrs_runner.py`
 
 **`speakrs_runner.py` requirements:**
 - Resolve CLI path: `SPEAKRS_CLI_PATH` env (set by JS) → packaged `Resources/bin/speakrs-cli` → dev `native/speakrs-cli/target/release/` → PATH **only when `AVANEVIS_PACKAGED` unset** (Swift-helper rule, `swift_audio_capture.py:82-84` as the template).
-- Spawn with: cleared HF token env (reuse the same clearing the JS side sends; belt-and-braces pop in Python too), `SPEAKRS_MODELS_DIR`/`SPEAKRS_MODE`/`SPEAKRS_EXCLUSIVE` set, lowered priority inherited, **and guaranteed child termination**: POSIX `start_new_session=True` + `os.killpg` in `finally`/signal handler; Windows `proc.kill()` in `finally` + `CTRL_BREAK_EVENT`-capable creation flags. Test with a fake hanging CLI.
-- Emit the **same** `emit_progress` phases as today (`preparing-audio` 15, `validating-accelerator` 30, `loading-model` 35, `running-model` 55, `merging-speakers` 80, `completed` 100) so `parseAiBackendProgressLine` / `diarization-progress` need zero changes.
+- Spawn with: cleared HF token env (reuse the same clearing the JS side sends; belt-and-braces pop in Python too), `SPEAKRS_MODELS_DIR`/`SPEAKRS_MODE`/`SPEAKRS_EXCLUSIVE` set, lowered priority inherited, **and guaranteed child termination**: POSIX — **same process group as Python**, no `start_new_session`; `finally` kills the CLI pid as backup. Windows — inherit default creation flags so Electron's `taskkill /T` reaps the tree; `proc.kill()` in `finally` is backup only. Test with a fake hanging CLI: killing the Python pid (POSIX group / Windows `/T`) must reap the CLI.
+- Emit the **same inner** `emit_progress` phases as `run_pyannote_diarization` (`validating-accelerator` 30, `loading-model` 35, `running-model` 55, `merging-speakers` 80). Parents keep `loading-transcript` / `preparing-audio` / `completed` / guided extras. Do not invent a new sequence.
 - Parse the CLI's single stdout JSON; map failures to the existing single-line `ERROR:` stderr convention (redacted).
 - Return `(speaker_segments, annotation_source, device)` — exactly `run_pyannote_diarization`'s tuple — so `build_diarization_result`, sidecar schema, and merge behavior are untouched.
 - Device mapping per the table above (`mps` requirement → `coreml` mode, reported device `coreml`).
@@ -281,10 +287,10 @@ Until the checklist is merged: dev/QA builds may fetch packs from upstream HF di
 ### Task 4: Electron main — spawn plumbing + setup/validation wiring
 
 **Files:**
-- Modify: `src/main/transcription-service.js` — `buildManagedDiarizationArgs` / `...GuidedTranscriptionArgs` append `--engine` from catalog; speakrs env block (`SPEAKRS_CLI_PATH`, `SPEAKRS_MODELS_DIR`, `SPEAKRS_MODE`, Windows `PATH` prepend for the downloaded ORT dir — alongside existing `buildCudaRuntimeEnv` for cublas/cudnn); skip `getDiarizationCacheEnv()` HF vars for speakrs runs (keep for pyannote); `resolveGuidedDiarizationStatus` stays catalog-only
-- Modify: `src/main/ai-addon-ipc.js` — validation spawn for speakrs: no `--token-stdin`, no token resolution, same `createAbortableComputeAction` + `addonValidation` timeout; keep token channels registered (legacy path) but never called on the speakrs path
+- Modify: `src/main/transcription-service.js` — `buildManagedDiarizationArgs` / `...GuidedTranscriptionArgs` append `--engine` from catalog; speakrs env block (`SPEAKRS_CLI_PATH`, `SPEAKRS_MODELS_DIR`, `SPEAKRS_MODE`, Windows `PATH` prepend for the downloaded ORT dir — alongside existing `buildCudaRuntimeEnv` for cublas/cudnn, **without** requiring `includeManagedDiarization` torch site-packages); skip `getDiarizationCacheEnv()` HF vars for speakrs runs (keep for pyannote); `resolveGuidedDiarizationStatus` stays catalog-only but must **not** require `runtime.modelRef` / pip `setupComplete` (those gates are fixed in Task 2; verify they still work here)
+- Modify: `src/main/ai-addon-ipc.js` — validation spawn for speakrs: no `--token-stdin`, no token resolution, no stdin token write, same `createAbortableComputeAction` + `addonValidation` timeout; keep token channels registered (legacy path) but never called on the speakrs path. Do **not** change the shared pyannote `buildManagedDiarizationValidationArgs` unconditionally — privacy tests still assert `--token-stdin` on that path; branch by engine.
 - Modify: `src/main.js` — `buildManagedDiarizationValidationArgs` engine branch; resolve packaged CLI path (`process.resourcesPath/bin/speakrs-cli[.exe]`)
-- Tests: `tests/js/ai-addon-privacy-hardening.test.js` (extend: speakrs validation spawns with cleared HF env and NO stdin token write), `transcription-queue-helpers` characterization, ipc snapshot unchanged this task (no channel changes yet)
+- Tests: `tests/js/ai-addon-privacy-hardening.test.js` (extend: speakrs validation spawns with cleared HF env and NO stdin token write; existing token-stdin test stays green for pyannote), `transcription-queue-helpers` characterization, ipc snapshot / facade key sets unchanged this task (no channel or facade-export changes)
 
 **Validation:** `npm test`; dev-mode end-to-end: record → guided transcription with speakrs → `*.speakers.json` schema-identical (diff against a pyannote run of the same audio apart from `model`/`device` fields); wall-clock kill test leaves no orphaned `speakrs-cli`.
 
@@ -294,7 +300,7 @@ Until the checklist is merged: dev/QA builds may fetch packs from upstream HF di
 
 **Files:**
 - Modify: `src/renderer/app.js`, `src/renderer/index.html` — hide token entry/status UI when engine=speakrs; setup flow becomes download+validate only
-- Modify: `src/renderer/history-detail-helpers.js` — `getDiarizationSetupMessage` new copy (no HF account); migration prompt for legacy-pyannote manifests; `shouldShowSpeakerSetupPrompt` Windows CUDA gate unchanged
+- Modify: `src/renderer/history-detail-helpers.js` — `getDiarizationSetupMessage` new copy (no HF account); migration prompt for legacy-pyannote manifests **only when `DIARIZATION_ENGINE` is already speakrs**; `shouldShowSpeakerSetupPrompt` Windows CUDA gate unchanged. If Task 0 recorded auto-only, hide or disable the speaker-count dropdown for speakrs (do not silently ignore a user-set count).
 - Modify: `src/renderer/formatters.js` — no change yet (`needsAccount` label stays until Task 8)
 - Modify: legacy cleanup: extend `remove-diarization-setup` handler (`ai-addon-ipc.js`) to delete pip tree + old HF cache + token file with explicit dialog copy (see Manifest migration); destructive-removal guards (compute/preload pending → reject) preserved
 - Modify: `tests/manual/local-ai-addons-checklist.md` — speakrs setup/validate/remove/migration rows
@@ -307,12 +313,12 @@ Until the checklist is merged: dev/QA builds may fetch packs from upstream HF di
 ### Task 6: Build / CI / release packaging
 
 **Files:**
-- Modify: `build/prepare-resources.js` — `buildSpeakrsCli()` mirroring `buildSwiftHelper()` (cargo build --release → stage to `build/resources/bin/` → strip → macOS codesign with `entitlements.mac.inherit.plist`); add build-input fingerprints to `resource-manifest.json` invalidation
-- Modify: `package.json` — `extraResources` already maps `build/resources/bin` → `bin`; add `Contents/Resources/bin/speakrs-cli` to mac `binaries`/`asarUnpack` signing list beside `audiocapture-helper`
-- Modify: `.github/workflows/ci.yml` — Rust toolchain (pinned via `rust-toolchain.toml`) + cargo cache on `windows-latest` and `macos-14` jobs; `cargo test`; **CPU-mode end-to-end smoke**: cache the small ONNX subset, run `speakrs-cli` on the fixture WAV, assert ≥ 1 segment (this is real-inference CI coverage pyannote never had)
+- Modify: `build/prepare-resources.js` — `buildSpeakrsCli()` mirroring `buildSwiftHelper()` (cargo build --release with the Task 1 feature flags → stage to `build/resources/bin/` → strip → macOS codesign with `entitlements.mac.inherit.plist`); add build-input fingerprints to `resource-manifest.json` invalidation. Stage the **validation fixture WAV** next to the CLI or under `backend/diarization/fixtures/` so packaged `--validate-setup --engine speakrs` can find it. `ort` compile-time downloads must be pinned/vendored here or in the crate — **not** via `download-manifest.js`.
+- Modify: `package.json` — `extraResources` already maps `build/resources/bin` → `bin`; add `Contents/Resources/bin/speakrs-cli` to mac `binaries` signing list beside `audiocapture-helper`. Include the fixture WAV in extraResources if it is not already under `backend/**/*.py` (it will not be — add an explicit resource entry).
+- Modify: `.github/workflows/ci.yml` — Rust toolchain (pinned via `rust-toolchain.toml`) + cargo cache on `windows-latest` and `macos-14` jobs; `cargo test`; **CPU-mode end-to-end smoke**: cache the small ONNX subset, run `speakrs-cli` on the fixture WAV, assert ≥ 1 segment (this is real-inference CI coverage pyannote never had). Prove `cuda,load-dynamic` **compiles** on `windows-latest` without a CUDA toolkit (link-only); do not claim CI covers CUDA/CoreML inference.
 - Modify: `.github/workflows/build-release.yml` — build + stage CLI per platform; fail release on missing binary or pack checksum mismatch
-- Modify: `AGENTS.md` — diarization bullets (this is the invariant doc; update in the same PR as cutover default flip, not before)
-- Modify: `docs/development/LOCAL_AI_MODEL_CATALOG.md` — replace token/MPS-only rules with speakrs pack-pin rules (revision, sha256, per-mode file lists, repack script usage)
+- Do **not** rewrite `AGENTS.md` diarization invariants in this task — that lands with the Task 7 default flip (and Task 8 removals). A one-line pointer to this plan is OK if needed.
+- Modify: `docs/development/LOCAL_AI_MODEL_CATALOG.md` — add speakrs pack-pin rules (revision, sha256, per-mode file lists, repack script usage) **alongside** the still-live pyannote rules until Task 8.
 
 **Validation:** `npm run prepare-build` stages the binary; packaged smoke (both CI jobs) asserts `bin/speakrs-cli` present and codesigned (mac); `npm run test:all`.
 
@@ -320,9 +326,9 @@ Until the checklist is merged: dev/QA builds may fetch packs from upstream HF di
 
 ### Task 7: Soak + benchmark + cutover gate
 
-- Flip `DIARIZATION_ENGINE` default to `'speakrs'` (if not already) in a beta/internal build; pyannote reachable via `AVANEVIS_DIARIZATION_ENGINE=pyannote`.
+- Flip `DIARIZATION_ENGINE` default to `'speakrs'` in a beta/internal build (this is the **first** time the default changes); pyannote reachable via `AVANEVIS_DIARIZATION_ENGINE=pyannote`. Update `AGENTS.md` diarization bullets in the same commit as the flip.
 - Run the full benchmark matrix (below) and record in `docs/development/SPEAKRS_BENCHMARKS.md`.
-- **Cutover bar (all):** ≥ 25 internal meetings across both platforms through guided transcription with zero engine crashes/hangs; wrong-speaker A/B within the Task 0 threshold; setup/validate/remove/migration manual checklist green on Windows CUDA + macOS AS packaged builds; no compute-queue or quit-drain regressions (existing characterization suites green).
+- **Cutover bar (all):** ≥ 25 internal meetings with a platform split (at least 10 per OS) through guided transcription with zero engine crashes/hangs; wrong-speaker A/B **2 reviewers × 50 turns**, speakrs not worse than **+2 turns** vs pyannote; setup/validate/remove/migration manual checklist green on Windows CUDA + macOS AS packaged builds; no compute-queue or quit-drain regressions (existing characterization suites green).
 - Rollback playbook: flip the catalog default back to pyannote in a patch release; speakrs artifacts stay cached (harmless); legacy pyannote installs still work because nothing was deleted automatically.
 
 ### Task 8: pyannote removal (post-soak cleanup — single PR)
@@ -363,23 +369,27 @@ Metrics: DER (`pyannote.metrics` offline, collar 0 + 250 ms), wall time / RTFx, 
 | # | Risk | Mitigation |
 |---|------|------------|
 | 1 | Model-pack redistribution: upstream repo has no LICENSE file; params extracted from community-1 | Repack with LICENSES/ATTRIBUTION per the Task 2b self-serve checklist (sherpa-onnx precedent); gates public release, not development |
-| 2 | Windows ORT CUDA DLL closure / CUDA ≥ 12.8 vs existing cuda12 pip profile | Task 0 proves the closure on clean hardware; ORT+cudart+cufft ship in our pinned archive; never mutate the shared transcription pip profile |
+| 2 | Windows ORT CUDA DLL closure vs existing cuda12 pip profile (cu126 torch + cublas/cudnn only) | Task 0b proves the closure on a box that already runs pyannote CUDA; ORT+cudart+cufft ship in our pinned archive; never mutate the shared transcription pip profile |
 | 3 | Young single-maintainer crate + ORT rc pin | Exact-version pin + vendored deps; our CLI is the only API surface; pyannote behind engine flag until soak; self-hosted models |
-| 4 | Real-meeting parity (overlap, exclusive boundaries feeding guided windows) unproven vs VoxConverse claims | Task 0 blind A/B + DER gates; `-fast` modes excluded from defaults |
-| 5 | Contract breakage during surgery (IPC snapshot, status enum, privacy tests, sidecar schema) | Characterization-first: pinned tests updated deliberately per task; `needsAccount`/token removal deferred to a single post-soak PR |
+| 4 | Real-meeting parity (overlap, exclusive boundaries feeding guided windows) unproven vs VoxConverse claims | Task 0 DER smoke + 1-reviewer A/B; Task 7 2-reviewer bar; `-fast` modes excluded from defaults |
+| 5 | Contract breakage during surgery (IPC snapshot, status enum, privacy tests, sidecar schema, facade exports) | Characterization-first: pin field sets not argv; no new facade keys; `needsAccount`/token removal deferred to Task 8 |
+| 6 | `setupComplete` + `getDiarizationModelRef` silently skip speakrs | Task 2 makes both engine-aware before any spawn plumbing |
+| 7 | POSIX `start_new_session` orphans the CLI | Same process group as Electron's Python child; no new session |
+| 8 | `default-features = false` without BLAS fails to build; static MKL inflates the Windows exe | Always keep `default-linalg`; Task 0 records binary size |
 
-**Single best next engineering action:** run Task 0 on Apple Silicon first — build `native/speakrs-cli` from the two upstream examples, run the 3 internal meetings against current pyannote MPS, and fill the spike tables. It exercises the biggest win, needs no CUDA hardware, and produces the model-pack file lists every later task depends on.
+**Single best next engineering action:** run Task 0a on Apple Silicon — rustc 1.88+, speakrs 0.5.0 with `default-linalg`+`coreml` and `online` off, `ExecutionMode::CoreMl` (not the CPU example), record the `required_files(CoreMl)` list from source, run the 3 internal meetings vs current pyannote MPS, fill Mac columns in `SPEAKRS_SPIKE_NOTES.md`. No GO line yet. Characterization golden tests may land in parallel (no hardware).
 
 ---
 
 ## Ordered execution summary
 
-1. Task 0 spike (Apple Silicon first, then Windows DLL closure) — **decision gate**
-2. Task 1 CLI + frozen JSON contract + fixtures
-3. Task 2 pack repack + catalog pins ∥ Task 2b legal gate (blocks release only)
-4. Task 3 Python engine switch (pyannote default preserved)
-5. Task 4 main-process plumbing
-6. Task 5 renderer UX + migration
-7. Task 6 build/CI/release packaging
-8. Task 7 soak + benchmarks + cutover flip
-9. Task 8 pyannote removal (single deliberate PR)
+1. Task 0a Mac spike (tables + file list; no GO) ∥ optional Task 1 pre-step characterization
+2. Task 0b Windows DLL closure — **decision gate** (GO/NO-GO)
+3. Task 1 CLI + frozen JSON contract + fixtures
+4. Task 2 pack repack + catalog pins (engine default stays **pyannote**) ∥ Task 2b legal gate (blocks release only)
+5. Task 3 Python engine switch (pyannote default preserved)
+6. Task 4 main-process plumbing
+7. Task 5 renderer UX + migration
+8. Task 6 build/CI/release packaging (merge the branch; default still pyannote)
+9. Task 7 soak + benchmarks + **cutover flip** to speakrs + `AGENTS.md`
+10. Task 8 pyannote removal (single deliberate PR)
