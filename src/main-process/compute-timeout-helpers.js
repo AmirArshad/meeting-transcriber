@@ -169,8 +169,7 @@ function runWallClockComputeAction({
     return Promise.race([
       actionPromise.catch(() => undefined),
       new Promise((resolve) => {
-        const graceHandle = setTimeout(resolve, graceMs);
-        graceHandle.unref?.();
+        setTimeout(resolve, graceMs);
       }),
     ]);
   };
