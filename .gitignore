@@ -49,6 +49,7 @@ desktop.ini
 # Application Data
 *.mkv
 *.wav
+!tests/fixtures/*.wav
 *.mp3
 recordings/
 userData/

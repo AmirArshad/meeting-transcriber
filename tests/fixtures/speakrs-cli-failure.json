@@ -1,0 +1,4 @@
+{
+  "success": false,
+  "error": "SPEAKRS_MODELS_DIR is missing or incomplete; re-run speaker setup"
+}

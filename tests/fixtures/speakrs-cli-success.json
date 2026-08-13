@@ -1,0 +1,9 @@
+{
+  "success": true,
+  "device": "cuda",
+  "annotationSource": "exclusive_speaker_diarization",
+  "segments": [
+    {"start": 0.0, "end": 2.5, "speaker": "SPEAKER_00"},
+    {"start": 2.5, "end": 5.0, "speaker": "SPEAKER_01"}
+  ]
+}

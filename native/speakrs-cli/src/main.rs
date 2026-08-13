@@ -7,6 +7,11 @@ use std::process::ExitCode;
 use serde::Serialize;
 use speakrs::{ExecutionMode, OwnedDiarizationPipeline};
 
+const ANNOTATION_SOURCE_EXCLUSIVE: &str = "exclusive_speaker_diarization";
+const ANNOTATION_SOURCE_OVERLAP: &str = "speaker_diarization";
+const MODELS_SETUP_ERROR: &str =
+    "SPEAKRS_MODELS_DIR is missing or incomplete; re-run speaker setup";
+
 #[derive(Serialize)]
 struct SuccessPayload {
     success: bool,
@@ -30,20 +35,16 @@ struct ErrorPayload {
 }
 
 fn main() -> ExitCode {
+    if let Err(message) = install_shutdown_handlers() {
+        let _ = writeln!(std::io::stderr(), "{message}");
+        emit_error(&message);
+        return ExitCode::FAILURE;
+    }
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
-            let _ = writeln!(
-                std::io::stderr(),
-                "{message}"
-            );
-            let payload = ErrorPayload {
-                success: false,
-                error: single_line(&message),
-            };
-            if let Ok(json) = serde_json::to_string(&payload) {
-                let _ = writeln!(std::io::stdout(), "{json}");
-            }
+            let _ = writeln!(std::io::stderr(), "{message}");
+            emit_error(&message);
             ExitCode::FAILURE
         }
     }
@@ -53,13 +54,12 @@ fn run() -> Result<(), String> {
     let wav_path = env::args()
         .nth(1)
         .ok_or_else(|| "usage: speakrs-cli <wav-path>".to_string())?;
-    let models_dir = env::var("SPEAKRS_MODELS_DIR")
-        .map_err(|_| "SPEAKRS_MODELS_DIR is required".to_string())?;
+    let models_dir = env::var("SPEAKRS_MODELS_DIR").map_err(|_| MODELS_SETUP_ERROR.to_string())?;
+    if models_dir.trim().is_empty() {
+        return Err(MODELS_SETUP_ERROR.to_string());
+    }
     let mode_name = env::var("SPEAKRS_MODE").map_err(|_| "SPEAKRS_MODE is required".to_string())?;
-    let exclusive = env::var("SPEAKRS_EXCLUSIVE")
-        .ok()
-        .map(|value| value != "0")
-        .unwrap_or(true);
+    let exclusive = parse_exclusive(env::var("SPEAKRS_EXCLUSIVE").ok().as_deref());
 
     if env::var_os("SPEAKRS_NUM_SPEAKERS").is_some() {
         return Err(
@@ -68,20 +68,18 @@ fn run() -> Result<(), String> {
     }
 
     let mode = parse_mode(&mode_name)?;
+    assert_models_dir(Path::new(&models_dir))?;
     let samples = decode_s16le_wav(Path::new(&wav_path))?;
-    let mut pipeline = OwnedDiarizationPipeline::from_dir(PathBuf::from(models_dir), mode)
-        .map_err(|error| format!("failed to load speakrs models: {error}"))?;
+    let mut pipeline = OwnedDiarizationPipeline::from_dir(PathBuf::from(&models_dir), mode)
+        .map_err(|error| format!("{MODELS_SETUP_ERROR}: {error}"))?;
     let result = pipeline
         .run(&samples)
         .map_err(|error| format!("speakrs inference failed: {error}"))?;
 
     let mut discrete = result.discrete_diarization.clone();
-    let annotation_source = if exclusive {
+    if exclusive {
         discrete.make_exclusive();
-        "exclusive_speaker_diarization"
-    } else {
-        "speaker_diarization"
-    };
+    }
     let segments = discrete
         .to_segments()
         .into_iter()
@@ -95,7 +93,7 @@ fn run() -> Result<(), String> {
     let payload = SuccessPayload {
         success: true,
         device: mode.as_str().to_string(),
-        annotation_source: annotation_source.to_string(),
+        annotation_source: annotation_source(exclusive).to_string(),
         segments,
     };
     let json = serde_json::to_string(&payload).map_err(|error| error.to_string())?;
@@ -103,15 +101,50 @@ fn run() -> Result<(), String> {
     Ok(())
 }
 
+fn emit_error(message: &str) {
+    let payload = ErrorPayload {
+        success: false,
+        error: single_line(message),
+    };
+    if let Ok(json) = serde_json::to_string(&payload) {
+        let _ = writeln!(std::io::stdout(), "{json}");
+    }
+}
+
+fn parse_exclusive(value: Option<&str>) -> bool {
+    value.is_none_or(|raw| raw != "0")
+}
+
+fn annotation_source(exclusive: bool) -> &'static str {
+    if exclusive {
+        ANNOTATION_SOURCE_EXCLUSIVE
+    } else {
+        ANNOTATION_SOURCE_OVERLAP
+    }
+}
+
 fn parse_mode(value: &str) -> Result<ExecutionMode, String> {
     match value {
         "cpu" => Ok(ExecutionMode::Cpu),
         "coreml" => Ok(ExecutionMode::CoreMl),
-        "coreml-fast" => Ok(ExecutionMode::CoreMlFast),
         "cuda" => Ok(ExecutionMode::Cuda),
-        "cuda-fast" => Ok(ExecutionMode::CudaFast),
-        other => Err(format!("unsupported SPEAKRS_MODE: {other}")),
+        other => Err(format!(
+            "unsupported SPEAKRS_MODE: {other} (expected cpu, coreml, or cuda)"
+        )),
     }
+}
+
+fn assert_models_dir(path: &Path) -> Result<(), String> {
+    if !path.is_dir() {
+        return Err(MODELS_SETUP_ERROR.to_string());
+    }
+    let mut entries = path
+        .read_dir()
+        .map_err(|_| MODELS_SETUP_ERROR.to_string())?;
+    if entries.next().is_none() {
+        return Err(MODELS_SETUP_ERROR.to_string());
+    }
+    Ok(())
 }
 
 fn normalize_speaker_label(label: &str) -> String {
@@ -206,14 +239,227 @@ fn decode_s16le_wav(path: &Path) -> Result<Vec<f32>, String> {
         .collect())
 }
 
+fn install_shutdown_handlers() -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        return install_windows_shutdown_handler();
+    }
+    #[cfg(unix)]
+    {
+        return install_unix_shutdown_handler();
+    }
+    #[allow(unreachable_code)]
+    Ok(())
+}
+
+#[cfg(windows)]
+fn install_windows_shutdown_handler() -> Result<(), String> {
+    use std::ffi::c_void;
+
+    unsafe extern "system" fn handler(ctrl_type: u32) -> i32 {
+        const CTRL_C_EVENT: u32 = 0;
+        const CTRL_BREAK_EVENT: u32 = 1;
+        const CTRL_CLOSE_EVENT: u32 = 2;
+        if matches!(
+            ctrl_type,
+            CTRL_C_EVENT | CTRL_BREAK_EVENT | CTRL_CLOSE_EVENT
+        ) {
+            let terminated = unsafe { TerminateProcess(GetCurrentProcess(), 1) };
+            return i32::from(terminated != 0);
+        }
+        0
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetCurrentProcess() -> *mut c_void;
+        fn SetConsoleCtrlHandler(
+            handler: Option<unsafe extern "system" fn(u32) -> i32>,
+            add: i32,
+        ) -> i32;
+        fn TerminateProcess(process: *mut c_void, exit_code: u32) -> i32;
+    }
+
+    let installed = unsafe { SetConsoleCtrlHandler(Some(handler), 1) };
+    if installed == 0 {
+        return Err("failed to install Windows shutdown handler".to_string());
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn install_unix_shutdown_handler() -> Result<(), String> {
+    use std::os::raw::c_int;
+
+    unsafe extern "C" fn handler(_signal: c_int) {
+        unsafe { immediate_exit(1) }
+    }
+
+    unsafe extern "C" {
+        fn signal(signum: c_int, handler: Option<unsafe extern "C" fn(c_int)>) -> usize;
+        #[link_name = "_exit"]
+        fn immediate_exit(status: c_int) -> !;
+    }
+
+    const SIGINT: c_int = 2;
+    const SIGTERM: c_int = 15;
+    const SIG_ERR: usize = usize::MAX;
+    for (name, signum) in [("SIGINT", SIGINT), ("SIGTERM", SIGTERM)] {
+        if unsafe { signal(signum, Some(handler)) } == SIG_ERR {
+            return Err(format!("failed to install {name} shutdown handler"));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::normalize_speaker_label;
+    use super::{
+        ANNOTATION_SOURCE_EXCLUSIVE, ANNOTATION_SOURCE_OVERLAP, ErrorPayload, MODELS_SETUP_ERROR,
+        SegmentPayload, SuccessPayload, annotation_source, assert_models_dir, decode_s16le_wav,
+        normalize_speaker_label, parse_exclusive, parse_mode, single_line,
+    };
+    use speakrs::ExecutionMode;
+    use std::fs;
+    use std::io::Write;
+    use std::path::PathBuf;
+
+    fn write_s16le_wav(path: &std::path::Path, samples: &[i16], channels: u16, sample_rate: u32) {
+        let data_bytes = samples.len() * 2;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36u32 + data_bytes as u32).to_le_bytes());
+        bytes.extend_from_slice(b"WAVE");
+        bytes.extend_from_slice(b"fmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&channels.to_le_bytes());
+        bytes.extend_from_slice(&sample_rate.to_le_bytes());
+        let byte_rate = sample_rate * u32::from(channels) * 2;
+        bytes.extend_from_slice(&byte_rate.to_le_bytes());
+        bytes.extend_from_slice(&(channels * 2).to_le_bytes());
+        bytes.extend_from_slice(&16u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&(data_bytes as u32).to_le_bytes());
+        for sample in samples {
+            bytes.extend_from_slice(&sample.to_le_bytes());
+        }
+        let mut file = fs::File::create(path).expect("create wav");
+        file.write_all(&bytes).expect("write wav");
+    }
+
+    fn temp_path(name: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "avanevis-speakrs-cli-{name}-{}",
+            std::process::id()
+        ));
+        path
+    }
 
     #[test]
     fn speaker_labels_keep_speaker_nn() {
         assert_eq!(normalize_speaker_label("SPEAKER_00"), "SPEAKER_00");
         assert_eq!(normalize_speaker_label("0"), "SPEAKER_00");
         assert_eq!(normalize_speaker_label("SPEAKER 3"), "SPEAKER_03");
+        assert_eq!(normalize_speaker_label("speaker_01"), "SPEAKER_01");
+    }
+
+    #[test]
+    fn exclusive_defaults_on_and_maps_sidecar_sources() {
+        assert!(parse_exclusive(None));
+        assert!(parse_exclusive(Some("1")));
+        assert!(!parse_exclusive(Some("0")));
+        assert_eq!(annotation_source(true), ANNOTATION_SOURCE_EXCLUSIVE);
+        assert_eq!(annotation_source(false), ANNOTATION_SOURCE_OVERLAP);
+    }
+
+    #[test]
+    fn parse_mode_accepts_only_frozen_modes() {
+        assert!(matches!(parse_mode("cpu"), Ok(ExecutionMode::Cpu)));
+        assert!(matches!(parse_mode("coreml"), Ok(ExecutionMode::CoreMl)));
+        assert!(matches!(parse_mode("cuda"), Ok(ExecutionMode::Cuda)));
+        for rejected in ["coreml-fast", "cuda-fast", "migraphx", "", "CPU"] {
+            assert!(parse_mode(rejected).is_err(), "{rejected}");
+        }
+    }
+
+    #[test]
+    fn success_json_uses_frozen_field_set() {
+        let payload = SuccessPayload {
+            success: true,
+            device: "cuda".to_string(),
+            annotation_source: ANNOTATION_SOURCE_EXCLUSIVE.to_string(),
+            segments: vec![SegmentPayload {
+                start: 0.0,
+                end: 1.5,
+                speaker: "SPEAKER_00".to_string(),
+            }],
+        };
+        let value: serde_json::Value =
+            serde_json::from_str(&serde_json::to_string(&payload).unwrap()).unwrap();
+        let object = value.as_object().unwrap();
+        assert_eq!(
+            object
+                .keys()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>(),
+            ["success", "device", "annotationSource", "segments"]
+                .into_iter()
+                .map(str::to_string)
+                .collect()
+        );
+        assert_eq!(object["success"], true);
+        assert_eq!(object["device"], "cuda");
+        assert_eq!(object["annotationSource"], ANNOTATION_SOURCE_EXCLUSIVE);
+        assert_eq!(object["segments"][0]["speaker"], "SPEAKER_00");
+        assert!(object["segments"][0]["start"].is_number());
+        assert!(object["segments"][0]["end"].is_number());
+    }
+
+    #[test]
+    fn failure_json_is_single_line_success_false() {
+        let payload = ErrorPayload {
+            success: false,
+            error: single_line("missing models\nre-run setup"),
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        assert!(!json.contains('\n'));
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["success"], false);
+        assert_eq!(value["error"], "missing models re-run setup");
+        assert_eq!(value.as_object().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn missing_models_dir_uses_setup_message() {
+        let missing = temp_path("missing-models");
+        let _ = fs::remove_dir_all(&missing);
+        assert_eq!(assert_models_dir(&missing).unwrap_err(), MODELS_SETUP_ERROR);
+
+        let empty = temp_path("empty-models");
+        let _ = fs::remove_dir_all(&empty);
+        fs::create_dir_all(&empty).unwrap();
+        assert_eq!(assert_models_dir(&empty).unwrap_err(), MODELS_SETUP_ERROR);
+        let _ = fs::remove_dir_all(&empty);
+    }
+
+    #[test]
+    fn decodes_mono_16k_s16le_and_rejects_other_formats() {
+        let ok_path = temp_path("ok.wav");
+        write_s16le_wav(&ok_path, &[0, 16384, -16384], 1, 16_000);
+        let samples = decode_s16le_wav(&ok_path).unwrap();
+        assert_eq!(samples.len(), 3);
+        assert!((samples[1] - 0.5).abs() < 0.01);
+        let _ = fs::remove_file(&ok_path);
+
+        let stereo = temp_path("stereo.wav");
+        write_s16le_wav(&stereo, &[0, 0], 2, 16_000);
+        assert!(
+            decode_s16le_wav(&stereo)
+                .unwrap_err()
+                .contains("mono 16 kHz")
+        );
+        let _ = fs::remove_file(&stereo);
     }
 }
