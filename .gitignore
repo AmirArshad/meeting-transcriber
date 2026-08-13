@@ -31,6 +31,9 @@ build/resources/
 swift/**/.build/
 swift/**/Package.resolved
 
+# Rust / speakrs-cli
+native/**/target/
+
 # IDEs
 .vscode/
 .idea/
