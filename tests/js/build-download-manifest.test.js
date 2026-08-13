@@ -28,6 +28,16 @@ test('BUILD_DOWNLOADS uses pinned direct download URLs', () => {
 });
 
 
+test('BUILD_DOWNLOADS does not pin speakrs or ort compile-time downloads', () => {
+  const keys = Object.keys(BUILD_DOWNLOADS);
+  assert.equal(keys.some((key) => /speakrs|ort|onnx/i.test(key)), false);
+  const source = fs.readFileSync(path.join(__dirname, '..', '..', 'build', 'download-manifest.js'), 'utf8');
+  assert.equal(/speakrs/i.test(source), false);
+  assert.equal(/onnxruntime/i.test(source), false);
+  assert.equal(/cdn\.pyke\.io/i.test(source), false);
+});
+
+
 test('getBuildDownload returns manifest entries and rejects unknown keys', () => {
   assert.equal(getBuildDownload('pythonWin').label, 'Windows embedded Python 3.11.9');
   assert.throws(() => getBuildDownload('missing'), /Unknown build download/);

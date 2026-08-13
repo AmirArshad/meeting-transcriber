@@ -40,6 +40,18 @@ This app keeps optional local AI add-on artifacts catalog-driven in `src/ai-addo
 
 ## Updating Speakrs Model-Pack Pins
 
+These rules live **alongside** the still-live pyannote dependency-pin rules above. Do not delete pyannote pins.
+
+| Pin | Value |
+|-----|--------|
+| Upstream repo | `avencera/speakrs-models` |
+| Revision | `5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f` (`5d24ffe`) |
+| Windows pack | `speakrs-models-5d24ffe-win32-x64-cuda.tar.gz` — sha256 `a79973647cb787bf2aebd31acc2668d282735e41d451e244308bcf04ea77ad20`, 208765985 bytes, 19 ONNX/PLDA files |
+| macOS pack | `speakrs-models-5d24ffe-darwin-arm64-coreml.tar.gz` — sha256 `0677b5eee394402ddd4cbdb991afd0736c24e955b145d4b98f69d63523cc8d50`, 375813778 bytes, 76 CoreML/ONNX/PLDA leaves |
+| Windows ORT | official `onnxruntime-win-x64-gpu_cuda12-1.27.1.zip` plus NVIDIA `cudart64_12` / `cufft64_11` wheels — setup-time only |
+
+Per-mode file lists and per-file SHA-256 values live in `src/ai-addon/speakrs-model-files.json` (`cudaPins` / `coremlPins`). Do not invent a shorter list.
+
 1. Pin the immutable `avencera/speakrs-models` revision in `src/ai-addon/speakrs-pack-spec.js`; keep `scripts/build-speakrs-model-pack.js`'s binding revision identical.
 2. Update `src/ai-addon/speakrs-model-files.json` only from the exact `speakrs` `required_files` lists and verify every source size and SHA-256.
 3. Build one archive per platform with:
@@ -51,6 +63,7 @@ This app keeps optional local AI add-on artifacts catalog-driven in `src/ai-addo
 7. Never delete shared CUDA pip packages, Whisper caches, or the packaged `Resources/bin/speakrs-cli`. Speakrs uninstall owns only `models/diarization/speakrs` and `runtimes/speakrs-ort`.
 8. Keep `licenseUrl` / `licenseUrls` metadata accurate. These fields document the MIT, CC-BY-4.0, and Apache-2.0 constituents and must not expand the download allowlist.
 9. Validate archive traversal rejection, per-file model checksums, all five Windows DLLs, cancellation cleanup, token-store isolation, and redacted progress with `npm test`.
+10. `speakrs-cli` is built by `build/prepare-resources.js` and installer-bundled. Pin `ort` compile-time downloads in `native/speakrs-cli/ort-compile-pins.json` only — never in `build/download-manifest.js`.
 
 ## Updating Summary Model Pins
 

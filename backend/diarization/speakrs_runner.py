@@ -127,12 +127,14 @@ def resolve_speakrs_validate_wav(
     candidates: List[Path] = []
     if cli_path is not None:
         candidates.append(Path(cli_path).resolve().parent / VALIDATE_WAV_NAME)
-    candidates.extend([
-        current_dir / "fixtures" / VALIDATE_WAV_NAME,
-        resources_or_repo / "bin" / VALIDATE_WAV_NAME,
-    ])
-    if not packaged:
-        candidates.append(resources_or_repo / "tests" / "fixtures" / VALIDATE_WAV_NAME)
+    if packaged:
+        candidates.append(resources_or_repo / "bin" / VALIDATE_WAV_NAME)
+    else:
+        candidates.extend([
+            current_dir / "fixtures" / VALIDATE_WAV_NAME,
+            resources_or_repo / "bin" / VALIDATE_WAV_NAME,
+            resources_or_repo / "tests" / "fixtures" / VALIDATE_WAV_NAME,
+        ])
 
     for candidate in candidates:
         if candidate.is_file():

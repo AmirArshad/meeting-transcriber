@@ -52,7 +52,7 @@ jobs:
   test-backend-macos:
     name: Test Python Backend (macOS)
     runs-on: macos-14  # Apple Silicon runner
-    timeout-minutes: 75
+    timeout-minutes: 90
 
     steps:
     - uses: actions/checkout@v6
@@ -141,6 +141,33 @@ jobs:
         flake8 backend --count --select=E9,F63,F7,F82 --show-source --statistics
       continue-on-error: true
 
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: '1.88.0'
+        targets: aarch64-apple-darwin
+        components: rustfmt, clippy
+
+    - name: Cache cargo
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: native/speakrs-cli
+        cache-on-failure: true
+
+    - name: Test speakrs-cli
+      working-directory: native/speakrs-cli
+      run: cargo test --locked
+
+    - name: Build speakrs-cli release
+      working-directory: native/speakrs-cli
+      run: cargo build --release --locked --target aarch64-apple-darwin
+
+    - name: Cache Speakrs CPU smoke artifacts
+      uses: actions/cache@v4
+      with:
+        path: .cache/speakrs-cpu-smoke
+        key: speakrs-cpu-smoke-${{ runner.os }}-${{ hashFiles('native/speakrs-cli/ci-cpu-smoke-pins.json', 'src/ai-addon/speakrs-pack-spec.js', 'src/ai-addon/speakrs-model-files.json') }}
+
     - name: Set up Node.js
       uses: actions/setup-node@v6
       with:
@@ -149,6 +176,9 @@ jobs:
 
     - name: Install Node dependencies
       run: npm ci
+
+    - name: Speakrs CPU-mode inference smoke
+      run: node scripts/run-speakrs-cpu-smoke.js --cli native/speakrs-cli/target/aarch64-apple-darwin/release/speakrs-cli
 
     - name: Build packaged macOS app smoke test
       run: |
@@ -163,7 +193,7 @@ jobs:
   test-frontend:
     name: Test Electron Frontend & Build Smoke
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
     - uses: actions/checkout@v6
@@ -174,8 +204,38 @@ jobs:
         node-version: '24'
         cache: 'npm'
 
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: '1.88.0'
+        targets: x86_64-pc-windows-msvc
+        components: rustfmt, clippy
+
+    - name: Cache cargo
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: native/speakrs-cli
+        cache-on-failure: true
+
+    - name: Test speakrs-cli
+      working-directory: native/speakrs-cli
+      run: cargo test --locked
+
+    - name: Prove Windows cuda,load-dynamic compiles without a CUDA toolkit
+      working-directory: native/speakrs-cli
+      run: cargo build --release --locked --target x86_64-pc-windows-msvc
+
+    - name: Cache Speakrs CPU smoke artifacts
+      uses: actions/cache@v4
+      with:
+        path: .cache/speakrs-cpu-smoke
+        key: speakrs-cpu-smoke-${{ runner.os }}-${{ hashFiles('native/speakrs-cli/ci-cpu-smoke-pins.json', 'src/ai-addon/speakrs-pack-spec.js', 'src/ai-addon/speakrs-model-files.json') }}
+
     - name: Install dependencies
       run: npm ci
+
+    - name: Speakrs CPU-mode inference smoke
+      run: node scripts/run-speakrs-cpu-smoke.js --cli native/speakrs-cli/target/x86_64-pc-windows-msvc/release/speakrs-cli.exe
 
     - name: Validate JavaScript syntax under src/
       run: npm run test:syntax
@@ -202,6 +262,30 @@ jobs:
         if ($helper) {
           throw "Windows package contains stale macOS audiocapture-helper"
         }
+
+        $cli = "dist/win-unpacked/resources/bin/speakrs-cli.exe"
+        if (-not (Test-Path $cli)) {
+          throw "Windows package is missing resources/bin/speakrs-cli.exe"
+        }
+        if ((Get-Item $cli).Length -le 0) {
+          throw "Windows package speakrs-cli.exe is empty"
+        }
+
+        $wavBin = "dist/win-unpacked/resources/bin/speakrs-two-speaker-16k.wav"
+        if (-not (Test-Path $wavBin) -or (Get-Item $wavBin).Length -le 0) {
+          throw "Windows package is missing the canonical Speakrs validation fixture WAV"
+        }
+
+        $wavBackend = "dist/win-unpacked/resources/backend/diarization/fixtures/speakrs-two-speaker-16k.wav"
+        if (Test-Path $wavBackend) {
+          throw "Windows package must not ship a duplicate Speakrs fixture under backend/diarization/fixtures"
+        }
+
+        if (Test-Path "dist/win-unpacked/resources/tests/fixtures/speakrs-two-speaker-16k.wav") {
+          throw "Windows package must not ship tests/fixtures as the Speakrs validation path"
+        }
+
+        node scripts/verify-speakrs-packaging.js --packaged
 
     - name: Check for npm security vulnerabilities
       run: npm audit --audit-level=high

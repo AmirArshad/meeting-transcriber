@@ -1,4 +1,5 @@
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const https = require('https');
 const { execFileSync, execSync } = require('child_process');
@@ -14,7 +15,7 @@ const LEGAL_DIR = path.join(BUILD_DIR, 'legal');
 const BIN_DIR = path.join(BUILD_DIR, 'bin');
 const REPO_ROOT = path.join(__dirname, '..');
 const RESOURCE_MANIFEST_PATH = path.join(BUILD_DIR, 'resource-manifest.json');
-const RESOURCE_MANIFEST_VERSION = 5;
+const RESOURCE_MANIFEST_VERSION = 7;
 const REQUIREMENTS_MACOS_BUILD = path.join(__dirname, '..', 'requirements-macos-build.txt');
 const REQUIREMENTS_WINDOWS_BUILD = path.join(__dirname, '..', 'requirements-windows-build.txt');
 const MACOS_RUNTIME_REMOVABLE_PACKAGES = Object.freeze([
@@ -38,6 +39,14 @@ const MACOS_RUNTIME_REMOVABLE_PACKAGES = Object.freeze([
 // Swift AudioCaptureHelper paths
 const SWIFT_HELPER_DIR = path.join(__dirname, '..', 'swift', 'AudioCaptureHelper');
 const SWIFT_HELPER_BINARY = 'audiocapture-helper';
+
+const SPEAKRS_CLI_DIR = path.join(REPO_ROOT, 'native', 'speakrs-cli');
+const SPEAKRS_VALIDATE_WAV_NAME = 'speakrs-two-speaker-16k.wav';
+const SPEAKRS_VALIDATE_WAV_SOURCE = path.join(REPO_ROOT, 'tests', 'fixtures', SPEAKRS_VALIDATE_WAV_NAME);
+const SPEAKRS_ORT_COMPILE_PINS_PATH = path.join(SPEAKRS_CLI_DIR, 'ort-compile-pins.json');
+const WINDOWS_PE_MACHINE_AMD64 = 0x8664;
+const MACHO_MAGIC_64_LE = 0xfeedfacf;
+const MACHO_CPU_TYPE_ARM64 = 0x0100000c;
 
 const IS_MAC = process.platform === 'darwin';
 const IS_WINDOWS = process.platform === 'win32';
@@ -284,6 +293,18 @@ function buildResourceManifest() {
         path.join(__dirname, '..', 'swift', 'AudioCaptureHelper')
       ),
       inheritEntitlements: hashString(readTextOrEmpty(path.join(__dirname, 'entitlements.mac.inherit.plist'))),
+      speakrsCargoToml: hashString(readTextOrEmpty(path.join(SPEAKRS_CLI_DIR, 'Cargo.toml'))),
+      speakrsCargoLock: hashString(readTextOrEmpty(path.join(SPEAKRS_CLI_DIR, 'Cargo.lock'))),
+      speakrsToolchain: hashString(readTextOrEmpty(path.join(SPEAKRS_CLI_DIR, 'rust-toolchain.toml'))),
+      speakrsSources: buildDirectoryManifest(
+        path.join(SPEAKRS_CLI_DIR, 'src'),
+        SPEAKRS_CLI_DIR
+      ),
+      speakrsOrtCompilePins: hashString(readTextOrEmpty(SPEAKRS_ORT_COMPILE_PINS_PATH)),
+      speakrsCargoTarget: getSpeakrsCargoTargetTriple(),
+      speakrsValidateWav: fs.existsSync(SPEAKRS_VALIDATE_WAV_SOURCE)
+        ? hashFileContent(SPEAKRS_VALIDATE_WAV_SOURCE)
+        : '',
     },
   };
 }
@@ -697,6 +718,345 @@ function extractTarGz(tarPath, targetDir) {
   }
 }
 
+function getSpeakrsCliBinaryName(platform = process.platform) {
+  return platform === 'win32' ? 'speakrs-cli.exe' : 'speakrs-cli';
+}
+
+function getSpeakrsCargoTargetTriple(platform = process.platform) {
+  if (platform === 'darwin') {
+    return 'aarch64-apple-darwin';
+  }
+  if (platform === 'win32') {
+    return 'x86_64-pc-windows-msvc';
+  }
+  throw new Error(`Unsupported Speakrs packaging platform: ${platform}`);
+}
+
+function getSpeakrsCargoFeatures(platform = process.platform) {
+  if (platform === 'darwin') {
+    return Object.freeze(['default-linalg', 'coreml']);
+  }
+  if (platform === 'win32') {
+    return Object.freeze(['default-linalg', 'cuda', 'load-dynamic']);
+  }
+  return Object.freeze(['default-linalg']);
+}
+
+function resolveCargoTargetDir(env = process.env, { cwd = SPEAKRS_CLI_DIR } = {}) {
+  const raw = env && env.CARGO_TARGET_DIR;
+  if (!raw) {
+    return path.join(cwd, 'target');
+  }
+  return path.isAbsolute(raw) ? raw : path.resolve(cwd, raw);
+}
+
+function resolveSpeakrsCliCargoOutputPath(platform = process.platform, env = process.env, { cwd = SPEAKRS_CLI_DIR } = {}) {
+  return path.join(
+    resolveCargoTargetDir(env, { cwd }),
+    getSpeakrsCargoTargetTriple(platform),
+    'release',
+    getSpeakrsCliBinaryName(platform)
+  );
+}
+
+function buildSpeakrsCliCargoArgs(platform = process.platform, { manifestPath } = {}) {
+  return [
+    'build',
+    '--release',
+    '--locked',
+    '--target',
+    getSpeakrsCargoTargetTriple(platform),
+    '--manifest-path',
+    manifestPath || path.join(SPEAKRS_CLI_DIR, 'Cargo.toml'),
+  ];
+}
+
+function loadSpeakrsOrtCompilePins() {
+  if (!fs.existsSync(SPEAKRS_ORT_COMPILE_PINS_PATH)) {
+    throw new Error(`Speakrs ort compile-time pins are missing: ${SPEAKRS_ORT_COMPILE_PINS_PATH}`);
+  }
+  return JSON.parse(fs.readFileSync(SPEAKRS_ORT_COMPILE_PINS_PATH, 'utf8'));
+}
+
+function readFilePrefix(filePath, length) {
+  const stat = fs.statSync(filePath);
+  if (stat.size < length) {
+    throw new Error(`speakrs-cli is too small to inspect architecture (${stat.size} bytes): ${filePath}`);
+  }
+  const fd = fs.openSync(filePath, 'r');
+  try {
+    const buffer = Buffer.alloc(length);
+    const bytesRead = fs.readSync(fd, buffer, 0, length, 0);
+    if (bytesRead < length) {
+      throw new Error(`speakrs-cli could not be read for architecture checks: ${filePath}`);
+    }
+    return buffer;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function readWindowsPeMachine(filePath) {
+  const dos = readFilePrefix(filePath, 64);
+  if (dos.toString('ascii', 0, 2) !== 'MZ') {
+    throw new Error(`speakrs-cli is not a Windows PE executable: ${filePath}`);
+  }
+  const peOffset = dos.readUInt32LE(0x3c);
+  if (peOffset < 64) {
+    throw new Error(`speakrs-cli has an invalid PE header offset: ${filePath}`);
+  }
+  const fd = fs.openSync(filePath, 'r');
+  try {
+    const header = Buffer.alloc(6);
+    const bytesRead = fs.readSync(fd, header, 0, 6, peOffset);
+    if (bytesRead < 6 || header.toString('ascii', 0, 4) !== 'PE\0\0') {
+      throw new Error(`speakrs-cli is missing a PE signature: ${filePath}`);
+    }
+    return header.readUInt16LE(4);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function readMachOCpuType(filePath) {
+  const header = readFilePrefix(filePath, 8);
+  const magic = header.readUInt32LE(0);
+  if (magic !== MACHO_MAGIC_64_LE) {
+    throw new Error(`speakrs-cli is not a thin 64-bit Mach-O binary: ${filePath}`);
+  }
+  return header.readUInt32LE(4);
+}
+
+function assertSpeakrsCliArchitecture(filePath, platform = process.platform) {
+  if (platform === 'darwin') {
+    const cpuType = readMachOCpuType(filePath);
+    if (cpuType !== MACHO_CPU_TYPE_ARM64) {
+      throw new Error(
+        `speakrs-cli is not arm64 (Mach-O cputype 0x${cpuType.toString(16)}): ${filePath}`
+      );
+    }
+    if (process.platform === 'darwin') {
+      const fileOutput = execFileSync('file', [filePath], { encoding: 'utf8' });
+      if (!fileOutput.includes('arm64')) {
+        throw new Error(`Bundled macOS speakrs-cli is not arm64: ${fileOutput.trim()}`);
+      }
+    }
+    return 'arm64';
+  }
+  if (platform === 'win32') {
+    const machine = readWindowsPeMachine(filePath);
+    if (machine !== WINDOWS_PE_MACHINE_AMD64) {
+      throw new Error(
+        `speakrs-cli is not Windows x64 PE (machine 0x${machine.toString(16)}): ${filePath}`
+      );
+    }
+    return 'x64';
+  }
+  throw new Error(`Unsupported Speakrs packaging platform: ${platform}`);
+}
+
+function resolveCargoExecutable() {
+  const cargoName = IS_WINDOWS ? 'cargo.exe' : 'cargo';
+  const candidates = [];
+  const pathEntries = String(process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  for (const entry of pathEntries) {
+    candidates.push(path.join(entry, cargoName));
+  }
+  candidates.push(path.join(os.homedir(), '.cargo', 'bin', cargoName));
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  throw new Error('Rust cargo not found. Install rustup 1.88.0 from native/speakrs-cli/rust-toolchain.toml.');
+}
+
+function resolveRustupExecutable(cargoPath) {
+  const rustupName = IS_WINDOWS ? 'rustup.exe' : 'rustup';
+  const nextToCargo = cargoPath ? path.join(path.dirname(cargoPath), rustupName) : null;
+  const candidates = [];
+  if (nextToCargo) {
+    candidates.push(nextToCargo);
+  }
+  const pathEntries = String(process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  for (const entry of pathEntries) {
+    candidates.push(path.join(entry, rustupName));
+  }
+  candidates.push(path.join(os.homedir(), '.cargo', 'bin', rustupName));
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  throw new Error('Rust rustup not found. Install rustup 1.88.0 from native/speakrs-cli/rust-toolchain.toml.');
+}
+
+function ensureSpeakrsRustTargetInstalled(triple, cargoPath) {
+  const rustup = resolveRustupExecutable(cargoPath);
+  try {
+    execFileSync(rustup, ['target', 'add', triple], { stdio: 'inherit' });
+  } catch (error) {
+    throw new Error(`Failed to install Rust target ${triple}: ${error.message}`);
+  }
+}
+
+function assertStagedSpeakrsCli(binDir = BIN_DIR, platform = process.platform) {
+  const destBinary = path.join(binDir, getSpeakrsCliBinaryName(platform));
+  if (!fs.existsSync(destBinary)) {
+    throw new Error(`speakrs-cli missing at ${destBinary}; prepare-build cannot continue.`);
+  }
+  const stat = fs.statSync(destBinary);
+  if (!stat.isFile() || stat.size <= 0) {
+    throw new Error(`speakrs-cli is empty or not a file at ${destBinary}`);
+  }
+  if (platform !== 'win32' && (stat.mode & 0o111) === 0) {
+    throw new Error(`speakrs-cli is not executable at ${destBinary}`);
+  }
+  assertSpeakrsCliArchitecture(destBinary, platform);
+  return destBinary;
+}
+
+function assertStagedSpeakrsValidateWav(binDir = BIN_DIR) {
+  const destWav = path.join(binDir, SPEAKRS_VALIDATE_WAV_NAME);
+  if (!fs.existsSync(destWav)) {
+    throw new Error(`Speakrs validation fixture WAV is missing at ${destWav}`);
+  }
+  const stat = fs.statSync(destWav);
+  if (!stat.isFile() || stat.size <= 0) {
+    throw new Error(`Speakrs validation fixture WAV is empty at ${destWav}`);
+  }
+  return destWav;
+}
+
+function stageSpeakrsValidateWav(binDir = BIN_DIR) {
+  if (!fs.existsSync(SPEAKRS_VALIDATE_WAV_SOURCE)) {
+    throw new Error(`Speakrs validation fixture WAV is missing: ${SPEAKRS_VALIDATE_WAV_SOURCE}`);
+  }
+  const sourceSize = fs.statSync(SPEAKRS_VALIDATE_WAV_SOURCE).size;
+  if (sourceSize <= 0) {
+    throw new Error(`Speakrs validation fixture WAV source is empty: ${SPEAKRS_VALIDATE_WAV_SOURCE}`);
+  }
+  fs.mkdirSync(binDir, { recursive: true });
+  const destWav = path.join(binDir, SPEAKRS_VALIDATE_WAV_NAME);
+  fs.copyFileSync(SPEAKRS_VALIDATE_WAV_SOURCE, destWav);
+  const staged = assertStagedSpeakrsValidateWav(binDir);
+  if (fs.statSync(staged).size !== sourceSize) {
+    throw new Error(`Failed to stage Speakrs validation fixture WAV at ${destWav}`);
+  }
+  return staged;
+}
+
+function buildMacOSSpeakrsCliVerificationCommands(cliPath) {
+  return [
+    { command: 'codesign', args: ['--verify', '--strict', '--verbose=2', cliPath] },
+    { command: 'codesign', args: ['-d', '--entitlements', ':-', cliPath] },
+  ];
+}
+
+function verifyMacOSSpeakrsCliSignature(cliPath = path.join(BIN_DIR, getSpeakrsCliBinaryName())) {
+  if (!IS_MAC) {
+    return;
+  }
+
+  if (!fs.existsSync(cliPath)) {
+    throw new Error(`macOS speakrs-cli missing at ${cliPath}`);
+  }
+
+  const [verifyCommand, entitlementsCommand] = buildMacOSSpeakrsCliVerificationCommands(cliPath);
+  execFileSync(verifyCommand.command, verifyCommand.args, { stdio: 'inherit' });
+
+  const entitlementsOutput = execFileSync(entitlementsCommand.command, entitlementsCommand.args, {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  if (!macOSHelperEntitlementsIncludeInherit(entitlementsOutput)) {
+    throw new Error('macOS speakrs-cli is missing com.apple.security.inherit entitlement.');
+  }
+}
+
+function buildSpeakrsCli() {
+  console.log('[Speakrs] Building speakrs-cli...');
+
+  if (!fs.existsSync(path.join(SPEAKRS_CLI_DIR, 'Cargo.toml'))) {
+    throw new Error(`speakrs-cli crate not found at ${SPEAKRS_CLI_DIR}`);
+  }
+  if (!fs.existsSync(path.join(SPEAKRS_CLI_DIR, 'rust-toolchain.toml'))) {
+    throw new Error('speakrs-cli rust-toolchain.toml is missing');
+  }
+
+  const pins = loadSpeakrsOrtCompilePins();
+  if (IS_WINDOWS && pins['win32-x64'] !== null) {
+    throw new Error('Windows speakrs-cli must stay load-dynamic; do not add a compile-time ORT download pin.');
+  }
+  if (IS_MAC && (!pins['darwin-arm64'] || !pins['darwin-arm64'].sha256 || !pins['darwin-arm64'].url)) {
+    throw new Error('macOS speakrs-cli is missing a pinned ort compile-time download.');
+  }
+
+  const cargo = resolveCargoExecutable();
+  const features = getSpeakrsCargoFeatures();
+  const triple = getSpeakrsCargoTargetTriple();
+  ensureSpeakrsRustTargetInstalled(triple, cargo);
+  console.log(`  Using ${cargo}`);
+  console.log(`  Target: ${triple}`);
+  console.log(`  Feature flags (Cargo.toml target cfg): ${features.join(', ')}`);
+
+  try {
+    execFileSync(cargo, buildSpeakrsCliCargoArgs(), {
+      cwd: SPEAKRS_CLI_DIR,
+      stdio: 'inherit',
+      env: process.env,
+    });
+  } catch (error) {
+    throw new Error(`speakrs-cli cargo build failed: ${error.message}`);
+  }
+
+  const sourceBinary = resolveSpeakrsCliCargoOutputPath(process.platform, process.env, {
+    cwd: SPEAKRS_CLI_DIR,
+  });
+  if (!fs.existsSync(sourceBinary)) {
+    throw new Error(`Built speakrs-cli not found at ${sourceBinary}`);
+  }
+
+  fs.mkdirSync(BIN_DIR, { recursive: true });
+  const destBinary = path.join(BIN_DIR, getSpeakrsCliBinaryName());
+  fs.copyFileSync(sourceBinary, destBinary);
+
+  if (!IS_WINDOWS) {
+    execSync(`chmod +x "${destBinary}"`, { stdio: 'inherit' });
+    console.log('  Stripping debug symbols...');
+    try {
+      const beforeSize = fs.statSync(destBinary).size;
+      execSync(`strip "${destBinary}"`, { stdio: 'inherit' });
+      const afterSize = fs.statSync(destBinary).size;
+      const reduction = ((beforeSize - afterSize) / beforeSize * 100).toFixed(1);
+      console.log(`  → Stripped: ${(beforeSize / 1024).toFixed(0)}KB → ${(afterSize / 1024).toFixed(0)}KB (${reduction}% reduction)`);
+    } catch (stripError) {
+      console.log('  → Strip failed (non-critical):', stripError.message);
+    }
+  }
+
+  if (IS_MAC) {
+    console.log('  Signing speakrs-cli with inherit entitlements...');
+    const inheritEntitlements = path.join(__dirname, 'entitlements.mac.inherit.plist');
+    try {
+      execSync(`codesign --force --options runtime --entitlements "${inheritEntitlements}" --sign - "${destBinary}"`, {
+        stdio: 'inherit',
+      });
+      console.log('  → speakrs-cli signed with inherit entitlements');
+    } catch (signError) {
+      console.log('  → Signing failed (may still work if electron-builder signs it):', signError.message);
+    }
+  }
+
+  assertStagedSpeakrsCli();
+  console.log(`  ✓ Built and copied to ${destBinary}`);
+  console.log('✓ speakrs-cli ready!\n');
+  return destBinary;
+}
+
 // Check if resources already exist
 function checkExistingResources() {
   const pythonExe = IS_WINDOWS ? 'python.exe' : 'python3';
@@ -1020,6 +1380,20 @@ async function prepareResources() {
     verifyMacOSHelperSignature();
   }
 
+  try {
+    buildSpeakrsCli();
+  } catch (error) {
+    console.error('ERROR: speakrs-cli build failed:', error.message);
+    throw error;
+  }
+
+  stageSpeakrsValidateWav();
+  assertStagedSpeakrsCli();
+  assertStagedSpeakrsValidateWav();
+  if (IS_MAC) {
+    verifyMacOSSpeakrsCliSignature();
+  }
+
   assertNoWindowsOnlyStaleHelper();
   ensureWindowsEmptyBinDirectory();
 
@@ -1046,22 +1420,43 @@ if (require.main === module) {
 }
 
 module.exports = {
+  MACHO_CPU_TYPE_ARM64,
+  WINDOWS_PE_MACHINE_AMD64,
+  assertSpeakrsCliArchitecture,
+  assertStagedSpeakrsCli,
+  assertStagedSpeakrsValidateWav,
   buildDirectoryManifest,
   buildResourceManifest,
+  buildSpeakrsCli,
+  buildSpeakrsCliCargoArgs,
+  buildMacOSSpeakrsCliVerificationCommands,
   ensureWindowsEmbeddedPythonPathConfig,
   getMacOSPythonRuntimeRemovablePackages,
   buildMacOSHelperVerificationCommands,
   macOSHelperEntitlementsIncludeInherit,
+  getSpeakrsCargoFeatures,
+  getSpeakrsCargoTargetTriple,
+  getSpeakrsCliBinaryName,
   getStaleResourceDirectories,
   ensureWindowsEmptyBinDirectory,
   listFilesRecursively,
+  loadSpeakrsOrtCompilePins,
   manifestsMatch,
   prepareResources,
   pruneMacOSPythonRuntimeDevelopmentFiles,
   downloadFile,
+  readMachOCpuType,
+  readWindowsPeMachine,
+  resolveCargoExecutable,
+  resolveCargoTargetDir,
+  resolveSpeakrsCliCargoOutputPath,
   stageLegalBundle,
   stageFfmpegSourceArchive,
+  stageSpeakrsValidateWav,
   writeFfmpegBinaryInfo,
   writeFfmpegComplianceManifest,
   verifyMacOSHelperSignature,
+  verifyMacOSSpeakrsCliSignature,
+  SPEAKRS_VALIDATE_WAV_NAME,
+  SPEAKRS_VALIDATE_WAV_SOURCE,
 };

@@ -11,6 +11,9 @@ if [[ ! -d "$APP_PATH" ]]; then
 fi
 
 HELPER_PATH="$APP_PATH/Contents/Resources/bin/audiocapture-helper"
+SPEAKRS_CLI_PATH="$APP_PATH/Contents/Resources/bin/speakrs-cli"
+SPEAKRS_WAV_BIN="$APP_PATH/Contents/Resources/bin/speakrs-two-speaker-16k.wav"
+SPEAKRS_WAV_BACKEND="$APP_PATH/Contents/Resources/backend/diarization/fixtures/speakrs-two-speaker-16k.wav"
 PYTHON_PATH="$APP_PATH/Contents/Resources/python/bin/python3"
 FFMPEG_PATH="$APP_PATH/Contents/Resources/ffmpeg/ffmpeg"
 SITE_PACKAGES="$APP_PATH/Contents/Resources/python/lib/python3.11/site-packages"
@@ -21,6 +24,23 @@ echo ""
 
 test -f "$HELPER_PATH"
 test -x "$HELPER_PATH"
+test -f "$SPEAKRS_CLI_PATH"
+test -x "$SPEAKRS_CLI_PATH"
+test -s "$SPEAKRS_CLI_PATH"
+file "$SPEAKRS_CLI_PATH" | grep -q "arm64"
+if [[ ! -f "$SPEAKRS_WAV_BIN" ]]; then
+  echo "ERROR: Packaged Speakrs validation fixture WAV is missing at Contents/Resources/bin/speakrs-two-speaker-16k.wav" >&2
+  exit 1
+fi
+test -s "$SPEAKRS_WAV_BIN"
+if [[ -f "$SPEAKRS_WAV_BACKEND" ]]; then
+  echo "ERROR: Packaged app must not ship a duplicate Speakrs fixture under backend/diarization/fixtures" >&2
+  exit 1
+fi
+if [[ -f "$APP_PATH/Contents/Resources/tests/fixtures/speakrs-two-speaker-16k.wav" ]]; then
+  echo "ERROR: Packaged app must not ship tests/fixtures as the Speakrs validation path" >&2
+  exit 1
+fi
 test -f "$PYTHON_PATH"
 test -f "$FFMPEG_PATH"
 test -x "$FFMPEG_PATH"
@@ -31,6 +51,8 @@ codesign --verify --strict --verbose=2 "$FFMPEG_PATH"
 
 codesign --verify --strict --verbose=2 "$HELPER_PATH"
 codesign -d --entitlements :- "$HELPER_PATH" | grep -q "com.apple.security.inherit"
+codesign --verify --strict --verbose=2 "$SPEAKRS_CLI_PATH"
+codesign -d --entitlements :- "$SPEAKRS_CLI_PATH" | grep -q "com.apple.security.inherit"
 
 helper_output="$(
 python3 - "$HELPER_PATH" 2>&1 <<'PY'
@@ -76,4 +98,4 @@ echo ""
 echo "Bundle sizes:"
 du -sh "$APP_PATH" "$APP_PATH/Contents/Resources/python" "$FFMPEG_PATH" 2>/dev/null || true
 echo ""
-echo "✓ Packaged macOS app verification passed (arm64 ffmpeg, Opus encode, MLX imports, no bundled torch)"
+echo "✓ Packaged macOS app verification passed (arm64 ffmpeg, arm64 speakrs-cli, Opus encode, MLX imports, speakrs-cli codesigned, no bundled torch)"

@@ -105,15 +105,17 @@ No cloud transcription. No telemetry or analytics. No background uploads. No net
 
 **Token handling (hard constraint).** Diarization uses `pyannote/speaker-diarization-community-1` with the **user's own** Hugging Face token only — never embed, proxy, log, or persist a maintainer token. Tokens stay in Electron `safeStorage` and must never reach manifests, meeting metadata, transcripts, summaries, progress events, or logs. Setup validation passes the token by stdin (`--token-stdin`) and clears `HF_TOKEN`, `HUGGINGFACE_HUB_TOKEN`, the deprecated `HUGGING_FACE_HUB_TOKEN`, and `HF_TOKEN_PATH` from the child env via `buildClearedHuggingFaceTokenEnv()`.
 
+**Speakrs is a user-selectable exclusive engine.** Speaker identification is Speakrs or pyannote — only one may be installed. New / unset users default Speakrs; existing pyannote installs stay until the user switches. Speakrs is token-free. Windows Speakrs uses setup-time ONNX Runtime **1.27.1** (cuda12) plus the existing transcription cuda12 pip DLLs; do **not** claim a Windows speed or DER win vs pyannote CUDA. The `speakrs-cli` binary is installer-bundled; model packs and the Windows ORT archive stay setup-time downloads.
+
 > **Trap:** never set `HF_TOKEN_PATH` to `""` — `huggingface_hub` reads that as `Path(".")` and breaks offline pyannote loads. The helper sets it to `os.devNull`.
 
 **Supply chain (hard constraint).** Summary downloads stay HTTPS and host-allowlisted via `DOWNLOAD_REDIRECT_HOSTS` in `src/ai-addon/download-helpers.js` — maintain that list when HF/Xet CDNs rotate, and **never** add `*.hf.co`-style wildcards. Runtime archives verify pinned SHA-256 and extract through the path-traversal guards in `src/ai-addon-archive-helpers.js`, off-thread (`src/ai-addon-zip-extractor-worker.js`, `src/ai-addon-tar-extractor-worker.js`). Model and runtime artifacts are pinned in `src/ai-addon-state.js` — never hard-code URLs, filenames, checksums, or runtime names in renderer or business logic. Diarization model refs are resolved from the catalog **in the main process**, never trusted from renderer input.
 
-- Diarization runs automatically only after transcription, when setup is complete and platform policy allows. macOS diarization is Apple Silicon **MPS-only** — do not add a CPU fallback.
-- For new recordings with diarization ready, prefer guided transcription: pyannote first, padded speaker windows, then transcribe those windows. If it fails, save a normal transcript and persist diarization error metadata.
+- Diarization runs automatically only after transcription, when setup is complete and platform policy allows. Speakrs on macOS is Apple Silicon **CoreML-only**; pyannote on macOS is Apple Silicon **MPS-only**. Do not add a CPU fallback for either engine.
+- For new recordings with diarization ready, prefer guided transcription: the selected engine first, padded speaker windows, then transcribe those windows. If it fails, save a normal transcript and persist diarization error metadata.
 - Summaries are **always user-triggered** from Home or History. Setup is always an explicit user action — no hidden or background downloads.
 - Meeting AI metadata accepts only `diarization` and `summary`, keeps sidecar paths under recordings, and stores only concise sanitized strings.
-- Transcription metadata records `transcriptionDevice` / `transcriptionComputeType` (`cpu`/`cuda`/`mps`). MLX may report `metal` in result JSON; `meeting_manager` normalizes that alias to `mps`. Guided transcription reports the Whisper runtime separately from `diarization.device` (which describes pyannote).
+- Transcription metadata records `transcriptionDevice` / `transcriptionComputeType` (`cpu`/`cuda`/`mps`). MLX may report `metal` in result JSON; `meeting_manager` normalizes that alias to `mps`. Guided transcription reports the Whisper runtime separately from `diarization.device` (Speakrs `cuda`/`coreml`, or pyannote `mps`/`cuda`).
 - Add-on caches live under `userData/ai-addons/models/...` so app updates preserve installed artifacts.
 - Stale summaries are detected through `sourceTranscriptHash`.
 
@@ -203,7 +205,7 @@ Touching the helper pipeline means verifying: it still builds from `swift/AudioC
 
 ### Build packaging
 
-Keep aligned when bundled runtime locations or prepared-resource inputs change: `build/prepare-resources.js`, `build/download-manifest.js` (pinned URLs + checksums, with `tests/js/build-download-manifest.test.js`), `package.json` `extraResources`, and path resolution in `src/main.js`. Generated `build/resources/resource-manifest.json` must keep invalidating stale prepared resources.
+Keep aligned when bundled runtime locations or prepared-resource inputs change: `build/prepare-resources.js`, `build/download-manifest.js` (pinned URLs + checksums, with `tests/js/build-download-manifest.test.js`), `package.json` `extraResources`, and path resolution in `src/main.js`. Generated `build/resources/resource-manifest.json` must keep invalidating stale prepared resources. `prepare-resources.js` builds and stages `Resources/bin/speakrs-cli[.exe]` plus the validation fixture WAV; fail the build if that binary is missing. `ort` compile-time downloads stay pinned in `native/speakrs-cli/ort-compile-pins.json` — **not** in `download-manifest.js`. Model packs and the Windows ORT 1.27.1 archive are setup-time, not installer-bundled.
 
 Windows packaged Python relies on `python311._pth` containing `../backend`; dev relies on `PYTHONPATH` set in `src/main.js`.
 

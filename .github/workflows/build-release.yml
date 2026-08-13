@@ -15,20 +15,48 @@ permissions:
   contents: write # Required to create releases
 
 jobs:
+  verify-speakrs-release-artifacts:
+    name: Verify Speakrs release artifact checksums
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: "npm"
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Cache Speakrs pack verification downloads
+        uses: actions/cache@v4
+        with:
+          path: .cache/speakrs-pack-verify
+          key: speakrs-pack-verify-${{ hashFiles('src/ai-addon/speakrs-pack-spec.js') }}
+
+      - name: Download and verify Speakrs model-pack and Windows ORT checksums
+        run: node scripts/verify-speakrs-packaging.js --verify-pack-checksums
+
   build-installer:
     name: Build ${{ matrix.os }} Installer
     runs-on: ${{ matrix.runner }}
+    needs: verify-speakrs-release-artifacts
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: Windows
             runner: windows-latest
+            rust-target: x86_64-pc-windows-msvc
             build-script: npm run build
             artifact-pattern: "*Setup-*.exe"
             artifact-name: avanevis-installer-windows
           - os: macOS
             runner: macos-14 # macOS 14 (Sonoma) with M1/M2/M3 runners
+            rust-target: aarch64-apple-darwin
             build-script: npm run build:mac
             artifact-pattern: "*Setup-*.dmg"
             artifact-name: avanevis-installer-macos
@@ -40,6 +68,19 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.88.0"
+          targets: ${{ matrix.rust-target }}
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native/speakrs-cli
+          cache-on-failure: true
 
       - name: Verify Swift version (macOS)
         if: matrix.os == 'macOS'
@@ -99,7 +140,7 @@ jobs:
       - name: Build installer (Windows)
         if: matrix.os == 'Windows'
         run: ${{ matrix.build-script }}
-        timeout-minutes: 45
+        timeout-minutes: 75
 
       - name: Build installer (macOS)
         if: matrix.os == 'macOS'
@@ -110,7 +151,10 @@ jobs:
           ulimit -n 10240 || true
           echo "Open file limit after: $(ulimit -n)"
           ${{ matrix.build-script }}
-        timeout-minutes: 45
+        timeout-minutes: 75
+
+      - name: Verify packaged Speakrs CLI and fixture
+        run: node scripts/verify-speakrs-packaging.js --packaged
 
       - name: Verify packaged macOS app smoke checks
         if: matrix.os == 'macOS'
@@ -155,7 +199,9 @@ jobs:
 
   publish-release:
     name: Publish GitHub Release
-    needs: build-installer
+    needs:
+      - build-installer
+      - verify-speakrs-release-artifacts
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
 

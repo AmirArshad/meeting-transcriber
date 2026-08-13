@@ -1,0 +1,12 @@
+{
+  "description": "Compile-time ort-sys download-binaries pins. Do not add these to build/download-manifest.js. Windows product builds use load-dynamic and do not download ORT at compile time; the GPU archive is a setup-time download pinned in src/ai-addon/speakrs-pack-spec.js (ONNX Runtime 1.27.1 cuda12).",
+  "ortSysVersion": "2.0.0-rc.13",
+  "darwin-arm64": {
+    "target": "aarch64-apple-darwin",
+    "featureSet": "coreml",
+    "url": "https://cdn.pyke.io/0/pyke:ort-rs/ms@1.28.0/aarch64-apple-darwin+coreml.tar.lzma2",
+    "sha256": "6934874e2e953576d9c1db47ff1af39c62c4f4220dbe6f988e131f72879674c7",
+    "fileName": "aarch64-apple-darwin+coreml.tar.lzma2"
+  },
+  "win32-x64": null
+}

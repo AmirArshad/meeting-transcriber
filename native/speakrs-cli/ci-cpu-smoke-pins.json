@@ -1,0 +1,11 @@
+{
+  "description": "CI-only CPU inference smoke pins. Not installer-bundled. Not build/download-manifest.js. Uses the published Windows ONNX subset pack plus a CPU ONNX Runtime dylib for Windows load-dynamic binaries.",
+  "onnxSubsetPlatform": "win32-x64",
+  "windowsCpuOrt": {
+    "label": "ONNX Runtime 1.27.1 Windows x64 CPU (CI smoke only)",
+    "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.27.1/onnxruntime-win-x64-1.27.1.zip",
+    "sha256": "2e00414a63fdef0914cd5a5ede6c707844878e0c08e1b6693842f0451b2df2a1",
+    "fileName": "onnxruntime-win-x64-1.27.1.zip",
+    "dylibName": "onnxruntime.dll"
+  }
+}
