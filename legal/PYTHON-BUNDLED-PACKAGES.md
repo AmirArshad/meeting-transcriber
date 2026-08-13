@@ -11,14 +11,14 @@ Generated: 2026-05-27T18:48:43.979Z
 | annotated-doc | 0.0.4 | requirements-windows-build.txt, requirements-macos-build.txt |
 | anyio | 4.13.0 | requirements-windows-build.txt, requirements-macos-build.txt |
 | av | 17.0.1 | requirements-windows-build.txt |
-| certifi | 2026.6.17 | requirements-windows-build.txt, requirements-macos-build.txt |
+| certifi | 2026.7.22 | requirements-windows-build.txt, requirements-macos-build.txt |
 | cffi | 2.0.0 | requirements-macos-build.txt |
 | charset-normalizer | 3.4.7 | requirements-macos-build.txt |
 | click | 8.4.1 | requirements-windows-build.txt, requirements-macos-build.txt |
 | colorama | 0.4.6 | requirements-windows-build.txt, requirements-macos-build.txt |
-| ctranslate2 | 4.7.2 | requirements-windows-build.txt |
+| ctranslate2 | 4.8.1 | requirements-windows-build.txt |
 | faster-whisper | 1.2.1 | requirements-windows-build.txt |
-| filelock | 3.29.7 | requirements-windows-build.txt, requirements-macos-build.txt |
+| filelock | 3.32.0 | requirements-windows-build.txt, requirements-macos-build.txt |
 | flatbuffers | 25.12.19 | requirements-windows-build.txt |
 | fsspec | 2026.4.0 | requirements-windows-build.txt, requirements-macos-build.txt |
 | h11 | 0.16.0 | requirements-windows-build.txt, requirements-macos-build.txt |
@@ -67,7 +67,7 @@ Generated: 2026-05-27T18:48:43.979Z
 | torch | 2.12.0 | requirements-macos-build.txt |
 | tqdm | 4.67.3 | requirements-windows-build.txt, requirements-macos-build.txt |
 | typer | 0.25.1 | requirements-windows-build.txt, requirements-macos-build.txt |
-| typing-extensions | 4.15.0 | requirements-windows-build.txt, requirements-macos-build.txt |
+| typing-extensions | 4.16.0 | requirements-windows-build.txt, requirements-macos-build.txt |
 | urllib3 | 2.7.0 | requirements-macos-build.txt |
 
 ## Full license scan (optional)
