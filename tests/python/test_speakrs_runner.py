@@ -117,11 +117,11 @@ def test_resolve_speakrs_cli_path_prefers_env_and_skips_which_when_packaged(tmp_
     which_calls = []
     monkeypatch.setattr(shutil, 'which', lambda name: which_calls.append(name) or str(tmp_path / 'from-path'))
 
-    resolved = runner.resolve_speakrs_cli_path(env={'SPEAKRS_CLI_PATH': str(cli), 'AVANEVIS_PACKAGED': '1'})
+    resolved = runner.resolve_speakrs_cli_path(env={'SPEAKRS_CLI_PATH': str(cli)})
     assert resolved == cli
     assert which_calls == []
 
-    missing_env = {'SPEAKRS_CLI_PATH': str(tmp_path / 'missing'), 'AVANEVIS_PACKAGED': '1'}
+    missing_env = {'SPEAKRS_CLI_PATH': str(tmp_path / 'missing')}
     with pytest.raises(FileNotFoundError, match='SPEAKRS_CLI_PATH'):
         runner.resolve_speakrs_cli_path(env=missing_env)
 
@@ -130,7 +130,7 @@ def test_resolve_speakrs_cli_path_prefers_env_and_skips_which_when_packaged(tmp_
     packaged_module.write_text('#', encoding='utf-8')
     with pytest.raises(FileNotFoundError, match='PATH lookup skipped'):
         runner.resolve_speakrs_cli_path(
-            env={'AVANEVIS_PACKAGED': '1'},
+            env={'AVANEVIS_PACKAGED': '1', 'SPEAKRS_CLI_PATH': str(cli)},
             module_file=str(packaged_module),
         )
     assert which_calls == []
@@ -175,11 +175,17 @@ def test_resolve_speakrs_cli_path_packaged_resources_bin(tmp_path, monkeypatch):
 def test_resolve_speakrs_cli_path_rejects_packaged_python_wrapper(tmp_path):
     script = tmp_path / 'fake_speakrs_cli.py'
     script.write_text('print("nope")\n', encoding='utf-8')
-    with pytest.raises(FileNotFoundError, match='bundled native CLI'):
+    packaged_module = tmp_path / 'resources' / 'backend' / 'diarization' / 'speakrs_runner.py'
+    packaged_module.parent.mkdir(parents=True)
+    packaged_module.write_text('#', encoding='utf-8')
+    py_decoy = tmp_path / 'resources' / 'bin' / 'speakrs-cli.py'
+    py_decoy.parent.mkdir(parents=True)
+    py_decoy.write_text('print("nope")\n', encoding='utf-8')
+    with pytest.raises(FileNotFoundError, match='PATH lookup skipped|bundled native CLI'):
         runner.resolve_speakrs_cli_path(env={
             'SPEAKRS_CLI_PATH': str(script),
             'AVANEVIS_PACKAGED': '1',
-        })
+        }, module_file=str(packaged_module))
 
 
 def test_resolve_speakrs_cli_path_accepts_unpackaged_python_wrapper(tmp_path):
@@ -268,6 +274,22 @@ def test_resolve_speakrs_validate_wav_skips_tests_fixtures_when_packaged(tmp_pat
     assert runner.resolve_speakrs_validate_wav(
         env={'SPEAKRS_VALIDATE_WAV': str(WAV_FIXTURE)},
     ) == WAV_FIXTURE
+
+
+def test_resolve_speakrs_validate_wav_ignores_env_when_packaged(tmp_path):
+    packaged_module = tmp_path / 'resources' / 'backend' / 'diarization' / 'speakrs_runner.py'
+    packaged_module.parent.mkdir(parents=True)
+    packaged_module.write_text('#', encoding='utf-8')
+    override = tmp_path / 'override.wav'
+    override.write_bytes(b'RIFF-override')
+    with pytest.raises(FileNotFoundError, match='validation fixture WAV'):
+        runner.resolve_speakrs_validate_wav(
+            env={
+                'AVANEVIS_PACKAGED': '1',
+                'SPEAKRS_VALIDATE_WAV': str(override),
+            },
+            module_file=str(packaged_module),
+        )
 
 
 def test_build_speakrs_child_env_clears_tokens_and_forces_exclusive():
@@ -528,6 +550,7 @@ def test_run_speakrs_diarization_rejects_packaged_python_wrapper(monkeypatch, tm
     monkeypatch.setenv('SPEAKRS_CLI_PATH', str(cli))
     monkeypatch.setenv('SPEAKRS_MODELS_DIR', str(tmp_path))
     monkeypatch.setenv('AVANEVIS_PACKAGED', '1')
+    monkeypatch.setattr(runner, 'resolve_speakrs_cli_path', lambda **_kwargs: cli)
 
     with pytest.raises(FileNotFoundError, match='bundled native CLI'):
         runner.run_speakrs_diarization(wav, required_device='cuda')

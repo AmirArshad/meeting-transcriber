@@ -40,13 +40,20 @@ const MACOS_RUNTIME_REMOVABLE_PACKAGES = Object.freeze([
 const SWIFT_HELPER_DIR = path.join(__dirname, '..', 'swift', 'AudioCaptureHelper');
 const SWIFT_HELPER_BINARY = 'audiocapture-helper';
 
+const {
+  MACHO_CPU_TYPE_ARM64,
+  WINDOWS_PE_MACHINE_AMD64,
+  assertSpeakrsCliArchitecture: assertSpeakrsCliArchitectureHeaders,
+  inspectSpeakrsCliFile,
+  inspectSpeakrsValidateWavFile,
+  readMachOCpuType,
+  readWindowsPeMachine,
+  SPEAKRS_VALIDATE_WAV_NAME,
+} = require('../src/ai-addon/speakrs-cli-integrity');
+
 const SPEAKRS_CLI_DIR = path.join(REPO_ROOT, 'native', 'speakrs-cli');
-const SPEAKRS_VALIDATE_WAV_NAME = 'speakrs-two-speaker-16k.wav';
 const SPEAKRS_VALIDATE_WAV_SOURCE = path.join(REPO_ROOT, 'tests', 'fixtures', SPEAKRS_VALIDATE_WAV_NAME);
 const SPEAKRS_ORT_COMPILE_PINS_PATH = path.join(SPEAKRS_CLI_DIR, 'ort-compile-pins.json');
-const WINDOWS_PE_MACHINE_AMD64 = 0x8664;
-const MACHO_MAGIC_64_LE = 0xfeedfacf;
-const MACHO_CPU_TYPE_ARM64 = 0x0100000c;
 
 const IS_MAC = process.platform === 'darwin';
 const IS_WINDOWS = process.platform === 'win32';
@@ -778,81 +785,15 @@ function loadSpeakrsOrtCompilePins() {
   return JSON.parse(fs.readFileSync(SPEAKRS_ORT_COMPILE_PINS_PATH, 'utf8'));
 }
 
-function readFilePrefix(filePath, length) {
-  const stat = fs.statSync(filePath);
-  if (stat.size < length) {
-    throw new Error(`speakrs-cli is too small to inspect architecture (${stat.size} bytes): ${filePath}`);
-  }
-  const fd = fs.openSync(filePath, 'r');
-  try {
-    const buffer = Buffer.alloc(length);
-    const bytesRead = fs.readSync(fd, buffer, 0, length, 0);
-    if (bytesRead < length) {
-      throw new Error(`speakrs-cli could not be read for architecture checks: ${filePath}`);
-    }
-    return buffer;
-  } finally {
-    fs.closeSync(fd);
-  }
-}
-
-function readWindowsPeMachine(filePath) {
-  const dos = readFilePrefix(filePath, 64);
-  if (dos.toString('ascii', 0, 2) !== 'MZ') {
-    throw new Error(`speakrs-cli is not a Windows PE executable: ${filePath}`);
-  }
-  const peOffset = dos.readUInt32LE(0x3c);
-  if (peOffset < 64) {
-    throw new Error(`speakrs-cli has an invalid PE header offset: ${filePath}`);
-  }
-  const fd = fs.openSync(filePath, 'r');
-  try {
-    const header = Buffer.alloc(6);
-    const bytesRead = fs.readSync(fd, header, 0, 6, peOffset);
-    if (bytesRead < 6 || header.toString('ascii', 0, 4) !== 'PE\0\0') {
-      throw new Error(`speakrs-cli is missing a PE signature: ${filePath}`);
-    }
-    return header.readUInt16LE(4);
-  } finally {
-    fs.closeSync(fd);
-  }
-}
-
-function readMachOCpuType(filePath) {
-  const header = readFilePrefix(filePath, 8);
-  const magic = header.readUInt32LE(0);
-  if (magic !== MACHO_MAGIC_64_LE) {
-    throw new Error(`speakrs-cli is not a thin 64-bit Mach-O binary: ${filePath}`);
-  }
-  return header.readUInt32LE(4);
-}
-
 function assertSpeakrsCliArchitecture(filePath, platform = process.platform) {
-  if (platform === 'darwin') {
-    const cpuType = readMachOCpuType(filePath);
-    if (cpuType !== MACHO_CPU_TYPE_ARM64) {
-      throw new Error(
-        `speakrs-cli is not arm64 (Mach-O cputype 0x${cpuType.toString(16)}): ${filePath}`
-      );
+  const arch = assertSpeakrsCliArchitectureHeaders(filePath, platform);
+  if (platform === 'darwin' && process.platform === 'darwin') {
+    const fileOutput = execFileSync('file', [filePath], { encoding: 'utf8' });
+    if (!fileOutput.includes('arm64')) {
+      throw new Error(`Bundled macOS speakrs-cli is not arm64: ${fileOutput.trim()}`);
     }
-    if (process.platform === 'darwin') {
-      const fileOutput = execFileSync('file', [filePath], { encoding: 'utf8' });
-      if (!fileOutput.includes('arm64')) {
-        throw new Error(`Bundled macOS speakrs-cli is not arm64: ${fileOutput.trim()}`);
-      }
-    }
-    return 'arm64';
   }
-  if (platform === 'win32') {
-    const machine = readWindowsPeMachine(filePath);
-    if (machine !== WINDOWS_PE_MACHINE_AMD64) {
-      throw new Error(
-        `speakrs-cli is not Windows x64 PE (machine 0x${machine.toString(16)}): ${filePath}`
-      );
-    }
-    return 'x64';
-  }
-  throw new Error(`Unsupported Speakrs packaging platform: ${platform}`);
+  return arch;
 }
 
 function resolveCargoExecutable() {
@@ -904,15 +845,19 @@ function ensureSpeakrsRustTargetInstalled(triple, cargoPath) {
 
 function assertStagedSpeakrsCli(binDir = BIN_DIR, platform = process.platform) {
   const destBinary = path.join(binDir, getSpeakrsCliBinaryName(platform));
-  if (!fs.existsSync(destBinary)) {
-    throw new Error(`speakrs-cli missing at ${destBinary}; prepare-build cannot continue.`);
-  }
-  const stat = fs.statSync(destBinary);
-  if (!stat.isFile() || stat.size <= 0) {
-    throw new Error(`speakrs-cli is empty or not a file at ${destBinary}`);
-  }
-  if (platform !== 'win32' && (stat.mode & 0o111) === 0) {
-    throw new Error(`speakrs-cli is not executable at ${destBinary}`);
+  const inspection = inspectSpeakrsCliFile(destBinary, { platform });
+  if (!inspection.ok) {
+    if (inspection.reason === 'missing') {
+      throw new Error(`speakrs-cli missing at ${destBinary}; prepare-build cannot continue.`);
+    }
+    if (inspection.reason === 'empty' || inspection.reason === 'directory' || inspection.reason === 'not-a-file') {
+      throw new Error(`speakrs-cli is empty or not a file at ${destBinary}`);
+    }
+    if (inspection.reason === 'non-executable') {
+      throw new Error(`speakrs-cli is not executable at ${destBinary}`);
+    }
+    assertSpeakrsCliArchitecture(destBinary, platform);
+    throw new Error(`speakrs-cli failed integrity checks at ${destBinary}`);
   }
   assertSpeakrsCliArchitecture(destBinary, platform);
   return destBinary;
@@ -920,11 +865,11 @@ function assertStagedSpeakrsCli(binDir = BIN_DIR, platform = process.platform) {
 
 function assertStagedSpeakrsValidateWav(binDir = BIN_DIR) {
   const destWav = path.join(binDir, SPEAKRS_VALIDATE_WAV_NAME);
-  if (!fs.existsSync(destWav)) {
-    throw new Error(`Speakrs validation fixture WAV is missing at ${destWav}`);
-  }
-  const stat = fs.statSync(destWav);
-  if (!stat.isFile() || stat.size <= 0) {
+  const inspection = inspectSpeakrsValidateWavFile(destWav);
+  if (!inspection.ok) {
+    if (inspection.reason === 'missing') {
+      throw new Error(`Speakrs validation fixture WAV is missing at ${destWav}`);
+    }
     throw new Error(`Speakrs validation fixture WAV is empty at ${destWav}`);
   }
   return destWav;

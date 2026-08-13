@@ -414,6 +414,23 @@ test('catalog keeps both speakrs and pyannote diarization entries', () => {
   assert.equal(windowsPack.modelPack.sizeBytes, 208765985);
   assert.equal(windowsPack.modelFiles.length, 19);
   assert.equal(windowsPack.runtimeArtifacts.length, 3);
+  const extractedDlls = {};
+  for (const artifact of windowsPack.runtimeArtifacts) {
+    assert.ok(artifact.extractedFiles);
+    for (const name of artifact.keepFileNames) {
+      const pin = artifact.extractedFiles[name];
+      assert.match(pin.sha256, /^[a-f0-9]{64}$/);
+      assert.equal(Number.isInteger(pin.sizeBytes) && pin.sizeBytes > 0, true);
+      extractedDlls[name] = pin;
+    }
+  }
+  assert.deepEqual(Object.keys(extractedDlls).sort(), [
+    'cudart64_12.dll',
+    'cufft64_11.dll',
+    'onnxruntime.dll',
+    'onnxruntime_providers_cuda.dll',
+    'onnxruntime_providers_shared.dll',
+  ]);
   assert.equal(macPack.modelPack.validationStatus, 'ready');
   assert.equal(
     macPack.modelPack.downloadUrl,

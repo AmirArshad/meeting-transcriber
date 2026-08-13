@@ -162,16 +162,36 @@ function runWallClockComputeAction({
     callback(value);
   };
 
+  // Isolated Speakrs-review exception to the plan freeze on this file: the
+  // returned timeout promise must still settle when the action never settles,
+  // but a referenced grace timer must not outlive the race. Clear the timer on
+  // both outcomes so a first-settling action cannot leak a live callback.
   const waitForActionOrGrace = (actionPromise) => {
     const graceMs = Number.isFinite(settleGraceMs) && settleGraceMs > 0
       ? settleGraceMs
       : AI_COMPUTE_TIMEOUT_MS.wallClockSettleGraceMs;
-    return Promise.race([
-      actionPromise.catch(() => undefined),
-      new Promise((resolve) => {
-        setTimeout(resolve, graceMs);
-      }),
-    ]);
+    let graceHandle = null;
+    const gracePromise = new Promise((resolve) => {
+      graceHandle = setTimeout(() => {
+        graceHandle = null;
+        resolve();
+      }, graceMs);
+    });
+    const actionSettled = Promise.resolve(actionPromise).then(
+      () => undefined,
+      () => undefined,
+    ).finally(() => {
+      if (graceHandle) {
+        clearTimeout(graceHandle);
+        graceHandle = null;
+      }
+    });
+    return Promise.race([actionSettled, gracePromise]).finally(() => {
+      if (graceHandle) {
+        clearTimeout(graceHandle);
+        graceHandle = null;
+      }
+    });
   };
 
   return new Promise((resolve, reject) => {

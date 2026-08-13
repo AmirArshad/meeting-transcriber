@@ -94,6 +94,7 @@ const {
   matchesFasterWhisperCacheFolderName,
 } = mainProcessHelpers;
 const { signalProcessTree, signalOwnedProcessGroup } = require('../../src/main-process/quit-lifecycle-helpers');
+const { createAsyncActionQueue } = require('../../src/main/ai-compute-queue');
 
 test('signalProcessTree signals a POSIX process group and falls back to the child', () => {
   const groupSignals = [];
@@ -800,6 +801,108 @@ test('runWallClockComputeAction releases after settle grace when the child never
     });
 
     await assert.rejects(actionPromise, /Stuck job timed out/);
+    assert.equal(getActiveWallClockComputeJobs().length, 0);
+  } finally {
+    clearInterval(keepAlive);
+  }
+});
+
+test('runWallClockComputeAction settles when the action settles during grace', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let resolveAction = null;
+  const actionPromise = runWallClockComputeAction({
+    timeoutMs: 1000,
+    settleGraceMs: 5000,
+    label: 'Grace settle',
+    terminateProcess: () => Promise.resolve(),
+    action: () => new Promise((resolve) => {
+      resolveAction = resolve;
+    }),
+  });
+
+  await Promise.resolve();
+  t.mock.timers.tick(1000);
+  await Promise.resolve();
+  resolveAction('too-late');
+  await Promise.resolve();
+  await assert.rejects(actionPromise, /Grace settle timed out/);
+  assert.equal(getActiveWallClockComputeJobs().length, 0);
+});
+
+test('runWallClockComputeAction rejects when grace expires first', async () => {
+  const keepAlive = setInterval(() => {}, 1000);
+  try {
+    const actionPromise = runWallClockComputeAction({
+      timeoutMs: 30,
+      settleGraceMs: 20,
+      label: 'Grace expire',
+      terminateProcess: () => Promise.resolve(),
+      action: () => new Promise(() => {}),
+    });
+    await assert.rejects(actionPromise, /Grace expire timed out/);
+    assert.equal(getActiveWallClockComputeJobs().length, 0);
+  } finally {
+    clearInterval(keepAlive);
+  }
+});
+
+test('runWallClockComputeAction timeout result is not changed by a late action callback', async () => {
+  const keepAlive = setInterval(() => {}, 1000);
+  try {
+    let resolveAction = null;
+    let settled = null;
+    const actionPromise = runWallClockComputeAction({
+      timeoutMs: 30,
+      settleGraceMs: 20,
+      label: 'Late callback',
+      terminateProcess: () => Promise.resolve(),
+      action: () => new Promise((resolve) => {
+        resolveAction = resolve;
+      }),
+    });
+    const captured = actionPromise.then(
+      (value) => {
+        settled = { ok: true, value };
+      },
+      (error) => {
+        settled = { ok: false, message: error.message };
+      },
+    );
+    await captured;
+    resolveAction('should-not-win');
+    await Promise.resolve();
+    assert.equal(settled.ok, false);
+    assert.match(settled.message, /Late callback timed out/);
+    assert.equal(getActiveWallClockComputeJobs().length, 0);
+  } finally {
+    clearInterval(keepAlive);
+  }
+});
+
+test('runWallClockComputeAction timeout still releases a following queued action', async () => {
+  const keepAlive = setInterval(() => {}, 1000);
+  try {
+    const queue = createAsyncActionQueue();
+    const events = [];
+    const first = queue.enqueue(() => runWallClockComputeAction({
+      timeoutMs: 30,
+      settleGraceMs: 20,
+      label: 'Stuck queued job',
+      terminateProcess: () => Promise.resolve(),
+      action: () => new Promise(() => {}),
+    }).then(
+      () => events.push('first-ok'),
+      () => events.push('first-timeout'),
+    ));
+    const second = queue.enqueue(async () => {
+      events.push('second');
+      return 'ok';
+    });
+
+    await first;
+    assert.equal(await second, 'ok');
+    assert.deepEqual(events, ['first-timeout', 'second']);
+    assert.equal(getActiveWallClockComputeJobs().length, 0);
   } finally {
     clearInterval(keepAlive);
   }

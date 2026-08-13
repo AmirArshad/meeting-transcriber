@@ -77,29 +77,30 @@ def resolve_speakrs_cli_path(
 ) -> Path:
     environ = os.environ if env is None else env
     packaged = _is_packaged(environ)
+    name = speakrs_cli_executable_name()
+    resources_or_repo = _resources_or_repo_root(module_file)
+
+    if packaged:
+        bundled = resources_or_repo / "bin" / name
+        if bundled.is_file():
+            _assert_trusted_packaged_cli(bundled)
+            return bundled
+        raise FileNotFoundError("speakrs-cli not found in packaged app resources (PATH lookup skipped)")
+
     explicit = str(environ.get("SPEAKRS_CLI_PATH") or "").strip()
     if explicit:
         path = Path(explicit)
         if path.is_file():
-            if packaged:
-                _assert_trusted_packaged_cli(path)
             return path
         raise FileNotFoundError(f"SPEAKRS_CLI_PATH does not exist: {explicit}")
 
-    name = speakrs_cli_executable_name()
-    resources_or_repo = _resources_or_repo_root(module_file)
     candidates = [
         resources_or_repo / "bin" / name,
         resources_or_repo / "native" / "speakrs-cli" / "target" / "release" / name,
     ]
     for candidate in candidates:
         if candidate.is_file():
-            if packaged:
-                _assert_trusted_packaged_cli(candidate)
             return candidate
-
-    if packaged:
-        raise FileNotFoundError("speakrs-cli not found in packaged app resources (PATH lookup skipped)")
 
     which_path = shutil.which(name) or shutil.which("speakrs-cli")
     if which_path:
@@ -115,21 +116,22 @@ def resolve_speakrs_validate_wav(
 ) -> Path:
     environ = os.environ if env is None else env
     packaged = _is_packaged(environ)
-    explicit = str(environ.get("SPEAKRS_VALIDATE_WAV") or "").strip()
-    if explicit:
-        path = Path(explicit)
-        if path.is_file():
-            return path
-        raise FileNotFoundError(f"SPEAKRS_VALIDATE_WAV does not exist: {explicit}")
-
     current_dir = _module_dir(module_file)
     resources_or_repo = _resources_or_repo_root(module_file)
     candidates: List[Path] = []
-    if cli_path is not None:
-        candidates.append(Path(cli_path).resolve().parent / VALIDATE_WAV_NAME)
     if packaged:
+        if cli_path is not None:
+            candidates.append(Path(cli_path).resolve().parent / VALIDATE_WAV_NAME)
         candidates.append(resources_or_repo / "bin" / VALIDATE_WAV_NAME)
     else:
+        explicit = str(environ.get("SPEAKRS_VALIDATE_WAV") or "").strip()
+        if explicit:
+            path = Path(explicit)
+            if path.is_file():
+                return path
+            raise FileNotFoundError(f"SPEAKRS_VALIDATE_WAV does not exist: {explicit}")
+        if cli_path is not None:
+            candidates.append(Path(cli_path).resolve().parent / VALIDATE_WAV_NAME)
         candidates.extend([
             current_dir / "fixtures" / VALIDATE_WAV_NAME,
             resources_or_repo / "bin" / VALIDATE_WAV_NAME,

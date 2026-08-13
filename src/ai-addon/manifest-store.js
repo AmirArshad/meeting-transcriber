@@ -16,16 +16,20 @@ const {
   normalizeAiAddonManifest,
 } = require('../ai-addon-state');
 const {
-  SPEAKRS_CUDA_RUNTIME_DLL_NAMES,
   SPEAKRS_DIARIZATION_ENGINES,
   SPEAKRS_MODEL_PACK_REVISION,
-  SPEAKRS_ORT_DLL_NAMES,
+  getSpeakrsExtractedRuntimeDllPins,
+  getSpeakrsRequiredRuntimeDllNames,
   resolveContainedSpeakrsPath,
 } = require('./speakrs-pack-spec');
+const {
+  SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE,
+  getPackagedSpeakrsIntegrityError,
+  inspectPackagedSpeakrsLayout,
+} = require('./speakrs-cli-integrity');
 const { getDiarizationTokenStatus, isAllowedDownloadUrl } = require('./download-helpers');
 
 const HASH_YIELD_BYTES = 8 * 1024 * 1024;
-const SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE = 'This AvaNevis install is incomplete. Reinstall AvaNevis.';
 
 function getDirectorySizeBytes(dirPath, fsModule = fs) {
   const existsSync = bindFsMethod(fsModule, 'existsSync');
@@ -181,14 +185,7 @@ function getPackagedSpeakrsCliPreflightError({
   if (resolvedEngine !== 'speakrs' || env?.AVANEVIS_PACKAGED !== '1') {
     return null;
   }
-  const bundled = getBundledSpeakrsCliPath({ platform, resourcesPath });
-  const existsSync = bindFsMethod(fsModule, 'existsSync');
-  if (bundled && existsSync?.(bundled)) {
-    return null;
-  }
-  const error = new Error(SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE);
-  error.code = 'SPEAKRS_PACKAGED_CLI_MISSING';
-  return error;
+  return getPackagedSpeakrsIntegrityError({ platform, resourcesPath, fsModule });
 }
 
 function resolveSpeakrsCliPathForSpawn({
@@ -309,6 +306,7 @@ function buildSpeakrsSpawnEnv({
     const ortDir = getSpeakrsOrtRuntimeDir(userDataDir);
     const currentPath = extra.PATH || env.PATH || process.env.PATH || '';
     speakrsEnv.PATH = prependUniquePathEntry(currentPath, ortDir);
+    speakrsEnv.ORT_DYLIB_PATH = path.join(ortDir, 'onnxruntime.dll');
   }
   return speakrsEnv;
 }
@@ -917,6 +915,7 @@ async function checkSpeakrsRuntimeCache({
   fsModule = fs,
   catalog = AI_MODEL_CATALOG,
   verifyChecksum = false,
+  verifyChecksumIfChanged = false,
 } = {}) {
   const artifact = getSpeakrsSetupArtifactsForPlatform(platform, arch, catalog);
   const runtimeDir = getSpeakrsOrtRuntimeDir(userDataDir);
@@ -949,15 +948,13 @@ async function checkSpeakrsRuntimeCache({
       validationStatus: 'unsupported',
       reason: 'No complete Speakrs ONNX Runtime artifact is configured for Windows.',
       runtimeDir,
-      missingFiles: [...SPEAKRS_ORT_DLL_NAMES, ...SPEAKRS_CUDA_RUNTIME_DLL_NAMES],
+      missingFiles: getSpeakrsRequiredRuntimeDllNames(),
       artifact,
     };
   }
 
-  const expectedNames = [
-    ...SPEAKRS_ORT_DLL_NAMES,
-    ...SPEAKRS_CUDA_RUNTIME_DLL_NAMES,
-  ];
+  const expectedNames = getSpeakrsRequiredRuntimeDllNames();
+  const expectedDllPins = getSpeakrsExtractedRuntimeDllPins(runtimeArtifacts);
   const runtimeManifestPath = path.join(runtimeDir, 'install.json');
   let runtimeManifest = null;
   try {
@@ -971,32 +968,58 @@ async function checkSpeakrsRuntimeCache({
     id: entry.id,
     sha256: entry.sha256,
   }));
+  if (!expectedDllPins) {
+    return {
+      supported: false,
+      installed: false,
+      partial: Boolean(runtimeDir && existsSync?.(runtimeDir)),
+      valid: false,
+      skipped: false,
+      validationStatus: 'unsupported',
+      reason: 'No complete Speakrs ONNX Runtime artifact is configured for Windows.',
+      runtimeDir,
+      missingFiles: expectedNames,
+      artifact,
+    };
+  }
   const manifestPinsMatch = JSON.stringify(runtimeManifest?.artifacts || null) === JSON.stringify(expectedArtifactPins);
   const missing = [];
-  const invalid = [];
+  const invalid = new Set();
   for (const name of expectedNames) {
     const filePath = path.join(runtimeDir, name);
-    const expectedFile = runtimeManifest?.files?.[name];
+    const pin = expectedDllPins[name];
     if (!existsSync?.(filePath)) {
       missing.push(name);
       continue;
     }
     const actualSize = getFileSizeBytes(filePath, fsModule);
-    if (
-      actualSize <= 0
-      || !expectedFile
-      || Number(expectedFile.sizeBytes) <= 0
-      || actualSize !== Number(expectedFile.sizeBytes)
-      || !isPinnedSha256(expectedFile.sha256)
-    ) {
-      invalid.push(name);
-      continue;
+    if (actualSize !== pin.sizeBytes) {
+      invalid.add(name);
     }
-    if (verifyChecksum && await hashFileSha256(filePath, fsModule) !== expectedFile.sha256) {
-      invalid.push(name);
+    if (verifyChecksum) {
+      const fingerprint = verifyChecksumIfChanged ? getArtifactFingerprint(filePath, fsModule) : null;
+      const cached = fingerprint ? speakrsChecksumFingerprintCache.get(fingerprint) : null;
+      if (cached && cached.expectedSha256 === pin.sha256 && cached.actualSha256 === pin.sha256) {
+        continue;
+      }
+      const actualSha256 = await hashFileSha256(filePath, fsModule);
+      if (actualSha256 !== pin.sha256) {
+        invalid.add(name);
+        if (fingerprint) {
+          speakrsChecksumFingerprintCache.delete(fingerprint);
+        }
+        continue;
+      }
+      if (fingerprint) {
+        speakrsChecksumFingerprintCache.set(fingerprint, {
+          expectedSha256: pin.sha256,
+          actualSha256,
+        });
+      }
     }
   }
-  const installed = manifestPinsMatch && missing.length === 0 && invalid.length === 0;
+  const invalidFiles = [...invalid];
+  const installed = manifestPinsMatch && missing.length === 0 && invalidFiles.length === 0;
   const partial = Boolean(runtimeDir && existsSync && existsSync(runtimeDir) && !installed);
   return {
     supported: true,
@@ -1004,15 +1027,15 @@ async function checkSpeakrsRuntimeCache({
     partial,
     valid: installed,
     skipped: false,
-    validationStatus: installed ? 'ready' : (invalid.length || (runtimeManifest && !manifestPinsMatch)) ? 'error' : 'notConfigured',
+    validationStatus: installed ? 'ready' : (invalidFiles.length || (runtimeManifest && !manifestPinsMatch)) ? 'error' : 'notConfigured',
     reason: installed
       ? null
-      : invalid.length || (runtimeManifest && !manifestPinsMatch)
+      : invalidFiles.length || (runtimeManifest && !manifestPinsMatch)
         ? 'Speakrs ONNX Runtime files failed integrity validation.'
         : 'Speakrs ONNX Runtime is not installed.',
     runtimeDir,
     missingFiles: missing,
-    invalidFiles: invalid,
+    invalidFiles,
     runtimeManifestPath,
     runtimeManifest,
     artifact,
@@ -1020,7 +1043,12 @@ async function checkSpeakrsRuntimeCache({
 }
 
 function hasSpeakrsLocalState({ userDataDir, packCache, runtimeCache, fsModule = fs } = {}) {
-  if (packCache?.installed || packCache?.partial || runtimeCache?.installed || runtimeCache?.partial) {
+  const runtimePresent = Boolean(
+    runtimeCache
+    && runtimeCache.skipped !== true
+    && (runtimeCache.installed || runtimeCache.partial)
+  );
+  if (packCache?.installed || packCache?.partial || runtimePresent) {
     return true;
   }
   const existsSync = bindFsMethod(fsModule, 'existsSync');
@@ -1317,6 +1345,13 @@ function deriveDiarizationStatus(featureStatus, tokenStatus, dependencyCache, pa
     return { ...featureStatus, status: 'unsupported' };
   }
   if (featureStatus.engine === 'speakrs') {
+    if (env?.AVANEVIS_PACKAGED === '1' && !cliPresent) {
+      return {
+        ...featureStatus,
+        status: 'error',
+        error: SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE,
+      };
+    }
     if (featureStatus.status === 'ready' && (!packCache?.valid || !runtimeCache?.valid || !cliPresent)) {
       return {
         ...featureStatus,
@@ -1373,9 +1408,11 @@ async function checkAiAddonSetupStatus({
   catalog = AI_MODEL_CATALOG,
   verifyChecksums = false,
   verifyChecksumsIfChanged = false,
+  computeAdmission = false,
   includeStorageSizes = false,
   checkTokenEncryption = false,
   env = process.env,
+  resourcesPath = process.resourcesPath,
   tokenStatusReader = getDiarizationTokenStatus,
 } = {}) {
   const { manifest, readError } = loadAiAddonManifest({
@@ -1385,6 +1422,9 @@ async function checkAiAddonSetupStatus({
     catalog,
   });
   const status = buildAiAddonStatus({ userDataDir, platform, arch, manifest, readError, catalog });
+  const computeAdmissionEngine = computeAdmission
+    ? resolveSpawnDiarizationEngine(status.features.diarization.engine, env)
+    : null;
   const tokenStatus = status.features.diarization.engine === 'pyannote'
     ? tokenStatusReader({
       userDataDir,
@@ -1412,9 +1452,15 @@ async function checkAiAddonSetupStatus({
     arch,
     fsModule,
     catalog,
-    verifyChecksum: verifyChecksums,
+    verifyChecksum: verifyChecksums || computeAdmissionEngine === 'speakrs',
+    verifyChecksumIfChanged: computeAdmissionEngine === 'speakrs',
   });
-  const speakrsCliPath = resolveSpeakrsCliPath({ platform, env, fsModule });
+  const packagedSpeakrsLayout = env?.AVANEVIS_PACKAGED === '1'
+    ? inspectPackagedSpeakrsLayout({ platform, resourcesPath, fsModule })
+    : null;
+  const speakrsCliPath = packagedSpeakrsLayout
+    ? (packagedSpeakrsLayout.ok ? packagedSpeakrsLayout.cliPath : null)
+    : resolveSpeakrsCliPath({ platform, env, fsModule, resourcesPath });
   const speakrsCliPresent = Boolean(speakrsCliPath);
   let summaryCache = await checkSummaryModelCache({
     userDataDir,

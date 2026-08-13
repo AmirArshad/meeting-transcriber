@@ -67,9 +67,9 @@ const {
 } = require('./manifest-store');
 const { extractRuntimeArchive } = require('./archive-install');
 const {
-  SPEAKRS_CUDA_RUNTIME_DLL_NAMES,
   SPEAKRS_DIARIZATION_ENGINES,
-  SPEAKRS_ORT_DLL_NAMES,
+  getSpeakrsExtractedRuntimeDllPins,
+  getSpeakrsRequiredRuntimeDllNames,
   resolveContainedSpeakrsPath,
 } = require('./speakrs-pack-spec');
 
@@ -270,6 +270,7 @@ async function installSpeakrsArtifacts({
   downloader = downloadFile,
   extractor = extractRuntimeArchive,
   cancelSignal,
+  replacement = null,
 } = {}) {
   throwIfAiAddonCanceled(cancelSignal, 'Speaker identification setup was canceled.');
   const artifact = getSpeakrsSetupArtifactsForPlatform(platform, arch, catalog);
@@ -302,6 +303,10 @@ async function installSpeakrsArtifacts({
     if (!isAllowedDownloadUrl(runtimeArtifact.downloadUrl)) {
       throw new Error('Speakrs runtime artifact host is not allowed.');
     }
+  }
+  const expectedDllPins = getSpeakrsExtractedRuntimeDllPins(artifact.runtimeArtifacts);
+  if ((platform === 'win32' && arch === 'x64') && !expectedDllPins) {
+    throw new Error('Speakrs runtime artifact metadata is incomplete.');
   }
 
   const existingPack = await checkSpeakrsModelCache({
@@ -407,16 +412,24 @@ async function installSpeakrsArtifacts({
       await validateStagedSpeakrsModelPack(modelStagingDir, artifact.modelFiles, fsModule);
     }
     if (runtimeStagingDir) {
+      if (!expectedDllPins) {
+        throw new Error('Speakrs runtime artifact metadata is incomplete.');
+      }
       const runtimeFiles = {};
-      for (const name of [...SPEAKRS_ORT_DLL_NAMES, ...SPEAKRS_CUDA_RUNTIME_DLL_NAMES]) {
+      for (const name of getSpeakrsRequiredRuntimeDllNames()) {
+        const pin = expectedDllPins[name];
         const filePath = path.join(runtimeStagingDir, name);
         const stats = fsModule.statSync(filePath);
-        if (!stats || stats.isDirectory?.() || Number(stats.size) <= 0) {
+        if (!stats || stats.isDirectory?.() || Number(stats.size) !== pin.sizeBytes) {
           throw new Error(`Speakrs runtime archive did not provide a valid ${name}.`);
         }
+        const actualSha256 = await hashFileSha256(filePath, fsModule);
+        if (actualSha256 !== pin.sha256) {
+          throw new Error(`Speakrs runtime DLL checksum does not match the pinned checksum: ${name}.`);
+        }
         runtimeFiles[name] = {
-          sizeBytes: Number(stats.size),
-          sha256: await hashFileSha256(filePath, fsModule),
+          sizeBytes: pin.sizeBytes,
+          sha256: pin.sha256,
         };
       }
       fsModule.writeFileSync(path.join(runtimeStagingDir, 'install.json'), `${JSON.stringify({
@@ -428,14 +441,22 @@ async function installSpeakrsArtifacts({
     if (modelStagingDir) {
       commitStagedDirectory(modelStagingDir, revisionDir, fsModule);
       committedPaths.push(revisionDir);
+      if (replacement) {
+        replacement.model = true;
+      }
     }
     if (runtimeStagingDir) {
       commitStagedDirectory(runtimeStagingDir, runtimeDir, fsModule);
       committedPaths.push(runtimeDir);
+      if (replacement) {
+        replacement.runtime = true;
+      }
     }
   } catch (error) {
-    for (const committedPath of committedPaths) {
-      removePathBestEffort(committedPath, fsModule);
+    if (!isAiAddonCancelError(error)) {
+      for (const committedPath of committedPaths) {
+        removePathBestEffort(committedPath, fsModule);
+      }
     }
     throw error;
   } finally {
@@ -993,6 +1014,99 @@ async function validateDiarizationSetup({
   return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, env });
 }
 
+async function assertTargetEngineLocalPreflight({
+  selectedEngine,
+  userDataDir,
+  platform,
+  arch,
+  token,
+  safeStorage,
+  fsModule = fs,
+  catalog = AI_MODEL_CATALOG,
+  env = process.env,
+  resourcesPath,
+  toolchainChecker = checkMacOSCompilerToolchain,
+  tokenStatusReader = getDiarizationTokenStatus,
+  tokenReader = getAiAddonToken,
+} = {}) {
+  if (selectedEngine === 'speakrs') {
+    const packagedCliError = getPackagedSpeakrsCliPreflightError({
+      engine: 'speakrs',
+      env,
+      platform,
+      resourcesPath,
+      fsModule,
+      applyQaOverride: false,
+    });
+    if (packagedCliError) {
+      throw packagedCliError;
+    }
+    const artifact = getSpeakrsSetupArtifactsForPlatform(platform, arch, catalog);
+    if (
+      !artifact
+      || !artifact.modelPack
+      || !artifact.modelPack.fileName
+      || !isPinnedSha256(artifact.modelPack.sha256)
+      || !Number(artifact.modelPack.sizeBytes)
+      || !Array.isArray(artifact.modelFiles)
+      || artifact.modelFiles.length === 0
+    ) {
+      throw new Error('Speakrs model-pack archive metadata is incomplete.');
+    }
+    if (platform === 'win32' && arch === 'x64' && !getSpeakrsExtractedRuntimeDllPins(artifact.runtimeArtifacts)) {
+      throw new Error('Speakrs runtime artifact metadata is incomplete.');
+    }
+    getSpeakrsModelRevisionDir(userDataDir, artifact.revision);
+    getSpeakrsOrtRuntimeDir(userDataDir);
+    for (const file of artifact.modelFiles) {
+      resolveContainedSpeakrsPath(getSpeakrsModelRevisionDir(userDataDir, artifact.revision), file.path);
+    }
+    return;
+  }
+
+  if (selectedEngine !== 'pyannote') {
+    throw new Error('Unknown speaker engine.');
+  }
+
+  const artifact = getDiarizationDependencyArtifactForPlatform(platform, arch, catalog);
+  const metadataError = validateDiarizationDependencyArtifact(artifact);
+  if (metadataError) {
+    throw new Error(metadataError);
+  }
+  await assertDiarizationSourceBuildToolchain({ platform, artifact, toolchainChecker });
+
+  if (!safeStorage || typeof safeStorage.isEncryptionAvailable !== 'function' || !safeStorage.isEncryptionAvailable()) {
+    throw new Error('Secure token storage is unavailable right now. Unlock Keychain or restart AvaNevis and try again.');
+  }
+
+  const trimmedToken = typeof token === 'string' ? token.trim() : '';
+  if (trimmedToken) {
+    if (!isLikelyHuggingFaceToken(trimmedToken)) {
+      throw new Error('Hugging Face token does not match the expected token format.');
+    }
+    return;
+  }
+
+  const storedStatus = tokenStatusReader({
+    userDataDir,
+    safeStorage,
+    fsModule,
+    checkEncryptionAvailability: false,
+  });
+  if (!storedStatus.hasToken) {
+    throw new Error('Hugging Face token is required for speaker identification setup.');
+  }
+  const storedToken = tokenReader({
+    userDataDir,
+    tokenKey: TOKEN_KEYS.diarizationHuggingFace,
+    safeStorage,
+    fsModule,
+  });
+  if (!isLikelyHuggingFaceToken(storedToken)) {
+    throw new Error('Stored Hugging Face token does not match the expected token format.');
+  }
+}
+
 async function setupDiarizationAddon({
   userDataDir,
   platform = process.platform,
@@ -1056,9 +1170,11 @@ async function setupDiarizationAddon({
   const availability = getDiarizationAvailability(platform, arch);
   let tokenForValidation = null;
   const previousDiarizationState = manifest.features.diarization;
+  const speakrsReplacement = { model: false, runtime: false };
 
   function buildSpeakrsCancellationUpdates(message) {
-    if (previousDiarizationState.engine === selectedEngine) {
+    const artifactsChanged = speakrsReplacement.model || speakrsReplacement.runtime;
+    if (!artifactsChanged && previousDiarizationState.engine === selectedEngine) {
       return {
         ...previousDiarizationState,
       };
@@ -1122,9 +1238,6 @@ async function setupDiarizationAddon({
       applyQaOverride: false,
     })
     : null;
-  if (packagedCliError) {
-    return markDiarizationError(packagedCliError.message);
-  }
 
   const tokenStatus = selectedEngine === 'pyannote'
     ? tokenStatusReader({
@@ -1149,6 +1262,31 @@ async function setupDiarizationAddon({
   const needsExclusiveDelete = (selectedEngine === 'speakrs' && pyannoteState)
     || (selectedEngine === 'pyannote' && speakrsState);
   if (needsExclusiveDelete) {
+    try {
+      await assertTargetEngineLocalPreflight({
+        selectedEngine,
+        userDataDir,
+        platform,
+        arch,
+        token,
+        safeStorage,
+        fsModule,
+        catalog,
+        env,
+        resourcesPath,
+        toolchainChecker,
+        tokenStatusReader,
+        tokenReader,
+      });
+    } catch (preflightError) {
+      emitSafeProgress(emitProgress, {
+        feature: 'diarization',
+        phase: 'error',
+        message: preflightError.message,
+        modelId: previousDiarizationState.modelId,
+      });
+      throw preflightError;
+    }
     const mutateExclusiveEngine = async () => {
       if (selectedEngine === 'speakrs' && pyannoteState) {
         await uninstallPyannoteLocalState({ userDataDir, fsModule });
@@ -1182,6 +1320,8 @@ async function setupDiarizationAddon({
     } else {
       await mutateExclusiveEngine();
     }
+  } else if (packagedCliError) {
+    return markDiarizationError(packagedCliError.message);
   }
 
   if (selectedEngine === 'speakrs') {
@@ -1211,6 +1351,7 @@ async function setupDiarizationAddon({
         downloader,
         extractor,
         cancelSignal,
+        replacement: speakrsReplacement,
       });
     } catch (installError) {
       if (isAiAddonCancelError(installError)) {

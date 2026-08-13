@@ -10,15 +10,19 @@ const { spawnSync } = require('child_process');
 const {
   SPEAKRS_MODEL_PACK_ARTIFACTS,
   SPEAKRS_ORT_RUNTIME_ARTIFACTS,
+  getSpeakrsExtractedRuntimeDllPins,
 } = require('../src/ai-addon/speakrs-pack-spec');
 const { isAllowedDownloadUrl } = require('../src/ai-addon/download-helpers');
 const {
   assertSpeakrsCliArchitecture,
-  getSpeakrsCliBinaryName,
 } = require('../build/prepare-resources');
+const {
+  inspectPackagedSpeakrsLayout,
+  SPEAKRS_VALIDATE_WAV_NAME,
+} = require('../src/ai-addon/speakrs-cli-integrity');
 
 const REPO_ROOT = path.join(__dirname, '..');
-const WAV_NAME = 'speakrs-two-speaker-16k.wav';
+const WAV_NAME = SPEAKRS_VALIDATE_WAV_NAME;
 const REQUIRED_MODEL_PACK_PLATFORMS = Object.freeze(['darwin-arm64', 'win32-x64']);
 const REQUIRED_WINDOWS_ORT_ARTIFACT_COUNT = 3;
 const CONNECT_TIMEOUT_MS = 30000;
@@ -92,6 +96,21 @@ function assertOrtRuntimePins(artifacts = SPEAKRS_ORT_RUNTIME_ARTIFACTS) {
   }
   for (const artifact of windowsOrt) {
     assertPinnedDownloadArtifact(artifact, { label: artifact.id || artifact.fileName });
+    if (!Array.isArray(artifact.keepFileNames) || artifact.keepFileNames.length === 0) {
+      fail(`Speakrs runtime pin is missing keepFileNames: ${artifact.id}`);
+    }
+    if (!artifact.extractedFiles || typeof artifact.extractedFiles !== 'object') {
+      fail(`Speakrs runtime pin is missing extractedFiles: ${artifact.id}`);
+    }
+    for (const name of artifact.keepFileNames) {
+      const pin = artifact.extractedFiles[name];
+      if (!pin || !/^[a-f0-9]{64}$/.test(String(pin.sha256 || '')) || !Number.isInteger(pin.sizeBytes) || pin.sizeBytes <= 0) {
+        fail(`Speakrs runtime pin is missing extracted DLL integrity for ${name}`);
+      }
+    }
+  }
+  if (!getSpeakrsExtractedRuntimeDllPins(windowsOrt)) {
+    fail('Windows Speakrs extracted DLL pin set is incomplete.');
   }
 }
 
@@ -288,27 +307,37 @@ function resolvePackagedResourcesRoot() {
 }
 
 function assertPackagedSpeakrsLayout(resourcesRoot = resolvePackagedResourcesRoot()) {
-  const cliName = getSpeakrsCliBinaryName();
-  const cliPath = path.join(resourcesRoot, 'bin', cliName);
-  if (!fs.existsSync(cliPath)) {
-    fail(`Packaged speakrs-cli is missing: ${cliPath}`);
+  const inspection = inspectPackagedSpeakrsLayout({
+    platform: process.platform,
+    resourcesPath: resourcesRoot,
+  });
+  if (!inspection.ok && inspection.kind === 'cli') {
+    if (inspection.reason === 'missing') {
+      fail(`Packaged speakrs-cli is missing: ${inspection.cliPath}`);
+    }
+    if (inspection.reason === 'empty' || inspection.reason === 'directory' || inspection.reason === 'not-a-file') {
+      fail(`Packaged speakrs-cli is empty: ${inspection.cliPath}`);
+    }
+    if (inspection.reason === 'non-executable') {
+      fail(`Packaged speakrs-cli is not executable: ${inspection.cliPath}`);
+    }
+    fail(`Packaged speakrs-cli failed integrity checks (${inspection.reason}): ${inspection.cliPath}`);
   }
+  if (!inspection.ok) {
+    if (inspection.reason === 'missing') {
+      fail(`Packaged Speakrs validation fixture WAV is missing at the canonical path: ${inspection.wavPath}`);
+    }
+    fail(`Packaged Speakrs validation fixture WAV is empty: ${inspection.wavPath}`);
+  }
+
+  const cliPath = inspection.cliPath;
   const cliStat = fs.statSync(cliPath);
-  if (!cliStat.isFile() || cliStat.size <= 0) {
-    fail(`Packaged speakrs-cli is empty: ${cliPath}`);
-  }
   if (process.platform !== 'win32' && (cliStat.mode & 0o111) === 0) {
     fail(`Packaged speakrs-cli is not executable: ${cliPath}`);
   }
   assertSpeakrsCliArchitecture(cliPath);
 
-  const canonicalWav = path.join(resourcesRoot, 'bin', WAV_NAME);
-  if (!fs.existsSync(canonicalWav)) {
-    fail(`Packaged Speakrs validation fixture WAV is missing at the canonical path: ${canonicalWav}`);
-  }
-  if (!fs.statSync(canonicalWav).isFile() || fs.statSync(canonicalWav).size <= 0) {
-    fail(`Packaged Speakrs validation fixture WAV is empty: ${canonicalWav}`);
-  }
+  const canonicalWav = inspection.wavPath;
 
   const duplicateCopies = [
     path.join(resourcesRoot, 'backend', 'diarization', 'fixtures', WAV_NAME),
@@ -345,6 +374,13 @@ async function verifyPublishedPackChecksums() {
   for (const artifact of artifacts) {
     await verifyArtifactDownload(artifact, cacheDir);
   }
+  const derived = spawnSync(process.execPath, [path.join(__dirname, 'derive-speakrs-runtime-dll-pins.js')], {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+  });
+  if (derived.status !== 0) {
+    fail((derived.stderr || derived.stdout || 'Extracted Speakrs runtime DLL pin verification failed.').trim());
+  }
 }
 
 async function main() {
@@ -377,5 +413,6 @@ module.exports = {
   assertPackagedSpeakrsLayout,
   assertPinnedDownloadArtifact,
   listReleaseChecksumArtifacts,
+  verifyArtifactDownload,
   verifyPublishedPackChecksums,
 };

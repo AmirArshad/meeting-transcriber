@@ -15,6 +15,7 @@ const {
 const {
   checkSpeakrsRuntimeCache,
   checkSpeakrsModelCache,
+  checkAiAddonSetupStatus,
   getPyannoteUninstallPaths,
   getSpeakrsModelRevisionDir,
   getSpeakrsOrtRuntimeDir,
@@ -100,6 +101,13 @@ function createPinnedTestCatalog(modelPath = 'model.bin') {
                 sizeBytes: ARCHIVE_BYTES.length,
                 downloadUrl: 'https://github.com/AmirArshad/meeting-transcriber/releases/download/speakrs-test/speakrs-runtime-test.zip',
                 keepFileNames: RUNTIME_DLL_NAMES,
+                extractedFiles: Object.fromEntries(RUNTIME_DLL_NAMES.map((name) => {
+                  const contents = Buffer.from(`MZ-${name}`);
+                  return [name, {
+                    sha256: crypto.createHash('sha256').update(contents).digest('hex'),
+                    sizeBytes: contents.length,
+                  }];
+                })),
               },
             ],
           },
@@ -154,6 +162,20 @@ function createAbortDownloader() {
     error.code = 'AI_ADDON_SETUP_CANCELLED';
     throw error;
   };
+}
+
+function createCancelingRuntimeValidator() {
+  return async () => {
+    const error = new Error('Speaker identification setup was canceled.');
+    error.name = 'AbortError';
+    error.code = 'AI_ADDON_SETUP_CANCELLED';
+    throw error;
+  };
+}
+
+function assertNotReady(status) {
+  assert.notEqual(status.features.diarization.status, 'ready');
+  assert.equal(status.features.diarization.setupComplete, false);
 }
 
 test('packaged Speakrs CLI resolution accepts only Resources/bin', () => {
@@ -251,6 +273,10 @@ test('packaged buildSpeakrsSpawnEnv pins Resources/bin and ignores decoys', () =
     assert.equal(spawned.AVANEVIS_PACKAGED, '1');
     assert.equal(spawned.SPEAKRS_MODE, 'cuda');
     assert.ok(spawned.PATH.startsWith(`${getSpeakrsOrtRuntimeDir(userDataDir)}${path.delimiter}`));
+    assert.equal(
+      spawned.ORT_DYLIB_PATH,
+      path.join(getSpeakrsOrtRuntimeDir(userDataDir), 'onnxruntime.dll'),
+    );
     assert.equal(spawned.PATH.includes(path.dirname(pathCandidate)), true);
 
     const pyDecoyEnv = buildSpeakrsSpawnEnv({
@@ -487,7 +513,7 @@ test('Speakrs install rejects unsafe required-file paths before downloading', as
   }
 });
 
-test('Windows production runtime requires every non-empty integrity-checked DLL', async () => {
+test('Windows production runtime rejects replaced DLLs even with a forged install.json', async () => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-runtime-'));
   const artifact = getSpeakrsSetupArtifactsForPlatform('win32', 'x64');
   const runtimeDir = getSpeakrsOrtRuntimeDir(userDataDir);
@@ -506,13 +532,200 @@ test('Windows production runtime requires every non-empty integrity-checked DLL'
       artifacts: artifact.runtimeArtifacts.map((entry) => ({ id: entry.id, sha256: entry.sha256 })),
       files,
     }));
-    assert.equal((await checkSpeakrsRuntimeCache({
+
+    const fullHash = await checkSpeakrsRuntimeCache({
       userDataDir,
       platform: 'win32',
       arch: 'x64',
       verifyChecksum: true,
-    })).valid, true);
+    });
+    assert.equal(fullHash.valid, false);
 
+    const passive = await checkSpeakrsRuntimeCache({
+      userDataDir,
+      platform: 'win32',
+      arch: 'x64',
+      verifyChecksum: false,
+    });
+    assert.equal(passive.valid, false);
+  } finally {
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test('forged install.json hashes cannot pass Speakrs compute admission', async () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-forged-runtime-'));
+  const catalog = createPinnedTestCatalog();
+  try {
+    await installValidTestSetup(userDataDir, catalog);
+    const runtimeDir = getSpeakrsOrtRuntimeDir(userDataDir);
+    const target = path.join(runtimeDir, RUNTIME_DLL_NAMES[0]);
+    const original = fs.readFileSync(target);
+    const forged = Buffer.alloc(original.length, 0x41);
+    fs.writeFileSync(target, forged);
+    const manifestPath = path.join(runtimeDir, 'install.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    manifest.files[RUNTIME_DLL_NAMES[0]] = {
+      sizeBytes: forged.length,
+      sha256: crypto.createHash('sha256').update(forged).digest('hex'),
+    };
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const passive = await checkAiAddonSetupStatus({
+      userDataDir,
+      platform: 'win32',
+      arch: 'x64',
+      catalog,
+      env: { SPEAKRS_CLI_PATH: path.join(userDataDir, 'dev-bin', 'speakrs-cli.exe') },
+    });
+    assert.equal(passive.features.diarization.status, 'ready');
+
+    const admission = await checkAiAddonSetupStatus({
+      userDataDir,
+      platform: 'win32',
+      arch: 'x64',
+      catalog,
+      env: { SPEAKRS_CLI_PATH: path.join(userDataDir, 'dev-bin', 'speakrs-cli.exe') },
+      computeAdmission: true,
+    });
+    assert.equal(admission.features.diarization.status, 'error');
+    assert.equal(admission.features.diarization.setupComplete, false);
+    assert.ok(admission.features.diarization.runtimeCache.invalidFiles.includes(RUNTIME_DLL_NAMES[0]));
+    assert.match(admission.features.diarization.error, /integrity validation/i);
+  } finally {
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test('Speakrs compute admission caches unchanged DLL fingerprints and rehashes changed metadata', async () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-runtime-fingerprint-'));
+  const catalog = createPinnedTestCatalog();
+  const cliPath = path.join(userDataDir, 'dev-bin', 'speakrs-cli.exe');
+  try {
+    await installValidTestSetup(userDataDir, catalog);
+    let hashReads = 0;
+    const fsModule = Object.create(fs);
+    Object.defineProperty(fsModule, 'createReadStream', {
+      value(filePath, ...args) {
+        if (RUNTIME_DLL_NAMES.includes(path.basename(filePath))) {
+          hashReads += 1;
+        }
+        return fs.createReadStream(filePath, ...args);
+      },
+    });
+
+    const options = {
+      userDataDir,
+      platform: 'win32',
+      arch: 'x64',
+      fsModule,
+      catalog,
+      env: { SPEAKRS_CLI_PATH: cliPath },
+      computeAdmission: true,
+    };
+    assert.equal((await checkAiAddonSetupStatus(options)).features.diarization.setupComplete, true);
+    assert.equal(hashReads, RUNTIME_DLL_NAMES.length);
+    assert.equal((await checkAiAddonSetupStatus(options)).features.diarization.setupComplete, true);
+    assert.equal(hashReads, RUNTIME_DLL_NAMES.length, 'unchanged fingerprints must skip redundant hashes');
+
+    const changedPath = path.join(getSpeakrsOrtRuntimeDir(userDataDir), RUNTIME_DLL_NAMES[0]);
+    const changedStats = fs.statSync(changedPath);
+    fs.utimesSync(changedPath, changedStats.atime, new Date(changedStats.mtimeMs + 5000));
+    assert.equal((await checkAiAddonSetupStatus(options)).features.diarization.setupComplete, true);
+    assert.equal(hashReads, RUNTIME_DLL_NAMES.length + 1, 'changed mtime must force a full hash');
+
+    fs.appendFileSync(changedPath, Buffer.from('x'));
+    const changedSize = await checkAiAddonSetupStatus(options);
+    assert.equal(changedSize.features.diarization.setupComplete, false);
+    assert.equal(hashReads, RUNTIME_DLL_NAMES.length + 2, 'changed size must force a full hash');
+  } finally {
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test('Pyannote compute admission does not hash Speakrs runtime DLLs', async () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pyannote-no-speakrs-hash-'));
+  const catalog = createPinnedTestCatalog();
+  try {
+    await installValidTestSetup(userDataDir, catalog);
+    const manifestPath = path.join(userDataDir, 'ai-addons', 'manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    manifest.features.diarization = {
+      ...manifest.features.diarization,
+      engine: 'pyannote',
+      modelId: PYANNOTE_DIARIZATION_MODEL_ID,
+    };
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    let runtimeHashReads = 0;
+    const fsModule = Object.create(fs);
+    Object.defineProperty(fsModule, 'createReadStream', {
+      value(filePath, ...args) {
+        if (RUNTIME_DLL_NAMES.includes(path.basename(filePath))) {
+          runtimeHashReads += 1;
+        }
+        return fs.createReadStream(filePath, ...args);
+      },
+    });
+    await checkAiAddonSetupStatus({
+      userDataDir,
+      platform: 'win32',
+      arch: 'x64',
+      fsModule,
+      catalog,
+      computeAdmission: true,
+    });
+    assert.equal(runtimeHashReads, 0);
+  } finally {
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test('QA Speakrs compute admission hashes the runtime even when the manifest selects Pyannote', async () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qa-speakrs-runtime-hash-'));
+  const catalog = createPinnedTestCatalog();
+  try {
+    await installValidTestSetup(userDataDir, catalog);
+    const manifestPath = path.join(userDataDir, 'ai-addons', 'manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    manifest.features.diarization = {
+      ...manifest.features.diarization,
+      engine: 'pyannote',
+      modelId: PYANNOTE_DIARIZATION_MODEL_ID,
+    };
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    let runtimeHashReads = 0;
+    const fsModule = Object.create(fs);
+    Object.defineProperty(fsModule, 'createReadStream', {
+      value(filePath, ...args) {
+        if (RUNTIME_DLL_NAMES.includes(path.basename(filePath))) {
+          runtimeHashReads += 1;
+        }
+        return fs.createReadStream(filePath, ...args);
+      },
+    });
+    await checkAiAddonSetupStatus({
+      userDataDir,
+      platform: 'win32',
+      arch: 'x64',
+      fsModule,
+      catalog,
+      env: { AVANEVIS_DIARIZATION_ENGINE: 'speakrs' },
+      computeAdmission: true,
+    });
+    assert.equal(runtimeHashReads, RUNTIME_DLL_NAMES.length);
+  } finally {
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test('Windows test runtime requires every non-empty integrity-checked DLL', async () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-runtime-required-'));
+  const catalog = createPinnedTestCatalog();
+  try {
+    await installValidTestSetup(userDataDir, catalog);
+    const runtimeDir = getSpeakrsOrtRuntimeDir(userDataDir);
     for (const fileName of RUNTIME_DLL_NAMES) {
       const filePath = path.join(runtimeDir, fileName);
       const original = fs.readFileSync(filePath);
@@ -521,6 +734,7 @@ test('Windows production runtime requires every non-empty integrity-checked DLL'
         userDataDir,
         platform: 'win32',
         arch: 'x64',
+        catalog,
         verifyChecksum: true,
       });
       assert.equal(result.valid, false, `${fileName} must be required`);
@@ -530,11 +744,12 @@ test('Windows production runtime requires every non-empty integrity-checked DLL'
 
     const corruptPath = path.join(runtimeDir, RUNTIME_DLL_NAMES[0]);
     const original = fs.readFileSync(corruptPath);
-    fs.writeFileSync(corruptPath, Buffer.alloc(original.length));
+    fs.writeFileSync(corruptPath, Buffer.alloc(original.length, 0));
     assert.equal((await checkSpeakrsRuntimeCache({
       userDataDir,
       platform: 'win32',
       arch: 'x64',
+      catalog,
       verifyChecksum: true,
     })).valid, false);
     fs.writeFileSync(corruptPath, Buffer.alloc(0));
@@ -542,6 +757,7 @@ test('Windows production runtime requires every non-empty integrity-checked DLL'
       userDataDir,
       platform: 'win32',
       arch: 'x64',
+      catalog,
       verifyChecksum: true,
     })).valid, false);
   } finally {
@@ -575,7 +791,7 @@ test('canceling runtime repair preserves a previously valid model pack', async (
     const modelBefore = fs.readFileSync(modelPath);
     fs.rmSync(path.join(getSpeakrsOrtRuntimeDir(userDataDir), 'cufft64_11.dll'));
 
-    await setupDiarizationAddon({
+    const status = await setupDiarizationAddon({
       userDataDir,
       platform: 'win32',
       arch: 'x64',
@@ -588,6 +804,7 @@ test('canceling runtime repair preserves a previously valid model pack', async (
     });
 
     assert.deepEqual(fs.readFileSync(modelPath), modelBefore);
+    assertNotReady(status);
   } finally {
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }
@@ -605,7 +822,7 @@ test('canceling model repair preserves a previously valid Windows runtime', asyn
     ]));
     fs.rmSync(path.join(getSpeakrsModelRevisionDir(userDataDir, SPEAKRS_MODEL_PACK_REVISION), 'model.bin'));
 
-    await setupDiarizationAddon({
+    const status = await setupDiarizationAddon({
       userDataDir,
       platform: 'win32',
       arch: 'x64',
@@ -620,6 +837,7 @@ test('canceling model repair preserves a previously valid Windows runtime', asyn
     for (const [name, contents] of runtimeBefore) {
       assert.deepEqual(fs.readFileSync(path.join(runtimeDir, name)), contents);
     }
+    assertNotReady(status);
   } finally {
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }
@@ -635,7 +853,7 @@ test('cancellation during runtime extraction removes attempt staging and downloa
     const modelBefore = fs.readFileSync(modelPath);
     fs.rmSync(path.join(runtimeDir, 'cufft64_11.dll'));
 
-    await setupDiarizationAddon({
+    const status = await setupDiarizationAddon({
       userDataDir,
       platform: 'win32',
       arch: 'x64',
@@ -657,6 +875,165 @@ test('cancellation during runtime extraction removes attempt staging and downloa
     assert.deepEqual(fs.readFileSync(modelPath), modelBefore);
     const runtimeParentEntries = fs.readdirSync(path.dirname(runtimeDir));
     assert.equal(runtimeParentEntries.some((name) => name.includes('.install-') || name.includes('.download-')), false);
+    assertNotReady(status);
+  } finally {
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test('cancellation after model commit does not restore unvalidated ready', async () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-model-commit-cancel-'));
+  const catalog = createPinnedTestCatalog();
+  try {
+    await installValidTestSetup(userDataDir, catalog);
+    const runtimeDir = getSpeakrsOrtRuntimeDir(userDataDir);
+    const runtimeBefore = new Map(RUNTIME_DLL_NAMES.map((name) => [
+      name,
+      fs.readFileSync(path.join(runtimeDir, name)),
+    ]));
+    const modelPath = path.join(getSpeakrsModelRevisionDir(userDataDir, SPEAKRS_MODEL_PACK_REVISION), 'model.bin');
+    fs.rmSync(modelPath);
+
+    const status = await setupDiarizationAddon({
+      userDataDir,
+      platform: 'win32',
+      arch: 'x64',
+      engine: 'speakrs',
+      safeStorage: createSafeStorage(),
+      catalog,
+      env: { SPEAKRS_CLI_PATH: path.join(userDataDir, 'dev-bin', 'speakrs-cli.exe') },
+      downloader: async ({ destinationPath }) => fs.writeFileSync(destinationPath, ARCHIVE_BYTES),
+      extractor: createTestExtractor(),
+      runtimeValidator: createCancelingRuntimeValidator(),
+    });
+
+    assert.equal(status.features.diarization.status, 'notConfigured');
+    assertNotReady(status);
+    assert.equal(fs.existsSync(modelPath), true);
+    for (const [name, contents] of runtimeBefore) {
+      assert.deepEqual(fs.readFileSync(path.join(runtimeDir, name)), contents);
+    }
+  } finally {
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test('cancellation after runtime commit does not restore unvalidated ready', async () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-runtime-commit-cancel-'));
+  const catalog = createPinnedTestCatalog();
+  try {
+    await installValidTestSetup(userDataDir, catalog);
+    const modelPath = path.join(getSpeakrsModelRevisionDir(userDataDir, SPEAKRS_MODEL_PACK_REVISION), 'model.bin');
+    const modelBefore = fs.readFileSync(modelPath);
+    fs.rmSync(path.join(getSpeakrsOrtRuntimeDir(userDataDir), 'cufft64_11.dll'));
+
+    const status = await setupDiarizationAddon({
+      userDataDir,
+      platform: 'win32',
+      arch: 'x64',
+      engine: 'speakrs',
+      safeStorage: createSafeStorage(),
+      catalog,
+      env: { SPEAKRS_CLI_PATH: path.join(userDataDir, 'dev-bin', 'speakrs-cli.exe') },
+      downloader: async ({ destinationPath }) => fs.writeFileSync(destinationPath, ARCHIVE_BYTES),
+      extractor: createTestExtractor(),
+      runtimeValidator: createCancelingRuntimeValidator(),
+    });
+
+    assert.equal(status.features.diarization.status, 'notConfigured');
+    assertNotReady(status);
+    assert.deepEqual(fs.readFileSync(modelPath), modelBefore);
+    assert.equal(fs.existsSync(path.join(getSpeakrsOrtRuntimeDir(userDataDir), 'cufft64_11.dll')), true);
+  } finally {
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test('cancellation after both Speakrs commits does not restore unvalidated ready', async () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-both-commit-cancel-'));
+  const catalog = createPinnedTestCatalog();
+  try {
+    await installValidTestSetup(userDataDir, catalog);
+    const modelPath = path.join(getSpeakrsModelRevisionDir(userDataDir, SPEAKRS_MODEL_PACK_REVISION), 'model.bin');
+    const runtimeDir = getSpeakrsOrtRuntimeDir(userDataDir);
+    fs.rmSync(modelPath);
+    fs.rmSync(path.join(runtimeDir, 'onnxruntime.dll'));
+
+    const status = await setupDiarizationAddon({
+      userDataDir,
+      platform: 'win32',
+      arch: 'x64',
+      engine: 'speakrs',
+      safeStorage: createSafeStorage(),
+      catalog,
+      env: { SPEAKRS_CLI_PATH: path.join(userDataDir, 'dev-bin', 'speakrs-cli.exe') },
+      downloader: async ({ destinationPath }) => fs.writeFileSync(destinationPath, ARCHIVE_BYTES),
+      extractor: createTestExtractor(),
+      runtimeValidator: createCancelingRuntimeValidator(),
+    });
+
+    assert.equal(status.features.diarization.status, 'notConfigured');
+    assertNotReady(status);
+    assert.equal(fs.existsSync(modelPath), true);
+    assert.equal(fs.existsSync(path.join(runtimeDir, 'onnxruntime.dll')), true);
+  } finally {
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test('cancellation before any Speakrs commit does not mark ready', async () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-before-commit-cancel-'));
+  const catalog = createPinnedTestCatalog();
+  try {
+    const cliPath = path.join(userDataDir, 'dev-bin', 'speakrs-cli.exe');
+    fs.mkdirSync(path.dirname(cliPath), { recursive: true });
+    fs.writeFileSync(cliPath, 'cli');
+    const status = await setupDiarizationAddon({
+      userDataDir,
+      platform: 'win32',
+      arch: 'x64',
+      engine: 'speakrs',
+      safeStorage: createSafeStorage(),
+      catalog,
+      env: { SPEAKRS_CLI_PATH: cliPath },
+      downloader: createAbortDownloader(),
+      extractor: createTestExtractor(),
+    });
+
+    assert.equal(status.features.diarization.status, 'notConfigured');
+    assertNotReady(status);
+    assert.equal(fs.existsSync(path.join(getSpeakrsOrtRuntimeDir(userDataDir), 'onnxruntime.dll')), false);
+    assert.equal(
+      fs.existsSync(path.join(getSpeakrsModelRevisionDir(userDataDir, SPEAKRS_MODEL_PACK_REVISION), 'model.bin')),
+      false,
+    );
+  } finally {
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test('cancellation with no Speakrs artifact changes may restore previous ready', async () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-unchanged-cancel-'));
+  const catalog = createPinnedTestCatalog();
+  try {
+    await installValidTestSetup(userDataDir, catalog);
+    const status = await setupDiarizationAddon({
+      userDataDir,
+      platform: 'win32',
+      arch: 'x64',
+      engine: 'speakrs',
+      safeStorage: createSafeStorage(),
+      catalog,
+      env: { SPEAKRS_CLI_PATH: path.join(userDataDir, 'dev-bin', 'speakrs-cli.exe') },
+      downloader: async () => {
+        throw new Error('download should not start');
+      },
+      extractor: createTestExtractor(),
+      runtimeValidator: createCancelingRuntimeValidator(),
+    });
+
+    assert.equal(status.features.diarization.status, 'ready');
+    assert.equal(status.features.diarization.setupComplete, true);
   } finally {
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }

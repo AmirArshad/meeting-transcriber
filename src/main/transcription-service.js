@@ -902,7 +902,7 @@ function createTranscriptionService(deps) {
       return null;
     }
     try {
-      const aiStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions());
+      const aiStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions({ computeAdmission: true }));
       const diarizationStatus = aiStatus && aiStatus.features && aiStatus.features.diarization;
       const catalogModelRef = diarizationStatus ? getDiarizationModelRef(diarizationStatus.modelId) : null;
       const engine = resolveSpawnDiarizationEngine(diarizationStatus && diarizationStatus.engine);
@@ -920,6 +920,12 @@ function createTranscriptionService(deps) {
           requiredDevice: diarizationAvailability.runtimeDevice,
         };
       }
+      if (engine === 'speakrs' && diarizationStatus && diarizationStatus.error) {
+        sendToRenderer(
+          'transcription-progress',
+          `Speaker identification is unavailable; continuing with normal transcription. ${diarizationStatus.error}\n`,
+        );
+      }
     } catch (error) {
       sendToRenderer(
         'transcription-progress',
@@ -927,6 +933,31 @@ function createTranscriptionService(deps) {
       );
     }
     return null;
+  }
+
+  async function requireDiarizationComputeAdmission(expectedEngine) {
+    const aiStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions({ computeAdmission: true }));
+    const diarizationStatus = aiStatus && aiStatus.features && aiStatus.features.diarization;
+    const catalogModelRef = diarizationStatus ? getDiarizationModelRef(diarizationStatus.modelId) : null;
+    const engine = resolveSpawnDiarizationEngine(diarizationStatus && diarizationStatus.engine);
+    const speakrsRuntimeError = expectedEngine === 'speakrs' && diarizationStatus?.runtimeCache?.valid !== true
+      ? diarizationStatus?.runtimeCache?.reason || 'Speakrs runtime integrity validation failed.'
+      : null;
+    if (speakrsRuntimeError || engine !== expectedEngine || !canStartGuidedDiarization({
+      status: diarizationStatus && diarizationStatus.status,
+      setupComplete: diarizationStatus && diarizationStatus.setupComplete,
+      engine: diarizationStatus && diarizationStatus.engine,
+      modelRef: catalogModelRef,
+    })) {
+      throw new Error(
+        speakrsRuntimeError
+        || diarizationStatus?.error
+        || diarizationStatus?.runtimeCache?.reason
+        || 'Speaker identification setup is not ready.',
+      );
+    }
+    throwIfPackagedSpeakrsCliMissing(engine);
+    return { diarizationStatus, catalogModelRef, engine };
   }
 
   async function persistGuidedDiarizationArtifacts(meeting, diarizationStatus, diarizationResult) {
@@ -1355,7 +1386,7 @@ function createTranscriptionService(deps) {
         // and failures degrade to diarization error metadata.
         if (!guidedDiarizationResult) {
           throwIfJobBlocked(meetingId, epoch);
-          const postPassStatus = guidedDiarizationStatus || await resolveGuidedDiarizationStatus();
+          const postPassStatus = await resolveGuidedDiarizationStatus();
           throwIfJobBlocked(meetingId, epoch);
           if (
             postPassStatus
@@ -2168,6 +2199,7 @@ function createTranscriptionService(deps) {
       }
 
       return enqueueAiComputeAction(async () => {
+        const admitted = await requireDiarizationComputeAdmission(guidedEngine);
         return runWallClockComputeAction({
           timeoutMs: getGuidedTranscriptionComputeTimeoutMs(modelSize),
           label: 'Speaker-guided transcription',
@@ -2179,14 +2211,14 @@ function createTranscriptionService(deps) {
               outputTranscript: tempTranscriptPath,
               language,
               modelSize,
-              modelRef: catalogModelRef || diarizationStatus.modelId,
-              speakerCount: speakerCount || diarizationStatus.speakerCount || 'auto',
+              modelRef: admitted.catalogModelRef || admitted.diarizationStatus.modelId,
+              speakerCount: speakerCount || admitted.diarizationStatus.speakerCount || 'auto',
               requiredDevice,
-              engine: guidedEngine,
+              engine: admitted.engine,
             }),
             cwd: pythonConfig.backendPath,
             env: buildDiarizationChildEnv({
-              engine: guidedEngine,
+              engine: admitted.engine,
               modelSize,
               requiredDevice,
               includeTranscriptionRuntime: true,
@@ -2268,75 +2300,83 @@ function createTranscriptionService(deps) {
         throw new Error('Speaker labels output must be a JSON file in the recordings directory.');
       }
       return enqueueAiComputeAction(async () => {
-        return runWallClockComputeAction({
-          timeoutMs: AI_COMPUTE_TIMEOUT_MS.diarization,
-          label: 'Speaker identification',
-          terminateProcess: terminateProcessBestEffort,
-          action: (registerProcess) => new Promise((resolve, reject) => {
-            const python = spawnTrackedPython(buildManagedDiarizationArgs({
-              audioPath: resolvedAudioPath,
-              segmentsJsonPath: resolvedSegmentsJsonPath,
-              outputPath: resolvedOutputPath,
-              modelRef: catalogModelRef || diarizationStatus.modelId,
-              speakerCount,
-              requiredDevice,
-              engine: diarizeEngine,
-            }), {
-              cwd: pythonConfig.backendPath,
-              env: buildDiarizationChildEnv({ engine: diarizeEngine, requiredDevice }),
-            });
-            registerProcess(python);
+        try {
+          const admitted = await requireDiarizationComputeAdmission(diarizeEngine);
+          return await runWallClockComputeAction({
+            timeoutMs: AI_COMPUTE_TIMEOUT_MS.diarization,
+            label: 'Speaker identification',
+            terminateProcess: terminateProcessBestEffort,
+            action: (registerProcess) => new Promise((resolve, reject) => {
+              const python = spawnTrackedPython(buildManagedDiarizationArgs({
+                audioPath: resolvedAudioPath,
+                segmentsJsonPath: resolvedSegmentsJsonPath,
+                outputPath: resolvedOutputPath,
+                modelRef: admitted.catalogModelRef || admitted.diarizationStatus.modelId,
+                speakerCount,
+                requiredDevice,
+                engine: admitted.engine,
+              }), {
+                cwd: pythonConfig.backendPath,
+                env: buildDiarizationChildEnv({ engine: admitted.engine, requiredDevice }),
+              });
+              registerProcess(python);
 
-            let output = '';
-            let errorOutput = '';
-            const stdoutOverflow = { overflowed: false };
+              let output = '';
+              let errorOutput = '';
+              const stdoutOverflow = { overflowed: false };
 
-            python.stdout.on('data', (data) => {
-              output = appendSpawnJsonStdout(output, data, stdoutOverflow);
-            });
+              python.stdout.on('data', (data) => {
+                output = appendSpawnJsonStdout(output, data, stdoutOverflow);
+              });
 
-            python.stderr.on('data', (data) => {
-              const stderrChunk = data.toString();
-              errorOutput = appendSpawnLogBuffer(errorOutput, stderrChunk);
-              for (const line of stderrChunk.split(/\r?\n/)) {
-                const progressEvent = parseAiBackendProgressLine(line, 'diarization');
-                if (progressEvent) {
-                  sendToRenderer('diarization-progress', progressEvent);
+              python.stderr.on('data', (data) => {
+                const stderrChunk = data.toString();
+                errorOutput = appendSpawnLogBuffer(errorOutput, stderrChunk);
+                for (const line of stderrChunk.split(/\r?\n/)) {
+                  const progressEvent = parseAiBackendProgressLine(line, 'diarization');
+                  if (progressEvent) {
+                    sendToRenderer('diarization-progress', progressEvent);
+                  }
                 }
-              }
-            });
+              });
 
-            python.on('close', (code) => {
-              if (tempSegmentsPath) {
-                fs.promises.rm(path.dirname(tempSegmentsPath), { recursive: true, force: true }).catch(() => {});
-              }
-
-              if (stdoutOverflow.overflowed) {
-                reject(new Error('Speaker diarization output exceeded the maximum allowed size.'));
-                return;
-              }
-
-              if (code === 0) {
-                try {
-                  resolve(JSON.parse(output));
-                } catch (error) {
-                  reject(new Error(`Failed to parse diarization result: ${error.message}`));
+              python.on('close', (code) => {
+                if (tempSegmentsPath) {
+                  fs.promises.rm(path.dirname(tempSegmentsPath), { recursive: true, force: true }).catch(() => {});
                 }
-                return;
-              }
 
-              const reason = summarizeDiarizationError(errorOutput);
-              reject(new Error(reason || 'Speaker diarization failed.'));
-            });
+                if (stdoutOverflow.overflowed) {
+                  reject(new Error('Speaker diarization output exceeded the maximum allowed size.'));
+                  return;
+                }
 
-            python.on('error', (error) => {
-              if (tempSegmentsPath) {
-                fs.promises.rm(path.dirname(tempSegmentsPath), { recursive: true, force: true }).catch(() => {});
-              }
-              reject(error);
-            });
-          }),
-        });
+                if (code === 0) {
+                  try {
+                    resolve(JSON.parse(output));
+                  } catch (error) {
+                    reject(new Error(`Failed to parse diarization result: ${error.message}`));
+                  }
+                  return;
+                }
+
+                const reason = summarizeDiarizationError(errorOutput);
+                reject(new Error(reason || 'Speaker diarization failed.'));
+              });
+
+              python.on('error', (error) => {
+                if (tempSegmentsPath) {
+                  fs.promises.rm(path.dirname(tempSegmentsPath), { recursive: true, force: true }).catch(() => {});
+                }
+                reject(error);
+              });
+            }),
+          });
+        } catch (error) {
+          if (tempSegmentsPath) {
+            await fs.promises.rm(path.dirname(tempSegmentsPath), { recursive: true, force: true }).catch(() => {});
+          }
+          throw error;
+        }
       });
     });
 

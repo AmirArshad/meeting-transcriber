@@ -312,6 +312,8 @@ test('diarize-transcript Speakrs production spawn receives engine argv and isola
 
   const captured = [];
   const cudaOptions = [];
+  const statusOptions = [];
+  let runQueuedAction = null;
   const runtime = createPythonRuntime({
     app: { isPackaged: false },
     spawn(_cmd, args, options) {
@@ -345,7 +347,9 @@ test('diarize-transcript Speakrs production spawn receives engine argv and isola
       pythonConfig: { backendPath: '/tmp/backend', pythonPath: 'python', ffmpegPath: '/tmp/ffmpeg' },
       spawnTrackedPython: (args, options) => runtime.spawnTrackedPython(args, options),
       getBackendModuleArgs: (moduleName, extraArgs = []) => ['-m', moduleName, ...extraArgs],
-      enqueueAiComputeAction: (action) => action(),
+      enqueueAiComputeAction: (action) => new Promise((resolve, reject) => {
+        runQueuedAction = () => action().then(resolve, reject);
+      }),
       getCachedCudaStatus: () => ({ available: false }),
       buildCudaRuntimeEnv: (extra = {}, options = {}) => {
         cudaOptions.push(options);
@@ -354,7 +358,7 @@ test('diarize-transcript Speakrs production spawn receives engine argv and isola
         }
         return { ...(extra || {}), PATH: extra.PATH || process.env.PATH || 'C:\\Windows\\System32' };
       },
-      getAiAddonRuntimeOptions: () => ({ userDataDir }),
+      getAiAddonRuntimeOptions: (extra = {}) => ({ userDataDir, ...extra }),
       getDiarizationDependencyEnv: () => ({ PYTHONPATH: '/tmp/pyannote-site' }),
       getDiarizationCacheEnv: () => ({
         HF_HOME: '/tmp/should-not-leak-to-speakrs',
@@ -385,17 +389,21 @@ test('diarize-transcript Speakrs production spawn receives engine argv and isola
       listMeetings: async () => [],
       isQuitCommitted: () => false,
       resolveSpeakrsCliPath: () => cliPath,
-      checkAiAddonSetupStatus: async () => ({
-        features: {
-          diarization: {
-            status: 'ready',
-            setupComplete: true,
-            engine: 'speakrs',
-            modelId: 'speakrs-community1-vbx',
-            speakerCount: 'auto',
+      checkAiAddonSetupStatus: async (options) => {
+        statusOptions.push(options);
+        return {
+          features: {
+            diarization: {
+              status: 'ready',
+              setupComplete: true,
+              engine: 'speakrs',
+              modelId: 'speakrs-community1-vbx',
+              speakerCount: 'auto',
+              runtimeCache: { valid: true },
+            },
           },
-        },
-      }),
+        };
+      },
     });
 
     const handlers = new Map();
@@ -411,12 +419,24 @@ test('diarize-transcript Speakrs production spawn receives engine argv and isola
     });
 
     const started = Date.now();
+    while (!runQueuedAction) {
+      if (Date.now() - started > 2000) {
+        throw new Error('Timed out waiting for diarize-transcript queue admission');
+      }
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.equal(captured.length, 0, 'Python must not spawn before the queued action starts');
+    assert.equal(statusOptions.length, 1);
+    assert.notEqual(statusOptions[0].computeAdmission, true);
+    runQueuedAction();
     while (captured.length === 0) {
       if (Date.now() - started > 2000) {
         throw new Error('Timed out waiting for diarize-transcript spawn');
       }
       await new Promise((resolve) => setImmediate(resolve));
     }
+    assert.equal(statusOptions.length, 2);
+    assert.equal(statusOptions[1].computeAdmission, true, 'integrity admission must run when the queue starts');
 
     const { args, options } = captured[0];
     assert.ok(args.includes('--engine'));
@@ -444,6 +464,7 @@ test('diarize-transcript Speakrs production spawn receives engine argv and isola
     if (process.platform === 'win32') {
       const ortDir = getSpeakrsOrtRuntimeDir(userDataDir);
       assert.equal(env.PATH.startsWith(`${ortDir}${path.delimiter}`) || env.PATH === ortDir, true);
+      assert.equal(env.ORT_DYLIB_PATH, path.join(ortDir, 'onnxruntime.dll'));
     }
     if (process.platform === 'win32') {
       assert.equal(options.detached, false);
@@ -462,6 +483,64 @@ test('diarize-transcript Speakrs production spawn receives engine argv and isola
     }
     fs.rmSync(recordingsDir, { recursive: true, force: true });
     fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test('queued Speakrs compute admission failure prevents diarization spawn', async () => {
+  const availability = getDiarizationAvailability(process.platform, process.arch);
+  assert.equal(availability.supported, true, 'handler coverage requires a supported diarization platform');
+  const recordingsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-admission-rec-'));
+  const audioPath = path.join(recordingsDir, 'meeting.opus');
+  fs.writeFileSync(audioPath, 'opus');
+  const spawned = [];
+  let runQueuedAction = null;
+  const statusOptions = [];
+  try {
+    const service = createService({
+      app: { getPath: () => recordingsDir, isPackaged: false },
+      fs,
+      spawnTrackedPython: (...args) => {
+        spawned.push(args);
+        throw new Error('Python must not spawn after failed Speakrs integrity admission');
+      },
+      enqueueAiComputeAction: (action) => new Promise((resolve, reject) => {
+        runQueuedAction = () => action().then(resolve, reject);
+      }),
+      getAiAddonRuntimeOptions: (extra = {}) => ({ userDataDir: recordingsDir, ...extra }),
+      getRecordingsDir: () => recordingsDir,
+      checkAiAddonSetupStatus: async (options) => {
+        statusOptions.push(options);
+        const admitted = options && options.computeAdmission === true;
+        return {
+          features: {
+            diarization: {
+              status: admitted ? 'error' : 'ready',
+              setupComplete: !admitted,
+              engine: 'speakrs',
+              modelId: 'speakrs-community1-vbx',
+              error: admitted ? 'Speakrs ONNX Runtime files failed integrity validation.' : null,
+            },
+          },
+        };
+      },
+    });
+    const handlers = new Map();
+    service.registerIpc({ handle(channel, handler) { handlers.set(channel, handler); } });
+    const resultPromise = handlers.get('diarize-transcript')({ sender: {} }, {
+      audioPath,
+      segments: [{ start: 0, end: 1, text: 'hello' }],
+    });
+    while (!runQueuedAction) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.equal(statusOptions.length, 1);
+    runQueuedAction();
+    await assert.rejects(resultPromise, /integrity validation/i);
+    assert.equal(statusOptions.length, 2);
+    assert.equal(statusOptions[1].computeAdmission, true);
+    assert.equal(spawned.length, 0);
+  } finally {
+    fs.rmSync(recordingsDir, { recursive: true, force: true });
   }
 });
 

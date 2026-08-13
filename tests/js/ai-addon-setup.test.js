@@ -2342,6 +2342,19 @@ function createSpeakrsTestCatalog({
                   'cudart64_12.dll',
                   'cufft64_11.dll',
                 ],
+                extractedFiles: Object.fromEntries([
+                  'onnxruntime.dll',
+                  'onnxruntime_providers_shared.dll',
+                  'onnxruntime_providers_cuda.dll',
+                  'cudart64_12.dll',
+                  'cufft64_11.dll',
+                ].map((name) => {
+                  const contents = Buffer.from(`MZ-${name}`);
+                  return [name, {
+                    sha256: crypto.createHash('sha256').update(contents).digest('hex'),
+                    sizeBytes: contents.length,
+                  }];
+                })),
               }] : []),
             ],
           },
@@ -2709,6 +2722,180 @@ test('token-only Pyannote state is uninstalled when switching to Speakrs', async
   assert.equal(status.features.diarization.engine, 'speakrs');
   assert.equal(status.features.diarization.status, 'ready');
   assert.equal(fsModule.existsSync(tokenPath), false);
+});
+
+test('failed Pyannote switch preflight leaves Speakrs ready and local files unchanged', async () => {
+  const fsModule = createMemoryFs();
+  const userDataDir = '/tmp/AvaNevis';
+  const catalog = createSpeakrsTestCatalog();
+  const cliPath = writeSpeakrsCli(fsModule, userDataDir);
+  const protectedFiles = createProtectedSiblingFiles(fsModule, userDataDir);
+  const tokenPath = getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace);
+  let tokenWrites = 0;
+
+  const ready = await setupDiarizationAddon({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    engine: 'speakrs',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog,
+    env: { SPEAKRS_CLI_PATH: cliPath },
+    downloader: async ({ destinationPath }) => fsModule.writeFileSync(destinationPath, SPEAKRS_TEST_BYTES),
+    extractor: createSpeakrsTestExtractor(fsModule),
+  });
+  assert.equal(ready.features.diarization.status, 'ready');
+  assert.equal(ready.features.diarization.engine, 'speakrs');
+
+  const modelPath = path.join(userDataDir, 'ai-addons', 'models', 'diarization', 'speakrs', '5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f', 'model.bin');
+  const runtimePath = path.join(userDataDir, 'ai-addons', 'runtimes', 'speakrs-ort', 'onnxruntime.dll');
+  const manifestPath = path.join(userDataDir, 'ai-addons', 'manifest.json');
+  const snapshot = {
+    model: fsModule.readFileSync(modelPath),
+    runtime: fsModule.readFileSync(runtimePath),
+    manifest: fsModule.readFileSync(manifestPath),
+    cudaPip: fsModule.readFileSync(protectedFiles.cudaPip),
+    whisperCache: fsModule.readFileSync(protectedFiles.whisperCache),
+  };
+
+  await assert.rejects(
+    () => setupDiarizationAddon({
+      userDataDir,
+      platform: 'win32',
+      arch: 'x64',
+      engine: 'pyannote',
+      safeStorage: createSafeStorage(),
+      fsModule,
+      catalog,
+      env: { SPEAKRS_CLI_PATH: cliPath },
+      tokenWriter: () => {
+        tokenWrites += 1;
+        throw new Error('token must not be persisted during failed preflight');
+      },
+      downloader: async () => {
+        throw new Error('download should not start');
+      },
+    }),
+    /Hugging Face token is required/,
+  );
+  assert.equal(tokenWrites, 0);
+
+  await assert.rejects(
+    () => setupDiarizationAddon({
+      userDataDir,
+      platform: 'win32',
+      arch: 'x64',
+      engine: 'pyannote',
+      token: 'not-a-token',
+      safeStorage: createSafeStorage(),
+      fsModule,
+      catalog,
+      env: { SPEAKRS_CLI_PATH: cliPath },
+      tokenWriter: () => {
+        tokenWrites += 1;
+        throw new Error('token must not be persisted during failed preflight');
+      },
+      downloader: async () => {
+        throw new Error('download should not start');
+      },
+    }),
+    /expected token format/,
+  );
+  assert.equal(tokenWrites, 0);
+
+  await assert.rejects(
+    () => setupDiarizationAddon({
+      userDataDir,
+      platform: 'win32',
+      arch: 'x64',
+      engine: 'pyannote',
+      token: 'hf_validtoken123',
+      safeStorage: {
+        isEncryptionAvailable: () => false,
+        encryptString: () => {
+          throw new Error('encrypt should not run');
+        },
+        decryptString: () => {
+          throw new Error('decrypt should not run');
+        },
+      },
+      fsModule,
+      catalog,
+      env: { SPEAKRS_CLI_PATH: cliPath },
+      tokenWriter: () => {
+        tokenWrites += 1;
+        throw new Error('token must not be persisted during failed preflight');
+      },
+      downloader: async () => {
+        throw new Error('download should not start');
+      },
+    }),
+    /Secure token storage is unavailable/,
+  );
+  assert.equal(tokenWrites, 0);
+
+  const status = await checkAiAddonSetupStatus({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog,
+    env: { SPEAKRS_CLI_PATH: cliPath },
+  });
+  assert.equal(status.features.diarization.engine, 'speakrs');
+  assert.equal(status.features.diarization.status, 'ready');
+  assert.equal(status.features.diarization.setupComplete, true);
+  assert.deepEqual(fsModule.readFileSync(modelPath), snapshot.model);
+  assert.deepEqual(fsModule.readFileSync(runtimePath), snapshot.runtime);
+  assert.deepEqual(fsModule.readFileSync(manifestPath), snapshot.manifest);
+  assert.deepEqual(fsModule.readFileSync(protectedFiles.cudaPip), snapshot.cudaPip);
+  assert.deepEqual(fsModule.readFileSync(protectedFiles.whisperCache), snapshot.whisperCache);
+  assert.equal(fsModule.existsSync(tokenPath), false);
+  assert.equal(fsModule.existsSync(protectedFiles.bundledCli), true);
+});
+
+test('failed Speakrs switch preflight leaves Pyannote token and files unchanged', async () => {
+  const fsModule = createMemoryFs();
+  const userDataDir = '/tmp/AvaNevis';
+  const catalog = createSpeakrsTestCatalog();
+  const protectedFiles = createProtectedSiblingFiles(fsModule, userDataDir);
+  const tokenPath = getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace);
+  const pyannoteHub = path.join(userDataDir, 'ai-addons', 'models', 'diarization', 'hub', 'config.json');
+  fsModule.writeFileSync(pyannoteHub, 'hub');
+  fsModule.writeFileSync(tokenPath, Buffer.from('encrypted:hf_secret'));
+  const snapshot = {
+    hub: fsModule.readFileSync(pyannoteHub),
+    token: fsModule.readFileSync(tokenPath),
+    cudaPip: fsModule.readFileSync(protectedFiles.cudaPip),
+    whisperCache: fsModule.readFileSync(protectedFiles.whisperCache),
+  };
+
+  await assert.rejects(
+    () => setupDiarizationAddon({
+      userDataDir,
+      platform: 'win32',
+      arch: 'x64',
+      engine: 'speakrs',
+      safeStorage: createSafeStorage(),
+      fsModule,
+      catalog,
+      env: { AVANEVIS_PACKAGED: '1' },
+      resourcesPath: path.join(userDataDir, 'missing-resources'),
+      downloader: async () => {
+        throw new Error('download should not start');
+      },
+    }),
+    (error) => error.code === 'SPEAKRS_PACKAGED_CLI_MISSING'
+      && error.message === 'This AvaNevis install is incomplete. Reinstall AvaNevis.',
+  );
+
+  assert.deepEqual(fsModule.readFileSync(pyannoteHub), snapshot.hub);
+  assert.deepEqual(fsModule.readFileSync(tokenPath), snapshot.token);
+  assert.deepEqual(fsModule.readFileSync(protectedFiles.cudaPip), snapshot.cudaPip);
+  assert.deepEqual(fsModule.readFileSync(protectedFiles.whisperCache), snapshot.whisperCache);
+  assert.equal(fsModule.existsSync(path.join(userDataDir, 'ai-addons', 'models', 'diarization', 'speakrs')), false);
 });
 
 test('remove speakrs setup leaves engine as the last choice', async () => {

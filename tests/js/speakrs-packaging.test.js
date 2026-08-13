@@ -326,6 +326,16 @@ test('catalog pins require both model-pack platforms and three Windows ORT artif
     /sha256 is invalid/,
   );
 
+  const missingExtracted = {
+    'win32-x64': SPEAKRS_ORT_RUNTIME_ARTIFACTS['win32-x64'].map((artifact, index) => (
+      index === 0 ? { ...artifact, extractedFiles: undefined } : { ...artifact }
+    )),
+  };
+  assert.throws(
+    () => assertOrtRuntimePins(missingExtracted),
+    /extractedFiles|extracted DLL/,
+  );
+
   assert.throws(
     () => assertPinnedDownloadArtifact({
       fileName: 'demo.tar.gz',
@@ -431,6 +441,22 @@ test('release workflow verifies remote checksums once and keeps packaged layout 
   assert.match(RELEASE_WORKFLOW, /node scripts\/verify-speakrs-packaging\.js --packaged/);
   assert.equal(RELEASE_WORKFLOW.includes('--packaged --verify-pack-checksums'), false);
   assert.match(RELEASE_WORKFLOW, /publish-release:[\s\S]*needs:[\s\S]*verify-speakrs-release-artifacts/);
+});
+
+
+test('Speakrs GitHub Actions use reviewed commit SHAs rather than moving refs', () => {
+  assert.doesNotMatch(CI_WORKFLOW, /dtolnay\/rust-toolchain@master/);
+  assert.doesNotMatch(RELEASE_WORKFLOW, /dtolnay\/rust-toolchain@master/);
+  assert.doesNotMatch(CI_WORKFLOW, /uses:\s*Swatinem\/rust-cache@v2\s/);
+  assert.doesNotMatch(RELEASE_WORKFLOW, /uses:\s*Swatinem\/rust-cache@v2\s/);
+  assert.match(CI_WORKFLOW, /dtolnay\/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772/);
+  assert.match(RELEASE_WORKFLOW, /dtolnay\/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772/);
+  assert.match(CI_WORKFLOW, /Swatinem\/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6/);
+  assert.match(RELEASE_WORKFLOW, /Swatinem\/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6/);
+  assert.match(CI_WORKFLOW, /dtolnay\/rust-toolchain master as of 2026-08-05/);
+  assert.match(RELEASE_WORKFLOW, /dtolnay\/rust-toolchain master as of 2026-08-05/);
+  assert.match(CI_WORKFLOW, /Swatinem\/rust-cache v2\.9\.2/);
+  assert.match(RELEASE_WORKFLOW, /Swatinem\/rust-cache v2\.9\.2/);
 });
 
 
