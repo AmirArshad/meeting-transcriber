@@ -111,7 +111,7 @@ Escalate-or-not: **do not bundle in installer** — keep setup-time download.
 
 Private corpus only (not in git). Longest valid local file is **55.9 min** (`20260722_073706`); `20260516_160249` is tagged 68.5 min but the opus is 0.6 MB / corrupt — not used.
 
-Pinned VoxConverse dev subset IDs: **not run** (no local VoxConverse tree). DER columns stay empty until a 10-file subset is pulled.
+Pinned VoxConverse dev subset (every 21st of sorted `dev/*.rttm`, n=10, 50.8 min): `abjxc,cmfyw,exymw,hiyis,jyflp,mekog,oenox,qsfzo,tjkfn,wjhgf`. Scored with `pyannote.metrics.DiarizationErrorRate` vs official RTTMs. Duration-weighted: speakrs `coreml` **8.46% / 6.74%** vs pyannote MPS **7.93% / 6.31%** (Δ **+0.53 / +0.43** abs). Gate was ≤ +1.0 abs — **PASS** both collars. Not a publishable claim (n=10). `wjhgf` is the outlier (+8.5 both collars, 91 s / 5 speakers).
 
 Cold-start (1 s silence, `coreml`): **1.84 s**, CLI RSS 246 MB.
 
@@ -122,6 +122,16 @@ Cold-start (1 s silence, `coreml`): **1.84 s**, CLI RSS 246 MB.
 | 20260812_072216 | 31.6 min | 2 | pyannote | mps | — | — | 69.35 run / 74.43 total | 27.3× run | 5.06 s load | 1.59 GB | — |
 | 20260709_074020 Radiology Company Onboarding | 24.9 min | 4 (overlap) | speakrs | coreml | — | — | 3.52 | 425× | 1.84 s | 3.50 GB | — |
 | 20260722_073706 Andrew Onboarding Call 2 | 55.9 min | 2 | speakrs | coreml | — | — | 6.57 | 510× | 1.84 s | **3.81 GB** | **3.64 GB** thin Python spawn; +~215 MB if Python also holds f32 |
+| voxconverse `abjxc` | 68.4 s | 1 | speakrs / pyannote | coreml / mps | 0.7 / 0.6 | 0.3 / 0.2 | 1.87 / 2.75 | — | — | — | — |
+| voxconverse `cmfyw` | 483.9 s | 5 | speakrs / pyannote | coreml / mps | 21.3 / 20.9 | 19.0 / 18.9 | 1.68 / 17.41 | — | — | — | — |
+| voxconverse `exymw` | 116.4 s | 5 | speakrs / pyannote | coreml / mps | 6.4 / 6.9 | 4.8 / 5.3 | 0.87 / 4.29 | — | — | — | — |
+| voxconverse `hiyis` | 87.0 s | 2 | speakrs / pyannote | coreml / mps | 0.5 / 0.6 | 0.0 / 0.0 | 0.71 / 2.96 | — | — | — | — |
+| voxconverse `jyflp` | 451.3 s | 7 | speakrs / pyannote | coreml / mps | 9.8 / 9.3 | 6.7 / 6.5 | 1.44 / 16.14 | — | — | — | — |
+| voxconverse `mekog` | 881.5 s | 2 | speakrs / pyannote | coreml / mps | 3.6 / 3.3 | 2.2 / 1.9 | 2.36 / 32.19 | — | — | — | — |
+| voxconverse `oenox` | 77.2 s | 2 | speakrs / pyannote | coreml / mps | 0.4 / 0.4 | 0.0 / 0.0 | 0.78 / 2.68 | — | — | — | — |
+| voxconverse `qsfzo` | 143.7 s | 2 | speakrs / pyannote | coreml / mps | 2.4 / 2.3 | 1.2 / 1.2 | 0.98 / 5.19 | — | — | — | — |
+| voxconverse `tjkfn` | 647.8 s | 10 | speakrs / pyannote | coreml / mps | 5.4 / 5.0 | 4.1 / 3.8 | 2.14 / 23.50 | — | — | — | — |
+| voxconverse `wjhgf` | 91.5 s | 5 | speakrs / pyannote | coreml / mps | 35.1 / 26.7 | 33.2 / 24.6 | 0.74 / 3.19 | — | — | — | — |
 
 RTFx excludes a separate cold-start row; wall seconds above include model load. Medium-meeting speed vs same-box pyannote MPS: **306× / 27.3× ≈ 11.2×** (bar was ≥2×). 55.9 min finishes in 6.57 s (30 min timeout is not in play). CLI RSS on the long file is under 4 GB.
 
