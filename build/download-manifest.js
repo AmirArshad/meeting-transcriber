@@ -14,7 +14,8 @@ const BUILD_DOWNLOADS = Object.freeze({
   }),
   ffmpegWin: Object.freeze({
     label: 'Windows ffmpeg 8.0.1 essentials build',
-    url: 'https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-8.0.1-essentials_build.zip',
+    // gyan.dev/ffmpeg/builds/packages/ only hosts the current release zip.
+    url: 'https://github.com/GyanD/codexffmpeg/releases/download/8.0.1/ffmpeg-8.0.1-essentials_build.zip',
     sha256: 'e2aaeaa0fdbc397d4794828086424d4aaa2102cef1fb6874f6ffd29c0b88b673',
   }),
   ffmpegMac: Object.freeze({

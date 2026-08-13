@@ -13,7 +13,7 @@ const {
 
 
 test('BUILD_DOWNLOADS uses pinned direct download URLs', () => {
-  assert.equal(BUILD_DOWNLOADS.ffmpegWin.url, 'https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-8.0.1-essentials_build.zip');
+  assert.equal(BUILD_DOWNLOADS.ffmpegWin.url, 'https://github.com/GyanD/codexffmpeg/releases/download/8.0.1/ffmpeg-8.0.1-essentials_build.zip');
   assert.equal(
     BUILD_DOWNLOADS.ffmpegMac.url,
     'https://github.com/shaka-project/static-ffmpeg-binaries/releases/download/n8.0.1-1/ffmpeg-osx-arm64',
