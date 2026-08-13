@@ -327,6 +327,10 @@ Until the checklist is merged: dev/QA builds may fetch packs from upstream HF di
 ### Task 7: Soak + benchmark + cutover gate
 
 - Flip `DIARIZATION_ENGINE` default to `'speakrs'` in a beta/internal build (this is the **first** time the default changes); pyannote reachable via `AVANEVIS_DIARIZATION_ENGINE=pyannote`. Update `AGENTS.md` diarization bullets in the same commit as the flip.
+- **README system requirements (binding — same commit as the flip).** Today's `4 GB RAM minimum, 8 GB recommended` (both OS) cannot host speakrs: 0a CLI peak was **3.81 GB** on a 56 min meeting, plus Electron + Python. Do **not** leave the 4 GB floor. After 0b records Windows RSS, set:
+  - App-wide (record + transcribe, no speaker ID): keep **8 GB recommended**; raise minimum only if 0b shows base paths need it.
+  - **Speaker identification (speakrs):** **8 GB RAM minimum, 16 GB recommended** for hour-scale meetings. State this under Requirements and in the speaker-ID feature blurb so a 4 GB machine is not promised this add-on.
+  - Disk: speaker-ID pack is ~420 MB (mac coreml) plus Windows ORT archive (0b); still far below today's 10 GB recommended. No disk-floor change unless 0b pack+ORT exceeds ~1 GB in a way that should be called out.
 - Run the full benchmark matrix (below) and record in `docs/development/SPEAKRS_BENCHMARKS.md`.
 - **Cutover bar (all):** ≥ 25 internal meetings with a platform split (at least 10 per OS) through guided transcription with zero engine crashes/hangs; wrong-speaker A/B **2 reviewers × 50 turns**, speakrs not worse than **+2 turns** vs pyannote; setup/validate/remove/migration manual checklist green on Windows CUDA + macOS AS packaged builds; no compute-queue or quit-drain regressions (existing characterization suites green).
 - Rollback playbook: flip the catalog default back to pyannote in a patch release; speakrs artifacts stay cached (harmless); legacy pyannote installs still work because nothing was deleted automatically.

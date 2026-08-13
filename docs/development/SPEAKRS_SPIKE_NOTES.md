@@ -143,6 +143,10 @@ Human A/B (1 reviewer × 50 turns): **not listened**. Automated majority-map of 
 
 DLL closure, driver floor, cuda/cuda-fast columns: not started.
 
+## README requirements (follow-up at Task 7 cutover)
+
+Current README: 4 GB min / 8 GB recommended both OS. **Too low for speakrs** (CLI 3.81 GB on 56 min). Plan Task 7 must raise speaker-ID to **8 GB min / 16 GB recommended** after 0b confirms Windows RSS. Do not change README until the default flip.
+
 ## Decision
 
 No GO/NO-GO until 0b.
