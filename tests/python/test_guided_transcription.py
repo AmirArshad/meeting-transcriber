@@ -200,3 +200,78 @@ def test_transcribe_with_diarization_guidance_progress_phases_are_pinned(monkeyp
         'saving-transcript',
         'completed',
     ]
+
+
+def test_guided_speakrs_engine_skips_pyannote_and_torch(monkeypatch, tmp_path):
+    audio_path = tmp_path / 'meeting.wav'
+    audio_path.write_bytes(b'audio')
+    output_path = tmp_path / 'meeting.md'
+    speakrs_calls = []
+
+    class FakeTranscriber:
+        def load_model(self):
+            pass
+
+        def transcribe_file(self, _audio_path, save_markdown=False):
+            return {'segments': [{'start': 0.0, 'end': 1.0, 'text': 'hello'}]}
+
+        def get_model_info(self):
+            return {'device': 'mps', 'compute_type': 'float16'}
+
+        def cleanup(self):
+            pass
+
+    monkeypatch.setattr(guided, 'prepare_diarization_audio', lambda *_args, **_kwargs: audio_path)
+    monkeypatch.setattr(guided, 'get_audio_duration_seconds', lambda _path: 2.0)
+    monkeypatch.setattr(
+        guided,
+        'run_pyannote_diarization',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError('pyannote must not run')),
+    )
+    monkeypatch.setattr(
+        'backend.diarization.speakrs_runner.run_speakrs_diarization',
+        lambda audio, **kwargs: speakrs_calls.append((audio, kwargs)) or (
+            [{'start': 0.0, 'end': 1.0, 'speaker': 'SPEAKER_00'}],
+            'exclusive_speaker_diarization',
+            'coreml',
+        ),
+    )
+    monkeypatch.setattr(guided, 'create_transcriber', lambda **_kwargs: FakeTranscriber())
+    monkeypatch.setattr(guided, 'extract_audio_window', lambda *_args, **_kwargs: None)
+
+    result = guided.transcribe_with_diarization_guidance(
+        audio_path=str(audio_path),
+        output_transcript=str(output_path),
+        required_device='mps',
+        engine='speakrs',
+    )
+
+    assert result['diarization']['device'] == 'coreml'
+    assert result['diarization']['model'] == 'speakrs-community1-vbx'
+    assert speakrs_calls == [(audio_path, {
+        'required_device': 'mps',
+        'model_ref': 'speakrs-community1-vbx',
+    })]
+
+
+def test_guided_main_redacts_unhandled_errors(monkeypatch, capsys):
+    monkeypatch.setattr(
+        guided.sys,
+        'argv',
+        ['guided_transcription.py', '--audio', 'meeting.wav'],
+    )
+    monkeypatch.setattr(
+        guided,
+        'transcribe_with_diarization_guidance',
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError('failed hf_secret_token_value')),
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        guided.main()
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 1
+    assert 'ERROR:' in captured.err
+    assert 'hf_secret_token_value' not in captured.err
+    assert '[redacted-token]' in captured.err
+    assert '\n' not in captured.err.split('ERROR:', 1)[-1].strip()

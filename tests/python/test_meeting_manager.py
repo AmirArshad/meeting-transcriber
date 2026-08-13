@@ -69,6 +69,60 @@ def test_add_meeting_maps_mlx_metal_device_to_mps(tmp_path):
     assert not source_transcript.exists()
 
 
+def test_normalize_transcription_device_does_not_alias_coreml():
+    from backend.meetings.normalization import normalize_transcription_device
+
+    assert normalize_transcription_device('metal') == 'mps'
+    assert normalize_transcription_device('coreml') is None
+    assert normalize_transcription_device('cuda') == 'cuda'
+
+
+def test_update_meeting_ai_preserves_sidecar_coreml_diarization_device(tmp_path):
+    from backend.meetings.normalization import normalize_transcription_device
+
+    recordings_dir = tmp_path / 'recordings'
+    source_audio, source_transcript = _create_source_files(recordings_dir, 'coreml_sidecar')
+    manager = MeetingManager(recordings_dir=str(recordings_dir))
+    meeting = manager.add_meeting(
+        audio_path=str(source_audio),
+        transcript_path=str(source_transcript),
+        duration=12.0,
+        language='en',
+        model='small',
+        transcription_device='cuda',
+    )
+
+    speakers_path = Path(meeting['audioPath']).with_suffix('.speakers.json')
+    sidecar = {
+        'status': 'completed',
+        'model': 'speakrs-community1-vbx',
+        'device': 'coreml',
+        'annotationSource': 'exclusive_speaker_diarization',
+        'speakerSegments': [{'start': 0.0, 'end': 1.0, 'speaker': 'SPEAKER_00'}],
+        'segments': [{'start': 0.0, 'end': 1.0, 'text': 'hello', 'speaker': 'SPEAKER_00'}],
+    }
+    speakers_path.write_text(json.dumps(sidecar), encoding='utf-8')
+
+    updated = manager.update_meeting_ai(
+        meeting['id'],
+        diarization={
+            'status': 'completed',
+            'model': 'speakrs-community1-vbx',
+            'segmentsPath': str(speakers_path),
+            'device': 'coreml',
+        },
+    )
+
+    assert updated is not None
+    assert updated['transcriptionDevice'] == 'cuda'
+    assert 'device' not in updated['ai']['diarization']
+    assert updated['ai']['diarization']['segmentsPath'] == str(speakers_path)
+    saved = json.loads(speakers_path.read_text(encoding='utf-8'))
+    assert saved['device'] == 'coreml'
+    assert saved['annotationSource'] == 'exclusive_speaker_diarization'
+    assert normalize_transcription_device(saved['device']) is None
+
+
 def test_add_meeting_rejects_paths_outside_recordings_dir(tmp_path):
     recordings_dir = tmp_path / 'recordings'
     recordings_dir.mkdir()

@@ -25,11 +25,14 @@ from .diarization_pipeline import (
     build_diarization_result,
     emit_progress,
     get_audio_duration_seconds,
+    normalize_engine,
     normalize_speaker_count,
     prepare_diarization_audio,
+    resolve_diarization_model_ref,
     run_pyannote_diarization,
     save_diarization_result,
 )
+from common.sensitive_text import redact_sensitive_text
 from transcription.formatting import save_transcript_markdown
 
 
@@ -360,12 +363,15 @@ def transcribe_with_diarization_guidance(
     ffmpeg_path: str = "ffmpeg",
     hf_token: Optional[str] = None,
     required_device: Optional[str] = None,
+    engine: Optional[str] = None,
 ) -> Dict[str, Any]:
     source_audio = Path(audio_path)
     if not source_audio.exists():
         raise FileNotFoundError(f"Audio file not found: {source_audio}")
 
     transcript_path = output_transcript or str(source_audio.with_suffix(".md"))
+    resolved_engine = normalize_engine(engine)
+    effective_model_ref = resolve_diarization_model_ref(resolved_engine, model_ref)
     with tempfile.TemporaryDirectory(prefix="avanevis-guided-transcription-") as work_dir_name:
         work_dir = Path(work_dir_name)
 
@@ -373,14 +379,23 @@ def transcribe_with_diarization_guidance(
         prepared_audio = prepare_diarization_audio(str(source_audio), work_dir_name, ffmpeg_path=ffmpeg_path)
         audio_duration = get_audio_duration_seconds(prepared_audio)
 
-        token = hf_token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN") or ""
-        speaker_segments, annotation_source, device = run_pyannote_diarization(
-            prepared_audio,
-            model_ref=model_ref,
-            hf_token=token,
-            speaker_count=speaker_count,
-            required_device=required_device,
-        )
+        if resolved_engine == "speakrs":
+            from .speakrs_runner import run_speakrs_diarization
+
+            speaker_segments, annotation_source, device = run_speakrs_diarization(
+                prepared_audio,
+                required_device=required_device,
+                model_ref=effective_model_ref,
+            )
+        else:
+            token = hf_token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN") or ""
+            speaker_segments, annotation_source, device = run_pyannote_diarization(
+                prepared_audio,
+                model_ref=effective_model_ref,
+                hf_token=token,
+                speaker_count=speaker_count,
+                required_device=required_device,
+            )
 
         emit_progress("building-speaker-windows", "Building speaker-guided transcription windows.", percent=81)
         windows = build_diarization_guided_windows(speaker_segments, audio_duration=audio_duration)
@@ -422,7 +437,7 @@ def transcribe_with_diarization_guidance(
         audio_path=str(source_audio),
         transcript_segments=transcript_segments,
         speaker_segments=speaker_segments,
-        model_ref=model_ref,
+        model_ref=effective_model_ref,
         annotation_source=annotation_source,
         device=device,
     )
@@ -470,6 +485,12 @@ def main() -> None:
     parser.add_argument("--model-ref", default=DEFAULT_MODEL_REF, help="pyannote model reference")
     parser.add_argument("--speaker-count", default="auto", help="Known speaker count or auto")
     parser.add_argument("--require-device", default=None, help="Require accelerated torch device: cuda or mps")
+    parser.add_argument(
+        "--engine",
+        choices=["speakrs", "pyannote"],
+        default="pyannote",
+        help="Diarization engine (default: pyannote)",
+    )
     parser.add_argument("--ffmpeg", default="ffmpeg", help="ffmpeg executable path")
     args = parser.parse_args()
 
@@ -485,11 +506,12 @@ def main() -> None:
             speaker_count=normalize_speaker_count(args.speaker_count),
             ffmpeg_path=args.ffmpeg,
             required_device=args.require_device,
+            engine=args.engine,
         )
         print(json.dumps(result, ensure_ascii=True))
     except Exception as exc:
         emit_progress("error", "Speaker-guided transcription failed.")
-        print(f"ERROR: {exc}", file=sys.stderr)
+        print(f"ERROR: {redact_sensitive_text(exc)}", file=sys.stderr)
         sys.exit(1)
 
 

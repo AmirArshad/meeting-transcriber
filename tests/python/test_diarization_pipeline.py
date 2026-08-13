@@ -818,6 +818,134 @@ def test_diarize_transcript_progress_phases_are_pinned(monkeypatch, tmp_path):
     ]
 
 
+def test_normalize_engine_defaults_to_pyannote():
+    assert pipeline.normalize_engine(None) == 'pyannote'
+    assert pipeline.normalize_engine('auto') == 'pyannote'
+    assert pipeline.normalize_engine('SPEAKRS') == 'speakrs'
+    with pytest.raises(ValueError, match='speakrs or pyannote'):
+        pipeline.normalize_engine('other')
+
+
+def test_build_diarization_result_preserves_coreml_device():
+    result = pipeline.build_diarization_result(
+        audio_path='meeting.opus',
+        transcript_segments=[{'start': 0, 'end': 2, 'text': 'hello'}],
+        speaker_segments=[{'start': 0, 'end': 2, 'speaker': 'SPEAKER_00'}],
+        model_ref='speakrs-community1-vbx',
+        annotation_source='exclusive_speaker_diarization',
+        device='coreml',
+    )
+
+    assert result['device'] == 'coreml'
+    assert result['annotationSource'] == 'exclusive_speaker_diarization'
+    assert result['model'] == 'speakrs-community1-vbx'
+
+
+def test_diarize_transcript_speakrs_skips_torch_and_matches_inner_phases(monkeypatch, tmp_path):
+    audio_path = tmp_path / 'meeting.wav'
+    audio_path.write_text('audio', encoding='utf-8')
+    segments_path = tmp_path / 'segments.json'
+    segments_path.write_text(json.dumps([{'start': 0, 'end': 1, 'text': 'hello'}]), encoding='utf-8')
+    output_path = tmp_path / 'meeting.speakers.json'
+    phases = _capture_progress_phases(monkeypatch, pipeline)
+
+    monkeypatch.setattr(pipeline, 'prepare_diarization_audio', lambda *_args, **_kwargs: audio_path)
+    monkeypatch.setattr(
+        pipeline,
+        'assert_required_device_available',
+        lambda _device: (_ for _ in ()).throw(AssertionError('torch must not run on speakrs')),
+    )
+    monkeypatch.setattr(
+        'backend.diarization.speakrs_runner.run_speakrs_diarization',
+        lambda *_args, **_kwargs: (
+            pipeline.emit_progress('validating-accelerator', 'check', percent=30),
+            pipeline.emit_progress('loading-model', 'load', percent=35),
+            pipeline.emit_progress('running-model', 'run', percent=55),
+            pipeline.emit_progress('merging-speakers', 'merge', percent=80),
+            ([{'start': 0, 'end': 1, 'speaker': 'SPEAKER_00'}], 'exclusive_speaker_diarization', 'coreml'),
+        )[-1],
+    )
+
+    result = pipeline.diarize_transcript(
+        audio_path=str(audio_path),
+        segments_json_path=str(segments_path),
+        output_json=str(output_path),
+        required_device='mps',
+        engine='speakrs',
+    )
+
+    assert result['device'] == 'coreml'
+    assert result['model'] == 'speakrs-community1-vbx'
+    assert result['annotationSource'] == 'exclusive_speaker_diarization'
+    assert phases == [
+        'loading-transcript',
+        'preparing-audio',
+        'validating-accelerator',
+        'loading-model',
+        'running-model',
+        'merging-speakers',
+        'completed',
+    ]
+
+
+def test_validate_setup_speakrs_progress_phases_include_parent_and_inner(monkeypatch, tmp_path):
+    wav_path = Path(__file__).resolve().parents[2] / 'tests' / 'fixtures' / 'speakrs-two-speaker-16k.wav'
+    cli = tmp_path / 'fake_speakrs_cli.py'
+    payload = json.dumps({
+        'success': True,
+        'device': 'cuda',
+        'annotationSource': 'exclusive_speaker_diarization',
+        'segments': [{'start': 0, 'end': 1, 'speaker': 'SPEAKER_00'}],
+    }, separators=(',', ':'))
+    cli.write_text(
+        'import sys\n'
+        f'print({payload!r})\n'
+        'sys.exit(0)\n',
+        encoding='utf-8',
+    )
+    monkeypatch.setenv('SPEAKRS_CLI_PATH', str(cli))
+    monkeypatch.setenv('SPEAKRS_MODELS_DIR', str(tmp_path))
+    monkeypatch.setenv('SPEAKRS_VALIDATE_WAV', str(wav_path))
+    monkeypatch.delenv('AVANEVIS_PACKAGED', raising=False)
+    monkeypatch.setattr(
+        pipeline.sys,
+        'argv',
+        ['diarization_pipeline.py', '--validate-setup', '--engine', 'speakrs', '--require-device', 'cuda'],
+    )
+    phases = _capture_progress_phases(monkeypatch, pipeline)
+
+    pipeline.main()
+
+    assert phases == [
+        'validating-runtime',
+        'validating-accelerator',
+        'loading-model',
+        'running-model',
+        'merging-speakers',
+        'ready',
+    ]
+
+
+def test_validate_setup_speakrs_skips_token_stdin(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(pipeline, '_read_hf_token_from_stdin', lambda: calls.append('token') or 'hf_secret')
+    monkeypatch.setattr(pipeline, 'validate_pyannote_setup', lambda **_kwargs: calls.append('pyannote') or {})
+    monkeypatch.setattr(
+        'backend.diarization.speakrs_runner.validate_speakrs_setup',
+        lambda **kwargs: calls.append(kwargs) or {'status': 'ready', 'model': 'speakrs-community1-vbx', 'device': 'cuda'},
+    )
+    monkeypatch.setattr(
+        pipeline.sys,
+        'argv',
+        ['diarization_pipeline.py', '--validate-setup', '--engine', 'speakrs', '--token-stdin', '--require-device', 'cuda'],
+    )
+
+    pipeline.main()
+
+    assert calls == [{'model_ref': 'speakrs-community1-vbx', 'required_device': 'cuda'}]
+
+
 def test_validate_pyannote_setup_progress_phases_are_pinned(monkeypatch):
     phases = _capture_progress_phases(monkeypatch, pipeline)
     monkeypatch.setenv('HF_TOKEN', 'hf_validtoken123')

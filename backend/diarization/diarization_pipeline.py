@@ -33,6 +33,8 @@ from common.sensitive_text import redact_sensitive_text
 
 
 DEFAULT_MODEL_REF = "pyannote/speaker-diarization-community-1"
+DEFAULT_ENGINE = "pyannote"
+ALLOWED_ENGINES = frozenset({"speakrs", "pyannote"})
 UNKNOWN_PROGRESS_ERROR = "Speaker diarization failed."
 
 os.environ.setdefault("PYANNOTE_METRICS_ENABLED", "0")
@@ -109,6 +111,52 @@ def emit_progress(phase: str, message: str, *, percent: Optional[float] = None) 
             pass
 
     print(json.dumps(payload), file=sys.stderr, flush=True)
+
+
+def normalize_engine(value: Any) -> str:
+    if value in (None, "", "auto"):
+        return DEFAULT_ENGINE
+    engine = str(value).strip().lower()
+    if engine not in ALLOWED_ENGINES:
+        raise ValueError("engine must be speakrs or pyannote")
+    return engine
+
+
+def resolve_diarization_model_ref(engine: str, model_ref: Optional[str] = None) -> str:
+    if engine == "speakrs":
+        from .speakrs_runner import SPEAKRS_MODEL_ID
+
+        if not model_ref or model_ref == DEFAULT_MODEL_REF:
+            return SPEAKRS_MODEL_ID
+        return model_ref
+    return model_ref or DEFAULT_MODEL_REF
+
+
+def run_diarization(
+    audio_path: Path,
+    *,
+    engine: Optional[str] = None,
+    model_ref: str = DEFAULT_MODEL_REF,
+    hf_token: str = "",
+    speaker_count: Optional[int] = None,
+    required_device: Optional[str] = None,
+) -> Tuple[List[Dict[str, Any]], str, str]:
+    resolved_engine = normalize_engine(engine)
+    if resolved_engine == "speakrs":
+        from .speakrs_runner import run_speakrs_diarization
+
+        return run_speakrs_diarization(
+            audio_path,
+            required_device=required_device,
+            model_ref=resolve_diarization_model_ref(resolved_engine, model_ref),
+        )
+    return run_pyannote_diarization(
+        audio_path,
+        model_ref=model_ref,
+        hf_token=hf_token,
+        speaker_count=speaker_count,
+        required_device=required_device,
+    )
 
 
 def normalize_speaker_count(value: Any) -> Optional[int]:
@@ -393,27 +441,38 @@ def diarize_transcript(
     ffmpeg_path: str = "ffmpeg",
     hf_token: Optional[str] = None,
     required_device: Optional[str] = None,
+    engine: Optional[str] = None,
 ) -> Dict[str, Any]:
     emit_progress("loading-transcript", "Loading transcript segments.", percent=5)
     transcript_segments = load_transcript_segments(segments_json_path)
+    resolved_engine = normalize_engine(engine)
+    effective_model_ref = resolve_diarization_model_ref(resolved_engine, model_ref)
 
     with tempfile.TemporaryDirectory(prefix="avanevis-diarization-") as work_dir:
         emit_progress("preparing-audio", "Preparing audio for speaker diarization.", percent=15)
         prepared_audio = prepare_diarization_audio(audio_path, work_dir, ffmpeg_path=ffmpeg_path)
-        token = hf_token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN") or ""
-        speaker_segments, annotation_source, device = run_pyannote_diarization(
-            prepared_audio,
-            model_ref=model_ref,
-            hf_token=token,
-            speaker_count=speaker_count,
-            required_device=required_device,
-        )
+        if resolved_engine == "speakrs":
+            speaker_segments, annotation_source, device = run_diarization(
+                prepared_audio,
+                engine=resolved_engine,
+                model_ref=effective_model_ref,
+                required_device=required_device,
+            )
+        else:
+            token = hf_token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN") or ""
+            speaker_segments, annotation_source, device = run_pyannote_diarization(
+                prepared_audio,
+                model_ref=effective_model_ref,
+                hf_token=token,
+                speaker_count=speaker_count,
+                required_device=required_device,
+            )
 
     result = build_diarization_result(
         audio_path=audio_path,
         transcript_segments=transcript_segments,
         speaker_segments=speaker_segments,
-        model_ref=model_ref,
+        model_ref=effective_model_ref,
         annotation_source=annotation_source,
         device=device,
     )
@@ -428,6 +487,12 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="Run local speaker diarization for an AvaNevis transcript")
     parser.add_argument("--validate-setup", action="store_true", help="Validate pyannote runtime and model access without diarizing audio")
+    parser.add_argument(
+        "--engine",
+        choices=["speakrs", "pyannote"],
+        default=DEFAULT_ENGINE,
+        help="Diarization engine (default: pyannote)",
+    )
     parser.add_argument(
         "--token-stdin",
         action="store_true",
@@ -444,12 +509,21 @@ def main() -> None:
 
     try:
         if args.validate_setup:
-            token = _read_hf_token_from_stdin() if args.token_stdin else None
-            result = validate_pyannote_setup(
-                model_ref=args.model_ref,
-                hf_token=token,
-                required_device=args.require_device,
-            )
+            engine = normalize_engine(args.engine)
+            if engine == "speakrs":
+                from .speakrs_runner import validate_speakrs_setup
+
+                result = validate_speakrs_setup(
+                    model_ref=resolve_diarization_model_ref(engine, args.model_ref),
+                    required_device=args.require_device,
+                )
+            else:
+                token = _read_hf_token_from_stdin() if args.token_stdin else None
+                result = validate_pyannote_setup(
+                    model_ref=args.model_ref,
+                    hf_token=token,
+                    required_device=args.require_device,
+                )
             emit_progress("ready", "Speaker diarization setup is ready.", percent=100)
             print(json.dumps(result, ensure_ascii=True))
             return
@@ -465,6 +539,7 @@ def main() -> None:
             speaker_count=normalize_speaker_count(args.speaker_count),
             ffmpeg_path=args.ffmpeg,
             required_device=args.require_device,
+            engine=args.engine,
         )
         print(json.dumps({**result, "segmentsPath": args.output_json}, ensure_ascii=True))
     except Exception as exc:
