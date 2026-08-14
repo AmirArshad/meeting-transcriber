@@ -27,6 +27,7 @@ Active TODOs only. Completed initiative history lives in git history, `docs/rele
 - [ ] [Risk: Low] Apple Developer signing/notarization: enable when enrolled (`package.json` `mac.notarize`, release workflow secrets).
 - [ ] [Risk: Low] Trial dropping other explicit transitive-only pins in a follow-up trim pass (not `onnxruntime`/`tokenizers`/`av` — those stay; see `docs/development/DEPENDABOT_TRIAGE.md`).
 - [x] [Risk: Low] Absorb Dependabot #73/#72/#58: `filelock` 3.32.0, `certifi` 2026.7.22, `typing-extensions` 4.16.0, `ctranslate2` 4.8.1. Windows transcription smoke passed. Close those PRs after this lands.
+- [x] [Risk: Low] npm `audit-level=high` (2026-08-14): Electron **42.9.0** (stay on 42; not 43) plus `overrides` for patched transitives (`brace-expansion`, `fast-uri`, `js-yaml`, `tar`, `undici`). `npm audit --audit-level=high` is clean.
 - [ ] [Risk: High] Evaluate whether macOS PyObjC `Cocoa` / `Quartz` pins are removable; requires `pip check`, PyObjC import checks, packaged `build:mac:dir`, and ScreenCaptureKit fallback smoke.
 
 ## Optional Validation Passes

@@ -13,7 +13,7 @@ Last reviewed: 2026-08-13. Absorbed #73 (`filelock`/`certifi`), #72 (`typing-ext
 | #56 | regex 2026.5.9→2026.7.10 | Low | **Absorbed** on `chore/dependency-hygiene` | Close after hygiene PR merges. |
 | #55 | adm-zip 0.5.17→0.6.0 | Medium | **Absorbed** on `chore/dependency-hygiene` | Security bump; AvaNevis uses `extractAllTo`. Close after hygiene PR merges. |
 | #58 | ctranslate2 4.7.2→4.8.1 | Medium | **Absorbed** 2026-08-13 | Pin is `4.8.1`. Still CUDA 12 wheels. Windows transcription smoke passed. Close Dependabot PR after hygiene PR merges. |
-| #53 | electron 42.2.0→43.1.0 | High | **Defer** | Nice-to-have (startup perf, Chromium security, macOS Notification APIs). No product blocker on 42.x; separate Win/mac packaged smoke required. Not a drive-by. |
+| #53 | electron 42.2.0→43.1.0 | High | **Defer (43)** / **Absorbed 42.9.0** | Stay on Electron 42. CI high audit (2026-08-14) required ≥42.5.1; landed **42.9.0**. Do not merge Dependabot 43.x without Win/mac packaged smoke. |
 | #57 | numpy 2.4.6→2.5.1 | High (broken) | **Closed 2026-07-14** | numpy 2.5.x requires **Python ≥3.12**; AvaNevis is Python **3.11**. CI fails install. Stay on `numpy==2.4.6` until a coordinated Python upgrade. |
 
 ### Track A — Windows `onnxruntime` / `tokenizers` / `av` (2026-07-14)
