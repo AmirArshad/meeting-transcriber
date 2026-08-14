@@ -72,7 +72,7 @@ function isPathInsideDirectory(filePath, directoryPath, fsImpl = fs) {
   }
 
   if (resolvedDirectory && !resolvedPath) {
-    if (!isSameOrInsideDirectory(filePath, resolvedDirectory)) {
+    if (!isSameOrInsideDirectory(filePath, directoryPath)) {
       return false;
     }
 

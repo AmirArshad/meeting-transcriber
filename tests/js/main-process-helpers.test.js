@@ -511,6 +511,40 @@ test('isPathInsideDirectory treats Windows long-path prefixes as inside the reco
 });
 
 
+test('isPathInsideDirectory allows a missing sidecar when native realpath uses a different spelling', () => {
+  const recordingsDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-alias-path-')));
+  try {
+    const outputPath = path.join(recordingsDir, 'meeting.speakers.json');
+    const parsed = path.parse(recordingsDir);
+    const nativeAlias = path.join(parsed.root, 'NATIVE~1', path.basename(recordingsDir));
+    const fsMock = {
+      realpathSync: Object.assign((filePath) => fs.realpathSync(filePath), {
+        native(filePath) {
+          const target = path.resolve(filePath);
+          if (target === path.resolve(outputPath)) {
+            const error = new Error('ENOENT');
+            error.code = 'ENOENT';
+            throw error;
+          }
+          if (target === path.resolve(recordingsDir)) {
+            return nativeAlias;
+          }
+          const error = new Error('ENOENT');
+          error.code = 'ENOENT';
+          throw error;
+        },
+      }),
+    };
+
+    assert.notEqual(path.resolve(nativeAlias), path.resolve(recordingsDir));
+    assert.equal(isPathInsideDirectory(outputPath, recordingsDir, fsMock), true);
+    assert.equal(isPathInsideDirectory(path.join(recordingsDir, '..', 'escape.json'), recordingsDir, fsMock), false);
+  } finally {
+    fs.rmSync(recordingsDir, { recursive: true, force: true });
+  }
+});
+
+
 test('isSafeRecordingsAudioPath rejects symlinks that resolve outside recordings', (t) => {
   if (process.platform === 'win32') {
     t.skip('Symlink path hardening test requires Unix-style symlinks.');
