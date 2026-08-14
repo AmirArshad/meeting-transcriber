@@ -70,6 +70,7 @@ const {
   SPEAKRS_DIARIZATION_ENGINES,
   getSpeakrsExtractedRuntimeDllPins,
   getSpeakrsRequiredRuntimeDllNames,
+  getSpeakrsSetupProgressCopy,
   resolveContainedSpeakrsPath,
 } = require('./speakrs-pack-spec');
 
@@ -213,8 +214,10 @@ async function uninstallSpeakrsLocalState({ userDataDir, fsModule = fs } = {}) {
   await removePathsStrict(getSpeakrsUninstallPaths(userDataDir), { userDataDir, fsModule });
 }
 
-async function uninstallPyannoteLocalState({ userDataDir, fsModule = fs } = {}) {
-  deleteAiAddonToken({ userDataDir, tokenKey: TOKEN_KEYS.diarizationHuggingFace, fsModule });
+async function uninstallPyannoteLocalState({ userDataDir, fsModule = fs, deleteToken = true } = {}) {
+  if (deleteToken) {
+    deleteAiAddonToken({ userDataDir, tokenKey: TOKEN_KEYS.diarizationHuggingFace, fsModule });
+  }
   await removePathsStrict(getPyannoteUninstallPaths(userDataDir), { userDataDir, fsModule });
 }
 
@@ -364,10 +367,11 @@ async function installSpeakrsArtifacts({
         runtimeDownloadPaths.push(tempPath);
       }
       mkdirSync?.(path.dirname(tempPath), { recursive: true });
+      const progressCopy = getSpeakrsSetupProgressCopy(item.file);
       emitSafeProgress(emitProgress, {
         feature: 'diarization',
         phase: 'downloading',
-        message: 'Downloading Speakrs speaker model.',
+        message: progressCopy.downloading,
         percent: totalBytes ? Math.round((completedBytes / totalBytes) * 80) : Math.round((index / downloads.length) * 80),
       });
       await downloader({
@@ -378,12 +382,12 @@ async function installSpeakrsArtifacts({
         onProgress: (progress) => emitSafeProgress(emitProgress, {
           feature: 'diarization',
           phase: 'downloading',
-          message: 'Downloading Speakrs speaker model.',
+          message: progressCopy.downloading,
           percent: totalBytes
             ? Math.round(((completedBytes + (progress.downloaded || 0)) / totalBytes) * 80)
             : Math.round(((index + ((progress.percent || 0) / 100)) / downloads.length) * 80),
           downloadedBytes: progress.downloaded,
-          totalBytes: progress.total || totalBytes,
+          totalBytes: progress.total || item.file.sizeBytes || totalBytes,
         }),
       });
       const actualSha256 = await hashFileSha256(tempPath, fsModule);
@@ -393,7 +397,7 @@ async function installSpeakrsArtifacts({
       emitSafeProgress(emitProgress, {
         feature: 'diarization',
         phase: 'extracting',
-        message: item.kind === 'model' ? 'Installing Speakrs speaker model.' : 'Installing Speakrs runtime.',
+        message: progressCopy.installing,
         percent: 85,
       });
       await extractor(
@@ -1289,7 +1293,7 @@ async function setupDiarizationAddon({
     }
     const mutateExclusiveEngine = async () => {
       if (selectedEngine === 'speakrs' && pyannoteState) {
-        await uninstallPyannoteLocalState({ userDataDir, fsModule });
+        await uninstallPyannoteLocalState({ userDataDir, fsModule, deleteToken: false });
       }
       if (selectedEngine === 'pyannote' && speakrsState) {
         await uninstallSpeakrsLocalState({ userDataDir, fsModule });
@@ -1645,6 +1649,7 @@ async function removeDiarizationSetup({
 
   if (engine === 'speakrs') {
     await uninstallSpeakrsLocalState({ userDataDir, fsModule });
+    deleteAiAddonToken({ userDataDir, tokenKey: TOKEN_KEYS.diarizationHuggingFace, fsModule });
   } else {
     await uninstallPyannoteLocalState({ userDataDir, modelId, fsModule });
   }

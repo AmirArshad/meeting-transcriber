@@ -330,7 +330,7 @@
                   type="password"
                   id="home-diarization-token-input"
                   class="settings-input"
-                  placeholder="hf_..."
+                  placeholder="Leave blank to reuse a saved token, or paste a new one"
                   autocomplete="off"
                 />
               </div>
@@ -890,11 +890,12 @@
                           type="password"
                           id="diarization-token-input"
                           class="settings-input"
-                          placeholder="hf_..."
+                          placeholder="Leave blank to reuse a saved token, or paste a new one"
                           autocomplete="off"
                         />
                         <p class="ai-addon-help">
                           Create a Hugging Face read token from Settings > Access Tokens, then accept the pyannote model terms before setup.
+                          If a token is already saved, leave this blank to reuse it.
                           <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noopener noreferrer">Create token</a>
                           <a href="https://huggingface.co/pyannote/speaker-diarization-community-1" target="_blank" rel="noopener noreferrer">Open model terms</a>
                         </p>
@@ -996,6 +997,13 @@
                   <p class="about-credits">
                     Transcription uses OpenAI Whisper (MIT). Optional speaker labels use
                     <a
+                      href="https://github.com/avencera/speakrs"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      >Speakrs</a
+                    >
+                    (Apache-2.0) or
+                    <a
                       href="https://huggingface.co/pyannote/speaker-diarization-community-1"
                       target="_blank"
                       rel="noopener noreferrer"
@@ -1015,7 +1023,7 @@
                       rel="noopener noreferrer"
                       >llama.cpp</a
                     >
-                    (MIT). Installers bundle ffmpeg (GPLv3).
+                    (MIT). Installers bundle ffmpeg (GPLv3) and the Speakrs CLI.
                   </p>
                   <button
                     type="button"

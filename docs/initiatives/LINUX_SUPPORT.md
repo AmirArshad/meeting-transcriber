@@ -17,7 +17,7 @@ The previous Linux plan (late 2025 / “v1.8.0”) assumed whole-session RAM mix
 | Durable `{stem}.capture/` track spools + bounded `finalize_capture` (v2.5.0) | Linux recorder **must** use the spool path from day one — no RAM-mix prototype that later gets rewritten |
 | Recording presence, discard/`cancel`, structured stdout JSON | Linux must emit the same `levels` / `event` / `warning` / `error` / stop-stage / final-result contract |
 | Background transcription queue + Home Activity (v2.6.0) | Mostly shared Electron/Python; Linux must not introduce a second lifecycle. Capture exclusive during encode; Start unlocks after pending persist |
-| Optional local AI add-ons (diarization + Qwen summaries via llama.cpp) | Need `linux-x64` catalog pins for llama.cpp runtime + (CUDA) pyannote/torch dependency artifacts |
+| Optional local AI add-ons (exclusive Speakrs or pyannote diarization + Qwen summaries via llama.cpp) | Need `linux-x64` catalog pins for llama.cpp runtime, a Speakrs pack/ORT story, and/or CUDA pyannote/torch dependency artifacts |
 | Pattern C main services + compute / GPU resource queues | Wire Linux through existing `recorder-service`, `transcription-service`, `ai-addon-ipc`, `gpu-runtime-service` — do not fork orchestration |
 
 This document replaces the old phase/week schedule with a dependency-ordered plan aligned to current invariants.

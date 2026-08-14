@@ -21,8 +21,19 @@
     return phase === 'downloading'
       || phase === 'downloading-runtime'
       || phase === 'downloading-dependencies'
+      || phase === 'extracting'
       || phase === 'extracting-runtime'
       || phase === 'validating';
+  }
+
+  function isAiAddonSetupLockingControls({ featureStatus, progressActive = false } = {}) {
+    if (featureStatus === 'downloading' || featureStatus === 'validating') {
+      return true;
+    }
+    if (!progressActive) {
+      return false;
+    }
+    return featureStatus !== 'ready' && featureStatus !== 'error';
   }
 
   function resolveSelectedDiarizationEngine(diarization, fallback = 'speakrs') {
@@ -88,9 +99,21 @@
     );
   }
 
+  function getDiarizationSetupButtonLabel({
+    selectedEngine,
+    installedEngine,
+    hasOtherEngineLocalState,
+  } = {}) {
+    return shouldConfirmDiarizationEngineSwitch({
+      selectedEngine,
+      installedEngine,
+      hasOtherEngineLocalState,
+    }) ? 'Switch model' : 'Set Up';
+  }
+
   function getDiarizationSwitchConfirmMessage({ targetEngine, platform } = {}) {
     if (targetEngine === 'speakrs') {
-      return 'Switch to Speakrs? This removes the current speaker model, including your saved Hugging Face token and about 2–4 GB of files. Speakrs does not need an account.';
+      return 'Switch to Speakrs? This removes the current speaker model (about 2–4 GB). Your saved Hugging Face token is kept so you can switch back to Pyannote without pasting it again. Speakrs does not need an account.';
     }
     if (targetEngine === 'pyannote') {
       const base = 'Switch to Pyannote? This removes Speakrs (about 800 MB). Pyannote needs a Hugging Face account and a larger download.';
@@ -104,9 +127,13 @@
       return 'Remove Pyannote speaker identification and the saved Hugging Face token?';
     }
     if (engine === 'speakrs') {
-      return 'Remove Speakrs speaker identification?';
+      return 'Remove Speakrs speaker identification and any saved Hugging Face token?';
     }
     return 'Remove speaker identification setup and stored token?';
+  }
+
+  function getDiarizationTokenInputPlaceholder() {
+    return 'Leave blank to reuse a saved token, or paste a new one';
   }
 
   function isSpeakrsPackagedCliMissingMessage(value) {
@@ -140,8 +167,11 @@
     buildDiarizationEngineCards,
     getDiarizationEngineCard,
     getDiarizationRemoveConfirmMessage,
+    getDiarizationSetupButtonLabel,
     getDiarizationSwitchConfirmMessage,
+    getDiarizationTokenInputPlaceholder,
     isAiAddonProgressPhase,
+    isAiAddonSetupLockingControls,
     isAiAddonTerminalStatus,
     isSpeakrsPackagedCliMissingMessage,
     isSpeakrsRecommended,

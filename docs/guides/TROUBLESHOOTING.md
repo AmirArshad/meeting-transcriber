@@ -166,7 +166,7 @@ If you still see "faster-whisper (CPU fallback)", report an issue on GitHub.
 
 **Symptom:** During macOS transcription, the log mentions unauthenticated Hugging Face requests or `HF_TOKEN`.
 
-**Cause:** The Apple Silicon transcription backend verifies or downloads public MLX Whisper model files from Hugging Face. This is separate from speaker identification. macOS speaker identification remains unsupported unless accelerated diarization is validated later.
+**Cause:** The Apple Silicon transcription backend verifies or downloads public MLX Whisper model files from Hugging Face. This is separate from optional speaker identification (Speakrs is token-free; Pyannote uses a Hugging Face token only during explicit setup).
 
 **Expected behavior:** Once `~/Library/Caches/avanevis/mlx_models/<model>` contains `weights.npz` and `config.json`, AvaNevis reuses those files and skips the Hugging Face Hub check for normal transcription.
 
@@ -190,9 +190,9 @@ If you still see "faster-whisper (CPU fallback)", report an issue on GitHub.
 
 **Symptom:** Speaker identification fails with "model cache is missing or incomplete" after setup previously completed.
 
-**Cause:** Actual speaker-identification runs use the local pyannote model cache populated during setup. AvaNevis does not implicitly re-download the gated model during meeting processing. A related bug (fixed) could also misreport Hugging Face auth-path probe failures as a missing cache when `HF_TOKEN_PATH` was cleared to an empty string.
+**Cause:** Runs use the engine that was installed during setup. **Pyannote** loads from the local Hugging Face cache and does not re-download the gated model during meeting processing. A related bug (fixed) could also misreport Hugging Face auth-path probe failures as a missing cache when `HF_TOKEN_PATH` was cleared to an empty string. **Speakrs** uses the setup-time model pack (and on Windows the ONNX Runtime closure); it does not use a Hugging Face token.
 
-**What to do:** First update to the latest app build and retry — do **not** remove CUDA or pyannote setup unless Settings still shows speaker identification as not ready. If it still fails after updating, open Settings > AI Add-ons and run Validate (or setup again) only after confirming the Hugging Face token still has access to `pyannote/speaker-diarization-community-1`.
+**What to do:** First update to the latest app build and retry — do **not** remove CUDA or speaker setup unless Settings still shows speaker identification as not ready. If it still fails after updating, open Settings > AI Add-ons and run Validate (or setup again). For Pyannote, confirm the Hugging Face token still has access to `pyannote/speaker-diarization-community-1`. For Speakrs, re-run setup so the model pack (and Windows ORT) can download again.
 
 ---
 

@@ -16,6 +16,7 @@ This app keeps optional local AI add-on artifacts catalog-driven in `src/ai-addo
 - Keep summary runtime flags compatible with the selected catalog model. The current Qwen3.5/llama.cpp path runs with reasoning disabled; parameterize that before adding a non-Qwen3 model that needs different flags.
 - Store artifacts under Electron `userData` via the AI add-on cache helpers so app updates do not remove installed add-ons.
 - Pyannote diarization must use the user's own Hugging Face token stored through Electron `safeStorage` only. Speakrs is token-free and must not inspect, decrypt, or store Hugging Face tokens.
+- Adding or renaming a speaker engine must keep Settings About credits, `THIRD_PARTY_NOTICES.md`, and `tests/js/legal-notices.test.js` in sync.
 
 ## Runtime Cache Locations
 

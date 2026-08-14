@@ -119,6 +119,7 @@ test('AI add-on validate and remove buttons require local setup state', () => {
       canConfigure: true,
       canValidate: false,
       canRemove: false,
+      canSelectEngine: true,
       hasLocalState: false,
       isBusy: false,
       isUnsupported: false,
@@ -173,6 +174,7 @@ test('AI add-on controls are disabled during active setup or unsupported state',
   assert.equal(downloadingSummary.canConfigure, false);
   assert.equal(downloadingSummary.canValidate, false);
   assert.equal(downloadingSummary.canRemove, false);
+  assert.equal(downloadingSummary.canSelectEngine, false);
 
   const unsupportedDiarization = buildAiAddonControlState({
     type: 'diarization',
@@ -182,6 +184,7 @@ test('AI add-on controls are disabled during active setup or unsupported state',
   assert.equal(unsupportedDiarization.canConfigure, false);
   assert.equal(unsupportedDiarization.canValidate, false);
   assert.equal(unsupportedDiarization.canRemove, false);
+  assert.equal(unsupportedDiarization.canSelectEngine, false);
 });
 
 test('summary generation button view exposes spinner and cancel hover copy', () => {
@@ -481,6 +484,7 @@ test('switching the selected engine re-enables Set Up while the other engine is 
     selectedEngine: 'speakrs',
   });
   assert.equal(sameEngine.canConfigure, false);
+  assert.equal(sameEngine.canSelectEngine, true);
   const switching = buildAiAddonControlState({
     type: 'diarization',
     feature: readySpeakrs,
@@ -488,4 +492,5 @@ test('switching the selected engine re-enables Set Up while the other engine is 
   });
   assert.equal(switching.canConfigure, true);
   assert.equal(switching.canRemove, true);
+  assert.equal(switching.canSelectEngine, true);
 });

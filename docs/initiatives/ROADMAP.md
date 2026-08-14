@@ -8,9 +8,9 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 
 - **Dual audio capture** — microphone + desktop audio recorded in parallel and mixed after the recording stops. WASAPI loopback on Windows; native Swift helper on macOS using CoreAudio process taps on macOS 14.2+ with Swift/PyObjC ScreenCaptureKit fallback.
 - **Local Whisper transcription** — `faster-whisper` on Windows with optional CUDA, `lightning-whisper-mlx` on Apple Silicon with Metal. CPU fallback path for non-GPU machines.
-- **Local AI add-ons (optional)** — speaker diarization and transcript summaries with explicit setup and local-only execution. Diarization uses `pyannote/speaker-diarization-community-1` (Windows CUDA, macOS Apple Silicon MPS). Summaries use pinned local `llama.cpp` runtime/model setup with History integration.
+- **Local AI add-ons (optional)** — speaker diarization and transcript summaries with explicit setup and local-only execution. Speaker identification is exclusive **Speakrs** (token-free; Windows CUDA / macOS Apple Silicon CoreML) or **Pyannote** (`pyannote/speaker-diarization-community-1`; Windows CUDA / macOS Apple Silicon MPS). Summaries use pinned local `llama.cpp` runtime/model setup with History integration.
 - **Meeting history** — persisted under the user-data folder with a unique meeting ID, browseable list, transcript viewer, and synchronized audio playback.
-- **Cross-platform installers** — Windows NSIS and macOS DMG with embedded Python runtime, ffmpeg, and the bundled native macOS audio helper.
+- **Cross-platform installers** — Windows NSIS and macOS DMG with embedded Python runtime, ffmpeg, `speakrs-cli`, and the bundled native macOS audio helper.
 - **GPU acceleration** — CUDA on Windows, Metal/MLX on Apple Silicon.
 - **Opus compression** — ~95% size reduction vs WAV (≈ 23 MB for a 40-minute meeting), with WAV fallback if ffmpeg fails or output verification fails.
 - **Model preloading** — improves first-time experience by warming the model in the background.
@@ -68,7 +68,7 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 
 ## In progress
 
-_No major product initiative in flight after v2.6.0. See Planned below and root [`todo.md`](../../todo.md)._
+- **Speakrs speaker identification** — exclusive Speakrs / Pyannote selector on `feature/speakrs-diarization`. New users default Speakrs; existing Pyannote installs stay until the user switches. Soak and packaged re-smoke are still open (see root [`todo.md`](../../todo.md)).
 
 ## Planned
 

@@ -22,6 +22,7 @@ These components are included when you build installers via
 | [ffmpeg](https://ffmpeg.org/) | Opus compression after recording | **GPLv3** (typical third-party builds) | See [legal/ffmpeg-SOURCE-OFFER.txt](legal/ffmpeg-SOURCE-OFFER.txt) and [legal/FFMPEG-COMPLIANCE.json](legal/FFMPEG-COMPLIANCE.json). Windows: gyan.dev essentials build. macOS: shaka-project/static-ffmpeg-binaries arm64 static build. Windows builds may include `legal/ffmpeg-upstream-*` copied from the gyan.dev archive. |
 | Python packages in `requirements-*-build.txt` | Recording, transcription, HF downloads | Mostly MIT / BSD / Apache-2.0 | Non-exhaustive list below |
 | macOS `audiocapture-helper` (Swift) | Desktop audio capture | Same as AvaNevis (MIT) unless otherwise noted in `swift/` | |
+| `speakrs-cli` | Token-free speaker-identification engine (optional add-on) | Apache-2.0 | Built from `native/speakrs-cli` (Speakrs 0.5.0) and bundled under `Resources/bin/`. Model packs and the Windows ONNX Runtime archive are setup-time downloads, not installer-bundled. |
 
 ### Notable bundled Python packages
 
@@ -78,7 +79,8 @@ same source notices are installed under
 | `speakrs` 0.5.0 | avencera / Praveen Perera | [source](https://github.com/avencera/speakrs/tree/v0.5.0) | Apache-2.0; Copyright 2026 Praveen Perera | AvaNevis selects the offline platform file set and repackages it with notices |
 | ONNX Runtime 1.27.1 CUDA 12 | Microsoft Corporation | [release](https://github.com/microsoft/onnxruntime/releases/tag/v1.27.1) | MIT; Copyright (c) Microsoft Corporation | AvaNevis selectively extracts five required DLLs; binaries unmodified |
 
-Full pack attribution: [legal/speakrs-model-pack/ATTRIBUTION.md](legal/speakrs-model-pack/ATTRIBUTION.md).
+**Attribution (CC BY 4.0):** When using Speakrs speaker identification, credit the CC BY pack components, for example:  
+*Speaker identification uses [Speakrs](https://github.com/avencera/speakrs) (Apache-2.0) with WeSpeaker embeddings and pyannote PLDA/VBx parameters (CC BY 4.0).*
 
 ### Optional meeting summaries — Qwen + llama.cpp
 
@@ -100,7 +102,7 @@ Full pack attribution: [legal/speakrs-model-pack/ATTRIBUTION.md](legal/speakrs-m
 
 ## 4. Trademarks
 
-Names such as **Whisper**, **Qwen**, **pyannote**, **Hugging Face**, **Electron**, **NVIDIA**, and **CUDA** are trademarks of their respective owners. AvaNevis uses them only to describe compatible components and does not claim endorsement.
+Names such as **Whisper**, **Qwen**, **pyannote**, **Speakrs**, **Hugging Face**, **Electron**, **NVIDIA**, and **CUDA** are trademarks of their respective owners. AvaNevis uses them only to describe compatible components and does not claim endorsement.
 
 ---
 
@@ -122,4 +124,4 @@ Installers intentionally omit the full source tarball to save size; the release 
 
 For license questions about AvaNevis itself, open a GitHub Discussion or Issue on the project repository. For legal advice about your specific distribution, consult a qualified attorney.
 
-*Last updated for AvaNevis 2.1.x open-source distribution.*
+*Last updated for AvaNevis 2.6.x with optional Speakrs / Pyannote speaker identification.*

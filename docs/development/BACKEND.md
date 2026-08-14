@@ -16,7 +16,8 @@ For cross-process invariants (recorder stdout JSON, compute queue, AI add-ons, p
 - `backend/transcription/faster_whisper_transcriber.py` — Windows/default Whisper transcription.
 - `backend/transcription/mlx_whisper_transcriber.py` — Apple Silicon MLX transcription.
 - `backend/diarization/guided_transcription.py` — diarization-first speaker-guided transcription.
-- `backend/diarization/diarization_pipeline.py` — local pyannote diarization runner and speaker merge.
+- `backend/diarization/diarization_pipeline.py` — engine dispatch (`--engine speakrs|pyannote`), pyannote runner, and speaker merge.
+- `backend/diarization/speakrs_runner.py` — token-free Speakrs CLI wrapper (Windows CUDA / macOS CoreML).
 - `backend/summaries/summary_runner.py` — local summary generation and sidecar output.
 
 ### Shared / extracted helpers (post-refactor)

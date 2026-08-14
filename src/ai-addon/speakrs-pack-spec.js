@@ -283,6 +283,51 @@ function buildSpeakrsSourceArtifacts(platformOrKey, arch) {
   }));
 }
 
+function formatSpeakrsProgressSize(sizeBytes) {
+  const bytes = Number(sizeBytes);
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return '';
+  }
+  const mb = bytes / (1024 * 1024);
+  if (mb >= 1) {
+    const rounded = mb >= 10 ? Math.round(mb) : Math.round(mb * 10) / 10;
+    return `${rounded} MB`;
+  }
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+function getSpeakrsSetupProgressCopy(artifact = {}) {
+  const sizeLabel = formatSpeakrsProgressSize(artifact.sizeBytes);
+  const sized = (label) => (sizeLabel ? `${label} (${sizeLabel}).` : `${label}.`);
+  switch (artifact.kind) {
+    case 'model-pack':
+      return {
+        downloading: sized('Downloading Speakrs speaker model'),
+        installing: 'Installing Speakrs speaker model.',
+      };
+    case 'ort-archive':
+      return {
+        downloading: sized('Downloading ONNX Runtime for Speakrs CUDA'),
+        installing: 'Installing ONNX Runtime for Speakrs CUDA.',
+      };
+    case 'cuda-runtime-wheel':
+      return {
+        downloading: sized('Downloading CUDA runtime library (cudart)'),
+        installing: 'Installing CUDA runtime library (cudart).',
+      };
+    case 'cufft-wheel':
+      return {
+        downloading: sized('Downloading CUDA FFT library (cufft)'),
+        installing: 'Installing CUDA FFT library (cufft).',
+      };
+    default:
+      return {
+        downloading: sized('Downloading Speakrs runtime'),
+        installing: 'Installing Speakrs runtime.',
+      };
+  }
+}
+
 assertPinnedRevision();
 
 module.exports = {
@@ -304,6 +349,7 @@ module.exports = {
   getSpeakrsModelPackArtifact,
   getSpeakrsRequiredRuntimeDllNames,
   getSpeakrsRuntimeArtifacts,
+  getSpeakrsSetupProgressCopy,
   getSpeakrsSourceFiles,
   getSpeakrsSourceTotalBytes,
   isPinnedSha256,

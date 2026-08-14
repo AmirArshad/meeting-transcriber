@@ -10,8 +10,11 @@ const {
   buildDiarizationEngineCards,
   getDiarizationEngineCard,
   getDiarizationRemoveConfirmMessage,
+  getDiarizationSetupButtonLabel,
   getDiarizationSwitchConfirmMessage,
+  getDiarizationTokenInputPlaceholder,
   isAiAddonProgressPhase,
+  isAiAddonSetupLockingControls,
   isAiAddonTerminalStatus,
   isSpeakrsPackagedCliMissingMessage,
   readDiarizationSetupToken,
@@ -37,10 +40,36 @@ test('isAiAddonProgressPhase recognizes active progress phases', () => {
   assert.equal(isAiAddonProgressPhase({ phase: 'downloading' }), true);
   assert.equal(isAiAddonProgressPhase({ phase: 'downloading-runtime' }), true);
   assert.equal(isAiAddonProgressPhase({ phase: 'downloading-dependencies' }), true);
+  assert.equal(isAiAddonProgressPhase({ phase: 'extracting' }), true);
   assert.equal(isAiAddonProgressPhase({ phase: 'extracting-runtime' }), true);
   assert.equal(isAiAddonProgressPhase({ phase: 'validating' }), true);
   assert.equal(isAiAddonProgressPhase({ phase: 'idle' }), false);
   assert.equal(isAiAddonProgressPhase(null), false);
+});
+
+test('isAiAddonSetupLockingControls ignores leftover progress after Ready', () => {
+  assert.equal(isAiAddonSetupLockingControls({ featureStatus: 'downloading' }), true);
+  assert.equal(isAiAddonSetupLockingControls({ featureStatus: 'validating' }), true);
+  assert.equal(isAiAddonSetupLockingControls({
+    featureStatus: 'ready',
+    progressActive: true,
+  }), false);
+  assert.equal(isAiAddonSetupLockingControls({
+    featureStatus: 'error',
+    progressActive: true,
+  }), false);
+  assert.equal(isAiAddonSetupLockingControls({
+    featureStatus: 'notConfigured',
+    progressActive: true,
+  }), true);
+  assert.equal(isAiAddonSetupLockingControls({
+    featureStatus: undefined,
+    progressActive: true,
+  }), true);
+  assert.equal(isAiAddonSetupLockingControls({
+    featureStatus: 'ready',
+    progressActive: false,
+  }), false);
 });
 
 test('Speakrs is Recommended only on Apple Silicon and uses selector copy', () => {
@@ -82,7 +111,7 @@ test('new users resolve to Speakrs and existing pyannote stays selected', () => 
 test('switch confirm copy matches the exclusive selector table', () => {
   assert.equal(
     getDiarizationSwitchConfirmMessage({ targetEngine: 'speakrs', platform: 'win32' }),
-    'Switch to Speakrs? This removes the current speaker model, including your saved Hugging Face token and about 2–4 GB of files. Speakrs does not need an account.',
+    'Switch to Speakrs? This removes the current speaker model (about 2–4 GB). Your saved Hugging Face token is kept so you can switch back to Pyannote without pasting it again. Speakrs does not need an account.',
   );
   assert.equal(
     getDiarizationSwitchConfirmMessage({ targetEngine: 'pyannote', platform: 'win32' }),
@@ -93,8 +122,11 @@ test('switch confirm copy matches the exclusive selector table', () => {
     'Switch to Pyannote? This removes Speakrs (about 800 MB). Pyannote needs a Hugging Face account and a larger download.',
   );
   assert.match(getDiarizationRemoveConfirmMessage({ engine: 'pyannote' }), /Pyannote.*token/i);
-  assert.match(getDiarizationRemoveConfirmMessage({ engine: 'speakrs' }), /Speakrs/);
-  assert.doesNotMatch(getDiarizationRemoveConfirmMessage({ engine: 'speakrs' }), /token/i);
+  assert.match(getDiarizationRemoveConfirmMessage({ engine: 'speakrs' }), /Speakrs.*token/i);
+  assert.equal(
+    getDiarizationTokenInputPlaceholder(),
+    'Leave blank to reuse a saved token, or paste a new one',
+  );
 });
 
 test('switch confirm is required only when the other engine has local state', () => {
@@ -163,4 +195,44 @@ test('setup reads only the initiating surface token and never sends Speakrs a to
   assert.equal(shouldClearDiarizationTokenFields({ selectedEngine: 'speakrs' }), true);
   assert.equal(shouldClearDiarizationTokenFields({ selectedEngine: 'pyannote' }), false);
   assert.equal(shouldClearDiarizationTokenFields({ selectedEngine: 'pyannote', setupAttemptEnded: true }), true);
+});
+
+test('setup button reads Switch model only when the other engine is installed', () => {
+  assert.equal(getDiarizationSetupButtonLabel({
+    selectedEngine: 'pyannote',
+    installedEngine: 'speakrs',
+    hasOtherEngineLocalState: true,
+  }), 'Switch model');
+  assert.equal(getDiarizationSetupButtonLabel({
+    selectedEngine: 'speakrs',
+    installedEngine: 'pyannote',
+    hasOtherEngineLocalState: true,
+  }), 'Switch model');
+  assert.equal(getDiarizationSetupButtonLabel({
+    selectedEngine: 'speakrs',
+    installedEngine: 'speakrs',
+    hasOtherEngineLocalState: true,
+  }), 'Set Up');
+  assert.equal(getDiarizationSetupButtonLabel({
+    selectedEngine: 'pyannote',
+    installedEngine: 'speakrs',
+    hasOtherEngineLocalState: false,
+  }), 'Set Up');
+});
+
+test('hidden AI add-on fields beat display:flex so Speakrs hides token and speaker-count', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'renderer', 'styles.css'), 'utf8');
+  assert.match(css, /\.ai-addon-field\s*\{[^}]*display:\s*flex/);
+  assert.match(css, /\.ai-addon-field\[hidden\]\s*\{[^}]*display:\s*none/);
+});
+
+test('Settings and Home apply Switch model and restore engine radios from control state', () => {
+  const appJs = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'renderer', 'app.js'), 'utf8');
+  assert.match(appJs, /getDiarizationSetupButtonLabel/);
+  assert.match(appJs, /canSelectEngine/);
+  assert.match(appJs, /radio\.disabled\s*=\s*!.*canSelectEngine/);
+  assert.match(appJs, /isAiAddonSetupLockingControls/);
+  assert.match(appJs, /setupActive:\s*diarizationSetupLocking/);
+  assert.doesNotMatch(appJs, /setupActive:\s*aiAddonDownloadState\.diarization\.active/);
+  assert.match(appJs, /getDiarizationTokenInputPlaceholder/);
 });

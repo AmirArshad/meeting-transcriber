@@ -6,6 +6,7 @@ This document explains how to build AvaNevis from source for the supported packa
 
 - Node.js 22.12+ installed; Node 24 is used in CI
 - Internet connection (for downloading Python and ffmpeg during build)
+- Rust/`cargo` with the toolchain in `native/speakrs-cli/rust-toolchain.toml` (needed to build bundled `speakrs-cli`)
 - Windows 10/11 (64-bit) for Windows builds
 - macOS 13+ on Apple Silicon for macOS builds
 - ~2GB free disk space for build artifacts
@@ -44,6 +45,7 @@ This step downloads and prepares the packaged runtime resources for the current 
 - Bundled Python runtime
 - Python dependencies from the platform-specific requirements file
 - ffmpeg binary
+- Bundled `speakrs-cli` (built from `native/speakrs-cli`) plus its validation fixture WAV
 - macOS Swift `audiocapture-helper` binary when building on macOS
 
 ```bash
@@ -59,7 +61,8 @@ The script will:
 2. Verify checksums for runtime downloads and the pinned pip bootstrap wheel
 3. Extract Python, bootstrap pip from the pinned wheel, and install platform-specific dependencies
 4. Download and verify ffmpeg
-5. Build and stage the Swift helper on macOS
+5. Build and stage `speakrs-cli` (fails the build if the binary is missing or fails integrity checks)
+6. Build and stage the Swift helper on macOS
 
 All resources are stored in `build/resources/` and then bundled via `electron-builder`.
 
@@ -109,12 +112,16 @@ The installer includes:
 - ✅ Embedded Python 3.11.9 runtime
 - ✅ Platform Python stack from `requirements-*-build.txt` (Windows: `faster-whisper`, `soxr`, `numpy`, …; macOS: `lightning-whisper-mlx`, `soxr`, `scipy`, `mlx`, …; `torch` is installed during build then removed). See [installer size notes](../completed/INSTALLER_SIZE_NOTES.md).
 - ✅ ffmpeg binary
+- ✅ `speakrs-cli` (Speakrs engine binary; model packs stay setup-time)
 - ✅ Backend Python scripts
+- ✅ Third-party notices under `resources/legal/`
 
-**NOT included (downloaded on first use):**
+**NOT included (downloaded on first use or during explicit Settings setup):**
 
 - ❌ Whisper AI models (~150-1500MB depending on model size)
 - ❌ CUDA/GPU libraries (optional, user opt-in)
+- ❌ Speakrs model packs and the Windows ONNX Runtime 1.27.1 archive
+- ❌ Pyannote / PyTorch speaker-identification dependencies
 
 ## Build Artifacts
 
@@ -208,7 +215,7 @@ Once built, you can distribute the installer:
 - Host on **GitHub Releases** (recommended — CI attaches FFmpeg source and legal files; see [RELEASE_COMPLIANCE.md](RELEASE_COMPLIANCE.md))
 - Share direct download link
 
-**Legal:** Installers bundle GPLv3 ffmpeg. Tagged releases must include `ffmpeg-8.0.1.tar.xz` and third-party notices on the same release page. See [THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md).
+**Legal:** Installers bundle GPLv3 ffmpeg and the Apache-2.0 Speakrs CLI. Tagged releases must include `ffmpeg-8.0.1.tar.xz` and third-party notices on the same release page. See [THIRD_PARTY_NOTICES.md](../../THIRD_PARTY_NOTICES.md).
 
 **Installer size (approximate):** Windows ~200–300 MB; macOS ~700–900 MB after arm64 ffmpeg + torch bundle trim (plus Whisper models on first use).
 

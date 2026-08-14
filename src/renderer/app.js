@@ -70,8 +70,11 @@ const {
 const {
   buildDiarizationEngineCards,
   getDiarizationRemoveConfirmMessage,
+  getDiarizationSetupButtonLabel,
   getDiarizationSwitchConfirmMessage,
+  getDiarizationTokenInputPlaceholder,
   isAiAddonProgressPhase,
+  isAiAddonSetupLockingControls,
   isAiAddonTerminalStatus,
   readDiarizationSetupToken,
   resolveDiarizationSetupSource,
@@ -1484,15 +1487,21 @@ function updateHomeAiAddonCTA(aiStatus) {
     });
     applyDiarizationEngineFields(selectedEngine);
     const diarization = aiStatus && aiStatus.features ? aiStatus.features.diarization : null;
+    const diarizationControlState = buildAiAddonControlState({
+      feature: diarization,
+      type: 'diarization',
+      setupActive: isAiAddonSetupLockingControls({
+        featureStatus: diarization && diarization.status,
+        progressActive: aiAddonDownloadState.diarization.active,
+      }),
+      unsupported: diarization && diarization.status === 'unsupported',
+      selectedEngine,
+    });
+    applyDiarizationEngineRadioState(diarizationControlState.canSelectEngine);
     applyAiAddonButtonState({
       setupButton: document.getElementById('home-setup-diarization-btn'),
-      controlState: buildAiAddonControlState({
-        feature: diarization,
-        type: 'diarization',
-        setupActive: aiAddonDownloadState.diarization.active,
-        unsupported: diarization && diarization.status === 'unsupported',
-        selectedEngine,
-      }),
+      controlState: diarizationControlState,
+      setupLabel: getActiveDiarizationSetupLabel(diarization, selectedEngine),
     });
     speakerPrompt.style.display = 'flex';
     return;
@@ -4392,6 +4401,10 @@ function hideAiAddonProgressSoon(feature, delayMs = 2500) {
     const state = aiAddonDownloadState[feature];
     if (state && !state.cancelling) {
       setAiAddonProgressState(feature, { active: false, cancelling: false });
+      if (aiAddonStatusSnapshot) {
+        updateAiAddonSettings(aiAddonStatusSnapshot);
+        updateHomeAiAddonCTA(aiAddonStatusSnapshot);
+      }
     }
   }, delayMs);
 }
@@ -4562,10 +4575,13 @@ function setAiAddonControlsDisabled(disabled) {
   });
 }
 
-function applyAiAddonButtonState({ setupButton, validateButton, removeButton, controlState }) {
+function applyAiAddonButtonState({ setupButton, validateButton, removeButton, controlState, setupLabel }) {
   const state = controlState || { canConfigure: false, canValidate: false, canRemove: false };
   if (setupButton) {
     setupButton.disabled = !state.canConfigure;
+    if (setupLabel) {
+      setupButton.textContent = setupLabel;
+    }
   }
   if (validateButton) {
     validateButton.disabled = !state.canValidate;
@@ -4573,6 +4589,20 @@ function applyAiAddonButtonState({ setupButton, validateButton, removeButton, co
   if (removeButton) {
     removeButton.disabled = !state.canRemove;
   }
+}
+
+function applyDiarizationEngineRadioState(canSelectEngine) {
+  document.querySelectorAll('.diarization-engine-radio').forEach((radio) => {
+    radio.disabled = !canSelectEngine;
+  });
+}
+
+function getActiveDiarizationSetupLabel(diarization, selectedEngine) {
+  return getDiarizationSetupButtonLabel({
+    selectedEngine,
+    installedEngine: resolveSelectedDiarizationEngine(diarization),
+    hasOtherEngineLocalState: hasDiarizationLocalState(diarization),
+  });
 }
 
 function appendAiAddonLog(text) {
@@ -4626,9 +4656,15 @@ function updateAiAddonSettings(status) {
   const diarization = status && status.features && status.features.diarization;
   const summary = status && status.features && status.features.summary;
   const diarizationUnsupported = diarization && diarization.status === 'unsupported';
-  const hasActiveSetup = aiAddonDownloadState.diarization.active || aiAddonDownloadState.summary.active
-    || (diarization && (diarization.status === 'downloading' || diarization.status === 'validating'))
-    || (summary && (summary.status === 'downloading' || summary.status === 'validating'));
+  const diarizationSetupLocking = isAiAddonSetupLockingControls({
+    featureStatus: diarization && diarization.status,
+    progressActive: aiAddonDownloadState.diarization.active,
+  });
+  const summarySetupLocking = isAiAddonSetupLockingControls({
+    featureStatus: summary && summary.status,
+    progressActive: aiAddonDownloadState.summary.active,
+  });
+  const hasActiveSetup = diarizationSetupLocking || summarySetupLocking;
   const overallStatus = hasActiveSetup
     ? 'downloading'
     : ((diarization && diarization.status === 'ready') || (summary && summary.status === 'ready')
@@ -4643,7 +4679,7 @@ function updateAiAddonSettings(status) {
     const diarizationControlState = buildAiAddonControlState({
       feature: diarization,
       type: 'diarization',
-      setupActive: aiAddonDownloadState.diarization.active,
+      setupActive: diarizationSetupLocking,
       unsupported: diarizationUnsupported,
       selectedEngine,
     });
@@ -4653,6 +4689,7 @@ function updateAiAddonSettings(status) {
       arch: homePromptContext.arch,
     });
     applyDiarizationEngineFields(selectedEngine);
+    applyDiarizationEngineRadioState(diarizationControlState.canSelectEngine);
     const speakerCount = document.getElementById('diarization-speaker-count');
     if (speakerCount) {
       speakerCount.value = String(diarization.speakerCount || 'auto');
@@ -4662,12 +4699,12 @@ function updateAiAddonSettings(status) {
     const tokenInput = document.getElementById('diarization-token-input');
     if (tokenInput) {
       tokenInput.disabled = !diarizationControlState.canConfigure;
-      tokenInput.placeholder = diarizationUnsupported ? 'Unavailable on this platform' : 'hf_...';
+      tokenInput.placeholder = diarizationUnsupported ? 'Unavailable on this platform' : getDiarizationTokenInputPlaceholder();
     }
     const homeTokenInput = document.getElementById('home-diarization-token-input');
     if (homeTokenInput) {
       homeTokenInput.disabled = !diarizationControlState.canConfigure;
-      homeTokenInput.placeholder = diarizationUnsupported ? 'Unavailable on this platform' : 'hf_...';
+      homeTokenInput.placeholder = diarizationUnsupported ? 'Unavailable on this platform' : getDiarizationTokenInputPlaceholder();
     }
 
     applyAiAddonButtonState({
@@ -4675,18 +4712,20 @@ function updateAiAddonSettings(status) {
       validateButton: document.getElementById('validate-diarization-btn'),
       removeButton: document.getElementById('remove-diarization-btn'),
       controlState: diarizationControlState,
+      setupLabel: getActiveDiarizationSetupLabel(diarization, selectedEngine),
     });
     applyAiAddonButtonState({
       setupButton: document.getElementById('home-setup-diarization-btn'),
       controlState: diarizationControlState,
+      setupLabel: getActiveDiarizationSetupLabel(diarization, selectedEngine),
     });
 
     const statusText = document.getElementById('diarization-status-text');
     if (statusText) {
       statusText.textContent = getDiarizationSetupMessage(diarization);
     }
-    if (!aiAddonDownloadState.diarization.active && isAiAddonTerminalStatus(diarization.status)) {
-      setAiAddonProgressState('diarization', { active: false, cancelling: false });
+    if (aiAddonDownloadState.diarization.active && isAiAddonTerminalStatus(diarization.status) && !aiAddonProgressHideTimers.diarization) {
+      hideAiAddonProgressSoon('diarization', 2500);
     }
     updateDiarizationFootprint(diarization);
   }
@@ -4696,7 +4735,7 @@ function updateAiAddonSettings(status) {
     const summaryControlState = buildAiAddonControlState({
       feature: summary,
       type: 'summary',
-      setupActive: aiAddonDownloadState.summary.active,
+      setupActive: summarySetupLocking,
     });
     const profileSelect = document.getElementById('summary-profile-select');
     if (profileSelect) {
@@ -4716,8 +4755,8 @@ function updateAiAddonSettings(status) {
     if (statusText) {
       statusText.textContent = getSummarySetupMessage(summary);
     }
-    if (!aiAddonDownloadState.summary.active && isAiAddonTerminalStatus(summary.status)) {
-      setAiAddonProgressState('summary', { active: false, cancelling: false });
+    if (aiAddonDownloadState.summary.active && isAiAddonTerminalStatus(summary.status) && !aiAddonProgressHideTimers.summary) {
+      hideAiAddonProgressSoon('summary', 2500);
     }
     updateSummaryFootprint(summary);
   }

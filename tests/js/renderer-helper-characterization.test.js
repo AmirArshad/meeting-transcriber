@@ -79,6 +79,7 @@ const EXTRACTED_PURE_HELPER_NAMES = [
   'formatBytes',
   'isAiAddonTerminalStatus',
   'isAiAddonProgressPhase',
+  'isAiAddonSetupLockingControls',
   'formatAiAddonProgressText',
   'clearElement',
   'meetingIdsEqual',
@@ -126,6 +127,7 @@ test('extracted pure helpers characterize summary/AI gating without DOM access',
   assert.equal(isAiAddonTerminalStatus('ready'), true);
   assert.equal(isAiAddonTerminalStatus('downloading'), false);
   assert.equal(isAiAddonProgressPhase({ phase: 'downloading' }), true);
+  assert.equal(isAiAddonProgressPhase({ phase: 'extracting' }), true);
   assert.equal(isAiAddonProgressPhase({ phase: 'idle' }), false);
 
   assert.equal(

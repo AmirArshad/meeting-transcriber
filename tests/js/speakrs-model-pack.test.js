@@ -14,6 +14,7 @@ const {
   SPEAKRS_ORT_RUNTIME_ARTIFACTS,
   buildSpeakrsSourceDownloadUrl,
   getSpeakrsRuntimeArtifacts,
+  getSpeakrsSetupProgressCopy,
   getSpeakrsSourceFiles,
   getSpeakrsSourceTotalBytes,
   normalizeSpeakrsRelativePath,
@@ -64,6 +65,25 @@ test('speakrs pack spec pins the official ORT 1.27.1 cuda12 archive and NVIDIA w
     buildSpeakrsSourceDownloadUrl('wespeaker-fbank.onnx'),
     /huggingface\.co\/avencera\/speakrs-models\/resolve\/5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f\/wespeaker-fbank\.onnx$/,
   );
+});
+
+test('Speakrs setup progress copy names each Windows runtime artifact', () => {
+  const runtime = getSpeakrsRuntimeArtifacts('win32-x64');
+  const modelCopy = getSpeakrsSetupProgressCopy({ kind: 'model-pack', sizeBytes: 208765985 });
+  const ortCopy = getSpeakrsSetupProgressCopy(runtime[0]);
+  const cudartCopy = getSpeakrsSetupProgressCopy(runtime[1]);
+  const cufftCopy = getSpeakrsSetupProgressCopy(runtime[2]);
+
+  assert.match(modelCopy.downloading, /speaker model \(199 MB\)/);
+  assert.equal(modelCopy.installing, 'Installing Speakrs speaker model.');
+  assert.match(ortCopy.downloading, /ONNX Runtime for Speakrs CUDA \(311 MB\)/);
+  assert.equal(ortCopy.installing, 'Installing ONNX Runtime for Speakrs CUDA.');
+  assert.match(cudartCopy.downloading, /CUDA runtime library \(cudart\) \(3\.4 MB\)/);
+  assert.equal(cudartCopy.installing, 'Installing CUDA runtime library (cudart).');
+  assert.match(cufftCopy.downloading, /CUDA FFT library \(cufft\) \(191 MB\)/);
+  assert.equal(cufftCopy.installing, 'Installing CUDA FFT library (cufft).');
+  assert.notEqual(ortCopy.downloading, modelCopy.downloading);
+  assert.notEqual(cudartCopy.downloading, ortCopy.downloading);
 });
 
 test('speakrs pack script refuses a source tree that does not match pinned checksums', () => {

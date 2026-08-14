@@ -2607,6 +2607,7 @@ test('setup speakrs deletes an existing pyannote tree first and keeps shared CUD
   assert.equal(status.features.diarization.status, 'ready');
   assert.equal(status.features.diarization.setupComplete, true);
   assert.equal(status.features.diarization.tokenStatus.hasToken, false);
+  assert.equal(fsModule.existsSync(getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace)), true);
   assert.ok(fsModule.removed.some((targetPath) => targetPath.includes(path.join('dependencies', 'diarization'))));
   assert.ok(fsModule.removed.some((targetPath) => targetPath.includes(path.join('models', 'diarization', 'hub'))));
   assert.equal(fsModule.existsSync(protectedFiles.cudaPip), true);
@@ -2694,10 +2695,10 @@ test('exclusive switch reserves disk mutation only around delete and releases be
   assert.equal(reservedDuringValidation, false);
   assert.equal(reserved, false);
   assert.equal(status.features.diarization.status, 'ready');
-  assert.equal(fsModule.existsSync(getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace)), false);
+  assert.equal(fsModule.existsSync(getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace)), true);
 });
 
-test('token-only Pyannote state is uninstalled when switching to Speakrs', async () => {
+test('token-only Pyannote state keeps the saved token when switching to Speakrs', async () => {
   const fsModule = createMemoryFs();
   const userDataDir = '/tmp/AvaNevis';
   const catalog = createSpeakrsTestCatalog();
@@ -2721,7 +2722,49 @@ test('token-only Pyannote state is uninstalled when switching to Speakrs', async
 
   assert.equal(status.features.diarization.engine, 'speakrs');
   assert.equal(status.features.diarization.status, 'ready');
-  assert.equal(fsModule.existsSync(tokenPath), false);
+  assert.equal(fsModule.existsSync(tokenPath), true);
+});
+
+test('empty Pyannote token reuses the saved token after a Speakrs switch', async () => {
+  const fsModule = createMemoryFs();
+  const userDataDir = '/tmp/AvaNevis';
+  const speakrsCatalog = createSpeakrsTestCatalog();
+  const pyannoteCatalog = createCatalogWithMockDiarizationSourceArtifact('win32-x64');
+  const cliPath = writeSpeakrsCli(fsModule, userDataDir);
+  const tokenPath = getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace);
+  fsModule.writeFileSync(tokenPath, Buffer.from('encrypted:hf_validtoken123'));
+
+  const speakrsStatus = await setupDiarizationAddon({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    engine: 'speakrs',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog: speakrsCatalog,
+    env: { SPEAKRS_CLI_PATH: cliPath },
+    downloader: async ({ destinationPath }) => fsModule.writeFileSync(destinationPath, SPEAKRS_TEST_BYTES),
+    extractor: createSpeakrsTestExtractor(fsModule),
+  });
+  assert.equal(speakrsStatus.features.diarization.status, 'ready');
+  assert.equal(fsModule.existsSync(tokenPath), true);
+
+  const pyannoteStatus = await setupDiarizationAddon({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    engine: 'pyannote',
+    token: '',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog: pyannoteCatalog,
+    downloader: createSourceArtifactDownloader(fsModule),
+    dependencyInstaller: stubAnyDiarizationDependencyInstaller,
+  });
+
+  assert.equal(pyannoteStatus.features.diarization.engine, 'pyannote');
+  assert.equal(pyannoteStatus.features.diarization.status, 'ready');
+  assert.equal(pyannoteStatus.features.diarization.tokenStatus.hasToken, true);
 });
 
 test('failed Pyannote switch preflight leaves Speakrs ready and local files unchanged', async () => {
@@ -2903,6 +2946,8 @@ test('remove speakrs setup leaves engine as the last choice', async () => {
   const userDataDir = '/tmp/AvaNevis';
   const catalog = createSpeakrsTestCatalog();
   const cliPath = writeSpeakrsCli(fsModule, userDataDir);
+  const tokenPath = getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace);
+  fsModule.writeFileSync(tokenPath, Buffer.from('encrypted:hf_validtoken123'));
 
   await setupDiarizationAddon({
     userDataDir,
@@ -2930,6 +2975,7 @@ test('remove speakrs setup leaves engine as the last choice', async () => {
   assert.equal(status.features.diarization.status, 'notConfigured');
   assert.equal(status.features.diarization.engine, 'speakrs');
   assert.equal(status.features.diarization.setupComplete, false);
+  assert.equal(fsModule.existsSync(tokenPath), false);
 });
 
 test('packaged Speakrs setup rejects a missing bundled CLI before download', async () => {

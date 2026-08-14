@@ -39,7 +39,7 @@ Everything below was re-verified against crates.io, docs.rs, the speakrs GitHub 
 3. **CLI is bundled in the installer (built in CI, both platforms); model packs + Windows ORT runtime archive are setup-time downloads.** Keeps the installer lean and the GPU stack out of non-diarization users' disk. **Feature flags (binding):** `default-features = false` plus **`default-linalg`** plus the platform features — never platform-only (that fails the crate's BLAS compile-time check). Mac: `["default-linalg", "coreml"]`. Windows: `["default-linalg", "cuda", "load-dynamic"]`. CI CPU smoke may use `["default-linalg"]` only. If the macOS binary exceeds 80 MB in Task 0 (OpenBLAS + static ort), switch macOS to `load-dynamic` too and move the ort dylib into the model pack. Record Windows exe size **with static MKL** — that can dwarf the “small exe” story.
 4. **Merge/labeling stays in Python.** `speaker_segments.py` (dominant-overlap merge, `Speaker N` relabeling, `Unknown`, 12 s coarse split) is pure Python with no torch dependency and is fully unit-tested. The CLI emits only raw turns.
 5. **Accelerator-only policy is unchanged in this migration.** `cpu` mode exists in the CLI for CI smoke tests only; product setup still requires CUDA (win32) / Apple Silicon (darwin-arm64). Relaxing that is a separate product decision the CLI makes cheap later.
-6. **Exclusive user-selected engine (v4 — replaces the catalog-constant flip).** Both engines stay in the product. The user picks one. **Only one may be installed.** Switching uninstalls the other (models + engine-specific caches + pyannote token). New / unset users **default to speakrs**. Existing pyannote installs stay on pyannote until they switch. `AVANEVIS_DIARIZATION_ENGINE` is QA spawn-only (does not install both). **No Task 7 silent flip. Task 8 is parked.** `-fast` stays off the default (locked #2). Do not claim a Windows speed or DER win vs pyannote CUDA.
+6. **Exclusive user-selected engine (v4 — replaces the catalog-constant flip).** Both engines stay in the product. The user picks one. **Only one may be installed.** Switching uninstalls the other (models + engine-specific caches). The Pyannote Hugging Face token stays in `safeStorage` across a switch to Speakrs so switch-back can reuse it; **Remove** still deletes the token. New / unset users **default to speakrs**. Existing pyannote installs stay on pyannote until they switch. `AVANEVIS_DIARIZATION_ENGINE` is QA spawn-only (does not install both). **No Task 7 silent flip. Task 8 is parked.** `-fast` stays off the default (locked #2). Do not claim a Windows speed or DER win vs pyannote CUDA.
 
 ### Execution guardrails (binding on the implementing agent)
 
@@ -178,15 +178,15 @@ Inside `features.diarization` (or a sibling `diarizationUi` object if that keeps
 
 - `userData/ai-addons/dependencies/diarization/`
 - `userData/ai-addons/models/diarization/hub` and `.../xet` / `.locks` under the **diarization** HF cache only (`getDiarizationCacheEnv` dir — not `AVANEVIS_TRANSCRIPTION_HF_CACHE_DIR`, not `~/.cache/huggingface/hub` Whisper trees)
-- `userData/ai-addons/tokens/diarization-huggingface-token.bin`
+- `userData/ai-addons/tokens/diarization-huggingface-token.bin` **on Remove only** — keep this file when switching to Speakrs
 - Do **not** delete cuda12 pip or Whisper caches
 
 Confirm dialogs **before** the delete (renderer). Copy:
 
-- To speakrs: `Switch to Speakrs? This removes the current speaker model, including your saved Hugging Face token and about 2–4 GB of files. Speakrs does not need an account.`
+- To speakrs: `Switch to Speakrs? This removes the current speaker model (about 2–4 GB). Your saved Hugging Face token is kept so you can switch back to Pyannote without pasting it again. Speakrs does not need an account.`
 - To pyannote: `Switch to Pyannote? This removes Speakrs (about 800 MB). Pyannote needs a Hugging Face account and a larger download. On this PC it is more accurate and faster.`
 - Mac to pyannote: same minus the “more accurate and faster” sentence.
-- Remove: keep today’s destructive-removal tone; name the active engine and that the token is deleted if pyannote.
+- Remove: keep today’s destructive-removal tone; name the active engine and that any saved Hugging Face token is deleted.
 
 #### UI copy
 
@@ -434,6 +434,8 @@ Do this **before** calling Task 7 checklist green. Still no Task 7 default flip.
 
 **Validation:** `npm test`; packaged Mac: Speakrs selected → no token field, no Speakers dropdown; Pyannote selected → both visible; Ready Speakrs → select Pyannote → button reads **Switch model** and is enabled → confirm → token prompt → Speakrs pack gone. Same-audio A/B note in the benchmarks file.
 
+**2026-08-14 code:** Switch-model label, `.ai-addon-field[hidden]`, and `canSelectEngine` radio restore landed. Soak could not switch Speakrs→Pyannote because `setAiAddonControlsDisabled(true)` never re-enabled engine radios after a successful setup. Later the same day: leftover progress no longer locks the overall Downloading badge; Pyannote→Speakrs **keeps** the Hugging Face token for switch-back (Remove still deletes it). Windows substitute A/B (short history clips) plus the 11:17 CUDA soak split-identity note are in `docs/development/SPEAKRS_BENCHMARKS.md`; the Mac 10:22 clip was not on that machine. Packaged re-smoke still required. Do not invent `--speaker-count`.
+
 ### Task 8: pyannote removal — **PARKED**
 
 Do **not** implement. Pyannote stays a first-class selectable engine. Revisit only if product later drops it. Never on `feature/speakrs-diarization`.
@@ -489,6 +491,6 @@ Metrics: DER (`pyannote.metrics` offline, collar 0 + 250 ms), wall time / RTFx, 
 5. Task 4 main-process plumbing
 6. Task 5 selector UI + exclusive switch/delete
 7. Task 6 build/CI/release (merge; both engines selectable)
-8. Task 7 soak + README RAM (no flip) — **Mac 2026-08-14 in progress; selector/quality not green**
-9. Task 7a selector UX (Switch model, `[hidden]` CSS, Speakrs→Pyannote) + same-audio A/B note
+8. Task 7 soak + README RAM (no flip) — **Mac 2026-08-14 in progress; selector/quality not green. README RAM + `SPEAKRS_BENCHMARKS.md` started.**
+9. Task 7a selector UX (Switch model, `[hidden]` CSS, Speakrs→Pyannote radios) **code 2026-08-14**; same-audio Mac 10:22 still outstanding; packaged re-smoke next
 10. Task 8 parked

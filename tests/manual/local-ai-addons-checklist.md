@@ -6,11 +6,12 @@ Use this checklist when validating speaker identification or local summaries on 
 
 - [ ] Confirm no network activity occurs during transcription, diarization, or summary generation.
 - [ ] Confirm network activity occurs only when the user explicitly starts summary model/runtime setup, Whisper model setup, CUDA setup, or update checks.
-- [ ] Confirm pyannote/PyTorch dependency downloads occur only when the user explicitly starts speaker identification setup.
+- [ ] Confirm pyannote/PyTorch dependency downloads occur only when the user explicitly starts **Pyannote** speaker identification setup.
+- [ ] Confirm Speakrs model-pack / Windows ORT downloads occur only when the user explicitly starts **Speakrs** setup.
 - [ ] Confirm Hugging Face token values never appear in logs, progress events, meeting metadata, transcripts, or summaries.
 - [ ] Confirm bearer tokens, legacy `Authorization: token ...`, `token=` / `access_token=` / `api_key=` values, `X-Api-Key`, and URL credentials are redacted from setup/runtime errors.
 
-## Windows CUDA Speaker Identification
+## Windows CUDA Pyannote Speaker Identification
 
 - [ ] Use Windows 10/11 x64 with NVIDIA GPU and CUDA setup complete.
 - [ ] Enter the user's own Hugging Face token after accepting `pyannote/speaker-diarization-community-1` terms.
@@ -27,7 +28,7 @@ Use this checklist when validating speaker identification or local summaries on 
 - [ ] Confirm current transcript and History transcript show speaker labels.
 - [ ] Attempt a second diarization/summary run while one local AI backend is active and confirm the app serializes work instead of launching concurrent GPU-heavy processes.
 
-## macOS Diarization Policy
+## macOS Pyannote Diarization Policy
 
 - [ ] Use Apple Silicon macOS only; confirm Intel macOS is unsupported for speaker identification.
 - [ ] Enter the user's own Hugging Face token after accepting `pyannote/speaker-diarization-community-1` terms.
@@ -73,12 +74,15 @@ Use this checklist when validating speaker identification or local summaries on 
 - [ ] Cards stay equal height and aligned at 100–200% zoom; they stack on a narrow Settings pane rather than overflowing.
 - [ ] New-user Home speaker prompt shows the same two cards and Set Up starts Speakrs (no token field).
 - [ ] Token fields and speaker-count stay **visually** hidden while Speakrs is selected (`.ai-addon-field[hidden]` must beat `display: flex`); they appear only for Pyannote. `needsAccount` still appears for Pyannote. Switching away from Pyannote clears typed tokens. Home and Settings never mix each other's token values.
-- [ ] When the other engine is installed, Settings/Home primary button reads **Switch model** (not Set Up). Selecting the other card leaves that button enabled.
-- [ ] Switch Speakrs → Pyannote from a Ready Speakrs install: confirm copy appears, Speakrs pack/ORT is deleted, token prompt is shown, shared CUDA pip (`nvidia-cublas`) remains.
-- [ ] Switch Pyannote → Speakrs: confirm copy appears, pyannote deps/HF cache/token are deleted, token UI hides, shared CUDA pip remains. Token-only Pyannote (saved token, no model tree) still requires this confirm and still enables Remove.
-- [ ] Remove deletes only the active engine and leaves `engine` as the last choice so re-setup is one click.
+- [ ] When the other engine is installed, Settings/Home primary button reads **Switch model** (not Set Up). Selecting the other card leaves that button enabled. After setup reaches Ready, engine cards/radios must stay enabled (not stuck dimmed) so Speakrs→Pyannote is possible.
+- [ ] Switch Speakrs → Pyannote from a Ready Speakrs install: confirm copy appears, Speakrs pack/ORT is deleted, token field is shown (leave blank to reuse a saved token), shared CUDA pip (`nvidia-cublas`) remains.
+- [ ] Switch Pyannote → Speakrs: confirm copy appears, pyannote deps/HF cache are deleted, **saved Hugging Face token is kept**, token UI hides, shared CUDA pip remains. Switching back to Pyannote with an empty token field reuses that saved token. Token-only Pyannote (saved token, no model tree) still requires this confirm and still enables Remove.
+- [ ] Remove deletes only the active engine (and any saved Hugging Face token) and leaves `engine` as the last choice so re-setup is one click.
 - [ ] Setup/Remove/Switch is rejected while setup is running or compute/preload/GPU-runtime work is pending. A job that starts after setup is queued must not begin exclusive deletion.
 - [ ] Packaged missing bundled `speakrs-cli`: Home and Settings show the incomplete-install / Reinstall AvaNevis copy. Set Up is disabled for Speakrs (it cannot restore the bundled binary). Do not tell the user to re-run speaker setup. No Python `FileNotFoundError` or traceback. Dev-mode missing CLI keeps the dev copy and does not show Reinstall AvaNevis.
+- [ ] Windows Speakrs setup: no token field; downloads the model pack and ORT; Ready; a new recording uses CUDA guided transcription and writes `*.speakers.json` without token values.
+- [ ] macOS Speakrs setup: Apple Silicon CoreML-only (no CPU fallback); no token field; Ready; a new recording uses `coreml` guided transcription and writes `*.speakers.json`.
+- [ ] Settings > About credits Speakrs (Apache-2.0) and pyannote (CC BY 4.0). Open third-party notices includes the Speakrs pack table and bundled `speakrs-cli`.
 
 ## Failure Modes
 

@@ -33,7 +33,7 @@ If an area looks solid, say so briefly and stop. Prefer concrete patches over va
 ## Shared preamble
 
 ```text
-You are reviewing AvaNevis — a privacy-first Electron desktop app (mic + desktop audio → local Whisper). Windows: faster-whisper (+ optional CUDA). macOS Apple Silicon: MLX + Swift CoreAudio tap helper. Optional local AI: pyannote diarization, llama.cpp summaries. No cloud transcription / no telemetry.
+You are reviewing AvaNevis — a privacy-first Electron desktop app (mic + desktop audio → local Whisper). Windows: faster-whisper (+ optional CUDA). macOS Apple Silicon: MLX + Swift CoreAudio tap helper. Optional local AI: exclusive Speakrs (token-free) or pyannote diarization, llama.cpp summaries. No cloud transcription / no telemetry.
 
 Canonical contracts: root AGENTS.md. Do not invent a second architecture.
 
@@ -162,6 +162,9 @@ Allowed paths only:
 - src/main-process/ai-progress-helpers.js
 - src/ai-progress-sanitizer.js (if present)
 - backend/diarization/diarization_pipeline.py (token stdin / env fallback)
+- backend/diarization/speakrs_runner.py (must stay token-free)
+- src/ai-addon/speakrs-cli-integrity.js
+- src/ai-addon/speakrs-pack-spec.js
 - backend/meetings/paths.py
 - backend/common/sensitive_text.py
 - src/main.js (validateAiMetadataPaths / update-meeting-ai only)
@@ -170,6 +173,7 @@ Allowed paths only:
 
 Starting lenses (not exclusive):
 - Token in child env, logs, progress, manifests, meeting metadata
+- Speakrs setup/runtime inspecting, decrypting, or logging the Hugging Face token
 - stdin EPIPE / empty token fail-closed
 - Zip/tar traversal, symlinks, Windows reserved names
 - Host allowlist gaps or over-broad redirects; CDN rotation breakage

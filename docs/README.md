@@ -19,6 +19,7 @@ This directory separates current guides, maintainer references, completed implem
 - [Backend development notes](development/BACKEND.md)
 - [macOS icon notes](development/MACOS_ICONS.md)
 - [Local AI model catalog](development/LOCAL_AI_MODEL_CATALOG.md)
+- [Speakrs soak / benchmarks](development/SPEAKRS_BENCHMARKS.md)
 - [Release compliance](development/RELEASE_COMPLIANCE.md)
 - [Adversarial review prompts](development/ADVERSARIAL_REVIEW_PROMPTS.md)
 - [Dependabot triage](development/DEPENDABOT_TRIAGE.md) (historical May 2026)
@@ -32,6 +33,7 @@ This directory separates current guides, maintainer references, completed implem
 ## Legal And Release Notices
 
 - [Third-party notices](../THIRD_PARTY_NOTICES.md)
+- [Speakrs model-pack attribution](../legal/speakrs-model-pack/ATTRIBUTION.md)
 - [Bundled Python packages](../legal/PYTHON-BUNDLED-PACKAGES.md)
 
 ## New Initiatives

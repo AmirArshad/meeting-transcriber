@@ -26,8 +26,8 @@ Online meetings are a tax on memory. The good options for getting transcripts ba
 - **Save As anywhere** — export any transcript through Electron's native save dialog as `.md` or `.txt`.
 - **Search and bulk-manage history** — filter the meeting list, multi-select, bulk delete, replay with synchronized audio.
 - **Recovery-friendly storage** — meetings are persisted with an atomic write + cross-process file lock, with corrupt-metadata backups (`meetings.corrupt.*.json`) and filesystem rescan/import on launch or when you refresh history (not on every list reload).
-- **Optional local AI add-ons** — speaker labels and meeting summaries can be set up after install. Speaker identification uses the user's own Hugging Face token; summaries use pinned local `llama.cpp`/GGUF artifacts and run only when the user clicks Generate Summary.
-- **One-click installer** — Windows NSIS and macOS DMG with embedded Python runtime, ffmpeg, and the bundled native macOS helper. No system Python required.
+- **Optional local AI add-ons** — speaker labels and meeting summaries can be set up after install. Speaker identification is Speakrs (token-free) or Pyannote (user's own Hugging Face token) — only one engine is installed at a time. Summaries use pinned local `llama.cpp`/GGUF artifacts and run only when the user clicks Generate Summary.
+- **One-click installer** — Windows NSIS and macOS DMG with embedded Python runtime, ffmpeg, `speakrs-cli`, and the bundled native macOS helper. No system Python required.
 - **Update awareness** — checks GitHub Releases on launch and shows an in-app banner with one-click open of the release page.
 
 ## Privacy
@@ -36,7 +36,7 @@ Online meetings are a tax on memory. The good options for getting transcripts ba
 - Optional speaker diarization and summaries are local-only after explicit setup.
 - Zero telemetry or analytics.
 - No account, login, or signup.
-- Speaker diarization requires your own Hugging Face token for the gated pyannote model; AvaNevis does not ship, proxy, or log a maintainer-owned token. Tokens and other secrets are redacted from progress output and from persisted meeting AI error fields.
+- Speaker diarization with **Pyannote** requires your own Hugging Face token for the gated pyannote model; AvaNevis does not ship, proxy, or log a maintainer-owned token. **Speakrs** setup is token-free. Tokens and other secrets are redacted from progress output and from persisted meeting AI error fields.
 - Summary models/runtimes download only after you explicitly start setup from Settings.
 - Open source — audit the code yourself.
 - Third-party licenses and attributions: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
@@ -106,7 +106,7 @@ See [docs/development/BUILD_INSTRUCTIONS.md](docs/development/BUILD_INSTRUCTIONS
 
 AI Add-ons are optional and live under Settings. They are not required for recording or transcription.
 
-- **Speaker Identification:** Windows CUDA and macOS Apple Silicon MPS paths use `pyannote/speaker-diarization-community-1` with the user's own Hugging Face token. When setup is ready, AvaNevis runs diarization before transcription and uses padded speaker turns to create speaker-guided Whisper chunks; if that guided path fails, it saves a normal transcript and records the speaker-label failure. The main process uses catalog-resolved model refs, validates the required accelerator, refuses CPU fallback, and serializes GPU-heavy work (transcription, diarization, guided transcription, summaries) through one compute queue with wall-clock timeouts so a hung job cannot block the app for the rest of the session.
+- **Speaker Identification:** Settings lets you install **one** engine: **Speakrs** (token-free; default for new users; Windows CUDA / macOS Apple Silicon CoreML) or **Pyannote** (`pyannote/speaker-diarization-community-1` with the user's own Hugging Face token; Windows CUDA / macOS Apple Silicon MPS). Switching uninstalls the other engine's models; a saved Hugging Face token is kept across a switch and removed only with Remove. When setup is ready, AvaNevis runs diarization before transcription and uses padded speaker turns to create speaker-guided Whisper chunks; if that guided path fails, it saves a normal transcript and records the speaker-label failure. The main process uses catalog-resolved model refs, validates the required accelerator, refuses CPU fallback, and serializes GPU-heavy work (transcription, diarization, guided transcription, summaries) through one compute queue with wall-clock timeouts so a hung job cannot block the app for the rest of the session.
 - **Meeting Summaries:** Uses a pinned local `llama.cpp` runtime and pinned GGUF model artifacts stored under Electron `userData`. Hugging Face-hosted public GGUF downloads use the bundled `huggingface_hub`/`hf_xet` path without reusing the speaker token. Summary setup verifies HTTPS artifact hosts, SHA-256 checksums, and safe runtime extraction. Summary generation is always user-triggered from Home or History.
 - **Expected size:** the default summary model is about 5.7 GB plus platform runtime archives. CUDA setup remains separate and can add several GB.
 - **Outputs:** derived files are saved beside recordings as `*.speakers.json`, `*.summary.json`, and `*.summary.md`; raw transcripts remain the source of truth.
@@ -168,6 +168,7 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
 
 - Windows 10 or 11, 64-bit
 - 4 GB RAM minimum, 8 GB recommended
+- Speaker identification (optional): **8 GB RAM minimum, 16 GB recommended**. Windows Speakrs download is about **823 MB** (model pack + ONNX Runtime); Pyannote is about 2–4 GB. Do not expect this add-on to fit a 4 GB machine.
 - 2 GB free disk minimum, 10 GB recommended (models + recordings)
 - Optional: NVIDIA GPU with 4 GB+ VRAM for CUDA acceleration
 
@@ -177,6 +178,7 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
 - macOS 14.2+ recommended for the CoreAudio system-audio capture path; macOS 13+ uses ScreenCaptureKit fallback behavior
 - Apple Silicon (M1/M2/M3/M4) — Intel Macs have a CPU fallback path in dev but are not a packaged target
 - 4 GB RAM minimum, 8 GB recommended
+- Speaker identification (optional): **8 GB RAM minimum, 16 GB recommended** (Speakrs CLI peaked at 3.81 GB RSS on a 56 min Mac meeting)
 - 2 GB free disk minimum, 10 GB recommended
 
 ## Tech stack
@@ -184,7 +186,7 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
 - **Frontend:** Electron 42, plain HTML / CSS / JavaScript (no UI framework)
 - **Backend:** Python 3.11, bundled with the installer
 - **Transcription:** `faster-whisper` (Windows, CUDA optional), `lightning-whisper-mlx` (macOS, Metal)
-- **Local AI add-ons:** `pyannote.audio` for Windows CUDA and macOS Apple Silicon MPS speaker identification, pinned `llama.cpp` + GGUF for user-triggered summaries
+- **Local AI add-ons:** Speakrs (token-free native CLI) or `pyannote.audio` for Windows CUDA and macOS Apple Silicon speaker identification; pinned `llama.cpp` + GGUF for user-triggered summaries
 - **Audio capture:** `pyaudiowpatch` WASAPI loopback (Windows), `sounddevice` + native Swift `AudioCaptureHelper` using CoreAudio process taps on macOS 14.2+ with ScreenCaptureKit fallback
 - **Audio processing:** NumPy, soxr + ffmpeg (Opus) on Windows and macOS packaged builds; macOS also keeps scipy for the MLX stack
 - **Updater:** GitHub Releases API + in-app banner (release page opens in browser)
@@ -204,6 +206,7 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
   - [Backend development notes](docs/development/BACKEND.md)
   - [GPU setup (CUDA)](docs/development/SETUP_GPU.md)
   - [Local AI model catalog](docs/development/LOCAL_AI_MODEL_CATALOG.md)
+  - [Speakrs soak / benchmarks](docs/development/SPEAKRS_BENCHMARKS.md)
   - [Installer implementation](docs/development/INSTALLER_IMPLEMENTATION.md)
   - [Code review remediation (May 2026)](docs/completed/CODE_REVIEW_REMEDIATION_2026-05.md)
 - **Roadmap & features**
@@ -262,7 +265,8 @@ PRs welcome. Please run `npm run test:all` before opening one and add coverage f
 - **Systran / guillaumekln** and **mlx-community** for packaged Whisper weights used by faster-whisper and Lightning-Whisper-MLX.
 - **faster-whisper** for the efficient CUDA/CPU transcription runtime.
 - **Lightning-Whisper-MLX** for Apple Silicon Metal acceleration.
-- **pyannote** for [Speaker Diarization Community-1](https://huggingface.co/pyannote/speaker-diarization-community-1) (CC BY 4.0), used when you enable optional speaker labels with your own Hugging Face token.
+- **Speakrs / avencera** for the [Speakrs](https://github.com/avencera/speakrs) speaker engine (Apache-2.0) and the `avencera/speakrs-models` pack (WeSpeaker CC BY 4.0; pyannote segmentation MIT; pyannote PLDA/VBx CC BY 4.0).
+- **pyannote** for [Speaker Diarization Community-1](https://huggingface.co/pyannote/speaker-diarization-community-1) (CC BY 4.0), used when you enable optional Pyannote speaker labels with your own Hugging Face token.
 - **Alibaba Qwen** and community quantizers (e.g. Unsloth GGUF builds) for optional local meeting summaries (Apache-2.0).
 - **ggml-org** for [llama.cpp](https://github.com/ggml-org/llama.cpp) summary inference (MIT).
 - **PyAudioWPatch** for WASAPI loopback on Windows.
@@ -274,7 +278,7 @@ PRs welcome. Please run `npm run test:all` before opening one and add coverage f
 
 AvaNevis application source code is licensed under the [MIT License](LICENSE.txt).
 
-Bundled and optional components (ffmpeg, Python packages, Whisper weights, pyannote, Qwen GGUF, llama.cpp, CUDA runtimes, and others) are governed by their own licenses. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for attribution, copyleft obligations, and optional model terms. Packaged installers also include a copy under `resources/legal/`.
+Bundled and optional components (ffmpeg, Python packages, Whisper weights, Speakrs, pyannote, Qwen GGUF, llama.cpp, CUDA runtimes, and others) are governed by their own licenses. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for attribution, copyleft obligations, and optional model terms. Packaged installers also include a copy under `resources/legal/`.
 
 ## Repo note
 

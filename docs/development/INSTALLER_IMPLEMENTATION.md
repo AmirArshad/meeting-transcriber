@@ -51,6 +51,7 @@ This avoids shipping stale prepared resources after build-time changes.
 - normalizes `python311._pth` so packaged imports resolve correctly
 - installs Windows runtime requirements
 - stages `ffmpeg.exe`
+- builds and stages `speakrs-cli.exe` under `build/resources/bin`
 
 ### macOS
 
@@ -61,6 +62,7 @@ This avoids shipping stale prepared resources after build-time changes.
 - installs macOS runtime requirements
 - downloads and stages ffmpeg
 - builds the Swift `audiocapture-helper`
+- builds and stages `speakrs-cli` under `build/resources/bin`
 - stages the helper in `build/resources/bin`
 
 ## Packaged Layout
@@ -79,6 +81,8 @@ resources/
 │   └── ffmpeg.exe
 ├── backend/
 │   └── *.py
+├── bin/
+│   └── speakrs-cli.exe
 └── icon.ico
 ```
 
@@ -94,7 +98,8 @@ AvaNevis.app/
     ├── backend/
     │   └── *.py
     ├── bin/
-    │   └── audiocapture-helper
+    │   ├── audiocapture-helper
+    │   └── speakrs-cli
     ├── iconTemplate.png
     └── iconTemplate@2x.png
 ```

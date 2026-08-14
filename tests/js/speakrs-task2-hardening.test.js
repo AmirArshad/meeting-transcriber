@@ -1152,6 +1152,19 @@ test('token-only Pyannote uninstall deletes the saved token and exact roots only
   }
 });
 
+test('Pyannote uninstall can keep the saved token when switching to Speakrs', async () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pyannote-keep-token-'));
+  const tokenPath = getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace);
+  try {
+    fs.mkdirSync(path.dirname(tokenPath), { recursive: true });
+    fs.writeFileSync(tokenPath, Buffer.from('encrypted:hf_secret'));
+    await uninstallPyannoteLocalState({ userDataDir, deleteToken: false });
+    assert.equal(fs.existsSync(tokenPath), true);
+  } finally {
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
 test('Speakrs uninstall unlinks a replaced root without following the symlink', async (t) => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-symlink-delete-'));
   const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-outside-target-'));

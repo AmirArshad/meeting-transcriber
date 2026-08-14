@@ -14,6 +14,9 @@ test('THIRD_PARTY_NOTICES.md exists and documents key optional models', () => {
   const contents = fs.readFileSync(noticesPath, 'utf8');
   assert.match(contents, /pyannote\/speaker-diarization-community-1/i);
   assert.match(contents, /CC BY 4\.0/i);
+  assert.match(contents, /Speakrs/i);
+  assert.match(contents, /speakrs-cli/i);
+  assert.match(contents, /avencera\/speakrs/i);
   assert.match(contents, /Qwen/i);
   assert.match(contents, /ffmpeg/i);
   assert.match(contents, /GPL/i);
@@ -42,4 +45,14 @@ test('getLegalNoticesPath falls back to repository root in development', () => {
     devRoot: repoRoot,
   });
   assert.equal(resolved, path.join(repoRoot, 'THIRD_PARTY_NOTICES.md'));
+});
+
+test('Settings About credits name Speakrs and pyannote', () => {
+  const aboutHtml = fs.readFileSync(path.join(repoRoot, 'src', 'renderer', 'index.html'), 'utf8');
+  assert.match(aboutHtml, /class="about-credits"/);
+  assert.match(aboutHtml, /https:\/\/github\.com\/avencera\/speakrs/);
+  assert.match(aboutHtml, />Speakrs</);
+  assert.match(aboutHtml, /Apache-2\.0/);
+  assert.match(aboutHtml, /pyannote Speaker Diarization Community-1/);
+  assert.match(aboutHtml, /Speakrs CLI/);
 });

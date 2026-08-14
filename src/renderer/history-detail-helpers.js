@@ -270,6 +270,7 @@
       canConfigure: !isUnsupported && !isBusy && !selectedIsReady && !packagedCliUnrepairable,
       canValidate: !isUnsupported && !isBusy && hasLocalState,
       canRemove: !isUnsupported && !isBusy && hasLocalState,
+      canSelectEngine: !isUnsupported && !isBusy,
       hasLocalState,
       isBusy,
       isUnsupported,
