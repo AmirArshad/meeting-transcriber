@@ -2578,13 +2578,19 @@ footer {
 }
 
 .diarization-engine-radio {
+  appearance: none;
+  -webkit-appearance: none;
   position: absolute;
-  inline-size: 1px;
-  block-size: 1px;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  border: 0;
   overflow: hidden;
   clip: rect(0 0 0 0);
   clip-path: inset(50%);
   white-space: nowrap;
+  pointer-events: none;
 }
 
 .diarization-engine-card.selected,

@@ -350,6 +350,50 @@
     return null;
   }
 
+  function isUnownedDocumentFocus(activeElement, doc = null) {
+    if (!activeElement) {
+      return true;
+    }
+    if (!doc) {
+      return false;
+    }
+    return activeElement === doc.body || activeElement === doc.documentElement;
+  }
+
+  /**
+   * Windows Chromium/Electron often moves keyboard focus to <body> when a
+   * sibling tree is rebuilt (History transcript hydrate, Activity queue ticks).
+   * Restore only when the editor is open and focus was lost, not when another
+   * control (search, a different input) is genuinely focused.
+   */
+  function shouldRestoreInlineEditorFocus({
+    editorOpen = false,
+    activeElement = null,
+    isEditorControl = false,
+    doc = null,
+  } = {}) {
+    if (!editorOpen) {
+      return false;
+    }
+    if (isEditorControl) {
+      return true;
+    }
+    return isUnownedDocumentFocus(activeElement, doc);
+  }
+
+  function shouldSkipMeetingReselect({
+    currentMeetingId = null,
+    nextMeetingId = null,
+    titleEditorOpen = false,
+  } = {}) {
+    if (!titleEditorOpen) {
+      return false;
+    }
+    const current = String(currentMeetingId == null ? '' : currentMeetingId).trim();
+    const next = String(nextMeetingId == null ? '' : nextMeetingId).trim();
+    return Boolean(current) && current === next;
+  }
+
   return {
     buildAiAddonControlState,
     buildHomeAiAddonPrompt,
@@ -358,8 +402,11 @@
     getDiarizationSetupMessage,
     getSummaryGenerationButtonView,
     getSummarySetupMessage,
+    isUnownedDocumentFocus,
     normalizeHistoryDetailTab,
     parseTranscriptMarkdownSegments,
+    shouldRestoreInlineEditorFocus,
+    shouldSkipMeetingReselect,
     shouldShowSpeakerSetupPrompt,
     shouldShowSummarySetupPrompt,
   };

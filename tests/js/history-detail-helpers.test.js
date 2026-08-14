@@ -10,6 +10,8 @@ const {
   hasDiarizationLocalState,
   normalizeHistoryDetailTab,
   parseTranscriptMarkdownSegments,
+  shouldRestoreInlineEditorFocus,
+  shouldSkipMeetingReselect,
   shouldShowSpeakerSetupPrompt,
 } = require('../../src/renderer/history-detail-helpers');
 const { SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE, shouldConfirmDiarizationEngineSwitch } = require('../../src/renderer/ai-addon-ui-helpers');
@@ -493,4 +495,50 @@ test('switching the selected engine re-enables Set Up while the other engine is 
   assert.equal(switching.canConfigure, true);
   assert.equal(switching.canRemove, true);
   assert.equal(switching.canSelectEngine, true);
+});
+
+test('inline rename restores focus only after Chromium steals it to the document', () => {
+  const doc = { body: { id: 'body' }, documentElement: { id: 'html' } };
+  const titleInput = { id: 'title-input' };
+  const searchInput = { id: 'search' };
+
+  assert.equal(shouldRestoreInlineEditorFocus({
+    editorOpen: true,
+    activeElement: doc.body,
+    doc,
+  }), true);
+  assert.equal(shouldRestoreInlineEditorFocus({
+    editorOpen: true,
+    activeElement: titleInput,
+    isEditorControl: true,
+    doc,
+  }), true);
+  assert.equal(shouldRestoreInlineEditorFocus({
+    editorOpen: true,
+    activeElement: searchInput,
+    doc,
+  }), false);
+  assert.equal(shouldRestoreInlineEditorFocus({
+    editorOpen: false,
+    activeElement: doc.body,
+    doc,
+  }), false);
+});
+
+test('re-clicking the selected History row does not close an in-progress title edit', () => {
+  assert.equal(shouldSkipMeetingReselect({
+    currentMeetingId: 'meeting_1',
+    nextMeetingId: 'meeting_1',
+    titleEditorOpen: true,
+  }), true);
+  assert.equal(shouldSkipMeetingReselect({
+    currentMeetingId: 'meeting_1',
+    nextMeetingId: 'meeting_2',
+    titleEditorOpen: true,
+  }), false);
+  assert.equal(shouldSkipMeetingReselect({
+    currentMeetingId: 'meeting_1',
+    nextMeetingId: 'meeting_1',
+    titleEditorOpen: false,
+  }), false);
 });

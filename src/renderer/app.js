@@ -48,6 +48,8 @@ const {
   getSummarySetupMessage,
   normalizeHistoryDetailTab,
   parseTranscriptMarkdownSegments,
+  shouldRestoreInlineEditorFocus,
+  shouldSkipMeetingReselect,
 } = window.historyDetailHelpers;
 const {
   hideUpdateNotificationBanner,
@@ -714,6 +716,18 @@ function renderActivityList() {
     queueState: transcriptionQueueState,
     meetings,
   });
+  const activeBeforeRender = typeof document !== 'undefined' ? document.activeElement : null;
+  const restoreActivityRenameFocus = shouldRestoreInlineEditorFocus({
+    editorOpen: Boolean(activityRenameMeetingId),
+    activeElement: activeBeforeRender,
+    isEditorControl: Boolean(
+      activeBeforeRender
+      && activeBeforeRender.classList
+      && activeBeforeRender.classList.contains('activity-rename-input')
+    ),
+    doc: typeof document !== 'undefined' ? document : null,
+  });
+
   clearElement(activityListEl);
   if (!rows.length) {
     const empty = document.createElement('p');
@@ -725,6 +739,7 @@ function renderActivityList() {
     refreshIdleStatusPill();
     updateSoftQueueDepthWarning();
     updateBackgroundTranscriptionTip();
+    restoreInlineTitleEditorFocus();
     return;
   }
 
@@ -889,6 +904,10 @@ function renderActivityList() {
   refreshIdleStatusPill();
   updateSoftQueueDepthWarning();
   updateBackgroundTranscriptionTip();
+  if (restoreActivityRenameFocus) {
+    focusActivityRenameInput({ select: false });
+  }
+  restoreInlineTitleEditorFocus();
 }
 
 function applyMeetingTitleLocally(updated) {
@@ -926,12 +945,7 @@ function beginActivityRename(meetingId, currentTitle = '') {
   activityRenameOriginal = activityRenameDraft;
   renderActivityList();
   requestAnimationFrame(() => {
-    const selector = `.activity-row[data-meeting-id="${CSS.escape(id)}"] .activity-rename-input`;
-    const input = activityListEl && activityListEl.querySelector(selector);
-    if (input) {
-      input.focus();
-      input.select();
-    }
+    focusActivityRenameInput({ select: true });
   });
 }
 
@@ -1537,6 +1551,41 @@ function closeInlineTitleEditor({ headingId, editBtnId, formId, editBtnDisplay =
   if (editBtn) editBtn.style.display = editBtnDisplay;
 }
 
+function isHistoryTitleEditorOpen() {
+  const form = document.getElementById('meeting-title-edit-form');
+  return Boolean(form && form.style.display === 'flex');
+}
+
+function focusActivityRenameInput({ select = false } = {}) {
+  if (!activityRenameMeetingId || !activityListEl) {
+    return;
+  }
+  const selector = `.activity-row[data-meeting-id="${CSS.escape(activityRenameMeetingId)}"] .activity-rename-input`;
+  const input = activityListEl.querySelector(selector);
+  if (!input) {
+    return;
+  }
+  input.focus({ preventScroll: true });
+  if (select) {
+    input.select();
+  }
+}
+
+function restoreInlineTitleEditorFocus() {
+  const historyInput = document.getElementById('meeting-title-input');
+  if (
+    historyInput
+    && shouldRestoreInlineEditorFocus({
+      editorOpen: isHistoryTitleEditorOpen(),
+      activeElement: document.activeElement,
+      isEditorControl: document.activeElement === historyInput,
+      doc: document,
+    })
+  ) {
+    historyInput.focus({ preventScroll: true });
+  }
+}
+
 // Settings persistence
 const SETTINGS_KEY = 'avanevis-settings';
 
@@ -1919,6 +1968,7 @@ function renderMeetingList() {
       meetings.length === 0 ? 'No meetings recorded yet' : 'No matches for your search',
     );
     updateSelectionToolbar();
+    restoreInlineTitleEditorFocus();
     return;
   }
 
@@ -1950,6 +2000,7 @@ function renderMeetingList() {
   });
 
   updateSelectionToolbar();
+  restoreInlineTitleEditorFocus();
 }
 
 // ---- Multi-select state for meetings ----
@@ -2063,6 +2114,14 @@ async function selectMeeting(meetingId) {
     return;
   }
 
+  if (shouldSkipMeetingReselect({
+    currentMeetingId,
+    nextMeetingId: targetId,
+    titleEditorOpen: isHistoryTitleEditorOpen(),
+  })) {
+    return;
+  }
+
   document.querySelectorAll('.meeting-item').forEach((item) => {
     item.classList.toggle('selected', item.dataset.id === targetId);
   });
@@ -2150,6 +2209,7 @@ async function selectMeeting(meetingId) {
     if (pendingMeetingTranscriptId === targetId) {
       pendingMeetingTranscriptId = null;
     }
+    restoreInlineTitleEditorFocus();
   }
 
 }
@@ -2188,10 +2248,12 @@ function wireInlineTitleEditor({
     heading.style.display = 'none';
     editBtn.style.display = 'none';
     form.style.display = 'flex';
-    // Defer focus + select to next tick so display change has applied
+    // Two frames: a just-shown input is not reliably focusable on Windows Electron.
     requestAnimationFrame(() => {
-      input.focus();
-      input.select();
+      requestAnimationFrame(() => {
+        input.focus({ preventScroll: true });
+        input.select();
+      });
     });
   };
 
