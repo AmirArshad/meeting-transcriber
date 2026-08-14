@@ -52,6 +52,7 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 
 ### Historical milestones
 
+- **August 2026** — Exclusive Speakrs / Pyannote speaker identification. New users default Speakrs (token-free); existing Pyannote installs stay until the user switches. Soak notes: [SPEAKRS_BENCHMARKS.md](../development/SPEAKRS_BENCHMARKS.md).
 - **v2.6.0 (July 2026)** — Back-to-back recording and background transcription queue shipped (Phase 1 + Phase 2 polish). Hardware smoke signed off on macOS; Windows queue/recorder smoke covered in pre-tag checks.
 - **v2.5.0 (July 2026)** — Recording awareness (Release 1) and long-recording safety (Release 2) shipped: presence indicators, durable capture spools, bounded finalization, interrupted-session recovery. Hardware smoke signed off on Windows and macOS.
 - **July 2026** — Codebase refactor complete (Phases 0–8 + 5B): Pattern C services under `src/main/`, AI-addon and main-process helper facades, Python `meetings/` package, shared `recorder_stdout.py`. Soft-cap accepted for `src/renderer/app.js`. See [AVANEVIS_CODEBASE_REFACTOR.md](AVANEVIS_CODEBASE_REFACTOR.md).
@@ -68,7 +69,7 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 
 ## In progress
 
-- **Speakrs speaker identification** — exclusive Speakrs / Pyannote selector on `feature/speakrs-diarization`. New users default Speakrs; existing Pyannote installs stay until the user switches. Soak and packaged re-smoke are still open (see root [`todo.md`](../../todo.md)).
+_No major product initiative in flight. See Planned below and root [`todo.md`](../../todo.md)._
 
 ## Planned
 

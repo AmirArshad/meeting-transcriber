@@ -6,11 +6,13 @@ Do **not** claim a Windows speed or DER win vs pyannote CUDA. Speakrs **0.5.0** 
 
 ## Ship bar
 
+Closed **2026-08-14** by product from the Mac packaged and Windows CUDA smokes below. No silent Speakrs cutover. Pyannote stays selectable. Do **not** claim the original ≥25-meeting / 2×50-turn bars were fully executed.
+
 | Bar | Status |
 |-----|--------|
-| ≥25 meetings (≥10/OS) guided, zero engine crashes | Mac 2026-08-14: 1 packaged CoreML guided meeting, no crash. Windows CUDA soak still outstanding. |
-| Mac 2×50-turn A/B, Speakrs not worse than **+2** vs pyannote | **Not green.** First Mac Speakrs meeting over-clustered (below). Same-audio on that clip is still outstanding (files were on the Mac). |
-| Selector / switch / remove packaged checklist | Task 7a code landed 2026-08-14. Needs packaged Mac re-smoke plus Windows CUDA smoke. |
+| ≥25 meetings (≥10/OS) guided, zero engine crashes | **Accepted with less volume.** Mac packaged CoreML guided (no crash) + Windows CUDA guided (no crash). |
+| Mac 2×50-turn A/B, Speakrs not worse than **+2** vs pyannote | **Not met.** Mac 10:22 over-clustered (+1 speaker). Windows shorts matched `speakerCount`; 11:17 CUDA split-identity on the closing mic turn. Keep pyannote. |
+| Selector / switch / remove | **Closed.** Switch model, hidden token/speaker-count, radios after Ready, Hugging Face token kept on Pyannote→Speakrs, About/notices credit Speakrs. |
 
 ## Mac packaged soak 2026-08-14
 
@@ -39,7 +41,7 @@ The Mac 10:22 in-room+YouTube clip was not on the Windows checkout used for Task
 
 Windows CUDA did **not** reproduce the Mac +1 speaker over-cluster on these shorts. Speakrs can still emit more exclusive turns (14 vs 5 on 21.9 s), which coarsens or fragments guided Whisper windows even when `speakerCount` matches.
 
-Keep pyannote selectable. Re-run pyannote vs Speakrs on the **same** Mac 10:22 clip when that machine is available, then the 2×50-turn Mac bar.
+Keep pyannote selectable. The same-audio Mac 10:22 A/B and 2×50-turn bar were not re-run before ship.
 
 ## Windows CUDA soak 2026-08-14
 
@@ -47,6 +49,6 @@ Guided Speakrs CUDA on a ~39 s mic-then-YouTube clip (`meeting_20260814_111755`)
 
 Exclusive turns: SPEAKER_00 on the mic intro, SPEAKER_01 on the YouTube stretch **and** the user’s closing line, plus a **0.14 s** SPEAKER_00 fragment at 38.98–39.11 s. Merge labeled that closing as Speaker 2. This is the same split-identity class as the Mac 10:22 YouTube clip (plan risk #4), not a `Speaker N` remapping bug and not something a `--speaker-count` flag can fix (0.5.0 has none). Do not add a “last turn belongs to Speaker 1” heuristic.
 
-## Next soak (Windows packaged)
+## After ship
 
-Record CUDA guided meetings here as they land. Do not overwrite Mac rows. Do not treat VoxConverse n=10 (spike) as the Task 7 human A/B.
+Task 7 soak is closed. Further meetings can still be logged here; do not overwrite Mac rows. Do not treat VoxConverse n=10 (spike) as the Task 7 human A/B.

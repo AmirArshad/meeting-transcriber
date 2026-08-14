@@ -228,6 +228,7 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
 ## Roadmap (short version)
 
 **Shipped recently**
+- **Speakrs speaker identification (August 2026)** — exclusive Speakrs (token-free default) or Pyannote selector; only one engine installed. Soak notes: [SPEAKRS_BENCHMARKS.md](docs/development/SPEAKRS_BENCHMARKS.md).
 - **v2.6.0 (July 2026)** — Back-to-back recording and background transcription queue: Start unlocks after save; Home Activity list; discard in-progress recordings; cancel/resume pending jobs. See [FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md](docs/initiatives/FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md) and [release notes](docs/releases/v2.6.0.md).
 - **v2.5.0 (July 2026)** — Recording awareness (presence pill, tray/Dock/taskbar indicators, hourly reminders, single-instance focus) and long-recording safety (durable capture spools, bounded stop finalization, interrupted-session recovery, low-disk warnings). See [LONG_RECORDING_SAFETY.md](docs/initiatives/LONG_RECORDING_SAFETY.md) and [release notes](docs/releases/v2.5.0.md).
 - Codebase refactor (July 2026): main-process Pattern C services under `src/main/`, AI-addon and main-process helper facades, Python `meetings/` / shared recorder stdout helpers, characterization gates. Soft-cap accepted for `src/renderer/app.js`; see [AVANEVIS_CODEBASE_REFACTOR.md](docs/initiatives/AVANEVIS_CODEBASE_REFACTOR.md).
