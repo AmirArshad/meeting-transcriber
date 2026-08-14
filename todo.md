@@ -4,7 +4,7 @@ Active TODOs only. Completed initiative history lives in git history, `docs/rele
 
 ## Active: Speakrs Diarization Migration
 
-**Shipped 2026-08-14** on `feature/speakrs-diarization` → `master`. Exclusive Speakrs / Pyannote selector; new users default Speakrs; existing pyannote stays until they switch. Soak closed from Mac packaged CoreML + Windows CUDA smoke (see `docs/development/SPEAKRS_BENCHMARKS.md`). **No silent cutover. Task 8 (delete pyannote) stays parked.**
+**Shipped in v2.7.0** (2026-08-14) on `feature/speakrs-diarization` → `master`. Exclusive Speakrs / Pyannote selector; new users default Speakrs; existing pyannote stays until they switch. Soak closed from Mac packaged CoreML + Windows CUDA smoke (see `docs/development/SPEAKRS_BENCHMARKS.md`). **No silent cutover. Task 8 (delete pyannote) stays parked.**
 **Plan:** [docs/superpowers/plans/2026-07-16-speakrs-diarization-migration.md](docs/superpowers/plans/2026-07-16-speakrs-diarization-migration.md) — **v5**.
 
 - [x] [Risk: Low] **Task 0a — macOS spike (tables only, no GO):** rustc 1.88+; speakrs 0.5.0 with `default-features=false`, `default-linalg`+`coreml`, `online` off; `ExecutionMode::CoreMl` (not the CPU example); record `required_files(CoreMl)` from source + sizes; 3 internal meetings vs pyannote MPS; CLI + combined RSS; notes in `docs/development/SPEAKRS_SPIKE_NOTES.md`. No app code touched. Pinned VoxConverse n=10 DER smoke **PASS** (Δ +0.53 / +0.43).
@@ -54,7 +54,7 @@ Do **not** force Phase 2 renderer controllers now. Revisit only if `app.js` grow
 
 ## Recently shipped (details in git history / linked docs)
 
-- **Speakrs speaker identification (2026-08-14)** — exclusive Speakrs / Pyannote selector; new users default Speakrs; pyannote stays selectable. Plan: `docs/superpowers/plans/2026-07-16-speakrs-diarization-migration.md`; soak notes: `docs/development/SPEAKRS_BENCHMARKS.md`.
+- **v2.7.0** — exclusive Speakrs / Pyannote selector; new users default Speakrs; pyannote stays selectable. Plan: `docs/superpowers/plans/2026-07-16-speakrs-diarization-migration.md`; soak notes: `docs/development/SPEAKRS_BENCHMARKS.md`; notes: `docs/releases/v2.7.0.md`.
 - **v2.6.0** — back-to-back recording & transcription queue (Phase 1 + Phase 2 polish) + cancel-recording discard. Design: `docs/initiatives/FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md`; notes: `docs/releases/v2.6.0.md`.
 - **v2.5.0** — recording awareness/presence + progressive capture spools & bounded finalization. Plan: `docs/superpowers/plans/2026-07-13-recording-awareness-and-long-recording-safety.md`.
 - **Pre-2.6.0 adversarial race hardening**; **macOS arm64 ffmpeg + bundle trim** (~1.3 GB → ~800 MB); **AvaNevis codebase refactor** (merged through #47; soft-cap accepted for `app.js`); **dependency/Dependabot triage** (`docs/development/DEPENDABOT_TRIAGE.md`).

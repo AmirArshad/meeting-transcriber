@@ -45,6 +45,7 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 - **Recording awareness (v2.5.0)** — authoritative `starting` / `recording` / `stopping` / `idle` lifecycle from the recorder service; always-visible in-app pill + elapsed clock; macOS static saturated menu-bar icon + `REC` + Dock badge; Windows taskbar overlay while minimized; hourly best-effort native reminders (click-to-open via retained notification objects — Electron has no Action Center cold-activation API); single-instance relaunch focuses the running app; recording-aware close copy.
 - **Long-recording safety (v2.5.0)** — durable `{stem}.capture/` track spools (not whole-session RAM); bounded multi-pass stop finalization; interrupted-session recovery (`Recover Now` / `Later`); Node `statfs` disk probes with periodic low-space warnings (never auto-stop); structured stop stages in the UI. See [LONG_RECORDING_SAFETY.md](LONG_RECORDING_SAFETY.md).
 - **Back-to-back recording & transcription queue (v2.6.0)** — Start unlocks after pending persist; main-owned FIFO transcription jobs; Home Activity list; discard capture; cancel/resume pending work; between-job GPU/preload admission. See [FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md](FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md).
+- **Speakrs speaker identification (v2.7.0)** — exclusive Speakrs (token-free default for new users) or Pyannote selector; only one engine installed; existing Pyannote installs stay until the user switches. Soak notes: [SPEAKRS_BENCHMARKS.md](../development/SPEAKRS_BENCHMARKS.md).
 
 ### Branding
 
@@ -52,7 +53,7 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 
 ### Historical milestones
 
-- **August 2026** — Exclusive Speakrs / Pyannote speaker identification. New users default Speakrs (token-free); existing Pyannote installs stay until the user switches. Soak notes: [SPEAKRS_BENCHMARKS.md](../development/SPEAKRS_BENCHMARKS.md).
+- **v2.7.0 (August 2026)** — Exclusive Speakrs / Pyannote speaker identification. New users default Speakrs (token-free); existing Pyannote installs stay until the user switches. Soak notes: [SPEAKRS_BENCHMARKS.md](../development/SPEAKRS_BENCHMARKS.md). [Release notes](../releases/v2.7.0.md).
 - **v2.6.0 (July 2026)** — Back-to-back recording and background transcription queue shipped (Phase 1 + Phase 2 polish). Hardware smoke signed off on macOS; Windows queue/recorder smoke covered in pre-tag checks.
 - **v2.5.0 (July 2026)** — Recording awareness (Release 1) and long-recording safety (Release 2) shipped: presence indicators, durable capture spools, bounded finalization, interrupted-session recovery. Hardware smoke signed off on Windows and macOS.
 - **July 2026** — Codebase refactor complete (Phases 0–8 + 5B): Pattern C services under `src/main/`, AI-addon and main-process helper facades, Python `meetings/` package, shared `recorder_stdout.py`. Soft-cap accepted for `src/renderer/app.js`. See [AVANEVIS_CODEBASE_REFACTOR.md](AVANEVIS_CODEBASE_REFACTOR.md).
