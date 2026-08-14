@@ -3,6 +3,46 @@
 const path = require('path');
 const fs = require('fs');
 
+function stripWindowsNamespacePrefix(filePath) {
+  if (typeof filePath !== 'string') {
+    return filePath;
+  }
+
+  if (filePath.startsWith('\\\\?\\UNC\\')) {
+    return `\\\\${filePath.slice(8)}`;
+  }
+  if (filePath.startsWith('\\\\?\\')) {
+    return filePath.slice(4);
+  }
+  return filePath;
+}
+
+function normalizeComparablePath(filePath) {
+  if (typeof filePath !== 'string' || !filePath) {
+    return filePath;
+  }
+
+  const resolved = path.resolve(stripWindowsNamespacePrefix(filePath));
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function isSameOrInsideDirectory(filePath, directoryPath) {
+  const normalizedFile = normalizeComparablePath(filePath);
+  const normalizedDirectory = normalizeComparablePath(directoryPath);
+  if (!normalizedFile || !normalizedDirectory) {
+    return false;
+  }
+
+  if (normalizedFile === normalizedDirectory) {
+    return true;
+  }
+
+  const prefix = normalizedDirectory.endsWith(path.sep)
+    ? normalizedDirectory
+    : `${normalizedDirectory}${path.sep}`;
+  return normalizedFile.startsWith(prefix);
+}
+
 function resolveExistingRealPath(filePath, fsImpl = fs) {
   if (!filePath) {
     return null;
@@ -10,7 +50,7 @@ function resolveExistingRealPath(filePath, fsImpl = fs) {
 
   try {
     const realpathSync = fsImpl.realpathSync.native || fsImpl.realpathSync;
-    return realpathSync(filePath);
+    return stripWindowsNamespacePrefix(realpathSync(filePath));
   } catch (error) {
     if (error && error.code === 'ENOENT') {
       return null;
@@ -28,25 +68,22 @@ function isPathInsideDirectory(filePath, directoryPath, fsImpl = fs) {
   const resolvedPath = resolveExistingRealPath(filePath, fsImpl);
 
   if (resolvedDirectory && resolvedPath) {
-    return resolvedPath === resolvedDirectory || resolvedPath.startsWith(resolvedDirectory + path.sep);
+    return isSameOrInsideDirectory(resolvedPath, resolvedDirectory);
   }
 
   if (resolvedDirectory && !resolvedPath) {
-    const lexicalPath = path.resolve(filePath);
-    if (!(lexicalPath === resolvedDirectory || lexicalPath.startsWith(resolvedDirectory + path.sep))) {
+    if (!isSameOrInsideDirectory(filePath, resolvedDirectory)) {
       return false;
     }
 
     const parentRealPath = resolveExistingRealPath(path.dirname(filePath), fsImpl);
     return Boolean(
       parentRealPath
-      && (parentRealPath === resolvedDirectory || parentRealPath.startsWith(resolvedDirectory + path.sep))
+      && isSameOrInsideDirectory(parentRealPath, resolvedDirectory),
     );
   }
 
-  const lexicalPath = path.resolve(filePath);
-  const lexicalDirectory = path.resolve(directoryPath);
-  return lexicalPath === lexicalDirectory || lexicalPath.startsWith(lexicalDirectory + path.sep);
+  return isSameOrInsideDirectory(filePath, directoryPath);
 }
 
 function isSafeRecordingsPath({ filePath, recordingsDir, allowedExtensions = [] } = {}) {

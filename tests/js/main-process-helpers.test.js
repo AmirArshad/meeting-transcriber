@@ -61,6 +61,7 @@ const {
   getTranscriberModule,
   resolveStopTimeoutAction,
   isModelDownloadErrorOutput,
+  isPathInsideDirectory,
   isSafeRecordingsAudioPath,
   isSafeRecordingsJsonPath,
   isSafeRecordingsMarkdownPath,
@@ -459,6 +460,54 @@ test('isSafeRecordingsMarkdownPath allows only markdown files inside recordings'
     filePath: path.join(recordingsDir, 'meeting.opus'),
     recordingsDir,
   }), true);
+});
+
+
+test('isSafeRecordingsJsonPath allows a not-yet-created speakers sidecar in a real recordings dir', () => {
+  const recordingsDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-json-path-')));
+  try {
+    const outputPath = path.join(recordingsDir, 'meeting.speakers.json');
+    assert.equal(fs.existsSync(outputPath), false);
+    assert.equal(isSafeRecordingsJsonPath({ filePath: outputPath, recordingsDir }), true);
+    assert.equal(isSafeRecordingsJsonPath({
+      filePath: path.join(recordingsDir, '..', 'escape.speakers.json'),
+      recordingsDir,
+    }), false);
+  } finally {
+    fs.rmSync(recordingsDir, { recursive: true, force: true });
+  }
+});
+
+
+test('isPathInsideDirectory treats Windows long-path prefixes as inside the recordings dir', () => {
+  const recordingsDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-long-path-')));
+  try {
+    const outputPath = path.join(recordingsDir, 'meeting.speakers.json');
+    const namespacedDir = path.toNamespacedPath(recordingsDir);
+    const fsMock = {
+      realpathSync: Object.assign((filePath) => fs.realpathSync(filePath), {
+        native(filePath) {
+          try {
+            const real = (fs.realpathSync.native || fs.realpathSync)(filePath);
+            return path.toNamespacedPath(real);
+          } catch (error) {
+            if (error && error.code === 'ENOENT') {
+              throw error;
+            }
+            throw error;
+          }
+        },
+      }),
+    };
+
+    if (process.platform === 'win32') {
+      assert.notEqual(namespacedDir, recordingsDir);
+    }
+    assert.equal(isPathInsideDirectory(outputPath, recordingsDir, fsMock), true);
+    assert.equal(isPathInsideDirectory(path.join(recordingsDir, '..', 'escape.json'), recordingsDir, fsMock), false);
+  } finally {
+    fs.rmSync(recordingsDir, { recursive: true, force: true });
+  }
 });
 
 
