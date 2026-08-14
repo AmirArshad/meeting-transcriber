@@ -1,6 +1,6 @@
-# Speakrs Diarization Migration Plan (v4 — exclusive engine selector)
+# Speakrs Diarization Migration Plan (v5 — exclusive engine selector)
 
-> **Revision history:** v1 drafted 2026-07-16. v2 (2026-07-18) production-viability rewrite. v3 (2026-08-13) pre-Task-0 hardening. **v4 (2026-08-13, post-0b):** Task 0b is **CONDITIONAL GO**. Product decision: keep **both** engines behind an exclusive user selector (not a silent Task 7 flip). Task 8 pyannote removal is **parked**. Spike notes: `docs/development/SPEAKRS_SPIKE_NOTES.md`.
+> **Revision history:** v1 drafted 2026-07-16. v2 (2026-07-18) production-viability rewrite. v3 (2026-08-13) pre-Task-0 hardening. **v4 (2026-08-13, post-0b):** Task 0b is **CONDITIONAL GO**. Product decision: keep **both** engines behind an exclusive user selector (not a silent Task 7 flip). Task 8 pyannote removal is **parked**. **v5 (2026-08-14):** first Mac packaged soak. Selector UX and one 2-talker quality miss are **Task 7a**, blocking the ship bar — not a silent cutover. Spike notes: `docs/development/SPEAKRS_SPIKE_NOTES.md`.
 >
 > **For agentic workers:** Execute inline by default. Use a subagent only when the user requests it or the task crosses high-risk platform/process boundaries. Do not ship speakrs packs publicly until Task 2b is merged. Do **not** delete pyannote code or token IPC on this branch.
 
@@ -197,7 +197,9 @@ Confirm dialogs **before** the delete (renderer). Copy:
 | Pyannote title | `Pyannote` | `Pyannote` |
 | Pyannote subtitle | `Needs a Hugging Face account.` | `More accurate and faster here. Needs a Hugging Face account.` |
 
-Do not put **Recommended** on pyannote (that would push tokens). Hide token fields unless pyannote is selected. Hide speaker-count for speakrs (auto-only). Home/History prompt uses `shouldShowSpeakerSetupPrompt` unchanged (Windows still CUDA-gated) and sets up **selected** `engine` (speakrs for new users).
+Do not put **Recommended** on pyannote (that would push tokens). Hide token fields unless pyannote is selected. Hide speaker-count for speakrs (auto-only — crate 0.5.0 has **no** speaker-count API; a 2–6 dropdown that cannot be honored is a lie). Home/History prompt uses `shouldShowSpeakerSetupPrompt` unchanged (Windows still CUDA-gated) and sets up **selected** `engine` (speakrs for new users).
+
+**Primary action label (v5):** the Settings/Home button is **`Set Up`** only when the selected engine has no local state. When the *other* engine is installed, the same button is **`Switch model`**. Selecting the other card must leave that button enabled. Do not require a separate “I picked the card, now find Set Up” discovery step.
 
 #### Status machine (per selected engine)
 
@@ -398,6 +400,39 @@ Until the checklist is merged: dev/QA builds may fetch packs from upstream HF di
 - Record matrix in `docs/development/SPEAKRS_BENCHMARKS.md`.
 - **Ship bar (all):** ≥ 25 meetings (≥10/OS) guided, zero engine crashes; 2×50-turn A/B speakrs not worse than **+2** vs pyannote on **Mac** (Windows A/B is informational — 0b already showed a DER gap); selector/switch/remove checklist green on packaged Windows CUDA + macOS AS; characterization suites green.
 - Rollback: users switch back to pyannote (re-download). No catalog-constant flip.
+- **Mac packaged soak 2026-08-14 (Apple Silicon dir build, ad-hoc signed):** setup Ready, CoreML guided path ran, no engine crash. Selector/switch checklist is **not** green — Task 7a. Quality bar is **not** green — first Speakrs guided meeting over-clustered (below). Windows CUDA soak still outstanding.
+
+#### Mac soak findings (2026-08-14) — facts, not guesses
+
+Two same-morning in-room + YouTube clips, Whisper `medium` / `mps`. Sidecars only; no transcript text in this plan.
+
+| Clip | Duration | Engine | `device` | sidecar `speakerCount` |
+|------|----------|--------|----------|------------------------|
+| 10:19 | 26 s | pyannote community-1 | `mps` | **2** |
+| 10:22 | 35 s | speakrs-community1-vbx | `coreml` | **3** |
+
+Speakrs exclusive turns were `SPEAKER_00` / `SPEAKER_01` / `SPEAKER_02`. Merge relabels those in index order to `Speaker 1` / `Speaker 2` / `Speaker 3`, so a phantom `SPEAKER_00` pushes the two real talkers onto **Speaker 2 and Speaker 3**. One in-room turn was also assigned the YouTube speaker’s label (split identity). Speed was fine (CoreML). This is a clustering miss, not a crash, and it is exactly the Task 7 A/B risk (plan risk #4). Do **not** add a Speakrs speaker-count CLI flag — 0.5.0 has none. Next measurement: pyannote vs Speakrs on the **same** 10:22 audio, then the 2×50-turn Mac bar.
+
+**Selector UX (blocking):**
+
+1. Switching is select-card-then-**Set Up**. When the other engine is installed, the button must read **Switch model** (product copy, v5).
+2. After Speakrs was Ready, the soak **could not switch back to Pyannote**. Unit test `switching the selected engine re-enables Set Up while the other engine is ready` already expects `canConfigure: true` for `selectedEngine: 'pyannote'` on a ready Speakrs feature. Reproduce in the packaged Settings UI. If Set Up stays disabled, `selectedEngine` is not reaching `buildAiAddonControlState`. If it is enabled but setup no-ops/errors, log the confirm + token path (Pyannote still needs a token after exclusive delete).
+3. Hugging Face token and Speakers dropdown stayed visible on Speakrs. Helpers already return false for speakrs (`shouldShowDiarizationTokenUi` / `shouldShowDiarizationSpeakerCount`) and JS sets `hidden`. **Root cause:** `src/renderer/styles.css` `.ai-addon-field { display: flex }` overrides the UA `[hidden] { display: none }` (same pattern already fixed for `.recording-presence[hidden]`). Speakrs stays auto-only; Pyannote keeps Auto / 2–6.
+
+### Task 7a: Selector UX + Mac quality follow-up (blocking ship bar)
+
+Do this **before** calling Task 7 checklist green. Still no Task 7 default flip. Still no Task 8.
+
+**Files:**
+
+- Modify: `src/renderer/styles.css` — `.ai-addon-field[hidden] { display: none; }` (and compact if needed) so token + speaker-count actually hide.
+- Modify: `src/renderer/ai-addon-ui-helpers.js` — `getDiarizationSetupButtonLabel({ selectedEngine, installedEngine, hasOtherEngineLocalState })` → `'Switch model'` when `shouldConfirmDiarizationEngineSwitch`, else `'Set Up'`.
+- Modify: `src/renderer/app.js` — apply that label on Settings + Home; selecting the other card must enable the button. Reproduce Speakrs→Pyannote in packaged Settings and fix whatever kept soak from switching (control state, confirm, or token gate). Do not auto-start setup on card click.
+- Modify: `tests/js/ai-addon-ui-helpers.test.js`, `tests/js/history-detail-helpers.test.js` — pin label + hidden fields; keep the existing `canConfigure` switch test and add a UI-level assertion that the Settings button text flips.
+- Modify: `tests/manual/local-ai-addons-checklist.md` — Switch model label; token/speaker-count hidden **visually** (not just `hidden=` attribute); Speakrs→Pyannote on a Ready Speakrs install.
+- Quality (no code until the same-audio A/B is logged): run pyannote on the 10:22 clip (or a new paired recording). If Speakrs is still ≥1 extra speaker or split-identity on the in-room talker, record it in `docs/development/SPEAKRS_BENCHMARKS.md` and keep pyannote selectable. Do not invent a Speakrs `--speaker-count`.
+
+**Validation:** `npm test`; packaged Mac: Speakrs selected → no token field, no Speakers dropdown; Pyannote selected → both visible; Ready Speakrs → select Pyannote → button reads **Switch model** and is enabled → confirm → token prompt → Speakrs pack gone. Same-audio A/B note in the benchmarks file.
 
 ### Task 8: pyannote removal — **PARKED**
 
@@ -454,5 +489,6 @@ Metrics: DER (`pyannote.metrics` offline, collar 0 + 250 ms), wall time / RTFx, 
 5. Task 4 main-process plumbing
 6. Task 5 selector UI + exclusive switch/delete
 7. Task 6 build/CI/release (merge; both engines selectable)
-8. Task 7 soak + README RAM (no flip)
-9. Task 8 parked
+8. Task 7 soak + README RAM (no flip) — **Mac 2026-08-14 in progress; selector/quality not green**
+9. Task 7a selector UX (Switch model, `[hidden]` CSS, Speakrs→Pyannote) + same-audio A/B note
+10. Task 8 parked

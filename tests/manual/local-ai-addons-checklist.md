@@ -72,8 +72,9 @@ Use this checklist when validating speaker identification or local summaries on 
 - [ ] Keyboard: native radio group. Tab lands on the selected card, arrow keys move between Speakrs and Pyannote, and a visible focus ring appears. Mouse click still selects. Disabled cards skip keyboard navigation.
 - [ ] Cards stay equal height and aligned at 100–200% zoom; they stack on a narrow Settings pane rather than overflowing.
 - [ ] New-user Home speaker prompt shows the same two cards and Set Up starts Speakrs (no token field).
-- [ ] Token fields and speaker-count stay hidden while Speakrs is selected; they appear only for Pyannote. `needsAccount` still appears for Pyannote. Switching away from Pyannote clears typed tokens. Home and Settings never mix each other's token values.
-- [ ] Switch Speakrs → Pyannote: confirm copy appears, Speakrs pack/ORT is deleted, token prompt is shown, shared CUDA pip (`nvidia-cublas`) remains.
+- [ ] Token fields and speaker-count stay **visually** hidden while Speakrs is selected (`.ai-addon-field[hidden]` must beat `display: flex`); they appear only for Pyannote. `needsAccount` still appears for Pyannote. Switching away from Pyannote clears typed tokens. Home and Settings never mix each other's token values.
+- [ ] When the other engine is installed, Settings/Home primary button reads **Switch model** (not Set Up). Selecting the other card leaves that button enabled.
+- [ ] Switch Speakrs → Pyannote from a Ready Speakrs install: confirm copy appears, Speakrs pack/ORT is deleted, token prompt is shown, shared CUDA pip (`nvidia-cublas`) remains.
 - [ ] Switch Pyannote → Speakrs: confirm copy appears, pyannote deps/HF cache/token are deleted, token UI hides, shared CUDA pip remains. Token-only Pyannote (saved token, no model tree) still requires this confirm and still enables Remove.
 - [ ] Remove deletes only the active engine and leaves `engine` as the last choice so re-setup is one click.
 - [ ] Setup/Remove/Switch is rejected while setup is running or compute/preload/GPU-runtime work is pending. A job that starts after setup is queued must not begin exclusive deletion.

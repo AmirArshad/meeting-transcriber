@@ -40,6 +40,10 @@ function flagNames(args) {
   return args.filter((value) => typeof value === 'string' && value.startsWith('--'));
 }
 
+function makeTempDir(prefix) {
+  return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
+}
+
 function assertEngineAgnosticFlags(actualFlags, requiredFlags) {
   for (const flag of requiredFlags) {
     assert.ok(actualFlags.includes(flag), `missing required flag ${flag}`);
@@ -292,8 +296,8 @@ test('diarize-transcript Speakrs production spawn receives engine argv and isola
   const availability = getDiarizationAvailability(process.platform, process.arch);
   assert.equal(availability.supported, true, 'handler coverage requires a supported diarization platform');
 
-  const recordingsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-diarize-rec-'));
-  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-diarize-ud-'));
+  const recordingsDir = makeTempDir('speakrs-diarize-rec-');
+  const userDataDir = makeTempDir('speakrs-diarize-ud-');
   const audioPath = path.join(recordingsDir, 'meeting.opus');
   fs.writeFileSync(audioPath, 'opus');
 
@@ -489,7 +493,7 @@ test('diarize-transcript Speakrs production spawn receives engine argv and isola
 test('queued Speakrs compute admission failure prevents diarization spawn', async () => {
   const availability = getDiarizationAvailability(process.platform, process.arch);
   assert.equal(availability.supported, true, 'handler coverage requires a supported diarization platform');
-  const recordingsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-admission-rec-'));
+  const recordingsDir = makeTempDir('speakrs-admission-rec-');
   const audioPath = path.join(recordingsDir, 'meeting.opus');
   fs.writeFileSync(audioPath, 'opus');
   const spawned = [];
@@ -530,7 +534,11 @@ test('queued Speakrs compute admission failure prevents diarization spawn', asyn
       audioPath,
       segments: [{ start: 0, end: 1, text: 'hello' }],
     });
+    const started = Date.now();
     while (!runQueuedAction) {
+      if (Date.now() - started > 2000) {
+        throw new Error('Timed out waiting for diarize-transcript queue admission');
+      }
       await new Promise((resolve) => setImmediate(resolve));
     }
     assert.equal(statusOptions.length, 1);
@@ -548,7 +556,7 @@ test('packaged missing Speakrs CLI diarize-transcript handler returns reinstall 
   const availability = getDiarizationAvailability(process.platform, process.arch);
   assert.equal(availability.supported, true, 'handler coverage requires a supported diarization platform');
 
-  const recordingsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-missing-cli-rec-'));
+  const recordingsDir = makeTempDir('speakrs-missing-cli-rec-');
   const audioPath = path.join(recordingsDir, 'meeting.opus');
   fs.writeFileSync(audioPath, 'opus');
   const previousPackaged = process.env.AVANEVIS_PACKAGED;

@@ -318,7 +318,11 @@ test('packaged buildSpeakrsSpawnEnv pins Resources/bin and ignores decoys', () =
   }
 });
 
-test('Windows Speakrs PATH prepends speakrs-ort once', () => {
+test('Windows Speakrs PATH prepends speakrs-ort once', (t) => {
+  if (process.platform !== 'win32') {
+    t.skip('Windows PATH uses `;`; host path.delimiter cannot simulate it on POSIX.');
+    return;
+  }
   const userDataDir = path.join('C:', 'Users', 'tester', 'AvaNevis');
   const ortDir = getSpeakrsOrtRuntimeDir(userDataDir);
   const spawned = buildSpeakrsSpawnEnv({
