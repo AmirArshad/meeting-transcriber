@@ -35,7 +35,7 @@
     "adm-zip": "0.6.0"
   },
   "devDependencies": {
-    "electron": "^42.9.0",
+    "electron": "^43.4.0",
     "electron-builder": "^26.15.3"
   },
   "overrides": {
