@@ -2,6 +2,22 @@
 
 Active TODOs only. Completed initiative history lives in git history, `docs/releases/`, and the linked design docs (see "Recently shipped" at the bottom).
 
+## Active: Linux Support (Omarchy first)
+
+**Plan:** [docs/initiatives/LINUX_SUPPORT.md](docs/initiatives/LINUX_SUPPORT.md) — replanned + review pass 2026-08-23. Primary target Omarchy 4 (Hyprland/Wayland/PipeWire); secondary Ubuntu 24.04+ via AppImage. Two milestones: **Core Beta** (Phases 0–5) then **Feature Parity** (Phases 6–9). One PR per phase; phases are strictly ordered. Gate A (red Windows CI test) is **resolved** — flake; green run [32613244438](https://github.com/AmirArshad/meeting-transcriber/actions/runs/32613244438). Gate B ([issue #76](https://github.com/AmirArshad/meeting-transcriber/issues/76), macOS DMG report) **still open** — blocks `build-release.yml` changes only.
+
+- [ ] [Risk: Low] **Phase 0 — baseline + characterization:** diagnosable-assertion fix in `tests/js/speakrs-task2-hardening.test.js` (snippet in plan Gate A); Linux cases in platform-selection tests; `npm test` green on the Omarchy host; Linux rows in both manual checklists; no Linux feature advertised as ready.
+- [ ] [Risk: Medium] **Phase 1 — Omarchy audio spike (disposable, not merged as recorder):** pulsectl enumeration + SoundCard mic/monitor concurrent capture; mic-only/desktop-only/mixed WAVs; default-sink switch behavior; cadence/drift/CPU evidence recorded in the plan doc.
+- [ ] [Risk: Medium] **Phase 2 — runtime + device plumbing:** `requirements-linux.txt` (`pulsectl==24.12.0`, `SoundCard==0.4.6`); verified Linux Python/ffmpeg pins into `build/download-manifest.js` (asset names in plan "Verified upstream artifacts"; compute SHA-256 at pin time); opaque `pulse-source:`/`pulse-monitor:` device IDs end to end; remove renderer `parseInt` coercions (`app.js` `runRecordingPreflightChecks` + start path) and `Number.isInteger(micId)` in the preflight handler.
+- [ ] [Risk: High] **Phase 3 — production `linux_recorder.py`:** durable spools, stdout JSON contract, stop stages, exact-token stdin, cancel tombstone, mic-only degradation, `linux-v1` finalization profile; full required-test list in the plan.
+- [ ] [Risk: High] **Phase 4 — Electron behavior:** Linux secret-storage bootstrap in `src/main.js` (`password-store` switch — Hyprland is not on Chromium's desktop list, so default selection lands on `basic_text`; snippet in plan decision 9); Wayland/ozone decision spike (XWayland blurry under Hyprland fractional scaling; recommendation `--ozone-platform-hint=auto`); tray via native SNI + `setContextMenu` only, no libappindicator dep, graceful no-SNI-host degradation; Linux faster-whisper paths; CPU baseline + CUDA fallback recording actual device.
+- [ ] [Risk: High] **Phase 5 — Core Beta packaging:** electron-builder decision (26.x `toolsets.appimage` opt-in vs v27 upgrade — never legacy FUSE2); pacman target with `.PKGINFO` validated on clean Omarchy; `AvaNevis-Setup-*` artifact names + tightened `findInstallerAsset` Linux branch in `src/updater.js`; CI ubuntu build job (AppImage cannot cross-compile); packaged-AppImage `safeStorage` token round-trip smoke; release job only after Gate B closes.
+- [ ] [Risk: Medium] **Phase 6 — accelerator foundation:** `nvidia-cublas-cu12`/`nvidia-cudnn-cu12` manylinux pins; CUDA-12-major probe at queued-job start; `LD_LIBRARY_PATH` injection; `gpuResourceActionQueue` serialization preserved.
+- [ ] [Risk: High] **Phase 7 — speaker-ID parity:** `Cargo.toml` Linux target (`default-linalg`+`cuda`+`load-dynamic`) + `ort-compile-pins.json` `linux-x64: null` entry; ORT `onnxruntime-linux-x64-gpu_cuda12-1.27.1.tgz` closure pins (cuDNN 9 + zlib + `LD_LIBRARY_PATH`); Linux model pack; Pyannote two-part token preflight (`isEncryptionAvailable()` **and** backend ≠ `basic_text`); exclusive switch/remove on packaged Linux; CUDA-only, no CPU fallback.
+- [ ] [Risk: Medium] **Phase 8 — summary parity:** pinned CPU runtime `llama-b9173-bin-ubuntu-x64.tar.gz` (same b9173 tag as Win/mac); Vulkan profile (`llama-b9173-bin-ubuntu-vulkan-x64.tar.gz`) only after real inference evidence; 60-min Balanced summary within the 90-min wall clock or Linux summaries stay unsupported.
+- [ ] [Risk: Medium] **Phase 9 — parity release:** run the four-environment support matrix in the plan; release only what it proves.
+- [ ] [Risk: Low] **Gate B follow-through:** verify the v2.7.0 DMG (checksum/mount/signature/notarization/stapling), update [issue #76](https://github.com/AmirArshad/meeting-transcriber/issues/76) — prerequisite for the Phase 5 release job.
+
 ## Active: Speakrs Diarization Migration
 
 **Shipped in v2.7.0** (2026-08-14) on `feature/speakrs-diarization` → `master`. Exclusive Speakrs / Pyannote selector; new users default Speakrs; existing pyannote stays until they switch. Soak closed from Mac packaged CoreML + Windows CUDA smoke (see `docs/development/SPEAKRS_BENCHMARKS.md`). **No silent cutover. Task 8 (delete pyannote) stays parked.**
@@ -37,10 +53,11 @@ Active TODOs only. Completed initiative history lives in git history, `docs/rele
 
 ## Next Priorities
 
-1. **Release hygiene** — notarization when enrolled; transitive pin trim; PyObjC Cocoa/Quartz evaluation.
-2. **Optional extended checklists** — when convenient.
-3. **Next product features** — silent auto-install updater; upload existing audio (reuse Activity queue); see [ROADMAP.md](docs/initiatives/ROADMAP.md).
-4. **Speakrs Task 8** stays parked — do not delete pyannote.
+1. **Linux support (Omarchy first)** — execute [docs/initiatives/LINUX_SUPPORT.md](docs/initiatives/LINUX_SUPPORT.md) phase by phase, starting with Phase 0 then the Phase 1 audio spike. Gate A resolved; Gate B still blocks release-workflow changes.
+2. **Release hygiene** — Gate B / issue #76 DMG verification; notarization when enrolled; transitive pin trim; PyObjC Cocoa/Quartz evaluation.
+3. **Optional extended checklists** — when convenient.
+4. **Next product features** — silent auto-install updater; upload existing audio (reuse Activity queue); see [ROADMAP.md](docs/initiatives/ROADMAP.md).
+5. **Speakrs Task 8** stays parked — do not delete pyannote.
 
 Do **not** force Phase 2 renderer controllers now. Revisit only if `app.js` grows materially or a feature forces controller-level changes — and only after (1) a DOM-testing decision and (2) a written Pattern C shared-state ownership plan.
 
