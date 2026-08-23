@@ -12,6 +12,11 @@ const BUILD_DOWNLOADS = Object.freeze({
     url: 'https://github.com/indygreg/python-build-standalone/releases/download/20240107/cpython-3.11.7+20240107-aarch64-apple-darwin-install_only.tar.gz',
     sha256: 'b042c966920cf8465385ca3522986b12d745151a72c060991088977ca36d3883',
   }),
+  pythonLinux: Object.freeze({
+    label: 'Linux standalone Python 3.11.7+20240107',
+    url: 'https://github.com/astral-sh/python-build-standalone/releases/download/20240107/cpython-3.11.7+20240107-x86_64-unknown-linux-gnu-install_only.tar.gz',
+    sha256: '4a51ce60007a6facf64e5495f4cf322e311ba9f39a8cd3f3e4c026eae488e140',
+  }),
   ffmpegWin: Object.freeze({
     label: 'Windows ffmpeg 8.0.1 essentials build',
     // gyan.dev/ffmpeg/builds/packages/ only hosts the current release zip.
@@ -24,6 +29,13 @@ const BUILD_DOWNLOADS = Object.freeze({
     sha256: 'c334b7f418e10201dc6c8e42407f5198c3270524cc77d40606e746be3c49159a',
     archiveFileName: 'ffmpeg-osx-arm64',
     requiredArch: 'arm64',
+  }),
+  ffmpegLinux: Object.freeze({
+    label: 'Linux ffmpeg n8.0.1 x64 static (shaka-project/static-ffmpeg-binaries)',
+    url: 'https://github.com/shaka-project/static-ffmpeg-binaries/releases/download/n8.0.1-1/ffmpeg-linux-x64',
+    sha256: 'b66cc32cd45584ff5f65b8957be4fa93b43d002c502808248f6de3fc5cbc1c31',
+    archiveFileName: 'ffmpeg-linux-x64',
+    requiredArch: 'x64',
   }),
   ffmpegSource: Object.freeze({
     label: 'FFmpeg 8.0.1 release source',

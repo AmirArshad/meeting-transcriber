@@ -72,9 +72,35 @@
     };
   }
 
+  function toOpaqueDeviceId(value) {
+    if (value == null) {
+      return '';
+    }
+    return String(value);
+  }
+
+  function decorateDesktopDevices(loopbacks, hostFamily) {
+    const devices = Array.isArray(loopbacks) ? loopbacks.slice() : [];
+    if (hostFamily !== 'linux') {
+      return devices;
+    }
+    return [
+      {
+        id: 'none',
+        name: 'None (microphone only)',
+        sample_rate: 48000,
+        channels: 0,
+        host_api: 'PulseAudio',
+      },
+      ...devices,
+    ];
+  }
+
   return {
     inferRendererHostFamily,
     getEmptyMicrophoneDeviceGuidance,
     getRecordingPermissionFailureGuidance,
+    toOpaqueDeviceId,
+    decorateDesktopDevices,
   };
 }));

@@ -17,6 +17,12 @@ const DISK_SPACE_WARNING_MESSAGE =
 const DISK_SPACE_CRITICAL_MESSAGE =
   'Less than 2 GB is available. Long recordings may run out of space.';
 
+const {
+  coerceIntegerDeviceId,
+  evaluateSelectedDevices,
+  extractDeviceManagerError,
+} = require('../main-process/device-id-helpers');
+
 /**
  * Pure disk-space classification used by checkDiskSpace and unit tests.
  * @param {number} availableBytes
@@ -185,6 +191,16 @@ function createDeviceIpc(deps) {
 
         if (code !== 0) {
           console.warn('validate-devices failed with code', code);
+          if (process.platform === 'linux') {
+            const message = extractDeviceManagerError(errorOutput)
+              || 'Could not list audio devices. Is PulseAudio or PipeWire running?';
+            resolve({
+              valid: false,
+              warnings: [],
+              errors: [message],
+            });
+            return;
+          }
           resolve({
             valid: true, // Allow recording to proceed
             warnings: ['Device enumeration failed - proceeding anyway'],
@@ -195,39 +211,11 @@ function createDeviceIpc(deps) {
 
         try {
           const data = JSON.parse(output);
-          const errors = [];
-          const warnings = [];
-
-          // Check microphone device
-          const micDevice = data.input_devices.find(d => d.id === micId);
-          if (!micDevice) {
-            errors.push(`Microphone device (ID: ${micId}) not found. It may have been disconnected.`);
-          }
-
-          // Check loopback device (platform-specific)
-          if (process.platform === 'darwin') {
-            // macOS: loopbackId -1 means ScreenCaptureKit (virtual)
-            if (loopbackId !== -1) {
-              warnings.push('Non-standard loopback device selected on macOS.');
-            }
-          } else {
-            // Windows: Check loopback device exists
-            const loopbackDevice = data.loopback_devices.find(d => d.id === loopbackId);
-            if (loopbackId >= 0 && !loopbackDevice) {
-              errors.push(`Desktop audio device (ID: ${loopbackId}) not found. It may have been disconnected.`);
-            }
-          }
-
-          resolve({
-            valid: errors.length === 0,
-            errors,
-            warnings,
-            devices: {
-              mic: micDevice || null,
-              loopback: loopbackId === -1 ? { name: 'System Audio (ScreenCaptureKit)', id: -1 } :
-                        data.loopback_devices.find(d => d.id === loopbackId) || null
-            }
-          });
+          resolve(evaluateSelectedDevices(data, {
+            micId,
+            loopbackId,
+            platform: process.platform,
+          }));
         } catch (e) {
           console.warn('Failed to parse device list:', e);
           resolve({
@@ -357,8 +345,9 @@ function createDeviceIpc(deps) {
     return new Promise((resolve) => {
       let settled = false;
       let timeoutHandle = null;
-      const args = Number.isInteger(micId)
-        ? getBackendModuleArgs('check_permissions', ['--mic-device-id', String(micId), '--skip-screen-recording-check'])
+      const integerMicId = coerceIntegerDeviceId(micId);
+      const args = integerMicId != null
+        ? getBackendModuleArgs('check_permissions', ['--mic-device-id', String(integerMicId), '--skip-screen-recording-check'])
         : getBackendModuleArgs('check_permissions', ['--skip-screen-recording-check']);
 
       const proc = spawnTrackedPython(args, {
@@ -550,6 +539,8 @@ module.exports = {
   registerDeviceIpc,
   buildDiskSpaceResult,
   buildUnknownDiskSpaceResult,
+  evaluateSelectedDevices,
+  extractDeviceManagerError,
   DISK_WARNING_BYTES,
   DISK_CRITICAL_BYTES,
   DISK_SPACE_WARNING_MESSAGE,

@@ -14,17 +14,23 @@ from typing import Dict, List, Any, Optional
 from device_helpers import (
     build_device_record,
     dedupe_device_by_name,
+    format_pulse_monitor_id,
+    format_pulse_source_id,
     is_blocked_windows_device_name,
+    is_pulse_monitor_source,
     macos_virtual_loopback_devices,
+    parse_pulse_device_id,
     sort_devices_by_name,
 )
 
 # Platform detection
 IS_WINDOWS = platform.system() == 'Windows'
 IS_MACOS = platform.system() == 'Darwin'
+IS_LINUX = platform.system() == 'Linux'
 
 pyaudio: Optional[object] = None
 sd: Optional[object] = None
+pulsectl: Optional[object] = None
 
 
 class DeviceManagerEnvironmentError(RuntimeError):
@@ -32,7 +38,7 @@ class DeviceManagerEnvironmentError(RuntimeError):
 
 
 def load_audio_backend():
-    global pyaudio, sd
+    global pyaudio, sd, pulsectl
 
     if IS_WINDOWS:
         if pyaudio is None:
@@ -56,6 +62,17 @@ def load_audio_backend():
                 ) from exc
         return sd
 
+    if IS_LINUX:
+        if pulsectl is None:
+            try:
+                import pulsectl as imported_pulsectl
+                pulsectl = imported_pulsectl
+            except ImportError as exc:
+                raise DeviceManagerEnvironmentError(
+                    "pulsectl not installed. Run: pip install pulsectl"
+                ) from exc
+        return pulsectl
+
     raise DeviceManagerEnvironmentError(f"Unsupported platform: {platform.system()}")
 
 
@@ -70,13 +87,29 @@ class DeviceManager:
         elif IS_MACOS:
             self.audio_backend = load_audio_backend()
             self.pa = None  # sounddevice doesn't need initialization
+            self.pulse = None
+        elif IS_LINUX:
+            backend = load_audio_backend()
+            self.audio_backend = backend
+            self.pa = None
+            try:
+                self.pulse = backend.Pulse('avanevis-device-manager')
+            except Exception as exc:
+                raise DeviceManagerEnvironmentError(
+                    "PulseAudio/PipeWire is not running. Start the session audio service and try again."
+                ) from exc
         else:
             raise DeviceManagerEnvironmentError(f"Unsupported platform: {platform.system()}")
 
     def __del__(self):
-        """Clean up PyAudio instance."""
+        """Clean up native audio clients."""
         if IS_WINDOWS and hasattr(self, 'pa') and self.pa:
             self.pa.terminate()
+        if IS_LINUX and getattr(self, 'pulse', None) is not None:
+            try:
+                self.pulse.close()
+            except Exception:
+                pass
 
     def list_all_devices(self) -> Dict[str, List[Dict[str, Any]]]:
         """
@@ -90,6 +123,8 @@ class DeviceManager:
             return self._list_devices_windows()
         elif IS_MACOS:
             return self._list_devices_macos()
+        elif IS_LINUX:
+            return self._list_devices_linux()
 
         raise DeviceManagerEnvironmentError(f"Unsupported platform: {platform.system()}")
 
@@ -183,7 +218,65 @@ class DeviceManager:
             "loopback_devices": loopback_devices,
         }
 
-    def validate_input_device(self, device_id: int, *, label: str = "Microphone") -> None:
+    def _pulse_sample_rate(self, info) -> int:
+        spec = getattr(info, "sample_spec", None)
+        return int(getattr(spec, "rate", 48000) or 48000)
+
+    def _list_devices_linux(self) -> Dict[str, List[Dict[str, Any]]]:
+        """Linux enumeration through pulsectl. IDs are opaque Pulse names."""
+        seen_inputs = {}
+        seen_outputs = {}
+        seen_loopbacks = {}
+
+        try:
+            sources = self.pulse.source_list()
+            sinks = self.pulse.sink_list()
+        except Exception as exc:
+            print(f"ERROR: Could not enumerate Pulse devices: {exc}", file=sys.stderr)
+            raise DeviceManagerEnvironmentError(
+                "Could not list PulseAudio/PipeWire devices. Is the session audio service running?"
+            ) from exc
+
+        for source in sources:
+            rate = self._pulse_sample_rate(source)
+            channels = int(getattr(source, "channel_count", 1) or 1)
+            name = source.description or source.name
+            if is_pulse_monitor_source(source):
+                device_data = build_device_record(
+                    device_id=format_pulse_monitor_id(source.name),
+                    name=name,
+                    channels=channels,
+                    sample_rate=rate,
+                    host_api="PulseAudio",
+                )
+                dedupe_device_by_name(seen_loopbacks, device_data)
+            else:
+                device_data = build_device_record(
+                    device_id=format_pulse_source_id(source.name),
+                    name=name,
+                    channels=channels,
+                    sample_rate=rate,
+                    host_api="PulseAudio",
+                )
+                dedupe_device_by_name(seen_inputs, device_data)
+
+        for sink in sinks:
+            device_data = build_device_record(
+                device_id=sink.name,
+                name=sink.description or sink.name,
+                channels=int(getattr(sink, "channel_count", 2) or 2),
+                sample_rate=self._pulse_sample_rate(sink),
+                host_api="PulseAudio",
+            )
+            dedupe_device_by_name(seen_outputs, device_data)
+
+        return {
+            "input_devices": sort_devices_by_name(seen_inputs.values()),
+            "output_devices": sort_devices_by_name(seen_outputs.values()),
+            "loopback_devices": sort_devices_by_name(seen_loopbacks.values()),
+        }
+
+    def validate_input_device(self, device_id, *, label: str = "Microphone") -> None:
         """Raise ValueError when device_id is not a usable input device."""
         if IS_WINDOWS:
             device_count = self.pa.get_device_count()
@@ -202,6 +295,18 @@ class DeviceManager:
                 raise ValueError(f"{label} device {device_id} has no input channels")
             return
 
+        if IS_LINUX:
+            parsed = parse_pulse_device_id(device_id)
+            if parsed is None or parsed[0] != "source":
+                raise ValueError(f"{label} device ID {device_id} is not a Pulse source id")
+            source_name = parsed[1]
+            for source in self.pulse.source_list():
+                if source.name == source_name:
+                    if is_pulse_monitor_source(source):
+                        raise ValueError(f"{label} device {device_id} is a monitor, not a microphone")
+                    return
+            raise ValueError(f"{label} device ID {device_id} was not found")
+
         raise ValueError(f"{label} device validation is not supported on this platform")
 
     def get_device_info(self, device_id: int) -> Dict[str, Any]:
@@ -218,6 +323,8 @@ class DeviceManager:
             return self._get_device_info_windows(device_id)
         elif IS_MACOS:
             return self._get_device_info_macos(device_id)
+        elif IS_LINUX:
+            return self._get_device_info_linux(device_id)
 
         return {"error": f"Unsupported platform: {platform.system()}"}
 
@@ -255,7 +362,41 @@ class DeviceManager:
         except Exception as e:
             return {"error": str(e)}
 
-    def get_default_devices(self) -> Dict[str, int]:
+    def _get_device_info_linux(self, device_id) -> Dict[str, Any]:
+        parsed = parse_pulse_device_id(device_id)
+        if parsed is None:
+            return {"error": f"Not a Pulse device id: {device_id}"}
+        kind, name = parsed
+        try:
+            if kind == "source":
+                for source in self.pulse.source_list():
+                    if source.name == name:
+                        return {
+                            "id": format_pulse_source_id(source.name),
+                            "name": source.description or source.name,
+                            "max_input_channels": int(getattr(source, "channel_count", 0) or 0),
+                            "max_output_channels": 0,
+                            "default_sample_rate": self._pulse_sample_rate(source),
+                            "is_loopback": False,
+                            "host_api": "PulseAudio",
+                        }
+            else:
+                for source in self.pulse.source_list():
+                    if source.name == name:
+                        return {
+                            "id": format_pulse_monitor_id(source.name),
+                            "name": source.description or source.name,
+                            "max_input_channels": int(getattr(source, "channel_count", 0) or 0),
+                            "max_output_channels": 0,
+                            "default_sample_rate": self._pulse_sample_rate(source),
+                            "is_loopback": True,
+                            "host_api": "PulseAudio",
+                        }
+            return {"error": f"Pulse device not found: {device_id}"}
+        except Exception as e:
+            return {"error": str(e)}
+
+    def get_default_devices(self) -> Dict[str, Any]:
         """
         Get the default input and output device IDs.
 
@@ -266,6 +407,8 @@ class DeviceManager:
             return self._get_default_devices_windows()
         elif IS_MACOS:
             return self._get_default_devices_macos()
+        elif IS_LINUX:
+            return self._get_default_devices_linux()
 
         return {"default_input": -1, "default_output": -1}
 
@@ -300,13 +443,43 @@ class DeviceManager:
                 if device['name'] == default_output['name']:
                     output_idx = i
 
-            return {
-                "default_input": input_idx,
-                "default_output": output_idx
-            }
+            return {"default_input": input_idx, "default_output": output_idx}
         except Exception as e:
             print(f"Warning: Could not get default devices: {e}", file=sys.stderr)
             return {"default_input": -1, "default_output": -1}
+
+    def _get_default_devices_linux(self) -> Dict[str, Any]:
+        try:
+            server = self.pulse.server_info()
+            sources = list(self.pulse.source_list())
+            sinks = {sink.name: sink for sink in self.pulse.sink_list()}
+
+            default_source_name = getattr(server, "default_source_name", None)
+            default_sink_name = getattr(server, "default_sink_name", None)
+
+            default_input = None
+            default_source = next((source for source in sources if source.name == default_source_name), None)
+            if default_source is not None and not is_pulse_monitor_source(default_source):
+                default_input = format_pulse_source_id(default_source.name)
+            else:
+                for source in sources:
+                    if not is_pulse_monitor_source(source):
+                        default_input = format_pulse_source_id(source.name)
+                        break
+
+            default_output = None
+            default_sink = sinks.get(default_sink_name)
+            monitor_name = getattr(default_sink, "monitor_source_name", None) if default_sink is not None else None
+            if monitor_name:
+                default_output = format_pulse_monitor_id(monitor_name)
+
+            return {
+                "default_input": default_input,
+                "default_output": default_output,
+            }
+        except Exception as e:
+            print(f"Warning: Could not get default devices: {e}", file=sys.stderr)
+            return {"default_input": None, "default_output": None}
 
 
 def main():

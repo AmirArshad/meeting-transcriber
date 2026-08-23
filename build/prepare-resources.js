@@ -18,6 +18,7 @@ const RESOURCE_MANIFEST_PATH = path.join(BUILD_DIR, 'resource-manifest.json');
 const RESOURCE_MANIFEST_VERSION = 7;
 const REQUIREMENTS_MACOS_BUILD = path.join(__dirname, '..', 'requirements-macos-build.txt');
 const REQUIREMENTS_WINDOWS_BUILD = path.join(__dirname, '..', 'requirements-windows-build.txt');
+const REQUIREMENTS_LINUX_BUILD = path.join(__dirname, '..', 'requirements-linux-build.txt');
 const MACOS_RUNTIME_REMOVABLE_PACKAGES = Object.freeze([
   'sympy',
   'av.libs',
@@ -57,6 +58,7 @@ const SPEAKRS_ORT_COMPILE_PINS_PATH = path.join(SPEAKRS_CLI_DIR, 'ort-compile-pi
 
 const IS_MAC = process.platform === 'darwin';
 const IS_WINDOWS = process.platform === 'win32';
+const IS_LINUX = process.platform === 'linux';
 
 function readTextOrEmpty(filePath) {
   return fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : '';
@@ -183,6 +185,13 @@ function writeFfmpegComplianceManifest(targetDir = LEGAL_DIR) {
         sha256: BUILD_DOWNLOADS.ffmpegMac.sha256,
         requiredArch: BUILD_DOWNLOADS.ffmpegMac.requiredArch || 'arm64',
       },
+      linux: {
+        ...(templateProvenance.linux || {}),
+        label: BUILD_DOWNLOADS.ffmpegLinux.label,
+        downloadUrl: BUILD_DOWNLOADS.ffmpegLinux.url,
+        sha256: BUILD_DOWNLOADS.ffmpegLinux.sha256,
+        requiredArch: BUILD_DOWNLOADS.ffmpegLinux.requiredArch || 'x64',
+      },
     },
     correspondingSource: {
       ...(template.correspondingSource || {}),
@@ -291,8 +300,10 @@ function buildResourceManifest() {
     inputs: {
       requirementsMacos: hashString(readTextOrEmpty(path.join(__dirname, '..', 'requirements-macos.txt'))),
       requirementsWindows: hashString(readTextOrEmpty(path.join(__dirname, '..', 'requirements-windows.txt'))),
+      requirementsLinux: hashString(readTextOrEmpty(path.join(__dirname, '..', 'requirements-linux.txt'))),
       requirementsMacosBuild: hashString(readTextOrEmpty(REQUIREMENTS_MACOS_BUILD)),
       requirementsWindowsBuild: hashString(readTextOrEmpty(REQUIREMENTS_WINDOWS_BUILD)),
+      requirementsLinuxBuild: hashString(readTextOrEmpty(REQUIREMENTS_LINUX_BUILD)),
       swiftPackage: hashString(readTextOrEmpty(path.join(__dirname, '..', 'swift', 'AudioCaptureHelper', 'Package.swift'))),
       swiftInfoPlist: hashString(readTextOrEmpty(path.join(__dirname, '..', 'swift', 'AudioCaptureHelper', 'Info.plist'))),
       swiftSources: buildDirectoryManifest(
@@ -1015,10 +1026,9 @@ function checkExistingResources() {
   const pythonExe = IS_WINDOWS ? 'python.exe' : 'python3';
   const ffmpegExe = IS_WINDOWS ? 'ffmpeg.exe' : 'ffmpeg';
 
-  // For macOS, check for python3 in PYTHON_DIR/bin/
-  const pythonPath = IS_MAC
-    ? path.join(PYTHON_DIR, 'bin', pythonExe)
-    : path.join(PYTHON_DIR, pythonExe);
+  const pythonPath = IS_WINDOWS
+    ? path.join(PYTHON_DIR, pythonExe)
+    : path.join(PYTHON_DIR, 'bin', pythonExe);
 
   const pythonExists = fs.existsSync(pythonPath);
   const ffmpegExists = fs.existsSync(path.join(FFMPEG_DIR, ffmpegExe));
@@ -1214,7 +1224,41 @@ async function prepareResources() {
       assertMacOSPythonRuntimeImports(pythonExe);
 
       console.log('✓ Python setup complete!\n');
-    } else {
+    } else if (IS_LINUX) {
+      console.log('[1/4] Downloading standalone Python for Linux (x86_64)...');
+      const pythonTar = path.join(BUILD_DIR, 'python-linux.tar.gz');
+      await downloadFile(getBuildDownload('pythonLinux'), pythonTar);
+
+      console.log('[2/4] Extracting Python...');
+      const tempDir = path.join(BUILD_DIR, 'python-temp');
+      extractTarGz(pythonTar, tempDir);
+
+      const extractedPythonDir = path.join(tempDir, 'python');
+      if (fs.existsSync(extractedPythonDir)) {
+        if (fs.existsSync(PYTHON_DIR)) {
+          fs.rmSync(PYTHON_DIR, { recursive: true, force: true });
+        }
+        fs.renameSync(extractedPythonDir, PYTHON_DIR);
+      }
+
+      fs.unlinkSync(pythonTar);
+      fs.rmSync(tempDir, { recursive: true, force: true });
+
+      console.log('[3/4] Setting up pip...');
+      const pythonExe = path.join(PYTHON_DIR, 'bin', 'python3');
+      execSync(`chmod +x "${pythonExe}"`, { stdio: 'inherit' });
+      await ensurePipInstalled(pythonExe, path.join(PYTHON_DIR, 'lib', 'python3.11', 'site-packages'));
+
+      console.log('[4/4] Installing Python dependencies...');
+      const requirementsPath = fs.existsSync(REQUIREMENTS_LINUX_BUILD)
+        ? REQUIREMENTS_LINUX_BUILD
+        : path.join(__dirname, '..', 'requirements-linux.txt');
+      execSync(`"${pythonExe}" -m pip install --only-binary=:all: -r "${requirementsPath}"`, {
+        stdio: 'inherit'
+      });
+
+      console.log('✓ Python setup complete!\n');
+    } else if (IS_WINDOWS) {
       // Windows: Download embedded Python
       console.log('[1/4] Downloading embedded Python...');
       const pythonZip = path.join(BUILD_DIR, 'python-embed.zip');
@@ -1248,6 +1292,8 @@ async function prepareResources() {
       });
 
       console.log('✓ Python setup complete!\n');
+    } else {
+      throw new Error(`Unsupported prepare-resources Python platform: ${process.platform}`);
     }
   }
 
@@ -1277,7 +1323,24 @@ async function prepareResources() {
       assertMacOSFfmpegBinaryArchitecture(ffmpegPath);
 
       console.log('✓ ffmpeg setup complete!\n');
-    } else {
+    } else if (IS_LINUX) {
+      const ffmpegDownload = getBuildDownload('ffmpegLinux');
+      console.log('[1/2] Downloading ffmpeg for Linux (x64)...');
+      const ffmpegStagingPath = path.join(BUILD_DIR, ffmpegDownload.archiveFileName || 'ffmpeg-linux-x64');
+      await downloadFile(ffmpegDownload, ffmpegStagingPath);
+
+      console.log('[2/2] Staging ffmpeg...');
+      if (!fs.existsSync(FFMPEG_DIR)) {
+        fs.mkdirSync(FFMPEG_DIR, { recursive: true });
+      }
+
+      const ffmpegPath = path.join(FFMPEG_DIR, 'ffmpeg');
+      fs.copyFileSync(ffmpegStagingPath, ffmpegPath);
+      fs.chmodSync(ffmpegPath, 0o755);
+      fs.unlinkSync(ffmpegStagingPath);
+
+      console.log('✓ ffmpeg setup complete!\n');
+    } else if (IS_WINDOWS) {
       // Windows: Download ffmpeg
       console.log('[1/2] Downloading ffmpeg...');
       const ffmpegZip = path.join(BUILD_DIR, 'ffmpeg.zip');
@@ -1313,6 +1376,8 @@ async function prepareResources() {
       fs.rmSync(tempDir, { recursive: true, force: true });
 
       console.log('✓ ffmpeg setup complete!\n');
+    } else {
+      throw new Error(`Unsupported prepare-resources ffmpeg platform: ${process.platform}`);
     }
   }
 
@@ -1333,18 +1398,22 @@ async function prepareResources() {
     verifyMacOSHelperSignature();
   }
 
-  try {
-    buildSpeakrsCli();
-  } catch (error) {
-    console.error('ERROR: speakrs-cli build failed:', error.message);
-    throw error;
-  }
+  if (isSpeakrsPackagingSupported()) {
+    try {
+      buildSpeakrsCli();
+    } catch (error) {
+      console.error('ERROR: speakrs-cli build failed:', error.message);
+      throw error;
+    }
 
-  stageSpeakrsValidateWav();
-  assertStagedSpeakrsCli();
-  assertStagedSpeakrsValidateWav();
-  if (IS_MAC) {
-    verifyMacOSSpeakrsCliSignature();
+    stageSpeakrsValidateWav();
+    assertStagedSpeakrsCli();
+    assertStagedSpeakrsValidateWav();
+    if (IS_MAC) {
+      verifyMacOSSpeakrsCliSignature();
+    }
+  } else {
+    console.log('Skipping speakrs-cli packaging on this platform (Linux Feature Parity, Phase 7)\n');
   }
 
   assertNoWindowsOnlyStaleHelper();

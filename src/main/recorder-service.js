@@ -10,6 +10,7 @@
  */
 
 const os = require('os');
+const { coerceIntegerDeviceId } = require('../main-process/device-id-helpers');
 
 const {
   buildRecordingPreflightReport,
@@ -1592,7 +1593,7 @@ function createRecorderService(deps) {
         validateSelectedDevices({ micId, loopbackId }),
         checkDiskSpace(),
         checkAudioOutputSupport(),
-        getMacOSPermissionStatus(Number.isInteger(micId) ? micId : null),
+        getMacOSPermissionStatus(coerceIntegerDeviceId(micId)),
       ]);
 
       return buildRecordingPreflightReport({

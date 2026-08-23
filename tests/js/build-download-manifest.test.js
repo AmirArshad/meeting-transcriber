@@ -20,6 +20,17 @@ test('BUILD_DOWNLOADS uses pinned direct download URLs', () => {
   );
   assert.equal(BUILD_DOWNLOADS.ffmpegMac.requiredArch, 'arm64');
   assert.match(BUILD_DOWNLOADS.ffmpegMac.sha256, /^[a-f0-9]{64}$/);
+  assert.equal(
+    BUILD_DOWNLOADS.pythonLinux.url,
+    'https://github.com/astral-sh/python-build-standalone/releases/download/20240107/cpython-3.11.7+20240107-x86_64-unknown-linux-gnu-install_only.tar.gz',
+  );
+  assert.match(BUILD_DOWNLOADS.pythonLinux.sha256, /^[a-f0-9]{64}$/);
+  assert.equal(
+    BUILD_DOWNLOADS.ffmpegLinux.url,
+    'https://github.com/shaka-project/static-ffmpeg-binaries/releases/download/n8.0.1-1/ffmpeg-linux-x64',
+  );
+  assert.equal(BUILD_DOWNLOADS.ffmpegLinux.requiredArch, 'x64');
+  assert.match(BUILD_DOWNLOADS.ffmpegLinux.sha256, /^[a-f0-9]{64}$/);
   assert.equal(BUILD_DOWNLOADS.ffmpegSource.url, 'https://ffmpeg.org/releases/ffmpeg-8.0.1.tar.xz');
   assert.equal(BUILD_DOWNLOADS.ffmpegSource.archiveFileName, 'ffmpeg-8.0.1.tar.xz');
   assert.match(BUILD_DOWNLOADS.ffmpegSource.sha256, /^[a-f0-9]{64}$/);

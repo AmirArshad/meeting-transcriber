@@ -8,11 +8,15 @@ from datetime import datetime
 from pathlib import Path
 
 from device_helpers import (
+    LINUX_DESKTOP_OFF_DEVICE_ID,
     MACOS_SCREENCAPTURE_LOOPBACK_DEVICE,
     build_device_record,
     dedupe_device_by_name,
+    format_pulse_monitor_id,
+    format_pulse_source_id,
     is_blocked_windows_device_name,
     macos_virtual_loopback_devices,
+    parse_pulse_device_id,
     sort_devices_by_name,
 )
 from summaries.sidecar_io import save_summary_outputs, sidecar_paths
@@ -121,6 +125,19 @@ class DeviceHelpersTests(unittest.TestCase):
         ]
         sorted_devices = sort_devices_by_name(devices)
         self.assertEqual([item["name"] for item in sorted_devices], ["Alpha", "Zebra"])
+
+    def test_linux_pulse_ids_are_opaque_strings(self):
+        record = build_device_record(
+            device_id="pulse-source:alsa_input.usb-mic",
+            name="USB Mic",
+            channels=1,
+            sample_rate=48000,
+            host_api="PulseAudio",
+        )
+        self.assertEqual(record["id"], "pulse-source:alsa_input.usb-mic")
+        self.assertEqual(format_pulse_monitor_id("out.monitor"), "pulse-monitor:out.monitor")
+        self.assertEqual(parse_pulse_device_id(format_pulse_source_id("mic")), ("source", "mic"))
+        self.assertEqual(LINUX_DESKTOP_OFF_DEVICE_ID, "none")
 
 
 if __name__ == "__main__":

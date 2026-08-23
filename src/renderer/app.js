@@ -93,6 +93,8 @@ const {
   inferRendererHostFamily,
   getEmptyMicrophoneDeviceGuidance,
   getRecordingPermissionFailureGuidance,
+  toOpaqueDeviceId,
+  decorateDesktopDevices,
 } = window.platformSelectionHelpers;
 const { roundedBar } = window.canvasHelpers;
 
@@ -1893,10 +1895,10 @@ async function loadAudioDevices() {
   try {
     addLog('Loading audio devices...');
     const devices = await window.electronAPI.getAudioDevices();
+    const hostFamily = inferRendererHostFamily(navigator.platform);
 
     // Check if no input devices found (likely permission issue on macOS)
     if (devices.inputs.length === 0) {
-      const hostFamily = inferRendererHostFamily(navigator.platform);
       const guidance = getEmptyMicrophoneDeviceGuidance(hostFamily);
 
       addLog(guidance.logMessage, 'error');
@@ -1910,9 +1912,11 @@ async function loadAudioDevices() {
 
     // Populate microphone dropdown
     populateSelect(micSelect, 'Select microphone...', devices.inputs);
-
-    // Populate desktop audio dropdown
-    populateSelect(desktopSelect, 'Select desktop audio...', devices.loopbacks);
+    populateSelect(
+      desktopSelect,
+      'Select desktop audio...',
+      decorateDesktopDevices(devices.loopbacks, hostFamily),
+    );
 
     addLog(`Found ${devices.inputs.length} microphones and ${devices.loopbacks.length} loopback devices`);
 
@@ -3136,8 +3140,8 @@ function updateControlsState() {
 
 async function runRecordingPreflightChecks({ micId, desktopId }) {
   const report = await window.electronAPI.runRecordingPreflight({
-    micId: parseInt(micId, 10),
-    loopbackId: parseInt(desktopId, 10),
+    micId: toOpaqueDeviceId(micId),
+    loopbackId: toOpaqueDeviceId(desktopId),
   });
 
   report.errors.forEach((message) => addLog(`Preflight error: ${message}`, 'error'));
@@ -3244,8 +3248,8 @@ async function startRecording() {
 
       const { promise: countdownPromise, cancel: cancelCountdown } = startCountdown();
       const recordingPromise = window.electronAPI.startRecording({
-        micId: parseInt(micId),
-        loopbackId: parseInt(desktopId),
+        micId: toOpaqueDeviceId(micId),
+        loopbackId: toOpaqueDeviceId(desktopId),
         isFirstRecording: isFirstRecording && attempt === 1 // Only use first-recording timeout on first attempt
       });
 

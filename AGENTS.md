@@ -23,7 +23,7 @@ Project skills live in `.agents/skills/*/SKILL.md`; see `.agents/README.md` for 
 ## Platform targets
 
 - Windows 10/11 x64; macOS 13+ runtime, packaged macOS builds are Apple Silicon (`arm64`) only.
-- Linux is in active development (`docs/initiatives/LINUX_SUPPORT.md`, branch `release/linux`). Until a phase ships, recorder/device factories fail closed and UI copy must not advertise Linux capture, CUDA, or add-ons as ready.
+- Linux is in active development (`docs/initiatives/LINUX_SUPPORT.md`, branch `release/linux`). The recorder factory still fails closed until Phase 3. Device IDs are opaque strings (`pulse-source:<name>`, `pulse-monitor:<name>`, `none`); renderer and IPC must not `parseInt` them. UI copy must not advertise Linux capture, CUDA, or add-ons as ready.
 - `src/main.js` keeps a `faster-whisper` fallback for Intel Macs in dev logic, but packaged builds do not target Intel.
 - Windows transcription: `faster-whisper`. Apple Silicon: `lightning-whisper-mlx`. Linux Core Beta transcription (when it ships) is also `faster-whisper`.
 

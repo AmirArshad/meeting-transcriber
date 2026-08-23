@@ -1,0 +1,16 @@
+# Audio Recording Dependencies (Linux)
+pulsectl>=24.12.0        # Pulse/PipeWire control: enumerate sources, sinks, monitors
+SoundCard>=0.4.6         # Pulse-compatible PCM capture (mic + sink monitors)
+numpy>=2.4.0             # For audio processing and mixing
+soxr>=1.1.0              # Shared spool finalization / StatefulResampler (processor.py)
+
+# Transcription Dependencies (Linux uses faster-whisper, not MLX)
+faster-whisper>=1.0.0    # Fast, accurate Whisper implementation (CPU + optional CUDA)
+filelock>=3.32.0         # Prevent race conditions during model downloads
+
+# SoundCard native binding
+# cffi is pulled in by SoundCard; packaged builds pin it in requirements-linux-build.txt.
+
+# Optional local speaker identification add-on
+# The desktop app installs pyannote.audio into userData during explicit speaker setup.
+# Linux speaker identification stays unsupported until Feature Parity (Phases 6–7).

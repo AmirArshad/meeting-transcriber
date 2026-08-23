@@ -47,3 +47,16 @@ test('recording permission failure copy is platform-specific and does not treat 
   assert.match(linux.alertMessage, /PulseAudio\/PipeWire/);
   assert.equal(linux.alertMessage.includes('Windows Settings'), false);
 });
+
+test('toOpaqueDeviceId and decorateDesktopDevices keep Pulse IDs as strings', () => {
+  const {
+    toOpaqueDeviceId,
+    decorateDesktopDevices,
+  } = require('../../src/renderer/platform-selection-helpers');
+
+  assert.equal(toOpaqueDeviceId(4), '4');
+  assert.equal(toOpaqueDeviceId('pulse-source:mic'), 'pulse-source:mic');
+  const decorated = decorateDesktopDevices([{ id: 'pulse-monitor:out.monitor', name: 'Out', sample_rate: 48000 }], 'linux');
+  assert.equal(decorated[0].id, 'none');
+  assert.equal(decorateDesktopDevices([{ id: 1, name: 'Loopback' }], 'win32')[0].id, 1);
+});

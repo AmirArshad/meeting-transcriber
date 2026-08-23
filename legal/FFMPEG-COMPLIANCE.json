@@ -26,6 +26,14 @@
         "opus": "v1.5.2",
         "mbedtls": "v3.4.1"
       }
+    },
+    "linux": {
+      "label": "shaka-project/static-ffmpeg-binaries ffmpeg n8.0.1 x64",
+      "downloadUrl": "https://github.com/shaka-project/static-ffmpeg-binaries/releases/download/n8.0.1-1/ffmpeg-linux-x64",
+      "sha256": "b66cc32cd45584ff5f65b8957be4fa93b43d002c502808248f6de3fc5cbc1c31",
+      "requiredArch": "x64",
+      "buildRelease": "n8.0.1-1",
+      "buildRepository": "https://github.com/shaka-project/static-ffmpeg-binaries"
     }
   },
   "correspondingSource": {

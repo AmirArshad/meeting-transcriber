@@ -77,8 +77,10 @@ test('buildResourceManifest tracks pinned packaged dependency requirements', () 
   assert.equal(manifest.version, 7);
   assert.equal(typeof manifest.inputs.requirementsMacosBuild, 'string');
   assert.equal(typeof manifest.inputs.requirementsWindowsBuild, 'string');
+  assert.equal(typeof manifest.inputs.requirementsLinuxBuild, 'string');
   assert.equal(manifest.inputs.requirementsMacosBuild.length, 64);
   assert.equal(manifest.inputs.requirementsWindowsBuild.length, 64);
+  assert.equal(manifest.inputs.requirementsLinuxBuild.length, 64);
 });
 
 

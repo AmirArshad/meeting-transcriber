@@ -4,6 +4,7 @@ import backend.device_manager as device_manager
 def test_load_audio_backend_raises_structured_error_for_unsupported_platform(monkeypatch):
     monkeypatch.setattr(device_manager, 'IS_WINDOWS', False)
     monkeypatch.setattr(device_manager, 'IS_MACOS', False)
+    monkeypatch.setattr(device_manager, 'IS_LINUX', False)
 
     try:
         device_manager.load_audio_backend()

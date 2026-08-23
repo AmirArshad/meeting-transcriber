@@ -1,6 +1,6 @@
 # Linux Support Plan — Omarchy First
 
-> **Status:** Phase 0 in progress on `release/linux`. Gate A is resolved (see below); Linux product capture/add-ons are not advertised as ready.
+> **Status:** Phases 0–2 in progress on `release/linux`. Gate A is resolved (see below); Linux product capture/add-ons are not advertised as ready. Phase 1 dummy-Pulse API spike is recorded below; Omarchy hardware exit criteria remain open. Phase 3 (`linux_recorder.py`) must not start until that live-capture evidence exists.
 > **Replanned:** 2026-08-23 against AvaNevis v2.7.0 / current `master`.
 > **Review pass:** 2026-08-23 — verified plan claims against the codebase and CI, corrected two host-fact conclusions (secret storage, tray), and pinned every required upstream Linux artifact. All "Verified" sections below were checked on that date.
 > **Primary target:** Omarchy 4, x86_64, Hyprland/Wayland, PipeWire with `pipewire-pulse`.
@@ -472,7 +472,7 @@ Build a disposable backend spike, not product orchestration:
 - switch the default sink during capture and record actual failure behavior
 - measure callback/block cadence, drift, CPU, and channel/sample-rate shapes
 
-The spike must not be merged as `linux_recorder.py`.
+The spike must not be merged as `linux_recorder.py`. Keep `scripts/linux-audio-spike.py` disposable.
 
 Exit criteria:
 
@@ -481,6 +481,28 @@ Exit criteria:
 - Bluetooth/headphone and HDMI monitor selection is understood
 - late desktop loss can be detected and degraded to mic-only
 - evidence is added to this document or a linked Linux benchmark note
+
+#### Phase 1 evidence — 2026-08-23 cloud dummy Pulse (partial)
+
+Ran `scripts/linux-audio-spike.py` against PulseAudio 16.1 on a headless cloud VM (`module-sine-source` mic + `module-null-sink` desktop, SoundCard 0.4.6, pulsectl 24.12.0). This validates the **API surface**, not Omarchy hardware.
+
+Proven on dummy Pulse:
+
+- pulsectl connected and enumerated sources, sinks, defaults, and sink `.monitor` mapping
+- SoundCard captured `pulse-source:avanevis_mic` and `pulse-monitor:avanevis_desktop.monitor` **concurrently** on two threads
+- float32 WAVs written for mic-only, desktop-only, and mixed output (48 kHz request; RMS mic ≈ 0.35, desktop ≈ 0.14 after an 880 Hz playback into the null sink)
+- default-sink switch `avanevis_desktop` → `avanevis_alt` succeeded in < 1 ms; Linux v1 will not hot-switch the live desktop stream
+- desktop monitor block cadence median ≈ 21.4 ms (1024 frames @ 48 kHz); dummy sine source is not wall-clock paced (median block ≈ 3 µs after a ~2 s first-block wait)
+- process CPU ≈ 5% over a ~3.9 s wall capture
+
+Still required on Omarchy before Phase 1 can be called complete, and before Phase 3:
+
+- browser speech in a mono transcription downmix
+- no ScreenCast portal during desktop capture
+- Bluetooth/headphone and HDMI monitor selection
+- late desktop-loss detection
+
+Phase 2 packaging pins and opaque device IDs proceed from the dummy concurrent-capture result. Do not advertise Linux recording as ready.
 
 ### Phase 2 — Linux runtime and device plumbing
 
@@ -717,4 +739,4 @@ Add Linux cases to characterization tests rather than weakening Windows/macOS sn
 
 ## First implementation action
 
-Gate A is resolved (green run linked above). Begin with **Phase 0** — land the assertion-diagnosability fix, the Linux platform-selection test cases, and a green `npm test` on the Omarchy host — then execute **Phase 1 — Omarchy audio spike** and record its evidence in this document. Only after the spike validates simultaneous mic + monitor capture should production Linux files or packaging pins be added.
+Gate A is resolved (green run linked above). Phase 0 fail-closed platform branches and the dummy-Pulse Phase 1 API spike are on `release/linux`. Phase 2 pins opaque Pulse IDs and Linux Python/ffmpeg artifacts. **Do not start Phase 3 `linux_recorder.py` until Omarchy live-capture evidence closes the remaining Phase 1 exit criteria.**

@@ -227,9 +227,12 @@ test('updater does not treat Linux source archives as installers before Phase 5'
   });
 });
 
-test('opaque Pulse device IDs are not integer-coercible (Phase 2 must not parseInt them)', () => {
-  assert.equal(Number.isNaN(parseInt('pulse-source:alsa_input.usb-mic', 10)), true);
-  assert.equal(Number.isNaN(parseInt('pulse-monitor:alsa_output.pci-0.monitor', 10)), true);
-  assert.equal(Number.isInteger(parseInt('pulse-source:alsa_input.usb-mic', 10)), false);
-  assert.equal(String(1), '1');
+test('opaque Pulse device IDs round-trip as strings (Phase 2)', () => {
+  const {
+    toOpaqueDeviceId,
+    decorateDesktopDevices,
+  } = require('../../src/renderer/platform-selection-helpers');
+  assert.equal(toOpaqueDeviceId('pulse-source:alsa_input.usb-mic'), 'pulse-source:alsa_input.usb-mic');
+  assert.equal(Number.isNaN(parseInt(toOpaqueDeviceId('pulse-source:alsa_input.usb-mic'), 10)), true);
+  assert.equal(decorateDesktopDevices([], 'linux')[0].id, 'none');
 });
