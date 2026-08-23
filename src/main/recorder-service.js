@@ -75,6 +75,7 @@ function createRecorderService(deps) {
     getBackendModuleArgs = null,
     collectPythonProcessOutput = null,
     scanRecordings = null,
+    resolveRecorderModule = getRecorderModule,
     terminateProcessBestEffort = async (proc) => {
       try {
         signalProcessTree(proc, 'SIGTERM');
@@ -1800,7 +1801,7 @@ function createRecorderService(deps) {
 
         // Start Python recording process (platform-specific recorder)
         // Run as module (-m) to support relative imports within the audio package
-        const recorderModule = getRecorderModule(process.platform);
+        const recorderModule = resolveRecorderModule(process.platform);
 
         proc = spawnTrackedPython([
           '-m', recorderModule,

@@ -15,6 +15,14 @@ const os = require('node:os');
 const fs = require('node:fs');
 
 const { createRecorderService } = require('../../src/main/recorder-service');
+const { getRecorderModule } = require('../../src/main-process-helpers');
+
+function resolveTestRecorderModule(platform = process.platform) {
+  if (platform === 'linux') {
+    return 'audio.windows_recorder';
+  }
+  return getRecorderModule(platform);
+}
 
 function createMinimalDeps(overrides = {}) {
   const recordingsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-recorder-deps-'));
@@ -44,6 +52,7 @@ function createMinimalDeps(overrides = {}) {
       addMeetingToHistory: async () => ({}),
       formatDurationForTranscript: () => '0:00',
       getRecordingsDir: () => recordingsDir,
+      resolveRecorderModule: resolveTestRecorderModule,
       ...overrides,
     },
     recordingsDir,

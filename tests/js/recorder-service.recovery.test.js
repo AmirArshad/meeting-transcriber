@@ -8,6 +8,7 @@ const fs = require('node:fs');
 const { EventEmitter } = require('node:events');
 
 const { createRecorderService } = require('../../src/main/recorder-service');
+const { getRecorderModule } = require('../../src/main-process-helpers');
 const { createRecordingsMaintenanceGate } = require('../../src/main/recordings-maintenance-gate');
 
 function createProc(stdoutPayload, { exitCode = 0, delayMs = 0 } = {}) {
@@ -58,6 +59,9 @@ function createRecoveryService(overrides = {}) {
     addMeetingToHistory: async () => ({}),
     formatDurationForTranscript: () => '0:00',
     getRecordingsDir: () => recordingsDir,
+    resolveRecorderModule: (platform) => (
+      platform === 'linux' ? 'audio.windows_recorder' : getRecorderModule(platform)
+    ),
     recordingsMaintenanceGate: gate,
     getBackendModuleArgs: (moduleName, extra = []) => ['-m', moduleName, ...extra],
     collectPythonProcessOutput(python) {
