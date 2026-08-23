@@ -236,6 +236,28 @@ test('buildHomeAiAddonPrompt gates speaker setup behind Windows CUDA', () => {
   assert.equal(buildHomeAiAddonPrompt({ aiStatus, platform: 'win32', hasNvidiaGpu: true, cudaInstalled: true }).feature, 'diarization');
 });
 
+test('buildHomeAiAddonPrompt hides unsupported Linux diarization and summary prompts', () => {
+  const prompt = buildHomeAiAddonPrompt({
+    platform: 'linux',
+    aiStatus: {
+      features: {
+        diarization: {
+          status: 'notConfigured',
+          setupComplete: false,
+          availability: { supported: false },
+        },
+        summary: {
+          status: 'notConfigured',
+          setupComplete: false,
+          availability: { supported: false },
+        },
+      },
+    },
+  });
+
+  assert.equal(prompt, null);
+});
+
 test('buildHomeAiAddonPrompt hides unsupported macOS diarization prompt', () => {
   const prompt = buildHomeAiAddonPrompt({
     platform: 'darwin',

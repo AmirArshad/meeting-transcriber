@@ -84,6 +84,15 @@ Use this checklist when validating speaker identification or local summaries on 
 - [ ] macOS Speakrs setup: Apple Silicon CoreML-only (no CPU fallback); no token field; Ready; a new recording uses `coreml` guided transcription and writes `*.speakers.json`.
 - [ ] Settings > About credits Speakrs (Apache-2.0) and pyannote (CC BY 4.0). Open third-party notices includes the Speakrs pack table and bundled `speakrs-cli`.
 
+## Linux (not ready — add-ons stay `unsupported`)
+
+Speaker identification and summaries must remain **unsupported** on Linux until Phases 6–8 in `docs/initiatives/LINUX_SUPPORT.md`. Home/Settings must not offer setup that cannot complete.
+
+- [ ] **Phase 0:** Settings and Home show speaker identification and summaries as unsupported; no Set Up / Switch / token field is offered.
+- [ ] **Blocked until Phase 6:** Linux CUDA 12 faster-whisper runtime install/repair/uninstall; CUDA-13-only hosts stay on CPU with clear copy.
+- [ ] **Blocked until Phase 7:** Speakrs CUDA-only and Pyannote CUDA-only on packaged Linux; exclusive switch; Pyannote token requires real `safeStorage` (not `basic_text`).
+- [ ] **Blocked until Phase 8:** Pinned Linux CPU llama.cpp summary runtime; 60-minute Balanced summary within the 90-minute wall clock.
+
 ## Failure Modes
 
 - [ ] Invalid Hugging Face token shows a clear setup error and does not store plaintext tokens.

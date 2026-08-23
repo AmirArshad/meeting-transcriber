@@ -34,6 +34,34 @@ function resolveVirtualEnvFromPythonExe(pythonExe, { path, fs }) {
 }
 
 /**
+ * Layout for the bundled / venv Python interpreter. Windows is the special
+ * case; macOS and Linux both use POSIX `bin/python3` (python-build-standalone).
+ */
+function resolvePythonRuntimeLayout(platform = process.platform) {
+  if (platform === 'win32') {
+    return {
+      family: 'windows',
+      venvBinDir: 'Scripts',
+      pythonFileName: 'python.exe',
+      systemPython: 'python',
+      packagedPythonSegments: ['python', 'python.exe'],
+      packagedFfmpegSegments: ['ffmpeg', 'ffmpeg.exe'],
+    };
+  }
+  if (platform === 'darwin' || platform === 'linux') {
+    return {
+      family: 'posix',
+      venvBinDir: 'bin',
+      pythonFileName: 'python3',
+      systemPython: 'python3',
+      packagedPythonSegments: ['python', 'bin', 'python3'],
+      packagedFfmpegSegments: ['ffmpeg', 'ffmpeg'],
+    };
+  }
+  throw new Error(`Unsupported Python runtime platform: ${platform}`);
+}
+
+/**
  * Create a Python runtime bound to injected Electron/Node primitives.
  *
  * @param {object} deps
@@ -55,20 +83,20 @@ function createPythonRuntime({ app, spawn, path, fs, dirname }) {
    */
   function getPythonConfig() {
     const isDev = !app.isPackaged;
-    const isMac = process.platform === 'darwin';
+    const layout = resolvePythonRuntimeLayout(process.platform);
 
     if (isDev) {
       const explicitPython = process.env.AVANEVIS_PYTHON || null;
       const venvPythonCandidate = process.env.VIRTUAL_ENV
-        ? path.join(process.env.VIRTUAL_ENV, isMac ? 'bin' : 'Scripts', isMac ? 'python3' : 'python.exe')
+        ? path.join(process.env.VIRTUAL_ENV, layout.venvBinDir, layout.pythonFileName)
         : null;
       // Stale VIRTUAL_ENV must not win over a working repo .venv (ENOENT on every spawn).
       const venvPython = venvPythonCandidate && fs.existsSync(venvPythonCandidate)
         ? venvPythonCandidate
         : null;
-      const repoVenvPython = path.join(dirname, '..', '.venv', isMac ? 'bin' : 'Scripts', isMac ? 'python3' : 'python.exe');
+      const repoVenvPython = path.join(dirname, '..', '.venv', layout.venvBinDir, layout.pythonFileName);
       const repoVenvExists = fs.existsSync(repoVenvPython);
-      const systemPython = isMac ? 'python3' : 'python';
+      const systemPython = layout.systemPython;
 
       let pythonExe;
       let pythonSource;
@@ -108,28 +136,14 @@ function createPythonRuntime({ app, spawn, path, fs, dirname }) {
     } else {
       // Production mode - use bundled Python
       const resourcesPath = process.resourcesPath;
-
-      if (isMac) {
-        // macOS: Use bundled Python from resources/python/bin/
-        return {
-          pythonExe: path.join(resourcesPath, 'python', 'bin', 'python3'),
-          pythonSource: 'packaged',
-          virtualEnv: null,
-          pythonArgsPrefix: [],
-          backendPath: path.join(resourcesPath, 'backend'),
-          ffmpegPath: path.join(resourcesPath, 'ffmpeg', 'ffmpeg')
-        };
-      } else {
-        // Windows: Use bundled Python from resources/python/
-        return {
-          pythonExe: path.join(resourcesPath, 'python', 'python.exe'),
-          pythonSource: 'packaged',
-          virtualEnv: null,
-          pythonArgsPrefix: [],
-          backendPath: path.join(resourcesPath, 'backend'),
-          ffmpegPath: path.join(resourcesPath, 'ffmpeg', 'ffmpeg.exe')
-        };
-      }
+      return {
+        pythonExe: path.join(resourcesPath, ...layout.packagedPythonSegments),
+        pythonSource: 'packaged',
+        virtualEnv: null,
+        pythonArgsPrefix: [],
+        backendPath: path.join(resourcesPath, 'backend'),
+        ffmpegPath: path.join(resourcesPath, ...layout.packagedFfmpegSegments),
+      };
     }
   }
 
@@ -221,4 +235,4 @@ function createPythonRuntime({ app, spawn, path, fs, dirname }) {
   };
 }
 
-module.exports = { createPythonRuntime, resolveVirtualEnvFromPythonExe };
+module.exports = { createPythonRuntime, resolveVirtualEnvFromPythonExe, resolvePythonRuntimeLayout };

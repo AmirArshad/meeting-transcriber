@@ -16,6 +16,7 @@ const {
   buildSpeakrsCliCargoArgs,
   getSpeakrsCargoFeatures,
   getSpeakrsCargoTargetTriple,
+  getSpeakrsResourceManifestTarget,
   getSpeakrsCliBinaryName,
   loadSpeakrsOrtCompilePins,
   manifestsMatch,
@@ -266,7 +267,7 @@ test('resource manifest fingerprints the speakrs crate, toolchain, entitlements,
   assert.equal(manifest.inputs.speakrsOrtCompilePins.length, 64);
   assert.equal(manifest.inputs.speakrsValidateWav.length, 64);
   assert.equal(manifest.inputs.inheritEntitlements.length, 64);
-  assert.equal(manifest.inputs.speakrsCargoTarget, getSpeakrsCargoTargetTriple());
+  assert.equal(manifest.inputs.speakrsCargoTarget, getSpeakrsResourceManifestTarget());
   assert.ok(Array.isArray(manifest.inputs.speakrsSources));
   assert.ok(manifest.inputs.speakrsSources.some((entry) => entry.path === 'src/main.rs'));
 

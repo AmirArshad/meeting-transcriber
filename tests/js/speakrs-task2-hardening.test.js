@@ -151,7 +151,12 @@ async function installValidTestSetup(userDataDir, catalog, emitProgress) {
     downloader: async ({ destinationPath }) => fs.writeFileSync(destinationPath, ARCHIVE_BYTES),
     extractor: createTestExtractor(modelPath),
   });
-  assert.equal(status.features.diarization.status, 'ready');
+  assert.equal(
+    status.features.diarization.status,
+    'ready',
+    `diarization status was '${status.features.diarization.status}'`
+    + ` (error: ${status.features.diarization.error || 'none reported'})`,
+  );
 }
 
 function createAbortDownloader() {

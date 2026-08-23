@@ -73,6 +73,21 @@ test('findInstallerAsset matches the actual macOS installer naming convention', 
 });
 
 
+test('findInstallerAsset returns null on Linux until installers ship', () => {
+  const originalPlatform = process.platform;
+  Object.defineProperty(process, 'platform', { value: 'linux' });
+
+  try {
+    assert.equal(findInstallerAsset([
+      { name: 'AvaNevis-Setup-1.7.18.AppImage' },
+      { name: 'source.tar.gz' },
+    ]), null);
+  } finally {
+    Object.defineProperty(process, 'platform', { value: originalPlatform });
+  }
+});
+
+
 test('openDownloadPage opens trusted GitHub release URLs', async () => {
   const openedUrls = [];
   const { openDownloadPage } = loadUpdaterWithShell((url) => {

@@ -308,7 +308,7 @@ function buildResourceManifest() {
         SPEAKRS_CLI_DIR
       ),
       speakrsOrtCompilePins: hashString(readTextOrEmpty(SPEAKRS_ORT_COMPILE_PINS_PATH)),
-      speakrsCargoTarget: getSpeakrsCargoTargetTriple(),
+      speakrsCargoTarget: getSpeakrsResourceManifestTarget(),
       speakrsValidateWav: fs.existsSync(SPEAKRS_VALIDATE_WAV_SOURCE)
         ? hashFileContent(SPEAKRS_VALIDATE_WAV_SOURCE)
         : '',
@@ -729,6 +729,10 @@ function getSpeakrsCliBinaryName(platform = process.platform) {
   return platform === 'win32' ? 'speakrs-cli.exe' : 'speakrs-cli';
 }
 
+function isSpeakrsPackagingSupported(platform = process.platform) {
+  return platform === 'darwin' || platform === 'win32';
+}
+
 function getSpeakrsCargoTargetTriple(platform = process.platform) {
   if (platform === 'darwin') {
     return 'aarch64-apple-darwin';
@@ -737,6 +741,10 @@ function getSpeakrsCargoTargetTriple(platform = process.platform) {
     return 'x86_64-pc-windows-msvc';
   }
   throw new Error(`Unsupported Speakrs packaging platform: ${platform}`);
+}
+
+function getSpeakrsResourceManifestTarget(platform = process.platform) {
+  return isSpeakrsPackagingSupported(platform) ? getSpeakrsCargoTargetTriple(platform) : null;
 }
 
 function getSpeakrsCargoFeatures(platform = process.platform) {
@@ -1381,6 +1389,8 @@ module.exports = {
   macOSHelperEntitlementsIncludeInherit,
   getSpeakrsCargoFeatures,
   getSpeakrsCargoTargetTriple,
+  getSpeakrsResourceManifestTarget,
+  isSpeakrsPackagingSupported,
   getSpeakrsCliBinaryName,
   getStaleResourceDirectories,
   ensureWindowsEmptyBinDirectory,

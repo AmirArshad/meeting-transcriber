@@ -16,6 +16,7 @@ const {
   buildQuitRecordingDialogOptions,
   getRecorderCloseAction,
   getRecorderEventAction,
+  getRecorderModule,
   getRecordingStopTimeout,
   parseRecordingStopResult,
   normalizeRecordingStopPayload,
@@ -1799,8 +1800,7 @@ function createRecorderService(deps) {
 
         // Start Python recording process (platform-specific recorder)
         // Run as module (-m) to support relative imports within the audio package
-        const isMac = process.platform === 'darwin';
-        const recorderModule = isMac ? 'audio.macos_recorder' : 'audio.windows_recorder';
+        const recorderModule = getRecorderModule(process.platform);
 
         proc = spawnTrackedPython([
           '-m', recorderModule,

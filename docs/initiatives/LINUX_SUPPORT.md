@@ -1,6 +1,6 @@
 # Linux Support Plan — Omarchy First
 
-> **Status:** Ready for implementation. Gate A is resolved (see below); no Linux product code has started.
+> **Status:** Phase 0 in progress on `release/linux`. Gate A is resolved (see below); Linux product capture/add-ons are not advertised as ready.
 > **Replanned:** 2026-08-23 against AvaNevis v2.7.0 / current `master`.
 > **Review pass:** 2026-08-23 — verified plan claims against the codebase and CI, corrected two host-fact conclusions (secret storage, tray), and pinned every required upstream Linux artifact. All "Verified" sections below were checked on that date.
 > **Primary target:** Omarchy 4, x86_64, Hyprland/Wayland, PipeWire with `pipewire-pulse`.
@@ -442,6 +442,8 @@ Acceptance requires a 60-minute transcript to generate a Balanced summary within
 Each phase should land as a reviewable PR with the smallest relevant tests first. Run `npm run test:all` for recorder, persistence, packaging, security, or cross-process changes and before every Linux PR is opened.
 
 ### Phase 0 — Baseline and contract characterization
+
+**Status (2026-08-23):** Implemented on `release/linux`. Gate A diagnosable assertion landed. Linux platform-selection tests cover recorder module, Python layout, add-on availability, updater fail-closed matching, and Speakrs packaging. GPU Settings and permission copy no longer treat Linux as Windows. Manual checklists have explicit Linux-not-ready rows.
 
 Deliverables:
 

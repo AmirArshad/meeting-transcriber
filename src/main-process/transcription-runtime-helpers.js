@@ -14,6 +14,10 @@ function getTranscriberModule(platform, arch) {
     return 'transcription.mlx_whisper_transcriber';
   }
 
+  if (platform === 'win32' || platform === 'linux' || platform === 'darwin') {
+    return 'transcription.faster_whisper_transcriber';
+  }
+
   return 'transcription.faster_whisper_transcriber';
 }
 

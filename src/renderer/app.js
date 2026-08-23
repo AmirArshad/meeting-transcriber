@@ -88,7 +88,12 @@ const {
 } = window.aiAddonUiHelpers;
 const { clearElement } = window.domHelpers;
 const { meetingIdsEqual } = window.meetingHelpers;
-const { isGpuRuntimeActionBusyError, formatGpuRuntimeBusyAlertMessage } = window.gpuSettingsHelpers;
+const { isGpuRuntimeActionBusyError, formatGpuRuntimeBusyAlertMessage, getUnsupportedGpuSettingsCopy } = window.gpuSettingsHelpers;
+const {
+  inferRendererHostFamily,
+  getEmptyMicrophoneDeviceGuidance,
+  getRecordingPermissionFailureGuidance,
+} = window.platformSelectionHelpers;
 const { roundedBar } = window.canvasHelpers;
 
 // UI Elements
@@ -1891,25 +1896,15 @@ async function loadAudioDevices() {
 
     // Check if no input devices found (likely permission issue on macOS)
     if (devices.inputs.length === 0) {
-      const isMac = navigator.platform.includes('Mac');
+      const hostFamily = inferRendererHostFamily(navigator.platform);
+      const guidance = getEmptyMicrophoneDeviceGuidance(hostFamily);
 
-      if (isMac) {
-        addLog('⚠️ No microphone devices found - permission may not be granted', 'error');
-
-        const shouldOpenSettings = confirm(
-          'No microphone devices found!\n\n' +
-          'This usually means microphone permission is not granted.\n\n' +
-          'Would you like to open System Settings to grant permission?\n\n' +
-          '1. Go to Privacy & Security → Microphone\n' +
-          '2. Grant permission to AvaNevis\n' +
-          '3. Restart the app'
-        );
-
+      addLog(guidance.logMessage, 'error');
+      if (guidance.openSettings && guidance.confirmMessage) {
+        const shouldOpenSettings = confirm(guidance.confirmMessage);
         if (shouldOpenSettings) {
-          window.electronAPI.openSystemSettings('microphone');
+          window.electronAPI.openSystemSettings(guidance.openSettings);
         }
-      } else {
-        addLog('⚠️ No microphone devices found', 'error');
       }
     }
 
@@ -3415,30 +3410,16 @@ async function startRecording() {
                                         errorMsg.toLowerCase().includes('device');
 
         if (shouldCheckPermissions) {
-          // Platform-specific permission instructions
-          const isMac = navigator.platform.includes('Mac');
+          const hostFamily = inferRendererHostFamily(navigator.platform);
+          const guidance = getRecordingPermissionFailureGuidance(hostFamily);
 
-          if (isMac) {
-            const shouldOpenSettings = confirm(
-              'Recording failed. Permission might be missing.\n\n' +
-              'Would you like to open System Settings to check permissions?\n\n' +
-              'Check both Microphone and Screen Recording permissions.'
-            );
-
+          if (guidance.kind === 'macos-settings') {
+            const shouldOpenSettings = confirm(guidance.confirmMessage);
             if (shouldOpenSettings) {
-              // Open Screen Recording by default as it's the more common "silent fail"
-              window.electronAPI.openSystemSettings('screen');
+              window.electronAPI.openSystemSettings(guidance.openSettings);
             }
           } else {
-            alert(
-              'Recording failed. Please check:\n\n' +
-              '1. Microphone permissions are granted to this app\n' +
-              '2. Selected devices are not in use by another application\n' +
-              '3. Devices are properly connected\n\n' +
-              '• Grant microphone permissions in Windows Settings\n' +
-              '• Restart the application\n' +
-              '• Try different audio devices'
-            );
+            alert(guidance.alertMessage);
           }
         } else {
           if (errorMsg.toLowerCase().includes('desktop audio failed to start')) {
@@ -5231,9 +5212,8 @@ async function checkGPUStatus() {
     // Get platform info
     const platform = await window.electronAPI.getPlatform();
     ctaState.platform = platform;
-    const isMac = platform === 'darwin';
 
-    if (isMac) {
+    if (platform === 'darwin') {
       // ============ macOS: Show Metal/MLX Status ============
       gpuDescription.textContent = 'GPU acceleration using Apple\'s Metal framework for Apple Silicon Macs. Provides 3-5x faster transcription.';
       
@@ -5290,7 +5270,7 @@ async function checkGPUStatus() {
       // Hide install/uninstall buttons on macOS (MLX is bundled)
       gpuActions.style.display = 'none';
 
-    } else {
+    } else if (platform === 'win32') {
       // ============ Windows: Show CUDA Status ============
       gpuDescription.textContent = 'Enable faster-whisper GPU acceleration for 4-5x faster transcription. Installs only the CUDA runtime libraries needed by CTranslate2.';
       
@@ -5410,6 +5390,28 @@ async function checkGPUStatus() {
       }
 
       gpuActions.style.display = 'block';
+    } else {
+      const copy = getUnsupportedGpuSettingsCopy(platform);
+      gpuDescription.textContent = copy.description;
+      gpuLabel1.textContent = 'Platform:';
+      gpuValue1.textContent = platform || 'unknown';
+      gpuValue1.className = 'info-value';
+      gpuLabel2.textContent = 'Acceleration:';
+      gpuValue2.textContent = 'CPU only';
+      gpuValue2.className = 'info-value';
+      gpuLabel3.textContent = 'GPU setup:';
+      gpuValue3.textContent = copy.statusLabel;
+      gpuValue3.className = 'info-value warning';
+      if (gpuLabel4) gpuLabel4.textContent = 'Diagnostics:';
+      if (gpuValue4) {
+        gpuValue4.textContent = copy.diagnostics;
+        gpuValue4.className = 'info-value';
+      }
+      if (gpuRow4) gpuRow4.style.display = 'flex';
+      statusBadge.textContent = copy.statusLabel;
+      statusBadge.classList.add('disabled');
+      gpuActions.style.display = 'none';
+      installBtn.disabled = true;
     }
   } catch (error) {
     console.error('Failed to check GPU status:', error);

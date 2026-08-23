@@ -48,6 +48,7 @@ const {
   getQuitInterceptState,
   getRecorderCloseAction,
   getRecorderEventAction,
+  getRecorderModule,
   findRecorderResultPayload,
   getRecorderResultAudioPath,
   normalizeRecordingStopPayload,
@@ -1228,6 +1229,16 @@ test('getTranscriberModule returns packaged-safe module names', () => {
     getTranscriberModule('darwin', 'x64'),
     'transcription.faster_whisper_transcriber',
   );
+  assert.equal(
+    getTranscriberModule('linux', 'x64'),
+    'transcription.faster_whisper_transcriber',
+  );
+});
+
+test('getRecorderModule fails closed outside Windows and macOS', () => {
+  assert.equal(getRecorderModule('darwin'), 'audio.macos_recorder');
+  assert.equal(getRecorderModule('win32'), 'audio.windows_recorder');
+  assert.throws(() => getRecorderModule('linux'), /not supported on linux/);
 });
 
 

@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { isGpuRuntimeActionBusyError, formatGpuRuntimeBusyAlertMessage } = require('../../src/renderer/gpu-settings-helpers');
+const { isGpuRuntimeActionBusyError, formatGpuRuntimeBusyAlertMessage, resolveGpuSettingsSurface, getUnsupportedGpuSettingsCopy } = require('../../src/renderer/gpu-settings-helpers');
 
 test('isGpuRuntimeActionBusyError detects busy runtime messages', () => {
   assert.equal(isGpuRuntimeActionBusyError({ message: 'GPU_RUNTIME_ACTION_BUSY' }), true);
@@ -30,4 +30,19 @@ test('formatGpuRuntimeBusyAlertMessage keeps N-queued compute-busy copy', () => 
     formatGpuRuntimeBusyAlertMessage({ code: 'GPU_RUNTIME_ACTION_BUSY', message: 'GPU_RUNTIME_ACTION_BUSY' }),
     /Another GPU setup operation is already running/,
   );
+});
+
+test('resolveGpuSettingsSurface keeps Linux off the Windows CUDA surface', () => {
+  assert.equal(resolveGpuSettingsSurface('darwin', 'arm64'), 'macos-metal');
+  assert.equal(resolveGpuSettingsSurface('darwin', 'x64'), 'macos-intel-cpu');
+  assert.equal(resolveGpuSettingsSurface('win32', 'x64'), 'windows-cuda');
+  assert.equal(resolveGpuSettingsSurface('linux', 'x64'), 'unsupported');
+  assert.equal(resolveGpuSettingsSurface('freebsd', 'x64'), 'unsupported');
+});
+
+test('unsupported GPU settings copy does not advertise Linux CUDA as ready', () => {
+  const linux = getUnsupportedGpuSettingsCopy('linux');
+  assert.match(linux.description, /not available yet/i);
+  assert.equal(linux.statusLabel, 'Not available yet');
+  assert.match(linux.diagnostics, /not offered on Linux/);
 });

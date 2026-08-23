@@ -134,13 +134,13 @@ function findInstallerAsset(assets) {
     return exeAsset || null;
   }
 
-  // Linux or other: try .AppImage, .deb, or .tar.gz
-  const linuxAsset = assets.find(asset =>
-    asset.name.endsWith('.AppImage') ||
-    asset.name.endsWith('.deb') ||
-    asset.name.endsWith('.tar.gz')
-  );
-  return linuxAsset || null;
+  // Linux installers are not shipped yet (Phase 5). Do not match source
+  // archives or other non-installer assets as if they were AppImages.
+  if (platform === 'linux') {
+    return null;
+  }
+
+  return null;
 }
 
 /**
