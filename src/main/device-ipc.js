@@ -89,8 +89,27 @@ function createDeviceIpc(deps) {
     runProcessWithTimeout,
     buildMacOSPermissionCheckFailureStatus,
     MACOS_PERMISSION_CHECK_TIMEOUT_MS,
+    platform = process.platform,
     logWarn = (...args) => console.warn(...args),
   } = deps;
+
+  function linuxDeviceManagerFailure(errorOutput) {
+    const message = extractDeviceManagerError(errorOutput)
+      || 'Could not list audio devices. Is PulseAudio or PipeWire running?';
+    return {
+      valid: false,
+      warnings: [],
+      errors: [message],
+    };
+  }
+
+  function proceedAnyway(warning) {
+    return {
+      valid: true,
+      warnings: [warning],
+      errors: [],
+    };
+  }
 
   const statfs = typeof deps.statfs === 'function'
     ? deps.statfs
@@ -158,12 +177,12 @@ function createDeviceIpc(deps) {
         if (!resolved) {
           resolved = true;
           try { python.kill(); } catch (e) { /* ignore */ }
-          console.warn('validate-devices timed out - allowing recording to proceed');
-          resolve({
-            valid: true, // Allow recording to proceed
-            warnings: ['Device validation timed out - proceeding anyway'],
-            errors: []
-          });
+          console.warn(platform === 'linux'
+            ? 'validate-devices timed out'
+            : 'validate-devices timed out - allowing recording to proceed');
+          resolve(platform === 'linux'
+            ? linuxDeviceManagerFailure('ERROR: Device validation timed out')
+            : proceedAnyway('Device validation timed out - proceeding anyway'));
         }
       }, TIMEOUT_MS);
 
@@ -173,11 +192,9 @@ function createDeviceIpc(deps) {
       } catch (e) {
         clearTimeout(timeout);
         console.error('Failed to spawn device_manager module:', e);
-        resolve({
-          valid: true, // Allow recording to proceed
-          warnings: ['Could not validate devices - proceeding anyway'],
-          errors: []
-        });
+        resolve(platform === 'linux'
+          ? linuxDeviceManagerFailure('ERROR: Could not start device validation')
+          : proceedAnyway('Could not validate devices - proceeding anyway'));
         return;
       }
 
@@ -191,21 +208,9 @@ function createDeviceIpc(deps) {
 
         if (code !== 0) {
           console.warn('validate-devices failed with code', code);
-          if (process.platform === 'linux') {
-            const message = extractDeviceManagerError(errorOutput)
-              || 'Could not list audio devices. Is PulseAudio or PipeWire running?';
-            resolve({
-              valid: false,
-              warnings: [],
-              errors: [message],
-            });
-            return;
-          }
-          resolve({
-            valid: true, // Allow recording to proceed
-            warnings: ['Device enumeration failed - proceeding anyway'],
-            errors: []
-          });
+          resolve(platform === 'linux'
+            ? linuxDeviceManagerFailure(errorOutput)
+            : proceedAnyway('Device enumeration failed - proceeding anyway'));
           return;
         }
 
@@ -214,15 +219,13 @@ function createDeviceIpc(deps) {
           resolve(evaluateSelectedDevices(data, {
             micId,
             loopbackId,
-            platform: process.platform,
+            platform,
           }));
         } catch (e) {
           console.warn('Failed to parse device list:', e);
-          resolve({
-            valid: true, // Allow recording to proceed
-            warnings: ['Could not parse device list - proceeding anyway'],
-            errors: []
-          });
+          resolve(platform === 'linux'
+            ? linuxDeviceManagerFailure('ERROR: Could not parse device list')
+            : proceedAnyway('Could not parse device list - proceeding anyway'));
         }
       });
 
@@ -231,11 +234,9 @@ function createDeviceIpc(deps) {
         resolved = true;
         clearTimeout(timeout);
         console.error('validate-devices error:', err);
-        resolve({
-          valid: true, // Allow recording to proceed
-          warnings: ['Device validation error - proceeding anyway'],
-          errors: []
-        });
+        resolve(platform === 'linux'
+          ? linuxDeviceManagerFailure('ERROR: Device validation error')
+          : proceedAnyway('Device validation error - proceeding anyway'));
       });
     });
   }
@@ -248,7 +249,7 @@ function createDeviceIpc(deps) {
    * manual validation can confirm behavior on real hardware.
    */
   function checkAudioOutputSupport() {
-    if (process.platform !== 'darwin') {
+    if (platform !== 'darwin') {
       // Windows WASAPI loopback works with all devices
       return { supported: true, warning: null };
     }
@@ -332,9 +333,9 @@ function createDeviceIpc(deps) {
   }
 
   function getMacOSPermissionStatus(micId = null) {
-    if (process.platform !== 'darwin') {
+    if (platform !== 'darwin') {
       return Promise.resolve({
-        platform: process.platform,
+        platform,
         all_granted: true,
         microphone: { granted: true },
         screen_recording: { granted: true },
@@ -465,7 +466,11 @@ function createDeviceIpc(deps) {
               reject(new Error(`Failed to parse device list: ${e.message}`));
             }
           } else {
-            reject(new Error(`Python process exited with code ${code}: ${errorOutput}`));
+            const detail = platform === 'linux'
+              ? (extractDeviceManagerError(errorOutput)
+                || 'Could not list audio devices. Is PulseAudio or PipeWire running?')
+              : errorOutput;
+            reject(new Error(`Python process exited with code ${code}: ${detail}`));
           }
         });
         python.on('error', reject);

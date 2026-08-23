@@ -15,6 +15,7 @@ from device_helpers import (
     build_device_record,
     dedupe_device_by_name,
     format_pulse_monitor_id,
+    format_pulse_sink_id,
     format_pulse_source_id,
     is_blocked_windows_device_name,
     is_pulse_monitor_source,
@@ -232,7 +233,10 @@ class DeviceManager:
             sources = self.pulse.source_list()
             sinks = self.pulse.sink_list()
         except Exception as exc:
-            print(f"ERROR: Could not enumerate Pulse devices: {exc}", file=sys.stderr)
+            # Do not prefix this diagnostic with ERROR: — Electron's
+            # extractDeviceManagerError would otherwise surface the raw Pulse
+            # exception (socket paths / server strings) as the user-facing text.
+            print(f"Warning: Could not enumerate Pulse devices: {exc}", file=sys.stderr)
             raise DeviceManagerEnvironmentError(
                 "Could not list PulseAudio/PipeWire devices. Is the session audio service running?"
             ) from exc
@@ -262,7 +266,7 @@ class DeviceManager:
 
         for sink in sinks:
             device_data = build_device_record(
-                device_id=sink.name,
+                device_id=format_pulse_sink_id(sink.name),
                 name=sink.description or sink.name,
                 channels=int(getattr(sink, "channel_count", 2) or 2),
                 sample_rate=self._pulse_sample_rate(sink),
@@ -370,7 +374,7 @@ class DeviceManager:
         try:
             if kind == "source":
                 for source in self.pulse.source_list():
-                    if source.name == name:
+                    if source.name == name and not is_pulse_monitor_source(source):
                         return {
                             "id": format_pulse_source_id(source.name),
                             "name": source.description or source.name,
@@ -380,9 +384,9 @@ class DeviceManager:
                             "is_loopback": False,
                             "host_api": "PulseAudio",
                         }
-            else:
+            elif kind == "monitor":
                 for source in self.pulse.source_list():
-                    if source.name == name:
+                    if source.name == name and is_pulse_monitor_source(source):
                         return {
                             "id": format_pulse_monitor_id(source.name),
                             "name": source.description or source.name,
@@ -390,6 +394,18 @@ class DeviceManager:
                             "max_output_channels": 0,
                             "default_sample_rate": self._pulse_sample_rate(source),
                             "is_loopback": True,
+                            "host_api": "PulseAudio",
+                        }
+            elif kind == "sink":
+                for sink in self.pulse.sink_list():
+                    if sink.name == name:
+                        return {
+                            "id": format_pulse_sink_id(sink.name),
+                            "name": sink.description or sink.name,
+                            "max_input_channels": 0,
+                            "max_output_channels": int(getattr(sink, "channel_count", 0) or 0),
+                            "default_sample_rate": self._pulse_sample_rate(sink),
+                            "is_loopback": False,
                             "host_api": "PulseAudio",
                         }
             return {"error": f"Pulse device not found: {device_id}"}
@@ -449,6 +465,13 @@ class DeviceManager:
             return {"default_input": -1, "default_output": -1}
 
     def _get_default_devices_linux(self) -> Dict[str, Any]:
+        """Linux defaults use opaque Pulse IDs, not numeric indexes.
+
+        ``default_input`` is a ``pulse-source:`` id (or None).
+        ``default_output`` is the default sink's monitor (``pulse-monitor:``),
+        not a ``pulse-sink:`` id — that matches the desktop-audio dropdown.
+        Missing Pulse data returns None rather than Windows/macOS ``-1``.
+        """
         try:
             server = self.pulse.server_info()
             sources = list(self.pulse.source_list())
@@ -489,15 +512,11 @@ def main():
     """
     try:
         manager = DeviceManager()
+        devices = manager.list_all_devices()
+        defaults = manager.get_default_devices()
     except DeviceManagerEnvironmentError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(1)
-
-    # Get all devices
-    devices = manager.list_all_devices()
-
-    # Get default devices
-    defaults = manager.get_default_devices()
 
     # Combine into single output
     output = {

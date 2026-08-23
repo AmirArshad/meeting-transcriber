@@ -162,14 +162,10 @@ Linux device selection must use stable Pulse names, not numeric indexes:
 
 - mic: `pulse-source:<source.name>`
 - desktop: `pulse-monitor:<monitor_source_name>`
+- output/sink (enumerated, not used for capture selection): `pulse-sink:<sink.name>`
 - explicit desktop-off: `none`
 
-The renderer and IPC payloads must treat device IDs as strings. The confirmed coercion sites (2026-08-23):
-
-- `src/renderer/app.js` — `parseInt(micId, 10)` / `parseInt(desktopId, 10)` inside `runRecordingPreflightChecks` (near line 3144) and `parseInt(micId)` / `parseInt(desktopId)` in the start-recording path (near line 3252). Search for `parseInt(micId`.
-- `src/main/recorder-service.js` — `Number.isInteger(micId) ? micId : null` in the `run-recording-preflight` handler (feeds `getMacOSPermissionStatus`).
-
-The main process is otherwise already string-safe: recorder argv uses `micId.toString()`. Preserve compatibility for existing Windows numeric IDs and macOS UIDs — on those platforms numeric strings still round-trip.
+The renderer and IPC payloads must treat device IDs as strings. The 2026-08-23 `parseInt` / `Number.isInteger` coercion sites now go through `toOpaqueDeviceId` / `coerceIntegerDeviceId`. Recorder argv still uses `micId.toString()` and must keep Pulse IDs unchanged. Preserve compatibility for existing Windows numeric IDs and macOS UIDs — on those platforms numeric strings still round-trip.
 
 Default selection:
 

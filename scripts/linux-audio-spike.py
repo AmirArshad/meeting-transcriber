@@ -270,17 +270,19 @@ def main() -> int:
         with pulsectl.Pulse("avanevis-linux-spike-switch") as pulse:
             before = pulse.server_info().default_sink_name
             switch_started = time.perf_counter()
-            switch_default_sink(pulse, alt_sink["name"])
-            after = pulse.server_info().default_sink_name
-            switch_elapsed_ms = (time.perf_counter() - switch_started) * 1000.0
-            sink_switch = {
-                "performed": True,
-                "before": before,
-                "after": after,
-                "elapsed_ms": switch_elapsed_ms,
-                "note": "Linux v1 will not hot-switch the desktop stream; a sink change is warn + continue on the original monitor.",
-            }
-            switch_default_sink(pulse, before)
+            try:
+                switch_default_sink(pulse, alt_sink["name"])
+                after = pulse.server_info().default_sink_name
+                switch_elapsed_ms = (time.perf_counter() - switch_started) * 1000.0
+                sink_switch = {
+                    "performed": True,
+                    "before": before,
+                    "after": after,
+                    "elapsed_ms": switch_elapsed_ms,
+                    "note": "Linux v1 will not hot-switch the desktop stream; a sink change is warn + continue on the original monitor.",
+                }
+            finally:
+                switch_default_sink(pulse, before)
 
     report = {
         "host": os.uname().nodename if hasattr(os, "uname") else "unknown",

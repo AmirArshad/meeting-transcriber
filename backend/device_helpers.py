@@ -21,6 +21,7 @@ MACOS_SCREENCAPTURE_LOOPBACK_DEVICE = {
 PULSE_INVALID_SINK_INDEX = 0xFFFFFFFF
 PULSE_SOURCE_ID_PREFIX = "pulse-source:"
 PULSE_MONITOR_ID_PREFIX = "pulse-monitor:"
+PULSE_SINK_ID_PREFIX = "pulse-sink:"
 LINUX_DESKTOP_OFF_DEVICE_ID = "none"
 
 
@@ -36,6 +37,10 @@ def format_pulse_monitor_id(monitor_source_name: str) -> str:
     return f"{PULSE_MONITOR_ID_PREFIX}{monitor_source_name}"
 
 
+def format_pulse_sink_id(sink_name: str) -> str:
+    return f"{PULSE_SINK_ID_PREFIX}{sink_name}"
+
+
 def is_linux_desktop_off_id(device_id: Any) -> bool:
     return str(device_id) == LINUX_DESKTOP_OFF_DEVICE_ID
 
@@ -48,6 +53,9 @@ def parse_pulse_device_id(device_id: Any) -> Optional[Tuple[str, str]]:
     if value.startswith(PULSE_MONITOR_ID_PREFIX):
         name = value[len(PULSE_MONITOR_ID_PREFIX):]
         return ("monitor", name) if name else None
+    if value.startswith(PULSE_SINK_ID_PREFIX):
+        name = value[len(PULSE_SINK_ID_PREFIX):]
+        return ("sink", name) if name else None
     return None
 
 

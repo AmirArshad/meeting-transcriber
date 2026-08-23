@@ -6,6 +6,7 @@ import backend.device_manager as device_manager
 from device_helpers import (
     LINUX_DESKTOP_OFF_DEVICE_ID,
     format_pulse_monitor_id,
+    format_pulse_sink_id,
     format_pulse_source_id,
     is_linux_desktop_off_id,
     is_pulse_monitor_source,
@@ -73,9 +74,12 @@ def _linux_flags(monkeypatch):
 def test_pulse_device_id_helpers_round_trip():
     assert format_pulse_source_id('alsa_input.usb-mic') == 'pulse-source:alsa_input.usb-mic'
     assert format_pulse_monitor_id('alsa_output.pci.monitor') == 'pulse-monitor:alsa_output.pci.monitor'
+    assert format_pulse_sink_id('alsa_output.pci') == 'pulse-sink:alsa_output.pci'
     assert parse_pulse_device_id('pulse-source:alsa_input.usb-mic') == ('source', 'alsa_input.usb-mic')
     assert parse_pulse_device_id('pulse-monitor:alsa_output.pci.monitor') == ('monitor', 'alsa_output.pci.monitor')
+    assert parse_pulse_device_id('pulse-sink:alsa_output.pci') == ('sink', 'alsa_output.pci')
     assert parse_pulse_device_id('0') is None
+    assert parse_pulse_device_id('alsa_output.pci') is None
     assert is_linux_desktop_off_id(LINUX_DESKTOP_OFF_DEVICE_ID)
     assert is_pulse_monitor_source(FakeSource('out.monitor', 'Monitor', monitor_of_sink=1, monitor_of_sink_name='out'))
     assert not is_pulse_monitor_source(FakeSource('mic', 'Mic'))
@@ -103,6 +107,7 @@ def test_linux_device_manager_enumerates_opaque_pulse_ids(monkeypatch):
 
     assert devices['input_devices'][0]['id'] == 'pulse-source:avanevis_mic'
     assert devices['loopback_devices'][0]['id'] == 'pulse-monitor:avanevis_desktop.monitor'
+    assert devices['output_devices'][0]['id'] == 'pulse-sink:avanevis_desktop'
     assert defaults['default_input'] == 'pulse-source:avanevis_mic'
     assert defaults['default_output'] == 'pulse-monitor:avanevis_desktop.monitor'
 
@@ -111,6 +116,14 @@ def test_linux_device_manager_enumerates_opaque_pulse_ids(monkeypatch):
         manager.validate_input_device('pulse-monitor:avanevis_desktop.monitor')
     with pytest.raises(ValueError, match='was not found'):
         manager.validate_input_device('pulse-source:missing')
+
+    sink_info = manager.get_device_info('pulse-sink:avanevis_desktop')
+    assert sink_info['id'] == 'pulse-sink:avanevis_desktop'
+    assert sink_info['max_output_channels'] == 2
+    monitor_info = manager.get_device_info('pulse-monitor:avanevis_desktop.monitor')
+    assert monitor_info['is_loopback'] is True
+    assert 'error' in manager.get_device_info('pulse-monitor:avanevis_mic')
+    assert 'error' in manager.get_device_info('pulse-source:avanevis_desktop.monitor')
 
 
 def test_linux_device_manager_fails_closed_without_pulse_server(monkeypatch):
@@ -124,3 +137,48 @@ def test_linux_device_manager_fails_closed_without_pulse_server(monkeypatch):
 
     with pytest.raises(device_manager.DeviceManagerEnvironmentError, match='PulseAudio/PipeWire is not running'):
         device_manager.DeviceManager()
+
+
+def test_linux_enumerate_failure_keeps_raw_exception_off_the_error_line(monkeypatch, capsys):
+    _linux_flags(monkeypatch)
+    manager = device_manager.DeviceManager.__new__(device_manager.DeviceManager)
+
+    class BoomPulse:
+        def source_list(self):
+            raise ConnectionRefusedError('no pulse at /run/user/1000/pulse/native')
+
+        def sink_list(self):
+            raise AssertionError('sink_list should not run after source_list fails')
+
+    manager.pulse = BoomPulse()
+    with pytest.raises(device_manager.DeviceManagerEnvironmentError, match='Could not list PulseAudio'):
+        manager._list_devices_linux()
+
+    captured = capsys.readouterr()
+    assert captured.err.startswith('Warning:')
+    assert 'ERROR:' not in captured.err
+    assert '/run/user/1000/pulse/native' in captured.err
+
+
+def test_linux_device_manager_main_surfaces_sanitized_enumerate_error(monkeypatch, capsys):
+    _linux_flags(monkeypatch)
+
+    class ConnectedButBroken:
+        def list_all_devices(self):
+            raise device_manager.DeviceManagerEnvironmentError(
+                'Could not list PulseAudio/PipeWire devices. Is the session audio service running?'
+            )
+
+        def get_default_devices(self):
+            raise AssertionError('defaults should not run after enumerate failure')
+
+    monkeypatch.setattr(device_manager, 'DeviceManager', ConnectedButBroken)
+    with pytest.raises(SystemExit) as exc:
+        device_manager.main()
+    assert exc.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.out == ''
+    assert captured.err.startswith(
+        'ERROR: Could not list PulseAudio/PipeWire devices. Is the session audio service running?'
+    )
+    assert '/run/user' not in captured.err

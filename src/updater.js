@@ -136,10 +136,6 @@ function findInstallerAsset(assets) {
 
   // Linux installers are not shipped yet (Phase 5). Do not match source
   // archives or other non-installer assets as if they were AppImages.
-  if (platform === 'linux') {
-    return null;
-  }
-
   return null;
 }
 

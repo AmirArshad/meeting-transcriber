@@ -2564,6 +2564,35 @@ test('buildRecordingPreflightReport allows macOS start when proactive screen che
 });
 
 
+test('buildRecordingPreflightReport still allows Windows start when devices validate', () => {
+  const result = buildRecordingPreflightReport({
+    platform: 'win32',
+    deviceCheck: { valid: true, errors: [], warnings: [] },
+    diskCheck: { success: true, warning: null },
+    audioOutputCheck: { supported: true, warning: null },
+  });
+
+  assert.equal(result.canStart, true);
+  assert.equal(result.errors.length, 0);
+  assert.equal((result.errorMessage || '').includes('Linux recording'), false);
+});
+
+
+test('buildRecordingPreflightReport hard-fails on Linux even when devices validate', () => {
+  const result = buildRecordingPreflightReport({
+    platform: 'linux',
+    deviceCheck: { valid: true, errors: [], warnings: [] },
+    diskCheck: { success: true, warning: null },
+    audioOutputCheck: { supported: true, warning: null },
+  });
+
+  assert.equal(result.canStart, false);
+  assert.match(result.errorMessage, /Linux recording is not available yet/);
+  assert.match(result.errorMessage, /Linux capture is not shipped/);
+  assert.equal(result.errorMessage.includes('Windows Settings'), false);
+});
+
+
 test('buildRecordingPreflightReport blocks macOS start when desktop backend is unavailable', () => {
   const result = buildRecordingPreflightReport({
     platform: 'darwin',

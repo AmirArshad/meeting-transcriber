@@ -113,6 +113,10 @@ test('extractDeviceManagerError reads the Python ERROR: line', () => {
     'PulseAudio/PipeWire is not running. Start the session audio service and try again.',
   );
   assert.equal(extractDeviceManagerError('no structured error'), null);
+  assert.equal(
+    extractDeviceManagerError('Warning: Could not enumerate Pulse devices: ConnectionRefusedError(/run/user/1000/pulse/native)\n'),
+    null,
+  );
 });
 
 test('decorateDesktopDevices prepends none only on Linux', () => {

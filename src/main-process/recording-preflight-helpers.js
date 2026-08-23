@@ -94,6 +94,10 @@ function buildRecordingPreflightReport({
   const warnings = Array.isArray(deviceCheck.warnings) ? [...deviceCheck.warnings] : [];
   let permissionStatus = null;
 
+  if (platform === 'linux') {
+    errors.push('Linux recording is not available yet.');
+  }
+
   if (deviceCheck.valid === false && errors.length === 0) {
     errors.push('Selected audio devices failed validation.');
   }
@@ -155,10 +159,15 @@ function buildRecordingPreflightReport({
       'If the microphone is missing, check System Settings > Privacy & Security > Microphone.',
       'For desktop audio on macOS, keep System Audio (ScreenCaptureKit) selected.',
     ]
-    : [
-      'Refresh your audio devices and try again.',
-      'Reconnect the selected microphone or desktop audio device if it was unplugged.',
-    ];
+    : platform === 'linux'
+      ? [
+        'Linux capture is not shipped in this build.',
+        'Refresh devices once PulseAudio or PipeWire is running to confirm enumeration.',
+      ]
+      : [
+        'Refresh your audio devices and try again.',
+        'Reconnect the selected microphone or desktop audio device if it was unplugged.',
+      ];
 
   const errorMessage = normalizedErrors.length
     ? [

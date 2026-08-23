@@ -1093,3 +1093,116 @@ test('cancel-recording rejects when stdin write fails and child exits without ca
       && /did not return a cancelled result/i.test(error.message),
   );
 });
+
+async function withProcessPlatform(platform, fn) {
+  const descriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+  Object.defineProperty(process, 'platform', { configurable: true, value: platform });
+  try {
+    return await fn();
+  } finally {
+    Object.defineProperty(process, 'platform', descriptor);
+  }
+}
+
+test('start-recording passes opaque Pulse IDs on argv unchanged', async () => {
+  const { EventEmitter } = require('node:events');
+  const spawned = [];
+  const proc = new EventEmitter();
+  proc.stdout = new EventEmitter();
+  proc.stderr = new EventEmitter();
+  proc.stdin = { write() {} };
+  proc.killed = false;
+  proc.pid = 9001;
+  proc.kill = () => { proc.killed = true; };
+
+  const { deps } = createMinimalDeps({
+    isQuitCommitted: () => false,
+    spawnTrackedPython(args) {
+      spawned.push(args);
+      return proc;
+    },
+  });
+
+  const service = createRecorderService(deps);
+  const handlers = {};
+  service.registerIpc({
+    handle(channel, handler) {
+      handlers[channel] = handler;
+    },
+  });
+
+  const startPromise = handlers['start-recording'](
+    { sender: {} },
+    {
+      micId: 'pulse-source:alsa_input.usb-mic',
+      loopbackId: 'pulse-monitor:alsa_output.pci.monitor',
+      isFirstRecording: false,
+    },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  proc.stdout.emit('data', Buffer.from(`${JSON.stringify({
+    type: 'event',
+    event: 'recording_started',
+    message: 'Recording started!',
+  })}\n`));
+  const result = await startPromise;
+  assert.equal(result.success, true);
+
+  assert.equal(spawned.length, 1);
+  const args = spawned[0];
+  assert.equal(args[args.indexOf('--mic') + 1], 'pulse-source:alsa_input.usb-mic');
+  assert.equal(args[args.indexOf('--loopback') + 1], 'pulse-monitor:alsa_output.pci.monitor');
+  assert.equal(Number.isNaN(parseInt(args[args.indexOf('--mic') + 1], 10)), true);
+
+  const stopPromise = handlers['stop-recording']({ sender: {} });
+  await new Promise((resolve) => setImmediate(resolve));
+  const audioPath = path.join(deps.getRecordingsDir(), 'pulse-ids.wav');
+  fs.writeFileSync(audioPath, 'x');
+  proc.stdout.emit('data', Buffer.from(`${JSON.stringify({
+    success: true,
+    audioPath,
+    duration: 1,
+  })}\n`));
+  proc.emit('close', 0);
+  await stopPromise;
+});
+
+test('start-recording with default getRecorderModule fails closed on linux without spawning', async () => {
+  const stopped = [];
+  const { deps } = createMinimalDeps({
+    isQuitCommitted: () => false,
+    resolveRecorderModule: undefined,
+    powerSaveBlocker: {
+      start: () => 11,
+      stop(id) {
+        stopped.push(id);
+      },
+    },
+    spawnTrackedPython() {
+      throw new Error('must not spawn a recorder on linux');
+    },
+  });
+
+  const service = createRecorderService(deps);
+  const handlers = {};
+  service.registerIpc({
+    handle(channel, handler) {
+      handlers[channel] = handler;
+    },
+  });
+
+  await withProcessPlatform('linux', async () => {
+    const result = await handlers['start-recording'](
+      { sender: {} },
+      {
+        micId: 'pulse-source:alsa_input.usb-mic',
+        loopbackId: 'none',
+        isFirstRecording: false,
+      },
+    );
+    assert.equal(result.success, false);
+    assert.equal(result.code, 'STARTUP_FAILED');
+    assert.match(result.message, /not supported on linux/);
+    assert.deepEqual(stopped, [11]);
+  });
+});
