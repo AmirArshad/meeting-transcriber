@@ -84,14 +84,13 @@ Use this checklist when validating speaker identification or local summaries on 
 - [ ] macOS Speakrs setup: Apple Silicon CoreML-only (no CPU fallback); no token field; Ready; a new recording uses `coreml` guided transcription and writes `*.speakers.json`.
 - [ ] Settings > About credits Speakrs (Apache-2.0) and pyannote (CC BY 4.0). Open third-party notices includes the Speakrs pack table and bundled `speakrs-cli`.
 
-## Linux (not ready — add-ons stay `unsupported`)
+## Linux (first version — add-ons stay greyed `unsupported`)
 
-Speaker identification and summaries must remain **unsupported** on Linux until Phases 6–8 in `docs/initiatives/LINUX_SUPPORT.md`. Home/Settings must not offer setup that cannot complete.
+Speaker identification and local summaries are **out of scope for the first Linux version** (Core Beta, Phases 0–5 in `docs/initiatives/LINUX_SUPPORT.md`). There is no Omarchy host with NVIDIA CUDA to validate those add-ons; do not ship a CPU fallback. Home/Settings/History must show the features **visible but greyed out**, with copy that they are not available on Linux in this version and will return in a future Linux update. Setup, switch, token, and Generate Summary must not start.
 
-- [ ] **Phase 0:** Settings and Home show speaker identification and summaries as unsupported; no Set Up / Switch / token field is offered.
-- [ ] **Blocked until Phase 6:** Linux CUDA 12 faster-whisper runtime install/repair/uninstall; CUDA-13-only hosts stay on CPU with clear copy.
-- [ ] **Blocked until Phase 7:** Speakrs CUDA-only and Pyannote CUDA-only on packaged Linux; exclusive switch; Pyannote token requires real `safeStorage` (not `basic_text`).
-- [ ] **Blocked until Phase 8:** Pinned Linux CPU llama.cpp summary runtime; 60-minute Balanced summary within the 90-minute wall clock.
+- [ ] **Phase 0:** catalog status is `unsupported` (`tests/js/linux-platform-selection.test.js`).
+- [ ] **Phase 4:** Settings cards are visually greyed; Set Up / Install Model / Validate / Remove / Switch / token fields disabled; Home AI add-on CTA does not offer setup; History Generate Summary disabled; Linux-specific future-version copy is shown.
+- [ ] **Later version (Phases 6–9, needs Omarchy + NVIDIA):** Linux CUDA Whisper; Speakrs/Pyannote CUDA-only; pinned Linux llama.cpp summaries. Do not run these rows on CPU-only Omarchy.
 
 ## Failure Modes
 

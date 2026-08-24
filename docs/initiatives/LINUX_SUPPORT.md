@@ -1,8 +1,9 @@
 # Linux Support Plan — Omarchy First
 
-> **Status:** Phases 0–2 in progress on `release/linux`. Gate A is resolved (see below); Linux product capture/add-ons are not advertised as ready. Phase 1 dummy-Pulse API spike is recorded below; Omarchy hardware exit criteria remain open. Phase 3 (`linux_recorder.py`) must not start until that live-capture evidence exists.
+> **Status:** Phases 0–2 in progress on `release/linux`. Gate A is resolved (see below); Linux product capture is not advertised as ready. Phase 1 dummy-Pulse API spike is recorded below; Omarchy hardware exit criteria remain open. Phase 3 (`linux_recorder.py`) must not start until that live-capture evidence exists.
 > **Replanned:** 2026-08-23 against AvaNevis v2.7.0 / current `master`.
 > **Review pass:** 2026-08-23 — verified plan claims against the codebase and CI, corrected two host-fact conclusions (secret storage, tray), and pinned every required upstream Linux artifact. All "Verified" sections below were checked on that date.
+> **Scope cut (2026-08-24):** the first Linux version is **Core Beta only** (Phases 0–5). Speaker identification and local summaries are **out of scope** until a later Linux version. There is no Omarchy host with an NVIDIA GPU to validate those CUDA-only add-ons; do not ship a CPU fallback. The UI must keep both features visible but greyed out as unsupported.
 > **Primary target:** Omarchy 4, x86_64, Hyprland/Wayland, PipeWire with `pipewire-pulse`.
 > **Secondary target:** Ubuntu 24.04+ and other modern x86_64 desktop distributions where the same binaries and Pulse-compatible capture path work without distro-specific code.
 
@@ -11,19 +12,20 @@
 This plan is written to be executed phase by phase, one PR per phase, by an implementer with no prior context on this initiative. Rules:
 
 1. Read root `AGENTS.md` first. It is the canonical source for every cross-process contract this plan touches. Where this plan and `AGENTS.md` disagree on an existing contract, `AGENTS.md` wins.
-2. Do not skip phases or reorder them. Each phase's exit criteria must pass before the next phase starts.
+2. Do not skip or reorder **in-scope** phases (0–5). Each phase's exit criteria must pass before the next phase starts. Phases 6–9 are a later Linux version — see rule 8.
 3. Every referenced line number was correct on 2026-08-23 and will drift. Each line reference includes a search pattern — locate code by the pattern, not the number.
 4. Every artifact pin below lists the exact URL and file name but **not** the SHA-256. At implementation time: download the file, run `sha256sum <file>` (or `shasum -a 256` on macOS), and record the hash in the pin. Never copy a hash from an unverified source, and never pin a URL you have not downloaded and hashed yourself.
 5. Never weaken a Windows or macOS test to make Linux pass. Add Linux cases alongside existing ones.
 6. Validation per phase: run the smallest relevant suite while iterating (`npm test` for JS, `npm run test:python` for Python), and always run `npm run test:all` before opening the phase PR.
 7. No Linux feature may be presented as available in the UI until its phase exit criteria pass. `unsupported` is the correct status until then.
+8. Do not start Phases 6–9 as part of the first Linux version. Those phases are a later Linux version, blocked on an Omarchy host with NVIDIA hardware.
 
-Delivery has two explicit milestones:
+Delivery has two explicit milestones. Only the first is in scope now:
 
-1. **Omarchy Core Beta** (Phases 0–5) — mic + desktop recording, recovery, background transcription queue, local faster-whisper, History/export, tray/notifications, pacman package, and a FUSE-less AppImage.
-2. **Linux Feature Parity** (Phases 6–9) — optional summaries plus the exclusive Speakrs/Pyannote speaker-identification selector, with Linux-specific catalog/runtime pins and the same privacy, integrity, cancellation, queue, and quit guarantees as Windows/macOS.
+1. **Omarchy Core Beta** (Phases 0–5) — **this is the first Linux version.** Mic + desktop recording, recovery, background transcription queue, local faster-whisper **on CPU**, History/export, tray/notifications, pacman package, and a FUSE-less AppImage. Speaker identification and local summaries stay `unsupported` and greyed out in the UI.
+2. **Later Linux version — add-on parity** (Phases 6–9, deferred) — optional summaries plus the exclusive Speakrs/Pyannote selector, Linux catalog/runtime pins, and managed CUDA Whisper. **Do not schedule this until an Omarchy machine with an NVIDIA GPU is available for soak.** A CPU llama.cpp binary existing upstream is not a reason to ship Linux summaries in Core Beta.
 
-Core Beta may ship while local AI add-ons truthfully report `unsupported` on Linux. A release must not present setup controls that cannot complete. "Linux support" should not be called feature-complete until the parity milestone passes its hardware matrix.
+A Core Beta release must not present setup controls that cannot complete. Greyed-out Settings cards and a disabled Generate Summary control are required; hiding the features, or leaving Set Up clickable, is not. Do not call Linux "feature-complete" with Windows/macOS while add-ons remain deferred.
 
 Ubuntu `.deb` support is a later packaging task unless the AppImage works unchanged. No Ubuntu-specific capture implementation is planned.
 
@@ -42,10 +44,10 @@ The original late-2025 plan predated most of the current runtime architecture. T
 | Discard/cancel with a `discarded` manifest tombstone | Linux cancel must skip finalization and must never resurrect discarded spools |
 | Main-owned background transcription queue and Activity UI | Capture unlocks after pending meeting persistence, not after Whisper; Linux uses the same queue and monotonic `seq` state |
 | Whisper preload and GPU runtime between-job admission | Linux model download and accelerator setup must use `gpuResourceActionQueue`, not a new lock or fail-fast path |
-| Exclusive Speakrs/Pyannote engine selector | Linux needs catalog support for both engines, exclusive deletion, token isolation, setup validation, and guided transcription |
-| Bundled `speakrs-cli` with fail-closed integrity | The Linux binary must be built, staged, packaged, and verified; model/runtime packs remain explicit setup-time downloads |
-| User-triggered Qwen summaries through pinned llama.cpp | Linux needs a pinned runtime profile and must preserve summary sidecar/metadata finalization semantics |
-| AI compute wall clocks and quit drain | Linux process groups and child-tree termination must work for Python, ffmpeg, llama-cli, and the Speakrs grandchild |
+| Exclusive Speakrs/Pyannote engine selector | **Out of the first Linux version.** Catalog stays without `linux-x64` entries; UI stays greyed `unsupported`. Later version (Phase 7) needs both engines, exclusive deletion, token isolation, setup validation, and guided transcription |
+| Bundled `speakrs-cli` with fail-closed integrity | **Do not stage a Linux Speakrs binary in Core Beta.** Windows/macOS packaging is unchanged. Later version (Phase 7) builds, stages, and fail-closes the Linux CLI; model/runtime packs remain setup-time downloads |
+| User-triggered Qwen summaries through pinned llama.cpp | **Out of the first Linux version**, including the CPU llama.cpp runtime. Later version (Phase 8) pins a Linux runtime and preserves sidecar/metadata finalization |
+| AI compute wall clocks and quit drain | Core Beta must prove process-group kill for Python and ffmpeg. `llama-cli` and `speakrs-cli` grandchildren are a later-version concern |
 | Packaged-path hardening | `AVANEVIS_PACKAGED=1` must prevent packaged Linux from resolving helpers or runtimes from untrusted `PATH` entries |
 
 ## Verified Omarchy host facts (2026-08-23)
@@ -70,10 +72,10 @@ Every external Linux artifact this plan needs exists upstream, mostly at the exa
 |---|---|---|
 | Bundled Python 3.11 (Phase 2) | `cpython-3.11.7+20240107-x86_64-unknown-linux-gnu-install_only.tar.gz` from python-build-standalone release `20240107` — the **same release** as the existing macOS pin. URL: `https://github.com/astral-sh/python-build-standalone/releases/download/20240107/cpython-3.11.7+20240107-x86_64-unknown-linux-gnu-install_only.tar.gz` (literal `+`, matching the existing macOS pin style in `build/download-manifest.js`). The project moved from `indygreg` to `astral-sh` on GitHub; old URLs redirect, but use the `astral-sh` URL form for new pins. | `build/download-manifest.js` (`pythonLinux`) |
 | Bundled ffmpeg (Phase 2) | `ffmpeg-linux-x64` (fully static) from `shaka-project/static-ffmpeg-binaries` release `n8.0.1-1` — the **same release** as the existing macOS pin. URL: `https://github.com/shaka-project/static-ffmpeg-binaries/releases/download/n8.0.1-1/ffmpeg-linux-x64`. | `build/download-manifest.js` (`ffmpegLinux`) |
-| Summary runtime, CPU baseline (Phase 8) | `llama-b9173-bin-ubuntu-x64.tar.gz` from `ggml-org/llama.cpp` release `b9173` — the **exact build tag** already pinned in `PINNED_LLAMA_CPP_RUNTIME` (`src/ai-addon-state.js`). URL: `https://github.com/ggml-org/llama.cpp/releases/download/b9173/llama-b9173-bin-ubuntu-x64.tar.gz`. Built against Ubuntu 22.04 glibc; runs on Arch (newer glibc) and Ubuntu 24.04. | `src/ai-addon-state.js` (`linux-x64` runtime entry) |
-| Summary runtime, optional Vulkan profile (Phase 8, gated) | `llama-b9173-bin-ubuntu-vulkan-x64.tar.gz` from the same release. URL: `https://github.com/ggml-org/llama.cpp/releases/download/b9173/llama-b9173-bin-ubuntu-vulkan-x64.tar.gz`. Only pinned if the Vulkan profile clears its evidence bar. | `src/ai-addon-state.js` |
-| Speakrs Linux ONNX Runtime (Phase 7) | `onnxruntime-linux-x64-gpu_cuda12-1.27.1.tgz` (~233 MB) from `microsoft/onnxruntime` release `v1.27.1` — the **same ORT version** as the Windows pack spec. URL: `https://github.com/microsoft/onnxruntime/releases/download/v1.27.1/onnxruntime-linux-x64-gpu_cuda12-1.27.1.tgz`. Caveats: requires cuDNN 9 and CUDA 12 libraries on `LD_LIBRARY_PATH`; cuDNN 9 on Linux additionally requires zlib (statically linked on Windows, not on Linux); Microsoft has deprecated CUDA 12 packages in the 1.27 line, so a future CUDA 13 migration will hit Windows and Linux together — acceptable for v1, do not migrate unilaterally. | `src/ai-addon/speakrs-pack-spec.js` |
-| faster-whisper CUDA libraries (Phase 6) | `nvidia-cublas-cu12` and `nvidia-cudnn-cu12` pip packages — both ship manylinux wheels. Same package names as the Windows CUDA profile; the only mechanical difference is `LD_LIBRARY_PATH` injection instead of Windows DLL directories. | Linux GPU runtime profile (Phase 6) |
+| Summary runtime, CPU baseline (**deferred Phase 8**) | `llama-b9173-bin-ubuntu-x64.tar.gz` from `ggml-org/llama.cpp` release `b9173` — the **exact build tag** already pinned in `PINNED_LLAMA_CPP_RUNTIME` (`src/ai-addon-state.js`). URL: `https://github.com/ggml-org/llama.cpp/releases/download/b9173/llama-b9173-bin-ubuntu-x64.tar.gz`. Built against Ubuntu 22.04 glibc; runs on Arch (newer glibc) and Ubuntu 24.04. **Do not pin this in Core Beta.** | `src/ai-addon-state.js` (`linux-x64` runtime entry) |
+| Summary runtime, optional Vulkan profile (**deferred Phase 8**, gated) | `llama-b9173-bin-ubuntu-vulkan-x64.tar.gz` from the same release. URL: `https://github.com/ggml-org/llama.cpp/releases/download/b9173/llama-b9173-bin-ubuntu-vulkan-x64.tar.gz`. Only pinned if the Vulkan profile clears its evidence bar. **Do not pin this in Core Beta.** | `src/ai-addon-state.js` |
+| Speakrs Linux ONNX Runtime (**deferred Phase 7**) | `onnxruntime-linux-x64-gpu_cuda12-1.27.1.tgz` (~233 MB) from `microsoft/onnxruntime` release `v1.27.1` — the **same ORT version** as the Windows pack spec. URL: `https://github.com/microsoft/onnxruntime/releases/download/v1.27.1/onnxruntime-linux-x64-gpu_cuda12-1.27.1.tgz`. Caveats: requires cuDNN 9 and CUDA 12 libraries on `LD_LIBRARY_PATH`; cuDNN 9 on Linux additionally requires zlib (statically linked on Windows, not on Linux); Microsoft has deprecated CUDA 12 packages in the 1.27 line, so a future CUDA 13 migration will hit Windows and Linux together — acceptable for a later version, do not migrate unilaterally. **Do not pin this in Core Beta.** | `src/ai-addon/speakrs-pack-spec.js` |
+| faster-whisper CUDA libraries (**deferred Phase 6**) | `nvidia-cublas-cu12` and `nvidia-cudnn-cu12` pip packages — both ship manylinux wheels. Same package names as the Windows CUDA profile; the only mechanical difference is `LD_LIBRARY_PATH` injection instead of Windows DLL directories. **Do not pin this in Core Beta.** | Linux GPU runtime profile (Phase 6) |
 | Capture library (Phases 1–3) | `SoundCard` 0.4.6 (PyPI) — actively maintained (Jan 2026 numpy-compat release); documented working against PipeWire's Pulse compatibility layer. | `requirements-linux.txt` |
 | Audio control library (Phases 1–3) | `pulsectl` 24.12.0 (PyPI) — latest release Dec 2024; mature, low-churn ctypes binding to libpulse. Slow release cadence is acceptable; the Phase 1 spike exercises exactly the API surface we depend on. | `requirements-linux.txt` |
 
@@ -114,13 +116,14 @@ Windows v2.7.0 has no equivalent open release issue.
 
 ### Gate C — freeze target support claims
 
-The first release must state:
+The first Linux version (Core Beta) must state:
 
 - Omarchy 4 x86_64 is supported.
 - Wayland/Hyprland + PipeWire/Pulse compatibility is the tested desktop.
+- Transcription is local faster-whisper on **CPU**. Linux CUDA Whisper is not a Core Beta support claim.
+- Speaker identification (Speakrs and Pyannote) and local summaries are **not available on Linux in this version**; they will return in a future Linux update. The Settings cards stay visible and greyed out. No Linux CPU fallback for either speaker engine.
 - Ubuntu/other distro AppImage use is experimental until matrix evidence exists.
-- Speaker identification is accelerator-only; no Linux CPU fallback is introduced implicitly.
-- Linux ARM64, Flatpak, Snap, RPM, ROCm/MIGraphX, and native Ubuntu `.deb` are out of the first release.
+- Linux ARM64, Flatpak, Snap, RPM, ROCm/MIGraphX, native Ubuntu `.deb`, and Linux AI add-on setup are out of the first release.
 
 ## Locked architecture decisions
 
@@ -219,26 +222,30 @@ Linux does not change:
 - one live capture at a time
 - one GPU-heavy compute action at a time
 - recoverable spool discovery and user-approved recovery
-- summary generation remaining user-triggered
 - quit terminating transcription-class work while preserving pending meetings
-- summary metadata finalization being non-abortable once sidecar renames begin
 
-POSIX Python is already spawned as a process-group leader. Linux validation must prove that terminating the group also reaps ffmpeg, llama-cli, and `speakrs-cli`; no child may start a new process group and escape shutdown.
+POSIX Python is already spawned as a process-group leader. Core Beta must prove that terminating the group also reaps ffmpeg. `llama-cli` and `speakrs-cli` grandchildren are a later-version concern (Phases 7–8). Summary generation remaining user-triggered, and summary metadata finalization being non-abortable, stay Windows/macOS invariants and must not grow Linux catalog paths in Core Beta.
 
-### 7. Core transcription uses faster-whisper
+### 7. Core transcription uses faster-whisper (CPU for the first Linux version)
 
 Linux uses `faster-whisper`, not MLX.
 
-- CPU is the guaranteed baseline.
-- CUDA is optional and must fall back to CPU with honest UI copy when unavailable or incompatible.
+First Linux version (Core Beta):
+
+- **CPU is the only supported transcription path.**
+- CUDA Whisper, the managed CUDA runtime install, and GPU Settings install/repair are deferred with diarization/summaries until an Omarchy host with NVIDIA hardware exists (Phase 6).
+- A CUDA probe may still run so Linux does not silently take the Windows GPU path. It must report unavailable/incompatible honestly and stay on CPU. Do not advertise Linux CUDA as ready, and do not offer an Install GPU control that cannot complete.
 - Model cache completeness and `AVANEVIS_TRANSCRIPTION_LOCAL_FILES_ONLY` behavior stay aligned between JS and Python.
-- Whisper cache remains separate from the diarization Hugging Face cache.
+- Whisper cache remains separate from the diarization Hugging Face cache (that cache stays unused on Linux in Core Beta).
 - Preload stays off the compute queue and enters through `gpuResourceActionQueue` between jobs.
 - The actual result device, not intended device, populates meeting metadata.
-- The queued job re-probes CUDA when it starts; no stale five-minute UI result controls compute.
-- Linux CUDA mechanics: the managed runtime installs the `nvidia-cublas-cu12` / `nvidia-cudnn-cu12` manylinux wheels (verified available) and injects their library directories via **`LD_LIBRARY_PATH`** into Python children — the Linux equivalent of the Windows `os.add_dll_directory` flow. The probe checks for the CUDA-12-major shared-object names; a host with only CUDA-13-named libraries surfaces the runtime-major mismatch and stays on CPU, exactly like Windows.
+- Linux child processes lower their own priority with `os.nice`, as on macOS, so transcription cannot starve a newly started recording.
 
-Linux child processes lower their own priority with `os.nice`, as on macOS, so transcription cannot starve a newly started recording.
+Later version (Phase 6, deferred) — keep the existing Windows semantics, do not invent a new lock:
+
+- The queued job re-probes CUDA when it starts; no stale five-minute UI result controls compute.
+- Managed runtime installs the `nvidia-cublas-cu12` / `nvidia-cudnn-cu12` manylinux wheels and injects their library directories via **`LD_LIBRARY_PATH`** into Python children.
+- The probe checks for CUDA-12-major shared-object names; a host with only CUDA-13-named libraries surfaces the runtime-major mismatch and stays on CPU.
 
 ### 8. Packaging is pacman-first, AppImage-second
 
@@ -266,18 +273,18 @@ Pick one: either opt in via `toolsets` on the current 26.x, or take the v27 upgr
 Two operational constraints:
 
 - **AppImages cannot be cross-compiled from macOS or Windows.** The CI Linux build job (ubuntu runner) is a hard requirement, not a nicety.
-- Verify packaged-AppImage secret storage explicitly (see decision 9): there are field reports of AppImages failing to `dlopen` the system `libsecret` from inside the AppImage mount namespace. Token save/load must be smoke-tested in the packaged AppImage on Omarchy, not only in the dev build.
+- Verify packaged-AppImage secret storage explicitly (see decision 9): there are field reports of AppImages failing to `dlopen` the system `libsecret` from inside the AppImage mount namespace. A generic `safeStorage` encrypt/decrypt round-trip must be smoke-tested in the packaged AppImage on Omarchy, not only in the dev build. This is desktop-integration evidence, not a Pyannote token requirement — Core Beta has no Linux token flow.
 
 Deferred:
 
 - `.deb` until the AppImage has a concrete Ubuntu incompatibility
 - RPM, Flatpak, Snap, AUR automation, Linux ARM64
 
-Bundle a pinned Linux Python 3.11 runtime, ffmpeg, backend sources, legal notices, and the Linux `speakrs-cli` in the prepared resource tree (see **Verified upstream artifacts** for the Python/ffmpeg pins). Do not rely on `/usr/bin/python`, system pip packages, or PATH ffmpeg in packaged builds.
+Bundle a pinned Linux Python 3.11 runtime, ffmpeg, backend sources, and legal notices in the prepared resource tree (see **Verified upstream artifacts** for the Python/ffmpeg pins). Do not rely on `/usr/bin/python`, system pip packages, or PATH ffmpeg in packaged builds. **Do not stage Linux `speakrs-cli`, ONNX Runtime, llama.cpp, or pyannote CUDA wheels in Core Beta.** `build/prepare-resources.js` must not fail a Linux package because a Speakrs binary is absent. Windows/macOS Speakrs packaging stays fail-closed.
 
 ### 9. Linux secret storage requires an explicit backend selection (new, 2026-08-23)
 
-Chromium selects the Linux keyring backend from `XDG_CURRENT_DESKTOP`. Hyprland (and Sway, i3, and other non-mainstream desktops) are not recognized, so Electron falls back to the non-encrypting `basic_text` backend even when gnome-keyring and `org.freedesktop.secrets` are fully functional — which is exactly the verified Omarchy host state. Without this decision, the Pyannote token preflight would fail closed on the primary target.
+Chromium selects the Linux keyring backend from `XDG_CURRENT_DESKTOP`. Hyprland (and Sway, i3, and other non-mainstream desktops) are not recognized, so Electron falls back to the non-encrypting `basic_text` backend even when gnome-keyring and `org.freedesktop.secrets` are fully functional — which is exactly the verified Omarchy host state. Core Beta still lands this switch so Hyprland encryption is correct for any future token use and so the AppImage `libsecret` smoke is meaningful. The Pyannote token preflight itself is **not** a Core Beta requirement.
 
 Implementation (Phase 4, in `src/main.js` **before** `app.whenReady()`):
 
@@ -296,10 +303,10 @@ Rules:
 
 - KDE is not a tested target for this release; the `kwallet6` branch is a best-effort courtesy (kwalletd6 is D-Bus-activated on demand). Refine per `KDE_SESSION_VERSION` only if a real KDE report demands it — do not build that matrix speculatively.
 - Forcing `gnome-libsecret` on a host with no Secret Service is safe: Chromium fails to initialize the backend and `safeStorage.isEncryptionAvailable()` returns `false`, which is the correct fail-closed outcome.
-- The token preflight (Phase 7) must check **both** `safeStorage.isEncryptionAvailable()` **and** `safeStorage.getSelectedStorageBackend() !== 'basic_text'`. `isEncryptionAvailable()` alone is not sufficient — Electron can report encryption "available" over `basic_text` when plain-text mode is enabled, and `basic_text` is hardcoded-key obfuscation, not encryption.
-- Missing secret storage on other desktops must produce `needsAccount`/unsupported guidance with copy telling the user to install/start a Secret Service (e.g. gnome-keyring) — never plain-text token persistence.
+- The token preflight (**deferred Phase 7**) must check **both** `safeStorage.isEncryptionAvailable()` **and** `safeStorage.getSelectedStorageBackend() !== 'basic_text'`. `isEncryptionAvailable()` alone is not sufficient — Electron can report encryption "available" over `basic_text` when plain-text mode is enabled, and `basic_text` is hardcoded-key obfuscation, not encryption.
+- Missing secret storage on other desktops must produce `needsAccount`/unsupported guidance with copy telling the user to install/start a Secret Service (e.g. gnome-keyring) — never plain-text token persistence. Core Beta has no Linux token UI; keep this rule for the later version.
 - Keep the existing invariants: token via stdin (`--token-stdin`), cleared HF env vars, `HF_TOKEN_PATH` set to `os.devNull`, never `""`.
-- Phase 5 must smoke-test token save/load in the **packaged AppImage** on Omarchy (the `dlopen(libsecret)` risk noted in decision 8).
+- Phase 5 must smoke-test a generic packaged-AppImage `safeStorage` encrypt/decrypt round-trip on Omarchy (the `dlopen(libsecret)` risk noted in decision 8). Do not require a Hugging Face token save for Core Beta.
 
 ### 10. Wayland presentation: tray, notifications, and the ozone decision (new, 2026-08-23)
 
@@ -331,9 +338,32 @@ return linuxAsset || null;
 
 - Linux `artifactName` values in `package.json` must therefore produce `AvaNevis-Setup-*` file names, keeping `src/updater.js` and release naming aligned (the existing release-asset-naming invariant in `AGENTS.md`).
 
-## AI add-on parity plan
+### 12. First Linux version does not ship diarization or summaries (new, 2026-08-24)
 
-Linux add-ons are not "just enable the UI." Each needs catalog entries, runtime packaging, setup validation, hardware policy, integrity checks, queue membership, cancellation, uninstall ownership, legal notices, and manual smoke.
+There is no Omarchy development host with an NVIDIA GPU. Speakrs and Pyannote on Linux are CUDA-only with **no CPU fallback** (same product policy as Windows/macOS). Local summaries are deferred with that same later milestone even though a CPU llama.cpp binary exists upstream — do not ship a Linux-only CPU summary exception in Core Beta.
+
+Core Beta product rules:
+
+- `getDiarizationAvailability('linux', …)` and `getSummaryAvailability('linux', …)` stay `supported: false`. Do not add `linux-x64` catalog, Speakrs pack, ORT, llama.cpp, or pyannote CUDA entries.
+- Feature status remains `unsupported`. Setup/generate IPC stays fail-closed.
+- **Do not hide the features.** Settings must still show the Speaker identification and Local summaries cards so users can see they exist on other platforms.
+- **Do grey them out.** `buildAiAddonControlState` already sets `canConfigure` / `canValidate` / `canRemove` / `canSelectEngine` false when `status === 'unsupported'`. Phase 4 must make that visually obvious: disabled buttons, disabled engine radios, disabled summary profile select, muted card chrome (for example an `ai-addon-card is-unsupported` class), and no token/speaker-count fields offered.
+- Home "Set up local AI add-ons" CTA must not offer setup on Linux (hide or disable it; do not leave Set Up clickable).
+- History and Home **Generate Summary** stay disabled, with the same unsupported reason in the tooltip/status text.
+- Linux-specific reason strings, not the generic "not supported on this platform" fallback:
+
+  - Speaker identification: `Speaker identification is not available on Linux in this version. It will return in a future Linux update.`
+  - Local summaries: `Local summaries are not available on Linux in this version. They will return in a future Linux update.`
+
+- Tests: `tests/js/linux-platform-selection.test.js` already pins catalog `unsupported`. Add renderer helper coverage that Linux control state is fully disabled and that the two reason strings render. Update `tests/manual/local-ai-addons-checklist.md` Linux rows to match.
+
+Later version (Phases 6–9) starts only when an Omarchy + NVIDIA machine is available. Until then, keep this decision's grey-out contract; do not partially enable summaries or a Speakrs CPU path.
+
+## Later Linux version — add-on parity plan (deferred)
+
+**Out of scope for the first Linux version.** Keep the requirements below so the later milestone does not have to be rediscovered. Do not implement them, pin their artifacts, or enable their UI in Core Beta.
+
+Linux add-ons are not "just enable the UI." Each needs catalog entries, runtime packaging, setup validation, hardware policy, integrity checks, queue membership, cancellation, uninstall ownership, legal notices, and manual smoke. Hardware gate: Omarchy 4 x86_64 **with NVIDIA CUDA**.
 
 ### Shared requirements
 
@@ -350,7 +380,7 @@ Linux add-ons are not "just enable the UI." Each needs catalog entries, runtime 
 
 ### Speakrs on Linux
 
-Product policy for v1: **x86_64 NVIDIA CUDA only; no product CPU fallback**. The CPU mode remains CI-only. AMD/ROCm/MIGraphX is a later evaluated target.
+Product policy for the later Linux version: **x86_64 NVIDIA CUDA only; no product CPU fallback**. The CPU mode remains CI-only. AMD/ROCm/MIGraphX is a later evaluated target.
 
 Implementation requirements:
 
@@ -378,7 +408,7 @@ Do not claim a Linux accuracy or speed win before same-audio evidence. Keep the 
 
 ### Pyannote on Linux
 
-Product policy for v1: **x86_64 NVIDIA CUDA only; no CPU fallback**.
+Product policy for the later Linux version: **x86_64 NVIDIA CUDA only; no CPU fallback**.
 
 Implementation requirements:
 
@@ -409,9 +439,9 @@ If guided transcription fails, save a normal transcript and concise sanitized di
 
 ### Summaries on Linux
 
-The current Qwen3.5 GGUF remains catalog-owned and llama.cpp remains the runtime. Linux must not silently use a system `llama-cli`.
+**Deferred.** The current Qwen3.5 GGUF remains catalog-owned and llama.cpp remains the runtime. Linux must not silently use a system `llama-cli`. Do not add a Core Beta CPU-only Linux summary path.
 
-Initial runtime policy:
+Initial runtime policy (later version):
 
 - Add a pinned Linux x64 **CPU** llama.cpp runtime as the compatibility baseline: `llama-b9173-bin-ubuntu-x64.tar.gz` (verified — same build tag as the Windows/macOS pins; see **Verified upstream artifacts**).
 - Treat Vulkan as a measured optimization, not a presence check. The first Omarchy host has Vulkan but incomplete Haswell support. The candidate asset is `llama-b9173-bin-ubuntu-vulkan-x64.tar.gz` (verified to exist) — pin it only after real inference evidence.
@@ -431,15 +461,17 @@ Preserve:
 - cancel/quit immunity during metadata finalization
 - no deletion of committed sidecars after a successful `update-ai`
 
-Acceptance requires a 60-minute transcript to generate a Balanced summary within the existing wall clock on the documented baseline hardware.
+Acceptance requires a 60-minute transcript to generate a Balanced summary within the existing wall clock on the documented baseline hardware. This acceptance bar is for the later Linux version only; Core Beta must not add a Linux summary catalog path "to try CPU first."
 
 ## Implementation phases
 
-Each phase should land as a reviewable PR with the smallest relevant tests first. Run `npm run test:all` for recorder, persistence, packaging, security, or cross-process changes and before every Linux PR is opened.
+Phases 0–5 are the first Linux version. Phases 6–9 are a later version and must not be scheduled until an Omarchy host with NVIDIA CUDA exists.
+
+Each in-scope phase should land as a reviewable PR with the smallest relevant tests first. Run `npm run test:all` for recorder, persistence, packaging, security, or cross-process changes and before every Linux PR is opened.
 
 ### Phase 0 — Baseline and contract characterization
 
-**Status (2026-08-23):** Implemented on `release/linux`. Gate A diagnosable assertion landed. Linux platform-selection tests cover recorder module, Python layout, add-on availability, updater fail-closed matching, and Speakrs packaging. GPU Settings and permission copy no longer treat Linux as Windows. Manual checklists have explicit Linux-not-ready rows.
+**Status (2026-08-23):** Implemented on `release/linux`. Gate A diagnosable assertion landed. Linux platform-selection tests cover recorder module, Python layout, add-on availability, updater fail-closed matching, and Speakrs packaging. GPU Settings and permission copy no longer treat Linux as Windows. Manual checklists have explicit Linux-not-ready rows. Add-on catalog paths stay `unsupported`.
 
 Deliverables:
 
@@ -455,6 +487,7 @@ Exit criteria:
 - `npm test` passes on the Omarchy development host
 - unknown/non-macOS platforms no longer silently enter Windows code
 - no Linux feature is advertised as ready
+- diarization and summary catalog status on Linux is `unsupported` (visual grey-out and Linux-specific copy land in Phase 4)
 
 ### Phase 1 — Omarchy audio spike
 
@@ -556,10 +589,11 @@ Files:
 - explicit Linux branches in recording presence, tray, notifications, close dialogs, and permission/preflight copy (see Locked decision 10 for the tray/SNI rules)
 - **Linux secret-storage bootstrap in `src/main.js`** per Locked decision 9 (the `password-store` switch, appended before `app.whenReady()`), plus a `getSelectedStorageBackend()` probe exposed for later preflights
 - **Wayland/ozone decision spike** per Locked decision 10: run the app under XWayland and under `--ozone-platform-hint=auto` on the Omarchy host, record findings in this document, and ship the chosen default
-- Linux faster-whisper runtime/cache paths
-- Linux CPU/CUDA probe and child environment
+- Linux faster-whisper **CPU** runtime/cache paths
+- Linux CUDA probe that reports unavailable/incompatible and stays on CPU — do not ship managed CUDA install or an Install GPU control
 - updater platform handling without enabling release assets prematurely
 - renderer platform gating for GPU and add-ons, including the three "not-mac means Windows" copy sites named in Locked decision 1
+- **Add-on grey-out per Locked decision 12:** Linux reason strings in `src/ai-addon-state.js`; disabled controls and muted card chrome in `src/renderer/app.js` / `src/renderer/index.html` / `src/renderer/styles.css`; helper coverage in `src/renderer/history-detail-helpers.js` / `src/renderer/ai-addon-ui-helpers.js` and matching `tests/js/` tests; Linux rows in `tests/manual/local-ai-addons-checklist.md`
 
 Behavior:
 
@@ -567,16 +601,19 @@ Behavior:
 - native notifications use Electron/desktop portals and remain best-effort
 - Close/quit during recording preserves current stop/persist semantics
 - background transcription queue continues while a new recording starts
-- queue, summary, and diarization remain serialized
-- Whisper preload and GPU runtime setup enter between compute jobs
+- Whisper preload enters between compute jobs
+- speaker identification and summary cards remain visible, greyed out, with the decision-12 copy; Set Up / Install Model / Validate / Remove / Switch / token fields / Generate Summary cannot start
+- Home AI add-on CTA does not offer setup
+- queue serialization for summary/diarization is unchanged on Windows/macOS; Linux must not enqueue those jobs
 
 Exit criteria:
 
 - Activity auto-resume, cancel pending, retry, rename, delete, History, transcript save, and playback work unchanged
-- CPU transcription is the reliable baseline
-- CUDA mismatch falls back to CPU and records the actual device
+- CPU transcription is the supported Linux path
+- a machine with no NVIDIA GPU stays on CPU with copy that does not advertise Linux CUDA as ready
 - quitting leaves no Python/ffmpeg process group alive
 - `safeStorage.getSelectedStorageBackend()` reports a real backend (not `basic_text`) on the Omarchy host
+- Settings/Home/History add-on controls are visibly disabled on Linux and show the future-version copy; IPC setup/generate still fail closed
 
 ### Phase 5 — Omarchy Core Beta packaging
 
@@ -588,19 +625,25 @@ Files:
 - Linux artifact naming in `src/updater.js`, including the tightened `findInstallerAsset` Linux branch (snippet in Locked decision 11)
 - Linux build/smoke jobs in `.github/workflows/ci.yml` (ubuntu runner — AppImages cannot be cross-compiled)
 - Linux release job in `.github/workflows/build-release.yml` **only after Gate B closes**
-- build/installer docs and troubleshooting
+- build/installer docs and troubleshooting — first-version claims match Gate C (CPU transcription; add-ons greyed unsupported)
 
 Exit criteria:
 
 - clean Omarchy install, upgrade, uninstall
 - AppImage launches without FUSE2 on Omarchy and Ubuntu 24.04
-- packaged app uses bundled Python, ffmpeg, and backend
+- packaged app uses bundled Python, ffmpeg, and backend — **no** Linux `speakrs-cli`, llama.cpp, or ORT
 - `AVANEVIS_PACKAGED=1` blocks PATH helper substitution
-- **packaged-AppImage secret storage round-trips** (token save + reload) on Omarchy — this covers the `dlopen(libsecret)` AppImage risk
+- **packaged-AppImage `safeStorage` encrypt/decrypt round-trip** on Omarchy — this covers the `dlopen(libsecret)` AppImage risk; no Hugging Face token is required
 - legal notices open
-- no AI setup button is offered until its Linux catalog path is complete
+- packaged UI still greys out speaker identification and summaries; no setup button can complete
 
-### Phase 6 — Linux accelerator/resource foundation
+**Core Beta ends here.** That is the first Linux version.
+
+### Phases 6–9 — Later Linux version (deferred)
+
+**Do not start these phases until an Omarchy host with an NVIDIA GPU is available.** They are not part of the first Linux version. Requirements and artifact URLs stay in this document so the later milestone does not have to be rediscovered.
+
+### Phase 6 — Linux accelerator/resource foundation (deferred)
 
 Port the existing managed runtime behavior instead of treating system CUDA as sufficient:
 
@@ -618,7 +661,7 @@ Exit criteria:
 - install/repair cannot race active compute or loaded libraries
 - no Linux shared-library path escapes the managed runtime
 
-### Phase 7 — Speaker identification parity
+### Phase 7 — Speaker identification parity (deferred)
 
 Order:
 
@@ -641,7 +684,7 @@ Exit criteria:
 - remove/switch never deletes Whisper or shared CUDA
 - quit/timeout leaves no `speakrs-cli` grandchild
 
-### Phase 8 — Summary parity
+### Phase 8 — Summary parity (deferred)
 
 Order:
 
@@ -661,18 +704,20 @@ Exit criteria:
 - 60-minute Balanced summary meets the existing wall clock
 - committed summary sidecars survive late abort/cleanup
 
-### Phase 9 — Feature-parity release and portability evidence
+### Phase 9 — Later-version release and portability evidence (deferred)
+
+Hardware gate: Omarchy 4 with NVIDIA CUDA. Until that host exists, the first Linux version ships only the Core Beta column.
 
 Matrix:
 
 | Environment | Core | CUDA Whisper | Speakrs | Pyannote | Summary | Package |
 |---|---:|---:|---:|---:|---:|---|
-| Omarchy 4 / Hyprland / PipeWire / CPU-only | Required | n/a | Unsupported | Unsupported | Required if CPU bar passes | pacman + AppImage |
-| Omarchy 4 / NVIDIA CUDA | Required | Required | Required | Required | Required | pacman + AppImage |
-| Ubuntu 24.04 / Wayland / PipeWire | Smoke | Smoke where available | Experimental | Experimental | Smoke | AppImage |
-| Ubuntu 24.04 / X11 / PulseAudio | Smoke | Optional | Deferred unless unchanged | Deferred unless unchanged | Smoke | AppImage |
+| Omarchy 4 / Hyprland / PipeWire / CPU-only | **Required (first version)** | Unsupported (greyed) | Unsupported (greyed) | Unsupported (greyed) | Unsupported (greyed) | pacman + AppImage |
+| Omarchy 4 / NVIDIA CUDA | Required | Later version | Later version | Later version | Later version | pacman + AppImage |
+| Ubuntu 24.04 / Wayland / PipeWire | Smoke | Later version | Unsupported until later | Unsupported until later | Unsupported until later | AppImage |
+| Ubuntu 24.04 / X11 / PulseAudio | Smoke | Optional later | Deferred | Deferred | Deferred | AppImage |
 
-Release only what the matrix proves. Unsupported combinations must remain explicit and must never fall back to cloud behavior.
+First version: release only Core Beta on CPU. Unsupported add-ons stay explicit and greyed and must never fall back to cloud behavior. The NVIDIA row is evidence for Phases 6–9 only.
 
 ## File touch map
 
@@ -682,12 +727,13 @@ Release only what the matrix proves. Unsupported combinations must remain explic
 | Device discovery | `backend/device_manager.py`, `src/main/device-ipc.js`, renderer device helpers |
 | Recorder orchestration | `src/main/recorder-service.js`, recorder output helpers and contract tests |
 | Python/runtime packaging | `src/main/python-runtime.js`, `build/download-manifest.js`, `build/prepare-resources.js`, Linux requirements |
-| Core transcription/CUDA | `src/main/transcription-service.js`, `src/main/gpu-runtime-service.js`, faster-whisper backend, runtime/cache helpers |
+| Core transcription | `src/main/transcription-service.js`, faster-whisper backend, runtime/cache helpers. Managed CUDA (`src/main/gpu-runtime-service.js`) is later-version only |
 | Presence/Wayland UX | `src/main/recording-presence-service.js`, `src/main.js`, renderer copy/styles |
-| Secret storage bootstrap | `src/main.js` (password-store switch), token preflight in add-on setup/IPC |
-| Add-on catalog/setup | `src/ai-addon-state.js`, `src/ai-addon/manifest-store.js`, setup/archive modules, `src/main/ai-addon-ipc.js` |
-| Speakrs | `native/speakrs-cli` (`Cargo.toml`, `ort-compile-pins.json`), pack spec/files/integrity, Python runner, packaging verification |
-| Summaries | summary setup/service, llama.cpp runtime catalog, summary backend/tests |
+| Secret storage bootstrap | `src/main.js` (`password-store` switch). Token preflight stays later-version (Phase 7) |
+| Add-on grey-out (Core Beta) | `src/ai-addon-state.js` Linux reason strings, `src/renderer/app.js`, `src/renderer/history-detail-helpers.js`, `src/renderer/ai-addon-ui-helpers.js`, `src/renderer/index.html`, `src/renderer/styles.css`, `tests/js/linux-platform-selection.test.js`, helper tests, `tests/manual/local-ai-addons-checklist.md` |
+| Add-on catalog/setup (later version) | `src/ai-addon-state.js` `linux-x64` entries, `src/ai-addon/manifest-store.js`, setup/archive modules, `src/main/ai-addon-ipc.js` |
+| Speakrs (later version) | `native/speakrs-cli` (`Cargo.toml`, `ort-compile-pins.json`), pack spec/files/integrity, Python runner, packaging verification |
+| Summaries (later version) | summary setup/service, llama.cpp runtime catalog, summary backend/tests |
 | Packaging/updater | `package.json`, `src/updater.js`, CI/release workflows, build docs |
 | Manual QA/legal | both manual checklists, `LOCAL_AI_MODEL_CATALOG.md`, About/notices tests |
 
@@ -699,34 +745,45 @@ Release only what the matrix proves. Unsupported combinations must remain explic
 - Python: `npm run test:python`
 - Syntax: `npm run test:python-syntax`
 - Full gate: `npm run test:all`
-- Linux `speakrs-cli`: cargo test/clippy plus CI CPU fixture smoke
-- packaged resource smoke: Python, ffmpeg, backend, CLI, legal bundle, no PATH substitution
+- packaged resource smoke: Python, ffmpeg, backend, legal bundle, no PATH substitution — **no** Linux `speakrs-cli` in Core Beta
 - installer smoke: pacman install/upgrade/uninstall and AppImage launch
+
+Linux `speakrs-cli` cargo test/clippy plus CI CPU fixture smoke belongs to **deferred Phase 7**, not Core Beta.
 
 Add Linux cases to characterization tests rather than weakening Windows/macOS snapshots. Update IPC source-scan tests only when an actual shared contract changes.
 
 ### Hardware/manual
 
+First Linux version (Omarchy CPU-only):
+
 - every input/output device class available on the Omarchy host
 - active browser/meeting audio, silence gaps, Bluetooth/HDMI change
 - 15/60-minute capture, stop, discard, crash recovery
-- recording during CPU and CUDA transcription
-- queued transcription + model preload/runtime setup ordering
+- recording during CPU transcription
+- queued transcription + model preload ordering
 - tray behavior with Waybar (SNI host present) and in a bare Wayland session (no SNI host) — no crash, presence still communicated
 - app rendering under XWayland vs `--ozone-platform-hint=auto` on Hyprland with fractional scaling (Phase 4 spike)
-- packaged-AppImage `safeStorage` token save/reload on Omarchy
-- CUDA-major mismatch and CPU fallback
+- packaged-AppImage `safeStorage` encrypt/decrypt on Omarchy
+- Settings/Home/History: speaker identification and summaries visible, greyed, future-version copy; no setup or Generate Summary can start
+- no network during transcription
+
+Later version only (needs NVIDIA Omarchy):
+
+- CUDA-major mismatch and CPU fallback; managed CUDA install/repair
 - Speakrs/Pyannote setup, switch, remove, guided fallback, quit
 - summary setup cancel and metadata-phase quit
-- no network during transcription/diarization/summary generation
+- no network during diarization/summary generation
 
 ## Non-goals for the first Linux release
 
+- speaker identification (Speakrs or Pyannote), guided transcription, or Linux `speakrs-cli`
+- local summaries, including a CPU llama.cpp runtime "to try it anyway"
+- managed Linux CUDA Whisper / GPU Settings install
+- a Linux CPU fallback for Speakrs or Pyannote
 - application-specific desktop-audio capture
 - PipeWire native graph API while Pulse compatibility is sufficient
 - real-time mixing or streaming captions
 - overlapping live recordings
-- Linux CPU speaker identification
 - ROCm/MIGraphX/AMD speaker acceleration
 - Linux ARM64
 - Flatpak, Snap, RPM, AUR automation
@@ -735,4 +792,4 @@ Add Linux cases to characterization tests rather than weakening Windows/macOS sn
 
 ## First implementation action
 
-Gate A is resolved (green run linked above). Phase 0 fail-closed platform branches and the dummy-Pulse Phase 1 API spike are on `release/linux`. Phase 2 pins opaque Pulse IDs and Linux Python/ffmpeg artifacts. **Do not start Phase 3 `linux_recorder.py` until Omarchy live-capture evidence closes the remaining Phase 1 exit criteria.**
+Gate A is resolved (green run linked above). Phase 0 fail-closed platform branches and the dummy-Pulse Phase 1 API spike are on `release/linux`. Phase 2 pins opaque Pulse IDs and Linux Python/ffmpeg artifacts. **Do not start Phase 3 `linux_recorder.py` until Omarchy live-capture evidence closes the remaining Phase 1 exit criteria.** **Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.**
