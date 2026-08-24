@@ -18,6 +18,7 @@ from device_helpers import (
     format_pulse_sink_id,
     format_pulse_source_id,
     is_blocked_windows_device_name,
+    is_pulse_endpoint_unavailable,
     is_pulse_monitor_source,
     macos_virtual_loopback_devices,
     parse_pulse_device_id,
@@ -223,6 +224,15 @@ class DeviceManager:
         spec = getattr(info, "sample_spec", None)
         return int(getattr(spec, "rate", 48000) or 48000)
 
+    def _linux_sink_for_monitor(self, source, sinks_by_name, sinks_by_monitor):
+        sink = sinks_by_monitor.get(source.name)
+        if sink is not None:
+            return sink
+        owner = getattr(source, "monitor_of_sink_name", None)
+        if owner:
+            return sinks_by_name.get(owner)
+        return None
+
     def _list_devices_linux(self) -> Dict[str, List[Dict[str, Any]]]:
         """Linux enumeration through pulsectl. IDs are opaque Pulse names."""
         seen_inputs = {}
@@ -230,8 +240,8 @@ class DeviceManager:
         seen_loopbacks = {}
 
         try:
-            sources = self.pulse.source_list()
-            sinks = self.pulse.sink_list()
+            sources = list(self.pulse.source_list())
+            sinks = list(self.pulse.sink_list())
         except Exception as exc:
             # Do not prefix this diagnostic with ERROR: — Electron's
             # extractDeviceManagerError would otherwise surface the raw Pulse
@@ -241,11 +251,21 @@ class DeviceManager:
                 "Could not list PulseAudio/PipeWire devices. Is the session audio service running?"
             ) from exc
 
+        sinks_by_name = {sink.name: sink for sink in sinks}
+        sinks_by_monitor = {
+            getattr(sink, "monitor_source_name", None): sink
+            for sink in sinks
+            if getattr(sink, "monitor_source_name", None)
+        }
+
         for source in sources:
             rate = self._pulse_sample_rate(source)
             channels = int(getattr(source, "channel_count", 1) or 1)
             name = source.description or source.name
             if is_pulse_monitor_source(source):
+                sink = self._linux_sink_for_monitor(source, sinks_by_name, sinks_by_monitor)
+                if sink is not None and is_pulse_endpoint_unavailable(sink):
+                    continue
                 device_data = build_device_record(
                     device_id=format_pulse_monitor_id(source.name),
                     name=name,
@@ -253,8 +273,10 @@ class DeviceManager:
                     sample_rate=rate,
                     host_api="PulseAudio",
                 )
-                dedupe_device_by_name(seen_loopbacks, device_data)
+                seen_loopbacks[device_data["id"]] = device_data
             else:
+                if is_pulse_endpoint_unavailable(source):
+                    continue
                 device_data = build_device_record(
                     device_id=format_pulse_source_id(source.name),
                     name=name,
@@ -262,9 +284,11 @@ class DeviceManager:
                     sample_rate=rate,
                     host_api="PulseAudio",
                 )
-                dedupe_device_by_name(seen_inputs, device_data)
+                seen_inputs[device_data["id"]] = device_data
 
         for sink in sinks:
+            if is_pulse_endpoint_unavailable(sink):
+                continue
             device_data = build_device_record(
                 device_id=format_pulse_sink_id(sink.name),
                 name=sink.description or sink.name,
@@ -272,7 +296,7 @@ class DeviceManager:
                 sample_rate=self._pulse_sample_rate(sink),
                 host_api="PulseAudio",
             )
-            dedupe_device_by_name(seen_outputs, device_data)
+            seen_outputs[device_data["id"]] = device_data
 
         return {
             "input_devices": sort_devices_by_name(seen_inputs.values()),

@@ -175,6 +175,59 @@ test('packaged Python on Linux uses the POSIX python-build-standalone layout', (
   }
 });
 
+test('packaged buildPythonEnv isolates PYTHONPATH and disables user site', () => {
+  const previousResources = process.resourcesPath;
+  Object.defineProperty(process, 'resourcesPath', { configurable: true, value: '/opt/AvaNevis/resources' });
+  const previousPythonPath = process.env.PYTHONPATH;
+  const previousPythonHome = process.env.PYTHONHOME;
+  const previousUserBase = process.env.PYTHONUSERBASE;
+  process.env.PYTHONPATH = '/tmp/hostile-pythonpath';
+  process.env.PYTHONHOME = '/tmp/hostile-pythonhome';
+  process.env.PYTHONUSERBASE = '/tmp/hostile-userbase';
+  try {
+    const runtime = withProcessPlatform('linux', () => createPythonRuntime({
+      app: { isPackaged: true },
+      spawn: () => new EventEmitter(),
+      path,
+      fs,
+      dirname: '/opt/AvaNevis/src',
+    }));
+    const env = runtime.buildPythonEnv({ PYTHONHOME: '/tmp/caller-pythonhome' });
+    assert.equal(env.PYTHONPATH, runtime.pythonConfig.backendPath);
+    assert.equal(env.PYTHONPATH.includes('hostile-pythonpath'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(env, 'PYTHONHOME'), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(env, 'PYTHONUSERBASE'), false);
+    assert.equal(env.PYTHONNOUSERSITE, '1');
+    assert.equal(env.AVANEVIS_PACKAGED, '1');
+
+    const extra = path.join(os.tmpdir(), 'avanevis-managed-site');
+    const withExtra = runtime.buildPythonEnv({ PYTHONPATH: extra });
+    assert.equal(withExtra.PYTHONPATH.startsWith(`${extra}${path.delimiter}`), true);
+    assert.equal(withExtra.PYTHONPATH.includes('hostile-pythonpath'), false);
+  } finally {
+    if (previousResources === undefined) {
+      delete process.resourcesPath;
+    } else {
+      Object.defineProperty(process, 'resourcesPath', { configurable: true, value: previousResources });
+    }
+    if (previousPythonPath === undefined) {
+      delete process.env.PYTHONPATH;
+    } else {
+      process.env.PYTHONPATH = previousPythonPath;
+    }
+    if (previousPythonHome === undefined) {
+      delete process.env.PYTHONHOME;
+    } else {
+      process.env.PYTHONHOME = previousPythonHome;
+    }
+    if (previousUserBase === undefined) {
+      delete process.env.PYTHONUSERBASE;
+    } else {
+      process.env.PYTHONUSERBASE = previousUserBase;
+    }
+  }
+});
+
 test('Linux add-on catalog paths stay unsupported until later phases', () => {
   const diarization = getDiarizationAvailability('linux', 'x64');
   const summary = getSummaryAvailability('linux', 'x64');

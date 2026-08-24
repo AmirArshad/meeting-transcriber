@@ -46,11 +46,15 @@ SAMPLE_RATE = 48000
 CAPTURE_SECONDS = 3.0
 BLOCK_FRAMES = 1024
 PULSE_INVALID_SINK_INDEX = 0xFFFFFFFF
-NULL_SINK_NAME = "avanevis_spike_alt"
+NULL_SINK_NAME = f"avanevis_spike_alt_{os.getpid()}"
 SCREENCAST_MARKERS = (
     "org.freedesktop.portal.ScreenCast",
     "org.freedesktop.impl.portal.ScreenCast",
     "xdg-desktop-portal-screencast",
+)
+DBUS_MONITOR_MATCHES = (
+    "interface='org.freedesktop.portal.ScreenCast'",
+    "interface='org.freedesktop.impl.portal.ScreenCast'",
 )
 
 
@@ -309,11 +313,51 @@ def _run(cmd: list[str], timeout: float = 8.0) -> subprocess.CompletedProcess[st
     return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
 
 
-def load_null_sink(pulse: pulsectl.Pulse) -> int:
-    existing = next((module for module in pulse.module_list() if NULL_SINK_NAME in (getattr(module, "argument", "") or "")), None)
+def terminate_process_group(proc: subprocess.Popen[bytes] | None, timeout: float = 3.0) -> None:
+    """Terminate an owned session, then SIGKILL the group if it does not exit."""
+    if proc is None or proc.poll() is not None:
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            proc.terminate()
+        except Exception:  # noqa: BLE001
+            return
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            try:
+                proc.kill()
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            pass
+
+
+def find_null_sink_module(pulse: pulsectl.Pulse, sink_name: str) -> Any | None:
+    needle = f"sink_name={sink_name}"
+    return next(
+        (module for module in pulse.module_list() if needle in (getattr(module, "argument", "") or "")),
+        None,
+    )
+
+
+def load_null_sink(pulse: pulsectl.Pulse, sink_name: str = NULL_SINK_NAME) -> tuple[int, bool]:
+    existing = find_null_sink_module(pulse, sink_name)
     if existing is not None:
-        return int(existing.index)
-    return int(pulse.module_load("module-null-sink", f"sink_name={NULL_SINK_NAME} sink_properties=device.description=AvaNevisSpikeAlt"))
+        return int(existing.index), False
+    return int(
+        pulse.module_load(
+            "module-null-sink",
+            f"sink_name={sink_name} sink_properties=device.description=AvaNevisSpikeAlt",
+        )
+    ), True
 
 
 def unload_module(pulse: pulsectl.Pulse, index: int) -> None:
@@ -323,15 +367,42 @@ def unload_module(pulse: pulsectl.Pulse, index: int) -> None:
         print(f"warning: module_unload({index}) failed: {exc}", file=sys.stderr)
 
 
+def restore_default_sink(pulse: pulsectl.Pulse, sink_name: str, errors: list[str]) -> None:
+    try:
+        switch_default_sink(pulse, sink_name)
+        actual = pulse.server_info().default_sink_name
+        if actual != sink_name:
+            errors.append(f"default sink restore: wanted {sink_name}, got {actual}")
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"default sink restore: {type(exc).__name__}: {exc}")
+
+
+def collect_restoration_errors(sink_switch: dict[str, Any], omarchy: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    errors.extend(sink_switch.get("restoration_errors") or [])
+    for key in ("hdmi_headphones", "bluetooth", "late_desktop_loss"):
+        errors.extend((omarchy.get(key) or {}).get("restoration_errors") or [])
+    portal = omarchy.get("screencast_portal") or {}
+    if portal.get("log_deleted") is False:
+        errors.append(portal.get("log_delete_error") or "dbus-monitor log was not deleted")
+    return errors
+
+
 def probe_sink_switch(default_sink_name: str, sinks: list[dict[str, Any]]) -> dict[str, Any]:
     alt = next((item for item in sinks if item["name"] != default_sink_name), None)
     created_null = False
     module_index: int | None = None
+    restoration_errors: list[str] = []
     with pulsectl.Pulse("avanevis-linux-spike-switch") as pulse:
         try:
             if alt is None:
-                module_index = load_null_sink(pulse)
-                created_null = True
+                module_index, created_null = load_null_sink(pulse)
+                if not created_null:
+                    return {
+                        "performed": False,
+                        "error": "null sink already existed; refusing to unload it",
+                        "restoration_errors": restoration_errors,
+                    }
                 time.sleep(0.2)
                 alt_name = NULL_SINK_NAME
             else:
@@ -348,32 +419,43 @@ def probe_sink_switch(default_sink_name: str, sinks: list[dict[str, Any]]) -> di
                 "before": before,
                 "after": after,
                 "elapsed_ms": elapsed_ms,
+                "restoration_errors": restoration_errors,
                 "note": "Linux v1 will not hot-switch the desktop stream; a sink change is warn + continue on the original monitor.",
             }
         except Exception as exc:  # noqa: BLE001
-            return {"performed": False, "error": f"{type(exc).__name__}: {exc}"}
+            return {
+                "performed": False,
+                "error": f"{type(exc).__name__}: {exc}",
+                "restoration_errors": restoration_errors,
+            }
         finally:
-            try:
-                switch_default_sink(pulse, default_sink_name)
-            except Exception:
-                pass
-            if module_index is not None:
+            restore_default_sink(pulse, default_sink_name, restoration_errors)
+            if created_null and module_index is not None:
                 unload_module(pulse, module_index)
+                if find_null_sink_module(pulse, NULL_SINK_NAME) is not None:
+                    restoration_errors.append(f"null sink {NULL_SINK_NAME} still listed after unload")
 
 
 def probe_late_desktop_loss() -> dict[str, Any]:
     """Unload a Pulse sink while SoundCard is recording its monitor."""
+    restoration_errors: list[str] = []
     with pulsectl.Pulse("avanevis-linux-spike-loss") as pulse:
-        module_index = load_null_sink(pulse)
+        module_index, created = load_null_sink(pulse)
+        if not created:
+            return {
+                "performed": False,
+                "error": "null sink already existed; refusing to unload it",
+                "restoration_errors": restoration_errors,
+            }
         time.sleep(0.25)
         sink = next((item for item in pulse.sink_list() if item.name == NULL_SINK_NAME), None)
         if sink is None:
             unload_module(pulse, module_index)
-            return {"performed": False, "error": "null sink did not appear"}
+            return {"performed": False, "error": "null sink did not appear", "restoration_errors": restoration_errors}
         monitor_name = getattr(sink, "monitor_source_name", None)
         if not monitor_name:
             unload_module(pulse, module_index)
-            return {"performed": False, "error": "null sink has no monitor"}
+            return {"performed": False, "error": "null sink has no monitor", "restoration_errors": restoration_errors}
 
         chunks: list[np.ndarray] = []
         errors: list[str] = []
@@ -394,7 +476,7 @@ def probe_late_desktop_loss() -> dict[str, Any]:
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"{type(exc).__name__}: {exc}")
 
-        thread = threading.Thread(target=worker, name="spike-late-loss")
+        thread = threading.Thread(target=worker, name="spike-late-loss", daemon=True)
         thread.start()
         time.sleep(0.35)
         blocks_before_unload = len(block_times)
@@ -405,6 +487,8 @@ def probe_late_desktop_loss() -> dict[str, Any]:
         stop.set()
         thread.join(timeout=8.0)
         hung = thread.is_alive()
+        if find_null_sink_module(pulse, NULL_SINK_NAME) is not None:
+            restoration_errors.append(f"null sink {NULL_SINK_NAME} still listed after late-loss unload")
         audio = np.concatenate(chunks, axis=0) if chunks else np.zeros((0, 1), dtype=np.float32)
         split = BLOCK_FRAMES * max(1, blocks_before_unload)
         pre = audio[:split] if audio.shape[0] else audio
@@ -421,6 +505,7 @@ def probe_late_desktop_loss() -> dict[str, Any]:
             "pre_unload_rms": rms(pre),
             "post_unload_rms": rms(post),
             "median_block_s": float(np.median(block_times)) if block_times else None,
+            "restoration_errors": restoration_errors,
             "note": (
                 "SoundCard continued or failed after the sink disappeared. "
                 "linux_recorder.py should treat a vanished monitor as late desktop loss "
@@ -430,15 +515,17 @@ def probe_late_desktop_loss() -> dict[str, Any]:
         if hung:
             result["note"] = (
                 "Capture thread did not return within 8s after sink unload — "
-                "product recorder must bound this wait."
+                "product recorder must bound this wait. The spike worker is a daemon "
+                "thread so this process can still exit."
             )
         return result
 
 
 def start_screencast_monitor(log_path: Path) -> subprocess.Popen[bytes]:
-    handle = log_path.open("wb")
+    fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    handle = os.fdopen(fd, "wb")
     proc = subprocess.Popen(
-        ["dbus-monitor", "--session"],
+        ["dbus-monitor", "--session", *DBUS_MONITOR_MATCHES],
         stdout=handle,
         stderr=subprocess.STDOUT,
         start_new_session=True,
@@ -449,25 +536,26 @@ def start_screencast_monitor(log_path: Path) -> subprocess.Popen[bytes]:
 
 
 def stop_screencast_monitor(proc: subprocess.Popen[bytes], log_path: Path) -> dict[str, Any]:
-    try:
-        os.killpg(proc.pid, signal.SIGTERM)
-    except (ProcessLookupError, PermissionError):
-        proc.terminate()
-    try:
-        proc.wait(timeout=2)
-    except subprocess.TimeoutExpired:
-        proc.kill()
+    terminate_process_group(proc, timeout=2)
     handle = getattr(proc, "_spike_log_handle", None)
     if handle is not None:
         handle.close()
     text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else ""
     hits = [marker for marker in SCREENCAST_MARKERS if marker in text]
-    return {
+    result = {
         "dbus_monitor_ran": True,
-        "log_bytes": log_path.stat().st_size if log_path.exists() else 0,
+        "log_bytes": len(text.encode("utf-8", errors="replace")),
         "screencast_markers_seen": hits,
         "portal_appeared": bool(hits),
+        "match_rules": list(DBUS_MONITOR_MATCHES),
     }
+    try:
+        log_path.unlink(missing_ok=True)
+        result["log_deleted"] = True
+    except OSError as exc:
+        result["log_deleted"] = False
+        result["log_delete_error"] = f"{type(exc).__name__}: {exc}"
+    return result
 
 
 def write_synthetic_speech_wav(path: Path, seconds: float = 4.0) -> None:
@@ -573,15 +661,7 @@ def probe_browser_speech(out_dir: Path, monitor_name: str, seconds: float) -> di
     except Exception as exc:  # noqa: BLE001
         return {"performed": False, "error": f"{type(exc).__name__}: {exc}"}
     finally:
-        if proc is not None and proc.poll() is None:
-            try:
-                os.killpg(proc.pid, signal.SIGTERM)
-            except (ProcessLookupError, PermissionError):
-                proc.terminate()
-            try:
-                proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+        terminate_process_group(proc, timeout=3)
 
 
 def probe_hdmi() -> dict[str, Any]:
@@ -621,6 +701,7 @@ def probe_hdmi() -> dict[str, Any]:
     )
     if not candidate:
         return probe
+    restoration_errors: list[str] = []
     with pulsectl.Pulse("avanevis-linux-spike-hdmi") as pulse:
         card_obj = next((item for item in pulse.card_list() if item.name == hdmi["name"]), None)
         if card_obj is None:
@@ -636,16 +717,22 @@ def probe_hdmi() -> dict[str, Any]:
                 "active_after": getattr(getattr(card_after, "profile_active", None), "name", None),
                 "sinks_after": sinks_after,
                 "hdmi_sink_appeared": any("hdmi" in name.lower() for name in sinks_after),
-                "note": "HDMI monitor selection is a different Pulse sink (.monitor of that sink). Unavailable ports do not become capture devices.",
+                "note": "HDMI monitor selection is a different Pulse sink (.monitor of that sink). Product enumerate omits monitors whose sink active port is available=no.",
             }
         except Exception as exc:  # noqa: BLE001
             probe["profile_switch"] = {"performed": False, "error": f"{type(exc).__name__}: {exc}"}
         finally:
-            try:
-                if original:
+            if original:
+                try:
                     pulse.card_profile_set(card_obj, original)
-            except Exception:
-                pass
+                    time.sleep(0.15)
+                    card_restored = next((item for item in pulse.card_list() if item.name == hdmi["name"]), card_obj)
+                    active = getattr(getattr(card_restored, "profile_active", None), "name", None)
+                    if active != original:
+                        restoration_errors.append(f"HDMI profile restore: wanted {original}, got {active}")
+                except Exception as exc:  # noqa: BLE001
+                    restoration_errors.append(f"HDMI profile restore: {type(exc).__name__}: {exc}")
+    probe["restoration_errors"] = restoration_errors
     _ = analog
     return probe
 
@@ -656,31 +743,40 @@ def probe_bluetooth() -> dict[str, Any]:
     devices = _run(["bluetoothctl", "devices"])
     blocked = "Soft blocked: yes" in (rfkill_before.stdout or "")
     unblocked = False
-    after_cards: list[str] = []
+    restoration_errors: list[str] = []
+    result: dict[str, Any] = {
+        "adapter_present": "Controller" in (btctl.stdout or ""),
+        "rfkill_before": rfkill_before.stdout.strip(),
+        "soft_blocked_before": blocked,
+        "temporarily_unblocked": False,
+        "paired_devices": devices.stdout.strip() or "",
+        "restoration_errors": restoration_errors,
+        "note": (
+            "A Bluetooth headset becomes its own Pulse sink with a .monitor source. "
+            "No paired A2DP device was required for this inventory. "
+            "linux_recorder.py should treat that monitor like HDMI: select by opaque pulse-monitor id, no hot-switch."
+        ),
+    }
     try:
         if blocked:
             unblock = _run(["rfkill", "unblock", "bluetooth"])
             unblocked = unblock.returncode == 0
             time.sleep(1.5)
-        after_cards = [card["name"] for card in enumerate_cards() if "blue" in card["name"].lower()]
-        sinks = [sink["name"] for sink in enumerate_pulse()["sinks"] if "blue" in sink["name"].lower()]
-        return {
-            "adapter_present": "Controller" in (btctl.stdout or ""),
-            "rfkill_before": rfkill_before.stdout.strip(),
-            "soft_blocked_before": blocked,
-            "temporarily_unblocked": unblocked,
-            "paired_devices": devices.stdout.strip() or "",
-            "bluez_cards_after_unblock": after_cards,
-            "bluez_sinks_after_unblock": sinks,
-            "note": (
-                "A Bluetooth headset becomes its own Pulse sink with a .monitor source. "
-                "No paired A2DP device was required for this inventory. "
-                "linux_recorder.py should treat that monitor like HDMI: select by opaque pulse-monitor id, no hot-switch."
-            ),
-        }
+        result["temporarily_unblocked"] = unblocked
+        result["bluez_cards_after_unblock"] = [card["name"] for card in enumerate_cards() if "blue" in card["name"].lower()]
+        result["bluez_sinks_after_unblock"] = [sink["name"] for sink in enumerate_pulse()["sinks"] if "blue" in sink["name"].lower()]
+        return result
     finally:
         if unblocked:
-            _run(["rfkill", "block", "bluetooth"])
+            block = _run(["rfkill", "block", "bluetooth"])
+            if block.returncode != 0:
+                restoration_errors.append(
+                    f"rfkill block bluetooth failed: {(block.stderr or block.stdout or '').strip() or block.returncode}"
+                )
+            else:
+                after = _run(["rfkill", "list", "bluetooth"])
+                if "Soft blocked: yes" not in (after.stdout or ""):
+                    restoration_errors.append("rfkill block bluetooth did not restore Soft blocked: yes")
 
 
 def host_facts() -> dict[str, Any]:
@@ -716,6 +812,10 @@ def main() -> int:
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(out_dir, 0o700)
+    except OSError:
+        pass
 
     inventory = enumerate_pulse()
     sources = inventory["sources"]
@@ -762,19 +862,25 @@ def main() -> int:
                 with pulsectl.Pulse("avanevis-linux-spike-switch") as pulse:
                     before = pulse.server_info().default_sink_name
                     switch_started = time.perf_counter()
+                    sink_switch = {
+                        "performed": False,
+                        "before": before,
+                        "restoration_errors": [],
+                    }
                     try:
                         switch_default_sink(pulse, alt_sink["name"])
                         after = pulse.server_info().default_sink_name
                         switch_elapsed_ms = (time.perf_counter() - switch_started) * 1000.0
-                        sink_switch = {
+                        sink_switch.update({
                             "performed": True,
-                            "before": before,
                             "after": after,
                             "elapsed_ms": switch_elapsed_ms,
                             "note": "Linux v1 will not hot-switch the desktop stream; a sink change is warn + continue on the original monitor.",
-                        }
+                        })
                     finally:
-                        switch_default_sink(pulse, before)
+                        restore_errors: list[str] = []
+                        restore_default_sink(pulse, before, restore_errors)
+                        sink_switch["restoration_errors"] = restore_errors
 
         if args.omarchy:
             omarchy["cards"] = enumerate_cards()
@@ -806,6 +912,9 @@ def main() -> int:
                 limitations.append("No HDMI card was found.")
             if not bluetooth.get("adapter_present"):
                 limitations.append("No Bluetooth adapter was found.")
+            restoration_errors = collect_restoration_errors(sink_switch, omarchy)
+            for detail in restoration_errors:
+                limitations.append(f"Host state restoration failed: {detail}")
             if not limitations:
                 limitations = ["Omarchy live probes completed; see omarchy.* in this report."]
         else:
@@ -814,6 +923,8 @@ def main() -> int:
                 "No browser speech, Bluetooth, HDMI, or ScreenCast-portal observation.",
                 "Do not treat this as Phase 1 exit-criteria complete.",
             ]
+            for detail in collect_restoration_errors(sink_switch, {}):
+                limitations.append(f"Host state restoration failed: {detail}")
 
         report = {
             "host": os.uname().nodename if hasattr(os, "uname") else "unknown",
@@ -840,12 +951,13 @@ def main() -> int:
             "default_sink_switch": sink_switch,
             "omarchy": omarchy,
             "limitations": limitations,
+            "restoration_errors": collect_restoration_errors(sink_switch, omarchy),
         }
         report_path = out_dir / "spike-report.json"
         report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
         print(json.dumps(report, indent=2))
         print(f"wrote {report_path}", file=sys.stderr)
-        return 0
+        return 1 if report["restoration_errors"] else 0
     finally:
         if dbus_proc is not None:
             try:

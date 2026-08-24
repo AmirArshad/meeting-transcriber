@@ -69,6 +69,39 @@ def is_pulse_monitor_source(source: Any) -> bool:
         return bool(getattr(source, "monitor_of_sink_name", None))
 
 
+_PULSE_PORT_UNAVAILABLE_TOKENS = frozenset({"no", "unavailable"})
+
+
+def is_pulse_port_unavailable(port: Any) -> bool:
+    """True only when Pulse reports the port as explicitly unavailable.
+
+    pulsectl exposes ``available`` as ``PulsePortAvailableEnum`` (unknown=0,
+    no=1, yes=2). Unknown / missing jack-detect stays usable — hiding those
+    would drop analog devices that never report plug state.
+    """
+    if port is None:
+        return False
+    available = getattr(port, "available", None)
+    if available is None:
+        available = getattr(port, "available_state", None)
+    if available is None:
+        return False
+    name = getattr(available, "name", None)
+    if isinstance(name, str) and name.lower() in _PULSE_PORT_UNAVAILABLE_TOKENS:
+        return True
+    if isinstance(available, bool):
+        return False
+    if isinstance(available, (int, float)):
+        return int(available) == 1
+    text = str(available).rsplit(".", 1)[-1].lower()
+    return text in _PULSE_PORT_UNAVAILABLE_TOKENS
+
+
+def is_pulse_endpoint_unavailable(info: Any) -> bool:
+    """True when a sink or source's active port is explicitly unplugged."""
+    return is_pulse_port_unavailable(getattr(info, "port_active", None))
+
+
 def build_device_record(
     *,
     device_id: int | str,

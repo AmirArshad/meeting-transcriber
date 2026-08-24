@@ -1,6 +1,6 @@
 # Linux Support Plan — Omarchy First
 
-> **Status:** Phases 0–2 complete on `release/linux` (Phase 2 packaged enumerate verified 2026-08-24 on Omarchy). Gate A is resolved; Linux product capture is not advertised as ready. **Next: adversarial review of Phases 0–2** ([prompt](_tmp-linux-phase-0-2-adversarial-review.md)). Do not start Phase 3 until that review lands.
+> **Status:** Phases 0–2 complete on `release/linux` (Phase 2 packaged enumerate verified 2026-08-24 on Omarchy). Gate A is resolved; Linux product capture is not advertised as ready. **Phase 0–2 adversarial review landed 2026-08-24** (static review on Ubuntu plus the Omarchy evidence already in this document); remediations are on `release/linux`. **Next: Phase 3.** Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.
 > **Replanned:** 2026-08-23 against AvaNevis v2.7.0 / current `master`.
 > **Review pass:** 2026-08-23 — verified plan claims against the codebase and CI, corrected two host-fact conclusions (secret storage, tray), and pinned every required upstream Linux artifact. All "Verified" sections below were checked on that date.
 > **Scope cut (2026-08-24):** the first Linux version is **Core Beta only** (Phases 0–5). Speaker identification and local summaries are **out of scope** until a later Linux version. There is no Omarchy host with an NVIDIA GPU to validate those CUDA-only add-ons; do not ship a CPU fallback. The UI must keep both features visible but greyed out as unsupported.
@@ -546,7 +546,7 @@ Phase 3 implications (do not implement here):
 
 - Device IDs stay `pulse-source:` / `pulse-monitor:` / `pulse-sink:` / `none`.
 - Desktop thread watches whether the selected monitor remains in `source_list()`; silence alone is not a loss signal (meetings go quiet).
-- HDMI/BT are additional sinks; headphones are not.
+- HDMI/BT are additional sinks; headphones are not. Product enumerate omits a sink/monitor whose active Pulse port is `available=no`.
 - No ScreenCast portal, no `xdg-desktop-portal-hyprland` audio path.
 
 Do not advertise Linux recording as ready until Phase 3 ships.
@@ -576,6 +576,18 @@ Exit criteria:
 - `pulse-monitor:alsa_output.pci-0000_00_1b.0.analog-stereo.monitor` (also `defaults.default_output`)
 
 Packaged imports of `pulsectl` / `SoundCard` / `numpy` / `soxr` resolved under `build/resources/python/lib/python3.11/site-packages` with `PATH=/usr/bin:/bin` (no venv). Missing Pulse (`PULSE_SERVER=unix:/tmp/avanevis-no-pulse`) exits 1 with `ERROR: PulseAudio/PipeWire is not running. Start the session audio service and try again.` — no socket path. Missing device: `Microphone device ID pulse-source:does-not-exist was not found`. Speakrs CLI staging is skipped on Linux (Phase 7).
+
+#### Phase 0–2 adversarial review — 2026-08-24
+
+Static review on Ubuntu (Omarchy hardware not required for these contracts) plus the Omarchy evidence already recorded above. Product recording stayed fail-closed. Remediations landed before Phase 3:
+
+- Packaged `buildPythonEnv()` no longer inherits ambient `PYTHONPATH` / `PYTHONHOME` / `PYTHONUSERBASE` and sets `PYTHONNOUSERSITE=1`. Caller-managed extras may still prepend the bundled backend path.
+- Linux enumerate keys devices by opaque Pulse name, so two mics that share a description both appear.
+- Sinks and monitors whose active Pulse port is explicitly `available=no` (forced HDMI on an unplugged port) are omitted; unknown jack-detect stays listed.
+- `get-audio-devices` and `warm-up-audio-system` share the 10 s device-manager timeout and kill the child.
+- Spike `--omarchy` restores owned sink/profile/rfkill state (exit 1 on restore failure), records ScreenCast with interface match rules into a mode-0600 log that is deleted after scoring, and SIGKILLs owned Chromium/D-Bus process groups.
+
+Do not advertise Linux recording as ready until Phase 3 ships.
 
 ### Phase 3 — Production Linux recorder
 
@@ -818,4 +830,4 @@ Later version only (needs NVIDIA Omarchy):
 
 ## First implementation action
 
-Gate A is resolved (green run linked above). Phases 0–2 are done on `release/linux`, including 2026-08-24 Omarchy live-capture and packaged-Python device enumeration. **Next: adversarial review of Phases 0–2** ([prompt](_tmp-linux-phase-0-2-adversarial-review.md)). Do not start Phase 3 until that review lands. **Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.**
+Gate A is resolved (green run linked above). Phases 0–2 are done on `release/linux`, including 2026-08-24 Omarchy live-capture, packaged-Python device enumeration, and the Phase 0–2 adversarial-review remediations. **Next: Phase 3 (`linux_recorder.py`).** **Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.**

@@ -23,7 +23,7 @@ function createFakePython({ code = 0, stdout = '', stderr = '' } = {}) {
   return proc;
 }
 
-function createService({ platform, spawnImpl }) {
+function createService({ platform, spawnImpl, deviceManagerTimeoutMs }) {
   return createDeviceIpc({
     app: { getPath: () => '/tmp' },
     path: require('node:path'),
@@ -41,6 +41,7 @@ function createService({ platform, spawnImpl }) {
     buildMacOSPermissionCheckFailureStatus: () => ({}),
     MACOS_PERMISSION_CHECK_TIMEOUT_MS: 1000,
     platform,
+    deviceManagerTimeoutMs,
   });
 }
 
@@ -158,4 +159,58 @@ test('get-audio-devices keeps Windows stderr on enumerate failure', async () => 
     () => handlers['get-audio-devices'](),
     (error) => error instanceof Error && error.message.includes('pyaudio exploded'),
   );
+});
+
+function createHangingPython() {
+  const proc = new EventEmitter();
+  proc.stdout = new EventEmitter();
+  proc.stderr = new EventEmitter();
+  proc.killCalls = 0;
+  proc.kill = () => {
+    proc.killCalls += 1;
+  };
+  return proc;
+}
+
+test('get-audio-devices times out instead of hanging on Linux', { timeout: 2000 }, async () => {
+  const hanging = createHangingPython();
+  const service = createService({
+    platform: 'linux',
+    spawnImpl: () => hanging,
+    deviceManagerTimeoutMs: 20,
+  });
+  const handlers = {};
+  service.registerIpc({
+    handle(channel, handler) {
+      handlers[channel] = handler;
+    },
+  });
+
+  await assert.rejects(
+    () => handlers['get-audio-devices'](),
+    (error) => error instanceof Error
+      && /PulseAudio or PipeWire running/.test(error.message)
+      && !error.message.includes('/run/user'),
+  );
+  assert.equal(hanging.killCalls >= 1, true);
+});
+
+test('warm-up-audio-system times out without leaving the IPC pending', { timeout: 2000 }, async () => {
+  const hanging = createHangingPython();
+  const service = createService({
+    platform: 'linux',
+    spawnImpl: () => hanging,
+    deviceManagerTimeoutMs: 20,
+  });
+  const handlers = {};
+  service.registerIpc({
+    handle(channel, handler) {
+      handlers[channel] = handler;
+    },
+  });
+
+  const result = await handlers['warm-up-audio-system']();
+  assert.equal(result.success, true);
+  assert.equal(result.deviceCount, 0);
+  assert.equal(hanging.killCalls >= 1, true);
 });

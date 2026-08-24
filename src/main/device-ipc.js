@@ -12,6 +12,7 @@
 
 const DISK_WARNING_BYTES = 10 * 1024 * 1024 * 1024;
 const DISK_CRITICAL_BYTES = 2 * 1024 * 1024 * 1024;
+const DEVICE_MANAGER_TIMEOUT_MS = 10000;
 const DISK_SPACE_WARNING_MESSAGE =
   'Less than 10 GB is available. Long recordings may run out of space.';
 const DISK_SPACE_CRITICAL_MESSAGE =
@@ -92,6 +93,9 @@ function createDeviceIpc(deps) {
     platform = process.platform,
     logWarn = (...args) => console.warn(...args),
   } = deps;
+  const deviceManagerTimeoutMs = Number.isFinite(deps.deviceManagerTimeoutMs) && deps.deviceManagerTimeoutMs > 0
+    ? deps.deviceManagerTimeoutMs
+    : DEVICE_MANAGER_TIMEOUT_MS;
 
   function linuxDeviceManagerFailure(errorOutput) {
     const message = extractDeviceManagerError(errorOutput)
@@ -165,8 +169,6 @@ function createDeviceIpc(deps) {
    * GRACEFUL: Returns valid=true with warning if check fails, allowing recording to proceed.
    */
   function validateSelectedDevices({ micId, loopbackId }) {
-    const TIMEOUT_MS = 10000; // 10 second timeout
-
     return new Promise((resolve) => {
       let resolved = false;
       let output = '';
@@ -184,7 +186,7 @@ function createDeviceIpc(deps) {
             ? linuxDeviceManagerFailure('ERROR: Device validation timed out')
             : proceedAnyway('Device validation timed out - proceeding anyway'));
         }
-      }, TIMEOUT_MS);
+      }, deviceManagerTimeoutMs);
 
       let python;
       try {
@@ -439,10 +441,38 @@ function createDeviceIpc(deps) {
 
     ipcMain.handle('get-audio-devices', async () => {
       return new Promise((resolve, reject) => {
-        const python = spawnTrackedPython(getBackendModuleArgs('device_manager'), { cwd: pythonConfig.backendPath });
-
+        let settled = false;
         let output = '';
         let errorOutput = '';
+        let python;
+
+        const finish = (handler) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          clearTimeout(timeout);
+          handler();
+        };
+
+        const timeout = setTimeout(() => {
+          try { python.kill(); } catch (e) { /* ignore */ }
+          const detail = platform === 'linux'
+            ? (extractDeviceManagerError(errorOutput)
+              || 'Could not list audio devices. Is PulseAudio or PipeWire running?')
+            : 'Device enumeration timed out';
+          finish(() => reject(new Error(detail)));
+        }, deviceManagerTimeoutMs);
+
+        try {
+          python = spawnTrackedPython(getBackendModuleArgs('device_manager'), { cwd: pythonConfig.backendPath });
+        } catch (e) {
+          const detail = platform === 'linux'
+            ? 'Could not list audio devices. Is PulseAudio or PipeWire running?'
+            : (e?.message || 'Could not start device enumeration');
+          finish(() => reject(new Error(detail)));
+          return;
+        }
 
         python.stdout.on('data', (data) => {
           output = appendSpawnLogBuffer(output, data);
@@ -457,23 +487,23 @@ function createDeviceIpc(deps) {
             try {
               const data = JSON.parse(output);
               // Reformat to match UI expectations
-              resolve({
+              finish(() => resolve({
                 inputs: data.input_devices,
                 loopbacks: data.loopback_devices,
                 defaults: data.defaults
-              });
+              }));
             } catch (e) {
-              reject(new Error(`Failed to parse device list: ${e.message}`));
+              finish(() => reject(new Error(`Failed to parse device list: ${e.message}`)));
             }
           } else {
             const detail = platform === 'linux'
               ? (extractDeviceManagerError(errorOutput)
                 || 'Could not list audio devices. Is PulseAudio or PipeWire running?')
               : errorOutput;
-            reject(new Error(`Python process exited with code ${code}: ${detail}`));
+            finish(() => reject(new Error(`Python process exited with code ${code}: ${detail}`)));
           }
         });
-        python.on('error', reject);
+        python.on('error', (err) => finish(() => reject(err)));
       });
     });
 
@@ -483,10 +513,33 @@ function createDeviceIpc(deps) {
      */
     ipcMain.handle('warm-up-audio-system', async () => {
       return new Promise((resolve) => {
-        // Step 1: Enumerate devices (forces driver initialization)
-        const python = spawnTrackedPython(getBackendModuleArgs('device_manager'), { cwd: pythonConfig.backendPath });
-
+        let settled = false;
         let output = '';
+        let python;
+
+        const finish = (payload) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          clearTimeout(timeout);
+          resolve(payload);
+        };
+
+        const timeout = setTimeout(() => {
+          try { python.kill(); } catch (e) { /* ignore */ }
+          console.log('Audio system warm-up timed out');
+          finish({ success: true, deviceCount: 0 });
+        }, deviceManagerTimeoutMs);
+
+        try {
+          // Step 1: Enumerate devices (forces driver initialization)
+          python = spawnTrackedPython(getBackendModuleArgs('device_manager'), { cwd: pythonConfig.backendPath });
+        } catch (e) {
+          console.log('Audio system warm-up completed (spawn error)');
+          finish({ success: true, deviceCount: 0 });
+          return;
+        }
 
         python.stdout.on('data', (data) => {
           output = appendSpawnLogBuffer(output, data);
@@ -499,21 +552,21 @@ function createDeviceIpc(deps) {
               console.log('Audio system warmed up successfully');
               console.log(`  Found ${data.input_devices.length} input devices`);
               console.log(`  Found ${data.loopback_devices.length} loopback devices`);
-              resolve({ success: true, deviceCount: data.input_devices.length + data.loopback_devices.length });
+              finish({ success: true, deviceCount: data.input_devices.length + data.loopback_devices.length });
             } catch (e) {
               // Even if parsing fails, enumeration happened so drivers are warm
               console.log('Audio system enumeration completed (with parsing error)');
-              resolve({ success: true, deviceCount: 0 });
+              finish({ success: true, deviceCount: 0 });
             }
           } else {
             // Even if it failed, we tried to initialize
             console.log('Audio system warm-up completed (with error)');
-            resolve({ success: true, deviceCount: 0 });
+            finish({ success: true, deviceCount: 0 });
           }
         });
         python.on('error', () => {
           console.log('Audio system warm-up completed (spawn error)');
-          resolve({ success: true, deviceCount: 0 });
+          finish({ success: true, deviceCount: 0 });
         });
       });
     });
@@ -548,6 +601,7 @@ module.exports = {
   extractDeviceManagerError,
   DISK_WARNING_BYTES,
   DISK_CRITICAL_BYTES,
+  DEVICE_MANAGER_TIMEOUT_MS,
   DISK_SPACE_WARNING_MESSAGE,
   DISK_SPACE_CRITICAL_MESSAGE,
 };

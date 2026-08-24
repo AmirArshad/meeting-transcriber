@@ -9,7 +9,9 @@ from device_helpers import (
     format_pulse_sink_id,
     format_pulse_source_id,
     is_linux_desktop_off_id,
+    is_pulse_endpoint_unavailable,
     is_pulse_monitor_source,
+    is_pulse_port_unavailable,
     parse_pulse_device_id,
 )
 
@@ -23,22 +25,31 @@ class FakeSampleSpec:
 
 
 class FakeSource:
-    def __init__(self, name, description, *, monitor_of_sink=PULSE_INVALID_INDEX, monitor_of_sink_name=None, channels=1, rate=48000):
+    def __init__(self, name, description, *, monitor_of_sink=PULSE_INVALID_INDEX, monitor_of_sink_name=None, channels=1, rate=48000, port_active=None):
         self.name = name
         self.description = description
         self.monitor_of_sink = monitor_of_sink
         self.monitor_of_sink_name = monitor_of_sink_name
         self.channel_count = channels
         self.sample_spec = FakeSampleSpec(rate)
+        self.port_active = port_active
 
 
 class FakeSink:
-    def __init__(self, name, description, monitor_source_name, *, channels=2, rate=48000):
+    def __init__(self, name, description, monitor_source_name, *, channels=2, rate=48000, port_active=None):
         self.name = name
         self.description = description
         self.monitor_source_name = monitor_source_name
         self.channel_count = channels
         self.sample_spec = FakeSampleSpec(rate)
+        self.port_active = port_active
+
+
+class FakePort:
+    def __init__(self, available):
+        self.available = available
+        self.name = 'hdmi-output'
+        self.description = 'HDMI / DisplayPort'
 
 
 class FakePulse:
@@ -182,3 +193,77 @@ def test_linux_device_manager_main_surfaces_sanitized_enumerate_error(monkeypatc
         'ERROR: Could not list PulseAudio/PipeWire devices. Is the session audio service running?'
     )
     assert '/run/user' not in captured.err
+
+
+def test_pulse_port_unavailable_only_when_explicitly_no():
+    assert is_pulse_port_unavailable(None) is False
+    assert is_pulse_port_unavailable(FakePort('unknown')) is False
+    assert is_pulse_port_unavailable(FakePort('yes')) is False
+    assert is_pulse_port_unavailable(FakePort('no')) is True
+    assert is_pulse_port_unavailable(FakePort(1)) is True
+    assert is_pulse_port_unavailable(FakePort(0)) is False
+    assert is_pulse_port_unavailable(FakePort(2)) is False
+
+    class EnumLike:
+        name = 'no'
+
+        def __str__(self):
+            return 'available.no'
+
+    assert is_pulse_port_unavailable(FakePort(EnumLike())) is True
+    assert is_pulse_endpoint_unavailable(FakeSink('hdmi', 'HDMI', 'hdmi.monitor', port_active=FakePort('no'))) is True
+    assert is_pulse_endpoint_unavailable(FakeSink('analog', 'Speakers', 'analog.monitor')) is False
+
+
+def test_linux_device_manager_keeps_distinct_pulse_ids_with_the_same_description(monkeypatch):
+    _linux_flags(monkeypatch)
+    pulse = FakePulse(
+        sources=[
+            FakeSource('usb_mic_a', 'Microphone', channels=1),
+            FakeSource('usb_mic_b', 'Microphone', channels=1),
+            FakeSource('analog.monitor', 'Monitor of Analog', monitor_of_sink=1, monitor_of_sink_name='analog', channels=2),
+        ],
+        sinks=[
+            FakeSink('analog', 'Analog', 'analog.monitor'),
+        ],
+        default_source='usb_mic_a',
+        default_sink='analog',
+    )
+    monkeypatch.setattr(device_manager, 'load_audio_backend', lambda: SimpleNamespace(Pulse=lambda name: pulse))
+
+    devices = device_manager.DeviceManager().list_all_devices()
+    input_ids = [item['id'] for item in devices['input_devices']]
+    assert 'pulse-source:usb_mic_a' in input_ids
+    assert 'pulse-source:usb_mic_b' in input_ids
+
+
+def test_linux_device_manager_omits_unavailable_hdmi_monitor(monkeypatch):
+    _linux_flags(monkeypatch)
+    pulse = FakePulse(
+        sources=[
+            FakeSource('analog_mic', 'Internal Mic', channels=1),
+            FakeSource('analog.monitor', 'Monitor of Analog', monitor_of_sink=1, monitor_of_sink_name='analog', channels=2),
+            FakeSource(
+                'hdmi.monitor',
+                'Monitor of HDMI',
+                monitor_of_sink=2,
+                monitor_of_sink_name='hdmi',
+                channels=2,
+            ),
+        ],
+        sinks=[
+            FakeSink('analog', 'Analog', 'analog.monitor', port_active=FakePort('yes')),
+            FakeSink('hdmi', 'HDMI', 'hdmi.monitor', port_active=FakePort('no')),
+        ],
+        default_source='analog_mic',
+        default_sink='analog',
+    )
+    monkeypatch.setattr(device_manager, 'load_audio_backend', lambda: SimpleNamespace(Pulse=lambda name: pulse))
+
+    devices = device_manager.DeviceManager().list_all_devices()
+    loopback_ids = [item['id'] for item in devices['loopback_devices']]
+    output_ids = [item['id'] for item in devices['output_devices']]
+    assert loopback_ids == ['pulse-monitor:analog.monitor']
+    assert output_ids == ['pulse-sink:analog']
+    assert 'pulse-monitor:hdmi.monitor' not in loopback_ids
+    assert 'pulse-sink:hdmi' not in output_ids

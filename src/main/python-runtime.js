@@ -155,9 +155,13 @@ function createPythonRuntime({ app, spawn, path, fs, dirname }) {
 
   function buildPythonEnv(extra = {}) {
     const { PYTHONPATH: extraPythonPath, ...restExtra } = extra || {};
-    const basePythonPath = pythonConfig.backendPath + (process.env.PYTHONPATH ?
-      (process.platform === 'win32' ? ';' : ':') + process.env.PYTHONPATH : '');
     const separator = process.platform === 'win32' ? ';' : ':';
+    // Packaged children must not inherit a developer or attacker PYTHONPATH —
+    // python-build-standalone honors it and would import pulsectl/numpy from
+    // outside the bundle. Dev still concatenates ambient PYTHONPATH.
+    const ambientPythonPath = app.isPackaged ? '' : (process.env.PYTHONPATH || '');
+    const basePythonPath = pythonConfig.backendPath
+      + (ambientPythonPath ? separator + ambientPythonPath : '');
 
     // Caller keys set to `undefined` are explicit unsets and must not inherit
     // from process.env after the merge (Speakrs must not see ambient HF caches).
@@ -174,6 +178,9 @@ function createPythonRuntime({ app, spawn, path, fs, dirname }) {
     // Packaged children always see AVANEVIS_PACKAGED=1; callers cannot override it.
     if (app.isPackaged) {
       env.AVANEVIS_PACKAGED = '1';
+      env.PYTHONNOUSERSITE = '1';
+      delete env.PYTHONHOME;
+      delete env.PYTHONUSERBASE;
     }
 
     return env;
@@ -182,14 +189,16 @@ function createPythonRuntime({ app, spawn, path, fs, dirname }) {
   /**
    * Helper to spawn and track Python processes for cleanup.
    *
-   * NOTE: Sets PYTHONPATH environment variable for development mode where system
-   * Python is used. For production builds with embedded Python, the .pth file is
-   * modified in build/prepare-resources.js to include the backend path, as embedded
-   * Python ignores the PYTHONPATH environment variable.
+   * Dev: PYTHONPATH includes the repo backend (plus ambient PYTHONPATH).
+   * Packaged: buildPythonEnv uses only bundled paths, ignores ambient
+   * PYTHONPATH/HOME/USERBASE, and sets PYTHONNOUSERSITE=1. Windows embedded
+   * Python also reads backend from python311._pth.
    */
   function spawnTrackedPython(args, options = {}) {
     const usePosixProcessGroup = process.platform !== 'win32' && options.detached !== false;
-    // Merge our environment with any options.env provided by caller
+    // Merge our environment with any options.env provided by caller.
+    // Packaged POSIX Python honors PYTHONPATH; buildPythonEnv strips ambient
+    // import paths. Windows embedded Python also uses python311._pth.
     const mergedOptions = {
       ...options,
       detached: usePosixProcessGroup,

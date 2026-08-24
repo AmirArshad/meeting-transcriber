@@ -367,6 +367,7 @@ test('packaged buildPythonEnv applies AVANEVIS_PACKAGED after caller overrides',
     });
     assert.equal(packagedEnv.AVANEVIS_PACKAGED, '1');
     assert.equal(packagedEnv.FOO, 'bar');
+    assert.equal(packagedEnv.PYTHONNOUSERSITE, '1');
 
     const devRuntime = createPythonRuntime({
       app: { isPackaged: false },
