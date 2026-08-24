@@ -1,6 +1,6 @@
 # Linux Support Plan — Omarchy First
 
-> **Status:** Phases 0–2 complete on `release/linux` (Phase 2 packaged enumerate verified 2026-08-24 on Omarchy). Gate A is resolved; Linux product capture is not advertised as ready. Phase 3 (`linux_recorder.py`) is next.
+> **Status:** Phases 0–2 complete on `release/linux` (Phase 2 packaged enumerate verified 2026-08-24 on Omarchy). Gate A is resolved; Linux product capture is not advertised as ready. **Next: adversarial review of Phases 0–2** ([prompt](_tmp-linux-phase-0-2-adversarial-review.md)). Do not start Phase 3 until that review lands.
 > **Replanned:** 2026-08-23 against AvaNevis v2.7.0 / current `master`.
 > **Review pass:** 2026-08-23 — verified plan claims against the codebase and CI, corrected two host-fact conclusions (secret storage, tray), and pinned every required upstream Linux artifact. All "Verified" sections below were checked on that date.
 > **Scope cut (2026-08-24):** the first Linux version is **Core Beta only** (Phases 0–5). Speaker identification and local summaries are **out of scope** until a later Linux version. There is no Omarchy host with an NVIDIA GPU to validate those CUDA-only add-ons; do not ship a CPU fallback. The UI must keep both features visible but greyed out as unsupported.
@@ -818,4 +818,4 @@ Later version only (needs NVIDIA Omarchy):
 
 ## First implementation action
 
-Gate A is resolved (green run linked above). Phases 0–2 are done on `release/linux`, including 2026-08-24 Omarchy live-capture and packaged-Python device enumeration. **Next: Phase 3 `linux_recorder.py`.** **Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.**
+Gate A is resolved (green run linked above). Phases 0–2 are done on `release/linux`, including 2026-08-24 Omarchy live-capture and packaged-Python device enumeration. **Next: adversarial review of Phases 0–2** ([prompt](_tmp-linux-phase-0-2-adversarial-review.md)). Do not start Phase 3 until that review lands. **Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.**
