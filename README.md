@@ -91,6 +91,16 @@ python3.11 -m venv .venv
 ./.venv/bin/python -m pip install -r requirements-macos.txt -r requirements-dev.txt
 ```
 
+### Linux `.venv` (Omarchy / Arch and other x86_64 desktops)
+
+```bash
+python3.11 -m venv .venv
+./.venv/bin/python -m pip install --upgrade pip
+./.venv/bin/python -m pip install -r requirements-linux.txt -r requirements-dev.txt
+```
+
+Linux capture is still in development (`docs/initiatives/LINUX_SUPPORT.md`). The `.venv` is enough for device enumeration and tests; product recording ships in Phase 3.
+
 Then start the app from the repo root:
 
 ```bash

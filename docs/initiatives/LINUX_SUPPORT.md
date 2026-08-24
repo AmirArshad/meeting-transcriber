@@ -1,6 +1,6 @@
 # Linux Support Plan — Omarchy First
 
-> **Status:** Phases 0–2 in progress on `release/linux`. Gate A is resolved (see below); Linux product capture is not advertised as ready. Phase 1 dummy-Pulse API spike is recorded below; Omarchy hardware exit criteria remain open. Phase 3 (`linux_recorder.py`) must not start until that live-capture evidence exists.
+> **Status:** Phases 0–2 complete on `release/linux` (Phase 2 packaged enumerate verified 2026-08-24 on Omarchy). Gate A is resolved; Linux product capture is not advertised as ready. Phase 3 (`linux_recorder.py`) is next.
 > **Replanned:** 2026-08-23 against AvaNevis v2.7.0 / current `master`.
 > **Review pass:** 2026-08-23 — verified plan claims against the codebase and CI, corrected two host-fact conclusions (secret storage, tray), and pinned every required upstream Linux artifact. All "Verified" sections below were checked on that date.
 > **Scope cut (2026-08-24):** the first Linux version is **Core Beta only** (Phases 0–5). Speaker identification and local summaries are **out of scope** until a later Linux version. There is no Omarchy host with an NVIDIA GPU to validate those CUDA-only add-ons; do not ship a CPU fallback. The UI must keep both features visible but greyed out as unsupported.
@@ -524,14 +524,32 @@ Proven on dummy Pulse:
 - desktop monitor block cadence median ≈ 21.4 ms (1024 frames @ 48 kHz); dummy sine source is not wall-clock paced (median block ≈ 3 µs after a ~2 s first-block wait)
 - process CPU ≈ 5% over a ~3.9 s wall capture
 
-Still required on Omarchy before Phase 1 can be called complete, and before Phase 3:
+#### Phase 1 evidence — 2026-08-24 Omarchy 4 / Hyprland / PipeWire (closes hardware exit criteria)
 
-- browser speech in a mono transcription downmix
-- no ScreenCast portal during desktop capture
-- Bluetooth/headphone and HDMI monitor selection
-- late desktop-loss detection
+Ran `scripts/linux-audio-spike.py --omarchy --seconds 4` on host `amiromarchy` (Omarchy 4.0.0, Hyprland/Wayland, PipeWire 1.6.8 via `pipewire-pulse`, Python 3.11.16 venv, SoundCard 0.4.6, pulsectl 24.12.0). Hardware: Haswell-ULT MacBook-class machine — analog duplex on `alsa_card.pci-0000_00_1b.0` (Cirrus Logic CS4208) plus HDMI card `alsa_card.pci-0000_00_03.0` with no display attached. Full JSON: `/tmp/avanevis-linux-spike/spike-report.json` (not in git; host device names only).
 
-Phase 2 packaging pins and opaque device IDs proceed from the dummy concurrent-capture result. Do not advertise Linux recording as ready.
+Proven on this host:
+
+- pulsectl enumerated opaque Pulse names. Selected `pulse-source:alsa_input.pci-0000_00_1b.0.analog-stereo` and `pulse-monitor:alsa_output.pci-0000_00_1b.0.analog-stereo.monitor`.
+- SoundCard captured mic + analog-sink monitor **concurrently** (188 blocks, median ~21.3 ms = 1024 frames @ 48 kHz). Desktop tone RMS ≈ 0.141; mic RMS ≈ 0.024. Process CPU ≈ 20% over ~4.1 s wall. Stereo was channel-identical (correlation 1.0); mean-mono downmix kept the same RMS.
+- **Browser speech:** Chromium (`--ozone-platform=wayland`) autoplayed a 4 s Open Speech Repository clip into the default analog sink. Monitor capture RMS ≈ 0.019, L/R identical. `ffmpeg -ac 1 -ar 16000` (the transcription downmix shape) kept mean_volume **-34.3 dB** on both stereo and mono — speech energy is not cancelled or dropped. Not one-sided; the macOS stereo-repair gate would not fire.
+- **No ScreenCast portal:** `dbus-monitor --session` during concurrent capture + Chromium playback saw **zero** `org.freedesktop.portal.ScreenCast` / `impl.portal.ScreenCast` markers (~70 KB of unrelated session traffic). Desktop capture is Pulse monitor only.
+- **HDMI:** Card profile `output:hdmi-stereo` is `available: no` with no cable, but `card_profile_set` still created `alsa_output.pci-0000_00_03.0.hdmi-stereo`. HDMI desktop capture is a **different** Pulse sink + `.monitor`, selected by opaque id. Do not assume unavailable ports stay absent. Profile restored to `off`.
+- **Headphones:** Port `analog-output-headphones` exists on the analog card and is `available: no` (jack unplugged). Plugging headphones retargets the **same** analog-stereo sink; the monitor Pulse name does not change. No extra `pulse-monitor:` id.
+- **Bluetooth:** Adapter present (`hci0`), soft-blocked. Temporary unblock produced no BlueZ card or A2DP sink (no paired device). A connected headset would appear as its own Pulse sink + `.monitor`, same selection model as HDMI. rfkill restored to blocked.
+- **Default-sink switch:** Creating `module-null-sink` `avanevis_spike_alt` and `sink_default_set` **does** change the server default (confirmed in a follow-up with a 150 ms settle). Linux v1 still must not hot-switch the live desktop stream; keep recording the originally selected monitor.
+- **Late desktop loss:** Unloaded the null sink while SoundCard was recording `avanevis_spike_alt.monitor`. The Pulse source disappeared (`source_still_listed_after_unload: false`). SoundCard **did not hang and did not raise** — it kept returning ~21 ms blocks of **silence** (post-unload RMS 0). Product recorder must detect a vanished monitor via pulsectl (or equivalent), warn, and continue mic-only. Do not wait for a SoundCard exception.
+
+Host restored afterward: analog duplex profile, HDMI `off`, default analog sink/source, Bluetooth soft-blocked, no leftover null sink.
+
+Phase 3 implications (do not implement here):
+
+- Device IDs stay `pulse-source:` / `pulse-monitor:` / `pulse-sink:` / `none`.
+- Desktop thread watches whether the selected monitor remains in `source_list()`; silence alone is not a loss signal (meetings go quiet).
+- HDMI/BT are additional sinks; headphones are not.
+- No ScreenCast portal, no `xdg-desktop-portal-hyprland` audio path.
+
+Do not advertise Linux recording as ready until Phase 3 ships.
 
 ### Phase 2 — Linux runtime and device plumbing
 
@@ -550,6 +568,14 @@ Exit criteria:
 - opaque Pulse IDs round-trip without coercion
 - missing Pulse server and missing selected devices return concise errors
 - prepared Python runs backend modules without system Python or repo-only imports
+
+**Status (2026-08-24, Omarchy host):** Exit criteria met. `npm run prepare-build` staged python-build-standalone 3.11.7 and ffmpeg n8.0.1. Dev `.venv` 3.11.16 and packaged `build/resources/python/bin/python3` returned identical JSON:
+
+- `pulse-source:alsa_input.pci-0000_00_1b.0.analog-stereo`
+- `pulse-sink:alsa_output.pci-0000_00_1b.0.analog-stereo`
+- `pulse-monitor:alsa_output.pci-0000_00_1b.0.analog-stereo.monitor` (also `defaults.default_output`)
+
+Packaged imports of `pulsectl` / `SoundCard` / `numpy` / `soxr` resolved under `build/resources/python/lib/python3.11/site-packages` with `PATH=/usr/bin:/bin` (no venv). Missing Pulse (`PULSE_SERVER=unix:/tmp/avanevis-no-pulse`) exits 1 with `ERROR: PulseAudio/PipeWire is not running. Start the session audio service and try again.` — no socket path. Missing device: `Microphone device ID pulse-source:does-not-exist was not found`. Speakrs CLI staging is skipped on Linux (Phase 7).
 
 ### Phase 3 — Production Linux recorder
 
@@ -792,4 +818,4 @@ Later version only (needs NVIDIA Omarchy):
 
 ## First implementation action
 
-Gate A is resolved (green run linked above). Phase 0 fail-closed platform branches and the dummy-Pulse Phase 1 API spike are on `release/linux`. Phase 2 pins opaque Pulse IDs and Linux Python/ffmpeg artifacts. **Do not start Phase 3 `linux_recorder.py` until Omarchy live-capture evidence closes the remaining Phase 1 exit criteria.** **Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.**
+Gate A is resolved (green run linked above). Phases 0–2 are done on `release/linux`, including 2026-08-24 Omarchy live-capture and packaged-Python device enumeration. **Next: Phase 3 `linux_recorder.py`.** **Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.**
