@@ -423,19 +423,31 @@ def test_late_desktop_vanish_keeps_committed_desktop_audio(tmp_path, monkeypatch
 
     assert recorder.start_recording() is True
     assert _wait_until(lambda: recorder._desktop_spool_accepted_any)
-    committed_before = recorder._desktop_spool.committed_frames
     pulse.remove_source(MONITOR_NAME)
     assert _wait_until(lambda: bool(recorder._desktop_runtime_failure), timeout=3.0)
-    time.sleep(0.1)
+    desktop_spool = recorder._desktop_spool
+    mic_spool = recorder._mic_spool
+    assert desktop_spool is not None
+    assert mic_spool is not None
+    desktop_at_vanish = desktop_spool.written_frames
+    # A fixed 0.1s sleep is not enough for another mic block on a loaded macOS
+    # runner (the CI flake was desktop == mic == 15360). Wait until the mic
+    # thread actually continues past the truncated desktop track.
+    assert _wait_until(
+        lambda: mic_spool.written_frames > desktop_at_vanish,
+        timeout=3.0,
+    ), "microphone should keep writing after the desktop monitor vanishes"
     recorder.stop_recording()
 
     manifest = finalized.get("manifest")
     assert manifest is not None
     assert manifest["includeDesktop"] is True
-    assert manifest["tracks"]["desktop"]["committedFrames"] > 0
+    desktop_frames = manifest["tracks"]["desktop"]["committedFrames"]
+    mic_frames = manifest["tracks"]["mic"]["committedFrames"]
+    assert desktop_frames > 0
     # Truncated at the last real desktop frame — no invented silence to mic length.
-    assert manifest["tracks"]["desktop"]["committedFrames"] < manifest["tracks"]["mic"]["committedFrames"]
-    assert committed_before >= 0
+    assert desktop_frames <= desktop_at_vanish + 1024
+    assert desktop_frames < mic_frames
 
     payloads = _stdout_payloads(capsys)
     vanished = next(
