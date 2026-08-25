@@ -145,6 +145,15 @@ def _pulse_source_names(pulse: Any) -> list[str]:
     return [str(getattr(source, "name", "") or "") for source in pulse.source_list()]
 
 
+def _soundcard_device_matches(device: Any, pulse_name: str) -> bool:
+    """Exact id/name match only — SoundCard's own lookup is substring-based."""
+    if device is None:
+        return False
+    device_id = str(getattr(device, "id", "") or "")
+    device_name = str(getattr(device, "name", "") or "")
+    return pulse_name in (device_id, device_name)
+
+
 class LinuxAudioRecorder:
     """Linux recorder: SoundCard PCM + pulsectl device/monitor watch."""
 
@@ -176,6 +185,8 @@ class LinuxAudioRecorder:
 
         self._soundcard = soundcard_module
         self._pulse_factory = pulse_factory or _default_pulse_factory
+        self._watch_pulse = None
+        self._watch_pulse_lock = threading.Lock()
 
         self.is_running = False
         self._running_lock = threading.Lock()
@@ -188,6 +199,7 @@ class LinuxAudioRecorder:
         self._desktop_spool_channels = None
         self._desktop_spool_accepted_any = False
         self._spool_close_fail_reason = None
+        self._desktop_partial_capture = False
 
         self.mic_level = 0.0
         self.desktop_level = 0.0
@@ -247,11 +259,43 @@ class LinuxAudioRecorder:
     def _list_source_names(self) -> list[str]:
         return self._with_pulse(_pulse_source_names)
 
+    def _close_watch_pulse(self) -> None:
+        """Drop the long-lived monitor-watch Pulse client (safe to call twice)."""
+        with self._watch_pulse_lock:
+            pulse = self._watch_pulse
+            self._watch_pulse = None
+        if pulse is None:
+            return
+        closer = getattr(pulse, "close", None)
+        if closer is None:
+            return
+        try:
+            closer()
+        except Exception as exc:
+            print(f"Warning: closing Pulse watch client failed: {exc}", file=sys.stderr)
+
+    def _watch_source_names(self) -> list[str]:
+        """Source names over one long-lived client.
+
+        The vanished-monitor watchdog runs twice a second for the whole meeting;
+        reconnecting per poll would blow thousands of Pulse handshakes through
+        the desktop capture read loop. The client is rebuilt only after a failure.
+        """
+        with self._watch_pulse_lock:
+            if self._watch_pulse is None:
+                self._watch_pulse = self._pulse_factory()
+            pulse = self._watch_pulse
+        try:
+            return _pulse_source_names(pulse)
+        except Exception:
+            self._close_watch_pulse()
+            raise
+
     def _monitor_still_listed(self) -> bool:
         if not self._desktop_pulse_name:
             return False
         try:
-            return self._desktop_pulse_name in self._list_source_names()
+            return self._desktop_pulse_name in self._watch_source_names()
         except Exception as exc:
             print(f"Warning: Pulse source_list() probe failed: {exc}", file=sys.stderr)
             return True
@@ -263,11 +307,20 @@ class LinuxAudioRecorder:
         except Exception:
             microphones = []
         for mic in microphones or []:
-            mic_id = str(getattr(mic, "id", "") or "")
-            mic_name = str(getattr(mic, "name", "") or "")
-            if mic_id == pulse_name or mic_name == pulse_name:
+            if _soundcard_device_matches(mic, pulse_name):
                 return mic
-        return sc.get_microphone(pulse_name, include_loopback=include_loopback)
+        # SoundCard's own lookup matches by substring. The Pulse name came from a
+        # source_list() we just read, so anything but an exact hit is a different
+        # device — never silently record it.
+        resolved = sc.get_microphone(pulse_name, include_loopback=include_loopback)
+        if not _soundcard_device_matches(resolved, pulse_name):
+            resolved_id = str(getattr(resolved, "id", "") or "")
+            resolved_name = str(getattr(resolved, "name", "") or "")
+            raise RuntimeError(
+                f"SoundCard resolved {pulse_name!r} to a different device "
+                f"(id={resolved_id!r}, name={resolved_name!r})"
+            )
+        return resolved
 
     def start_recording(self) -> bool:
         if self._get_running():
@@ -419,6 +472,7 @@ class LinuxAudioRecorder:
             self.mic_thread.join(timeout=1.0)
         if self.desktop_thread and self.desktop_thread.is_alive():
             self.desktop_thread.join(timeout=1.0)
+        self._close_watch_pulse()
         self._release_and_discard_startup_capture()
 
     def _open_capture_spools(
@@ -432,6 +486,7 @@ class LinuxAudioRecorder:
         )
         self._desktop_spool_accepted_any = False
         self._spool_close_fail_reason = None
+        self._desktop_partial_capture = False
         self._capture_manifest = CaptureManifestCoordinator.create(
             self.output_path,
             started_at_ns=started_ns,
@@ -531,29 +586,47 @@ class LinuxAudioRecorder:
                 mic_frames = mic_result.committed_frames
 
         if self._desktop_spool is not None:
-            desktop_failed = bool(self._desktop_runtime_failure) or bool(
-                self._spool_close_fail_reason
-            )
+            # Two distinct conditions. A *capture-side* loss (vanished Pulse
+            # monitor, stream error, writer stall) leaves everything already
+            # committed perfectly usable — on Linux that is the routine case of
+            # the user switching audio output mid-meeting, so discarding the
+            # whole desktop track would throw away the entire meeting's system
+            # audio. A *spool* failure means the durable segment state itself is
+            # untrustworthy, and only that excludes the track.
+            desktop_capture_degraded = bool(self._desktop_runtime_failure)
+            spool_unusable = bool(self._spool_close_fail_reason)
+            # Only pad to the mic timeline when desktop capture ran to the end;
+            # a truncated track must stop at its last real frame, and the mixer
+            # zero-fills the remainder.
             pad_to = None
             if (
-                not desktop_failed
+                not desktop_capture_degraded
+                and not spool_unusable
                 and self._desktop_spool_accepted_any
                 and mic_frames > 0
             ):
                 pad_to = mic_frames
             desk_result = self._desktop_spool.close(final_frame_count=pad_to)
             self._desktop_spool = None
-            if desk_result.fail_reason and not desktop_failed:
-                self._note_desktop_runtime_failure(
-                    f"Desktop capture spool failed: {desk_result.fail_reason}",
-                    code="DESKTOP_SPOOL_FAILED",
-                )
-                desktop_failed = True
+            if desk_result.fail_reason:
+                spool_unusable = True
+                if not desktop_capture_degraded:
+                    self._note_desktop_runtime_failure(
+                        f"Desktop capture spool failed: {desk_result.fail_reason}",
+                        code="DESKTOP_SPOOL_FAILED",
+                    )
+                    desktop_capture_degraded = True
             include_desktop = (
-                not desktop_failed
+                not spool_unusable
                 and self._desktop_spool_accepted_any
                 and desk_result.committed_frames > 0
             )
+            if include_desktop and desktop_capture_degraded:
+                print(
+                    "Desktop capture ended early; keeping "
+                    f"{desk_result.committed_frames} committed desktop frames",
+                    file=sys.stderr,
+                )
 
         if self._capture_manifest is not None:
             try:
@@ -676,6 +749,7 @@ class LinuxAudioRecorder:
             self.mic_thread.join(timeout=2.0)
         if self.desktop_thread:
             self.desktop_thread.join(timeout=2.0)
+        self._close_watch_pulse()
         self._close_spool_handles_for_discard()
         mark_capture_discarded_and_cleanup(self._capture_manifest)
         self._capture_manifest = None
@@ -702,14 +776,23 @@ class LinuxAudioRecorder:
 
                 while self._get_running():
                     chunk = recorder.record(numframes=self.chunk_size)
+                    # record() blocks, so stop may have closed the spools while we
+                    # were inside it. Appending then returns False, and reporting
+                    # that as a writer stall would make stop_recording skip
+                    # finalization and lose an otherwise complete meeting.
+                    if not self._get_running():
+                        return
                     elapsed = time.time() - (self.recording_start_time or time.time())
                     if elapsed < self.preroll_seconds:
                         continue
                     if self.mic_capture_start_time is None:
                         self.mic_capture_start_time = time.time()
                     frames = _normalize_capture_frames(chunk, channels)
-                    if self._mic_spool is not None:
-                        if not self._mic_spool.append(frames.tobytes()):
+                    spool = self._mic_spool
+                    if spool is not None:
+                        if not spool.append(frames.tobytes()):
+                            if not self._get_running():
+                                return
                             message = (
                                 "Audio capture writer stalled; recording was stopped "
                                 "to preserve committed audio."
@@ -774,16 +857,23 @@ class LinuxAudioRecorder:
                             break
                     if self._desktop_runtime_failure or self._desktop_give_up:
                         break
+                    # Same blocking-read window as the mic thread: never mistake a
+                    # closed-at-stop spool for a stalled writer.
+                    if not self._get_running():
+                        break
                     elapsed = time.time() - (self.recording_start_time or time.time())
                     if elapsed < self.preroll_seconds:
                         continue
                     if self.desktop_capture_start_time is None:
                         self.desktop_capture_start_time = time.time()
                     frames = _normalize_capture_frames(chunk, channels)
-                    if self._desktop_spool is not None:
-                        if self._desktop_spool.append(frames.tobytes()):
+                    spool = self._desktop_spool
+                    if spool is not None:
+                        if spool.append(frames.tobytes()):
                             self._desktop_spool_accepted_any = True
                         else:
+                            if not self._get_running() or self._desktop_give_up:
+                                break
                             self._note_desktop_runtime_failure(
                                 "Desktop capture writer stalled",
                                 code="DESKTOP_SPOOL_FAILED",
@@ -805,16 +895,35 @@ class LinuxAudioRecorder:
                     error_message, code="DESKTOP_RECORDING_FAILED"
                 )
         finally:
+            self._close_watch_pulse()
             if not self._desktop_started_event.is_set():
                 self._desktop_started_event.set()
 
     def _note_desktop_runtime_failure(self, message: str, *, code: str = "DESKTOP_RECORDING_FAILED") -> None:
         if not self._desktop_runtime_failure:
             self._desktop_runtime_failure = message
+        # Desktop audio already committed to the spool is kept in the mix, so the
+        # user-facing copy must not claim a mic-only save when it is only partial.
+        partial = bool(self._desktop_spool_accepted_any)
+        if partial:
+            self._desktop_partial_capture = True
+        with self.level_lock:
+            self.desktop_level = 0.0
         if self._desktop_runtime_warning_sent:
             return
         self._desktop_runtime_warning_sent = True
         print(f"WARNING: {message}", file=sys.stderr)
+        if partial:
+            _send_warning_message(
+                code,
+                f"{message} Desktop audio recorded before this point is kept.",
+                help=(
+                    "Desktop audio capture stopped part-way through. The saved file "
+                    "contains the desktop audio captured up to that point, plus the "
+                    "full microphone recording."
+                ),
+            )
+            return
         _send_warning_message(
             code,
             f"{message} Continuing with microphone audio only.",
@@ -871,6 +980,7 @@ class LinuxAudioRecorder:
             self.mic_thread.join(timeout=2.0)
         if self.desktop_thread:
             self.desktop_thread.join(timeout=2.0)
+        self._close_watch_pulse()
 
         try:
             self._close_capture_spools_for_mix()

@@ -102,7 +102,9 @@ Product capture (`backend/audio/linux_recorder.py`) is wired. Green automated te
 
 - [ ] **Omarchy hardware:** Record microphone + Pulse/PipeWire monitor (desktop) audio together on Omarchy 4 (Hyprland/Wayland). No ScreenCast portal / screen-sharing UI.
 - [ ] **Omarchy hardware:** Browser/YouTube speech reaches the transcript after mono downmix, not only the meter or saved stereo channel.
-- [ ] **Omarchy hardware:** Desktop startup failure and late desktop loss warn and continue mic-only; mic failure is a structured stop failure.
+- [ ] **Omarchy hardware:** Desktop *startup* failure warns and continues mic-only; mic failure is a structured stop failure.
+- [ ] **Omarchy hardware:** Late desktop loss — unplug/replug headphones (or switch output sink) mid-capture. The warning says earlier desktop audio is kept, the saved mix still contains the desktop audio from before the switch, and the desktop level meter drops to zero.
+- [ ] **Omarchy hardware:** Restart PipeWire mid-capture. The monitor watchdog rebuilds its single Pulse client, does not report a false vanish, and recording continues.
 - [ ] **Omarchy hardware:** Discard/cancel tombstones the capture as `discarded` and never creates a History meeting.
 - [ ] **Omarchy hardware:** Stop stages (`post_processing_started` → encoding → complete) come from stdout JSON.
 - [ ] **Omarchy hardware:** Live 15/60-minute captures pass; recording while CPU transcription runs has no obvious glitches; capture arrays do not grow with duration.

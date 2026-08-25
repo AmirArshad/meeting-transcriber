@@ -48,6 +48,9 @@ class FakeRecorder:
             raise RuntimeError(f"simulated {self.pulse_name} capture failure")
         self._records += 1
         time.sleep(0.01)
+        hook = self.backend.on_record.get(self.pulse_name)
+        if hook is not None:
+            hook(self._records)
         channels = self.backend.channels.get(self.pulse_name, 2)
         frames = int(numframes or 1024)
         return np.full((frames, channels), 0.2, dtype=np.float32)
@@ -69,6 +72,8 @@ class FakeSoundCard:
         self.channels = {MIC_NAME: 1, MONITOR_NAME: 2}
         self.fail_open = {}
         self.fail_record = {}
+        self.on_record = {}
+        self.mismatched_fallback = set()
 
     def all_microphones(self, include_loopback=False):
         names = [MIC_NAME]
@@ -77,6 +82,12 @@ class FakeSoundCard:
         return [FakeMicrophone(self, name) for name in names]
 
     def get_microphone(self, name, include_loopback=False):
+        if name in self.mismatched_fallback:
+            # SoundCard matches by substring; emulate it binding another device.
+            other = FakeMicrophone(self, name)
+            other.id = f"{name}_some_other_device"
+            other.name = other.id
+            return other
         if name not in self.channels:
             raise ValueError(f"unknown SoundCard source {name}")
         return FakeMicrophone(self, name)
@@ -122,20 +133,31 @@ def _stdout_payloads(capsys):
     return payloads
 
 
-def _make_recorder(tmp_path, *, soundcard, pulse, desktop_id=MONITOR_ID, **kwargs):
+def _make_recorder(tmp_path, *, soundcard, pulse, desktop_id=MONITOR_ID, factory_calls=None, **kwargs):
+    def factory():
+        if factory_calls is not None:
+            factory_calls.append(1)
+        return pulse
+
     return LinuxAudioRecorder(
         mic_device_id=MIC_ID,
         desktop_device_id=desktop_id,
         output_path=str(tmp_path / "recording.wav"),
         preroll_seconds=0,
         soundcard_module=soundcard,
-        pulse_factory=lambda: pulse,
+        pulse_factory=factory,
         **kwargs,
     )
 
 
 def _patch_finalize_success(monkeypatch):
+    seen = {}
+
     def fake_finalize(manifest_path, output_path, *, progress_callback=None, coordinator=None, **kwargs):
+        try:
+            seen["manifest"] = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+        except Exception:
+            seen["manifest"] = None
         if progress_callback:
             for stage, message in (
                 ("post_processing_started", "Finishing recording..."),
@@ -161,7 +183,7 @@ def _patch_finalize_success(monkeypatch):
         )
 
     monkeypatch.setattr(linux_mod, "finalize_capture", fake_finalize)
-    return fake_finalize
+    return seen
 
 
 def _wait_until(predicate, timeout=2.0):
@@ -388,3 +410,220 @@ def test_pulse_probe_exception_does_not_treat_monitor_as_vanished(tmp_path, monk
     warnings = [item for item in payloads if item.get("type") == "warning"]
     assert not any(item.get("code") == "DESKTOP_MONITOR_VANISHED" for item in warnings)
     assert recorder.recording_failure is None
+
+
+def test_late_desktop_vanish_keeps_committed_desktop_audio(tmp_path, monkeypatch, capsys):
+    """A monitor that vanishes mid-meeting must not discard the desktop audio
+    already committed before it went away (routine on Linux when the user
+    switches audio output)."""
+    finalized = _patch_finalize_success(monkeypatch)
+    soundcard = FakeSoundCard()
+    pulse = FakePulse([MIC_NAME, MONITOR_NAME])
+    recorder = _make_recorder(tmp_path, soundcard=soundcard, pulse=pulse)
+
+    assert recorder.start_recording() is True
+    assert _wait_until(lambda: recorder._desktop_spool_accepted_any)
+    committed_before = recorder._desktop_spool.committed_frames
+    pulse.remove_source(MONITOR_NAME)
+    assert _wait_until(lambda: bool(recorder._desktop_runtime_failure), timeout=3.0)
+    time.sleep(0.1)
+    recorder.stop_recording()
+
+    manifest = finalized.get("manifest")
+    assert manifest is not None
+    assert manifest["includeDesktop"] is True
+    assert manifest["tracks"]["desktop"]["committedFrames"] > 0
+    # Truncated at the last real desktop frame — no invented silence to mic length.
+    assert manifest["tracks"]["desktop"]["committedFrames"] < manifest["tracks"]["mic"]["committedFrames"]
+    assert committed_before >= 0
+
+    payloads = _stdout_payloads(capsys)
+    vanished = next(
+        item for item in payloads
+        if item.get("type") == "warning" and item.get("code") == "DESKTOP_MONITOR_VANISHED"
+    )
+    # Copy must not claim a mic-only save when desktop audio is kept.
+    assert "microphone audio only" not in vanished.get("message", "")
+    assert "kept" in vanished.get("message", "")
+    assert recorder.recording_failure is None
+    assert recorder._desktop_partial_capture is True
+
+
+def test_desktop_start_failure_keeps_mic_only_copy(tmp_path, monkeypatch, capsys):
+    """Nothing was ever captured, so the mic-only wording must stay."""
+    _patch_finalize_success(monkeypatch)
+    soundcard = FakeSoundCard()
+    soundcard.fail_open[MONITOR_NAME] = "monitor open failed"
+    pulse = FakePulse([MIC_NAME, MONITOR_NAME])
+    recorder = _make_recorder(tmp_path, soundcard=soundcard, pulse=pulse)
+
+    assert recorder.start_recording() is True
+    time.sleep(0.08)
+    recorder.stop_recording()
+
+    payloads = _stdout_payloads(capsys)
+    warning = next(
+        item for item in payloads
+        if item.get("type") == "warning" and item.get("code") == "DESKTOP_START_FAILED"
+    )
+    assert "microphone audio only" in warning.get("message", "")
+    assert recorder._desktop_partial_capture is False
+
+
+def test_mic_append_after_stop_close_is_not_a_writer_stall(tmp_path, monkeypatch, capsys):
+    """The mic thread blocks inside record(); stop can close and commit the spool
+    underneath it. Waking up and appending to that closed spool must not be
+    reported as a stall — that error makes stop skip finalization entirely."""
+    _patch_finalize_success(monkeypatch)
+    soundcard = FakeSoundCard()
+    pulse = FakePulse([MIC_NAME])
+    recorder = _make_recorder(tmp_path, soundcard=soundcard, pulse=pulse, desktop_id="none")
+
+    raced = threading.Event()
+
+    def close_spool_under_the_thread(call_index):
+        # Reproduce the stop-vs-blocking-read window: running flag cleared and the
+        # spool committed while this thread was inside record().
+        if call_index < 3 or raced.is_set():
+            return
+        raced.set()
+        recorder._set_running(False)
+        spool = recorder._mic_spool
+        if spool is not None:
+            spool.close()
+
+    soundcard.on_record[MIC_NAME] = close_spool_under_the_thread
+
+    assert recorder.start_recording() is True
+    assert _wait_until(lambda: raced.is_set(), timeout=3.0)
+    if recorder.mic_thread:
+        recorder.mic_thread.join(timeout=2.0)
+
+    # This is exactly what stop_recording() consults before deciding whether to
+    # skip finalization, so a false positive here loses the whole meeting.
+    assert recorder._has_async_recording_error() is False
+    assert recorder._resolve_async_recording_failure() is None
+    assert recorder._last_error is None
+    payloads = _stdout_payloads(capsys)
+    errors = [item for item in payloads if item.get("type") == "error"]
+    assert errors == []
+    recorder._release_capture_spools()
+
+
+def test_desktop_append_after_stop_close_emits_no_spurious_warning(tmp_path, monkeypatch, capsys):
+    _patch_finalize_success(monkeypatch)
+    soundcard = FakeSoundCard()
+    pulse = FakePulse([MIC_NAME, MONITOR_NAME])
+    recorder = _make_recorder(tmp_path, soundcard=soundcard, pulse=pulse)
+
+    raced = threading.Event()
+
+    def close_spool_under_the_thread(call_index):
+        if call_index < 3 or raced.is_set():
+            return
+        raced.set()
+        recorder._set_running(False)
+        spool = recorder._desktop_spool
+        if spool is not None:
+            spool.close()
+
+    soundcard.on_record[MONITOR_NAME] = close_spool_under_the_thread
+
+    assert recorder.start_recording() is True
+    assert _wait_until(lambda: raced.is_set(), timeout=3.0)
+    if recorder.desktop_thread:
+        recorder.desktop_thread.join(timeout=2.0)
+
+    assert recorder._desktop_runtime_failure is None
+    payloads = _stdout_payloads(capsys)
+    warnings = [item for item in payloads if item.get("type") == "warning"]
+    assert not any(item.get("code") == "DESKTOP_SPOOL_FAILED" for item in warnings)
+    recorder._release_capture_spools()
+
+
+def test_monitor_watchdog_reuses_one_pulse_client(tmp_path, monkeypatch):
+    """The vanished-monitor poll runs twice a second for the whole meeting; it
+    must not open a fresh Pulse connection per poll."""
+    _patch_finalize_success(monkeypatch)
+    soundcard = FakeSoundCard()
+    pulse = FakePulse([MIC_NAME, MONITOR_NAME])
+    factory_calls = []
+    recorder = _make_recorder(
+        tmp_path, soundcard=soundcard, pulse=pulse, factory_calls=factory_calls
+    )
+
+    assert recorder.start_recording() is True
+    startup_calls = len(factory_calls)
+    assert _wait_until(lambda: recorder._desktop_spool_accepted_any)
+    time.sleep(1.6)  # >= 3 watchdog polls
+    watch_calls = len(factory_calls) - startup_calls
+    recorder.stop_recording()
+
+    assert watch_calls == 1, f"watchdog opened {watch_calls} Pulse clients"
+    assert recorder._watch_pulse is None
+
+
+def test_watchdog_pulse_client_is_rebuilt_after_a_failure(tmp_path, monkeypatch):
+    _patch_finalize_success(monkeypatch)
+    soundcard = FakeSoundCard()
+    pulse = FakePulse([MIC_NAME, MONITOR_NAME])
+    factory_calls = []
+    recorder = _make_recorder(
+        tmp_path, soundcard=soundcard, pulse=pulse, factory_calls=factory_calls
+    )
+
+    assert recorder.start_recording() is True
+    assert _wait_until(lambda: recorder._desktop_spool_accepted_any)
+    assert _wait_until(lambda: recorder._watch_pulse is not None, timeout=2.0)
+    pulse.raise_on_list = True
+    assert _wait_until(lambda: recorder._watch_pulse is None, timeout=2.0)
+    before = len(factory_calls)
+    pulse.raise_on_list = False
+    assert _wait_until(lambda: len(factory_calls) > before, timeout=2.0)
+    assert recorder._desktop_runtime_failure is None
+    recorder.stop_recording()
+    assert recorder.recording_failure is None
+
+
+def test_soundcard_fallback_must_match_the_requested_pulse_name(tmp_path, monkeypatch, capsys):
+    """SoundCard's lookup matches by substring. Binding a different device than
+    the one the user picked would silently record the wrong source."""
+    _patch_finalize_success(monkeypatch)
+    soundcard = FakeSoundCard()
+
+    def only_the_monitor(include_loopback=False):
+        # Force the get_microphone() fallback for the mic.
+        return [FakeMicrophone(soundcard, MONITOR_NAME)] if include_loopback else []
+
+    soundcard.all_microphones = only_the_monitor
+    soundcard.mismatched_fallback.add(MIC_NAME)
+    pulse = FakePulse([MIC_NAME])
+    recorder = _make_recorder(tmp_path, soundcard=soundcard, pulse=pulse, desktop_id="none")
+
+    assert recorder.start_recording() is False
+    payloads = _stdout_payloads(capsys)
+    errors = [item for item in payloads if item.get("type") == "error"]
+    assert any("different device" in (item.get("message") or "") for item in errors)
+
+
+def test_desktop_soundcard_mismatch_degrades_to_mic_only(tmp_path, monkeypatch, capsys):
+    _patch_finalize_success(monkeypatch)
+    soundcard = FakeSoundCard()
+    real_all = soundcard.all_microphones
+
+    def hide_the_monitor(include_loopback=False):
+        return [mic for mic in real_all(include_loopback=include_loopback) if mic.id != MONITOR_NAME]
+
+    soundcard.all_microphones = hide_the_monitor
+    soundcard.mismatched_fallback.add(MONITOR_NAME)
+    pulse = FakePulse([MIC_NAME, MONITOR_NAME])
+    recorder = _make_recorder(tmp_path, soundcard=soundcard, pulse=pulse)
+
+    assert recorder.start_recording() is True
+    time.sleep(0.08)
+    recorder.stop_recording()
+    payloads = _stdout_payloads(capsys)
+    warnings = [item for item in payloads if item.get("type") == "warning"]
+    assert any(item.get("code") == "DESKTOP_START_FAILED" for item in warnings)
+    assert recorder.recording_failure is None
+    assert Path(recorder.final_output_path).is_file()

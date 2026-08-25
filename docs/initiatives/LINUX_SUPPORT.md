@@ -1,6 +1,6 @@
 # Linux Support Plan — Omarchy First
 
-> **Status:** Phases 0–2 complete on `release/linux`. **Phase 3 product code and automated tests landed 2026-08-25 on an Ubuntu VPS** (`linux_recorder.py`, factory, preflight, Electron wiring). **Direct next step: adversarial review of that Phase 3 landing** (`docs/initiatives/_tmp-linux-phase-3-adversarial-review.md`). Do not start Phase 4. Omarchy hardware smoke still blocks calling Phase 3 complete (15/60-minute captures, record-during-CPU-transcription, browser speech in the transcript, no duration-growing capture array). Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.
+> **Status:** Phases 0–2 complete on `release/linux`. **Phase 3 product code, automated tests, and the Phase 3 adversarial review are done on an Ubuntu VPS (2026-08-25)** (`linux_recorder.py`, factory, preflight, Electron wiring; four review defects remediated — see *Phase 3 adversarial review*). **Direct next step: Omarchy hardware smoke.** Do not start Phase 4. Omarchy hardware smoke still blocks calling Phase 3 complete (15/60-minute captures, record-during-CPU-transcription, browser speech in the transcript, no duration-growing capture array). Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.
 > **Replanned:** 2026-08-23 against AvaNevis v2.7.0 / current `master`.
 > **Review pass:** 2026-08-23 — verified plan claims against the codebase and CI, corrected two host-fact conclusions (secret storage, tray), and pinned every required upstream Linux artifact. All "Verified" sections below were checked on that date.
 > **Scope cut (2026-08-24):** the first Linux version is **Core Beta only** (Phases 0–5). Speaker identification and local summaries are **out of scope** until a later Linux version. There is no Omarchy host with an NVIDIA GPU to validate those CUDA-only add-ons; do not ship a CPU fallback. The UI must keep both features visible but greyed out as unsupported.
@@ -627,11 +627,20 @@ Exit criteria:
 - browser speech reaches the transcript, not only meters/saved channels
 - no whole-session capture array grows with duration on hardware
 
-Do not start Phase 4 until the Phase 3 adversarial review (and any remediations) plus those Omarchy rows pass. Do not treat `scripts/linux-audio-spike.py` as the product recorder.
+Do not start Phase 4 until those Omarchy rows pass. Do not treat `scripts/linux-audio-spike.py` as the product recorder.
 
-#### Phase 3 adversarial review — NEXT
+#### Phase 3 adversarial review — 2026-08-25 (done)
 
-Paste `docs/initiatives/_tmp-linux-phase-3-adversarial-review.md` into a fresh review session (one theme, do not combine with other prompts). Scope is the Phase 3 landing on `release/linux` since `ce0a550`. This VPS is enough for static review + automated tests; it is not Omarchy. After remediations land, delete the temp prompt (same as Phases 0–2). Then run Omarchy hardware smoke. Then Phase 4.
+Static review on the Ubuntu VPS of everything since `ce0a550`, scoped to `linux_recorder.py`, the `linux-v1` profile helpers, capture recovery, and the Electron wiring. No RAM mix, no capture array that grows with duration, no structured control on stderr, exact-token stdin, cancel tombstone, opaque IDs never `parseInt`ed, and `windows-v1` / `macos-v1` behavior all held up. Four defects found and remediated in this branch, each with a regression test that fails against the pre-fix recorder:
+
+- **Late desktop loss discarded every already-committed desktop frame.** `_close_capture_spools_for_mix` copied the macOS rule (`_desktop_runtime_failure` ⇒ `includeDesktop = false`). On macOS a late loss means the helper crashed; on Linux it is the routine case of the user switching audio output, which removes the old sink's monitor — so a monitor vanishing at minute 59 threw away 59 minutes of system audio. The track is now excluded only on a *spool* failure; a capture-side loss keeps the committed frames truncated at the last real frame (`pad_to=None`, mixer zero-fills the rest), and the warning copy no longer claims a mic-only save.
+- **Blocking-read capture threads could turn a good recording into `RECORDING_THREAD_FAILED`.** Unlike the macOS callback model, the Linux threads block inside `recorder.record()`; `stop_recording` joins for 2 s and then closes and commits the spools. A thread waking after that appended to a closed spool, which reads as `False` — the mic path mis-reported it as a writer stall and set `_error_event`, which `stop_recording` consults *after* the close, so finalization was skipped and the meeting was lost to a spurious error (recoverable only on next launch). The desktop path emitted a phantom `DESKTOP_SPOOL_FAILED` warning, including during Discard. Both loops now re-check `_get_running()` after `record()` returns and after a `False` append, and read the spool reference once.
+- **The vanished-monitor watchdog opened a new `pulsectl.Pulse` connection every 500 ms**, inline in the desktop capture read loop — roughly 7,200 connect/handshake/teardown cycles per hour, each one stalling capture. The tests injected a single shared fake, so the suite could not see it. The watch now holds one long-lived client, rebuilt only after a failure and closed on stop/cancel/abort; probe exceptions still fail open (never treated as a vanish).
+- **SoundCard's fallback lookup could silently bind the wrong device.** `sc.get_microphone()` matches by substring, so an exact-match miss could open a different microphone or monitor with no warning. Resolution is now exact-`id`/`name` only; a mismatch raises (mic → honest start failure, desktop → warning + mic-only).
+
+Also fixed: the desktop level meter stayed frozen at its last value after the monitor vanished, so the UI implied desktop audio was still flowing.
+
+Residual hardware smoke this review cannot substitute for (all still open on Omarchy): the four exit-criteria rows above, plus specifically — unplug/replug headphones mid-capture and confirm the partial desktop audio survives into the mix, and confirm the single watch client does not drift after a PipeWire restart.
 
 ### Phase 4 — Electron behavior, queue, and core transcription
 
@@ -845,4 +854,4 @@ Later version only (needs NVIDIA Omarchy):
 
 ## First implementation action
 
-Gate A is resolved (green run linked above). Phases 0–2 are done on `release/linux`. Phase 3 product code and automated tests landed on an Ubuntu VPS (2026-08-25). **Next: adversarial review of Phase 3** — paste `docs/initiatives/_tmp-linux-phase-3-adversarial-review.md` into a fresh session. Do not start Phase 4. After review remediations, remaining Phase 3 work is Omarchy hardware smoke (15/60-minute captures, record-during-CPU-transcription, browser speech in the transcript, no duration-growing capture array). **Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.**
+Gate A is resolved (green run linked above). Phases 0–2 are done on `release/linux`. Phase 3 product code, automated tests, and the Phase 3 adversarial review are done on an Ubuntu VPS (2026-08-25). Do not start Phase 4. Remaining Phase 3 work is Omarchy hardware smoke (15/60-minute captures, record-during-CPU-transcription, browser speech in the transcript, no duration-growing capture array). **Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.**
