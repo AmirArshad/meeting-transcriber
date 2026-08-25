@@ -18,9 +18,6 @@ const { createRecorderService } = require('../../src/main/recorder-service');
 const { getRecorderModule } = require('../../src/main-process-helpers');
 
 function resolveTestRecorderModule(platform = process.platform) {
-  if (platform === 'linux') {
-    return 'audio.windows_recorder';
-  }
   return getRecorderModule(platform);
 }
 
@@ -1167,19 +1164,23 @@ test('start-recording passes opaque Pulse IDs on argv unchanged', async () => {
   await stopPromise;
 });
 
-test('start-recording with default getRecorderModule fails closed on linux without spawning', async () => {
-  const stopped = [];
+test('start-recording with default getRecorderModule spawns linux_recorder on linux', async () => {
+  const { EventEmitter } = require('node:events');
+  const spawned = [];
+  const proc = new EventEmitter();
+  proc.stdout = new EventEmitter();
+  proc.stderr = new EventEmitter();
+  proc.stdin = { write() {} };
+  proc.killed = false;
+  proc.pid = 9002;
+  proc.kill = () => { proc.killed = true; };
+
   const { deps } = createMinimalDeps({
     isQuitCommitted: () => false,
     resolveRecorderModule: undefined,
-    powerSaveBlocker: {
-      start: () => 11,
-      stop(id) {
-        stopped.push(id);
-      },
-    },
-    spawnTrackedPython() {
-      throw new Error('must not spawn a recorder on linux');
+    spawnTrackedPython(args) {
+      spawned.push(args);
+      return proc;
     },
   });
 
@@ -1192,7 +1193,7 @@ test('start-recording with default getRecorderModule fails closed on linux witho
   });
 
   await withProcessPlatform('linux', async () => {
-    const result = await handlers['start-recording'](
+    const startPromise = handlers['start-recording'](
       { sender: {} },
       {
         micId: 'pulse-source:alsa_input.usb-mic',
@@ -1200,9 +1201,69 @@ test('start-recording with default getRecorderModule fails closed on linux witho
         isFirstRecording: false,
       },
     );
-    assert.equal(result.success, false);
-    assert.equal(result.code, 'STARTUP_FAILED');
-    assert.match(result.message, /not supported on linux/);
-    assert.deepEqual(stopped, [11]);
+    await new Promise((resolve) => setImmediate(resolve));
+    proc.stdout.emit('data', Buffer.from(`${JSON.stringify({
+      type: 'event',
+      event: 'recording_started',
+      message: 'Recording started!',
+    })}\n`));
+    const result = await startPromise;
+    assert.equal(result.success, true);
+    assert.equal(spawned.length, 1);
+    assert.equal(spawned[0][spawned[0].indexOf('-m') + 1], 'audio.linux_recorder');
+    assert.equal(spawned[0][spawned[0].indexOf('--mic') + 1], 'pulse-source:alsa_input.usb-mic');
+    assert.equal(spawned[0][spawned[0].indexOf('--loopback') + 1], 'none');
   });
+
+  const stopPromise = handlers['stop-recording']({ sender: {} });
+  await new Promise((resolve) => setImmediate(resolve));
+  const audioPath = path.join(deps.getRecordingsDir(), 'linux-spawn.wav');
+  fs.writeFileSync(audioPath, 'x');
+  proc.stdout.emit('data', Buffer.from(`${JSON.stringify({
+    success: true,
+    outputPath: audioPath,
+    duration: 1,
+  })}\n`));
+  proc.emit('close', 0);
+  await stopPromise;
+});
+
+test('stop timeout force-kills a child that never closes', async () => {
+  const { EventEmitter } = require('node:events');
+  const proc = new EventEmitter();
+  proc.stdout = new EventEmitter();
+  proc.stderr = new EventEmitter();
+  proc.stdin = { write() {} };
+  proc.killed = false;
+  proc.pid = 4250;
+  proc.kill = () => { proc.killed = true; };
+
+  const { deps } = createMinimalDeps({
+    isQuitCommitted: () => false,
+    spawnTrackedPython: () => proc,
+    getRecordingStopTimeoutMs: () => 10,
+  });
+  const service = createRecorderService(deps);
+  const handlers = {};
+  service.registerIpc({ handle(channel, handler) { handlers[channel] = handler; } });
+
+  const startPromise = handlers['start-recording'](
+    { sender: {} },
+    { micId: 'pulse-source:alsa_input.usb-mic', loopbackId: 'none', isFirstRecording: false },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  proc.stdout.emit('data', Buffer.from(`${JSON.stringify({
+    type: 'event', event: 'recording_started', message: 'Recording started!',
+  })}\n`));
+  await startPromise;
+
+  await assert.rejects(
+    () => handlers['stop-recording']({ sender: {} }),
+    (error) => error && /Recording stop timeout/.test(error.message),
+  );
+  assert.equal(proc.killed, true);
+
+  proc.emit('close', 1);
+  await new Promise((resolve) => setImmediate(resolve));
+  service.clearRecordingRuntimeState('test teardown');
 });

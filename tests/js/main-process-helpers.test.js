@@ -1235,10 +1235,14 @@ test('getTranscriberModule returns packaged-safe module names', () => {
   );
 });
 
-test('getRecorderModule fails closed outside Windows and macOS', () => {
+test('getRecorderModule selects Linux and fails closed on unknown platforms', () => {
   assert.equal(getRecorderModule('darwin'), 'audio.macos_recorder');
   assert.equal(getRecorderModule('win32'), 'audio.windows_recorder');
-  assert.throws(() => getRecorderModule('linux'), /not supported on linux/);
+  assert.equal(getRecorderModule('linux'), 'audio.linux_recorder');
+  assert.throws(
+    () => getRecorderModule('freebsd'),
+    /Supported platforms: Windows, macOS, Linux/,
+  );
 });
 
 
@@ -2578,7 +2582,7 @@ test('buildRecordingPreflightReport still allows Windows start when devices vali
 });
 
 
-test('buildRecordingPreflightReport hard-fails on Linux even when devices validate', () => {
+test('buildRecordingPreflightReport allows Linux start when devices validate', () => {
   const result = buildRecordingPreflightReport({
     platform: 'linux',
     deviceCheck: { valid: true, errors: [], warnings: [] },
@@ -2586,10 +2590,21 @@ test('buildRecordingPreflightReport hard-fails on Linux even when devices valida
     audioOutputCheck: { supported: true, warning: null },
   });
 
-  assert.equal(result.canStart, false);
-  assert.match(result.errorMessage, /Linux recording is not available yet/);
-  assert.match(result.errorMessage, /Linux capture is not shipped/);
-  assert.equal(result.errorMessage.includes('Windows Settings'), false);
+  assert.equal(result.canStart, true);
+  assert.equal(result.errors.length, 0);
+  assert.equal(result.errorMessage, null);
+
+  const blocked = buildRecordingPreflightReport({
+    platform: 'linux',
+    deviceCheck: { valid: false, errors: ['Microphone was not found.'], warnings: [] },
+    diskCheck: { success: true, warning: null },
+    audioOutputCheck: { supported: true, warning: null },
+  });
+  assert.equal(blocked.canStart, false);
+  assert.match(blocked.errorMessage, /PulseAudio or PipeWire/);
+  assert.equal(blocked.errorMessage.includes('Linux recording is not available'), false);
+  assert.equal(blocked.errorMessage.includes('Linux capture is not shipped'), false);
+  assert.equal(blocked.errorMessage.includes('Windows Settings'), false);
 });
 
 

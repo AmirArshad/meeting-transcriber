@@ -65,16 +65,13 @@ function loadUpdater() {
   }
 }
 
-test('getRecorderModule selects explicit platform modules and fails closed on Linux', () => {
+test('getRecorderModule selects explicit platform modules including Linux', () => {
   assert.equal(getRecorderModule('darwin'), 'audio.macos_recorder');
   assert.equal(getRecorderModule('win32'), 'audio.windows_recorder');
-  assert.throws(
-    () => getRecorderModule('linux'),
-    /Audio recording is not supported on linux/,
-  );
+  assert.equal(getRecorderModule('linux'), 'audio.linux_recorder');
   assert.throws(
     () => getRecorderModule('freebsd'),
-    /Supported platforms: Windows, macOS/,
+    /Supported platforms: Windows, macOS, Linux/,
   );
 });
 

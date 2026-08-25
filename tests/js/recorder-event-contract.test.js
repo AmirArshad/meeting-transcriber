@@ -21,6 +21,7 @@ const {
 
 const WINDOWS_RECORDER = path.join(ROOT, 'backend', 'audio', 'windows_recorder.py');
 const MACOS_RECORDER = path.join(ROOT, 'backend', 'audio', 'macos_recorder.py');
+const LINUX_RECORDER = path.join(ROOT, 'backend', 'audio', 'linux_recorder.py');
 const RECORDER_SERVICE_JS = path.join(ROOT, 'src', 'main', 'recorder-service.js');
 const RENDERER_APP_JS = path.join(ROOT, 'src', 'renderer', 'app.js');
 
@@ -86,11 +87,9 @@ test('Windows recorder emitter uses audioPath in the final result payload', () =
   );
 });
 
-test('macOS recorder emitter uses outputPath in the final result payload', () => {
-  const source = readUtf8(MACOS_RECORDER);
+test('Linux recorder emitter uses outputPath in the final result payload', () => {
+  const source = readUtf8(LINUX_RECORDER);
   assertEmitterDefinesFinalKey(source, 'outputPath');
-
-  // Success and recoverable-failure payloads both use the macOS spelling.
   assert.match(
     source,
     /['"]outputPath['"]\s*:\s*recovered_path(?:\s+or\s+args\.output)?/,
@@ -172,8 +171,8 @@ test('structured stdout events drive control actions; stderr text is not a contr
   );
 });
 
-test('Windows and macOS recorders emit structured stdout helpers for levels/event/warning/error', () => {
-  for (const filePath of [WINDOWS_RECORDER, MACOS_RECORDER]) {
+test('Windows, macOS, and Linux recorders emit structured stdout helpers for levels/event/warning/error', () => {
+  for (const filePath of [WINDOWS_RECORDER, MACOS_RECORDER, LINUX_RECORDER]) {
     const source = readUtf8(filePath);
     assert.match(source, /def _send_event_message/);
     assert.match(source, /def _send_warning_message/);
@@ -203,7 +202,7 @@ test('Windows and macOS recorders emit structured stop-stage stdout events', () 
     lastPos = pos;
   }
 
-  for (const filePath of [WINDOWS_RECORDER, MACOS_RECORDER]) {
+  for (const filePath of [WINDOWS_RECORDER, MACOS_RECORDER, LINUX_RECORDER]) {
     const source = readUtf8(filePath);
     assert.match(source, /finalize_capture/);
     assert.match(source, /progress_callback/);
@@ -219,4 +218,17 @@ test('Windows and macOS recorders emit structured stop-stage stdout events', () 
     assert.equal(action.recordingStartedMessage, null);
     assert.equal(action.initProgress, null);
   }
+});
+
+test('Linux stdout chunks can fragment across levels, events, and outputPath results', () => {
+  const first = parseRecorderStdoutChunk(
+    '{"type":"levels","mic":0.2,"desktop":0.4}\n{"type":"event","event":"recording_started","message":"Recording started!"}\n{"success":true,"outputPath":"/home/me/recordin',
+  );
+  assert.deepEqual(first.messages.map((message) => message.kind), ['levels', 'event']);
+  assert.equal(first.remainder.startsWith('{"success":true,"outputPath":'), true);
+
+  const second = parseRecorderStdoutChunk('g.opus","duration":8.5}\n', first.remainder);
+  assert.equal(second.messages.length, 1);
+  assert.equal(getRecorderResultAudioPath(second.messages[0].payload), '/home/me/recording.opus');
+  assert.equal(second.remainder, '');
 });

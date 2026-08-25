@@ -669,3 +669,100 @@ def test_successful_recovery_promotes_before_cleanup(tmp_path, monkeypatch):
     assert not (tmp_path / "recording_promote_ok.recovering.opus").exists()
     assert not (tmp_path / "recording_promote_ok.recovering.wav").exists()
     assert not session.exists() or not (session / MANIFEST_FILENAME).exists()
+
+
+def test_linux_v1_interrupted_session_recovers(tmp_path, monkeypatch):
+    _patch_finalize_io(monkeypatch)
+    session = _build_interrupted_session(
+        tmp_path,
+        stem="recording_linux_force_kill",
+        started_at_iso="2026-08-25T00:00:00.000Z",
+        state="recording",
+        mic_frames=4800,
+        desktop_frames=4800,
+        profile="linux-v1",
+        dtype="<f4",
+    )
+    candidates = list_interrupted_captures(tmp_path)
+    assert len(candidates) == 1
+    assert candidates[0]["outputStem"] == "recording_linux_force_kill"
+    result = recover_capture(tmp_path, session, ffmpeg_path="ffmpeg")
+    assert Path(result["audioPath"]).is_file()
+    assert not session.exists()
+
+
+def test_linux_v1_discarded_is_not_listed_or_finalized(tmp_path, monkeypatch):
+    session = _build_interrupted_session(
+        tmp_path,
+        stem="recording_linux_discarded",
+        started_at_iso="2026-08-25T00:00:00.000Z",
+        state="discarded",
+        profile="linux-v1",
+        dtype="<f4",
+    )
+    called = {"finalize": False}
+
+    def boom(*_args, **_kwargs):
+        called["finalize"] = True
+        raise AssertionError("finalize_capture must not run for discarded linux-v1")
+
+    monkeypatch.setattr("backend.audio.capture_recovery.finalize_capture", boom)
+    candidates = list_interrupted_captures(tmp_path)
+    assert candidates == []
+    assert called["finalize"] is False
+    assert not session.exists()
+
+
+def test_linux_v1_discarded_recover_is_cleanup_only(tmp_path, monkeypatch):
+    session = _build_interrupted_session(
+        tmp_path,
+        stem="recording_linux_discarded_recover",
+        started_at_iso="2026-08-25T00:00:00.000Z",
+        state="discarded",
+        profile="linux-v1",
+        dtype="<f4",
+    )
+    called = {"finalize": False}
+
+    def boom(*_args, **_kwargs):
+        called["finalize"] = True
+        raise AssertionError("finalize_capture must not run for discarded linux-v1")
+
+    monkeypatch.setattr("backend.audio.capture_recovery.finalize_capture", boom)
+    result = recover_capture(tmp_path, session, ffmpeg_path="ffmpeg")
+    assert result["cancelled"] is True
+    assert called["finalize"] is False
+    assert not session.exists()
+
+
+def test_preexisting_linux_max_pad_final_is_accepted(tmp_path, monkeypatch):
+    session = _build_interrupted_session(
+        tmp_path,
+        stem="recording_linux_maxpad",
+        started_at_iso="2026-08-25T00:00:00.000Z",
+        state="finalizing",
+        mic_frames=48000 * 60,
+        desktop_frames=48000 * 120,
+        profile="linux-v1",
+        dtype="<f4",
+    )
+    final = tmp_path / "recording_linux_maxpad.opus"
+    final.write_bytes(b"OggS-linux-maxpad-final")
+
+    monkeypatch.setattr(
+        "backend.audio.capture_recovery.ffmpeg_can_decode",
+        lambda *a, **k: True,
+    )
+    monkeypatch.setattr(
+        "backend.audio.capture_recovery.probe_audio_duration_seconds",
+        lambda *a, **k: 120.0,
+    )
+    monkeypatch.setattr(
+        "backend.audio.capture_recovery.finalize_capture",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not re-finalize linux-v1 max-pad")),
+    )
+
+    result = recover_capture(tmp_path, session, ffmpeg_path="ffmpeg")
+    assert Path(result["audioPath"]) == final
+    assert result["duration"] == 120.0
+    assert not session.exists()

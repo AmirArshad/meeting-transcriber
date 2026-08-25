@@ -59,9 +59,7 @@ function createRecoveryService(overrides = {}) {
     addMeetingToHistory: async () => ({}),
     formatDurationForTranscript: () => '0:00',
     getRecordingsDir: () => recordingsDir,
-    resolveRecorderModule: (platform) => (
-      platform === 'linux' ? 'audio.windows_recorder' : getRecorderModule(platform)
-    ),
+    resolveRecorderModule: getRecorderModule,
     recordingsMaintenanceGate: gate,
     getBackendModuleArgs: (moduleName, extra = []) => ['-m', moduleName, ...extra],
     collectPythonProcessOutput(python) {

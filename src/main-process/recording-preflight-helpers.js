@@ -94,10 +94,6 @@ function buildRecordingPreflightReport({
   const warnings = Array.isArray(deviceCheck.warnings) ? [...deviceCheck.warnings] : [];
   let permissionStatus = null;
 
-  if (platform === 'linux') {
-    errors.push('Linux recording is not available yet.');
-  }
-
   if (deviceCheck.valid === false && errors.length === 0) {
     errors.push('Selected audio devices failed validation.');
   }
@@ -161,8 +157,9 @@ function buildRecordingPreflightReport({
     ]
     : platform === 'linux'
       ? [
-        'Linux capture is not shipped in this build.',
-        'Refresh devices once PulseAudio or PipeWire is running to confirm enumeration.',
+        'Refresh your audio devices and try again.',
+        'If the microphone is missing, start PulseAudio or PipeWire and refresh devices.',
+        'Desktop audio uses the selected output monitor. No screen-sharing permission is required.',
       ]
       : [
         'Refresh your audio devices and try again.',

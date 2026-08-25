@@ -130,8 +130,11 @@ function getRecorderModule(platform = process.platform) {
   if (platform === 'win32') {
     return 'audio.windows_recorder';
   }
+  if (platform === 'linux') {
+    return 'audio.linux_recorder';
+  }
   throw new Error(
-    `Audio recording is not supported on ${platform}. Supported platforms: Windows, macOS`,
+    `Audio recording is not supported on ${platform}. Supported platforms: Windows, macOS, Linux`,
   );
 }
 

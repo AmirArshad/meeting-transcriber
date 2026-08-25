@@ -42,6 +42,16 @@ class RecorderTempPathTests(unittest.TestCase):
             build_stable_wav_path_for_output(r"C:\Users\me\recordings\recording_2026.opus").endswith(".wav")
         )
 
+    def test_build_temp_path_posix_linux_stem(self):
+        path = build_recorder_temp_pcm_path("/home/user/.config/AvaNevis/recordings/recording_linux.opus")
+        self.assertTrue(path.endswith(RECORDER_TEMP_PCM_SUFFIX))
+        self.assertIn("recording_linux", path)
+        self.assertTrue(
+            build_stable_wav_path_for_output(
+                "/home/user/.config/AvaNevis/recordings/recording_linux.opus"
+            ).endswith(".wav")
+        )
+
     def test_is_recorder_temp_recognizes_current_and_legacy(self):
         self.assertTrue(is_recorder_temp_pcm_path("recording_x.pcm.tmp"))
         self.assertTrue(is_recorder_temp_pcm_path("recording_x.temp.wav"))
@@ -157,6 +167,22 @@ class ScanImportTempRecoveryTests(unittest.TestCase):
             other.write_bytes(b"ok")
             selected = select_scannable_audio_files(recordings_dir)
             self.assertEqual([path.name for path in selected], [other.name])
+
+    def test_select_scannable_skips_linux_v1_capture_session(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            recordings_dir = Path(temp_dir)
+            meeting = recordings_dir / "meeting_20260825_120000.opus"
+            meeting.write_bytes(b"opus")
+            capture_dir = recordings_dir / "recording_linux.capture"
+            capture_dir.mkdir()
+            (capture_dir / "manifest.json").write_text(
+                '{"processingProfile":"linux-v1","state":"recording"}',
+                encoding="utf-8",
+            )
+            (capture_dir / "mic_0000.pcm.part").write_bytes(b"\x00" * 16)
+            (capture_dir / "inside.wav").write_bytes(b"RIFF")
+            selected = select_scannable_audio_files(recordings_dir)
+            self.assertEqual([path.name for path in selected], [meeting.name])
 
 
 if __name__ == "__main__":

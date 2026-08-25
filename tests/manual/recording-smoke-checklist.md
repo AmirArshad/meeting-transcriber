@@ -96,15 +96,16 @@ Ship static `build/iconRecording.png` (18×18) and `build/iconRecording@2x.png` 
 - [ ] **Stop stages (Release 2 Task 6):** same as macOS — visible stage changes during stop; capture (`REC`) vs finalization (`Finishing recording...`) distinguishable.
 - [ ] **Disk reserve (Release 2 Task 6):** with free space below 10 GB (or a test double), confirm a single `recording-warning` / native safety toast when crossing warning, and escalation to critical below 2 GB; recording must **not** auto-stop.
 
-## Linux (not ready — Phase 0 characterization)
+## Linux (Phase 3 implemented — Omarchy hardware smoke still open)
 
-Linux capture is **not shipped**. Do not treat a green `npm test` on Linux as recording support. Rows below land with later phases in `docs/initiatives/LINUX_SUPPORT.md`.
+Product capture (`backend/audio/linux_recorder.py`) is wired. Green automated tests on an Ubuntu VPS are **not** enough to close Phase 3. Do not treat dummy-Pulse or `scripts/linux-audio-spike.py` as Omarchy exit evidence. Add-ons stay unsupported.
 
-- [ ] **Blocked until Phase 3:** Record microphone + Pulse/PipeWire monitor (desktop) audio together on Omarchy 4 (Hyprland/Wayland). No ScreenCast portal / screen-sharing UI.
-- [ ] **Blocked until Phase 3:** Browser/YouTube speech reaches the transcript after mono downmix, not only the meter or saved stereo channel.
-- [ ] **Blocked until Phase 3:** Desktop startup failure and late desktop loss warn and continue mic-only; mic failure is a structured stop failure.
-- [ ] **Blocked until Phase 3:** Discard/cancel tombstones the capture as `discarded` and never creates a History meeting.
-- [ ] **Blocked until Phase 3:** Stop stages (`post_processing_started` → encoding → complete) come from stdout JSON.
+- [ ] **Omarchy hardware:** Record microphone + Pulse/PipeWire monitor (desktop) audio together on Omarchy 4 (Hyprland/Wayland). No ScreenCast portal / screen-sharing UI.
+- [ ] **Omarchy hardware:** Browser/YouTube speech reaches the transcript after mono downmix, not only the meter or saved stereo channel.
+- [ ] **Omarchy hardware:** Desktop startup failure and late desktop loss warn and continue mic-only; mic failure is a structured stop failure.
+- [ ] **Omarchy hardware:** Discard/cancel tombstones the capture as `discarded` and never creates a History meeting.
+- [ ] **Omarchy hardware:** Stop stages (`post_processing_started` → encoding → complete) come from stdout JSON.
+- [ ] **Omarchy hardware:** Live 15/60-minute captures pass; recording while CPU transcription runs has no obvious glitches; capture arrays do not grow with duration.
 - [ ] **Blocked until Phase 4:** Tray uses native SNI + context menu only; missing SNI host does not crash.
 - [ ] **Blocked until Phase 5:** Packaged AppImage/pacman uses bundled Python and ffmpeg (`AVANEVIS_PACKAGED=1`); no FUSE2 requirement.
 

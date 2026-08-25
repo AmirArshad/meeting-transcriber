@@ -17,9 +17,14 @@ def _get_audio_recorder_class():
 
         return MacOSAudioRecorder
 
+    if system == 'Linux':
+        from .linux_recorder import LinuxAudioRecorder
+
+        return LinuxAudioRecorder
+
     raise NotImplementedError(
         f"Audio recording not supported on {system}. "
-        "Supported platforms: Windows, macOS"
+        "Supported platforms: Windows, macOS, Linux"
     )
 
 

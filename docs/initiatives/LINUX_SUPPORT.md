@@ -1,6 +1,6 @@
 # Linux Support Plan — Omarchy First
 
-> **Status:** Phases 0–2 complete on `release/linux` (Phase 2 packaged enumerate verified 2026-08-24 on Omarchy). Gate A is resolved; Linux product capture is not advertised as ready. **Phase 0–2 adversarial review landed 2026-08-24** (static review on Ubuntu plus the Omarchy evidence already in this document); remediations are on `release/linux`. **Next: Phase 3.** Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.
+> **Status:** Phases 0–2 complete on `release/linux`. **Phase 3 product code and automated tests landed 2026-08-25 on an Ubuntu VPS** (`linux_recorder.py`, factory, preflight, Electron wiring). **Direct next step: adversarial review of that Phase 3 landing** (`docs/initiatives/_tmp-linux-phase-3-adversarial-review.md`). Do not start Phase 4. Omarchy hardware smoke still blocks calling Phase 3 complete (15/60-minute captures, record-during-CPU-transcription, browser speech in the transcript, no duration-growing capture array). Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.
 > **Replanned:** 2026-08-23 against AvaNevis v2.7.0 / current `master`.
 > **Review pass:** 2026-08-23 — verified plan claims against the codebase and CI, corrected two host-fact conclusions (secret storage, tray), and pinned every required upstream Linux artifact. All "Verified" sections below were checked on that date.
 > **Scope cut (2026-08-24):** the first Linux version is **Core Beta only** (Phases 0–5). Speaker identification and local summaries are **out of scope** until a later Linux version. There is no Omarchy host with an NVIDIA GPU to validate those CUDA-only add-ons; do not ship a CPU fallback. The UI must keep both features visible but greyed out as unsupported.
@@ -620,6 +620,19 @@ Exit criteria:
 - browser speech reaches the transcript, not only meters/saved channels
 - no whole-session capture array grows with duration
 
+**Status (2026-08-25, Ubuntu VPS — not Omarchy):** `backend/audio/linux_recorder.py` is wired through the factory, `getRecorderModule('linux')`, and recording preflight. Automated cases for mic+desktop, mic-only, desktop startup/late loss, mic failure, Stop success, recoverable finalization failure, cancel tombstone, force-kill recovery, stop/cancel timeout, and stdout chunk parsing are in the suite. Dummy-Pulse smoke on this VPS is API evidence only. **Phase 3 is not complete.** Remaining Omarchy hardware exit criteria (do not skip):
+
+- live 15/60-minute Omarchy captures
+- recording while CPU transcription runs has no obvious glitches
+- browser speech reaches the transcript, not only meters/saved channels
+- no whole-session capture array grows with duration on hardware
+
+Do not start Phase 4 until the Phase 3 adversarial review (and any remediations) plus those Omarchy rows pass. Do not treat `scripts/linux-audio-spike.py` as the product recorder.
+
+#### Phase 3 adversarial review — NEXT
+
+Paste `docs/initiatives/_tmp-linux-phase-3-adversarial-review.md` into a fresh review session (one theme, do not combine with other prompts). Scope is the Phase 3 landing on `release/linux` since `ce0a550`. This VPS is enough for static review + automated tests; it is not Omarchy. After remediations land, delete the temp prompt (same as Phases 0–2). Then run Omarchy hardware smoke. Then Phase 4.
+
 ### Phase 4 — Electron behavior, queue, and core transcription
 
 Files:
@@ -676,6 +689,8 @@ Exit criteria:
 - packaged UI still greys out speaker identification and summaries; no setup button can complete
 
 **Core Beta ends here.** That is the first Linux version.
+
+After Phase 5 exit criteria pass, run a **repo documentation pass** so AGENTS.md, README, BACKEND.md, TESTING/BUILD docs, LINUX_SUPPORT status, and manual checklists describe the shipped Linux Core Beta (Pulse/PipeWire recording, CPU faster-whisper, add-ons still greyed `unsupported`). Do not advertise CUDA or add-ons as ready.
 
 ### Phases 6–9 — Later Linux version (deferred)
 
@@ -830,4 +845,4 @@ Later version only (needs NVIDIA Omarchy):
 
 ## First implementation action
 
-Gate A is resolved (green run linked above). Phases 0–2 are done on `release/linux`, including 2026-08-24 Omarchy live-capture, packaged-Python device enumeration, and the Phase 0–2 adversarial-review remediations. **Next: Phase 3 (`linux_recorder.py`).** **Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.**
+Gate A is resolved (green run linked above). Phases 0–2 are done on `release/linux`. Phase 3 product code and automated tests landed on an Ubuntu VPS (2026-08-25). **Next: adversarial review of Phase 3** — paste `docs/initiatives/_tmp-linux-phase-3-adversarial-review.md` into a fresh session. Do not start Phase 4. After review remediations, remaining Phase 3 work is Omarchy hardware smoke (15/60-minute captures, record-during-CPU-transcription, browser speech in the transcript, no duration-growing capture array). **Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.**

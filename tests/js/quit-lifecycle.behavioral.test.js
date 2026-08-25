@@ -96,9 +96,7 @@ function createRecorderDeps(overrides = {}) {
     formatDurationForTranscript: () => '0:00',
     getRecordingsDir: () => recordingsDir,
     getRecordingStopTimeoutMs: () => 30,
-    resolveRecorderModule: (platform) => (
-      platform === 'linux' ? 'audio.windows_recorder' : getRecorderModule(platform)
-    ),
+    resolveRecorderModule: getRecorderModule,
     ...overrides,
   };
 

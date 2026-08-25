@@ -6,10 +6,18 @@ import backend.audio as audio
 import backend.device_manager as device_manager
 
 
-def test_audio_factory_fails_closed_on_linux(monkeypatch):
-    monkeypatch.setattr(std_platform, 'system', lambda: 'Linux')
-    with pytest.raises(NotImplementedError, match='Linux'):
-        audio.get_audio_recorder()
+from backend.audio.linux_recorder import LinuxAudioRecorder
+
+
+def test_audio_factory_selects_linux_recorder(monkeypatch):
+    monkeypatch.setattr(std_platform, "system", lambda: "Linux")
+    assert audio._get_audio_recorder_class() is LinuxAudioRecorder
+
+
+def test_audio_factory_still_fails_closed_on_unknown_platforms(monkeypatch):
+    monkeypatch.setattr(std_platform, "system", lambda: "FreeBSD")
+    with pytest.raises(NotImplementedError, match="FreeBSD"):
+        audio._get_audio_recorder_class()
 
 
 def test_device_manager_loads_pulsectl_on_linux(monkeypatch):

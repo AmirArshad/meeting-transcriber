@@ -842,6 +842,19 @@ def test_windows_aligned_frame_count_caps_at_mic():
     )
     assert macos_total == 5000
 
+    _, _, linux_total = _aligned_frame_count(
+        1000,
+        5000,
+        include_desktop=True,
+        alignment={
+            "micLeadingPadFrames": 0,
+            "desktopTrimFrames": 0,
+            "desktopLeadingPadFrames": 0,
+        },
+        profile="linux-v1",
+    )
+    assert linux_total == macos_total
+
 
 def test_final_duration_matches_expectation():
     from audio.streaming_post_processor import final_duration_matches_expectation
@@ -877,3 +890,38 @@ def test_expected_output_duration_windows_caps_at_mic():
 
     data["processingProfile"] = "macos-v1"
     assert expected_output_duration_seconds(data) == 120.0
+
+    data["processingProfile"] = "linux-v1"
+    assert expected_output_duration_seconds(data) == 120.0
+
+
+def test_linux_v1_profile_helpers():
+    assert spp._profile_requires_native_48k("linux-v1") is False
+    assert spp._profile_uses_one_sided("linux-v1") is True
+    assert spp._profile_enhances_mic_before_mix("linux-v1") is True
+    assert spp._profile_enhances_after_mix("linux-v1") is False
+    assert spp._profile_caps_at_mic("linux-v1") is False
+    assert spp._profile_requires_native_48k("macos-v1") is True
+    assert spp._profile_caps_at_mic("windows-v1") is True
+
+
+def test_linux_v1_float32_session_finalizes(tmp_path, monkeypatch):
+    mic = np.full((4800, 1), 0.2, dtype=np.float32)
+    desk = np.full((9600, 2), 0.1, dtype=np.float32)
+    coordinator, output = _build_session(
+        tmp_path,
+        profile="linux-v1",
+        mic=mic,
+        desktop=desk,
+        dtype="<f4",
+    )
+    _patch_finalize_io(monkeypatch)
+    result = finalize_capture(
+        coordinator.session_dir / MANIFEST_FILENAME,
+        output,
+        chunk_frames=480,
+        coordinator=coordinator,
+    )
+    got = _read_wav_int16(Path(result.final_path))
+    # linux-v1 max-pads to the longer desktop track (interleaved stereo int16).
+    assert len(got) // 2 >= 9600
