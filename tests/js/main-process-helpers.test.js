@@ -1289,6 +1289,32 @@ test('buildTranscriptionCliArgs includes --device for faster-whisper platforms',
   );
 });
 
+test('buildTranscriptionCliArgs forces CPU on Linux even when auto is requested', () => {
+  assert.deepEqual(
+    buildTranscriptionCliArgs({
+      platform: 'linux',
+      arch: 'x64',
+      audioFile: 'demo.opus',
+      language: 'en',
+      modelSize: 'small',
+      device: 'auto',
+    }),
+    [
+      '-m',
+      'transcription.faster_whisper_transcriber',
+      '--file',
+      'demo.opus',
+      '--language',
+      'en',
+      '--model',
+      'small',
+      '--device',
+      'cpu',
+      '--json',
+    ],
+  );
+});
+
 test('buildTranscriptionCliArgs omits --device for mlx macOS arm64', () => {
   assert.deepEqual(
     buildTranscriptionCliArgs({

@@ -44,7 +44,7 @@ function buildTranscriptionCliArgs({
     '--model', modelSize,
   ];
   if (!(platform === 'darwin' && arch === 'arm64')) {
-    extraArgs.push('--device', device);
+    extraArgs.push('--device', platform === 'linux' ? 'cpu' : device);
   }
   extraArgs.push('--json');
   return buildTranscriberArgs({ platform, arch, extraArgs });

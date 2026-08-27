@@ -96,21 +96,22 @@ Ship static `build/iconRecording.png` (18×18) and `build/iconRecording@2x.png` 
 - [ ] **Stop stages (Release 2 Task 6):** same as macOS — visible stage changes during stop; capture (`REC`) vs finalization (`Finishing recording...`) distinguishable.
 - [ ] **Disk reserve (Release 2 Task 6):** with free space below 10 GB (or a test double), confirm a single `recording-warning` / native safety toast when crossing warning, and escalation to critical below 2 GB; recording must **not** auto-stop.
 
-## Linux (Phase 3 implemented — Omarchy hardware smoke still open)
+## Linux (Phases 3–4 closed — 60-minute soak cancelled; Phase 5 next)
 
-Product capture (`backend/audio/linux_recorder.py`) is wired. Green automated tests on an Ubuntu VPS are **not** enough to close Phase 3. Do not treat dummy-Pulse or `scripts/linux-audio-spike.py` as Omarchy exit evidence. Add-ons stay unsupported.
+Product capture (`backend/audio/linux_recorder.py`) is wired. Do not treat dummy-Pulse or `scripts/linux-audio-spike.py` as Omarchy exit evidence. Add-ons stay greyed `unsupported` (Phase 4).
 
-Evidence 2026-08-27 on `amiromarchy` (Omarchy 4.0.1) used the product recorder CLI unless noted. Artifacts: `/tmp/avanevis-linux-smoke/`.
+Evidence 2026-08-27 on `amiromarchy` (Omarchy 4.0.1) used the product recorder CLI unless noted. Artifacts: `/tmp/avanevis-linux-smoke/` (morning CLI) and `/home/amir/avanevis-linux-smoke/` (afternoon headphone + Electron).
 
 - [x] **Omarchy hardware:** Record microphone + Pulse/PipeWire monitor (desktop) audio together on Omarchy 4 (Hyprland/Wayland). No ScreenCast portal / screen-sharing UI. (9.82 s mix; dbus-monitor: no ScreenCast markers.)
 - [x] **Omarchy hardware:** Browser/YouTube speech reaches the transcript after mono downmix, not only the meter or saved stereo channel. (Chromium autoplay of OSR Harvard sentences; `tiny.en` CPU transcript contained *birch canoe* / *dark blue background*.)
 - [x] **Omarchy hardware:** Desktop *startup* failure warns and continues mic-only. Mic-thread failure remains covered by the automated suite, not re-run as a destructive live kill on this pass.
-- [x] **Omarchy hardware:** Late desktop loss — vanished Pulse monitor mid-capture (null-sink unload). `DESKTOP_MONITOR_VANISHED` says earlier desktop audio is kept; 240640 committed frames mixed; desktop level dropped to 0. **Still open:** unplug/replug headphones (this jack retargets the same analog sink name).
+- [x] **Omarchy hardware:** Late desktop loss — vanished Pulse monitor mid-capture (null-sink unload). `DESKTOP_MONITOR_VANISHED` says earlier desktop audio is kept; 240640 committed frames mixed; desktop level dropped to 0.
+- [x] **Omarchy hardware:** Unplug/replug headphones mid-capture (physical analog jack; same `alsa_output.pci-0000_00_1b.0.analog-stereo` sink, `Active Port` headphones ↔ speakers). No vanish warning. 440 Hz tone played **before** unplug is in the 45.36 s mix (Goertzel peak t≈1.5 s); 880 Hz during unplug and 1320 Hz after replug also present.
 - [x] **Omarchy hardware:** Restart PipeWire mid-capture. Pulse names returned immediately; watchdog did **not** false-vanish. SoundCard streams went `FAILED` — desktop warned and kept ~3.35 s, mic is a structured `RECORDING_THREAD_FAILED` (fatal, no opus). Recording does not continue across a full PipeWire restart; leftover `{stem}.capture` stayed `finalizing` with both tracks committed.
-- [x] **Omarchy hardware:** Discard/cancel tombstones the capture as `discarded` and never creates a History meeting. (CLI `{ cancelled: true }`; capture dir removed. History meeting resurrection is N/A for CLI — still confirm once in the Electron UI.)
+- [x] **Omarchy hardware:** Discard/cancel tombstones the capture as `discarded` and never creates a History meeting. CLI `{ cancelled: true }`; capture dir removed. **Electron UI:** History had 2 meetings; Discard of meeting 3 left `historyCount` 2 (same ids), no third opus/md, main log `Recording cancelled; capture discarded.`
 - [x] **Omarchy hardware:** Stop stages (`post_processing_started` → encoding → complete) come from stdout JSON.
-- [ ] **Omarchy hardware:** Live 15/60-minute captures pass; recording while CPU transcription runs has no obvious glitches; capture arrays do not grow with duration. **15-minute passed** 2026-08-27 (901.8 s; RSS 49.6→52.3 MB; spool 688 MB; 14 desktop beeps at ~60 s). **CLI capture during `tiny.en` CPU load passed** (62 s, desktop level steady, whisper pcpu 144%). **60-minute and Electron queue overlap still open.**
-- [ ] **Blocked until Phase 4:** Tray uses native SNI + context menu only; missing SNI host does not crash.
+- [x] **Omarchy hardware:** Live 15-minute capture passed; recording while CPU transcription runs has no obvious glitches; capture arrays do not grow with duration over 15 minutes (RSS 49.6→52.3 MB vs 688 MB spool; 14 desktop beeps at ~60 s). CLI capture during `tiny.en` CPU load passed (62 s). Electron queue overlap passed (`npm start`; Stop meeting 1 2:06 → Start meeting 2 while `small` CPU Whisper at 123% pcpu). **60-minute soak cancelled** by operator 2026-08-27 — not run, not passed.
+- [x] **Phase 4:** Tray uses native SNI + context menu only; missing SNI host does not crash. Evidence 2026-08-27 on `amiromarchy`: SNI host was quickshell (`org.kde.StatusNotifierWatcher`; Waybar not running). After `whenReady()`, `RegisteredStatusNotifierItems` included `:1.198/StatusNotifierItem`; main log had no `Failed to create system tray`. Linux has no tray `click` handler (`setContextMenu` only). Recording close dialog is Keep Recording in Tray / `hide`. Missing-host live (kill the watcher) was not run; constructor throw is unit-tested.
 - [ ] **Blocked until Phase 5:** Packaged AppImage/pacman uses bundled Python and ffmpeg (`AVANEVIS_PACKAGED=1`); no FUSE2 requirement.
 
 ## Interrupted capture recovery (Release 2 Task 10)

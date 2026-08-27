@@ -277,6 +277,19 @@
     };
   }
 
+  function getSummaryActionControlState(feature) {
+    if (feature && feature.status === 'unsupported') {
+      return {
+        enabled: false,
+        title: getSummarySetupMessage(feature),
+      };
+    }
+    return {
+      enabled: true,
+      title: '',
+    };
+  }
+
   function getSummaryGenerationButtonView({ active = false, cancelling = false } = {}) {
     if (!active) {
       return {
@@ -400,6 +413,7 @@
     cleanMarkdownText,
     hasDiarizationLocalState,
     getDiarizationSetupMessage,
+    getSummaryActionControlState,
     getSummaryGenerationButtonView,
     getSummarySetupMessage,
     isUnownedDocumentFocus,

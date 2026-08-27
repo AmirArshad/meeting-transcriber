@@ -1,6 +1,6 @@
 # Linux Support Plan — Omarchy First
 
-> **Status:** Phases 0–2 complete on `release/linux`. **Phase 3 product code, automated tests, and the Phase 3 adversarial review are done on an Ubuntu VPS (2026-08-25).** **Omarchy hardware smoke 2026-08-27:** 15-minute soak passed; cancel / start-fail / late vanish / Chromium→CPU transcript passed; PipeWire restart fails SoundCard streams (no false vanish). **Still open:** 60-minute soak, Electron record-during-CPU-transcription, headphone unplug. Do not start Phase 4. Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.
+> **Status:** Phases 0–4 product code complete on `release/linux` (Phase 3 60-minute soak **cancelled** by operator 2026-08-27 — not run, not passed; 15-minute soak is the duration-growth evidence). **NEXT: Phase 4 adversarial review** (parked prompt `docs/initiatives/_tmp-linux-phase-4-adversarial-review.md`). Do not start Phase 5 until that review lands. Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.
 > **Replanned:** 2026-08-23 against AvaNevis v2.7.0 / current `master`.
 > **Review pass:** 2026-08-23 — verified plan claims against the codebase and CI, corrected two host-fact conclusions (secret storage, tray), and pinned every required upstream Linux artifact. All "Verified" sections below were checked on that date.
 > **Scope cut (2026-08-24):** the first Linux version is **Core Beta only** (Phases 0–5). Speaker identification and local summaries are **out of scope** until a later Linux version. There is no Omarchy host with an NVIDIA GPU to validate those CUDA-only add-ons; do not ship a CPU fallback. The UI must keep both features visible but greyed out as unsupported.
@@ -320,6 +320,8 @@ Rules:
 
 **Ozone / XWayland (decision spike required in Phase 4).** By default Chromium runs under XWayland, which renders blurry under Hyprland fractional scaling — a loud complaint in exactly the Omarchy demographic. Native Wayland via `--ozone-platform-hint=auto` fixes rendering but changes window-decoration and input behavior. Phase 4 must run the app both ways on the Omarchy host, record findings, and pick a shipped default. Recommendation going in: ship `--ozone-platform-hint=auto` (appended in `src/main.js` for Linux only) so Wayland sessions get native rendering and X11 Ubuntu sessions still work; revert to XWayland default only if the spike finds functional regressions. Audio capture is unaffected either way (no ScreenCast portal in the design).
 
+**Shipped default (2026-08-27 Omarchy spike):** `--ozone-platform-hint=auto`. On Hyprland it binds native Wayland (`xwayland=False`); `--ozone-platform=x11` still binds XWayland when forced. Do **not** force `--ozone-platform=wayland` as the Linux default — that would hurt X11 Ubuntu. Findings are in the Phase 4 evidence section.
+
 ### 11. The updater stays notify-only; tighten Linux asset matching (new, 2026-08-23)
 
 `src/updater.js` only notifies and opens a download URL — it performs no self-update. This is correct for Linux (no AppImage self-update machinery, and pacman-installed apps must not self-update). Two required changes (Phase 5):
@@ -487,7 +489,7 @@ Exit criteria:
 - `npm test` passes on the Omarchy development host
 - unknown/non-macOS platforms no longer silently enter Windows code
 - no Linux feature is advertised as ready
-- diarization and summary catalog status on Linux is `unsupported` (visual grey-out and Linux-specific copy land in Phase 4)
+- diarization and summary catalog status on Linux is `unsupported` (visual grey-out and Linux-specific copy landed in Phase 4)
 
 ### Phase 1 — Omarchy audio spike
 
@@ -615,16 +617,16 @@ Required test cases:
 
 Exit criteria:
 
-- live 15/60-minute Omarchy captures pass
+- live 15-minute Omarchy capture passes (60-minute soak **cancelled** by operator 2026-08-27 — not evidence it would pass)
 - recording while CPU transcription runs has no obvious glitches
 - browser speech reaches the transcript, not only meters/saved channels
 - no whole-session capture array grows with duration
 
 **Status (2026-08-25, Ubuntu VPS — not Omarchy):** `backend/audio/linux_recorder.py` is wired through the factory, `getRecorderModule('linux')`, and recording preflight. Automated cases for mic+desktop, mic-only, desktop startup/late loss, mic failure, Stop success, recoverable finalization failure, cancel tombstone, force-kill recovery, stop/cancel timeout, and stdout chunk parsing are in the suite. Dummy-Pulse smoke on this VPS is API evidence only.
 
-#### Phase 3 evidence — 2026-08-27 Omarchy 4.0.1 / Hyprland / PipeWire 1.6.8 (in progress)
+#### Phase 3 evidence — 2026-08-27 Omarchy 4.0.1 / Hyprland / PipeWire 1.6.8 (closed)
 
-Host `amiromarchy`, branch `release/linux` @ `b6adf0a`. Product recorder is `backend/audio/linux_recorder.py` via `.venv` 3.11.16 (SoundCard 0.4.6, pulsectl 24.12.0). Same Pulse ids as Phase 2: `pulse-source:alsa_input.pci-0000_00_1b.0.analog-stereo` and `pulse-monitor:alsa_output.pci-0000_00_1b.0.analog-stereo.monitor`. Artifacts under `/tmp/avanevis-linux-smoke/` (not in git).
+Host `amiromarchy`, branch `release/linux` (morning CLI rows @ `b6adf0a`; afternoon Electron/headphone @ `2eb90ca`). Product recorder is `backend/audio/linux_recorder.py` via `.venv` 3.11.16 (SoundCard 0.4.6, pulsectl 24.12.0). Same Pulse ids as Phase 2: `pulse-source:alsa_input.pci-0000_00_1b.0.analog-stereo` and `pulse-monitor:alsa_output.pci-0000_00_1b.0.analog-stereo.monitor`. Artifacts under `/tmp/avanevis-linux-smoke/` (morning CLI) and `/home/amir/avanevis-linux-smoke/` (afternoon headphone + Electron; not in git). `/tmp` is 3.9 GB tmpfs — do not put a 60-minute spool there.
 
 Proven on this host with the **product** recorder (not the spike):
 
@@ -634,16 +636,14 @@ Proven on this host with the **product** recorder (not the spike):
 - **Late desktop loss:** recorded `pulse-monitor:avanevis_smoke_desk.monitor`, unloaded the null sink at ~5 s. `DESKTOP_MONITOR_VANISHED` help text says earlier desktop audio is kept; stderr `keeping 240640 committed desktop frames` (5.01 s @ 48 kHz). Desktop level 0.088 → 0.0 after vanish. Final 9.66 s mix mean −11.5 dB (tone kept, not discarded). Analog default sink restored.
 - **Browser speech in the transcript:** Chromium (`--ozone-platform=wayland`) autoplayed Open Speech Repository `OSR_us_000_0010_8k.wav` into the analog sink. Product mix 12.10 s, stereo and ffmpeg `-ac 1 -ar 16000` downmix both mean −30.4 dB. `faster-whisper` `tiny.en` on **CPU** (`device: cpu`, `int8`) transcribed *The birch canoe slid on the smooth planks. Glue the sheet to the dark blue background.*
 - **15-minute soak (pass):** 08:55–09:11 +01, 901.8 s stereo Opus (12 MB, mean −42.0 dB). Stdout stop stages complete; no leftover `.capture`. Steady VmRSS **49.6 MB → 52.3 MB** while `{stem}.capture/` grew to **688 MB** on disk (linear ~45 MB/min). Fourteen 880 Hz desktop beeps landed at ~60 s spacing (first onset 59.4 s). Not a duration-growing capture array.
-- **Capture during CPU transcription (CLI):** 62.00 s mix while `tiny.en` looped on CPU (whisper pcpu peaked 144%). Desktop level stayed 0.088 after preroll (1 zeroish sample at start). Recorder RSS 14→56 MB. No warnings. Electron queue overlap (Stop meeting 1 → Start meeting 2 while Whisper runs) still needed in the app.
+- **Capture during CPU transcription (CLI):** 62.00 s mix while `tiny.en` looped on CPU (whisper pcpu peaked 144%). Desktop level stayed 0.088 after preroll (1 zeroish sample at start). Recorder RSS 14→56 MB. No warnings.
 - **PipeWire restart mid-capture:** `systemctl --user restart pipewire pipewire-pulse wireplumber` at t≈4 s. Pulse was back within 0.5 s and the analog source/monitor names were unchanged. SoundCard streams went `FAILED`. Watchdog did **not** emit `DESKTOP_MONITOR_VANISHED` (not a false vanish). Desktop path warned `DESKTOP_RECORDING_FAILED` and kept 160768 frames (~3.35 s). Mic path is fatal per contract → `RECORDING_THREAD_FAILED`, `success: false`, duration 0, no opus; leftover capture left `state: finalizing` with both tracks committed. Matches the parked cross-platform “mic-thread failure skips finalization” finding — do not treat as a Linux-only vanish bug. Reconnect-after-FAILED is not a Core Beta requirement.
+- **Headphone unplug/replug (pass):** physical analog jack on the CS4208 card. Pulse retargeted the **same** `alsa_output.pci-0000_00_1b.0.analog-stereo` sink (`Active Port` speakers → headphones → speakers → headphones). Monitor id never changed. No `DESKTOP_MONITOR_VANISHED`. 45.36 s mix, mean −30.6 dB, stop stages complete, no leftover `.capture`. Goertzel markers in the mix: **440 Hz at t≈1.5 s** (played before unplug) power 93.8; 880 Hz at t≈32.5 s (during unplug, speakers) power 115; 1320 Hz at t≈40.5 s (after replug) power 93.5. Pre-unplug desktop audio is in the saved file.
+- **Electron record-during-CPU-transcription (pass):** `npm start` on this host (userData `~/.config/avanevis`). First-run FTUE downloaded `small` to CPU/`int8` in ~26 s. Cache already had a 67 MB incomplete `model.bin` blob from the morning abort (`…671.160804a2.incomplete`, still 67 MB afterward); huggingface wrote a sibling complete blob of the same hash (484 MB) rather than growing that incomplete in place. Stop meeting 1 (2:06) unlocked Start with pill `Ready · 1 transcribing` while Activity showed TRANSCRIBING. Meeting 2 started at 17:25:01 with `faster_whisper_transcriber --model small --device auto` at **123% pcpu / 763 MB RSS** and `linux_recorder` at **33% pcpu / 56 MB RSS**. Overlap snapshot: Meeting 1 TRANSCRIBING + Meeting 2 Recording. After Stop meeting 2 (39 s): pill `Ready · 2 transcribing`, Activity Meeting 1 TRANSCRIBING / Meeting 2 QUEUED. Meeting 1 metadata `transcriptionDevice: cpu`, `transcriptionComputeType: int8`. Meeting 2 mix still has 880 Hz desktop beeps at t≈4 / 19 / 28 s (no obvious capture dropout under CPU Whisper). First-run mic/desktop dropdowns were empty until selected — not a recorder defect.
+- **Electron Discard vs History (pass):** History had 2 meetings (`20260827_172451`, `20260827_172555`). Started meeting 3, confirmed Cancel, Discard. Main log: `Recording cancelled; capture discarded.` UI returned to `Ready · 1 transcribing` with **historyCount still 2** (same ids). Recordings dir gained no third opus/md; no leftover `.capture`.
+- **60-minute soak (cancelled, 2026-08-27):** operator waived the hour-long run. Not executed; do not treat the 15-minute RSS/spool row as 60-minute evidence. `/tmp` on this host is 3.9 GB tmpfs — a future soak must spool on disk.
 
-Still open on this host (do not start Phase 4):
-
-- 60-minute soak
-- Electron record-during-CPU-transcription (CLI overlap under `tiny.en` passed; app queue still needed)
-- unplug/replug headphones mid-capture (this jack retargets the same analog sink; still needs a live session)
-
-**Phase 3 is not complete.** Do not start Phase 4 until those remaining rows pass. Do not treat `scripts/linux-audio-spike.py` as the product recorder.
+**Phase 3 is closed** with that waiver. Phase 4 may start. Do not treat `scripts/linux-audio-spike.py` as the product recorder.
 
 #### Phase 3 adversarial review — 2026-08-25 (done)
 
@@ -656,7 +656,7 @@ Static review on the Ubuntu VPS of everything since `ce0a550`, scoped to `linux_
 
 Also fixed: the desktop level meter stayed frozen at its last value after the monitor vanished, so the UI implied desktop audio was still flowing.
 
-Residual hardware smoke this review cannot substitute for: 60-minute soak, Electron record-during-CPU-transcription, headphone unplug/replug. PipeWire restart was run 2026-08-27 — SoundCard streams fail closed (mic fatal); the watchdog did not false-vanish.
+Residual hardware smoke this review cannot substitute for was run 2026-08-27 except the 60-minute soak, which the operator **cancelled** (not passed). Electron record-during-CPU-transcription and headphone unplug/replug passed. PipeWire restart: SoundCard streams fail closed (mic fatal); the watchdog did not false-vanish.
 
 ### Phase 4 — Electron behavior, queue, and core transcription
 
@@ -690,6 +690,32 @@ Exit criteria:
 - quitting leaves no Python/ffmpeg process group alive
 - `safeStorage.getSelectedStorageBackend()` reports a real backend (not `basic_text`) on the Omarchy host
 - Settings/Home/History add-on controls are visibly disabled on Linux and show the future-version copy; IPC setup/generate still fail closed
+
+### Phase 4 Omarchy evidence (2026-08-27)
+
+Host: `amiromarchy`, Omarchy 4, Hyprland (`XDG_CURRENT_DESKTOP=Hyprland`, `WAYLAND_DISPLAY=wayland-1`), laptop panel `eDP-1` scale **1.6**. `org.freedesktop.secrets` is running. The session SNI host is **quickshell** (`org.kde.StatusNotifierWatcher`); Waybar was not running this session.
+
+Switches live in `src/main-process/linux-electron-bootstrap.js` and are applied from `src/main.js` **before** `app.requestSingleInstanceLock()` so Chromium does not already bind XWayland / `basic_text`.
+
+**Secret storage (Locked decision 9).** Live `whenReady()` log: `Linux secret storage backend: gnome_libsecret` — not `basic_text`. Hyprland is still not on Chromium's desktop list; the explicit `password-store=gnome-libsecret` switch is what selected the real backend. `getSelectedStorageBackend()` / `probeSecretStorage()` are exported for the later Phase 7 token preflight. Packaged-AppImage `dlopen(libsecret)` remains a Phase 5 exit criterion.
+
+**Ozone (Locked decision 10).** Three launches of `node_modules/electron/dist/electron .` with Omarchy's ambient `ELECTRON_OZONE_PLATFORM_HINT=wayland` **unset**, so the measurement is the app switch:
+
+| Launch | `whenReady()` log | Hyprland `xwayland` | window size |
+|---|---|---|---|
+| `--ozone-platform=x11` | `ozone-platform: x11 hint: auto` | `True` | `[781, 952]` |
+| app default (hint auto only) | `ozone-platform: wayland hint: auto` | `False` | `[781, 952]` |
+| `--ozone-platform=wayland` | `ozone-platform: wayland hint: auto` | `False` | `[781, 952]` |
+
+**Shipped Linux default: `--ozone-platform-hint=auto`.** Native Wayland binds on this host without forcing `--ozone-platform=wayland` (keep X11 Ubuntu working). Audio capture is Pulse/PipeWire either way — no ScreenCast portal; do not reopen Phase 3. Side-by-side sharpness screenshots were not taken; native vs XWayland is distinguished by Hyprland's `xwayland` flag. Window size matched across the three launches on the 1.6-scale panel.
+
+**Tray (Locked decision 10).** Linux registers no tray `click` handler; interaction is `setContextMenu` only. `new Tray()` is try/catch so a missing SNI host does not crash the app. Live with quickshell as watcher: `RegisteredStatusNotifierItems` = `[':1.198/StatusNotifierItem']`; no `Failed to create system tray` in the main log. Recording close dialog uses **Keep Recording in Tray** and `keepRecordingAction: 'hide'`. Killing the SNI host for a live invisible-tray pass was not done this session (would disrupt the desktop); the constructor-throw path is unit-tested in `tests/js/recording-presence-service.test.js`.
+
+**CUDA / CPU Whisper.** `buildTranscriptionCliArgs` on Linux always passes `--device cpu`. `check-cuda` / `install-gpu` / `uninstall-gpu` use `unsupportedPlatform` with copy that CUDA is not available on Linux in this version and transcription uses CPU faster-whisper. GPU Settings already hides Install GPU on non-win32 (Phase 0).
+
+**Add-on grey-out (Locked decision 12).** Exact reason strings live in `src/ai-addon-state.js`. Settings cards `#diarization-addon-card` / `#summary-addon-card` take `.ai-addon-card.is-unsupported`; token and speaker-count fields are not offered when unsupported; History Generate Summary stays disabled with that copy; `generate-summary` throws when status is `unsupported`. Locked decision 1 copy sites were already extracted in Phase 0 (`inferRendererHostFamily` / `getRecordingPermissionFailureGuidance` / `getUnsupportedGpuSettingsCopy`).
+
+**Phase 4 is closed.** Do not start Phase 5 until packaging work begins deliberately. Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.
 
 ### Phase 5 — Omarchy Core Beta packaging
 
@@ -836,11 +862,11 @@ First Linux version (Omarchy CPU-only):
 
 - every input/output device class available on the Omarchy host
 - active browser/meeting audio, silence gaps, Bluetooth/HDMI change
-- 15/60-minute capture, stop, discard, crash recovery
+- 15-minute capture, stop, discard, crash recovery (60-minute soak cancelled for Core Beta Phase 3, 2026-08-27)
 - recording during CPU transcription
 - queued transcription + model preload ordering
-- tray behavior with Waybar (SNI host present) and in a bare Wayland session (no SNI host) — no crash, presence still communicated
-- app rendering under XWayland vs `--ozone-platform-hint=auto` on Hyprland with fractional scaling (Phase 4 spike)
+- tray behavior with an SNI host present (this Omarchy session: quickshell StatusNotifierWatcher, not Waybar) and in a bare Wayland session (no SNI host) — no crash, presence still communicated. Phase 4 live: SNI item registered; missing-host crash path is unit-tested
+- app rendering under XWayland vs `--ozone-platform-hint=auto` on Hyprland with fractional scaling — Phase 4 spike closed 2026-08-27; shipped default is `auto` (native Wayland on this host)
 - packaged-AppImage `safeStorage` encrypt/decrypt on Omarchy
 - Settings/Home/History: speaker identification and summaries visible, greyed, future-version copy; no setup or Generate Summary can start
 - no network during transcription
@@ -870,4 +896,4 @@ Later version only (needs NVIDIA Omarchy):
 
 ## First implementation action
 
-Gate A is resolved (green run linked above). Phases 0–2 are done on `release/linux`. Phase 3 product code, automated tests, and the Phase 3 adversarial review are done on an Ubuntu VPS (2026-08-25). Omarchy hardware smoke started 2026-08-27 (see *Phase 3 evidence — 2026-08-27*). Do not start Phase 4 until the remaining 60-minute soak, Electron queue overlap, and headphone unplug/replug rows pass. **Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.**
+Gate A is resolved (green run linked above). Phases 0–4 product code is done on `release/linux` (Phase 3 60-minute soak cancelled by operator 2026-08-27; Phase 4 ozone/secret-storage/tray/CPU/add-on grey-out closed 2026-08-27). **NEXT: Phase 4 adversarial review** — paste `docs/initiatives/_tmp-linux-phase-4-adversarial-review.md`. Do not start Phase 5 packaging until that review lands. **Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.**

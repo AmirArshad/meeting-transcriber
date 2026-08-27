@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {
   buildAiAddonControlState,
   getDiarizationSetupMessage,
+  getSummaryActionControlState,
   getSummaryGenerationButtonView,
   getSummarySetupMessage,
   buildHomeAiAddonPrompt,
@@ -14,7 +15,15 @@ const {
   shouldSkipMeetingReselect,
   shouldShowSpeakerSetupPrompt,
 } = require('../../src/renderer/history-detail-helpers');
-const { SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE, shouldConfirmDiarizationEngineSwitch } = require('../../src/renderer/ai-addon-ui-helpers');
+const {
+  SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE,
+  shouldConfirmDiarizationEngineSwitch,
+  shouldOfferDiarizationSetupFields,
+} = require('../../src/renderer/ai-addon-ui-helpers');
+const {
+  LINUX_DIARIZATION_UNAVAILABLE_REASON,
+  LINUX_SUMMARY_UNAVAILABLE_REASON,
+} = require('../../src/ai-addon-state');
 
 test('parseTranscriptMarkdownSegments renders saved speaker labels from Markdown', () => {
   const segments = parseTranscriptMarkdownSegments(`# Meeting Transcription
@@ -256,6 +265,43 @@ test('buildHomeAiAddonPrompt hides unsupported Linux diarization and summary pro
   });
 
   assert.equal(prompt, null);
+});
+
+test('Linux add-on control state is fully disabled and shows future-version copy', () => {
+  const diarization = {
+    status: 'unsupported',
+    availability: { supported: false, reason: LINUX_DIARIZATION_UNAVAILABLE_REASON },
+  };
+  const summary = {
+    status: 'unsupported',
+    availability: { supported: false, reason: LINUX_SUMMARY_UNAVAILABLE_REASON },
+  };
+
+  const diarizationControls = buildAiAddonControlState({
+    type: 'diarization',
+    feature: diarization,
+    unsupported: true,
+  });
+  const summaryControls = buildAiAddonControlState({
+    type: 'summary',
+    feature: summary,
+  });
+  const summaryAction = getSummaryActionControlState(summary);
+  const fields = shouldOfferDiarizationSetupFields({ engine: 'pyannote', unsupported: true });
+
+  assert.equal(diarizationControls.canConfigure, false);
+  assert.equal(diarizationControls.canValidate, false);
+  assert.equal(diarizationControls.canRemove, false);
+  assert.equal(diarizationControls.canSelectEngine, false);
+  assert.equal(diarizationControls.isUnsupported, true);
+  assert.equal(summaryControls.canConfigure, false);
+  assert.equal(summaryControls.canValidate, false);
+  assert.equal(summaryControls.canRemove, false);
+  assert.equal(summaryAction.enabled, false);
+  assert.equal(summaryAction.title, LINUX_SUMMARY_UNAVAILABLE_REASON);
+  assert.equal(getDiarizationSetupMessage(diarization), LINUX_DIARIZATION_UNAVAILABLE_REASON);
+  assert.equal(getSummarySetupMessage(summary), LINUX_SUMMARY_UNAVAILABLE_REASON);
+  assert.deepEqual(fields, { showToken: false, showSpeakerCount: false });
 });
 
 test('buildHomeAiAddonPrompt hides unsupported macOS diarization prompt', () => {

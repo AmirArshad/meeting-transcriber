@@ -57,7 +57,13 @@ function createDeps(overrides = {}) {
     setContextMenu(menu) {
       tray.menu = menu;
     },
-    on() {},
+    on(event, handler) {
+      if (!tray.events[event]) {
+        tray.events[event] = [];
+      }
+      tray.events[event].push(handler);
+    },
+    events: {},
     destroy() {
       destroyed = true;
     },
@@ -303,10 +309,41 @@ test('Windows recording close dialog minimizes; macOS hides; idle preserves Gate
   ]);
   assert.equal(macRecording.keepRecordingAction, 'hide');
 
+  const linuxRecording = buildWindowCloseDialogOptions(
+    { state: 'recording', sessionId: 1, startedAt: 1 },
+    'linux',
+  );
+  assert.deepEqual(linuxRecording.buttons, [
+    'Keep Recording in Tray',
+    'Stop and Quit',
+    'Cancel',
+  ]);
+  assert.equal(linuxRecording.keepRecordingAction, 'hide');
+  assert.match(linuxRecording.detail, /system tray/i);
+
   const idle = buildWindowCloseDialogOptions({ state: 'idle' }, 'win32');
   assert.equal(idle.title, 'Minimize to Tray');
   assert.deepEqual(idle.buttons, ['Minimize to Tray', 'Close App', 'Cancel']);
   assert.equal(idle.keepRecordingAction, 'hide');
+});
+
+test('Linux tray uses context menu only and survives a missing SNI host', () => {
+  const harness = createDeps({ platform: 'linux' });
+  const service = createRecordingPresenceService(harness.deps);
+  service.createTray();
+  assert.equal(harness.tray.events.click, undefined);
+  assert.ok(harness.menuTemplates.length > 0);
+
+  const throwing = createDeps({
+    platform: 'linux',
+    Tray: function Tray() {
+      throw new Error('StatusNotifierWatcher is not available');
+    },
+  });
+  const degraded = createRecordingPresenceService(throwing.deps);
+  assert.equal(degraded.createTray(), null);
+  degraded.updateCaptureState({ state: 'recording', sessionId: 1, startedAt: 1_000 });
+  assert.equal(throwing.menuTemplates.length, 0);
 });
 
 test('tray menu intentionally replaces Gate A Show/Hide with Show AvaNevis and Quit AvaNevis', () => {

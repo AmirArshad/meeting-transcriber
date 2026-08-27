@@ -19,7 +19,7 @@ function createProcess() {
   return proc;
 }
 
-function createHarness({ summaryExitCode = 0, metadataOutput = null, previousSummary = null } = {}) {
+function createHarness({ summaryExitCode = 0, metadataOutput = null, previousSummary = null, checkAiAddonSetupStatus } = {}) {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-summary-service-'));
   const recordingsDir = path.join(userData, 'recordings');
   fs.mkdirSync(recordingsDir, { recursive: true });
@@ -121,9 +121,9 @@ function createHarness({ summaryExitCode = 0, metadataOutput = null, previousSum
     assertSafeExistingSegmentsPath: (value) => value,
     terminateProcessBestEffort: async (proc) => proc?.kill(),
     summarizeSummaryValidationError: (value) => value || 'summary failed',
-    checkAiAddonSetupStatus: async () => ({
+    checkAiAddonSetupStatus: checkAiAddonSetupStatus || (async () => ({
       features: { summary: { status: 'ready', setupComplete: true, modelId: 'test-model' } },
-    }),
+    })),
     getSummaryArtifactForPlatform: () => ({ modelId: 'test-model', modelLabel: 'Test', filename: 'model.gguf' }),
     getSummaryArtifactPath: () => path.join(userData, 'model.gguf'),
     getSummaryRuntimeDir: () => path.join(userData, 'runtime'),
@@ -140,6 +140,27 @@ function createHarness({ summaryExitCode = 0, metadataOutput = null, previousSum
     getGeneratedPaths: () => ({ outputJson: generatedOutputJson, outputMarkdown: generatedOutputMarkdown }),
   };
 }
+
+test('generate-summary stays fail-closed when the feature is unsupported', async () => {
+  const { handlers } = createHarness({
+    checkAiAddonSetupStatus: async () => ({
+      features: {
+        summary: {
+          status: 'unsupported',
+          setupComplete: false,
+          availability: {
+            reason: 'Local summaries are not available on Linux in this version. They will return in a future Linux update.',
+          },
+        },
+      },
+    }),
+  });
+
+  await assert.rejects(
+    handlers['generate-summary']({ sender: {} }, { meetingId: 'meeting_1' }),
+    /not available on Linux in this version/,
+  );
+});
 
 test('failed summary regeneration preserves the previously committed sidecars', async () => {
   const { handlers, outputJson, outputMarkdown } = createHarness({ summaryExitCode: 1 });

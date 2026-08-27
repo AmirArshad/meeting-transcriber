@@ -117,6 +117,16 @@ const {
   createRecordingPresenceService,
   buildWindowCloseDialogOptions,
 } = require('./main/recording-presence-service');
+const {
+  applyLinuxElectronCommandLineSwitches,
+  getSelectedStorageBackend,
+} = require('./main-process/linux-electron-bootstrap');
+
+// Ozone and password-store must be set before any other app.* call so Chromium
+// does not already bind XWayland / basic_text on Hyprland.
+if (process.platform === 'linux') {
+  applyLinuxElectronCommandLineSwitches(app.commandLine, process.env);
+}
 
 // Stable Windows toast activator (never use Electron's per-run generated CLSID in packaged builds).
 const AVANEVIS_TOAST_ACTIVATOR_CLSID = '{A7E2C4F1-9B83-4D2E-8F61-1C0A9E5B7D33}';
@@ -1491,6 +1501,16 @@ app.whenReady().then(async () => {
   console.log('app.getName():', app.getName());
   console.log('app.isPackaged:', app.isPackaged);
   console.log('process.resourcesPath:', process.resourcesPath);
+  if (process.platform === 'linux') {
+    const secretBackend = getSelectedStorageBackend(getSafeStorage());
+    console.log('Linux secret storage backend:', secretBackend);
+    console.log(
+      'Linux ozone-platform:',
+      app.commandLine.getSwitchValue('ozone-platform') || '(unset)',
+      'hint:',
+      app.commandLine.getSwitchValue('ozone-platform-hint') || '(unset)',
+    );
+  }
   console.log('==============================');
 
   // Set cache paths to userData to avoid permission issues

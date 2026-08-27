@@ -749,6 +749,9 @@ function getAiAddonPaths(userDataDir) {
   };
 }
 
+const LINUX_DIARIZATION_UNAVAILABLE_REASON = 'Speaker identification is not available on Linux in this version. It will return in a future Linux update.';
+const LINUX_SUMMARY_UNAVAILABLE_REASON = 'Local summaries are not available on Linux in this version. They will return in a future Linux update.';
+
 function getDiarizationAvailability(platform, arch) {
   if (platform === 'win32' && arch === 'x64') {
     return {
@@ -780,6 +783,16 @@ function getDiarizationAvailability(platform, arch) {
     };
   }
 
+  if (platform === 'linux') {
+    return {
+      supported: false,
+      reason: LINUX_DIARIZATION_UNAVAILABLE_REASON,
+      acceleration: 'unsupported',
+      runtimeDevice: null,
+      automaticAfterTranscription: false,
+    };
+  }
+
   return {
     supported: false,
     reason: 'Speaker identification is not supported on this platform.',
@@ -795,6 +808,15 @@ function getSummaryAvailability(platform, arch) {
       supported: true,
       reason: null,
       runtime: 'llama.cpp',
+      userTriggeredOnly: true,
+    };
+  }
+
+  if (platform === 'linux') {
+    return {
+      supported: false,
+      reason: LINUX_SUMMARY_UNAVAILABLE_REASON,
+      runtime: 'unsupported',
       userTriggeredOnly: true,
     };
   }
@@ -912,6 +934,8 @@ module.exports = {
   getAiAddonPaths,
   getAiAddonStatus,
   getDefaultModelId,
+  LINUX_DIARIZATION_UNAVAILABLE_REASON,
+  LINUX_SUMMARY_UNAVAILABLE_REASON,
   getDiarizationAvailability,
   getDiarizationDependencyArtifactForPlatform,
   getDiarizationModelRef,

@@ -88,8 +88,8 @@ Use this checklist when validating speaker identification or local summaries on 
 
 Speaker identification and local summaries are **out of scope for the first Linux version** (Core Beta, Phases 0–5 in `docs/initiatives/LINUX_SUPPORT.md`). There is no Omarchy host with NVIDIA CUDA to validate those add-ons; do not ship a CPU fallback. Home/Settings/History must show the features **visible but greyed out**, with copy that they are not available on Linux in this version and will return in a future Linux update. Setup, switch, token, and Generate Summary must not start.
 
-- [ ] **Phase 0:** catalog status is `unsupported` (`tests/js/linux-platform-selection.test.js`).
-- [ ] **Phase 4:** Settings cards are visually greyed; Set Up / Install Model / Validate / Remove / Switch / token fields disabled; Home AI add-on CTA does not offer setup; History Generate Summary disabled; Linux-specific future-version copy is shown.
+- [x] **Phase 0:** catalog status is `unsupported` (`tests/js/linux-platform-selection.test.js`).
+- [x] **Phase 4:** Settings cards are visually greyed; Set Up / Install Model / Validate / Remove / Switch / token fields disabled; Home AI add-on CTA does not offer setup; History Generate Summary disabled; Linux-specific future-version copy is shown. Evidence 2026-08-27: exact copy pinned in `linux-platform-selection.test.js`; `.ai-addon-card.is-unsupported` in `styles.css`; token/speaker-count hidden (`shouldOfferDiarizationSetupFields`); Generate Summary disabled with future-version `title` (`history-detail-helpers.test.js`); `generate-summary` throws when status is `unsupported`. Live Settings chrome was not screenshot this session.
 - [ ] **Later version (Phases 6–9, needs Omarchy + NVIDIA):** Linux CUDA Whisper; Speakrs/Pyannote CUDA-only; pinned Linux llama.cpp summaries. Do not run these rows on CPU-only Omarchy.
 
 ## Failure Modes

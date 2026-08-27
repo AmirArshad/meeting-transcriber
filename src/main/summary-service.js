@@ -281,6 +281,14 @@ function createSummaryService(deps) {
         clearActiveSummaryGeneration();
         throw createAiAddonCancelError('Summary generation was canceled.');
       }
+      if (aiStatus.features.summary.status === 'unsupported') {
+        clearActiveSummaryGeneration();
+        throw new Error(
+          (aiStatus.features.summary.availability && aiStatus.features.summary.availability.reason)
+          || aiStatus.features.summary.error
+          || 'Local summaries are not supported on this platform.',
+        );
+      }
       if (aiStatus.features.summary.status !== 'ready' || !aiStatus.features.summary.setupComplete) {
         clearActiveSummaryGeneration();
         throw new Error('Summary model setup is not ready.');

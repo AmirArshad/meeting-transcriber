@@ -44,6 +44,7 @@ const {
   buildHomeAiAddonPrompt,
   getDiarizationSetupMessage,
   hasDiarizationLocalState,
+  getSummaryActionControlState,
   getSummaryGenerationButtonView,
   getSummarySetupMessage,
   normalizeHistoryDetailTab,
@@ -83,8 +84,7 @@ const {
   resolveSelectedDiarizationEngine,
   shouldClearDiarizationTokenFields,
   shouldConfirmDiarizationEngineSwitch,
-  shouldShowDiarizationSpeakerCount,
-  shouldShowDiarizationTokenUi,
+  shouldOfferDiarizationSetupFields,
 } = window.aiAddonUiHelpers;
 const { clearElement } = window.domHelpers;
 const { meetingIdsEqual } = window.meetingHelpers;
@@ -1322,12 +1322,25 @@ function restoreSummaryGenerationButton(button) {
   }
 
   button.textContent = button.dataset.originalLabel || button.textContent || 'Generate Summary';
-  button.disabled = false;
   button.classList.remove('is-loading', 'summary-generation-active', 'is-cancelling');
   delete button.dataset.originalLabel;
   delete button.dataset.hoverLabel;
   button.removeAttribute('aria-busy');
-  button.removeAttribute('title');
+}
+
+function applySummaryActionAvailability() {
+  const summary = aiAddonStatusSnapshot && aiAddonStatusSnapshot.features
+    ? aiAddonStatusSnapshot.features.summary
+    : null;
+  const control = getSummaryActionControlState(summary);
+  for (const button of getSummaryGenerationButtons()) {
+    button.disabled = !control.enabled;
+    if (control.title) {
+      button.title = control.title;
+    } else {
+      button.removeAttribute('title');
+    }
+  }
 }
 
 function updateSummaryGenerationButtons() {
@@ -1336,12 +1349,15 @@ function updateSummaryGenerationButtons() {
     cancelling: summaryGenerationCancelling,
   });
 
-  for (const button of getSummaryGenerationButtons()) {
-    if (!view.active) {
+  if (!view.active) {
+    for (const button of getSummaryGenerationButtons()) {
       restoreSummaryGenerationButton(button);
-      continue;
     }
+    applySummaryActionAvailability();
+    return;
+  }
 
+  for (const button of getSummaryGenerationButtons()) {
     if (!button.dataset.originalLabel) {
       button.dataset.originalLabel = button.textContent;
     }
@@ -1455,9 +1471,10 @@ function applyDiarizationEngineCards({ selectedEngine, platform, arch }) {
   });
 }
 
-function applyDiarizationEngineFields(selectedEngine) {
-  const showToken = shouldShowDiarizationTokenUi(selectedEngine);
-  const showSpeakerCount = shouldShowDiarizationSpeakerCount(selectedEngine);
+function applyDiarizationEngineFields(selectedEngine, { unsupported = false } = {}) {
+  const fields = shouldOfferDiarizationSetupFields({ engine: selectedEngine, unsupported });
+  const showToken = fields.showToken;
+  const showSpeakerCount = fields.showSpeakerCount;
   ['diarization-token-field', 'home-diarization-token-field'].forEach((id) => {
     const field = document.getElementById(id);
     if (field) {
@@ -1501,13 +1518,15 @@ function updateHomeAiAddonCTA(aiStatus) {
     if (title) title.textContent = prompt.title;
     if (message) message.textContent = prompt.message;
     const selectedEngine = getSelectedDiarizationEngine({ engine: prompt.engine });
+    const diarization = aiStatus && aiStatus.features ? aiStatus.features.diarization : null;
     applyDiarizationEngineCards({
       selectedEngine,
       platform: homePromptContext.platform,
       arch: homePromptContext.arch,
     });
-    applyDiarizationEngineFields(selectedEngine);
-    const diarization = aiStatus && aiStatus.features ? aiStatus.features.diarization : null;
+    applyDiarizationEngineFields(selectedEngine, {
+      unsupported: diarization && diarization.status === 'unsupported',
+    });
     const diarizationControlState = buildAiAddonControlState({
       feature: diarization,
       type: 'diarization',
@@ -4720,6 +4739,15 @@ function updateAiAddonSettings(status) {
 
   setStatusBadge(document.getElementById('ai-addons-status-badge'), overallStatus);
 
+  const diarizationCard = document.getElementById('diarization-addon-card');
+  const summaryCard = document.getElementById('summary-addon-card');
+  if (diarizationCard) {
+    diarizationCard.classList.toggle('is-unsupported', Boolean(diarizationUnsupported));
+  }
+  if (summaryCard) {
+    summaryCard.classList.toggle('is-unsupported', Boolean(summary && summary.status === 'unsupported'));
+  }
+
   if (diarization) {
     setStatusBadge(document.getElementById('diarization-status-badge'), diarization.status);
     const selectedEngine = getSelectedDiarizationEngine(diarization);
@@ -4735,7 +4763,7 @@ function updateAiAddonSettings(status) {
       platform: homePromptContext.platform,
       arch: homePromptContext.arch,
     });
-    applyDiarizationEngineFields(selectedEngine);
+    applyDiarizationEngineFields(selectedEngine, { unsupported: diarizationUnsupported });
     applyDiarizationEngineRadioState(diarizationControlState.canSelectEngine);
     const speakerCount = document.getElementById('diarization-speaker-count');
     if (speakerCount) {
@@ -4812,6 +4840,7 @@ function updateAiAddonSettings(status) {
   renderAiAddonProgress('summary');
 
   updateAiAddonFootprintWarning(status);
+  updateSummaryGenerationButtons();
 }
 
 async function refreshAiAddonSettings() {
@@ -4947,7 +4976,9 @@ function setupAiAddonSettingsListeners() {
       platform: homePromptContext.platform,
       arch: homePromptContext.arch,
     });
-    applyDiarizationEngineFields(engine);
+    applyDiarizationEngineFields(engine, {
+      unsupported: Boolean(diarization && diarization.status === 'unsupported'),
+    });
     if (aiAddonStatusSnapshot) {
       updateAiAddonSettings(aiAddonStatusSnapshot);
       updateHomeAiAddonCTA(aiAddonStatusSnapshot);

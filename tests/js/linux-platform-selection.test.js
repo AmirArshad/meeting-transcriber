@@ -17,6 +17,8 @@ const {
   getSpeakrsSetupArtifactsForPlatform,
   getSummaryRuntimeArtifactForPlatform,
   buildAiAddonStatus,
+  LINUX_DIARIZATION_UNAVAILABLE_REASON,
+  LINUX_SUMMARY_UNAVAILABLE_REASON,
 } = require('../../src/ai-addon-state');
 const {
   createPythonRuntime,
@@ -230,9 +232,10 @@ test('Linux add-on catalog paths stay unsupported until later phases', () => {
   const summary = getSummaryAvailability('linux', 'x64');
   assert.equal(diarization.supported, false);
   assert.equal(diarization.acceleration, 'unsupported');
-  assert.match(diarization.reason, /not supported on this platform/i);
+  assert.equal(diarization.reason, LINUX_DIARIZATION_UNAVAILABLE_REASON);
   assert.equal(summary.supported, false);
   assert.equal(summary.runtime, 'unsupported');
+  assert.equal(summary.reason, LINUX_SUMMARY_UNAVAILABLE_REASON);
   assert.equal(getSpeakrsSetupArtifactsForPlatform('linux', 'x64').modelPack, null);
   assert.deepEqual(getSpeakrsSetupArtifactsForPlatform('linux', 'x64').packEntries, []);
   assert.equal(getSummaryRuntimeArtifactForPlatform('linux', 'x64'), null);

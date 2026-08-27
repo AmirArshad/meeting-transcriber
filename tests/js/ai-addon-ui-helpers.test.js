@@ -24,7 +24,19 @@ const {
   shouldConfirmDiarizationEngineSwitch,
   shouldShowDiarizationSpeakerCount,
   shouldShowDiarizationTokenUi,
+  shouldOfferDiarizationSetupFields,
 } = require('../../src/renderer/ai-addon-ui-helpers');
+
+test('unsupported Linux add-on fields hide token and speaker-count UI', () => {
+  assert.deepEqual(
+    shouldOfferDiarizationSetupFields({ engine: 'pyannote', unsupported: true }),
+    { showToken: false, showSpeakerCount: false },
+  );
+  assert.deepEqual(
+    shouldOfferDiarizationSetupFields({ engine: 'pyannote', unsupported: false }),
+    { showToken: true, showSpeakerCount: true },
+  );
+});
 
 test('isAiAddonTerminalStatus recognizes terminal statuses', () => {
   assert.equal(isAiAddonTerminalStatus('ready'), true);

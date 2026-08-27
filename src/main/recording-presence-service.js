@@ -122,6 +122,19 @@ function buildWindowCloseDialogOptions(
       };
     }
 
+    if (platform === 'linux') {
+      return {
+        type: 'question',
+        title: 'AvaNevis is still recording',
+        message: 'AvaNevis is still recording.',
+        detail: 'Keep recording in the system tray, or stop and quit. If no tray icon is visible, AvaNevis is still recording in the background.',
+        buttons: ['Keep Recording in Tray', 'Stop and Quit', 'Cancel'],
+        defaultId: 0,
+        cancelId: 2,
+        keepRecordingAction: 'hide',
+      };
+    }
+
     return {
       type: 'question',
       title: 'AvaNevis is still recording',
@@ -402,7 +415,11 @@ function createRecordingPresenceService(deps) {
       },
     ];
 
-    tray.setContextMenu(Menu.buildFromTemplate(template));
+    try {
+      tray.setContextMenu(Menu.buildFromTemplate(template));
+    } catch (error) {
+      logWarn('Failed to update tray menu:', error?.message || error);
+    }
   }
 
   function applyTrayPresentation() {
@@ -410,21 +427,25 @@ function createRecordingPresenceService(deps) {
       return;
     }
 
-    const view = buildTrayView(captureState, now());
-    const image = loadTrayNativeImage(view.trayImage);
-    // macOS: setTemplateImage(false) already applied for recording images before setImage.
-    tray.setImage(image);
+    try {
+      const view = buildTrayView(captureState, now());
+      const image = loadTrayNativeImage(view.trayImage);
+      // macOS: setTemplateImage(false) already applied for recording images before setImage.
+      tray.setImage(image);
 
-    if (platform === 'darwin' && typeof tray.setTitle === 'function') {
-      try {
-        tray.setTitle(view.title, { fontType: 'monospacedDigit' });
-      } catch (_) {
-        tray.setTitle(view.title);
+      if (platform === 'darwin' && typeof tray.setTitle === 'function') {
+        try {
+          tray.setTitle(view.title, { fontType: 'monospacedDigit' });
+        } catch (_) {
+          tray.setTitle(view.title);
+        }
       }
-    }
 
-    tray.setToolTip(view.tooltip);
-    rebuildTrayMenu(view);
+      tray.setToolTip(view.tooltip);
+      rebuildTrayMenu(view);
+    } catch (error) {
+      logWarn('Failed to update tray presentation:', error?.message || error);
+    }
   }
 
   function syncPlatformPresence() {
@@ -487,16 +508,25 @@ function createRecordingPresenceService(deps) {
       return tray;
     }
 
-    // loadTrayNativeImage already applies setTemplateImage for darwin idle/recording.
-    tray = new Tray(loadTrayNativeImage('idle'));
+    try {
+      // loadTrayNativeImage already applies setTemplateImage for darwin idle/recording.
+      tray = new Tray(loadTrayNativeImage('idle'));
+    } catch (error) {
+      logWarn('Failed to create system tray:', error?.message || error);
+      tray = null;
+      return null;
+    }
 
-    tray.on('click', () => {
-      try {
-        toggleMainWindow();
-      } catch (error) {
-        logWarn('Tray click failed:', error?.message || error);
-      }
-    });
+    // Linux SNI activation is host-dependent; drive interaction through setContextMenu only.
+    if (platform !== 'linux') {
+      tray.on('click', () => {
+        try {
+          toggleMainWindow();
+        } catch (error) {
+          logWarn('Tray click failed:', error?.message || error);
+        }
+      });
+    }
 
     applyTrayPresentation();
     return tray;
