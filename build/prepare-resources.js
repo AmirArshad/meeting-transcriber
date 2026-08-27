@@ -407,6 +407,15 @@ function ensureWindowsEmptyBinDirectory() {
   }
 }
 
+function ensureLinuxEmptyBinDirectory() {
+  // extraResources copies build/resources/bin on every platform. Linux Core Beta
+  // does not stage speakrs-cli, but the directory must still exist so packaging
+  // does not fail closed on a missing from-path.
+  if (IS_LINUX && !fs.existsSync(BIN_DIR)) {
+    fs.mkdirSync(BIN_DIR, { recursive: true });
+  }
+}
+
 function buildMacOSHelperVerificationCommands(helperPath) {
   return [
     { command: 'codesign', args: ['--verify', '--strict', '--verbose=2', helperPath] },
@@ -1145,6 +1154,7 @@ async function prepareResources() {
   const existing = checkExistingResources();
   assertNoWindowsOnlyStaleHelper();
   ensureWindowsEmptyBinDirectory();
+  ensureLinuxEmptyBinDirectory();
 
   // Prepare Python
   if (existing.pythonExists) {
@@ -1418,6 +1428,7 @@ async function prepareResources() {
 
   assertNoWindowsOnlyStaleHelper();
   ensureWindowsEmptyBinDirectory();
+  ensureLinuxEmptyBinDirectory();
 
   // Whisper models are downloaded on first use into the user cache
   // (~/.cache/huggingface/hub or MLX cache). They are not bundled in the installer.

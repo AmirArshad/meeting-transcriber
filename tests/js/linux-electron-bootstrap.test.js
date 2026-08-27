@@ -12,6 +12,8 @@ const {
   getSelectedStorageBackend,
   probeSecretStorage,
   resolveLinuxPasswordStore,
+  runLinuxSafeStorageSmoke,
+  SAFESTORAGE_SMOKE_CANARY,
 } = require('../../src/main-process/linux-electron-bootstrap');
 
 test('Linux password-store is gnome-libsecret except KDE → kwallet6', () => {
@@ -61,6 +63,28 @@ test('getSelectedStorageBackend is exposed for later preflights and rejects basi
     isEncryptionAvailable: () => true,
   });
   assert.equal(real.isBasicText, false);
+});
+
+test('Linux safeStorage smoke requires a real backend and a successful encrypt/decrypt round-trip', () => {
+  const basic = runLinuxSafeStorageSmoke({
+    getSelectedStorageBackend: () => 'basic_text',
+    isEncryptionAvailable: () => true,
+    encryptString: () => Buffer.from('x'),
+    decryptString: () => SAFESTORAGE_SMOKE_CANARY,
+  });
+  assert.equal(basic.ok, false);
+  assert.equal(basic.isBasicText, true);
+  assert.equal(basic.roundTrip, false);
+
+  const good = runLinuxSafeStorageSmoke({
+    getSelectedStorageBackend: () => 'gnome_libsecret',
+    isEncryptionAvailable: () => true,
+    encryptString: (value) => Buffer.from(value),
+    decryptString: (value) => value.toString(),
+  });
+  assert.equal(good.ok, true);
+  assert.equal(good.roundTrip, true);
+  assert.equal(good.isBasicText, false);
 });
 
 const {

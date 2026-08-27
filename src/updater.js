@@ -134,8 +134,18 @@ function findInstallerAsset(assets) {
     return exeAsset || null;
   }
 
-  // Linux installers are not shipped yet (Phase 5). Do not match source
-  // archives or other non-installer assets as if they were AppImages.
+  if (platform === 'linux') {
+    // Match only published Core Beta artifacts. Prefer the portable AppImage,
+    // then the pacman package. Never treat source archives, .deb, or arbitrary
+    // tarballs as installers.
+    const linuxAsset = assets.find((asset) =>
+      asset.name.startsWith(INSTALLER_NAME_TOKEN) && asset.name.endsWith('.AppImage')
+    ) || assets.find((asset) =>
+      asset.name.startsWith(INSTALLER_NAME_TOKEN) && asset.name.endsWith('.pkg.tar.zst')
+    );
+    return linuxAsset || null;
+  }
+
   return null;
 }
 

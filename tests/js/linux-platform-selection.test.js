@@ -269,13 +269,17 @@ test('Speakrs packaging stays fail-closed on Linux while resource manifests stil
   assert.equal(manifest.inputs.speakrsCargoToml.length, 64);
 });
 
-test('updater does not treat Linux source archives as installers before Phase 5', () => {
+test('updater matches Linux AvaNevis-Setup AppImage and ignores source archives', () => {
   const { findInstallerAsset } = loadUpdater();
   withProcessPlatform('linux', () => {
-    assert.equal(findInstallerAsset([
+    assert.deepEqual(findInstallerAsset([
       { name: 'source.tar.gz' },
       { name: 'AvaNevis-Setup-2.7.0.AppImage' },
       { name: 'AvaNevis-Setup-2.7.0.exe' },
+    ]), { name: 'AvaNevis-Setup-2.7.0.AppImage' });
+    assert.equal(findInstallerAsset([
+      { name: 'source.tar.gz' },
+      { name: 'AvaNevis-Setup-2.7.0.deb' },
     ]), null);
   });
 });

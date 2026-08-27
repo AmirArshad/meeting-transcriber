@@ -96,9 +96,9 @@ Ship static `build/iconRecording.png` (18×18) and `build/iconRecording@2x.png` 
 - [ ] **Stop stages (Release 2 Task 6):** same as macOS — visible stage changes during stop; capture (`REC`) vs finalization (`Finishing recording...`) distinguishable.
 - [ ] **Disk reserve (Release 2 Task 6):** with free space below 10 GB (or a test double), confirm a single `recording-warning` / native safety toast when crossing warning, and escalation to critical below 2 GB; recording must **not** auto-stop.
 
-## Linux (Phases 3–4 closed — 60-minute soak cancelled; Phase 5 next)
+## Linux (Phases 3–4 closed — 60-minute soak cancelled; Phase 5 packaging landed with residuals)
 
-Product capture (`backend/audio/linux_recorder.py`) is wired. Do not treat dummy-Pulse or `scripts/linux-audio-spike.py` as Omarchy exit evidence. Add-ons stay greyed `unsupported` (Phase 4).
+Product capture (`backend/audio/linux_recorder.py`) is wired. Do not treat dummy-Pulse or `scripts/linux-audio-spike.py` as Omarchy exit evidence. Add-ons stay greyed `unsupported` (Phase 4). Phase 5 packaging code landed 2026-08-28; Core Beta is **not** marked complete.
 
 Evidence 2026-08-27 on `amiromarchy` (Omarchy 4.0.1) used the product recorder CLI unless noted. Artifacts: `/tmp/avanevis-linux-smoke/` (morning CLI) and `/home/amir/avanevis-linux-smoke/` (afternoon headphone + Electron).
 
@@ -112,7 +112,8 @@ Evidence 2026-08-27 on `amiromarchy` (Omarchy 4.0.1) used the product recorder C
 - [x] **Omarchy hardware:** Stop stages (`post_processing_started` → encoding → complete) come from stdout JSON.
 - [x] **Omarchy hardware:** Live 15-minute capture passed; recording while CPU transcription runs has no obvious glitches; capture arrays do not grow with duration over 15 minutes (RSS 49.6→52.3 MB vs 688 MB spool; 14 desktop beeps at ~60 s). CLI capture during `tiny.en` CPU load passed (62 s). Electron queue overlap passed (`npm start`; Stop meeting 1 2:06 → Start meeting 2 while `small` CPU Whisper at 123% pcpu). **60-minute soak cancelled** by operator 2026-08-27 — not run, not passed.
 - [x] **Phase 4:** Tray uses native SNI + context menu only; missing SNI host does not crash. Evidence 2026-08-27 on `amiromarchy`: SNI host was quickshell (`org.kde.StatusNotifierWatcher`; Waybar not running). After `whenReady()`, `RegisteredStatusNotifierItems` included `:1.198/StatusNotifierItem`; main log had no `Failed to create system tray`. Linux has no tray `click` handler (`setContextMenu` only). With a tray, recording close is Keep Recording in Tray / `hide`; when tray construction fails, it is Keep Recording Minimized / `minimize` so the taskbar recording indicator and Stop/Discard remain reachable. Missing-host live (kill the watcher) was not run; constructor throw and fallback close behavior are unit-tested.
-- [ ] **Blocked until Phase 5:** Packaged AppImage/pacman uses bundled Python and ffmpeg (`AVANEVIS_PACKAGED=1`); no FUSE2 requirement.
+- [x] **Phase 5 packaging (Omarchy, 2026-08-28):** AppImage is a static-pie ELF (`toolsets.appimage` `1.0.2`); host has no `fuse2` / `libfuse.so.2`. Default AppImage launch (not `--appimage-extract-and-run`) with `AVANEVIS_SAFESTORAGE_SMOKE=1` used bundled Python/ffmpeg/backend under the AppImage mount, CPU `transcription.faster_whisper_transcriber`, and `safeStorage` backend `gnome_libsecret` (`roundTrip: true`, not `basic_text`). pacman `.PKGINFO` depends matched the explicit list (no libappindicator, no ffmpeg). Clean `pacman -U` / same-version upgrade / `pacman -R` (not `-s`) on Omarchy. Verifier passed on unpacked + AppImage + pacman. No `speakrs-cli` / llama.cpp / CUDA ORT in the package.
+- [ ] **Phase 5 still open:** Packaged Settings chrome / Setup / Generate Summary were not clicked. In-app Open legal notices was not clicked (the notices file is present and readable in the package). No packaged recording or transcription session (do not substitute `npm start`). Ubuntu 24.04 evidence is a Docker AppImage launch with `fuse3` + `/dev/fuse` (no fuse2), not a Ubuntu desktop recording smoke. Gate B still blocks attaching Linux artifacts to GitHub Releases.
 
 ## Interrupted capture recovery (Release 2 Task 10)
 

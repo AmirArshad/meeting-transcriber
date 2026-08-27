@@ -47,6 +47,7 @@ test('findInstallerAsset matches the actual Windows installer naming convention'
     const asset = findInstallerAsset([
       { name: 'AvaNevis-Setup-1.7.18.exe' },
       { name: 'avanevis-portable.exe' },
+      { name: 'AvaNevis-Setup-1.7.18.AppImage' },
     ]);
 
     assert.deepEqual(asset, { name: 'AvaNevis-Setup-1.7.18.exe' });
@@ -64,6 +65,7 @@ test('findInstallerAsset matches the actual macOS installer naming convention', 
     const asset = findInstallerAsset([
       { name: 'AvaNevis-Setup-1.7.18.dmg' },
       { name: 'AvaNevis-1.7.18.dmg' },
+      { name: 'AvaNevis-Setup-1.7.18.AppImage' },
     ]);
 
     assert.deepEqual(asset, { name: 'AvaNevis-Setup-1.7.18.dmg' });
@@ -73,14 +75,48 @@ test('findInstallerAsset matches the actual macOS installer naming convention', 
 });
 
 
-test('findInstallerAsset returns null on Linux until installers ship', () => {
+test('findInstallerAsset prefers the Linux AppImage and requires the installer-name token', () => {
+  const originalPlatform = process.platform;
+  Object.defineProperty(process, 'platform', { value: 'linux' });
+
+  try {
+    assert.deepEqual(findInstallerAsset([
+      { name: 'AvaNevis-Setup-2.7.0.pkg.tar.zst' },
+      { name: 'AvaNevis-Setup-2.7.0.AppImage' },
+      { name: 'source.tar.gz' },
+    ]), { name: 'AvaNevis-Setup-2.7.0.AppImage' });
+  } finally {
+    Object.defineProperty(process, 'platform', { value: originalPlatform });
+  }
+});
+
+
+test('findInstallerAsset falls back to the Linux pacman artifact when no AppImage is published', () => {
+  const originalPlatform = process.platform;
+  Object.defineProperty(process, 'platform', { value: 'linux' });
+
+  try {
+    assert.deepEqual(findInstallerAsset([
+      { name: 'AvaNevis-Setup-2.7.0.pkg.tar.zst' },
+      { name: 'AvaNevis-Setup-2.7.0.exe' },
+    ]), { name: 'AvaNevis-Setup-2.7.0.pkg.tar.zst' });
+  } finally {
+    Object.defineProperty(process, 'platform', { value: originalPlatform });
+  }
+});
+
+
+test('findInstallerAsset ignores Linux source archives, debs, and unprefixed AppImages', () => {
   const originalPlatform = process.platform;
   Object.defineProperty(process, 'platform', { value: 'linux' });
 
   try {
     assert.equal(findInstallerAsset([
-      { name: 'AvaNevis-Setup-1.7.18.AppImage' },
       { name: 'source.tar.gz' },
+      { name: 'AvaNevis-Setup-2.7.0.tar.gz' },
+      { name: 'AvaNevis-Setup-2.7.0.deb' },
+      { name: 'AvaNevis-2.7.0.AppImage' },
+      { name: 'meeting-transcriber-2.7.0.AppImage' },
     ]), null);
   } finally {
     Object.defineProperty(process, 'platform', { value: originalPlatform });

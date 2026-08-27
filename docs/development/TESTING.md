@@ -61,6 +61,12 @@ py -3.11 -m pip install -r requirements-dev.txt
 python3 -m pip install -r requirements-dev.txt
 ```
 
+#### Linux
+
+```bash
+python3 -m pip install -r requirements-dev.txt
+```
+
 ### Python app + test dependencies
 
 Install the platform runtime requirements plus the test requirements if you also want to run the desktop app locally.
@@ -75,6 +81,12 @@ py -3.11 -m pip install -r requirements-windows.txt -r requirements-dev.txt
 
 ```bash
 python3 -m pip install -r requirements-macos.txt -r requirements-dev.txt
+```
+
+#### Linux
+
+```bash
+python3 -m pip install -r requirements-linux.txt -r requirements-dev.txt
 ```
 
 ## Run Tests
@@ -190,6 +202,7 @@ CI currently runs:
 - packaged Windows build smoke test
 - packaged macOS build smoke test
 - packaged macOS resource verification for helper, Python, and ffmpeg
+- Ubuntu Linux packaging job: `npm run test:all`, resource preparation, AppImage + pacman, `scripts/verify-linux-packaging.js` (bundled Python/ffmpeg/backend, no deferred add-on binaries, static AppImage runtime, pacman `.PKGINFO`)
 
 ## Troubleshooting
 

@@ -1,6 +1,6 @@
 # Linux Support Plan — Omarchy First
 
-> **Status:** Phases 0–4 product code and the Phase 4 adversarial review are complete on `release/linux` (Phase 3 60-minute soak **cancelled** by operator 2026-08-27 — not run, not passed; 15-minute soak is the duration-growth evidence). **NEXT: Phase 5 packaging, which has not started.** Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.
+> **Status:** Phases 0–4 product code and the Phase 4 adversarial review are complete on `release/linux` (Phase 3 60-minute soak **cancelled** by operator 2026-08-27 — not run, not passed; 15-minute soak is the duration-growth evidence). **Phase 5 packaging code, Ubuntu CI, updater matching, and Omarchy/Ubuntu package evidence landed 2026-08-28.** Core Beta is **not** marked complete: packaged Settings / legal-notices UI clicks and a packaged recording session were not run; Gate B still blocks `.github/workflows/build-release.yml`. Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.
 > **Replanned:** 2026-08-23 against AvaNevis v2.7.0 / current `master`.
 > **Review pass:** 2026-08-23 — verified plan claims against the codebase and CI, corrected two host-fact conclusions (secret storage, tray), and pinned every required upstream Linux artifact. All "Verified" sections below were checked on that date.
 > **Scope cut (2026-08-24):** the first Linux version is **Core Beta only** (Phases 0–5). Speaker identification and local summaries are **out of scope** until a later Linux version. There is no Omarchy host with an NVIDIA GPU to validate those CUDA-only add-ons; do not ship a CPU fallback. The UI must keep both features visible but greyed out as unsupported.
@@ -106,7 +106,7 @@ On the current Omarchy host, `npm test` also fails seven Linux-platform assumpti
 
 ### Gate B — triage current macOS release integrity — **STILL OPEN**
 
-[Issue #76](https://github.com/AmirArshad/meeting-transcriber/issues/76) reports that the v2.7.0 DMG appears corrupt on macOS 15.7.7 / M3 Pro. As of 2026-08-23 the issue is open with one reporter follow-up ("redownloaded and verified the download was good") and no maintainer-side verification. This does not block Phases 0–4, but it blocks touching `.github/workflows/build-release.yml` (Phase 5's release job):
+[Issue #76](https://github.com/AmirArshad/meeting-transcriber/issues/76) reports that the v2.7.0 DMG appears corrupt on macOS 15.7.7 / M3 Pro. Re-checked 2026-08-28: the issue is still **OPEN**, last comment 2026-08-11 ("redownloaded and verified the download was good"), no maintainer-side verification. This does not block Phases 0–5 product/CI packaging, but it still blocks touching `.github/workflows/build-release.yml` (no Linux release job until Gate B closes):
 
 1. Download the published DMG and verify checksum, mountability, signature, notarization, and stapling.
 2. Determine whether the screenshot is true file corruption, a signing/notarization failure, or Gatekeeper copy.
@@ -697,7 +697,7 @@ Host: `amiromarchy`, Omarchy 4, Hyprland (`XDG_CURRENT_DESKTOP=Hyprland`, `WAYLA
 
 Switches live in `src/main-process/linux-electron-bootstrap.js` and are applied from `src/main.js` **before** `app.requestSingleInstanceLock()` so Chromium does not already bind XWayland / `basic_text`.
 
-**Secret storage (Locked decision 9).** Live `whenReady()` log: `Linux secret storage backend: gnome_libsecret` — not `basic_text`. Hyprland is still not on Chromium's desktop list; the explicit `password-store=gnome-libsecret` switch is what selected the real backend. `getSelectedStorageBackend()` / `probeSecretStorage()` are exported for the later Phase 7 token preflight. Packaged-AppImage `dlopen(libsecret)` remains a Phase 5 exit criterion.
+**Secret storage (Locked decision 9).** Live `whenReady()` log: `Linux secret storage backend: gnome_libsecret` — not `basic_text`. Hyprland is still not on Chromium's desktop list; the explicit `password-store=gnome-libsecret` switch is what selected the real backend. `getSelectedStorageBackend()` / `probeSecretStorage()` are exported for the later Phase 7 token preflight. Packaged-AppImage `dlopen(libsecret)` was proven in Phase 5 (2026-08-28): generic encrypt/decrypt round-trip, backend `gnome_libsecret`, not `basic_text`.
 
 **Ozone (Locked decision 10).** Three launches of `node_modules/electron/dist/electron .` with Omarchy's ambient `ELECTRON_OZONE_PLATFORM_HINT=wayland` **unset**, so the measurement is the app switch:
 
@@ -717,33 +717,51 @@ Switches live in `src/main-process/linux-electron-bootstrap.js` and are applied 
 
 **Add-on grey-out (Locked decision 12).** Exact reason strings live in `src/ai-addon-state.js`. Settings cards `#diarization-addon-card` / `#summary-addon-card` take `.ai-addon-card.is-unsupported`; all setup controls begin disabled and remain gated by status; token and speaker-count fields are not offered when unsupported; History Generate Summary stays disabled with that copy; `generate-summary` rejects unsupported before any Python preflight. Locked decision 1 copy sites were already extracted in Phase 0 (`inferRendererHostFamily` / `getRecordingPermissionFailureGuidance` / `getUnsupportedGpuSettingsCopy`).
 
-**Phase 4 product code and adversarial review are closed. Phase 5 packaging has not started.** Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.
+**Phase 4 product code and adversarial review are closed. Phase 5 packaging code landed 2026-08-28; Core Beta is not marked complete (see Phase 5 residuals).** Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.
 
 ### Phase 5 — Omarchy Core Beta packaging
+
+**Status (2026-08-28):** Packaging implementation, Ubuntu CI, updater matching, and the Omarchy/Ubuntu package smokes below landed on `release/linux`. Stay on **electron-builder `^26.15.3`**; do **not** upgrade to v27 in this phase (ESM, Node 22.12, toolset-default changes, `--no-sandbox` / desktop Exec / DMG APFS). Opt in to the reviewed static AppImage toolset with `"toolsets": { "appimage": "1.0.2" }` — never the legacy FUSE2 runtime (`0.0.0`). The live build fetched `appimage-tools-runtime-20251108.tar.gz` (static type2-runtime), not `appimage-12.0.1.7z`. The static runtime is a static-pie ELF and does **not** need host `fuse2` / `libfuse.so.2`; it still uses the kernel FUSE device (`/dev/fuse`) plus userspace `fuse3` (`fusermount3`) via bundled squashfuse. Do **not** treat `--appimage-extract-and-run` as proof of the shipped default.
+
+Arch **build-host** only: electron-builder's bundled fpm needs `libcrypt.so.1` (`libxcrypt-compat` on Omarchy). That is not a pacman runtime depend.
 
 Files:
 
 - Linux targets and resources in `package.json` (AppImage + pacman; `artifactName` producing `AvaNevis-Setup-*` per Locked decision 11)
-- the **electron-builder decision** from Locked decision 8: opt into the static AppImage toolset on 26.x, or upgrade to v27 after reviewing its breaking changes — never the legacy FUSE2 runtime
-- pacman packaging metadata/dependencies (no libappindicator; validate `.PKGINFO` on clean Omarchy)
-- Linux artifact naming in `src/updater.js`, including the tightened `findInstallerAsset` Linux branch (snippet in Locked decision 11)
-- Linux build/smoke jobs in `.github/workflows/ci.yml` (ubuntu runner — AppImages cannot be cross-compiled)
-- Linux release job in `.github/workflows/build-release.yml` **only after Gate B closes**
+- the **electron-builder decision** from Locked decision 8: opt into the static AppImage toolset on 26.x (`1.0.2`), not a v27 upgrade
+- pacman packaging metadata/dependencies (no libappindicator; `.PKGINFO` validated on Omarchy)
+- Linux artifact naming in `src/updater.js` (tightened `findInstallerAsset`)
+- Linux build/smoke job in `.github/workflows/ci.yml` (ubuntu runner — AppImages cannot be cross-compiled)
+- Linux release job in `.github/workflows/build-release.yml` **only after Gate B closes** — **not added** (issue #76 still OPEN as of 2026-08-28)
 - build/installer docs and troubleshooting — first-version claims match Gate C (CPU transcription; add-ons greyed unsupported)
 
 Exit criteria:
 
-- clean Omarchy install, upgrade, uninstall
-- AppImage launches without FUSE2 on Omarchy and Ubuntu 24.04
-- packaged app uses bundled Python, ffmpeg, and backend — **no** Linux `speakrs-cli`, llama.cpp, or ORT
-- `AVANEVIS_PACKAGED=1` blocks PATH helper substitution
-- **packaged-AppImage `safeStorage` encrypt/decrypt round-trip** on Omarchy — this covers the `dlopen(libsecret)` AppImage risk; no Hugging Face token is required
-- legal notices open
-- packaged UI still greys out speaker identification and summaries; no setup button can complete
+- clean Omarchy install, upgrade, uninstall — **passed 2026-08-28** (`sudo pacman -U dist/AvaNevis-Setup-2.7.0.pkg.tar.zst`, same-version reinstall, `sudo pacman -R avanevis` without `-s`; gtk3 and libsecret remained)
+- AppImage launches without FUSE2 on Omarchy and Ubuntu 24.04 — **passed** (see evidence; not extract-and-run)
+- packaged app uses bundled Python, ffmpeg, and backend — **no** Linux `speakrs-cli`, llama.cpp, or ORT — **passed** (verifier + installed layout; no `resources/bin`)
+- `AVANEVIS_PACKAGED=1` blocks PATH helper substitution — **passed** (`scripts/verify-linux-packaging.js` isolation)
+- **packaged-AppImage `safeStorage` encrypt/decrypt round-trip** on Omarchy — **passed** (`gnome_libsecret`, `roundTrip: true`, not `basic_text`; no HF token)
+- legal notices open — **partial:** packaged `resources/legal/THIRD_PARTY_NOTICES.md` exists and is readable (`legalNoticesReadable: true`). The Settings **Open legal notices** button was not clicked.
+- packaged UI still greys out speaker identification and summaries; no setup button can complete — **partial:** packaged main-process availability is fail-closed (`diarization.supported` / `summary.supported` both `false` in the AppImage and pacman smokes). Packaged Settings chrome / Setup / Generate Summary were not clicked.
 
-**Core Beta ends here.** That is the first Linux version.
+**Core Beta is not marked complete** while the two UI-click rows and a packaged recording session remain open. Do not run the full post-Phase-5 documentation sweep yet.
 
-After Phase 5 exit criteria pass, run a **repo documentation pass** so AGENTS.md, README, BACKEND.md, TESTING/BUILD docs, LINUX_SUPPORT status, and manual checklists describe the shipped Linux Core Beta (Pulse/PipeWire recording, CPU faster-whisper, add-ons still greyed `unsupported`). Do not advertise CUDA or add-ons as ready.
+### Phase 5 Omarchy / Ubuntu evidence (2026-08-28)
+
+Host: `amiromarchy`, Omarchy 4.0.1, Hyprland. `fuse2` / `libfuse.so.2` **not** installed; `fuse3` + `/dev/fuse` are present. Artifacts (gitignored, not committed): `dist/AvaNevis-Setup-2.7.0.AppImage` (~312 MB), `dist/AvaNevis-Setup-2.7.0.pkg.tar.zst` (~284 MB), `dist/linux-unpacked/`.
+
+**Verifier.** `node scripts/verify-linux-packaging.js --unpacked --appimage --pacman` passed. `.PKGINFO` depends: `alsa-lib`, `at-spi2-core`, `dbus`, `gtk3`, `libnotify`, `libpulse`, `libsecret`, `libxss`, `libxtst`, `nss`, `xdg-utils`. No `libappindicator`, no `ffmpeg`.
+
+**AppImage (Omarchy, default runtime).** `ldd` shows no FUSE libs (static-pie). `AVANEVIS_SAFESTORAGE_SMOKE=1 ./dist/AvaNevis-Setup-2.7.0.AppImage` exit 0. Payload included `pythonExe` / `ffmpegPath` / `backendPath` under `/tmp/.mount_AvaNev…/resources/…`, `transcriberModule: transcription.faster_whisper_transcriber`, `backend: gnome_libsecret`, `isBasicText: false`, `roundTrip: true`, add-ons `supported: false`, `legalNoticesReadable: true`. Ozone: native Wayland (`hint: auto`). `--appimage-extract-and-run` was **not** used.
+
+**Ubuntu 24.04.** No Ubuntu desktop on this host. Evidence is an `ubuntu:24.04` container. `--appimage-help` succeeded with **no** fuse packages and **no** `libfuse.so.2`. A default Electron launch without `/dev/fuse` failed (`fusermount` / `fuse: device not found`) — that is missing kernel FUSE, not a fuse2 requirement. Retry with `--device /dev/fuse`, `fuse3` (not fuse2), and xvfb: AppImage mounted at `/tmp/.mount_AvaNev…`, `app.isPackaged: true`, bundled Python 3.11.7 / ffmpeg n8.0.1 / backend, CPU faster-whisper. Timeout killed the GUI after 25 s (no smoke env). That container also began a Whisper `small` preload against the HF Hub — expected first-launch behavior, not a Linux-only cloud path. This is **not** a Ubuntu desktop recording/safeStorage smoke.
+
+**pacman.** Clean install to `/opt/AvaNevis`; same-version upgrade; `AVANEVIS_SAFESTORAGE_SMOKE=1 /opt/AvaNevis/avanevis` exit 0 with the same fail-closed add-on payload and `gnome_libsecret` round-trip; uninstall without `-s`. Installed tree had no `resources/bin` (no `speakrs-cli`).
+
+**Not run (leave open):** packaged Settings screenshot / Setup click / Generate Summary click; in-app Open legal notices; a packaged recording or transcription session (bundled-path + transcriber-module smoke only; do not substitute `npm start`).
+
+After those remaining exit criteria pass, run a **repo documentation pass** so AGENTS.md, README, BACKEND.md, TESTING/BUILD docs, LINUX_SUPPORT status, and manual checklists describe the shipped Linux Core Beta (Pulse/PipeWire recording, CPU faster-whisper, add-ons still greyed `unsupported`). Do not advertise CUDA or add-ons as ready.
 
 ### Phases 6–9 — Later Linux version (deferred)
 
@@ -869,8 +887,8 @@ First Linux version (Omarchy CPU-only):
 - queued transcription + model preload ordering
 - tray behavior with an SNI host present (this Omarchy session: quickshell StatusNotifierWatcher, not Waybar) and in a bare Wayland session (no SNI host) — no crash, presence still communicated. Phase 4 live: SNI item registered; missing-host crash path is unit-tested
 - app rendering under XWayland vs `--ozone-platform-hint=auto` on Hyprland with fractional scaling — Phase 4 spike closed 2026-08-27; shipped default is `auto` (native Wayland on this host)
-- packaged-AppImage `safeStorage` encrypt/decrypt on Omarchy
-- Settings/Home/History: speaker identification and summaries visible, greyed, future-version copy; no setup or Generate Summary can start
+- packaged-AppImage `safeStorage` encrypt/decrypt on Omarchy — **passed 2026-08-28** (`gnome_libsecret`, not `basic_text`)
+- Settings/Home/History: speaker identification and summaries visible, greyed, future-version copy; no setup or Generate Summary can start — Phase 4 unit/dev evidence; **packaged UI clicks not run in Phase 5**
 - no network during transcription
 
 Later version only (needs NVIDIA Omarchy):
@@ -898,4 +916,4 @@ Later version only (needs NVIDIA Omarchy):
 
 ## First implementation action
 
-Gate A is resolved (green run linked above). Phases 0–4 product code and the Phase 4 adversarial review are done on `release/linux` (Phase 3 60-minute soak cancelled by operator 2026-08-27; Phase 4 ozone/secret-storage/tray/CPU/add-on grey-out and review remediation closed 2026-08-27). **NEXT: Phase 5 packaging; it has not started. Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.**
+Gate A is resolved (green run linked above). Phases 0–4 product code and the Phase 4 adversarial review are done on `release/linux` (Phase 3 60-minute soak cancelled by operator 2026-08-27; Phase 4 ozone/secret-storage/tray/CPU/add-on grey-out and review remediation closed 2026-08-27). **Phase 5 packaging code landed 2026-08-28; Core Beta is not marked complete** (packaged Settings/legal-notices UI clicks and a packaged recording session not run; Gate B still open — do not touch `build-release.yml`). Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.

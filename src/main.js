@@ -120,6 +120,7 @@ const {
 const {
   applyLinuxElectronCommandLineSwitches,
   getSelectedStorageBackend,
+  runLinuxSafeStorageSmoke,
 } = require('./main-process/linux-electron-bootstrap');
 
 // Ozone and password-store must be set before any other app.* call so Chromium
@@ -1511,6 +1512,31 @@ app.whenReady().then(async () => {
       'hint:',
       app.commandLine.getSwitchValue('ozone-platform-hint') || '(unset)',
     );
+    if (process.env.AVANEVIS_SAFESTORAGE_SMOKE === '1') {
+      const smoke = runLinuxSafeStorageSmoke(getSafeStorage());
+      const {
+        getDiarizationAvailability,
+        getSummaryAvailability,
+      } = require('./ai-addon-state');
+      const noticesPath = getLegalNoticesPath({
+        resourcesPath: process.resourcesPath,
+        devRoot: null,
+      });
+      const payload = {
+        ...smoke,
+        pythonExe: pythonConfig.pythonExe,
+        ffmpegPath: pythonConfig.ffmpegPath,
+        backendPath: pythonConfig.backendPath,
+        transcriberModule: getTranscriberModule(process.platform, process.arch),
+        diarization: getDiarizationAvailability('linux', 'x64'),
+        summary: getSummaryAvailability('linux', 'x64'),
+        legalNoticesPath: noticesPath,
+        legalNoticesReadable: Boolean(noticesPath && fs.existsSync(noticesPath)),
+      };
+      console.log('AVANEVIS_SAFESTORAGE_SMOKE', JSON.stringify(payload));
+      app.exit(payload.ok && payload.legalNoticesReadable && payload.diarization.supported === false && payload.summary.supported === false ? 0 : 1);
+      return;
+    }
   }
   console.log('==============================');
 

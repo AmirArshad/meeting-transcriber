@@ -59,9 +59,39 @@ function probeSecretStorage(safeStorage) {
   };
 }
 
+const SAFESTORAGE_SMOKE_CANARY = 'avanevis-linux-phase5-safestorage';
+
+function runLinuxSafeStorageSmoke(safeStorage) {
+  const probe = probeSecretStorage(safeStorage);
+  let roundTrip = false;
+  let error = null;
+  if (
+    probe.encryptionAvailable
+    && !probe.isBasicText
+    && safeStorage
+    && typeof safeStorage.encryptString === 'function'
+    && typeof safeStorage.decryptString === 'function'
+  ) {
+    try {
+      const encrypted = safeStorage.encryptString(SAFESTORAGE_SMOKE_CANARY);
+      roundTrip = safeStorage.decryptString(encrypted) === SAFESTORAGE_SMOKE_CANARY;
+    } catch (err) {
+      error = err && err.message ? String(err.message) : String(err);
+    }
+  }
+  return {
+    ...probe,
+    roundTrip,
+    ok: Boolean(roundTrip && probe.encryptionAvailable && !probe.isBasicText),
+    error,
+  };
+}
+
 module.exports = {
+  SAFESTORAGE_SMOKE_CANARY,
   applyLinuxElectronCommandLineSwitches,
   getSelectedStorageBackend,
   probeSecretStorage,
   resolveLinuxPasswordStore,
+  runLinuxSafeStorageSmoke,
 };
