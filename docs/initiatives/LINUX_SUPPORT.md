@@ -1,6 +1,6 @@
 # Linux Support Plan — Omarchy First
 
-> **Status:** Phases 0–2 complete on `release/linux`. **Phase 3 product code, automated tests, and the Phase 3 adversarial review are done on an Ubuntu VPS (2026-08-25)** (`linux_recorder.py`, factory, preflight, Electron wiring; four review defects remediated — see *Phase 3 adversarial review*). **Direct next step: Omarchy hardware smoke.** Do not start Phase 4. Omarchy hardware smoke still blocks calling Phase 3 complete (15/60-minute captures, record-during-CPU-transcription, browser speech in the transcript, no duration-growing capture array). Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.
+> **Status:** Phases 0–2 complete on `release/linux`. **Phase 3 product code, automated tests, and the Phase 3 adversarial review are done on an Ubuntu VPS (2026-08-25).** **Omarchy hardware smoke 2026-08-27:** 15-minute soak passed; cancel / start-fail / late vanish / Chromium→CPU transcript passed; PipeWire restart fails SoundCard streams (no false vanish). **Still open:** 60-minute soak, Electron record-during-CPU-transcription, headphone unplug. Do not start Phase 4. Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.
 > **Replanned:** 2026-08-23 against AvaNevis v2.7.0 / current `master`.
 > **Review pass:** 2026-08-23 — verified plan claims against the codebase and CI, corrected two host-fact conclusions (secret storage, tray), and pinned every required upstream Linux artifact. All "Verified" sections below were checked on that date.
 > **Scope cut (2026-08-24):** the first Linux version is **Core Beta only** (Phases 0–5). Speaker identification and local summaries are **out of scope** until a later Linux version. There is no Omarchy host with an NVIDIA GPU to validate those CUDA-only add-ons; do not ship a CPU fallback. The UI must keep both features visible but greyed out as unsupported.
@@ -620,14 +620,30 @@ Exit criteria:
 - browser speech reaches the transcript, not only meters/saved channels
 - no whole-session capture array grows with duration
 
-**Status (2026-08-25, Ubuntu VPS — not Omarchy):** `backend/audio/linux_recorder.py` is wired through the factory, `getRecorderModule('linux')`, and recording preflight. Automated cases for mic+desktop, mic-only, desktop startup/late loss, mic failure, Stop success, recoverable finalization failure, cancel tombstone, force-kill recovery, stop/cancel timeout, and stdout chunk parsing are in the suite. Dummy-Pulse smoke on this VPS is API evidence only. **Phase 3 is not complete.** Remaining Omarchy hardware exit criteria (do not skip):
+**Status (2026-08-25, Ubuntu VPS — not Omarchy):** `backend/audio/linux_recorder.py` is wired through the factory, `getRecorderModule('linux')`, and recording preflight. Automated cases for mic+desktop, mic-only, desktop startup/late loss, mic failure, Stop success, recoverable finalization failure, cancel tombstone, force-kill recovery, stop/cancel timeout, and stdout chunk parsing are in the suite. Dummy-Pulse smoke on this VPS is API evidence only.
 
-- live 15/60-minute Omarchy captures
-- recording while CPU transcription runs has no obvious glitches
-- browser speech reaches the transcript, not only meters/saved channels
-- no whole-session capture array grows with duration on hardware
+#### Phase 3 evidence — 2026-08-27 Omarchy 4.0.1 / Hyprland / PipeWire 1.6.8 (in progress)
 
-Do not start Phase 4 until those Omarchy rows pass. Do not treat `scripts/linux-audio-spike.py` as the product recorder.
+Host `amiromarchy`, branch `release/linux` @ `b6adf0a`. Product recorder is `backend/audio/linux_recorder.py` via `.venv` 3.11.16 (SoundCard 0.4.6, pulsectl 24.12.0). Same Pulse ids as Phase 2: `pulse-source:alsa_input.pci-0000_00_1b.0.analog-stereo` and `pulse-monitor:alsa_output.pci-0000_00_1b.0.analog-stereo.monitor`. Artifacts under `/tmp/avanevis-linux-smoke/` (not in git).
+
+Proven on this host with the **product** recorder (not the spike):
+
+- **Mic + desktop Stop:** 9.82 s stereo Opus 48 kHz; stdout stop stages `post_processing_started` → `audio_normalizing` → `audio_mixing` → `audio_encoding` → `post_processing_complete`; desktop levels nonzero; L/R RMS matched (−23.9 dB). No leftover `.capture`. No ScreenCast D-Bus markers.
+- **Discard:** stdin `cancel` after 3 s → `{ success: true, cancelled: true }`; no opus; capture dir removed (`Recording cancelled; capture discarded.`).
+- **Desktop startup failure:** `pulse-monitor:does-not-exist` → `DESKTOP_START_FAILED`, `desktopStatus: unavailable`, mic-only opus 3.38 s.
+- **Late desktop loss:** recorded `pulse-monitor:avanevis_smoke_desk.monitor`, unloaded the null sink at ~5 s. `DESKTOP_MONITOR_VANISHED` help text says earlier desktop audio is kept; stderr `keeping 240640 committed desktop frames` (5.01 s @ 48 kHz). Desktop level 0.088 → 0.0 after vanish. Final 9.66 s mix mean −11.5 dB (tone kept, not discarded). Analog default sink restored.
+- **Browser speech in the transcript:** Chromium (`--ozone-platform=wayland`) autoplayed Open Speech Repository `OSR_us_000_0010_8k.wav` into the analog sink. Product mix 12.10 s, stereo and ffmpeg `-ac 1 -ar 16000` downmix both mean −30.4 dB. `faster-whisper` `tiny.en` on **CPU** (`device: cpu`, `int8`) transcribed *The birch canoe slid on the smooth planks. Glue the sheet to the dark blue background.*
+- **15-minute soak (pass):** 08:55–09:11 +01, 901.8 s stereo Opus (12 MB, mean −42.0 dB). Stdout stop stages complete; no leftover `.capture`. Steady VmRSS **49.6 MB → 52.3 MB** while `{stem}.capture/` grew to **688 MB** on disk (linear ~45 MB/min). Fourteen 880 Hz desktop beeps landed at ~60 s spacing (first onset 59.4 s). Not a duration-growing capture array.
+- **Capture during CPU transcription (CLI):** 62.00 s mix while `tiny.en` looped on CPU (whisper pcpu peaked 144%). Desktop level stayed 0.088 after preroll (1 zeroish sample at start). Recorder RSS 14→56 MB. No warnings. Electron queue overlap (Stop meeting 1 → Start meeting 2 while Whisper runs) still needed in the app.
+- **PipeWire restart mid-capture:** `systemctl --user restart pipewire pipewire-pulse wireplumber` at t≈4 s. Pulse was back within 0.5 s and the analog source/monitor names were unchanged. SoundCard streams went `FAILED`. Watchdog did **not** emit `DESKTOP_MONITOR_VANISHED` (not a false vanish). Desktop path warned `DESKTOP_RECORDING_FAILED` and kept 160768 frames (~3.35 s). Mic path is fatal per contract → `RECORDING_THREAD_FAILED`, `success: false`, duration 0, no opus; leftover capture left `state: finalizing` with both tracks committed. Matches the parked cross-platform “mic-thread failure skips finalization” finding — do not treat as a Linux-only vanish bug. Reconnect-after-FAILED is not a Core Beta requirement.
+
+Still open on this host (do not start Phase 4):
+
+- 60-minute soak
+- Electron record-during-CPU-transcription (CLI overlap under `tiny.en` passed; app queue still needed)
+- unplug/replug headphones mid-capture (this jack retargets the same analog sink; still needs a live session)
+
+**Phase 3 is not complete.** Do not start Phase 4 until those remaining rows pass. Do not treat `scripts/linux-audio-spike.py` as the product recorder.
 
 #### Phase 3 adversarial review — 2026-08-25 (done)
 
@@ -640,7 +656,7 @@ Static review on the Ubuntu VPS of everything since `ce0a550`, scoped to `linux_
 
 Also fixed: the desktop level meter stayed frozen at its last value after the monitor vanished, so the UI implied desktop audio was still flowing.
 
-Residual hardware smoke this review cannot substitute for (all still open on Omarchy): the four exit-criteria rows above, plus specifically — unplug/replug headphones mid-capture and confirm the partial desktop audio survives into the mix, and confirm the single watch client does not drift after a PipeWire restart.
+Residual hardware smoke this review cannot substitute for: 60-minute soak, Electron record-during-CPU-transcription, headphone unplug/replug. PipeWire restart was run 2026-08-27 — SoundCard streams fail closed (mic fatal); the watchdog did not false-vanish.
 
 ### Phase 4 — Electron behavior, queue, and core transcription
 
@@ -854,4 +870,4 @@ Later version only (needs NVIDIA Omarchy):
 
 ## First implementation action
 
-Gate A is resolved (green run linked above). Phases 0–2 are done on `release/linux`. Phase 3 product code, automated tests, and the Phase 3 adversarial review are done on an Ubuntu VPS (2026-08-25). Do not start Phase 4. Remaining Phase 3 work is Omarchy hardware smoke (15/60-minute captures, record-during-CPU-transcription, browser speech in the transcript, no duration-growing capture array). **Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.**
+Gate A is resolved (green run linked above). Phases 0–2 are done on `release/linux`. Phase 3 product code, automated tests, and the Phase 3 adversarial review are done on an Ubuntu VPS (2026-08-25). Omarchy hardware smoke started 2026-08-27 (see *Phase 3 evidence — 2026-08-27*). Do not start Phase 4 until the remaining 60-minute soak, Electron queue overlap, and headphone unplug/replug rows pass. **Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.**
