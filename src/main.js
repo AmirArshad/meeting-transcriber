@@ -1311,6 +1311,7 @@ function createWindow() {
         : 0;
       const dialogOptions = buildWindowCloseDialogOptions(captureState, process.platform, {
         pendingTranscriptionCount,
+        trayAvailable: recordingPresenceService ? recordingPresenceService.hasTray() : false,
       });
       const { keepRecordingAction, ...messageBoxOptions } = dialogOptions;
 

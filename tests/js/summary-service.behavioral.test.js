@@ -19,7 +19,13 @@ function createProcess() {
   return proc;
 }
 
-function createHarness({ summaryExitCode = 0, metadataOutput = null, previousSummary = null, checkAiAddonSetupStatus } = {}) {
+function createHarness({
+  summaryExitCode = 0,
+  metadataOutput = null,
+  previousSummary = null,
+  checkAiAddonSetupStatus,
+  platform = 'win32',
+} = {}) {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-summary-service-'));
   const recordingsDir = path.join(userData, 'recordings');
   fs.mkdirSync(recordingsDir, { recursive: true });
@@ -28,6 +34,7 @@ function createHarness({ summaryExitCode = 0, metadataOutput = null, previousSum
   const previousOutputMarkdown = path.join(recordingsDir, 'meeting.summary.md');
   let generatedOutputJson = null;
   let generatedOutputMarkdown = null;
+  const spawnedArgs = [];
   fs.writeFileSync(transcriptPath, '# Meeting\n');
 
   const meeting = {
@@ -58,6 +65,7 @@ function createHarness({ summaryExitCode = 0, metadataOutput = null, previousSum
     fs,
     pythonConfig: { backendPath: recordingsDir },
     spawnTrackedPython(args) {
+      spawnedArgs.push([...args]);
       const proc = createProcess();
       const joined = args.join(' ');
       if (joined.includes('meeting_manager') && joined.includes(' get ')) {
@@ -121,6 +129,7 @@ function createHarness({ summaryExitCode = 0, metadataOutput = null, previousSum
     assertSafeExistingSegmentsPath: (value) => value,
     terminateProcessBestEffort: async (proc) => proc?.kill(),
     summarizeSummaryValidationError: (value) => value || 'summary failed',
+    platform,
     checkAiAddonSetupStatus: checkAiAddonSetupStatus || (async () => ({
       features: { summary: { status: 'ready', setupComplete: true, modelId: 'test-model' } },
     })),
@@ -138,11 +147,13 @@ function createHarness({ summaryExitCode = 0, metadataOutput = null, previousSum
     outputJson: previousOutputJson,
     outputMarkdown: previousOutputMarkdown,
     getGeneratedPaths: () => ({ outputJson: generatedOutputJson, outputMarkdown: generatedOutputMarkdown }),
+    getSpawnedArgs: () => spawnedArgs.map((args) => [...args]),
   };
 }
 
-test('generate-summary stays fail-closed when the feature is unsupported', async () => {
-  const { handlers } = createHarness({
+test('generate-summary stays fail-closed before spawning preflight when the feature is unsupported', async () => {
+  const { handlers, getSpawnedArgs } = createHarness({
+    platform: 'linux',
     checkAiAddonSetupStatus: async () => ({
       features: {
         summary: {
@@ -160,6 +171,7 @@ test('generate-summary stays fail-closed when the feature is unsupported', async
     handlers['generate-summary']({ sender: {} }, { meetingId: 'meeting_1' }),
     /not available on Linux in this version/,
   );
+  assert.deepEqual(getSpawnedArgs(), []);
 });
 
 test('failed summary regeneration preserves the previously committed sidecars', async () => {

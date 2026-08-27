@@ -38,6 +38,35 @@ test('unsupported Linux add-on fields hide token and speaker-count UI', () => {
   );
 });
 
+test('AI add-on controls are disabled in the initial HTML until status is known', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'renderer', 'index.html'), 'utf8');
+  const controlIds = [
+    'ai-addon-cta',
+    'generate-summary-btn',
+    'regenerate-summary-btn',
+    'home-setup-diarization-btn',
+    'diarization-token-input',
+    'diarization-speaker-count',
+    'setup-diarization-btn',
+    'validate-diarization-btn',
+    'remove-diarization-btn',
+    'summary-profile-select',
+    'setup-summary-btn',
+    'validate-summary-btn',
+    'remove-summary-btn',
+  ];
+  for (const id of controlIds) {
+    const openingTag = html.match(new RegExp(`<[^>]+id="${id}"[^>]*>`, 'i'))?.[0] || '';
+    assert.match(openingTag, /\sdisabled(?:\s|>|=)/i, `${id} must start disabled`);
+  }
+
+  const engineRadios = [...html.matchAll(/<input[^>]+class="diarization-engine-radio"[^>]*>/gi)];
+  assert.ok(engineRadios.length > 0);
+  for (const [openingTag] of engineRadios) {
+    assert.match(openingTag, /\sdisabled(?:\s|>|=)/i);
+  }
+});
+
 test('isAiAddonTerminalStatus recognizes terminal statuses', () => {
   assert.equal(isAiAddonTerminalStatus('ready'), true);
   assert.equal(isAiAddonTerminalStatus('error'), true);

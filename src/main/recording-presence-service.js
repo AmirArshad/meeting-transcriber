@@ -104,7 +104,7 @@ function isActiveCaptureState(state) {
 function buildWindowCloseDialogOptions(
   captureState,
   platform = process.platform,
-  { pendingTranscriptionCount = 0 } = {},
+  { pendingTranscriptionCount = 0, trayAvailable = true } = {},
 ) {
   const state = captureState?.state || 'idle';
 
@@ -123,6 +123,18 @@ function buildWindowCloseDialogOptions(
     }
 
     if (platform === 'linux') {
+      if (!trayAvailable) {
+        return {
+          type: 'question',
+          title: 'AvaNevis is still recording',
+          message: 'AvaNevis is still recording.',
+          detail: 'Minimize to keep the taskbar recording indicator visible, or stop and quit.',
+          buttons: ['Keep Recording Minimized', 'Stop and Quit', 'Cancel'],
+          defaultId: 0,
+          cancelId: 2,
+          keepRecordingAction: 'minimize',
+        };
+      }
       return {
         type: 'question',
         title: 'AvaNevis is still recording',
@@ -551,6 +563,7 @@ function createRecordingPresenceService(deps) {
 
   return {
     createTray,
+    hasTray: () => Boolean(tray),
     updateCaptureState,
     getCaptureState,
     refreshPresentation,

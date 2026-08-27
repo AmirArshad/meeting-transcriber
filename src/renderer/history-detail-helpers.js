@@ -248,6 +248,7 @@
   }
 
   function buildAiAddonControlState({ feature, type, setupActive = false, unsupported = false, selectedEngine } = {}) {
+    const statusKnown = Boolean(feature && typeof feature.status === 'string');
     const hasLocalState = type === 'summary'
       ? hasSummaryLocalState(feature)
       : hasDiarizationLocalState(feature);
@@ -267,17 +268,50 @@
     );
 
     return {
-      canConfigure: !isUnsupported && !isBusy && !selectedIsReady && !packagedCliUnrepairable,
-      canValidate: !isUnsupported && !isBusy && hasLocalState,
-      canRemove: !isUnsupported && !isBusy && hasLocalState,
-      canSelectEngine: !isUnsupported && !isBusy,
+      canConfigure: statusKnown && !isUnsupported && !isBusy && !selectedIsReady && !packagedCliUnrepairable,
+      canValidate: statusKnown && !isUnsupported && !isBusy && hasLocalState,
+      canRemove: statusKnown && !isUnsupported && !isBusy && hasLocalState,
+      canSelectEngine: statusKnown && !isUnsupported && !isBusy,
       hasLocalState,
       isBusy,
       isUnsupported,
     };
   }
 
+  function canRunAiAddonControlAction({ action, ...controlOptions } = {}) {
+    const controlState = buildAiAddonControlState(controlOptions);
+    if (action === 'configure') {
+      return controlState.canConfigure;
+    }
+    if (action === 'validate') {
+      return controlState.canValidate;
+    }
+    if (action === 'remove') {
+      return controlState.canRemove;
+    }
+    if (action === 'select') {
+      return controlState.canSelectEngine;
+    }
+    return false;
+  }
+
+  function getUnsupportedAiAddonFootprintRows(feature) {
+    if (!feature || feature.status !== 'unsupported') {
+      return null;
+    }
+    return [
+      { label: 'Platform', value: 'unsupported' },
+      { label: 'Runtime', value: 'disabled' },
+    ];
+  }
+
   function getSummaryActionControlState(feature) {
+    if (!feature) {
+      return {
+        enabled: false,
+        title: getSummarySetupMessage(feature),
+      };
+    }
     if (feature && feature.status === 'unsupported') {
       return {
         enabled: false,
@@ -410,12 +444,14 @@
   return {
     buildAiAddonControlState,
     buildHomeAiAddonPrompt,
+    canRunAiAddonControlAction,
     cleanMarkdownText,
     hasDiarizationLocalState,
     getDiarizationSetupMessage,
     getSummaryActionControlState,
     getSummaryGenerationButtonView,
     getSummarySetupMessage,
+    getUnsupportedAiAddonFootprintRows,
     isUnownedDocumentFocus,
     normalizeHistoryDetailTab,
     parseTranscriptMarkdownSegments,

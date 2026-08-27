@@ -274,6 +274,16 @@ function createGpuRuntimeService(deps) {
   }
 
   async function enrichCheckCudaStatus(parsedStatus) {
+    if (parsedStatus && parsedStatus.statusCode === 'unsupportedPlatform') {
+      return {
+        ...parsedStatus,
+        version: null,
+        packages: [],
+        pythonVersion: null,
+        pythonSupportedForInstall: false,
+        pythonExecutable: null,
+      };
+    }
     try {
       const pythonVersion = await getCachedActivePythonVersion();
       return {
@@ -562,6 +572,11 @@ function createGpuRuntimeService(deps) {
 
     ipcMain.handle('ensure-compatible-gpu-runtime', async (event, options = {}) => {
       assertTrustedRendererSender(event);
+      if (process.platform !== 'win32') {
+        const error = new Error(getUnsupportedPlatformCudaProbeError(process.platform));
+        error.code = 'unsupportedPlatform';
+        throw error;
+      }
       return runGpuRuntimeAction((registerProcess) => ensureCompatibleGpuRuntime({
         ...options,
         registerProcess,

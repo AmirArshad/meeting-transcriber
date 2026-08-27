@@ -342,8 +342,22 @@ test('Linux tray uses context menu only and survives a missing SNI host', () => 
   });
   const degraded = createRecordingPresenceService(throwing.deps);
   assert.equal(degraded.createTray(), null);
+  assert.equal(degraded.hasTray(), false);
   degraded.updateCaptureState({ state: 'recording', sessionId: 1, startedAt: 1_000 });
   assert.equal(throwing.menuTemplates.length, 0);
+
+  const degradedClose = buildWindowCloseDialogOptions(
+    { state: 'recording', sessionId: 1, startedAt: 1_000 },
+    'linux',
+    { trayAvailable: degraded.hasTray() },
+  );
+  assert.deepEqual(degradedClose.buttons, [
+    'Keep Recording Minimized',
+    'Stop and Quit',
+    'Cancel',
+  ]);
+  assert.equal(degradedClose.keepRecordingAction, 'minimize');
+  assert.match(degradedClose.detail, /taskbar recording indicator/i);
 });
 
 test('tray menu intentionally replaces Gate A Show/Hide with Show AvaNevis and Quit AvaNevis', () => {

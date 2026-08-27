@@ -282,6 +282,7 @@
               style="display: none"
               title="Set up local AI add-ons"
               aria-label="Set up local AI add-ons"
+              disabled
             >
               <span class="gpu-cta-icon" aria-hidden="true">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -309,7 +310,7 @@
               </div>
               <div class="diarization-engine-selector" role="radiogroup" aria-label="Speaker engine">
                 <label class="diarization-engine-card" data-engine="speakrs" data-prompt-engine="speakrs" id="home-diarization-engine-speakrs">
-                  <input type="radio" name="home-diarization-engine" value="speakrs" class="diarization-engine-radio" />
+                  <input type="radio" name="home-diarization-engine" value="speakrs" class="diarization-engine-radio" disabled />
                   <span class="diarization-engine-card-title">
                     <span>Speakrs</span>
                     <span class="setting-badge diarization-engine-recommended" data-speakrs-recommended hidden>Recommended</span>
@@ -317,7 +318,7 @@
                   <span class="diarization-engine-card-sub" data-engine-sub="speakrs">No Hugging Face account.</span>
                 </label>
                 <label class="diarization-engine-card" data-engine="pyannote" data-prompt-engine="pyannote" id="home-diarization-engine-pyannote">
-                  <input type="radio" name="home-diarization-engine" value="pyannote" class="diarization-engine-radio" />
+                  <input type="radio" name="home-diarization-engine" value="pyannote" class="diarization-engine-radio" disabled />
                   <span class="diarization-engine-card-title">
                     <span>Pyannote</span>
                   </span>
@@ -332,10 +333,11 @@
                   class="settings-input"
                   placeholder="Leave blank to reuse a saved token, or paste a new one"
                   autocomplete="off"
+                  disabled
                 />
               </div>
               <div class="ai-addon-actions">
-                <button id="home-setup-diarization-btn" class="btn btn-primary btn-small">Set Up</button>
+                <button id="home-setup-diarization-btn" class="btn btn-primary btn-small" disabled>Set Up</button>
               </div>
             </section>
 
@@ -711,7 +713,7 @@
                           <button id="retry-transcription-btn" class="btn btn-small" style="display: none;">
                             Retry Transcription
                           </button>
-                          <button id="generate-summary-btn" class="btn btn-small">
+                          <button id="generate-summary-btn" class="btn btn-small" disabled>
                             Generate Summary
                           </button>
                           <button id="copy-transcript-btn" class="btn btn-small">
@@ -738,7 +740,7 @@
                       <div class="transcript-header-row">
                         <h3>Summary</h3>
                         <div class="transcript-section-actions">
-                          <button id="regenerate-summary-btn" class="btn btn-small">
+                          <button id="regenerate-summary-btn" class="btn btn-small" disabled>
                             Generate Summary
                           </button>
                           <button id="copy-summary-btn" class="btn btn-small" disabled>
@@ -868,7 +870,7 @@
 
                       <div class="diarization-engine-selector" role="radiogroup" aria-label="Speaker engine">
                         <label class="diarization-engine-card" data-engine="speakrs" id="diarization-engine-speakrs">
-                          <input type="radio" name="settings-diarization-engine" value="speakrs" class="diarization-engine-radio" />
+                          <input type="radio" name="settings-diarization-engine" value="speakrs" class="diarization-engine-radio" disabled />
                           <span class="diarization-engine-card-title">
                             <span>Speakrs</span>
                             <span class="setting-badge diarization-engine-recommended" data-speakrs-recommended hidden>Recommended</span>
@@ -876,7 +878,7 @@
                           <span class="diarization-engine-card-sub" id="diarization-engine-speakrs-sub">No Hugging Face account.</span>
                         </label>
                         <label class="diarization-engine-card" data-engine="pyannote" id="diarization-engine-pyannote">
-                          <input type="radio" name="settings-diarization-engine" value="pyannote" class="diarization-engine-radio" />
+                          <input type="radio" name="settings-diarization-engine" value="pyannote" class="diarization-engine-radio" disabled />
                           <span class="diarization-engine-card-title">
                             <span>Pyannote</span>
                           </span>
@@ -892,6 +894,7 @@
                           class="settings-input"
                           placeholder="Leave blank to reuse a saved token, or paste a new one"
                           autocomplete="off"
+                          disabled
                         />
                         <p class="ai-addon-help">
                           Create a Hugging Face read token from Settings > Access Tokens, then accept the pyannote model terms before setup.
@@ -903,7 +906,7 @@
 
                       <div class="ai-addon-field compact" id="diarization-speaker-count-field" hidden>
                         <label for="diarization-speaker-count">Speakers</label>
-                        <select id="diarization-speaker-count" class="device-select">
+                        <select id="diarization-speaker-count" class="device-select" disabled>
                           <option value="auto">Auto</option>
                           <option value="2">2 speakers</option>
                           <option value="3">3 speakers</option>
@@ -922,10 +925,10 @@
                         <p class="progress-text" id="diarization-progress-text">Starting&hellip;</p>
                       </div>
                       <div class="ai-addon-actions">
-                        <button id="setup-diarization-btn" class="btn btn-primary btn-small">Set Up</button>
+                        <button id="setup-diarization-btn" class="btn btn-primary btn-small" disabled>Set Up</button>
                         <button id="cancel-diarization-btn" class="btn btn-secondary btn-small cancel-download-btn">Cancel Download</button>
-                        <button id="validate-diarization-btn" class="btn btn-small">Validate</button>
-                        <button id="remove-diarization-btn" class="btn btn-danger btn-small">Remove</button>
+                        <button id="validate-diarization-btn" class="btn btn-small" disabled>Validate</button>
+                        <button id="remove-diarization-btn" class="btn btn-danger btn-small" disabled>Remove</button>
                       </div>
                     </div>
 
@@ -940,7 +943,7 @@
 
                       <div class="ai-addon-field compact">
                         <label for="summary-profile-select">Profile</label>
-                        <select id="summary-profile-select" class="device-select">
+                        <select id="summary-profile-select" class="device-select" disabled>
                           <option value="concise">Concise</option>
                           <option value="balanced" selected>Balanced</option>
                           <option value="detailed">Detailed</option>
@@ -957,10 +960,10 @@
                         <p class="progress-text" id="summary-progress-text">Starting&hellip;</p>
                       </div>
                       <div class="ai-addon-actions">
-                        <button id="setup-summary-btn" class="btn btn-primary btn-small">Install Model</button>
+                        <button id="setup-summary-btn" class="btn btn-primary btn-small" disabled>Install Model</button>
                         <button id="cancel-summary-btn" class="btn btn-secondary btn-small cancel-download-btn">Cancel Download</button>
-                        <button id="validate-summary-btn" class="btn btn-small">Validate</button>
-                        <button id="remove-summary-btn" class="btn btn-danger btn-small">Remove</button>
+                        <button id="validate-summary-btn" class="btn btn-small" disabled>Validate</button>
+                        <button id="remove-summary-btn" class="btn btn-danger btn-small" disabled>Remove</button>
                       </div>
                     </div>
                   </div>

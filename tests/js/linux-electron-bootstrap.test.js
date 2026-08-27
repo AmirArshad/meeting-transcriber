@@ -2,6 +2,10 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const { createGpuRuntimeService } = require('../../src/main/gpu-runtime-service');
 
 const {
   applyLinuxElectronCommandLineSwitches,
@@ -70,6 +74,8 @@ test('Linux CUDA probe reports unavailable and does not advertise install', () =
   assert.equal(linux.deviceAvailable, false);
   assert.equal(linux.runtimeLoadable, false);
   assert.equal(linux.statusCode, 'unsupportedPlatform');
+  assert.deepEqual(linux.supportedProfiles, []);
+  assert.equal(linux.recommendedInstallProfile, null);
   assert.match(linux.error, /not available on Linux in this version/);
   assert.match(linux.error, /CPU faster-whisper/);
   assert.equal(
@@ -77,4 +83,60 @@ test('Linux CUDA probe reports unavailable and does not advertise install', () =
     'CUDA is not available on Linux in this version. Transcription uses the CPU faster-whisper runtime.',
   );
   assert.match(getUnsupportedPlatformCudaProbeError('darwin'), /only supported on Windows/);
+});
+
+test('Linux GPU IPC fails closed before Python probing or GPU runtime queue admission', async () => {
+  const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+  const handlers = {};
+  let pythonVersionCalls = 0;
+  let gpuQueueAdmissions = 0;
+
+  Object.defineProperty(process, 'platform', { configurable: true, value: 'linux' });
+  try {
+    const service = createGpuRuntimeService({
+      app: { getPath: () => '/tmp/avanevis-test' },
+      path,
+      fs,
+      pythonConfig: { pythonExe: '/fake/python', backendPath: '/fake/backend' },
+      spawnTrackedPython: () => {
+        throw new Error('Linux GPU IPC must not spawn Python');
+      },
+      getBackendModuleArgs: () => [],
+      appendSpawnLogBuffer: (buffer, data) => `${buffer}${data}`,
+      sendRedactedProgress: () => {},
+      flushRedactedProgress: () => {},
+      getActivePythonVersion: async () => {
+        pythonVersionCalls += 1;
+        return { output: 'Python 3.11.9', parsed: { version: '3.11.9', major: 3, minor: 11 } };
+      },
+      terminateProcessBestEffort: () => {},
+      assertTrustedRendererSender: () => {},
+      getDiarizationDependencySitePackagesPath: () => null,
+      enqueueGpuResourceAction: async (action) => {
+        gpuQueueAdmissions += 1;
+        return action();
+      },
+    });
+    service.registerIpc({
+      handle(channel, handler) {
+        handlers[channel] = handler;
+      },
+    });
+
+    const status = await handlers['check-cuda']({ sender: {} });
+    assert.equal(status.statusCode, 'unsupportedPlatform');
+    assert.deepEqual(status.packages, []);
+    assert.equal(status.pythonVersion, null);
+    assert.equal(status.pythonExecutable, null);
+    assert.equal(pythonVersionCalls, 0);
+
+    await assert.rejects(
+      handlers['ensure-compatible-gpu-runtime']({ sender: {} }),
+      (error) => error && error.code === 'unsupportedPlatform',
+    );
+    assert.equal(gpuQueueAdmissions, 0);
+    assert.equal(pythonVersionCalls, 0);
+  } finally {
+    Object.defineProperty(process, 'platform', platformDescriptor);
+  }
 });

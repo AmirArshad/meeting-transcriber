@@ -3,6 +3,8 @@ const assert = require('node:assert/strict');
 
 const {
   buildAiAddonControlState,
+  canRunAiAddonControlAction,
+  getUnsupportedAiAddonFootprintRows,
   getDiarizationSetupMessage,
   getSummaryActionControlState,
   getSummaryGenerationButtonView,
@@ -198,6 +200,66 @@ test('AI add-on controls are disabled during active setup or unsupported state',
   assert.equal(unsupportedDiarization.canSelectEngine, false);
 });
 
+test('AI add-on controls fail closed until setup status is known', () => {
+  const unknownSummary = buildAiAddonControlState({
+    type: 'summary',
+    feature: null,
+  });
+  assert.equal(unknownSummary.canConfigure, false);
+  assert.equal(unknownSummary.canValidate, false);
+  assert.equal(unknownSummary.canRemove, false);
+  assert.equal(unknownSummary.canSelectEngine, false);
+  assert.deepEqual(getSummaryActionControlState(null), {
+    enabled: false,
+    title: 'Summary setup status is unavailable. Open Settings to validate the local summary model.',
+  });
+});
+
+test('AI add-on action guard follows the fail-closed control state', () => {
+  assert.equal(canRunAiAddonControlAction({ type: 'summary', feature: null, action: 'configure' }), false);
+  assert.equal(canRunAiAddonControlAction({
+    type: 'summary',
+    feature: { status: 'unsupported' },
+    action: 'configure',
+  }), false);
+  assert.equal(canRunAiAddonControlAction({
+    type: 'summary',
+    feature: { status: 'notConfigured' },
+    action: 'configure',
+  }), true);
+  assert.equal(canRunAiAddonControlAction({
+    type: 'diarization',
+    feature: { status: 'unsupported' },
+    action: 'select',
+  }), false);
+  assert.equal(canRunAiAddonControlAction({
+    type: 'diarization',
+    feature: { status: 'notConfigured' },
+    action: 'select',
+  }), true);
+  assert.equal(canRunAiAddonControlAction({
+    type: 'summary',
+    feature: { status: 'ready', setupComplete: true, cache: { installed: true } },
+    action: 'validate',
+  }), true);
+  assert.equal(canRunAiAddonControlAction({
+    type: 'summary',
+    feature: { status: 'ready', setupComplete: true, cache: { installed: true } },
+    action: 'remove',
+  }), true);
+});
+
+test('unsupported add-on footprints advertise a disabled runtime', () => {
+  assert.deepEqual(
+    getUnsupportedAiAddonFootprintRows({ status: 'unsupported' }),
+    [
+      { label: 'Platform', value: 'unsupported' },
+      { label: 'Runtime', value: 'disabled' },
+    ],
+  );
+  assert.equal(getUnsupportedAiAddonFootprintRows({ status: 'ready' }), null);
+});
+
 test('summary generation button view exposes spinner and cancel hover copy', () => {
   assert.deepEqual(getSummaryGenerationButtonView({ active: false }), {
     active: false,
@@ -302,6 +364,17 @@ test('Linux add-on control state is fully disabled and shows future-version copy
   assert.equal(getDiarizationSetupMessage(diarization), LINUX_DIARIZATION_UNAVAILABLE_REASON);
   assert.equal(getSummarySetupMessage(summary), LINUX_SUMMARY_UNAVAILABLE_REASON);
   assert.deepEqual(fields, { showToken: false, showSpeakerCount: false });
+});
+
+test('startup status refresh reapplies History summary availability', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const appSource = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'renderer', 'app.js'), 'utf8');
+  const refreshStart = appSource.indexOf('async function refreshHomeAiAddonPrompt()');
+  const refreshEnd = appSource.indexOf('\n}', refreshStart);
+  const refreshSource = appSource.slice(refreshStart, refreshEnd + 2);
+  assert.match(refreshSource, /aiAddonStatusSnapshot\s*=\s*status/);
+  assert.match(refreshSource, /updateSummaryGenerationButtons\(\)/);
 });
 
 test('buildHomeAiAddonPrompt hides unsupported macOS diarization prompt', () => {

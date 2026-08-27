@@ -81,9 +81,9 @@ function buildUnsupportedPlatformCudaStatus(platform = process.platform) {
     missingLibraries: [],
     runtime: 'ctranslate2',
     statusCode: 'unsupportedPlatform',
-    supportedProfiles: getSupportedTranscriptionCudaProfileIds(),
+    supportedProfiles: [],
     unsupportedDetectedProfiles: [],
-    recommendedInstallProfile: getSupportedTranscriptionCudaProfileIds()[0] || 'cuda12',
+    recommendedInstallProfile: null,
     error: getUnsupportedPlatformCudaProbeError(platform),
   };
 }

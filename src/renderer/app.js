@@ -42,11 +42,13 @@ const {
 const {
   buildAiAddonControlState,
   buildHomeAiAddonPrompt,
+  canRunAiAddonControlAction,
   getDiarizationSetupMessage,
   hasDiarizationLocalState,
   getSummaryActionControlState,
   getSummaryGenerationButtonView,
   getSummarySetupMessage,
+  getUnsupportedAiAddonFootprintRows,
   normalizeHistoryDetailTab,
   parseTranscriptMarkdownSegments,
   shouldRestoreInlineEditorFocus,
@@ -1506,13 +1508,19 @@ function updateHomeAiAddonCTA(aiStatus) {
   });
 
   if (!prompt) {
-    if (cta) cta.style.display = 'none';
+    if (cta) {
+      cta.disabled = true;
+      cta.style.display = 'none';
+    }
     if (speakerPrompt) speakerPrompt.style.display = 'none';
     return;
   }
 
   if (prompt.feature === 'diarization' && speakerPrompt) {
-    if (cta) cta.style.display = 'none';
+    if (cta) {
+      cta.disabled = true;
+      cta.style.display = 'none';
+    }
     const title = document.getElementById('diarization-setup-prompt-title');
     const message = document.getElementById('diarization-setup-prompt-message');
     if (title) title.textContent = prompt.title;
@@ -1556,6 +1564,7 @@ function updateHomeAiAddonCTA(aiStatus) {
   if (title) title.textContent = prompt.title;
   if (sub) sub.textContent = prompt.message;
   cta.dataset.feature = prompt.feature;
+  cta.disabled = false;
   cta.style.display = 'flex';
 }
 
@@ -4544,11 +4553,9 @@ function renderFootprintRows(container, rows) {
 }
 
 function updateDiarizationFootprint(diarization) {
-  if (diarization && diarization.status === 'unsupported') {
-    renderFootprintRows(document.getElementById('diarization-footprint'), [
-      { label: 'Platform', value: 'unsupported' },
-      { label: 'Runtime', value: 'disabled' },
-    ]);
+  const unsupportedRows = getUnsupportedAiAddonFootprintRows(diarization);
+  if (unsupportedRows) {
+    renderFootprintRows(document.getElementById('diarization-footprint'), unsupportedRows);
     return;
   }
 
@@ -4579,6 +4586,12 @@ function updateDiarizationFootprint(diarization) {
 }
 
 function updateSummaryFootprint(summary) {
+  const unsupportedRows = getUnsupportedAiAddonFootprintRows(summary);
+  if (unsupportedRows) {
+    renderFootprintRows(document.getElementById('summary-footprint'), unsupportedRows);
+    return;
+  }
+
   const storage = summary && summary.storage;
   const estimatedModel = storage && storage.estimatedModelBytes;
   const estimatedRuntime = storage && storage.estimatedRuntimeBytes;
@@ -4873,10 +4886,12 @@ async function refreshHomeAiAddonPrompt() {
     const status = await window.electronAPI.getAiAddonStatus({ includeStorageSizes: false });
     aiAddonStatusSnapshot = status;
     updateHomeAiAddonCTA(status);
+    updateSummaryGenerationButtons();
     return status;
   } catch (error) {
     console.warn('Could not refresh home AI add-on prompt:', error);
     updateHomeAiAddonCTA(null);
+    updateSummaryGenerationButtons();
     return null;
   }
 }
@@ -4966,6 +4981,23 @@ function setupAiAddonSettingsListeners() {
   const removeSummaryBtn = document.getElementById('remove-summary-btn');
   const summaryProfileSelect = document.getElementById('summary-profile-select');
 
+  function canRunControlAction(featureName, action, { selectedEngine } = {}) {
+    const feature = aiAddonStatusSnapshot && aiAddonStatusSnapshot.features
+      ? aiAddonStatusSnapshot.features[featureName]
+      : null;
+    return canRunAiAddonControlAction({
+      action,
+      feature,
+      type: featureName,
+      selectedEngine,
+      unsupported: Boolean(feature && feature.status === 'unsupported'),
+      setupActive: isAiAddonSetupLockingControls({
+        featureStatus: feature && feature.status,
+        progressActive: Boolean(aiAddonDownloadState[featureName] && aiAddonDownloadState[featureName].active),
+      }),
+    });
+  }
+
   function selectDiarizationEngine(engine) {
     selectedDiarizationEngine = engine;
     const diarization = aiAddonStatusSnapshot && aiAddonStatusSnapshot.features
@@ -4990,6 +5022,9 @@ function setupAiAddonSettingsListeners() {
       ? aiAddonStatusSnapshot.features.diarization
       : null;
     const engine = getSelectedDiarizationEngine(diarization);
+    if (!canRunControlAction('diarization', 'configure', { selectedEngine: engine })) {
+      return null;
+    }
     if (shouldConfirmDiarizationEngineSwitch({
       selectedEngine: engine,
       installedEngine: resolveSelectedDiarizationEngine(diarization),
@@ -5034,7 +5069,7 @@ function setupAiAddonSettingsListeners() {
 
   document.querySelectorAll('.diarization-engine-radio').forEach((radio) => {
     radio.addEventListener('change', () => {
-      if (radio.checked) {
+      if (radio.checked && canRunControlAction('diarization', 'select')) {
         selectDiarizationEngine(radio.value);
       }
     });
@@ -5064,15 +5099,23 @@ function setupAiAddonSettingsListeners() {
   }
 
   if (validateDiarizationBtn) {
-    validateDiarizationBtn.addEventListener('click', () => withAiAddonAction(validateDiarizationBtn, 'Validating...', async () => {
-      const status = await window.electronAPI.validateDiarizationSetup();
-      addLog('Speaker identification validation complete.');
-      return status;
-    }));
+    validateDiarizationBtn.addEventListener('click', () => {
+      if (!canRunControlAction('diarization', 'validate')) {
+        return;
+      }
+      withAiAddonAction(validateDiarizationBtn, 'Validating...', async () => {
+        const status = await window.electronAPI.validateDiarizationSetup();
+        addLog('Speaker identification validation complete.');
+        return status;
+      });
+    });
   }
 
   if (removeDiarizationBtn) {
     removeDiarizationBtn.addEventListener('click', () => {
+      if (!canRunControlAction('diarization', 'remove')) {
+        return;
+      }
       const diarization = aiAddonStatusSnapshot && aiAddonStatusSnapshot.features
         ? aiAddonStatusSnapshot.features.diarization
         : null;
@@ -5090,13 +5133,18 @@ function setupAiAddonSettingsListeners() {
   }
 
   if (setupSummaryBtn) {
-    setupSummaryBtn.addEventListener('click', () => withAiAddonSetupAction('summary', setupSummaryBtn, 'Installing...', 'Summary model setup', async () => {
-      const status = await window.electronAPI.setupSummaryModel({
-        profile: summaryProfileSelect ? summaryProfileSelect.value : DEFAULT_SUMMARY_PROFILE,
+    setupSummaryBtn.addEventListener('click', () => {
+      if (!canRunControlAction('summary', 'configure')) {
+        return;
+      }
+      withAiAddonSetupAction('summary', setupSummaryBtn, 'Installing...', 'Summary model setup', async () => {
+        const status = await window.electronAPI.setupSummaryModel({
+          profile: summaryProfileSelect ? summaryProfileSelect.value : DEFAULT_SUMMARY_PROFILE,
+        });
+        addLog('Summary model setup checked.');
+        return status;
       });
-      addLog('Summary model setup checked.');
-      return status;
-    }));
+    });
   }
 
   if (cancelSummaryBtn) {
@@ -5116,15 +5164,23 @@ function setupAiAddonSettingsListeners() {
   }
 
   if (validateSummaryBtn) {
-    validateSummaryBtn.addEventListener('click', () => withAiAddonAction(validateSummaryBtn, 'Validating...', async () => {
-      const status = await window.electronAPI.validateSummaryModel({});
-      addLog('Summary model validation complete.');
-      return status;
-    }));
+    validateSummaryBtn.addEventListener('click', () => {
+      if (!canRunControlAction('summary', 'validate')) {
+        return;
+      }
+      withAiAddonAction(validateSummaryBtn, 'Validating...', async () => {
+        const status = await window.electronAPI.validateSummaryModel({});
+        addLog('Summary model validation complete.');
+        return status;
+      });
+    });
   }
 
   if (removeSummaryBtn) {
     removeSummaryBtn.addEventListener('click', () => {
+      if (!canRunControlAction('summary', 'remove')) {
+        return;
+      }
       if (!confirm('Remove the local summary model from this device?')) {
         return;
       }
