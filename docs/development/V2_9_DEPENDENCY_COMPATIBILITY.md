@@ -67,7 +67,7 @@ Material floats observed 2026-08-28 (runtime) versus current build pins:
 | `onnxruntime` | 1.29.0 | 1.26.0 | Keep 1.26.0 until VAD/decode/Speakrs evidence |
 | `huggingface-hub` | 1.29.0 | macOS **1.29.0**; Windows/Linux **1.16.1** | **Accepted** macOS-only (2026-08-28). Windows/Linux stay 1.16.1 until those hosts evidence the bump |
 | `pytest` | 9.1.1 | floor `>=9.1.1` | **Accepted** Task 2 (2026-08-28): `requirements-dev.txt` floor raised; not a packaged pin |
-| `mlx` | 0.32.2 | 0.31.2 | macOS only; needs native smoke |
+| `mlx` | 0.32.2 | **0.32.2** | **Accepted** macOS-only (2026-08-28) after packaged MLX smoke; `lightning-whisper-mlx` stays 0.0.10; `tiktoken` stays 0.3.3 |
 | `torch` (macOS runtime) | 2.13.0 | **2.13.0** then prune | **Accepted** Task 2 (2026-08-28 Mac): still prune after pip |
 | `setuptools` (macOS runtime) | 84.0.0 | Windows/Linux/macOS **84.0.0** | **Accepted** Task 2 on all three packaged platforms |
 | PyObjC capture frameworks | 12.2.2 | 10.0 / 12.1 mix | Coordinated macOS change only |
@@ -403,7 +403,28 @@ Held: Windows/Linux `huggingface-hub==1.16.1`; Electron 42.9.0; Linux AI add-ons
 
 Held: Windows/Linux `typer==0.25.1` / `click==8.4.1` / `colorama==0.4.6`; mlx 0.31.2; Electron 42.9.0; PyObjC; sounddevice 0.4.6.
 
-**Next (this Mac):** remaining clusters: `mlx` 0.31.2 → 0.32.2 only after packaged MLX smoke; remaining macOS-only floats (`cffi`, `regex`, `Pygments`, `annotated-doc`). Keep the lock. Do not bump PyObjC or `sounddevice` unless their capture gates pass. Windows/Linux Task 3 trim remains on those hosts.
+### Cluster 3: mlx 0.32.2 — accepted 2026-08-28 (this Mac)
+
+**Upstream:** [mlx 0.32.2](https://github.com/ml-explore/mlx/releases/tag/v0.32.2). Maintenance/bug-fix release over 0.31.2. Pulls `mlx-metal==0.32.2` (not a requirements pin). `lightning-whisper-mlx==0.0.10` requires unpinned `mlx` and exact `tiktoken==0.3.3`. No application-code change.
+
+**Pin:** `requirements-macos-build.txt` `mlx==0.31.2` → **`mlx==0.32.2`**. `lightning-whisper-mlx==0.0.10` and `tiktoken==0.3.3` unchanged.
+
+**Resolver / `pip check`:** clean venv `/tmp/avanevis-v2.9-macos-build-mlx032`. `mlx==0.32.2`, `mlx-metal==0.32.2`, `lightning-whisper-mlx==0.0.10`, `tiktoken==0.3.3`. `import mlx.core` → `Device(gpu, 0)`. `pip check`: No broken requirements found.
+
+**pip-audit:** no ignores → **No known vulnerabilities found**.
+
+**SBOM:** `npm run legal:sbom` → generated 2026-08-28T17:58:52.595Z; 63 direct pins. Direct pin `mlx` is **0.32.2**.
+
+**Packaged macOS dir build:** `npm run build:mac:dir` exit 0. Torch/setuptools pruned. `npm run verify:mac:packaged` passed. Bundled `pip check` passed. Bundled `mlx==0.32.2` / `mlx-metal==0.32.2` / `lightning-whisper-mlx==0.0.10` / `tiktoken==0.3.3`.
+
+**Hardware smokes (packaged `dist/mac-arm64/AvaNevis.app`):**
+- MLX `base` two-speaker fixture: exit 0, `device: metal`, `computeType: float16`, duration 14.22s, same English fixture text as clusters 1–2.
+- CoreAudio tap: 15.22s, peak 0.7328, `helperCaptureBackend=coreaudio_tap`.
+- ScreenCaptureKit `--screencapturekit` fail-closed on Screen Recording TCC.
+
+Held: Electron 42.9.0; PyObjC; sounddevice 0.4.6; Windows/Linux pins.
+
+**Next (this Mac):** remaining macOS-only floats (`cffi` 2.0.0 → 2.1.1, `regex`, `Pygments`, `annotated-doc`) if not already pulled by clusters 1–3. Keep the lock. Do not bump PyObjC or `sounddevice` unless their capture gates pass. Windows/Linux Task 3 trim remains on those hosts.
 
 ## Blockers and non-goals
 
