@@ -65,7 +65,7 @@ Material floats observed 2026-08-28 (runtime) versus current build pins:
 | `filelock` | 3.32.4 | 3.32.3 | Floor raised on Linux; build stays 3.32.3 |
 | `av` | 18.1.0 | **18.1.0** | **Accepted** Task 2 (2026-08-28): Windows/Linux build pins; macOS does not pin `av` |
 | `onnxruntime` | 1.29.0 | 1.26.0 | Keep 1.26.0 until VAD/decode/Speakrs evidence |
-| `huggingface-hub` | 1.29.0 | 1.16.1 | Hold packaged pin |
+| `huggingface-hub` | 1.29.0 | macOS **1.29.0**; Windows/Linux **1.16.1** | **Accepted** macOS-only (2026-08-28). Windows/Linux stay 1.16.1 until those hosts evidence the bump |
 | `pytest` | 9.1.1 | floor `>=9.1.1` | **Accepted** Task 2 (2026-08-28): `requirements-dev.txt` floor raised; not a packaged pin |
 | `mlx` | 0.32.2 | 0.31.2 | macOS only; needs native smoke |
 | `torch` (macOS runtime) | 2.13.0 | **2.13.0** then prune | **Accepted** Task 2 (2026-08-28 Mac): still prune after pip |
@@ -123,6 +123,8 @@ tokenizers==0.23.1 tqdm==4.70.0 typing_extensions==4.16.0
 **After torch 2.13.0 + setuptools 84.0.0:** clean venv `/tmp/avanevis-v2.9-macos-build-torch213`. `pip check` passed. `pip_audit -r requirements-macos-build.txt` with **no ignores**: `No known vulnerabilities found` (CVE-2025-3000 is patched in 2.13.0; PYSEC-2026-3447 is past setuptools 83). Torch remains in `MACOS_RUNTIME_REMOVABLE_PACKAGES`. Pyannote `torch==2.8.0` in `src/ai-addon-state.js` was not changed.
 
 **After Numba 0.67.0 + llvmlite 0.49.0:** clean venv `/tmp/avanevis-v2.9-macos-build-numba067`. `pip check` passed at `numba==0.67.0`, `llvmlite==0.49.0`, `torch==2.13.0`, `setuptools==84.0.0`, `mlx==0.31.2`.
+
+**After huggingface-hub 1.29.0 (cluster 1):** clean venv `/tmp/avanevis-v2.9-macos-build-hfhub129`. `pip check` passed at `huggingface-hub==1.29.0`, `hf-xet==1.6.0`, `filelock==3.32.3`, `click==8.5.0`. Packaged python-build-standalone 3.11.7 matched. Windows/Linux build files still pin `huggingface-hub==1.16.1`.
 
 ## SBOM
 
@@ -337,7 +339,48 @@ Unconstrained runtime still floats `sounddevice==0.5.6` and PyObjC **12.2.2**. T
 
 Current `legal/PYTHON-BUNDLED-PACKAGES.md` is unchanged (63 direct pins, generated 2026-08-28T17:07:40.260Z). A trial-2 file would drop 20 macOS direct names; scipy / Jinja2 / networkx / sympy / mpmath / MarkupSafe / more-itertools would disappear from the legal table while still being installed (or installed-then-pruned). That SBOM diff is evidence **against** accepting the trim.
 
-**Next (this Mac):** bump stale macOS *build pins* to current resolve (do not delete pins). Preferred clusters: `huggingface-hub` 1.16.1 → 1.29.0 with the transitives it pulls; `typer` 0.25.1 → 0.27.2 (expect to drop `click` on macOS; `colorama` becomes Windows-only — fix code if anything imports them); `mlx` 0.31.2 → 0.32.2 only after packaged MLX smoke. Keep the lock. Do not bump PyObjC or `sounddevice` in that session unless their capture gates pass. Windows/Linux Task 3 trim remains on those hosts.
+## Task 3 macOS pin upgrades (keep the lock)
+
+Stay on `feature/v2.9-dependency-hygiene`. Host: macOS 26.6.2 arm64, Homebrew CPython 3.11.16. Packaged dir build used python-build-standalone 3.11.7. Electron stayed 42.9.0. Windows/Linux pins unchanged except where a macOS-only bump makes the SBOM `platform-specific`. `filelock` stays **3.32.3**. `onnxruntime`, `tokenizers`, and `av` were not changed. PyObjC and `sounddevice` were not bumped.
+
+### Cluster 1: huggingface-hub 1.29.0 + pulled transitives — accepted 2026-08-28 (this Mac)
+
+**Upstream:** [huggingface-hub 1.29.0](https://github.com/huggingface/huggingface_hub/releases/tag/v1.29.0) (2026-08-27). Security/path hardening for `local_dir` filenames (CVE-2026-15717 follow-up in 1.26.0); Xet download rate-limit fix. 1.16.1 required `typer>=0.20.0` and `hf-xet>=1.4.3`. 1.29.0 **drops typer** and requires `click>=8.4.2,<9` plus `hf-xet>=1.5.2`. PyPI lists no vulnerabilities on 1.29.0. App usage is `hf_hub_download(..., local_dir=..., token=False)` in `mlx_whisper_transcriber.py` and `hf_model_downloader.py`. Distil `./mlx_models/...` filenames still pass `_validate_relative_filename`. `token=False` still omits `Authorization`. No application-code change.
+
+**Pin (macOS build only):**
+
+| Package | Before | After |
+|---|---|---|
+| `huggingface-hub` | 1.16.1 | **1.29.0** |
+| `hf-xet` | 1.5.0 | **1.6.0** (hub 1.29 requires `>=1.5.2`) |
+| `click` | 8.4.1 | **8.5.0** (hub 1.29 requires `>=8.4.2`; current resolve) |
+| `fsspec` | 2026.4.0 | **2026.7.0** |
+| `anyio` | 4.13.0 | **4.14.2** |
+| `charset-normalizer` | 3.4.7 | **3.5.1** |
+| `idna` | 3.16 | **3.19** |
+| `packaging` | 26.2 | **26.3** |
+| `tqdm` | 4.67.3 | **4.70.0** |
+
+`filelock==3.32.3` unchanged (`huggingface-hub` requires `>=3.10.0`). `typer==0.25.1` and `mlx==0.31.2` unchanged in this commit. `httpx==0.28.1` / `httpcore==1.0.9` / `h11==0.16.0` already matched current resolve.
+
+**Resolver / `pip check`:** clean venv `/tmp/avanevis-v2.9-macos-build-hfhub129`, `pip install --only-binary=:all: -r requirements-macos-build.txt` → versions in the table above. `pip check`: No broken requirements found.
+
+**pip-audit:** `python -m pip_audit -r requirements-macos-build.txt` with no `--ignore-vuln` → **No known vulnerabilities found**.
+
+**Tests:** trial venv `pytest tests/python/test_hf_model_downloader.py tests/python/test_transcriber_helpers.py -q` exit 0 (1 skipped).
+
+**SBOM:** `npm run legal:sbom` → `legal/PYTHON-BUNDLED-PACKAGES.md` generated 2026-08-28T17:41:00.992Z; 63 direct pins. `huggingface-hub`, `hf-xet`, `click`, `fsspec`, `anyio`, `idna`, `packaging`, and `tqdm` are now **platform-specific** vs Windows/Linux 1.16.1-era pins. `charset-normalizer` is macOS-only at **3.5.1**.
+
+**Packaged macOS dir build:** `npm run build:mac:dir` exit 0. prepare-resources installed `huggingface-hub==1.29.0` then **Removed torch (533 MB)** and **Removed setuptools (7 MB)**. `npm run verify:mac:packaged` passed. Bundled `python -m pip check`: No broken requirements found. Bundled inventory: `huggingface-hub==1.29.0`, `hf-xet==1.6.0`, `filelock==3.32.3`, `click==8.5.0`, `mlx==0.31.2`, `lightning-whisper-mlx==0.0.10`, `tiktoken==0.3.3`.
+
+**Hardware smokes (same Mac session; packaged `dist/mac-arm64/AvaNevis.app`):**
+- MLX transcription: bundled python `-m transcription.mlx_whisper_transcriber --file tests/fixtures/speakrs-two-speaker-16k.wav --model base --language en --json` → exit 0, `device: metal`, `computeType: float16`, duration 14.22s, English two-speaker fixture text, cache `~/Library/Caches/avanevis`.
+- Desktop capture: packaged `audiocapture-helper` via `SwiftAudioCapture`, CoreAudio tap, 15.04s, peak 0.7325, `helperCaptureBackend=coreaudio_tap`.
+- ScreenCaptureKit fallback: helper `--screencapturekit` fail-closed `PERMISSION_DENIED: Screen Recording permission not granted` (same TCC limit as Task 2).
+
+Held: Windows/Linux `huggingface-hub==1.16.1`; Electron 42.9.0; Linux AI add-ons; PyObjC; sounddevice 0.4.6; `onnxruntime` 1.26.0; `tokenizers` 0.23.1; mlx 0.31.2; typer 0.25.1. `click` stays on macOS because hub 1.29 requires it — cluster 2 must not drop it.
+
+**Next (this Mac):** remaining clusters: `typer` 0.25.1 → 0.27.2 (`click` stays; drop `colorama` only if unused); `mlx` 0.31.2 → 0.32.2 only after packaged MLX smoke; remaining macOS-only floats (`cffi`, `regex`, `Pygments`, `annotated-doc`). Keep the lock. Do not bump PyObjC or `sounddevice` unless their capture gates pass. Windows/Linux Task 3 trim remains on those hosts.
 
 ## Blockers and non-goals
 
