@@ -68,6 +68,10 @@ Material floats observed 2026-08-28 (runtime) versus current build pins:
 | `huggingface-hub` | 1.29.0 | macOS **1.29.0**; Windows/Linux **1.16.1** | **Accepted** macOS-only (2026-08-28). Windows/Linux stay 1.16.1 until those hosts evidence the bump |
 | `pytest` | 9.1.1 | floor `>=9.1.1` | **Accepted** Task 2 (2026-08-28): `requirements-dev.txt` floor raised; not a packaged pin |
 | `mlx` | 0.32.2 | **0.32.2** | **Accepted** macOS-only (2026-08-28) after packaged MLX smoke; `lightning-whisper-mlx` stays 0.0.10; `tiktoken` stays 0.3.3 |
+| `cffi` | 2.1.1 | macOS/Linux **2.1.1** | **Accepted** macOS-only (2026-08-28). Linux already 2.1.1; Windows does not pin `cffi` |
+| `regex` | 2026.7.19 | macOS **2026.7.19** | **Accepted** macOS-only (2026-08-28). macOS-only pin (`tiktoken`) |
+| `Pygments` | 2.21.0 | macOS **2.21.0**; Windows/Linux **2.20.0** | **Accepted** macOS-only (2026-08-28) |
+| `annotated-doc` | 0.0.5 | macOS **0.0.5**; Windows/Linux **0.0.4** | **Accepted** macOS-only (2026-08-28) |
 | `torch` (macOS runtime) | 2.13.0 | **2.13.0** then prune | **Accepted** Task 2 (2026-08-28 Mac): still prune after pip |
 | `setuptools` (macOS runtime) | 84.0.0 | Windows/Linux/macOS **84.0.0** | **Accepted** Task 2 on all three packaged platforms |
 | PyObjC capture frameworks | 12.2.2 | 10.0 / 12.1 mix | Coordinated macOS change only |
@@ -424,7 +428,35 @@ Held: Windows/Linux `typer==0.25.1` / `click==8.4.1` / `colorama==0.4.6`; mlx 0.
 
 Held: Electron 42.9.0; PyObjC; sounddevice 0.4.6; Windows/Linux pins.
 
-**Next (this Mac):** remaining macOS-only floats (`cffi` 2.0.0 → 2.1.1, `regex`, `Pygments`, `annotated-doc`) if not already pulled by clusters 1–3. Keep the lock. Do not bump PyObjC or `sounddevice` unless their capture gates pass. Windows/Linux Task 3 trim remains on those hosts.
+### Cluster 4: remaining macOS-only floats — accepted 2026-08-28 (this Mac)
+
+**Upstream:** leftover Task 3 version-holds that clusters 1–3 did not pull. `cffi` 2.1.1 is the current binary wheel for `sounddevice` native glue (Linux already pins 2.1.1 for Pulse/SoundCard). `regex` 2026.7.19 is the current `tiktoken` native dep. `Pygments` 2.21.0 and `annotated-doc` 0.0.5 are current `rich`/`typer` deps. AvaNevis does not import these packages. `pycparser==3.0` already matched current resolve. No application-code change. `sounddevice` stays **0.4.6**; PyObjC is unchanged.
+
+**Pin (macOS build only):**
+
+| Package | Before | After |
+|---|---|---|
+| `cffi` | 2.0.0 | **2.1.1** (Linux already 2.1.1; Windows does not pin `cffi`) |
+| `regex` | 2026.7.10 | **2026.7.19** (macOS-only pin) |
+| `Pygments` | 2.20.0 | **2.21.0** (Windows/Linux stay 2.20.0) |
+| `annotated-doc` | 0.0.4 | **0.0.5** (Windows/Linux stay 0.0.4) |
+
+**Resolver / `pip check`:** clean venv `/tmp/avanevis-v2.9-macos-build-c4floats`, `pip install --only-binary=:all: -r requirements-macos-build.txt` → versions in the table above, `pycparser==3.0`, `sounddevice==0.4.6`, `filelock==3.32.3`. `pip check`: No broken requirements found.
+
+**pip-audit:** `python -m pip_audit -r requirements-macos-build.txt` with no `--ignore-vuln` → **No known vulnerabilities found**.
+
+**SBOM:** `npm run legal:sbom` → `legal/PYTHON-BUNDLED-PACKAGES.md` generated 2026-08-28T18:05:48.860Z; 63 direct pins. `cffi` is now **2.1.1** on both macOS and Linux. `regex` is macOS-only at **2026.7.19**. `Pygments` and `annotated-doc` are **platform-specific**.
+
+**Packaged macOS dir build:** `npm run build:mac:dir` exit 0. prepare-resources installed `cffi==2.1.1`, `regex==2026.7.19`, `Pygments==2.21.0`, `annotated-doc==0.0.5`, then **Removed torch** and **Removed setuptools**. `npm run verify:mac:packaged` passed. Bundled `python -m pip check`: No broken requirements found. Bundled inventory: `cffi==2.1.1`, `regex==2026.7.19`, `Pygments==2.21.0`, `annotated-doc==0.0.5`, `sounddevice==0.4.6`, `mlx==0.32.2`.
+
+**Hardware smokes (same Mac session; packaged `dist/mac-arm64/AvaNevis.app`):**
+- MLX transcription: bundled python `-m transcription.mlx_whisper_transcriber --file tests/fixtures/speakrs-two-speaker-16k.wav --model base --language en --json` → exit 0, `device: metal`, `computeType: float16`, duration 14.22s, same English two-speaker fixture text as clusters 1–3, cache `~/Library/Caches/avanevis`.
+- Desktop capture: packaged `audiocapture-helper` via `SwiftAudioCapture`, CoreAudio tap, 14.98s, peak 0.7327, `helperCaptureBackend=coreaudio_tap`.
+- ScreenCaptureKit fallback: helper `--screencapturekit` fail-closed `PERMISSION_DENIED: Screen Recording permission not granted` (same TCC limit as Task 2).
+
+Held: Electron 42.9.0; PyObjC 10.0/12.1 mix; sounddevice 0.4.6; Windows/Linux `Pygments==2.20.0` / `annotated-doc==0.0.4`; `filelock==3.32.3`. All 14 Task 3 version-hold rows are now either upgraded (clusters 1–4) or graph-changed (macOS `colorama` removed; `click` kept for hub 1.29). The 20 matching range-locks stay pinned.
+
+**Next:** evaluate macOS PyObjC `Cocoa` / `Quartz` separately (imports, `pip check`, packaged dir build, hardware capture). Do not bump `sounddevice` unless capture gates pass. Windows/Linux Task 3 trim remains on those hosts.
 
 ## Blockers and non-goals
 
