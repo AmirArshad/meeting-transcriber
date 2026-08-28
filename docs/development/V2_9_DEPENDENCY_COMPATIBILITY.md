@@ -66,7 +66,7 @@ Material floats observed 2026-08-28 (runtime) versus current build pins:
 | `av` | 18.1.0 | 17.0.1 | Task 2 after packaged decode smoke |
 | `onnxruntime` | 1.29.0 | 1.26.0 | Keep 1.26.0 until VAD/decode/Speakrs evidence |
 | `huggingface-hub` | 1.29.0 | 1.16.1 | Hold packaged pin |
-| `pytest` | 9.1.1 | floor `>=9.0.3` | Task 2 may record 9.1.1; suite already passed on it |
+| `pytest` | 9.1.1 | floor `>=9.1.1` | **Accepted** Task 2 (2026-08-28): `requirements-dev.txt` floor raised; not a packaged pin |
 | `mlx` | 0.32.2 | 0.31.2 | macOS only; needs native smoke |
 | `torch` (macOS runtime) | 2.13.0 | 2.12.0 then prune | **Trial 2.13.0 on a Mac** with setuptools 84; still prune after pip |
 | `setuptools` (macOS runtime) | 84.0.0 | 81.0.0 | Windows/Linux Task 2 here; macOS only with Torch 2.13 |
@@ -83,7 +83,9 @@ Material floats observed 2026-08-28 (runtime) versus current build pins:
 
 ### `requirements-dev.txt` — Windows 3.11.9 install
 
-`pytest==9.1.1`, `numpy==2.4.6`, `soxr==1.1.0`, `filelock==3.32.4`, plus pytest transitives (`iniconfig==2.3.0`, `pluggy==1.6.0`, `Pygments==2.21.0`, `packaging==26.3`). `pip check` passed.
+Task 1 (floor `>=9.0.3`) already resolved `pytest==9.1.1`. Task 2 raised the floor to `>=9.1.1`; a fresh clean venv still resolves the same graph. `pip check` passed.
+
+`pytest==9.1.1`, `numpy==2.4.6`, `soxr==1.1.0`, `filelock==3.32.4`, plus pytest transitives (`iniconfig==2.3.0`, `pluggy==1.6.0`, `Pygments==2.21.0`, `packaging==26.3`).
 
 ### `requirements.txt` and `requirements-windows.txt` — Windows 3.11.9 install
 
@@ -160,11 +162,33 @@ Linux equivalent: WSL2 Python 3.11.15 clean venvs for `requirements-linux.txt` a
 
 macOS equivalent: dry-run resolver only; native install/`pip check` still needed on macos-14 before Task 2 macOS pin changes.
 
+## Task 2 accepted (Windows/Linux)
+
+Stay on `feature/v2.9-dependency-hygiene`. Each row is its own commit. macOS pins are unchanged until the Mac session.
+
+### pytest 9.1.1 — accepted 2026-08-28 (this PC)
+
+**Upstream:** [pytest 9.1.1](https://github.com/pytest-dev/pytest/releases/tag/9.1.1) (2026-06-19) is a bug-fix release over 9.1.0 (`RaisesGroup` message, indirect parametrize regression, `conftest.py` load regression, mypy `argvalues` typing). No security advisory. Dev-only; not bundled.
+
+**Pin:** `requirements-dev.txt` floor `pytest>=9.0.3` → `pytest>=9.1.1`. Build files do not list pytest.
+
+**Resolver (clean Windows 3.11.9 venv, `%TEMP%\avanevis-v2.9-pytest-911`):** `pip install -r requirements-dev.txt` installed `pytest==9.1.1` with `iniconfig==2.3.0`, `pluggy==1.6.0`, `Pygments==2.21.0`, `packaging==26.3`, `colorama==0.4.6`, `numpy==2.4.6`, `soxr==1.1.0`, `filelock==3.32.4`.
+
+**`pip check`:** No broken requirements found (clean venv and repo `.venv` after `pip install -U pytest>=9.1.1`).
+
+**SBOM:** unchanged. `npm run legal:sbom` reads only `requirements-*-build.txt`; pytest is not a packaged pin.
+
+**Suite:** `npm run test:python` → **576 passed, 7 skipped** in 57.45s (`pytest 9.1.1` in repo `.venv`). `npm test` → **754 passed, 1 failed, 1 skipped**. The failure is `assertAppImageUsesStaticRuntime rejects malformed ELF...` (`spawnSync file ENOENT`) — Windows host has no `file(1)` for ELF inspection. Unrelated to pytest; not a Python-suite gate.
+
+Held: packaged Python pins; Electron 42.9.0; macOS `torch` / `setuptools` / Numba.
+
+**This Windows PC remaining:** PyAV 18.1.0 in Windows/Linux **build** files after import + fixture decode + `prepare-build`; setuptools 84 in Windows/Linux **build** files only. Separate commits. Do not change macOS pins yet.
+
 ## When to switch to the Mac
 
-Stay on `feature/v2.9-dependency-hygiene`. Finish the Windows/Linux Task 2 commits on this PC first, then continue the same branch on Apple Silicon.
+Stay on `feature/v2.9-dependency-hygiene`. Finish the remaining Windows/Linux Task 2 commits on this PC first, then continue the same branch on Apple Silicon.
 
-**This Windows PC (start Task 2 here):** pytest 9.1.1; PyAV 18.1.0 in Windows/Linux **build** files after import + fixture decode + `prepare-build`; setuptools 84 in Windows/Linux **build** files only. Separate commits. Do not change macOS pins yet.
+**This Windows PC remaining:** PyAV 18.1.0 in Windows/Linux **build** files after import + fixture decode + `prepare-build`; setuptools 84 in Windows/Linux **build** files only. Separate commits. Do not change macOS pins yet. pytest 9.1.1 is already recorded above.
 
 **Switch to the Mac when those three commits exist**, and do this work there:
 
