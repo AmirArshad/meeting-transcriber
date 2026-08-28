@@ -66,6 +66,7 @@ jobs:
             artifact-path: |
               dist/AvaNevis-Setup-*.AppImage
               dist/AvaNevis-Setup-*.pkg.tar.zst
+              dist/AvaNevis-Setup-*.deb
             artifact-name: avanevis-installer-linux
 
     steps:
@@ -112,7 +113,7 @@ jobs:
         if: matrix.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends file zstd libarchive-tools libpulse0
+          sudo apt-get install -y --no-install-recommends file zstd libarchive-tools libpulse0 fakeroot dpkg
 
       - name: Create placeholder icon (if missing - Windows only)
         if: matrix.os == 'Windows'
@@ -185,7 +186,7 @@ jobs:
 
       - name: Verify packaged Linux artifacts
         if: matrix.os == 'Linux'
-        run: node scripts/verify-linux-packaging.js --unpacked --appimage --pacman
+        run: node scripts/verify-linux-packaging.js --unpacked --appimage --pacman --deb
 
       - name: Verify package version matches tag
         if: startsWith(github.ref, 'refs/tags/')
@@ -256,8 +257,9 @@ jobs:
           macos_asset=$(find release-artifacts/avanevis-installer-macos -type f -name '*.dmg' | head -n 1)
           linux_appimage=$(find release-artifacts/avanevis-installer-linux -type f -name 'AvaNevis-Setup-*.AppImage' | head -n 1)
           linux_pacman=$(find release-artifacts/avanevis-installer-linux -type f -name 'AvaNevis-Setup-*.pkg.tar.zst' | head -n 1)
+          linux_deb=$(find release-artifacts/avanevis-installer-linux -type f -name 'AvaNevis-Setup-*.deb' | head -n 1)
 
-          if [ -z "$windows_asset" ] || [ -z "$macos_asset" ] || [ -z "$linux_appimage" ] || [ -z "$linux_pacman" ]; then
+          if [ -z "$windows_asset" ] || [ -z "$macos_asset" ] || [ -z "$linux_appimage" ] || [ -z "$linux_pacman" ] || [ -z "$linux_deb" ]; then
             echo "Expected release assets were not downloaded"
             find release-artifacts -maxdepth 3 -type f | sort || true
             exit 1
@@ -268,6 +270,7 @@ jobs:
           cp "$macos_asset" release-upload/
           cp "$linux_appimage" release-upload/
           cp "$linux_pacman" release-upload/
+          cp "$linux_deb" release-upload/
 
           echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
           echo "windows_name=$(basename "$windows_asset")" >> $GITHUB_OUTPUT
@@ -278,6 +281,8 @@ jobs:
           echo "linux_appimage_size=$(du -h "$linux_appimage" | cut -f1)" >> $GITHUB_OUTPUT
           echo "linux_pacman_name=$(basename "$linux_pacman")" >> $GITHUB_OUTPUT
           echo "linux_pacman_size=$(du -h "$linux_pacman" | cut -f1)" >> $GITHUB_OUTPUT
+          echo "linux_deb_name=$(basename "$linux_deb")" >> $GITHUB_OUTPUT
+          echo "linux_deb_size=$(du -h "$linux_deb" | cut -f1)" >> $GITHUB_OUTPUT
 
       - name: Build release notes
         shell: bash
@@ -292,6 +297,8 @@ jobs:
           LINUX_APPIMAGE_SIZE="${{ steps.collect_assets.outputs.linux_appimage_size }}"
           LINUX_PACMAN_NAME="${{ steps.collect_assets.outputs.linux_pacman_name }}"
           LINUX_PACMAN_SIZE="${{ steps.collect_assets.outputs.linux_pacman_size }}"
+          LINUX_DEB_NAME="${{ steps.collect_assets.outputs.linux_deb_name }}"
+          LINUX_DEB_SIZE="${{ steps.collect_assets.outputs.linux_deb_size }}"
           REPO="${{ github.repository }}"
 
           # Escaped backticks so installer filenames are not executed by the shell.
@@ -304,6 +311,7 @@ jobs:
           - macOS installer: \`${MACOS_NAME}\` (${MACOS_SIZE})
           - Linux AppImage: \`${LINUX_APPIMAGE_NAME}\` (${LINUX_APPIMAGE_SIZE})
           - Linux pacman package: \`${LINUX_PACMAN_NAME}\` (${LINUX_PACMAN_SIZE})
+          - Linux deb package (experimental): \`${LINUX_DEB_NAME}\` (${LINUX_DEB_SIZE})
 
           EOF
 
@@ -321,7 +329,7 @@ jobs:
 
           - Windows 10/11 x64
           - macOS 13+ on Apple Silicon
-          - Linux x86_64 Core Beta (Omarchy first; Ubuntu AppImage experimental)
+          - Linux x86_64 Core Beta (Omarchy first; other distros are experimental betas)
 
           ### Installation
 
@@ -337,14 +345,14 @@ jobs:
           4. Grant microphone and screen recording permissions when prompted.
 
           **Linux Core Beta**
-          1. Run the AppImage, or install the pacman package on Omarchy/Arch.
+          1. On Omarchy/Arch install the pacman package, or run the AppImage. Debian-family friends can try the experimental \`.deb\`. See \`docs/guides/LINUX_EXPERIMENTAL.md\`.
           2. Transcription uses CPU faster-whisper; speaker identification and summaries remain unavailable in this version.
 
           ### Notes
 
           - The app records microphone and desktop audio locally, then transcribes on-device.
           - Whisper models download on first use unless they are already cached locally.
-          - GPU acceleration is used automatically when supported (CUDA on Windows, Metal on Apple Silicon).
+          - GPU acceleration is used automatically when supported (CUDA on Windows, Metal on Apple Silicon). Linux Core Beta transcription stays on CPU faster-whisper.
 
           ### Privacy
 

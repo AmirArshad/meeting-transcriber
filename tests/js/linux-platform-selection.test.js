@@ -271,17 +271,16 @@ test('Speakrs packaging stays fail-closed on Linux while resource manifests stil
 
 test('updater matches Linux AvaNevis-Setup AppImage and ignores source archives', () => {
   const { findInstallerAsset } = loadUpdater();
-  withProcessPlatform('linux', () => {
-    assert.deepEqual(findInstallerAsset([
-      { name: 'source.tar.gz' },
-      { name: 'AvaNevis-Setup-2.7.0.AppImage' },
-      { name: 'AvaNevis-Setup-2.7.0.exe' },
-    ]), { name: 'AvaNevis-Setup-2.7.0.AppImage' });
-    assert.equal(findInstallerAsset([
-      { name: 'source.tar.gz' },
-      { name: 'AvaNevis-Setup-2.7.0.deb' },
-    ]), null);
-  });
+  assert.deepEqual(findInstallerAsset([
+    { name: 'source.tar.gz' },
+    { name: 'AvaNevis-Setup-2.7.0.AppImage' },
+    { name: 'AvaNevis-Setup-2.7.0.exe' },
+  ], { platform: 'linux', env: {}, osReleaseText: '' }), { name: 'AvaNevis-Setup-2.7.0.AppImage' });
+  assert.equal(findInstallerAsset([
+    { name: 'source.tar.gz' },
+    { name: 'AvaNevis-Setup-2.7.0.tar.gz' },
+    { name: 'AvaNevis-2.7.0.deb' },
+  ], { platform: 'linux', env: {}, osReleaseText: 'ID=ubuntu\n' }), null);
 });
 
 test('opaque Pulse device IDs round-trip as strings (Phase 2)', () => {

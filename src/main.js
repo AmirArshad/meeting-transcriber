@@ -119,6 +119,7 @@ const {
 } = require('./main/recording-presence-service');
 const {
   applyLinuxElectronCommandLineSwitches,
+  buildLinuxEnvironmentDiagnostics,
   getSelectedStorageBackend,
   runLinuxSafeStorageSmoke,
 } = require('./main-process/linux-electron-bootstrap');
@@ -1512,6 +1513,12 @@ app.whenReady().then(async () => {
       'hint:',
       app.commandLine.getSwitchValue('ozone-platform-hint') || '(unset)',
     );
+    console.log('Linux environment diagnostics:', JSON.stringify(buildLinuxEnvironmentDiagnostics({
+      env: process.env,
+      safeStorage: getSafeStorage(),
+      commandLine: app.commandLine,
+      argv: process.argv,
+    })));
     if (process.env.AVANEVIS_SAFESTORAGE_SMOKE === '1') {
       const smoke = runLinuxSafeStorageSmoke(getSafeStorage());
       const {

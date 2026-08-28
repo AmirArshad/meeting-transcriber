@@ -10,11 +10,13 @@ const { spawnSync } = require('node:child_process');
 const packageJson = require('../../package.json');
 const {
   assertAppImageUsesStaticRuntime,
+  assertDebControl,
   assertLinuxPackagedLayout,
   assertNotForbiddenPackagedPath,
   assertPacmanPkginfo,
   findLinuxArtifact,
   findLinuxResourcesRoot,
+  getJustifiedDebDepends,
   getJustifiedPacmanDepends,
   parsePkginfo,
   verifyPacmanArchivePayload,
@@ -52,7 +54,7 @@ test('electron-builder stays on 26.x and opts into the static FUSE-less AppImage
   assert.equal(packageJson.build.toolsets.appimage === '1.0.3', false);
 });
 
-test('Linux package targets are x86_64 AppImage and pacman with AvaNevis-Setup artifact names', () => {
+test('Linux package targets are x86_64 AppImage, pacman, and one experimental deb', () => {
   const linuxTargets = packageJson.build.linux.target;
   assert.ok(Array.isArray(linuxTargets));
   assert.deepEqual(
@@ -60,6 +62,7 @@ test('Linux package targets are x86_64 AppImage and pacman with AvaNevis-Setup a
     [
       ['AppImage', ['x64']],
       ['pacman', ['x64']],
+      ['deb', ['x64']],
     ],
   );
   assert.equal(packageJson.build.artifactName, '${productName}-Setup-${version}.${ext}');
@@ -67,11 +70,30 @@ test('Linux package targets are x86_64 AppImage and pacman with AvaNevis-Setup a
     packageJson.build.pacman.artifactName,
     '${productName}-Setup-${version}.pkg.tar.zst',
   );
-  assert.equal(packageJson.build.linux.target.some((target) => target.target === 'deb'), false);
+  assert.equal(packageJson.build.deb.artifactName, '${productName}-Setup-${version}.deb');
   assert.equal(packageJson.build.linux.target.some((target) => target.target === 'rpm'), false);
   assert.equal(packageJson.build.linux.executableName, 'avanevis');
   assert.equal(packageJson.desktopName, 'avanevis');
   assert.equal(packageJson.build.linux.syncDesktopName, true);
+});
+
+test('deb depends are explicit and omit appindicator, ffmpeg, and deferred AI runtimes', () => {
+  const depends = getJustifiedDebDepends(packageJson);
+  assert.deepEqual(depends, [
+    'libasound2',
+    'libatspi2.0-0',
+    'libgtk-3-0',
+    'libnotify4',
+    'libnss3',
+    'libpulse0',
+    'libsecret-1-0',
+    'libuuid1',
+    'libxss1',
+    'libxtst6',
+    'xdg-utils',
+  ]);
+  assert.deepEqual(packageJson.build.deb.recommends, []);
+  assert.equal(depends.some((name) => /appindicator|ffmpeg|onnx|cuda|speakrs|llama/i.test(name)), false);
 });
 
 test('pacman depends are an explicit justified list and omit libappindicator and ffmpeg', () => {
@@ -256,6 +278,26 @@ test('assertPacmanPkginfo accepts the justified depend list and rejects libappin
   );
 });
 
+test('assertDebControl pins package identity, architecture, version, and justified dependencies', () => {
+  const depends = getJustifiedDebDepends(packageJson);
+  const control = [
+    'Package: avanevis',
+    `Version: ${packageJson.version}`,
+    'Architecture: amd64',
+    `Depends: ${depends.join(', ')}`,
+    '',
+  ].join('\n');
+  assert.deepEqual(assertDebControl(control, packageJson), depends);
+  assert.throws(
+    () => assertDebControl(control.replace('libpulse0', 'libappindicator3-1'), packageJson),
+    /unjustified|missing justified/i,
+  );
+  assert.throws(
+    () => assertDebControl(control.replace('Architecture: amd64', 'Architecture: arm64'), packageJson),
+    /Architecture.*amd64/i,
+  );
+});
+
 test('verifyPacmanArchivePayload validates the actual archive resources and exclusions', () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-pacman-payload-'));
   try {
@@ -337,12 +379,18 @@ test('Ubuntu CI job builds Linux packages on ubuntu-latest with SHA-pinned actio
   assert.match(CI_WORKFLOW, /branches:.*release\/linux/);
 });
 
-test('release workflow builds and publishes both Linux Core Beta artifacts after Gate B', () => {
+test('release workflow builds and publishes all three Linux Core Beta payload artifacts after Gate B', () => {
   assert.match(RELEASE_WORKFLOW, /os: Linux/);
   assert.match(RELEASE_WORKFLOW, /build:linux/);
   assert.match(RELEASE_WORKFLOW, /AvaNevis-Setup-\*\.AppImage/);
   assert.match(RELEASE_WORKFLOW, /AvaNevis-Setup-\*\.pkg\.tar\.zst/);
+  assert.match(RELEASE_WORKFLOW, /AvaNevis-Setup-\*\.deb/);
   assert.match(RELEASE_WORKFLOW, /verify-linux-packaging\.js/);
   assert.match(RELEASE_WORKFLOW, /os: Windows/);
   assert.match(RELEASE_WORKFLOW, /os: macOS/);
+});
+
+test('Ubuntu CI builds and verifies the experimental deb beside AppImage and pacman', () => {
+  assert.match(CI_WORKFLOW, /--linux dir AppImage pacman deb --x64/);
+  assert.match(CI_WORKFLOW, /verify-linux-packaging\.js --unpacked --appimage --pacman --deb/);
 });

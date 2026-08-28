@@ -44,7 +44,8 @@ test('recording permission failure copy is platform-specific and does not treat 
 
   const linux = getRecordingPermissionFailureGuidance('linux');
   assert.equal(linux.kind, 'alert');
-  assert.match(linux.alertMessage, /PulseAudio\/PipeWire/);
+  assert.match(linux.alertMessage, /pipewire-pulse/);
+  assert.match(linux.alertMessage, /user audio session/);
   assert.equal(linux.alertMessage.includes('Windows Settings'), false);
 });
 

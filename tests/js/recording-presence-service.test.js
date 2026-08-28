@@ -358,6 +358,23 @@ test('Linux tray uses context menu only and survives a missing SNI host', () => 
   ]);
   assert.equal(degradedClose.keepRecordingAction, 'minimize');
   assert.match(degradedClose.detail, /taskbar recording indicator/i);
+
+  const degradedPending = buildWindowCloseDialogOptions(
+    { state: 'idle' },
+    'linux',
+    { pendingTranscriptionCount: 2, trayAvailable: false },
+  );
+  assert.deepEqual(degradedPending.buttons, ['Keep AvaNevis Minimized', 'Close App', 'Cancel']);
+  assert.equal(degradedPending.keepRecordingAction, 'minimize');
+  assert.match(degradedPending.detail, /taskbar/i);
+
+  const degradedIdle = buildWindowCloseDialogOptions(
+    { state: 'idle' },
+    'linux',
+    { trayAvailable: false },
+  );
+  assert.deepEqual(degradedIdle.buttons, ['Keep AvaNevis Minimized', 'Close App', 'Cancel']);
+  assert.equal(degradedIdle.keepRecordingAction, 'minimize');
 });
 
 test('tray menu intentionally replaces Gate A Show/Hide with Show AvaNevis and Quit AvaNevis', () => {

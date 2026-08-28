@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * Verify a packaged Linux AvaNevis layout (unpacked dir, AppImage, or pacman).
+ * Verify a packaged Linux AvaNevis layout (unpacked dir, AppImage, pacman, or deb).
  *
  * Core Beta: bundled Python/ffmpeg/backend/legal, CPU faster-whisper, no
  * Speakrs/ORT-CUDA/llama.cpp/pyannote artifacts, no FUSE2 AppImage runtime.
@@ -22,6 +22,7 @@ const FORBIDDEN_DEPEND_SUBSTRINGS = Object.freeze([
 ]);
 
 const FORBIDDEN_PACMAN_PACKAGES = Object.freeze(['ffmpeg']);
+const FORBIDDEN_DEB_PACKAGES = Object.freeze(['ffmpeg']);
 
 const FORBIDDEN_BASENAME_PATTERNS = Object.freeze([
   /^speakrs-cli(\.exe)?$/i,
@@ -66,6 +67,26 @@ function getJustifiedPacmanDepends(pkg = require('../package.json')) {
   });
   if (forbidden.length > 0) {
     fail(`pacman.depends contains unjustified packages: ${forbidden.join(', ')}`);
+  }
+  return depends.slice();
+}
+
+function getJustifiedDebDepends(pkg = require('../package.json')) {
+  const depends = pkg.build && pkg.build.deb && pkg.build.deb.depends;
+  if (!Array.isArray(depends) || depends.length === 0) {
+    fail('package.json build.deb.depends must be an explicit non-empty list');
+  }
+  const forbidden = depends.filter((name) => {
+    const lower = String(name).toLowerCase();
+    return FORBIDDEN_DEB_PACKAGES.includes(lower)
+      || FORBIDDEN_DEPEND_SUBSTRINGS.some((marker) => lower.includes(marker));
+  });
+  if (forbidden.length > 0) {
+    fail(`deb.depends contains unjustified packages: ${forbidden.join(', ')}`);
+  }
+  const recommends = pkg.build.deb.recommends;
+  if (!Array.isArray(recommends) || recommends.length !== 0) {
+    fail('package.json build.deb.recommends must be [] so tray integration is not a package requirement');
   }
   return depends.slice();
 }
@@ -352,6 +373,105 @@ function assertPacmanPkginfo(pkginfoText, pkg = require('../package.json')) {
   return depends;
 }
 
+function parseDebControl(controlText) {
+  const fields = {};
+  let currentKey = null;
+  for (const line of String(controlText || '').split(/\r?\n/)) {
+    const continuation = line.match(/^\s+(.*)$/);
+    if (continuation && currentKey) {
+      fields[currentKey] += ` ${continuation[1].trim()}`;
+      continue;
+    }
+    const match = line.match(/^([A-Za-z][A-Za-z0-9-]*):\s*(.*)$/);
+    if (!match) {
+      currentKey = null;
+      continue;
+    }
+    currentKey = match[1].toLowerCase();
+    fields[currentKey] = match[2].trim();
+  }
+  return fields;
+}
+
+function parseDebDependencyNames(value) {
+  return String(value || '')
+    .split(',')
+    .map((entry) => entry.trim().split(/\s+\(/, 1)[0])
+    .filter(Boolean);
+}
+
+function assertDebControl(controlText, pkg = require('../package.json')) {
+  const expected = getJustifiedDebDepends(pkg);
+  const fields = parseDebControl(controlText);
+  const expectedFields = {
+    package: pkg.name,
+    version: pkg.version,
+    architecture: 'amd64',
+  };
+  for (const [key, expectedValue] of Object.entries(expectedFields)) {
+    if (fields[key] !== expectedValue) {
+      fail(`deb control ${key} must be ${expectedValue}, got ${fields[key] || '(missing)'}`);
+    }
+  }
+  const depends = parseDebDependencyNames(fields.depends);
+  if (depends.length === 0) {
+    fail('deb control has no Depends entries');
+  }
+  const unexpected = depends.filter((name) => !expected.includes(name));
+  if (unexpected.length > 0) {
+    fail(`deb control has unjustified depends: ${unexpected.join(', ')}`);
+  }
+  const missing = expected.filter((name) => !depends.includes(name));
+  if (missing.length > 0) {
+    fail(`deb control is missing justified depends: ${missing.join(', ')}`);
+  }
+  return depends;
+}
+
+function readDebControlFromArchive(archivePath, { spawnSyncFn = spawnSync } = {}) {
+  const result = spawnSyncFn('dpkg-deb', ['-f', archivePath], {
+    encoding: 'utf8',
+    timeout: 30000,
+  });
+  if (result.status !== 0) {
+    fail(`Failed to read deb control from ${archivePath}: ${result.stderr || result.error}`);
+  }
+  return result.stdout;
+}
+
+function extractDebArchive(archivePath, destDir, { spawnSyncFn = spawnSync } = {}) {
+  fs.mkdirSync(destDir, { recursive: true });
+  const result = spawnSyncFn('dpkg-deb', ['-x', archivePath, destDir], {
+    encoding: 'utf8',
+    timeout: 120000,
+  });
+  if (result.status !== 0) {
+    fail(`Failed to extract deb archive ${archivePath}: ${result.stderr || result.stdout || result.error}`);
+  }
+  return destDir;
+}
+
+function verifyDebArchivePayload(
+  archivePath,
+  pkg = require('../package.json'),
+  { spawnSyncFn = spawnSync } = {},
+) {
+  const control = readDebControlFromArchive(archivePath, { spawnSyncFn });
+  const depends = assertDebControl(control, pkg);
+  const extractDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-deb-'));
+  try {
+    extractDebArchive(archivePath, extractDir, { spawnSyncFn });
+    const resourcesRoot = findLinuxResourcesRoot(extractDir);
+    if (!resourcesRoot) {
+      fail(`Could not find packaged resources in deb archive ${archivePath}`);
+    }
+    assertLinuxPackagedLayout(resourcesRoot);
+    return { depends };
+  } finally {
+    fs.rmSync(extractDir, { recursive: true, force: true });
+  }
+}
+
 function readPkginfoFromPacmanArchive(archivePath, { spawnSyncFn = spawnSync } = {}) {
   const result = spawnSyncFn('tar', ['-xOf', archivePath, '.PKGINFO'], {
     encoding: 'utf8',
@@ -461,6 +581,7 @@ function main(argv = process.argv.slice(2)) {
   const wantUnpacked = argv.includes('--unpacked') || argv.length === 0;
   const wantAppImage = argv.includes('--appimage') || argv.length === 0;
   const wantPacman = argv.includes('--pacman') || argv.length === 0;
+  const wantDeb = argv.includes('--deb') || argv.length === 0;
   const runIsolation = !argv.includes('--skip-runtime');
 
   if (wantUnpacked) {
@@ -516,26 +637,43 @@ function main(argv = process.argv.slice(2)) {
     console.log('pacman .PKGINFO depends:', verified.depends.join(', '));
   }
 
+  if (wantDeb) {
+    const deb = findLinuxArtifact(distDir, '.deb');
+    if (!deb) {
+      fail('No AvaNevis-Setup-*.deb found in dist/');
+    }
+    console.log(`Verifying deb package: ${deb}`);
+    const verified = verifyDebArchivePayload(deb);
+    console.log('deb control depends:', verified.depends.join(', '));
+  }
+
   console.log('✓ Linux packaging verification passed');
 }
 
 module.exports = {
   FORBIDDEN_BASENAME_PATTERNS,
   FORBIDDEN_DEPEND_SUBSTRINGS,
+  FORBIDDEN_DEB_PACKAGES,
   FORBIDDEN_PACMAN_PACKAGES,
   FUSE2_RUNTIME_MARKERS,
   assertAppImageUsesStaticRuntime,
+  assertDebControl,
   assertLinuxPackagedLayout,
   assertLinuxPackagedRuntimeIsolation,
   assertNotForbiddenPackagedPath,
   assertPacmanPkginfo,
   extractAppImage,
+  extractDebArchive,
   findLinuxArtifact,
   findLinuxResourcesRoot,
   getJustifiedPacmanDepends,
+  getJustifiedDebDepends,
+  parseDebControl,
   parsePkginfo,
   proveAppImageRuntimeLaunchesWithoutFuse,
   readPkginfoFromPacmanArchive,
+  readDebControlFromArchive,
+  verifyDebArchivePayload,
   verifyPacmanArchivePayload,
 };
 

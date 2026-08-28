@@ -28,7 +28,7 @@ Online meetings are a tax on memory. The good options for getting transcripts ba
 - **Search and bulk-manage history** — filter the meeting list, multi-select, bulk delete, replay with synchronized audio.
 - **Recovery-friendly storage** — meetings are persisted with an atomic write + cross-process file lock, with corrupt-metadata backups (`meetings.corrupt.*.json`) and filesystem rescan/import on launch or when you refresh history (not on every list reload).
 - **Optional local AI add-ons** — speaker labels and meeting summaries can be set up after install on **Windows and macOS**. Speaker identification is Speakrs (token-free) or Pyannote (user's own Hugging Face token) — only one engine is installed at a time. Summaries use pinned local `llama.cpp`/GGUF artifacts and run only when the user clicks Generate Summary. On **Linux Core Beta** both cards stay visible and greyed `unsupported` (no CPU fallback; no Linux CUDA add-ons).
-- **One-click installer** — Windows NSIS and macOS DMG with embedded Python runtime, ffmpeg, `speakrs-cli`, and the bundled native macOS helper. Linux Core Beta ships an x86_64 AppImage (no host fuse2) and a pacman package with bundled Python/ffmpeg/backend and **no** `speakrs-cli`. No system Python required. Linux artifacts are included by the release workflow after the macOS DMG integrity gate closed on 2026-08-28.
+- **One-click installer** — Windows NSIS and macOS DMG with embedded Python runtime, ffmpeg, `speakrs-cli`, and the bundled native macOS helper. Linux Core Beta ships an x86_64 AppImage (no host fuse2), a pacman package, and an experimental `.deb`, each with bundled Python/ffmpeg/backend and **no** `speakrs-cli`. No system Python required. The release workflow publishes all three Linux artifacts after the macOS DMG integrity gate closed on 2026-08-28.
 - **Update awareness** — checks GitHub Releases on launch and shows an in-app banner with one-click open of the release page.
 
 ## Privacy
@@ -65,9 +65,13 @@ If right-click → Open misbehaves, run `xattr -d com.apple.quarantine /Applicat
 
 ### Linux (x86_64 Core Beta — Omarchy first)
 
-Omarchy/Arch: install the `AvaNevis-Setup-<version>.pkg.tar.zst` pacman package, or run the `AvaNevis-Setup-<version>.AppImage`. The AppImage is a static-pie runtime and does **not** need host `fuse2` / `libfuse.so.2` (kernel `/dev/fuse` + `fuse3` still mount the image). Do not treat `--appimage-extract-and-run` as the shipped default.
+**Supported:** Omarchy 4 x86_64. Install `AvaNevis-Setup-<version>.pkg.tar.zst`, or run the AppImage.
 
-Transcription is local CPU `faster-whisper`. Speaker identification and summaries stay visible in Settings but greyed `unsupported`. Ubuntu 24.04 AppImage use is experimental until a desktop smoke exists.
+**Experimental beta:** Ubuntu/Debian-family `.deb` or AppImage; vanilla Arch and CachyOS pacman or AppImage; Fedora Workstation and SteamOS Desktop Mode AppImage. Distro matrix and likely failures: [LINUX_EXPERIMENTAL.md](docs/guides/LINUX_EXPERIMENTAL.md). Ubuntu desktop recording has not been smoke-tested yet. The 60-minute soak was cancelled (not run).
+
+The AppImage is a static-pie runtime and does **not** need host `fuse2` / `libfuse.so.2` (kernel `/dev/fuse` + `fuse3` still mount the image). Do not treat `--appimage-extract-and-run` as the shipped default.
+
+Transcription is local CPU `faster-whisper`. Speaker identification and summaries stay visible in Settings but greyed `unsupported`.
 
 > **Upgrading from "Meeting Transcriber"?** The new app uses a fresh user-data folder (`%APPDATA%\AvaNevis` on Windows, `~/Library/Application Support/AvaNevis` on macOS, `~/.config/avanevis` on Linux), so old recordings won't auto-appear. Move the old folder's contents into the new one to keep your history. The first AvaNevis update prompt for existing Meeting Transcriber installs opens the GitHub release page in your browser instead of auto-downloading; future AvaNevis-to-AvaNevis updates restore the direct-download path.
 
@@ -106,7 +110,7 @@ python3.11 -m venv .venv
 ./.venv/bin/python -m pip install -r requirements-linux.txt -r requirements-dev.txt
 ```
 
-Linux capture uses Pulse/PipeWire (`docs/initiatives/LINUX_SUPPORT.md`, branch `release/linux`). The `.venv` is for device enumeration, tests, and `npm start`. Packaged AppImage/pacman builds use bundled Python 3.11 and ffmpeg (`npm run build:linux`). Speaker identification and summaries stay greyed `unsupported` on Linux. Do not advertise Linux CUDA.
+Linux capture uses Pulse/PipeWire (`docs/initiatives/LINUX_SUPPORT.md`, branch `release/linux`). The `.venv` is for device enumeration, tests, and `npm start`. Packaged AppImage/pacman/deb builds use bundled Python 3.11 and ffmpeg (`npm run build:linux`). Speaker identification and summaries stay greyed `unsupported` on Linux. Do not advertise Linux CUDA.
 
 Then start the app from the repo root:
 
@@ -163,7 +167,7 @@ For recorder changes, also run the manual smoke checklist in `tests/manual/recor
 ## How it works
 
 1. **Pick devices.** Choose a mic, a desktop-audio loopback device, the language, and a Whisper model size in the Settings tab.
-2. **Record.** Both streams are written to disk in parallel (WASAPI loopback on Windows, CoreAudio process tap via the bundled Swift helper on macOS 14.2+, with Swift/PyObjC ScreenCaptureKit fallback). The audio visualizer shows live mic + desktop levels.
+2. **Record.** Both streams are written to disk in parallel (WASAPI loopback on Windows; CoreAudio process tap via the bundled Swift helper on macOS 14.2+, with Swift/PyObjC ScreenCaptureKit fallback; Pulse/PipeWire mic + sink-monitor capture on Linux). The audio visualizer shows live mic + desktop levels.
 3. **Stop.** The recorder reports completion as structured stdout JSON (`success: true` with a file path, or `success: false` with a code and message when capture fails). The main process normalizes Windows `audioPath` and macOS `outputPath` into one `audioPath` for the UI. On success, the two streams are aligned, mixed at 48 kHz stereo, kept mono-compatible for transcription, and compressed to Opus (with WAV fallback if ffmpeg fails).
 4. **Transcribe.** The mixed audio is passed to the platform-appropriate Whisper backend; output lands as a Markdown transcript with `[mm:ss - mm:ss]` timestamp lines.
 5. **Save.** Meeting metadata, audio file, and transcript are persisted to the user-data folder under a unique meeting ID. Meetings that already exist on disk get rescanned and re-imported on launch.
@@ -235,6 +239,8 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
   - [Adversarial review prompts](docs/development/ADVERSARIAL_REVIEW_PROMPTS.md)
   - [Acoustic echo cancellation](docs/initiatives/FEATURE_ECHO_CANCELLATION.md)
   - [Linux support](docs/initiatives/LINUX_SUPPORT.md)
+  - [Linux experimental beta](docs/guides/LINUX_EXPERIMENTAL.md)
+  - [Troubleshooting](docs/guides/TROUBLESHOOTING.md)
   - [Speaker diarization](docs/completed/FEATURE_SPEAKER_DIARIZATION.md)
   - [Transcript summaries](docs/completed/FEATURE_TRANSCRIPT_SUMMARIES.md)
   - [Local AI feature plan](docs/completed/PLAN_LOCAL_AI_FEATURES.md)

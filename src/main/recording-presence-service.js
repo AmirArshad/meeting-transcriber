@@ -162,6 +162,18 @@ function buildWindowCloseDialogOptions(
   const pendingCount = Math.max(0, Number(pendingTranscriptionCount) || 0);
   if (pendingCount > 0) {
     const noun = pendingCount === 1 ? 'recording' : 'recordings';
+    if (platform === 'linux' && !trayAvailable) {
+      return {
+        type: 'question',
+        title: 'Keep AvaNevis Minimized',
+        message: 'Would you like to close the app or keep it minimized?',
+        detail: `${pendingCount} ${noun} will finish transcribing next time you open AvaNevis. Keeping the window minimized preserves a visible taskbar entry.`,
+        buttons: ['Keep AvaNevis Minimized', 'Close App', 'Cancel'],
+        defaultId: 0,
+        cancelId: 2,
+        keepRecordingAction: 'minimize',
+      };
+    }
     return {
       type: 'question',
       title: 'Minimize to Tray',
@@ -171,6 +183,19 @@ function buildWindowCloseDialogOptions(
       defaultId: 0,
       cancelId: 2,
       keepRecordingAction: 'hide',
+    };
+  }
+
+  if (platform === 'linux' && !trayAvailable) {
+    return {
+      type: 'question',
+      title: 'Keep AvaNevis Minimized',
+      message: 'Would you like to close the app or keep it minimized?',
+      detail: 'No system tray is available in this desktop session. Keeping AvaNevis minimized preserves a visible taskbar entry.',
+      buttons: ['Keep AvaNevis Minimized', 'Close App', 'Cancel'],
+      defaultId: 0,
+      cancelId: 2,
+      keepRecordingAction: 'minimize',
     };
   }
 

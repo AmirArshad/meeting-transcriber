@@ -80,6 +80,12 @@
           "arch": [
             "x64"
           ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "build/icons",
@@ -122,6 +128,23 @@
         "nss",
         "xdg-utils"
       ]
+    },
+    "deb": {
+      "artifactName": "${productName}-Setup-${version}.deb",
+      "depends": [
+        "libasound2",
+        "libatspi2.0-0",
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libpulse0",
+        "libsecret-1-0",
+        "libuuid1",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils"
+      ],
+      "recommends": []
     },
     "toolsets": {
       "appimage": "1.0.2"

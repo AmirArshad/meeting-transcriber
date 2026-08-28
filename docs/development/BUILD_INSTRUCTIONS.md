@@ -9,7 +9,7 @@ This document explains how to build AvaNevis from source for the supported packa
 - Rust/`cargo` with the toolchain in `native/speakrs-cli/rust-toolchain.toml` (needed to build bundled `speakrs-cli` on Windows and macOS; Linux Core Beta skips Speakrs)
 - Windows 10/11 (64-bit) for Windows builds
 - macOS 13+ on Apple Silicon for macOS builds
-- Linux x86_64 for AppImage and pacman builds (cannot cross-compile AppImages)
+- Linux x86_64 for AppImage, pacman, and experimental deb builds (cannot cross-compile AppImages)
 - ~2GB free disk space for build artifacts
 
 ## Step 1: Install Dependencies
@@ -111,7 +111,7 @@ npm run build:mac:dir
 
 Output: `dist/mac-arm64/`
 
-### Linux AppImage and pacman (x86_64, build on Linux)
+### Linux AppImage, pacman, and experimental deb (x86_64, build on Linux)
 
 AppImages cannot be cross-compiled from Windows or macOS. On the Linux build host:
 
@@ -123,6 +123,7 @@ Output:
 
 - `dist/AvaNevis-Setup-<version>.AppImage`
 - `dist/AvaNevis-Setup-<version>.pkg.tar.zst`
+- `dist/AvaNevis-Setup-<version>.deb`
 
 Unpacked directory (faster iteration):
 
@@ -132,10 +133,10 @@ npm run build:linux:dir
 
 Output: `dist/linux-unpacked/` (binary `avanevis`)
 
-Verify layout, static AppImage runtime (rejects legacy FUSE2 markers), bundled Python/ffmpeg/backend isolation, add-on exclusions, and pacman `.PKGINFO`:
+Verify layout, static AppImage runtime (rejects legacy FUSE2 markers), bundled Python/ffmpeg/backend isolation, add-on exclusions, pacman `.PKGINFO`, and Debian control metadata:
 
 ```bash
-npm run verify:linux:packaged -- --unpacked --appimage --pacman
+npm run verify:linux:packaged -- --unpacked --appimage --pacman --deb
 ```
 
 Stay on electron-builder 26.x with `"toolsets": { "appimage": "1.0.2" }`. That is the static type2-runtime (no host `fuse2` / `libfuse.so.2`). The runtime still needs the kernel FUSE device (`/dev/fuse`) and typically userspace `fuse3`. Do **not** treat `--appimage-extract-and-run` as proof of the shipped default.
@@ -175,6 +176,7 @@ dist/
 ├── AvaNevis-Setup-<version>.dmg          # macOS (macOS builds)
 ├── AvaNevis-Setup-<version>.AppImage     # Linux portable (Linux builds)
 ├── AvaNevis-Setup-<version>.pkg.tar.zst  # Linux pacman (Linux builds)
+├── AvaNevis-Setup-<version>.deb          # Linux deb, experimental (Linux builds)
 ├── win-unpacked/                         # Unpacked Windows app (if using build:dir)
 ├── linux-unpacked/                       # Unpacked Linux app (if using build:linux:dir)
 └── builder-*.yaml                        # Build metadata
@@ -270,7 +272,7 @@ Once built, you can distribute the installer:
 After `npm run build:linux` or `build:linux:dir`:
 
 ```bash
-npm run verify:linux:packaged -- --unpacked --appimage --pacman
+npm run verify:linux:packaged -- --unpacked --appimage --pacman --deb
 ```
 
 Optional generic `safeStorage` round-trip (Omarchy / a real Linux desktop with a Secret Service — no Hugging Face token):
@@ -281,9 +283,9 @@ AVANEVIS_SAFESTORAGE_SMOKE=1 ./dist/AvaNevis-Setup-<version>.AppImage
 
 Expect exit 0, backend `gnome_libsecret` (not `basic_text`), bundled Python/ffmpeg/backend paths, and `diarization`/`summary` `supported: false`.
 
-Omarchy packaged UI (2026-08-28): Settings add-on cards stay greyed `unsupported`; Open third-party notices opens `resources/legal/THIRD_PARTY_NOTICES.md` inside the AppImage mount; a short AppImage recording transcribes with bundled `faster_whisper_transcriber --device cpu`. That is not a 60-minute soak. Ubuntu 24.04 **desktop** smoke is still open.
+Omarchy packaged UI (2026-08-28): Settings add-on cards stay greyed `unsupported`; Open third-party notices opens `resources/legal/THIRD_PARTY_NOTICES.md` inside the AppImage mount; a short AppImage recording transcribes with bundled `faster_whisper_transcriber --device cpu`. That is not a 60-minute soak. Ubuntu 24.04 **desktop** smoke is still open. Other distros are experimental betas — see [LINUX_EXPERIMENTAL.md](../guides/LINUX_EXPERIMENTAL.md).
 
-GitHub Release builds include both Linux artifacts after Gate B ([issue #76](https://github.com/AmirArshad/meeting-transcriber/issues/76)) closed on 2026-08-28. Certificate-less macOS builds explicitly use a complete ad-hoc bundle signature; Developer-ID signing/notarization remains a future enrollment step.
+GitHub Release builds include AppImage, pacman, and experimental `.deb` after Gate B ([issue #76](https://github.com/AmirArshad/meeting-transcriber/issues/76)) closed on 2026-08-28. Certificate-less macOS builds explicitly use a complete ad-hoc bundle signature; Developer-ID signing/notarization remains a future enrollment step.
 
 ### macOS packaged smoke (no Apple Developer account required)
 

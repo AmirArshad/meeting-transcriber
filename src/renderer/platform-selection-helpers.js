@@ -66,7 +66,7 @@
       kind: 'alert',
       alertMessage: 'Recording failed. Please check:\n\n'
         + '1. The selected microphone is connected and not in use\n'
-        + '2. The PulseAudio/PipeWire session is running\n'
+        + '2. pipewire-pulse (or PulseAudio) is installed and your user audio session is running\n'
         + '3. Microphone access is allowed for this app\n\n'
         + 'Then refresh devices or restart AvaNevis.',
     };

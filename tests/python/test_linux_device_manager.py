@@ -146,8 +146,10 @@ def test_linux_device_manager_fails_closed_without_pulse_server(monkeypatch):
 
     monkeypatch.setattr(device_manager, 'load_audio_backend', lambda: SimpleNamespace(Pulse=BoomPulse))
 
-    with pytest.raises(device_manager.DeviceManagerEnvironmentError, match='PulseAudio/PipeWire is not running'):
+    with pytest.raises(device_manager.DeviceManagerEnvironmentError) as exc:
         device_manager.DeviceManager()
+    assert 'pipewire-pulse' in str(exc.value)
+    assert 'user audio session' in str(exc.value)
 
 
 def test_linux_enumerate_failure_keeps_raw_exception_off_the_error_line(monkeypatch, capsys):
@@ -162,8 +164,10 @@ def test_linux_enumerate_failure_keeps_raw_exception_off_the_error_line(monkeypa
             raise AssertionError('sink_list should not run after source_list fails')
 
     manager.pulse = BoomPulse()
-    with pytest.raises(device_manager.DeviceManagerEnvironmentError, match='Could not list PulseAudio'):
+    with pytest.raises(device_manager.DeviceManagerEnvironmentError) as exc:
         manager._list_devices_linux()
+    assert 'pipewire-pulse' in str(exc.value)
+    assert 'user audio session' in str(exc.value)
 
     captured = capsys.readouterr()
     assert captured.err.startswith('Warning:')

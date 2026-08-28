@@ -86,7 +86,8 @@ test('validate-devices uses the Pulse fallback when Linux stderr has no ERROR li
   });
 
   assert.equal(result.valid, false);
-  assert.match(result.errors[0], /Is PulseAudio or PipeWire running/);
+  assert.match(result.errors[0], /install pipewire-pulse/i);
+  assert.match(result.errors[0], /user audio session/i);
   assert.equal(result.errors[0].includes('/run/user'), false);
 });
 
@@ -189,7 +190,8 @@ test('get-audio-devices times out instead of hanging on Linux', { timeout: 2000 
   await assert.rejects(
     () => handlers['get-audio-devices'](),
     (error) => error instanceof Error
-      && /PulseAudio or PipeWire running/.test(error.message)
+      && /install pipewire-pulse/i.test(error.message)
+      && /user audio session/i.test(error.message)
       && !error.message.includes('/run/user'),
   );
   assert.equal(hanging.killCalls >= 1, true);

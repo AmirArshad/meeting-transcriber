@@ -6,6 +6,7 @@
  */
 
 const { app, shell } = require('electron');
+const fs = require('fs');
 const https = require('https');
 const { resolveExternalUrl, UPDATER_HTTP_RESPONSE_MAX_CHARS } = require('./main-process-helpers');
 
@@ -117,8 +118,57 @@ function fetchLatestRelease() {
  * @param {Array} assets - Release assets from GitHub API
  * @returns {Object|null} Matching asset or null
  */
-function findInstallerAsset(assets) {
-  const platform = process.platform;
+function parseOsRelease(text) {
+  const fields = {};
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const match = line.match(/^([A-Z][A-Z0-9_]*)=(.*)$/);
+    if (!match) continue;
+    let value = match[2].trim();
+    if ((value.startsWith('"') && value.endsWith('"'))
+        || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    fields[match[1]] = value.replace(/\\([\\"'$`])/g, '$1');
+  }
+  return fields;
+}
+
+function readOsRelease() {
+  try {
+    return fs.readFileSync('/etc/os-release', 'utf8');
+  } catch (_error) {
+    return '';
+  }
+}
+
+function resolveLinuxInstallerOrder({ env = process.env, osReleaseText = readOsRelease() } = {}) {
+  if (env && env.APPIMAGE) {
+    return ['.AppImage'];
+  }
+
+  const release = parseOsRelease(osReleaseText);
+  const id = String(release.ID || '').toLowerCase();
+  const related = new Set([
+    id,
+    ...String(release.ID_LIKE || '').toLowerCase().split(/\s+/),
+  ].filter(Boolean));
+
+  // SteamOS has an Arch lineage but its read-only A/B root makes pacman -U a
+  // poor update route. Keep Desktop Mode friends on the portable artifact.
+  if (id === 'steamos') {
+    return ['.AppImage'];
+  }
+  if (['ubuntu', 'debian', 'pop', 'linuxmint'].some((name) => related.has(name))) {
+    return ['.deb', '.AppImage'];
+  }
+  if (['arch', 'cachyos', 'omarchy'].some((name) => related.has(name))) {
+    return ['.pkg.tar.zst', '.AppImage'];
+  }
+  return ['.AppImage'];
+}
+
+function findInstallerAsset(assets, options = {}) {
+  const platform = options.platform || process.platform;
 
   if (platform === 'darwin') {
     const dmgAsset = assets.find(asset =>
@@ -135,15 +185,19 @@ function findInstallerAsset(assets) {
   }
 
   if (platform === 'linux') {
-    // Match only published Core Beta artifacts. Prefer the portable AppImage,
-    // then the pacman package. Never treat source archives, .deb, or arbitrary
-    // tarballs as installers.
-    const linuxAsset = assets.find((asset) =>
-      asset.name.startsWith(INSTALLER_NAME_TOKEN) && asset.name.endsWith('.AppImage')
-    ) || assets.find((asset) =>
-      asset.name.startsWith(INSTALLER_NAME_TOKEN) && asset.name.endsWith('.pkg.tar.zst')
-    );
-    return linuxAsset || null;
+    const suffixOrder = resolveLinuxInstallerOrder({
+      env: options.env || process.env,
+      osReleaseText: Object.prototype.hasOwnProperty.call(options, 'osReleaseText')
+        ? options.osReleaseText
+        : readOsRelease(),
+    });
+    for (const suffix of suffixOrder) {
+      const asset = assets.find((candidate) =>
+        candidate.name.startsWith(INSTALLER_NAME_TOKEN) && candidate.name.endsWith(suffix)
+      );
+      if (asset) return asset;
+    }
+    return null;
   }
 
   return null;
@@ -188,6 +242,8 @@ function openDownloadPage(url) {
 module.exports = {
   checkForUpdates,
   findInstallerAsset,
+  parseOsRelease,
+  resolveLinuxInstallerOrder,
   openDownloadPage,
   isNewerVersion // Export for testing
 };

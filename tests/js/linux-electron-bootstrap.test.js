@@ -9,12 +9,82 @@ const { createGpuRuntimeService } = require('../../src/main/gpu-runtime-service'
 
 const {
   applyLinuxElectronCommandLineSwitches,
+  buildLinuxEnvironmentDiagnostics,
+  classifyLinuxDesktopEnvironment,
   getSelectedStorageBackend,
   probeSecretStorage,
   resolveLinuxPasswordStore,
   runLinuxSafeStorageSmoke,
   SAFESTORAGE_SMOKE_CANARY,
 } = require('../../src/main-process/linux-electron-bootstrap');
+
+test('Linux desktop classification covers the friend-test matrix without changing secret-store policy', () => {
+  const cases = [
+    ['GNOME', 'gnome'],
+    ['ubuntu:GNOME', 'gnome'],
+    ['KDE', 'kde'],
+    ['KDE:Plasma', 'kde'],
+    ['Hyprland', 'hyprland'],
+    ['COSMIC', 'cosmic'],
+    ['sway:wlroots', 'sway'],
+    ['niri', 'niri'],
+    ['X-Cinnamon', 'cinnamon'],
+    ['XFCE', 'xfce'],
+    ['unexpected-shell', 'other'],
+    ['', 'unknown'],
+  ];
+
+  for (const [desktop, expected] of cases) {
+    const env = desktop ? { XDG_CURRENT_DESKTOP: desktop } : {};
+    assert.equal(classifyLinuxDesktopEnvironment(env), expected, desktop || '(unset)');
+    assert.equal(
+      resolveLinuxPasswordStore(env),
+      expected === 'kde' ? 'kwallet6' : 'gnome-libsecret',
+      desktop || '(unset)',
+    );
+  }
+});
+
+test('Linux diagnostics are bounded, sanitized, and do not expose display socket values', () => {
+  const diagnostics = buildLinuxEnvironmentDiagnostics({
+    env: {
+      XDG_CURRENT_DESKTOP: 'ubuntu:GNOME\nsecret=value',
+      XDG_SESSION_TYPE: 'wayland\nunsafe',
+      WAYLAND_DISPLAY: 'wayland-secret-socket',
+      DISPLAY: ':99-private',
+    },
+    safeStorage: {
+      getSelectedStorageBackend: () => 'gnome_libsecret',
+      isEncryptionAvailable: () => true,
+    },
+    commandLine: {
+      getSwitchValue(name) {
+        return name === 'ozone-platform-hint' ? 'auto' : '';
+      },
+    },
+    argv: ['/opt/AvaNevis/avanevis', '--no-sandbox'],
+  });
+
+  assert.deepEqual(diagnostics, {
+    desktop: 'ubuntu:GNOME secret=value',
+    desktopFamily: 'gnome',
+    sessionType: 'wayland unsafe',
+    hasWaylandDisplay: true,
+    hasX11Display: true,
+    requestedPasswordStore: 'gnome-libsecret',
+    selectedSecretBackend: 'gnome_libsecret',
+    secretEncryptionAvailable: true,
+    ozonePlatform: null,
+    ozonePlatformHint: 'auto',
+    sandboxDisabled: true,
+  });
+  assert.doesNotMatch(JSON.stringify(diagnostics), /wayland-secret-socket|:99-private/);
+
+  const oversized = buildLinuxEnvironmentDiagnostics({
+    env: { XDG_CURRENT_DESKTOP: `Hyprland${'x'.repeat(300)}` },
+  });
+  assert.ok(oversized.desktop.length <= 120);
+});
 
 test('Linux password-store is gnome-libsecret except KDE → kwallet6', () => {
   assert.equal(resolveLinuxPasswordStore({ XDG_CURRENT_DESKTOP: 'Hyprland' }), 'gnome-libsecret');

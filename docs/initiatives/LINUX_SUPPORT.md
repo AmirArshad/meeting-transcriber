@@ -1,11 +1,11 @@
 # Linux Support Plan — Omarchy First
 
-> **Status:** **Omarchy Core Beta (Phases 0–5) is complete** on `release/linux` (2026-08-28). Phase 3 60-minute soak **cancelled** by operator 2026-08-27 — not run, not passed; 15-minute soak is the duration-growth evidence. Phase 5 packaged Settings / legal-notices clicks and a packaged AppImage recording + CPU faster-whisper session closed 2026-08-28. Gate B closed on Apple Silicon macOS 2026-08-28 and the release workflow now includes AppImage + pacman artifacts. Ubuntu 24.04 **desktop** AppImage recording smoke is still open (Docker launch only). Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.
+> **Status:** **Omarchy Core Beta (Phases 0–5) is complete** on `release/linux` (2026-08-28). Phase 3 60-minute soak **cancelled** by operator 2026-08-27 — not run, not passed; 15-minute soak is the duration-growth evidence. Phase 5 packaged Settings / legal-notices clicks and a packaged AppImage recording + CPU faster-whisper session closed 2026-08-28. Gate B closed on Apple Silicon macOS 2026-08-28 and the release workflow now includes AppImage, pacman, and an experimental `.deb`. Ubuntu 24.04 **desktop** recording/`safeStorage` smoke is still open (Docker launch only). Additional distros and desktops are **experimental betas** with no hardware claim — see [LINUX_EXPERIMENTAL.md](../guides/LINUX_EXPERIMENTAL.md). Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.
 > **Replanned:** 2026-08-23 against AvaNevis v2.7.0 / current `master`.
 > **Review pass:** 2026-08-23 — verified plan claims against the codebase and CI, corrected two host-fact conclusions (secret storage, tray), and pinned every required upstream Linux artifact. All "Verified" sections below were checked on that date.
 > **Scope cut (2026-08-24):** the first Linux version is **Core Beta only** (Phases 0–5). Speaker identification and local summaries are **out of scope** until a later Linux version. There is no Omarchy host with an NVIDIA GPU to validate those CUDA-only add-ons; do not ship a CPU fallback. The UI must keep both features visible but greyed out as unsupported.
 > **Primary target:** Omarchy 4, x86_64, Hyprland/Wayland, PipeWire with `pipewire-pulse`.
-> **Secondary target:** Ubuntu 24.04+ and other modern x86_64 desktop distributions where the same binaries and Pulse-compatible capture path work without distro-specific code.
+> **Secondary target:** experimental-beta x86_64 desktops (Ubuntu, vanilla Arch, CachyOS, Fedora Workstation, SteamOS Desktop Mode) where the same Pulse-compatible capture path may work without distro-specific code. These are not hardware-validated. See [LINUX_EXPERIMENTAL.md](../guides/LINUX_EXPERIMENTAL.md).
 
 ## How to use this plan
 
@@ -27,7 +27,7 @@ Delivery has two explicit milestones. Only the first is in scope now:
 
 A Core Beta release must not present setup controls that cannot complete. Greyed-out Settings cards and a disabled Generate Summary control are required; hiding the features, or leaving Set Up clickable, is not. Do not call Linux "feature-complete" with Windows/macOS while add-ons remain deferred.
 
-Ubuntu `.deb` support is a later packaging task unless the AppImage works unchanged. No Ubuntu-specific capture implementation is planned.
+An experimental x86_64 `.deb` is published beside AppImage and pacman for Debian-family friends. It does not promote Ubuntu (or any other distro) to Supported. No Ubuntu-specific capture implementation is planned.
 
 ## Executive decision
 
@@ -113,7 +113,7 @@ On the current Omarchy host, `npm test` also fails seven Linux-platform assumpti
 3. `build.mac.identity` is now explicitly `"-"`, which produces a complete ad-hoc bundle signature with hardened runtime and the existing `disable-library-validation` entitlement. The packaged verifier checks the whole app seal before and after smoke execution and uses `PYTHONDONTWRITEBYTECODE=1` so imports cannot invalidate it.
 4. A fresh Electron 42.9.0 DMG passed `hdiutil verify`, mounted, passed the MLX/ffmpeg/helper/Speakrs packaged smoke, and the app inside the mounted DMG passed deep/strict signature verification. It remains intentionally not Developer-ID signed, notarized, or stapled until enrollment, so the documented first-launch Gatekeeper bypass remains necessary.
 
-Gate B is closed and `.github/workflows/build-release.yml` now builds, verifies, uploads, and publishes both Linux Core Beta artifacts.
+Gate B is closed and `.github/workflows/build-release.yml` now builds, verifies, uploads, and publishes AppImage, pacman, and experimental `.deb` Core Beta artifacts.
 
 Windows v2.7.0 has no equivalent open release issue.
 
@@ -125,8 +125,8 @@ The first Linux version (Core Beta) must state:
 - Wayland/Hyprland + PipeWire/Pulse compatibility is the tested desktop.
 - Transcription is local faster-whisper on **CPU**. Linux CUDA Whisper is not a Core Beta support claim.
 - Speaker identification (Speakrs and Pyannote) and local summaries are **not available on Linux in this version**; they will return in a future Linux update. The Settings cards stay visible and greyed out. No Linux CPU fallback for either speaker engine.
-- Ubuntu/other distro AppImage use is experimental until matrix evidence exists.
-- Linux ARM64, Flatpak, Snap, RPM, ROCm/MIGraphX, native Ubuntu `.deb`, and Linux AI add-on setup are out of the first release.
+- Ubuntu, vanilla Arch, CachyOS, Fedora Workstation, SteamOS Desktop Mode, and additional desktops (GNOME, KDE Plasma, COSMIC, Sway, Niri, Cinnamon, XFCE) are **experimental betas** until friend hardware evidence exists. See [LINUX_EXPERIMENTAL.md](../guides/LINUX_EXPERIMENTAL.md) and [linux-experimental-beta-checklist.md](../../tests/manual/linux-experimental-beta-checklist.md).
+- Linux ARM64, Flatpak, Snap, RPM, ROCm/MIGraphX, and Linux AI add-on setup remain out of this release. The experimental `.deb` is a packaging convenience, not a Ubuntu support claim.
 
 ## Locked architecture decisions
 
@@ -280,8 +280,9 @@ Two operational constraints:
 
 Deferred:
 
-- `.deb` until the AppImage has a concrete Ubuntu incompatibility
 - RPM, Flatpak, Snap, AUR automation, Linux ARM64
+
+An experimental x86_64 `.deb` (`AvaNevis-Setup-*`, explicit `libpulse0` / `libsecret-1-0`, no AppIndicator/ffmpeg/AI depends) shipped 2026-08-28 for Debian-family friends. It does not change the Supported tier.
 
 Bundle a pinned Linux Python 3.11 runtime, ffmpeg, backend sources, and legal notices in the prepared resource tree (see **Verified upstream artifacts** for the Python/ffmpeg pins). Do not rely on `/usr/bin/python`, system pip packages, or PATH ffmpeg in packaged builds. **Do not stage Linux `speakrs-cli`, ONNX Runtime, llama.cpp, or pyannote CUDA wheels in Core Beta.** `build/prepare-resources.js` must not fail a Linux package because a Speakrs binary is absent. Windows/macOS Speakrs packaging stays fail-closed.
 
@@ -342,6 +343,8 @@ return linuxAsset || null;
 ```
 
 - Linux `artifactName` values in `package.json` must therefore produce `AvaNevis-Setup-*` file names, keeping `src/updater.js` and release naming aligned (the existing release-asset-naming invariant in `AGENTS.md`).
+
+**Shipped matching (2026-08-28 experimental slice):** still notify-only and still `AvaNevis-Setup-*` only. Selection is now distro-aware: running AppImage → AppImage; Debian-family → `.deb` then AppImage; Arch-family → pacman then AppImage; Fedora, SteamOS, and unknown Linux → AppImage. Source archives and unprefixed names still never match.
 
 ### 12. First Linux version does not ship diarization or summaries (new, 2026-08-24)
 
@@ -730,7 +733,7 @@ Arch **build-host** only: electron-builder's bundled fpm needs `libcrypt.so.1` (
 
 Files:
 
-- Linux targets and resources in `package.json` (AppImage + pacman; `artifactName` producing `AvaNevis-Setup-*` per Locked decision 11)
+- Linux targets and resources in `package.json` (AppImage + pacman + experimental deb; `artifactName` producing `AvaNevis-Setup-*` per Locked decision 11)
 - the **electron-builder decision** from Locked decision 8: opt into the static AppImage toolset on 26.x (`1.0.2`), not a v27 upgrade
 - pacman packaging metadata/dependencies (no libappindicator; `.PKGINFO` validated on Omarchy)
 - Linux artifact naming in `src/updater.js` (tightened `findInstallerAsset`)
@@ -767,7 +770,7 @@ Host: `amiromarchy`, Omarchy 4.0.1, Hyprland. `fuse2` / `libfuse.so.2` **not** i
 
 **Still open:** Ubuntu 24.04 **desktop** AppImage recording/safeStorage smoke (Docker launch 2026-08-28 is not that row).
 
-Repo documentation (AGENTS.md, README, BACKEND.md, TESTING/BUILD, checklists) describes shipped Linux Core Beta: Pulse/PipeWire recording, CPU faster-whisper, add-ons still greyed `unsupported`. Do not advertise CUDA or add-ons as ready. GitHub Releases include both Linux artifacts after Gate B closed.
+Repo documentation (AGENTS.md, README, BACKEND.md, TESTING/BUILD, checklists) describes shipped Linux Core Beta: Pulse/PipeWire recording, CPU faster-whisper, add-ons still greyed `unsupported`. Do not advertise CUDA or add-ons as ready. GitHub Releases include AppImage, pacman, and experimental `.deb` after Gate B closed. Experimental-beta distro coverage is documented in `docs/guides/LINUX_EXPERIMENTAL.md`; it is not hardware evidence.
 
 ### Phases 6–9 — Later Linux version (deferred)
 
@@ -922,4 +925,4 @@ Later version only (needs NVIDIA Omarchy):
 
 ## First implementation action
 
-Gates A and B are resolved. Phases 0–5 Omarchy Core Beta is complete on `release/linux` (Phase 3 60-minute soak cancelled by operator 2026-08-27; Phase 4 ozone/secret-storage/tray/CPU/add-on grey-out and review remediation closed 2026-08-27; Phase 5 packaging + packaged UI/recording evidence closed 2026-08-28). The release workflow includes AppImage + pacman. Ubuntu 24.04 desktop AppImage recording smoke is still open. Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.
+Gates A and B are resolved. Phases 0–5 Omarchy Core Beta is complete on `release/linux` (Phase 3 60-minute soak cancelled by operator 2026-08-27; Phase 4 ozone/secret-storage/tray/CPU/add-on grey-out and review remediation closed 2026-08-27; Phase 5 packaging + packaged UI/recording evidence closed 2026-08-28). The release workflow includes AppImage, pacman, and an experimental `.deb`. Ubuntu 24.04 desktop recording/`safeStorage` smoke is still open. Other distros remain experimental betas. Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.

@@ -164,9 +164,9 @@ The main process also selects the platform transcriber and launches it with `pyt
 
 - Windows: `AvaNevis-Setup-<version>.exe`
 - macOS: `AvaNevis-Setup-<version>.dmg`
-- Linux: `AvaNevis-Setup-<version>.AppImage` (preferred updater match) and `AvaNevis-Setup-<version>.pkg.tar.zst`
+- Linux: `AvaNevis-Setup-<version>.AppImage`, `AvaNevis-Setup-<version>.pkg.tar.zst`, and experimental `AvaNevis-Setup-<version>.deb`
 
-`src/updater.js` `findInstallerAsset` requires the `AvaNevis-Setup-` token on every platform. Linux never matches source `.tar.gz`, `.deb`, or unprefixed AppImages. The updater stays notify-only (no AppImage self-update; pacman-installed apps must not self-update).
+`src/updater.js` `findInstallerAsset` requires the `AvaNevis-Setup-` token on every platform. Linux selects among those three suffixes from the current install (`APPIMAGE`) and `/etc/os-release`: a running AppImage stays on AppImage; Debian-family prefers `.deb`; Arch-family prefers pacman; Fedora, SteamOS, and unknown Linux prefer AppImage. Source `.tar.gz` and unprefixed names never match. The updater stays notify-only (no AppImage self-update; pacman/deb-installed apps must not self-update).
 
 ## CI Coverage
 
@@ -176,15 +176,15 @@ The current CI workflow validates packaging more directly than before:
 - macOS backend job builds the Swift helper
 - macOS backend job also runs `npm run build:mac:dir`
 - macOS packaged output is checked for bundled helper, Python, and ffmpeg
-- Ubuntu packaging job (`test-packaging-linux` on `ubuntu-latest`) runs `npm ci`, `npm run test:all`, `prepare-build`, electron-builder `dir` + AppImage + pacman, and `scripts/verify-linux-packaging.js`
-- GitHub Release workflow builds Windows, macOS, Linux AppImage, and Linux pacman artifacts; Gate B closed 2026-08-28 after fixing incomplete ad-hoc macOS bundle signing
+- Ubuntu packaging job (`test-packaging-linux` on `ubuntu-latest`) runs `npm ci`, `npm run test:all`, `prepare-build`, electron-builder `dir` + AppImage + pacman + deb, and `scripts/verify-linux-packaging.js`
+- GitHub Release workflow builds Windows, macOS, Linux AppImage, Linux pacman, and experimental Linux `.deb` artifacts; Gate B closed 2026-08-28 after fixing incomplete ad-hoc macOS bundle signing
 
 This is still not a substitute for hardware recording tests, but it catches many packaging regressions before release tags.
 
 ## Known Constraints
 
 - macOS packaged builds target Apple Silicon only.
-- Linux packaged builds target x86_64 AppImage + pacman only; no `.deb` / RPM / Flatpak in Core Beta.
+- Linux packaged builds target x86_64 AppImage + pacman + one experimental `.deb`; no RPM / Flatpak / Snap in Core Beta.
 - Linux AppImage uses electron-builder 26.x static toolset `1.0.2` (no host fuse2). Kernel `/dev/fuse` is still required to mount.
 - Unsigned distribution means users still see the normal Gatekeeper workaround flow.
 - Update delivery is still a manual browser-download flow, not an in-app auto-install system.

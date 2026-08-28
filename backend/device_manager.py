@@ -98,7 +98,8 @@ class DeviceManager:
                 self.pulse = backend.Pulse('avanevis-device-manager')
             except Exception as exc:
                 raise DeviceManagerEnvironmentError(
-                    "PulseAudio/PipeWire is not running. Start the session audio service and try again."
+                    "Could not reach the Pulse-compatible audio server. Install pipewire-pulse "
+                    "(or PulseAudio), then start or sign back into your user audio session and try again."
                 ) from exc
         else:
             raise DeviceManagerEnvironmentError(f"Unsupported platform: {platform.system()}")
@@ -248,7 +249,8 @@ class DeviceManager:
             # exception (socket paths / server strings) as the user-facing text.
             print(f"Warning: Could not enumerate Pulse devices: {exc}", file=sys.stderr)
             raise DeviceManagerEnvironmentError(
-                "Could not list PulseAudio/PipeWire devices. Is the session audio service running?"
+                "Could not list Pulse-compatible devices. Install pipewire-pulse (or PulseAudio), "
+                "then start or sign back into your user audio session and try again."
             ) from exc
 
         sinks_by_name = {sink.name: sink for sink in sinks}

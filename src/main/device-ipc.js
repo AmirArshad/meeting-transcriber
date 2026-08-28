@@ -17,6 +17,8 @@ const DISK_SPACE_WARNING_MESSAGE =
   'Less than 10 GB is available. Long recordings may run out of space.';
 const DISK_SPACE_CRITICAL_MESSAGE =
   'Less than 2 GB is available. Long recordings may run out of space.';
+const LINUX_AUDIO_SESSION_ERROR =
+  'Could not reach the Pulse-compatible audio server. Install pipewire-pulse (or PulseAudio), then start or sign back into your user audio session and try again.';
 
 const {
   coerceIntegerDeviceId,
@@ -99,7 +101,7 @@ function createDeviceIpc(deps) {
 
   function linuxDeviceManagerFailure(errorOutput) {
     const message = extractDeviceManagerError(errorOutput)
-      || 'Could not list audio devices. Is PulseAudio or PipeWire running?';
+      || LINUX_AUDIO_SESSION_ERROR;
     return {
       valid: false,
       warnings: [],
@@ -459,7 +461,7 @@ function createDeviceIpc(deps) {
           try { python.kill(); } catch (e) { /* ignore */ }
           const detail = platform === 'linux'
             ? (extractDeviceManagerError(errorOutput)
-              || 'Could not list audio devices. Is PulseAudio or PipeWire running?')
+              || LINUX_AUDIO_SESSION_ERROR)
             : 'Device enumeration timed out';
           finish(() => reject(new Error(detail)));
         }, deviceManagerTimeoutMs);
@@ -468,7 +470,7 @@ function createDeviceIpc(deps) {
           python = spawnTrackedPython(getBackendModuleArgs('device_manager'), { cwd: pythonConfig.backendPath });
         } catch (e) {
           const detail = platform === 'linux'
-            ? 'Could not list audio devices. Is PulseAudio or PipeWire running?'
+            ? LINUX_AUDIO_SESSION_ERROR
             : (e?.message || 'Could not start device enumeration');
           finish(() => reject(new Error(detail)));
           return;
@@ -498,7 +500,7 @@ function createDeviceIpc(deps) {
           } else {
             const detail = platform === 'linux'
               ? (extractDeviceManagerError(errorOutput)
-                || 'Could not list audio devices. Is PulseAudio or PipeWire running?')
+                || LINUX_AUDIO_SESSION_ERROR)
               : errorOutput;
             finish(() => reject(new Error(`Python process exited with code ${code}: ${detail}`)));
           }

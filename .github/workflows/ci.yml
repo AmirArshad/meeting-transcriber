@@ -327,7 +327,7 @@ jobs:
     - name: Install package inspection tools
       run: |
         sudo apt-get update
-        sudo apt-get install -y --no-install-recommends zstd libarchive-tools libpulse0
+        sudo apt-get install -y --no-install-recommends zstd libarchive-tools libpulse0 fakeroot dpkg
 
     - name: Install Python dependencies
       run: |
@@ -341,13 +341,13 @@ jobs:
     - name: Run the full automated suite
       run: npm run test:all
 
-    - name: Build Linux unpacked, AppImage, and pacman packages
+    - name: Build Linux unpacked, AppImage, pacman, and deb packages
       run: |
         npm run prepare-build
-        npx electron-builder build --linux dir AppImage pacman --x64 --publish never
+        npx electron-builder build --linux dir AppImage pacman deb --x64 --publish never
 
-    - name: Verify packaged Linux layout, AppImage runtime, and pacman metadata
-      run: node scripts/verify-linux-packaging.js --unpacked --appimage --pacman
+    - name: Verify packaged Linux layout, AppImage runtime, pacman metadata, and deb control
+      run: node scripts/verify-linux-packaging.js --unpacked --appimage --pacman --deb
 
   security-audit:
     name: Security audit (${{ matrix.label }})
