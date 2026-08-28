@@ -512,7 +512,73 @@ Held: Electron 42.9.0; sounddevice 0.4.6; Windows/Linux pins; `filelock==3.32.3`
 - Packaged `sounddevice.InputStream` on default mic (index 1): 1.5 s, 17 callbacks, peak 0.003466.
 - ScreenCaptureKit fallback: helper `--screencapturekit` fail-closed `PERMISSION_DENIED: Screen Recording permission not granted` (same TCC limit as Task 2 / clusters 1–4 / PyObjC). That is a TCC limitation, not a resolver pass.
 
-Held: Electron 42.9.0; Windows/Linux pins; `filelock==3.32.3`; `onnxruntime` 1.26.0; `tokenizers` 0.23.1; `av` 18.1.0; all seven PyObjC pins at 12.2.2. Windows/Linux Task 3 trim remains on those hosts.
+Held: Electron 42.9.0; Windows/Linux pins; `filelock==3.32.3`; `onnxruntime` 1.26.0; `tokenizers` 0.23.1; `av` 18.1.0; all seven PyObjC pins at 12.2.2.
+
+## Task 3 Windows/Linux pin trim — rejected 2026-08-28 (this PC)
+
+Host: Windows 10 26200 x64, CPython 3.11.9 (`MSC v.1938`). Linux stand-in: WSL2 Ubuntu, uv CPython 3.11.15. Clean venvs under `%TEMP%\avanevis-v2.9-task3\win` and `/tmp/avanevis-v2.9-task3/linux`. Resolver: `pip install --dry-run --ignore-installed --only-binary=:all:` plus a real trial-2 install on each host. `pip check` text in every executed install: **No broken requirements found.**
+
+No pins were deleted. `requirements-windows-build.txt`, `requirements-linux-build.txt`, `requirements-windows.txt`, `requirements-linux.txt`, and `requirements-common.txt` are unchanged. macOS pins were not touched. Electron stayed 42.9.0. `filelock` stays **3.32.3**. `onnxruntime==1.26.0`, `tokenizers==0.23.1`, and `av==18.1.0` remain explicit direct runtime deps. Runtime floats (`onnxruntime` 1.29.0, `huggingface-hub` 1.29.0, `filelock` 3.32.4) were **not** copied into a build file.
+
+A packaged Windows dir rebuild / Linux AppImage was **not** run: the plan requires that gate before *accepting* a deletion, and no deletion was accepted. Trial-2 venvs used the retained lock graph (holds restored; matching pins omitted but still installed transitively) for decode and CPU transcription smoke.
+
+### Method
+
+Kept as first-party or documented holds: `pyaudiowpatch==0.2.12.8` (Windows), `pulsectl==24.12.0` / `SoundCard==0.4.6` / `cffi==2.1.1` (Linux), `numpy==2.4.6`, `soxr==1.1.0`, `faster-whisper==1.2.1`, `filelock==3.32.3`, `av==18.1.0`, `ctranslate2==4.8.1`, `huggingface-hub==1.16.1`, `tokenizers==0.23.1`, `onnxruntime==1.26.0`, `setuptools==84.0.0`.
+
+Runtime files have no explicit transitive `==` pins to drop. Their floors already leave `onnxruntime` / `tokenizers` / `av` transitive under `faster-whisper>=1.0.0`; that is expected for dev installs and is not a trim of the packaged lock.
+
+**Trial 1** omitted every other Windows/Linux build pin. Unconstrained resolve vs the lock (same version-holds on both hosts unless noted):
+
+| Package | Lock | Unpinned resolve | Verdict |
+|---|---|---|---|
+| `tqdm` | 4.67.3 | 4.70.0 | **Reject** — version hold |
+| `packaging` | 26.2 | 26.3 | **Reject** — version hold |
+| `protobuf` | 7.35.1 | 7.36.0 | **Reject** — version hold (`onnxruntime` unpinned protobuf) |
+| `fsspec` | 2026.4.0 | 2026.7.0 | **Reject** — version hold |
+| `hf-xet` | 1.5.0 | 1.6.0 | **Reject** — version hold |
+| `typer` | 0.25.1 | 0.27.2 | **Reject** — version + drops `click`; `colorama` becomes Windows-only |
+| `anyio` | 4.13.0 | 4.14.2 | **Reject** — version hold |
+| `idna` | 3.16 | 3.19 | **Reject** — version hold |
+| `click` | 8.4.1 | **not installed** | **Reject** — graph change. `typer==0.27.2` no longer requires `click` |
+| `colorama` | 0.4.6 | 0.4.6 on Windows; **not installed** on Linux | **Reject** on Linux — graph change. Windows still pulls it via `tqdm`/`click` Windows extras |
+| `annotated-doc` | 0.0.4 | 0.0.5 | **Reject** — version hold |
+| `Pygments` | 2.20.0 | 2.21.0 | **Reject** — version hold |
+
+**Trial 2** restored those holds and omitted only the packages that still resolved to the lock version. Real venvs `%TEMP%\avanevis-v2.9-task3\win\trial2-venv` and `/tmp/avanevis-v2.9-task3/linux/trial2-venv`: `pip check` passed. Freeze matched the fully pinned baseline for every requirements package (`setuptools==84.0.0` present via `pip show` / `pip freeze --all`; default `pip freeze` omits it). Wheels stayed platform-native (`av` `win_amd64` / `manylinux_2_28_x86_64`; `onnxruntime` / `ctranslate2` `cp311` CUDA-12-compatible tags). Hypothetical SBOM would drop those names from the Windows/Linux build files while pip still installed them.
+
+Those matches are **not parent exact-pins**. They match today because they are the current latest that satisfies a range. Removing them would let a later resolve change the packaged artifact without a requirements diff, and the SBOM generator would stop listing real runtime pieces (`flatbuffers` is Windows/Linux-only today; `colorama` is already absent from macOS). **Reject** the trim; retain the lock.
+
+| Package | Lock | Why retain even though trial 2 matched |
+|---|---|---|
+| `certifi` | 2026.7.22 | `httpx` unpinned certifi; CA bundle; security-sensitive |
+| `h11` | 0.16.0 | `httpcore`: `h11>=0.16` |
+| `httpcore` | 1.0.9 | `httpx`: `httpcore==1.*` |
+| `httpx` | 0.28.1 | `huggingface-hub==1.16.1`: `httpx<1,>=0.23.0` |
+| `typing-extensions` | 4.16.0 | `huggingface-hub`: `>=4.1.0` |
+| `PyYAML` | 6.0.3 | `huggingface-hub`: `>=5.1`; `ctranslate2`: `>=5.3,<7` |
+| `flatbuffers` | 25.12.19 | `onnxruntime` unpinned `flatbuffers` |
+| `shellingham` | 1.5.4 | `typer`: `>=1.3.0` |
+| `rich` | 15.0.0 | `typer`: `>=13.8.0` |
+| `markdown-it-py` | 4.2.0 | `rich`: `>=2.2.0` |
+| `mdurl` | 0.1.2 | `markdown-it-py`: `mdurl~=0.1` |
+| `colorama` | 0.4.6 | Windows: `tqdm`/`click` `platform_system == "Windows"`. Linux: only the explicit pin keeps it once typer floats |
+| `pycparser` | 3.0 | Linux: `cffi` requires `pycparser` except on PyPy |
+
+Held first-party / Task 2 pins (not trim candidates here): `huggingface-hub==1.16.1` vs runtime **1.29.0**; `filelock==3.32.3` vs runtime **3.32.4**; `onnxruntime==1.26.0` vs runtime **1.29.0**; `tokenizers==0.23.1`; `av==18.1.0`; `ctranslate2==4.8.1`; `setuptools==84.0.0`.
+
+### Decode and transcription smoke
+
+Trial-2 venvs (retained lock versions; matching pins transitive):
+
+- Windows 3.11.9: `av 18.1.0` decoded `tests/fixtures/speakrs-two-speaker-16k.wav` → rate 16000, channels 1, frames 223, samples 227592. Offline CPU transcription `--model small --device cpu --language en --json` with `HF_HUB_OFFLINE=1` and `AVANEVIS_TRANSCRIPTION_LOCAL_FILES_ONLY=1`: `Using cached Whisper model files only.`, exit 0, `device: cpu`, `computeType: int8`, duration 14.22s, English two-speaker fixture text. Imports: `faster_whisper 1.2.1`, `onnxruntime 1.26.0`, `tokenizers 0.23.1`, `ctranslate2 4.8.1`, `huggingface_hub 1.16.1`.
+- WSL2 3.11.15: same decode counts. Offline CPU transcription `--model tiny.en` (the WSL cache; Windows used `small`): same flags, exit 0, `device: cpu`, `computeType: int8`, duration 14.22s, English fixture text. `cffi==2.1.1` / `pycparser==3.0`. `pulsectl` was not imported: this WSL image has no `libpulse.so.0` (resolver stand-in, not Omarchy hardware).
+
+Temporary transcript output stayed under `%TEMP%` / `/tmp`. Do not treat WSL Pulse absence as a Linux capture gate.
+
+### SBOM
+
+Current `legal/PYTHON-BUNDLED-PACKAGES.md` is unchanged (63 direct pins, generated 2026-08-28T22:02:58.900Z). A trial-2 file would drop the matching Windows/Linux direct names (`flatbuffers` would disappear from the legal table entirely; `colorama` is already macOS-absent). That SBOM diff is evidence **against** accepting the trim.
 
 ## Blockers and non-goals
 
