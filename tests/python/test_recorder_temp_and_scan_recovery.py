@@ -14,6 +14,7 @@ sys.path.insert(0, str(BACKEND))
 from audio.recorder_temp_paths import (  # noqa: E402
     MIN_RECOVERABLE_PCM_BYTES,
     RECORDER_TEMP_PCM_SUFFIX,
+    build_final_opus_path_for_output,
     build_recorder_temp_pcm_path,
     build_stable_wav_path_for_output,
     is_recorder_temp_pcm_path,
@@ -50,6 +51,23 @@ class RecorderTempPathTests(unittest.TestCase):
             build_stable_wav_path_for_output(
                 "/home/user/.config/AvaNevis/recordings/recording_linux.opus"
             ).endswith(".wav")
+        )
+
+    def test_final_opus_path_only_rewrites_the_extension(self):
+        # str.replace('.wav', '.opus') rewrites every occurrence, so a
+        # recordings root containing '.wav' produced a mangled candidate path.
+        self.assertEqual(
+            build_final_opus_path_for_output("/home/user/my.wav.archive/recording_1.wav"),
+            "/home/user/my.wav.archive/recording_1.opus",
+        )
+        self.assertEqual(
+            build_final_opus_path_for_output("/home/user/recordings/meeting.v2.wav"),
+            "/home/user/recordings/meeting.v2.opus",
+        )
+        self.assertTrue(
+            build_final_opus_path_for_output(
+                r"C:\Users\me\recordings\recording_2026.wav"
+            ).endswith(".opus")
         )
 
     def test_is_recorder_temp_recognizes_current_and_legacy(self):

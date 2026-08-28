@@ -305,17 +305,23 @@
     ];
   }
 
-  function getSummaryActionControlState(feature) {
-    if (!feature) {
+  function getSummaryActionControlState(feature, { platformSupportsSummaries = true } = {}) {
+    if (feature && feature.status === 'unsupported') {
+      // Authoritative unsupported (Linux Core Beta): stay disabled with the copy.
       return {
         enabled: false,
         title: getSummarySetupMessage(feature),
       };
     }
-    if (feature && feature.status === 'unsupported') {
+    if (!feature) {
+      // Status is unknown — either not fetched yet, or the probe threw. On a
+      // platform that can run summaries, keep the button live: clicking it
+      // re-fetches status and routes the user to Settings, which is strictly
+      // more useful than a permanently dead control after one failed refresh.
+      // Where the platform cannot support summaries at all, stay fail-closed.
       return {
-        enabled: false,
-        title: getSummarySetupMessage(feature),
+        enabled: Boolean(platformSupportsSummaries),
+        title: platformSupportsSummaries ? '' : getSummarySetupMessage(feature),
       };
     }
     return {

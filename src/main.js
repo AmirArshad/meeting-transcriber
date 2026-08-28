@@ -1519,7 +1519,20 @@ app.whenReady().then(async () => {
       commandLine: app.commandLine,
       argv: process.argv,
     })));
-    if (process.env.AVANEVIS_SAFESTORAGE_SMOKE === '1') {
+    // Packaging smoke hook. It exits the app, so it must be a deliberate
+    // opt-in: an env var alone would let anything in the user's environment
+    // terminate a packaged install at startup. Release builds require the
+    // explicit AVANEVIS_ALLOW_SMOKE_HOOKS acknowledgement as well; dev and CI
+    // set only the first var.
+    const smokeRequested = process.env.AVANEVIS_SAFESTORAGE_SMOKE === '1';
+    const smokeAllowed = !app.isPackaged || process.env.AVANEVIS_ALLOW_SMOKE_HOOKS === '1';
+    if (smokeRequested && !smokeAllowed) {
+      console.warn(
+        'AVANEVIS_SAFESTORAGE_SMOKE ignored in a packaged build:'
+        + ' set AVANEVIS_ALLOW_SMOKE_HOOKS=1 to enable the packaging smoke hook.',
+      );
+    }
+    if (smokeRequested && smokeAllowed) {
       const smoke = runLinuxSafeStorageSmoke(getSafeStorage());
       const {
         getDiarizationAvailability,

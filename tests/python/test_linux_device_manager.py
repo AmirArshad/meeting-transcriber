@@ -219,6 +219,34 @@ def test_pulse_port_unavailable_only_when_explicitly_no():
     assert is_pulse_endpoint_unavailable(FakeSink('analog', 'Speakers', 'analog.monitor')) is False
 
 
+def test_pulse_port_unavailable_matches_the_real_pulsectl_enum_value():
+    """Guard against a probe that only satisfies hand-written fakes.
+
+    ``pulsectl.EnumValue`` has no ``.name``, is not an ``int`` subclass, and
+    reprs as ``<EnumValue available=no>``. An earlier implementation matched
+    every fake in the test above yet returned False for every real port, which
+    silently disabled unplugged-HDMI filtering in production.
+    """
+    pulsectl = pytest.importorskip('pulsectl')
+    available_enum = pulsectl.pulsectl.PulsePortAvailableEnum
+
+    assert is_pulse_port_unavailable(FakePort(available_enum.no)) is True
+    assert is_pulse_port_unavailable(FakePort(available_enum.yes)) is False
+    assert is_pulse_port_unavailable(FakePort(available_enum.unknown)) is False
+
+    # available_state is pulsectl's <=17.6.0 compatibility alias for the same value.
+    class LegacyPort:
+        available = None
+        available_state = available_enum.no
+
+    assert is_pulse_port_unavailable(LegacyPort()) is True
+
+    class RealisticSink:
+        port_active = FakePort(available_enum.no)
+
+    assert is_pulse_endpoint_unavailable(RealisticSink()) is True
+
+
 def test_linux_device_manager_keeps_distinct_pulse_ids_with_the_same_description(monkeypatch):
     _linux_flags(monkeypatch)
     pulse = FakePulse(

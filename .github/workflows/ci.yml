@@ -2,9 +2,9 @@ name: CI - Tests & Validation
 
 on:
   push:
-    branches: [ master, main, release/linux ]
+    branches: [ master, main ]
   pull_request:
-    branches: [ master, main, release/linux ]
+    branches: [ master, main ]
   workflow_dispatch:
 
 concurrency:

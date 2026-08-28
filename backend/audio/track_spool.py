@@ -194,7 +194,14 @@ class TrackSpool:
             self._mark_failed("sustained no-progress")
             return False
 
+        # The closed check, the byte accounting, and the enqueue all happen
+        # under one lock, and close() flips _closed under the same lock. Without
+        # that, a chunk could pass the check, close() could complete (writer
+        # joined, segments closed), and the enqueue would then report success
+        # for bytes nobody will ever write.
         with self._queued_lock:
+            if self._closed or self._failed:
+                return False
             if self._queued_bytes + len(payload) > self._max_queue_bytes:
                 self._mark_failed("hard queue cap exceeded")
                 return False
@@ -203,6 +210,14 @@ class TrackSpool:
             if was_empty and self._queued_bytes > 0:
                 self._pending_since = self._clock()
             queued_after = self._queued_bytes
+            try:
+                self._queue.put_nowait((payload, frame_position))
+            except queue.Full:
+                self._queued_bytes = max(0, self._queued_bytes - len(payload))
+                if self._queued_bytes <= 0:
+                    self._pending_since = None
+                self._mark_failed("queue put failed")
+                return False
 
         soft_limit = int(self._max_queue_bytes * SOFT_HIGH_WATER_RATIO)
         if (
@@ -220,16 +235,6 @@ class TrackSpool:
             except Exception:
                 pass
 
-        try:
-            self._queue.put_nowait((payload, frame_position))
-        except queue.Full:
-            with self._queued_lock:
-                self._queued_bytes = max(0, self._queued_bytes - len(payload))
-                if self._queued_bytes <= 0:
-                    self._pending_since = None
-            self._mark_failed("queue put failed")
-            return False
-
         if self._failed:
             return False
         return True
@@ -246,7 +251,10 @@ class TrackSpool:
             ):
                 raise ValueError("final_frame_count must be a non-negative int")
 
-        self._closed = True
+        with self._queued_lock:
+            # Paired with append()'s check: after this point no further chunk
+            # can be accepted, so nothing is silently dropped on the floor.
+            self._closed = True
         try:
             self._queue.put(None)
         except Exception:

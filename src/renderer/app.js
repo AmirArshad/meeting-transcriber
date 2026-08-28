@@ -349,7 +349,11 @@ function populateSelect(select, placeholder, devices) {
   devices.forEach((device) => {
     const option = document.createElement('option');
     option.value = device.id;
-    option.textContent = `${device.name} (${device.sample_rate} Hz)`;
+    // Synthetic entries (the Linux "None (microphone only)" desktop option)
+    // carry no sample rate and must not render "(48000 Hz)".
+    option.textContent = device.sample_rate
+      ? `${device.name} (${device.sample_rate} Hz)`
+      : device.name;
     select.appendChild(option);
   });
 }
@@ -1334,7 +1338,13 @@ function applySummaryActionAvailability() {
   const summary = aiAddonStatusSnapshot && aiAddonStatusSnapshot.features
     ? aiAddonStatusSnapshot.features.summary
     : null;
-  const control = getSummaryActionControlState(summary);
+  // homePromptContext.platform is the authoritative main-process platform.
+  // Until it arrives, fall back to the renderer host family so a slow first
+  // status fetch cannot leave Generate Summary dead on Windows/macOS.
+  const platform = homePromptContext.platform || inferRendererHostFamily(navigator.platform);
+  const control = getSummaryActionControlState(summary, {
+    platformSupportsSummaries: platform === 'win32' || platform === 'darwin',
+  });
   for (const button of getSummaryGenerationButtons()) {
     button.disabled = !control.enabled;
     if (control.title) {

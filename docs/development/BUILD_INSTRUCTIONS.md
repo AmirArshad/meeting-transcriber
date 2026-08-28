@@ -278,10 +278,12 @@ npm run verify:linux:packaged -- --unpacked --appimage --pacman --deb
 Optional generic `safeStorage` round-trip (Omarchy / a real Linux desktop with a Secret Service — no Hugging Face token):
 
 ```bash
-AVANEVIS_SAFESTORAGE_SMOKE=1 ./dist/AvaNevis-Setup-<version>.AppImage
+AVANEVIS_ALLOW_SMOKE_HOOKS=1 AVANEVIS_SAFESTORAGE_SMOKE=1 ./dist/AvaNevis-Setup-<version>.AppImage
 ```
 
 Expect exit 0, backend `gnome_libsecret` (not `basic_text`), bundled Python/ffmpeg/backend paths, and `diarization`/`summary` `supported: false`.
+
+The smoke hook exits the app, so packaged builds require **both** variables. `AVANEVIS_SAFESTORAGE_SMOKE=1` alone is ignored in a packaged build (it logs a warning and starts normally), so a stray environment variable cannot terminate a user's install at startup. Unpackaged `npm start` needs only `AVANEVIS_SAFESTORAGE_SMOKE=1`.
 
 Omarchy packaged UI (2026-08-28): Settings add-on cards stay greyed `unsupported`; Open third-party notices opens `resources/legal/THIRD_PARTY_NOTICES.md` inside the AppImage mount; a short AppImage recording transcribes with bundled `faster_whisper_transcriber --device cpu`. That is not a 60-minute soak. Ubuntu 24.04 **desktop** smoke is still open. Other distros are experimental betas — see [LINUX_EXPERIMENTAL.md](../guides/LINUX_EXPERIMENTAL.md).
 
@@ -296,6 +298,22 @@ npm run verify:mac:packaged
 ```
 
 Checks arm64 ffmpeg, ad-hoc codesign validity, `libopus` encode, bundled MLX imports, absence of bundled `torch`, and prints bundle sizes.
+
+### macOS signing identity guard
+
+`build.mac.identity` is pinned to `"-"` so certificate-less builds produce a **complete ad-hoc bundle signature** instead of electron-builder silently skipping signing (the Gate B / [issue #76](https://github.com/AmirArshad/meeting-transcriber/issues/76) root cause).
+
+That pin is itself a trap after Apple Developer enrollment: an explicit `identity` takes precedence over `CSC_LINK` and keychain discovery, so a "signed" build would still come out ad-hoc. `npm run build:mac` therefore runs `scripts/check-mac-signing-identity.js` first, which **fails the build** when `identity` is `"-"` while any of `CSC_LINK`, `CSC_NAME`, `CSC_KEY_PASSWORD`, `APPLE_TEAM_ID`, `APPLEID`, or `APPLE_API_KEY` is set. Resolve it one of three ways:
+
+```bash
+# Sign with the real certificate (leave package.json alone):
+npx electron-builder build --mac -c.mac.identity="Developer ID Application: … (TEAMID)"
+
+# Or remove the "identity" pin from package.json build.mac once enrollment is permanent.
+
+# Or deliberately ad-hoc sign anyway:
+AVANEVIS_ALLOW_ADHOC_MAC_SIGNING=1 npm run build:mac
+```
 
 ## Code Signing (Optional — paid Apple / Windows certs)
 

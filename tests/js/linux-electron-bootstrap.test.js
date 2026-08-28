@@ -179,58 +179,87 @@ test('Linux CUDA probe reports unavailable and does not advertise install', () =
   assert.match(getUnsupportedPlatformCudaProbeError('darwin'), /only supported on Windows/);
 });
 
+test('macOS CUDA probe shape is pinned and advertises no installable profile', () => {
+  // Sharing buildUnsupportedPlatformCudaStatus with Linux changed the macOS
+  // payload: it used to carry the Windows cuda12 profile list plus a
+  // recommendedInstallProfile, which was never installable on macOS anyway.
+  // Pin the shape so a future Linux tweak cannot silently reshape macOS.
+  const mac = buildUnsupportedPlatformCudaStatus('darwin');
+  assert.equal(mac.installed, false);
+  assert.equal(mac.deviceAvailable, false);
+  assert.equal(mac.runtimeLoadable, false);
+  assert.equal(mac.runtime, 'ctranslate2');
+  assert.equal(mac.statusCode, 'unsupportedPlatform');
+  assert.deepEqual(mac.missingLibraries, []);
+  assert.deepEqual(mac.supportedProfiles, []);
+  assert.deepEqual(mac.unsupportedDetectedProfiles, []);
+  assert.equal(mac.recommendedInstallProfile, null);
+  assert.equal(mac.error, 'CUDA runtime checks are only supported on Windows.');
+  // The renderer joins these arrays for the CUDA warning banner; empty arrays
+  // (not undefined) keep that copy from rendering "undefined".
+  assert.equal(mac.supportedProfiles.join(', '), '');
+});
+
 test('Linux GPU IPC fails closed before Python probing or GPU runtime queue admission', async () => {
-  const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
-  const handlers = {};
-  let pythonVersionCalls = 0;
-  let gpuQueueAdmissions = 0;
+  for (const platform of ['linux', 'darwin']) {
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+    const handlers = {};
+    let pythonVersionCalls = 0;
+    let gpuQueueAdmissions = 0;
 
-  Object.defineProperty(process, 'platform', { configurable: true, value: 'linux' });
-  try {
-    const service = createGpuRuntimeService({
-      app: { getPath: () => '/tmp/avanevis-test' },
-      path,
-      fs,
-      pythonConfig: { pythonExe: '/fake/python', backendPath: '/fake/backend' },
-      spawnTrackedPython: () => {
-        throw new Error('Linux GPU IPC must not spawn Python');
-      },
-      getBackendModuleArgs: () => [],
-      appendSpawnLogBuffer: (buffer, data) => `${buffer}${data}`,
-      sendRedactedProgress: () => {},
-      flushRedactedProgress: () => {},
-      getActivePythonVersion: async () => {
-        pythonVersionCalls += 1;
-        return { output: 'Python 3.11.9', parsed: { version: '3.11.9', major: 3, minor: 11 } };
-      },
-      terminateProcessBestEffort: () => {},
-      assertTrustedRendererSender: () => {},
-      getDiarizationDependencySitePackagesPath: () => null,
-      enqueueGpuResourceAction: async (action) => {
-        gpuQueueAdmissions += 1;
-        return action();
-      },
-    });
-    service.registerIpc({
-      handle(channel, handler) {
-        handlers[channel] = handler;
-      },
-    });
+    Object.defineProperty(process, 'platform', { configurable: true, value: platform });
+    try {
+      const service = createGpuRuntimeService({
+        app: { getPath: () => '/tmp/avanevis-test' },
+        path,
+        fs,
+        pythonConfig: { pythonExe: '/fake/python', backendPath: '/fake/backend' },
+        spawnTrackedPython: () => {
+          throw new Error(`${platform} GPU IPC must not spawn Python`);
+        },
+        getBackendModuleArgs: () => [],
+        appendSpawnLogBuffer: (buffer, data) => `${buffer}${data}`,
+        sendRedactedProgress: () => {},
+        flushRedactedProgress: () => {},
+        getActivePythonVersion: async () => {
+          pythonVersionCalls += 1;
+          return { output: 'Python 3.11.9', parsed: { version: '3.11.9', major: 3, minor: 11 } };
+        },
+        terminateProcessBestEffort: () => {},
+        assertTrustedRendererSender: () => {},
+        getDiarizationDependencySitePackagesPath: () => null,
+        enqueueGpuResourceAction: async (action) => {
+          gpuQueueAdmissions += 1;
+          return action();
+        },
+      });
+      service.registerIpc({
+        handle(channel, handler) {
+          handlers[channel] = handler;
+        },
+      });
 
-    const status = await handlers['check-cuda']({ sender: {} });
-    assert.equal(status.statusCode, 'unsupportedPlatform');
-    assert.deepEqual(status.packages, []);
-    assert.equal(status.pythonVersion, null);
-    assert.equal(status.pythonExecutable, null);
-    assert.equal(pythonVersionCalls, 0);
+      const status = await handlers['check-cuda']({ sender: {} });
+      assert.equal(status.statusCode, 'unsupportedPlatform', platform);
+      assert.deepEqual(status.packages, []);
+      assert.equal(status.pythonVersion, null);
+      assert.equal(status.pythonExecutable, null);
+      assert.equal(pythonVersionCalls, 0);
 
-    await assert.rejects(
-      handlers['ensure-compatible-gpu-runtime']({ sender: {} }),
-      (error) => error && error.code === 'unsupportedPlatform',
-    );
-    assert.equal(gpuQueueAdmissions, 0);
-    assert.equal(pythonVersionCalls, 0);
-  } finally {
-    Object.defineProperty(process, 'platform', platformDescriptor);
+      // All three mutating GPU channels reject before touching the resource
+      // queue. This is a deliberate contract change from the older structured
+      // { success: false } resolution — pin it for macOS too, not just Linux.
+      for (const channel of ['install-gpu', 'ensure-compatible-gpu-runtime', 'uninstall-gpu']) {
+        await assert.rejects(
+          handlers[channel]({ sender: {} }, {}),
+          (error) => error && error.code === 'unsupportedPlatform',
+          `${platform} ${channel} must reject`,
+        );
+      }
+      assert.equal(gpuQueueAdmissions, 0);
+      assert.equal(pythonVersionCalls, 0);
+    } finally {
+      Object.defineProperty(process, 'platform', platformDescriptor);
+    }
   }
 });

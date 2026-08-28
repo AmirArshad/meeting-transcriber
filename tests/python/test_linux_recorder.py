@@ -40,6 +40,9 @@ class FakeRecorder:
         return self
 
     def __exit__(self, *args):
+        fail = self.backend.fail_exit.get(self.pulse_name)
+        if fail:
+            raise RuntimeError(fail)
         return False
 
     def record(self, numframes=None):
@@ -72,6 +75,7 @@ class FakeSoundCard:
         self.channels = {MIC_NAME: 1, MONITOR_NAME: 2}
         self.fail_open = {}
         self.fail_record = {}
+        self.fail_exit = {}
         self.on_record = {}
         self.mismatched_fallback = set()
 
@@ -595,6 +599,168 @@ def test_watchdog_pulse_client_is_rebuilt_after_a_failure(tmp_path, monkeypatch)
     assert recorder._desktop_runtime_failure is None
     recorder.stop_recording()
     assert recorder.recording_failure is None
+
+
+class InstrumentedPulse(FakePulse):
+    """Detects a close() that lands while source_list() is still in flight.
+
+    pulsectl frees a libpulse mainloop in close(); doing that under an active
+    call is a native use-after-free, so the recorder must serialise them.
+    """
+
+    def __init__(self, names, *, list_delay=0.2):
+        super().__init__(names)
+        self.list_delay = list_delay
+        self.in_flight = threading.Event()
+        self.closed = False
+        self.overlapped = False
+        self.close_calls = 0
+
+    def source_list(self):
+        self.in_flight.set()
+        try:
+            if self.closed:
+                self.overlapped = True
+            time.sleep(self.list_delay)
+            if self.closed:
+                self.overlapped = True
+            return super().source_list()
+        finally:
+            self.in_flight.clear()
+
+    def close(self):
+        if self.in_flight.is_set():
+            self.overlapped = True
+        self.close_calls += 1
+        self.closed = True
+        return None
+
+
+def test_watchdog_probe_and_close_never_overlap(tmp_path, monkeypatch):
+    """Stop joins capture threads with a bounded timeout, so a thread stalled in
+    record() can still be inside source_list() when the main thread tears the
+    watch client down. Closing there would segfault libpulse, not raise."""
+    _patch_finalize_success(monkeypatch)
+    soundcard = FakeSoundCard()
+    pulse = InstrumentedPulse([MIC_NAME, MONITOR_NAME], list_delay=0.25)
+    recorder = _make_recorder(tmp_path, soundcard=soundcard, pulse=pulse)
+
+    assert recorder.start_recording() is True
+    assert _wait_until(lambda: pulse.in_flight.is_set(), timeout=3.0)
+    # Close while the watchdog is demonstrably inside source_list().
+    recorder._close_watch_pulse(final=True)
+
+    assert pulse.overlapped is False, "close() ran while source_list() was in flight"
+    assert pulse.closed is True
+    recorder.stop_recording()
+
+
+def test_watch_close_is_bounded_when_source_list_wedges(tmp_path, monkeypatch):
+    """Serialising close against source_list must not make stop hang forever if
+    the Pulse call itself wedges. Bounded give-up leaks one client (the capture
+    thread's finally still closes it) instead of stalling the stop path."""
+    _patch_finalize_success(monkeypatch)
+    monkeypatch.setattr(linux_mod, "WATCH_PULSE_CLOSE_TIMEOUT_SECONDS", 0.2)
+    soundcard = FakeSoundCard()
+    pulse = InstrumentedPulse([MIC_NAME, MONITOR_NAME], list_delay=5.0)
+    recorder = _make_recorder(tmp_path, soundcard=soundcard, pulse=pulse)
+
+    assert recorder.start_recording() is True
+    assert _wait_until(lambda: pulse.in_flight.is_set(), timeout=3.0)
+
+    started = time.monotonic()
+    recorder._close_watch_pulse(final=True)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 2.0, f"close blocked for {elapsed:.2f}s behind a wedged source_list()"
+    assert pulse.overlapped is False
+    # The latch still applies even though the close itself was skipped.
+    assert recorder._watch_pulse_closed is True
+    assert recorder._monitor_still_listed() is True
+    recorder.stop_recording()
+
+
+def test_watchdog_does_not_reconnect_after_stop(tmp_path, monkeypatch):
+    """A late loop iteration must not rebuild the client stop just closed, and
+    must not report a vanish on the way out."""
+    _patch_finalize_success(monkeypatch)
+    soundcard = FakeSoundCard()
+    pulse = FakePulse([MIC_NAME, MONITOR_NAME])
+    factory_calls = []
+    recorder = _make_recorder(
+        tmp_path, soundcard=soundcard, pulse=pulse, factory_calls=factory_calls
+    )
+
+    assert recorder.start_recording() is True
+    assert _wait_until(lambda: recorder._desktop_spool_accepted_any)
+    recorder.stop_recording()
+
+    calls_after_stop = len(factory_calls)
+    pulse.remove_source(MONITOR_NAME)
+    # Simulates the late iteration: the monitor really is gone, but the session
+    # is over, so this must fail open rather than reconnect or warn.
+    assert recorder._monitor_still_listed() is True
+    assert len(factory_calls) == calls_after_stop
+    assert recorder._watch_pulse is None
+    assert recorder.recording_failure is None
+
+
+def test_mic_teardown_error_after_stop_still_finalizes(tmp_path, monkeypatch, capsys):
+    """The SoundCard recorder's __exit__ unwinds at stop. An error there used to
+    set _error_event, which stop_recording reads *after* closing the spools —
+    skipping finalize_capture and losing an otherwise complete meeting to
+    RECORDING_THREAD_FAILED with duration 0."""
+    seen = _patch_finalize_success(monkeypatch)
+    soundcard = FakeSoundCard()
+    soundcard.fail_exit[MIC_NAME] = "stream already gone"
+    pulse = FakePulse([MIC_NAME, MONITOR_NAME])
+    recorder = _make_recorder(tmp_path, soundcard=soundcard, pulse=pulse)
+
+    assert recorder.start_recording() is True
+    assert _wait_until(lambda: recorder._desktop_spool_accepted_any)
+    recorder.stop_recording()
+
+    assert recorder.recording_failure is None
+    assert recorder.final_output_path is not None
+    assert seen.get("manifest") is not None
+    payloads = _stdout_payloads(capsys)
+    assert not [p for p in payloads if p.get("code") == "MIC_RECORDING_FAILED"]
+    assert not [p for p in payloads if p.get("code") == "RECORDING_THREAD_FAILED"]
+
+
+def test_desktop_teardown_error_after_stop_emits_no_warning(tmp_path, monkeypatch, capsys):
+    _patch_finalize_success(monkeypatch)
+    soundcard = FakeSoundCard()
+    soundcard.fail_exit[MONITOR_NAME] = "monitor stream already gone"
+    pulse = FakePulse([MIC_NAME, MONITOR_NAME])
+    recorder = _make_recorder(tmp_path, soundcard=soundcard, pulse=pulse)
+
+    assert recorder.start_recording() is True
+    assert _wait_until(lambda: recorder._desktop_spool_accepted_any)
+    recorder.stop_recording()
+
+    assert recorder.recording_failure is None
+    payloads = _stdout_payloads(capsys)
+    assert not [p for p in payloads if p.get("code") == "DESKTOP_RECORDING_FAILED"]
+
+
+def test_desktop_teardown_error_after_cancel_emits_no_warning(tmp_path, monkeypatch, capsys):
+    """Discard must stay clean: a phantom desktop warning would contradict the
+    `capture discarded` result the user just asked for."""
+    _patch_finalize_success(monkeypatch)
+    soundcard = FakeSoundCard()
+    soundcard.fail_exit[MONITOR_NAME] = "monitor stream already gone"
+    soundcard.fail_exit[MIC_NAME] = "mic stream already gone"
+    pulse = FakePulse([MIC_NAME, MONITOR_NAME])
+    recorder = _make_recorder(tmp_path, soundcard=soundcard, pulse=pulse)
+
+    assert recorder.start_recording() is True
+    assert _wait_until(lambda: recorder._desktop_spool_accepted_any)
+    recorder.cancel_recording()
+
+    payloads = _stdout_payloads(capsys)
+    assert not [p for p in payloads if p.get("type") == "warning"]
+    assert not [p for p in payloads if p.get("type") == "error"]
 
 
 def test_soundcard_fallback_must_match_the_requested_pulse_name(tmp_path, monkeypatch, capsys):

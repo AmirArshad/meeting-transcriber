@@ -209,10 +209,31 @@ test('AI add-on controls fail closed until setup status is known', () => {
   assert.equal(unknownSummary.canValidate, false);
   assert.equal(unknownSummary.canRemove, false);
   assert.equal(unknownSummary.canSelectEngine, false);
-  assert.deepEqual(getSummaryActionControlState(null), {
+  assert.deepEqual(getSummaryActionControlState(null, { platformSupportsSummaries: false }), {
     enabled: false,
     title: 'Summary setup status is unavailable. Open Settings to validate the local summary model.',
   });
+});
+
+test('unknown summary status stays clickable where the platform supports summaries', () => {
+  // A single failed getAiAddonStatus() call must not leave Generate Summary
+  // permanently dead on Windows/macOS. Clicking re-fetches status and routes
+  // the user into Settings, which beats an inert control.
+  assert.deepEqual(getSummaryActionControlState(null, { platformSupportsSummaries: true }), {
+    enabled: true,
+    title: '',
+  });
+  assert.deepEqual(getSummaryActionControlState(undefined), {
+    enabled: true,
+    title: '',
+  });
+  // An authoritative unsupported verdict still wins over the optimistic default.
+  const unsupported = getSummaryActionControlState(
+    { status: 'unsupported', availability: { reason: LINUX_SUMMARY_UNAVAILABLE_REASON } },
+    { platformSupportsSummaries: true },
+  );
+  assert.equal(unsupported.enabled, false);
+  assert.equal(unsupported.title, LINUX_SUMMARY_UNAVAILABLE_REASON);
 });
 
 test('AI add-on action guard follows the fail-closed control state', () => {

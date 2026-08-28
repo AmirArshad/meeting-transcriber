@@ -2,6 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
 
@@ -12,6 +13,7 @@ const {
   buildTrayView,
   buildWindowCloseDialogOptions,
   formatTrayElapsed,
+  resolveTrayImageFileName,
   RECORDING_REMINDER_INTERVAL_MS,
 } = require('../../src/main/recording-presence-service');
 
@@ -375,6 +377,59 @@ test('Linux tray uses context menu only and survives a missing SNI host', () => 
   );
   assert.deepEqual(degradedIdle.buttons, ['Keep AvaNevis Minimized', 'Close App', 'Cancel']);
   assert.equal(degradedIdle.keepRecordingAction, 'minimize');
+});
+
+test('Linux tray images are decodable PNGs, never the Windows .ico', () => {
+  // nativeImage.createFromPath returns an EMPTY image for .ico outside Windows,
+  // and new Tray(empty) still succeeds on Linux — a registered but invisible
+  // SNI item. Pin the filenames and prove the assets decode.
+  assert.equal(resolveTrayImageFileName('linux', 'idle'), 'iconTrayLinux.png');
+  assert.equal(resolveTrayImageFileName('linux', 'recording'), 'iconTrayLinuxRecording.png');
+  assert.equal(resolveTrayImageFileName('win32', 'idle'), 'icon.ico');
+  assert.equal(resolveTrayImageFileName('win32', 'recording'), 'iconRecording.png');
+  assert.equal(resolveTrayImageFileName('darwin', 'idle'), 'iconTemplate.png');
+  assert.equal(resolveTrayImageFileName('darwin', 'recording'), 'iconRecording.png');
+
+  for (const kind of ['idle', 'recording']) {
+    const fileName = resolveTrayImageFileName('linux', kind);
+    assert.equal(path.extname(fileName), '.png', `${kind} Linux tray image must be a PNG`);
+    const filePath = path.join(__dirname, '..', '..', 'build', fileName);
+    const bytes = fs.readFileSync(filePath);
+    assert.ok(bytes.length > 0, `${fileName} is empty`);
+    assert.deepEqual(
+      Array.from(bytes.subarray(0, 8)),
+      [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
+      `${fileName} is not a PNG`,
+    );
+  }
+
+  const packageJson = require('../../package.json');
+  const staged = new Set(packageJson.build.extraResources.map((entry) => entry.to));
+  assert.ok(staged.has('iconTrayLinux.png'), 'Linux idle tray icon must be staged in extraResources');
+  assert.ok(
+    staged.has('iconTrayLinuxRecording.png'),
+    'Linux recording tray icon must be staged in extraResources',
+  );
+});
+
+test('Linux tray falls back loudly instead of registering a blank icon', () => {
+  const warnings = [];
+  const harness = createDeps({
+    platform: 'linux',
+    nativeImage: {
+      createFromPath: () => ({
+        isEmpty: () => true,
+        setTemplateImage() {},
+      }),
+    },
+    logWarn: (...args) => warnings.push(args.join(' ')),
+  });
+  const service = createRecordingPresenceService(harness.deps);
+  service.createTray();
+  assert.ok(
+    warnings.some((line) => /Tray image could not be decoded/.test(line)),
+    'an undecodable tray image must be reported',
+  );
 });
 
 test('tray menu intentionally replaces Gate A Show/Hide with Show AvaNevis and Quit AvaNevis', () => {

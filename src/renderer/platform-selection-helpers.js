@@ -88,7 +88,9 @@
       {
         id: 'none',
         name: 'None (microphone only)',
-        sample_rate: 48000,
+        // No sample rate: populateSelect omits the "(N Hz)" suffix so the
+        // synthetic entry does not read "None (microphone only) (48000 Hz)".
+        sample_rate: null,
         channels: 0,
         host_api: 'PulseAudio',
       },

@@ -204,7 +204,9 @@ CI currently runs:
 - packaged macOS resource verification for helper, Python, and ffmpeg
 - Ubuntu Linux packaging job: `npm run test:all`, resource preparation, AppImage + pacman + experimental deb, `scripts/verify-linux-packaging.js` (bundled Python/ffmpeg/backend, no deferred add-on binaries, static AppImage runtime, pacman `.PKGINFO`, Debian control)
 
-Linux Core Beta hardware smoke (Omarchy Pulse/PipeWire recording, packaged AppImage Settings/legal-notices/CPU transcription) is manual — see `tests/manual/recording-smoke-checklist.md` and `docs/initiatives/LINUX_SUPPORT.md`. Friend distro/desktop coverage is `tests/manual/linux-experimental-beta-checklist.md`. The Phase 3 60-minute soak was cancelled 2026-08-27 (not run). Ubuntu 24.04 desktop recording/`safeStorage` smoke is still open.
+Linux Core Beta hardware smoke (Omarchy Pulse/PipeWire recording, packaged AppImage Settings/legal-notices/CPU transcription) is manual — see `tests/manual/recording-smoke-checklist.md` and `docs/initiatives/LINUX_SUPPORT.md`. Friend distro/desktop coverage is `tests/manual/linux-experimental-beta-checklist.md`. The Phase 3 60-minute soak was cancelled 2026-08-27 (not run). Ubuntu 24.04 desktop recording/`safeStorage` smoke is still open, as are a visual tray-icon check and unplugged-endpoint filtering on hardware.
+
+**Fakes must model the real dependency.** The 2026-08-28 pre-merge review found three defects that the green suite could not see because the test doubles were shaped more conveniently than the library. `is_pulse_port_unavailable` matched every `FakePort` and no real `pulsectl.EnumValue`; the tray icon assertions never loaded an actual image, so an undecodable `.ico` passed. When a helper exists to interpret a third-party object, assert against the real type (`pytest.importorskip`) or against the real asset bytes — not only against a hand-written stand-in.
 
 ## Troubleshooting
 

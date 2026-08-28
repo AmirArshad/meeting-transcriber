@@ -36,6 +36,16 @@ def build_stable_wav_path_for_output(output_path: PathLike) -> str:
     return str(Path(output_path).with_suffix(".wav"))
 
 
+def build_final_opus_path_for_output(output_path: PathLike) -> str:
+    """Final compressed Opus path for a recorder output path.
+
+    Uses ``with_suffix`` rather than ``str.replace('.wav', '.opus')`` — the
+    latter rewrites *every* occurrence, so a recordings directory containing
+    ``.wav`` anywhere in its path would produce a mangled candidate.
+    """
+    return str(Path(output_path).with_suffix(".opus"))
+
+
 def is_recorder_temp_pcm_path(path: PathLike) -> bool:
     """True when ``path`` looks like a recorder post-processing temp file."""
     name = Path(path).name.lower()

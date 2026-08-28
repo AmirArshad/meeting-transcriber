@@ -110,7 +110,7 @@ python3.11 -m venv .venv
 ./.venv/bin/python -m pip install -r requirements-linux.txt -r requirements-dev.txt
 ```
 
-Linux capture uses Pulse/PipeWire (`docs/initiatives/LINUX_SUPPORT.md`, branch `release/linux`). The `.venv` is for device enumeration, tests, and `npm start`. Packaged AppImage/pacman/deb builds use bundled Python 3.11 and ffmpeg (`npm run build:linux`). Speaker identification and summaries stay greyed `unsupported` on Linux. Do not advertise Linux CUDA.
+Linux capture uses Pulse/PipeWire (`docs/initiatives/LINUX_SUPPORT.md`). The `.venv` is for device enumeration, tests, and `npm start`. Packaged AppImage/pacman/deb builds use bundled Python 3.11 and ffmpeg (`npm run build:linux`). Speaker identification and summaries stay greyed `unsupported` on Linux. Do not advertise Linux CUDA.
 
 Then start the app from the repo root:
 

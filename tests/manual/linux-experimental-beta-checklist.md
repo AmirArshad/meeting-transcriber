@@ -30,7 +30,7 @@ Run these on every experimental machine.
 - [ ] **Browser speech in the transcript.** After CPU `faster-whisper`, desktop speech is in the `.md` transcript.
 - [ ] **Discard versus History.** Discard does not add a meeting; Stop does.
 - [ ] **Disabled add-ons.** Speaker Identification and Meeting Summaries stay greyed `unsupported`. Setup and Generate Summary cannot start.
-- [ ] **Tray or minimize.** With an SNI host, idle close can hide to tray. With no tray, idle and pending-transcription close **minimize** and leave a taskbar entry.
+- [ ] **Tray or minimize.** With an SNI host, idle close can hide to tray. With no tray, idle and pending-transcription close **minimize** and leave a taskbar entry. When a tray icon *is* shown, check it is actually drawn (app mark when idle, app mark + red REC badge while recording) — an undecodable image still constructs a Tray on Linux, so a blank entry is a real failure mode.
 - [ ] **Sanitized diagnostics.** Main log includes `Linux environment diagnostics:` without Wayland/X11 socket names or secrets.
 
 ## Distro rows

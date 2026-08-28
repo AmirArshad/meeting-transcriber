@@ -219,6 +219,22 @@ function resolveResourcePath(deps, fileName) {
   return deps.path.join(deps.dirname || __dirname, '../../build', fileName);
 }
 
+function resolveTrayImageFileName(platform, kind) {
+  if (kind === 'recording') {
+    // Linux SNI hosts render the item beside every other tray icon, so the
+    // recording state keeps the app mark and badges it with the red REC dot.
+    // A bare red dot (the Windows/macOS idiom) loses app identity in a panel.
+    return platform === 'linux' ? 'iconTrayLinuxRecording.png' : 'iconRecording.png';
+  }
+  if (platform === 'darwin') {
+    return 'iconTemplate.png';
+  }
+  // nativeImage.createFromPath cannot decode .ico outside Windows — it returns
+  // an empty image, and new Tray(empty) succeeds on Linux, which produced a
+  // registered-but-invisible SNI item. Linux needs a real PNG.
+  return platform === 'linux' ? 'iconTrayLinux.png' : 'icon.ico';
+}
+
 function createRecordingPresenceService(deps) {
   const {
     app,
@@ -242,9 +258,9 @@ function createRecordingPresenceService(deps) {
   } = deps;
 
   const idleTrayImagePath = deps.idleTrayImagePath
-    || resolveResourcePath(deps, platform === 'darwin' ? 'iconTemplate.png' : 'icon.ico');
+    || resolveResourcePath(deps, resolveTrayImageFileName(platform, 'idle'));
   const recordingTrayImagePath = deps.recordingTrayImagePath
-    || resolveResourcePath(deps, 'iconRecording.png');
+    || resolveResourcePath(deps, resolveTrayImageFileName(platform, 'recording'));
   const recordingOverlayPath = deps.recordingOverlayPath
     || resolveResourcePath(deps, 'recording-overlay.png');
 
@@ -381,6 +397,11 @@ function createRecordingPresenceService(deps) {
   function loadTrayNativeImage(kind) {
     const filePath = kind === 'recording' ? recordingTrayImagePath : idleTrayImagePath;
     const image = nativeImage.createFromPath(filePath);
+    // An empty image still constructs a Tray on Linux, which is how a blank
+    // SNI item shipped unnoticed. Surface it instead of registering nothing.
+    if (typeof image.isEmpty === 'function' && image.isEmpty()) {
+      logWarn(`Tray image could not be decoded (${kind}):`, filePath);
+    }
     if (platform === 'darwin' && typeof image.setTemplateImage === 'function') {
       // Non-template for saturated red recording status; template for idle monochrome.
       image.setTemplateImage(kind !== 'recording');
@@ -609,4 +630,5 @@ module.exports = {
   buildWindowCloseDialogOptions,
   formatTrayElapsed,
   isActiveCaptureState,
+  resolveTrayImageFileName,
 };

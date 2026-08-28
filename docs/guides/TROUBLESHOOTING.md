@@ -396,9 +396,11 @@ On Ubuntu, AppArmor may block unprivileged user namespaces. The pinned AppRun th
 
 ### ⚠️ No tray icon / closing the window “loses” the app
 
-**Cause:** Electron uses StatusNotifierItem. Stock GNOME and some compositors have no SNI host.
+**Cause:** Electron uses StatusNotifierItem. Stock GNOME and some compositors have no SNI host. AvaNevis detects a failed tray construction and switches the close dialog to **Keep AvaNevis Minimized**.
 
 **Solution:** Keep the window **minimized** so the taskbar entry stays. Installing an AppIndicator extension is optional and is not a support requirement.
+
+**If a tray item exists but shows no image:** that is a bug, not a compositor quirk — report it. AvaNevis ships dedicated Linux tray PNGs (`iconTrayLinux.png` idle, `iconTrayLinuxRecording.png` while recording); the Windows `.ico` cannot be decoded by Electron on Linux and produces an empty image that still constructs a Tray. Include the main-process log line `Tray image could not be decoded` if present.
 
 ### ⚠️ `safeStorage` / keyring unavailable
 

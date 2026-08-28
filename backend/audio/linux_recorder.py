@@ -37,6 +37,7 @@ from .constants import (
     MIC_BOOST_LINEAR,
 )
 from .recorder_temp_paths import (
+    build_final_opus_path_for_output,
     build_recorder_temp_pcm_path,
     build_stable_wav_path_for_output,
     promote_recorder_temp_to_wav,
@@ -58,6 +59,10 @@ except ImportError:  # pragma: no cover - package import fallback
 MIC_START_TIMEOUT_SECONDS = 5.0
 DESKTOP_START_TIMEOUT_SECONDS = 5.0
 DESKTOP_MONITOR_POLL_SECONDS = 0.5
+# Bounds how long stop/cancel will wait to close the watch client behind an
+# in-flight source_list(). Correctness (never free a libpulse mainloop under an
+# active call) must not turn into an unbounded stall on the stop path.
+WATCH_PULSE_CLOSE_TIMEOUT_SECONDS = 2.0
 LINUX_PROCESSING_PROFILE = "linux-v1"
 
 _stdout_lock = threading.Lock()
@@ -186,7 +191,8 @@ class LinuxAudioRecorder:
         self._soundcard = soundcard_module
         self._pulse_factory = pulse_factory or _default_pulse_factory
         self._watch_pulse = None
-        self._watch_pulse_lock = threading.Lock()
+        self._watch_pulse_lock = threading.RLock()
+        self._watch_pulse_closed = False
 
         self.is_running = False
         self._running_lock = threading.Lock()
@@ -259,20 +265,49 @@ class LinuxAudioRecorder:
     def _list_source_names(self) -> list[str]:
         return self._with_pulse(_pulse_source_names)
 
-    def _close_watch_pulse(self) -> None:
-        """Drop the long-lived monitor-watch Pulse client (safe to call twice)."""
-        with self._watch_pulse_lock:
-            pulse = self._watch_pulse
-            self._watch_pulse = None
-        if pulse is None:
-            return
-        closer = getattr(pulse, "close", None)
-        if closer is None:
+    def _close_watch_pulse(self, *, final: bool = False) -> None:
+        """Drop the long-lived monitor-watch Pulse client (safe to call twice).
+
+        The close happens **under** ``_watch_pulse_lock`` on purpose. Stop and
+        cancel join the desktop thread with a bounded timeout, so a capture
+        thread stalled inside ``recorder.record()`` can still be mid
+        ``source_list()`` on this client when the main thread gives up waiting.
+        Freeing a libpulse mainloop underneath an in-flight call is a native
+        use-after-free, not a catchable Python error — serialise instead.
+
+        ``final=True`` latches the client closed so a late watchdog iteration
+        cannot immediately reconnect the handle the caller just tore down. The
+        latch is set before contending for the lock so it takes effect even if
+        the close itself is skipped.
+
+        The lock acquire is bounded: a wedged ``source_list()`` must not stall
+        stop indefinitely. Giving up leaks one Pulse client until the desktop
+        thread's ``finally`` closes it (or the process exits), which is strictly
+        better than either a segfault or a hung stop.
+        """
+        if final:
+            self._watch_pulse_closed = True
+        acquired = self._watch_pulse_lock.acquire(timeout=WATCH_PULSE_CLOSE_TIMEOUT_SECONDS)
+        if not acquired:
+            print(
+                "Warning: Pulse watch client is busy; leaving it to the capture thread to close",
+                file=sys.stderr,
+            )
             return
         try:
-            closer()
-        except Exception as exc:
-            print(f"Warning: closing Pulse watch client failed: {exc}", file=sys.stderr)
+            pulse = self._watch_pulse
+            self._watch_pulse = None
+            if pulse is None:
+                return
+            closer = getattr(pulse, "close", None)
+            if closer is None:
+                return
+            try:
+                closer()
+            except Exception as exc:
+                print(f"Warning: closing Pulse watch client failed: {exc}", file=sys.stderr)
+        finally:
+            self._watch_pulse_lock.release()
 
     def _watch_source_names(self) -> list[str]:
         """Source names over one long-lived client.
@@ -280,20 +315,30 @@ class LinuxAudioRecorder:
         The vanished-monitor watchdog runs twice a second for the whole meeting;
         reconnecting per poll would blow thousands of Pulse handshakes through
         the desktop capture read loop. The client is rebuilt only after a failure.
+
+        The whole call is serialised against ``_close_watch_pulse`` so stop and
+        cancel cannot free the client while this thread is inside libpulse.
         """
         with self._watch_pulse_lock:
+            if self._watch_pulse_closed:
+                raise RuntimeError("Pulse watch client is closed")
             if self._watch_pulse is None:
                 self._watch_pulse = self._pulse_factory()
             pulse = self._watch_pulse
-        try:
-            return _pulse_source_names(pulse)
-        except Exception:
-            self._close_watch_pulse()
-            raise
+            try:
+                return _pulse_source_names(pulse)
+            except Exception:
+                self._close_watch_pulse()
+                raise
 
     def _monitor_still_listed(self) -> bool:
         if not self._desktop_pulse_name:
             return False
+        with self._watch_pulse_lock:
+            if self._watch_pulse_closed:
+                # Stop/cancel already tore the watch down; never report a vanish
+                # on the way out, and do not reconnect just to answer.
+                return True
         try:
             return self._desktop_pulse_name in self._watch_source_names()
         except Exception as exc:
@@ -329,6 +374,8 @@ class LinuxAudioRecorder:
 
         self._set_running(True)
         self._error_event.clear()
+        with self._watch_pulse_lock:
+            self._watch_pulse_closed = False
         with self._error_lock:
             self._last_error = None
         self._desktop_runtime_failure = None
@@ -472,7 +519,7 @@ class LinuxAudioRecorder:
             self.mic_thread.join(timeout=1.0)
         if self.desktop_thread and self.desktop_thread.is_alive():
             self.desktop_thread.join(timeout=1.0)
-        self._close_watch_pulse()
+        self._close_watch_pulse(final=True)
         self._release_and_discard_startup_capture()
 
     def _open_capture_spools(
@@ -749,7 +796,7 @@ class LinuxAudioRecorder:
             self.mic_thread.join(timeout=2.0)
         if self.desktop_thread:
             self.desktop_thread.join(timeout=2.0)
-        self._close_watch_pulse()
+        self._close_watch_pulse(final=True)
         self._close_spool_handles_for_discard()
         mark_capture_discarded_and_cleanup(self._capture_manifest)
         self._capture_manifest = None
@@ -809,6 +856,22 @@ class LinuxAudioRecorder:
             print(f"ERROR in mic recording: {exc}", file=sys.stderr)
             import traceback
             traceback.print_exc(file=sys.stderr)
+            # A failure raised *after* stop/cancel already flipped the running
+            # flag is teardown noise, not a capture failure — most often the
+            # SoundCard recorder's __exit__ unwinding a stream the server has
+            # already dropped. Setting _error_event here would make
+            # stop_recording take the async-failure branch, skip
+            # finalize_capture, and report RECORDING_THREAD_FAILED with
+            # duration 0 on an otherwise complete meeting (recoverable only via
+            # next-launch capture recovery). Committed spool frames are durable
+            # either way, so degrade to a stderr diagnostic.
+            if not self._get_running() and stream_opened:
+                print(
+                    "Ignoring microphone teardown error raised after stop; "
+                    "committed audio is unaffected.",
+                    file=sys.stderr,
+                )
+                return
             error_message = f"Microphone recording failed: {exc}"
             with self._error_lock:
                 self._last_error = error_message
@@ -846,6 +909,15 @@ class LinuxAudioRecorder:
                 last_watch = time.monotonic()
                 while self._get_running() and not self._desktop_give_up:
                     chunk = recorder.record(numframes=self.chunk_size)
+                    # record() blocks, so stop/cancel may have run underneath us.
+                    # Re-check BEFORE the vanish probe: a monitor that only
+                    # "disappeared" because the session is ending must not emit
+                    # DESKTOP_MONITOR_VANISHED on stdout after Stop, and the
+                    # probe must not resurrect a Pulse client stop just closed.
+                    if self._desktop_runtime_failure or self._desktop_give_up:
+                        break
+                    if not self._get_running():
+                        break
                     now = time.monotonic()
                     if now - last_watch >= DESKTOP_MONITOR_POLL_SECONDS:
                         last_watch = now
@@ -855,12 +927,6 @@ class LinuxAudioRecorder:
                                 code="DESKTOP_MONITOR_VANISHED",
                             )
                             break
-                    if self._desktop_runtime_failure or self._desktop_give_up:
-                        break
-                    # Same blocking-read window as the mic thread: never mistake a
-                    # closed-at-stop spool for a stalled writer.
-                    if not self._get_running():
-                        break
                     elapsed = time.time() - (self.recording_start_time or time.time())
                     if elapsed < self.preroll_seconds:
                         continue
@@ -890,12 +956,23 @@ class LinuxAudioRecorder:
             if not capture_started:
                 self._desktop_start_error = error_message
                 self._desktop_started_event.set()
+            elif self._desktop_give_up or not self._get_running():
+                # Teardown noise after stop/cancel. Warning here would put a
+                # phantom DESKTOP_RECORDING_FAILED on stdout after Stop and, on
+                # Discard, contradict the "capture discarded" result.
+                print(
+                    "Ignoring desktop teardown error raised after stop; "
+                    "committed audio is unaffected.",
+                    file=sys.stderr,
+                )
             else:
                 self._note_desktop_runtime_failure(
                     error_message, code="DESKTOP_RECORDING_FAILED"
                 )
         finally:
-            self._close_watch_pulse()
+            # The only watchdog caller is this thread; latch it closed so a
+            # stop/cancel racing our exit cannot be handed a fresh client.
+            self._close_watch_pulse(final=True)
             if not self._desktop_started_event.is_set():
                 self._desktop_started_event.set()
 
@@ -951,7 +1028,7 @@ class LinuxAudioRecorder:
     def _resolve_recoverable_output_path(self) -> Optional[str]:
         if self.final_output_path and Path(self.final_output_path).exists():
             return self.final_output_path
-        preferred = self.output_path.replace(".wav", ".opus")
+        preferred = build_final_opus_path_for_output(self.output_path)
         for candidate in (preferred, self.output_path):
             if candidate and Path(candidate).exists() and not str(candidate).lower().endswith(".pcm.tmp"):
                 return candidate
@@ -980,7 +1057,7 @@ class LinuxAudioRecorder:
             self.mic_thread.join(timeout=2.0)
         if self.desktop_thread:
             self.desktop_thread.join(timeout=2.0)
-        self._close_watch_pulse()
+        self._close_watch_pulse(final=True)
 
         try:
             self._close_capture_spools_for_mix()

@@ -376,7 +376,10 @@ test('Ubuntu CI job builds Linux packages on ubuntu-latest with SHA-pinned actio
   assert.match(CI_WORKFLOW, /actions\/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38/);
   assert.match(CI_WORKFLOW, /actions\/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1/);
   assert.doesNotMatch(CI_WORKFLOW, /libfuse2|fuse2/);
-  assert.match(CI_WORKFLOW, /branches:.*release\/linux/);
+  // Post-merge the Linux packaging job must run on the default branch, not on
+  // the retired release/linux feature branch.
+  assert.match(CI_WORKFLOW, /branches:\s*\[\s*master,\s*main\s*\]/);
+  assert.doesNotMatch(CI_WORKFLOW, /release\/linux/);
 });
 
 test('release workflow builds and publishes all three Linux Core Beta payload artifacts after Gate B', () => {

@@ -59,5 +59,9 @@ test('toOpaqueDeviceId and decorateDesktopDevices keep Pulse IDs as strings', ()
   assert.equal(toOpaqueDeviceId('pulse-source:mic'), 'pulse-source:mic');
   const decorated = decorateDesktopDevices([{ id: 'pulse-monitor:out.monitor', name: 'Out', sample_rate: 48000 }], 'linux');
   assert.equal(decorated[0].id, 'none');
+  // The desktop-off entry is synthetic: no sample rate, so the dropdown does
+  // not render "None (microphone only) (48000 Hz)".
+  assert.equal(decorated[0].sample_rate, null);
+  assert.equal(decorated[1].sample_rate, 48000);
   assert.equal(decorateDesktopDevices([{ id: 1, name: 'Loopback' }], 'win32')[0].id, 1);
 });
