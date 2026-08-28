@@ -4,13 +4,17 @@ sounddevice==0.4.6
 numpy==2.4.6
 # Shared spool finalization imports processor.StatefulResampler (soxr).
 soxr==1.1.0
-pyobjc-framework-ScreenCaptureKit==10.0
-pyobjc-framework-CoreAudio==10.0
-pyobjc-framework-AVFoundation==10.0
-pyobjc-core==12.1
-pyobjc-framework-Cocoa==12.1
-pyobjc-framework-CoreMedia==12.1
-pyobjc-framework-Quartz==12.1
+# Coordinated PyObjC set: do not bump one framework alone. ScreenCaptureKit 12.2.2
+# requires pyobjc-core / Cocoa / CoreMedia >=12.2.2. Cocoa stays because backend
+# imports Foundation (NSObject, NSRunLoop). Quartz is not imported by application
+# code, but pyobjc-framework-AVFoundation==12.2.2 requires it — keep the pin.
+pyobjc-framework-ScreenCaptureKit==12.2.2
+pyobjc-framework-CoreAudio==12.2.2
+pyobjc-framework-AVFoundation==12.2.2
+pyobjc-core==12.2.2
+pyobjc-framework-Cocoa==12.2.2
+pyobjc-framework-CoreMedia==12.2.2
+pyobjc-framework-Quartz==12.2.2
 lightning-whisper-mlx==0.0.10
 # Pinned for reproducibility; also installed transitively via lightning-whisper-mlx (not used by backend/).
 scipy==1.17.1

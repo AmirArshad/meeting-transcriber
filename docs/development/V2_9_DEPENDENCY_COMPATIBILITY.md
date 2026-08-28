@@ -47,8 +47,8 @@ Treat these as **direct runtime dependencies** even when a resolver also reaches
 | `setuptools` | pip / wheel metadata | Windows/Linux/macOS build `==84.0.0` (also pruned from the macOS runtime) | Windows/Linux **accepted** Task 2. macOS **accepted** with Torch 2.13.0. CI no longer ignores `CVE-2025-3000` or `PYSEC-2026-3447`. |
 | `numba` / `llvmlite` | MLX stack | macOS build `==0.67.0` / `==0.49.0` | **Accepted** Task 2 on Apple Silicon (2026-08-28). Numba 0.67 requires `llvmlite>=0.49,<0.50`. Matching pair; not Dependabot Numba-alone against llvmlite 0.47. |
 | `numpy` | audio + ML | all build files `==2.4.6` | Stay on 2.4.x; 2.5+ needs Python ≥3.12. |
-| PyObjC `ScreenCaptureKit` / `CoreAudio` / `AVFoundation` | macOS capture fallback | build `==10.0` | Runtime files float to **12.2.2**. Coordinated bump only. |
-| PyObjC `Cocoa` / `Quartz` / `core` / `CoreMedia` | ScreenCaptureKit fallback graph | build `==12.1` | Task 3: do not remove without imports, `pip check`, packaged macOS dir build, and hardware capture smoke. |
+| PyObjC `ScreenCaptureKit` / `CoreAudio` / `AVFoundation` | macOS capture fallback | macOS build `==12.2.2` | **Accepted** coordinated bump (2026-08-28). Runtime files already floated to 12.2.2. |
+| PyObjC `Cocoa` / `Quartz` / `core` / `CoreMedia` | ScreenCaptureKit fallback graph | macOS build `==12.2.2` | **Kept** at 12.2.2. Cocoa supplies `Foundation` (`NSObject`, `NSRunLoop`). Quartz is required by `pyobjc-framework-AVFoundation==12.2.2`. |
 | `tiktoken` | MLX | macOS `==0.3.3` | Dependabot ignore; do not bump alone. |
 | Speakrs ONNX Runtime | add-on, **not** pip requirements | Windows setup-time archive **1.27.1** (`src/ai-addon/speakrs-pack-spec.js`) | Distinct from pip `onnxruntime==1.26.0`. Linux add-ons remain `unsupported`. |
 
@@ -74,8 +74,8 @@ Material floats observed 2026-08-28 (runtime) versus current build pins:
 | `annotated-doc` | 0.0.5 | macOS **0.0.5**; Windows/Linux **0.0.4** | **Accepted** macOS-only (2026-08-28) |
 | `torch` (macOS runtime) | 2.13.0 | **2.13.0** then prune | **Accepted** Task 2 (2026-08-28 Mac): still prune after pip |
 | `setuptools` (macOS runtime) | 84.0.0 | Windows/Linux/macOS **84.0.0** | **Accepted** Task 2 on all three packaged platforms |
-| PyObjC capture frameworks | 12.2.2 | 10.0 / 12.1 mix | Coordinated macOS change only |
-| `sounddevice` | 0.5.6 | 0.4.6 | Hold until macOS capture smoke |
+| PyObjC capture frameworks | 12.2.2 | **12.2.2** | **Accepted** macOS-only (2026-08-28). Coordinated seven-package bump; Cocoa and Quartz retained |
+| `sounddevice` | 0.5.6 | 0.4.6 | Hold until its own capture-gated cluster |
 
 ## Per-file evidence
 
@@ -118,7 +118,7 @@ tokenizers==0.23.1 tqdm==4.70.0 typing_extensions==4.16.0
 
 ### `requirements-macos.txt` — Homebrew CPython 3.11.16 native install (Apple Silicon)
 
-`pip check` passed (`No broken requirements found.`). Clean venv `/tmp/avanevis-v2.9-macos-runtime`. Resolved graph includes `torch==2.13.0`, `setuptools==84.0.0`, `numba==0.67.0`, `llvmlite==0.49.0`, `mlx==0.32.2`, `lightning-whisper-mlx==0.0.10`, `filelock==3.32.4`, `sounddevice==0.5.6`, PyObjC 12.2.2, `tiktoken==0.3.3`. 45 frozen packages. This is the unconstrained runtime float, not the packaged pin set. PyObjC 12.2 and sounddevice 0.5.6 remain **not** accepted as packaged pins.
+`pip check` passed (`No broken requirements found.`). Clean venv `/tmp/avanevis-v2.9-macos-runtime`. Resolved graph includes `torch==2.13.0`, `setuptools==84.0.0`, `numba==0.67.0`, `llvmlite==0.49.0`, `mlx==0.32.2`, `lightning-whisper-mlx==0.0.10`, `filelock==3.32.4`, `sounddevice==0.5.6`, PyObjC 12.2.2, `tiktoken==0.3.3`. 45 frozen packages. This is the unconstrained runtime float, not the packaged pin set. Packaged PyObjC **12.2.2** was accepted later in this file. sounddevice 0.5.6 remains **not** accepted as a packaged pin.
 
 ### `requirements-macos-build.txt` — Homebrew CPython 3.11.16 native install (Apple Silicon)
 
@@ -269,7 +269,7 @@ Held: Electron 42.9.0; Linux AI add-ons; PyObjC 10.0/12.1 mix; sounddevice 0.4.6
 
 Stay on `feature/v2.9-dependency-hygiene`. Native `pip check`, torch 2.13.0 + setuptools 84.0.0, Numba 0.67.0 + llvmlite 0.49.0, packaged dir build, MLX smoke, and CoreAudio tap capture are recorded above. CI pip-audit ignores for CVE-2025-3000 / PYSEC-2026-3447 are removed.
 
-PyObjC 12.2 and sounddevice 0.5.6 remain **not** accepted unless a later commit takes them with their own evidence.
+Packaged PyObjC **12.2.2** was accepted later in this file. sounddevice 0.5.6 remains **not** accepted unless a later commit takes it with its own capture evidence.
 
 ## Task 3 macOS pin trim — rejected 2026-08-28 (this Mac)
 
@@ -456,7 +456,42 @@ Held: Electron 42.9.0; PyObjC; sounddevice 0.4.6; Windows/Linux pins.
 
 Held: Electron 42.9.0; PyObjC 10.0/12.1 mix; sounddevice 0.4.6; Windows/Linux `Pygments==2.20.0` / `annotated-doc==0.0.4`; `filelock==3.32.3`. All 14 Task 3 version-hold rows are now either upgraded (clusters 1–4) or graph-changed (macOS `colorama` removed; `click` kept for hub 1.29). The 20 matching range-locks stay pinned.
 
-**Next:** evaluate macOS PyObjC `Cocoa` / `Quartz` separately (imports, `pip check`, packaged dir build, hardware capture). Do not bump `sounddevice` unless capture gates pass. Windows/Linux Task 3 trim remains on those hosts.
+### Coordinated PyObjC 12.2.2 — accepted 2026-08-28 (this Mac)
+
+**Upstream:** [PyObjC 12.2.2](https://pyobjc.readthedocs.io/en/latest/changelog.html) (2026-08-11). Current PyPI for all seven packages. 12.2.3 is mentioned in docs (AVFoundation retain-count metadata) but is **not** on PyPI. 12.2 updates framework bindings for the macOS 26.5 SDK; 12.2.2 is an Xcode 27 build fix. `pyobjc-framework-ScreenCaptureKit==12.2.2` requires `pyobjc-core`, `Cocoa`, and `CoreMedia` `>=12.2.2`. `pyobjc-framework-AVFoundation==12.2.2` requires those plus `CoreAudio` and **`Quartz`**. Application code imports `Foundation` (`NSObject`, `NSRunLoop`, `NSDate`), `ScreenCaptureKit`, `AVFoundation.AVAudioFormat`, `CoreAudio` (availability), `CoreMedia` sample-buffer helpers, and `objc`. No `import Quartz`. **Cocoa and Quartz were not removed:** Cocoa owns `Foundation`; Quartz is a declared AVFoundation dependency. No application-code change. CoreAudio aggregate-device key constants still type as `bytes` in 12.2.2; AvaNevis does not use them.
+
+**Pin (macOS build only, coordinated):**
+
+| Package | Before | After |
+|---|---|---|
+| `pyobjc-framework-ScreenCaptureKit` | 10.0 | **12.2.2** |
+| `pyobjc-framework-CoreAudio` | 10.0 | **12.2.2** |
+| `pyobjc-framework-AVFoundation` | 10.0 | **12.2.2** |
+| `pyobjc-core` | 12.1 | **12.2.2** |
+| `pyobjc-framework-Cocoa` | 12.1 | **12.2.2** |
+| `pyobjc-framework-CoreMedia` | 12.1 | **12.2.2** |
+| `pyobjc-framework-Quartz` | 12.1 | **12.2.2** |
+
+`requirements-macos.txt` floors stay `>=10.0` (runtime already resolved 12.2.2). Windows/Linux files have no PyObjC pins.
+
+**Resolver / `pip check`:** clean venv `/tmp/avanevis-v2.9-macos-build-pyobjc1222`, `pip install --only-binary=:all: -r requirements-macos-build.txt` → all seven at **12.2.2**. `pip check`: No broken requirements found. `ScreenCaptureAudioRecorder` constructed. PyObjC ScreenCaptureKit permission probe fail-closed (`pyobjc_sck_permission_granted False`, SCStreamError -3801 TCC). `StreamDelegate.alloc().init()` succeeded inside `_create_stream_delegate`.
+
+**pip-audit:** `python -m pip_audit -r requirements-macos-build.txt` with no `--ignore-vuln` → **No known vulnerabilities found**.
+
+**Tests:** repo `.venv` `pytest tests/python/test_screencapture_helper.py tests/python/test_macos_capture_sink_parity.py tests/python/test_macos_capture_helpers.py -q` → **57 passed**.
+
+**SBOM:** `npm run legal:sbom` → `legal/PYTHON-BUNDLED-PACKAGES.md` generated 2026-08-28T20:54:41.677Z; 63 direct pins. All seven `pyobjc-*` names are **12.2.2**.
+
+**Packaged macOS dir build:** `npm run build:mac:dir` exit 0. prepare-resources installed PyObjC 12.2.2 then **Removed torch** and **Removed setuptools**. `npm run verify:mac:packaged` passed. Bundled `python -m pip check`: No broken requirements found. Bundled inventory: all seven `pyobjc-*==12.2.2`, `filelock==3.32.3`, `sounddevice==0.4.6`, `mlx==0.32.2`.
+
+**Hardware smokes (same Mac session; packaged `dist/mac-arm64/AvaNevis.app`):**
+- MLX transcription: bundled python `-m transcription.mlx_whisper_transcriber --file tests/fixtures/speakrs-two-speaker-16k.wav --model base --language en --json` → exit 0, `device: metal`, `computeType: float16`, duration 14.22s, same English two-speaker fixture text as clusters 1–4, cache `~/Library/Caches/avanevis`.
+- Desktop capture: packaged `audiocapture-helper` via `SwiftAudioCapture`, CoreAudio tap, 15.15s, peak 0.7328, `helperCaptureBackend=coreaudio_tap`.
+- ScreenCaptureKit fallback: helper `--screencapturekit` fail-closed `PERMISSION_DENIED: Screen Recording permission not granted` (same TCC limit as Task 2 / clusters 1–4). PyObjC `ScreenCaptureAudioRecorder` remains importable in the bundle.
+
+Held: Electron 42.9.0; sounddevice 0.4.6; Windows/Linux pins; `filelock==3.32.3`; `onnxruntime` 1.26.0; `tokenizers` 0.23.1; `av` 18.1.0. `sounddevice` was **not** attempted in this session.
+
+**Next:** optional macOS `sounddevice` 0.4.6 → 0.5.6 as its own capture-gated cluster. Windows/Linux Task 3 trim remains on those hosts.
 
 ## Blockers and non-goals
 
