@@ -18,7 +18,7 @@ Verified, not assumed — correct these only with evidence.
 
 **Gotcha:** Claude Code does **not** read `AGENTS.md`, `.cursor/rules/`, or `.agents/skills/`. It reaches this file only through the `@AGENTS.md` import in root `CLAUDE.md`, and it reaches project skills only through `.claude/skills/`. Root `CLAUDE.md` is `.cursorignore`d so Cursor does not double-load this file.
 
-Project skills live in `.agents/skills/*/SKILL.md`; see `.agents/README.md` for the kept/removed set and the per-tool discovery caveat.
+Project skills live in `.agents/skills/*/SKILL.md`; see `.agents/README.md` for the kept/removed set and discovery details. The official Anthropic `frontend-design` skill is also copied to `.claude/skills/frontend-design/` for direct Claude Code discovery; Cursor receives a scoped renderer router in `.cursor/rules/frontend-design-skill.mdc`, while OpenCode loads the canonical `.agents` skill and that router through `opencode.json`.
 
 ## Platform targets
 

@@ -10,6 +10,7 @@ Planned or active future work lives here. Completed designs should move to `../c
 - [Linux support](LINUX_SUPPORT.md)
 - [Audio setup wizard](FEATURE_SETUP_WIZARD.md)
 - [macOS audio architecture improvements](MACOS_AUDIO_ARCHITECTURE.md)
+- [Meeting objects and private sync — future exploration](MEETING_OBJECTS_AND_PRIVATE_SYNC.md) — no implementation is scheduled for v2.9.0
 
 ## Complete (reference)
 

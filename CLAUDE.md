@@ -6,7 +6,7 @@
 
 ## Project skills — Claude Code cannot auto-discover them
 
-**Verified:** Claude Code discovers skills only from `.claude/skills/`, `~/.claude/skills/`, plugins, and enterprise paths. It does **not** scan `.agents/skills/`, where this repo keeps its skills. So `/skill-name` and automatic invocation will not work for them — you must open the file with Read.
+**Verified:** Claude Code discovers skills only from `.claude/skills/`, `~/.claude/skills/`, plugins, and enterprise paths. It does **not** scan the general `.agents/skills/` tree, so the skills in the table below must be opened with Read. The official `frontend-design` skill is also directly installed at `.claude/skills/frontend-design/SKILL.md` and can be discovered normally for renderer visual work.
 
 When a task below matches, read the file, then follow it:
 
@@ -23,6 +23,7 @@ When a task below matches, read the file, then follow it:
 | `.agents/skills/security-best-practices/SKILL.md` | The user explicitly asks for a security best-practices review |
 | `.agents/skills/security-threat-model/SKILL.md` | The user explicitly asks to threat model the repo or a path |
 | `.agents/skills/skill-creator/SKILL.md` | Authoring or updating a project skill |
+| `.claude/skills/frontend-design/SKILL.md` | Visual-system, layout, CSS, or HTML work under `src/renderer/` |
 
 On explicit request only — never auto-invoke: `grill-me`, `grill-with-docs`, `handoff`, `to-spec` (all under `.agents/skills/<name>/SKILL.md`).
 

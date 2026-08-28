@@ -98,7 +98,7 @@ Longer horizon, lower priority:
 
 - **Linux support.** Native Linux desktop build (AppImage + `.deb`); plan refreshed post-v2.6.0 for spool capture, Activity transcription queue, and local AI catalog pins. Reference: [LINUX_SUPPORT.md](LINUX_SUPPORT.md).
 - **Setup wizard.** Guided first-time configuration. Reference: [FEATURE_SETUP_WIZARD.md](FEATURE_SETUP_WIZARD.md).
-- **Optional cloud sync** to user-owned cloud storage (never to a hosted backend).
+- **Optional private meeting-object sync** to user-controlled storage (never to a hosted AvaNevis backend). See [Meeting objects and private sync](MEETING_OBJECTS_AND_PRIVATE_SYNC.md); the concept is not scheduled for v2.9.0.
 - **Companion mobile apps** (iOS / Android) for remote review.
 - **Localized UI** (Spanish, French, etc.).
 - **Semantic search** across transcripts.

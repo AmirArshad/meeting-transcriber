@@ -1,0 +1,11 @@
+---
+description: Load the official frontend-design skill before visual changes to AvaNevis renderer surfaces.
+globs: src/renderer/**
+alwaysApply: false
+---
+
+# Frontend-design skill router
+
+Before proposing or changing the visual system, layout, navigation, HTML, or CSS under `src/renderer/`, read `.agents/skills/frontend-design/SKILL.md` and follow it.
+
+Keep AvaNevis local-first: visual work must not introduce cloud controls, telemetry, background upload, or account state unless the user separately authorizes that product work.
