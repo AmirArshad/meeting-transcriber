@@ -263,9 +263,81 @@ Held: Electron 42.9.0; Linux AI add-ons; PyObjC 10.0/12.1 mix; sounddevice 0.4.6
 
 Stay on `feature/v2.9-dependency-hygiene`. Native `pip check`, torch 2.13.0 + setuptools 84.0.0, Numba 0.67.0 + llvmlite 0.49.0, packaged dir build, MLX smoke, and CoreAudio tap capture are recorded above. CI pip-audit ignores for CVE-2025-3000 / PYSEC-2026-3447 are removed.
 
-**Next:** Task 3 explicit-transitive pin trim. Keep `onnxruntime`, `tokenizers`, and `av` as direct runtime deps. PyObjC `Cocoa` / `Quartz` and sounddevice 0.5.6 still need their own evidence.
+PyObjC 12.2 and sounddevice 0.5.6 remain **not** accepted unless a later commit takes them with their own evidence.
 
-PyObjC 12.2 and sounddevice 0.5.6 remain **not** accepted unless a later Task 2/3 commit takes them with their own evidence.
+## Task 3 macOS pin trim — rejected 2026-08-28 (this Mac)
+
+Host: macOS 26.6.2 arm64, Homebrew CPython 3.11.16. Clean venvs under `/tmp/avanevis-v2.9-task3`. Resolver: `pip install --dry-run --ignore-installed --only-binary=:all:` plus a real trial-2 install. `pip check` text in every executed install: **No broken requirements found.**
+
+No pins were deleted. `requirements-macos.txt` and `requirements-macos-build.txt` are unchanged. Windows/Linux pins were not touched. Electron stayed 42.9.0. PyObjC `Cocoa` / `Quartz` were not evaluated. `sounddevice` stayed `==0.4.6`. `onnxruntime`, `tokenizers`, and `av` are not in the macOS files and remain direct runtime deps on Windows/Linux.
+
+A packaged macOS dir rebuild was **not** run: the plan requires that gate before *accepting* a deletion, and no deletion was accepted. Task 2’s `dist/mac-arm64/AvaNevis.app` remains the last packaged artifact.
+
+### Method
+
+Kept as first-party or documented holds: `sounddevice==0.4.6`, `numpy==2.4.6`, `soxr==1.1.0`, every PyObjC pin (including Cocoa/Quartz/CoreMedia), `lightning-whisper-mlx==0.0.10`, `filelock==3.32.3`, `tiktoken==0.3.3`, `huggingface-hub==1.16.1`, `mlx==0.31.2`, `numba==0.67.0`, `llvmlite==0.49.0`, `torch==2.13.0`, `setuptools==84.0.0`.
+
+**Trial 1** omitted every other `requirements-macos-build.txt` pin. Unconstrained resolve vs the lock:
+
+| Package | Lock | Unpinned resolve | Verdict |
+|---|---|---|---|
+| `annotated-doc` | 0.0.4 | 0.0.5 | **Reject** — version hold |
+| `anyio` | 4.13.0 | 4.14.2 | **Reject** — version hold |
+| `cffi` | 2.0.0 | 2.1.1 | **Reject** — version hold (sounddevice native) |
+| `charset-normalizer` | 3.4.7 | 3.5.1 | **Reject** — version hold |
+| `click` | 8.4.1 | **not installed** | **Reject** — graph change. `typer==0.27.2` no longer requires `click` |
+| `colorama` | 0.4.6 | **not installed** | **Reject** — graph change. `typer==0.27.2` marks `colorama` Windows-only |
+| `fsspec` | 2026.4.0 | 2026.7.0 | **Reject** — version hold |
+| `hf-xet` | 1.5.0 | 1.6.0 | **Reject** — version hold |
+| `idna` | 3.16 | 3.19 | **Reject** — version hold |
+| `packaging` | 26.2 | 26.3 | **Reject** — version hold |
+| `Pygments` | 2.20.0 | 2.21.0 | **Reject** — version hold |
+| `regex` | 2026.7.10 | 2026.7.19 | **Reject** — version hold |
+| `tqdm` | 4.67.3 | 4.70.0 | **Reject** — version hold |
+| `typer` | 0.25.1 | 0.27.2 | **Reject** — version + drops `click`; `colorama` becomes Windows-only |
+
+**Trial 2** restored those 14 pins and omitted only the 20 packages that still resolved to the lock version. Real venv `/tmp/avanevis-v2.9-task3/trim2-venv`: `pip check` passed. Freeze matched the fully pinned baseline for every requirements package (`setuptools==84.0.0` present; `scipy==1.17.1` still installed transitively). Hypothetical SBOM would drop those 20 names from the macOS build file while pip still installed them.
+
+Those 20 are **not parent exact-pins**. They match today because they are the current latest that satisfies a range. Removing them would let a later resolve change the packaged artifact without a requirements diff, and the SBOM generator would stop listing real runtime pieces (`scipy` ~20 MB for `lightning-whisper-mlx.timing`, plus the torch resolver/prune set). **Reject** the trim; retain the lock.
+
+| Package | Lock | Why retain even though trial 2 matched |
+|---|---|---|
+| `certifi` | 2026.7.22 | requests CA bundle; security-sensitive |
+| `h11` | 0.16.0 | `httpcore` range |
+| `httpcore` | 1.0.9 | `httpx` range |
+| `httpx` | 0.28.1 | `huggingface-hub`: `httpx<1,>=0.23.0` |
+| `Jinja2` | 3.1.6 | torch resolver then prune; a newer Jinja2 extra would not be pruned |
+| `markdown-it-py` | 4.2.0 | `rich` range |
+| `MarkupSafe` | 3.0.3 | Jinja2 / torch prune set |
+| `mdurl` | 0.1.2 | `markdown-it-py` range |
+| `more-itertools` | 11.1.0 | `lightning-whisper-mlx` unpinned dep |
+| `mpmath` | 1.3.0 | `sympy==1.14.0` requires `mpmath<1.4` (range, not exact) |
+| `networkx` | 3.6.1 | torch resolver then prune |
+| `pycparser` | 3.0 | `cffi` range |
+| `PyYAML` | 6.0.3 | `huggingface-hub` range |
+| `requests` | 2.34.2 | `tiktoken` range |
+| `rich` | 15.0.0 | `typer` range |
+| `scipy` | 1.17.1 | MLX runtime `scipy.signal`; SBOM would hide it |
+| `shellingham` | 1.5.4 | `typer` range |
+| `sympy` | 1.14.0 | torch resolver then prune |
+| `typing-extensions` | 4.16.0 | torch / `huggingface-hub` range |
+| `urllib3` | 2.7.0 | `requests` range |
+
+Held first-party / Task 2 pins (not trim candidates here): `huggingface-hub==1.16.1` vs runtime **1.29.0**; `mlx==0.31.2` vs runtime **0.32.2**; `filelock==3.32.3` vs runtime **3.32.4**; `tiktoken==0.3.3` (exact from `lightning-whisper-mlx`, kept like the Windows `tokenizers` pin). Extra `mlx-metal==0.31.2` is pulled by `mlx` and is not a requirements pin.
+
+### `requirements-macos.txt` scipy floor
+
+Trial: dropped `scipy>=1.17.0`. Clean venv still resolved **scipy 1.17.1** via `lightning-whisper-mlx`. `pip check` passed. `import scipy` succeeded (`1.17.1`). The floor is not constraining today.
+
+**Rejected** anyway: the line documents that MLX needs scipy even though `backend/` does not import it. Removing it would not shrink anything and would hide that runtime requirement from the runtime file.
+
+Unconstrained runtime still floats `sounddevice==0.5.6` and PyObjC **12.2.2**. Those remain **not** accepted.
+
+### SBOM
+
+Current `legal/PYTHON-BUNDLED-PACKAGES.md` is unchanged (63 direct pins, generated 2026-08-28T17:07:40.260Z). A trial-2 file would drop 20 macOS direct names; scipy / Jinja2 / networkx / sympy / mpmath / MarkupSafe / more-itertools would disappear from the legal table while still being installed (or installed-then-pruned). That SBOM diff is evidence **against** accepting the trim.
+
+**Next (this Mac):** bump stale macOS *build pins* to current resolve (do not delete pins). Preferred clusters: `huggingface-hub` 1.16.1 → 1.29.0 with the transitives it pulls; `typer` 0.25.1 → 0.27.2 (expect to drop `click` on macOS; `colorama` becomes Windows-only — fix code if anything imports them); `mlx` 0.31.2 → 0.32.2 only after packaged MLX smoke. Keep the lock. Do not bump PyObjC or `sounddevice` in that session unless their capture gates pass. Windows/Linux Task 3 trim remains on those hosts.
 
 ## Blockers and non-goals
 
