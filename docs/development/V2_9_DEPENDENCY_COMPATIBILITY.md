@@ -39,7 +39,7 @@ Treat these as **direct runtime dependencies** even when a resolver also reaches
 |---|---|---|---|
 | `onnxruntime` | faster-whisper Silero VAD (`vad_filter=True` in `faster_whisper_transcriber.py`) | Windows/Linux build `==1.26.0` | Import/VAD failure if missing. macOS `prepare-resources.js` **removes** `onnxruntime` after pip because MLX does not use it. |
 | `tokenizers` | faster-whisper tokenization | Windows/Linux build `==0.23.1` | Tokenize/model load failure if missing. |
-| `av` (PyAV) | faster-whisper path-based decode | Windows/Linux build `==17.0.1` | `transcribe(audio_path)` decode. Bundled ffmpeg does not replace this import. Runtime files currently float to **18.1.0** — Task 2 candidate only after packaged decode smoke. |
+| `av` (PyAV) | faster-whisper path-based decode | Windows/Linux build `==18.1.0` | `transcribe(audio_path)` decode. Bundled ffmpeg does not replace this import. Direct runtime dep; do not prune in Task 3. |
 | `ctranslate2` | faster-whisper inference | Windows/Linux build `==4.8.1` | CUDA 12 wheels. Packaged Windows GPU profile remains `nvidia-cublas-cu12` / `nvidia-cudnn-cu12`. This host also has CUDA 13 on PATH; that does not change the packaged CUDA 12 contract. |
 | `faster-whisper` | Windows + Linux transcription | `==1.2.1` | Linux Core Beta is **CPU only**. |
 | `lightning-whisper-mlx` | Apple Silicon transcription | macOS build `==0.0.10` | Pins `tiktoken==0.3.3`. |
@@ -63,7 +63,7 @@ Material floats observed 2026-08-28 (runtime) versus current build pins:
 | Package | Runtime resolve | Build pin | Action in v2.9 |
 |---|---|---|---|
 | `filelock` | 3.32.4 | 3.32.3 | Floor raised on Linux; build stays 3.32.3 |
-| `av` | 18.1.0 | 17.0.1 | Task 2 after packaged decode smoke |
+| `av` | 18.1.0 | **18.1.0** | **Accepted** Task 2 (2026-08-28): Windows/Linux build pins; macOS does not pin `av` |
 | `onnxruntime` | 1.29.0 | 1.26.0 | Keep 1.26.0 until VAD/decode/Speakrs evidence |
 | `huggingface-hub` | 1.29.0 | 1.16.1 | Hold packaged pin |
 | `pytest` | 9.1.1 | floor `>=9.1.1` | **Accepted** Task 2 (2026-08-28): `requirements-dev.txt` floor raised; not a packaged pin |
@@ -102,7 +102,7 @@ tokenizers==0.23.1 tqdm==4.70.0 typing_extensions==4.16.0
 
 ### `requirements-windows-build.txt` — Windows 3.11.9 install
 
-`pip check` passed. Matches the file’s pins, including `filelock==3.32.3`, `av==17.0.1`, `onnxruntime==1.26.0`, `tokenizers==0.23.1`, `faster-whisper==1.2.1`, `ctranslate2==4.8.1`, `setuptools==83.0.0`, `numpy==2.4.6`, `huggingface-hub==1.16.1`.
+`pip check` passed. Matches the file’s pins, including `filelock==3.32.3`, `av==17.0.1` at Task 1 / `av==18.1.0` after Task 2, `onnxruntime==1.26.0`, `tokenizers==0.23.1`, `faster-whisper==1.2.1`, `ctranslate2==4.8.1`, `setuptools==83.0.0`, `numpy==2.4.6`, `huggingface-hub==1.16.1`.
 
 ### `requirements-linux.txt` — WSL2 CPython 3.11.15 install
 
@@ -110,7 +110,7 @@ tokenizers==0.23.1 tqdm==4.70.0 typing_extensions==4.16.0
 
 ### `requirements-linux-build.txt` — WSL2 CPython 3.11.15 install
 
-`pip check` passed after the FileLock correction. Pins installed as written: `filelock==3.32.3`, `av==17.0.1`, `onnxruntime==1.26.0`, `tokenizers==0.23.1`, `faster-whisper==1.2.1`, `ctranslate2==4.8.1`, `setuptools==83.0.0`, `pulsectl==24.12.0`, `SoundCard==0.4.6`, `cffi==2.1.1`, `numpy==2.4.6`.
+`pip check` passed after the FileLock correction. Pins installed as written: `filelock==3.32.3`, `av==17.0.1` at Task 1 / `av==18.1.0` after Task 2, `onnxruntime==1.26.0`, `tokenizers==0.23.1`, `faster-whisper==1.2.1`, `ctranslate2==4.8.1`, `setuptools==83.0.0`, `pulsectl==24.12.0`, `SoundCard==0.4.6`, `cffi==2.1.1`, `numpy==2.4.6`.
 
 ### `requirements-macos.txt` — dry-run only (no macOS `pip check`)
 
@@ -122,7 +122,7 @@ Dry-run succeeded (`Would install` 53 packages) at the pinned graph: `filelock==
 
 ## SBOM
 
-Command: `npm run legal:sbom` → `legal/PYTHON-BUNDLED-PACKAGES.md` (63 direct pins).
+Command: `npm run legal:sbom` → `legal/PYTHON-BUNDLED-PACKAGES.md` (63 direct pins). Regenerated 2026-08-28T16:12:43.484Z after accepting `av==18.1.0`.
 
 The generator lists **direct `==` pins** from the three build requirement files, not a full transitive lock. Transitive packages still install during `npm run prepare-build`.
 
@@ -182,13 +182,31 @@ Stay on `feature/v2.9-dependency-hygiene`. Each row is its own commit. macOS pin
 
 Held: packaged Python pins; Electron 42.9.0; macOS `torch` / `setuptools` / Numba.
 
-**This Windows PC remaining:** PyAV 18.1.0 in Windows/Linux **build** files after import + fixture decode + `prepare-build`; setuptools 84 in Windows/Linux **build** files only. Separate commits. Do not change macOS pins yet.
+### PyAV 18.1.0 — accepted 2026-08-28 (this PC)
+
+**Upstream:** [PyAV v18.1.0](https://github.com/PyAV-Org/PyAV/releases/tag/v18.1.0) (2026-08-12). Feature release over 17.0.1 (via 18.0.0): `AVRational`, packet/frame helpers, CUDA-context interop. AvaNevis does not call those APIs directly; faster-whisper uses `av` to decode `transcribe(audio_path)`. No security advisory on this bump. cp311 wheels exist for `win_amd64` and `manylinux_2_28_x86_64` (`--only-binary=:all:`).
+
+**Pin:** `requirements-windows-build.txt` and `requirements-linux-build.txt` `av==17.0.1` → `av==18.1.0`. macOS build files unchanged (no `av` pin). `onnxruntime==1.26.0` and `tokenizers==0.23.1` stay explicit direct runtime deps.
+
+**Resolver / `pip check`:**
+- Windows 3.11.9 clean venv `%TEMP%\avanevis-v2.9-pyav-1810`: `pip install --only-binary=:all: -r requirements-windows-build.txt` → `av==18.1.0`. `pip check`: No broken requirements found.
+- WSL2 CPython 3.11.15 `/tmp/avanevis-v2.9-pyav-1810`: same for `requirements-linux-build.txt` (`av-18.1.0-cp311-abi3-manylinux_2_28_x86_64.whl`). `pip check`: No broken requirements found.
+
+**Import + fixture decode** (`tests/fixtures/speakrs-two-speaker-16k.wav`): both venvs and the Windows bundled embed printed `av 18.1.0`, `rate 16000 channels 1 frames 223 samples 227592`, plus `faster_whisper 1.2.1` / `onnxruntime 1.26.0` / `tokenizers 0.23.1`.
+
+**`prepare-build`:** `npm run prepare-build` exit 0 (manifest invalidated for the av pin; reinstalled embedded 3.11.9, pip installed `av==18.1.0`, ffmpeg, speakrs-cli). Bundled `build/resources/python/python.exe -m pip check`: No broken requirements found. Bundled decode matched the venv counts.
+
+**SBOM:** `npm run legal:sbom` → `legal/PYTHON-BUNDLED-PACKAGES.md` generated 2026-08-28T16:12:43.484Z; direct pin `av` is **18.1.0** (was 17.0.1). 63 direct pins.
+
+Held: macOS pins; Electron; Linux AI add-ons; `onnxruntime` 1.26.0; `tokenizers` 0.23.1.
+
+**This Windows PC remaining:** setuptools 84 in Windows/Linux **build** files only. Do not change macOS pins yet.
 
 ## When to switch to the Mac
 
 Stay on `feature/v2.9-dependency-hygiene`. Finish the remaining Windows/Linux Task 2 commits on this PC first, then continue the same branch on Apple Silicon.
 
-**This Windows PC remaining:** PyAV 18.1.0 in Windows/Linux **build** files after import + fixture decode + `prepare-build`; setuptools 84 in Windows/Linux **build** files only. Separate commits. Do not change macOS pins yet. pytest 9.1.1 is already recorded above.
+**This Windows PC remaining:** setuptools 84 in Windows/Linux **build** files only. Separate commits. Do not change macOS pins yet. pytest 9.1.1 and PyAV 18.1.0 are already recorded above.
 
 **Switch to the Mac when those three commits exist**, and do this work there:
 
@@ -205,5 +223,4 @@ PyObjC 12.2 and sounddevice 0.5.6 remain **not** in this Mac trial unless a late
 - **Do not** upgrade Electron.
 - **Do not** start Linux AI add-on phases 6–9.
 - **Do not** add Apple signing or notarization.
-- **PyAV 18.1.0** is a Windows/Linux Task 2 candidate; packaged pin remains 17.0.1 until import + fixture decode + installer smoke pass on those platforms.
 - Host CUDA 13 toolkits must not be mistaken for packaged CUDA 12 support.
