@@ -44,7 +44,7 @@ Treat these as **direct runtime dependencies** even when a resolver also reaches
 | `faster-whisper` | Windows + Linux transcription | `==1.2.1` | Linux Core Beta is **CPU only**. |
 | `lightning-whisper-mlx` | Apple Silicon transcription | macOS build `==0.0.10` | Pins `tiktoken==0.3.3`. |
 | `torch` | macOS resolver only | macOS build `==2.12.0`, then **pruned** | MLX never imports `torch_whisper.py`. `lightning-whisper-mlx` does not pin Torch; `setuptools<82` is upstream from **2.12.0**. Task 2 trials **2.13.0** on a Mac (still pruned). Not Pyannote’s `torch==2.8.0`. |
-| `setuptools` | pip / wheel metadata | Windows/Linux build `==83.0.0`; macOS build `==81.0.0` (also pruned from the macOS runtime) | Windows/Linux: evaluate **84** in Task 2 on this PC. macOS: only with Torch 2.13 on a Mac. CI currently ignores `PYSEC-2026-3447` because of the 2.12 pin. |
+| `setuptools` | pip / wheel metadata | Windows/Linux build `==84.0.0`; macOS build `==81.0.0` (also pruned from the macOS runtime) | Windows/Linux **accepted** Task 2. macOS: only with Torch 2.13 on a Mac. CI currently ignores `PYSEC-2026-3447` because of the 2.12 pin. |
 | `numba` / `llvmlite` | MLX stack | macOS build `==0.65.1` / `==0.47.0` | Unconstrained macOS runtime floats to **0.67.0 / 0.49.0**. Accept 0.67 only with matching llvmlite 0.49 **and** MLX/Whisper plus ScreenCaptureKit-fallback smoke. |
 | `numpy` | audio + ML | all build files `==2.4.6` | Stay on 2.4.x; 2.5+ needs Python ≥3.12. |
 | PyObjC `ScreenCaptureKit` / `CoreAudio` / `AVFoundation` | macOS capture fallback | build `==10.0` | Runtime files float to **12.2.2**. Coordinated bump only. |
@@ -69,7 +69,7 @@ Material floats observed 2026-08-28 (runtime) versus current build pins:
 | `pytest` | 9.1.1 | floor `>=9.1.1` | **Accepted** Task 2 (2026-08-28): `requirements-dev.txt` floor raised; not a packaged pin |
 | `mlx` | 0.32.2 | 0.31.2 | macOS only; needs native smoke |
 | `torch` (macOS runtime) | 2.13.0 | 2.12.0 then prune | **Trial 2.13.0 on a Mac** with setuptools 84; still prune after pip |
-| `setuptools` (macOS runtime) | 84.0.0 | 81.0.0 | Windows/Linux Task 2 here; macOS only with Torch 2.13 |
+| `setuptools` (macOS runtime) | 84.0.0 | Windows/Linux **84.0.0**; macOS **81.0.0** | Windows/Linux **accepted** Task 2; macOS only with Torch 2.13 |
 | PyObjC capture frameworks | 12.2.2 | 10.0 / 12.1 mix | Coordinated macOS change only |
 | `sounddevice` | 0.5.6 | 0.4.6 | Hold until macOS capture smoke |
 
@@ -102,7 +102,7 @@ tokenizers==0.23.1 tqdm==4.70.0 typing_extensions==4.16.0
 
 ### `requirements-windows-build.txt` — Windows 3.11.9 install
 
-`pip check` passed. Matches the file’s pins, including `filelock==3.32.3`, `av==17.0.1` at Task 1 / `av==18.1.0` after Task 2, `onnxruntime==1.26.0`, `tokenizers==0.23.1`, `faster-whisper==1.2.1`, `ctranslate2==4.8.1`, `setuptools==83.0.0`, `numpy==2.4.6`, `huggingface-hub==1.16.1`.
+`pip check` passed. Matches the file’s pins, including `filelock==3.32.3`, `av==17.0.1` at Task 1 / `av==18.1.0` after Task 2, `onnxruntime==1.26.0`, `tokenizers==0.23.1`, `faster-whisper==1.2.1`, `ctranslate2==4.8.1`, `setuptools==83.0.0` at Task 1 / `setuptools==84.0.0` after Task 2, `numpy==2.4.6`, `huggingface-hub==1.16.1`.
 
 ### `requirements-linux.txt` — WSL2 CPython 3.11.15 install
 
@@ -110,7 +110,7 @@ tokenizers==0.23.1 tqdm==4.70.0 typing_extensions==4.16.0
 
 ### `requirements-linux-build.txt` — WSL2 CPython 3.11.15 install
 
-`pip check` passed after the FileLock correction. Pins installed as written: `filelock==3.32.3`, `av==17.0.1` at Task 1 / `av==18.1.0` after Task 2, `onnxruntime==1.26.0`, `tokenizers==0.23.1`, `faster-whisper==1.2.1`, `ctranslate2==4.8.1`, `setuptools==83.0.0`, `pulsectl==24.12.0`, `SoundCard==0.4.6`, `cffi==2.1.1`, `numpy==2.4.6`.
+`pip check` passed after the FileLock correction. Pins installed as written: `filelock==3.32.3`, `av==17.0.1` at Task 1 / `av==18.1.0` after Task 2, `onnxruntime==1.26.0`, `tokenizers==0.23.1`, `faster-whisper==1.2.1`, `ctranslate2==4.8.1`, `setuptools==83.0.0` at Task 1 / `setuptools==84.0.0` after Task 2, `pulsectl==24.12.0`, `SoundCard==0.4.6`, `cffi==2.1.1`, `numpy==2.4.6`.
 
 ### `requirements-macos.txt` — dry-run only (no macOS `pip check`)
 
@@ -122,7 +122,7 @@ Dry-run succeeded (`Would install` 53 packages) at the pinned graph: `filelock==
 
 ## SBOM
 
-Command: `npm run legal:sbom` → `legal/PYTHON-BUNDLED-PACKAGES.md` (63 direct pins). Regenerated 2026-08-28T16:12:43.484Z after accepting `av==18.1.0`.
+Command: `npm run legal:sbom` → `legal/PYTHON-BUNDLED-PACKAGES.md` (63 direct pins). Regenerated 2026-08-28T16:20:48.832Z after accepting `setuptools==84.0.0` on Windows/Linux (macOS remains 81.0.0).
 
 The generator lists **direct `==` pins** from the three build requirement files, not a full transitive lock. Transitive packages still install during `npm run prepare-build`.
 
@@ -200,13 +200,31 @@ Held: packaged Python pins; Electron 42.9.0; macOS `torch` / `setuptools` / Numb
 
 Held: macOS pins; Electron; Linux AI add-ons; `onnxruntime` 1.26.0; `tokenizers` 0.23.1.
 
-**This Windows PC remaining:** setuptools 84 in Windows/Linux **build** files only. Do not change macOS pins yet.
+### setuptools 84.0.0 — accepted 2026-08-28 (this PC, Windows/Linux only)
+
+**Upstream:** [setuptools v84.0.0](https://setuptools.pypa.io/en/stable/history.html) (2026-08-08). Distutils/compiler decoupling (`Compiler.call`, `Extension` dataclass, newline `keywords`/`platforms` deprecation). PYSEC-2026-3447 / CVE-2026-59890 was already fixed in **83.0.0**; PyPI lists no vulnerabilities on 84.0.0. Wheel `setuptools-84.0.0-py3-none-any.whl` (`requires-python >=3.10`).
+
+**Pin:** `requirements-windows-build.txt` and `requirements-linux-build.txt` `setuptools==83.0.0` → `setuptools==84.0.0`. macOS pin remains `setuptools==81.0.0` with `torch==2.12.0`. Comment in `requirements-macos-build.txt` updated to name the Windows/Linux 84.0.0 pin; the macOS pin itself is unchanged.
+
+**Resolver / `pip check`:**
+- Windows 3.11.9 clean venv `%TEMP%\avanevis-v2.9-setuptools-84`: `pip install --only-binary=:all: -r requirements-windows-build.txt` → `setuptools==84.0.0`, `av==18.1.0`, `onnxruntime==1.26.0`, `tokenizers==0.23.1`. `pip check`: No broken requirements found.
+- WSL2 CPython 3.11.15 `/tmp/avanevis-v2.9-setuptools-84`: same for `requirements-linux-build.txt`. `pip check`: No broken requirements found.
+
+**`prepare-build`:** `npm run prepare-build` exit 0. Bundled `build/resources/python/python.exe`: `setuptools 84.0.0`, `av 18.1.0`, `onnxruntime 1.26.0`, `tokenizers 0.23.1`; `pip check`: No broken requirements found.
+
+**pip-audit:** `python -m pip_audit -r requirements-windows-build.txt` → **No known vulnerabilities found**.
+
+**SBOM:** `npm run legal:sbom` → `legal/PYTHON-BUNDLED-PACKAGES.md` generated 2026-08-28T16:20:48.832Z; `setuptools` is **platform-specific (84.0.0 vs 81.0.0)**. 63 direct pins.
+
+Held: macOS `torch==2.12.0` / `setuptools==81.0.0` / Numba 0.65.1; Electron 42.9.0; Linux AI add-ons; `onnxruntime` 1.26.0; `tokenizers` 0.23.1.
+
+**This Windows PC:** the three Windows/Linux Task 2 commits are done. Next step is the Mac.
 
 ## When to switch to the Mac
 
-Stay on `feature/v2.9-dependency-hygiene`. Finish the remaining Windows/Linux Task 2 commits on this PC first, then continue the same branch on Apple Silicon.
+Stay on `feature/v2.9-dependency-hygiene`. The three Windows/Linux Task 2 commits exist on this PC. Continue the same branch on Apple Silicon.
 
-**This Windows PC remaining:** setuptools 84 in Windows/Linux **build** files only. Separate commits. Do not change macOS pins yet. pytest 9.1.1 and PyAV 18.1.0 are already recorded above.
+**This Windows PC:** pytest 9.1.1, PyAV 18.1.0, and setuptools 84.0.0 (Windows/Linux build) are recorded above. Do not change macOS pins from this machine.
 
 **Switch to the Mac when those three commits exist**, and do this work there:
 
