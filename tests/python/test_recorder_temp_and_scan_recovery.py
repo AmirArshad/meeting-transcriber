@@ -56,13 +56,18 @@ class RecorderTempPathTests(unittest.TestCase):
     def test_final_opus_path_only_rewrites_the_extension(self):
         # str.replace('.wav', '.opus') rewrites every occurrence, so a
         # recordings root containing '.wav' produced a mangled candidate path.
-        self.assertEqual(
-            build_final_opus_path_for_output("/home/user/my.wav.archive/recording_1.wav"),
-            "/home/user/my.wav.archive/recording_1.opus",
+        # Compare Path objects so native separators (Windows CI) still match.
+        dotted_parent = build_final_opus_path_for_output(
+            "/home/user/my.wav.archive/recording_1.wav"
         )
         self.assertEqual(
-            build_final_opus_path_for_output("/home/user/recordings/meeting.v2.wav"),
-            "/home/user/recordings/meeting.v2.opus",
+            Path(dotted_parent),
+            Path("/home/user/my.wav.archive/recording_1.opus"),
+        )
+        self.assertEqual(Path(dotted_parent).parent.name, "my.wav.archive")
+        self.assertEqual(
+            Path(build_final_opus_path_for_output("/home/user/recordings/meeting.v2.wav")),
+            Path("/home/user/recordings/meeting.v2.opus"),
         )
         self.assertTrue(
             build_final_opus_path_for_output(
