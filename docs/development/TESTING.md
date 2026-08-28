@@ -204,6 +204,8 @@ CI currently runs:
 - packaged macOS resource verification for helper, Python, and ffmpeg
 - Ubuntu Linux packaging job: `npm run test:all`, resource preparation, AppImage + pacman, `scripts/verify-linux-packaging.js` (bundled Python/ffmpeg/backend, no deferred add-on binaries, static AppImage runtime, pacman `.PKGINFO`)
 
+Linux Core Beta hardware smoke (Omarchy Pulse/PipeWire recording, packaged AppImage Settings/legal-notices/CPU transcription) is manual — see `tests/manual/recording-smoke-checklist.md` and `docs/initiatives/LINUX_SUPPORT.md`. The Phase 3 60-minute soak was cancelled 2026-08-27 (not run). Ubuntu 24.04 desktop AppImage smoke is still open.
+
 ## Troubleshooting
 
 ### `python3: No module named pytest`
