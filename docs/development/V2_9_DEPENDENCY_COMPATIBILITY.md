@@ -45,7 +45,7 @@ Treat these as **direct runtime dependencies** even when a resolver also reaches
 | `lightning-whisper-mlx` | Apple Silicon transcription | macOS build `==0.0.10` | Pins `tiktoken==0.3.3`. |
 | `torch` | macOS resolver only | macOS build `==2.13.0`, then **pruned** | MLX never imports `torch_whisper.py`. `lightning-whisper-mlx` does not pin Torch. **Accepted** Task 2 on Apple Silicon (2026-08-28). Stays in `MACOS_RUNTIME_REMOVABLE_PACKAGES`. Not Pyannote’s `torch==2.8.0`. |
 | `setuptools` | pip / wheel metadata | Windows/Linux/macOS build `==84.0.0` (also pruned from the macOS runtime) | Windows/Linux **accepted** Task 2. macOS **accepted** with Torch 2.13.0. CI no longer ignores `CVE-2025-3000` or `PYSEC-2026-3447`. |
-| `numba` / `llvmlite` | MLX stack | macOS build `==0.65.1` / `==0.47.0` | Unconstrained macOS runtime floats to **0.67.0 / 0.49.0**. Same-session Numba 0.67 trial follows this torch/setuptools commit. |
+| `numba` / `llvmlite` | MLX stack | macOS build `==0.67.0` / `==0.49.0` | **Accepted** Task 2 on Apple Silicon (2026-08-28). Numba 0.67 requires `llvmlite>=0.49,<0.50`. Matching pair; not Dependabot Numba-alone against llvmlite 0.47. |
 | `numpy` | audio + ML | all build files `==2.4.6` | Stay on 2.4.x; 2.5+ needs Python ≥3.12. |
 | PyObjC `ScreenCaptureKit` / `CoreAudio` / `AVFoundation` | macOS capture fallback | build `==10.0` | Runtime files float to **12.2.2**. Coordinated bump only. |
 | PyObjC `Cocoa` / `Quartz` / `core` / `CoreMedia` | ScreenCaptureKit fallback graph | build `==12.1` | Task 3: do not remove without imports, `pip check`, packaged macOS dir build, and hardware capture smoke. |
@@ -122,9 +122,11 @@ tokenizers==0.23.1 tqdm==4.70.0 typing_extensions==4.16.0
 
 **After torch 2.13.0 + setuptools 84.0.0:** clean venv `/tmp/avanevis-v2.9-macos-build-torch213`. `pip check` passed. `pip_audit -r requirements-macos-build.txt` with **no ignores**: `No known vulnerabilities found` (CVE-2025-3000 is patched in 2.13.0; PYSEC-2026-3447 is past setuptools 83). Torch remains in `MACOS_RUNTIME_REMOVABLE_PACKAGES`. Pyannote `torch==2.8.0` in `src/ai-addon-state.js` was not changed.
 
+**After Numba 0.67.0 + llvmlite 0.49.0:** clean venv `/tmp/avanevis-v2.9-macos-build-numba067`. `pip check` passed at `numba==0.67.0`, `llvmlite==0.49.0`, `torch==2.13.0`, `setuptools==84.0.0`, `mlx==0.31.2`.
+
 ## SBOM
 
-Command: `npm run legal:sbom` → `legal/PYTHON-BUNDLED-PACKAGES.md` (63 direct pins). Regenerated 2026-08-28T17:06:33.177Z after accepting macOS `torch==2.13.0` / `setuptools==84.0.0` (all three build files now pin setuptools 84.0.0; torch pin is 2.13.0).
+Command: `npm run legal:sbom` → `legal/PYTHON-BUNDLED-PACKAGES.md` (63 direct pins). Regenerated 2026-08-28T17:07:40.260Z after accepting macOS `numba==0.67.0` / `llvmlite==0.49.0` (torch remains 2.13.0; setuptools 84.0.0 on all three build files).
 
 The generator lists **direct `==` pins** from the three build requirement files, not a full transitive lock. Transitive packages still install during `npm run prepare-build`.
 
@@ -245,13 +247,25 @@ Stay on `feature/v2.9-dependency-hygiene`. Host: macOS 26.6.2 arm64, Homebrew CP
 
 Held: Numba 0.65.1 / llvmlite 0.47.0 until the following same-session commit; Electron 42.9.0; Linux AI add-ons; PyObjC; sounddevice 0.4.6; `onnxruntime` 1.26.0; `tokenizers` 0.23.1.
 
-## After the Mac torch/setuptools commit
+### Numba 0.67.0 + llvmlite 0.49.0 — accepted 2026-08-28 (this Mac)
 
-Stay on `feature/v2.9-dependency-hygiene`. Native `pip check`, torch 2.13.0 + setuptools 84.0.0, packaged dir build, MLX smoke, and CoreAudio tap capture are recorded above. CI pip-audit ignores for CVE-2025-3000 / PYSEC-2026-3447 are removed.
+**Upstream:** [numba 0.67.0](https://pypi.org/project/numba/0.67.0/) requires `llvmlite>=0.49.0dev0,<0.50` and `numpy>=1.22,<2.6`. Packaged numpy stays 2.4.6. Do not accept Dependabot Numba alone against llvmlite 0.47.
 
-**Same Mac session next:** Numba **0.67** with llvmlite **0.49** (not 0.47). Reuse the packaged MLX + helper evidence; reject Numba if resolver/`pip check` fails.
+**Pin:** `requirements-macos-build.txt` `numba==0.65.1` / `llvmlite==0.47.0` → `numba==0.67.0` / `llvmlite==0.49.0`. mlx remains `==0.31.2`.
 
-PyObjC 12.2 and sounddevice 0.5.6 remain **not** in this Mac trial unless a later Task 2/3 commit takes them with their own evidence.
+**Resolver / `pip check`:** clean venv `/tmp/avanevis-v2.9-macos-build-numba067` with the torch 2.13 / setuptools 84 pins already in the file. `pip install --only-binary=:all:` → `numba==0.67.0`, `llvmlite==0.49.0`. Import ok. `pip check`: No broken requirements found. `pip_audit -r requirements-macos-build.txt` with no ignores: **No known vulnerabilities found**.
+
+**Packaged dir build + smokes:** the `npm run build:mac:dir` / MLX / helper session above installed this Numba pair into `dist/mac-arm64/AvaNevis.app` (`numba==0.67.0`, `llvmlite==0.49.0` in bundled site-packages). Packaged MLX `base` transcription of the two-speaker fixture succeeded on Metal. ScreenCaptureKit `--screencapturekit` startup fail-closed on Screen Recording TCC as recorded in the torch section.
+
+Held: Electron 42.9.0; Linux AI add-ons; PyObjC 10.0/12.1 mix; sounddevice 0.4.6; `onnxruntime` 1.26.0; `tokenizers` 0.23.1; mlx 0.31.2.
+
+## After Mac Task 2
+
+Stay on `feature/v2.9-dependency-hygiene`. Native `pip check`, torch 2.13.0 + setuptools 84.0.0, Numba 0.67.0 + llvmlite 0.49.0, packaged dir build, MLX smoke, and CoreAudio tap capture are recorded above. CI pip-audit ignores for CVE-2025-3000 / PYSEC-2026-3447 are removed.
+
+**Next:** Task 3 explicit-transitive pin trim. Keep `onnxruntime`, `tokenizers`, and `av` as direct runtime deps. PyObjC `Cocoa` / `Quartz` and sounddevice 0.5.6 still need their own evidence.
+
+PyObjC 12.2 and sounddevice 0.5.6 remain **not** accepted unless a later Task 2/3 commit takes them with their own evidence.
 
 ## Blockers and non-goals
 
