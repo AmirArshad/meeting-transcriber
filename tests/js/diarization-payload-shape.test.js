@@ -44,6 +44,17 @@ function makeTempDir(prefix) {
   return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
 }
 
+function mockSupportedDiarizationHost() {
+  const platformDesc = Object.getOwnPropertyDescriptor(process, 'platform');
+  const archDesc = Object.getOwnPropertyDescriptor(process, 'arch');
+  Object.defineProperty(process, 'platform', { configurable: true, value: 'win32' });
+  Object.defineProperty(process, 'arch', { configurable: true, value: 'x64' });
+  return () => {
+    Object.defineProperty(process, 'platform', platformDesc);
+    Object.defineProperty(process, 'arch', archDesc);
+  };
+}
+
 function assertEngineAgnosticFlags(actualFlags, requiredFlags) {
   for (const flag of requiredFlags) {
     assert.ok(actualFlags.includes(flag), `missing required flag ${flag}`);
@@ -293,6 +304,7 @@ test('pyannote child env keeps managed HF cache after spawn merge', () => {
 });
 
 test('diarize-transcript Speakrs production spawn receives engine argv and isolated env', async () => {
+  const restoreHost = mockSupportedDiarizationHost();
   const availability = getDiarizationAvailability(process.platform, process.arch);
   assert.equal(availability.supported, true, 'handler coverage requires a supported diarization platform');
 
@@ -478,6 +490,7 @@ test('diarize-transcript Speakrs production spawn receives engine argv and isola
 
     await resultPromise;
   } finally {
+    restoreHost();
     for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) {
         delete process.env[key];
@@ -491,6 +504,7 @@ test('diarize-transcript Speakrs production spawn receives engine argv and isola
 });
 
 test('queued Speakrs compute admission failure prevents diarization spawn', async () => {
+  const restoreHost = mockSupportedDiarizationHost();
   const availability = getDiarizationAvailability(process.platform, process.arch);
   assert.equal(availability.supported, true, 'handler coverage requires a supported diarization platform');
   const recordingsDir = makeTempDir('speakrs-admission-rec-');
@@ -548,11 +562,13 @@ test('queued Speakrs compute admission failure prevents diarization spawn', asyn
     assert.equal(statusOptions[1].computeAdmission, true);
     assert.equal(spawned.length, 0);
   } finally {
+    restoreHost();
     fs.rmSync(recordingsDir, { recursive: true, force: true });
   }
 });
 
 test('packaged missing Speakrs CLI diarize-transcript handler returns reinstall copy without spawning', async () => {
+  const restoreHost = mockSupportedDiarizationHost();
   const availability = getDiarizationAvailability(process.platform, process.arch);
   assert.equal(availability.supported, true, 'handler coverage requires a supported diarization platform');
 
@@ -640,6 +656,7 @@ test('packaged missing Speakrs CLI diarize-transcript handler returns reinstall 
     );
     assert.equal(spawned.length, 0);
   } finally {
+    restoreHost();
     if (previousPackaged === undefined) {
       delete process.env.AVANEVIS_PACKAGED;
     } else {

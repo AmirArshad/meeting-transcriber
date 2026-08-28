@@ -155,10 +155,16 @@ function buildRecordingPreflightReport({
       'If the microphone is missing, check System Settings > Privacy & Security > Microphone.',
       'For desktop audio on macOS, keep System Audio (ScreenCaptureKit) selected.',
     ]
-    : [
-      'Refresh your audio devices and try again.',
-      'Reconnect the selected microphone or desktop audio device if it was unplugged.',
-    ];
+    : platform === 'linux'
+      ? [
+        'Refresh your audio devices and try again.',
+        'If the microphone is missing, start PulseAudio or PipeWire and refresh devices.',
+        'Desktop audio uses the selected output monitor. No screen-sharing permission is required.',
+      ]
+      : [
+        'Refresh your audio devices and try again.',
+        'Reconnect the selected microphone or desktop audio device if it was unplugged.',
+      ];
 
   const errorMessage = normalizedErrors.length
     ? [

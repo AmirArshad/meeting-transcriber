@@ -98,6 +98,7 @@ test('returns AI add-on paths under Electron userData', () => {
 test('supports macOS diarization only on Apple Silicon MPS policy', () => {
   const availability = getDiarizationAvailability('darwin', 'arm64');
   const intelAvailability = getDiarizationAvailability('darwin', 'x64');
+  const linuxAvailability = getDiarizationAvailability('linux', 'x64');
 
   assert.equal(availability.supported, true);
   assert.equal(availability.acceleration, 'mps');
@@ -105,6 +106,8 @@ test('supports macOS diarization only on Apple Silicon MPS policy', () => {
   assert.equal(availability.automaticAfterTranscription, true);
   assert.equal(intelAvailability.supported, false);
   assert.match(intelAvailability.reason, /Apple Silicon.*Metal\/MPS/);
+  assert.equal(linuxAvailability.supported, false);
+  assert.equal(linuxAvailability.acceleration, 'unsupported');
 });
 
 test('allows Windows x64 diarization candidate without changing transcription paths', () => {

@@ -51,6 +51,16 @@
     return engine === 'pyannote';
   }
 
+  function shouldOfferDiarizationSetupFields({ engine, unsupported = false } = {}) {
+    if (unsupported) {
+      return { showToken: false, showSpeakerCount: false };
+    }
+    return {
+      showToken: shouldShowDiarizationTokenUi(engine),
+      showSpeakerCount: shouldShowDiarizationSpeakerCount(engine),
+    };
+  }
+
   function isSpeakrsRecommended({ platform, arch } = {}) {
     return platform === 'darwin' && arch === 'arm64';
   }
@@ -180,6 +190,7 @@
     resolveSelectedDiarizationEngine,
     shouldClearDiarizationTokenFields,
     shouldConfirmDiarizationEngineSwitch,
+    shouldOfferDiarizationSetupFields,
     shouldShowDiarizationSpeakerCount,
     shouldShowDiarizationTokenUi,
   };

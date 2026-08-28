@@ -47,6 +47,45 @@ class TrackSpoolTests(unittest.TestCase):
         )
         return coordinator, spool
 
+    def test_append_never_reports_success_for_a_chunk_close_will_drop(self):
+        """append() and close() race at every stop: the capture thread is
+        blocked inside record() while the main thread closes the spool.
+
+        Returning True for a chunk enqueued after the writer already exited
+        would silently drop committed-looking audio, so the closed check and
+        the enqueue must be atomic with respect to close().
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            coordinator, spool = self._open_spool(Path(tmp), flush_interval_s=0.01)
+            try:
+                chunk = np.zeros((64, 2), dtype="<i2").tobytes()
+                accepted = []
+                start = threading.Event()
+
+                def writer():
+                    start.wait()
+                    for _ in range(200):
+                        accepted.append(spool.append(chunk))
+
+                thread = threading.Thread(target=writer)
+                thread.start()
+                start.set()
+                time.sleep(0.02)
+                result = spool.close()
+                thread.join(timeout=5)
+                self.assertFalse(thread.is_alive())
+
+                accepted_count = sum(1 for ok in accepted if ok)
+                # Every append that returned True must be represented in the
+                # durable committed frame count.
+                self.assertGreaterEqual(result.committed_frames, accepted_count * 64)
+                # And once close() wins, no later append may claim success.
+                true_indexes = [i for i, ok in enumerate(accepted) if ok]
+                last_true = true_indexes[-1] if true_indexes else -1
+                self.assertTrue(all(not ok for ok in accepted[last_true + 1:]))
+            finally:
+                coordinator.close()
+
     def test_queue_headroom_uses_declared_format(self):
         # 8 MiB / (48000 * 2 * 2) ≈ 43.69 s for stereo int16
         seconds = queue_headroom_seconds(
@@ -404,9 +443,12 @@ class TrackSpoolTests(unittest.TestCase):
             coordinator, spool = self._open_spool(
                 recordings_dir,
                 max_queue_bytes=8 * 1024 * 1024,
-                segment_bytes=64 * 1024,
+                # Larger segments avoid hundreds of Windows temp-file rolls while
+                # the writer fills the clamped 180s gap (CI flake: join timeout).
+                segment_bytes=2 * 1024 * 1024,
                 stall_timeout_s=30.0,
                 flush_interval_s=0.05,
+                close_join_timeout_s=60.0,
             )
             try:
                 chunk = _int16_stereo_frames(10)
@@ -416,6 +458,12 @@ class TrackSpoolTests(unittest.TestCase):
                 self.assertIsNone(result.fail_reason)
                 self.assertLessEqual(result.committed_frames, 48000 * 180 + 20)
             finally:
+                if spool._worker.is_alive():
+                    try:
+                        spool._queue.put(None)
+                    except Exception:
+                        pass
+                    spool._worker.join(timeout=5.0)
                 coordinator.close()
 
     def test_close_skips_mutation_when_writer_still_alive(self):

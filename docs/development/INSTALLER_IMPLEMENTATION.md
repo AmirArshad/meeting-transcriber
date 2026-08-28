@@ -20,8 +20,10 @@ The packaging flow is intentionally explicit:
 
 - Windows embedded Python
 - macOS standalone Python
+- Linux standalone Python (python-build-standalone, same release as macOS)
 - Windows ffmpeg (gyan.dev essentials)
 - macOS ffmpeg (shaka-project/static-ffmpeg-binaries `ffmpeg-osx-arm64`, arm64)
+- Linux ffmpeg (shaka-project/static-ffmpeg-binaries `ffmpeg-linux-x64`)
 - a pinned `pip` wheel used for bootstrap
 
 The build no longer depends on the moving-target `get-pip.py` bootstrap script.
@@ -65,6 +67,17 @@ This avoids shipping stale prepared resources after build-time changes.
 - builds and stages `speakrs-cli` under `build/resources/bin`
 - stages the helper in `build/resources/bin`
 
+### Linux
+
+- downloads the python-build-standalone tarball
+- verifies the checksum
+- extracts Python into `build/resources/python`
+- bootstraps pip from the pinned wheel
+- installs Linux runtime requirements (`requirements-linux-build.txt`)
+- downloads and stages ffmpeg
+- **skips** `speakrs-cli` (Core Beta; empty `build/resources/bin` so extraResources `from` exists)
+- stages legal notices
+
 ## Packaged Layout
 
 Electron bundles these prepared resources via `package.json` `extraResources`.
@@ -104,6 +117,26 @@ AvaNevis.app/
     └── iconTemplate@2x.png
 ```
 
+### Linux packaged app
+
+```text
+resources/
+├── python/
+│   └── bin/python3
+├── ffmpeg/
+│   └── ffmpeg
+├── backend/
+│   └── *.py
+├── legal/
+│   └── THIRD_PARTY_NOTICES.md
+├── requirements-linux.txt
+└── requirements-linux-build.txt
+```
+
+There is no `resources/bin/speakrs-cli` (or llama.cpp / CUDA ORT) in Core Beta. electron-builder skips an empty `bin` directory.
+
+Pacman installs the same tree under `/opt/AvaNevis/`.
+
 ## Runtime Path Resolution
 
 `src/main.js` chooses runtime paths based on whether the app is packaged:
@@ -111,16 +144,18 @@ AvaNevis.app/
 - development:
   - macOS uses `python3`
   - Windows uses `python`
+  - Linux uses `python3` (or the repo `.venv`)
   - ffmpeg is expected on `PATH`
 - packaged app:
   - Windows uses `resources/python/python.exe`
-  - macOS uses `resources/python/bin/python3`
+  - macOS and Linux use `resources/python/bin/python3`
   - ffmpeg is resolved from the packaged `resources/ffmpeg` directory
+  - packaged children get `AVANEVIS_PACKAGED=1` and `PYTHONNOUSERSITE=1`; ambient `PYTHONPATH` / `PYTHONHOME` / `PYTHONUSERBASE` are stripped
 
 The main process also selects the platform transcriber and launches it with `python -m` so package-relative imports work in packaged builds:
 
 - Apple Silicon macOS packaged builds use `transcription.mlx_whisper_transcriber`
-- Windows uses `transcription.faster_whisper_transcriber`
+- Windows and Linux use `transcription.faster_whisper_transcriber` (Linux packaged builds are CPU-only)
 - Intel Mac development runs can still fall back to `transcription.faster_whisper_transcriber`
 
 ## Installer Artifacts
@@ -129,6 +164,9 @@ The main process also selects the platform transcriber and launches it with `pyt
 
 - Windows: `AvaNevis-Setup-<version>.exe`
 - macOS: `AvaNevis-Setup-<version>.dmg`
+- Linux: `AvaNevis-Setup-<version>.AppImage`, `AvaNevis-Setup-<version>.pkg.tar.zst`, and experimental `AvaNevis-Setup-<version>.deb`
+
+`src/updater.js` `findInstallerAsset` requires the `AvaNevis-Setup-` token on every platform. Linux selects among those three suffixes from the current install (`APPIMAGE`) and `/etc/os-release`: a running AppImage stays on AppImage; Debian-family prefers `.deb`; Arch-family prefers pacman; Fedora, SteamOS, and unknown Linux prefer AppImage. Source `.tar.gz` and unprefixed names never match. The updater stays notify-only (no AppImage self-update; pacman/deb-installed apps must not self-update).
 
 ## CI Coverage
 
@@ -138,12 +176,16 @@ The current CI workflow validates packaging more directly than before:
 - macOS backend job builds the Swift helper
 - macOS backend job also runs `npm run build:mac:dir`
 - macOS packaged output is checked for bundled helper, Python, and ffmpeg
+- Ubuntu packaging job (`test-packaging-linux` on `ubuntu-latest`) runs `npm ci`, `npm run test:all`, `prepare-build`, electron-builder `dir` + AppImage + pacman + deb, and `scripts/verify-linux-packaging.js`
+- GitHub Release workflow builds Windows, macOS, Linux AppImage, Linux pacman, and experimental Linux `.deb` artifacts; Gate B closed 2026-08-28 after fixing incomplete ad-hoc macOS bundle signing
 
 This is still not a substitute for hardware recording tests, but it catches many packaging regressions before release tags.
 
 ## Known Constraints
 
 - macOS packaged builds target Apple Silicon only.
+- Linux packaged builds target x86_64 AppImage + pacman + one experimental `.deb`; no RPM / Flatpak / Snap in Core Beta.
+- Linux AppImage uses electron-builder 26.x static toolset `1.0.2` (no host fuse2). Kernel `/dev/fuse` is still required to mount.
 - Unsigned distribution means users still see the normal Gatekeeper workaround flow.
 - Update delivery is still a manual browser-download flow, not an in-app auto-install system.
 - Recorder smoke tests on real hardware remain manual.

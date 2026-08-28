@@ -12,6 +12,7 @@ const fs = require('node:fs');
 const { EventEmitter } = require('node:events');
 
 const { createRecorderService } = require('../../src/main/recorder-service');
+const { getRecorderModule } = require('../../src/main-process-helpers');
 const { createSummaryService } = require('../../src/main/summary-service');
 const { createGpuRuntimeService } = require('../../src/main/gpu-runtime-service');
 const {
@@ -95,6 +96,7 @@ function createRecorderDeps(overrides = {}) {
     formatDurationForTranscript: () => '0:00',
     getRecordingsDir: () => recordingsDir,
     getRecordingStopTimeoutMs: () => 30,
+    resolveRecorderModule: getRecorderModule,
     ...overrides,
   };
 

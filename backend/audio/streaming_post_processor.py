@@ -58,6 +58,26 @@ TARGET_RATE = DEFAULT_SAMPLE_RATE
 TARGET_CHANNELS = 2
 
 
+def _profile_requires_native_48k(profile: str) -> bool:
+    return profile == "macos-v1"
+
+
+def _profile_uses_one_sided(profile: str) -> bool:
+    return profile in ("macos-v1", "linux-v1")
+
+
+def _profile_enhances_mic_before_mix(profile: str) -> bool:
+    return profile in ("windows-v1", "linux-v1")
+
+
+def _profile_enhances_after_mix(profile: str) -> bool:
+    return profile == "macos-v1"
+
+
+def _profile_caps_at_mic(profile: str) -> bool:
+    return profile == "windows-v1"
+
+
 class FinalizationError(RuntimeError):
     """Bounded finalization failed before verified completion."""
 
@@ -374,7 +394,7 @@ def _normalize_track_to_stereo_file(
     sample_rate = int(track["sampleRate"])
     channels = int(track["channels"])
     dtype = str(track["dtype"])
-    if profile == "macos-v1" and sample_rate != target_rate:
+    if _profile_requires_native_48k(profile) and sample_rate != target_rate:
         raise FinalizationError(
             f"macOS-v1 capture rate {sample_rate} Hz is unsupported; expected {target_rate} Hz"
         )
@@ -530,8 +550,8 @@ def _iter_aligned_mix_chunks(
                 desk_chunk = _apply_one_sided(desk_chunk, desk_one_sided)
                 mixed = mic_chunk * (mic_volume * mic_boost) + desk_chunk * desktop_volume
                 _mix_soft_limit_inplace(mixed, apply=apply_mix_limit)
-            elif profile == "windows-v1":
-                # Windows mic-only: enhance already applied; no extra volume multiply.
+            elif _profile_enhances_mic_before_mix(profile):
+                # Windows/linux-v1 mic-only: enhance already applied; no extra volume multiply.
                 mixed = mic_chunk
             else:
                 mixed = mic_chunk * mic_volume
@@ -605,7 +625,7 @@ def _aligned_frame_count(
     """Return (mic_start_pad, desk_start_pad_after_trim, total_frames).
 
     ``windows-v1`` hard-caps at mic duration (matches the RAM-path reconstruct
-    that never extends past the mic timeline). ``macos-v1`` max-pads.
+    that never extends past the mic timeline). ``macos-v1`` and ``linux-v1`` max-pad.
     """
     mic_pad = int(alignment.get("micLeadingPadFrames") or 0)
     desk_trim = int(alignment.get("desktopTrimFrames") or 0)
@@ -615,7 +635,7 @@ def _aligned_frame_count(
         return mic_pad, 0, mic_total
     desk_kept = max(0, desk_frames - desk_trim)
     desk_total = desk_kept + desk_pad
-    if profile == "windows-v1":
+    if _profile_caps_at_mic(profile):
         return mic_pad, desk_pad, mic_total
     return mic_pad, desk_pad, max(mic_total, desk_total)
 
@@ -779,7 +799,8 @@ def expected_output_duration_seconds(data: Dict[str, Any]) -> Optional[float]:
     """Expected final meeting duration using the same profile/alignment rules as finalize.
 
     Uses track ``committedFrames``/``sampleRate`` and alignment pads/trims in the
-    seconds domain. ``windows-v1`` caps at the mic timeline; ``macos-v1`` max-pads.
+    seconds domain. ``windows-v1`` caps at the mic timeline; ``macos-v1`` and
+    ``linux-v1`` max-pad.
     """
     tracks = data.get("tracks") or {}
     mic = tracks.get("mic")
@@ -817,7 +838,7 @@ def expected_output_duration_seconds(data: Dict[str, Any]) -> Optional[float]:
     desk_pad = int(alignment.get("desktopLeadingPadFrames") or 0)
     desk_seconds = (max(0, desk_frames - desk_trim) + max(0, desk_pad)) / float(desk_rate)
 
-    if profile == "windows-v1":
+    if _profile_caps_at_mic(profile):
         return mic_seconds
     return max(mic_seconds, desk_seconds)
 
@@ -1155,10 +1176,12 @@ def finalize_capture(
         mic_path = coordinator.session_dir / NORMALIZED_MIC_NAME
 
         mic_one_sided = (
-            _decide_one_sided(mic_stats) if profile == "macos-v1" else _OneSidedDecision(False)
+            _decide_one_sided(mic_stats) if _profile_uses_one_sided(profile) else _OneSidedDecision(False)
         )
         desk_one_sided = (
-            _decide_one_sided(desk_stats) if profile == "macos-v1" and include_desktop else _OneSidedDecision(False)
+            _decide_one_sided(desk_stats)
+            if _profile_uses_one_sided(profile) and include_desktop
+            else _OneSidedDecision(False)
         )
 
         mic_pad, desk_pad, total_frames = _aligned_frame_count(
@@ -1174,9 +1197,10 @@ def finalize_capture(
         )
         desk_trim = int(alignment.get("desktopTrimFrames") or 0)
 
-        # Windows enhances mic before mix; macOS enhances after global mix limiting.
+        # Windows/linux-v1 enhance mic before mix (faithful desktop).
+        # macOS enhances after global mix limiting.
         mic_enhance = None
-        if profile == "windows-v1":
+        if _profile_enhances_mic_before_mix(profile):
             mic_enhance = _plan_stereo_enhance_from_stats(mic_stats)
 
         _emit_progress(progress_callback, "audio_mixing", "Mixing audio...")
@@ -1204,7 +1228,7 @@ def finalize_capture(
         apply_mix_limit = include_desktop and mix_peak > 1.0
 
         post_mix_enhance = None
-        if profile == "macos-v1":
+        if _profile_enhances_after_mix(profile):
             # One bounded stats pass over the globally limited aligned mix is
             # sufficient: centered extrema derive from global sum/min/max.
             mixed_stats = _TrackStats()
@@ -1264,7 +1288,7 @@ def finalize_capture(
                 desk_one_sided=desk_one_sided,
                 mic_enhance=mic_enhance,
                 apply_mix_limit=apply_mix_limit,
-                post_mix_enhance=post_mix_enhance if profile == "macos-v1" else None,
+                post_mix_enhance=post_mix_enhance if _profile_enhances_after_mix(profile) else None,
             ),
         )
         capture_temp_written = True

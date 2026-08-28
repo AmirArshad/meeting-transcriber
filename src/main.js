@@ -117,6 +117,18 @@ const {
   createRecordingPresenceService,
   buildWindowCloseDialogOptions,
 } = require('./main/recording-presence-service');
+const {
+  applyLinuxElectronCommandLineSwitches,
+  buildLinuxEnvironmentDiagnostics,
+  getSelectedStorageBackend,
+  runLinuxSafeStorageSmoke,
+} = require('./main-process/linux-electron-bootstrap');
+
+// Ozone and password-store must be set before any other app.* call so Chromium
+// does not already bind XWayland / basic_text on Hyprland.
+if (process.platform === 'linux') {
+  applyLinuxElectronCommandLineSwitches(app.commandLine, process.env);
+}
 
 // Stable Windows toast activator (never use Electron's per-run generated CLSID in packaged builds).
 const AVANEVIS_TOAST_ACTIVATOR_CLSID = '{A7E2C4F1-9B83-4D2E-8F61-1C0A9E5B7D33}';
@@ -1301,6 +1313,7 @@ function createWindow() {
         : 0;
       const dialogOptions = buildWindowCloseDialogOptions(captureState, process.platform, {
         pendingTranscriptionCount,
+        trayAvailable: recordingPresenceService ? recordingPresenceService.hasTray() : false,
       });
       const { keepRecordingAction, ...messageBoxOptions } = dialogOptions;
 
@@ -1491,6 +1504,60 @@ app.whenReady().then(async () => {
   console.log('app.getName():', app.getName());
   console.log('app.isPackaged:', app.isPackaged);
   console.log('process.resourcesPath:', process.resourcesPath);
+  if (process.platform === 'linux') {
+    const secretBackend = getSelectedStorageBackend(getSafeStorage());
+    console.log('Linux secret storage backend:', secretBackend);
+    console.log(
+      'Linux ozone-platform:',
+      app.commandLine.getSwitchValue('ozone-platform') || '(unset)',
+      'hint:',
+      app.commandLine.getSwitchValue('ozone-platform-hint') || '(unset)',
+    );
+    console.log('Linux environment diagnostics:', JSON.stringify(buildLinuxEnvironmentDiagnostics({
+      env: process.env,
+      safeStorage: getSafeStorage(),
+      commandLine: app.commandLine,
+      argv: process.argv,
+    })));
+    // Packaging smoke hook. It exits the app, so it must be a deliberate
+    // opt-in: an env var alone would let anything in the user's environment
+    // terminate a packaged install at startup. Release builds require the
+    // explicit AVANEVIS_ALLOW_SMOKE_HOOKS acknowledgement as well; dev and CI
+    // set only the first var.
+    const smokeRequested = process.env.AVANEVIS_SAFESTORAGE_SMOKE === '1';
+    const smokeAllowed = !app.isPackaged || process.env.AVANEVIS_ALLOW_SMOKE_HOOKS === '1';
+    if (smokeRequested && !smokeAllowed) {
+      console.warn(
+        'AVANEVIS_SAFESTORAGE_SMOKE ignored in a packaged build:'
+        + ' set AVANEVIS_ALLOW_SMOKE_HOOKS=1 to enable the packaging smoke hook.',
+      );
+    }
+    if (smokeRequested && smokeAllowed) {
+      const smoke = runLinuxSafeStorageSmoke(getSafeStorage());
+      const {
+        getDiarizationAvailability,
+        getSummaryAvailability,
+      } = require('./ai-addon-state');
+      const noticesPath = getLegalNoticesPath({
+        resourcesPath: process.resourcesPath,
+        devRoot: null,
+      });
+      const payload = {
+        ...smoke,
+        pythonExe: pythonConfig.pythonExe,
+        ffmpegPath: pythonConfig.ffmpegPath,
+        backendPath: pythonConfig.backendPath,
+        transcriberModule: getTranscriberModule(process.platform, process.arch),
+        diarization: getDiarizationAvailability('linux', 'x64'),
+        summary: getSummaryAvailability('linux', 'x64'),
+        legalNoticesPath: noticesPath,
+        legalNoticesReadable: Boolean(noticesPath && fs.existsSync(noticesPath)),
+      };
+      console.log('AVANEVIS_SAFESTORAGE_SMOKE', JSON.stringify(payload));
+      app.exit(payload.ok && payload.legalNoticesReadable && payload.diarization.supported === false && payload.summary.supported === false ? 0 : 1);
+      return;
+    }
+  }
   console.log('==============================');
 
   // Set cache paths to userData to avoid permission issues

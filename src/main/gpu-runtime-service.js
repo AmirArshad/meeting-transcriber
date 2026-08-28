@@ -26,6 +26,7 @@ const {
   AI_COMPUTE_TIMEOUT_MS,
   runWallClockComputeAction,
 } = require('../main-process-helpers');
+const { buildUnsupportedPlatformCudaStatus, getUnsupportedPlatformCudaProbeError } = require('../main-process/cuda-runtime-helpers');
 
 /**
  * @param {object} deps
@@ -273,6 +274,16 @@ function createGpuRuntimeService(deps) {
   }
 
   async function enrichCheckCudaStatus(parsedStatus) {
+    if (parsedStatus && parsedStatus.statusCode === 'unsupportedPlatform') {
+      return {
+        ...parsedStatus,
+        version: null,
+        packages: [],
+        pythonVersion: null,
+        pythonSupportedForInstall: false,
+        pythonExecutable: null,
+      };
+    }
     try {
       const pythonVersion = await getCachedActivePythonVersion();
       return {
@@ -346,18 +357,7 @@ function createGpuRuntimeService(deps) {
   function checkCudaRuntimeStatus({ registerProcess = (proc) => proc } = {}) {
     return new Promise((resolve) => {
       if (process.platform !== 'win32') {
-        resolve({
-          installed: false,
-          deviceAvailable: false,
-          runtimeLoadable: false,
-          missingLibraries: [],
-          runtime: 'ctranslate2',
-          statusCode: 'unsupportedPlatform',
-          supportedProfiles: getSupportedTranscriptionCudaProfileIds(),
-          unsupportedDetectedProfiles: [],
-          recommendedInstallProfile: getSupportedTranscriptionCudaProfileIds()[0] || 'cuda12',
-          error: 'CUDA runtime checks are only supported on Windows.',
-        });
+        resolve(buildUnsupportedPlatformCudaStatus(process.platform));
         return;
       }
 
@@ -416,18 +416,7 @@ function createGpuRuntimeService(deps) {
       : (proc) => proc;
 
     if (process.platform !== 'win32') {
-      const finalStatus = await enrichCheckCudaStatus({
-        installed: false,
-        deviceAvailable: false,
-        runtimeLoadable: false,
-        missingLibraries: [],
-        runtime: 'ctranslate2',
-        statusCode: 'unsupportedPlatform',
-        supportedProfiles: getSupportedTranscriptionCudaProfileIds(),
-        unsupportedDetectedProfiles: [],
-        recommendedInstallProfile: getSupportedTranscriptionCudaProfileIds()[0] || 'cuda12',
-        error: 'CUDA runtime checks are only supported on Windows.',
-      });
+      const finalStatus = await enrichCheckCudaStatus(buildUnsupportedPlatformCudaStatus(process.platform));
       return {
         success: false,
         action: 'none',
@@ -506,18 +495,7 @@ function createGpuRuntimeService(deps) {
       assertTrustedRendererSender(event);
       try {
         if (process.platform !== 'win32') {
-          return enrichCheckCudaStatus({
-            installed: false,
-            deviceAvailable: false,
-            runtimeLoadable: false,
-            missingLibraries: [],
-            runtime: 'ctranslate2',
-            statusCode: 'unsupportedPlatform',
-            supportedProfiles: getSupportedTranscriptionCudaProfileIds(),
-            unsupportedDetectedProfiles: [],
-            recommendedInstallProfile: getSupportedTranscriptionCudaProfileIds()[0] || 'cuda12',
-            error: 'CUDA runtime checks are only supported on Windows.',
-          });
+          return enrichCheckCudaStatus(buildUnsupportedPlatformCudaStatus(process.platform));
         }
         // Avoid caching a transient "not loadable" probe while pip is rewriting DLLs.
         // When no cache exists yet (first-run install), still defer — return a
@@ -573,6 +551,11 @@ function createGpuRuntimeService(deps) {
 
     ipcMain.handle('install-gpu', async (event, options = {}) => {
       assertTrustedRendererSender(event);
+      if (process.platform !== 'win32') {
+        const error = new Error(getUnsupportedPlatformCudaProbeError(process.platform));
+        error.code = 'unsupportedPlatform';
+        throw error;
+      }
       return runGpuRuntimeAction(async (registerProcess) => {
         const requestedMode = String(options && options.mode ? options.mode : 'install').trim().toLowerCase();
         const ensureResult = await ensureCompatibleGpuRuntime({
@@ -589,6 +572,11 @@ function createGpuRuntimeService(deps) {
 
     ipcMain.handle('ensure-compatible-gpu-runtime', async (event, options = {}) => {
       assertTrustedRendererSender(event);
+      if (process.platform !== 'win32') {
+        const error = new Error(getUnsupportedPlatformCudaProbeError(process.platform));
+        error.code = 'unsupportedPlatform';
+        throw error;
+      }
       return runGpuRuntimeAction((registerProcess) => ensureCompatibleGpuRuntime({
         ...options,
         registerProcess,
@@ -597,6 +585,11 @@ function createGpuRuntimeService(deps) {
 
     ipcMain.handle('uninstall-gpu', async (event) => {
       assertTrustedRendererSender(event);
+      if (process.platform !== 'win32') {
+        const error = new Error(getUnsupportedPlatformCudaProbeError(process.platform));
+        error.code = 'unsupportedPlatform';
+        throw error;
+      }
       return runGpuRuntimeAction((registerProcess) => new Promise((resolve, reject) => {
         const python = registerProcess(spawnTrackedPython(buildTranscriptionCudaUninstallArgs()));
 

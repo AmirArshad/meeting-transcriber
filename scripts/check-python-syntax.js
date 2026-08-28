@@ -6,17 +6,22 @@
  */
 
 const { spawnSync } = require('node:child_process');
+const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.resolve(__dirname, '..');
 const SCRIPT = path.join(__dirname, 'check_python_syntax.py');
+const posixVenvPython = path.join(ROOT, '.venv', 'bin', 'python');
+const winVenvPython = path.join(ROOT, '.venv', 'Scripts', 'python.exe');
 
 const candidates = process.platform === 'win32'
   ? [
+    ...(fs.existsSync(winVenvPython) ? [{ command: winVenvPython, args: [SCRIPT] }] : []),
     { command: 'py', args: ['-3.11', SCRIPT] },
     { command: 'python', args: [SCRIPT] },
   ]
   : [
+    ...(fs.existsSync(posixVenvPython) ? [{ command: posixVenvPython, args: [SCRIPT] }] : []),
     { command: 'python3', args: [SCRIPT] },
     { command: 'python', args: [SCRIPT] },
   ];

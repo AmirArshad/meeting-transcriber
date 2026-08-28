@@ -123,6 +123,21 @@ function parseRecorderStdoutChunk(output, pendingBuffer = '') {
   return { messages, remainder };
 }
 
+function getRecorderModule(platform = process.platform) {
+  if (platform === 'darwin') {
+    return 'audio.macos_recorder';
+  }
+  if (platform === 'win32') {
+    return 'audio.windows_recorder';
+  }
+  if (platform === 'linux') {
+    return 'audio.linux_recorder';
+  }
+  throw new Error(
+    `Audio recording is not supported on ${platform}. Supported platforms: Windows, macOS, Linux`,
+  );
+}
+
 function getRecorderResultAudioPath(recordingInfo) {
   if (!recordingInfo || typeof recordingInfo !== 'object') {
     return null;
@@ -501,6 +516,7 @@ module.exports = {
   normalizeRecorderLevels,
   getRecorderCloseAction,
   getRecorderEventAction,
+  getRecorderModule,
   findRecorderResultPayload,
   getRecorderResultAudioPath,
   normalizeRecordingStopPayload,

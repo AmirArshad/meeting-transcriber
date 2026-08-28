@@ -14,6 +14,7 @@ const OUTPUT_PATH = path.join(REPO_ROOT, 'legal', 'PYTHON-BUNDLED-PACKAGES.md');
 const REQUIREMENTS_FILES = [
   path.join(REPO_ROOT, 'requirements-windows-build.txt'),
   path.join(REPO_ROOT, 'requirements-macos-build.txt'),
+  path.join(REPO_ROOT, 'requirements-linux-build.txt'),
 ];
 
 function parsePinnedRequirements(filePath) {

@@ -16,6 +16,7 @@ const {
   buildSpeakrsCliCargoArgs,
   getSpeakrsCargoFeatures,
   getSpeakrsCargoTargetTriple,
+  getSpeakrsResourceManifestTarget,
   getSpeakrsCliBinaryName,
   loadSpeakrsOrtCompilePins,
   manifestsMatch,
@@ -266,7 +267,7 @@ test('resource manifest fingerprints the speakrs crate, toolchain, entitlements,
   assert.equal(manifest.inputs.speakrsOrtCompilePins.length, 64);
   assert.equal(manifest.inputs.speakrsValidateWav.length, 64);
   assert.equal(manifest.inputs.inheritEntitlements.length, 64);
-  assert.equal(manifest.inputs.speakrsCargoTarget, getSpeakrsCargoTargetTriple());
+  assert.equal(manifest.inputs.speakrsCargoTarget, getSpeakrsResourceManifestTarget());
   assert.ok(Array.isArray(manifest.inputs.speakrsSources));
   assert.ok(manifest.inputs.speakrsSources.some((entry) => entry.path === 'src/main.rs'));
 
@@ -522,6 +523,15 @@ test('macOS packaged-app verifier requires arm64 speakrs-cli and the canonical f
   assert.match(MACOS_VERIFY_SCRIPT, /test -s "\$SPEAKRS_WAV_BIN"/);
   assert.match(MACOS_VERIFY_SCRIPT, /must not ship a duplicate Speakrs fixture under backend\/diarization\/fixtures/);
   assert.equal(MACOS_VERIFY_SCRIPT.includes('SPEAKRS_WAV_BIN" && ! -f "$SPEAKRS_WAV_BACKEND'), false);
+});
+
+
+test('macOS packaged-app verifier rejects an invalid app seal without mutating it with pycache', () => {
+  assert.match(MACOS_VERIFY_SCRIPT, /codesign --verify --deep --strict --verbose=2 "\$APP_PATH"/);
+  assert.match(MACOS_VERIFY_SCRIPT, /PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="\$BACKEND_PATH"/);
+  // PR builds otherwise skip signing, which leaves the incomplete linker seal
+  // that Gate B closed (codesign --deep --strict: no resources).
+  assert.match(CI_WORKFLOW, /CSC_FOR_PULL_REQUEST:\s*true/);
 });
 
 

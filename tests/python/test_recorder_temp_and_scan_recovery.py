@@ -14,6 +14,7 @@ sys.path.insert(0, str(BACKEND))
 from audio.recorder_temp_paths import (  # noqa: E402
     MIN_RECOVERABLE_PCM_BYTES,
     RECORDER_TEMP_PCM_SUFFIX,
+    build_final_opus_path_for_output,
     build_recorder_temp_pcm_path,
     build_stable_wav_path_for_output,
     is_recorder_temp_pcm_path,
@@ -40,6 +41,38 @@ class RecorderTempPathTests(unittest.TestCase):
         self.assertFalse(path.endswith(".opus"))
         self.assertTrue(
             build_stable_wav_path_for_output(r"C:\Users\me\recordings\recording_2026.opus").endswith(".wav")
+        )
+
+    def test_build_temp_path_posix_linux_stem(self):
+        path = build_recorder_temp_pcm_path("/home/user/.config/AvaNevis/recordings/recording_linux.opus")
+        self.assertTrue(path.endswith(RECORDER_TEMP_PCM_SUFFIX))
+        self.assertIn("recording_linux", path)
+        self.assertTrue(
+            build_stable_wav_path_for_output(
+                "/home/user/.config/AvaNevis/recordings/recording_linux.opus"
+            ).endswith(".wav")
+        )
+
+    def test_final_opus_path_only_rewrites_the_extension(self):
+        # str.replace('.wav', '.opus') rewrites every occurrence, so a
+        # recordings root containing '.wav' produced a mangled candidate path.
+        # Compare Path objects so native separators (Windows CI) still match.
+        dotted_parent = build_final_opus_path_for_output(
+            "/home/user/my.wav.archive/recording_1.wav"
+        )
+        self.assertEqual(
+            Path(dotted_parent),
+            Path("/home/user/my.wav.archive/recording_1.opus"),
+        )
+        self.assertEqual(Path(dotted_parent).parent.name, "my.wav.archive")
+        self.assertEqual(
+            Path(build_final_opus_path_for_output("/home/user/recordings/meeting.v2.wav")),
+            Path("/home/user/recordings/meeting.v2.opus"),
+        )
+        self.assertTrue(
+            build_final_opus_path_for_output(
+                r"C:\Users\me\recordings\recording_2026.wav"
+            ).endswith(".opus")
         )
 
     def test_is_recorder_temp_recognizes_current_and_legacy(self):
@@ -157,6 +190,22 @@ class ScanImportTempRecoveryTests(unittest.TestCase):
             other.write_bytes(b"ok")
             selected = select_scannable_audio_files(recordings_dir)
             self.assertEqual([path.name for path in selected], [other.name])
+
+    def test_select_scannable_skips_linux_v1_capture_session(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            recordings_dir = Path(temp_dir)
+            meeting = recordings_dir / "meeting_20260825_120000.opus"
+            meeting.write_bytes(b"opus")
+            capture_dir = recordings_dir / "recording_linux.capture"
+            capture_dir.mkdir()
+            (capture_dir / "manifest.json").write_text(
+                '{"processingProfile":"linux-v1","state":"recording"}',
+                encoding="utf-8",
+            )
+            (capture_dir / "mic_0000.pcm.part").write_bytes(b"\x00" * 16)
+            (capture_dir / "inside.wav").write_bytes(b"RIFF")
+            selected = select_scannable_audio_files(recordings_dir)
+            self.assertEqual([path.name for path in selected], [meeting.name])
 
 
 if __name__ == "__main__":

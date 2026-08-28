@@ -50,6 +50,7 @@ const EXPECTED_RENDERER_GLOBALS = [
   'domHelpers',
   'meetingHelpers',
   'gpuSettingsHelpers',
+  'platformSelectionHelpers',
   'canvasHelpers',
 ];
 
@@ -65,6 +66,7 @@ const EXPECTED_SCRIPT_ORDER = [
   'dom-helpers.js',
   'meeting-helpers.js',
   'gpu-settings-helpers.js',
+  'platform-selection-helpers.js',
   'canvas-helpers.js',
   'app.js',
 ];
@@ -85,6 +87,9 @@ const EXTRACTED_PURE_HELPER_NAMES = [
   'meetingIdsEqual',
   'isGpuRuntimeActionBusyError',
   'formatGpuRuntimeBusyAlertMessage',
+  'inferRendererHostFamily',
+  'getEmptyMicrophoneDeviceGuidance',
+  'getRecordingPermissionFailureGuidance',
   'roundedBar',
   'getIdleStatusPillText',
   'buildActivityRows',
@@ -161,6 +166,7 @@ test('app.js no longer defines extracted pure helpers inline', () => {
   assert.match(appSource, /window\.domHelpers/);
   assert.match(appSource, /window\.meetingHelpers/);
   assert.match(appSource, /window\.gpuSettingsHelpers/);
+  assert.match(appSource, /window\.platformSelectionHelpers/);
   assert.match(appSource, /window\.canvasHelpers/);
 });
 

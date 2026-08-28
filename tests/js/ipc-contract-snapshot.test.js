@@ -179,6 +179,7 @@ const EXPECTED_MAIN_PROCESS_HELPER_EXPORTS = [
   'getQuitInterceptState',
   'getRecorderCloseAction',
   'getRecorderEventAction',
+  'getRecorderModule',
   'getRecorderResultAudioPath',
   'getRecordingStopTimeout',
   'getRequiredCudaRuntimeDlls',

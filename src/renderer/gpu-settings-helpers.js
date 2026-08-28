@@ -39,8 +39,35 @@
     );
   }
 
+  function resolveGpuSettingsSurface(platform, arch) {
+    if (platform === 'darwin') {
+      return arch === 'arm64' ? 'macos-metal' : 'macos-intel-cpu';
+    }
+    if (platform === 'win32') {
+      return 'windows-cuda';
+    }
+    return 'unsupported';
+  }
+
+  function getUnsupportedGpuSettingsCopy(platform) {
+    if (platform === 'linux') {
+      return {
+        description: 'Linux GPU acceleration is not available yet. Transcription uses the CPU faster-whisper runtime.',
+        statusLabel: 'Not available yet',
+        diagnostics: 'CUDA and Metal GPU setup are not offered on Linux in this release.',
+      };
+    }
+    return {
+      description: 'GPU acceleration is not supported on this platform.',
+      statusLabel: 'Unsupported',
+      diagnostics: 'No GPU runtime is configured for this operating system.',
+    };
+  }
+
   return {
     isGpuRuntimeActionBusyError,
     formatGpuRuntimeBusyAlertMessage,
+    resolveGpuSettingsSurface,
+    getUnsupportedGpuSettingsCopy,
   };
 }));

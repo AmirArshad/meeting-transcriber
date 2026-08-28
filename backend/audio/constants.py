@@ -14,6 +14,8 @@ DEFAULT_CHANNELS = 2  # Stereo output
 # Buffer sizes
 DEFAULT_CHUNK_SIZE = 4096  # frames per buffer
 WINDOWS_CHUNK_MULTIPLIER = 4  # Larger buffers on Windows for background resilience
+# Pulse/PipeWire typically delivers ~1024 frames @ 48 kHz (~21 ms).
+LINUX_CHUNK_SIZE = 1024
 
 # Preroll (device warm-up)
 DEFAULT_PREROLL_SECONDS = 1.5  # Discard first 1.5s for device warm-up

@@ -70,6 +70,7 @@ function isSameMeetingSummarySidecar({ filePath, recordingsDir, transcriptBase }
  * @param {Function} deps.assertSafeExistingSegmentsPath
  * @param {Function} deps.terminateProcessBestEffort
  * @param {Function} deps.summarizeSummaryValidationError
+ * @param {NodeJS.Platform} [deps.platform]
  * @param {Function} [deps.isQuitCommitted]
  * @param {Function} [deps.checkAiAddonSetupStatus]
  * @param {Function} [deps.getSummaryArtifactForPlatform]
@@ -103,6 +104,7 @@ function createSummaryService(deps) {
     assertSafeExistingSegmentsPath,
     terminateProcessBestEffort,
     summarizeSummaryValidationError,
+    platform = process.platform,
     isQuitCommitted = () => false,
     checkAiAddonSetupStatus = defaultCheckAiAddonSetupStatus,
     getSummaryArtifactForPlatform = defaultGetSummaryArtifactForPlatform,
@@ -169,6 +171,33 @@ function createSummaryService(deps) {
 
       if (activeSummaryGeneration) {
         throw new Error('Summary generation is already running. Cancel it or wait for it to finish.');
+      }
+
+      // Unsupported platforms must fail closed before the meeting-manager
+      // preflight. Keep the established Windows/macOS meeting-first ordering so
+      // their error precedence, cancellation, and checksum timing do not change.
+      if (platform !== 'win32' && platform !== 'darwin') {
+        const platformStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions({
+          verifyChecksums: true,
+          verifyChecksumsIfChanged: true,
+        }));
+        const unsupportedSummary = platformStatus && platformStatus.features && platformStatus.features.summary;
+        if (unsupportedSummary && unsupportedSummary.status === 'unsupported') {
+          throw new Error(
+            (unsupportedSummary.availability && unsupportedSummary.availability.reason)
+            || unsupportedSummary.error
+            || 'Local summaries are not supported on this platform.',
+          );
+        }
+
+        // The status probe is async. Close a future supported non-Windows/non-macOS
+        // concurrent-start race before claiming the active slot.
+        if (isQuitCommitted()) {
+          throw new Error('Cannot generate a summary while the app is quitting.');
+        }
+        if (activeSummaryGeneration) {
+          throw new Error('Summary generation is already running. Cancel it or wait for it to finish.');
+        }
       }
 
       const controller = new AbortController();
@@ -280,6 +309,14 @@ function createSummaryService(deps) {
       if (controller.signal.aborted) {
         clearActiveSummaryGeneration();
         throw createAiAddonCancelError('Summary generation was canceled.');
+      }
+      if (aiStatus.features.summary.status === 'unsupported') {
+        clearActiveSummaryGeneration();
+        throw new Error(
+          (aiStatus.features.summary.availability && aiStatus.features.summary.availability.reason)
+          || aiStatus.features.summary.error
+          || 'Local summaries are not supported on this platform.',
+        );
       }
       if (aiStatus.features.summary.status !== 'ready' || !aiStatus.features.summary.setupComplete) {
         clearActiveSummaryGeneration();

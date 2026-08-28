@@ -23,8 +23,9 @@ Project skills live in `.agents/skills/*/SKILL.md`; see `.agents/README.md` for 
 ## Platform targets
 
 - Windows 10/11 x64; macOS 13+ runtime, packaged macOS builds are Apple Silicon (`arm64`) only.
+- Linux Core Beta (Omarchy first) is merged to `master` (`docs/initiatives/LINUX_SUPPORT.md`). Pulse/PipeWire capture uses opaque device IDs (`pulse-source:<name>`, `pulse-monitor:<name>`, `pulse-sink:<name>`, `none`); renderer and IPC must not `parseInt` them. Packaged x86_64 AppImage + pacman + experimental `.deb` (`AvaNevis-Setup-*`, electron-builder 26.x `toolsets.appimage` `1.0.2`, no host fuse2). Transcription is CPU `faster-whisper`. Add-ons stay greyed fail-closed `unsupported`. UI copy must not advertise Linux CUDA or add-ons as ready. Phase 3 60-minute soak was cancelled 2026-08-27 (not run). Gate B closed 2026-08-28; the release workflow includes all three Linux artifacts. Omarchy 4 remains the only **Supported** target; Ubuntu, vanilla Arch, CachyOS, Fedora Workstation, SteamOS Desktop Mode, and extra desktops are **experimental betas** (`docs/guides/LINUX_EXPERIMENTAL.md`) with no hardware claim. The Ubuntu desktop recording/`safeStorage` smoke remains open, as do a visual tray-icon check and unplugged-endpoint filtering on hardware (both were fixed in the 2026-08-28 pre-merge review). Do not start Phases 6–9.
 - `src/main.js` keeps a `faster-whisper` fallback for Intel Macs in dev logic, but packaged builds do not target Intel.
-- Windows transcription: `faster-whisper`. Apple Silicon: `lightning-whisper-mlx`.
+- Windows transcription: `faster-whisper`. Apple Silicon: `lightning-whisper-mlx`. Linux Core Beta: `faster-whisper` on **CPU** only.
 
 ## End-to-end flow
 
@@ -61,14 +62,19 @@ Phase 0 source-scan tests treat `src/main.js` + `src/main/**/*.js` as one combin
 
 Recorder **control flow** rides structured **stdout** JSON — `levels`, `event`, `warning`, `error` — parsed line-by-line by `parseRecorderStdoutChunk`. **stderr is diagnostics-only and must never drive startup stages, warnings, errors, or recording-start state.**
 
-Change startup/progress in `backend/audio/windows_recorder.py` or `macos_recorder.py` and you must update, together: `src/main/recorder-service.js`, `src/main-process/recorder-output-helpers.js` (and the `src/main-process-helpers.js` re-export), `tests/js/main-process-helpers.test.js`, `tests/js/recorder-event-contract.test.js`. The migration in `docs/completed/json-based-events.md` is complete; do not partially revert it.
+Change startup/progress in `backend/audio/windows_recorder.py`, `macos_recorder.py`, or `linux_recorder.py` and you must update, together: `src/main/recorder-service.js`, `src/main-process/recorder-output-helpers.js` (and the `src/main-process-helpers.js` re-export), `tests/js/main-process-helpers.test.js`, `tests/js/recorder-event-contract.test.js`. The migration in `docs/completed/json-based-events.md` is complete; do not partially revert it.
 
 - Stop-stage events, both platforms: `post_processing_started`, `audio_normalizing`, `audio_mixing`, `audio_encoding`, `post_processing_complete` — forwarded as `recording-progress`.
 - Stdin control is **exact-token only** (`line.strip().lower()` equals `stop` or `cancel`) — not a substring match.
-- Final JSON: Windows emits `audioPath`, macOS emits `outputPath`. Stop parsing accepts both.
+- Final JSON: Windows emits `audioPath`, macOS and Linux emit `outputPath`. Stop parsing accepts both.
 - Stop/finalize **failures must still emit a structured `success:false` payload** carrying a recoverable path when a final or temp file exists. Never exit with only a stderr traceback.
 - Windows: set `_final_output_path` immediately after compress succeeds, guard temp unlink with `OSError`, and emit the success JSON **before** `cleanup()` (`pa.terminate()`).
 - macOS: late desktop-capture failure (after a successful start) warns and continues mic-only. Only mic-thread failure is a hard stop failure.
+- Linux: late desktop loss is a vanished Pulse monitor (`source_list()` no longer lists the selected `pulse-monitor:`). SoundCard may keep returning silence with no exception — poll `source_list()` over **one long-lived** watch client (never a new `pulsectl.Pulse` per poll) and warn. Unlike macOS, a late desktop loss **keeps the desktop frames already committed** and mixes them truncated at the last real frame: switching audio output mid-meeting is routine on Linux, so `_close_capture_spools_for_mix` excludes the desktop track only on a *spool* failure, never on a capture-side loss. The warning copy must say the earlier desktop audio is kept. Mic-thread failure is fatal. Desktop startup failure is warning + mic-only.
+- Linux capture threads block inside `recorder.record()`, so stop can close and commit a spool underneath them. Re-check `_get_running()` after every `record()` return **and** after an `append()` that returns `False` — otherwise a closed-at-stop spool is misreported as a writer stall, `stop_recording` sees an async failure, and finalization is skipped on an otherwise complete meeting. For the same reason a capture-thread exception raised **after** stop/cancel already cleared the running flag is teardown noise (usually the SoundCard recorder's `__exit__`): log it to stderr and return. Setting `_error_event` there makes `stop_recording` take the async-failure branch *after* the spools are closed, skipping `finalize_capture` and reporting `RECORDING_THREAD_FAILED` with `duration: 0` on a complete meeting. The desktop equivalent must not emit a phantom `DESKTOP_RECORDING_FAILED` — on Discard it would contradict the `cancelled: true` result.
+- The Linux vanished-monitor watch client is shared mutable native state. `_close_watch_pulse()` must hold `_watch_pulse_lock` **across** `close()`, and `_watch_source_names()` must hold it across `source_list()` — stop and cancel only join capture threads with a bounded timeout, so a stalled thread can still be inside libpulse when the main thread tears the client down, and freeing a mainloop under an in-flight call is a native use-after-free, not a catchable error. `_close_watch_pulse(final=True)` latches the client closed so a late loop iteration cannot reconnect; the desktop loop must re-check `_get_running()` / `_desktop_give_up` **before** the vanish probe so stop never emits `DESKTOP_MONITOR_VANISHED` on the way out.
+- Linux device resolution is exact-match only: SoundCard's `get_microphone()` matches by substring, so a fallback that resolves to a different `id`/`name` than the requested Pulse source must raise rather than silently record the wrong device.
+- Pulse port availability comes back as `pulsectl.EnumValue`, which has **no** `.name`, is not an `int` subclass, and reprs as `<EnumValue available=no>`. `is_pulse_port_unavailable` reads `_value` (or compares via `EnumValue.__eq__` against native strings) — a `.name`/`str()` probe silently returns `False` for every real port and disables unplugged-endpoint filtering. Test it against `PulsePortAvailableEnum`, not only hand-written fakes.
 - Live stdout may stash a `result` payload for unexpected-exit recovery. There is no legacy `temp.opus` stop fallback.
 
 ### Recording data-loss guards
@@ -91,7 +97,7 @@ Change startup/progress in `backend/audio/windows_recorder.py` or `macos_recorde
 
 Mic and desktop audio are recorded **separately and mixed after stop** — deliberately. Do not reintroduce real-time mixing without an intentional redesign.
 
-Both recorders always spill raw capture to durable `{stem}.capture/` track spools during recording; stop finalizes via bounded `finalize_capture`. Interrupted sessions recover through `audio.capture_recovery`. Whole-session RAM mix (and its `MemoryError` path) is obsolete.
+Platform recorders always spill raw capture to durable `{stem}.capture/` track spools during recording; stop finalizes via bounded `finalize_capture` (`windows-v1`, `macos-v1`, `linux-v1`). Interrupted sessions recover through `audio.capture_recovery`. Whole-session RAM mix (and its `MemoryError` path) is obsolete.
 
 Preserve: 48 kHz, stereo, mono-compatible stereo for transcription downmixes, Opus via ffmpeg, gentle mic enhancement, faithful desktop audio, and mic-only degradation rather than discarding the microphone recording.
 
@@ -207,11 +213,15 @@ Touching the helper pipeline means verifying: it still builds from `swift/AudioC
 
 Keep aligned when bundled runtime locations or prepared-resource inputs change: `build/prepare-resources.js`, `build/download-manifest.js` (pinned URLs + checksums, with `tests/js/build-download-manifest.test.js`), `package.json` `extraResources`, and path resolution in `src/main.js`. Generated `build/resources/resource-manifest.json` must keep invalidating stale prepared resources. `prepare-resources.js` builds and stages `Resources/bin/speakrs-cli[.exe]` plus the validation fixture WAV; fail the build if that binary is missing. `ort` compile-time downloads stay pinned in `native/speakrs-cli/ort-compile-pins.json` — **not** in `download-manifest.js`. Model packs and the Windows ORT 1.27.1 archive are setup-time, not installer-bundled.
 
-Windows packaged Python relies on `python311._pth` containing `../backend`; dev relies on `PYTHONPATH` set in `src/main.js`.
+Windows packaged Python relies on `python311._pth` containing `../backend`; dev relies on `PYTHONPATH` set in `src/main.js`. Packaged macOS/Linux python-build-standalone **does** honor `PYTHONPATH`.
 
-**Packaged-only path hardening.** Packaged apps set `process.env.AVANEVIS_PACKAGED=1` at main-process startup (so worker threads inherit it) and inject it via `buildPythonEnv()` for every Python child. When set, `backend/audio/swift_audio_capture.py` must **not** call `shutil.which("audiocapture-helper")` — only the bundled `Resources/bin/audiocapture-helper` or explicit dev build paths are valid. Summary tar extraction (`resolvePreferredTarExecutable`) likewise prefers absolute system tar over PATH. Dev/`npm start` leaves the var unset so PATH lookup still works.
+**Packaged-only path hardening.** Packaged apps set `process.env.AVANEVIS_PACKAGED=1` at main-process startup (so worker threads inherit it) and inject it via `buildPythonEnv()` for every Python child. Packaged `buildPythonEnv()` must not inherit ambient `PYTHONPATH`, `PYTHONHOME`, or `PYTHONUSERBASE`, and must set `PYTHONNOUSERSITE=1`. Caller-supplied `PYTHONPATH` extras (managed add-on site-packages) may still prepend the bundled backend path. When set, `backend/audio/swift_audio_capture.py` must **not** call `shutil.which("audiocapture-helper")` — only the bundled `Resources/bin/audiocapture-helper` or explicit dev build paths are valid. Summary tar extraction (`resolvePreferredTarExecutable`) likewise prefers absolute system tar over PATH. Dev/`npm start` leaves the var unset so PATH lookup still works.
 
 **Release asset naming.** `src/updater.js` identifies installers by filename pattern. Change artifact naming in `package.json` or `.github/workflows/build-release.yml` and you must update `src/updater.js` too.
+
+**Tray assets.** `resolveTrayImageFileName` (`src/main/recording-presence-service.js`) owns the per-platform tray image. Linux must use PNGs (`iconTrayLinux.png`, `iconTrayLinuxRecording.png`) — `nativeImage.createFromPath` cannot decode `.ico` outside Windows and returns an **empty** image, while `new Tray(emptyImage)` still succeeds on Linux, so the failure mode is a registered-but-invisible SNI item rather than an exception. Any new tray image must also be added to `package.json` `extraResources`. Regeneration commands are in `docs/development/MACOS_ICONS.md`.
+
+**macOS signing identity.** `build.mac.identity` is pinned to `"-"` so certificate-less builds ad-hoc sign the whole bundle (Gate B). Because an explicit identity beats `CSC_LINK`/keychain discovery, `npm run build:mac` first runs `scripts/check-mac-signing-identity.js`, which fails the build if that pin coexists with real signing credentials. Override with `-c.mac.identity=...`, or acknowledge with `AVANEVIS_ALLOW_ADHOC_MAC_SIGNING=1`.
 
 ### Renderer conventions
 
@@ -221,7 +231,7 @@ Non-obvious: the saved `.md` transcript is the source of truth (the viewer rende
 
 ### Python backend
 
-Spawned per-invocation by `src/main/` services — not a long-running server. Platform split is explicit and intentional: `windows_recorder.py` vs `macos_recorder.py`, `faster_whisper_transcriber.py` vs `mlx_whisper_transcriber.py`. Shared stdout emitters live in `backend/audio/recorder_stdout.py`; platform recorders keep thin `_send_*` wrappers so the Electron contract stays stable. Module layout detail: `docs/development/BACKEND.md`.
+Spawned per-invocation by `src/main/` services — not a long-running server. Platform split is explicit and intentional: `windows_recorder.py` vs `macos_recorder.py` vs `linux_recorder.py`, `faster_whisper_transcriber.py` vs `mlx_whisper_transcriber.py`. Shared stdout emitters live in `backend/audio/recorder_stdout.py`; platform recorders keep thin `_send_*` wrappers so the Electron contract stays stable. Module layout detail: `docs/development/BACKEND.md`.
 
 **Windows gotcha:** manifest-less `*.capture` cleanup must probe `session.lock` with `timeout=0`, re-check `manifest.json`, **release the lock, then** `rmtree`. Releasing before the delete is mandatory on Windows — an open lock file cannot be removed.
 
@@ -229,8 +239,8 @@ Spawned per-invocation by `src/main/` services — not a long-running server. Pl
 
 Each of these fans out further than it looks.
 
-- **Recorder process output** → both recorders, `src/main/recorder-service.js`, `src/main-process/recorder-output-helpers.js` (+ facade), `tests/js/recorder-event-contract.test.js`, and any renderer UI state keyed on that progress.
-- **Saved meeting filenames or locations** → `recorder_temp_paths.py`, both recorders, compressor input-format handling, `backend/meeting_manager.py`, `backend/meetings/scan_import.py`, delete logic, renderer playback assumptions, `tests/python/test_recorder_temp_and_scan_recovery.py`.
+- **Recorder process output** → Windows/macOS/Linux recorders, `src/main/recorder-service.js`, `src/main-process/recorder-output-helpers.js` (+ facade), `tests/js/recorder-event-contract.test.js`, and any renderer UI state keyed on that progress.
+- **Saved meeting filenames or locations** → `recorder_temp_paths.py`, Windows/macOS/Linux recorders, compressor input-format handling, `backend/meeting_manager.py`, `backend/meetings/scan_import.py`, delete logic, renderer playback assumptions, `tests/python/test_recorder_temp_and_scan_recovery.py`.
 - **Model download behavior** → `src/main.js`, the renderer first-time setup flow, transcriber `--preload` CLI behavior, and build logic if bundled/offline semantics change.
 - **AI catalog or runtime pins** → `src/ai-addon-state.js`, `src/ai-addon-setup.js` if cache/setup semantics move, `docs/development/LOCAL_AI_MODEL_CATALOG.md`, `todo.md` if product defaults change, `tests/js/ai-addon-*.test.js`. Adding or renaming an engine also updates Settings About credits (`src/renderer/index.html`), `THIRD_PARTY_NOTICES.md`, and `tests/js/legal-notices.test.js`.
 
@@ -248,6 +258,8 @@ Check commands per toolchain — full setup lives in `README.md`:
 
 Hardware-dependent paths are covered by manual checklists, not CI: `tests/manual/recording-smoke-checklist.md` and `tests/manual/local-ai-addons-checklist.md`. Targeted adversarial review prompts: `docs/development/ADVERSARIAL_REVIEW_PROMPTS.md`.
 
+**Fakes must model the real dependency.** A green suite is not evidence when the test double is shaped more conveniently than the library. The 2026-08-28 Linux pre-merge review found three defects hidden this way — `is_pulse_port_unavailable` matched every `FakePort` and no real `pulsectl.EnumValue`, and no tray test ever decoded an actual image file. When a helper interprets a third-party object or a shipped asset, assert against the real type (`pytest.importorskip`) or the real bytes, not only a hand-written stand-in.
+
 CI runs JS + Python tests, recursive backend `compileall`, JS syntax checks, manifest tests, and packaged-build smoke — **not** full end-to-end with real audio devices. Characterization gates worth knowing about: IPC/compute-queue source scans and facade export snapshots in `tests/js/`, plus recorder stdout contracts in `tests/js/recorder-event-contract.test.js` and `tests/python/test_recorder_event_contract.py`.
 
 Non-obvious validation targets: transcript JSON shape still matches renderer expectations; complete-cache detection stays aligned across JS and Python; add-on status still covers `notConfigured`, `needsAccount`, `downloading`, `validating`, `ready`, `error`, `unsupported`; Windows speaker prompts stay behind CUDA readiness; summary setup cancellation removes partial files **without** deleting a previously valid install.
@@ -259,6 +271,7 @@ Non-obvious validation targets: transcript JSON shape still matches renderer exp
 - `src/main/recorder-service.js`, `transcription-service.js` — most IPC and subprocess orchestration.
 - `backend/audio/windows_recorder.py` — timing-, sample-rate-, and callback-sensitive.
 - `backend/audio/macos_recorder.py` — threading + native helper + permission edge cases.
+- `backend/audio/linux_recorder.py` — Pulse/PipeWire SoundCard capture; vanished-monitor poll; linux-v1 finalization.
 - `build/prepare-resources.js` — packaging-critical and platform-specific.
 
 ## Working defaults

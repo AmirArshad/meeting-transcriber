@@ -1,6 +1,6 @@
 {
   "name": "avanevis",
-  "version": "2.7.0",
+  "version": "2.8.0",
   "description": "AvaNevis private meeting recorder and local AI transcriber",
   "main": "src/main.js",
   "scripts": {
@@ -19,9 +19,12 @@
     "legal:release-assets": "node scripts/stage-release-legal-assets.js",
     "build": "npm run prepare-build && electron-builder build --win --publish never",
     "build:dir": "npm run prepare-build && electron-builder build --win --dir",
-    "build:mac": "npm run prepare-build && electron-builder build --mac --publish never",
+    "build:mac": "node scripts/check-mac-signing-identity.js && npm run prepare-build && electron-builder build --mac --publish never",
     "build:mac:dir": "npm run prepare-build && electron-builder build --mac --dir",
-    "verify:mac:packaged": "bash scripts/verify-macos-packaged-app.sh"
+    "verify:mac:packaged": "bash scripts/verify-macos-packaged-app.sh",
+    "build:linux": "npm run prepare-build && electron-builder build --linux --x64 --publish never",
+    "build:linux:dir": "npm run prepare-build && electron-builder build --linux dir --x64 --publish never",
+    "verify:linux:packaged": "node scripts/verify-linux-packaging.js"
   },
   "keywords": [
     "transcription",
@@ -30,6 +33,8 @@
     "audio"
   ],
   "author": "AvaNevis",
+  "homepage": "https://github.com/AmirArshad/meeting-transcriber",
+  "desktopName": "avanevis",
   "license": "MIT",
   "dependencies": {
     "adm-zip": "0.6.0"
@@ -62,7 +67,90 @@
       ],
       "icon": "build/icon.ico"
     },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "pacman",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icons",
+      "category": "AudioVideo",
+      "executableName": "avanevis",
+      "syncDesktopName": true,
+      "synopsis": "Private meeting recorder and local AI transcriber",
+      "maintainer": "AvaNevis <AmirArshad@users.noreply.github.com>",
+      "desktop": {
+        "entry": {
+          "Name": "AvaNevis",
+          "Comment": "Private meeting recorder and local AI transcriber",
+          "Categories": "AudioVideo;Audio;Office;Utility;"
+        }
+      },
+      "extraResources": [
+        {
+          "from": "requirements-linux.txt",
+          "to": "requirements-linux.txt"
+        },
+        {
+          "from": "requirements-linux-build.txt",
+          "to": "requirements-linux-build.txt"
+        }
+      ]
+    },
+    "pacman": {
+      "artifactName": "${productName}-Setup-${version}.pkg.tar.zst",
+      "compression": "zstd",
+      "depends": [
+        "alsa-lib",
+        "at-spi2-core",
+        "dbus",
+        "gtk3",
+        "libnotify",
+        "libpulse",
+        "libsecret",
+        "libxss",
+        "libxtst",
+        "nss",
+        "xdg-utils"
+      ]
+    },
+    "deb": {
+      "artifactName": "${productName}-Setup-${version}.deb",
+      "depends": [
+        "libasound2",
+        "libatspi2.0-0",
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libpulse0",
+        "libsecret-1-0",
+        "libuuid1",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils"
+      ],
+      "recommends": []
+    },
+    "toolsets": {
+      "appimage": "1.0.2"
+    },
     "mac": {
+      "identity": "-",
       "target": [
         {
           "target": "dmg",
@@ -198,6 +286,14 @@
       {
         "from": "build/iconRecording@2x.png",
         "to": "iconRecording@2x.png"
+      },
+      {
+        "from": "build/iconTrayLinux.png",
+        "to": "iconTrayLinux.png"
+      },
+      {
+        "from": "build/iconTrayLinuxRecording.png",
+        "to": "iconTrayLinuxRecording.png"
       },
       {
         "from": "build/recording-overlay.png",

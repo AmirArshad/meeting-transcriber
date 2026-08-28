@@ -151,7 +151,12 @@ async function installValidTestSetup(userDataDir, catalog, emitProgress) {
     downloader: async ({ destinationPath }) => fs.writeFileSync(destinationPath, ARCHIVE_BYTES),
     extractor: createTestExtractor(modelPath),
   });
-  assert.equal(status.features.diarization.status, 'ready');
+  assert.equal(
+    status.features.diarization.status,
+    'ready',
+    `diarization status was '${status.features.diarization.status}'`
+    + ` (error: ${status.features.diarization.error || 'none reported'})`,
+  );
 }
 
 function createAbortDownloader() {
@@ -362,6 +367,7 @@ test('packaged buildPythonEnv applies AVANEVIS_PACKAGED after caller overrides',
     });
     assert.equal(packagedEnv.AVANEVIS_PACKAGED, '1');
     assert.equal(packagedEnv.FOO, 'bar');
+    assert.equal(packagedEnv.PYTHONNOUSERSITE, '1');
 
     const devRuntime = createPythonRuntime({
       app: { isPackaged: false },

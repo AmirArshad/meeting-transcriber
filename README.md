@@ -5,6 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/Platform-Windows%2010%2F11-0078D6.svg)](https://www.microsoft.com/windows)
 [![macOS](https://img.shields.io/badge/Platform-macOS%2013%2B-000000.svg)](https://www.apple.com/macos)
+[![Linux](https://img.shields.io/badge/Platform-Linux%20x86__64%20Core%20Beta-FCC624.svg)](https://omarchy.org/)
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
 [![Electron](https://img.shields.io/badge/Electron-42-47848F.svg)](https://www.electronjs.org/)
 
@@ -18,16 +19,16 @@ Online meetings are a tax on memory. The good options for getting transcripts ba
 
 - **Dual capture** — microphone + desktop audio recorded in parallel, then mixed after the recording stops to keep both streams intact.
 - **Durable long recordings** — capture spills to on-disk track spools (not whole-session RAM). Stop uses bounded multi-pass finalization; interrupted sessions can be recovered after relaunch.
-- **Recording awareness** — always-visible in-app recording pill + elapsed clock; macOS menu-bar `REC` / Dock badge; Windows taskbar overlay; hourly best-effort reminders; single-instance relaunch focuses the existing window.
-- **Local transcription** — `faster-whisper` on Windows (CUDA when available), `lightning-whisper-mlx` on Apple Silicon (Metal). CPU fallback path exists for non-GPU machines.
+- **Recording awareness** — always-visible in-app recording pill + elapsed clock; macOS menu-bar `REC` / Dock badge; Windows taskbar overlay; Linux StatusNotifierItem tray (`setContextMenu` only) with a taskbar-visible fallback when tray creation fails; hourly best-effort reminders; single-instance relaunch focuses the existing window.
+- **Local transcription** — `faster-whisper` on Windows (CUDA when available) and on Linux Core Beta (**CPU** only), `lightning-whisper-mlx` on Apple Silicon (Metal). CPU fallback path exists for non-GPU Windows machines. Do not advertise Linux CUDA.
 - **Premium dark UI** — vertical icon rail, top-bar app pane, dense waveform visualizer with peak-hold and DPR-aware rendering, and a stutter-free custom audio scrubber driven by `requestAnimationFrame`.
 - **Markdown transcripts** — saved transcripts are real Markdown (timestamps, headings, lists), and the in-app viewer renders them inline with chip-style timestamp pills.
 - **Editable meetings** — rename meetings inline (history *and* immediately after recording) without renaming any files; metadata stays anchored to the meeting ID.
 - **Save As anywhere** — export any transcript through Electron's native save dialog as `.md` or `.txt`.
 - **Search and bulk-manage history** — filter the meeting list, multi-select, bulk delete, replay with synchronized audio.
 - **Recovery-friendly storage** — meetings are persisted with an atomic write + cross-process file lock, with corrupt-metadata backups (`meetings.corrupt.*.json`) and filesystem rescan/import on launch or when you refresh history (not on every list reload).
-- **Optional local AI add-ons** — speaker labels and meeting summaries can be set up after install. Speaker identification is Speakrs (token-free) or Pyannote (user's own Hugging Face token) — only one engine is installed at a time. Summaries use pinned local `llama.cpp`/GGUF artifacts and run only when the user clicks Generate Summary.
-- **One-click installer** — Windows NSIS and macOS DMG with embedded Python runtime, ffmpeg, `speakrs-cli`, and the bundled native macOS helper. No system Python required.
+- **Optional local AI add-ons** — speaker labels and meeting summaries can be set up after install on **Windows and macOS**. Speaker identification is Speakrs (token-free) or Pyannote (user's own Hugging Face token) — only one engine is installed at a time. Summaries use pinned local `llama.cpp`/GGUF artifacts and run only when the user clicks Generate Summary. On **Linux Core Beta** both cards stay visible and greyed `unsupported` (no CPU fallback; no Linux CUDA add-ons).
+- **One-click installer** — Windows NSIS and macOS DMG with embedded Python runtime, ffmpeg, `speakrs-cli`, and the bundled native macOS helper. Linux Core Beta ships an x86_64 AppImage (no host fuse2), a pacman package, and an experimental `.deb`, each with bundled Python/ffmpeg/backend and **no** `speakrs-cli`. No system Python required. The release workflow publishes all three Linux artifacts after the macOS DMG integrity gate closed on 2026-08-28.
 - **Update awareness** — checks GitHub Releases on launch and shows an in-app banner with one-click open of the release page.
 
 ## Privacy
@@ -62,7 +63,17 @@ Online meetings are a tax on memory. The good options for getting transcripts ba
 
 If right-click → Open misbehaves, run `xattr -d com.apple.quarantine /Applications/AvaNevis.app` once and relaunch.
 
-> **Upgrading from "Meeting Transcriber"?** The new app uses a fresh user-data folder (`%APPDATA%\AvaNevis` on Windows, `~/Library/Application Support/AvaNevis` on macOS), so old recordings won't auto-appear. Move the old folder's contents into the new one to keep your history. The first AvaNevis update prompt for existing Meeting Transcriber installs opens the GitHub release page in your browser instead of auto-downloading; future AvaNevis-to-AvaNevis updates restore the direct-download path.
+### Linux (x86_64 Core Beta — Omarchy first)
+
+**Supported:** Omarchy 4 x86_64. Install `AvaNevis-Setup-<version>.pkg.tar.zst`, or run the AppImage.
+
+**Experimental beta:** Ubuntu/Debian-family `.deb` or AppImage; vanilla Arch and CachyOS pacman or AppImage; Fedora Workstation and SteamOS Desktop Mode AppImage. Distro matrix and likely failures: [LINUX_EXPERIMENTAL.md](docs/guides/LINUX_EXPERIMENTAL.md). Ubuntu desktop recording has not been smoke-tested yet. The 60-minute soak was cancelled (not run).
+
+The AppImage is a static-pie runtime and does **not** need host `fuse2` / `libfuse.so.2` (kernel `/dev/fuse` + `fuse3` still mount the image). Do not treat `--appimage-extract-and-run` as the shipped default.
+
+Transcription is local CPU `faster-whisper`. Speaker identification and summaries stay visible in Settings but greyed `unsupported`.
+
+> **Upgrading from "Meeting Transcriber"?** The new app uses a fresh user-data folder (`%APPDATA%\AvaNevis` on Windows, `~/Library/Application Support/AvaNevis` on macOS, `~/.config/avanevis` on Linux), so old recordings won't auto-appear. Move the old folder's contents into the new one to keep your history. The first AvaNevis update prompt for existing Meeting Transcriber installs opens the GitHub release page in your browser instead of auto-downloading; future AvaNevis-to-AvaNevis updates restore the direct-download path.
 
 ## Develop
 
@@ -91,6 +102,16 @@ python3.11 -m venv .venv
 ./.venv/bin/python -m pip install -r requirements-macos.txt -r requirements-dev.txt
 ```
 
+### Linux `.venv` (Omarchy / Arch and other x86_64 desktops)
+
+```bash
+python3.11 -m venv .venv
+./.venv/bin/python -m pip install --upgrade pip
+./.venv/bin/python -m pip install -r requirements-linux.txt -r requirements-dev.txt
+```
+
+Linux capture uses Pulse/PipeWire (`docs/initiatives/LINUX_SUPPORT.md`). The `.venv` is for device enumeration, tests, and `npm start`. Packaged AppImage/pacman/deb builds use bundled Python 3.11 and ffmpeg (`npm run build:linux`). Speaker identification and summaries stay greyed `unsupported` on Linux. Do not advertise Linux CUDA.
+
 Then start the app from the repo root:
 
 ```bash
@@ -111,7 +132,7 @@ AI Add-ons are optional and live under Settings. They are not required for recor
 - **Expected size:** the default summary model is about 5.7 GB plus platform runtime archives. CUDA setup remains separate and can add several GB.
 - **Outputs:** derived files are saved beside recordings as `*.speakers.json`, `*.summary.json`, and `*.summary.md`; raw transcripts remain the source of truth.
 
-See [docs/development/LOCAL_AI_MODEL_CATALOG.md](docs/development/LOCAL_AI_MODEL_CATALOG.md) for catalog maintenance and [tests/manual/local-ai-addons-checklist.md](tests/manual/local-ai-addons-checklist.md) for manual validation.
+See [docs/development/LOCAL_AI_MODEL_CATALOG.md](docs/development/LOCAL_AI_MODEL_CATALOG.md) for catalog maintenance and [tests/manual/local-ai-addons-checklist.md](tests/manual/local-ai-addons-checklist.md) for manual validation. Linux Core Beta keeps both add-on cards visible and greyed; setup and Generate Summary cannot start.
 
 ### Build installers
 
@@ -146,7 +167,7 @@ For recorder changes, also run the manual smoke checklist in `tests/manual/recor
 ## How it works
 
 1. **Pick devices.** Choose a mic, a desktop-audio loopback device, the language, and a Whisper model size in the Settings tab.
-2. **Record.** Both streams are written to disk in parallel (WASAPI loopback on Windows, CoreAudio process tap via the bundled Swift helper on macOS 14.2+, with Swift/PyObjC ScreenCaptureKit fallback). The audio visualizer shows live mic + desktop levels.
+2. **Record.** Both streams are written to disk in parallel (WASAPI loopback on Windows; CoreAudio process tap via the bundled Swift helper on macOS 14.2+, with Swift/PyObjC ScreenCaptureKit fallback; Pulse/PipeWire mic + sink-monitor capture on Linux). The audio visualizer shows live mic + desktop levels.
 3. **Stop.** The recorder reports completion as structured stdout JSON (`success: true` with a file path, or `success: false` with a code and message when capture fails). The main process normalizes Windows `audioPath` and macOS `outputPath` into one `audioPath` for the UI. On success, the two streams are aligned, mixed at 48 kHz stereo, kept mono-compatible for transcription, and compressed to Opus (with WAV fallback if ffmpeg fails).
 4. **Transcribe.** The mixed audio is passed to the platform-appropriate Whisper backend; output lands as a Markdown transcript with `[mm:ss - mm:ss]` timestamp lines.
 5. **Save.** Meeting metadata, audio file, and transcript are persisted to the user-data folder under a unique meeting ID. Meetings that already exist on disk get rescanned and re-imported on launch.
@@ -207,7 +228,7 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
   - [GPU setup (CUDA)](docs/development/SETUP_GPU.md)
   - [Local AI model catalog](docs/development/LOCAL_AI_MODEL_CATALOG.md)
   - [Speakrs soak / benchmarks](docs/development/SPEAKRS_BENCHMARKS.md)
-  - [v2.7.0 release notes](docs/releases/v2.7.0.md)
+  - [v2.8.0 release notes](docs/releases/v2.8.0.md)
   - [Installer implementation](docs/development/INSTALLER_IMPLEMENTATION.md)
   - [Code review remediation (May 2026)](docs/completed/CODE_REVIEW_REMEDIATION_2026-05.md)
 - **Roadmap & features**
@@ -218,6 +239,8 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
   - [Adversarial review prompts](docs/development/ADVERSARIAL_REVIEW_PROMPTS.md)
   - [Acoustic echo cancellation](docs/initiatives/FEATURE_ECHO_CANCELLATION.md)
   - [Linux support](docs/initiatives/LINUX_SUPPORT.md)
+  - [Linux experimental beta](docs/guides/LINUX_EXPERIMENTAL.md)
+  - [Troubleshooting](docs/guides/TROUBLESHOOTING.md)
   - [Speaker diarization](docs/completed/FEATURE_SPEAKER_DIARIZATION.md)
   - [Transcript summaries](docs/completed/FEATURE_TRANSCRIPT_SUMMARIES.md)
   - [Local AI feature plan](docs/completed/PLAN_LOCAL_AI_FEATURES.md)
@@ -229,6 +252,7 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
 ## Roadmap (short version)
 
 **Shipped recently**
+- **v2.8.0 (August 2026)** — Linux x86_64 Core Beta: Omarchy 4 support, Pulse/PipeWire microphone and desktop-audio capture, CPU-only local transcription, AppImage and pacman packages plus an experimental `.deb`. AI add-ons remain unsupported on Linux. [Release notes](docs/releases/v2.8.0.md).
 - **v2.7.0 (August 2026)** — Speakrs speaker identification: exclusive Speakrs (token-free default for new users) or Pyannote selector; only one engine installed. Soak notes: [SPEAKRS_BENCHMARKS.md](docs/development/SPEAKRS_BENCHMARKS.md). [Release notes](docs/releases/v2.7.0.md).
 - **v2.6.0 (July 2026)** — Back-to-back recording and background transcription queue: Start unlocks after save; Home Activity list; discard in-progress recordings; cancel/resume pending jobs. See [FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md](docs/initiatives/FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md) and [release notes](docs/releases/v2.6.0.md).
 - **v2.5.0 (July 2026)** — Recording awareness (presence pill, tray/Dock/taskbar indicators, hourly reminders, single-instance focus) and long-recording safety (durable capture spools, bounded stop finalization, interrupted-session recovery, low-disk warnings). See [LONG_RECORDING_SAFETY.md](docs/initiatives/LONG_RECORDING_SAFETY.md) and [release notes](docs/releases/v2.5.0.md).

@@ -2524,6 +2524,16 @@ footer {
   margin-bottom: 4px;
 }
 
+.ai-addon-card.is-unsupported {
+  opacity: 0.78;
+  background: var(--surface-3);
+}
+
+.ai-addon-card.is-unsupported .ai-addon-card-header p,
+.ai-addon-card.is-unsupported .ai-addon-status-text {
+  color: var(--text-tertiary);
+}
+
 .ai-addon-list {
   display: flex;
   flex-direction: column;

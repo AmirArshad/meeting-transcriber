@@ -66,6 +66,28 @@ function isSupportedCudaInstallPythonVersion(versionInfo) {
   return Boolean(versionInfo && versionInfo.major === 3 && versionInfo.minor === 11);
 }
 
+function getUnsupportedPlatformCudaProbeError(platform = process.platform) {
+  if (platform === 'linux') {
+    return 'CUDA is not available on Linux in this version. Transcription uses the CPU faster-whisper runtime.';
+  }
+  return 'CUDA runtime checks are only supported on Windows.';
+}
+
+function buildUnsupportedPlatformCudaStatus(platform = process.platform) {
+  return {
+    installed: false,
+    deviceAvailable: false,
+    runtimeLoadable: false,
+    missingLibraries: [],
+    runtime: 'ctranslate2',
+    statusCode: 'unsupportedPlatform',
+    supportedProfiles: [],
+    unsupportedDetectedProfiles: [],
+    recommendedInstallProfile: null,
+    error: getUnsupportedPlatformCudaProbeError(platform),
+  };
+}
+
 function buildUnsupportedCudaPythonMessage(versionOutput) {
   const versionInfo = parsePythonVersion(versionOutput);
   const version = versionInfo ? versionInfo.version : String(versionOutput || '').trim() || 'unknown';
@@ -409,6 +431,8 @@ module.exports = {
   buildTranscriptionCudaInstallArgs,
   buildTranscriptionCudaUninstallArgs,
   buildUnsupportedCudaPythonMessage,
+  buildUnsupportedPlatformCudaStatus,
+  getUnsupportedPlatformCudaProbeError,
   getPythonSitePackagesCandidates,
   getPyTorchCudaBinCandidates,
   classifyCudaProbeStatus,

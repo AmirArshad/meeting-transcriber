@@ -42,10 +42,13 @@ const {
 const {
   buildAiAddonControlState,
   buildHomeAiAddonPrompt,
+  canRunAiAddonControlAction,
   getDiarizationSetupMessage,
   hasDiarizationLocalState,
+  getSummaryActionControlState,
   getSummaryGenerationButtonView,
   getSummarySetupMessage,
+  getUnsupportedAiAddonFootprintRows,
   normalizeHistoryDetailTab,
   parseTranscriptMarkdownSegments,
   shouldRestoreInlineEditorFocus,
@@ -83,12 +86,18 @@ const {
   resolveSelectedDiarizationEngine,
   shouldClearDiarizationTokenFields,
   shouldConfirmDiarizationEngineSwitch,
-  shouldShowDiarizationSpeakerCount,
-  shouldShowDiarizationTokenUi,
+  shouldOfferDiarizationSetupFields,
 } = window.aiAddonUiHelpers;
 const { clearElement } = window.domHelpers;
 const { meetingIdsEqual } = window.meetingHelpers;
-const { isGpuRuntimeActionBusyError, formatGpuRuntimeBusyAlertMessage } = window.gpuSettingsHelpers;
+const { isGpuRuntimeActionBusyError, formatGpuRuntimeBusyAlertMessage, getUnsupportedGpuSettingsCopy } = window.gpuSettingsHelpers;
+const {
+  inferRendererHostFamily,
+  getEmptyMicrophoneDeviceGuidance,
+  getRecordingPermissionFailureGuidance,
+  toOpaqueDeviceId,
+  decorateDesktopDevices,
+} = window.platformSelectionHelpers;
 const { roundedBar } = window.canvasHelpers;
 
 // UI Elements
@@ -340,7 +349,11 @@ function populateSelect(select, placeholder, devices) {
   devices.forEach((device) => {
     const option = document.createElement('option');
     option.value = device.id;
-    option.textContent = `${device.name} (${device.sample_rate} Hz)`;
+    // Synthetic entries (the Linux "None (microphone only)" desktop option)
+    // carry no sample rate and must not render "(48000 Hz)".
+    option.textContent = device.sample_rate
+      ? `${device.name} (${device.sample_rate} Hz)`
+      : device.name;
     select.appendChild(option);
   });
 }
@@ -1315,12 +1328,31 @@ function restoreSummaryGenerationButton(button) {
   }
 
   button.textContent = button.dataset.originalLabel || button.textContent || 'Generate Summary';
-  button.disabled = false;
   button.classList.remove('is-loading', 'summary-generation-active', 'is-cancelling');
   delete button.dataset.originalLabel;
   delete button.dataset.hoverLabel;
   button.removeAttribute('aria-busy');
-  button.removeAttribute('title');
+}
+
+function applySummaryActionAvailability() {
+  const summary = aiAddonStatusSnapshot && aiAddonStatusSnapshot.features
+    ? aiAddonStatusSnapshot.features.summary
+    : null;
+  // homePromptContext.platform is the authoritative main-process platform.
+  // Until it arrives, fall back to the renderer host family so a slow first
+  // status fetch cannot leave Generate Summary dead on Windows/macOS.
+  const platform = homePromptContext.platform || inferRendererHostFamily(navigator.platform);
+  const control = getSummaryActionControlState(summary, {
+    platformSupportsSummaries: platform === 'win32' || platform === 'darwin',
+  });
+  for (const button of getSummaryGenerationButtons()) {
+    button.disabled = !control.enabled;
+    if (control.title) {
+      button.title = control.title;
+    } else {
+      button.removeAttribute('title');
+    }
+  }
 }
 
 function updateSummaryGenerationButtons() {
@@ -1329,12 +1361,15 @@ function updateSummaryGenerationButtons() {
     cancelling: summaryGenerationCancelling,
   });
 
-  for (const button of getSummaryGenerationButtons()) {
-    if (!view.active) {
+  if (!view.active) {
+    for (const button of getSummaryGenerationButtons()) {
       restoreSummaryGenerationButton(button);
-      continue;
     }
+    applySummaryActionAvailability();
+    return;
+  }
 
+  for (const button of getSummaryGenerationButtons()) {
     if (!button.dataset.originalLabel) {
       button.dataset.originalLabel = button.textContent;
     }
@@ -1448,9 +1483,10 @@ function applyDiarizationEngineCards({ selectedEngine, platform, arch }) {
   });
 }
 
-function applyDiarizationEngineFields(selectedEngine) {
-  const showToken = shouldShowDiarizationTokenUi(selectedEngine);
-  const showSpeakerCount = shouldShowDiarizationSpeakerCount(selectedEngine);
+function applyDiarizationEngineFields(selectedEngine, { unsupported = false } = {}) {
+  const fields = shouldOfferDiarizationSetupFields({ engine: selectedEngine, unsupported });
+  const showToken = fields.showToken;
+  const showSpeakerCount = fields.showSpeakerCount;
   ['diarization-token-field', 'home-diarization-token-field'].forEach((id) => {
     const field = document.getElementById(id);
     if (field) {
@@ -1482,25 +1518,33 @@ function updateHomeAiAddonCTA(aiStatus) {
   });
 
   if (!prompt) {
-    if (cta) cta.style.display = 'none';
+    if (cta) {
+      cta.disabled = true;
+      cta.style.display = 'none';
+    }
     if (speakerPrompt) speakerPrompt.style.display = 'none';
     return;
   }
 
   if (prompt.feature === 'diarization' && speakerPrompt) {
-    if (cta) cta.style.display = 'none';
+    if (cta) {
+      cta.disabled = true;
+      cta.style.display = 'none';
+    }
     const title = document.getElementById('diarization-setup-prompt-title');
     const message = document.getElementById('diarization-setup-prompt-message');
     if (title) title.textContent = prompt.title;
     if (message) message.textContent = prompt.message;
     const selectedEngine = getSelectedDiarizationEngine({ engine: prompt.engine });
+    const diarization = aiStatus && aiStatus.features ? aiStatus.features.diarization : null;
     applyDiarizationEngineCards({
       selectedEngine,
       platform: homePromptContext.platform,
       arch: homePromptContext.arch,
     });
-    applyDiarizationEngineFields(selectedEngine);
-    const diarization = aiStatus && aiStatus.features ? aiStatus.features.diarization : null;
+    applyDiarizationEngineFields(selectedEngine, {
+      unsupported: diarization && diarization.status === 'unsupported',
+    });
     const diarizationControlState = buildAiAddonControlState({
       feature: diarization,
       type: 'diarization',
@@ -1530,6 +1574,7 @@ function updateHomeAiAddonCTA(aiStatus) {
   if (title) title.textContent = prompt.title;
   if (sub) sub.textContent = prompt.message;
   cta.dataset.feature = prompt.feature;
+  cta.disabled = false;
   cta.style.display = 'flex';
 }
 
@@ -1888,36 +1933,28 @@ async function loadAudioDevices() {
   try {
     addLog('Loading audio devices...');
     const devices = await window.electronAPI.getAudioDevices();
+    const hostFamily = inferRendererHostFamily(navigator.platform);
 
     // Check if no input devices found (likely permission issue on macOS)
     if (devices.inputs.length === 0) {
-      const isMac = navigator.platform.includes('Mac');
+      const guidance = getEmptyMicrophoneDeviceGuidance(hostFamily);
 
-      if (isMac) {
-        addLog('⚠️ No microphone devices found - permission may not be granted', 'error');
-
-        const shouldOpenSettings = confirm(
-          'No microphone devices found!\n\n' +
-          'This usually means microphone permission is not granted.\n\n' +
-          'Would you like to open System Settings to grant permission?\n\n' +
-          '1. Go to Privacy & Security → Microphone\n' +
-          '2. Grant permission to AvaNevis\n' +
-          '3. Restart the app'
-        );
-
+      addLog(guidance.logMessage, 'error');
+      if (guidance.openSettings && guidance.confirmMessage) {
+        const shouldOpenSettings = confirm(guidance.confirmMessage);
         if (shouldOpenSettings) {
-          window.electronAPI.openSystemSettings('microphone');
+          window.electronAPI.openSystemSettings(guidance.openSettings);
         }
-      } else {
-        addLog('⚠️ No microphone devices found', 'error');
       }
     }
 
     // Populate microphone dropdown
     populateSelect(micSelect, 'Select microphone...', devices.inputs);
-
-    // Populate desktop audio dropdown
-    populateSelect(desktopSelect, 'Select desktop audio...', devices.loopbacks);
+    populateSelect(
+      desktopSelect,
+      'Select desktop audio...',
+      decorateDesktopDevices(devices.loopbacks, hostFamily),
+    );
 
     addLog(`Found ${devices.inputs.length} microphones and ${devices.loopbacks.length} loopback devices`);
 
@@ -3141,8 +3178,8 @@ function updateControlsState() {
 
 async function runRecordingPreflightChecks({ micId, desktopId }) {
   const report = await window.electronAPI.runRecordingPreflight({
-    micId: parseInt(micId, 10),
-    loopbackId: parseInt(desktopId, 10),
+    micId: toOpaqueDeviceId(micId),
+    loopbackId: toOpaqueDeviceId(desktopId),
   });
 
   report.errors.forEach((message) => addLog(`Preflight error: ${message}`, 'error'));
@@ -3249,8 +3286,8 @@ async function startRecording() {
 
       const { promise: countdownPromise, cancel: cancelCountdown } = startCountdown();
       const recordingPromise = window.electronAPI.startRecording({
-        micId: parseInt(micId),
-        loopbackId: parseInt(desktopId),
+        micId: toOpaqueDeviceId(micId),
+        loopbackId: toOpaqueDeviceId(desktopId),
         isFirstRecording: isFirstRecording && attempt === 1 // Only use first-recording timeout on first attempt
       });
 
@@ -3415,30 +3452,16 @@ async function startRecording() {
                                         errorMsg.toLowerCase().includes('device');
 
         if (shouldCheckPermissions) {
-          // Platform-specific permission instructions
-          const isMac = navigator.platform.includes('Mac');
+          const hostFamily = inferRendererHostFamily(navigator.platform);
+          const guidance = getRecordingPermissionFailureGuidance(hostFamily);
 
-          if (isMac) {
-            const shouldOpenSettings = confirm(
-              'Recording failed. Permission might be missing.\n\n' +
-              'Would you like to open System Settings to check permissions?\n\n' +
-              'Check both Microphone and Screen Recording permissions.'
-            );
-
+          if (guidance.kind === 'macos-settings') {
+            const shouldOpenSettings = confirm(guidance.confirmMessage);
             if (shouldOpenSettings) {
-              // Open Screen Recording by default as it's the more common "silent fail"
-              window.electronAPI.openSystemSettings('screen');
+              window.electronAPI.openSystemSettings(guidance.openSettings);
             }
           } else {
-            alert(
-              'Recording failed. Please check:\n\n' +
-              '1. Microphone permissions are granted to this app\n' +
-              '2. Selected devices are not in use by another application\n' +
-              '3. Devices are properly connected\n\n' +
-              '• Grant microphone permissions in Windows Settings\n' +
-              '• Restart the application\n' +
-              '• Try different audio devices'
-            );
+            alert(guidance.alertMessage);
           }
         } else {
           if (errorMsg.toLowerCase().includes('desktop audio failed to start')) {
@@ -4540,11 +4563,9 @@ function renderFootprintRows(container, rows) {
 }
 
 function updateDiarizationFootprint(diarization) {
-  if (diarization && diarization.status === 'unsupported') {
-    renderFootprintRows(document.getElementById('diarization-footprint'), [
-      { label: 'Platform', value: 'unsupported' },
-      { label: 'Runtime', value: 'disabled' },
-    ]);
+  const unsupportedRows = getUnsupportedAiAddonFootprintRows(diarization);
+  if (unsupportedRows) {
+    renderFootprintRows(document.getElementById('diarization-footprint'), unsupportedRows);
     return;
   }
 
@@ -4575,6 +4596,12 @@ function updateDiarizationFootprint(diarization) {
 }
 
 function updateSummaryFootprint(summary) {
+  const unsupportedRows = getUnsupportedAiAddonFootprintRows(summary);
+  if (unsupportedRows) {
+    renderFootprintRows(document.getElementById('summary-footprint'), unsupportedRows);
+    return;
+  }
+
   const storage = summary && summary.storage;
   const estimatedModel = storage && storage.estimatedModelBytes;
   const estimatedRuntime = storage && storage.estimatedRuntimeBytes;
@@ -4735,6 +4762,15 @@ function updateAiAddonSettings(status) {
 
   setStatusBadge(document.getElementById('ai-addons-status-badge'), overallStatus);
 
+  const diarizationCard = document.getElementById('diarization-addon-card');
+  const summaryCard = document.getElementById('summary-addon-card');
+  if (diarizationCard) {
+    diarizationCard.classList.toggle('is-unsupported', Boolean(diarizationUnsupported));
+  }
+  if (summaryCard) {
+    summaryCard.classList.toggle('is-unsupported', Boolean(summary && summary.status === 'unsupported'));
+  }
+
   if (diarization) {
     setStatusBadge(document.getElementById('diarization-status-badge'), diarization.status);
     const selectedEngine = getSelectedDiarizationEngine(diarization);
@@ -4750,7 +4786,7 @@ function updateAiAddonSettings(status) {
       platform: homePromptContext.platform,
       arch: homePromptContext.arch,
     });
-    applyDiarizationEngineFields(selectedEngine);
+    applyDiarizationEngineFields(selectedEngine, { unsupported: diarizationUnsupported });
     applyDiarizationEngineRadioState(diarizationControlState.canSelectEngine);
     const speakerCount = document.getElementById('diarization-speaker-count');
     if (speakerCount) {
@@ -4827,6 +4863,7 @@ function updateAiAddonSettings(status) {
   renderAiAddonProgress('summary');
 
   updateAiAddonFootprintWarning(status);
+  updateSummaryGenerationButtons();
 }
 
 async function refreshAiAddonSettings() {
@@ -4859,10 +4896,12 @@ async function refreshHomeAiAddonPrompt() {
     const status = await window.electronAPI.getAiAddonStatus({ includeStorageSizes: false });
     aiAddonStatusSnapshot = status;
     updateHomeAiAddonCTA(status);
+    updateSummaryGenerationButtons();
     return status;
   } catch (error) {
     console.warn('Could not refresh home AI add-on prompt:', error);
     updateHomeAiAddonCTA(null);
+    updateSummaryGenerationButtons();
     return null;
   }
 }
@@ -4952,6 +4991,23 @@ function setupAiAddonSettingsListeners() {
   const removeSummaryBtn = document.getElementById('remove-summary-btn');
   const summaryProfileSelect = document.getElementById('summary-profile-select');
 
+  function canRunControlAction(featureName, action, { selectedEngine } = {}) {
+    const feature = aiAddonStatusSnapshot && aiAddonStatusSnapshot.features
+      ? aiAddonStatusSnapshot.features[featureName]
+      : null;
+    return canRunAiAddonControlAction({
+      action,
+      feature,
+      type: featureName,
+      selectedEngine,
+      unsupported: Boolean(feature && feature.status === 'unsupported'),
+      setupActive: isAiAddonSetupLockingControls({
+        featureStatus: feature && feature.status,
+        progressActive: Boolean(aiAddonDownloadState[featureName] && aiAddonDownloadState[featureName].active),
+      }),
+    });
+  }
+
   function selectDiarizationEngine(engine) {
     selectedDiarizationEngine = engine;
     const diarization = aiAddonStatusSnapshot && aiAddonStatusSnapshot.features
@@ -4962,7 +5018,9 @@ function setupAiAddonSettingsListeners() {
       platform: homePromptContext.platform,
       arch: homePromptContext.arch,
     });
-    applyDiarizationEngineFields(engine);
+    applyDiarizationEngineFields(engine, {
+      unsupported: Boolean(diarization && diarization.status === 'unsupported'),
+    });
     if (aiAddonStatusSnapshot) {
       updateAiAddonSettings(aiAddonStatusSnapshot);
       updateHomeAiAddonCTA(aiAddonStatusSnapshot);
@@ -4974,6 +5032,9 @@ function setupAiAddonSettingsListeners() {
       ? aiAddonStatusSnapshot.features.diarization
       : null;
     const engine = getSelectedDiarizationEngine(diarization);
+    if (!canRunControlAction('diarization', 'configure', { selectedEngine: engine })) {
+      return null;
+    }
     if (shouldConfirmDiarizationEngineSwitch({
       selectedEngine: engine,
       installedEngine: resolveSelectedDiarizationEngine(diarization),
@@ -5018,7 +5079,7 @@ function setupAiAddonSettingsListeners() {
 
   document.querySelectorAll('.diarization-engine-radio').forEach((radio) => {
     radio.addEventListener('change', () => {
-      if (radio.checked) {
+      if (radio.checked && canRunControlAction('diarization', 'select')) {
         selectDiarizationEngine(radio.value);
       }
     });
@@ -5048,15 +5109,23 @@ function setupAiAddonSettingsListeners() {
   }
 
   if (validateDiarizationBtn) {
-    validateDiarizationBtn.addEventListener('click', () => withAiAddonAction(validateDiarizationBtn, 'Validating...', async () => {
-      const status = await window.electronAPI.validateDiarizationSetup();
-      addLog('Speaker identification validation complete.');
-      return status;
-    }));
+    validateDiarizationBtn.addEventListener('click', () => {
+      if (!canRunControlAction('diarization', 'validate')) {
+        return;
+      }
+      withAiAddonAction(validateDiarizationBtn, 'Validating...', async () => {
+        const status = await window.electronAPI.validateDiarizationSetup();
+        addLog('Speaker identification validation complete.');
+        return status;
+      });
+    });
   }
 
   if (removeDiarizationBtn) {
     removeDiarizationBtn.addEventListener('click', () => {
+      if (!canRunControlAction('diarization', 'remove')) {
+        return;
+      }
       const diarization = aiAddonStatusSnapshot && aiAddonStatusSnapshot.features
         ? aiAddonStatusSnapshot.features.diarization
         : null;
@@ -5074,13 +5143,18 @@ function setupAiAddonSettingsListeners() {
   }
 
   if (setupSummaryBtn) {
-    setupSummaryBtn.addEventListener('click', () => withAiAddonSetupAction('summary', setupSummaryBtn, 'Installing...', 'Summary model setup', async () => {
-      const status = await window.electronAPI.setupSummaryModel({
-        profile: summaryProfileSelect ? summaryProfileSelect.value : DEFAULT_SUMMARY_PROFILE,
+    setupSummaryBtn.addEventListener('click', () => {
+      if (!canRunControlAction('summary', 'configure')) {
+        return;
+      }
+      withAiAddonSetupAction('summary', setupSummaryBtn, 'Installing...', 'Summary model setup', async () => {
+        const status = await window.electronAPI.setupSummaryModel({
+          profile: summaryProfileSelect ? summaryProfileSelect.value : DEFAULT_SUMMARY_PROFILE,
+        });
+        addLog('Summary model setup checked.');
+        return status;
       });
-      addLog('Summary model setup checked.');
-      return status;
-    }));
+    });
   }
 
   if (cancelSummaryBtn) {
@@ -5100,15 +5174,23 @@ function setupAiAddonSettingsListeners() {
   }
 
   if (validateSummaryBtn) {
-    validateSummaryBtn.addEventListener('click', () => withAiAddonAction(validateSummaryBtn, 'Validating...', async () => {
-      const status = await window.electronAPI.validateSummaryModel({});
-      addLog('Summary model validation complete.');
-      return status;
-    }));
+    validateSummaryBtn.addEventListener('click', () => {
+      if (!canRunControlAction('summary', 'validate')) {
+        return;
+      }
+      withAiAddonAction(validateSummaryBtn, 'Validating...', async () => {
+        const status = await window.electronAPI.validateSummaryModel({});
+        addLog('Summary model validation complete.');
+        return status;
+      });
+    });
   }
 
   if (removeSummaryBtn) {
     removeSummaryBtn.addEventListener('click', () => {
+      if (!canRunControlAction('summary', 'remove')) {
+        return;
+      }
       if (!confirm('Remove the local summary model from this device?')) {
         return;
       }
@@ -5231,9 +5313,8 @@ async function checkGPUStatus() {
     // Get platform info
     const platform = await window.electronAPI.getPlatform();
     ctaState.platform = platform;
-    const isMac = platform === 'darwin';
 
-    if (isMac) {
+    if (platform === 'darwin') {
       // ============ macOS: Show Metal/MLX Status ============
       gpuDescription.textContent = 'GPU acceleration using Apple\'s Metal framework for Apple Silicon Macs. Provides 3-5x faster transcription.';
       
@@ -5290,7 +5371,7 @@ async function checkGPUStatus() {
       // Hide install/uninstall buttons on macOS (MLX is bundled)
       gpuActions.style.display = 'none';
 
-    } else {
+    } else if (platform === 'win32') {
       // ============ Windows: Show CUDA Status ============
       gpuDescription.textContent = 'Enable faster-whisper GPU acceleration for 4-5x faster transcription. Installs only the CUDA runtime libraries needed by CTranslate2.';
       
@@ -5410,6 +5491,28 @@ async function checkGPUStatus() {
       }
 
       gpuActions.style.display = 'block';
+    } else {
+      const copy = getUnsupportedGpuSettingsCopy(platform);
+      gpuDescription.textContent = copy.description;
+      gpuLabel1.textContent = 'Platform:';
+      gpuValue1.textContent = platform || 'unknown';
+      gpuValue1.className = 'info-value';
+      gpuLabel2.textContent = 'Acceleration:';
+      gpuValue2.textContent = 'CPU only';
+      gpuValue2.className = 'info-value';
+      gpuLabel3.textContent = 'GPU setup:';
+      gpuValue3.textContent = copy.statusLabel;
+      gpuValue3.className = 'info-value warning';
+      if (gpuLabel4) gpuLabel4.textContent = 'Diagnostics:';
+      if (gpuValue4) {
+        gpuValue4.textContent = copy.diagnostics;
+        gpuValue4.className = 'info-value';
+      }
+      if (gpuRow4) gpuRow4.style.display = 'flex';
+      statusBadge.textContent = copy.statusLabel;
+      statusBadge.classList.add('disabled');
+      gpuActions.style.display = 'none';
+      installBtn.disabled = true;
     }
   } catch (error) {
     console.error('Failed to check GPU status:', error);

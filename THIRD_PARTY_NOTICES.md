@@ -19,7 +19,7 @@ These components are included when you build installers via
 |-----------|------|-------------------|--------|
 | [Electron](https://www.electronjs.org/) | Desktop shell | MIT | |
 | [Python](https://www.python.org/) | Embedded / standalone runtime in installer | PSF License | See python.org license page |
-| [ffmpeg](https://ffmpeg.org/) | Opus compression after recording | **GPLv3** (typical third-party builds) | See [legal/ffmpeg-SOURCE-OFFER.txt](legal/ffmpeg-SOURCE-OFFER.txt) and [legal/FFMPEG-COMPLIANCE.json](legal/FFMPEG-COMPLIANCE.json). Windows: gyan.dev essentials build. macOS: shaka-project/static-ffmpeg-binaries arm64 static build. Windows builds may include `legal/ffmpeg-upstream-*` copied from the gyan.dev archive. |
+| [ffmpeg](https://ffmpeg.org/) | Opus compression after recording | **GPLv3** (typical third-party builds) | See [legal/ffmpeg-SOURCE-OFFER.txt](legal/ffmpeg-SOURCE-OFFER.txt) and [legal/FFMPEG-COMPLIANCE.json](legal/FFMPEG-COMPLIANCE.json). Windows: gyan.dev essentials build. macOS: shaka-project/static-ffmpeg-binaries arm64 static build. Linux (when packaged): shaka-project `ffmpeg-linux-x64` static build. Windows builds may include `legal/ffmpeg-upstream-*` copied from the gyan.dev archive. |
 | Python packages in `requirements-*-build.txt` | Recording, transcription, HF downloads | Mostly MIT / BSD / Apache-2.0 | Non-exhaustive list below |
 | macOS `audiocapture-helper` (Swift) | Desktop audio capture | Same as AvaNevis (MIT) unless otherwise noted in `swift/` | |
 | `speakrs-cli` | Token-free speaker-identification engine (optional add-on) | Apache-2.0 | Built from `native/speakrs-cli` (Speakrs 0.5.0) and bundled under `Resources/bin/`. Model packs and the Windows ONNX Runtime archive are setup-time downloads, not installer-bundled. |
@@ -31,11 +31,12 @@ These components are included when you build installers via
 | faster-whisper, ctranslate2 | MIT |
 | lightning-whisper-mlx, mlx | MIT |
 | numpy, scipy, soxr | BSD |
+| pulsectl, SoundCard | MIT / BSD-3-Clause |
 | pyaudiowpatch, sounddevice | MIT |
 | huggingface-hub, hf-xet, httpx | Apache-2.0 |
 | pyobjc-* (macOS) | MIT |
 
-Full pinned versions: `requirements-windows-build.txt`, `requirements-macos-build.txt`. A generated table of direct pins lives in [legal/PYTHON-BUNDLED-PACKAGES.md](legal/PYTHON-BUNDLED-PACKAGES.md) (refresh with `npm run legal:sbom`).
+Full pinned versions: `requirements-windows-build.txt`, `requirements-macos-build.txt`, `requirements-linux-build.txt`. A generated table of direct pins lives in [legal/PYTHON-BUNDLED-PACKAGES.md](legal/PYTHON-BUNDLED-PACKAGES.md) (refresh with `npm run legal:sbom`).
 
 ---
 

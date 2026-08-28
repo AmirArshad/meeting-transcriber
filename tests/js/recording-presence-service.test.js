@@ -2,6 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
 
@@ -12,6 +13,7 @@ const {
   buildTrayView,
   buildWindowCloseDialogOptions,
   formatTrayElapsed,
+  resolveTrayImageFileName,
   RECORDING_REMINDER_INTERVAL_MS,
 } = require('../../src/main/recording-presence-service');
 
@@ -57,7 +59,13 @@ function createDeps(overrides = {}) {
     setContextMenu(menu) {
       tray.menu = menu;
     },
-    on() {},
+    on(event, handler) {
+      if (!tray.events[event]) {
+        tray.events[event] = [];
+      }
+      tray.events[event].push(handler);
+    },
+    events: {},
     destroy() {
       destroyed = true;
     },
@@ -303,10 +311,125 @@ test('Windows recording close dialog minimizes; macOS hides; idle preserves Gate
   ]);
   assert.equal(macRecording.keepRecordingAction, 'hide');
 
+  const linuxRecording = buildWindowCloseDialogOptions(
+    { state: 'recording', sessionId: 1, startedAt: 1 },
+    'linux',
+  );
+  assert.deepEqual(linuxRecording.buttons, [
+    'Keep Recording in Tray',
+    'Stop and Quit',
+    'Cancel',
+  ]);
+  assert.equal(linuxRecording.keepRecordingAction, 'hide');
+  assert.match(linuxRecording.detail, /system tray/i);
+
   const idle = buildWindowCloseDialogOptions({ state: 'idle' }, 'win32');
   assert.equal(idle.title, 'Minimize to Tray');
   assert.deepEqual(idle.buttons, ['Minimize to Tray', 'Close App', 'Cancel']);
   assert.equal(idle.keepRecordingAction, 'hide');
+});
+
+test('Linux tray uses context menu only and survives a missing SNI host', () => {
+  const harness = createDeps({ platform: 'linux' });
+  const service = createRecordingPresenceService(harness.deps);
+  service.createTray();
+  assert.equal(harness.tray.events.click, undefined);
+  assert.ok(harness.menuTemplates.length > 0);
+
+  const throwing = createDeps({
+    platform: 'linux',
+    Tray: function Tray() {
+      throw new Error('StatusNotifierWatcher is not available');
+    },
+  });
+  const degraded = createRecordingPresenceService(throwing.deps);
+  assert.equal(degraded.createTray(), null);
+  assert.equal(degraded.hasTray(), false);
+  degraded.updateCaptureState({ state: 'recording', sessionId: 1, startedAt: 1_000 });
+  assert.equal(throwing.menuTemplates.length, 0);
+
+  const degradedClose = buildWindowCloseDialogOptions(
+    { state: 'recording', sessionId: 1, startedAt: 1_000 },
+    'linux',
+    { trayAvailable: degraded.hasTray() },
+  );
+  assert.deepEqual(degradedClose.buttons, [
+    'Keep Recording Minimized',
+    'Stop and Quit',
+    'Cancel',
+  ]);
+  assert.equal(degradedClose.keepRecordingAction, 'minimize');
+  assert.match(degradedClose.detail, /taskbar recording indicator/i);
+
+  const degradedPending = buildWindowCloseDialogOptions(
+    { state: 'idle' },
+    'linux',
+    { pendingTranscriptionCount: 2, trayAvailable: false },
+  );
+  assert.deepEqual(degradedPending.buttons, ['Keep AvaNevis Minimized', 'Close App', 'Cancel']);
+  assert.equal(degradedPending.keepRecordingAction, 'minimize');
+  assert.match(degradedPending.detail, /taskbar/i);
+
+  const degradedIdle = buildWindowCloseDialogOptions(
+    { state: 'idle' },
+    'linux',
+    { trayAvailable: false },
+  );
+  assert.deepEqual(degradedIdle.buttons, ['Keep AvaNevis Minimized', 'Close App', 'Cancel']);
+  assert.equal(degradedIdle.keepRecordingAction, 'minimize');
+});
+
+test('Linux tray images are decodable PNGs, never the Windows .ico', () => {
+  // nativeImage.createFromPath returns an EMPTY image for .ico outside Windows,
+  // and new Tray(empty) still succeeds on Linux — a registered but invisible
+  // SNI item. Pin the filenames and prove the assets decode.
+  assert.equal(resolveTrayImageFileName('linux', 'idle'), 'iconTrayLinux.png');
+  assert.equal(resolveTrayImageFileName('linux', 'recording'), 'iconTrayLinuxRecording.png');
+  assert.equal(resolveTrayImageFileName('win32', 'idle'), 'icon.ico');
+  assert.equal(resolveTrayImageFileName('win32', 'recording'), 'iconRecording.png');
+  assert.equal(resolveTrayImageFileName('darwin', 'idle'), 'iconTemplate.png');
+  assert.equal(resolveTrayImageFileName('darwin', 'recording'), 'iconRecording.png');
+
+  for (const kind of ['idle', 'recording']) {
+    const fileName = resolveTrayImageFileName('linux', kind);
+    assert.equal(path.extname(fileName), '.png', `${kind} Linux tray image must be a PNG`);
+    const filePath = path.join(__dirname, '..', '..', 'build', fileName);
+    const bytes = fs.readFileSync(filePath);
+    assert.ok(bytes.length > 0, `${fileName} is empty`);
+    assert.deepEqual(
+      Array.from(bytes.subarray(0, 8)),
+      [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
+      `${fileName} is not a PNG`,
+    );
+  }
+
+  const packageJson = require('../../package.json');
+  const staged = new Set(packageJson.build.extraResources.map((entry) => entry.to));
+  assert.ok(staged.has('iconTrayLinux.png'), 'Linux idle tray icon must be staged in extraResources');
+  assert.ok(
+    staged.has('iconTrayLinuxRecording.png'),
+    'Linux recording tray icon must be staged in extraResources',
+  );
+});
+
+test('Linux tray falls back loudly instead of registering a blank icon', () => {
+  const warnings = [];
+  const harness = createDeps({
+    platform: 'linux',
+    nativeImage: {
+      createFromPath: () => ({
+        isEmpty: () => true,
+        setTemplateImage() {},
+      }),
+    },
+    logWarn: (...args) => warnings.push(args.join(' ')),
+  });
+  const service = createRecordingPresenceService(harness.deps);
+  service.createTray();
+  assert.ok(
+    warnings.some((line) => /Tray image could not be decoded/.test(line)),
+    'an undecodable tray image must be reported',
+  );
 });
 
 test('tray menu intentionally replaces Gate A Show/Hide with Show AvaNevis and Quit AvaNevis', () => {

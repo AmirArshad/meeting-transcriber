@@ -20,6 +20,7 @@ from audio import recorder_stdout  # noqa: E402
 
 WINDOWS_RECORDER = ROOT / "backend" / "audio" / "windows_recorder.py"
 MACOS_RECORDER = ROOT / "backend" / "audio" / "macos_recorder.py"
+LINUX_RECORDER = ROOT / "backend" / "audio" / "linux_recorder.py"
 RECORDER_STDOUT = ROOT / "backend" / "audio" / "recorder_stdout.py"
 
 
@@ -39,8 +40,8 @@ def test_shared_recorder_stdout_module_exists():
         assert f"def {name}" in source, f"recorder_stdout.py missing {name}"
 
 
-def test_windows_and_macos_emitters_define_required_message_helpers():
-    for path in (WINDOWS_RECORDER, MACOS_RECORDER):
+def test_windows_macos_and_linux_emitters_define_required_message_helpers():
+    for path in (WINDOWS_RECORDER, MACOS_RECORDER, LINUX_RECORDER):
         source = _read(path)
         assert "from . import recorder_stdout" in source or "import recorder_stdout" in source
         for name in (
@@ -63,12 +64,11 @@ def test_windows_final_result_uses_audio_path_key():
     assert "outputPath" not in recording_info_block
 
 
-def test_macos_final_result_uses_output_path_key():
-    source = _read(MACOS_RECORDER)
+def test_linux_final_result_uses_output_path_key():
+    source = _read(LINUX_RECORDER)
     assert '"outputPath"' in source or "'outputPath'" in source
-    # Success and recoverable-failure payloads both use the macOS spelling.
-    assert "result['outputPath'] = recovered_path" in source or 'result["outputPath"] = recovered_path' in source
-    assert "'outputPath': recovered_path or args.output" in source
+    assert "result[\"outputPath\"] = recovered_path" in source or "result['outputPath'] = recovered_path" in source
+    assert '"outputPath": recovered_path or args.output' in source or "'outputPath': recovered_path or args.output" in source
 
 
 def test_windows_emits_result_json_before_cleanup():
@@ -96,6 +96,29 @@ def test_windows_sets_final_path_before_temp_unlink():
     assert unlink_pos != -1
     assert recoverable_pos < unlink_pos
     assert "except OSError" in after_compress[unlink_pos - 80 : unlink_pos + 120]
+
+
+def test_linux_stop_path_guards_processing_exceptions():
+    source = _read(LINUX_RECORDER)
+    stop = source.split("def stop_recording", 1)[1].split("def is_recording", 1)[0]
+    assert "except Exception as process_err" in stop
+    assert "RECORDER_FAILED" in stop
+    assert "_resolve_recoverable_output_path" in stop
+    assert "_finalize_from_capture_spools" in stop
+
+
+def test_linux_late_desktop_failure_does_not_hard_fail_stop():
+    source = _read(LINUX_RECORDER)
+    assert "def _note_desktop_runtime_failure" in source
+    resolve = source.split("def _resolve_async_recording_failure", 1)[1].split(
+        "def _finalize_recording_failure", 1
+    )[0]
+    assert "DESKTOP_AUDIO_FAILED" not in resolve
+    desktop_except = source.split("ERROR in desktop recording", 1)[1].split(
+        "def _note_desktop_runtime_failure", 1
+    )[0]
+    assert "_note_desktop_runtime_failure" in desktop_except
+    assert "_error_event.set()" not in desktop_except
 
 
 def test_macos_stop_path_guards_processing_exceptions():
@@ -136,6 +159,17 @@ def test_macos_recoverable_path_promotes_temp_not_returns_pcm_tmp():
     assert "promote_recorder_temp_to_wav(temp_path" in resolve
 
 
+def test_linux_recoverable_path_promotes_temp_not_returns_pcm_tmp():
+    source = _read(LINUX_RECORDER)
+    resolve = source.split("def _resolve_recoverable_output_path", 1)[1].split(
+        "def stop_recording", 1
+    )[0]
+    assert "promote_recorder_temp_to_wav" in resolve
+    assert "build_stable_wav_path_for_output" in resolve
+    assert "endswith('.pcm.tmp')" in resolve or 'endswith(".pcm.tmp")' in resolve
+    assert "promote_recorder_temp_to_wav(temp_path" in resolve
+
+
 def test_macos_generic_except_does_not_toast_before_best_effort_stop():
     source = _read(MACOS_RECORDER)
     # Use the recording-loop except (last in main), not the startup except.
@@ -159,7 +193,7 @@ def test_recorders_use_non_scanned_temp_pcm_extension():
     # macOS recovery still promotes orphan recorder temps via the shared helper.
     macos = _read(MACOS_RECORDER)
     assert "build_recorder_temp_pcm_path" in macos
-    for path in (WINDOWS_RECORDER, MACOS_RECORDER):
+    for path in (WINDOWS_RECORDER, MACOS_RECORDER, LINUX_RECORDER):
         source = _read(path)
         # Active write path must not use scannable .temp.wav / _temp.wav.
         assert "with_suffix('.temp.wav')" not in source
@@ -186,7 +220,7 @@ def test_recorders_emit_structured_stop_stage_events():
     assert positions == sorted(positions), (
         "streaming_post_processor stop stages must appear in processing order"
     )
-    for path in (WINDOWS_RECORDER, MACOS_RECORDER):
+    for path in (WINDOWS_RECORDER, MACOS_RECORDER, LINUX_RECORDER):
         source = _read(path)
         assert "finalize_capture" in source
         assert "progress_callback" in source
@@ -255,7 +289,7 @@ def test_stderr_debug_prints_are_not_structured_control_messages():
     send_json = shared.split("def send_json_message", 1)[1].split("def ", 1)[0]
     assert "sys.stderr" not in send_json
 
-    for path in (WINDOWS_RECORDER, MACOS_RECORDER):
+    for path in (WINDOWS_RECORDER, MACOS_RECORDER, LINUX_RECORDER):
         source = _read(path)
         assert "file=sys.stderr" in source
         # Thin wrappers must not print control JSON to stderr themselves.
@@ -307,7 +341,7 @@ def test_recorder_stdin_uses_exact_token_matching():
         cancel_requested=False, recording_cancelled=False
     ) == "stop"
 
-    for path in (WINDOWS_RECORDER, MACOS_RECORDER):
+    for path in (WINDOWS_RECORDER, MACOS_RECORDER, LINUX_RECORDER):
         source = _read(path)
         assert "parse_recorder_stdin_command" in source
         assert '"stop" in line' not in source
@@ -317,7 +351,7 @@ def test_recorder_stdin_uses_exact_token_matching():
 
 
 def test_cancel_recording_methods_skip_finalize_capture():
-    for path in (WINDOWS_RECORDER, MACOS_RECORDER):
+    for path in (WINDOWS_RECORDER, MACOS_RECORDER, LINUX_RECORDER):
         source = _read(path)
         cancel_fn = source.split("def cancel_recording", 1)[1].split("\n    def ", 1)[0]
         assert "finalize_capture" not in cancel_fn
@@ -342,6 +376,23 @@ def test_macos_duration_mode_shares_stdin_cancel_listener():
     assert "cancel_recording" in finish_helper
     # Cancel intent must not fall through to stop_recording on exception.
     except_block = source.rsplit("except Exception as e:", 1)[1]
+    assert "resolve_post_exception_capture_action" in except_block
+    assert "cancel_recording()" in except_block
+
+
+def test_linux_duration_mode_shares_stdin_cancel_listener():
+    source = _read(LINUX_RECORDER)
+    listener_pos = source.find("def input_listener")
+    duration_pos = source.find("if args.duration > 0:")
+    assert listener_pos != -1
+    assert duration_pos != -1
+    assert listener_pos < duration_pos
+    finish_helper = source.split("def finish_capture_from_stdin_or_duration", 1)[1].split(
+        "\n    try:", 1
+    )[0]
+    assert "RECORDER_STDIN_CANCEL" in finish_helper
+    assert "cancel_recording" in finish_helper
+    except_block = source.rsplit("except Exception as exc:", 1)[1]
     assert "resolve_post_exception_capture_action" in except_block
     assert "cancel_recording()" in except_block
 

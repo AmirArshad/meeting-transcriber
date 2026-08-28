@@ -13,11 +13,12 @@ For cross-process invariants (recorder stdout JSON, compute queue, AI add-ons, p
 - `backend/meeting_manager.py` — meeting history CLI/orchestration (`python -m meeting_manager`); public methods remain instance-method monkeypatch seams over `backend/meetings/`.
 - `backend/audio/windows_recorder.py` — Windows microphone plus WASAPI loopback recording.
 - `backend/audio/macos_recorder.py` — macOS microphone plus desktop/system audio recording.
-- `backend/transcription/faster_whisper_transcriber.py` — Windows/default Whisper transcription.
+- `backend/audio/linux_recorder.py` — Linux microphone plus Pulse/PipeWire monitor recording.
+- `backend/transcription/faster_whisper_transcriber.py` — Windows and Linux Whisper transcription (Linux Core Beta is CPU-only).
 - `backend/transcription/mlx_whisper_transcriber.py` — Apple Silicon MLX transcription.
 - `backend/diarization/guided_transcription.py` — diarization-first speaker-guided transcription.
 - `backend/diarization/diarization_pipeline.py` — engine dispatch (`--engine speakrs|pyannote`), pyannote runner, and speaker merge.
-- `backend/diarization/speakrs_runner.py` — token-free Speakrs CLI wrapper (Windows CUDA / macOS CoreML).
+- `backend/diarization/speakrs_runner.py` — token-free Speakrs CLI wrapper (Windows CUDA / macOS CoreML; not shipped on Linux Core Beta).
 - `backend/summaries/summary_runner.py` — local summary generation and sidecar output.
 
 ### Shared / extracted helpers (post-refactor)
@@ -77,9 +78,9 @@ npm run test:python-syntax
 
 - Recorder control-flow messages are structured JSON on stdout (`levels`, `event`, `warning`, `error`).
 - Recorder stderr is debug-only.
-- Windows recorder final JSON uses `audioPath`; macOS uses `outputPath`. Electron accepts both (intentional; not a pending unification).
+- Windows recorder final JSON uses `audioPath`; macOS and Linux use `outputPath`. Electron accepts both (intentional; not a pending unification).
 - Stop/finalize failures must emit structured `success: false` JSON (with recoverable paths when a final or temp file exists), not only a stderr traceback.
-- Both platform recorders always spill mic/desktop capture to durable `{stem}.capture/` track spools during recording. Stop finalizes via bounded `finalize_capture` (no whole-session RAM mix). Interrupted sessions recover through `audio.capture_recovery`.
+- Platform recorders always spill mic/desktop capture to durable `{stem}.capture/` track spools during recording. Stop finalizes via bounded `finalize_capture` (no whole-session RAM mix). Interrupted sessions recover through `audio.capture_recovery`. Processing profiles are `windows-v1`, `macos-v1`, and `linux-v1`.
 - Capture spool segments (`.pcm.part`) and session dirs must never be scan-imported as meetings.
 - Meeting metadata writes must preserve file locks, atomic temp-file writes, corrupt backups, and transactional add/delete behavior.
 - Optional AI add-ons must never write Hugging Face tokens to logs, metadata, transcripts, summaries, or progress events.

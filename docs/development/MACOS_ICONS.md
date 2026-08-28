@@ -1,5 +1,17 @@
 # macOS Icon Requirements
 
+> **Linux tray icons live elsewhere.** Linux uses `build/iconTrayLinux.png` (idle) and `build/iconTrayLinuxRecording.png` (recording), both 64×64 full-colour PNGs staged through `build.extraResources`. They are **not** template images and must not be replaced with `icon.ico` — `nativeImage.createFromPath` returns an empty image for `.ico` outside Windows, and `new Tray(emptyImage)` still succeeds on Linux, so the failure is a silently blank tray entry. Regenerate with ImageMagick:
+>
+> ```bash
+> magick build/icons/256x256.png -filter Lanczos -resize 64x64 -strip build/iconTrayLinux.png
+> magick -size 64x64 xc:none \
+>   \( build/icons/256x256.png -filter Lanczos -resize 48x48 \) -geometry +0+0 -composite \
+>   \( build/recording-overlay.png -filter Lanczos -resize 34x34 \) -geometry +30+30 -composite \
+>   -depth 8 -define png:color-type=6 -strip build/iconTrayLinuxRecording.png
+> ```
+>
+> Filenames are pinned by `resolveTrayImageFileName` in `src/main/recording-presence-service.js` and asserted in `tests/js/recording-presence-service.test.js`.
+
 ## Tray Icons (Menu Bar)
 
 For macOS menu bar (tray) icons, you need **Template Images** that automatically adapt to light/dark mode.

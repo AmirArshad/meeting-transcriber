@@ -14,6 +14,7 @@ function getTranscriberModule(platform, arch) {
     return 'transcription.mlx_whisper_transcriber';
   }
 
+  // Windows, Linux, and Intel macOS all use faster-whisper.
   return 'transcription.faster_whisper_transcriber';
 }
 
@@ -43,7 +44,7 @@ function buildTranscriptionCliArgs({
     '--model', modelSize,
   ];
   if (!(platform === 'darwin' && arch === 'arm64')) {
-    extraArgs.push('--device', device);
+    extraArgs.push('--device', platform === 'linux' ? 'cpu' : device);
   }
   extraArgs.push('--json');
   return buildTranscriberArgs({ platform, arch, extraArgs });

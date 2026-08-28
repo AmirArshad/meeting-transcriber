@@ -22,6 +22,11 @@ BACKEND_PATH="$APP_PATH/Contents/Resources/backend"
 echo "Verifying packaged macOS app: $APP_PATH"
 echo ""
 
+# CI has no Apple Developer certificate, so package.json explicitly requests a
+# complete ad-hoc bundle signature. Reject unsigned or partially signed apps;
+# the v2.7.0 release incident passed the old leaf-binary-only checks.
+codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+
 test -f "$HELPER_PATH"
 test -x "$HELPER_PATH"
 test -f "$SPEAKRS_CLI_PATH"
@@ -79,7 +84,7 @@ if [[ -d "$SITE_PACKAGES/torch" ]]; then
   exit 1
 fi
 
-PYTHONPATH="$BACKEND_PATH" "$PYTHON_PATH" -c "
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$BACKEND_PATH" "$PYTHON_PATH" -c "
 import lightning_whisper_mlx
 from lightning_whisper_mlx.lightning import LightningWhisperMLX
 import transcription.mlx_whisper_transcriber
@@ -93,6 +98,9 @@ trap 'rm -rf "$SMOKE_DIR"' EXIT
 "$FFMPEG_PATH" -hide_banner -loglevel error \
   -i "$SMOKE_DIR/smoke.wav" -c:a libopus -b:a 128k -ar 48000 -y "$SMOKE_DIR/smoke.opus"
 test -s "$SMOKE_DIR/smoke.opus"
+
+# Smoke execution must not mutate sealed resources (notably Python bytecode).
+codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 
 echo ""
 echo "Bundle sizes:"

@@ -104,7 +104,7 @@ function isActiveCaptureState(state) {
 function buildWindowCloseDialogOptions(
   captureState,
   platform = process.platform,
-  { pendingTranscriptionCount = 0 } = {},
+  { pendingTranscriptionCount = 0, trayAvailable = true } = {},
 ) {
   const state = captureState?.state || 'idle';
 
@@ -119,6 +119,31 @@ function buildWindowCloseDialogOptions(
         defaultId: 0,
         cancelId: 2,
         keepRecordingAction: 'minimize',
+      };
+    }
+
+    if (platform === 'linux') {
+      if (!trayAvailable) {
+        return {
+          type: 'question',
+          title: 'AvaNevis is still recording',
+          message: 'AvaNevis is still recording.',
+          detail: 'Minimize to keep the taskbar recording indicator visible, or stop and quit.',
+          buttons: ['Keep Recording Minimized', 'Stop and Quit', 'Cancel'],
+          defaultId: 0,
+          cancelId: 2,
+          keepRecordingAction: 'minimize',
+        };
+      }
+      return {
+        type: 'question',
+        title: 'AvaNevis is still recording',
+        message: 'AvaNevis is still recording.',
+        detail: 'Keep recording in the system tray, or stop and quit. If no tray icon is visible, AvaNevis is still recording in the background.',
+        buttons: ['Keep Recording in Tray', 'Stop and Quit', 'Cancel'],
+        defaultId: 0,
+        cancelId: 2,
+        keepRecordingAction: 'hide',
       };
     }
 
@@ -137,6 +162,18 @@ function buildWindowCloseDialogOptions(
   const pendingCount = Math.max(0, Number(pendingTranscriptionCount) || 0);
   if (pendingCount > 0) {
     const noun = pendingCount === 1 ? 'recording' : 'recordings';
+    if (platform === 'linux' && !trayAvailable) {
+      return {
+        type: 'question',
+        title: 'Keep AvaNevis Minimized',
+        message: 'Would you like to close the app or keep it minimized?',
+        detail: `${pendingCount} ${noun} will finish transcribing next time you open AvaNevis. Keeping the window minimized preserves a visible taskbar entry.`,
+        buttons: ['Keep AvaNevis Minimized', 'Close App', 'Cancel'],
+        defaultId: 0,
+        cancelId: 2,
+        keepRecordingAction: 'minimize',
+      };
+    }
     return {
       type: 'question',
       title: 'Minimize to Tray',
@@ -146,6 +183,19 @@ function buildWindowCloseDialogOptions(
       defaultId: 0,
       cancelId: 2,
       keepRecordingAction: 'hide',
+    };
+  }
+
+  if (platform === 'linux' && !trayAvailable) {
+    return {
+      type: 'question',
+      title: 'Keep AvaNevis Minimized',
+      message: 'Would you like to close the app or keep it minimized?',
+      detail: 'No system tray is available in this desktop session. Keeping AvaNevis minimized preserves a visible taskbar entry.',
+      buttons: ['Keep AvaNevis Minimized', 'Close App', 'Cancel'],
+      defaultId: 0,
+      cancelId: 2,
+      keepRecordingAction: 'minimize',
     };
   }
 
@@ -167,6 +217,22 @@ function resolveResourcePath(deps, fileName) {
     return deps.path.join(deps.resourcesPath || process.resourcesPath, fileName);
   }
   return deps.path.join(deps.dirname || __dirname, '../../build', fileName);
+}
+
+function resolveTrayImageFileName(platform, kind) {
+  if (kind === 'recording') {
+    // Linux SNI hosts render the item beside every other tray icon, so the
+    // recording state keeps the app mark and badges it with the red REC dot.
+    // A bare red dot (the Windows/macOS idiom) loses app identity in a panel.
+    return platform === 'linux' ? 'iconTrayLinuxRecording.png' : 'iconRecording.png';
+  }
+  if (platform === 'darwin') {
+    return 'iconTemplate.png';
+  }
+  // nativeImage.createFromPath cannot decode .ico outside Windows — it returns
+  // an empty image, and new Tray(empty) succeeds on Linux, which produced a
+  // registered-but-invisible SNI item. Linux needs a real PNG.
+  return platform === 'linux' ? 'iconTrayLinux.png' : 'icon.ico';
 }
 
 function createRecordingPresenceService(deps) {
@@ -192,9 +258,9 @@ function createRecordingPresenceService(deps) {
   } = deps;
 
   const idleTrayImagePath = deps.idleTrayImagePath
-    || resolveResourcePath(deps, platform === 'darwin' ? 'iconTemplate.png' : 'icon.ico');
+    || resolveResourcePath(deps, resolveTrayImageFileName(platform, 'idle'));
   const recordingTrayImagePath = deps.recordingTrayImagePath
-    || resolveResourcePath(deps, 'iconRecording.png');
+    || resolveResourcePath(deps, resolveTrayImageFileName(platform, 'recording'));
   const recordingOverlayPath = deps.recordingOverlayPath
     || resolveResourcePath(deps, 'recording-overlay.png');
 
@@ -331,6 +397,11 @@ function createRecordingPresenceService(deps) {
   function loadTrayNativeImage(kind) {
     const filePath = kind === 'recording' ? recordingTrayImagePath : idleTrayImagePath;
     const image = nativeImage.createFromPath(filePath);
+    // An empty image still constructs a Tray on Linux, which is how a blank
+    // SNI item shipped unnoticed. Surface it instead of registering nothing.
+    if (typeof image.isEmpty === 'function' && image.isEmpty()) {
+      logWarn(`Tray image could not be decoded (${kind}):`, filePath);
+    }
     if (platform === 'darwin' && typeof image.setTemplateImage === 'function') {
       // Non-template for saturated red recording status; template for idle monochrome.
       image.setTemplateImage(kind !== 'recording');
@@ -402,7 +473,11 @@ function createRecordingPresenceService(deps) {
       },
     ];
 
-    tray.setContextMenu(Menu.buildFromTemplate(template));
+    try {
+      tray.setContextMenu(Menu.buildFromTemplate(template));
+    } catch (error) {
+      logWarn('Failed to update tray menu:', error?.message || error);
+    }
   }
 
   function applyTrayPresentation() {
@@ -410,21 +485,25 @@ function createRecordingPresenceService(deps) {
       return;
     }
 
-    const view = buildTrayView(captureState, now());
-    const image = loadTrayNativeImage(view.trayImage);
-    // macOS: setTemplateImage(false) already applied for recording images before setImage.
-    tray.setImage(image);
+    try {
+      const view = buildTrayView(captureState, now());
+      const image = loadTrayNativeImage(view.trayImage);
+      // macOS: setTemplateImage(false) already applied for recording images before setImage.
+      tray.setImage(image);
 
-    if (platform === 'darwin' && typeof tray.setTitle === 'function') {
-      try {
-        tray.setTitle(view.title, { fontType: 'monospacedDigit' });
-      } catch (_) {
-        tray.setTitle(view.title);
+      if (platform === 'darwin' && typeof tray.setTitle === 'function') {
+        try {
+          tray.setTitle(view.title, { fontType: 'monospacedDigit' });
+        } catch (_) {
+          tray.setTitle(view.title);
+        }
       }
-    }
 
-    tray.setToolTip(view.tooltip);
-    rebuildTrayMenu(view);
+      tray.setToolTip(view.tooltip);
+      rebuildTrayMenu(view);
+    } catch (error) {
+      logWarn('Failed to update tray presentation:', error?.message || error);
+    }
   }
 
   function syncPlatformPresence() {
@@ -487,16 +566,25 @@ function createRecordingPresenceService(deps) {
       return tray;
     }
 
-    // loadTrayNativeImage already applies setTemplateImage for darwin idle/recording.
-    tray = new Tray(loadTrayNativeImage('idle'));
+    try {
+      // loadTrayNativeImage already applies setTemplateImage for darwin idle/recording.
+      tray = new Tray(loadTrayNativeImage('idle'));
+    } catch (error) {
+      logWarn('Failed to create system tray:', error?.message || error);
+      tray = null;
+      return null;
+    }
 
-    tray.on('click', () => {
-      try {
-        toggleMainWindow();
-      } catch (error) {
-        logWarn('Tray click failed:', error?.message || error);
-      }
-    });
+    // Linux SNI activation is host-dependent; drive interaction through setContextMenu only.
+    if (platform !== 'linux') {
+      tray.on('click', () => {
+        try {
+          toggleMainWindow();
+        } catch (error) {
+          logWarn('Tray click failed:', error?.message || error);
+        }
+      });
+    }
 
     applyTrayPresentation();
     return tray;
@@ -521,6 +609,7 @@ function createRecordingPresenceService(deps) {
 
   return {
     createTray,
+    hasTray: () => Boolean(tray),
     updateCaptureState,
     getCaptureState,
     refreshPresentation,
@@ -541,4 +630,5 @@ module.exports = {
   buildWindowCloseDialogOptions,
   formatTrayElapsed,
   isActiveCaptureState,
+  resolveTrayImageFileName,
 };

@@ -10,12 +10,14 @@
  */
 
 const os = require('os');
+const { coerceIntegerDeviceId } = require('../main-process/device-id-helpers');
 
 const {
   buildRecordingPreflightReport,
   buildQuitRecordingDialogOptions,
   getRecorderCloseAction,
   getRecorderEventAction,
+  getRecorderModule,
   getRecordingStopTimeout,
   parseRecordingStopResult,
   normalizeRecordingStopPayload,
@@ -74,6 +76,7 @@ function createRecorderService(deps) {
     getBackendModuleArgs = null,
     collectPythonProcessOutput = null,
     scanRecordings = null,
+    resolveRecorderModule = getRecorderModule,
     terminateProcessBestEffort = async (proc) => {
       try {
         signalProcessTree(proc, 'SIGTERM');
@@ -1590,7 +1593,7 @@ function createRecorderService(deps) {
         validateSelectedDevices({ micId, loopbackId }),
         checkDiskSpace(),
         checkAudioOutputSupport(),
-        getMacOSPermissionStatus(Number.isInteger(micId) ? micId : null),
+        getMacOSPermissionStatus(coerceIntegerDeviceId(micId)),
       ]);
 
       return buildRecordingPreflightReport({
@@ -1799,8 +1802,7 @@ function createRecorderService(deps) {
 
         // Start Python recording process (platform-specific recorder)
         // Run as module (-m) to support relative imports within the audio package
-        const isMac = process.platform === 'darwin';
-        const recorderModule = isMac ? 'audio.macos_recorder' : 'audio.windows_recorder';
+        const recorderModule = resolveRecorderModule(process.platform);
 
         proc = spawnTrackedPython([
           '-m', recorderModule,

@@ -368,12 +368,71 @@ If you also ran a non-MLX development setup on macOS, you may additionally have 
 
 ---
 
+## Linux Issues
+
+Linux Core Beta is **Omarchy-first**. Other distros are experimental betas. See [LINUX_EXPERIMENTAL.md](LINUX_EXPERIMENTAL.md) for the matrix and [linux-experimental-beta-checklist.md](../../tests/manual/linux-experimental-beta-checklist.md) for friend-test rows. The 60-minute soak was cancelled. Ubuntu desktop recording/`safeStorage` smoke is still open.
+
+### ❌ Could not list audio devices / Pulse-compatible server
+
+**Symptom:** Preflight or Settings device list fails with a message about `pipewire-pulse` (or PulseAudio) and the user audio session.
+
+**Cause:** AvaNevis captures through a Pulse-compatible server in the logged-in session. `pipewire-pulse` may be missing, or the user service may not be running.
+
+**Solution:**
+1. Install `pipewire-pulse` (or PulseAudio) for your distro.
+2. Start the user session audio service, or sign out and back in.
+3. Confirm `pactl info` works and `pactl list sources short` shows a microphone plus a `*.monitor` source.
+4. Refresh devices or restart AvaNevis.
+
+Do not expect a ScreenCast / screen-sharing prompt. Desktop audio is the sink monitor, not a portal.
+
+### ⚠️ AppImage will not start (`fuse: device not found` / `fusermount`)
+
+**Cause:** The static AppImage runtime still needs kernel `/dev/fuse` and typically `fuse3`. It does **not** need host `fuse2` / `libfuse.so.2`.
+
+**Solution:** Install `fuse3` and ensure `/dev/fuse` is present. Fallback only: `./AvaNevis-Setup-<version>.AppImage --appimage-extract-and-run`. Do not treat that flag as the shipped default.
+
+On Ubuntu, AppArmor may block unprivileged user namespaces. The pinned AppRun then relaunches with `--no-sandbox`. That is expected; do not disable AppArmor for this beta.
+
+### ⚠️ No tray icon / closing the window “loses” the app
+
+**Cause:** Electron uses StatusNotifierItem. Stock GNOME and some compositors have no SNI host. AvaNevis detects a failed tray construction and switches the close dialog to **Keep AvaNevis Minimized**.
+
+**Solution:** Keep the window **minimized** so the taskbar entry stays. Installing an AppIndicator extension is optional and is not a support requirement.
+
+**If a tray item exists but shows no image:** that is a bug, not a compositor quirk — report it. AvaNevis ships dedicated Linux tray PNGs (`iconTrayLinux.png` idle, `iconTrayLinuxRecording.png` while recording); the Windows `.ico` cannot be decoded by Electron on Linux and produces an empty image that still constructs a Tray. Include the main-process log line `Tray image could not be decoded` if present.
+
+### ⚠️ `safeStorage` / keyring unavailable
+
+**Cause:** Chromium needs a Secret Service (GNOME Keyring, KWallet, or equivalent). Hyprland/Sway/Niri do not imply one. KDE uses `kwallet6`; other named desktops request `gnome-libsecret`.
+
+**Solution:** Start the desktop’s keyring. Core Beta has no Linux Hugging Face token flow; this matters for generic encryption availability and later add-ons.
+
+### ⚠️ Fedora: permission denied / odd launch failures
+
+Keep SELinux enforcing. Collect AVC / `ausearch` evidence. Never run `setenforce 0`.
+
+### ⚠️ SteamOS / Steam Deck
+
+Use **Desktop Mode** and the AppImage from home storage. Do not disable the read-only root or install with pacman. Gaming Mode is out of scope.
+
+### 🗑️ Uninstall (Linux)
+
+- pacman: `sudo pacman -R avanevis` (not `-s`)
+- deb: `sudo apt remove avanevis`
+- AppImage: delete the `.AppImage` file
+- User data: `~/.config/avanevis`
+- Whisper cache (faster-whisper): `~/.cache/huggingface`
+
+---
+
 ## Still Having Issues?
 
 1. **Check Existing Issues:** [GitHub Issues](https://github.com/AmirArshad/meeting-transcriber/issues)
 2. **Enable Debug Mode:**
    - Windows: Run from Command Prompt
    - macOS: Run from Terminal with `open -a "AvaNevis"`
+   - Linux: run the AppImage or `/opt/AvaNevis/avanevis` from a terminal and copy the sanitized `Linux environment diagnostics:` line
    - Check Console.app (macOS) or Event Viewer (Windows) for errors
 3. **Report a Bug:** [Create New Issue](https://github.com/AmirArshad/meeting-transcriber/issues/new)
    - Include OS version
@@ -389,4 +448,4 @@ If you also ran a non-MLX development setup on macOS, you may additionally have 
 
 ---
 
-**Last Updated:** December 2025
+**Last Updated:** August 2026
