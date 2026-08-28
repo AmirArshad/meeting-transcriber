@@ -16,6 +16,7 @@ Where docs disagree on a cross-process contract, `AGENTS.md` wins.
 | Packaging and installers | `docs/development/BUILD_INSTRUCTIONS.md`, `docs/development/INSTALLER_IMPLEMENTATION.md` |
 | Backend module layout | `docs/development/BACKEND.md` |
 | AI catalog pins | `docs/development/LOCAL_AI_MODEL_CATALOG.md` |
+| v2.9 dependency evidence | `docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md` |
 | Speakrs soak / quality notes | `docs/development/SPEAKRS_BENCHMARKS.md` |
 | Third-party notices / About credits | `THIRD_PARTY_NOTICES.md`, Settings About in `src/renderer/index.html` |
 | Recorder stdout JSON migration history | `docs/completed/json-based-events.md` |

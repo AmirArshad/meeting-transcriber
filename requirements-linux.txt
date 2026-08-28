@@ -6,7 +6,7 @@ soxr>=1.1.0              # Shared spool finalization / StatefulResampler (proces
 
 # Transcription Dependencies (Linux uses faster-whisper, not MLX)
 faster-whisper>=1.0.0    # Fast, accurate Whisper implementation (CPU + optional CUDA)
-filelock>=3.32.0         # Prevent race conditions during model downloads
+filelock>=3.32.3         # Prevent race conditions during model downloads (CVE-2025-68146, CVE-2026-22701)
 
 # SoundCard native binding
 # cffi is pulled in by SoundCard; packaged builds pin it in requirements-linux-build.txt.

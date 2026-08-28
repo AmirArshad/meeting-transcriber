@@ -6,8 +6,8 @@
 
 ## Next up — release foundation
 
-- [ ] [Risk: Medium] Create `feature/v2.9-dependency-hygiene`; establish a per-platform resolver matrix before changing any package pin. Record Python 3.11 runtime/build results, CUDA/MLX/Whisper/Speakrs compatibility, SBOMs, and the offline transcription smoke.
-- [ ] [Risk: Low] Correct the Linux `FileLock` inconsistency: `requirements-linux.txt` must require `filelock>=3.32.3`; `requirements-linux-build.txt` must pin `filelock==3.32.3`. Include this in v2.9.0, not as a speculative independent release.
+- [x] [Risk: Medium] Create `feature/v2.9-dependency-hygiene`; establish a per-platform resolver matrix before changing any package pin. Record Python 3.11 runtime/build results, CUDA/MLX/Whisper/Speakrs compatibility, SBOMs, and the offline transcription smoke. Evidence: [`docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md`](docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md).
+- [x] [Risk: Low] Correct the Linux `FileLock` inconsistency: `requirements-linux.txt` must require `filelock>=3.32.3`; `requirements-linux-build.txt` must pin `filelock==3.32.3`. Include this in v2.9.0, not as a speculative independent release.
 - [ ] [Risk: Medium] Accept only dependency updates proven on their own platform gates: pytest 9.1.1; PyAV 18.1.0 after Windows/Linux packaged decode smoke; setuptools 84 only for Windows/Linux after resolving macOS separately; Numba 0.67 only together with compatible llvmlite and MLX validation.
 - [ ] [Risk: High] Trial the explicit-transitive pin trim. Keep direct runtime dependencies `onnxruntime`, `tokenizers`, and `av`; remove a pin only after `pip check`, deterministic resolver output, SBOM diff, packaged build, and platform runtime smoke demonstrate it is redundant.
 - [ ] [Risk: High] Evaluate macOS PyObjC `Cocoa` / `Quartz` pins separately. Preserve the ScreenCaptureKit fallback and require imports, `pip check`, packaged macOS directory build, and a macOS hardware capture smoke before accepting any removal.
