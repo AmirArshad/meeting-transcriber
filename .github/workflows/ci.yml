@@ -183,6 +183,10 @@ jobs:
       run: node scripts/run-speakrs-cpu-smoke.js --cli native/speakrs-cli/target/aarch64-apple-darwin/release/speakrs-cli
 
     - name: Build packaged macOS app smoke test
+      env:
+        # electron-builder skips signing on pull_request unless this is set.
+        # identity "-" is ad-hoc; there is no Developer ID secret to leak.
+        CSC_FOR_PULL_REQUEST: true
       run: |
         echo "Open file limit before: $(ulimit -n)"
         ulimit -n 10240 || true

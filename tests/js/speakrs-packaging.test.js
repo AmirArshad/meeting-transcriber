@@ -529,6 +529,9 @@ test('macOS packaged-app verifier requires arm64 speakrs-cli and the canonical f
 test('macOS packaged-app verifier rejects an invalid app seal without mutating it with pycache', () => {
   assert.match(MACOS_VERIFY_SCRIPT, /codesign --verify --deep --strict --verbose=2 "\$APP_PATH"/);
   assert.match(MACOS_VERIFY_SCRIPT, /PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="\$BACKEND_PATH"/);
+  // PR builds otherwise skip signing, which leaves the incomplete linker seal
+  // that Gate B closed (codesign --deep --strict: no resources).
+  assert.match(CI_WORKFLOW, /CSC_FOR_PULL_REQUEST:\s*true/);
 });
 
 

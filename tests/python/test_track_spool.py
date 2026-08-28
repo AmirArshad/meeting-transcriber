@@ -404,9 +404,12 @@ class TrackSpoolTests(unittest.TestCase):
             coordinator, spool = self._open_spool(
                 recordings_dir,
                 max_queue_bytes=8 * 1024 * 1024,
-                segment_bytes=64 * 1024,
+                # Larger segments avoid hundreds of Windows temp-file rolls while
+                # the writer fills the clamped 180s gap (CI flake: join timeout).
+                segment_bytes=2 * 1024 * 1024,
                 stall_timeout_s=30.0,
                 flush_interval_s=0.05,
+                close_join_timeout_s=60.0,
             )
             try:
                 chunk = _int16_stereo_frames(10)
@@ -416,6 +419,12 @@ class TrackSpoolTests(unittest.TestCase):
                 self.assertIsNone(result.fail_reason)
                 self.assertLessEqual(result.committed_frames, 48000 * 180 + 20)
             finally:
+                if spool._worker.is_alive():
+                    try:
+                        spool._queue.put(None)
+                    except Exception:
+                        pass
+                    spool._worker.join(timeout=5.0)
                 coordinator.close()
 
     def test_close_skips_mutation_when_writer_still_alive(self):

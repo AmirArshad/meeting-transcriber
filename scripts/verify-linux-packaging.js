@@ -300,18 +300,36 @@ function parsePkginfo(pkginfoText) {
   return { fields, depends };
 }
 
+function isExpectedPacmanPkgver(actual, version) {
+  const base = String(version || '');
+  const value = String(actual || '');
+  if (!base) {
+    return false;
+  }
+  if (value === base) {
+    return true;
+  }
+  // Arch .PKGINFO pkgver is version-pkgrel. electron-builder emits "2.7.0-1".
+  const escaped = base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^${escaped}-[1-9][0-9]*$`).test(value);
+}
+
 function assertPacmanPkginfo(pkginfoText, pkg = require('../package.json')) {
   const expected = getJustifiedPacmanDepends(pkg);
   const { fields, depends } = parsePkginfo(pkginfoText);
   const expectedFields = {
     pkgname: pkg.name,
-    pkgver: pkg.version,
     arch: 'x86_64',
   };
   for (const [key, expectedValue] of Object.entries(expectedFields)) {
     if (fields[key] !== expectedValue) {
       fail(`pacman .PKGINFO ${key} must be ${expectedValue}, got ${fields[key] || '(missing)'}`);
     }
+  }
+  if (!isExpectedPacmanPkgver(fields.pkgver, pkg.version)) {
+    fail(
+      `pacman .PKGINFO pkgver must be ${pkg.version} or ${pkg.version}-<pkgrel>, got ${fields.pkgver || '(missing)'}`,
+    );
   }
   if (depends.length === 0) {
     fail('pacman .PKGINFO has no depend entries');

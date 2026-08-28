@@ -221,6 +221,12 @@ test('assertPacmanPkginfo accepts the justified depend list and rejects libappin
     '',
   ].join('\n');
   assert.deepEqual(assertPacmanPkginfo(pkginfo, packageJson), depends);
+  // electron-builder writes Arch pkgver as version-pkgrel (2.7.0-1).
+  const pkginfoWithRel = pkginfo.replace(
+    `pkgver = ${packageJson.version}`,
+    `pkgver = ${packageJson.version}-1`,
+  );
+  assert.deepEqual(assertPacmanPkginfo(pkginfoWithRel, packageJson), depends);
 
   assert.throws(
     () => assertPacmanPkginfo(`${pkginfo}depend = libappindicator-gtk3\n`, packageJson),
@@ -240,6 +246,14 @@ test('assertPacmanPkginfo accepts the justified depend list and rejects libappin
     () => assertPacmanPkginfo(pkginfo.replace(`pkgver = ${packageJson.version}`, 'pkgver = 9.9.9'), packageJson),
     /pkgver.*9\.9\.9/i,
   );
+  assert.throws(
+    () => assertPacmanPkginfo(pkginfo.replace(`pkgver = ${packageJson.version}`, `pkgver = ${packageJson.version}-0`), packageJson),
+    /pkgver/,
+  );
+  assert.throws(
+    () => assertPacmanPkginfo(pkginfo.replace(`pkgver = ${packageJson.version}`, 'pkgver = 9.9.9-1'), packageJson),
+    /pkgver.*9\.9\.9-1/i,
+  );
 });
 
 test('verifyPacmanArchivePayload validates the actual archive resources and exclusions', () => {
@@ -251,7 +265,7 @@ test('verifyPacmanArchivePayload validates the actual archive resources and excl
     const depends = getJustifiedPacmanDepends(packageJson);
     writeFile(path.join(packageRoot, '.PKGINFO'), [
       'pkgname = avanevis',
-      `pkgver = ${packageJson.version}`,
+      `pkgver = ${packageJson.version}-1`,
       'arch = x86_64',
       ...depends.map((name) => `depend = ${name}`),
       '',
