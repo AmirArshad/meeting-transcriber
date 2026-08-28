@@ -11,8 +11,8 @@ Decision record for `feature/v2.9-dependency-hygiene` Task 1. Later version chan
 |---|---|---|
 | CPython 3.11.9 (`MSC v.1938`, 64-bit) | Windows host clean venvs | `cp311` win_amd64 |
 | CPython 3.11.15 (uv `cpython-3.11.15-linux-x86_64-gnu`) | WSL2 Ubuntu | `cp311` manylinux |
-| CPython 3.11 (packaged `PYTHON_VERSION = 3.11.9` in `build/prepare-resources.js`) | Windows/macOS/Linux installers | same ABI; not re-resolved in this task |
-| macOS arm64 3.11 | not present on this host | `pip install --dry-run --report` with `--python-version 3.11 --abi cp311` and `macosx_14_0_arm64` / `13_0` / `12_0` / `11_0` tags |
+| CPython 3.11 (packaged `PYTHON_VERSION = 3.11.9` in `build/prepare-resources.js`) | Windows/Linux/macOS installers | same ABI; packaged macOS dir build used python-build-standalone 3.11.7 on this Mac |
+| Homebrew CPython 3.11.16 | Apple Silicon Mac (Task 2 native `pip check`) | `cp311` macosx arm64 |
 
 Linux WSL2 is **not** Omarchy hardware. It is a Python 3.11 Linux resolver/`pip check` stand-in. Packaged Linux still uses python-build-standalone 3.11.9.
 
@@ -43,9 +43,9 @@ Treat these as **direct runtime dependencies** even when a resolver also reaches
 | `ctranslate2` | faster-whisper inference | Windows/Linux build `==4.8.1` | CUDA 12 wheels. Packaged Windows GPU profile remains `nvidia-cublas-cu12` / `nvidia-cudnn-cu12`. This host also has CUDA 13 on PATH; that does not change the packaged CUDA 12 contract. |
 | `faster-whisper` | Windows + Linux transcription | `==1.2.1` | Linux Core Beta is **CPU only**. |
 | `lightning-whisper-mlx` | Apple Silicon transcription | macOS build `==0.0.10` | Pins `tiktoken==0.3.3`. |
-| `torch` | macOS resolver only | macOS build `==2.12.0`, then **pruned** | MLX never imports `torch_whisper.py`. `lightning-whisper-mlx` does not pin Torch; `setuptools<82` is upstream from **2.12.0**. Task 2 trials **2.13.0** on a Mac (still pruned). Not Pyannote’s `torch==2.8.0`. |
-| `setuptools` | pip / wheel metadata | Windows/Linux build `==84.0.0`; macOS build `==81.0.0` (also pruned from the macOS runtime) | Windows/Linux **accepted** Task 2. macOS: only with Torch 2.13 on a Mac. CI currently ignores `PYSEC-2026-3447` because of the 2.12 pin. |
-| `numba` / `llvmlite` | MLX stack | macOS build `==0.65.1` / `==0.47.0` | Unconstrained macOS runtime floats to **0.67.0 / 0.49.0**. Accept 0.67 only with matching llvmlite 0.49 **and** MLX/Whisper plus ScreenCaptureKit-fallback smoke. |
+| `torch` | macOS resolver only | macOS build `==2.13.0`, then **pruned** | MLX never imports `torch_whisper.py`. `lightning-whisper-mlx` does not pin Torch. **Accepted** Task 2 on Apple Silicon (2026-08-28). Stays in `MACOS_RUNTIME_REMOVABLE_PACKAGES`. Not Pyannote’s `torch==2.8.0`. |
+| `setuptools` | pip / wheel metadata | Windows/Linux/macOS build `==84.0.0` (also pruned from the macOS runtime) | Windows/Linux **accepted** Task 2. macOS **accepted** with Torch 2.13.0. CI no longer ignores `CVE-2025-3000` or `PYSEC-2026-3447`. |
+| `numba` / `llvmlite` | MLX stack | macOS build `==0.65.1` / `==0.47.0` | Unconstrained macOS runtime floats to **0.67.0 / 0.49.0**. Same-session Numba 0.67 trial follows this torch/setuptools commit. |
 | `numpy` | audio + ML | all build files `==2.4.6` | Stay on 2.4.x; 2.5+ needs Python ≥3.12. |
 | PyObjC `ScreenCaptureKit` / `CoreAudio` / `AVFoundation` | macOS capture fallback | build `==10.0` | Runtime files float to **12.2.2**. Coordinated bump only. |
 | PyObjC `Cocoa` / `Quartz` / `core` / `CoreMedia` | ScreenCaptureKit fallback graph | build `==12.1` | Task 3: do not remove without imports, `pip check`, packaged macOS dir build, and hardware capture smoke. |
@@ -68,8 +68,8 @@ Material floats observed 2026-08-28 (runtime) versus current build pins:
 | `huggingface-hub` | 1.29.0 | 1.16.1 | Hold packaged pin |
 | `pytest` | 9.1.1 | floor `>=9.1.1` | **Accepted** Task 2 (2026-08-28): `requirements-dev.txt` floor raised; not a packaged pin |
 | `mlx` | 0.32.2 | 0.31.2 | macOS only; needs native smoke |
-| `torch` (macOS runtime) | 2.13.0 | 2.12.0 then prune | **Trial 2.13.0 on a Mac** with setuptools 84; still prune after pip |
-| `setuptools` (macOS runtime) | 84.0.0 | Windows/Linux **84.0.0**; macOS **81.0.0** | Windows/Linux **accepted** Task 2; macOS only with Torch 2.13 |
+| `torch` (macOS runtime) | 2.13.0 | **2.13.0** then prune | **Accepted** Task 2 (2026-08-28 Mac): still prune after pip |
+| `setuptools` (macOS runtime) | 84.0.0 | Windows/Linux/macOS **84.0.0** | **Accepted** Task 2 on all three packaged platforms |
 | PyObjC capture frameworks | 12.2.2 | 10.0 / 12.1 mix | Coordinated macOS change only |
 | `sounddevice` | 0.5.6 | 0.4.6 | Hold until macOS capture smoke |
 
@@ -112,17 +112,19 @@ tokenizers==0.23.1 tqdm==4.70.0 typing_extensions==4.16.0
 
 `pip check` passed after the FileLock correction. Pins installed as written: `filelock==3.32.3`, `av==17.0.1` at Task 1 / `av==18.1.0` after Task 2, `onnxruntime==1.26.0`, `tokenizers==0.23.1`, `faster-whisper==1.2.1`, `ctranslate2==4.8.1`, `setuptools==83.0.0` at Task 1 / `setuptools==84.0.0` after Task 2, `pulsectl==24.12.0`, `SoundCard==0.4.6`, `cffi==2.1.1`, `numpy==2.4.6`.
 
-### `requirements-macos.txt` — dry-run only (no macOS `pip check`)
+### `requirements-macos.txt` — Homebrew CPython 3.11.16 native install (Apple Silicon)
 
-`pip install --dry-run --report` with macOS arm64 tags succeeded (`Would install` 46 packages). Notable floats: `filelock==3.32.4`, `lightning-whisper-mlx==0.0.10`, `mlx==0.32.2`, `numba==0.67.0`, `llvmlite==0.49.0`, `torch==2.13.0`, `setuptools==84.0.0`, PyObjC 12.2.2, `sounddevice==0.5.6`, `scipy==1.17.1`, `tiktoken==0.3.3`. **Native `pip check` was not run** (no macOS 3.11 on this machine). CI `test-backend-macos` installs this file plus `requirements-dev.txt` but does not run `pip check`.
+`pip check` passed (`No broken requirements found.`). Clean venv `/tmp/avanevis-v2.9-macos-runtime`. Resolved graph includes `torch==2.13.0`, `setuptools==84.0.0`, `numba==0.67.0`, `llvmlite==0.49.0`, `mlx==0.32.2`, `lightning-whisper-mlx==0.0.10`, `filelock==3.32.4`, `sounddevice==0.5.6`, PyObjC 12.2.2, `tiktoken==0.3.3`. 45 frozen packages. This is the unconstrained runtime float, not the packaged pin set. PyObjC 12.2 and sounddevice 0.5.6 remain **not** accepted as packaged pins.
 
-### `requirements-macos-build.txt` — dry-run only (no macOS `pip check`)
+### `requirements-macos-build.txt` — Homebrew CPython 3.11.16 native install (Apple Silicon)
 
-Dry-run succeeded (`Would install` 53 packages) at the pinned graph: `filelock==3.32.3`, `torch==2.12.0`, `setuptools==81.0.0`, `mlx==0.31.2`, `numba==0.65.1`, `llvmlite==0.47.0`, `lightning-whisper-mlx==0.0.10`, mixed PyObjC 10.0/12.1, `tiktoken==0.3.3`, `scipy==1.17.1`. Same native `pip check` gap as the runtime file.
+**Baseline (pre-trial):** `pip install --only-binary=:all:` then `pip check` passed at `torch==2.12.0`, `setuptools==81.0.0`, `numba==0.65.1`, `llvmlite==0.47.0`, `mlx==0.31.2`.
+
+**After torch 2.13.0 + setuptools 84.0.0:** clean venv `/tmp/avanevis-v2.9-macos-build-torch213`. `pip check` passed. `pip_audit -r requirements-macos-build.txt` with **no ignores**: `No known vulnerabilities found` (CVE-2025-3000 is patched in 2.13.0; PYSEC-2026-3447 is past setuptools 83). Torch remains in `MACOS_RUNTIME_REMOVABLE_PACKAGES`. Pyannote `torch==2.8.0` in `src/ai-addon-state.js` was not changed.
 
 ## SBOM
 
-Command: `npm run legal:sbom` → `legal/PYTHON-BUNDLED-PACKAGES.md` (63 direct pins). Regenerated 2026-08-28T16:20:48.832Z after accepting `setuptools==84.0.0` on Windows/Linux (macOS remains 81.0.0).
+Command: `npm run legal:sbom` → `legal/PYTHON-BUNDLED-PACKAGES.md` (63 direct pins). Regenerated 2026-08-28T17:06:33.177Z after accepting macOS `torch==2.13.0` / `setuptools==84.0.0` (all three build files now pin setuptools 84.0.0; torch pin is 2.13.0).
 
 The generator lists **direct `==` pins** from the three build requirement files, not a full transitive lock. Transitive packages still install during `npm run prepare-build`.
 
@@ -160,7 +162,7 @@ Executed here in a clean 3.11.9 venv (plus `requirements-dev.txt` for pytest): `
 
 Linux equivalent: WSL2 Python 3.11.15 clean venvs for `requirements-linux.txt` and `requirements-linux-build.txt`, both `pip check` passed.
 
-macOS equivalent: dry-run resolver only; native install/`pip check` still needed on macos-14 before Task 2 macOS pin changes.
+macOS equivalent: Homebrew CPython 3.11.16 clean venvs for `requirements-macos.txt` and `requirements-macos-build.txt`, both `pip check` passed (2026-08-28 Apple Silicon).
 
 ## Task 2 accepted (Windows/Linux)
 
@@ -220,18 +222,34 @@ Held: macOS `torch==2.12.0` / `setuptools==81.0.0` / Numba 0.65.1; Electron 42.9
 
 **This Windows PC:** the three Windows/Linux Task 2 commits are done. Next step is the Mac.
 
-## When to switch to the Mac
+## Task 2 accepted (macOS Apple Silicon)
 
-Stay on `feature/v2.9-dependency-hygiene`. The three Windows/Linux Task 2 commits exist on this PC. Continue the same branch on Apple Silicon.
+Stay on `feature/v2.9-dependency-hygiene`. Host: macOS 26.6.2 arm64, Homebrew CPython 3.11.16. Packaged dir build used python-build-standalone 3.11.7. Electron stayed 42.9.0. Pyannote `torch==2.8.0` was not changed. `onnxruntime`, `tokenizers`, and `av` were not changed. PyObjC and `sounddevice` were not bumped.
 
-**This Windows PC:** pytest 9.1.1, PyAV 18.1.0, and setuptools 84.0.0 (Windows/Linux build) are recorded above. Do not change macOS pins from this machine.
+### torch 2.13.0 + setuptools 84.0.0 — accepted 2026-08-28 (this Mac)
 
-**Switch to the Mac when those three commits exist**, and do this work there:
+**Upstream:** [torch 2.13.0](https://pypi.org/project/torch/2.13.0/) requires `setuptools>=77.0.3` (no `<82` cap). [setuptools 84.0.0](https://setuptools.pypa.io/en/stable/history.html) is past PYSEC-2026-3447. GitHub advisory GHSA-rrmf-rvhw-rf47 lists CVE-2025-3000 patched in **2.13.0** (affected `<=2.12.1`).
 
-1. Native `pip check` for `requirements-macos.txt` and `requirements-macos-build.txt` on Python 3.11.
-2. Trial **`torch==2.13.0` + `setuptools==84`** in `requirements-macos-build.txt` in one commit. Torch is still resolver-only and must remain in `MACOS_RUNTIME_REMOVABLE_PACKAGES`. Re-run pip-audit; keep ignoring `CVE-2025-3000` only if it still has no fix version. Do not touch Pyannote `torch==2.8.0`.
-3. Numba **0.67** with llvmlite **0.49** (not 0.47). Packaged MLX transcription smoke + ScreenCaptureKit-fallback capture smoke.
-4. Reject any of 2–3 if resolver, `pip check`, packaged dir build, or hardware smoke fails; leave the 2.12.0 / 81.0.0 / Numba 0.65.1 pins in place.
+**Pin:** `requirements-macos-build.txt` `torch==2.12.0` / `setuptools==81.0.0` → `torch==2.13.0` / `setuptools==84.0.0`. Torch stays in `MACOS_RUNTIME_REMOVABLE_PACKAGES` (`build/prepare-resources.js`). CI `pip-macos` no longer ignores CVE-2025-3000 or PYSEC-2026-3447.
+
+**Resolver / `pip check`:** clean venv `/tmp/avanevis-v2.9-macos-build-torch213`, `pip install --only-binary=:all: -r requirements-macos-build.txt` → `torch==2.13.0`, `setuptools==84.0.0`. `pip check`: No broken requirements found.
+
+**pip-audit:** `python -m pip_audit -r requirements-macos-build.txt` with no `--ignore-vuln` → **No known vulnerabilities found**.
+
+**Packaged macOS dir build:** `npm run build:mac:dir` exit 0. prepare-resources installed `torch==2.13.0` then **Removed torch (533 MB)** and **Removed setuptools (7 MB)**. `npm run verify:mac:packaged` passed (ad-hoc deep/strict, no `site-packages/torch` directory). Packaged `import torch` raises `ModuleNotFoundError` (leftover `torch-2.13.0.dist-info` / `setuptools-84.0.0.dist-info` metadata only — existing prune-directory behavior).
+
+**Hardware smokes (same Mac session; packaged `dist/mac-arm64/AvaNevis.app`):**
+- MLX transcription: bundled python `-m transcription.mlx_whisper_transcriber --file tests/fixtures/speakrs-two-speaker-16k.wav --model base --language en --json` → exit 0, `device: metal`, `computeType: float16`, duration 14.22s, English two-speaker fixture text, cache `~/Library/Caches/avanevis`.
+- Desktop capture: packaged `audiocapture-helper` via `SwiftAudioCapture`, CoreAudio tap, 8.51s, peak 0.693, `helperCaptureBackend=coreaudio_tap`.
+- ScreenCaptureKit fallback: helper started with `--screencapturekit` (`preferCoreAudioTap: false`), requested shareable content, then fail-closed `PERMISSION_DENIED: Screen Recording permission not granted`. The same deny occurred when launched from Terminal.app. Cursor/Terminal/this agent do not hold Screen Recording TCC; the SCK **path** ran and failed closed. PCM capture via SCK was not possible in this session. That is a TCC limitation, not a Torch/setuptools resolver failure.
+
+Held: Numba 0.65.1 / llvmlite 0.47.0 until the following same-session commit; Electron 42.9.0; Linux AI add-ons; PyObjC; sounddevice 0.4.6; `onnxruntime` 1.26.0; `tokenizers` 0.23.1.
+
+## After the Mac torch/setuptools commit
+
+Stay on `feature/v2.9-dependency-hygiene`. Native `pip check`, torch 2.13.0 + setuptools 84.0.0, packaged dir build, MLX smoke, and CoreAudio tap capture are recorded above. CI pip-audit ignores for CVE-2025-3000 / PYSEC-2026-3447 are removed.
+
+**Same Mac session next:** Numba **0.67** with llvmlite **0.49** (not 0.47). Reuse the packaged MLX + helper evidence; reject Numba if resolver/`pip check` fails.
 
 PyObjC 12.2 and sounddevice 0.5.6 remain **not** in this Mac trial unless a later Task 2/3 commit takes them with their own evidence.
 

@@ -394,14 +394,11 @@ jobs:
       if: matrix.kind == 'pip-macos'
       run: |
         python -m pip install pip-audit
-        # torch==2.12.0 is installed only for reproducible pip resolution during
+        # torch==2.13.0 is installed only for reproducible pip resolution during
         # macOS packaging, then removed before the app ships (see prepare-resources.js).
-        # CVE-2025-3000 (torch.jit.script) has no PyPI fix version yet.
-        # PYSEC-2026-3447 (setuptools<83) cannot be fixed while torch requires
-        # setuptools<82; setuptools is also pruned from the packaged macOS runtime.
-        python -m pip_audit -r requirements-macos-build.txt \
-          --ignore-vuln CVE-2025-3000 \
-          --ignore-vuln PYSEC-2026-3447
+        # CVE-2025-3000 is patched in torch 2.13.0. setuptools==84.0.0 is past
+        # PYSEC-2026-3447. Both packages stay in MACOS_RUNTIME_REMOVABLE_PACKAGES.
+        python -m pip_audit -r requirements-macos-build.txt
 
     - name: Audit pinned Windows Python dependencies
       if: matrix.kind == 'pip-windows'

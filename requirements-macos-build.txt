@@ -50,12 +50,12 @@ numba==0.65.1
 llvmlite==0.47.0
 # Pinned for reproducible pip resolution; lightning-whisper-mlx requires torch but MLX inference
 # never imports torch_whisper.py, so prepare-resources removes torch after install.
-# torch==2.12.0 requires setuptools<82 (Windows/Linux build pin is 84.0.0; no torch there).
-# pip-audit: CVE-2025-3000 has no fix version; CI ignores it because torch is not shipped.
-# pip-audit: PYSEC-2026-3447 (setuptools<83) is ignored on macOS for the same torch pin;
-# setuptools is pruned from the packaged macOS runtime after install.
-torch==2.12.0
-setuptools==81.0.0
+# torch==2.13.0 requires setuptools>=77.0.3 (no <82 cap). Keep in lockstep with Windows/Linux
+# setuptools==84.0.0. Torch remains in MACOS_RUNTIME_REMOVABLE_PACKAGES and is pruned after pip.
+# pip-audit: CVE-2025-3000 is patched in 2.13.0; do not ignore it. setuptools 84.0.0
+# is past PYSEC-2026-3447 (setuptools<83); setuptools is still pruned after install.
+torch==2.13.0
+setuptools==84.0.0
 networkx==3.6.1
 sympy==1.14.0
 # sympy==1.14.0 requires mpmath<1.4.
