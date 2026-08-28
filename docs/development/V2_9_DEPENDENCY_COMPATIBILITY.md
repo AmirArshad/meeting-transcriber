@@ -380,7 +380,30 @@ Stay on `feature/v2.9-dependency-hygiene`. Host: macOS 26.6.2 arm64, Homebrew CP
 
 Held: Windows/Linux `huggingface-hub==1.16.1`; Electron 42.9.0; Linux AI add-ons; PyObjC; sounddevice 0.4.6; `onnxruntime` 1.26.0; `tokenizers` 0.23.1; mlx 0.31.2; typer 0.25.1. `click` stays on macOS because hub 1.29 requires it — cluster 2 must not drop it.
 
-**Next (this Mac):** remaining clusters: `typer` 0.25.1 → 0.27.2 (`click` stays; drop `colorama` only if unused); `mlx` 0.31.2 → 0.32.2 only after packaged MLX smoke; remaining macOS-only floats (`cffi`, `regex`, `Pygments`, `annotated-doc`). Keep the lock. Do not bump PyObjC or `sounddevice` unless their capture gates pass. Windows/Linux Task 3 trim remains on those hosts.
+### Cluster 2: typer 0.27.2 — accepted 2026-08-28 (this Mac)
+
+**Upstream:** [typer 0.27.2](https://pypi.org/project/typer/0.27.2/) (2026-08-28). 0.26.0 vendored Click and dropped the third-party `click` dependency. 0.27.2 requires `shellingham`, `rich`, `annotated-doc`, and `colorama` **only on Windows**. AvaNevis does not import `typer`, `click`, or `colorama` in application code. huggingface-hub 1.29.0 still requires `click>=8.4.2,<9`, so the macOS `click==8.5.0` pin **stays**. No application-code change.
+
+**Pin (macOS build only):** `typer==0.25.1` → **`typer==0.27.2`**. Removed unused macOS `colorama==0.4.6` (not installed after the bump; Windows/Linux keep `colorama==0.4.6`). `click==8.5.0` retained. `annotated-doc==0.0.4` unchanged (cluster 4).
+
+**Resolver / `pip check`:** clean venv `/tmp/avanevis-v2.9-macos-build-typer027`. `typer==0.27.2`, `click==8.5.0`, colorama **not installed**. `pip check`: No broken requirements found.
+
+**pip-audit:** `python -m pip_audit -r requirements-macos-build.txt` with no ignores → **No known vulnerabilities found**.
+
+**Tests:** same hf/transcriber helper files exit 0 (1 skipped).
+
+**SBOM:** `npm run legal:sbom` → generated 2026-08-28T17:49:26.902Z; 63 direct pins. `typer` is **platform-specific (0.25.1 vs 0.27.2)**. `colorama` is now Windows/Linux only.
+
+**Packaged macOS dir build:** `npm run build:mac:dir` exit 0. Torch/setuptools pruned. `npm run verify:mac:packaged` passed. Bundled `pip check` passed. Bundled `typer==0.27.2`, `click==8.5.0`, colorama absent.
+
+**Hardware smokes (packaged `dist/mac-arm64/AvaNevis.app`):**
+- MLX `base` two-speaker fixture: exit 0, `device: metal`, `computeType: float16`, duration 14.22s.
+- CoreAudio tap: 15.07s, peak 0.7328, `helperCaptureBackend=coreaudio_tap`.
+- ScreenCaptureKit `--screencapturekit` fail-closed on Screen Recording TCC.
+
+Held: Windows/Linux `typer==0.25.1` / `click==8.4.1` / `colorama==0.4.6`; mlx 0.31.2; Electron 42.9.0; PyObjC; sounddevice 0.4.6.
+
+**Next (this Mac):** remaining clusters: `mlx` 0.31.2 → 0.32.2 only after packaged MLX smoke; remaining macOS-only floats (`cffi`, `regex`, `Pygments`, `annotated-doc`). Keep the lock. Do not bump PyObjC or `sounddevice` unless their capture gates pass. Windows/Linux Task 3 trim remains on those hosts.
 
 ## Blockers and non-goals
 
