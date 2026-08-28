@@ -4,6 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/Platform-Windows%2010%2F11-0078D6.svg)](https://www.microsoft.com/windows)
+[![macOS](https://img.shields.io/badge/Platform-macOS%2013%2B-000000.svg)](https://www.apple.com/macos)
 [![Linux](https://img.shields.io/badge/Platform-Linux%20x86__64%20Core%20Beta-FCC624.svg)](https://omarchy.org/)
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
 [![Electron](https://img.shields.io/badge/Electron-42-47848F.svg)](https://www.electronjs.org/)
@@ -27,7 +28,7 @@ Online meetings are a tax on memory. The good options for getting transcripts ba
 - **Search and bulk-manage history** — filter the meeting list, multi-select, bulk delete, replay with synchronized audio.
 - **Recovery-friendly storage** — meetings are persisted with an atomic write + cross-process file lock, with corrupt-metadata backups (`meetings.corrupt.*.json`) and filesystem rescan/import on launch or when you refresh history (not on every list reload).
 - **Optional local AI add-ons** — speaker labels and meeting summaries can be set up after install on **Windows and macOS**. Speaker identification is Speakrs (token-free) or Pyannote (user's own Hugging Face token) — only one engine is installed at a time. Summaries use pinned local `llama.cpp`/GGUF artifacts and run only when the user clicks Generate Summary. On **Linux Core Beta** both cards stay visible and greyed `unsupported` (no CPU fallback; no Linux CUDA add-ons).
-- **One-click installer** — Windows NSIS and macOS DMG with embedded Python runtime, ffmpeg, `speakrs-cli`, and the bundled native macOS helper. Linux Core Beta ships an x86_64 AppImage (no host fuse2) and a pacman package with bundled Python/ffmpeg/backend and **no** `speakrs-cli`. No system Python required. GitHub Release attach of Linux artifacts waits on [issue #76](https://github.com/AmirArshad/meeting-transcriber/issues/76).
+- **One-click installer** — Windows NSIS and macOS DMG with embedded Python runtime, ffmpeg, `speakrs-cli`, and the bundled native macOS helper. Linux Core Beta ships an x86_64 AppImage (no host fuse2) and a pacman package with bundled Python/ffmpeg/backend and **no** `speakrs-cli`. No system Python required. Linux artifacts are included by the release workflow after the macOS DMG integrity gate closed on 2026-08-28.
 - **Update awareness** — checks GitHub Releases on launch and shows an in-app banner with one-click open of the release page.
 
 ## Privacy
@@ -66,7 +67,7 @@ If right-click → Open misbehaves, run `xattr -d com.apple.quarantine /Applicat
 
 Omarchy/Arch: install the `AvaNevis-Setup-<version>.pkg.tar.zst` pacman package, or run the `AvaNevis-Setup-<version>.AppImage`. The AppImage is a static-pie runtime and does **not** need host `fuse2` / `libfuse.so.2` (kernel `/dev/fuse` + `fuse3` still mount the image). Do not treat `--appimage-extract-and-run` as the shipped default.
 
-Transcription is local CPU `faster-whisper`. Speaker identification and summaries stay visible in Settings but greyed `unsupported`. GitHub Release attach of these artifacts waits on [issue #76](https://github.com/AmirArshad/meeting-transcriber/issues/76); build locally with `npm run build:linux` until then. Ubuntu 24.04 AppImage use is experimental until a desktop smoke exists.
+Transcription is local CPU `faster-whisper`. Speaker identification and summaries stay visible in Settings but greyed `unsupported`. Ubuntu 24.04 AppImage use is experimental until a desktop smoke exists.
 
 > **Upgrading from "Meeting Transcriber"?** The new app uses a fresh user-data folder (`%APPDATA%\AvaNevis` on Windows, `~/Library/Application Support/AvaNevis` on macOS, `~/.config/avanevis` on Linux), so old recordings won't auto-appear. Move the old folder's contents into the new one to keep your history. The first AvaNevis update prompt for existing Meeting Transcriber installs opens the GitHub release page in your browser instead of auto-downloading; future AvaNevis-to-AvaNevis updates restore the direct-download path.
 

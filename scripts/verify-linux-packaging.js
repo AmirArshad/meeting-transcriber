@@ -244,7 +244,7 @@ function assertLinuxPackagedRuntimeIsolation(resourcesRoot, { env = {}, spawnSyn
   }
 }
 
-function assertAppImageUsesStaticRuntime(appImagePath) {
+function assertAppImageUsesStaticRuntime(appImagePath, { spawnSyncFn = spawnSync } = {}) {
   if (!fs.existsSync(appImagePath) || !fs.statSync(appImagePath).isFile()) {
     fail(`AppImage is missing: ${appImagePath}`);
   }
@@ -264,6 +264,19 @@ function assertAppImageUsesStaticRuntime(appImagePath) {
     if (head.includes(marker)) {
       fail(`AppImage embeds the legacy FUSE2 runtime (found ${JSON.stringify(marker)})`);
     }
+  }
+  const fileResult = spawnSyncFn('file', ['-b', appImagePath], {
+    encoding: 'utf8',
+    timeout: 15000,
+  });
+  const fileOutput = `${fileResult.stdout || ''}${fileResult.stderr || ''}`.trim();
+  if (fileResult.status !== 0) {
+    fail(`Could not inspect AppImage ELF runtime: ${fileOutput || fileResult.error}`);
+  }
+  if (!/ELF 64-bit/i.test(fileOutput)
+      || !/(?:x86-64|x86_64)/i.test(fileOutput)
+      || !/(?:static-pie linked|statically linked)/i.test(fileOutput)) {
+    fail(`AppImage runtime is not a valid x86_64 static PIE ELF: ${fileOutput || '(empty file output)'}`);
   }
   return appImagePath;
 }
@@ -289,7 +302,17 @@ function parsePkginfo(pkginfoText) {
 
 function assertPacmanPkginfo(pkginfoText, pkg = require('../package.json')) {
   const expected = getJustifiedPacmanDepends(pkg);
-  const { depends } = parsePkginfo(pkginfoText);
+  const { fields, depends } = parsePkginfo(pkginfoText);
+  const expectedFields = {
+    pkgname: pkg.name,
+    pkgver: pkg.version,
+    arch: 'x86_64',
+  };
+  for (const [key, expectedValue] of Object.entries(expectedFields)) {
+    if (fields[key] !== expectedValue) {
+      fail(`pacman .PKGINFO ${key} must be ${expectedValue}, got ${fields[key] || '(missing)'}`);
+    }
+  }
   if (depends.length === 0) {
     fail('pacman .PKGINFO has no depend entries');
   }
@@ -322,6 +345,43 @@ function readPkginfoFromPacmanArchive(archivePath, { spawnSyncFn = spawnSync } =
   return result.stdout;
 }
 
+function extractPacmanArchive(archivePath, destDir, { spawnSyncFn = spawnSync } = {}) {
+  fs.mkdirSync(destDir, { recursive: true });
+  const result = spawnSyncFn('tar', ['-xf', archivePath, '-C', destDir], {
+    encoding: 'utf8',
+    timeout: 120000,
+  });
+  if (result.status !== 0) {
+    fail(`Failed to extract pacman archive ${archivePath}: ${result.stderr || result.stdout || result.error}`);
+  }
+  return destDir;
+}
+
+function verifyPacmanArchivePayload(
+  archivePath,
+  pkg = require('../package.json'),
+  { spawnSyncFn = spawnSync } = {},
+) {
+  const extractDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-pacman-'));
+  try {
+    extractPacmanArchive(archivePath, extractDir, { spawnSyncFn });
+    const pkginfoPath = path.join(extractDir, '.PKGINFO');
+    if (!fs.existsSync(pkginfoPath)) {
+      fail(`pacman archive is missing .PKGINFO: ${archivePath}`);
+    }
+    const pkginfo = fs.readFileSync(pkginfoPath, 'utf8');
+    const depends = assertPacmanPkginfo(pkginfo, pkg);
+    const resourcesRoot = findLinuxResourcesRoot(extractDir);
+    if (!resourcesRoot) {
+      fail(`Could not find packaged resources in pacman archive ${archivePath}`);
+    }
+    assertLinuxPackagedLayout(resourcesRoot);
+    return { depends };
+  } finally {
+    fs.rmSync(extractDir, { recursive: true, force: true });
+  }
+}
+
 function findLinuxArtifact(distDir, suffix) {
   if (!fs.existsSync(distDir)) {
     return null;
@@ -352,8 +412,11 @@ function extractAppImage(appImagePath, destDir, { spawnSyncFn = spawnSync } = {}
   return extracted;
 }
 
-function proveAppImageRuntimeLaunchesWithoutFuse(appImagePath, { spawnSyncFn = spawnSync } = {}) {
-  assertAppImageUsesStaticRuntime(appImagePath);
+function proveAppImageRuntimeLaunchesWithoutFuse(
+  appImagePath,
+  { spawnSyncFn = spawnSync, assertStaticRuntimeFn = assertAppImageUsesStaticRuntime } = {},
+) {
+  assertStaticRuntimeFn(appImagePath);
   const result = spawnSyncFn(appImagePath, ['--appimage-help'], {
     encoding: 'utf8',
     timeout: 20000,
@@ -366,12 +429,11 @@ function proveAppImageRuntimeLaunchesWithoutFuse(appImagePath, { spawnSyncFn = s
   if (/libfuse\.so\.2/i.test(output) || /AppImages require FUSE/i.test(output)) {
     fail(`AppImage runtime still requires FUSE2: ${output}`);
   }
-  if (result.status !== 0 && result.status !== null) {
-    // Some static runtimes print help and exit 0; treat fuse errors only as fatal.
-    // A missing display must not be confused with a FUSE2 failure.
-    if (/fuse/i.test(output)) {
-      fail(`AppImage runtime failed with a FUSE error: ${output}`);
-    }
+  if (result.status !== 0) {
+    fail(
+      `AppImage runtime launch failed with status ${result.status == null ? 'none' : result.status}: `
+      + `${output || result.error || '(no output)'}`,
+    );
   }
   return output;
 }
@@ -432,9 +494,8 @@ function main(argv = process.argv.slice(2)) {
       fail('No AvaNevis-Setup-*.pkg.tar.zst (or .pacman) found in dist/');
     }
     console.log(`Verifying pacman package: ${pacman}`);
-    const pkginfo = readPkginfoFromPacmanArchive(pacman);
-    assertPacmanPkginfo(pkginfo);
-    console.log('pacman .PKGINFO depends:', parsePkginfo(pkginfo).depends.join(', '));
+    const verified = verifyPacmanArchivePayload(pacman);
+    console.log('pacman .PKGINFO depends:', verified.depends.join(', '));
   }
 
   console.log('✓ Linux packaging verification passed');
@@ -457,6 +518,7 @@ module.exports = {
   parsePkginfo,
   proveAppImageRuntimeLaunchesWithoutFuse,
   readPkginfoFromPacmanArchive,
+  verifyPacmanArchivePayload,
 };
 
 if (require.main === module) {

@@ -52,14 +52,21 @@ jobs:
             runner: windows-latest
             rust-target: x86_64-pc-windows-msvc
             build-script: npm run build
-            artifact-pattern: "*Setup-*.exe"
+            artifact-path: "dist/AvaNevis-Setup-*.exe"
             artifact-name: avanevis-installer-windows
           - os: macOS
             runner: macos-14 # macOS 14 (Sonoma) with M1/M2/M3 runners
             rust-target: aarch64-apple-darwin
             build-script: npm run build:mac
-            artifact-pattern: "*Setup-*.dmg"
+            artifact-path: "dist/AvaNevis-Setup-*.dmg"
             artifact-name: avanevis-installer-macos
+          - os: Linux
+            runner: ubuntu-latest
+            build-script: npm run build:linux
+            artifact-path: |
+              dist/AvaNevis-Setup-*.AppImage
+              dist/AvaNevis-Setup-*.pkg.tar.zst
+            artifact-name: avanevis-installer-linux
 
     steps:
       - uses: actions/checkout@v6
@@ -70,6 +77,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install Rust toolchain
+        if: matrix.os != 'Linux'
         # dtolnay/rust-toolchain master as of 2026-08-05 (PR #182)
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
@@ -78,6 +86,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Cache cargo
+        if: matrix.os != 'Linux'
         # Swatinem/rust-cache v2.9.2
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
@@ -98,6 +107,12 @@ jobs:
 
       - name: Install Node dependencies
         run: npm ci
+
+      - name: Install Linux package inspection tools
+        if: matrix.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends file zstd libarchive-tools libpulse0
 
       - name: Create placeholder icon (if missing - Windows only)
         if: matrix.os == 'Windows'
@@ -155,12 +170,22 @@ jobs:
           ${{ matrix.build-script }}
         timeout-minutes: 75
 
+      - name: Build installers (Linux)
+        if: matrix.os == 'Linux'
+        run: ${{ matrix.build-script }}
+        timeout-minutes: 75
+
       - name: Verify packaged Speakrs CLI and fixture
+        if: matrix.os != 'Linux'
         run: node scripts/verify-speakrs-packaging.js --packaged
 
       - name: Verify packaged macOS app smoke checks
         if: matrix.os == 'macOS'
         run: bash scripts/verify-macos-packaged-app.sh
+
+      - name: Verify packaged Linux artifacts
+        if: matrix.os == 'Linux'
+        run: node scripts/verify-linux-packaging.js --unpacked --appimage --pacman
 
       - name: Verify package version matches tag
         if: startsWith(github.ref, 'refs/tags/')
@@ -174,28 +199,11 @@ jobs:
             exit 1
           fi
 
-      - name: Find installer file
-        id: find_installer
-        shell: bash
-        run: |
-          set -euo pipefail
-          pattern="${{ matrix.artifact-pattern }}"
-          installer=$(find dist -name "$pattern" -type f -print | head -n 1)
-
-          if [ -z "$installer" ]; then
-            echo "Expected installer not found for pattern: $pattern"
-            find dist -maxdepth 3 -type f | sort || true
-            exit 1
-          fi
-
-          echo "installer_path=$installer" >> $GITHUB_OUTPUT
-          echo "installer_name=$(basename "$installer")" >> $GITHUB_OUTPUT
-
-      - name: Upload installer artifact
+      - name: Upload installer artifacts
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact-name }}
-          path: ${{ steps.find_installer.outputs.installer_path }}
+          path: ${{ matrix.artifact-path }}
           retention-days: 30
           if-no-files-found: error
 
@@ -246,8 +254,10 @@ jobs:
 
           windows_asset=$(find release-artifacts/avanevis-installer-windows -type f -name '*.exe' | head -n 1)
           macos_asset=$(find release-artifacts/avanevis-installer-macos -type f -name '*.dmg' | head -n 1)
+          linux_appimage=$(find release-artifacts/avanevis-installer-linux -type f -name 'AvaNevis-Setup-*.AppImage' | head -n 1)
+          linux_pacman=$(find release-artifacts/avanevis-installer-linux -type f -name 'AvaNevis-Setup-*.pkg.tar.zst' | head -n 1)
 
-          if [ -z "$windows_asset" ] || [ -z "$macos_asset" ]; then
+          if [ -z "$windows_asset" ] || [ -z "$macos_asset" ] || [ -z "$linux_appimage" ] || [ -z "$linux_pacman" ]; then
             echo "Expected release assets were not downloaded"
             find release-artifacts -maxdepth 3 -type f | sort || true
             exit 1
@@ -256,12 +266,18 @@ jobs:
           mkdir -p release-upload
           cp "$windows_asset" release-upload/
           cp "$macos_asset" release-upload/
+          cp "$linux_appimage" release-upload/
+          cp "$linux_pacman" release-upload/
 
           echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
           echo "windows_name=$(basename "$windows_asset")" >> $GITHUB_OUTPUT
           echo "windows_size=$(du -h "$windows_asset" | cut -f1)" >> $GITHUB_OUTPUT
           echo "macos_name=$(basename "$macos_asset")" >> $GITHUB_OUTPUT
           echo "macos_size=$(du -h "$macos_asset" | cut -f1)" >> $GITHUB_OUTPUT
+          echo "linux_appimage_name=$(basename "$linux_appimage")" >> $GITHUB_OUTPUT
+          echo "linux_appimage_size=$(du -h "$linux_appimage" | cut -f1)" >> $GITHUB_OUTPUT
+          echo "linux_pacman_name=$(basename "$linux_pacman")" >> $GITHUB_OUTPUT
+          echo "linux_pacman_size=$(du -h "$linux_pacman" | cut -f1)" >> $GITHUB_OUTPUT
 
       - name: Build release notes
         shell: bash
@@ -272,6 +288,10 @@ jobs:
           WINDOWS_SIZE="${{ steps.collect_assets.outputs.windows_size }}"
           MACOS_NAME="${{ steps.collect_assets.outputs.macos_name }}"
           MACOS_SIZE="${{ steps.collect_assets.outputs.macos_size }}"
+          LINUX_APPIMAGE_NAME="${{ steps.collect_assets.outputs.linux_appimage_name }}"
+          LINUX_APPIMAGE_SIZE="${{ steps.collect_assets.outputs.linux_appimage_size }}"
+          LINUX_PACMAN_NAME="${{ steps.collect_assets.outputs.linux_pacman_name }}"
+          LINUX_PACMAN_SIZE="${{ steps.collect_assets.outputs.linux_pacman_size }}"
           REPO="${{ github.repository }}"
 
           # Escaped backticks so installer filenames are not executed by the shell.
@@ -282,6 +302,8 @@ jobs:
 
           - Windows installer: \`${WINDOWS_NAME}\` (${WINDOWS_SIZE})
           - macOS installer: \`${MACOS_NAME}\` (${MACOS_SIZE})
+          - Linux AppImage: \`${LINUX_APPIMAGE_NAME}\` (${LINUX_APPIMAGE_SIZE})
+          - Linux pacman package: \`${LINUX_PACMAN_NAME}\` (${LINUX_PACMAN_SIZE})
 
           EOF
 
@@ -299,6 +321,7 @@ jobs:
 
           - Windows 10/11 x64
           - macOS 13+ on Apple Silicon
+          - Linux x86_64 Core Beta (Omarchy first; Ubuntu AppImage experimental)
 
           ### Installation
 
@@ -312,6 +335,10 @@ jobs:
           2. Drag AvaNevis into Applications.
           3. On first launch, right-click the app and choose "Open" to bypass Gatekeeper for the unsigned build.
           4. Grant microphone and screen recording permissions when prompted.
+
+          **Linux Core Beta**
+          1. Run the AppImage, or install the pacman package on Omarchy/Arch.
+          2. Transcription uses CPU faster-whisper; speaker identification and summaries remain unavailable in this version.
 
           ### Notes
 

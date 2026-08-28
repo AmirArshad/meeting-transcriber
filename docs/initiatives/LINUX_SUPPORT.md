@@ -1,6 +1,6 @@
 # Linux Support Plan — Omarchy First
 
-> **Status:** **Omarchy Core Beta (Phases 0–5) is complete** on `release/linux` (2026-08-28). Phase 3 60-minute soak **cancelled** by operator 2026-08-27 — not run, not passed; 15-minute soak is the duration-growth evidence. Phase 5 packaged Settings / legal-notices clicks and a packaged AppImage recording + CPU faster-whisper session closed 2026-08-28. Residuals that do **not** reopen product code: Gate B still blocks `.github/workflows/build-release.yml` (issue #76 OPEN; this Linux host cannot verify the v2.7.0 DMG); Ubuntu 24.04 **desktop** AppImage recording smoke is still open (Docker launch only). Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.
+> **Status:** **Omarchy Core Beta (Phases 0–5) is complete** on `release/linux` (2026-08-28). Phase 3 60-minute soak **cancelled** by operator 2026-08-27 — not run, not passed; 15-minute soak is the duration-growth evidence. Phase 5 packaged Settings / legal-notices clicks and a packaged AppImage recording + CPU faster-whisper session closed 2026-08-28. Gate B closed on Apple Silicon macOS 2026-08-28 and the release workflow now includes AppImage + pacman artifacts. Ubuntu 24.04 **desktop** AppImage recording smoke is still open (Docker launch only). Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.
 > **Replanned:** 2026-08-23 against AvaNevis v2.7.0 / current `master`.
 > **Review pass:** 2026-08-23 — verified plan claims against the codebase and CI, corrected two host-fact conclusions (secret storage, tray), and pinned every required upstream Linux artifact. All "Verified" sections below were checked on that date.
 > **Scope cut (2026-08-24):** the first Linux version is **Core Beta only** (Phases 0–5). Speaker identification and local summaries are **out of scope** until a later Linux version. There is no Omarchy host with an NVIDIA GPU to validate those CUDA-only add-ons; do not ship a CPU fallback. The UI must keep both features visible but greyed out as unsupported.
@@ -104,13 +104,16 @@ Record the green run link above in the first Linux PR description. Do not let Li
 
 On the current Omarchy host, `npm test` also fails seven Linux-platform assumptions before any product change: resource-manifest/Speakrs packaging rejects `process.platform === 'linux'`, three diarization handler tests require an already-supported platform, the Speakrs resource-manifest test rejects Linux, and one dev-Python fixture falls back to `python`. These are Phase 0 work, not evidence of a regression. The first Linux PR must make the normal JS suite runnable and green on Linux without weakening Windows/macOS coverage.
 
-### Gate B — triage current macOS release integrity — **STILL OPEN**
+### Gate B — triage current macOS release integrity — **CLOSED 2026-08-28**
 
-[Issue #76](https://github.com/AmirArshad/meeting-transcriber/issues/76) reports that the v2.7.0 DMG appears corrupt on macOS 15.7.7 / M3 Pro. Re-checked 2026-08-28: the issue is still **OPEN**, last comment 2026-08-11 ("redownloaded and verified the download was good"), no maintainer-side verification. This does not block Phases 0–5 product/CI packaging, but it still blocks touching `.github/workflows/build-release.yml` (no Linux release job until Gate B closes):
+[Issue #76](https://github.com/AmirArshad/meeting-transcriber/issues/76) reported that the v2.7.0 DMG appeared corrupt on macOS 15.7.7 / M3 Pro. Maintainer verification on Apple Silicon macOS found:
 
-1. Download the published DMG and verify checksum, mountability, signature, notarization, and stapling.
-2. Determine whether the screenshot is true file corruption, a signing/notarization failure, or Gatekeeper copy.
-3. Close or update the issue with a verified result before adding Linux artifacts to `build-release.yml`.
+1. The published DMG matched GitHub's SHA-256 (`901417118ab2ee3e964a73bea0562e09082625c7c7a55b37c6bedc0e6521fccf`), passed `hdiutil verify`, and mounted normally. It was not file corruption.
+2. The contained app was only linker-signed: no sealed resources, `Identifier=Electron`, `codesign --verify --deep --strict` failed, Gatekeeper assessment failed, and there was no notarization/stapling ticket. The release workflow's old claim that certificate-less builds were ad-hoc signed was false because electron-builder skips signing when no identity is found.
+3. `build.mac.identity` is now explicitly `"-"`, which produces a complete ad-hoc bundle signature with hardened runtime and the existing `disable-library-validation` entitlement. The packaged verifier checks the whole app seal before and after smoke execution and uses `PYTHONDONTWRITEBYTECODE=1` so imports cannot invalidate it.
+4. A fresh Electron 42.9.0 DMG passed `hdiutil verify`, mounted, passed the MLX/ffmpeg/helper/Speakrs packaged smoke, and the app inside the mounted DMG passed deep/strict signature verification. It remains intentionally not Developer-ID signed, notarized, or stapled until enrollment, so the documented first-launch Gatekeeper bypass remains necessary.
+
+Gate B is closed and `.github/workflows/build-release.yml` now builds, verifies, uploads, and publishes both Linux Core Beta artifacts.
 
 Windows v2.7.0 has no equivalent open release issue.
 
@@ -478,7 +481,7 @@ Each in-scope phase should land as a reviewable PR with the smallest relevant te
 Deliverables:
 
 - record the Gate A resolution: link the green run ([32613244438](https://github.com/AmirArshad/meeting-transcriber/actions/runs/32613244438)) in the PR, and land the diagnosable-assertion fix from Gate A (exact snippet above) in `tests/js/speakrs-task2-hardening.test.js`
-- document Gate B status (still open — do not touch `build-release.yml`)
+- document Gate B closure and the macOS bundle-signing root cause before enabling Linux release artifacts
 - add Linux cases to platform-selection tests before implementation
 - characterize recorder argv selection, Python runtime resolution, device ID serialization, add-on availability, updater asset selection, and packaged path rules
 - add Linux rows to the manual recording and local-AI checklists
@@ -717,7 +720,7 @@ Switches live in `src/main-process/linux-electron-bootstrap.js` and are applied 
 
 **Add-on grey-out (Locked decision 12).** Exact reason strings live in `src/ai-addon-state.js`. Settings cards `#diarization-addon-card` / `#summary-addon-card` take `.ai-addon-card.is-unsupported`; all setup controls begin disabled and remain gated by status; token and speaker-count fields are not offered when unsupported; History Generate Summary stays disabled with that copy; `generate-summary` rejects unsupported before any Python preflight. Locked decision 1 copy sites were already extracted in Phase 0 (`inferRendererHostFamily` / `getRecordingPermissionFailureGuidance` / `getUnsupportedGpuSettingsCopy`).
 
-**Phase 4 product code and adversarial review are closed.** Phase 5 packaging and packaged UI/recording evidence closed 2026-08-28; Omarchy Core Beta is complete (see Phase 5 residuals: Gate B, Ubuntu desktop). Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.
+**Phase 4 product code and adversarial review are closed.** Phase 5 packaging and packaged UI/recording evidence closed 2026-08-28; Omarchy Core Beta is complete. Gate B is closed; Ubuntu desktop smoke remains open. Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.
 
 ### Phase 5 — Omarchy Core Beta packaging
 
@@ -732,7 +735,7 @@ Files:
 - pacman packaging metadata/dependencies (no libappindicator; `.PKGINFO` validated on Omarchy)
 - Linux artifact naming in `src/updater.js` (tightened `findInstallerAsset`)
 - Linux build/smoke job in `.github/workflows/ci.yml` (ubuntu runner — AppImages cannot be cross-compiled)
-- Linux release job in `.github/workflows/build-release.yml` **only after Gate B closes** — **not added** (issue #76 still OPEN as of 2026-08-28)
+- Linux release job in `.github/workflows/build-release.yml` — **added after Gate B closed 2026-08-28**; publishes both AppImage and pacman artifacts
 - build/installer docs and troubleshooting — first-version claims match Gate C (CPU transcription; add-ons greyed unsupported)
 
 Exit criteria:
@@ -746,7 +749,7 @@ Exit criteria:
 - legal notices open — **passed 2026-08-28:** Settings **Open third-party notices** in the packaged AppImage invoked `xdg-open /tmp/.mount_AvaNev…/resources/legal/THIRD_PARTY_NOTICES.md` (AppImage mount, not the repo file) and nvim opened that bundled file.
 - packaged UI still greys out speaker identification and summaries; no setup button can complete — **passed 2026-08-28:** packaged Settings cards `#diarization-addon-card` / `#summary-addon-card` have `.is-unsupported`; badges **Unsupported**; Set Up / Install Model / Validate / Remove / Home Set Up / History **Generate Summary** `disabled`; Home add-on prompt `display: none`. Exact decision-12 strings in the card status text. `generate-summary` IPC: `Local summaries are not available on Linux in this version. They will return in a future Linux update.`
 
-**Omarchy Core Beta is complete.** Residuals: Gate B (no `build-release.yml` Linux job); Ubuntu 24.04 **desktop** AppImage recording smoke (Docker launch only).
+**Omarchy Core Beta is complete.** Residual: Ubuntu 24.04 **desktop** AppImage recording smoke (Docker launch only). Gate B is closed and Linux artifacts are in the release workflow.
 
 ### Phase 5 Omarchy / Ubuntu evidence (2026-08-28)
 
@@ -762,9 +765,9 @@ Host: `amiromarchy`, Omarchy 4.0.1, Hyprland. `fuse2` / `libfuse.so.2` **not** i
 
 **Packaged Settings / legal notices / recording (Omarchy AppImage, 2026-08-28).** Default AppImage launch (not `--appimage-extract-and-run`); host still has no `fuse2` / `libfuse.so.2`. Native Wayland (`ozone-platform: wayland hint: auto`). `app.isPackaged: true`. Bundled Python 3.11.7 / ffmpeg n8.0.1 / backend under `/tmp/.mount_AvaNevOkeFIA/resources/…`. Screenshots of greyed Speaker Identification and Meeting Summaries cards; History Generate Summary disabled. `xdg-open` of bundled `resources/legal/THIRD_PARTY_NOTICES.md`. Meeting `20260828_005135`: 4:55 stereo Opus, Stop stages Normalizing → Mixing → Encoding → saved, then `Ready · 1 transcribing`. Live transcriber: `/tmp/.mount_AvaNev…/resources/python/bin/python3 -m transcription.faster_whisper_transcriber --model small --device cpu` with `AVANEVIS_PACKAGED=1`, `PYTHONPATH` the bundled backend, `PYTHONNOUSERSITE=1`. Metadata `transcriptionDevice: cpu`, `transcriptionComputeType: int8`, `transcriptionStatus: completed`. Transcript includes Harvard-list desktop speech (*The birch canoe slid on the smooth planks*). No `resources/bin` / `speakrs-cli`. Not a 60-minute soak.
 
-**Still open:** Ubuntu 24.04 **desktop** AppImage recording/safeStorage smoke (Docker launch 2026-08-28 is not that row). Gate B / issue #76.
+**Still open:** Ubuntu 24.04 **desktop** AppImage recording/safeStorage smoke (Docker launch 2026-08-28 is not that row).
 
-Repo documentation (AGENTS.md, README, BACKEND.md, TESTING/BUILD, checklists) describes shipped Linux Core Beta: Pulse/PipeWire recording, CPU faster-whisper, add-ons still greyed `unsupported`. Do not advertise CUDA or add-ons as ready. GitHub Release attach of Linux artifacts still waits on Gate B.
+Repo documentation (AGENTS.md, README, BACKEND.md, TESTING/BUILD, checklists) describes shipped Linux Core Beta: Pulse/PipeWire recording, CPU faster-whisper, add-ons still greyed `unsupported`. Do not advertise CUDA or add-ons as ready. GitHub Releases include both Linux artifacts after Gate B closed.
 
 ### Phases 6–9 — Later Linux version (deferred)
 
@@ -919,4 +922,4 @@ Later version only (needs NVIDIA Omarchy):
 
 ## First implementation action
 
-Gate A is resolved (green run linked above). Phases 0–5 Omarchy Core Beta is complete on `release/linux` (Phase 3 60-minute soak cancelled by operator 2026-08-27; Phase 4 ozone/secret-storage/tray/CPU/add-on grey-out and review remediation closed 2026-08-27; Phase 5 packaging + packaged UI/recording evidence closed 2026-08-28). **Gate B still open — do not touch `build-release.yml`.** Ubuntu 24.04 desktop AppImage recording smoke is still open. Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.
+Gates A and B are resolved. Phases 0–5 Omarchy Core Beta is complete on `release/linux` (Phase 3 60-minute soak cancelled by operator 2026-08-27; Phase 4 ozone/secret-storage/tray/CPU/add-on grey-out and review remediation closed 2026-08-27; Phase 5 packaging + packaged UI/recording evidence closed 2026-08-28). The release workflow includes AppImage + pacman. Ubuntu 24.04 desktop AppImage recording smoke is still open. Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.

@@ -127,6 +127,7 @@
       "appimage": "1.0.2"
     },
     "mac": {
+      "identity": "-",
       "target": [
         {
           "target": "dmg",

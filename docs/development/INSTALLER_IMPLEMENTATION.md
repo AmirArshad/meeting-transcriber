@@ -177,7 +177,7 @@ The current CI workflow validates packaging more directly than before:
 - macOS backend job also runs `npm run build:mac:dir`
 - macOS packaged output is checked for bundled helper, Python, and ffmpeg
 - Ubuntu packaging job (`test-packaging-linux` on `ubuntu-latest`) runs `npm ci`, `npm run test:all`, `prepare-build`, electron-builder `dir` + AppImage + pacman, and `scripts/verify-linux-packaging.js`
-- GitHub Release workflow remains Windows/macOS-only while Gate B ([issue #76](https://github.com/AmirArshad/meeting-transcriber/issues/76)) is open
+- GitHub Release workflow builds Windows, macOS, Linux AppImage, and Linux pacman artifacts; Gate B closed 2026-08-28 after fixing incomplete ad-hoc macOS bundle signing
 
 This is still not a substitute for hardware recording tests, but it catches many packaging regressions before release tags.
 

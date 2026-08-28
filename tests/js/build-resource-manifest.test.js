@@ -137,6 +137,7 @@ test('macOS bundled Mach-O signing paths match extraResources destinations', () 
     'Contents/Resources/bin/speakrs-cli',
     'Contents/Resources/ffmpeg/ffmpeg',
   ]);
+  assert.equal(packageJson.build.mac.identity, '-');
   assert.equal(packageJson.build.mac.notarize, false);
 });
 

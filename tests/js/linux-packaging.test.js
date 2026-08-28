@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const packageJson = require('../../package.json');
 const {
@@ -16,6 +17,7 @@ const {
   findLinuxResourcesRoot,
   getJustifiedPacmanDepends,
   parsePkginfo,
+  verifyPacmanArchivePayload,
 } = require('../../scripts/verify-linux-packaging');
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -156,7 +158,7 @@ test('assertNotForbiddenPackagedPath allows CPU onnxruntime site-packages and re
   assert.throws(() => assertNotForbiddenPackagedPath('bin/audiocapture-helper'), /deferred add-on/);
 });
 
-test('assertAppImageUsesStaticRuntime rejects ELF runtimes that still require libfuse.so.2', () => {
+test('assertAppImageUsesStaticRuntime rejects malformed ELF and runtimes that still require libfuse.so.2', () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-appimage-runtime-'));
   try {
     const fuse2 = path.join(tempDir, 'fuse2.AppImage');
@@ -168,12 +170,42 @@ test('assertAppImageUsesStaticRuntime rejects ELF runtimes that still require li
     fs.writeFileSync(fuse2, payload);
     assert.throws(() => assertAppImageUsesStaticRuntime(fuse2), /legacy FUSE2/);
 
+    const malformed = path.join(tempDir, 'malformed.AppImage');
+    fs.writeFileSync(malformed, Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x00]));
+    assert.throws(() => assertAppImageUsesStaticRuntime(malformed), /valid ELF|static PIE/);
+
     const staticRuntime = path.join(tempDir, 'static.AppImage');
     fs.writeFileSync(staticRuntime, Buffer.concat([
       Buffer.from([0x7f, 0x45, 0x4c, 0x46]),
       Buffer.from('static appimage runtime without host FUSE2'),
     ]));
-    assert.equal(assertAppImageUsesStaticRuntime(staticRuntime), staticRuntime);
+    assert.equal(assertAppImageUsesStaticRuntime(staticRuntime, {
+      spawnSyncFn: () => ({
+        status: 0,
+        stdout: 'ELF 64-bit LSB pie executable, x86-64, static-pie linked',
+        stderr: '',
+      }),
+    }), staticRuntime);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('proveAppImageRuntimeLaunchesWithoutFuse rejects arbitrary runtime launch failures', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-appimage-launch-'));
+  try {
+    const appImage = path.join(tempDir, 'AvaNevis-Setup-2.7.0.AppImage');
+    fs.writeFileSync(appImage, Buffer.alloc(4096));
+    assert.throws(
+      () => require('../../scripts/verify-linux-packaging').proveAppImageRuntimeLaunchesWithoutFuse(
+        appImage,
+        {
+          assertStaticRuntimeFn: () => appImage,
+          spawnSyncFn: () => ({ status: 127, stdout: '', stderr: 'broken runtime' }),
+        },
+      ),
+      /runtime launch failed.*broken runtime/i,
+    );
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -183,6 +215,8 @@ test('assertPacmanPkginfo accepts the justified depend list and rejects libappin
   const depends = getJustifiedPacmanDepends(packageJson);
   const pkginfo = [
     'pkgname = avanevis',
+    `pkgver = ${packageJson.version}`,
+    'arch = x86_64',
     ...depends.map((name) => `depend = ${name}`),
     '',
   ].join('\n');
@@ -197,6 +231,45 @@ test('assertPacmanPkginfo accepts the justified depend list and rejects libappin
     /unjustified depends/,
   );
   assert.equal(parsePkginfo(pkginfo).fields.pkgname, 'avanevis');
+
+  assert.throws(
+    () => assertPacmanPkginfo(pkginfo.replace('pkgname = avanevis', 'pkgname = wrong'), packageJson),
+    /pkgname.*wrong/i,
+  );
+  assert.throws(
+    () => assertPacmanPkginfo(pkginfo.replace(`pkgver = ${packageJson.version}`, 'pkgver = 9.9.9'), packageJson),
+    /pkgver.*9\.9\.9/i,
+  );
+});
+
+test('verifyPacmanArchivePayload validates the actual archive resources and exclusions', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-pacman-payload-'));
+  try {
+    const packageRoot = path.join(tempDir, 'package-root');
+    const resourcesRoot = path.join(packageRoot, 'opt', 'AvaNevis', 'resources');
+    makeLinuxResourcesFixture(resourcesRoot);
+    const depends = getJustifiedPacmanDepends(packageJson);
+    writeFile(path.join(packageRoot, '.PKGINFO'), [
+      'pkgname = avanevis',
+      `pkgver = ${packageJson.version}`,
+      'arch = x86_64',
+      ...depends.map((name) => `depend = ${name}`),
+      '',
+    ].join('\n'));
+    const archive = path.join(tempDir, 'AvaNevis-Setup-2.7.0.pkg.tar.zst');
+    const create = spawnSync('tar', ['-cf', archive, '-C', packageRoot, '.'], { encoding: 'utf8' });
+    assert.equal(create.status, 0, create.stderr);
+
+    assert.doesNotThrow(() => verifyPacmanArchivePayload(archive, packageJson));
+
+    fs.rmSync(path.join(resourcesRoot, 'ffmpeg', 'ffmpeg'));
+    const brokenArchive = path.join(tempDir, 'AvaNevis-Setup-2.7.0-broken.pkg.tar.zst');
+    const createBroken = spawnSync('tar', ['-cf', brokenArchive, '-C', packageRoot, '.'], { encoding: 'utf8' });
+    assert.equal(createBroken.status, 0, createBroken.stderr);
+    assert.throws(() => verifyPacmanArchivePayload(brokenArchive, packageJson), /Missing bundled ffmpeg/);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
 });
 
 test('findLinuxResourcesRoot locates python-build-standalone under unpacked and /opt layouts', () => {
@@ -250,10 +323,12 @@ test('Ubuntu CI job builds Linux packages on ubuntu-latest with SHA-pinned actio
   assert.match(CI_WORKFLOW, /branches:.*release\/linux/);
 });
 
-test('release workflow stays Windows/macOS-only while Gate B is open', () => {
-  assert.doesNotMatch(RELEASE_WORKFLOW, /os: Linux/);
-  assert.doesNotMatch(RELEASE_WORKFLOW, /build:linux/);
-  assert.doesNotMatch(RELEASE_WORKFLOW, /--linux/);
+test('release workflow builds and publishes both Linux Core Beta artifacts after Gate B', () => {
+  assert.match(RELEASE_WORKFLOW, /os: Linux/);
+  assert.match(RELEASE_WORKFLOW, /build:linux/);
+  assert.match(RELEASE_WORKFLOW, /AvaNevis-Setup-\*\.AppImage/);
+  assert.match(RELEASE_WORKFLOW, /AvaNevis-Setup-\*\.pkg\.tar\.zst/);
+  assert.match(RELEASE_WORKFLOW, /verify-linux-packaging\.js/);
   assert.match(RELEASE_WORKFLOW, /os: Windows/);
   assert.match(RELEASE_WORKFLOW, /os: macOS/);
 });

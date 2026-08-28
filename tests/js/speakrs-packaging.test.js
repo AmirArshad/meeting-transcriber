@@ -526,6 +526,12 @@ test('macOS packaged-app verifier requires arm64 speakrs-cli and the canonical f
 });
 
 
+test('macOS packaged-app verifier rejects an invalid app seal without mutating it with pycache', () => {
+  assert.match(MACOS_VERIFY_SCRIPT, /codesign --verify --deep --strict --verbose=2 "\$APP_PATH"/);
+  assert.match(MACOS_VERIFY_SCRIPT, /PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="\$BACKEND_PATH"/);
+});
+
+
 test('macOS speakrs-cli verification checks signature and entitlements', () => {
   const commands = buildMacOSSpeakrsCliVerificationCommands(
     '/Applications/AvaNevis.app/Contents/Resources/bin/speakrs-cli',

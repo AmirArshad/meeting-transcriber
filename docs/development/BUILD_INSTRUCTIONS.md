@@ -283,7 +283,7 @@ Expect exit 0, backend `gnome_libsecret` (not `basic_text`), bundled Python/ffmp
 
 Omarchy packaged UI (2026-08-28): Settings add-on cards stay greyed `unsupported`; Open third-party notices opens `resources/legal/THIRD_PARTY_NOTICES.md` inside the AppImage mount; a short AppImage recording transcribes with bundled `faster_whisper_transcriber --device cpu`. That is not a 60-minute soak. Ubuntu 24.04 **desktop** smoke is still open.
 
-GitHub Release attach of Linux artifacts waits on Gate B ([issue #76](https://github.com/AmirArshad/meeting-transcriber/issues/76)). Do not add a Linux job to `.github/workflows/build-release.yml` while that issue is open.
+GitHub Release builds include both Linux artifacts after Gate B ([issue #76](https://github.com/AmirArshad/meeting-transcriber/issues/76)) closed on 2026-08-28. Certificate-less macOS builds explicitly use a complete ad-hoc bundle signature; Developer-ID signing/notarization remains a future enrollment step.
 
 ### macOS packaged smoke (no Apple Developer account required)
 
