@@ -2,7 +2,7 @@
 
 > **Historical triage (2026-05-27).** The phased dependency-upgrade branch work and the “Close now” / “Defer” PR actions below are complete. For current dependency and release hygiene, use root `todo.md` and the v2.9.0 matrix. Keep this file as background for why pins and Dependabot ignores look the way they do.
 
-**v2.9.0 (2026-08-28):** live decision record is [`docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md`](V2_9_DEPENDENCY_COMPATIBILITY.md). Linux `filelock` is aligned to `>=3.32.3` / `==3.32.3`. Do **not** merge Dependabot PRs into `master` or `release/v2.9.0`; accept candidates only from that matrix after their platform gates. Electron 44 stays on `feature/v2.9-electron-44`.
+**v2.9.0 (2026-08-28):** live decision record is [`docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md`](V2_9_DEPENDENCY_COMPATIBILITY.md). Linux `filelock` is aligned to `>=3.32.3` / `==3.32.3`. Task 2 will trial macOS `torch==2.13.0` + `setuptools==84` on a Mac (resolver-only Torch, still pruned). Do **not** merge Dependabot PRs into `master` or `release/v2.9.0`; accept candidates only from that matrix after their platform gates. Electron 44 stays on `feature/v2.9-electron-44`.
 
 Last reviewed: 2026-08-28 (FileLock Linux correction + matrix). Prior: 2026-08-13. Absorbed #73 (`filelock`/`certifi`), #72 (`typing-extensions`), and #58 (`ctranslate2` 4.8.1) on `chore/deps-filelock-certifi-typing-ctranslate2`. Prior: 2026-07-14 on `chore/dependency-hygiene`.
 

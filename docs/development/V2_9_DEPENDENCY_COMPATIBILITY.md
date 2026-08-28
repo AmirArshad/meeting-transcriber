@@ -43,8 +43,8 @@ Treat these as **direct runtime dependencies** even when a resolver also reaches
 | `ctranslate2` | faster-whisper inference | Windows/Linux build `==4.8.1` | CUDA 12 wheels. Packaged Windows GPU profile remains `nvidia-cublas-cu12` / `nvidia-cudnn-cu12`. This host also has CUDA 13 on PATH; that does not change the packaged CUDA 12 contract. |
 | `faster-whisper` | Windows + Linux transcription | `==1.2.1` | Linux Core Beta is **CPU only**. |
 | `lightning-whisper-mlx` | Apple Silicon transcription | macOS build `==0.0.10` | Pins `tiktoken==0.3.3`. |
-| `torch` | macOS resolver only | macOS build `==2.12.0`, then **pruned** | MLX inference never imports `torch_whisper.py`. `torch==2.12.0` requires `setuptools<82`. |
-| `setuptools` | pip / wheel metadata | Windows/Linux build `==83.0.0`; macOS build `==81.0.0` (also pruned from the macOS runtime) | **Global setuptools 84 is blocked** while macOS still resolves Torch 2.12.0. CI ignores `PYSEC-2026-3447` on macOS for that reason. An unconstrained macOS *runtime* resolve already floats to setuptools **84.0.0** with torch **2.13.0** — do not treat that as an accepted packaged graph. |
+| `torch` | macOS resolver only | macOS build `==2.12.0`, then **pruned** | MLX never imports `torch_whisper.py`. `lightning-whisper-mlx` does not pin Torch; `setuptools<82` is upstream from **2.12.0**. Task 2 trials **2.13.0** on a Mac (still pruned). Not Pyannote’s `torch==2.8.0`. |
+| `setuptools` | pip / wheel metadata | Windows/Linux build `==83.0.0`; macOS build `==81.0.0` (also pruned from the macOS runtime) | Windows/Linux: evaluate **84** in Task 2 on this PC. macOS: only with Torch 2.13 on a Mac. CI currently ignores `PYSEC-2026-3447` because of the 2.12 pin. |
 | `numba` / `llvmlite` | MLX stack | macOS build `==0.65.1` / `==0.47.0` | Unconstrained macOS runtime floats to **0.67.0 / 0.49.0**. Accept 0.67 only with matching llvmlite 0.49 **and** MLX/Whisper plus ScreenCaptureKit-fallback smoke. |
 | `numpy` | audio + ML | all build files `==2.4.6` | Stay on 2.4.x; 2.5+ needs Python ≥3.12. |
 | PyObjC `ScreenCaptureKit` / `CoreAudio` / `AVFoundation` | macOS capture fallback | build `==10.0` | Runtime files float to **12.2.2**. Coordinated bump only. |
@@ -68,8 +68,8 @@ Material floats observed 2026-08-28 (runtime) versus current build pins:
 | `huggingface-hub` | 1.29.0 | 1.16.1 | Hold packaged pin |
 | `pytest` | 9.1.1 | floor `>=9.0.3` | Task 2 may record 9.1.1; suite already passed on it |
 | `mlx` | 0.32.2 | 0.31.2 | macOS only; needs native smoke |
-| `torch` (macOS runtime) | 2.13.0 | 2.12.0 then prune | Do not follow the runtime float |
-| `setuptools` (macOS runtime) | 84.0.0 | 81.0.0 | Blocker for a global 84 bump |
+| `torch` (macOS runtime) | 2.13.0 | 2.12.0 then prune | **Trial 2.13.0 on a Mac** with setuptools 84; still prune after pip |
+| `setuptools` (macOS runtime) | 84.0.0 | 81.0.0 | Windows/Linux Task 2 here; macOS only with Torch 2.13 |
 | PyObjC capture frameworks | 12.2.2 | 10.0 / 12.1 mix | Coordinated macOS change only |
 | `sounddevice` | 0.5.6 | 0.4.6 | Hold until macOS capture smoke |
 
@@ -160,13 +160,26 @@ Linux equivalent: WSL2 Python 3.11.15 clean venvs for `requirements-linux.txt` a
 
 macOS equivalent: dry-run resolver only; native install/`pip check` still needed on macos-14 before Task 2 macOS pin changes.
 
-## Blockers and non-goals (before Task 2)
+## When to switch to the Mac
+
+Stay on `feature/v2.9-dependency-hygiene`. Finish the Windows/Linux Task 2 commits on this PC first, then continue the same branch on Apple Silicon.
+
+**This Windows PC (start Task 2 here):** pytest 9.1.1; PyAV 18.1.0 in Windows/Linux **build** files after import + fixture decode + `prepare-build`; setuptools 84 in Windows/Linux **build** files only. Separate commits. Do not change macOS pins yet.
+
+**Switch to the Mac when those three commits exist**, and do this work there:
+
+1. Native `pip check` for `requirements-macos.txt` and `requirements-macos-build.txt` on Python 3.11.
+2. Trial **`torch==2.13.0` + `setuptools==84`** in `requirements-macos-build.txt` in one commit. Torch is still resolver-only and must remain in `MACOS_RUNTIME_REMOVABLE_PACKAGES`. Re-run pip-audit; keep ignoring `CVE-2025-3000` only if it still has no fix version. Do not touch Pyannote `torch==2.8.0`.
+3. Numba **0.67** with llvmlite **0.49** (not 0.47). Packaged MLX transcription smoke + ScreenCaptureKit-fallback capture smoke.
+4. Reject any of 2–3 if resolver, `pip check`, packaged dir build, or hardware smoke fails; leave the 2.12.0 / 81.0.0 / Numba 0.65.1 pins in place.
+
+PyObjC 12.2 and sounddevice 0.5.6 remain **not** in this Mac trial unless a later Task 2/3 commit takes them with their own evidence.
+
+## Blockers and non-goals
 
 - **Do not** merge or land Dependabot PRs from this evidence. Use this matrix to accept or reject each candidate in its own commit.
 - **Do not** upgrade Electron.
 - **Do not** start Linux AI add-on phases 6–9.
 - **Do not** add Apple signing or notarization.
-- **setuptools 84** is acceptable to *evaluate* on Windows/Linux build files only. It is **not** acceptable as a global bump while macOS packaged Torch remains 2.12.0 / setuptools 81.0.0.
-- **macOS native `pip check`** and packaged MLX / ScreenCaptureKit smoke are still required before accepting macOS-only floats (PyObjC 12.2, Numba 0.67, MLX 0.32, Torch 2.13, sounddevice 0.5.6).
 - **PyAV 18.1.0** is a Windows/Linux Task 2 candidate; packaged pin remains 17.0.1 until import + fixture decode + installer smoke pass on those platforms.
 - Host CUDA 13 toolkits must not be mistaken for packaged CUDA 12 support.
