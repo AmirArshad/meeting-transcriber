@@ -49,6 +49,7 @@ Treat these as **direct runtime dependencies** even when a resolver also reaches
 | `numpy` | audio + ML | all build files `==2.4.6` | Stay on 2.4.x; 2.5+ needs Python ≥3.12. |
 | PyObjC `ScreenCaptureKit` / `CoreAudio` / `AVFoundation` | macOS capture fallback | macOS build `==12.2.2` | **Accepted** coordinated bump (2026-08-28). Runtime files already floated to 12.2.2. |
 | PyObjC `Cocoa` / `Quartz` / `core` / `CoreMedia` | ScreenCaptureKit fallback graph | macOS build `==12.2.2` | **Kept** at 12.2.2. Cocoa supplies `Foundation` (`NSObject`, `NSRunLoop`). Quartz is required by `pyobjc-framework-AVFoundation==12.2.2`. |
+| `sounddevice` | macOS microphone (`InputStream`, `query_devices`) | macOS build `==0.5.6` | **Accepted** (2026-08-28). Runtime already floated to 0.5.6. Desktop capture stays the Swift helper; this pin is the mic path. |
 | `tiktoken` | MLX | macOS `==0.3.3` | Dependabot ignore; do not bump alone. |
 | Speakrs ONNX Runtime | add-on, **not** pip requirements | Windows setup-time archive **1.27.1** (`src/ai-addon/speakrs-pack-spec.js`) | Distinct from pip `onnxruntime==1.26.0`. Linux add-ons remain `unsupported`. |
 
@@ -75,7 +76,7 @@ Material floats observed 2026-08-28 (runtime) versus current build pins:
 | `torch` (macOS runtime) | 2.13.0 | **2.13.0** then prune | **Accepted** Task 2 (2026-08-28 Mac): still prune after pip |
 | `setuptools` (macOS runtime) | 84.0.0 | Windows/Linux/macOS **84.0.0** | **Accepted** Task 2 on all three packaged platforms |
 | PyObjC capture frameworks | 12.2.2 | **12.2.2** | **Accepted** macOS-only (2026-08-28). Coordinated seven-package bump; Cocoa and Quartz retained |
-| `sounddevice` | 0.5.6 | 0.4.6 | Hold until its own capture-gated cluster |
+| `sounddevice` | 0.5.6 | **0.5.6** | **Accepted** macOS-only (2026-08-28) after packaged CoreAudio tap + InputStream smoke |
 
 ## Per-file evidence
 
@@ -118,7 +119,7 @@ tokenizers==0.23.1 tqdm==4.70.0 typing_extensions==4.16.0
 
 ### `requirements-macos.txt` — Homebrew CPython 3.11.16 native install (Apple Silicon)
 
-`pip check` passed (`No broken requirements found.`). Clean venv `/tmp/avanevis-v2.9-macos-runtime`. Resolved graph includes `torch==2.13.0`, `setuptools==84.0.0`, `numba==0.67.0`, `llvmlite==0.49.0`, `mlx==0.32.2`, `lightning-whisper-mlx==0.0.10`, `filelock==3.32.4`, `sounddevice==0.5.6`, PyObjC 12.2.2, `tiktoken==0.3.3`. 45 frozen packages. This is the unconstrained runtime float, not the packaged pin set. Packaged PyObjC **12.2.2** was accepted later in this file. sounddevice 0.5.6 remains **not** accepted as a packaged pin.
+`pip check` passed (`No broken requirements found.`). Clean venv `/tmp/avanevis-v2.9-macos-runtime`. Resolved graph includes `torch==2.13.0`, `setuptools==84.0.0`, `numba==0.67.0`, `llvmlite==0.49.0`, `mlx==0.32.2`, `lightning-whisper-mlx==0.0.10`, `filelock==3.32.4`, `sounddevice==0.5.6`, PyObjC 12.2.2, `tiktoken==0.3.3`. 45 frozen packages. This is the unconstrained runtime float, not the packaged pin set. Packaged PyObjC **12.2.2** and `sounddevice==0.5.6` were accepted later in this file.
 
 ### `requirements-macos-build.txt` — Homebrew CPython 3.11.16 native install (Apple Silicon)
 
@@ -269,7 +270,7 @@ Held: Electron 42.9.0; Linux AI add-ons; PyObjC 10.0/12.1 mix; sounddevice 0.4.6
 
 Stay on `feature/v2.9-dependency-hygiene`. Native `pip check`, torch 2.13.0 + setuptools 84.0.0, Numba 0.67.0 + llvmlite 0.49.0, packaged dir build, MLX smoke, and CoreAudio tap capture are recorded above. CI pip-audit ignores for CVE-2025-3000 / PYSEC-2026-3447 are removed.
 
-Packaged PyObjC **12.2.2** was accepted later in this file. sounddevice 0.5.6 remains **not** accepted unless a later commit takes it with its own capture evidence.
+Packaged PyObjC **12.2.2** and `sounddevice==0.5.6` were accepted later in this file.
 
 ## Task 3 macOS pin trim — rejected 2026-08-28 (this Mac)
 
@@ -337,7 +338,7 @@ Trial: dropped `scipy>=1.17.0`. Clean venv still resolved **scipy 1.17.1** via `
 
 **Rejected** anyway: the line documents that MLX needs scipy even though `backend/` does not import it. Removing it would not shrink anything and would hide that runtime requirement from the runtime file.
 
-Unconstrained runtime still floats `sounddevice==0.5.6` and PyObjC **12.2.2**. Those remain **not** accepted.
+Unconstrained runtime already floated `sounddevice==0.5.6` and PyObjC **12.2.2**. Those were **not** accepted in the trim session; both were accepted later in this file after their own capture-gated clusters.
 
 ### SBOM
 
@@ -491,7 +492,27 @@ Held: Electron 42.9.0; PyObjC 10.0/12.1 mix; sounddevice 0.4.6; Windows/Linux `P
 
 Held: Electron 42.9.0; sounddevice 0.4.6; Windows/Linux pins; `filelock==3.32.3`; `onnxruntime` 1.26.0; `tokenizers` 0.23.1; `av` 18.1.0. `sounddevice` was **not** attempted in this session.
 
-**Next:** optional macOS `sounddevice` 0.4.6 → 0.5.6 as its own capture-gated cluster. Windows/Linux Task 3 trim remains on those hosts.
+### sounddevice 0.5.6 — accepted 2026-08-28 (this Mac)
+
+**Upstream:** [sounddevice 0.5.6](https://python-sounddevice.readthedocs.io/en/latest/version-history.html) (2026-08-17). Current PyPI. 0.4.6 → 0.5.6 is Windows-heavy (WASAPI `auto_convert`, optional ASIO via `SD_ENABLE_ASIO`, Windows ARM64 wheels/arch detection). macOS still ships PortAudio **19.7.0** in the universal2 wheel. DeviceList `#548` only changed **repr** to use each dict’s `index`; unfiltered `query_devices()` still matches `enumerate`. AvaNevis uses `query_devices`, `query_hostapis`, and `InputStream(device=, channels=, samplerate=, blocksize=, callback=)` for the microphone path. Desktop capture is the Swift helper, not sounddevice. No application-code change. `cffi==2.1.1` unchanged. Runtime floor stays `sounddevice>=0.4.6`.
+
+**Pin (macOS build only):** `sounddevice==0.4.6` → **`sounddevice==0.5.6`**. Windows/Linux files have no `sounddevice` pin.
+
+**Resolver / `pip check`:** clean venv `/tmp/avanevis-v2.9-macos-build-sd056`, `pip install --only-binary=:all: -r requirements-macos-build.txt` → `sounddevice==0.5.6`, `cffi==2.1.1`, `filelock==3.32.3`, all seven `pyobjc-*==12.2.2`, `mlx==0.32.2`. `pip check`: No broken requirements found. Host trial: PortAudio V19.7.0, 3 devices, `enumerate` vs `index` mismatches `[]`, default input MacBook Pro Microphone index 1, `InputStream` 1.5 s / 17 callbacks / peak 0.003052.
+
+**pip-audit:** `python -m pip_audit -r requirements-macos-build.txt` with no `--ignore-vuln` → **No known vulnerabilities found**.
+
+**SBOM:** `npm run legal:sbom` → `legal/PYTHON-BUNDLED-PACKAGES.md` generated 2026-08-28T22:02:58.900Z; 63 direct pins. Direct pin `sounddevice` is **0.5.6**.
+
+**Packaged macOS dir build:** `npm run build:mac:dir` exit 0. prepare-resources installed `sounddevice==0.5.6` then **Removed torch** and **Removed setuptools**. `npm run verify:mac:packaged` passed. Bundled `python -m pip check`: No broken requirements found. Bundled inventory: `sounddevice==0.5.6`, `cffi==2.1.1`, all seven `pyobjc-*==12.2.2`, `filelock==3.32.3`, `mlx==0.32.2`. Bundled PortAudio V19.7.0; `enumerate` vs `index` mismatches `[]`.
+
+**Hardware smokes (same Mac session; packaged `dist/mac-arm64/AvaNevis.app`):**
+- MLX transcription: bundled python `-m transcription.mlx_whisper_transcriber --file tests/fixtures/speakrs-two-speaker-16k.wav --model base --language en --json` → exit 0, `device: metal`, `computeType: float16`, duration 14.22s, same English two-speaker fixture text as clusters 1–4 / PyObjC, cache `~/Library/Caches/avanevis`.
+- Desktop capture: packaged `audiocapture-helper` via `SwiftAudioCapture`, CoreAudio tap, 15.05s, peak **0.7328**, `helperCaptureBackend=coreaudio_tap`.
+- Packaged `sounddevice.InputStream` on default mic (index 1): 1.5 s, 17 callbacks, peak 0.003466.
+- ScreenCaptureKit fallback: helper `--screencapturekit` fail-closed `PERMISSION_DENIED: Screen Recording permission not granted` (same TCC limit as Task 2 / clusters 1–4 / PyObjC). That is a TCC limitation, not a resolver pass.
+
+Held: Electron 42.9.0; Windows/Linux pins; `filelock==3.32.3`; `onnxruntime` 1.26.0; `tokenizers` 0.23.1; `av` 18.1.0; all seven PyObjC pins at 12.2.2. Windows/Linux Task 3 trim remains on those hosts.
 
 ## Blockers and non-goals
 

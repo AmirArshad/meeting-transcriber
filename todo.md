@@ -13,7 +13,7 @@
 - [x] [Risk: High] Trial the explicit-transitive pin trim on macOS. **Rejected** (2026-08-28): do not delete pins. 14 hold older versions or the typer/click/colorama graph; 20 others match today but are range-locks. Windows/Linux trim still pending. Keep `onnxruntime`, `tokenizers`, and `av`. See the matrix.
 - [x] [Risk: High] On this Mac, bump stale `requirements-macos-build.txt` pins to current resolve (keep the lock; do not float). **Clusters 1–4 accepted** (2026-08-28): huggingface-hub 1.29.0 + transitives; typer 0.27.2 / drop unused macOS colorama / keep click; mlx 0.32.2; remaining floats `cffi` 2.1.1, `regex` 2026.7.19, `Pygments` 2.21.0, `annotated-doc` 0.0.5. `filelock` stays 3.32.3. Do not bump PyObjC or `sounddevice` unless capture gates pass. See the matrix.
 - [x] [Risk: High] Evaluate macOS PyObjC separately with capture as the gate. **Accepted** (2026-08-28): coordinated bump of all seven packaged pins to **12.2.2**. Cocoa and Quartz were **not** removed (Foundation imports; AVFoundation requires Quartz). ScreenCaptureKit fallback preserved. See the matrix.
-- [ ] [Risk: High] Optional: evaluate macOS `sounddevice` 0.4.6 → 0.5.6 as its own capture-gated cluster after PyObjC. Reject if CoreAudio tap peak is not `>> 0.001`. Windows/Linux Task 3 trim remains on those hosts.
+- [x] [Risk: High] Optional: evaluate macOS `sounddevice` 0.4.6 → 0.5.6 as its own capture-gated cluster after PyObjC. **Accepted** (2026-08-28): packaged pin `==0.5.6`. CoreAudio tap `helperCaptureBackend=coreaudio_tap`, peak 0.7328. Windows/Linux Task 3 trim remains on those hosts.
 
 ## Dedicated Electron 44 compatibility lane
 
