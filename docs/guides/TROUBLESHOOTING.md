@@ -123,7 +123,7 @@ xattr -d com.apple.quarantine ~/Downloads/AvaNevis-Setup-*.dmg
 **Cause:** Packaged macOS builds are Apple Silicon only (`arm64`).
 
 **What to do:**
-- Use the packaged macOS release on an Apple Silicon Mac (M1/M2/M3/M4).
+- Use the packaged macOS release on an Apple Silicon Mac (M1 or newer).
 - If you are developing from source, the repo still contains an Intel Mac CPU fallback path using `faster-whisper`, but that is not a supported packaged target.
 
 ---

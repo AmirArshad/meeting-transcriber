@@ -31,6 +31,8 @@ Unconstrained runtime files still resolve **filelock 3.32.4** today. Packaged bu
 
 SBOM: `legal/PYTHON-BUNDLED-PACKAGES.md` regenerated 2026-08-28T15:31:52.342Z. Direct pin `filelock` is **3.32.3** on all three `requirements-*-build.txt` files (the previous SBOM listed 3.32.0 for all three and was stale relative to the Windows/macOS pins).
 
+**macOS packaged-wheel target (2026-08-29):** macOS packaging downloads the locked dependency set for `macosx_14_0_arm64` (CPython 3.11, binary wheels only) into a temporary wheelhouse, then installs only from that wheelhouse. This keeps current MLX pins while preventing a macOS 26 build host from embedding macOS-26-only wheels. Packaged support is macOS 14+ on Apple Silicon (M1 or newer); macOS 14.2+ remains recommended for CoreAudio process-tap capture.
+
 ## Package and runtime ownership
 
 Treat these as **direct runtime dependencies** even when a resolver also reaches them through `faster-whisper`. Never prune them in Task 3 without a failed experiment.
@@ -350,7 +352,7 @@ Stay on `feature/v2.9-dependency-hygiene`. Host: macOS 26.6.2 arm64, Homebrew CP
 
 ### Cluster 1: huggingface-hub 1.29.0 + pulled transitives — accepted 2026-08-28 (this Mac)
 
-**Upstream:** [huggingface-hub 1.29.0](https://github.com/huggingface/huggingface_hub/releases/tag/v1.29.0) (2026-08-27). Security/path hardening for `local_dir` filenames (CVE-2026-15717 follow-up in 1.26.0); Xet download rate-limit fix. 1.16.1 required `typer>=0.20.0` and `hf-xet>=1.4.3`. 1.29.0 **drops typer** and requires `click>=8.4.2,<9` plus `hf-xet>=1.5.2`. PyPI lists no vulnerabilities on 1.29.0. App usage is `hf_hub_download(..., local_dir=..., token=False)` in `mlx_whisper_transcriber.py` and `hf_model_downloader.py`. Distil `./mlx_models/...` filenames still pass `_validate_relative_filename`. `token=False` still omits `Authorization`. No application-code change.
+**Upstream:** [huggingface-hub 1.29.0](https://github.com/huggingface/huggingface_hub/releases/tag/v1.29.0) (2026-08-27). Security/path hardening for `local_dir` filenames (CVE-2026-15717 follow-up in 1.26.0); Xet download rate-limit fix. 1.16.1 required `typer>=0.20.0` and `hf-xet>=1.4.3`. 1.29.0 **drops typer** and requires `click>=8.4.2,<9` plus `hf-xet>=1.5.2`. PyPI lists no vulnerabilities on 1.29.0. App usage is `hf_hub_download(..., local_dir=..., token=False)` in `mlx_whisper_transcriber.py` and `hf_model_downloader.py`. Distil `./mlx_models/...` filenames still pass `_validate_relative_filename`. `token=False` omits `Authorization` and disables cached/environment token discovery. The MLX call was aligned with the summary downloader after the pre-PR paper review found that it had relied on Hub's default `token=None`. No other application-code change was needed for the dependency bump.
 
 **Pin (macOS build only):**
 

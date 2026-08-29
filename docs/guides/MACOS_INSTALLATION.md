@@ -198,10 +198,10 @@ See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) or [open an issue on GitHub](https:
 
 ## 📋 macOS Version Requirements
 
-- **Minimum:** macOS 13 (Ventura)
+- **Minimum:** macOS 14 (Sonoma)
 - **Recommended:** macOS 14.2 or later for CoreAudio system-audio capture
 - **Architecture:**
-  - ✅ Apple Silicon (M1/M2/M3/M4) - Full GPU acceleration
+  - ✅ Apple Silicon (M1 or newer) - Full GPU acceleration
   - ❌ Intel Mac (x64) - packaged releases are not supported
 
 If you are building from source for development only, the repo still contains an Intel Mac CPU fallback path.

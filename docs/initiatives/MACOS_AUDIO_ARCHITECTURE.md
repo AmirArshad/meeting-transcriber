@@ -2,7 +2,7 @@
 
 **Status:** Partially implemented / partially planned
 **Priority:** High (Post-v1.7.0)  
-**Target:** macOS 13+ (Ventura/Sonoma)
+**Target:** macOS 14+ (Sonoma or later)
 
 This document outlines larger macOS audio architecture ideas. Some supporting hardening work has already landed since the original draft:
 
