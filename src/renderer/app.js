@@ -6049,8 +6049,8 @@ class AudioVisualizer {
       }
     }
 
-    this._draw(this.micCtx, this.micBuffer, this.micPeaks, [139, 124, 246]);
-    this._draw(this.desktopCtx, this.desktopBuffer, this.desktopPeaks, [56, 189, 248]);
+    this._draw(this.micCtx, this.micBuffer, this.micPeaks, [184, 168, 201]);
+    this._draw(this.desktopCtx, this.desktopBuffer, this.desktopPeaks, [152, 174, 214]);
     this._lastDrawnMicTarget = this.micTarget;
     this._lastDrawnDesktopTarget = this.desktopTarget;
 

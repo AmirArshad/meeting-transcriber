@@ -271,7 +271,8 @@ test('renderer visual foundation includes responsive History and reduced-motion 
 
   assert.match(css, /@media\s*\(max-width:\s*900px\)[\s\S]*?\.history-layout\s*\{[\s\S]*?grid-template-columns:\s*1fr/);
   assert.match(css, /@media\s*\(prefers-reduced-motion:\s*reduce\)/);
-  assert.match(css, /\.meeting-detail-header::before/);
+  assert.doesNotMatch(css, /\.recording-section::before/);
+  assert.match(css, /--accent:\s*#b8a8c9/);
   assert.match(css, /--rail-width:\s*56px/);
   assert.match(
     css,
