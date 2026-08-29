@@ -30,9 +30,9 @@
 
 ## UI refresh and future layout foundation
 
-- [ ] [Risk: Medium] Create `feature/v2.9-ui-foundation`; use the installed Anthropic `frontend-design` skill to define and apply a calm, functional Omarchy-inspired visual system across the existing Record, History, and Settings navigation.
-- [ ] [Risk: Medium] Standardize the shell, section headers, buttons, cards, controls, focus states, responsive history/detail layout, and reduced-motion behavior without adding a cloud UI, account state, networking, or new persistence schema.
-- [ ] [Risk: Low] Preserve a stable meeting-detail action region and semantic layout boundaries that a later private-sync feature can extend. The future concept is documented in [Meeting objects and private sync](docs/initiatives/MEETING_OBJECTS_AND_PRIVATE_SYNC.md); it is explicitly out of scope for v2.9.0.
+- [x] [Risk: Medium] Create `feature/v2.9-ui-foundation`; use the installed Anthropic `frontend-design` skill to define and apply a calm, functional Omarchy-inspired visual system across the existing Record, History, and Settings navigation. Evidence: branch `feature/v2.9-ui-foundation`. Manual visual matrix remains in `tests/manual/recording-transcription-regression-checklist.md` section 5.
+- [x] [Risk: Medium] Standardize the shell, section headers, buttons, cards, controls, focus states, responsive history/detail layout, and reduced-motion behavior without adding a cloud UI, account state, networking, or new persistence schema.
+- [x] [Risk: Low] Preserve a stable meeting-detail action region and semantic layout boundaries that a later private-sync feature can extend. The future concept is documented in [Meeting objects and private sync](docs/initiatives/MEETING_OBJECTS_AND_PRIVATE_SYNC.md); it is explicitly out of scope for v2.9.0.
 
 ## Explicitly deferred
 

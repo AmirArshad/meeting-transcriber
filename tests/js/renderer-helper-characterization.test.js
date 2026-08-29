@@ -272,6 +272,11 @@ test('renderer visual foundation includes responsive History and reduced-motion 
   assert.match(css, /@media\s*\(max-width:\s*900px\)[\s\S]*?\.history-layout\s*\{[\s\S]*?grid-template-columns:\s*1fr/);
   assert.match(css, /@media\s*\(prefers-reduced-motion:\s*reduce\)/);
   assert.match(css, /\.meeting-detail-header::before/);
+  assert.match(css, /--rail-width:\s*56px/);
+  assert.match(
+    css,
+    /\.rail-btn\.active::before\s*\{[\s\S]*?left:\s*calc\(-0\.5 \* \(var\(--rail-width\) - var\(--rail-btn-size\)\)\)/,
+  );
 });
 
 test('activateTab synchronizes active navigation styling and accessibility state', () => {

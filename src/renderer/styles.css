@@ -49,6 +49,8 @@
   --r-lg: 10px;
   --r-xl: 12px;
   --r-pill: 999px;
+  --rail-width: 56px;
+  --rail-btn-size: 36px;
 
   /* ---- Spacing ---- */
   --space-1: 4px;
@@ -3257,12 +3259,13 @@ h5 {
 }
 
 .container {
-  grid-template-columns: 56px minmax(0, 1fr);
+  grid-template-columns: var(--rail-width) minmax(0, 1fr);
 }
 
 .icon-rail {
   gap: var(--space-1);
   padding-bottom: var(--space-3);
+  width: var(--rail-width);
   background: var(--surface-0);
   border-right-color: var(--hairline);
   backdrop-filter: none;
@@ -3270,7 +3273,7 @@ h5 {
 }
 
 .rail-logo {
-  width: 56px;
+  width: var(--rail-width);
   margin-bottom: var(--space-2);
 }
 
@@ -3285,8 +3288,8 @@ h5 {
 }
 
 .rail-btn {
-  width: 36px;
-  height: 36px;
+  width: var(--rail-btn-size);
+  height: var(--rail-btn-size);
   border-radius: var(--r-sm);
 }
 
@@ -3297,7 +3300,9 @@ h5 {
 }
 
 .rail-btn.active::before {
-  left: -11px;
+  /* Keep the capture-seam marker on the rail's inner left edge, including
+     the 48px narrow rail, instead of translating it off the window. */
+  left: calc(-0.5 * (var(--rail-width) - var(--rail-btn-size)));
   top: 7px;
   bottom: 7px;
   width: 2px;
@@ -3736,13 +3741,8 @@ select.device-select,
 }
 
 @media (max-width: 640px) {
-  .container {
-    grid-template-columns: 48px minmax(0, 1fr);
-  }
-
-  .icon-rail,
-  .rail-logo {
-    width: 48px;
+  :root {
+    --rail-width: 48px;
   }
 
   .top-bar {
