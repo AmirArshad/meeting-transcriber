@@ -1435,7 +1435,17 @@ function activateTab(targetTab) {
   const allNavButtons = [...tabButtons, ...railButtons];
 
   allNavButtons.forEach((btn) => {
-    btn.classList.toggle('active', btn.dataset.tab === targetTab);
+    const isActive = btn.dataset.tab === targetTab;
+    btn.classList.toggle('active', isActive);
+    if (btn.matches('.rail-btn[data-tab]')) {
+      if (isActive) {
+        btn.setAttribute('aria-current', 'page');
+      } else {
+        btn.removeAttribute('aria-current');
+      }
+    } else {
+      btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    }
   });
   tabPanes.forEach((pane) => {
     pane.classList.toggle('active', pane.id === `${targetTab}-tab`);
@@ -1446,11 +1456,17 @@ function activateTab(targetTab) {
   }
 }
 
+function getPreferredScrollBehavior() {
+  const prefersReducedMotion = typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  return prefersReducedMotion ? 'auto' : 'smooth';
+}
+
 function openSettingsAtAiAddons() {
   activateTab('settings');
   const section = document.getElementById('ai-addons-settings');
   if (section) {
-    section.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    section.scrollIntoView({ block: 'start', behavior: getPreferredScrollBehavior() });
   }
 }
 

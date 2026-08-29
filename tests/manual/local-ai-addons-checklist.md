@@ -95,6 +95,13 @@ Speaker identification and local summaries are **out of scope for the first Linu
 - [ ] **Windows/macOS regression row (pre-merge review 2026-08-28):** Generate Summary in History and Home starts `disabled` in the HTML and is enabled from add-on status. Confirm on Windows and macOS that it becomes clickable on a normal launch, **and** that it is still clickable when the status probe fails (temporarily break `getAiAddonStatus`, e.g. by pointing the add-on root at an unreadable path): clicking must surface the setup message and open Settings rather than doing nothing. An authoritative `unsupported` status must still leave it disabled with the platform copy.
 - [ ] **Later version (Phases 6–9, needs Omarchy + NVIDIA):** Linux CUDA Whisper; Speakrs/Pyannote CUDA-only; pinned Linux llama.cpp summaries. Do not run these rows on CPU-only Omarchy.
 
+### v2.9 renderer refresh regression
+
+- [ ] At desktop and narrow widths, Speaker Identification and Meeting Summaries retain their full unsupported reason copy without truncation.
+- [ ] Unsupported badges, cards, engine radios, setup/validate/remove actions, Home setup CTA, and History Generate Summary retain disabled styling with a visible disabled state.
+- [ ] Keyboard focus never lands on disabled Linux add-on controls; enabled navigation and Settings controls retain a visible focus ring.
+- [ ] Reduced-motion mode does not alter unsupported visibility or enable any add-on control.
+
 ## Failure Modes
 
 - [ ] Invalid Hugging Face token shows a clear setup error and does not store plaintext tokens.

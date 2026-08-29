@@ -28,3 +28,18 @@ Use this lightweight checklist for any future recording, transcription, or cross
 
 - [ ] Save new representative logs if the recorder contract or error wording changes intentionally.
 - [ ] Update `todo.md` with the task result and validation status.
+
+## 5. Renderer visual-foundation matrix
+
+Use this section for renderer-only visual changes. The existing recording and
+transcription behavior remains the source of truth; visual approval never
+replaces an interaction pass.
+
+- [ ] At 1440x900, 1024x768, 800x700, and 560x700, visit Record, History, and Settings; confirm no clipped controls or horizontal page overflow.
+- [ ] Start recording, confirm the rail and top-bar recording presence remain visible, then Stop & Transcribe and repeat with Discard.
+- [ ] In History, select a meeting and exercise audio play/seek/volume, Transcript/Summary tabs, inline rename (Enter/Escape), Copy, Save, Retry, Generate Summary, and Delete.
+- [ ] Navigate the rail, setup controls, recording controls, History, and Settings using the keyboard only; every interactive element has a visible focus indicator.
+- [ ] Enable reduced motion in the OS and confirm pulsing, spinning, modal entrance, hover translation, and smooth scrolling no longer create sustained movement.
+- [ ] Windows 10/11 smoke: system text is legible, native selects open, scrollbar/focus treatment remains visible, and no title-bar or DPI scaling collision appears at 100%, 150%, or 200%.
+- [ ] macOS 14+ smoke: system typography falls back cleanly, controls retain visible focus, and the narrow History split does not overlap window chrome.
+- [ ] Omarchy smoke: packaged AppImage/pacman/deb renders the same shell; Record/History/Settings remain usable; add-on cards remain visible, greyed, and fail-closed.

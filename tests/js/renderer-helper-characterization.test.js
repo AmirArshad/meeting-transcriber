@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const vm = require('node:vm');
 
 const {
   ROOT,
@@ -37,6 +38,7 @@ const { roundedBar } = require('../../src/renderer/canvas-helpers');
 
 const APP_JS = path.join(ROOT, 'src', 'renderer', 'app.js');
 const INDEX_HTML = path.join(ROOT, 'src', 'renderer', 'index.html');
+const STYLES_CSS = path.join(ROOT, 'src', 'renderer', 'styles.css');
 
 const EXPECTED_RENDERER_GLOBALS = [
   'recordingStateHelpers',
@@ -242,4 +244,101 @@ test('Phase 0.3 does not mislabel DOM helpers as pure', () => {
       `${name} should remain classified as stateful/DOM (not extracted as pure in Phase 0)`,
     );
   }
+});
+
+test('meeting detail exposes semantic header and labelled action region without changing control IDs', () => {
+  const html = readUtf8(INDEX_HTML);
+
+  assert.match(html, /<header\s+class="meeting-header meeting-detail-header"/);
+  assert.match(
+    html,
+    /<div\s+class="meeting-detail-actions"\s+role="group"\s+aria-label="Meeting actions">[\s\S]*?id="delete-meeting"[\s\S]*?<\/div>/,
+  );
+  for (const id of [
+    'meeting-title',
+    'meeting-title-edit',
+    'meeting-title-edit-form',
+    'meeting-title-input',
+    'meeting-title-cancel',
+    'delete-meeting',
+  ]) {
+    assert.equal((html.match(new RegExp(`id="${id}"`, 'g')) || []).length, 1, `${id} remains unique`);
+  }
+});
+
+test('renderer visual foundation includes responsive History and reduced-motion behavior', () => {
+  const css = readUtf8(STYLES_CSS);
+
+  assert.match(css, /@media\s*\(max-width:\s*900px\)[\s\S]*?\.history-layout\s*\{[\s\S]*?grid-template-columns:\s*1fr/);
+  assert.match(css, /@media\s*\(prefers-reduced-motion:\s*reduce\)/);
+  assert.match(css, /\.meeting-detail-header::before/);
+});
+
+test('activateTab synchronizes active navigation styling and accessibility state', () => {
+  const appSource = readUtf8(APP_JS);
+  const start = appSource.indexOf('function activateTab(targetTab)');
+  const end = appSource.indexOf('\nfunction getPreferredScrollBehavior()', start);
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+
+  const makeClassList = () => {
+    const values = new Set();
+    return {
+      contains: (value) => values.has(value),
+      toggle: (value, force) => (force ? values.add(value) : values.delete(value)),
+    };
+  };
+  const makeButton = (tab, rail = false) => ({
+    dataset: { tab },
+    classList: makeClassList(),
+    attributes: {},
+    matches: (selector) => rail && selector === '.rail-btn[data-tab]',
+    setAttribute(name, value) { this.attributes[name] = String(value); },
+    removeAttribute(name) { delete this.attributes[name]; },
+  });
+  const recordTab = makeButton('record');
+  const historyTab = makeButton('history');
+  const recordRail = makeButton('record', true);
+  const historyRail = makeButton('history', true);
+  const panes = ['record', 'history'].map((tab) => ({ id: `${tab}-tab`, classList: makeClassList() }));
+  const document = {
+    querySelectorAll(selector) {
+      if (selector === '.tab-btn') return [recordTab, historyTab];
+      if (selector === '.rail-btn[data-tab]') return [recordRail, historyRail];
+      if (selector === '.tab-pane') return panes;
+      return [];
+    },
+  };
+
+  const activateTab = vm.runInNewContext(`(${appSource.slice(start, end)})`, {
+    document,
+    initSettingsTab: async () => {},
+    console,
+  });
+  activateTab('history');
+
+  assert.equal(historyTab.classList.contains('active'), true);
+  assert.equal(historyTab.attributes['aria-selected'], 'true');
+  assert.equal(recordTab.attributes['aria-selected'], 'false');
+  assert.equal(historyRail.attributes['aria-current'], 'page');
+  assert.equal(recordRail.attributes['aria-current'], undefined);
+  assert.equal(panes[1].classList.contains('active'), true);
+});
+
+test('Settings navigation disables explicit smooth scrolling for reduced motion', () => {
+  const appSource = readUtf8(APP_JS);
+  const start = appSource.indexOf('function getPreferredScrollBehavior()');
+  const end = appSource.indexOf('\nfunction openSettingsAtAiAddons()', start);
+  assert.notEqual(start, -1);
+  assert.notEqual(end, -1);
+
+  const functionSource = appSource.slice(start, end);
+  const reduceMotion = vm.runInNewContext(`(${functionSource})`, {
+    window: { matchMedia: () => ({ matches: true }) },
+  });
+  const allowMotion = vm.runInNewContext(`(${functionSource})`, {
+    window: { matchMedia: () => ({ matches: false }) },
+  });
+  assert.equal(reduceMotion(), 'auto');
+  assert.equal(allowMotion(), 'smooth');
 });
