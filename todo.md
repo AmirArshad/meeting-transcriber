@@ -15,6 +15,7 @@
 - [x] [Risk: High] Evaluate macOS PyObjC separately with capture as the gate. **Accepted** (2026-08-28): coordinated bump of all seven packaged pins to **12.2.2**. Cocoa and Quartz were **not** removed (Foundation imports; AVFoundation requires Quartz). ScreenCaptureKit fallback preserved. See the matrix.
 - [x] [Risk: High] Optional: evaluate macOS `sounddevice` 0.4.6 → 0.5.6 as its own capture-gated cluster after PyObjC. **Accepted** (2026-08-28): packaged pin `==0.5.6`. CoreAudio tap `helperCaptureBackend=coreaudio_tap`, peak 0.7328.
 - [x] [Risk: High] Trial the explicit-transitive pin trim on Windows/Linux. **Rejected** (2026-08-28): do not delete pins. Version holds plus the typer/click graph (Linux also drops `colorama`); remaining matches are range-locks. Keep `onnxruntime`, `tokenizers`, and `av`. `filelock` stays 3.32.3. See the matrix.
+- [ ] [Risk: High] On Windows/Linux, bump stale `requirements-*-build.txt` pins to current resolve (keep the lock; do not float). Cluster 1 accepted 2026-08-29: huggingface-hub 1.29.0 + pulled transitives. Remaining: typer 0.27.2 (drop unused Linux colorama; keep click); leftover floats protobuf / Pygments / annotated-doc. `filelock` stays 3.32.3. Do not bump `onnxruntime` 1.26.0.
 
 ## Dedicated Electron 44 compatibility lane
 

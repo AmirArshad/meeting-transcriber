@@ -66,7 +66,7 @@ Material floats observed 2026-08-28 (runtime) versus current build pins:
 | `filelock` | 3.32.4 | 3.32.3 | Floor raised on Linux; build stays 3.32.3 |
 | `av` | 18.1.0 | **18.1.0** | **Accepted** Task 2 (2026-08-28): Windows/Linux build pins; macOS does not pin `av` |
 | `onnxruntime` | 1.29.0 | 1.26.0 | Keep 1.26.0 until VAD/decode/Speakrs evidence |
-| `huggingface-hub` | 1.29.0 | macOS **1.29.0**; Windows/Linux **1.16.1** | **Accepted** macOS-only (2026-08-28). Windows/Linux stay 1.16.1 until those hosts evidence the bump |
+| `huggingface-hub` | 1.29.0 | **1.29.0** | **Accepted** macOS (2026-08-28) and Windows/Linux (2026-08-29)
 | `pytest` | 9.1.1 | floor `>=9.1.1` | **Accepted** Task 2 (2026-08-28): `requirements-dev.txt` floor raised; not a packaged pin |
 | `mlx` | 0.32.2 | **0.32.2** | **Accepted** macOS-only (2026-08-28) after packaged MLX smoke; `lightning-whisper-mlx` stays 0.0.10; `tiktoken` stays 0.3.3 |
 | `cffi` | 2.1.1 | macOS/Linux **2.1.1** | **Accepted** macOS-only (2026-08-28). Linux already 2.1.1; Windows does not pin `cffi` |
@@ -579,6 +579,47 @@ Temporary transcript output stayed under `%TEMP%` / `/tmp`. Do not treat WSL Pul
 ### SBOM
 
 Current `legal/PYTHON-BUNDLED-PACKAGES.md` is unchanged (63 direct pins, generated 2026-08-28T22:02:58.900Z). A trial-2 file would drop the matching Windows/Linux direct names (`flatbuffers` would disappear from the legal table entirely; `colorama` is already macOS-absent). That SBOM diff is evidence **against** accepting the trim.
+
+## Task 3 Windows/Linux pin upgrades (keep the lock)
+
+Stay on `feature/v2.9-dependency-hygiene`. Host: Windows 10 26200 x64, CPython 3.11.9. Linux stand-in: WSL2 Ubuntu, uv CPython 3.11.15. Packaged Windows python: embed 3.11.9 via `npm run prepare-build`. Electron stayed 42.9.0. macOS pins unchanged except where a Windows/Linux bump makes the SBOM shared. `filelock` stays **3.32.3**. `onnxruntime==1.26.0`, `tokenizers==0.23.1`, and `av==18.1.0` were not changed.
+
+### Cluster 1: huggingface-hub 1.29.0 + pulled transitives — accepted 2026-08-29 (this PC)
+
+**Upstream:** [huggingface-hub 1.29.0](https://github.com/huggingface/huggingface_hub/releases/tag/v1.29.0) (2026-08-27). Same notes as the macOS cluster: path hardening for `local_dir` filenames; 1.29.0 **drops typer** and requires `click>=8.4.2,<9` plus `hf-xet>=1.5.2`. PyPI still lists 1.29.0 as current (2026-08-29). App usage on this stack is `hf_hub_download(..., local_dir=..., token=False)` in `hf_model_downloader.py` (summaries; Linux add-ons remain unsupported). faster-whisper uses hub only for model cache layout. Distil filenames and `token=False` were already validated on macOS. No application-code change.
+
+**Pin (Windows and Linux build files):**
+
+| Package | Before | After |
+|---|---|---|
+| `huggingface-hub` | 1.16.1 | **1.29.0** |
+| `hf-xet` | 1.5.0 | **1.6.0** |
+| `click` | 8.4.1 | **8.5.0** |
+| `fsspec` | 2026.4.0 | **2026.7.0** |
+| `anyio` | 4.13.0 | **4.14.2** |
+| `idna` | 3.16 | **3.19** |
+| `packaging` | 26.2 | **26.3** |
+| `tqdm` | 4.67.3 | **4.70.0** |
+
+`filelock==3.32.3` unchanged. `typer==0.25.1` unchanged in this commit. `httpx==0.28.1` / `httpcore==1.0.9` / `h11==0.16.0` already matched. Did not add `charset-normalizer` (macOS-only pin).
+
+**Resolver / `pip check`:**
+- Windows 3.11.9 clean venv `%TEMP%\avanevis-v2.9-winlinux-c1\win`: `pip install --only-binary=:all: -r requirements-windows-build.txt` → versions in the table. `pip check`: No broken requirements found.
+- WSL2 3.11.15 `/tmp/avanevis-v2.9-winlinux-c1/linux`: same for `requirements-linux-build.txt`. `pip check`: No broken requirements found.
+
+**pip-audit:** both requirement files with no `--ignore-vuln` → **No known vulnerabilities found**.
+
+**Tests:** trial venvs `pytest tests/python/test_hf_model_downloader.py tests/python/test_transcriber_helpers.py -q` → Windows **47 passed**; WSL **46 passed, 1 skipped**. No application-code change.
+
+**SBOM:** `npm run legal:sbom` → `legal/PYTHON-BUNDLED-PACKAGES.md` generated 2026-08-29T15:21:38.104Z; 63 direct pins. `huggingface-hub`, `hf-xet`, `click`, `fsspec`, `anyio`, `idna`, `packaging`, and `tqdm` are now **1.29.0-era** on all three platforms.
+
+**Packaged Windows `prepare-build`:** exit 0. Bundled `build/resources/python/python.exe -m pip check`: No broken requirements found. Bundled inventory matches the table plus `filelock==3.32.3`, `typer==0.25.1`, `onnxruntime==1.26.0`, `tokenizers==0.23.1`, `av==18.1.0`. Bundled decode of the two-speaker fixture: rate 16000, channels 1, frames 223, samples 227592.
+
+**Transcription smoke (trial venvs, offline cache):**
+- Windows `--model small --device cpu`: exit 0, `device: cpu`, `computeType: int8`, duration 14.22s, English fixture text, `Using cached Whisper model files only.`
+- WSL `--model tiny.en` (WSL cache): exit 0, same device/compute/duration, English fixture text.
+
+Held: `typer==0.25.1`; Electron 42.9.0; Linux AI add-ons; `onnxruntime` 1.26.0; `tokenizers` 0.23.1; `filelock==3.32.3`. `click` stays because hub 1.29 requires it — cluster 2 must not drop it.
 
 ## Blockers and non-goals
 
