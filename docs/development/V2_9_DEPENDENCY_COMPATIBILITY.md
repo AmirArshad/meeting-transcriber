@@ -71,8 +71,8 @@ Material floats observed 2026-08-28 (runtime) versus current build pins:
 | `mlx` | 0.32.2 | **0.32.2** | **Accepted** macOS-only (2026-08-28) after packaged MLX smoke; `lightning-whisper-mlx` stays 0.0.10; `tiktoken` stays 0.3.3 |
 | `cffi` | 2.1.1 | macOS/Linux **2.1.1** | **Accepted** macOS-only (2026-08-28). Linux already 2.1.1; Windows does not pin `cffi` |
 | `regex` | 2026.7.19 | macOS **2026.7.19** | **Accepted** macOS-only (2026-08-28). macOS-only pin (`tiktoken`) |
-| `Pygments` | 2.21.0 | macOS **2.21.0**; Windows/Linux **2.20.0** | **Accepted** macOS-only (2026-08-28) |
-| `annotated-doc` | 0.0.5 | macOS **0.0.5**; Windows/Linux **0.0.4** | **Accepted** macOS-only (2026-08-28) |
+| `Pygments` | 2.21.0 | **2.21.0** | **Accepted** macOS (2026-08-28) and Windows/Linux (2026-08-29) |
+| `annotated-doc` | 0.0.5 | **0.0.5** | **Accepted** macOS (2026-08-28) and Windows/Linux (2026-08-29) |
 | `torch` (macOS runtime) | 2.13.0 | **2.13.0** then prune | **Accepted** Task 2 (2026-08-28 Mac): still prune after pip |
 | `setuptools` (macOS runtime) | 84.0.0 | Windows/Linux/macOS **84.0.0** | **Accepted** Task 2 on all three packaged platforms |
 | PyObjC capture frameworks | 12.2.2 | **12.2.2** | **Accepted** macOS-only (2026-08-28). Coordinated seven-package bump; Cocoa and Quartz retained |
@@ -642,6 +642,32 @@ Held: `typer==0.25.1`; Electron 42.9.0; Linux AI add-ons; `onnxruntime` 1.26.0; 
 **Transcription smoke:** Windows `small` and WSL `tiny.en` offline CPU/int8, duration 14.22s, English fixture text.
 
 Held: Electron 42.9.0; `onnxruntime` 1.26.0; `filelock==3.32.3`; leftover floats protobuf 7.35.1 / Pygments 2.20.0 / annotated-doc 0.0.4.
+
+### Cluster 3: remaining Windows/Linux floats — accepted 2026-08-29 (this PC)
+
+**Upstream:** leftover Task 3 version-holds that clusters 1–2 did not pull. `protobuf` 7.36.0 is the current wheel for unpinned `onnxruntime==1.26.0` protobuf. `Pygments` 2.21.0 and `annotated-doc` 0.0.5 are current `rich`/`typer` deps (macOS already at these). AvaNevis does not import these packages. No application-code change. `onnxruntime` stays **1.26.0**. `filelock` stays **3.32.3**.
+
+**Pin (Windows and Linux build files):**
+
+| Package | Before | After |
+|---|---|---|
+| `protobuf` | 7.35.1 | **7.36.0** (Windows/Linux only; macOS does not pin protobuf) |
+| `Pygments` | 2.20.0 | **2.21.0** |
+| `annotated-doc` | 0.0.4 | **0.0.5** |
+
+**Resolver / `pip check`:** Windows and WSL installs of the updated build files → versions in the table, `onnxruntime==1.26.0`, `filelock==3.32.3`. `pip check`: No broken requirements found.
+
+**pip-audit:** both files, no ignores → **No known vulnerabilities found**.
+
+**Tests:** same hf/transcriber helpers: Windows 47 passed; WSL 46 passed, 1 skipped.
+
+**SBOM:** `npm run legal:sbom` → generated 2026-08-29T15:29:14.162Z; 63 direct pins. `protobuf` is **7.36.0** (Windows/Linux). `Pygments` and `annotated-doc` are **2.21.0** / **0.0.5** on all three platforms.
+
+**Packaged Windows `prepare-build`:** exit 0. Bundled `pip check` passed. Bundled `protobuf==7.36.0`, `Pygments==2.21.0`, `annotated-doc==0.0.5`, `onnxruntime==1.26.0`.
+
+**Transcription smoke:** Windows `small` and WSL `tiny.en` offline CPU/int8, duration 14.22s, English fixture text.
+
+Held: Electron 42.9.0; `onnxruntime` 1.26.0 vs runtime 1.29.0; `filelock==3.32.3` vs runtime 3.32.4; `tokenizers==0.23.1`; `av==18.1.0`. Range-locks that already matched current resolve stay pinned. All Windows/Linux Task 3 version-hold rows are now upgraded (clusters 1–3) or graph-changed (Linux `colorama` removed; `click` kept for hub 1.29).
 
 ## Blockers and non-goals
 
