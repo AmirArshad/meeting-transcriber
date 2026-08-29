@@ -15,10 +15,11 @@ const LEGAL_DIR = path.join(BUILD_DIR, 'legal');
 const BIN_DIR = path.join(BUILD_DIR, 'bin');
 const REPO_ROOT = path.join(__dirname, '..');
 const RESOURCE_MANIFEST_PATH = path.join(BUILD_DIR, 'resource-manifest.json');
-const RESOURCE_MANIFEST_VERSION = 7;
+const RESOURCE_MANIFEST_VERSION = 8;
 const REQUIREMENTS_MACOS_BUILD = path.join(__dirname, '..', 'requirements-macos-build.txt');
 const REQUIREMENTS_WINDOWS_BUILD = path.join(__dirname, '..', 'requirements-windows-build.txt');
 const REQUIREMENTS_LINUX_BUILD = path.join(__dirname, '..', 'requirements-linux-build.txt');
+const MACOS_PYTHON_WHEEL_PLATFORM = 'macosx_14_0_arm64';
 const MACOS_RUNTIME_REMOVABLE_PACKAGES = Object.freeze([
   'sympy',
   'av.libs',
@@ -421,6 +422,25 @@ function buildMacOSHelperVerificationCommands(helperPath) {
     { command: 'codesign', args: ['--verify', '--strict', '--verbose=2', helperPath] },
     { command: 'codesign', args: ['-d', '--entitlements', ':-', helperPath] },
   ];
+}
+
+function buildMacOSPythonWheelhouseCommands(requirementsPath, wheelhousePath) {
+  return {
+    download: [
+      '-m', 'pip', 'download', '--only-binary=:all:',
+      '--platform', MACOS_PYTHON_WHEEL_PLATFORM,
+      '--implementation', 'cp',
+      '--python-version', '3.11',
+      '--abi', 'cp311',
+      '--dest', wheelhousePath,
+      '-r', requirementsPath,
+    ],
+    install: [
+      '-m', 'pip', 'install', '--only-binary=:all:',
+      '--no-index', '--find-links', wheelhousePath,
+      '-r', requirementsPath,
+    ],
+  };
 }
 
 function macOSHelperEntitlementsIncludeInherit(entitlementsOutput) {
@@ -1211,9 +1231,14 @@ async function prepareResources() {
       const requirementsPath = fs.existsSync(REQUIREMENTS_MACOS_BUILD)
         ? REQUIREMENTS_MACOS_BUILD
         : path.join(__dirname, '..', 'requirements-macos.txt');
-      execSync(`"${pythonExe}" -m pip install --only-binary=:all: -r "${requirementsPath}"`, {
-        stdio: 'inherit'
-      });
+      const wheelhousePath = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-macos-wheels-'));
+      const wheelhouseCommands = buildMacOSPythonWheelhouseCommands(requirementsPath, wheelhousePath);
+      try {
+        execFileSync(pythonExe, wheelhouseCommands.download, { stdio: 'inherit' });
+        execFileSync(pythonExe, wheelhouseCommands.install, { stdio: 'inherit' });
+      } finally {
+        fs.rmSync(wheelhousePath, { recursive: true, force: true });
+      }
 
       // Clean up bloated transitive dependencies to reduce bundle size.
       // scipy stays bundled (lightning-whisper-mlx imports scipy.signal at runtime).
@@ -1466,6 +1491,7 @@ module.exports = {
   ensureWindowsEmbeddedPythonPathConfig,
   getMacOSPythonRuntimeRemovablePackages,
   buildMacOSHelperVerificationCommands,
+  buildMacOSPythonWheelhouseCommands,
   macOSHelperEntitlementsIncludeInherit,
   getSpeakrsCargoFeatures,
   getSpeakrsCargoTargetTriple,

@@ -16,10 +16,12 @@ Where docs disagree on a cross-process contract, `AGENTS.md` wins.
 | Packaging and installers | `docs/development/BUILD_INSTRUCTIONS.md`, `docs/development/INSTALLER_IMPLEMENTATION.md` |
 | Backend module layout | `docs/development/BACKEND.md` |
 | AI catalog pins | `docs/development/LOCAL_AI_MODEL_CATALOG.md` |
+| v2.9 dependency evidence | `docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md` |
 | Speakrs soak / quality notes | `docs/development/SPEAKRS_BENCHMARKS.md` |
 | Third-party notices / About credits | `THIRD_PARTY_NOTICES.md`, Settings About in `src/renderer/index.html` |
 | Recorder stdout JSON migration history | `docs/completed/json-based-events.md` |
 | macOS capture — **planned**, not shipped | `docs/initiatives/MACOS_AUDIO_ARCHITECTURE.md` |
+| Encode / Whisper / llama speed — **planned spike**, not v2.9 | `docs/initiatives/LOCAL_INFERENCE_PERFORMANCE.md` |
 | Meeting history user-facing behavior | `docs/guides/MEETING_TRANSCRIPTION.md` |
 | Manual QA (hardware-dependent) | `tests/manual/recording-smoke-checklist.md`, `tests/manual/local-ai-addons-checklist.md` |
 | Adversarial review prompts | `docs/development/ADVERSARIAL_REVIEW_PROMPTS.md` |

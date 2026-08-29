@@ -9,6 +9,7 @@ const { hashString } = require('../../build/download-manifest');
 const {
   buildDirectoryManifest,
   buildMacOSHelperVerificationCommands,
+  buildMacOSPythonWheelhouseCommands,
   buildResourceManifest,
   ensureWindowsEmbeddedPythonPathConfig,
   ensureWindowsEmptyBinDirectory,
@@ -74,7 +75,7 @@ test('manifestsMatch detects Swift source changes through the resource manifest'
 test('buildResourceManifest tracks pinned packaged dependency requirements', () => {
   const manifest = buildResourceManifest();
 
-  assert.equal(manifest.version, 7);
+  assert.equal(manifest.version, 8);
   assert.equal(typeof manifest.inputs.requirementsMacosBuild, 'string');
   assert.equal(typeof manifest.inputs.requirementsWindowsBuild, 'string');
   assert.equal(typeof manifest.inputs.requirementsLinuxBuild, 'string');
@@ -92,6 +93,29 @@ test('macOS packaged Python keeps pip for optional diarization setup', () => {
   assert.ok(removablePackages.includes('torch'));
   assert.ok(removablePackages.includes('Jinja2'));
   assert.ok(removablePackages.includes('MarkupSafe'));
+});
+
+
+test('macOS packaged Python resolves dependencies from macOS 14 arm64 wheels', () => {
+  const commands = buildMacOSPythonWheelhouseCommands(
+    '/repo/requirements-macos-build.txt',
+    '/tmp/avanevis-macos-wheels',
+  );
+
+  assert.deepEqual(commands.download, [
+    '-m', 'pip', 'download', '--only-binary=:all:',
+    '--platform', 'macosx_14_0_arm64',
+    '--implementation', 'cp',
+    '--python-version', '3.11',
+    '--abi', 'cp311',
+    '--dest', '/tmp/avanevis-macos-wheels',
+    '-r', '/repo/requirements-macos-build.txt',
+  ]);
+  assert.deepEqual(commands.install, [
+    '-m', 'pip', 'install', '--only-binary=:all:',
+    '--no-index', '--find-links', '/tmp/avanevis-macos-wheels',
+    '-r', '/repo/requirements-macos-build.txt',
+  ]);
 });
 
 

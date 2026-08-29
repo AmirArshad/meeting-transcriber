@@ -501,6 +501,27 @@ def test_mlx_transcriber_does_not_import_hf_hub_when_model_files_are_cached(tmp_
     service._download_model_files()
 
 
+def test_mlx_transcriber_disables_hf_token_discovery_for_public_model_downloads(tmp_path, monkeypatch):
+    service = cast(Any, MLXWhisperTranscriber(model_size='small', language='en'))
+    service.cache_dir = tmp_path / 'cache-root'
+    service.model_dir = service.cache_dir / 'mlx_models' / service.model_storage_dir
+    captured_calls = []
+
+    def fake_download(**kwargs):
+        captured_calls.append(kwargs)
+
+    monkeypatch.setitem(
+        __import__('sys').modules,
+        'huggingface_hub',
+        types.SimpleNamespace(hf_hub_download=fake_download),
+    )
+
+    service._download_model_files()
+
+    assert len(captured_calls) == 2
+    assert all(call['token'] is False for call in captured_calls)
+
+
 def test_mlx_transcriber_get_model_info_reports_cache_and_repo(tmp_path, monkeypatch):
     service = cast(Any, MLXWhisperTranscriber(model_size='large', language='en'))
     monkeypatch.setattr(service, '_get_cache_dir', lambda: tmp_path / 'cache-root')

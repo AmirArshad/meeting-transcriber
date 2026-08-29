@@ -11,6 +11,7 @@ Planned or active future work lives here. Completed designs should move to `../c
 - [Audio setup wizard](FEATURE_SETUP_WIZARD.md)
 - [macOS audio architecture improvements](MACOS_AUDIO_ARCHITECTURE.md)
 - [Meeting objects and private sync — future exploration](MEETING_OBJECTS_AND_PRIVATE_SYNC.md) — no implementation is scheduled for v2.9.0
+- [Local inference performance — future spike](LOCAL_INFERENCE_PERFORMANCE.md) — encode / Whisper / llama.cpp headroom; no implementation is scheduled for v2.9.0
 
 ## Complete (reference)
 

@@ -295,6 +295,7 @@ class MLXWhisperTranscriber(BaseTranscriber):
                     repo_id=self.model_repo,
                     filename=filename,
                     local_dir=local_dir,
+                    token=False,
                 )
         finally:
             hf_logger.setLevel(previous_level)

@@ -1,8 +1,10 @@
 # Dependabot PR triage (Phase 5)
 
-> **Historical triage (2026-05-27).** The phased dependency-upgrade branch work and the “Close now” / “Defer” PR actions below are complete. For current dependency and release hygiene, use root `todo.md`. Keep this file as background for why pins and Dependabot ignores look the way they do.
+> **Historical triage (2026-05-27).** The phased dependency-upgrade branch work and the “Close now” / “Defer” PR actions below are complete. For current dependency and release hygiene, use root `todo.md` and the v2.9.0 matrix. Keep this file as background for why pins and Dependabot ignores look the way they do.
 
-Last reviewed: 2026-08-13. Absorbed #73 (`filelock`/`certifi`), #72 (`typing-extensions`), and #58 (`ctranslate2` 4.8.1) on `chore/deps-filelock-certifi-typing-ctranslate2`. Prior: 2026-07-14 on `chore/dependency-hygiene`.
+**v2.9.0 (2026-08-28):** live decision record is [`docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md`](V2_9_DEPENDENCY_COMPATIBILITY.md). Linux `filelock` is aligned to `>=3.32.3` / `==3.32.3`. macOS packaged `torch==2.13.0` + `setuptools==84.0.0` is the Task 2 Mac trial (resolver-only Torch, still pruned). Do **not** merge Dependabot PRs into `master` or `release/v2.9.0`; accept candidates only from that matrix after their platform gates. Electron 44 stays on `feature/v2.9-electron-44`.
+
+Last reviewed: 2026-08-29 (Task 3 Windows/Linux remaining floats protobuf/Pygments/annotated-doc). Prior: 2026-08-29 (Task 3 Windows/Linux typer 0.27.2). Prior: 2026-08-29 (Task 3 Windows/Linux huggingface-hub 1.29.0). Prior: 2026-08-28 (Task 3 Windows/Linux pin trim **rejected**). Prior: 2026-08-28 (Task 3 macOS pin trim **rejected**). Prior: 2026-08-28 (Task 2 macOS Numba 0.67.0 / llvmlite 0.49.0). Prior: 2026-08-28 (Task 2 macOS torch 2.13.0 + setuptools 84.0.0). Prior: 2026-08-28 (Task 2 setuptools 84.0.0 Windows/Linux build pin). Prior: 2026-08-28 (Task 2 PyAV 18.1.0). Prior: 2026-08-28 (FileLock Linux correction + matrix). Prior: 2026-08-13. Absorbed #73 (`filelock`/`certifi`), #72 (`typing-extensions`), and #58 (`ctranslate2` 4.8.1) on `chore/deps-filelock-certifi-typing-ctranslate2`. Prior: 2026-07-14 on `chore/dependency-hygiene`.
 
 ## Current open set (2026-07-14)
 
@@ -22,7 +24,7 @@ Last reviewed: 2026-08-13. Absorbed #73 (`filelock`/`certifi`), #72 (`typing-ext
 |---------|------------------------|---------|
 | `onnxruntime` | Hard dep of `faster-whisper==1.2.1`; Silero VAD for `vad_filter=True` in `faster_whisper_transcriber.py` | **Keep pin** (`==1.26.0`). Removal → VAD/import failure. (macOS build prunes onnxruntime after pip; Windows must keep it.) |
 | `tokenizers` | Hard dep of faster-whisper Whisper tokenization | **Keep pin** (`==0.23.1`). Removal → model/tokenize failure. |
-| `av` (PyAV) | Hard dep of faster-whisper path-based audio decode | **Keep pin** (`==17.0.1`). Removal → decode failure on `transcribe(audio_path)`. Bundled ffmpeg does not replace this path. |
+| `av` (PyAV) | Hard dep of faster-whisper path-based audio decode | **Keep pin** (`==18.1.0`, accepted v2.9 Task 2). Removal → decode failure on `transcribe(audio_path)`. Bundled ffmpeg does not replace this path. |
 
 These are not “reproducibility-only” optional pins: pip declares them required, and AvaNevis hits all three at runtime. Explicit `==` pins stay for reproducible packaged builds / installer size control. Dev `requirements-windows.txt` may continue to leave them transitive under `faster-whisper>=1.0.0`.
 
@@ -79,7 +81,7 @@ gh pr close 15 --comment "Declined: coordinate all pyobjc-framework pins (10→1
 |----|---------|------------|
 | #17 | pyaudiowpatch 0.2.12.4 → 0.2.12.8 | `requirements-windows-build.txt`, dev `>=0.2.12.8` |
 | #14 | protobuf 7.34.1 → 7.35.0 | `requirements-windows-build.txt` |
-| #16 | setuptools 81 → 82 (mac) | Windows **82.0.1**; macOS **81.0.0** (`torch==2.12.0` requires `setuptools<82`) |
+| #16 | setuptools 81 → 82 (mac) | Windows/Linux/macOS build **84.0.0**; macOS `torch==2.13.0` no longer requires `setuptools<82` |
 | #21 | huggingface-hub 1.15.0 → 1.16.1 | both `requirements-*-build.txt` |
 | #13 | mpmath 1.3.0 → 1.4.1 | Deferred on macOS (`sympy==1.14.0` requires `mpmath<1.4`) |
 

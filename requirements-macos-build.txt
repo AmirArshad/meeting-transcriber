@@ -1,61 +1,64 @@
 # Pinned dependencies used only for packaged macOS builds.
 # Keep local development requirements in requirements-macos.txt.
-sounddevice==0.4.6
+sounddevice==0.5.6
 numpy==2.4.6
 # Shared spool finalization imports processor.StatefulResampler (soxr).
 soxr==1.1.0
-pyobjc-framework-ScreenCaptureKit==10.0
-pyobjc-framework-CoreAudio==10.0
-pyobjc-framework-AVFoundation==10.0
-pyobjc-core==12.1
-pyobjc-framework-Cocoa==12.1
-pyobjc-framework-CoreMedia==12.1
-pyobjc-framework-Quartz==12.1
+# Coordinated PyObjC set: do not bump one framework alone. ScreenCaptureKit 12.2.2
+# requires pyobjc-core / Cocoa / CoreMedia >=12.2.2. Cocoa stays because backend
+# imports Foundation (NSObject, NSRunLoop). Quartz is not imported by application
+# code, but pyobjc-framework-AVFoundation==12.2.2 requires it — keep the pin.
+pyobjc-framework-ScreenCaptureKit==12.2.2
+pyobjc-framework-CoreAudio==12.2.2
+pyobjc-framework-AVFoundation==12.2.2
+pyobjc-core==12.2.2
+pyobjc-framework-Cocoa==12.2.2
+pyobjc-framework-CoreMedia==12.2.2
+pyobjc-framework-Quartz==12.2.2
 lightning-whisper-mlx==0.0.10
 # Pinned for reproducibility; also installed transitively via lightning-whisper-mlx (not used by backend/).
 scipy==1.17.1
 filelock==3.32.3
-cffi==2.0.0
+cffi==2.1.1
 pycparser==3.0
 tiktoken==0.3.3
-regex==2026.7.10
+regex==2026.7.19
 requests==2.34.2
-charset-normalizer==3.4.7
-idna==3.16
+charset-normalizer==3.5.1
+idna==3.19
 urllib3==2.7.0
 certifi==2026.7.22
-huggingface-hub==1.16.1
-hf-xet==1.5.0
+huggingface-hub==1.29.0
+hf-xet==1.6.0
 httpx==0.28.1
 httpcore==1.0.9
-fsspec==2026.4.0
+fsspec==2026.7.0
 h11==0.16.0
-packaging==26.2
+packaging==26.3
 PyYAML==6.0.3
-tqdm==4.67.3
-typer==0.25.1
-annotated-doc==0.0.4
-click==8.4.1
+tqdm==4.70.0
+typer==0.27.2
+annotated-doc==0.0.5
+click==8.5.0
 rich==15.0.0
-Pygments==2.20.0
+Pygments==2.21.0
 markdown-it-py==4.2.0
 mdurl==0.1.2
 shellingham==1.5.4
 typing-extensions==4.16.0
-anyio==4.13.0
-colorama==0.4.6
-mlx==0.31.2
+anyio==4.14.2
+mlx==0.32.2
 more-itertools==11.1.0
-numba==0.65.1
-llvmlite==0.47.0
+numba==0.67.0
+llvmlite==0.49.0
 # Pinned for reproducible pip resolution; lightning-whisper-mlx requires torch but MLX inference
 # never imports torch_whisper.py, so prepare-resources removes torch after install.
-# torch==2.12.0 requires setuptools<82 (Windows build pin is 83.0.0; no torch there).
-# pip-audit: CVE-2025-3000 has no fix version; CI ignores it because torch is not shipped.
-# pip-audit: PYSEC-2026-3447 (setuptools<83) is ignored on macOS for the same torch pin;
-# setuptools is pruned from the packaged macOS runtime after install.
-torch==2.12.0
-setuptools==81.0.0
+# torch==2.13.0 requires setuptools>=77.0.3 (no <82 cap). Keep in lockstep with Windows/Linux
+# setuptools==84.0.0. Torch remains in MACOS_RUNTIME_REMOVABLE_PACKAGES and is pruned after pip.
+# pip-audit: CVE-2025-3000 is patched in 2.13.0; do not ignore it. setuptools 84.0.0
+# is past PYSEC-2026-3447 (setuptools<83); setuptools is still pruned after install.
+torch==2.13.0
+setuptools==84.0.0
 networkx==3.6.1
 sympy==1.14.0
 # sympy==1.14.0 requires mpmath<1.4.
