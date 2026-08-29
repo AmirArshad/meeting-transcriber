@@ -621,6 +621,28 @@ Stay on `feature/v2.9-dependency-hygiene`. Host: Windows 10 26200 x64, CPython 3
 
 Held: `typer==0.25.1`; Electron 42.9.0; Linux AI add-ons; `onnxruntime` 1.26.0; `tokenizers` 0.23.1; `filelock==3.32.3`. `click` stays because hub 1.29 requires it — cluster 2 must not drop it.
 
+### Cluster 2: typer 0.27.2 — accepted 2026-08-29 (this PC)
+
+**Upstream:** [typer 0.27.2](https://pypi.org/project/typer/0.27.2/) (2026-08-28). Same as macOS cluster 2: 0.26.0 vendored Click; 0.27.2 requires `shellingham`, `rich`, `annotated-doc`, and `colorama` **only on Windows**. AvaNevis does not import `typer`, `click`, or `colorama`. huggingface-hub 1.29.0 still requires `click>=8.4.2,<9`, so `click==8.5.0` **stays**. No application-code change.
+
+**Pin:** Windows and Linux `typer==0.25.1` → **`typer==0.27.2`**. Removed unused Linux `colorama==0.4.6` (not installed after the bump). Windows keeps `colorama==0.4.6` (`tqdm`/`click` Windows extras). `click==8.5.0` retained. `annotated-doc==0.0.4` unchanged (cluster 3).
+
+**Resolver / `pip check`:**
+- Windows `%TEMP%\avanevis-v2.9-winlinux-c2\win`: `typer==0.27.2`, `click==8.5.0`, `colorama==0.4.6`. `pip check`: No broken requirements found.
+- WSL `/tmp/avanevis-v2.9-winlinux-c2/linux`: `typer==0.27.2`, `click==8.5.0`, colorama **not installed**. `pip check`: No broken requirements found.
+
+**pip-audit:** both files, no ignores → **No known vulnerabilities found**.
+
+**Tests:** same hf/transcriber helpers: Windows 47 passed; WSL 46 passed, 1 skipped.
+
+**SBOM:** `npm run legal:sbom` → generated 2026-08-29T15:26:32.979Z; 63 direct pins. `typer` is **0.27.2** on all three platforms. `colorama` is Windows-only.
+
+**Packaged Windows `prepare-build`:** exit 0. Bundled `pip check` passed. Bundled `typer==0.27.2`, `click==8.5.0`, `colorama==0.4.6`.
+
+**Transcription smoke:** Windows `small` and WSL `tiny.en` offline CPU/int8, duration 14.22s, English fixture text.
+
+Held: Electron 42.9.0; `onnxruntime` 1.26.0; `filelock==3.32.3`; leftover floats protobuf 7.35.1 / Pygments 2.20.0 / annotated-doc 0.0.4.
+
 ## Blockers and non-goals
 
 - **Do not** merge or land Dependabot PRs from this evidence. Use this matrix to accept or reject each candidate in its own commit.
