@@ -280,6 +280,19 @@ test('renderer visual foundation includes responsive History and reduced-motion 
   );
 });
 
+test('responsive recording controls stay grouped when the visualizer stacks', () => {
+  const css = readUtf8(STYLES_CSS);
+
+  assert.match(
+    css,
+    /@media\s*\(max-width:\s*880px\)[\s\S]*?\.controls-group\s*\{\s*justify-content:\s*flex-start;\s*width:\s*100%;\s*\}/,
+  );
+  assert.match(
+    css,
+    /@media\s*\(max-width:\s*640px\)[\s\S]*?\.controls-group\s*\{[\s\S]*?justify-content:\s*flex-start;/,
+  );
+});
+
 test('activateTab synchronizes active navigation styling and accessibility state', () => {
   const appSource = readUtf8(APP_JS);
   const start = appSource.indexOf('function activateTab(targetTab)');

@@ -1058,7 +1058,7 @@ select.device-select:disabled {
     padding-top: 12px;
   }
   .recording-controls-row { flex-direction: column; align-items: stretch; }
-  .controls-group { justify-content: space-between; width: 100%; }
+  .controls-group { justify-content: flex-start; width: 100%; }
 }
 
 /* ============================================================================
@@ -3747,6 +3747,7 @@ select.device-select,
   .controls-group {
     flex-wrap: wrap;
     width: 100%;
+    justify-content: flex-start;
   }
 
   .record-button {
