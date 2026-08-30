@@ -985,57 +985,72 @@ select.device-select:disabled {
 }
 
 /* ============================================================================
-   Audio Visualizer — dramatic, dual-channel
+   Audio Visualizer — dual-channel signal monitor
    ============================================================================ */
 
 .audio-visualizer {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: var(--space-2);
   margin-left: auto;
-  padding-left: 18px;
+  padding-left: var(--space-4);
   border-left: 1px solid var(--hairline);
-  min-width: 320px;
+  min-width: 340px;
   flex: 1;
 }
 
 .visualizer-track {
-  display: flex;
+  --trace-rgb: var(--accent-rgb);
+  display: grid;
+  grid-template-columns: 62px minmax(0, 1fr);
   align-items: center;
-  gap: 10px;
+  gap: var(--space-2);
 }
 
-.track-icon {
-  font-size: 11px;
+.visualizer-track + .visualizer-track {
+  --trace-rgb: var(--sky-rgb);
+}
+
+.track-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: rgba(var(--trace-rgb), 0.82);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.075em;
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.track-label svg {
+  flex: 0 0 auto;
   color: var(--text-tertiary);
-  width: 16px;
-  text-align: center;
-  opacity: 0.85;
-  flex-shrink: 0;
+  opacity: 0.8;
 }
 
 .waveform-container {
   flex: 1;
-  height: 28px;
-  background:
-    radial-gradient(120% 100% at 50% 50%, rgba(var(--accent-rgb), 0.04), transparent 60%),
-    var(--surface-0);
+  height: 30px;
+  background: var(--surface-0);
   border-radius: var(--r-xs);
   border: 1px solid var(--hairline-soft);
   overflow: hidden;
   position: relative;
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.35);
+  box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.26);
 }
 
-.waveform-container::before {
+.waveform-container::after {
   content: "";
   position: absolute;
-  inset: 0;
-  background: linear-gradient(180deg,
-    rgba(255, 255, 255, 0.03) 0%,
-    transparent 30%,
-    transparent 70%,
-    rgba(0, 0, 0, 0.18) 100%);
+  top: 5px;
+  right: 7px;
+  bottom: 5px;
+  width: 1px;
+  background: rgba(var(--trace-rgb), 0.2);
   pointer-events: none;
   z-index: 1;
 }

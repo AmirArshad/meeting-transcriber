@@ -98,7 +98,7 @@ const {
   toOpaqueDeviceId,
   decorateDesktopDevices,
 } = window.platformSelectionHelpers;
-const { roundedBar } = window.canvasHelpers;
+const { writeSignalTrace } = window.canvasHelpers;
 
 // UI Elements
 const micSelect = document.getElementById('mic-select');
@@ -5846,7 +5846,7 @@ function handleDismissUpdate() {
 }
 
 // ============================================================================
-// Audio Visualizer Class — dramatic, interpolated, dual-channel
+// Audio Visualizer Class — restrained, interpolated, dual-channel signal monitor
 // ============================================================================
 
 class AudioVisualizer {
@@ -5862,6 +5862,8 @@ class AudioVisualizer {
     this.bufferSize = 96;
     this.micBuffer = new Array(this.bufferSize).fill(0);
     this.desktopBuffer = new Array(this.bufferSize).fill(0);
+    this.micTrace = new Float32Array(this.bufferSize);
+    this.desktopTrace = new Float32Array(this.bufferSize);
 
     // Per-channel "current incoming sample" target. Each draw frame the
     // newest column lerps toward this target so the wave keeps moving even
@@ -5869,17 +5871,13 @@ class AudioVisualizer {
     this.micTarget = 0;
     this.desktopTarget = 0;
 
-    // Peak-hold values (decay over time)
-    this.micPeaks = new Array(this.bufferSize).fill(0);
-    this.desktopPeaks = new Array(this.bufferSize).fill(0);
-
     // Sample-arrival metering — decides when to "shift" a new column in.
     // The recorder emits at ~5 Hz (every 200ms); we shift at that cadence.
     this.lastShiftTime = 0;
     this.shiftIntervalMs = 80; // visual shift cadence — denser than recorder for fluidity
+    this.tracePhase = 0;
 
     this.rafId = null;
-    this.fallbackIntervalId = null;
     this.isRunning = false;
 
     this.lastUpdateTime = 0;
@@ -5888,14 +5886,16 @@ class AudioVisualizer {
     this._lastDrawnDesktopTarget = null;
     this._visibilityHandler = null;
 
-    // For subtle ambient motion when input is near-silent
-    this.phase = 0;
+    this.dpr = 1;
+    this.micColor = '184, 168, 201';
+    this.desktopColor = '168, 176, 200';
   }
 
   _setupCanvas(canvas, ctx) {
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const rect = canvas.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return;
+    this.dpr = dpr;
     canvas.width = Math.round(rect.width * dpr);
     canvas.height = Math.round(rect.height * dpr);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -5907,15 +5907,20 @@ class AudioVisualizer {
     this.container.style.display = 'flex';
     this.micBuffer.fill(0);
     this.desktopBuffer.fill(0);
-    this.micPeaks.fill(0);
-    this.desktopPeaks.fill(0);
+    this.micTrace.fill(0);
+    this.desktopTrace.fill(0);
     this.micTarget = 0;
     this.desktopTarget = 0;
+    this.tracePhase = 0;
     this.lastUpdateTime = Date.now();
     this.lastShiftTime = performance.now();
     this.warningShown = false;
     this._lastDrawnMicTarget = null;
     this._lastDrawnDesktopTarget = null;
+
+    const rootStyles = getComputedStyle(document.documentElement);
+    this.micColor = rootStyles.getPropertyValue('--accent-rgb').trim() || this.micColor;
+    this.desktopColor = rootStyles.getPropertyValue('--sky-rgb').trim() || this.desktopColor;
 
     if (!this._visibilityHandler) {
       this._visibilityHandler = () => {
@@ -5934,15 +5939,6 @@ class AudioVisualizer {
       this._loop();
     });
 
-    // Background safety: if document is hidden, rAF is throttled to ~1 Hz.
-    // Use a setInterval to ensure visualization keeps ticking near hidden too.
-    this.fallbackIntervalId = setInterval(() => {
-      if (document.hidden && this.isRunning) {
-        // No need to draw, but keep peak decay current so when window
-        // returns to focus the state is consistent.
-        this._decayPeaks();
-      }
-    }, 200);
   }
 
   stop() {
@@ -5950,10 +5946,6 @@ class AudioVisualizer {
     if (this.rafId !== null) {
       cancelAnimationFrame(this.rafId);
       this.rafId = null;
-    }
-    if (this.fallbackIntervalId !== null) {
-      clearInterval(this.fallbackIntervalId);
-      this.fallbackIntervalId = null;
     }
     if (this._visibilityHandler) {
       document.removeEventListener('visibilitychange', this._visibilityHandler);
@@ -5981,13 +5973,6 @@ class AudioVisualizer {
     }
   }
 
-  _decayPeaks() {
-    for (let i = 0; i < this.bufferSize; i++) {
-      this.micPeaks[i] *= 0.94;
-      this.desktopPeaks[i] *= 0.94;
-    }
-  }
-
   _loop() {
     if (!this.isRunning) return;
 
@@ -6008,8 +5993,6 @@ class AudioVisualizer {
       return;
     }
 
-    this.phase = (this.phase + 0.06) % (Math.PI * 2);
-
     // Smoothly lerp the newest column toward the target (fast attack, slow release)
     const lastIdx = this.bufferSize - 1;
     const lerp = (cur, target) => {
@@ -6022,19 +6005,11 @@ class AudioVisualizer {
     // Periodically shift a new column in so the wave scrolls left
     if (shouldShift) {
       this.lastShiftTime = now;
-      for (let i = 0; i < this.bufferSize - 1; i++) {
-        this.micBuffer[i] = this.micBuffer[i + 1];
-        this.desktopBuffer[i] = this.desktopBuffer[i + 1];
-        this.micPeaks[i] = this.micPeaks[i + 1];
-        this.desktopPeaks[i] = this.desktopPeaks[i + 1];
-      }
+      this.micBuffer.copyWithin(0, 1);
+      this.desktopBuffer.copyWithin(0, 1);
       this.micBuffer[lastIdx] = this.micTarget;
       this.desktopBuffer[lastIdx] = this.desktopTarget;
-    }
-
-    for (let i = 0; i < this.bufferSize; i++) {
-      this.micPeaks[i] = Math.max(this.micPeaks[i] * 0.95, this.micBuffer[i]);
-      this.desktopPeaks[i] = Math.max(this.desktopPeaks[i] * 0.95, this.desktopBuffer[i]);
+      this.tracePhase = (this.tracePhase + 1) % 8;
     }
 
     if (heartbeatFade) {
@@ -6049,136 +6024,53 @@ class AudioVisualizer {
       }
     }
 
-    this._draw(this.micCtx, this.micBuffer, this.micPeaks, [184, 168, 201]);
-    this._draw(this.desktopCtx, this.desktopBuffer, this.desktopPeaks, [152, 174, 214]);
+    this._draw(this.micCtx, this.micBuffer, this.micTrace, this.micColor);
+    this._draw(this.desktopCtx, this.desktopBuffer, this.desktopTrace, this.desktopColor);
     this._lastDrawnMicTarget = this.micTarget;
     this._lastDrawnDesktopTarget = this.desktopTarget;
 
     this.rafId = requestAnimationFrame(() => this._loop());
   }
 
-  // Aggressive perceptual scaling to make speech visible without crushing peaks.
-  _shape(level) {
-    const x = Math.max(0, Math.min(1, level));
-    // Soft expander: emphasize mid + boost low signal visibility
-    const shaped = Math.pow(x, 0.38);
-    return shaped;
-  }
-
-  _draw(ctx, buffer, peaks, rgb) {
+  _draw(ctx, buffer, trace, colorBase) {
     const canvas = ctx.canvas;
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = this.dpr;
     const width = canvas.width / dpr;
     const height = canvas.height / dpr;
     const midY = height / 2;
     const n = this.bufferSize;
-    const [r, g, b] = rgb;
-    const colorBase = `${r}, ${g}, ${b}`;
 
     ctx.clearRect(0, 0, width, height);
 
-    const colWidth = width / n;
-    const barWidth = Math.max(1.2, colWidth - 1.4);
-    const radius = Math.min(barWidth / 2, 1.6);
-
-    // Background midline (subtle baseline)
-    ctx.strokeStyle = `rgba(${colorBase}, 0.10)`;
+    // A quiet datum line makes a silent source immediately legible.
+    ctx.strokeStyle = `rgba(${colorBase}, 0.11)`;
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(0, midY);
     ctx.lineTo(width, midY);
     ctx.stroke();
 
-    // Compute per-bar shaped amplitudes
-    const amps = new Array(n);
-    const peakAmps = new Array(n);
-    let maxAmp = 0;
-    const ampScale = height * 0.40;
-    for (let i = 0; i < n; i++) {
-      const a = this._shape(buffer[i]) * ampScale;
-      amps[i] = Math.max(1.0, a);
-      peakAmps[i] = Math.max(amps[i], this._shape(peaks[i]) * ampScale);
-      if (amps[i] > maxAmp) maxAmp = amps[i];
-    }
+    const energy = writeSignalTrace(buffer, trace, this.tracePhase);
+    const amplitudeScale = height * 0.4;
 
-    // Vertical gradient for the bars
-    const grad = ctx.createLinearGradient(0, 0, 0, height);
-    grad.addColorStop(0.0, `rgba(${colorBase}, 0.95)`);
-    grad.addColorStop(0.5, `rgba(${colorBase}, 0.55)`);
-    grad.addColorStop(1.0, `rgba(${colorBase}, 0.95)`);
-
-    // Soft glow underlay (proportional to overall energy)
-    const energy = Math.min(1, maxAmp / ampScale);
-    if (energy > 0.05) {
-      ctx.save();
-      ctx.shadowColor = `rgba(${colorBase}, ${0.3 + energy * 0.4})`;
-      ctx.shadowBlur = 4 + energy * 8;
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      for (let i = 0; i < n; i++) {
-        const x = i * colWidth + (colWidth - barWidth) / 2;
-        const h = amps[i] * 2;
-        const y = midY - amps[i];
-        roundedBar(ctx, x, y, barWidth, h, radius);
-      }
-      ctx.fill();
-      ctx.restore();
-    } else {
-      // Quiet state: just draw bars without glow for performance
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      for (let i = 0; i < n; i++) {
-        const x = i * colWidth + (colWidth - barWidth) / 2;
-        const h = amps[i] * 2;
-        const y = midY - amps[i];
-        roundedBar(ctx, x, y, barWidth, h, radius);
-      }
-      ctx.fill();
-    }
-
-    // Peak-hold caps (bright crest leftover from loud moments)
-    ctx.fillStyle = `rgba(${colorBase}, 0.95)`;
-    for (let i = 0; i < n; i++) {
-      const peak = peakAmps[i];
-      if (peak <= amps[i] + 0.5) continue;
-      const x = i * colWidth + (colWidth - barWidth) / 2;
-      const capH = 1.0;
-      // top cap
-      ctx.fillRect(x, midY - peak - capH / 2, barWidth, capH);
-      // bottom cap (mirrored)
-      ctx.fillRect(x, midY + peak - capH / 2, barWidth, capH);
-    }
-
-    // Crisp envelope outline (smooth curve over the bar tops)
-    ctx.strokeStyle = `rgba(${colorBase}, 0.9)`;
-    ctx.lineWidth = 1.1;
-    ctx.lineJoin = 'round';
-    ctx.lineCap = 'round';
+    // Build the angular path once, then stroke it twice. The broad underlay
+    // supplies presence without the cost and haze of per-frame shadow blur.
     ctx.beginPath();
     for (let i = 0; i < n; i++) {
-      const x = i * colWidth + colWidth / 2;
-      const y = midY - amps[i];
+      const x = (i / (n - 1)) * width;
+      const y = midY - trace[i] * amplitudeScale;
       if (i === 0) ctx.moveTo(x, y);
-      else {
-        const px = (i - 1) * colWidth + colWidth / 2;
-        const py = midY - amps[i - 1];
-        const cx = (px + x) / 2;
-        const cy = (py + y) / 2;
-        ctx.quadraticCurveTo(px, py, cx, cy);
-      }
+      else ctx.lineTo(x, y);
     }
+    ctx.strokeStyle = `rgba(${colorBase}, ${0.1 + energy * 0.12})`;
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'miter';
     ctx.stroke();
 
-    // When near-silent, add a tiny breathing shimmer so the UI feels alive
-    if (energy < 0.04) {
-      const shimmer = (Math.sin(this.phase) + 1) / 2; // 0..1
-      const sa = 0.2 + shimmer * 0.8;
-      ctx.fillStyle = `rgba(${colorBase}, ${0.18 * sa})`;
-      const dotR = 1.2;
-      ctx.beginPath();
-      ctx.arc(width / 2, midY, dotR, 0, Math.PI * 2);
-      ctx.fill();
-    }
+    ctx.strokeStyle = `rgba(${colorBase}, ${0.72 + energy * 0.23})`;
+    ctx.lineWidth = 1.15;
+    ctx.stroke();
   }
 }
 
