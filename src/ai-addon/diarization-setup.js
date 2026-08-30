@@ -233,17 +233,39 @@ function removePathBestEffort(targetPath, fsModule = fs) {
   }
 }
 
-function commitStagedDirectory(stagingDir, destinationDir, fsModule = fs) {
+const TRANSIENT_WINDOWS_DIRECTORY_RENAME_CODES = new Set(['EACCES', 'EBUSY', 'EPERM']);
+const WINDOWS_DIRECTORY_RENAME_ATTEMPTS = 3;
+const WINDOWS_DIRECTORY_RENAME_RETRY_DELAY_MS = 25;
+
+function waitForWindowsDirectoryRenameRetry() {
+  return new Promise((resolve) => setTimeout(resolve, WINDOWS_DIRECTORY_RENAME_RETRY_DELAY_MS));
+}
+
+async function commitStagedDirectory(stagingDir, destinationDir, fsModule = fs, platform = process.platform) {
   const existsSync = bindFsMethod(fsModule, 'existsSync');
   const renameSync = bindFsMethod(fsModule, 'renameSync');
   const rmSync = bindFsMethod(fsModule, 'rmSync');
   if (!renameSync || !rmSync) {
     throw new Error('File system does not support atomically installing Speakrs artifacts.');
   }
-  if (existsSync?.(destinationDir)) {
-    rmSync(destinationDir, { recursive: true, force: true });
+
+  for (let attempt = 1; attempt <= WINDOWS_DIRECTORY_RENAME_ATTEMPTS; attempt += 1) {
+    try {
+      if (existsSync?.(destinationDir)) {
+        rmSync(destinationDir, { recursive: true, force: true });
+      }
+      renameSync(stagingDir, destinationDir);
+      return;
+    } catch (error) {
+      const canRetry = platform === 'win32'
+        && TRANSIENT_WINDOWS_DIRECTORY_RENAME_CODES.has(error?.code)
+        && attempt < WINDOWS_DIRECTORY_RENAME_ATTEMPTS;
+      if (!canRetry) {
+        throw error;
+      }
+      await waitForWindowsDirectoryRenameRetry();
+    }
   }
-  renameSync(stagingDir, destinationDir);
 }
 
 async function validateStagedSpeakrsModelPack(stagingDir, files, fsModule = fs) {
@@ -443,14 +465,14 @@ async function installSpeakrsArtifacts({
     }
     throwIfAiAddonCanceled(cancelSignal, 'Speaker identification setup was canceled.');
     if (modelStagingDir) {
-      commitStagedDirectory(modelStagingDir, revisionDir, fsModule);
+      await commitStagedDirectory(modelStagingDir, revisionDir, fsModule, platform);
       committedPaths.push(revisionDir);
       if (replacement) {
         replacement.model = true;
       }
     }
     if (runtimeStagingDir) {
-      commitStagedDirectory(runtimeStagingDir, runtimeDir, fsModule);
+      await commitStagedDirectory(runtimeStagingDir, runtimeDir, fsModule, platform);
       committedPaths.push(runtimeDir);
       if (replacement) {
         replacement.runtime = true;

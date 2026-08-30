@@ -1022,6 +1022,49 @@ test('cancellation before any Speakrs commit does not mark ready', async () => {
   }
 });
 
+test('Speakrs setup retries a transient Windows runtime-directory rename', async () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-runtime-rename-retry-'));
+  const catalog = createPinnedTestCatalog();
+  const runtimeDir = getSpeakrsOrtRuntimeDir(userDataDir);
+  let runtimeRenameAttempts = 0;
+  const fsModule = {
+    ...fs,
+    renameSync(fromPath, toPath) {
+      if (path.resolve(toPath) === path.resolve(runtimeDir)) {
+        runtimeRenameAttempts += 1;
+        if (runtimeRenameAttempts === 1) {
+          const error = new Error('simulated transient Windows directory lock');
+          error.code = 'EPERM';
+          throw error;
+        }
+      }
+      return fs.renameSync(fromPath, toPath);
+    },
+  };
+  try {
+    const cliPath = path.join(userDataDir, 'dev-bin', 'speakrs-cli.exe');
+    fs.mkdirSync(path.dirname(cliPath), { recursive: true });
+    fs.writeFileSync(cliPath, 'cli');
+    const status = await setupDiarizationAddon({
+      userDataDir,
+      platform: 'win32',
+      arch: 'x64',
+      engine: 'speakrs',
+      safeStorage: createSafeStorage(),
+      catalog,
+      env: { SPEAKRS_CLI_PATH: cliPath },
+      fsModule,
+      downloader: async ({ destinationPath }) => fs.writeFileSync(destinationPath, ARCHIVE_BYTES),
+      extractor: createTestExtractor(),
+    });
+
+    assert.equal(status.features.diarization.status, 'ready');
+    assert.equal(runtimeRenameAttempts, 2);
+  } finally {
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
 test('cancellation with no Speakrs artifact changes may restore previous ready', async () => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-unchanged-cancel-'));
   const catalog = createPinnedTestCatalog();

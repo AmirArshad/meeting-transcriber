@@ -1,6 +1,6 @@
 # AvaNevis v2.9.0 — Active Work
 
-**Release objective:** compatibility-led dependency maintenance, targeted reliability follow-through, and an Omarchy-inspired visual-system refresh. This release remains privacy-first and local-only on Windows x64, macOS 13+ arm64, and Linux x64 Core Beta (Omarchy supported; other distributions experimental).
+**Release objective:** compatibility-led dependency maintenance, targeted reliability follow-through, an Omarchy-inspired visual-system refresh, and explicit capture-mode selection. This release remains privacy-first and local-only on Windows x64, macOS 13+ arm64, and Linux x64 Core Beta (Omarchy supported; other distributions experimental).
 
 **Source plan:** [v2.9.0 implementation plan](docs/superpowers/plans/2026-08-28-v2.9.0.md). Detailed completed work remains in git history, [release notes](docs/releases/), and the linked initiative documents.
 
@@ -30,9 +30,13 @@
 
 ## UI refresh and future layout foundation
 
-- [ ] [Risk: Medium] Create `feature/v2.9-ui-foundation`; use the installed Anthropic `frontend-design` skill to define and apply a calm, functional Omarchy-inspired visual system across the existing Record, History, and Settings navigation.
-- [ ] [Risk: Medium] Standardize the shell, section headers, buttons, cards, controls, focus states, responsive history/detail layout, and reduced-motion behavior without adding a cloud UI, account state, networking, or new persistence schema.
-- [ ] [Risk: Low] Preserve a stable meeting-detail action region and semantic layout boundaries that a later private-sync feature can extend. The future concept is documented in [Meeting objects and private sync](docs/initiatives/MEETING_OBJECTS_AND_PRIVATE_SYNC.md); it is explicitly out of scope for v2.9.0.
+- [x] [Risk: Medium] Create `feature/v2.9-ui-foundation`; use the installed Anthropic `frontend-design` skill to define and apply a calm, functional Omarchy-inspired visual system across the existing Record, History, and Settings navigation. Evidence: branch `feature/v2.9-ui-foundation`. Manual visual matrix remains in `tests/manual/recording-transcription-regression-checklist.md` section 5.
+- [x] [Risk: Medium] Standardize the shell, section headers, buttons, cards, controls, focus states, responsive history/detail layout, and reduced-motion behavior without adding a cloud UI, account state, networking, or new persistence schema.
+- [x] [Risk: Low] Preserve a stable meeting-detail action region and semantic layout boundaries that a later private-sync feature can extend. The future concept is documented in [Meeting objects and private sync](docs/initiatives/MEETING_OBJECTS_AND_PRIVATE_SYNC.md); it is explicitly out of scope for v2.9.0.
+
+## Final v2.9 capture-mode lane
+
+- [ ] [Risk: High] Create `feature/v2.9-capture-modes` only after the preceding v2.9 lanes are accepted. Keep the primary Start Recording action as mic + desktop, then add a tasteful accessible split-button disclosure for **Record Mic Only** and **Record Desktop Only**. Carry an explicit capture mode through renderer, preload, recorder service, device preflight, and all platform recorders; an unselected source must not be opened, permission-probed, or accidentally included in the finished audio. Preserve structured recorder stdout, Stop/Discard, capture recovery, duration/transcription behavior, and opaque Linux device IDs. Require JS/Python contract tests plus Windows, macOS, and Omarchy record/stop/discard/recovery/transcription evidence for all three modes. This work is deliberately **not** part of `feature/v2.9-ui-foundation`.
 
 ## Explicitly deferred
 
@@ -47,7 +51,8 @@
 3. `feature/v2.9-ui-foundation` — visual system and bounded layout foundations.
 4. `feature/v2.9-reliability-follow-through` — only the focused recorder/device changes whose validation gates pass.
 5. `feature/v2.9-electron-44` — independent compatibility lane; merge only after its complete gate.
-6. `release/v2.9.0` — integration/release-only branch after each accepted lane is independently green. Do not combine unrelated high-risk upgrades.
+6. `feature/v2.9-capture-modes` — final dedicated capture-mode lane; merge only after all platform contract and hardware gates pass.
+7. `release/v2.9.0` — integration/release-only branch after each accepted lane is independently green. Do not combine unrelated high-risk upgrades.
 
 ## Recently shipped / historical reference
 
