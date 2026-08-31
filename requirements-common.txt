@@ -1,7 +1,7 @@
 # Common dependencies shared by both Windows and macOS
 
 # Audio processing
-numpy>=2.4.0            # For audio processing and mixing
+numpy>=2.5.2            # For audio processing and mixing
 # soxr: Windows + macOS packaged builds (processor.py / streaming_post_processor.py)
 
 # Transcription

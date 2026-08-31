@@ -6,7 +6,7 @@ pulsectl==24.12.0
 SoundCard==0.4.6
 cffi==2.1.1
 pycparser==3.0
-numpy==2.4.6
+numpy==2.5.2
 soxr==1.1.0
 faster-whisper==1.2.1
 filelock==3.32.3
