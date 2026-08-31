@@ -1,6 +1,6 @@
 # AvaNevis v2.9.0 — Active Work
 
-**Release objective:** compatibility-led dependency maintenance, targeted reliability follow-through, an Omarchy-inspired visual-system refresh, and explicit capture-mode selection. This release remains privacy-first and local-only on Windows x64, macOS 13+ arm64, and Linux x64 Core Beta (Omarchy supported; other distributions experimental).
+**Release objective:** compatibility-led dependency maintenance, targeted reliability follow-through, an Omarchy-inspired visual-system refresh, and explicit capture-mode selection. This release remains privacy-first and local-only on Windows x64, macOS 13+ arm64, and Linux x64 Core Beta (Omarchy and CachyOS Hyprland supported; other distributions experimental).
 
 **Source plan:** [v2.9.0 implementation plan](docs/superpowers/plans/2026-08-28-v2.9.0.md). Detailed completed work remains in git history, [release notes](docs/releases/), and the linked initiative documents.
 
@@ -19,7 +19,7 @@
 
 ## Dedicated Electron 44 compatibility lane
 
-- [ ] [Risk: High] Create `feature/v2.9-electron-44` from the v2.9 integration branch. Treat Dependabot PR #86 (`electron` 42.9.0 → 44.x) as a compatibility upgrade, not an automatic dependency bump. Verify all CI suites, electron-builder 26 packaging, Windows x64 recording, macOS 13+ arm64 recorder/helper, and Linux Core Beta packaging/tray/safeStorage/PipeWire capture before it may join v2.9.0.
+- [ ] [Risk: High] Create `feature/v2.9-electron-44` from the v2.9 integration branch. Treat Dependabot PR #86 (`electron` 42.9.0 → 44.x) as a compatibility upgrade, not an automatic dependency bump. **In progress (2026-08-31):** npm `latest` is 44.0.0; electron-builder stays 26.15.3. CachyOS Hyprland packaged AppImage/pacman/deb + `verify:linux:packaged` (ar+tar deb fallback) + tray SNI + PipeWire enumeration + CPU Whisper pin. Windows x64 recording and macOS 13+ arm64 recorder/helper still required before this lane may join v2.9.0.
 
 ## Reliability follow-through
 
@@ -56,5 +56,5 @@
 
 ## Recently shipped / historical reference
 
-- Linux Core Beta shipped in v2.8.0. Omarchy remains the only supported Linux target; Phase 3’s 60-minute soak was cancelled and is not claimed as passed. See [Linux support](docs/initiatives/LINUX_SUPPORT.md) and [Linux experimental beta guide](docs/guides/LINUX_EXPERIMENTAL.md).
+- Linux Core Beta shipped in v2.8.0. Omarchy 4 and CachyOS x86_64 Hyprland are the Supported Linux targets; Phase 3’s 60-minute soak was cancelled and is not claimed as passed. See [Linux support](docs/initiatives/LINUX_SUPPORT.md) and [Linux experimental beta guide](docs/guides/LINUX_EXPERIMENTAL.md).
 - Speakrs/Pyannote migration, completed Linux Core Beta phases, and earlier release hygiene are documented in their initiative and release records; they are intentionally not duplicated here.

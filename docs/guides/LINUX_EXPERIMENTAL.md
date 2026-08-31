@@ -1,6 +1,6 @@
 # Linux experimental beta
 
-Omarchy 4 x86_64 (Hyprland/Wayland, PipeWire with `pipewire-pulse`) is the only **Supported** Linux target. Everything else in this guide is an **experimental beta**: the same Core Beta payload may run, but we have not proven it on that hardware.
+Omarchy 4 and CachyOS x86_64 on Hyprland/Wayland (PipeWire with `pipewire-pulse`) are **Supported**. Everything else in this guide is an **experimental beta**: the same Core Beta payload may run, but we have not proven it on that hardware.
 
 This is not Linux 1.0 and not Windows/macOS parity. Transcription stays CPU `faster-whisper`. Speaker identification and summaries stay visible and greyed `unsupported`. Do not start Phases 6–9 from friend feedback.
 
@@ -10,12 +10,13 @@ Friend hardware evidence uses [tests/manual/linux-experimental-beta-checklist.md
 
 | Target | Tier | Recommended download | Notes |
 |---|---|---|---|
-| Omarchy 4 x86_64 | **Supported** | `.pkg.tar.zst`; AppImage alternative | Only hardware-validated Linux target. |
+| Omarchy 4 x86_64 | **Supported** | `.pkg.tar.zst`; AppImage alternative | Hyprland/Wayland + PipeWire. Hardware-validated. |
+| CachyOS x86_64 (Hyprland) | **Supported** | `.pkg.tar.zst`; AppImage alternative | Same Core Beta payload as Omarchy. Electron 44 packaged evidence 2026-08-31: Wayland, noctalia SNI tray, PipeWire devices, CPU faster-whisper. Other CachyOS desktops stay experimental below. |
 | Ubuntu Desktop 24.04 / 26.04 | **Experimental beta** | `.deb`; AppImage alternative | Default desktop is still GNOME (GNOME 46 on 24.04, GNOME 50 on 26.04). Ubuntu **desktop** recording/`safeStorage` smoke is still open. |
 | Pop!_OS / COSMIC | **Experimental beta** | `.deb`; AppImage alternative | COSMIC is a separate desktop, not “new Ubuntu.” Tray and keyring currently have upstream rough edges. |
 | Linux Mint | **Experimental beta** | `.deb`; AppImage alternative | Debian-family updater match. Cinnamon uses `gnome-libsecret`. |
 | Vanilla Arch x86_64 | **Experimental beta** | `.pkg.tar.zst` on a conventional desktop; AppImage otherwise | `pipewire-pulse`, a Secret Service provider, and an SNI tray host are not guaranteed. |
-| CachyOS x86_64 | **Experimental beta** | `.pkg.tar.zst`; AppImage alternative | Installer usually includes PipeWire audio; KDE/GNOME/Hyprland/COSMIC/Niri/Sway sessions vary. |
+| CachyOS x86_64 (non-Hyprland) | **Experimental beta** | `.pkg.tar.zst`; AppImage alternative | KDE/GNOME/COSMIC/Niri/Sway sessions vary. Hyprland is Supported above. |
 | Fedora Workstation 43/44 | **Experimental beta** | AppImage | PipeWire is suitable. Stock GNOME likely has no tray. Keep SELinux enforcing. |
 | SteamOS 3 Desktop Mode | **Experimental beta, Desktop Mode only** | AppImage | Store the AppImage in the home directory. Do not disable the read-only root or use pacman. Gaming Mode is out of scope. |
 | Fedora Silverblue/Kinoite and other Atomic desktops | **Out** | None | Not the Workstation beta target. |

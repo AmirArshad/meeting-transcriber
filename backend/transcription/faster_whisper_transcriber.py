@@ -31,6 +31,14 @@ _RETRYABLE_CUDA_ERROR_PATTERNS = (
 )
 
 
+def resolve_faster_whisper_device(device: str, platform: Optional[str] = None) -> str:
+    """Linux Core Beta is CPU faster-whisper only; ignore auto/cuda until Phase 6."""
+    plat = sys.platform if platform is None else platform
+    if plat.startswith("linux") and device != "cpu":
+        return "cpu"
+    return device
+
+
 def get_hugging_face_hub_cache_dir() -> Path:
     explicit_cache = (
         os.environ.get("AVANEVIS_TRANSCRIPTION_HF_CACHE_DIR")
@@ -240,7 +248,7 @@ class TranscriberService(BaseTranscriber):
         """
         self.model_size = model_size
         self.language = language
-        self.device = device
+        self.device = resolve_faster_whisper_device(device)
         self.compute_type = compute_type
         self.model = None
 
@@ -254,7 +262,7 @@ class TranscriberService(BaseTranscriber):
         print(f"Initializing Whisper transcriber...", file=sys.stderr)
         print(f"  Model: {model_size}", file=sys.stderr)
         print(f"  Language: {self.SUPPORTED_LANGUAGES[language]} ({language})", file=sys.stderr)
-        print(f"  Device: {device}", file=sys.stderr)
+        print(f"  Device: {self.device}", file=sys.stderr)
 
     def load_model(self):
         """Load the Whisper model. Call this once before transcribing."""

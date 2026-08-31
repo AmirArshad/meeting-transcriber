@@ -5,8 +5,8 @@
 > **Replanned:** 2026-08-23 against AvaNevis v2.7.0 / current `master`.
 > **Review pass:** 2026-08-23 — verified plan claims against the codebase and CI, corrected two host-fact conclusions (secret storage, tray), and pinned every required upstream Linux artifact. All "Verified" sections below were checked on that date.
 > **Scope cut (2026-08-24):** the first Linux version is **Core Beta only** (Phases 0–5). Speaker identification and local summaries are **out of scope** until a later Linux version. There is no Omarchy host with an NVIDIA GPU to validate those CUDA-only add-ons; do not ship a CPU fallback. The UI must keep both features visible but greyed out as unsupported.
-> **Primary target:** Omarchy 4, x86_64, Hyprland/Wayland, PipeWire with `pipewire-pulse`.
-> **Secondary target:** experimental-beta x86_64 desktops (Ubuntu, vanilla Arch, CachyOS, Fedora Workstation, SteamOS Desktop Mode) where the same Pulse-compatible capture path may work without distro-specific code. These are not hardware-validated. See [LINUX_EXPERIMENTAL.md](../guides/LINUX_EXPERIMENTAL.md).
+> **Primary target:** Omarchy 4 and CachyOS x86_64, Hyprland/Wayland, PipeWire with `pipewire-pulse`.
+> **Secondary target:** experimental-beta x86_64 desktops (Ubuntu, vanilla Arch, non-Hyprland CachyOS, Fedora Workstation, SteamOS Desktop Mode) where the same Pulse-compatible capture path may work without distro-specific code. These are not hardware-validated. See [LINUX_EXPERIMENTAL.md](../guides/LINUX_EXPERIMENTAL.md).
 
 ## How to use this plan
 
@@ -123,10 +123,11 @@ Windows v2.7.0 has no equivalent open release issue.
 The first Linux version (Core Beta) must state:
 
 - Omarchy 4 x86_64 is supported.
+- CachyOS x86_64 Hyprland/Wayland + PipeWire is supported (same Core Beta payload; evidence 2026-08-31).
 - Wayland/Hyprland + PipeWire/Pulse compatibility is the tested desktop.
 - Transcription is local faster-whisper on **CPU**. Linux CUDA Whisper is not a Core Beta support claim.
 - Speaker identification (Speakrs and Pyannote) and local summaries are **not available on Linux in this version**; they will return in a future Linux update. The Settings cards stay visible and greyed out. No Linux CPU fallback for either speaker engine.
-- Ubuntu, vanilla Arch, CachyOS, Fedora Workstation, SteamOS Desktop Mode, and additional desktops (GNOME, KDE Plasma, COSMIC, Sway, Niri, Cinnamon, XFCE) are **experimental betas** until friend hardware evidence exists. See [LINUX_EXPERIMENTAL.md](../guides/LINUX_EXPERIMENTAL.md) and [linux-experimental-beta-checklist.md](../../tests/manual/linux-experimental-beta-checklist.md).
+- Ubuntu, vanilla Arch, non-Hyprland CachyOS, Fedora Workstation, SteamOS Desktop Mode, and additional desktops (GNOME, KDE Plasma, COSMIC, Sway, Niri, Cinnamon, XFCE) are **experimental betas** until friend hardware evidence exists. See [LINUX_EXPERIMENTAL.md](../guides/LINUX_EXPERIMENTAL.md) and [linux-experimental-beta-checklist.md](../../tests/manual/linux-experimental-beta-checklist.md).
 - Linux ARM64, Flatpak, Snap, RPM, ROCm/MIGraphX, and Linux AI add-on setup remain out of this release. The experimental `.deb` is a packaging convenience, not a Ubuntu support claim.
 
 ## Locked architecture decisions

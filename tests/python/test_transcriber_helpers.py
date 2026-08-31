@@ -10,7 +10,7 @@ import pytest
 
 from backend.transcription import faster_whisper_transcriber as fw_transcriber
 from backend.transcription.cuda_probe import build_probe_report, find_unsupported_runtime_profiles
-from backend.transcription.faster_whisper_transcriber import TranscriberService
+from backend.transcription.faster_whisper_transcriber import TranscriberService, resolve_faster_whisper_device
 from backend.transcription.mlx_whisper_transcriber import MLXWhisperTranscriber
 from backend.transcription import nvidia_dll_loader
 
@@ -23,6 +23,14 @@ def test_transcriber_service_rejects_unknown_language():
 def test_mlx_transcriber_rejects_unknown_language():
     with pytest.raises(ValueError, match='Unsupported language'):
         MLXWhisperTranscriber(language='xx')
+
+
+def test_faster_whisper_linux_core_beta_stays_on_cpu():
+    assert resolve_faster_whisper_device('auto', platform='linux') == 'cpu'
+    assert resolve_faster_whisper_device('cuda', platform='linux') == 'cpu'
+    assert resolve_faster_whisper_device('cpu', platform='linux') == 'cpu'
+    assert resolve_faster_whisper_device('auto', platform='win32') == 'auto'
+    assert resolve_faster_whisper_device('cuda', platform='win32') == 'cuda'
 
 
 def test_faster_whisper_lock_file_path_uses_private_lock_dir(monkeypatch, tmp_path):
@@ -764,6 +772,7 @@ def test_get_model_info_for_faster_whisper_includes_runtime_state():
 
 
 def test_load_model_internal_persists_cpu_fallback_device(monkeypatch):
+    monkeypatch.setattr(fw_transcriber.sys, 'platform', 'win32')
     service = TranscriberService(model_size='small', device='cuda', compute_type='float16')
     calls = {'n': 0}
 
@@ -812,6 +821,7 @@ def test_transcribe_file_includes_resolved_device_in_result(monkeypatch, tmp_pat
 
 
 def test_transcribe_file_retries_on_retryable_cuda_runtime_error(monkeypatch, tmp_path):
+    monkeypatch.setattr(fw_transcriber.sys, 'platform', 'win32')
     audio_path = tmp_path / 'sample.opus'
     audio_path.write_bytes(b'audio')
     service = TranscriberService(model_size='small', language='en', device='auto')
@@ -845,6 +855,7 @@ def test_transcribe_file_retries_on_retryable_cuda_runtime_error(monkeypatch, tm
 
 
 def test_transcribe_file_retries_on_cuda13_runtime_error(monkeypatch, tmp_path):
+    monkeypatch.setattr(fw_transcriber.sys, 'platform', 'win32')
     audio_path = tmp_path / 'sample.opus'
     audio_path.write_bytes(b'audio')
     service = TranscriberService(model_size='small', language='en', device='auto')

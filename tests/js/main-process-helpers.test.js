@@ -23,7 +23,9 @@ const {
   buildModelDownloadCheck,
   runGuidedTranscriptionProcess,
   buildPythonModuleArgs,
+  resolveFasterWhisperCliDevice,
   buildTranscriptionCliArgs,
+  buildWhisperPreloadArgs,
   buildTranscriberArgs,
   buildTranscriptionCudaInstallArgs,
   buildTranscriptionCudaUninstallArgs,
@@ -1290,6 +1292,9 @@ test('buildTranscriptionCliArgs includes --device for faster-whisper platforms',
 });
 
 test('buildTranscriptionCliArgs forces CPU on Linux even when auto is requested', () => {
+  assert.equal(resolveFasterWhisperCliDevice('linux', 'auto'), 'cpu');
+  assert.equal(resolveFasterWhisperCliDevice('linux', 'cuda'), 'cpu');
+  assert.equal(resolveFasterWhisperCliDevice('win32', 'auto'), 'auto');
   assert.deepEqual(
     buildTranscriptionCliArgs({
       platform: 'linux',
@@ -1311,6 +1316,55 @@ test('buildTranscriptionCliArgs forces CPU on Linux even when auto is requested'
       '--device',
       'cpu',
       '--json',
+    ],
+  );
+});
+
+test('buildWhisperPreloadArgs forces CPU on Linux and keeps Windows auto', () => {
+  assert.deepEqual(
+    buildWhisperPreloadArgs({
+      platform: 'linux',
+      arch: 'x64',
+      modelSize: 'small',
+    }),
+    [
+      '-m',
+      'transcription.faster_whisper_transcriber',
+      '--preload',
+      '--model',
+      'small',
+      '--device',
+      'cpu',
+    ],
+  );
+  assert.deepEqual(
+    buildWhisperPreloadArgs({
+      platform: 'win32',
+      arch: 'x64',
+      modelSize: 'small',
+    }),
+    [
+      '-m',
+      'transcription.faster_whisper_transcriber',
+      '--preload',
+      '--model',
+      'small',
+      '--device',
+      'auto',
+    ],
+  );
+  assert.deepEqual(
+    buildWhisperPreloadArgs({
+      platform: 'darwin',
+      arch: 'arm64',
+      modelSize: 'small',
+    }),
+    [
+      '-m',
+      'transcription.mlx_whisper_transcriber',
+      '--preload',
+      '--model',
+      'small',
     ],
   );
 });

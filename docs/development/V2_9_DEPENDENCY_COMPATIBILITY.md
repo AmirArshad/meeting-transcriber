@@ -4,7 +4,8 @@ Decision record for `feature/v2.9-dependency-hygiene` Task 1. Later version chan
 
 **Recorded:** 2026-08-28  
 **Python target:** 3.11 (`cp311`)  
-**Electron baseline:** 42.9.0 (Electron 44 is a separate lane; not evaluated here)  
+**Electron baseline:** 42.9.0  
+**Electron 44 lane (2026-08-31):** npm `latest` is **44.0.0** (dist-tag `44-x-y` also 44.0.0). No newer non-prerelease 44.x patch on the registry. Electron 45 is `alpha` only (`45.0.0-alpha.2`) and is out of scope. electron-builder remains **26.15.3** (npm `latest`; not combined with this lane).  
 **Privacy:** no cloud transcription, telemetry, or extra network use beyond explicit model/update checks and these resolver downloads.
 
 | Interpreter | Where | ABI |
@@ -674,7 +675,41 @@ Held: Electron 42.9.0; `onnxruntime` 1.26.0 vs runtime 1.29.0; `filelock==3.32.3
 ## Blockers and non-goals
 
 - **Do not** merge or land Dependabot PRs from this evidence. Use this matrix to accept or reject each candidate in its own commit.
-- **Do not** upgrade Electron.
+- Electron 44.0.0 is evaluated only on `feature/v2.9-electron-44`. Do not combine it with Python/runtime upgrades. Electron 45 and all prereleases are out of scope.
 - **Do not** start Linux AI add-on phases 6–9.
 - **Do not** add Apple signing or notarization.
 - Host CUDA 13 toolkits must not be mistaken for packaged CUDA 12 support.
+
+## Electron 44.0.0 lane (2026-08-31)
+
+**Branch:** `feature/v2.9-electron-44`  
+**Host (this session):** CachyOS x86_64, Hyprland/Wayland, PipeWire 1.6.8 (`pipewire-pulse`), Node 24.20.0, npm 11.19.0. SNI host: noctalia `org.kde.StatusNotifierWatcher`. fuse3 present; fuse2 absent.
+
+**Registry check:** `npm view electron@latest version` → `44.0.0`. Published 44.x versions on npm: `44.0.0` plus alphas/betas. `npm view electron-builder@latest version` → `26.15.3`.
+
+**Stack:** Chromium 152.0.7977.54, Node 24.18.1 (in Electron), V8 15.2.
+
+**Breaking-change review vs AvaNevis (no code change required unless a later gate fails):**
+
+| Change | Impact |
+|---|---|
+| Unity desktop removed | No Unity branch; `password-store` is `gnome-libsecret` except KDE `kwallet6`. |
+| macOS 12 dropped | Already macOS 13+ runtime / 14+ packaged Apple Silicon. |
+| ANGLE statically linked; no `libEGL`/`libGLESv2` | Packaging tests do not require those libs. |
+| `net.request` `Sec-Fetch-Dest` | Updater uses Node `https`, not Electron `net`. |
+| 32-bit Windows/Linux dropped | We ship Windows x64 and Linux x64 only. |
+| Renderer `clipboard` module removed | Renderer copy uses W3C `navigator.clipboard.writeText` from a user gesture; preload does not expose Electron `clipboard`. |
+| `openAsHidden` login-item fields removed | Unused. |
+
+**Candidate:** `package.json` `electron` `^42.9.0` → `^44.0.0`. Keep electron-builder `^26.15.3`.
+
+**Linux packaging (CachyOS, 2026-08-31):** `npm run build:linux` with electron-builder 26.15.3 produced AppImage + pacman + deb. `libEGL`/`libGLESv2` absent as expected. `npm run verify:linux:packaged` initially failed because `dpkg-deb` is not on Arch-family hosts; `readDebControlFromArchive` / `extractDebArchive` now fall back to `ar`+`tar`. Verifier passed after that fix.
+
+**CachyOS Hyprland smoke (packaged `linux-unpacked`, Electron 44.0.0):**
+- `ozone-platform=wayland`, hint `auto`
+- SNI item `org.freedesktop.StatusNotifierItem-*` on noctalia watcher; no tray-create failure
+- `password-store=gnome-libsecret`; `encryptionAvailable=false` with no running Secret Service (fail-closed). Do not auto-activate `ksecretd` — a locked wallet hung `isEncryptionAvailable()` at startup
+- Packaged `device_manager.py`: opaque `pulse-source:` / `pulse-monitor:` / `pulse-sink:` IDs; onboard front-mic `available=no` omitted; HDMI `available=yes` kept
+- First-run Whisper **preload defaulted to CUDA** via CTranslate2 on this NVIDIA host. Fixed: `buildWhisperPreloadArgs` and `resolve_faster_whisper_device` force CPU on Linux. Packaged-python `--preload --model small --device cpu` loaded **CPU / int8**
+- Add-ons reported `supported: false` with the Core Beta reason strings; legal notices readable
+- Windows x64 and macOS 13+ arm64 hardware matrix still required before accepting this lane into v2.9.0
