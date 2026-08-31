@@ -1,7 +1,7 @@
 # Pinned dependencies used only for packaged macOS builds.
 # Keep local development requirements in requirements-macos.txt.
 sounddevice==0.5.6
-numpy==2.4.6
+numpy==2.5.2
 # Shared spool finalization imports processor.StatefulResampler (soxr).
 soxr==1.1.0
 # Coordinated PyObjC set: do not bump one framework alone. ScreenCaptureKit 12.2.2
