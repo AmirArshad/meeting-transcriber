@@ -201,7 +201,14 @@ test('assertAppImageUsesStaticRuntime rejects malformed ELF and runtimes that st
 
     const malformed = path.join(tempDir, 'malformed.AppImage');
     fs.writeFileSync(malformed, Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x00]));
-    assert.throws(() => assertAppImageUsesStaticRuntime(malformed), /valid ELF|static PIE/);
+    // Windows has no file(1); the live Linux verifier still uses real `file`.
+    assert.throws(() => assertAppImageUsesStaticRuntime(malformed, {
+      spawnSyncFn: () => ({
+        status: 0,
+        stdout: 'ELF 64-bit LSB executable, ARM, dynamically linked',
+        stderr: '',
+      }),
+    }), /valid ELF|static PIE/);
 
     const staticRuntime = path.join(tempDir, 'static.AppImage');
     fs.writeFileSync(staticRuntime, Buffer.concat([
