@@ -11,7 +11,7 @@ Friend hardware evidence uses [tests/manual/linux-experimental-beta-checklist.md
 | Target | Tier | Recommended download | Notes |
 |---|---|---|---|
 | Omarchy 4 x86_64 | **Supported** | `.pkg.tar.zst`; AppImage alternative | Hyprland/Wayland + PipeWire. Hardware-validated. |
-| CachyOS x86_64 (Hyprland) | **Supported** | `.pkg.tar.zst`; AppImage alternative | Same Core Beta payload as Omarchy. Electron 44 packaged evidence 2026-08-31: Wayland, noctalia SNI tray, PipeWire devices, CPU faster-whisper. Other CachyOS desktops stay experimental below. |
+| CachyOS x86_64 (Hyprland) | **Supported** | `.pkg.tar.zst`; AppImage alternative | Same Core Beta payload as Omarchy. Electron 44 packaged evidence 2026-08-31: Wayland, noctalia SNI tray, PipeWire devices, Discard vs Stop History, 2-minute mic+desktop capture with browser speech in the CPU `faster-whisper` transcript. Other CachyOS desktops stay experimental below. |
 | Ubuntu Desktop 24.04 / 26.04 | **Experimental beta** | `.deb`; AppImage alternative | Default desktop is still GNOME (GNOME 46 on 24.04, GNOME 50 on 26.04). Ubuntu **desktop** recording/`safeStorage` smoke is still open. |
 | Pop!_OS / COSMIC | **Experimental beta** | `.deb`; AppImage alternative | COSMIC is a separate desktop, not “new Ubuntu.” Tray and keyring currently have upstream rough edges. |
 | Linux Mint | **Experimental beta** | `.deb`; AppImage alternative | Debian-family updater match. Cinnamon uses `gnome-libsecret`. |

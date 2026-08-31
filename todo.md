@@ -19,7 +19,7 @@
 
 ## Dedicated Electron 44 compatibility lane
 
-- [ ] [Risk: High] Create `feature/v2.9-electron-44` from the v2.9 integration branch. Treat Dependabot PR #86 (`electron` 42.9.0 → 44.x) as a compatibility upgrade, not an automatic dependency bump. **In progress (2026-08-31):** npm `latest` is 44.0.0; electron-builder stays 26.15.3. CachyOS Hyprland packaged AppImage/pacman/deb + `verify:linux:packaged` (ar+tar deb fallback) + tray SNI + PipeWire enumeration + CPU Whisper pin. Windows x64 recording and macOS 13+ arm64 recorder/helper still required before this lane may join v2.9.0.
+- [ ] [Risk: High] Create `feature/v2.9-electron-44` from the v2.9 integration branch. Treat Dependabot PR #86 (`electron` 42.9.0 → 44.x) as a compatibility upgrade, not an automatic dependency bump. **In progress (2026-08-31):** npm `latest` is 44.1.0; electron-builder stays 26.15.3. CachyOS Hyprland packaged AppImage/pacman/deb + `verify:linux:packaged` (ar+tar deb fallback) + tray SNI + PipeWire enumeration + CPU Whisper pin + Discard/Stop History + 2:28 mic+desktop capture with browser speech in the `.md` (`cpu`/`int8`) on 44.0.0. Pin raised to 44.1.0 before Windows/macOS so that hardware pass is not duplicated. Windows x64 recording and macOS 13+ arm64 recorder/helper still required before this lane may join v2.9.0.
 
 ## Reliability follow-through
 

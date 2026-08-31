@@ -5,7 +5,7 @@ Decision record for `feature/v2.9-dependency-hygiene` Task 1. Later version chan
 **Recorded:** 2026-08-28  
 **Python target:** 3.11 (`cp311`)  
 **Electron baseline:** 42.9.0  
-**Electron 44 lane (2026-08-31):** npm `latest` is **44.0.0** (dist-tag `44-x-y` also 44.0.0). No newer non-prerelease 44.x patch on the registry. Electron 45 is `alpha` only (`45.0.0-alpha.2`) and is out of scope. electron-builder remains **26.15.3** (npm `latest`; not combined with this lane).  
+**Electron 44 lane (2026-08-31):** npm `latest` is **44.1.0** (dist-tag `44-x-y` also 44.1.0; 44.0.0 published 2026-08-25, 44.1.0 published 2026-08-31). Electron 45 is `alpha` only (`45.0.0-alpha.2`) and is out of scope. electron-builder remains **26.15.3** (npm `latest`; not combined with this lane).  
 **Privacy:** no cloud transcription, telemetry, or extra network use beyond explicit model/update checks and these resolver downloads.
 
 | Interpreter | Where | ABI |
@@ -675,19 +675,19 @@ Held: Electron 42.9.0; `onnxruntime` 1.26.0 vs runtime 1.29.0; `filelock==3.32.3
 ## Blockers and non-goals
 
 - **Do not** merge or land Dependabot PRs from this evidence. Use this matrix to accept or reject each candidate in its own commit.
-- Electron 44.0.0 is evaluated only on `feature/v2.9-electron-44`. Do not combine it with Python/runtime upgrades. Electron 45 and all prereleases are out of scope.
+- Electron 44.1.0 is evaluated only on `feature/v2.9-electron-44`. Do not combine it with Python/runtime upgrades. Electron 45 and all prereleases are out of scope.
 - **Do not** start Linux AI add-on phases 6–9.
 - **Do not** add Apple signing or notarization.
 - Host CUDA 13 toolkits must not be mistaken for packaged CUDA 12 support.
 
-## Electron 44.0.0 lane (2026-08-31)
+## Electron 44.1.0 lane (2026-08-31)
 
 **Branch:** `feature/v2.9-electron-44`  
 **Host (this session):** CachyOS x86_64, Hyprland/Wayland, PipeWire 1.6.8 (`pipewire-pulse`), Node 24.20.0, npm 11.19.0. SNI host: noctalia `org.kde.StatusNotifierWatcher`. fuse3 present; fuse2 absent.
 
-**Registry check:** `npm view electron@latest version` → `44.0.0`. Published 44.x versions on npm: `44.0.0` plus alphas/betas. `npm view electron-builder@latest version` → `26.15.3`.
+**Registry check:** `npm view electron@latest version` → `44.1.0`. Published non-prerelease 44.x: `44.0.0`, `44.1.0`. `npm view electron-builder@latest version` → `26.15.3`.
 
-**Stack:** Chromium 152.0.7977.54, Node 24.18.1 (in Electron), V8 15.2.
+**Stack (44.1.0):** Chromium 152.0.7977.65, Node 24.19.0 (in Electron), V8 15.2. Patch vs 44.0.0 includes a Wayland/GNOME tray-icon restore (`#53214`), Windows shutdown and AppX GPU fixes, macOS WebAuthn/notification crash fixes. No additional breaking changes beyond the 44.0.0 review below.
 
 **Breaking-change review vs AvaNevis (no code change required unless a later gate fails):**
 
@@ -701,15 +701,16 @@ Held: Electron 42.9.0; `onnxruntime` 1.26.0 vs runtime 1.29.0; `filelock==3.32.3
 | Renderer `clipboard` module removed | Renderer copy uses W3C `navigator.clipboard.writeText` from a user gesture; preload does not expose Electron `clipboard`. |
 | `openAsHidden` login-item fields removed | Unused. |
 
-**Candidate:** `package.json` `electron` `^42.9.0` → `^44.0.0`. Keep electron-builder `^26.15.3`.
+**Candidate:** `package.json` `electron` `^42.9.0` → `^44.1.0` (44.0.0 was the morning pin; 44.1.0 is npm `latest` the same day). Keep electron-builder `^26.15.3`.
 
-**Linux packaging (CachyOS, 2026-08-31):** `npm run build:linux` with electron-builder 26.15.3 produced AppImage + pacman + deb. `libEGL`/`libGLESv2` absent as expected. `npm run verify:linux:packaged` initially failed because `dpkg-deb` is not on Arch-family hosts; `readDebControlFromArchive` / `extractDebArchive` now fall back to `ar`+`tar`. Verifier passed after that fix.
+**Linux packaging (CachyOS, 2026-08-31):** `npm run build:linux` with electron-builder 26.15.3 produced AppImage + pacman + deb. `libEGL`/`libGLESv2` absent as expected. `npm run verify:linux:packaged` initially failed because `dpkg-deb` is not on Arch-family hosts; `readDebControlFromArchive` / `extractDebArchive` now fall back to `ar`+`tar`. Verifier passed after that fix. Re-run on **44.1.0** the same day: `npm run test:all` (769 JS pass / 1 skip, 578 Python pass / 7 skip, JS+Python syntax OK); `build:linux` packaged `electron=44.1.0`; unpacked binary reports `Chrome/152.0.7977.65`; `verify:linux:packaged` passed.
 
-**CachyOS Hyprland smoke (packaged `linux-unpacked`, Electron 44.0.0):**
+**CachyOS Hyprland smoke (packaged `linux-unpacked`, Electron 44.0.0 then pin 44.1.0):**
 - `ozone-platform=wayland`, hint `auto`
 - SNI item `org.freedesktop.StatusNotifierItem-*` on noctalia watcher; no tray-create failure
 - `password-store=gnome-libsecret`; `encryptionAvailable=false` with no running Secret Service (fail-closed). Do not auto-activate `ksecretd` — a locked wallet hung `isEncryptionAvailable()` at startup
 - Packaged `device_manager.py`: opaque `pulse-source:` / `pulse-monitor:` / `pulse-sink:` IDs; onboard front-mic `available=no` omitted; HDMI `available=yes` kept
 - First-run Whisper **preload defaulted to CUDA** via CTranslate2 on this NVIDIA host. Fixed: `buildWhisperPreloadArgs` and `resolve_faster_whisper_device` force CPU on Linux. Packaged-python `--preload --model small --device cpu` loaded **CPU / int8**
 - Add-ons reported `supported: false` with the Core Beta reason strings; legal notices readable
-- Windows x64 and macOS 13+ arm64 hardware matrix still required before accepting this lane into v2.9.0
+- Hardware capture (2026-08-31, same packaged `linux-unpacked`): Discard of ~10 s left `meetings.json` empty. Stop of 2:28 (Logitech C925e + FiiO `pulse-monitor`, Chrome looping the Whisper JFK fixture, no ScreenCast portal) saved one History meeting. `faster_whisper_transcriber --device cpu` wrote `transcriptionDevice: cpu`, `transcriptionComputeType: int8`. The `.md` contains the looping JFK line (“ask not what your country can do for you” / “fellow Americans”), not only level-meter activity. Setup / Install Model / Generate Summary stayed disabled. noctalia `RegisteredStatusNotifierItems` included `StatusNotifierItem-<avanevis-pid>-1` while recording; recording tray-bar crops had more red pixels than idle. Physical HDMI unplug was not performed (port still `available`); unplugged onboard analog-input stayed omitted
+- Windows x64 and macOS 13+ arm64 hardware matrix still required before accepting this lane into v2.9.0. Test **44.1.0**, not a second 44.0.0 pass.

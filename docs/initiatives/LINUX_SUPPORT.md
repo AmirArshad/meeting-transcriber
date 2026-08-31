@@ -123,7 +123,7 @@ Windows v2.7.0 has no equivalent open release issue.
 The first Linux version (Core Beta) must state:
 
 - Omarchy 4 x86_64 is supported.
-- CachyOS x86_64 Hyprland/Wayland + PipeWire is supported (same Core Beta payload; evidence 2026-08-31).
+- CachyOS x86_64 Hyprland/Wayland + PipeWire is supported (same Core Beta payload; evidence 2026-08-31, including packaged 2-minute mic+desktop Stop with browser speech in the CPU transcript).
 - Wayland/Hyprland + PipeWire/Pulse compatibility is the tested desktop.
 - Transcription is local faster-whisper on **CPU**. Linux CUDA Whisper is not a Core Beta support claim.
 - Speaker identification (Speakrs and Pyannote) and local summaries are **not available on Linux in this version**; they will return in a future Linux update. The Settings cards stay visible and greyed out. No Linux CPU fallback for either speaker engine.
