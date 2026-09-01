@@ -1,10 +1,11 @@
 # Linux Support Plan — Omarchy First
 
-> **Status:** **Omarchy Core Beta (Phases 0–5) is complete** and merged to `master` (pre-merge review 2026-08-28). Phase 3 60-minute soak **cancelled** by operator 2026-08-27 — not run, not passed; 15-minute soak is the duration-growth evidence. Phase 5 packaged Settings / legal-notices clicks and a packaged AppImage recording + CPU faster-whisper session closed 2026-08-28. Gate B closed on Apple Silicon macOS 2026-08-28 and the release workflow now includes AppImage, pacman, and an experimental `.deb`. Ubuntu 24.04 **desktop** recording/`safeStorage` smoke is still open (Docker launch only). Additional distros and desktops are **experimental betas** with no hardware claim — see [LINUX_EXPERIMENTAL.md](../guides/LINUX_EXPERIMENTAL.md). Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.
+> **Status:** **Omarchy Core Beta (Phases 0–5) is complete** and merged to `master` (pre-merge review 2026-08-28). Phase 3 60-minute soak **cancelled** by operator 2026-08-27 — not run, not passed; 15-minute soak is the duration-growth evidence. Phase 5 packaged Settings / legal-notices clicks and a packaged AppImage recording + CPU faster-whisper session closed 2026-08-28. Gate B closed on Apple Silicon macOS 2026-08-28 and the release workflow now includes AppImage, pacman, and an experimental `.deb`. Ubuntu 24.04 **desktop** recording/`safeStorage` smoke is still open (Docker launch only). Additional distros and desktops are **experimental betas** with no hardware claim — see [LINUX_EXPERIMENTAL.md](../guides/LINUX_EXPERIMENTAL.md). Phases 6–9 are now a v2.9 evidence-gated extension for CachyOS x86_64 + NVIDIA RTX 4070; they remain unavailable everywhere else until their individual gates pass.
 > **Pre-merge review (2026-08-28):** full-branch review before the first Linux release. Eleven defects fixed — see [Pre-merge review remediation](#pre-merge-review-remediation-2026-08-28). Two of them (`is_pulse_port_unavailable` never matching a real `pulsectl` enum, and a blank Linux tray icon) were behaviours this document previously claimed as evidence; those claims are corrected in place below.
 > **Replanned:** 2026-08-23 against AvaNevis v2.7.0 / current `master`.
 > **Review pass:** 2026-08-23 — verified plan claims against the codebase and CI, corrected two host-fact conclusions (secret storage, tray), and pinned every required upstream Linux artifact. All "Verified" sections below were checked on that date.
 > **Scope cut (2026-08-24):** the first Linux version is **Core Beta only** (Phases 0–5). Speaker identification and local summaries are **out of scope** until a later Linux version. There is no Omarchy host with an NVIDIA GPU to validate those CUDA-only add-ons; do not ship a CPU fallback. The UI must keep both features visible but greyed out as unsupported.
+> **Scope extension (2026-09-01):** v2.9 now includes a separate, sequential Linux AI lane because a CachyOS desktop with an NVIDIA RTX 4070 is available. The lane begins with fresh artifact and compatibility investigation; CUDA Whisper, Speakrs, Pyannote, and summaries are independently accepted or left unavailable. Its detailed execution plan is [2026-09-01-v2.9-linux-ai-addons.md](../superpowers/plans/2026-09-01-v2.9-linux-ai-addons.md).
 > **Primary target:** Omarchy 4 and CachyOS x86_64, Hyprland/Wayland, PipeWire with `pipewire-pulse`.
 > **Secondary target:** experimental-beta x86_64 desktops (Ubuntu, vanilla Arch, non-Hyprland CachyOS, Fedora Workstation, SteamOS Desktop Mode) where the same Pulse-compatible capture path may work without distro-specific code. These are not hardware-validated. See [LINUX_EXPERIMENTAL.md](../guides/LINUX_EXPERIMENTAL.md).
 
@@ -13,20 +14,20 @@
 This plan is written to be executed phase by phase, one PR per phase, by an implementer with no prior context on this initiative. Rules:
 
 1. Read root `AGENTS.md` first. It is the canonical source for every cross-process contract this plan touches. Where this plan and `AGENTS.md` disagree on an existing contract, `AGENTS.md` wins.
-2. Do not skip or reorder **in-scope** phases (0–5). Each phase's exit criteria must pass before the next phase starts. Phases 6–9 are a later Linux version — see rule 8.
+2. Do not skip or reorder **in-scope** phases. Each phase's exit criteria must pass before the next phase starts. Phases 6–9 are v2.9 Linux-AI gates for the validated CachyOS RTX 4070 profile — see rule 8.
 3. Every referenced line number was correct on 2026-08-23 and will drift. Each line reference includes a search pattern — locate code by the pattern, not the number.
 4. Every artifact pin below lists the exact URL and file name but **not** the SHA-256. At implementation time: download the file, run `sha256sum <file>` (or `shasum -a 256` on macOS), and record the hash in the pin. Never copy a hash from an unverified source, and never pin a URL you have not downloaded and hashed yourself.
 5. Never weaken a Windows or macOS test to make Linux pass. Add Linux cases alongside existing ones.
 6. Validation per phase: run the smallest relevant suite while iterating (`npm test` for JS, `npm run test:python` for Python), and always run `npm run test:all` before opening the phase PR.
 7. No Linux feature may be presented as available in the UI until its phase exit criteria pass. `unsupported` is the correct status until then.
-8. Do not start Phases 6–9 as part of the first Linux version. Those phases are a later Linux version, blocked on an Omarchy host with NVIDIA hardware.
+8. Run Phases 6–9 only through the v2.9 Linux-AI plan on CachyOS x86_64 + NVIDIA RTX 4070. Each component stays unavailable until its specific artifact, security, packaged, and hardware gate passes; no CPU fallback or wider Linux support claim is allowed.
 
-Delivery has two explicit milestones. Only the first is in scope now:
+Delivery has two explicit milestones:
 
 1. **Omarchy Core Beta** (Phases 0–5) — **this is the first Linux version.** Mic + desktop recording, recovery, background transcription queue, local faster-whisper **on CPU**, History/export, tray/notifications, pacman package, and a FUSE-less AppImage. Speaker identification and local summaries stay `unsupported` and greyed out in the UI.
-2. **Later Linux version — add-on parity** (Phases 6–9, deferred) — optional summaries plus the exclusive Speakrs/Pyannote selector, Linux catalog/runtime pins, and managed CUDA Whisper. **Do not schedule this until an Omarchy machine with an NVIDIA GPU is available for soak.** A CPU llama.cpp binary existing upstream is not a reason to ship Linux summaries in Core Beta.
+2. **v2.9 Linux AI extension** (Phases 6–9, gated) — managed CUDA Whisper, accepted CUDA-only Speakrs/Pyannote support, and accepted CUDA-only summaries on CachyOS x86_64 + NVIDIA RTX 4070. A phase must not make a component available until its fresh artifact, security, packaged, and hardware evidence is recorded. A CPU llama.cpp binary is not an acceptable fallback.
 
-A Core Beta release must not present setup controls that cannot complete. Greyed-out Settings cards and a disabled Generate Summary control are required; hiding the features, or leaving Set Up clickable, is not. Do not call Linux "feature-complete" with Windows/macOS while add-ons remain deferred.
+Core Beta and all unvalidated Linux AI profiles must not present setup controls that cannot complete. Greyed-out Settings cards and a disabled Generate Summary control are required; hiding the features, or leaving Set Up clickable, is not. Do not call Linux "feature-complete" with Windows/macOS beyond the accepted 4070 matrix.
 
 An experimental x86_64 `.deb` is published beside AppImage and pacman for Debian-family friends. It does not promote Ubuntu (or any other distro) to Supported. No Ubuntu-specific capture implementation is planned.
 
@@ -348,7 +349,7 @@ return linuxAsset || null;
 
 **Shipped matching (2026-08-28 experimental slice):** still notify-only and still `AvaNevis-Setup-*` only. Selection is now distro-aware: running AppImage → AppImage; Debian-family → `.deb` then AppImage; Arch-family → pacman then AppImage; Fedora, SteamOS, and unknown Linux → AppImage. Source archives and unprefixed names still never match.
 
-### 12. First Linux version does not ship diarization or summaries (new, 2026-08-24)
+### 12. Core Beta historical decision: no diarization or summaries (2026-08-24; superseded for the v2.9 RTX 4070 lane)
 
 There is no Omarchy development host with an NVIDIA GPU. Speakrs and Pyannote on Linux are CUDA-only with **no CPU fallback** (same product policy as Windows/macOS). Local summaries are deferred with that same later milestone even though a CPU llama.cpp binary exists upstream — do not ship a Linux-only CPU summary exception in Core Beta.
 
@@ -367,11 +368,11 @@ Core Beta product rules:
 
 - Tests: `tests/js/linux-platform-selection.test.js` already pins catalog `unsupported`. Add renderer helper coverage that Linux control state is fully disabled and that the two reason strings render. Update `tests/manual/local-ai-addons-checklist.md` Linux rows to match.
 
-Later version (Phases 6–9) starts only when an Omarchy + NVIDIA machine is available. Until then, keep this decision's grey-out contract; do not partially enable summaries or a Speakrs CPU path.
+For unvalidated Linux profiles, keep this decision's grey-out contract; do not partially enable summaries or a Speakrs CPU path. The v2.9 CachyOS + RTX 4070 lane supersedes the later-version scheduling condition only after each component's acceptance gate passes.
 
-## Later Linux version — add-on parity plan (deferred)
+## Linux add-on parity plan (historical Core Beta deferral; v2.9 execution is gated)
 
-**Out of scope for the first Linux version.** Keep the requirements below so the later milestone does not have to be rediscovered. Do not implement them, pin their artifacts, or enable their UI in Core Beta.
+**Out of scope for Core Beta.** The requirements below are the baseline for the v2.9 gated implementation. Do not implement, pin, or enable an individual component until the current [v2.9 Linux-AI plan](../superpowers/plans/2026-09-01-v2.9-linux-ai-addons.md) records its acceptance evidence.
 
 Linux add-ons are not "just enable the UI." Each needs catalog entries, runtime packaging, setup validation, hardware policy, integrity checks, queue membership, cancellation, uninstall ownership, legal notices, and manual smoke. Hardware gate: Omarchy 4 x86_64 **with NVIDIA CUDA**.
 
@@ -727,7 +728,7 @@ Switches live in `src/main-process/linux-electron-bootstrap.js` and are applied 
 
 **Add-on grey-out (Locked decision 12).** Exact reason strings live in `src/ai-addon-state.js`. Settings cards `#diarization-addon-card` / `#summary-addon-card` take `.ai-addon-card.is-unsupported`; all setup controls begin disabled and remain gated by status; token and speaker-count fields are not offered when unsupported; History Generate Summary stays disabled with that copy; `generate-summary` rejects unsupported before any Python preflight. Locked decision 1 copy sites were already extracted in Phase 0 (`inferRendererHostFamily` / `getRecordingPermissionFailureGuidance` / `getUnsupportedGpuSettingsCopy`).
 
-**Phase 4 product code and adversarial review are closed.** Phase 5 packaging and packaged UI/recording evidence closed 2026-08-28; Omarchy Core Beta is complete. Gate B is closed; Ubuntu desktop smoke remains open. Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.
+**Phase 4 product code and adversarial review are closed.** Phase 5 packaging and packaged UI/recording evidence closed 2026-08-28; Omarchy Core Beta is complete. Gate B is closed; Ubuntu desktop smoke remains open. The Core Beta CUDA/add-on grey-out behavior remains correct until the v2.9 CachyOS RTX 4070 lane accepts each replacement path.
 
 ### Phase 5 — Omarchy Core Beta packaging
 
@@ -807,16 +808,16 @@ Full-branch review of `release/linux` before merging to `master` and cutting the
 
 **Still open after this review:** the 60-minute soak (cancelled, not passed), the Ubuntu 24.04 desktop AppImage recording/`safeStorage` smoke, a visual confirmation of the new tray icons on an Omarchy panel, and a live no-SNI-host tray pass (unit-tested only).
 
-### Phases 6–9 — Later Linux version (deferred)
+### Phases 6–9 — v2.9 Linux AI extension (gated)
 
-**Do not start these phases until an Omarchy host with an NVIDIA GPU is available.** They are not part of the first Linux version. Requirements and artifact URLs stay in this document so the later milestone does not have to be rediscovered.
+**Run these phases only through the v2.9 Linux-AI plan on CachyOS x86_64 + NVIDIA RTX 4070.** Begin with fresh official artifact, license, hash, driver/CUDA, Python, and encrypted-secret-storage investigation. Requirements and historical artifact URLs below are leads, not accepted pins.
 
-### Phase 6 — Linux accelerator/resource foundation (deferred)
+### Phase 6 — Linux accelerator/resource foundation (v2.9 gated)
 
 Port the existing managed runtime behavior instead of treating system CUDA as sufficient:
 
 - define Linux faster-whisper CUDA package/runtime pins (`nvidia-cublas-cu12`, `nvidia-cudnn-cu12` manylinux wheels — verified available)
-- build a fresh CUDA-major probe for queued-job start (CUDA-12-major `.so` names; a CUDA-13-only host surfaces the mismatch and stays on CPU)
+- build a fresh CUDA-major probe for queued-job start (CUDA-12-major `.so` names; a CUDA-13-only host surfaces the mismatch and remains unavailable)
 - inject contained shared-library paths into children via `LD_LIBRARY_PATH` (the Linux analogue of the Windows DLL-directory flow)
 - serialize install/repair/uninstall with compute and preload through `gpuResourceActionQueue`
 - invalidate cached CUDA status after uninstall/failure
@@ -825,18 +826,18 @@ Port the existing managed runtime behavior instead of treating system CUDA as su
 Exit criteria:
 
 - CUDA 12 profile works on supported NVIDIA hardware without a system CUDA toolkit
-- incompatible/newer-only CUDA stays on CPU with clear copy
+- incompatible/newer-only CUDA remains unavailable with clear copy
 - install/repair cannot race active compute or loaded libraries
 - no Linux shared-library path escapes the managed runtime
 
-### Phase 7 — Speaker identification parity (deferred)
+### Phase 7 — Speaker identification parity (v2.9 gated)
 
 Order:
 
 1. Linux `speakrs-cli` build/package/integrity — including the `Cargo.toml` Linux target section and the `ort-compile-pins.json` `linux-x64: null` entry (exact snippets in **Speakrs on Linux**)
 2. Linux model and ORT/CUDA pack pins (`onnxruntime-linux-x64-gpu_cuda12-1.27.1.tgz` closure; cuDNN 9 + zlib + `LD_LIBRARY_PATH` caveats)
 3. Speakrs setup validation and guided smoke
-4. Pyannote Linux dependency pins and the two-part secure-token preflight from Locked decision 9
+4. Investigate Pyannote Linux dependency pins and the two-part secure-token preflight from Locked decision 9; accept Pyannote only if both pass
 5. selector switch/remove behavior on packaged Linux
 6. soak and same-audio comparison
 
@@ -847,17 +848,17 @@ Exit criteria:
 - Speakrs uses no token
 - Pyannote token never reaches logs/manifests/metadata
 - setup/validate full-hashes; compute admission rehashes changed fingerprints
-- both engines run CUDA-only and produce unchanged sidecar schemas
+- every accepted engine runs CUDA-only and produces unchanged sidecar schemas
 - guided failure preserves a normal transcript
 - remove/switch never deletes Whisper or shared CUDA
 - quit/timeout leaves no `speakrs-cli` grandchild
 
-### Phase 8 — Summary parity (deferred)
+### Phase 8 — Summary parity (v2.9 gated)
 
 Order:
 
 1. add pinned Linux model platform entry
-2. add pinned Linux CPU llama.cpp runtime (`llama-b9173-bin-ubuntu-x64.tar.gz`) and extraction tests
+2. investigate and add one pinned Linux CUDA llama.cpp runtime and extraction tests; do not use the historical CPU/Vulkan assets as a fallback
 3. validate setup, cancellation, checksum, offline generation, sidecars, stale-hash UX
 4. benchmark the current default model
 5. optionally add a catalog-driven Vulkan profile (`llama-b9173-bin-ubuntu-vulkan-x64.tar.gz`) after real inference evidence
@@ -872,20 +873,20 @@ Exit criteria:
 - 60-minute Balanced summary meets the existing wall clock
 - committed summary sidecars survive late abort/cleanup
 
-### Phase 9 — Later-version release and portability evidence (deferred)
+### Phase 9 — v2.9 Linux AI release evidence (gated)
 
-Hardware gate: Omarchy 4 with NVIDIA CUDA. Until that host exists, the first Linux version ships only the Core Beta column.
+Hardware gate: CachyOS x86_64 with NVIDIA RTX 4070 CUDA. Until an individual component passes, the first Linux version ships only the Core Beta column for that component.
 
 Matrix:
 
 | Environment | Core | CUDA Whisper | Speakrs | Pyannote | Summary | Package |
 |---|---:|---:|---:|---:|---:|---|
 | Omarchy 4 / Hyprland / PipeWire / CPU-only | **Required (first version)** | Unsupported (greyed) | Unsupported (greyed) | Unsupported (greyed) | Unsupported (greyed) | pacman + AppImage |
-| Omarchy 4 / NVIDIA CUDA | Required | Later version | Later version | Later version | Later version | pacman + AppImage |
-| Ubuntu 24.04 / Wayland / PipeWire | Smoke | Later version | Unsupported until later | Unsupported until later | Unsupported until later | AppImage |
-| Ubuntu 24.04 / X11 / PulseAudio | Smoke | Optional later | Deferred | Deferred | Deferred | AppImage |
+| CachyOS / Hyprland / PipeWire / RTX 4070 | Required | Evidence-gated v2.9 | Evidence-gated v2.9 | Evidence-gated v2.9 | Evidence-gated v2.9 | AppImage + pacman + deb |
+| Ubuntu 24.04 / Wayland / PipeWire | Smoke | Experimental/unavailable | Experimental/unavailable | Experimental/unavailable | Experimental/unavailable | AppImage |
+| Ubuntu 24.04 / X11 / PulseAudio | Smoke | Experimental/unavailable | Experimental/unavailable | Experimental/unavailable | Experimental/unavailable | AppImage |
 
-First version: release only Core Beta on CPU. Unsupported add-ons stay explicit and greyed and must never fall back to cloud behavior. The NVIDIA row is evidence for Phases 6–9 only.
+Core Beta remains CPU-only. Unaccepted and unvalidated Linux AI add-ons stay explicit and greyed and must never fall back to CPU or cloud behavior. The RTX 4070 row is evidence for Phases 6–9 only.
 
 ## File touch map
 
@@ -943,11 +944,11 @@ Later version only (needs NVIDIA Omarchy):
 - summary setup cancel and metadata-phase quit
 - no network during diarization/summary generation
 
-## Non-goals for the first Linux release
+## Core Beta non-goals and v2.9 Linux-AI boundaries
 
-- speaker identification (Speakrs or Pyannote), guided transcription, or Linux `speakrs-cli`
-- local summaries, including a CPU llama.cpp runtime "to try it anyway"
-- managed Linux CUDA Whisper / GPU Settings install
+- speaker identification, guided transcription, or Linux `speakrs-cli` outside accepted v2.9 CachyOS RTX 4070 gates
+- local summaries outside an accepted CUDA runtime; a CPU llama.cpp runtime "to try it anyway"
+- managed Linux CUDA Whisper / GPU Settings install outside the accepted profile
 - a Linux CPU fallback for Speakrs or Pyannote
 - application-specific desktop-audio capture
 - PipeWire native graph API while Pulse compatibility is sufficient
@@ -961,4 +962,4 @@ Later version only (needs NVIDIA Omarchy):
 
 ## First implementation action
 
-Gates A and B are resolved. Phases 0–5 Omarchy Core Beta is complete on `release/linux` and ready to merge to `master` (Phase 3 60-minute soak cancelled by operator 2026-08-27; Phase 4 ozone/secret-storage/tray/CPU/add-on grey-out and review remediation closed 2026-08-27; Phase 5 packaging + packaged UI/recording evidence closed 2026-08-28; pre-merge full-branch review 2026-08-28). The release workflow includes AppImage, pacman, and an experimental `.deb`. Ubuntu 24.04 desktop recording/`safeStorage` smoke is still open, as are a visual tray-icon check and unplugged-endpoint filtering on hardware. Other distros remain experimental betas. Do not start Phases 6–9 until an Omarchy host with NVIDIA hardware exists.
+Gates A and B are resolved. Phases 0–5 Omarchy Core Beta is complete on `release/linux` and ready to merge to `master` (Phase 3 60-minute soak cancelled by operator 2026-08-27; Phase 4 ozone/secret-storage/tray/CPU/add-on grey-out and review remediation closed 2026-08-27; Phase 5 packaging + packaged UI/recording evidence closed 2026-08-28; pre-merge full-branch review 2026-08-28). The release workflow includes AppImage, pacman, and an experimental `.deb`. Ubuntu 24.04 desktop recording/`safeStorage` smoke is still open, as are a visual tray-icon check and unplugged-endpoint filtering on hardware. Other distros remain experimental betas. The next implementation action is Task 1 of the v2.9 Linux-AI plan on CachyOS x86_64 + NVIDIA RTX 4070.

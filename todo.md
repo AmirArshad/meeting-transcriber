@@ -28,6 +28,12 @@
 - [ ] [Risk: Medium] Correct the shared macOS/Linux desktop-leading-pad duration geometry only in its own focused change, with capture-recovery duration tests and macOS hardware validation. Do not broaden it into a recorder redesign.
 - [ ] [Risk: Medium] Make a documented decision on macOS late-desktop-capture behavior: retain its current conservative policy unless an isolated hardware-tested change proves that preserving committed frames is safe.
 
+## Linux AI add-ons — CachyOS RTX 4070 gated lane
+
+- [ ] [Risk: High] Create `feature/v2.9-linux-ai-addons` after the accepted Electron 44 and reliability lanes. First record fresh official artifact/license/hash evidence and packaged CachyOS + RTX 4070 preflight for CUDA Whisper, Speakrs, Pyannote, and summaries. Use [`2026-09-01-v2.9-linux-ai-addons.md`](docs/superpowers/plans/2026-09-01-v2.9-linux-ai-addons.md); do not enable a component before its own gate passes.
+- [ ] [Risk: High] Add managed CUDA-only Linux Whisper, then packaged Speakrs. Investigate Pyannote separately; accept it only after encrypted non-`basic_text` `safeStorage`, token-isolation, pinned dependency, and CUDA validation evidence. Add summaries only with a fresh pinned CUDA-only runtime decision. No Linux CPU fallback or cloud path.
+- [ ] [Risk: High] Complete the packaged AppImage/pacman/deb, setup/repair/remove, cancellation/quit, guided-transcription, summary-sidecar, and bounded GPU/VRAM-soak matrix on CachyOS x86_64 + NVIDIA RTX 4070. Keep all other Linux AI profiles experimental or unavailable.
+
 ## UI refresh and future layout foundation
 
 - [x] [Risk: Medium] Create `feature/v2.9-ui-foundation`; use the installed Anthropic `frontend-design` skill to define and apply a calm, functional Omarchy-inspired visual system across the existing Record, History, and Settings navigation. Evidence: branch `feature/v2.9-ui-foundation`. Manual visual matrix remains in `tests/manual/recording-transcription-regression-checklist.md` section 5.
@@ -40,7 +46,6 @@
 
 ## Explicitly deferred
 
-- [ ] [Risk: High] Linux AI add-on phases 6–9 (CUDA, Speakrs/Pyannote, and summaries) are **v3.0+ only**. Linux stays CPU `faster-whisper`; add-ons remain greyed `unsupported`; no CPU fallback is added.
 - [ ] [Risk: Low] Apple Developer signing/notarization remains deferred until enrollment. Keep current ad-hoc macOS packaging checks intact.
 - [ ] [Risk: High] Do not delete Pyannote or its token IPC; Speakrs and Pyannote remain user-selectable exclusive engines.
 
@@ -51,8 +56,9 @@
 3. `feature/v2.9-ui-foundation` — visual system and bounded layout foundations.
 4. `feature/v2.9-reliability-follow-through` — only the focused recorder/device changes whose validation gates pass.
 5. `feature/v2.9-electron-44` — independent compatibility lane; merge only after its complete gate.
-6. `feature/v2.9-capture-modes` — final dedicated capture-mode lane; merge only after all platform contract and hardware gates pass.
-7. `release/v2.9.0` — integration/release-only branch after each accepted lane is independently green. Do not combine unrelated high-risk upgrades.
+6. `feature/v2.9-linux-ai-addons` — dedicated CachyOS RTX 4070 CUDA/add-on lane; merge only accepted components with full hardware evidence.
+7. `feature/v2.9-capture-modes` — final dedicated capture-mode lane; merge only after all platform contract and hardware gates pass.
+8. `release/v2.9.0` — integration/release-only branch after each accepted lane is independently green. Do not combine unrelated high-risk upgrades.
 
 ## Recently shipped / historical reference
 

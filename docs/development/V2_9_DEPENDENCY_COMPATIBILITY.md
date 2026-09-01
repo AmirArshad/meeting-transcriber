@@ -4,8 +4,8 @@ Decision record for `feature/v2.9-dependency-hygiene` Task 1. Later version chan
 
 **Recorded:** 2026-08-28  
 **Python target:** 3.11 (`cp311`)  
-**Electron baseline:** 42.9.0  
-**Electron 44 lane (2026-08-31):** npm `latest` is **44.1.0** (dist-tag `44-x-y` also 44.1.0; 44.0.0 published 2026-08-25, 44.1.0 published 2026-08-31). Electron 45 is `alpha` only (`45.0.0-alpha.2`) and is out of scope. electron-builder remains **26.15.3** (npm `latest`; not combined with this lane).  
+**Electron baseline:** 42.9.0
+**Electron 44 lane (2026-08-31):** npm `latest` is **44.1.0** (dist-tag `44-x-y` also 44.1.0; 44.0.0 published 2026-08-25, 44.1.0 published 2026-08-31). Electron 45 is `alpha` only (`45.0.0-alpha.2`) and is out of scope. electron-builder remains **26.15.3** (npm `latest`; not combined with this lane).
 **Privacy:** no cloud transcription, telemetry, or extra network use beyond explicit model/update checks and these resolver downloads.
 
 | Interpreter | Where | ABI |
@@ -44,7 +44,7 @@ Treat these as **direct runtime dependencies** even when a resolver also reaches
 | `tokenizers` | faster-whisper tokenization | Windows/Linux build `==0.23.1` | Tokenize/model load failure if missing. |
 | `av` (PyAV) | faster-whisper path-based decode | Windows/Linux build `==18.1.0` | `transcribe(audio_path)` decode. Bundled ffmpeg does not replace this import. Direct runtime dep; do not prune in Task 3. |
 | `ctranslate2` | faster-whisper inference | Windows/Linux build `==4.8.1` | CUDA 12 wheels. Packaged Windows GPU profile remains `nvidia-cublas-cu12` / `nvidia-cudnn-cu12`. This host also has CUDA 13 on PATH; that does not change the packaged CUDA 12 contract. |
-| `faster-whisper` | Windows + Linux transcription | `==1.2.1` | Linux Core Beta is **CPU only**. |
+| `faster-whisper` | Windows + Linux transcription | `==1.2.1` | Linux Core Beta is **CPU only**; v2.9 CUDA use is restricted to the separately gated CachyOS x86_64 + RTX 4070 lane. |
 | `lightning-whisper-mlx` | Apple Silicon transcription | macOS build `==0.0.10` | Pins `tiktoken==0.3.3`. |
 | `torch` | macOS resolver only | macOS build `==2.13.0`, then **pruned** | MLX never imports `torch_whisper.py`. `lightning-whisper-mlx` does not pin Torch. **Accepted** Task 2 on Apple Silicon (2026-08-28). Stays in `MACOS_RUNTIME_REMOVABLE_PACKAGES`. Not Pyannote’s `torch==2.8.0`. |
 | `setuptools` | pip / wheel metadata | Windows/Linux/macOS build `==84.0.0` (also pruned from the macOS runtime) | Windows/Linux **accepted** Task 2. macOS **accepted** with Torch 2.13.0. CI no longer ignores `CVE-2025-3000` or `PYSEC-2026-3447`. |
@@ -54,9 +54,9 @@ Treat these as **direct runtime dependencies** even when a resolver also reaches
 | PyObjC `Cocoa` / `Quartz` / `core` / `CoreMedia` | ScreenCaptureKit fallback graph | macOS build `==12.2.2` | **Kept** at 12.2.2. Cocoa supplies `Foundation` (`NSObject`, `NSRunLoop`). Quartz is required by `pyobjc-framework-AVFoundation==12.2.2`. |
 | `sounddevice` | macOS microphone (`InputStream`, `query_devices`) | macOS build `==0.5.6` | **Accepted** (2026-08-28). Runtime already floated to 0.5.6. Desktop capture stays the Swift helper; this pin is the mic path. |
 | `tiktoken` | MLX | macOS `==0.3.3` | Dependabot ignore; do not bump alone. |
-| Speakrs ONNX Runtime | add-on, **not** pip requirements | Windows setup-time archive **1.27.1** (`src/ai-addon/speakrs-pack-spec.js`) | Distinct from pip `onnxruntime==1.26.0`. Linux add-ons remain `unsupported`. |
+| Speakrs ONNX Runtime | add-on, **not** pip requirements | Windows setup-time archive **1.27.1** (`src/ai-addon/speakrs-pack-spec.js`) | Distinct from pip `onnxruntime==1.26.0`. Linux artifacts require a separate v2.9 investigation and acceptance record. |
 
-Linux CUDA, Speakrs, Pyannote, and summaries are **v3.0+**. This matrix does not authorize those packages.
+Linux CUDA, Speakrs, Pyannote, and summaries are in the v2.9 CachyOS x86_64 + RTX 4070 evidence-gated lane. This matrix authorizes no Linux package or runtime until its dated artifact/security/packaged/hardware row is complete.
 
 ## Resolver vs packaged pins
 
@@ -682,7 +682,7 @@ Held: Electron 42.9.0; `onnxruntime` 1.26.0 vs runtime 1.29.0; `filelock==3.32.3
 
 ## Electron 44.1.0 lane (2026-08-31)
 
-**Branch:** `feature/v2.9-electron-44`  
+**Branch:** `feature/v2.9-electron-44`
 **Host (this session):** CachyOS x86_64, Hyprland/Wayland, PipeWire 1.6.8 (`pipewire-pulse`), Node 24.20.0, npm 11.19.0. SNI host: noctalia `org.kde.StatusNotifierWatcher`. fuse3 present; fuse2 absent.
 
 **Registry check:** `npm view electron@latest version` → `44.1.0`. Published non-prerelease 44.x: `44.0.0`, `44.1.0`. `npm view electron-builder@latest version` → `26.15.3`.
