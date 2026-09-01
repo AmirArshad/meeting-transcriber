@@ -7,6 +7,8 @@ from typing import Optional, Tuple
 
 import numpy as np
 
+from .capture_alignment import compute_capture_alignment_frames
+
 
 def align_streams_by_start_time(
     mic_audio: np.ndarray,
@@ -39,56 +41,51 @@ def align_streams_by_start_time(
     if sample_rate <= 0:
         return mic_audio, desktop_audio
 
-    reference_start = recording_start_time + max(float(preroll_seconds), 0.0)
+    alignment = compute_capture_alignment_frames(
+        recording_start_time=recording_start_time,
+        mic_capture_start_time=mic_capture_start_time,
+        desktop_capture_start_time=desktop_capture_start_time,
+        sample_rate=sample_rate,
+        preroll_seconds=preroll_seconds,
+    )
 
-    # Trim desktop samples captured during the mic preroll window.
-    if desktop_capture_start_time < reference_start and len(desktop_audio) > 0:
-        trim_seconds = reference_start - desktop_capture_start_time
-        trim_samples = int(round(trim_seconds * sample_rate))
-        if trim_samples > 0:
-            if trim_samples >= len(desktop_audio):
-                print(
-                    f"Stream alignment: trimmed all {len(desktop_audio)} desktop samples "
-                    f"captured during {trim_seconds:.3f}s preroll",
-                    file=sys.stderr,
-                )
-                channels = desktop_audio.shape[1] if len(desktop_audio.shape) > 1 else 1
-                desktop_audio = np.zeros((0, channels), dtype=desktop_audio.dtype)
-            else:
-                desktop_audio = desktop_audio[trim_samples:]
-                print(
-                    f"Stream alignment: trimmed {trim_samples} desktop preroll samples "
-                    f"({trim_seconds:.3f}s)",
-                    file=sys.stderr,
-                )
-        desktop_capture_start_time = reference_start
+    trim_samples = int(alignment["desktopTrimFrames"])
+    if trim_samples > 0 and len(desktop_audio) > 0:
+        trim_seconds = trim_samples / float(sample_rate)
+        if trim_samples >= len(desktop_audio):
+            print(
+                f"Stream alignment: trimmed all {len(desktop_audio)} desktop samples "
+                f"captured during {trim_seconds:.3f}s preroll",
+                file=sys.stderr,
+            )
+            channels = desktop_audio.shape[1] if len(desktop_audio.shape) > 1 else 1
+            desktop_audio = np.zeros((0, channels), dtype=desktop_audio.dtype)
+        else:
+            desktop_audio = desktop_audio[trim_samples:]
+            print(
+                f"Stream alignment: trimmed {trim_samples} desktop preroll samples "
+                f"({trim_seconds:.3f}s)",
+                file=sys.stderr,
+            )
 
-    mic_reference = max(mic_capture_start_time, reference_start)
-    desktop_reference = max(desktop_capture_start_time, reference_start)
-
-    offset_seconds = desktop_reference - mic_reference
-    offset_samples = int(round(offset_seconds * sample_rate))
-
-    if offset_samples == 0:
-        return mic_audio, desktop_audio
-
+    offset_samples = int(alignment["desktopLeadingPadFrames"])
+    mic_padding = int(alignment["micLeadingPadFrames"])
     if offset_samples > 0:
         channels = desktop_audio.shape[1] if len(desktop_audio.shape) > 1 else 1
         padding = np.zeros((offset_samples, channels), dtype=desktop_audio.dtype)
         desktop_audio = np.concatenate([padding, desktop_audio], axis=0)
         print(
             f"Aligned desktop stream with {offset_samples} leading silence samples "
-            f"({offset_seconds:.3f}s startup lag)",
+            f"({offset_samples / float(sample_rate):.3f}s startup lag)",
             file=sys.stderr,
         )
-    else:
-        mic_padding = abs(offset_samples)
+    elif mic_padding > 0:
         channels = mic_audio.shape[1] if len(mic_audio.shape) > 1 else 1
         padding = np.zeros((mic_padding, channels), dtype=mic_audio.dtype)
         mic_audio = np.concatenate([padding, mic_audio], axis=0)
         print(
             f"Aligned mic stream with {mic_padding} leading silence samples "
-            f"({abs(offset_seconds):.3f}s startup lag)",
+            f"({mic_padding / float(sample_rate):.3f}s startup lag)",
             file=sys.stderr,
         )
 

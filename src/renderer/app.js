@@ -97,6 +97,7 @@ const {
   getRecordingPermissionFailureGuidance,
   toOpaqueDeviceId,
   decorateDesktopDevices,
+  resolveInitialDeviceSelection,
 } = window.platformSelectionHelpers;
 const { writeSignalTrace } = window.canvasHelpers;
 
@@ -1673,16 +1674,19 @@ function saveSettings(settings) {
 }
 
 // Apply saved settings to UI controls
-function applySavedSettings() {
+function applySavedSettings(devices = {}, hostFamily = 'unknown') {
   const settings = loadSettings();
 
-  if (settings.micId && micSelect.querySelector(`option[value="${settings.micId}"]`)) {
-    micSelect.value = settings.micId;
-  }
-
-  if (settings.desktopId && desktopSelect.querySelector(`option[value="${settings.desktopId}"]`)) {
-    desktopSelect.value = settings.desktopId;
-  }
+  micSelect.value = resolveInitialDeviceSelection({
+    savedId: settings.micId,
+    defaultId: devices.defaults?.default_input,
+    devices: devices.inputs,
+  });
+  desktopSelect.value = resolveInitialDeviceSelection({
+    savedId: settings.desktopId,
+    defaultId: devices.defaults?.default_output,
+    devices: decorateDesktopDevices(devices.loopbacks, hostFamily),
+  });
 
   if (settings.language) {
     languageSelect.value = settings.language;
@@ -1974,8 +1978,9 @@ async function loadAudioDevices() {
 
     addLog(`Found ${devices.inputs.length} microphones and ${devices.loopbacks.length} loopback devices`);
 
-    // Apply saved settings after devices are loaded
-    applySavedSettings();
+    // Restore a persisted choice when present; otherwise initialize from the
+    // host default only if that exact device is available in this refresh.
+    applySavedSettings(devices, hostFamily);
   } catch (error) {
     console.error('Failed to load devices:', error);
     addLog(`Error: ${error.message}`, 'error');

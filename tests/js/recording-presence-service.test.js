@@ -6,16 +6,17 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
 
-const {
-  createRecordingPresenceService,
-  getNextReminderAt,
-  buildReminderCopy,
-  buildTrayView,
-  buildWindowCloseDialogOptions,
-  formatTrayElapsed,
-  resolveTrayImageFileName,
-  RECORDING_REMINDER_INTERVAL_MS,
-} = require('../../src/main/recording-presence-service');
+  const {
+    createRecordingPresenceService,
+    getNextReminderAt,
+    buildReminderCopy,
+    buildTrayView,
+    buildWindowCloseDialogOptions,
+    formatTrayElapsed,
+    resolveTrayImageFileName,
+    probeLinuxStatusNotifierWatcher,
+    RECORDING_REMINDER_INTERVAL_MS,
+  } = require('../../src/main/recording-presence-service');
 
 function createDeps(overrides = {}) {
   const timers = [];
@@ -122,6 +123,7 @@ function createDeps(overrides = {}) {
     quitApp() {
       deps._quitCalled = true;
     },
+    linuxTrayHostAvailable: () => true,
     now: () => 1_000,
     setTimeoutFn: (fn, delay) => {
       const timer = { fn, delay, cleared: false };
@@ -377,6 +379,49 @@ test('Linux tray uses context menu only and survives a missing SNI host', () => 
   );
   assert.deepEqual(degradedIdle.buttons, ['Keep AvaNevis Minimized', 'Close App', 'Cancel']);
   assert.equal(degradedIdle.keepRecordingAction, 'minimize');
+});
+
+test('Linux skips Tray construction when StatusNotifierWatcher is absent', () => {
+  const warnings = [];
+  const harness = createDeps({
+    platform: 'linux',
+    linuxTrayHostAvailable: () => false,
+    logWarn: (...args) => warnings.push(args.join(' ')),
+  });
+  const service = createRecordingPresenceService(harness.deps);
+  assert.equal(service.createTray(), null);
+  assert.equal(service.hasTray(), false);
+  assert.match(warnings.join('\n'), /StatusNotifierWatcher is not available/);
+});
+
+test('probeLinuxStatusNotifierWatcher is fail-closed', () => {
+  assert.equal(probeLinuxStatusNotifierWatcher({ platform: 'win32' }), true);
+  assert.equal(probeLinuxStatusNotifierWatcher({ platform: 'darwin' }), true);
+  assert.equal(
+    probeLinuxStatusNotifierWatcher({
+      platform: 'linux',
+      spawnSyncFn: () => ({ status: 0 }),
+    }),
+    true,
+  );
+  assert.equal(
+    probeLinuxStatusNotifierWatcher({
+      platform: 'linux',
+      spawnSyncFn: () => ({ status: 1, stderr: 'not provided' }),
+    }),
+    false,
+  );
+  assert.equal(
+    probeLinuxStatusNotifierWatcher({
+      platform: 'linux',
+      spawnSyncFn: () => {
+        const error = new Error('spawn busctl ENOENT');
+        error.code = 'ENOENT';
+        return { error, status: null };
+      },
+    }),
+    false,
+  );
 });
 
 test('Linux tray images are decodable PNGs, never the Windows .ico', () => {

@@ -42,6 +42,7 @@ def _build_interrupted_session(
     profile: str = "windows-v1",
     dtype: str = "<i2",
     sample_rate: int = 48000,
+    alignment: dict | None = None,
 ):
     output = recordings_dir / f"{stem}.opus"
     coordinator = CaptureManifestCoordinator.create(
@@ -66,6 +67,9 @@ def _build_interrupted_session(
         coordinator.set_include_desktop(True)
     else:
         coordinator.set_include_desktop(False)
+
+    if alignment:
+        coordinator.set_alignment(**alignment)
 
     coordinator.set_state(state)
     session_dir = coordinator.session_dir
@@ -735,10 +739,10 @@ def test_linux_v1_discarded_recover_is_cleanup_only(tmp_path, monkeypatch):
     assert not session.exists()
 
 
-def test_preexisting_linux_max_pad_final_is_accepted(tmp_path, monkeypatch):
+def test_preexisting_linux_mic_capped_final_is_accepted(tmp_path, monkeypatch):
     session = _build_interrupted_session(
         tmp_path,
-        stem="recording_linux_maxpad",
+        stem="recording_linux_miccap",
         started_at_iso="2026-08-25T00:00:00.000Z",
         state="finalizing",
         mic_frames=48000 * 60,
@@ -746,8 +750,43 @@ def test_preexisting_linux_max_pad_final_is_accepted(tmp_path, monkeypatch):
         profile="linux-v1",
         dtype="<f4",
     )
-    final = tmp_path / "recording_linux_maxpad.opus"
-    final.write_bytes(b"OggS-linux-maxpad-final")
+    final = tmp_path / "recording_linux_miccap.opus"
+    final.write_bytes(b"OggS-linux-miccap-final")
+
+    monkeypatch.setattr(
+        "backend.audio.capture_recovery.ffmpeg_can_decode",
+        lambda *a, **k: True,
+    )
+    monkeypatch.setattr(
+        "backend.audio.capture_recovery.probe_audio_duration_seconds",
+        lambda *a, **k: 60.0,
+    )
+    monkeypatch.setattr(
+        "backend.audio.capture_recovery.finalize_capture",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("must not re-finalize linux-v1 mic-capped final")
+        ),
+    )
+
+    result = recover_capture(tmp_path, session, ffmpeg_path="ffmpeg")
+    assert Path(result["audioPath"]) == final
+    assert result["duration"] == 60.0
+    assert not session.exists()
+
+
+def test_preexisting_linux_overlong_final_is_not_accepted(tmp_path, monkeypatch):
+    session = _build_interrupted_session(
+        tmp_path,
+        stem="recording_linux_overlong",
+        started_at_iso="2026-08-25T00:00:00.000Z",
+        state="finalizing",
+        mic_frames=48000 * 60,
+        desktop_frames=48000 * 120,
+        profile="linux-v1",
+        dtype="<f4",
+    )
+    overlong = tmp_path / "recording_linux_overlong.opus"
+    overlong.write_bytes(b"OggS-linux-overlong-final")
 
     monkeypatch.setattr(
         "backend.audio.capture_recovery.ffmpeg_can_decode",
@@ -757,12 +796,37 @@ def test_preexisting_linux_max_pad_final_is_accepted(tmp_path, monkeypatch):
         "backend.audio.capture_recovery.probe_audio_duration_seconds",
         lambda *a, **k: 120.0,
     )
-    monkeypatch.setattr(
-        "backend.audio.capture_recovery.finalize_capture",
-        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not re-finalize linux-v1 max-pad")),
+
+    called = {"finalize": 0}
+
+    def fake_finalize(*args, **kwargs):
+        called["finalize"] += 1
+        raise spp.FinalizationError("overlong linux final must re-finalize")
+
+    monkeypatch.setattr("backend.audio.capture_recovery.finalize_capture", fake_finalize)
+
+    with pytest.raises(spp.FinalizationError, match="overlong linux final must re-finalize"):
+        recover_capture(tmp_path, session, ffmpeg_path="ffmpeg")
+    assert called["finalize"] == 1
+    assert session.is_dir()
+    assert overlong.is_file()
+
+
+def test_recovery_macos_leading_pad_duration_follows_mic(tmp_path, monkeypatch):
+    _patch_finalize_io(monkeypatch)
+    session = _build_interrupted_session(
+        tmp_path,
+        stem="recording_macos_pad",
+        started_at_iso="2026-09-01T10:00:00.000Z",
+        state="recording",
+        mic_frames=48000,
+        desktop_frames=48000,
+        profile="macos-v1",
+        dtype="<f4",
+        alignment={"desktop_leading_pad_frames": 4800},
     )
 
     result = recover_capture(tmp_path, session, ffmpeg_path="ffmpeg")
-    assert Path(result["audioPath"]) == final
-    assert result["duration"] == 120.0
+    assert Path(result["audioPath"]).is_file()
+    assert result["duration"] == pytest.approx(1.0, abs=0.05)
     assert not session.exists()

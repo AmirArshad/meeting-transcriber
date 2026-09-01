@@ -27,6 +27,7 @@ from .capture_manifest import (
 )
 from .track_spool import TrackSpool
 from .streaming_post_processor import FinalizationError, finalize_capture
+from .capture_alignment import compute_capture_alignment_frames
 from .macos_desktop_diagnostics import (
     build_desktop_diagnostics,
     format_desktop_diagnostics_summary,
@@ -533,45 +534,13 @@ class MacOSAudioRecorder:
 
     def _compute_spool_alignment_frames(self) -> dict:
         """Derive start-alignment frame pads/trims without loading PCM."""
-        if (
-            self.recording_start_time is None
-            or self.mic_capture_start_time is None
-            or self.desktop_capture_start_time is None
-            or self.sample_rate <= 0
-        ):
-            return {
-                "desktopTrimFrames": 0,
-                "desktopLeadingPadFrames": 0,
-                "micLeadingPadFrames": 0,
-            }
-
-        reference_start = self.recording_start_time + max(float(self.preroll_seconds), 0.0)
-        desktop_trim = 0
-        desktop_capture_start = self.desktop_capture_start_time
-        if desktop_capture_start < reference_start:
-            desktop_trim = int(round((reference_start - desktop_capture_start) * self.sample_rate))
-            desktop_capture_start = reference_start
-
-        mic_reference = max(self.mic_capture_start_time, reference_start)
-        desktop_reference = max(desktop_capture_start, reference_start)
-        offset_samples = int(round((desktop_reference - mic_reference) * self.sample_rate))
-        if offset_samples > 0:
-            return {
-                "desktopTrimFrames": max(0, desktop_trim),
-                "desktopLeadingPadFrames": offset_samples,
-                "micLeadingPadFrames": 0,
-            }
-        if offset_samples < 0:
-            return {
-                "desktopTrimFrames": max(0, desktop_trim),
-                "desktopLeadingPadFrames": 0,
-                "micLeadingPadFrames": abs(offset_samples),
-            }
-        return {
-            "desktopTrimFrames": max(0, desktop_trim),
-            "desktopLeadingPadFrames": 0,
-            "micLeadingPadFrames": 0,
-        }
+        return compute_capture_alignment_frames(
+            recording_start_time=self.recording_start_time,
+            mic_capture_start_time=self.mic_capture_start_time,
+            desktop_capture_start_time=self.desktop_capture_start_time,
+            sample_rate=self.sample_rate,
+            preroll_seconds=self.preroll_seconds,
+        )
 
     def _close_capture_spools_for_mix(self) -> None:
         """Close/commit spools and prepare the manifest for bounded finalization."""
@@ -596,6 +565,9 @@ class MacOSAudioRecorder:
             )
             # Late desktop failure: close at last valid frame (no mic-length pad)
             # and discard desktop for mic-only mix. Empty desktop: never pad silence.
+            # v2.9 keeps this conservative policy. Linux may mix already-committed
+            # desktop after a vanished monitor; macOS helper failure is not proven
+            # safe to keep (partial/corrupt CoreAudio or ScreenCaptureKit output).
             pad_to = None
             if (
                 not desktop_failed
@@ -967,7 +939,12 @@ class MacOSAudioRecorder:
                 self._note_desktop_runtime_failure(error_message, code="DESKTOP_RECORDING_FAILED")
 
     def _note_desktop_runtime_failure(self, message: str, *, code: str = "DESKTOP_RECORDING_FAILED") -> None:
-        """Record a late desktop failure without discarding microphone audio."""
+        """Record a late desktop failure without discarding microphone audio.
+
+        v2.9 retains this conservative macOS policy: a late helper failure
+        excludes the desktop track from the mix (mic-only), unlike Linux
+        capture-side loss which keeps already-committed desktop frames.
+        """
         if not self._desktop_runtime_failure:
             self._desktop_runtime_failure = message
         if self._desktop_runtime_warning_sent:

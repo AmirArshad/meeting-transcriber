@@ -65,3 +65,61 @@ test('toOpaqueDeviceId and decorateDesktopDevices keep Pulse IDs as strings', ()
   assert.equal(decorated[1].sample_rate, 48000);
   assert.equal(decorateDesktopDevices([{ id: 1, name: 'Loopback' }], 'win32')[0].id, 1);
 });
+
+test('resolveInitialDeviceSelection preserves a saved selection and uses a valid system default only when unset', () => {
+  const {
+    resolveInitialDeviceSelection,
+  } = require('../../src/renderer/platform-selection-helpers');
+  const devices = [
+    { id: 'pulse-source:saved' },
+    { id: 'pulse-source:default' },
+  ];
+
+  assert.equal(
+    resolveInitialDeviceSelection({ savedId: 'pulse-source:saved', defaultId: 'pulse-source:default', devices }),
+    'pulse-source:saved',
+  );
+  assert.equal(
+    resolveInitialDeviceSelection({ savedId: undefined, defaultId: 'pulse-source:default', devices }),
+    'pulse-source:default',
+  );
+  assert.equal(
+    resolveInitialDeviceSelection({ savedId: undefined, defaultId: 'pulse-source:missing', devices }),
+    '',
+  );
+  assert.equal(
+    resolveInitialDeviceSelection({ savedId: 'pulse-source:missing', defaultId: 'pulse-source:default', devices }),
+    '',
+  );
+  assert.equal(
+    resolveInitialDeviceSelection({ savedId: '', defaultId: 'pulse-source:default', devices }),
+    '',
+  );
+});
+
+test('resolveInitialDeviceSelection stringifies numeric ids and ignores a -1 default sentinel', () => {
+  const {
+    resolveInitialDeviceSelection,
+  } = require('../../src/renderer/platform-selection-helpers');
+  const macDevices = [
+    { id: 3 },
+    { id: -1 },
+  ];
+
+  assert.equal(
+    resolveInitialDeviceSelection({ savedId: undefined, defaultId: 3, devices: macDevices }),
+    '3',
+  );
+  assert.equal(
+    resolveInitialDeviceSelection({ savedId: 5, defaultId: 3, devices: [{ id: 3 }, { id: 5 }] }),
+    '5',
+  );
+  assert.equal(
+    resolveInitialDeviceSelection({ savedId: undefined, defaultId: -1, devices: macDevices }),
+    '',
+  );
+  assert.equal(
+    resolveInitialDeviceSelection({ savedId: -1, defaultId: 3, devices: macDevices }),
+    '-1',
+  );
+});

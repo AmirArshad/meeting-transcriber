@@ -6,6 +6,8 @@
  * Capture truth remains in recorder-service; this service only presents state.
  */
 
+const { spawnSync } = require('child_process');
+
 const RECORDING_REMINDER_INTERVAL_MS = 60 * 60 * 1000;
 const TRAY_ELAPSED_REFRESH_MS = 60 * 1000;
 
@@ -235,6 +237,27 @@ function resolveTrayImageFileName(platform, kind) {
   return platform === 'linux' ? 'iconTrayLinux.png' : 'icon.ico';
 }
 
+function probeLinuxStatusNotifierWatcher({
+  spawnSyncFn = spawnSync,
+  platform = process.platform,
+} = {}) {
+  if (platform !== 'linux') {
+    return true;
+  }
+  try {
+    const result = spawnSyncFn('busctl', ['--user', 'status', 'org.kde.StatusNotifierWatcher'], {
+      encoding: 'utf8',
+      timeout: 2000,
+    });
+    if (!result || result.error) {
+      return false;
+    }
+    return result.status === 0;
+  } catch (_error) {
+    return false;
+  }
+}
+
 function createRecordingPresenceService(deps) {
   const {
     app,
@@ -255,6 +278,7 @@ function createRecordingPresenceService(deps) {
     platform = process.platform,
     reminderIntervalMs = RECORDING_REMINDER_INTERVAL_MS,
     logWarn = (...args) => console.warn(...args),
+    linuxTrayHostAvailable = () => probeLinuxStatusNotifierWatcher({ platform }),
   } = deps;
 
   const idleTrayImagePath = deps.idleTrayImagePath
@@ -566,6 +590,12 @@ function createRecordingPresenceService(deps) {
       return tray;
     }
 
+    if (platform === 'linux' && !linuxTrayHostAvailable()) {
+      logWarn('Failed to create system tray: StatusNotifierWatcher is not available');
+      tray = null;
+      return null;
+    }
+
     try {
       // loadTrayNativeImage already applies setTemplateImage for darwin idle/recording.
       tray = new Tray(loadTrayNativeImage('idle'));
@@ -631,4 +661,5 @@ module.exports = {
   formatTrayElapsed,
   isActiveCaptureState,
   resolveTrayImageFileName,
+  probeLinuxStatusNotifierWatcher,
 };
