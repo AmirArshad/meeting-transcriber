@@ -343,7 +343,7 @@ test('Windows Speakrs PATH prepends speakrs-ort once', (t) => {
   assert.equal(parts.filter((part) => path.normalize(part) === path.normalize(ortDir)).length, 1);
 });
 
-test('packaged buildPythonEnv applies AVANEVIS_PACKAGED after caller overrides', () => {
+test('packaged buildPythonEnv enforces packaged isolation after caller overrides', () => {
   const previousDescriptor = Object.getOwnPropertyDescriptor(process, 'resourcesPath');
   Object.defineProperty(process, 'resourcesPath', {
     value: path.join(os.tmpdir(), 'avanevis-resources'),
@@ -363,9 +363,11 @@ test('packaged buildPythonEnv applies AVANEVIS_PACKAGED after caller overrides',
     });
     const packagedEnv = packagedRuntime.buildPythonEnv({
       AVANEVIS_PACKAGED: '0',
+      PYTHONDONTWRITEBYTECODE: '0',
       FOO: 'bar',
     });
     assert.equal(packagedEnv.AVANEVIS_PACKAGED, '1');
+    assert.equal(packagedEnv.PYTHONDONTWRITEBYTECODE, '1');
     assert.equal(packagedEnv.FOO, 'bar');
     assert.equal(packagedEnv.PYTHONNOUSERSITE, '1');
 
