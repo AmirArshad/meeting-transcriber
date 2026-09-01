@@ -98,11 +98,24 @@
     ];
   }
 
+  function resolveInitialDeviceSelection({ savedId, defaultId, devices }) {
+    const availableIds = new Set(
+      (Array.isArray(devices) ? devices : []).map((device) => String(device?.id ?? '')),
+    );
+    const isAvailable = (id) => availableIds.has(String(id ?? ''));
+
+    if (savedId !== undefined && savedId !== null) {
+      return isAvailable(savedId) ? String(savedId) : '';
+    }
+    return isAvailable(defaultId) ? String(defaultId) : '';
+  }
+
   return {
     inferRendererHostFamily,
     getEmptyMicrophoneDeviceGuidance,
     getRecordingPermissionFailureGuidance,
     toOpaqueDeviceId,
     decorateDesktopDevices,
+    resolveInitialDeviceSelection,
   };
 }));
