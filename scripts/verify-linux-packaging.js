@@ -428,15 +428,119 @@ function assertDebControl(controlText, pkg = require('../package.json')) {
   return depends;
 }
 
+function isMissingCommand(result) {
+  return Boolean(result && result.error && result.error.code === 'ENOENT');
+}
+
+function listArMembers(archivePath, spawnSyncFn) {
+  const listed = spawnSyncFn('ar', ['t', archivePath], {
+    encoding: 'utf8',
+    timeout: 30000,
+  });
+  if (isMissingCommand(listed)) {
+    fail(`Failed to read deb archive ${archivePath}: ar is not available (install binutils)`);
+  }
+  if (listed.status !== 0) {
+    fail(`Failed to list deb members in ${archivePath}: ${listed.stderr || listed.error}`);
+  }
+  return String(listed.stdout || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function findDebArchiveMember(members, prefix) {
+  return members.find((name) => name === prefix || name.startsWith(`${prefix}.`)) || null;
+}
+
+function extractArMember(archivePath, memberName, destDir, spawnSyncFn) {
+  fs.mkdirSync(destDir, { recursive: true });
+  const extracted = spawnSyncFn('ar', ['x', archivePath, memberName], {
+    cwd: destDir,
+    encoding: 'utf8',
+    timeout: 120000,
+  });
+  if (isMissingCommand(extracted)) {
+    fail(`Failed to extract ${memberName} from ${archivePath}: ar is not available (install binutils)`);
+  }
+  if (extracted.status !== 0) {
+    fail(`Failed to extract ${memberName} from ${archivePath}: ${extracted.stderr || extracted.error}`);
+  }
+  const memberPath = path.join(destDir, memberName);
+  if (!fs.existsSync(memberPath)) {
+    fail(`ar did not extract ${memberName} from ${archivePath}`);
+  }
+  return memberPath;
+}
+
+function readTarMember(archivePath, memberNames, spawnSyncFn) {
+  const errors = [];
+  for (const memberName of memberNames) {
+    const result = spawnSyncFn('tar', ['-xOf', archivePath, memberName], {
+      encoding: 'utf8',
+      timeout: 30000,
+    });
+    if (!isMissingCommand(result) && result.status === 0) {
+      return result.stdout;
+    }
+    errors.push(`${memberName}: ${result.stderr || result.error || `status ${result.status}`}`);
+  }
+  fail(`Failed to read ${memberNames.join(' or ')} from ${archivePath} (${errors.join('; ')})`);
+}
+
+function readDebControlWithAr(archivePath, spawnSyncFn) {
+  const members = listArMembers(archivePath, spawnSyncFn);
+  const controlMember = findDebArchiveMember(members, 'control.tar');
+  if (!controlMember) {
+    fail(`deb archive ${archivePath} has no control.tar* member`);
+  }
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-deb-control-'));
+  try {
+    const controlTar = extractArMember(archivePath, controlMember, tmp, spawnSyncFn);
+    return readTarMember(controlTar, ['./control', 'control'], spawnSyncFn);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function extractDebWithAr(archivePath, destDir, spawnSyncFn) {
+  const members = listArMembers(archivePath, spawnSyncFn);
+  const dataMember = findDebArchiveMember(members, 'data.tar');
+  if (!dataMember) {
+    fail(`deb archive ${archivePath} has no data.tar* member`);
+  }
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-deb-data-'));
+  try {
+    const dataTar = extractArMember(archivePath, dataMember, tmp, spawnSyncFn);
+    fs.mkdirSync(destDir, { recursive: true });
+    const extracted = spawnSyncFn('tar', ['-xf', dataTar, '-C', destDir], {
+      encoding: 'utf8',
+      timeout: 120000,
+    });
+    if (extracted.status !== 0) {
+      fail(
+        `Failed to extract deb data from ${archivePath}: `
+        + `${extracted.stderr || extracted.stdout || extracted.error}`,
+      );
+    }
+    return destDir;
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 function readDebControlFromArchive(archivePath, { spawnSyncFn = spawnSync } = {}) {
   const result = spawnSyncFn('dpkg-deb', ['-f', archivePath], {
     encoding: 'utf8',
     timeout: 30000,
   });
-  if (result.status !== 0) {
+  if (!isMissingCommand(result) && result.status === 0) {
+    return result.stdout;
+  }
+  if (!isMissingCommand(result)) {
     fail(`Failed to read deb control from ${archivePath}: ${result.stderr || result.error}`);
   }
-  return result.stdout;
+  return readDebControlWithAr(archivePath, spawnSyncFn);
 }
 
 function extractDebArchive(archivePath, destDir, { spawnSyncFn = spawnSync } = {}) {
@@ -445,10 +549,13 @@ function extractDebArchive(archivePath, destDir, { spawnSyncFn = spawnSync } = {
     encoding: 'utf8',
     timeout: 120000,
   });
-  if (result.status !== 0) {
+  if (!isMissingCommand(result) && result.status === 0) {
+    return destDir;
+  }
+  if (!isMissingCommand(result)) {
     fail(`Failed to extract deb archive ${archivePath}: ${result.stderr || result.stdout || result.error}`);
   }
-  return destDir;
+  return extractDebWithAr(archivePath, destDir, spawnSyncFn);
 }
 
 function verifyDebArchivePayload(

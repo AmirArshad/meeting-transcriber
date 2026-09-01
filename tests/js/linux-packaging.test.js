@@ -20,6 +20,7 @@ const {
   getJustifiedPacmanDepends,
   parsePkginfo,
   verifyPacmanArchivePayload,
+  verifyDebArchivePayload,
 } = require('../../scripts/verify-linux-packaging');
 
 const ROOT = path.join(__dirname, '..', '..');
@@ -52,6 +53,12 @@ test('electron-builder stays on 26.x and opts into the static FUSE-less AppImage
   assert.equal(packageJson.build.toolsets.appimage, '1.0.2');
   assert.notEqual(packageJson.build.toolsets.appimage, '0.0.0');
   assert.equal(packageJson.build.toolsets.appimage === '1.0.3', false);
+});
+
+test('Electron is the v2.9 stable 44.x candidate, not a 45 prerelease', () => {
+  assert.match(packageJson.devDependencies.electron, /^\^44\./);
+  assert.match(packageJson.devDependencies.electron, /^[^\s]*44\./);
+  assert.equal(packageJson.devDependencies.electron.includes('45'), false);
 });
 
 test('Linux package targets are x86_64 AppImage, pacman, and one experimental deb', () => {
@@ -194,7 +201,14 @@ test('assertAppImageUsesStaticRuntime rejects malformed ELF and runtimes that st
 
     const malformed = path.join(tempDir, 'malformed.AppImage');
     fs.writeFileSync(malformed, Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x00]));
-    assert.throws(() => assertAppImageUsesStaticRuntime(malformed), /valid ELF|static PIE/);
+    // Windows has no file(1); the live Linux verifier still uses real `file`.
+    assert.throws(() => assertAppImageUsesStaticRuntime(malformed, {
+      spawnSyncFn: () => ({
+        status: 0,
+        stdout: 'ELF 64-bit LSB executable, ARM, dynamically linked',
+        stderr: '',
+      }),
+    }), /valid ELF|static PIE/);
 
     const staticRuntime = path.join(tempDir, 'static.AppImage');
     fs.writeFileSync(staticRuntime, Buffer.concat([
@@ -323,6 +337,74 @@ test('verifyPacmanArchivePayload validates the actual archive resources and excl
     const createBroken = spawnSync('tar', ['-cf', brokenArchive, '-C', packageRoot, '.'], { encoding: 'utf8' });
     assert.equal(createBroken.status, 0, createBroken.stderr);
     assert.throws(() => verifyPacmanArchivePayload(brokenArchive, packageJson), /Missing bundled ffmpeg/);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+function commandAvailable(name) {
+  const result = spawnSync(name, ['--version'], { encoding: 'utf8' });
+  return !result.error && result.status === 0;
+}
+
+function spawnWithoutDpkgDeb(command, args, options) {
+  if (command === 'dpkg-deb') {
+    const error = new Error('spawnSync dpkg-deb ENOENT');
+    error.code = 'ENOENT';
+    return {
+      error,
+      status: null,
+      stdout: Buffer.isBuffer(options && options.encoding === 'buffer' ? Buffer.alloc(0) : ''),
+      stderr: '',
+    };
+  }
+  return spawnSync(command, args, options);
+}
+
+test('verifyDebArchivePayload verifies a .deb via ar+tar when dpkg-deb is missing', (t) => {
+  if (!commandAvailable('ar')) {
+    t.skip('ar (binutils) is required to synthesize a .deb');
+    return;
+  }
+
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-deb-payload-'));
+  try {
+    const controlDir = path.join(tempDir, 'control');
+    const dataDir = path.join(tempDir, 'data');
+    const resourcesRoot = path.join(dataDir, 'opt', 'AvaNevis', 'resources');
+    fs.mkdirSync(controlDir, { recursive: true });
+    makeLinuxResourcesFixture(resourcesRoot);
+
+    const depends = getJustifiedDebDepends(packageJson);
+    fs.writeFileSync(path.join(controlDir, 'control'), [
+      'Package: avanevis',
+      `Version: ${packageJson.version}`,
+      'Architecture: amd64',
+      `Depends: ${depends.join(', ')}`,
+      '',
+    ].join('\n'));
+    fs.writeFileSync(path.join(tempDir, 'debian-binary'), '2.0\n');
+
+    const controlTar = path.join(tempDir, 'control.tar.xz');
+    const dataTar = path.join(tempDir, 'data.tar.xz');
+    const createControl = spawnSync('tar', ['-cJf', controlTar, '-C', controlDir, 'control'], { encoding: 'utf8' });
+    const createData = spawnSync('tar', ['-cJf', dataTar, '-C', dataDir, '.'], { encoding: 'utf8' });
+    if (createControl.status !== 0 || createData.status !== 0) {
+      t.skip(`tar -cJf unavailable: ${createControl.stderr || createData.stderr || 'xz missing'}`);
+      return;
+    }
+
+    const archive = path.join(tempDir, 'AvaNevis-Setup-2.8.0.deb');
+    const createDeb = spawnSync(
+      'ar',
+      ['r', archive, 'debian-binary', 'control.tar.xz', 'data.tar.xz'],
+      { cwd: tempDir, encoding: 'utf8' },
+    );
+    assert.equal(createDeb.status, 0, createDeb.stderr);
+
+    assert.doesNotThrow(() => verifyDebArchivePayload(archive, packageJson, {
+      spawnSyncFn: spawnWithoutDpkgDeb,
+    }));
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }

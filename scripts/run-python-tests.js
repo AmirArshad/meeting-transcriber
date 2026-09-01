@@ -14,6 +14,7 @@ const candidates = process.platform === 'win32'
   ]
   : [
     ...(fs.existsSync(posixVenvPython) ? [{ command: posixVenvPython, args: ['-m', 'pytest', 'tests/python'] }] : []),
+    { command: 'python3.11', args: ['-m', 'pytest', 'tests/python'] },
     { command: 'python3', args: ['-m', 'pytest', 'tests/python'] },
     { command: 'python', args: ['-m', 'pytest', 'tests/python'] },
   ];

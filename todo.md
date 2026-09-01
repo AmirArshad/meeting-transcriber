@@ -1,6 +1,6 @@
 # AvaNevis v2.9.0 — Active Work
 
-**Release objective:** compatibility-led dependency maintenance, targeted reliability follow-through, an Omarchy-inspired visual-system refresh, and explicit capture-mode selection. This release remains privacy-first and local-only on Windows x64, macOS 13+ arm64, and Linux x64 Core Beta (Omarchy supported; other distributions experimental).
+**Release objective:** compatibility-led dependency maintenance, targeted reliability follow-through, an Omarchy-inspired visual-system refresh, and explicit capture-mode selection. This release remains privacy-first and local-only on Windows x64, macOS 13+ arm64, and Linux x64 Core Beta (Omarchy and CachyOS Hyprland supported; other distributions experimental).
 
 **Source plan:** [v2.9.0 implementation plan](docs/superpowers/plans/2026-08-28-v2.9.0.md). Detailed completed work remains in git history, [release notes](docs/releases/), and the linked initiative documents.
 
@@ -19,7 +19,7 @@
 
 ## Dedicated Electron 44 compatibility lane
 
-- [ ] [Risk: High] Create `feature/v2.9-electron-44` from the v2.9 integration branch. Treat Dependabot PR #86 (`electron` 42.9.0 → 44.x) as a compatibility upgrade, not an automatic dependency bump. Verify all CI suites, electron-builder 26 packaging, Windows x64 recording, macOS 13+ arm64 recorder/helper, and Linux Core Beta packaging/tray/safeStorage/PipeWire capture before it may join v2.9.0.
+- [x] [Risk: High] Create `feature/v2.9-electron-44` from the v2.9 integration branch. Treat Dependabot PR #86 (`electron` 42.9.0 → 44.x) as a compatibility upgrade, not an automatic dependency bump. **Accepted (2026-09-01):** Electron 44.1.0 with electron-builder 26.15.3 passed the complete Linux, Windows x64, and macOS arm64 compatibility matrix. CachyOS packaged AppImage/pacman/deb passed verification, SNI tray, PipeWire enumeration/capture, Discard/Stop, and CPU/int8 Whisper with desktop fixture speech. Windows passed `test:all`, `build:dir`, Discard/Stop, CUDA/float16 transcription, and packaged Speakrs. macOS passed `test:all`, `build:mac:dir`, deep/strict seal and packaged-native verification, CoreAudio-tap Discard/Stop, 78.45 s 48 kHz stereo Opus integrity, MPS/float16 MLX transcription, and fixture speech in the transcript. Full evidence: [`docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md`](docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md).
 
 ## Reliability follow-through
 
@@ -27,6 +27,12 @@
 - [ ] [Risk: Medium] Decide whether `get-audio-devices.defaults` should populate first-run selections. Keep user-saved selections authoritative and validate the behavior on Windows, macOS, and Linux hardware before shipping.
 - [ ] [Risk: Medium] Correct the shared macOS/Linux desktop-leading-pad duration geometry only in its own focused change, with capture-recovery duration tests and macOS hardware validation. Do not broaden it into a recorder redesign.
 - [ ] [Risk: Medium] Make a documented decision on macOS late-desktop-capture behavior: retain its current conservative policy unless an isolated hardware-tested change proves that preserving committed frames is safe.
+
+## Linux AI add-ons — CachyOS RTX 4070 gated lane
+
+- [ ] [Risk: High] Create `feature/v2.9-linux-ai-addons` after the accepted Electron 44 and reliability lanes. First record fresh official artifact/license/hash evidence and packaged CachyOS + RTX 4070 preflight for CUDA Whisper, Speakrs, Pyannote, and summaries. Use [`2026-09-01-v2.9-linux-ai-addons.md`](docs/superpowers/plans/2026-09-01-v2.9-linux-ai-addons.md); do not enable a component before its own gate passes.
+- [ ] [Risk: High] Add managed CUDA-only Linux Whisper, then packaged Speakrs. Investigate Pyannote separately; accept it only after encrypted non-`basic_text` `safeStorage`, token-isolation, pinned dependency, and CUDA validation evidence. Add summaries only with a fresh pinned CUDA-only runtime decision. No Linux CPU fallback or cloud path.
+- [ ] [Risk: High] Complete the packaged AppImage/pacman/deb, setup/repair/remove, cancellation/quit, guided-transcription, summary-sidecar, and bounded GPU/VRAM-soak matrix on CachyOS x86_64 + NVIDIA RTX 4070. Keep all other Linux AI profiles experimental or unavailable.
 
 ## UI refresh and future layout foundation
 
@@ -40,7 +46,6 @@
 
 ## Explicitly deferred
 
-- [ ] [Risk: High] Linux AI add-on phases 6–9 (CUDA, Speakrs/Pyannote, and summaries) are **v3.0+ only**. Linux stays CPU `faster-whisper`; add-ons remain greyed `unsupported`; no CPU fallback is added.
 - [ ] [Risk: Low] Apple Developer signing/notarization remains deferred until enrollment. Keep current ad-hoc macOS packaging checks intact.
 - [ ] [Risk: High] Do not delete Pyannote or its token IPC; Speakrs and Pyannote remain user-selectable exclusive engines.
 
@@ -51,10 +56,11 @@
 3. `feature/v2.9-ui-foundation` — visual system and bounded layout foundations.
 4. `feature/v2.9-reliability-follow-through` — only the focused recorder/device changes whose validation gates pass.
 5. `feature/v2.9-electron-44` — independent compatibility lane; merge only after its complete gate.
-6. `feature/v2.9-capture-modes` — final dedicated capture-mode lane; merge only after all platform contract and hardware gates pass.
-7. `release/v2.9.0` — integration/release-only branch after each accepted lane is independently green. Do not combine unrelated high-risk upgrades.
+6. `feature/v2.9-linux-ai-addons` — dedicated CachyOS RTX 4070 CUDA/add-on lane; merge only accepted components with full hardware evidence.
+7. `feature/v2.9-capture-modes` — final dedicated capture-mode lane; merge only after all platform contract and hardware gates pass.
+8. `release/v2.9.0` — integration/release-only branch after each accepted lane is independently green. Do not combine unrelated high-risk upgrades.
 
 ## Recently shipped / historical reference
 
-- Linux Core Beta shipped in v2.8.0. Omarchy remains the only supported Linux target; Phase 3’s 60-minute soak was cancelled and is not claimed as passed. See [Linux support](docs/initiatives/LINUX_SUPPORT.md) and [Linux experimental beta guide](docs/guides/LINUX_EXPERIMENTAL.md).
+- Linux Core Beta shipped in v2.8.0. Omarchy 4 and CachyOS x86_64 Hyprland are the Supported Linux targets; Phase 3’s 60-minute soak was cancelled and is not claimed as passed. See [Linux support](docs/initiatives/LINUX_SUPPORT.md) and [Linux experimental beta guide](docs/guides/LINUX_EXPERIMENTAL.md).
 - Speakrs/Pyannote migration, completed Linux Core Beta phases, and earlier release hygiene are documented in their initiative and release records; they are intentionally not duplicated here.

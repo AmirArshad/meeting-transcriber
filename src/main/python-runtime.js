@@ -179,6 +179,7 @@ function createPythonRuntime({ app, spawn, path, fs, dirname }) {
     if (app.isPackaged) {
       env.AVANEVIS_PACKAGED = '1';
       env.PYTHONNOUSERSITE = '1';
+      env.PYTHONDONTWRITEBYTECODE = '1';
       delete env.PYTHONHOME;
       delete env.PYTHONUSERBASE;
     }
@@ -191,7 +192,7 @@ function createPythonRuntime({ app, spawn, path, fs, dirname }) {
    *
    * Dev: PYTHONPATH includes the repo backend (plus ambient PYTHONPATH).
    * Packaged: buildPythonEnv uses only bundled paths, ignores ambient
-   * PYTHONPATH/HOME/USERBASE, and sets PYTHONNOUSERSITE=1. Windows embedded
+   * PYTHONPATH/HOME/USERBASE, disables user site and bytecode writes. Windows embedded
    * Python also reads backend from python311._pth.
    */
   function spawnTrackedPython(args, options = {}) {

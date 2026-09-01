@@ -82,6 +82,11 @@ test('download-model and AI add-on setup handlers stay off the compute queue', (
     /isTranscriptionModelCached/,
     'download-model must re-check cache completeness before treating non-zero exit as success',
   );
+  assert.match(
+    downloadModelSource,
+    /buildWhisperPreloadArgs/,
+    'download-model must use buildWhisperPreloadArgs so Linux preload stays CPU',
+  );
   assert.ok(
     extractIpcHandlerSource(combined, 'cancel-download-model'),
     'cancel-download-model IPC must exist',

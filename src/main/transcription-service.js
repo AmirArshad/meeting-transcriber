@@ -15,6 +15,7 @@ const {
   buildDiarizationOutputPath,
   buildGuidedTranscriptTempPath,
   buildTranscriptionCliArgs,
+  buildWhisperPreloadArgs,
   buildTranscriberArgs,
   buildTranscriptionRuntimeEnv,
   cacheContainsCompleteTranscriptionModel,
@@ -1988,10 +1989,11 @@ function createTranscriptionService(deps) {
 
         let python;
         try {
-          python = spawnTrackedPython(getTranscriberArgs([
-            '--preload',
-            '--model', model
-          ]), {
+          python = spawnTrackedPython(buildWhisperPreloadArgs({
+            platform: process.platform,
+            arch: process.arch,
+            modelSize: model,
+          }), {
             cwd: pythonConfig.backendPath,
             env: buildTranscriptionRuntimeEnv({
               cacheDir: downloadCheck.cacheDir,

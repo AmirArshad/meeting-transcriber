@@ -84,6 +84,18 @@ test('getTranscriberModule uses faster-whisper on Linux and Windows, MLX only on
   assert.equal(getTranscriberModule('darwin', 'arm64'), 'transcription.mlx_whisper_transcriber');
 });
 
+test('Linux Python test wrappers prefer python3.11 before python3 (CachyOS python3 is 3.14)', () => {
+  const runPythonTests = fs.readFileSync(path.join(__dirname, '../../scripts/run-python-tests.js'), 'utf8');
+  const checkPythonSyntax = fs.readFileSync(path.join(__dirname, '../../scripts/check-python-syntax.js'), 'utf8');
+  for (const source of [runPythonTests, checkPythonSyntax]) {
+    const python311 = source.indexOf("command: 'python3.11'");
+    const python3 = source.indexOf("command: 'python3'");
+    assert.ok(python311 >= 0, 'missing python3.11 candidate');
+    assert.ok(python3 >= 0, 'missing python3 candidate');
+    assert.ok(python311 < python3, 'python3.11 must be tried before python3');
+  }
+});
+
 test('Python runtime layout is POSIX on Linux and does not inherit Windows paths', () => {
   const linux = resolvePythonRuntimeLayout('linux');
   const mac = resolvePythonRuntimeLayout('darwin');

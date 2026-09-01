@@ -2,7 +2,8 @@
 
 /**
  * Cross-platform wrapper for scripts/check_python_syntax.py.
- * Mirrors scripts/run-python-tests.js interpreter selection (py -3.11 / python3).
+ * Mirrors scripts/run-python-tests.js interpreter selection
+ * (py -3.11 / python3.11 / python3).
  */
 
 const { spawnSync } = require('node:child_process');
@@ -22,6 +23,7 @@ const candidates = process.platform === 'win32'
   ]
   : [
     ...(fs.existsSync(posixVenvPython) ? [{ command: posixVenvPython, args: [SCRIPT] }] : []),
+    { command: 'python3.11', args: [SCRIPT] },
     { command: 'python3', args: [SCRIPT] },
     { command: 'python', args: [SCRIPT] },
   ];

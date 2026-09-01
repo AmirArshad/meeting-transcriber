@@ -7,7 +7,7 @@
 [![macOS](https://img.shields.io/badge/Platform-macOS%2013%2B-000000.svg)](https://www.apple.com/macos)
 [![Linux](https://img.shields.io/badge/Platform-Linux%20x86__64%20Core%20Beta-FCC624.svg)](https://omarchy.org/)
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
-[![Electron](https://img.shields.io/badge/Electron-42-47848F.svg)](https://www.electronjs.org/)
+[![Electron](https://img.shields.io/badge/Electron-44-47848F.svg)](https://www.electronjs.org/)
 
 AvaNevis (formerly Meeting Transcriber) records your microphone *and* desktop audio at the same time, then transcribes everything on-device with Whisper. No cloud, no telemetry, no account.
 
@@ -63,11 +63,11 @@ Online meetings are a tax on memory. The good options for getting transcripts ba
 
 If right-click → Open misbehaves, run `xattr -d com.apple.quarantine /Applications/AvaNevis.app` once and relaunch.
 
-### Linux (x86_64 Core Beta — Omarchy first)
+### Linux (x86_64 Core Beta — Omarchy and CachyOS)
 
-**Supported:** Omarchy 4 x86_64. Install `AvaNevis-Setup-<version>.pkg.tar.zst`, or run the AppImage.
+**Supported:** Omarchy 4 and CachyOS x86_64 on Hyprland/Wayland with PipeWire. Install `AvaNevis-Setup-<version>.pkg.tar.zst`, or run the AppImage.
 
-**Experimental beta:** Ubuntu/Debian-family `.deb` or AppImage; vanilla Arch and CachyOS pacman or AppImage; Fedora Workstation and SteamOS Desktop Mode AppImage. Distro matrix and likely failures: [LINUX_EXPERIMENTAL.md](docs/guides/LINUX_EXPERIMENTAL.md). Ubuntu desktop recording has not been smoke-tested yet. The 60-minute soak was cancelled (not run).
+**Experimental beta:** Ubuntu/Debian-family `.deb` or AppImage; vanilla Arch pacman or AppImage; Fedora Workstation and SteamOS Desktop Mode AppImage; CachyOS sessions that are not Hyprland. Distro matrix and likely failures: [LINUX_EXPERIMENTAL.md](docs/guides/LINUX_EXPERIMENTAL.md). Ubuntu desktop recording has not been smoke-tested yet. The 60-minute soak was cancelled (not run).
 
 The AppImage is a static-pie runtime and does **not** need host `fuse2` / `libfuse.so.2` (kernel `/dev/fuse` + `fuse3` still mount the image). Do not treat `--appimage-extract-and-run` as the shipped default.
 

@@ -30,6 +30,18 @@ function buildTranscriberArgs({ platform, arch, extraArgs = [] } = {}) {
   return buildPythonModuleArgs(getTranscriberModule(platform, arch), extraArgs);
 }
 
+function resolveFasterWhisperCliDevice(platform, device = 'auto') {
+  return platform === 'linux' ? 'cpu' : device;
+}
+
+function appendFasterWhisperDeviceArgs(extraArgs, { platform, arch, device = 'auto' } = {}) {
+  if (platform === 'darwin' && arch === 'arm64') {
+    return extraArgs;
+  }
+  extraArgs.push('--device', resolveFasterWhisperCliDevice(platform, device));
+  return extraArgs;
+}
+
 function buildTranscriptionCliArgs({
   platform,
   arch,
@@ -43,10 +55,21 @@ function buildTranscriptionCliArgs({
     '--language', language,
     '--model', modelSize,
   ];
-  if (!(platform === 'darwin' && arch === 'arm64')) {
-    extraArgs.push('--device', platform === 'linux' ? 'cpu' : device);
-  }
+  appendFasterWhisperDeviceArgs(extraArgs, { platform, arch, device });
   extraArgs.push('--json');
+  return buildTranscriberArgs({ platform, arch, extraArgs });
+}
+
+function buildWhisperPreloadArgs({
+  platform,
+  arch,
+  modelSize,
+} = {}) {
+  const extraArgs = [
+    '--preload',
+    '--model', modelSize,
+  ];
+  appendFasterWhisperDeviceArgs(extraArgs, { platform, arch, device: 'auto' });
   return buildTranscriberArgs({ platform, arch, extraArgs });
 }
 
@@ -217,7 +240,9 @@ function runGuidedTranscriptionProcess({
 module.exports = {
   getTranscriberModule,
   buildPythonModuleArgs,
+  resolveFasterWhisperCliDevice,
   buildTranscriptionCliArgs,
+  buildWhisperPreloadArgs,
   buildTranscriberArgs,
   buildGuidedTranscriptTempPath,
   runGuidedTranscriptionProcess,

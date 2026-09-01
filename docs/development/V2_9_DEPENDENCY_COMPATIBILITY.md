@@ -4,7 +4,8 @@ Decision record for `feature/v2.9-dependency-hygiene` Task 1. Later version chan
 
 **Recorded:** 2026-08-28  
 **Python target:** 3.11 (`cp311`)  
-**Electron baseline:** 42.9.0 (Electron 44 is a separate lane; not evaluated here)  
+**Electron baseline:** 42.9.0
+**Electron 44 lane (2026-08-31):** npm `latest` is **44.1.0** (dist-tag `44-x-y` also 44.1.0; 44.0.0 published 2026-08-25, 44.1.0 published 2026-08-31). Electron 45 is `alpha` only (`45.0.0-alpha.2`) and is out of scope. electron-builder remains **26.15.3** (npm `latest`; not combined with this lane).
 **Privacy:** no cloud transcription, telemetry, or extra network use beyond explicit model/update checks and these resolver downloads.
 
 | Interpreter | Where | ABI |
@@ -43,7 +44,7 @@ Treat these as **direct runtime dependencies** even when a resolver also reaches
 | `tokenizers` | faster-whisper tokenization | Windows/Linux build `==0.23.1` | Tokenize/model load failure if missing. |
 | `av` (PyAV) | faster-whisper path-based decode | Windows/Linux build `==18.1.0` | `transcribe(audio_path)` decode. Bundled ffmpeg does not replace this import. Direct runtime dep; do not prune in Task 3. |
 | `ctranslate2` | faster-whisper inference | Windows/Linux build `==4.8.1` | CUDA 12 wheels. Packaged Windows GPU profile remains `nvidia-cublas-cu12` / `nvidia-cudnn-cu12`. This host also has CUDA 13 on PATH; that does not change the packaged CUDA 12 contract. |
-| `faster-whisper` | Windows + Linux transcription | `==1.2.1` | Linux Core Beta is **CPU only**. |
+| `faster-whisper` | Windows + Linux transcription | `==1.2.1` | Linux Core Beta is **CPU only**; v2.9 CUDA use is restricted to the separately gated CachyOS x86_64 + RTX 4070 lane. |
 | `lightning-whisper-mlx` | Apple Silicon transcription | macOS build `==0.0.10` | Pins `tiktoken==0.3.3`. |
 | `torch` | macOS resolver only | macOS build `==2.13.0`, then **pruned** | MLX never imports `torch_whisper.py`. `lightning-whisper-mlx` does not pin Torch. **Accepted** Task 2 on Apple Silicon (2026-08-28). Stays in `MACOS_RUNTIME_REMOVABLE_PACKAGES`. Not Pyannote’s `torch==2.8.0`. |
 | `setuptools` | pip / wheel metadata | Windows/Linux/macOS build `==84.0.0` (also pruned from the macOS runtime) | Windows/Linux **accepted** Task 2. macOS **accepted** with Torch 2.13.0. CI no longer ignores `CVE-2025-3000` or `PYSEC-2026-3447`. |
@@ -53,9 +54,9 @@ Treat these as **direct runtime dependencies** even when a resolver also reaches
 | PyObjC `Cocoa` / `Quartz` / `core` / `CoreMedia` | ScreenCaptureKit fallback graph | macOS build `==12.2.2` | **Kept** at 12.2.2. Cocoa supplies `Foundation` (`NSObject`, `NSRunLoop`). Quartz is required by `pyobjc-framework-AVFoundation==12.2.2`. |
 | `sounddevice` | macOS microphone (`InputStream`, `query_devices`) | macOS build `==0.5.6` | **Accepted** (2026-08-28). Runtime already floated to 0.5.6. Desktop capture stays the Swift helper; this pin is the mic path. |
 | `tiktoken` | MLX | macOS `==0.3.3` | Dependabot ignore; do not bump alone. |
-| Speakrs ONNX Runtime | add-on, **not** pip requirements | Windows setup-time archive **1.27.1** (`src/ai-addon/speakrs-pack-spec.js`) | Distinct from pip `onnxruntime==1.26.0`. Linux add-ons remain `unsupported`. |
+| Speakrs ONNX Runtime | add-on, **not** pip requirements | Windows setup-time archive **1.27.1** (`src/ai-addon/speakrs-pack-spec.js`) | Distinct from pip `onnxruntime==1.26.0`. Linux artifacts require a separate v2.9 investigation and acceptance record. |
 
-Linux CUDA, Speakrs, Pyannote, and summaries are **v3.0+**. This matrix does not authorize those packages.
+Linux CUDA, Speakrs, Pyannote, and summaries are in the v2.9 CachyOS x86_64 + RTX 4070 evidence-gated lane. This matrix authorizes no Linux package or runtime until its dated artifact/security/packaged/hardware row is complete.
 
 ## Resolver vs packaged pins
 
@@ -674,7 +675,59 @@ Held: Electron 42.9.0; `onnxruntime` 1.26.0 vs runtime 1.29.0; `filelock==3.32.3
 ## Blockers and non-goals
 
 - **Do not** merge or land Dependabot PRs from this evidence. Use this matrix to accept or reject each candidate in its own commit.
-- **Do not** upgrade Electron.
+- Electron 44.1.0 is evaluated only on `feature/v2.9-electron-44`. Do not combine it with Python/runtime upgrades. Electron 45 and all prereleases are out of scope.
 - **Do not** start Linux AI add-on phases 6–9.
 - **Do not** add Apple signing or notarization.
 - Host CUDA 13 toolkits must not be mistaken for packaged CUDA 12 support.
+
+## Electron 44.1.0 lane (2026-08-31)
+
+**Branch:** `feature/v2.9-electron-44`
+**Host (this session):** CachyOS x86_64, Hyprland/Wayland, PipeWire 1.6.8 (`pipewire-pulse`), Node 24.20.0, npm 11.19.0. SNI host: noctalia `org.kde.StatusNotifierWatcher`. fuse3 present; fuse2 absent.
+
+**Registry check:** `npm view electron@latest version` → `44.1.0`. Published non-prerelease 44.x: `44.0.0`, `44.1.0`. `npm view electron-builder@latest version` → `26.15.3`.
+
+**Stack (44.1.0):** Chromium 152.0.7977.65, Node 24.19.0 (in Electron), V8 15.2. Patch vs 44.0.0 includes a Wayland/GNOME tray-icon restore (`#53214`), Windows shutdown and AppX GPU fixes, macOS WebAuthn/notification crash fixes. No additional breaking changes beyond the 44.0.0 review below.
+
+**Breaking-change review vs AvaNevis (no code change required unless a later gate fails):**
+
+| Change | Impact |
+|---|---|
+| Unity desktop removed | No Unity branch; `password-store` is `gnome-libsecret` except KDE `kwallet6`. |
+| macOS 12 dropped | Already macOS 13+ runtime / 14+ packaged Apple Silicon. |
+| ANGLE statically linked; no `libEGL`/`libGLESv2` | Packaging tests do not require those libs. |
+| `net.request` `Sec-Fetch-Dest` | Updater uses Node `https`, not Electron `net`. |
+| 32-bit Windows/Linux dropped | We ship Windows x64 and Linux x64 only. |
+| Renderer `clipboard` module removed | Renderer copy uses W3C `navigator.clipboard.writeText` from a user gesture; preload does not expose Electron `clipboard`. |
+| `openAsHidden` login-item fields removed | Unused. |
+
+**Candidate:** `package.json` `electron` `^42.9.0` → `^44.1.0` (44.0.0 was the morning pin; 44.1.0 is npm `latest` the same day). Keep electron-builder `^26.15.3`.
+
+**Linux packaging (CachyOS, 2026-08-31):** `npm run build:linux` with electron-builder 26.15.3 produced AppImage + pacman + deb. `libEGL`/`libGLESv2` absent as expected. `npm run verify:linux:packaged` initially failed because `dpkg-deb` is not on Arch-family hosts; `readDebControlFromArchive` / `extractDebArchive` now fall back to `ar`+`tar`. Verifier passed after that fix. Re-run on **44.1.0** the same day: `npm run test:all` (769 JS pass / 1 skip, 578 Python pass / 7 skip, JS+Python syntax OK); `build:linux` packaged `electron=44.1.0`; unpacked binary reports `Chrome/152.0.7977.65`; `verify:linux:packaged` passed.
+
+**CachyOS Hyprland smoke (packaged `linux-unpacked`, Electron 44.0.0 then pin 44.1.0):**
+- `ozone-platform=wayland`, hint `auto`
+- SNI item `org.freedesktop.StatusNotifierItem-*` on noctalia watcher; no tray-create failure
+- `password-store=gnome-libsecret`; `encryptionAvailable=false` with no running Secret Service (fail-closed). Do not auto-activate `ksecretd` — a locked wallet hung `isEncryptionAvailable()` at startup
+- Packaged `device_manager.py`: opaque `pulse-source:` / `pulse-monitor:` / `pulse-sink:` IDs; onboard front-mic `available=no` omitted; HDMI `available=yes` kept
+- First-run Whisper **preload defaulted to CUDA** via CTranslate2 on this NVIDIA host. Fixed: `buildWhisperPreloadArgs` and `resolve_faster_whisper_device` force CPU on Linux. Packaged-python `--preload --model small --device cpu` loaded **CPU / int8**
+- Add-ons reported `supported: false` with the Core Beta reason strings; legal notices readable
+- Hardware capture (2026-08-31, same packaged `linux-unpacked`): Discard of ~10 s left `meetings.json` empty. Stop of 2:28 (Logitech C925e + FiiO `pulse-monitor`, Chrome looping the Whisper JFK fixture, no ScreenCast portal) saved one History meeting. `faster_whisper_transcriber --device cpu` wrote `transcriptionDevice: cpu`, `transcriptionComputeType: int8`. The `.md` contains the looping JFK line (“ask not what your country can do for you” / “fellow Americans”), not only level-meter activity. Setup / Install Model / Generate Summary stayed disabled. noctalia `RegisteredStatusNotifierItems` included `StatusNotifierItem-<avanevis-pid>-1` while recording; recording tray-bar crops had more red pixels than idle. Physical HDMI unplug was not performed (port still `available`); unplugged onboard analog-input stayed omitted
+- macOS 13+ arm64 hardware matrix passed on **44.1.0** on 2026-09-01; evidence below.
+
+**Windows packaging (Windows 11 Pro 10.0.26200, 2026-08-31):** Node 22.15.0, npm 10.9.2. `npm ci` installed Electron **44.1.0**. `npm run test:all`: 768 JS pass / 2 skip (the extra skip is `ar`/binutils for synthesizing a `.deb`), 578 Python pass / 7 skip. One JS test failed until patched: `assertAppImageUsesStaticRuntime`’s malformed-ELF case shelled out to Unix `file(1)`. The static-runtime case already injected `spawnSyncFn`; the malformed case now does too. Live Linux `verify:linux:packaged` still uses real `file`. `npm run build:dir` packaged `electron=44.1.0`; `AvaNevis.exe` `process.versions` reports `electron 44.1.0`, `chrome 152.0.7977.65`, `node 24.19.0`. Bundled `pip check` clean. Bundled PyAV **18.1.0** decoded `tests/fixtures/speakrs-two-speaker-16k.wav` → rate 16000, channels 1, frames 223, samples 227592. Offline CPU `--model small --device cpu` wrote `device: cpu`, `computeType: int8`, duration 14.22s, English fixture text. Speakrs packaging verifier passed; no stale `audiocapture-helper`. First electron-builder attempt in this agent shell failed with `spawn powershell.exe ENOENT` because PATH had PowerShell 7 (`pwsh`) only; retry with `C:\Windows\System32\WindowsPowerShell\v1.0` succeeded. Not a product change — CI `windows-latest` already has `powershell.exe`.
+
+**Windows x64 smoke (packaged `win-unpacked`, Electron 44.1.0):**
+- CDP `Browser`: `Chrome/152.0.7977.65`; renderer `file://…/app.asar/src/renderer/index.html`
+- Packaged `device_manager.py`: WASAPI Logitech C925e mic id 39; FiiO DAC-E10 loopback id 47. Host also has CUDA 13 toolkits on PATH; this pass used the already-installed packaged CUDA 12 profile (not a CUDA 13 install)
+- Discard of ~12 s (C925e + FiiO loopback) left History at 40 meetings; latest id stayed `20260827_230839`. UI returned to Ready; Cancel stayed hidden
+- Stop of 2:28 (`durationSeconds` 148.82) saved meeting `20260831_231450`. Status flipped to `Ready · 1 transcribing` then completed. Metadata: `model: medium`, `transcriptionDevice: cuda`, `transcriptionComputeType: float16`. Speakrs `speakrs-community1-vbx` completed (`speakerCount: 1` — looping single-file speech). The `.md` contains the looping two-speaker fixture lines (“Morning, Zyra” / “design review starts at 10” / “Thanks, Hazel”), not only level-meter activity
+
+**macOS packaging (macOS 26.6.2 arm64, 2026-09-01):** Node 26.8.1, npm 11.19.0. `npm ci` installed Electron **44.1.0** with no audit findings. `npm run test:all`: 768 JS pass / 2 skip, 577 Python pass / 8 skip, JS+Python syntax OK. `npm run build:mac:dir` packaged `electron=44.1.0`; the first attempt was stopped after stale local `node_modules` exposed Electron 42.9.0, then `npm ci` restored the lockfile runtime before the accepted build. `npm run verify:mac:packaged` passed with host Metal access: arm64 app/ffmpeg/Speakrs CLI, deep/strict bundle seal, helper and Speakrs signatures/entitlements, Opus encode, MLX imports, and no bundled Torch. The restricted-shell verifier reached the same seal/native checks but could not expose a Metal device; the host-GPU rerun is the accepted result. A deep/strict recheck after the first live smoke then exposed Python `__pycache__` writes inside the signed bundle. Root cause: the verifier protected its own import smoke with `PYTHONDONTWRITEBYTECODE=1`, but normal packaged children did not. `buildPythonEnv()` now forces that flag for every packaged child (caller overrides cannot disable it), with a red/green contract test. A rebuilt app retained a valid deep/strict seal after startup, CoreAudio recording, Opus finalization, Speakrs, and MLX transcription; the bundled backend contained zero `__pycache__` directories.
+
+**macOS arm64 smoke (packaged `AvaNevis.app`, Electron 44.1.0):**
+- Packaged startup selected bundled Python 3.11.7, bundled ffmpeg n8.0.1, and `transcription.mlx_whisper_transcriber`; device enumeration exposed the MacBook Pro microphone and the native system-audio source
+- Automated Discard (MacBook Pro microphone + system audio) reached `recording_started` with `helperCaptureBackend=coreaudio_tap`, then returned structured `cancelled: true`; only one 2026-09-01 History meeting exists, from the later Stop pass
+- Automated Stop of 1:18.45 (`durationSeconds` 78.4533125) used the same microphone while looping `tests/fixtures/speakrs-two-speaker-16k.wav` through system audio. Desktop diagnostics: `coreaudio_tap`, 7,355 helper buffers, 3,765,760 samples, peak **0.732860**. Opus integrity decode passed at 48 kHz stereo
+- Meeting `20260901_080341` completed with `model: medium`, `transcriptionDevice: mps`, `transcriptionComputeType: float16`; Speakrs `speakrs-community1-vbx` completed. The `.md` repeats “Morning, Zyra”, “design review starts at 10”, and “Thanks, Hazel”, proving browser/system speech survived the saved stereo file and MLX mono transcription path
+- Post-fix seal regression: rebuilt Electron 44.1.0 package recorded another 39.51 s CoreAudio-tap meeting (desktop peak **0.732753**), completed Speakrs plus base MLX on `mps`/`float16`, and transcribed “Morning, Zyra” / “design reviews start at 10” / “Thanks, Hazel”. While the app remained running, `codesign --verify --deep --strict` passed and `Contents/Resources/backend` contained zero `__pycache__` directories

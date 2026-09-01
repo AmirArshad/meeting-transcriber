@@ -2,7 +2,7 @@
 
 Hardware-only. Automated CI packaging checks are not evidence for these rows.
 
-**Supported** remains Omarchy 4 x86_64 (Hyprland/Wayland, PipeWire/`pipewire-pulse`). Every other distro and desktop here is an **experimental beta** until a human fills the row. Ubuntu desktop recording/`safeStorage` smoke is still open. The Phase 3 60-minute soak was cancelled 2026-08-27 (not run). SteamOS testing is Desktop Mode AppImage only. Do not start Phases 6–9.
+**Supported** remains Omarchy 4 and CachyOS x86_64 Hyprland/Wayland (PipeWire/`pipewire-pulse`). Every other distro and desktop here is an **experimental beta** until a human fills the row. Ubuntu desktop recording/`safeStorage` smoke is still open. The Phase 3 60-minute soak was cancelled 2026-08-27 (not run). SteamOS testing is Desktop Mode AppImage only. Do not start Phases 6–9.
 
 User-facing install and failure notes: [docs/guides/LINUX_EXPERIMENTAL.md](../../docs/guides/LINUX_EXPERIMENTAL.md).
 
@@ -43,7 +43,8 @@ Mark only machines that were actually tested. Leave unchecked rows open.
 - [ ] **Pop!_OS / COSMIC** — Experimental. `.deb` or AppImage. Note tray/keyring issues; do not “fix” them with AvaNevis workarounds.
 - [ ] **Linux Mint** — Experimental. `.deb` or AppImage.
 - [ ] **Vanilla Arch x86_64** — Experimental. pacman on a conventional desktop; otherwise AppImage. Confirm `pipewire-pulse` is installed and the user session is running.
-- [ ] **CachyOS x86_64** — Experimental. pacman or AppImage. Record which desktop the installer selected.
+- [x] **CachyOS x86_64 Hyprland** — Supported (2026-08-31). Electron 44.0.0 `linux-unpacked` / AppImage / pacman / deb on this host (`ID=cachyos`, Hyprland/Wayland). noctalia SNI tray registered (`StatusNotifierItem` on the AvaNevis pid). Opaque `pulse-source:` / `pulse-monitor:` IDs; onboard analog-input with every port `not available` omitted; HDMI monitor kept (`hdmi-output-0` available — physical HDMI unplug not performed). Discard left History empty. Stop of a 2:28 mic+desktop capture (Chrome looping the Whisper JFK fixture through the FiiO monitor) saved a meeting; CPU `faster-whisper` `--device cpu` / `int8` put “ask not what your country can do for you” / “fellow Americans” in the `.md`. Add-on Setup / Install Model / Generate Summary stayed disabled `Unsupported`. Other CachyOS desktops remain experimental.
+- [ ] **CachyOS x86_64 (non-Hyprland)** — Experimental. pacman or AppImage. Record which desktop the installer selected.
 - [ ] **Fedora Workstation 43 or 44** — Experimental. AppImage only. Keep SELinux enforcing; collect AVC evidence if denied. Do not test Silverblue/Kinoite as this row.
 - [ ] **SteamOS 3 Desktop Mode** — Experimental, AppImage from home storage only. Gaming Mode is out of scope. Do not disable the read-only root or use pacman.
 
@@ -51,7 +52,7 @@ Mark only machines that were actually tested. Leave unchecked rows open.
 
 Independent of distro. Same shared product rows; record the desktop name from diagnostics.
 
-- [x] **Hyprland** — Supported on Omarchy 2026-08-28 (native Wayland, `gnome_libsecret`, quickshell SNI).
+- [x] **Hyprland** — Supported on Omarchy 2026-08-28 (native Wayland, `gnome_libsecret`, quickshell SNI) and CachyOS 2026-08-31 (noctalia SNI, packaged 2-minute capture + CPU transcript).
 - [ ] **GNOME** (including Ubuntu GNOME)
 - [ ] **KDE Plasma**
 - [ ] **COSMIC**
