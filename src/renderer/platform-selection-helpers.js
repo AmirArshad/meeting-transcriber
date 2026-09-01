@@ -98,6 +98,16 @@
     ];
   }
 
+  function isUsableDefaultDeviceId(id) {
+    if (id === undefined || id === null || id === '') {
+      return false;
+    }
+    // PortAudio / sounddevice error sentinels must not match a real device.
+    // macOS ScreenCaptureKit loopback uses id -1, so treating -1 as a default
+    // would auto-select System Audio whenever defaults failed to resolve.
+    return String(id) !== '-1';
+  }
+
   function resolveInitialDeviceSelection({ savedId, defaultId, devices }) {
     const availableIds = new Set(
       (Array.isArray(devices) ? devices : []).map((device) => String(device?.id ?? '')),
@@ -106,6 +116,9 @@
 
     if (savedId !== undefined && savedId !== null) {
       return isAvailable(savedId) ? String(savedId) : '';
+    }
+    if (!isUsableDefaultDeviceId(defaultId)) {
+      return '';
     }
     return isAvailable(defaultId) ? String(defaultId) : '';
   }

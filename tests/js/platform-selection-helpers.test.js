@@ -96,3 +96,30 @@ test('resolveInitialDeviceSelection preserves a saved selection and uses a valid
     '',
   );
 });
+
+test('resolveInitialDeviceSelection stringifies numeric ids and ignores a -1 default sentinel', () => {
+  const {
+    resolveInitialDeviceSelection,
+  } = require('../../src/renderer/platform-selection-helpers');
+  const macDevices = [
+    { id: 3 },
+    { id: -1 },
+  ];
+
+  assert.equal(
+    resolveInitialDeviceSelection({ savedId: undefined, defaultId: 3, devices: macDevices }),
+    '3',
+  );
+  assert.equal(
+    resolveInitialDeviceSelection({ savedId: 5, defaultId: 3, devices: [{ id: 3 }, { id: 5 }] }),
+    '5',
+  );
+  assert.equal(
+    resolveInitialDeviceSelection({ savedId: undefined, defaultId: -1, devices: macDevices }),
+    '',
+  );
+  assert.equal(
+    resolveInitialDeviceSelection({ savedId: -1, defaultId: 3, devices: macDevices }),
+    '-1',
+  );
+});

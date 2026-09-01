@@ -75,7 +75,9 @@ def _profile_enhances_after_mix(profile: str) -> bool:
 
 
 def _profile_caps_at_mic(profile: str) -> bool:
-    return profile == "windows-v1"
+    # Close() may pad the desktop spool to mic_frames, then mix-time leading pad
+    # would otherwise extend the finished file past the microphone timeline.
+    return profile in ("windows-v1", "macos-v1", "linux-v1")
 
 
 class FinalizationError(RuntimeError):
@@ -624,8 +626,9 @@ def _aligned_frame_count(
 ) -> tuple[int, int, int]:
     """Return (mic_start_pad, desk_start_pad_after_trim, total_frames).
 
-    ``windows-v1`` hard-caps at mic duration (matches the RAM-path reconstruct
-    that never extends past the mic timeline). ``macos-v1`` and ``linux-v1`` max-pad.
+    Every v1 profile caps at the microphone timeline. Desktop trim/leading-pad
+    still shift where system audio sits inside that window; they must not make
+    the finished meeting longer than the mic track.
     """
     mic_pad = int(alignment.get("micLeadingPadFrames") or 0)
     desk_trim = int(alignment.get("desktopTrimFrames") or 0)
@@ -798,9 +801,9 @@ _PREEXISTING_DURATION_RATIO_SLACK = 0.05
 def expected_output_duration_seconds(data: Dict[str, Any]) -> Optional[float]:
     """Expected final meeting duration using the same profile/alignment rules as finalize.
 
-    Uses track ``committedFrames``/``sampleRate`` and alignment pads/trims in the
-    seconds domain. ``windows-v1`` caps at the mic timeline; ``macos-v1`` and
-    ``linux-v1`` max-pad.
+    Uses track ``committedFrames``/``sampleRate`` and the same alignment
+    geometry as ``_aligned_frame_count``. Every v1 profile is bounded by the
+    microphone timeline.
     """
     tracks = data.get("tracks") or {}
     mic = tracks.get("mic")
@@ -816,28 +819,43 @@ def expected_output_duration_seconds(data: Dict[str, Any]) -> Optional[float]:
 
     alignment = data.get("alignment") if isinstance(data.get("alignment"), dict) else {}
     mic_pad = int(alignment.get("micLeadingPadFrames") or 0)
-    mic_seconds = (mic_frames + max(0, mic_pad)) / float(mic_rate)
-
     profile = data.get("processingProfile") or "macos-v1"
     include_desktop = bool(data.get("includeDesktop", False)) and isinstance(
         tracks.get("desktop"), dict
     )
-    if not include_desktop:
-        return mic_seconds
+    desk_frames = 0
+    desk_rate = 0
+    if include_desktop:
+        desk = tracks["desktop"]
+        try:
+            desk_frames = int(desk.get("committedFrames") or 0)
+            desk_rate = int(desk.get("sampleRate") or 0)
+        except (TypeError, ValueError):
+            include_desktop = False
+        if desk_frames <= 0 or desk_rate <= 0:
+            include_desktop = False
 
-    desk = tracks["desktop"]
-    try:
-        desk_frames = int(desk.get("committedFrames") or 0)
-        desk_rate = int(desk.get("sampleRate") or 0)
-    except (TypeError, ValueError):
-        return mic_seconds
-    if desk_frames <= 0 or desk_rate <= 0:
-        return mic_seconds
+    alignment_frames = {
+        "micLeadingPadFrames": mic_pad,
+        "desktopTrimFrames": int(alignment.get("desktopTrimFrames") or 0),
+        "desktopLeadingPadFrames": int(alignment.get("desktopLeadingPadFrames") or 0),
+    }
+    if not include_desktop or desk_rate == mic_rate:
+        _, _, total_frames = _aligned_frame_count(
+            mic_frames,
+            desk_frames,
+            include_desktop=include_desktop,
+            alignment=alignment_frames,
+            profile=profile,
+        )
+        return total_frames / float(mic_rate)
 
-    desk_trim = int(alignment.get("desktopTrimFrames") or 0)
-    desk_pad = int(alignment.get("desktopLeadingPadFrames") or 0)
+    # Rare mismatched native rates: convert in the seconds domain, then apply
+    # the same mic-timeline cap as ``_aligned_frame_count``.
+    mic_seconds = (mic_frames + max(0, mic_pad)) / float(mic_rate)
+    desk_trim = int(alignment_frames["desktopTrimFrames"])
+    desk_pad = int(alignment_frames["desktopLeadingPadFrames"])
     desk_seconds = (max(0, desk_frames - desk_trim) + max(0, desk_pad)) / float(desk_rate)
-
     if _profile_caps_at_mic(profile):
         return mic_seconds
     return max(mic_seconds, desk_seconds)

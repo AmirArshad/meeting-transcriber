@@ -811,49 +811,41 @@ def test_aligned_mix_opens_each_normalized_input_once_per_pass(tmp_path, monkeyp
     assert open_counts == {mic_path: 1, desk_path: 1}
 
 
-def test_windows_aligned_frame_count_caps_at_mic():
+def test_v1_profiles_cap_aligned_frame_count_at_mic():
     from audio.streaming_post_processor import _aligned_frame_count
 
-    mic_pad, desk_pad, total = _aligned_frame_count(
-        1000,
-        5000,
-        include_desktop=True,
-        alignment={
-            "micLeadingPadFrames": 0,
-            "desktopTrimFrames": 0,
-            "desktopLeadingPadFrames": 0,
-        },
-        profile="windows-v1",
-    )
-    assert total == 1000
-    assert mic_pad == 0
-    assert desk_pad == 0
+    alignment = {
+        "micLeadingPadFrames": 0,
+        "desktopTrimFrames": 0,
+        "desktopLeadingPadFrames": 0,
+    }
+    for profile in ("windows-v1", "macos-v1", "linux-v1"):
+        mic_pad, desk_pad, total = _aligned_frame_count(
+            1000,
+            5000,
+            include_desktop=True,
+            alignment=alignment,
+            profile=profile,
+        )
+        assert total == 1000, profile
+        assert mic_pad == 0
+        assert desk_pad == 0
 
-    _, _, macos_total = _aligned_frame_count(
-        1000,
-        5000,
-        include_desktop=True,
-        alignment={
-            "micLeadingPadFrames": 0,
-            "desktopTrimFrames": 0,
-            "desktopLeadingPadFrames": 0,
-        },
-        profile="macos-v1",
-    )
-    assert macos_total == 5000
-
-    _, _, linux_total = _aligned_frame_count(
-        1000,
-        5000,
-        include_desktop=True,
-        alignment={
-            "micLeadingPadFrames": 0,
-            "desktopTrimFrames": 0,
-            "desktopLeadingPadFrames": 0,
-        },
-        profile="linux-v1",
-    )
-    assert linux_total == macos_total
+    # pad_to=mic_frames plus a desktop leading pad must not extend past mic.
+    for profile in ("windows-v1", "macos-v1", "linux-v1"):
+        _, desk_pad, total = _aligned_frame_count(
+            1000,
+            1000,
+            include_desktop=True,
+            alignment={
+                "micLeadingPadFrames": 0,
+                "desktopTrimFrames": 0,
+                "desktopLeadingPadFrames": 200,
+            },
+            profile=profile,
+        )
+        assert total == 1000, profile
+        assert desk_pad == 200
 
 
 def test_final_duration_matches_expectation():
@@ -870,7 +862,7 @@ def test_final_duration_matches_expectation():
     assert final_duration_matches_expectation(120.0, None) is False
 
 
-def test_expected_output_duration_windows_caps_at_mic():
+def test_expected_output_duration_v1_profiles_cap_at_mic():
     from audio.streaming_post_processor import expected_output_duration_seconds
 
     data = {
@@ -886,13 +878,15 @@ def test_expected_output_duration_windows_caps_at_mic():
             "desktop": {"committedFrames": 48000 * 120, "sampleRate": 48000},
         },
     }
-    assert expected_output_duration_seconds(data) == 60.0
+    for profile in ("windows-v1", "macos-v1", "linux-v1"):
+        data["processingProfile"] = profile
+        assert expected_output_duration_seconds(data) == 60.0, profile
 
-    data["processingProfile"] = "macos-v1"
-    assert expected_output_duration_seconds(data) == 120.0
-
-    data["processingProfile"] = "linux-v1"
-    assert expected_output_duration_seconds(data) == 120.0
+    data["alignment"]["desktopLeadingPadFrames"] = 4800
+    data["tracks"]["desktop"]["committedFrames"] = 48000 * 60
+    for profile in ("windows-v1", "macos-v1", "linux-v1"):
+        data["processingProfile"] = profile
+        assert expected_output_duration_seconds(data) == 60.0, profile
 
 
 def test_linux_v1_profile_helpers():
@@ -900,8 +894,9 @@ def test_linux_v1_profile_helpers():
     assert spp._profile_uses_one_sided("linux-v1") is True
     assert spp._profile_enhances_mic_before_mix("linux-v1") is True
     assert spp._profile_enhances_after_mix("linux-v1") is False
-    assert spp._profile_caps_at_mic("linux-v1") is False
+    assert spp._profile_caps_at_mic("linux-v1") is True
     assert spp._profile_requires_native_48k("macos-v1") is True
+    assert spp._profile_caps_at_mic("macos-v1") is True
     assert spp._profile_caps_at_mic("windows-v1") is True
 
 
@@ -923,5 +918,5 @@ def test_linux_v1_float32_session_finalizes(tmp_path, monkeypatch):
         coordinator=coordinator,
     )
     got = _read_wav_int16(Path(result.final_path))
-    # linux-v1 max-pads to the longer desktop track (interleaved stereo int16).
-    assert len(got) // 2 >= 9600
+    # linux-v1 is bounded by the microphone timeline (interleaved stereo int16).
+    assert abs(len(got) // 2 - 4800) <= 2

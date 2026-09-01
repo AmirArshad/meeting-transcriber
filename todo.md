@@ -24,9 +24,9 @@
 ## Reliability follow-through
 
 - [ ] [Risk: Low] On Omarchy hardware, visually confirm idle/recording Linux tray icons and a no-SNI-host close/minimize pass; re-check unplugged HDMI endpoint filtering; record evidence without upgrading experimental distributions to supported.
-- [ ] [Risk: Medium] Decide whether `get-audio-devices.defaults` should populate first-run selections. Keep user-saved selections authoritative and validate the behavior on Windows, macOS, and Linux hardware before shipping.
-- [ ] [Risk: Medium] Correct the shared macOS/Linux desktop-leading-pad duration geometry only in its own focused change, with capture-recovery duration tests and macOS hardware validation. Do not broaden it into a recorder redesign.
-- [ ] [Risk: Medium] Make a documented decision on macOS late-desktop-capture behavior: retain its current conservative policy unless an isolated hardware-tested change proves that preserving committed frames is safe.
+- [x] [Risk: Medium] First-run device defaults: persisted renderer selection wins; only an unset selection may read `devices.defaults`; missing/unsupported IDs (including PortAudio `-1`) leave the placeholder. Implemented on `feature/v2.9-reliability-follow-through`. Linux Pulse IDs stay opaque strings. **macOS 2026-09-01 (this Mac):** `device_manager` defaults `input=1` / `output=2`; helper selects mic `1` and leaves desktop on the placeholder (`2` is speakers, not the `-1` ScreenCaptureKit loopback). A failed `-1` default does not auto-select System Audio; a saved `-1` still restores it. Windows hardware confirmation still open.
+- [x] [Risk: Medium] Desktop-leading-pad duration geometry: `macos-v1` and `linux-v1` now share the windows mic-timeline cap in `_aligned_frame_count` / `expected_output_duration_seconds`. Capture-recovery duration tests cover a leftover overlong Linux final and a macOS leading-pad recover. **macOS hardware 2026-09-01:** 8 s CLI mic+desktop (`coreaudio_tap`); mic spool 335872 frames (6.997 s), desktop helper 385536 samples (8.032 s), finished Opus **7.93 s** (mic timeline + start alignment, 0.11 s shorter than raw desktop — not max-padded).
+- [x] [Risk: Medium] macOS late-desktop-capture: **retain** the current conservative policy (warn, continue, mix mic-only; do not keep committed desktop frames). Linux vanished-monitor keep-committed remains the exception because output switching is routine there. No isolated hardware evidence that preserving macOS helper frames after a late CoreAudio/SCK failure is safe.
 
 ## Linux AI add-ons — CachyOS RTX 4070 gated lane
 

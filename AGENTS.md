@@ -99,7 +99,7 @@ Mic and desktop audio are recorded **separately and mixed after stop** — delib
 
 Platform recorders always spill raw capture to durable `{stem}.capture/` track spools during recording; stop finalizes via bounded `finalize_capture` (`windows-v1`, `macos-v1`, `linux-v1`). Interrupted sessions recover through `audio.capture_recovery`. Whole-session RAM mix (and its `MemoryError` path) is obsolete.
 
-Preserve: 48 kHz, stereo, mono-compatible stereo for transcription downmixes, Opus via ffmpeg, gentle mic enhancement, faithful desktop audio, and mic-only degradation rather than discarding the microphone recording.
+Preserve: 48 kHz, stereo, mono-compatible stereo for transcription downmixes, Opus via ffmpeg, gentle mic enhancement, faithful desktop audio, and mic-only degradation rather than discarding the microphone recording. Final mix duration on `windows-v1`, `macos-v1`, and `linux-v1` is bounded by the microphone timeline — desktop leading-pad/trim alignment must not extend the finished file past the mic track.
 
 **Temp-file gotchas:** post-processing temps use a deliberately non-scanned `.pcm.tmp` extension (`backend/audio/recorder_temp_paths.py`). Scan-import recovers orphan temps into `{stem}.wav`, or deletes them when a final Opus/WAV already exists. Temps at or below WAV-header size are **dropped, not promoted**. macOS recovery must promote a leftover `.pcm.tmp` to a stable `{stem}.wav` before emitting `outputPath` — never hand Electron the volatile temp path.
 

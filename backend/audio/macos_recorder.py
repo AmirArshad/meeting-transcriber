@@ -596,6 +596,9 @@ class MacOSAudioRecorder:
             )
             # Late desktop failure: close at last valid frame (no mic-length pad)
             # and discard desktop for mic-only mix. Empty desktop: never pad silence.
+            # v2.9 keeps this conservative policy. Linux may mix already-committed
+            # desktop after a vanished monitor; macOS helper failure is not proven
+            # safe to keep (partial/corrupt CoreAudio or ScreenCaptureKit output).
             pad_to = None
             if (
                 not desktop_failed
