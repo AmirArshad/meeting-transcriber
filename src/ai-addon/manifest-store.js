@@ -18,10 +18,22 @@ const {
 const {
   SPEAKRS_DIARIZATION_ENGINES,
   SPEAKRS_MODEL_PACK_REVISION,
+  SPEAKRS_ORT_SO_NAMES,
   getSpeakrsExtractedRuntimeDllPins,
-  getSpeakrsRequiredRuntimeDllNames,
+  getSpeakrsRequiredRuntimeLibraryNames,
   resolveContainedSpeakrsPath,
 } = require('./speakrs-pack-spec');
+const {
+  getManagedLinuxCudaLibraryDirs,
+  getManagedLinuxCudaRuntimeTarget,
+} = require('../main-process/cuda-runtime-helpers');
+const {
+  buildContainedLinuxCudaLibraryPath,
+  lstatRejectSymlink,
+  resolveLinuxCudaDriverLibraryDirs,
+  resolveRequiredLinuxCudaLibraryPath,
+} = require('../main-process/linux-cuda-runtime-helpers');
+const { getLinuxCudaDriverLibraryAllowlist } = require('../main-process/linux-cuda-runtime-catalog');
 const {
   SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE,
   getPackagedSpeakrsIntegrityError,
@@ -30,6 +42,25 @@ const {
 const { getDiarizationTokenStatus, isAllowedDownloadUrl } = require('./download-helpers');
 
 const HASH_YIELD_BYTES = 8 * 1024 * 1024;
+const HUGGING_FACE_ENV_KEY_PATTERN = /^(HF_|HUGGINGFACE_|HUGGING_FACE_|TRANSFORMERS_)/i;
+const HUGGING_FACE_ENV_KEYS = Object.freeze([
+  'HF_HOME',
+  'HF_HUB_CACHE',
+  'HUGGINGFACE_HUB_CACHE',
+  'TRANSFORMERS_CACHE',
+  'TRANSFORMERS_OFFLINE',
+  'HF_HUB_OFFLINE',
+  'HF_TOKEN',
+  'HUGGINGFACE_HUB_TOKEN',
+  'HUGGING_FACE_HUB_TOKEN',
+  'HF_TOKEN_PATH',
+  'HF_ENDPOINT',
+  'HF_HUB_ENABLE_HF_TRANSFER',
+  'HF_HUB_DISABLE_TELEMETRY',
+  'HF_HUB_DISABLE_XET',
+  'HF_XET_CACHE',
+  'HF_HUB_VERBOSITY',
+]);
 
 function getDirectorySizeBytes(dirPath, fsModule = fs) {
   const existsSync = bindFsMethod(fsModule, 'existsSync');
@@ -244,6 +275,130 @@ function canStartGuidedDiarization({
   return Boolean(modelRef);
 }
 
+function clearHuggingFaceEnvVars(target, extra = {}, env = process.env) {
+  const keys = new Set(HUGGING_FACE_ENV_KEYS);
+  for (const source of [extra, env, target]) {
+    if (!source || typeof source !== 'object') {
+      continue;
+    }
+    for (const key of Object.keys(source)) {
+      if (HUGGING_FACE_ENV_KEY_PATTERN.test(key)) {
+        keys.add(key);
+      }
+    }
+  }
+  for (const key of keys) {
+    target[key] = undefined;
+  }
+  return target;
+}
+
+function linuxAllowlistedLibraryExists(fileName, fsModule = fs) {
+  const existsSync = bindFsMethod(fsModule, 'existsSync');
+  const realpathSync = bindFsMethod(fsModule, 'realpathSync') || fs.realpathSync;
+  const statSync = bindFsMethod(fsModule, 'statSync');
+  if (!fileName || !existsSync || !realpathSync || !statSync) {
+    return false;
+  }
+  for (const dir of getLinuxCudaDriverLibraryAllowlist()) {
+    const candidate = path.join(dir, fileName);
+    if (!existsSync(candidate)) {
+      continue;
+    }
+    try {
+      const realFile = realpathSync(candidate);
+      const stats = statSync(realFile);
+      if (!stats || typeof stats.isFile !== 'function' || !stats.isFile()) {
+        continue;
+      }
+      for (const allowed of getLinuxCudaDriverLibraryAllowlist()) {
+        try {
+          const realAllowed = realpathSync(allowed);
+          const relative = path.relative(realAllowed, realFile);
+          if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) {
+            return true;
+          }
+        } catch (_error) {
+          // Candidate allowlist directory may be absent.
+        }
+      }
+    } catch (_error) {
+      continue;
+    }
+  }
+  return false;
+}
+
+function buildSpeakrsLinuxLibraryPath({
+  userDataDir,
+  fsModule = fs,
+} = {}) {
+  const ortDir = getSpeakrsOrtRuntimeDir(userDataDir);
+  const libraryDirs = [];
+  const seen = new Set();
+  const addDir = (candidate) => {
+    if (!candidate || !path.isAbsolute(candidate)) {
+      return;
+    }
+    try {
+      const stats = lstatRejectSymlink(candidate, fsModule, 'Speakrs library directory');
+      if (typeof stats.isDirectory === 'function' && !stats.isDirectory()) {
+        return;
+      }
+      const resolved = path.resolve(candidate);
+      if (seen.has(resolved)) {
+        return;
+      }
+      seen.add(resolved);
+      libraryDirs.push(resolved);
+    } catch (_error) {
+      // Missing or unsafe directories are omitted; ambient LD_LIBRARY_PATH stays cleared.
+    }
+  };
+
+  addDir(ortDir);
+
+  let managedPath = '';
+  try {
+    const managedRoot = getManagedLinuxCudaRuntimeTarget(userDataDir);
+    const existsSync = bindFsMethod(fsModule, 'existsSync');
+    const managedDirs = getManagedLinuxCudaLibraryDirs(managedRoot)
+      .filter((candidate) => existsSync?.(candidate));
+    if (managedDirs.length > 0) {
+      let driverLibraryDirs = [];
+      try {
+        driverLibraryDirs = resolveLinuxCudaDriverLibraryDirs({ fsModule });
+      } catch (_error) {
+        driverLibraryDirs = [];
+      }
+      managedPath = buildContainedLinuxCudaLibraryPath({
+        managedRoot,
+        libraryDirs: managedDirs,
+        driverLibraryDirs,
+        fsModule,
+      });
+    }
+  } catch (_error) {
+    managedPath = '';
+  }
+
+  const parts = [
+    ...libraryDirs,
+    ...String(managedPath || '').split(path.delimiter).filter(Boolean),
+  ];
+  const unique = [];
+  const uniqueSeen = new Set();
+  for (const part of parts) {
+    const normalized = path.normalize(part);
+    if (!normalized || uniqueSeen.has(normalized)) {
+      continue;
+    }
+    uniqueSeen.add(normalized);
+    unique.push(part);
+  }
+  return unique.length > 0 ? unique.join(path.delimiter) : undefined;
+}
+
 function prependUniquePathEntry(currentPath, entry, delimiter = path.delimiter) {
   if (!entry) {
     return currentPath || '';
@@ -279,15 +434,15 @@ function buildSpeakrsSpawnEnv({
       projectRoot,
     }));
   const modelsDir = getSpeakrsModelRevisionDir(userDataDir);
-  const mode = resolveSpeakrsMode(requiredDevice, env);
+  const mode = platform === 'linux'
+    ? 'cuda'
+    : resolveSpeakrsMode(requiredDevice, env);
+  const { LD_LIBRARY_PATH: _ignoredLibraryPath, ...restExtra } = extra || {};
   const speakrsEnv = {
-    ...extra,
+    ...restExtra,
     SPEAKRS_EXCLUSIVE: '1',
-    HF_HOME: undefined,
-    HF_HUB_CACHE: undefined,
-    HUGGINGFACE_HUB_CACHE: undefined,
-    TRANSFORMERS_CACHE: undefined,
   };
+  clearHuggingFaceEnvVars(speakrsEnv, extra, env);
   if (resolvedCliPath) {
     speakrsEnv.SPEAKRS_CLI_PATH = resolvedCliPath;
   } else if (packaged) {
@@ -307,6 +462,16 @@ function buildSpeakrsSpawnEnv({
     const currentPath = extra.PATH || env.PATH || process.env.PATH || '';
     speakrsEnv.PATH = prependUniquePathEntry(currentPath, ortDir);
     speakrsEnv.ORT_DYLIB_PATH = path.join(ortDir, 'onnxruntime.dll');
+  }
+  if (platform === 'linux') {
+    speakrsEnv.LD_LIBRARY_PATH = buildSpeakrsLinuxLibraryPath({
+      userDataDir,
+      fsModule,
+    });
+    speakrsEnv.ORT_DYLIB_PATH = path.join(
+      getSpeakrsOrtRuntimeDir(userDataDir),
+      SPEAKRS_ORT_SO_NAMES[0],
+    );
   }
   return speakrsEnv;
 }
@@ -908,6 +1073,49 @@ function findNamedFiles(rootDir, fileNames, fsModule = fs) {
   return found;
 }
 
+async function hashPinnedSpeakrsFile({
+  filePath,
+  pin,
+  name,
+  fsModule,
+  verifyChecksum,
+  verifyChecksumIfChanged,
+  missing,
+  invalid,
+} = {}) {
+  const existsSync = bindFsMethod(fsModule, 'existsSync');
+  if (!existsSync?.(filePath)) {
+    missing.push(name);
+    return;
+  }
+  const actualSize = getFileSizeBytes(filePath, fsModule);
+  if (actualSize !== pin.sizeBytes) {
+    invalid.add(name);
+  }
+  if (!verifyChecksum) {
+    return;
+  }
+  const fingerprint = verifyChecksumIfChanged ? getArtifactFingerprint(filePath, fsModule) : null;
+  const cached = fingerprint ? speakrsChecksumFingerprintCache.get(fingerprint) : null;
+  if (cached && cached.expectedSha256 === pin.sha256 && cached.actualSha256 === pin.sha256) {
+    return;
+  }
+  const actualSha256 = await hashFileSha256(filePath, fsModule);
+  if (actualSha256 !== pin.sha256) {
+    invalid.add(name);
+    if (fingerprint) {
+      speakrsChecksumFingerprintCache.delete(fingerprint);
+    }
+    return;
+  }
+  if (fingerprint) {
+    speakrsChecksumFingerprintCache.set(fingerprint, {
+      expectedSha256: pin.sha256,
+      actualSha256,
+    });
+  }
+}
+
 async function checkSpeakrsRuntimeCache({
   userDataDir,
   platform = process.platform,
@@ -922,8 +1130,11 @@ async function checkSpeakrsRuntimeCache({
   const existsSync = bindFsMethod(fsModule, 'existsSync');
   const readFileSync = bindFsMethod(fsModule, 'readFileSync');
   const runtimeArtifacts = artifact?.runtimeArtifacts || [];
-  const requiresWindowsRuntime = platform === 'win32' && arch === 'x64';
-  if (!requiresWindowsRuntime) {
+  const requiresExtractedRuntime = (
+    (platform === 'win32' && arch === 'x64')
+    || (platform === 'linux' && arch === 'x64')
+  );
+  if (!requiresExtractedRuntime) {
     return {
       supported: true,
       installed: true,
@@ -936,9 +1147,14 @@ async function checkSpeakrsRuntimeCache({
       artifact,
     };
   }
+  const expectedNames = getSpeakrsRequiredRuntimeLibraryNames(platform, arch);
+  const expectedDllPins = getSpeakrsExtractedRuntimeDllPins(runtimeArtifacts, platform, arch);
+  const incompleteReason = platform === 'linux'
+    ? 'No complete Speakrs ONNX Runtime artifact is configured for Linux.'
+    : 'No complete Speakrs ONNX Runtime artifact is configured for Windows.';
   if (!artifact || runtimeArtifacts.length === 0 || runtimeArtifacts.some((entry) => (
     !entry.id || !entry.fileName || !isPinnedSha256(entry.sha256) || !Number(entry.sizeBytes)
-  ))) {
+  )) || !expectedDllPins) {
     return {
       supported: false,
       installed: false,
@@ -946,15 +1162,13 @@ async function checkSpeakrsRuntimeCache({
       valid: false,
       skipped: false,
       validationStatus: 'unsupported',
-      reason: 'No complete Speakrs ONNX Runtime artifact is configured for Windows.',
+      reason: incompleteReason,
       runtimeDir,
-      missingFiles: getSpeakrsRequiredRuntimeDllNames(),
+      missingFiles: expectedNames,
       artifact,
     };
   }
 
-  const expectedNames = getSpeakrsRequiredRuntimeDllNames();
-  const expectedDllPins = getSpeakrsExtractedRuntimeDllPins(runtimeArtifacts);
   const runtimeManifestPath = path.join(runtimeDir, 'install.json');
   let runtimeManifest = null;
   try {
@@ -968,56 +1182,71 @@ async function checkSpeakrsRuntimeCache({
     id: entry.id,
     sha256: entry.sha256,
   }));
-  if (!expectedDllPins) {
-    return {
-      supported: false,
-      installed: false,
-      partial: Boolean(runtimeDir && existsSync?.(runtimeDir)),
-      valid: false,
-      skipped: false,
-      validationStatus: 'unsupported',
-      reason: 'No complete Speakrs ONNX Runtime artifact is configured for Windows.',
-      runtimeDir,
-      missingFiles: expectedNames,
-      artifact,
-    };
-  }
   const manifestPinsMatch = JSON.stringify(runtimeManifest?.artifacts || null) === JSON.stringify(expectedArtifactPins);
   const missing = [];
   const invalid = new Set();
   for (const name of expectedNames) {
-    const filePath = path.join(runtimeDir, name);
-    const pin = expectedDllPins[name];
-    if (!existsSync?.(filePath)) {
-      missing.push(name);
-      continue;
+    await hashPinnedSpeakrsFile({
+      filePath: path.join(runtimeDir, name),
+      pin: expectedDllPins[name],
+      name,
+      fsModule,
+      verifyChecksum,
+      verifyChecksumIfChanged,
+      missing,
+      invalid,
+    });
+  }
+
+  if (platform === 'linux') {
+    const requiredDynamicLibraries = runtimeArtifacts
+      .map((entry) => entry.requiredDynamicLibraries)
+      .find((list) => Array.isArray(list) && list.length > 0) || [];
+    let managedRoot = null;
+    try {
+      managedRoot = getManagedLinuxCudaRuntimeTarget(userDataDir);
+    } catch (_error) {
+      managedRoot = null;
     }
-    const actualSize = getFileSizeBytes(filePath, fsModule);
-    if (actualSize !== pin.sizeBytes) {
-      invalid.add(name);
-    }
-    if (verifyChecksum) {
-      const fingerprint = verifyChecksumIfChanged ? getArtifactFingerprint(filePath, fsModule) : null;
-      const cached = fingerprint ? speakrsChecksumFingerprintCache.get(fingerprint) : null;
-      if (cached && cached.expectedSha256 === pin.sha256 && cached.actualSha256 === pin.sha256) {
+    for (const library of requiredDynamicLibraries) {
+      if (!library || !library.name || !library.source) {
         continue;
       }
-      const actualSha256 = await hashFileSha256(filePath, fsModule);
-      if (actualSha256 !== pin.sha256) {
-        invalid.add(name);
-        if (fingerprint) {
-          speakrsChecksumFingerprintCache.delete(fingerprint);
+      if (library.source === 'managed-cuda-runtime') {
+        if (!managedRoot) {
+          missing.push(library.name);
+          continue;
         }
+        let libraryPath;
+        try {
+          libraryPath = resolveRequiredLinuxCudaLibraryPath(managedRoot, {
+            fileName: library.name,
+            relativePath: library.relativePath,
+          }, fsModule);
+        } catch (_error) {
+          missing.push(library.name);
+          continue;
+        }
+        await hashPinnedSpeakrsFile({
+          filePath: libraryPath,
+          pin: { sha256: library.sha256, sizeBytes: library.sizeBytes },
+          name: library.name,
+          fsModule,
+          verifyChecksum,
+          verifyChecksumIfChanged,
+          missing,
+          invalid,
+        });
         continue;
       }
-      if (fingerprint) {
-        speakrsChecksumFingerprintCache.set(fingerprint, {
-          expectedSha256: pin.sha256,
-          actualSha256,
-        });
+      if (library.source === 'nvidia-driver' || library.source === 'system') {
+        if (!linuxAllowlistedLibraryExists(library.name, fsModule)) {
+          missing.push(library.name);
+        }
       }
     }
   }
+
   const invalidFiles = [...invalid];
   const installed = manifestPinsMatch && missing.length === 0 && invalidFiles.length === 0;
   const partial = Boolean(runtimeDir && existsSync && existsSync(runtimeDir) && !installed);
@@ -1032,7 +1261,9 @@ async function checkSpeakrsRuntimeCache({
       ? null
       : invalidFiles.length || (runtimeManifest && !manifestPinsMatch)
         ? 'Speakrs ONNX Runtime files failed integrity validation.'
-        : 'Speakrs ONNX Runtime is not installed.',
+        : missing.length
+          ? `Speakrs ONNX Runtime is not installed. Missing: ${missing.join(', ')}.`
+          : 'Speakrs ONNX Runtime is not installed.',
     runtimeDir,
     missingFiles: missing,
     invalidFiles,
@@ -1414,6 +1645,7 @@ async function checkAiAddonSetupStatus({
   env = process.env,
   resourcesPath = process.resourcesPath,
   tokenStatusReader = getDiarizationTokenStatus,
+  cudaStatus = null,
 } = {}) {
   const { manifest, readError } = loadAiAddonManifest({
     userDataDir,
@@ -1421,7 +1653,15 @@ async function checkAiAddonSetupStatus({
     readFileSync: bindFsMethod(fsModule, 'readFileSync'),
     catalog,
   });
-  const status = buildAiAddonStatus({ userDataDir, platform, arch, manifest, readError, catalog });
+  const status = buildAiAddonStatus({
+    userDataDir,
+    platform,
+    arch,
+    manifest,
+    readError,
+    catalog,
+    cudaStatus,
+  });
   const computeAdmissionEngine = computeAdmission
     ? resolveSpawnDiarizationEngine(status.features.diarization.engine, env)
     : null;
@@ -1443,8 +1683,8 @@ async function checkAiAddonSetupStatus({
     arch,
     fsModule,
     catalog,
-    verifyChecksum: verifyChecksums,
-    verifyChecksumIfChanged: Boolean(verifyChecksums && verifyChecksumsIfChanged),
+    verifyChecksum: verifyChecksums || computeAdmissionEngine === 'speakrs',
+    verifyChecksumIfChanged: computeAdmissionEngine === 'speakrs',
   });
   const speakrsRuntimeCache = await checkSpeakrsRuntimeCache({
     userDataDir,

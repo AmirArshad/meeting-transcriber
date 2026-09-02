@@ -103,6 +103,8 @@ function createAiAddonIpc(deps) {
     isQuitCommitted = () => false,
     resolveSpeakrsCliPath = null,
     resourcesPath = process.resourcesPath,
+    getCachedCudaStatus = () => null,
+    resolveCudaStatusForTranscription = null,
   } = deps;
 
   // Single shared cache reference — never copy this let into a stale local.
@@ -222,6 +224,7 @@ function createAiAddonIpc(deps) {
       platform: process.platform,
       arch: process.arch,
       emitProgress: emitAiAddonProgress,
+      cudaStatus: typeof getCachedCudaStatus === 'function' ? getCachedCudaStatus() : null,
       ...extra,
     };
 
@@ -231,6 +234,40 @@ function createAiAddonIpc(deps) {
     }
 
     return options;
+  }
+
+  async function resolveLinuxSpeakrsCudaStatus({ registerProcess, cancelSignal } = {}) {
+    if (process.platform !== 'linux') {
+      return typeof getCachedCudaStatus === 'function' ? getCachedCudaStatus() : null;
+    }
+    if (typeof resolveCudaStatusForTranscription !== 'function') {
+      const error = new Error('Linux CUDA admission requires the live CUDA runtime resolver.');
+      error.code = 'LINUX_CUDA_RESOLVER_UNAVAILABLE';
+      throw error;
+    }
+    let activeProcess = null;
+    const register = (child) => {
+      activeProcess = typeof registerProcess === 'function' ? registerProcess(child) : child;
+      return activeProcess;
+    };
+    const abort = () => {
+      if (activeProcess) {
+        terminateProcessBestEffort(activeProcess);
+      }
+    };
+    cancelSignal?.addEventListener?.('abort', abort, { once: true });
+    try {
+      if (cancelSignal?.aborted) {
+        throw createAiAddonCancelError('Speaker identification setup was canceled.');
+      }
+      const status = await resolveCudaStatusForTranscription({ registerProcess: register });
+      if (cancelSignal?.aborted) {
+        throw createAiAddonCancelError('Speaker identification setup was canceled.');
+      }
+      return status;
+    } finally {
+      cancelSignal?.removeEventListener?.('abort', abort);
+    }
   }
 
   function createRemovalBusyError(feature) {
@@ -550,6 +587,7 @@ function createAiAddonIpc(deps) {
       includeStorageSizes: Boolean(options && options.includeStorageSizes),
       verifyChecksums: Boolean(options && options.verifyChecksums),
       checkTokenEncryption: false,
+      cudaStatus: typeof getCachedCudaStatus === 'function' ? getCachedCudaStatus() : null,
     }));
 
     ipcMain.handle('store-diarization-token', async (event, token) => {
@@ -607,6 +645,12 @@ function createAiAddonIpc(deps) {
         // Re-check when the queued setup begins so a job that started after IPC
         // admission cannot race exclusive deletion. Fail-fast: do not wait.
         assertAddonDiskMutationCanRun('diarization', 'setup');
+        const cudaStatus = await runWallClockComputeAction({
+          timeoutMs: AI_COMPUTE_TIMEOUT_MS.addonValidation,
+          label: 'Linux CUDA admission',
+          terminateProcess: terminateProcessBestEffort,
+          action: (registerProcess) => resolveLinuxSpeakrsCudaStatus({ registerProcess, cancelSignal }),
+        });
         return setupDiarizationAddon(getAiAddonRuntimeOptions({
           includeSafeStorage: true,
           engine,
@@ -616,6 +660,7 @@ function createAiAddonIpc(deps) {
           pythonExe: pythonConfig.pythonExe,
           runtimeValidator: validateDiarizationRuntime,
           cancelSignal,
+          cudaStatus,
           resourcesPath,
           withExclusiveDiskMutation: (action) => {
             assertAddonDiskMutationCanRun('diarization', 'setup');
@@ -648,9 +693,15 @@ function createAiAddonIpc(deps) {
         throw new Error('Speaker identification setup is already running. Cancel it or wait for it to finish before validating.');
       }
 
-      return enqueueAiAddonAction(() => validateDiarizationSetup(getAiAddonRuntimeOptions({
+      return enqueueAiAddonAction(async () => validateDiarizationSetup(getAiAddonRuntimeOptions({
         includeSafeStorage: true,
         runtimeValidator: validateDiarizationRuntime,
+        cudaStatus: await runWallClockComputeAction({
+          timeoutMs: AI_COMPUTE_TIMEOUT_MS.addonValidation,
+          label: 'Linux CUDA admission',
+          terminateProcess: terminateProcessBestEffort,
+          action: (registerProcess) => resolveLinuxSpeakrsCudaStatus({ registerProcess }),
+        }),
       })));
     });
 

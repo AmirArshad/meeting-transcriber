@@ -9,7 +9,7 @@ const { EventEmitter } = require('node:events');
 
 const { createTranscriptionService } = require('../../src/main/transcription-service');
 const { createPythonRuntime } = require('../../src/main/python-runtime');
-const { getDiarizationAvailability } = require('../../src/ai-addon-state');
+const { getDiarizationAvailability, LINUX_DIARIZATION_UNAVAILABLE_REASON } = require('../../src/ai-addon-state');
 const { getSpeakrsOrtRuntimeDir, SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE } = require('../../src/ai-addon/manifest-store');
 
 const DIARIZE_REQUIRED_FLAGS = Object.freeze([
@@ -662,6 +662,55 @@ test('packaged missing Speakrs CLI diarize-transcript handler returns reinstall 
     } else {
       process.env.AVANEVIS_PACKAGED = previousPackaged;
     }
+    fs.rmSync(recordingsDir, { recursive: true, force: true });
+  }
+});
+
+test('Linux Speakrs stays unavailable without CUDA preflight and does not spawn', async () => {
+  const platformDesc = Object.getOwnPropertyDescriptor(process, 'platform');
+  const archDesc = Object.getOwnPropertyDescriptor(process, 'arch');
+  Object.defineProperty(process, 'platform', { configurable: true, value: 'linux' });
+  Object.defineProperty(process, 'arch', { configurable: true, value: 'x64' });
+  const recordingsDir = makeTempDir('linux-speakrs-nocuda-');
+  const audioPath = path.join(recordingsDir, 'meeting.opus');
+  fs.writeFileSync(audioPath, 'opus');
+  const spawned = [];
+  try {
+    const service = createService({
+      app: { getPath: () => recordingsDir, isPackaged: false },
+      fs,
+      spawnTrackedPython: (...args) => {
+        spawned.push(args);
+        throw new Error('Linux Speakrs must not spawn without CUDA preflight');
+      },
+      resolveCudaStatusForTranscription: async () => ({
+        statusCode: 'missingDriver',
+        installed: false,
+        deviceAvailable: false,
+        runtimeLoadable: false,
+        missingLibraries: ['libcuda.so.1'],
+        matchedProfile: null,
+        error: 'NVIDIA driver libraries were not found.',
+      }),
+      getRecordingsDir: () => recordingsDir,
+    });
+    const handlers = new Map();
+    service.registerIpc({ handle(channel, handler) { handlers.set(channel, handler); } });
+    await assert.rejects(
+      handlers.get('diarize-transcript')({ sender: {} }, {
+        audioPath,
+        segments: [{ start: 0, end: 1, text: 'hello' }],
+      }),
+      (error) => error
+        && /CUDA 12|NVIDIA GPU/.test(error.message)
+        && error.message.includes('NVIDIA driver libraries were not found'),
+    );
+    assert.equal(spawned.length, 0);
+    assert.equal(getDiarizationAvailability('linux', 'x64').supported, false);
+    assert.equal(getDiarizationAvailability('linux', 'x64').reason, LINUX_DIARIZATION_UNAVAILABLE_REASON);
+  } finally {
+    Object.defineProperty(process, 'platform', platformDesc);
+    Object.defineProperty(process, 'arch', archDesc);
     fs.rmSync(recordingsDir, { recursive: true, force: true });
   }
 });

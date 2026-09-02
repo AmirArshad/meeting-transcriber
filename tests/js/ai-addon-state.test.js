@@ -108,6 +108,21 @@ test('supports macOS diarization only on Apple Silicon MPS policy', () => {
   assert.match(intelAvailability.reason, /Apple Silicon.*Metal\/MPS/);
   assert.equal(linuxAvailability.supported, false);
   assert.equal(linuxAvailability.acceleration, 'unsupported');
+  assert.match(linuxAvailability.reason, /CUDA 12/);
+
+  const linuxReady = getDiarizationAvailability('linux', 'x64', {
+    cudaStatus: {
+      statusCode: 'ready',
+      installed: true,
+      deviceAvailable: true,
+      runtimeLoadable: true,
+      missingLibraries: [],
+      matchedProfile: 'cuda12',
+    },
+  });
+  assert.equal(linuxReady.supported, true);
+  assert.equal(linuxReady.acceleration, 'cuda');
+  assert.equal(linuxReady.runtimeDevice, 'cuda');
 });
 
 test('allows Windows x64 diarization candidate without changing transcription paths', () => {
@@ -173,7 +188,10 @@ test('model catalog exposes swappable v1 defaults', () => {
   assert.equal(DEFAULT_DIARIZATION_MODEL_ID, SPEAKRS_DIARIZATION_MODEL_ID);
   assert.equal(speakrsModel.engine, 'speakrs');
   assert.equal(speakrsModel.runtime.type, 'native-cli');
-  assert.equal(speakrsModel.tokenRequired, false);
+  assert.equal(speakrsModel.runtime.modeByPlatform['linux-x64'], 'cuda');
+  assert.equal(speakrsModel.supportedPlatforms.linux.acceleration, 'cuda');
+  assert.equal(speakrsModel.supportedPlatforms.linux.arch, 'x64');
+  assert.equal(diarizationModel.supportedPlatforms.linux, undefined);
   assert.equal(diarizationModel.engine, 'pyannote');
   assert.equal(diarizationModel.runtime.modelRef, 'pyannote/speaker-diarization-community-1');
   assert.equal(diarizationModel.license, 'cc-by-4.0');

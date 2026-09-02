@@ -16,8 +16,10 @@ const {
   getSummaryAvailability,
   getSpeakrsSetupArtifactsForPlatform,
   getSummaryRuntimeArtifactForPlatform,
+  getDiarizationDependencyArtifactForPlatform,
   buildAiAddonStatus,
   LINUX_DIARIZATION_UNAVAILABLE_REASON,
+  LINUX_PYANNOTE_UNAVAILABLE_REASON,
   LINUX_SUMMARY_UNAVAILABLE_REASON,
 } = require('../../src/ai-addon-state');
 const {
@@ -239,7 +241,7 @@ test('packaged buildPythonEnv isolates PYTHONPATH and disables user site', () =>
   }
 });
 
-test('Linux add-on catalog paths stay unsupported until later phases', () => {
+test('Linux Speakrs catalog is present and CUDA-gated; summaries stay unsupported', () => {
   const diarization = getDiarizationAvailability('linux', 'x64');
   const summary = getSummaryAvailability('linux', 'x64');
   assert.equal(diarization.supported, false);
@@ -248,9 +250,15 @@ test('Linux add-on catalog paths stay unsupported until later phases', () => {
   assert.equal(summary.supported, false);
   assert.equal(summary.runtime, 'unsupported');
   assert.equal(summary.reason, LINUX_SUMMARY_UNAVAILABLE_REASON);
-  assert.equal(getSpeakrsSetupArtifactsForPlatform('linux', 'x64').modelPack, null);
-  assert.deepEqual(getSpeakrsSetupArtifactsForPlatform('linux', 'x64').packEntries, []);
+
+  const linuxArtifacts = getSpeakrsSetupArtifactsForPlatform('linux', 'x64');
+  assert.equal(linuxArtifacts.modelPack.id, 'speakrs-models-5d24ffe-linux-x64-cuda');
+  assert.equal(linuxArtifacts.runtime.modeByPlatform['linux-x64'], 'cuda');
+  assert.ok(linuxArtifacts.runtimeArtifacts.some((entry) => entry.kind === 'ort-archive'));
+  assert.ok(linuxArtifacts.runtimeArtifacts.some((entry) => entry.kind === 'curand-wheel'));
+  assert.ok(linuxArtifacts.runtimeArtifacts.some((entry) => entry.kind === 'nvrtc-wheel'));
   assert.equal(getSummaryRuntimeArtifactForPlatform('linux', 'x64'), null);
+  assert.equal(getDiarizationDependencyArtifactForPlatform('linux', 'x64'), null);
 
   const status = buildAiAddonStatus({
     userDataDir: '/tmp/avanevis-linux-addons',
@@ -265,6 +273,41 @@ test('Linux add-on catalog paths stay unsupported until later phases', () => {
   });
   assert.equal(status.features.diarization.status, 'unsupported');
   assert.equal(status.features.summary.status, 'unsupported');
+
+  const readyCuda = {
+    statusCode: 'ready',
+    installed: true,
+    deviceAvailable: true,
+    runtimeLoadable: true,
+    missingLibraries: [],
+    matchedProfile: 'cuda12',
+  };
+  const admitted = getDiarizationAvailability('linux', 'x64', { cudaStatus: readyCuda });
+  assert.equal(admitted.supported, true);
+  assert.equal(admitted.acceleration, 'cuda');
+  assert.equal(admitted.runtimeDevice, 'cuda');
+  assert.equal(admitted.automaticAfterTranscription, true);
+
+  const admittedStatus = buildAiAddonStatus({
+    userDataDir: '/tmp/avanevis-linux-addons',
+    platform: 'linux',
+    arch: 'x64',
+    cudaStatus: readyCuda,
+    manifest: {
+      features: {
+        diarization: { status: 'notConfigured' },
+        summary: { status: 'ready' },
+      },
+    },
+  });
+  assert.equal(admittedStatus.features.diarization.status, 'notConfigured');
+  assert.equal(admittedStatus.features.diarization.availability.supported, true);
+  assert.equal(admittedStatus.features.summary.status, 'unsupported');
+  assert.match(LINUX_PYANNOTE_UNAVAILABLE_REASON, /Pyannote/);
+
+  const arm64 = getDiarizationAvailability('linux', 'arm64');
+  assert.equal(arm64.supported, false);
+  assert.match(arm64.reason, /x86_64|CUDA 12/);
 });
 
 test('Speakrs packaging builds the Linux CLI while resource manifests still fingerprint', () => {

@@ -13,8 +13,9 @@ Decision record for `feature/v2.9-dependency-hygiene` Task 1. Later version chan
 This is **host/candidate investigation only** for `feature/v2.9-linux-ai-addons`.
 It is **not** packaged RTX 4070 preflight. CUDA Whisper later passed Task 3
 packaged RTX 4070 acceptance (2026-09-02). Task 4 recorded Linux Speakrs CLI
-and pack-spec pins (2026-09-02) without catalog/UI enablement or RTX 4070
-Speakrs acceptance. Pyannote and summaries remain unavailable. A component stays unavailable until its later
+and pack-spec pins (2026-09-02). Task 5 added `linux-x64` Speakrs catalog
+entries and CUDA-gated setup/guided admission (2026-09-02) **without** packaged
+RTX 4070 Speakrs acceptance. Pyannote and summaries remain unavailable. A component stays unavailable until its later
 implementation (Task 2), packaged, and hardware gates (Task 3+) have passed.
 No entry below permits a CPU fallback, ambient system-CUDA library discovery, or a
 Linux catalog/status change that would advertise CUDA as ready.
@@ -80,8 +81,10 @@ loaded only through the Task 2 controlled library path. **Task 3 packaged RTX 40
 CUDA Whisper is accepted** (2026-09-02). Evidence:
 [Linux AI add-ons — Task 3 packaged CUDA Whisper acceptance](#linux-ai-add-ons--task-3-packaged-cuda-whisper-acceptance-2026-09-02).
 Speakrs CLI/pack-spec pins are recorded in
-[Linux AI add-ons — Task 4 Speakrs CLI packaging pins](#linux-ai-add-ons--task-4-speakrs-cli-packaging-pins-2026-09-02);
-catalog/UI and RTX 4070 Speakrs stay unaccepted. Pyannote and summaries remain unavailable.
+[Linux AI add-ons — Task 4 Speakrs CLI packaging pins](#linux-ai-add-ons--task-4-speakrs-cli-packaging-pins-2026-09-02).
+Task 5 catalog/admission work is recorded in
+[Linux AI add-ons — Task 5 Speakrs catalog and admission](#linux-ai-add-ons--task-5-speakrs-catalog-and-admission-2026-09-02)
+and is **not** packaged RTX 4070 Speakrs acceptance. Pyannote and summaries remain unavailable.
 
 ## Linux AI add-ons — Task 3 packaged CUDA Whisper acceptance (2026-09-02)
 
@@ -277,10 +280,10 @@ Windows/macOS behavior, IPC channel names, and facade export shapes are unchange
 
 ## Linux AI add-ons — Task 4 Speakrs CLI packaging pins (2026-09-02)
 
-**Decision: packaging/integrity pins recorded; Speakrs remains unavailable.**
-This is not packaged RTX 4070 Speakrs acceptance. Do not add `linux-x64` catalog
-entries, do not admit Linux diarization, and do not un-grey Settings. Task 5 owns
-setup, guided transcription, and hardware evidence.
+**Decision: packaging/integrity pins recorded; Task 5 owns catalog admission.**
+This is not packaged RTX 4070 Speakrs acceptance. Task 5 added `linux-x64`
+catalog entries and CUDA-gated setup/guided transcription; hardware evidence
+and adversarial review still block calling Task 5 accepted. Do not weaken these pins.
 
 **CLI.** `buildSpeakrsCli()` on Linux targets `x86_64-unknown-linux-gnu` with
 Cargo features `default-linalg`, `cuda`, `load-dynamic`. Compile-time ORT stays
@@ -325,6 +328,55 @@ source. Never trust hashes from user-writable `install.json`.
 `onnxruntime-linux-x64-1.27.1.tgz` (8,828,892 bytes,
 `25b1ef1fea1acd210d63f8f24dc870ad6e077795ce1f54876252c6d3803c15af`). That smoke
 is not RTX 4070 evidence.
+
+## Linux AI add-ons — Task 5 Speakrs catalog and admission (2026-09-02)
+
+**Decision: implemented, not accepted.** Stop for adversarial review before
+calling Task 5 accepted. JS/CI is not packaged RTX 4070 Speakrs evidence.
+Do not treat `scripts/run-speakrs-cpu-smoke.js` as that gate. Pyannote and
+llama.cpp summaries were not started.
+
+**What landed.** `linux-x64` Speakrs catalog entries (`modeByPlatform` CUDA,
+pack `speakrs-models-5d24ffe-linux-x64-cuda`, Task 4 ORT/wheel/managed CUDA
+closure). Setup, validate, and guided transcription re-probe CUDA via
+`resolveCudaStatusForTranscription` and admit only when
+`isLinuxCudaStatusReadyForAdmission` is true on x86_64. Failed preflight
+leaves Speakrs `unsupported` with a CUDA/x64 reason — no CPU fallback, no
+supported-but-greyed card. UI status may use the cached CUDA probe; compute
+and setup re-probe. Child env is CUDA-only (`SPEAKRS_MODE=cuda`): packaged
+CLI path, managed model/runtime roots, and a rebuilt `LD_LIBRARY_PATH` from
+Speakrs ORT keep files, managed cublas/cublasLt/cudnn, allowlisted
+`libcuda.so.1`, and system `libz.so.1`. Ambient `LD_LIBRARY_PATH` is ignored.
+Every Hugging Face env var is cleared before spawn. Setup full-hashes catalog
+pins for model pack files and extracted runtime libraries; compute admission
+re-hashes changed `path + size + mtimeMs` fingerprints. Hashes in
+user-writable `install.json` are identity-only and never trusted. Speakrs
+uninstall still deletes only `models/diarization/speakrs` and
+`runtimes/speakrs-ort`. Guided failure still persists an ordinary transcript.
+Cancel/quit still terminate the POSIX CLI process group and must not leave a
+sticky compute-queue slot.
+
+**Task 4 pins reused (not changed):** ORT 1.27.1 Linux GPU tgz
+`08b568bd69500c36606aff7c3896ee4fa7d3531719f6b00f43e6a34db41dc4bf`; extracted
+`libonnxruntime.so.1.27.1` / `libonnxruntime_providers_shared.so` /
+`libonnxruntime_providers_cuda.so`; cudart/cufft/curand/nvrtc wheels; managed
+`libcublas.so.12` / `libcublasLt.so.12` / `libcudnn.so.9` path/hash/size from
+the Task 3 CUDA catalog.
+
+**JS validation (this session, not hardware acceptance):** passed.
+
+```bash
+node --test tests/js/diarization-payload-shape.test.js \
+  tests/js/speakrs-task2-hardening.test.js \
+  tests/js/linux-platform-selection.test.js \
+  tests/js/quit-lifecycle.behavioral.test.js
+```
+
+**Packaged CachyOS x86_64 + RTX 4070 evidence — still required, not recorded:**
+setup, validate, guided transcription, normal-transcript fallback, cancel,
+switch/remove, repair, and quit. Record here when collected: model/runtime
+hashes vs Task 4 pins, `SPEAKRS_MODE=cuda`, device evidence, sidecar schema,
+and child-process cleanup. Until that row is filled, Task 5 is not accepted.
 
 ## Interpreters used for this matrix
 

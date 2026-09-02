@@ -917,13 +917,33 @@ function createTranscriptionService(deps) {
     });
   }
 
-  async function resolveGuidedDiarizationStatus() {
-    const diarizationAvailability = getDiarizationAvailability(process.platform, process.arch);
+  async function resolveDiarizationAvailability({ registerProcess } = {}) {
+    let cudaStatus = null;
+    if (process.platform === 'linux') {
+      if (typeof resolveCudaStatusForTranscription === 'function') {
+        cudaStatus = await resolveCudaStatusForTranscription({ registerProcess });
+      } else {
+        const error = new Error('Linux speaker identification requires the live CUDA runtime resolver.');
+        error.code = 'LINUX_CUDA_RESOLVER_UNAVAILABLE';
+        throw error;
+      }
+    }
+    return {
+      availability: getDiarizationAvailability(process.platform, process.arch, { cudaStatus }),
+      cudaStatus,
+    };
+  }
+
+  async function resolveGuidedDiarizationStatus({ registerProcess } = {}) {
+    const { availability: diarizationAvailability, cudaStatus } = await resolveDiarizationAvailability({ registerProcess });
     if (!diarizationAvailability.supported || !diarizationAvailability.runtimeDevice) {
       return null;
     }
     try {
-      const aiStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions({ computeAdmission: true }));
+      const aiStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions({
+        computeAdmission: true,
+        cudaStatus,
+      }));
       const diarizationStatus = aiStatus && aiStatus.features && aiStatus.features.diarization;
       const catalogModelRef = diarizationStatus ? getDiarizationModelRef(diarizationStatus.modelId) : null;
       const engine = resolveSpawnDiarizationEngine(diarizationStatus && diarizationStatus.engine);
@@ -956,15 +976,22 @@ function createTranscriptionService(deps) {
     return null;
   }
 
-  async function requireDiarizationComputeAdmission(expectedEngine) {
-    const aiStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions({ computeAdmission: true }));
+  async function requireDiarizationComputeAdmission(expectedEngine, { registerProcess } = {}) {
+    const { availability, cudaStatus } = await resolveDiarizationAvailability({ registerProcess });
+    if (!availability.supported || !availability.runtimeDevice) {
+      throw new Error(availability.reason || 'Speaker identification is not supported on this platform.');
+    }
+    const aiStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions({
+      computeAdmission: true,
+      cudaStatus,
+    }));
     const diarizationStatus = aiStatus && aiStatus.features && aiStatus.features.diarization;
     const catalogModelRef = diarizationStatus ? getDiarizationModelRef(diarizationStatus.modelId) : null;
     const engine = resolveSpawnDiarizationEngine(diarizationStatus && diarizationStatus.engine);
     const speakrsRuntimeError = expectedEngine === 'speakrs' && diarizationStatus?.runtimeCache?.valid !== true
       ? diarizationStatus?.runtimeCache?.reason || 'Speakrs runtime integrity validation failed.'
       : null;
-    if (speakrsRuntimeError || engine !== expectedEngine || !canStartGuidedDiarization({
+    if (speakrsRuntimeError || (expectedEngine && engine !== expectedEngine) || !canStartGuidedDiarization({
       status: diarizationStatus && diarizationStatus.status,
       setupComplete: diarizationStatus && diarizationStatus.setupComplete,
       engine: diarizationStatus && diarizationStatus.engine,
@@ -978,7 +1005,7 @@ function createTranscriptionService(deps) {
       );
     }
     throwIfPackagedSpeakrsCliMissing(engine);
-    return { diarizationStatus, catalogModelRef, engine };
+    return { diarizationStatus, catalogModelRef, engine, requiredDevice: availability.runtimeDevice };
   }
 
   async function persistGuidedDiarizationArtifacts(meeting, diarizationStatus, diarizationResult) {
@@ -1280,7 +1307,13 @@ function createTranscriptionService(deps) {
         });
         publishTranscriptionQueueState();
 
-        guidedDiarizationStatus = await resolveGuidedDiarizationStatus();
+        guidedDiarizationStatus = await runWallClockComputeAction({
+          timeoutMs: getGuidedTranscriptionComputeTimeoutMs(modelSize),
+          label: 'Speaker identification admission',
+          meetingId,
+          terminateProcess: terminateProcessBestEffort,
+          action: (registerProcess) => resolveGuidedDiarizationStatus({ registerProcess }),
+        });
         throwIfJobBlocked(meetingId, epoch);
         const timeoutMs = guidedDiarizationStatus
           ? getGuidedTranscriptionComputeTimeoutMs(modelSize)
@@ -1438,7 +1471,13 @@ function createTranscriptionService(deps) {
         // and failures degrade to diarization error metadata.
         if (!guidedDiarizationResult) {
           throwIfJobBlocked(meetingId, epoch);
-          const postPassStatus = await resolveGuidedDiarizationStatus();
+          const postPassStatus = await runWallClockComputeAction({
+            timeoutMs: AI_COMPUTE_TIMEOUT_MS.diarization,
+            label: 'Speaker identification admission',
+            meetingId,
+            terminateProcess: terminateProcessBestEffort,
+            action: (registerProcess) => resolveGuidedDiarizationStatus({ registerProcess }),
+          });
           throwIfJobBlocked(meetingId, epoch);
           if (
             postPassStatus
@@ -2185,33 +2224,19 @@ function createTranscriptionService(deps) {
       });
 
       const resolvedAudioPath = assertSafeExistingRecordingAudioPath(audioFile);
-      const availability = getDiarizationAvailability(process.platform, process.arch);
-      if (!availability.supported) {
-        throw new Error(availability.reason || 'Speaker identification is not supported on this platform.');
-      }
-      const requiredDevice = availability.runtimeDevice;
-      if (!requiredDevice) {
-        throw new Error('Speaker identification accelerator policy is not configured for this platform.');
-      }
-
-      const aiStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions());
-      const diarizationStatus = aiStatus && aiStatus.features && aiStatus.features.diarization;
-      const catalogModelRef = diarizationStatus ? getDiarizationModelRef(diarizationStatus.modelId) : null;
-      if (!canStartGuidedDiarization({
-        status: diarizationStatus && diarizationStatus.status,
-        setupComplete: diarizationStatus && diarizationStatus.setupComplete,
-        engine: diarizationStatus && diarizationStatus.engine,
-        modelRef: catalogModelRef,
+      const passiveAiStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions());
+      const passiveDiarizationStatus = passiveAiStatus && passiveAiStatus.features && passiveAiStatus.features.diarization;
+      const passiveModelRef = passiveDiarizationStatus ? getDiarizationModelRef(passiveDiarizationStatus.modelId) : null;
+      if (process.platform !== 'linux' && !canStartGuidedDiarization({
+        status: passiveDiarizationStatus && passiveDiarizationStatus.status,
+        setupComplete: passiveDiarizationStatus && passiveDiarizationStatus.setupComplete,
+        engine: passiveDiarizationStatus && passiveDiarizationStatus.engine,
+        modelRef: passiveModelRef,
       })) {
-        throw new Error(
-          !diarizationStatus || diarizationStatus.status !== 'ready' || !diarizationStatus.setupComplete
-            ? 'Speaker identification setup is not ready.'
-            : 'Speaker identification model is not configured.',
-        );
+        throw new Error('Speaker identification setup is not ready.');
       }
-      const guidedEngine = resolveSpawnDiarizationEngine(diarizationStatus.engine);
+      const guidedEngine = resolveSpawnDiarizationEngine(passiveDiarizationStatus.engine);
       throwIfPackagedSpeakrsCliMissing(guidedEngine);
-
       const recordingsDir = getRecordingsDir();
       const finalTranscriptPath = resolvedAudioPath.replace(/\.[^/.]+$/, '.md');
       if (!isSafeRecordingsMarkdownPath({ filePath: finalTranscriptPath, recordingsDir })) {
@@ -2225,12 +2250,13 @@ function createTranscriptionService(deps) {
       }
 
       return enqueueAiComputeAction(async () => {
-        const admitted = await requireDiarizationComputeAdmission(guidedEngine);
         return runWallClockComputeAction({
           timeoutMs: getGuidedTranscriptionComputeTimeoutMs(modelSize),
           label: 'Speaker-guided transcription',
           terminateProcess: terminateProcessBestEffort,
-          action: (registerProcess) => runGuidedTranscriptionProcess({
+          action: async (registerProcess) => {
+            const admitted = await requireDiarizationComputeAdmission(guidedEngine, { registerProcess });
+            return runGuidedTranscriptionProcess({
             spawnProcess: spawnTrackedPython,
             args: buildManagedDiarizationGuidedTranscriptionArgs({
               audioPath: resolvedAudioPath,
@@ -2239,14 +2265,14 @@ function createTranscriptionService(deps) {
               modelSize,
               modelRef: admitted.catalogModelRef || admitted.diarizationStatus.modelId,
               speakerCount: speakerCount || admitted.diarizationStatus.speakerCount || 'auto',
-              requiredDevice,
+              requiredDevice: admitted.requiredDevice,
               engine: admitted.engine,
             }),
             cwd: pythonConfig.backendPath,
             env: buildDiarizationChildEnv({
               engine: admitted.engine,
               modelSize,
-              requiredDevice,
+              requiredDevice: admitted.requiredDevice,
               includeTranscriptionRuntime: true,
             }),
             finalTranscriptPath,
@@ -2264,7 +2290,8 @@ function createTranscriptionService(deps) {
                 sendToRenderer('transcription-progress', `${redactSensitiveText(line)}\n`);
               }
             },
-          }),
+            });
+          },
         });
       });
     });
@@ -2278,33 +2305,19 @@ function createTranscriptionService(deps) {
         throw new Error('diarize-transcript requires an audioPath');
       }
 
-      const availability = getDiarizationAvailability(process.platform, process.arch);
-      if (!availability.supported) {
-        throw new Error(availability.reason || 'Speaker identification is not supported on this platform.');
-      }
-      const requiredDevice = availability.runtimeDevice;
-      if (!requiredDevice) {
-        throw new Error('Speaker identification accelerator policy is not configured for this platform.');
-      }
-
-      const aiStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions());
-      const diarizationStatus = aiStatus && aiStatus.features && aiStatus.features.diarization;
-      const catalogModelRef = diarizationStatus ? getDiarizationModelRef(diarizationStatus.modelId) : null;
-      if (!canStartGuidedDiarization({
-        status: diarizationStatus && diarizationStatus.status,
-        setupComplete: diarizationStatus && diarizationStatus.setupComplete,
-        engine: diarizationStatus && diarizationStatus.engine,
-        modelRef: catalogModelRef,
+      const passiveAiStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions());
+      const passiveDiarizationStatus = passiveAiStatus && passiveAiStatus.features && passiveAiStatus.features.diarization;
+      const passiveModelRef = passiveDiarizationStatus ? getDiarizationModelRef(passiveDiarizationStatus.modelId) : null;
+      if (process.platform !== 'linux' && !canStartGuidedDiarization({
+        status: passiveDiarizationStatus && passiveDiarizationStatus.status,
+        setupComplete: passiveDiarizationStatus && passiveDiarizationStatus.setupComplete,
+        engine: passiveDiarizationStatus && passiveDiarizationStatus.engine,
+        modelRef: passiveModelRef,
       })) {
-        throw new Error(
-          !diarizationStatus || diarizationStatus.status !== 'ready' || !diarizationStatus.setupComplete
-            ? 'Speaker identification setup is not ready.'
-            : 'Speaker identification model is not configured.',
-        );
+        throw new Error('Speaker identification setup is not ready.');
       }
-      const diarizeEngine = resolveSpawnDiarizationEngine(diarizationStatus.engine);
+      const diarizeEngine = resolveSpawnDiarizationEngine(passiveDiarizationStatus.engine);
       throwIfPackagedSpeakrsCliMissing(diarizeEngine);
-
       const resolvedAudioPath = assertSafeExistingRecordingAudioPath(audioPath);
 
       let tempSegmentsPath = null;
@@ -2327,23 +2340,24 @@ function createTranscriptionService(deps) {
       }
       return enqueueAiComputeAction(async () => {
         try {
-          const admitted = await requireDiarizationComputeAdmission(diarizeEngine);
           return await runWallClockComputeAction({
             timeoutMs: AI_COMPUTE_TIMEOUT_MS.diarization,
             label: 'Speaker identification',
             terminateProcess: terminateProcessBestEffort,
-            action: (registerProcess) => new Promise((resolve, reject) => {
+            action: async (registerProcess) => {
+              const admitted = await requireDiarizationComputeAdmission(diarizeEngine, { registerProcess });
+              return new Promise((resolve, reject) => {
               const python = spawnTrackedPython(buildManagedDiarizationArgs({
                 audioPath: resolvedAudioPath,
                 segmentsJsonPath: resolvedSegmentsJsonPath,
                 outputPath: resolvedOutputPath,
                 modelRef: admitted.catalogModelRef || admitted.diarizationStatus.modelId,
                 speakerCount,
-                requiredDevice,
+                requiredDevice: admitted.requiredDevice,
                 engine: admitted.engine,
               }), {
                 cwd: pythonConfig.backendPath,
-                env: buildDiarizationChildEnv({ engine: admitted.engine, requiredDevice }),
+                env: buildDiarizationChildEnv({ engine: admitted.engine, requiredDevice: admitted.requiredDevice }),
               });
               registerProcess(python);
 
@@ -2395,7 +2409,8 @@ function createTranscriptionService(deps) {
                 }
                 reject(error);
               });
-            }),
+              });
+            },
           });
         } catch (error) {
           if (tempSegmentsPath) {

@@ -741,6 +741,8 @@ aiAddonIpc = createAiAddonIpc({
   terminateProcessBestEffort,
   buildManagedDiarizationValidationArgs,
   resolveSpeakrsCliPath: resolveAppSpeakrsCliPath,
+  getCachedCudaStatus,
+  resolveCudaStatusForTranscription,
   buildSummaryArgs,
   summarizeDiarizationError,
   summarizeSummaryValidationError,

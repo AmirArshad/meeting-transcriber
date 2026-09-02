@@ -324,6 +324,7 @@ const AI_MODEL_CATALOG = deepFreeze({
           modeByPlatform: {
             'win32-x64': 'cuda',
             'darwin-arm64': 'coreml',
+            'linux-x64': 'cuda',
           },
         },
         packRevision: SPEAKRS_MODEL_PACK_REVISION,
@@ -341,10 +342,17 @@ const AI_MODEL_CATALOG = deepFreeze({
               ...getSpeakrsModelPackArtifact('darwin-arm64'),
             },
           ],
+          'linux-x64': [
+            {
+              ...getSpeakrsModelPackArtifact('linux-x64'),
+            },
+            ...getSpeakrsRuntimeArtifacts('linux-x64'),
+          ],
         },
         supportedPlatforms: {
           win32: { acceleration: 'cuda', status: 'enabled' },
           darwin: { acceleration: 'coreml', arch: 'arm64', status: 'enabled' },
+          linux: { acceleration: 'cuda', arch: 'x64', status: 'enabled' },
         },
       },
       {
@@ -504,7 +512,7 @@ function getSpeakrsSetupArtifactsForPlatform(platform = process.platform, arch =
     ? modelPack.requiredFiles.map((file) => ({ ...file }))
     : [];
   const runtimeArtifacts = packEntries
-    .filter((entry) => entry.kind === 'ort-archive' || entry.kind === 'cuda-runtime-wheel' || entry.kind === 'cufft-wheel')
+    .filter((entry) => entry && entry.kind && entry.kind !== 'model-pack')
     .map((entry) => ({
       ...entry,
       keepFileNames: Array.isArray(entry.keepFileNames) ? [...entry.keepFileNames] : [],
@@ -749,10 +757,28 @@ function getAiAddonPaths(userDataDir) {
   };
 }
 
-const LINUX_DIARIZATION_UNAVAILABLE_REASON = 'Speaker identification is not available on Linux in this version. It will return in a future Linux update.';
+const LINUX_DIARIZATION_UNAVAILABLE_REASON = 'Speaker identification on Linux requires the managed CUDA 12 runtime, an NVIDIA GPU, and x86_64. CPU-only speaker identification is not supported.';
 const LINUX_SUMMARY_UNAVAILABLE_REASON = 'Local summaries are not available on Linux in this version. They will return in a future Linux update.';
+const LINUX_PYANNOTE_UNAVAILABLE_REASON = 'Pyannote speaker identification is not available on Linux in this version.';
 
-function getDiarizationAvailability(platform, arch) {
+function getLinuxSpeakrsUnavailableReason({ arch, cudaStatus } = {}) {
+  if (arch !== 'x64') {
+    return LINUX_DIARIZATION_UNAVAILABLE_REASON;
+  }
+  const { isLinuxCudaStatusReadyForAdmission } = require('./main-process/linux-cuda-runtime-helpers');
+  if (isLinuxCudaStatusReadyForAdmission(cudaStatus)) {
+    return null;
+  }
+  const detail = cudaStatus && (cudaStatus.error || cudaStatus.statusCode)
+    ? ` ${String(cudaStatus.error || cudaStatus.statusCode).trim()}`
+    : '';
+  if (!detail) {
+    return LINUX_DIARIZATION_UNAVAILABLE_REASON;
+  }
+  return `Speaker identification on Linux requires the managed CUDA 12 runtime and a working NVIDIA GPU.${detail} CPU-only speaker identification is not supported.`;
+}
+
+function getDiarizationAvailability(platform, arch, options = {}) {
   if (platform === 'win32' && arch === 'x64') {
     return {
       supported: true,
@@ -784,9 +810,22 @@ function getDiarizationAvailability(platform, arch) {
   }
 
   if (platform === 'linux') {
+    const reason = getLinuxSpeakrsUnavailableReason({
+      arch,
+      cudaStatus: options && options.cudaStatus,
+    });
+    if (!reason) {
+      return {
+        supported: true,
+        reason: null,
+        acceleration: 'cuda',
+        runtimeDevice: 'cuda',
+        automaticAfterTranscription: true,
+      };
+    }
     return {
       supported: false,
-      reason: LINUX_DIARIZATION_UNAVAILABLE_REASON,
+      reason,
       acceleration: 'unsupported',
       runtimeDevice: null,
       automaticAfterTranscription: false,
@@ -874,10 +913,18 @@ function loadAiAddonManifest({ userDataDir, existsSync = fs.existsSync, readFile
   }
 }
 
-function buildAiAddonStatus({ userDataDir, platform = process.platform, arch = process.arch, manifest, readError = null, catalog = AI_MODEL_CATALOG } = {}) {
+function buildAiAddonStatus({
+  userDataDir,
+  platform = process.platform,
+  arch = process.arch,
+  manifest,
+  readError = null,
+  catalog = AI_MODEL_CATALOG,
+  cudaStatus = null,
+} = {}) {
   const paths = getAiAddonPaths(userDataDir);
   const normalizedManifest = normalizeAiAddonManifest(manifest, catalog);
-  const diarizationAvailability = getDiarizationAvailability(platform, arch);
+  const diarizationAvailability = getDiarizationAvailability(platform, arch, { cudaStatus });
   const summaryAvailability = getSummaryAvailability(platform, arch);
 
   return {
@@ -903,7 +950,15 @@ function buildAiAddonStatus({ userDataDir, platform = process.platform, arch = p
   };
 }
 
-function getAiAddonStatus({ userDataDir, platform = process.platform, arch = process.arch, existsSync, readFileSync, catalog = AI_MODEL_CATALOG } = {}) {
+function getAiAddonStatus({
+  userDataDir,
+  platform = process.platform,
+  arch = process.arch,
+  existsSync,
+  readFileSync,
+  catalog = AI_MODEL_CATALOG,
+  cudaStatus = null,
+} = {}) {
   const { manifest, readError } = loadAiAddonManifest({ userDataDir, existsSync, readFileSync, catalog });
 
   return buildAiAddonStatus({
@@ -913,6 +968,7 @@ function getAiAddonStatus({ userDataDir, platform = process.platform, arch = pro
     manifest,
     readError,
     catalog,
+    cudaStatus,
   });
 }
 
@@ -935,6 +991,7 @@ module.exports = {
   getAiAddonStatus,
   getDefaultModelId,
   LINUX_DIARIZATION_UNAVAILABLE_REASON,
+  LINUX_PYANNOTE_UNAVAILABLE_REASON,
   LINUX_SUMMARY_UNAVAILABLE_REASON,
   getDiarizationAvailability,
   getDiarizationDependencyArtifactForPlatform,

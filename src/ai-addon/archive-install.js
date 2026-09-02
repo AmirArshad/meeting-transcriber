@@ -130,7 +130,11 @@ function extractZipArchiveInWorker(archivePath, destinationDir, options = {}) {
 function extractTarGzArchiveInWorker(archivePath, destinationDir, options = {}) {
   return runArchiveExtractionInWorker(
     'ai-addon-tar-extractor-worker.js',
-    { archivePath, destinationDir },
+    {
+      archivePath,
+      destinationDir,
+      includeFileNames: Array.isArray(options.includeFileNames) ? options.includeFileNames : null,
+    },
     'Runtime tar.gz archive',
     options.cancelSignal,
   );
@@ -161,6 +165,67 @@ async function extractTarGzArchive(archivePath, destinationDir, tarRunner = runT
   await tarRunner(['-xzf', archivePath, '-C', destinationDir]);
 }
 
+function flattenSelectedArchiveFiles(destinationDir, includeFileNames, fsModule = fs) {
+  if (!Array.isArray(includeFileNames) || includeFileNames.length === 0) {
+    return;
+  }
+  const wanted = new Set();
+  for (const fileName of includeFileNames) {
+    const normalized = String(fileName || '');
+    if (!normalized || normalized !== path.basename(normalized) || normalized.includes('/') || normalized.includes('\\')) {
+      throw new Error('Archive flatten received an unsafe selected filename.');
+    }
+    wanted.add(normalized);
+  }
+  const existsSync = bindFsMethod(fsModule, 'existsSync');
+  const readdirSync = bindFsMethod(fsModule, 'readdirSync');
+  const statSync = bindFsMethod(fsModule, 'statSync');
+  const copyFileSync = bindFsMethod(fsModule, 'copyFileSync');
+  const rmSync = bindFsMethod(fsModule, 'rmSync');
+  if (!existsSync || !readdirSync || !statSync || !copyFileSync || !rmSync || !existsSync(destinationDir)) {
+    throw new Error('File system does not support flattening selected archive files.');
+  }
+  const selected = new Map();
+  const queue = [path.resolve(destinationDir)];
+  const resolvedRoot = path.resolve(destinationDir);
+  while (queue.length) {
+    const currentDir = queue.shift();
+    for (const entry of readdirSync(currentDir, { withFileTypes: true })) {
+      const entryPath = path.join(currentDir, entry.name);
+      const isDirectory = typeof entry.isDirectory === 'function'
+        ? entry.isDirectory()
+        : statSync(entryPath).isDirectory();
+      if (isDirectory) {
+        queue.push(entryPath);
+        continue;
+      }
+      if (!wanted.has(entry.name)) {
+        continue;
+      }
+      if (selected.has(entry.name)) {
+        throw new Error(`Archive contains duplicate selected filename: ${entry.name}`);
+      }
+      selected.set(entry.name, entryPath);
+    }
+  }
+  for (const name of wanted) {
+    if (!selected.has(name)) {
+      throw new Error(`Archive did not provide required file: ${name}`);
+    }
+  }
+  for (const [name, sourcePath] of selected) {
+    const destPath = path.join(resolvedRoot, name);
+    if (path.resolve(sourcePath) !== destPath) {
+      copyFileSync(sourcePath, destPath);
+    }
+  }
+  for (const entry of readdirSync(resolvedRoot)) {
+    if (!wanted.has(entry)) {
+      rmSync(path.join(resolvedRoot, entry), { recursive: true, force: true });
+    }
+  }
+}
+
 async function extractRuntimeArchive(archivePath, destinationDir, archiveFormat, options = {}) {
   if (archiveFormat === 'zip') {
     if (typeof archivePath === 'string') {
@@ -173,10 +238,13 @@ async function extractRuntimeArchive(archivePath, destinationDir, archiveFormat,
   if (archiveFormat === 'tar.gz') {
     if (typeof archivePath === 'string') {
       await extractTarGzArchiveInWorker(archivePath, destinationDir, options);
-      return;
+    } else {
+      fs.mkdirSync(destinationDir, { recursive: true });
+      await extractTarGzArchive(archivePath, destinationDir);
+      if (Array.isArray(options.includeFileNames) && options.includeFileNames.length > 0) {
+        flattenSelectedArchiveFiles(destinationDir, options.includeFileNames);
+      }
     }
-    fs.mkdirSync(destinationDir, { recursive: true });
-    await extractTarGzArchive(archivePath, destinationDir);
     return;
   }
 
@@ -205,6 +273,7 @@ module.exports = {
   extractZipArchive,
   extractRuntimeArchive,
   extractTarGzArchive,
+  flattenSelectedArchiveFiles,
   validateTarListing,
   // Private helpers used by setup flows
   finalizeInstalledRuntimeExecutable,

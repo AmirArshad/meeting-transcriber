@@ -99,6 +99,9 @@ function createServiceHarness(overrides = {}) {
     getBackendModuleArgs: (moduleName, args) => [moduleName, ...args],
     enqueueAiComputeAction: (action) => computeQueue.enqueue(action),
     getCachedCudaStatus: () => ({ available: false }),
+    // Compute admission never consumes the UI cache on Linux; this harness
+    // models an explicit live probe finding no managed CUDA runtime.
+    resolveCudaStatusForTranscription: async () => null,
     buildCudaRuntimeEnv: (env) => env || {},
     getAiAddonRuntimeOptions: () => ({}),
     getDiarizationDependencyEnv: () => ({}),
