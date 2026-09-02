@@ -160,7 +160,48 @@ test('Linux safeStorage smoke requires a real backend and a successful encrypt/d
 const {
   getUnsupportedPlatformCudaProbeError,
   buildUnsupportedPlatformCudaStatus,
+  getManagedLinuxCudaRuntimeTarget,
+  getManagedLinuxCudaLibraryDirs,
 } = require('../../src/main-process/cuda-runtime-helpers');
+
+test('Linux CUDA managed target is userData-scoped and has only wheel library roots', () => {
+  const target = getManagedLinuxCudaRuntimeTarget('/home/alice/.config/AvaNevis');
+  assert.equal(target, '/home/alice/.config/AvaNevis/ai-addons/cuda/python');
+  assert.deepEqual(getManagedLinuxCudaLibraryDirs(target), [
+    '/home/alice/.config/AvaNevis/ai-addons/cuda/python/nvidia/cublas/lib',
+    '/home/alice/.config/AvaNevis/ai-addons/cuda/python/nvidia/cudnn/lib',
+  ]);
+});
+
+test('admitted Linux CUDA builds a controlled managed-first loader environment', () => {
+  const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+  Object.defineProperty(process, 'platform', { configurable: true, value: 'linux' });
+  try {
+    const userData = '/tmp/avanevis-linux-cuda-test';
+    const target = getManagedLinuxCudaRuntimeTarget(userData);
+    const libraryDirs = getManagedLinuxCudaLibraryDirs(target);
+    const service = createGpuRuntimeService({
+      app: { getPath: () => userData },
+      path,
+      fs: { existsSync: (candidate) => libraryDirs.includes(candidate) },
+      pythonConfig: { pythonExe: '/fake/python' },
+      spawnTrackedPython: () => { throw new Error('not used'); },
+      getBackendModuleArgs: () => [],
+      appendSpawnLogBuffer: (buffer) => buffer,
+      sendRedactedProgress: () => {},
+      flushRedactedProgress: () => {},
+      getActivePythonVersion: async () => ({ parsed: { version: '3.11.9' } }),
+      terminateProcessBestEffort: () => {},
+      assertTrustedRendererSender: () => {},
+      getDiarizationDependencySitePackagesPath: () => null,
+      isLinuxCudaProfileEnabled: () => true,
+    });
+    const env = service.buildCudaRuntimeEnv({ LD_LIBRARY_PATH: '/usr/lib:/lib' });
+    assert.equal(env.LD_LIBRARY_PATH, `${libraryDirs.join(':')}:/usr/lib:/lib`);
+  } finally {
+    Object.defineProperty(process, 'platform', platformDescriptor);
+  }
+});
 
 test('Linux CUDA probe reports unavailable and does not advertise install', () => {
   const linux = buildUnsupportedPlatformCudaStatus('linux');

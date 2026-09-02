@@ -200,10 +200,14 @@ function createTranscriptionService(deps) {
 
   function getTranscriptionRuntimeEnv(modelSize, cudaOptions = {}) {
     const downloadCheck = getTranscriptionModelDownloadCheck(modelSize);
+    const linuxCudaRequired = cudaOptions && cudaOptions.linuxCudaEnabled === true;
     return buildTranscriptionRuntimeEnv({
       cacheDir: downloadCheck.cacheDir,
       modelCached: isTranscriptionModelCached(modelSize, downloadCheck),
-      baseEnv: buildCudaRuntimeEnv({}, cudaOptions),
+      baseEnv: buildCudaRuntimeEnv(
+        linuxCudaRequired ? { AVANEVIS_LINUX_CUDA_REQUIRED: '1' } : {},
+        cudaOptions,
+      ),
     });
   }
 
@@ -357,6 +361,7 @@ function createTranscriptionService(deps) {
     language,
     modelSize,
     device = 'auto',
+    linuxCudaEnabled = false,
     registerProcess,
   } = {}) {
     return new Promise((resolve, reject) => {
@@ -367,7 +372,11 @@ function createTranscriptionService(deps) {
         language: language || 'en',
         modelSize,
         device,
-      }), { cwd: pythonConfig.backendPath, env: getTranscriptionRuntimeEnv(modelSize) });
+        linuxCudaEnabled,
+      }), {
+        cwd: pythonConfig.backendPath,
+        env: getTranscriptionRuntimeEnv(modelSize, linuxCudaEnabled ? { linuxCudaEnabled: true } : {}),
+      });
 
       if (typeof registerProcess === 'function') {
         registerProcess(python);
@@ -1098,6 +1107,32 @@ function createTranscriptionService(deps) {
     registerProcess,
     beforeSpawn = null,
   }) {
+    // Linux CUDA is an explicitly admitted profile, unlike Windows' optional
+    // acceleration. A fresh non-ready status must never turn into auto/CPU.
+    if (process.platform === 'linux') {
+      const status = typeof resolveCudaStatusForTranscription === 'function'
+        ? await resolveCudaStatusForTranscription({ registerProcess })
+        : null;
+      if (status) {
+        if (status.statusCode !== 'ready') {
+          const error = new Error(status.error || `Linux CUDA runtime is unavailable (${status.statusCode || 'unknown'}).`);
+          error.code = 'LINUX_CUDA_UNAVAILABLE';
+          throw error;
+        }
+        if (typeof beforeSpawn === 'function') beforeSpawn();
+        return runTranscriptionProcess({
+          audioFile,
+          language,
+          modelSize,
+          device: 'cuda',
+          linuxCudaEnabled: true,
+          registerProcess,
+        });
+      }
+      // Core Beta remains CPU-only when the future acceptance gate is absent.
+      if (typeof beforeSpawn === 'function') beforeSpawn();
+      return runTranscriptionProcess({ audioFile, language, modelSize, device: 'cpu', registerProcess });
+    }
     const shouldPreemptiveCpuRetry = await shouldPreemptiveCpuAtJobStart(registerProcess);
     if (shouldPreemptiveCpuRetry) {
       sendToRenderer(
@@ -2106,39 +2141,12 @@ function createTranscriptionService(deps) {
           label: 'Transcription',
           terminateProcess: terminateProcessBestEffort,
           action: async (registerProcess) => {
-            // Decide CPU preemption when the job starts, not at enqueue (CUDA may have been repaired).
-            // Re-probe when the UI cache is stale so broken-CUDA boxes get the CPU UX message.
-            const shouldPreemptiveCpuRetry = await shouldPreemptiveCpuAtJobStart(registerProcess);
-            if (shouldPreemptiveCpuRetry) {
-              sendToRenderer(
-                'transcription-progress',
-                'CUDA runtime is not loadable on this system. Starting transcription on CPU.\n',
-              );
-            }
-            try {
-              return await runTranscriptionProcess({
-                audioFile,
-                language,
-                modelSize,
-                device: shouldPreemptiveCpuRetry ? 'cpu' : 'auto',
-                registerProcess,
-              });
-            } catch (error) {
-              if (!isRetryableCudaTranscriptionError(error && error.message)) {
-                throw error;
-              }
-              sendToRenderer(
-                'transcription-progress',
-                'GPU transcription failed because CUDA runtime libraries could not be loaded. Retrying on CPU; this may take significantly longer.\n',
-              );
-              return runTranscriptionProcess({
-                audioFile,
-                language,
-                modelSize,
-                device: 'cpu',
-                registerProcess,
-              });
-            }
+            return runNormalTranscriptionWithCudaFallback({
+              audioFile,
+              language,
+              modelSize,
+              registerProcess,
+            });
           },
         });
       });

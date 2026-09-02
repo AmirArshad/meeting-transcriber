@@ -4,7 +4,7 @@
 > **Pre-merge review (2026-08-28):** full-branch review before the first Linux release. Eleven defects fixed — see [Pre-merge review remediation](#pre-merge-review-remediation-2026-08-28). Two of them (`is_pulse_port_unavailable` never matching a real `pulsectl` enum, and a blank Linux tray icon) were behaviours this document previously claimed as evidence; those claims are corrected in place below.
 > **Replanned:** 2026-08-23 against AvaNevis v2.7.0 / current `master`.
 > **Review pass:** 2026-08-23 — verified plan claims against the codebase and CI, corrected two host-fact conclusions (secret storage, tray), and pinned every required upstream Linux artifact. All "Verified" sections below were checked on that date.
-> **Scope cut (2026-08-24):** the first Linux version is **Core Beta only** (Phases 0–5). Speaker identification and local summaries are **out of scope** until a later Linux version. There is no Omarchy host with an NVIDIA GPU to validate those CUDA-only add-ons; do not ship a CPU fallback. The UI must keep both features visible but greyed out as unsupported.
+> **Scope cut (2026-08-24):** the first Linux version is **Core Beta only** (Phases 0–5). Speaker identification and local summaries are **out of scope** for Core Beta; do not ship a CPU fallback. The UI must keep both features visible but greyed out as unsupported. CUDA-only add-ons now proceed only through the separately gated v2.9 CachyOS + RTX 4070 lane; hardware presence alone does not change Core Beta support claims.
 > **Scope extension (2026-09-01):** v2.9 now includes a separate, sequential Linux AI lane because a CachyOS desktop with an NVIDIA RTX 4070 is available. The lane begins with fresh artifact and compatibility investigation; CUDA Whisper, Speakrs, Pyannote, and summaries are independently accepted or left unavailable. Its detailed execution plan is [2026-09-01-v2.9-linux-ai-addons.md](../superpowers/plans/2026-09-01-v2.9-linux-ai-addons.md).
 > **Primary target:** Omarchy 4 and CachyOS x86_64, Hyprland/Wayland, PipeWire with `pipewire-pulse`.
 > **Secondary target:** experimental-beta x86_64 desktops (Ubuntu, vanilla Arch, non-Hyprland CachyOS, Fedora Workstation, SteamOS Desktop Mode) where the same Pulse-compatible capture path may work without distro-specific code. These are not hardware-validated. See [LINUX_EXPERIMENTAL.md](../guides/LINUX_EXPERIMENTAL.md).
@@ -239,7 +239,7 @@ Linux uses `faster-whisper`, not MLX.
 First Linux version (Core Beta):
 
 - **CPU is the only supported transcription path.**
-- CUDA Whisper, the managed CUDA runtime install, and GPU Settings install/repair are deferred with diarization/summaries until an Omarchy host with NVIDIA hardware exists (Phase 6).
+- CUDA Whisper, the managed CUDA runtime install, and GPU Settings install/repair are deferred from Core Beta with diarization/summaries. They are now the separately gated v2.9 CachyOS + RTX 4070 Phase 6 work; no status changes until its implementation and packaged evidence pass.
 - A CUDA probe may still run so Linux does not silently take the Windows GPU path. It must report unavailable/incompatible honestly and stay on CPU. Do not advertise Linux CUDA as ready, and do not offer an Install GPU control that cannot complete.
 - Model cache completeness and `AVANEVIS_TRANSCRIPTION_LOCAL_FILES_ONLY` behavior stay aligned between JS and Python.
 - Whisper cache remains separate from the diarization Hugging Face cache (that cache stays unused on Linux in Core Beta).
@@ -351,7 +351,7 @@ return linuxAsset || null;
 
 ### 12. Core Beta historical decision: no diarization or summaries (2026-08-24; superseded for the v2.9 RTX 4070 lane)
 
-There is no Omarchy development host with an NVIDIA GPU. Speakrs and Pyannote on Linux are CUDA-only with **no CPU fallback** (same product policy as Windows/macOS). Local summaries are deferred with that same later milestone even though a CPU llama.cpp binary exists upstream — do not ship a Linux-only CPU summary exception in Core Beta.
+The original Omarchy Core Beta host had no NVIDIA evidence. The current CachyOS RTX 4070 host is reserved for the separately gated v2.9 Linux-AI lane. Speakrs and Pyannote on Linux are CUDA-only with **no CPU fallback** (same product policy as Windows/macOS). Local summaries are deferred with that same later milestone even though a CPU llama.cpp binary exists upstream — do not ship a Linux-only CPU summary exception in Core Beta.
 
 Core Beta product rules:
 
@@ -811,6 +811,20 @@ Full-branch review of `release/linux` before merging to `master` and cutting the
 ### Phases 6–9 — v2.9 Linux AI extension (gated)
 
 **Run these phases only through the v2.9 Linux-AI plan on CachyOS x86_64 + NVIDIA RTX 4070.** Begin with fresh official artifact, license, hash, driver/CUDA, Python, and encrypted-secret-storage investigation. Requirements and historical artifact URLs below are leads, not accepted pins.
+
+**Task 1 evidence (CachyOS RTX 4070, 2026-09-02).** The host is CachyOS
+x86_64 / Hyprland / Wayland / PipeWire 1.6.8 with an RTX 4070 (compute 8.9),
+NVIDIA 610.57.04, and CUDA UMD 13.3.  The candidate CUDA 12 CTranslate2,
+CUBLAS, and cuDNN manylinux wheel closure was downloaded and locally hashed in
+the dependency compatibility matrix.  This is sufficient to start the managed
+runtime implementation gate, not to advertise CUDA Whisper.  The selected
+Electron secret-store backend is `gnome_libsecret`, but encryption is currently
+unavailable and an encrypt/decrypt round-trip fails; Pyannote is consequently
+unavailable pending Task 6.  ONNX Runtime 1.27.1 Linux CUDA 12 was inspected as
+a Speakrs lead, but no packaged/integrity-checked Linux CLI exists yet.  Current
+official llama.cpp Linux releases have no CUDA x86_64 artifact, so summaries are
+also unavailable.  Full hashes, sizes, and source links are recorded in
+`docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md`.
 
 ### Phase 6 — Linux accelerator/resource foundation (v2.9 gated)
 

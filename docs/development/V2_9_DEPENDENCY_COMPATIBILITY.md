@@ -8,6 +8,47 @@ Decision record for `feature/v2.9-dependency-hygiene` Task 1. Later version chan
 **Electron 44 lane (2026-08-31):** npm `latest` is **44.1.0** (dist-tag `44-x-y` also 44.1.0; 44.0.0 published 2026-08-25, 44.1.0 published 2026-08-31). Electron 45 is `alpha` only (`45.0.0-alpha.2`) and is out of scope. electron-builder remains **26.15.3** (npm `latest`; not combined with this lane).
 **Privacy:** no cloud transcription, telemetry, or extra network use beyond explicit model/update checks and these resolver downloads.
 
+## Linux AI add-ons — Task 1 host and artifact gate (2026-09-02)
+
+This is the initial evidence record for `feature/v2.9-linux-ai-addons`, not an
+acceptance claim.  A component remains unavailable until its later implementation,
+packaged, and hardware gates have passed.  In particular, no entry below permits a
+CPU fallback, ambient system-CUDA library discovery, or a Linux catalog change.
+
+### CachyOS host baseline
+
+| Field | Observed value |
+|---|---|
+| OS / kernel | CachyOS rolling, `Linux 7.2.2-1-cachyos`, x86_64 |
+| desktop / audio | Hyprland on Wayland; PipeWire 1.6.8 |
+| GPU | NVIDIA GeForce RTX 4070, compute capability 8.9, 12,282 MiB VRAM |
+| driver | NVIDIA open kernel module / userspace 610.57.04; CUDA UMD 13.3 |
+| GPU baseline | 10,103 MiB free at 2026-09-02 10:30 BST; normal desktop processes were using the remainder |
+| packaged target Python | CPython 3.11.9 (`build/prepare-resources.js`); the host development Python is 3.14.7 and is not an acceptance interpreter |
+| Electron | 44.1.0 |
+| secret store probe | Electron selected `gnome_libsecret` under Hyprland, but `safeStorage.isEncryptionAvailable()` returned `false`; no encrypt/decrypt round trip was possible |
+
+The development sandbox does not expose `/dev/nvidia*`; host-side `nvidia-smi`
+does.  GPU smoke evidence must therefore run on the host/packaged application, not
+inside the sandboxed test shell.
+
+### Candidate investigation
+
+All files below were downloaded from the stated official publisher to a disposable
+directory and locally hashed.  Sizes are exact bytes, not rounded download UI
+values.
+
+| Component | Official candidate and license | Linux x86_64 artifact evidence | Decision |
+|---|---|---|---|
+| CUDA Whisper | [CTranslate2 4.8.1](https://pypi.org/project/ctranslate2/4.8.1/) (MIT), NVIDIA CUDA Python wheels (NVIDIA proprietary terms) | `ctranslate2-4.8.1-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl`, 39,351,971 bytes, `c0a584c17f21779eb9035bcbc1ec280998f90b36725b70a5ff911f33e343199a`; `nvidia_cublas_cu12-12.9.2.10-py3-none-manylinux_2_27_x86_64.whl`, 581,240,110 bytes, `e4f53a8ca8c5d6e8c492d0d0a3d565ecb59a751b19cfdaa4f6da0ab2104c1702`; `nvidia_cudnn_cu12-9.22.0.52-py3-none-manylinux_2_27_x86_64.whl`, 718,382,818 bytes, `391b9a7ee6386daaca7f8dca41e83c2c99f760c9581a0400755e87b4287b8847`. Inspection found `libcublas.so.12`, `libcublasLt.so.12`, and cuDNN 9 libraries. | Viable candidate only. Task 2 must add a contained Linux CUDA 12 profile and test it before any catalog/status change; Task 3 requires packaged RTX 4070 evidence. |
+| Speakrs | [ONNX Runtime 1.27.1 Linux GPU CUDA 12](https://github.com/microsoft/onnxruntime/releases/download/v1.27.1/onnxruntime-linux-x64-gpu_cuda12-1.27.1.tgz) (MIT) | `onnxruntime-linux-x64-gpu_cuda12-1.27.1.tgz`, 244,763,765 bytes, `08b568bd69500c36606aff7c3896ee4fa7d3531719f6b00f43e6a34db41dc4bf`; archive contains x86_64 `libonnxruntime.so.1.27.1` and CUDA provider libraries. | Not accepted. The runtime archive alone is not a Speakrs implementation: there is no staged, integrity-checked Linux `speakrs-cli` yet. Task 4 owns the CLI build/package/integrity gate. |
+| Pyannote | `pyannote/speaker-diarization-community-1` requires the user's token; token-based setup has no maintainer artifact to download or pin. | No token was requested, supplied, logged, or downloaded. The required host preflight currently fails because selected `gnome_libsecret` is not encryption-available. | Not accepted. Defer dependency resolution and token-stdin smoke to Task 6 after the encrypted-secret-store prerequisite passes. |
+| Summaries | [llama.cpp official releases](https://github.com/ggml-org/llama.cpp/releases) (MIT) | The current official Linux x86_64 assets are CPU/Vulkan/other non-CUDA variants; official CUDA release artifacts are Windows-only. | Rejected for now. Do not substitute CPU or Vulkan. Task 8 may reconsider only if an official, redistributable Linux CUDA artifact with a complete library closure becomes available and passes the RTX 4070 smoke. |
+
+The host's CUDA 13 toolkit/UMD does not itself authorize a CUDA 13 app runtime.
+NVIDIA's CUDA 12 runtime wheels above remain a separate managed profile and must be
+loaded only through the controlled library path designed in Task 2.
+
 | Interpreter | Where | ABI |
 |---|---|---|
 | CPython 3.11.9 (`MSC v.1938`, 64-bit) | Windows host clean venvs | `cp311` win_amd64 |

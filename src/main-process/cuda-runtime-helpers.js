@@ -9,7 +9,9 @@ const CUDA_RUNTIME_PROFILES = Object.freeze({
     supported: true,
     pipPackages: Object.freeze(['nvidia-cublas-cu12', 'nvidia-cudnn-cu12']),
     requiredDlls: Object.freeze(['cublas64_12.dll', 'cublasLt64_12.dll', 'cudnn64_9.dll']),
+    requiredSharedLibraries: Object.freeze(['libcublas.so.12', 'libcublasLt.so.12', 'libcudnn.so.9']),
     expectedDllPrefixes: Object.freeze(['cublas64_12', 'cublaslt64_12', 'cudnn64_9']),
+    expectedSharedLibraryPrefixes: Object.freeze(['libcublas.so.12', 'libcublaslt.so.12', 'libcudnn.so.9']),
   }),
   cuda13: Object.freeze({
     id: 'cuda13',
@@ -17,7 +19,9 @@ const CUDA_RUNTIME_PROFILES = Object.freeze({
     supported: false,
     pipPackages: Object.freeze(['nvidia-cublas', 'nvidia-cudnn-cu13']),
     requiredDlls: Object.freeze(['cublas64_13.dll', 'cublasLt64_13.dll', 'cudnn64_9.dll']),
+    requiredSharedLibraries: Object.freeze(['libcublas.so.13', 'libcublasLt.so.13', 'libcudnn.so.9']),
     expectedDllPrefixes: Object.freeze(['cublas64_13', 'cublaslt64_13']),
+    expectedSharedLibraryPrefixes: Object.freeze(['libcublas.so.13', 'libcublaslt.so.13']),
   }),
 });
 const SUPPORTED_TRANSCRIPTION_CUDA_PROFILE_IDS = Object.freeze(['cuda12']);
@@ -124,6 +128,57 @@ function getPyTorchCudaBinCandidates(sitePackagesDirs = []) {
   return candidates;
 }
 
+function getManagedLinuxCudaRuntimeTarget(userDataPath = '') {
+  if (!userDataPath || !path.isAbsolute(userDataPath)) {
+    throw new Error('CUDA runtime userData path must be an absolute path.');
+  }
+  return path.join(path.resolve(userDataPath), 'ai-addons', 'cuda', 'python');
+}
+
+function getManagedLinuxCudaLibraryDirs(managedRoot = '') {
+  if (!managedRoot || !path.isAbsolute(managedRoot)) {
+    throw new Error('Managed CUDA runtime root must be an absolute path.');
+  }
+  return [
+    path.join(managedRoot, 'nvidia', 'cublas', 'lib'),
+    path.join(managedRoot, 'nvidia', 'cudnn', 'lib'),
+  ];
+}
+
+function buildManagedLinuxCudaLibraryPath({
+  managedRoot = '',
+  libraryDirs = [],
+  inheritedLibraryPath = '',
+} = {}) {
+  if (!managedRoot || !path.isAbsolute(managedRoot)) {
+    throw new Error('Managed CUDA runtime root must be an absolute path.');
+  }
+  const resolvedRoot = path.resolve(managedRoot);
+  const resolvedDirs = [];
+  const seenDirs = new Set();
+  for (const libraryDir of libraryDirs) {
+    if (!libraryDir || !path.isAbsolute(libraryDir)) {
+      throw new Error('Managed CUDA library directories must be absolute paths.');
+    }
+    const resolvedDir = path.resolve(libraryDir);
+    const relative = path.relative(resolvedRoot, resolvedDir);
+    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      throw new Error('Managed CUDA library directory is outside the managed runtime root.');
+    }
+    if (seenDirs.has(resolvedDir)) {
+      throw new Error('Managed CUDA library directories must not contain a duplicate.');
+    }
+    seenDirs.add(resolvedDir);
+    resolvedDirs.push(resolvedDir);
+  }
+  if (resolvedDirs.length === 0) {
+    throw new Error('Managed CUDA library directories must not be empty.');
+  }
+  return inheritedLibraryPath
+    ? [...resolvedDirs, inheritedLibraryPath].join(path.delimiter)
+    : resolvedDirs.join(path.delimiter);
+}
+
 function getCudaRuntimeProfile(profileId = DEFAULT_TRANSCRIPTION_CUDA_PROFILE_ID) {
   return CUDA_RUNTIME_PROFILES[profileId] || null;
 }
@@ -139,6 +194,14 @@ function getSupportedTranscriptionCudaProfileIds() {
 function getRequiredCudaRuntimeDlls(profileId = DEFAULT_TRANSCRIPTION_CUDA_PROFILE_ID) {
   const profile = getCudaRuntimeProfile(profileId);
   return profile ? [...profile.requiredDlls] : [];
+}
+
+function getRequiredCudaRuntimeLibraries(profileId = DEFAULT_TRANSCRIPTION_CUDA_PROFILE_ID, { platform = process.platform } = {}) {
+  const profile = getCudaRuntimeProfile(profileId);
+  if (!profile) return [];
+  return platform === 'linux'
+    ? [...(profile.requiredSharedLibraries || [])]
+    : [...profile.requiredDlls];
 }
 
 function getTranscriptionCudaPackages(profileId = DEFAULT_TRANSCRIPTION_CUDA_PROFILE_ID) {
@@ -166,6 +229,12 @@ function buildTranscriptionCudaInstallArgs(options = {}) {
   }
   if (noCache) {
     args.push('--no-cache-dir');
+  }
+  if (options && options.target) {
+    if (!path.isAbsolute(options.target)) {
+      throw new Error('CUDA runtime install target must be an absolute path.');
+    }
+    args.push('--target', path.resolve(options.target));
   }
   args.push(
     ...packages,
@@ -427,6 +496,7 @@ module.exports = {
   getCudaRuntimeProfiles,
   getSupportedTranscriptionCudaProfileIds,
   getRequiredCudaRuntimeDlls,
+  getRequiredCudaRuntimeLibraries,
   getTranscriptionCudaPackages,
   buildTranscriptionCudaInstallArgs,
   buildTranscriptionCudaUninstallArgs,
@@ -435,6 +505,9 @@ module.exports = {
   getUnsupportedPlatformCudaProbeError,
   getPythonSitePackagesCandidates,
   getPyTorchCudaBinCandidates,
+  getManagedLinuxCudaRuntimeTarget,
+  getManagedLinuxCudaLibraryDirs,
+  buildManagedLinuxCudaLibraryPath,
   classifyCudaProbeStatus,
   resolveCudaInstalledProfile,
   cudaStatusNeedsGpuRuntimeEnsure,

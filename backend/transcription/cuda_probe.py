@@ -6,6 +6,8 @@ import argparse
 import ctypes
 import json
 import os
+import subprocess
+import sys
 from collections.abc import Callable, Iterable
 from typing import Any
 
@@ -73,7 +75,7 @@ def find_unsupported_runtime_profiles(
 
             for name in names:
                 lower_name = str(name).lower()
-                if not lower_name.endswith(".dll"):
+                if not (lower_name.endswith(".dll") or ".so" in lower_name):
                     continue
                 if any(lower_name.startswith(prefix) for prefix in prefixes):
                     found = True
@@ -89,6 +91,24 @@ def find_unsupported_runtime_profiles(
 
 def _load_windows_dll(dll_name: str) -> Any:
     return ctypes.WinDLL(dll_name)  # type: ignore[attr-defined]
+
+
+def _load_linux_shared_library(library_name: str) -> Any:
+    return ctypes.CDLL(library_name)
+
+
+def _get_nvidia_smi_device_count() -> int:
+    """Probe the NVIDIA driver, independently from managed CUDA wheel loading."""
+    result = subprocess.run(
+        ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    if result.returncode != 0:
+        return 0
+    return len([line for line in result.stdout.splitlines() if line.strip()])
 
 
 def _get_ctranslate2_cuda_device_count() -> int:
@@ -107,10 +127,11 @@ def build_probe_report(
     path_value: str | None = None,
     listdir: Callable[[str], list[str]] | Callable[[str], list[Any]] = os.listdir,
     isdir: Callable[[str], bool] = os.path.isdir,
+    platform: str = "win32",
 ) -> dict[str, Any]:
     probe_error = ""
     get_device_count = device_count_getter or _get_ctranslate2_cuda_device_count
-    dll_loader = load_dll or _load_windows_dll
+    dll_loader = load_dll or (_load_linux_shared_library if platform.startswith("linux") else _load_windows_dll)
 
     try:
         device_count = get_device_count()
@@ -183,15 +204,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--profiles-json", required=True)
     parser.add_argument("--supported-profiles", required=True)
     parser.add_argument("--unsupported-hints-json", required=True)
+    parser.add_argument("--platform", default=sys.platform)
+    parser.add_argument("--device-check", choices=["ctranslate2", "nvidia-smi"], default="ctranslate2")
     args = parser.parse_args(argv)
 
     profiles = json.loads(args.profiles_json)
     supported_profiles = [item.strip() for item in args.supported_profiles.split(",") if item.strip()]
     unsupported_hints = json.loads(args.unsupported_hints_json)
+    device_count_getter = _get_nvidia_smi_device_count if args.device_check == "nvidia-smi" else None
     _print_report(build_probe_report(
         profiles=profiles,
         supported_profiles=supported_profiles,
         unsupported_hints=unsupported_hints,
+        device_count_getter=device_count_getter,
+        platform=args.platform,
     ))
     return 0
 

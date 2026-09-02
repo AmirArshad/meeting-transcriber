@@ -97,6 +97,10 @@ const {
   shouldKillProcessOnQuit,
   matchesFasterWhisperCacheFolderName,
 } = mainProcessHelpers;
+const {
+  getRequiredCudaRuntimeLibraries,
+  buildManagedLinuxCudaLibraryPath,
+} = require('../../src/main-process/cuda-runtime-helpers');
 const { signalProcessTree, signalOwnedProcessGroup } = require('../../src/main-process/quit-lifecycle-helpers');
 const { createAsyncActionQueue } = require('../../src/main/ai-compute-queue');
 
@@ -1509,6 +1513,67 @@ test('transcription CUDA installer only targets CTranslate2 runtime libraries', 
   );
 });
 
+test('Linux transcription CLI accepts CUDA only after explicit runtime admission', () => {
+  assert.equal(resolveFasterWhisperCliDevice('linux', 'cuda'), 'cpu');
+  assert.equal(
+    resolveFasterWhisperCliDevice('linux', 'cuda', { linuxCudaEnabled: true }),
+    'cuda',
+  );
+  assert.deepEqual(
+    buildTranscriptionCliArgs({
+      platform: 'linux',
+      arch: 'x64',
+      audioFile: '/recordings/meeting.opus',
+      modelSize: 'small',
+      device: 'cuda',
+      linuxCudaEnabled: true,
+    }),
+    [
+      '-m', 'transcription.faster_whisper_transcriber',
+      '--file', '/recordings/meeting.opus', '--language', 'en', '--model', 'small',
+      '--device', 'cuda', '--json',
+    ],
+  );
+});
+
+test('managed Linux CUDA library paths reject untrusted directories and preserve inherited lookup', () => {
+  assert.equal(
+    buildManagedLinuxCudaLibraryPath({
+      managedRoot: '/home/alice/.config/avanevis/ai-addons/cuda',
+      libraryDirs: [
+        '/home/alice/.config/avanevis/ai-addons/cuda/nvidia/cublas/lib',
+        '/home/alice/.config/avanevis/ai-addons/cuda/nvidia/cudnn/lib',
+      ],
+      inheritedLibraryPath: '/usr/lib:/lib',
+    }),
+    '/home/alice/.config/avanevis/ai-addons/cuda/nvidia/cublas/lib:/home/alice/.config/avanevis/ai-addons/cuda/nvidia/cudnn/lib:/usr/lib:/lib',
+  );
+  assert.throws(
+    () => buildManagedLinuxCudaLibraryPath({
+      managedRoot: '/home/alice/.config/avanevis/ai-addons/cuda',
+      libraryDirs: ['/usr/lib'],
+    }),
+    /outside the managed runtime root/,
+  );
+  assert.throws(
+    () => buildManagedLinuxCudaLibraryPath({
+      managedRoot: '/home/alice/.config/avanevis/ai-addons/cuda',
+      libraryDirs: ['relative/lib'],
+    }),
+    /absolute/,
+  );
+  assert.throws(
+    () => buildManagedLinuxCudaLibraryPath({
+      managedRoot: '/home/alice/.config/avanevis/ai-addons/cuda',
+      libraryDirs: [
+        '/home/alice/.config/avanevis/ai-addons/cuda/nvidia/cublas/lib',
+        '/home/alice/.config/avanevis/ai-addons/cuda/nvidia/cublas/lib',
+      ],
+    }),
+    /duplicate/,
+  );
+});
+
 test('CUDA runtime profiles expose supported baseline and optional newer runtimes', () => {
   const profiles = getCudaRuntimeProfiles();
   const supportedIds = getSupportedTranscriptionCudaProfileIds();
@@ -1516,6 +1581,10 @@ test('CUDA runtime profiles expose supported baseline and optional newer runtime
   assert.ok(profiles.some((profile) => profile.id === 'cuda13' && profile.supported === false));
   assert.deepEqual(supportedIds, ['cuda12']);
   assert.deepEqual(getRequiredCudaRuntimeDlls(), ['cublas64_12.dll', 'cublasLt64_12.dll', 'cudnn64_9.dll']);
+  assert.deepEqual(
+    getRequiredCudaRuntimeLibraries('cuda12', { platform: 'linux' }),
+    ['libcublas.so.12', 'libcublasLt.so.12', 'libcudnn.so.9'],
+  );
   assert.deepEqual(getTranscriptionCudaPackages(), ['nvidia-cublas-cu12', 'nvidia-cudnn-cu12']);
   const cuda13Profile = profiles.find((profile) => profile.id === 'cuda13');
   assert.equal(cuda13Profile.expectedDllPrefixes.includes('cudnn64_9'), false);

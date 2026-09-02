@@ -33,6 +33,16 @@ def test_faster_whisper_linux_core_beta_stays_on_cpu():
     assert resolve_faster_whisper_device('cuda', platform='win32') == 'cuda'
 
 
+def test_faster_whisper_linux_cuda_admission_rejects_non_cuda_device(monkeypatch):
+    monkeypatch.setenv('AVANEVIS_LINUX_CUDA_REQUIRED', '1')
+
+    assert resolve_faster_whisper_device('cuda', platform='linux') == 'cuda'
+    with pytest.raises(ValueError, match='requires --device cuda'):
+        resolve_faster_whisper_device('auto', platform='linux')
+    with pytest.raises(ValueError, match='requires --device cuda'):
+        resolve_faster_whisper_device('cpu', platform='linux')
+
+
 def test_faster_whisper_lock_file_path_uses_private_lock_dir(monkeypatch, tmp_path):
     service = TranscriberService(model_size='small')
     captured = {}
@@ -91,6 +101,30 @@ def test_cuda_probe_detects_unsupported_newer_runtime(tmp_path):
     assert report['missingLibraries'] == ['cublas64_12.dll', 'cublasLt64_12.dll', 'cudnn64_9.dll']
     assert report['unsupportedDetectedProfiles'] == ['cuda13']
     assert report['installedProfile'] == 'cuda13'
+    assert report['statusCode'] == 'unsupportedRuntimeMajor'
+
+
+def test_cuda_probe_detects_linux_shared_library_runtime_major(tmp_path):
+    cuda13_lib = tmp_path / 'cuda13-lib'
+    cuda13_lib.mkdir()
+    (cuda13_lib / 'libcublas.so.13').write_text('shared object')
+
+    report = build_probe_report(
+        profiles=[{
+            'id': 'cuda12',
+            'requiredDlls': ['libcublas.so.12', 'libcublasLt.so.12', 'libcudnn.so.9'],
+        }],
+        supported_profiles=['cuda12'],
+        unsupported_hints=[{
+            'id': 'cuda13',
+            'expectedDllPrefixes': ['libcublas.so.13'],
+        }],
+        device_count_getter=lambda: 1,
+        load_dll=lambda library: (_ for _ in ()).throw(OSError(library)),
+        path_value=str(cuda13_lib),
+    )
+
+    assert report['unsupportedDetectedProfiles'] == ['cuda13']
     assert report['statusCode'] == 'unsupportedRuntimeMajor'
 
 
@@ -793,6 +827,26 @@ def test_load_model_internal_persists_cpu_fallback_device(monkeypatch):
     assert calls['n'] == 2
 
 
+def test_linux_cuda_required_never_loads_cpu_after_managed_runtime_failure(monkeypatch):
+    monkeypatch.setattr(fw_transcriber.sys, 'platform', 'linux')
+    monkeypatch.setenv('AVANEVIS_LINUX_CUDA_REQUIRED', '1')
+    service = TranscriberService(model_size='small', device='cuda', compute_type='float16')
+    calls = {'n': 0}
+
+    def fake_create(_WhisperModel, *, device, compute_type, local_files_only):
+        calls['n'] += 1
+        raise RuntimeError('libcublas.so.12: cannot open shared object file')
+
+    monkeypatch.setitem(__import__('sys').modules, 'faster_whisper', types.SimpleNamespace(WhisperModel=object))
+    monkeypatch.setattr(service, '_create_whisper_model', fake_create)
+    monkeypatch.setattr(service, '_should_use_local_files_only', lambda: True)
+
+    with pytest.raises(RuntimeError, match='refusing CPU fallback'):
+        service._load_model_internal()
+    assert calls['n'] == 1
+    assert service.device == 'cuda'
+
+
 def test_transcribe_file_includes_resolved_device_in_result(monkeypatch, tmp_path):
     audio_path = tmp_path / 'sample.opus'
     audio_path.write_bytes(b'audio')
@@ -852,6 +906,25 @@ def test_transcribe_file_retries_on_retryable_cuda_runtime_error(monkeypatch, tm
     assert result['text'] == 'hello'
     assert calls['attempt'] == 2
     assert service.device == 'cpu'
+
+
+def test_linux_cuda_required_never_retries_transcription_on_cpu(monkeypatch, tmp_path):
+    monkeypatch.setattr(fw_transcriber.sys, 'platform', 'linux')
+    monkeypatch.setenv('AVANEVIS_LINUX_CUDA_REQUIRED', '1')
+    audio_path = tmp_path / 'sample.opus'
+    audio_path.write_bytes(b'audio')
+    service = TranscriberService(model_size='small', language='en', device='cuda', compute_type='float16')
+
+    class Model:
+        def transcribe(self, *_args, **_kwargs):
+            raise RuntimeError('libcublas.so.12: cannot open shared object file')
+
+    service.model = Model()
+    monkeypatch.setattr(service, 'load_model', lambda: pytest.fail('Linux CUDA must not reload on CPU'))
+
+    with pytest.raises(RuntimeError, match='libcublas.so.12'):
+        service.transcribe_file(str(audio_path), save_markdown=False)
+    assert service.device == 'cuda'
 
 
 def test_transcribe_file_retries_on_cuda13_runtime_error(monkeypatch, tmp_path):

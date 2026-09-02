@@ -30,15 +30,20 @@ function buildTranscriberArgs({ platform, arch, extraArgs = [] } = {}) {
   return buildPythonModuleArgs(getTranscriberModule(platform, arch), extraArgs);
 }
 
-function resolveFasterWhisperCliDevice(platform, device = 'auto') {
-  return platform === 'linux' ? 'cpu' : device;
+function resolveFasterWhisperCliDevice(platform, device = 'auto', { linuxCudaEnabled = false } = {}) {
+  return platform === 'linux' && !linuxCudaEnabled ? 'cpu' : device;
 }
 
-function appendFasterWhisperDeviceArgs(extraArgs, { platform, arch, device = 'auto' } = {}) {
+function appendFasterWhisperDeviceArgs(extraArgs, {
+  platform,
+  arch,
+  device = 'auto',
+  linuxCudaEnabled = false,
+} = {}) {
   if (platform === 'darwin' && arch === 'arm64') {
     return extraArgs;
   }
-  extraArgs.push('--device', resolveFasterWhisperCliDevice(platform, device));
+  extraArgs.push('--device', resolveFasterWhisperCliDevice(platform, device, { linuxCudaEnabled }));
   return extraArgs;
 }
 
@@ -49,13 +54,14 @@ function buildTranscriptionCliArgs({
   language = 'en',
   modelSize,
   device = 'auto',
+  linuxCudaEnabled = false,
 } = {}) {
   const extraArgs = [
     '--file', audioFile,
     '--language', language,
     '--model', modelSize,
   ];
-  appendFasterWhisperDeviceArgs(extraArgs, { platform, arch, device });
+  appendFasterWhisperDeviceArgs(extraArgs, { platform, arch, device, linuxCudaEnabled });
   extraArgs.push('--json');
   return buildTranscriberArgs({ platform, arch, extraArgs });
 }

@@ -26,7 +26,14 @@ const {
   AI_COMPUTE_TIMEOUT_MS,
   runWallClockComputeAction,
 } = require('../main-process-helpers');
-const { buildUnsupportedPlatformCudaStatus, getUnsupportedPlatformCudaProbeError } = require('../main-process/cuda-runtime-helpers');
+const {
+  buildUnsupportedPlatformCudaStatus,
+  getUnsupportedPlatformCudaProbeError,
+  getManagedLinuxCudaRuntimeTarget,
+  getManagedLinuxCudaLibraryDirs,
+  buildManagedLinuxCudaLibraryPath,
+  getRequiredCudaRuntimeLibraries,
+} = require('../main-process/cuda-runtime-helpers');
 
 /**
  * @param {object} deps
@@ -72,6 +79,9 @@ function createGpuRuntimeService(deps) {
     ),
     enqueueGpuResourceAction = (action) => action(),
     isQuitCommitted = () => false,
+    // Task 2 supplies the fail-closed machinery. A later packaged RTX 4070
+    // acceptance task is the only code allowed to opt this profile in.
+    isLinuxCudaProfileEnabled = () => false,
   } = deps;
 
   // Single shared CUDA status cache + GPU runtime lock. Never copy these lets
@@ -79,6 +89,15 @@ function createGpuRuntimeService(deps) {
   let cachedCudaStatus = null;
   let gpuRuntimeActionPromise = null;
   let cachedActivePythonVersion = null;
+
+  function isSupportedCudaPlatform() {
+    return process.platform === 'win32'
+      || (process.platform === 'linux' && isLinuxCudaProfileEnabled() === true);
+  }
+
+  function getLinuxCudaRuntimeTarget() {
+    return getManagedLinuxCudaRuntimeTarget(app.getPath('userData'));
+  }
 
   function updateCachedCudaStatus(status) {
     if (!status || typeof status !== 'object') {
@@ -112,7 +131,7 @@ function createGpuRuntimeService(deps) {
    * while this probe runs, so a ~1–2s probe is safe relative to the job budget.
    */
   async function resolveCudaStatusForTranscription({ registerProcess } = {}) {
-    if (process.platform !== 'win32') {
+    if (!isSupportedCudaPlatform()) {
       return null;
     }
     // Transcription enters through gpuResourceActionQueue, so any runtime action
@@ -129,8 +148,24 @@ function createGpuRuntimeService(deps) {
   }
 
   function buildCudaRuntimeEnv(extra = {}, { includeManagedDiarization = false } = {}) {
-    if (process.platform !== 'win32') {
+    if (process.platform !== 'win32' && process.platform !== 'linux') {
       return extra;
+    }
+
+    if (process.platform === 'linux') {
+      if (!isLinuxCudaProfileEnabled()) return extra;
+      const managedRoot = getLinuxCudaRuntimeTarget();
+      const libraryDirs = getManagedLinuxCudaLibraryDirs(managedRoot)
+        .filter((candidate) => fs.existsSync(candidate));
+      if (libraryDirs.length === 0) return extra;
+      return {
+        ...extra,
+        LD_LIBRARY_PATH: buildManagedLinuxCudaLibraryPath({
+          managedRoot,
+          libraryDirs,
+          inheritedLibraryPath: extra.LD_LIBRARY_PATH || process.env.LD_LIBRARY_PATH || '',
+        }),
+      };
     }
 
     const candidateSitePackagesDirs = [
@@ -314,6 +349,7 @@ function createGpuRuntimeService(deps) {
       const python = registerProcess(spawnTrackedPython(buildTranscriptionCudaInstallArgs({
         forceReinstall: isRepairMode,
         noCache: isRepairMode,
+        ...(process.platform === 'linux' ? { target: getLinuxCudaRuntimeTarget() } : {}),
       })));
 
       let errorOutput = '';
@@ -356,7 +392,7 @@ function createGpuRuntimeService(deps) {
 
   function checkCudaRuntimeStatus({ registerProcess = (proc) => proc } = {}) {
     return new Promise((resolve) => {
-      if (process.platform !== 'win32') {
+      if (!isSupportedCudaPlatform()) {
         resolve(buildUnsupportedPlatformCudaStatus(process.platform));
         return;
       }
@@ -365,19 +401,37 @@ function createGpuRuntimeService(deps) {
       const supportedProfileIds = getSupportedTranscriptionCudaProfileIds();
       const supportedProfiles = knownProfiles.filter((profile) => supportedProfileIds.includes(profile.id));
       const unsupportedProfiles = knownProfiles.filter((profile) => !supportedProfileIds.includes(profile.id));
-      const probeProfiles = supportedProfiles.map((profile) => ({
-        id: profile.id,
-        requiredDlls: profile.requiredDlls,
-      }));
+      const probeProfiles = supportedProfiles.map((profile) => {
+        const libraries = getRequiredCudaRuntimeLibraries(profile.id, { platform: process.platform });
+        if (process.platform !== 'linux') return { id: profile.id, requiredDlls: libraries };
+        const managedDirs = getManagedLinuxCudaLibraryDirs(getLinuxCudaRuntimeTarget());
+        return {
+          id: profile.id,
+          // Absolute managed paths prevent a matching system CUDA basename
+          // from satisfying a partially installed managed runtime.
+          requiredDlls: libraries.map((library) => {
+            const found = managedDirs
+              .map((directory) => path.join(directory, library))
+              .find((candidate) => fs.existsSync(candidate));
+            // Keep this absolute even when absent. Passing a bare soname here
+            // would let ctypes resolve an ambient system CUDA library.
+            return found || path.join(managedDirs[0], library);
+          }),
+        };
+      });
       const unsupportedDllHints = unsupportedProfiles.map((profile) => ({
         id: profile.id,
-        expectedDllPrefixes: Array.isArray(profile.expectedDllPrefixes) ? profile.expectedDllPrefixes : [],
+        expectedDllPrefixes: process.platform === 'linux'
+          ? (Array.isArray(profile.expectedSharedLibraryPrefixes) ? profile.expectedSharedLibraryPrefixes : [])
+          : (Array.isArray(profile.expectedDllPrefixes) ? profile.expectedDllPrefixes : []),
       }));
 
       const python = registerProcess(spawnTrackedPython(getBackendModuleArgs('transcription.cuda_probe', [
         '--profiles-json', JSON.stringify(probeProfiles),
         '--supported-profiles', supportedProfileIds.join(','),
         '--unsupported-hints-json', JSON.stringify(unsupportedDllHints),
+        '--platform', process.platform,
+        '--device-check', process.platform === 'linux' ? 'nvidia-smi' : 'ctranslate2',
       ]), { env: buildCudaRuntimeEnv() }));
 
       let output = '';
@@ -415,7 +469,7 @@ function createGpuRuntimeService(deps) {
       ? options.registerProcess
       : (proc) => proc;
 
-    if (process.platform !== 'win32') {
+    if (!isSupportedCudaPlatform()) {
       const finalStatus = await enrichCheckCudaStatus(buildUnsupportedPlatformCudaStatus(process.platform));
       return {
         success: false,
@@ -494,7 +548,7 @@ function createGpuRuntimeService(deps) {
     ipcMain.handle('check-cuda', async (event) => {
       assertTrustedRendererSender(event);
       try {
-        if (process.platform !== 'win32') {
+        if (!isSupportedCudaPlatform()) {
           return enrichCheckCudaStatus(buildUnsupportedPlatformCudaStatus(process.platform));
         }
         // Avoid caching a transient "not loadable" probe while pip is rewriting DLLs.
@@ -551,7 +605,7 @@ function createGpuRuntimeService(deps) {
 
     ipcMain.handle('install-gpu', async (event, options = {}) => {
       assertTrustedRendererSender(event);
-      if (process.platform !== 'win32') {
+      if (!isSupportedCudaPlatform()) {
         const error = new Error(getUnsupportedPlatformCudaProbeError(process.platform));
         error.code = 'unsupportedPlatform';
         throw error;
@@ -572,7 +626,7 @@ function createGpuRuntimeService(deps) {
 
     ipcMain.handle('ensure-compatible-gpu-runtime', async (event, options = {}) => {
       assertTrustedRendererSender(event);
-      if (process.platform !== 'win32') {
+      if (!isSupportedCudaPlatform()) {
         const error = new Error(getUnsupportedPlatformCudaProbeError(process.platform));
         error.code = 'unsupportedPlatform';
         throw error;
@@ -585,12 +639,24 @@ function createGpuRuntimeService(deps) {
 
     ipcMain.handle('uninstall-gpu', async (event) => {
       assertTrustedRendererSender(event);
-      if (process.platform !== 'win32') {
+      if (!isSupportedCudaPlatform()) {
         const error = new Error(getUnsupportedPlatformCudaProbeError(process.platform));
         error.code = 'unsupportedPlatform';
         throw error;
       }
       return runGpuRuntimeAction((registerProcess) => new Promise((resolve, reject) => {
+        if (process.platform === 'linux') {
+          fs.promises.rm(getLinuxCudaRuntimeTarget(), { recursive: true, force: true })
+            .then(() => {
+              invalidateCachedCudaStatus();
+              resolve({ success: true });
+            })
+            .catch((error) => {
+              invalidateCachedCudaStatus();
+              reject(error);
+            });
+          return;
+        }
         const python = registerProcess(spawnTrackedPython(buildTranscriptionCudaUninstallArgs()));
 
         let errorOutput = '';
