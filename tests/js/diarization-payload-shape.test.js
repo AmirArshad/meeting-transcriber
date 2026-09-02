@@ -200,6 +200,13 @@ test('speakrs child env skips HF cache vars and does not inherit exclusive=0', (
     assert.equal(speakrsEnv.PYTHONPATH, undefined);
     assert.equal(speakrsEnv.SPEAKRS_EXCLUSIVE, '1');
     assert.equal(speakrsEnv.SPEAKRS_MODE, 'cuda');
+    if (process.platform === 'linux') {
+      assert.equal(
+        speakrsEnv.AVANEVIS_LINUX_CUDA_REQUIRED,
+        '1',
+        'guided Linux Speakrs must make Whisper fail closed on the admitted CUDA runtime',
+      );
+    }
     assert.equal(pyannoteEnv.HF_HOME, '/tmp/should-not-leak-to-speakrs');
     assert.equal(pyannoteEnv.PYTHONPATH, '/tmp/pyannote-site');
     assert.equal(pyannoteEnv.SPEAKRS_CLI_PATH, undefined);

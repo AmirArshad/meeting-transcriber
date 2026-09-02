@@ -211,7 +211,7 @@ def resolve_transcriber_backend(value: Optional[str] = None) -> str:
     return "faster"
 
 
-def create_transcriber(*, backend: str, model_size: str, language: str) -> Any:
+def create_transcriber(*, backend: str, model_size: str, language: str, device: Optional[str] = None) -> Any:
     resolved_backend = resolve_transcriber_backend(backend)
     if resolved_backend == "mlx":
         from transcription.mlx_whisper_transcriber import MLXWhisperTranscriber
@@ -220,7 +220,7 @@ def create_transcriber(*, backend: str, model_size: str, language: str) -> Any:
 
     from transcription.faster_whisper_transcriber import TranscriberService
 
-    return TranscriberService(model_size=model_size, language=language)
+    return TranscriberService(model_size=model_size, language=language, device=device or "auto")
 
 
 def _extract_result_text(result: Dict[str, Any]) -> str:
@@ -401,10 +401,16 @@ def transcribe_with_diarization_guidance(
         windows = build_diarization_guided_windows(speaker_segments, audio_duration=audio_duration)
 
         emit_progress("loading-transcriber", "Loading local transcription model.", percent=82)
+        transcription_device_required = (
+            "cuda"
+            if sys.platform.startswith("linux") and os.environ.get("AVANEVIS_LINUX_CUDA_REQUIRED") == "1"
+            else None
+        )
         transcriber = create_transcriber(
             backend=transcriber_backend,
             model_size=model_size,
             language=language,
+            device=transcription_device_required,
         )
         transcriber.load_model()
         transcription_device = None

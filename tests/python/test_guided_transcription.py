@@ -151,6 +151,54 @@ def test_guided_transcription_runs_diarization_without_token(monkeypatch, tmp_pa
     })]
 
 
+def test_guided_linux_cuda_admission_passes_cuda_to_faster_whisper(monkeypatch, tmp_path):
+    audio_path = tmp_path / 'meeting.wav'
+    audio_path.write_bytes(b'audio')
+    captured_transcriber_args = []
+
+    class FakeTranscriber:
+        def load_model(self):
+            pass
+
+        def transcribe_file(self, _audio_path, save_markdown=False):
+            return {'segments': [{'start': 0.0, 'end': 1.0, 'text': 'hello'}]}
+
+        def get_model_info(self):
+            return {'device': 'cuda', 'compute_type': 'float16'}
+
+        def cleanup(self):
+            pass
+
+    monkeypatch.setenv('AVANEVIS_LINUX_CUDA_REQUIRED', '1')
+    monkeypatch.setattr(guided.sys, 'platform', 'linux')
+    monkeypatch.setattr(guided, 'prepare_diarization_audio', lambda *_args, **_kwargs: audio_path)
+    monkeypatch.setattr(guided, 'get_audio_duration_seconds', lambda _path: 2.0)
+    monkeypatch.setattr(
+        'backend.diarization.speakrs_runner.run_speakrs_diarization',
+        lambda *_args, **_kwargs: ([{'start': 0.0, 'end': 1.0, 'speaker': 'SPEAKER_00'}], 'exclusive_speaker_diarization', 'cuda'),
+    )
+    monkeypatch.setattr(
+        guided,
+        'create_transcriber',
+        lambda **kwargs: captured_transcriber_args.append(kwargs) or FakeTranscriber(),
+    )
+    monkeypatch.setattr(guided, 'extract_audio_window', lambda *_args, **_kwargs: None)
+
+    guided.transcribe_with_diarization_guidance(
+        audio_path=str(audio_path),
+        output_transcript=str(tmp_path / 'meeting.md'),
+        required_device='cuda',
+        engine='speakrs',
+    )
+
+    assert captured_transcriber_args == [{
+        'backend': 'auto',
+        'model_size': 'small',
+        'language': 'en',
+        'device': 'cuda',
+    }]
+
+
 def test_transcribe_with_diarization_guidance_progress_phases_are_pinned(monkeypatch, tmp_path):
     audio_path = tmp_path / 'meeting.wav'
     audio_path.write_bytes(b'audio')

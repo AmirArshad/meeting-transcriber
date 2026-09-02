@@ -280,9 +280,13 @@ function createTranscriptionService(deps) {
     }
     const clearedTokens = buildClearedHuggingFaceTokenEnv();
     if (resolvedEngine === 'speakrs') {
+      const linuxCudaEnabled = process.platform === 'linux' && requiredDevice === 'cuda';
       const baseEnv = includeTranscriptionRuntime
-        ? getTranscriptionRuntimeEnv(modelSize, { includeManagedDiarization: false })
-        : buildCudaRuntimeEnv({}, { includeManagedDiarization: false });
+        ? getTranscriptionRuntimeEnv(modelSize, { includeManagedDiarization: false, linuxCudaEnabled })
+        : buildCudaRuntimeEnv(
+          linuxCudaEnabled ? { AVANEVIS_LINUX_CUDA_REQUIRED: '1' } : {},
+          { includeManagedDiarization: false },
+        );
       return {
         ...buildSpeakrsSpawnEnv({
           userDataDir: app.getPath('userData'),

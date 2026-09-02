@@ -378,6 +378,127 @@ switch/remove, repair, and quit. Record here when collected: model/runtime
 hashes vs Task 4 pins, `SPEAKRS_MODE=cuda`, device evidence, sidecar schema,
 and child-process cleanup. Until that row is filled, Task 5 is not accepted.
 
+### Task 5 packaged hardware-smoke attempt — blocked at prerequisites (2026-09-02)
+
+**Status: not run; Task 5 remains unaccepted.** The available host identifies as
+`CachyOS Linux`, `x86_64`, kernel `7.2.2-1-cachyos`, on branch
+`feature/v2.9-linux-ai-addons` at
+`3e58b15724221d279c3957d622cdfac830abca08` (`fix: harden Linux Speakrs CUDA
+admission`). It is therefore the intended distribution/architecture family,
+but it did not expose a working NVIDIA device to this session:
+
+```text
+$ nvidia-smi --query-gpu=name,driver_version,compute_cap --format=csv,noheader
+NVIDIA-SMI has failed because it couldn't communicate with the NVIDIA driver.
+```
+
+No v2.9 installer was present. The only local Linux artifacts were
+`AvaNevis-Setup-2.8.0.AppImage`, `.pkg.tar.zst`, and `.deb`; their hashes are
+the historical 2.8.0 rows above, not evidence for this branch. They were not
+launched, because they cannot establish the v2.9 packaged Speakrs behavior.
+
+The source contracts below passed on this host, but are **not** a substitute
+for a packaged GPU smoke:
+
+```text
+node --test tests/js/diarization-payload-shape.test.js \
+  tests/js/speakrs-task2-hardening.test.js \
+  tests/js/linux-platform-selection.test.js \
+  tests/js/quit-lifecycle.behavioral.test.js \
+  tests/js/speakrs-cli-integrity.test.js \
+  tests/js/speakrs-model-pack.test.js \
+  tests/js/linux-packaging.test.js
+# pass 7, fail 0, skipped 0
+```
+
+The catalog pin record remains the expected comparison baseline only: model
+pack `speakrs-models-5d24ffe-linux-x64-cuda` SHA-256
+`a79973647cb787bf2aebd31acc2668d282735e41d451e244308bcf04ea77ad20`; ORT
+1.27.1 archive SHA-256
+`08b568bd69500c36606aff7c3896ee4fa7d3531719f6b00f43e6a34db41dc4bf`.
+Neither artifact was downloaded, extracted, or hashed in this attempt.
+
+Consequently, there is no observed `SPEAKRS_MODE=cuda`, actual diarization or
+Whisper device, setup/validation result, guided-transcription sidecar,
+ordinary-transcript fallback, cancellation point (CUDA probe, extraction,
+hashing, or CLI execution), switch/remove/repair result, process-group child,
+or compute/resource-queue cleanup evidence. Do not claim Linux Speakrs
+hardware support from this entry. Resume only with a v2.9 packaged artifact
+and a host where `nvidia-smi` reports the RTX 4070; then execute every Task 5
+manual row and record the resulting artifacts and process evidence here.
+
+**Superseded prerequisite finding (same session):** the sandbox hid
+`/dev/nvidia*`, but a read-only host-level probe reported `NVIDIA GeForce RTX
+4070`, driver `610.57.04`, compute capability `8.9`, and `12282 MiB`. An
+isolated build of `3e58b157` completed and `npm run verify:linux:packaged`
+passed for its unpacked bundle, AppImage, pacman, and deb artifacts. The
+feature branch intentionally still packages version `2.8.0`; this is a v2.9
+feature-lane candidate, not a release-version claim. A fresh disposable
+packaged-app profile is now running on CachyOS Hyprland/Wayland to collect the
+remaining live Task 5 evidence. No Speakrs support claim follows from the
+build, verifier, or GPU probe alone.
+
+**Guided-transcription finding (same session; rejected until rebuilt):** a
+fresh packaged profile completed Speakrs setup and validation. Its manifest is
+`ready` with engine `speakrs`; the guided bundled two-speaker WAV run produced
+`guided-fixture.md`, `diarization.device: "cuda"`, and no remaining
+`speakrs-cli` child. CUDA preflight also reported `statusCode: "ready"`,
+`runtimeLoadable: true`, profile `cuda12`. However, the same guided result
+reported Whisper `transcriptionDevice: "cpu"` / `int8`. Investigation found
+that `buildDiarizationChildEnv()` supplied managed CUDA libraries but omitted
+`AVANEVIS_LINUX_CUDA_REQUIRED=1`; the backend correctly coerced its default
+`auto` Whisper device to CPU. A red/green contract now requires that flag for
+admitted Linux CUDA Speakrs children. Rebuild and repeat the packaged guided
+run before recording a CUDA Whisper pass or accepting Task 5.
+
+**Partial packaged rerun after the guided-device fixes (same session):** the
+fresh rebuilt `linux-unpacked` candidate was launched on CachyOS x86_64,
+Hyprland/Wayland with an NVIDIA GeForce RTX 4070 (driver `610.57.04`, compute
+capability `8.9`, 12,282 MiB). This remains a feature-lane candidate whose
+package metadata says `2.8.0`, not a v2.9 release artifact. The first child-env
+fix exposed a second fail-closed defect: `guided_transcription.py` still
+constructed faster-whisper with `device=auto`, which correctly rejected under
+`AVANEVIS_LINUX_CUDA_REQUIRED=1`. A red/green Python regression now pins the
+admitted Linux path to `device=cuda`; after rebuilding, the bundled
+two-speaker fixture completed with both `diarization.device: "cuda"` and
+Whisper `transcriptionDevice: "cuda"`, `transcriptionComputeType: "float16"`.
+The ordinary Whisper IPC path also completed with `requestedDevice: "cuda"`,
+`device: "cuda"`, and `computeType: "float16"`.
+
+The persisted guided meeting sidecar is SHA-256
+`2d5fe2a6c9672d9653a89b182c8d7321c37fc6f2d65e5b71bb4a4c48b6901781` and has
+the schema keys `annotationSource`, `audioPath`, `completedAt`, `device`,
+`model`, `segments`, `segmentsPath`, `speakerCount`, `speakerSegments`, and
+`status`; each labelled transcript segment has `start`, `end`, `speaker`, and
+`text`. The observed runtime hashes match the recorded pins: ORT
+`libonnxruntime.so.1.27.1` `67eda041…adfc094`, CUDA provider
+`cffff5fe…98ec0ce3`, `libcudart.so.12` `256e6409…eb133b7`, and the primary
+Speakrs ResNet model `203a4c67…64fcc0f`.
+
+Quit was also issued while a long fixture had both a packaged
+`guided_transcription` process and its packaged `speakrs-cli` child alive
+(separate POSIX process groups). The app process exited and a post-quit process
+scan found neither child; a restart against the same profile immediately
+completed another CUDA/float16 Whisper request, which is positive
+process-group and compute-slot recovery evidence. This is intentionally only a
+partial Task 5 row: cancellation at the CUDA-probe/extraction/hashing
+checkpoints, guided-failure-to-ordinary persistence, and an engine switch are
+still outstanding. **Task 5 remains unaccepted; do not claim Linux Speakrs
+hardware support yet.**
+
+**Follow-up lifecycle evidence (same session):** `remove-diarization-setup`
+removed the 24-file Speakrs model tree and 8-file ORT runtime tree, while the
+shared managed CUDA `libcublas.so.12` stayed byte-identical at
+`5757ab5839fb4f203ca47ecb336110d10f4a5606b1e097f195fbca89774569e2`.
+`setup-diarization({engine: "speakrs"})` rebuilt both trees and an explicit
+full `validate-diarization-setup` returned `ready`; the reinstalled ORT library
+again full-hashed to `67eda041…adfc094`. A queued 28-minute local fixture was
+cancelled while a live packaged `speakrs-cli` child was observed. The IPC
+returned `{ success: true, cancelled: true }`; afterwards no CLI or guided
+Python child and no guided temporary transcript remained, and the meeting was
+durably `failed` with `Cancelled by user`. This closes the active-CLI cancel,
+remove, repair, and shared-CUDA-preservation rows only.
+
 ## Interpreters used for this matrix
 
 | Interpreter | Where | ABI |
