@@ -55,7 +55,7 @@ function normalizeGzipTimestamp(filePath, fsModule = fs) {
 }
 
 function selectPackFiles(platformKey) {
-  if (platformKey !== 'win32-x64' && platformKey !== 'darwin-arm64') {
+  if (platformKey !== 'win32-x64' && platformKey !== 'darwin-arm64' && platformKey !== 'linux-x64') {
     fail(`Unsupported Speakrs pack platform: ${platformKey}`);
   }
   return getSpeakrsSourceFiles(platformKey);
@@ -202,7 +202,7 @@ function main(argv = process.argv.slice(2)) {
     return 0;
   }
   if (!args.source || !args.out) {
-    fail('Usage: node scripts/build-speakrs-model-pack.js --platform win32-x64|darwin-arm64 --source <snapshot-dir> --out <dir>');
+    fail('Usage: node scripts/build-speakrs-model-pack.js --platform win32-x64|darwin-arm64|linux-x64 --source <snapshot-dir> --out <dir>');
   }
   const files = selectPackFiles(platformKey);
   const mismatches = validateSourceTree(args.source, files);

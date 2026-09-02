@@ -20,6 +20,7 @@ const {
   getSpeakrsCliBinaryName,
   loadSpeakrsOrtCompilePins,
   manifestsMatch,
+  readElfMachine,
   readMachOCpuType,
   readWindowsPeMachine,
   resolveCargoTargetDir,
@@ -29,6 +30,7 @@ const {
   stageSpeakrsValidateWav,
 } = require('../../build/prepare-resources');
 const {
+  REQUIRED_LINUX_ORT_ARTIFACT_COUNT,
   REQUIRED_MODEL_PACK_PLATFORMS,
   REQUIRED_WINDOWS_ORT_ARTIFACT_COUNT,
   assertCatalogPinsComplete,
@@ -50,6 +52,7 @@ const {
   SPEAKRS_MODEL_PACK_ARTIFACTS,
   SPEAKRS_ORT_RUNTIME_ARTIFACTS,
 } = require('../../src/ai-addon/speakrs-pack-spec');
+const { writeSpeakrsLinuxElfFixture } = require('./speakrs-linux-elf-fixture');
 
 const ROOT = path.join(__dirname, '..', '..');
 const CARGO_TOML = fs.readFileSync(path.join(ROOT, 'native', 'speakrs-cli', 'Cargo.toml'), 'utf8');
@@ -79,6 +82,14 @@ function writeMinimalMachO(filePath, cpuType) {
   fs.writeFileSync(filePath, buf);
 }
 
+function writeMinimalElf(filePath, { eiClass = 2, machine = 62 } = {}) {
+  writeSpeakrsLinuxElfFixture(filePath, {
+    kind: eiClass === 1 ? 'header-only' : 'pie-executable',
+    eiClass,
+    machine,
+  });
+}
+
 function writeCanonicalFixture(filePath, contents = Buffer.from('RIFF-fixture')) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, contents);
@@ -94,7 +105,7 @@ test('speakrs rust-toolchain stays pinned at 1.88.0', () => {
 test('speakrs cargo feature flags stay on the Task 1 matrix', () => {
   assert.deepEqual(getSpeakrsCargoFeatures('darwin'), ['default-linalg', 'coreml']);
   assert.deepEqual(getSpeakrsCargoFeatures('win32'), ['default-linalg', 'cuda', 'load-dynamic']);
-  assert.deepEqual(getSpeakrsCargoFeatures('linux'), ['default-linalg']);
+  assert.deepEqual(getSpeakrsCargoFeatures('linux'), ['default-linalg', 'cuda', 'load-dynamic']);
   assert.equal(CARGO_TOML.includes('default-features = false'), true);
   assert.equal(CARGO_TOML.includes('default-linalg'), true);
   assert.equal(CARGO_TOML.includes('"online"'), false);
@@ -103,6 +114,7 @@ test('speakrs cargo feature flags stay on the Task 1 matrix', () => {
   assert.equal(/\bonline\b/.test(CARGO_TOML), false);
   assert.match(CARGO_TOML, /target_os = "macos"[\s\S]*features = \["default-linalg", "coreml"\]/);
   assert.match(CARGO_TOML, /target_os = "windows"[\s\S]*features = \["default-linalg", "cuda", "load-dynamic"\]/);
+  assert.match(CARGO_TOML, /target_os = "linux"[\s\S]*features = \["default-linalg", "cuda", "load-dynamic"\]/);
   for (const platform of ['darwin', 'win32', 'linux']) {
     assert.equal(
       getSpeakrsCargoFeatures(platform).some((feature) => feature.includes('fast') || feature === 'online'),
@@ -120,13 +132,14 @@ test('installer artifactName is unchanged', () => {
 test('speakrs-cli binary names stay platform-specific', () => {
   assert.equal(getSpeakrsCliBinaryName('win32'), 'speakrs-cli.exe');
   assert.equal(getSpeakrsCliBinaryName('darwin'), 'speakrs-cli');
+  assert.equal(getSpeakrsCliBinaryName('linux'), 'speakrs-cli');
 });
 
 
 test('speakrs packaging builds an explicit target triple per platform', () => {
   assert.equal(getSpeakrsCargoTargetTriple('darwin'), 'aarch64-apple-darwin');
   assert.equal(getSpeakrsCargoTargetTriple('win32'), 'x86_64-pc-windows-msvc');
-  assert.throws(() => getSpeakrsCargoTargetTriple('linux'), /Unsupported Speakrs packaging platform/);
+  assert.equal(getSpeakrsCargoTargetTriple('linux'), 'x86_64-unknown-linux-gnu');
   assert.deepEqual(
     buildSpeakrsCliCargoArgs('darwin', { manifestPath: '/tmp/Cargo.toml' }),
     ['build', '--release', '--locked', '--target', 'aarch64-apple-darwin', '--manifest-path', '/tmp/Cargo.toml'],
@@ -134,6 +147,10 @@ test('speakrs packaging builds an explicit target triple per platform', () => {
   assert.deepEqual(
     buildSpeakrsCliCargoArgs('win32', { manifestPath: 'D:\\crate\\Cargo.toml' }),
     ['build', '--release', '--locked', '--target', 'x86_64-pc-windows-msvc', '--manifest-path', 'D:\\crate\\Cargo.toml'],
+  );
+  assert.deepEqual(
+    buildSpeakrsCliCargoArgs('linux', { manifestPath: '/tmp/Cargo.toml' }),
+    ['build', '--release', '--locked', '--target', 'x86_64-unknown-linux-gnu', '--manifest-path', '/tmp/Cargo.toml'],
   );
 });
 
@@ -201,6 +218,34 @@ test('assertStagedSpeakrsCli fails closed when the binary is missing, empty, or 
     if (process.platform !== 'darwin') {
       assert.equal(assertSpeakrsCliArchitecture(darwinCli, 'darwin'), 'arm64');
     }
+
+    const linuxDir = path.join(tempDir, 'linux');
+    const linuxCli = path.join(linuxDir, 'speakrs-cli');
+    writeMinimalElf(linuxCli, { eiClass: 1, machine: 3 });
+    if (process.platform !== 'win32') {
+      fs.chmodSync(linuxCli, 0o755);
+    }
+    assert.throws(
+      () => assertSpeakrsCliArchitecture(linuxCli, 'linux'),
+      /32-bit ELF/,
+    );
+
+    writeMinimalElf(linuxCli, { machine: 183 });
+    if (process.platform !== 'win32') {
+      fs.chmodSync(linuxCli, 0o755);
+    }
+    assert.throws(
+      () => assertSpeakrsCliArchitecture(linuxCli, 'linux'),
+      /not Linux x86_64 ELF/,
+    );
+
+    writeMinimalElf(linuxCli);
+    if (process.platform !== 'win32') {
+      fs.chmodSync(linuxCli, 0o755);
+    }
+    assert.equal(readElfMachine(linuxCli), 62);
+    assert.equal(assertSpeakrsCliArchitecture(linuxCli, 'linux'), 'x64');
+    assert.equal(assertStagedSpeakrsCli(linuxDir, 'linux'), linuxCli);
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -281,6 +326,7 @@ test('ort compile-time downloads stay crate-pinned and off the installer downloa
   const pins = loadSpeakrsOrtCompilePins();
   assert.equal(pins.ortSysVersion, '2.0.0-rc.13');
   assert.equal(pins['win32-x64'], null);
+  assert.equal(pins['linux-x64'], null);
   assert.equal(
     pins['darwin-arm64'].url,
     'https://cdn.pyke.io/0/pyke:ort-rs/ms@1.28.0/aarch64-apple-darwin+coreml.tar.lzma2',
@@ -298,15 +344,16 @@ test('ort compile-time downloads stay crate-pinned and off the installer downloa
 });
 
 
-test('catalog pins require both model-pack platforms and three Windows ORT artifacts', () => {
-  assert.deepEqual([...REQUIRED_MODEL_PACK_PLATFORMS].sort(), ['darwin-arm64', 'win32-x64']);
+test('catalog pins require Windows, macOS, and Linux model packs plus ORT closures', () => {
+  assert.deepEqual([...REQUIRED_MODEL_PACK_PLATFORMS].sort(), ['darwin-arm64', 'linux-x64', 'win32-x64']);
   assert.equal(REQUIRED_WINDOWS_ORT_ARTIFACT_COUNT, 3);
+  assert.equal(REQUIRED_LINUX_ORT_ARTIFACT_COUNT, 5);
   assert.doesNotThrow(() => assertCatalogPinsComplete());
 
   const missingDarwin = { 'win32-x64': SPEAKRS_MODEL_PACK_ARTIFACTS['win32-x64'] };
   assert.throws(
     () => assertModelPackPins(missingDarwin),
-    /exactly darwin-arm64, win32-x64/,
+    /exactly darwin-arm64, linux-x64, win32-x64/,
   );
 
   const incompleteOrt = {
@@ -315,6 +362,15 @@ test('catalog pins require both model-pack platforms and three Windows ORT artif
   assert.throws(
     () => assertOrtRuntimePins(incompleteOrt),
     /ORT 1\.27\.1 runtime pin set is incomplete/,
+  );
+
+  const incompleteLinuxOrt = {
+    'win32-x64': SPEAKRS_ORT_RUNTIME_ARTIFACTS['win32-x64'],
+    'linux-x64': SPEAKRS_ORT_RUNTIME_ARTIFACTS['linux-x64'].slice(0, 3),
+  };
+  assert.throws(
+    () => assertOrtRuntimePins(incompleteLinuxOrt),
+    /Linux Speakrs ORT 1\.27\.1 runtime pin set is incomplete/,
   );
 
   const malformedSha = {
@@ -349,24 +405,27 @@ test('catalog pins require both model-pack platforms and three Windows ORT artif
 });
 
 
-test('release checksum verification includes both model packs and all Windows ORT artifacts', () => {
+test('release checksum verification includes model packs and Windows/Linux ORT artifacts', () => {
   const artifacts = listReleaseChecksumArtifacts();
-  assert.equal(artifacts.filter((artifact) => artifact.checksumKind === 'model-pack').length, 2);
-  assert.equal(artifacts.filter((artifact) => artifact.checksumKind === 'ort-runtime').length, 3);
+  assert.equal(artifacts.filter((artifact) => artifact.checksumKind === 'model-pack').length, 3);
+  assert.equal(artifacts.filter((artifact) => artifact.checksumKind === 'ort-runtime').length, 8);
   assert.deepEqual(
     artifacts.filter((artifact) => artifact.checksumKind === 'model-pack').map((artifact) => artifact.platform).sort(),
-    ['darwin-arm64', 'win32-x64'],
+    ['darwin-arm64', 'linux-x64', 'win32-x64'],
   );
   assert.ok(artifacts.some((artifact) => artifact.fileName === 'onnxruntime-win-x64-gpu_cuda12-1.27.1.zip'));
+  assert.ok(artifacts.some((artifact) => artifact.fileName === 'onnxruntime-linux-x64-gpu_cuda12-1.27.1.tgz'));
   assert.ok(artifacts.some((artifact) => artifact.fileName.includes('nvidia_cuda_runtime_cu12')));
   assert.ok(artifacts.some((artifact) => artifact.fileName.includes('nvidia_cufft_cu12')));
+  assert.ok(artifacts.some((artifact) => artifact.fileName === 'nvidia_curand_cu12-10.3.10.19-py3-none-manylinux_2_27_x86_64.whl'));
+  assert.ok(artifacts.some((artifact) => artifact.fileName === 'nvidia_cuda_nvrtc_cu12-12.9.86-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl'));
   assert.match(VERIFY_PACKAGING_SOURCE, /async function verifyPublishedPackChecksums/);
   assert.match(VERIFY_PACKAGING_SOURCE, /listReleaseChecksumArtifacts\(\)/);
   assert.match(VERIFY_PACKAGING_SOURCE, /checksumKind: 'ort-runtime'/);
 });
 
 
-test('CPU smoke uses the published ONNX subset pack and a CI-only Windows CPU ORT pin', () => {
+test('CPU smoke uses the published ONNX subset pack and CI-only Windows/Linux CPU ORT pins', () => {
   const pack = SPEAKRS_MODEL_PACK_ARTIFACTS[cpuSmokePins.onnxSubsetPlatform];
   assert.ok(pack);
   assert.match(pack.sha256, /^[a-f0-9]{64}$/);
@@ -375,6 +434,12 @@ test('CPU smoke uses the published ONNX subset pack and a CI-only Windows CPU OR
     cpuSmokePins.windowsCpuOrt.sha256,
     '2e00414a63fdef0914cd5a5ede6c707844878e0c08e1b6693842f0451b2df2a1',
   );
+  assert.equal(cpuSmokePins.linuxCpuOrt.fileName, 'onnxruntime-linux-x64-1.27.1.tgz');
+  assert.equal(
+    cpuSmokePins.linuxCpuOrt.sha256,
+    '25b1ef1fea1acd210d63f8f24dc870ad6e077795ce1f54876252c6d3803c15af',
+  );
+  assert.equal(cpuSmokePins.linuxCpuOrt.dylibName, 'libonnxruntime.so.1.27.1');
 });
 
 
@@ -421,14 +486,19 @@ test('CPU smoke extraction markers are pin-identity based and reject stale cache
 test('CI and release workflows install explicit Rust targets and pin-safe smoke caches', () => {
   assert.match(CI_WORKFLOW, /targets:\s*aarch64-apple-darwin/);
   assert.match(CI_WORKFLOW, /targets:\s*x86_64-pc-windows-msvc/);
+  assert.match(CI_WORKFLOW, /targets:\s*x86_64-unknown-linux-gnu/);
   assert.match(CI_WORKFLOW, /cargo build --release --locked --target aarch64-apple-darwin/);
   assert.match(CI_WORKFLOW, /cargo build --release --locked --target x86_64-pc-windows-msvc/);
+  assert.match(CI_WORKFLOW, /cargo build --release --locked --target x86_64-unknown-linux-gnu/);
   assert.match(CI_WORKFLOW, /native\/speakrs-cli\/target\/aarch64-apple-darwin\/release\/speakrs-cli/);
   assert.match(CI_WORKFLOW, /native\/speakrs-cli\/target\/x86_64-pc-windows-msvc\/release\/speakrs-cli\.exe/);
+  assert.match(CI_WORKFLOW, /native\/speakrs-cli\/target\/x86_64-unknown-linux-gnu\/release\/speakrs-cli/);
+  assert.match(CI_WORKFLOW, /Speakrs CPU-mode inference smoke \(non-GPU structural check\)/);
   assert.match(CI_WORKFLOW, /hashFiles\('native\/speakrs-cli\/ci-cpu-smoke-pins\.json'/);
   assert.equal(CI_WORKFLOW.includes('speakrs-cpu-smoke-${{ runner.os }}-5d24ffe'), false);
   assert.match(RELEASE_WORKFLOW, /rust-target: x86_64-pc-windows-msvc/);
   assert.match(RELEASE_WORKFLOW, /rust-target: aarch64-apple-darwin/);
+  assert.match(RELEASE_WORKFLOW, /rust-target: x86_64-unknown-linux-gnu/);
   assert.match(RELEASE_WORKFLOW, /targets: \$\{\{ matrix\.rust-target \}\}/);
 });
 

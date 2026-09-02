@@ -19,6 +19,7 @@ const {
   getJustifiedDebDepends,
   getJustifiedPacmanDepends,
   parsePkginfo,
+  REQUIRED_LINUX_LEGAL_FILES,
   verifyPacmanArchivePayload,
   verifyDebArchivePayload,
 } = require('../../scripts/verify-linux-packaging');
@@ -27,10 +28,23 @@ const ROOT = path.join(__dirname, '..', '..');
 const CI_WORKFLOW = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
 const RELEASE_WORKFLOW = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'build-release.yml'), 'utf8');
 const PREPARE_RESOURCES_SOURCE = fs.readFileSync(path.join(ROOT, 'build', 'prepare-resources.js'), 'utf8');
+const { writeSpeakrsLinuxElfFixture } = require('./speakrs-linux-elf-fixture');
 
 function writeFile(filePath, contents = 'ok') {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, contents);
+}
+
+function writeMinimalElf(filePath) {
+  writeSpeakrsLinuxElfFixture(filePath, { kind: 'pie-executable' });
+}
+
+function writeRequiredLegalBundle(root) {
+  writeFile(path.join(root, 'legal', 'THIRD_PARTY_NOTICES.md'), 'notices\n');
+  writeFile(path.join(root, 'legal', 'LICENSE.txt'), 'MIT\n');
+  writeFile(path.join(root, 'legal', 'FFMPEG-COMPLIANCE.json'), '{}\n');
+  writeFile(path.join(root, 'legal', 'ffmpeg-SOURCE-OFFER.txt'), 'source offer\n');
+  writeFile(path.join(root, 'legal', 'PYTHON-BUNDLED-PACKAGES.md'), 'python notices\n');
 }
 
 function makeLinuxResourcesFixture(root) {
@@ -38,12 +52,15 @@ function makeLinuxResourcesFixture(root) {
   writeFile(path.join(root, 'ffmpeg', 'ffmpeg'), '#!/bin/sh\n');
   writeFile(path.join(root, 'backend', 'audio', 'linux_recorder.py'), 'pass\n');
   writeFile(path.join(root, 'backend', 'transcription', 'faster_whisper_transcriber.py'), 'pass\n');
-  writeFile(path.join(root, 'legal', 'THIRD_PARTY_NOTICES.md'), 'notices\n');
+  writeRequiredLegalBundle(root);
   writeFile(path.join(root, 'requirements-linux.txt'), 'pulsectl==24.12.0\n');
   writeFile(path.join(root, 'requirements-linux-build.txt'), 'pulsectl==24.12.0\n');
+  writeMinimalElf(path.join(root, 'bin', 'speakrs-cli'));
+  writeFile(path.join(root, 'bin', 'speakrs-two-speaker-16k.wav'), Buffer.from('RIFF-fixture'));
   if (process.platform !== 'win32') {
     fs.chmodSync(path.join(root, 'python', 'bin', 'python3'), 0o755);
     fs.chmodSync(path.join(root, 'ffmpeg', 'ffmpeg'), 0o755);
+    fs.chmodSync(path.join(root, 'bin', 'speakrs-cli'), 0o755);
   }
   return root;
 }
@@ -123,7 +140,7 @@ test('pacman depends are an explicit justified list and omit libappindicator and
   assert.equal(depends.includes('c-ares'), false);
 });
 
-test('Linux extraResources keep runtime/legal assets and add requirements without Speakrs/ORT/llama', () => {
+test('Linux extraResources keep runtime/legal/bin assets; linux-specific extras stay requirements-only without setup-time ORT or llama', () => {
   const globalResources = packageJson.build.extraResources;
   assert.ok(globalResources.some((entry) => entry.from === 'build/resources/python' && entry.to === 'python'));
   assert.ok(globalResources.some((entry) => entry.from === 'build/resources/ffmpeg' && entry.to === 'ffmpeg'));
@@ -155,19 +172,52 @@ test('assertLinuxPackagedLayout requires bundled Python, ffmpeg, backend, and le
     const layout = assertLinuxPackagedLayout(resourcesRoot);
     assert.equal(layout.pythonPath, path.join(resourcesRoot, 'python', 'bin', 'python3'));
     assert.equal(layout.ffmpegPath, path.join(resourcesRoot, 'ffmpeg', 'ffmpeg'));
+    assert.equal(layout.noticesPath, path.join(resourcesRoot, 'legal', 'THIRD_PARTY_NOTICES.md'));
+
+    fs.rmSync(layout.noticesPath);
+    assert.throws(() => assertLinuxPackagedLayout(resourcesRoot), /Missing packaged legal notices/);
+    writeFile(layout.noticesPath, 'notices\n');
+
+    for (const name of REQUIRED_LINUX_LEGAL_FILES) {
+      const legalPath = path.join(resourcesRoot, 'legal', name);
+      const previous = fs.readFileSync(legalPath);
+      fs.rmSync(legalPath);
+      assert.throws(
+        () => assertLinuxPackagedLayout(resourcesRoot),
+        /Missing packaged legal notices/,
+        name,
+      );
+      fs.writeFileSync(legalPath, previous);
+    }
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
 });
 
-test('assertLinuxPackagedLayout rejects deferred Linux add-on binaries', () => {
+test('assertLinuxPackagedLayout requires Speakrs CLI and rejects deferred add-on binaries', () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-linux-forbidden-'));
   try {
     const resourcesRoot = path.join(tempDir, 'resources');
     makeLinuxResourcesFixture(resourcesRoot);
-    writeFile(path.join(resourcesRoot, 'bin', 'speakrs-cli'), 'elf');
-    assert.throws(() => assertLinuxPackagedLayout(resourcesRoot), /deferred add-on/);
+    assert.doesNotThrow(() => assertLinuxPackagedLayout(resourcesRoot));
+
     fs.rmSync(path.join(resourcesRoot, 'bin', 'speakrs-cli'));
+    assert.throws(() => assertLinuxPackagedLayout(resourcesRoot), /Speakrs cli is missing/);
+    writeMinimalElf(path.join(resourcesRoot, 'bin', 'speakrs-cli'));
+    if (process.platform !== 'win32') {
+      fs.chmodSync(path.join(resourcesRoot, 'bin', 'speakrs-cli'), 0o755);
+    }
+
+    writeFile(path.join(resourcesRoot, 'bin', 'speakrs-cli'), 'not-an-elf');
+    if (process.platform !== 'win32') {
+      fs.chmodSync(path.join(resourcesRoot, 'bin', 'speakrs-cli'), 0o755);
+    }
+    assert.throws(() => assertLinuxPackagedLayout(resourcesRoot), /Speakrs cli is malformed/);
+    writeMinimalElf(path.join(resourcesRoot, 'bin', 'speakrs-cli'));
+    if (process.platform !== 'win32') {
+      fs.chmodSync(path.join(resourcesRoot, 'bin', 'speakrs-cli'), 0o755);
+    }
+
     writeFile(path.join(resourcesRoot, 'bin', 'llama-cli'), 'elf');
     assert.throws(() => assertLinuxPackagedLayout(resourcesRoot), /deferred add-on/);
     fs.rmSync(path.join(resourcesRoot, 'bin', 'llama-cli'));
@@ -178,10 +228,39 @@ test('assertLinuxPackagedLayout rejects deferred Linux add-on binaries', () => {
   }
 });
 
+test('assertLinuxPackagedLayout rejects duplicate Speakrs fixtures and stale platform binaries', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-linux-speakrs-dup-'));
+  try {
+    const resourcesRoot = path.join(tempDir, 'resources');
+    makeLinuxResourcesFixture(resourcesRoot);
+    writeFile(path.join(resourcesRoot, 'backend', 'diarization', 'fixtures', 'speakrs-two-speaker-16k.wav'), 'dup');
+    assert.throws(() => assertLinuxPackagedLayout(resourcesRoot), /exactly one speakrs-two-speaker-16k\.wav/);
+    fs.rmSync(path.join(resourcesRoot, 'backend', 'diarization', 'fixtures', 'speakrs-two-speaker-16k.wav'));
+
+    writeFile(path.join(resourcesRoot, 'opt', 'extra', 'speakrs-two-speaker-16k.wav'), 'dup');
+    assert.throws(() => assertLinuxPackagedLayout(resourcesRoot), /exactly one speakrs-two-speaker-16k\.wav/);
+    fs.rmSync(path.join(resourcesRoot, 'opt', 'extra', 'speakrs-two-speaker-16k.wav'));
+
+    writeFile(path.join(resourcesRoot, 'bin', 'speakrs-cli.exe'), 'pe');
+    assert.throws(() => assertLinuxPackagedLayout(resourcesRoot), /stale Windows Speakrs binary|deferred add-on/);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test('assertNotForbiddenPackagedPath allows CPU onnxruntime site-packages and rejects Speakrs CUDA ORT', () => {
   assert.doesNotThrow(() => assertNotForbiddenPackagedPath('python/lib/python3.11/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.so'));
+  assert.doesNotThrow(() => assertNotForbiddenPackagedPath('bin/speakrs-cli'));
   assert.throws(
     () => assertNotForbiddenPackagedPath('python/onnxruntime-linux-x64-gpu_cuda12-1.27.1.tgz'),
+    /deferred add-on/,
+  );
+  assert.throws(
+    () => assertNotForbiddenPackagedPath('python/onnxruntime-win-x64-gpu_cuda12-1.27.1.zip'),
+    /deferred add-on/,
+  );
+  assert.throws(
+    () => assertNotForbiddenPackagedPath('python/nvidia_cufft_cu12-11.4.1.4-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl'),
     /deferred add-on/,
   );
   assert.throws(() => assertNotForbiddenPackagedPath('bin/audiocapture-helper'), /deferred add-on/);
@@ -444,8 +523,12 @@ test('findLinuxArtifact only matches AvaNevis-Setup names', () => {
   }
 });
 
-test('prepare-resources still skips Speakrs on Linux and still creates a bin directory for extraResources', () => {
-  assert.match(PREPARE_RESOURCES_SOURCE, /Skipping speakrs-cli packaging on this platform/);
+test('prepare-resources builds Speakrs on Linux and still creates a bin directory for extraResources', () => {
+  assert.match(PREPARE_RESOURCES_SOURCE, /isSpeakrsPackagingSupported/);
+  assert.match(PREPARE_RESOURCES_SOURCE, /x86_64-unknown-linux-gnu/);
+  assert.match(PREPARE_RESOURCES_SOURCE, /Linux speakrs-cli must stay load-dynamic/);
+  assert.match(PREPARE_RESOURCES_SOURCE, /isLinuxX64ElfExecutableFileOutput/);
+  assert.doesNotMatch(PREPARE_RESOURCES_SOURCE, /Skipping speakrs-cli packaging on this platform/);
   assert.match(PREPARE_RESOURCES_SOURCE, /ensureLinuxEmptyBinDirectory|IS_LINUX && !fs.existsSync\(BIN_DIR\)/);
 });
 
@@ -454,6 +537,8 @@ test('Ubuntu CI job builds Linux packages on ubuntu-latest with SHA-pinned actio
   assert.match(CI_WORKFLOW, /npm run test:all/);
   assert.match(CI_WORKFLOW, /build:linux|electron-builder build --linux/);
   assert.match(CI_WORKFLOW, /verify-linux-packaging\.js/);
+  assert.match(CI_WORKFLOW, /x86_64-unknown-linux-gnu/);
+  assert.match(CI_WORKFLOW, /Speakrs CPU-mode inference smoke \(non-GPU structural check\)/);
   assert.match(CI_WORKFLOW, /actions\/checkout@d23441a48e516b6c34aea4fa41551a30e30af803/);
   assert.match(CI_WORKFLOW, /actions\/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38/);
   assert.match(CI_WORKFLOW, /actions\/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1/);

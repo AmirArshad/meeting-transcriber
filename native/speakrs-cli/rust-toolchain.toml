@@ -1,6 +1,6 @@
 [toolchain]
 channel = "1.88.0"
 components = ["rustfmt", "clippy"]
-# Packaging builds pass an explicit --target (aarch64-apple-darwin or
-# x86_64-pc-windows-msvc). CI/release and prepare-resources install that
-# rust-std rather than listing both targets here.
+# Packaging builds pass an explicit --target (aarch64-apple-darwin,
+# x86_64-pc-windows-msvc, or x86_64-unknown-linux-gnu). CI/release and
+# prepare-resources install that rust-std rather than listing every target here.

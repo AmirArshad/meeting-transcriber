@@ -1,5 +1,5 @@
 {
-  "description": "CI-only CPU inference smoke pins. Not installer-bundled. Not build/download-manifest.js. Uses the published Windows ONNX subset pack plus a CPU ONNX Runtime dylib for Windows load-dynamic binaries.",
+  "description": "CI-only CPU inference smoke pins. Not installer-bundled. Not build/download-manifest.js. Uses the published CUDA ONNX subset pack plus a CPU ONNX Runtime dylib for Windows/Linux load-dynamic binaries. Linux smoke is a non-GPU structural check only.",
   "onnxSubsetPlatform": "win32-x64",
   "windowsCpuOrt": {
     "label": "ONNX Runtime 1.27.1 Windows x64 CPU (CI smoke only)",
@@ -7,5 +7,13 @@
     "sha256": "2e00414a63fdef0914cd5a5ede6c707844878e0c08e1b6693842f0451b2df2a1",
     "fileName": "onnxruntime-win-x64-1.27.1.zip",
     "dylibName": "onnxruntime.dll"
+  },
+  "linuxCpuOrt": {
+    "label": "ONNX Runtime 1.27.1 Linux x64 CPU (CI smoke only, non-GPU)",
+    "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.27.1/onnxruntime-linux-x64-1.27.1.tgz",
+    "sha256": "25b1ef1fea1acd210d63f8f24dc870ad6e077795ce1f54876252c6d3803c15af",
+    "fileName": "onnxruntime-linux-x64-1.27.1.tgz",
+    "dylibName": "libonnxruntime.so.1.27.1",
+    "sizeBytes": 8828892
   }
 }

@@ -8,15 +8,19 @@ const path = require('node:path');
 const {
   PYANNOTE_DIARIZATION_MODEL_ID,
   SPEAKRS_DIARIZATION_MODEL_ID,
+  SPEAKRS_LINUX_REQUIRED_DYNAMIC_LIBRARIES,
   SPEAKRS_MODEL_PACK_REVISION,
   SPEAKRS_MODEL_PACK_REVISION_SHORT,
   SPEAKRS_MODELS_REPO,
   SPEAKRS_ORT_RUNTIME_ARTIFACTS,
+  assertSpeakrsLinuxRequiredDynamicLibraryClosure,
   buildSpeakrsSourceDownloadUrl,
   getSpeakrsRuntimeArtifacts,
   getSpeakrsSetupProgressCopy,
   getSpeakrsSourceFiles,
   getSpeakrsSourceTotalBytes,
+  getSpeakrsExtractedRuntimeDllPins,
+  getSpeakrsRequiredRuntimeLibraryNames,
   normalizeSpeakrsRelativePath,
   resolveContainedSpeakrsPath,
 } = require('../../src/ai-addon/speakrs-pack-spec');
@@ -39,10 +43,14 @@ test('speakrs pack spec keeps the binding revision and source file counts', () =
   assert.doesNotThrow(() => assertBindingPins());
 
   const cudaFiles = selectPackFiles('win32-x64');
+  const linuxCudaFiles = selectPackFiles('linux-x64');
   const coremlFiles = selectPackFiles('darwin-arm64');
   assert.equal(cudaFiles.length, 19);
+  assert.equal(linuxCudaFiles.length, 19);
+  assert.deepEqual(linuxCudaFiles.map((file) => file.path), cudaFiles.map((file) => file.path));
   assert.equal(coremlFiles.length, 76);
   assert.equal(getSpeakrsSourceTotalBytes('win32-x64'), 230677218);
+  assert.equal(getSpeakrsSourceTotalBytes('linux-x64'), 230677218);
   assert.equal(getSpeakrsSourceTotalBytes('darwin-arm64'), 419482724);
   assert.ok(cudaFiles.every((file) => /^[a-f0-9]{64}$/.test(file.sha256)));
   assert.ok(coremlFiles.every((file) => /^[a-f0-9]{64}$/.test(file.sha256)));
@@ -61,9 +69,114 @@ test('speakrs pack spec pins the official ORT 1.27.1 cuda12 archive and NVIDIA w
   assert.equal(runtime[2].fileName, 'nvidia_cufft_cu12-11.4.1.4-py3-none-win_amd64.whl');
   assert.equal(runtime[2].sha256, '8e5bfaac795e93f80611f807d42844e8e27e340e0cde270dcb6c65386d795b80');
   assert.deepEqual(SPEAKRS_ORT_RUNTIME_ARTIFACTS['darwin-arm64'], []);
+  const linuxRuntime = getSpeakrsRuntimeArtifacts('linux-x64');
+  assert.equal(linuxRuntime.length, 5);
+  assert.equal(linuxRuntime[0].fileName, 'onnxruntime-linux-x64-gpu_cuda12-1.27.1.tgz');
+  assert.equal(linuxRuntime[0].sha256, '08b568bd69500c36606aff7c3896ee4fa7d3531719f6b00f43e6a34db41dc4bf');
+  assert.equal(linuxRuntime[0].sizeBytes, 244763765);
+  assert.equal(linuxRuntime[0].architecture, 'x64');
+  assert.equal(linuxRuntime[0].cudaMajor, 12);
+  assert.equal(linuxRuntime[0].dynamicLibraryDir, 'lib');
+  assert.equal(
+    linuxRuntime[0].extractedFiles['libonnxruntime.so.1.27.1'].sha256,
+    '67eda041546eb01cf5606add5467d8bb7305b2aedb5cf37fdc6b055c7adfc094',
+  );
+  assert.equal(linuxRuntime[0].extractedFiles['libonnxruntime.so.1.27.1'].sizeBytes, 27000912);
+  assert.equal(
+    linuxRuntime[0].extractedFiles['libonnxruntime_providers_shared.so'].sha256,
+    'c6a12593396095f5670160e284c35d1700b7708cf3037b7042e2a5200ccae772',
+  );
+  assert.equal(linuxRuntime[0].extractedFiles['libonnxruntime_providers_cuda.so'].sizeBytes, 373925672);
+  assert.equal(linuxRuntime[1].fileName, 'nvidia_cuda_runtime_cu12-12.9.79-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl');
+  assert.equal(linuxRuntime[1].extractedFiles['libcudart.so.12'].sha256, '256e6409e4f06f618e1fb53d4844a6b81cdded1013afa8ade40c22f99eb133b7');
+  assert.equal(linuxRuntime[2].fileName, 'nvidia_cufft_cu12-11.4.1.4-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl');
+  assert.equal(linuxRuntime[2].extractedFiles['libcufft.so.11'].sizeBytes, 291507928);
+  assert.equal(linuxRuntime[3].fileName, 'nvidia_curand_cu12-10.3.10.19-py3-none-manylinux_2_27_x86_64.whl');
+  assert.equal(linuxRuntime[3].extractedFiles['libcurand.so.10'].sha256, 'ab8c07338fa663c018b16df5b3f3878c84aaae98bda930e9e8bad340427b0faa');
+  assert.equal(linuxRuntime[3].extractedFiles['libcurand.so.10'].sizeBytes, 166965432);
+  assert.equal(linuxRuntime[4].fileName, 'nvidia_cuda_nvrtc_cu12-12.9.86-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl');
+  assert.equal(linuxRuntime[4].extractedFiles['libnvrtc.so.12'].sha256, '7c67c6b51ea0e0279634cebd676ff7efda1674806444520c84430ad5c35fe625');
+  assert.equal(linuxRuntime[4].extractedFiles['libnvrtc.so.12'].sizeBytes, 106244480);
+  assert.ok(getSpeakrsExtractedRuntimeDllPins(linuxRuntime, 'linux-x64'));
+  assert.deepEqual(
+    getSpeakrsRequiredRuntimeLibraryNames('linux-x64'),
+    [
+      'libonnxruntime.so.1.27.1',
+      'libonnxruntime_providers_shared.so',
+      'libonnxruntime_providers_cuda.so',
+      'libcudart.so.12',
+      'libcufft.so.11',
+      'libcurand.so.10',
+      'libnvrtc.so.12',
+    ],
+  );
+  const linuxPack = require('../../src/ai-addon/speakrs-pack-spec').getSpeakrsModelPackArtifact('linux-x64');
+  assert.equal(linuxPack.architecture, 'x64');
+  assert.equal(linuxPack.cudaMajor, 12);
+  assert.equal(linuxPack.sha256, 'a79973647cb787bf2aebd31acc2668d282735e41d451e244308bcf04ea77ad20');
+  assert.equal(linuxPack.sizeBytes, 208765985);
   assert.match(
     buildSpeakrsSourceDownloadUrl('wespeaker-fbank.onnx'),
     /huggingface\.co\/avencera\/speakrs-models\/resolve\/5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f\/wespeaker-fbank\.onnx$/,
+  );
+});
+
+test('Linux Speakrs requiredDynamicLibraries map every non-system library to a pin or managed CUDA catalog', () => {
+  assert.doesNotThrow(() => assertSpeakrsLinuxRequiredDynamicLibraryClosure());
+  assert.equal(
+    SPEAKRS_LINUX_REQUIRED_DYNAMIC_LIBRARIES.some((entry) => entry.source === 'cuda-provider-needed'),
+    false,
+  );
+  const curand = SPEAKRS_LINUX_REQUIRED_DYNAMIC_LIBRARIES.find((entry) => entry.name === 'libcurand.so.10');
+  const nvrtc = SPEAKRS_LINUX_REQUIRED_DYNAMIC_LIBRARIES.find((entry) => entry.name === 'libnvrtc.so.12');
+  const cublas = SPEAKRS_LINUX_REQUIRED_DYNAMIC_LIBRARIES.find((entry) => entry.name === 'libcublas.so.12');
+  assert.equal(curand.source, 'curand-wheel');
+  assert.equal(nvrtc.source, 'nvrtc-wheel');
+  assert.equal(cublas.source, 'managed-cuda-runtime');
+  assert.match(cublas.sha256, /^[a-f0-9]{64}$/);
+  assert.equal(cublas.relativePath, 'nvidia/cublas/lib/libcublas.so.12');
+
+  const linuxRuntime = getSpeakrsRuntimeArtifacts('linux-x64');
+  assert.throws(
+    () => assertSpeakrsLinuxRequiredDynamicLibraryClosure({
+      runtimeArtifacts: linuxRuntime.map((artifact, index) => (
+        index === 0 ? { ...artifact, requiredDynamicLibraries: undefined } : artifact
+      )),
+    }),
+    /missing requiredDynamicLibraries/,
+  );
+  assert.throws(
+    () => assertSpeakrsLinuxRequiredDynamicLibraryClosure({
+      runtimeArtifacts: linuxRuntime,
+      requiredLibraries: SPEAKRS_LINUX_REQUIRED_DYNAMIC_LIBRARIES.map((entry) => (
+        entry.name === 'libcurand.so.10'
+          ? { ...entry, name: 'libcurand.so.99' }
+          : { ...entry }
+      )),
+    }),
+    /missing a pinned artifact|missing from requiredDynamicLibraries/,
+  );
+  assert.throws(
+    () => assertSpeakrsLinuxRequiredDynamicLibraryClosure({
+      runtimeArtifacts: linuxRuntime,
+      requiredLibraries: SPEAKRS_LINUX_REQUIRED_DYNAMIC_LIBRARIES.map((entry) => (
+        entry.name === 'libnvrtc.so.12'
+          ? { ...entry, source: 'cuda-provider-needed' }
+          : { ...entry }
+      )),
+    }),
+    /missing a pinned artifact/,
+  );
+  assert.throws(
+    () => assertSpeakrsLinuxRequiredDynamicLibraryClosure({
+      runtimeArtifacts: linuxRuntime,
+      requiredLibraries: SPEAKRS_LINUX_REQUIRED_DYNAMIC_LIBRARIES.map((entry) => (
+        entry.name === 'libcublas.so.12'
+          ? { ...entry, name: 'libcublas.so.99' }
+          : { ...entry }
+      )),
+    }),
+    /missing from the managed CUDA catalog/,
   );
 });
 

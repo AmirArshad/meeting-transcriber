@@ -12,8 +12,9 @@ Decision record for `feature/v2.9-dependency-hygiene` Task 1. Later version chan
 
 This is **host/candidate investigation only** for `feature/v2.9-linux-ai-addons`.
 It is **not** packaged RTX 4070 preflight. CUDA Whisper later passed Task 3
-packaged RTX 4070 acceptance (2026-09-02); Speakrs, Pyannote, and summaries
-remain unavailable. A component stays unavailable until its later
+packaged RTX 4070 acceptance (2026-09-02). Task 4 recorded Linux Speakrs CLI
+and pack-spec pins (2026-09-02) without catalog/UI enablement or RTX 4070
+Speakrs acceptance. Pyannote and summaries remain unavailable. A component stays unavailable until its later
 implementation (Task 2), packaged, and hardware gates (Task 3+) have passed.
 No entry below permits a CPU fallback, ambient system-CUDA library discovery, or a
 Linux catalog/status change that would advertise CUDA as ready.
@@ -59,7 +60,7 @@ search-index metadata.
 | CUDA Whisper / CTranslate2 | [CTranslate2 4.8.1](https://pypi.org/project/ctranslate2/4.8.1/) ([MIT](https://github.com/OpenNMT/CTranslate2/blob/v4.8.1/LICENSE.txt)). Requires packaged CPython 3.11 (`cp311`), manylinux_2_27_x86_64. Direct wheel: `https://files.pythonhosted.org/packages/30/84/f610e90bb419707632b9b668476b9fd4cdb090c9b53c119ce017699b58ca/ctranslate2-4.8.1-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl`. Already the packaged Linux pin; **not** reinstalled into userData. | `ctranslate2-4.8.1-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl`, 39,351,971 bytes, SHA-256 `c0a584c17f21779eb9035bcbc1ec280998f90b36725b70a5ff911f33e343199a`. | **Accepted (Task 3, 2026-09-02)** on packaged CachyOS x86_64 + NVIDIA RTX 4070. Offered as best-effort opt-in CUDA on other NVIDIA Linux x86_64; default remains CPU until install. |
 | NVIDIA cuBLAS CUDA 12 | [nvidia-cublas-cu12 12.9.2.10](https://pypi.org/project/nvidia-cublas-cu12/12.9.2.10/) (`LicenseRef-NVIDIA-Proprietary`; [NVIDIA CUDA EULA](https://docs.nvidia.com/cuda/eula/index.html)). Requires Python ≥3, manylinux_2_27_x86_64, NVIDIA driver able to load CUDA 12 user-mode (host 610.57 / UMD 13.3 is forward-compatible; it does **not** authorize a CUDA 13 app runtime). Direct wheel: `https://files.pythonhosted.org/packages/cb/c0/0a517bfe63ccd3b92eb254d264e28fca3c7cab75d07daea315250fb1bf73/nvidia_cublas_cu12-12.9.2.10-py3-none-manylinux_2_27_x86_64.whl`. | `nvidia_cublas_cu12-12.9.2.10-py3-none-manylinux_2_27_x86_64.whl`, 581,240,110 bytes, SHA-256 `e4f53a8ca8c5d6e8c492d0d0a3d565ecb59a751b19cfdaa4f6da0ab2104c1702`. Extracted regular files include `nvidia/cublas/lib/libcublas.so.12` (105,140,976 bytes, `5757ab5839fb4f203ca47ecb336110d10f4a5606b1e097f195fbca89774569e2`) and `libcublasLt.so.12` (749,210,000 bytes, `2c9006a75c74b3bea2dc7ae2ec38ab038b0e45ea02cb4b717a915e8a5796acb1`). | **Accepted (Task 3, 2026-09-02)** as the managed CUDA 12 Whisper closure on CachyOS x86_64 + RTX 4070. Not a CUDA 13 app runtime. Not Speakrs/Pyannote. |
 | NVIDIA cuDNN CUDA 12 | [nvidia-cudnn-cu12 9.22.0.52](https://pypi.org/project/nvidia-cudnn-cu12/9.22.0.52/) (NVIDIA proprietary; [cuDNN SLA](https://docs.nvidia.com/deeplearning/cudnn/latest/reference/eula.html)). Same Python/manylinux/driver requirements as cuBLAS. Direct wheel: `https://files.pythonhosted.org/packages/a0/8f/2ede6b758b7524608472010f632bdd3370ea271d715d1d66044614b84cdc/nvidia_cudnn_cu12-9.22.0.52-py3-none-manylinux_2_27_x86_64.whl`. | `nvidia_cudnn_cu12-9.22.0.52-py3-none-manylinux_2_27_x86_64.whl`, 718,382,818 bytes, SHA-256 `391b9a7ee6386daaca7f8dca41e83c2c99f760c9581a0400755e87b4287b8847`. Extracted `nvidia/cudnn/lib/libcudnn.so.9` plus companion `libcudnn_{adv,cnn,ops,graph,...}.so.9` libraries. | **Accepted (Task 3, 2026-09-02)** as the managed CUDA 12 Whisper closure on CachyOS x86_64 + RTX 4070. Not Speakrs/Pyannote. |
-| Speakrs | [ONNX Runtime 1.27.1 Linux GPU CUDA 12](https://github.com/microsoft/onnxruntime/releases/download/v1.27.1/onnxruntime-linux-x64-gpu_cuda12-1.27.1.tgz) (MIT) | `onnxruntime-linux-x64-gpu_cuda12-1.27.1.tgz`, 244,763,765 bytes, `08b568bd69500c36606aff7c3896ee4fa7d3531719f6b00f43e6a34db41dc4bf`; archive contains x86_64 `libonnxruntime.so.1.27.1` and CUDA provider libraries. | **Not accepted.** The runtime archive alone is not a Speakrs implementation: there is no staged, integrity-checked Linux `speakrs-cli` yet. Task 4 owns the CLI build/package/integrity gate. |
+| Speakrs | [ONNX Runtime 1.27.1 Linux GPU CUDA 12](https://github.com/microsoft/onnxruntime/releases/download/v1.27.1/onnxruntime-linux-x64-gpu_cuda12-1.27.1.tgz) (MIT) plus installer-bundled Linux `speakrs-cli` | GPU archive `onnxruntime-linux-x64-gpu_cuda12-1.27.1.tgz`, 244,763,765 bytes, `08b568bd69500c36606aff7c3896ee4fa7d3531719f6b00f43e6a34db41dc4bf`. Extracted regular files: `libonnxruntime.so.1.27.1` 27,000,912 bytes `67eda041546eb01cf5606add5467d8bb7305b2aedb5cf37fdc6b055c7adfc094`; `libonnxruntime_providers_shared.so` 14,632 bytes `c6a12593396095f5670160e284c35d1700b7708cf3037b7042e2a5200ccae772`; `libonnxruntime_providers_cuda.so` 373,925,672 bytes `cffff5fe3aac14fe50eed1113757ac8318ee12ef307fcb9def35a24398ec0ce3`. NVIDIA wheels: `nvidia_cuda_runtime_cu12-12.9.79-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl` 3,493,179 bytes `25bba2dfb01d48a9b59ca474a1ac43c6ebf7011f1b0b8cc44f54eb6ac48a96c3` → `libcudart.so.12` 741,088 bytes `256e6409e4f06f618e1fb53d4844a6b81cdded1013afa8ade40c22f99eb133b7`; `nvidia_cufft_cu12-11.4.1.4-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl` 200,877,592 bytes `c67884f2a7d276b4b80eb56a79322a95df592ae5e765cf1243693365ccab4e28` → `libcufft.so.11` 291,507,928 bytes `e1d65ebd08895f9d9883f848f3974f89e0130416252477b18835ba7f15d159bc`; `nvidia_curand_cu12-10.3.10.19-py3-none-manylinux_2_27_x86_64.whl` 68,295,626 bytes `49b274db4780d421bd2ccd362e1415c13887c53c214f0d4b761752b8f9f6aa1e` → `libcurand.so.10` 166,965,432 bytes `ab8c07338fa663c018b16df5b3f3878c84aaae98bda930e9e8bad340427b0faa`; `nvidia_cuda_nvrtc_cu12-12.9.86-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl` 89,568,129 bytes `210cf05005a447e29214e9ce50851e83fc5f4358df8b453155d5e1918094dcb4` → `libnvrtc.so.12` 106,244,480 bytes `7c67c6b51ea0e0279634cebd676ff7efda1674806444520c84430ad5c35fe625`. Model pack reuses the published CUDA ONNX subset `speakrs-models-5d24ffe-win32-x64-cuda.tar.gz`, 208,765,985 bytes, `a79973647cb787bf2aebd31acc2668d282735e41d451e244308bcf04ea77ad20` (same 19 files as Windows). Compile-time ORT pin is `linux-x64: null` (`load-dynamic`). CI-only CPU ORT smoke pin: `onnxruntime-linux-x64-1.27.1.tgz` 8,828,892 bytes `25b1ef1fea1acd210d63f8f24dc870ad6e077795ce1f54876252c6d3803c15af`. | **Task 4 pins recorded (2026-09-02).** Linux x86_64 `speakrs-cli` is built/staged with the canonical validation WAV and ELF executable/PIE integrity checks. Setup-time dynamic ORT/CUDA closure is pinned in `src/ai-addon/speakrs-pack-spec.js`, including curand/nvrtc and managed CUDA cublas/cudnn path/hash metadata. Catalog/UI and packaged RTX 4070 Speakrs remain **not accepted** until Task 5. CI CPU fixture smoke is a non-GPU structural check only. Never trust hashes from user-writable `install.json`. |
 | Pyannote | `pyannote/speaker-diarization-community-1` requires the user's token; token-based setup has no maintainer artifact to download or pin. | No token was requested, supplied, logged, or downloaded. The required host preflight currently fails because selected `gnome_libsecret` is not encryption-available. | **Not accepted.** Defer dependency resolution and token-stdin smoke to Task 6 after the encrypted-secret-store prerequisite passes. |
 | Summaries | [llama.cpp official releases](https://github.com/ggml-org/llama.cpp/releases) (MIT) | The current official Linux x86_64 assets are CPU/Vulkan/other non-CUDA variants; official CUDA release artifacts are Windows-only. | **Rejected for now.** Do not substitute CPU or Vulkan. Task 8 may reconsider only if an official, redistributable Linux CUDA artifact with a complete library closure becomes available and passes the RTX 4070 smoke. |
 
@@ -78,7 +79,9 @@ NVIDIA's CUDA 12 runtime wheels above remain a separate managed profile and must
 loaded only through the Task 2 controlled library path. **Task 3 packaged RTX 4070
 CUDA Whisper is accepted** (2026-09-02). Evidence:
 [Linux AI add-ons — Task 3 packaged CUDA Whisper acceptance](#linux-ai-add-ons--task-3-packaged-cuda-whisper-acceptance-2026-09-02).
-Speakrs, Pyannote, and summaries remain unavailable.
+Speakrs CLI/pack-spec pins are recorded in
+[Linux AI add-ons — Task 4 Speakrs CLI packaging pins](#linux-ai-add-ons--task-4-speakrs-cli-packaging-pins-2026-09-02);
+catalog/UI and RTX 4070 Speakrs stay unaccepted. Pyannote and summaries remain unavailable.
 
 ## Linux AI add-ons — Task 3 packaged CUDA Whisper acceptance (2026-09-02)
 
@@ -271,6 +274,57 @@ Linux children always clear ambient `LD_LIBRARY_PATH`; only an admitted managed
 runtime may repopulate it with validated managed and driver directories.
 Linux Settings copy says uninstall returns to CPU.
 Windows/macOS behavior, IPC channel names, and facade export shapes are unchanged.
+
+## Linux AI add-ons — Task 4 Speakrs CLI packaging pins (2026-09-02)
+
+**Decision: packaging/integrity pins recorded; Speakrs remains unavailable.**
+This is not packaged RTX 4070 Speakrs acceptance. Do not add `linux-x64` catalog
+entries, do not admit Linux diarization, and do not un-grey Settings. Task 5 owns
+setup, guided transcription, and hardware evidence.
+
+**CLI.** `buildSpeakrsCli()` on Linux targets `x86_64-unknown-linux-gnu` with
+Cargo features `default-linalg`, `cuda`, `load-dynamic`. Compile-time ORT stays
+`native/speakrs-cli/ort-compile-pins.json` `linux-x64: null`. The staged binary
+must be a 64-bit little-endian x86_64 ELF named `speakrs-cli`, executable, and
+structurally launchable: `ET_EXEC` or PIE `ET_DYN`, current ELF versions, a
+nonzero entry point, bounded program headers, at least one `PT_LOAD`, and a
+supported x86_64 interpreter (`/lib64/ld-linux-x86-64.so.2` or
+`/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2`). Integrity rejects 32-bit,
+non-x86_64, non-ELF, shared-object, missing-interpreter, header-only, renamed,
+PATH-supplied, and empty candidates without weakening PE/Mach-O checks. `file(1)`
+must report an x86_64 executable/PIE, not a shared object. The canonical
+`speakrs-two-speaker-16k.wav` is staged next to the CLI.
+
+**Model pack.** Same 19 CUDA ONNX/PLDA files as Windows (`cudaPins`). Published
+archive is the existing GitHub asset
+`speakrs-models-5d24ffe-win32-x64-cuda.tar.gz` (sha256
+`a79973647cb787bf2aebd31acc2668d282735e41d451e244308bcf04ea77ad20`, 208,765,985
+bytes). Pack-spec id is `speakrs-models-5d24ffe-linux-x64-cuda` with
+`architecture: x64` and `cudaMajor: 12`.
+
+**Setup-time runtime closure** (not installer-bundled):
+
+| Artifact | Size (bytes) | SHA-256 | Extracted keep files |
+|---|---|---|---|
+| `onnxruntime-linux-x64-gpu_cuda12-1.27.1.tgz` | 244,763,765 | `08b568bd69500c36606aff7c3896ee4fa7d3531719f6b00f43e6a34db41dc4bf` | `libonnxruntime.so.1.27.1` 27,000,912 `67eda041546eb01cf5606add5467d8bb7305b2aedb5cf37fdc6b055c7adfc094`; `libonnxruntime_providers_shared.so` 14,632 `c6a12593396095f5670160e284c35d1700b7708cf3037b7042e2a5200ccae772`; `libonnxruntime_providers_cuda.so` 373,925,672 `cffff5fe3aac14fe50eed1113757ac8318ee12ef307fcb9def35a24398ec0ce3` |
+| `nvidia_cuda_runtime_cu12-12.9.79-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl` | 3,493,179 | `25bba2dfb01d48a9b59ca474a1ac43c6ebf7011f1b0b8cc44f54eb6ac48a96c3` | `libcudart.so.12` 741,088 `256e6409e4f06f618e1fb53d4844a6b81cdded1013afa8ade40c22f99eb133b7` |
+| `nvidia_cufft_cu12-11.4.1.4-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl` | 200,877,592 | `c67884f2a7d276b4b80eb56a79322a95df592ae5e765cf1243693365ccab4e28` | `libcufft.so.11` 291,507,928 `e1d65ebd08895f9d9883f848f3974f89e0130416252477b18835ba7f15d159bc` |
+| `nvidia_curand_cu12-10.3.10.19-py3-none-manylinux_2_27_x86_64.whl` | 68,295,626 | `49b274db4780d421bd2ccd362e1415c13887c53c214f0d4b761752b8f9f6aa1e` | `libcurand.so.10` 166,965,432 `ab8c07338fa663c018b16df5b3f3878c84aaae98bda930e9e8bad340427b0faa` |
+| `nvidia_cuda_nvrtc_cu12-12.9.86-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl` | 89,568,129 | `210cf05005a447e29214e9ce50851e83fc5f4358df8b453155d5e1918094dcb4` | `libnvrtc.so.12` 106,244,480 `7c67c6b51ea0e0279634cebd676ff7efda1674806444520c84430ad5c35fe625` |
+
+TensorRT `.so` is not kept. CUDA-provider `NEEDED` libraries from the managed
+CUDA 12 profile (`libcublas.so.12`, `libcublasLt.so.12`, `libcudnn.so.9`, with
+catalog path/hash/size) plus `libcuda.so.1` (NVIDIA driver) and `libz.so.1`
+(system) stay in `requiredDynamicLibraries` for Task 5 `LD_LIBRARY_PATH`
+admission. Every non-system/non-driver required library maps to a pinned Speakrs
+artifact or the managed CUDA catalog; `cuda-provider-needed` is not a valid
+source. Never trust hashes from user-writable `install.json`.
+
+**CI.** Ubuntu builds/tests `x86_64-unknown-linux-gnu` and runs
+`scripts/run-speakrs-cpu-smoke.js` labeled **non-GPU structural check** using
+`onnxruntime-linux-x64-1.27.1.tgz` (8,828,892 bytes,
+`25b1ef1fea1acd210d63f8f24dc870ad6e077795ce1f54876252c6d3803c15af`). That smoke
+is not RTX 4070 evidence.
 
 ## Interpreters used for this matrix
 

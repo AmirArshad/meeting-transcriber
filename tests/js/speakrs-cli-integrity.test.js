@@ -5,6 +5,8 @@ const os = require('node:os');
 const path = require('node:path');
 
 const {
+  ELF_CLASS_32,
+  ELF_MACHINE_X86_64,
   MACHO_CPU_TYPE_ARM64,
   SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE,
   SPEAKRS_VALIDATE_WAV_NAME,
@@ -13,6 +15,7 @@ const {
   inspectPackagedSpeakrsLayout,
   inspectSpeakrsCliFile,
   inspectSpeakrsValidateWavFile,
+  isLinuxX64ElfExecutableFileOutput,
 } = require('../../src/ai-addon/speakrs-cli-integrity');
 const {
   checkAiAddonSetupStatus,
@@ -22,6 +25,7 @@ const {
   AI_MODEL_CATALOG,
   SPEAKRS_DIARIZATION_MODEL_ID,
 } = require('../../src/ai-addon-state');
+const { writeSpeakrsLinuxElfFixture } = require('./speakrs-linux-elf-fixture');
 
 function createStatusCatalog() {
   const bytes = Buffer.from('model');
@@ -72,6 +76,8 @@ function writeReadySpeakrsStatusState(userDataDir, catalog) {
 const WINDOWS_PE_MACHINE_I386 = 0x14c;
 const MACHO_CPU_TYPE_X86_64 = 0x01000007;
 const MACHO_FAT_MAGIC = 0xcafebabe;
+const ELF_MACHINE_AARCH64 = 183;
+const ELF_MACHINE_I386 = 3;
 
 function writeMinimalPe(filePath, machine) {
   const buf = Buffer.alloc(0x48, 0);
@@ -89,6 +95,14 @@ function writeMinimalMachO(filePath, cpuType) {
   buf.writeUInt32LE(cpuType, 4);
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, buf);
+}
+
+function writeMinimalElf(filePath, { eiClass = 2, machine = ELF_MACHINE_X86_64, kind = 'pie-executable' } = {}) {
+  if (eiClass === ELF_CLASS_32) {
+    writeSpeakrsLinuxElfFixture(filePath, { eiClass: ELF_CLASS_32, machine });
+    return;
+  }
+  writeSpeakrsLinuxElfFixture(filePath, { kind, machine });
 }
 
 function writeCanonicalFixture(filePath, contents = Buffer.from('RIFF-fixture')) {
@@ -133,6 +147,8 @@ function makeLayout(root, {
     writeMinimalPe(cliPath, WINDOWS_PE_MACHINE_AMD64);
   } else if (cli === 'valid-darwin') {
     writeMinimalMachO(cliPath, MACHO_CPU_TYPE_ARM64);
+  } else if (cli === 'valid-linux') {
+    writeMinimalElf(cliPath);
   } else if (cli === 'empty') {
     fs.writeFileSync(cliPath, Buffer.alloc(0));
   } else if (cli === 'directory') {
@@ -185,6 +201,10 @@ test('inspectSpeakrsCliFile rejects missing, empty, directory, and wrong names',
     const wrong = path.join(root, 'speakrs.exe');
     writeMinimalPe(wrong, WINDOWS_PE_MACHINE_AMD64);
     assert.equal(inspectSpeakrsCliFile(wrong, { platform: 'win32' }).reason, 'wrong-basename');
+
+    const pathLookup = inspectSpeakrsCliFile('speakrs-cli', { platform: 'linux' });
+    assert.equal(pathLookup.ok, false);
+    assert.equal(pathLookup.reason, 'path-lookup');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -237,6 +257,55 @@ test('inspectSpeakrsCliFile rejects wrong architecture and malformed binaries', 
     const validMac = path.join(root, 'valid-mac', 'speakrs-cli');
     writeMinimalMachO(validMac, MACHO_CPU_TYPE_ARM64);
     assert.equal(inspectSpeakrsCliFile(validMac, { platform: 'darwin', fsModule: darwinFs }).ok, true);
+
+    const linuxFs = darwinFs;
+    const validLinux = path.join(root, 'valid-linux', 'speakrs-cli');
+    writeMinimalElf(validLinux);
+    assert.equal(inspectSpeakrsCliFile(validLinux, { platform: 'linux', fsModule: linuxFs }).ok, true);
+
+    const elf32 = path.join(root, 'elf32', 'speakrs-cli');
+    writeMinimalElf(elf32, { eiClass: ELF_CLASS_32, machine: ELF_MACHINE_I386 });
+    assert.equal(inspectSpeakrsCliFile(elf32, { platform: 'linux', fsModule: linuxFs }).reason, 'wrong-architecture');
+
+    const aarch64Elf = path.join(root, 'aarch64-elf', 'speakrs-cli');
+    writeMinimalElf(aarch64Elf, { machine: ELF_MACHINE_AARCH64, kind: 'pie-executable' });
+    assert.equal(inspectSpeakrsCliFile(aarch64Elf, { platform: 'linux', fsModule: linuxFs }).reason, 'wrong-architecture');
+
+    const peOnLinux = path.join(root, 'pe-on-linux', 'speakrs-cli');
+    writeMinimalPe(peOnLinux, WINDOWS_PE_MACHINE_AMD64);
+    assert.equal(inspectSpeakrsCliFile(peOnLinux, { platform: 'linux', fsModule: linuxFs }).reason, 'malformed');
+
+    const headerOnly = path.join(root, 'header-only', 'speakrs-cli');
+    writeSpeakrsLinuxElfFixture(headerOnly, { kind: 'header-only' });
+    assert.equal(inspectSpeakrsCliFile(headerOnly, { platform: 'linux', fsModule: linuxFs }).reason, 'malformed');
+
+    const sharedObject = path.join(root, 'shared-object', 'speakrs-cli');
+    writeSpeakrsLinuxElfFixture(sharedObject, { kind: 'shared-object' });
+    assert.equal(inspectSpeakrsCliFile(sharedObject, { platform: 'linux', fsModule: linuxFs }).reason, 'malformed');
+    assert.match(
+      inspectSpeakrsCliFile(sharedObject, { platform: 'linux', fsModule: linuxFs }).detail,
+      /shared object/,
+    );
+
+    const missingInterp = path.join(root, 'missing-interp', 'speakrs-cli');
+    writeSpeakrsLinuxElfFixture(missingInterp, { kind: 'missing-interpreter' });
+    assert.equal(inspectSpeakrsCliFile(missingInterp, { platform: 'linux', fsModule: linuxFs }).reason, 'malformed');
+    assert.match(
+      inspectSpeakrsCliFile(missingInterp, { platform: 'linux', fsModule: linuxFs }).detail,
+      /interpreter/,
+    );
+
+    const badVersion = path.join(root, 'bad-version', 'speakrs-cli');
+    writeSpeakrsLinuxElfFixture(badVersion, { kind: 'bad-header-version' });
+    assert.equal(inspectSpeakrsCliFile(badVersion, { platform: 'linux', fsModule: linuxFs }).reason, 'malformed');
+    assert.match(
+      inspectSpeakrsCliFile(badVersion, { platform: 'linux', fsModule: linuxFs }).detail,
+      /ELF version/,
+    );
+
+    const truncatedPhdrs = path.join(root, 'truncated-phdrs', 'speakrs-cli');
+    writeSpeakrsLinuxElfFixture(truncatedPhdrs, { kind: 'truncated-program-table' });
+    assert.equal(inspectSpeakrsCliFile(truncatedPhdrs, { platform: 'linux', fsModule: linuxFs }).reason, 'malformed');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -370,6 +439,42 @@ test('packaged Speakrs integrity is fail-closed and ignores overrides', () => {
       platform: 'win32',
       resourcesPath: valid.resourcesPath,
     }), null);
+
+    const linuxValid = makeLayout(path.join(root, 'valid-linux'), { platform: 'linux', cli: 'valid-linux' });
+    if (process.platform !== 'win32') {
+      fs.chmodSync(linuxValid.cliPath, 0o755);
+    }
+    const linuxLayout = inspectPackagedSpeakrsLayout({
+      platform: 'linux',
+      resourcesPath: linuxValid.resourcesPath,
+      fsModule: process.platform === 'win32'
+        ? {
+            existsSync: fs.existsSync.bind(fs),
+            statSync: (filePath) => {
+              const stats = fs.statSync(filePath);
+              return {
+                isFile: () => stats.isFile(),
+                isDirectory: () => stats.isDirectory(),
+                size: stats.size,
+                mode: 0o755,
+              };
+            },
+            openSync: fs.openSync.bind(fs),
+            readSync: fs.readSync.bind(fs),
+            closeSync: fs.closeSync.bind(fs),
+          }
+        : fs,
+    });
+    assert.equal(linuxLayout.ok, true);
+    assert.equal(linuxLayout.cliPath, linuxValid.cliPath);
+    assert.equal(
+      isLinuxX64ElfExecutableFileOutput('ELF 64-bit LSB pie executable, x86-64, dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2'),
+      true,
+    );
+    assert.equal(
+      isLinuxX64ElfExecutableFileOutput('ELF 64-bit LSB shared object, x86-64, version 1 (SYSV), dynamically linked'),
+      false,
+    );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

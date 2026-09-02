@@ -3,14 +3,15 @@
 
 const crypto = require('crypto');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
+const { spawnSync } = require('child_process');
 const AdmZip = require('adm-zip');
 
 const {
-  SPEAKRS_CUDA_RUNTIME_DLL_NAMES,
-  SPEAKRS_ORT_DLL_NAMES,
   SPEAKRS_ORT_RUNTIME_ARTIFACTS,
   getSpeakrsExtractedRuntimeDllPins,
+  getSpeakrsRequiredRuntimeLibraryNames,
 } = require('../src/ai-addon/speakrs-pack-spec');
 const {
   listReleaseChecksumArtifacts,
@@ -18,10 +19,6 @@ const {
 
 const REPO_ROOT = path.join(__dirname, '..');
 const CACHE_DIR = path.join(REPO_ROOT, '.cache', 'speakrs-pack-verify');
-const REQUIRED_DLL_NAMES = Object.freeze([
-  ...SPEAKRS_ORT_DLL_NAMES,
-  ...SPEAKRS_CUDA_RUNTIME_DLL_NAMES,
-]);
 
 function fail(message) {
   throw new Error(message);
@@ -31,7 +28,7 @@ function hashBufferSha256(buffer) {
   return crypto.createHash('sha256').update(buffer).digest('hex');
 }
 
-function extractNamedFiles(archivePath, fileNames) {
+function extractNamedFilesFromZip(archivePath, fileNames) {
   const zip = new AdmZip(archivePath);
   const wanted = new Set(fileNames);
   const found = new Map();
@@ -48,14 +45,56 @@ function extractNamedFiles(archivePath, fileNames) {
   return found;
 }
 
-async function main() {
-  const { verifyArtifactDownload } = require('./verify-speakrs-packaging');
-  const artifacts = listReleaseChecksumArtifacts().filter((artifact) => artifact.checksumKind === 'ort-runtime');
-  if (artifacts.length !== SPEAKRS_ORT_RUNTIME_ARTIFACTS['win32-x64'].length) {
-    fail('Windows ORT runtime pin set is incomplete.');
+function extractNamedFilesFromTarGz(archivePath, fileNames) {
+  const wanted = new Set(fileNames);
+  const found = new Map();
+  const extractDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-ort-tar-'));
+  try {
+    const result = spawnSync('tar', ['-xzf', archivePath, '-C', extractDir], {
+      encoding: 'utf8',
+      windowsHide: true,
+    });
+    if (result.status !== 0) {
+      fail(result.stderr || `tar failed extracting ${archivePath}`);
+    }
+    const stack = [extractDir];
+    while (stack.length) {
+      const current = stack.pop();
+      for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+        const fullPath = path.join(current, entry.name);
+        if (entry.isDirectory()) {
+          stack.push(fullPath);
+          continue;
+        }
+        if (!entry.isFile() || !wanted.has(entry.name) || found.has(entry.name)) {
+          continue;
+        }
+        found.set(entry.name, fs.readFileSync(fullPath));
+      }
+    }
+  } finally {
+    fs.rmSync(extractDir, { recursive: true, force: true });
+  }
+  return found;
+}
+
+function extractNamedFiles(archivePath, fileNames) {
+  if (/\.(tgz|tar\.gz)$/i.test(archivePath)) {
+    return extractNamedFilesFromTarGz(archivePath, fileNames);
+  }
+  return extractNamedFilesFromZip(archivePath, fileNames);
+}
+
+async function verifyPlatformRuntimePins(platformKey, { verifyArtifactDownload }) {
+  const artifacts = listReleaseChecksumArtifacts().filter((artifact) => (
+    artifact.checksumKind === 'ort-runtime' && artifact.platform === platformKey
+  ));
+  const expectedArtifacts = SPEAKRS_ORT_RUNTIME_ARTIFACTS[platformKey] || [];
+  if (artifacts.length !== expectedArtifacts.length) {
+    fail(`${platformKey} ORT runtime pin set is incomplete.`);
   }
 
-  fs.mkdirSync(CACHE_DIR, { recursive: true });
+  const requiredNames = getSpeakrsRequiredRuntimeLibraryNames(platformKey);
   const extracted = {};
   for (const artifact of artifacts) {
     const archivePath = await verifyArtifactDownload(artifact, CACHE_DIR);
@@ -79,29 +118,35 @@ async function main() {
     }
   }
 
-  const missing = REQUIRED_DLL_NAMES.filter((name) => !extracted[name]);
+  const missing = requiredNames.filter((name) => !extracted[name]);
   if (missing.length) {
-    fail(`Derived DLL pin set is missing: ${missing.join(', ')}`);
+    fail(`Derived ${platformKey} runtime pin set is missing: ${missing.join(', ')}`);
   }
-  if (Object.keys(extracted).length !== REQUIRED_DLL_NAMES.length) {
-    fail('Derived DLL pin set has unexpected extra files.');
+  if (Object.keys(extracted).length !== requiredNames.length) {
+    fail(`Derived ${platformKey} runtime pin set has unexpected extra files.`);
   }
 
-  const expected = getSpeakrsExtractedRuntimeDllPins(SPEAKRS_ORT_RUNTIME_ARTIFACTS['win32-x64']);
+  const expected = getSpeakrsExtractedRuntimeDllPins(expectedArtifacts, platformKey);
   if (!expected) {
-    fail('Catalog extracted DLL pins are incomplete.');
+    fail(`Catalog extracted runtime pins are incomplete for ${platformKey}.`);
   }
-  for (const name of REQUIRED_DLL_NAMES) {
+  for (const name of requiredNames) {
     if (extracted[name].sha256 !== expected[name].sha256 || extracted[name].sizeBytes !== expected[name].sizeBytes) {
       fail(
-        `Extracted DLL pin mismatch for ${name}. `
+        `Extracted runtime pin mismatch for ${name}. `
         + `Derived ${extracted[name].sizeBytes}/${extracted[name].sha256}, `
         + `catalog ${expected[name].sizeBytes}/${expected[name].sha256}.`
       );
     }
   }
+}
 
-  process.stdout.write('Extracted Speakrs runtime DLL pins match the catalog.\n');
+async function main() {
+  const { verifyArtifactDownload } = require('./verify-speakrs-packaging');
+  fs.mkdirSync(CACHE_DIR, { recursive: true });
+  await verifyPlatformRuntimePins('win32-x64', { verifyArtifactDownload });
+  await verifyPlatformRuntimePins('linux-x64', { verifyArtifactDownload });
+  process.stdout.write('Extracted Speakrs runtime library pins match the catalog.\n');
 }
 
 if (require.main === module) {

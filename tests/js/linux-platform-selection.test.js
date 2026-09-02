@@ -267,16 +267,16 @@ test('Linux add-on catalog paths stay unsupported until later phases', () => {
   assert.equal(status.features.summary.status, 'unsupported');
 });
 
-test('Speakrs packaging stays fail-closed on Linux while resource manifests still fingerprint', () => {
-  assert.equal(isSpeakrsPackagingSupported('linux'), false);
+test('Speakrs packaging builds the Linux CLI while resource manifests still fingerprint', () => {
+  assert.equal(isSpeakrsPackagingSupported('linux'), true);
   assert.equal(isSpeakrsPackagingSupported('win32'), true);
-  assert.throws(() => getSpeakrsCargoTargetTriple('linux'), /Unsupported Speakrs packaging platform/);
-  assert.equal(getSpeakrsResourceManifestTarget('linux'), null);
+  assert.equal(getSpeakrsCargoTargetTriple('linux'), 'x86_64-unknown-linux-gnu');
+  assert.equal(getSpeakrsResourceManifestTarget('linux'), 'x86_64-unknown-linux-gnu');
   assert.equal(getSpeakrsResourceManifestTarget('darwin'), 'aarch64-apple-darwin');
 
   const manifest = withProcessPlatform('linux', () => buildResourceManifest());
   assert.equal(manifest.platform, 'linux');
-  assert.equal(manifest.inputs.speakrsCargoTarget, null);
+  assert.equal(manifest.inputs.speakrsCargoTarget, 'x86_64-unknown-linux-gnu');
   assert.equal(typeof manifest.inputs.speakrsCargoToml, 'string');
   assert.equal(manifest.inputs.speakrsCargoToml.length, 64);
 });
