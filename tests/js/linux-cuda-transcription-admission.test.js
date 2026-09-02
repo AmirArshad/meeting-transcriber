@@ -44,6 +44,18 @@ function createFakeProcess({ stdoutText = '', stderrText = '', exitCode = 0, han
   return proc;
 }
 
+function readyLinuxCudaStatus(overrides = {}) {
+  return {
+    statusCode: 'ready',
+    installed: true,
+    deviceAvailable: true,
+    runtimeLoadable: true,
+    missingLibraries: [],
+    matchedProfile: 'cuda12',
+    ...overrides,
+  };
+}
+
 function transcriptionJson(overrides = {}) {
   return JSON.stringify({
     text: 'hello',
@@ -112,7 +124,7 @@ function createLinuxTranscriptionService(overrides = {}) {
     getActiveWallClockComputeJobs: () => [],
     waitForGpuRuntimeIdle: async () => {},
     hasInFlightGpuRuntimeAction: () => false,
-    resolveCudaStatusForTranscription: async () => ({ statusCode: 'ready' }),
+    resolveCudaStatusForTranscription: async () => readyLinuxCudaStatus(),
     ...overrides,
     spawnTrackedPython: (args, options) => {
       spawnCalls.push({ args, env: options && options.env });
@@ -150,7 +162,7 @@ test('Linux CUDA admission stays on CPU when the admission resolver is missing',
 test('Linux CUDA admission stays on CPU on arm64 even if a resolver claims ready', async () => {
   await withProcess({ platform: 'linux', arch: 'arm64' }, async () => {
     const { service, spawnCalls } = createLinuxTranscriptionService({
-      resolveCudaStatusForTranscription: async () => ({ statusCode: 'ready' }),
+      resolveCudaStatusForTranscription: async () => readyLinuxCudaStatus(),
       spawnTrackedPython: () => createFakeProcess({
         stdoutText: transcriptionJson({ device: 'cpu', computeType: 'int8' }),
         exitCode: 0,
@@ -183,6 +195,19 @@ test('Linux CUDA non-ready statuses fail closed without a CPU fallback', async (
       );
       assert.equal(spawnCalls.length, 0, statusCode);
     }
+  });
+});
+
+test('Linux CUDA statusCode ready without device/runtime invariants fails closed', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    const { service, spawnCalls } = createLinuxTranscriptionService({
+      resolveCudaStatusForTranscription: async () => ({ statusCode: 'ready' }),
+    });
+    await assert.rejects(
+      service.runNormalTranscriptionWithCudaFallback(ADMISSION_ARGS),
+      (error) => error && error.code === 'LINUX_CUDA_UNAVAILABLE',
+    );
+    assert.equal(spawnCalls.length, 0);
   });
 });
 

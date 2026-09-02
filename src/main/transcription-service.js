@@ -63,6 +63,7 @@ const {
   shouldTerminateComputeJobsForMeeting,
 } = require('../main-process-helpers');
 const { checkAiAddonSetupStatus: defaultCheckAiAddonSetupStatus } = require('../ai-addon-setup');
+const { isLinuxCudaStatusReadyForAdmission } = require('../main-process/linux-cuda-runtime-helpers');
 const {
   getDiarizationAvailability,
   getDiarizationModelRef,
@@ -1128,7 +1129,7 @@ function createTranscriptionService(deps) {
         ? await resolveCudaStatusForTranscription({ registerProcess })
         : null;
       if (status) {
-        if (status.statusCode !== 'ready') {
+        if (!isLinuxCudaStatusReadyForAdmission(status)) {
           const error = new Error(status.error || `Linux CUDA runtime is unavailable (${status.statusCode || 'unknown'}).`);
           error.code = 'LINUX_CUDA_UNAVAILABLE';
           throw error;

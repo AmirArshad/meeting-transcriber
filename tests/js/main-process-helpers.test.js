@@ -1862,15 +1862,16 @@ test('parseCheckCudaStatus preserves backend probeError instead of recomputing d
   assert.match(status.error, /nvidia-smi/);
 });
 
-test('parseCheckCudaStatus treats invalid JSON as probeError', () => {
+test('parseCheckCudaStatus treats invalid JSON as deviceUnavailable on Windows', () => {
   const status = parseCheckCudaStatus('{not-json');
-  assert.equal(status.statusCode, 'probeError');
-  assert.match(status.error, /invalid JSON/);
+  assert.equal(status.statusCode, 'deviceUnavailable');
+  assert.equal(status.installed, false);
 });
 
-test('parseCheckCudaStatus treats empty output as probeError', () => {
+test('parseCheckCudaStatus treats empty output as deviceUnavailable on Windows', () => {
   const status = parseCheckCudaStatus('');
-  assert.equal(status.statusCode, 'probeError');
+  assert.equal(status.statusCode, 'deviceUnavailable');
+  assert.equal(status.installed, false);
 });
 
 test('parseCheckCudaStatus JSON ignores multiline error without inventing keys', () => {

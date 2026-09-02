@@ -309,6 +309,20 @@ async function verifyLinuxCudaRuntimeIntegrity({
     };
   }
 
+  const unexpectedLoaderFiles = collectUnexpectedLinuxCudaLoaderFiles({
+    managedRoot: validatedRoot,
+    catalog,
+    fsModule,
+  });
+  if (unexpectedLoaderFiles.length > 0) {
+    return {
+      ok: false,
+      statusCode: 'runtimeIntegrityFailed',
+      missingLibraries: [],
+      error: `Unexpected CUDA loader-directory files: ${unexpectedLoaderFiles.join(', ')}`,
+    };
+  }
+
   return {
     ok: true,
     statusCode: 'ready',
@@ -316,6 +330,68 @@ async function verifyLinuxCudaRuntimeIntegrity({
     error: '',
     managedRoot: validatedRoot,
   };
+}
+
+function isLinuxSharedLibraryFileName(name) {
+  return /\.so(?:\.|$)/.test(String(name || ''));
+}
+
+function getLinuxCudaLoaderRelativeDirs(catalog = getLinuxCuda12RuntimeCatalog()) {
+  const dirs = [];
+  const seen = new Set();
+  const add = (relativeDir) => {
+    const normalized = String(relativeDir || '').replace(/\\/g, '/').replace(/\/+$/, '');
+    if (!normalized || normalized.includes('..') || path.isAbsolute(normalized) || seen.has(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    dirs.push(normalized);
+  };
+  for (const relativeDir of catalog.libraryRelativeDirs || []) {
+    add(relativeDir);
+  }
+  for (const library of catalog.requiredLibraries || []) {
+    const relativePath = String(library.relativePath || '').replace(/\\/g, '/');
+    const relativeDir = relativePath.split('/').slice(0, -1).join('/');
+    add(relativeDir);
+  }
+  return dirs;
+}
+
+function collectUnexpectedLinuxCudaLoaderFiles({
+  managedRoot,
+  catalog = getLinuxCuda12RuntimeCatalog(),
+  fsModule = fs,
+} = {}) {
+  const expectedByDir = new Map();
+  for (const library of catalog.requiredLibraries || []) {
+    const relativePath = String(library.relativePath || '').replace(/\\/g, '/');
+    const relativeDir = relativePath.split('/').slice(0, -1).join('/');
+    if (!expectedByDir.has(relativeDir)) {
+      expectedByDir.set(relativeDir, new Set());
+    }
+    expectedByDir.get(relativeDir).add(library.fileName);
+  }
+
+  const unexpected = [];
+  const readdirSync = fsModule.readdirSync || fs.readdirSync;
+  for (const relativeDir of getLinuxCudaLoaderRelativeDirs(catalog)) {
+    const absDir = path.join(managedRoot, ...relativeDir.split('/'));
+    let names;
+    try {
+      names = readdirSync(absDir);
+    } catch (_error) {
+      continue;
+    }
+    const allowed = expectedByDir.get(relativeDir) || new Set();
+    for (const name of names) {
+      if (!isLinuxSharedLibraryFileName(name) || allowed.has(name)) {
+        continue;
+      }
+      unexpected.push(`${relativeDir}/${name}`);
+    }
+  }
+  return unexpected;
 }
 
 function getLinuxCudaWheelhousePath(userDataPath) {
@@ -329,33 +405,115 @@ function getLinuxCudaTombstonePath(activePath, { now = Date.now(), pid = process
   return `${activePath}.tombstone-${now}-${pid}`;
 }
 
+function getLinuxCudaRuntimeStagingPath(activePath, { now = Date.now(), pid = process.pid } = {}) {
+  return `${activePath}.staging-${now}-${pid}`;
+}
+
+function getLinuxCudaWheelStagePath(userDataPath, { now = Date.now(), pid = process.pid } = {}) {
+  if (!userDataPath || !path.isAbsolute(userDataPath)) {
+    throw new Error('CUDA wheel stage userData path must be an absolute path.');
+  }
+  return path.join(path.resolve(userDataPath), 'ai-addons', 'cuda', `wheel-stage-${now}-${pid}`);
+}
+
+function stageVerifiedLinuxCudaWheels({
+  sourceDir,
+  stagingDir,
+  catalog = getLinuxCuda12RuntimeCatalog(),
+  fsModule = fs,
+} = {}) {
+  assertLinuxCudaCatalogIntegrity(catalog);
+  if (!sourceDir || !path.isAbsolute(sourceDir)) {
+    throw new Error('Linux CUDA wheel source directory must be an absolute path.');
+  }
+  if (!stagingDir || !path.isAbsolute(stagingDir)) {
+    throw new Error('Linux CUDA wheel staging directory must be an absolute path.');
+  }
+  if (path.resolve(sourceDir) === path.resolve(stagingDir)) {
+    throw new Error('Linux CUDA wheel staging directory must not be the persistent wheelhouse.');
+  }
+  const mkdirSync = fsModule.mkdirSync || fs.mkdirSync;
+  const copyFileSync = fsModule.copyFileSync || fs.copyFileSync;
+  mkdirSync(stagingDir, { recursive: true });
+  return catalog.wheels.map((wheel) => {
+    const destinationPath = path.join(stagingDir, wheel.fileName);
+    copyFileSync(path.join(sourceDir, wheel.fileName), destinationPath);
+    verifyDownloadedLinuxCudaWheel(destinationPath, wheel, fsModule);
+    return destinationPath;
+  });
+}
+
 function buildLinuxCudaOfflineInstallArgs({
-  wheelhouse,
+  wheelPaths,
   target,
   catalog = getLinuxCuda12RuntimeCatalog(),
 } = {}) {
   assertLinuxCudaCatalogIntegrity(catalog);
-  if (!wheelhouse || !path.isAbsolute(wheelhouse)) {
-    throw new Error('Linux CUDA wheelhouse must be an absolute path.');
-  }
   if (!target || !path.isAbsolute(target)) {
     throw new Error('Linux CUDA install target must be an absolute path.');
   }
+  if (!Array.isArray(wheelPaths) || wheelPaths.length !== catalog.wheels.length) {
+    throw new Error('Linux CUDA install requires the exact verified wheel closure.');
+  }
+  const resolvedWheels = wheelPaths.map((wheelPath, index) => {
+    if (!wheelPath || !path.isAbsolute(wheelPath)) {
+      throw new Error('Linux CUDA wheel paths must be absolute.');
+    }
+    const expectedName = catalog.wheels[index].fileName;
+    if (path.basename(wheelPath) !== expectedName) {
+      throw new Error(`Linux CUDA wheel path does not match catalog name: ${expectedName}`);
+    }
+    return path.resolve(wheelPath);
+  });
   return [
     '-m',
     'pip',
     'install',
     '--no-index',
-    '--find-links',
-    path.resolve(wheelhouse),
-    '--target',
-    path.resolve(target),
     '--no-deps',
     '--no-compile',
     '--only-binary=:all:',
+    '--no-cache-dir',
     '--no-warn-script-location',
-    ...catalog.wheels.map((wheel) => `${wheel.packageName}==${wheel.version}`),
+    '--target',
+    path.resolve(target),
+    ...resolvedWheels,
   ];
+}
+
+function swapLinuxCudaRuntimeAtomically({
+  activePath,
+  stagingPath,
+  fsModule = fs,
+  now = Date.now(),
+  pid = process.pid,
+} = {}) {
+  assertAbsolutePath(activePath, 'Active CUDA runtime');
+  assertAbsolutePath(stagingPath, 'Staged CUDA runtime');
+  if (path.resolve(activePath) === path.resolve(stagingPath)) {
+    throw new Error('CUDA runtime staging path must not be the active path.');
+  }
+  const existsSync = fsModule.existsSync || fs.existsSync;
+  const renameSync = fsModule.renameSync || fs.renameSync;
+  const tombstonePath = getLinuxCudaTombstonePath(activePath, { now, pid });
+  let renamedActive = false;
+  try {
+    if (existsSync(activePath)) {
+      renameSync(activePath, tombstonePath);
+      renamedActive = true;
+    }
+    renameSync(stagingPath, activePath);
+  } catch (error) {
+    if (renamedActive && !existsSync(activePath) && existsSync(tombstonePath)) {
+      try {
+        renameSync(tombstonePath, activePath);
+      } catch (_rollbackError) {
+        // Keep the original swap failure. The tombstone still holds the prior runtime.
+      }
+    }
+    throw error;
+  }
+  return { tombstonePath, renamedActive };
 }
 
 function verifyDownloadedLinuxCudaWheel(filePath, wheel, fsModule = fs) {
@@ -407,11 +565,95 @@ function buildProbeErrorStatus(error, extras = {}) {
     missingLibraries: [],
     runtime: 'ctranslate2',
     statusCode: 'probeError',
+    matchedProfile: '',
+    installedProfile: '',
     supportedProfiles: ['cuda12'],
     unsupportedDetectedProfiles: [],
     recommendedInstallProfile: 'cuda12',
     error: String(error || 'CUDA probe failed.'),
     ...extras,
+  };
+}
+
+function isLinuxCudaStatusReadyForAdmission(status, expectedProfile = 'cuda12') {
+  if (!status || typeof status !== 'object') {
+    return false;
+  }
+  return status.statusCode === 'ready'
+    && status.installed === true
+    && status.deviceAvailable === true
+    && status.runtimeLoadable === true
+    && Array.isArray(status.missingLibraries)
+    && status.missingLibraries.length === 0
+    && status.matchedProfile === expectedProfile;
+}
+
+function parseLinuxCheckCudaStatus(output = '', { expectedProfile = 'cuda12' } = {}) {
+  const raw = String(output || '').trim();
+  if (!raw) {
+    return buildProbeErrorStatus('CUDA probe produced no output.');
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (_error) {
+    return buildProbeErrorStatus('CUDA probe returned invalid JSON.');
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return buildProbeErrorStatus('CUDA probe returned invalid JSON.');
+  }
+
+  if (typeof parsed.deviceAvailable !== 'boolean'
+    || typeof parsed.runtimeLoadable !== 'boolean'
+    || !Array.isArray(parsed.missingLibraries)
+    || typeof parsed.statusCode !== 'string') {
+    return buildProbeErrorStatus('CUDA probe JSON failed schema validation.');
+  }
+
+  const statusCode = parsed.statusCode.trim();
+  if (!isKnownCudaProbeStatusCode(statusCode)) {
+    return buildProbeErrorStatus('CUDA probe returned an unknown statusCode.');
+  }
+
+  const deviceAvailable = parsed.deviceAvailable;
+  const runtimeLoadable = parsed.runtimeLoadable;
+  const missingLibraries = parsed.missingLibraries.map((item) => String(item));
+  const matchedProfile = typeof parsed.matchedProfile === 'string' ? parsed.matchedProfile : '';
+  const unsupportedDetectedProfiles = Array.isArray(parsed.unsupportedDetectedProfiles)
+    ? parsed.unsupportedDetectedProfiles.map((item) => String(item))
+    : [];
+  const supportedProfiles = Array.isArray(parsed.supportedProfiles)
+    ? parsed.supportedProfiles.map((item) => String(item))
+    : ['cuda12'];
+  const rawInstalledProfile = typeof parsed.installedProfile === 'string' ? parsed.installedProfile : '';
+  const installedProfile = matchedProfile || rawInstalledProfile || unsupportedDetectedProfiles[0] || '';
+  const readyConsistent = deviceAvailable === true
+    && runtimeLoadable === true
+    && missingLibraries.length === 0
+    && matchedProfile === expectedProfile
+    && statusCode === 'ready';
+
+  if (statusCode === 'ready' && !readyConsistent) {
+    return buildProbeErrorStatus(
+      'CUDA probe reported ready without a consistent device, runtime, and matched profile.',
+    );
+  }
+
+  return {
+    installed: readyConsistent,
+    deviceAvailable,
+    runtimeLoadable,
+    missingLibraries,
+    runtime: typeof parsed.runtime === 'string' && parsed.runtime ? parsed.runtime : 'ctranslate2',
+    error: parsed.error == null ? '' : String(parsed.error),
+    statusCode,
+    matchedProfile,
+    installedProfile,
+    supportedProfiles: supportedProfiles.length ? supportedProfiles : ['cuda12'],
+    unsupportedDetectedProfiles,
+    recommendedInstallProfile: parsed.recommendedInstallProfile || expectedProfile,
+    deviceProbe: parsed.deviceProbe || null,
   };
 }
 
@@ -429,10 +671,18 @@ module.exports = {
   hashFileSha256Sync,
   resolveRequiredLinuxCudaLibraryPath,
   verifyLinuxCudaRuntimeIntegrity,
+  collectUnexpectedLinuxCudaLoaderFiles,
+  isLinuxSharedLibraryFileName,
   getLinuxCudaWheelhousePath,
   getLinuxCudaTombstonePath,
+  getLinuxCudaRuntimeStagingPath,
+  getLinuxCudaWheelStagePath,
+  stageVerifiedLinuxCudaWheels,
+  swapLinuxCudaRuntimeAtomically,
   buildLinuxCudaOfflineInstallArgs,
   verifyDownloadedLinuxCudaWheel,
   detectUnsupportedLinuxCudaMajor,
   buildProbeErrorStatus,
+  parseLinuxCheckCudaStatus,
+  isLinuxCudaStatusReadyForAdmission,
 };

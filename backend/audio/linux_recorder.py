@@ -931,30 +931,37 @@ class LinuxAudioRecorder:
             print(f"ERROR in desktop recording: {exc}", file=sys.stderr)
             import traceback
             traceback.print_exc(file=sys.stderr)
-            error_message = f"Desktop audio recording failed: {exc}"
-            if not capture_started:
-                resource_exhausted = _is_audio_resource_exhaustion(exc)
-                if resource_exhausted:
-                    error_message = (
-                        f"Desktop audio stream could not be opened ({exc}); "
-                        "disabling desktop capture for this recording and not retrying. "
-                        "Check the PipeWire/WirePlumber audio device state."
-                    )
-                    self._desktop_start_error_code = "DESKTOP_AUDIO_RESOURCE_EXHAUSTED"
-                self._desktop_start_error = error_message
-                self._desktop_started_event.set()
-            elif self._desktop_give_up or not self._get_running():
-                # Teardown noise after stop/cancel. Warning here would put a
-                # phantom DESKTOP_RECORDING_FAILED on stdout after Stop and, on
-                # Discard, contradict the "capture discarded" result.
+            # Teardown after stop/cancel is diagnostic-only. Classify resource
+            # exhaustion before the startup/runtime split so ENOSPC / set_hw_params
+            # keep DESKTOP_AUDIO_RESOURCE_EXHAUSTED whether they happen at open
+            # or after the stream has entered.
+            if capture_started and (self._desktop_give_up or not self._get_running()):
                 print(
                     "Ignoring desktop teardown error raised after stop; "
                     "committed audio is unaffected.",
                     file=sys.stderr,
                 )
+            elif _is_audio_resource_exhaustion(exc):
+                error_message = (
+                    f"Desktop audio stream could not be opened ({exc}); "
+                    "disabling desktop capture for this recording and not retrying. "
+                    "Check the PipeWire/WirePlumber audio device state."
+                )
+                if not capture_started:
+                    self._desktop_start_error_code = "DESKTOP_AUDIO_RESOURCE_EXHAUSTED"
+                    self._desktop_start_error = error_message
+                    self._desktop_started_event.set()
+                else:
+                    self._note_desktop_runtime_failure(
+                        error_message, code="DESKTOP_AUDIO_RESOURCE_EXHAUSTED"
+                    )
+            elif not capture_started:
+                self._desktop_start_error = f"Desktop audio recording failed: {exc}"
+                self._desktop_started_event.set()
             else:
                 self._note_desktop_runtime_failure(
-                    error_message, code="DESKTOP_RECORDING_FAILED"
+                    f"Desktop audio recording failed: {exc}",
+                    code="DESKTOP_RECORDING_FAILED",
                 )
         finally:
             # The only watchdog caller is this thread; latch it closed so a

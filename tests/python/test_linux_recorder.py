@@ -53,6 +53,10 @@ class FakeRecorder:
 
     def record(self, numframes=None):
         fail = self.backend.fail_record.get(self.pulse_name)
+        if isinstance(fail, BaseException):
+            raise fail
+        if isinstance(fail, str):
+            raise RuntimeError(fail)
         if fail is not None and self._records >= fail:
             raise RuntimeError(f"simulated {self.pulse_name} capture failure")
         self._records += 1
@@ -283,6 +287,56 @@ def test_linux_enospc_desktop_open_is_fail_closed_without_retry(
     _patch_finalize_success(monkeypatch)
     soundcard = FakeSoundCard()
     soundcard.fail_open[MONITOR_NAME] = OSError(errno.ENOSPC, "No space left on device")
+    pulse = FakePulse([MIC_NAME, MONITOR_NAME])
+    recorder = _make_recorder(tmp_path, soundcard=soundcard, pulse=pulse)
+
+    assert recorder.start_recording() is True
+    time.sleep(0.08)
+    recorder.stop_recording()
+
+    assert soundcard.open_attempts[MONITOR_NAME] == 1
+    assert recorder.recording_failure is None
+    payloads = _stdout_payloads(capsys)
+    warning = next(
+        item for item in payloads
+        if item.get("type") == "warning" and item.get("code") == "DESKTOP_AUDIO_RESOURCE_EXHAUSTED"
+    )
+    assert "not retrying" in warning.get("message", "").lower()
+
+
+def test_linux_set_hw_params_desktop_open_is_resource_exhausted_without_retry(
+    tmp_path, monkeypatch, capsys
+):
+    """ALSA/Pulse often reports set_hw_params as a message-only RuntimeError."""
+    _patch_finalize_success(monkeypatch)
+    soundcard = FakeSoundCard()
+    soundcard.fail_open[MONITOR_NAME] = RuntimeError(
+        "Error opening <PulseWrapper>: Error calling set_hw_params: Invalid argument"
+    )
+    pulse = FakePulse([MIC_NAME, MONITOR_NAME])
+    recorder = _make_recorder(tmp_path, soundcard=soundcard, pulse=pulse)
+
+    assert recorder.start_recording() is True
+    time.sleep(0.08)
+    recorder.stop_recording()
+
+    assert soundcard.open_attempts[MONITOR_NAME] == 1
+    assert recorder.recording_failure is None
+    payloads = _stdout_payloads(capsys)
+    warning = next(
+        item for item in payloads
+        if item.get("type") == "warning" and item.get("code") == "DESKTOP_AUDIO_RESOURCE_EXHAUSTED"
+    )
+    assert "not retrying" in warning.get("message", "").lower()
+
+
+def test_linux_enospc_during_desktop_record_is_resource_exhausted_without_retry(
+    tmp_path, monkeypatch, capsys
+):
+    """Resource exhaustion after the stream has entered must keep the same code."""
+    _patch_finalize_success(monkeypatch)
+    soundcard = FakeSoundCard()
+    soundcard.fail_record[MONITOR_NAME] = OSError(errno.ENOSPC, "No space left on device")
     pulse = FakePulse([MIC_NAME, MONITOR_NAME])
     recorder = _make_recorder(tmp_path, soundcard=soundcard, pulse=pulse)
 

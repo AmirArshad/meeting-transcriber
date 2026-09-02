@@ -19,10 +19,17 @@ const {
 const {
   buildContainedLinuxCudaLibraryPath,
   buildLinuxCudaOfflineInstallArgs,
+  collectUnexpectedLinuxCudaLoaderFiles,
   detectUnsupportedLinuxCudaMajor,
+  getLinuxCudaRuntimeStagingPath,
   getLinuxCudaTombstonePath,
+  getLinuxCudaWheelStagePath,
   getLinuxCudaWheelhousePath,
+  isLinuxCudaStatusReadyForAdmission,
+  parseLinuxCheckCudaStatus,
   resolveLinuxCudaDriverLibraryDirs,
+  stageVerifiedLinuxCudaWheels,
+  swapLinuxCudaRuntimeAtomically,
   verifyDownloadedLinuxCudaWheel,
   verifyLinuxCudaRuntimeIntegrity,
 } = require('../../src/main-process/linux-cuda-runtime-helpers');
@@ -138,7 +145,6 @@ test('Linux CUDA integrity full-hashes required libraries and reports hash misma
     }],
   };
   fs.writeFileSync(path.join(cublas, 'libcublas.so.12'), good);
-  fs.writeFileSync(path.join(cudnn, 'libcudnn.so.9'), 'x');
   const ok = await verifyLinuxCudaRuntimeIntegrity({ managedRoot: root, catalog, fsModule: fs });
   assert.equal(ok.ok, true);
 
@@ -172,25 +178,35 @@ test('Linux CUDA wheel verification rejects size and hash mismatches', () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('Linux CUDA offline install args never use an unpinned pip package name', () => {
+test('Linux CUDA offline install args pass exact verified wheel paths, not package names', () => {
+  const wheelPaths = [
+    '/tmp/avanevis/ai-addons/cuda/wheel-stage/nvidia_cublas_cu12-12.9.2.10-py3-none-manylinux_2_27_x86_64.whl',
+    '/tmp/avanevis/ai-addons/cuda/wheel-stage/nvidia_cudnn_cu12-9.22.0.52-py3-none-manylinux_2_27_x86_64.whl',
+  ];
   const args = buildLinuxCudaOfflineInstallArgs({
-    wheelhouse: '/tmp/avanevis/ai-addons/cuda/wheelhouse',
-    target: '/tmp/avanevis/ai-addons/cuda/python',
+    wheelPaths,
+    target: '/tmp/avanevis/ai-addons/cuda/python.staging-1',
   });
   assert.ok(args.includes('--no-index'));
-  assert.ok(args.includes('--find-links'));
   assert.ok(args.includes('--target'));
-  assert.ok(args.includes('nvidia-cublas-cu12==12.9.2.10'));
-  assert.ok(args.includes('nvidia-cudnn-cu12==9.22.0.52'));
-  assert.equal(args.includes('nvidia-cublas-cu12'), false);
+  assert.ok(args.includes('--no-cache-dir'));
+  assert.equal(args.includes('--find-links'), false);
+  assert.equal(args.some((item) => String(item).startsWith('nvidia-cublas-cu12')), false);
+  assert.equal(args.some((item) => String(item).startsWith('nvidia-cudnn-cu12')), false);
+  assert.ok(wheelPaths.every((wheelPath) => args.includes(wheelPath)));
 });
 
 test('Linux CUDA tombstone path is beside the active runtime, not inside it', () => {
   const active = '/home/alice/.config/AvaNevis/ai-addons/cuda/python';
   const tombstone = getLinuxCudaTombstonePath(active, { now: 42, pid: 7 });
   assert.equal(tombstone, `${active}.tombstone-42-7`);
+  assert.equal(getLinuxCudaRuntimeStagingPath(active, { now: 42, pid: 7 }), `${active}.staging-42-7`);
   assert.equal(getLinuxCudaWheelhousePath('/home/alice/.config/AvaNevis'),
     '/home/alice/.config/AvaNevis/ai-addons/cuda/wheelhouse');
+  assert.equal(
+    getLinuxCudaWheelStagePath('/home/alice/.config/AvaNevis', { now: 42, pid: 7 }),
+    '/home/alice/.config/AvaNevis/ai-addons/cuda/wheel-stage-42-7',
+  );
 });
 
 test('unsupported CUDA major is detected only from managed library directories', () => {
@@ -211,4 +227,133 @@ test('driver allowlist rejects a writable directory even when the basename match
     /writable CUDA driver library directory/,
   );
   fs.rmSync(writable, { recursive: true, force: true });
+});
+
+test('Linux CUDA integrity rejects an unexpected shared library in a loader directory', async () => {
+  const { root, cublas } = makeRuntimeTree();
+  const good = Buffer.from('good-library');
+  const catalog = {
+    architecture: 'x64',
+    platform: 'linux',
+    libraryRelativeDirs: ['nvidia/cublas/lib'],
+    wheels: [{
+      id: 'fixture',
+      packageName: 'fixture',
+      version: '1',
+      fileName: 'fixture.whl',
+      sha256: 'a'.repeat(64),
+      sizeBytes: 1,
+      downloadUrl: 'https://files.pythonhosted.org/packages/fixture.whl',
+    }],
+    requiredLibraries: [{
+      fileName: 'libcublas.so.12',
+      relativePath: 'nvidia/cublas/lib/libcublas.so.12',
+      sha256: crypto.createHash('sha256').update(good).digest('hex'),
+      sizeBytes: good.length,
+    }],
+  };
+  fs.writeFileSync(path.join(cublas, 'libcublas.so.12'), good);
+  fs.writeFileSync(path.join(cublas, 'libhostile.so.12'), 'hostile');
+  const unexpected = collectUnexpectedLinuxCudaLoaderFiles({
+    managedRoot: root,
+    catalog,
+    fsModule: fs,
+  });
+  assert.deepEqual(unexpected, ['nvidia/cublas/lib/libhostile.so.12']);
+  const failed = await verifyLinuxCudaRuntimeIntegrity({ managedRoot: root, catalog, fsModule: fs });
+  assert.equal(failed.ok, false);
+  assert.equal(failed.statusCode, 'runtimeIntegrityFailed');
+  assert.match(failed.error, /libhostile\.so\.12/);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('Linux CUDA wheel staging copies only catalog names and re-hashes the copies', () => {
+  const source = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-linux-cuda-whsrc-'));
+  const staging = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-linux-cuda-whstg-'));
+  const body = Buffer.from('pinned-wheel');
+  const extra = Buffer.from('unverified-extra-wheel');
+  const catalog = {
+    architecture: 'x64',
+    platform: 'linux',
+    wheels: [{
+      id: 'fixture',
+      packageName: 'nvidia-cublas-cu12',
+      version: '1',
+      fileName: 'fixture.whl',
+      sha256: crypto.createHash('sha256').update(body).digest('hex'),
+      sizeBytes: body.length,
+      downloadUrl: 'https://files.pythonhosted.org/packages/fixture.whl',
+    }],
+    requiredLibraries: [{
+      fileName: 'libcublas.so.12',
+      relativePath: 'nvidia/cublas/lib/libcublas.so.12',
+      sha256: 'b'.repeat(64),
+      sizeBytes: 1,
+    }],
+  };
+  fs.writeFileSync(path.join(source, 'fixture.whl'), body);
+  fs.writeFileSync(path.join(source, 'nvidia_cublas_cu12-1-py3-none-any.whl'), extra);
+  const staged = stageVerifiedLinuxCudaWheels({
+    sourceDir: source,
+    stagingDir: staging,
+    catalog,
+    fsModule: fs,
+  });
+  assert.deepEqual(staged, [path.join(staging, 'fixture.whl')]);
+  assert.equal(fs.existsSync(path.join(staging, 'nvidia_cublas_cu12-1-py3-none-any.whl')), false);
+  fs.rmSync(source, { recursive: true, force: true });
+  fs.rmSync(staging, { recursive: true, force: true });
+});
+
+test('Linux CUDA runtime swap tombstones the active path then promotes staging', () => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-linux-cuda-swap-'));
+  const active = path.join(parent, 'python');
+  const staging = path.join(parent, 'python.staging-1');
+  fs.mkdirSync(active, { recursive: true });
+  fs.mkdirSync(staging, { recursive: true });
+  fs.writeFileSync(path.join(active, 'old.txt'), 'old');
+  fs.writeFileSync(path.join(staging, 'new.txt'), 'new');
+  const result = swapLinuxCudaRuntimeAtomically({
+    activePath: active,
+    stagingPath: staging,
+    fsModule: fs,
+    now: 9,
+    pid: 3,
+  });
+  assert.equal(fs.existsSync(path.join(active, 'new.txt')), true);
+  assert.equal(fs.existsSync(path.join(active, 'old.txt')), false);
+  assert.equal(fs.existsSync(path.join(result.tombstonePath, 'old.txt')), true);
+  assert.equal(result.renamedActive, true);
+  fs.rmSync(parent, { recursive: true, force: true });
+});
+
+test('Linux CUDA probe parser requires a single JSON object and ready invariants', () => {
+  assert.equal(parseLinuxCheckCudaStatus('').statusCode, 'probeError');
+  assert.equal(parseLinuxCheckCudaStatus('not json').statusCode, 'probeError');
+  assert.equal(parseLinuxCheckCudaStatus('{"statusCode":"ready"}').statusCode, 'probeError');
+  assert.equal(parseLinuxCheckCudaStatus(JSON.stringify({
+    statusCode: 'ready',
+    deviceAvailable: true,
+    runtimeLoadable: false,
+    missingLibraries: [],
+    matchedProfile: 'cuda12',
+  })).statusCode, 'probeError');
+
+  const ready = parseLinuxCheckCudaStatus(JSON.stringify({
+    statusCode: 'ready',
+    deviceAvailable: true,
+    runtimeLoadable: true,
+    missingLibraries: [],
+    runtime: 'ctranslate2',
+    matchedProfile: 'cuda12',
+    installedProfile: 'cuda12',
+    unsupportedDetectedProfiles: [],
+    supportedProfiles: ['cuda12'],
+    recommendedInstallProfile: 'cuda12',
+    error: '',
+  }));
+  assert.equal(ready.statusCode, 'ready');
+  assert.equal(ready.installed, true);
+  assert.equal(isLinuxCudaStatusReadyForAdmission(ready), true);
+  assert.equal(isLinuxCudaStatusReadyForAdmission({ statusCode: 'ready' }), false);
 });

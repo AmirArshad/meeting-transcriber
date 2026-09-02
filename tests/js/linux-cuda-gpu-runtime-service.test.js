@@ -79,16 +79,18 @@ function makeFixtureCatalog(root) {
       sizeBytes: file.body.length,
     };
   });
+  const wheelBody = Buffer.from('whl');
   return {
     architecture: 'x64',
     platform: 'linux',
+    libraryRelativeDirs: ['nvidia/cublas/lib', 'nvidia/cudnn/lib'],
     wheels: [{
       id: 'fixture-cublas',
       packageName: 'nvidia-cublas-cu12',
       version: '12.9.2.10',
       fileName: 'fixture.whl',
-      sha256: 'a'.repeat(64),
-      sizeBytes: 4,
+      sha256: crypto.createHash('sha256').update(wheelBody).digest('hex'),
+      sizeBytes: wheelBody.length,
       downloadUrl: 'https://files.pythonhosted.org/packages/fixture.whl',
     }],
     requiredLibraries,
@@ -99,6 +101,10 @@ function makeFixtureCatalog(root) {
 function createLinuxGpuService(overrides = {}) {
   const userData = overrides.userData || fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-linux-gpu-'));
   const catalog = overrides.catalog || makeFixtureCatalog(getManagedLinuxCudaRuntimeTarget(userData));
+  const librarySnapshots = Object.fromEntries(catalog.requiredLibraries.map((library) => {
+    const fullPath = path.join(getManagedLinuxCudaRuntimeTarget(userData), ...library.relativePath.split('/'));
+    return [library.relativePath, fs.existsSync(fullPath) ? fs.readFileSync(fullPath) : Buffer.from(library.fileName)];
+  }));
   const spawnCalls = [];
   const downloads = [];
   const renamed = [];
@@ -112,6 +118,9 @@ function createLinuxGpuService(overrides = {}) {
     statSync: realFs.statSync.bind(realFs),
     readFileSync: realFs.readFileSync.bind(realFs),
     writeFileSync: realFs.writeFileSync.bind(realFs),
+    copyFileSync: realFs.copyFileSync.bind(realFs),
+    readdirSync: realFs.readdirSync.bind(realFs),
+    rmSync: realFs.rmSync.bind(realFs),
     createReadStream: realFs.createReadStream.bind(realFs),
     realpathSync: realFs.realpathSync.bind(realFs),
     accessSync: realFs.accessSync.bind(realFs),
@@ -160,6 +169,14 @@ function createLinuxGpuService(overrides = {}) {
       spawnCalls.push({ args, env: options && options.env });
       if (typeof overrides.spawnTrackedPython === 'function') {
         return overrides.spawnTrackedPython(args, options);
+      }
+      if (args.includes('pip') && args.includes('--no-index')) {
+        const target = args[args.indexOf('--target') + 1];
+        for (const library of catalog.requiredLibraries) {
+          const destination = path.join(target, ...library.relativePath.split('/'));
+          fs.mkdirSync(path.dirname(destination), { recursive: true });
+          fs.writeFileSync(destination, librarySnapshots[library.relativePath]);
+        }
       }
       return createFakeProcess({ stdoutText: readyProbeJson(), exitCode: 0 });
     },
@@ -313,6 +330,39 @@ test('Linux CUDA probe treats invalid child JSON as probeError', async () => {
   });
 });
 
+test('Linux CUDA probe treats non-JSON text as probeError', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    const { service, cleanup } = createLinuxGpuService({
+      spawnTrackedPython: () => createFakeProcess({ stdoutText: 'deviceAvailable:True\nruntimeLoadable:True', exitCode: 0 }),
+    });
+    try {
+      const status = await service.checkCudaRuntimeStatus();
+      assert.equal(status.statusCode, 'probeError');
+      assert.equal(status.installed, false);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+test('Linux CUDA probe rejects ready JSON that is missing device/runtime invariants', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    const { service, cleanup } = createLinuxGpuService({
+      spawnTrackedPython: () => createFakeProcess({
+        stdoutText: JSON.stringify({ statusCode: 'ready' }),
+        exitCode: 0,
+      }),
+    });
+    try {
+      const status = await service.checkCudaRuntimeStatus();
+      assert.equal(status.statusCode, 'probeError');
+      assert.equal(status.installed, false);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
 test('Linux CUDA hash mismatch fails closed before the probe child', async () => {
   await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
     const { service, catalog, spawnCalls, userData, cleanup } = createLinuxGpuService();
@@ -392,23 +442,49 @@ test('Linux CUDA uninstall rejects quit before touching the active runtime', asy
   });
 });
 
-test('Linux CUDA install downloads the pinned wheel closure and never uses unpinned pip names', async () => {
+test('Linux CUDA install downloads pinned wheels and pip-installs exact staged paths into a fresh target', async () => {
   await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
-    const { service, spawnCalls, downloads, catalog, cleanup } = createLinuxGpuService({
-      verifyLinuxCudaIntegrity: async () => ({ ok: true, statusCode: 'ready', missingLibraries: [] }),
-    });
+    const { service, spawnCalls, downloads, catalog, userData, renamed, cleanup } = createLinuxGpuService();
     try {
-      const body = Buffer.from('whl');
-      catalog.wheels[0].sha256 = crypto.createHash('sha256').update(body).digest('hex');
-      catalog.wheels[0].sizeBytes = body.length;
+      const active = getManagedLinuxCudaRuntimeTarget(userData);
       await service.runGpuPackageInstall({ mode: 'install' });
       assert.equal(downloads.length, 1);
       assert.equal(downloads[0].url, catalog.wheels[0].downloadUrl);
       const pipArgs = spawnCalls.find((call) => call.args.includes('--no-index'));
       assert.ok(pipArgs, 'expected offline pip install');
-      assert.ok(pipArgs.args.includes('--no-index'));
-      assert.ok(pipArgs.args.includes('nvidia-cublas-cu12==12.9.2.10'));
-      assert.equal(pipArgs.args.includes('nvidia-cublas-cu12'), false);
+      assert.equal(pipArgs.args.includes('--find-links'), false);
+      assert.equal(pipArgs.args.some((item) => String(item).includes('nvidia-cublas-cu12==')), false);
+      assert.ok(pipArgs.args.some((item) => String(item).endsWith(catalog.wheels[0].fileName)));
+      const target = pipArgs.args[pipArgs.args.indexOf('--target') + 1];
+      assert.notEqual(target, active);
+      assert.match(target, /\.staging-/);
+      assert.ok(renamed.some((item) => item.to === active));
+      assert.equal(fs.existsSync(active), true);
+      assert.equal(fs.existsSync(path.join(userData, 'ai-addons', 'cuda', 'wheelhouse', 'fixture.whl')), true);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+test('Linux CUDA repair installs into staging then atomically replaces a damaged live runtime', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    const { service, catalog, userData, spawnCalls, cleanup } = createLinuxGpuService();
+    try {
+      const active = getManagedLinuxCudaRuntimeTarget(userData);
+      const damagedPath = path.join(active, catalog.requiredLibraries[0].relativePath);
+      const original = fs.readFileSync(damagedPath);
+      fs.writeFileSync(damagedPath, Buffer.alloc(original.length, 0x41));
+      const before = await service.checkCudaRuntimeStatus();
+      assert.equal(before.statusCode, 'runtimeIntegrityFailed');
+
+      await service.runGpuPackageInstall({ mode: 'repair' });
+      const pipArgs = spawnCalls.find((call) => call.args.includes('--no-index'));
+      assert.notEqual(pipArgs.args[pipArgs.args.indexOf('--target') + 1], active);
+      const repaired = fs.readFileSync(damagedPath);
+      assert.equal(repaired.equals(original), true);
+      const after = await service.checkCudaRuntimeStatus();
+      assert.equal(after.statusCode, 'ready');
     } finally {
       cleanup();
     }

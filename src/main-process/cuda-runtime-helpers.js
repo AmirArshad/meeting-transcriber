@@ -348,6 +348,8 @@ function getGpuRuntimeEnsurePlan(status = {}, { forceRepair = false, skipInstall
 
 function parseCheckCudaStatus(output = '') {
   const raw = String(output || '').trim();
+  // Windows/macOS keep the historical empty/invalid contract: classify as
+  // deviceUnavailable. Linux uses parseLinuxCheckCudaStatus (strict JSON).
   if (!raw) {
     return {
       installed: false,
@@ -355,8 +357,8 @@ function parseCheckCudaStatus(output = '') {
       runtimeLoadable: false,
       missingLibraries: [],
       runtime: 'ctranslate2',
-      error: 'CUDA probe produced no output.',
-      statusCode: 'probeError',
+      error: '',
+      statusCode: 'deviceUnavailable',
       matchedProfile: '',
       installedProfile: '',
       supportedProfiles: getSupportedTranscriptionCudaProfileIds(),
@@ -367,6 +369,7 @@ function parseCheckCudaStatus(output = '') {
 
   // Prefer a single JSON object (current probe format). Fall back to legacy
   // key:value lines for older probe builds / hand-crafted test fixtures.
+  // Invalid JSON is not probeError on this Windows parser — it falls through.
   let values = null;
   let backendStatusCode = '';
   const jsonCandidate = raw.split(/\r?\n/).map((line) => line.trim()).find((line) => line.startsWith('{'));
@@ -400,20 +403,7 @@ function parseCheckCudaStatus(output = '') {
         };
       }
     } catch (_error) {
-      return {
-        installed: false,
-        deviceAvailable: false,
-        runtimeLoadable: false,
-        missingLibraries: [],
-        runtime: 'ctranslate2',
-        error: 'CUDA probe returned invalid JSON.',
-        statusCode: 'probeError',
-        matchedProfile: '',
-        installedProfile: '',
-        supportedProfiles: getSupportedTranscriptionCudaProfileIds(),
-        unsupportedDetectedProfiles: [],
-        recommendedInstallProfile: DEFAULT_TRANSCRIPTION_CUDA_PROFILE_ID,
-      };
+      values = null;
     }
   }
 

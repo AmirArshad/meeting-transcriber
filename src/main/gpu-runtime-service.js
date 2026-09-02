@@ -41,10 +41,15 @@ const {
 const {
   buildLinuxCudaOfflineInstallArgs,
   buildProbeErrorStatus,
+  getLinuxCudaRuntimeStagingPath,
   getLinuxCudaTombstonePath,
   getLinuxCudaWheelhousePath,
+  getLinuxCudaWheelStagePath,
+  parseLinuxCheckCudaStatus,
   resolveLinuxCudaDriverLibraryDirs,
   resolveRequiredLinuxCudaLibraryPath,
+  stageVerifiedLinuxCudaWheels,
+  swapLinuxCudaRuntimeAtomically,
   verifyDownloadedLinuxCudaWheel,
   verifyLinuxCudaRuntimeIntegrity,
 } = require('../main-process/linux-cuda-runtime-helpers');
@@ -376,66 +381,113 @@ function createGpuRuntimeService(deps) {
     }
   }
 
+  function bestEffortRemovePath(targetPath) {
+    if (!targetPath) {
+      return;
+    }
+    try {
+      fs.rmSync(targetPath, { recursive: true, force: true });
+    } catch (_error) {
+      fs.promises.rm(targetPath, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+
   async function runLinuxCudaPackageInstall({ mode = 'install', registerProcess = (proc) => proc } = {}) {
     const catalog = assertLinuxCudaCatalogIntegrity(getLinuxCudaCatalog());
     const userData = app.getPath('userData');
     const wheelhouse = getLinuxCudaWheelhousePath(userData);
-    const target = getLinuxCudaRuntimeTarget();
+    const activeTarget = getLinuxCudaRuntimeTarget();
+    const now = Date.now();
+    const pid = process.pid;
+    const wheelStage = getLinuxCudaWheelStagePath(userData, { now, pid });
+    const runtimeStage = getLinuxCudaRuntimeStagingPath(activeTarget, { now, pid });
+    let promoted = false;
     fs.mkdirSync(wheelhouse, { recursive: true });
-    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.mkdirSync(path.dirname(activeTarget), { recursive: true });
 
-    for (const wheel of catalog.wheels) {
-      const destinationPath = path.join(wheelhouse, wheel.fileName);
-      await downloadLinuxCudaWheel({
-        url: wheel.downloadUrl,
-        destinationPath,
-        expectedSizeBytes: wheel.sizeBytes,
-      });
-      verifyDownloadedLinuxCudaWheel(destinationPath, wheel, fs);
-    }
+    try {
+      for (const wheel of catalog.wheels) {
+        const destinationPath = path.join(wheelhouse, wheel.fileName);
+        await downloadLinuxCudaWheel({
+          url: wheel.downloadUrl,
+          destinationPath,
+          expectedSizeBytes: wheel.sizeBytes,
+        });
+        verifyDownloadedLinuxCudaWheel(destinationPath, wheel, fs);
+      }
 
-    await new Promise((resolve, reject) => {
-      const python = registerProcess(spawnTrackedPython(buildLinuxCudaOfflineInstallArgs({
-        wheelhouse,
-        target,
+      const verifiedWheelPaths = stageVerifiedLinuxCudaWheels({
+        sourceDir: wheelhouse,
+        stagingDir: wheelStage,
         catalog,
-      })));
-      let errorOutput = '';
-      const progressRedactor = createLineChunkRedactor();
-      python.stdout.on('data', (data) => {
-        sendRedactedProgress('gpu-install-progress', data.toString(), progressRedactor);
+        fsModule: fs,
       });
-      python.stderr.on('data', (data) => {
-        const text = data.toString();
-        errorOutput = appendSpawnLogBuffer(errorOutput, text);
-        sendRedactedProgress('gpu-install-progress', text, progressRedactor);
-      });
-      python.on('close', (code) => {
-        flushRedactedProgress('gpu-install-progress', progressRedactor);
-        if (code === 0) {
-          resolve();
-          return;
-        }
-        invalidateCachedCudaStatus();
-        reject(new Error(`Failed to install CUDA libraries: ${errorOutput}`));
-      });
-      python.on('error', (error) => {
-        flushRedactedProgress('gpu-install-progress', progressRedactor);
-        invalidateCachedCudaStatus();
-        reject(error);
-      });
-    });
 
-    const integrity = await verifyLinuxCudaIntegrity({
-      managedRoot: target,
-      catalog,
-      fsModule: fs,
-    });
-    if (!integrity.ok) {
+      await new Promise((resolve, reject) => {
+        const python = registerProcess(spawnTrackedPython(buildLinuxCudaOfflineInstallArgs({
+          wheelPaths: verifiedWheelPaths,
+          target: runtimeStage,
+          catalog,
+        })));
+        let errorOutput = '';
+        const progressRedactor = createLineChunkRedactor();
+        python.stdout.on('data', (data) => {
+          sendRedactedProgress('gpu-install-progress', data.toString(), progressRedactor);
+        });
+        python.stderr.on('data', (data) => {
+          const text = data.toString();
+          errorOutput = appendSpawnLogBuffer(errorOutput, text);
+          sendRedactedProgress('gpu-install-progress', text, progressRedactor);
+        });
+        python.on('close', (code) => {
+          flushRedactedProgress('gpu-install-progress', progressRedactor);
+          if (code === 0) {
+            resolve();
+            return;
+          }
+          invalidateCachedCudaStatus();
+          reject(new Error(`Failed to install CUDA libraries: ${errorOutput}`));
+        });
+        python.on('error', (error) => {
+          flushRedactedProgress('gpu-install-progress', progressRedactor);
+          invalidateCachedCudaStatus();
+          reject(error);
+        });
+      });
+
+      const integrity = await verifyLinuxCudaIntegrity({
+        managedRoot: runtimeStage,
+        catalog,
+        fsModule: fs,
+      });
+      if (!integrity.ok) {
+        invalidateCachedCudaStatus();
+        const error = new Error(integrity.error || 'Managed CUDA runtime failed integrity verification.');
+        error.code = integrity.statusCode;
+        throw error;
+      }
+
+      const { tombstonePath, renamedActive } = swapLinuxCudaRuntimeAtomically({
+        activePath: activeTarget,
+        stagingPath: runtimeStage,
+        fsModule: fs,
+        now,
+        pid,
+      });
+      promoted = true;
       invalidateCachedCudaStatus();
-      const error = new Error(integrity.error || 'Managed CUDA runtime failed integrity verification.');
-      error.code = integrity.statusCode;
-      throw error;
+      if (renamedActive) {
+        try {
+          fs.rmSync(tombstonePath, { recursive: true, force: true });
+        } catch (_error) {
+          await fs.promises.rm(tombstonePath, { recursive: true, force: true });
+        }
+      }
+    } finally {
+      bestEffortRemovePath(wheelStage);
+      if (!promoted) {
+        bestEffortRemovePath(runtimeStage);
+      }
     }
 
     return {
@@ -603,7 +655,9 @@ function createGpuRuntimeService(deps) {
           finish(buildProbeErrorStatus(`CUDA probe exited with code ${code}.`));
           return;
         }
-        finish(parseCheckCudaStatus(output));
+        finish(process.platform === 'linux'
+          ? parseLinuxCheckCudaStatus(output)
+          : parseCheckCudaStatus(output));
       });
       python.on('error', (error) => {
         finish(buildProbeErrorStatus(String(error && error.message ? error.message : error)));
