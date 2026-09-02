@@ -1118,8 +1118,9 @@ function createTranscriptionService(deps) {
     registerProcess,
     beforeSpawn = null,
   }) {
-    // Linux CUDA is an explicitly admitted profile, unlike Windows' optional
-    // acceleration. A fresh non-ready status must never turn into auto/CPU.
+    // Linux CUDA is opt-in via the managed runtime, unlike Windows' optional
+    // acceleration. No managed tree keeps Core Beta CPU. A present tree must
+    // never turn a non-ready status into auto/CPU; uninstall restores CPU.
     if (process.platform === 'linux') {
       if (process.arch !== 'x64') {
         if (typeof beforeSpawn === 'function') beforeSpawn();
@@ -1144,7 +1145,7 @@ function createTranscriptionService(deps) {
           registerProcess,
         });
       }
-      // Core Beta remains CPU-only when the future acceptance gate is absent.
+      // Core Beta remains CPU-only until the user installs a managed CUDA runtime.
       if (typeof beforeSpawn === 'function') beforeSpawn();
       return runTranscriptionProcess({ audioFile, language, modelSize, device: 'cpu', registerProcess });
     }

@@ -2,7 +2,7 @@
 
 Omarchy 4 and CachyOS x86_64 on Hyprland/Wayland (PipeWire with `pipewire-pulse`) are **Supported**. Everything else in this guide is an **experimental beta**: the same Core Beta payload may run, but we have not proven it on that hardware.
 
-This is not Linux 1.0 and not Windows/macOS parity. Transcription stays CPU `faster-whisper`. Speaker identification and summaries stay visible and greyed `unsupported`. Do not start Phases 6–9 from friend feedback.
+This is not Linux 1.0 and not Windows/macOS parity. Transcription uses CPU `faster-whisper` by default. Optional CUDA 12 acceleration can be installed from Settings when an NVIDIA GPU is visible (`/proc/driver/nvidia` or `nvidia-smi`); it is tested on CachyOS x86_64 + RTX 4070 and best-effort on other NVIDIA Linux. Uninstall stays available whenever a managed runtime tree exists, including after a GPU disappears, and returns transcription to CPU. Speaker identification and summaries stay visible and greyed `unsupported`. Do not start Phases 6–9 from friend feedback.
 
 Friend hardware evidence uses [tests/manual/linux-experimental-beta-checklist.md](../../tests/manual/linux-experimental-beta-checklist.md). Automated packaging tests do not count as distro validation.
 

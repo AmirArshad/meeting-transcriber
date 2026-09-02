@@ -32,6 +32,12 @@ const {
   swapLinuxCudaRuntimeAtomically,
   verifyDownloadedLinuxCudaWheel,
   verifyLinuxCudaRuntimeIntegrity,
+  isAcceptedLinuxCudaProfileHost,
+  isLinuxCudaOffered,
+  detectLinuxNvidiaGpu,
+  hasLinuxNvidiaGpu,
+  managedLinuxCudaRuntimeExists,
+  parseOsReleaseId,
 } = require('../../src/main-process/linux-cuda-runtime-helpers');
 
 function makeRuntimeTree() {
@@ -356,4 +362,116 @@ test('Linux CUDA probe parser requires a single JSON object and ready invariants
   assert.equal(ready.installed, true);
   assert.equal(isLinuxCudaStatusReadyForAdmission(ready), true);
   assert.equal(isLinuxCudaStatusReadyForAdmission({ statusCode: 'ready' }), false);
+});
+
+test('Linux CUDA offer is NVIDIA-visible on any linux x64 distro, not CachyOS/4070-only', () => {
+  const nvidia = {
+    platform: 'linux',
+    arch: 'x64',
+    gpuName: 'NVIDIA GeForce RTX 3060',
+  };
+  assert.equal(isLinuxCudaOffered({ ...nvidia, osReleaseText: 'ID=ubuntu\n' }), true);
+  assert.equal(isLinuxCudaOffered({ ...nvidia, gpuName: 'NVIDIA GeForce RTX 4070 Ti' }), true);
+  assert.equal(isLinuxCudaOffered({
+    platform: 'linux',
+    arch: 'x64',
+    osReleaseText: 'ID=omarchy\n',
+    gpuName: 'NVIDIA GeForce RTX 4070',
+  }), true);
+  assert.equal(isLinuxCudaOffered({
+    platform: 'linux',
+    arch: 'x64',
+    gpuNames: [],
+    gpuName: '',
+  }), false);
+  assert.equal(hasLinuxNvidiaGpu({ gpuName: 'NVIDIA GeForce RTX 4090' }), true);
+  assert.equal(hasLinuxNvidiaGpu({ gpuNames: [] }), false);
+  assert.equal(isLinuxCudaOffered({ ...nvidia, arch: 'arm64' }), false);
+  const procOnly = detectLinuxNvidiaGpu({
+    fsModule: {
+      readdirSync: () => ['0000:01:00.0'],
+      readFileSync: () => 'Model: \t\t NVIDIA GeForce RTX 3060\nIRQ: 77\n',
+    },
+    execFileSyncFn: () => { throw new Error('nvidia-smi missing'); },
+  });
+  assert.equal(procOnly.hasGPU, true);
+  assert.match(procOnly.gpuName, /RTX 3060/);
+  assert.equal(isLinuxCudaOffered({
+    platform: 'linux',
+    arch: 'x64',
+    fsModule: {
+      readdirSync: () => ['0000:01:00.0'],
+      readFileSync: () => 'Model: \t\t NVIDIA GeForce RTX 3060\nIRQ: 77\n',
+    },
+    execFileSyncFn: () => { throw new Error('nvidia-smi missing'); },
+  }), true);
+
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-linux-cuda-offer-'));
+  try {
+    const managedRoot = path.join(userData, 'ai-addons', 'cuda', 'python');
+    assert.equal(managedLinuxCudaRuntimeExists(userData), false);
+    fs.mkdirSync(managedRoot, { recursive: true });
+    assert.equal(managedLinuxCudaRuntimeExists(userData), true);
+    assert.equal(isLinuxCudaOffered({
+      platform: 'linux',
+      arch: 'x64',
+      userDataPath: userData,
+      gpuNames: [],
+    }), true);
+  } finally {
+    fs.rmSync(userData, { recursive: true, force: true });
+  }
+});
+
+test('Linux CUDA tested-host record remains CachyOS x86_64 + exact RTX 4070', () => {
+  const accepted = {
+    platform: 'linux',
+    arch: 'x64',
+    osReleaseText: 'NAME="CachyOS Linux"\nID=cachyos\n',
+    gpuName: 'NVIDIA GeForce RTX 4070',
+  };
+  assert.equal(isAcceptedLinuxCudaProfileHost(accepted), true);
+  assert.equal(isAcceptedLinuxCudaProfileHost({
+    ...accepted,
+    osReleaseText: 'ID="cachyos"\n',
+  }), true);
+  assert.equal(parseOsReleaseId('ID="cachyos"\n'), 'cachyos');
+
+  assert.equal(isAcceptedLinuxCudaProfileHost({ ...accepted, gpuName: 'NVIDIA GeForce RTX 4070 Ti' }), false);
+  assert.equal(isAcceptedLinuxCudaProfileHost({ ...accepted, gpuName: 'NVIDIA GeForce RTX 4070 Super' }), false);
+  assert.equal(isAcceptedLinuxCudaProfileHost({
+    ...accepted,
+    osReleaseText: 'ID=omarchy\n',
+  }), false);
+  assert.equal(isAcceptedLinuxCudaProfileHost({
+    ...accepted,
+    osReleaseText: 'ID=ubuntu\n',
+  }), false);
+  assert.equal(isAcceptedLinuxCudaProfileHost({ ...accepted, arch: 'arm64' }), false);
+  assert.equal(isAcceptedLinuxCudaProfileHost({ ...accepted, platform: 'win32' }), false);
+  assert.equal(isAcceptedLinuxCudaProfileHost({
+    ...accepted,
+    gpuNames: [],
+  }), false);
+  const missingFs = {
+    readdirSync() { throw new Error('no proc nvidia'); },
+    readFileSync() { throw new Error('no proc nvidia'); },
+  };
+  assert.equal(isAcceptedLinuxCudaProfileHost({
+    ...accepted,
+    gpuName: undefined,
+    gpuNames: undefined,
+    fsModule: missingFs,
+    execFileSyncFn: () => { throw new Error('nvidia-smi missing'); },
+  }), false);
+  assert.equal(isAcceptedLinuxCudaProfileHost({
+    ...accepted,
+    gpuName: undefined,
+    gpuNames: undefined,
+    fsModule: {
+      readdirSync: () => ['0000:01:00.0'],
+      readFileSync: () => 'Model: \t\t NVIDIA GeForce RTX 4070\nIRQ: 77\n',
+    },
+    execFileSyncFn: () => { throw new Error('nvidia-smi missing'); },
+  }), true);
 });

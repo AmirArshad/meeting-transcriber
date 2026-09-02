@@ -11,15 +11,16 @@ Decision record for `feature/v2.9-dependency-hygiene` Task 1. Later version chan
 ## Linux AI add-ons — Task 1 host and candidate investigation (2026-09-02)
 
 This is **host/candidate investigation only** for `feature/v2.9-linux-ai-addons`.
-It is **not** packaged RTX 4070 preflight, not packaged acceptance, and not a
-user-facing CUDA enablement.  A component remains unavailable until its later
+It is **not** packaged RTX 4070 preflight. CUDA Whisper later passed Task 3
+packaged RTX 4070 acceptance (2026-09-02); Speakrs, Pyannote, and summaries
+remain unavailable. A component stays unavailable until its later
 implementation (Task 2), packaged, and hardware gates (Task 3+) have passed.
 No entry below permits a CPU fallback, ambient system-CUDA library discovery, or a
 Linux catalog/status change that would advertise CUDA as ready.
 
-**Managed install location (Task 2 target, not yet user-facing):**
-`{Electron userData}/ai-addons/cuda/python`
-(`getManagedLinuxCudaRuntimeTarget`).  Driver libraries, if retained, come only
+**Managed install location:** `{Electron userData}/ai-addons/cuda/python`
+(`getManagedLinuxCudaRuntimeTarget`). User-facing only on the accepted
+CachyOS x86_64 + RTX 4070 host after Task 3. Driver libraries, if retained, come only
 from a code-owned allowlist; inherited `LD_LIBRARY_PATH` is not trusted.
 
 ### CachyOS host baseline
@@ -55,9 +56,9 @@ search-index metadata.
 
 | Component | Official candidate, license, requirements | Linux x86_64 artifact evidence | Decision |
 |---|---|---|---|
-| CUDA Whisper / CTranslate2 | [CTranslate2 4.8.1](https://pypi.org/project/ctranslate2/4.8.1/) ([MIT](https://github.com/OpenNMT/CTranslate2/blob/v4.8.1/LICENSE.txt)). Requires packaged CPython 3.11 (`cp311`), manylinux_2_27_x86_64. Direct wheel: `https://files.pythonhosted.org/packages/30/84/f610e90bb419707632b9b668476b9fd4cdb090c9b53c119ce017699b58ca/ctranslate2-4.8.1-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl`. Already the packaged Linux pin; **not** reinstalled into userData. | `ctranslate2-4.8.1-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl`, 39,351,971 bytes, SHA-256 `c0a584c17f21779eb9035bcbc1ec280998f90b36725b70a5ff911f33e343199a`. | **Candidate only.** Packaged CTranslate2 stays where it is. Task 2 supplies the managed CUDA 12 library closure; Task 3 is packaged RTX 4070 evidence. |
-| NVIDIA cuBLAS CUDA 12 | [nvidia-cublas-cu12 12.9.2.10](https://pypi.org/project/nvidia-cublas-cu12/12.9.2.10/) (`LicenseRef-NVIDIA-Proprietary`; [NVIDIA CUDA EULA](https://docs.nvidia.com/cuda/eula/index.html)). Requires Python ≥3, manylinux_2_27_x86_64, NVIDIA driver able to load CUDA 12 user-mode (host 610.57 / UMD 13.3 is forward-compatible; it does **not** authorize a CUDA 13 app runtime). Direct wheel: `https://files.pythonhosted.org/packages/cb/c0/0a517bfe63ccd3b92eb254d264e28fca3c7cab75d07daea315250fb1bf73/nvidia_cublas_cu12-12.9.2.10-py3-none-manylinux_2_27_x86_64.whl`. | `nvidia_cublas_cu12-12.9.2.10-py3-none-manylinux_2_27_x86_64.whl`, 581,240,110 bytes, SHA-256 `e4f53a8ca8c5d6e8c492d0d0a3d565ecb59a751b19cfdaa4f6da0ab2104c1702`. Extracted regular files include `nvidia/cublas/lib/libcublas.so.12` (105,140,976 bytes, `5757ab5839fb4f203ca47ecb336110d10f4a5606b1e097f195fbca89774569e2`) and `libcublasLt.so.12` (749,210,000 bytes, `2c9006a75c74b3bea2dc7ae2ec38ab038b0e45ea02cb4b717a915e8a5796acb1`). | **Candidate only.** Task 2 owns the code-owned catalog, offline install, and integrity hashing. Not packaged-accepted. |
-| NVIDIA cuDNN CUDA 12 | [nvidia-cudnn-cu12 9.22.0.52](https://pypi.org/project/nvidia-cudnn-cu12/9.22.0.52/) (NVIDIA proprietary; [cuDNN SLA](https://docs.nvidia.com/deeplearning/cudnn/latest/reference/eula.html)). Same Python/manylinux/driver requirements as cuBLAS. Direct wheel: `https://files.pythonhosted.org/packages/a0/8f/2ede6b758b7524608472010f632bdd3370ea271d715d1d66044614b84cdc/nvidia_cudnn_cu12-9.22.0.52-py3-none-manylinux_2_27_x86_64.whl`. | `nvidia_cudnn_cu12-9.22.0.52-py3-none-manylinux_2_27_x86_64.whl`, 718,382,818 bytes, SHA-256 `391b9a7ee6386daaca7f8dca41e83c2c99f760c9581a0400755e87b4287b8847`. Extracted `nvidia/cudnn/lib/libcudnn.so.9` plus companion `libcudnn_{adv,cnn,ops,graph,...}.so.9` libraries. | **Candidate only.** Task 2 pins and full-hashes the extracted managed `.so` closure. Not packaged-accepted. |
+| CUDA Whisper / CTranslate2 | [CTranslate2 4.8.1](https://pypi.org/project/ctranslate2/4.8.1/) ([MIT](https://github.com/OpenNMT/CTranslate2/blob/v4.8.1/LICENSE.txt)). Requires packaged CPython 3.11 (`cp311`), manylinux_2_27_x86_64. Direct wheel: `https://files.pythonhosted.org/packages/30/84/f610e90bb419707632b9b668476b9fd4cdb090c9b53c119ce017699b58ca/ctranslate2-4.8.1-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl`. Already the packaged Linux pin; **not** reinstalled into userData. | `ctranslate2-4.8.1-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl`, 39,351,971 bytes, SHA-256 `c0a584c17f21779eb9035bcbc1ec280998f90b36725b70a5ff911f33e343199a`. | **Accepted (Task 3, 2026-09-02)** on packaged CachyOS x86_64 + NVIDIA RTX 4070. Offered as best-effort opt-in CUDA on other NVIDIA Linux x86_64; default remains CPU until install. |
+| NVIDIA cuBLAS CUDA 12 | [nvidia-cublas-cu12 12.9.2.10](https://pypi.org/project/nvidia-cublas-cu12/12.9.2.10/) (`LicenseRef-NVIDIA-Proprietary`; [NVIDIA CUDA EULA](https://docs.nvidia.com/cuda/eula/index.html)). Requires Python ≥3, manylinux_2_27_x86_64, NVIDIA driver able to load CUDA 12 user-mode (host 610.57 / UMD 13.3 is forward-compatible; it does **not** authorize a CUDA 13 app runtime). Direct wheel: `https://files.pythonhosted.org/packages/cb/c0/0a517bfe63ccd3b92eb254d264e28fca3c7cab75d07daea315250fb1bf73/nvidia_cublas_cu12-12.9.2.10-py3-none-manylinux_2_27_x86_64.whl`. | `nvidia_cublas_cu12-12.9.2.10-py3-none-manylinux_2_27_x86_64.whl`, 581,240,110 bytes, SHA-256 `e4f53a8ca8c5d6e8c492d0d0a3d565ecb59a751b19cfdaa4f6da0ab2104c1702`. Extracted regular files include `nvidia/cublas/lib/libcublas.so.12` (105,140,976 bytes, `5757ab5839fb4f203ca47ecb336110d10f4a5606b1e097f195fbca89774569e2`) and `libcublasLt.so.12` (749,210,000 bytes, `2c9006a75c74b3bea2dc7ae2ec38ab038b0e45ea02cb4b717a915e8a5796acb1`). | **Accepted (Task 3, 2026-09-02)** as the managed CUDA 12 Whisper closure on CachyOS x86_64 + RTX 4070. Not a CUDA 13 app runtime. Not Speakrs/Pyannote. |
+| NVIDIA cuDNN CUDA 12 | [nvidia-cudnn-cu12 9.22.0.52](https://pypi.org/project/nvidia-cudnn-cu12/9.22.0.52/) (NVIDIA proprietary; [cuDNN SLA](https://docs.nvidia.com/deeplearning/cudnn/latest/reference/eula.html)). Same Python/manylinux/driver requirements as cuBLAS. Direct wheel: `https://files.pythonhosted.org/packages/a0/8f/2ede6b758b7524608472010f632bdd3370ea271d715d1d66044614b84cdc/nvidia_cudnn_cu12-9.22.0.52-py3-none-manylinux_2_27_x86_64.whl`. | `nvidia_cudnn_cu12-9.22.0.52-py3-none-manylinux_2_27_x86_64.whl`, 718,382,818 bytes, SHA-256 `391b9a7ee6386daaca7f8dca41e83c2c99f760c9581a0400755e87b4287b8847`. Extracted `nvidia/cudnn/lib/libcudnn.so.9` plus companion `libcudnn_{adv,cnn,ops,graph,...}.so.9` libraries. | **Accepted (Task 3, 2026-09-02)** as the managed CUDA 12 Whisper closure on CachyOS x86_64 + RTX 4070. Not Speakrs/Pyannote. |
 | Speakrs | [ONNX Runtime 1.27.1 Linux GPU CUDA 12](https://github.com/microsoft/onnxruntime/releases/download/v1.27.1/onnxruntime-linux-x64-gpu_cuda12-1.27.1.tgz) (MIT) | `onnxruntime-linux-x64-gpu_cuda12-1.27.1.tgz`, 244,763,765 bytes, `08b568bd69500c36606aff7c3896ee4fa7d3531719f6b00f43e6a34db41dc4bf`; archive contains x86_64 `libonnxruntime.so.1.27.1` and CUDA provider libraries. | **Not accepted.** The runtime archive alone is not a Speakrs implementation: there is no staged, integrity-checked Linux `speakrs-cli` yet. Task 4 owns the CLI build/package/integrity gate. |
 | Pyannote | `pyannote/speaker-diarization-community-1` requires the user's token; token-based setup has no maintainer artifact to download or pin. | No token was requested, supplied, logged, or downloaded. The required host preflight currently fails because selected `gnome_libsecret` is not encryption-available. | **Not accepted.** Defer dependency resolution and token-stdin smoke to Task 6 after the encrypted-secret-store prerequisite passes. |
 | Summaries | [llama.cpp official releases](https://github.com/ggml-org/llama.cpp/releases) (MIT) | The current official Linux x86_64 assets are CPU/Vulkan/other non-CUDA variants; official CUDA release artifacts are Windows-only. | **Rejected for now.** Do not substitute CPU or Vulkan. Task 8 may reconsider only if an official, redistributable Linux CUDA artifact with a complete library closure becomes available and passes the RTX 4070 smoke. |
@@ -75,7 +76,203 @@ sha256sum nvidia_cudnn_cu12-9.22.0.52-py3-none-manylinux_2_27_x86_64.whl
 The host's CUDA 13 toolkit/UMD does not itself authorize a CUDA 13 app runtime.
 NVIDIA's CUDA 12 runtime wheels above remain a separate managed profile and must be
 loaded only through the Task 2 controlled library path. **Task 3 packaged RTX 4070
-evidence is unresolved.**
+CUDA Whisper is accepted** (2026-09-02). Evidence:
+[Linux AI add-ons — Task 3 packaged CUDA Whisper acceptance](#linux-ai-add-ons--task-3-packaged-cuda-whisper-acceptance-2026-09-02).
+Speakrs, Pyannote, and summaries remain unavailable.
+
+## Linux AI add-ons — Task 3 packaged CUDA Whisper acceptance (2026-09-02)
+
+**Decision: accepted** for CUDA Whisper on packaged CachyOS x86_64 + NVIDIA RTX 4070.
+CI and unit tests are not this gate. Speakrs, Pyannote, and summaries stay unavailable.
+Same-day follow-up: offer the same managed CUDA 12 install on other NVIDIA Linux x86_64
+as best-effort. Default transcription stays CPU until install; uninstall returns to CPU.
+While a managed runtime is installed, a non-ready probe stays fail-closed (no silent CPU).
+
+**Host (this session):** CachyOS rolling, kernel `Linux 7.2.2-1-cachyos`, Hyprland/Wayland,
+PipeWire, `ID=cachyos`. GPU identity from both `nvidia-smi` and
+`/proc/driver/nvidia/gpus/*/information`: NVIDIA GeForce RTX 4070, driver 610.57.04,
+compute capability 8.9, 12282 MiB VRAM. Packaged Python 3.11.7. Electron 44.1.0.
+Isolated `--user-data-dir` for the evidence pass (not the interactive home profile).
+
+**Payload:** `npm run build:linux && npm run verify:linux:packaged` (twice this session;
+the second rebuild picked up the `/proc/driver/nvidia` host-gate correction). First
+evidence pass used `dist/linux-unpacked/avanevis`. The three release artifacts were
+produced by the same `build:linux` and passed `verify:linux:packaged`:
+
+| Artifact | Size | SHA-256 |
+|---|---|---|
+| `AvaNevis-Setup-2.8.0.AppImage` | 319M | `c94935183d3d54f231ace78131b39aa07046e70e0b5b1ad6103d058a278e3821` |
+| `AvaNevis-Setup-2.8.0.pkg.tar.zst` | 292M | `15e3e67ff091fd057a69c55e747fbb3782da21619ae2916f8318f70e1c5fa143` |
+| `AvaNevis-Setup-2.8.0.deb` | 243M | `e248e5600a717871c5d0883bb4d73ad3e372ebe531092a5cb9a00c9ff7fc633d` |
+
+Launch (isolated userData; not the interactive home profile):
+
+```text
+ELECTRON_ENABLE_LOGGING=1 dist/linux-unpacked/avanevis \
+  --user-data-dir=/tmp/avanevis-v29-task3 \
+  --remote-debugging-port=9222
+```
+
+Renderer IPC was exercised through the packaged `window.electronAPI` (trusted sender).
+
+### 1. Managed CUDA 12 install through the packaged app
+
+`checkCUDA` on a fresh userData tree: `statusCode=missingLibraries`,
+`pythonSupportedForInstall=true`, Python 3.11.7. Packaged `installGPU` completed
+with `finalStatus.statusCode=ready`, `matchedProfile=cuda12`,
+`deviceAvailable=true`, `runtimeLoadable=true`.
+
+Exact pip argv from main-process log (no `--find-links`, no `package==version`):
+
+```text
+Linux CUDA pip install: {
+  "wheelPaths": [
+    ".../ai-addons/cuda/wheel-stage-1788349510245-148958/nvidia_cublas_cu12-12.9.2.10-py3-none-manylinux_2_27_x86_64.whl",
+    ".../ai-addons/cuda/wheel-stage-1788349510245-148958/nvidia_cudnn_cu12-9.22.0.52-py3-none-manylinux_2_27_x86_64.whl"
+  ],
+  "stagingTarget": ".../ai-addons/cuda/python.staging-1788349510245-148958",
+  "activeTarget": ".../ai-addons/cuda/python",
+  "pipArgs": ["-m","pip","install","--no-index","--no-deps","--no-compile","--only-binary=:all:","--no-cache-dir","--no-warn-script-location","--target",".../python.staging-1788349510245-148958",".../nvidia_cublas_cu12-12.9.2.10-py3-none-manylinux_2_27_x86_64.whl",".../nvidia_cudnn_cu12-9.22.0.52-py3-none-manylinux_2_27_x86_64.whl"]
+}
+
+Linux CUDA runtime swapped: {
+  "activeTarget": ".../ai-addons/cuda/python",
+  "stagingTarget": ".../ai-addons/cuda/python.staging-1788349510245-148958",
+  "tombstonePath": ".../ai-addons/cuda/python.tombstone-1788349510245-148958",
+  "renamedActive": false
+}
+```
+
+Device probe after install:
+
+```text
+deviceProbe.devices[0]={name:NVIDIA GeForce RTX 4070, driverVersion:610.57.04, computeCapability:8.9}
+```
+
+Staged wheel sizes/hashes matched the catalog pins (`e4f53a8c…c1702` 581,240,110 bytes;
+`391b9a7e…b8847` 718,382,818 bytes). Extracted managed libraries matched
+`src/main-process/linux-cuda-runtime-catalog.js` (`libcublas.so.12`
+`5757ab5839fb4f203ca47ecb336110d10f4a5606b1e097f195fbca89774569e2` 105,140,976 bytes;
+`libcublasLt.so.12` `2c9006a75c74b3bea2dc7ae2ec38ab038b0e45ea02cb4b717a915e8a5796acb1`
+749,210,000 bytes; plus the pinned cuDNN 9 `.so` set).
+
+### 2. Fresh model preload and CUDA transcription
+
+`checkModelDownloaded("tiny")` → `downloaded: false`. Packaged `downloadModel("tiny")`
+succeeded. Preload used CPU/int8 (download path, not transcription). Then
+`retryTranscription({ meetingId: "20260902_124414", modelSize: "tiny", language: "en" })`
+of the 148.47 s JFK desktop-loop fixture
+(`meeting_20260902_task3_cuda.opus`, copied from the 2026-08-31 CachyOS Stop pass):
+
+| Field | Result |
+|---|---|
+| Model | `tiny` (fresh HF cache `models--Systran--faster-whisper-tiny`) |
+| Wall time | 7943 ms |
+| Result JSON | `device: cuda`, `computeType: float16`, `requestedDevice: cuda`, `transcriptionDevice: cuda` |
+| Meeting metadata at success | `id: 20260902_124414`, `model: tiny`, `transcriptionDevice: cuda`, `transcriptionComputeType: float16`, `transcriptionStatus: completed`, `durationSeconds: 148.4586875` |
+| Transcript | looping JFK line (“ask not what your country can do for you” / “fellow Americans”) |
+| Queue `seq` | `queued` (`seq` 2–3) → `waiting_resource` (`seq` 4–5) → `transcribing` (`seq` 6) → `persisting` (`seq` 7–8) → `completed`/`ready` (`seq` 9, `busyCount` 0) |
+
+Progress: `Device: cuda` then `Device: CUDA` / `Compute type: float16` /
+`Using GPU acceleration`.
+
+### 3. Repair after an intentionally corrupted managed library
+
+Overwrote the first 64 bytes of live `libcublas.so.12` (size unchanged). `checkCUDA`
+→ `runtimeIntegrityFailed` / `Managed CUDA library hash mismatch: libcublas.so.12`.
+`retryTranscription` failed closed (`hash mismatch`); no CPU child. `installGPU({ mode: "repair" })`
+pip-installed the same exact staged wheel paths into
+`python.staging-1788349651626-148958` and swapped (`renamedActive: true`).
+Tombstone directory was deleted. Restored `libcublas.so.12` SHA-256 `5757ab58…`.
+Later tiny transcription: `cuda` / `float16`.
+
+### 4. Uninstall tombstone
+
+**Superseded pre-follow-up evidence (Task 3 same-day pass).** At that time the
+admitted profile still required CUDA after uninstall, so the next transcription
+failed closed. Current behavior after the opt-in follow-up: uninstall removes
+the live tree and the next transcription uses Core Beta CPU. Retain the
+commands and paths below as historical context; do not treat the fail-closed
+retry as current acceptance criteria. A packaged uninstall→CPU smoke after the
+later UI/admission fix is listed under residual hardware smoke.
+
+```text
+Linux CUDA uninstall tombstoned: {
+  "activePath": ".../ai-addons/cuda/python",
+  "tombstonePath": ".../ai-addons/cuda/python.tombstone-1788350103805-158719"
+}
+```
+
+`uninstallGPU` returned `{ success: true, tombstonePath: that path }`. After return,
+the live `python/` tree and the tombstone were both gone; `wheelhouse` remained.
+Transcription then failed closed (`missingLibraries` / managed root does not exist).
+
+After that fail-closed retry, `meetings.json` for `20260902_124414` shows
+`transcriptionStatus: failed`, `transcriptionError` = missing CUDA root, and
+`transcriptionDevice: cpu` / `transcriptionComputeType: int8`. That is leftover
+default metadata on a **failed** row, not a successful CPU transcription. The
+happy-path persist captured above was `cuda` / `float16`.
+
+### 5. Fail-closed (no CPU fallback) while the profile is admitted
+
+| Case | `checkCUDA` | Transcription |
+|---|---|---|
+| Unexpected `nvidia/cublas/lib/libcublas.so.13` in the loader dir | `runtimeIntegrityFailed` (integrity rejects the CUDA 13 name before probe `unsupportedRuntimeMajor`) | threw; no CPU child |
+| Packaged `cuda_probe.py` printed `not-json-probe` instead of JSON | `probeError` / `CUDA probe returned invalid JSON.` | threw; probe file restored afterward |
+| Relaunch with `PATH` containing no `nvidia-smi` (GPU still visible in `/proc/driver/nvidia`) while a managed runtime is admitted | Final CUDA probe `probeError` / `nvidia-smi was not found on PATH.` | threw; no CPU child. Settings/install detection now uses `/proc` first and must not reject this host at the preliminary GPU check. |
+| Uninstalled runtime (**superseded pre-follow-up**) | `missingLibraries` / managed root does not exist | threw; no CPU child. Current code returns to CPU after uninstall. |
+
+Host gate at Task 3 evidence time: CachyOS x86_64 + exact `NVIDIA GeForce RTX 4070` (not Ti/Super), preferring
+`/proc/driver/nvidia`. A first missing-`nvidia-smi` pass *before* the `/proc` correction used Core Beta CPU.
+That was a host-gate bug; it was fixed and retested. Fail-closed evidence is the
+second pass (`probeError` + throw).
+
+The later opt-in follow-up (same day) keeps that fail-closed behavior **only while a
+managed runtime is installed**. After uninstall, transcription returns to CPU.
+
+### 6. Cancel and quit while a GPU job is running
+
+Cancel of an in-flight `small` CUDA job: queue `active`/`transcribing` (`seq` 41,
+`busyCount` 1), `cancelPendingTranscription` →
+`{ success: true, cancelled: true, active: true }`, retry rejected
+`Cancelled by user`, queue `failed`/`cancelled` (`seq` 44, `busyCount` 0).
+Immediate later `tiny` transcription: `cuda` / `float16` (resource queue released;
+completed `seq` 52).
+
+Quit: SIGTERM during `small` `transcribing` ran `Quit drain terminating non-abortable
+compute job: Transcription retry` (`Transcription retry was terminated because the app
+is quitting.`). After relaunch, queue `jobs: []` `busyCount: 0`; later tiny
+transcription: `cuda` / `float16`.
+
+### 7. Residual desktop-audio smoke (best-effort; does not block CUDA acceptance)
+
+8.00 s packaged mic+desktop Stop (Logitech C925e `pulse-source:` + FiiO
+`pulse-monitor:`) wrote `recording_2026-09-02T11-55-42.opus` (116K). No
+`DESKTOP_AUDIO_RESOURCE_EXHAUSTED` warning on this host. Not reproduced; CUDA
+acceptance does not depend on it.
+
+### Enablement
+
+**Follow-up (2026-09-02, same day):** Linux CUDA is opt-in, not CachyOS/4070-gated.
+
+Composition root passes `isLinuxCudaProfileEnabled: () => isLinuxCudaOffered({ userDataPath })`.
+Offer = Linux x86_64 with a visible NVIDIA GPU (any model) or a leftover managed runtime.
+GPU visibility, `check-gpu`, and install preflight share `detectLinuxNvidiaGpu`
+(`/proc/driver/nvidia` first, then `nvidia-smi`). The GPU-runtime service default
+remains `() => false`. Distro ID and exact GPU name are not gates. Tested host
+remains CachyOS x86_64 + RTX 4070; other NVIDIA Linux is best-effort.
+
+Transcription: no managed runtime tree → Core Beta CPU. Installed but not ready →
+fail-closed (`LINUX_CUDA_UNAVAILABLE`) until repair or uninstall. `check-cuda`
+reports `managedRuntimePresent` separately from `installed`, and Settings shows
+Uninstall whenever `ai-addons/cuda/python` exists (Repair and Uninstall coexist
+for broken installs). Uninstall tombstones the live tree and restores CPU.
+Linux children always clear ambient `LD_LIBRARY_PATH`; only an admitted managed
+runtime may repopulate it with validated managed and driver directories.
+Linux Settings copy says uninstall returns to CPU.
+Windows/macOS behavior, IPC channel names, and facade export shapes are unchanged.
+
+## Interpreters used for this matrix
 
 | Interpreter | Where | ABI |
 |---|---|---|
@@ -113,7 +310,7 @@ Treat these as **direct runtime dependencies** even when a resolver also reaches
 | `tokenizers` | faster-whisper tokenization | Windows/Linux build `==0.23.1` | Tokenize/model load failure if missing. |
 | `av` (PyAV) | faster-whisper path-based decode | Windows/Linux build `==18.1.0` | `transcribe(audio_path)` decode. Bundled ffmpeg does not replace this import. Direct runtime dep; do not prune in Task 3. |
 | `ctranslate2` | faster-whisper inference | Windows/Linux build `==4.8.1` | CUDA 12 wheels. Packaged Windows GPU profile remains `nvidia-cublas-cu12` / `nvidia-cudnn-cu12`. This host also has CUDA 13 on PATH; that does not change the packaged CUDA 12 contract. |
-| `faster-whisper` | Windows + Linux transcription | `==1.2.1` | Linux Core Beta is **CPU only**; v2.9 CUDA use is restricted to the separately gated CachyOS x86_64 + RTX 4070 lane. |
+| `faster-whisper` | Windows + Linux transcription | `==1.2.1` | Linux default remains **CPU**. Optional managed CUDA 12 after install (Task 3 accepted on CachyOS x86_64 + RTX 4070; other NVIDIA Linux is best-effort). |
 | `lightning-whisper-mlx` | Apple Silicon transcription | macOS build `==0.0.10` | Pins `tiktoken==0.3.3`. |
 | `torch` | macOS resolver only | macOS build `==2.13.0`, then **pruned** | MLX never imports `torch_whisper.py`. `lightning-whisper-mlx` does not pin Torch. **Accepted** Task 2 on Apple Silicon (2026-08-28). Stays in `MACOS_RUNTIME_REMOVABLE_PACKAGES`. Not Pyannote’s `torch==2.8.0`. |
 | `setuptools` | pip / wheel metadata | Windows/Linux/macOS build `==84.0.0` (also pruned from the macOS runtime) | Windows/Linux **accepted** Task 2. macOS **accepted** with Torch 2.13.0. CI no longer ignores `CVE-2025-3000` or `PYSEC-2026-3447`. |
@@ -125,7 +322,7 @@ Treat these as **direct runtime dependencies** even when a resolver also reaches
 | `tiktoken` | MLX | macOS `==0.3.3` | Dependabot ignore; do not bump alone. |
 | Speakrs ONNX Runtime | add-on, **not** pip requirements | Windows setup-time archive **1.27.1** (`src/ai-addon/speakrs-pack-spec.js`) | Distinct from pip `onnxruntime==1.26.0`. Linux artifacts require a separate v2.9 investigation and acceptance record. |
 
-Linux CUDA, Speakrs, Pyannote, and summaries are in the v2.9 CachyOS x86_64 + RTX 4070 evidence-gated lane. This matrix authorizes no Linux package or runtime until its dated artifact/security/packaged/hardware row is complete.
+Linux CUDA Whisper is **tested** on CachyOS x86_64 + RTX 4070 (Task 3, 2026-09-02) and **offered** as opt-in CUDA on other NVIDIA Linux x86_64. Speakrs, Pyannote, and summaries remain in the evidence-gated lane.
 
 ## Resolver vs packaged pins
 

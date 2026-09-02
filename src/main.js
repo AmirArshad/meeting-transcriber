@@ -105,6 +105,7 @@ const {
   createAiComputeQueue,
 } = require('./main/ai-compute-queue');
 const { createGpuRuntimeService } = require('./main/gpu-runtime-service');
+const { isLinuxCudaOffered } = require('./main-process/linux-cuda-runtime-helpers');
 const {
   createAiAddonIpc,
   createAiAddonCancelErrorStandalone,
@@ -716,6 +717,7 @@ gpuRuntimeService = createGpuRuntimeService({
   formatQueuedTranscriptionBusyMessage,
   enqueueGpuResourceAction: gpuResourceActionQueue.enqueue,
   isQuitCommitted,
+  isLinuxCudaProfileEnabled: () => isLinuxCudaOffered({ userDataPath: app.getPath('userData') }),
 });
 gpuRuntimeService.registerIpc(ipcMain);
 const {

@@ -1,14 +1,200 @@
 'use strict';
 
+const { execFileSync } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+
+const ACCEPTED_LINUX_CUDA_OS_ID = 'cachyos';
+const ACCEPTED_LINUX_CUDA_GPU_NAMES = Object.freeze([
+  'nvidia geforce rtx 4070',
+  'geforce rtx 4070',
+]);
 
 const {
   assertLinuxCudaCatalogIntegrity,
   getLinuxCuda12RuntimeCatalog,
   getLinuxCudaDriverLibraryAllowlist,
 } = require('./linux-cuda-runtime-catalog');
+
+function parseOsReleaseId(text) {
+  for (const line of String(text || '').split('\n')) {
+    const match = line.match(/^ID=(.*)$/);
+    if (!match) continue;
+    return match[1].trim().replace(/^["']|["']$/g, '').toLowerCase();
+  }
+  return '';
+}
+
+function readOsReleaseText(fsModule = fs) {
+  try {
+    return fsModule.readFileSync('/etc/os-release', 'utf8');
+  } catch (_error) {
+    return '';
+  }
+}
+
+function isAcceptedLinuxCudaGpuName(name) {
+  const normalized = String(name || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  return ACCEPTED_LINUX_CUDA_GPU_NAMES.includes(normalized);
+}
+
+function readNvidiaSmiGpuNames({ execFileSyncFn = execFileSync } = {}) {
+  try {
+    const output = execFileSyncFn('nvidia-smi', [
+      '--query-gpu=name',
+      '--format=csv,noheader',
+    ], {
+      encoding: 'utf8',
+      timeout: 10000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    return String(output || '')
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+  } catch (_error) {
+    return [];
+  }
+}
+
+function readProcNvidiaGpuNames(fsModule = fs) {
+  const readdirSync = fsModule.readdirSync || fs.readdirSync;
+  const readFileSync = fsModule.readFileSync || fs.readFileSync;
+  try {
+    const entries = readdirSync('/proc/driver/nvidia/gpus');
+    const names = [];
+    for (const entry of entries) {
+      try {
+        const text = readFileSync(path.join('/proc/driver/nvidia/gpus', String(entry), 'information'), 'utf8');
+        for (const line of String(text || '').split('\n')) {
+          const match = line.match(/^Model:\s*(.+)\s*$/);
+          if (match) names.push(match[1].trim());
+        }
+      } catch (_error) {
+        // Ignore unreadable GPU nodes.
+      }
+    }
+    return names;
+  } catch (_error) {
+    return [];
+  }
+}
+
+function listLinuxNvidiaGpuNames({
+  gpuNames,
+  gpuName,
+  fsModule = fs,
+  execFileSyncFn = execFileSync,
+} = {}) {
+  if (Array.isArray(gpuNames)) {
+    return gpuNames.map((name) => String(name || '').trim()).filter(Boolean);
+  }
+  if (gpuName != null) {
+    const trimmed = String(gpuName).trim();
+    return trimmed ? [trimmed] : [];
+  }
+  const fromProc = readProcNvidiaGpuNames(fsModule);
+  if (fromProc.length > 0) {
+    return fromProc;
+  }
+  return readNvidiaSmiGpuNames({ execFileSyncFn });
+}
+
+function detectLinuxNvidiaGpu(options = {}) {
+  const gpuNames = listLinuxNvidiaGpuNames(options);
+  return {
+    hasGPU: gpuNames.length > 0,
+    gpuName: gpuNames[0] || null,
+    gpuNames,
+  };
+}
+
+function hasLinuxNvidiaGpu(options = {}) {
+  return detectLinuxNvidiaGpu(options).hasGPU;
+}
+
+function managedLinuxCudaRuntimeExists(userDataPath, fsModule = fs) {
+  if (!userDataPath) {
+    return false;
+  }
+  try {
+    const { getManagedLinuxCudaRuntimeTarget } = require('./cuda-runtime-helpers');
+    const target = getManagedLinuxCudaRuntimeTarget(userDataPath);
+    const existsSync = fsModule.existsSync || fs.existsSync;
+    return existsSync(target);
+  } catch (_error) {
+    return false;
+  }
+}
+
+/**
+ * Settings / install offer: Linux x86_64 with an NVIDIA GPU, or a leftover
+ * managed runtime so Uninstall remains reachable. Distro ID and exact GPU
+ * model are not gates. Tested host remains CachyOS x86_64 + RTX 4070.
+ */
+function isLinuxCudaOffered({
+  platform = process.platform,
+  arch = process.arch,
+  userDataPath,
+  fsModule = fs,
+  execFileSyncFn = execFileSync,
+  gpuNames,
+  gpuName,
+} = {}) {
+  if (platform !== 'linux' || arch !== 'x64') {
+    return false;
+  }
+  if (detectLinuxNvidiaGpu({ gpuNames, gpuName, fsModule, execFileSyncFn }).hasGPU) {
+    return true;
+  }
+  return managedLinuxCudaRuntimeExists(userDataPath, fsModule);
+}
+
+/**
+ * Hardware we actually accepted in Task 3. Not the offer/admission gate.
+ * GPU identity prefers `/proc/driver/nvidia` so a missing `nvidia-smi` still
+ * records this as the tested CachyOS + RTX 4070 host.
+ */
+function isAcceptedLinuxCudaProfileHost({
+  platform = process.platform,
+  arch = process.arch,
+  osReleaseText,
+  gpuNames,
+  gpuName,
+  fsModule = fs,
+  execFileSyncFn = execFileSync,
+} = {}) {
+  if (platform !== 'linux' || arch !== 'x64') {
+    return false;
+  }
+  const releaseText = osReleaseText == null ? readOsReleaseText(fsModule) : osReleaseText;
+  if (parseOsReleaseId(releaseText) !== ACCEPTED_LINUX_CUDA_OS_ID) {
+    return false;
+  }
+  let names;
+  if (Array.isArray(gpuNames)) {
+    names = gpuNames;
+  } else if (gpuName != null) {
+    names = [gpuName];
+  } else {
+    names = readProcNvidiaGpuNames(fsModule);
+    if (!names.some(isAcceptedLinuxCudaGpuName)) {
+      names = names.concat(readNvidiaSmiGpuNames({ execFileSyncFn }));
+    }
+  }
+  return names.some(isAcceptedLinuxCudaGpuName);
+}
+
+let cachedAcceptedLinuxCudaProfileEnabled;
+
+function isAcceptedLinuxCudaProfileEnabled() {
+  if (cachedAcceptedLinuxCudaProfileEnabled !== undefined) {
+    return cachedAcceptedLinuxCudaProfileEnabled;
+  }
+  cachedAcceptedLinuxCudaProfileEnabled = isAcceptedLinuxCudaProfileHost();
+  return cachedAcceptedLinuxCudaProfileEnabled;
+}
 
 const KNOWN_CUDA_PROBE_STATUS_CODES = Object.freeze([
   'ready',
@@ -658,6 +844,17 @@ function parseLinuxCheckCudaStatus(output = '', { expectedProfile = 'cuda12' } =
 }
 
 module.exports = {
+  ACCEPTED_LINUX_CUDA_OS_ID,
+  ACCEPTED_LINUX_CUDA_GPU_NAMES,
+  parseOsReleaseId,
+  isAcceptedLinuxCudaGpuName,
+  listLinuxNvidiaGpuNames,
+  detectLinuxNvidiaGpu,
+  hasLinuxNvidiaGpu,
+  managedLinuxCudaRuntimeExists,
+  isLinuxCudaOffered,
+  isAcceptedLinuxCudaProfileHost,
+  isAcceptedLinuxCudaProfileEnabled,
   KNOWN_CUDA_PROBE_STATUS_CODES,
   isKnownCudaProbeStatusCode,
   isWorldWritableMode,

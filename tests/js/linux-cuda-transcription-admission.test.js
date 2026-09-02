@@ -159,6 +159,21 @@ test('Linux CUDA admission stays on CPU when the admission resolver is missing',
   });
 });
 
+test('Linux CUDA admission stays on CPU when no managed runtime is installed', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    const { service, spawnCalls } = createLinuxTranscriptionService({
+      resolveCudaStatusForTranscription: async () => null,
+      spawnTrackedPython: () => createFakeProcess({
+        stdoutText: transcriptionJson({ device: 'cpu', computeType: 'int8' }),
+        exitCode: 0,
+      }),
+    });
+    const result = await service.runNormalTranscriptionWithCudaFallback(ADMISSION_ARGS);
+    assert.equal(result.transcriptionDevice, 'cpu');
+    assert.ok(spawnCalls[0].args.includes('cpu'));
+  });
+});
+
 test('Linux CUDA admission stays on CPU on arm64 even if a resolver claims ready', async () => {
   await withProcess({ platform: 'linux', arch: 'arm64' }, async () => {
     const { service, spawnCalls } = createLinuxTranscriptionService({
