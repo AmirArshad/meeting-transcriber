@@ -12,6 +12,7 @@ diagnostics-only. Stdin commands are exact-token ``stop`` / ``cancel``.
 
 from __future__ import annotations
 
+import errno
 import os
 import sys
 import threading
@@ -110,6 +111,14 @@ def _send_error_message(code: str, message: str, **extra: Any) -> None:
         send_json=_send_json_message,
         **extra,
     )
+
+
+def _is_audio_resource_exhaustion(exc: BaseException) -> bool:
+    """Identify non-retryable ALSA/Pulse resource exhaustion errors."""
+    if isinstance(exc, OSError) and exc.errno == errno.ENOSPC:
+        return True
+    text = str(exc).lower()
+    return "no space left on device" in text or "set_hw_params" in text
 
 
 def _load_soundcard():
@@ -220,6 +229,7 @@ class LinuxAudioRecorder:
         self._desktop_started_event = threading.Event()
         self._mic_start_error = None
         self._desktop_start_error = None
+        self._desktop_start_error_code = "DESKTOP_START_FAILED"
         self._desktop_give_up = False
 
         self.mic_thread = None
@@ -498,7 +508,7 @@ class LinuxAudioRecorder:
                 self._desktop_give_up = True
                 self._note_desktop_runtime_failure(
                     self._desktop_start_error,
-                    code="DESKTOP_START_FAILED",
+                    code=self._desktop_start_error_code,
                 )
 
         if self._desktop_enabled and not self._desktop_runtime_failure:
@@ -923,6 +933,14 @@ class LinuxAudioRecorder:
             traceback.print_exc(file=sys.stderr)
             error_message = f"Desktop audio recording failed: {exc}"
             if not capture_started:
+                resource_exhausted = _is_audio_resource_exhaustion(exc)
+                if resource_exhausted:
+                    error_message = (
+                        f"Desktop audio stream could not be opened ({exc}); "
+                        "disabling desktop capture for this recording and not retrying. "
+                        "Check the PipeWire/WirePlumber audio device state."
+                    )
+                    self._desktop_start_error_code = "DESKTOP_AUDIO_RESOURCE_EXHAUSTED"
                 self._desktop_start_error = error_message
                 self._desktop_started_event.set()
             elif self._desktop_give_up or not self._get_running():

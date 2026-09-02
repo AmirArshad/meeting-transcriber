@@ -165,6 +165,9 @@ Do not depend on `pactl`, `wpctl`, or distro shell scripts at runtime. They are 
 
 The host package contract is `libpulse` plus a running Pulse-compatible server. The pacman package should depend on the appropriate Omarchy/Arch packages; the AppImage should preflight and explain a missing server.
 
+For USB DAC/PipeWire failures and `ENOSPC` recovery, see
+[`docs/development/LINUX_AUDIO_TROUBLESHOOTING.md`](../development/LINUX_AUDIO_TROUBLESHOOTING.md).
+
 ### 3. Device IDs are opaque strings
 
 Linux device selection must use stable Pulse names, not numeric indexes:

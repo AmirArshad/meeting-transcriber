@@ -6,6 +6,7 @@ that can run on a headless VPS.
 
 from __future__ import annotations
 
+import errno
 import json
 import threading
 import time
@@ -34,8 +35,13 @@ class FakeRecorder:
         self._records = 0
 
     def __enter__(self):
+        self.backend.open_attempts[self.pulse_name] = (
+            self.backend.open_attempts.get(self.pulse_name, 0) + 1
+        )
         fail = self.backend.fail_open.get(self.pulse_name)
         if fail:
+            if isinstance(fail, BaseException):
+                raise fail
             raise RuntimeError(fail)
         return self
 
@@ -78,6 +84,7 @@ class FakeSoundCard:
         self.fail_exit = {}
         self.on_record = {}
         self.mismatched_fallback = set()
+        self.open_attempts = {}
 
     def all_microphones(self, include_loopback=False):
         names = [MIC_NAME]
@@ -262,6 +269,35 @@ def test_desktop_startup_failure_warns_and_continues_mic_only(tmp_path, monkeypa
     assert not any("DESKTOP" in (item.get("code") or "") for item in errors)
     assert recorder.recording_failure is None
     assert Path(recorder.final_output_path).is_file()
+
+
+def test_linux_enospc_desktop_open_is_fail_closed_without_retry(
+    tmp_path, monkeypatch, capsys
+):
+    """A Pulse/PipeWire resource exhaustion must not be retried.
+
+    Retrying the failed stream is what can make PipeWire repeatedly reset a USB
+    DAC. The microphone remains usable, while the warning identifies the
+    non-retryable resource condition.
+    """
+    _patch_finalize_success(monkeypatch)
+    soundcard = FakeSoundCard()
+    soundcard.fail_open[MONITOR_NAME] = OSError(errno.ENOSPC, "No space left on device")
+    pulse = FakePulse([MIC_NAME, MONITOR_NAME])
+    recorder = _make_recorder(tmp_path, soundcard=soundcard, pulse=pulse)
+
+    assert recorder.start_recording() is True
+    time.sleep(0.08)
+    recorder.stop_recording()
+
+    assert soundcard.open_attempts[MONITOR_NAME] == 1
+    assert recorder.recording_failure is None
+    payloads = _stdout_payloads(capsys)
+    warning = next(
+        item for item in payloads
+        if item.get("type") == "warning" and item.get("code") == "DESKTOP_AUDIO_RESOURCE_EXHAUSTED"
+    )
+    assert "not retrying" in warning.get("message", "").lower()
 
 
 def test_late_desktop_failure_warns_and_continues_mic_only(tmp_path, monkeypatch, capsys):
