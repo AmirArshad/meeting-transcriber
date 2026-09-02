@@ -2,6 +2,7 @@ import tempfile
 import types
 import os
 import json
+import subprocess
 from typing import Any, cast
 from pathlib import Path
 import builtins
@@ -9,7 +10,12 @@ import builtins
 import pytest
 
 from backend.transcription import faster_whisper_transcriber as fw_transcriber
-from backend.transcription.cuda_probe import build_probe_report, find_unsupported_runtime_profiles
+from backend.transcription.cuda_probe import (
+    NvidiaSmiProbeError,
+    build_probe_report,
+    find_unsupported_runtime_profiles,
+    probe_nvidia_smi_devices,
+)
 from backend.transcription.faster_whisper_transcriber import TranscriberService, resolve_faster_whisper_device
 from backend.transcription.mlx_whisper_transcriber import MLXWhisperTranscriber
 from backend.transcription import nvidia_dll_loader
@@ -199,6 +205,131 @@ def test_cuda_probe_prefers_ready_supported_runtime_even_with_cuda13_on_path(tmp
     assert report['unsupportedDetectedProfiles'] == ['cuda13']
     assert report['installedProfile'] == 'cuda12'
     assert report['statusCode'] == 'ready'
+
+
+class _FakeCompletedProcess:
+    def __init__(self, returncode=0, stdout='', stderr=''):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def test_nvidia_smi_probe_returns_structured_device_rows():
+    devices = probe_nvidia_smi_devices(
+        runner=lambda *args, **kwargs: _FakeCompletedProcess(
+            stdout='NVIDIA GeForce RTX 4070, 610.57.04, 8.9\n',
+        ),
+    )
+    assert devices == [{
+        'name': 'NVIDIA GeForce RTX 4070',
+        'driverVersion': '610.57.04',
+        'computeCapability': '8.9',
+    }]
+
+
+def test_nvidia_smi_probe_classifies_missing_timeout_nonzero_and_malformed():
+    with pytest.raises(NvidiaSmiProbeError, match='was not found') as missing:
+        probe_nvidia_smi_devices(runner=lambda *args, **kwargs: (_ for _ in ()).throw(FileNotFoundError('nvidia-smi')))
+    assert missing.value.kind == 'missing_executable'
+
+    with pytest.raises(NvidiaSmiProbeError, match='timed out') as timed_out:
+        probe_nvidia_smi_devices(
+            runner=lambda *args, **kwargs: (_ for _ in ()).throw(
+                subprocess.TimeoutExpired(cmd='nvidia-smi', timeout=10)
+            ),
+        )
+    assert timed_out.value.kind == 'timeout'
+
+    with pytest.raises(NvidiaSmiProbeError, match='exited with code 1') as nonzero:
+        probe_nvidia_smi_devices(runner=lambda *args, **kwargs: _FakeCompletedProcess(returncode=1, stderr='driver'))
+    assert nonzero.value.kind == 'nonzero_exit'
+
+    with pytest.raises(NvidiaSmiProbeError, match='Unexpected nvidia-smi row') as malformed:
+        probe_nvidia_smi_devices(
+            runner=lambda *args, **kwargs: _FakeCompletedProcess(stdout='NVIDIA GeForce RTX 4070, 610.57.04\n'),
+        )
+    assert malformed.value.kind == 'malformed_output'
+
+
+def test_cuda_probe_nvidia_smi_failures_override_status_to_probe_error():
+    def raise_missing():
+        raise NvidiaSmiProbeError('missing_executable', 'nvidia-smi was not found on PATH.')
+
+    report = build_probe_report(
+        profiles=[{'id': 'cuda12', 'requiredDlls': ['libcublas.so.12']}],
+        supported_profiles=['cuda12'],
+        unsupported_hints=[],
+        device_count_getter=raise_missing,
+        load_dll=lambda name: object(),
+        path_value='',
+        platform='linux',
+    )
+    assert report['statusCode'] == 'probeError'
+    assert report['deviceAvailable'] is False
+    assert 'nvidia-smi' in report['error']
+
+
+def test_cuda_probe_ignores_ambient_path_when_library_search_dirs_are_empty(tmp_path, monkeypatch):
+    cuda13_lib = tmp_path / 'cuda13-lib'
+    cuda13_lib.mkdir()
+    (cuda13_lib / 'libcublas.so.13').write_text('shared object')
+    monkeypatch.setenv('PATH', str(cuda13_lib))
+
+    report = build_probe_report(
+        profiles=[{'id': 'cuda12', 'requiredDlls': ['libcublas.so.12']}],
+        supported_profiles=['cuda12'],
+        unsupported_hints=[{'id': 'cuda13', 'expectedDllPrefixes': ['libcublas.so.13']}],
+        device_count_getter=lambda: 1,
+        load_dll=lambda name: object(),
+        path_value='',
+        platform='linux',
+    )
+    assert report['unsupportedDetectedProfiles'] == []
+    assert report['statusCode'] == 'ready'
+
+
+def test_cuda_probe_validates_ctranslate2_cuda_after_verified_libraries():
+    calls = []
+
+    def load_dll(name):
+        calls.append(('load', name))
+        return object()
+
+    def validator():
+        calls.append('validate')
+
+    report = build_probe_report(
+        profiles=[{'id': 'cuda12', 'requiredDlls': ['libcublas.so.12']}],
+        supported_profiles=['cuda12'],
+        unsupported_hints=[],
+        device_count_getter=lambda: 1,
+        load_dll=load_dll,
+        path_value='',
+        platform='linux',
+        validate_ctranslate2_cuda=True,
+        ctranslate2_validator=validator,
+    )
+    assert calls[0][0] == 'load'
+    assert calls[-1] == 'validate'
+    assert report['statusCode'] == 'ready'
+    assert report['runtimeLoadable'] is True
+
+
+def test_cuda_probe_ctranslate2_init_failure_is_not_ready():
+    report = build_probe_report(
+        profiles=[{'id': 'cuda12', 'requiredDlls': ['libcublas.so.12']}],
+        supported_profiles=['cuda12'],
+        unsupported_hints=[],
+        device_count_getter=lambda: 1,
+        load_dll=lambda name: object(),
+        path_value='',
+        platform='linux',
+        validate_ctranslate2_cuda=True,
+        ctranslate2_validator=lambda: (_ for _ in ()).throw(RuntimeError('CUDA runtime init failed')),
+    )
+    assert report['runtimeLoadable'] is False
+    assert report['statusCode'] == 'runtimeUnavailable'
+    assert 'CUDA runtime init failed' in report['error']
 
 
 def test_cuda_probe_module_invokes_nvidia_dll_loader_at_import():

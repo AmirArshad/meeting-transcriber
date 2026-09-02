@@ -34,6 +34,21 @@ const {
   buildManagedLinuxCudaLibraryPath,
   getRequiredCudaRuntimeLibraries,
 } = require('../main-process/cuda-runtime-helpers');
+const {
+  assertLinuxCudaCatalogIntegrity,
+  getLinuxCuda12RuntimeCatalog,
+} = require('../main-process/linux-cuda-runtime-catalog');
+const {
+  buildLinuxCudaOfflineInstallArgs,
+  buildProbeErrorStatus,
+  getLinuxCudaTombstonePath,
+  getLinuxCudaWheelhousePath,
+  resolveLinuxCudaDriverLibraryDirs,
+  resolveRequiredLinuxCudaLibraryPath,
+  verifyDownloadedLinuxCudaWheel,
+  verifyLinuxCudaRuntimeIntegrity,
+} = require('../main-process/linux-cuda-runtime-helpers');
+const { downloadFile } = require('../ai-addon/download-helpers');
 
 /**
  * @param {object} deps
@@ -82,6 +97,9 @@ function createGpuRuntimeService(deps) {
     // Task 2 supplies the fail-closed machinery. A later packaged RTX 4070
     // acceptance task is the only code allowed to opt this profile in.
     isLinuxCudaProfileEnabled = () => false,
+    downloadLinuxCudaWheel = downloadFile,
+    verifyLinuxCudaIntegrity = verifyLinuxCudaRuntimeIntegrity,
+    getLinuxCudaCatalog = getLinuxCuda12RuntimeCatalog,
   } = deps;
 
   // Single shared CUDA status cache + GPU runtime lock. Never copy these lets
@@ -92,7 +110,7 @@ function createGpuRuntimeService(deps) {
 
   function isSupportedCudaPlatform() {
     return process.platform === 'win32'
-      || (process.platform === 'linux' && isLinuxCudaProfileEnabled() === true);
+      || (process.platform === 'linux' && process.arch === 'x64' && isLinuxCudaProfileEnabled() === true);
   }
 
   function getLinuxCudaRuntimeTarget() {
@@ -153,19 +171,36 @@ function createGpuRuntimeService(deps) {
     }
 
     if (process.platform === 'linux') {
-      if (!isLinuxCudaProfileEnabled()) return extra;
-      const managedRoot = getLinuxCudaRuntimeTarget();
-      const libraryDirs = getManagedLinuxCudaLibraryDirs(managedRoot)
-        .filter((candidate) => fs.existsSync(candidate));
-      if (libraryDirs.length === 0) return extra;
-      return {
-        ...extra,
-        LD_LIBRARY_PATH: buildManagedLinuxCudaLibraryPath({
-          managedRoot,
-          libraryDirs,
-          inheritedLibraryPath: extra.LD_LIBRARY_PATH || process.env.LD_LIBRARY_PATH || '',
-        }),
-      };
+      if (!isLinuxCudaProfileEnabled() || process.arch !== 'x64') return extra;
+      const rest = { ...extra };
+      delete rest.LD_LIBRARY_PATH;
+      // Explicit undefined unsets inherited LD_LIBRARY_PATH in buildPythonEnv.
+      // Omitting the key would let a hostile process.env value leak into the child.
+      try {
+        const managedRoot = getLinuxCudaRuntimeTarget();
+        const libraryDirs = getManagedLinuxCudaLibraryDirs(managedRoot)
+          .filter((candidate) => fs.existsSync(candidate));
+        if (libraryDirs.length === 0) {
+          return { ...rest, LD_LIBRARY_PATH: undefined };
+        }
+        let driverLibraryDirs = [];
+        try {
+          driverLibraryDirs = resolveLinuxCudaDriverLibraryDirs({ fsModule: fs });
+        } catch (_driverError) {
+          driverLibraryDirs = [];
+        }
+        return {
+          ...rest,
+          LD_LIBRARY_PATH: buildManagedLinuxCudaLibraryPath({
+            managedRoot,
+            libraryDirs,
+            driverLibraryDirs,
+            fsModule: fs,
+          }),
+        };
+      } catch (_error) {
+        return { ...rest, LD_LIBRARY_PATH: undefined };
+      }
     }
 
     const candidateSitePackagesDirs = [
@@ -341,15 +376,89 @@ function createGpuRuntimeService(deps) {
     }
   }
 
+  async function runLinuxCudaPackageInstall({ mode = 'install', registerProcess = (proc) => proc } = {}) {
+    const catalog = assertLinuxCudaCatalogIntegrity(getLinuxCudaCatalog());
+    const userData = app.getPath('userData');
+    const wheelhouse = getLinuxCudaWheelhousePath(userData);
+    const target = getLinuxCudaRuntimeTarget();
+    fs.mkdirSync(wheelhouse, { recursive: true });
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+
+    for (const wheel of catalog.wheels) {
+      const destinationPath = path.join(wheelhouse, wheel.fileName);
+      await downloadLinuxCudaWheel({
+        url: wheel.downloadUrl,
+        destinationPath,
+        expectedSizeBytes: wheel.sizeBytes,
+      });
+      verifyDownloadedLinuxCudaWheel(destinationPath, wheel, fs);
+    }
+
+    await new Promise((resolve, reject) => {
+      const python = registerProcess(spawnTrackedPython(buildLinuxCudaOfflineInstallArgs({
+        wheelhouse,
+        target,
+        catalog,
+      })));
+      let errorOutput = '';
+      const progressRedactor = createLineChunkRedactor();
+      python.stdout.on('data', (data) => {
+        sendRedactedProgress('gpu-install-progress', data.toString(), progressRedactor);
+      });
+      python.stderr.on('data', (data) => {
+        const text = data.toString();
+        errorOutput = appendSpawnLogBuffer(errorOutput, text);
+        sendRedactedProgress('gpu-install-progress', text, progressRedactor);
+      });
+      python.on('close', (code) => {
+        flushRedactedProgress('gpu-install-progress', progressRedactor);
+        if (code === 0) {
+          resolve();
+          return;
+        }
+        invalidateCachedCudaStatus();
+        reject(new Error(`Failed to install CUDA libraries: ${errorOutput}`));
+      });
+      python.on('error', (error) => {
+        flushRedactedProgress('gpu-install-progress', progressRedactor);
+        invalidateCachedCudaStatus();
+        reject(error);
+      });
+    });
+
+    const integrity = await verifyLinuxCudaIntegrity({
+      managedRoot: target,
+      catalog,
+      fsModule: fs,
+    });
+    if (!integrity.ok) {
+      invalidateCachedCudaStatus();
+      const error = new Error(integrity.error || 'Managed CUDA runtime failed integrity verification.');
+      error.code = integrity.statusCode;
+      throw error;
+    }
+
+    return {
+      success: true,
+      mode,
+      message: mode === 'repair'
+        ? 'GPU runtime repair completed successfully.'
+        : 'GPU acceleration installed successfully.',
+    };
+  }
+
   function runGpuPackageInstall({ mode = 'install', registerProcess = (proc) => proc } = {}) {
     const normalizedMode = String(mode || 'install').trim().toLowerCase() === 'repair' ? 'repair' : 'install';
     const isRepairMode = normalizedMode === 'repair';
+
+    if (process.platform === 'linux') {
+      return runLinuxCudaPackageInstall({ mode: normalizedMode, registerProcess });
+    }
 
     return new Promise((resolve, reject) => {
       const python = registerProcess(spawnTrackedPython(buildTranscriptionCudaInstallArgs({
         forceReinstall: isRepairMode,
         noCache: isRepairMode,
-        ...(process.platform === 'linux' ? { target: getLinuxCudaRuntimeTarget() } : {}),
       })));
 
       let errorOutput = '';
@@ -390,74 +499,114 @@ function createGpuRuntimeService(deps) {
     });
   }
 
-  function checkCudaRuntimeStatus({ registerProcess = (proc) => proc } = {}) {
+  async function checkCudaRuntimeStatus({ registerProcess = (proc) => proc } = {}) {
+    if (!isSupportedCudaPlatform()) {
+      return buildUnsupportedPlatformCudaStatus(process.platform);
+    }
+
+    if (process.platform === 'linux') {
+      const catalog = getLinuxCudaCatalog();
+      const integrity = await verifyLinuxCudaIntegrity({
+        managedRoot: getLinuxCudaRuntimeTarget(),
+        catalog,
+        fsModule: fs,
+      });
+      if (!integrity.ok) {
+        const status = {
+          installed: false,
+          deviceAvailable: false,
+          runtimeLoadable: false,
+          missingLibraries: integrity.missingLibraries || [],
+          runtime: 'ctranslate2',
+          statusCode: integrity.statusCode,
+          supportedProfiles: getSupportedTranscriptionCudaProfileIds(),
+          unsupportedDetectedProfiles: [],
+          recommendedInstallProfile: getSupportedTranscriptionCudaProfileIds()[0] || 'cuda12',
+          error: integrity.error,
+        };
+        updateCachedCudaStatus(status);
+        return status;
+      }
+    }
+
     return new Promise((resolve) => {
-      if (!isSupportedCudaPlatform()) {
-        resolve(buildUnsupportedPlatformCudaStatus(process.platform));
+      const finish = (status) => {
+        updateCachedCudaStatus(status);
+        resolve(status);
+      };
+      let probeProfiles;
+      let unsupportedDllHints;
+      let managedDirs = [];
+      let linuxCatalog = null;
+      let supportedProfileIds = [];
+      try {
+        const knownProfiles = getCudaRuntimeProfiles();
+        supportedProfileIds = getSupportedTranscriptionCudaProfileIds();
+        const supportedProfiles = knownProfiles.filter((profile) => supportedProfileIds.includes(profile.id));
+        const unsupportedProfiles = knownProfiles.filter((profile) => !supportedProfileIds.includes(profile.id));
+        linuxCatalog = process.platform === 'linux' ? getLinuxCudaCatalog() : null;
+        managedDirs = process.platform === 'linux'
+          ? getManagedLinuxCudaLibraryDirs(getLinuxCudaRuntimeTarget())
+          : [];
+        probeProfiles = supportedProfiles.map((profile) => {
+          const libraries = getRequiredCudaRuntimeLibraries(profile.id, { platform: process.platform });
+          if (process.platform !== 'linux') return { id: profile.id, requiredDlls: libraries };
+          return {
+            id: profile.id,
+            requiredDlls: libraries.map((libraryName) => {
+              const pin = linuxCatalog.requiredLibraries.find((item) => item.fileName === libraryName)
+                || { fileName: libraryName, relativePath: `nvidia/cublas/lib/${libraryName}` };
+              return resolveRequiredLinuxCudaLibraryPath(getLinuxCudaRuntimeTarget(), pin, fs);
+            }),
+          };
+        });
+        unsupportedDllHints = process.platform === 'linux'
+          ? [{
+            id: 'cuda13',
+            expectedDllPrefixes: [...linuxCatalog.unsupportedLibraryPrefixes],
+          }]
+          : unsupportedProfiles.map((profile) => ({
+            id: profile.id,
+            expectedDllPrefixes: Array.isArray(profile.expectedDllPrefixes) ? profile.expectedDllPrefixes : [],
+          }));
+      } catch (error) {
+        finish(buildProbeErrorStatus(String(error && error.message ? error.message : error)));
         return;
       }
 
-      const knownProfiles = getCudaRuntimeProfiles();
-      const supportedProfileIds = getSupportedTranscriptionCudaProfileIds();
-      const supportedProfiles = knownProfiles.filter((profile) => supportedProfileIds.includes(profile.id));
-      const unsupportedProfiles = knownProfiles.filter((profile) => !supportedProfileIds.includes(profile.id));
-      const probeProfiles = supportedProfiles.map((profile) => {
-        const libraries = getRequiredCudaRuntimeLibraries(profile.id, { platform: process.platform });
-        if (process.platform !== 'linux') return { id: profile.id, requiredDlls: libraries };
-        const managedDirs = getManagedLinuxCudaLibraryDirs(getLinuxCudaRuntimeTarget());
-        return {
-          id: profile.id,
-          // Absolute managed paths prevent a matching system CUDA basename
-          // from satisfying a partially installed managed runtime.
-          requiredDlls: libraries.map((library) => {
-            const found = managedDirs
-              .map((directory) => path.join(directory, library))
-              .find((candidate) => fs.existsSync(candidate));
-            // Keep this absolute even when absent. Passing a bare soname here
-            // would let ctypes resolve an ambient system CUDA library.
-            return found || path.join(managedDirs[0], library);
-          }),
-        };
-      });
-      const unsupportedDllHints = unsupportedProfiles.map((profile) => ({
-        id: profile.id,
-        expectedDllPrefixes: process.platform === 'linux'
-          ? (Array.isArray(profile.expectedSharedLibraryPrefixes) ? profile.expectedSharedLibraryPrefixes : [])
-          : (Array.isArray(profile.expectedDllPrefixes) ? profile.expectedDllPrefixes : []),
-      }));
-
-      const python = registerProcess(spawnTrackedPython(getBackendModuleArgs('transcription.cuda_probe', [
+      const probeArgs = [
         '--profiles-json', JSON.stringify(probeProfiles),
         '--supported-profiles', supportedProfileIds.join(','),
         '--unsupported-hints-json', JSON.stringify(unsupportedDllHints),
         '--platform', process.platform,
         '--device-check', process.platform === 'linux' ? 'nvidia-smi' : 'ctranslate2',
-      ]), { env: buildCudaRuntimeEnv() }));
+      ];
+      if (process.platform === 'linux') {
+        probeArgs.push(
+          '--library-search-dirs-json',
+          JSON.stringify(managedDirs),
+          '--validate-ctranslate2-cuda',
+        );
+      }
+
+      const python = registerProcess(spawnTrackedPython(
+        getBackendModuleArgs('transcription.cuda_probe', probeArgs),
+        { env: buildCudaRuntimeEnv() },
+      ));
 
       let output = '';
       python.stdout.on('data', (data) => {
         output = appendSpawnLogBuffer(output, data);
       });
-      python.on('close', () => {
-        const status = parseCheckCudaStatus(output);
-        updateCachedCudaStatus(status);
-        resolve(status);
+      python.on('close', (code) => {
+        if (code !== 0) {
+          finish(buildProbeErrorStatus(`CUDA probe exited with code ${code}.`));
+          return;
+        }
+        finish(parseCheckCudaStatus(output));
       });
       python.on('error', (error) => {
-        const status = {
-          installed: false,
-          deviceAvailable: false,
-          runtimeLoadable: false,
-          missingLibraries: [],
-          runtime: 'ctranslate2',
-          statusCode: 'probeError',
-          supportedProfiles: getSupportedTranscriptionCudaProfileIds(),
-          unsupportedDetectedProfiles: [],
-          recommendedInstallProfile: getSupportedTranscriptionCudaProfileIds()[0] || 'cuda12',
-          error: String(error && error.message ? error.message : error),
-        };
-        updateCachedCudaStatus(status);
-        resolve(status);
+        finish(buildProbeErrorStatus(String(error && error.message ? error.message : error)));
       });
     });
   }
@@ -646,13 +795,26 @@ function createGpuRuntimeService(deps) {
       }
       return runGpuRuntimeAction((registerProcess) => new Promise((resolve, reject) => {
         if (process.platform === 'linux') {
-          fs.promises.rm(getLinuxCudaRuntimeTarget(), { recursive: true, force: true })
-            .then(() => {
-              invalidateCachedCudaStatus();
-              resolve({ success: true });
-            })
+          const activePath = getLinuxCudaRuntimeTarget();
+          if (!fs.existsSync(activePath)) {
+            invalidateCachedCudaStatus();
+            resolve({ success: true });
+            return;
+          }
+          const tombstonePath = getLinuxCudaTombstonePath(activePath);
+          try {
+            fs.renameSync(activePath, tombstonePath);
+          } catch (error) {
+            invalidateCachedCudaStatus();
+            reject(error);
+            return;
+          }
+          invalidateCachedCudaStatus();
+          fs.promises.rm(tombstonePath, { recursive: true, force: true })
+            .then(() => resolve({ success: true, tombstonePath }))
             .catch((error) => {
-              invalidateCachedCudaStatus();
+              // Active path is already renamed away. Report the tombstone cleanup
+              // failure without targeting the live runtime again.
               reject(error);
             });
           return;

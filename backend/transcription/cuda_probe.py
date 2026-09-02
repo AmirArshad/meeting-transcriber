@@ -89,6 +89,14 @@ def find_unsupported_runtime_profiles(
     return detected
 
 
+class NvidiaSmiProbeError(Exception):
+    """Structured NVIDIA-device probe failure that must surface as probeError."""
+
+    def __init__(self, kind: str, message: str):
+        super().__init__(message)
+        self.kind = kind
+
+
 def _load_windows_dll(dll_name: str) -> Any:
     return ctypes.WinDLL(dll_name)  # type: ignore[attr-defined]
 
@@ -97,24 +105,71 @@ def _load_linux_shared_library(library_name: str) -> Any:
     return ctypes.CDLL(library_name)
 
 
+def probe_nvidia_smi_devices(
+    *,
+    runner: Callable[..., Any] | None = None,
+    timeout: int = 10,
+) -> list[dict[str, str]]:
+    """Return structured NVIDIA GPU rows from an approved nvidia-smi query."""
+    command = [
+        "nvidia-smi",
+        "--query-gpu=name,driver_version,compute_cap",
+        "--format=csv,noheader",
+    ]
+    run = runner or subprocess.run
+    try:
+        result = run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout,
+        )
+    except FileNotFoundError as exc:
+        raise NvidiaSmiProbeError("missing_executable", "nvidia-smi was not found on PATH.") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise NvidiaSmiProbeError("timeout", "nvidia-smi timed out.") from exc
+    except OSError as exc:
+        raise NvidiaSmiProbeError("missing_executable", str(exc)) from exc
+
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip()
+        raise NvidiaSmiProbeError(
+            "nonzero_exit",
+            f"nvidia-smi exited with code {result.returncode}" + (f": {stderr}" if stderr else "."),
+        )
+
+    devices: list[dict[str, str]] = []
+    for raw_line in (result.stdout or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) < 3 or not parts[0] or not parts[1] or not parts[2]:
+            raise NvidiaSmiProbeError("malformed_output", f"Unexpected nvidia-smi row: {line}")
+        devices.append({
+            "name": parts[0],
+            "driverVersion": parts[1],
+            "computeCapability": parts[2],
+        })
+    return devices
+
+
 def _get_nvidia_smi_device_count() -> int:
     """Probe the NVIDIA driver, independently from managed CUDA wheel loading."""
-    result = subprocess.run(
-        ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=10,
-    )
-    if result.returncode != 0:
-        return 0
-    return len([line for line in result.stdout.splitlines() if line.strip()])
+    return len(probe_nvidia_smi_devices())
 
 
 def _get_ctranslate2_cuda_device_count() -> int:
     import ctranslate2  # imported lazily so tests can run without CUDA runtime DLLs
 
     return int(ctranslate2.get_cuda_device_count())
+
+
+def _validate_ctranslate2_cuda() -> None:
+    import ctranslate2  # imported lazily so tests can run without CUDA runtime DLLs
+
+    int(ctranslate2.get_cuda_device_count())
 
 
 def build_probe_report(
@@ -128,13 +183,22 @@ def build_probe_report(
     listdir: Callable[[str], list[str]] | Callable[[str], list[Any]] = os.listdir,
     isdir: Callable[[str], bool] = os.path.isdir,
     platform: str = "win32",
+    validate_ctranslate2_cuda: bool = False,
+    ctranslate2_validator: Callable[[], None] | None = None,
+    device_probe: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     probe_error = ""
+    status_override = ""
     get_device_count = device_count_getter or _get_ctranslate2_cuda_device_count
     dll_loader = load_dll or (_load_linux_shared_library if platform.startswith("linux") else _load_windows_dll)
+    resolved_device_probe = device_probe
 
     try:
         device_count = get_device_count()
+    except NvidiaSmiProbeError as exc:
+        device_count = 0
+        probe_error = str(exc)
+        status_override = "probeError"
     except Exception as exc:
         device_count = 0
         probe_error = str(exc)
@@ -164,6 +228,15 @@ def build_probe_report(
             missing_libraries = current_missing
 
     runtime_loadable = bool(matched_profile)
+    if validate_ctranslate2_cuda and runtime_loadable:
+        validator = ctranslate2_validator or _validate_ctranslate2_cuda
+        try:
+            validator()
+        except Exception as exc:
+            runtime_loadable = False
+            matched_profile = ""
+            probe_error = str(exc)
+
     unsupported_detected_profiles = find_unsupported_runtime_profiles(
         unsupported_hints,
         path_value=path_value,
@@ -171,14 +244,14 @@ def build_probe_report(
         isdir=isdir,
     )
     installed_profile = matched_profile or (unsupported_detected_profiles[0] if unsupported_detected_profiles else "")
-    status_code = classify_cuda_probe_status(
+    status_code = status_override or classify_cuda_probe_status(
         device_available=device_count > 0,
         runtime_loadable=runtime_loadable,
         missing_libraries=missing_libraries,
         unsupported_detected_profiles=unsupported_detected_profiles,
     )
 
-    return {
+    report = {
         "deviceAvailable": device_count > 0,
         "runtimeLoadable": runtime_loadable,
         "missingLibraries": missing_libraries,
@@ -191,6 +264,9 @@ def build_probe_report(
         "statusCode": status_code,
         "error": probe_error,
     }
+    if resolved_device_probe is not None:
+        report["deviceProbe"] = resolved_device_probe
+    return report
 
 
 def _print_report(report: dict[str, Any]) -> None:
@@ -206,18 +282,50 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--unsupported-hints-json", required=True)
     parser.add_argument("--platform", default=sys.platform)
     parser.add_argument("--device-check", choices=["ctranslate2", "nvidia-smi"], default="ctranslate2")
+    parser.add_argument("--library-search-dirs-json", default="")
+    parser.add_argument("--validate-ctranslate2-cuda", action="store_true")
     args = parser.parse_args(argv)
 
     profiles = json.loads(args.profiles_json)
     supported_profiles = [item.strip() for item in args.supported_profiles.split(",") if item.strip()]
     unsupported_hints = json.loads(args.unsupported_hints_json)
-    device_count_getter = _get_nvidia_smi_device_count if args.device_check == "nvidia-smi" else None
+    # When the caller supplies --library-search-dirs-json, even as [], search
+    # only those directories. Falling back to ambient PATH would let an
+    # unsupported CUDA major on PATH masquerade as the managed runtime.
+    path_value = None
+    if args.library_search_dirs_json:
+        parsed_dirs = json.loads(args.library_search_dirs_json)
+        path_value = os.pathsep.join(str(item) for item in parsed_dirs if item)
+
+    device_probe = None
+    nvidia_smi_error: NvidiaSmiProbeError | None = None
+    nvidia_smi_devices: list[dict[str, str]] | None = None
+    if args.device_check == "nvidia-smi":
+        try:
+            nvidia_smi_devices = probe_nvidia_smi_devices()
+            device_probe = {
+                "devices": nvidia_smi_devices,
+                "driverVersion": nvidia_smi_devices[0]["driverVersion"] if nvidia_smi_devices else "",
+            }
+        except NvidiaSmiProbeError as exc:
+            nvidia_smi_error = exc
+
+        def device_count_getter() -> int:
+            if nvidia_smi_error is not None:
+                raise nvidia_smi_error
+            return len(nvidia_smi_devices or [])
+    else:
+        device_count_getter = None
+
     _print_report(build_probe_report(
         profiles=profiles,
         supported_profiles=supported_profiles,
         unsupported_hints=unsupported_hints,
         device_count_getter=device_count_getter,
+        path_value=path_value,
         platform=args.platform,
+        validate_ctranslate2_cuda=args.validate_ctranslate2_cuda,
+        device_probe=device_probe,
     ))
     return 0
 

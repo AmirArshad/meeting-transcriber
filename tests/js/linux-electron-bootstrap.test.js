@@ -173,17 +173,20 @@ test('Linux CUDA managed target is userData-scoped and has only wheel library ro
   ]);
 });
 
-test('admitted Linux CUDA builds a controlled managed-first loader environment', () => {
+test('admitted Linux CUDA builds a contained managed loader environment and ignores inherited LD_LIBRARY_PATH', () => {
   const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
   Object.defineProperty(process, 'platform', { configurable: true, value: 'linux' });
+  const userData = fs.mkdtempSync(path.join(require('os').tmpdir(), 'avanevis-linux-cuda-env-'));
   try {
-    const userData = '/tmp/avanevis-linux-cuda-test';
     const target = getManagedLinuxCudaRuntimeTarget(userData);
     const libraryDirs = getManagedLinuxCudaLibraryDirs(target);
+    for (const directory of libraryDirs) {
+      fs.mkdirSync(directory, { recursive: true });
+    }
     const service = createGpuRuntimeService({
       app: { getPath: () => userData },
       path,
-      fs: { existsSync: (candidate) => libraryDirs.includes(candidate) },
+      fs,
       pythonConfig: { pythonExe: '/fake/python' },
       spawnTrackedPython: () => { throw new Error('not used'); },
       getBackendModuleArgs: () => [],
@@ -196,10 +199,12 @@ test('admitted Linux CUDA builds a controlled managed-first loader environment',
       getDiarizationDependencySitePackagesPath: () => null,
       isLinuxCudaProfileEnabled: () => true,
     });
-    const env = service.buildCudaRuntimeEnv({ LD_LIBRARY_PATH: '/usr/lib:/lib' });
-    assert.equal(env.LD_LIBRARY_PATH, `${libraryDirs.join(':')}:/usr/lib:/lib`);
+    const env = service.buildCudaRuntimeEnv({ LD_LIBRARY_PATH: '/tmp/hostile:/lib' });
+    assert.ok(env.LD_LIBRARY_PATH.startsWith(libraryDirs.join(':')));
+    assert.doesNotMatch(env.LD_LIBRARY_PATH, /\/tmp\/hostile/);
   } finally {
     Object.defineProperty(process, 'platform', platformDescriptor);
+    fs.rmSync(userData, { recursive: true, force: true });
   }
 });
 

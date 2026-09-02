@@ -412,6 +412,16 @@ function createTranscriptionService(deps) {
           try {
             const result = JSON.parse(output);
             if (result.text !== undefined || result.segments !== undefined) {
+              if (linuxCudaEnabled) {
+                const reportedDevice = typeof result.device === 'string' ? result.device.trim().toLowerCase() : '';
+                const reportedComputeType = typeof result.computeType === 'string' ? result.computeType.trim().toLowerCase() : '';
+                if (reportedDevice !== 'cuda' || !['float16', 'int8_float16'].includes(reportedComputeType)) {
+                  const cudaError = new Error('Admitted Linux CUDA transcription did not report CUDA float16 execution.');
+                  cudaError.code = 'LINUX_CUDA_DEVICE_MISMATCH';
+                  reject(cudaError);
+                  return;
+                }
+              }
               const actualDevice = typeof result.device === 'string' && result.device.trim()
                 ? result.device.trim().toLowerCase()
                 : device;
@@ -1110,6 +1120,10 @@ function createTranscriptionService(deps) {
     // Linux CUDA is an explicitly admitted profile, unlike Windows' optional
     // acceleration. A fresh non-ready status must never turn into auto/CPU.
     if (process.platform === 'linux') {
+      if (process.arch !== 'x64') {
+        if (typeof beforeSpawn === 'function') beforeSpawn();
+        return runTranscriptionProcess({ audioFile, language, modelSize, device: 'cpu', registerProcess });
+      }
       const status = typeof resolveCudaStatusForTranscription === 'function'
         ? await resolveCudaStatusForTranscription({ registerProcess })
         : null;
@@ -2657,6 +2671,7 @@ function createTranscriptionService(deps) {
     buildDiarizationChildEnv,
     canStartGuidedDiarization,
     runTranscriptionProcess,
+    runNormalTranscriptionWithCudaFallback,
     cleanupGuidedTranscriptTempFiles,
     runMeetingTranscriptionJob,
     admitMeetingTranscriptionJob,

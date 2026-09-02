@@ -30,8 +30,14 @@ function buildTranscriberArgs({ platform, arch, extraArgs = [] } = {}) {
   return buildPythonModuleArgs(getTranscriberModule(platform, arch), extraArgs);
 }
 
-function resolveFasterWhisperCliDevice(platform, device = 'auto', { linuxCudaEnabled = false } = {}) {
-  return platform === 'linux' && !linuxCudaEnabled ? 'cpu' : device;
+function resolveFasterWhisperCliDevice(platform, device = 'auto', {
+  linuxCudaEnabled = false,
+  arch = process.arch,
+} = {}) {
+  if (platform === 'linux' && (!linuxCudaEnabled || arch !== 'x64')) {
+    return 'cpu';
+  }
+  return device;
 }
 
 function appendFasterWhisperDeviceArgs(extraArgs, {
@@ -43,7 +49,10 @@ function appendFasterWhisperDeviceArgs(extraArgs, {
   if (platform === 'darwin' && arch === 'arm64') {
     return extraArgs;
   }
-  extraArgs.push('--device', resolveFasterWhisperCliDevice(platform, device, { linuxCudaEnabled }));
+  extraArgs.push('--device', resolveFasterWhisperCliDevice(platform, device, {
+    linuxCudaEnabled,
+    arch,
+  }));
   return extraArgs;
 }
 

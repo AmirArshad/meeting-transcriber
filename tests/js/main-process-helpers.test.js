@@ -1516,8 +1516,12 @@ test('transcription CUDA installer only targets CTranslate2 runtime libraries', 
 test('Linux transcription CLI accepts CUDA only after explicit runtime admission', () => {
   assert.equal(resolveFasterWhisperCliDevice('linux', 'cuda'), 'cpu');
   assert.equal(
-    resolveFasterWhisperCliDevice('linux', 'cuda', { linuxCudaEnabled: true }),
+    resolveFasterWhisperCliDevice('linux', 'cuda', { linuxCudaEnabled: true, arch: 'x64' }),
     'cuda',
+  );
+  assert.equal(
+    resolveFasterWhisperCliDevice('linux', 'cuda', { linuxCudaEnabled: true, arch: 'arm64' }),
+    'cpu',
   );
   assert.deepEqual(
     buildTranscriptionCliArgs({
@@ -1536,39 +1540,42 @@ test('Linux transcription CLI accepts CUDA only after explicit runtime admission
   );
 });
 
-test('managed Linux CUDA library paths reject untrusted directories and preserve inherited lookup', () => {
+test('managed Linux CUDA library paths reject untrusted directories and ignore inherited lookup', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-linux-cuda-lib-'));
+  const cublas = path.join(root, 'nvidia', 'cublas', 'lib');
+  const cudnn = path.join(root, 'nvidia', 'cudnn', 'lib');
+  fs.mkdirSync(cublas, { recursive: true });
+  fs.mkdirSync(cudnn, { recursive: true });
   assert.equal(
     buildManagedLinuxCudaLibraryPath({
-      managedRoot: '/home/alice/.config/avanevis/ai-addons/cuda',
-      libraryDirs: [
-        '/home/alice/.config/avanevis/ai-addons/cuda/nvidia/cublas/lib',
-        '/home/alice/.config/avanevis/ai-addons/cuda/nvidia/cudnn/lib',
-      ],
+      managedRoot: root,
+      libraryDirs: [cublas, cudnn],
       inheritedLibraryPath: '/usr/lib:/lib',
+      fsModule: fs,
     }),
-    '/home/alice/.config/avanevis/ai-addons/cuda/nvidia/cublas/lib:/home/alice/.config/avanevis/ai-addons/cuda/nvidia/cudnn/lib:/usr/lib:/lib',
+    `${cublas}:${cudnn}`,
   );
   assert.throws(
     () => buildManagedLinuxCudaLibraryPath({
-      managedRoot: '/home/alice/.config/avanevis/ai-addons/cuda',
+      managedRoot: root,
       libraryDirs: ['/usr/lib'],
+      fsModule: fs,
     }),
-    /outside the managed runtime root/,
+    /escapes the managed CUDA runtime root/,
   );
   assert.throws(
     () => buildManagedLinuxCudaLibraryPath({
-      managedRoot: '/home/alice/.config/avanevis/ai-addons/cuda',
+      managedRoot: root,
       libraryDirs: ['relative/lib'],
+      fsModule: fs,
     }),
     /absolute/,
   );
   assert.throws(
     () => buildManagedLinuxCudaLibraryPath({
-      managedRoot: '/home/alice/.config/avanevis/ai-addons/cuda',
-      libraryDirs: [
-        '/home/alice/.config/avanevis/ai-addons/cuda/nvidia/cublas/lib',
-        '/home/alice/.config/avanevis/ai-addons/cuda/nvidia/cublas/lib',
-      ],
+      managedRoot: root,
+      libraryDirs: [cublas, cublas],
+      fsModule: fs,
     }),
     /duplicate/,
   );
@@ -1649,6 +1656,10 @@ test('cudaStatusNeedsGpuRuntimeEnsure only targets recoverable runtime states', 
     statusCode: 'deviceUnavailable',
     deviceAvailable: false,
   }), false);
+  assert.equal(cudaStatusNeedsGpuRuntimeEnsure({
+    installed: false,
+    statusCode: 'runtimeIntegrityFailed',
+  }), true);
 });
 
 test('selectGpuInstallModeForCudaStatus prefers repair for drifted runtimes', () => {
@@ -1657,6 +1668,9 @@ test('selectGpuInstallModeForCudaStatus prefers repair for drifted runtimes', ()
   }), 'repair');
   assert.equal(selectGpuInstallModeForCudaStatus({
     statusCode: 'missingLibraries',
+  }), 'repair');
+  assert.equal(selectGpuInstallModeForCudaStatus({
+    statusCode: 'runtimeIntegrityFailed',
   }), 'repair');
   assert.equal(selectGpuInstallModeForCudaStatus({
     statusCode: 'runtimeUnavailable',
@@ -1827,6 +1841,36 @@ test('parseCheckCudaStatus accepts JSON probe output', () => {
   assert.deepEqual(status.missingLibraries, ['cublas64_12.dll', 'cudnn64_9.dll']);
   assert.equal(status.statusCode, 'missingLibraries');
   assert.match(status.error, /cublas64_12\.dll not found/);
+});
+
+test('parseCheckCudaStatus preserves backend probeError instead of recomputing deviceUnavailable', () => {
+  const status = parseCheckCudaStatus(JSON.stringify({
+    deviceAvailable: false,
+    runtimeLoadable: false,
+    missingLibraries: [],
+    runtime: 'ctranslate2',
+    matchedProfile: '',
+    installedProfile: '',
+    unsupportedDetectedProfiles: [],
+    supportedProfiles: ['cuda12'],
+    recommendedInstallProfile: 'cuda12',
+    statusCode: 'probeError',
+    error: 'nvidia-smi was not found on PATH.',
+  }));
+  assert.equal(status.statusCode, 'probeError');
+  assert.equal(status.installed, false);
+  assert.match(status.error, /nvidia-smi/);
+});
+
+test('parseCheckCudaStatus treats invalid JSON as probeError', () => {
+  const status = parseCheckCudaStatus('{not-json');
+  assert.equal(status.statusCode, 'probeError');
+  assert.match(status.error, /invalid JSON/);
+});
+
+test('parseCheckCudaStatus treats empty output as probeError', () => {
+  const status = parseCheckCudaStatus('');
+  assert.equal(status.statusCode, 'probeError');
 });
 
 test('parseCheckCudaStatus JSON ignores multiline error without inventing keys', () => {

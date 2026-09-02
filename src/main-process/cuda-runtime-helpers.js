@@ -145,38 +145,18 @@ function getManagedLinuxCudaLibraryDirs(managedRoot = '') {
   ];
 }
 
-function buildManagedLinuxCudaLibraryPath({
-  managedRoot = '',
-  libraryDirs = [],
-  inheritedLibraryPath = '',
-} = {}) {
-  if (!managedRoot || !path.isAbsolute(managedRoot)) {
-    throw new Error('Managed CUDA runtime root must be an absolute path.');
-  }
-  const resolvedRoot = path.resolve(managedRoot);
-  const resolvedDirs = [];
-  const seenDirs = new Set();
-  for (const libraryDir of libraryDirs) {
-    if (!libraryDir || !path.isAbsolute(libraryDir)) {
-      throw new Error('Managed CUDA library directories must be absolute paths.');
-    }
-    const resolvedDir = path.resolve(libraryDir);
-    const relative = path.relative(resolvedRoot, resolvedDir);
-    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-      throw new Error('Managed CUDA library directory is outside the managed runtime root.');
-    }
-    if (seenDirs.has(resolvedDir)) {
-      throw new Error('Managed CUDA library directories must not contain a duplicate.');
-    }
-    seenDirs.add(resolvedDir);
-    resolvedDirs.push(resolvedDir);
-  }
-  if (resolvedDirs.length === 0) {
-    throw new Error('Managed CUDA library directories must not be empty.');
-  }
-  return inheritedLibraryPath
-    ? [...resolvedDirs, inheritedLibraryPath].join(path.delimiter)
-    : resolvedDirs.join(path.delimiter);
+function buildManagedLinuxCudaLibraryPath(options = {}) {
+  const {
+    buildContainedLinuxCudaLibraryPath,
+  } = require('./linux-cuda-runtime-helpers');
+  // Inherited LD_LIBRARY_PATH is intentionally ignored. Hostile or stale
+  // loader paths must not ride along with the managed runtime.
+  return buildContainedLinuxCudaLibraryPath({
+    managedRoot: options.managedRoot,
+    libraryDirs: options.libraryDirs,
+    driverLibraryDirs: options.driverLibraryDirs || [],
+    fsModule: options.fsModule,
+  });
 }
 
 function getCudaRuntimeProfile(profileId = DEFAULT_TRANSCRIPTION_CUDA_PROFILE_ID) {
@@ -199,9 +179,11 @@ function getRequiredCudaRuntimeDlls(profileId = DEFAULT_TRANSCRIPTION_CUDA_PROFI
 function getRequiredCudaRuntimeLibraries(profileId = DEFAULT_TRANSCRIPTION_CUDA_PROFILE_ID, { platform = process.platform } = {}) {
   const profile = getCudaRuntimeProfile(profileId);
   if (!profile) return [];
-  return platform === 'linux'
-    ? [...(profile.requiredSharedLibraries || [])]
-    : [...profile.requiredDlls];
+  if (platform === 'linux') {
+    const { getLinuxCudaProbeLibraryFileNames } = require('./linux-cuda-runtime-catalog');
+    return getLinuxCudaProbeLibraryFileNames();
+  }
+  return [...profile.requiredDlls];
 }
 
 function getTranscriptionCudaPackages(profileId = DEFAULT_TRANSCRIPTION_CUDA_PROFILE_ID) {
@@ -310,7 +292,8 @@ function cudaStatusNeedsGpuRuntimeEnsure(status = {}) {
   }
   return statusCode === 'missingLibraries'
     || statusCode === 'unsupportedRuntimeMajor'
-    || statusCode === 'runtimeUnavailable';
+    || statusCode === 'runtimeUnavailable'
+    || statusCode === 'runtimeIntegrityFailed';
 }
 
 function selectGpuInstallModeForCudaStatus(status = {}, { forceRepair = false } = {}) {
@@ -318,7 +301,7 @@ function selectGpuInstallModeForCudaStatus(status = {}, { forceRepair = false } 
     return 'repair';
   }
   const statusCode = String(status.statusCode || '').trim();
-  if (statusCode === 'unsupportedRuntimeMajor' || statusCode === 'missingLibraries') {
+  if (statusCode === 'unsupportedRuntimeMajor' || statusCode === 'missingLibraries' || statusCode === 'runtimeIntegrityFailed') {
     return 'repair';
   }
   return 'install';
@@ -372,8 +355,8 @@ function parseCheckCudaStatus(output = '') {
       runtimeLoadable: false,
       missingLibraries: [],
       runtime: 'ctranslate2',
-      error: '',
-      statusCode: 'deviceUnavailable',
+      error: 'CUDA probe produced no output.',
+      statusCode: 'probeError',
       matchedProfile: '',
       installedProfile: '',
       supportedProfiles: getSupportedTranscriptionCudaProfileIds(),
@@ -385,11 +368,13 @@ function parseCheckCudaStatus(output = '') {
   // Prefer a single JSON object (current probe format). Fall back to legacy
   // key:value lines for older probe builds / hand-crafted test fixtures.
   let values = null;
+  let backendStatusCode = '';
   const jsonCandidate = raw.split(/\r?\n/).map((line) => line.trim()).find((line) => line.startsWith('{'));
   if (jsonCandidate) {
     try {
       const parsed = JSON.parse(jsonCandidate);
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        backendStatusCode = String(parsed.statusCode || '').trim();
         values = {
           deviceAvailable: parsed.deviceAvailable === true || parsed.deviceAvailable === 'True' || parsed.deviceAvailable === 'true'
             ? 'True'
@@ -411,10 +396,24 @@ function parseCheckCudaStatus(output = '') {
             ? parsed.supportedProfiles.join(',')
             : String(parsed.supportedProfiles || ''),
           recommendedInstallProfile: parsed.recommendedInstallProfile || DEFAULT_TRANSCRIPTION_CUDA_PROFILE_ID,
+          deviceProbe: parsed.deviceProbe || null,
         };
       }
     } catch (_error) {
-      values = null;
+      return {
+        installed: false,
+        deviceAvailable: false,
+        runtimeLoadable: false,
+        missingLibraries: [],
+        runtime: 'ctranslate2',
+        error: 'CUDA probe returned invalid JSON.',
+        statusCode: 'probeError',
+        matchedProfile: '',
+        installedProfile: '',
+        supportedProfiles: getSupportedTranscriptionCudaProfileIds(),
+        unsupportedDetectedProfiles: [],
+        recommendedInstallProfile: DEFAULT_TRANSCRIPTION_CUDA_PROFILE_ID,
+      };
     }
   }
 
@@ -433,6 +432,7 @@ function parseCheckCudaStatus(output = '') {
       const value = line.slice(separator + 1).trim();
       values[key] = value;
     }
+    backendStatusCode = String(values.statusCode || '').trim();
   }
 
   const deviceAvailable = values.deviceAvailable === 'True' || values.deviceAvailable === 'true';
@@ -454,12 +454,16 @@ function parseCheckCudaStatus(output = '') {
     .map((item) => item.trim())
     .filter(Boolean);
   const recommendedInstallProfile = values.recommendedInstallProfile || DEFAULT_TRANSCRIPTION_CUDA_PROFILE_ID;
-  const statusCode = classifyCudaProbeStatus({
+  const classifiedStatusCode = classifyCudaProbeStatus({
     deviceAvailable,
     runtimeLoadable,
     missingLibraries,
     unsupportedDetectedProfiles,
   });
+  const { isKnownCudaProbeStatusCode } = require('./linux-cuda-runtime-helpers');
+  const statusCode = isKnownCudaProbeStatusCode(backendStatusCode)
+    ? backendStatusCode
+    : classifiedStatusCode;
   const installedProfile = resolveCudaInstalledProfile({
     matchedProfile,
     installedProfile: rawInstalledProfile,
@@ -467,7 +471,7 @@ function parseCheckCudaStatus(output = '') {
   });
 
   return {
-    installed: Boolean(deviceAvailable && runtimeLoadable && missingLibraries.length === 0),
+    installed: Boolean(deviceAvailable && runtimeLoadable && missingLibraries.length === 0 && statusCode === 'ready'),
     deviceAvailable,
     runtimeLoadable,
     missingLibraries,
@@ -479,6 +483,7 @@ function parseCheckCudaStatus(output = '') {
     supportedProfiles: supportedProfiles.length ? supportedProfiles : getSupportedTranscriptionCudaProfileIds(),
     unsupportedDetectedProfiles,
     recommendedInstallProfile,
+    deviceProbe: values.deviceProbe || null,
   };
 }
 
