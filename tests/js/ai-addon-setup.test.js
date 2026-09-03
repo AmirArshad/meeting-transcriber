@@ -2178,6 +2178,54 @@ test('setup summary model cancellation cleans partial cache and resets state', a
   assert.ok(fsModule.removed.includes(getSummaryRuntimeDir('/tmp/AvaNevis', artifact)));
 });
 
+test('summary model cancellation preserves a previously valid runtime', async () => {
+  const fsModule = createMemoryFs();
+  const catalog = createCatalogWithPinnedSummaryArtifact({
+    sha256: CHECKSUM_TARGET_SHA256,
+  });
+  const userDataDir = '/tmp/AvaNevis';
+  const artifact = getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog);
+  const artifactPath = getSummaryArtifactPath(userDataDir, artifact);
+  const runtimeExecutable = getSummaryRuntimeExecutablePath(userDataDir, artifact, catalog.summary.runtimeArtifacts['win32-x64']);
+  fsModule.mkdirSync(path.dirname(artifactPath));
+  fsModule.writeFileSync(artifactPath, 'corrupt previous model');
+  fsModule.mkdirSync(path.dirname(runtimeExecutable));
+  fsModule.writeFileSync(runtimeExecutable, 'previous runtime');
+  const controller = new AbortController();
+
+  const status = await setupSummaryModel({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    engine: 'pyannote',
+    modelId: 'summary-model',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog,
+    cancelSignal: controller.signal,
+    downloader: async ({ url, destinationPath }) => {
+      if (url.endsWith('/runtime.zip')) {
+        throw new Error('runtime should not be redownloaded');
+      }
+      fsModule.writeFileSync(destinationPath, 'partial model');
+      controller.abort();
+      const error = new Error('Summary model setup was canceled.');
+      error.name = 'AbortError';
+      throw error;
+    },
+  });
+
+  assert.equal(status.features.summary.status, 'notConfigured');
+  assert.equal(status.features.summary.error, null);
+  assert.equal(fsModule.existsSync(getSummaryArtifactPath(userDataDir, artifact)), false);
+  assert.equal(fsModule.existsSync(runtimeExecutable), true);
+  assert.equal(
+    fsModule.removed.includes(getSummaryRuntimeDir(userDataDir, artifact)),
+    false,
+    'canceled model setup must not remove the previously valid runtime',
+  );
+});
+
 test('summary validation failure removes runtime installed during failed setup', async () => {
   const fsModule = createMemoryFs();
   const catalog = createCatalogWithPinnedSummaryArtifact({
@@ -2244,6 +2292,85 @@ test('summary cancellation during validation preserves pre-existing ready cache'
   assert.equal(fsModule.existsSync(runtimeExecutable), true);
   assert.equal(fsModule.removed.length, 0);
   assert.match(status.features.summary.lastValidation.message, /Existing local model and runtime were kept/);
+});
+
+test('summary cancellation during validation preserves a valid model when runtime was incomplete', async () => {
+  const fsModule = createMemoryFs();
+  const catalog = createCatalogWithPinnedSummaryArtifact({
+    sha256: CHECKSUM_TARGET_SHA256,
+  });
+  const userDataDir = '/tmp/AvaNevis';
+  const artifact = getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog);
+  const artifactPath = getSummaryArtifactPath(userDataDir, artifact);
+  const runtimeDir = getSummaryRuntimeDir(userDataDir, artifact);
+  fsModule.mkdirSync(path.dirname(artifactPath));
+  fsModule.writeFileSync(artifactPath, 'checksum target\n');
+  const controller = new AbortController();
+
+  const status = await setupSummaryModel({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    engine: 'pyannote',
+    modelId: 'summary-model',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog,
+    cancelSignal: controller.signal,
+    downloader: async ({ destinationPath }) => fsModule.writeFileSync(destinationPath, 'runtime archive\n'),
+    extractor: async () => fsModule.writeFileSync(
+      path.join(runtimeDir, 'extract', 'llama-cli.exe'),
+      'bin',
+    ),
+    runtimeValidator: async () => {
+      controller.abort();
+      const error = new Error('aborted');
+      error.name = 'AbortError';
+      throw error;
+    },
+  });
+
+  assert.equal(status.features.summary.status, 'notConfigured');
+  assert.equal(fsModule.existsSync(artifactPath), true);
+  assert.equal(fsModule.existsSync(runtimeDir), false);
+});
+
+test('summary cancellation during validation preserves a valid runtime when model was incomplete', async () => {
+  const fsModule = createMemoryFs();
+  const catalog = createCatalogWithPinnedSummaryArtifact({
+    sha256: CHECKSUM_TARGET_SHA256,
+  });
+  const userDataDir = '/tmp/AvaNevis';
+  const artifact = getSummaryArtifactForPlatform('summary-model', 'win32', 'x64', catalog);
+  const artifactPath = getSummaryArtifactPath(userDataDir, artifact);
+  const runtimeDir = getSummaryRuntimeDir(userDataDir, artifact);
+  const runtimeExecutable = path.join(runtimeDir, 'extract', 'llama-cli.exe');
+  fsModule.mkdirSync(path.dirname(runtimeExecutable));
+  fsModule.writeFileSync(runtimeExecutable, 'bin');
+  const controller = new AbortController();
+
+  const status = await setupSummaryModel({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    engine: 'pyannote',
+    modelId: 'summary-model',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog,
+    cancelSignal: controller.signal,
+    downloader: async ({ destinationPath }) => fsModule.writeFileSync(destinationPath, 'checksum target\n'),
+    runtimeValidator: async () => {
+      controller.abort();
+      const error = new Error('aborted');
+      error.name = 'AbortError';
+      throw error;
+    },
+  });
+
+  assert.equal(status.features.summary.status, 'notConfigured');
+  assert.equal(fsModule.existsSync(artifactPath), false);
+  assert.equal(fsModule.existsSync(runtimeExecutable), true);
 });
 
 test('remove summary model clears cache and manifest state', async () => {

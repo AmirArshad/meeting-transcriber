@@ -443,7 +443,10 @@ async function setupSummaryModel({
       rmSync(getSummaryRuntimeDir(userDataDir, artifact), { recursive: true, force: true });
     }
     if (includeModel) {
-      rmSync(getSummaryModelCacheDir(userDataDir, selectedModelId), { recursive: true, force: true });
+      // The runtime is stored beneath the model cache directory. Remove only
+      // the model artifact so canceling a replacement download cannot delete
+      // a previously valid runtime.
+      rmSync(getSummaryArtifactPath(userDataDir, artifact), { force: true });
     }
   };
   if (cache.valid && runtimeCache.valid) {
@@ -741,7 +744,10 @@ async function setupSummaryModel({
       const message = hadValidModelBeforeSetup && hadValidRuntimeBeforeSetup
         ? 'Summary model setup was canceled. Existing local model and runtime were kept.'
         : 'Summary model setup was canceled. Partial downloads were removed.';
-      cleanupDownloadedSummaryArtifacts({ includeModel: status !== 'ready', includeRuntime: status !== 'ready' });
+      cleanupDownloadedSummaryArtifacts({
+        includeModel: !hadValidModelBeforeSetup,
+        includeRuntime: !hadValidRuntimeBeforeSetup,
+      });
       updateManifestFeature({
         userDataDir,
         feature: 'summary',
