@@ -179,6 +179,9 @@ jobs:
     - name: Install Node dependencies
       run: npm ci
 
+    - name: Run frontend regression tests
+      run: npm run test:js
+
     - name: Speakrs CPU-mode inference smoke
       run: node scripts/run-speakrs-cpu-smoke.js --cli native/speakrs-cli/target/aarch64-apple-darwin/release/speakrs-cli
 
