@@ -946,6 +946,37 @@ function createTranscriptionService(deps) {
     };
   }
 
+  /**
+   * True only when the user actually opted into speaker identification and the
+   * install is expected to work. `notConfigured` / `downloading` / `validating`
+   * are ordinary opt-out states, NOT failures: `packCache.reason` and
+   * `runtimeCache.reason` are non-null whenever the artifacts are simply absent
+   * (see `checkSpeakrsModelCache` / `checkSpeakrsRuntimeCache` in
+   * `src/ai-addon/manifest-store.js`). Treating those reasons as failures makes
+   * every meeting on every platform carry durable `ai.diarization` error
+   * metadata for a feature the user never enabled.
+   */
+  function isDiarizationFailureExpectedToRun(diarizationStatus) {
+    if (!diarizationStatus) {
+      return false;
+    }
+    return diarizationStatus.status === 'error' || diarizationStatus.setupComplete === true;
+  }
+
+  /**
+   * Mirrors the cache gating in `requireDiarizationComputeAdmission`: a `reason`
+   * is only meaningful when the matching cache is actually invalid.
+   */
+  function resolveSpeakrsFailureReason(engine, diarizationStatus) {
+    if (engine !== 'speakrs' || !isDiarizationFailureExpectedToRun(diarizationStatus)) {
+      return null;
+    }
+    return diarizationStatus.error
+      || (diarizationStatus.runtimeCache?.valid !== true ? diarizationStatus.runtimeCache?.reason : null)
+      || (diarizationStatus.packCache?.valid !== true ? diarizationStatus.packCache?.reason : null)
+      || null;
+  }
+
   async function resolveGuidedDiarizationStatus({ registerProcess } = {}) {
     let diarizationAvailability = null;
     let diarizationStatus = null;
@@ -980,11 +1011,7 @@ function createTranscriptionService(deps) {
           requiredDevice: diarizationAvailability.runtimeDevice,
         };
       }
-      const speakrsFailure = engine === 'speakrs' && diarizationStatus
-        ? diarizationStatus.error
-          || diarizationStatus.runtimeCache?.reason
-          || diarizationStatus.packCache?.reason
-        : null;
+      const speakrsFailure = resolveSpeakrsFailureReason(engine, diarizationStatus);
       if (speakrsFailure) {
         sendToRenderer(
           'transcription-progress',
@@ -1000,11 +1027,22 @@ function createTranscriptionService(deps) {
         };
       }
     } catch (error) {
+      // Pyannote is deliberately hidden and unavailable on Linux, so the policy
+      // gate is an expected outcome, not a per-meeting fault. Announcing it on
+      // every recording is noise, and stamping durable `ai.diarization` error
+      // metadata for a hidden engine is wrong. Other errors keep their
+      // diagnostic progress line below.
+      if (error && error.code === 'LINUX_PYANNOTE_UNAVAILABLE') {
+        return null;
+      }
       sendToRenderer(
         'transcription-progress',
         `Speaker identification status unavailable; continuing with normal transcription. ${error.message}\n`,
       );
-      if (diarizationAvailability && diarizationAvailability.runtimeDevice) {
+      // Only surface a durable failure when the user actually configured the
+      // feature. If the status probe itself threw we cannot tell, so degrade
+      // silently rather than inventing an error for an opt-out user.
+      if (diarizationAvailability && diarizationAvailability.runtimeDevice && isDiarizationFailureExpectedToRun(diarizationStatus)) {
         return {
           engine,
           modelId: diarizationStatus && diarizationStatus.modelId || null,
@@ -1083,11 +1121,11 @@ function createTranscriptionService(deps) {
     return { speakerSidecarPath, meeting: updatedMeeting };
   }
 
-  async function persistDiarizationFailureArtifacts(meeting, diarizationStatus, errorMessage) {
-    if (!meeting || !meeting.id || typeof updateMeetingAiMetadata !== 'function') {
-      return meeting;
+  async function persistDiarizationFailureArtifacts(meetingId, diarizationStatus, errorMessage) {
+    if (!meetingId || typeof updateMeetingAiMetadata !== 'function') {
+      return null;
     }
-    return updateMeetingAiMetadataBounded(meeting.id, {
+    return updateMeetingAiMetadataBounded(meetingId, {
       diarization: buildGuidedDiarizationAiMetadata({
         diarizationStatus,
         status: 'error',
@@ -1275,6 +1313,12 @@ function createTranscriptionService(deps) {
     let guidedDiarizationStatus = null;
     let guidedDiarizationResult = null;
     let guidedTranscriptionError = null;
+    // Lowest-priority failure: "speaker ID could not even be admitted". Any
+    // concrete downstream failure (guided run, post-pass, sidecar write) is
+    // strictly more informative and must win, so this is kept separate rather
+    // than pre-seeding `guidedTranscriptionError` and being masked by `||`.
+    let admissionDiarizationError = null;
+    const resolveDiarizationFailure = () => guidedTranscriptionError || admissionDiarizationError;
     let postPassDiarizationResult = null;
     let result = null;
     let updatedMeeting = null;
@@ -1359,7 +1403,7 @@ function createTranscriptionService(deps) {
         });
         throwIfJobBlocked(meetingId, epoch);
         if (guidedDiarizationStatus && guidedDiarizationStatus.error) {
-          guidedTranscriptionError = new Error(guidedDiarizationStatus.error);
+          admissionDiarizationError = new Error(guidedDiarizationStatus.error);
         }
         const canRunGuidedTranscription = guidedDiarizationStatus && !guidedDiarizationStatus.error;
         const timeoutMs = canRunGuidedTranscription
@@ -1516,7 +1560,12 @@ function createTranscriptionService(deps) {
         // diarization became ready while the job was queued. Runs on its own
         // wall clock with the diarization budget (like the pre-queue design),
         // and failures degrade to diarization error metadata.
-        if (!guidedDiarizationResult) {
+        //
+        // Skipped when head admission already returned a terminal failure: the
+        // answer cannot change within one job, and re-probing costs another
+        // CUDA probe child plus a full `computeAdmission` status hash while
+        // still holding the compute-queue slot (and warns the user twice).
+        if (!guidedDiarizationResult && !admissionDiarizationError) {
           throwIfJobBlocked(meetingId, epoch);
           const postPassStatus = await runWallClockComputeAction({
             timeoutMs: AI_COMPUTE_TIMEOUT_MS.diarization,
@@ -1595,7 +1644,7 @@ function createTranscriptionService(deps) {
           }
           if (postPassStatus && postPassStatus.error) {
             guidedDiarizationStatus = postPassStatus;
-            guidedTranscriptionError = guidedTranscriptionError || new Error(postPassStatus.error);
+            admissionDiarizationError = admissionDiarizationError || new Error(postPassStatus.error);
           }
         }
 
@@ -1648,11 +1697,11 @@ function createTranscriptionService(deps) {
             if (persisted && persisted.meeting) {
               updatedMeeting = persisted.meeting;
             }
-          } else if (guidedTranscriptionError && guidedDiarizationStatus && !isQuitCommitted()) {
+          } else if (resolveDiarizationFailure() && guidedDiarizationStatus && !isQuitCommitted()) {
             updatedMeeting = await persistDiarizationFailureArtifacts(
-              { ...(updatedMeeting || {}), id: meetingId },
+              meetingId,
               guidedDiarizationStatus,
-              guidedTranscriptionError.message,
+              resolveDiarizationFailure().message,
             ) || updatedMeeting;
           }
         } catch (sidecarError) {
@@ -1668,11 +1717,16 @@ function createTranscriptionService(deps) {
               `Could not save speaker identification metadata; the transcript itself is saved. ${sidecarError.message}\n`,
             );
             try {
-              updatedMeeting = await persistDiarizationFailureArtifacts(
-                { ...(updatedMeeting || {}), id: meetingId },
-                guidedDiarizationStatus,
-                sidecarError.message,
-              ) || updatedMeeting;
+              // Only stamp diarization error metadata when diarization was
+              // actually in play; a sidecar write failure with no diarization
+              // status must not invent an `ai.diarization` record.
+              if (guidedDiarizationStatus) {
+                updatedMeeting = await persistDiarizationFailureArtifacts(
+                  meetingId,
+                  guidedDiarizationStatus,
+                  sidecarError.message,
+                ) || updatedMeeting;
+              }
             } catch (metadataError) {
               // Best-effort only; the meeting is already completed.
             }
@@ -1712,7 +1766,7 @@ function createTranscriptionService(deps) {
           ? (guidedDiarizationResult.diarization || guidedDiarizationResult)
           : postPassDiarizationResult,
         diarizationStatus: guidedDiarizationStatus,
-        diarizationError: guidedTranscriptionError ? guidedTranscriptionError.message : null,
+        diarizationError: resolveDiarizationFailure() ? resolveDiarizationFailure().message : null,
         meeting: result.meeting || updatedMeeting,
       };
     } catch (error) {

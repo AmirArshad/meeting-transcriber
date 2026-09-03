@@ -577,6 +577,79 @@ acceptance rerun was used to establish this follow-up beyond the
 already-restored Ready check; guided jobs were exercised only as the
 cancel/quit lifecycle fixtures.
 
+### Task 5 adversarial review — never-installed Speakrs reported as a per-meeting failure (2026-09-03, defect + fix)
+
+**Status: Task 5 acceptance evidence partially invalidated.** The targeted
+adversarial review required before Task 5 acceptance was run against
+`3a58549..79a508f` and found a shipping defect in
+`resolveGuidedDiarizationStatus` (`src/main/transcription-service.js`).
+
+**Defect.** The fallback-metadata fix gated on
+`diarizationStatus.error || runtimeCache?.reason || packCache?.reason`. Those
+`reason` fields are non-null whenever the Speakrs artifacts are *merely absent*
+— `checkSpeakrsModelCache` returns `'Speakrs model pack is not installed.'` and
+`checkSpeakrsRuntimeCache` returns `'Speakrs ONNX Runtime is not installed.
+Missing: ...'` (`src/ai-addon/manifest-store.js`) — and a fresh manifest
+defaults to `engine: 'speakrs'` (`normalizeDiarizationSelection`,
+`src/ai-addon-state.js`). Nothing checked the owning
+`features.diarization.status`.
+
+**Blast radius.** Reproduced against the real derived status shape on
+`linux/x64` (`requiredDevice: cuda`), `win32/x64` (`cuda`) and `darwin/arm64`
+(`mps`). `getDiarizationAvailability` returns `supported: true` for Windows x64
+unconditionally, so every Windows x64 install was affected, not only
+CUDA-capable ones. For any user who never opted into speaker identification,
+each transcription wrote durable `ai.diarization = {status:'error', model:
+'speakrs-community1-vbx', error:'Speakrs ... is not installed.'}` into
+`meetings.json`, producing a permanent
+`Speaker identification failed for this recording.` banner
+(`src/renderer/app.js:3780-3786`) plus a warning log (`:4035`). The
+"Speaker identification is unavailable" progress line fired twice per meeting
+because the post-pass re-ran the same admission probe.
+
+**Impact on prior Task 5 evidence.** `removeDiarizationSetup` sets the manifest
+to `notConfigured` (`src/ai-addon/diarization-setup.js:1743`), and the Remove
+row ran before fallback fixtures `20260903_112216` / `20260903_112605`. Those
+fixtures therefore may have demonstrated the defect rather than the fallback
+criterion. `20260903_121531` is described only as a "model-missing run" and the
+recorded evidence does not state `features.diarization.status` at that moment,
+so it cannot be adjudicated from this document either. **The fallback row is
+re-opened; a rerun must record `features.diarization.status` and passes only
+when it is `error`.** `20260903_110001` remains the original historical
+omitted-metadata failure and is not rewritten.
+
+**Fix.** `resolveGuidedDiarizationStatus` now treats a cache `reason` as a
+failure only when `status === 'error'` or `setupComplete === true`, and only
+when the owning cache is actually `valid !== true` — matching the gating
+already used by `requireDiarizationComputeAdmission`. The Linux
+`LINUX_PYANNOTE_UNAVAILABLE` policy gate returns silently instead of stamping
+error metadata for a deliberately hidden engine; the catch-block fallback is
+gated the same way, so a transient status-probe throw degrades silently rather
+than inventing a durable failure. The post-pass no longer re-probes after a
+terminal admission failure (one fewer CUDA probe child and
+`computeAdmission` status hash inside the held compute slot, and one warning
+instead of two). An admission-level error no longer masks a concrete
+guided/post-pass/sidecar failure, and
+`persistDiarizationFailureArtifacts` takes a `meetingId` instead of a forged
+meeting object that silently defeated its own guard.
+
+**Regression coverage.** `tests/js/linux-cuda-transcription-admission.test.js`
+gained 13 tests: `{notConfigured, downloading, validating}` ×
+`{linux/x64, win32/x64, darwin/arm64}`, Linux-pyannote silence, a
+single-admission-probe assertion, an error-priority assertion, and a full-job
+"unconfigured writes no metadata" case. All 13 were confirmed to fail against
+`79a508f` and pass with the fix. `npm run test:all` is green (868 JS pass /
+0 fail / 1 skipped; 599 Python pass / 7 skipped; Python syntax clean). The two
+tests introduced by `79a508f` still pass unchanged — the fix preserves the
+intended installed-but-broken behaviour and only stops misclassifying
+"never installed".
+
+**Still required before Task 5 acceptance.** Packaged reruns on CachyOS
+x86_64 + RTX 4070 of the re-opened fallback row (recording
+`features.diarization.status`) and the new never-installed negative row, plus
+the equivalent never-installed check on Windows x64 and macOS arm64. See
+`tests/manual/local-ai-addons-checklist.md`.
+
 ## Interpreters used for this matrix
 
 | Interpreter | Where | ABI |

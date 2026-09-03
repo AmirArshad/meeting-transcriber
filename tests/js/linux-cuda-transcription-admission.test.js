@@ -171,6 +171,78 @@ test('Linux guided admission preserves Speakrs integrity failure for fallback me
   });
 });
 
+// `packCache.reason` / `runtimeCache.reason` are NON-NULL whenever the Speakrs
+// artifacts are merely absent — see `checkSpeakrsModelCache` (reason:
+// 'Speakrs model pack is not installed.') and `checkSpeakrsRuntimeCache`
+// (reason: 'Speakrs ONNX Runtime is not installed. Missing: ...') in
+// src/ai-addon/manifest-store.js. A fresh manifest also defaults to
+// `engine: 'speakrs'` (normalizeDiarizationSelection in src/ai-addon-state.js).
+// Reading those reasons without checking the owning status/`valid` turns "user
+// never enabled speaker identification" into a per-meeting failure.
+function diarizationFeature(overrides = {}) {
+  return {
+    features: {
+      diarization: {
+        status: 'notConfigured',
+        setupComplete: false,
+        engine: 'speakrs',
+        modelId: 'speakrs-community1-vbx',
+        speakerCount: 'auto',
+        error: null,
+        packCache: { valid: false, installed: false, reason: 'Speakrs model pack is not installed.' },
+        runtimeCache: { valid: false, installed: false, reason: 'Speakrs ONNX Runtime is not installed.' },
+        ...overrides,
+      },
+    },
+  };
+}
+
+for (const [platform, arch] of [['linux', 'x64'], ['win32', 'x64'], ['darwin', 'arm64']]) {
+  for (const status of ['notConfigured', 'downloading', 'validating']) {
+    test(`${platform}/${arch}: '${status}' speaker identification is not a per-meeting failure`, async () => {
+      await withProcess({ platform, arch }, async () => {
+        const progress = [];
+        const { service } = createLinuxTranscriptionService({
+          // macOS skips the extracted ORT runtime entirely (skipped/valid).
+          checkAiAddonSetupStatus: async () => diarizationFeature({
+            status,
+            runtimeCache: platform === 'darwin'
+              ? { valid: true, skipped: true, reason: null }
+              : { valid: false, installed: false, reason: 'Speakrs ONNX Runtime is not installed.' },
+          }),
+          sendToRenderer: (channel, payload) => {
+            if (channel === 'transcription-progress') progress.push(payload);
+          },
+        });
+
+        assert.equal(await service.resolveGuidedDiarizationStatus(), null);
+        assert.deepEqual(progress, []);
+      });
+    });
+  }
+}
+
+test('Linux pyannote selection stays silently unavailable instead of erroring every meeting', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    const progress = [];
+    const { service } = createLinuxTranscriptionService({
+      checkAiAddonSetupStatus: async () => diarizationFeature({
+        engine: 'pyannote',
+        modelId: 'pyannote-speaker-diarization-community-1',
+      }),
+      sendToRenderer: (channel, payload) => {
+        if (channel === 'transcription-progress') progress.push(payload);
+      },
+    });
+
+    // assertLinuxSpeakrsOnlyEngine throws LINUX_PYANNOTE_UNAVAILABLE; pyannote is
+    // deliberately hidden on Linux, so that policy gate must not be reported as a
+    // recording-level diarization failure.
+    assert.equal(await service.resolveGuidedDiarizationStatus(), null);
+    assert.deepEqual(progress, []);
+  });
+});
+
 const ADMISSION_ARGS = {
   audioFile: '/tmp/avanevis-test/recordings/meeting.opus',
   language: 'en',
@@ -411,6 +483,128 @@ test('Linux Speakrs pack failure persists diarization error metadata after ordin
       spawnCalls.some((call) => String((call.args || []).join(' ')).includes('guided')),
       false,
     );
+  });
+});
+
+function speakrsIntegrityFailureFeature() {
+  return diarizationFeature({
+    status: 'error',
+    runtimeCache: { valid: false, reason: 'Speakrs runtime integrity validation failed.' },
+  });
+}
+
+function fallbackJobMeeting() {
+  return {
+    id: '20260903_112605',
+    title: 'fallback fixture',
+    audioPath: '/tmp/avanevis-test/recordings/meeting_20260903_112605.wav',
+    transcriptPath: '/tmp/avanevis-test/recordings/meeting_20260903_112605.md',
+    durationSeconds: 14,
+  };
+}
+
+function fallbackJobOverrides(meeting, extra = {}) {
+  return {
+    enqueueAiComputeAction: async (action) => action(),
+    runWallClockComputeAction: async ({ label, action }) => {
+      const text = String(label || '');
+      if (text.startsWith('Meeting lookup')) return meeting;
+      if (text.startsWith('Meeting status update')) {
+        return { ...meeting, transcriptionStatus: 'completed', transcriptionDevice: 'cuda' };
+      }
+      return action((proc) => proc);
+    },
+    ...extra,
+  };
+}
+
+test('a terminal admission failure is not re-probed by the post-pass', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    const meeting = fallbackJobMeeting();
+    let admissionProbes = 0;
+    const progress = [];
+    const { service } = createLinuxTranscriptionService(fallbackJobOverrides(meeting, {
+      updateMeetingAiMetadata: async (meetingId, updates) => ({
+        ...meeting,
+        ai: { diarization: updates.diarization },
+      }),
+      checkAiAddonSetupStatus: async () => {
+        admissionProbes += 1;
+        return speakrsIntegrityFailureFeature();
+      },
+      sendToRenderer: (channel, payload) => {
+        if (channel === 'transcription-progress') progress.push(payload);
+      },
+    }));
+
+    await service.admitMeetingTranscriptionJob({ meetingId: meeting.id, language: 'en', modelSize: 'tiny' });
+
+    // Re-probing costs another CUDA probe child plus a full computeAdmission
+    // status hash inside the held compute slot, and warns the user twice, for
+    // an answer that cannot change within a single job.
+    assert.equal(admissionProbes, 1);
+    assert.equal(
+      progress.filter((line) => line.includes('Speaker identification is unavailable')).length,
+      1,
+    );
+  });
+});
+
+test('a concrete sidecar failure outranks the admission-level diarization error', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    const meeting = fallbackJobMeeting();
+    const aiUpdates = [];
+    const { service } = createLinuxTranscriptionService(fallbackJobOverrides(meeting, {
+      checkAiAddonSetupStatus: async () => speakrsIntegrityFailureFeature(),
+      updateMeetingAiMetadata: async (meetingId, updates) => {
+        aiUpdates.push(updates.diarization);
+        if (aiUpdates.length === 1) {
+          throw new Error('meetings.json is locked by another process.');
+        }
+        return { ...meeting, ai: { diarization: updates.diarization } };
+      },
+    }));
+
+    const result = await service.admitMeetingTranscriptionJob({
+      meetingId: meeting.id,
+      language: 'en',
+      modelSize: 'tiny',
+    });
+
+    // The admission error is the least informative failure available; the real
+    // persistence fault must not be masked by it.
+    assert.equal(aiUpdates[0].error, 'Speakrs runtime integrity validation failed.');
+    assert.equal(aiUpdates[1].error, 'meetings.json is locked by another process.');
+    assert.equal(result.diarizationError, 'meetings.json is locked by another process.');
+  });
+});
+
+test('an unconfigured Speakrs install writes no diarization metadata for a completed job', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    const meeting = fallbackJobMeeting();
+    const aiUpdates = [];
+    const progress = [];
+    const { service } = createLinuxTranscriptionService(fallbackJobOverrides(meeting, {
+      checkAiAddonSetupStatus: async () => diarizationFeature(),
+      updateMeetingAiMetadata: async (meetingId, updates) => {
+        aiUpdates.push(updates);
+        return meeting;
+      },
+      sendToRenderer: (channel, payload) => {
+        if (channel === 'transcription-progress') progress.push(payload);
+      },
+    }));
+
+    const result = await service.admitMeetingTranscriptionJob({
+      meetingId: meeting.id,
+      language: 'en',
+      modelSize: 'tiny',
+    });
+
+    assert.equal(result.transcriptionDevice || result.device, 'cuda');
+    assert.equal(result.diarizationError, null);
+    assert.deepEqual(aiUpdates, []);
+    assert.deepEqual(progress.filter((line) => line.includes('Speaker identification')), []);
   });
 });
 
