@@ -118,17 +118,18 @@ Core Beta Omarchy remains fail-closed for add-ons. On the accepted CachyOS + RTX
 - [x] **Fail-closed preflight:** On the rebuilt packaged app, removing the managed CUDA tree and restarting produced `checkCUDA.runtimeLoadable: false` / `statusCode: "missingLibraries"` and a diarization card with `status: "unsupported"` plus the managed CUDA 12/GPU reason; no CPU fallback was offered. Non-ready probe statuses and non-x64 admission remain covered by `linux-cuda-transcription-admission.test.js`.
 - [x] Record hashes, device, sidecar schema, and child-process cleanup in `docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md`. Evidence for the 2026-09-03 packaged rerun is recorded there; the earlier `20260903_110001` metadata omission remains a superseded historical failure. Task 5 is not formally accepted until the equivalent never-installed check passes on Windows x64 and macOS arm64.
 
-## Linux Qwen summaries (CachyOS x86_64 + RTX 4070 — active Task 6)
+## Linux Qwen summaries (CachyOS x86_64 + RTX 4070 — Task 6)
 
-The runtime decision and packaged inference evidence are recorded; final
-acceptance remains open only for the quit-during-metadata row. Reuse the
-existing Windows/macOS summary flow and shared queues. Do not substitute CPU,
-Vulkan, SYCL, ROCm, cloud, or ambient `LD_LIBRARY_PATH` behavior.
+The runtime decision and packaged inference evidence are recorded, including
+the quit-during-metadata row. Reuse the existing Windows/macOS summary flow
+and shared queues. Do not substitute CPU, Vulkan, SYCL, ROCm, cloud, or
+ambient `LD_LIBRARY_PATH` behavior.
 
 - [x] Pin and document the Qwen GGUF and Linux CUDA llama.cpp runtime: immutable HTTPS URLs, exact sizes and SHA-256 values, licenses, archive layout, Qwen3.5 compatibility, reasoning-disabled flags, and the complete verified shared-library closure. Catalog and evidence: [`V2_9_DEPENDENCY_COMPATIBILITY.md`](../../docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md).
 - [x] Setup is explicit and local-only: managed `userData` cache, allowlisted downloads, safe staged extraction, full-hash validation, no Hugging Face/diarization token access, and cancellation cleanup that preserves any prior valid install. Automated structural coverage and packaged setup/Ready evidence passed.
 - [x] Status remains `unsupported` unless Linux x86_64 NVIDIA detection, managed CUDA admission, runtime/model integrity, and packaged-path validation all pass. Generation uses `aiComputeActionQueue` and the shared GPU resource queue, with wall-clock cancellation and quit cleanup. Packaged status/generation evidence passed on 2026-09-03.
-- [ ] On packaged CachyOS + RTX 4070, complete the remaining quit-during-metadata-finalization check. The 2026-09-03 smoke observed setup/Ready, offline CUDA generation, JSON/Markdown sidecars, metadata and `sourceTranscriptHash`, cancellation, settled queue, device/runtime/model versions, approximately 15-second timing, 6,250 MiB peak VRAM, and no lingering `llama-cli`/Python children. Only the existing profile, model, generatedAt, sourceTranscriptHash, and sidecar paths are persisted in `ai.summary`.
+- [x] Packaged CachyOS + RTX 4070 acceptance: a measured 305-second idle interval preserved summary `ready` status; a controlled quit during metadata finalization preserved the newly generated JSON/Markdown sidecars and `meetings.json` metadata (`completed`, `balanced`, model, `generatedAt`, `sourceTranscriptHash`, and both sidecar paths). The app, `meeting_manager`, summary, and lock-helper children all exited. Full hashes, runtime paths, CUDA/device details, cancellation, and the earlier approximately 15-second / 6,250 MiB inference evidence are in the compatibility matrix. The separate CUDA-probe quit row, Task 5, and overall branch acceptance remain open.
+- [x] Quit during the in-queue CUDA probe: on the rebuilt packaged app, a delayed `nvidia-smi` wrapper stalled a live probe behind a three-level tree (`python(cuda_probe)` → `sh(wrapper)` → `sleep`), and quit was issued through the app's own tray `Quit AvaNevis` item over `com.canonical.dbusmenu` — a native click handler path, not CDP. Four consecutive runs quit 138–206 ms into the live probe window; exact-PID snapshots before and after each quit show the app, probe, wrapper, and `sleep` grandchild all gone with zero survivors in the probe's process group. Drain was clean (`AI_ADDON_SETUP_CANCELLED` at the post-probe abort check, ~1 s exit, no drain-timeout or GPU-repair warning), `meetings.json` and both sidecars stayed byte-identical with no `.tmp` leftovers, and a post-quit relaunch still reported summary `ready` with the meeting `completed`. Regression lock: `Linux CUDA probe owns a process group so quit reaches nvidia-smi descendants` in `tests/js/linux-cuda-gpu-runtime-service.test.js`.
 
 ### v2.9 renderer refresh regression
 

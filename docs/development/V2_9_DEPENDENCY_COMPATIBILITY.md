@@ -65,7 +65,7 @@ search-index metadata.
 | NVIDIA cuDNN CUDA 12 | [nvidia-cudnn-cu12 9.22.0.52](https://pypi.org/project/nvidia-cudnn-cu12/9.22.0.52/) (NVIDIA proprietary; [cuDNN SLA](https://docs.nvidia.com/deeplearning/cudnn/latest/reference/eula.html)). Same Python/manylinux/driver requirements as cuBLAS. Direct wheel: `https://files.pythonhosted.org/packages/a0/8f/2ede6b758b7524608472010f632bdd3370ea271d715d1d66044614b84cdc/nvidia_cudnn_cu12-9.22.0.52-py3-none-manylinux_2_27_x86_64.whl`. | `nvidia_cudnn_cu12-9.22.0.52-py3-none-manylinux_2_27_x86_64.whl`, 718,382,818 bytes, SHA-256 `391b9a7ee6386daaca7f8dca41e83c2c99f760c9581a0400755e87b4287b8847`. Extracted `nvidia/cudnn/lib/libcudnn.so.9` plus companion `libcudnn_{adv,cnn,ops,graph,...}.so.9` libraries. | **Accepted (Task 3, 2026-09-02)** as the managed CUDA 12 Whisper closure on CachyOS x86_64 + RTX 4070. Not Speakrs/Pyannote. |
 | Speakrs | [ONNX Runtime 1.27.1 Linux GPU CUDA 12](https://github.com/microsoft/onnxruntime/releases/download/v1.27.1/onnxruntime-linux-x64-gpu_cuda12-1.27.1.tgz) (MIT) plus installer-bundled Linux `speakrs-cli` | GPU archive `onnxruntime-linux-x64-gpu_cuda12-1.27.1.tgz`, 244,763,765 bytes, `08b568bd69500c36606aff7c3896ee4fa7d3531719f6b00f43e6a34db41dc4bf`. Extracted regular files: `libonnxruntime.so.1.27.1` 27,000,912 bytes `67eda041546eb01cf5606add5467d8bb7305b2aedb5cf37fdc6b055c7adfc094`; `libonnxruntime_providers_shared.so` 14,632 bytes `c6a12593396095f5670160e284c35d1700b7708cf3037b7042e2a5200ccae772`; `libonnxruntime_providers_cuda.so` 373,925,672 bytes `cffff5fe3aac14fe50eed1113757ac8318ee12ef307fcb9def35a24398ec0ce3`. NVIDIA wheels: `nvidia_cuda_runtime_cu12-12.9.79-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl` 3,493,179 bytes `25bba2dfb01d48a9b59ca474a1ac43c6ebf7011f1b0b8cc44f54eb6ac48a96c3` → `libcudart.so.12` 741,088 bytes `256e6409e4f06f618e1fb53d4844a6b81cdded1013afa8ade40c22f99eb133b7`; `nvidia_cufft_cu12-11.4.1.4-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl` 200,877,592 bytes `c67884f2a7d276b4b80eb56a79322a95df592ae5e765cf1243693365ccab4e28` → `libcufft.so.11` 291,507,928 bytes `e1d65ebd08895f9d9883f848f3974f89e0130416252477b18835ba7f15d159bc`; `nvidia_curand_cu12-10.3.10.19-py3-none-manylinux_2_27_x86_64.whl` 68,295,626 bytes `49b274db4780d421bd2ccd362e1415c13887c53c214f0d4b761752b8f9f6aa1e` → `libcurand.so.10` 166,965,432 bytes `ab8c07338fa663c018b16df5b3f3878c84aaae98bda930e9e8bad340427b0faa`; `nvidia_cuda_nvrtc_cu12-12.9.86-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl` 89,568,129 bytes `210cf05005a447e29214e9ce50851e83fc5f4358df8b453155d5e1918094dcb4` → `libnvrtc.so.12` 106,244,480 bytes `7c67c6b51ea0e0279634cebd676ff7efda1674806444520c84430ad5c35fe625`. Model pack reuses the published CUDA ONNX subset `speakrs-models-5d24ffe-win32-x64-cuda.tar.gz`, 208,765,985 bytes, `a79973647cb787bf2aebd31acc2668d282735e41d451e244308bcf04ea77ad20` (same 19 files as Windows). Compile-time ORT pin is `linux-x64: null` (`load-dynamic`). CI-only CPU ORT smoke pin: `onnxruntime-linux-x64-1.27.1.tgz` 8,828,892 bytes `25b1ef1fea1acd210d63f8f24dc870ad6e077795ce1f54876252c6d3803c15af`. | **Task 4 pins recorded (2026-09-02).** Linux x86_64 `speakrs-cli` is built/staged with the canonical validation WAV and ELF executable/PIE integrity checks. Setup-time dynamic ORT/CUDA closure is pinned in `src/ai-addon/speakrs-pack-spec.js`, including curand/nvrtc and managed CUDA cublas/cudnn path/hash metadata. Catalog/UI and packaged RTX 4070 Speakrs remain **not accepted** until Task 5. CI CPU fixture smoke is a non-GPU structural check only. Never trust hashes from user-writable `install.json`. |
 | Pyannote | `pyannote/speaker-diarization-community-1` requires the user's token; token-based setup has no maintainer artifact to download or pin. | No token was requested, supplied, logged, or downloaded. Linux is now Speakrs-only by product scope. | **Out of scope on Linux.** Do not investigate, pin, package, or surface a Linux Pyannote path. Windows/macOS retain their existing compatibility option. |
-| Summaries | [llama.cpp official releases](https://github.com/ggml-org/llama.cpp/releases) (MIT) plus the existing Qwen GGUF catalog artifacts (Apache-2.0 model license) | Windows x64 CUDA and macOS arm64 Metal already use the shared Qwen/llama.cpp summary implementation. Linux now has a separately pinned `ai-dock/llama.cpp-cuda` v0.3.0 CUDA 12.8 amd64 archive plus pinned NVIDIA CUDA runtime/NCCL wheels; exact bytes and extracted closure are recorded below. | **Linux Task 6 reactivated, implementation complete and hardware inference gate passed; final acceptance remains open for quit-during-metadata evidence.** CPU, Vulkan, SYCL, ROCm, cloud, and ambient-library alternatives are rejected. |
+| Summaries | [llama.cpp official releases](https://github.com/ggml-org/llama.cpp/releases) (MIT) plus the existing Qwen GGUF catalog artifacts (Apache-2.0 model license) | Windows x64 CUDA and macOS arm64 Metal already use the shared Qwen/llama.cpp summary implementation. Linux now has a separately pinned `ai-dock/llama.cpp-cuda` v0.3.0 CUDA 12.8 amd64 archive plus pinned NVIDIA CUDA runtime/NCCL wheels; exact bytes and extracted closure are recorded below. | **Linux Task 6 implementation complete; all packaged hardware gates passed, including quit during an in-queue CUDA probe. Task 5 and overall branch acceptance remain open.** CPU, Vulkan, SYCL, ROCm, cloud, and ambient-library alternatives are rejected. |
 
 ### Linux AI add-ons — Task 6 CUDA-only Qwen summaries (reactivated 2026-09-03)
 
@@ -121,9 +121,13 @@ immutable wheel URL.
 | `nvidia_nccl_cu12-2.31.2-py3-none-manylinux_2_18_x86_64.whl` | 342,105,414 | `f9b1dc3c2a7e20176054144ebb3b32fea83b40402ee5d7ac7045cd11ecc956c0` | `libnccl.so.2`, 473,266,472 bytes, `dba12e429fe11268b895d0531ba96a7f679f35227d5b1ec77c5febbcd02281bd` |
 
 The extracted runtime pins the regular local closure (`llama-cli`,
-`libllama-cli-impl.so`, `libllama-server-impl.so`, `libllama-common.so`,
-`libllama.so`, `libmtmd.so`, `libggml*.so`, and `VERSION.txt`) by size and
-SHA-256 in the catalog; the archive itself is also verified before extraction.
+`libllama-cli-impl.so`, `libllama-server-impl.so`,
+`libllama-batched-bench-impl.so`, `libllama-bench-impl.so`,
+`libllama-completion-impl.so`, `libllama-fit-params-impl.so`,
+`libllama-perplexity-impl.so`, `libllama-quantize-impl.so`,
+`libllama-common.so`, `libllama.so`, `libmtmd.so`, `libggml*.so`, and
+`VERSION.txt`) by size and SHA-256 in the catalog; the archive itself is also
+verified before extraction.
 The runtime requires `libcublas.so.12` and `libcublasLt.so.12` from the
 already-managed Task 2 CUDA tree, `libcuda.so.1` from the code-owned driver
 allowlist, and system
@@ -157,12 +161,106 @@ A separate long-transcript run accepted
 `AI_ADDON_SETUP_CANCELLED` error, produced no summary sidecars, and left no
 `llama-cli`, summary-runner, or meeting-manager child. The app remained alive.
 After both runs, the shared compute action had settled (`busyCount: 0`
-inferred from the queue's settled process and no lingering compute child);
-quit-during-metadata-finalization remains a code-path/manual acceptance row,
-not claimed by this smoke. This replaces the earlier “hardware inference
-evidence pending” note for Task 6, but final Task 6 acceptance remains open
-until the quit-during-metadata row is run. It does not accept Task 5 or the
-overall branch. Windows/macOS cross-platform acceptance remains explicit.
+inferred from the queue's settled process and no lingering compute child).
+
+A follow-up cold launch of the rebuilt unpacked package on the same host
+survived a measured 305-second idle interval. A post-idle status probe still
+reported summary `ready`/supported with the catalog model at
+`/tmp/avanevis-acceptance-20260903/ai-addons/models/summary/qwen3.5-9b-q4-k-m/Qwen3.5-9B-Q4_K_M.gguf`;
+the untouched Speakrs lane reported `notConfigured`/supported.
+
+The metadata-finalization quit row was then exercised with a short external
+`meetings.json.lock` held after summary preflight, while the packaged
+`meeting_manager update-ai` child was active. A clean CDP `Browser.close`
+request was issued during that metadata-save window; the app and its
+`meeting_manager` child exited after the lock was released within the
+metadata lock timeout. The new JSON and Markdown sidecars both existed, and
+`meetings.json` persisted `ai.summary.status: completed`, profile
+`balanced`, model `Qwen3.5 9B 4-bit GGUF`, the new `generatedAt`, the expected
+`sourceTranscriptHash`, and both matching sidecar paths. No summary, Python,
+or lock-helper child remained. This completes the Linux Task 6 packaged
+metadata-finalization evidence. The separate in-queue CUDA-probe quit row is
+also **accepted** (four consecutive packaged native-tray-quit runs; see below).
+Neither accepts Task 5 or the overall branch; Windows/macOS cross-platform
+acceptance remains explicit.
+
+A final rebuilt-packaged test injected a delayed `nvidia-smi` wrapper while the
+in-queue Linux CUDA probe was live and quit through the app's **own tray menu
+item**, not CDP: the harness activates `Quit AvaNevis` on the real
+`com.canonical.dbusmenu` object exported by the app's StatusNotifierItem, which
+runs the registered Electron click handler and `app.quit()` exactly as a tray
+click does. The wrapper is a transparent passthrough until a trigger file is
+created, so startup and add-on status still use the real `nvidia-smi`; once
+armed it builds a genuine three-level descendant tree
+`python(transcription.cuda_probe)` → `sh(wrapper)` → `sleep 300` and stalls
+inside the probe's `nvidia-smi` call.
+
+**Four consecutive runs passed** (2026-09-03), each with exact-PID snapshots
+taken before and after quit:
+
+| Run | probe / wrapper / sleep PIDs | probe PGID | quit issued after wrapper start | app main pid exit | survivors |
+|---|---|---|---|---|---|
+| 1 | 735423 / 735437 / 735442 | 735423 | 206 ms | ~1 s | none |
+| 2 | 737924 / 737932 / 737943 | 737924 | 138 ms | ~1 s | none |
+| 3 | 740221 / 740236 / 740241 | 740221 | 183 ms | ~1 s | none |
+| 4 | 742474 / 742489 / 742495 | 742474 | 197 ms | ~1 s | none |
+
+Every quit landed far inside the probe's live 10-second `nvidia-smi` window, so
+the probe was genuinely in flight and not already unwinding. The before-quit
+snapshots show all three processes sharing the probe's PGID, and that PGID is
+distinct from the app's own group — the probe child is a detached POSIX group
+owner. The after-quit snapshots re-check each captured PID individually and
+scan the whole probe process group: in all four runs the app, the probe, the
+wrapper, and the `sleep` grandchild were gone with zero group survivors, and a
+system-wide scan after the last run found no leaked `cuda_probe`, wrapper, or
+`sleep` process.
+
+Queue state was clean rather than force-killed. `generate-summary` rejected with
+`AI_ADDON_SETUP_CANCELLED` at `summary-service.js:433` — the post-probe abort
+check inside the compute-queue action — in all four runs, and no run logged
+`Quit drain for local AI work did not finish cleanly`, a non-abortable
+termination, or a GPU repair marker. The ~1-second exit against a 30-second
+drain budget shows `aiComputeActionQueue.drain()` and
+`gpuResourceActionQueue.drain()` both resolved before quit proceeded.
+
+No summary data was lost. `meetings.json` and both committed sidecars stayed
+byte-identical across every run
+(`6ce6a3cf81f7c209de1988004957076a1a885e5311b0a34326e4edbb18ce04e5`,
+`18ba9153d29b807c917ba672d79dc738da02a2d51b9225395e1d64fb4cf21fff`,
+`ee27c92238d99ab1a9467742b6871481dab902668fe4dade81fadbdbe49e71a9`), no `.tmp`
+sidecars were left behind, and a post-quit relaunch reported summary `ready`
+with the meeting still at `ai.summary.status: completed`, profile `balanced`,
+model `Qwen3.5 9B 4-bit GGUF`, and its original `sourceTranscriptHash` and
+sidecar paths.
+
+The load-bearing invariant is now locked in CI by `Linux CUDA probe owns a
+process group so quit reaches nvidia-smi descendants`
+(`tests/js/linux-cuda-gpu-runtime-service.test.js`): the probe must not be
+spawned with `detached: false`, those options must still yield
+`avanevisProcessGroup: true`, and quit must signal the negative PID rather than
+falling back to the direct child. Spawning the probe with `detached: false`
+makes that test fail. This row is **accepted**; Task 5 and overall branch
+acceptance remain open.
+
+Scope of that acceptance, stated honestly:
+
+- The run was launched with `--remote-debugging-port` because the summary had
+  to be started through the renderer bridge. The debugger socket is closed
+  before the tray quit, so no CDP client is attached at quit time, but the
+  DevTools HTTP listener is still present. The quit path itself
+  (`before-quit` → drain → `abortActiveSummaryForQuit` → process-group signal)
+  does not involve DevTools.
+- "No queue remains" is an inference, not a direct post-mortem read: the
+  process is gone, so the evidence is the ~1-second exit inside a 30-second
+  drain budget with no `did not finish cleanly` warning. That distinguishes a
+  completed drain from an abandoned one; it is not an assertion on
+  `hasPendingWork()` at exit.
+- This row aborts before any new summary output exists, so it proves the
+  **previously committed** metadata and sidecars survive. The separate
+  metadata-finalization quit row is what covers newly written summary output.
+- The `sleep` grandchild is the discriminator: it does not die when its parent
+  dies, so its disappearance is affirmative evidence of a group signal rather
+  than a coincidence of the app exiting.
 
 Local hash commands (disposable directory; 2026-09-02):
 
@@ -185,7 +283,8 @@ Task 5 catalog/admission work is recorded in
 [Linux AI add-ons — Task 5 Speakrs catalog and admission](#linux-ai-add-ons--task-5-speakrs-catalog-and-admission-2026-09-02)
 and is **not** packaged RTX 4070 Speakrs acceptance. Pyannote is out of Linux
 product scope. The separate Linux Qwen summary lane is reactivated as Task 6
-and remains unavailable until its own artifact and RTX 4070 gates pass.
+and has passed its artifact, inference, idle-status, metadata-finalization, and
+quit-during-CUDA-probe gates. Task 5 and overall branch acceptance stay open.
 
 ## Linux AI add-ons — Task 3 packaged CUDA Whisper acceptance (2026-09-02)
 
