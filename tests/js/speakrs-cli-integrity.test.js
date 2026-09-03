@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const crypto = require('node:crypto');
 
 const {
   ELF_CLASS_32,
@@ -110,6 +111,27 @@ function writeCanonicalFixture(filePath, contents = Buffer.from('RIFF-fixture'))
   fs.writeFileSync(filePath, contents);
 }
 
+function writePackagedIntegrityManifest(resourcesPath, platform) {
+  const binDir = path.join(resourcesPath, 'bin');
+  const cliName = platform === 'win32' ? 'speakrs-cli.exe' : 'speakrs-cli';
+  const cliPath = path.join(binDir, cliName);
+  const wavPath = path.join(binDir, SPEAKRS_VALIDATE_WAV_NAME);
+  const pin = (filePath) => {
+    const contents = fs.readFileSync(filePath);
+    return {
+      sizeBytes: contents.length,
+      sha256: crypto.createHash('sha256').update(contents).digest('hex'),
+    };
+  };
+  const platformKey = platform === 'darwin' ? 'darwin-arm64' : `${platform}-x64`;
+  fs.writeFileSync(path.join(binDir, 'speakrs-integrity.json'), JSON.stringify({
+    version: 1,
+    platforms: {
+      [platformKey]: { cli: pin(cliPath), validationWav: pin(wavPath) },
+    },
+  }));
+}
+
 function createDarwinFs({ nonExecutablePaths = new Set(), nonFilePaths = new Set() } = {}) {
   return new Proxy(fs, {
     get(target, property) {
@@ -175,6 +197,11 @@ function makeLayout(root, {
     fs.writeFileSync(wavPath, Buffer.alloc(0));
   } else if (fixture === 'directory') {
     fs.mkdirSync(wavPath, { recursive: true });
+  }
+
+  if (fs.existsSync(cliPath) && fs.existsSync(wavPath)
+    && fs.statSync(cliPath).isFile() && fs.statSync(wavPath).isFile()) {
+    writePackagedIntegrityManifest(resourcesPath, platform);
   }
 
   return { resourcesPath, cliPath, wavPath };
@@ -417,6 +444,24 @@ test('packaged Speakrs integrity is fail-closed and ignores overrides', () => {
     }).reason, 'missing');
 
     const valid = makeLayout(path.join(root, 'valid'), { cli: 'valid-win32', fixture: 'present' });
+    fs.appendFileSync(valid.cliPath, 'substituted binary contents');
+    const substitutedCli = inspectPackagedSpeakrsLayout({
+      platform: 'win32',
+      resourcesPath: valid.resourcesPath,
+    });
+    assert.equal(substitutedCli.ok, false);
+    assert.equal(substitutedCli.kind, 'cli');
+    assert.equal(substitutedCli.reason, 'checksum-mismatch');
+    writePackagedIntegrityManifest(valid.resourcesPath, 'win32');
+    fs.appendFileSync(valid.wavPath, 'substituted fixture contents');
+    const substitutedFixture = inspectPackagedSpeakrsLayout({
+      platform: 'win32',
+      resourcesPath: valid.resourcesPath,
+    });
+    assert.equal(substitutedFixture.ok, false);
+    assert.equal(substitutedFixture.kind, 'fixture');
+    assert.equal(substitutedFixture.reason, 'checksum-mismatch');
+    writePackagedIntegrityManifest(valid.resourcesPath, 'win32');
     const override = path.join(root, 'override', 'speakrs-cli.exe');
     writeMinimalPe(override, WINDOWS_PE_MACHINE_AMD64);
     writeCanonicalFixture(path.join(root, 'override', SPEAKRS_VALIDATE_WAV_NAME));

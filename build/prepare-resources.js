@@ -52,6 +52,7 @@ const {
   readElfMachine,
   readMachOCpuType,
   readWindowsPeMachine,
+  SPEAKRS_PACKAGED_INTEGRITY_MANIFEST_NAME,
   SPEAKRS_VALIDATE_WAV_NAME,
 } = require('../src/ai-addon/speakrs-cli-integrity');
 
@@ -954,6 +955,27 @@ function stageSpeakrsValidateWav(binDir = BIN_DIR) {
   return staged;
 }
 
+function writeSpeakrsPackagedIntegrityManifest(binDir = BIN_DIR, platform = process.platform) {
+  const cliPath = assertStagedSpeakrsCli(binDir, platform);
+  const wavPath = assertStagedSpeakrsValidateWav(binDir);
+  const platformKey = platform === 'darwin' ? 'darwin-arm64' : `${platform}-x64`;
+  const pin = (filePath) => ({
+    sizeBytes: fs.statSync(filePath).size,
+    sha256: hashFileContent(filePath),
+  });
+  const manifestPath = path.join(binDir, SPEAKRS_PACKAGED_INTEGRITY_MANIFEST_NAME);
+  fs.writeFileSync(manifestPath, `${JSON.stringify({
+    version: 1,
+    platforms: {
+      [platformKey]: {
+        cli: pin(cliPath),
+        validationWav: pin(wavPath),
+      },
+    },
+  }, null, 2)}\n`);
+  return manifestPath;
+}
+
 function buildMacOSSpeakrsCliVerificationCommands(cliPath) {
   return [
     { command: 'codesign', args: ['--verify', '--strict', '--verbose=2', cliPath] },
@@ -1460,6 +1482,7 @@ async function prepareResources() {
     stageSpeakrsValidateWav();
     assertStagedSpeakrsCli();
     assertStagedSpeakrsValidateWav();
+    writeSpeakrsPackagedIntegrityManifest();
     if (IS_MAC) {
       verifyMacOSSpeakrsCliSignature();
     }
@@ -1532,6 +1555,7 @@ module.exports = {
   stageLegalBundle,
   stageFfmpegSourceArchive,
   stageSpeakrsValidateWav,
+  writeSpeakrsPackagedIntegrityManifest,
   writeFfmpegBinaryInfo,
   writeFfmpegComplianceManifest,
   verifyMacOSHelperSignature,

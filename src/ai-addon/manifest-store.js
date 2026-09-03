@@ -1130,6 +1130,41 @@ async function hashPinnedSpeakrsFile({
   }
 }
 
+function collectUnexpectedSpeakrsRuntimeLoaderFiles({
+  runtimeDir,
+  platform = process.platform,
+  expectedNames = [],
+  fsModule = fs,
+} = {}) {
+  const readdirSync = bindFsMethod(fsModule, 'readdirSync');
+  const existsSync = bindFsMethod(fsModule, 'existsSync');
+  if (!runtimeDir || !readdirSync) {
+    throw new Error('File system cannot inspect the Speakrs runtime loader directory.');
+  }
+  if (existsSync && !existsSync(runtimeDir)) {
+    return [];
+  }
+  const expected = new Set(expectedNames.map((name) => (
+    platform === 'win32' ? String(name).toLowerCase() : String(name)
+  )));
+  const isLoaderFile = platform === 'win32'
+    ? (name) => /\.dll$/i.test(name)
+    : (name) => /\.so(?:\.|$)/.test(name);
+  let entries;
+  try {
+    entries = readdirSync(runtimeDir, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      return [];
+    }
+    throw error;
+  }
+  return entries
+    .map((entry) => String(entry.name || ''))
+    .filter((name) => isLoaderFile(name) && !expected.has(platform === 'win32' ? name.toLowerCase() : name))
+    .sort();
+}
+
 async function checkSpeakrsRuntimeCache({
   userDataDir,
   platform = process.platform,
@@ -1210,6 +1245,15 @@ async function checkSpeakrsRuntimeCache({
       missing,
       invalid,
     });
+  }
+  const unexpectedLoaderFiles = collectUnexpectedSpeakrsRuntimeLoaderFiles({
+    runtimeDir,
+    platform,
+    expectedNames,
+    fsModule,
+  });
+  for (const name of unexpectedLoaderFiles) {
+    invalid.add(name);
   }
 
   if (platform === 'linux') {

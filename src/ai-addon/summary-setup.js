@@ -209,7 +209,7 @@ async function installSummaryRuntime({
       percent: 95,
     });
     try {
-      await extractor(archivePath, extractDir, runtimeArchive.archiveFormat);
+      await extractor(archivePath, extractDir, runtimeArchive.archiveFormat, { cancelSignal });
     } catch (extractError) {
       if (rmSync) {
         rmSync(extractDir, { recursive: true, force: true });

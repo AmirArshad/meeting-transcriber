@@ -2178,6 +2178,51 @@ test('setup summary model cancellation cleans partial cache and resets state', a
   assert.ok(fsModule.removed.includes(getSummaryRuntimeDir('/tmp/AvaNevis', artifact)));
 });
 
+test('summary setup cancels an in-progress runtime extractor through its cancellation signal', async () => {
+  const fsModule = createMemoryFs();
+  const catalog = createCatalogWithPinnedSummaryArtifact({
+    sha256: CHECKSUM_TARGET_SHA256,
+  });
+  const runtimeBytes = Buffer.from('runtime archive\n');
+  catalog.summary.runtimeArtifacts['win32-x64'].artifacts[0].sha256 = crypto
+    .createHash('sha256').update(runtimeBytes).digest('hex');
+  catalog.summary.runtimeArtifacts['win32-x64'].artifacts[0].sizeBytes = runtimeBytes.length;
+  const controller = new AbortController();
+  let extractorStarted = false;
+
+  const status = await setupSummaryModel({
+    userDataDir: '/tmp/AvaNevis',
+    platform: 'win32',
+    arch: 'x64',
+    engine: 'pyannote',
+    modelId: 'summary-model',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog,
+    cancelSignal: controller.signal,
+    downloader: async ({ url, destinationPath }) => {
+      fsModule.writeFileSync(destinationPath, url.endsWith('/runtime.zip')
+        ? runtimeBytes
+        : 'checksum target\n');
+    },
+    extractor: async (_archivePath, _extractDir, _archiveFormat, { cancelSignal }) => {
+      extractorStarted = true;
+      return new Promise((_resolve, reject) => {
+        cancelSignal.addEventListener('abort', () => {
+          const error = new Error('Summary model setup was canceled.');
+          error.name = 'AbortError';
+          reject(error);
+        }, { once: true });
+        controller.abort();
+      });
+    },
+  });
+
+  assert.equal(extractorStarted, true);
+  assert.equal(status.features.summary.status, 'notConfigured');
+  assert.equal(status.features.summary.error, null);
+});
+
 test('summary model cancellation preserves a previously valid runtime', async () => {
   const fsModule = createMemoryFs();
   const catalog = createCatalogWithPinnedSummaryArtifact({

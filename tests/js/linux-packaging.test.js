@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const crypto = require('node:crypto');
 
 const packageJson = require('../../package.json');
 const {
@@ -39,6 +40,26 @@ function writeMinimalElf(filePath) {
   writeSpeakrsLinuxElfFixture(filePath, { kind: 'pie-executable' });
 }
 
+function writeSpeakrsIntegrityManifest(resourcesRoot) {
+  const binDir = path.join(resourcesRoot, 'bin');
+  const pin = (name) => {
+    const contents = fs.readFileSync(path.join(binDir, name));
+    return {
+      sizeBytes: contents.length,
+      sha256: crypto.createHash('sha256').update(contents).digest('hex'),
+    };
+  };
+  writeFile(path.join(binDir, 'speakrs-integrity.json'), JSON.stringify({
+    version: 1,
+    platforms: {
+      'linux-x64': {
+        cli: pin('speakrs-cli'),
+        validationWav: pin('speakrs-two-speaker-16k.wav'),
+      },
+    },
+  }));
+}
+
 function writeRequiredLegalBundle(root) {
   writeFile(path.join(root, 'legal', 'THIRD_PARTY_NOTICES.md'), 'notices\n');
   writeFile(path.join(root, 'legal', 'LICENSE.txt'), 'MIT\n');
@@ -57,6 +78,7 @@ function makeLinuxResourcesFixture(root) {
   writeFile(path.join(root, 'requirements-linux-build.txt'), 'pulsectl==24.12.0\n');
   writeMinimalElf(path.join(root, 'bin', 'speakrs-cli'));
   writeFile(path.join(root, 'bin', 'speakrs-two-speaker-16k.wav'), Buffer.from('RIFF-fixture'));
+  writeSpeakrsIntegrityManifest(root);
   if (process.platform !== 'win32') {
     fs.chmodSync(path.join(root, 'python', 'bin', 'python3'), 0o755);
     fs.chmodSync(path.join(root, 'ffmpeg', 'ffmpeg'), 0o755);

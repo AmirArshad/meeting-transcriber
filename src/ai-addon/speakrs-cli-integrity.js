@@ -1,10 +1,12 @@
 'use strict';
 
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
 const SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE = 'This AvaNevis install is incomplete. Reinstall AvaNevis.';
 const SPEAKRS_VALIDATE_WAV_NAME = 'speakrs-two-speaker-16k.wav';
+const SPEAKRS_PACKAGED_INTEGRITY_MANIFEST_NAME = 'speakrs-integrity.json';
 const WINDOWS_PE_MACHINE_AMD64 = 0x8664;
 const MACHO_MAGIC_64_LE = 0xfeedfacf;
 const MACHO_CPU_TYPE_ARM64 = 0x0100000c;
@@ -52,6 +54,66 @@ function getBundledSpeakrsValidateWavPath({
     return null;
   }
   return path.join(resourcesPath, 'bin', SPEAKRS_VALIDATE_WAV_NAME);
+}
+
+function getBundledSpeakrsIntegrityManifestPath({
+  resourcesPath = process.resourcesPath,
+} = {}) {
+  if (!resourcesPath) {
+    return null;
+  }
+  return path.join(resourcesPath, 'bin', SPEAKRS_PACKAGED_INTEGRITY_MANIFEST_NAME);
+}
+
+function getSpeakrsPackagedPlatformKey(platform = process.platform) {
+  if (platform === 'darwin') {
+    return 'darwin-arm64';
+  }
+  if (platform === 'win32' || platform === 'linux') {
+    return `${platform}-x64`;
+  }
+  return null;
+}
+
+function readPackagedSpeakrsIntegrityPins({
+  platform = process.platform,
+  resourcesPath = process.resourcesPath,
+  fsModule = fs,
+} = {}) {
+  const readFileSync = bindFsMethod(fsModule, 'readFileSync');
+  const manifestPath = getBundledSpeakrsIntegrityManifestPath({ resourcesPath });
+  const platformKey = getSpeakrsPackagedPlatformKey(platform);
+  if (!readFileSync || !manifestPath || !platformKey) {
+    return null;
+  }
+  try {
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    const pins = manifest?.version === 1 ? manifest?.platforms?.[platformKey] : null;
+    for (const key of ['cli', 'validationWav']) {
+      const pin = pins?.[key];
+      if (!Number.isInteger(pin?.sizeBytes) || pin.sizeBytes <= 0 || !/^[a-f0-9]{64}$/.test(pin?.sha256 || '')) {
+        return null;
+      }
+    }
+    return pins;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function matchesPackagedSpeakrsPin(filePath, pin, fsModule = fs) {
+  const readFileSync = bindFsMethod(fsModule, 'readFileSync');
+  if (!readFileSync || !pin) {
+    return false;
+  }
+  try {
+    const contents = readFileSync(filePath);
+    const buffer = Buffer.isBuffer(contents) ? contents : Buffer.from(contents);
+    return buffer.length === pin.sizeBytes
+      && crypto.createHash('sha256').update(buffer).digest('hex') === pin.sha256;
+  } catch (_error) {
+    return false;
+  }
 }
 
 function readFileSlice(filePath, offset, length, fsModule = fs) {
@@ -418,6 +480,39 @@ function inspectPackagedSpeakrsLayout({
       detail: wav.detail || null,
     };
   }
+  // On macOS, the signed app bundle's code seal protects Resources/bin; these
+  // build-generated pins additionally reject a substituted file before spawn.
+  const pins = readPackagedSpeakrsIntegrityPins({ platform, resourcesPath, fsModule });
+  if (!pins) {
+    return {
+      ok: false,
+      kind: 'cli',
+      reason: 'missing-pin',
+      cliPath,
+      wavPath,
+      detail: null,
+    };
+  }
+  if (!matchesPackagedSpeakrsPin(cliPath, pins.cli, fsModule)) {
+    return {
+      ok: false,
+      kind: 'cli',
+      reason: 'checksum-mismatch',
+      cliPath,
+      wavPath,
+      detail: null,
+    };
+  }
+  if (!matchesPackagedSpeakrsPin(wavPath, pins.validationWav, fsModule)) {
+    return {
+      ok: false,
+      kind: 'fixture',
+      reason: 'checksum-mismatch',
+      cliPath,
+      wavPath,
+      detail: null,
+    };
+  }
   return {
     ok: true,
     kind: null,
@@ -463,9 +558,11 @@ module.exports = {
   WINDOWS_PE_MACHINE_AMD64,
   assertSpeakrsCliArchitecture,
   getBundledSpeakrsCliPath,
+  getBundledSpeakrsIntegrityManifestPath,
   getBundledSpeakrsValidateWavPath,
   getPackagedSpeakrsIntegrityError,
   getSpeakrsCliExecutableName,
+  getSpeakrsPackagedPlatformKey,
   inspectPackagedSpeakrsLayout,
   inspectSpeakrsCliFile,
   inspectSpeakrsValidateWavFile,
@@ -473,4 +570,5 @@ module.exports = {
   readElfMachine,
   readMachOCpuType,
   readWindowsPeMachine,
+  SPEAKRS_PACKAGED_INTEGRITY_MANIFEST_NAME,
 };

@@ -669,6 +669,40 @@ test('Windows production runtime rejects replaced DLLs even with a forged instal
   }
 });
 
+test('Windows Speakrs runtime rejects an unpinned DLL in its loader directory', async () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-unpinned-windows-loader-'));
+  const catalog = createPinnedTestCatalog();
+  try {
+    await installValidTestSetup(userDataDir, catalog);
+    const runtimeDir = getSpeakrsOrtRuntimeDir(userDataDir);
+    fs.writeFileSync(path.join(runtimeDir, 'libz.dll'), 'unlisted loader');
+
+    const cache = await checkSpeakrsRuntimeCache({
+      userDataDir,
+      platform: 'win32',
+      arch: 'x64',
+      catalog,
+      verifyChecksum: true,
+    });
+    assert.equal(cache.valid, false);
+    assert.ok(cache.invalidFiles.includes('libz.dll'));
+    for (const computeAdmission of [false, true]) {
+      const status = await checkAiAddonSetupStatus({
+        userDataDir,
+        platform: 'win32',
+        arch: 'x64',
+        catalog,
+        env: { SPEAKRS_CLI_PATH: path.join(userDataDir, 'dev-bin', 'speakrs-cli.exe') },
+        computeAdmission,
+      });
+      assert.equal(status.features.diarization.setupComplete, false);
+      assert.match(status.features.diarization.error, /integrity validation/i);
+    }
+  } finally {
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
 test('forged install.json hashes cannot pass Speakrs compute admission', async () => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-forged-runtime-'));
   const catalog = createPinnedTestCatalog();
@@ -1579,6 +1613,41 @@ test('Linux Speakrs compute admission rejects forged runtime hashes in user-writ
     assert.equal(admission.features.diarization.setupComplete, false);
     assert.ok(admission.features.diarization.runtimeCache.invalidFiles.includes(RUNTIME_SO_NAMES[0]));
     assert.match(admission.features.diarization.error, /integrity validation/i);
+  } finally {
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test('Linux Speakrs runtime rejects an unpinned shared object in its loader directory', async () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-unpinned-linux-loader-'));
+  const catalog = createPinnedLinuxTestCatalog();
+  try {
+    await installValidLinuxTestSetup(userDataDir, catalog);
+    const runtimeDir = getSpeakrsOrtRuntimeDir(userDataDir);
+    fs.writeFileSync(path.join(runtimeDir, 'libstdc++.so.6'), 'unlisted loader');
+
+    const cache = await checkSpeakrsRuntimeCache({
+      userDataDir,
+      platform: 'linux',
+      arch: 'x64',
+      catalog,
+      verifyChecksum: true,
+    });
+    assert.equal(cache.valid, false);
+    assert.ok(cache.invalidFiles.includes('libstdc++.so.6'));
+    for (const computeAdmission of [false, true]) {
+      const status = await checkAiAddonSetupStatus({
+        userDataDir,
+        platform: 'linux',
+        arch: 'x64',
+        catalog,
+        cudaStatus: READY_LINUX_CUDA,
+        env: { SPEAKRS_CLI_PATH: path.join(userDataDir, 'dev-bin', 'speakrs-cli') },
+        computeAdmission,
+      });
+      assert.equal(status.features.diarization.setupComplete, false);
+      assert.match(status.features.diarization.error, /integrity validation/i);
+    }
   } finally {
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }
