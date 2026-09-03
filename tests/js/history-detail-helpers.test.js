@@ -89,6 +89,19 @@ test('setup messages explain graceful degradation paths', () => {
     }),
     /Apple Silicon.*Metal\/MPS/i,
   );
+  assert.equal(
+    getDiarizationSetupMessage({
+      status: 'unsupported',
+      lastValidation: {
+        status: 'ready',
+        message: 'Speaker identification setup is ready.',
+      },
+      availability: {
+        reason: 'Speaker identification on Linux requires the managed CUDA 12 runtime and a working NVIDIA GPU. CPU-only speaker identification is not supported.',
+      },
+    }),
+    'Speaker identification on Linux requires the managed CUDA 12 runtime and a working NVIDIA GPU. CPU-only speaker identification is not supported.',
+  );
   assert.match(
     getSummarySetupMessage({
       status: 'error',

@@ -947,18 +947,24 @@ function createTranscriptionService(deps) {
   }
 
   async function resolveGuidedDiarizationStatus({ registerProcess } = {}) {
-    const { availability: diarizationAvailability, cudaStatus } = await resolveDiarizationAvailability({ registerProcess });
-    if (!diarizationAvailability.supported || !diarizationAvailability.runtimeDevice) {
-      return null;
-    }
+    let diarizationAvailability = null;
+    let diarizationStatus = null;
+    let engine = null;
+    let catalogModelRef = null;
     try {
+      const availabilityResult = await resolveDiarizationAvailability({ registerProcess });
+      diarizationAvailability = availabilityResult.availability;
+      const cudaStatus = availabilityResult.cudaStatus;
+      if (!diarizationAvailability.supported || !diarizationAvailability.runtimeDevice) {
+        return null;
+      }
       const aiStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions({
         computeAdmission: true,
         cudaStatus,
       }));
-      const diarizationStatus = aiStatus && aiStatus.features && aiStatus.features.diarization;
-      const catalogModelRef = diarizationStatus ? getDiarizationModelRef(diarizationStatus.modelId) : null;
-      const engine = resolveSpawnDiarizationEngine(diarizationStatus && diarizationStatus.engine);
+      diarizationStatus = aiStatus && aiStatus.features && aiStatus.features.diarization;
+      catalogModelRef = diarizationStatus ? getDiarizationModelRef(diarizationStatus.modelId) : null;
+      engine = resolveSpawnDiarizationEngine(diarizationStatus && diarizationStatus.engine);
       assertLinuxSpeakrsOnlyEngine(engine, process.platform);
       if (canStartGuidedDiarization({
         status: diarizationStatus && diarizationStatus.status,
@@ -974,17 +980,40 @@ function createTranscriptionService(deps) {
           requiredDevice: diarizationAvailability.runtimeDevice,
         };
       }
-      if (engine === 'speakrs' && diarizationStatus && diarizationStatus.error) {
+      const speakrsFailure = engine === 'speakrs' && diarizationStatus
+        ? diarizationStatus.error
+          || diarizationStatus.runtimeCache?.reason
+          || diarizationStatus.packCache?.reason
+        : null;
+      if (speakrsFailure) {
         sendToRenderer(
           'transcription-progress',
-          `Speaker identification is unavailable; continuing with normal transcription. ${diarizationStatus.error}\n`,
+          `Speaker identification is unavailable; continuing with normal transcription. ${speakrsFailure}\n`,
         );
+        return {
+          engine,
+          modelId: diarizationStatus.modelId,
+          speakerCount: diarizationStatus.speakerCount || 'auto',
+          modelRef: catalogModelRef || diarizationStatus.modelId || null,
+          requiredDevice: diarizationAvailability.runtimeDevice,
+          error: speakrsFailure,
+        };
       }
     } catch (error) {
       sendToRenderer(
         'transcription-progress',
         `Speaker identification status unavailable; continuing with normal transcription. ${error.message}\n`,
       );
+      if (diarizationAvailability && diarizationAvailability.runtimeDevice) {
+        return {
+          engine,
+          modelId: diarizationStatus && diarizationStatus.modelId || null,
+          speakerCount: diarizationStatus && diarizationStatus.speakerCount || 'auto',
+          modelRef: catalogModelRef || diarizationStatus && diarizationStatus.modelId || null,
+          requiredDevice: diarizationAvailability.runtimeDevice,
+          error: error.message,
+        };
+      }
     }
     return null;
   }
@@ -1329,7 +1358,11 @@ function createTranscriptionService(deps) {
           action: (registerProcess) => resolveGuidedDiarizationStatus({ registerProcess }),
         });
         throwIfJobBlocked(meetingId, epoch);
-        const timeoutMs = guidedDiarizationStatus
+        if (guidedDiarizationStatus && guidedDiarizationStatus.error) {
+          guidedTranscriptionError = new Error(guidedDiarizationStatus.error);
+        }
+        const canRunGuidedTranscription = guidedDiarizationStatus && !guidedDiarizationStatus.error;
+        const timeoutMs = canRunGuidedTranscription
           ? getGuidedTranscriptionComputeTimeoutMs(modelSize)
           : getTranscriptionComputeTimeoutMs(modelSize);
 
@@ -1348,14 +1381,14 @@ function createTranscriptionService(deps) {
             upsertQueueJob(transcriptionQueueState, {
               meetingId,
               status: QUEUE_JOB_STATUSES.active,
-              phase: guidedDiarizationStatus
+              phase: canRunGuidedTranscription
                 ? QUEUE_JOB_PHASES.identifying_speakers
                 : QUEUE_JOB_PHASES.transcribing,
               percent: null,
             });
             publishTranscriptionQueueState();
 
-            if (guidedDiarizationStatus) {
+            if (canRunGuidedTranscription) {
               try {
                 const tempTranscriptPath = buildGuidedTranscriptTempPath({ finalTranscriptPath: transcriptPath });
                 guidedDiarizationResult = await runGuidedTranscriptionProcess({
@@ -1495,6 +1528,7 @@ function createTranscriptionService(deps) {
           throwIfJobBlocked(meetingId, epoch);
           if (
             postPassStatus
+            && !postPassStatus.error
             && Array.isArray(transcriptionResult.segments)
             && transcriptionResult.segments.length > 0
           ) {
@@ -1559,6 +1593,10 @@ function createTranscriptionService(deps) {
               }
             }
           }
+          if (postPassStatus && postPassStatus.error) {
+            guidedDiarizationStatus = postPassStatus;
+            guidedTranscriptionError = guidedTranscriptionError || new Error(postPassStatus.error);
+          }
         }
 
         // Sidecar / AI-metadata persistence. Contained: the transcript is
@@ -1612,7 +1650,7 @@ function createTranscriptionService(deps) {
             }
           } else if (guidedTranscriptionError && guidedDiarizationStatus && !isQuitCommitted()) {
             updatedMeeting = await persistDiarizationFailureArtifacts(
-              updatedMeeting,
+              { ...(updatedMeeting || {}), id: meetingId },
               guidedDiarizationStatus,
               guidedTranscriptionError.message,
             ) || updatedMeeting;
@@ -1631,7 +1669,7 @@ function createTranscriptionService(deps) {
             );
             try {
               updatedMeeting = await persistDiarizationFailureArtifacts(
-                updatedMeeting,
+                { ...(updatedMeeting || {}), id: meetingId },
                 guidedDiarizationStatus,
                 sidecarError.message,
               ) || updatedMeeting;
@@ -2703,6 +2741,7 @@ function createTranscriptionService(deps) {
     canStartGuidedDiarization,
     runTranscriptionProcess,
     runNormalTranscriptionWithCudaFallback,
+    resolveGuidedDiarizationStatus,
     cleanupGuidedTranscriptTempFiles,
     runMeetingTranscriptionJob,
     admitMeetingTranscriptionJob,

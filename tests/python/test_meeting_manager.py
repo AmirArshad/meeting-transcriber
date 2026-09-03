@@ -1038,6 +1038,54 @@ def test_update_meeting_ai_clears_stale_diarization_path_on_terminal_error(tmp_p
     assert meeting['ai']['diarization']['segmentsPath'] is None
 
 
+def test_update_meeting_ai_persists_speakrs_fallback_error_metadata(tmp_path):
+    recordings_dir = tmp_path / 'recordings'
+    manager = MeetingManager(recordings_dir=str(recordings_dir))
+
+    audio_path = recordings_dir / 'meeting_20260903_112605.wav'
+    transcript_path = recordings_dir / 'meeting_20260903_112605.md'
+    audio_path.write_bytes(b'audio')
+    transcript_path.write_text('ordinary transcript', encoding='utf-8')
+    manager._save_meetings([{
+        'id': '20260903_112605',
+        'title': 'Task 5 fixed2 fallback fixture',
+        'date': '2026-09-03T11:26:05.684456',
+        'duration': '0:14',
+        'durationSeconds': 14.2245,
+        'audioPath': str(audio_path),
+        'transcriptPath': str(transcript_path),
+        'language': 'en',
+        'model': 'tiny',
+        'transcriptionStatus': 'completed',
+        'transcriptionDevice': 'cuda',
+        'transcriptionComputeType': 'float16',
+    }])
+
+    meeting = manager.update_meeting_ai(
+        '20260903_112605',
+        diarization={
+            'status': 'error',
+            'model': 'speakrs-community1-vbx',
+            'completedAt': '2026-09-03T10:26:16.879Z',
+            'error': 'Speakrs model pack is not installed.',
+        },
+    )
+
+    persisted = meeting['ai']['diarization']
+    assert persisted['status'] == 'error'
+    assert persisted['model'] == 'speakrs-community1-vbx'
+    assert persisted['completedAt'] == '2026-09-03T10:26:16.879Z'
+    assert persisted['error'] == 'Speakrs model pack is not installed.'
+    assert persisted['segmentsPath'] is None
+    assert not (recordings_dir / 'meeting_20260903_112605.speakers.json').exists()
+
+    fetched = manager.get_meeting('20260903_112605')
+    assert fetched['ai']['diarization']['status'] == 'error'
+    assert fetched['ai']['diarization']['model'] == 'speakrs-community1-vbx'
+    assert fetched['ai']['diarization']['error'] == 'Speakrs model pack is not installed.'
+    assert fetched['transcript'] == 'ordinary transcript'
+
+
 def test_get_meeting_falls_back_to_inline_transcript_when_file_is_missing(tmp_path):
     recordings_dir = tmp_path / 'recordings'
     manager = MeetingManager(recordings_dir=str(recordings_dir))

@@ -73,7 +73,9 @@ const {
   isMeetingTranscriptionRetryable,
 } = window.summaryUiHelpers;
 const {
+  applyDiarizationEngineCardDomState,
   buildDiarizationEngineCards,
+  coerceDiarizationEngineForPlatform,
   getDiarizationRemoveConfirmMessage,
   getDiarizationSetupButtonLabel,
   getDiarizationSwitchConfirmMessage,
@@ -1471,33 +1473,54 @@ function openSettingsAtAiAddons() {
   }
 }
 
+function getRendererPlatform() {
+  return homePromptContext.platform || inferRendererHostFamily(navigator.platform);
+}
+
 function getSelectedDiarizationEngine(diarization) {
-  return selectedDiarizationEngine || resolveSelectedDiarizationEngine(diarization);
+  return coerceDiarizationEngineForPlatform(
+    selectedDiarizationEngine || resolveSelectedDiarizationEngine(diarization),
+    getRendererPlatform(),
+  );
 }
 
 function applyDiarizationEngineCards({ selectedEngine, platform, arch }) {
-  const cards = buildDiarizationEngineCards({ platform, arch });
-  document.querySelectorAll('.diarization-engine-card').forEach((card) => {
-    const engine = card.dataset.engine;
+  const resolvedPlatform = platform || getRendererPlatform();
+  const cardNodes = Array.from(document.querySelectorAll('.diarization-engine-card'));
+  const states = applyDiarizationEngineCardDomState(
+    cardNodes.map((card) => ({ engine: card.dataset.engine })),
+    { selectedEngine, platform: resolvedPlatform, arch },
+  );
+  const catalog = buildDiarizationEngineCards({ platform: resolvedPlatform, arch });
+  document.querySelectorAll('.diarization-engine-selector').forEach((selector) => {
+    selector.classList.toggle('is-single-engine', catalog.length < 2);
+  });
+  cardNodes.forEach((card, index) => {
+    const state = states[index];
     const radio = card.querySelector('.diarization-engine-radio');
-    const selected = engine === selectedEngine;
-    const entry = cards.find((item) => item.engine === engine);
-    if (!entry) {
-      card.hidden = true;
+    card.hidden = Boolean(state && state.hidden);
+    if (!state || state.hidden) {
+      card.classList.remove('selected');
+      if (radio) {
+        radio.checked = false;
+        radio.disabled = true;
+        radio.tabIndex = -1;
+      }
       return;
     }
-    card.hidden = false;
-    card.classList.toggle('selected', selected);
+    card.classList.toggle('selected', state.selected);
     if (radio) {
-      radio.checked = selected;
+      radio.checked = state.selected;
+      radio.removeAttribute('tabIndex');
     }
     const subtitle = card.querySelector('[data-engine-sub], .diarization-engine-card-sub');
-    if (subtitle) {
+    const entry = catalog.find((item) => item.engine === state.engine);
+    if (subtitle && entry) {
       subtitle.textContent = entry.subtitle;
     }
   });
   document.querySelectorAll('[data-speakrs-recommended]').forEach((badge) => {
-    const speakrsCard = cards.find((entry) => entry.engine === 'speakrs');
+    const speakrsCard = catalog.find((entry) => entry.engine === 'speakrs');
     badge.hidden = !(speakrsCard && speakrsCard.recommended);
   });
 }
@@ -1531,7 +1554,7 @@ function updateHomeAiAddonCTA(aiStatus) {
   const speakerPrompt = document.getElementById('diarization-setup-prompt');
   const prompt = buildHomeAiAddonPrompt({
     aiStatus,
-    platform: homePromptContext.platform,
+    platform: getRendererPlatform(),
     cudaInstalled: homePromptContext.cudaInstalled,
     hasNvidiaGpu: homePromptContext.hasNvidiaGpu,
   });
@@ -1558,7 +1581,7 @@ function updateHomeAiAddonCTA(aiStatus) {
     const diarization = aiStatus && aiStatus.features ? aiStatus.features.diarization : null;
     applyDiarizationEngineCards({
       selectedEngine,
-      platform: homePromptContext.platform,
+      platform: getRendererPlatform(),
       arch: homePromptContext.arch,
     });
     applyDiarizationEngineFields(selectedEngine, {
@@ -4705,7 +4728,8 @@ function applyAiAddonButtonState({ setupButton, validateButton, removeButton, co
 
 function applyDiarizationEngineRadioState(canSelectEngine) {
   document.querySelectorAll('.diarization-engine-radio').forEach((radio) => {
-    radio.disabled = !canSelectEngine;
+    const card = radio.closest('.diarization-engine-card');
+    radio.disabled = !canSelectEngine || Boolean(card && card.hidden);
   });
 }
 
@@ -4806,7 +4830,7 @@ function updateAiAddonSettings(status) {
     });
     applyDiarizationEngineCards({
       selectedEngine,
-      platform: homePromptContext.platform,
+      platform: getRendererPlatform(),
       arch: homePromptContext.arch,
     });
     applyDiarizationEngineFields(selectedEngine, { unsupported: diarizationUnsupported });
@@ -5032,16 +5056,16 @@ function setupAiAddonSettingsListeners() {
   }
 
   function selectDiarizationEngine(engine) {
-    selectedDiarizationEngine = engine;
+    selectedDiarizationEngine = coerceDiarizationEngineForPlatform(engine, getRendererPlatform());
     const diarization = aiAddonStatusSnapshot && aiAddonStatusSnapshot.features
       ? aiAddonStatusSnapshot.features.diarization
-      : { engine };
+      : { engine: selectedDiarizationEngine };
     applyDiarizationEngineCards({
-      selectedEngine: engine,
-      platform: homePromptContext.platform,
+      selectedEngine: selectedDiarizationEngine,
+      platform: getRendererPlatform(),
       arch: homePromptContext.arch,
     });
-    applyDiarizationEngineFields(engine, {
+    applyDiarizationEngineFields(selectedDiarizationEngine, {
       unsupported: Boolean(diarization && diarization.status === 'unsupported'),
     });
     if (aiAddonStatusSnapshot) {

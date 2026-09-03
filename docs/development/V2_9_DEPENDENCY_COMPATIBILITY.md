@@ -500,6 +500,83 @@ Python child and no guided temporary transcript remained, and the meeting was
 durably `failed` with `Cancelled by user`. This closes the active-CLI cancel,
 remove, repair, and shared-CUDA-preservation rows only.
 
+### Task 5 fresh isolated packaged rerun — fallback metadata gate failed (2026-09-03)
+
+**Status: not accepted.** Fresh current-head `3a585493a1d0127f20fc37bb2a9745ee2dc7feae` evidence used CachyOS x86_64, kernel `7.2.2-1-cachyos`, Hyprland/Wayland, RTX 4070 (driver `610.57.04`, compute capability `8.9`, 12,282 MiB), rebuilt `dist/linux-unpacked/avanevis`, and isolated userData `/tmp/avanevis-v29-task5-VQYDLj/user-data`. Renderer IPC was driven through local CDP; no interactive profile was used.
+
+Fresh commands all exited 0: `npm run test:all`, `npm run build:linux`, and `npm run verify:linux:packaged` (unpacked, AppImage, pacman, and deb). The resulting artifacts hash to AppImage `f9e2581340e12d94e675174a049dd27ab14c22f3578a635651fb646cc478d778`, pacman `037a101d7bb00d7a0483f12e0de9ffd84ed1b4bc87b8c362e21d8a54be296844`, and deb `228887fc9fefdc314f26092d661423991b158c19be92a85e910bbc536e46f1de`.
+
+Empty-profile preflight was fail-closed (`missingLibraries`: cublas, cublasLt, cudnn). Packaged CUDA install then reached `ready`/`cuda12`, `deviceAvailable=true`, `runtimeLoadable=true`; Speakrs setup and a later repair both returned ready. Full installed hashes match catalog pins: ORT `67eda041546eb01cf5606add5467d8bb7305b2aedb5cf37fdc6b055c7adfc094`, CUDA provider `cffff5fe3aac14fe50eed1113757ac8318ee12ef307fcb9def35a24398ec0ce3`, managed cublas `5757ab5839fb4f203ca47ecb336110d10f4a5606b1e097f195fbca89774569e2`, and Speakrs ResNet `203a4c67112167580ab1fcb62f4568c633499fb283805890aebe1c48564fcc0f`.
+
+Bundled two-speaker fixture `1eed9687badcdd0d554638c8229fdb48d5c80e21ed1393c3bb5621f0c83bd998` produced persisted meeting `20260903_105917`: Whisper `cuda`/`float16`, CUDA Speakrs sidecar SHA-256 `f0349ad7460ac1ed4d437e6da6a8ee673843049768600f8266a2ca84756cf7c2`. Its keys are `annotationSource`, `audioPath`, `completedAt`, `device`, `model`, `segments`, `segmentsPath`, `speakerCount`, `speakerSegments`, and `status`; labelled segments have `start`, `end`, `speaker`, and `text`. After settlement the renderer queue was empty (`busyCount:0`) and `ps` found no guided Python or Speakrs CLI child.
+
+**Failure:** moving the managed ResNet forced guided failure. Meeting `20260903_110001` correctly persisted an ordinary CUDA/float16 `.md`, created no sidecar, and left no child, but its metadata omitted `ai.diarization` entirely rather than storing a concise diarization error. This fails the Task 5 fallback criterion. Repair restored Ready. Removal deleted only Speakrs model/ORT roots while the cublas hash and faster-whisper tiny cache survived. DOM inspection found visible Speakrs, both Pyannote cards hidden, token field `hidden`/`display:none`, and summary `is-unsupported` with an Unsupported badge and disabled setup. Historical cancel/quit evidence above was not rerun after this failure. Do not accept Task 5 until fallback metadata is fixed and the affected packaged rows rerun.
+
+### Task 5 follow-up — on-disk fallback metadata and Linux Pyannote CSS (2026-09-03, not accepted)
+
+**Status: not accepted.** Same isolated profile `/tmp/avanevis-v29-task5-VQYDLj/user-data`. Do not treat this as packaged Task 5 acceptance: cancel/quit, fail-closed preflight, History fallback copy, and a rebuilt Speakrs-only UI were not re-run.
+
+**Superseded for meetings `20260903_112216` and `20260903_112605` only:** after `resolveGuidedDiarizationStatus()` retained Speakrs `error` / cache `reason` and `runMeetingTranscriptionJob()` carried that into `guidedTranscriptionError`, those later fallback fixtures persisted concise `ai.diarization` on disk (`status: "error"`, `model: "speakrs-community1-vbx"`, timestamp, `error: "Speakrs model pack is not installed."`, `segmentsPath: null`) with ordinary CUDA/float16 transcripts and no `.speakers.json`. Meeting `20260903_110001` remains the original omitted-metadata failure and is not rewritten. A job-level JS regression now asserts `updateMeetingAiMetadata` receives that error payload; a Python `update-ai`/`get` round trip covers the meeting-manager boundary. History UI for the error banner was not re-opened in the packaged app this session.
+
+**Superseded DOM-hidden Speakrs-only claim:** `.diarization-engine-card { display: flex }` overrode the HTML `hidden` attribute, so CDP `hidden=true` / token `display:none` was not visual absence of the Pyannote Settings/Home cards. The renderer now allowlists Pyannote to `win32`/`darwin` only, coerces Linux/unknown to Speakrs, and adds `.diarization-engine-card[hidden] { display: none !important; }` plus a single-column selector. Packaged UI must be rebuilt and inspected visually before calling the Speakrs-only row accepted.
+
+### Task 5 rebuilt packaged acceptance rerun — remaining rows reproduced (2026-09-03)
+
+**Status: acceptance evidence complete; formal acceptance remains pending the
+required adversarial review.** This rerun used a fresh
+`npm run build:linux` from the current working tree and the same isolated
+profile `/tmp/avanevis-v29-task5-VQYDLj/user-data` on CachyOS x86_64,
+Hyprland/Wayland, NVIDIA RTX 4070. `app.isPackaged` was true and
+`process.resourcesPath` pointed at the rebuilt `dist/linux-unpacked/resources`.
+The ResNet model was restored after the fallback run.
+
+**Rebuilt UI.** Settings was visually inspected after status initialization:
+only the Speakrs card was painted; Pyannote cards/text were absent from the
+visible page and its hidden subtree was not keyboard-reachable. Home likewise
+contained no visible Pyannote text. Meeting Summaries remained visibly
+`Unsupported`, with the Linux unavailable copy and disabled controls. The
+main-process Linux Pyannote rejection was unchanged. The stale-validation-copy
+edge case found during this rerun is covered by a focused renderer regression:
+an authoritative `unsupported` availability reason now wins over a previous
+`lastValidation: ready` message.
+
+**Rebuilt fallback.** Existing meeting `20260903_112605` was opened in History
+and displayed `Speaker identification failed for this recording. Speakrs model
+pack is not installed.` A fresh model-missing run created meeting
+`20260903_121531` (`Task 5 post-rebuild fallback`): its ordinary transcript
+persisted with `transcriptionDevice: "cuda"` and
+`transcriptionComputeType: "float16"`, no `.speakers.json` existed, and
+`ai.diarization` contained only `status: "error"`, model
+`speakrs-community1-vbx`, `completedAt`, the concise model-pack error, and
+`segmentsPath: null`. History displayed the same per-recording error line.
+Restoring the ResNet and rechecking setup returned `ready` with valid model
+and runtime caches.
+
+**Rebuilt cancellation and quit.** During cancellation, process snapshots
+observed the packaged Python `diarization.guided_transcription` process and
+the bundled `resources/bin/speakrs-cli` child in the guided process group.
+Cancellation returned `{ success: true, cancelled: true }`; the meeting was
+`failed` with `Cancelled by user`, guided temporary output was absent, and
+the renderer queue reported `busyCount: 0`. A second run sent quit while the
+Speakrs child was live; the app exited within the bounded drain and a final
+process scan found neither `speakrs-cli` nor guided Python.
+
+**Rebuilt fail-closed preflight.** With the managed CUDA tree moved aside,
+the restarted packaged app reported `checkCUDA.runtimeLoadable: false`,
+`statusCode: "missingLibraries"`, and the diarization card rendered
+`Unsupported` with the managed CUDA 12/NVIDIA GPU requirement. It did not
+offer CPU speaker identification. The non-ready probe-status matrix and
+non-x64 admission cases remain pinned by
+`tests/js/linux-cuda-transcription-admission.test.js`; the packaged
+missing-runtime result confirms the user-facing gate.
+
+These observations supersede the earlier “not re-run after failure” notes
+above, while preserving meeting `20260903_110001` as the original historical
+omitted-metadata failure. No dedicated setup, repair, or guided-success
+acceptance rerun was used to establish this follow-up beyond the
+already-restored Ready check; guided jobs were exercised only as the
+cancel/quit lifecycle fixtures.
+
 ## Interpreters used for this matrix
 
 | Interpreter | Where | ABI |

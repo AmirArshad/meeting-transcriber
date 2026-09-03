@@ -137,6 +137,40 @@ function createLinuxTranscriptionService(overrides = {}) {
   return { service, spawnCalls };
 }
 
+test('Linux guided admission preserves Speakrs integrity failure for fallback metadata', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    const { service } = createLinuxTranscriptionService({
+      resolveCudaStatusForTranscription: async () => readyLinuxCudaStatus(),
+      getAiAddonRuntimeOptions: (extra = {}) => ({ ...extra }),
+      checkAiAddonSetupStatus: async () => ({
+        features: {
+          diarization: {
+            status: 'error',
+            setupComplete: false,
+            engine: 'speakrs',
+            modelId: 'speakrs-community1-vbx',
+            speakerCount: 'auto',
+            error: null,
+            runtimeCache: { valid: false, reason: 'Speakrs runtime integrity validation failed.' },
+            packCache: { valid: false, reason: 'Speakrs model pack is not installed.' },
+          },
+        },
+      }),
+    });
+
+    const status = await service.resolveGuidedDiarizationStatus();
+
+    assert.deepEqual(status, {
+      engine: 'speakrs',
+      modelId: 'speakrs-community1-vbx',
+      speakerCount: 'auto',
+      modelRef: 'speakrs-community1-vbx',
+      requiredDevice: 'cuda',
+      error: 'Speakrs runtime integrity validation failed.',
+    });
+  });
+});
+
 const ADMISSION_ARGS = {
   audioFile: '/tmp/avanevis-test/recordings/meeting.opus',
   language: 'en',
@@ -302,6 +336,81 @@ test('Linux CUDA cancel terminates the admitted child without a CPU retry', asyn
     child.kill();
     await assert.rejects(promise, /Transcription failed/);
     assert.equal(spawnCalls.length, 1);
+  });
+});
+
+test('Linux Speakrs pack failure persists diarization error metadata after ordinary CUDA fallback', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    const meeting = {
+      id: '20260903_112605',
+      title: 'Task 5 fixed2 fallback fixture',
+      audioPath: '/tmp/avanevis-test/recordings/meeting_20260903_112605.wav',
+      transcriptPath: '/tmp/avanevis-test/recordings/meeting_20260903_112605.md',
+      durationSeconds: 14,
+    };
+    const aiUpdates = [];
+    const { service, spawnCalls } = createLinuxTranscriptionService({
+      enqueueAiComputeAction: async (action) => action(),
+      updateMeetingAiMetadata: async (meetingId, updates) => {
+        aiUpdates.push({ meetingId, updates });
+        return {
+          ...meeting,
+          transcriptionStatus: 'completed',
+          transcriptionDevice: 'cuda',
+          transcriptionComputeType: 'float16',
+          ai: { diarization: updates.diarization },
+        };
+      },
+      checkAiAddonSetupStatus: async () => ({
+        features: {
+          diarization: {
+            status: 'error',
+            setupComplete: false,
+            engine: 'speakrs',
+            modelId: 'speakrs-community1-vbx',
+            speakerCount: 'auto',
+            error: null,
+            runtimeCache: { valid: false, reason: 'Speakrs runtime integrity validation failed.' },
+            packCache: { valid: false, reason: 'Speakrs model pack is not installed.' },
+          },
+        },
+      }),
+      runWallClockComputeAction: async ({ label, action }) => {
+        const text = String(label || '');
+        if (text.startsWith('Meeting lookup')) {
+          return meeting;
+        }
+        if (text.startsWith('Meeting status update')) {
+          return {
+            ...meeting,
+            transcriptionStatus: 'completed',
+            transcriptionDevice: 'cuda',
+            transcriptionComputeType: 'float16',
+          };
+        }
+        return action((proc) => proc);
+      },
+    });
+
+    const result = await service.admitMeetingTranscriptionJob({
+      meetingId: meeting.id,
+      language: 'en',
+      modelSize: 'tiny',
+    });
+
+    assert.equal(result.transcriptionDevice || result.device, 'cuda');
+    assert.equal(result.diarizationError, 'Speakrs runtime integrity validation failed.');
+    assert.equal(aiUpdates.length, 1);
+    assert.equal(aiUpdates[0].meetingId, meeting.id);
+    assert.equal(aiUpdates[0].updates.diarization.status, 'error');
+    assert.equal(aiUpdates[0].updates.diarization.model, 'speakrs-community1-vbx');
+    assert.equal(aiUpdates[0].updates.diarization.error, 'Speakrs runtime integrity validation failed.');
+    assert.match(String(aiUpdates[0].updates.diarization.completedAt), /T/);
+    assert.equal(result.meeting.ai.diarization.status, 'error');
+    assert.equal(
+      spawnCalls.some((call) => String((call.args || []).join(' ')).includes('guided')),
+      false,
+    );
   });
 });
 

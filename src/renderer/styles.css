@@ -2597,6 +2597,10 @@ footer {
   margin: 4px 0 12px;
 }
 
+.diarization-engine-selector.is-single-engine {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .diarization-engine-card {
   position: relative;
   display: flex;
@@ -2613,6 +2617,10 @@ footer {
   cursor: pointer;
   padding: 10px 12px;
   text-align: left;
+}
+
+.diarization-engine-card[hidden] {
+  display: none !important;
 }
 
 .diarization-engine-radio {
