@@ -205,11 +205,18 @@ function createTranscriptionService(deps) {
     return buildTranscriptionRuntimeEnv({
       cacheDir: downloadCheck.cacheDir,
       modelCached: isTranscriptionModelCached(modelSize, downloadCheck),
-      baseEnv: buildCudaRuntimeEnv(
+      baseEnv: buildScopedCudaRuntimeEnv(
         linuxCudaRequired ? { AVANEVIS_LINUX_CUDA_REQUIRED: '1' } : {},
         cudaOptions,
       ),
     });
+  }
+
+  function buildScopedCudaRuntimeEnv(extra = {}, options = {}) {
+    return buildCudaRuntimeEnv({
+      AVANEVIS_LINUX_CUDA_REQUIRED: undefined,
+      ...extra,
+    }, options);
   }
 
   function getTranscriberArgs(extraArgs = []) {
@@ -283,7 +290,7 @@ function createTranscriptionService(deps) {
       const linuxCudaEnabled = process.platform === 'linux' && requiredDevice === 'cuda';
       const baseEnv = includeTranscriptionRuntime
         ? getTranscriptionRuntimeEnv(modelSize, { includeManagedDiarization: false, linuxCudaEnabled })
-        : buildCudaRuntimeEnv(
+        : buildScopedCudaRuntimeEnv(
           linuxCudaEnabled ? { AVANEVIS_LINUX_CUDA_REQUIRED: '1' } : {},
           { includeManagedDiarization: false },
         );
@@ -300,7 +307,7 @@ function createTranscriptionService(deps) {
 
     const baseEnv = includeTranscriptionRuntime
       ? getTranscriptionRuntimeEnv(modelSize, { includeManagedDiarization: true })
-      : buildCudaRuntimeEnv({}, { includeManagedDiarization: true });
+      : buildScopedCudaRuntimeEnv({}, { includeManagedDiarization: true });
     return {
       ...getDiarizationDependencyEnv(),
       ...getDiarizationCacheEnv(),
@@ -2092,7 +2099,7 @@ function createTranscriptionService(deps) {
             env: buildTranscriptionRuntimeEnv({
               cacheDir: downloadCheck.cacheDir,
               modelCached: false,
-              baseEnv: buildCudaRuntimeEnv(),
+              baseEnv: buildScopedCudaRuntimeEnv(),
             }),
           });
         } catch (error) {

@@ -90,10 +90,13 @@
   }
 
   function buildDiarizationEngineCards({ platform, arch } = {}) {
-    return [
+    const cards = [
       getDiarizationEngineCard({ engine: 'speakrs', platform, arch }),
-      getDiarizationEngineCard({ engine: 'pyannote', platform, arch }),
     ];
+    if (platform !== 'linux') {
+      cards.push(getDiarizationEngineCard({ engine: 'pyannote', platform, arch }));
+    }
+    return cards;
   }
 
   function shouldConfirmDiarizationEngineSwitch({

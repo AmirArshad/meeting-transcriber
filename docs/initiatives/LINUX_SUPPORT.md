@@ -20,12 +20,12 @@ This plan is written to be executed phase by phase, one PR per phase, by an impl
 5. Never weaken a Windows or macOS test to make Linux pass. Add Linux cases alongside existing ones.
 6. Validation per phase: run the smallest relevant suite while iterating (`npm test` for JS, `npm run test:python` for Python), and always run `npm run test:all` before opening the phase PR.
 7. No Linux feature may be presented as available in the UI until its phase exit criteria pass. `unsupported` is the correct status until then.
-8. Run Phases 6–9 only through the v2.9 Linux-AI plan on CachyOS x86_64 + NVIDIA RTX 4070. Each component stays unavailable until its specific artifact, security, packaged, and hardware gate passes; no CPU fallback or wider Linux support claim is allowed.
+8. Run Phases 6–9 only through the v2.9 Linux-AI plan on CachyOS x86_64 + NVIDIA RTX 4070. Speakrs and summaries stay unavailable until their specific artifact, packaged, and hardware gates pass; Pyannote is out of Linux product scope. No CPU fallback or wider Linux support claim is allowed.
 
 Delivery has two explicit milestones:
 
 1. **Omarchy Core Beta** (Phases 0–5) — **this is the first Linux version.** Mic + desktop recording, recovery, background transcription queue, local faster-whisper **on CPU**, History/export, tray/notifications, pacman package, and a FUSE-less AppImage. Speaker identification and local summaries stay `unsupported` and greyed out in the UI.
-2. **v2.9 Linux AI extension** (Phases 6–9, gated) — managed CUDA Whisper, accepted CUDA-only Speakrs/Pyannote support, and accepted CUDA-only summaries on CachyOS x86_64 + NVIDIA RTX 4070. A phase must not make a component available until its fresh artifact, security, packaged, and hardware evidence is recorded. A CPU llama.cpp binary is not an acceptable fallback.
+2. **v2.9 Linux AI extension** (Phases 6–9, gated) — managed CUDA Whisper, accepted CUDA-only Speakrs support, and accepted CUDA-only summaries on CachyOS x86_64 + NVIDIA RTX 4070. Pyannote is out of Linux product scope. A phase must not make a component available until its fresh artifact, packaged, and hardware evidence is recorded. A CPU llama.cpp binary is not an acceptable fallback.
 
 Core Beta and all unvalidated Linux AI profiles must not present setup controls that cannot complete. Greyed-out Settings cards and a disabled Generate Summary control are required; hiding the features, or leaving Set Up clickable, is not. Do not call Linux "feature-complete" with Windows/macOS beyond the accepted 4070 matrix.
 
@@ -46,7 +46,7 @@ The original late-2025 plan predated most of the current runtime architecture. T
 | Discard/cancel with a `discarded` manifest tombstone | Linux cancel must skip finalization and must never resurrect discarded spools |
 | Main-owned background transcription queue and Activity UI | Capture unlocks after pending meeting persistence, not after Whisper; Linux uses the same queue and monotonic `seq` state |
 | Whisper preload and GPU runtime between-job admission | Linux model download and accelerator setup must use `gpuResourceActionQueue`, not a new lock or fail-fast path |
-| Exclusive Speakrs/Pyannote engine selector | **Out of the first Linux version.** Catalog stays without `linux-x64` entries; UI stays greyed `unsupported`. Later version (Phase 7) needs both engines, exclusive deletion, token isolation, setup validation, and guided transcription |
+| Speaker identification selector | **Out of the first Linux version.** Catalog stays without `linux-x64` entries; UI stays greyed `unsupported`. The v2.9 extension exposes Speakrs only, with setup validation and guided transcription; Linux has no Pyannote selector or token flow |
 | Bundled `speakrs-cli` with fail-closed integrity | **Do not stage a Linux Speakrs binary in Core Beta.** Windows/macOS packaging is unchanged. Later version (Phase 7) builds, stages, and fail-closes the Linux CLI; model/runtime packs remain setup-time downloads |
 | User-triggered Qwen summaries through pinned llama.cpp | **Out of the first Linux version**, including the CPU llama.cpp runtime. Later version (Phase 8) pins a Linux runtime and preserves sidecar/metadata finalization |
 | AI compute wall clocks and quit drain | Core Beta must prove process-group kill for Python and ffmpeg. `llama-cli` and `speakrs-cli` grandchildren are a later-version concern |
@@ -127,7 +127,7 @@ The first Linux version (Core Beta) must state:
 - CachyOS x86_64 Hyprland/Wayland + PipeWire is supported (same Core Beta payload; evidence 2026-08-31, including packaged 2-minute mic+desktop Stop with browser speech in the CPU transcript).
 - Wayland/Hyprland + PipeWire/Pulse compatibility is the tested desktop.
 - Transcription is local faster-whisper on **CPU**. Linux CUDA Whisper is not a Core Beta support claim.
-- Speaker identification (Speakrs and Pyannote) and local summaries are **not available on Linux in this version**; they will return in a future Linux update. The Settings cards stay visible and greyed out. No Linux CPU fallback for either speaker engine.
+- Speaker identification and local summaries are **not available on Linux in this version**; they will return in a future Linux update. The Settings cards stay visible and greyed out. The later Linux speaker option is Speakrs only, with no CPU fallback.
 - Ubuntu, vanilla Arch, non-Hyprland CachyOS, Fedora Workstation, SteamOS Desktop Mode, and additional desktops (GNOME, KDE Plasma, COSMIC, Sway, Niri, Cinnamon, XFCE) are **experimental betas** until friend hardware evidence exists. See [LINUX_EXPERIMENTAL.md](../guides/LINUX_EXPERIMENTAL.md) and [linux-experimental-beta-checklist.md](../../tests/manual/linux-experimental-beta-checklist.md).
 - Linux ARM64, Flatpak, Snap, RPM, ROCm/MIGraphX, and Linux AI add-on setup remain out of this release. The experimental `.deb` is a packaging convenience, not a Ubuntu support claim.
 
@@ -354,11 +354,11 @@ return linuxAsset || null;
 
 ### 12. Core Beta historical decision: no diarization or summaries (2026-08-24; superseded for the v2.9 RTX 4070 lane)
 
-The original Omarchy Core Beta host had no NVIDIA evidence. The current CachyOS RTX 4070 host is reserved for the separately gated v2.9 Linux-AI lane. Speakrs and Pyannote on Linux are CUDA-only with **no CPU fallback** (same product policy as Windows/macOS). Local summaries are deferred with that same later milestone even though a CPU llama.cpp binary exists upstream — do not ship a Linux-only CPU summary exception in Core Beta.
+The original Omarchy Core Beta host had no NVIDIA evidence. The current CachyOS RTX 4070 host is reserved for the separately gated v2.9 Linux-AI lane. Linux is Speakrs-only and CUDA-only with **no CPU fallback**. Local summaries are deferred with that same later milestone even though a CPU llama.cpp binary exists upstream — do not ship a Linux-only CPU summary exception in Core Beta.
 
 Core Beta product rules:
 
-- `getDiarizationAvailability('linux', …)` and `getSummaryAvailability('linux', …)` stay `supported: false`. Do not add `linux-x64` catalog, Speakrs pack, ORT, llama.cpp, or pyannote CUDA entries.
+- `getDiarizationAvailability('linux', …)` and `getSummaryAvailability('linux', …)` stay `supported: false`. Do not add `linux-x64` catalog, Speakrs pack, ORT, llama.cpp, or Pyannote CUDA entries during Core Beta.
 - Feature status remains `unsupported`. Setup/generate IPC stays fail-closed.
 - **Do not hide the features.** Settings must still show the Speaker identification and Local summaries cards so users can see they exist on other platforms.
 - **Do grey them out.** `buildAiAddonControlState` already sets `canConfigure` / `canValidate` / `canRemove` / `canSelectEngine` false when `status === 'unsupported'`. Phase 4 must make that visually obvious: disabled buttons, disabled engine radios, disabled summary profile select, muted card chrome (for example an `ai-addon-card is-unsupported` class), and no token/speaker-count fields offered.
@@ -418,26 +418,7 @@ Implementation requirements:
 8. Keep progress phases, sidecar schema, guided windows, and fallback-to-normal-transcript behavior unchanged.
 9. Preserve the 30-minute diarization wall clock and process-group kill of the CLI grandchild.
 
-Do not claim a Linux accuracy or speed win before same-audio evidence. Keep the known split-identity/over-clustering risk documented and keep Pyannote selectable.
-
-### Pyannote on Linux
-
-Product policy for the later Linux version: **x86_64 NVIDIA CUDA only; no CPU fallback**.
-
-Implementation requirements:
-
-1. Add a pinned `linux-x64` managed dependency artifact for pyannote/PyTorch CUDA.
-2. Keep the user's own Hugging Face token in Electron `safeStorage`; never persist plaintext.
-3. Token preflight per **Locked decision 9**: the `password-store` switch must already be appended at startup, and the preflight requires **both** `safeStorage.isEncryptionAvailable()` **and** `getSelectedStorageBackend() !== 'basic_text'`. Missing secret storage produces `needsAccount`/unsupported guidance, never basic-text token persistence.
-4. Continue passing validation tokens over stdin and clear all Hugging Face token environment variables, with `HF_TOKEN_PATH` set to `os.devNull`, never `""`.
-5. Keep pyannote model loading offline/local-only after setup.
-6. Preserve the exclusive-engine rules:
-   - new/unset users default Speakrs
-   - legacy Pyannote installs stay Pyannote
-   - switching removes the other engine's models/dependencies
-   - Pyannote → Speakrs keeps the saved token
-   - Remove deletes the active engine and the saved token
-7. Never delete Whisper caches or shared CUDA libraries during switch/remove.
+Do not claim a Linux accuracy or speed win before same-audio evidence. Keep the known split-identity/over-clustering risk documented. Linux is Speakrs-only by product scope: do not add Linux Pyannote dependency pins, token setup, catalog entries, or a Pyannote selector. Main-process Linux Pyannote rejection remains as defense in depth. This does not change the Windows/macOS compatibility selector or their token safeguards.
 
 ### Guided transcription and diarization sidecars
 
@@ -854,20 +835,17 @@ Order:
 1. Linux `speakrs-cli` build/package/integrity — including the `Cargo.toml` Linux target section and the `ort-compile-pins.json` `linux-x64: null` entry (exact snippets in **Speakrs on Linux**)
 2. Linux model and ORT/CUDA pack pins (`onnxruntime-linux-x64-gpu_cuda12-1.27.1.tgz` closure; cuDNN 9 + zlib + `LD_LIBRARY_PATH` caveats)
 3. Speakrs setup validation and guided smoke
-4. Investigate Pyannote Linux dependency pins and the two-part secure-token preflight from Locked decision 9; accept Pyannote only if both pass
-5. selector switch/remove behavior on packaged Linux
-6. soak and same-audio comparison
+4. Speakrs remove behavior on packaged Linux
+5. soak and same-audio comparison
 
 Exit criteria:
 
-- both engine cards are truthful
-- only one engine is installed
+- the sole Linux engine card is Speakrs
 - Speakrs uses no token
-- Pyannote token never reaches logs/manifests/metadata
 - setup/validate full-hashes; compute admission rehashes changed fingerprints
-- every accepted engine runs CUDA-only and produces unchanged sidecar schemas
+- Speakrs runs CUDA-only and produces unchanged sidecar schemas
 - guided failure preserves a normal transcript
-- remove/switch never deletes Whisper or shared CUDA
+- remove never deletes Whisper or shared CUDA
 - quit/timeout leaves no `speakrs-cli` grandchild
 
 ### Phase 8 — Summary parity (v2.9 gated)
@@ -896,12 +874,12 @@ Hardware gate: CachyOS x86_64 with NVIDIA RTX 4070 CUDA. Until an individual com
 
 Matrix:
 
-| Environment | Core | CUDA Whisper | Speakrs | Pyannote | Summary | Package |
-|---|---:|---:|---:|---:|---:|---|
-| Omarchy 4 / Hyprland / PipeWire / CPU-only | **Required (first version)** | Unsupported (greyed) | Unsupported (greyed) | Unsupported (greyed) | Unsupported (greyed) | pacman + AppImage |
-| CachyOS / Hyprland / PipeWire / RTX 4070 | Required | Evidence-gated v2.9 | Evidence-gated v2.9 | Evidence-gated v2.9 | Evidence-gated v2.9 | AppImage + pacman + deb |
-| Ubuntu 24.04 / Wayland / PipeWire | Smoke | Experimental/unavailable | Experimental/unavailable | Experimental/unavailable | Experimental/unavailable | AppImage |
-| Ubuntu 24.04 / X11 / PulseAudio | Smoke | Experimental/unavailable | Experimental/unavailable | Experimental/unavailable | Experimental/unavailable | AppImage |
+| Environment | Core | CUDA Whisper | Speakrs | Summary | Package |
+|---|---:|---:|---:|---:|---|
+| Omarchy 4 / Hyprland / PipeWire / CPU-only | **Required (first version)** | Unsupported (greyed) | Unsupported (greyed) | Unsupported (greyed) | pacman + AppImage |
+| CachyOS / Hyprland / PipeWire / RTX 4070 | Required | Evidence-gated v2.9 | Evidence-gated v2.9 | Evidence-gated v2.9 | AppImage + pacman + deb |
+| Ubuntu 24.04 / Wayland / PipeWire | Smoke | Experimental/unavailable | Experimental/unavailable | Experimental/unavailable | AppImage |
+| Ubuntu 24.04 / X11 / PulseAudio | Smoke | Experimental/unavailable | Experimental/unavailable | Experimental/unavailable | AppImage |
 
 Core Beta remains CPU-only. Unaccepted and unvalidated Linux AI add-ons stay explicit and greyed and must never fall back to CPU or cloud behavior. The RTX 4070 row is evidence for Phases 6–9 only.
 
@@ -957,7 +935,7 @@ First Linux version (Omarchy CPU-only):
 Later version only (needs NVIDIA Omarchy):
 
 - CUDA-major mismatch and CPU fallback; managed CUDA install/repair
-- Speakrs/Pyannote setup, switch, remove, guided fallback, quit
+- Speakrs setup, remove, guided fallback, quit
 - summary setup cancel and metadata-phase quit
 - no network during diarization/summary generation
 
@@ -966,7 +944,7 @@ Later version only (needs NVIDIA Omarchy):
 - speaker identification, guided transcription, or Linux `speakrs-cli` outside accepted v2.9 CachyOS RTX 4070 gates
 - local summaries outside an accepted CUDA runtime; a CPU llama.cpp runtime "to try it anyway"
 - managed Linux CUDA Whisper / GPU Settings install outside the accepted profile
-- a Linux CPU fallback for Speakrs or Pyannote
+- a Linux CPU fallback for Speakrs
 - application-specific desktop-audio capture
 - PipeWire native graph API while Pulse compatibility is sufficient
 - real-time mixing or streaming captions

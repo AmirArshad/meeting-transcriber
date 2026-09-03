@@ -1483,8 +1483,10 @@ function applyDiarizationEngineCards({ selectedEngine, platform, arch }) {
     const selected = engine === selectedEngine;
     const entry = cards.find((item) => item.engine === engine);
     if (!entry) {
+      card.hidden = true;
       return;
     }
+    card.hidden = false;
     card.classList.toggle('selected', selected);
     if (radio) {
       radio.checked = selected;

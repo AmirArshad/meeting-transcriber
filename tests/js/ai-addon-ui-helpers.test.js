@@ -134,6 +134,12 @@ test('Speakrs is Recommended only on Apple Silicon and uses selector copy', () =
   assert.deepEqual(cards.map((card) => card.engine), ['speakrs', 'pyannote']);
 });
 
+test('Linux exposes Speakrs as its only speaker-identification engine', () => {
+  const cards = buildDiarizationEngineCards({ platform: 'linux', arch: 'x64' });
+
+  assert.deepEqual(cards.map((card) => card.engine), ['speakrs']);
+});
+
 test('token and speaker-count UI stay hidden unless pyannote is selected', () => {
   assert.equal(shouldShowDiarizationTokenUi('speakrs'), false);
   assert.equal(shouldShowDiarizationSpeakerCount('speakrs'), false);

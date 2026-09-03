@@ -219,6 +219,41 @@ test('speakrs child env skips HF cache vars and does not inherit exclusive=0', (
   }
 });
 
+test('only admitted Linux Speakrs explicitly retains the CUDA-required child flag', () => {
+  const platformDesc = Object.getOwnPropertyDescriptor(process, 'platform');
+  const archDesc = Object.getOwnPropertyDescriptor(process, 'arch');
+  const cudaEnvInputs = [];
+  const service = createService({
+    buildCudaRuntimeEnv: (extra = {}) => {
+      cudaEnvInputs.push(extra);
+      return extra;
+    },
+  });
+
+  try {
+    for (const platform of ['linux', 'win32', 'darwin']) {
+      Object.defineProperty(process, 'platform', { configurable: true, value: platform });
+      Object.defineProperty(process, 'arch', { configurable: true, value: 'x64' });
+      service.getTranscriptionRuntimeEnv('small');
+      service.buildDiarizationChildEnv({ engine: 'pyannote', requiredDevice: 'cuda' });
+      service.buildDiarizationChildEnv({ engine: 'speakrs', requiredDevice: 'cuda' });
+    }
+  } finally {
+    Object.defineProperty(process, 'platform', platformDesc);
+    Object.defineProperty(process, 'arch', archDesc);
+  }
+
+  const retained = cudaEnvInputs.filter(
+    (input) => input.AVANEVIS_LINUX_CUDA_REQUIRED === '1',
+  );
+  const explicitlyCleared = cudaEnvInputs.filter(
+    (input) => Object.hasOwn(input, 'AVANEVIS_LINUX_CUDA_REQUIRED')
+      && input.AVANEVIS_LINUX_CUDA_REQUIRED === undefined,
+  );
+  assert.equal(retained.length, 1, 'only Linux Speakrs CUDA admission retains the flag');
+  assert.equal(explicitlyCleared.length, 8, 'ordinary, Pyannote, Windows, and macOS paths scrub ambient state');
+});
+
 test('packaged missing Speakrs CLI rejects child env before Python spawn', () => {
   const previous = process.env.AVANEVIS_PACKAGED;
   process.env.AVANEVIS_PACKAGED = '1';
