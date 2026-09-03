@@ -67,6 +67,11 @@ test('download-model and AI add-on setup handlers stay off the compute queue', (
     !/waitForAiComputeQueueIdle/.test(downloadModelSource),
     'download-model must not use the 15-minute compute idle wait',
   );
+  const summarySetupSource = extractIpcHandlerSource(combined, 'setup-summary-model');
+  assert.ok(
+    !/enqueueGpuResourceAction/.test(summarySetupSource),
+    'summary runtime/model setup must stay on aiAddonActionQueue without holding the GPU resource queue',
+  );
   assert.match(
     downloadModelSource,
     /enqueueGpuResourceAction/,

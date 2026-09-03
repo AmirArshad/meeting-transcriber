@@ -1791,7 +1791,7 @@ test('summary checksum verifyChecksumIfChanged skips re-hash when fingerprint ma
   assert.equal(second.checksumSkippedUnchanged, true);
 });
 
-test('summary runtime cache stays in userData and requires llama-cli', () => {
+test('summary runtime cache stays in userData and requires llama-cli', async () => {
   const fsModule = createMemoryFs();
   const artifact = getSummaryArtifactForPlatform(DEFAULT_SUMMARY_MODEL_ID, 'win32', 'x64');
   const runtimeDir = getSummaryRuntimeDir('/tmp/AvaNevis', artifact);
@@ -1803,7 +1803,7 @@ test('summary runtime cache stays in userData and requires llama-cli', () => {
   assert.equal(runtimeDir, path.join('/tmp/AvaNevis', 'ai-addons', 'models', 'summary', DEFAULT_SUMMARY_MODEL_ID, 'runtime', 'win32-x64'));
   assert.equal(runtimeExecutable, path.join(runtimeDir, 'llama-cli.exe'));
 
-  const missingCache = checkSummaryRuntimeCache({
+  const missingCache = await checkSummaryRuntimeCache({
     userDataDir: '/tmp/AvaNevis',
     platform: 'win32',
     arch: 'x64',
@@ -1816,7 +1816,7 @@ test('summary runtime cache stays in userData and requires llama-cli', () => {
   assert.equal(missingCache.reason, 'llama.cpp runtime is not installed.');
 
   fsModule.mkdirSync(path.join(runtimeDir, 'extract'));
-  const partialCache = checkSummaryRuntimeCache({
+  const partialCache = await checkSummaryRuntimeCache({
     userDataDir: '/tmp/AvaNevis',
     platform: 'win32',
     arch: 'x64',
@@ -1830,7 +1830,7 @@ test('summary runtime cache stays in userData and requires llama-cli', () => {
   fsModule.mkdirSync(path.dirname(nestedRuntimeExecutable));
   fsModule.writeFileSync(nestedRuntimeExecutable, 'bin');
   fsModule.writeFileSync(runtimeExecutable, 'orphaned bin');
-  const installedCache = checkSummaryRuntimeCache({
+  const installedCache = await checkSummaryRuntimeCache({
     userDataDir: '/tmp/AvaNevis',
     platform: 'win32',
     arch: 'x64',

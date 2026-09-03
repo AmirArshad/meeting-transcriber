@@ -15,10 +15,12 @@ It is **not** packaged RTX 4070 preflight. CUDA Whisper later passed Task 3
 packaged RTX 4070 acceptance (2026-09-02). Task 4 recorded Linux Speakrs CLI
 and pack-spec pins (2026-09-02). Task 5 added `linux-x64` Speakrs catalog
 entries and CUDA-gated setup/guided admission (2026-09-02) **without** packaged
-RTX 4070 Speakrs acceptance. Pyannote is out of Linux product scope and summaries remain unavailable. A component stays unavailable until its later
+RTX 4070 Speakrs acceptance. Pyannote is out of Linux product scope. Linux
+Qwen summaries are a separate, reactivated Task 6 lane and remain unavailable
+until their own gates pass. A component stays unavailable until its later
 implementation (Task 2), packaged, and hardware gates (Task 3+) have passed.
-No entry below permits a CPU fallback, ambient system-CUDA library discovery, or a
-Linux catalog/status change that would advertise CUDA as ready.
+No entry below permits a CPU fallback or ambient system-CUDA library discovery;
+Linux status may advertise CUDA as ready only after the explicit gates below pass.
 
 **Managed install location:** `{Electron userData}/ai-addons/cuda/python`
 (`getManagedLinuxCudaRuntimeTarget`). User-facing only on the accepted
@@ -63,7 +65,104 @@ search-index metadata.
 | NVIDIA cuDNN CUDA 12 | [nvidia-cudnn-cu12 9.22.0.52](https://pypi.org/project/nvidia-cudnn-cu12/9.22.0.52/) (NVIDIA proprietary; [cuDNN SLA](https://docs.nvidia.com/deeplearning/cudnn/latest/reference/eula.html)). Same Python/manylinux/driver requirements as cuBLAS. Direct wheel: `https://files.pythonhosted.org/packages/a0/8f/2ede6b758b7524608472010f632bdd3370ea271d715d1d66044614b84cdc/nvidia_cudnn_cu12-9.22.0.52-py3-none-manylinux_2_27_x86_64.whl`. | `nvidia_cudnn_cu12-9.22.0.52-py3-none-manylinux_2_27_x86_64.whl`, 718,382,818 bytes, SHA-256 `391b9a7ee6386daaca7f8dca41e83c2c99f760c9581a0400755e87b4287b8847`. Extracted `nvidia/cudnn/lib/libcudnn.so.9` plus companion `libcudnn_{adv,cnn,ops,graph,...}.so.9` libraries. | **Accepted (Task 3, 2026-09-02)** as the managed CUDA 12 Whisper closure on CachyOS x86_64 + RTX 4070. Not Speakrs/Pyannote. |
 | Speakrs | [ONNX Runtime 1.27.1 Linux GPU CUDA 12](https://github.com/microsoft/onnxruntime/releases/download/v1.27.1/onnxruntime-linux-x64-gpu_cuda12-1.27.1.tgz) (MIT) plus installer-bundled Linux `speakrs-cli` | GPU archive `onnxruntime-linux-x64-gpu_cuda12-1.27.1.tgz`, 244,763,765 bytes, `08b568bd69500c36606aff7c3896ee4fa7d3531719f6b00f43e6a34db41dc4bf`. Extracted regular files: `libonnxruntime.so.1.27.1` 27,000,912 bytes `67eda041546eb01cf5606add5467d8bb7305b2aedb5cf37fdc6b055c7adfc094`; `libonnxruntime_providers_shared.so` 14,632 bytes `c6a12593396095f5670160e284c35d1700b7708cf3037b7042e2a5200ccae772`; `libonnxruntime_providers_cuda.so` 373,925,672 bytes `cffff5fe3aac14fe50eed1113757ac8318ee12ef307fcb9def35a24398ec0ce3`. NVIDIA wheels: `nvidia_cuda_runtime_cu12-12.9.79-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl` 3,493,179 bytes `25bba2dfb01d48a9b59ca474a1ac43c6ebf7011f1b0b8cc44f54eb6ac48a96c3` → `libcudart.so.12` 741,088 bytes `256e6409e4f06f618e1fb53d4844a6b81cdded1013afa8ade40c22f99eb133b7`; `nvidia_cufft_cu12-11.4.1.4-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl` 200,877,592 bytes `c67884f2a7d276b4b80eb56a79322a95df592ae5e765cf1243693365ccab4e28` → `libcufft.so.11` 291,507,928 bytes `e1d65ebd08895f9d9883f848f3974f89e0130416252477b18835ba7f15d159bc`; `nvidia_curand_cu12-10.3.10.19-py3-none-manylinux_2_27_x86_64.whl` 68,295,626 bytes `49b274db4780d421bd2ccd362e1415c13887c53c214f0d4b761752b8f9f6aa1e` → `libcurand.so.10` 166,965,432 bytes `ab8c07338fa663c018b16df5b3f3878c84aaae98bda930e9e8bad340427b0faa`; `nvidia_cuda_nvrtc_cu12-12.9.86-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl` 89,568,129 bytes `210cf05005a447e29214e9ce50851e83fc5f4358df8b453155d5e1918094dcb4` → `libnvrtc.so.12` 106,244,480 bytes `7c67c6b51ea0e0279634cebd676ff7efda1674806444520c84430ad5c35fe625`. Model pack reuses the published CUDA ONNX subset `speakrs-models-5d24ffe-win32-x64-cuda.tar.gz`, 208,765,985 bytes, `a79973647cb787bf2aebd31acc2668d282735e41d451e244308bcf04ea77ad20` (same 19 files as Windows). Compile-time ORT pin is `linux-x64: null` (`load-dynamic`). CI-only CPU ORT smoke pin: `onnxruntime-linux-x64-1.27.1.tgz` 8,828,892 bytes `25b1ef1fea1acd210d63f8f24dc870ad6e077795ce1f54876252c6d3803c15af`. | **Task 4 pins recorded (2026-09-02).** Linux x86_64 `speakrs-cli` is built/staged with the canonical validation WAV and ELF executable/PIE integrity checks. Setup-time dynamic ORT/CUDA closure is pinned in `src/ai-addon/speakrs-pack-spec.js`, including curand/nvrtc and managed CUDA cublas/cudnn path/hash metadata. Catalog/UI and packaged RTX 4070 Speakrs remain **not accepted** until Task 5. CI CPU fixture smoke is a non-GPU structural check only. Never trust hashes from user-writable `install.json`. |
 | Pyannote | `pyannote/speaker-diarization-community-1` requires the user's token; token-based setup has no maintainer artifact to download or pin. | No token was requested, supplied, logged, or downloaded. Linux is now Speakrs-only by product scope. | **Out of scope on Linux.** Do not investigate, pin, package, or surface a Linux Pyannote path. Windows/macOS retain their existing compatibility option. |
-| Summaries | [llama.cpp official releases](https://github.com/ggml-org/llama.cpp/releases) (MIT) | The current official Linux x86_64 assets are CPU/Vulkan/other non-CUDA variants; official CUDA release artifacts are Windows-only. | **Rejected for now.** Do not substitute CPU or Vulkan. The Linux summary task may reconsider only if an official, redistributable Linux CUDA artifact with a complete library closure becomes available and passes the RTX 4070 smoke. |
+| Summaries | [llama.cpp official releases](https://github.com/ggml-org/llama.cpp/releases) (MIT) plus the existing Qwen GGUF catalog artifacts (Apache-2.0 model license) | Windows x64 CUDA and macOS arm64 Metal already use the shared Qwen/llama.cpp summary implementation. Linux now has a separately pinned `ai-dock/llama.cpp-cuda` v0.3.0 CUDA 12.8 amd64 archive plus pinned NVIDIA CUDA runtime/NCCL wheels; exact bytes and extracted closure are recorded below. | **Linux Task 6 reactivated, implementation complete and hardware inference gate passed; final acceptance remains open for quit-during-metadata evidence.** CPU, Vulkan, SYCL, ROCm, cloud, and ambient-library alternatives are rejected. |
+
+### Linux AI add-ons — Task 6 CUDA-only Qwen summaries (reactivated 2026-09-03)
+
+This lane is active again; the previous Linux-summary deferral remains
+historical evidence, not the product decision. Windows x64 CUDA and macOS
+arm64 Metal retain their existing summary behavior unchanged. Linux must reuse
+the shared catalog/setup/service/UI contracts and become available only for
+x86_64 NVIDIA systems after managed CUDA admission, artifact integrity,
+runtime validation, packaged-path isolation, and the CachyOS RTX 4070 gate.
+
+The current official `b9173` release was previously rejected for Linux because
+it has no CUDA x86_64 archive. Its CPU/Vulkan/SYCL/ROCm archives remain
+rejected and must not be relabeled or used as fallback. The replacement runtime
+decision records:
+
+- exact publisher/source release or commit, license, immutable download URL,
+  archive filename, byte size, and SHA-256;
+- complete runtime/model compatibility for Qwen3.5 with reasoning disabled;
+- every managed/pinned shared library and its source, size, and SHA-256, plus
+  allowlisted presence checks for driver/system libraries;
+- safe archive layout, managed `userData` cache paths, and the exact rebuilt
+  CUDA library environment with ambient `LD_LIBRARY_PATH` excluded; and
+- packaged AppImage/unpacked acceptance on CachyOS x86_64 + RTX 4070, including
+  setup, Ready status, offline generation, JSON/Markdown sidecars, metadata and
+  `sourceTranscriptHash`, cancellation/quit cleanup, queue `busyCount: 0`,
+  observed model/runtime/device/version details, timings, and no lingering
+  children; the persisted summary metadata contains only the existing profile,
+  model, generatedAt, sourceTranscriptHash, and sidecar paths.
+
+Unit tests and CPU-only CI may validate structure and fail-closed policy only;
+they cannot establish Linux Qwen support.
+
+### Task 6 catalog decision
+
+The selected Linux runtime is the `ai-dock/llama.cpp-cuda` v0.3.0 CUDA 12.8
+amd64 release, built from llama.cpp commit
+`c1d0e7a004015f23bc0233470b747b596f29b264`. It is MIT-licensed (the contained
+llama.cpp binaries are MIT and the ai-dock build scripts are MIT). Its direct
+archive is `llama.cpp-v0.3.0-cuda-12.8-amd64.tar.gz`, 150,794,376 bytes,
+SHA-256
+`37616f0271e82717eb8ddcd5d2319fd845ddcf93c83fd3943d0a1a539c1d0a99`.
+The archive reports CUDA 12.8.1 and is pinned in `src/ai-addon-state.js`.
+
+The binary closure additionally uses the pinned NVIDIA wheels below. They are
+NVIDIA Software License Agreement artifacts and are downloaded only during
+explicit summary setup. The NCCL wheel ships its applicable notice at
+`nvidia/nccl/lib/LICENSE.txt`; the catalog records that path alongside the
+immutable wheel URL.
+
+| Artifact | Size | SHA-256 | Extracted library |
+|---|---:|---|---|
+| `nvidia_cuda_runtime_cu12-12.9.79-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl` | 3,493,179 | `25bba2dfb01d48a9b59ca474a1ac43c6ebf7011f1b0b8cc44f54eb6ac48a96c3` | `libcudart.so.12`, 741,088 bytes, `256e6409e4f06f618e1fb53d4844a6b81cdded1013afa8ade40c22f99eb133b7` |
+| `nvidia_nccl_cu12-2.31.2-py3-none-manylinux_2_18_x86_64.whl` | 342,105,414 | `f9b1dc3c2a7e20176054144ebb3b32fea83b40402ee5d7ac7045cd11ecc956c0` | `libnccl.so.2`, 473,266,472 bytes, `dba12e429fe11268b895d0531ba96a7f679f35227d5b1ec77c5febbcd02281bd` |
+
+The extracted runtime pins the regular local closure (`llama-cli`,
+`libllama-cli-impl.so`, `libllama-server-impl.so`, `libllama-common.so`,
+`libllama.so`, `libmtmd.so`, `libggml*.so`, and `VERSION.txt`) by size and
+SHA-256 in the catalog; the archive itself is also verified before extraction.
+The runtime requires `libcublas.so.12` and `libcublasLt.so.12` from the
+already-managed Task 2 CUDA tree, `libcuda.so.1` from the code-owned driver
+allowlist, and system
+OpenSSL/zlib/brotli/zstd/libstdc++/libgcc/libgomp/pthread/dl/rt libraries.
+Admission resolves every declared managed/runtime dependency against those
+catalog pins and checks driver/system names in the explicit allowlist. Linux
+summary children receive only the runtime directories, managed CUDA
+directories, and validated driver directories in `LD_LIBRARY_PATH`; ambient
+`LD_LIBRARY_PATH` is discarded.
+
+Packaged CachyOS x86_64 + RTX 4070 evidence was captured on 2026-09-03 using
+the rebuilt unpacked app with `app.isPackaged: true`, isolated user data
+`/tmp/avanevis-task6-hardware`, and local CDP. Setup was explicit and returned
+`summary.status: ready` / `setupComplete: true`; the manifest persisted the
+same Ready state. The model was catalog pin
+`unsloth/Qwen3.5-9B-GGUF@3885219b6810b007914f3a7950a8d1b469d598a5`,
+`Qwen3.5-9B-Q4_K_M.gguf`, 5,680,522,464 bytes, SHA-256
+`03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8`.
+The host was CachyOS x86_64 on Hyprland/Wayland with an
+NVIDIA GeForce RTX 4070 (driver `610.57.04`, 12,282 MiB VRAM). The runtime
+reported llama.cpp `v0.3.0`, CUDA `12.8.1`, and build
+`c1d0e7a004015f23bc0233470b747b596f29b264`. An offline summary completed in
+about 15 seconds, used `/tmp/.../llama-cli`, and GPU sampling observed a peak
+of `6,250 MiB`; no CPU/Vulkan fallback was involved. The result used the
+existing summary schema, wrote both JSON and Markdown sidecars, persisted
+`ai.summary.status: completed`, and recorded
+`sourceTranscriptHash: sha256:98cd1f8f3ac99d794535e572dc7d21cc8fc9086b4b68bea3c98a29735ebe92b0`.
+
+A separate long-transcript run accepted
+`cancel-summary-generation({meetingId})`; the generator returned the expected
+`AI_ADDON_SETUP_CANCELLED` error, produced no summary sidecars, and left no
+`llama-cli`, summary-runner, or meeting-manager child. The app remained alive.
+After both runs, the shared compute action had settled (`busyCount: 0`
+inferred from the queue's settled process and no lingering compute child);
+quit-during-metadata-finalization remains a code-path/manual acceptance row,
+not claimed by this smoke. This replaces the earlier “hardware inference
+evidence pending” note for Task 6, but final Task 6 acceptance remains open
+until the quit-during-metadata row is run. It does not accept Task 5 or the
+overall branch. Windows/macOS cross-platform acceptance remains explicit.
 
 Local hash commands (disposable directory; 2026-09-02):
 
@@ -84,7 +183,9 @@ Speakrs CLI/pack-spec pins are recorded in
 [Linux AI add-ons — Task 4 Speakrs CLI packaging pins](#linux-ai-add-ons--task-4-speakrs-cli-packaging-pins-2026-09-02).
 Task 5 catalog/admission work is recorded in
 [Linux AI add-ons — Task 5 Speakrs catalog and admission](#linux-ai-add-ons--task-5-speakrs-catalog-and-admission-2026-09-02)
-and is **not** packaged RTX 4070 Speakrs acceptance. Pyannote is out of Linux product scope and summaries remain unavailable.
+and is **not** packaged RTX 4070 Speakrs acceptance. Pyannote is out of Linux
+product scope. The separate Linux Qwen summary lane is reactivated as Task 6
+and remains unavailable until its own artifact and RTX 4070 gates pass.
 
 ## Linux AI add-ons — Task 3 packaged CUDA Whisper acceptance (2026-09-02)
 
@@ -649,6 +750,66 @@ x86_64 + RTX 4070 of the re-opened fallback row (recording
 `features.diarization.status`) and the new never-installed negative row, plus
 the equivalent never-installed check on Windows x64 and macOS arm64. See
 `tests/manual/local-ai-addons-checklist.md`.
+
+### Task 5 packaged Linux rerun — never-installed and broken fallback pass (2026-09-03)
+
+**Status: Linux rows pass; Task 5 is not formally accepted.** A fresh
+`npm run build:linux` and `npm run verify:linux:packaged -- --unpacked --appimage
+--pacman --deb` completed successfully from `8a7ec98b3f781a62c1eef33fa4854f8033ac1779`.
+The smoke used `dist/linux-unpacked/avanevis` with isolated userData
+`/tmp/avanevis-v29-task5-rerun-20260903/user-data`, local CDP, and no interactive
+profile. Main-process startup recorded `app.isPackaged: true` and
+`process.resourcesPath` as the rebuilt unpacked resources directory.
+
+Host evidence: CachyOS x86_64, kernel `7.2.2-1-cachyos`, NVIDIA GeForce RTX 4070,
+driver `610.57.04`, compute capability `8.9`, 12,282 MiB. Managed CUDA setup
+returned `statusCode: "ready"`, `matchedProfile: "cuda12"`,
+`runtimeLoadable: true`, and `deviceAvailable: true`. The fixture
+`tests/fixtures/speakrs-two-speaker-16k.wav` is SHA-256
+`1eed9687badcdd0d554638c8229fdb48d5c80e21ed1393c3bb5621f0c83bd998`.
+Current package hashes are AppImage
+`ee7f4fed79ef447dd051b27364fbe3e1bb914924aeb07a90e30b0925f05a4b6d`,
+pacman `3084b08ff93b804abaa2f7710daf4dacd08fa25c0fae6f07994f69e46d7c09a4`,
+and deb `34cf814052938ce0f0b152d0010793e8e2074c8e74996601e5619742098704a6`.
+Restored Speakrs ResNet SHA-256 is
+`203a4c67112167580ab1fcb62f4568c633499fb283805890aebe1c48564fcc0f`;
+ORT, CUDA runtime, cuFFT, cuRAND, and NVRTC extracted hashes matched the
+Task 4 pins, including ORT `67eda041…adfc094` and CUDA provider
+`cffff5fe…98ec0ce3`.
+
+**Scenario A — never installed / downloading.** After CUDA became ready,
+`checkAiAddonSetupStatus` reported `features.diarization.status: "notConfigured"`
+for meeting `20260903_124835`. Its retry returned `device: "cuda"` and
+`computeType: "float16"`; the direct `recordings/meetings.json` entry has no
+`ai` key. History contained no `Speaker identification failed for this
+recording` text, and the captured progress strings contained no `Speaker
+identification is unavailable` line. Speakrs setup was then started explicitly;
+at the moment of retry for meeting `20260903_124956`, the same status field was
+`"downloading"`. That meeting also completed as ordinary CUDA/`float16`
+transcription with no `ai` key, no History failure banner, and no unavailable
+progress line.
+
+**Scenario B — installed but broken fallback.** Speakrs setup first reached
+`ready`. Moving only
+`wespeaker-voxceleb-resnet34.onnx` aside left the runtime manifest untouched;
+before retry, `features.diarization.status` was `"error"` with the concise
+pack-cache reason and missing-file list. Meeting `20260903_125307` completed an
+ordinary CUDA/`float16` transcript with no `.speakers.json`. Its persisted
+`ai.diarization` object had exactly `status: "error"`, model
+`speakrs-community1-vbx`, `completedAt`, error
+`"Speakrs model pack is not installed."`, and `segmentsPath: null`. History
+rendered the per-recording error line exactly once. The captured transcription
+progress contained exactly one `Speaker identification is unavailable` line,
+confirming no post-pass duplicate probe. The ResNet was restored and setup
+returned to `ready` with valid pack/runtime caches.
+
+After each transcription the renderer queue settled to `busyCount: 0`; the
+final queue contained only terminal `ready` jobs. A final process scan found no
+`speakrs-cli` or `guided_transcription` child. No sidecar was expected or
+written in either negative/fallback run; the fallback schema is the concise
+`ai.diarization` shape recorded above. This closes the two Linux checklist rows,
+but the equivalent never-installed check remains required on Windows x64 and
+macOS arm64 before release acceptance.
 
 ## Interpreters used for this matrix
 

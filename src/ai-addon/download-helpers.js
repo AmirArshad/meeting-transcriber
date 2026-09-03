@@ -3,6 +3,7 @@
 const { spawn } = require('child_process');
 const fs = require('fs');
 const https = require('https');
+const os = require('os');
 const path = require('path');
 
 const { AI_MODEL_CATALOG, getAiAddonPaths } = require('../ai-addon-state');
@@ -151,6 +152,10 @@ function buildPythonEnvForBackend({ backendPath, extra = {} } = {}) {
   return {
     ...process.env,
     ...extra,
+    HF_TOKEN: '',
+    HUGGINGFACE_HUB_TOKEN: '',
+    HUGGING_FACE_HUB_TOKEN: '',
+    HF_TOKEN_PATH: os.devNull,
     PYTHONPATH: pythonPathParts.join(separator),
   };
 }

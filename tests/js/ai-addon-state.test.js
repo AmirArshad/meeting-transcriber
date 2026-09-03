@@ -248,7 +248,9 @@ test('selects platform-specific summary setup artifacts from the catalog', () =>
   assert.equal(windowsArtifact.validationStatus, 'ready');
   assert.equal(macArtifact.artifactId, `${DEFAULT_SUMMARY_MODEL_ID}-gguf-darwin-arm64-metal`);
   assert.equal(macArtifact.acceleration, 'metal');
-  assert.equal(getSummaryArtifactForPlatform(DEFAULT_SUMMARY_MODEL_ID, 'linux', 'x64'), null);
+  const linuxArtifact = getSummaryArtifactForPlatform(DEFAULT_SUMMARY_MODEL_ID, 'linux', 'x64');
+  assert.equal(linuxArtifact.artifactId, `${DEFAULT_SUMMARY_MODEL_ID}-gguf-linux-x64-cuda`);
+  assert.equal(linuxArtifact.acceleration, 'cuda');
 });
 
 test('model selection falls back when a manifest references a retired model', () => {

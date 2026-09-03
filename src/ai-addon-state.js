@@ -133,6 +133,115 @@ const SUMMARY_RUNTIME_ARTIFACTS = deepFreeze({
     ],
     validationStatus: 'ready',
   },
+  'linux-x64': {
+    id: 'llama-cpp-v0.3.0-linux-x64-cuda-12.8',
+    label: 'llama.cpp v0.3.0 for Linux CUDA 12.8',
+    runtime: 'llama.cpp',
+    version: 'v0.3.0',
+    repository: 'ai-dock/llama.cpp-cuda',
+    sourceCommit: 'c1d0e7a004015f23bc0233470b747b596f29b264',
+    upstreamRepository: 'ggml-org/llama.cpp',
+    upstreamCommit: 'c1d0e7a004015f23bc0233470b747b596f29b264',
+    releaseUrl: 'https://github.com/ai-dock/llama.cpp-cuda/releases/tag/v0.3.0',
+    platform: 'linux',
+    arch: 'x64',
+    acceleration: 'cuda',
+    cudaMajor: 12,
+    executableName: 'llama-cli',
+    runtimeFamilies: ['llama-cpp-cuda'],
+    artifacts: [
+      {
+        id: 'ai-dock-llama-cpp-v0.3.0-linux-x64-cuda-12.8',
+        fileName: 'llama.cpp-v0.3.0-cuda-12.8-amd64.tar.gz',
+        archiveFormat: 'tar.gz',
+        sha256: '37616f0271e82717eb8ddcd5d2319fd845ddcf93c83fd3943d0a1a539c1d0a99',
+        sizeBytes: 150794376,
+        downloadUrl: 'https://github.com/ai-dock/llama.cpp-cuda/releases/download/v0.3.0/llama.cpp-v0.3.0-cuda-12.8-amd64.tar.gz',
+        license: 'llama.cpp MIT; ai-dock build scripts MIT',
+        licenseUrl: 'https://github.com/ai-dock/llama.cpp-cuda/blob/main/LICENSE',
+        architecture: 'x64',
+        cudaMajor: 12,
+        requiredFiles: [
+          { path: 'cuda-12.8/llama-cli', sha256: '9ae3a204f56b5218073e74684f49acdb7d84ed1ef234e3123fc7d21c32a2b373', sizeBytes: 1056232 },
+          { path: 'cuda-12.8/libllama-cli-impl.so', sha256: 'a8b81f3c2008ce7f9c25468fdbd8af35deb6bfe6675fd3fc55bd41354e11ae76', sizeBytes: 259416 },
+          { path: 'cuda-12.8/libllama-server-impl.so', sha256: '5559f96a135980886ceddd05b11e5fe9afc334a02eede5b72c41533fa5939873', sizeBytes: 7096728 },
+          { path: 'cuda-12.8/libllama-common.so.0.3.0', sha256: '105f5c906c38198380f40bff0cbda9cee42409b7beb9fe38597a6b95e0c0b091', sizeBytes: 6027112 },
+          { path: 'cuda-12.8/libllama.so.0.3.0', sha256: '65928a659c17d319ecfb63ae502ae0780e9db7829f9c5eb89127505835016b12', sizeBytes: 4394216 },
+          { path: 'cuda-12.8/libmtmd.so.0.3.0', sha256: 'dd2c69476ea7151a1171a0437280c449ae6a2deccf686e186650a1a24ef3bad9', sizeBytes: 1846792 },
+          { path: 'cuda-12.8/libggml.so.0.22.0', sha256: '80f07c76209b5cb2c09e88626291740ffae86c02ba2264cb0208dcff65d13a4c', sizeBytes: 55184 },
+          { path: 'cuda-12.8/libggml-base.so.0.22.0', sha256: '9bfb6ffbb21c541f33da770bd3cc0668284fe59a34c2aeae1012d67e97d39ae1', sizeBytes: 919464 },
+          { path: 'cuda-12.8/libggml-cpu.so.0.22.0', sha256: '4ce9f1238a99726061b50d0990890c7c927134495a0d7ceb426f3e47652601bb', sizeBytes: 1140744 },
+          { path: 'cuda-12.8/libggml-cuda.so.0.22.0', sha256: '2b639645c6fd9584a8b9facccfde737ddb0a713d8b584ccd6f1af032c8768fb6', sizeBytes: 162060960 },
+          { path: 'cuda-12.8/VERSION.txt', sha256: '60c4ffeeab994decbb52291518d291768634170d05bcd07329b7b08c21333853', sizeBytes: 217 },
+        ],
+      },
+      {
+        id: 'nvidia-cuda-runtime-cu12-12.9.79-linux-x64-summary',
+        kind: 'cuda-runtime-wheel',
+        fileName: 'nvidia_cuda_runtime_cu12-12.9.79-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl',
+        archiveFormat: 'zip',
+        architecture: 'x64',
+        cudaMajor: 12,
+        dynamicLibraryDir: 'nvidia/cuda_runtime/lib',
+        sha256: '25bba2dfb01d48a9b59ca474a1ac43c6ebf7011f1b0b8cc44f54eb6ac48a96c3',
+        sizeBytes: 3493179,
+        downloadUrl: 'https://files.pythonhosted.org/packages/bc/46/a92db19b8309581092a3add7e6fceb4c301a3fd233969856a8cbf042cd3c/nvidia_cuda_runtime_cu12-12.9.79-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl',
+        license: 'NVIDIA proprietary',
+        licenseUrl: 'https://docs.nvidia.com/cuda/eula/index.html',
+        extractedFiles: {
+          'libcudart.so.12': {
+            path: 'nvidia/cuda_runtime/lib/libcudart.so.12',
+            sha256: '256e6409e4f06f618e1fb53d4844a6b81cdded1013afa8ade40c22f99eb133b7',
+            sizeBytes: 741088,
+          },
+        },
+      },
+      {
+        id: 'nvidia-nccl-cu12-2.31.2-linux-x64-summary',
+        kind: 'nccl-wheel',
+        fileName: 'nvidia_nccl_cu12-2.31.2-py3-none-manylinux_2_18_x86_64.whl',
+        archiveFormat: 'zip',
+        architecture: 'x64',
+        cudaMajor: 12,
+        dynamicLibraryDir: 'nvidia/nccl/lib',
+        sha256: 'f9b1dc3c2a7e20176054144ebb3b32fea83b40402ee5d7ac7045cd11ecc956c0',
+        sizeBytes: 342105414,
+        downloadUrl: 'https://files.pythonhosted.org/packages/0f/36/104de52d6368f5b7f886e8fd252e0a438fe73a215e59b1b47f93a80ae2ea/nvidia_nccl_cu12-2.31.2-py3-none-manylinux_2_18_x86_64.whl',
+        license: 'NVIDIA Software License Agreement (wheel LICENSE.txt)',
+        licenseUrl: 'https://files.pythonhosted.org/packages/0f/36/104de52d6368f5b7f886e8fd252e0a438fe73a215e59b1b47f93a80ae2ea/nvidia_nccl_cu12-2.31.2-py3-none-manylinux_2_18_x86_64.whl#nvidia/nccl/lib/LICENSE.txt',
+        licenseFile: 'nvidia/nccl/lib/LICENSE.txt',
+        extractedFiles: {
+          'libnccl.so.2': {
+            path: 'nvidia/nccl/lib/libnccl.so.2',
+            sha256: 'dba12e429fe11268b895d0531ba96a7f679f35227d5b1ec77c5febbcd02281bd',
+            sizeBytes: 473266472,
+          },
+        },
+      },
+    ],
+    requiredDynamicLibraries: [
+      { fileName: 'libcudart.so.12', source: 'summary-runtime', relativePath: 'nvidia/cuda_runtime/lib/libcudart.so.12' },
+      { fileName: 'libcublas.so.12', source: 'managed-cuda12', relativePath: 'nvidia/cublas/lib/libcublas.so.12' },
+      { fileName: 'libcublasLt.so.12', source: 'managed-cuda12', relativePath: 'nvidia/cublas/lib/libcublasLt.so.12' },
+      { fileName: 'libnccl.so.2', source: 'summary-runtime', relativePath: 'nvidia/nccl/lib/libnccl.so.2' },
+      { fileName: 'libcuda.so.1', source: 'nvidia-driver', relativePath: null },
+      { fileName: 'libssl.so.3', source: 'system', relativePath: null },
+      { fileName: 'libcrypto.so.3', source: 'system', relativePath: null },
+      { fileName: 'libz.so.1', source: 'system', relativePath: null },
+      { fileName: 'libstdc++.so.6', source: 'system', relativePath: null },
+      { fileName: 'libgcc_s.so.1', source: 'system', relativePath: null },
+      { fileName: 'libm.so.6', source: 'system', relativePath: null },
+      { fileName: 'libbrotlienc.so.1', source: 'system', relativePath: null },
+      { fileName: 'libbrotlidec.so.1', source: 'system', relativePath: null },
+      { fileName: 'libbrotlicommon.so.1', source: 'system', relativePath: null },
+      { fileName: 'libzstd.so.1', source: 'system', relativePath: null },
+      { fileName: 'libgomp.so.1', source: 'system', relativePath: null },
+      { fileName: 'libpthread.so.0', source: 'system', relativePath: null },
+      { fileName: 'libdl.so.2', source: 'system', relativePath: null },
+      { fileName: 'librt.so.1', source: 'system', relativePath: null },
+    ],
+    validationStatus: 'ready',
+  },
 });
 
 const DIARIZATION_DEPENDENCY_ARTIFACTS = deepFreeze({
@@ -284,6 +393,20 @@ function buildSummaryArtifact({ modelId, label, runtimeArchitecture }) {
         platform: 'darwin',
         arch: 'arm64',
         acceleration: 'metal',
+        runtime: 'llama.cpp',
+        runtimeArchitecture,
+        fileName: source ? source.fileName : null,
+        sha256: source ? source.lfsSha256 : null,
+        downloadUrl: source ? source.downloadUrl : null,
+        source: source || null,
+        validationStatus,
+      },
+      'linux-x64': {
+        id: `${artifactBaseId}-linux-x64-cuda`,
+        label: `${label} for Linux CUDA`,
+        platform: 'linux',
+        arch: 'x64',
+        acceleration: 'cuda',
         runtime: 'llama.cpp',
         runtimeArchitecture,
         fileName: source ? source.fileName : null,
@@ -758,7 +881,7 @@ function getAiAddonPaths(userDataDir) {
 }
 
 const LINUX_DIARIZATION_UNAVAILABLE_REASON = 'Speaker identification on Linux requires the managed CUDA 12 runtime, an NVIDIA GPU, and x86_64. CPU-only speaker identification is not supported.';
-const LINUX_SUMMARY_UNAVAILABLE_REASON = 'Local summaries are not available on Linux in this version. They will return in a future Linux update.';
+const LINUX_SUMMARY_UNAVAILABLE_REASON = 'Local Qwen summaries on Linux require the managed CUDA 12 runtime, an NVIDIA GPU, verified x86_64 artifacts, and the packaged CUDA-only path. CPU, Vulkan, SYCL, ROCm, and cloud summaries are not supported.';
 const LINUX_PYANNOTE_UNAVAILABLE_REASON = 'Pyannote speaker identification is not available on Linux in this version.';
 
 function getLinuxSpeakrsUnavailableReason({ arch, cudaStatus } = {}) {
@@ -841,7 +964,21 @@ function getDiarizationAvailability(platform, arch, options = {}) {
   };
 }
 
-function getSummaryAvailability(platform, arch) {
+function getLinuxSummaryUnavailableReason({ arch, cudaStatus } = {}) {
+  if (arch !== 'x64') {
+    return LINUX_SUMMARY_UNAVAILABLE_REASON;
+  }
+  const { isLinuxCudaStatusReadyForAdmission } = require('./main-process/linux-cuda-runtime-helpers');
+  if (isLinuxCudaStatusReadyForAdmission(cudaStatus)) {
+    return null;
+  }
+  const detail = cudaStatus && (cudaStatus.error || cudaStatus.statusCode)
+    ? ` ${String(cudaStatus.error || cudaStatus.statusCode).trim()}`
+    : '';
+  return `${LINUX_SUMMARY_UNAVAILABLE_REASON}${detail}`;
+}
+
+function getSummaryAvailability(platform, arch, options = {}) {
   if ((platform === 'win32' && arch === 'x64') || (platform === 'darwin' && arch === 'arm64')) {
     return {
       supported: true,
@@ -852,9 +989,23 @@ function getSummaryAvailability(platform, arch) {
   }
 
   if (platform === 'linux') {
+    const reason = getLinuxSummaryUnavailableReason({
+      arch,
+      cudaStatus: options && options.cudaStatus,
+    });
+    if (!reason) {
+      return {
+        supported: true,
+        reason: null,
+        runtime: 'llama.cpp',
+        acceleration: 'cuda',
+        runtimeDevice: 'cuda',
+        userTriggeredOnly: true,
+      };
+    }
     return {
       supported: false,
-      reason: LINUX_SUMMARY_UNAVAILABLE_REASON,
+      reason,
       runtime: 'unsupported',
       userTriggeredOnly: true,
     };
@@ -945,7 +1096,7 @@ function buildAiAddonStatus({
   const paths = getAiAddonPaths(userDataDir);
   const normalizedManifest = normalizeAiAddonManifest(manifest, catalog);
   const diarizationAvailability = getDiarizationAvailability(platform, arch, { cudaStatus });
-  const summaryAvailability = getSummaryAvailability(platform, arch);
+  const summaryAvailability = getSummaryAvailability(platform, arch, { cudaStatus });
   const diarizationState = normalizeLinuxDiarizationState(
     normalizedManifest.features.diarization,
     platform,
@@ -1015,6 +1166,7 @@ module.exports = {
   getAiAddonStatus,
   getDefaultModelId,
   LINUX_DIARIZATION_UNAVAILABLE_REASON,
+  getLinuxSummaryUnavailableReason,
   LINUX_PYANNOTE_UNAVAILABLE_REASON,
   LINUX_SUMMARY_UNAVAILABLE_REASON,
   getDiarizationAvailability,

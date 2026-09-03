@@ -89,7 +89,8 @@ same source notices are installed under
 |------|-------------------|--------|
 | Qwen3 / Qwen3.5 GGUF weights (catalog pins) | **Apache-2.0** | e.g. [Qwen/Qwen3.5-9B](https://huggingface.co/Qwen/Qwen3.5-9B), community GGUF repos such as `unsloth/Qwen3.5-9B-GGUF` |
 | [llama.cpp](https://github.com/ggml-org/llama.cpp) runtime binaries | MIT | Downloaded from pinned GitHub releases during summary setup |
-| NVIDIA CUDA runtime archives (Windows summary/diarization GPU paths) | NVIDIA Software License Agreement | Bundled only as part of optional user-triggered GPU runtime downloads |
+| [ai-dock/llama.cpp-cuda](https://github.com/ai-dock/llama.cpp-cuda) Linux CUDA build scripts | MIT | The Linux summary runtime is pinned to the v0.3.0 build; the contained llama.cpp binaries remain MIT |
+| NVIDIA CUDA runtime and [NCCL](https://pypi.org/project/nvidia-nccl-cu12/2.31.2/) archives | NVIDIA Software License Agreement (the NCCL wheel's `nvidia/nccl/lib/LICENSE.txt`) | Downloaded only as part of optional user-triggered managed CUDA runtime and Linux summary setup; the pinned wheel is recorded in the catalog |
 
 **Trademark:** “Qwen” is associated with Alibaba Cloud. AvaNevis is not affiliated with or endorsed by Alibaba.
 

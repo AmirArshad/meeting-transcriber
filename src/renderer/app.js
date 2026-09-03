@@ -3832,7 +3832,10 @@ async function generateSummaryForMeeting(meetingId) {
 
   let aiStatus;
   try {
-    aiStatus = await window.electronAPI.getAiAddonStatus({ verifyChecksums: true });
+    aiStatus = await window.electronAPI.getAiAddonStatus({
+      verifyChecksums: true,
+      verifyChecksumsIfChanged: true,
+    });
   } catch (error) {
     addLog(`Summary setup status unavailable: ${error.message}`, 'error');
     summaryGenerationMeetingId = null;

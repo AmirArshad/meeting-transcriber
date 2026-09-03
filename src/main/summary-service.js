@@ -14,6 +14,7 @@ const pathModule = require('path');
 
 const {
   buildHuggingFaceOfflineEnv,
+  buildClearedHuggingFaceTokenEnv,
   parseAiBackendProgressLine,
   AI_COMPUTE_TIMEOUT_MS,
   runWallClockComputeAction,
@@ -24,8 +25,12 @@ const {
   getSummaryRuntimeDir: defaultGetSummaryRuntimeDir,
 } = require('../ai-addon-setup');
 const {
+  buildSummaryRuntimeEnv: defaultBuildSummaryRuntimeEnv,
+} = require('../ai-addon/manifest-store');
+const {
   getSummaryArtifactForPlatform: defaultGetSummaryArtifactForPlatform,
 } = require('../ai-addon-state');
+const { isLinuxCudaStatusReadyForAdmission } = require('../main-process/linux-cuda-runtime-helpers');
 
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -76,8 +81,6 @@ function isSameMeetingSummarySidecar({ filePath, recordingsDir, transcriptBase }
  * @param {Function} [deps.getSummaryArtifactForPlatform]
  * @param {Function} [deps.getSummaryArtifactPath]
  * @param {Function} [deps.getSummaryRuntimeDir]
- * @param {Function} [deps.hasInFlightGpuRuntimeAction]
- * @param {Function} [deps.waitForGpuRuntimeIdle]
  */
 function createSummaryService(deps) {
   // Single shared reference — never duplicate this let in main.js.
@@ -105,13 +108,14 @@ function createSummaryService(deps) {
     terminateProcessBestEffort,
     summarizeSummaryValidationError,
     platform = process.platform,
+    arch = process.arch,
     isQuitCommitted = () => false,
     checkAiAddonSetupStatus = defaultCheckAiAddonSetupStatus,
+    buildSummaryRuntimeEnv = defaultBuildSummaryRuntimeEnv,
     getSummaryArtifactForPlatform = defaultGetSummaryArtifactForPlatform,
     getSummaryArtifactPath = defaultGetSummaryArtifactPath,
     getSummaryRuntimeDir = defaultGetSummaryRuntimeDir,
-    hasInFlightGpuRuntimeAction = () => false,
-    waitForGpuRuntimeIdle = async () => {},
+    resolveCudaStatusForTranscription = null,
   } = deps;
 
   async function removeSummarySidecarFiles(filePaths = []) {
@@ -177,19 +181,27 @@ function createSummaryService(deps) {
       // preflight. Keep the established Windows/macOS meeting-first ordering so
       // their error precedence, cancellation, and checksum timing do not change.
       if (platform !== 'win32' && platform !== 'darwin') {
-        const platformStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions({
-          verifyChecksums: true,
-          verifyChecksumsIfChanged: true,
-        }));
-        const unsupportedSummary = platformStatus && platformStatus.features && platformStatus.features.summary;
-        if (unsupportedSummary && unsupportedSummary.status === 'unsupported') {
-          throw new Error(
-            (unsupportedSummary.availability && unsupportedSummary.availability.reason)
-            || unsupportedSummary.error
-            || 'Local summaries are not supported on this platform.',
+        if (platform === 'linux') {
+          const managedRuntimePath = path.join(
+            app.getPath('userData'),
+            'ai-addons',
+            'cuda',
+            'python',
           );
+          if (!fs.existsSync(managedRuntimePath)) {
+            throw new Error('Local summaries on Linux require the managed CUDA 12 runtime and an NVIDIA GPU.');
+          }
+        } else {
+          const platformStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions());
+          const unsupportedSummary = platformStatus && platformStatus.features && platformStatus.features.summary;
+          if (unsupportedSummary && unsupportedSummary.status === 'unsupported') {
+            throw new Error(
+              (unsupportedSummary.availability && unsupportedSummary.availability.reason)
+              || unsupportedSummary.error
+              || 'Local summaries are not supported on this platform.',
+            );
+          }
         }
-
         // The status probe is async. Close a future supported non-Windows/non-macOS
         // concurrent-start race before claiming the active slot.
         if (isQuitCommitted()) {
@@ -297,10 +309,11 @@ function createSummaryService(deps) {
       try {
         // Skip full GGUF re-hash on every generate; setup/validate already pin checksums.
         // Re-verify only when the artifact mtime/size changed since the last match.
-        aiStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions({
+        const statusOptions = getAiAddonRuntimeOptions({
           verifyChecksums: true,
           verifyChecksumsIfChanged: true,
-        }));
+        });
+        aiStatus = await checkAiAddonSetupStatus(statusOptions);
       } catch (error) {
         clearActiveSummaryGeneration();
         throw error;
@@ -310,7 +323,10 @@ function createSummaryService(deps) {
         clearActiveSummaryGeneration();
         throw createAiAddonCancelError('Summary generation was canceled.');
       }
-      if (aiStatus.features.summary.status === 'unsupported') {
+      const linuxSummaryReadyForAdmission = platform === 'linux'
+        && aiStatus.features.summary.cache?.valid === true
+        && aiStatus.features.summary.runtimeCache?.valid === true;
+      if (aiStatus.features.summary.status === 'unsupported' && !linuxSummaryReadyForAdmission) {
         clearActiveSummaryGeneration();
         throw new Error(
           (aiStatus.features.summary.availability && aiStatus.features.summary.availability.reason)
@@ -318,7 +334,8 @@ function createSummaryService(deps) {
           || 'Local summaries are not supported on this platform.',
         );
       }
-      if (aiStatus.features.summary.status !== 'ready' || !aiStatus.features.summary.setupComplete) {
+      if ((!linuxSummaryReadyForAdmission
+        && (aiStatus.features.summary.status !== 'ready' || !aiStatus.features.summary.setupComplete))) {
         clearActiveSummaryGeneration();
         throw new Error('Summary model setup is not ready.');
       }
@@ -328,7 +345,7 @@ function createSummaryService(deps) {
         clearActiveSummaryGeneration();
         throw new Error('Summary model selection is managed by local setup. Validate or reinstall the selected model in Settings.');
       }
-      const artifact = getSummaryArtifactForPlatform(selectedModelId, process.platform, process.arch);
+      const artifact = getSummaryArtifactForPlatform(selectedModelId, platform, arch);
       if (!artifact) {
         clearActiveSummaryGeneration();
         throw new Error('No summary model artifact is available for this platform.');
@@ -369,14 +386,6 @@ function createSummaryService(deps) {
       }
 
       return enqueueAiComputeAction(async () => {
-        if (hasInFlightGpuRuntimeAction()) {
-          sendToRenderer('summary-progress', {
-            feature: 'summary',
-            phase: 'waiting',
-            message: 'Waiting for GPU runtime setup to finish before generating the summary.',
-          });
-          await waitForGpuRuntimeIdle();
-        }
         return runWallClockComputeAction({
         timeoutMs: AI_COMPUTE_TIMEOUT_MS.summary,
         label: 'Summary generation',
@@ -390,7 +399,24 @@ function createSummaryService(deps) {
           }
           return terminateProcessBestEffort(proc);
         },
-        action: (registerProcess) => new Promise((resolve, reject) => {
+        action: async (registerProcess) => {
+        let summaryEnv = buildClearedHuggingFaceTokenEnv(buildHuggingFaceOfflineEnv());
+        if (platform === 'linux' && typeof resolveCudaStatusForTranscription === 'function') {
+          const cudaStatus = await resolveCudaStatusForTranscription({ registerProcess });
+          if (!isLinuxCudaStatusReadyForAdmission(cudaStatus)) {
+            throw new Error('Linux local summaries require an admitted managed CUDA 12 runtime and NVIDIA GPU.');
+          }
+          summaryEnv = {
+            ...summaryEnv,
+            ...buildSummaryRuntimeEnv({
+              userDataDir: app.getPath('userData'),
+              artifact,
+              platform,
+              arch,
+            }),
+          };
+        }
+        return new Promise((resolve, reject) => {
         if (!activeSummaryGeneration || activeSummaryGeneration.controller !== controller || controller.signal.aborted) {
           clearActiveSummaryGeneration();
           reject(createAiAddonCancelError('Summary generation was canceled.'));
@@ -412,7 +438,7 @@ function createSummaryService(deps) {
           speakersJsonPath,
           profile: profile || 'balanced',
           modelLabel: artifact.modelLabel || artifact.modelId,
-        }), { cwd: pythonConfig.backendPath, env: buildHuggingFaceOfflineEnv() });
+        }), { cwd: pythonConfig.backendPath, env: summaryEnv });
         activeSummaryGeneration.process = python;
         registerProcess(python);
 
@@ -647,7 +673,8 @@ function createSummaryService(deps) {
           ]);
           finish(reject, controller.signal.aborted ? createAiAddonCancelError('Summary generation was canceled.') : error);
         });
-      }),
+        });
+        },
         });
       }).catch((error) => {
         // Metadata-phase terminate is skipped so a hung update-ai can outlive the

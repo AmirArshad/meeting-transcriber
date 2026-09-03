@@ -1,0 +1,14 @@
+llama-cli options:
+  -m, --model FNAME
+  --file FNAME
+  --ctx-size N
+  -ngl, --n-gpu-layers N
+  --temp N
+  -n, --predict N
+  --no-display-prompt
+  --no-warmup
+  --single-turn
+  --simple-io
+  --reasoning off|on
+  --no-conversation
+  --seed N

@@ -93,6 +93,7 @@ const {
 } = require('./ai-addon-state');
 const {
   getBundledSpeakrsCliPath,
+  buildSummaryRuntimeEnv,
   resolveSpeakrsCliPathForSpawn,
   resolveSpawnDiarizationEngine,
 } = require('./ai-addon/manifest-store');
@@ -748,6 +749,7 @@ aiAddonIpc = createAiAddonIpc({
   summarizeSummaryValidationError,
   hasPendingAiComputeWork: () => aiComputeActionQueue.hasPendingWork(),
   hasPendingGpuResourceWork: () => gpuResourceActionQueue.hasPendingWork(),
+  enqueueGpuResourceAction: gpuResourceActionQueue.enqueue,
   enqueueGpuExclusiveRemovalAction,
   isQuitCommitted,
 });
@@ -817,6 +819,8 @@ summaryService = createSummaryService({
   enqueueAiComputeAction: enqueueGpuExclusiveComputeAction,
   createAiAddonCancelError,
   getAiAddonRuntimeOptions,
+  buildSummaryRuntimeEnv,
+  resolveCudaStatusForTranscription,
   buildSummaryArgs,
   collectPythonProcessOutput,
   sendToRenderer,

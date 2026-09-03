@@ -169,7 +169,7 @@ test('generate-summary stays fail-closed before spawning preflight when the feat
 
   await assert.rejects(
     handlers['generate-summary']({ sender: {} }, { meetingId: 'meeting_1' }),
-    /not available on Linux in this version/,
+    /managed CUDA 12 runtime and an NVIDIA GPU/,
   );
   assert.deepEqual(getSpawnedArgs(), []);
 });
