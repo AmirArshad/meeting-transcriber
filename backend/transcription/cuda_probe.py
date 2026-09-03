@@ -166,10 +166,13 @@ def _get_ctranslate2_cuda_device_count() -> int:
     return int(ctranslate2.get_cuda_device_count())
 
 
-def _validate_ctranslate2_cuda() -> None:
+def _validate_ctranslate2_cuda() -> int:
     import ctranslate2  # imported lazily so tests can run without CUDA runtime DLLs
 
-    int(ctranslate2.get_cuda_device_count())
+    device_count = int(ctranslate2.get_cuda_device_count())
+    if device_count <= 0:
+        raise RuntimeError("CTranslate2 reported no CUDA devices.")
+    return device_count
 
 
 def build_probe_report(
@@ -184,7 +187,7 @@ def build_probe_report(
     isdir: Callable[[str], bool] = os.path.isdir,
     platform: str = "win32",
     validate_ctranslate2_cuda: bool = False,
-    ctranslate2_validator: Callable[[], None] | None = None,
+    ctranslate2_validator: Callable[[], int] | None = None,
     device_probe: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     probe_error = ""
@@ -231,11 +234,15 @@ def build_probe_report(
     if validate_ctranslate2_cuda and runtime_loadable:
         validator = ctranslate2_validator or _validate_ctranslate2_cuda
         try:
-            validator()
+            validated_device_count = int(validator())
+            if validated_device_count <= 0:
+                raise RuntimeError("CTranslate2 reported no CUDA devices.")
         except Exception as exc:
             runtime_loadable = False
             matched_profile = ""
             probe_error = str(exc)
+            if not status_override:
+                status_override = "runtimeUnavailable"
 
     unsupported_detected_profiles = find_unsupported_runtime_profiles(
         unsupported_hints,

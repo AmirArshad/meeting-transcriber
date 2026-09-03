@@ -602,6 +602,161 @@ function getLinuxCudaWheelStagePath(userDataPath, { now = Date.now(), pid = proc
   return path.join(path.resolve(userDataPath), 'ai-addons', 'cuda', `wheel-stage-${now}-${pid}`);
 }
 
+function isLinuxCudaRecoveryArtifactName(name) {
+  const normalized = String(name || '');
+  return /^wheel-stage-[^/]+$/.test(normalized)
+    || /^python\.(?:staging|tombstone)-[^/]+$/.test(normalized);
+}
+
+async function removeLinuxCudaRecoveryDirectory(targetPath, fsModule = fs) {
+  const lstatSync = fsModule.lstatSync || fs.lstatSync;
+  let stats;
+  try {
+    stats = lstatSync(targetPath);
+  } catch (error) {
+    if (error && error.code === 'ENOENT') {
+      return false;
+    }
+    throw error;
+  }
+  if ((typeof stats.isSymbolicLink === 'function' && stats.isSymbolicLink())
+    || (typeof stats.isDirectory === 'function' && !stats.isDirectory())) {
+    return false;
+  }
+  const rm = fsModule.promises && fsModule.promises.rm
+    ? fsModule.promises.rm.bind(fsModule.promises)
+    : async (target, options) => fs.rmSync(target, options);
+  await rm(targetPath, { recursive: true, force: true });
+  return true;
+}
+
+/**
+ * Reconcile artifacts left by a killed Linux CUDA install before starting
+ * another one. Only known direct children of the CUDA add-on directory are
+ * considered. Symlinks and non-directories are left untouched; the active
+ * runtime and persistent wheelhouse are never candidates.
+ *
+ * A tombstone is a prior runtime moved aside during an atomic swap. If the
+ * active path is absent, restore the first tombstone that passes the full
+ * catalog integrity check. Otherwise, or for unverified tombstones, delete
+ * the tombstone after preserving the active path.
+ */
+async function reconcileLinuxCudaRuntimeArtifacts({
+  userDataPath,
+  activePath,
+  catalog = getLinuxCuda12RuntimeCatalog(),
+  fsModule = fs,
+} = {}) {
+  assertLinuxCudaCatalogIntegrity(catalog);
+  if (!userDataPath || !path.isAbsolute(userDataPath)) {
+    throw new Error('Linux CUDA recovery userData path must be an absolute path.');
+  }
+  const resolvedActivePath = activePath || require('./cuda-runtime-helpers')
+    .getManagedLinuxCudaRuntimeTarget(userDataPath);
+  assertAbsolutePath(resolvedActivePath, 'Active CUDA runtime');
+
+  const cudaRoot = path.join(path.resolve(userDataPath), 'ai-addons', 'cuda');
+  if (path.resolve(path.dirname(resolvedActivePath)) !== path.resolve(cudaRoot)
+    || path.basename(resolvedActivePath) !== 'python') {
+    throw new Error('Active CUDA runtime must be the managed python path.');
+  }
+  let rootStats;
+  try {
+    rootStats = (fsModule.lstatSync || fs.lstatSync)(cudaRoot);
+  } catch (error) {
+    if (error && error.code === 'ENOENT') {
+      return { removed: [], restored: null, skipped: [] };
+    }
+    throw error;
+  }
+  if ((typeof rootStats.isSymbolicLink === 'function' && rootStats.isSymbolicLink())
+    || (typeof rootStats.isDirectory === 'function' && !rootStats.isDirectory())) {
+    return { removed: [], restored: null, skipped: [cudaRoot] };
+  }
+  const readdirSync = fsModule.readdirSync || fs.readdirSync;
+  let names;
+  try {
+    names = readdirSync(cudaRoot);
+  } catch (error) {
+    if (error && error.code === 'ENOENT') {
+      return { removed: [], restored: null, skipped: [] };
+    }
+    throw error;
+  }
+
+  const candidates = names
+    .map((name) => String(name))
+    .filter(isLinuxCudaRecoveryArtifactName)
+    .map((name) => ({
+      name,
+      path: path.join(cudaRoot, name),
+      isTombstone: /^python\.tombstone-/.test(name),
+    }));
+  const removed = [];
+  const skipped = [];
+
+  for (const candidate of candidates.filter((item) => !item.isTombstone)) {
+    if (await removeLinuxCudaRecoveryDirectory(candidate.path, fsModule)) {
+      removed.push(candidate.path);
+    } else {
+      skipped.push(candidate.path);
+    }
+  }
+
+  const tombstones = candidates.filter((item) => item.isTombstone);
+  let activePresent = false;
+  try {
+    const activeStats = (fsModule.lstatSync || fs.lstatSync)(resolvedActivePath);
+    activePresent = true;
+    if (typeof activeStats.isSymbolicLink === 'function' && activeStats.isSymbolicLink()) {
+      skipped.push(resolvedActivePath);
+    }
+  } catch (error) {
+    if (!error || error.code !== 'ENOENT') {
+      throw error;
+    }
+  }
+
+  let restored = null;
+  let restoreError = null;
+  if (!activePresent) {
+    for (const tombstone of tombstones.slice().sort((left, right) => right.name.localeCompare(left.name))) {
+      const integrity = await verifyLinuxCudaRuntimeIntegrity({
+        managedRoot: tombstone.path,
+        catalog,
+        fsModule,
+      });
+      if (!integrity.ok) {
+        continue;
+      }
+      try {
+        (fsModule.renameSync || fs.renameSync)(tombstone.path, resolvedActivePath);
+        restored = tombstone.path;
+        activePresent = true;
+        break;
+      } catch (error) {
+        restoreError = error;
+      }
+    }
+  }
+
+  for (const tombstone of tombstones) {
+    if (tombstone.path === restored) {
+      continue;
+    }
+    if (await removeLinuxCudaRecoveryDirectory(tombstone.path, fsModule)) {
+      removed.push(tombstone.path);
+    } else {
+      skipped.push(tombstone.path);
+    }
+  }
+
+  if (restoreError && !restored) {
+    throw restoreError;
+  }
+  return { removed, restored, skipped };
+}
+
 function stageVerifiedLinuxCudaWheels({
   sourceDir,
   stagingDir,
@@ -874,6 +1029,8 @@ module.exports = {
   getLinuxCudaTombstonePath,
   getLinuxCudaRuntimeStagingPath,
   getLinuxCudaWheelStagePath,
+  isLinuxCudaRecoveryArtifactName,
+  reconcileLinuxCudaRuntimeArtifacts,
   stageVerifiedLinuxCudaWheels,
   swapLinuxCudaRuntimeAtomically,
   buildLinuxCudaOfflineInstallArgs,

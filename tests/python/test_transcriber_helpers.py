@@ -297,6 +297,7 @@ def test_cuda_probe_validates_ctranslate2_cuda_after_verified_libraries():
 
     def validator():
         calls.append('validate')
+        return 1
 
     report = build_probe_report(
         profiles=[{'id': 'cuda12', 'requiredDlls': ['libcublas.so.12']}],
@@ -313,6 +314,23 @@ def test_cuda_probe_validates_ctranslate2_cuda_after_verified_libraries():
     assert calls[-1] == 'validate'
     assert report['statusCode'] == 'ready'
     assert report['runtimeLoadable'] is True
+
+
+def test_cuda_probe_ctranslate2_zero_devices_is_not_ready():
+    report = build_probe_report(
+        profiles=[{'id': 'cuda12', 'requiredDlls': ['libcublas.so.12']}],
+        supported_profiles=['cuda12'],
+        unsupported_hints=[],
+        device_count_getter=lambda: 1,
+        load_dll=lambda name: object(),
+        path_value='',
+        platform='linux',
+        validate_ctranslate2_cuda=True,
+        ctranslate2_validator=lambda: 0,
+    )
+    assert report['runtimeLoadable'] is False
+    assert report['statusCode'] == 'runtimeUnavailable'
+    assert 'no CUDA devices' in report['error']
 
 
 def test_cuda_probe_ctranslate2_init_failure_is_not_ready():

@@ -48,6 +48,7 @@ const {
   getLinuxCudaWheelStagePath,
   managedLinuxCudaRuntimeExists,
   parseLinuxCheckCudaStatus,
+  reconcileLinuxCudaRuntimeArtifacts,
   resolveLinuxCudaDriverLibraryDirs,
   resolveRequiredLinuxCudaLibraryPath,
   stageVerifiedLinuxCudaWheels,
@@ -459,6 +460,12 @@ function createGpuRuntimeService(deps) {
     const userData = app.getPath('userData');
     const wheelhouse = getLinuxCudaWheelhousePath(userData);
     const activeTarget = getLinuxCudaRuntimeTarget();
+    await reconcileLinuxCudaRuntimeArtifacts({
+      userDataPath: userData,
+      activePath: activeTarget,
+      catalog,
+      fsModule: fs,
+    });
     const now = Date.now();
     const pid = process.pid;
     const wheelStage = getLinuxCudaWheelStagePath(userData, { now, pid });

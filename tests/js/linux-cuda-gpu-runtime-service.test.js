@@ -12,7 +12,13 @@ const { createGpuRuntimeService } = require('../../src/main/gpu-runtime-service'
 const { createPythonRuntime } = require('../../src/main/python-runtime');
 const { signalProcessTree } = require('../../src/main-process/quit-lifecycle-helpers');
 const { getManagedLinuxCudaRuntimeTarget } = require('../../src/main-process/cuda-runtime-helpers');
-const { detectLinuxNvidiaGpu, isLinuxCudaOffered } = require('../../src/main-process/linux-cuda-runtime-helpers');
+const {
+  detectLinuxNvidiaGpu,
+  getLinuxCudaRuntimeStagingPath,
+  getLinuxCudaTombstonePath,
+  getLinuxCudaWheelStagePath,
+  isLinuxCudaOffered,
+} = require('../../src/main-process/linux-cuda-runtime-helpers');
 
 function withProcess({ platform = process.platform, arch = process.arch }, fn) {
   const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
@@ -571,6 +577,36 @@ test('Linux CUDA install downloads pinned wheels and pip-installs exact staged p
       assert.ok(renamed.some((item) => item.to === active));
       assert.equal(fs.existsSync(active), true);
       assert.equal(fs.existsSync(path.join(userData, 'ai-addons', 'cuda', 'wheelhouse', 'fixture.whl')), true);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+test('Linux CUDA install reconciles stale stages and restores a verified tombstone after restart', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    const { service, userData, cleanup } = createLinuxGpuService();
+    const active = getManagedLinuxCudaRuntimeTarget(userData);
+    const tombstone = getLinuxCudaTombstonePath(active, { now: 1, pid: 2 });
+    const runtimeStage = getLinuxCudaRuntimeStagingPath(active, { now: 3, pid: 4 });
+    const wheelStage = getLinuxCudaWheelStagePath(userData, { now: 5, pid: 6 });
+    try {
+      fs.renameSync(active, tombstone);
+      fs.mkdirSync(runtimeStage, { recursive: true });
+      fs.writeFileSync(path.join(runtimeStage, 'partial.txt'), 'partial');
+      fs.mkdirSync(wheelStage, { recursive: true });
+      fs.writeFileSync(path.join(wheelStage, 'partial.whl'), 'partial');
+
+      await service.runGpuPackageInstall({ mode: 'repair' });
+
+      assert.equal(fs.existsSync(active), true);
+      assert.equal(fs.existsSync(tombstone), false);
+      assert.equal(fs.existsSync(runtimeStage), false);
+      assert.equal(fs.existsSync(wheelStage), false);
+      assert.equal(
+        fs.existsSync(path.join(userData, 'ai-addons', 'cuda', 'wheelhouse', 'fixture.whl')),
+        true,
+      );
     } finally {
       cleanup();
     }
