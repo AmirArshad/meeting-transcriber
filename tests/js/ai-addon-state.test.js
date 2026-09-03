@@ -233,6 +233,27 @@ test('catalog pins llama.cpp runtime release artifacts', () => {
   assert.equal(macRuntime.executableName, 'llama-cli');
   assert.equal(macRuntime.artifacts[0].fileName, 'llama-b9173-bin-macos-arm64.tar.gz');
   assert.equal(macRuntime.artifacts[0].sha256, '18764a5a179e023a3007a3a32b309febbe249f63c5716a6827428435f7439ff8');
+
+  const linuxRuntime = getSummaryRuntimeArtifactForPlatform('linux', 'x64');
+  assert.deepEqual(linuxRuntime.artifacts[0].requiredFiles, [
+    { path: 'cuda-12.8/llama-cli', sha256: '9ae3a204f56b5218073e74684f49acdb7d84ed1ef234e3123fc7d21c32a2b373', sizeBytes: 1056232 },
+    { path: 'cuda-12.8/libllama-cli-impl.so', sha256: 'a8b81f3c2008ce7f9c25468fdbd8af35deb6bfe6675fd3fc55bd41354e11ae76', sizeBytes: 259416 },
+    { path: 'cuda-12.8/libllama-server-impl.so', sha256: '5559f96a135980886ceddd05b11e5fe9afc334a02eede5b72c41533fa5939873', sizeBytes: 7096728 },
+    { path: 'cuda-12.8/libllama-common.so.0.3.0', sha256: '105f5c906c38198380f40bff0cbda9cee42409b7beb9fe38597a6b95e0c0b091', sizeBytes: 6027112 },
+    { path: 'cuda-12.8/libllama.so.0.3.0', sha256: '65928a659c17d319ecfb63ae502ae0780e9db7829f9c5eb89127505835016b12', sizeBytes: 4394216 },
+    { path: 'cuda-12.8/libmtmd.so.0.3.0', sha256: 'dd2c69476ea7151a1171a0437280c449ae6a2deccf686e186650a1a24ef3bad9', sizeBytes: 1846792 },
+    { path: 'cuda-12.8/libllama-batched-bench-impl.so', sha256: 'bfc7f5b06489b32cb7571aae17e00a38d9183053866ec62f8f31acd07170876e', sizeBytes: 48728 },
+    { path: 'cuda-12.8/libllama-bench-impl.so', sha256: '13fdf38028578f8589772083bfdf2f633e4c165b21422eccd664b7a90eacd35f', sizeBytes: 477232 },
+    { path: 'cuda-12.8/libllama-completion-impl.so', sha256: 'ab47d089a8caa591361fe65adb3b740ecfac1fa3470932962b5b414619ddfd34', sizeBytes: 118040 },
+    { path: 'cuda-12.8/libllama-fit-params-impl.so', sha256: '971a049515b1a05a475a966387165331989ac16acb69946ae595884a39f0fe49', sizeBytes: 39632 },
+    { path: 'cuda-12.8/libllama-perplexity-impl.so', sha256: '83c9756a557010e3f3761b36650602061c61dd4a14aa9ebd037b8d1efc01cc34', sizeBytes: 171400 },
+    { path: 'cuda-12.8/libllama-quantize-impl.so', sha256: 'f9e42108824d145d263027399c5a06a125e67875e3277abfe021440dbd598142', sizeBytes: 85928 },
+    { path: 'cuda-12.8/libggml.so.0.22.0', sha256: '80f07c76209b5cb2c09e88626291740ffae86c02ba2264cb0208dcff65d13a4c', sizeBytes: 55184 },
+    { path: 'cuda-12.8/libggml-base.so.0.22.0', sha256: '9bfb6ffbb21c541f33da770bd3cc0668284fe59a34c2aeae1012d67e97d39ae1', sizeBytes: 919464 },
+    { path: 'cuda-12.8/libggml-cpu.so.0.22.0', sha256: '4ce9f1238a99726061b50d0990890c7c927134495a0d7ceb426f3e47652601bb', sizeBytes: 1140744 },
+    { path: 'cuda-12.8/libggml-cuda.so.0.22.0', sha256: '2b639645c6fd9584a8b9facccfde737ddb0a713d8b584ccd6f1af032c8768fb6', sizeBytes: 162060960 },
+    { path: 'cuda-12.8/VERSION.txt', sha256: '60c4ffeeab994decbb52291518d291768634170d05bcd07329b7b08c21333853', sizeBytes: 217 },
+  ]);
 });
 
 test('selects platform-specific summary setup artifacts from the catalog', () => {
