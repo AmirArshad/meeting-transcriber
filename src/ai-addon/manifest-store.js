@@ -243,6 +243,15 @@ function resolveSpawnDiarizationEngine(manifestEngine, env = process.env) {
   return SPEAKRS_DIARIZATION_ENGINES.includes(engine) ? engine : null;
 }
 
+function assertLinuxSpeakrsOnlyEngine(engine, platform = process.platform) {
+  if (platform === 'linux' && engine !== 'speakrs') {
+    const error = new Error('Pyannote speaker identification is not available on Linux in this version.');
+    error.code = 'LINUX_PYANNOTE_UNAVAILABLE';
+    throw error;
+  }
+  return engine;
+}
+
 function resolveSpeakrsMode(requiredDevice, env = process.env) {
   const raw = String(requiredDevice || '').trim().toLowerCase();
   if (raw === 'cuda') {
@@ -1890,6 +1899,7 @@ module.exports = {
   SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE,
   isNativeSpeakrsCliPath,
   resolveSpawnDiarizationEngine,
+  assertLinuxSpeakrsOnlyEngine,
   resolveSpeakrsMode,
   canStartGuidedDiarization,
   buildSpeakrsSpawnEnv,

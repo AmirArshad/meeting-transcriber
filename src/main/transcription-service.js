@@ -73,6 +73,7 @@ const {
   getPackagedSpeakrsCliPreflightError,
   canStartGuidedDiarization,
   resolveSpawnDiarizationEngine,
+  assertLinuxSpeakrsOnlyEngine,
 } = require('../ai-addon/manifest-store');
 
 /**
@@ -958,6 +959,7 @@ function createTranscriptionService(deps) {
       const diarizationStatus = aiStatus && aiStatus.features && aiStatus.features.diarization;
       const catalogModelRef = diarizationStatus ? getDiarizationModelRef(diarizationStatus.modelId) : null;
       const engine = resolveSpawnDiarizationEngine(diarizationStatus && diarizationStatus.engine);
+      assertLinuxSpeakrsOnlyEngine(engine, process.platform);
       if (canStartGuidedDiarization({
         status: diarizationStatus && diarizationStatus.status,
         setupComplete: diarizationStatus && diarizationStatus.setupComplete,
@@ -999,6 +1001,7 @@ function createTranscriptionService(deps) {
     const diarizationStatus = aiStatus && aiStatus.features && aiStatus.features.diarization;
     const catalogModelRef = diarizationStatus ? getDiarizationModelRef(diarizationStatus.modelId) : null;
     const engine = resolveSpawnDiarizationEngine(diarizationStatus && diarizationStatus.engine);
+    assertLinuxSpeakrsOnlyEngine(engine, process.platform);
     const speakrsRuntimeError = expectedEngine === 'speakrs' && diarizationStatus?.runtimeCache?.valid !== true
       ? diarizationStatus?.runtimeCache?.reason || 'Speakrs runtime integrity validation failed.'
       : null;

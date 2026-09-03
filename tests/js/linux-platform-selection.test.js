@@ -305,6 +305,20 @@ test('Linux Speakrs catalog is present and CUDA-gated; summaries stay unsupporte
   assert.equal(admittedStatus.features.summary.status, 'unsupported');
   assert.match(LINUX_PYANNOTE_UNAVAILABLE_REASON, /Pyannote/);
 
+  const stalePyannoteStatus = buildAiAddonStatus({
+    userDataDir: '/tmp/avanevis-linux-addons',
+    platform: 'linux',
+    arch: 'x64',
+    cudaStatus: readyCuda,
+    manifest: {
+      features: {
+        diarization: { status: 'ready', engine: 'pyannote' },
+      },
+    },
+  });
+  assert.equal(stalePyannoteStatus.features.diarization.engine, 'speakrs');
+  assert.equal(stalePyannoteStatus.features.diarization.status, 'notConfigured');
+
   const arm64 = getDiarizationAvailability('linux', 'arm64');
   assert.equal(arm64.supported, false);
   assert.match(arm64.reason, /x86_64|CUDA 12/);

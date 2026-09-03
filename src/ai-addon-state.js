@@ -876,6 +876,26 @@ function applyAvailability(state, availability) {
   };
 }
 
+function normalizeLinuxDiarizationState(state, platform) {
+  if (platform !== 'linux' || state?.engine !== 'pyannote') {
+    return state;
+  }
+
+  // A profile may have been created on Windows/macOS before it was opened on
+  // Linux. Do not leave the sole visible Speakrs card tied to that hidden,
+  // unsupported selection. This is a status projection only: setup still owns
+  // the exclusive-engine migration and its cleanup.
+  return {
+    ...state,
+    engine: 'speakrs',
+    modelId: SPEAKRS_DIARIZATION_MODEL_ID,
+    status: 'notConfigured',
+    setupComplete: false,
+    error: null,
+    lastValidation: null,
+  };
+}
+
 function buildManifestReadError(message, catalog = AI_MODEL_CATALOG) {
   return normalizeAiAddonManifest({
     features: {
@@ -926,6 +946,10 @@ function buildAiAddonStatus({
   const normalizedManifest = normalizeAiAddonManifest(manifest, catalog);
   const diarizationAvailability = getDiarizationAvailability(platform, arch, { cudaStatus });
   const summaryAvailability = getSummaryAvailability(platform, arch);
+  const diarizationState = normalizeLinuxDiarizationState(
+    normalizedManifest.features.diarization,
+    platform,
+  );
 
   return {
     manifestVersion: MANIFEST_VERSION,
@@ -944,7 +968,7 @@ function buildAiAddonStatus({
     summaryProfiles: SUMMARY_PROFILES,
     models: catalog,
     features: {
-      diarization: applyAvailability(normalizedManifest.features.diarization, diarizationAvailability),
+      diarization: applyAvailability(diarizationState, diarizationAvailability),
       summary: applyAvailability(normalizedManifest.features.summary, summaryAvailability),
     },
   };

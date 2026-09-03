@@ -1287,7 +1287,26 @@ async function setupDiarizationAddon({
       message,
       modelId: selectedModelId,
     });
-    return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, env, cudaStatus });
+    const status = await checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, env, cudaStatus });
+    return {
+      ...status,
+      features: {
+        ...status.features,
+        diarization: {
+          ...status.features.diarization,
+          engine: selectedEngine,
+          modelId: selectedModelId,
+          status: 'unsupported',
+          setupComplete: false,
+          error: message,
+          availability: {
+            ...status.features.diarization.availability,
+            supported: false,
+            reason: message,
+          },
+        },
+      },
+    };
   }
 
   const packagedCliError = selectedEngine === 'speakrs'

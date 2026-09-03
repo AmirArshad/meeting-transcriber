@@ -25,6 +25,7 @@ const {
   resolveSpeakrsCliPathForSpawn,
   buildSpeakrsSpawnEnv,
   canStartGuidedDiarization,
+  assertLinuxSpeakrsOnlyEngine,
   resolveSpawnDiarizationEngine,
   getPackagedSpeakrsCliPreflightError,
   SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE,
@@ -532,6 +533,11 @@ test('buildPythonEnv unsets explicit undefined keys after merging process.env', 
 test('QA AVANEVIS_DIARIZATION_ENGINE overrides spawn dispatch only', () => {
   assert.equal(resolveSpawnDiarizationEngine('pyannote', { AVANEVIS_DIARIZATION_ENGINE: 'speakrs' }), 'speakrs');
   assert.equal(resolveSpawnDiarizationEngine('speakrs', { AVANEVIS_DIARIZATION_ENGINE: 'pyannote' }), 'pyannote');
+  assert.throws(
+    () => assertLinuxSpeakrsOnlyEngine('pyannote', 'linux'),
+    (error) => error && error.code === 'LINUX_PYANNOTE_UNAVAILABLE',
+  );
+  assert.equal(assertLinuxSpeakrsOnlyEngine('speakrs', 'linux'), 'speakrs');
   assert.equal(resolveSpawnDiarizationEngine('speakrs', {}), 'speakrs');
   assert.equal(canStartGuidedDiarization({
     status: 'ready',

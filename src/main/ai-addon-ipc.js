@@ -335,7 +335,7 @@ function createAiAddonIpc(deps) {
     }
     const clearedTokens = buildClearedHuggingFaceTokenEnv();
     if (engine === 'speakrs') {
-      const cudaEnv = buildCudaRuntimeEnv({}, { includeManagedDiarization: false });
+      const cudaEnv = buildCudaRuntimeEnv({ AVANEVIS_LINUX_CUDA_REQUIRED: undefined }, { includeManagedDiarization: false });
       return {
         ...buildSpeakrsSpawnEnv({
           userDataDir: app.getPath('userData'),
@@ -349,7 +349,7 @@ function createAiAddonIpc(deps) {
     return {
       ...getDiarizationDependencyEnv(),
       ...getDiarizationCacheEnv(),
-      ...buildCudaRuntimeEnv({}, { includeManagedDiarization: true }),
+      ...buildCudaRuntimeEnv({ AVANEVIS_LINUX_CUDA_REQUIRED: undefined }, { includeManagedDiarization: true }),
       ...clearedTokens,
     };
   }
