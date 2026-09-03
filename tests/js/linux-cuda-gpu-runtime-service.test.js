@@ -9,6 +9,8 @@ const crypto = require('node:crypto');
 const { EventEmitter } = require('node:events');
 
 const { createGpuRuntimeService } = require('../../src/main/gpu-runtime-service');
+const { createPythonRuntime } = require('../../src/main/python-runtime');
+const { signalProcessTree } = require('../../src/main-process/quit-lifecycle-helpers');
 const { getManagedLinuxCudaRuntimeTarget } = require('../../src/main-process/cuda-runtime-helpers');
 const { detectLinuxNvidiaGpu, isLinuxCudaOffered } = require('../../src/main-process/linux-cuda-runtime-helpers');
 
@@ -195,7 +197,7 @@ function createLinuxGpuService(overrides = {}) {
     fs: serviceFs,
     getLinuxCudaCatalog: overrides.getLinuxCudaCatalog || (() => catalog),
     spawnTrackedPython: (args, options) => {
-      spawnCalls.push({ args, env: options && options.env });
+      spawnCalls.push({ args, env: options && options.env, options });
       if (typeof overrides.spawnTrackedPython === 'function') {
         return overrides.spawnTrackedPython(args, options);
       }
@@ -249,6 +251,58 @@ test('Linux transcription probes CUDA when a managed runtime tree exists', async
       const status = await service.resolveCudaStatusForTranscription();
       assert.equal(status.statusCode, 'ready');
       assert.ok(spawnCalls.length > 0);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+// Packaged CachyOS x86_64 + RTX 4070 evidence (2026-09-03): a native tray quit
+// issued while an in-queue CUDA probe was live reaped the probe, the delayed
+// `nvidia-smi` wrapper, and the wrapper's `sleep` grandchild. That only holds
+// because the probe child owns its own POSIX process group and quit signals the
+// group rather than the direct child. Spawning it with `detached: false`, or
+// terminating with a plain `proc.kill()`, would silently orphan `nvidia-smi`
+// descendants while every existing behavioral test still passed.
+test('Linux CUDA probe owns a process group so quit reaches nvidia-smi descendants', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    const { service, spawnCalls, cleanup } = createLinuxGpuService();
+    try {
+      await service.resolveCudaStatusForTranscription();
+      const probeCall = spawnCalls.find((call) => call.args.includes('transcription.cuda_probe'));
+      assert.ok(probeCall, 'expected a cuda_probe spawn');
+      assert.notEqual(
+        probeCall.options && probeCall.options.detached,
+        false,
+        'the CUDA probe must not opt out of its POSIX process group',
+      );
+
+      // Those exact options must still produce a group-owning child.
+      const spawned = [];
+      const pythonRuntime = createPythonRuntime({
+        app: { isPackaged: false, getPath: () => os.tmpdir() },
+        spawn: (exe, args, options) => {
+          spawned.push({ exe, args, options });
+          const proc = new EventEmitter();
+          proc.pid = 4242;
+          return proc;
+        },
+        path,
+        fs,
+        dirname: path.join(__dirname, '..', '..', 'src'),
+      });
+      const child = pythonRuntime.spawnTrackedPython(probeCall.args, probeCall.options || {});
+      assert.equal(spawned[0].options.detached, true, 'probe child must be spawned detached');
+      assert.equal(child.avanevisProcessGroup, true);
+
+      // ...and quit must signal that whole group, which is what reaped the
+      // wrapper and its `sleep` descendant in the packaged run.
+      const signals = [];
+      child.kill = () => {
+        throw new Error('quit must not fall back to a direct-child signal for a group owner');
+      };
+      signalProcessTree(child, 'SIGTERM', (pid, signal) => signals.push({ pid, signal }));
+      assert.deepEqual(signals, [{ pid: -4242, signal: 'SIGTERM' }]);
     } finally {
       cleanup();
     }

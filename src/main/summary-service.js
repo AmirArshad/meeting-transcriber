@@ -401,8 +401,37 @@ function createSummaryService(deps) {
         },
         action: async (registerProcess) => {
         let summaryEnv = buildClearedHuggingFaceTokenEnv(buildHuggingFaceOfflineEnv());
-        if (platform === 'linux' && typeof resolveCudaStatusForTranscription === 'function') {
-          const cudaStatus = await resolveCudaStatusForTranscription({ registerProcess });
+        if (platform === 'linux') {
+          if (typeof resolveCudaStatusForTranscription !== 'function') {
+            throw new Error('Linux local summaries require the live CUDA runtime resolver.');
+          }
+          // CUDA admission runs before the summary subprocess exists. Keep the
+          // probe in the same active-process slot so quit can terminate it
+          // instead of clearing the slot and leaving the queue action hanging.
+          const registerSummaryProcess = (proc) => {
+            const isCurrent = activeSummaryGeneration
+              && activeSummaryGeneration.controller === controller
+              && !controller.signal.aborted;
+            const registeredProcess = registerProcess(proc);
+            if (!isCurrent) {
+              // The action may have been queued when quit cleared its slot.
+              // Kill a child that races into admission after that abort and
+              // reject before it can become an orphaned compute action.
+              Promise.resolve(terminateProcessBestEffort(registeredProcess)).catch(() => {});
+              throw createAiAddonCancelError('Summary generation was canceled because the app is quitting.');
+            }
+            activeSummaryGeneration.process = registeredProcess;
+            return registeredProcess;
+          };
+          if (controller.signal.aborted) {
+            throw createAiAddonCancelError('Summary generation was canceled because the app is quitting.');
+          }
+          const cudaStatus = await resolveCudaStatusForTranscription({
+            registerProcess: registerSummaryProcess,
+          });
+          if (controller.signal.aborted) {
+            throw createAiAddonCancelError('Summary generation was canceled because the app is quitting.');
+          }
           if (!isLinuxCudaStatusReadyForAdmission(cudaStatus)) {
             throw new Error('Linux local summaries require an admitted managed CUDA 12 runtime and NVIDIA GPU.');
           }
