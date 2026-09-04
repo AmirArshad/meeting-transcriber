@@ -28,6 +28,7 @@ const {
   SPEAKRS_VALIDATE_WAV_NAME,
   SPEAKRS_VALIDATE_WAV_SOURCE,
   stageSpeakrsValidateWav,
+  writeSpeakrsPackagedIntegrityManifest,
 } = require('../../build/prepare-resources');
 const {
   REQUIRED_LINUX_ORT_ARTIFACT_COUNT,
@@ -593,6 +594,29 @@ test('macOS packaged-app verifier requires arm64 speakrs-cli and the canonical f
   assert.match(MACOS_VERIFY_SCRIPT, /test -s "\$SPEAKRS_WAV_BIN"/);
   assert.match(MACOS_VERIFY_SCRIPT, /must not ship a duplicate Speakrs fixture under backend\/diarization\/fixtures/);
   assert.equal(MACOS_VERIFY_SCRIPT.includes('SPEAKRS_WAV_BIN" && ! -f "$SPEAKRS_WAV_BACKEND'), false);
+});
+
+
+test('Speakrs packaged integrity manifest hashes binary CLI bytes', () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-speakrs-integrity-'));
+  try {
+    const binDir = path.join(tempDir, 'bin');
+    const cliPath = path.join(binDir, getSpeakrsCliBinaryName('darwin'));
+    const wavPath = path.join(binDir, SPEAKRS_VALIDATE_WAV_NAME);
+    writeMinimalMachO(cliPath, MACHO_CPU_TYPE_ARM64);
+    fs.chmodSync(cliPath, 0o755);
+    writeCanonicalFixture(wavPath, Buffer.from([0x52, 0x49, 0x46, 0x46, 0xff, 0x80, 0x00]));
+
+    const manifestPath = writeSpeakrsPackagedIntegrityManifest(binDir, 'darwin');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    const expected = require('node:crypto').createHash('sha256')
+      .update(fs.readFileSync(cliPath))
+      .digest('hex');
+
+    assert.equal(manifest.platforms['darwin-arm64'].cli.sha256, expected);
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
 });
 
 

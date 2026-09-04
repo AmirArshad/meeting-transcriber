@@ -54,6 +54,19 @@ function withProcessPlatform(platform, fn) {
   }
 }
 
+async function withProcessRuntimeAsync({ platform, arch }, fn) {
+  const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+  const archDescriptor = Object.getOwnPropertyDescriptor(process, 'arch');
+  Object.defineProperty(process, 'platform', { configurable: true, value: platform });
+  Object.defineProperty(process, 'arch', { configurable: true, value: arch });
+  try {
+    return await fn();
+  } finally {
+    Object.defineProperty(process, 'platform', platformDescriptor);
+    Object.defineProperty(process, 'arch', archDescriptor);
+  }
+}
+
 function loadUpdater() {
   const originalElectronModule = require.cache[electronModulePath];
   delete require.cache[updaterModulePath];
@@ -487,7 +500,9 @@ test('Linux add-on status re-primes expired CUDA state when managed runtime exis
   const handlers = {};
   try {
     service.registerIpc({ handle(channel, handler) { handlers[channel] = handler; } });
-    await handlers['get-ai-addon-status']({ sender: {} }, { verifyChecksumsIfChanged: true });
+    await withProcessRuntimeAsync({ platform: 'linux', arch: 'x64' }, () => (
+      handlers['get-ai-addon-status']({ sender: {} }, { verifyChecksumsIfChanged: true })
+    ));
   } finally {
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }

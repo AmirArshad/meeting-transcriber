@@ -175,7 +175,9 @@ test('Linux CUDA managed target is userData-scoped and has only wheel library ro
 
 test('admitted Linux CUDA builds a contained managed loader environment and ignores inherited LD_LIBRARY_PATH', () => {
   const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+  const archDescriptor = Object.getOwnPropertyDescriptor(process, 'arch');
   Object.defineProperty(process, 'platform', { configurable: true, value: 'linux' });
+  Object.defineProperty(process, 'arch', { configurable: true, value: 'x64' });
   const userData = fs.mkdtempSync(path.join(require('os').tmpdir(), 'avanevis-linux-cuda-env-'));
   try {
     const target = getManagedLinuxCudaRuntimeTarget(userData);
@@ -200,10 +202,11 @@ test('admitted Linux CUDA builds a contained managed loader environment and igno
       isLinuxCudaProfileEnabled: () => true,
     });
     const env = service.buildCudaRuntimeEnv({ LD_LIBRARY_PATH: '/tmp/hostile:/lib' });
-    assert.ok(env.LD_LIBRARY_PATH.startsWith(libraryDirs.join(':')));
+    assert.ok(env.LD_LIBRARY_PATH.startsWith(libraryDirs.map((directory) => fs.realpathSync(directory)).join(':')));
     assert.doesNotMatch(env.LD_LIBRARY_PATH, /\/tmp\/hostile/);
   } finally {
     Object.defineProperty(process, 'platform', platformDescriptor);
+    Object.defineProperty(process, 'arch', archDescriptor);
     fs.rmSync(userData, { recursive: true, force: true });
   }
 });

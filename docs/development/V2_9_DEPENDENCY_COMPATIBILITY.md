@@ -907,8 +907,35 @@ final queue contained only terminal `ready` jobs. A final process scan found no
 `speakrs-cli` or `guided_transcription` child. No sidecar was expected or
 written in either negative/fallback run; the fallback schema is the concise
 `ai.diarization` shape recorded above. This closes the two Linux checklist rows,
-but the equivalent never-installed check remains required on Windows x64 and
+but the equivalent never-installed check remained required on Windows x64 and
 macOS arm64 before release acceptance.
+
+### Task 5 packaged macOS arm64 rerun — never-installed Speakrs pass (2026-09-04)
+
+**Status: macOS negative row passes; Task 5 is not formally accepted.** On macOS
+26.6.2 arm64 (Node 26.8.1, npm 11.19.0), a clean `npm run prepare-build` plus
+`CSC_FOR_PULL_REQUEST=true npx electron-builder build --mac --dir` rebuilt the
+packaged app. The first fresh-profile launch exposed a packaging defect: the
+Speakrs integrity manifest had hashed the Mach-O executable after coercing its
+bytes to text, so its stored SHA-256 did not match the runtime's raw-byte check
+and the UI incorrectly showed `This AvaNevis install is incomplete. Reinstall
+AvaNevis.` The fix makes `hashFileContent()` hash the raw Buffer; its regression
+test contains non-UTF-8 CLI bytes. The rebuilt package passed
+`inspectPackagedSpeakrsLayout` (`ok: true`) and `npm run verify:mac:packaged`
+(deep/strict seal, arm64 signed Speakrs CLI, MLX imports, and no bundled Torch).
+
+The corrected app used isolated userData
+`/private/tmp/avanevis-task5-macos-manual-fixed-20260904`. Before recording,
+the packaged status was `features.diarization.status: "notConfigured"`, engine
+`"speakrs"`, `cliPresent: true`, and `setupComplete: false`; the Speakrs card
+showed the normal unconfigured UI with **Set Up** enabled. Speakrs was never
+configured. A user-driven 30.58-second recording/transcription saved meeting
+`20260904_093701`: `transcriptionStatus: "completed"`,
+`transcriptionDevice: "mps"`, `transcriptionComputeType: "float16"`, normal
+`.md` transcript, and `.opus` audio. Its `meetings.json` entry has no `ai` key,
+and the recordings directory has no `*.speakers.json`; the UI showed neither a
+speaker-identification failure banner nor speaker labels. The equivalent
+never-installed Windows x64 check remains the final Task 5 acceptance gate.
 
 ## Interpreters used for this matrix
 

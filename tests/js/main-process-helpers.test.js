@@ -1553,7 +1553,7 @@ test('managed Linux CUDA library paths reject untrusted directories and ignore i
       inheritedLibraryPath: '/usr/lib:/lib',
       fsModule: fs,
     }),
-    `${cublas}:${cudnn}`,
+    `${fs.realpathSync(cublas)}:${fs.realpathSync(cudnn)}`,
   );
   assert.throws(
     () => buildManagedLinuxCudaLibraryPath({

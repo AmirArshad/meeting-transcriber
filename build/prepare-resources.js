@@ -1,4 +1,5 @@
 const fs = require('fs');
+const crypto = require('crypto');
 const os = require('os');
 const path = require('path');
 const https = require('https');
@@ -89,7 +90,7 @@ function listFilesRecursively(dirPath) {
 }
 
 function hashFileContent(filePath) {
-  return hashString(fs.readFileSync(filePath));
+  return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
 }
 
 function buildDirectoryManifest(dirPath, rootPath) {

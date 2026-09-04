@@ -357,7 +357,7 @@ test('Linux CUDA loader env ignores inherited hostile LD_LIBRARY_PATH', async ()
     try {
       const env = service.buildCudaRuntimeEnv({ LD_LIBRARY_PATH: '/tmp/hostile:/lib' });
       const managed = getManagedLinuxCudaRuntimeTarget(userData);
-      assert.ok(String(env.LD_LIBRARY_PATH).startsWith(path.join(managed, 'nvidia')));
+      assert.ok(String(env.LD_LIBRARY_PATH).startsWith(path.join(fs.realpathSync(managed), 'nvidia')));
       assert.doesNotMatch(String(env.LD_LIBRARY_PATH), /\/tmp\/hostile/);
     } finally {
       cleanup();

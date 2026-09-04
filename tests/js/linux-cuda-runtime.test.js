@@ -82,7 +82,7 @@ test('contained Linux CUDA loader rejects empty, relative, duplicate, and escape
       managedRoot: root,
       libraryDirs: [cublas, cudnn],
     }),
-    `${cublas}:${cudnn}`,
+    `${fs.realpathSync(cublas)}:${fs.realpathSync(cudnn)}`,
   );
   assert.throws(
     () => buildContainedLinuxCudaLibraryPath({ managedRoot: root, libraryDirs: [] }),
