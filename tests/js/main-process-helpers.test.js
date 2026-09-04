@@ -1558,19 +1558,24 @@ test('managed Linux CUDA library paths reject untrusted directories and ignore i
   assert.throws(
     () => buildManagedLinuxCudaLibraryPath({
       managedRoot: root,
-      libraryDirs: ['/usr/lib'],
-      fsModule: fs,
-    }),
-    /escapes the managed CUDA runtime root/,
-  );
-  assert.throws(
-    () => buildManagedLinuxCudaLibraryPath({
-      managedRoot: root,
       libraryDirs: ['relative/lib'],
       fsModule: fs,
     }),
     /absolute/,
   );
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-linux-cuda-escape-'));
+  try {
+    assert.throws(
+      () => buildManagedLinuxCudaLibraryPath({
+        managedRoot: root,
+        libraryDirs: [outside],
+        fsModule: fs,
+      }),
+      /escapes the managed CUDA runtime root/,
+    );
+  } finally {
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
   assert.throws(
     () => buildManagedLinuxCudaLibraryPath({
       managedRoot: root,
@@ -1579,6 +1584,7 @@ test('managed Linux CUDA library paths reject untrusted directories and ignore i
     }),
     /duplicate/,
   );
+  fs.rmSync(root, { recursive: true, force: true });
 });
 
 test('CUDA runtime profiles expose supported baseline and optional newer runtimes', () => {

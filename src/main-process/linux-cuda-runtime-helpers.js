@@ -4,12 +4,14 @@ const { execFileSync } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { isWorldWritableMode } = require('./posix-file-mode');
 
 const ACCEPTED_LINUX_CUDA_OS_ID = 'cachyos';
 const ACCEPTED_LINUX_CUDA_GPU_NAMES = Object.freeze([
   'nvidia geforce rtx 4070',
   'geforce rtx 4070',
 ]);
+const LINUX_LIBRARY_PATH_DELIMITER = ':';
 
 const {
   assertLinuxCudaCatalogIntegrity,
@@ -213,12 +215,36 @@ function isKnownCudaProbeStatusCode(value) {
   return KNOWN_CUDA_PROBE_STATUS_CODES.includes(String(value || '').trim());
 }
 
-function isWorldWritableMode(mode) {
-  return (Number(mode) & 0o002) !== 0;
+function isWindowsDrivePath(targetPath) {
+  const value = String(targetPath || '');
+  return /^[A-Za-z]:[\\/]/.test(value) || value.startsWith('\\\\');
+}
+
+function isLinuxRuntimeAbsolutePath(targetPath) {
+  const value = String(targetPath || '');
+  return isWindowsDrivePath(value) || path.posix.isAbsolute(value);
+}
+
+function resolveLinuxRuntimePath(targetPath, label) {
+  if (!isLinuxRuntimeAbsolutePath(targetPath)) {
+    throw new Error(`${label} must be an absolute path.`);
+  }
+  if (isWindowsDrivePath(targetPath)) {
+    return path.win32.resolve(targetPath);
+  }
+  return path.posix.normalize(targetPath);
+}
+
+function joinLinuxRuntimePath(root, ...parts) {
+  const resolved = resolveLinuxRuntimePath(root, 'Linux runtime path');
+  if (isWindowsDrivePath(resolved)) {
+    return path.win32.join(resolved, ...parts);
+  }
+  return path.posix.join(resolved, ...parts);
 }
 
 function assertAbsolutePath(targetPath, label) {
-  if (!targetPath || !path.isAbsolute(targetPath)) {
+  if (!isLinuxRuntimeAbsolutePath(targetPath)) {
     throw new Error(`${label} must be an absolute path.`);
   }
   return targetPath;
@@ -407,7 +433,7 @@ function buildContainedLinuxCudaLibraryPath({
     seen.add(driverDir);
     validatedDrivers.push(driverDir);
   }
-  return [...validatedManaged, ...validatedDrivers].join(path.delimiter);
+  return [...validatedManaged, ...validatedDrivers].join(LINUX_LIBRARY_PATH_DELIMITER);
 }
 
 function hashFileSha256Sync(filePath, fsModule = fs) {
@@ -581,10 +607,10 @@ function collectUnexpectedLinuxCudaLoaderFiles({
 }
 
 function getLinuxCudaWheelhousePath(userDataPath) {
-  if (!userDataPath || !path.isAbsolute(userDataPath)) {
+  if (!userDataPath || !isLinuxRuntimeAbsolutePath(userDataPath)) {
     throw new Error('CUDA wheelhouse userData path must be an absolute path.');
   }
-  return path.join(path.resolve(userDataPath), 'ai-addons', 'cuda', 'wheelhouse');
+  return joinLinuxRuntimePath(userDataPath, 'ai-addons', 'cuda', 'wheelhouse');
 }
 
 function getLinuxCudaTombstonePath(activePath, { now = Date.now(), pid = process.pid } = {}) {
@@ -596,10 +622,10 @@ function getLinuxCudaRuntimeStagingPath(activePath, { now = Date.now(), pid = pr
 }
 
 function getLinuxCudaWheelStagePath(userDataPath, { now = Date.now(), pid = process.pid } = {}) {
-  if (!userDataPath || !path.isAbsolute(userDataPath)) {
+  if (!userDataPath || !isLinuxRuntimeAbsolutePath(userDataPath)) {
     throw new Error('CUDA wheel stage userData path must be an absolute path.');
   }
-  return path.join(path.resolve(userDataPath), 'ai-addons', 'cuda', `wheel-stage-${now}-${pid}`);
+  return joinLinuxRuntimePath(userDataPath, 'ai-addons', 'cuda', `wheel-stage-${now}-${pid}`);
 }
 
 function isLinuxCudaRecoveryArtifactName(name) {
@@ -648,14 +674,14 @@ async function reconcileLinuxCudaRuntimeArtifacts({
   fsModule = fs,
 } = {}) {
   assertLinuxCudaCatalogIntegrity(catalog);
-  if (!userDataPath || !path.isAbsolute(userDataPath)) {
+  if (!userDataPath || !isLinuxRuntimeAbsolutePath(userDataPath)) {
     throw new Error('Linux CUDA recovery userData path must be an absolute path.');
   }
   const resolvedActivePath = activePath || require('./cuda-runtime-helpers')
     .getManagedLinuxCudaRuntimeTarget(userDataPath);
   assertAbsolutePath(resolvedActivePath, 'Active CUDA runtime');
 
-  const cudaRoot = path.join(path.resolve(userDataPath), 'ai-addons', 'cuda');
+  const cudaRoot = joinLinuxRuntimePath(userDataPath, 'ai-addons', 'cuda');
   if (path.resolve(path.dirname(resolvedActivePath)) !== path.resolve(cudaRoot)
     || path.basename(resolvedActivePath) !== 'python') {
     throw new Error('Active CUDA runtime must be the managed python path.');
@@ -790,21 +816,21 @@ function buildLinuxCudaOfflineInstallArgs({
   catalog = getLinuxCuda12RuntimeCatalog(),
 } = {}) {
   assertLinuxCudaCatalogIntegrity(catalog);
-  if (!target || !path.isAbsolute(target)) {
+  if (!target || !isLinuxRuntimeAbsolutePath(target)) {
     throw new Error('Linux CUDA install target must be an absolute path.');
   }
   if (!Array.isArray(wheelPaths) || wheelPaths.length !== catalog.wheels.length) {
     throw new Error('Linux CUDA install requires the exact verified wheel closure.');
   }
   const resolvedWheels = wheelPaths.map((wheelPath, index) => {
-    if (!wheelPath || !path.isAbsolute(wheelPath)) {
+    if (!wheelPath || !isLinuxRuntimeAbsolutePath(wheelPath)) {
       throw new Error('Linux CUDA wheel paths must be absolute.');
     }
     const expectedName = catalog.wheels[index].fileName;
-    if (path.basename(wheelPath) !== expectedName) {
+    if (path.posix.basename(wheelPath) !== expectedName && path.basename(wheelPath) !== expectedName) {
       throw new Error(`Linux CUDA wheel path does not match catalog name: ${expectedName}`);
     }
-    return path.resolve(wheelPath);
+    return resolveLinuxRuntimePath(wheelPath, 'Linux CUDA wheel path');
   });
   return [
     '-m',
@@ -817,7 +843,7 @@ function buildLinuxCudaOfflineInstallArgs({
     '--no-cache-dir',
     '--no-warn-script-location',
     '--target',
-    path.resolve(target),
+    resolveLinuxRuntimePath(target, 'Linux CUDA install target'),
     ...resolvedWheels,
   ];
 }
@@ -1013,6 +1039,7 @@ module.exports = {
   KNOWN_CUDA_PROBE_STATUS_CODES,
   isKnownCudaProbeStatusCode,
   isWorldWritableMode,
+  LINUX_LIBRARY_PATH_DELIMITER,
   lstatRejectSymlink,
   validateLinuxCudaManagedRoot,
   validateLinuxCudaLibraryDirectory,
@@ -1021,6 +1048,9 @@ module.exports = {
   buildContainedLinuxCudaLibraryPath,
   hashFileSha256,
   hashFileSha256Sync,
+  isLinuxRuntimeAbsolutePath,
+  joinLinuxRuntimePath,
+  resolveLinuxRuntimePath,
   resolveRequiredLinuxCudaLibraryPath,
   verifyLinuxCudaRuntimeIntegrity,
   collectUnexpectedLinuxCudaLoaderFiles,

@@ -129,19 +129,27 @@ function getPyTorchCudaBinCandidates(sitePackagesDirs = []) {
 }
 
 function getManagedLinuxCudaRuntimeTarget(userDataPath = '') {
-  if (!userDataPath || !path.isAbsolute(userDataPath)) {
+  const {
+    isLinuxRuntimeAbsolutePath,
+    joinLinuxRuntimePath,
+  } = require('./linux-cuda-runtime-helpers');
+  if (!userDataPath || !isLinuxRuntimeAbsolutePath(userDataPath)) {
     throw new Error('CUDA runtime userData path must be an absolute path.');
   }
-  return path.join(path.resolve(userDataPath), 'ai-addons', 'cuda', 'python');
+  return joinLinuxRuntimePath(userDataPath, 'ai-addons', 'cuda', 'python');
 }
 
 function getManagedLinuxCudaLibraryDirs(managedRoot = '') {
-  if (!managedRoot || !path.isAbsolute(managedRoot)) {
+  const {
+    isLinuxRuntimeAbsolutePath,
+    joinLinuxRuntimePath,
+  } = require('./linux-cuda-runtime-helpers');
+  if (!managedRoot || !isLinuxRuntimeAbsolutePath(managedRoot)) {
     throw new Error('Managed CUDA runtime root must be an absolute path.');
   }
   return [
-    path.join(managedRoot, 'nvidia', 'cublas', 'lib'),
-    path.join(managedRoot, 'nvidia', 'cudnn', 'lib'),
+    joinLinuxRuntimePath(managedRoot, 'nvidia', 'cublas', 'lib'),
+    joinLinuxRuntimePath(managedRoot, 'nvidia', 'cudnn', 'lib'),
   ];
 }
 

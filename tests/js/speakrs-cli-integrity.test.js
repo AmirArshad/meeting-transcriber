@@ -492,23 +492,6 @@ test('packaged Speakrs integrity is fail-closed and ignores overrides', () => {
     const linuxLayout = inspectPackagedSpeakrsLayout({
       platform: 'linux',
       resourcesPath: linuxValid.resourcesPath,
-      fsModule: process.platform === 'win32'
-        ? {
-            existsSync: fs.existsSync.bind(fs),
-            statSync: (filePath) => {
-              const stats = fs.statSync(filePath);
-              return {
-                isFile: () => stats.isFile(),
-                isDirectory: () => stats.isDirectory(),
-                size: stats.size,
-                mode: 0o755,
-              };
-            },
-            openSync: fs.openSync.bind(fs),
-            readSync: fs.readSync.bind(fs),
-            closeSync: fs.closeSync.bind(fs),
-          }
-        : fs,
     });
     assert.equal(linuxLayout.ok, true);
     assert.equal(linuxLayout.cliPath, linuxValid.cliPath);

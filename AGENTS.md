@@ -72,7 +72,7 @@ This file is the always-on safety baseline. Read the path-matched canonical cont
 ### Always-on safeguards
 
 - Privacy is non-negotiable: no cloud processing, telemetry, background uploads, or embedded/proxied secrets.
-- Preserve explicit platform behavior. Linux is x86_64 Core Beta; CUDA add-ons are fail-closed and component-gated. Do not call Task 5 or this branch accepted before the Windows x64 negative check.
+- Preserve explicit platform behavior. Linux is x86_64 Core Beta; CUDA add-ons are fail-closed and component-gated. Linux Speakrs Task 5 and CUDA-only Qwen summaries (Task 6) are accepted with evidence in `docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md`.
 - `src/main.js` is composition-only. IPC changes span service, preload, renderer, and tests; inspect Electron and Python sides of every cross-process contract.
 - Use the smallest relevant test while iterating; run `npm run test:all` before a PR for cross-cutting, recorder, persistence, packaging, or security work. Hardware acceptance is manual evidence, never inferred from CI.
 - Runtime scripts, tests, and dated compatibility evidence beat stale prose. Keep `todo.md` current for task state and use `docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md` for v2.9 acceptance evidence.

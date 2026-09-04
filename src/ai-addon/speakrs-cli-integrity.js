@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { lacksUnixExecuteBits } = require('../main-process/posix-file-mode');
 
 const SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE = 'This AvaNevis install is incomplete. Reinstall AvaNevis.';
 const SPEAKRS_VALIDATE_WAV_NAME = 'speakrs-two-speaker-16k.wav';
@@ -407,7 +408,7 @@ function inspectSpeakrsCliFile(filePath, {
   if (!Number.isFinite(stats.size) || stats.size <= 0) {
     return { ok: false, reason: 'empty', filePath };
   }
-  if (platform !== 'win32' && stats.mode != null && (stats.mode & 0o111) === 0) {
+  if (platform !== 'win32' && lacksUnixExecuteBits(stats.mode)) {
     return { ok: false, reason: 'non-executable', filePath };
   }
 

@@ -564,6 +564,7 @@ test('packaged Speakrs layout requires the canonical fixture and rejects missing
       );
 
       writeCanonicalFixture(wavPath);
+      writeSpeakrsPackagedIntegrityManifest(path.join(resourcesRoot, 'bin'), 'win32');
       const duplicate = path.join(resourcesRoot, 'backend', 'diarization', 'fixtures', SPEAKRS_VALIDATE_WAV_NAME);
       writeCanonicalFixture(duplicate);
       assert.throws(

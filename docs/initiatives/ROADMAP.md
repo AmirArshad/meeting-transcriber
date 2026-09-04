@@ -71,7 +71,7 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 
 ## In progress
 
-v2.9 dependency and Linux-AI work is in flight. CUDA Whisper and CUDA-only Qwen summaries have recorded CachyOS RTX 4070 evidence; Linux Speakrs Task 5 remains pending its Windows x64 negative acceptance check. See root [`todo.md`](../../todo.md) and the [compatibility matrix](../development/V2_9_DEPENDENCY_COMPATIBILITY.md).
+v2.9 Linux-AI add-ons are accepted. CUDA Whisper, Linux Speakrs (including the Windows x64 never-installed check), and CUDA-only Qwen summaries have recorded evidence. The next v2.9 lane is capture-mode selection. See root [`todo.md`](../../todo.md) and the [compatibility matrix](../development/V2_9_DEPENDENCY_COMPATIBILITY.md).
 
 ## Planned
 

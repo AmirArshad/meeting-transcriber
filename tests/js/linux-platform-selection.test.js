@@ -449,19 +449,23 @@ test('Linux summary runtime rejects unexpected loaders and unsafe executable dir
     );
     fs.rmSync(path.join(extractDir, 'libhostile.so.6'));
 
-    fs.chmodSync(extractDir, 0o777);
-    assert.throws(
-      () => buildSummaryRuntimeEnv({
-        userDataDir,
-        artifact,
-        platform: 'linux',
-        arch: 'x64',
-        driverLibraryDirs: [],
-      }),
-      /executable directory must not be world-writable/,
-    );
+    if (os.type() !== 'Windows_NT') {
+      fs.chmodSync(extractDir, 0o777);
+      assert.throws(
+        () => buildSummaryRuntimeEnv({
+          userDataDir,
+          artifact,
+          platform: 'linux',
+          arch: 'x64',
+          driverLibraryDirs: [],
+        }),
+        /executable directory must not be world-writable/,
+      );
+    }
   } finally {
-    fs.chmodSync(extractDir, 0o755);
+    if (os.type() !== 'Windows_NT') {
+      fs.chmodSync(extractDir, 0o755);
+    }
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }
 });

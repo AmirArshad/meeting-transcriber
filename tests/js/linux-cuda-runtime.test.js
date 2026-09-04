@@ -102,13 +102,18 @@ test('contained Linux CUDA loader rejects empty, relative, duplicate, and escape
     }),
     /duplicate/,
   );
-  assert.throws(
-    () => buildContainedLinuxCudaLibraryPath({
-      managedRoot: root,
-      libraryDirs: ['/usr'],
-    }),
-    /escapes the managed CUDA runtime root/,
-  );
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-linux-cuda-escape-'));
+  try {
+    assert.throws(
+      () => buildContainedLinuxCudaLibraryPath({
+        managedRoot: root,
+        libraryDirs: [outside],
+      }),
+      /escapes the managed CUDA runtime root/,
+    );
+  } finally {
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
   fs.rmSync(root, { recursive: true, force: true });
 });
 
