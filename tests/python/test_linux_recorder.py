@@ -43,6 +43,12 @@ class FakeRecorder:
             if isinstance(fail, BaseException):
                 raise fail
             raise RuntimeError(fail)
+        # Emulate a stream that accepts the open but never becomes ready, so
+        # the recorder's start-timeout branch can be exercised. The gate is
+        # released by the test so no thread is left blocked forever.
+        gate = self.backend.stall_open.get(self.pulse_name)
+        if gate is not None:
+            gate.wait(timeout=10.0)
         return self
 
     def __exit__(self, *args):
@@ -87,6 +93,8 @@ class FakeSoundCard:
         self.fail_record = {}
         self.fail_exit = {}
         self.on_record = {}
+        # pulse_name -> threading.Event; open blocks until the event is set.
+        self.stall_open = {}
         self.mismatched_fallback = set()
         self.open_attempts = {}
 
@@ -201,6 +209,216 @@ def _patch_finalize_success(monkeypatch):
     return seen
 
 
+def test_linux_recorder_accepts_an_explicit_capture_mode(tmp_path):
+    soundcard = FakeSoundCard()
+    pulse = FakePulse([MONITOR_NAME])
+    recorder = _make_recorder(
+        tmp_path,
+        soundcard=soundcard,
+        pulse=pulse,
+        capture_mode="desktop-only",
+    )
+
+    assert recorder.capture_mode == "desktop-only"
+
+
+def test_linux_desktop_only_never_opens_the_microphone(tmp_path, monkeypatch):
+    seen = _patch_finalize_success(monkeypatch)
+    soundcard = FakeSoundCard()
+    pulse = FakePulse([MONITOR_NAME])
+    recorder = _make_recorder(
+        tmp_path,
+        soundcard=soundcard,
+        pulse=pulse,
+        capture_mode="desktop-only",
+    )
+
+    assert recorder.start_recording() is True
+    assert recorder.mic_thread is None
+    assert recorder._mic_spool is None
+    assert recorder.desktop_thread is not None
+    assert MIC_NAME not in soundcard.open_attempts
+    assert soundcard.open_attempts == {MONITOR_NAME: 1}
+    assert _wait_until(lambda: recorder._desktop_spool_accepted_any)
+    recorder.stop_recording()
+
+    # The manifest handed to finalization must be a coherent one-track
+    # desktop-primary contract: no mic track, no secondary-mix flag, and no
+    # mic-timeline alignment.
+    manifest = seen["manifest"]
+    assert set(manifest["tracks"]) == {"desktop"}
+    assert manifest["primaryTrack"] == "desktop"
+    assert manifest.get("includeDesktop") is False
+    assert manifest.get("alignment") is None
+
+
+def _patch_finalize_io(monkeypatch):
+    """Run the real finalizer with an in-memory writer instead of ffmpeg.
+
+    Keeps `finalize_capture`/`resolve_primary_track` and the whole mix path
+    genuine (a stubbed finalizer cannot detect a contradictory manifest) while
+    staying runnable on hosts without ffmpeg.
+    """
+    import backend.audio.streaming_post_processor as spp
+    from backend.audio.wav_io import write_int16_pcm_wav
+
+    def fake_finalize_ffmpeg(*, ffmpeg_path, output_path, frame_iter, sample_rate=48000):
+        frames = [chunk for chunk in frame_iter if chunk.size]
+        audio = np.concatenate(frames, axis=0) if frames else np.zeros((0, 2), dtype=np.float32)
+        int16 = (np.clip(audio, -1.0, 1.0) * 32767.0).astype(np.int16)
+        write_int16_pcm_wav(output_path, int16.reshape(-1), channels=2, sample_rate=sample_rate)
+        return int(audio.shape[0])
+
+    def compress_copy(input_path, output_path, sample_rate, **kwargs):
+        dest = Path(output_path).with_suffix(".wav")
+        dest.write_bytes(Path(input_path).read_bytes())
+        return str(dest), {
+            "input_size": dest.stat().st_size,
+            "output_size": dest.stat().st_size,
+            "ratio": 0.0,
+        }
+
+    monkeypatch.setattr(spp, "_stream_final_wav_via_ffmpeg", fake_finalize_ffmpeg)
+    monkeypatch.setattr(spp, "_verify_final_temp", lambda *a, **k: None)
+    monkeypatch.setattr(spp, "compress_and_report", compress_copy)
+    monkeypatch.setattr(spp, "ffmpeg_can_decode", lambda *a, **k: True)
+
+
+def test_linux_desktop_only_finalizes_through_the_real_finalizer(tmp_path, monkeypatch):
+    """Regression: a desktop-primary manifest must actually be finalizable.
+
+    Guards the defect where Linux wrote `includeDesktop: true` alongside
+    `primaryTrack: "desktop"`, which `resolve_primary_track` rejects — making
+    every Linux desktop-only recording fail at stop and stay permanently
+    unrecoverable.
+    """
+    _patch_finalize_io(monkeypatch)
+    recorder = _make_recorder(
+        tmp_path,
+        soundcard=FakeSoundCard(),
+        pulse=FakePulse([MONITOR_NAME]),
+        capture_mode="desktop-only",
+    )
+
+    assert recorder.start_recording() is True
+    session_dir = recorder._capture_manifest.session_dir
+    assert _wait_until(lambda: recorder._desktop_spool_accepted_any)
+    recorder.stop_recording()
+
+    assert recorder.recording_failure is None
+    assert recorder.final_output_path
+    assert Path(recorder.final_output_path).is_file()
+    # Successful finalization cleans up the capture session; a leftover session
+    # dir means the recording was left as an unrecoverable interrupted capture.
+    assert not session_dir.exists()
+    assert list_interrupted_captures(tmp_path) == []
+
+
+def test_linux_desktop_only_interrupted_capture_is_recoverable(tmp_path, monkeypatch):
+    """A crashed desktop-only capture must still be recoverable afterwards."""
+    _patch_finalize_io(monkeypatch)
+    recorder = _make_recorder(
+        tmp_path,
+        soundcard=FakeSoundCard(),
+        pulse=FakePulse([MONITOR_NAME]),
+        capture_mode="desktop-only",
+    )
+
+    assert recorder.start_recording() is True
+    assert _wait_until(lambda: recorder._desktop_spool_accepted_any)
+    session_dir = recorder._capture_manifest.session_dir
+
+    # Simulate an interrupted process: stop capture and release the spools/lock
+    # without running the stop workflow at all.
+    recorder._set_running(False)
+    if recorder.desktop_thread:
+        recorder.desktop_thread.join(timeout=2.0)
+    recorder._close_watch_pulse(final=True)
+    recorder._release_capture_spools()
+
+    candidates = list_interrupted_captures(tmp_path)
+    assert [Path(item["captureDir"]) for item in candidates] == [session_dir]
+
+    result = recover_capture(tmp_path, session_dir, ffmpeg_path="ffmpeg")
+    assert Path(result["audioPath"]).is_file()
+    assert result["duration"] > 0
+    assert not session_dir.exists()
+
+
+def test_linux_desktop_only_start_fails_when_the_monitor_is_unavailable(tmp_path, capsys):
+    """desktop-only has no mic fallback, so a missing monitor is terminal."""
+    recorder = _make_recorder(
+        tmp_path,
+        soundcard=FakeSoundCard(),
+        pulse=FakePulse([]),  # monitor is gone
+        capture_mode="desktop-only",
+    )
+
+    assert recorder.start_recording() is False
+
+    payloads = _stdout_payloads(capsys)
+    errors = [item for item in payloads if item.get("type") == "error"]
+    assert any(item.get("code") == "DESKTOP_START_FAILED" for item in errors), errors
+    # Never claim a started recording with no active source.
+    assert not any(item.get("event") == "recording_started" for item in payloads), payloads
+    # No microphone fallback may be offered anywhere in the payloads.
+    assert not any(
+        "microphone audio only" in str(item.get("help", "")).lower()
+        for item in payloads
+    ), payloads
+    # The terminal error is the single report: no duplicate warning with the
+    # same text ahead of it.
+    assert not any(item.get("type") == "warning" for item in payloads), payloads
+
+
+def test_linux_desktop_only_start_fails_when_desktop_capture_is_switched_off(tmp_path, capsys):
+    """The Linux 'none' desktop selection leaves desktop-only with no source."""
+    recorder = _make_recorder(
+        tmp_path,
+        soundcard=FakeSoundCard(),
+        pulse=FakePulse([MONITOR_NAME]),
+        desktop_id="none",
+        capture_mode="desktop-only",
+    )
+
+    assert recorder.start_recording() is False
+
+    payloads = _stdout_payloads(capsys)
+    errors = [item for item in payloads if item.get("type") == "error"]
+    assert any(item.get("code") == "DESKTOP_START_FAILED" for item in errors), errors
+    # It must not surface as an internal capture-manifest/primary-track error.
+    assert not any("primaryTrack" in str(item.get("message", "")) for item in errors), errors
+
+
+def test_linux_mic_only_never_touches_desktop_capture(tmp_path, monkeypatch, capsys):
+    seen = _patch_finalize_success(monkeypatch)
+    soundcard = FakeSoundCard()
+    recorder = _make_recorder(
+        tmp_path,
+        soundcard=soundcard,
+        pulse=FakePulse([MIC_NAME, MONITOR_NAME]),
+        capture_mode="mic-only",
+    )
+
+    assert recorder.start_recording() is True
+    assert recorder.desktop_thread is None
+    assert recorder._desktop_spool is None
+    assert recorder._desktop_requested is False
+    assert MONITOR_NAME not in soundcard.open_attempts
+    recorder.stop_recording()
+
+    manifest = seen["manifest"]
+    assert set(manifest["tracks"]) == {"mic"}
+    assert manifest["primaryTrack"] == "mic"
+    assert manifest.get("includeDesktop") is False
+
+    payloads = _stdout_payloads(capsys)
+    # An unrequested desktop source must not produce a "no desktop audio" warning.
+    assert not any(
+        item.get("code") == "NO_DESKTOP_AUDIO_CAPTURED" for item in payloads
+    ), payloads
+
+
 def _wait_until(predicate, timeout=2.0):
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -273,6 +491,92 @@ def test_desktop_startup_failure_warns_and_continues_mic_only(tmp_path, monkeypa
     assert not any("DESKTOP" in (item.get("code") or "") for item in errors)
     assert recorder.recording_failure is None
     assert Path(recorder.final_output_path).is_file()
+
+
+def test_desktop_only_startup_open_failure_is_terminal(tmp_path, capsys):
+    """Same failure as the mic-and-desktop case above, but terminal.
+
+    `mic-and-desktop` warns and continues mic-only. `desktop-only` has no
+    second source, so continuing would report a started recording with zero
+    active sources and only fail at stop.
+    """
+    soundcard = FakeSoundCard()
+    soundcard.fail_open[MONITOR_NAME] = "monitor open failed"
+    recorder = _make_recorder(
+        tmp_path,
+        soundcard=soundcard,
+        pulse=FakePulse([MIC_NAME, MONITOR_NAME]),
+        capture_mode="desktop-only",
+    )
+
+    assert recorder.start_recording() is False
+
+    payloads = _stdout_payloads(capsys)
+    errors = [item for item in payloads if item.get("type") == "error"]
+    assert any(item.get("code") == "DESKTOP_START_FAILED" for item in errors), errors
+    assert not any(item.get("event") == "recording_started" for item in payloads), payloads
+    # The microphone must never be opened for a desktop-only attempt, even on
+    # the failure path.
+    assert MIC_NAME not in soundcard.open_attempts
+    assert recorder.mic_thread is None
+    # No orphan capture directory.
+    assert not (tmp_path / "recording.capture").exists()
+
+
+def test_desktop_only_start_timeout_is_terminal(tmp_path, monkeypatch, capsys):
+    """A desktop stream that never becomes ready must abort desktop-only."""
+    monkeypatch.setattr(linux_mod, "DESKTOP_START_TIMEOUT_SECONDS", 0.2)
+    gate = threading.Event()
+    soundcard = FakeSoundCard()
+    soundcard.stall_open[MONITOR_NAME] = gate
+    recorder = _make_recorder(
+        tmp_path,
+        soundcard=soundcard,
+        pulse=FakePulse([MIC_NAME, MONITOR_NAME]),
+        capture_mode="desktop-only",
+    )
+
+    try:
+        assert recorder.start_recording() is False
+    finally:
+        gate.set()  # release the stalled capture thread
+
+    payloads = _stdout_payloads(capsys)
+    errors = [item for item in payloads if item.get("type") == "error"]
+    assert any(item.get("code") == "DESKTOP_START_FAILED" for item in errors), errors
+    assert not any(item.get("event") == "recording_started" for item in payloads), payloads
+    assert not any(
+        "microphone audio only" in str(item.get("help", "")).lower() for item in payloads
+    ), payloads
+
+
+def test_default_mode_still_continues_mic_only_on_a_desktop_start_timeout(
+    tmp_path, monkeypatch, capsys
+):
+    """Default-path regression: the terminal desktop-only path must not leak here."""
+    monkeypatch.setattr(linux_mod, "DESKTOP_START_TIMEOUT_SECONDS", 0.2)
+    _patch_finalize_success(monkeypatch)
+    gate = threading.Event()
+    soundcard = FakeSoundCard()
+    soundcard.stall_open[MONITOR_NAME] = gate
+    recorder = _make_recorder(
+        tmp_path,
+        soundcard=soundcard,
+        pulse=FakePulse([MIC_NAME, MONITOR_NAME]),
+    )
+
+    try:
+        assert recorder.start_recording() is True
+        assert _wait_until(lambda: recorder._mic_spool is not None)
+        recorder.stop_recording()
+    finally:
+        gate.set()
+
+    payloads = _stdout_payloads(capsys)
+    warnings = [item for item in payloads if item.get("type") == "warning"]
+    assert any(item.get("code") == "DESKTOP_START_TIMEOUT" for item in warnings), warnings
+    assert any(item.get("event") == "recording_started" for item in payloads), payloads
+    assert recorder.recording_failure is None
 
 
 def test_linux_enospc_desktop_open_is_fail_closed_without_retry(

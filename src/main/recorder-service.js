@@ -12,6 +12,68 @@
 const os = require('os');
 const { coerceIntegerDeviceId } = require('../main-process/device-id-helpers');
 
+const CAPTURE_MODES = new Set([
+  'mic-and-desktop',
+  'mic-only',
+  'desktop-only',
+]);
+const DEFAULT_CAPTURE_MODE = 'mic-and-desktop';
+
+function normalizeCaptureMode(captureMode) {
+  const normalized = captureMode === undefined ? DEFAULT_CAPTURE_MODE : captureMode;
+  return CAPTURE_MODES.has(normalized) ? normalized : null;
+}
+
+/**
+ * Placeholder passed to a recorder for a source this capture mode did not
+ * request. Recorders never probe, open, or validate an unrequested source, but
+ * argv is still positional and `--mic`/`--loopback` are `type=int` on Windows
+ * and macOS — an empty selection would abort the child inside argparse with a
+ * stderr-only failure instead of structured stdout JSON. Keeping the real id
+ * out of argv also means an unrequested device id never reaches the child.
+ */
+function unrequestedDeviceIdPlaceholder(platform) {
+  return platform === 'linux' ? 'none' : '-1';
+}
+
+/**
+ * Resolve the argv device ids for one capture mode.
+ *
+ * A requested source must carry a real, non-empty selection; an unrequested
+ * source is replaced by the platform placeholder so its id never reaches the
+ * recorder child. Returns `{ micArg, loopbackArg }` on success, or
+ * `{ error: { code, message } }` for a missing requested selection.
+ */
+function resolveRecorderDeviceArgs({ micId, loopbackId, captureMode, platform }) {
+  const placeholder = unrequestedDeviceIdPlaceholder(platform);
+  const includeMic = captureMode !== 'desktop-only';
+  const includeDesktop = captureMode !== 'mic-only';
+  const asArg = (value) => (value === undefined || value === null ? '' : String(value));
+
+  const micArg = includeMic ? asArg(micId) : placeholder;
+  const loopbackArg = includeDesktop ? asArg(loopbackId) : placeholder;
+
+  if (includeMic && micArg === '') {
+    return {
+      error: {
+        code: 'MISSING_MICROPHONE_SELECTION',
+        message: 'Select a microphone before starting this recording.',
+      },
+    };
+  }
+
+  if (includeDesktop && loopbackArg === '') {
+    return {
+      error: {
+        code: 'MISSING_DESKTOP_SELECTION',
+        message: 'Select a desktop audio source before starting this recording.',
+      },
+    };
+  }
+
+  return { micArg, loopbackArg };
+}
+
 const {
   buildRecordingPreflightReport,
   buildQuitRecordingDialogOptions,
@@ -117,7 +179,14 @@ function createRecorderService(deps) {
   let startupCancelGeneration = 0;
   let recordingSessionCounter = 0;
   let activeRecordingSessionId = null;
-  let publishedCaptureState = { state: 'idle', sessionId: null, startedAt: null };
+  let publishedCaptureState = {
+    state: 'idle',
+    sessionId: null,
+    startedAt: null,
+    captureMode: DEFAULT_CAPTURE_MODE,
+  };
+  /** Capture mode of the in-flight/active recording (main-process authority). */
+  let activeCaptureMode = DEFAULT_CAPTURE_MODE;
   // Last structured result seen by the live stdout listener (not only stop buffer).
   let lastLiveRecorderResult = null;
   // Suppress unexpected_exit UI after a stop-timeout force-kill (renderer already failed).
@@ -241,6 +310,10 @@ function createRecorderService(deps) {
       state,
       sessionId: Number.isInteger(sessionId) ? sessionId : null,
       startedAt: Number.isFinite(startedAt) ? startedAt : null,
+      // Authoritative capture mode so a reloaded/hydrated renderer restores
+      // source-accurate status copy and visualizer tracks instead of assuming
+      // the two-source default. Idle carries the default.
+      captureMode: state === 'idle' ? DEFAULT_CAPTURE_MODE : activeCaptureMode,
     };
     try {
       onCaptureStateChanged({ ...publishedCaptureState });
@@ -838,6 +911,7 @@ function createRecorderService(deps) {
     resetStopWorkflowState();
 
     if (publishIdle) {
+      activeCaptureMode = DEFAULT_CAPTURE_MODE;
       publishCaptureState('idle', null, null);
     }
     return true;
@@ -1588,12 +1662,32 @@ function createRecorderService(deps) {
       return deferRecordingRecovery();
     });
 
-    ipcMain.handle('run-recording-preflight', async (event, { micId, loopbackId }) => {
+    ipcMain.handle('run-recording-preflight', async (event, { micId, loopbackId, captureMode }) => {
+      const normalizedCaptureMode = normalizeCaptureMode(captureMode);
+      if (!normalizedCaptureMode) {
+        return {
+          canStart: false,
+          errors: ['Choose a valid recording capture mode.'],
+          warnings: [],
+          errorMessage: 'Choose a valid recording capture mode.',
+          warningMessage: null,
+          permissionStatus: null,
+        };
+      }
+      // Always run the macOS probe so desktop-only keeps its desktop-audio
+      // backend and Screen Recording diagnostics. Only the microphone
+      // open-test is suppressed, so an unrequested microphone can never raise
+      // a privacy prompt. buildRecordingPreflightReport then drops errors for
+      // whichever source this mode did not request.
+      const skipMicrophoneCheck = normalizedCaptureMode === 'desktop-only';
       const [deviceCheck, diskCheck, audioOutputCheck, permissionCheck] = await Promise.all([
-        validateSelectedDevices({ micId, loopbackId }),
+        validateSelectedDevices({ micId, loopbackId, captureMode: normalizedCaptureMode }),
         checkDiskSpace(),
         checkAudioOutputSupport(),
-        getMacOSPermissionStatus(coerceIntegerDeviceId(micId)),
+        getMacOSPermissionStatus(
+          skipMicrophoneCheck ? null : coerceIntegerDeviceId(micId),
+          { skipMicrophoneCheck },
+        ),
       ]);
 
       return buildRecordingPreflightReport({
@@ -1602,6 +1696,7 @@ function createRecorderService(deps) {
         diskCheck,
         audioOutputCheck,
         permissionCheck,
+        captureMode: normalizedCaptureMode,
       });
     });
 
@@ -1617,6 +1712,28 @@ function createRecorderService(deps) {
           code: 'QUIT_IN_PROGRESS',
           message: 'Cannot start recording while the app is quitting.',
         };
+      }
+
+      const captureMode = normalizeCaptureMode(options?.captureMode);
+      if (!captureMode) {
+        return {
+          success: false,
+          code: 'INVALID_CAPTURE_MODE',
+          message: 'Choose a valid recording capture mode.',
+        };
+      }
+
+      // Resolve argv device ids before any admission/spawn work so a missing
+      // requested selection fails fast and structured, and so an unrequested
+      // source's id is never forwarded to the recorder child.
+      const deviceArgs = resolveRecorderDeviceArgs({
+        micId: options?.micId,
+        loopbackId: options?.loopbackId,
+        captureMode,
+        platform: process.platform,
+      });
+      if (deviceArgs.error) {
+        return { success: false, ...deviceArgs.error };
       }
 
       // Snapshot cancel generation before admission. Do not reset it — a Cancel
@@ -1673,6 +1790,9 @@ function createRecorderService(deps) {
 
       const sessionId = ++recordingSessionCounter;
       activeRecordingSessionId = sessionId;
+      // Latch the mode before the first non-idle publish so every capture-state
+      // consumer (tray presence, hydrated renderer) sees the real sources.
+      activeCaptureMode = captureMode;
       // Publish non-idle before releasing the start reservation so recovery
       // cannot race in between admission and capture-state publication.
       publishCaptureState('starting', sessionId, null);
@@ -1769,7 +1889,7 @@ function createRecorderService(deps) {
         }
 
         try {
-          const { micId, loopbackId, isFirstRecording } = options;
+          const { isFirstRecording } = options;
 
         // Generate unique filename with timestamp
         const timestamp = new Date().toISOString()
@@ -1806,8 +1926,9 @@ function createRecorderService(deps) {
 
         proc = spawnTrackedPython([
           '-m', recorderModule,
-          '--mic', micId.toString(),
-          '--loopback', loopbackId.toString(),
+          '--mic', deviceArgs.micArg,
+          '--loopback', deviceArgs.loopbackArg,
+          '--capture-mode', captureMode,
           '--output', outputPath
         ], { cwd: pythonConfig.backendPath });
         pythonProcess = proc;

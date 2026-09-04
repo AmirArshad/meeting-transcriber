@@ -909,6 +909,16 @@ select.device-select:disabled {
 }
 
 /* ---- Record button (premium) ---- */
+.record-split-control { display: inline-flex; position: relative; }
+.record-split-control .record-button { min-width: 190px; border-radius: var(--r-sm) 0 0 var(--r-sm); }
+.record-mode-toggle { width: 34px; border: 0; border-left: 1px solid rgba(255,255,255,.28); color: #fff; background: var(--accent-deep); border-radius: 0 var(--r-sm) var(--r-sm) 0; cursor: pointer; }
+.record-mode-toggle:focus-visible, .record-mode-menu button:focus-visible { outline: 2px solid var(--focus-ring, #fff); outline-offset: 2px; }
+.record-mode-toggle:disabled { cursor: not-allowed; opacity: .55; }
+.record-mode-menu { position: absolute; z-index: 20; top: calc(100% + 6px); left: 0; min-width: 224px; padding: 4px; background: var(--surface-2); border: 1px solid var(--hairline); border-radius: var(--r-sm); box-shadow: var(--shadow-lg); }
+/* Explicit so a future `display` on .record-mode-menu cannot defeat `hidden`. */
+.record-mode-menu[hidden] { display: none; }
+.record-mode-menu button { display: block; width: 100%; padding: 9px 10px; border: 0; background: transparent; color: var(--text-primary); font: inherit; text-align: left; cursor: pointer; border-radius: calc(var(--r-sm) - 2px); }
+.record-mode-menu button:hover { background: var(--surface-3); }
 .record-button {
   display: inline-flex;
   align-items: center;
@@ -1005,6 +1015,13 @@ select.device-select:disabled {
   grid-template-columns: 62px minmax(0, 1fr);
   align-items: center;
   gap: var(--space-2);
+}
+
+/* A class selector with `display` outranks the UA `[hidden]` rule, so a
+   single-source capture mode could not hide its unrequested track without
+   this. Keep it adjacent to the rule it overrides. */
+.visualizer-track[hidden] {
+  display: none;
 }
 
 .visualizer-track + .visualizer-track {

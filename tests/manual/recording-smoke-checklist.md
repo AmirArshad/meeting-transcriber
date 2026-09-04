@@ -147,6 +147,64 @@ Evidence 2026-08-27 on `amiromarchy` (Omarchy 4.0.1) used the product recorder C
 - [ ] Start summary generation, immediately hover/click the active Generate Summary button, and verify cancellation leaves the transcript unchanged and no summary sidecars are orphaned without metadata.
 - [ ] Fill 15/60-minute RSS/disk baselines in `docs/initiatives/LONG_RECORDING_SAFETY.md` before claiming Task 10 2h/4h evidence.
 
+## Capture modes (v2.9) — hardware acceptance matrix
+
+Automated tests establish the contract; this matrix is the hardware gate. Run
+the whole block per platform and record the date + build. **Do not mark the
+capture-modes lane accepted until every row is evidenced on Windows 10/11,
+macOS 14+ arm64, and Omarchy/CachyOS x86_64.**
+
+The primary `Start Recording` button is always `mic-and-desktop`. The two
+single-source modes come from the split-button disclosure menu.
+
+### Per platform — `mic-and-desktop` (default regression)
+
+- [ ] Windows / [ ] macOS / [ ] Linux — Record 60s with mic speech **and** browser audio playing; stop; both sources are audible in the saved Opus and both appear in the transcript.
+- [ ] Windows / [ ] macOS / [ ] Linux — Status pill reads `Recording mic + system audio…`; **both** visualizer tracks are visible and moving.
+- [ ] Windows / [ ] macOS / [ ] Linux — Discard mid-recording: no meeting persisted, no transcription enqueued, status returns to Ready.
+- [ ] Windows / [ ] macOS / [ ] Linux — Kill the app mid-recording; relaunch recovers the capture and the recovered file contains both sources.
+
+### Per platform — `mic-only`
+
+- [ ] Windows / [ ] macOS / [ ] Linux — Record 60s with browser audio playing loudly; the saved file contains **no** system audio at all.
+- [ ] macOS — **No** Screen Recording or System Audio Recording prompt appears, and no screen-recording indicator lights up.
+- [ ] Windows / [ ] macOS / [ ] Linux — Status pill reads `Recording mic only…`; the System visualizer track is **absent** (not a flat line).
+- [ ] Windows / [ ] macOS / [ ] Linux — No `NO_DESKTOP_AUDIO_CAPTURED` warning and no “check permissions” warning appears in the log.
+- [ ] macOS — With the bundled `audiocapture-helper` renamed away (or on macOS 12), `mic-only` still **starts and saves**; only desktop-requesting modes are blocked.
+- [ ] Windows / [ ] macOS / [ ] Linux — Stop, Discard, and interrupted-capture recovery all work; transcription enqueues normally.
+
+### Per platform — `desktop-only`
+
+- [ ] Windows / [ ] macOS / [ ] Linux — Record 60s of browser audio while **speaking into the mic**; the saved file contains **no** microphone audio.
+- [ ] macOS — **No** microphone prompt appears and the orange microphone indicator never lights up (check Control Center).
+- [ ] Windows / [ ] Linux — OS mic-in-use indicator (Windows privacy icon / Pulse client list) never shows AvaNevis using the microphone.
+- [ ] Windows / [ ] macOS / [ ] Linux — Status pill reads `Recording system audio only…`; the Mic visualizer track is **absent**.
+- [ ] Windows / [ ] macOS / [ ] Linux — No warning claims “saved recording contains microphone audio only”.
+- [ ] macOS — Confirm `helperCaptureBackend=coreaudio_tap` on 14.2+, and that **browser speech reaches the transcript** (not only the level meter). This is the one-sided-stereo/mono-downmix path.
+- [ ] Windows / [ ] macOS / [ ] Linux — Stop, Discard, and interrupted-capture recovery all work; the recovered file is desktop audio.
+- [ ] Linux — Switch the audio output device mid-recording (vanished monitor): the recording stays desktop-primary, earlier desktop frames are kept, and the warning does **not** offer a microphone fallback.
+- [ ] macOS — Force a late helper failure mid-recording: the failure is terminal (no silent microphone-only save) and the capture stays recoverable.
+- [ ] Windows / [ ] macOS / [ ] Linux — Record with system audio **muted/silent** for the whole session: stop fails with the structured “did not produce usable desktop audio” message rather than saving an empty meeting or hanging.
+- [ ] Linux — Select `None (microphone only)` as the desktop source, then choose `Record Desktop Only`: blocked at preflight with “Select a desktop audio source for a desktop-only recording.”, **not** an internal capture-manifest error.
+- [ ] Windows / [ ] macOS — On a machine with **no** input devices at all, `desktop-only` still starts and saves (argv must not carry an empty `--mic`).
+
+### Keyboard / focus (per platform)
+
+- [ ] Tab to the disclosure button; `Enter` and `Space` both open the menu and focus the first item.
+- [ ] `ArrowDown`/`ArrowUp` wrap through both items; `Home`/`End` jump to first/last.
+- [ ] `Escape` closes the menu and returns focus to the disclosure button — both with focus inside the menu and with focus back on the toggle.
+- [ ] `Tab` from inside the open menu closes it and returns focus to the toggle (no orphaned open menu).
+- [ ] Clicking elsewhere in the window closes the menu; switching apps (window blur) closes it.
+- [ ] While `starting`/`countdown`/`recording`/`stopping`/`cancelling`, the disclosure button is disabled and the menu cannot be opened; a menu left open when the state changes is force-closed and cannot start a recording.
+- [ ] Screen reader (Narrator / VoiceOver / Orca) announces the disclosure as a collapsed menu button and reads both items.
+
+### Cross-process / lifecycle (per platform, any single-source mode)
+
+- [ ] Reload the renderer mid-recording: the hydrated window restores the **correct** status copy and visualizer tracks for the active mode (not the two-source default).
+- [ ] Quit mid-recording and accept the drain: the meeting is persisted once and transcription enqueues.
+- [ ] Cancel during startup (before `recording_started`): no meeting, no orphan capture directory.
+- [ ] Fixture transcription of each mode's output produces a sensible transcript.
+
 ## Related guardrails
 
 - Compare recorder failure-mode output with `tests/manual/fixtures/macos-no-desktop-audio.log` when desktop capture degrades to mic-only.

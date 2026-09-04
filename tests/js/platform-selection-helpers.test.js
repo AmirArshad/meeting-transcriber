@@ -7,7 +7,44 @@ const {
   inferRendererHostFamily,
   getEmptyMicrophoneDeviceGuidance,
   getRecordingPermissionFailureGuidance,
+  decorateDesktopDevices,
+  isDesktopCaptureDisabledSelection,
 } = require('../../src/renderer/platform-selection-helpers');
+
+test('isDesktopCaptureDisabledSelection matches only the synthetic desktop-off entry', () => {
+  assert.equal(isDesktopCaptureDisabledSelection('none'), true);
+
+  // Real device ids, sentinels, and empty selections are not "desktop off".
+  for (const value of [
+    'pulse-monitor:alsa_output.pci.monitor',
+    'pulse-source:alsa_input.usb-mic',
+    '',
+    '-1',
+    -1,
+    0,
+    null,
+    undefined,
+    'None',
+  ]) {
+    assert.equal(isDesktopCaptureDisabledSelection(value), false, String(value));
+  }
+});
+
+test('the Linux desktop-off option id matches isDesktopCaptureDisabledSelection', () => {
+  // The sentinel is defined once; keep the option and the predicate in step.
+  const [first] = decorateDesktopDevices(
+    [{ id: 'pulse-monitor:out.monitor', name: 'Desktop' }],
+    'linux',
+  );
+  assert.equal(isDesktopCaptureDisabledSelection(first.id), true);
+
+  const windowsDevices = decorateDesktopDevices(
+    [{ id: 3, name: 'Loopback' }],
+    'win32',
+  );
+  assert.equal(windowsDevices.length, 1);
+  assert.equal(isDesktopCaptureDisabledSelection(windowsDevices[0].id), false);
+});
 
 test('inferRendererHostFamily distinguishes Mac, Windows, and Linux navigator platforms', () => {
   assert.equal(inferRendererHostFamily('MacIntel'), 'darwin');

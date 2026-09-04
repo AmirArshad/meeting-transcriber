@@ -242,12 +242,28 @@ def main():
             "and granted=null instead of asserting a grant."
         ),
     )
+    parser.add_argument(
+        "--skip-microphone-check",
+        action="store_true",
+        help=(
+            "Skip the microphone open-test. Used by desktop-only capture so an "
+            "unrequested microphone is never opened and cannot raise a macOS "
+            "privacy prompt. Payload reports microphone.skipped=true and "
+            "granted=null instead of asserting a grant."
+        ),
+    )
     args = parser.parse_args()
 
     if platform.system() != 'Darwin':
         print(json.dumps({
             "platform": platform.system(),
-            "microphone": {"granted": True},
+            # Report a skipped probe as skipped rather than granted, matching
+            # the macOS payload shape so callers can branch on one field.
+            "microphone": (
+                {"granted": None, "skipped": True}
+                if args.skip_microphone_check
+                else {"granted": True, "skipped": False}
+            ),
             "screen_recording": {"granted": True},
             "system_audio_recording": {"granted": None, "probed": False},
             "desktop_audio": {"available": True, "backend": "native"},
@@ -259,8 +275,14 @@ def main():
     # Check macOS version compatibility first
     version_compatible, version_str, version_warning = check_macos_version_compatibility()
 
-    # Check microphone permission
-    mic_granted, mic_error = check_microphone_permission(args.mic_device_id)
+    # Check microphone permission. Skipping must not open the device: that is
+    # what would trigger the macOS microphone prompt for an unrequested source.
+    mic_skipped = bool(args.skip_microphone_check)
+    if mic_skipped:
+        mic_granted = None
+        mic_error = ""
+    else:
+        mic_granted, mic_error = check_microphone_permission(args.mic_device_id)
 
     # Check whether the selected macOS runtime can capture desktop audio at all.
     if version_compatible:
@@ -300,11 +322,13 @@ def main():
         ),
     }
 
-    # When Screen Recording was skipped, all_granted is mic + desktop backend only.
-    if screen_skipped:
-        all_granted = bool(mic_granted and desktop_available)
-    else:
-        all_granted = bool(mic_granted and screen_granted and desktop_available)
+    # Skipped probes are excluded from all_granted rather than counted as grants.
+    required_grants = [desktop_available]
+    if not mic_skipped:
+        required_grants.append(mic_granted)
+    if not screen_skipped:
+        required_grants.append(screen_granted)
+    all_granted = all(bool(value) for value in required_grants)
 
     # Prepare result
     result = {
@@ -316,7 +340,8 @@ def main():
         },
         "microphone": {
             "granted": mic_granted,
-            "error": mic_error if not mic_granted else None
+            "skipped": mic_skipped,
+            "error": mic_error if mic_granted is False else None
         },
         "screen_recording": {
             "granted": screen_granted,
@@ -333,7 +358,12 @@ def main():
     }
 
     # Add helpful messages
-    if not mic_granted:
+    if mic_skipped:
+        result["microphone"]["note"] = (
+            "Microphone open-test skipped; this capture mode does not record the "
+            "microphone, so it is never opened or permission-probed."
+        )
+    elif not mic_granted:
         result["microphone"]["help"] = (
             "Grant microphone permission in: "
             "System Settings > Privacy & Security > Microphone"

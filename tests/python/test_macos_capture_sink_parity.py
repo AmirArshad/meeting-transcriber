@@ -121,6 +121,9 @@ def test_macos_recorder_desktop_sink_failure_degrades_to_mic_only():
     recorder._desktop_runtime_failure = None
     recorder._desktop_runtime_warning_sent = False
     recorder._error_event = threading.Event()
+    # Default two-source capture: the degradation copy must still offer mic-only.
+    recorder.include_mic = True
+    recorder.include_desktop = True
     recorder.desktop_capture = SimpleNamespace(
         error_event=threading.Event(),
         last_error="Desktop audio sink rejected audio (writer backpressure)",
@@ -142,4 +145,37 @@ def test_macos_recorder_desktop_sink_failure_degrades_to_mic_only():
     assert message is not None
     assert recorder._desktop_runtime_failure is not None
     assert warned and warned[0][0] == "DESKTOP_AUDIO_FAILED"
+    assert "microphone audio only" in warned[0][1]
     assert recorder._has_async_recording_error() is False
+
+
+def test_macos_desktop_only_sink_failure_never_offers_a_microphone_fallback():
+    """desktop-only has no mic to degrade onto; its copy must not promise one."""
+    from backend.audio import macos_recorder as macos_mod
+
+    recorder = macos_mod.MacOSAudioRecorder.__new__(macos_mod.MacOSAudioRecorder)
+    recorder._desktop_runtime_failure = None
+    recorder._desktop_runtime_warning_sent = False
+    recorder._error_event = threading.Event()
+    recorder.include_mic = False
+    recorder.include_desktop = True
+    recorder.desktop_capture = SimpleNamespace(
+        error_event=threading.Event(),
+        last_error="Desktop audio sink rejected audio (writer backpressure)",
+    )
+    recorder.desktop_capture.error_event.set()
+
+    warned = []
+
+    original = macos_mod._send_warning_message
+    macos_mod._send_warning_message = lambda code, message, **kw: warned.append(
+        (code, message, kw)
+    )
+    try:
+        recorder._consume_desktop_helper_failure()
+    finally:
+        macos_mod._send_warning_message = original
+
+    assert warned and warned[0][0] == "DESKTOP_AUDIO_FAILED"
+    assert "microphone" not in warned[0][1].lower()
+    assert "microphone audio only" not in (warned[0][2].get("help") or "").lower()

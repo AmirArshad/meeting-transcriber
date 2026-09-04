@@ -54,19 +54,28 @@ function extractDeviceManagerError(stderr) {
   return match ? match[1].trim() : null;
 }
 
-function evaluateSelectedDevices(data, { micId, loopbackId, platform }) {
+function evaluateSelectedDevices(data, { micId, loopbackId, platform, captureMode }) {
   const errors = [];
   const warnings = [];
   const inputDevices = data?.input_devices || [];
   const loopbackDevices = data?.loopback_devices || [];
-  const micDevice = findDeviceById(inputDevices, micId);
+  const includeMic = captureMode !== 'desktop-only';
+  const includeDesktop = captureMode !== 'mic-only';
+  const micDevice = includeMic ? findDeviceById(inputDevices, micId) : null;
 
-  if (!micDevice) {
+  if (includeMic && !micDevice) {
     errors.push(`Microphone device (ID: ${micId}) not found. It may have been disconnected.`);
   }
 
   let loopbackDevice = null;
-  if (platform === 'darwin') {
+  if (!includeDesktop) {
+    loopbackDevice = null;
+  } else if (isDesktopCaptureOffId(loopbackId) && !includeMic) {
+    // desktop-only with desktop capture explicitly switched off has no source
+    // at all. Reject it here rather than letting the recorder fail later with
+    // an internal capture-manifest error.
+    errors.push('Select a desktop audio source for a desktop-only recording.');
+  } else if (platform === 'darwin') {
     if (!isMacOSSystemAudioLoopbackId(loopbackId)) {
       warnings.push('Non-standard loopback device selected on macOS.');
     }

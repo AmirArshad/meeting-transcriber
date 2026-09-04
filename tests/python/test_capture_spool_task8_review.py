@@ -47,6 +47,8 @@ def _make_windows_spool_recorder(tmp_path, *, sample_rate=4, channels=2):
     recorder.loopback_sample_rate = sample_rate
     recorder.loopback_channels = channels
     recorder.mixing_mode = True
+    recorder.include_mic = True
+    recorder.include_desktop = True
     recorder.preroll_seconds = 0
     recorder.chunk_size = 2
     recorder.original_chunk_size = 2
@@ -84,6 +86,196 @@ def _make_windows_spool_recorder(tmp_path, *, sample_rate=4, channels=2):
     recorder._open_capture_spools()
     recorder.is_recording = True
     return recorder
+
+
+def test_macos_desktop_only_spool_has_no_microphone_track(tmp_path):
+    recorder = macos_mod.MacOSAudioRecorder.__new__(macos_mod.MacOSAudioRecorder)
+    recorder.output_path = str(tmp_path / "desktop-only.opus")
+    recorder.sample_rate = 48000
+    recorder.channels = 2
+    recorder.mic_volume = 1.0
+    recorder.desktop_volume = 1.0
+    recorder.include_mic = False
+    recorder.include_desktop = True
+    recorder.desktop_capture = object()
+    recorder._capture_manifest = None
+    recorder._mic_spool = None
+    recorder._desktop_spool = None
+    recorder._mic_spool_channels = None
+    recorder._desktop_spool_accepted_any = False
+    recorder._spool_close_fail_reason = None
+
+    recorder._open_capture_spools()
+
+    data = recorder._capture_manifest.to_dict()
+    assert set(data["tracks"]) == {"desktop"}
+    assert data["primaryTrack"] == "desktop"
+    assert recorder._mic_spool is None
+    assert recorder._desktop_spool is not None
+    recorder._release_capture_spools()
+
+
+def test_windows_desktop_only_constructor_does_not_probe_microphone(tmp_path, monkeypatch):
+    calls = []
+
+    class FakePyAudio:
+        def get_device_count(self):
+            return 3
+
+        def get_device_info_by_index(self, index):
+            calls.append(index)
+            assert index == 2
+            return {"maxInputChannels": 2, "defaultSampleRate": 48000, "name": "loopback"}
+
+        def terminate(self):
+            return None
+
+    monkeypatch.setattr(windows_mod.pyaudio, "PyAudio", FakePyAudio)
+    monkeypatch.setattr(
+        windows_mod.AudioRecorder, "_probe_loopback_sample_rate", lambda self, *_: (48000, 2)
+    )
+
+    recorder = windows_mod.AudioRecorder(
+        mic_device_id=0,
+        loopback_device_id=2,
+        output_path=str(tmp_path / "desktop-only.opus"),
+        capture_mode="desktop-only",
+    )
+
+    assert calls == [2]
+    assert recorder.mic_sample_rate is None
+    assert recorder.mic_channels is None
+    assert recorder.mixing_mode is True
+    recorder.cleanup()
+
+
+def test_windows_desktop_only_spool_has_no_microphone_track(tmp_path):
+    recorder = windows_mod.AudioRecorder.__new__(windows_mod.AudioRecorder)
+    recorder.output_path = str(tmp_path / "desktop-only.opus")
+    recorder.include_mic = False
+    recorder.include_desktop = True
+    recorder.loopback_sample_rate = 48000
+    recorder.loopback_channels = 2
+    recorder.mic_volume = 1.0
+    recorder.desktop_volume = 1.0
+    recorder._capture_manifest = None
+    recorder._mic_spool = None
+    recorder._desktop_spool = None
+
+    recorder._open_capture_spools()
+
+    data = recorder._capture_manifest.to_dict()
+    assert set(data["tracks"]) == {"desktop"}
+    assert data["primaryTrack"] == "desktop"
+    assert recorder._mic_spool is None
+    recorder._release_capture_spools()
+
+
+def test_windows_desktop_only_spool_failure_never_offers_a_microphone_fallback(tmp_path):
+    """desktop-only has no mic to degrade onto; its copy must not promise one."""
+    recorder = windows_mod.AudioRecorder.__new__(windows_mod.AudioRecorder)
+    recorder.include_mic = False
+    recorder.include_desktop = True
+    recorder._desktop_spool_warning = None
+
+    warned = []
+    original = windows_mod._send_warning_message
+    windows_mod._send_warning_message = lambda code, message, **kw: warned.append(
+        (code, message, kw)
+    )
+    try:
+        recorder._note_desktop_spool_failure("Desktop capture spool failed: disk full")
+    finally:
+        windows_mod._send_warning_message = original
+
+    assert warned and warned[0][0] == "DESKTOP_SPOOL_FAILED"
+    help_text = (warned[0][2].get("help") or "").lower()
+    assert "microphone" not in help_text, help_text
+    assert "continues with microphone audio" not in help_text
+
+
+def test_windows_default_spool_failure_still_degrades_to_mic_only(tmp_path):
+    """Default-path regression for the same helper."""
+    recorder = windows_mod.AudioRecorder.__new__(windows_mod.AudioRecorder)
+    recorder.include_mic = True
+    recorder.include_desktop = True
+    recorder._desktop_spool_warning = None
+
+    warned = []
+    original = windows_mod._send_warning_message
+    windows_mod._send_warning_message = lambda code, message, **kw: warned.append(
+        (code, message, kw)
+    )
+    try:
+        recorder._note_desktop_spool_failure("Desktop capture spool failed: disk full")
+    finally:
+        windows_mod._send_warning_message = original
+
+    assert warned and warned[0][0] == "DESKTOP_SPOOL_FAILED"
+    assert "microphone audio" in (warned[0][2].get("help") or "").lower()
+
+
+@pytest.mark.parametrize(
+    "profile,module",
+    [("windows-v1", "windows"), ("macos-v1", "macos")],
+)
+def test_desktop_only_close_is_terminal_without_usable_desktop_audio(
+    tmp_path, profile, module
+):
+    """No desktop frames means nothing to save; it must fail, not save mic-only.
+
+    The manifest must also never be left with a contradictory
+    `primaryTrack: desktop` + `includeDesktop: true` combination, which
+    `resolve_primary_track` rejects and which would make the capture
+    permanently unrecoverable.
+    """
+    from backend.audio.capture_mode import DESKTOP_ONLY_NO_AUDIO_MESSAGE
+
+    if module == "windows":
+        recorder = windows_mod.AudioRecorder.__new__(windows_mod.AudioRecorder)
+        recorder.loopback_sample_rate = 48000
+        recorder.loopback_channels = 2
+        recorder._desktop_spool_warning = None
+        recorder._desktop_spool_accepted_any = False
+        recorder._deferred_desktop_chunks = []
+        recorder._deferred_desktop_bytes = 0
+        recorder._deferred_desktop_started_at = None
+        recorder._desktop_spool_lock = threading.Lock()
+        recorder.mic_total_bytes = 0
+    else:
+        recorder = macos_mod.MacOSAudioRecorder.__new__(macos_mod.MacOSAudioRecorder)
+        recorder.sample_rate = 48000
+        recorder.channels = 2
+        recorder.desktop_capture = object()
+        recorder._desktop_spool_accepted_any = False
+        recorder._spool_close_fail_reason = None
+        recorder._desktop_runtime_failure = None
+        recorder._error_lock = threading.Lock()
+        recorder._error_event = threading.Event()
+        recorder._mic_spool_channels = None
+
+    recorder.output_path = str(tmp_path / "desktop-only.opus")
+    recorder.include_mic = False
+    recorder.include_desktop = True
+    recorder.mic_volume = 1.0
+    recorder.desktop_volume = 1.0
+    recorder._capture_manifest = None
+    recorder._mic_spool = None
+    recorder._desktop_spool = None
+
+    recorder._open_capture_spools()
+    try:
+        # No desktop frames were ever committed.
+        with pytest.raises(RuntimeError, match="desktop audio"):
+            recorder._close_capture_spools_for_mix()
+
+        data = recorder._capture_manifest.to_dict()
+        assert data["primaryTrack"] == "desktop"
+        # The contradictory combination must never be persisted.
+        assert not (data["primaryTrack"] == "desktop" and data.get("includeDesktop"))
+        assert DESKTOP_ONLY_NO_AUDIO_MESSAGE
+    finally:
+        recorder._release_capture_spools()
 
 
 def test_windows_startup_callbacks_reach_spool_and_deferred_desktop_matches_reconstruct(tmp_path):
@@ -318,6 +510,8 @@ def _make_macos_spool_recorder(tmp_path, *, channels=2):
     recorder._error_lock = threading.Lock()
     recorder._desktop_runtime_failure = None
     recorder._desktop_runtime_warning_sent = False
+    recorder.include_mic = True
+    recorder.include_desktop = True
     recorder.desktop_capture = SimpleNamespace(
         error_event=threading.Event(),
         last_error=None,
@@ -737,6 +931,8 @@ def test_windows_start_recording_opens_spools_after_sample_rate_fallback(tmp_pat
     recorder.loopback_sample_rate = 48000
     recorder.loopback_channels = 2
     recorder.mixing_mode = True
+    recorder.include_mic = True
+    recorder.include_desktop = True
     recorder.preroll_seconds = 0
     recorder.chunk_size = 256
     recorder.original_chunk_size = 256

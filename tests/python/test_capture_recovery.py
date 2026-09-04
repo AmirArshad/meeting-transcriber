@@ -830,3 +830,76 @@ def test_recovery_macos_leading_pad_duration_follows_mic(tmp_path, monkeypatch):
     assert Path(result["audioPath"]).is_file()
     assert result["duration"] == pytest.approx(1.0, abs=0.05)
     assert not session.exists()
+
+
+@pytest.mark.parametrize(
+    "profile,dtype",
+    [("macos-v1", "<f4"), ("linux-v1", "<f4"), ("windows-v1", "<i2")],
+)
+def test_recovery_finalizes_interrupted_desktop_primary_capture(
+    tmp_path, monkeypatch, profile, dtype
+):
+    """An interrupted desktop-only capture must be recoverable on every profile."""
+    _patch_finalize_io(monkeypatch)
+    output = tmp_path / "desktop_only.opus"
+    coordinator = CaptureManifestCoordinator.create(
+        output,
+        started_at_ns=1_000_000,
+        started_at_iso="2026-09-04T12:00:00.000Z",
+    )
+    coordinator.set_processing_profile(profile)
+    coordinator.set_mix_params(mic_volume=0.1, desktop_volume=1.0, mic_boost=9.0)
+    coordinator.add_track("desktop", sample_rate=48000, channels=2, dtype=dtype)
+    if dtype == "<i2":
+        desktop = np.full((24000, 2), 6553, dtype=np.int16)
+    else:
+        desktop = np.full((24000, 2), 0.2, dtype=np.float32)
+    name = "desktop_0000.pcm.part"
+    _write_segment(coordinator.session_dir / name, desktop)
+    coordinator.commit_track("desktop", [name], committed_frames=len(desktop))
+    coordinator.set_include_desktop(False)
+    coordinator.set_primary_track("desktop")
+    coordinator.set_state("recording")
+    session = coordinator.session_dir
+    coordinator.close()
+
+    result = recover_capture(tmp_path, session, ffmpeg_path="ffmpeg")
+
+    assert Path(result["audioPath"]).is_file()
+    assert result["duration"] == pytest.approx(0.5, abs=0.05)
+    assert not session.exists()
+
+
+def test_recovery_refuses_a_contradictory_desktop_primary_manifest(tmp_path, monkeypatch):
+    """A desktop-primary manifest with the secondary-mix flag is corrupt.
+
+    It must fail loudly and keep every capture file, never silently produce a
+    mic-oriented mix and never delete the capture directory.
+    """
+    _patch_finalize_io(monkeypatch)
+    output = tmp_path / "contradictory.opus"
+    coordinator = CaptureManifestCoordinator.create(
+        output,
+        started_at_ns=1_000_000,
+        started_at_iso="2026-09-04T12:00:00.000Z",
+    )
+    coordinator.set_processing_profile("linux-v1")
+    coordinator.set_mix_params(mic_volume=1.0, desktop_volume=1.0, mic_boost=9.0)
+    coordinator.add_track("desktop", sample_rate=48000, channels=2, dtype="<f4")
+    desktop = np.full((24000, 2), 0.2, dtype=np.float32)
+    name = "desktop_0000.pcm.part"
+    _write_segment(coordinator.session_dir / name, desktop)
+    coordinator.commit_track("desktop", [name], committed_frames=len(desktop))
+    coordinator.set_include_desktop(True)  # contradictory
+    coordinator.set_primary_track("desktop")
+    coordinator.set_state("recording")
+    session = coordinator.session_dir
+    coordinator.close()
+
+    with pytest.raises(spp.FinalizationError, match="desktop-primary"):
+        recover_capture(tmp_path, session, ffmpeg_path="ffmpeg")
+
+    # Never destructive on a rejected manifest.
+    assert session.exists()
+    assert (session / name).is_file()
+    assert not output.is_file()

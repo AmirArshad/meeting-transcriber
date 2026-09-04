@@ -77,6 +77,76 @@ test('evaluateSelectedDevices accepts Pulse IDs and none on Linux', () => {
   assert.equal(missing.errors.length, 2);
 });
 
+test('evaluateSelectedDevices ignores an unrequested microphone for desktop-only capture', () => {
+  const result = evaluateSelectedDevices({
+    input_devices: [],
+    loopback_devices: [{ id: 'pulse-monitor:avanevis_desktop.monitor', name: 'Desktop' }],
+  }, {
+    micId: 'pulse-source:missing',
+    loopbackId: 'pulse-monitor:avanevis_desktop.monitor',
+    platform: 'linux',
+    captureMode: 'desktop-only',
+  });
+
+  assert.equal(result.valid, true);
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.devices.mic, null);
+  assert.equal(result.devices.loopback.name, 'Desktop');
+});
+
+test('evaluateSelectedDevices ignores an unrequested desktop source for mic-only capture', () => {
+  const result = evaluateSelectedDevices({
+    input_devices: [{ id: 'pulse-source:mic', name: 'Mic' }],
+    loopback_devices: [],
+  }, {
+    micId: 'pulse-source:mic',
+    loopbackId: 'pulse-monitor:gone',
+    platform: 'linux',
+    captureMode: 'mic-only',
+  });
+
+  assert.equal(result.valid, true);
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.devices.loopback, null);
+  assert.equal(result.devices.mic.name, 'Mic');
+});
+
+test('evaluateSelectedDevices rejects desktop capture switched off for desktop-only', () => {
+  const result = evaluateSelectedDevices({
+    input_devices: [{ id: 'pulse-source:mic', name: 'Mic' }],
+    loopback_devices: [{ id: 'pulse-monitor:out.monitor', name: 'Desktop' }],
+  }, {
+    micId: 'pulse-source:mic',
+    loopbackId: 'none',
+    platform: 'linux',
+    captureMode: 'desktop-only',
+  });
+
+  // 'none' is the Linux "desktop capture off" sentinel. desktop-only would have
+  // no source at all, so this must fail preflight rather than fail inside the
+  // recorder with an internal capture-manifest error.
+  assert.equal(result.valid, false);
+  assert.deepEqual(result.errors, [
+    'Select a desktop audio source for a desktop-only recording.',
+  ]);
+});
+
+test('evaluateSelectedDevices still accepts desktop capture switched off for the default mode', () => {
+  const result = evaluateSelectedDevices({
+    input_devices: [{ id: 'pulse-source:mic', name: 'Mic' }],
+    loopback_devices: [{ id: 'pulse-monitor:out.monitor', name: 'Desktop' }],
+  }, {
+    micId: 'pulse-source:mic',
+    loopbackId: 'none',
+    platform: 'linux',
+    captureMode: 'mic-and-desktop',
+  });
+
+  assert.equal(result.valid, true);
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.devices.loopback.id, 'none');
+});
+
 test('evaluateSelectedDevices still matches Windows numeric ids sent as strings', () => {
   const data = {
     input_devices: [{ id: 0, name: 'Mic' }],
