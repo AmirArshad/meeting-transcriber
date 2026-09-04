@@ -1515,7 +1515,7 @@ test('Linux Speakrs spawn env is CUDA-only and ignores ambient LD_LIBRARY_PATH',
     assert.equal(env.HUGGINGFACE_HUB_TOKEN, undefined);
     assert.equal(env.HF_HUB_CACHE, undefined);
     assert.doesNotMatch(String(env.LD_LIBRARY_PATH || ''), /hostile-libs|ambient/);
-    assert.ok(String(env.LD_LIBRARY_PATH || '').startsWith(comparableFsPath(runtimeDir)));
+    assert.ok(String(env.LD_LIBRARY_PATH || '').startsWith(path.resolve(runtimeDir)));
     assert.ok(env.LD_LIBRARY_PATH.includes(comparableFsPath(cublasDir)));
     assert.ok(env.LD_LIBRARY_PATH.includes(comparableFsPath(cudnnDir)));
     assert.equal(env.ORT_DYLIB_PATH, path.join(runtimeDir, 'libonnxruntime.so.1.27.1'));
