@@ -193,6 +193,131 @@ def test_macos_desktop_only_reports_a_missing_backend_before_creating_spools(
     assert not (tmp_path / "meeting.capture").exists()
 
 
+def test_macos_cli_mic_only_skips_desktop_backend_requirement(monkeypatch, tmp_path) -> None:
+    """The real CLI must let mic-only reach its recorder without desktop support."""
+    macos = importlib.import_module("backend.audio.macos_recorder")
+    queried = []
+
+    monkeypatch.setattr(macos, "SWIFT_CAPTURE_AVAILABLE", False)
+    monkeypatch.setattr(macos, "SCREENCAPTURE_AVAILABLE", False)
+    monkeypatch.setattr(macos.sd, "query_devices", lambda: queried.append(True) or [])
+    monkeypatch.setattr(sys, "argv", [
+        "macos_recorder.py", "--mic", "0", "--loopback", "-1",
+        "--capture-mode", "mic-only", "--output", str(tmp_path / "meeting.opus"),
+    ])
+
+    class RecorderExit(Exception):
+        pass
+
+    class FakeRecorder:
+        recording_failure = None
+        recording_duration = 1
+        desktop_diagnostics = {}
+
+        def __init__(self, **kwargs):
+            assert kwargs["capture_mode"] == "mic-only"
+
+        def start_recording(self):
+            return True
+
+        def is_recording(self):
+            return False
+
+        def _has_async_recording_error(self):
+            return False
+
+        def _consume_desktop_helper_failure(self):
+            return None
+
+        def stop_recording(self):
+            return None
+
+        def _resolve_recoverable_output_path(self):
+            return str(tmp_path / "meeting.opus")
+
+    monkeypatch.setattr(macos, "MacOSAudioRecorder", FakeRecorder)
+    monkeypatch.setattr(macos.time, "sleep", lambda _: None)
+    monkeypatch.setattr(sys, "exit", lambda code=0: (_ for _ in ()).throw(RecorderExit(code)))
+
+    with pytest.raises(RecorderExit) as exit_info:
+        macos.main()
+    assert exit_info.value.args == (0,)
+    assert queried == [True]
+
+
+def test_macos_cli_desktop_only_skips_microphone_enumeration(monkeypatch, tmp_path) -> None:
+    """The real CLI must not touch microphone APIs for desktop-only capture."""
+    macos = importlib.import_module("backend.audio.macos_recorder")
+
+    monkeypatch.setattr(macos, "SWIFT_CAPTURE_AVAILABLE", True)
+    monkeypatch.setattr(macos, "SCREENCAPTURE_AVAILABLE", False)
+    monkeypatch.setattr(
+        macos.sd,
+        "query_devices",
+        lambda: (_ for _ in ()).throw(AssertionError("desktop-only must not enumerate microphones")),
+    )
+    monkeypatch.setattr(sys, "argv", [
+        "macos_recorder.py", "--mic", "0", "--loopback", "-1",
+        "--capture-mode", "desktop-only", "--output", str(tmp_path / "meeting.opus"),
+    ])
+
+    class RecorderExit(Exception):
+        pass
+
+    class FakeRecorder:
+        recording_failure = None
+        recording_duration = 1
+        desktop_diagnostics = {}
+
+        def __init__(self, **kwargs):
+            assert kwargs["capture_mode"] == "desktop-only"
+
+        def start_recording(self):
+            return True
+
+        def is_recording(self):
+            return False
+
+        def _has_async_recording_error(self):
+            return False
+
+        def _consume_desktop_helper_failure(self):
+            return None
+
+        def stop_recording(self):
+            return None
+
+        def _resolve_recoverable_output_path(self):
+            return str(tmp_path / "meeting.opus")
+
+    monkeypatch.setattr(macos, "MacOSAudioRecorder", FakeRecorder)
+    monkeypatch.setattr(macos.time, "sleep", lambda _: None)
+    monkeypatch.setattr(sys, "exit", lambda code=0: (_ for _ in ()).throw(RecorderExit(code)))
+
+    with pytest.raises(RecorderExit) as exit_info:
+        macos.main()
+    assert exit_info.value.args == (0,)
+
+
+def test_macos_cli_desktop_request_reports_missing_backend_with_structured_stdout(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    macos = importlib.import_module("backend.audio.macos_recorder")
+
+    monkeypatch.setattr(macos, "SWIFT_CAPTURE_AVAILABLE", False)
+    monkeypatch.setattr(macos, "SCREENCAPTURE_AVAILABLE", False)
+    monkeypatch.setattr(sys, "argv", [
+        "macos_recorder.py", "--mic", "0", "--loopback", "-1",
+        "--capture-mode", "desktop-only", "--output", str(tmp_path / "meeting.opus"),
+    ])
+
+    with pytest.raises(SystemExit) as exit_info:
+        macos.main()
+
+    assert exit_info.value.code == 1
+    assert '"code": "NO_DESKTOP_AUDIO_BACKEND"' in capsys.readouterr().out
+
+
 def test_capture_manifest_persists_desktop_primary_track(tmp_path) -> None:
     coordinator = CaptureManifestCoordinator.create(
         tmp_path / "desktop-only.opus",

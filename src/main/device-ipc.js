@@ -170,7 +170,7 @@ function createDeviceIpc(deps) {
    * Checks that selected devices exist and are accessible.
    * GRACEFUL: Returns valid=true with warning if check fails, allowing recording to proceed.
    */
-  function validateSelectedDevices({ micId, loopbackId }) {
+  function validateSelectedDevices({ micId, loopbackId, captureMode }) {
     return new Promise((resolve) => {
       let resolved = false;
       let output = '';
@@ -224,6 +224,7 @@ function createDeviceIpc(deps) {
             micId,
             loopbackId,
             platform,
+            captureMode,
           }));
         } catch (e) {
           console.warn('Failed to parse device list:', e);

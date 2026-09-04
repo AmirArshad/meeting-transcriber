@@ -4538,10 +4538,11 @@ function startRecordingPresencePoll() {
       activeRecordingSessionId = mainState.sessionId;
       recordingStartTime = Number(mainState.startedAt) || Date.now();
       frozenPresenceElapsedText = null;
+      activeCaptureMode = normalizeCaptureMode(mainState.captureMode);
       setRecordingState('recording');
       startTimer();
       if (audioVisualizer) {
-        audioVisualizer.start();
+        audioVisualizer.start(activeCaptureMode);
       }
       addLog('Recording became active after window reload.');
       return;

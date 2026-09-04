@@ -1251,13 +1251,14 @@ def main():
     parser.add_argument("--duration", type=int, default=0, help="Duration in seconds (0 for manual stop)")
 
     args = parser.parse_args()
+    include_mic, include_desktop = resolve_capture_mode(args.capture_mode)
 
-    if SWIFT_CAPTURE_AVAILABLE or SCREENCAPTURE_AVAILABLE:
+    if include_desktop and (SWIFT_CAPTURE_AVAILABLE or SCREENCAPTURE_AVAILABLE):
         if SWIFT_CAPTURE_AVAILABLE:
             print(f"  Using: Swift audiocapture-helper (native)", file=sys.stderr)
         else:
             print(f"  Using: PyObjC ScreenCaptureKit (fallback)", file=sys.stderr)
-    else:
+    elif include_desktop:
         message = "Desktop audio capture is unavailable because neither Swift helper nor PyObjC ScreenCaptureKit is available."
         print(f"\n✗ {message}", file=sys.stderr)
         _send_error_message(
@@ -1269,25 +1270,27 @@ def main():
 
     _send_configuring_devices_event()
 
-    # List available devices for reference
-    print(f"\nAvailable audio devices:", file=sys.stderr)
-    try:
-        devices = sd.query_devices()
-        for i, dev in enumerate(devices):
-            if dev['max_input_channels'] > 0:
-                print(f"  [{i}] {dev['name']} ({dev['max_input_channels']} channels)", file=sys.stderr)
-        print(f"", file=sys.stderr)
-    except Exception as e:
-        print(f"  ERROR: Could not enumerate audio devices", file=sys.stderr)
-        print(f"  {e}", file=sys.stderr)
-        print(f"  Microphone permission may not be granted.", file=sys.stderr)
-        print(f"  Grant permission in: System Settings > Privacy & Security > Microphone", file=sys.stderr)
-        _send_error_message(
-            "DEVICE_ENUMERATION_FAILED",
-            f"Could not enumerate audio devices: {e}",
-            help="Grant Microphone permission in System Settings > Privacy & Security > Microphone.",
-        )
-        sys.exit(1)
+    if include_mic:
+        # List available microphone devices for reference. Desktop-only must
+        # never enumerate an unrequested microphone or trigger its TCC path.
+        print(f"\nAvailable audio devices:", file=sys.stderr)
+        try:
+            devices = sd.query_devices()
+            for i, dev in enumerate(devices):
+                if dev['max_input_channels'] > 0:
+                    print(f"  [{i}] {dev['name']} ({dev['max_input_channels']} channels)", file=sys.stderr)
+            print(f"", file=sys.stderr)
+        except Exception as e:
+            print(f"  ERROR: Could not enumerate audio devices", file=sys.stderr)
+            print(f"  {e}", file=sys.stderr)
+            print(f"  Microphone permission may not be granted.", file=sys.stderr)
+            print(f"  Grant permission in: System Settings > Privacy & Security > Microphone", file=sys.stderr)
+            _send_error_message(
+                "DEVICE_ENUMERATION_FAILED",
+                f"Could not enumerate audio devices: {e}",
+                help="Grant Microphone permission in System Settings > Privacy & Security > Microphone.",
+            )
+            sys.exit(1)
 
     recorder = None
     try:
