@@ -18,7 +18,7 @@ Verified, not assumed — correct these only with evidence.
 
 **Gotcha:** Claude Code does **not** read `AGENTS.md`, `.cursor/rules/`, or `.agents/skills/`. It reaches this file only through the `@AGENTS.md` import in root `CLAUDE.md`, and it reaches project skills only through `.claude/skills/`. Root `CLAUDE.md` is `.cursorignore`d so Cursor does not double-load this file.
 
-Project skills live in `.agents/skills/*/SKILL.md`; see `.agents/README.md` for the kept/removed set and discovery details. The official Anthropic `frontend-design` skill is also copied to `.claude/skills/frontend-design/` for direct Claude Code discovery; Cursor receives a scoped renderer router in `.cursor/rules/frontend-design-skill.mdc`, while OpenCode loads the canonical `.agents` skill and that router through `opencode.json`.
+Project skills live in `.agents/skills/*/SKILL.md`; see `.agents/README.md` for the kept/removed set and discovery details. The official Anthropic `frontend-design` skill is also copied to `.claude/skills/frontend-design/` for direct Claude Code discovery. OpenCode currently loads the Cursor routers and fast defaults, not the general `.agents` skill tree; use a skill only when its workflow is explicitly selected.
 
 ## Platform targets
 
@@ -58,7 +58,40 @@ Phase 0 source-scan tests treat `src/main.js` + `src/main/**/*.js` as one combin
 
 ## Critical invariants
 
-### Recorder stdout is the control contract
+This file is the always-on safety baseline. Read the path-matched canonical contract before changing the corresponding surface; these documents preserve the detailed operational rules that previously lived inline here.
+
+| Change surface | Canonical contract |
+|---|---|
+| Recorder, capture, discard, spool/finalization | `docs/development/contracts/recording.md` |
+| AI add-ons, tokens, downloads, queues, caches | `docs/development/contracts/local-ai.md` |
+| Prepared resources, installers, signing, tray | `docs/development/contracts/packaging.md` |
+| Swift helper or macOS desktop audio | `docs/development/contracts/macos-audio.md` |
+| Meeting metadata, scan/import, rename | `docs/development/contracts/meeting-persistence.md` |
+| Main/preload/renderer channels and facades | `docs/development/contracts/ipc.md` |
+
+### Always-on safeguards
+
+- Privacy is non-negotiable: no cloud processing, telemetry, background uploads, or embedded/proxied secrets.
+- Preserve explicit platform behavior. Linux is x86_64 Core Beta; CUDA add-ons are fail-closed and component-gated. Do not call Task 5 or this branch accepted before the Windows x64 negative check.
+- `src/main.js` is composition-only. IPC changes span service, preload, renderer, and tests; inspect Electron and Python sides of every cross-process contract.
+- Use the smallest relevant test while iterating; run `npm run test:all` before a PR for cross-cutting, recorder, persistence, packaging, or security work. Hardware acceptance is manual evidence, never inferred from CI.
+- Runtime scripts, tests, and dated compatibility evidence beat stale prose. Keep `todo.md` current for task state and use `docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md` for v2.9 acceptance evidence.
+
+## Validation
+
+- JS: `npm test`; Python: `npm run test:python`, `npm run test:python-syntax`; full: `npm run test:all`.
+- Device smoke: `python backend/device_manager.py`; macOS helper: `swift build -c release --arch arm64` in `swift/AudioCaptureHelper`.
+- Verify third-party object/asset behavior against real types or bytes, not convenient fakes only.
+
+## Working defaults
+
+- Work inline; ask before routine delegation. Keep plans concise and file-level.
+- Prefer extraction behind stable interfaces, retain explicit platform differences, and preserve graceful degradation.
+- Do not re-review unchanged work after feedback; inspect the final diff and relevant evidence before claiming completion.
+
+<!-- Detailed operational invariants moved to the linked canonical contracts above. -->
+
+<!--
 
 Recorder **control flow** rides structured **stdout** JSON — `levels`, `event`, `warning`, `error` — parsed line-by-line by `parseRecorderStdoutChunk`. **stderr is diagnostics-only and must never drive startup stages, warnings, errors, or recording-start state.**
 
@@ -282,4 +315,4 @@ Non-obvious validation targets: transcript JSON shape still matches renderer exp
 - Prefer extracting behind stable interfaces over rewriting flows; keep platform differences explicit rather than abstracted away; preserve the intentional graceful degradation in handlers rather than hard-failing.
 - When simplifying, preserve current operational behavior first, then reduce complexity.
 - Trust runtime scripts and CI over stale docs. When docs disagree with this file on a cross-process contract, this file wins. Inspect both the Electron and Python side before changing any cross-process contract.
-- Keep `todo.md` current when task status, major progress, or execution order changes. Update this file when cross-process contracts, AI catalog pins, build inputs, or validation expectations change.
+-->

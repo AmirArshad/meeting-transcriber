@@ -4,7 +4,7 @@ Decision record for `feature/v2.9-dependency-hygiene` Task 1. Later version chan
 
 **Recorded:** 2026-08-28  
 **Python target:** 3.11 (`cp311`)  
-**Electron baseline:** 42.9.0
+**Initial Electron baseline:** 42.9.0
 **Electron 44 lane (2026-08-31):** npm `latest` is **44.1.0** (dist-tag `44-x-y` also 44.1.0; 44.0.0 published 2026-08-25, 44.1.0 published 2026-08-31). Electron 45 is `alpha` only (`45.0.0-alpha.2`) and is out of scope. electron-builder remains **26.15.3** (npm `latest`; not combined with this lane).
 **Privacy:** no cloud transcription, telemetry, or extra network use beyond explicit model/update checks and these resolver downloads.
 

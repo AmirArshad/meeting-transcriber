@@ -1,5 +1,7 @@
 # Linux Support Plan — Omarchy First
 
+> **Current v2.9 status (2026-09-04):** Phases 0–5 below are historical Linux Core Beta evidence. The v2.9 Linux-AI implementation is on `feature/v2.9-linux-ai-addons`: CUDA Whisper (Task 3) and CUDA-only Qwen summaries (Task 6) have their documented CachyOS x86_64 + RTX 4070 evidence; Linux Speakrs Task 5 has passed Linux and macOS negative rows but remains formally pending the equivalent Windows x64 check. This document preserves the original decisions and evidence. Current acceptance status is authoritative only in [`docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md`](../development/V2_9_DEPENDENCY_COMPATIBILITY.md) and [`todo.md`](../../todo.md).
+
 > **Status:** **Omarchy Core Beta (Phases 0–5) is complete** and merged to `master` (pre-merge review 2026-08-28). Phase 3 60-minute soak **cancelled** by operator 2026-08-27 — not run, not passed; 15-minute soak is the duration-growth evidence. Phase 5 packaged Settings / legal-notices clicks and a packaged AppImage recording + CPU faster-whisper session closed 2026-08-28. Gate B closed on Apple Silicon macOS 2026-08-28 and the release workflow now includes AppImage, pacman, and an experimental `.deb`. Ubuntu 24.04 **desktop** recording/`safeStorage` smoke is still open (Docker launch only). Additional distros and desktops are **experimental betas** with no hardware claim — see [LINUX_EXPERIMENTAL.md](../guides/LINUX_EXPERIMENTAL.md). Phases 6–9 are now a v2.9 evidence-gated extension for CachyOS x86_64 + NVIDIA RTX 4070; they remain unavailable everywhere else until their individual gates pass.
 > **Pre-merge review (2026-08-28):** full-branch review before the first Linux release. Eleven defects fixed — see [Pre-merge review remediation](#pre-merge-review-remediation-2026-08-28). Two of them (`is_pulse_port_unavailable` never matching a real `pulsectl` enum, and a blank Linux tray icon) were behaviours this document previously claimed as evidence; those claims are corrected in place below.
 > **Replanned:** 2026-08-23 against AvaNevis v2.7.0 / current `master`.
@@ -792,9 +794,9 @@ Full-branch review of `release/linux` before merging to `master` and cutting the
 
 **Still open after this review:** the 60-minute soak (cancelled, not passed), the Ubuntu 24.04 desktop AppImage recording/`safeStorage` smoke, a visual confirmation of the new tray icons on an Omarchy panel, and a live no-SNI-host tray pass (unit-tested only).
 
-### Phases 6–9 — v2.9 Linux AI extension (gated)
+### Phases 6–9 — v2.9 Linux AI extension (historical plan; superseded by recorded evidence)
 
-**Run these phases only through the v2.9 Linux-AI plan on CachyOS x86_64 + NVIDIA RTX 4070.** Begin with fresh official artifact, license, hash, driver/CUDA, Python, and encrypted-secret-storage investigation. Requirements and historical artifact URLs below are leads, not accepted pins.
+**Historical execution plan.** The implementation and hardware evidence now live in the v2.9 compatibility matrix. Retain the requirements below as design rationale; do not read future tense or historical artifact URLs as current acceptance status.
 
 **Task 1 evidence (CachyOS RTX 4070, 2026-09-02).** The host is CachyOS
 x86_64 / Hyprland / Wayland / PipeWire 1.6.8 with an RTX 4070 (compute 8.9),

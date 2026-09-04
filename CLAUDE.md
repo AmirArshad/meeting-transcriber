@@ -31,6 +31,6 @@ Rationale for keeping the tree at `.agents/skills/` and paying for this router: 
 
 ## Claude-specific config
 
-- `.claude/rules/*.md` are supported and committed. **Gotcha:** a rule file **without** a `paths:` frontmatter field loads on *every* request. Always add `paths:` unless you genuinely want it always-on.
+- `.claude/rules/*.md` are supported when present. **Gotcha:** a rule file **without** a `paths:` frontmatter field loads on *every* request. Always add `paths:` unless you genuinely want it always-on.
 - `.cursor/rules/*.mdc` are **not** read by Claude Code. They are thin pointers into `AGENTS.md` anyway, so nothing is missing.
 - Personal settings stay in `.claude/settings.local.json` and `CLAUDE.local.md` (both gitignored).

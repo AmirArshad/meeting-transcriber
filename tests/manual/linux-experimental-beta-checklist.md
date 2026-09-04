@@ -2,9 +2,9 @@
 
 Hardware-only. Automated CI packaging checks are not evidence for these rows.
 
-**Supported** remains Omarchy 4 and CachyOS x86_64 Hyprland/Wayland (PipeWire/`pipewire-pulse`). Every other distro and desktop here is an **experimental beta** until a human fills the row. Ubuntu desktop recording/`safeStorage` smoke is still open. The Phase 3 60-minute soak was cancelled 2026-08-27 (not run). SteamOS testing is Desktop Mode AppImage only. Do not start Phases 6–9.
+**Supported** remains Omarchy 4 and CachyOS x86_64 Hyprland/Wayland (PipeWire/`pipewire-pulse`). Every other distro and desktop here is an **experimental beta** until a human fills the row. Ubuntu desktop recording/`safeStorage` smoke is still open. The Phase 3 60-minute soak was cancelled 2026-08-27 (not run). SteamOS testing is Desktop Mode AppImage only.
 
-**v2.9 Linux-AI Task 3 (2026-09-02):** packaged CUDA Whisper is **accepted** on CachyOS x86_64 + NVIDIA RTX 4070. Linux CUDA setup is also **offered** on other NVIDIA x86_64 Linux as best-effort (same managed CUDA 12 profile). Default transcription stays CPU until the user installs CUDA; uninstall returns to CPU. While CUDA is installed, a broken runtime stays fail-closed until repair or uninstall. Speakrs and summaries remain unavailable; Pyannote is out of Linux product scope. Evidence: [`docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md`](../../docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md) Task 3 section.
+**v2.9 Linux-AI status:** packaged CUDA Whisper is **accepted** on CachyOS x86_64 + NVIDIA RTX 4070. Linux CUDA setup is also **offered** on other NVIDIA x86_64 Linux as best-effort (same managed CUDA 12 profile). Default transcription stays CPU until the user installs CUDA; uninstall returns to CPU. While CUDA is installed, a broken runtime stays fail-closed until repair or uninstall. CUDA-only Qwen summary evidence is complete on the accepted host. Linux Speakrs is available only after CUDA admission and remains formally pending the equivalent Windows x64 Task 5 negative check; Linux Pyannote is out of product scope. See [`docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md`](../../docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md).
 
 User-facing install and failure notes: [docs/guides/LINUX_EXPERIMENTAL.md](../../docs/guides/LINUX_EXPERIMENTAL.md).
 
@@ -31,7 +31,7 @@ Run these on every experimental machine.
 - [ ] **Two-minute mic+desktop capture.** No ScreenCast / screen-sharing portal. Stop stages complete and a meeting is saved.
 - [ ] **Browser speech in the transcript.** After CPU `faster-whisper`, desktop speech is in the `.md` transcript.
 - [ ] **Discard versus History.** Discard does not add a meeting; Stop does.
-- [ ] **Disabled add-ons.** Speaker Identification and Meeting Summaries stay greyed `unsupported`. Setup and Generate Summary cannot start.
+- [ ] **AI admission boundary.** Without admitted managed CUDA, Speaker Identification and Meeting Summaries stay fail-closed. With admitted CUDA on the accepted CachyOS host, run the dedicated rows in `tests/manual/local-ai-addons-checklist.md`; do not treat this distro checklist as Task 5 acceptance.
 - [ ] **Tray or minimize.** With an SNI host, idle close can hide to tray. With no tray, idle and pending-transcription close **minimize** and leave a taskbar entry. When a tray icon *is* shown, check it is actually drawn (app mark when idle, app mark + red REC badge while recording) — an undecodable image still constructs a Tray on Linux, so a blank entry is a real failure mode.
 - [ ] **Sanitized diagnostics.** Main log includes `Linux environment diagnostics:` without Wayland/X11 socket names or secrets.
 
@@ -65,7 +65,7 @@ Independent of distro. Same shared product rows; record the desktop name from di
 
 ## v2.9 CachyOS CUDA Whisper (Task 3, 2026-09-02)
 
-Hardware acceptance for **this CachyOS x86_64 + NVIDIA RTX 4070 host**. CI and unit tests are not this gate. Other NVIDIA Linux x86_64 may install the same managed CUDA 12 profile as best-effort; that is not this hardware row. Speakrs, Pyannote, and summaries stay greyed `unsupported`.
+Hardware acceptance for **this CachyOS x86_64 + NVIDIA RTX 4070 host**. CI and unit tests are not this gate. Other NVIDIA Linux x86_64 may install the same managed CUDA 12 profile as best-effort; that is not this hardware row. Pyannote remains unavailable; CUDA-only Speakrs and summaries are covered by the dedicated local-AI checklist and compatibility matrix.
 
 Same-day follow-up: default transcription is CPU until CUDA is installed. Uninstall returns to CPU. A broken installed runtime stays fail-closed until repair or uninstall. The Task 3 uninstall/fail-closed rows below are **superseded pre-follow-up evidence** (profile required CUDA even after uninstall); current code restores CPU after uninstall and keeps Uninstall visible whenever `ai-addons/cuda/python` exists.
 

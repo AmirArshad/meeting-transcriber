@@ -5,9 +5,8 @@ Planned or active future work lives here. Completed designs should move to `../c
 ## Active / planned
 
 - [Roadmap](ROADMAP.md)
-- **[Back-to-back recording & transcription queue](FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md)** — **next big feature** (design locked; Phase 1 not started) · [before/after SVG](../architecture/background-transcription-queue-before-after.svg)
+- [Linux support](LINUX_SUPPORT.md) — Core Beta shipped; v2.9 Linux-AI evidence and remaining gates are in the compatibility matrix
 - [Acoustic echo cancellation](FEATURE_ECHO_CANCELLATION.md)
-- [Linux support](LINUX_SUPPORT.md)
 - [Audio setup wizard](FEATURE_SETUP_WIZARD.md)
 - [macOS audio architecture improvements](MACOS_AUDIO_ARCHITECTURE.md)
 - [Meeting objects and private sync — future exploration](MEETING_OBJECTS_AND_PRIVATE_SYNC.md) — no implementation is scheduled for v2.9.0
@@ -19,3 +18,4 @@ Planned or active future work lives here. Completed designs should move to `../c
 - [AvaNevis codebase refactor](AVANEVIS_CODEBASE_REFACTOR.md) — Phases 0–8 + 5B complete (2026-07-09); residual: Phase 7B macOS smoke when hardware is available
 - [Fable refactor plan review prompt](FABLE_REFACTOR_PLAN_REVIEW_PROMPT.md) — historical pre-merge review prompt
 - [Phase 0 smoke baseline](phase-0-smoke-baseline.md) — characterization baseline notes
+- [Back-to-back recording & transcription queue](FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md) — shipped in v2.6.0 · [before/after SVG](../architecture/background-transcription-queue-before-after.svg)
