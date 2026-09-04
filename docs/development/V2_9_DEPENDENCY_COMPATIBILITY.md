@@ -1693,3 +1693,115 @@ Held: Electron 42.9.0; `onnxruntime` 1.26.0 vs runtime 1.29.0; `filelock==3.32.3
 - Automated Stop of 1:18.45 (`durationSeconds` 78.4533125) used the same microphone while looping `tests/fixtures/speakrs-two-speaker-16k.wav` through system audio. Desktop diagnostics: `coreaudio_tap`, 7,355 helper buffers, 3,765,760 samples, peak **0.732860**. Opus integrity decode passed at 48 kHz stereo
 - Meeting `20260901_080341` completed with `model: medium`, `transcriptionDevice: mps`, `transcriptionComputeType: float16`; Speakrs `speakrs-community1-vbx` completed. The `.md` repeats “Morning, Zyra”, “design review starts at 10”, and “Thanks, Hazel”, proving browser/system speech survived the saved stereo file and MLX mono transcription path
 - Post-fix seal regression: rebuilt Electron 44.1.0 package recorded another 39.51 s CoreAudio-tap meeting (desktop peak **0.732753**), completed Speakrs plus base MLX on `mps`/`float16`, and transcribed “Morning, Zyra” / “design reviews start at 10” / “Thanks, Hazel”. While the app remained running, `codesign --verify --deep --strict` passed and `Contents/Resources/backend` contained zero `__pycache__` directories
+
+## Capture modes — Linux CachyOS hardware evidence (2026-09-04)
+
+**Status: partial evidence; the v2.9 capture-mode lane remains open.** This was a
+local development run on the current machine, not packaged Linux acceptance and
+not evidence for any other distro or desktop. The host is a supported Linux
+target (CachyOS x86_64 with Hyprland/Wayland); unsupported Linux combinations
+remain experimental per `docs/guides/LINUX_EXPERIMENTAL.md`.
+
+**Code under test:** branch `feature/v2.9-capture-modes`, commit
+`d600febf2a61edb088b483a095d9c8ef52ab63a8`.
+
+### Host and source baseline
+
+| Item | Observed value |
+|---|---|
+| OS / architecture | CachyOS rolling, x86_64 |
+| Session | Hyprland on Wayland |
+| Kernel | `7.2.3-1-cachyos` |
+| PipeWire | `1.6.8` |
+| Pulse-compatible server | PulseAudio protocol 35, server `PulseAudio (on PipeWire 1.6.8)` |
+| Electron/dev app | Electron 44.1.0, `app.isPackaged=false` |
+| GPU | PCI: NVIDIA GeForce RTX 4070 and AMD/ATI Raphael iGPU |
+| NVIDIA driver probe | `nvidia-smi --query-gpu=name,driver_version --format=csv,noheader` → exit **9**; no CUDA used |
+| Transcription | local cached Whisper, CPU / `int8`; no cloud or upload path |
+
+Selected devices were kept as opaque strings throughout; no numeric parsing or
+coercion was used:
+
+- Mic: `pulse-source:alsa_input.usb-046d_Logitech_Webcam_C925e_681FC0BF-02.analog-stereo`
+- Desktop: `pulse-monitor:alsa_output.usb-FiiO_DigiHug_USB_Audio-01.analog-stereo.monitor`
+- Stale selections used for negative-path checks were `pulse-monitor:does-not-exist`, `pulse-source:does-not-exist`, and `none`.
+
+### Commands and exit codes
+
+| Command | Result |
+|---|---|
+| `cat /etc/os-release` | exit **0** |
+| `uname -srmo` | exit **0** |
+| `pipewire --version` | exit **0**; libpipewire 1.6.8 |
+| `pipewire-pulse --version` | exit **0**; libpipewire 1.6.8 |
+| `pactl info \| sed '/Cookie/d'` | exit **0** |
+| `./.venv/bin/python backend/device_manager.py` | exit **0**; opaque Pulse source/monitor IDs enumerated |
+| `node --test tests/js/device-id-helpers.test.js tests/js/device-ipc-linux.test.js tests/js/linux-platform-selection.test.js tests/js/recording-state-helpers.test.js tests/js/recorder-event-contract.test.js tests/js/recorder-service.deps.test.js tests/js/main-process-helpers.test.js` | exit **0** |
+| `./.venv/bin/python -m pytest -q tests/python/test_capture_mode.py tests/python/test_linux_recorder.py tests/python/test_linux_device_manager.py tests/python/test_check_permissions_capture_modes.py tests/python/test_recorder_event_contract.py tests/python/test_capture_spool_task8_review.py` | exit **0**; `[100%]` |
+| `npm start -- --remote-debugging-port=9222` | started successfully; intentionally terminated with `SIGINT` after the smoke run |
+
+The raw recorder check was run as:
+
+```sh
+../.venv/bin/python -m audio.linux_recorder --mic pulse-source:alsa_input.usb-046d_Logitech_Webcam_C925e_681FC0BF-02.analog-stereo --loopback pulse-monitor:alsa_output.usb-FiiO_DigiHug_USB_Audio-01.analog-stereo.monitor --capture-mode mic-and-desktop --output /tmp/avanevis-cli-stdout-check-<timestamp>.opus
+```
+
+It exited **0**; `<timestamp>` denotes the unique temporary output suffix used
+for that run.
+
+The automated commands above are contract results only and are reported
+separately from the hardware observations below.
+
+### Manual mode results
+
+| Mode / recording | Hardware observation | Saved/transcription result |
+|---|---|---|
+| Default `mic-and-desktop`: `20260904_200907`, 30.80 s | Both UI tracks visible; status `Recording mic + system audio…`; mic and desktop streams opened | Playable Opus; local CPU transcription contained the desktop speech fixture. No mic speech stimulus was used in this run. |
+| Default `mic-and-desktop`: `20260904_201943`, 10.998 s; `20260904_202206`, 12.803 s | Both UI tracks visible and both meters moved; both streams opened | Playable Opus and local transcription succeeded. Mic speech was present only partially in the transcript (`20260904_202206`: “Thanks, Hazel… Please include”). This is partial source evidence, not a full mixed-mode pass. |
+| `mic-only`: `20260904_201825`, 11.819 s | Status `Recording mic only…`; mic track visible, desktop track absent; stale desktop selection tolerated; only mic stream opened | Playable Opus; local CPU transcript contained the mic speech fixture (“Morning, Zaira…”). |
+| `desktop-only`: `20260904_201314`, 10.795 s | Status `Recording system audio only…`; desktop track visible, mic track absent; stale mic selection tolerated; only desktop stream opened | Playable Opus; local CPU transcript contained the desktop speech fixture (“Morning, Zyra…”). No microphone fallback was advertised or opened. |
+| Late desktop monitor loss: `20260904_201622`, 10.421 s | Temporary Pulse null-sink monitor was removed during mixed capture; desktop level fell to zero while mic levels continued | Finalization succeeded. Structured warning code `DESKTOP_MONITOR_VANISHED` stated that earlier desktop audio was kept; diagnostics recorded committed desktop frames retained for the mix. |
+
+The preflight checks also passed: mic-only accepted the stale desktop ID;
+desktop-only accepted the stale mic ID; desktop-only with desktop ID `none`
+was rejected before recording with `Select a desktop audio source for a desktop-only recording.`
+
+Stop and Discard were exercised for all three modes. Each Discard returned to
+Ready, left History IDs unchanged, created no saved meeting, and did not enqueue
+transcription. Stop progress advanced through the structured stdout stages
+`post_processing_started`, `audio_normalizing`, `audio_mixing`,
+`audio_encoding`, and `post_processing_complete`.
+
+### Structured output and diagnostics
+
+The direct Linux recorder smoke exited **0**, produced a 5.012-second Opus,
+and emitted JSON stdout records for `configuring_devices`,
+`desktop_stream_opened`, `recording_started`, `mic_stream_opened`, `levels`,
+all stop stages, and the final success/result payload. Stderr contained only
+initialization, device, stop, and ffmpeg diagnostics; it was not used for
+control flow or UI state.
+
+Sanitized late-loss event:
+
+```json
+{
+  "event": "warning",
+  "code": "DESKTOP_MONITOR_VANISHED",
+  "message": "Desktop monitor <temporary> disappeared from Pulse. Desktop audio recorded before this point is kept.",
+  "help": "Desktop audio capture stopped part-way through. The saved file contains the desktop audio captured up to that point, plus the full microphone recording."
+}
+```
+
+### Matrix conclusion
+
+| Scenario | Result on this host |
+|---|---|
+| Default mixed start/UI/save/desktop transcription | **PASS** |
+| Default mixed mic content fully represented in transcript | **PARTIAL** |
+| Mic-only source isolation and local transcription | **PASS** |
+| Desktop-only source isolation and local transcription | **PASS** |
+| Stale/unavailable unrequested-source tolerance | **PASS** |
+| Desktop-only `none` preflight rejection | **PASS** |
+| Stop and Discard for all three modes | **PASS** |
+| Late Pulse monitor loss with retained earlier desktop audio | **PASS** |
+| Full v2.9 capture-mode hardware acceptance | **NOT ACCEPTED** — Windows and macOS remain unexercised here, and the mixed mic transcript needs a stronger rerun |
