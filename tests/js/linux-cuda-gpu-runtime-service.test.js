@@ -12,6 +12,7 @@ const { createGpuRuntimeService } = require('../../src/main/gpu-runtime-service'
 const { createPythonRuntime } = require('../../src/main/python-runtime');
 const { signalProcessTree } = require('../../src/main-process/quit-lifecycle-helpers');
 const { getManagedLinuxCudaRuntimeTarget } = require('../../src/main-process/cuda-runtime-helpers');
+const { comparableFsPath } = require('./comparable-fs-path');
 const {
   detectLinuxNvidiaGpu,
   getLinuxCudaRuntimeStagingPath,
@@ -357,7 +358,7 @@ test('Linux CUDA loader env ignores inherited hostile LD_LIBRARY_PATH', async ()
     try {
       const env = service.buildCudaRuntimeEnv({ LD_LIBRARY_PATH: '/tmp/hostile:/lib' });
       const managed = getManagedLinuxCudaRuntimeTarget(userData);
-      assert.ok(String(env.LD_LIBRARY_PATH).startsWith(path.join(fs.realpathSync(managed), 'nvidia')));
+      assert.ok(String(env.LD_LIBRARY_PATH).startsWith(path.join(comparableFsPath(managed), 'nvidia')));
       assert.doesNotMatch(String(env.LD_LIBRARY_PATH), /\/tmp\/hostile/);
     } finally {
       cleanup();

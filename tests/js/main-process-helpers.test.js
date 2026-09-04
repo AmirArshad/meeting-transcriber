@@ -6,6 +6,7 @@ const path = require('node:path');
 
 const mainProcessHelpers = require('../../src/main-process-helpers');
 const { createLineChunkRedactor } = require('../../src/ai-progress-sanitizer');
+const { comparableLinuxLibraryPath } = require('./comparable-fs-path');
 
 const {
   buildFileUrl,
@@ -1553,7 +1554,7 @@ test('managed Linux CUDA library paths reject untrusted directories and ignore i
       inheritedLibraryPath: '/usr/lib:/lib',
       fsModule: fs,
     }),
-    `${fs.realpathSync(cublas)}:${fs.realpathSync(cudnn)}`,
+    comparableLinuxLibraryPath([cublas, cudnn]),
   );
   assert.throws(
     () => buildManagedLinuxCudaLibraryPath({

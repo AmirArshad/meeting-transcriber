@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { createGpuRuntimeService } = require('../../src/main/gpu-runtime-service');
+const { comparableLinuxLibraryPath } = require('./comparable-fs-path');
 
 const {
   applyLinuxElectronCommandLineSwitches,
@@ -202,7 +203,7 @@ test('admitted Linux CUDA builds a contained managed loader environment and igno
       isLinuxCudaProfileEnabled: () => true,
     });
     const env = service.buildCudaRuntimeEnv({ LD_LIBRARY_PATH: '/tmp/hostile:/lib' });
-    assert.ok(env.LD_LIBRARY_PATH.startsWith(libraryDirs.map((directory) => fs.realpathSync(directory)).join(':')));
+    assert.ok(env.LD_LIBRARY_PATH.startsWith(comparableLinuxLibraryPath(libraryDirs)));
     assert.doesNotMatch(env.LD_LIBRARY_PATH, /\/tmp\/hostile/);
   } finally {
     Object.defineProperty(process, 'platform', platformDescriptor);

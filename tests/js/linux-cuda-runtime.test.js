@@ -16,6 +16,7 @@ const {
   getLinuxCudaRequiredLibraries,
   getLinuxCudaWheelPins,
 } = require('../../src/main-process/linux-cuda-runtime-catalog');
+const { comparableLinuxLibraryPath } = require('./comparable-fs-path');
 const {
   buildContainedLinuxCudaLibraryPath,
   buildLinuxCudaOfflineInstallArgs,
@@ -82,7 +83,7 @@ test('contained Linux CUDA loader rejects empty, relative, duplicate, and escape
       managedRoot: root,
       libraryDirs: [cublas, cudnn],
     }),
-    `${fs.realpathSync(cublas)}:${fs.realpathSync(cudnn)}`,
+    comparableLinuxLibraryPath([cublas, cudnn]),
   );
   assert.throws(
     () => buildContainedLinuxCudaLibraryPath({ managedRoot: root, libraryDirs: [] }),
