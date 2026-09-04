@@ -1,4 +1,5 @@
 const fs = require('fs');
+const crypto = require('crypto');
 const os = require('os');
 const path = require('path');
 const https = require('https');
@@ -48,8 +49,11 @@ const {
   assertSpeakrsCliArchitecture: assertSpeakrsCliArchitectureHeaders,
   inspectSpeakrsCliFile,
   inspectSpeakrsValidateWavFile,
+  isLinuxX64ElfExecutableFileOutput,
+  readElfMachine,
   readMachOCpuType,
   readWindowsPeMachine,
+  SPEAKRS_PACKAGED_INTEGRITY_MANIFEST_NAME,
   SPEAKRS_VALIDATE_WAV_NAME,
 } = require('../src/ai-addon/speakrs-cli-integrity');
 
@@ -86,7 +90,7 @@ function listFilesRecursively(dirPath) {
 }
 
 function hashFileContent(filePath) {
-  return hashString(fs.readFileSync(filePath));
+  return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
 }
 
 function buildDirectoryManifest(dirPath, rootPath) {
@@ -409,9 +413,9 @@ function ensureWindowsEmptyBinDirectory() {
 }
 
 function ensureLinuxEmptyBinDirectory() {
-  // extraResources copies build/resources/bin on every platform. Linux Core Beta
-  // does not stage speakrs-cli, but the directory must still exist so packaging
-  // does not fail closed on a missing from-path.
+  // extraResources copies build/resources/bin on every platform. Linux now
+  // stages speakrs-cli into this directory; keep the mkdir as a safety net
+  // so packaging does not fail closed on a missing from-path.
   if (IS_LINUX && !fs.existsSync(BIN_DIR)) {
     fs.mkdirSync(BIN_DIR, { recursive: true });
   }
@@ -770,7 +774,7 @@ function getSpeakrsCliBinaryName(platform = process.platform) {
 }
 
 function isSpeakrsPackagingSupported(platform = process.platform) {
-  return platform === 'darwin' || platform === 'win32';
+  return platform === 'darwin' || platform === 'win32' || platform === 'linux';
 }
 
 function getSpeakrsCargoTargetTriple(platform = process.platform) {
@@ -779,6 +783,9 @@ function getSpeakrsCargoTargetTriple(platform = process.platform) {
   }
   if (platform === 'win32') {
     return 'x86_64-pc-windows-msvc';
+  }
+  if (platform === 'linux') {
+    return 'x86_64-unknown-linux-gnu';
   }
   throw new Error(`Unsupported Speakrs packaging platform: ${platform}`);
 }
@@ -791,7 +798,7 @@ function getSpeakrsCargoFeatures(platform = process.platform) {
   if (platform === 'darwin') {
     return Object.freeze(['default-linalg', 'coreml']);
   }
-  if (platform === 'win32') {
+  if (platform === 'win32' || platform === 'linux') {
     return Object.freeze(['default-linalg', 'cuda', 'load-dynamic']);
   }
   return Object.freeze(['default-linalg']);
@@ -839,6 +846,14 @@ function assertSpeakrsCliArchitecture(filePath, platform = process.platform) {
     const fileOutput = execFileSync('file', [filePath], { encoding: 'utf8' });
     if (!fileOutput.includes('arm64')) {
       throw new Error(`Bundled macOS speakrs-cli is not arm64: ${fileOutput.trim()}`);
+    }
+  }
+  if (platform === 'linux' && process.platform === 'linux') {
+    const fileOutput = execFileSync('file', [filePath], { encoding: 'utf8' });
+    if (!isLinuxX64ElfExecutableFileOutput(fileOutput)) {
+      throw new Error(
+        `Bundled Linux speakrs-cli is not an x86_64 ELF executable/PIE: ${fileOutput.trim()}`,
+      );
     }
   }
   return arch;
@@ -941,6 +956,27 @@ function stageSpeakrsValidateWav(binDir = BIN_DIR) {
   return staged;
 }
 
+function writeSpeakrsPackagedIntegrityManifest(binDir = BIN_DIR, platform = process.platform) {
+  const cliPath = assertStagedSpeakrsCli(binDir, platform);
+  const wavPath = assertStagedSpeakrsValidateWav(binDir);
+  const platformKey = platform === 'darwin' ? 'darwin-arm64' : `${platform}-x64`;
+  const pin = (filePath) => ({
+    sizeBytes: fs.statSync(filePath).size,
+    sha256: hashFileContent(filePath),
+  });
+  const manifestPath = path.join(binDir, SPEAKRS_PACKAGED_INTEGRITY_MANIFEST_NAME);
+  fs.writeFileSync(manifestPath, `${JSON.stringify({
+    version: 1,
+    platforms: {
+      [platformKey]: {
+        cli: pin(cliPath),
+        validationWav: pin(wavPath),
+      },
+    },
+  }, null, 2)}\n`);
+  return manifestPath;
+}
+
 function buildMacOSSpeakrsCliVerificationCommands(cliPath) {
   return [
     { command: 'codesign', args: ['--verify', '--strict', '--verbose=2', cliPath] },
@@ -983,6 +1019,9 @@ function buildSpeakrsCli() {
   const pins = loadSpeakrsOrtCompilePins();
   if (IS_WINDOWS && pins['win32-x64'] !== null) {
     throw new Error('Windows speakrs-cli must stay load-dynamic; do not add a compile-time ORT download pin.');
+  }
+  if (IS_LINUX && pins['linux-x64'] !== null) {
+    throw new Error('Linux speakrs-cli must stay load-dynamic; do not add a compile-time ORT download pin.');
   }
   if (IS_MAC && (!pins['darwin-arm64'] || !pins['darwin-arm64'].sha256 || !pins['darwin-arm64'].url)) {
     throw new Error('macOS speakrs-cli is missing a pinned ort compile-time download.');
@@ -1444,11 +1483,12 @@ async function prepareResources() {
     stageSpeakrsValidateWav();
     assertStagedSpeakrsCli();
     assertStagedSpeakrsValidateWav();
+    writeSpeakrsPackagedIntegrityManifest();
     if (IS_MAC) {
       verifyMacOSSpeakrsCliSignature();
     }
   } else {
-    console.log('Skipping speakrs-cli packaging on this platform (Linux Feature Parity, Phase 7)\n');
+    throw new Error(`Speakrs packaging is not supported on ${process.platform}`);
   }
 
   assertNoWindowsOnlyStaleHelper();
@@ -1506,14 +1546,17 @@ module.exports = {
   prepareResources,
   pruneMacOSPythonRuntimeDevelopmentFiles,
   downloadFile,
+  readElfMachine,
   readMachOCpuType,
   readWindowsPeMachine,
+  isLinuxX64ElfExecutableFileOutput,
   resolveCargoExecutable,
   resolveCargoTargetDir,
   resolveSpeakrsCliCargoOutputPath,
   stageLegalBundle,
   stageFfmpegSourceArchive,
   stageSpeakrsValidateWav,
+  writeSpeakrsPackagedIntegrityManifest,
   writeFfmpegBinaryInfo,
   writeFfmpegComplianceManifest,
   verifyMacOSHelperSignature,

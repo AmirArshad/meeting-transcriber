@@ -11,13 +11,23 @@ const {
   getRecorderModule,
   getTranscriberModule,
 } = require('../../src/main-process-helpers');
+const { createAiAddonIpc } = require('../../src/main/ai-addon-ipc');
+const {
+  getSummaryRuntimeDir,
+} = require('../../src/ai-addon-setup');
+const {
+  buildSummaryRuntimeEnv,
+  validateSummaryRuntimeArtifact,
+} = require('../../src/ai-addon/manifest-store');
 const {
   getDiarizationAvailability,
   getSummaryAvailability,
   getSpeakrsSetupArtifactsForPlatform,
   getSummaryRuntimeArtifactForPlatform,
+  getDiarizationDependencyArtifactForPlatform,
   buildAiAddonStatus,
   LINUX_DIARIZATION_UNAVAILABLE_REASON,
+  LINUX_PYANNOTE_UNAVAILABLE_REASON,
   LINUX_SUMMARY_UNAVAILABLE_REASON,
 } = require('../../src/ai-addon-state');
 const {
@@ -41,6 +51,19 @@ function withProcessPlatform(platform, fn) {
     return fn();
   } finally {
     Object.defineProperty(process, 'platform', descriptor);
+  }
+}
+
+async function withProcessRuntimeAsync({ platform, arch }, fn) {
+  const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+  const archDescriptor = Object.getOwnPropertyDescriptor(process, 'arch');
+  Object.defineProperty(process, 'platform', { configurable: true, value: platform });
+  Object.defineProperty(process, 'arch', { configurable: true, value: arch });
+  try {
+    return await fn();
+  } finally {
+    Object.defineProperty(process, 'platform', platformDescriptor);
+    Object.defineProperty(process, 'arch', archDescriptor);
   }
 }
 
@@ -239,7 +262,7 @@ test('packaged buildPythonEnv isolates PYTHONPATH and disables user site', () =>
   }
 });
 
-test('Linux add-on catalog paths stay unsupported until later phases', () => {
+test('Linux Speakrs and Qwen summary catalogs are present and CUDA-gated', () => {
   const diarization = getDiarizationAvailability('linux', 'x64');
   const summary = getSummaryAvailability('linux', 'x64');
   assert.equal(diarization.supported, false);
@@ -248,9 +271,43 @@ test('Linux add-on catalog paths stay unsupported until later phases', () => {
   assert.equal(summary.supported, false);
   assert.equal(summary.runtime, 'unsupported');
   assert.equal(summary.reason, LINUX_SUMMARY_UNAVAILABLE_REASON);
-  assert.equal(getSpeakrsSetupArtifactsForPlatform('linux', 'x64').modelPack, null);
-  assert.deepEqual(getSpeakrsSetupArtifactsForPlatform('linux', 'x64').packEntries, []);
-  assert.equal(getSummaryRuntimeArtifactForPlatform('linux', 'x64'), null);
+
+  const linuxArtifacts = getSpeakrsSetupArtifactsForPlatform('linux', 'x64');
+  assert.equal(linuxArtifacts.modelPack.id, 'speakrs-models-5d24ffe-linux-x64-cuda');
+  assert.equal(linuxArtifacts.runtime.modeByPlatform['linux-x64'], 'cuda');
+  assert.ok(linuxArtifacts.runtimeArtifacts.some((entry) => entry.kind === 'ort-archive'));
+  assert.ok(linuxArtifacts.runtimeArtifacts.some((entry) => entry.kind === 'curand-wheel'));
+  assert.ok(linuxArtifacts.runtimeArtifacts.some((entry) => entry.kind === 'nvrtc-wheel'));
+  const summaryRuntime = getSummaryRuntimeArtifactForPlatform('linux', 'x64');
+  assert.equal(summaryRuntime.platform, 'linux');
+  assert.equal(summaryRuntime.arch, 'x64');
+  assert.equal(summaryRuntime.acceleration, 'cuda');
+  assert.equal(summaryRuntime.artifacts.length, 3);
+  assert.deepEqual(
+    summaryRuntime.artifacts.map(({ fileName, sizeBytes, sha256 }) => ({ fileName, sizeBytes, sha256 })),
+    [
+      {
+        fileName: 'llama.cpp-v0.3.0-cuda-12.8-amd64.tar.gz',
+        sizeBytes: 150794376,
+        sha256: '37616f0271e82717eb8ddcd5d2319fd845ddcf93c83fd3943d0a1a539c1d0a99',
+      },
+      {
+        fileName: 'nvidia_cuda_runtime_cu12-12.9.79-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl',
+        sizeBytes: 3493179,
+        sha256: '25bba2dfb01d48a9b59ca474a1ac43c6ebf7011f1b0b8cc44f54eb6ac48a96c3',
+      },
+      {
+        fileName: 'nvidia_nccl_cu12-2.31.2-py3-none-manylinux_2_18_x86_64.whl',
+        sizeBytes: 342105414,
+        sha256: 'f9b1dc3c2a7e20176054144ebb3b32fea83b40402ee5d7ac7045cd11ecc956c0',
+      },
+    ],
+  );
+  assert.equal(validateSummaryRuntimeArtifact(summaryRuntime), null);
+  const missingNccl = JSON.parse(JSON.stringify(summaryRuntime));
+  missingNccl.artifacts = missingNccl.artifacts.filter((archive) => archive.kind !== 'nccl-wheel');
+  assert.match(validateSummaryRuntimeArtifact(missingNccl), /NCCL/);
+  assert.equal(getDiarizationDependencyArtifactForPlatform('linux', 'x64'), null);
 
   const status = buildAiAddonStatus({
     userDataDir: '/tmp/avanevis-linux-addons',
@@ -265,18 +322,208 @@ test('Linux add-on catalog paths stay unsupported until later phases', () => {
   });
   assert.equal(status.features.diarization.status, 'unsupported');
   assert.equal(status.features.summary.status, 'unsupported');
+
+  const readyCuda = {
+    statusCode: 'ready',
+    installed: true,
+    deviceAvailable: true,
+    runtimeLoadable: true,
+    missingLibraries: [],
+    matchedProfile: 'cuda12',
+  };
+  const admitted = getDiarizationAvailability('linux', 'x64', { cudaStatus: readyCuda });
+  assert.equal(admitted.supported, true);
+  assert.equal(admitted.acceleration, 'cuda');
+  assert.equal(admitted.runtimeDevice, 'cuda');
+  assert.equal(admitted.automaticAfterTranscription, true);
+
+  const admittedStatus = buildAiAddonStatus({
+    userDataDir: '/tmp/avanevis-linux-addons',
+    platform: 'linux',
+    arch: 'x64',
+    cudaStatus: readyCuda,
+    manifest: {
+      features: {
+        diarization: { status: 'notConfigured' },
+        summary: { status: 'ready' },
+      },
+    },
+  });
+  assert.equal(admittedStatus.features.diarization.status, 'notConfigured');
+  assert.equal(admittedStatus.features.diarization.availability.supported, true);
+  assert.equal(admittedStatus.features.summary.status, 'ready');
+  assert.equal(admittedStatus.features.summary.availability.supported, true);
+  assert.match(LINUX_PYANNOTE_UNAVAILABLE_REASON, /Pyannote/);
+
+  const stalePyannoteStatus = buildAiAddonStatus({
+    userDataDir: '/tmp/avanevis-linux-addons',
+    platform: 'linux',
+    arch: 'x64',
+    cudaStatus: readyCuda,
+    manifest: {
+      features: {
+        diarization: { status: 'ready', engine: 'pyannote' },
+      },
+    },
+  });
+  assert.equal(stalePyannoteStatus.features.diarization.engine, 'speakrs');
+  assert.equal(stalePyannoteStatus.features.diarization.status, 'notConfigured');
+
+  const arm64 = getDiarizationAvailability('linux', 'arm64');
+  assert.equal(arm64.supported, false);
+  assert.match(arm64.reason, /x86_64|CUDA 12/);
 });
 
-test('Speakrs packaging stays fail-closed on Linux while resource manifests still fingerprint', () => {
-  assert.equal(isSpeakrsPackagingSupported('linux'), false);
+test('Linux summary runtime environment is explicit and excludes ambient loader paths', () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-linux-summary-env-'));
+  const artifact = require('../../src/ai-addon-state').getSummaryArtifactForPlatform(
+    'qwen3.5-9b-q4-k-m',
+    'linux',
+    'x64',
+  );
+  const runtimeDir = getSummaryRuntimeDir(userDataDir, artifact);
+  const extractDir = path.join(runtimeDir, 'extract', 'cuda-12.8');
+  const managedRoot = path.join(userDataDir, 'ai-addons', 'cuda', 'python');
+  fs.mkdirSync(extractDir, { recursive: true });
+  fs.writeFileSync(path.join(extractDir, 'llama-cli'), '');
+  for (const relativeDir of ['nvidia/cuda_runtime/lib', 'nvidia/nccl/lib']) {
+    fs.mkdirSync(path.join(runtimeDir, 'extract', relativeDir), { recursive: true });
+  }
+  for (const relativeDir of ['nvidia/cublas/lib', 'nvidia/cudnn/lib']) {
+    fs.mkdirSync(path.join(managedRoot, relativeDir), { recursive: true });
+  }
+
+  const originalLoaderPath = process.env.LD_LIBRARY_PATH;
+  process.env.LD_LIBRARY_PATH = '/untrusted/ambient/path';
+  try {
+    const env = buildSummaryRuntimeEnv({
+      userDataDir,
+      artifact,
+      platform: 'linux',
+      arch: 'x64',
+      driverLibraryDirs: [],
+    });
+    assert.ok(env.LD_LIBRARY_PATH.includes(path.join(runtimeDir, 'extract', 'cuda-12.8')));
+    assert.ok(env.LD_LIBRARY_PATH.includes(path.join(runtimeDir, 'extract', 'nvidia', 'nccl', 'lib')));
+    assert.ok(!env.LD_LIBRARY_PATH.includes('/untrusted/ambient/path'));
+  } finally {
+    if (originalLoaderPath === undefined) {
+      delete process.env.LD_LIBRARY_PATH;
+    } else {
+      process.env.LD_LIBRARY_PATH = originalLoaderPath;
+    }
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test('Linux summary runtime rejects unexpected loaders and unsafe executable directories', () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-linux-summary-loader-'));
+  const artifact = require('../../src/ai-addon-state').getSummaryArtifactForPlatform(
+    'qwen3.5-9b-q4-k-m',
+    'linux',
+    'x64',
+  );
+  const runtimeDir = getSummaryRuntimeDir(userDataDir, artifact);
+  const extractDir = path.join(runtimeDir, 'extract', 'cuda-12.8');
+  const managedRoot = path.join(userDataDir, 'ai-addons', 'cuda', 'python');
+  fs.mkdirSync(extractDir, { recursive: true });
+  fs.writeFileSync(path.join(extractDir, 'llama-cli'), '');
+  for (const relativeDir of ['nvidia/cuda_runtime/lib', 'nvidia/nccl/lib']) {
+    fs.mkdirSync(path.join(runtimeDir, 'extract', relativeDir), { recursive: true });
+  }
+  for (const relativeDir of ['nvidia/cublas/lib', 'nvidia/cudnn/lib']) {
+    fs.mkdirSync(path.join(managedRoot, relativeDir), { recursive: true });
+  }
+
+  try {
+    fs.writeFileSync(path.join(extractDir, 'libhostile.so.6'), '');
+    assert.throws(
+      () => buildSummaryRuntimeEnv({
+        userDataDir,
+        artifact,
+        platform: 'linux',
+        arch: 'x64',
+        driverLibraryDirs: [],
+      }),
+      /Unexpected summary runtime loader files/,
+    );
+    fs.rmSync(path.join(extractDir, 'libhostile.so.6'));
+
+    if (os.type() !== 'Windows_NT') {
+      fs.chmodSync(extractDir, 0o777);
+      assert.throws(
+        () => buildSummaryRuntimeEnv({
+          userDataDir,
+          artifact,
+          platform: 'linux',
+          arch: 'x64',
+          driverLibraryDirs: [],
+        }),
+        /executable directory must not be world-writable/,
+      );
+    }
+  } finally {
+    if (os.type() !== 'Windows_NT') {
+      fs.chmodSync(extractDir, 0o755);
+    }
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test('Linux add-on status re-primes expired CUDA state when managed runtime exists', async () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-linux-status-'));
+  fs.mkdirSync(path.join(userDataDir, 'ai-addons', 'cuda', 'python'), { recursive: true });
+  const readyCuda = {
+    statusCode: 'ready',
+    installed: true,
+    deviceAvailable: true,
+    runtimeLoadable: true,
+    missingLibraries: [],
+    matchedProfile: 'cuda12',
+  };
+  let observedCudaStatus = null;
+  let liveProbeCount = 0;
+  const service = createAiAddonIpc({
+    app: { getPath: () => userDataDir },
+    path,
+    fs,
+    pythonConfig: { backendPath: userDataDir },
+    sendToRenderer() {},
+    checkAiAddonSetupStatus: async (options) => {
+      observedCudaStatus = options.cudaStatus;
+      return { features: { summary: { status: 'unsupported' } } };
+    },
+    getCachedCudaStatus: () => null,
+    resolveCudaStatusForTranscription: async () => {
+      liveProbeCount += 1;
+      return readyCuda;
+    },
+    enqueueGpuResourceAction: (action) => action(),
+    terminateProcessBestEffort: () => {},
+  });
+  const handlers = {};
+  try {
+    service.registerIpc({ handle(channel, handler) { handlers[channel] = handler; } });
+    await withProcessRuntimeAsync({ platform: 'linux', arch: 'x64' }, () => (
+      handlers['get-ai-addon-status']({ sender: {} }, { verifyChecksumsIfChanged: true })
+    ));
+  } finally {
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+  assert.equal(liveProbeCount, 1);
+  assert.equal(observedCudaStatus, readyCuda);
+});
+
+test('Speakrs packaging builds the Linux CLI while resource manifests still fingerprint', () => {
+  assert.equal(isSpeakrsPackagingSupported('linux'), true);
   assert.equal(isSpeakrsPackagingSupported('win32'), true);
-  assert.throws(() => getSpeakrsCargoTargetTriple('linux'), /Unsupported Speakrs packaging platform/);
-  assert.equal(getSpeakrsResourceManifestTarget('linux'), null);
+  assert.equal(getSpeakrsCargoTargetTriple('linux'), 'x86_64-unknown-linux-gnu');
+  assert.equal(getSpeakrsResourceManifestTarget('linux'), 'x86_64-unknown-linux-gnu');
   assert.equal(getSpeakrsResourceManifestTarget('darwin'), 'aarch64-apple-darwin');
 
   const manifest = withProcessPlatform('linux', () => buildResourceManifest());
   assert.equal(manifest.platform, 'linux');
-  assert.equal(manifest.inputs.speakrsCargoTarget, null);
+  assert.equal(manifest.inputs.speakrsCargoTarget, 'x86_64-unknown-linux-gnu');
   assert.equal(typeof manifest.inputs.speakrsCargoToml, 'string');
   assert.equal(manifest.inputs.speakrsCargoToml.length, 64);
 });

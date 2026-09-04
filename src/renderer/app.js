@@ -73,7 +73,9 @@ const {
   isMeetingTranscriptionRetryable,
 } = window.summaryUiHelpers;
 const {
+  applyDiarizationEngineCardDomState,
   buildDiarizationEngineCards,
+  coerceDiarizationEngineForPlatform,
   getDiarizationRemoveConfirmMessage,
   getDiarizationSetupButtonLabel,
   getDiarizationSwitchConfirmMessage,
@@ -90,7 +92,7 @@ const {
 } = window.aiAddonUiHelpers;
 const { clearElement } = window.domHelpers;
 const { meetingIdsEqual } = window.meetingHelpers;
-const { isGpuRuntimeActionBusyError, formatGpuRuntimeBusyAlertMessage, getUnsupportedGpuSettingsCopy } = window.gpuSettingsHelpers;
+const { isGpuRuntimeActionBusyError, formatGpuRuntimeBusyAlertMessage, getUnsupportedGpuSettingsCopy, isCudaRuntimeSettingsSurface, getLinuxCudaSettingsDescription, getLinuxCudaBrokenRuntimeCopy, getLinuxCudaUninstallConfirmSuffix, shouldShowGpuUninstallButton, shouldShowGpuInstallOrRepairButton, shouldUseGpuRepairButton, shouldShowGpuHomeCta, shouldShowCudaRuntimeWarning } = window.gpuSettingsHelpers;
 const {
   inferRendererHostFamily,
   getEmptyMicrophoneDeviceGuidance,
@@ -1471,31 +1473,54 @@ function openSettingsAtAiAddons() {
   }
 }
 
+function getRendererPlatform() {
+  return homePromptContext.platform || inferRendererHostFamily(navigator.platform);
+}
+
 function getSelectedDiarizationEngine(diarization) {
-  return selectedDiarizationEngine || resolveSelectedDiarizationEngine(diarization);
+  return coerceDiarizationEngineForPlatform(
+    selectedDiarizationEngine || resolveSelectedDiarizationEngine(diarization),
+    getRendererPlatform(),
+  );
 }
 
 function applyDiarizationEngineCards({ selectedEngine, platform, arch }) {
-  const cards = buildDiarizationEngineCards({ platform, arch });
-  document.querySelectorAll('.diarization-engine-card').forEach((card) => {
-    const engine = card.dataset.engine;
+  const resolvedPlatform = platform || getRendererPlatform();
+  const cardNodes = Array.from(document.querySelectorAll('.diarization-engine-card'));
+  const states = applyDiarizationEngineCardDomState(
+    cardNodes.map((card) => ({ engine: card.dataset.engine })),
+    { selectedEngine, platform: resolvedPlatform, arch },
+  );
+  const catalog = buildDiarizationEngineCards({ platform: resolvedPlatform, arch });
+  document.querySelectorAll('.diarization-engine-selector').forEach((selector) => {
+    selector.classList.toggle('is-single-engine', catalog.length < 2);
+  });
+  cardNodes.forEach((card, index) => {
+    const state = states[index];
     const radio = card.querySelector('.diarization-engine-radio');
-    const selected = engine === selectedEngine;
-    const entry = cards.find((item) => item.engine === engine);
-    if (!entry) {
+    card.hidden = Boolean(state && state.hidden);
+    if (!state || state.hidden) {
+      card.classList.remove('selected');
+      if (radio) {
+        radio.checked = false;
+        radio.disabled = true;
+        radio.tabIndex = -1;
+      }
       return;
     }
-    card.classList.toggle('selected', selected);
+    card.classList.toggle('selected', state.selected);
     if (radio) {
-      radio.checked = selected;
+      radio.checked = state.selected;
+      radio.removeAttribute('tabIndex');
     }
     const subtitle = card.querySelector('[data-engine-sub], .diarization-engine-card-sub');
-    if (subtitle) {
+    const entry = catalog.find((item) => item.engine === state.engine);
+    if (subtitle && entry) {
       subtitle.textContent = entry.subtitle;
     }
   });
   document.querySelectorAll('[data-speakrs-recommended]').forEach((badge) => {
-    const speakrsCard = cards.find((entry) => entry.engine === 'speakrs');
+    const speakrsCard = catalog.find((entry) => entry.engine === 'speakrs');
     badge.hidden = !(speakrsCard && speakrsCard.recommended);
   });
 }
@@ -1529,7 +1554,7 @@ function updateHomeAiAddonCTA(aiStatus) {
   const speakerPrompt = document.getElementById('diarization-setup-prompt');
   const prompt = buildHomeAiAddonPrompt({
     aiStatus,
-    platform: homePromptContext.platform,
+    platform: getRendererPlatform(),
     cudaInstalled: homePromptContext.cudaInstalled,
     hasNvidiaGpu: homePromptContext.hasNvidiaGpu,
   });
@@ -1556,7 +1581,7 @@ function updateHomeAiAddonCTA(aiStatus) {
     const diarization = aiStatus && aiStatus.features ? aiStatus.features.diarization : null;
     applyDiarizationEngineCards({
       selectedEngine,
-      platform: homePromptContext.platform,
+      platform: getRendererPlatform(),
       arch: homePromptContext.arch,
     });
     applyDiarizationEngineFields(selectedEngine, {
@@ -3807,7 +3832,10 @@ async function generateSummaryForMeeting(meetingId) {
 
   let aiStatus;
   try {
-    aiStatus = await window.electronAPI.getAiAddonStatus({ verifyChecksums: true });
+    aiStatus = await window.electronAPI.getAiAddonStatus({
+      verifyChecksums: true,
+      verifyChecksumsIfChanged: true,
+    });
   } catch (error) {
     addLog(`Summary setup status unavailable: ${error.message}`, 'error');
     summaryGenerationMeetingId = null;
@@ -4703,7 +4731,8 @@ function applyAiAddonButtonState({ setupButton, validateButton, removeButton, co
 
 function applyDiarizationEngineRadioState(canSelectEngine) {
   document.querySelectorAll('.diarization-engine-radio').forEach((radio) => {
-    radio.disabled = !canSelectEngine;
+    const card = radio.closest('.diarization-engine-card');
+    radio.disabled = !canSelectEngine || Boolean(card && card.hidden);
   });
 }
 
@@ -4804,7 +4833,7 @@ function updateAiAddonSettings(status) {
     });
     applyDiarizationEngineCards({
       selectedEngine,
-      platform: homePromptContext.platform,
+      platform: getRendererPlatform(),
       arch: homePromptContext.arch,
     });
     applyDiarizationEngineFields(selectedEngine, { unsupported: diarizationUnsupported });
@@ -5030,16 +5059,16 @@ function setupAiAddonSettingsListeners() {
   }
 
   function selectDiarizationEngine(engine) {
-    selectedDiarizationEngine = engine;
+    selectedDiarizationEngine = coerceDiarizationEngineForPlatform(engine, getRendererPlatform());
     const diarization = aiAddonStatusSnapshot && aiAddonStatusSnapshot.features
       ? aiAddonStatusSnapshot.features.diarization
-      : { engine };
+      : { engine: selectedDiarizationEngine };
     applyDiarizationEngineCards({
-      selectedEngine: engine,
-      platform: homePromptContext.platform,
+      selectedEngine: selectedDiarizationEngine,
+      platform: getRendererPlatform(),
       arch: homePromptContext.arch,
     });
-    applyDiarizationEngineFields(engine, {
+    applyDiarizationEngineFields(selectedDiarizationEngine, {
       unsupported: Boolean(diarization && diarization.status === 'unsupported'),
     });
     if (aiAddonStatusSnapshot) {
@@ -5392,148 +5421,166 @@ async function checkGPUStatus() {
       // Hide install/uninstall buttons on macOS (MLX is bundled)
       gpuActions.style.display = 'none';
 
-    } else if (platform === 'win32') {
-      // ============ Windows: Show CUDA Status ============
-      gpuDescription.textContent = 'Enable faster-whisper GPU acceleration for 4-5x faster transcription. Installs only the CUDA runtime libraries needed by CTranslate2.';
-      
-      // Update labels for Windows
-      gpuLabel1.textContent = 'GPU Detected:';
-      gpuLabel2.textContent = 'CUDA Libraries:';
-      gpuLabel3.textContent = 'Download Size:';
-      if (gpuLabel4) gpuLabel4.textContent = 'Diagnostics:';
+    } else {
+      if (platform === 'linux') {
+        ctaState.cudaInfo = await window.electronAPI.checkCUDA();
+      }
+      const useCudaSurface = platform === 'win32'
+        || isCudaRuntimeSettingsSurface(platform, ctaState.cudaInfo);
 
-      // Check if GPU exists
-      const gpuInfo = await window.electronAPI.checkGPU();
-      ctaState.gpuInfo = gpuInfo;
-
-      if (gpuInfo.hasGPU) {
-        gpuValue1.textContent = gpuInfo.gpuName;
-        gpuValue1.classList.add('success');
-      } else {
-        gpuValue1.textContent = 'No NVIDIA GPU detected';
-        gpuValue1.classList.add('error');
-        gpuValue2.textContent = 'N/A';
-        gpuValue3.textContent = 'N/A';
+      if (!useCudaSurface) {
+        const copy = getUnsupportedGpuSettingsCopy(platform);
+        gpuDescription.textContent = copy.description;
+        gpuLabel1.textContent = 'Platform:';
+        gpuValue1.textContent = platform || 'unknown';
+        gpuValue1.className = 'info-value';
+        gpuLabel2.textContent = 'Acceleration:';
+        gpuValue2.textContent = 'CPU only';
+        gpuValue2.className = 'info-value';
+        gpuLabel3.textContent = 'GPU setup:';
+        gpuValue3.textContent = copy.statusLabel;
+        gpuValue3.className = 'info-value warning';
+        if (gpuLabel4) gpuLabel4.textContent = 'Diagnostics:';
         if (gpuValue4) {
-          gpuValue4.textContent = 'No NVIDIA GPU detected.';
+          gpuValue4.textContent = copy.diagnostics;
           gpuValue4.className = 'info-value';
         }
         if (gpuRow4) gpuRow4.style.display = 'flex';
-        statusBadge.textContent = 'Not Available';
+        statusBadge.textContent = copy.statusLabel;
         statusBadge.classList.add('disabled');
+        gpuActions.style.display = 'none';
         installBtn.disabled = true;
-        return;
-      }
-
-      // Check CUDA installation
-      const cudaInfo = await window.electronAPI.checkCUDA();
-      ctaState.cudaInfo = cudaInfo;
-
-      if (cudaInfo.installed) {
-        gpuValue2.textContent = 'Installed and loadable';
-        gpuValue2.classList.add('success');
-        gpuValue3.textContent = 'Already installed';
-        if (gpuValue4) {
-          gpuValue4.textContent = 'CUDA runtime libraries are healthy and loadable.';
-          gpuValue4.className = 'info-value success';
-        }
-        if (gpuRow4) gpuRow4.style.display = 'flex';
-        statusBadge.textContent = 'Enabled';
-        statusBadge.classList.add('enabled');
-        installBtn.style.display = 'none';
-        uninstallBtn.style.display = 'block';
-        resetInstallButton();
       } else {
-        const statusCode = String(cudaInfo.statusCode || '').trim();
-        if (cudaInfo.repairRecommendedAfterQuit) {
-          setRepairInstallButton();
-          gpuValue2.textContent = 'Repair recommended (previous quit interrupted GPU setup)';
-        } else if (statusCode === 'unsupportedRuntimeMajor') {
-          setRepairInstallButton();
-          const unsupportedProfiles = Array.isArray(cudaInfo.unsupportedDetectedProfiles)
-            ? cudaInfo.unsupportedDetectedProfiles.filter(Boolean)
-            : [];
-          gpuValue2.textContent = unsupportedProfiles.length
-            ? `Unsupported runtime detected (${unsupportedProfiles.join(', ')})`
-            : 'Unsupported CUDA runtime detected';
-        } else if (cudaInfo.deviceAvailable && cudaInfo.runtimeLoadable === false) {
-          resetInstallButton();
-          const missing = Array.isArray(cudaInfo.missingLibraries) && cudaInfo.missingLibraries.length
-            ? `Missing: ${cudaInfo.missingLibraries.join(', ')}`
-            : 'CUDA runtime libraries are not loadable';
-          gpuValue2.textContent = missing;
-        } else if (cudaInfo.deviceAvailable) {
-          resetInstallButton();
-          gpuValue2.textContent = 'CUDA runtime not ready';
-        } else {
-          resetInstallButton();
-          gpuValue2.textContent = 'No CUDA device available';
-        }
-        gpuValue2.classList.add('warning');
-        gpuValue3.textContent = cudaInfo.pythonSupportedForInstall === false && cudaInfo.pythonVersion
-          ? `Requires Python 3.11 (current: ${cudaInfo.pythonVersion})`
-          : '~1 GB';
-        if (gpuValue4) {
-          const diagnostics = [];
-          if (cudaInfo.repairRecommendedAfterQuit) {
-            diagnostics.push(cudaInfo.repairRecommendedReason
-              || 'GPU runtime setup was interrupted by a previous quit. Repair before relying on CUDA.');
+        gpuDescription.textContent = platform === 'linux'
+          ? getLinuxCudaSettingsDescription()
+          : 'Enable faster-whisper GPU acceleration for 4-5x faster transcription. Installs only the CUDA runtime libraries needed by CTranslate2.';
+        gpuLabel1.textContent = 'GPU Detected:';
+        gpuLabel2.textContent = 'CUDA Libraries:';
+        gpuLabel3.textContent = 'Download Size:';
+        if (gpuLabel4) gpuLabel4.textContent = 'Diagnostics:';
+
+        const gpuInfo = await window.electronAPI.checkGPU();
+        ctaState.gpuInfo = gpuInfo;
+
+        if (!gpuInfo.hasGPU) {
+          gpuValue1.textContent = 'No NVIDIA GPU detected';
+          gpuValue1.classList.add('error');
+          if (platform !== 'linux') {
+            gpuValue2.textContent = 'N/A';
+            gpuValue3.textContent = 'N/A';
+            if (gpuValue4) {
+              gpuValue4.textContent = 'No NVIDIA GPU detected.';
+              gpuValue4.className = 'info-value';
+            }
+            if (gpuRow4) gpuRow4.style.display = 'flex';
+            statusBadge.textContent = 'Not Available';
+            statusBadge.classList.add('disabled');
+            installBtn.disabled = true;
+            return;
           }
-          if (statusCode === 'unsupportedRuntimeMajor') {
+        } else {
+          gpuValue1.textContent = gpuInfo.gpuName;
+          gpuValue1.classList.add('success');
+        }
+
+        const cudaInfo = platform === 'linux' && ctaState.cudaInfo
+          ? ctaState.cudaInfo
+          : await window.electronAPI.checkCUDA();
+        ctaState.cudaInfo = cudaInfo;
+
+        if (cudaInfo.installed) {
+          gpuValue2.textContent = 'Installed and loadable';
+          gpuValue2.classList.add('success');
+          gpuValue3.textContent = 'Already installed';
+          if (gpuValue4) {
+            gpuValue4.textContent = 'CUDA runtime libraries are healthy and loadable.';
+            gpuValue4.className = 'info-value success';
+          }
+          if (gpuRow4) gpuRow4.style.display = 'flex';
+          statusBadge.textContent = 'Enabled';
+          statusBadge.classList.add('enabled');
+          installBtn.style.display = 'none';
+          uninstallBtn.style.display = shouldShowGpuUninstallButton(platform, cudaInfo) ? 'block' : 'none';
+          resetInstallButton();
+        } else {
+          const statusCode = String(cudaInfo.statusCode || '').trim();
+          if (shouldUseGpuRepairButton(platform, cudaInfo)) {
+            setRepairInstallButton();
+          } else {
+            resetInstallButton();
+          }
+          if (cudaInfo.repairRecommendedAfterQuit) {
+            gpuValue2.textContent = 'Repair recommended (previous quit interrupted GPU setup)';
+          } else if (statusCode === 'unsupportedRuntimeMajor') {
             const unsupportedProfiles = Array.isArray(cudaInfo.unsupportedDetectedProfiles)
               ? cudaInfo.unsupportedDetectedProfiles.filter(Boolean)
               : [];
-            diagnostics.push(
-              unsupportedProfiles.length
-                ? `Detected newer CUDA runtime (${unsupportedProfiles.join(', ')}), but packaged transcription currently supports ${Array.isArray(cudaInfo.supportedProfiles) ? cudaInfo.supportedProfiles.join(', ') : 'cuda12'}.`
-                : 'Detected CUDA runtime is newer than the packaged transcription stack currently supports.',
-            );
+            gpuValue2.textContent = unsupportedProfiles.length
+              ? `Unsupported runtime detected (${unsupportedProfiles.join(', ')})`
+              : 'Unsupported CUDA runtime detected';
+          } else if (statusCode === 'runtimeIntegrityFailed') {
+            gpuValue2.textContent = 'Managed CUDA runtime failed integrity checks';
+          } else if (cudaInfo.deviceAvailable && cudaInfo.runtimeLoadable === false) {
+            const missing = Array.isArray(cudaInfo.missingLibraries) && cudaInfo.missingLibraries.length
+              ? `Missing: ${cudaInfo.missingLibraries.join(', ')}`
+              : 'CUDA runtime libraries are not loadable';
+            gpuValue2.textContent = missing;
+          } else if (cudaInfo.deviceAvailable) {
+            gpuValue2.textContent = 'CUDA runtime not ready';
+          } else {
+            gpuValue2.textContent = 'No CUDA device available';
           }
-          if (cudaInfo.deviceAvailable === false) {
-            diagnostics.push('CUDA device not available to CTranslate2.');
+          gpuValue2.classList.add('warning');
+          gpuValue3.textContent = cudaInfo.pythonSupportedForInstall === false && cudaInfo.pythonVersion
+            ? `Requires Python 3.11 (current: ${cudaInfo.pythonVersion})`
+            : '~1 GB';
+          if (gpuValue4) {
+            const diagnostics = [];
+            if (cudaInfo.repairRecommendedAfterQuit) {
+              diagnostics.push(cudaInfo.repairRecommendedReason
+                || 'GPU runtime setup was interrupted by a previous quit. Repair before relying on CUDA.');
+            }
+            if (statusCode === 'unsupportedRuntimeMajor') {
+              const unsupportedProfiles = Array.isArray(cudaInfo.unsupportedDetectedProfiles)
+                ? cudaInfo.unsupportedDetectedProfiles.filter(Boolean)
+                : [];
+              diagnostics.push(
+                unsupportedProfiles.length
+                  ? `Detected newer CUDA runtime (${unsupportedProfiles.join(', ')}), but packaged transcription currently supports ${Array.isArray(cudaInfo.supportedProfiles) ? cudaInfo.supportedProfiles.join(', ') : 'cuda12'}.`
+                  : 'Detected CUDA runtime is newer than the packaged transcription stack currently supports.',
+              );
+            }
+            if (cudaInfo.deviceAvailable === false) {
+              diagnostics.push('CUDA device not available to CTranslate2.');
+            }
+            if (Array.isArray(cudaInfo.missingLibraries) && cudaInfo.missingLibraries.length > 0) {
+              diagnostics.push(
+                platform === 'linux'
+                  ? `Missing runtime libraries: ${cudaInfo.missingLibraries.join(', ')}`
+                  : `Missing runtime DLLs: ${cudaInfo.missingLibraries.join(', ')}`,
+              );
+            }
+            if (cudaInfo.error) {
+              diagnostics.push(`Probe error: ${String(cudaInfo.error).replace(/\s+/g, ' ').trim().slice(0, 180)}`);
+            }
+            if (platform === 'linux' && shouldShowGpuUninstallButton(platform, cudaInfo)) {
+              diagnostics.push('Uninstall this runtime to return transcription to CPU.');
+            }
+            gpuValue4.textContent = diagnostics.length
+              ? diagnostics.join(' ')
+              : 'CUDA runtime is not ready. Reinstall CUDA libraries from this page.';
+            gpuValue4.className = 'info-value warning';
           }
-          if (Array.isArray(cudaInfo.missingLibraries) && cudaInfo.missingLibraries.length > 0) {
-            diagnostics.push(`Missing runtime DLLs: ${cudaInfo.missingLibraries.join(', ')}`);
-          }
-          if (cudaInfo.error) {
-            diagnostics.push(`Probe error: ${String(cudaInfo.error).replace(/\s+/g, ' ').trim().slice(0, 180)}`);
-          }
-          gpuValue4.textContent = diagnostics.length
-            ? diagnostics.join(' ')
-            : 'CUDA runtime is not ready. Reinstall CUDA libraries from this page.';
-          gpuValue4.className = 'info-value warning';
+          if (gpuRow4) gpuRow4.style.display = 'flex';
+          statusBadge.textContent = 'Available';
+          statusBadge.classList.add('disabled');
+          installBtn.disabled = cudaInfo.pythonSupportedForInstall === false;
+          installBtn.style.display = shouldShowGpuInstallOrRepairButton(cudaInfo) ? 'block' : 'none';
+          uninstallBtn.style.display = shouldShowGpuUninstallButton(platform, cudaInfo) ? 'block' : 'none';
         }
-        if (gpuRow4) gpuRow4.style.display = 'flex';
-        statusBadge.textContent = 'Available';
-        statusBadge.classList.add('disabled');
-        installBtn.disabled = cudaInfo.pythonSupportedForInstall === false;
-        installBtn.style.display = 'block';
-        uninstallBtn.style.display = 'none';
-      }
 
-      gpuActions.style.display = 'block';
-    } else {
-      const copy = getUnsupportedGpuSettingsCopy(platform);
-      gpuDescription.textContent = copy.description;
-      gpuLabel1.textContent = 'Platform:';
-      gpuValue1.textContent = platform || 'unknown';
-      gpuValue1.className = 'info-value';
-      gpuLabel2.textContent = 'Acceleration:';
-      gpuValue2.textContent = 'CPU only';
-      gpuValue2.className = 'info-value';
-      gpuLabel3.textContent = 'GPU setup:';
-      gpuValue3.textContent = copy.statusLabel;
-      gpuValue3.className = 'info-value warning';
-      if (gpuLabel4) gpuLabel4.textContent = 'Diagnostics:';
-      if (gpuValue4) {
-        gpuValue4.textContent = copy.diagnostics;
-        gpuValue4.className = 'info-value';
+        gpuActions.style.display = 'block';
       }
-      if (gpuRow4) gpuRow4.style.display = 'flex';
-      statusBadge.textContent = copy.statusLabel;
-      statusBadge.classList.add('disabled');
-      gpuActions.style.display = 'none';
-      installBtn.disabled = true;
     }
   } catch (error) {
     console.error('Failed to check GPU status:', error);
@@ -5560,12 +5607,13 @@ async function checkGPUStatus() {
 }
 
 // Show or hide the "Install CUDA" CTA on the Record (home) tab.
-// Only shown on Windows when an NVIDIA GPU is present and CUDA is not installed.
+// Shown when CUDA settings are offered, an NVIDIA GPU is visible, and CUDA is
+// not ready. Leftover Linux trees without a GPU stay on Settings Uninstall.
 function updateGPUCTA({ platform, gpuInfo, cudaInfo }) {
   const cta = document.getElementById('gpu-cta');
   if (!cta) return;
 
-  if (platform !== 'win32' || !gpuInfo || !gpuInfo.hasGPU || !cudaInfo || cudaInfo.installed) {
+  if (!shouldShowGpuHomeCta({ platform, gpuInfo, cudaInfo })) {
     cta.style.display = 'none';
     return;
   }
@@ -5573,12 +5621,14 @@ function updateGPUCTA({ platform, gpuInfo, cudaInfo }) {
   const sub = cta.querySelector('.gpu-cta-sub');
   const title = cta.querySelector('strong');
   const statusCode = String((cudaInfo && cudaInfo.statusCode) || '').trim();
-  if (statusCode === 'unsupportedRuntimeMajor') {
+  if (statusCode === 'unsupportedRuntimeMajor' || shouldUseGpuRepairButton(platform, cudaInfo)) {
     if (title) {
       title.textContent = 'Repair GPU runtime compatibility';
     }
     if (sub) {
-      sub.textContent = `${gpuInfo.gpuName || 'NVIDIA GPU'} detected - keep newer CUDA for other apps and add AvaNevis-compatible runtime libs`;
+      sub.textContent = statusCode === 'unsupportedRuntimeMajor'
+        ? `${gpuInfo.gpuName || 'NVIDIA GPU'} detected - keep newer CUDA for other apps and add AvaNevis-compatible runtime libs`
+        : `${gpuInfo.gpuName || 'NVIDIA GPU'} detected - repair the managed CUDA runtime or uninstall to return to CPU`;
     }
     cta.style.display = 'flex';
     return;
@@ -5599,22 +5649,16 @@ function updateCudaRuntimeWarning({ platform, gpuInfo, cudaInfo }) {
     return;
   }
 
-  const hasBrokenRuntime = platform === 'win32'
-    && gpuInfo
-    && gpuInfo.hasGPU
-    && cudaInfo
-    && (
-      cudaInfo.repairRecommendedAfterQuit === true
-      || (cudaInfo.deviceAvailable && cudaInfo.runtimeLoadable === false)
-    );
-
-  if (!hasBrokenRuntime) {
+  if (!shouldShowCudaRuntimeWarning({ platform, gpuInfo, cudaInfo })) {
     warning.style.display = 'none';
     return;
   }
 
   const missing = Array.isArray(cudaInfo.missingLibraries) ? cudaInfo.missingLibraries.filter(Boolean) : [];
   const statusCode = String(cudaInfo.statusCode || '').trim();
+  const linuxNoCpuFallback = platform === 'linux'
+    ? getLinuxCudaBrokenRuntimeCopy()
+    : '';
   if (cudaInfo.repairRecommendedAfterQuit) {
     warningSub.textContent = cudaInfo.repairRecommendedReason
       || 'GPU runtime setup was interrupted by a previous quit. Repair GPU compatibility in Settings before relying on CUDA transcription.';
@@ -5622,13 +5666,19 @@ function updateCudaRuntimeWarning({ platform, gpuInfo, cudaInfo }) {
     const unsupportedProfiles = Array.isArray(cudaInfo.unsupportedDetectedProfiles)
       ? cudaInfo.unsupportedDetectedProfiles.filter(Boolean)
       : [];
-    warningSub.textContent = unsupportedProfiles.length
-      ? `Detected ${unsupportedProfiles.join(', ')} runtime libraries, but this AvaNevis build currently supports ${Array.isArray(cudaInfo.supportedProfiles) ? cudaInfo.supportedProfiles.join(', ') : 'cuda12'}. Transcription will fall back to CPU until supported GPU runtime libraries are installed.`
-      : 'Detected a newer CUDA runtime than this AvaNevis build currently supports. Transcription will fall back to CPU until supported GPU runtime libraries are installed.';
+    const detected = unsupportedProfiles.length
+      ? `Detected ${unsupportedProfiles.join(', ')} runtime libraries, but this AvaNevis build currently supports ${Array.isArray(cudaInfo.supportedProfiles) ? cudaInfo.supportedProfiles.join(', ') : 'cuda12'}.`
+      : 'Detected a newer CUDA runtime than this AvaNevis build currently supports.';
+    warningSub.textContent = platform === 'linux'
+      ? `${detected}${linuxNoCpuFallback}`
+      : `${detected} Transcription will fall back to CPU until supported GPU runtime libraries are installed.`;
   } else {
-    warningSub.textContent = missing.length
-      ? `Missing CUDA runtime libraries: ${missing.join(', ')}. Transcription will automatically fall back to CPU until CUDA is fixed.`
-      : 'CUDA runtime libraries are not loadable. Transcription will automatically fall back to CPU until CUDA is fixed.';
+    const missingText = missing.length
+      ? `Missing CUDA runtime libraries: ${missing.join(', ')}.`
+      : 'CUDA runtime libraries are not loadable.';
+    warningSub.textContent = platform === 'linux'
+      ? `${missingText}${linuxNoCpuFallback}`
+      : `${missingText} Transcription will automatically fall back to CPU until CUDA is fixed.`;
   }
   warning.style.display = 'flex';
 }
@@ -5767,10 +5817,13 @@ async function installGPUAcceleration() {
 }
 
 async function uninstallGPUAcceleration() {
+  const platform = await window.electronAPI.getPlatform().catch(() => null);
   const confirmed = confirm(
     'This will remove AvaNevis-installed GPU runtime libraries used for transcription acceleration.\n\n' +
     'It does not remove newer system CUDA runtimes used by other applications.\n\n' +
-    'AvaNevis transcription will fall back to CPU mode.\n\n' +
+    (platform === 'linux'
+      ? getLinuxCudaUninstallConfirmSuffix()
+      : 'AvaNevis transcription will fall back to CPU mode.\n\n') +
     'Continue?'
   );
 

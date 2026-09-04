@@ -2,7 +2,9 @@
 
 Omarchy 4 and CachyOS x86_64 on Hyprland/Wayland (PipeWire with `pipewire-pulse`) are **Supported**. Everything else in this guide is an **experimental beta**: the same Core Beta payload may run, but we have not proven it on that hardware.
 
-This is not Linux 1.0 and not Windows/macOS parity. Transcription stays CPU `faster-whisper`. Speaker identification and summaries stay visible and greyed `unsupported`. Do not start Phases 6–9 from friend feedback.
+This is not Linux 1.0 and not Windows/macOS parity. Transcription uses CPU `faster-whisper` by default. Optional managed CUDA 12 acceleration can be installed from Settings when an NVIDIA GPU is visible (`/proc/driver/nvidia` or `nvidia-smi`); it is hardware-evidenced on CachyOS x86_64 + RTX 4070 and best-effort elsewhere. Uninstall stays available whenever a managed runtime tree exists, including after a GPU disappears, and returns transcription to CPU.
+
+Linux Speakrs and Qwen summaries are CUDA-only, explicit setup paths: no CPU, Vulkan, SYCL, ROCm, Pyannote, or cloud fallback is offered. They remain disabled unless the managed CUDA runtime is admitted. Task 6 packaged summary evidence is complete on the CachyOS RTX 4070 host. Linux Speakrs Task 5 is **accepted** (2026-09-04), including the Windows x64 never-installed check. The authoritative evidence and exact scope are in the [v2.9 compatibility matrix](../development/V2_9_DEPENDENCY_COMPATIBILITY.md).
 
 Friend hardware evidence uses [tests/manual/linux-experimental-beta-checklist.md](../../tests/manual/linux-experimental-beta-checklist.md). Automated packaging tests do not count as distro validation.
 
@@ -42,7 +44,7 @@ Capture is Pulse/PipeWire, not compositor-specific. Desktop differences are secr
 
 ## Install
 
-Release assets are `AvaNevis-Setup-<version>.AppImage`, `AvaNevis-Setup-<version>.pkg.tar.zst`, and `AvaNevis-Setup-<version>.deb`. All three carry the same bundled Python 3.11, ffmpeg, backend, and CPU Whisper payload. None include `speakrs-cli`, llama.cpp, or CUDA add-on runtimes.
+Release assets are `AvaNevis-Setup-<version>.AppImage`, `AvaNevis-Setup-<version>.pkg.tar.zst`, and `AvaNevis-Setup-<version>.deb`. The v2.9 branch packages bundled Python 3.11, ffmpeg, backend, and staged `speakrs-cli`; Whisper models, Speakrs model packs, llama.cpp/Qwen artifacts, and CUDA runtimes are explicit setup-time downloads. No ambient system CUDA libraries are trusted.
 
 ### AppImage
 
@@ -116,7 +118,7 @@ SteamOS and other immutable images: use the AppImage from home storage. Do not d
 - COSMIC tray/keyring bugs upstream.
 - SteamOS Gaming Mode, Deck audio routing, and pacman on a read-only root.
 - `safeStorage` `basic_text` when no keyring is running (especially Hyprland/Sway/Niri without one configured).
-- Greyed speaker identification and summaries — by design on Linux Core Beta.
+- CUDA-only Speakrs or summaries remain unavailable until managed-runtime, GPU, architecture, and integrity checks pass.
 
 ## Evidence bundle
 

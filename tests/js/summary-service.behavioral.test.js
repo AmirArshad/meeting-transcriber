@@ -169,9 +169,19 @@ test('generate-summary stays fail-closed before spawning preflight when the feat
 
   await assert.rejects(
     handlers['generate-summary']({ sender: {} }, { meetingId: 'meeting_1' }),
-    /not available on Linux in this version/,
+    /managed CUDA 12 runtime and an NVIDIA GPU/,
   );
   assert.deepEqual(getSpawnedArgs(), []);
+});
+
+test('Linux summary generation fails closed when the live CUDA resolver is unavailable', async () => {
+  const harness = createHarness({ platform: 'linux' });
+  fs.mkdirSync(path.join(path.dirname(harness.recordingsDir), 'ai-addons', 'cuda', 'python'), { recursive: true });
+
+  await assert.rejects(
+    harness.handlers['generate-summary']({ sender: {} }, { meetingId: 'meeting_1' }),
+    /live CUDA runtime resolver/,
+  );
 });
 
 test('failed summary regeneration preserves the previously committed sidecars', async () => {

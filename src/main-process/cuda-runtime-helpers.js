@@ -9,7 +9,9 @@ const CUDA_RUNTIME_PROFILES = Object.freeze({
     supported: true,
     pipPackages: Object.freeze(['nvidia-cublas-cu12', 'nvidia-cudnn-cu12']),
     requiredDlls: Object.freeze(['cublas64_12.dll', 'cublasLt64_12.dll', 'cudnn64_9.dll']),
+    requiredSharedLibraries: Object.freeze(['libcublas.so.12', 'libcublasLt.so.12', 'libcudnn.so.9']),
     expectedDllPrefixes: Object.freeze(['cublas64_12', 'cublaslt64_12', 'cudnn64_9']),
+    expectedSharedLibraryPrefixes: Object.freeze(['libcublas.so.12', 'libcublaslt.so.12', 'libcudnn.so.9']),
   }),
   cuda13: Object.freeze({
     id: 'cuda13',
@@ -17,7 +19,9 @@ const CUDA_RUNTIME_PROFILES = Object.freeze({
     supported: false,
     pipPackages: Object.freeze(['nvidia-cublas', 'nvidia-cudnn-cu13']),
     requiredDlls: Object.freeze(['cublas64_13.dll', 'cublasLt64_13.dll', 'cudnn64_9.dll']),
+    requiredSharedLibraries: Object.freeze(['libcublas.so.13', 'libcublasLt.so.13', 'libcudnn.so.9']),
     expectedDllPrefixes: Object.freeze(['cublas64_13', 'cublaslt64_13']),
+    expectedSharedLibraryPrefixes: Object.freeze(['libcublas.so.13', 'libcublaslt.so.13']),
   }),
 });
 const SUPPORTED_TRANSCRIPTION_CUDA_PROFILE_IDS = Object.freeze(['cuda12']);
@@ -124,6 +128,45 @@ function getPyTorchCudaBinCandidates(sitePackagesDirs = []) {
   return candidates;
 }
 
+function getManagedLinuxCudaRuntimeTarget(userDataPath = '') {
+  const {
+    isLinuxRuntimeAbsolutePath,
+    joinLinuxRuntimePath,
+  } = require('./linux-cuda-runtime-helpers');
+  if (!userDataPath || !isLinuxRuntimeAbsolutePath(userDataPath)) {
+    throw new Error('CUDA runtime userData path must be an absolute path.');
+  }
+  return joinLinuxRuntimePath(userDataPath, 'ai-addons', 'cuda', 'python');
+}
+
+function getManagedLinuxCudaLibraryDirs(managedRoot = '') {
+  const {
+    isLinuxRuntimeAbsolutePath,
+    joinLinuxRuntimePath,
+  } = require('./linux-cuda-runtime-helpers');
+  if (!managedRoot || !isLinuxRuntimeAbsolutePath(managedRoot)) {
+    throw new Error('Managed CUDA runtime root must be an absolute path.');
+  }
+  return [
+    joinLinuxRuntimePath(managedRoot, 'nvidia', 'cublas', 'lib'),
+    joinLinuxRuntimePath(managedRoot, 'nvidia', 'cudnn', 'lib'),
+  ];
+}
+
+function buildManagedLinuxCudaLibraryPath(options = {}) {
+  const {
+    buildContainedLinuxCudaLibraryPath,
+  } = require('./linux-cuda-runtime-helpers');
+  // Inherited LD_LIBRARY_PATH is intentionally ignored. Hostile or stale
+  // loader paths must not ride along with the managed runtime.
+  return buildContainedLinuxCudaLibraryPath({
+    managedRoot: options.managedRoot,
+    libraryDirs: options.libraryDirs,
+    driverLibraryDirs: options.driverLibraryDirs || [],
+    fsModule: options.fsModule,
+  });
+}
+
 function getCudaRuntimeProfile(profileId = DEFAULT_TRANSCRIPTION_CUDA_PROFILE_ID) {
   return CUDA_RUNTIME_PROFILES[profileId] || null;
 }
@@ -139,6 +182,16 @@ function getSupportedTranscriptionCudaProfileIds() {
 function getRequiredCudaRuntimeDlls(profileId = DEFAULT_TRANSCRIPTION_CUDA_PROFILE_ID) {
   const profile = getCudaRuntimeProfile(profileId);
   return profile ? [...profile.requiredDlls] : [];
+}
+
+function getRequiredCudaRuntimeLibraries(profileId = DEFAULT_TRANSCRIPTION_CUDA_PROFILE_ID, { platform = process.platform } = {}) {
+  const profile = getCudaRuntimeProfile(profileId);
+  if (!profile) return [];
+  if (platform === 'linux') {
+    const { getLinuxCudaProbeLibraryFileNames } = require('./linux-cuda-runtime-catalog');
+    return getLinuxCudaProbeLibraryFileNames();
+  }
+  return [...profile.requiredDlls];
 }
 
 function getTranscriptionCudaPackages(profileId = DEFAULT_TRANSCRIPTION_CUDA_PROFILE_ID) {
@@ -166,6 +219,12 @@ function buildTranscriptionCudaInstallArgs(options = {}) {
   }
   if (noCache) {
     args.push('--no-cache-dir');
+  }
+  if (options && options.target) {
+    if (!path.isAbsolute(options.target)) {
+      throw new Error('CUDA runtime install target must be an absolute path.');
+    }
+    args.push('--target', path.resolve(options.target));
   }
   args.push(
     ...packages,
@@ -241,7 +300,8 @@ function cudaStatusNeedsGpuRuntimeEnsure(status = {}) {
   }
   return statusCode === 'missingLibraries'
     || statusCode === 'unsupportedRuntimeMajor'
-    || statusCode === 'runtimeUnavailable';
+    || statusCode === 'runtimeUnavailable'
+    || statusCode === 'runtimeIntegrityFailed';
 }
 
 function selectGpuInstallModeForCudaStatus(status = {}, { forceRepair = false } = {}) {
@@ -249,7 +309,7 @@ function selectGpuInstallModeForCudaStatus(status = {}, { forceRepair = false } 
     return 'repair';
   }
   const statusCode = String(status.statusCode || '').trim();
-  if (statusCode === 'unsupportedRuntimeMajor' || statusCode === 'missingLibraries') {
+  if (statusCode === 'unsupportedRuntimeMajor' || statusCode === 'missingLibraries' || statusCode === 'runtimeIntegrityFailed') {
     return 'repair';
   }
   return 'install';
@@ -296,6 +356,8 @@ function getGpuRuntimeEnsurePlan(status = {}, { forceRepair = false, skipInstall
 
 function parseCheckCudaStatus(output = '') {
   const raw = String(output || '').trim();
+  // Windows/macOS keep the historical empty/invalid contract: classify as
+  // deviceUnavailable. Linux uses parseLinuxCheckCudaStatus (strict JSON).
   if (!raw) {
     return {
       installed: false,
@@ -315,12 +377,15 @@ function parseCheckCudaStatus(output = '') {
 
   // Prefer a single JSON object (current probe format). Fall back to legacy
   // key:value lines for older probe builds / hand-crafted test fixtures.
+  // Invalid JSON is not probeError on this Windows parser — it falls through.
   let values = null;
+  let backendStatusCode = '';
   const jsonCandidate = raw.split(/\r?\n/).map((line) => line.trim()).find((line) => line.startsWith('{'));
   if (jsonCandidate) {
     try {
       const parsed = JSON.parse(jsonCandidate);
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        backendStatusCode = String(parsed.statusCode || '').trim();
         values = {
           deviceAvailable: parsed.deviceAvailable === true || parsed.deviceAvailable === 'True' || parsed.deviceAvailable === 'true'
             ? 'True'
@@ -342,6 +407,7 @@ function parseCheckCudaStatus(output = '') {
             ? parsed.supportedProfiles.join(',')
             : String(parsed.supportedProfiles || ''),
           recommendedInstallProfile: parsed.recommendedInstallProfile || DEFAULT_TRANSCRIPTION_CUDA_PROFILE_ID,
+          deviceProbe: parsed.deviceProbe || null,
         };
       }
     } catch (_error) {
@@ -364,6 +430,7 @@ function parseCheckCudaStatus(output = '') {
       const value = line.slice(separator + 1).trim();
       values[key] = value;
     }
+    backendStatusCode = String(values.statusCode || '').trim();
   }
 
   const deviceAvailable = values.deviceAvailable === 'True' || values.deviceAvailable === 'true';
@@ -385,12 +452,16 @@ function parseCheckCudaStatus(output = '') {
     .map((item) => item.trim())
     .filter(Boolean);
   const recommendedInstallProfile = values.recommendedInstallProfile || DEFAULT_TRANSCRIPTION_CUDA_PROFILE_ID;
-  const statusCode = classifyCudaProbeStatus({
+  const classifiedStatusCode = classifyCudaProbeStatus({
     deviceAvailable,
     runtimeLoadable,
     missingLibraries,
     unsupportedDetectedProfiles,
   });
+  const { isKnownCudaProbeStatusCode } = require('./linux-cuda-runtime-helpers');
+  const statusCode = isKnownCudaProbeStatusCode(backendStatusCode)
+    ? backendStatusCode
+    : classifiedStatusCode;
   const installedProfile = resolveCudaInstalledProfile({
     matchedProfile,
     installedProfile: rawInstalledProfile,
@@ -398,7 +469,7 @@ function parseCheckCudaStatus(output = '') {
   });
 
   return {
-    installed: Boolean(deviceAvailable && runtimeLoadable && missingLibraries.length === 0),
+    installed: Boolean(deviceAvailable && runtimeLoadable && missingLibraries.length === 0 && statusCode === 'ready'),
     deviceAvailable,
     runtimeLoadable,
     missingLibraries,
@@ -410,6 +481,7 @@ function parseCheckCudaStatus(output = '') {
     supportedProfiles: supportedProfiles.length ? supportedProfiles : getSupportedTranscriptionCudaProfileIds(),
     unsupportedDetectedProfiles,
     recommendedInstallProfile,
+    deviceProbe: values.deviceProbe || null,
   };
 }
 
@@ -427,6 +499,7 @@ module.exports = {
   getCudaRuntimeProfiles,
   getSupportedTranscriptionCudaProfileIds,
   getRequiredCudaRuntimeDlls,
+  getRequiredCudaRuntimeLibraries,
   getTranscriptionCudaPackages,
   buildTranscriptionCudaInstallArgs,
   buildTranscriptionCudaUninstallArgs,
@@ -435,6 +508,9 @@ module.exports = {
   getUnsupportedPlatformCudaProbeError,
   getPythonSitePackagesCandidates,
   getPyTorchCudaBinCandidates,
+  getManagedLinuxCudaRuntimeTarget,
+  getManagedLinuxCudaLibraryDirs,
+  buildManagedLinuxCudaLibraryPath,
   classifyCudaProbeStatus,
   resolveCudaInstalledProfile,
   cudaStatusNeedsGpuRuntimeEnsure,

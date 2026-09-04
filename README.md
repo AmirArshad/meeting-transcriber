@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Windows](https://img.shields.io/badge/Platform-Windows%2010%2F11-0078D6.svg)](https://www.microsoft.com/windows)
-[![macOS](https://img.shields.io/badge/Platform-macOS%2013%2B-000000.svg)](https://www.apple.com/macos)
+[![macOS](https://img.shields.io/badge/Platform-macOS%2014%2B-000000.svg)](https://www.apple.com/macos)
 [![Linux](https://img.shields.io/badge/Platform-Linux%20x86__64%20Core%20Beta-FCC624.svg)](https://omarchy.org/)
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
 [![Electron](https://img.shields.io/badge/Electron-44-47848F.svg)](https://www.electronjs.org/)
@@ -20,15 +20,15 @@ Online meetings are a tax on memory. The good options for getting transcripts ba
 - **Dual capture** — microphone + desktop audio recorded in parallel, then mixed after the recording stops to keep both streams intact.
 - **Durable long recordings** — capture spills to on-disk track spools (not whole-session RAM). Stop uses bounded multi-pass finalization; interrupted sessions can be recovered after relaunch.
 - **Recording awareness** — always-visible in-app recording pill + elapsed clock; macOS menu-bar `REC` / Dock badge; Windows taskbar overlay; Linux StatusNotifierItem tray (`setContextMenu` only) with a taskbar-visible fallback when tray creation fails; hourly best-effort reminders; single-instance relaunch focuses the existing window.
-- **Local transcription** — `faster-whisper` on Windows (CUDA when available) and on Linux Core Beta (**CPU** only), `lightning-whisper-mlx` on Apple Silicon (Metal). CPU fallback path exists for non-GPU Windows machines. Do not advertise Linux CUDA.
+- **Local transcription** — `faster-whisper` on Windows and Linux, `lightning-whisper-mlx` on Apple Silicon. Linux defaults to CPU; managed CUDA 12 is an explicit, verified x86_64 NVIDIA setup path. A broken installed Linux runtime fails closed until repaired or removed.
 - **Premium dark UI** — vertical icon rail, top-bar app pane, dense waveform visualizer with peak-hold and DPR-aware rendering, and a stutter-free custom audio scrubber driven by `requestAnimationFrame`.
 - **Markdown transcripts** — saved transcripts are real Markdown (timestamps, headings, lists), and the in-app viewer renders them inline with chip-style timestamp pills.
 - **Editable meetings** — rename meetings inline (history *and* immediately after recording) without renaming any files; metadata stays anchored to the meeting ID.
 - **Save As anywhere** — export any transcript through Electron's native save dialog as `.md` or `.txt`.
 - **Search and bulk-manage history** — filter the meeting list, multi-select, bulk delete, replay with synchronized audio.
 - **Recovery-friendly storage** — meetings are persisted with an atomic write + cross-process file lock, with corrupt-metadata backups (`meetings.corrupt.*.json`) and filesystem rescan/import on launch or when you refresh history (not on every list reload).
-- **Optional local AI add-ons** — speaker labels and meeting summaries can be set up after install on **Windows and macOS**. Speaker identification is Speakrs (token-free) or Pyannote (user's own Hugging Face token) — only one engine is installed at a time. Summaries use pinned local `llama.cpp`/GGUF artifacts and run only when the user clicks Generate Summary. On **Linux Core Beta** both cards stay visible and greyed `unsupported` (no CPU fallback; no Linux CUDA add-ons).
-- **One-click installer** — Windows NSIS and macOS DMG with embedded Python runtime, ffmpeg, `speakrs-cli`, and the bundled native macOS helper. Linux Core Beta ships an x86_64 AppImage (no host fuse2), a pacman package, and an experimental `.deb`, each with bundled Python/ffmpeg/backend and **no** `speakrs-cli`. No system Python required. The release workflow publishes all three Linux artifacts after the macOS DMG integrity gate closed on 2026-08-28.
+- **Optional local AI add-ons** — speaker labels and meeting summaries are explicit local setup on Windows and macOS. Linux uses CUDA-only Speakrs and CUDA-only Qwen summaries after managed-runtime admission; Linux Pyannote, CPU fallback, and cloud fallback are unavailable. Linux support evidence is limited to CachyOS x86_64 + RTX 4070; see the [Linux guide](docs/guides/LINUX_EXPERIMENTAL.md) for support boundaries.
+- **One-click installer** — Windows NSIS and macOS DMG bundle Python, ffmpeg, `speakrs-cli`, and the macOS helper. Linux x86_64 packages bundle Python/ffmpeg/backend and stage `speakrs-cli`; add-on model packs and CUDA runtimes are explicit setup-time downloads. No system Python is required.
 - **Update awareness** — checks GitHub Releases on launch and shows an in-app banner with one-click open of the release page.
 
 ## Privacy
@@ -71,7 +71,7 @@ If right-click → Open misbehaves, run `xattr -d com.apple.quarantine /Applicat
 
 The AppImage is a static-pie runtime and does **not** need host `fuse2` / `libfuse.so.2` (kernel `/dev/fuse` + `fuse3` still mount the image). Do not treat `--appimage-extract-and-run` as the shipped default.
 
-Transcription is local CPU `faster-whisper`. Speaker identification and summaries stay visible in Settings but greyed `unsupported`.
+Transcription defaults to local CPU `faster-whisper`. On x86_64 Linux with a verified managed CUDA 12 runtime and NVIDIA GPU, CUDA transcription and local add-ons may be set up; otherwise their controls remain fail-closed. Linux support and acceptance boundaries are in [LINUX_EXPERIMENTAL.md](docs/guides/LINUX_EXPERIMENTAL.md) and the [v2.9 compatibility matrix](docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md).
 
 > **Upgrading from "Meeting Transcriber"?** The new app uses a fresh user-data folder (`%APPDATA%\AvaNevis` on Windows, `~/Library/Application Support/AvaNevis` on macOS, `~/.config/avanevis` on Linux), so old recordings won't auto-appear. Move the old folder's contents into the new one to keep your history. The first AvaNevis update prompt for existing Meeting Transcriber installs opens the GitHub release page in your browser instead of auto-downloading; future AvaNevis-to-AvaNevis updates restore the direct-download path.
 
@@ -110,7 +110,7 @@ python3.11 -m venv .venv
 ./.venv/bin/python -m pip install -r requirements-linux.txt -r requirements-dev.txt
 ```
 
-Linux capture uses Pulse/PipeWire (`docs/initiatives/LINUX_SUPPORT.md`). The `.venv` is for device enumeration, tests, and `npm start`. Packaged AppImage/pacman/deb builds use bundled Python 3.11 and ffmpeg (`npm run build:linux`). Speaker identification and summaries stay greyed `unsupported` on Linux. Do not advertise Linux CUDA.
+Linux capture uses Pulse/PipeWire (`docs/initiatives/LINUX_SUPPORT.md`). The `.venv` is for device enumeration, tests, and `npm start`. Packaged AppImage/pacman/deb builds use bundled Python 3.11 and ffmpeg (`npm run build:linux`). Linux AI features are CUDA-only and remain fail-closed without an admitted managed runtime; see the [compatibility matrix](docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md) before making support claims.
 
 Then start the app from the repo root:
 
@@ -132,7 +132,7 @@ AI Add-ons are optional and live under Settings. They are not required for recor
 - **Expected size:** the default summary model is about 5.7 GB plus platform runtime archives. CUDA setup remains separate and can add several GB.
 - **Outputs:** derived files are saved beside recordings as `*.speakers.json`, `*.summary.json`, and `*.summary.md`; raw transcripts remain the source of truth.
 
-See [docs/development/LOCAL_AI_MODEL_CATALOG.md](docs/development/LOCAL_AI_MODEL_CATALOG.md) for catalog maintenance and [tests/manual/local-ai-addons-checklist.md](tests/manual/local-ai-addons-checklist.md) for manual validation. Linux Core Beta keeps both add-on cards visible and greyed; setup and Generate Summary cannot start.
+See [docs/development/LOCAL_AI_MODEL_CATALOG.md](docs/development/LOCAL_AI_MODEL_CATALOG.md) for catalog maintenance, [tests/manual/local-ai-addons-checklist.md](tests/manual/local-ai-addons-checklist.md) for manual validation, and the [v2.9 compatibility matrix](docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md) for Linux evidence and remaining gates. Linux Pyannote is unavailable; Linux Speakrs and summaries require admitted CUDA and have no CPU or cloud fallback.
 
 ### Build installers
 
@@ -204,7 +204,7 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
 
 ## Tech stack
 
-- **Frontend:** Electron 42, plain HTML / CSS / JavaScript (no UI framework)
+- **Frontend:** Electron 44, plain HTML / CSS / JavaScript (no UI framework)
 - **Backend:** Python 3.11, bundled with the installer
 - **Transcription:** `faster-whisper` (Windows, CUDA optional), `lightning-whisper-mlx` (macOS, Metal)
 - **Local AI add-ons:** Speakrs (token-free native CLI) or `pyannote.audio` for Windows CUDA and macOS Apple Silicon speaker identification; pinned `llama.cpp` + GGUF for user-triggered summaries
@@ -227,6 +227,7 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
   - [Backend development notes](docs/development/BACKEND.md)
   - [GPU setup (CUDA)](docs/development/SETUP_GPU.md)
   - [Local AI model catalog](docs/development/LOCAL_AI_MODEL_CATALOG.md)
+  - [v2.9 dependency compatibility and acceptance evidence](docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md)
   - [Speakrs soak / benchmarks](docs/development/SPEAKRS_BENCHMARKS.md)
   - [v2.8.0 release notes](docs/releases/v2.8.0.md)
   - [Installer implementation](docs/development/INSTALLER_IMPLEMENTATION.md)

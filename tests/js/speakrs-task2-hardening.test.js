@@ -8,10 +8,13 @@ const { EventEmitter } = require('node:events');
 
 const {
   AI_MODEL_CATALOG,
+  LINUX_PYANNOTE_UNAVAILABLE_REASON,
   PYANNOTE_DIARIZATION_MODEL_ID,
   SPEAKRS_DIARIZATION_MODEL_ID,
   getSpeakrsSetupArtifactsForPlatform,
 } = require('../../src/ai-addon-state');
+const { flattenSelectedArchiveFiles } = require('../../src/ai-addon/archive-install');
+const { linuxLibraryPathContainsDir } = require('./comparable-fs-path');
 const {
   checkSpeakrsRuntimeCache,
   checkSpeakrsModelCache,
@@ -23,6 +26,7 @@ const {
   resolveSpeakrsCliPathForSpawn,
   buildSpeakrsSpawnEnv,
   canStartGuidedDiarization,
+  assertLinuxSpeakrsOnlyEngine,
   resolveSpawnDiarizationEngine,
   getPackagedSpeakrsCliPreflightError,
   SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE,
@@ -39,8 +43,10 @@ const {
 } = require('../../src/ai-addon/diarization-setup');
 const {
   SPEAKRS_CUDA_RUNTIME_DLL_NAMES,
+  SPEAKRS_CUDA_RUNTIME_SO_NAMES,
   SPEAKRS_MODEL_PACK_REVISION,
   SPEAKRS_ORT_DLL_NAMES,
+  SPEAKRS_ORT_SO_NAMES,
 } = require('../../src/ai-addon/speakrs-pack-spec');
 const { stageLegalBundle } = require('../../build/prepare-resources');
 
@@ -49,6 +55,15 @@ const ARCHIVE_BYTES = Buffer.from('model-pack-archive');
 const ARCHIVE_SHA256 = crypto.createHash('sha256').update(ARCHIVE_BYTES).digest('hex');
 const MODEL_SHA256 = crypto.createHash('sha256').update(MODEL_BYTES).digest('hex');
 const RUNTIME_DLL_NAMES = [...SPEAKRS_ORT_DLL_NAMES, ...SPEAKRS_CUDA_RUNTIME_DLL_NAMES];
+const RUNTIME_SO_NAMES = [...SPEAKRS_ORT_SO_NAMES, ...SPEAKRS_CUDA_RUNTIME_SO_NAMES];
+const READY_LINUX_CUDA = Object.freeze({
+  statusCode: 'ready',
+  installed: true,
+  deviceAvailable: true,
+  runtimeLoadable: true,
+  missingLibraries: [],
+  matchedProfile: 'cuda12',
+});
 
 function createSafeStorage() {
   return {
@@ -119,6 +134,65 @@ function createPinnedTestCatalog(modelPath = 'model.bin') {
   };
 }
 
+function createPinnedLinuxTestCatalog(modelPath = 'model.bin') {
+  return {
+    diarization: {
+      defaultModelId: SPEAKRS_DIARIZATION_MODEL_ID,
+      models: [
+        {
+          id: SPEAKRS_DIARIZATION_MODEL_ID,
+          engine: 'speakrs',
+          tokenRequired: false,
+          runtime: {
+            type: 'native-cli',
+            executableName: 'speakrs-cli',
+            modeByPlatform: { 'linux-x64': 'cuda' },
+          },
+          packRevision: SPEAKRS_MODEL_PACK_REVISION,
+          packArtifacts: {
+            'linux-x64': [
+              {
+                id: 'speakrs-model-pack-linux-test',
+                kind: 'model-pack',
+                fileName: 'speakrs-model-pack-linux-test.tar.gz',
+                archiveFormat: 'tar.gz',
+                sha256: ARCHIVE_SHA256,
+                sizeBytes: ARCHIVE_BYTES.length,
+                downloadUrl: 'https://github.com/AmirArshad/meeting-transcriber/releases/download/speakrs-test/speakrs-model-pack-linux-test.tar.gz',
+                requiredFiles: [{
+                  path: modelPath,
+                  fileName: path.posix.basename(modelPath),
+                  sha256: MODEL_SHA256,
+                  sizeBytes: MODEL_BYTES.length,
+                }],
+              },
+              {
+                id: 'speakrs-runtime-linux-test',
+                kind: 'ort-archive',
+                fileName: 'speakrs-runtime-linux-test.tgz',
+                archiveFormat: 'tar.gz',
+                sha256: ARCHIVE_SHA256,
+                sizeBytes: ARCHIVE_BYTES.length,
+                downloadUrl: 'https://github.com/AmirArshad/meeting-transcriber/releases/download/speakrs-test/speakrs-runtime-linux-test.tgz',
+                keepFileNames: RUNTIME_SO_NAMES,
+                extractedFiles: Object.fromEntries(RUNTIME_SO_NAMES.map((name) => {
+                  const contents = Buffer.from(`MZ-${name}`);
+                  return [name, {
+                    sha256: crypto.createHash('sha256').update(contents).digest('hex'),
+                    sizeBytes: contents.length,
+                  }];
+                })),
+              },
+            ],
+          },
+        },
+        AI_MODEL_CATALOG.diarization.models.find((model) => model.id === PYANNOTE_DIARIZATION_MODEL_ID),
+      ],
+    },
+    summary: AI_MODEL_CATALOG.summary,
+  };
+}
+
 function createTestExtractor(modelPath = 'model.bin') {
   return async (_archivePath, destinationDir, _archiveFormat, options = {}) => {
     fs.mkdirSync(destinationDir, { recursive: true });
@@ -155,6 +229,32 @@ async function installValidTestSetup(userDataDir, catalog, emitProgress) {
     status.features.diarization.status,
     'ready',
     `diarization status was '${status.features.diarization.status}'`
+    + ` (error: ${status.features.diarization.error || 'none reported'})`,
+  );
+}
+
+async function installValidLinuxTestSetup(userDataDir, catalog, emitProgress) {
+  const cliPath = path.join(userDataDir, 'dev-bin', 'speakrs-cli');
+  fs.mkdirSync(path.dirname(cliPath), { recursive: true });
+  fs.writeFileSync(cliPath, 'cli');
+  const modelPath = getSpeakrsSetupArtifactsForPlatform('linux', 'x64', catalog).modelFiles[0].path;
+  const status = await setupDiarizationAddon({
+    userDataDir,
+    platform: 'linux',
+    arch: 'x64',
+    engine: 'speakrs',
+    safeStorage: createSafeStorage(),
+    catalog,
+    env: { SPEAKRS_CLI_PATH: cliPath },
+    emitProgress,
+    cudaStatus: READY_LINUX_CUDA,
+    downloader: async ({ destinationPath }) => fs.writeFileSync(destinationPath, ARCHIVE_BYTES),
+    extractor: createTestExtractor(modelPath),
+  });
+  assert.equal(
+    status.features.diarization.status,
+    'ready',
+    `Linux diarization status was '${status.features.diarization.status}'`
     + ` (error: ${status.features.diarization.error || 'none reported'})`,
   );
 }
@@ -434,6 +534,11 @@ test('buildPythonEnv unsets explicit undefined keys after merging process.env', 
 test('QA AVANEVIS_DIARIZATION_ENGINE overrides spawn dispatch only', () => {
   assert.equal(resolveSpawnDiarizationEngine('pyannote', { AVANEVIS_DIARIZATION_ENGINE: 'speakrs' }), 'speakrs');
   assert.equal(resolveSpawnDiarizationEngine('speakrs', { AVANEVIS_DIARIZATION_ENGINE: 'pyannote' }), 'pyannote');
+  assert.throws(
+    () => assertLinuxSpeakrsOnlyEngine('pyannote', 'linux'),
+    (error) => error && error.code === 'LINUX_PYANNOTE_UNAVAILABLE',
+  );
+  assert.equal(assertLinuxSpeakrsOnlyEngine('speakrs', 'linux'), 'speakrs');
   assert.equal(resolveSpawnDiarizationEngine('speakrs', {}), 'speakrs');
   assert.equal(canStartGuidedDiarization({
     status: 'ready',
@@ -565,6 +670,40 @@ test('Windows production runtime rejects replaced DLLs even with a forged instal
   }
 });
 
+test('Windows Speakrs runtime rejects an unpinned DLL in its loader directory', async () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-unpinned-windows-loader-'));
+  const catalog = createPinnedTestCatalog();
+  try {
+    await installValidTestSetup(userDataDir, catalog);
+    const runtimeDir = getSpeakrsOrtRuntimeDir(userDataDir);
+    fs.writeFileSync(path.join(runtimeDir, 'libz.dll'), 'unlisted loader');
+
+    const cache = await checkSpeakrsRuntimeCache({
+      userDataDir,
+      platform: 'win32',
+      arch: 'x64',
+      catalog,
+      verifyChecksum: true,
+    });
+    assert.equal(cache.valid, false);
+    assert.ok(cache.invalidFiles.includes('libz.dll'));
+    for (const computeAdmission of [false, true]) {
+      const status = await checkAiAddonSetupStatus({
+        userDataDir,
+        platform: 'win32',
+        arch: 'x64',
+        catalog,
+        env: { SPEAKRS_CLI_PATH: path.join(userDataDir, 'dev-bin', 'speakrs-cli.exe') },
+        computeAdmission,
+      });
+      assert.equal(status.features.diarization.setupComplete, false);
+      assert.match(status.features.diarization.error, /integrity validation/i);
+    }
+  } finally {
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
 test('forged install.json hashes cannot pass Speakrs compute admission', async () => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-forged-runtime-'));
   const catalog = createPinnedTestCatalog();
@@ -604,6 +743,53 @@ test('forged install.json hashes cannot pass Speakrs compute admission', async (
     assert.equal(admission.features.diarization.setupComplete, false);
     assert.ok(admission.features.diarization.runtimeCache.invalidFiles.includes(RUNTIME_DLL_NAMES[0]));
     assert.match(admission.features.diarization.error, /integrity validation/i);
+  } finally {
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test('forged model-pack metadata cannot pass Speakrs compute admission', async () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-forged-model-pack-'));
+  const catalog = createPinnedTestCatalog();
+  const cliPath = path.join(userDataDir, 'dev-bin', 'speakrs-cli.exe');
+  try {
+    await installValidTestSetup(userDataDir, catalog);
+    const modelPath = getSpeakrsSetupArtifactsForPlatform('win32', 'x64', catalog).modelFiles[0].path;
+    const target = path.join(getSpeakrsModelRevisionDir(userDataDir, SPEAKRS_MODEL_PACK_REVISION), ...modelPath.split('/'));
+    const original = fs.readFileSync(target);
+    const forged = Buffer.alloc(original.length, 0x41);
+    fs.writeFileSync(target, forged);
+    fs.writeFileSync(path.join(path.dirname(target), 'install.json'), `${JSON.stringify({
+      files: {
+        [modelPath]: {
+          sizeBytes: forged.length,
+          sha256: crypto.createHash('sha256').update(forged).digest('hex'),
+        },
+      },
+    }, null, 2)}\n`);
+
+    const passive = await checkAiAddonSetupStatus({
+      userDataDir,
+      platform: 'win32',
+      arch: 'x64',
+      catalog,
+      env: { SPEAKRS_CLI_PATH: cliPath },
+    });
+    assert.equal(passive.features.diarization.status, 'ready');
+
+    const admission = await checkAiAddonSetupStatus({
+      userDataDir,
+      platform: 'win32',
+      arch: 'x64',
+      catalog,
+      env: { SPEAKRS_CLI_PATH: cliPath },
+      computeAdmission: true,
+    });
+    assert.equal(admission.features.diarization.status, 'error');
+    assert.equal(admission.features.diarization.setupComplete, false);
+    assert.equal(admission.features.diarization.packCache.checksumStatus, 'mismatch');
+    assert.match(admission.features.diarization.packCache.reason, /pinned checksum/);
+    assert.match(admission.features.diarization.error, /checksum does not match the pinned checksum/i);
   } finally {
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }
@@ -1289,4 +1475,294 @@ test('packaged missing Speakrs CLI preflight is a reinstall error, not a Python 
     resourcesPath: path.join(os.tmpdir(), 'avanevis-empty-resources'),
     fsModule: { existsSync: () => false },
   }), null);
+});
+
+test('Linux Speakrs spawn env is CUDA-only and ignores ambient LD_LIBRARY_PATH', () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-linux-speakrs-env-'));
+  try {
+    const runtimeDir = getSpeakrsOrtRuntimeDir(userDataDir);
+    const cublasDir = path.join(userDataDir, 'ai-addons', 'cuda', 'python', 'nvidia', 'cublas', 'lib');
+    const cudnnDir = path.join(userDataDir, 'ai-addons', 'cuda', 'python', 'nvidia', 'cudnn', 'lib');
+    fs.mkdirSync(runtimeDir, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(cublasDir, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(cudnnDir, { recursive: true, mode: 0o700 });
+    fs.chmodSync(runtimeDir, 0o700);
+    fs.chmodSync(cublasDir, 0o700);
+    fs.chmodSync(cudnnDir, 0o700);
+    fs.writeFileSync(path.join(runtimeDir, 'libonnxruntime.so.1.27.1'), 'so');
+
+    const env = buildSpeakrsSpawnEnv({
+      userDataDir,
+      extra: {
+        LD_LIBRARY_PATH: '/tmp/hostile-libs',
+        SPEAKRS_MODE: 'cpu',
+        HF_TOKEN: 'should-clear',
+        HUGGINGFACE_HUB_TOKEN: 'should-clear',
+      },
+      env: {
+        PATH: '/usr/bin',
+        HOME: '/home/test',
+        SPEAKRS_MODE: 'cpu',
+        LD_LIBRARY_PATH: '/tmp/ambient',
+        HF_HUB_CACHE: '/tmp/hf',
+      },
+      platform: 'linux',
+      arch: 'x64',
+    });
+
+    assert.equal(env.SPEAKRS_MODE, 'cuda');
+    assert.equal(env.HF_TOKEN, undefined);
+    assert.equal(env.HUGGINGFACE_HUB_TOKEN, undefined);
+    assert.equal(env.HF_HUB_CACHE, undefined);
+    assert.doesNotMatch(String(env.LD_LIBRARY_PATH || ''), /hostile-libs|ambient/);
+    assert.ok(String(env.LD_LIBRARY_PATH || '').startsWith(path.resolve(runtimeDir)));
+    assert.ok(linuxLibraryPathContainsDir(env.LD_LIBRARY_PATH, cublasDir));
+    assert.ok(linuxLibraryPathContainsDir(env.LD_LIBRARY_PATH, cudnnDir));
+    assert.equal(env.ORT_DYLIB_PATH, path.join(runtimeDir, 'libonnxruntime.so.1.27.1'));
+  } finally {
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test('Linux Speakrs setup stays unsupported without CUDA preflight', async () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-linux-speakrs-nocuda-'));
+  const catalog = createPinnedLinuxTestCatalog();
+  try {
+    const cliPath = path.join(userDataDir, 'dev-bin', 'speakrs-cli');
+    fs.mkdirSync(path.dirname(cliPath), { recursive: true });
+    fs.writeFileSync(cliPath, 'cli');
+    const status = await setupDiarizationAddon({
+      userDataDir,
+      platform: 'linux',
+      arch: 'x64',
+      engine: 'speakrs',
+      safeStorage: createSafeStorage(),
+      catalog,
+      env: { SPEAKRS_CLI_PATH: cliPath },
+      downloader: async () => {
+        throw new Error('Linux Speakrs must not download without CUDA preflight');
+      },
+    });
+    assert.equal(status.features.diarization.status, 'unsupported');
+    assert.equal(status.features.diarization.availability.supported, false);
+    assert.match(status.features.diarization.availability.reason, /CUDA 12/);
+    assert.equal(status.features.diarization.setupComplete, false);
+  } finally {
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test('Linux Pyannote setup stays unavailable even when Speakrs CUDA is ready', async () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-linux-pyannote-reject-'));
+  try {
+    const status = await setupDiarizationAddon({
+      userDataDir,
+      platform: 'linux',
+      arch: 'x64',
+      engine: 'pyannote',
+      safeStorage: createSafeStorage(),
+      cudaStatus: READY_LINUX_CUDA,
+      downloader: async () => {
+        throw new Error('Linux Pyannote must not download');
+      },
+    });
+    assert.equal(status.features.diarization.status, 'unsupported');
+    assert.equal(status.features.diarization.error, LINUX_PYANNOTE_UNAVAILABLE_REASON);
+  } finally {
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test('Linux Speakrs compute admission rejects forged runtime hashes in user-writable install.json', async () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-linux-forged-install-'));
+  const catalog = createPinnedLinuxTestCatalog();
+  try {
+    await installValidLinuxTestSetup(userDataDir, catalog);
+    const runtimeDir = getSpeakrsOrtRuntimeDir(userDataDir);
+    const target = path.join(runtimeDir, RUNTIME_SO_NAMES[0]);
+    const original = fs.readFileSync(target);
+    const forged = Buffer.alloc(original.length, 0x41);
+    fs.writeFileSync(target, forged);
+    const manifestPath = path.join(runtimeDir, 'install.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    manifest.files[RUNTIME_SO_NAMES[0]] = {
+      sizeBytes: forged.length,
+      sha256: crypto.createHash('sha256').update(forged).digest('hex'),
+    };
+    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const passive = await checkAiAddonSetupStatus({
+      userDataDir,
+      platform: 'linux',
+      arch: 'x64',
+      catalog,
+      cudaStatus: READY_LINUX_CUDA,
+      env: { SPEAKRS_CLI_PATH: path.join(userDataDir, 'dev-bin', 'speakrs-cli') },
+    });
+    assert.equal(passive.features.diarization.status, 'ready');
+
+    const admission = await checkAiAddonSetupStatus({
+      userDataDir,
+      platform: 'linux',
+      arch: 'x64',
+      catalog,
+      cudaStatus: READY_LINUX_CUDA,
+      env: { SPEAKRS_CLI_PATH: path.join(userDataDir, 'dev-bin', 'speakrs-cli') },
+      computeAdmission: true,
+    });
+    assert.equal(admission.features.diarization.status, 'error');
+    assert.equal(admission.features.diarization.setupComplete, false);
+    assert.ok(admission.features.diarization.runtimeCache.invalidFiles.includes(RUNTIME_SO_NAMES[0]));
+    assert.match(admission.features.diarization.error, /integrity validation/i);
+  } finally {
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test('Linux Speakrs runtime rejects an unpinned shared object in its loader directory', async () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-unpinned-linux-loader-'));
+  const catalog = createPinnedLinuxTestCatalog();
+  try {
+    await installValidLinuxTestSetup(userDataDir, catalog);
+    const runtimeDir = getSpeakrsOrtRuntimeDir(userDataDir);
+    fs.writeFileSync(path.join(runtimeDir, 'libstdc++.so.6'), 'unlisted loader');
+
+    const cache = await checkSpeakrsRuntimeCache({
+      userDataDir,
+      platform: 'linux',
+      arch: 'x64',
+      catalog,
+      verifyChecksum: true,
+    });
+    assert.equal(cache.valid, false);
+    assert.ok(cache.invalidFiles.includes('libstdc++.so.6'));
+    for (const computeAdmission of [false, true]) {
+      const status = await checkAiAddonSetupStatus({
+        userDataDir,
+        platform: 'linux',
+        arch: 'x64',
+        catalog,
+        cudaStatus: READY_LINUX_CUDA,
+        env: { SPEAKRS_CLI_PATH: path.join(userDataDir, 'dev-bin', 'speakrs-cli') },
+        computeAdmission,
+      });
+      assert.equal(status.features.diarization.setupComplete, false);
+      assert.match(status.features.diarization.error, /integrity validation/i);
+    }
+  } finally {
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test('Linux Speakrs compute admission caches unchanged SO fingerprints and rehashes changed metadata', async () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-linux-runtime-fingerprint-'));
+  const catalog = createPinnedLinuxTestCatalog();
+  const cliPath = path.join(userDataDir, 'dev-bin', 'speakrs-cli');
+  try {
+    await installValidLinuxTestSetup(userDataDir, catalog);
+    let hashReads = 0;
+    const fsModule = Object.create(fs);
+    Object.defineProperty(fsModule, 'createReadStream', {
+      value(filePath, ...args) {
+        if (RUNTIME_SO_NAMES.includes(path.basename(filePath))) {
+          hashReads += 1;
+        }
+        return fs.createReadStream(filePath, ...args);
+      },
+    });
+
+    const options = {
+      userDataDir,
+      platform: 'linux',
+      arch: 'x64',
+      fsModule,
+      catalog,
+      cudaStatus: READY_LINUX_CUDA,
+      env: { SPEAKRS_CLI_PATH: cliPath },
+      computeAdmission: true,
+    };
+    assert.equal((await checkAiAddonSetupStatus(options)).features.diarization.setupComplete, true);
+    assert.equal(hashReads, RUNTIME_SO_NAMES.length);
+    assert.equal((await checkAiAddonSetupStatus(options)).features.diarization.setupComplete, true);
+    assert.equal(hashReads, RUNTIME_SO_NAMES.length, 'unchanged fingerprints must skip redundant hashes');
+
+    const changedPath = path.join(getSpeakrsOrtRuntimeDir(userDataDir), RUNTIME_SO_NAMES[0]);
+    const changedStats = fs.statSync(changedPath);
+    fs.utimesSync(changedPath, changedStats.atime, new Date(changedStats.mtimeMs + 5000));
+    assert.equal((await checkAiAddonSetupStatus(options)).features.diarization.setupComplete, true);
+    assert.equal(hashReads, RUNTIME_SO_NAMES.length + 1, 'changed mtime must force a full hash');
+
+    fs.appendFileSync(changedPath, Buffer.from('x'));
+    const changedSize = await checkAiAddonSetupStatus(options);
+    assert.equal(changedSize.features.diarization.setupComplete, false);
+    assert.equal(hashReads, RUNTIME_SO_NAMES.length + 2, 'changed size must force a full hash');
+  } finally {
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test('Linux Speakrs runtime cache flags missing managed CUDA libraries from requiredDynamicLibraries', async () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-linux-missing-cublas-'));
+  const catalog = createPinnedLinuxTestCatalog();
+  try {
+    await installValidLinuxTestSetup(userDataDir, catalog);
+    catalog.diarization.models[0].packArtifacts['linux-x64'][1].requiredDynamicLibraries = [
+      {
+        name: 'libcublas.so.12',
+        source: 'managed-cuda-runtime',
+        relativePath: 'nvidia/cublas/lib/libcublas.so.12',
+        sha256: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        sizeBytes: 16,
+      },
+    ];
+    const runtimeCache = await checkSpeakrsRuntimeCache({
+      userDataDir,
+      platform: 'linux',
+      arch: 'x64',
+      catalog,
+      verifyChecksum: true,
+    });
+    assert.equal(runtimeCache.valid, false);
+    assert.ok(runtimeCache.missingFiles.includes('libcublas.so.12'));
+  } finally {
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test('uninstalling Linux Speakrs never reaches managed CUDA or Whisper roots', async () => {
+  const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-linux-exact-delete-'));
+  const sharedFiles = [
+    path.join(userDataDir, 'ai-addons', 'cuda', 'python', 'nvidia', 'cublas', 'lib', 'libcublas.so.12'),
+    path.join(userDataDir, '.cache', 'huggingface', 'hub', 'models--Systran--faster-whisper-small', 'model.bin'),
+    path.join(userDataDir, 'Resources', 'bin', 'speakrs-cli'),
+  ];
+  try {
+    for (const filePath of sharedFiles) {
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, 'keep');
+    }
+    fs.mkdirSync(getSpeakrsOrtRuntimeDir(userDataDir), { recursive: true });
+    fs.mkdirSync(path.dirname(getSpeakrsModelRevisionDir(userDataDir)), { recursive: true });
+    await uninstallSpeakrsLocalState({ userDataDir });
+    assert.ok(sharedFiles.every((filePath) => fs.existsSync(filePath)));
+    assert.equal(fs.existsSync(getSpeakrsOrtRuntimeDir(userDataDir)), false);
+  } finally {
+    fs.rmSync(userDataDir, { recursive: true, force: true });
+  }
+});
+
+test('Linux ORT tar flatten keeps selected .so files at dest root and removes extras', () => {
+  const destinationDir = fs.mkdtempSync(path.join(os.tmpdir(), 'speakrs-linux-ort-flatten-'));
+  try {
+    fs.mkdirSync(path.join(destinationDir, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(destinationDir, 'lib', 'libonnxruntime.so.1.27.1'), 'ort');
+    fs.writeFileSync(path.join(destinationDir, 'lib', 'unused.so'), 'drop');
+    fs.writeFileSync(path.join(destinationDir, 'README.txt'), 'drop');
+    flattenSelectedArchiveFiles(destinationDir, ['libonnxruntime.so.1.27.1']);
+    assert.equal(fs.readFileSync(path.join(destinationDir, 'libonnxruntime.so.1.27.1'), 'utf8'), 'ort');
+    assert.equal(fs.existsSync(path.join(destinationDir, 'lib')), false);
+    assert.equal(fs.existsSync(path.join(destinationDir, 'README.txt')), false);
+  } finally {
+    fs.rmSync(destinationDir, { recursive: true, force: true });
+  }
 });

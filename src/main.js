@@ -93,6 +93,7 @@ const {
 } = require('./ai-addon-state');
 const {
   getBundledSpeakrsCliPath,
+  buildSummaryRuntimeEnv,
   resolveSpeakrsCliPathForSpawn,
   resolveSpawnDiarizationEngine,
 } = require('./ai-addon/manifest-store');
@@ -105,6 +106,7 @@ const {
   createAiComputeQueue,
 } = require('./main/ai-compute-queue');
 const { createGpuRuntimeService } = require('./main/gpu-runtime-service');
+const { isLinuxCudaOffered } = require('./main-process/linux-cuda-runtime-helpers');
 const {
   createAiAddonIpc,
   createAiAddonCancelErrorStandalone,
@@ -716,6 +718,7 @@ gpuRuntimeService = createGpuRuntimeService({
   formatQueuedTranscriptionBusyMessage,
   enqueueGpuResourceAction: gpuResourceActionQueue.enqueue,
   isQuitCommitted,
+  isLinuxCudaProfileEnabled: () => isLinuxCudaOffered({ userDataPath: app.getPath('userData') }),
 });
 gpuRuntimeService.registerIpc(ipcMain);
 const {
@@ -739,11 +742,14 @@ aiAddonIpc = createAiAddonIpc({
   terminateProcessBestEffort,
   buildManagedDiarizationValidationArgs,
   resolveSpeakrsCliPath: resolveAppSpeakrsCliPath,
+  getCachedCudaStatus,
+  resolveCudaStatusForTranscription,
   buildSummaryArgs,
   summarizeDiarizationError,
   summarizeSummaryValidationError,
   hasPendingAiComputeWork: () => aiComputeActionQueue.hasPendingWork(),
   hasPendingGpuResourceWork: () => gpuResourceActionQueue.hasPendingWork(),
+  enqueueGpuResourceAction: gpuResourceActionQueue.enqueue,
   enqueueGpuExclusiveRemovalAction,
   isQuitCommitted,
 });
@@ -813,6 +819,8 @@ summaryService = createSummaryService({
   enqueueAiComputeAction: enqueueGpuExclusiveComputeAction,
   createAiAddonCancelError,
   getAiAddonRuntimeOptions,
+  buildSummaryRuntimeEnv,
+  resolveCudaStatusForTranscription,
   buildSummaryArgs,
   collectPythonProcessOutput,
   sendToRenderer,

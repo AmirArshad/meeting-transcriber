@@ -12,7 +12,7 @@
 const {
   AI_ADDON_PROGRESS_CHANNEL,
   AI_ADDON_CANCEL_CODE,
-  checkAiAddonSetupStatus,
+  checkAiAddonSetupStatus: defaultCheckAiAddonSetupStatus,
   checkDiarizationDependencyCache,
   getSummaryArtifactPath,
   getSummaryRuntimeDir,
@@ -24,6 +24,9 @@ const {
   validateSummaryModel,
   isLikelyHuggingFaceToken,
 } = require('../ai-addon-setup');
+const {
+  buildSummaryRuntimeEnv: defaultBuildSummaryRuntimeEnv,
+} = require('../ai-addon/manifest-store');
 const {
   getSummaryArtifactForPlatform,
 } = require('../ai-addon-state');
@@ -49,6 +52,7 @@ const {
   resolveSpawnDiarizationEngine,
 } = require('../ai-addon/manifest-store');
 const { SPEAKRS_DIARIZATION_ENGINES } = require('../ai-addon/speakrs-pack-spec');
+const { managedLinuxCudaRuntimeExists } = require('../main-process/linux-cuda-runtime-helpers');
 
 /**
  * @param {object} deps
@@ -69,8 +73,6 @@ const { SPEAKRS_DIARIZATION_ENGINES } = require('../ai-addon/speakrs-pack-spec')
  * @param {Function} deps.summarizeDiarizationError
  * @param {Function} deps.summarizeSummaryValidationError
  * @param {{ enqueue: Function, drain: Function, hasPendingWork: Function }} [deps.aiAddonActionQueue]
- * @param {Function} [deps.hasInFlightGpuRuntimeAction]
- * @param {Function} [deps.waitForGpuRuntimeIdle]
  * @param {Function} [deps.hasPendingAiComputeWork]
  * @param {Function} [deps.hasPendingGpuResourceWork]
  * @param {Function} [deps.enqueueGpuExclusiveRemovalAction]
@@ -88,6 +90,7 @@ function createAiAddonIpc(deps) {
     getSafeStorage,
     assertTrustedRendererSender,
     buildCudaRuntimeEnv,
+    buildSummaryRuntimeEnv = defaultBuildSummaryRuntimeEnv,
     createAbortableComputeAction,
     terminateProcessBestEffort,
     buildManagedDiarizationValidationArgs,
@@ -95,14 +98,16 @@ function createAiAddonIpc(deps) {
     summarizeDiarizationError,
     summarizeSummaryValidationError,
     aiAddonActionQueue: injectedAiAddonActionQueue,
-    hasInFlightGpuRuntimeAction = () => false,
-    waitForGpuRuntimeIdle = async () => {},
+    checkAiAddonSetupStatus = defaultCheckAiAddonSetupStatus,
     hasPendingAiComputeWork = () => false,
     hasPendingGpuResourceWork = () => false,
+    enqueueGpuResourceAction = (action) => action(),
     enqueueGpuExclusiveRemovalAction = (action) => action(),
     isQuitCommitted = () => false,
     resolveSpeakrsCliPath = null,
     resourcesPath = process.resourcesPath,
+    getCachedCudaStatus = () => null,
+    resolveCudaStatusForTranscription = null,
   } = deps;
 
   // Single shared cache reference — never copy this let into a stale local.
@@ -222,6 +227,7 @@ function createAiAddonIpc(deps) {
       platform: process.platform,
       arch: process.arch,
       emitProgress: emitAiAddonProgress,
+      cudaStatus: typeof getCachedCudaStatus === 'function' ? getCachedCudaStatus() : null,
       ...extra,
     };
 
@@ -231,6 +237,56 @@ function createAiAddonIpc(deps) {
     }
 
     return options;
+  }
+
+  async function resolveLiveCudaStatusForAddonStatus() {
+    const cached = typeof getCachedCudaStatus === 'function' ? getCachedCudaStatus() : null;
+    if (process.platform !== 'linux'
+      || process.arch !== 'x64'
+      || typeof resolveCudaStatusForTranscription !== 'function'
+      || !managedLinuxCudaRuntimeExists(app.getPath('userData'), fs)) {
+      return cached;
+    }
+    return enqueueGpuResourceAction(() => runWallClockComputeAction({
+      timeoutMs: AI_COMPUTE_TIMEOUT_MS.addonValidation,
+      label: 'Linux CUDA status check',
+      terminateProcess: terminateProcessBestEffort,
+      action: (registerProcess) => resolveCudaStatusForTranscription({ registerProcess }),
+    }));
+  }
+
+  async function resolveLinuxSpeakrsCudaStatus({ registerProcess, cancelSignal } = {}) {
+    if (process.platform !== 'linux') {
+      return typeof getCachedCudaStatus === 'function' ? getCachedCudaStatus() : null;
+    }
+    if (typeof resolveCudaStatusForTranscription !== 'function') {
+      const error = new Error('Linux CUDA admission requires the live CUDA runtime resolver.');
+      error.code = 'LINUX_CUDA_RESOLVER_UNAVAILABLE';
+      throw error;
+    }
+    let activeProcess = null;
+    const register = (child) => {
+      activeProcess = typeof registerProcess === 'function' ? registerProcess(child) : child;
+      return activeProcess;
+    };
+    const abort = () => {
+      if (activeProcess) {
+        terminateProcessBestEffort(activeProcess);
+      }
+    };
+    cancelSignal?.addEventListener?.('abort', abort, { once: true });
+    try {
+      if (cancelSignal?.aborted) {
+        throw createAiAddonCancelError('Speaker identification setup was canceled.');
+      }
+      const status = await resolveCudaStatusForTranscription({ registerProcess: register });
+      if (cancelSignal?.aborted) {
+        throw createAiAddonCancelError('Speaker identification setup was canceled.');
+      }
+      return status;
+    } finally {
+      cancelSignal?.removeEventListener?.('abort', abort);
+    }
   }
 
   function createRemovalBusyError(feature) {
@@ -298,7 +354,7 @@ function createAiAddonIpc(deps) {
     }
     const clearedTokens = buildClearedHuggingFaceTokenEnv();
     if (engine === 'speakrs') {
-      const cudaEnv = buildCudaRuntimeEnv({}, { includeManagedDiarization: false });
+      const cudaEnv = buildCudaRuntimeEnv({ AVANEVIS_LINUX_CUDA_REQUIRED: undefined }, { includeManagedDiarization: false });
       return {
         ...buildSpeakrsSpawnEnv({
           userDataDir: app.getPath('userData'),
@@ -312,7 +368,7 @@ function createAiAddonIpc(deps) {
     return {
       ...getDiarizationDependencyEnv(),
       ...getDiarizationCacheEnv(),
-      ...buildCudaRuntimeEnv({}, { includeManagedDiarization: true }),
+      ...buildCudaRuntimeEnv({ AVANEVIS_LINUX_CUDA_REQUIRED: undefined }, { includeManagedDiarization: true }),
       ...clearedTokens,
     };
   }
@@ -345,9 +401,6 @@ function createAiAddonIpc(deps) {
       cancelSignal,
       cancelMessage: 'Speaker identification setup was canceled.',
       action: async () => {
-        if (hasInFlightGpuRuntimeAction()) {
-          await waitForGpuRuntimeIdle();
-        }
         return runWallClockComputeAction({
         timeoutMs: AI_COMPUTE_TIMEOUT_MS.addonValidation,
         label: 'Speaker identification validation',
@@ -459,7 +512,7 @@ function createAiAddonIpc(deps) {
     });
   }
 
-  function validateSummaryRuntimeSmoke({ modelId, cache, cancelSignal }) {
+  function validateSummaryRuntimeSmoke({ modelId, cache, runtimeArtifact, cancelSignal }) {
     const artifact = getSummaryArtifactForPlatform(modelId, process.platform, process.arch);
     if (!artifact) {
       return Promise.reject(new Error('No summary model artifact is available for this platform.'));
@@ -472,9 +525,6 @@ function createAiAddonIpc(deps) {
       cancelSignal,
       cancelMessage: 'Summary model setup was canceled.',
       action: async () => {
-        if (hasInFlightGpuRuntimeAction()) {
-          await waitForGpuRuntimeIdle();
-        }
         return runWallClockComputeAction({
         timeoutMs: AI_COMPUTE_TIMEOUT_MS.addonValidation,
         label: 'Summary model validation',
@@ -485,13 +535,26 @@ function createAiAddonIpc(deps) {
             return;
           }
 
+          const summaryEnv = buildSummaryRuntimeEnv({
+            userDataDir: app.getPath('userData'),
+            artifact,
+            runtimeArtifact,
+            platform: process.platform,
+            arch: process.arch,
+          });
           const python = registerProcess(spawnTrackedPython(buildSummaryArgs({
             meetingId: 'setup-validation',
             runtimeDir,
             modelPath,
             validateRuntime: true,
             modelLabel: artifact.modelLabel || artifact.modelId,
-          }), { cwd: pythonConfig.backendPath }));
+          }), {
+            cwd: pythonConfig.backendPath,
+            env: buildClearedHuggingFaceTokenEnv({
+              ...process.env,
+              ...summaryEnv,
+            }),
+          }));
 
           let output = '';
           let errorOutput = '';
@@ -549,7 +612,9 @@ function createAiAddonIpc(deps) {
       arch: process.arch,
       includeStorageSizes: Boolean(options && options.includeStorageSizes),
       verifyChecksums: Boolean(options && options.verifyChecksums),
+      verifyChecksumsIfChanged: Boolean(options && options.verifyChecksumsIfChanged),
       checkTokenEncryption: false,
+      cudaStatus: await resolveLiveCudaStatusForAddonStatus(),
     }));
 
     ipcMain.handle('store-diarization-token', async (event, token) => {
@@ -607,6 +672,12 @@ function createAiAddonIpc(deps) {
         // Re-check when the queued setup begins so a job that started after IPC
         // admission cannot race exclusive deletion. Fail-fast: do not wait.
         assertAddonDiskMutationCanRun('diarization', 'setup');
+        const cudaStatus = await runWallClockComputeAction({
+          timeoutMs: AI_COMPUTE_TIMEOUT_MS.addonValidation,
+          label: 'Linux CUDA admission',
+          terminateProcess: terminateProcessBestEffort,
+          action: (registerProcess) => resolveLinuxSpeakrsCudaStatus({ registerProcess, cancelSignal }),
+        });
         return setupDiarizationAddon(getAiAddonRuntimeOptions({
           includeSafeStorage: true,
           engine,
@@ -616,6 +687,7 @@ function createAiAddonIpc(deps) {
           pythonExe: pythonConfig.pythonExe,
           runtimeValidator: validateDiarizationRuntime,
           cancelSignal,
+          cudaStatus,
           resourcesPath,
           withExclusiveDiskMutation: (action) => {
             assertAddonDiskMutationCanRun('diarization', 'setup');
@@ -648,9 +720,15 @@ function createAiAddonIpc(deps) {
         throw new Error('Speaker identification setup is already running. Cancel it or wait for it to finish before validating.');
       }
 
-      return enqueueAiAddonAction(() => validateDiarizationSetup(getAiAddonRuntimeOptions({
+      return enqueueAiAddonAction(async () => validateDiarizationSetup(getAiAddonRuntimeOptions({
         includeSafeStorage: true,
         runtimeValidator: validateDiarizationRuntime,
+        cudaStatus: await runWallClockComputeAction({
+          timeoutMs: AI_COMPUTE_TIMEOUT_MS.addonValidation,
+          label: 'Linux CUDA admission',
+          terminateProcess: terminateProcessBestEffort,
+          action: (registerProcess) => resolveLinuxSpeakrsCudaStatus({ registerProcess }),
+        }),
       })));
     });
 
@@ -678,13 +756,19 @@ function createAiAddonIpc(deps) {
 
     ipcMain.handle('setup-summary-model', async (event, options = {}) => {
       assertTrustedRendererSender(event);
-      return runCancellableAiAddonSetup('summary', (cancelSignal) => setupSummaryModel(getAiAddonRuntimeOptions({
+      return runCancellableAiAddonSetup('summary', async (cancelSignal) => setupSummaryModel(getAiAddonRuntimeOptions({
         modelId: options.modelId,
         profile: options.profile,
         pythonExe: pythonConfig.pythonExe,
         backendPath: pythonConfig.backendPath,
         runtimeValidator: validateSummaryRuntimeSmoke,
         cancelSignal,
+        cudaStatus: await runWallClockComputeAction({
+          timeoutMs: AI_COMPUTE_TIMEOUT_MS.addonValidation,
+          label: 'Linux CUDA summary admission',
+          terminateProcess: terminateProcessBestEffort,
+          action: (registerProcess) => resolveLinuxSpeakrsCudaStatus({ registerProcess, cancelSignal }),
+        }),
       })));
     });
 
@@ -699,10 +783,16 @@ function createAiAddonIpc(deps) {
         throw new Error('Summary model setup is already running. Cancel it or wait for it to finish before validating.');
       }
 
-      return enqueueAiAddonAction(() => validateSummaryModel(getAiAddonRuntimeOptions({
+      return enqueueAiAddonAction(async () => validateSummaryModel(getAiAddonRuntimeOptions({
         modelId: options.modelId,
         profile: options.profile,
         runtimeValidator: validateSummaryRuntimeSmoke,
+        cudaStatus: await runWallClockComputeAction({
+          timeoutMs: AI_COMPUTE_TIMEOUT_MS.addonValidation,
+          label: 'Linux CUDA summary validation',
+          terminateProcess: terminateProcessBestEffort,
+          action: (registerProcess) => resolveLinuxSpeakrsCudaStatus({ registerProcess }),
+        }),
       })));
     });
 

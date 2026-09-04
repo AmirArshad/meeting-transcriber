@@ -43,6 +43,28 @@
     return engine === 'pyannote' || engine === 'speakrs' ? engine : fallback;
   }
 
+  function coerceDiarizationEngineForPlatform(engine, platform) {
+    if (platform !== 'win32' && platform !== 'darwin') {
+      return 'speakrs';
+    }
+    return engine === 'pyannote' ? 'pyannote' : 'speakrs';
+  }
+
+  function applyDiarizationEngineCardDomState(cardStates, { selectedEngine, platform, arch } = {}) {
+    const catalog = buildDiarizationEngineCards({ platform, arch });
+    const selected = coerceDiarizationEngineForPlatform(selectedEngine, platform);
+    return (Array.isArray(cardStates) ? cardStates : []).map((card) => {
+      const engine = card && card.engine;
+      const entry = catalog.find((item) => item.engine === engine);
+      return {
+        engine,
+        hidden: !entry,
+        selected: Boolean(entry) && engine === selected,
+        radioDisabled: !entry,
+      };
+    });
+  }
+
   function shouldShowDiarizationTokenUi(engine) {
     return engine === 'pyannote';
   }
@@ -90,10 +112,13 @@
   }
 
   function buildDiarizationEngineCards({ platform, arch } = {}) {
-    return [
+    const cards = [
       getDiarizationEngineCard({ engine: 'speakrs', platform, arch }),
-      getDiarizationEngineCard({ engine: 'pyannote', platform, arch }),
     ];
+    if (platform === 'win32' || platform === 'darwin') {
+      cards.push(getDiarizationEngineCard({ engine: 'pyannote', platform, arch }));
+    }
+    return cards;
   }
 
   function shouldConfirmDiarizationEngineSwitch({
@@ -174,7 +199,9 @@
 
   return {
     SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE,
+    applyDiarizationEngineCardDomState,
     buildDiarizationEngineCards,
+    coerceDiarizationEngineForPlatform,
     getDiarizationEngineCard,
     getDiarizationRemoveConfirmMessage,
     getDiarizationSetupButtonLabel,

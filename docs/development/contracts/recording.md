@@ -1,0 +1,7 @@
+# Recording contract
+
+Recorder control flow is structured line-delimited JSON on stdout (`levels`, `event`, `warning`, `error`); stderr is diagnostics only. Update platform recorders, `recorder-service`, output helpers/facade, and recorder-contract tests together. Stdin accepts only exact `stop` or `cancel`; stop failures emit structured `success:false` with a recoverable path when one exists.
+
+Capture is separate durable mic/desktop spools, mixed only after stop at 48 kHz stereo/mono-compatible Opus. Never restore whole-session RAM mixing. Discard never persists/enqueues, tombstones before cleanup, and cannot resurrect a discarded session. Stop/cancel are first-command-wins; preserve session IDs, quit result sharing, power-save blocking, state transitions, bounded cancellation, and never auto-stop for disk space/reminders.
+
+Platform policy is deliberate: Windows emits `audioPath`; macOS/Linux emit `outputPath`; parsing accepts both. macOS late desktop loss becomes mic-only and discards its desktop track. Linux late monitor loss retains already committed desktop frames; its long-lived locked Pulse watch client must never be closed during `source_list`, exact device resolution is required, and post-stop capture-thread exceptions are teardown noise. Preserve recorder temp recovery and never scan `.pcm.tmp` as a meeting.

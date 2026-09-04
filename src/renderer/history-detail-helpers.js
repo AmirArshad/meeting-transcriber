@@ -123,6 +123,9 @@
     if (!feature) {
       return '';
     }
+    if (feature.status === 'unsupported' && feature.availability && feature.availability.reason) {
+      return feature.availability.reason;
+    }
     return feature.error
       || featureValidationMessage(feature)
       || (feature.cache && feature.cache.reason)

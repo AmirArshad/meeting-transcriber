@@ -703,6 +703,7 @@ test('F2: generate-summary enters metadata before update-ai; quit abort cannot k
       }
     },
     summarizeSummaryValidationError: (text) => text || 'summary error',
+    platform: 'win32',
     isQuitCommitted: () => false,
     checkAiAddonSetupStatus: async () => ({
       features: {
@@ -755,6 +756,243 @@ test('F2: generate-summary enters metadata before update-ai; quit abort cannot k
   assert.match(result.jsonPath, /\.summary\.json$/);
   assert.ok(fs.existsSync(result.jsonPath), 'final summary json must exist after successful update-ai');
   assert.ok(fs.existsSync(result.markdownPath), 'final summary md must exist after successful update-ai');
+});
+
+test('summary quit abort terminates an active Linux CUDA probe', async () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-sum-cuda-quit-'));
+  const recordingsDir = path.join(userData, 'recordings');
+  fs.mkdirSync(path.join(userData, 'ai-addons', 'cuda', 'python'), { recursive: true });
+  fs.mkdirSync(recordingsDir, { recursive: true });
+  const transcriptPath = path.join(recordingsDir, 'meeting.md');
+  fs.writeFileSync(transcriptPath, '# Meeting\n\nHello world.\n');
+
+  const probeProcess = createLongLivedProcess();
+  let probeStarted = false;
+  let releaseProbe = () => {};
+  const probeGate = new Promise((resolve) => {
+    releaseProbe = resolve;
+  });
+
+  const service = createSummaryService({
+    app: { getPath: () => userData },
+    path,
+    fs,
+    pythonConfig: { backendPath: recordingsDir },
+    spawnTrackedPython(args) {
+      const proc = createLongLivedProcess();
+      if (args.includes('get')) {
+        setTimeout(() => {
+          proc.stdout.emit('data', Buffer.from(JSON.stringify({
+            id: 'meeting_1',
+            transcriptPath,
+            transcriptionStatus: 'completed',
+            ai: {},
+          })));
+          proc.emit('close', 0);
+        }, 5);
+        return proc;
+      }
+      throw new Error('summary generation must not spawn before CUDA admission');
+    },
+    getBackendModuleArgs: (moduleName, extraArgs = []) => ['-m', moduleName, ...extraArgs],
+    enqueueAiComputeAction: (action) => action(),
+    createAiAddonCancelError: createAiAddonCancelErrorStandalone,
+    getAiAddonRuntimeOptions: () => ({}),
+    buildSummaryArgs: () => [],
+    collectPythonProcessOutput: (python) => {
+      let stdout = '';
+      python.stdout.on('data', (data) => { stdout += data.toString(); });
+      return {
+        getStdout: () => stdout,
+        getStderr: () => '',
+        assertStdoutWithinLimit() {},
+      };
+    },
+    resolveCudaStatusForTranscription: async ({ registerProcess }) => {
+      registerProcess(probeProcess);
+      probeStarted = true;
+      await probeGate;
+      return null;
+    },
+    sendToRenderer() {},
+    appendSpawnLogBuffer: (buffer, chunk) => buffer + String(chunk),
+    appendSpawnJsonStdout: (buffer, chunk) => buffer + String(chunk),
+    assertTrustedRendererSender() {},
+    assertSafeExistingTranscriptPath: (p) => p,
+    assertSafeExistingSegmentsPath: (p) => p,
+    terminateProcessBestEffort(proc) {
+      if (proc === probeProcess) {
+        proc.killed = true;
+        releaseProbe();
+      }
+    },
+    summarizeSummaryValidationError: (text) => text || 'summary error',
+    platform: 'linux',
+    arch: 'x64',
+    isQuitCommitted: () => false,
+    checkAiAddonSetupStatus: async () => ({
+      features: {
+        summary: {
+          status: 'ready',
+          setupComplete: true,
+          modelId: 'test-model',
+          cache: { valid: true },
+          runtimeCache: { valid: true },
+        },
+      },
+    }),
+    getSummaryArtifactForPlatform: () => ({
+      modelId: 'test-model',
+      modelLabel: 'Test',
+      filename: 'model.gguf',
+      runtime: 'llama.cpp',
+    }),
+    getSummaryArtifactPath: () => path.join(userData, 'model.gguf'),
+    getSummaryRuntimeDir: () => path.join(userData, 'runtime'),
+  });
+
+  const handlers = {};
+  service.registerIpc({
+    handle(channel, handler) {
+      handlers[channel] = handler;
+    },
+  });
+
+  const resultPromise = handlers['generate-summary'](
+    { sender: {} },
+    { meetingId: 'meeting_1', profile: 'balanced' },
+  );
+  for (let i = 0; i < 50 && !probeStarted; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(probeStarted, true, 'expected Linux CUDA admission probe');
+
+  try {
+    service.abortActiveSummaryForQuit('quit during CUDA admission');
+    assert.equal(probeProcess.killed, true, 'quit must terminate a live CUDA probe');
+    releaseProbe();
+    await assert.rejects(resultPromise, /canceled because the app is quitting/);
+  } finally {
+    releaseProbe();
+    assert.equal(service.hasActiveSummaryGeneration(), false);
+    assert.equal(getActiveWallClockComputeJob(), null);
+    fs.rmSync(userData, { recursive: true, force: true });
+  }
+});
+
+test('queued summary cancellation does not start Linux CUDA admission after quit', async () => {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-sum-queued-quit-'));
+  const recordingsDir = path.join(userData, 'recordings');
+  fs.mkdirSync(path.join(userData, 'ai-addons', 'cuda', 'python'), { recursive: true });
+  fs.mkdirSync(recordingsDir, { recursive: true });
+  const transcriptPath = path.join(recordingsDir, 'meeting.md');
+  fs.writeFileSync(transcriptPath, '# Meeting\n\nHello world.\n');
+
+  let releaseQueue = () => {};
+  let queuedAction = null;
+  let probeCalls = 0;
+  const queueGate = new Promise((resolve) => {
+    releaseQueue = resolve;
+  });
+
+  const service = createSummaryService({
+    app: { getPath: () => userData },
+    path,
+    fs,
+    pythonConfig: { backendPath: recordingsDir },
+    spawnTrackedPython(args) {
+      const proc = createLongLivedProcess();
+      if (args.includes('get')) {
+        setTimeout(() => {
+          proc.stdout.emit('data', Buffer.from(JSON.stringify({
+            id: 'meeting_1',
+            transcriptPath,
+            transcriptionStatus: 'completed',
+            ai: {},
+          })));
+          proc.emit('close', 0);
+        }, 5);
+        return proc;
+      }
+      throw new Error('quit-canceled queued summary must not spawn a summary child');
+    },
+    getBackendModuleArgs: (moduleName, extraArgs = []) => ['-m', moduleName, ...extraArgs],
+    enqueueAiComputeAction: (action) => {
+      queuedAction = action;
+      return queueGate.then(action);
+    },
+    createAiAddonCancelError: createAiAddonCancelErrorStandalone,
+    getAiAddonRuntimeOptions: () => ({}),
+    buildSummaryArgs: () => [],
+    collectPythonProcessOutput: (python) => {
+      let stdout = '';
+      python.stdout.on('data', (data) => { stdout += data.toString(); });
+      return {
+        getStdout: () => stdout,
+        getStderr: () => '',
+        assertStdoutWithinLimit() {},
+      };
+    },
+    resolveCudaStatusForTranscription: async ({ registerProcess }) => {
+      probeCalls += 1;
+      registerProcess(createLongLivedProcess());
+      return null;
+    },
+    sendToRenderer() {},
+    appendSpawnLogBuffer: (buffer, chunk) => buffer + String(chunk),
+    appendSpawnJsonStdout: (buffer, chunk) => buffer + String(chunk),
+    assertTrustedRendererSender() {},
+    assertSafeExistingTranscriptPath: (p) => p,
+    assertSafeExistingSegmentsPath: (p) => p,
+    terminateProcessBestEffort() {},
+    summarizeSummaryValidationError: (text) => text || 'summary error',
+    platform: 'linux',
+    arch: 'x64',
+    isQuitCommitted: () => false,
+    checkAiAddonSetupStatus: async () => ({
+      features: {
+        summary: {
+          status: 'ready',
+          setupComplete: true,
+          modelId: 'test-model',
+          cache: { valid: true },
+          runtimeCache: { valid: true },
+        },
+      },
+    }),
+    getSummaryArtifactForPlatform: () => ({
+      modelId: 'test-model',
+      modelLabel: 'Test',
+      filename: 'model.gguf',
+      runtime: 'llama.cpp',
+    }),
+    getSummaryArtifactPath: () => path.join(userData, 'model.gguf'),
+    getSummaryRuntimeDir: () => path.join(userData, 'runtime'),
+  });
+
+  const handlers = {};
+  service.registerIpc({
+    handle(channel, handler) {
+      handlers[channel] = handler;
+    },
+  });
+
+  const resultPromise = handlers['generate-summary'](
+    { sender: {} },
+    { meetingId: 'meeting_1', profile: 'balanced' },
+  );
+  for (let i = 0; i < 50 && !queuedAction; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.ok(queuedAction, 'expected summary action to wait in the compute queue');
+
+  service.abortActiveSummaryForQuit('quit before CUDA admission');
+  releaseQueue();
+  await assert.rejects(resultPromise);
+  assert.equal(probeCalls, 0, 'queued quit must not start a CUDA admission probe');
+  assert.equal(service.hasActiveSummaryGeneration(), false);
+  assert.equal(getActiveWallClockComputeJob(), null);
+  fs.rmSync(userData, { recursive: true, force: true });
 });
 
 test('F4: terminateNonAbortableQuitComputeJobs terminates tracked transcription jobs', async () => {

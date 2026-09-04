@@ -7,6 +7,7 @@ const path = require('path');
 const {
   AI_MODEL_CATALOG,
   getDiarizationAvailability,
+  LINUX_PYANNOTE_UNAVAILABLE_REASON,
   getDiarizationModelRef,
   getDiarizationDependencyArtifactForPlatform,
   getModelById,
@@ -69,7 +70,7 @@ const { extractRuntimeArchive } = require('./archive-install');
 const {
   SPEAKRS_DIARIZATION_ENGINES,
   getSpeakrsExtractedRuntimeDllPins,
-  getSpeakrsRequiredRuntimeDllNames,
+  getSpeakrsRequiredRuntimeLibraryNames,
   getSpeakrsSetupProgressCopy,
   resolveContainedSpeakrsPath,
 } = require('./speakrs-pack-spec');
@@ -329,8 +330,8 @@ async function installSpeakrsArtifacts({
       throw new Error('Speakrs runtime artifact host is not allowed.');
     }
   }
-  const expectedDllPins = getSpeakrsExtractedRuntimeDllPins(artifact.runtimeArtifacts);
-  if ((platform === 'win32' && arch === 'x64') && !expectedDllPins) {
+  const expectedDllPins = getSpeakrsExtractedRuntimeDllPins(artifact.runtimeArtifacts, platform, arch);
+  if (((platform === 'win32' && arch === 'x64') || (platform === 'linux' && arch === 'x64')) && !expectedDllPins) {
     throw new Error('Speakrs runtime artifact metadata is incomplete.');
   }
 
@@ -442,7 +443,7 @@ async function installSpeakrsArtifacts({
         throw new Error('Speakrs runtime artifact metadata is incomplete.');
       }
       const runtimeFiles = {};
-      for (const name of getSpeakrsRequiredRuntimeDllNames()) {
+      for (const name of getSpeakrsRequiredRuntimeLibraryNames(platform, arch)) {
         const pin = expectedDllPins[name];
         const filePath = path.join(runtimeStagingDir, name);
         const stats = fsModule.statSync(filePath);
@@ -879,6 +880,7 @@ async function validateDiarizationSetup({
   env = process.env,
   tokenStatusReader = getDiarizationTokenStatus,
   tokenReader = getAiAddonToken,
+  cudaStatus = null,
 } = {}) {
   throwIfAiAddonCanceled(cancelSignal, 'Speaker identification setup was canceled.');
   emitSafeProgress(emitProgress, {
@@ -897,7 +899,7 @@ async function validateDiarizationSetup({
   });
   const modelId = selected.modelId;
   const engine = selected.engine;
-  const availability = getDiarizationAvailability(platform, arch);
+  const availability = getDiarizationAvailability(platform, arch, { cudaStatus });
   const dependencyCache = checkDiarizationDependencyCache({ userDataDir, platform, arch, fsModule, catalog });
   let status = 'ready';
   let message = 'Speaker identification setup is ready.';
@@ -907,6 +909,10 @@ async function validateDiarizationSetup({
     status = 'unsupported';
     message = availability.reason;
     error = availability.reason;
+  } else if (engine === 'pyannote' && platform === 'linux') {
+    status = 'unsupported';
+    message = LINUX_PYANNOTE_UNAVAILABLE_REASON;
+    error = LINUX_PYANNOTE_UNAVAILABLE_REASON;
   } else if (engine === 'speakrs') {
     const packCache = await checkSpeakrsModelCache({
       userDataDir,
@@ -1037,7 +1043,7 @@ async function validateDiarizationSetup({
     percent: status === 'ready' ? 100 : undefined,
   });
 
-  return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, env });
+  return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, env, cudaStatus });
 }
 
 async function assertTargetEngineLocalPreflight({
@@ -1079,7 +1085,10 @@ async function assertTargetEngineLocalPreflight({
     ) {
       throw new Error('Speakrs model-pack archive metadata is incomplete.');
     }
-    if (platform === 'win32' && arch === 'x64' && !getSpeakrsExtractedRuntimeDllPins(artifact.runtimeArtifacts)) {
+    if (platform === 'linux' && arch === 'x64' && !getSpeakrsExtractedRuntimeDllPins(artifact.runtimeArtifacts, platform, arch)) {
+      throw new Error('Speakrs runtime artifact metadata is incomplete.');
+    }
+    if (platform === 'win32' && arch === 'x64' && !getSpeakrsExtractedRuntimeDllPins(artifact.runtimeArtifacts, platform, arch)) {
       throw new Error('Speakrs runtime artifact metadata is incomplete.');
     }
     getSpeakrsModelRevisionDir(userDataDir, artifact.revision);
@@ -1160,6 +1169,7 @@ async function setupDiarizationAddon({
   tokenReader = getAiAddonToken,
   tokenWriter = storeAiAddonToken,
   resourcesPath = process.resourcesPath,
+  cudaStatus = null,
 } = {}) {
   throwIfAiAddonCanceled(cancelSignal, 'Speaker identification setup was canceled.');
   emitSafeProgress(emitProgress, {
@@ -1189,11 +1199,11 @@ async function setupDiarizationAddon({
       }),
     });
     emitSafeProgress(emitProgress, { feature: 'diarization', phase: 'error', status: 'error', message });
-    return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, env });
+    return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, env, cudaStatus });
   }
   const selectedModelId = selected.modelId;
   const selectedEngine = selected.engine;
-  const availability = getDiarizationAvailability(platform, arch);
+  const availability = getDiarizationAvailability(platform, arch, { cudaStatus });
   let tokenForValidation = null;
   const previousDiarizationState = manifest.features.diarization;
   const speakrsReplacement = { model: false, runtime: false };
@@ -1231,7 +1241,7 @@ async function setupDiarizationAddon({
       }),
     });
     emitSafeProgress(emitProgress, { feature: 'diarization', phase: 'error', status: 'error', message, modelId: selectedModelId });
-    return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, env });
+    return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, env, cudaStatus });
   }
 
   if (!availability.supported) {
@@ -1251,7 +1261,52 @@ async function setupDiarizationAddon({
       }),
     });
     emitSafeProgress(emitProgress, { feature: 'diarization', phase: 'unsupported', status: 'unsupported', message, modelId: selectedModelId });
-    return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, env });
+    return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, env, cudaStatus });
+  }
+
+  if (selectedEngine === 'pyannote' && platform === 'linux') {
+    const message = LINUX_PYANNOTE_UNAVAILABLE_REASON;
+    updateManifestFeature({
+      userDataDir,
+      feature: 'diarization',
+      fsModule,
+      catalog,
+      updates: buildFeatureUpdates({
+        status: 'unsupported',
+        modelId: selectedModelId,
+        engine: selectedEngine,
+        speakerCount,
+        validation: createValidation('unsupported', message, now),
+        error: message,
+      }),
+    });
+    emitSafeProgress(emitProgress, {
+      feature: 'diarization',
+      phase: 'unsupported',
+      status: 'unsupported',
+      message,
+      modelId: selectedModelId,
+    });
+    const status = await checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, env, cudaStatus });
+    return {
+      ...status,
+      features: {
+        ...status.features,
+        diarization: {
+          ...status.features.diarization,
+          engine: selectedEngine,
+          modelId: selectedModelId,
+          status: 'unsupported',
+          setupComplete: false,
+          error: message,
+          availability: {
+            ...status.features.diarization.availability,
+            supported: false,
+            reason: message,
+          },
+        },
+      },
+    };
   }
 
   const packagedCliError = selectedEngine === 'speakrs'
@@ -1390,7 +1445,7 @@ async function setupDiarizationAddon({
           updates: buildSpeakrsCancellationUpdates(message),
         });
         emitSafeProgress(emitProgress, { feature: 'diarization', phase: 'cancelled', status: 'notConfigured', message, modelId: selectedModelId, percent: 0 });
-        return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, env });
+        return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, env, cudaStatus });
       }
       return markDiarizationError(installError.message || 'Speakrs speaker setup failed.');
     }
@@ -1411,6 +1466,7 @@ async function setupDiarizationAddon({
         env,
         tokenStatusReader,
         tokenReader,
+        cudaStatus,
       });
     } catch (validationError) {
       if (!isAiAddonCancelError(validationError)) {
@@ -1425,7 +1481,7 @@ async function setupDiarizationAddon({
         updates: buildSpeakrsCancellationUpdates(message),
       });
       emitSafeProgress(emitProgress, { feature: 'diarization', phase: 'cancelled', status: 'notConfigured', message, modelId: selectedModelId, percent: 0 });
-      return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, env });
+      return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, env, cudaStatus });
     }
   }
 
@@ -1448,7 +1504,7 @@ async function setupDiarizationAddon({
         }),
       });
       emitSafeProgress(emitProgress, { feature: 'diarization', phase: 'needsAccount', status: 'needsAccount', message, modelId: selectedModelId });
-      return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, env });
+      return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, env, cudaStatus });
     }
 
     try {
@@ -1488,7 +1544,7 @@ async function setupDiarizationAddon({
       }),
     });
     emitSafeProgress(emitProgress, { feature: 'diarization', phase: 'needsAccount', status: 'needsAccount', message, modelId: selectedModelId });
-    return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, env });
+    return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, env, cudaStatus });
   }
 
   updateManifestFeature({
@@ -1563,7 +1619,7 @@ async function setupDiarizationAddon({
           }),
         });
         emitSafeProgress(emitProgress, { feature: 'diarization', phase: 'cancelled', status: 'notConfigured', message, modelId: selectedModelId, percent: 0 });
-        return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, env });
+        return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, env, cudaStatus });
       }
 
       const message = dependencyError.message || 'Speaker identification dependency setup failed.';
@@ -1582,7 +1638,7 @@ async function setupDiarizationAddon({
       }),
     });
     emitSafeProgress(emitProgress, { feature: 'diarization', phase: 'error', status: 'error', message, modelId: selectedModelId });
-    return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, env });
+    return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, env, cudaStatus });
   }
 
   if (!tokenForValidation) {
@@ -1615,6 +1671,7 @@ async function setupDiarizationAddon({
       env,
       tokenStatusReader,
       tokenReader,
+      cudaStatus,
     });
   } catch (validationError) {
     if (!isAiAddonCancelError(validationError)) {
@@ -1638,7 +1695,7 @@ async function setupDiarizationAddon({
       }),
     });
     emitSafeProgress(emitProgress, { feature: 'diarization', phase: 'cancelled', status: 'notConfigured', message, modelId: selectedModelId, percent: 0 });
-    return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, env });
+    return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, env, cudaStatus });
   }
 }
 
@@ -1652,6 +1709,7 @@ async function removeDiarizationSetup({
   now = () => new Date().toISOString(),
   emitProgress,
   env = process.env,
+  cudaStatus = null,
 } = {}) {
   const manifest = loadManifest({ userDataDir, fsModule, catalog });
   const selected = resolveDiarizationSetupTarget({
@@ -1699,7 +1757,7 @@ async function removeDiarizationSetup({
     modelId,
   });
 
-  return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, env });
+  return checkAiAddonSetupStatus({ userDataDir, platform, arch, safeStorage, fsModule, catalog, env, cudaStatus });
 }
 
 module.exports = {

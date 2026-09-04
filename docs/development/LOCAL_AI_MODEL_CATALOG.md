@@ -6,8 +6,8 @@ This app keeps optional local AI add-on artifacts catalog-driven in `src/ai-addo
 
 - Keep AvaNevis local-only: no cloud diarization, cloud summarization, telemetry, or background uploads.
 - Summary model and runtime downloads must be explicit user-triggered setup actions.
-- Speaker diarization setup must be explicit and stays under Electron `userData`. Speakrs uses a self-hosted model-pack archive plus a Windows ONNX Runtime closure; pyannote uses its managed Python dependencies and Hugging Face cache.
-- Speaker diarization is accelerator-only: Windows uses CUDA; macOS uses Apple Silicon CoreML for Speakrs or PyTorch Metal/MPS for pyannote. CPU-only fallback must not be enabled. **Linux Core Beta has no catalog entries** (`unsupported`); do not add `linux-x64` Speakrs/Pyannote/llama.cpp pins until Phases 6–9.
+- Speaker diarization setup must be explicit and stays under Electron `userData`. Speakrs uses a self-hosted model-pack archive plus a Windows or Linux ONNX Runtime closure; pyannote uses its managed Python dependencies and Hugging Face cache.
+- Speaker diarization is accelerator-only: Windows uses CUDA; macOS uses Apple Silicon CoreML for Speakrs or PyTorch Metal/MPS for pyannote. Linux is Speakrs-only, CUDA-only on x86_64 after the accepted managed CUDA 12 preflight, and has no CPU fallback. Pyannote is not a Linux product option. Linux summaries are an active v2.9 CUDA-only Qwen lane, but remain unavailable until their own pinned runtime/model, integrity, managed CUDA, packaged, and RTX 4070 gates pass. Task 4 pins remain the Linux `speakrs-cli` and setup-time CUDA 12 ORT/model-pack closure in `src/ai-addon/speakrs-pack-spec.js`; do not weaken those pins.
 - Setup downloads must emit redacted progress, support cancellation, clean partial `.download` files, and preserve any previously valid install when cancellation happens during validation. Redaction must cover bearer tokens, legacy `Authorization: token ...`, `token=` / `access_token=` / `api_key=` query parameters, `X-Api-Key`, and URL credentials.
 - Pin every downloadable summary model and runtime artifact by immutable URL, filename, and SHA-256 checksum.
 - Summary model/runtime download URLs must use HTTPS and an allowed artifact host. The allowlist is derived from catalog **download-related** keys only (`downloadUrl`, `url`, `indexUrl`, `extraIndexUrls`) plus known GitHub/Hugging Face/PyPI redirect hosts listed explicitly in `DOWNLOAD_REDIRECT_HOSTS` (`src/ai-addon/download-helpers.js`). `licenseUrl` / `releaseUrl` / docs links must not expand the allowlist. Do **not** wildcard `*.hf.co` / `*.huggingface.co`; when HF/Xet rotates CDN subdomains, add the new host to that set. HF-hosted summary models normally download via bundled Python `huggingface_hub`/`hf_xet` (bypassing the JS allowlist) and still require pinned SHA-256 verification. Arbitrary HTTPS hosts remain blocked.
@@ -17,6 +17,19 @@ This app keeps optional local AI add-on artifacts catalog-driven in `src/ai-addo
 - Store artifacts under Electron `userData` via the AI add-on cache helpers so app updates do not remove installed add-ons.
 - Pyannote diarization must use the user's own Hugging Face token stored through Electron `safeStorage` only. Speakrs is token-free and must not inspect, decrypt, or store Hugging Face tokens.
 - Adding or renaming a speaker engine must keep Settings About credits, `THIRD_PARTY_NOTICES.md`, and `tests/js/legal-notices.test.js` in sync.
+
+### Linux Qwen summary runtime pin
+
+The active Linux summary lane uses the catalog entry
+`llama-cpp-v0.3.0-linux-x64-cuda-12.8`: ai-dock's MIT llama.cpp v0.3.0
+CUDA 12.8 amd64 release, plus the pinned NVIDIA CUDA runtime and NCCL wheels.
+The release archive, wheel sizes, SHA-256 values, extracted regular-file pins,
+and license links live in `src/ai-addon-state.js` and the v2.9 compatibility
+matrix. The NCCL wheel's applicable notice is
+`nvidia/nccl/lib/LICENSE.txt`. NCCL is kept with the summary runtime rather than broadened into the
+Task 2 transcription runtime catalog. Linux status stays `unsupported` unless
+the managed CUDA 12 admission, all local artifact checks, and packaged RTX
+4070 evidence pass.
 
 ## Runtime Cache Locations
 
@@ -48,8 +61,10 @@ These rules live **alongside** the still-live pyannote dependency-pin rules abov
 | Upstream repo | `avencera/speakrs-models` |
 | Revision | `5d24ffee75f13fb061fa6d10944a64e2dc1d5e6f` (`5d24ffe`) |
 | Windows pack | `speakrs-models-5d24ffe-win32-x64-cuda.tar.gz` — sha256 `a79973647cb787bf2aebd31acc2668d282735e41d451e244308bcf04ea77ad20`, 208765985 bytes, 19 ONNX/PLDA files |
+| Linux pack | same published CUDA archive as Windows (`speakrs-models-5d24ffe-win32-x64-cuda.tar.gz`, same hash/size/19 files); pack-spec and catalog id `speakrs-models-5d24ffe-linux-x64-cuda`, `architecture: x64`, `cudaMajor: 12`. Setup and guided transcription admit only after x64/CUDA preflight. |
 | macOS pack | `speakrs-models-5d24ffe-darwin-arm64-coreml.tar.gz` — sha256 `0677b5eee394402ddd4cbdb991afd0736c24e955b145d4b98f69d63523cc8d50`, 375813778 bytes, 76 CoreML/ONNX/PLDA leaves |
 | Windows ORT | official `onnxruntime-win-x64-gpu_cuda12-1.27.1.zip` plus NVIDIA `cudart64_12` / `cufft64_11` wheels — setup-time only |
+| Linux ORT | official `onnxruntime-linux-x64-gpu_cuda12-1.27.1.tgz` (244,763,765 bytes, `08b568bd69500c36606aff7c3896ee4fa7d3531719f6b00f43e6a34db41dc4bf`) plus NVIDIA `libcudart.so.12` / `libcufft.so.11` / `libcurand.so.10` / `libnvrtc.so.12` wheels — setup-time only; compile-time pin `linux-x64: null` |
 
 Per-mode file lists and per-file SHA-256 values live in `src/ai-addon/speakrs-model-files.json` (`cudaPins` / `coremlPins`). Do not invent a shorter list.
 
@@ -58,15 +73,24 @@ Per-mode file lists and per-file SHA-256 values live in `src/ai-addon/speakrs-mo
 3. Build one archive per platform with:
    - `node scripts/build-speakrs-model-pack.js --platform win32-x64 --source <snapshot-dir> --out <output-dir>`
    - `node scripts/build-speakrs-model-pack.js --platform darwin-arm64 --source <snapshot-dir> --out <output-dir>`
+   - `node scripts/build-speakrs-model-pack.js --platform linux-x64 --source <snapshot-dir> --out <output-dir>` (same CUDA ONNX subset as Windows; Linux currently publishes that existing archive URL)
 4. The builder must preserve nested `.mlmodelc` paths and inject `legal/speakrs-model-pack/ATTRIBUTION.md` plus every complete text under `LICENSES/`. Do not publish a pack if those files are missing.
 5. Publish packs only on a dedicated GitHub model-artifact release, not an AvaNevis application release. Record each exact public URL, byte size, and SHA-256 in `SPEAKRS_MODEL_PACK_ARTIFACTS`; absent metadata must keep production setup fail-closed.
-6. Keep the Windows runtime separate from the model pack. It must use the pinned ONNX Runtime 1.27.1 CUDA 12 archive and NVIDIA runtime/cuFFT wheels, extract only `onnxruntime.dll`, `onnxruntime_providers_shared.dll`, `onnxruntime_providers_cuda.dll`, `cudart64_12.dll`, and `cufft64_11.dll`, and pin each extracted file's SHA-256 and size in catalog/spec `extractedFiles`. Installation and setup validation full-hash those immutable pins. Passive status checks enforce the pinned sizes plus archive identity; every Speakrs compute admission hashes changed `path + size + mtimeMs` fingerprints before spawn. Never trust hashes written into user-writable `install.json`.
+6. Keep the Windows and Linux runtimes separate from the model pack. Windows must use the pinned ONNX Runtime 1.27.1 CUDA 12 archive and NVIDIA runtime/cuFFT wheels, extract only `onnxruntime.dll`, `onnxruntime_providers_shared.dll`, `onnxruntime_providers_cuda.dll`, `cudart64_12.dll`, and `cufft64_11.dll`. Linux must use the pinned `onnxruntime-linux-x64-gpu_cuda12-1.27.1.tgz` archive and NVIDIA `libcudart.so.12` / `libcufft.so.11` / `libcurand.so.10` / `libnvrtc.so.12` wheels, extract only `libonnxruntime.so.1.27.1`, `libonnxruntime_providers_shared.so`, `libonnxruntime_providers_cuda.so`, `libcudart.so.12`, `libcufft.so.11`, `libcurand.so.10`, and `libnvrtc.so.12`. Pin each extracted file's SHA-256 and size in catalog/spec `extractedFiles`. Installation and setup validation full-hash those immutable pins. Passive status checks enforce the pinned sizes plus archive identity; every Speakrs compute admission hashes changed `path + size + mtimeMs` fingerprints before spawn. Never trust hashes written into user-writable `install.json`.
 7. Never delete shared CUDA pip packages, Whisper caches, or the packaged `Resources/bin/speakrs-cli`. Speakrs uninstall owns only `models/diarization/speakrs` and `runtimes/speakrs-ort`.
 8. Keep `licenseUrl` / `licenseUrls` metadata accurate. These fields document the MIT, CC-BY-4.0, and Apache-2.0 constituents and must not expand the download allowlist.
 9. Validate archive traversal rejection, per-file model checksums, all five Windows DLLs, cancellation cleanup, token-store isolation, and redacted progress with `npm test`.
 10. `speakrs-cli` is built by `build/prepare-resources.js` and installer-bundled. Pin `ort` compile-time downloads in `native/speakrs-cli/ort-compile-pins.json` only — never in `build/download-manifest.js`.
 
 ## Updating Summary Model Pins
+
+The existing Qwen summary implementation is enabled for Windows x64 CUDA
+and macOS arm64 Metal. Linux uses the same summary service, sidecar contract,
+profiles, and `aiComputeActionQueue`, but its catalog entry must be a distinct
+CUDA-only `linux-x64` artifact/runtime admission: x86_64, NVIDIA detection,
+admitted managed CUDA 12, verified model/runtime closure, and packaged RTX 4070
+evidence are all required before status can become `ready`. Linux must not
+reuse a CPU, Vulkan, SYCL, ROCm, cloud, or ambient-library path.
 
 1. Pick the catalog entry in `src/ai-addon-state.js` or add a new summary model entry.
 2. Use an immutable Hugging Face revision URL, not a moving branch like `main`.
@@ -76,6 +100,13 @@ Per-mode file lists and per-file SHA-256 values live in `src/ai-addon/speakrs-mo
 6. Update the summary model source metadata and the model metadata in `AI_MODEL_CATALOG`.
 7. Confirm packaged Windows and macOS requirements still include compatible `huggingface-hub` and `hf-xet` pins if the artifact is hosted on Hugging Face.
 8. Run `npm test` to verify catalog normalization, checksum status, setup selection, cancellation, and syntax checks.
+
+The prior Linux summary deferral is historical: the pinned `b9173` release was
+rejected because it did not publish a Linux CUDA x86_64 asset. Preserve that
+rejection as evidence, and do not add Linux catalog pins until a redistributable
+CUDA runtime decision has an exact source/release/commit, license, archive
+layout, byte size, SHA-256, complete dynamic-library closure, and RTX 4070
+inference smoke record.
 
 ## Updating llama.cpp Runtime Pins
 

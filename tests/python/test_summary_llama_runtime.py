@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 import pytest
 
@@ -24,10 +25,11 @@ def test_normalize_platform_matches_electron_style_names():
     assert normalize_platform('Darwin', 'arm64') == {'platform': 'darwin', 'arch': 'arm64'}
 
 
-def test_platform_acceleration_targets_cuda_and_metal_only():
+def test_platform_acceleration_targets_supported_cuda_and_metal_paths():
     assert get_platform_acceleration('win32', 'x64') == 'cuda'
     assert get_platform_acceleration('darwin', 'arm64') == 'metal'
-    assert get_platform_acceleration('linux', 'x64') == 'unsupported'
+    assert get_platform_acceleration('linux', 'x64') == 'cuda'
+    assert get_platform_acceleration('linux', 'arm64') == 'unsupported'
 
 
 def test_default_llama_executable_name_is_platform_specific():
@@ -88,6 +90,7 @@ def test_resolve_llama_runtime_prefers_extracted_windows_executable(tmp_path):
 
 def test_build_llama_cli_args_uses_json_prompt_file(tmp_path):
     runtime = {
+        'platform': 'darwin',
         'executable': str(tmp_path / 'llama-cli'),
         'modelPath': str(tmp_path / 'model.gguf'),
         'contextTokens': 4096,
@@ -105,6 +108,43 @@ def test_build_llama_cli_args_uses_json_prompt_file(tmp_path):
     assert '--single-turn' in args
     assert '--simple-io' in args
     assert args[args.index('--reasoning') + 1] == 'off'
+
+
+def test_linux_v030_cli_uses_supported_noninteractive_flags(tmp_path):
+    runtime = {
+        'platform': 'linux',
+        'executable': str(tmp_path / 'llama-cli'),
+        'modelPath': str(tmp_path / 'model.gguf'),
+    }
+    args = build_llama_cli_args(runtime, prompt_path=str(tmp_path / 'prompt.txt'), max_tokens=128)
+
+    assert '--no-conversation' not in args
+    assert '--single-turn' in args
+    assert args[args.index('--reasoning') + 1] == 'off'
+
+
+def test_pinned_v030_help_fixture_covers_every_emitted_cli_flag(tmp_path):
+    runtime = {
+        'platform': 'linux',
+        'executable': str(tmp_path / 'llama-cli'),
+        'modelPath': str(tmp_path / 'model.gguf'),
+    }
+    args = build_llama_smoke_test_args(runtime, prompt_path=str(tmp_path / 'prompt.txt'))
+    help_text = Path('tests/fixtures/llama-cli-v0.3.0-help.txt').read_text(encoding='utf-8')
+    flag_names = {
+        argument for argument in args
+        if argument.startswith('--')
+    }
+    assert flag_names <= set(re.findall(r'--[a-z0-9-]+', help_text))
+
+
+def test_missing_runtime_platform_does_not_enable_legacy_conversation_flag(tmp_path):
+    runtime = {
+        'executable': str(tmp_path / 'llama-cli'),
+        'modelPath': str(tmp_path / 'model.gguf'),
+    }
+    args = build_llama_cli_args(runtime, prompt_path=str(tmp_path / 'prompt.txt'), max_tokens=128)
+    assert '--no-conversation' not in args
 
 
 def test_smoke_args_use_pinned_runtime_compatible_flags(tmp_path):

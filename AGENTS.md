@@ -18,14 +18,14 @@ Verified, not assumed — correct these only with evidence.
 
 **Gotcha:** Claude Code does **not** read `AGENTS.md`, `.cursor/rules/`, or `.agents/skills/`. It reaches this file only through the `@AGENTS.md` import in root `CLAUDE.md`, and it reaches project skills only through `.claude/skills/`. Root `CLAUDE.md` is `.cursorignore`d so Cursor does not double-load this file.
 
-Project skills live in `.agents/skills/*/SKILL.md`; see `.agents/README.md` for the kept/removed set and discovery details. The official Anthropic `frontend-design` skill is also copied to `.claude/skills/frontend-design/` for direct Claude Code discovery; Cursor receives a scoped renderer router in `.cursor/rules/frontend-design-skill.mdc`, while OpenCode loads the canonical `.agents` skill and that router through `opencode.json`.
+Project skills live in `.agents/skills/*/SKILL.md`; see `.agents/README.md` for the kept/removed set and discovery details. The official Anthropic `frontend-design` skill is also copied to `.claude/skills/frontend-design/` for direct Claude Code discovery. OpenCode currently loads the Cursor routers and fast defaults, not the general `.agents` skill tree; use a skill only when its workflow is explicitly selected.
 
 ## Platform targets
 
 - Windows 10/11 x64; macOS 14+ runtime, packaged macOS builds are Apple Silicon (`arm64`) only.
-- Linux Core Beta (Omarchy first) is merged to `master` (`docs/initiatives/LINUX_SUPPORT.md`). Pulse/PipeWire capture uses opaque device IDs (`pulse-source:<name>`, `pulse-monitor:<name>`, `pulse-sink:<name>`, `none`); renderer and IPC must not `parseInt` them. Packaged x86_64 AppImage + pacman + experimental `.deb` (`AvaNevis-Setup-*`, electron-builder 26.x `toolsets.appimage` `1.0.2`, no host fuse2). Core Beta transcription remains CPU `faster-whisper` — preload and transcribe pass `--device cpu` until the dedicated v2.9 Linux-AI lane accepts a managed CUDA profile. The v2.9 Linux-AI lane is limited to CachyOS x86_64 + NVIDIA RTX 4070 and must separately accept managed CUDA Whisper, Speakrs, Pyannote, and summaries through pinned artifacts, encrypted non-`basic_text` `safeStorage` for Pyannote, packaged verification, and hardware evidence. Every unaccepted Linux AI path stays greyed fail-closed `unsupported`, with no CPU fallback or broader support claim. Phase 3 60-minute soak was cancelled 2026-08-27 (not run). Gate B closed 2026-08-28; the release workflow includes all three Linux artifacts. **Supported** Linux targets are Omarchy 4 and CachyOS x86_64 on Hyprland/Wayland + PipeWire (same Core Beta payload); Linux AI support is more narrowly limited to the accepted RTX 4070 profile. Ubuntu, vanilla Arch, Fedora Workstation, SteamOS Desktop Mode, other CachyOS desktops, and extra desktops are **experimental betas** (`docs/guides/LINUX_EXPERIMENTAL.md`) with no hardware claim. The Ubuntu desktop recording/`safeStorage` smoke remains open. Linux packaging verification must not require `dpkg-deb` (Arch-family hosts use `ar`+`tar`).
+- Linux Core Beta (Omarchy first) is merged to `master` (`docs/initiatives/LINUX_SUPPORT.md`). Pulse/PipeWire capture uses opaque device IDs (`pulse-source:<name>`, `pulse-monitor:<name>`, `pulse-sink:<name>`, `none`); renderer and IPC must not `parseInt` them. Packaged x86_64 AppImage + pacman + experimental `.deb` (`AvaNevis-Setup-*`, electron-builder 26.x `toolsets.appimage` `1.0.2`, no host fuse2). Core Beta transcription remains CPU `faster-whisper` until the user installs the optional managed CUDA 12 runtime. Linux CUDA setup is offered on x86_64 when an NVIDIA GPU is visible (`/proc/driver/nvidia` first, then `nvidia-smi`; the same detector feeds Settings, `check-gpu`, and install preflight). It is tested on CachyOS x86_64 + RTX 4070 and best-effort on other NVIDIA Linux. While a managed runtime tree exists, transcription is fail-closed CUDA; Settings keeps Uninstall reachable next to Repair so a broken or leftover tree can return to CPU. Linux children always clear ambient `LD_LIBRARY_PATH` and only repopulate it with validated managed and driver directories for an admitted runtime. Linux speaker identification is Speakrs-only; Pyannote stays unavailable and hidden from the Linux selector, while main-process rejection remains a defense-in-depth boundary. Summaries stay greyed `unsupported` until their own gate passes, with no cloud path. Phase 3 60-minute soak was cancelled 2026-08-27 (not run). Gate B closed 2026-08-28; the release workflow includes all three Linux artifacts. **Supported** Linux targets are Omarchy 4 and CachyOS x86_64 on Hyprland/Wayland + PipeWire (same Core Beta payload). Ubuntu, vanilla Arch, Fedora Workstation, SteamOS Desktop Mode, other CachyOS desktops, and extra desktops are **experimental betas** (`docs/guides/LINUX_EXPERIMENTAL.md`) with no hardware claim. The Ubuntu desktop recording/`safeStorage` smoke remains open. Linux packaging verification must not require `dpkg-deb` (Arch-family hosts use `ar`+`tar`).
 - `src/main.js` keeps a `faster-whisper` fallback for Intel Macs in dev logic, but packaged builds do not target Intel.
-- Windows transcription: `faster-whisper`. Apple Silicon: `lightning-whisper-mlx`. Linux Core Beta: `faster-whisper` on **CPU** only.
+- Windows transcription: `faster-whisper`. Apple Silicon: `lightning-whisper-mlx`. Linux: `faster-whisper` on **CPU** by default; optional managed CUDA 12 after install.
 
 ## End-to-end flow
 
@@ -58,7 +58,40 @@ Phase 0 source-scan tests treat `src/main.js` + `src/main/**/*.js` as one combin
 
 ## Critical invariants
 
-### Recorder stdout is the control contract
+This file is the always-on safety baseline. Read the path-matched canonical contract before changing the corresponding surface; these documents preserve the detailed operational rules that previously lived inline here.
+
+| Change surface | Canonical contract |
+|---|---|
+| Recorder, capture, discard, spool/finalization | `docs/development/contracts/recording.md` |
+| AI add-ons, tokens, downloads, queues, caches | `docs/development/contracts/local-ai.md` |
+| Prepared resources, installers, signing, tray | `docs/development/contracts/packaging.md` |
+| Swift helper or macOS desktop audio | `docs/development/contracts/macos-audio.md` |
+| Meeting metadata, scan/import, rename | `docs/development/contracts/meeting-persistence.md` |
+| Main/preload/renderer channels and facades | `docs/development/contracts/ipc.md` |
+
+### Always-on safeguards
+
+- Privacy is non-negotiable: no cloud processing, telemetry, background uploads, or embedded/proxied secrets.
+- Preserve explicit platform behavior. Linux is x86_64 Core Beta; CUDA add-ons are fail-closed and component-gated. Linux Speakrs Task 5 and CUDA-only Qwen summaries (Task 6) are accepted with evidence in `docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md`.
+- `src/main.js` is composition-only. IPC changes span service, preload, renderer, and tests; inspect Electron and Python sides of every cross-process contract.
+- Use the smallest relevant test while iterating; run `npm run test:all` before a PR for cross-cutting, recorder, persistence, packaging, or security work. Hardware acceptance is manual evidence, never inferred from CI.
+- Runtime scripts, tests, and dated compatibility evidence beat stale prose. Keep `todo.md` current for task state and use `docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md` for v2.9 acceptance evidence.
+
+## Validation
+
+- JS: `npm test`; Python: `npm run test:python`, `npm run test:python-syntax`; full: `npm run test:all`.
+- Device smoke: `python backend/device_manager.py`; macOS helper: `swift build -c release --arch arm64` in `swift/AudioCaptureHelper`.
+- Verify third-party object/asset behavior against real types or bytes, not convenient fakes only.
+
+## Working defaults
+
+- Work inline; ask before routine delegation. Keep plans concise and file-level.
+- Prefer extraction behind stable interfaces, retain explicit platform differences, and preserve graceful degradation.
+- Do not re-review unchanged work after feedback; inspect the final diff and relevant evidence before claiming completion.
+
+<!-- Detailed operational invariants moved to the linked canonical contracts above. -->
+
+<!--
 
 Recorder **control flow** rides structured **stdout** JSON — `levels`, `event`, `warning`, `error` — parsed line-by-line by `parseRecorderStdoutChunk`. **stderr is diagnostics-only and must never drive startup stages, warnings, errors, or recording-start state.**
 
@@ -282,4 +315,4 @@ Non-obvious validation targets: transcript JSON shape still matches renderer exp
 - Prefer extracting behind stable interfaces over rewriting flows; keep platform differences explicit rather than abstracted away; preserve the intentional graceful degradation in handlers rather than hard-failing.
 - When simplifying, preserve current operational behavior first, then reduce complexity.
 - Trust runtime scripts and CI over stale docs. When docs disagree with this file on a cross-process contract, this file wins. Inspect both the Electron and Python side before changing any cross-process contract.
-- Keep `todo.md` current when task status, major progress, or execution order changes. Update this file when cross-process contracts, AI catalog pins, build inputs, or validation expectations change.
+-->

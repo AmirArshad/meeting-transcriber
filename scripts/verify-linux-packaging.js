@@ -4,14 +4,22 @@
 /**
  * Verify a packaged Linux AvaNevis layout (unpacked dir, AppImage, pacman, or deb).
  *
- * Core Beta: bundled Python/ffmpeg/backend/legal, CPU faster-whisper, no
- * Speakrs/ORT-CUDA/llama.cpp/pyannote artifacts, no FUSE2 AppImage runtime.
+ * Core Beta capture plus installer-bundled Linux speakrs-cli. Setup-time Speakrs
+ * ORT/CUDA, llama.cpp, and pyannote artifacts stay out of the package. CI Speakrs
+ * checks are structural/non-GPU only.
  */
 
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const {
+  inspectPackagedSpeakrsLayout,
+  SPEAKRS_VALIDATE_WAV_NAME,
+} = require('../src/ai-addon/speakrs-cli-integrity');
+const {
+  getSpeakrsSetupTimeArtifactBasenames,
+} = require('../src/ai-addon/speakrs-pack-spec');
 
 const REPO_ROOT = path.join(__dirname, '..');
 const DEFAULT_UNPACKED = path.join(REPO_ROOT, 'dist', 'linux-unpacked');
@@ -25,21 +33,44 @@ const FORBIDDEN_PACMAN_PACKAGES = Object.freeze(['ffmpeg']);
 const FORBIDDEN_DEB_PACKAGES = Object.freeze(['ffmpeg']);
 
 const FORBIDDEN_BASENAME_PATTERNS = Object.freeze([
-  /^speakrs-cli(\.exe)?$/i,
+  /^speakrs-cli\.exe$/i,
   /^llama-cli(\.exe)?$/i,
   /^audiocapture-helper$/i,
 ]);
 
 const FORBIDDEN_PATH_SUBSTRINGS = Object.freeze([
   'onnxruntime-linux-x64-gpu',
+  'onnxruntime-win-x64-gpu',
   'nvidia_cublas',
   'nvidia-cublas',
   'nvidia_cudnn',
   'nvidia-cudnn',
   'nvidia_cuda_runtime',
+  'nvidia_cufft',
+  'nvidia_curand',
+  'nvidia_cuda_nvrtc',
+  'nvidia_nvrtc',
   'llama.cpp',
   'pyannote.audio',
-  'speakrs-cli',
+]);
+
+const FORBIDDEN_SETUP_TIME_ARCHIVE_BASENAME_PATTERNS = Object.freeze([
+  /^onnxruntime-.*-gpu/i,
+  /^nvidia_cufft/i,
+  /^nvidia_cuda_runtime/i,
+  /^nvidia_cublas/i,
+  /^nvidia_cudnn/i,
+  /^nvidia_curand/i,
+  /^nvidia_cuda_nvrtc/i,
+  /^nvidia_nvrtc/i,
+]);
+
+const REQUIRED_LINUX_LEGAL_FILES = Object.freeze([
+  'THIRD_PARTY_NOTICES.md',
+  'LICENSE.txt',
+  'FFMPEG-COMPLIANCE.json',
+  'ffmpeg-SOURCE-OFFER.txt',
+  'PYTHON-BUNDLED-PACKAGES.md',
 ]);
 
 const FUSE2_RUNTIME_MARKERS = Object.freeze([
@@ -120,6 +151,16 @@ function assertNotForbiddenPackagedPath(relativePath) {
       fail(`Linux package must not contain deferred add-on binary: ${rel}`);
     }
   }
+  for (const pattern of FORBIDDEN_SETUP_TIME_ARCHIVE_BASENAME_PATTERNS) {
+    if (pattern.test(base)) {
+      fail(`Linux package must not contain deferred add-on path: ${rel}`);
+    }
+  }
+  for (const name of getSpeakrsSetupTimeArtifactBasenames()) {
+    if (base === name) {
+      fail(`Linux package must not contain deferred add-on path: ${rel}`);
+    }
+  }
   const lower = rel.toLowerCase();
   for (const marker of FORBIDDEN_PATH_SUBSTRINGS) {
     if (lower.includes(marker.toLowerCase())) {
@@ -173,7 +214,8 @@ function assertLinuxPackagedLayout(resourcesRoot, { requireRequirements = true }
   const backendPath = path.join(resourcesRoot, 'backend');
   const recorderPath = path.join(backendPath, 'audio', 'linux_recorder.py');
   const transcriberPath = path.join(backendPath, 'transcription', 'faster_whisper_transcriber.py');
-  const noticesPath = path.join(resourcesRoot, 'legal', 'THIRD_PARTY_NOTICES.md');
+  const legalDir = path.join(resourcesRoot, 'legal');
+  const noticesPath = path.join(legalDir, 'THIRD_PARTY_NOTICES.md');
 
   assertExecutableFile(pythonPath, 'bundled Python');
   assertExecutableFile(ffmpegPath, 'bundled ffmpeg');
@@ -184,8 +226,11 @@ function assertLinuxPackagedLayout(resourcesRoot, { requireRequirements = true }
   if (!fs.existsSync(transcriberPath)) {
     fail(`Missing bundled faster-whisper transcriber: ${transcriberPath}`);
   }
-  if (!fs.existsSync(noticesPath) || fs.statSync(noticesPath).size <= 0) {
-    fail(`Missing packaged legal notices: ${noticesPath}`);
+  for (const name of REQUIRED_LINUX_LEGAL_FILES) {
+    const legalPath = path.join(legalDir, name);
+    if (!fs.existsSync(legalPath) || fs.statSync(legalPath).size <= 0) {
+      fail(`Missing packaged legal notices: ${legalPath}`);
+    }
   }
 
   if (requireRequirements) {
@@ -197,7 +242,33 @@ function assertLinuxPackagedLayout(resourcesRoot, { requireRequirements = true }
     }
   }
 
-  for (const filePath of listFilesRecursive(resourcesRoot)) {
+  const speakrsLayout = inspectPackagedSpeakrsLayout({
+    platform: 'linux',
+    resourcesPath: resourcesRoot,
+  });
+  if (!speakrsLayout.ok) {
+    const target = speakrsLayout.kind === 'fixture' ? speakrsLayout.wavPath : speakrsLayout.cliPath;
+    fail(
+      `Linux package Speakrs ${speakrsLayout.kind || 'layout'} is ${speakrsLayout.reason}: ${target}`,
+    );
+  }
+
+  const packagedFiles = listFilesRecursive(resourcesRoot);
+  const fixtureMatches = packagedFiles
+    .filter((filePath) => path.basename(filePath) === SPEAKRS_VALIDATE_WAV_NAME)
+    .map((filePath) => path.relative(resourcesRoot, filePath).replace(/\\/g, '/'));
+  if (fixtureMatches.length !== 1 || fixtureMatches[0] !== `bin/${SPEAKRS_VALIDATE_WAV_NAME}`) {
+    fail(
+      `Linux package must contain exactly one ${SPEAKRS_VALIDATE_WAV_NAME} at bin/${SPEAKRS_VALIDATE_WAV_NAME}; found: ${fixtureMatches.join(', ') || '(none)'}`,
+    );
+  }
+
+  const staleWinCli = path.join(resourcesRoot, 'bin', 'speakrs-cli.exe');
+  if (fs.existsSync(staleWinCli)) {
+    fail(`Linux package contains a stale Windows Speakrs binary: ${staleWinCli}`);
+  }
+
+  for (const filePath of packagedFiles) {
     assertNotForbiddenPackagedPath(path.relative(resourcesRoot, filePath));
   }
 
@@ -762,7 +833,9 @@ module.exports = {
   FORBIDDEN_DEPEND_SUBSTRINGS,
   FORBIDDEN_DEB_PACKAGES,
   FORBIDDEN_PACMAN_PACKAGES,
+  FORBIDDEN_SETUP_TIME_ARCHIVE_BASENAME_PATTERNS,
   FUSE2_RUNTIME_MARKERS,
+  REQUIRED_LINUX_LEGAL_FILES,
   assertAppImageUsesStaticRuntime,
   assertDebControl,
   assertLinuxPackagedLayout,

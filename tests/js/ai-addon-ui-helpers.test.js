@@ -7,7 +7,9 @@ const path = require('node:path');
 
 const {
   SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE,
+  applyDiarizationEngineCardDomState,
   buildDiarizationEngineCards,
+  coerceDiarizationEngineForPlatform,
   getDiarizationEngineCard,
   getDiarizationRemoveConfirmMessage,
   getDiarizationSetupButtonLabel,
@@ -132,6 +134,42 @@ test('Speakrs is Recommended only on Apple Silicon and uses selector copy', () =
 
   const cards = buildDiarizationEngineCards({ platform: 'darwin', arch: 'arm64' });
   assert.deepEqual(cards.map((card) => card.engine), ['speakrs', 'pyannote']);
+});
+
+test('Linux exposes Speakrs as its only speaker-identification engine', () => {
+  const cards = buildDiarizationEngineCards({ platform: 'linux', arch: 'x64' });
+
+  assert.deepEqual(cards.map((card) => card.engine), ['speakrs']);
+});
+
+test('unknown renderer platform stays Speakrs-only until win32/darwin is known', () => {
+  assert.deepEqual(buildDiarizationEngineCards({}).map((card) => card.engine), ['speakrs']);
+  assert.deepEqual(buildDiarizationEngineCards({ platform: null }).map((card) => card.engine), ['speakrs']);
+  assert.equal(coerceDiarizationEngineForPlatform('pyannote', 'linux'), 'speakrs');
+  assert.equal(coerceDiarizationEngineForPlatform('pyannote', null), 'speakrs');
+  assert.equal(coerceDiarizationEngineForPlatform('pyannote', 'win32'), 'pyannote');
+});
+
+test('Linux renderer state hides Pyannote cards and keeps token UI off', () => {
+  const homeAndSettings = applyDiarizationEngineCardDomState(
+    [{ engine: 'speakrs' }, { engine: 'pyannote' }],
+    { selectedEngine: 'pyannote', platform: 'linux', arch: 'x64' },
+  );
+
+  assert.deepEqual(homeAndSettings, [
+    { engine: 'speakrs', hidden: false, selected: true, radioDisabled: false },
+    { engine: 'pyannote', hidden: true, selected: false, radioDisabled: true },
+  ]);
+  assert.equal(
+    shouldShowDiarizationTokenUi(coerceDiarizationEngineForPlatform('pyannote', 'linux')),
+    false,
+  );
+  assert.equal(
+    shouldOfferDiarizationSetupFields({
+      engine: coerceDiarizationEngineForPlatform('pyannote', 'linux'),
+    }).showToken,
+    false,
+  );
 });
 
 test('token and speaker-count UI stay hidden unless pyannote is selected', () => {
@@ -265,6 +303,20 @@ test('hidden AI add-on fields beat display:flex so Speakrs hides token and speak
   const css = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'renderer', 'styles.css'), 'utf8');
   assert.match(css, /\.ai-addon-field\s*\{[^}]*display:\s*flex/);
   assert.match(css, /\.ai-addon-field\[hidden\]\s*\{[^}]*display:\s*none/);
+});
+
+test('hidden diarization engine cards beat display:flex so Linux can hide Pyannote', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'renderer', 'styles.css'), 'utf8');
+  assert.match(css, /\.diarization-engine-card\s*\{[^}]*display:\s*flex/);
+  assert.match(css, /\.diarization-engine-card\[hidden\]\s*\{[^}]*display:\s*none/);
+  assert.match(css, /\.diarization-engine-selector\.is-single-engine\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/);
+});
+
+test('renderer applies Linux Speakrs-only card state instead of leaving static Pyannote HTML visible', () => {
+  const appJs = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'renderer', 'app.js'), 'utf8');
+  assert.match(appJs, /applyDiarizationEngineCardDomState/);
+  assert.match(appJs, /coerceDiarizationEngineForPlatform/);
+  assert.match(appJs, /is-single-engine/);
 });
 
 test('Settings and Home apply Switch model and restore engine radios from control state', () => {

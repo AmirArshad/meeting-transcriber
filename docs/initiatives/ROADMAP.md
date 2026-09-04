@@ -1,6 +1,6 @@
 # AvaNevis — Product Roadmap
 
-This document outlines what's shipped, what's in flight, and what's planned. AvaNevis (formerly Meeting Transcriber) is a privacy-first local-only meeting recorder + transcriber for Windows and Apple Silicon macOS.
+This document outlines what's shipped, what's in flight, and what's planned. AvaNevis (formerly Meeting Transcriber) is a privacy-first local-only meeting recorder + transcriber for Windows, Apple Silicon macOS, and Linux x86_64 Core Beta.
 
 ## Shipped
 
@@ -10,7 +10,7 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 - **Local Whisper transcription** — `faster-whisper` on Windows with optional CUDA, `lightning-whisper-mlx` on Apple Silicon with Metal. CPU fallback path for non-GPU machines.
 - **Local AI add-ons (optional)** — speaker diarization and transcript summaries with explicit setup and local-only execution. Speaker identification is exclusive **Speakrs** (token-free; Windows CUDA / macOS Apple Silicon CoreML) or **Pyannote** (`pyannote/speaker-diarization-community-1`; Windows CUDA / macOS Apple Silicon MPS). Summaries use pinned local `llama.cpp` runtime/model setup with History integration.
 - **Meeting history** — persisted under the user-data folder with a unique meeting ID, browseable list, transcript viewer, and synchronized audio playback.
-- **Cross-platform installers** — Windows NSIS and macOS DMG with embedded Python runtime, ffmpeg, `speakrs-cli`, and the bundled native macOS audio helper.
+- **Cross-platform installers** — Windows NSIS, macOS DMG, and Linux x86_64 AppImage/pacman/experimental `.deb` packages with bundled runtimes.
 - **GPU acceleration** — CUDA on Windows, Metal/MLX on Apple Silicon.
 - **Opus compression** — ~95% size reduction vs WAV (≈ 23 MB for a 40-minute meeting), with WAV fallback if ffmpeg fails or output verification fails.
 - **Model preloading** — improves first-time experience by warming the model in the background.
@@ -46,6 +46,7 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 - **Long-recording safety (v2.5.0)** — durable `{stem}.capture/` track spools (not whole-session RAM); bounded multi-pass stop finalization; interrupted-session recovery (`Recover Now` / `Later`); Node `statfs` disk probes with periodic low-space warnings (never auto-stop); structured stop stages in the UI. See [LONG_RECORDING_SAFETY.md](LONG_RECORDING_SAFETY.md).
 - **Back-to-back recording & transcription queue (v2.6.0)** — Start unlocks after pending persist; main-owned FIFO transcription jobs; Home Activity list; discard capture; cancel/resume pending work; between-job GPU/preload admission. See [FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md](FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md).
 - **Speakrs speaker identification (v2.7.0)** — exclusive Speakrs (token-free default for new users) or Pyannote selector; only one engine installed; existing Pyannote installs stay until the user switches. Soak notes: [SPEAKRS_BENCHMARKS.md](../development/SPEAKRS_BENCHMARKS.md).
+- **Linux Core Beta (v2.8.0)** — Omarchy 4 and CachyOS x86_64 Hyprland/Wayland + PipeWire support, with AppImage, pacman, and experimental `.deb` packaging. See [LINUX_EXPERIMENTAL.md](../guides/LINUX_EXPERIMENTAL.md).
 
 ### Branding
 
@@ -70,7 +71,7 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 
 ## In progress
 
-_No major product initiative in flight. See Planned below and root [`todo.md`](../../todo.md)._
+v2.9 Linux-AI add-ons are accepted. CUDA Whisper, Linux Speakrs (including the Windows x64 never-installed check), and CUDA-only Qwen summaries have recorded evidence. The next v2.9 lane is capture-mode selection. See root [`todo.md`](../../todo.md) and the [compatibility matrix](../development/V2_9_DEPENDENCY_COMPATIBILITY.md).
 
 ## Planned
 
@@ -96,7 +97,7 @@ _No major product initiative in flight. See Planned below and root [`todo.md`](.
 
 Longer horizon, lower priority:
 
-- **Linux support.** Native Linux desktop build (AppImage + `.deb`); plan refreshed post-v2.6.0 for spool capture, Activity transcription queue, and local AI catalog pins. Reference: [LINUX_SUPPORT.md](LINUX_SUPPORT.md).
+- **Linux expansion.** Broader desktop/hardware validation beyond the supported Core Beta hosts, including the still-open Ubuntu desktop recording/`safeStorage` smoke. Reference: [LINUX_SUPPORT.md](LINUX_SUPPORT.md).
 - **Setup wizard.** Guided first-time configuration. Reference: [FEATURE_SETUP_WIZARD.md](FEATURE_SETUP_WIZARD.md).
 - **Optional private meeting-object sync** to user-controlled storage (never to a hosted AvaNevis backend). See [Meeting objects and private sync](MEETING_OBJECTS_AND_PRIVATE_SYNC.md); the concept is not scheduled for v2.9.0.
 - **Local inference performance** (encode / Whisper / llama.cpp knobs and warm workers; stay on Electron + Python). See [Local inference performance](LOCAL_INFERENCE_PERFORMANCE.md); not scheduled for v2.9.0.
@@ -123,7 +124,7 @@ Longer horizon, lower priority:
 - **Minor (1.X.0)** — New features, backwards compatible.
 - **Patch (1.2.X)** — Bug fixes and minor improvements.
 
-**Current branch version:** 2.2.0 (recording reliability, macOS packaged desktop audio capture, and security/stability remediation).
+**Current development lane:** v2.9.0. Release acceptance remains component-gated; do not infer it from this roadmap.
 
 The rebrand introduces a new Electron `productName`, which changes the user-data folder. Existing Meeting Transcriber installs won't see their old recordings until the user manually moves the data folder, so this release uses a major version bump.
 

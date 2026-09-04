@@ -1,0 +1,746 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const { EventEmitter } = require('node:events');
+
+const { createGpuRuntimeService } = require('../../src/main/gpu-runtime-service');
+const { createPythonRuntime } = require('../../src/main/python-runtime');
+const { signalProcessTree } = require('../../src/main-process/quit-lifecycle-helpers');
+const { getManagedLinuxCudaRuntimeTarget } = require('../../src/main-process/cuda-runtime-helpers');
+const { linuxLibraryPathStartsWithDir } = require('./comparable-fs-path');
+const {
+  detectLinuxNvidiaGpu,
+  getLinuxCudaRuntimeStagingPath,
+  getLinuxCudaTombstonePath,
+  getLinuxCudaWheelStagePath,
+  isLinuxCudaOffered,
+} = require('../../src/main-process/linux-cuda-runtime-helpers');
+
+function withProcess({ platform = process.platform, arch = process.arch }, fn) {
+  const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+  const archDescriptor = Object.getOwnPropertyDescriptor(process, 'arch');
+  Object.defineProperty(process, 'platform', { configurable: true, value: platform });
+  Object.defineProperty(process, 'arch', { configurable: true, value: arch });
+  return Promise.resolve()
+    .then(fn)
+    .finally(() => {
+      Object.defineProperty(process, 'platform', platformDescriptor);
+      Object.defineProperty(process, 'arch', archDescriptor);
+    });
+}
+
+function createFakeProcess({ stdoutText = '', exitCode = 0, emitError = null } = {}) {
+  const proc = new EventEmitter();
+  proc.stdout = new EventEmitter();
+  proc.stderr = new EventEmitter();
+  proc.kill = () => {};
+  queueMicrotask(() => {
+    if (emitError) {
+      proc.emit('error', emitError);
+      return;
+    }
+    if (stdoutText) {
+      proc.stdout.emit('data', Buffer.from(stdoutText));
+    }
+    proc.emit('close', exitCode);
+  });
+  return proc;
+}
+
+function readyProbeJson() {
+  return JSON.stringify({
+    deviceAvailable: true,
+    runtimeLoadable: true,
+    missingLibraries: [],
+    runtime: 'ctranslate2',
+    matchedProfile: 'cuda12',
+    installedProfile: 'cuda12',
+    unsupportedDetectedProfiles: [],
+    supportedProfiles: ['cuda12'],
+    recommendedInstallProfile: 'cuda12',
+    statusCode: 'ready',
+    error: '',
+    deviceProbe: {
+      driverVersion: '610.57.04',
+      devices: [{ name: 'NVIDIA GeForce RTX 4070', driverVersion: '610.57.04', computeCapability: '8.9' }],
+    },
+  });
+}
+
+function makeFixtureCatalog(root) {
+  const files = [
+    { fileName: 'libcublas.so.12', relativePath: 'nvidia/cublas/lib/libcublas.so.12', body: 'cublas' },
+    { fileName: 'libcublasLt.so.12', relativePath: 'nvidia/cublas/lib/libcublasLt.so.12', body: 'cublaslt' },
+    { fileName: 'libcudnn.so.9', relativePath: 'nvidia/cudnn/lib/libcudnn.so.9', body: 'cudnn' },
+  ];
+  const requiredLibraries = files.map((file) => {
+    const fullPath = path.join(root, ...file.relativePath.split('/'));
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+    fs.writeFileSync(fullPath, file.body);
+    return {
+      fileName: file.fileName,
+      relativePath: file.relativePath,
+      sha256: crypto.createHash('sha256').update(file.body).digest('hex'),
+      sizeBytes: file.body.length,
+    };
+  });
+  const wheelBody = Buffer.from('whl');
+  return {
+    architecture: 'x64',
+    platform: 'linux',
+    libraryRelativeDirs: ['nvidia/cublas/lib', 'nvidia/cudnn/lib'],
+    wheels: [{
+      id: 'fixture-cublas',
+      packageName: 'nvidia-cublas-cu12',
+      version: '12.9.2.10',
+      fileName: 'fixture.whl',
+      sha256: crypto.createHash('sha256').update(wheelBody).digest('hex'),
+      sizeBytes: wheelBody.length,
+      downloadUrl: 'https://files.pythonhosted.org/packages/fixture.whl',
+    }],
+    requiredLibraries,
+    unsupportedLibraryPrefixes: ['libcublas.so.13', 'libcublaslt.so.13'],
+  };
+}
+
+function wrapFsWithProcNvidia(baseFs, modelName = 'NVIDIA GeForce RTX 4090') {
+  const procRoot = '/proc/driver/nvidia/gpus';
+  const gpuId = '0000:01:00.0';
+  const infoPath = path.join(procRoot, gpuId, 'information');
+  return {
+    ...baseFs,
+    readdirSync(target, options) {
+      if (String(target) === procRoot) {
+        return [gpuId];
+      }
+      return baseFs.readdirSync(target, options);
+    },
+    readFileSync(target, encoding) {
+      if (String(target) === infoPath) {
+        return `Model:\t\t ${modelName}\nIRQ: 77\n`;
+      }
+      return baseFs.readFileSync(target, encoding);
+    },
+  };
+}
+
+function missingNvidiaSmi() {
+  throw new Error('nvidia-smi missing');
+}
+
+function createLinuxGpuService(overrides = {}) {
+  const userData = overrides.userData || fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-linux-gpu-'));
+  const catalog = overrides.catalog || makeFixtureCatalog(getManagedLinuxCudaRuntimeTarget(userData));
+  const librarySnapshots = Object.fromEntries(catalog.requiredLibraries.map((library) => {
+    const fullPath = path.join(getManagedLinuxCudaRuntimeTarget(userData), ...library.relativePath.split('/'));
+    return [library.relativePath, fs.existsSync(fullPath) ? fs.readFileSync(fullPath) : Buffer.from(library.fileName)];
+  }));
+  const spawnCalls = [];
+  const downloads = [];
+  const renamed = [];
+  const removed = [];
+  const realFs = overrides.fs || fs;
+  const serviceFs = {
+    ...realFs,
+    existsSync: realFs.existsSync.bind(realFs),
+    mkdirSync: realFs.mkdirSync.bind(realFs),
+    lstatSync: realFs.lstatSync.bind(realFs),
+    statSync: realFs.statSync.bind(realFs),
+    readFileSync: realFs.readFileSync.bind(realFs),
+    writeFileSync: realFs.writeFileSync.bind(realFs),
+    copyFileSync: realFs.copyFileSync.bind(realFs),
+    readdirSync: realFs.readdirSync.bind(realFs),
+    rmSync: realFs.rmSync.bind(realFs),
+    createReadStream: realFs.createReadStream.bind(realFs),
+    realpathSync: realFs.realpathSync.bind(realFs),
+    accessSync: realFs.accessSync.bind(realFs),
+    constants: realFs.constants,
+    renameSync(from, to) {
+      renamed.push({ from, to });
+      return realFs.renameSync(from, to);
+    },
+    promises: {
+      ...realFs.promises,
+      rm(target, options) {
+        removed.push(target);
+        return realFs.promises.rm(target, options);
+      },
+    },
+  };
+  const service = createGpuRuntimeService({
+    app: { getPath: () => userData },
+    path,
+    fs: serviceFs,
+    pythonConfig: { pythonExe: '/fake/python', backendPath: '/fake/backend' },
+    getBackendModuleArgs: (moduleName, extra = []) => ['-m', moduleName, ...extra],
+    appendSpawnLogBuffer: (buffer, data) => `${buffer}${data}`,
+    sendRedactedProgress: () => {},
+    flushRedactedProgress: () => {},
+    getActivePythonVersion: async () => ({
+      output: 'Python 3.11.9',
+      parsed: { version: '3.11.9', major: 3, minor: 11 },
+    }),
+    terminateProcessBestEffort: () => {},
+    assertTrustedRendererSender: () => {},
+    getDiarizationDependencySitePackagesPath: () => null,
+    enqueueGpuResourceAction: async (action) => action(),
+    isLinuxCudaProfileEnabled: () => true,
+    getLinuxCudaCatalog: () => catalog,
+    execFileSyncFn: overrides.execFileSyncFn || (() => {
+      throw new Error('nvidia-smi should not be required when /proc NVIDIA is visible');
+    }),
+    downloadLinuxCudaWheel: async ({ url, destinationPath, expectedSizeBytes }) => {
+      downloads.push({ url, destinationPath, expectedSizeBytes });
+      fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
+      fs.writeFileSync(destinationPath, 'whl');
+    },
+    ...overrides,
+    app: (overrides.app) || { getPath: () => userData },
+    fs: serviceFs,
+    getLinuxCudaCatalog: overrides.getLinuxCudaCatalog || (() => catalog),
+    spawnTrackedPython: (args, options) => {
+      spawnCalls.push({ args, env: options && options.env, options });
+      if (typeof overrides.spawnTrackedPython === 'function') {
+        return overrides.spawnTrackedPython(args, options);
+      }
+      if (args.includes('pip') && args.includes('--no-index')) {
+        const target = args[args.indexOf('--target') + 1];
+        for (const library of catalog.requiredLibraries) {
+          const destination = path.join(target, ...library.relativePath.split('/'));
+          fs.mkdirSync(path.dirname(destination), { recursive: true });
+          fs.writeFileSync(destination, librarySnapshots[library.relativePath]);
+        }
+      }
+      return createFakeProcess({ stdoutText: readyProbeJson(), exitCode: 0 });
+    },
+  });
+  return { service, userData, catalog, spawnCalls, downloads, renamed, removed, cleanup() {
+    fs.rmSync(userData, { recursive: true, force: true });
+  } };
+}
+
+test('Linux CUDA stays unsupported when the profile is disabled by default', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    const { service, spawnCalls, cleanup } = createLinuxGpuService({ isLinuxCudaProfileEnabled: () => false });
+    try {
+      const status = await service.checkCudaRuntimeStatus();
+      assert.equal(status.statusCode, 'unsupportedPlatform');
+      assert.equal(spawnCalls.length, 0);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+test('Linux transcription stays CPU when the managed CUDA runtime is not installed', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    const { service, userData, spawnCalls, cleanup } = createLinuxGpuService();
+    try {
+      fs.rmSync(getManagedLinuxCudaRuntimeTarget(userData), { recursive: true, force: true });
+      const status = await service.resolveCudaStatusForTranscription();
+      assert.equal(status, null);
+      assert.equal(spawnCalls.length, 0);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+test('Linux transcription probes CUDA when a managed runtime tree exists', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    const { service, spawnCalls, cleanup } = createLinuxGpuService();
+    try {
+      const status = await service.resolveCudaStatusForTranscription();
+      assert.equal(status.statusCode, 'ready');
+      assert.ok(spawnCalls.length > 0);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+// Packaged CachyOS x86_64 + RTX 4070 evidence (2026-09-03): a native tray quit
+// issued while an in-queue CUDA probe was live reaped the probe, the delayed
+// `nvidia-smi` wrapper, and the wrapper's `sleep` grandchild. That only holds
+// because the probe child owns its own POSIX process group and quit signals the
+// group rather than the direct child. Spawning it with `detached: false`, or
+// terminating with a plain `proc.kill()`, would silently orphan `nvidia-smi`
+// descendants while every existing behavioral test still passed.
+test('Linux CUDA probe owns a process group so quit reaches nvidia-smi descendants', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    const { service, spawnCalls, cleanup } = createLinuxGpuService();
+    try {
+      await service.resolveCudaStatusForTranscription();
+      const probeCall = spawnCalls.find((call) => call.args.includes('transcription.cuda_probe'));
+      assert.ok(probeCall, 'expected a cuda_probe spawn');
+      assert.notEqual(
+        probeCall.options && probeCall.options.detached,
+        false,
+        'the CUDA probe must not opt out of its POSIX process group',
+      );
+
+      // Those exact options must still produce a group-owning child.
+      const spawned = [];
+      const pythonRuntime = createPythonRuntime({
+        app: { isPackaged: false, getPath: () => os.tmpdir() },
+        spawn: (exe, args, options) => {
+          spawned.push({ exe, args, options });
+          const proc = new EventEmitter();
+          proc.pid = 4242;
+          return proc;
+        },
+        path,
+        fs,
+        dirname: path.join(__dirname, '..', '..', 'src'),
+      });
+      const child = pythonRuntime.spawnTrackedPython(probeCall.args, probeCall.options || {});
+      assert.equal(spawned[0].options.detached, true, 'probe child must be spawned detached');
+      assert.equal(child.avanevisProcessGroup, true);
+
+      // ...and quit must signal that whole group, which is what reaped the
+      // wrapper and its `sleep` descendant in the packaged run.
+      const signals = [];
+      child.kill = () => {
+        throw new Error('quit must not fall back to a direct-child signal for a group owner');
+      };
+      signalProcessTree(child, 'SIGTERM', (pid, signal) => signals.push({ pid, signal }));
+      assert.deepEqual(signals, [{ pid: -4242, signal: 'SIGTERM' }]);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+test('Linux arm64 is rejected even when the CUDA profile is enabled', async () => {
+  await withProcess({ platform: 'linux', arch: 'arm64' }, async () => {
+    const { service, spawnCalls, cleanup } = createLinuxGpuService();
+    try {
+      const status = await service.checkCudaRuntimeStatus();
+      assert.equal(status.statusCode, 'unsupportedPlatform');
+      assert.equal(spawnCalls.length, 0);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+test('Linux CUDA probe reports ready after integrity and a successful child', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    const previousLibraryPath = process.env.LD_LIBRARY_PATH;
+    process.env.LD_LIBRARY_PATH = '/tmp/hostile:/lib';
+    const { service, spawnCalls, cleanup } = createLinuxGpuService();
+    try {
+      const status = await service.checkCudaRuntimeStatus();
+      assert.equal(status.statusCode, 'ready');
+      assert.equal(status.installed, true);
+      assert.ok(spawnCalls[0].args.includes('--validate-ctranslate2-cuda'));
+      assert.ok(spawnCalls[0].args.includes('--library-search-dirs-json'));
+      assert.equal(String(spawnCalls[0].env && spawnCalls[0].env.LD_LIBRARY_PATH || '').includes('/tmp/hostile'), false);
+    } finally {
+      if (previousLibraryPath === undefined) {
+        delete process.env.LD_LIBRARY_PATH;
+      } else {
+        process.env.LD_LIBRARY_PATH = previousLibraryPath;
+      }
+      cleanup();
+    }
+  });
+});
+
+test('Linux CUDA loader env ignores inherited hostile LD_LIBRARY_PATH', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    const { service, userData, cleanup } = createLinuxGpuService();
+    try {
+      const env = service.buildCudaRuntimeEnv({ LD_LIBRARY_PATH: '/tmp/hostile:/lib' });
+      const managed = getManagedLinuxCudaRuntimeTarget(userData);
+      assert.ok(linuxLibraryPathStartsWithDir(env.LD_LIBRARY_PATH, path.join(managed, 'nvidia')));
+      assert.doesNotMatch(String(env.LD_LIBRARY_PATH), /\/tmp\/hostile/);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+test('Linux CUDA probe surfaces non-ready integrity statuses without spawning', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    const cases = [
+      ['missingLibraries', { ok: false, statusCode: 'missingLibraries', missingLibraries: ['libcublas.so.12'], error: 'missing' }],
+      ['runtimeIntegrityFailed', { ok: false, statusCode: 'runtimeIntegrityFailed', missingLibraries: [], error: 'hash mismatch' }],
+    ];
+    for (const [statusCode, integrity] of cases) {
+      const { service, spawnCalls, cleanup } = createLinuxGpuService({
+        verifyLinuxCudaIntegrity: async () => integrity,
+      });
+      try {
+        const status = await service.checkCudaRuntimeStatus();
+        assert.equal(status.statusCode, statusCode);
+        assert.equal(status.installed, false);
+        assert.equal(spawnCalls.length, 0);
+      } finally {
+        cleanup();
+      }
+    }
+  });
+});
+
+test('Linux CUDA probe preserves backend status codes from valid JSON', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    for (const statusCode of ['deviceUnavailable', 'unsupportedRuntimeMajor', 'runtimeUnavailable', 'probeError']) {
+      const payload = {
+        deviceAvailable: statusCode !== 'deviceUnavailable' && statusCode !== 'probeError',
+        runtimeLoadable: false,
+        missingLibraries: [],
+        runtime: 'ctranslate2',
+        matchedProfile: '',
+        installedProfile: statusCode === 'unsupportedRuntimeMajor' ? 'cuda13' : '',
+        unsupportedDetectedProfiles: statusCode === 'unsupportedRuntimeMajor' ? ['cuda13'] : [],
+        supportedProfiles: ['cuda12'],
+        recommendedInstallProfile: 'cuda12',
+        statusCode,
+        error: statusCode,
+      };
+      const { service, cleanup } = createLinuxGpuService({
+        spawnTrackedPython: () => createFakeProcess({ stdoutText: JSON.stringify(payload), exitCode: 0 }),
+      });
+      try {
+        const status = await service.checkCudaRuntimeStatus();
+        assert.equal(status.statusCode, statusCode, statusCode);
+        assert.equal(status.installed, false);
+      } finally {
+        cleanup();
+      }
+    }
+  });
+});
+
+test('Linux CUDA probe treats a nonzero child exit as probeError', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    const { service, cleanup } = createLinuxGpuService({
+      spawnTrackedPython: () => createFakeProcess({ stdoutText: readyProbeJson(), exitCode: 1 }),
+    });
+    try {
+      const status = await service.checkCudaRuntimeStatus();
+      assert.equal(status.statusCode, 'probeError');
+      assert.match(status.error, /exited with code 1/);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+test('Linux CUDA probe treats invalid child JSON as probeError', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    const { service, cleanup } = createLinuxGpuService({
+      spawnTrackedPython: () => createFakeProcess({ stdoutText: '{nope', exitCode: 0 }),
+    });
+    try {
+      const status = await service.checkCudaRuntimeStatus();
+      assert.equal(status.statusCode, 'probeError');
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+test('Linux CUDA probe treats non-JSON text as probeError', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    const { service, cleanup } = createLinuxGpuService({
+      spawnTrackedPython: () => createFakeProcess({ stdoutText: 'deviceAvailable:True\nruntimeLoadable:True', exitCode: 0 }),
+    });
+    try {
+      const status = await service.checkCudaRuntimeStatus();
+      assert.equal(status.statusCode, 'probeError');
+      assert.equal(status.installed, false);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+test('Linux CUDA probe rejects ready JSON that is missing device/runtime invariants', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    const { service, cleanup } = createLinuxGpuService({
+      spawnTrackedPython: () => createFakeProcess({
+        stdoutText: JSON.stringify({ statusCode: 'ready' }),
+        exitCode: 0,
+      }),
+    });
+    try {
+      const status = await service.checkCudaRuntimeStatus();
+      assert.equal(status.statusCode, 'probeError');
+      assert.equal(status.installed, false);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+test('Linux CUDA hash mismatch fails closed before the probe child', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    const { service, catalog, spawnCalls, userData, cleanup } = createLinuxGpuService();
+    try {
+      const libraryPath = path.join(getManagedLinuxCudaRuntimeTarget(userData), catalog.requiredLibraries[0].relativePath);
+      const original = fs.readFileSync(libraryPath);
+      fs.writeFileSync(libraryPath, Buffer.alloc(original.length, 0x41));
+      const status = await service.checkCudaRuntimeStatus();
+      assert.equal(status.statusCode, 'runtimeIntegrityFailed');
+      assert.match(status.error, /hash mismatch/);
+      assert.equal(spawnCalls.length, 0);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+test('Linux CUDA symlink library escape is not treated as ready', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    const { service, catalog, spawnCalls, userData, cleanup } = createLinuxGpuService();
+    try {
+      const libraryPath = path.join(getManagedLinuxCudaRuntimeTarget(userData), catalog.requiredLibraries[0].relativePath);
+      const outside = path.join(os.tmpdir(), `avanevis-linux-cuda-escape-${process.pid}`);
+      fs.writeFileSync(outside, 'outside');
+      fs.rmSync(libraryPath);
+      fs.symlinkSync(outside, libraryPath);
+      const status = await service.checkCudaRuntimeStatus();
+      assert.notEqual(status.statusCode, 'ready');
+      assert.equal(status.installed, false);
+      assert.equal(spawnCalls.length, 0);
+      fs.rmSync(outside, { force: true });
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+test('Linux CUDA uninstall tombstones the active path then deletes only the tombstone', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    const { service, userData, renamed, removed, cleanup } = createLinuxGpuService();
+    try {
+      const handlers = {};
+      service.registerIpc({ handle(channel, handler) { handlers[channel] = handler; } });
+      const active = getManagedLinuxCudaRuntimeTarget(userData);
+      assert.equal(fs.existsSync(active), true);
+      const result = await handlers['uninstall-gpu']({ sender: {} });
+      assert.equal(result.success, true);
+      assert.equal(renamed.length, 1);
+      assert.equal(renamed[0].from, active);
+      assert.match(renamed[0].to, /\.tombstone-/);
+      assert.deepEqual(removed, [renamed[0].to]);
+      assert.equal(fs.existsSync(active), false);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+test('Linux CUDA uninstall rejects quit before touching the active runtime', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    const { service, userData, renamed, removed, cleanup } = createLinuxGpuService({
+      isQuitCommitted: () => true,
+    });
+    try {
+      const handlers = {};
+      service.registerIpc({ handle(channel, handler) { handlers[channel] = handler; } });
+      await assert.rejects(
+        handlers['uninstall-gpu']({ sender: {} }),
+        (error) => error && error.code === 'QUIT_IN_PROGRESS',
+      );
+      assert.equal(renamed.length, 0);
+      assert.equal(removed.length, 0);
+      assert.equal(fs.existsSync(getManagedLinuxCudaRuntimeTarget(userData)), true);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+test('Linux CUDA install downloads pinned wheels and pip-installs exact staged paths into a fresh target', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    const { service, spawnCalls, downloads, catalog, userData, renamed, cleanup } = createLinuxGpuService();
+    try {
+      const active = getManagedLinuxCudaRuntimeTarget(userData);
+      await service.runGpuPackageInstall({ mode: 'install' });
+      assert.equal(downloads.length, 1);
+      assert.equal(downloads[0].url, catalog.wheels[0].downloadUrl);
+      const pipArgs = spawnCalls.find((call) => call.args.includes('--no-index'));
+      assert.ok(pipArgs, 'expected offline pip install');
+      assert.equal(pipArgs.args.includes('--find-links'), false);
+      assert.equal(pipArgs.args.some((item) => String(item).includes('nvidia-cublas-cu12==')), false);
+      assert.ok(pipArgs.args.some((item) => String(item).endsWith(catalog.wheels[0].fileName)));
+      const target = pipArgs.args[pipArgs.args.indexOf('--target') + 1];
+      assert.notEqual(target, active);
+      assert.match(target, /\.staging-/);
+      assert.ok(renamed.some((item) => item.to === active));
+      assert.equal(fs.existsSync(active), true);
+      assert.equal(fs.existsSync(path.join(userData, 'ai-addons', 'cuda', 'wheelhouse', 'fixture.whl')), true);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+test('Linux CUDA install reconciles stale stages and restores a verified tombstone after restart', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    const { service, userData, cleanup } = createLinuxGpuService();
+    const active = getManagedLinuxCudaRuntimeTarget(userData);
+    const tombstone = getLinuxCudaTombstonePath(active, { now: 1, pid: 2 });
+    const runtimeStage = getLinuxCudaRuntimeStagingPath(active, { now: 3, pid: 4 });
+    const wheelStage = getLinuxCudaWheelStagePath(userData, { now: 5, pid: 6 });
+    try {
+      fs.renameSync(active, tombstone);
+      fs.mkdirSync(runtimeStage, { recursive: true });
+      fs.writeFileSync(path.join(runtimeStage, 'partial.txt'), 'partial');
+      fs.mkdirSync(wheelStage, { recursive: true });
+      fs.writeFileSync(path.join(wheelStage, 'partial.whl'), 'partial');
+
+      await service.runGpuPackageInstall({ mode: 'repair' });
+
+      assert.equal(fs.existsSync(active), true);
+      assert.equal(fs.existsSync(tombstone), false);
+      assert.equal(fs.existsSync(runtimeStage), false);
+      assert.equal(fs.existsSync(wheelStage), false);
+      assert.equal(
+        fs.existsSync(path.join(userData, 'ai-addons', 'cuda', 'wheelhouse', 'fixture.whl')),
+        true,
+      );
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+test('Linux CUDA repair installs into staging then atomically replaces a damaged live runtime', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    const { service, catalog, userData, spawnCalls, cleanup } = createLinuxGpuService();
+    try {
+      const active = getManagedLinuxCudaRuntimeTarget(userData);
+      const damagedPath = path.join(active, catalog.requiredLibraries[0].relativePath);
+      const original = fs.readFileSync(damagedPath);
+      fs.writeFileSync(damagedPath, Buffer.alloc(original.length, 0x41));
+      const before = await service.checkCudaRuntimeStatus();
+      assert.equal(before.statusCode, 'runtimeIntegrityFailed');
+
+      await service.runGpuPackageInstall({ mode: 'repair' });
+      const pipArgs = spawnCalls.find((call) => call.args.includes('--no-index'));
+      assert.notEqual(pipArgs.args[pipArgs.args.indexOf('--target') + 1], active);
+      const repaired = fs.readFileSync(damagedPath);
+      assert.equal(repaired.equals(original), true);
+      const after = await service.checkCudaRuntimeStatus();
+      assert.equal(after.statusCode, 'ready');
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+test('Linux CUDA status reports managedRuntimePresent separately from readiness', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    const { service, catalog, userData, cleanup } = createLinuxGpuService();
+    try {
+      const ready = await service.checkCudaRuntimeStatus();
+      assert.equal(ready.installed, true);
+      assert.equal(ready.managedRuntimePresent, true);
+
+      const libraryPath = path.join(getManagedLinuxCudaRuntimeTarget(userData), catalog.requiredLibraries[0].relativePath);
+      const original = fs.readFileSync(libraryPath);
+      fs.writeFileSync(libraryPath, Buffer.alloc(original.length, 0x41));
+      const broken = await service.checkCudaRuntimeStatus();
+      assert.equal(broken.installed, false);
+      assert.equal(broken.statusCode, 'runtimeIntegrityFailed');
+      assert.equal(broken.managedRuntimePresent, true);
+
+      fs.rmSync(getManagedLinuxCudaRuntimeTarget(userData), { recursive: true, force: true });
+      const missing = await service.checkCudaRuntimeStatus();
+      assert.equal(missing.installed, false);
+      assert.equal(missing.managedRuntimePresent, false);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+test('Linux check-gpu and install preflight use /proc NVIDIA when nvidia-smi is missing', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-linux-gpu-proc-'));
+    const procFs = wrapFsWithProcNvidia(fs, 'NVIDIA GeForce RTX 3060');
+    const gpuDetect = {
+      platform: 'linux',
+      arch: 'x64',
+      userDataPath: userData,
+      fsModule: procFs,
+      execFileSyncFn: missingNvidiaSmi,
+    };
+    const { service, spawnCalls, downloads, cleanup } = createLinuxGpuService({
+      userData,
+      fs: procFs,
+      execFileSyncFn: missingNvidiaSmi,
+      isLinuxCudaProfileEnabled: () => isLinuxCudaOffered(gpuDetect),
+    });
+    try {
+      fs.rmSync(getManagedLinuxCudaRuntimeTarget(userData), { recursive: true, force: true });
+      const detected = detectLinuxNvidiaGpu({
+        fsModule: procFs,
+        execFileSyncFn: missingNvidiaSmi,
+      });
+      assert.equal(detected.hasGPU, true);
+      assert.match(detected.gpuName, /RTX 3060/);
+
+      const gpuInfo = await service.checkNvidiaGpuAvailability();
+      assert.equal(gpuInfo.hasGPU, true);
+      assert.match(gpuInfo.gpuName, /RTX 3060/);
+      assert.equal(spawnCalls.some((call) => call.args.some((item) => String(item).includes('nvidia-smi'))), false);
+
+      const result = await service.ensureCompatibleGpuRuntime({ skipInstallIfReady: false });
+      assert.notEqual(result.message, 'No NVIDIA GPU was detected on this system. GPU acceleration cannot be enabled.');
+      assert.ok(downloads.length > 0, 'install should proceed past the GPU preflight');
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+test('Linux ensure skipInstallIfReady does not download or pip-install a ready runtime', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    const { service, spawnCalls, downloads, cleanup } = createLinuxGpuService();
+    try {
+      const result = await service.ensureCompatibleGpuRuntime({ skipInstallIfReady: true });
+      assert.equal(result.success, true);
+      assert.equal(result.action, 'none');
+      assert.equal(downloads.length, 0);
+      assert.equal(spawnCalls.some((call) => call.args.includes('pip')), false);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+test('Linux CPU children clear ambient LD_LIBRARY_PATH when no managed runtime exists', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    const { service, userData, cleanup } = createLinuxGpuService();
+    try {
+      fs.rmSync(getManagedLinuxCudaRuntimeTarget(userData), { recursive: true, force: true });
+      const env = service.buildCudaRuntimeEnv({ LD_LIBRARY_PATH: '/tmp/hostile:/lib', OTHER: 'keep' });
+      assert.equal(env.LD_LIBRARY_PATH, undefined);
+      assert.equal(env.OTHER, 'keep');
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+test('Linux arm64 children clear ambient LD_LIBRARY_PATH', async () => {
+  await withProcess({ platform: 'linux', arch: 'arm64' }, async () => {
+    const { service, cleanup } = createLinuxGpuService();
+    try {
+      const env = service.buildCudaRuntimeEnv({ LD_LIBRARY_PATH: '/tmp/hostile:/lib' });
+      assert.equal(env.LD_LIBRARY_PATH, undefined);
+    } finally {
+      cleanup();
+    }
+  });
+});

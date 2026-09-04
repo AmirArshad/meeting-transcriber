@@ -2,6 +2,7 @@ import tempfile
 import types
 import os
 import json
+import subprocess
 from typing import Any, cast
 from pathlib import Path
 import builtins
@@ -9,7 +10,12 @@ import builtins
 import pytest
 
 from backend.transcription import faster_whisper_transcriber as fw_transcriber
-from backend.transcription.cuda_probe import build_probe_report, find_unsupported_runtime_profiles
+from backend.transcription.cuda_probe import (
+    NvidiaSmiProbeError,
+    build_probe_report,
+    find_unsupported_runtime_profiles,
+    probe_nvidia_smi_devices,
+)
 from backend.transcription.faster_whisper_transcriber import TranscriberService, resolve_faster_whisper_device
 from backend.transcription.mlx_whisper_transcriber import MLXWhisperTranscriber
 from backend.transcription import nvidia_dll_loader
@@ -31,6 +37,16 @@ def test_faster_whisper_linux_core_beta_stays_on_cpu():
     assert resolve_faster_whisper_device('cpu', platform='linux') == 'cpu'
     assert resolve_faster_whisper_device('auto', platform='win32') == 'auto'
     assert resolve_faster_whisper_device('cuda', platform='win32') == 'cuda'
+
+
+def test_faster_whisper_linux_cuda_admission_rejects_non_cuda_device(monkeypatch):
+    monkeypatch.setenv('AVANEVIS_LINUX_CUDA_REQUIRED', '1')
+
+    assert resolve_faster_whisper_device('cuda', platform='linux') == 'cuda'
+    with pytest.raises(ValueError, match='requires --device cuda'):
+        resolve_faster_whisper_device('auto', platform='linux')
+    with pytest.raises(ValueError, match='requires --device cuda'):
+        resolve_faster_whisper_device('cpu', platform='linux')
 
 
 def test_faster_whisper_lock_file_path_uses_private_lock_dir(monkeypatch, tmp_path):
@@ -91,6 +107,30 @@ def test_cuda_probe_detects_unsupported_newer_runtime(tmp_path):
     assert report['missingLibraries'] == ['cublas64_12.dll', 'cublasLt64_12.dll', 'cudnn64_9.dll']
     assert report['unsupportedDetectedProfiles'] == ['cuda13']
     assert report['installedProfile'] == 'cuda13'
+    assert report['statusCode'] == 'unsupportedRuntimeMajor'
+
+
+def test_cuda_probe_detects_linux_shared_library_runtime_major(tmp_path):
+    cuda13_lib = tmp_path / 'cuda13-lib'
+    cuda13_lib.mkdir()
+    (cuda13_lib / 'libcublas.so.13').write_text('shared object')
+
+    report = build_probe_report(
+        profiles=[{
+            'id': 'cuda12',
+            'requiredDlls': ['libcublas.so.12', 'libcublasLt.so.12', 'libcudnn.so.9'],
+        }],
+        supported_profiles=['cuda12'],
+        unsupported_hints=[{
+            'id': 'cuda13',
+            'expectedDllPrefixes': ['libcublas.so.13'],
+        }],
+        device_count_getter=lambda: 1,
+        load_dll=lambda library: (_ for _ in ()).throw(OSError(library)),
+        path_value=str(cuda13_lib),
+    )
+
+    assert report['unsupportedDetectedProfiles'] == ['cuda13']
     assert report['statusCode'] == 'unsupportedRuntimeMajor'
 
 
@@ -165,6 +205,149 @@ def test_cuda_probe_prefers_ready_supported_runtime_even_with_cuda13_on_path(tmp
     assert report['unsupportedDetectedProfiles'] == ['cuda13']
     assert report['installedProfile'] == 'cuda12'
     assert report['statusCode'] == 'ready'
+
+
+class _FakeCompletedProcess:
+    def __init__(self, returncode=0, stdout='', stderr=''):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def test_nvidia_smi_probe_returns_structured_device_rows():
+    devices = probe_nvidia_smi_devices(
+        runner=lambda *args, **kwargs: _FakeCompletedProcess(
+            stdout='NVIDIA GeForce RTX 4070, 610.57.04, 8.9\n',
+        ),
+    )
+    assert devices == [{
+        'name': 'NVIDIA GeForce RTX 4070',
+        'driverVersion': '610.57.04',
+        'computeCapability': '8.9',
+    }]
+
+
+def test_nvidia_smi_probe_classifies_missing_timeout_nonzero_and_malformed():
+    with pytest.raises(NvidiaSmiProbeError, match='was not found') as missing:
+        probe_nvidia_smi_devices(runner=lambda *args, **kwargs: (_ for _ in ()).throw(FileNotFoundError('nvidia-smi')))
+    assert missing.value.kind == 'missing_executable'
+
+    with pytest.raises(NvidiaSmiProbeError, match='timed out') as timed_out:
+        probe_nvidia_smi_devices(
+            runner=lambda *args, **kwargs: (_ for _ in ()).throw(
+                subprocess.TimeoutExpired(cmd='nvidia-smi', timeout=10)
+            ),
+        )
+    assert timed_out.value.kind == 'timeout'
+
+    with pytest.raises(NvidiaSmiProbeError, match='exited with code 1') as nonzero:
+        probe_nvidia_smi_devices(runner=lambda *args, **kwargs: _FakeCompletedProcess(returncode=1, stderr='driver'))
+    assert nonzero.value.kind == 'nonzero_exit'
+
+    with pytest.raises(NvidiaSmiProbeError, match='Unexpected nvidia-smi row') as malformed:
+        probe_nvidia_smi_devices(
+            runner=lambda *args, **kwargs: _FakeCompletedProcess(stdout='NVIDIA GeForce RTX 4070, 610.57.04\n'),
+        )
+    assert malformed.value.kind == 'malformed_output'
+
+
+def test_cuda_probe_nvidia_smi_failures_override_status_to_probe_error():
+    def raise_missing():
+        raise NvidiaSmiProbeError('missing_executable', 'nvidia-smi was not found on PATH.')
+
+    report = build_probe_report(
+        profiles=[{'id': 'cuda12', 'requiredDlls': ['libcublas.so.12']}],
+        supported_profiles=['cuda12'],
+        unsupported_hints=[],
+        device_count_getter=raise_missing,
+        load_dll=lambda name: object(),
+        path_value='',
+        platform='linux',
+    )
+    assert report['statusCode'] == 'probeError'
+    assert report['deviceAvailable'] is False
+    assert 'nvidia-smi' in report['error']
+
+
+def test_cuda_probe_ignores_ambient_path_when_library_search_dirs_are_empty(tmp_path, monkeypatch):
+    cuda13_lib = tmp_path / 'cuda13-lib'
+    cuda13_lib.mkdir()
+    (cuda13_lib / 'libcublas.so.13').write_text('shared object')
+    monkeypatch.setenv('PATH', str(cuda13_lib))
+
+    report = build_probe_report(
+        profiles=[{'id': 'cuda12', 'requiredDlls': ['libcublas.so.12']}],
+        supported_profiles=['cuda12'],
+        unsupported_hints=[{'id': 'cuda13', 'expectedDllPrefixes': ['libcublas.so.13']}],
+        device_count_getter=lambda: 1,
+        load_dll=lambda name: object(),
+        path_value='',
+        platform='linux',
+    )
+    assert report['unsupportedDetectedProfiles'] == []
+    assert report['statusCode'] == 'ready'
+
+
+def test_cuda_probe_validates_ctranslate2_cuda_after_verified_libraries():
+    calls = []
+
+    def load_dll(name):
+        calls.append(('load', name))
+        return object()
+
+    def validator():
+        calls.append('validate')
+        return 1
+
+    report = build_probe_report(
+        profiles=[{'id': 'cuda12', 'requiredDlls': ['libcublas.so.12']}],
+        supported_profiles=['cuda12'],
+        unsupported_hints=[],
+        device_count_getter=lambda: 1,
+        load_dll=load_dll,
+        path_value='',
+        platform='linux',
+        validate_ctranslate2_cuda=True,
+        ctranslate2_validator=validator,
+    )
+    assert calls[0][0] == 'load'
+    assert calls[-1] == 'validate'
+    assert report['statusCode'] == 'ready'
+    assert report['runtimeLoadable'] is True
+
+
+def test_cuda_probe_ctranslate2_zero_devices_is_not_ready():
+    report = build_probe_report(
+        profiles=[{'id': 'cuda12', 'requiredDlls': ['libcublas.so.12']}],
+        supported_profiles=['cuda12'],
+        unsupported_hints=[],
+        device_count_getter=lambda: 1,
+        load_dll=lambda name: object(),
+        path_value='',
+        platform='linux',
+        validate_ctranslate2_cuda=True,
+        ctranslate2_validator=lambda: 0,
+    )
+    assert report['runtimeLoadable'] is False
+    assert report['statusCode'] == 'runtimeUnavailable'
+    assert 'no CUDA devices' in report['error']
+
+
+def test_cuda_probe_ctranslate2_init_failure_is_not_ready():
+    report = build_probe_report(
+        profiles=[{'id': 'cuda12', 'requiredDlls': ['libcublas.so.12']}],
+        supported_profiles=['cuda12'],
+        unsupported_hints=[],
+        device_count_getter=lambda: 1,
+        load_dll=lambda name: object(),
+        path_value='',
+        platform='linux',
+        validate_ctranslate2_cuda=True,
+        ctranslate2_validator=lambda: (_ for _ in ()).throw(RuntimeError('CUDA runtime init failed')),
+    )
+    assert report['runtimeLoadable'] is False
+    assert report['statusCode'] == 'runtimeUnavailable'
+    assert 'CUDA runtime init failed' in report['error']
 
 
 def test_cuda_probe_module_invokes_nvidia_dll_loader_at_import():
@@ -793,6 +976,26 @@ def test_load_model_internal_persists_cpu_fallback_device(monkeypatch):
     assert calls['n'] == 2
 
 
+def test_linux_cuda_required_never_loads_cpu_after_managed_runtime_failure(monkeypatch):
+    monkeypatch.setattr(fw_transcriber.sys, 'platform', 'linux')
+    monkeypatch.setenv('AVANEVIS_LINUX_CUDA_REQUIRED', '1')
+    service = TranscriberService(model_size='small', device='cuda', compute_type='float16')
+    calls = {'n': 0}
+
+    def fake_create(_WhisperModel, *, device, compute_type, local_files_only):
+        calls['n'] += 1
+        raise RuntimeError('libcublas.so.12: cannot open shared object file')
+
+    monkeypatch.setitem(__import__('sys').modules, 'faster_whisper', types.SimpleNamespace(WhisperModel=object))
+    monkeypatch.setattr(service, '_create_whisper_model', fake_create)
+    monkeypatch.setattr(service, '_should_use_local_files_only', lambda: True)
+
+    with pytest.raises(RuntimeError, match='refusing CPU fallback'):
+        service._load_model_internal()
+    assert calls['n'] == 1
+    assert service.device == 'cuda'
+
+
 def test_transcribe_file_includes_resolved_device_in_result(monkeypatch, tmp_path):
     audio_path = tmp_path / 'sample.opus'
     audio_path.write_bytes(b'audio')
@@ -852,6 +1055,25 @@ def test_transcribe_file_retries_on_retryable_cuda_runtime_error(monkeypatch, tm
     assert result['text'] == 'hello'
     assert calls['attempt'] == 2
     assert service.device == 'cpu'
+
+
+def test_linux_cuda_required_never_retries_transcription_on_cpu(monkeypatch, tmp_path):
+    monkeypatch.setattr(fw_transcriber.sys, 'platform', 'linux')
+    monkeypatch.setenv('AVANEVIS_LINUX_CUDA_REQUIRED', '1')
+    audio_path = tmp_path / 'sample.opus'
+    audio_path.write_bytes(b'audio')
+    service = TranscriberService(model_size='small', language='en', device='cuda', compute_type='float16')
+
+    class Model:
+        def transcribe(self, *_args, **_kwargs):
+            raise RuntimeError('libcublas.so.12: cannot open shared object file')
+
+    service.model = Model()
+    monkeypatch.setattr(service, 'load_model', lambda: pytest.fail('Linux CUDA must not reload on CPU'))
+
+    with pytest.raises(RuntimeError, match='libcublas.so.12'):
+        service.transcribe_file(str(audio_path), save_markdown=False)
+    assert service.device == 'cuda'
 
 
 def test_transcribe_file_retries_on_cuda13_runtime_error(monkeypatch, tmp_path):

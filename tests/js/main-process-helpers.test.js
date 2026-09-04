@@ -6,6 +6,7 @@ const path = require('node:path');
 
 const mainProcessHelpers = require('../../src/main-process-helpers');
 const { createLineChunkRedactor } = require('../../src/ai-progress-sanitizer');
+const { comparableFsPath, comparableLinuxLibraryPathParts } = require('./comparable-fs-path');
 
 const {
   buildFileUrl,
@@ -97,6 +98,10 @@ const {
   shouldKillProcessOnQuit,
   matchesFasterWhisperCacheFolderName,
 } = mainProcessHelpers;
+const {
+  getRequiredCudaRuntimeLibraries,
+  buildManagedLinuxCudaLibraryPath,
+} = require('../../src/main-process/cuda-runtime-helpers');
 const { signalProcessTree, signalOwnedProcessGroup } = require('../../src/main-process/quit-lifecycle-helpers');
 const { createAsyncActionQueue } = require('../../src/main/ai-compute-queue');
 
@@ -1509,6 +1514,80 @@ test('transcription CUDA installer only targets CTranslate2 runtime libraries', 
   );
 });
 
+test('Linux transcription CLI accepts CUDA only after explicit runtime admission', () => {
+  assert.equal(resolveFasterWhisperCliDevice('linux', 'cuda'), 'cpu');
+  assert.equal(
+    resolveFasterWhisperCliDevice('linux', 'cuda', { linuxCudaEnabled: true, arch: 'x64' }),
+    'cuda',
+  );
+  assert.equal(
+    resolveFasterWhisperCliDevice('linux', 'cuda', { linuxCudaEnabled: true, arch: 'arm64' }),
+    'cpu',
+  );
+  assert.deepEqual(
+    buildTranscriptionCliArgs({
+      platform: 'linux',
+      arch: 'x64',
+      audioFile: '/recordings/meeting.opus',
+      modelSize: 'small',
+      device: 'cuda',
+      linuxCudaEnabled: true,
+    }),
+    [
+      '-m', 'transcription.faster_whisper_transcriber',
+      '--file', '/recordings/meeting.opus', '--language', 'en', '--model', 'small',
+      '--device', 'cuda', '--json',
+    ],
+  );
+});
+
+test('managed Linux CUDA library paths reject untrusted directories and ignore inherited lookup', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-linux-cuda-lib-'));
+  const cublas = path.join(root, 'nvidia', 'cublas', 'lib');
+  const cudnn = path.join(root, 'nvidia', 'cudnn', 'lib');
+  fs.mkdirSync(cublas, { recursive: true });
+  fs.mkdirSync(cudnn, { recursive: true });
+  assert.deepEqual(
+    comparableLinuxLibraryPathParts(buildManagedLinuxCudaLibraryPath({
+      managedRoot: root,
+      libraryDirs: [cublas, cudnn],
+      inheritedLibraryPath: '/usr/lib:/lib',
+      fsModule: fs,
+    })),
+    [cublas, cudnn].map(comparableFsPath),
+  );
+  assert.throws(
+    () => buildManagedLinuxCudaLibraryPath({
+      managedRoot: root,
+      libraryDirs: ['relative/lib'],
+      fsModule: fs,
+    }),
+    /absolute/,
+  );
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-linux-cuda-escape-'));
+  try {
+    assert.throws(
+      () => buildManagedLinuxCudaLibraryPath({
+        managedRoot: root,
+        libraryDirs: [outside],
+        fsModule: fs,
+      }),
+      /escapes the managed CUDA runtime root/,
+    );
+  } finally {
+    fs.rmSync(outside, { recursive: true, force: true });
+  }
+  assert.throws(
+    () => buildManagedLinuxCudaLibraryPath({
+      managedRoot: root,
+      libraryDirs: [cublas, cublas],
+      fsModule: fs,
+    }),
+    /duplicate/,
+  );
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
 test('CUDA runtime profiles expose supported baseline and optional newer runtimes', () => {
   const profiles = getCudaRuntimeProfiles();
   const supportedIds = getSupportedTranscriptionCudaProfileIds();
@@ -1516,6 +1595,10 @@ test('CUDA runtime profiles expose supported baseline and optional newer runtime
   assert.ok(profiles.some((profile) => profile.id === 'cuda13' && profile.supported === false));
   assert.deepEqual(supportedIds, ['cuda12']);
   assert.deepEqual(getRequiredCudaRuntimeDlls(), ['cublas64_12.dll', 'cublasLt64_12.dll', 'cudnn64_9.dll']);
+  assert.deepEqual(
+    getRequiredCudaRuntimeLibraries('cuda12', { platform: 'linux' }),
+    ['libcublas.so.12', 'libcublasLt.so.12', 'libcudnn.so.9'],
+  );
   assert.deepEqual(getTranscriptionCudaPackages(), ['nvidia-cublas-cu12', 'nvidia-cudnn-cu12']);
   const cuda13Profile = profiles.find((profile) => profile.id === 'cuda13');
   assert.equal(cuda13Profile.expectedDllPrefixes.includes('cudnn64_9'), false);
@@ -1580,6 +1663,10 @@ test('cudaStatusNeedsGpuRuntimeEnsure only targets recoverable runtime states', 
     statusCode: 'deviceUnavailable',
     deviceAvailable: false,
   }), false);
+  assert.equal(cudaStatusNeedsGpuRuntimeEnsure({
+    installed: false,
+    statusCode: 'runtimeIntegrityFailed',
+  }), true);
 });
 
 test('selectGpuInstallModeForCudaStatus prefers repair for drifted runtimes', () => {
@@ -1588,6 +1675,9 @@ test('selectGpuInstallModeForCudaStatus prefers repair for drifted runtimes', ()
   }), 'repair');
   assert.equal(selectGpuInstallModeForCudaStatus({
     statusCode: 'missingLibraries',
+  }), 'repair');
+  assert.equal(selectGpuInstallModeForCudaStatus({
+    statusCode: 'runtimeIntegrityFailed',
   }), 'repair');
   assert.equal(selectGpuInstallModeForCudaStatus({
     statusCode: 'runtimeUnavailable',
@@ -1758,6 +1848,37 @@ test('parseCheckCudaStatus accepts JSON probe output', () => {
   assert.deepEqual(status.missingLibraries, ['cublas64_12.dll', 'cudnn64_9.dll']);
   assert.equal(status.statusCode, 'missingLibraries');
   assert.match(status.error, /cublas64_12\.dll not found/);
+});
+
+test('parseCheckCudaStatus preserves backend probeError instead of recomputing deviceUnavailable', () => {
+  const status = parseCheckCudaStatus(JSON.stringify({
+    deviceAvailable: false,
+    runtimeLoadable: false,
+    missingLibraries: [],
+    runtime: 'ctranslate2',
+    matchedProfile: '',
+    installedProfile: '',
+    unsupportedDetectedProfiles: [],
+    supportedProfiles: ['cuda12'],
+    recommendedInstallProfile: 'cuda12',
+    statusCode: 'probeError',
+    error: 'nvidia-smi was not found on PATH.',
+  }));
+  assert.equal(status.statusCode, 'probeError');
+  assert.equal(status.installed, false);
+  assert.match(status.error, /nvidia-smi/);
+});
+
+test('parseCheckCudaStatus treats invalid JSON as deviceUnavailable on Windows', () => {
+  const status = parseCheckCudaStatus('{not-json');
+  assert.equal(status.statusCode, 'deviceUnavailable');
+  assert.equal(status.installed, false);
+});
+
+test('parseCheckCudaStatus treats empty output as deviceUnavailable on Windows', () => {
+  const status = parseCheckCudaStatus('');
+  assert.equal(status.statusCode, 'deviceUnavailable');
+  assert.equal(status.installed, false);
 });
 
 test('parseCheckCudaStatus JSON ignores multiline error without inventing keys', () => {

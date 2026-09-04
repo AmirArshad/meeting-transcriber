@@ -9,7 +9,7 @@ const { EventEmitter } = require('node:events');
 
 const { createTranscriptionService } = require('../../src/main/transcription-service');
 const { createPythonRuntime } = require('../../src/main/python-runtime');
-const { getDiarizationAvailability } = require('../../src/ai-addon-state');
+const { getDiarizationAvailability, LINUX_DIARIZATION_UNAVAILABLE_REASON } = require('../../src/ai-addon-state');
 const { getSpeakrsOrtRuntimeDir, SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE } = require('../../src/ai-addon/manifest-store');
 
 const DIARIZE_REQUIRED_FLAGS = Object.freeze([
@@ -200,6 +200,13 @@ test('speakrs child env skips HF cache vars and does not inherit exclusive=0', (
     assert.equal(speakrsEnv.PYTHONPATH, undefined);
     assert.equal(speakrsEnv.SPEAKRS_EXCLUSIVE, '1');
     assert.equal(speakrsEnv.SPEAKRS_MODE, 'cuda');
+    if (process.platform === 'linux') {
+      assert.equal(
+        speakrsEnv.AVANEVIS_LINUX_CUDA_REQUIRED,
+        '1',
+        'guided Linux Speakrs must make Whisper fail closed on the admitted CUDA runtime',
+      );
+    }
     assert.equal(pyannoteEnv.HF_HOME, '/tmp/should-not-leak-to-speakrs');
     assert.equal(pyannoteEnv.PYTHONPATH, '/tmp/pyannote-site');
     assert.equal(pyannoteEnv.SPEAKRS_CLI_PATH, undefined);
@@ -210,6 +217,41 @@ test('speakrs child env skips HF cache vars and does not inherit exclusive=0', (
       process.env.SPEAKRS_EXCLUSIVE = previousExclusive;
     }
   }
+});
+
+test('only admitted Linux Speakrs explicitly retains the CUDA-required child flag', () => {
+  const platformDesc = Object.getOwnPropertyDescriptor(process, 'platform');
+  const archDesc = Object.getOwnPropertyDescriptor(process, 'arch');
+  const cudaEnvInputs = [];
+  const service = createService({
+    buildCudaRuntimeEnv: (extra = {}) => {
+      cudaEnvInputs.push(extra);
+      return extra;
+    },
+  });
+
+  try {
+    for (const platform of ['linux', 'win32', 'darwin']) {
+      Object.defineProperty(process, 'platform', { configurable: true, value: platform });
+      Object.defineProperty(process, 'arch', { configurable: true, value: 'x64' });
+      service.getTranscriptionRuntimeEnv('small');
+      service.buildDiarizationChildEnv({ engine: 'pyannote', requiredDevice: 'cuda' });
+      service.buildDiarizationChildEnv({ engine: 'speakrs', requiredDevice: 'cuda' });
+    }
+  } finally {
+    Object.defineProperty(process, 'platform', platformDesc);
+    Object.defineProperty(process, 'arch', archDesc);
+  }
+
+  const retained = cudaEnvInputs.filter(
+    (input) => input.AVANEVIS_LINUX_CUDA_REQUIRED === '1',
+  );
+  const explicitlyCleared = cudaEnvInputs.filter(
+    (input) => Object.hasOwn(input, 'AVANEVIS_LINUX_CUDA_REQUIRED')
+      && input.AVANEVIS_LINUX_CUDA_REQUIRED === undefined,
+  );
+  assert.equal(retained.length, 1, 'only Linux Speakrs CUDA admission retains the flag');
+  assert.equal(explicitlyCleared.length, 8, 'ordinary, Pyannote, Windows, and macOS paths scrub ambient state');
 });
 
 test('packaged missing Speakrs CLI rejects child env before Python spawn', () => {
@@ -662,6 +704,55 @@ test('packaged missing Speakrs CLI diarize-transcript handler returns reinstall 
     } else {
       process.env.AVANEVIS_PACKAGED = previousPackaged;
     }
+    fs.rmSync(recordingsDir, { recursive: true, force: true });
+  }
+});
+
+test('Linux Speakrs stays unavailable without CUDA preflight and does not spawn', async () => {
+  const platformDesc = Object.getOwnPropertyDescriptor(process, 'platform');
+  const archDesc = Object.getOwnPropertyDescriptor(process, 'arch');
+  Object.defineProperty(process, 'platform', { configurable: true, value: 'linux' });
+  Object.defineProperty(process, 'arch', { configurable: true, value: 'x64' });
+  const recordingsDir = makeTempDir('linux-speakrs-nocuda-');
+  const audioPath = path.join(recordingsDir, 'meeting.opus');
+  fs.writeFileSync(audioPath, 'opus');
+  const spawned = [];
+  try {
+    const service = createService({
+      app: { getPath: () => recordingsDir, isPackaged: false },
+      fs,
+      spawnTrackedPython: (...args) => {
+        spawned.push(args);
+        throw new Error('Linux Speakrs must not spawn without CUDA preflight');
+      },
+      resolveCudaStatusForTranscription: async () => ({
+        statusCode: 'missingDriver',
+        installed: false,
+        deviceAvailable: false,
+        runtimeLoadable: false,
+        missingLibraries: ['libcuda.so.1'],
+        matchedProfile: null,
+        error: 'NVIDIA driver libraries were not found.',
+      }),
+      getRecordingsDir: () => recordingsDir,
+    });
+    const handlers = new Map();
+    service.registerIpc({ handle(channel, handler) { handlers.set(channel, handler); } });
+    await assert.rejects(
+      handlers.get('diarize-transcript')({ sender: {} }, {
+        audioPath,
+        segments: [{ start: 0, end: 1, text: 'hello' }],
+      }),
+      (error) => error
+        && /CUDA 12|NVIDIA GPU/.test(error.message)
+        && error.message.includes('NVIDIA driver libraries were not found'),
+    );
+    assert.equal(spawned.length, 0);
+    assert.equal(getDiarizationAvailability('linux', 'x64').supported, false);
+    assert.equal(getDiarizationAvailability('linux', 'x64').reason, LINUX_DIARIZATION_UNAVAILABLE_REASON);
+  } finally {
+    Object.defineProperty(process, 'platform', platformDesc);
+    Object.defineProperty(process, 'arch', archDesc);
     fs.rmSync(recordingsDir, { recursive: true, force: true });
   }
 });

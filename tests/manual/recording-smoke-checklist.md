@@ -98,7 +98,7 @@ Ship static `build/iconRecording.png` (18×18) and `build/iconRecording@2x.png` 
 
 ## Linux (Phases 3–4 closed — 60-minute soak cancelled; Phase 5 Core Beta packaging closed 2026-08-28)
 
-Product capture (`backend/audio/linux_recorder.py`) is wired. Do not treat dummy-Pulse or `scripts/linux-audio-spike.py` as Omarchy exit evidence. Add-ons stay greyed `unsupported` (Phase 4). Phase 5 packaged AppImage/pacman evidence, Settings/legal-notices UI clicks, and a packaged CPU transcription session closed 2026-08-28. Omarchy Core Beta and Gate B are complete; Ubuntu 24.04 desktop smoke remains open.
+Product capture (`backend/audio/linux_recorder.py`) is wired. Do not treat dummy-Pulse or `scripts/linux-audio-spike.py` as Omarchy exit evidence. The 2026-08-28 Core Beta UI evidence below is historical; current CUDA-only add-on coverage belongs in `tests/manual/local-ai-addons-checklist.md`. Phase 5 packaged AppImage/pacman evidence and a packaged CPU transcription session closed 2026-08-28. Omarchy Core Beta and Gate B are complete; Ubuntu 24.04 desktop smoke remains open.
 
 Evidence 2026-08-27 on `amiromarchy` (Omarchy 4.0.1) used the product recorder CLI unless noted. Artifacts: `/tmp/avanevis-linux-smoke/` (morning CLI) and `/home/amir/avanevis-linux-smoke/` (afternoon headphone + Electron).
 

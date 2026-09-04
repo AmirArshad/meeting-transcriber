@@ -32,11 +32,21 @@ _RETRYABLE_CUDA_ERROR_PATTERNS = (
 
 
 def resolve_faster_whisper_device(device: str, platform: Optional[str] = None) -> str:
-    """Linux Core Beta is CPU faster-whisper only; ignore auto/cuda until Phase 6."""
+    """Keep Linux CPU-only unless the main-process CUDA admission explicitly requires it."""
     plat = sys.platform if platform is None else platform
-    if plat.startswith("linux") and device != "cpu":
-        return "cpu"
+    if plat.startswith("linux"):
+        linux_cuda_required = os.environ.get("AVANEVIS_LINUX_CUDA_REQUIRED") == "1"
+        if linux_cuda_required:
+            if device != "cuda":
+                raise ValueError("Linux CUDA transcription requires --device cuda; refusing CPU or auto fallback.")
+            return "cuda"
+        if device != "cpu":
+            return "cpu"
     return device
+
+
+def linux_cuda_required() -> bool:
+    return sys.platform.startswith("linux") and os.environ.get("AVANEVIS_LINUX_CUDA_REQUIRED") == "1"
 
 
 def get_hugging_face_hub_cache_dir() -> Path:
@@ -344,6 +354,8 @@ class TranscriberService(BaseTranscriber):
             if device == "cuda":
                 print(f"  Using GPU acceleration - transcription will be 4-5x faster!", file=sys.stderr)
         except Exception as e:
+            if linux_cuda_required():
+                raise RuntimeError("Linux CUDA transcription could not load the admitted managed runtime; refusing CPU fallback.") from e
             # If GPU fails (missing CUDA libraries), fall back to CPU
             if device != "cpu":
                 error_msg = str(e).lower()
@@ -483,7 +495,7 @@ class TranscriberService(BaseTranscriber):
         try:
             results = self._run_transcription_attempt(audio_path)
         except Exception as error:
-            if not retry_device or not self._is_retryable_cuda_runtime_error(error):
+            if linux_cuda_required() or not retry_device or not self._is_retryable_cuda_runtime_error(error):
                 raise
 
             print(

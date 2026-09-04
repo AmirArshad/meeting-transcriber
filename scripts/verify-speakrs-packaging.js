@@ -10,6 +10,7 @@ const { spawnSync } = require('child_process');
 const {
   SPEAKRS_MODEL_PACK_ARTIFACTS,
   SPEAKRS_ORT_RUNTIME_ARTIFACTS,
+  assertSpeakrsLinuxRequiredDynamicLibraryClosure,
   getSpeakrsExtractedRuntimeDllPins,
 } = require('../src/ai-addon/speakrs-pack-spec');
 const { isAllowedDownloadUrl } = require('../src/ai-addon/download-helpers');
@@ -23,8 +24,9 @@ const {
 
 const REPO_ROOT = path.join(__dirname, '..');
 const WAV_NAME = SPEAKRS_VALIDATE_WAV_NAME;
-const REQUIRED_MODEL_PACK_PLATFORMS = Object.freeze(['darwin-arm64', 'win32-x64']);
+const REQUIRED_MODEL_PACK_PLATFORMS = Object.freeze(['darwin-arm64', 'linux-x64', 'win32-x64']);
 const REQUIRED_WINDOWS_ORT_ARTIFACT_COUNT = 3;
+const REQUIRED_LINUX_ORT_ARTIFACT_COUNT = 5;
 const CONNECT_TIMEOUT_MS = 30000;
 const IDLE_TIMEOUT_MS = 60000;
 const MAX_REDIRECTS = 5;
@@ -109,8 +111,45 @@ function assertOrtRuntimePins(artifacts = SPEAKRS_ORT_RUNTIME_ARTIFACTS) {
       }
     }
   }
-  if (!getSpeakrsExtractedRuntimeDllPins(windowsOrt)) {
+  if (!getSpeakrsExtractedRuntimeDllPins(windowsOrt, 'win32-x64')) {
     fail('Windows Speakrs extracted DLL pin set is incomplete.');
+  }
+
+  const linuxOrt = artifacts['linux-x64'];
+  if (!Array.isArray(linuxOrt) || linuxOrt.length !== REQUIRED_LINUX_ORT_ARTIFACT_COUNT) {
+    fail('Linux Speakrs ORT 1.27.1 runtime pin set is incomplete.');
+  }
+  for (const artifact of linuxOrt) {
+    assertPinnedDownloadArtifact(artifact, { label: artifact.id || artifact.fileName });
+    if (artifact.architecture !== 'x64') {
+      fail(`Linux Speakrs runtime pin is missing architecture x64: ${artifact.id}`);
+    }
+    if (artifact.cudaMajor !== 12) {
+      fail(`Linux Speakrs runtime pin is missing cudaMajor 12: ${artifact.id}`);
+    }
+    if (!artifact.dynamicLibraryDir || typeof artifact.dynamicLibraryDir !== 'string') {
+      fail(`Linux Speakrs runtime pin is missing dynamicLibraryDir: ${artifact.id}`);
+    }
+    if (!Array.isArray(artifact.keepFileNames) || artifact.keepFileNames.length === 0) {
+      fail(`Speakrs runtime pin is missing keepFileNames: ${artifact.id}`);
+    }
+    if (!artifact.extractedFiles || typeof artifact.extractedFiles !== 'object') {
+      fail(`Speakrs runtime pin is missing extractedFiles: ${artifact.id}`);
+    }
+    for (const name of artifact.keepFileNames) {
+      const pin = artifact.extractedFiles[name];
+      if (!pin || !/^[a-f0-9]{64}$/.test(String(pin.sha256 || '')) || !Number.isInteger(pin.sizeBytes) || pin.sizeBytes <= 0) {
+        fail(`Speakrs runtime pin is missing extracted library integrity for ${name}`);
+      }
+    }
+  }
+  if (!getSpeakrsExtractedRuntimeDllPins(linuxOrt, 'linux-x64')) {
+    fail('Linux Speakrs extracted library pin set is incomplete.');
+  }
+  try {
+    assertSpeakrsLinuxRequiredDynamicLibraryClosure({ runtimeArtifacts: linuxOrt });
+  } catch (error) {
+    fail(error.message);
   }
 }
 
@@ -140,6 +179,13 @@ function listReleaseChecksumArtifacts(
       ...artifact,
       checksumKind: 'ort-runtime',
       platform: 'win32-x64',
+    });
+  }
+  for (const artifact of ortArtifacts['linux-x64'] || []) {
+    artifacts.push({
+      ...artifact,
+      checksumKind: 'ort-runtime',
+      platform: 'linux-x64',
     });
   }
   return artifacts;
@@ -405,6 +451,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  REQUIRED_LINUX_ORT_ARTIFACT_COUNT,
   REQUIRED_MODEL_PACK_PLATFORMS,
   REQUIRED_WINDOWS_ORT_ARTIFACT_COUNT,
   assertCatalogPinsComplete,

@@ -171,7 +171,9 @@ function resolveCliPath(explicitPath) {
     ? 'aarch64-apple-darwin'
     : process.platform === 'win32'
       ? 'x86_64-pc-windows-msvc'
-      : null;
+      : process.platform === 'linux'
+        ? 'x86_64-unknown-linux-gnu'
+        : null;
   const candidates = [
     path.join(REPO_ROOT, 'build', 'resources', 'bin', CLI_NAME),
   ];
@@ -208,6 +210,10 @@ function getWindowsCpuOrtMarkerIdentity(pin) {
   return `${pin.sha256}\n${pin.fileName}\n${pin.dylibName}\n`;
 }
 
+function getLinuxCpuOrtMarkerIdentity(pin) {
+  return `${pin.sha256}\n${pin.fileName}\n${pin.dylibName}\n`;
+}
+
 function getCpuSmokeCacheIdentity(pins = smokePins, packs = SPEAKRS_MODEL_PACK_ARTIFACTS) {
   const pack = packs[pins.onnxSubsetPlatform];
   const parts = [
@@ -216,6 +222,9 @@ function getCpuSmokeCacheIdentity(pins = smokePins, packs = SPEAKRS_MODEL_PACK_A
     pins.windowsCpuOrt ? pins.windowsCpuOrt.sha256 : '',
     pins.windowsCpuOrt ? pins.windowsCpuOrt.fileName : '',
     pins.windowsCpuOrt ? pins.windowsCpuOrt.dylibName : '',
+    pins.linuxCpuOrt ? pins.linuxCpuOrt.sha256 : '',
+    pins.linuxCpuOrt ? pins.linuxCpuOrt.fileName : '',
+    pins.linuxCpuOrt ? pins.linuxCpuOrt.dylibName : '',
   ];
   return crypto.createHash('sha256').update(parts.join('\n')).digest('hex');
 }
@@ -290,6 +299,29 @@ async function ensureWindowsCpuOrt() {
   return extracted;
 }
 
+async function ensureLinuxCpuOrt() {
+  if (process.platform !== 'linux') {
+    return null;
+  }
+  const pin = smokePins.linuxCpuOrt;
+  if (!pin || !pin.url || !pin.sha256 || !pin.dylibName) {
+    fail('Linux Speakrs CPU smoke ORT pin is incomplete.');
+  }
+  const archivePath = await ensurePinnedFile(pin, CACHE_DIR);
+  const extractDir = path.join(CACHE_DIR, 'linux-cpu-ort');
+  const expectedIdentity = getLinuxCpuOrtMarkerIdentity(pin);
+  if (!canReuseExtraction(extractDir, expectedIdentity, pin.dylibName)) {
+    fs.rmSync(extractDir, { recursive: true, force: true });
+    extractTarGz(archivePath, extractDir);
+    writeExtractionMarker(extractDir, expectedIdentity);
+  }
+  const extracted = findFileByName(extractDir, pin.dylibName);
+  if (!extracted) {
+    fail(`CPU ORT extract is missing ${pin.dylibName}`);
+  }
+  return extracted;
+}
+
 function runCli(cliPath, wavPath, modelsDir, ortDylibPath) {
   const env = { ...process.env };
   env.SPEAKRS_MODELS_DIR = modelsDir;
@@ -299,6 +331,9 @@ function runCli(cliPath, wavPath, modelsDir, ortDylibPath) {
   if (ortDylibPath) {
     env.ORT_DYLIB_PATH = ortDylibPath;
     env.PATH = `${path.dirname(ortDylibPath)}${path.delimiter}${env.PATH || ''}`;
+    if (process.platform !== 'win32') {
+      env.LD_LIBRARY_PATH = `${path.dirname(ortDylibPath)}${path.delimiter}${env.LD_LIBRARY_PATH || ''}`;
+    }
   }
   const result = spawnSync(cliPath, [wavPath], {
     encoding: 'utf8',
@@ -319,7 +354,10 @@ function runCli(cliPath, wavPath, modelsDir, ortDylibPath) {
   if (payload.device !== 'cpu') {
     fail(`speakrs-cli CPU smoke reported device ${payload.device}, expected cpu`);
   }
-  process.stdout.write(`Speakrs CPU smoke passed (${payload.segments.length} segment(s))\n`);
+  const gpuNote = process.platform === 'linux'
+    ? ' (non-GPU structural check)'
+    : '';
+  process.stdout.write(`Speakrs CPU smoke passed (${payload.segments.length} segment(s))${gpuNote}\n`);
 }
 
 async function main() {
@@ -329,7 +367,9 @@ async function main() {
   const cliPath = resolveCliPath(cliIndex >= 0 ? args[cliIndex + 1] : null);
   const wavPath = resolveWavPath(wavIndex >= 0 ? args[wavIndex + 1] : null);
   const modelsDir = await ensureOnnxSubset();
-  const ortDylibPath = await ensureWindowsCpuOrt();
+  const ortDylibPath = process.platform === 'linux'
+    ? await ensureLinuxCpuOrt()
+    : await ensureWindowsCpuOrt();
   runCli(cliPath, wavPath, modelsDir, ortDylibPath);
 }
 
@@ -344,6 +384,7 @@ module.exports = {
   CACHE_DIR,
   canReuseExtraction,
   getCpuSmokeCacheIdentity,
+  getLinuxCpuOrtMarkerIdentity,
   getOnnxSubsetMarkerIdentity,
   getWindowsCpuOrtMarkerIdentity,
   markerMatches,

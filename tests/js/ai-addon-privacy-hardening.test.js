@@ -187,6 +187,31 @@ test('speakrs validation clears HF env and does not write a token to stdin', asy
   await assert.doesNotReject(resultPromise);
 });
 
+test('diarization validation explicitly scrubs the guided CUDA requirement flag', async () => {
+  const cudaEnvInputs = [];
+  const { deps, spawned } = createValidationDeps({
+    buildCudaRuntimeEnv(extra = {}) {
+      cudaEnvInputs.push(extra);
+      return extra;
+    },
+  });
+  const service = createAiAddonIpc(deps);
+
+  const resultPromise = service.validateDiarizationRuntime({
+    engine: 'speakrs',
+    modelRef: 'speakrs-community1-vbx',
+    requiredDevice: 'cuda',
+  });
+
+  const { child } = await waitForSpawn(spawned);
+  assert.equal(cudaEnvInputs.length, 1);
+  assert.equal(Object.hasOwn(cudaEnvInputs[0], 'AVANEVIS_LINUX_CUDA_REQUIRED'), true);
+  assert.equal(cudaEnvInputs[0].AVANEVIS_LINUX_CUDA_REQUIRED, undefined);
+  child.stdout.emit('data', Buffer.from(JSON.stringify({ ok: true })));
+  child.emit('close', 0);
+  await resultPromise;
+});
+
 test('Speakrs validation final spawn env drops ambient HF cache vars', async () => {
   const previous = {
     HF_HOME: process.env.HF_HOME,

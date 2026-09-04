@@ -18,10 +18,27 @@ const {
 const {
   SPEAKRS_DIARIZATION_ENGINES,
   SPEAKRS_MODEL_PACK_REVISION,
+  SPEAKRS_ORT_SO_NAMES,
   getSpeakrsExtractedRuntimeDllPins,
-  getSpeakrsRequiredRuntimeDllNames,
+  getSpeakrsRequiredRuntimeLibraryNames,
   resolveContainedSpeakrsPath,
 } = require('./speakrs-pack-spec');
+const {
+  getManagedLinuxCudaLibraryDirs,
+  getManagedLinuxCudaRuntimeTarget,
+} = require('../main-process/cuda-runtime-helpers');
+const {
+  buildContainedLinuxCudaLibraryPath,
+  isWorldWritableMode,
+  lstatRejectSymlink,
+  resolveRequiredLinuxCudaLibraryPath,
+  resolveLinuxCudaDriverLibraryDirs,
+  validateLinuxCudaManagedRoot,
+} = require('../main-process/linux-cuda-runtime-helpers');
+const {
+  getLinuxCudaDriverLibraryAllowlist,
+  getLinuxCudaRequiredLibraries,
+} = require('../main-process/linux-cuda-runtime-catalog');
 const {
   SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE,
   getPackagedSpeakrsIntegrityError,
@@ -30,6 +47,25 @@ const {
 const { getDiarizationTokenStatus, isAllowedDownloadUrl } = require('./download-helpers');
 
 const HASH_YIELD_BYTES = 8 * 1024 * 1024;
+const HUGGING_FACE_ENV_KEY_PATTERN = /^(HF_|HUGGINGFACE_|HUGGING_FACE_|TRANSFORMERS_)/i;
+const HUGGING_FACE_ENV_KEYS = Object.freeze([
+  'HF_HOME',
+  'HF_HUB_CACHE',
+  'HUGGINGFACE_HUB_CACHE',
+  'TRANSFORMERS_CACHE',
+  'TRANSFORMERS_OFFLINE',
+  'HF_HUB_OFFLINE',
+  'HF_TOKEN',
+  'HUGGINGFACE_HUB_TOKEN',
+  'HUGGING_FACE_HUB_TOKEN',
+  'HF_TOKEN_PATH',
+  'HF_ENDPOINT',
+  'HF_HUB_ENABLE_HF_TRANSFER',
+  'HF_HUB_DISABLE_TELEMETRY',
+  'HF_HUB_DISABLE_XET',
+  'HF_XET_CACHE',
+  'HF_HUB_VERBOSITY',
+]);
 
 function getDirectorySizeBytes(dirPath, fsModule = fs) {
   const existsSync = bindFsMethod(fsModule, 'existsSync');
@@ -212,6 +248,15 @@ function resolveSpawnDiarizationEngine(manifestEngine, env = process.env) {
   return SPEAKRS_DIARIZATION_ENGINES.includes(engine) ? engine : null;
 }
 
+function assertLinuxSpeakrsOnlyEngine(engine, platform = process.platform) {
+  if (platform === 'linux' && engine !== 'speakrs') {
+    const error = new Error('Pyannote speaker identification is not available on Linux in this version.');
+    error.code = 'LINUX_PYANNOTE_UNAVAILABLE';
+    throw error;
+  }
+  return engine;
+}
+
 function resolveSpeakrsMode(requiredDevice, env = process.env) {
   const raw = String(requiredDevice || '').trim().toLowerCase();
   if (raw === 'cuda') {
@@ -242,6 +287,130 @@ function canStartGuidedDiarization({
     return true;
   }
   return Boolean(modelRef);
+}
+
+function clearHuggingFaceEnvVars(target, extra = {}, env = process.env) {
+  const keys = new Set(HUGGING_FACE_ENV_KEYS);
+  for (const source of [extra, env, target]) {
+    if (!source || typeof source !== 'object') {
+      continue;
+    }
+    for (const key of Object.keys(source)) {
+      if (HUGGING_FACE_ENV_KEY_PATTERN.test(key)) {
+        keys.add(key);
+      }
+    }
+  }
+  for (const key of keys) {
+    target[key] = undefined;
+  }
+  return target;
+}
+
+function linuxAllowlistedLibraryExists(fileName, fsModule = fs) {
+  const existsSync = bindFsMethod(fsModule, 'existsSync');
+  const realpathSync = bindFsMethod(fsModule, 'realpathSync') || fs.realpathSync;
+  const statSync = bindFsMethod(fsModule, 'statSync');
+  if (!fileName || !existsSync || !realpathSync || !statSync) {
+    return false;
+  }
+  for (const dir of getLinuxCudaDriverLibraryAllowlist()) {
+    const candidate = path.join(dir, fileName);
+    if (!existsSync(candidate)) {
+      continue;
+    }
+    try {
+      const realFile = realpathSync(candidate);
+      const stats = statSync(realFile);
+      if (!stats || typeof stats.isFile !== 'function' || !stats.isFile()) {
+        continue;
+      }
+      for (const allowed of getLinuxCudaDriverLibraryAllowlist()) {
+        try {
+          const realAllowed = realpathSync(allowed);
+          const relative = path.relative(realAllowed, realFile);
+          if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) {
+            return true;
+          }
+        } catch (_error) {
+          // Candidate allowlist directory may be absent.
+        }
+      }
+    } catch (_error) {
+      continue;
+    }
+  }
+  return false;
+}
+
+function buildSpeakrsLinuxLibraryPath({
+  userDataDir,
+  fsModule = fs,
+} = {}) {
+  const ortDir = getSpeakrsOrtRuntimeDir(userDataDir);
+  const libraryDirs = [];
+  const seen = new Set();
+  const addDir = (candidate) => {
+    if (!candidate || !path.isAbsolute(candidate)) {
+      return;
+    }
+    try {
+      const stats = lstatRejectSymlink(candidate, fsModule, 'Speakrs library directory');
+      if (typeof stats.isDirectory === 'function' && !stats.isDirectory()) {
+        return;
+      }
+      const resolved = path.resolve(candidate);
+      if (seen.has(resolved)) {
+        return;
+      }
+      seen.add(resolved);
+      libraryDirs.push(resolved);
+    } catch (_error) {
+      // Missing or unsafe directories are omitted; ambient LD_LIBRARY_PATH stays cleared.
+    }
+  };
+
+  addDir(ortDir);
+
+  let managedPath = '';
+  try {
+    const managedRoot = getManagedLinuxCudaRuntimeTarget(userDataDir);
+    const existsSync = bindFsMethod(fsModule, 'existsSync');
+    const managedDirs = getManagedLinuxCudaLibraryDirs(managedRoot)
+      .filter((candidate) => existsSync?.(candidate));
+    if (managedDirs.length > 0) {
+      let driverLibraryDirs = [];
+      try {
+        driverLibraryDirs = resolveLinuxCudaDriverLibraryDirs({ fsModule });
+      } catch (_error) {
+        driverLibraryDirs = [];
+      }
+      managedPath = buildContainedLinuxCudaLibraryPath({
+        managedRoot,
+        libraryDirs: managedDirs,
+        driverLibraryDirs,
+        fsModule,
+      });
+    }
+  } catch (_error) {
+    managedPath = '';
+  }
+
+  const parts = [
+    ...libraryDirs,
+    ...String(managedPath || '').split(path.delimiter).filter(Boolean),
+  ];
+  const unique = [];
+  const uniqueSeen = new Set();
+  for (const part of parts) {
+    const normalized = path.normalize(part);
+    if (!normalized || uniqueSeen.has(normalized)) {
+      continue;
+    }
+    uniqueSeen.add(normalized);
+    unique.push(part);
+  }
+  return unique.length > 0 ? unique.join(path.delimiter) : undefined;
 }
 
 function prependUniquePathEntry(currentPath, entry, delimiter = path.delimiter) {
@@ -279,15 +448,15 @@ function buildSpeakrsSpawnEnv({
       projectRoot,
     }));
   const modelsDir = getSpeakrsModelRevisionDir(userDataDir);
-  const mode = resolveSpeakrsMode(requiredDevice, env);
+  const mode = platform === 'linux'
+    ? 'cuda'
+    : resolveSpeakrsMode(requiredDevice, env);
+  const { LD_LIBRARY_PATH: _ignoredLibraryPath, ...restExtra } = extra || {};
   const speakrsEnv = {
-    ...extra,
+    ...restExtra,
     SPEAKRS_EXCLUSIVE: '1',
-    HF_HOME: undefined,
-    HF_HUB_CACHE: undefined,
-    HUGGINGFACE_HUB_CACHE: undefined,
-    TRANSFORMERS_CACHE: undefined,
   };
+  clearHuggingFaceEnvVars(speakrsEnv, extra, env);
   if (resolvedCliPath) {
     speakrsEnv.SPEAKRS_CLI_PATH = resolvedCliPath;
   } else if (packaged) {
@@ -307,6 +476,16 @@ function buildSpeakrsSpawnEnv({
     const currentPath = extra.PATH || env.PATH || process.env.PATH || '';
     speakrsEnv.PATH = prependUniquePathEntry(currentPath, ortDir);
     speakrsEnv.ORT_DYLIB_PATH = path.join(ortDir, 'onnxruntime.dll');
+  }
+  if (platform === 'linux') {
+    speakrsEnv.LD_LIBRARY_PATH = buildSpeakrsLinuxLibraryPath({
+      userDataDir,
+      fsModule,
+    });
+    speakrsEnv.ORT_DYLIB_PATH = path.join(
+      getSpeakrsOrtRuntimeDir(userDataDir),
+      SPEAKRS_ORT_SO_NAMES[0],
+    );
   }
   return speakrsEnv;
 }
@@ -908,6 +1087,84 @@ function findNamedFiles(rootDir, fileNames, fsModule = fs) {
   return found;
 }
 
+async function hashPinnedSpeakrsFile({
+  filePath,
+  pin,
+  name,
+  fsModule,
+  verifyChecksum,
+  verifyChecksumIfChanged,
+  missing,
+  invalid,
+} = {}) {
+  const existsSync = bindFsMethod(fsModule, 'existsSync');
+  if (!existsSync?.(filePath)) {
+    missing.push(name);
+    return;
+  }
+  const actualSize = getFileSizeBytes(filePath, fsModule);
+  if (actualSize !== pin.sizeBytes) {
+    invalid.add(name);
+  }
+  if (!verifyChecksum) {
+    return;
+  }
+  const fingerprint = verifyChecksumIfChanged ? getArtifactFingerprint(filePath, fsModule) : null;
+  const cached = fingerprint ? speakrsChecksumFingerprintCache.get(fingerprint) : null;
+  if (cached && cached.expectedSha256 === pin.sha256 && cached.actualSha256 === pin.sha256) {
+    return;
+  }
+  const actualSha256 = await hashFileSha256(filePath, fsModule);
+  if (actualSha256 !== pin.sha256) {
+    invalid.add(name);
+    if (fingerprint) {
+      speakrsChecksumFingerprintCache.delete(fingerprint);
+    }
+    return;
+  }
+  if (fingerprint) {
+    speakrsChecksumFingerprintCache.set(fingerprint, {
+      expectedSha256: pin.sha256,
+      actualSha256,
+    });
+  }
+}
+
+function collectUnexpectedSpeakrsRuntimeLoaderFiles({
+  runtimeDir,
+  platform = process.platform,
+  expectedNames = [],
+  fsModule = fs,
+} = {}) {
+  const readdirSync = bindFsMethod(fsModule, 'readdirSync');
+  const existsSync = bindFsMethod(fsModule, 'existsSync');
+  if (!runtimeDir || !readdirSync) {
+    throw new Error('File system cannot inspect the Speakrs runtime loader directory.');
+  }
+  if (existsSync && !existsSync(runtimeDir)) {
+    return [];
+  }
+  const expected = new Set(expectedNames.map((name) => (
+    platform === 'win32' ? String(name).toLowerCase() : String(name)
+  )));
+  const isLoaderFile = platform === 'win32'
+    ? (name) => /\.dll$/i.test(name)
+    : (name) => /\.so(?:\.|$)/.test(name);
+  let entries;
+  try {
+    entries = readdirSync(runtimeDir, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      return [];
+    }
+    throw error;
+  }
+  return entries
+    .map((entry) => String(entry.name || ''))
+    .filter((name) => isLoaderFile(name) && !expected.has(platform === 'win32' ? name.toLowerCase() : name))
+    .sort();
+}
+
 async function checkSpeakrsRuntimeCache({
   userDataDir,
   platform = process.platform,
@@ -922,8 +1179,11 @@ async function checkSpeakrsRuntimeCache({
   const existsSync = bindFsMethod(fsModule, 'existsSync');
   const readFileSync = bindFsMethod(fsModule, 'readFileSync');
   const runtimeArtifacts = artifact?.runtimeArtifacts || [];
-  const requiresWindowsRuntime = platform === 'win32' && arch === 'x64';
-  if (!requiresWindowsRuntime) {
+  const requiresExtractedRuntime = (
+    (platform === 'win32' && arch === 'x64')
+    || (platform === 'linux' && arch === 'x64')
+  );
+  if (!requiresExtractedRuntime) {
     return {
       supported: true,
       installed: true,
@@ -936,9 +1196,14 @@ async function checkSpeakrsRuntimeCache({
       artifact,
     };
   }
+  const expectedNames = getSpeakrsRequiredRuntimeLibraryNames(platform, arch);
+  const expectedDllPins = getSpeakrsExtractedRuntimeDllPins(runtimeArtifacts, platform, arch);
+  const incompleteReason = platform === 'linux'
+    ? 'No complete Speakrs ONNX Runtime artifact is configured for Linux.'
+    : 'No complete Speakrs ONNX Runtime artifact is configured for Windows.';
   if (!artifact || runtimeArtifacts.length === 0 || runtimeArtifacts.some((entry) => (
     !entry.id || !entry.fileName || !isPinnedSha256(entry.sha256) || !Number(entry.sizeBytes)
-  ))) {
+  )) || !expectedDllPins) {
     return {
       supported: false,
       installed: false,
@@ -946,15 +1211,13 @@ async function checkSpeakrsRuntimeCache({
       valid: false,
       skipped: false,
       validationStatus: 'unsupported',
-      reason: 'No complete Speakrs ONNX Runtime artifact is configured for Windows.',
+      reason: incompleteReason,
       runtimeDir,
-      missingFiles: getSpeakrsRequiredRuntimeDllNames(),
+      missingFiles: expectedNames,
       artifact,
     };
   }
 
-  const expectedNames = getSpeakrsRequiredRuntimeDllNames();
-  const expectedDllPins = getSpeakrsExtractedRuntimeDllPins(runtimeArtifacts);
   const runtimeManifestPath = path.join(runtimeDir, 'install.json');
   let runtimeManifest = null;
   try {
@@ -968,56 +1231,80 @@ async function checkSpeakrsRuntimeCache({
     id: entry.id,
     sha256: entry.sha256,
   }));
-  if (!expectedDllPins) {
-    return {
-      supported: false,
-      installed: false,
-      partial: Boolean(runtimeDir && existsSync?.(runtimeDir)),
-      valid: false,
-      skipped: false,
-      validationStatus: 'unsupported',
-      reason: 'No complete Speakrs ONNX Runtime artifact is configured for Windows.',
-      runtimeDir,
-      missingFiles: expectedNames,
-      artifact,
-    };
-  }
   const manifestPinsMatch = JSON.stringify(runtimeManifest?.artifacts || null) === JSON.stringify(expectedArtifactPins);
   const missing = [];
   const invalid = new Set();
   for (const name of expectedNames) {
-    const filePath = path.join(runtimeDir, name);
-    const pin = expectedDllPins[name];
-    if (!existsSync?.(filePath)) {
-      missing.push(name);
-      continue;
+    await hashPinnedSpeakrsFile({
+      filePath: path.join(runtimeDir, name),
+      pin: expectedDllPins[name],
+      name,
+      fsModule,
+      verifyChecksum,
+      verifyChecksumIfChanged,
+      missing,
+      invalid,
+    });
+  }
+  const unexpectedLoaderFiles = collectUnexpectedSpeakrsRuntimeLoaderFiles({
+    runtimeDir,
+    platform,
+    expectedNames,
+    fsModule,
+  });
+  for (const name of unexpectedLoaderFiles) {
+    invalid.add(name);
+  }
+
+  if (platform === 'linux') {
+    const requiredDynamicLibraries = runtimeArtifacts
+      .map((entry) => entry.requiredDynamicLibraries)
+      .find((list) => Array.isArray(list) && list.length > 0) || [];
+    let managedRoot = null;
+    try {
+      managedRoot = getManagedLinuxCudaRuntimeTarget(userDataDir);
+    } catch (_error) {
+      managedRoot = null;
     }
-    const actualSize = getFileSizeBytes(filePath, fsModule);
-    if (actualSize !== pin.sizeBytes) {
-      invalid.add(name);
-    }
-    if (verifyChecksum) {
-      const fingerprint = verifyChecksumIfChanged ? getArtifactFingerprint(filePath, fsModule) : null;
-      const cached = fingerprint ? speakrsChecksumFingerprintCache.get(fingerprint) : null;
-      if (cached && cached.expectedSha256 === pin.sha256 && cached.actualSha256 === pin.sha256) {
+    for (const library of requiredDynamicLibraries) {
+      if (!library || !library.name || !library.source) {
         continue;
       }
-      const actualSha256 = await hashFileSha256(filePath, fsModule);
-      if (actualSha256 !== pin.sha256) {
-        invalid.add(name);
-        if (fingerprint) {
-          speakrsChecksumFingerprintCache.delete(fingerprint);
+      if (library.source === 'managed-cuda-runtime') {
+        if (!managedRoot) {
+          missing.push(library.name);
+          continue;
         }
+        let libraryPath;
+        try {
+          libraryPath = resolveRequiredLinuxCudaLibraryPath(managedRoot, {
+            fileName: library.name,
+            relativePath: library.relativePath,
+          }, fsModule);
+        } catch (_error) {
+          missing.push(library.name);
+          continue;
+        }
+        await hashPinnedSpeakrsFile({
+          filePath: libraryPath,
+          pin: { sha256: library.sha256, sizeBytes: library.sizeBytes },
+          name: library.name,
+          fsModule,
+          verifyChecksum,
+          verifyChecksumIfChanged,
+          missing,
+          invalid,
+        });
         continue;
       }
-      if (fingerprint) {
-        speakrsChecksumFingerprintCache.set(fingerprint, {
-          expectedSha256: pin.sha256,
-          actualSha256,
-        });
+      if (library.source === 'nvidia-driver' || library.source === 'system') {
+        if (!linuxAllowlistedLibraryExists(library.name, fsModule)) {
+          missing.push(library.name);
+        }
       }
     }
   }
+
   const invalidFiles = [...invalid];
   const installed = manifestPinsMatch && missing.length === 0 && invalidFiles.length === 0;
   const partial = Boolean(runtimeDir && existsSync && existsSync(runtimeDir) && !installed);
@@ -1032,7 +1319,9 @@ async function checkSpeakrsRuntimeCache({
       ? null
       : invalidFiles.length || (runtimeManifest && !manifestPinsMatch)
         ? 'Speakrs ONNX Runtime files failed integrity validation.'
-        : 'Speakrs ONNX Runtime is not installed.',
+        : missing.length
+          ? `Speakrs ONNX Runtime is not installed. Missing: ${missing.join(', ')}.`
+          : 'Speakrs ONNX Runtime is not installed.',
     runtimeDir,
     missingFiles: missing,
     invalidFiles,
@@ -1134,6 +1423,10 @@ function isPinnedSha256(value) {
   return /^[a-f0-9]{64}$/i.test(String(value || ''));
 }
 
+function isPinnedByteSize(value) {
+  return Number.isSafeInteger(Number(value)) && Number(value) > 0;
+}
+
 function validateSummaryRuntimeArtifact(runtimeArtifact) {
   if (!runtimeArtifact) {
     return 'Pinned llama.cpp runtime artifact is not configured for this platform.';
@@ -1144,25 +1437,419 @@ function validateSummaryRuntimeArtifact(runtimeArtifact) {
   if (!Array.isArray(runtimeArtifact.artifacts) || runtimeArtifact.artifacts.length === 0) {
     return 'Pinned llama.cpp runtime archives are not configured.';
   }
+  if (runtimeArtifact.platform === 'linux') {
+    if (runtimeArtifact.arch !== 'x64' || runtimeArtifact.acceleration !== 'cuda' || runtimeArtifact.cudaMajor !== 12) {
+      return 'Linux summary runtime must be pinned for x86_64 CUDA 12.';
+    }
+    if (!runtimeArtifact.artifacts.some((archive) => archive.kind === 'nccl-wheel')) {
+      return 'Linux summary runtime must include a pinned NCCL CUDA 12 dependency.';
+    }
+    if (!Array.isArray(runtimeArtifact.requiredDynamicLibraries)
+      || !runtimeArtifact.requiredDynamicLibraries.some((library) => library.fileName === 'libnccl.so.2')) {
+      return 'Linux summary runtime must declare its NCCL shared-library dependency.';
+    }
+    const pinnedRuntimeFiles = getSummaryRuntimeRequiredFiles(runtimeArtifact);
+    const managedLibraries = new Map(getLinuxCudaRequiredLibraries().map((library) => [library.fileName, library]));
+    for (const library of runtimeArtifact.requiredDynamicLibraries) {
+      if (!library || !library.fileName || !library.source) {
+        return 'Linux summary runtime dependency metadata is incomplete.';
+      }
+      if (library.source === 'summary-runtime') {
+        if (!library.relativePath) {
+          return 'Linux summary runtime dependency metadata is incomplete.';
+        }
+        if (!pinnedRuntimeFiles.some((file) => file.path === library.relativePath)) {
+          return `Linux summary runtime dependency is not pinned: ${library.fileName}`;
+        }
+      } else if (library.source === 'managed-cuda12') {
+        if (!library.relativePath) {
+          return 'Linux summary runtime dependency metadata is incomplete.';
+        }
+        const managedPin = managedLibraries.get(library.fileName);
+        if (!managedPin || managedPin.relativePath !== library.relativePath) {
+          return `Linux summary runtime dependency is not pinned in the managed CUDA catalog: ${library.fileName}`;
+        }
+      } else if (library.source !== 'nvidia-driver' && library.source !== 'system') {
+        return `Unknown Linux summary runtime dependency source: ${library.source}`;
+      }
+    }
+  }
   for (const archive of runtimeArtifact.artifacts) {
-    if (!archive.fileName || !archive.downloadUrl || !isPinnedSha256(archive.sha256)) {
+    if (!archive.fileName || !archive.downloadUrl || !isPinnedSha256(archive.sha256) || !isPinnedByteSize(archive.sizeBytes)) {
       return 'Pinned llama.cpp runtime archive metadata is incomplete.';
     }
     if (!isAllowedDownloadUrl(archive.downloadUrl)) {
       return 'Pinned llama.cpp runtime archive host is not allowed.';
+    }
+    if (!['zip', 'tar.gz'].includes(archive.archiveFormat)) {
+      return 'Pinned llama.cpp runtime archive format is not supported.';
+    }
+    for (const file of archive.requiredFiles || []) {
+      if (!file.path || !isPinnedSha256(file.sha256) || !isPinnedByteSize(file.sizeBytes)) {
+        return 'Pinned llama.cpp runtime extracted-file metadata is incomplete.';
+      }
+    }
+    for (const [fileName, file] of Object.entries(archive.extractedFiles || {})) {
+      if (!fileName || !file.path || !isPinnedSha256(file.sha256) || !isPinnedByteSize(file.sizeBytes)) {
+        return 'Pinned llama.cpp runtime library metadata is incomplete.';
+      }
     }
   }
 
   return null;
 }
 
-function checkSummaryRuntimeCache({
+function getSummaryRuntimeRequiredFiles(runtimeArtifact) {
+  const files = [];
+  for (const archive of runtimeArtifact?.artifacts || []) {
+    for (const file of archive.requiredFiles || []) {
+      files.push({ ...file });
+    }
+    for (const [fileName, file] of Object.entries(archive.extractedFiles || {})) {
+      files.push({
+        path: file.path || `${archive.dynamicLibraryDir || ''}/${fileName}`,
+        sha256: file.sha256,
+        sizeBytes: file.sizeBytes,
+      });
+    }
+  }
+  return files;
+}
+
+const summaryRuntimeChecksumFingerprintCache = new Map();
+const summaryRuntimeDependencyFingerprintCache = new Map();
+
+function getSummaryRuntimeLoaderDirectories(rootPath, runtimeArtifact, requiredFiles, executablePath) {
+  const directories = new Map();
+  const addDirectory = (relativeDirectory, expectedNames = [], allowRoot = false) => {
+    const normalized = String(relativeDirectory || '').replace(/\\/g, '/').replace(/\/+$/, '');
+    if ((!normalized && !allowRoot) || normalized.startsWith('/') || normalized.split('/').some((part) => part === '..')) {
+      throw new Error('Summary runtime loader directory is unsafe.');
+    }
+    const directoryPath = path.resolve(rootPath, ...normalized.split('/'));
+    if (!directories.has(directoryPath)) {
+      directories.set(directoryPath, new Set());
+    }
+    for (const name of expectedNames) {
+      if (name) {
+        directories.get(directoryPath).add(name);
+      }
+    }
+  };
+
+  for (const file of requiredFiles || []) {
+    const relativePath = String(file.path || '').replace(/\\/g, '/');
+    const baseName = path.posix.basename(relativePath);
+    if (!/\.so(?:\.|$)/.test(baseName)) {
+      continue;
+    }
+    const relativeDirectory = path.posix.dirname(relativePath) === '.' ? '' : path.posix.dirname(relativePath);
+    addDirectory(relativeDirectory, [baseName]);
+  }
+  for (const archive of runtimeArtifact?.artifacts || []) {
+    if (archive.dynamicLibraryDir) {
+      addDirectory(archive.dynamicLibraryDir);
+    }
+  }
+  if (executablePath) {
+    const relativeExecutableDir = path.relative(rootPath, path.dirname(executablePath));
+    addDirectory(relativeExecutableDir, [], true);
+  }
+
+  return directories;
+}
+
+function getSummaryRuntimeAllowedSymlinkNames(expectedNames) {
+  const aliases = new Set();
+  for (const name of expectedNames) {
+    const match = String(name).match(/^(.*\.so)(?:\.\d.*)?$/);
+    if (!match) {
+      continue;
+    }
+    aliases.add(match[1]);
+    aliases.add(`${match[1]}.0`);
+  }
+  return aliases;
+}
+
+function collectUnexpectedSummaryRuntimeLoaderFiles({
+  runtimeDir,
+  runtimeArtifact,
+  requiredFiles,
+  executablePath,
+  fsModule = fs,
+} = {}) {
+  const readdirSync = bindFsMethod(fsModule, 'readdirSync');
+  const lstatSync = bindFsMethod(fsModule, 'lstatSync');
+  const realpathSync = bindFsMethod(fsModule, 'realpathSync');
+  if (!readdirSync || !lstatSync || !realpathSync) {
+    throw new Error('File system cannot inspect the summary runtime loader directories.');
+  }
+  const rootPath = path.resolve(runtimeDir);
+  const realRoot = path.resolve(realpathSync(rootPath));
+  const directories = getSummaryRuntimeLoaderDirectories(rootPath, runtimeArtifact, requiredFiles, executablePath);
+  const unexpected = [];
+
+  for (const [directoryPath, expectedNames] of directories) {
+    let directoryStats;
+    try {
+      directoryStats = lstatSync(directoryPath);
+    } catch (error) {
+      if (error && error.code === 'ENOENT') {
+        continue;
+      }
+      throw error;
+    }
+    if (!directoryStats?.isDirectory?.()) {
+      throw new Error(`Summary runtime loader directory is not a directory: ${path.basename(directoryPath)}`);
+    }
+    const allowedAliases = getSummaryRuntimeAllowedSymlinkNames(expectedNames);
+    for (const entry of readdirSync(directoryPath, { withFileTypes: true })) {
+      const name = String(entry.name || '');
+      if (!/\.so(?:\.|$)/.test(name) || expectedNames.has(name)) {
+        continue;
+      }
+      const candidate = path.join(directoryPath, name);
+      const stats = lstatSync(candidate);
+      if (allowedAliases.has(name) && stats.isSymbolicLink?.()) {
+        const realCandidate = path.resolve(realpathSync(candidate));
+        const relative = path.relative(realRoot, realCandidate);
+        if (!relative.startsWith('..') && !path.isAbsolute(relative) && expectedNames.has(path.basename(realCandidate))) {
+          continue;
+        }
+      }
+      unexpected.push(path.relative(rootPath, candidate).split(path.sep).join('/'));
+    }
+  }
+  return unexpected;
+}
+
+async function verifySummaryPinnedFile({
+  filePath,
+  pin,
+  fsModule,
+  verifyChecksum,
+  verifyChecksumIfChanged,
+} = {}) {
+  const lstatSync = bindFsMethod(fsModule, 'lstatSync');
+  const realpathSync = bindFsMethod(fsModule, 'realpathSync');
+  const statSync = bindFsMethod(fsModule, 'statSync');
+  if (!lstatSync || !realpathSync || !statSync) {
+    return 'File system cannot validate the summary runtime dependency.';
+  }
+  try {
+    const lstat = lstatSync(filePath);
+    if (lstat.isSymbolicLink?.()) {
+      return `Summary runtime dependency must not be a symbolic link: ${path.basename(filePath)}`;
+    }
+    const stats = statSync(realpathSync(filePath));
+    if (!stats?.isFile?.() || Number(stats.size) !== Number(pin.sizeBytes)) {
+      return `Summary runtime dependency size mismatch: ${path.basename(filePath)}`;
+    }
+    if (!verifyChecksum) {
+      return null;
+    }
+    const realFile = path.resolve(realpathSync(filePath));
+    const fingerprint = `${realFile}\0${Number(stats.size)}\0${Number(stats.mtimeMs)}`;
+    if (verifyChecksumIfChanged) {
+      const cached = summaryRuntimeDependencyFingerprintCache.get(fingerprint);
+      if (cached && cached.expectedSha256 === pin.sha256 && cached.actualSha256 === pin.sha256) {
+        return null;
+      }
+    }
+    const actualSha256 = await hashFileSha256(realFile, fsModule);
+    if (actualSha256 !== pin.sha256) {
+      summaryRuntimeDependencyFingerprintCache.delete(fingerprint);
+      return `Summary runtime dependency hash mismatch: ${path.basename(filePath)}`;
+    }
+    if (verifyChecksumIfChanged) {
+      summaryRuntimeDependencyFingerprintCache.set(fingerprint, {
+        expectedSha256: pin.sha256,
+        actualSha256,
+      });
+    }
+    return null;
+  } catch (error) {
+    return error.message || `Summary runtime dependency is missing: ${path.basename(filePath)}`;
+  }
+}
+
+async function verifySummaryRuntimeDynamicLibraries({
+  userDataDir,
+  runtimeDir,
+  runtimeArtifact,
+  requiredFiles,
+  fsModule = fs,
+  verifyChecksum = false,
+  verifyChecksumIfChanged = false,
+} = {}) {
+  const runtimeLibraries = runtimeArtifact?.requiredDynamicLibraries || [];
+  const managedLibraries = getLinuxCudaRequiredLibraries();
+  const requiredByPath = new Map((requiredFiles || []).map((file) => [
+    String(file.path || '').replace(/\\/g, '/'),
+    file,
+  ]));
+  let managedRoot = null;
+
+  for (const library of runtimeLibraries) {
+    const name = String(library.fileName || '');
+    if (!name || !library.source) {
+      return 'Linux summary runtime dependency metadata is incomplete.';
+    }
+    if (library.source === 'summary-runtime') {
+      const relativePath = String(library.relativePath || '').replace(/\\/g, '/');
+      if (!relativePath || relativePath.startsWith('/') || relativePath.split('/').some((part) => part === '..')) {
+        return `Unsafe Linux summary runtime dependency path: ${name}`;
+      }
+      const pin = requiredByPath.get(relativePath);
+      if (!pin) {
+        return `Summary runtime dependency is not pinned: ${name}`;
+      }
+      const error = await verifySummaryPinnedFile({
+        filePath: path.join(runtimeDir, ...relativePath.split('/')),
+        pin,
+        fsModule,
+        verifyChecksum,
+        verifyChecksumIfChanged,
+      });
+      if (error) {
+        return error;
+      }
+      continue;
+    }
+    if (library.source === 'managed-cuda12') {
+      const pin = managedLibraries.find((entry) => entry.fileName === name);
+      if (!pin) {
+        return `Summary runtime dependency is not pinned in the managed CUDA catalog: ${name}`;
+      }
+      if (!managedRoot) {
+        managedRoot = getManagedLinuxCudaRuntimeTarget(userDataDir);
+        try {
+          managedRoot = validateLinuxCudaManagedRoot(managedRoot, fsModule);
+        } catch (error) {
+          return error.message;
+        }
+      }
+      let filePath;
+      try {
+        filePath = resolveRequiredLinuxCudaLibraryPath(managedRoot, pin, fsModule);
+      } catch (error) {
+        return error.message;
+      }
+      const error = await verifySummaryPinnedFile({
+        filePath,
+        pin,
+        fsModule,
+        verifyChecksum,
+        verifyChecksumIfChanged,
+      });
+      if (error) {
+        return error;
+      }
+      continue;
+    }
+    if (library.source === 'nvidia-driver' || library.source === 'system') {
+      if (!linuxAllowlistedLibraryExists(name, fsModule)) {
+        return `Required Linux summary system library is not available: ${name}`;
+      }
+      continue;
+    }
+    return `Unknown Linux summary runtime dependency source: ${library.source}`;
+  }
+  return null;
+}
+
+async function verifySummaryRuntimeFiles(runtimeDir, runtimeArtifact, fsModule = fs, verifyChecksum = false, verifyChecksumIfChanged = false) {
+  const requiredFiles = getSummaryRuntimeRequiredFiles(runtimeArtifact);
+  if (!verifyChecksum || requiredFiles.length === 0) {
+    return { ok: true, checksumSkippedUnchanged: false, error: null };
+  }
+  const existsSync = bindFsMethod(fsModule, 'existsSync');
+  const lstatSync = bindFsMethod(fsModule, 'lstatSync');
+  const realpathSync = bindFsMethod(fsModule, 'realpathSync');
+  const statSync = bindFsMethod(fsModule, 'statSync');
+  if (!existsSync || !lstatSync || !realpathSync || !statSync) {
+    return { ok: false, checksumSkippedUnchanged: false, error: 'File system cannot validate the summary runtime files.' };
+  }
+
+  const rootPath = path.resolve(runtimeDir);
+  let realRoot;
+  try {
+    realRoot = path.resolve(realpathSync(rootPath));
+  } catch (error) {
+    return { ok: false, checksumSkippedUnchanged: false, error: 'Summary runtime extraction directory is not available.' };
+  }
+  let skippedAll = true;
+  for (const file of requiredFiles) {
+    const relativePath = String(file.path || '').replace(/\\/g, '/');
+    if (!relativePath || relativePath.startsWith('/') || relativePath.split('/').some((part) => part === '..')) {
+      return { ok: false, checksumSkippedUnchanged: false, error: `Unsafe summary runtime file path: ${relativePath}` };
+    }
+    const filePath = path.join(rootPath, ...relativePath.split('/'));
+    try {
+      const lstat = lstatSync(filePath);
+      if (lstat.isSymbolicLink?.()) {
+        return { ok: false, checksumSkippedUnchanged: false, error: `Summary runtime file must not be a symbolic link: ${path.basename(filePath)}` };
+      }
+      const realFile = path.resolve(realpathSync(filePath));
+      const relative = path.relative(realRoot, realFile);
+      if (relative.startsWith('..') || path.isAbsolute(relative)) {
+        return { ok: false, checksumSkippedUnchanged: false, error: 'Summary runtime file escapes its managed extraction directory.' };
+      }
+      const stats = statSync(realFile);
+      if (!stats?.isFile?.() || Number(stats.size) !== Number(file.sizeBytes)) {
+        return { ok: false, checksumSkippedUnchanged: false, error: `Summary runtime file size mismatch: ${path.basename(filePath)}` };
+      }
+      const fingerprint = `${realFile}\0${Number(stats.size)}\0${Number(stats.mtimeMs)}`;
+      if (verifyChecksumIfChanged) {
+        const cached = summaryRuntimeChecksumFingerprintCache.get(fingerprint);
+        if (cached && cached.expectedSha256 === file.sha256 && cached.actualSha256 === file.sha256) {
+          continue;
+        }
+      }
+      skippedAll = false;
+      const actualSha256 = await hashFileSha256(realFile, fsModule);
+      if (actualSha256 !== file.sha256) {
+        return { ok: false, checksumSkippedUnchanged: false, error: `Summary runtime file hash mismatch: ${path.basename(filePath)}` };
+      }
+      if (verifyChecksumIfChanged) {
+        summaryRuntimeChecksumFingerprintCache.set(fingerprint, {
+          expectedSha256: file.sha256,
+          actualSha256,
+        });
+      }
+    } catch (error) {
+      return { ok: false, checksumSkippedUnchanged: false, error: error.message || `Summary runtime file is missing: ${path.basename(filePath)}` };
+    }
+  }
+  const unexpectedLoaderFiles = collectUnexpectedSummaryRuntimeLoaderFiles({
+    runtimeDir: rootPath,
+    runtimeArtifact,
+    requiredFiles,
+    executablePath: requiredFiles
+      .map((file) => path.join(rootPath, ...String(file.path || '').replace(/\\/g, '/').split('/')))
+      .find((filePath) => path.basename(filePath) === runtimeArtifact?.executableName),
+    fsModule,
+  });
+  if (unexpectedLoaderFiles.length > 0) {
+    return {
+      ok: false,
+      checksumSkippedUnchanged: false,
+      error: `Unexpected summary runtime loader files: ${unexpectedLoaderFiles.join(', ')}`,
+    };
+  }
+  return { ok: true, checksumSkippedUnchanged: verifyChecksumIfChanged && skippedAll, error: null };
+}
+
+async function checkSummaryRuntimeCache({
   userDataDir,
   platform = process.platform,
   arch = process.arch,
   modelId,
   fsModule = fs,
   catalog = AI_MODEL_CATALOG,
+  verifyChecksum = false,
+  verifyChecksumIfChanged = false,
 } = {}) {
   const artifact = getSummaryArtifactForPlatform(modelId, platform, arch, catalog);
   const runtimeArtifact = getSummaryRuntimeArtifactForPlatform(platform, arch, catalog);
@@ -1176,14 +1863,33 @@ function checkSummaryRuntimeCache({
     || (expectedExecutablePath && existsSync && existsSync(expectedExecutablePath) ? expectedExecutablePath : null);
   const installed = Boolean(executablePath && existsSync && existsSync(executablePath));
   const partial = Boolean(runtimeDir && existsSync && existsSync(runtimeDir) && !installed);
+  const runtimeIntegrity = installed
+    ? await verifySummaryRuntimeFiles(path.join(runtimeDir, 'extract'), runtimeArtifact, fsModule, verifyChecksum, verifyChecksumIfChanged)
+    : { ok: false, checksumSkippedUnchanged: false, error: null };
+  const runtimeDependencyError = installed && runtimeIntegrity.ok && platform === 'linux'
+    ? await verifySummaryRuntimeDynamicLibraries({
+      userDataDir,
+      runtimeDir: path.join(runtimeDir, 'extract'),
+      runtimeArtifact,
+      requiredFiles: getSummaryRuntimeRequiredFiles(runtimeArtifact),
+      fsModule,
+      verifyChecksum,
+      verifyChecksumIfChanged,
+    })
+    : null;
 
   return {
     supported: Boolean(artifact && runtimeArtifact),
     installed,
     partial,
-    valid: installed && !validationError,
-    validationStatus: validationError ? 'pendingPinnedRuntime' : installed ? 'ready' : 'notConfigured',
-    reason: validationError || (installed ? null : 'llama.cpp runtime is not installed.'),
+    valid: installed && !validationError && runtimeIntegrity.ok && !runtimeDependencyError,
+    validationStatus: validationError
+      ? 'pendingPinnedRuntime'
+      : installed ? (runtimeIntegrity.ok && !runtimeDependencyError ? 'ready' : 'error') : 'notConfigured',
+    reason: validationError || (installed
+      ? (runtimeIntegrity.error || runtimeDependencyError)
+      : 'llama.cpp runtime is not installed.'),
+    checksumSkippedUnchanged: runtimeIntegrity.checksumSkippedUnchanged,
     estimatedDownloadBytes: Array.isArray(runtimeArtifact?.artifacts)
       ? runtimeArtifact.artifacts.reduce((total, runtimeArchive) => total + (Number(runtimeArchive.sizeBytes) || 0), 0)
       : null,
@@ -1191,6 +1897,125 @@ function checkSummaryRuntimeCache({
     expectedExecutablePath,
     executablePath,
     runtimeArtifact,
+  };
+}
+
+function buildSummaryRuntimeEnv({
+  userDataDir,
+  artifact,
+  runtimeArtifact,
+  platform = process.platform,
+  arch = process.arch,
+  fsModule = fs,
+  driverLibraryDirs = null,
+} = {}) {
+  if (platform !== 'linux') {
+    return {};
+  }
+  if (arch !== 'x64') {
+    throw new Error('Linux local summaries require x86_64.');
+  }
+  const selectedRuntimeArtifact = runtimeArtifact
+    || getSummaryRuntimeArtifactForPlatform(platform, arch, AI_MODEL_CATALOG);
+  const runtimeDir = getSummaryRuntimeDir(userDataDir, artifact);
+  const extractRoot = path.join(runtimeDir, 'extract');
+  const realpathSync = bindFsMethod(fsModule, 'realpathSync');
+  const existsSync = bindFsMethod(fsModule, 'existsSync');
+  if (!realpathSync || !existsSync) {
+    throw new Error('File system cannot resolve the managed Linux summary runtime.');
+  }
+  let realExtractRoot;
+  try {
+    realExtractRoot = path.resolve(realpathSync(extractRoot));
+  } catch (_error) {
+    throw new Error('Managed Linux summary runtime is not installed.');
+  }
+
+  const runtimeLibraryDirs = [];
+  const seenRuntimeDirs = new Set();
+  for (const archive of selectedRuntimeArtifact?.artifacts || []) {
+    if (!archive.dynamicLibraryDir) {
+      continue;
+    }
+    const relativeDir = String(archive.dynamicLibraryDir).replace(/\\/g, '/');
+    if (!relativeDir || relativeDir.startsWith('/') || relativeDir.split('/').some((part) => part === '..')) {
+      throw new Error('Summary runtime library path is unsafe.');
+    }
+    const candidate = path.join(realExtractRoot, ...relativeDir.split('/'));
+    const stats = lstatRejectSymlink(candidate, fsModule, 'summary runtime library directory');
+    if (typeof stats.isDirectory === 'function' && !stats.isDirectory()) {
+      throw new Error('Summary runtime library path is not a directory.');
+    }
+    if (isWorldWritableMode(stats.mode)) {
+      throw new Error('Summary runtime library directory must not be world-writable.');
+    }
+    const realDir = path.resolve(realpathSync(candidate));
+    const relative = path.relative(realExtractRoot, realDir);
+    if (relative.startsWith('..') || path.isAbsolute(relative)) {
+      throw new Error('Summary runtime library path escaped its managed extraction directory.');
+    }
+    if (!seenRuntimeDirs.has(realDir)) {
+      seenRuntimeDirs.add(realDir);
+      runtimeLibraryDirs.push(realDir);
+    }
+  }
+  const executablePath = findRuntimeExecutablePath(runtimeDir, selectedRuntimeArtifact?.executableName, fsModule);
+  if (!executablePath) {
+    throw new Error('Managed Linux summary runtime executable is not installed.');
+  }
+  const executableDir = path.resolve(path.dirname(executablePath));
+  const executableStats = lstatRejectSymlink(executableDir, fsModule, 'summary runtime executable directory');
+  if (typeof executableStats.isDirectory === 'function' && !executableStats.isDirectory()) {
+    throw new Error('Summary runtime executable directory is not a directory.');
+  }
+  if (isWorldWritableMode(executableStats.mode)) {
+    throw new Error('Summary runtime executable directory must not be world-writable.');
+  }
+  const realExecutableDir = path.resolve(realpathSync(executableDir));
+  const executableRelative = path.relative(realExtractRoot, realExecutableDir);
+  if (executableRelative.startsWith('..') || path.isAbsolute(executableRelative)) {
+    throw new Error('Summary runtime executable directory escaped its managed extraction directory.');
+  }
+  const executableStatsFile = lstatRejectSymlink(executablePath, fsModule, 'summary runtime executable');
+  if (typeof executableStatsFile.isFile === 'function' && !executableStatsFile.isFile()) {
+    throw new Error('Summary runtime executable is not a regular file.');
+  }
+  const realExecutable = path.resolve(realpathSync(executablePath));
+  const executableFileRelative = path.relative(realExtractRoot, realExecutable);
+  if (executableFileRelative.startsWith('..') || path.isAbsolute(executableFileRelative)) {
+    throw new Error('Summary runtime executable escaped its managed extraction directory.');
+  }
+  const unexpectedLoaderFiles = collectUnexpectedSummaryRuntimeLoaderFiles({
+    runtimeDir: realExtractRoot,
+    runtimeArtifact: selectedRuntimeArtifact,
+    requiredFiles: getSummaryRuntimeRequiredFiles(selectedRuntimeArtifact),
+    executablePath: realExecutable,
+    fsModule,
+  });
+  if (unexpectedLoaderFiles.length > 0) {
+    throw new Error(`Unexpected summary runtime loader files: ${unexpectedLoaderFiles.join(', ')}`);
+  }
+  if (!seenRuntimeDirs.has(executableDir)) {
+    runtimeLibraryDirs.unshift(executableDir);
+  }
+
+  const managedRoot = getManagedLinuxCudaRuntimeTarget(userDataDir);
+  let driverDirs = [];
+  try {
+    driverDirs = driverLibraryDirs || resolveLinuxCudaDriverLibraryDirs({ fsModule });
+  } catch (_driverError) {
+    // The loader can still use the system default driver search path. Never
+    // weaken the managed path or admit an unvalidated driver directory.
+    driverDirs = [];
+  }
+  const managedPath = buildContainedLinuxCudaLibraryPath({
+    managedRoot,
+    libraryDirs: getManagedLinuxCudaLibraryDirs(managedRoot),
+    driverLibraryDirs: driverDirs,
+    fsModule,
+  });
+  return {
+    LD_LIBRARY_PATH: [...runtimeLibraryDirs, managedPath].join(path.delimiter),
   };
 }
 
@@ -1414,6 +2239,7 @@ async function checkAiAddonSetupStatus({
   env = process.env,
   resourcesPath = process.resourcesPath,
   tokenStatusReader = getDiarizationTokenStatus,
+  cudaStatus = null,
 } = {}) {
   const { manifest, readError } = loadAiAddonManifest({
     userDataDir,
@@ -1421,7 +2247,15 @@ async function checkAiAddonSetupStatus({
     readFileSync: bindFsMethod(fsModule, 'readFileSync'),
     catalog,
   });
-  const status = buildAiAddonStatus({ userDataDir, platform, arch, manifest, readError, catalog });
+  const status = buildAiAddonStatus({
+    userDataDir,
+    platform,
+    arch,
+    manifest,
+    readError,
+    catalog,
+    cudaStatus,
+  });
   const computeAdmissionEngine = computeAdmission
     ? resolveSpawnDiarizationEngine(status.features.diarization.engine, env)
     : null;
@@ -1443,8 +2277,8 @@ async function checkAiAddonSetupStatus({
     arch,
     fsModule,
     catalog,
-    verifyChecksum: verifyChecksums,
-    verifyChecksumIfChanged: Boolean(verifyChecksums && verifyChecksumsIfChanged),
+    verifyChecksum: verifyChecksums || computeAdmissionEngine === 'speakrs',
+    verifyChecksumIfChanged: computeAdmissionEngine === 'speakrs',
   });
   const speakrsRuntimeCache = await checkSpeakrsRuntimeCache({
     userDataDir,
@@ -1485,13 +2319,15 @@ async function checkAiAddonSetupStatus({
       reason: status.features.summary.error || (status.features.summary.lastValidation && status.features.summary.lastValidation.message) || 'Summary model artifact checksum does not match the pinned checksum.',
     };
   }
-  const summaryRuntimeCache = checkSummaryRuntimeCache({
+  const summaryRuntimeCache = await checkSummaryRuntimeCache({
     userDataDir,
     platform,
     arch,
     modelId: status.features.summary.modelId,
     fsModule,
     catalog,
+    verifyChecksum: verifyChecksums,
+    verifyChecksumIfChanged: Boolean(verifyChecksums && verifyChecksumsIfChanged),
   });
   const diarization = deriveDiarizationStatus(
     status.features.diarization,
@@ -1631,6 +2467,7 @@ module.exports = {
   checkDiarizationDependencyCache,
   checkSummaryModelCache,
   checkSummaryRuntimeCache,
+  buildSummaryRuntimeEnv,
   getDiarizationDependencySitePackagesDir,
   getDiarizationModelCacheDir,
   getSpeakrsModelCacheDir,
@@ -1650,6 +2487,7 @@ module.exports = {
   SPEAKRS_PACKAGED_CLI_MISSING_MESSAGE,
   isNativeSpeakrsCliPath,
   resolveSpawnDiarizationEngine,
+  assertLinuxSpeakrsOnlyEngine,
   resolveSpeakrsMode,
   canStartGuidedDiarization,
   buildSpeakrsSpawnEnv,
@@ -1675,6 +2513,7 @@ module.exports = {
   isPinnedSha256,
   validateDiarizationDependencyArtifact,
   validateSummaryRuntimeArtifact,
+  isPinnedByteSize,
   validateSummarySetupArtifact,
   validatePinnedSummarySetup,
   createValidation,

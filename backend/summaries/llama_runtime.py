@@ -56,6 +56,8 @@ def get_platform_acceleration(platform: str, arch: str) -> str:
         return "cuda"
     if platform == "darwin" and arch == "arm64":
         return "metal"
+    if platform == "linux" and arch == "x64":
+        return "cuda"
     return "unsupported"
 
 
@@ -124,7 +126,7 @@ def build_llama_cli_args(
     if max_tokens <= 0:
         raise SummaryRuntimeError("max_tokens must be greater than 0.")
 
-    return [
+    args = [
         str(runtime["executable"]),
         "--model",
         str(runtime["modelPath"]),
@@ -140,15 +142,17 @@ def build_llama_cli_args(
         str(max_tokens),
         "--no-display-prompt",
         "--no-warmup",
-        # Chat-template models default to conversation/interactive mode, which
-        # prints "/exit" help chrome and can make the model treat CLI status as
-        # the "transcript". Force a non-interactive single completion instead.
-        "--no-conversation",
+        # Chat-template models default to conversation/interactive mode on the
+        # older Windows/macOS pin. The Linux v0.3.0 CLI does not expose that
+        # legacy switch; --single-turn is its equivalent.
         "--single-turn",
         "--simple-io",
         "--reasoning",
         "off",
     ]
+    if runtime.get("platform") in ("win32", "darwin"):
+        args.insert(args.index("--single-turn"), "--no-conversation")
+    return args
 
 def build_llama_smoke_test_args(runtime: Dict[str, Any], *, prompt_path: str) -> List[str]:
     smoke_runtime = {

@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { createGpuRuntimeService } = require('../../src/main/gpu-runtime-service');
+const { comparableFsPath, comparableLinuxLibraryPathParts } = require('./comparable-fs-path');
 
 const {
   applyLinuxElectronCommandLineSwitches,
@@ -160,7 +161,89 @@ test('Linux safeStorage smoke requires a real backend and a successful encrypt/d
 const {
   getUnsupportedPlatformCudaProbeError,
   buildUnsupportedPlatformCudaStatus,
+  getManagedLinuxCudaRuntimeTarget,
+  getManagedLinuxCudaLibraryDirs,
 } = require('../../src/main-process/cuda-runtime-helpers');
+
+test('Linux CUDA managed target is userData-scoped and has only wheel library roots', () => {
+  const target = getManagedLinuxCudaRuntimeTarget('/home/alice/.config/AvaNevis');
+  assert.equal(target, '/home/alice/.config/AvaNevis/ai-addons/cuda/python');
+  assert.deepEqual(getManagedLinuxCudaLibraryDirs(target), [
+    '/home/alice/.config/AvaNevis/ai-addons/cuda/python/nvidia/cublas/lib',
+    '/home/alice/.config/AvaNevis/ai-addons/cuda/python/nvidia/cudnn/lib',
+  ]);
+});
+
+test('admitted Linux CUDA builds a contained managed loader environment and ignores inherited LD_LIBRARY_PATH', () => {
+  const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+  const archDescriptor = Object.getOwnPropertyDescriptor(process, 'arch');
+  Object.defineProperty(process, 'platform', { configurable: true, value: 'linux' });
+  Object.defineProperty(process, 'arch', { configurable: true, value: 'x64' });
+  const userData = fs.mkdtempSync(path.join(require('os').tmpdir(), 'avanevis-linux-cuda-env-'));
+  try {
+    const target = getManagedLinuxCudaRuntimeTarget(userData);
+    const libraryDirs = getManagedLinuxCudaLibraryDirs(target);
+    for (const directory of libraryDirs) {
+      fs.mkdirSync(directory, { recursive: true });
+    }
+    const service = createGpuRuntimeService({
+      app: { getPath: () => userData },
+      path,
+      fs,
+      pythonConfig: { pythonExe: '/fake/python' },
+      spawnTrackedPython: () => { throw new Error('not used'); },
+      getBackendModuleArgs: () => [],
+      appendSpawnLogBuffer: (buffer) => buffer,
+      sendRedactedProgress: () => {},
+      flushRedactedProgress: () => {},
+      getActivePythonVersion: async () => ({ parsed: { version: '3.11.9' } }),
+      terminateProcessBestEffort: () => {},
+      assertTrustedRendererSender: () => {},
+      getDiarizationDependencySitePackagesPath: () => null,
+      isLinuxCudaProfileEnabled: () => true,
+    });
+    const env = service.buildCudaRuntimeEnv({ LD_LIBRARY_PATH: '/tmp/hostile:/lib' });
+    assert.deepEqual(
+      comparableLinuxLibraryPathParts(env.LD_LIBRARY_PATH).slice(0, libraryDirs.length),
+      libraryDirs.map((directory) => comparableFsPath(directory)),
+    );
+    assert.doesNotMatch(env.LD_LIBRARY_PATH, /\/tmp\/hostile/);
+  } finally {
+    Object.defineProperty(process, 'platform', platformDescriptor);
+    Object.defineProperty(process, 'arch', archDescriptor);
+    fs.rmSync(userData, { recursive: true, force: true });
+  }
+});
+
+test('Linux CUDA loader env clears inherited LD_LIBRARY_PATH when no managed runtime exists', () => {
+  const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+  Object.defineProperty(process, 'platform', { configurable: true, value: 'linux' });
+  const userData = fs.mkdtempSync(path.join(require('os').tmpdir(), 'avanevis-linux-cuda-env-cpu-'));
+  try {
+    const service = createGpuRuntimeService({
+      app: { getPath: () => userData },
+      path,
+      fs,
+      pythonConfig: { pythonExe: '/fake/python' },
+      spawnTrackedPython: () => { throw new Error('not used'); },
+      getBackendModuleArgs: () => [],
+      appendSpawnLogBuffer: (buffer) => buffer,
+      sendRedactedProgress: () => {},
+      flushRedactedProgress: () => {},
+      getActivePythonVersion: async () => ({ parsed: { version: '3.11.9' } }),
+      terminateProcessBestEffort: () => {},
+      assertTrustedRendererSender: () => {},
+      getDiarizationDependencySitePackagesPath: () => null,
+      isLinuxCudaProfileEnabled: () => true,
+    });
+    const env = service.buildCudaRuntimeEnv({ LD_LIBRARY_PATH: '/tmp/hostile:/lib', OTHER: 'keep' });
+    assert.equal(env.LD_LIBRARY_PATH, undefined);
+    assert.equal(env.OTHER, 'keep');
+  } finally {
+    Object.defineProperty(process, 'platform', platformDescriptor);
+    fs.rmSync(userData, { recursive: true, force: true });
+  }
+});
 
 test('Linux CUDA probe reports unavailable and does not advertise install', () => {
   const linux = buildUnsupportedPlatformCudaStatus('linux');

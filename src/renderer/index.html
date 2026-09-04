@@ -317,7 +317,7 @@
                   </span>
                   <span class="diarization-engine-card-sub" data-engine-sub="speakrs">No Hugging Face account.</span>
                 </label>
-                <label class="diarization-engine-card" data-engine="pyannote" data-prompt-engine="pyannote" id="home-diarization-engine-pyannote">
+                <label class="diarization-engine-card" data-engine="pyannote" data-prompt-engine="pyannote" id="home-diarization-engine-pyannote" hidden>
                   <input type="radio" name="home-diarization-engine" value="pyannote" class="diarization-engine-radio" disabled />
                   <span class="diarization-engine-card-title">
                     <span>Pyannote</span>
@@ -877,7 +877,7 @@
                           </span>
                           <span class="diarization-engine-card-sub" id="diarization-engine-speakrs-sub">No Hugging Face account.</span>
                         </label>
-                        <label class="diarization-engine-card" data-engine="pyannote" id="diarization-engine-pyannote">
+                        <label class="diarization-engine-card" data-engine="pyannote" id="diarization-engine-pyannote" hidden>
                           <input type="radio" name="settings-diarization-engine" value="pyannote" class="diarization-engine-radio" disabled />
                           <span class="diarization-engine-card-title">
                             <span>Pyannote</span>
@@ -1026,7 +1026,15 @@
                       rel="noopener noreferrer"
                       >llama.cpp</a
                     >
-                    (MIT). Installers bundle ffmpeg (GPLv3) and the Speakrs CLI.
+                    (MIT); Linux CUDA summaries also use the pinned
+                    <a
+                      href="https://github.com/ai-dock/llama.cpp-cuda"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      >ai-dock Linux build</a
+                    >
+                    (MIT build scripts) and NVIDIA NCCL (NVIDIA Software License
+                    Agreement). Installers bundle ffmpeg (GPLv3) and the Speakrs CLI.
                   </p>
                   <button
                     type="button"
