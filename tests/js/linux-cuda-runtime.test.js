@@ -16,7 +16,7 @@ const {
   getLinuxCudaRequiredLibraries,
   getLinuxCudaWheelPins,
 } = require('../../src/main-process/linux-cuda-runtime-catalog');
-const { comparableLinuxLibraryPath } = require('./comparable-fs-path');
+const { comparableFsPath, comparableLinuxLibraryPathParts } = require('./comparable-fs-path');
 const {
   buildContainedLinuxCudaLibraryPath,
   buildLinuxCudaOfflineInstallArgs,
@@ -78,12 +78,12 @@ test('Linux CUDA catalog is a complete linux-x64 pin set', () => {
 
 test('contained Linux CUDA loader rejects empty, relative, duplicate, and escaped directories', () => {
   const { root, cublas, cudnn } = makeRuntimeTree();
-  assert.equal(
-    buildContainedLinuxCudaLibraryPath({
+  assert.deepEqual(
+    comparableLinuxLibraryPathParts(buildContainedLinuxCudaLibraryPath({
       managedRoot: root,
       libraryDirs: [cublas, cudnn],
-    }),
-    comparableLinuxLibraryPath([cublas, cudnn]),
+    })),
+    [cublas, cudnn].map(comparableFsPath),
   );
   assert.throws(
     () => buildContainedLinuxCudaLibraryPath({ managedRoot: root, libraryDirs: [] }),

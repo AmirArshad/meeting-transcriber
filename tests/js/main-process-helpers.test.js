@@ -6,7 +6,7 @@ const path = require('node:path');
 
 const mainProcessHelpers = require('../../src/main-process-helpers');
 const { createLineChunkRedactor } = require('../../src/ai-progress-sanitizer');
-const { comparableLinuxLibraryPath } = require('./comparable-fs-path');
+const { comparableFsPath, comparableLinuxLibraryPathParts } = require('./comparable-fs-path');
 
 const {
   buildFileUrl,
@@ -1547,14 +1547,14 @@ test('managed Linux CUDA library paths reject untrusted directories and ignore i
   const cudnn = path.join(root, 'nvidia', 'cudnn', 'lib');
   fs.mkdirSync(cublas, { recursive: true });
   fs.mkdirSync(cudnn, { recursive: true });
-  assert.equal(
-    buildManagedLinuxCudaLibraryPath({
+  assert.deepEqual(
+    comparableLinuxLibraryPathParts(buildManagedLinuxCudaLibraryPath({
       managedRoot: root,
       libraryDirs: [cublas, cudnn],
       inheritedLibraryPath: '/usr/lib:/lib',
       fsModule: fs,
-    }),
-    comparableLinuxLibraryPath([cublas, cudnn]),
+    })),
+    [cublas, cudnn].map(comparableFsPath),
   );
   assert.throws(
     () => buildManagedLinuxCudaLibraryPath({

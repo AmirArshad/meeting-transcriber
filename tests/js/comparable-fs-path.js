@@ -8,11 +8,36 @@ function comparableFsPath(targetPath) {
   return path.resolve(realpathSync(targetPath));
 }
 
-function comparableLinuxLibraryPath(dirs) {
-  return dirs.map(comparableFsPath).join(':');
+function splitLinuxLibraryPath(value) {
+  const text = String(value || '');
+  if (!text) {
+    return [];
+  }
+  return text.split(/[;:](?=(?:[A-Za-z]:[\\/]|\/))/).filter(Boolean);
+}
+
+function comparableLinuxLibraryPathParts(value) {
+  return splitLinuxLibraryPath(value).map((part) => comparableFsPath(part));
+}
+
+function linuxLibraryPathContainsDir(value, dir) {
+  return comparableLinuxLibraryPathParts(value).includes(comparableFsPath(dir));
+}
+
+function linuxLibraryPathStartsWithDir(value, dir) {
+  const parts = comparableLinuxLibraryPathParts(value);
+  if (parts.length === 0) {
+    return false;
+  }
+  const prefix = comparableFsPath(dir);
+  return parts[0] === prefix
+    || parts[0].startsWith(`${prefix}${path.sep}`)
+    || parts[0].startsWith(`${prefix}/`);
 }
 
 module.exports = {
   comparableFsPath,
-  comparableLinuxLibraryPath,
+  comparableLinuxLibraryPathParts,
+  linuxLibraryPathContainsDir,
+  linuxLibraryPathStartsWithDir,
 };

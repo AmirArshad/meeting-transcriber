@@ -14,7 +14,7 @@ const {
   getSpeakrsSetupArtifactsForPlatform,
 } = require('../../src/ai-addon-state');
 const { flattenSelectedArchiveFiles } = require('../../src/ai-addon/archive-install');
-const { comparableFsPath } = require('./comparable-fs-path');
+const { linuxLibraryPathContainsDir } = require('./comparable-fs-path');
 const {
   checkSpeakrsRuntimeCache,
   checkSpeakrsModelCache,
@@ -1516,8 +1516,8 @@ test('Linux Speakrs spawn env is CUDA-only and ignores ambient LD_LIBRARY_PATH',
     assert.equal(env.HF_HUB_CACHE, undefined);
     assert.doesNotMatch(String(env.LD_LIBRARY_PATH || ''), /hostile-libs|ambient/);
     assert.ok(String(env.LD_LIBRARY_PATH || '').startsWith(path.resolve(runtimeDir)));
-    assert.ok(env.LD_LIBRARY_PATH.includes(comparableFsPath(cublasDir)));
-    assert.ok(env.LD_LIBRARY_PATH.includes(comparableFsPath(cudnnDir)));
+    assert.ok(linuxLibraryPathContainsDir(env.LD_LIBRARY_PATH, cublasDir));
+    assert.ok(linuxLibraryPathContainsDir(env.LD_LIBRARY_PATH, cudnnDir));
     assert.equal(env.ORT_DYLIB_PATH, path.join(runtimeDir, 'libonnxruntime.so.1.27.1'));
   } finally {
     fs.rmSync(userDataDir, { recursive: true, force: true });
