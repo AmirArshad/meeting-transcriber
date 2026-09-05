@@ -26,8 +26,23 @@
     return '';
   }
 
+  function shouldAbortSummaryGenerationAfterPreflight({
+    requestedMeetingId,
+    activeMeetingId,
+    cancelling = false,
+  } = {}) {
+    if (cancelling) {
+      return true;
+    }
+    if (!requestedMeetingId || !activeMeetingId) {
+      return true;
+    }
+    return String(activeMeetingId) !== String(requestedMeetingId);
+  }
+
   return {
     getMeetingTranscriptionStatusMessage,
     isMeetingTranscriptionRetryable,
+    shouldAbortSummaryGenerationAfterPreflight,
   };
 }));

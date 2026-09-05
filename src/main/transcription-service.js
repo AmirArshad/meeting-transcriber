@@ -983,16 +983,50 @@ function createTranscriptionService(deps) {
     let engine = null;
     let catalogModelRef = null;
     try {
+      const preliminaryStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions({
+        computeAdmission: false,
+        cudaStatus: typeof getCachedCudaStatus === 'function'
+          ? getCachedCudaStatus({ allowStale: true })
+          : null,
+      }));
+      const preliminaryDiarization = preliminaryStatus && preliminaryStatus.features
+        && preliminaryStatus.features.diarization;
+      if (
+        !canStartGuidedDiarization({
+          status: preliminaryDiarization && preliminaryDiarization.status,
+          setupComplete: preliminaryDiarization && preliminaryDiarization.setupComplete,
+          engine: preliminaryDiarization && preliminaryDiarization.engine,
+          modelRef: preliminaryDiarization ? getDiarizationModelRef(preliminaryDiarization.modelId) : null,
+        })
+        && !isDiarizationFailureExpectedToRun(preliminaryDiarization)
+      ) {
+        return null;
+      }
+
       const availabilityResult = await resolveDiarizationAvailability({ registerProcess });
       diarizationAvailability = availabilityResult.availability;
       const cudaStatus = availabilityResult.cudaStatus;
       if (!diarizationAvailability.supported || !diarizationAvailability.runtimeDevice) {
         return null;
       }
-      const aiStatus = await checkAiAddonSetupStatus(getAiAddonRuntimeOptions({
-        computeAdmission: true,
-        cudaStatus,
-      }));
+      const needsComputeAdmission = Boolean(
+        preliminaryDiarization
+        && (
+          preliminaryDiarization.setupComplete === true
+          || canStartGuidedDiarization({
+            status: preliminaryDiarization.status,
+            setupComplete: preliminaryDiarization.setupComplete,
+            engine: preliminaryDiarization.engine,
+            modelRef: getDiarizationModelRef(preliminaryDiarization.modelId),
+          })
+        )
+      );
+      const aiStatus = needsComputeAdmission
+        ? await checkAiAddonSetupStatus(getAiAddonRuntimeOptions({
+          computeAdmission: true,
+          cudaStatus,
+        }))
+        : preliminaryStatus;
       diarizationStatus = aiStatus && aiStatus.features && aiStatus.features.diarization;
       catalogModelRef = diarizationStatus ? getDiarizationModelRef(diarizationStatus.modelId) : null;
       engine = resolveSpawnDiarizationEngine(diarizationStatus && diarizationStatus.engine);

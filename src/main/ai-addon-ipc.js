@@ -42,6 +42,7 @@ const {
   parseAiBackendProgressLine,
   AI_COMPUTE_TIMEOUT_MS,
   runWallClockComputeAction,
+  createCancellableProcessRegistrar,
   splitBufferedLines,
   buildClearedHuggingFaceTokenEnv,
 } = require('../main-process-helpers');
@@ -52,7 +53,6 @@ const {
   resolveSpawnDiarizationEngine,
 } = require('../ai-addon/manifest-store');
 const { SPEAKRS_DIARIZATION_ENGINES } = require('../ai-addon/speakrs-pack-spec');
-const { managedLinuxCudaRuntimeExists } = require('../main-process/linux-cuda-runtime-helpers');
 
 /**
  * @param {object} deps
@@ -240,19 +240,12 @@ function createAiAddonIpc(deps) {
   }
 
   async function resolveLiveCudaStatusForAddonStatus() {
-    const cached = typeof getCachedCudaStatus === 'function' ? getCachedCudaStatus() : null;
-    if (process.platform !== 'linux'
-      || process.arch !== 'x64'
-      || typeof resolveCudaStatusForTranscription !== 'function'
-      || !managedLinuxCudaRuntimeExists(app.getPath('userData'), fs)) {
-      return cached;
+    // Passive status (Settings refresh, Generate Summary preflight) must not
+    // wait behind transcription. Live hashing/probes belong to compute start.
+    if (typeof getCachedCudaStatus === 'function') {
+      return getCachedCudaStatus({ allowStale: true }) || getCachedCudaStatus();
     }
-    return enqueueGpuResourceAction(() => runWallClockComputeAction({
-      timeoutMs: AI_COMPUTE_TIMEOUT_MS.addonValidation,
-      label: 'Linux CUDA status check',
-      terminateProcess: terminateProcessBestEffort,
-      action: (registerProcess) => resolveCudaStatusForTranscription({ registerProcess }),
-    }));
+    return null;
   }
 
   async function resolveLinuxSpeakrsCudaStatus({ registerProcess, cancelSignal } = {}) {
@@ -264,28 +257,22 @@ function createAiAddonIpc(deps) {
       error.code = 'LINUX_CUDA_RESOLVER_UNAVAILABLE';
       throw error;
     }
-    let activeProcess = null;
-    const register = (child) => {
-      activeProcess = typeof registerProcess === 'function' ? registerProcess(child) : child;
-      return activeProcess;
-    };
-    const abort = () => {
-      if (activeProcess) {
-        terminateProcessBestEffort(activeProcess);
-      }
-    };
-    cancelSignal?.addEventListener?.('abort', abort, { once: true });
+    const registrar = createCancellableProcessRegistrar({
+      registerProcess,
+      cancelSignal,
+      terminateProcess: terminateProcessBestEffort,
+      createCancelError: () => createAiAddonCancelError('Speaker identification setup was canceled.'),
+    });
     try {
-      if (cancelSignal?.aborted) {
-        throw createAiAddonCancelError('Speaker identification setup was canceled.');
-      }
-      const status = await resolveCudaStatusForTranscription({ registerProcess: register });
-      if (cancelSignal?.aborted) {
-        throw createAiAddonCancelError('Speaker identification setup was canceled.');
-      }
+      registrar.throwIfCancelled();
+      const status = await resolveCudaStatusForTranscription({
+        registerProcess: registrar.register,
+        cancelSignal,
+      });
+      registrar.throwIfCancelled();
       return status;
     } finally {
-      cancelSignal?.removeEventListener?.('abort', abort);
+      registrar.cleanup();
     }
   }
 
@@ -550,10 +537,7 @@ function createAiAddonIpc(deps) {
             modelLabel: artifact.modelLabel || artifact.modelId,
           }), {
             cwd: pythonConfig.backendPath,
-            env: buildClearedHuggingFaceTokenEnv({
-              ...process.env,
-              ...summaryEnv,
-            }),
+            env: buildClearedHuggingFaceTokenEnv(summaryEnv),
           }));
 
           let output = '';

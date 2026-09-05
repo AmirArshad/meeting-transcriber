@@ -92,6 +92,77 @@ async function terminateNonAbortableQuitComputeJobs() {
   return jobs.length;
 }
 
+function createCancellableProcessRegistrar({
+  registerProcess = (proc) => proc,
+  cancelSignal = null,
+  terminateProcess = () => {},
+  createCancelError = () => {
+    const error = new Error('Operation was canceled.');
+    error.name = 'AbortError';
+    return error;
+  },
+} = {}) {
+  let activeProcess = null;
+  let cancelled = Boolean(cancelSignal && cancelSignal.aborted);
+
+  const abort = () => {
+    cancelled = true;
+    if (!activeProcess) {
+      return;
+    }
+    try {
+      Promise.resolve(terminateProcess(activeProcess)).catch(() => undefined);
+    } catch (_error) {
+      // Best-effort terminate of the in-flight child.
+    }
+  };
+
+  if (cancelSignal && typeof cancelSignal.addEventListener === 'function') {
+    cancelSignal.addEventListener('abort', abort, { once: true });
+  }
+
+  const isCancelled = () => cancelled || Boolean(cancelSignal && cancelSignal.aborted);
+
+  const throwIfCancelled = () => {
+    if (isCancelled()) {
+      cancelled = true;
+      throw createCancelError();
+    }
+  };
+
+  const register = (child) => {
+    if (isCancelled()) {
+      cancelled = true;
+      try {
+        Promise.resolve(terminateProcess(child)).catch(() => undefined);
+      } catch (_error) {
+        // Best-effort terminate of a child registered after cancellation.
+      }
+      throw createCancelError();
+    }
+    const registered = typeof registerProcess === 'function' ? registerProcess(child) : child;
+    activeProcess = registered;
+    if (isCancelled()) {
+      abort();
+      throw createCancelError();
+    }
+    return registered;
+  };
+
+  const cleanup = () => {
+    if (cancelSignal && typeof cancelSignal.removeEventListener === 'function') {
+      cancelSignal.removeEventListener('abort', abort);
+    }
+  };
+
+  return {
+    register,
+    throwIfCancelled,
+    cleanup,
+    isCancelled,
+  };
+}
+
 function runWallClockComputeAction({
   action,
   timeoutMs,
@@ -100,9 +171,22 @@ function runWallClockComputeAction({
   settleGraceMs = AI_COMPUTE_TIMEOUT_MS.wallClockSettleGraceMs,
   meetingId = null,
 }) {
+  const abortController = typeof AbortController === 'function' ? new AbortController() : null;
+  const actionOptions = { signal: abortController ? abortController.signal : undefined };
+  const abortAction = (reason) => {
+    if (!abortController || abortController.signal.aborted) {
+      return;
+    }
+    try {
+      abortController.abort(reason);
+    } catch (_error) {
+      abortController.abort();
+    }
+  };
+
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     // Identity registerProcess so callers can still use the return value.
-    return Promise.resolve().then(() => action((proc) => proc));
+    return Promise.resolve().then(() => action((proc) => proc, actionOptions));
   }
 
   let activeProcess = null;
@@ -134,6 +218,7 @@ function runWallClockComputeAction({
     startedAt: Date.now(),
     terminate: async () => {
       quitTerminated = true;
+      abortAction(new Error(`${label} was terminated because the app is quitting.`));
       try {
         await Promise.resolve(terminateProcess(activeProcess));
       } catch (_error) {
@@ -201,7 +286,7 @@ function runWallClockComputeAction({
     activeWallClockComputeJobs.add(job);
 
     const actionPromise = Promise.resolve()
-      .then(() => action(registerProcess));
+      .then(() => action(registerProcess, actionOptions));
 
     timeoutHandle = setTimeout(() => {
       if (settled) {
@@ -209,6 +294,7 @@ function runWallClockComputeAction({
       }
       timedOut = true;
       const timeoutError = new Error(`${label} timed out after ${formatComputeTimeoutLabel(timeoutMs)}.`);
+      abortAction(timeoutError);
       Promise.resolve(terminateProcess(activeProcess))
         .catch(() => undefined)
         .then(() => waitForActionOrGrace(actionPromise))
@@ -252,6 +338,7 @@ module.exports = {
   AI_COMPUTE_TIMEOUT_MS,
   getTranscriptionComputeTimeoutMs,
   formatComputeTimeoutLabel,
+  createCancellableProcessRegistrar,
   runWallClockComputeAction,
   getActiveWallClockComputeJob,
   getActiveWallClockComputeJobs,

@@ -4,6 +4,7 @@ const { execFileSync } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { Worker } = require('worker_threads');
 const { isWorldWritableMode } = require('./posix-file-mode');
 
 const ACCEPTED_LINUX_CUDA_OS_ID = 'cachyos';
@@ -12,6 +13,7 @@ const ACCEPTED_LINUX_CUDA_GPU_NAMES = Object.freeze([
   'geforce rtx 4070',
 ]);
 const LINUX_LIBRARY_PATH_DELIMITER = ':';
+const HASH_READ_CHUNK_BYTES = 1024 * 1024;
 
 const {
   assertLinuxCudaCatalogIntegrity,
@@ -437,7 +439,36 @@ function buildContainedLinuxCudaLibraryPath({
 }
 
 function hashFileSha256Sync(filePath, fsModule = fs) {
+  const openSync = fsModule.openSync || fs.openSync;
+  const readSync = fsModule.readSync || fs.readSync;
+  const closeSync = fsModule.closeSync || fs.closeSync;
+  if (typeof openSync === 'function' && typeof readSync === 'function' && typeof closeSync === 'function') {
+    const hash = crypto.createHash('sha256');
+    const fd = openSync(filePath, 'r');
+    try {
+      const buffer = Buffer.alloc(HASH_READ_CHUNK_BYTES);
+      while (true) {
+        const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
+        if (!bytesRead) {
+          break;
+        }
+        hash.update(bytesRead === buffer.length ? buffer : buffer.subarray(0, bytesRead));
+      }
+      return hash.digest('hex');
+    } finally {
+      closeSync(fd);
+    }
+  }
+  const createReadStream = fsModule.createReadStream || fs.createReadStream;
+  if (typeof createReadStream === 'function') {
+    throw new Error('Synchronous CUDA hashing requires openSync/readSync; use hashFileSha256 for streamed hashing.');
+  }
   const readFileSync = fsModule.readFileSync || fs.readFileSync;
+  const statSync = fsModule.statSync || fs.statSync;
+  const size = Number((statSync(filePath) || {}).size || 0);
+  if (size > HASH_READ_CHUNK_BYTES) {
+    throw new Error('Refusing to hash a large CUDA artifact with a whole-file read.');
+  }
   return crypto.createHash('sha256').update(readFileSync(filePath)).digest('hex');
 }
 
@@ -448,11 +479,41 @@ async function hashFileSha256(filePath, fsModule = fs) {
   }
   return new Promise((resolve, reject) => {
     const hash = crypto.createHash('sha256');
-    const stream = createReadStream(filePath);
+    const stream = createReadStream(filePath, { highWaterMark: HASH_READ_CHUNK_BYTES });
     stream.on('error', reject);
     stream.on('data', (chunk) => hash.update(chunk));
     stream.on('end', () => resolve(hash.digest('hex')));
   });
+}
+
+function copyFileBoundedSync(sourcePath, destinationPath, fsModule = fs) {
+  const openSync = fsModule.openSync || fs.openSync;
+  const readSync = fsModule.readSync || fs.readSync;
+  const writeSync = fsModule.writeSync || fs.writeSync;
+  const closeSync = fsModule.closeSync || fs.closeSync;
+  if (typeof openSync !== 'function' || typeof readSync !== 'function' || typeof writeSync !== 'function') {
+    const copyFileSync = fsModule.copyFileSync || fs.copyFileSync;
+    copyFileSync(sourcePath, destinationPath);
+    return;
+  }
+  const sourceFd = openSync(sourcePath, 'r');
+  let destinationFd;
+  try {
+    destinationFd = openSync(destinationPath, 'w');
+    const buffer = Buffer.alloc(HASH_READ_CHUNK_BYTES);
+    while (true) {
+      const bytesRead = readSync(sourceFd, buffer, 0, buffer.length, null);
+      if (!bytesRead) {
+        break;
+      }
+      writeSync(destinationFd, buffer, 0, bytesRead);
+    }
+  } finally {
+    closeSync(sourceFd);
+    if (destinationFd != null) {
+      closeSync(destinationFd);
+    }
+  }
 }
 
 function resolveRequiredLinuxCudaLibraryPath(managedRoot, library, fsModule = fs) {
@@ -800,11 +861,10 @@ function stageVerifiedLinuxCudaWheels({
     throw new Error('Linux CUDA wheel staging directory must not be the persistent wheelhouse.');
   }
   const mkdirSync = fsModule.mkdirSync || fs.mkdirSync;
-  const copyFileSync = fsModule.copyFileSync || fs.copyFileSync;
   mkdirSync(stagingDir, { recursive: true });
   return catalog.wheels.map((wheel) => {
     const destinationPath = path.join(stagingDir, wheel.fileName);
-    copyFileSync(path.join(sourceDir, wheel.fileName), destinationPath);
+    copyFileBoundedSync(path.join(sourceDir, wheel.fileName), destinationPath, fsModule);
     verifyDownloadedLinuxCudaWheel(destinationPath, wheel, fsModule);
     return destinationPath;
   });
@@ -896,6 +956,106 @@ function verifyDownloadedLinuxCudaWheel(filePath, wheel, fsModule = fs) {
     throw new Error(`CUDA wheel hash mismatch: ${wheel.fileName}`);
   }
   return true;
+}
+
+function runLinuxCudaFileWorkerJob(job = {}) {
+  const op = String(job.op || '');
+  if (op === 'verifyWheel') {
+    return verifyDownloadedLinuxCudaWheel(job.filePath, job.wheel, fs);
+  }
+  if (op === 'stageWheels') {
+    return stageVerifiedLinuxCudaWheels({
+      sourceDir: job.sourceDir,
+      stagingDir: job.stagingDir,
+      catalog: job.catalog,
+      fsModule: fs,
+    });
+  }
+  throw new Error(`Unknown Linux CUDA file worker operation: ${op}`);
+}
+
+function runLinuxCudaFileWorker(workerData, {
+  cancelSignal = null,
+  workerFactory = (workerPath, options) => new Worker(workerPath, options),
+} = {}) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let worker;
+    let removeAbortListener = () => {};
+    const finish = (callback, value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      removeAbortListener();
+      if (worker) {
+        Promise.resolve(worker.terminate())
+          .catch(() => {})
+          .finally(() => callback(value));
+        return;
+      }
+      callback(value);
+    };
+    try {
+      worker = workerFactory(path.join(__dirname, 'linux-cuda-file-worker.js'), { workerData });
+    } catch (error) {
+      finish(reject, error);
+      return;
+    }
+    if (cancelSignal && typeof cancelSignal.addEventListener === 'function') {
+      const handleAbort = () => {
+        const error = new Error('GPU runtime setup was canceled.');
+        error.name = 'AbortError';
+        error.code = 'GPU_RUNTIME_ACTION_CANCELLED';
+        finish(reject, error);
+      };
+      cancelSignal.addEventListener('abort', handleAbort, { once: true });
+      removeAbortListener = () => cancelSignal.removeEventListener('abort', handleAbort);
+      if (cancelSignal.aborted) {
+        handleAbort();
+        return;
+      }
+    }
+    worker.once('message', (message) => {
+      if (message && message.ok) {
+        finish(resolve, message.result);
+        return;
+      }
+      const error = new Error((message && message.error && message.error.message) || 'Linux CUDA file worker failed.');
+      if (message && message.error && message.error.stack) {
+        error.stack = message.error.stack;
+      }
+      finish(reject, error);
+    });
+    worker.once('error', (error) => finish(reject, error));
+    worker.once('exit', (code) => {
+      if (settled) {
+        return;
+      }
+      finish(reject, new Error(`Linux CUDA file worker exited with code ${code}.`));
+    });
+  });
+}
+
+function verifyDownloadedLinuxCudaWheelInWorker(filePath, wheel, options = {}) {
+  return runLinuxCudaFileWorker({
+    op: 'verifyWheel',
+    filePath,
+    wheel: {
+      fileName: wheel.fileName,
+      sha256: wheel.sha256,
+      sizeBytes: wheel.sizeBytes,
+    },
+  }, options);
+}
+
+function stageVerifiedLinuxCudaWheelsInWorker(args = {}, options = {}) {
+  return runLinuxCudaFileWorker({
+    op: 'stageWheels',
+    sourceDir: args.sourceDir,
+    stagingDir: args.stagingDir,
+    catalog: args.catalog,
+  }, options);
 }
 
 function detectUnsupportedLinuxCudaMajor({
@@ -1040,6 +1200,7 @@ module.exports = {
   isKnownCudaProbeStatusCode,
   isWorldWritableMode,
   LINUX_LIBRARY_PATH_DELIMITER,
+  HASH_READ_CHUNK_BYTES,
   lstatRejectSymlink,
   validateLinuxCudaManagedRoot,
   validateLinuxCudaLibraryDirectory,
@@ -1062,9 +1223,12 @@ module.exports = {
   isLinuxCudaRecoveryArtifactName,
   reconcileLinuxCudaRuntimeArtifacts,
   stageVerifiedLinuxCudaWheels,
+  stageVerifiedLinuxCudaWheelsInWorker,
   swapLinuxCudaRuntimeAtomically,
   buildLinuxCudaOfflineInstallArgs,
   verifyDownloadedLinuxCudaWheel,
+  verifyDownloadedLinuxCudaWheelInWorker,
+  runLinuxCudaFileWorkerJob,
   detectUnsupportedLinuxCudaMajor,
   buildProbeErrorStatus,
   parseLinuxCheckCudaStatus,

@@ -19,6 +19,8 @@ const {
   getLinuxCudaTombstonePath,
   getLinuxCudaWheelStagePath,
   isLinuxCudaOffered,
+  stageVerifiedLinuxCudaWheels,
+  verifyDownloadedLinuxCudaWheel,
 } = require('../../src/main-process/linux-cuda-runtime-helpers');
 
 function withProcess({ platform = process.platform, arch = process.arch }, fn) {
@@ -191,6 +193,8 @@ function createLinuxGpuService(overrides = {}) {
     enqueueGpuResourceAction: async (action) => action(),
     isLinuxCudaProfileEnabled: () => true,
     getLinuxCudaCatalog: () => catalog,
+    stageLinuxCudaWheels: stageVerifiedLinuxCudaWheels,
+    verifyLinuxCudaWheel: verifyDownloadedLinuxCudaWheel,
     execFileSyncFn: overrides.execFileSyncFn || (() => {
       throw new Error('nvidia-smi should not be required when /proc NVIDIA is visible');
     }),
@@ -739,6 +743,199 @@ test('Linux arm64 children clear ambient LD_LIBRARY_PATH', async () => {
     try {
       const env = service.buildCudaRuntimeEnv({ LD_LIBRARY_PATH: '/tmp/hostile:/lib' });
       assert.equal(env.LD_LIBRARY_PATH, undefined);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+function waitUntil(predicate, timeoutMs = 1000) {
+  const started = Date.now();
+  return new Promise((resolve, reject) => {
+    const poll = () => {
+      if (predicate()) {
+        resolve();
+        return;
+      }
+      if (Date.now() - started > timeoutMs) {
+        reject(new Error('Timed out waiting for condition'));
+        return;
+      }
+      setTimeout(poll, 5);
+    };
+    poll();
+  });
+}
+
+test('Linux CUDA install timeout during download does not promote after the lock is released', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    let releaseDownload;
+    const downloadGate = new Promise((resolve) => {
+      releaseDownload = resolve;
+    });
+    let resourceTail = Promise.resolve();
+    const { service, userData, renamed, cleanup } = createLinuxGpuService({
+      gpuRuntimeActionTimeoutMs: 40,
+      gpuRuntimeSettleGraceMs: 15,
+      enqueueGpuResourceAction: (action) => {
+        const run = resourceTail.then(() => action(), () => action());
+        resourceTail = run.catch(() => {});
+        return run;
+      },
+      downloadLinuxCudaWheel: async ({ destinationPath, cancelSignal }) => {
+        fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
+        fs.writeFileSync(destinationPath, 'whl');
+        await new Promise((resolve, reject) => {
+          const finish = () => resolve();
+          if (cancelSignal && typeof cancelSignal.addEventListener === 'function') {
+            cancelSignal.addEventListener('abort', () => {
+              const error = new Error('Download was canceled.');
+              error.name = 'AbortError';
+              reject(error);
+            }, { once: true });
+          }
+          downloadGate.then(finish, finish);
+        });
+      },
+    });
+    try {
+      const active = getManagedLinuxCudaRuntimeTarget(userData);
+      const before = fs.readdirSync(active);
+      const installPromise = service.runGpuRuntimeAction((registerProcess, { signal } = {}) => (
+        service.runGpuPackageInstall({ mode: 'install', registerProcess, signal })
+      ));
+      await waitUntil(() => service.hasInFlightGpuRuntimeAction() === true, 500);
+      await assert.rejects(installPromise, /timed out/);
+      assert.equal(service.hasInFlightGpuRuntimeAction(), false);
+
+      let secondRan = false;
+      await service.runGpuRuntimeAction(async () => {
+        secondRan = true;
+        return { ok: true };
+      });
+      assert.equal(secondRan, true);
+      releaseDownload();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      assert.equal(renamed.length, 0);
+      assert.deepEqual(fs.readdirSync(active), before);
+    } finally {
+      releaseDownload();
+      cleanup();
+    }
+  });
+});
+
+test('Linux CUDA install timeout during post-install hashing does not promote after the lock is released', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    let releaseIntegrity;
+    const integrityGate = new Promise((resolve) => {
+      releaseIntegrity = resolve;
+    });
+    let resourceTail = Promise.resolve();
+    const { service, userData, catalog, renamed, cleanup } = createLinuxGpuService({
+      gpuRuntimeActionTimeoutMs: 40,
+      gpuRuntimeSettleGraceMs: 15,
+      enqueueGpuResourceAction: (action) => {
+        const run = resourceTail.then(() => action(), () => action());
+        resourceTail = run.catch(() => {});
+        return run;
+      },
+      verifyLinuxCudaIntegrity: async (args) => {
+        await integrityGate;
+        const { verifyLinuxCudaRuntimeIntegrity } = require('../../src/main-process/linux-cuda-runtime-helpers');
+        return verifyLinuxCudaRuntimeIntegrity(args);
+      },
+    });
+    try {
+      const active = getManagedLinuxCudaRuntimeTarget(userData);
+      const before = fs.readdirSync(active);
+      const installPromise = service.runGpuRuntimeAction((registerProcess, { signal } = {}) => (
+        service.runGpuPackageInstall({ mode: 'install', registerProcess, signal })
+      ));
+      await waitUntil(() => service.hasInFlightGpuRuntimeAction() === true, 500);
+      await assert.rejects(installPromise, /timed out/);
+      assert.equal(service.hasInFlightGpuRuntimeAction(), false);
+
+      let secondRan = false;
+      await service.runGpuRuntimeAction(async () => {
+        secondRan = true;
+        return { ok: true };
+      });
+      assert.equal(secondRan, true);
+      releaseIntegrity();
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      assert.equal(renamed.length, 0);
+      assert.deepEqual(fs.readdirSync(active), before);
+      assert.equal(catalog.wheels.length > 0, true);
+    } finally {
+      releaseIntegrity();
+      cleanup();
+    }
+  });
+});
+
+test('Linux live CUDA probes reuse unchanged library hashes within the process', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    let hashCalls = 0;
+    const { service, cleanup } = createLinuxGpuService({
+      verifyLinuxCudaIntegrity: async (args) => {
+        hashCalls += 1;
+        const { verifyLinuxCudaRuntimeIntegrity } = require('../../src/main-process/linux-cuda-runtime-helpers');
+        return verifyLinuxCudaRuntimeIntegrity(args);
+      },
+    });
+    try {
+      const first = await service.checkCudaRuntimeStatus();
+      const second = await service.checkCudaRuntimeStatus();
+      assert.equal(first.statusCode, 'ready');
+      assert.equal(second.statusCode, 'ready');
+      assert.equal(hashCalls, 1);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+test('Linux live CUDA cache still rejects an extra loader library after hashes are memoized', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    let hashCalls = 0;
+    const { service, userData, catalog, spawnCalls, cleanup } = createLinuxGpuService({
+      verifyLinuxCudaIntegrity: async (args) => {
+        hashCalls += 1;
+        const { verifyLinuxCudaRuntimeIntegrity } = require('../../src/main-process/linux-cuda-runtime-helpers');
+        return verifyLinuxCudaRuntimeIntegrity(args);
+      },
+    });
+    try {
+      const first = await service.checkCudaRuntimeStatus();
+      assert.equal(first.statusCode, 'ready');
+      assert.equal(hashCalls, 1);
+      const probeCount = () => spawnCalls.filter((call) => call.args.includes('transcription.cuda_probe')).length;
+      assert.equal(probeCount(), 1);
+
+      const extraLibrary = path.join(
+        getManagedLinuxCudaRuntimeTarget(userData),
+        'nvidia',
+        'cublas',
+        'lib',
+        'libcuda.so.1',
+      );
+      fs.writeFileSync(extraLibrary, 'inert');
+
+      const { verifyLinuxCudaRuntimeIntegrity } = require('../../src/main-process/linux-cuda-runtime-helpers');
+      const fullCheck = await verifyLinuxCudaRuntimeIntegrity({
+        managedRoot: getManagedLinuxCudaRuntimeTarget(userData),
+        catalog,
+        fsModule: fs,
+      });
+      assert.equal(fullCheck.statusCode, 'runtimeIntegrityFailed');
+      assert.match(fullCheck.error, /libcuda\.so\.1/);
+
+      const cached = await service.checkCudaRuntimeStatus();
+      assert.equal(cached.statusCode, 'runtimeIntegrityFailed');
+      assert.match(cached.error, /libcuda\.so\.1/);
+      assert.equal(hashCalls, 1, 'directory scan must fail before reusing cached hashes or hashing again');
+      assert.equal(probeCount(), 1, 'an extra loader library must not start another CUDA probe');
     } finally {
       cleanup();
     }

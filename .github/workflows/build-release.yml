@@ -327,7 +327,7 @@ jobs:
           ### Platform Support
 
           - Windows 10/11 x64
-          - macOS 13+ on Apple Silicon
+          - macOS 14+ on Apple Silicon
           - Linux x86_64 Core Beta (Omarchy first; other distros are experimental betas)
 
           ### Installation
@@ -345,7 +345,7 @@ jobs:
 
           **Linux Core Beta**
           1. On Omarchy/Arch install the pacman package, or run the AppImage. Debian-family friends can try the experimental \`.deb\`. See \`docs/guides/LINUX_EXPERIMENTAL.md\`.
-          2. Transcription uses CPU faster-whisper; speaker identification and summaries remain unavailable in this version.
+          2. Transcription uses CPU faster-whisper by default. Optional managed CUDA 12, Speakrs speaker identification, and CUDA-only Qwen summaries are explicit setup on supported NVIDIA x86_64 hosts.
 
           ### Notes
 
