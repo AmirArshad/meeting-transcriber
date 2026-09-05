@@ -262,6 +262,71 @@ test('packaged buildPythonEnv isolates PYTHONPATH and disables user site', () =>
   }
 });
 
+test('packaged summary validation does not reintroduce ambient PYTHONPATH', async () => {
+  const previousResources = process.resourcesPath;
+  Object.defineProperty(process, 'resourcesPath', { configurable: true, value: '/tmp/review-packaged-resources' });
+  const previousPythonPath = process.env.PYTHONPATH;
+  process.env.PYTHONPATH = '/tmp/review-ambient-imports';
+  const spawned = [];
+  try {
+    await withProcessRuntimeAsync({ platform: 'linux', arch: 'x64' }, async () => {
+      const runtime = createPythonRuntime({
+        app: { isPackaged: true, getPath: () => '/tmp/review-user-data' },
+        spawn: (exe, args, options) => {
+          spawned.push({ exe, args, options });
+          const proc = new EventEmitter();
+          proc.stdout = new EventEmitter();
+          proc.stderr = new EventEmitter();
+          proc.kill = () => {};
+          queueMicrotask(() => {
+            proc.stdout.emit('data', Buffer.from(JSON.stringify({ ok: true })));
+            proc.emit('close', 0);
+          });
+          return proc;
+        },
+        path,
+        fs,
+        dirname: '/tmp/review-packaged-resources/src',
+      });
+      const service = createAiAddonIpc({
+        app: { getPath: () => '/tmp/review-user-data', isPackaged: true },
+        path,
+        fs,
+        pythonConfig: runtime.pythonConfig,
+        spawnTrackedPython: (args, options) => runtime.spawnTrackedPython(args, options),
+        appendSpawnLogBuffer: (buffer, data) => `${buffer || ''}${data}`,
+        sendToRenderer() {},
+        assertTrustedRendererSender() {},
+        createAbortableComputeAction: ({ action }) => action(),
+        terminateProcessBestEffort() {},
+        buildSummaryArgs: () => ['-m', 'summary.validate'],
+        buildSummaryRuntimeEnv: () => ({
+          PYTHONPATH: '/tmp/review-llama-site',
+        }),
+      });
+      await service.validateSummaryRuntimeSmoke({
+        modelId: 'qwen3.5-9b-q4-k-m',
+      });
+    });
+    assert.equal(spawned.length, 1);
+    const pythonPath = String(spawned[0].options.env.PYTHONPATH || '');
+    assert.match(pythonPath, /review-llama-site/);
+    assert.match(pythonPath, /review-packaged-resources/);
+    assert.equal(pythonPath.includes('review-ambient-imports'), false);
+  } finally {
+    if (previousResources === undefined) {
+      delete process.resourcesPath;
+    } else {
+      Object.defineProperty(process, 'resourcesPath', { configurable: true, value: previousResources });
+    }
+    if (previousPythonPath === undefined) {
+      delete process.env.PYTHONPATH;
+    } else {
+      process.env.PYTHONPATH = previousPythonPath;
+    }
+  }
+});
+
 test('Linux Speakrs and Qwen summary catalogs are present and CUDA-gated', () => {
   const diarization = getDiarizationAvailability('linux', 'x64');
   const summary = getSummaryAvailability('linux', 'x64');
@@ -470,7 +535,7 @@ test('Linux summary runtime rejects unexpected loaders and unsafe executable dir
   }
 });
 
-test('Linux add-on status re-primes expired CUDA state when managed runtime exists', async () => {
+test('Linux add-on status uses cached CUDA status instead of waiting behind GPU work', async () => {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-linux-status-'));
   fs.mkdirSync(path.join(userDataDir, 'ai-addons', 'cuda', 'python'), { recursive: true });
   const readyCuda = {
@@ -483,6 +548,7 @@ test('Linux add-on status re-primes expired CUDA state when managed runtime exis
   };
   let observedCudaStatus = null;
   let liveProbeCount = 0;
+  let resourceAdmissions = 0;
   const service = createAiAddonIpc({
     app: { getPath: () => userDataDir },
     path,
@@ -493,12 +559,15 @@ test('Linux add-on status re-primes expired CUDA state when managed runtime exis
       observedCudaStatus = options.cudaStatus;
       return { features: { summary: { status: 'unsupported' } } };
     },
-    getCachedCudaStatus: () => null,
+    getCachedCudaStatus: () => readyCuda,
     resolveCudaStatusForTranscription: async () => {
       liveProbeCount += 1;
       return readyCuda;
     },
-    enqueueGpuResourceAction: (action) => action(),
+    enqueueGpuResourceAction: (action) => {
+      resourceAdmissions += 1;
+      return action();
+    },
     terminateProcessBestEffort: () => {},
   });
   const handlers = {};
@@ -510,8 +579,70 @@ test('Linux add-on status re-primes expired CUDA state when managed runtime exis
   } finally {
     fs.rmSync(userDataDir, { recursive: true, force: true });
   }
-  assert.equal(liveProbeCount, 1);
+  assert.equal(liveProbeCount, 0);
+  assert.equal(resourceAdmissions, 0);
   assert.equal(observedCudaStatus, readyCuda);
+});
+
+test('Linux Speakrs CUDA admission terminates a probe registered after cancel during hashing', async () => {
+  let releaseHash;
+  const hashGate = new Promise((resolve) => {
+    releaseHash = resolve;
+  });
+  const registered = [];
+  const terminated = [];
+  const service = createAiAddonIpc({
+    app: { getPath: () => '/tmp/avanevis-linux-cancel-probe' },
+    path,
+    fs,
+    pythonConfig: { backendPath: '/tmp/backend' },
+    sendToRenderer() {},
+    assertTrustedRendererSender() {},
+    terminateProcessBestEffort(proc) {
+      terminated.push(proc);
+    },
+    resolveCudaStatusForTranscription: async ({ registerProcess }) => {
+      await hashGate;
+      const child = new EventEmitter();
+      child.pid = 4242;
+      try {
+        registerProcess(child);
+        registered.push(child);
+      } catch (error) {
+        registered.push(child);
+        throw error;
+      }
+      return {
+        statusCode: 'ready',
+        installed: true,
+        deviceAvailable: true,
+        runtimeLoadable: true,
+        missingLibraries: [],
+        matchedProfile: 'cuda12',
+      };
+    },
+  });
+  const handlers = {};
+  service.registerIpc({ handle(channel, handler) { handlers[channel] = handler; } });
+  const setupPromise = withProcessRuntimeAsync({ platform: 'linux', arch: 'x64' }, () => (
+    handlers['setup-diarization']({ sender: {} }, { engine: 'speakrs' })
+  ));
+  const started = Date.now();
+  while (!service.hasInFlightAiAddonSetup()) {
+    if (Date.now() - started > 1000) {
+      throw new Error('Setup did not become in-flight');
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  const cancelResult = await handlers['cancel-diarization-setup']({ sender: {} });
+  assert.equal(cancelResult.canceled, true);
+  releaseHash();
+  await assert.rejects(setupPromise, (error) => error && error.code === 'AI_ADDON_SETUP_CANCELLED');
+  assert.ok(terminated.length >= registered.length);
+  assert.equal(registered.length <= 1, true);
+  if (registered.length === 1) {
+    assert.equal(terminated.includes(registered[0]), true);
+  }
 });
 
 test('Speakrs packaging builds the Linux CLI while resource manifests still fingerprint', () => {

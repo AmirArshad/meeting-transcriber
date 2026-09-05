@@ -154,6 +154,7 @@ const EXPECTED_MAIN_PROCESS_HELPER_EXPORTS = [
   'clearTranscriptionJobDeleteTombstone',
   'collectProcessesToKillOnQuit',
   'countBusyTranscriptionJobs',
+  'createCancellableProcessRegistrar',
   'createLineChunkRedactor',
   'createTranscriptionQueueState',
   'cudaStatusNeedsGpuRuntimeEnsure',

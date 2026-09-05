@@ -30,8 +30,12 @@ const {
   parseLinuxCheckCudaStatus,
   resolveLinuxCudaDriverLibraryDirs,
   stageVerifiedLinuxCudaWheels,
+  stageVerifiedLinuxCudaWheelsInWorker,
   swapLinuxCudaRuntimeAtomically,
   verifyDownloadedLinuxCudaWheel,
+  verifyDownloadedLinuxCudaWheelInWorker,
+  HASH_READ_CHUNK_BYTES,
+  hashFileSha256Sync,
   verifyLinuxCudaRuntimeIntegrity,
   isAcceptedLinuxCudaProfileHost,
   isLinuxCudaOffered,
@@ -188,6 +192,72 @@ test('Linux CUDA wheel verification rejects size and hash mismatches', () => {
     /hash mismatch/,
   );
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('CUDA wheel hashing uses bounded reads instead of a whole-file slurp', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-linux-cuda-hash-'));
+  const filePath = path.join(dir, 'large.whl');
+  const size = HASH_READ_CHUNK_BYTES * 2 + 4096;
+  fs.writeFileSync(filePath, Buffer.alloc(size, 0x61));
+  let slurped = false;
+  const spyFs = {
+    ...fs,
+    readFileSync(...args) {
+      if (String(args[0]) === filePath) {
+        slurped = true;
+      }
+      return fs.readFileSync(...args);
+    },
+  };
+  const digest = hashFileSha256Sync(filePath, spyFs);
+  assert.equal(slurped, false);
+  assert.equal(digest, crypto.createHash('sha256').update(Buffer.alloc(size, 0x61)).digest('hex'));
+  const wheel = {
+    fileName: 'large.whl',
+    sha256: digest,
+    sizeBytes: size,
+  };
+  assert.equal(verifyDownloadedLinuxCudaWheel(filePath, wheel, spyFs), true);
+  assert.equal(slurped, false);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('CUDA wheel staging worker copies and re-hashes a multi-chunk file off the main thread', async () => {
+  const source = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-linux-cuda-whsrc-'));
+  const staging = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-linux-cuda-whstg-'));
+  const size = HASH_READ_CHUNK_BYTES + 2048;
+  const body = Buffer.alloc(size, 0x62);
+  const fileName = 'fixture-large.whl';
+  fs.writeFileSync(path.join(source, fileName), body);
+  const catalog = {
+    architecture: 'x64',
+    platform: 'linux',
+    wheels: [{
+      id: 'fixture',
+      packageName: 'nvidia-cublas-cu12',
+      version: '1',
+      fileName,
+      sha256: crypto.createHash('sha256').update(body).digest('hex'),
+      sizeBytes: size,
+      downloadUrl: 'https://files.pythonhosted.org/packages/fixture-large.whl',
+    }],
+    requiredLibraries: [{
+      fileName: 'libcublas.so.12',
+      relativePath: 'nvidia/cublas/lib/libcublas.so.12',
+      sha256: 'b'.repeat(64),
+      sizeBytes: 1,
+    }],
+  };
+  const staged = await stageVerifiedLinuxCudaWheelsInWorker({
+    sourceDir: source,
+    stagingDir: staging,
+    catalog,
+  });
+  assert.deepEqual(staged, [path.join(staging, fileName)]);
+  assert.equal(verifyDownloadedLinuxCudaWheel(path.join(staging, fileName), catalog.wheels[0], fs), true);
+  await verifyDownloadedLinuxCudaWheelInWorker(path.join(source, fileName), catalog.wheels[0]);
+  fs.rmSync(source, { recursive: true, force: true });
+  fs.rmSync(staging, { recursive: true, force: true });
 });
 
 test('Linux CUDA offline install args pass exact verified wheel paths, not package names', () => {

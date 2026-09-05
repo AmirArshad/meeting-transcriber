@@ -229,6 +229,7 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
   - [Local AI model catalog](docs/development/LOCAL_AI_MODEL_CATALOG.md)
   - [v2.9 dependency compatibility and acceptance evidence](docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md)
   - [Speakrs soak / benchmarks](docs/development/SPEAKRS_BENCHMARKS.md)
+  - [v2.9.0 release notes](docs/releases/v2.9.0.md)
   - [v2.8.0 release notes](docs/releases/v2.8.0.md)
   - [Installer implementation](docs/development/INSTALLER_IMPLEMENTATION.md)
   - [Code review remediation (May 2026)](docs/completed/CODE_REVIEW_REMEDIATION_2026-05.md)
@@ -253,6 +254,7 @@ The UI exposes 12 commonly used languages: English, Spanish, French, German, Ita
 ## Roadmap (short version)
 
 **Shipped recently**
+- **v2.9.0 (September 2026)** — Electron 44, explicit mic-only / desktop-only capture, Omarchy-inspired visual refresh, and optional Linux CUDA 12 (fail-closed Whisper, Speakrs-only speaker labels, CUDA-only Qwen summaries). [Release notes](docs/releases/v2.9.0.md).
 - **v2.8.0 (August 2026)** — Linux x86_64 Core Beta: Omarchy 4 support, Pulse/PipeWire microphone and desktop-audio capture, CPU-only local transcription, AppImage and pacman packages plus an experimental `.deb`. AI add-ons remain unsupported on Linux. [Release notes](docs/releases/v2.8.0.md).
 - **v2.7.0 (August 2026)** — Speakrs speaker identification: exclusive Speakrs (token-free default for new users) or Pyannote selector; only one engine installed. Soak notes: [SPEAKRS_BENCHMARKS.md](docs/development/SPEAKRS_BENCHMARKS.md). [Release notes](docs/releases/v2.7.0.md).
 - **v2.6.0 (July 2026)** — Back-to-back recording and background transcription queue: Start unlocks after save; Home Activity list; discard in-progress recordings; cancel/resume pending jobs. See [FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md](docs/initiatives/FEATURE_BACKGROUND_TRANSCRIPTION_QUEUE.md) and [release notes](docs/releases/v2.6.0.md).

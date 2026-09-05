@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const {
   getMeetingTranscriptionStatusMessage,
   isMeetingTranscriptionRetryable,
+  shouldAbortSummaryGenerationAfterPreflight,
 } = require('../../src/renderer/summary-ui-helpers');
 
 test('isMeetingTranscriptionRetryable only for failed or pending', () => {
@@ -30,4 +31,22 @@ test('getMeetingTranscriptionStatusMessage covers failed, pending, and completed
   );
   assert.equal(getMeetingTranscriptionStatusMessage({ transcriptionStatus: 'completed' }), '');
   assert.equal(getMeetingTranscriptionStatusMessage(null), '');
+});
+
+test('shouldAbortSummaryGenerationAfterPreflight keeps a local cancel across status checks', () => {
+  assert.equal(shouldAbortSummaryGenerationAfterPreflight({
+    requestedMeetingId: 'meeting-1',
+    activeMeetingId: 'meeting-1',
+    cancelling: true,
+  }), true);
+  assert.equal(shouldAbortSummaryGenerationAfterPreflight({
+    requestedMeetingId: 'meeting-1',
+    activeMeetingId: 'meeting-2',
+    cancelling: false,
+  }), true);
+  assert.equal(shouldAbortSummaryGenerationAfterPreflight({
+    requestedMeetingId: 'meeting-1',
+    activeMeetingId: 'meeting-1',
+    cancelling: false,
+  }), false);
 });

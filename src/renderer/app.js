@@ -75,6 +75,7 @@ const {
 const {
   getMeetingTranscriptionStatusMessage,
   isMeetingTranscriptionRetryable,
+  shouldAbortSummaryGenerationAfterPreflight,
 } = window.summaryUiHelpers;
 const {
   applyDiarizationEngineCardDomState,
@@ -1411,8 +1412,6 @@ async function cancelSummaryGeneration(meetingId) {
     const result = await window.electronAPI.cancelSummaryGeneration({ meetingId: meetingId || summaryGenerationMeetingId });
     if (result && result.message && !result.canceled) {
       addLog(result.message, 'warning');
-      summaryGenerationCancelling = false;
-      updateSummaryGenerationButtons();
     }
   } catch (error) {
     summaryGenerationCancelling = false;
@@ -3973,6 +3972,25 @@ async function generateSummaryForMeeting(meetingId) {
     });
   } catch (error) {
     addLog(`Summary setup status unavailable: ${error.message}`, 'error');
+    summaryGenerationMeetingId = null;
+    summaryGenerationCancelling = false;
+    updateSummaryGenerationButtons();
+    return;
+  }
+
+  if (shouldAbortSummaryGenerationAfterPreflight({
+    requestedMeetingId: normalizedMeetingId,
+    activeMeetingId: summaryGenerationMeetingId,
+    cancelling: summaryGenerationCancelling,
+  })) {
+    addLog('Summary generation cancelled. Transcript is unchanged.', 'warning');
+    if (meetingIdsEqual(currentMeetingId, normalizedMeetingId)) {
+      const restored = await restoreCurrentHistorySummary(normalizedMeetingId);
+      if (!restored) {
+        showSummaryMessage('Summary generation cancelled. Transcript is unchanged.');
+      }
+      activateHistoryDetailTab('summary');
+    }
     summaryGenerationMeetingId = null;
     summaryGenerationCancelling = false;
     updateSummaryGenerationButtons();

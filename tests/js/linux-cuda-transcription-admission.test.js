@@ -222,6 +222,21 @@ for (const [platform, arch] of [['linux', 'x64'], ['win32', 'x64'], ['darwin', '
   }
 }
 
+test('Linux unconfigured speaker identification skips live CUDA hashing', async () => {
+  await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
+    let cudaResolves = 0;
+    const { service } = createLinuxTranscriptionService({
+      checkAiAddonSetupStatus: async () => diarizationFeature(),
+      resolveCudaStatusForTranscription: async () => {
+        cudaResolves += 1;
+        return readyLinuxCudaStatus();
+      },
+    });
+    assert.equal(await service.resolveGuidedDiarizationStatus(), null);
+    assert.equal(cudaResolves, 0);
+  });
+});
+
 test('Linux pyannote selection stays silently unavailable instead of erroring every meeting', async () => {
   await withProcess({ platform: 'linux', arch: 'x64' }, async () => {
     const progress = [];

@@ -88,6 +88,7 @@ const {
   MACOS_PERMISSION_CHECK_TIMEOUT_MS,
   AI_COMPUTE_TIMEOUT_MS,
   getTranscriptionComputeTimeoutMs,
+  createCancellableProcessRegistrar,
   runWallClockComputeAction,
   getActiveWallClockComputeJob,
   getActiveWallClockComputeJobs,
@@ -1011,6 +1012,39 @@ test('runWallClockComputeAction no-timeout path passes an identity registerProce
   });
   assert.equal(result, 'ok');
   assert.equal(seen, proc);
+});
+
+test('runWallClockComputeAction aborts its signal when the wall-clock limit is exceeded', async () => {
+  let seenSignal = null;
+  await assert.rejects(runWallClockComputeAction({
+    timeoutMs: 20,
+    settleGraceMs: 10,
+    label: 'Signal timeout',
+    terminateProcess: () => {},
+    action: (_registerProcess, { signal } = {}) => new Promise(() => {
+      seenSignal = signal;
+    }),
+  }), /timed out/);
+  assert.equal(Boolean(seenSignal && seenSignal.aborted), true);
+});
+
+test('createCancellableProcessRegistrar terminates children registered after abort', async () => {
+  const terminated = [];
+  const controller = new AbortController();
+  const registrar = createCancellableProcessRegistrar({
+    cancelSignal: controller.signal,
+    terminateProcess: (proc) => terminated.push(proc),
+    createCancelError: () => {
+      const error = new Error('canceled');
+      error.code = 'AI_ADDON_SETUP_CANCELLED';
+      return error;
+    },
+  });
+  controller.abort();
+  const child = { pid: 99 };
+  assert.throws(() => registrar.register(child), (error) => error && error.code === 'AI_ADDON_SETUP_CANCELLED');
+  assert.deepEqual(terminated, [child]);
+  registrar.cleanup();
 });
 
 
