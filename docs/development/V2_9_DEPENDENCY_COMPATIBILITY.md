@@ -1804,11 +1804,11 @@ Sanitized late-loss event:
 | Desktop-only `none` preflight rejection | **PASS** |
 | Stop and Discard for all three modes | **PASS** |
 | Late Pulse monitor loss with retained earlier desktop audio | **PASS** |
-| Full v2.9 capture-mode hardware acceptance | **NOT ACCEPTED** — Windows remains unexercised here, and the mixed mic transcript needs a stronger rerun. macOS arm64 evidence is recorded in the following section. |
+| Full v2.9 capture-mode hardware acceptance | **NOT ACCEPTED** — Windows x64 development smoke is recorded in the following Windows section. Linux mixed-mic transcript and Linux renderer smoke remain open. |
 
 ## Capture modes — macOS arm64 hardware evidence (2026-09-05)
 
-**Status: macOS development smoke recorded; the v2.9 capture-mode lane remains open until Windows is evidenced.** This was a local development run on the current machine, not a packaged macOS acceptance. Packaged `build:mac:dir` was not rebuilt on this pass.
+**Status: macOS development smoke recorded; the v2.9 capture-mode lane remains open** until Linux renderer smoke / mixed-mic rerun are evidenced. Windows x64 development smoke is recorded in the following section. This was a local development run on the current machine, not a packaged macOS acceptance. Packaged `build:mac:dir` was not rebuilt on this pass.
 
 **Code under test:** branch `feature/v2.9-capture-modes`, commit
 `35b7583ec1f0127ff307e6cffb0c252c3183a3a6`.
@@ -1850,7 +1850,7 @@ Artifacts: `/tmp/avanevis-macos-capture-modes-20260905/`.
 | CLI `mic-only` Stop, 15.445 s | `mic_stream_opened` only; `desktopDiagnostics={}`; levels `mic_max=0.051`, `desktop_max=0.0`; stderr “Microphone-only capture: desktop audio was not requested”; helper process not started | Playable Opus. Transcript contained fixture speech via **acoustic bleed** into the built-in mic (laptop speakers). Isolation is the missing desktop spool/levels, not a sealed room. |
 | CLI `mic-and-desktop` Stop, 17.471 s | Both streams; levels `mic_max=0.08`, `desktop_max=0.618`; tap peak **0.934** | Playable Opus. MLX transcript contained the fixture. Independent live mic speech was not used; mic energy is room/bleed. **PARTIAL** for mixed mic content, same class as the Linux host. |
 | CLI Discard of all three modes | `{ cancelled: true }`; no post-processing events; no leftover `.capture`; no Opus | No meeting persisted. |
-| CLI silent `desktop-only` (output volume 0), 9.931 s | Tap still delivered frames; `peakLevel=0.0`; `mic_max=0.0` | Stop **succeeded**. MLX transcript empty (`chars=0`). Does **not** raise `DESKTOP_ONLY_NO_AUDIO_MESSAGE` on this CoreAudio-tap host. |
+| CLI silent `desktop-only` (output volume 0), 9.931 s | Tap still delivered frames; `peakLevel=0.0`; `mic_max=0.0` | Stop **succeeded**. MLX transcript empty (`chars=0`). **Accepted 2026-09-05:** silence frames are still frames, so this saves a quiet file rather than `DESKTOP_ONLY_NO_AUDIO_MESSAGE`. |
 | CLI `mic-only` with helper renamed away, 11.776 s | Import logged helper miss + PyObjC fallback **module** message; `include_desktop` still skipped init; “desktop audio was not requested” | Saved Opus; recording started without the Swift helper. Helpers restored (same inode). |
 | CLI `desktop-only` late helper `kill -9` (PID 17708, exit -9) | Status reader: `process exited with code -9`. Stop still finalized **desktop-primary** from committed frames (3.104 s, peak 0.450). `error_event` was **not** set, so this was not the `_desktop_runtime_failure` terminal path | Truncated but valid Opus; MLX: “Morning, Zyra. The design review starts at 10”. **Not** a silent microphone-only save. Unexpected helper SIGKILL currently keeps committed desktop frames. |
 | CLI interrupted mixed SIGKILL + recover | Both `mic_0000.pcm.part` and `desktop_0000.pcm.part`; discovery `state: recording`, ~5.97 s | Recovered Opus; MLX: “Zyra… design reviews start at 10… Thanks, Hazel”. |
@@ -1875,6 +1875,73 @@ Stop progress on the CLI path emitted `post_processing_started`, `audio_normaliz
 | Stop and Discard for all three modes | **PASS** |
 | Interrupted mixed capture recovery | **PASS** |
 | Renderer split-button keyboard / hydration / startup cancel | **PASS** |
-| Silent desktop-only stop | **OBSERVED** — tap silence saves a quiet file; empty-frame `DESKTOP_ONLY_NO_AUDIO_MESSAGE` not hit |
+| Silent desktop-only stop | **ACCEPTED** — tap silence still delivers frames, so stop saves a quiet file; empty-frame `DESKTOP_ONLY_NO_AUDIO_MESSAGE` is not this path |
 | Late helper SIGKILL | **OBSERVED** — truncated desktop-primary save, not mic fallback and not the terminal empty-spool failure |
-| Full v2.9 capture-mode hardware acceptance | **NOT ACCEPTED** — Windows remains unexercised |
+| Full v2.9 capture-mode hardware acceptance | **NOT ACCEPTED** — Windows x64 development smoke is recorded below; Linux renderer smoke remains open |
+
+## Capture modes — Windows x64 hardware evidence (2026-09-05)
+
+**Status: Windows development smoke recorded; the v2.9 capture-mode lane remains open** until Linux renderer smoke / mixed-mic rerun are evidenced. This was a local development run on the current machine (`npm start` / `electron . --remote-debugging-port=9222`), not a packaged `win-unpacked` rebuild. Durations were ~7–16 s rather than 60 s, matching the macOS development pass.
+
+**Code under test:** branch `feature/v2.9-capture-modes`, commit
+`e82e179a985347fc9f6da640ab9b122be0aadbfd`.
+
+### Host and source baseline
+
+| Item | Observed value |
+|---|---|
+| OS / architecture | Windows 11 Pro 24H2 (`10.0.26200`), x64 |
+| CPU / GPU | AMD Ryzen 5 7600; NVIDIA GeForce RTX 4070 |
+| Node / npm / Electron | Node v22.23.2, Electron **44.1.0**, `app.isPackaged=false` |
+| Python | `.venv` CPython 3.11.9; ffmpeg `2025-11-17-git-e94439e49b` (`C:\ffmpeg\bin\ffmpeg.exe`) |
+| Devices | WASAPI mic `42` Logitech Webcam C925e; WASAPI loopback `48` `VG27AQML1A (NVIDIA High Definition Audio) [Loopback]`. PortAudio `defaults.default_input=1` (FiiO SPDIF Interface MME) / `default_output=7` (VG27AQML1A speakers, not a loopback id) |
+| Playback | looping `tests/fixtures/speakrs-two-speaker-16k.wav` via `System.Media.SoundPlayer` / `winsound` on the default output (VG27AQML1A) |
+| Transcription | local cached faster-whisper; CLI used `--model base --device cuda` (`cuda` / `float16`); Electron Stop used the user’s `medium` + Speakrs path (`cuda` / `float16`) |
+
+Artifacts: `%TEMP%\avanevis-windows-capture-modes-20260905\`.
+
+### Commands and exit codes
+
+| Command | Result |
+|---|---|
+| `.venv\Scripts\python.exe backend\device_manager.py` | exit **0**; WASAPI C925e `42`, VG27AQML1A loopback `48` |
+| `audio.windows_recorder --capture-mode {mic-and-desktop,mic-only,desktop-only}` stdin `stop` | each exit **0** |
+| same with stdin `cancel` | each exit **0**, `{ success: true, cancelled: true }` |
+| silent `desktop-only` stdin `stop` (no fixture, `desktop_max=0`) | exit **1**, structured `RECORDER_FAILED` carrying `DESKTOP_ONLY_NO_AUDIO_MESSAGE` |
+| `TerminateProcess` of `windows_recorder` mid capture, then `audio.capture_recovery --recover` | leftover `{stem}.capture`; recover exit **0** for mixed / mic-only / desktop-only |
+| `npx electron . --remote-debugging-port=9222` | Electron 44.1.0; CDP `file://…/src/renderer/index.html`; `userData` `C:\Users\Amirs\AppData\Roaming\avanevis` |
+
+### Manual mode results
+
+| Mode / recording | Hardware observation | Saved/transcription result |
+|---|---|---|
+| CLI `desktop-only` Stop, 15.372 s | No `mic_stream_opened`; levels `mic_max=0.0`, `desktop_max=0.496`; stderr “MIC first callback: NEVER”; CapabilityAccess `microphone\NonPackaged` did **not** add `.venv` Python (the `pythoncore-3.11-64\python.exe` LastUsed stamp only moved on a later mic-only run) | Playable 48 kHz stereo Opus. CUDA `base` transcript contained the fixture (“Morning, Zyra” / “design review starts at 10” / “Thanks, Hazel”). |
+| CLI `mic-only` Stop, 16.384 s | `mic_stream_opened` only; no loopback probe; levels `mic_max=0.12`, `desktop_max=0.0`; “Desktop spool included: False”; “DESKTOP first callback: NEVER” | Playable Opus. Transcript contained fixture speech via **acoustic bleed** into the C925e (monitor speakers). Isolation is the missing desktop spool/levels, not a sealed room. |
+| CLI `mic-and-desktop` Stop, 16.384 s | Both streams; levels `mic_max=0.12`, `desktop_max=0.496` | Playable Opus. CUDA transcript contained the fixture. Independent live mic speech was not used; mic energy is room/bleed. **PARTIAL** for mixed mic content, same class as the Linux and macOS hosts. |
+| CLI Discard of all three modes | `{ cancelled: true }`; no post-processing events; no leftover `.capture`; no Opus | No meeting persisted. |
+| CLI silent `desktop-only` (fixture stopped), ~16 s wall | Loopback opened; levels stayed `0.0`/`0.0`; WASAPI delivered **no** desktop callbacks | Stop **failed**. Structured `success: false`, `code: RECORDER_FAILED`, message is `DESKTOP_ONLY_NO_AUDIO_MESSAGE`. No Opus. `{stem}.capture` left behind. **Accepted 2026-09-05:** keep this empty-spool failure; do not save an empty meeting. macOS tap silence is a different path (frames delivered). |
+| CLI interrupted mixed / mic-only / desktop-only `TerminateProcess` + recover | Each left `{stem}.capture`; recover `{ success: true }` | Mixed 7.168 s, desktop-only 7.182 s, mic-only 6.827 s; CUDA transcripts contained the fixture. Desktop-only recover stayed desktop-primary (no microphone fallback). |
+| Electron UI, all three modes | Status pills: `Recording mic + system audio…` / `Recording mic only…` / `Recording system audio only…`. Unrequested visualizer track `hidden` with `offsetParent=null` (absent, not a flat line). Disclosure `aria-haspopup=menu`; click opens and focuses first item; ArrowDown/Up wrap; Home/End; Escape restores focus to the toggle; Tab closes; `pointerdown` outside closes (`click` on `body` does not — the listener is `pointerdown`). Toggle `disabled` while recording and click does not open the menu | Discard of all three modes returned to Ready. History stayed at **42** meetings (`20260901_224647` still latest) through the Discard sequence. Confirm copy: “Cancel this recording? The audio will not be saved.” Main log: `Recording cancelled; capture discarded.` |
+| Electron renderer reload mid mixed recording | After `Page.reload`, hydrated status still `Recording mic + system audio…`, both tracks visible | Discard afterwards left Ready; no extra meeting. |
+| Electron cancel during startup (`desktop-only`) | State `starting` / “Running checks...”; Discard visible | Returned to Ready; History still 42. |
+| Electron `desktop-only` Stop, meeting `20260905_150450`, 15.039 s | `Mic spool bytes: 0`; MIC callbacks NEVER; desktop peak from live loopback; `Ready · 1 transcribing` then completed | Guided Whisper/Speakrs `medium` `cuda`/`float16`. The `.md` contains the fixture (“Morning, Zyra” / “design review starts at 10” / “Thanks, Hazel”). This is the WASAPI desktop-primary / mono-downmix path in the product UI. |
+| First renderer snapshot (empty selection) | Dropdowns populated (11 inputs / 10 desktop entries) but stayed on placeholders before CDP selected C925e `42` + VG27AQML1A loopback `48` | PortAudio `default_output=7` is the VG27AQML1A **speakers** id, not loopback `48`, so the desktop placeholder matches the missing-ID rule. Mic `default_input=1` (FiiO SPDIF MME) was not auto-selected on this origin. |
+
+Stop progress on the CLI path emitted `post_processing_started`, `audio_normalizing`, `audio_mixing`, `audio_encoding`, and `post_processing_complete`. Stderr stayed diagnostic. No `NO_DESKTOP_AUDIO_CAPTURED` and no “saved recording contains microphone audio only” warning on mic-only or desktop-only.
+
+### Matrix conclusion
+
+| Scenario | Result on this host |
+|---|---|
+| Default mixed start/UI/save/desktop transcription | **PASS** |
+| Default mixed independent mic speech in transcript | **PARTIAL** (C925e + speaker bleed; both spools live) |
+| Mic-only source isolation and local transcription | **PASS** |
+| Desktop-only source isolation, no mic open, and transcript | **PASS** (no `mic_stream_opened`; OS mic consent stamp unchanged for `.venv` Python; fixture in CLI and Electron transcripts) |
+| Stop and Discard for all three modes | **PASS** |
+| Interrupted capture recovery (all three modes) | **PASS** |
+| Renderer split-button keyboard / hydration / startup cancel | **PASS** |
+| Silent desktop-only stop | **ACCEPTED** — WASAPI empty loopback raises `DESKTOP_ONLY_NO_AUDIO_MESSAGE` and does not save a meeting. Keep that structured failure for a truly empty spool; do not save an empty-but-valid recording. macOS tap silence is a different path (frames delivered) and stays a quiet file |
+| Screen reader / Narrator | **NOT RUN** |
+| Desktop-only with no input devices at all | **NOT RUN** (this PC has microphones) |
+| Electron quit-drain mid-recording | **NOT RUN** (CLI `TerminateProcess` + recover covers capture recovery) |
+| Full v2.9 capture-mode hardware acceptance | **NOT ACCEPTED** — Linux renderer smoke / mixed-mic rerun remain open |
