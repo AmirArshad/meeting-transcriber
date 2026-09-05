@@ -221,6 +221,14 @@ def validate_manifest_data(data: Any) -> Dict[str, Any]:
         raise CaptureManifestError("tracks must be an object")
     for name, track in tracks.items():
         _validate_track_dict(name, track)
+    if "primaryTrack" in data and data["primaryTrack"] is not None:
+        primary_track = data["primaryTrack"]
+        if primary_track not in ("mic", "desktop"):
+            raise CaptureManifestError(f"Invalid primaryTrack: {primary_track!r}")
+        if primary_track not in tracks:
+            raise CaptureManifestError(
+                f"primaryTrack {primary_track!r} is missing from capture tracks"
+            )
     if "processingProfile" in data and data["processingProfile"] is not None:
         if data["processingProfile"] not in VALID_PROCESSING_PROFILES:
             raise CaptureManifestError(
@@ -480,6 +488,19 @@ class CaptureManifestCoordinator:
         with self._thread_lock:
             self._ensure_open()
             self._data["includeDesktop"] = bool(include)
+            self._write_atomic_unlocked()
+
+    def set_primary_track(self, name: str) -> None:
+        """Persist the source that defines one-track finalization geometry."""
+        with self._thread_lock:
+            self._ensure_open()
+            if name not in ("mic", "desktop"):
+                raise CaptureManifestError(f"Invalid primaryTrack: {name!r}")
+            if name not in self._data["tracks"]:
+                raise CaptureManifestError(
+                    f"primaryTrack {name!r} is missing from capture tracks"
+                )
+            self._data["primaryTrack"] = name
             self._write_atomic_unlocked()
 
     def set_final_relative_path(self, relative_path: str) -> None:

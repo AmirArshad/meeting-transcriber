@@ -170,7 +170,7 @@ function createDeviceIpc(deps) {
    * Checks that selected devices exist and are accessible.
    * GRACEFUL: Returns valid=true with warning if check fails, allowing recording to proceed.
    */
-  function validateSelectedDevices({ micId, loopbackId }) {
+  function validateSelectedDevices({ micId, loopbackId, captureMode }) {
     return new Promise((resolve) => {
       let resolved = false;
       let output = '';
@@ -224,6 +224,7 @@ function createDeviceIpc(deps) {
             micId,
             loopbackId,
             platform,
+            captureMode,
           }));
         } catch (e) {
           console.warn('Failed to parse device list:', e);
@@ -336,12 +337,23 @@ function createDeviceIpc(deps) {
     });
   }
 
-  function getMacOSPermissionStatus(micId = null) {
+  /**
+   * @param {*} micId Selected microphone id (ignored when `skipMicrophoneCheck`).
+   * @param {{ skipMicrophoneCheck?: boolean }} [options] `skipMicrophoneCheck`
+   *   suppresses the microphone open-test entirely so a capture mode that does
+   *   not record the microphone can never raise a macOS privacy prompt, while
+   *   still collecting desktop-audio backend diagnostics.
+   */
+  function getMacOSPermissionStatus(micId = null, options = {}) {
+    const skipMicrophoneCheck = Boolean(options?.skipMicrophoneCheck);
+
     if (platform !== 'darwin') {
       return Promise.resolve({
         platform,
         all_granted: true,
-        microphone: { granted: true },
+        microphone: skipMicrophoneCheck
+          ? { granted: null, skipped: true }
+          : { granted: true, skipped: false },
         screen_recording: { granted: true },
         system_audio_recording: { granted: null, probed: false },
       });
@@ -351,9 +363,13 @@ function createDeviceIpc(deps) {
       let settled = false;
       let timeoutHandle = null;
       const integerMicId = coerceIntegerDeviceId(micId);
-      const args = integerMicId != null
-        ? getBackendModuleArgs('check_permissions', ['--mic-device-id', String(integerMicId), '--skip-screen-recording-check'])
-        : getBackendModuleArgs('check_permissions', ['--skip-screen-recording-check']);
+      const extraArgs = ['--skip-screen-recording-check'];
+      if (skipMicrophoneCheck) {
+        extraArgs.push('--skip-microphone-check');
+      } else if (integerMicId != null) {
+        extraArgs.unshift('--mic-device-id', String(integerMicId));
+      }
+      const args = getBackendModuleArgs('check_permissions', extraArgs);
 
       const proc = spawnTrackedPython(args, {
         cwd: pythonConfig.backendPath,

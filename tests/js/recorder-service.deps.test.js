@@ -1101,7 +1101,269 @@ async function withProcessPlatform(platform, fn) {
   }
 }
 
-test('start-recording passes opaque Pulse IDs on argv unchanged', async () => {
+/**
+ * Drive one full start/stop cycle and return the spawned argv.
+ * `startOptions` is passed to `start-recording` verbatim so tests can omit
+ * `captureMode` to characterize a legacy caller.
+ */
+async function captureStartArgv(startOptions, { stopFileName = 'argv-probe.wav' } = {}) {
+  const { EventEmitter } = require('node:events');
+  const spawned = [];
+  const proc = new EventEmitter();
+  proc.stdout = new EventEmitter();
+  proc.stderr = new EventEmitter();
+  proc.stdin = { write() {} };
+  proc.killed = false;
+  proc.pid = 9101;
+  proc.kill = () => { proc.killed = true; };
+
+  const { deps } = createMinimalDeps({
+    isQuitCommitted: () => false,
+    spawnTrackedPython(args) {
+      spawned.push(args);
+      return proc;
+    },
+  });
+
+  const service = createRecorderService(deps);
+  const handlers = {};
+  service.registerIpc({
+    handle(channel, handler) {
+      handlers[channel] = handler;
+    },
+  });
+
+  const startPromise = handlers['start-recording']({ sender: {} }, startOptions);
+  await new Promise((resolve) => setImmediate(resolve));
+  proc.stdout.emit('data', Buffer.from(`${JSON.stringify({
+    type: 'event',
+    event: 'recording_started',
+    message: 'Recording started!',
+  })}\n`));
+  const result = await startPromise;
+
+  if (result.success) {
+    const stopPromise = handlers['stop-recording']({ sender: {} });
+    await new Promise((resolve) => setImmediate(resolve));
+    const audioPath = path.join(deps.getRecordingsDir(), stopFileName);
+    fs.writeFileSync(audioPath, 'x');
+    proc.stdout.emit('data', Buffer.from(`${JSON.stringify({
+      success: true,
+      audioPath,
+      duration: 1,
+    })}\n`));
+    proc.emit('close', 0);
+    await stopPromise;
+  }
+
+  return { result, spawned, handlers, deps };
+}
+
+test('start-recording sends the explicit mic-and-desktop default on argv', async () => {
+  const { result, spawned } = await captureStartArgv({
+    micId: 0,
+    loopbackId: 2,
+    captureMode: 'mic-and-desktop',
+    isFirstRecording: false,
+  }, { stopFileName: 'default-mode.wav' });
+
+  assert.equal(result.success, true);
+  assert.equal(spawned.length, 1);
+  const args = spawned[0];
+  assert.equal(args[args.indexOf('--capture-mode') + 1], 'mic-and-desktop');
+  // Default path must keep forwarding both real device ids untouched.
+  assert.equal(args[args.indexOf('--mic') + 1], '0');
+  assert.equal(args[args.indexOf('--loopback') + 1], '2');
+});
+
+test('start-recording defaults a legacy caller that omits captureMode to mic-and-desktop', async () => {
+  const { result, spawned } = await captureStartArgv({
+    micId: 1,
+    loopbackId: 3,
+    isFirstRecording: false,
+  }, { stopFileName: 'legacy-mode.wav' });
+
+  assert.equal(result.success, true);
+  const args = spawned[0];
+  assert.equal(args[args.indexOf('--capture-mode') + 1], 'mic-and-desktop');
+  assert.equal(args[args.indexOf('--mic') + 1], '1');
+  assert.equal(args[args.indexOf('--loopback') + 1], '3');
+});
+
+test('mic-only argv keeps the mic id and replaces the unrequested loopback id', async () => {
+  await withProcessPlatform('win32', async () => {
+    const { result, spawned } = await captureStartArgv({
+      micId: 4,
+      loopbackId: 7,
+      captureMode: 'mic-only',
+      isFirstRecording: false,
+    }, { stopFileName: 'mic-only.wav' });
+
+    assert.equal(result.success, true);
+    const args = spawned[0];
+    assert.equal(args[args.indexOf('--capture-mode') + 1], 'mic-only');
+    assert.equal(args[args.indexOf('--mic') + 1], '4');
+    // The unrequested desktop id must never reach the recorder child, and the
+    // placeholder must parse as an int for argparse on Windows/macOS.
+    assert.equal(args[args.indexOf('--loopback') + 1], '-1');
+  });
+});
+
+test('desktop-only argv keeps the loopback id and replaces the unrequested mic id', async () => {
+  await withProcessPlatform('win32', async () => {
+    const { result, spawned } = await captureStartArgv({
+      micId: 5,
+      loopbackId: 9,
+      captureMode: 'desktop-only',
+      isFirstRecording: false,
+    }, { stopFileName: 'desktop-only.wav' });
+
+    assert.equal(result.success, true);
+    const args = spawned[0];
+    assert.equal(args[args.indexOf('--capture-mode') + 1], 'desktop-only');
+    assert.equal(args[args.indexOf('--loopback') + 1], '9');
+    assert.equal(args[args.indexOf('--mic') + 1], '-1');
+  });
+});
+
+test('single-source argv placeholders stay opaque on linux', async () => {
+  await withProcessPlatform('linux', async () => {
+    const { result, spawned } = await captureStartArgv({
+      micId: 'pulse-source:alsa_input.usb-mic',
+      loopbackId: 'pulse-monitor:alsa_output.pci.monitor',
+      captureMode: 'desktop-only',
+      isFirstRecording: false,
+    }, { stopFileName: 'linux-desktop-only.wav' });
+
+    assert.equal(result.success, true);
+    const args = spawned[0];
+    assert.equal(args[args.indexOf('--loopback') + 1], 'pulse-monitor:alsa_output.pci.monitor');
+    // Linux ids are opaque strings, so the placeholder must be the Pulse
+    // "off" sentinel rather than a numeric -1 the recorder would try to parse.
+    assert.equal(args[args.indexOf('--mic') + 1], 'none');
+  });
+});
+
+test('start-recording rejects a missing requested device selection before spawning', async () => {
+  const cases = [
+    { options: { micId: '', loopbackId: 2, captureMode: 'mic-and-desktop' }, code: 'MISSING_MICROPHONE_SELECTION' },
+    { options: { micId: 0, loopbackId: '', captureMode: 'mic-and-desktop' }, code: 'MISSING_DESKTOP_SELECTION' },
+    { options: { micId: '', loopbackId: 2, captureMode: 'mic-only' }, code: 'MISSING_MICROPHONE_SELECTION' },
+    { options: { micId: 0, loopbackId: '', captureMode: 'desktop-only' }, code: 'MISSING_DESKTOP_SELECTION' },
+  ];
+
+  for (const { options, code } of cases) {
+    let spawnCount = 0;
+    const { deps } = createMinimalDeps({
+      isQuitCommitted: () => false,
+      spawnTrackedPython() {
+        spawnCount += 1;
+        throw new Error('recorder should not be spawned without a requested device');
+      },
+    });
+    const service = createRecorderService(deps);
+    const handlers = {};
+    service.registerIpc({
+      handle(channel, handler) {
+        handlers[channel] = handler;
+      },
+    });
+
+    const result = await handlers['start-recording'](
+      { sender: {} },
+      { ...options, isFirstRecording: false },
+    );
+
+    assert.equal(result.success, false, `${code}: expected failure`);
+    assert.equal(result.code, code);
+    assert.equal(spawnCount, 0);
+  }
+});
+
+test('an unrequested empty device selection still starts', async () => {
+  // desktop-only on a machine with no input devices at all: micSelect is empty,
+  // and that must not reach argparse as an empty --mic value.
+  await withProcessPlatform('win32', async () => {
+    const { result, spawned } = await captureStartArgv({
+      micId: '',
+      loopbackId: 2,
+      captureMode: 'desktop-only',
+      isFirstRecording: false,
+    }, { stopFileName: 'no-mic-hardware.wav' });
+
+    assert.equal(result.success, true);
+    assert.equal(spawned[0][spawned[0].indexOf('--mic') + 1], '-1');
+  });
+});
+
+test('capture state exposes the active capture mode for a hydrated renderer', async () => {
+  const { handlers } = await captureStartArgv({
+    micId: 5,
+    loopbackId: 9,
+    captureMode: 'desktop-only',
+    isFirstRecording: false,
+  }, { stopFileName: 'capture-mode-state.wav' });
+
+  // Back to idle after the stop cycle: the mode resets to the default.
+  const idleState = await handlers['get-recording-state']({ sender: {} });
+  assert.equal(idleState.state, 'idle');
+  assert.equal(idleState.captureMode, 'mic-and-desktop');
+});
+
+test('capture state reports a single-source mode while recording', async () => {
+  const { EventEmitter } = require('node:events');
+  const proc = new EventEmitter();
+  proc.stdout = new EventEmitter();
+  proc.stderr = new EventEmitter();
+  proc.stdin = { write() {} };
+  proc.killed = false;
+  proc.pid = 9102;
+  proc.kill = () => { proc.killed = true; };
+
+  const { deps } = createMinimalDeps({
+    isQuitCommitted: () => false,
+    spawnTrackedPython() { return proc; },
+  });
+  const service = createRecorderService(deps);
+  const handlers = {};
+  service.registerIpc({
+    handle(channel, handler) {
+      handlers[channel] = handler;
+    },
+  });
+
+  const startPromise = handlers['start-recording'](
+    { sender: {} },
+    { micId: 5, loopbackId: 9, captureMode: 'desktop-only', isFirstRecording: false },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+  proc.stdout.emit('data', Buffer.from(`${JSON.stringify({
+    type: 'event',
+    event: 'recording_started',
+    message: 'Recording started!',
+  })}\n`));
+  await startPromise;
+
+  const state = await handlers['get-recording-state']({ sender: {} });
+  assert.equal(state.state, 'recording');
+  assert.equal(state.captureMode, 'desktop-only');
+
+  // Always drain the recording: a live session keeps heartbeat timers and the
+  // power-save blocker alive and would stall the test runner.
+  const stopPromise = handlers['stop-recording']({ sender: {} });
+  await new Promise((resolve) => setImmediate(resolve));
+  const audioPath = path.join(deps.getRecordingsDir(), 'capture-mode-live.wav');
+  fs.writeFileSync(audioPath, 'x');
+  proc.stdout.emit('data', Buffer.from(`${JSON.stringify({
+    success: true,
+    audioPath,
+    duration: 1,
+  })}\n`));
+  proc.emit('close', 0);
+  await stopPromise;
+});
+
+test('start-recording passes opaque Pulse IDs and explicit capture mode on argv unchanged', async () => {
   const { EventEmitter } = require('node:events');
   const spawned = [];
   const proc = new EventEmitter();
@@ -1133,6 +1395,7 @@ test('start-recording passes opaque Pulse IDs on argv unchanged', async () => {
     {
       micId: 'pulse-source:alsa_input.usb-mic',
       loopbackId: 'pulse-monitor:alsa_output.pci.monitor',
+      captureMode: 'mic-and-desktop',
       isFirstRecording: false,
     },
   );
@@ -1145,12 +1408,6 @@ test('start-recording passes opaque Pulse IDs on argv unchanged', async () => {
   const result = await startPromise;
   assert.equal(result.success, true);
 
-  assert.equal(spawned.length, 1);
-  const args = spawned[0];
-  assert.equal(args[args.indexOf('--mic') + 1], 'pulse-source:alsa_input.usb-mic');
-  assert.equal(args[args.indexOf('--loopback') + 1], 'pulse-monitor:alsa_output.pci.monitor');
-  assert.equal(Number.isNaN(parseInt(args[args.indexOf('--mic') + 1], 10)), true);
-
   const stopPromise = handlers['stop-recording']({ sender: {} });
   await new Promise((resolve) => setImmediate(resolve));
   const audioPath = path.join(deps.getRecordingsDir(), 'pulse-ids.wav');
@@ -1162,6 +1419,160 @@ test('start-recording passes opaque Pulse IDs on argv unchanged', async () => {
   })}\n`));
   proc.emit('close', 0);
   await stopPromise;
+
+  assert.equal(spawned.length, 1);
+  const args = spawned[0];
+  assert.equal(args[args.indexOf('--mic') + 1], 'pulse-source:alsa_input.usb-mic');
+  assert.equal(args[args.indexOf('--loopback') + 1], 'pulse-monitor:alsa_output.pci.monitor');
+  assert.equal(args[args.indexOf('--capture-mode') + 1], 'mic-and-desktop');
+  assert.equal(Number.isNaN(parseInt(args[args.indexOf('--mic') + 1], 10)), true);
+  assert.equal(Number.isNaN(parseInt(args[args.indexOf('--loopback') + 1], 10)), true);
+});
+
+test('start-recording rejects an unknown capture mode before spawning a recorder', async () => {
+  let spawnCount = 0;
+  const { deps } = createMinimalDeps({
+    isQuitCommitted: () => false,
+    spawnTrackedPython() {
+      spawnCount += 1;
+      throw new Error('recorder should not be spawned for an invalid capture mode');
+    },
+  });
+  const service = createRecorderService(deps);
+  const handlers = {};
+  service.registerIpc({
+    handle(channel, handler) {
+      handlers[channel] = handler;
+    },
+  });
+
+  const result = await handlers['start-recording'](
+    { sender: {} },
+    { micId: 0, loopbackId: 1, captureMode: 'all-the-audio', isFirstRecording: false },
+  );
+
+  assert.deepEqual(result, {
+    success: false,
+    code: 'INVALID_CAPTURE_MODE',
+    message: 'Choose a valid recording capture mode.',
+  });
+  assert.equal(spawnCount, 0);
+});
+
+/** Build a preflight-only service with recording call spies. */
+function createPreflightHarness({ permissionCheck } = {}) {
+  const deviceOptions = [];
+  const permissionCalls = [];
+  const { deps } = createMinimalDeps({
+    validateSelectedDevices: async (options) => {
+      deviceOptions.push(options);
+      return { valid: true, errors: [], warnings: [] };
+    },
+    checkDiskSpace: async () => ({ success: true, warning: null }),
+    checkAudioOutputSupport: async () => ({ supported: true, warning: null }),
+    getMacOSPermissionStatus: async (micId, options) => {
+      permissionCalls.push({ micId, options });
+      return permissionCheck || { microphone: { granted: true } };
+    },
+  });
+  const service = createRecorderService(deps);
+  const handlers = {};
+  service.registerIpc({
+    handle(channel, handler) {
+      handlers[channel] = handler;
+    },
+  });
+  return { handlers, deviceOptions, permissionCalls };
+}
+
+test('desktop-only preflight skips only the microphone probe, not desktop diagnostics', async () => {
+  const { handlers, deviceOptions, permissionCalls } = createPreflightHarness();
+
+  await withProcessPlatform('darwin', async () => {
+    const result = await handlers['run-recording-preflight'](
+      { sender: {} },
+      { micId: 3, loopbackId: -1, captureMode: 'desktop-only' },
+    );
+    assert.equal(result.canStart, true);
+  });
+
+  assert.deepEqual(deviceOptions, [{
+    micId: 3,
+    loopbackId: -1,
+    captureMode: 'desktop-only',
+  }]);
+  // The probe still runs (desktop-audio backend + Screen Recording stay
+  // diagnosed) but the microphone open-test is suppressed, and the mic id is
+  // not even forwarded, so no macOS microphone prompt can appear.
+  assert.equal(permissionCalls.length, 1);
+  assert.equal(permissionCalls[0].micId, null);
+  assert.deepEqual(permissionCalls[0].options, { skipMicrophoneCheck: true });
+});
+
+test('mic-and-desktop and mic-only preflight still open-test the microphone', async () => {
+  for (const captureMode of ['mic-and-desktop', 'mic-only']) {
+    const { handlers, permissionCalls } = createPreflightHarness();
+    await withProcessPlatform('darwin', async () => {
+      await handlers['run-recording-preflight'](
+        { sender: {} },
+        { micId: 3, loopbackId: -1, captureMode },
+      );
+    });
+    assert.equal(permissionCalls.length, 1, captureMode);
+    assert.equal(permissionCalls[0].micId, 3, captureMode);
+    assert.deepEqual(permissionCalls[0].options, { skipMicrophoneCheck: false }, captureMode);
+  }
+});
+
+test('mic-only preflight is not blocked by an absent desktop audio backend', async () => {
+  const { handlers } = createPreflightHarness({
+    permissionCheck: {
+      microphone: { granted: true },
+      // macOS 12 / missing-or-unsigned helper: both desktop signals fail.
+      screen_recording: { granted: false, error: 'denied' },
+      desktop_audio: { available: false, error: 'no backend' },
+    },
+  });
+
+  await withProcessPlatform('darwin', async () => {
+    const micOnly = await handlers['run-recording-preflight'](
+      { sender: {} },
+      { micId: 3, loopbackId: -1, captureMode: 'mic-only' },
+    );
+    assert.equal(micOnly.canStart, true);
+    assert.deepEqual(micOnly.errors, []);
+
+    // The same environment must still block a recording that wants desktop audio.
+    const dual = await handlers['run-recording-preflight'](
+      { sender: {} },
+      { micId: 3, loopbackId: -1, captureMode: 'mic-and-desktop' },
+    );
+    assert.equal(dual.canStart, false);
+    assert.equal(dual.errors.length, 2);
+  });
+});
+
+test('desktop-only preflight still reports a missing desktop audio backend', async () => {
+  const { handlers } = createPreflightHarness({
+    permissionCheck: {
+      microphone: { granted: null, skipped: true },
+      screen_recording: { granted: null, skipped: true },
+      desktop_audio: { available: false, error: 'no backend', help: 'Reinstall AvaNevis.' },
+    },
+  });
+
+  await withProcessPlatform('darwin', async () => {
+    const result = await handlers['run-recording-preflight'](
+      { sender: {} },
+      { micId: 3, loopbackId: -1, captureMode: 'desktop-only' },
+    );
+    assert.equal(result.canStart, false);
+    assert.equal(result.errors.length, 1);
+    assert.match(result.errors[0], /Desktop audio capture is unavailable/);
+    // permissionStatus must stay non-null so the renderer can route the user.
+    assert.equal(result.permissionStatus.missingDesktopAudio, true);
+    assert.equal(result.permissionStatus.missingMicrophone, false);
+  });
 });
 
 test('start-recording with default getRecorderModule spawns linux_recorder on linux', async () => {

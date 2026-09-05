@@ -362,10 +362,22 @@
 
               <div class="recording-controls-row">
                 <div class="controls-group">
-                  <button id="record-btn" class="record-button idle">
-                    <span class="button-icon">▶</span>
-                    <span class="button-text">Start Recording</span>
-                  </button>
+                  <div class="record-split-control">
+                    <button id="record-btn" class="record-button idle">
+                      <span class="button-icon">▶</span>
+                      <span class="button-text">Start Recording</span>
+                    </button>
+                    <button id="record-mode-toggle" class="record-mode-toggle" type="button"
+                      aria-label="Choose recording source" aria-haspopup="menu"
+                      aria-controls="record-mode-menu" aria-expanded="false">
+                      ▾
+                    </button>
+                    <div id="record-mode-menu" class="record-mode-menu" role="menu"
+                      aria-labelledby="record-mode-toggle" hidden>
+                      <button type="button" role="menuitem" data-capture-mode="mic-only">Record Mic Only</button>
+                      <button type="button" role="menuitem" data-capture-mode="desktop-only">Record Desktop Only</button>
+                    </div>
+                  </div>
                   <button
                     type="button"
                     id="discard-recording-btn"
@@ -384,7 +396,7 @@
                   id="audio-visualizer"
                   style="display: none"
                 >
-                  <div class="visualizer-track">
+                  <div class="visualizer-track" id="mic-visualizer-track">
                     <span class="track-label">
                       <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
@@ -404,7 +416,7 @@
                       ></canvas>
                     </div>
                   </div>
-                  <div class="visualizer-track">
+                  <div class="visualizer-track" id="desktop-visualizer-track">
                     <span class="track-label">
                       <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>

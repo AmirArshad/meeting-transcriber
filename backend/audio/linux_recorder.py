@@ -45,6 +45,7 @@ from .recorder_temp_paths import (
 )
 from .streaming_post_processor import FinalizationError, finalize_capture
 from .capture_alignment import compute_capture_alignment_frames
+from .capture_mode import DESKTOP_ONLY_NO_AUDIO_MESSAGE, resolve_capture_mode
 from .track_spool import TrackSpool
 
 try:
@@ -183,6 +184,7 @@ class LinuxAudioRecorder:
         mic_volume: float = 1.0,
         desktop_volume: float = 1.0,
         preroll_seconds: Optional[float] = None,
+        capture_mode: str = "mic-and-desktop",
         *,
         soundcard_module: Any = None,
         pulse_factory: Optional[Callable[[], Any]] = None,
@@ -197,6 +199,8 @@ class LinuxAudioRecorder:
         self.mic_volume = float(mic_volume)
         self.desktop_volume = float(desktop_volume)
         self.preroll_seconds = 1.5 if preroll_seconds is None else float(preroll_seconds)
+        self.capture_mode = capture_mode
+        self.include_mic, self.include_desktop = resolve_capture_mode(capture_mode)
 
         self._soundcard = soundcard_module
         self._pulse_factory = pulse_factory or _default_pulse_factory
@@ -401,20 +405,21 @@ class LinuxAudioRecorder:
         self.recording_start_time = time.time()
 
         try:
-            mic_parsed = parse_pulse_device_id(self.mic_device_id)
-            if mic_parsed is None or mic_parsed[0] != "source":
-                raise ValueError(
-                    f"Microphone device ID {self.mic_device_id} is not a pulse-source id"
-                )
-            self._mic_pulse_name = mic_parsed[1]
-
             source_names = self._list_source_names()
-            if self._mic_pulse_name not in source_names:
-                raise ValueError(
-                    f"Microphone device ID {self.mic_device_id} was not found"
-                )
+            self._mic_pulse_name = None
+            if self.include_mic:
+                mic_parsed = parse_pulse_device_id(self.mic_device_id)
+                if mic_parsed is None or mic_parsed[0] != "source":
+                    raise ValueError(
+                        f"Microphone device ID {self.mic_device_id} is not a pulse-source id"
+                    )
+                self._mic_pulse_name = mic_parsed[1]
+                if self._mic_pulse_name not in source_names:
+                    raise ValueError(
+                        f"Microphone device ID {self.mic_device_id} was not found"
+                    )
 
-            self._desktop_requested = not is_linux_desktop_off_id(self.desktop_device_id)
+            self._desktop_requested = self.include_desktop and not is_linux_desktop_off_id(self.desktop_device_id)
             self._desktop_enabled = False
             self._desktop_pulse_name = None
             if self._desktop_requested:
@@ -423,11 +428,13 @@ class LinuxAudioRecorder:
                     self._note_desktop_runtime_failure(
                         f"Desktop device ID {self.desktop_device_id} is not a pulse-monitor id",
                         code="DESKTOP_START_FAILED",
+                        warn=self.include_mic,
                     )
                 elif desk_parsed[1] not in source_names:
                     self._note_desktop_runtime_failure(
                         f"Desktop monitor {self.desktop_device_id} was not found",
                         code="DESKTOP_START_FAILED",
+                        warn=self.include_mic,
                     )
                 else:
                     self._desktop_pulse_name = desk_parsed[1]
@@ -439,11 +446,18 @@ class LinuxAudioRecorder:
             self._set_running(False)
             return False
 
+        # Desktop-only has no second source to degrade onto, so an unavailable
+        # desktop monitor is terminal here rather than a warning. Detect it
+        # before any spool/manifest exists so the reported error is the real
+        # desktop cause instead of a downstream manifest/primary-track error.
+        desktop_only_unavailable: Optional[str] = None
         try:
-            mic_obj = self._resolve_soundcard_microphone(
-                self._mic_pulse_name, include_loopback=False
-            )
-            mic_channels = max(1, min(int(getattr(mic_obj, "channels", 1) or 1), 8))
+            mic_channels = None
+            if self.include_mic:
+                mic_obj = self._resolve_soundcard_microphone(
+                    self._mic_pulse_name, include_loopback=False
+                )
+                mic_channels = max(1, min(int(getattr(mic_obj, "channels", 1) or 1), 8))
             desktop_channels = None
             if self._desktop_enabled:
                 try:
@@ -457,12 +471,18 @@ class LinuxAudioRecorder:
                     self._note_desktop_runtime_failure(
                         f"Desktop audio failed to open: {desk_err}",
                         code="DESKTOP_START_FAILED",
+                        warn=self.include_mic,
                     )
                     self._desktop_enabled = False
-            self._open_capture_spools(
-                mic_channels=mic_channels,
-                desktop_channels=desktop_channels,
-            )
+            if not self.include_mic and not self._desktop_enabled:
+                desktop_only_unavailable = self._desktop_runtime_failure or (
+                    f"Desktop audio source {self.desktop_device_id} is unavailable."
+                )
+            else:
+                self._open_capture_spools(
+                    mic_channels=mic_channels,
+                    desktop_channels=desktop_channels,
+                )
         except Exception as spool_err:
             message = f"Failed to open capture spools: {spool_err}"
             print(f"ERROR: {message}", file=sys.stderr)
@@ -471,9 +491,23 @@ class LinuxAudioRecorder:
             self._release_and_discard_startup_capture()
             return False
 
-        self.mic_thread = threading.Thread(target=self._record_microphone, name="linux-mic")
-        self.mic_thread.daemon = True
-        self.mic_thread.start()
+        if desktop_only_unavailable is not None:
+            print(f"ERROR: {desktop_only_unavailable}", file=sys.stderr)
+            _send_error_message(
+                "DESKTOP_START_FAILED",
+                desktop_only_unavailable,
+                help=(
+                    "Desktop-only recording needs an available desktop audio monitor. "
+                    "Pick a different desktop audio source, or record the microphone too."
+                ),
+            )
+            self._set_running(False)
+            return False
+
+        if self.include_mic:
+            self.mic_thread = threading.Thread(target=self._record_microphone, name="linux-mic")
+            self.mic_thread.daemon = True
+            self.mic_thread.start()
 
         if self._desktop_enabled:
             self.desktop_thread = threading.Thread(
@@ -482,7 +516,7 @@ class LinuxAudioRecorder:
             self.desktop_thread.daemon = True
             self.desktop_thread.start()
 
-        if not self._mic_started_event.wait(timeout=MIC_START_TIMEOUT_SECONDS):
+        if self.include_mic and not self._mic_started_event.wait(timeout=MIC_START_TIMEOUT_SECONDS):
             message = (
                 f"Microphone stream did not become ready within "
                 f"{MIC_START_TIMEOUT_SECONDS:g} seconds."
@@ -492,7 +526,7 @@ class LinuxAudioRecorder:
             self._abort_startup()
             return False
 
-        if self._mic_start_error:
+        if self.include_mic and self._mic_start_error:
             self._abort_startup()
             return False
 
@@ -503,13 +537,32 @@ class LinuxAudioRecorder:
                     f"Desktop audio did not become ready within "
                     f"{DESKTOP_START_TIMEOUT_SECONDS:g} seconds.",
                     code="DESKTOP_START_TIMEOUT",
+                    warn=self.include_mic,
                 )
             elif self._desktop_start_error:
                 self._desktop_give_up = True
                 self._note_desktop_runtime_failure(
                     self._desktop_start_error,
                     code=self._desktop_start_error_code,
+                    warn=self.include_mic,
                 )
+
+            # Desktop-only cannot continue mic-only, so a desktop startup
+            # failure must abort the attempt instead of reporting a started
+            # recording with no active source at all.
+            if not self.include_mic and self._desktop_runtime_failure:
+                message = self._desktop_runtime_failure
+                print(f"ERROR: {message}", file=sys.stderr)
+                _send_error_message(
+                    "DESKTOP_START_FAILED",
+                    message,
+                    help=(
+                        "Desktop-only recording needs a working desktop audio monitor. "
+                        "Pick a different desktop audio source, or record the microphone too."
+                    ),
+                )
+                self._abort_startup()
+                return False
 
         if self._desktop_enabled and not self._desktop_runtime_failure:
             desktop_status = "active"
@@ -534,11 +587,11 @@ class LinuxAudioRecorder:
         self._release_and_discard_startup_capture()
 
     def _open_capture_spools(
-        self, *, mic_channels: int, desktop_channels: Optional[int]
+        self, *, mic_channels: Optional[int], desktop_channels: Optional[int]
     ) -> None:
         started_ns = time.time_ns()
         started_iso = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + ".000Z"
-        self._mic_spool_channels = int(mic_channels)
+        self._mic_spool_channels = int(mic_channels) if mic_channels is not None else None
         self._desktop_spool_channels = (
             int(desktop_channels) if desktop_channels is not None else None
         )
@@ -556,20 +609,21 @@ class LinuxAudioRecorder:
             desktop_volume=self.desktop_volume,
             mic_boost=MIC_BOOST_LINEAR,
         )
-        self._capture_manifest.add_track(
-            "mic",
-            sample_rate=self.sample_rate,
-            channels=self._mic_spool_channels,
-            dtype="<f4",
-        )
-        self._mic_spool = TrackSpool(
-            self._capture_manifest,
-            self._capture_manifest.session_dir,
-            "mic",
-            sample_rate=self.sample_rate,
-            channels=self._mic_spool_channels,
-            dtype="<f4",
-        )
+        if self._mic_spool_channels is not None:
+            self._capture_manifest.add_track(
+                "mic",
+                sample_rate=self.sample_rate,
+                channels=self._mic_spool_channels,
+                dtype="<f4",
+            )
+            self._mic_spool = TrackSpool(
+                self._capture_manifest,
+                self._capture_manifest.session_dir,
+                "mic",
+                sample_rate=self.sample_rate,
+                channels=self._mic_spool_channels,
+                dtype="<f4",
+            )
         if desktop_channels is not None:
             self._capture_manifest.add_track(
                 "desktop",
@@ -585,6 +639,8 @@ class LinuxAudioRecorder:
                 channels=self._desktop_spool_channels,
                 dtype="<f4",
             )
+        if not self.include_mic:
+            self._capture_manifest.set_primary_track("desktop")
 
     def _compute_spool_alignment_frames(self) -> dict:
         return compute_capture_alignment_frames(
@@ -654,6 +710,17 @@ class LinuxAudioRecorder:
                     file=sys.stderr,
                 )
 
+        # Desktop-primary (desktop-only) finalization is a one-track contract:
+        # `includeDesktop` means "mix a *secondary* desktop track onto the mic
+        # timeline", so it must stay false here or `resolve_primary_track`
+        # rejects the manifest as contradictory and the capture can never be
+        # finalized or recovered. Keep this in step with the macOS/Windows
+        # recorders.
+        if not self.include_mic:
+            if not include_desktop:
+                raise RuntimeError(DESKTOP_ONLY_NO_AUDIO_MESSAGE)
+            include_desktop = False
+
         if self._capture_manifest is not None:
             try:
                 self._capture_manifest.set_include_desktop(include_desktop)
@@ -664,6 +731,9 @@ class LinuxAudioRecorder:
                         "desktop_leading_pad_frames": alignment["desktopLeadingPadFrames"],
                         "mic_leading_pad_frames": alignment["micLeadingPadFrames"],
                     })
+                self._capture_manifest.set_primary_track(
+                    "mic" if self.include_mic else "desktop"
+                )
                 self._capture_manifest.set_state("finalizing")
             except Exception as exc:
                 if include_desktop:
@@ -970,9 +1040,22 @@ class LinuxAudioRecorder:
             if not self._desktop_started_event.is_set():
                 self._desktop_started_event.set()
 
-    def _note_desktop_runtime_failure(self, message: str, *, code: str = "DESKTOP_RECORDING_FAILED") -> None:
+    def _note_desktop_runtime_failure(
+        self,
+        message: str,
+        *,
+        code: str = "DESKTOP_RECORDING_FAILED",
+        warn: bool = True,
+    ) -> None:
         if not self._desktop_runtime_failure:
             self._desktop_runtime_failure = message
+        # `warn=False` records the cause without emitting: used at startup for
+        # desktop-only, where the caller immediately reports the same text as a
+        # terminal `error`. Emitting both would duplicate it in the UI log.
+        if not warn:
+            with self.level_lock:
+                self.desktop_level = 0.0
+            return
         # Desktop audio already committed to the spool is kept in the mix, so the
         # user-facing copy must not claim a mic-only save when it is only partial.
         partial = bool(self._desktop_spool_accepted_any)
@@ -992,6 +1075,20 @@ class LinuxAudioRecorder:
                     "Desktop audio capture stopped part-way through. The saved file "
                     "contains the desktop audio captured up to that point, plus the "
                     "full microphone recording."
+                    if self.include_mic else
+                    "Desktop audio capture stopped part-way through. The saved file "
+                    "contains the desktop audio captured up to that point."
+                ),
+            )
+            return
+        if not self.include_mic:
+            # Desktop-only has no microphone to fall back to; never offer one.
+            _send_warning_message(
+                code,
+                message,
+                help=(
+                    "Desktop audio capture failed and this recording requested "
+                    "desktop audio only."
                 ),
             )
             return
@@ -1070,6 +1167,10 @@ class LinuxAudioRecorder:
             include_desktop = bool(self._capture_manifest.to_dict().get("includeDesktop"))
         if include_desktop:
             print("Desktop track committed for bounded finalization", file=sys.stderr)
+        elif not self.include_mic:
+            # Desktop-primary: `includeDesktop` is intentionally false and the
+            # desktop track *is* the output. Never claim a mic-only save.
+            print("Desktop-primary track committed for bounded finalization", file=sys.stderr)
         elif self._desktop_requested and not self._desktop_runtime_failure:
             _send_warning_message(
                 "NO_DESKTOP_AUDIO_CAPTURED",
@@ -1141,6 +1242,12 @@ def main() -> None:
         required=True,
         help="Opaque pulse-monitor:<name> desktop id, or none",
     )
+    parser.add_argument(
+        "--capture-mode",
+        choices=("mic-and-desktop", "mic-only", "desktop-only"),
+        default="mic-and-desktop",
+        help="Requested capture sources",
+    )
     parser.add_argument("--output", required=True, help="Output file path")
     parser.add_argument("--duration", type=int, default=0, help="Duration in seconds (0 for manual stop)")
     args = parser.parse_args()
@@ -1157,6 +1264,7 @@ def main() -> None:
             desktop_device_id=args.loopback,
             output_path=str(output_path),
             preroll_seconds=0,
+            capture_mode=args.capture_mode,
         )
         if not recorder.start_recording():
             sys.exit(1)

@@ -79,6 +79,18 @@
     return String(value);
   }
 
+  const DESKTOP_CAPTURE_OFF_ID = 'none';
+
+  /**
+   * True for the synthetic Linux "desktop capture off" selection. A
+   * desktop-only recording has no second source, so that selection must be
+   * rejected before start rather than failing inside the recorder.
+   * Keep in step with `LINUX_DESKTOP_OFF_ID` in main-process device helpers.
+   */
+  function isDesktopCaptureDisabledSelection(deviceId) {
+    return toOpaqueDeviceId(deviceId) === DESKTOP_CAPTURE_OFF_ID;
+  }
+
   function decorateDesktopDevices(loopbacks, hostFamily) {
     const devices = Array.isArray(loopbacks) ? loopbacks.slice() : [];
     if (hostFamily !== 'linux') {
@@ -86,7 +98,7 @@
     }
     return [
       {
-        id: 'none',
+        id: DESKTOP_CAPTURE_OFF_ID,
         name: 'None (microphone only)',
         // No sample rate: populateSelect omits the "(N Hz)" suffix so the
         // synthetic entry does not read "None (microphone only) (48000 Hz)".
@@ -129,6 +141,7 @@
     getRecordingPermissionFailureGuidance,
     toOpaqueDeviceId,
     decorateDesktopDevices,
+    isDesktopCaptureDisabledSelection,
     resolveInitialDeviceSelection,
   };
 }));

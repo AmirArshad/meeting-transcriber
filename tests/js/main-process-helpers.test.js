@@ -2769,6 +2769,101 @@ test('buildRecordingPreflightReport allows macOS start when proactive screen che
 });
 
 
+test('buildRecordingPreflightReport keeps the default mode blocked by both macOS sources', () => {
+  // Regression guard: the two-source default must keep reporting desktop
+  // failures even after single-source modes learned to ignore them.
+  const permissionCheck = {
+    all_granted: false,
+    microphone: { granted: true },
+    screen_recording: { granted: false, error: 'denied' },
+    desktop_audio: { available: false, error: 'no backend' },
+  };
+
+  for (const captureMode of ['mic-and-desktop', undefined]) {
+    const result = buildRecordingPreflightReport({
+      platform: 'darwin',
+      deviceCheck: { valid: true, errors: [], warnings: [] },
+      diskCheck: { success: true, warning: null },
+      audioOutputCheck: { supported: true, warning: null },
+      permissionCheck,
+      captureMode,
+    });
+
+    assert.equal(result.canStart, false, String(captureMode));
+    assert.equal(result.permissionStatus.missingScreenRecording, true);
+    assert.equal(result.permissionStatus.missingDesktopAudio, true);
+    // Unchanged default guidance.
+    assert.match(result.errorMessage, /Privacy & Security > Microphone/);
+    assert.match(result.errorMessage, /keep System Audio \(ScreenCaptureKit\) selected/);
+  }
+});
+
+test('buildRecordingPreflightReport never blocks a mode on its unrequested source', () => {
+  const brokenBoth = {
+    all_granted: false,
+    microphone: {
+      granted: false,
+      error: 'No input devices found',
+      help: 'Grant microphone permission',
+    },
+    screen_recording: { granted: false, error: 'denied' },
+    desktop_audio: { available: false, error: 'no backend' },
+  };
+
+  // mic-only: desktop backend + Screen Recording failures are irrelevant.
+  const micOnly = buildRecordingPreflightReport({
+    platform: 'darwin',
+    deviceCheck: { valid: true, errors: [], warnings: [] },
+    diskCheck: { success: true, warning: null },
+    audioOutputCheck: { supported: true, warning: null },
+    permissionCheck: { ...brokenBoth, microphone: { granted: true } },
+    captureMode: 'mic-only',
+  });
+  assert.equal(micOnly.canStart, true);
+  assert.deepEqual(micOnly.errors, []);
+  assert.equal(micOnly.permissionStatus.missingScreenRecording, false);
+  assert.equal(micOnly.permissionStatus.missingDesktopAudio, false);
+
+  // desktop-only: a denied microphone is irrelevant, desktop failures are not.
+  const desktopOnly = buildRecordingPreflightReport({
+    platform: 'darwin',
+    deviceCheck: { valid: true, errors: [], warnings: [] },
+    diskCheck: { success: true, warning: null },
+    audioOutputCheck: { supported: true, warning: null },
+    permissionCheck: brokenBoth,
+    captureMode: 'desktop-only',
+  });
+  assert.equal(desktopOnly.canStart, false);
+  assert.equal(desktopOnly.permissionStatus.missingMicrophone, false);
+  assert.equal(desktopOnly.permissionStatus.missingDesktopAudio, true);
+  assert.doesNotMatch(desktopOnly.errorMessage, /Microphone permission is not granted/);
+});
+
+test('buildRecordingPreflightReport guidance omits the unrequested source', () => {
+  const base = {
+    platform: 'darwin',
+    deviceCheck: { valid: false, errors: ['Device gone.'], warnings: [] },
+    diskCheck: { success: true, warning: null },
+    audioOutputCheck: { supported: true, warning: null },
+  };
+
+  const micOnly = buildRecordingPreflightReport({ ...base, captureMode: 'mic-only' });
+  assert.match(micOnly.errorMessage, /Privacy & Security > Microphone/);
+  assert.doesNotMatch(micOnly.errorMessage, /ScreenCaptureKit/);
+
+  const desktopOnly = buildRecordingPreflightReport({ ...base, captureMode: 'desktop-only' });
+  assert.match(desktopOnly.errorMessage, /ScreenCaptureKit/);
+  assert.doesNotMatch(desktopOnly.errorMessage, /Privacy & Security > Microphone/);
+
+  const linuxDesktopOnly = buildRecordingPreflightReport({
+    ...base,
+    platform: 'linux',
+    captureMode: 'desktop-only',
+  });
+  assert.match(linuxDesktopOnly.errorMessage, /selected output monitor/);
+  assert.doesNotMatch(linuxDesktopOnly.errorMessage, /PulseAudio or PipeWire/);
+});
+
 test('buildRecordingPreflightReport still allows Windows start when devices validate', () => {
   const result = buildRecordingPreflightReport({
     platform: 'win32',

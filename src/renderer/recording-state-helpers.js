@@ -159,7 +159,94 @@
     );
   }
 
+  const CAPTURE_MODES = ['mic-and-desktop', 'mic-only', 'desktop-only'];
+  const DEFAULT_CAPTURE_MODE = 'mic-and-desktop';
+
+  /**
+   * Closed renderer-side mirror of the main-process capture-mode contract.
+   * Unknown/absent values normalize to the two-source default so presentation
+   * can never invent a single-source view for a dual-source recording.
+   */
+  function normalizeCaptureMode(captureMode) {
+    return CAPTURE_MODES.indexOf(captureMode) === -1 ? DEFAULT_CAPTURE_MODE : captureMode;
+  }
+
+  /**
+   * Which sources a capture mode actually records. Drives device validation,
+   * the visualizer tracks, and status copy so the UI never shows a dead meter
+   * for a source that was never opened.
+   */
+  function getCaptureModeSources(captureMode) {
+    const mode = normalizeCaptureMode(captureMode);
+    return {
+      mode,
+      includeMic: mode !== 'desktop-only',
+      includeDesktop: mode !== 'mic-only',
+    };
+  }
+
+  /**
+   * Recording status pill copy that names the sources actually being captured.
+   */
+  function getRecordingSourceStatusText(captureMode) {
+    const { includeMic, includeDesktop } = getCaptureModeSources(captureMode);
+    if (includeMic && includeDesktop) {
+      return 'Recording mic + system audio…';
+    }
+    return includeMic ? 'Recording mic only…' : 'Recording system audio only…';
+  }
+
+  /**
+   * Keyboard contract for the record-source disclosure menu.
+   *
+   * Pure so it can be tested without a DOM. Returns one of:
+   * - `{ action: 'none' }`                          leave the event alone
+   * - `{ action: 'close', restoreFocus: true }`     dismiss, focus the toggle
+   * - `{ action: 'focus', focusIndex: n }`          move focus within the menu
+   *
+   * `preventDefault` is true whenever the menu consumes the key.
+   */
+  function resolveRecordModeMenuKeyAction({
+    key,
+    itemCount = 0,
+    activeIndex = -1,
+    isOpen = true,
+  } = {}) {
+    const none = { action: 'none', preventDefault: false };
+    if (!isOpen || itemCount <= 0) {
+      return none;
+    }
+
+    // Escape and Tab both dismiss and hand focus back to the toggle so the
+    // surrounding tab order continues normally and no open menu is orphaned.
+    if (key === 'Escape' || key === 'Tab') {
+      return { action: 'close', restoreFocus: true, preventDefault: true };
+    }
+
+    if (key === 'Home') {
+      return { action: 'focus', focusIndex: 0, preventDefault: true };
+    }
+    if (key === 'End') {
+      return { action: 'focus', focusIndex: itemCount - 1, preventDefault: true };
+    }
+
+    if (key === 'ArrowDown' || key === 'ArrowUp') {
+      const step = key === 'ArrowDown' ? 1 : -1;
+      // From "no active item", ArrowDown lands on the first entry and ArrowUp
+      // on the last, then both wrap.
+      const base = activeIndex < 0 ? (step === 1 ? -1 : 0) : activeIndex;
+      const next = ((base + step) % itemCount + itemCount) % itemCount;
+      return { action: 'focus', focusIndex: next, preventDefault: true };
+    }
+
+    return none;
+  }
+
   const helpers = {
+    normalizeCaptureMode,
+    getCaptureModeSources,
+    getRecordingSourceStatusText,
+    resolveRecordModeMenuKeyAction,
     getRecordButtonAction,
     getRecordingPresenceView,
     shouldShowDiscardRecordingControl,

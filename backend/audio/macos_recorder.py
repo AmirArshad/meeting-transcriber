@@ -28,6 +28,7 @@ from .capture_manifest import (
 from .track_spool import TrackSpool
 from .streaming_post_processor import FinalizationError, finalize_capture
 from .capture_alignment import compute_capture_alignment_frames
+from .capture_mode import DESKTOP_ONLY_NO_AUDIO_MESSAGE, resolve_capture_mode
 from .macos_desktop_diagnostics import (
     build_desktop_diagnostics,
     format_desktop_diagnostics_summary,
@@ -162,7 +163,8 @@ class MacOSAudioRecorder:
         chunk_size: int = 4096,
         mic_volume: float = 1.0,
         desktop_volume: float = 1.0,
-        preroll_seconds: Optional[float] = None  # None = use default 1.5s, 0 = no preroll (for production with countdown)
+        preroll_seconds: Optional[float] = None,  # None = use default 1.5s, 0 = no preroll (for production with countdown)
+        capture_mode: str = "mic-and-desktop",
     ):
         """Initialize the macOS recorder."""
         _send_configuring_devices_event()
@@ -174,6 +176,8 @@ class MacOSAudioRecorder:
         self.chunk_size = chunk_size
         self.mic_volume = mic_volume
         self.desktop_volume = desktop_volume
+        self.capture_mode = capture_mode
+        self.include_mic, self.include_desktop = resolve_capture_mode(capture_mode)
 
         # Recording state
         self.is_running = False
@@ -217,7 +221,7 @@ class MacOSAudioRecorder:
         self.desktop_capture: Optional[Any] = None
         self.desktop_capture_type = None  # 'swift' or 'pyobjc'
 
-        if SWIFT_CAPTURE_AVAILABLE:
+        if self.include_desktop and SWIFT_CAPTURE_AVAILABLE:
             try:
                 if SwiftAudioCapture is None:
                     raise RuntimeError("SwiftAudioCapture unavailable")
@@ -232,7 +236,7 @@ class MacOSAudioRecorder:
                 self.desktop_capture = None
 
         # Fallback to PyObjC ScreenCaptureKit
-        if self.desktop_capture is None and SCREENCAPTURE_AVAILABLE:
+        if self.include_desktop and self.desktop_capture is None and SCREENCAPTURE_AVAILABLE:
             try:
                 if ScreenCaptureAudioRecorder is None:
                     raise RuntimeError("ScreenCaptureAudioRecorder unavailable")
@@ -356,22 +360,25 @@ class MacOSAudioRecorder:
         # This is the single reference point for preroll timing
         self.recording_start_time = time.time()
 
-        if self.desktop_capture is not None:
+        if self.include_desktop and self.desktop_capture is not None:
             self.desktop_capture.audio_sink = None
 
-        # Get device info
+        # Query/open only sources requested by the capture mode.  In
+        # particular, desktop-only must not trigger a microphone permission
+        # prompt merely to obtain channel metadata.
         try:
-            if sd.query_devices is None:
-                raise RuntimeError("sounddevice is not available")
-            devices = sd.query_devices()
-            if self.mic_device_id < 0 or self.mic_device_id >= len(devices):
-                raise ValueError(
-                    f"Microphone device ID {self.mic_device_id} is out of range (0-{len(devices) - 1})"
-                )
-            self.mic_info = devices[self.mic_device_id]
-            if self.mic_info.get('max_input_channels', 0) <= 0:
-                raise ValueError(f"Microphone device {self.mic_device_id} has no input channels")
-            print(f"Microphone: {(self.mic_info or {}).get('name', 'unknown')}", file=sys.stderr)
+            if self.include_mic:
+                if sd.query_devices is None:
+                    raise RuntimeError("sounddevice is not available")
+                devices = sd.query_devices()
+                if self.mic_device_id < 0 or self.mic_device_id >= len(devices):
+                    raise ValueError(
+                        f"Microphone device ID {self.mic_device_id} is out of range (0-{len(devices) - 1})"
+                    )
+                self.mic_info = devices[self.mic_device_id]
+                if self.mic_info.get('max_input_channels', 0) <= 0:
+                    raise ValueError(f"Microphone device {self.mic_device_id} has no input channels")
+                print(f"Microphone: {(self.mic_info or {}).get('name', 'unknown')}", file=sys.stderr)
 
             # Desktop audio status
             if self.desktop_capture:
@@ -387,8 +394,25 @@ class MacOSAudioRecorder:
             self._set_running(False)
             return False
 
+        # A missing desktop backend is terminal whenever desktop audio was
+        # requested. Check it before any spool/manifest exists so the reported
+        # error stays NO_DESKTOP_AUDIO_BACKEND instead of a downstream
+        # capture-spool/primary-track failure from a desktop-less session, and
+        # so no orphan capture directory is created.
+        if self.include_desktop and not self.desktop_capture:
+            message = "Desktop audio capture is unavailable because no ScreenCaptureKit backend is available."
+            help_text = "Reinstall AvaNevis or rebuild the macOS package so audiocapture-helper is bundled and signed."
+            print(message, file=sys.stderr)
+            print(f"  Swift helper or PyObjC ScreenCaptureKit required", file=sys.stderr)
+            _send_error_message("NO_DESKTOP_AUDIO_BACKEND", message, help=help_text)
+            self._set_running(False)
+            return False
+
         try:
-            mic_channels = min(int(self.mic_info.get('max_input_channels', 1) or 1), 2)
+            mic_channels = (
+                min(int(self.mic_info.get('max_input_channels', 1) or 1), 2)
+                if self.include_mic else None
+            )
             self._open_capture_spools(mic_channels=mic_channels)
         except Exception as spool_err:
             message = f"Failed to open capture spools: {spool_err}"
@@ -397,41 +421,33 @@ class MacOSAudioRecorder:
             self._set_running(False)
             self._release_and_discard_startup_capture()
             return False
-        if self.desktop_capture is not None:
+        if self.include_desktop and self.desktop_capture is not None:
             self.desktop_capture.audio_sink = self._desktop_audio_sink
 
-        # Start microphone recording thread
-        self.mic_thread = threading.Thread(target=self._record_microphone)
-        self.mic_thread.daemon = True
-        self.mic_thread.start()
+        if self.include_mic:
+            self.mic_thread = threading.Thread(target=self._record_microphone)
+            self.mic_thread.daemon = True
+            self.mic_thread.start()
 
-        # Start desktop recording if capture method is available
-        if self.desktop_capture:
+        # Start desktop recording if capture method is available. A missing
+        # backend was already rejected above, before spools existed.
+        if self.include_desktop and self.desktop_capture:
             self.desktop_thread = threading.Thread(target=self._record_desktop)
             self.desktop_thread.daemon = True
             self.desktop_thread.start()
-        else:
-            message = "Desktop audio capture is unavailable because no ScreenCaptureKit backend is available."
-            help_text = "Reinstall AvaNevis or rebuild the macOS package so audiocapture-helper is bundled and signed."
-            print(message, file=sys.stderr)
-            print(f"  Swift helper or PyObjC ScreenCaptureKit required", file=sys.stderr)
-            _send_error_message("NO_DESKTOP_AUDIO_BACKEND", message, help=help_text)
-            self._mic_started_event.wait(timeout=1.0)
-            self._abort_startup()
-            return False
 
-        if not self._mic_started_event.wait(timeout=MIC_START_TIMEOUT_SECONDS):
+        if self.include_mic and not self._mic_started_event.wait(timeout=MIC_START_TIMEOUT_SECONDS):
             message = f"Microphone stream did not become ready within {MIC_START_TIMEOUT_SECONDS:g} seconds."
             print(f"ERROR: {message}", file=sys.stderr)
             _send_error_message("MIC_START_TIMEOUT", message)
             self._abort_startup()
             return False
 
-        if self._mic_start_error:
+        if self.include_mic and self._mic_start_error:
             self._abort_startup()
             return False
 
-        if self.desktop_capture:
+        if self.include_desktop and self.desktop_capture:
             if not self._desktop_started_event.wait(timeout=DESKTOP_START_TIMEOUT_SECONDS):
                 capture_type = self.desktop_capture_type or 'unknown'
                 message = (
@@ -447,7 +463,7 @@ class MacOSAudioRecorder:
                 self._abort_startup()
                 return False
 
-        desktop_status = 'active' if self.desktop_capture else 'unavailable'
+        desktop_status = 'active' if self.include_desktop and self.desktop_capture else 'unavailable'
         _send_event_message("recording_started", "Recording started!", desktopStatus=desktop_status)
         print(f"Recording started!", file=sys.stderr)
         return True
@@ -485,10 +501,10 @@ class MacOSAudioRecorder:
             self._desktop_spool_accepted_any = True
         return accepted
 
-    def _open_capture_spools(self, *, mic_channels: int) -> None:
+    def _open_capture_spools(self, *, mic_channels: Optional[int] = None) -> None:
         started_ns = time.time_ns()
         started_iso = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + ".000Z"
-        self._mic_spool_channels = int(mic_channels)
+        self._mic_spool_channels = int(mic_channels) if self.include_mic else None
         self._desktop_spool_accepted_any = False
         self._spool_close_fail_reason = None
         self._capture_manifest = CaptureManifestCoordinator.create(
@@ -502,21 +518,17 @@ class MacOSAudioRecorder:
             desktop_volume=self.desktop_volume,
             mic_boost=MIC_BOOST_LINEAR,
         )
-        self._capture_manifest.add_track(
-            "mic",
-            sample_rate=self.sample_rate,
-            channels=self._mic_spool_channels,
-            dtype="<f4",
-        )
-        self._mic_spool = TrackSpool(
-            self._capture_manifest,
-            self._capture_manifest.session_dir,
-            "mic",
-            sample_rate=self.sample_rate,
-            channels=self._mic_spool_channels,
-            dtype="<f4",
-        )
-        if self.desktop_capture is not None:
+        if self.include_mic:
+            if self._mic_spool_channels is None:
+                raise RuntimeError("Microphone channels are required for microphone capture")
+            self._capture_manifest.add_track(
+                "mic", sample_rate=self.sample_rate, channels=self._mic_spool_channels, dtype="<f4"
+            )
+            self._mic_spool = TrackSpool(
+                self._capture_manifest, self._capture_manifest.session_dir, "mic",
+                sample_rate=self.sample_rate, channels=self._mic_spool_channels, dtype="<f4",
+            )
+        if self.include_desktop and self.desktop_capture is not None:
             self._capture_manifest.add_track(
                 "desktop",
                 sample_rate=self.sample_rate,
@@ -531,6 +543,7 @@ class MacOSAudioRecorder:
                 channels=self.channels,
                 dtype="<f4",
             )
+        self._capture_manifest.set_primary_track("mic" if self.include_mic else "desktop")
 
     def _compute_spool_alignment_frames(self) -> dict:
         """Derive start-alignment frame pads/trims without loading PCM."""
@@ -570,6 +583,8 @@ class MacOSAudioRecorder:
             # safe to keep (partial/corrupt CoreAudio or ScreenCaptureKit output).
             pad_to = None
             if (
+                self.include_mic
+                and
                 not desktop_failed
                 and self._desktop_spool_accepted_any
                 and mic_frames > 0
@@ -590,6 +605,11 @@ class MacOSAudioRecorder:
                 and desk_result.committed_frames > 0
             )
 
+        if not self.include_mic:
+            if not include_desktop:
+                raise RuntimeError(DESKTOP_ONLY_NO_AUDIO_MESSAGE)
+            include_desktop = False
+
         if self._capture_manifest is not None:
             try:
                 self._capture_manifest.set_include_desktop(include_desktop)
@@ -600,11 +620,14 @@ class MacOSAudioRecorder:
                         "desktop_leading_pad_frames": alignment["desktopLeadingPadFrames"],
                         "mic_leading_pad_frames": alignment["micLeadingPadFrames"],
                     })
+                self._capture_manifest.set_primary_track("mic" if self.include_mic else "desktop")
                 self._capture_manifest.set_state("finalizing")
             except Exception as exc:
-                if include_desktop:
+                if include_desktop or not self.include_mic:
                     # Prefer failing stop (mic committed + recoverable) over silent
                     # mic-only finalize that deletes desktop segments, or unaligned mix.
+                    # Desktop-primary has no microphone to degrade onto at all, so an
+                    # unverified manifest must fail stop and stay recoverable.
                     raise RuntimeError(
                         f"Failed to persist desktop mix settings before finalization: {exc}"
                     ) from exc
@@ -944,6 +967,9 @@ class MacOSAudioRecorder:
         v2.9 retains this conservative macOS policy: a late helper failure
         excludes the desktop track from the mix (mic-only), unlike Linux
         capture-side loss which keeps already-committed desktop frames.
+
+        Desktop-only has no microphone to degrade onto, so its copy must never
+        offer one; that failure is made terminal by ``_close_capture_spools_for_mix``.
         """
         if not self._desktop_runtime_failure:
             self._desktop_runtime_failure = message
@@ -951,6 +977,16 @@ class MacOSAudioRecorder:
             return
         self._desktop_runtime_warning_sent = True
         print(f"WARNING: {message}", file=sys.stderr)
+        if not self.include_mic:
+            _send_warning_message(
+                code,
+                message,
+                help=(
+                    "Desktop audio capture failed after recording started and this "
+                    "recording requested desktop audio only."
+                ),
+            )
+            return
         _send_warning_message(
             code,
             f"{message} Continuing with microphone audio only.",
@@ -1081,6 +1117,16 @@ class MacOSAudioRecorder:
             include_desktop = bool(self._capture_manifest.to_dict().get("includeDesktop"))
         if include_desktop:
             print("Desktop track committed for bounded finalization", file=sys.stderr)
+        elif not self.include_mic:
+            # Desktop-primary: `includeDesktop` is intentionally false and the
+            # desktop track *is* the output. Never claim a mic-only save, and
+            # never send the user to microphone/desktop permission settings for
+            # a recording that succeeded.
+            print("Desktop-primary track committed for bounded finalization", file=sys.stderr)
+        elif not self.include_desktop:
+            # mic-only: desktop audio was never requested, so its absence is
+            # not a failure and must not raise a permissions warning.
+            print("Microphone-only capture: desktop audio was not requested", file=sys.stderr)
         elif not self._desktop_runtime_failure:
             capture_type = self.desktop_capture_type or 'unknown'
             self._emit_desktop_diagnostics_warning()
@@ -1195,17 +1241,24 @@ def main():
     parser = argparse.ArgumentParser(description="macOS Audio Recorder CLI")
     parser.add_argument("--mic", type=int, required=True, help="Microphone device ID")
     parser.add_argument("--loopback", type=int, required=True, help="Desktop audio device ID (reserved for future use)")
+    parser.add_argument(
+        "--capture-mode",
+        choices=("mic-and-desktop", "mic-only", "desktop-only"),
+        default="mic-and-desktop",
+        help="Requested capture sources",
+    )
     parser.add_argument("--output", required=True, help="Output file path")
     parser.add_argument("--duration", type=int, default=0, help="Duration in seconds (0 for manual stop)")
 
     args = parser.parse_args()
+    include_mic, include_desktop = resolve_capture_mode(args.capture_mode)
 
-    if SWIFT_CAPTURE_AVAILABLE or SCREENCAPTURE_AVAILABLE:
+    if include_desktop and (SWIFT_CAPTURE_AVAILABLE or SCREENCAPTURE_AVAILABLE):
         if SWIFT_CAPTURE_AVAILABLE:
             print(f"  Using: Swift audiocapture-helper (native)", file=sys.stderr)
         else:
             print(f"  Using: PyObjC ScreenCaptureKit (fallback)", file=sys.stderr)
-    else:
+    elif include_desktop:
         message = "Desktop audio capture is unavailable because neither Swift helper nor PyObjC ScreenCaptureKit is available."
         print(f"\n✗ {message}", file=sys.stderr)
         _send_error_message(
@@ -1217,25 +1270,27 @@ def main():
 
     _send_configuring_devices_event()
 
-    # List available devices for reference
-    print(f"\nAvailable audio devices:", file=sys.stderr)
-    try:
-        devices = sd.query_devices()
-        for i, dev in enumerate(devices):
-            if dev['max_input_channels'] > 0:
-                print(f"  [{i}] {dev['name']} ({dev['max_input_channels']} channels)", file=sys.stderr)
-        print(f"", file=sys.stderr)
-    except Exception as e:
-        print(f"  ERROR: Could not enumerate audio devices", file=sys.stderr)
-        print(f"  {e}", file=sys.stderr)
-        print(f"  Microphone permission may not be granted.", file=sys.stderr)
-        print(f"  Grant permission in: System Settings > Privacy & Security > Microphone", file=sys.stderr)
-        _send_error_message(
-            "DEVICE_ENUMERATION_FAILED",
-            f"Could not enumerate audio devices: {e}",
-            help="Grant Microphone permission in System Settings > Privacy & Security > Microphone.",
-        )
-        sys.exit(1)
+    if include_mic:
+        # List available microphone devices for reference. Desktop-only must
+        # never enumerate an unrequested microphone or trigger its TCC path.
+        print(f"\nAvailable audio devices:", file=sys.stderr)
+        try:
+            devices = sd.query_devices()
+            for i, dev in enumerate(devices):
+                if dev['max_input_channels'] > 0:
+                    print(f"  [{i}] {dev['name']} ({dev['max_input_channels']} channels)", file=sys.stderr)
+            print(f"", file=sys.stderr)
+        except Exception as e:
+            print(f"  ERROR: Could not enumerate audio devices", file=sys.stderr)
+            print(f"  {e}", file=sys.stderr)
+            print(f"  Microphone permission may not be granted.", file=sys.stderr)
+            print(f"  Grant permission in: System Settings > Privacy & Security > Microphone", file=sys.stderr)
+            _send_error_message(
+                "DEVICE_ENUMERATION_FAILED",
+                f"Could not enumerate audio devices: {e}",
+                help="Grant Microphone permission in System Settings > Privacy & Security > Microphone.",
+            )
+            sys.exit(1)
 
     recorder = None
     try:
@@ -1244,7 +1299,8 @@ def main():
             mic_device_id=args.mic,
             desktop_device_id=args.loopback,
             output_path=args.output,
-            preroll_seconds=0  # Production mode: no preroll, countdown in Electron app handles device warm-up
+            preroll_seconds=0,  # Production mode: no preroll, countdown in Electron app handles device warm-up
+            capture_mode=args.capture_mode,
         )
 
         # Start recording

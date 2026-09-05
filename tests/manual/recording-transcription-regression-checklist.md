@@ -24,6 +24,18 @@ Use this lightweight checklist for any future recording, transcription, or cross
 - [ ] Re-check model preload/download and transcript save flow if transcription behavior changed.
 - [ ] On macOS, verify desktop speech survives the saved stereo file and the MLX mono transcription path.
 
+### Capture modes (v2.9)
+
+Any change to recorder source gating, capture manifests, finalization, or the
+record split button must re-run the capture-mode matrix in
+`tests/manual/recording-smoke-checklist.md`. Minimum per-change pass:
+
+- [ ] `mic-and-desktop` record → stop → transcribe still produces both sources (default regression).
+- [ ] `mic-only` saves no system audio and raises no desktop permission prompt or warning.
+- [ ] `desktop-only` saves no microphone audio, raises no microphone prompt/indicator, and its desktop speech reaches the transcript.
+- [ ] Interrupted-capture recovery works for a single-source capture on the changed platform (a desktop-primary capture must never be left permanently unrecoverable).
+- [ ] Split-button keyboard/focus pass (Enter/Space/Arrow/Home/End/Escape/Tab, click-away, disabled while non-idle).
+
 ## 4. Update evidence
 
 - [ ] Save new representative logs if the recorder contract or error wording changes intentionally.

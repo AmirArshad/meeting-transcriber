@@ -43,6 +43,7 @@ def _build_session(
     desk_channels: int | None = None,
     dtype: str = "<i2",
     include_desktop: bool = True,
+    primary_track: str = "mic",
 ):
     output = tmp_path / "meeting.opus"
     coordinator = CaptureManifestCoordinator.create(
@@ -70,6 +71,37 @@ def _build_session(
     else:
         coordinator.set_include_desktop(False)
 
+    coordinator.set_primary_track(primary_track)
+
+    coordinator.set_state("finalizing")
+    return coordinator, output
+
+
+def _build_desktop_primary_session(
+    tmp_path: Path,
+    *,
+    profile: str,
+    desktop: np.ndarray,
+    dtype: str,
+):
+    """Create the one-track manifest emitted by desktop-only capture."""
+    output = tmp_path / "desktop-only.opus"
+    coordinator = CaptureManifestCoordinator.create(
+        output,
+        started_at_ns=1,
+        started_at_iso="2026-09-04T12:00:00.000Z",
+    )
+    coordinator.set_processing_profile(profile)
+    coordinator.set_mix_params(mic_volume=0.25, desktop_volume=1.0, mic_boost=9.0)
+    frames = desktop if desktop.ndim > 1 else desktop.reshape(-1, 1)
+    coordinator.add_track(
+        "desktop", sample_rate=48000, channels=frames.shape[1], dtype=dtype
+    )
+    name = "desktop_0000.pcm.part"
+    _write_segment(coordinator.session_dir / name, frames.astype(np.dtype(dtype)))
+    coordinator.commit_track("desktop", [name], committed_frames=len(frames))
+    coordinator.set_include_desktop(False)
+    coordinator.set_primary_track("desktop")
     coordinator.set_state("finalizing")
     return coordinator, output
 
@@ -451,6 +483,133 @@ def test_windows_multichannel_and_resample_fixture(tmp_path, monkeypatch):
     assert abs(len(got) // 2 - len(ref) // 2) <= 8
     n = min(len(got), len(ref))
     assert _mae_int16(got[:n], ref[:n]) <= 2.0
+
+
+@pytest.mark.parametrize(
+    "profile,dtype",
+    [("windows-v1", "<i2"), ("macos-v1", "<f4"), ("linux-v1", "<f4")],
+)
+def test_desktop_primary_finalizes_the_desktop_track_without_mic_processing(
+    tmp_path, monkeypatch, profile, dtype
+):
+    desktop = np.column_stack(
+        [
+            np.linspace(-0.4, 0.4, 960, dtype=np.float32),
+            np.linspace(0.3, -0.3, 960, dtype=np.float32),
+        ]
+    )
+    if dtype == "<i2":
+        desktop = (desktop * 32767).astype(np.int16)
+    coordinator, output = _build_desktop_primary_session(
+        tmp_path, profile=profile, desktop=desktop, dtype=dtype
+    )
+    _patch_finalize_io(monkeypatch)
+
+    result = finalize_capture(
+        coordinator.session_dir / MANIFEST_FILENAME,
+        output,
+        chunk_frames=120,
+        coordinator=coordinator,
+    )
+
+    got = _read_wav_int16(Path(result.final_path)).reshape(-1, 2)
+    assert len(got) == len(desktop)
+    # Desktop-only follows desktop volume (1.0), not mic volume (0.25), and
+    # must not get the mic boost/enhancement treatment.
+    expected_peak = int(np.max(np.abs(desktop.astype(np.float32))))
+    if dtype == "<f4":
+        expected_peak = int(np.max(np.abs(desktop)) * 32767)
+    assert int(np.max(np.abs(got.astype(np.int32)))) >= expected_peak * 0.85
+    assert result.stats["includeDesktop"] is False
+
+
+@pytest.mark.parametrize("profile", ["macos-v1", "linux-v1"])
+def test_desktop_primary_repairs_a_one_sided_desktop_track(tmp_path, monkeypatch, profile):
+    """A one-sided desktop track must still be balanced in desktop-only mode.
+
+    macOS CoreAudio taps can deliver all energy on a single channel. Without the
+    one-sided repair, the finished stereo file collapses to near-silence in the
+    transcription mono downmix. The dual-source path repairs this via the
+    desktop track; desktop-only must not lose that safety net.
+    """
+    desktop = np.zeros((4_800, 2), dtype=np.float32)
+    desktop[:, 0] = np.float32(0.5)  # left only, right is digital silence
+
+    coordinator, output = _build_desktop_primary_session(
+        tmp_path, profile=profile, desktop=desktop, dtype="<f4"
+    )
+    _patch_finalize_io(monkeypatch)
+
+    result = finalize_capture(
+        coordinator.session_dir / MANIFEST_FILENAME,
+        output,
+        chunk_frames=512,
+        coordinator=coordinator,
+    )
+
+    got = _read_wav_int16(Path(result.final_path)).reshape(-1, 2)
+    left_rms = float(np.sqrt(np.mean((got[:, 0].astype(np.float64)) ** 2)))
+    right_rms = float(np.sqrt(np.mean((got[:, 1].astype(np.float64)) ** 2)))
+
+    assert left_rms > 0, "left channel must retain the captured desktop audio"
+    # The repaired output must carry real energy on both channels, otherwise the
+    # mono downmix used for transcription halves (or loses) the speech.
+    assert right_rms > left_rms * 0.5, (
+        f"one-sided desktop track was not repaired (L={left_rms:.1f}, R={right_rms:.1f})"
+    )
+
+    # A mono downmix of the result must stay close to the original level.
+    mono_rms = float(np.sqrt(np.mean(got.astype(np.float64).mean(axis=1) ** 2)))
+    assert mono_rms > 0.5 * 0.5 * 32767 * 0.7, f"mono downmix collapsed (rms={mono_rms:.1f})"
+
+
+def test_desktop_primary_applies_desktop_volume_on_every_profile(tmp_path, monkeypatch):
+    """`desktopVolume` must reach the single-track desktop-primary writer.
+
+    windows-v1/linux-v1 skip the volume multiply for a mic-primary single track
+    because the mic enhance plan already normalized level. Desktop-primary has
+    no enhance plan, so the gain has to be applied explicitly.
+    """
+    for profile in ("windows-v1", "linux-v1", "macos-v1"):
+        desktop = np.full((2_400, 2), 0.4, dtype=np.float32)
+        coordinator, output = _build_desktop_primary_session(
+            tmp_path / profile, profile=profile, desktop=desktop, dtype="<f4"
+        )
+        # _build_desktop_primary_session uses desktopVolume=1.0; halve it.
+        coordinator.set_mix_params(mic_volume=0.25, desktop_volume=0.5, mic_boost=9.0)
+        _patch_finalize_io(monkeypatch)
+
+        result = finalize_capture(
+            coordinator.session_dir / MANIFEST_FILENAME,
+            output,
+            chunk_frames=512,
+            coordinator=coordinator,
+        )
+
+        got = _read_wav_int16(Path(result.final_path)).reshape(-1, 2)
+        peak = float(np.max(np.abs(got.astype(np.float64))))
+        expected = 0.4 * 0.5 * 32767
+        assert abs(peak - expected) <= expected * 0.05, (
+            f"{profile}: desktopVolume not applied (peak={peak:.1f}, expected~{expected:.1f})"
+        )
+        # The mic boost must never touch desktop audio.
+        assert peak < 0.4 * 9.0 * 32767
+
+
+def test_desktop_primary_rejects_a_secondary_desktop_mix(tmp_path, monkeypatch):
+    desktop = np.ones((16, 2), dtype=np.int16)
+    coordinator, output = _build_desktop_primary_session(
+        tmp_path, profile="windows-v1", desktop=desktop, dtype="<i2"
+    )
+    coordinator.set_include_desktop(True)
+    _patch_finalize_io(monkeypatch)
+
+    with pytest.raises(spp.FinalizationError, match="desktop-primary"):
+        finalize_capture(
+            coordinator.session_dir / MANIFEST_FILENAME,
+            output,
+            coordinator=coordinator,
+        )
 
 
 def test_windows_default_chunk_resample_fixture_crosses_chunk_boundary(

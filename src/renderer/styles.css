@@ -909,6 +909,30 @@ select.device-select:disabled {
 }
 
 /* ---- Record button (premium) ---- */
+.record-split-control { display: inline-flex; position: relative; align-items: stretch; }
+.record-split-control .record-button {
+  min-width: 190px;
+  border-radius: var(--r-xs) 0 0 var(--r-xs);
+  transition: color 0.15s var(--ease-out), background-color 0.15s var(--ease-out), border-color 0.15s var(--ease-out);
+}
+.record-mode-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  padding: 0;
+  font: inherit;
+  border-radius: 0 var(--r-xs) var(--r-xs) 0;
+  cursor: pointer;
+  transition: color 0.15s var(--ease-out), background-color 0.15s var(--ease-out), border-color 0.15s var(--ease-out);
+}
+.record-mode-toggle:focus-visible, .record-mode-menu button:focus-visible { outline: 2px solid var(--focus-ring, #fff); outline-offset: 2px; }
+.record-mode-toggle:disabled { cursor: not-allowed; pointer-events: none; }
+.record-mode-menu { position: absolute; z-index: 20; top: calc(100% + 6px); left: 0; min-width: 224px; padding: 4px; background: var(--surface-2); border: 1px solid var(--hairline); border-radius: var(--r-sm); box-shadow: var(--shadow-lg); }
+/* Explicit so a future `display` on .record-mode-menu cannot defeat `hidden`. */
+.record-mode-menu[hidden] { display: none; }
+.record-mode-menu button { display: block; width: 100%; padding: 9px 10px; border: 0; background: transparent; color: var(--text-primary); font: inherit; text-align: left; cursor: pointer; border-radius: calc(var(--r-sm) - 2px); }
+.record-mode-menu button:hover { background: var(--surface-3); }
 .record-button {
   display: inline-flex;
   align-items: center;
@@ -953,15 +977,12 @@ select.device-select:disabled {
     0 0 0 1px rgba(255, 255, 255, 0.08);
 }
 
-/* Recording = serious crimson with glow */
+/* Recording = same crimson as the v2.9 Stop chrome. */
 .record-button.recording {
-  background: linear-gradient(180deg, #d93b40 0%, #b1262a 100%);
+  background: #b84c4c;
   color: #fff;
-  box-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.1) inset,
-    0 0 0 1px rgba(255, 255, 255, 0.06),
-    0 0 24px -4px var(--crimson-glow);
-  animation: record-glow 2.4s var(--ease-in-out) infinite;
+  box-shadow: none;
+  animation: none;
 }
 
 @keyframes record-glow {
@@ -970,7 +991,7 @@ select.device-select:disabled {
 }
 
 .record-button.recording:hover {
-  filter: brightness(1.08);
+  filter: none;
 }
 
 .record-button.processing {
@@ -1005,6 +1026,13 @@ select.device-select:disabled {
   grid-template-columns: 62px minmax(0, 1fr);
   align-items: center;
   gap: var(--space-2);
+}
+
+/* A class selector with `display` outranks the UA `[hidden]` rule, so a
+   single-source capture mode could not hide its unrequested track without
+   this. Keep it adjacent to the rule it overrides. */
+.visualizer-track[hidden] {
+  display: none;
 }
 
 .visualizer-track + .visualizer-track {
@@ -3494,6 +3522,55 @@ select.device-select,
   background: #b84c4c;
   border-color: var(--crimson);
   box-shadow: none;
+  animation: none;
+}
+
+/* Disclosure is the right cap of the split control — same chrome as the sibling. */
+.record-mode-toggle {
+  color: var(--surface-0);
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  border-left-color: rgba(16, 18, 20, 0.16);
+  box-shadow: none;
+  transition-property: color, background-color, border-color, opacity;
+}
+
+.record-button.idle + .record-mode-toggle:hover:not(:disabled),
+.record-split-control:has(.record-button.idle:hover) .record-mode-toggle:not(:disabled) {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+}
+
+.record-split-control .record-button.idle,
+.record-split-control:has(.record-button.idle) .record-mode-toggle {
+  color: var(--surface-0);
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: none;
+}
+
+/* One fill for the whole split so Stop and the disclosure cannot drift. */
+.record-split-control .record-button.recording,
+.record-split-control:has(.record-button.recording) .record-mode-toggle {
+  color: #fff;
+  background: #b84c4c;
+  border-color: var(--crimson);
+  box-shadow: none;
+  animation: none;
+  filter: none;
+}
+
+.record-split-control:has(.record-button.recording) .record-mode-toggle {
+  border-left-color: rgba(16, 18, 20, 0.22);
+}
+
+.record-split-control .record-button.processing,
+.record-split-control:has(.record-button.processing) .record-mode-toggle {
+  color: var(--text-tertiary);
+  background: var(--surface-3);
+  border-color: var(--hairline);
+  box-shadow: none;
+  animation: none;
 }
 
 .discard-recording-btn {

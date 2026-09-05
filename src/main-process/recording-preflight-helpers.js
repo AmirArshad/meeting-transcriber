@@ -89,7 +89,14 @@ function buildRecordingPreflightReport({
   diskCheck = {},
   audioOutputCheck = {},
   permissionCheck = null,
+  captureMode = 'mic-and-desktop',
 }) {
+  // A single-source recording must never be blocked by the absence of the
+  // source it did not request. Unknown values fall back to the two-source
+  // default so this helper can only ever be more permissive than before for
+  // an explicit single-source mode.
+  const includeMic = captureMode !== 'desktop-only';
+  const includeDesktop = captureMode !== 'mic-only';
   const errors = Array.isArray(deviceCheck.errors) ? [...deviceCheck.errors] : [];
   const warnings = Array.isArray(deviceCheck.warnings) ? [...deviceCheck.warnings] : [];
   let permissionStatus = null;
@@ -115,9 +122,12 @@ function buildRecordingPreflightReport({
   }
 
   if (platform === 'darwin' && permissionCheck) {
-    const missingMicrophone = permissionCheck.microphone?.granted === false;
-    const missingScreenRecording = permissionCheck.screen_recording?.granted === false;
-    const missingDesktopAudio = permissionCheck.desktop_audio?.available === false;
+    const missingMicrophone = includeMic
+      && permissionCheck.microphone?.granted === false;
+    const missingScreenRecording = includeDesktop
+      && permissionCheck.screen_recording?.granted === false;
+    const missingDesktopAudio = includeDesktop
+      && permissionCheck.desktop_audio?.available === false;
 
     if (missingMicrophone) {
       errors.push(buildPermissionErrorMessage('Microphone', permissionCheck.microphone));
@@ -149,22 +159,42 @@ function buildRecordingPreflightReport({
   const normalizedWarnings = dedupeMessages(warnings);
   const isMac = platform === 'darwin';
 
-  const guidance = isMac
-    ? [
-      'Refresh your audio devices and try again.',
-      'If the microphone is missing, check System Settings > Privacy & Security > Microphone.',
-      'For desktop audio on macOS, keep System Audio (ScreenCaptureKit) selected.',
-    ]
+  // Default two-source guidance is unchanged. Single-source modes drop the
+  // lines about the source they never requested, so the user is not sent to
+  // fix a device this recording does not use.
+  const micGuidance = isMac
+    ? 'If the microphone is missing, check System Settings > Privacy & Security > Microphone.'
     : platform === 'linux'
+      ? 'If the microphone is missing, start PulseAudio or PipeWire and refresh devices.'
+      : 'Reconnect the selected microphone if it was unplugged.';
+  const desktopGuidance = isMac
+    ? 'For desktop audio on macOS, keep System Audio (ScreenCaptureKit) selected.'
+    : platform === 'linux'
+      ? 'Desktop audio uses the selected output monitor. No screen-sharing permission is required.'
+      : 'Reconnect the selected desktop audio device if it was unplugged.';
+
+  const guidance = includeMic && includeDesktop
+    ? (isMac
       ? [
         'Refresh your audio devices and try again.',
-        'If the microphone is missing, start PulseAudio or PipeWire and refresh devices.',
-        'Desktop audio uses the selected output monitor. No screen-sharing permission is required.',
+        micGuidance,
+        desktopGuidance,
       ]
-      : [
-        'Refresh your audio devices and try again.',
-        'Reconnect the selected microphone or desktop audio device if it was unplugged.',
-      ];
+      : platform === 'linux'
+        ? [
+          'Refresh your audio devices and try again.',
+          micGuidance,
+          desktopGuidance,
+        ]
+        : [
+          'Refresh your audio devices and try again.',
+          'Reconnect the selected microphone or desktop audio device if it was unplugged.',
+        ])
+    : [
+      'Refresh your audio devices and try again.',
+      ...(includeMic ? [micGuidance] : []),
+      ...(includeDesktop ? [desktopGuidance] : []),
+    ];
 
   const errorMessage = normalizedErrors.length
     ? [

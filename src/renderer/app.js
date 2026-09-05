@@ -8,6 +8,10 @@ const MAX_PROGRESS_LOG_ENTRIES = 250;
 const AI_ADDON_PROGRESS_LOG_INTERVAL_MS = 1000;
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const {
+  normalizeCaptureMode,
+  getCaptureModeSources,
+  getRecordingSourceStatusText,
+  resolveRecordModeMenuKeyAction,
   getRecordButtonAction,
   getRecordingPresenceView,
   shouldShowDiscardRecordingControl,
@@ -99,6 +103,7 @@ const {
   getRecordingPermissionFailureGuidance,
   toOpaqueDeviceId,
   decorateDesktopDevices,
+  isDesktopCaptureDisabledSelection,
   resolveInitialDeviceSelection,
 } = window.platformSelectionHelpers;
 const { writeSignalTrace } = window.canvasHelpers;
@@ -110,6 +115,13 @@ const languageSelect = document.getElementById('language-select');
 const modelSelect = document.getElementById('model-select');
 const refreshBtn = document.getElementById('refresh-devices');
 const recordBtn = document.getElementById('record-btn');
+const recordModeToggle = document.getElementById('record-mode-toggle');
+const recordModeMenu = document.getElementById('record-mode-menu');
+/**
+ * Capture mode of the current/most recent start attempt. Drives source-accurate
+ * status copy and visualizer tracks. Always an explicit closed value.
+ */
+let activeCaptureMode = 'mic-and-desktop';
 const discardRecordingBtn = document.getElementById('discard-recording-btn');
 const statusIndicator = document.getElementById('status-indicator');
 const statusText = document.getElementById('status-text');
@@ -2442,6 +2454,76 @@ function setupEventListeners() {
     loadMeetingHistory({ scan: true });
   });
   recordBtn.addEventListener('click', handleRecordButtonClick);
+  if (recordModeToggle && recordModeMenu) {
+    recordModeToggle.addEventListener('click', () => {
+      if (recordingState !== 'idle') return;
+      if (recordModeMenu.hidden) {
+        openRecordModeMenu();
+      } else {
+        closeRecordModeMenu({ restoreFocus: true });
+      }
+    });
+
+    // Escape must work with focus on the toggle too, not only inside the menu.
+    recordModeToggle.addEventListener('keydown', (event) => {
+      if (recordModeMenu.hidden) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeRecordModeMenu({ restoreFocus: true });
+      }
+    });
+
+    recordModeMenu.addEventListener('click', (event) => {
+      const mode = event.target?.closest?.('[data-capture-mode]')?.dataset?.captureMode;
+      if (!mode) return;
+      // Lifecycle guard: a menu left open by a state change must never start a
+      // recording. The toggle is also disabled and the menu force-closed by
+      // updateControlsState() for every non-idle state.
+      if (recordingState !== 'idle') {
+        closeRecordModeMenu({ restoreFocus: true });
+        return;
+      }
+      closeRecordModeMenu({ restoreFocus: true });
+      void startRecording(mode);
+    });
+
+    recordModeMenu.addEventListener('keydown', (event) => {
+      const items = getRecordModeMenuItems();
+      const decision = resolveRecordModeMenuKeyAction({
+        key: event.key,
+        itemCount: items.length,
+        activeIndex: items.indexOf(document.activeElement),
+        isOpen: !recordModeMenu.hidden,
+      });
+
+      if (decision.preventDefault) {
+        event.preventDefault();
+      }
+      if (decision.action === 'close') {
+        closeRecordModeMenu({ restoreFocus: decision.restoreFocus });
+      } else if (decision.action === 'focus') {
+        items[decision.focusIndex]?.focus();
+      }
+    });
+
+    // Dismiss on any outside interaction, and whenever focus leaves the split
+    // control entirely (click-away, window blur, programmatic focus moves).
+    document.addEventListener('pointerdown', (event) => {
+      if (recordModeMenu.hidden) return;
+      if (recordModeMenu.contains(event.target) || recordModeToggle.contains(event.target)) {
+        return;
+      }
+      closeRecordModeMenu({ restoreFocus: false });
+    });
+    document.addEventListener('focusin', (event) => {
+      if (recordModeMenu.hidden) return;
+      if (recordModeMenu.contains(event.target) || recordModeToggle.contains(event.target)) {
+        return;
+      }
+      closeRecordModeMenu({ restoreFocus: false });
+    });
+    window.addEventListener('blur', () => closeRecordModeMenu({ restoreFocus: false }));
+  }
   if (discardRecordingBtn) {
     discardRecordingBtn.addEventListener('click', () => {
       void discardRecording();
@@ -2742,7 +2824,7 @@ function setupEventListeners() {
 function handleRecordButtonClick() {
   switch (getRecordButtonAction(recordingState)) {
     case 'start':
-      startRecording();
+      startRecording('mic-and-desktop');
       break;
     case 'stop':
       stopRecording();
@@ -3166,7 +3248,7 @@ function updateButtonUI() {
       icon.textContent = '■';
       text.textContent = getRecordButtonLabel('recording');
       statusIndicator.classList.add('recording');
-      statusText.textContent = 'Recording...';
+      statusText.textContent = getRecordingSourceStatusText(activeCaptureMode);
       lastStopProgressMessage = '';
       break;
 
@@ -3211,6 +3293,38 @@ function updateButtonUI() {
   updateDiscardRecordingButtonVisibility();
 }
 
+function getRecordModeMenuItems() {
+  if (!recordModeMenu) {
+    return [];
+  }
+  return [...recordModeMenu.querySelectorAll('[role="menuitem"]')];
+}
+
+function openRecordModeMenu() {
+  if (!recordModeToggle || !recordModeMenu || recordModeToggle.disabled) {
+    return;
+  }
+  recordModeMenu.hidden = false;
+  recordModeToggle.setAttribute('aria-expanded', 'true');
+  getRecordModeMenuItems()[0]?.focus();
+}
+
+/**
+ * Close the record-source menu. `restoreFocus` returns focus to the disclosure
+ * button for keyboard/activation dismissals; it is skipped for click-away and
+ * blur so we never steal focus from wherever the user actually went.
+ */
+function closeRecordModeMenu({ restoreFocus = false } = {}) {
+  if (!recordModeToggle || !recordModeMenu || recordModeMenu.hidden) {
+    return;
+  }
+  recordModeMenu.hidden = true;
+  recordModeToggle.setAttribute('aria-expanded', 'false');
+  if (restoreFocus && !recordModeToggle.disabled) {
+    recordModeToggle.focus();
+  }
+}
+
 // Update other controls based on state
 function updateControlsState() {
   const isBusy = recordingState !== 'idle' && recordingState !== 'initializing';
@@ -3220,12 +3334,20 @@ function updateControlsState() {
   languageSelect.disabled = isBusy || isInitializing;
   modelSelect.disabled = isBusy || isInitializing;
   refreshBtn.disabled = isBusy || isInitializing;
+  if (recordModeToggle) {
+    recordModeToggle.disabled = isBusy || isInitializing;
+    if (recordModeToggle.disabled) {
+      // Never leave an actionable menu open once the lifecycle leaves idle.
+      closeRecordModeMenu({ restoreFocus: false });
+    }
+  }
 }
 
-async function runRecordingPreflightChecks({ micId, desktopId }) {
+async function runRecordingPreflightChecks({ micId, desktopId, captureMode }) {
   const report = await window.electronAPI.runRecordingPreflight({
     micId: toOpaqueDeviceId(micId),
     loopbackId: toOpaqueDeviceId(desktopId),
+    captureMode,
   });
 
   report.errors.forEach((message) => addLog(`Preflight error: ${message}`, 'error'));
@@ -3248,19 +3370,31 @@ async function runRecordingPreflightChecks({ micId, desktopId }) {
 }
 
 // Start recording with retry logic
-async function startRecording() {
+async function startRecording(requestedCaptureMode = 'mic-and-desktop') {
+  // Normalize once at the renderer boundary so every downstream consumer
+  // (device validation, preflight, start IPC, status copy, visualizer) sees the
+  // same explicit closed value. Main normalizes and validates again.
+  const captureMode = normalizeCaptureMode(requestedCaptureMode);
+  const { includeMic, includeDesktop } = getCaptureModeSources(captureMode);
   const micId = micSelect.value;
   const desktopId = desktopSelect.value;
 
-  if (!micId) {
+  if (includeMic && !micId) {
     alert('Please select a microphone');
     return;
   }
 
-  if (!desktopId) {
+  if (includeDesktop && !desktopId) {
     alert('Please select a desktop audio source');
     return;
   }
+
+  if (includeDesktop && !includeMic && isDesktopCaptureDisabledSelection(desktopId)) {
+    alert('Please select a desktop audio source for a desktop-only recording.');
+    return;
+  }
+
+  activeCaptureMode = captureMode;
 
   setRecordingState('starting');
 
@@ -3279,7 +3413,7 @@ async function startRecording() {
   };
 
   try {
-    const preflightPassed = await runRecordingPreflightChecks({ micId, desktopId });
+    const preflightPassed = await runRecordingPreflightChecks({ micId, desktopId, captureMode });
     if (startWasDiscarded()) {
       addLog('Recording discarded during startup checks.', 'warning');
       setIdleIfCurrentStart();
@@ -3334,6 +3468,7 @@ async function startRecording() {
       const recordingPromise = window.electronAPI.startRecording({
         micId: toOpaqueDeviceId(micId),
         loopbackId: toOpaqueDeviceId(desktopId),
+        captureMode,
         isFirstRecording: isFirstRecording && attempt === 1 // Only use first-recording timeout on first attempt
       });
 
@@ -3466,7 +3601,7 @@ async function startRecording() {
 
       // Update UI
       startTimer();
-      audioVisualizer.start();
+      audioVisualizer.start(captureMode);
 
       // Clear previous session meeting pointer; Activity shows queue rows.
       currentRecordingMeeting = null;
@@ -4343,10 +4478,13 @@ async function hydrateRecordingStateFromMain() {
   if (mainState.state === 'recording' && canHydratedRendererStopRecording(mainState)) {
     activeRecordingSessionId = mainState.sessionId;
     recordingStartTime = Number(mainState.startedAt) || Date.now();
+    // Main owns the authoritative capture mode; without it a hydrated renderer
+    // would show a dead meter and "mic + system audio" for a single-source run.
+    activeCaptureMode = normalizeCaptureMode(mainState.captureMode);
     setRecordingState('recording');
     startTimer();
     if (audioVisualizer) {
-      audioVisualizer.start();
+      audioVisualizer.start(activeCaptureMode);
     }
     addLog('Resumed an in-progress recording after window reload.');
     return;
@@ -4361,6 +4499,7 @@ async function hydrateRecordingStateFromMain() {
     ) {
       frozenPresenceElapsedText = formatElapsedDuration((Date.now() - recordingStartTime) / 1000);
     }
+    activeCaptureMode = normalizeCaptureMode(mainState.captureMode);
     setRecordingState(mainState.state);
     startRecordingPresencePoll();
   }
@@ -4399,10 +4538,11 @@ function startRecordingPresencePoll() {
       activeRecordingSessionId = mainState.sessionId;
       recordingStartTime = Number(mainState.startedAt) || Date.now();
       frozenPresenceElapsedText = null;
+      activeCaptureMode = normalizeCaptureMode(mainState.captureMode);
       setRecordingState('recording');
       startTimer();
       if (audioVisualizer) {
-        audioVisualizer.start();
+        audioVisualizer.start(activeCaptureMode);
       }
       addLog('Recording became active after window reload.');
       return;
@@ -5912,9 +6052,16 @@ class AudioVisualizer {
     this.container = document.getElementById('audio-visualizer');
     this.micCanvas = document.getElementById('mic-waveform');
     this.desktopCanvas = document.getElementById('desktop-waveform');
+    this.micTrackEl = document.getElementById('mic-visualizer-track');
+    this.desktopTrackEl = document.getElementById('desktop-visualizer-track');
 
     this.micCtx = this.micCanvas.getContext('2d');
     this.desktopCtx = this.desktopCanvas.getContext('2d');
+
+    // Which tracks this recording actually captures. A source that was never
+    // opened must not be shown as a flat, permanently silent meter.
+    this.includeMic = true;
+    this.includeDesktop = true;
 
     // History buffers — current displayed values (smoothly interpolated)
     this.bufferSize = 96;
@@ -5960,7 +6107,17 @@ class AudioVisualizer {
     ctx.scale(dpr, dpr);
   }
 
-  start() {
+  start(captureMode) {
+    const sources = getCaptureModeSources(captureMode);
+    this.includeMic = sources.includeMic;
+    this.includeDesktop = sources.includeDesktop;
+    if (this.micTrackEl) {
+      this.micTrackEl.hidden = !this.includeMic;
+    }
+    if (this.desktopTrackEl) {
+      this.desktopTrackEl.hidden = !this.includeDesktop;
+    }
+
     this.isRunning = true;
     this.container.style.display = 'flex';
     this.micBuffer.fill(0);
@@ -5990,10 +6147,15 @@ class AudioVisualizer {
       document.addEventListener('visibilitychange', this._visibilityHandler);
     }
 
-    // Defer a tick so the container is visible and has layout
+    // Defer a tick so the container is visible and has layout. A hidden track
+    // has no layout box, so only size the canvases actually on screen.
     requestAnimationFrame(() => {
-      this._setupCanvas(this.micCanvas, this.micCtx);
-      this._setupCanvas(this.desktopCanvas, this.desktopCtx);
+      if (this.includeMic) {
+        this._setupCanvas(this.micCanvas, this.micCtx);
+      }
+      if (this.includeDesktop) {
+        this._setupCanvas(this.desktopCanvas, this.desktopCtx);
+      }
       this._loop();
     });
 
@@ -6017,8 +6179,15 @@ class AudioVisualizer {
     this.lastUpdateTime = Date.now();
     this.warningShown = false;
 
-    const nextMicTarget = Math.max(0, Math.min(1, levels.mic || 0));
-    const nextDesktopTarget = Math.max(0, Math.min(1, levels.desktop || 0));
+    // Recorders keep emitting both keys (stdout schema is unchanged), but an
+    // unrequested source reports a constant 0.0 — ignore it rather than
+    // rendering it as a real, silent input.
+    const nextMicTarget = this.includeMic
+      ? Math.max(0, Math.min(1, levels.mic || 0))
+      : 0;
+    const nextDesktopTarget = this.includeDesktop
+      ? Math.max(0, Math.min(1, levels.desktop || 0))
+      : 0;
     if (nextMicTarget !== this.micTarget || nextDesktopTarget !== this.desktopTarget) {
       this._lastDrawnMicTarget = null;
       this._lastDrawnDesktopTarget = null;
@@ -6082,8 +6251,12 @@ class AudioVisualizer {
       }
     }
 
-    this._draw(this.micCtx, this.micBuffer, this.micTrace, this.micColor);
-    this._draw(this.desktopCtx, this.desktopBuffer, this.desktopTrace, this.desktopColor);
+    if (this.includeMic) {
+      this._draw(this.micCtx, this.micBuffer, this.micTrace, this.micColor);
+    }
+    if (this.includeDesktop) {
+      this._draw(this.desktopCtx, this.desktopBuffer, this.desktopTrace, this.desktopColor);
+    }
     this._lastDrawnMicTarget = this.micTarget;
     this._lastDrawnDesktopTarget = this.desktopTarget;
 

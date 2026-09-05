@@ -173,6 +173,130 @@ function createHangingPython() {
   return proc;
 }
 
+function deviceListPython({ inputDevices = [], loopbackDevices = [] } = {}) {
+  return createFakePython({
+    stdout: JSON.stringify({
+      input_devices: inputDevices,
+      loopback_devices: loopbackDevices,
+    }),
+  });
+}
+
+test('validateSelectedDevices preserves desktop-only mode through real device validation', async () => {
+  const service = createService({
+    platform: 'linux',
+    spawnImpl: () => deviceListPython({
+      loopbackDevices: [{ id: 'pulse-monitor:desktop.monitor', name: 'Desktop' }],
+    }),
+  });
+
+  const result = await service.validateSelectedDevices({
+    micId: 'pulse-source:disconnected-mic',
+    loopbackId: 'pulse-monitor:desktop.monitor',
+    captureMode: 'desktop-only',
+  });
+
+  assert.equal(result.valid, true);
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.devices.mic, null);
+  assert.equal(result.devices.loopback.name, 'Desktop');
+});
+
+test('validateSelectedDevices preserves mic-only mode through real device validation', async () => {
+  const service = createService({
+    platform: 'linux',
+    spawnImpl: () => deviceListPython({
+      inputDevices: [{ id: 'pulse-source:mic', name: 'Mic' }],
+    }),
+  });
+
+  const result = await service.validateSelectedDevices({
+    micId: 'pulse-source:mic',
+    loopbackId: 'pulse-monitor:stale.monitor',
+    captureMode: 'mic-only',
+  });
+
+  assert.equal(result.valid, true);
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.devices.mic.name, 'Mic');
+  assert.equal(result.devices.loopback, null);
+});
+
+test('validateSelectedDevices rejects Linux desktop-only with desktop capture off', async () => {
+  const service = createService({
+    platform: 'linux',
+    spawnImpl: () => deviceListPython({
+      inputDevices: [{ id: 'pulse-source:mic', name: 'Mic' }],
+    }),
+  });
+
+  const result = await service.validateSelectedDevices({
+    micId: 'pulse-source:mic',
+    loopbackId: 'none',
+    captureMode: 'desktop-only',
+  });
+
+  assert.equal(result.valid, false);
+  assert.deepEqual(result.errors, [
+    'Select a desktop audio source for a desktop-only recording.',
+  ]);
+});
+
+test('validateSelectedDevices ignores unrequested device IDs for each platform', async () => {
+  const cases = [
+    {
+      platform: 'linux',
+      micId: 'pulse-source:mic',
+      missingMicId: 'pulse-source:missing',
+      loopbackId: 'pulse-monitor:desktop.monitor',
+      staleLoopbackId: 'pulse-monitor:stale.monitor',
+      inputDevices: [{ id: 'pulse-source:mic', name: 'Mic' }],
+      loopbackDevices: [{ id: 'pulse-monitor:desktop.monitor', name: 'Desktop' }],
+    },
+    {
+      platform: 'darwin',
+      micId: '2',
+      missingMicId: '99',
+      loopbackId: '-1',
+      staleLoopbackId: '99',
+      inputDevices: [{ id: 2, name: 'Mic' }],
+      loopbackDevices: [],
+    },
+    {
+      platform: 'win32',
+      micId: '0',
+      missingMicId: '99',
+      loopbackId: '1',
+      staleLoopbackId: '99',
+      inputDevices: [{ id: 0, name: 'Mic' }],
+      loopbackDevices: [{ id: 1, name: 'Desktop' }],
+    },
+  ];
+
+  for (const scenario of cases) {
+    const service = createService({
+      platform: scenario.platform,
+      spawnImpl: () => deviceListPython(scenario),
+    });
+
+    const desktopOnly = await service.validateSelectedDevices({
+      micId: scenario.missingMicId,
+      loopbackId: scenario.loopbackId,
+      captureMode: 'desktop-only',
+    });
+    assert.equal(desktopOnly.valid, true, `${scenario.platform} desktop-only`);
+    assert.equal(desktopOnly.devices.mic, null);
+
+    const micOnly = await service.validateSelectedDevices({
+      micId: scenario.micId,
+      loopbackId: scenario.staleLoopbackId,
+      captureMode: 'mic-only',
+    });
+    assert.equal(micOnly.valid, true, `${scenario.platform} mic-only`);
+    assert.equal(micOnly.devices.loopback, null);
+  }
+});
+
 test('get-audio-devices times out instead of hanging on Linux', { timeout: 2000 }, async () => {
   const hanging = createHangingPython();
   const service = createService({

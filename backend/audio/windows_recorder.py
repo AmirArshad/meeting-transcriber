@@ -96,6 +96,7 @@ from .track_spool import (
     TrackSpool,
 )
 from .streaming_post_processor import FinalizationError, finalize_capture
+from .capture_mode import DESKTOP_ONLY_NO_AUDIO_MESSAGE, resolve_capture_mode
 
 # Bound desktop PCM deferred until mic_first_capture_time exists (matches spool queue).
 DEFERRED_DESKTOP_MAX_BYTES = DEFAULT_MAX_QUEUE_BYTES
@@ -130,14 +131,19 @@ class AudioRecorder:
         chunk_size: int = DEFAULT_CHUNK_SIZE,
         mic_volume: float = 1.0,
         desktop_volume: float = 1.0,
-        preroll_seconds: float = None  # None = use default, 0 = no preroll (for production with countdown)
+        preroll_seconds: float = None,  # None = use default, 0 = no preroll (for production with countdown)
+        capture_mode: str = "mic-and-desktop",
     ):
         """
         Initialize the Windows audio recorder.
 
         Args:
-            mic_device_id: PyAudio device index for microphone
-            loopback_device_id: PyAudio device index for desktop audio (-1 to disable)
+            mic_device_id: PyAudio device index for microphone. Ignored (and not
+                probed) when ``capture_mode`` is ``desktop-only``.
+            loopback_device_id: PyAudio device index for desktop audio. Ignored
+                (and not probed) when ``capture_mode`` is ``mic-only``. Desktop
+                capture is disabled by capture mode, never by a sentinel device
+                index — a requested desktop source must be a valid index.
             output_path: Path for output audio file
             sample_rate: Target output sample rate (default: 48000)
             channels: Target output channels (default: 2 for stereo)
@@ -146,6 +152,9 @@ class AudioRecorder:
             desktop_volume: Desktop audio volume multiplier (0.0-1.0)
             preroll_seconds: Seconds to discard at start for device warm-up
                             (None = default 1.5s, 0 = disabled for production)
+            capture_mode: One of ``mic-and-desktop``, ``mic-only``,
+                ``desktop-only``. Determines which sources are probed, opened,
+                threaded, spooled, and finalized.
         """
         _send_event_message("configuring_devices", "Configuring audio devices...")
         self.mic_device_id = mic_device_id
@@ -156,41 +165,37 @@ class AudioRecorder:
         self.chunk_size = chunk_size
         self.mic_volume = mic_volume
         self.desktop_volume = desktop_volume
+        self.capture_mode = capture_mode
+        self.include_mic, self.include_desktop = resolve_capture_mode(capture_mode)
 
         self.pa = pyaudio.PyAudio()
         loopback_info = None
+        self.mic_sample_rate = None
+        self.mic_channels = None
+        self.mic_requested_higher_rate = False
 
         try:
             # Get device info and auto-detect channel counts
             device_count = self.pa.get_device_count()
-            if mic_device_id < 0 or mic_device_id >= device_count:
-                raise RuntimeError(
-                    f"Microphone device ID {mic_device_id} is out of range (0-{device_count - 1})"
-                )
+            if self.include_mic:
+                if mic_device_id < 0 or mic_device_id >= device_count:
+                    raise RuntimeError(
+                        f"Microphone device ID {mic_device_id} is out of range (0-{device_count - 1})"
+                    )
+                mic_info = self.pa.get_device_info_by_index(mic_device_id)
+                if mic_info.get('maxInputChannels', 0) <= 0:
+                    raise RuntimeError(f"Microphone device {mic_device_id} has no input channels")
+                default_rate = int(mic_info['defaultSampleRate'])
+                if default_rate < 48000 and sample_rate == 48000:
+                    print(f"Mic default rate is {default_rate} Hz, will attempt to use {sample_rate} Hz", file=sys.stderr)
+                    self.mic_sample_rate = sample_rate
+                    self.mic_requested_higher_rate = True
+                else:
+                    self.mic_sample_rate = default_rate
+                self.mic_channels = int(mic_info['maxInputChannels'])
 
-            mic_info = self.pa.get_device_info_by_index(mic_device_id)
-            if mic_info.get('maxInputChannels', 0) <= 0:
-                raise RuntimeError(f"Microphone device {mic_device_id} has no input channels")
-
-            # AUDIO QUALITY FIX: Try to use high-quality mode instead of default
-            # Many modern USB mics support 48kHz even if default is 16kHz
-            # This avoids quality-degrading resampling
-            default_rate = int(mic_info['defaultSampleRate'])
-
-            # Try to use 48kHz if device supports it, otherwise use native rate
-            # This matches Google Meet's approach
-            if default_rate < 48000 and sample_rate == 48000:
-                print(f"Mic default rate is {default_rate} Hz, will attempt to use {sample_rate} Hz", file=sys.stderr)
-                self.mic_sample_rate = sample_rate  # Try requested rate
-                self.mic_requested_higher_rate = True
-            else:
-                self.mic_sample_rate = default_rate
-                self.mic_requested_higher_rate = False
-
-            self.mic_channels = int(mic_info['maxInputChannels'])
-
-            if loopback_device_id >= 0:
-                if loopback_device_id >= device_count:
+            if self.include_desktop:
+                if loopback_device_id < 0 or loopback_device_id >= device_count:
                     raise RuntimeError(
                         f"Loopback device ID {loopback_device_id} is out of range (0-{device_count - 1})"
                     )
@@ -202,7 +207,7 @@ class AudioRecorder:
             self.pa = None
             raise
 
-        if loopback_device_id >= 0 and loopback_info is not None:
+        if self.include_desktop and loopback_info is not None:
             # COMPATIBILITY FIX: Probe actual working sample rate instead of trusting default
             # This prevents distorted audio on Bluetooth headsets and other devices
             # where reported rate doesn't match actual operating rate
@@ -230,7 +235,8 @@ class AudioRecorder:
             self.mixing_mode = False
 
         print(f"Device configuration:", file=sys.stderr)
-        print(f"  Mic: {self.mic_sample_rate} Hz, {self.mic_channels} channel(s)", file=sys.stderr)
+        if self.include_mic:
+            print(f"  Mic: {self.mic_sample_rate} Hz, {self.mic_channels} channel(s)", file=sys.stderr)
         if self.mixing_mode:
             print(f"  Loopback: {self.loopback_sample_rate} Hz, {self.loopback_channels} channel(s)", file=sys.stderr)
         print(f"  Target output: {self.target_sample_rate} Hz, {self.target_channels} channel(s) (stereo)", file=sys.stderr)
@@ -469,7 +475,10 @@ class AudioRecorder:
                             "Capture spool was not ready when desktop audio arrived."
                         )
                         return (in_data, pyaudio.paContinue)
-                    reference = self.mic_first_capture_time
+                    reference = (
+                        self.mic_first_capture_time
+                        if self.include_mic else self.recording_start_time
+                    )
                     if reference is None:
                         # Defer until mic reference exists (do not silently drop).
                         if not self._enqueue_deferred_desktop_locked(current_time, in_data):
@@ -489,7 +498,11 @@ class AudioRecorder:
         self.is_recording = False
 
     def _note_desktop_spool_failure(self, message: str) -> None:
-        """Degrade to mic-only without stopping the meeting (desktop may fail mid-capture)."""
+        """Degrade to mic-only without stopping the meeting (desktop may fail mid-capture).
+
+        Desktop-only has no microphone to degrade onto, so its copy must never
+        offer one; that failure is made terminal by ``_close_capture_spools_for_mix``.
+        """
         if self._desktop_spool_warning:
             return
         self._desktop_spool_warning = message
@@ -501,6 +514,9 @@ class AudioRecorder:
                 help=(
                     "The meeting continues with microphone audio. "
                     "Desktop/system audio may be missing."
+                    if self.include_mic else
+                    "This recording requested desktop audio only, so it cannot "
+                    "continue without it."
                 ),
             )
         except Exception:
@@ -616,21 +632,15 @@ class AudioRecorder:
             desktop_volume=float(getattr(self, "desktop_volume", 1.0)),
             mic_boost=MIC_BOOST_LINEAR,
         )
-        self._capture_manifest.add_track(
-            "mic",
-            sample_rate=self.mic_sample_rate,
-            channels=self.mic_channels,
-            dtype="<i2",
-        )
-        self._mic_spool = TrackSpool(
-            self._capture_manifest,
-            self._capture_manifest.session_dir,
-            "mic",
-            sample_rate=self.mic_sample_rate,
-            channels=self.mic_channels,
-            dtype="<i2",
-        )
-        if self.mixing_mode:
+        if self.include_mic:
+            self._capture_manifest.add_track(
+                "mic", sample_rate=self.mic_sample_rate, channels=self.mic_channels, dtype="<i2"
+            )
+            self._mic_spool = TrackSpool(
+                self._capture_manifest, self._capture_manifest.session_dir, "mic",
+                sample_rate=self.mic_sample_rate, channels=self.mic_channels, dtype="<i2",
+            )
+        if self.include_desktop:
             self._capture_manifest.add_track(
                 "desktop",
                 sample_rate=self.loopback_sample_rate,
@@ -645,11 +655,13 @@ class AudioRecorder:
                 channels=self.loopback_channels,
                 dtype="<i2",
             )
+        self._capture_manifest.set_primary_track("mic" if self.include_mic else "desktop")
 
     def _close_capture_spools_for_mix(self) -> None:
         """Close/commit spools and prepare the manifest for bounded finalization."""
         # Place any remaining deferred desktop audio before closing.
-        self._flush_deferred_desktop_spool()
+        if self.include_desktop:
+            self._flush_deferred_desktop_spool()
 
         mic_result = None
         desk_result = None
@@ -668,7 +680,8 @@ class AudioRecorder:
                 pad_to = None
                 mic_frames = 0 if mic_result is None else mic_result.committed_frames
                 if (
-                    not desktop_failed
+                    self.include_mic
+                    and not desktop_failed
                     and self._desktop_spool_accepted_any
                     and mic_frames > 0
                     and self.mic_sample_rate > 0
@@ -696,6 +709,8 @@ class AudioRecorder:
             warning = (
                 f"Desktop capture spool failed; continuing with microphone only. "
                 f"({desk_result.fail_reason})"
+                if self.include_mic else
+                f"Desktop capture spool failed. ({desk_result.fail_reason})"
             )
             if not self._desktop_spool_warning:
                 self._desktop_spool_warning = warning
@@ -704,7 +719,13 @@ class AudioRecorder:
                     _send_warning_message(
                         "DESKTOP_SPOOL_FAILED",
                         warning,
-                        help="The meeting audio was saved from the microphone. Desktop/system audio may be missing.",
+                        help=(
+                            "The meeting audio was saved from the microphone. "
+                            "Desktop/system audio may be missing."
+                            if self.include_mic else
+                            "This recording requested desktop audio only, so it "
+                            "cannot be saved without usable desktop audio."
+                        ),
                     )
                 except Exception:
                     pass
@@ -722,16 +743,26 @@ class AudioRecorder:
                 mic_result.committed_frames * self.mic_channels * 2
             )
 
+        if not self.include_mic:
+            if not include_desktop:
+                raise RuntimeError(DESKTOP_ONLY_NO_AUDIO_MESSAGE)
+            include_desktop = False
+
         if self._capture_manifest is not None:
             try:
                 self._capture_manifest.set_include_desktop(include_desktop)
+                self._capture_manifest.set_primary_track(
+                    "mic" if self.include_mic else "desktop"
+                )
                 self._capture_manifest.set_state("finalizing")
             except Exception as exc:
                 # Never silently finalize mic-only after a failed includeDesktop write
                 # when desktop audio was expected — fail stop so capture stays recoverable.
-                if include_desktop:
+                # Desktop-primary has no microphone to degrade onto at all, so an
+                # unverified manifest must fail stop there too.
+                if include_desktop or not self.include_mic:
                     raise RuntimeError(
-                        f"Failed to persist includeDesktop=True before finalization: {exc}"
+                        f"Failed to persist capture mix settings before finalization: {exc}"
                     ) from exc
                 try:
                     _send_warning_message(
@@ -891,46 +922,43 @@ class AudioRecorder:
 
         # Open streams with start=False so sample-rate fallback can settle before
         # capture spools/manifests are created with the final rates.
-        try:
-            self.mic_stream = self.pa.open(
-                format=pyaudio.paInt16,
-                channels=self.mic_channels,
-                rate=self.mic_sample_rate,  # Try higher quality rate
-                input=True,
-                input_device_index=self.mic_device_id,
-                frames_per_buffer=self.chunk_size,
-                stream_callback=self._mic_callback,
-                start=False,
-            )
-            print(f"✓ Microphone stream opened at {self.mic_sample_rate} Hz", file=sys.stderr)
-            _send_event_message("mic_stream_opened", "Microphone stream opened")
-        except Exception as e:
-            # If higher rate failed, try falling back to device default
-            if self.mic_requested_higher_rate:
-                print(f"  Warning: {self.mic_sample_rate} Hz not supported, trying device default...", file=sys.stderr)
-                mic_info = self.pa.get_device_info_by_index(self.mic_device_id)
-                self.mic_sample_rate = int(mic_info['defaultSampleRate'])
-                try:
-                    self.mic_stream = self.pa.open(
-                        format=pyaudio.paInt16,
-                        channels=self.mic_channels,
-                        rate=self.mic_sample_rate,
-                        input=True,
-                        input_device_index=self.mic_device_id,
-                        frames_per_buffer=self.chunk_size,
-                        stream_callback=self._mic_callback,
-                        start=False,
-                    )
-                    print(f"✓ Microphone stream opened at {self.mic_sample_rate} Hz (fallback)", file=sys.stderr)
-                    _send_event_message("mic_stream_opened", "Microphone stream opened")
-                except Exception as e2:
+        if self.include_mic:
+            try:
+                self.mic_stream = self.pa.open(
+                    format=pyaudio.paInt16,
+                    channels=self.mic_channels,
+                    rate=self.mic_sample_rate,
+                    input=True,
+                    input_device_index=self.mic_device_id,
+                    frames_per_buffer=self.chunk_size,
+                    stream_callback=self._mic_callback,
+                    start=False,
+                )
+                print(f"✓ Microphone stream opened at {self.mic_sample_rate} Hz", file=sys.stderr)
+                _send_event_message("mic_stream_opened", "Microphone stream opened")
+            except Exception as e:
+                if self.mic_requested_higher_rate:
+                    print(f"  Warning: {self.mic_sample_rate} Hz not supported, trying device default...", file=sys.stderr)
+                    mic_info = self.pa.get_device_info_by_index(self.mic_device_id)
+                    self.mic_sample_rate = int(mic_info['defaultSampleRate'])
+                    try:
+                        self.mic_stream = self.pa.open(
+                            format=pyaudio.paInt16, channels=self.mic_channels,
+                            rate=self.mic_sample_rate, input=True,
+                            input_device_index=self.mic_device_id,
+                            frames_per_buffer=self.chunk_size,
+                            stream_callback=self._mic_callback, start=False,
+                        )
+                        print(f"✓ Microphone stream opened at {self.mic_sample_rate} Hz (fallback)", file=sys.stderr)
+                        _send_event_message("mic_stream_opened", "Microphone stream opened")
+                    except Exception as e2:
+                        self._abort_start_recording()
+                        raise RuntimeError(f"Failed to open microphone stream: {e2}")
+                else:
                     self._abort_start_recording()
-                    raise RuntimeError(f"Failed to open microphone stream: {e2}")
-            else:
-                self._abort_start_recording()
-                raise RuntimeError(f"Failed to open microphone stream (device {self.mic_device_id}): {e}")
+                    raise RuntimeError(f"Failed to open microphone stream (device {self.mic_device_id}): {e}")
 
-        if self.mixing_mode:
+        if self.include_desktop:
             # Open desktop stream with error handling
             try:
                 self.desktop_stream = self.pa.open(
@@ -959,7 +987,8 @@ class AudioRecorder:
 
         # Start streams
         try:
-            self.mic_stream.start_stream()
+            if self.mic_stream:
+                self.mic_stream.start_stream()
             if self.desktop_stream:
                 self.desktop_stream.start_stream()
         except Exception as e:
@@ -1055,7 +1084,12 @@ class AudioRecorder:
         include = False
         if self._capture_manifest is not None:
             include = bool(self._capture_manifest.to_dict().get("includeDesktop"))
-        print(f"  Desktop spool included: {include}", file=sys.stderr)
+        if self.include_mic:
+            print(f"  Desktop spool included: {include}", file=sys.stderr)
+        else:
+            # Desktop-primary: `includeDesktop` is a secondary-mix flag and is
+            # intentionally false; the desktop track is the output itself.
+            print("  Desktop-primary track committed for bounded finalization", file=sys.stderr)
 
         # Async spool failures discovered at close must not continue into mix/success.
         async_err = self.get_async_capture_error()
@@ -1169,6 +1203,12 @@ def main():
     parser = argparse.ArgumentParser(description="Audio Recorder CLI")
     parser.add_argument("--mic", type=int, required=True, help="Microphone device ID")
     parser.add_argument("--loopback", type=int, required=True, help="Loopback device ID")
+    parser.add_argument(
+        "--capture-mode",
+        choices=("mic-and-desktop", "mic-only", "desktop-only"),
+        default="mic-and-desktop",
+        help="Requested capture sources",
+    )
     parser.add_argument("--output", required=True, help="Output file path")
     parser.add_argument("--duration", type=int, default=0, help="Duration in seconds (0 for manual stop)")
     
@@ -1227,7 +1267,8 @@ def main():
             loopback_device_id=args.loopback,
             output_path=str(output_path),
             sample_rate=48000,
-            preroll_seconds=0  # Production mode: no preroll, countdown in Electron app handles device warm-up
+            preroll_seconds=0,  # Production mode: no preroll, countdown in Electron app handles device warm-up
+            capture_mode=args.capture_mode,
         )
         recorder.start_recording()
         

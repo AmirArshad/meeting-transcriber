@@ -88,6 +88,24 @@ class FinalizationError(RuntimeError):
         self.recoverable_path = recoverable_path
 
 
+def resolve_primary_track(data: Dict[str, Any]) -> str:
+    """Resolve the manifest's output-timeline source without guessing tracks."""
+    tracks = data.get("tracks")
+    if not isinstance(tracks, dict):
+        raise FinalizationError("Capture manifest has invalid tracks")
+    primary_track = data.get("primaryTrack", "mic")
+    if primary_track not in ("mic", "desktop") or primary_track not in tracks:
+        raise FinalizationError(f"Capture manifest has invalid primaryTrack: {primary_track!r}")
+    # Desktop-primary is the one-track desktop-only contract.  Treat a
+    # secondary desktop mix flag (or a microphone track) as corrupt rather
+    # than silently taking a mic-oriented fallback/finalization path.
+    if primary_track == "desktop" and (
+        bool(data.get("includeDesktop", False)) or set(tracks) != {"desktop"}
+    ):
+        raise FinalizationError("Capture manifest has invalid desktop-primary track combination")
+    return primary_track
+
+
 @dataclass
 class FinalizationResult:
     final_path: str
@@ -552,10 +570,13 @@ def _iter_aligned_mix_chunks(
                 desk_chunk = _apply_one_sided(desk_chunk, desk_one_sided)
                 mixed = mic_chunk * (mic_volume * mic_boost) + desk_chunk * desktop_volume
                 _mix_soft_limit_inplace(mixed, apply=apply_mix_limit)
-            elif _profile_enhances_mic_before_mix(profile):
-                # Windows/linux-v1 mic-only: enhance already applied; no extra volume multiply.
+            elif _profile_enhances_mic_before_mix(profile) and mic_enhance is not None:
+                # Windows/linux-v1 mic-primary single track: the enhance plan
+                # already normalized level, so no extra volume multiply.
                 mixed = mic_chunk
             else:
+                # Includes desktop-primary on every profile, where no enhance plan
+                # exists and `mic_volume` carries the desktop gain.
                 mixed = mic_chunk * mic_volume
 
             if post_mix_enhance is not None:
@@ -806,6 +827,20 @@ def expected_output_duration_seconds(data: Dict[str, Any]) -> Optional[float]:
     microphone timeline.
     """
     tracks = data.get("tracks") or {}
+    try:
+        primary_track = resolve_primary_track(data)
+    except FinalizationError:
+        return None
+    if primary_track == "desktop":
+        desktop = tracks.get("desktop")
+        if not isinstance(desktop, dict):
+            return None
+        try:
+            frames = int(desktop.get("committedFrames") or 0)
+            sample_rate = int(desktop.get("sampleRate") or 0)
+        except (TypeError, ValueError):
+            return None
+        return frames / float(sample_rate) if frames > 0 and sample_rate > 0 else None
     mic = tracks.get("mic")
     if not isinstance(mic, dict):
         return None
@@ -1114,8 +1149,7 @@ def finalize_capture(
             raise FinalizationError(
                 f"Missing or invalid processingProfile on capture manifest: {profile!r}"
             )
-        if "mic" not in data.get("tracks", {}):
-            raise FinalizationError("Capture manifest has no mic track")
+        primary_track_name = resolve_primary_track(data)
 
         if coordinator.state not in ("finalizing", "error", "recording"):
             if coordinator.state == "complete" and data.get("finalRelativePath"):
@@ -1161,13 +1195,17 @@ def finalize_capture(
         desktop_volume = float(mix.get("desktopVolume", 1.0))
         mic_boost = float(mix.get("micBoost", MIC_BOOST_LINEAR))
         alignment = data.get("alignment") or {}
-        include_desktop = bool(data.get("includeDesktop", False)) and coordinator.has_track("desktop")
+        include_desktop = (
+            primary_track_name == "mic"
+            and bool(data.get("includeDesktop", False))
+            and coordinator.has_track("desktop")
+        )
 
         _emit_progress(progress_callback, "audio_normalizing", "Normalizing audio...")
 
-        mic_track = coordinator.get_track("mic")
+        mic_track = coordinator.get_track(primary_track_name)
         if int(mic_track.get("committedFrames") or 0) <= 0:
-            raise FinalizationError("No microphone audio was captured")
+            raise FinalizationError(f"No {primary_track_name} audio was captured")
 
         mic_frames, mic_stats = _normalize_track_to_stereo_file(
             session_dir=coordinator.session_dir,
@@ -1193,8 +1231,15 @@ def finalize_capture(
 
         mic_path = coordinator.session_dir / NORMALIZED_MIC_NAME
 
+        # One-sided repair is a channel-balance fix on the *primary* track, not
+        # mic enhancement: macOS CoreAudio taps (and Pulse monitors) can land all
+        # energy on a single channel, which the transcription mono downmix would
+        # then halve or silence. Desktop-primary needs it at least as much as
+        # mic-primary, so this must stay keyed on the profile only.
         mic_one_sided = (
-            _decide_one_sided(mic_stats) if _profile_uses_one_sided(profile) else _OneSidedDecision(False)
+            _decide_one_sided(mic_stats)
+            if _profile_uses_one_sided(profile)
+            else _OneSidedDecision(False)
         )
         desk_one_sided = (
             _decide_one_sided(desk_stats)
@@ -1218,8 +1263,15 @@ def finalize_capture(
         # Windows/linux-v1 enhance mic before mix (faithful desktop).
         # macOS enhances after global mix limiting.
         mic_enhance = None
-        if _profile_enhances_mic_before_mix(profile):
+        if primary_track_name == "mic" and _profile_enhances_mic_before_mix(profile):
             mic_enhance = _plan_stereo_enhance_from_stats(mic_stats)
+
+        if primary_track_name == "desktop":
+            # Desktop-primary rides the single-track writer path, so the desktop
+            # gain has to travel in the primary-track volume slot; the mic boost
+            # must never be applied to desktop audio.
+            mic_volume = desktop_volume
+            mic_boost = 1.0
 
         _emit_progress(progress_callback, "audio_mixing", "Mixing audio...")
         mix_peak = 0.0
@@ -1246,7 +1298,7 @@ def finalize_capture(
         apply_mix_limit = include_desktop and mix_peak > 1.0
 
         post_mix_enhance = None
-        if _profile_enhances_after_mix(profile):
+        if primary_track_name == "mic" and _profile_enhances_after_mix(profile):
             # One bounded stats pass over the globally limited aligned mix is
             # sufficient: centered extrema derive from global sum/min/max.
             mixed_stats = _TrackStats()
@@ -1306,7 +1358,11 @@ def finalize_capture(
                 desk_one_sided=desk_one_sided,
                 mic_enhance=mic_enhance,
                 apply_mix_limit=apply_mix_limit,
-                post_mix_enhance=post_mix_enhance if _profile_enhances_after_mix(profile) else None,
+                post_mix_enhance=(
+                    post_mix_enhance
+                    if primary_track_name == "mic" and _profile_enhances_after_mix(profile)
+                    else None
+                ),
             ),
         )
         capture_temp_written = True
