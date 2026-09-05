@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { EventEmitter } = require('node:events');
 
 const {
   LINUX_CUDA12_RUNTIME_CATALOG,
@@ -35,6 +36,7 @@ const {
   verifyDownloadedLinuxCudaWheel,
   verifyDownloadedLinuxCudaWheelInWorker,
   HASH_READ_CHUNK_BYTES,
+  hashFileSha256,
   hashFileSha256Sync,
   verifyLinuxCudaRuntimeIntegrity,
   isAcceptedLinuxCudaProfileHost,
@@ -222,6 +224,28 @@ test('CUDA wheel hashing uses bounded reads instead of a whole-file slurp', () =
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('CUDA hashing waits for stream close so Windows can rename the parent directory', async () => {
+  const body = Buffer.from('libcublas');
+  const expected = crypto.createHash('sha256').update(body).digest('hex');
+  const stream = new EventEmitter();
+  stream.destroy = () => {};
+  let resolved = false;
+  const promise = hashFileSha256('/managed/nvidia/cublas/lib/libcublas.so.12', {
+    createReadStream: () => stream,
+  }).then((digest) => {
+    resolved = true;
+    return digest;
+  });
+  stream.emit('data', body);
+  stream.emit('end');
+  for (let i = 0; i < 20; i += 1) {
+    await Promise.resolve();
+  }
+  assert.equal(resolved, false, 'must not resolve on end while the file handle is still open');
+  stream.emit('close');
+  assert.equal(await promise, expected);
+});
+
 test('CUDA wheel staging worker copies and re-hashes a multi-chunk file off the main thread', async () => {
   const source = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-linux-cuda-whsrc-'));
   const staging = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-linux-cuda-whstg-'));
@@ -405,6 +429,43 @@ test('Linux CUDA runtime swap tombstones the active path then promotes staging',
   assert.equal(fs.existsSync(path.join(active, 'new.txt')), true);
   assert.equal(fs.existsSync(path.join(active, 'old.txt')), false);
   assert.equal(fs.existsSync(path.join(result.tombstonePath, 'old.txt')), true);
+  assert.equal(result.renamedActive, true);
+  fs.rmSync(parent, { recursive: true, force: true });
+});
+
+test('Linux CUDA runtime swap retries a transient EPERM rename before promotion', () => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'avanevis-linux-cuda-swap-retry-'));
+  const active = path.join(parent, 'python');
+  const staging = path.join(parent, 'python.staging-1');
+  fs.mkdirSync(active, { recursive: true });
+  fs.mkdirSync(staging, { recursive: true });
+  fs.writeFileSync(path.join(active, 'old.txt'), 'old');
+  fs.writeFileSync(path.join(staging, 'new.txt'), 'new');
+  let stagingPromoteAttempts = 0;
+  const fsModule = {
+    ...fs,
+    existsSync: fs.existsSync.bind(fs),
+    renameSync(from, to) {
+      if (path.resolve(from) === path.resolve(staging) && path.resolve(to) === path.resolve(active)) {
+        stagingPromoteAttempts += 1;
+        if (stagingPromoteAttempts === 1) {
+          const error = new Error('simulated transient directory lock');
+          error.code = 'EPERM';
+          throw error;
+        }
+      }
+      return fs.renameSync(from, to);
+    },
+  };
+  const result = swapLinuxCudaRuntimeAtomically({
+    activePath: active,
+    stagingPath: staging,
+    fsModule,
+    now: 9,
+    pid: 3,
+  });
+  assert.equal(stagingPromoteAttempts, 2);
+  assert.equal(fs.existsSync(path.join(active, 'new.txt')), true);
   assert.equal(result.renamedActive, true);
   fs.rmSync(parent, { recursive: true, force: true });
 });
