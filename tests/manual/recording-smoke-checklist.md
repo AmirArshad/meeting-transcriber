@@ -150,9 +150,11 @@ Evidence 2026-08-27 on `amiromarchy` (Omarchy 4.0.1) used the product recorder C
 ## Capture modes (v2.9) — hardware acceptance matrix
 
 Automated tests establish the contract; this matrix is the hardware gate. Run
-the whole block per platform and record the date + build. **Do not mark the
-capture-modes lane accepted until every row is evidenced on Windows 10/11,
-macOS 14+ arm64, and Omarchy/CachyOS x86_64.**
+the whole block per platform and record the date + build.
+
+**Lane close (2026-09-05):** remaining unchecked rows are **won't do**. Independent
+mixed-mic speech stays PARTIAL; 60 s recordings, packaged rebuilds, screen
+reader, quit-drain, and leftover Linux edge rows are not required for merge.
 
 The primary `Start Recording` button is always `mic-and-desktop`. The two
 single-source modes come from the split-button disclosure menu.

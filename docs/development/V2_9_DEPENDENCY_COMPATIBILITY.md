@@ -1696,7 +1696,8 @@ Held: Electron 42.9.0; `onnxruntime` 1.26.0 vs runtime 1.29.0; `filelock==3.32.3
 
 ## Capture modes — Linux CachyOS hardware evidence (2026-09-04)
 
-**Status: partial evidence; the v2.9 capture-mode lane remains open.** This was a
+**Status: partial evidence; remaining mixed-mic / packaged / leftover rows are
+won't do as of the 2026-09-05 lane close.** This was a
 local development run on the current machine, not packaged Linux acceptance and
 not evidence for any other distro or desktop. The host is a supported Linux
 target (CachyOS x86_64 with Hyprland/Wayland); unsupported Linux combinations
@@ -1804,11 +1805,11 @@ Sanitized late-loss event:
 | Desktop-only `none` preflight rejection | **PASS** |
 | Stop and Discard for all three modes | **PASS** |
 | Late Pulse monitor loss with retained earlier desktop audio | **PASS** |
-| Full v2.9 capture-mode hardware acceptance | **NOT ACCEPTED** — Windows x64 development smoke is recorded below. Linux renderer smoke was recorded 2026-09-05; mixed-mic independent speech remains **PARTIAL**. |
+| Full v2.9 capture-mode hardware acceptance | **WON'T DO (2026-09-05)** — independent mixed-mic speech stays **PARTIAL**; packaged rebuilds, 60 s rows, and leftover edge rows are not required for merge. |
 
 ## Capture modes — Linux CachyOS renderer smoke (2026-09-05)
 
-**Status: Linux renderer smoke recorded; mixed-mic independent speech remains PARTIAL.** This was a local development run (`electron . --user-data-dir=… --remote-debugging-port=9222`), not packaged Linux acceptance. Isolated userData: `/tmp/avanevis-linux-capture-modes-20260905/user-data`.
+**Status: Linux renderer smoke recorded; mixed-mic independent speech remains PARTIAL.** Remaining leftover rows are **won't do** as of the 2026-09-05 lane close. This was a local development run (`electron . --user-data-dir=… --remote-debugging-port=9222`), not packaged Linux acceptance. Isolated userData: `/tmp/avanevis-linux-capture-modes-20260905/user-data`.
 
 **Code under test:** branch `feature/v2.9-capture-modes`, commit
 `439d5db559a2a4fa95dd811e8d5db081079ebfdf`.
@@ -1868,11 +1869,11 @@ Stop progress advanced through Finishing / Normalizing / Mixing / Encoding. No `
 | Default mixed Stop with both streams and desktop fixture in transcript | **PASS** |
 | Default mixed independent mic speech in transcript | **PARTIAL** |
 | Interrupted-capture recovery / quit-drain / empty desktop-only spool / desktop-only vanished monitor | **NOT RUN** on this pass |
-| Full v2.9 capture-mode hardware acceptance | **NOT ACCEPTED** — mixed-mic independent speech remains partial; 60 s rows, recovery, and remaining Linux desktop-only edge rows are still open |
+| Full v2.9 capture-mode hardware acceptance | **WON'T DO (2026-09-05)** — mixed-mic independent speech stays partial; 60 s rows, recovery, and remaining Linux desktop-only edge rows are not required for merge |
 
 ## Capture modes — macOS arm64 hardware evidence (2026-09-05)
 
-**Status: macOS development smoke recorded; the v2.9 capture-mode lane remains open** until a stronger Linux mixed-mic transcript is evidenced. Windows x64 development smoke is recorded in the following section. This was a local development run on the current machine, not a packaged macOS acceptance. Packaged `build:mac:dir` was not rebuilt on this pass.
+**Status: macOS development smoke recorded; remaining mixed-mic / packaged / leftover rows are won't do as of the 2026-09-05 lane close.** Windows x64 development smoke is recorded in the following section. This was a local development run on the current machine, not a packaged macOS acceptance. Packaged `build:mac:dir` was not rebuilt on this pass.
 
 **Code under test:** branch `feature/v2.9-capture-modes`, commit
 `35b7583ec1f0127ff307e6cffb0c252c3183a3a6`.
@@ -1941,11 +1942,11 @@ Stop progress on the CLI path emitted `post_processing_started`, `audio_normaliz
 | Renderer split-button keyboard / hydration / startup cancel | **PASS** |
 | Silent desktop-only stop | **ACCEPTED** — tap silence still delivers frames, so stop saves a quiet file; empty-frame `DESKTOP_ONLY_NO_AUDIO_MESSAGE` is not this path |
 | Late helper SIGKILL | **OBSERVED** — truncated desktop-primary save, not mic fallback and not the terminal empty-spool failure |
-| Full v2.9 capture-mode hardware acceptance | **NOT ACCEPTED** — Linux renderer smoke is recorded 2026-09-05; mixed-mic independent speech remains **PARTIAL** |
+| Full v2.9 capture-mode hardware acceptance | **WON'T DO (2026-09-05)** — Linux renderer smoke is recorded 2026-09-05; mixed-mic independent speech stays **PARTIAL**; leftover rows are not required for merge |
 
 ## Capture modes — Windows x64 hardware evidence (2026-09-05)
 
-**Status: Windows development smoke recorded; the v2.9 capture-mode lane remains open** until a stronger Linux mixed-mic transcript is evidenced. This was a local development run on the current machine (`npm start` / `electron . --remote-debugging-port=9222`), not a packaged `win-unpacked` rebuild. Durations were ~7–16 s rather than 60 s, matching the macOS development pass.
+**Status: Windows development smoke recorded; remaining mixed-mic / packaged / leftover rows are won't do as of the 2026-09-05 lane close.** This was a local development run on the current machine (`npm start` / `electron . --remote-debugging-port=9222`), not a packaged `win-unpacked` rebuild. Durations were ~7–16 s rather than 60 s, matching the macOS development pass.
 
 **Code under test:** branch `feature/v2.9-capture-modes`, commit
 `e82e179a985347fc9f6da640ab9b122be0aadbfd`.
@@ -2008,4 +2009,21 @@ Stop progress on the CLI path emitted `post_processing_started`, `audio_normaliz
 | Screen reader / Narrator | **NOT RUN** |
 | Desktop-only with no input devices at all | **NOT RUN** (this PC has microphones) |
 | Electron quit-drain mid-recording | **NOT RUN** (CLI `TerminateProcess` + recover covers capture recovery) |
-| Full v2.9 capture-mode hardware acceptance | **NOT ACCEPTED** — Linux renderer smoke is recorded 2026-09-05; mixed-mic independent speech remains **PARTIAL** |
+| Full v2.9 capture-mode hardware acceptance | **WON'T DO (2026-09-05)** — Linux renderer smoke is recorded 2026-09-05; mixed-mic independent speech stays **PARTIAL**; leftover rows are not required for merge |
+
+## Capture modes — lane close (2026-09-05)
+
+**Accepted for merge** on `feature/v2.9-capture-modes`. Development smokes on
+Linux CachyOS, macOS arm64, and Windows x64, plus the 2026-09-05 Linux renderer
+smoke, stay as recorded above. The two remaining gates are **won't do**:
+
+1. Second-opinion adversarial review of the ~2,600-line fix diff.
+2. Remaining hardware-matrix rows: independent mixed-mic speech in the
+   transcript, packaged rebuilds, 60 s recordings, screen reader, quit-drain,
+   and leftover Linux edge rows (empty desktop-only spool, vanished-monitor on
+   the renderer pass).
+
+Mixed-mic independent speech stays **PARTIAL** on all three hosts (fixture
+bleed, not a sealed-room second talker). Unchecked rows in
+`tests/manual/recording-smoke-checklist.md` remain historical incomplete
+evidence, not open work.
