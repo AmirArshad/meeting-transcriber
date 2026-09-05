@@ -14,6 +14,9 @@ const ACCEPTED_LINUX_CUDA_GPU_NAMES = Object.freeze([
 ]);
 const LINUX_LIBRARY_PATH_DELIMITER = ':';
 const HASH_READ_CHUNK_BYTES = 1024 * 1024;
+const TRANSIENT_DIRECTORY_RENAME_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
+const DIRECTORY_RENAME_ATTEMPTS = 5;
+const DIRECTORY_RENAME_RETRY_DELAY_MS = 25;
 
 const {
   assertLinuxCudaCatalogIntegrity,
@@ -480,9 +483,36 @@ async function hashFileSha256(filePath, fsModule = fs) {
   return new Promise((resolve, reject) => {
     const hash = crypto.createHash('sha256');
     const stream = createReadStream(filePath, { highWaterMark: HASH_READ_CHUNK_BYTES });
-    stream.on('error', reject);
+    let ended = false;
+    let settled = false;
+    const settle = (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(hash.digest('hex'));
+    };
+    stream.on('error', (error) => {
+      settle(error);
+      if (typeof stream.destroy === 'function') {
+        stream.destroy();
+      }
+    });
     stream.on('data', (chunk) => hash.update(chunk));
-    stream.on('end', () => resolve(hash.digest('hex')));
+    stream.on('end', () => {
+      ended = true;
+    });
+    stream.on('close', () => {
+      if (!ended) {
+        settle(new Error(`CUDA hash stream closed before end: ${filePath}`));
+        return;
+      }
+      settle();
+    });
   });
 }
 
@@ -908,6 +938,32 @@ function buildLinuxCudaOfflineInstallArgs({
   ];
 }
 
+function waitForDirectoryRenameRetry(ms = DIRECTORY_RENAME_RETRY_DELAY_MS) {
+  const lock = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(lock, 0, 0, ms);
+}
+
+function renameSyncRetryingTransientLock(renameSync, from, to) {
+  // Do not gate on process.platform: Linux CUDA tests mock it to 'linux' on Windows CI,
+  // where directory rename still returns EPERM while hashed files are closing.
+  let lastError;
+  for (let attempt = 1; attempt <= DIRECTORY_RENAME_ATTEMPTS; attempt += 1) {
+    try {
+      renameSync(from, to);
+      return;
+    } catch (error) {
+      lastError = error;
+      const retryable = TRANSIENT_DIRECTORY_RENAME_CODES.has(error && error.code)
+        && attempt < DIRECTORY_RENAME_ATTEMPTS;
+      if (!retryable) {
+        throw error;
+      }
+      waitForDirectoryRenameRetry();
+    }
+  }
+  throw lastError;
+}
+
 function swapLinuxCudaRuntimeAtomically({
   activePath,
   stagingPath,
@@ -926,14 +982,14 @@ function swapLinuxCudaRuntimeAtomically({
   let renamedActive = false;
   try {
     if (existsSync(activePath)) {
-      renameSync(activePath, tombstonePath);
+      renameSyncRetryingTransientLock(renameSync, activePath, tombstonePath);
       renamedActive = true;
     }
-    renameSync(stagingPath, activePath);
+    renameSyncRetryingTransientLock(renameSync, stagingPath, activePath);
   } catch (error) {
     if (renamedActive && !existsSync(activePath) && existsSync(tombstonePath)) {
       try {
-        renameSync(tombstonePath, activePath);
+        renameSyncRetryingTransientLock(renameSync, tombstonePath, activePath);
       } catch (_rollbackError) {
         // Keep the original swap failure. The tombstone still holds the prior runtime.
       }
