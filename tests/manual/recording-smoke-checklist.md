@@ -161,22 +161,23 @@ macOS 14+ arm64 development evidence for this matrix was recorded 2026-09-05
 on `feature/v2.9-capture-modes` (`35b7583`); Windows x64 development evidence
 was recorded 2026-09-05 (`e82e179`). Details live in
 [`V2_9_DEPENDENCY_COMPATIBILITY.md`](../../docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md).
-Durations were ~12–18 s rather than 60 s. Linux CachyOS evidence is in the
-same document (2026-09-04). Linux renderer smoke remains open.
+Durations were ~12–18 s rather than 60 s. Linux CachyOS recorder evidence is in
+the same document (2026-09-04); Linux renderer smoke was recorded 2026-09-05
+(`439d5db`). Mixed-mic independent speech on Linux remains partial.
 
 ### Per platform — `mic-and-desktop` (default regression)
 
 - [ ] Windows / [ ] macOS / [ ] Linux — Record 60s with mic speech **and** browser audio playing; stop; both sources are audible in the saved Opus and both appear in the transcript.
-- [x] Windows / [x] macOS / [ ] Linux — Status pill reads `Recording mic + system audio…`; **both** visualizer tracks are visible and moving.
-- [x] Windows / [x] macOS / [ ] Linux — Discard mid-recording: no meeting persisted, no transcription enqueued, status returns to Ready.
+- [x] Windows / [x] macOS / [x] Linux — Status pill reads `Recording mic + system audio…`; **both** visualizer tracks are visible and moving.
+- [x] Windows / [x] macOS / [x] Linux — Discard mid-recording: no meeting persisted, no transcription enqueued, status returns to Ready.
 - [ ] Windows / [ ] macOS / [ ] Linux — Kill the app mid-recording; relaunch recovers the capture and the recovered file contains both sources.
 
 ### Per platform — `mic-only`
 
 - [ ] Windows / [ ] macOS / [ ] Linux — Record 60s with browser audio playing loudly; the saved file contains **no** system audio at all.
 - [x] macOS — **No** Screen Recording or System Audio Recording prompt appears, and no screen-recording indicator lights up.
-- [x] Windows / [x] macOS / [ ] Linux — Status pill reads `Recording mic only…`; the System visualizer track is **absent** (not a flat line).
-- [x] Windows / [x] macOS / [ ] Linux — No `NO_DESKTOP_AUDIO_CAPTURED` warning and no “check permissions” warning appears in the log.
+- [x] Windows / [x] macOS / [x] Linux — Status pill reads `Recording mic only…`; the System visualizer track is **absent** (not a flat line).
+- [x] Windows / [x] macOS / [x] Linux — No `NO_DESKTOP_AUDIO_CAPTURED` warning and no “check permissions” warning appears in the log.
 - [x] macOS — With the bundled `audiocapture-helper` renamed away (or on macOS 12), `mic-only` still **starts and saves**; only desktop-requesting modes are blocked.
 - [x] Windows / [x] macOS / [ ] Linux — Stop, Discard, and interrupted-capture recovery all work; transcription enqueues normally.
 
@@ -184,9 +185,9 @@ same document (2026-09-04). Linux renderer smoke remains open.
 
 - [ ] Windows / [ ] macOS / [ ] Linux — Record 60s of browser audio while **speaking into the mic**; the saved file contains **no** microphone audio.
 - [ ] macOS — **No** microphone prompt appears and the orange microphone indicator never lights up (check Control Center).
-- [x] Windows / [ ] Linux — OS mic-in-use indicator (Windows privacy icon / Pulse client list) never shows AvaNevis using the microphone.
-- [x] Windows / [x] macOS / [ ] Linux — Status pill reads `Recording system audio only…`; the Mic visualizer track is **absent**.
-- [x] Windows / [x] macOS / [ ] Linux — No warning claims “saved recording contains microphone audio only”.
+- [x] Windows / [x] Linux — OS mic-in-use indicator (Windows privacy icon / Pulse client list) never shows AvaNevis using the microphone.
+- [x] Windows / [x] macOS / [x] Linux — Status pill reads `Recording system audio only…`; the Mic visualizer track is **absent**.
+- [x] Windows / [x] macOS / [x] Linux — No warning claims “saved recording contains microphone audio only”.
 - [x] macOS — Confirm `helperCaptureBackend=coreaudio_tap` on 14.2+, and that **browser speech reaches the transcript** (not only the level meter). This is the one-sided-stereo/mono-downmix path.
 - [x] Windows / [x] macOS / [ ] Linux — Stop, Discard, and interrupted-capture recovery all work; the recovered file is desktop audio.
 - [ ] Linux — Switch the audio output device mid-recording (vanished monitor): the recording stays desktop-primary, earlier desktop frames are kept, and the warning does **not** offer a microphone fallback.
@@ -194,7 +195,7 @@ same document (2026-09-04). Linux renderer smoke remains open.
 - [x] Windows — Silent WASAPI loopback with **no desktop frames**: stop fails with `DESKTOP_ONLY_NO_AUDIO_MESSAGE`; no meeting saved. **Accepted 2026-09-05** (keep the structured empty-spool failure).
 - [x] macOS — Muted CoreAudio tap still **delivers silence frames**: stop succeeds with a quiet Opus (empty transcript). **Accepted 2026-09-05** as frame delivery, not an empty spool.
 - [ ] Linux — Empty desktop-only spool (no frames): stop fails with the same structured message rather than saving an empty meeting or hanging.
-- [ ] Linux — Select `None (microphone only)` as the desktop source, then choose `Record Desktop Only`: blocked at preflight with “Select a desktop audio source for a desktop-only recording.”, **not** an internal capture-manifest error.
+- [x] Linux — Select `None (microphone only)` as the desktop source, then choose `Record Desktop Only`: blocked at preflight with “Select a desktop audio source for a desktop-only recording.”, **not** an internal capture-manifest error.
 - [ ] Windows / [ ] macOS — On a machine with **no** input devices at all, `desktop-only` still starts and saves (argv must not carry an empty `--mic`).
 
 ### Keyboard / focus (per platform)

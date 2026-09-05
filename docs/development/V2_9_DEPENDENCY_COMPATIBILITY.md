@@ -1804,11 +1804,75 @@ Sanitized late-loss event:
 | Desktop-only `none` preflight rejection | **PASS** |
 | Stop and Discard for all three modes | **PASS** |
 | Late Pulse monitor loss with retained earlier desktop audio | **PASS** |
-| Full v2.9 capture-mode hardware acceptance | **NOT ACCEPTED** — Windows x64 development smoke is recorded in the following Windows section. Linux mixed-mic transcript and Linux renderer smoke remain open. |
+| Full v2.9 capture-mode hardware acceptance | **NOT ACCEPTED** — Windows x64 development smoke is recorded below. Linux renderer smoke was recorded 2026-09-05; mixed-mic independent speech remains **PARTIAL**. |
+
+## Capture modes — Linux CachyOS renderer smoke (2026-09-05)
+
+**Status: Linux renderer smoke recorded; mixed-mic independent speech remains PARTIAL.** This was a local development run (`electron . --user-data-dir=… --remote-debugging-port=9222`), not packaged Linux acceptance. Isolated userData: `/tmp/avanevis-linux-capture-modes-20260905/user-data`.
+
+**Code under test:** branch `feature/v2.9-capture-modes`, commit
+`439d5db559a2a4fa95dd811e8d5db081079ebfdf`.
+
+### Host and source baseline
+
+| Item | Observed value |
+|---|---|
+| OS / architecture | CachyOS rolling, x86_64 |
+| Session | Hyprland on Wayland (`XDG_CURRENT_DESKTOP=Hyprland`) |
+| Kernel | `7.2.3-1-cachyos` |
+| PipeWire | PulseAudio protocol 35, server `PulseAudio (on PipeWire 1.6.8)` |
+| Electron / dev app | Electron **44.1.0**, Chrome/152.0.7977.65, `app.isPackaged=false` |
+| Python | `.venv` CPython 3.11.16 |
+| Devices | mic `pulse-source:alsa_input.usb-046d_Logitech_Webcam_C925e_681FC0BF-02.analog-stereo`; desktop `pulse-monitor:alsa_output.pci-0000_01_00.1.hdmi-stereo.monitor` (HDMI VG27AQML1A). Empty isolated `localStorage` selected those Pulse defaults. |
+| Playback | looping `tests/fixtures/speakrs-two-speaker-16k.wav` via `pw-play --target alsa_output.pci-0000_01_00.1.hdmi-stereo` |
+| Transcription | local cached Whisper `tiny`, CPU / `int8`; no cloud or upload path |
+
+Renderer IPC was driven through local CDP (`file:///home/shareh/Projects/meeting-transcriber/src/renderer/index.html`). `window.confirm` / `window.alert` were stubbed only to capture copy and accept Discard.
+
+### Renderer split-button / hydration
+
+| Check | Result |
+|---|---|
+| `aria-haspopup=menu`; click opens and focuses first item (`Record Mic Only`) | **PASS** |
+| CDP `Input.dispatchKeyEvent` `Enter` and `Space` on the focused toggle | both open the menu and focus the first item |
+| `ArrowDown`/`ArrowUp` wrap; `Home`/`End` jump to first/last | **PASS** |
+| `Escape` from toggle and from a focused item restores focus to the toggle | **PASS** |
+| `Tab` from inside the open menu closes it and restores the toggle | **PASS** |
+| `pointerdown` outside the split control closes the menu; `window` `blur` closes it | **PASS** |
+| While `starting`/`recording`, toggle `disabled` and a click does not open the menu | **PASS** (all three modes) |
+| Status pills | `Recording mic + system audio…` / `Recording mic only…` / `Recording system audio only…` |
+| Unrequested visualizer track | `hidden` with `offsetParent=null` (absent, not a flat line) |
+| Discard of all three live modes | confirm copy `Cancel this recording? The audio will not be saved.`; History stayed at **0** meetings; log `Recording cancelled. Nothing was saved.` |
+| Renderer reload mid mixed recording | after `Page.reload`, hydrated status still `Recording mic + system audio…`, both tracks visible, log `Resumed an in-progress recording after window reload.`; Discard afterwards left Ready and 0 meetings |
+| Cancel during startup (`desktop-only`) | Discard visible at `Running checks...` / `⏳ Starting...`; returned to Ready; no meeting |
+| `None (microphone only)` + Record Desktop Only | alert `Please select a desktop audio source for a desktop-only recording.`; stayed Ready; no recording started |
+
+### Electron Stop results
+
+| Mode / recording | Hardware observation | Saved/transcription result |
+|---|---|---|
+| Electron `desktop-only` Stop, meeting `20260905_164049`, 15.21 s | argv `--mic none --loopback pulse-monitor:…hdmi-stereo.monitor --capture-mode desktop-only`. Log: `Desktop audio stream opened` only. Pulse `linux_recorder.py` source-output was on HDMI monitor source **64**, not C925e source **65**. | Playable 48 kHz stereo Opus **15.22 s**. CPU/`int8` `tiny` transcript contains the fixture (“Morning, Zira” / “design reviews start at 10” / “Thanks, Hazel”). |
+| Electron `mic-and-desktop` Stop, meeting `20260905_164219`, 19.22 s | argv `--mic pulse-source:…C925e… --loopback pulse-monitor:…hdmi-stereo.monitor --capture-mode mic-and-desktop`. Both `Desktop audio stream opened` and `Microphone stream opened`. | Playable 48 kHz stereo Opus **19.22 s**. CPU/`int8` `tiny` transcript contains the desktop fixture. No independent spoken mic phrase appeared. **PARTIAL** for mixed mic content (same class as the 2026-09-04 host pass). |
+
+Stop progress advanced through Finishing / Normalizing / Mixing / Encoding. No `NO_DESKTOP_AUDIO_CAPTURED` and no “saved recording contains microphone audio only” warning on the single-source live sessions.
+
+### Matrix conclusion
+
+| Scenario | Result on this host |
+|---|---|
+| Renderer split-button keyboard / disabled-while-recording / status pills / absent tracks | **PASS** |
+| Discard of all three modes and startup cancel | **PASS** |
+| Renderer reload hydration of a live mixed recording | **PASS** |
+| Desktop-only `none` preflight rejection | **PASS** |
+| Desktop-only Stop, no mic open, fixture in transcript | **PASS** |
+| Default mixed Stop with both streams and desktop fixture in transcript | **PASS** |
+| Default mixed independent mic speech in transcript | **PARTIAL** |
+| Interrupted-capture recovery / quit-drain / empty desktop-only spool / desktop-only vanished monitor | **NOT RUN** on this pass |
+| Full v2.9 capture-mode hardware acceptance | **NOT ACCEPTED** — mixed-mic independent speech remains partial; 60 s rows, recovery, and remaining Linux desktop-only edge rows are still open |
 
 ## Capture modes — macOS arm64 hardware evidence (2026-09-05)
 
-**Status: macOS development smoke recorded; the v2.9 capture-mode lane remains open** until Linux renderer smoke / mixed-mic rerun are evidenced. Windows x64 development smoke is recorded in the following section. This was a local development run on the current machine, not a packaged macOS acceptance. Packaged `build:mac:dir` was not rebuilt on this pass.
+**Status: macOS development smoke recorded; the v2.9 capture-mode lane remains open** until a stronger Linux mixed-mic transcript is evidenced. Windows x64 development smoke is recorded in the following section. This was a local development run on the current machine, not a packaged macOS acceptance. Packaged `build:mac:dir` was not rebuilt on this pass.
 
 **Code under test:** branch `feature/v2.9-capture-modes`, commit
 `35b7583ec1f0127ff307e6cffb0c252c3183a3a6`.
@@ -1877,11 +1941,11 @@ Stop progress on the CLI path emitted `post_processing_started`, `audio_normaliz
 | Renderer split-button keyboard / hydration / startup cancel | **PASS** |
 | Silent desktop-only stop | **ACCEPTED** — tap silence still delivers frames, so stop saves a quiet file; empty-frame `DESKTOP_ONLY_NO_AUDIO_MESSAGE` is not this path |
 | Late helper SIGKILL | **OBSERVED** — truncated desktop-primary save, not mic fallback and not the terminal empty-spool failure |
-| Full v2.9 capture-mode hardware acceptance | **NOT ACCEPTED** — Windows x64 development smoke is recorded below; Linux renderer smoke remains open |
+| Full v2.9 capture-mode hardware acceptance | **NOT ACCEPTED** — Linux renderer smoke is recorded 2026-09-05; mixed-mic independent speech remains **PARTIAL** |
 
 ## Capture modes — Windows x64 hardware evidence (2026-09-05)
 
-**Status: Windows development smoke recorded; the v2.9 capture-mode lane remains open** until Linux renderer smoke / mixed-mic rerun are evidenced. This was a local development run on the current machine (`npm start` / `electron . --remote-debugging-port=9222`), not a packaged `win-unpacked` rebuild. Durations were ~7–16 s rather than 60 s, matching the macOS development pass.
+**Status: Windows development smoke recorded; the v2.9 capture-mode lane remains open** until a stronger Linux mixed-mic transcript is evidenced. This was a local development run on the current machine (`npm start` / `electron . --remote-debugging-port=9222`), not a packaged `win-unpacked` rebuild. Durations were ~7–16 s rather than 60 s, matching the macOS development pass.
 
 **Code under test:** branch `feature/v2.9-capture-modes`, commit
 `e82e179a985347fc9f6da640ab9b122be0aadbfd`.
@@ -1944,4 +2008,4 @@ Stop progress on the CLI path emitted `post_processing_started`, `audio_normaliz
 | Screen reader / Narrator | **NOT RUN** |
 | Desktop-only with no input devices at all | **NOT RUN** (this PC has microphones) |
 | Electron quit-drain mid-recording | **NOT RUN** (CLI `TerminateProcess` + recover covers capture recovery) |
-| Full v2.9 capture-mode hardware acceptance | **NOT ACCEPTED** — Linux renderer smoke / mixed-mic rerun remain open |
+| Full v2.9 capture-mode hardware acceptance | **NOT ACCEPTED** — Linux renderer smoke is recorded 2026-09-05; mixed-mic independent speech remains **PARTIAL** |
