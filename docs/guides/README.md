@@ -8,3 +8,4 @@ Current user-facing documentation lives here.
 - [macOS installation](MACOS_INSTALLATION.md)
 - [macOS feature compatibility](MACOS_FEATURE_COMPATIBILITY.md)
 - [Linux experimental beta](LINUX_EXPERIMENTAL.md)
+- [Arch User Repository (AUR) package guide](AUR_PACKAGE_GUIDE.md)

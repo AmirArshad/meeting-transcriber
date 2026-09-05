@@ -6,6 +6,7 @@ Planned or active future work lives here. Completed designs should move to `../c
 
 - [Roadmap](ROADMAP.md)
 - [Linux support](LINUX_SUPPORT.md) — Core Beta shipped; v2.9 Linux-AI evidence and remaining gates are in the compatibility matrix
+- [AUR packaging and release automation](AUR_PACKAGING_AND_AUTOMATION.md)
 - [Acoustic echo cancellation](FEATURE_ECHO_CANCELLATION.md)
 - [Audio setup wizard](FEATURE_SETUP_WIZARD.md)
 - [macOS audio architecture improvements](MACOS_AUDIO_ARCHITECTURE.md)

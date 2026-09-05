@@ -91,6 +91,10 @@ v2.9 Linux-AI add-ons are accepted. CUDA Whisper, Linux Speakrs (including the W
 - **Acoustic echo cancellation (AEC).** Remove echo when desktop audio bleeds into the mic. Requires real-time, frame-synchronized processing — a significant change to the current post-processing mix architecture. Workaround today: use headphones. Reference: [FEATURE_ECHO_CANCELLATION.md](FEATURE_ECHO_CANCELLATION.md).
 - **macOS advanced audio.** Stream audio to disk during capture (flat ~50 MB RAM), per-app capture (e.g. Zoom-only), and real-time mixing to remove the post-recording mix step. Reference: [MACOS_AUDIO_ARCHITECTURE.md](MACOS_AUDIO_ARCHITECTURE.md).
 
+### Packaging & Distribution
+
+- **AUR package (`avanevis-bin`) & CI release automation.** Maintain the `avanevis-bin` package on the Arch User Repository for native installation via `yay` / `paru`, and automate release publishing from GitHub Actions. Reference: [AUR_PACKAGING_AND_AUTOMATION.md](AUR_PACKAGING_AND_AUTOMATION.md) and [AUR_PACKAGE_GUIDE.md](../guides/AUR_PACKAGE_GUIDE.md).
+
 ---
 
 ## Future enhancements
