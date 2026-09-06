@@ -5,7 +5,7 @@
 **Primary pain:** After Stop, users wait through encode + full Whisper (and optional diarization) before they can start the next meeting. There is also no way to discard a recording — Stop always processes.  
 **Review input:** Adversarial design review (2026-07-15) and second-pass review (2026-07-15) — findings below are incorporated as product/architecture decisions, not open questions.  
 **Diagram:** [Architecture + Home UX before/after](../architecture/background-transcription-queue-before-after.svg)  
-**Tracking:** Root [`todo.md`](../../todo.md) · [Roadmap (In progress)](ROADMAP.md)
+**Tracking:** Root [`todo.md`](../../todo.md) · [Product roadmap](ROADMAP.md)
 
 ## Verdict
 

@@ -1,6 +1,6 @@
 # Initiative: AUR Packaging and Release Automation
 
-- **Status:** In progress (v2.9.0 manual publication baseline; CI automation planned)
+- **Status:** Post-v2.9 follow-up (manual v2.9 baseline prepared; AUR claim, live smoke, and CI automation remain)
 - **Target Package:** `avanevis-bin` on the Arch User Repository (AUR)
 - **Target Distros:** Arch Linux, Omarchy 4, CachyOS, Manjaro, EndeavourOS, and Arch-family distributions
 
@@ -26,7 +26,7 @@ Publishing `avanevis-bin` to the AUR:
 
 ### 2. Implementation Milestones
 
-#### Phase 1: Manual Package Publication (v2.9.0)
+#### Phase 1: Manual Package Publication (v2.9.0 baseline)
 - [x] Construct idiomatic, verified `PKGBUILD` for `avanevis-bin` using v2.9.0 release assets.
 - [x] Verify package creation, dependency resolution, symlinks, and license placement with `makepkg`.
 - [x] Provide maintainer operational guide in [`docs/guides/AUR_PACKAGE_GUIDE.md`](../guides/AUR_PACKAGE_GUIDE.md).

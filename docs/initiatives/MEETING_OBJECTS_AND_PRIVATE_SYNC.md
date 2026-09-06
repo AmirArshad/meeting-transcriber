@@ -1,6 +1,6 @@
 # Meeting objects and private sync — future initiative
 
-**Status:** Exploration only. Not scheduled for v2.9.0.
+**Status:** Exploration only. Not scheduled for v2.10.
 
 ## Intent
 

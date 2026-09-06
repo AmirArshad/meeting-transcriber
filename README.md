@@ -11,6 +11,8 @@
 
 AvaNevis (formerly Meeting Transcriber) records your microphone *and* desktop audio at the same time, then transcribes everything on-device with Whisper. No cloud, no telemetry, no account.
 
+**Current release:** v2.9.0 is released. The next development cycle is v2.10 planning; see the [product roadmap](docs/initiatives/ROADMAP.md) and [post-v2.9 planning backlog](todo.md).
+
 ## Why
 
 Online meetings are a tax on memory. The good options for getting transcripts back either upload your audio to someone else's cloud, charge per minute, or only listen to your microphone and miss whatever the other side said. AvaNevis captures both sides, runs the model locally, and keeps everything on disk under your user folder.
@@ -71,7 +73,7 @@ If right-click → Open misbehaves, run `xattr -d com.apple.quarantine /Applicat
 
 The AppImage is a static-pie runtime and does **not** need host `fuse2` / `libfuse.so.2` (kernel `/dev/fuse` + `fuse3` still mount the image). Do not treat `--appimage-extract-and-run` as the shipped default.
 
-Transcription defaults to local CPU `faster-whisper`. On x86_64 Linux with a verified managed CUDA 12 runtime and NVIDIA GPU, CUDA transcription and local add-ons may be set up; otherwise their controls remain fail-closed. Linux support and acceptance boundaries are in [LINUX_EXPERIMENTAL.md](docs/guides/LINUX_EXPERIMENTAL.md) and the [v2.9 compatibility matrix](docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md).
+Transcription defaults to local CPU `faster-whisper`. On x86_64 Linux with a verified managed CUDA 12 runtime and NVIDIA GPU, CUDA transcription and local add-ons may be set up; otherwise their controls remain fail-closed. Linux support and acceptance boundaries are in [LINUX_EXPERIMENTAL.md](docs/guides/LINUX_EXPERIMENTAL.md). The [v2.9 compatibility matrix](docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md) is the historical release evidence record.
 
 > **Upgrading from "Meeting Transcriber"?** The new app uses a fresh user-data folder (`%APPDATA%\AvaNevis` on Windows, `~/Library/Application Support/AvaNevis` on macOS, `~/.config/avanevis` on Linux), so old recordings won't auto-appear. Move the old folder's contents into the new one to keep your history. The first AvaNevis update prompt for existing Meeting Transcriber installs opens the GitHub release page in your browser instead of auto-downloading; future AvaNevis-to-AvaNevis updates restore the direct-download path.
 
@@ -132,7 +134,7 @@ AI Add-ons are optional and live under Settings. They are not required for recor
 - **Expected size:** the default summary model is about 5.7 GB plus platform runtime archives. CUDA setup remains separate and can add several GB.
 - **Outputs:** derived files are saved beside recordings as `*.speakers.json`, `*.summary.json`, and `*.summary.md`; raw transcripts remain the source of truth.
 
-See [docs/development/LOCAL_AI_MODEL_CATALOG.md](docs/development/LOCAL_AI_MODEL_CATALOG.md) for catalog maintenance, [tests/manual/local-ai-addons-checklist.md](tests/manual/local-ai-addons-checklist.md) for manual validation, and the [v2.9 compatibility matrix](docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md) for Linux evidence and remaining gates. Linux Pyannote is unavailable; Linux Speakrs and summaries require admitted CUDA and have no CPU or cloud fallback.
+See [docs/development/LOCAL_AI_MODEL_CATALOG.md](docs/development/LOCAL_AI_MODEL_CATALOG.md) for catalog maintenance, [tests/manual/local-ai-addons-checklist.md](tests/manual/local-ai-addons-checklist.md) for manual validation, and the [v2.9 compatibility matrix](docs/development/V2_9_DEPENDENCY_COMPATIBILITY.md) for the historical Linux evidence. Linux Pyannote is unavailable; Linux Speakrs and summaries require admitted CUDA and have no CPU or cloud fallback.
 
 ### Build installers
 

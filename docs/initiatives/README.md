@@ -5,7 +5,8 @@ Planned or active future work lives here. Completed designs should move to `../c
 ## Active / planned
 
 - [Roadmap](ROADMAP.md)
-- [Linux support](LINUX_SUPPORT.md) — Core Beta shipped; v2.9 Linux-AI evidence and remaining gates are in the compatibility matrix
+- [Parakeet integration — v2.10 plan](../superpowers/plans/2026-09-06-parakeet-integration.md) — English-only optional engine; target all three platforms, ship validated combinations; speed/resource qualification and implementation pending
+- [Linux support](LINUX_SUPPORT.md) — Core Beta and the accepted v2.9 Linux-AI work are shipped; evidence is in the compatibility matrix
 - [AUR packaging and release automation](AUR_PACKAGING_AND_AUTOMATION.md)
 - [Acoustic echo cancellation](FEATURE_ECHO_CANCELLATION.md)
 - [Audio setup wizard](FEATURE_SETUP_WIZARD.md)

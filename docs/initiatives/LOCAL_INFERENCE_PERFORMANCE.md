@@ -1,6 +1,6 @@
 # Local inference performance — future spike
 
-**Status:** Exploration note only. Not scheduled for v2.9.0. A later pass (for example Fable 5) should turn this into a measurement-first spike before any behavior change.
+**Status:** In v2.10 scope, not implemented or qualified. This exploration note is refined by the [Inference Performance design and implementation plan](../superpowers/plans/2026-09-06-inference-performance.md). Use that plan for current slice boundaries, sequencing, and acceptance; worker ideas below remain candidates for a separate lifecycle design.
 
 ## Intent
 
@@ -46,7 +46,7 @@ Largest remaining numbers. Current knobs are accuracy-first:
 - Each job **spawns a new Python process and reloads the model**
 - Settings default is Small; Medium/Large are much slower
 - Guided transcription is diarize, then transcribe speaker windows
-- Linux Core Beta stays CPU `faster-whisper` until v3.0 add-on phases
+- Linux defaults to CPU `faster-whisper`; explicitly installed managed CUDA is available under existing fail-closed admission gates.
 
 Plausible in-stack wins (needs same-audio A/B, not a blind default flip):
 
@@ -62,7 +62,7 @@ Do **not** default-cut over to whisper.cpp. Windows/Linux quality and CUDA live 
 
 Already llama.cpp with GPU layers `-1` and `--no-warmup`. Remaining waste:
 
-- **`llama-cli` is spawned per generate**, so the GGUF reloads every time
+- **`llama-cli` is spawned per prompt**, including chunk, repair, and merge calls, so a single summary can reload the GGUF multiple times
 - **Context is always 32,768 tokens**, even for a short transcript
 - Long meetings chunk into multiple completions (`backend/summaries/summary_pipeline.py`)
 - 9B/14B catalog entries are much slower than 4B for short meetings
@@ -89,7 +89,7 @@ Measurement first, then **one engine per change**:
 3. Transcribe: warm worker, then Fast/Accurate decode and turbo/distil as an explicit setting.
 4. Summarize: keep-alive + adaptive ctx; leave catalog pins alone.
 
-Hardware A/B must cover WER (or a documented proxy), summary faithfulness on a fixture transcript, Opus decode/playback, and a long-meeting MLX batch check. Linux CUDA / add-ons stay out of scope until Phases 6–9.
+Hardware A/B must cover WER (or a documented proxy), summary faithfulness on a fixture transcript, Opus decode/playback, and a long-meeting MLX batch check. Include Linux managed CUDA and admitted add-ons where available; preserve independent component gates and CPU-only behavior when they are unavailable. The linked v2.10 plan supersedes this exploratory ordering: qualify bounded changes before designing persistent workers.
 
 ## Entry criteria for a future release
 

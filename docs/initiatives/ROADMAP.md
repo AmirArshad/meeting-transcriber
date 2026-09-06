@@ -69,9 +69,29 @@ This document outlines what's shipped, what's in flight, and what's planned. Ava
 
 ---
 
-## In progress
+## Current release
 
-v2.9 Linux-AI add-ons are accepted. CUDA Whisper, Linux Speakrs (including the Windows x64 never-installed check), and CUDA-only Qwen summaries have recorded evidence. The next v2.9 lane is capture-mode selection. See root [`todo.md`](../../todo.md) and the [compatibility matrix](../development/V2_9_DEPENDENCY_COMPATIBILITY.md).
+**v2.9.0 is released.** It delivered Electron 44.1.0, dependency and
+reliability maintenance, the Omarchy-inspired UI refresh, explicit capture
+modes, and the accepted Linux CUDA/AI lanes. The [v2.9 release notes](../releases/v2.9.0.md)
+and [compatibility matrix](../development/V2_9_DEPENDENCY_COMPATIBILITY.md)
+are the historical release records.
+
+## Next release: v2.10 scope
+
+The v2.10 scope is committed in [`todo.md`](../../todo.md). It includes:
+
+- language/model cleanup: remove Farsi/Persian, review other poor-performing languages, add Whisper Large, and remove Tiny/Base;
+- optional English-only Parakeet transcription: target Windows, Apple Silicon macOS, and Linux, enabling only validated combinations; prioritize speed and lower resource use, with accuracy improvement optional. See the [Parakeet integration plan](../superpowers/plans/2026-09-06-parakeet-integration.md) for design, qualification, and implementation phases;
+- language-aware summarisation: constrain Qwen to supported languages, match summary language to transcript language, and explore better current models;
+- Settings and navigation UX improvements, including Linux Speakrs presentation, accurate removal warnings, clearer enable/disable terminology, AI log timestamps, and refreshed Record/app icons;
+- meeting rename click-away saving and cross-platform shortcuts for recording and navigation;
+- the existing inference-performance work from [Local inference performance](LOCAL_INFERENCE_PERFORMANCE.md), refined in the [design and implementation plan](../superpowers/plans/2026-09-06-inference-performance.md).
+
+This section records scope only. The [v2.10 plan index](../superpowers/plans/2026-09-06-v2.10.md)
+links the Parakeet and inference-performance designs and acceptance approaches;
+implementation and platform qualification remain open.
+Other items still need their detailed design, sequencing, and acceptance planning.
 
 ## Planned
 
@@ -103,13 +123,12 @@ Longer horizon, lower priority:
 
 - **Linux expansion.** Broader desktop/hardware validation beyond the supported Core Beta hosts, including the still-open Ubuntu desktop recording/`safeStorage` smoke. Reference: [LINUX_SUPPORT.md](LINUX_SUPPORT.md).
 - **Setup wizard.** Guided first-time configuration. Reference: [FEATURE_SETUP_WIZARD.md](FEATURE_SETUP_WIZARD.md).
-- **Optional private meeting-object sync** to user-controlled storage (never to a hosted AvaNevis backend). See [Meeting objects and private sync](MEETING_OBJECTS_AND_PRIVATE_SYNC.md); the concept is not scheduled for v2.9.0.
-- **Local inference performance** (encode / Whisper / llama.cpp knobs and warm workers; stay on Electron + Python). See [Local inference performance](LOCAL_INFERENCE_PERFORMANCE.md); not scheduled for v2.9.0.
+- **Optional private meeting-object sync** to user-controlled storage (never to a hosted AvaNevis backend). See [Meeting objects and private sync](MEETING_OBJECTS_AND_PRIVATE_SYNC.md); not scheduled for v2.10.
+- **Local inference performance** (encode / Whisper / llama.cpp knobs and warm workers; stay on Electron + Python). See [Local inference performance](LOCAL_INFERENCE_PERFORMANCE.md); included in v2.10 scope.
 - **Companion mobile apps** (iOS / Android) for remote review.
 - **Localized UI** (Spanish, French, etc.).
 - **Semantic search** across transcripts.
 - **Meeting templates** with preset device + model configuration.
-- **Global keyboard shortcuts** for start/stop recording.
 
 ---
 
