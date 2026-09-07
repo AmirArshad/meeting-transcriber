@@ -166,6 +166,10 @@ swift build -c release --arch arm64              # macOS helper; run inside swif
 
 For recorder changes, also run the manual smoke checklist in `tests/manual/recording-smoke-checklist.md`.
 
+## Coding agent setup
+
+Codex, Claude Code, OpenCode and Cursor share root AGENTS.md and canonical on-demand skills. Follow the [agent setup guide](.agents/README.md) for Linux/macOS, native Windows and WSL bootstrap commands, then restart your agent. Claude uses relative links; the other tools discover `.agents/skills/` natively. Detailed rules live in [the contract directory](docs/development/contracts/).
+
 ## How it works
 
 1. **Pick devices.** Choose a mic, a desktop-audio loopback device, the language, and a Whisper model size in the Settings tab.

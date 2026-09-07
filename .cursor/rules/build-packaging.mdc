@@ -4,8 +4,4 @@ globs: build/**,package.json,src/updater.js,.github/workflows/build-release.yml,
 alwaysApply: false
 ---
 
-# Build and release packaging
-
-You are editing packaging. In `AGENTS.md`, read **Critical invariants → Build packaging** — it carries the four files that must stay aligned, the `AVANEVIS_PACKAGED=1` path-hardening rule, and the updater filename coupling.
-
-Step-by-step procedures: `docs/development/BUILD_INSTRUCTIONS.md`, `docs/development/INSTALLER_IMPLEMENTATION.md`.
+Read `docs/development/contracts/packaging.md` before changing matching files.

@@ -4,8 +4,4 @@ globs: tests/**,.github/workflows/**
 alwaysApply: false
 ---
 
-# Validation and CI
-
-You are editing tests or CI. In `AGENTS.md`, read **Validation** — it lists the check command per toolchain, when to escalate to `npm run test:all`, what CI does and does not cover, and the characterization gates that pin the IPC and recorder contracts.
-
-Where new tests go: pure helpers → `tests/js/` or `tests/python/` alongside the existing patterns. Recorder stdout, IPC, or cache semantics → extend the existing contract tests (`main-process-helpers`, `recorder-event-contract`, `test_transcriber_helpers`, `ai-addon-*`) rather than adding a parallel suite.
+Read `docs/development/TESTING.md` before changing matching files.

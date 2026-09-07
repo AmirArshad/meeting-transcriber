@@ -1,0 +1,4 @@
+# Portable agent bootstrap scripts; Git symlink blobs are not text-normalized.
+scripts/agents/*.sh text eol=lf
+scripts/agents/*.ps1 text eol=lf
+scripts/agents/*.py text eol=lf

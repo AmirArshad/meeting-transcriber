@@ -4,8 +4,4 @@ globs: swift/**,backend/audio/macos_recorder.py,backend/audio/swift_audio_captur
 alwaysApply: false
 ---
 
-# macOS Swift audio helper
-
-You are editing the macOS desktop-capture path. In `AGENTS.md`, read **Critical invariants → macOS desktop audio capture** in full — it is the densest set of gotchas in the repo.
-
-It covers the raw-float32-stdout / JSON-stderr split, gap zero-fill and its 3-minute cap, the no-float64-upcast rule, the multi-buffer interleaving trap, the System Audio Recording vs Screen Recording distinction, and the packaging/signing checklist.
+Read `docs/development/contracts/macos-audio.md` before changing matching files.

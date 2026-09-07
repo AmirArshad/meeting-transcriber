@@ -4,8 +4,4 @@ globs: src/main.js,src/main/**/*.js,src/preload.js,src/renderer/**,src/main-proc
 alwaysApply: false
 ---
 
-# Electron IPC surface
-
-You are editing the IPC surface. In `AGENTS.md`, read **IPC channel ownership** for the channel→service table, plus **Facades whose export shape is pinned**.
-
-Renaming or re-shaping a channel means updating the owning `src/main/` service, `src/preload.js`, and **every** renderer call site — source-scan tests pin the channel names. Prefer new logic in `src/main-process/` or a `src/main/` service over growing `src/main.js`.
+Read `docs/development/contracts/ipc.md` before changing matching files.

@@ -1,10 +1,5 @@
-# Claude Code project config
+# Claude Code adapter
 
-Commit-able Claude Code artifacts live here:
+Root `CLAUDE.md` imports `AGENTS.md`. Project skills are relative links to the canonical `.agents/skills/` tree, not copies. Setup, Windows junction fallback and verification are documented in [the agent setup guide](../.agents/README.md).
 
-- `rules/` — `.md` rules. **A rule without a `paths:` frontmatter field loads on every request**; add `paths:` to scope it to matching files.
-- `skills/` — the only place Claude Code discovers project skills. This repo instead keeps skills in `.agents/skills/` and routes to them from root `CLAUDE.md`; see the table there.
-
-Local-only (gitignored): `settings.local.json`, and root `CLAUDE.local.md`.
-
-Entry point is root `CLAUDE.md`, which imports `AGENTS.md`. Do not add a `.claude/CLAUDE.md` as well — both would load.
+Personal settings belong in ignored `settings.local.json` and root `CLAUDE.local.md`. Do not add another `.claude/CLAUDE.md`. If path-scoped `.claude/rules/*.md` are introduced, supply `paths` frontmatter; unscoped rules load unconditionally. Keep shared workflow prose in its canonical owner.

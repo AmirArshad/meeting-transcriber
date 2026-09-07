@@ -1,11 +1,7 @@
 ---
 description: Meeting history persistence — locks, atomic writes, import IDs
-globs: backend/meeting_manager.py,backend/meetings/**,tests/python/**/test*meeting*,src/main.js,src/renderer/**
+globs: src/main/meeting-manager-client.js,backend/meeting_manager.py,backend/meetings/**,tests/python/**/test*meeting*,src/main.js,src/renderer/**
 alwaysApply: false
 ---
 
-# Meeting metadata persistence
-
-You are editing meeting persistence. In `AGENTS.md`, read **Critical invariants → Meeting metadata persistence**, plus the **Saved meeting filenames or locations** entry under **Cross-cutting change checklists**.
-
-Locking, atomic writes, transactional add, corrupt-file backups, and suffixed-ID preservation are data-integrity constraints — preserve them. User-facing behavior: `docs/guides/MEETING_TRANSCRIPTION.md`.
+Read `docs/development/contracts/meeting-persistence.md` before changing matching files.

@@ -1,11 +1,7 @@
 ---
 description: Local AI add-ons — catalog, privacy, setup, and compute queue
-globs: src/ai-addon*.js,backend/diarization/**,backend/summaries/**,tests/js/ai-addon*.test.js,docs/development/LOCAL_AI_MODEL_CATALOG.md
+globs: src/ai-addon/**,src/main/*ai*.js,src/main/*gpu*.js,src/main/*summary*.js,src/main/*transcription*.js,src/ai-addon*.js,backend/diarization/**,backend/summaries/**,tests/js/ai-addon*.test.js,docs/development/LOCAL_AI_MODEL_CATALOG.md
 alwaysApply: false
 ---
 
-# Local AI add-ons
-
-You are editing local AI add-ons. In `AGENTS.md`, read **Critical invariants → Local AI add-ons: catalog-driven and explicit**, then **Summary finalization must not be interrupted** and **GPU compute serialization and timeouts**.
-
-Hard constraints live there: user-owned Hugging Face token only, `safeStorage`, the `HF_TOKEN_PATH=""` trap, HTTPS + `DOWNLOAD_REDIRECT_HOSTS` allowlist with no wildcards, pinned SHA-256, path-traversal-guarded extraction, and never deleting committed sidecars.
+Read `docs/development/contracts/local-ai.md` before changing matching files.

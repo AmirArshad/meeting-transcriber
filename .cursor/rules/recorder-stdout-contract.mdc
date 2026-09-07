@@ -4,8 +4,4 @@ globs: backend/audio/**,src/main.js,src/main/recorder-service.js,src/main-proces
 alwaysApply: false
 ---
 
-# Recorder stdout contract
-
-You are editing the recorder control contract. In `AGENTS.md`, read **Critical invariants → Recorder stdout is the control contract**, then **Recording data-loss guards** and **Post-processing mix architecture**.
-
-Highest-cost mistakes here: driving control flow from stderr, changing startup/progress on one side only, and exiting a failed stop without a structured `success:false` payload.
+Read `docs/development/contracts/recording.md` before changing matching files.

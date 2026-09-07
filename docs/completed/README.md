@@ -26,4 +26,4 @@ Implemented designs, completed feature plans, historical audits, remediation sum
 - [Session notes](SESSION_NOTES.md)
 - [Audits](audits/)
 - [TODO archives](todo-archives/)
-- [Archived agent snapshots](archive/)
+- [Archived agent snapshot](archive/AGENT_GUIDE.md) — historical only; never restore as CLAUDE.md or AGENTS.md. Current owners are root AGENTS.md and docs/development/contracts/.

@@ -4,8 +4,4 @@ globs: backend/**
 alwaysApply: false
 ---
 
-# Python backend
-
-You are editing the Python backend. In `AGENTS.md`, read **Critical invariants → Python backend**, plus whichever of these your change touches: **Recorder stdout is the control contract**, **Meeting metadata persistence**, **Local AI add-ons**, **macOS desktop audio capture**.
-
-Quick check after edits: `npm run test:python` then `npm run test:python-syntax`. Module layout detail: `docs/development/BACKEND.md`.
+Read `docs/development/BACKEND.md` before changing matching files.

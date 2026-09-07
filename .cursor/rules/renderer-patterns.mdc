@@ -4,8 +4,4 @@ globs: src/renderer/**,tests/js/history-detail-helpers.test.js,tests/js/update-n
 alwaysApply: false
 ---
 
-# Renderer patterns
-
-You are editing the renderer. In `AGENTS.md`, read **Critical invariants → Renderer conventions**, and **IPC channel ownership** if you are adding or changing a handler.
-
-Non-obvious items it carries: the saved `.md` transcript is the source of truth, meeting rename deliberately does not rename files on disk, and the DPR-aware canvas/scrubber patterns must survive visualizer edits.
+Read `docs/development/contracts/ipc.md` before changing matching files.

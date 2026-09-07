@@ -35,7 +35,7 @@ If an area looks solid, say so briefly and stop. Prefer concrete patches over va
 ```text
 You are reviewing AvaNevis — a privacy-first Electron desktop app (mic + desktop audio → local Whisper). Windows: faster-whisper (+ optional CUDA). macOS Apple Silicon: MLX + Swift CoreAudio tap helper. Optional local AI: exclusive Speakrs (token-free) or pyannote diarization, llama.cpp summaries. No cloud transcription / no telemetry.
 
-Canonical contracts: root AGENTS.md. Do not invent a second architecture.
+Canonical contracts: docs/development/contracts/, indexed by root AGENTS.md. Do not invent a second architecture.
 
 Rules for this session:
 - Review ONLY the theme and allowed paths below. Do not review the whole app.

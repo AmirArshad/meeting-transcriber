@@ -75,3 +75,12 @@ CLAUDE.local.md
 
 # Agent
 .agent/
+
+# Personal agent overlays and tool caches (shared instructions remain tracked)
+AGENTS.override.md
+.opencode/node_modules/
+.opencode/package.json
+.opencode/bun.lock
+.opencode/bun.lockb
+.cursor/cache/
+.codex/config.toml

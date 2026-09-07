@@ -1,6 +1,6 @@
 # AvaNevis Agent Guide (archived)
 
-> **Archived 2026-05-18.** Historical snapshot only — not auto-loaded by any tool.
+> **Archived 2026-05-18.** Historical snapshot only. Renamed to AGENT_GUIDE.md to prevent Claude descendant instruction loading.
 >
 > **DO NOT USE for current architecture.** This archive predates the Phase 3 main-process service split (`src/main/*`), AI-addon facades, and Python `meetings/` extraction. File paths and “parse in `src/main.js`” guidance here are obsolete.
 >

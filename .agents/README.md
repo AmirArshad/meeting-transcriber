@@ -1,33 +1,66 @@
-# Project Agent Skills
+# Project agent setup
 
-Skills are folders with a `SKILL.md` (Agent Skills open standard).
+Root `AGENTS.md` is the canonical always-on guide. Its fixed order is identity, quick commands, repo map, invariants/do-not, working agreements, skills index, deeper-doc paths. Edit it only for explicit instruction work; keep dates, task status, machine paths and generated inventories out. Detailed cross-process rules live in `docs/development/contracts/`; skill bodies load on demand.
 
-**Discovery is not uniform — verify before assuming.** Claude Code does **not** scan `.agents/skills/`; its skill paths are `.claude/skills/`, `~/.claude/skills/`, plugins, and enterprise locations. Root `CLAUDE.md` therefore carries a small router table for the general project-skill set. The official `frontend-design` skill is the deliberate exception: `npx skills` copies its upstream body to both `.agents/skills/frontend-design/` and `.claude/skills/frontend-design/`, a scoped Cursor router loads the canonical copy for `src/renderer/**`, and OpenCode reads both the canonical skill path and the router via its committed configuration.
+## Layout and tools
 
-This repo keeps a **lean** set on purpose: avoid skills that auto-invoke on every turn or force heavy workflows (those burn tokens hard, especially on large models).
+- **Codex CLI / IDE:** discovers root AGENTS.md and canonical `.agents/skills/*/SKILL.md` natively. Start at the repository root. Use `/skills` to inspect discovery or `$name` to select a skill. Home instructions and skills can also affect the session.
+- **Claude Code:** root CLAUDE.md contains the literal `@AGENTS.md` import. `.claude/skills/<name>` links to `../../.agents/skills/<name>`. Restart after bootstrapping, inspect `/context`, and invoke `/name`. Personal skills can override project names; plugins are namespaced. Do not add another `.claude/CLAUDE.md` or copy skill bodies.
+- **OpenCode:** reads AGENTS.md and `.agents/skills/` natively. `opencode.json` contains settings/permissions only; do not load Cursor rules through `instructions`. Run `opencode debug skill` to inspect discovery; no model call is needed.
+- **Cursor:** reads AGENTS.md and `.agents/skills/` natively. `.cursor/rules/*.mdc` contains only glob-scoped contract/skill pointers. Inspect Customize → Skills after reopening the workspace. No `.cursor/skills/` or `.opencode/skills/` mirrors are needed.
 
-## Installed (kept)
+All 16 existing skills remain; the authoritative name/trigger index is in AGENTS.md. Generic routers, forced brainstorming/TDD and browser/MCP packs previously removed from this repo remain absent. This migration creates no new workflow skills. The four explicit-only helpers (`grill-me`, `grill-with-docs`, `handoff`, `to-spec`) keep Claude/Cursor `disable-model-invocation`; Codex uses `agents/openai.yaml` policy. OpenCode ignores that extension, so the canonical index and descriptions also state explicit-only use. This is a workflow instruction, not an access-control boundary.
 
-| Skill | Why |
-| --- | --- |
-| `writing-plans` / `executing-plans` / `finishing-a-development-branch` | Multi-step work without always-on tax |
-| `verification-before-completion` | Evidence before “done” claims |
-| `systematic-debugging` | Root-cause debugging when something breaks |
-| `requesting-code-review` | Structured review requests |
-| `gh-fix-ci` / `gh-address-comments` | PR CI + review comment loops |
-| `security-best-practices` / `security-threat-model` | Explicit security reviews only |
-| `grill-me` / `grill-with-docs` / `handoff` / `to-spec` | Manual-only (`disable-model-invocation`) planning helpers |
-| `skill-creator` | Author new project skills when needed |
-| `frontend-design` | Official Anthropic guidance for deliberate visual-system and renderer UI work |
+Use portable name/description/metadata frontmatter. Descriptions are unquoted scalars without colon-space or angle brackets. License and handoff hint metadata remain available; LICENSE.txt files are unchanged. Existing licenses and repo adaptations must survive updates. `skills-lock.json` records upstream provenance; `localModified` is a human warning, not proof that an updater will protect edits. Review upstream changes into the canonical tree, reapply local changes, then rerun setup and validation. Do not run a bulk skills installer that replaces links with copies.
 
-## Intentionally removed
+Tool-specific subagent definitions, if needed later, belong separately in `.claude/agents/` and `.opencode/agents/`; their frontmatter is incompatible. Do not symlink those definitions. No such directories are needed now.
 
-Aggressive Superpowers routers (`using-superpowers`, `brainstorming`, forced TDD), browser/MCP packs, and other high auto-trigger / large-body skills. Re-add surgically later if a workflow needs them.
+## Linux and macOS
 
-Provenance: root `skills-lock.json`. Refresh kept skills with `npx skills update` when desired.
+From a fresh checkout at the repository root:
 
-Do not duplicate the general skill tree into `.claude/skills/` or `.cursor/skills/`. The vetted `frontend-design` copy is the one exception because direct Claude discovery is a stated cross-tool requirement; update it only with `npx skills update frontend-design --project --yes` so both official copies and `skills-lock.json` remain aligned. Cursor uses a short router instead of a second body copy.
+```sh
+sh scripts/agents/link_skills.sh
+sh scripts/agents/link_skills.sh --check
+npm ci
+python3 scripts/agents/validate_setup.py
+python3 scripts/agents/test_link_skills.py
+```
 
-## Local modifications vs upstream
+The linker requires only POSIX sh, ln, readlink and basic POSIX utilities, including BSD userland. It is idempotent, refuses real directories, repairs exact Git link stubs, removes stale links and detects dangling links. The validator uses Python 3 and the existing npm-installed js-yaml parser. No global skill installer is required. Existing real copies cause a refusal; compare and preserve local edits before removing those copies explicitly.
 
-Every skill here is vendored, with an upstream `computedHash` in root `skills-lock.json`. Editing one breaks that hash and `npx skills update` will overwrite the edit. Locally modified skills are marked `"localModified": true` in the lock file — re-apply those changes by hand after any update.
+## Windows native
+
+Preferred: enable Developer Mode (or use an elevated shell), then clone with real symlinks:
+
+```powershell
+git -c core.symlinks=true clone https://github.com/AmirArshad/meeting-transcriber.git
+Set-Location meeting-transcriber
+git config core.symlinks true
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/agents/link_skills.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/agents/link_skills.ps1 --check
+npm ci
+py -3.11 scripts/agents/validate_setup.py
+py -3.11 scripts/agents/test_link_skills.py
+```
+
+In an existing clone, start with `git config core.symlinks true`; the script replaces exact symlink text stubs without rewriting unrelated files. Without symlink privilege the same PowerShell script falls back to directory junctions. For already tracked mode-120000 skill links it sets `git update-index --skip-worktree`; this is local index metadata and stages no content. Untracked links cannot receive that flag; the script warns to rerun after the migration is committed. After pulling added/removed skills, rerun setup and `--check`. Junctions use absolute local targets, so rerun after moving the checkout. To resume Git management of a junction entry, remove that junction only (never recursively delete its target), then run `git update-index --no-skip-worktree -- .claude/skills/<name>` and rerun the linker.
+
+Git Bash's default `ln -s` can copy instead of linking. If using Git Bash with symlink privilege:
+
+```sh
+MSYS=winsymlinks:nativestrict sh scripts/agents/link_skills.sh
+sh scripts/agents/link_skills.sh --check
+```
+
+Use PowerShell checks for junction checkouts; the POSIX check intentionally requires relative symbolic links. Script LF endings are pinned in `.gitattributes`. Git's mode-120000 symlink blobs bypass text/eol conversion; no broad normalization or binary policy was introduced.
+
+## Windows through WSL
+
+Clone on WSL's Linux filesystem and run the Linux commands inside WSL. Linux symlink creation/checking is unaffected when that checkout is viewed from Windows via `\\wsl.localhost\<distribution>\...` (UNC). This does not guarantee a native Windows agent resolves every Linux target; run agents inside WSL for that route. A checkout on `/mnt/c` instead inherits NTFS/DrvFS and Windows link constraints; use the native setup route or move the checkout onto the WSL filesystem.
+
+## Verification and maintenance
+
+Run `python3 scripts/agents/validate_setup.py` (Windows `py -3.11 ...`) and the link tests after changing setup. During this migration only, add `--migration-check` to compare skill bodies and relocated sections with HEAD. It never stages or changes Git content. Restart tool sessions after changes; existing sessions may retain earlier metadata. Global duplicate skills and trust/settings overrides are environment concerns, not something this repo can silently remove.
+
+The [audit](../docs/development/AGENT_SETUP_AUDIT.md) records before/after evidence, preservation hashes, per-tool limits and platform verification gaps. The [implementation plan](../docs/superpowers/plans/2026-09-07-agent-setup.md) cites the live documentation. Prompt-cache hit rate depends on each tool's full prompt construction; this setup reduces stable prefix size but does not claim a measured cache-hit percentage.

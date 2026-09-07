@@ -85,4 +85,20 @@ npm run test:python-syntax
 - Meeting metadata writes must preserve file locks, atomic temp-file writes, corrupt backups, and transactional add/delete behavior.
 - Optional AI add-ons must never write Hugging Face tokens to logs, metadata, transcripts, summaries, or progress events.
 
-For the complete cross-process invariants, use root `AGENTS.md`.
+For complete cross-process invariants, follow the contract index in root `AGENTS.md` to `docs/development/contracts/`.
+
+### Python backend
+
+Spawned per-invocation by `src/main/` services — not a long-running server. Platform split is explicit and intentional: `windows_recorder.py` vs `macos_recorder.py` vs `linux_recorder.py`, `faster_whisper_transcriber.py` vs `mlx_whisper_transcriber.py`. Shared stdout emitters live in `backend/audio/recorder_stdout.py`; platform recorders keep thin `_send_*` wrappers so the Electron contract stays stable. Module layout detail: `docs/development/BACKEND.md`.
+
+**Windows gotcha:** manifest-less `*.capture` cleanup must probe `session.lock` with `timeout=0`, re-check `manifest.json`, **release the lock, then** `rmtree`. Releasing before the delete is mandatory on Windows — an open lock file cannot be removed.
+
+## Maintenance hotspots
+
+- `src/main.js` — composition root; easy to regress via quit/compute-queue or path resolution.
+- `src/renderer/app.js` — the largest file and the biggest hotspot; many implicit assumptions, controller extraction deferred.
+- `src/main/recorder-service.js`, `transcription-service.js` — most IPC and subprocess orchestration.
+- `backend/audio/windows_recorder.py` — timing-, sample-rate-, and callback-sensitive.
+- `backend/audio/macos_recorder.py` — threading + native helper + permission edge cases.
+- `backend/audio/linux_recorder.py` — Pulse/PipeWire SoundCard capture; vanished-monitor poll; linux-v1 finalization.
+- `build/prepare-resources.js` — packaging-critical and platform-specific.

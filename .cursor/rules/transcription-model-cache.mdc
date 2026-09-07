@@ -4,8 +4,4 @@ globs: src/main-process-helpers.js,src/main-process/transcription-*.js,src/main.
 alwaysApply: false
 ---
 
-# Transcription model cache
-
-You are editing the Whisper cache / offline spawn policy. In `AGENTS.md`, read **Critical invariants → Transcription model cache and offline runtime**.
-
-It carries the cache locations, the exact completeness file lists, the four implementation sites that must stay aligned, and the rule that the Whisper cache is separate from the diarization HF cache.
+Read `docs/development/contracts/local-ai.md` before changing matching files.

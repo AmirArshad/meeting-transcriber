@@ -240,3 +240,23 @@ py -3.11 -m pytest tests/python
 
 That can still happen. Run the manual smoke checklist in `tests/manual/recording-smoke-checklist.md`.
 If the change touches recorder failure handling or process messaging, also compare output against the representative fixtures in `tests/manual/fixtures/`.
+
+## Validation
+
+Check commands per toolchain — full setup lives in `README.md`:
+
+- JS: `npm test` (regression suite + `node --check` over all `src/**/*.js`)
+- Python: `npm run test:python`, `npm run test:python-syntax`
+- Everything: `npm run test:all`
+- Device smoke: `python backend/device_manager.py`
+- macOS helper: `swift build -c release --arch arm64` inside `swift/AudioCaptureHelper`
+
+**Which one to run.** Start with the smallest relevant command. Escalate to `npm run test:all` when the change is cross-cutting, or touches recorder, persistence, packaging, or security — and always before opening a PR. These two rules do not conflict: small-first is for iterating, `test:all` is the pre-PR gate.
+
+Hardware-dependent paths are covered by manual checklists, not CI: `tests/manual/recording-smoke-checklist.md` and `tests/manual/local-ai-addons-checklist.md`. Targeted adversarial review prompts: `docs/development/ADVERSARIAL_REVIEW_PROMPTS.md`.
+
+**Fakes must model the real dependency.** A green suite is not evidence when the test double is shaped more conveniently than the library. The 2026-08-28 Linux pre-merge review found three defects hidden this way — `is_pulse_port_unavailable` matched every `FakePort` and no real `pulsectl.EnumValue`, and no tray test ever decoded an actual image file. When a helper interprets a third-party object or a shipped asset, assert against the real type (`pytest.importorskip`) or the real bytes, not only a hand-written stand-in.
+
+CI runs JS + Python tests, recursive backend `compileall`, JS syntax checks, manifest tests, and packaged-build smoke — **not** full end-to-end with real audio devices. Characterization gates worth knowing about: IPC/compute-queue source scans and facade export snapshots in `tests/js/`, plus recorder stdout contracts in `tests/js/recorder-event-contract.test.js` and `tests/python/test_recorder_event_contract.py`.
+
+Non-obvious validation targets: transcript JSON shape still matches renderer expectations; complete-cache detection stays aligned across JS and Python; add-on status still covers `notConfigured`, `needsAccount`, `downloading`, `validating`, `ready`, `error`, `unsupported`; Windows speaker prompts stay behind CUDA readiness; summary setup cancellation removes partial files **without** deleting a previously valid install.
