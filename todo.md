@@ -15,6 +15,8 @@ Design links and sequencing boundaries: [v2.10 plan index](docs/superpowers/plan
 
 ### Transcription and language support
 
+Design and file-level plan for the four Whisper/language items below: [Language/model policy and Whisper Large](docs/superpowers/plans/2026-09-07-language-model-policy-whisper-large.md). Separate policy/migration, Large qualification, and language-evaluation slices; design only, with no implementation or acceptance evidence yet.
+
 - [ ] Remove Farsi/Persian from the language list because of poor observed performance.
 - [ ] Explore whether any other currently listed languages also have poor performance and should be removed.
 - [ ] Add Whisper Large as a transcription model option.
@@ -23,6 +25,8 @@ Design links and sequencing boundaries: [v2.10 plan index](docs/superpowers/plan
 
 ### Summarisation
 
+Design and file-level plan: [Qwen language support and alternative summarisation models](docs/superpowers/plans/2026-09-07-summary-languages-and-models.md). Independent language-support and alternative-model qualification slices; design only, with no implementation or acceptance evidence yet.
+
 - [ ] Explore which languages the current Qwen summarisation model actually supports.
 - [ ] Enable summarisation only for the supported languages retained by the product.
 - [ ] Ensure Qwen summary output matches the language of the transcript.
@@ -30,8 +34,10 @@ Design links and sequencing boundaries: [v2.10 plan index](docs/superpowers/plan
 
 ### Settings and navigation UX
 
+Design and implementation slices: [Settings, navigation and keyboard shortcuts](docs/superpowers/plans/2026-09-07-settings-navigation-shortcuts.md). Design only; Speakrs removal will preserve Hugging Face tokens, and no implementation or platform acceptance is claimed.
+
 - [ ] On Linux, remove or redesign the clickable Speakrs tab when Speakrs is the only available speaker-identification engine.
-- [ ] Fix Speakrs removal warnings so they do not mention Hugging Face tokens; token warnings should apply only to Pyannote removal.
+- [ ] Preserve saved Hugging Face tokens when removing Speakrs and remove token warnings from its confirmation; token deletion and warnings apply only to Pyannote removal.
 - [ ] Revisit Setup / Install Model / Remove Model terminology in favor of clearer feature enable/disable language, without changing underlying functionality.
 - [ ] Add timestamps to the AI Add-ons log in Settings.
 - [ ] Improve the Record navigation icon so it does not imply that clicking it starts recording.
@@ -41,7 +47,7 @@ Design links and sequencing boundaries: [v2.10 plan index](docs/superpowers/plan
 ### Meeting and keyboard UX
 
 - [ ] Save a meeting rename when the user clicks away while editing.
-- [ ] Add cross-platform keyboard shortcuts that avoid system shortcut conflicts, including start recording, stop recording, and navigation to Record, History, and Settings.
+- [ ] Add cross-platform keyboard shortcuts that avoid system shortcut conflicts, including start recording, stop recording, and navigation to Record, History, and Settings. [Design and implementation plan](docs/superpowers/plans/2026-09-07-settings-navigation-shortcuts.md), with app-focused defaults pending platform conflict checks.
 
 ### Performance
 
