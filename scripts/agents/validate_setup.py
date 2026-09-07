@@ -28,7 +28,7 @@ def main():
     js = """const fs=require('fs'),yaml=require('js-yaml');
     const paths=JSON.parse(fs.readFileSync(0,'utf8'));
     process.stdout.write(JSON.stringify(paths.map(p=>{
-      const s=fs.readFileSync(p,'utf8');
+      const s=fs.readFileSync(p,'utf8').replace(/\\r/g,'');
       if(!s.startsWith('---\\n'))throw Error('Missing frontmatter: '+p);
       const end=s.indexOf('\\n---\\n',4);if(end<0)throw Error('Unclosed frontmatter: '+p);
       return yaml.load(s.slice(4,end));

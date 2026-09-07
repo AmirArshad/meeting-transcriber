@@ -24,7 +24,8 @@ class LinkTests(unittest.TestCase):
         self.links.mkdir(parents=True)
         self.entry = self.links / 'example'
         if os.name == 'nt':
-            self.command = ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(scripts / 'link_skills.ps1')]
+            ps = shutil.which('powershell') or shutil.which('pwsh') or 'powershell'
+            self.command = [ps, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(scripts / 'link_skills.ps1')]
             subprocess.run(['git', 'init', '-q', str(self.root)], check=True)
         else:
             self.command = ['sh', str(scripts / 'link_skills.sh')]
