@@ -46,7 +46,7 @@ markdown-it-py==4.2.0
 mdurl==0.1.2
 shellingham==1.5.4
 typing-extensions==4.16.0
-anyio==4.14.2
+anyio==4.15.0
 mlx==0.32.2
 more-itertools==11.1.0
 numba==0.67.0
