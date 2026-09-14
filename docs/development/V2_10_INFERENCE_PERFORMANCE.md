@@ -222,3 +222,118 @@ evidence.** The work qualifies a fresh-process MLX baseline only. The fixture's
 name/number/beginning misses and the missing long-meeting/guided/diverse-audio
 coverage fail the quality gate for a beam/model/batch or product-mode change.
 MLX batch size remains 1, and no production source file was changed.
+
+## Apple Silicon summary context qualification — 2026-09-14
+
+This is a local, baseline-only qualification of the existing per-prompt
+llama.cpp summary path. It makes no production runtime, context, prompt,
+chunking, IPC, queue, persistence, or worker-lifetime change.
+
+### Inputs and environment
+
+- Hardware/OS: Apple M4 Pro (14 CPU cores, 48 GB unified memory), macOS
+  26.6.2 (25G83), arm64. AC power, 100% charged; Low Power Mode was off and
+  High Power Mode was off. Filesystem-cache state was not controlled. Each
+  trial was a new Python and llama-cli process; no model process remained
+  resident between trials.
+- App revision: `a1cae70d4a5b4c2927cca0230ddc2648b54f4a75`; Python 3.11.16.
+- Model: installed catalog default `qwen3.5-9b-q4-k-m`, Qwen3.5 9B Q4_K_M;
+  5,680,522,464 bytes, SHA-256
+  `03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8`.
+- Runtime: installed catalog target `llama-cpp-b9173-darwin-arm64-metal`,
+  llama.cpp b9173 / commit `49d1701bd24e4cedf6dfec9e50e185111203946b`.
+  `llama-cli --version` reported `9173 (49d1701bd)`, built with AppleClang
+  15.0.0.15000309 for Darwin arm64. `llama-cli` SHA-256:
+  `eec00d923f7f1307ca01691e86c7cb8e98fe5ded327cd1352559bca8fac3992d`.
+  The bundled `llama-tokenize` SHA-256 was
+  `4020ace3f31b976f585b85215a6516d1954296123fb6869f7c02e7ed14f01ae9`.
+- Configuration: existing `detailed` profile, `--ctx-size 32768`,
+  `--predict 2600`, `--n-gpu-layers -1`, temperature 0.1, no warmup, and the
+  existing one-CLI-invocation-per-prompt lifecycle. Actual Metal device/VRAM
+  telemetry is unavailable from this production invocation; `-1` requests all
+  layers and the catalog target is Metal, but that is not treated as measured
+  actual-device evidence.
+
+The explicit, non-user fixtures were added under `tests/fixtures/`:
+
+| Fixture | SHA-256 | Shape | Expected evidence checked manually |
+| --- | --- | --- | --- |
+| `summary-context-qualification-en.md` | `c9b25c781837ed5acf8f930c65f0b8741590c5d205321b3bf3a87ca8db13a101` | English, one chunk | approval date, three owners/actions, vendor risk, open support coverage |
+| `summary-context-qualification-fa.md` | `168ece091228518b8f20594e8155f5d48fb9df9e4abf7ad96bb64372b92ae510` | Persian, one chunk | same facts in Persian, including Tuesday October 6 |
+
+Raw outputs and sidecars were kept only in a local scratch directory outside
+the repository; the report does not retain prompt or transcript text. The
+first six exploratory runs used speaker names
+in a markdown form that `parse_markdown_transcript` does not recognize. They
+completed but produced empty-content summaries, so they are recorded as
+fixture-construction failures and excluded. A combined re-run then overlapped
+two CLI processes after the terminal collection window elapsed; those partial
+trials are also excluded. The six raw trials below were rerun singly, in the
+foreground, after no summary process was active.
+
+### Unmodified 32k raw trials
+
+`real` and CPU are `/usr/bin/time -l` measurements in seconds, converted to
+milliseconds below. Peak RSS is the tool's maximum-resident-set field. The
+runner gives progress boundaries, but it has no production timing hooks around
+complete prompt construction, native load, prompt evaluation, generation, or
+persistence; those components are explicitly unavailable rather than derived
+by subtraction.
+
+| Fixture / trial | Total fresh-process ms | CPU ms (user + system) | Peak RSS bytes | Outcome / quality |
+| --- | ---: | ---: | ---: | --- |
+| English / 1 | 18170 | 960 + 470 | 7030063104 | Completed; all checked facts present. |
+| English / 2 | 18000 | 1010 + 480 | 7024951296 | Completed; all checked facts present. |
+| English / 3 | 18180 | 970 + 470 | 7024803840 | Completed; all checked facts present. |
+| Persian / 1 | 20080 | 1040 + 490 | 7027326976 | Completed, but changed Tuesday to Wednesday. |
+| Persian / 2 | 17860 | 990 + 470 | 7027048448 | Completed, but changed Tuesday to Wednesday. |
+| Persian / 3 | 18700 | 1010 + 480 | 7027294208 | Completed, but changed Tuesday to Wednesday. |
+
+| Fixture | Successful process median [range] ms | CPU total median [range] ms | Peak RSS range bytes | Prompt construction / runtime load / generation / persistence |
+| --- | ---: | ---: | ---: | --- |
+| English | 18170 [18000–18180] | 1440 [1430–1490] | 7024803840–7030063104 | unavailable / unavailable / unavailable / unavailable |
+| Persian | 18700 [17860–20080] | 1490 [1460–1530] | 7027048448–7027326976 | unavailable / unavailable / unavailable / unavailable |
+
+The normal CLI's timing line is a rate-only display and does not give a safe
+load/prompt/generation decomposition. `--perf` exists, but it is not among the
+production arguments, so it was not used to derive baseline component times.
+The actual installed b9173 CLI also emitted that `--no-conversation` is not
+supported before continuing its single-turn invocation. This is recorded as
+runtime compatibility evidence; this Task does not alter that existing flag.
+
+### Prompt accounting and context decision
+
+The installed b9173 bundle provides `llama-tokenize --file|--stdin
+--show-count`; it uses the same installed GGUF. Exact rendered-prompt checks
+using the current detailed profile produced 412 tokens for the complete
+English chunk prompt, 52 for the repair prompt, and 490 for a complete merge
+prompt containing one validated chunk summary. This proves an available raw
+prompt tokenizer, including the constructed prompt text.
+
+It does **not** qualify smaller contexts: the existing CLI invocation's
+template/conversation behavior cannot be reconciled with that standalone count
+because the production `--no-conversation` flag is unsupported, and there is
+no validated accounting of resulting template overhead. More importantly, the
+current code has no defined per-call safety headroom policy. The 2,600-token
+detailed output allowance alone is therefore insufficient to establish a
+complete context budget. No 4k, 8k, or 16k candidate was run; no estimated or
+character-based allocation was used. Chunk, repair, and merge counts are kept
+separate and are not reused as one another's budget.
+
+### Decision: retain 32k; reject context promotion
+
+**Retain `LLAMA_CONTEXT_TOKENS = 32768` and make no source change.** The
+prerequisite for safe complete-prompt accounting is incomplete, the required
+long/merge and repair-generation quality coverage is absent, and the Persian
+fixture changed a material date in all three baseline trials. The English
+single-chunk summary was faithful, but it cannot offset that multilingual
+quality failure or establish behavior for chunk/repair/merge calls. Existing
+bounded failure behavior, base-context chunk budgeting, cancellation and
+prior-summary preservation remain unchanged.
+
+This evidence is macOS Apple Silicon only. It makes no Windows or Linux
+performance, compatibility, or actual-device claim. Before reconsidering a
+smaller allocation, qualify the exact runtime's full invocation/template token
+count, explicit output reservation and safety headroom for every prompt type,
+then collect uncontended fresh-process short, long/merge, repair, and retained
+language quality trials.
