@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import builtins
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -12,6 +13,25 @@ SPEC = importlib.util.spec_from_file_location("inference_performance", MODULE_PA
 assert SPEC is not None and SPEC.loader is not None
 benchmark = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(benchmark)
+
+
+def test_peak_rss_is_unavailable_when_resource_module_is_not_supported(monkeypatch):
+    """The benchmark must remain importable on Windows, which lacks resource."""
+    original_import = builtins.__import__
+
+    def reject_resource(name, *args, **kwargs):
+        if name == "resource":
+            raise ModuleNotFoundError("No module named 'resource'", name="resource")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", reject_resource)
+    spec = importlib.util.spec_from_file_location("inference_performance_without_resource", MODULE_PATH)
+    assert spec is not None and spec.loader is not None
+    without_resource = importlib.util.module_from_spec(spec)
+
+    spec.loader.exec_module(without_resource)
+
+    assert without_resource.peak_rss_bytes() is None
 
 
 def _successful_trial(**overrides):

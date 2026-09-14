@@ -14,7 +14,6 @@ import hashlib
 import json
 import os
 import platform
-import resource
 import shutil
 import subprocess
 import sys
@@ -25,6 +24,11 @@ from collections import defaultdict
 from pathlib import Path
 from statistics import median
 from typing import Any, Callable, Iterable
+
+try:
+    import resource
+except ImportError:
+    resource = None
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -131,6 +135,8 @@ def wav_metadata(path: Path) -> dict[str, float | int]:
 
 
 def peak_rss_bytes() -> int | None:
+    if resource is None:
+        return None
     try:
         # macOS reports ru_maxrss in bytes; Linux reports KiB. The harness labels
         # this explicitly and normalizes Linux only, retaining unavailable on error.
