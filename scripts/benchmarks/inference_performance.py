@@ -130,6 +130,24 @@ def wav_metadata(path: Path) -> dict[str, float | int]:
         return {"duration_ms": reader.getnframes() * 1000.0 / reader.getframerate(), "channels": reader.getnchannels(), "sample_rate": reader.getframerate()}
 
 
+def output_is_valid(source: dict[str, float | int], decoded: dict[str, float | int]) -> bool:
+    """Enforce the recording contract for a decoded qualification output."""
+    return (
+        decoded["sample_rate"] == 48_000
+        and decoded["channels"] == 2
+        and abs(decoded["duration_ms"] - source["duration_ms"]) <= 25.0
+    )
+
+
+def finalization_measurements(elapsed_ms: float) -> dict[str, float]:
+    """Name finalizer timing fields consistently with the report's units."""
+    return {
+        "recording_finalization_ms": elapsed_ms,
+        "stop_to_ready_backend_ms": elapsed_ms,
+        "end_to_end": elapsed_ms,
+    }
+
+
 def peak_rss_bytes() -> int | None:
     try:
         # macOS reports ru_maxrss in bytes; Linux reports KiB. The harness labels
@@ -157,7 +175,7 @@ def encode_trial(fixture: Path, ffmpeg: str, effort: int, scratch: Path) -> dict
     if decode_ok:
         ffmpeg_to_wav(ffmpeg, final_path, decoded)
         decoded_info = wav_metadata(decoded)
-        decode_ok = decoded_info["channels"] == source_info["channels"] and abs(decoded_info["duration_ms"] - source_info["duration_ms"]) <= 25.0
+        decode_ok = output_is_valid(source_info, decoded_info)
     return {
         "measurements_ms": {"encode": encode_ms, "end_to_end": encode_ms},
         "resources": {"cpu_time_ms": cpu_ms, "peak_rss_bytes": peak_rss_bytes(), "baseline_rss_bytes": before_rss, "peak_vram_bytes": None},
@@ -194,8 +212,11 @@ def finalization_trial(fixture: Path, ffmpeg: str, scratch: Path) -> dict[str, A
         if decode_ok:
             ffmpeg_to_wav(ffmpeg, final_path, decoded)
             decoded_info = wav_metadata(decoded)
-            decode_ok = decoded_info["channels"] == 2 and abs(decoded_info["duration_ms"] - result.duration * 1000.0) <= 25.0
-        return {"measurements_ms": {"recording_finalization": elapsed_ms, "stop_to_ready_backend": elapsed_ms, "end_to_end": elapsed_ms}, "resources": {"cpu_time_ms": cpu_ms, "peak_rss_bytes": peak_rss_bytes(), "baseline_rss_bytes": before_rss, "peak_vram_bytes": None}, "output": {"bytes": final_path.stat().st_size, **(decoded_info or {"duration_ms": None, "channels": None, "sample_rate": None}), "decode_ok": decode_ok, "fallback_wav": final_path.suffix.lower() == ".wav"}}
+            decode_ok = output_is_valid(
+                {"duration_ms": result.duration * 1000.0, "channels": 2, "sample_rate": 48_000},
+                decoded_info,
+            )
+        return {"measurements_ms": finalization_measurements(elapsed_ms), "resources": {"cpu_time_ms": cpu_ms, "peak_rss_bytes": peak_rss_bytes(), "baseline_rss_bytes": before_rss, "peak_vram_bytes": None}, "output": {"bytes": final_path.stat().st_size, **(decoded_info or {"duration_ms": None, "channels": None, "sample_rate": None}), "decode_ok": decode_ok, "fallback_wav": final_path.suffix.lower() == ".wav"}}
     finally:
         try:
             coordinator.close()

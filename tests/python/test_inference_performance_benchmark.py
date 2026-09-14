@@ -98,3 +98,20 @@ def test_redaction_removes_paths_machine_identifiers_and_free_text():
     assert redacted["hardware_uuid"] == "redacted"
     assert redacted["meeting_title"] == "redacted"
     assert redacted["runtime_version"] == "ffmpeg 8.0.1"
+
+
+def test_output_validation_requires_48khz_stereo_and_duration_tolerance():
+    source = {"duration_ms": 1_000.0, "channels": 2, "sample_rate": 48_000}
+
+    assert benchmark.output_is_valid(source, {"duration_ms": 1_020.0, "channels": 2, "sample_rate": 48_000})
+    assert not benchmark.output_is_valid(source, {"duration_ms": 1_020.0, "channels": 2, "sample_rate": 44_100})
+
+
+def test_finalization_measurements_obey_the_report_millisecond_schema():
+    trial = _successful_trial(
+        configuration={"kind": "finalization", "process_mode": "fresh-process"},
+        measurements_ms=benchmark.finalization_measurements(42.0),
+    )
+
+    benchmark.validate_trial(trial)
+    assert trial["measurements_ms"]["recording_finalization_ms"] == 42.0
