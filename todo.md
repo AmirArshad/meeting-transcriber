@@ -51,7 +51,7 @@ Design and implementation slices: [Settings, navigation and keyboard shortcuts](
 
 ### Performance
 
-- [ ] Deliver measured local inference-performance improvements through independently qualified slices. [Design and implementation plan](docs/superpowers/plans/2026-09-06-inference-performance.md): establish a shared baseline, then qualify recording finalization/Opus encoding speed, Whisper decoding, and summary context independently; resident workers require a separate lifecycle design. Planned only; no optimization or platform acceptance completed.
+- [ ] Deliver measured local inference-performance improvements through independently qualified slices. [Design and implementation plan](docs/superpowers/plans/2026-09-06-inference-performance.md): Task 5 records macOS Apple Silicon local evidence only—retain Opus effort 10, existing MLX Whisper defaults, and 32k summary context; no 4k/8k/16k context candidate is qualified. No optimization, Windows/Linux qualification, or hardware/release acceptance is completed; resident workers require a separate lifecycle design.
 - [ ] Investigate Linux input-volume defaults when back on a Linux machine: determine why some PipeWire/PulseAudio setups reset the microphone to 50%, measure the resulting capture/transcription quality impact, and assess a safe app-side or setup-side remedy without unexpectedly changing user device settings.
 
 ## Deferred beyond v2.10

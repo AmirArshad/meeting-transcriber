@@ -337,3 +337,36 @@ smaller allocation, qualify the exact runtime's full invocation/template token
 count, explicit output reservation and safety headroom for every prompt type,
 then collect uncontended fresh-process short, long/merge, repair, and retained
 language quality trials.
+
+## Task 5 release decision — 2026-09-14
+
+**No v2.10 inference-performance optimization is qualified for release from
+the recorded evidence.** This is a release-decision record for the Task 1–4
+local evidence, not a hardware acceptance, packaged-app acceptance, or product
+performance claim. No production default, runtime pin, IPC surface, UI,
+process lifetime, dependency, or model artifact changed for this work.
+
+| Platform / slice | Recorded decision | Evidence boundary |
+| --- | --- | --- |
+| Apple Silicon macOS / Opus encoding | Retain Opus effort 10. Reject effort 5 and 6 promotion. | Three fresh-process direct-encoder trials on each repeated-English fixture observed about 26% lower encoder medians for efforts 5 and 6, but both produced larger files and have no required listening, transcript/WER, diverse-audio, recoverable-failure, or cross-platform quality evidence. |
+| Apple Silicon macOS / MLX Whisper | Retain existing MLX Whisper defaults, including `small` and batch size 1. Reject any decode/default or product-mode promotion. | The only standard-path baseline is a short synthetic English fixture; it missed the beginning, both expected names, and the expected number. Guided transcription, long meetings, overlap/desktop audio, retained languages, listening review, and higher-batch completeness were not qualified. |
+| Apple Silicon macOS / llama.cpp summaries | Retain the 32k summary context. No 4k, 8k, or 16k candidate is qualified. | A standalone tokenizer count cannot account for the installed CLI's unresolved template/conversation overhead or define complete-prompt output reservation and safety headroom. No smaller candidate ran; long/merge and repair-generation coverage is absent, and every Persian baseline changed a material date. |
+| Windows x64 / all slices | No decision beyond retaining existing behavior. | No local qualification evidence was recorded. |
+| Linux x86_64 / all slices | No decision beyond retaining existing behavior. | No local qualification evidence was recorded, including no managed-CUDA or component-gated add-on qualification. |
+
+The entire evidence set is limited to local Apple M4 Pro direct-backend or
+fresh-process CLI measurements on 2026-09-14. It does not measure packaged
+Windows/Linux behavior, UI Stop-to-ready, queue/admission timing, native
+load-time decomposition, actual-device VRAM, concurrent recording/inference,
+power/thermal variation, or persistent-worker behavior. The recording
+fixtures do not provide the required independent speech, silence, overlap,
+desktop-audio, retained-language, listening, WER, or recoverable-failure
+coverage. The MLX baseline is not guided-path evidence. The summary baseline
+does not establish faithful short/long multilingual chunk, repair, and merge
+behavior. These limitations prevent hardware or release acceptance claims.
+
+Future promotion requires the per-slice gates in the implementation plan,
+including actual-runtime/device evidence on each release platform, quality and
+lost-content checks, and at least 10% median improvement in the targeted stage
+without an end-to-end or resource regression beyond observed baseline
+variation. Persistent workers remain a separate lifecycle design.

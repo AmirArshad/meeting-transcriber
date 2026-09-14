@@ -8,7 +8,7 @@
 
 **Tech Stack:** Existing plain HTML/CSS/JS, Electron, Python 3.11, ffmpeg/libopus, faster-whisper, lightning-whisper-mlx, and catalog-pinned llama.cpp.
 
-**Status:** Proposed v2.10 design, 2026-09-06. Documentation only; no implementation, benchmarks, dependency qualification, or hardware acceptance completed.
+**Status:** Task 5 release decision recorded 2026-09-14 from the Task 1–4 local evidence. Documentation/evidence only: no optimization is qualified or implemented, and no platform hardware or release acceptance is claimed. The recorded evidence is Apple Silicon macOS only; Windows and Linux remain unqualified.
 
 ## Global Constraints
 
