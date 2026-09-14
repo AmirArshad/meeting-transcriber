@@ -36,6 +36,7 @@ Design and file-level plan: [Qwen language support and alternative summarisation
 
 Design and implementation slices: [Settings, navigation and keyboard shortcuts](docs/superpowers/plans/2026-09-07-settings-navigation-shortcuts.md). Design only; Speakrs removal will preserve Hugging Face tokens, and no implementation or platform acceptance is claimed.
 
+- [ ] Design an invoked, temporary audio signal check for the selected microphone and system-audio source. It should run only when the user requests it, use the existing live level path, save/transcribe/upload nothing, never change OS mixer settings, and report actionable `Quiet` / `Good` / `Clipping` or `Not detected` results. Treat this as a design spike first; do not expose an always-on volume dashboard or assume nominal OS percentages are comparable across devices.
 - [ ] On Linux, remove or redesign the clickable Speakrs tab when Speakrs is the only available speaker-identification engine.
 - [ ] Preserve saved Hugging Face tokens when removing Speakrs and remove token warnings from its confirmation; token deletion and warnings apply only to Pyannote removal.
 - [ ] Revisit Setup / Install Model / Remove Model terminology in favor of clearer feature enable/disable language, without changing underlying functionality.
