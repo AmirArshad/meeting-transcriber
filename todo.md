@@ -51,14 +51,14 @@ Design and implementation slices: [Settings, navigation and keyboard shortcuts](
 
 ### Performance
 
-- [ ] Deliver measured local inference-performance improvements through independently qualified slices. [Design and implementation plan](docs/superpowers/plans/2026-09-06-inference-performance.md): baseline/encoding, Whisper qualification, and summary-context qualification; resident workers require a separate lifecycle design. Planned only; no optimization or platform acceptance completed.
+- [ ] Deliver measured local inference-performance improvements through independently qualified slices. [Design and implementation plan](docs/superpowers/plans/2026-09-06-inference-performance.md): establish a shared baseline, then qualify recording finalization/Opus encoding speed, Whisper decoding, and summary context independently; resident workers require a separate lifecycle design. Planned only; no optimization or platform acceptance completed.
+- [ ] Investigate Linux input-volume defaults when back on a Linux machine: determine why some PipeWire/PulseAudio setups reset the microphone to 50%, measure the resulting capture/transcription quality impact, and assess a safe app-side or setup-side remedy without unexpectedly changing user device settings.
 
-## Immediate post-release maintenance
+## Deferred beyond v2.10
 
-- [ ] Claim `avanevis-bin` on the AUR and perform a live CachyOS/Omarchy install smoke.
-- [ ] Decide whether AUR publishing automation belongs in v2.10 or remains release infrastructure.
-- [ ] Keep Apple Developer signing/notarization deferred until enrollment; retain ad-hoc macOS packaging checks.
-- [ ] Preserve the Windows/macOS Speakrs/Pyannote selector and token IPC; Linux remains Speakrs-only.
+- [x] Perform a live CachyOS/Omarchy install smoke; verified working on the supported Linux setup.
+- [ ] Claim `avanevis-bin` on the AUR and revisit AUR publishing automation later, likely around/after v3 rather than in v2.10.
+- [ ] Revisit Apple Developer signing/notarization later, likely around/after v3 and only when enrollment/timing make it worthwhile; retain ad-hoc macOS packaging checks meanwhile.
 - [ ] Revisit the pre-existing `run-recording-preflight` trusted-renderer-sender observation only as a separate security task.
 
 ## Release history

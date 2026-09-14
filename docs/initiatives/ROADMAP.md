@@ -113,7 +113,7 @@ Other items still need their detailed design, sequencing, and acceptance plannin
 
 ### Packaging & Distribution
 
-- **AUR package (`avanevis-bin`) & CI release automation.** Maintain the `avanevis-bin` package on the Arch User Repository for native installation via `yay` / `paru`, and automate release publishing from GitHub Actions. Reference: [AUR_PACKAGING_AND_AUTOMATION.md](AUR_PACKAGING_AND_AUTOMATION.md) and [AUR_PACKAGE_GUIDE.md](../guides/AUR_PACKAGE_GUIDE.md).
+- **AUR package (`avanevis-bin`) & CI release automation — deferred beyond v2.10.** The supported CachyOS/Omarchy install smoke is complete; revisit publishing automation later, likely around/after v3. Reference: [AUR_PACKAGING_AND_AUTOMATION.md](AUR_PACKAGING_AND_AUTOMATION.md) and [AUR_PACKAGE_GUIDE.md](../guides/AUR_PACKAGE_GUIDE.md).
 
 ---
 
@@ -124,7 +124,8 @@ Longer horizon, lower priority:
 - **Linux expansion.** Broader desktop/hardware validation beyond the supported Core Beta hosts, including the still-open Ubuntu desktop recording/`safeStorage` smoke. Reference: [LINUX_SUPPORT.md](LINUX_SUPPORT.md).
 - **Setup wizard.** Guided first-time configuration. Reference: [FEATURE_SETUP_WIZARD.md](FEATURE_SETUP_WIZARD.md).
 - **Optional private meeting-object sync** to user-controlled storage (never to a hosted AvaNevis backend). See [Meeting objects and private sync](MEETING_OBJECTS_AND_PRIVATE_SYNC.md); not scheduled for v2.10.
-- **Local inference performance** (encode / Whisper / llama.cpp knobs and warm workers; stay on Electron + Python). See [Local inference performance](LOCAL_INFERENCE_PERFORMANCE.md); included in v2.10 scope.
+- **Local inference performance** (recording finalization/encoding, Whisper, llama.cpp knobs and warm workers; stay on Electron + Python). See [Local inference performance](LOCAL_INFERENCE_PERFORMANCE.md); included in v2.10 scope.
+- **Apple Developer signing/notarization** — deferred until a later release, likely around/after v3; ad-hoc macOS packaging checks remain the current boundary.
 - **Companion mobile apps** (iOS / Android) for remote review.
 - **Localized UI** (Spanish, French, etc.).
 - **Semantic search** across transcripts.
