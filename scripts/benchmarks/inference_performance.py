@@ -11,9 +11,12 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
+import importlib.metadata
 import json
 import os
 import platform
+import re
 import resource
 import shutil
 import subprocess
@@ -158,6 +161,134 @@ def peak_rss_bytes() -> int | None:
         return None
 
 
+def monotonic_ms() -> float:
+    """Return the monotonic clock in report units."""
+    return time.perf_counter() * 1000.0
+
+
+def mlx_transcriber_class() -> Any:
+    """Import the production MLX transcriber only inside a fresh MLX worker."""
+    return importlib.import_module("backend.transcription.mlx_whisper_transcriber").MLXWhisperTranscriber
+
+
+def _normalized_words(value: str) -> list[str]:
+    return re.findall(r"[\w']+", value.casefold())
+
+
+def _word_error_rate(reference: list[str], actual: list[str]) -> float | None:
+    if not reference:
+        return None
+    prior = list(range(len(actual) + 1))
+    for index, expected in enumerate(reference, start=1):
+        current = [index]
+        for actual_index, observed in enumerate(actual, start=1):
+            current.append(min(
+                prior[actual_index] + 1,
+                current[actual_index - 1] + 1,
+                prior[actual_index - 1] + (expected != observed),
+            ))
+        prior = current
+    return prior[-1] / len(reference)
+
+
+def _reference_section_status(reference: list[str], actual: list[str], section: str) -> str:
+    if not reference:
+        return UNAVAILABLE
+    span = max(1, len(reference) // 8)
+    if section == "beginning":
+        expected = reference[:span]
+    elif section == "end":
+        expected = reference[-span:]
+    else:
+        midpoint = len(reference) // 2
+        expected = reference[max(0, midpoint - span // 2): midpoint + (span + 1) // 2]
+    expected_text = " ".join(expected)
+    return "present" if expected_text in " ".join(actual) else "missing"
+
+
+def transcript_validation(results: dict[str, Any], reference_text: str | None, expected_names: list[str], expected_numbers: list[str]) -> dict[str, Any]:
+    """Return content-only parity evidence without retaining transcript text."""
+    actual = _normalized_words(str(results.get("text", "")))
+    reference = _normalized_words(reference_text or "")
+    segments = results.get("segments") or []
+    timestamp_status = "present" if segments and all(
+        isinstance(segment, dict)
+        and isinstance(segment.get("start"), (int, float))
+        and isinstance(segment.get("end"), (int, float))
+        and float(segment["end"]) >= float(segment["start"])
+        for segment in segments
+    ) else "missing"
+    return {
+        "reference": "available" if reference else UNAVAILABLE,
+        "wer": _word_error_rate(reference, actual),
+        "beginning": _reference_section_status(reference, actual, "beginning") if reference else ("present" if actual else "missing"),
+        "middle": _reference_section_status(reference, actual, "middle") if reference else ("present" if actual else "missing"),
+        "end": _reference_section_status(reference, actual, "end") if reference else ("present" if actual else "missing"),
+        "timestamps": timestamp_status,
+        "names": "present" if expected_names and all(name.casefold() in actual for name in expected_names) else (UNAVAILABLE if not expected_names else "missing"),
+        "numbers": "present" if expected_numbers and all(number.casefold() in actual for number in expected_numbers) else (UNAVAILABLE if not expected_numbers else "missing"),
+    }
+
+
+def mlx_trial(
+    fixture: Path,
+    model: str,
+    language: str,
+    output_path: Path,
+    reference_text: str | None = None,
+    expected_names: list[str] | None = None,
+    expected_numbers: list[str] | None = None,
+) -> dict[str, Any]:
+    """Run the production MLX calls and expose only directly observable stages.
+
+    lightning-whisper-mlx loads its native model internally during
+    ``transcribe_audio``. That component cannot be separated without changing
+    the runtime, so it is deliberately recorded as unavailable.
+    """
+    expected_names = expected_names or []
+    expected_numbers = expected_numbers or []
+    # The production CLI starts with backend/ as its cwd; the benchmark is
+    # intentionally launched from the repository root, so use the package path.
+    from backend.common.process_priority import lower_process_priority
+    lower_process_priority()
+    before_rss = peak_rss_bytes()
+    before_cpu = time.process_time()
+    started = monotonic_ms()
+    imported_at = monotonic_ms()
+    transcriber_type = mlx_transcriber_class()
+    imported_done = monotonic_ms()
+    transcriber = transcriber_type(model_size=model, language=language)
+    load_started = monotonic_ms()
+    transcriber.load_model()
+    load_done = monotonic_ms()
+    decode_started = monotonic_ms()
+    backend_result = transcriber._transcribe_audio(str(fixture))
+    decode_done = monotonic_ms()
+    duration = transcriber._probe_audio_duration(str(fixture))
+    results = transcriber._build_results_from_backend_result(backend_result, str(fixture), duration)
+    transcriber._save_markdown(results, str(fixture), str(output_path))
+    transcriber.cleanup()
+    completed = monotonic_ms()
+    validation = transcript_validation(results, reference_text, expected_names, expected_numbers)
+    return {
+        "configuration": {"kind": "mlx-whisper", "process_mode": "fresh-process", "model": model, "language": language, "batch_size": transcriber.batch_size, "path": "standard"},
+        "outcome": "success" if output_path.is_file() and validation["timestamps"] == "present" else "failed",
+        "measurements_ms": {
+            "python_import_ms": imported_done - imported_at,
+            "production_load_model_ms": load_done - load_started,
+            "decode_transcription_ms": decode_done - decode_started,
+            "transcript_processing_persistence_ms": completed - decode_done,
+            "worker_end_to_end_ms": completed - started,
+            "process_startup_ms": None,
+            "runtime_model_load_ms": None,
+        },
+        "resources": {"cpu_time_ms": (time.process_time() - before_cpu) * 1000.0, "peak_rss_bytes": peak_rss_bytes(), "baseline_rss_bytes": before_rss, "peak_vram_bytes": None},
+        "output": {"bytes": output_path.stat().st_size if output_path.is_file() else None, "duration_ms": float(results.get("duration", 0) or 0) * 1000.0, "segments": len(results.get("segments") or []), "device": results.get("device", transcriber.device), "compute_type": results.get("computeType", transcriber.compute_type)},
+        "runtime": {"backend": "lightning-whisper-mlx", "model_key": transcriber.model_key, "model_repo": transcriber.model_repo, "model_files": {name: sha256_file(transcriber.model_dir / name) for name in ("weights.npz", "config.json")}},
+        "transcript_validation": validation,
+    }
+
+
 def encode_trial(fixture: Path, ffmpeg: str, effort: int, scratch: Path) -> dict[str, Any]:
     source_wav = scratch / "source.wav"
     ffmpeg_to_wav(ffmpeg, fixture, source_wav)
@@ -228,10 +359,19 @@ def worker(args: argparse.Namespace) -> dict[str, Any]:
     _parsed_id, fixture = args.fixture[0]
     fixture = fixture.resolve(strict=True)
     with tempfile.TemporaryDirectory(prefix="avanevis-inference-performance-", dir=args.scratch_dir) as temp:
-        result = finalization_trial(fixture, args.ffmpeg, Path(temp)) if args.kind == "finalization" else encode_trial(fixture, args.ffmpeg, args.effort, Path(temp))
+        scratch = Path(temp)
+        if args.kind == "finalization":
+            result = finalization_trial(fixture, args.ffmpeg, scratch)
+        elif args.kind == "encode":
+            result = encode_trial(fixture, args.ffmpeg, args.effort, scratch)
+        else:
+            reference_text = args.reference_path.read_text(encoding="utf-8") if args.reference_path else None
+            result = mlx_trial(fixture, args.model, args.language, scratch / "transcript.md", reference_text, args.expected_name, args.expected_number)
     configuration = {"kind": args.kind, "process_mode": "fresh-process"}
     if args.kind == "encode":
         configuration["effort"] = args.effort
+    if args.kind == "mlx":
+        return {"fixture_id": args.fixture_id, **result}
     return {"fixture_id": args.fixture_id, "configuration": configuration, "outcome": "success" if result["output"]["decode_ok"] else "failed", **result}
 
 
@@ -246,6 +386,24 @@ def run_worker(fixture_id: str, fixture: Path, ffmpeg: str, kind: str, effort: i
             configuration["effort"] = effort
         return {"fixture_id": fixture_id, "configuration": configuration, "outcome": "failed", "measurements_ms": {}, "resources": {}, "output": {}, "failure": "worker failed"}
     return json.loads(result.stdout)
+
+
+def run_mlx_worker(fixture_id: str, fixture: Path, model: str, language: str, reference_path: Path | None, expected_names: list[str], expected_numbers: list[str], scratch_dir: Path) -> dict[str, Any]:
+    command = [sys.executable, str(Path(__file__).resolve()), "--worker", "--fixture-id", fixture_id, "--fixture", f"{fixture_id}={fixture}", "--kind", "mlx", "--model", model, "--language", language, "--scratch-dir", str(scratch_dir)]
+    if reference_path:
+        command.extend(["--reference-path", str(reference_path)])
+    for name in expected_names:
+        command.extend(["--expected-name", name])
+    for number in expected_numbers:
+        command.extend(["--expected-number", number])
+    started = monotonic_ms()
+    result = subprocess.run(command, text=True, capture_output=True, check=False)
+    wall_ms = monotonic_ms() - started
+    if result.returncode:
+        return {"fixture_id": fixture_id, "configuration": {"kind": "mlx-whisper", "process_mode": "fresh-process", "model": model, "language": language, "batch_size": 1, "path": "standard"}, "outcome": "failed", "measurements_ms": {"fresh_process_wall_ms": wall_ms, "process_startup_ms": None, "runtime_model_load_ms": None}, "resources": {}, "output": {}, "failure": "worker failed"}
+    trial = json.loads(result.stdout)
+    trial["measurements_ms"]["fresh_process_wall_ms"] = wall_ms
+    return trial
 
 
 def parse_fixture(value: str) -> tuple[str, Path]:
@@ -264,11 +422,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, help="New or empty report directory outside recordings")
     parser.add_argument("--trials", type=int, default=3)
     parser.add_argument("--efforts", default="10,5,6")
+    parser.add_argument("--mlx", action="store_true", help="Run the Apple Silicon production-equivalent MLX Whisper path only")
+    parser.add_argument("--model", default="small", help="Existing MLX model size (default: production small)")
+    parser.add_argument("--language", default="en", help="Existing MLX language code (default: en)")
+    parser.add_argument("--reference", type=Path, help="Explicit local plaintext reference transcript for WER-style validation")
+    parser.add_argument("--expected-name", action="append", default=[], help="Expected local reference name; repeatable")
+    parser.add_argument("--expected-number", action="append", default=[], help="Expected local reference number token; repeatable")
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--kind", choices=("encode", "finalization"), default="encode", help=argparse.SUPPRESS)
+    parser.add_argument("--kind", choices=("encode", "finalization", "mlx"), default="encode", help=argparse.SUPPRESS)
     parser.add_argument("--fixture-id", help=argparse.SUPPRESS)
     parser.add_argument("--effort", type=int, help=argparse.SUPPRESS)
     parser.add_argument("--scratch-dir", type=Path, help=argparse.SUPPRESS)
+    parser.add_argument("--reference-path", type=Path, help=argparse.SUPPRESS)
     return parser.parse_args()
 
 
@@ -277,12 +442,14 @@ def main() -> int:
     if args.worker:
         print(json.dumps(worker(args), sort_keys=True))
         return 0
-    if not args.fixture or not args.ffmpeg or not args.output_dir:
-        raise SystemExit("--fixture, --ffmpeg, and --output-dir are required; the harness never discovers or downloads inputs")
+    if not args.fixture or not args.output_dir or (not args.mlx and not args.ffmpeg):
+        raise SystemExit("--fixture, --output-dir, and --ffmpeg (unless --mlx) are required; the harness never discovers or downloads inputs")
     if args.trials < 3:
         raise SystemExit("--trials must be at least 3 for qualification")
-    if not Path(args.ffmpeg).is_file():
+    if args.ffmpeg and not Path(args.ffmpeg).is_file():
         raise SystemExit("--ffmpeg must be an explicit existing runtime path")
+    if args.reference and not args.reference.is_file():
+        raise SystemExit("--reference must be an explicit existing local plaintext file")
     efforts = [int(item) for item in args.efforts.split(",")]
     if any(effort < 0 or effort > 10 for effort in efforts):
         raise SystemExit("Opus efforts must be between 0 and 10")
@@ -292,11 +459,20 @@ def main() -> int:
         if not fixture.is_file():
             raise SystemExit(f"fixture {fixture_id!r} is unavailable: {fixture}")
         for trial_index in range(args.trials):
-            trials.append(run_worker(fixture_id, fixture, args.ffmpeg, "finalization", None, args.output_dir))
-            rotated = efforts[trial_index % len(efforts):] + efforts[:trial_index % len(efforts)]
-            for effort in rotated:
-                trials.append(run_worker(fixture_id, fixture, args.ffmpeg, "encode", effort, args.output_dir))
-    metadata = {"platform": platform.platform(), "machine": platform.machine(), "python": platform.python_version(), "app_revision": app_revision(), "ffmpeg_version": executable_version(args.ffmpeg), "fixture_identities": [{"id": fixture_id, "sha256": sha256_file(fixture)} for fixture_id, fixture in args.fixture], "process_modes": ["fresh-process"], "filesystem_cache": "state not controlled", "model_resident": False, "power_mode": UNAVAILABLE, "unavailable_measurements": ["queue_wait_ms", "admission_ms", "spawn_import_load_ms", "peak_vram_bytes"]}
+            if args.mlx:
+                trials.append(run_mlx_worker(fixture_id, fixture, args.model, args.language, args.reference, args.expected_name, args.expected_number, args.output_dir))
+            else:
+                trials.append(run_worker(fixture_id, fixture, args.ffmpeg, "finalization", None, args.output_dir))
+                rotated = efforts[trial_index % len(efforts):] + efforts[:trial_index % len(efforts)]
+                for effort in rotated:
+                    trials.append(run_worker(fixture_id, fixture, args.ffmpeg, "encode", effort, args.output_dir))
+    mlx_version = None
+    if args.mlx:
+        try:
+            mlx_version = importlib.metadata.version("lightning-whisper-mlx")
+        except importlib.metadata.PackageNotFoundError:
+            mlx_version = UNAVAILABLE
+    metadata = {"platform": platform.platform(), "machine": platform.machine(), "python": platform.python_version(), "app_revision": app_revision(), "ffmpeg_version": executable_version(args.ffmpeg) if args.ffmpeg else UNAVAILABLE, "mlx_runtime_version": mlx_version, "fixture_identities": [{"id": fixture_id, "sha256": sha256_file(fixture)} for fixture_id, fixture in args.fixture], "reference_identity": {"sha256": sha256_file(args.reference)} if args.reference else UNAVAILABLE, "process_modes": ["fresh-process"], "filesystem_cache": "state not controlled", "model_resident": False, "power_mode": UNAVAILABLE, "unavailable_measurements": ["queue_wait_ms", "admission_ms", "process_startup_ms", "runtime_model_load_ms", "peak_vram_bytes"]}
     report = build_report(metadata, trials)
     (args.output_dir / "inference-performance-report-v1.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps(report, indent=2, sort_keys=True))

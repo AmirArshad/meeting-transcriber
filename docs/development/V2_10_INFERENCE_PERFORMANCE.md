@@ -126,3 +126,99 @@ content, listening review, transcript/WER review, or recoverable-failure
 trials. It therefore does not satisfy the full audio-quality or cross-platform
 release gates. No Whisper, summary, UI, worker-lifetime, or automatic-setting
 decision follows from this evidence.
+
+## Apple Silicon MLX Whisper baseline — 2026-09-14
+
+This is a baseline-only qualification of the existing Apple Silicon standard
+transcription path. It makes no faster-whisper, Parakeet, model, beam, batch,
+UI, IPC, worker-lifetime, or setting change. The benchmark calls the existing
+`MLXWhisperTranscriber` with the production `small` model selection, `en`, and
+batch size 1. It uses the cached `lightning-whisper-mlx` 0.0.10 runtime and
+never downloads a model or dependency. `HF_HUB_OFFLINE=1` and
+`AVANEVIS_TRANSCRIPTION_LOCAL_FILES_ONLY=1` were set because the required
+local cache files were already complete.
+
+Environment and identity:
+
+- Hardware/OS: Apple M4 Pro (14 CPU cores, 48 GB unified memory), macOS
+  26.6.2 (25G83), arm64; AC power, 100% charged. Power-performance mode is
+  unavailable from the collected system interface.
+- App revision: `915b8868908de53e9a956ba86a8d867a90b8b728`; Python 3.11.16;
+  `lightning-whisper-mlx` 0.0.10. Actual result device was `metal` and compute
+  type `float16` in every trial.
+- Model: `mlx-community/whisper-small-mlx`, key `small`; `weights.npz`
+  SHA-256 `55b6674c9b339702d486e2b1573839a66f8ec8f821ed2886993ef717a86b09f5`,
+  `config.json` SHA-256
+  `e8f58e638208af66d5d5d67801259dc7a12d199e971967a9f9d33a8e3635668e`.
+- Filesystem cache: existing complete local cache, state otherwise not
+  controlled. Every trial was a fresh Python process; no model was resident
+  between trials.
+
+### Fixture, reference, and method
+
+The explicit local fixture was `tests/fixtures/speakrs-two-speaker-16k.wav`
+(SHA-256 `1eed9687badcdd0d554638c8229fdb48d5c80e21ed1393c3bb5621f0c83bd998`),
+14,224.5 ms of generated English two-speaker speech. Its locally maintained
+generator supplies the reference dialogue; the reference text hash was
+`a65643640aae5377b7079ad1ca301a1ef62c5254d0aea20c3d918500612fff20`.
+
+The command below ran in a foreground CLI and completed all three trials:
+
+```sh
+env -u AVANEVIS_MLX_WHISPER_BATCH_SIZE \
+  HF_HUB_OFFLINE=1 AVANEVIS_TRANSCRIPTION_LOCAL_FILES_ONLY=1 \
+  .venv/bin/python scripts/benchmarks/inference_performance.py --mlx \
+  --fixture speakrs-two-speaker-en=tests/fixtures/speakrs-two-speaker-16k.wav \
+  --reference /private/tmp/v2.10-inference-fixtures-2026-09-14/speakrs-two-speaker-reference.txt \
+  --expected-name Hazel --expected-name Zira --expected-number ten \
+  --model small --language en \
+  --output-dir /private/tmp/v2.10-mlx-qualification-2026-09-14 --trials 3
+```
+
+The harness measures only observable boundaries. `production_load_model_ms`
+is the existing transcriber's cache verification/import/file-lock method;
+`decode_transcription_ms` is its unmodified MLX `transcribe_audio` call. The
+runtime internally initializes the native model during that latter call, so a
+separate native model-load field is `unavailable`, not estimated by
+subtraction. `process_startup_ms`, queue wait, device admission, VRAM, and UI
+timing are likewise unavailable. `fresh_process_wall_ms` is the observed
+parent-to-child wall time, not a UI duration.
+
+### Raw standard-path trials
+
+| Trial | Import ms | Production load ms | Decode/transcription ms | Process/persist ms | Worker end-to-end ms | Fresh-process wall ms | CPU ms | Peak RSS bytes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 1.012 | 840.386 | 560.579 | 0.927 | 1402.934 | 1754.628 | 1039.502 | 996147200 |
+| 2 | 0.876 | 816.112 | 563.135 | 0.894 | 1381.050 | 1755.543 | 1028.905 | 998342656 |
+| 3 | 0.924 | 821.227 | 562.122 | 0.912 | 1385.214 | 1752.550 | 1029.067 | 995508224 |
+| Median [range] | 0.924 [0.876–1.012] | 821.227 [816.112–840.386] | 562.122 [560.579–563.135] | 0.912 [0.894–0.927] | 1385.214 [1381.050–1402.934] | 1754.628 [1752.550–1755.543] | 1029.067 [1028.905–1039.502] | 996147200 [995508224–998342656] |
+
+All three standard-path trials exited successfully, wrote a 518-byte markdown
+transcript, reported one timestamped segment, and reported the 14,224.5 ms
+audio duration. The report is held in the local scratch directory named in the
+command above; it contains only fixture/model hashes and validation outcomes,
+not transcript text or user paths.
+
+### Transcript parity and completeness
+
+The reference/WER-style comparison was reproducible across all three trials:
+WER 0.06383; middle and end reference sections present; beginning reference
+section missing; expected names `Hazel`/`Zira` missing; expected number token
+`ten` missing; timestamps present after the production transcriber's existing
+timebase normalization. This is a real quality/completeness limitation of this
+small synthetic fixture result, not a failed benchmark trial. It is recorded
+instead of being normalized away or replaced with an untested decoder.
+
+The guided/speaker-related path was not exercised: it remains a distinct
+speaker-engine admission and windowing flow, and no standard backend duration
+here is presented as guided or UI timing. No long-meeting fixture, desktop
+audio, overlap, retained-language fixture, listening review, or higher MLX
+batch experiment was performed.
+
+### Decision
+
+**Retain production defaults; reject any decoding/default promotion from this
+evidence.** The work qualifies a fresh-process MLX baseline only. The fixture's
+name/number/beginning misses and the missing long-meeting/guided/diverse-audio
+coverage fail the quality gate for a beam/model/batch or product-mode change.
+MLX batch size remains 1, and no production source file was changed.

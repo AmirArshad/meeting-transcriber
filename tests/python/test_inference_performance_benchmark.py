@@ -115,3 +115,63 @@ def test_finalization_measurements_obey_the_report_millisecond_schema():
 
     benchmark.validate_trial(trial)
     assert trial["measurements_ms"]["recording_finalization_ms"] == 42.0
+
+
+def test_mlx_trial_reports_observable_stages_and_marks_hidden_runtime_load_unavailable(monkeypatch, tmp_path):
+    """Catches a benchmark regression that folds hidden MLX loading into a made-up field."""
+    fixture = tmp_path / "fixture.wav"
+    fixture.write_bytes(b"local-fixture")
+    output = tmp_path / "transcript.md"
+    model_dir = tmp_path / "model"
+    model_dir.mkdir()
+    (model_dir / "weights.npz").write_bytes(b"weights")
+    (model_dir / "config.json").write_text("{}", encoding="utf-8")
+
+    class FakeTranscriber:
+        def __init__(self, *, model_size, language):
+            self.model_size = model_size
+            self.language = language
+            self.device = "metal"
+            self.compute_type = "float16"
+            self.batch_size = 1
+            self.model_key = "small"
+            self.model_repo = "mlx-community/whisper-small-mlx"
+            self.model_dir = model_dir
+
+        def load_model(self):
+            return None
+
+        def _transcribe_audio(self, audio_path):
+            assert audio_path == str(fixture)
+            return {"language": "en", "segments": [
+                {"start": 0, "end": 1, "text": "beginning 42"},
+                {"start": 1, "end": 2, "text": "middle Ada"},
+                {"start": 2, "end": 3, "text": "ending 7"},
+            ]}
+
+        def _probe_audio_duration(self, audio_path):
+            return 3.0
+
+        def _build_results_from_backend_result(self, result, audio_path, duration):
+            return {"text": "beginning 42 middle Ada ending 7", "segments": result["segments"], "language": "en", "duration": duration}
+
+        def _save_markdown(self, results, audio_path, output_path):
+            Path(output_path).write_text(results["text"], encoding="utf-8")
+
+        def cleanup(self):
+            return None
+
+    ticks = iter(range(10))
+    monkeypatch.setattr(benchmark, "monotonic_ms", lambda: float(next(ticks)))
+    monkeypatch.setattr(benchmark, "peak_rss_bytes", lambda: 2048)
+    monkeypatch.setattr(benchmark, "mlx_transcriber_class", lambda: FakeTranscriber)
+
+    trial = benchmark.mlx_trial(fixture, "small", "en", output)
+
+    assert trial["outcome"] == "success"
+    assert trial["configuration"] == {"kind": "mlx-whisper", "process_mode": "fresh-process", "model": "small", "language": "en", "batch_size": 1, "path": "standard"}
+    assert trial["measurements_ms"]["python_import_ms"] == 1.0
+    assert trial["measurements_ms"]["production_load_model_ms"] == 1.0
+    assert trial["measurements_ms"]["decode_transcription_ms"] == 1.0
+    assert trial["measurements_ms"]["runtime_model_load_ms"] is None
+    assert trial["transcript_validation"] == {"reference": "unavailable", "wer": None, "beginning": "present", "middle": "present", "end": "present", "timestamps": "present", "names": "unavailable", "numbers": "unavailable"}
