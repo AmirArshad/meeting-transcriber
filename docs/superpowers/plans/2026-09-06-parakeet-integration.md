@@ -1,6 +1,6 @@
 # Parakeet Integration Implementation Plan
 
-> **For agentic workers:** Execute inline by default. Ask before routine delegation, as required by AGENTS.md. This document records the feature design and implementation phases; saving it does not authorize implementation.
+> Design and file-level plan. Implementation is not authorized by this document. Qualify a runtime per platform (Task 1) before coding. Sequencing for v2.10 is in [the plan index](2026-09-06-v2.10.md).
 
 **Goal:** Offer an optional local Parakeet transcription engine for English meetings, with measured improvements in speed and resource use over the existing Whisper path.
 
@@ -23,9 +23,9 @@
 
 ## Product decisions and model scope
 
-The user approved targeting all three platforms with independent validation gates, English-only initial scope, and a speed/resource-use focus. Accuracy improvement is a bonus, not a requirement to beat Whisper.
+Product decisions: target all three platforms with independent validation gates; English-only launch; speed and resource-use first. Accuracy improvement is a bonus, not a requirement to beat Whisper.
 
-Parakeet is a model family, not universally English-only. NVIDIA's [TDT 0.6B v2 model card](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2) describes English transcription; [TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) supports 25 European languages. Sources checked 2026-09-06. English-only is the AvaNevis launch scope regardless of the eventual artifact. Evaluate v2 first for that scope; do not pin it until runtime and performance qualification passes. This supersedes the initial chat design's tentative v3/automatic-language recommendation.
+Parakeet is a model family, not universally English-only. NVIDIA's [TDT 0.6B v2 model card](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2) describes English transcription; [TDT 0.6B v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) supports 25 European languages. Sources checked 2026-09-06. English-only is the AvaNevis launch scope regardless of the eventual artifact. Evaluate v2 first for that scope; do not pin it until runtime and performance qualification passes. Multilingual first-release and automatic language selection are out of scope.
 
 The [community Parakeet MLX implementation](https://github.com/senstella/parakeet-mlx) is an Apple Silicon candidate, not acceptance evidence. Evaluate packaged Python and native alternatives against the same app contract. Do not assume NeMo, MLX, ONNX, a converted model, or existing CUDA dependencies work on all targets.
 

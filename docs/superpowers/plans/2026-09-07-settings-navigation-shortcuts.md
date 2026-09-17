@@ -1,8 +1,8 @@
 # Settings, Navigation and Keyboard Shortcuts Design and Implementation Plan
 
-> **For agentic workers:** Execute inline by default. Use a subagent only when the user requests it or the task crosses high-risk platform/process boundaries.
+> Design and file-level plan. Implementation is not authorized by this document. Sequencing for v2.10 is in [the plan index](2026-09-06-v2.10.md). This slice does not wait on model investigations. Click-away meeting rename remains separate.
 
-**Status:** Design only; no implementation or platform acceptance. Based on the Settings/navigation and keyboard feedback in [todo.md](../../../todo.md). Click-away meeting rename remains separate.
+**Status:** Design only; no implementation or platform acceptance.
 
 **Goal:** Make feature setup and page navigation clearer, and provide discoverable keyboard access to navigation and recording.
 
@@ -28,8 +28,6 @@
 - `src/renderer/app.js:4905` appends bounded, plain-text AI Add-on Log lines without timestamps; the general log at line 4594 already timestamps entries. Add-on progress arrives through `src/preload.js:149`.
 - The primary recording button calls `handleRecordButtonClick` (`app.js:2823`), using `src/renderer/recording-state-helpers.js:2`: idle means start, recording means stop, other states ignore. Start defaults to Mic + Desktop; alternate capture modes have separate menu actions. There is no central navigation/recording shortcut dispatcher; existing key handlers serve individual controls and dialogs.
 - Trace: `app.js:3372`/`:3711` → `src/preload.js:74`/`:75` → `src/main/recorder-service.js:1706`/`:2379`. Main spawns the platform recorder module at line 1927 and sends `stop\n` at line 1071. The inspected Linux endpoint parses stdin and calls stop/cancel separately in `backend/audio/linux_recorder.py:1326`. Navigation ends in the renderer; add-on actions retain their existing main-owned runtime path.
-
-Investigation was limited to these surfaces, `AGENTS.md`, todo/index, the directly relevant `docs/development/contracts/ipc.md` and, for the approved token-retention correction, `docs/development/contracts/local-ai.md`, and the tests listed below. The removal implementation and one platform recorder endpoint were necessary additional boundary checks, not a platform-runtime audit.
 
 ## 2. User-facing change
 
@@ -107,6 +105,6 @@ Click-away rename; global/background shortcuts; remapping or command palette; ne
 
 ## 8. Open decisions
 
-None currently. **Resolved 2026-09-07:** the user approved preserving Hugging Face tokens when removing Speakrs. This behavior and its token-free confirmation are part of slice A; Pyannote removal remains unchanged.
+None currently. **Resolved 2026-09-07:** removing Speakrs must preserve any saved Hugging Face token and omit token warnings. That behavior is part of slice A; Pyannote removal remains unchanged.
 
-Other choices above are proposed defaults, not blockers requiring an interview. Shortcut conflict/layout qualification is engineering acceptance work, not a product decision.
+Shortcut chords above are proposed defaults. Conflict and keyboard-layout qualification is packaged acceptance work on each OS, not a further product decision.

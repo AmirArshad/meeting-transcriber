@@ -1,6 +1,6 @@
 # Inference Performance Implementation Plan
 
-> **For agentic workers:** Execute inline by default. Use a subagent only when the user requests it or the task crosses high-risk platform/process boundaries.
+> Design and file-level plan. Implementation is not authorized by this document. Sequencing for v2.10 is in [the plan index](2026-09-06-v2.10.md).
 
 **Goal:** Reduce local recording-finalization and inference waits through measured, independently qualified changes, without sacrificing saved audio or transcript/summary quality.
 
@@ -8,7 +8,7 @@
 
 **Tech Stack:** Existing plain HTML/CSS/JS, Electron, Python 3.11, ffmpeg/libopus, faster-whisper, lightning-whisper-mlx, and catalog-pinned llama.cpp.
 
-**Status:** Task 5 release decision recorded 2026-09-14 from the Task 1–4 local evidence. Documentation/evidence only: no optimization is qualified or implemented, and no platform hardware or release acceptance is claimed. The recorded evidence is Apple Silicon macOS only; Windows and Linux remain unqualified.
+**Status:** Task 5 release decision recorded 2026-09-14 from the Task 1–4 local evidence. No optimization is qualified or implemented. The recorded evidence is Apple Silicon macOS only. Windows and Linux remain unqualified; run those rows only if a production default change is still being pursued. Persistent workers still need a separate lifecycle design.
 
 ## Global Constraints
 
@@ -20,7 +20,7 @@
 
 ## 1. Current behavior
 
-The committed scope is `todo.md:44–46`. `docs/initiatives/LOCAL_INFERENCE_PERFORMANCE.md` is an existing exploration note, not an implementation plan. This plan refines it; its old v3.0 Linux deferral is obsolete. Only the directly relevant recording and local-AI contracts were read. Investigation exceeded 15 files because the inherited feature spans three independent pipelines; additional reads were focused excerpts, tests, and call-site searches.
+The committed scope is the Performance section of `todo.md`. `docs/initiatives/LOCAL_INFERENCE_PERFORMANCE.md` is an exploration note, not an implementation plan. This plan refines it; its old v3.0 Linux deferral is obsolete.
 
 | Flow | Existing implementation |
 |---|---|

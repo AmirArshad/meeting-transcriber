@@ -1,6 +1,6 @@
 # Local inference performance — future spike
 
-**Status:** In v2.10 scope, not implemented or qualified. This exploration note is refined by the [Inference Performance design and implementation plan](../superpowers/plans/2026-09-06-inference-performance.md). Use that plan for current slice boundaries, sequencing, and acceptance; worker ideas below remain candidates for a separate lifecycle design.
+**Status:** In v2.10 scope. Apple Silicon local evidence (2026-09-14) retained current encoding, Whisper, and summary-context defaults; no optimization is implemented. Windows and Linux are unqualified. This exploration note is refined by the [Inference Performance design and implementation plan](../superpowers/plans/2026-09-06-inference-performance.md). Use that plan and the [v2.10 plan index](../superpowers/plans/2026-09-06-v2.10.md) for slice boundaries and sequencing; worker ideas below remain candidates for a separate lifecycle design.
 
 ## Intent
 
@@ -93,4 +93,4 @@ Hardware A/B must cover WER (or a documented proxy), summary faithfulness on a f
 
 ## Entry criteria for a future release
 
-Before implementation: a short decision record with measured baselines, the chosen Fast/Accurate product copy, and which knobs stay conservative by default. Review any new long-lived Python or llama process against quit drain, `aiComputeActionQueue`, and packaged offline cache rules in `AGENTS.md`.
+Before implementation: a short decision record with measured baselines, the chosen Fast/Accurate product copy, and which knobs stay conservative by default. Review any new long-lived Python or llama process against quit drain, `aiComputeActionQueue`, and packaged offline cache rules in the [local AI contract](../development/contracts/local-ai.md).

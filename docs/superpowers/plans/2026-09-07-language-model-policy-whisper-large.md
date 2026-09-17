@@ -1,6 +1,6 @@
 # Language/model policy and Whisper Large — Design and Implementation Plan
 
-> **For agentic workers:** Execute inline by default. Use a subagent only when the user requests it or the task crosses high-risk platform/process boundaries.
+> Design and file-level plan. Implementation is not authorized by this document. Sequencing for v2.10 is in [the plan index](2026-09-06-v2.10.md). Slice A (curated choices) can proceed without hardware qualification; slices B and C cannot.
 
 **Status:** Design only, 2026-09-07. No implementation, downloads, benchmarks, or platform acceptance performed.
 
@@ -10,7 +10,7 @@
 
 **Tech Stack:** Existing plain HTML/CSS/JS, Electron, Python, faster-whisper and lightning-whisper-mlx.
 
-**Global constraints:** Local-only processing; explicit downloads; stable IPC ownership and facade exports; existing queue, cancellation, quit, timeout, cache and persistence invariants. Windows 10/11 x64, Apple Silicon macOS 14+, Linux x86_64 under existing support tiers. [Local AI contract](../../development/contracts/local-ai.md) and [AGENTS.md](../../../AGENTS.md) govern implementation.
+**Global constraints:** Local-only processing; explicit downloads; stable IPC ownership and facade exports; existing queue, cancellation, quit, timeout, cache and persistence invariants. Windows 10/11 x64, Apple Silicon macOS 14+, Linux x86_64 under existing support tiers. The [local AI contract](../../development/contracts/local-ai.md) governs implementation.
 
 ## 1. Current behavior
 
@@ -20,8 +20,6 @@
 - `src/main/transcription-service.js:1955` persists a pending meeting before admitting its compute job. Resume uses each meeting's persisted language/model, explicitly ignoring current controls (`:2065`); retry can override them (`:2799`). Ordinary transcription spawns tracked Python (`:373`); guided transcription builds the same language/model arguments (`:347`). `src/main/python-runtime.js:198` owns the spawn environment. `backend/diarization/guided_transcription.py:214` selects the corresponding Whisper backend.
 - Large is partly wired: `src/main-process/transcription-model-helpers.js:6` accepts `large` and `large-v3` alongside Tiny/Base. MLX maps both Large names to `mlx-community/whisper-large-v3-mlx` (`backend/transcription/mlx_whisper_transcriber.py:51`). faster-whisper passes its model string to the dependency (`backend/transcription/faster_whisper_transcriber.py:408`), while JS and Python cache checks interpolate that string (`transcription-model-helpers.js:60`, `faster_whisper_transcriber.py:73`). The dependency's actual alias/cache resolution has **not** been verified here; this is a release blocker for exposing Large.
 - Existing Large budgets are 120 minutes ordinary, 180 minutes plus 30 seconds outer margin guided, and 30 minutes admitted preload (`src/main-process/compute-timeout-helpers.js:3`, `:27`, `:327`). Backend language tables are broader than the UI. MLX currently falls back to Base for an unknown model key (`mlx_whisper_transcriber.py:249`). These are implementation facts, not proof of model quality or hardware suitability.
-
-Investigation was limited to this flow, the local-AI contract, scope/index, model/cache/timeout helpers and relevant tests. A few extra narrow reads beyond 15 files were needed to verify pending-job recovery, guided execution and tracked spawning; no unrelated roadmap or release history was loaded.
 
 ## 2. User-facing change
 
@@ -98,6 +96,6 @@ Parakeet implementation, summary models/languages, automatic language detection 
 
 ## 8. Open decisions
 
-1. Confirm the compatibility policy: remove Persian/Tiny/Base from **new choices**, while allowing existing pending jobs to finish with their saved values. This is recommended to preserve the locked resume contract; a prohibition on legacy execution would require a separately designed blocked-job flow, not silent substitution.
+1. **Recommended compatibility policy:** remove Persian/Tiny/Base from **new choices**, while allowing existing pending jobs to finish with their saved values. A prohibition on legacy execution would need a separately designed blocked-job flow, not silent substitution.
 2. If Large passes only some platform/runtime gates, may those paths ship first, or must exposure wait for all target platforms? Recommendation: independent exposure with explicit unavailable reasons.
-3. For additional language removals, who provides fluent acceptance review and approves the quality bar/representative use cases? Retain current non-Persian choices until that evidence and decision exist. Dependency compatibility, cache identity and resource measurements are engineering investigations, not product questions.
+3. Additional language removals need fluent review and an explicit product decision after evidence exists. Retain current non-Persian choices until then. Dependency compatibility, cache identity, and resource measurements are engineering investigations.

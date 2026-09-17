@@ -2,7 +2,8 @@
 
 This document records developer qualification evidence for v2.10. It is not a
 product performance claim and it does not change recording or decoding
-defaults.
+defaults. Keep raw reports, fixtures that are not already in `tests/fixtures/`,
+transcripts, and machine-local paths out of git.
 
 ## Protocol
 
@@ -169,10 +170,11 @@ env -u AVANEVIS_MLX_WHISPER_BATCH_SIZE \
   HF_HUB_OFFLINE=1 AVANEVIS_TRANSCRIPTION_LOCAL_FILES_ONLY=1 \
   .venv/bin/python scripts/benchmarks/inference_performance.py --mlx \
   --fixture speakrs-two-speaker-en=tests/fixtures/speakrs-two-speaker-16k.wav \
-  --reference /private/tmp/v2.10-inference-fixtures-2026-09-14/speakrs-two-speaker-reference.txt \
+  --reference /absolute/path/to/reference.txt \
   --expected-name Hazel --expected-name Zira --expected-number ten \
   --model small --language en \
-  --output-dir /private/tmp/v2.10-mlx-qualification-2026-09-14 --trials 3
+  --output-dir /absolute/path/to/local-evidence \
+  --trials 3
 ```
 
 The harness measures only observable boundaries. `production_load_model_ms`

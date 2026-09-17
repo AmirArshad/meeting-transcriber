@@ -88,10 +88,11 @@ The v2.10 scope is committed in [`todo.md`](../../todo.md). It includes:
 - meeting rename click-away saving and cross-platform shortcuts for recording and navigation;
 - the existing inference-performance work from [Local inference performance](LOCAL_INFERENCE_PERFORMANCE.md), refined in the [design and implementation plan](../superpowers/plans/2026-09-06-inference-performance.md).
 
-This section records scope only. The [v2.10 plan index](../superpowers/plans/2026-09-06-v2.10.md)
-links the Parakeet and inference-performance designs and acceptance approaches;
-implementation and platform qualification remain open.
-Other items still need their detailed design, sequencing, and acceptance planning.
+This section records scope only. Status and checkboxes live in [`todo.md`](../../todo.md).
+Order, remaining investigations, and which machines they need live in the
+[v2.10 plan index](../superpowers/plans/2026-09-06-v2.10.md). Designs are not
+implementation or acceptance evidence. Click-away rename still needs a short
+design; Linux microphone volume is an investigation, not a designed change.
 
 ## Planned
 

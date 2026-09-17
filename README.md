@@ -11,7 +11,7 @@
 
 AvaNevis (formerly Meeting Transcriber) records your microphone *and* desktop audio at the same time, then transcribes everything on-device with Whisper. No cloud, no telemetry, no account.
 
-**Current release:** v2.9.0 is released. The next development cycle is v2.10 planning; see the [product roadmap](docs/initiatives/ROADMAP.md) and [post-v2.9 planning backlog](todo.md).
+**Current release:** v2.9.0 is released. v2.10 designs are captured; qualification and implementation are still open. See the [product roadmap](docs/initiatives/ROADMAP.md) and [v2.10 status](todo.md).
 
 ## Why
 

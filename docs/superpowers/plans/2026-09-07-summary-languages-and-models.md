@@ -1,6 +1,6 @@
 # Qwen language support and alternative summarisation models — design and plan
 
-**Status:** Design proposal only, 2026-09-07. No implementation, model benchmark, upstream capability verification, or platform acceptance performed.
+**Status:** Design proposal only, 2026-09-07. No implementation, model benchmark, upstream capability verification, or platform acceptance performed. Sequencing for v2.10 is in [the plan index](2026-09-06-v2.10.md). Qualify languages (slice A1) and alternative models (slice B1) before claiming support or replacing Qwen.
 
 **Goal:** Summarise retained, qualified transcript languages in that same language, and evaluate whether a qualified alternative improves on the installed Qwen model.
 
@@ -18,8 +18,6 @@ Two independently releasable slices: **A — current-model language qualificatio
 - The existing argument builder in `src/main.js:966` invokes `summaries.summary_runner`. `backend/summaries/summary_runner.py:207` loads transcript/speaker segments, runs chunk summaries and an optional merge, and writes JSON/Markdown. No language argument reaches these prompts. Chunk/merge/repair instructions are English; Markdown headings and empty-section text are English (`backend/summaries/summary_pipeline.py:315`, `:330`, `:477`; `backend/summaries/summary_runner.py:83`). JSON validation is not language validation.
 - Summary sidecars carry model, profile, generation time, and transcript hash. Main commits attempt-specific sidecars through `update-ai`; a failed regeneration preserves the old summary (`src/main/summary-service.js:367`, `:579`). Meeting hydration detects transcript-hash staleness (`backend/meeting_manager.py:533`). Existing meeting `language` is useful context, but scan-import can assign `en` (`:482`).
 - Runtime paths are Windows x64 CUDA, Apple Silicon Metal, and Linux x64 managed CUDA 12 with live admission (`src/ai-addon-state.js:987`; `src/main/summary-service.js:401`; `backend/summaries/llama_runtime.py:55`). Linux is not universally disabled: stale prose must not override this runtime gate. Context is currently 32,768 tokens; CLI flags already differ between Windows/macOS and Linux (`backend/summaries/llama_runtime.py:18`, `:120`).
-
-Investigation followed only the local-AI canonical contract and the summary path. Targeted excerpts extended beyond roughly 15 files to verify the existing argument-builder and meeting-metadata allowlist boundaries; no unrelated roadmap or release history was loaded.
 
 ## 2. User-facing change
 
