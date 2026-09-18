@@ -91,8 +91,8 @@ The v2.10 scope is committed in [`todo.md`](../../todo.md). It includes:
 This section records scope only. Status and checkboxes live in [`todo.md`](../../todo.md).
 Order, remaining investigations, and which machines they need live in the
 [v2.10 plan index](../superpowers/plans/2026-09-06-v2.10.md). Designs are not
-implementation or acceptance evidence. Click-away rename still needs a short
-design; Linux microphone volume is an investigation, not a designed change.
+implementation or acceptance evidence. Linux microphone volume is an
+investigation, not a designed change.
 
 ## Planned
 

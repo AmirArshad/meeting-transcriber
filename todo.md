@@ -10,26 +10,34 @@ implementation or acceptance evidence.
 
 ## Status
 
-v2.10 is designed. Almost none of it is implemented.
+v2.10 is partly implemented. No-hardware UX and Whisper choice policy Slice A
+have shipped; hardware-gated model work has not.
 
 - Designs exist for inference performance, optional Parakeet, Whisper
   language/model policy, summarisation languages/models, and Settings /
   navigation / shortcuts.
+- Whisper choice policy Slice A shipped in PR #102: Persian is off new
+  choices; Tiny/Base are retired; Small is the floor; pending jobs keep their
+  saved language/model. Slice B (Large) and slice C (other language removals)
+  remain blocked on hardware qualification.
+- Settings, navigation, keyboard shortcuts, and click-away meeting rename
+  shipped in PR #103. The AvaNevis rail logo shipped in PR #104.
 - The only executed qualification is local inference performance on Apple
   Silicon (2026-09-14): keep current Opus encoding, Whisper defaults, and 32k
   summary context. No production change. Windows and Linux are unqualified.
-- Click-away meeting rename is in scope and still needs a short design.
-- No checkbox in the committed scope below is complete.
+- Remaining committed work: Parakeet, Whisper Large, extra language removals,
+  summarisation language/model qualification, inference-performance slices,
+  and the Linux microphone-volume investigation.
 
 ## How to sequence the work
 
-Settings and the transcription **policy** change (Persian / Tiny / Base off
-new choices) do not wait on hardware investigations. New engines, Whisper
-Large, extra language removals, summary-language claims, and inference default
-changes do.
+Settings, click-away rename, and the transcription **policy** change (Persian /
+Tiny / Base off new choices) did not wait on hardware investigations. New
+engines, Whisper Large, extra language removals, summary-language claims, and
+inference default changes still do.
 
-1. **Can start now:** Settings presentation, keyboard shortcuts, click-away
-   rename (design first), and the curated Whisper choice list.
+1. **Shipped without hardware qualification:** Settings presentation, keyboard
+   shortcuts, click-away rename, and the curated Whisper choice list (Slice A).
 2. **Investigate next, on the matching release machines:** Parakeet,
    Whisper Large, other listed languages, Qwen summary languages, a local
    output-language check, alternative summary models, Linux mic volume, and
@@ -48,13 +56,13 @@ revision, and artifact hashes — not home directories or meeting content.
 ### Transcription and language support
 
 Design: [Language/model policy and Whisper Large](docs/superpowers/plans/2026-09-07-language-model-policy-whisper-large.md).
-Slice A (curated choices) can ship without Large or extra language removals.
-Slice B (Large) and slice C (other languages) need qualification first.
+Slice A (curated choices) shipped in PR #102 without Large or extra language
+removals. Slice B (Large) and slice C (other languages) need qualification first.
 
-- [ ] Remove Farsi/Persian from the language list because of poor observed performance.
+- [x] Remove Farsi/Persian from the language list because of poor observed performance.
 - [ ] Explore whether any other currently listed languages also have poor performance and should be removed.
 - [ ] Add Whisper Large as a transcription model option.
-- [ ] Remove Tiny and Base model options; Small becomes the smallest available Whisper model.
+- [x] Remove Tiny and Base model options; Small becomes the smallest available Whisper model.
 - [ ] Add optional English-only Parakeet transcription in Settings, targeting Windows, Apple Silicon macOS, and Linux with independent validation gates. Prioritize faster transcription and lower resource use; improved accuracy is optional. Design: [Parakeet integration](docs/superpowers/plans/2026-09-06-parakeet-integration.md). Qualify a runtime per platform before implementation.
 
 ### Summarisation
@@ -86,7 +94,7 @@ Pyannote removal.
 
 ### Meeting and keyboard UX
 
-- [x] Save a meeting rename when the user clicks away while editing. Still needs a short design; not part of the Settings/shortcuts plan.
+- [x] Save a meeting rename when the user clicks away while editing. Shipped in PR #103; not part of the Settings/shortcuts plan.
 - [x] Add cross-platform keyboard shortcuts that avoid system shortcut conflicts, including start recording, stop recording, and navigation to Record, History, and Settings. Design is in the Settings/shortcuts plan; packaged conflict checks remain on each OS.
 
 ### Performance
