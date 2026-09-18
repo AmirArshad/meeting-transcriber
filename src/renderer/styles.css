@@ -244,32 +244,29 @@ h5 {
 }
 
 /* Logo sits in a header that matches the top bar height, so the
-   logo's center aligns horizontally with the H1's center. */
+   mark's center aligns with the H1. Decorative only — not a control. */
 .rail-logo {
-  width: 60px; /* full rail width */
+  width: var(--rail-width);
   height: var(--top-bar-height);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--text-primary);
   flex-shrink: 0;
-  margin-bottom: 10px;
+  margin-bottom: var(--space-2);
   border-bottom: 1px solid var(--hairline);
+  pointer-events: none;
 }
 
 .rail-logo-mark {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: linear-gradient(135deg, var(--accent) 0%, var(--sky) 100%);
-  box-shadow: 0 4px 14px -4px var(--accent-glow), inset 0 1px 0 rgba(255, 255, 255, 0.18);
-  color: #fff;
+  width: var(--rail-btn-size);
+  height: var(--rail-btn-size);
+  display: block;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: var(--shadow-1);
+  object-fit: contain;
 }
-
-.rail-logo-mark svg { display: block; }
 
 .rail-btn {
   position: relative;
@@ -3357,13 +3354,12 @@ h5 {
 }
 
 .rail-logo-mark {
-  width: 30px;
-  height: 30px;
-  border: 1px solid var(--hairline-strong);
-  border-radius: var(--r-sm);
-  background: var(--surface-2);
+  width: var(--rail-btn-size);
+  height: var(--rail-btn-size);
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
   box-shadow: var(--shadow-1);
-  color: var(--accent-strong);
 }
 
 .rail-btn {

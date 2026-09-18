@@ -82,7 +82,7 @@ Pyannote removal.
 - [x] Add timestamps to the AI Add-ons log in Settings.
 - [x] Improve the Record navigation icon so it does not imply that clicking it starts recording.
 - [x] Consider removing the inactive microphone icon at the top and using that visual position for the Record page icon.
-- [ ] Consider using the AvaNevis app logo in place of the current inactive microphone icon.
+- [x] Add the AvaNevis app logo above the Record page icon in the rail. Decorative only; Record keeps the microphone treatment.
 
 ### Meeting and keyboard UX
 
