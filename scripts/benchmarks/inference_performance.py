@@ -17,7 +17,10 @@ import json
 import os
 import platform
 import re
-import resource
+try:
+    import resource
+except ImportError:  # Windows has no Unix resource module; peak RSS stays unavailable.
+    resource = None  # type: ignore[assignment]
 import shutil
 import subprocess
 import sys
@@ -152,6 +155,8 @@ def finalization_measurements(elapsed_ms: float) -> dict[str, float]:
 
 
 def peak_rss_bytes() -> int | None:
+    if resource is None:
+        return None
     try:
         # macOS reports ru_maxrss in bytes; Linux reports KiB. The harness labels
         # this explicitly and normalizes Linux only, retaining unavailable on error.
