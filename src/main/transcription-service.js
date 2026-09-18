@@ -75,6 +75,63 @@ const {
   resolveSpawnDiarizationEngine,
   assertLinuxSpeakrsOnlyEngine,
 } = require('../ai-addon/manifest-store');
+const transcriptionPolicy = require('../transcription-policy');
+
+/**
+ * v2.10 Slice A: curated Small/Medium + 11-language lists for NEW work.
+ * Pending-job resume keeps legacy compat (Tiny/Base/Large + Persian) via
+ * isCompatible* below and must not pass through validateNewSelection.
+ */
+function rejectUnsupportedNewSelection({ language, modelSize }) {
+  const validation = transcriptionPolicy.validateNewSelection({ language, modelSize });
+  if (!validation.ok) {
+    const error = new Error(validation.message);
+    error.code = validation.code;
+    throw error;
+  }
+  return validation;
+}
+
+function resolveLegacyCompatibleSelection({ language, modelSize }) {
+  const normalizedLanguage = String(language == null ? 'en' : language).trim().toLowerCase() || 'en';
+  const normalizedModel = String(modelSize == null ? 'small' : modelSize).trim().toLowerCase() || 'small';
+  if (!transcriptionPolicy.isCompatibleLanguage(normalizedLanguage)) {
+    const error = new Error('Choose a supported transcription language.');
+    error.code = 'UNSUPPORTED_LANGUAGE';
+    throw error;
+  }
+  if (!transcriptionPolicy.isCompatibleModelSize(normalizedModel)) {
+    const error = new Error('Choose a supported Whisper model.');
+    error.code = 'UNSUPPORTED_MODEL';
+    throw error;
+  }
+  return { language: normalizedLanguage, modelSize: normalizedModel };
+}
+
+// NEW-work field resolution: a present key (even '') is validated raw so
+// empty strings cannot fall back to defaults and bypass validation. Only a
+// genuinely absent key takes the fallback default.
+function resolveNewSelectionField(options, key, fallback) {
+  const request = options || {};
+  if (Object.hasOwn(request, key)) {
+    return request[key];
+  }
+  return fallback;
+}
+
+// Renderer-facing model setup (check/download) offers Small/Medium only.
+// Legacy cached models stay usable internally by pending-job execution, which
+// never passes through here.
+function requireSelectableModelSize(modelSize) {
+  const raw = modelSize == null ? 'small' : modelSize;
+  const normalized = String(raw).trim().toLowerCase() || 'small';
+  if (!transcriptionPolicy.isSelectableModelSize(normalized)) {
+    const error = new Error('Choose a supported Whisper model.');
+    error.code = 'UNSUPPORTED_MODEL';
+    throw error;
+  }
+  return normalized;
+}
 
 /**
  * @param {object} deps
@@ -1964,8 +2021,9 @@ function createTranscriptionService(deps) {
       throw new Error('finalize-recording-transcription requires addMeetingToHistory');
     }
 
-    const normalizedModel = requireAllowedModelSize(modelSize);
-    const normalizedLanguage = String(language || 'en');
+    const validated = rejectUnsupportedNewSelection({ language, modelSize });
+    const normalizedModel = validated.modelSize;
+    const normalizedLanguage = validated.language;
     const resolvedAudioPath = assertSafeExistingRecordingAudioPath(audioPath);
     const transcriptPath = resolvedAudioPath.replace(/\.[^/.]+$/, '.md');
     if (!isSafeRecordingsMarkdownPath({ filePath: transcriptPath, recordingsDir: getRecordingsDir() })) {
@@ -2060,7 +2118,7 @@ function createTranscriptionService(deps) {
 
   async function resumePendingTranscriptions(_options = {}) {
     if (isQuitCommitted()) {
-      return { success: true, enqueuedCount: 0, meetingIds: [], quitSkipped: true };
+      return { success: true, enqueuedCount: 0, meetingIds: [], skipped: [], quitSkipped: true };
     }
     // Locked snapshot contract: always use each meeting's persisted language/model.
     // Renderer must not send Settings overrides (changing dropdowns must not rewrite old jobs).
@@ -2072,6 +2130,7 @@ function createTranscriptionService(deps) {
     ));
 
     const enqueued = [];
+    const skipped = [];
     for (const meeting of pending) {
       if (isQuitCommitted()) {
         break;
@@ -2091,8 +2150,14 @@ function createTranscriptionService(deps) {
       }
 
       try {
-        const normalizedModel = requireAllowedModelSize(meeting.model || 'small');
-        const normalizedLanguage = String(meeting.language || 'en');
+        // Legacy compat: resume uses each meeting's persisted language/model
+        // (Tiny/Base/Large + Persian keep working) — never validateNewSelection.
+        const legacy = resolveLegacyCompatibleSelection({
+          language: meeting.language || 'en',
+          modelSize: meeting.model || 'small',
+        });
+        const normalizedModel = legacy.modelSize;
+        const normalizedLanguage = legacy.language;
         const jobPromise = admitMeetingTranscriptionJob({
           meetingId,
           language: normalizedLanguage,
@@ -2124,6 +2189,19 @@ function createTranscriptionService(deps) {
         )) {
           continue;
         }
+        if (admitError && (
+          admitError.code === 'UNSUPPORTED_LANGUAGE'
+          || admitError.code === 'UNSUPPORTED_MODEL'
+        )) {
+          // Persisted values outside even legacy compat: surface the reason
+          // instead of silently retrying the row on every startup.
+          skipped.push({
+            meetingId,
+            code: admitError.code,
+            error: admitError.message,
+          });
+          continue;
+        }
         console.warn(
           `Skipping resume for meeting ${meetingId}:`,
           (admitError && admitError.message) || admitError,
@@ -2136,6 +2214,7 @@ function createTranscriptionService(deps) {
       success: true,
       enqueuedCount: enqueued.length,
       meetingIds: enqueued,
+      skipped,
     };
   }
 
@@ -2144,7 +2223,8 @@ function createTranscriptionService(deps) {
      * Check if Whisper model is downloaded
      */
     ipcMain.handle('check-model-downloaded', async (event, modelSize) => {
-      const size = requireAllowedModelSize(modelSize);
+      assertTrustedRendererSender(event);
+      const size = requireSelectableModelSize(modelSize);
       return new Promise((resolve) => {
         const { cacheDir, modelPatterns } = buildModelDownloadCheck({
           platform: process.platform,
@@ -2173,7 +2253,7 @@ function createTranscriptionService(deps) {
      */
     ipcMain.handle('download-model', async (event, modelSize) => {
       assertTrustedRendererSender(event);
-      const model = requireAllowedModelSize(modelSize);
+      const model = requireSelectableModelSize(modelSize);
       if (isQuitCommitted()) {
         const error = new Error('Cannot download a Whisper model while the app is quitting.');
         error.code = 'QUIT_IN_PROGRESS';
@@ -2318,9 +2398,17 @@ function createTranscriptionService(deps) {
     ipcMain.handle('transcribe-audio', async (event, options) => {
       assertTrustedRendererSender(event);
 
-      let { audioFile, language, modelSize } = options;
+      const request = options || {};
+      let { audioFile } = request;
 
-      modelSize = requireAllowedModelSize(modelSize);
+      // NEW work: curated Small/Medium + 11-language lists only. Present
+      // fields validate raw ('' must reject, not fall back to English).
+      const validated = rejectUnsupportedNewSelection({
+        language: resolveNewSelectionField(request, 'language', 'en'),
+        modelSize: resolveNewSelectionField(request, 'modelSize', 'small'),
+      });
+      const language = validated.language;
+      const modelSize = validated.modelSize;
 
       const recordingsDir = getRecordingsDir();
       audioFile = resolveTranscriptionAudioFile({
@@ -2350,8 +2438,16 @@ function createTranscriptionService(deps) {
     ipcMain.handle('transcribe-audio-with-speakers', async (event, options = {}) => {
       assertTrustedRendererSender(event);
 
-      let { audioFile, language, modelSize, speakerCount } = options;
-      modelSize = requireAllowedModelSize(modelSize);
+      const request = options || {};
+      let { audioFile, speakerCount } = request;
+      // NEW work: curated Small/Medium + 11-language lists only. Present
+      // fields validate raw ('' must reject, not fall back to English).
+      const validatedSpeakers = rejectUnsupportedNewSelection({
+        language: resolveNewSelectionField(request, 'language', 'en'),
+        modelSize: resolveNewSelectionField(request, 'modelSize', 'small'),
+      });
+      const language = validatedSpeakers.language;
+      const modelSize = validatedSpeakers.modelSize;
 
       if (!audioFile) {
         throw new Error('transcribe-audio-with-speakers requires an audioFile');
@@ -2796,8 +2892,31 @@ function createTranscriptionService(deps) {
         throw error;
       }
 
-      const normalizedModel = requireAllowedModelSize(options.modelSize || meeting.model || 'small');
-      const normalizedLanguage = String(options.language || meeting.language || 'en');
+      // Retry carries explicit new dropdown selections when the renderer sends
+      // them (strict curated validation); falling back to the meeting's saved
+      // values keeps legacy pending-job compat (Tiny/Base/Large + Persian).
+      // Field presence (not truthiness) decides: present-but-empty values
+      // must fail validation, never fall back to the meeting's saved values.
+      let normalizedModel;
+      let normalizedLanguage;
+      const retryRequest = options || {};
+      const hasExplicitLanguage = Object.hasOwn(retryRequest, 'language');
+      const hasExplicitModel = Object.hasOwn(retryRequest, 'modelSize');
+      if (hasExplicitLanguage || hasExplicitModel) {
+        const validated = rejectUnsupportedNewSelection({
+          language: hasExplicitLanguage ? retryRequest.language : (meeting.language || 'en'),
+          modelSize: hasExplicitModel ? retryRequest.modelSize : (meeting.model || 'small'),
+        });
+        normalizedModel = validated.modelSize;
+        normalizedLanguage = validated.language;
+      } else {
+        const legacy = resolveLegacyCompatibleSelection({
+          language: meeting.language || 'en',
+          modelSize: meeting.model || 'small',
+        });
+        normalizedModel = legacy.modelSize;
+        normalizedLanguage = legacy.language;
+      }
       assertSafeExistingRecordingAudioPath(meeting.audioPath);
       assertSafeExistingTranscriptPath(meeting.transcriptPath);
 
@@ -2835,6 +2954,11 @@ function createTranscriptionService(deps) {
     admitMeetingTranscriptionJob,
     finalizeRecordingTranscription,
     resumePendingTranscriptions,
+    // Slice A policy seams (wiring + tests): strict new-work validation and
+    // canonical legacy-compat resolution.
+    rejectUnsupportedNewSelection,
+    resolveLegacyCompatibleSelection,
+    requireSelectableModelSize,
     cancelJobForDelete,
     clearMeetingDeleteGuard,
     getBusyTranscriptionJobCount,

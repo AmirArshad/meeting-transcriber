@@ -54,6 +54,9 @@ const EXPECTED_RENDERER_GLOBALS = [
   'gpuSettingsHelpers',
   'platformSelectionHelpers',
   'canvasHelpers',
+  // v2.10 Slice A shared policy (src/transcription-policy.js, UMD) loads
+  // before app.js so Record UI + main use one curated source of truth.
+  'transcriptionPolicy',
 ];
 
 const EXPECTED_SCRIPT_ORDER = [
@@ -70,6 +73,7 @@ const EXPECTED_SCRIPT_ORDER = [
   'gpu-settings-helpers.js',
   'platform-selection-helpers.js',
   'canvas-helpers.js',
+  '../transcription-policy.js',
   'app.js',
 ];
 
