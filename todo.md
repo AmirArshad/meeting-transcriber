@@ -76,18 +76,18 @@ This slice does not wait on model investigations. Removing Speakrs must
 preserve any saved Hugging Face token; token deletion applies only to
 Pyannote removal.
 
-- [ ] On Linux, remove or redesign the clickable Speakrs tab when Speakrs is the only available speaker-identification engine.
-- [ ] Preserve saved Hugging Face tokens when removing Speakrs and remove token warnings from its confirmation; token deletion and warnings apply only to Pyannote removal.
-- [ ] Revisit Setup / Install Model / Remove Model terminology in favor of clearer feature enable/disable language, without changing underlying functionality.
-- [ ] Add timestamps to the AI Add-ons log in Settings.
-- [ ] Improve the Record navigation icon so it does not imply that clicking it starts recording.
-- [ ] Consider removing the inactive microphone icon at the top and using that visual position for the Record page icon.
+- [x] On Linux, remove or redesign the clickable Speakrs tab when Speakrs is the only available speaker-identification engine.
+- [x] Preserve saved Hugging Face tokens when removing Speakrs and remove token warnings from its confirmation; token deletion and warnings apply only to Pyannote removal.
+- [x] Revisit Setup / Install Model / Remove Model terminology in favor of clearer feature enable/disable language, without changing underlying functionality.
+- [x] Add timestamps to the AI Add-ons log in Settings.
+- [x] Improve the Record navigation icon so it does not imply that clicking it starts recording.
+- [x] Consider removing the inactive microphone icon at the top and using that visual position for the Record page icon.
 - [ ] Consider using the AvaNevis app logo in place of the current inactive microphone icon.
 
 ### Meeting and keyboard UX
 
-- [ ] Save a meeting rename when the user clicks away while editing. Still needs a short design; not part of the Settings/shortcuts plan.
-- [ ] Add cross-platform keyboard shortcuts that avoid system shortcut conflicts, including start recording, stop recording, and navigation to Record, History, and Settings. Design is in the Settings/shortcuts plan; packaged conflict checks remain on each OS.
+- [x] Save a meeting rename when the user clicks away while editing. Still needs a short design; not part of the Settings/shortcuts plan.
+- [x] Add cross-platform keyboard shortcuts that avoid system shortcut conflicts, including start recording, stop recording, and navigation to Record, History, and Settings. Design is in the Settings/shortcuts plan; packaged conflict checks remain on each OS.
 
 ### Performance
 

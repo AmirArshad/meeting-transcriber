@@ -2439,6 +2439,19 @@ footer {
   gap: 14px;
 }
 
+.settings-subnav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  margin: 2px 0 10px;
+}
+
+.settings-subnav a {
+  color: var(--accent-strong);
+}
+
 .settings-group {
   background: var(--surface-1);
   border: 1px solid var(--hairline);
@@ -2712,6 +2725,17 @@ footer {
 
 .diarization-engine-recommended::before {
   display: none;
+}
+
+.diarization-engine-static {
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  margin: 4px 0 0;
+}
+
+.diarization-engine-static[hidden] {
+  display: none !important;
 }
 
 .diarization-setup-prompt {

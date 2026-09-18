@@ -81,10 +81,13 @@ const {
   applyDiarizationEngineCardDomState,
   buildDiarizationEngineCards,
   coerceDiarizationEngineForPlatform,
+  getAiAddonRemoveButtonLabel,
+  getAiAddonValidateButtonLabel,
   getDiarizationRemoveConfirmMessage,
   getDiarizationSetupButtonLabel,
   getDiarizationSwitchConfirmMessage,
   getDiarizationTokenInputPlaceholder,
+  getSummarySetupButtonLabel,
   isAiAddonProgressPhase,
   isAiAddonSetupLockingControls,
   isAiAddonTerminalStatus,
@@ -94,6 +97,7 @@ const {
   shouldClearDiarizationTokenFields,
   shouldConfirmDiarizationEngineSwitch,
   shouldOfferDiarizationSetupFields,
+  shouldUseStaticSpeakrsEngineText,
 } = window.aiAddonUiHelpers;
 const { clearElement } = window.domHelpers;
 const { meetingIdsEqual } = window.meetingHelpers;
@@ -108,6 +112,12 @@ const {
   resolveInitialDeviceSelection,
 } = window.platformSelectionHelpers;
 const { writeSignalTrace } = window.canvasHelpers;
+const {
+  getKeyboardShortcutAria,
+  getKeyboardShortcutDisplay,
+  resolveKeyboardShortcutAction,
+  shouldSuppressKeyboardShortcut,
+} = window.keyboardShortcutHelpers;
 
 // UI Elements
 const micSelect = document.getElementById('mic-select');
@@ -211,6 +221,10 @@ let meetings = [];
 let audioVisualizer = null;
 let isFirstRecording = true; // Track if this is first recording (for longer timeout)
 let isInitializing = true; // Track if app is still initializing
+let recordingHydrated = false; // Authoritative main capture state loaded; gates Start/Stop
+let recordingHydrationFailed = false; // Prior capture probe failed; next success logs recovery
+let hydratedCaptureState = false; // ensureRecordingHydration ran to completion; false allows retry
+let rendererQuitCommitted = false; // Set on app-quit-progress; rejects new Start/Stop
 const checkedMeetingIds = new Set();
 let meetingSearchQuery = '';
 let meetingSearchQueryNormalized = '';
@@ -793,6 +807,12 @@ function renderActivityList() {
       form.addEventListener('submit', (event) => {
         event.preventDefault();
         event.stopPropagation();
+        void commitActivityRename(row.meetingId);
+      });
+      form.addEventListener('focusout', (event) => {
+        if (event.relatedTarget && form.contains(event.relatedTarget)) {
+          return;
+        }
         void commitActivityRename(row.meetingId);
       });
 
@@ -1498,6 +1518,170 @@ function openSettingsAtAiAddons() {
   }
 }
 
+function focusTabHeading(targetTab) {
+  const pane = document.getElementById(`${targetTab}-tab`);
+  if (!pane) {
+    return;
+  }
+  const heading = pane.querySelector('h2, h3');
+  if (!heading) {
+    return;
+  }
+  if (!heading.hasAttribute('tabindex')) {
+    heading.setAttribute('tabindex', '-1');
+  }
+  heading.focus({ preventScroll: true });
+}
+
+function activateTabAndFocusHeading(targetTab) {
+  activateTab(targetTab);
+  focusTabHeading(targetTab);
+}
+
+function canRunKeyboardRecordingCommand(action) {
+  if (action === 'start-recording') {
+    return isRecordingCommandAdmitted('start');
+  }
+  if (action === 'stop-recording') {
+    return isRecordingCommandAdmitted('stop');
+  }
+  return false;
+}
+
+function isRecordingCommandAdmitted(action) {
+  if (!recordingHydrated || rendererQuitCommitted || isInitializing) {
+    return false;
+  }
+  if (recoveryPromptOpen) {
+    return false;
+  }
+  if (!recordBtn || recordBtn.disabled) {
+    return false;
+  }
+  if (action === 'start') {
+    return getRecordButtonAction(recordingState) === 'start';
+  }
+  if (action === 'stop') {
+    return getRecordButtonAction(recordingState) === 'stop';
+  }
+  return false;
+}
+
+function isKeyboardShortcutDialogOpen() {
+  if (recoveryPromptOpen || isHistoryTitleEditorOpen()) {
+    return true;
+  }
+  if (recordModeMenu && !recordModeMenu.hidden) {
+    return true;
+  }
+  if (typeof document === 'undefined' || !document.querySelectorAll) {
+    return false;
+  }
+  const openModal = Array.from(document.querySelectorAll('.modal-overlay')).some(
+    (modal) => !modal.classList.contains('hidden'),
+  );
+  return openModal;
+}
+
+function handleKeyboardShortcut(event) {
+  const action = resolveKeyboardShortcutAction(event, { platform: getRendererPlatform() });
+  if (!action) {
+    return;
+  }
+  if (shouldSuppressKeyboardShortcut(event, {
+    isMenuOpen: Boolean(recordModeMenu && !recordModeMenu.hidden),
+    isDialogOpen: isKeyboardShortcutDialogOpen(),
+  })) {
+    return;
+  }
+  if (action === 'goto-record' || action === 'goto-history' || action === 'goto-settings') {
+    event.preventDefault();
+    activateTabAndFocusHeading(action === 'goto-record' ? 'record' : action === 'goto-history' ? 'history' : 'settings');
+    return;
+  }
+  if (action === 'start-recording' || action === 'stop-recording') {
+    if (!canRunKeyboardRecordingCommand(action)) {
+      return;
+    }
+    event.preventDefault();
+    if (action === 'start-recording') {
+      void startRecording('mic-and-desktop');
+    } else {
+      void stopRecording();
+    }
+  }
+}
+
+function applyKeyboardShortcutDiscovery() {
+  const platform = getRendererPlatform();
+  const displays = {
+    'goto-record': getKeyboardShortcutDisplay('goto-record', { platform }),
+    'goto-history': getKeyboardShortcutDisplay('goto-history', { platform }),
+    'goto-settings': getKeyboardShortcutDisplay('goto-settings', { platform }),
+    'start-recording': getKeyboardShortcutDisplay('start-recording', { platform }),
+    'stop-recording': getKeyboardShortcutDisplay('stop-recording', { platform }),
+  };
+  const railRecord = document.querySelector('.rail-btn[data-tab="record"]');
+  if (railRecord) {
+    railRecord.setAttribute('aria-keyshortcuts', getKeyboardShortcutAria('goto-record', { platform }));
+    railRecord.title = `Record page (${displays['goto-record']})`;
+  }
+  const railHistory = document.querySelector('.rail-btn[data-tab="history"]');
+  if (railHistory) {
+    railHistory.setAttribute('aria-keyshortcuts', getKeyboardShortcutAria('goto-history', { platform }));
+    railHistory.title = `History (${displays['goto-history']})`;
+  }
+  const railSettings = document.querySelector('.rail-btn[data-tab="settings"]');
+  if (railSettings) {
+    railSettings.setAttribute('aria-keyshortcuts', getKeyboardShortcutAria('goto-settings', { platform }));
+    railSettings.title = `Settings (${displays['goto-settings']})`;
+  }
+  if (recordBtn) {
+    const startDisplay = displays['start-recording'];
+    const stopDisplay = displays['stop-recording'];
+    recordBtn.setAttribute('aria-keyshortcuts', `${getKeyboardShortcutAria('start-recording', { platform })} ${getKeyboardShortcutAria('stop-recording', { platform })}`);
+    recordBtn.title = `Start Recording (${startDisplay}) / Stop (${stopDisplay})`;
+  }
+  document.querySelectorAll('[data-shortcut-display]').forEach((el) => {
+    const action = el.getAttribute('data-shortcut-display');
+    if (action && displays[action]) {
+      el.textContent = displays[action];
+    }
+  });
+  const note = document.getElementById('keyboard-shortcuts-note');
+  if (note) {
+    note.textContent = 'Works while AvaNevis is focused. Start uses Mic + Desktop; use the recording menu for other modes.';
+  }
+}
+
+function setupKeyboardShortcuts() {
+  if (setupKeyboardShortcuts._bound) {
+    return;
+  }
+  setupKeyboardShortcuts._bound = true;
+  document.addEventListener('keydown', handleKeyboardShortcut);
+  applyKeyboardShortcutDiscovery();
+  document.querySelectorAll('.settings-subnav a[href^="#"]').forEach((link) => {
+    link.addEventListener('click', (event) => {
+      const targetId = link.getAttribute('href').slice(1);
+      const section = document.getElementById(targetId);
+      if (!section) {
+        return;
+      }
+      event.preventDefault();
+      activateTab('settings');
+      section.scrollIntoView({ block: 'start', behavior: getPreferredScrollBehavior() });
+      const heading = section.querySelector('h3');
+      if (heading) {
+        if (!heading.hasAttribute('tabindex')) {
+          heading.setAttribute('tabindex', '-1');
+        }
+        heading.focus({ preventScroll: true });
+      }
+    });
+  });
+}
+
 function getRendererPlatform() {
   return homePromptContext.platform || inferRendererHostFamily(navigator.platform);
 }
@@ -1511,6 +1695,7 @@ function getSelectedDiarizationEngine(diarization) {
 
 function applyDiarizationEngineCards({ selectedEngine, platform, arch }) {
   const resolvedPlatform = platform || getRendererPlatform();
+  const useStaticSpeakrsText = shouldUseStaticSpeakrsEngineText({ platform: resolvedPlatform });
   const cardNodes = Array.from(document.querySelectorAll('.diarization-engine-card'));
   const states = applyDiarizationEngineCardDomState(
     cardNodes.map((card) => ({ engine: card.dataset.engine })),
@@ -1520,9 +1705,22 @@ function applyDiarizationEngineCards({ selectedEngine, platform, arch }) {
   document.querySelectorAll('.diarization-engine-selector').forEach((selector) => {
     selector.classList.toggle('is-single-engine', catalog.length < 2);
   });
+  document.querySelectorAll('[data-speakrs-static]').forEach((staticEl) => {
+    staticEl.hidden = !useStaticSpeakrsText;
+  });
   cardNodes.forEach((card, index) => {
     const state = states[index];
     const radio = card.querySelector('.diarization-engine-radio');
+    if (useStaticSpeakrsText) {
+      card.hidden = true;
+      card.classList.remove('selected');
+      if (radio) {
+        radio.checked = false;
+        radio.disabled = true;
+        radio.tabIndex = -1;
+      }
+      return;
+    }
     card.hidden = Boolean(state && state.hidden);
     if (!state || state.hidden) {
       card.classList.remove('selected');
@@ -1627,6 +1825,8 @@ function updateHomeAiAddonCTA(aiStatus) {
       setupButton: document.getElementById('home-setup-diarization-btn'),
       controlState: diarizationControlState,
       setupLabel: getActiveDiarizationSetupLabel(diarization, selectedEngine),
+      validateLabel: getAiAddonValidateButtonLabel(),
+      removeLabel: getAiAddonRemoveButtonLabel(),
     });
     speakerPrompt.style.display = 'flex';
     return;
@@ -1832,26 +2032,6 @@ async function init() {
   setRecordingState('initializing');
   statusText.textContent = 'Initializing...';
 
-  let hydratedCaptureState = false;
-  const ensureRecordingHydration = async () => {
-    if (hydratedCaptureState) {
-      return;
-    }
-    hydratedCaptureState = true;
-    try {
-      if (!audioVisualizer) {
-        audioVisualizer = new AudioVisualizer();
-      }
-      setupEventListeners();
-      setupRecordingRecoveryUi();
-      await hydrateRecordingStateFromMain();
-      await queryRecordingRecoveryState();
-    } catch (hydrateError) {
-      console.error('Failed to hydrate recording state:', hydrateError);
-      hydratedCaptureState = false;
-    }
-  };
-
   try {
     startupCudaCheckPromise = checkGPUStatus().catch((error) => {
       console.warn('Startup CUDA/GPU check failed:', error);
@@ -1934,7 +2114,7 @@ async function init() {
     }
     await refreshHomeAiAddonPrompt();
 
-    if (recordingState === 'idle') {
+    if (recordingState === 'idle' && recordingHydrated) {
       addLog('Ready to record!');
       refreshIdleStatusPill();
     }
@@ -2419,9 +2599,13 @@ function wireInlineTitleEditor({
 
   if (!row || !heading || !editBtn || !form || !input || !cancelBtn) return;
 
+  let suppressClickAwaySave = false;
+  let commitInFlight = false;
+
   const enterEditMode = () => {
     const meeting = getMeeting();
     if (!meeting) return;
+    suppressClickAwaySave = false;
     input.value = meeting.title || '';
     heading.style.display = 'none';
     editBtn.style.display = 'none';
@@ -2451,18 +2635,22 @@ function wireInlineTitleEditor({
 
   cancelBtn.addEventListener('click', (e) => {
     e.preventDefault();
+    suppressClickAwaySave = true;
     exitEditMode();
   });
 
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       e.preventDefault();
+      suppressClickAwaySave = true;
       exitEditMode();
     }
   });
 
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
+  const commitTitleEdit = async () => {
+    if (commitInFlight) {
+      return;
+    }
     const meeting = getMeeting();
     if (!meeting) {
       exitEditMode();
@@ -2474,6 +2662,7 @@ function wireInlineTitleEditor({
       exitEditMode();
       return;
     }
+    commitInFlight = true;
     try {
       const updated = await window.electronAPI.updateMeeting(meeting.id, { title: newTitle });
       if (!updated || !updated.title) {
@@ -2491,11 +2680,30 @@ function wireInlineTitleEditor({
       addLog(`Failed to rename meeting: ${err.message}`, 'error');
       alert(`Failed to rename meeting: ${err.message}`);
     } finally {
+      commitInFlight = false;
       const activeMeeting = getMeeting();
       if (activeMeeting && String(activeMeeting.id) === editedMeetingId) {
         exitEditMode();
       }
     }
+  };
+
+  form.addEventListener('focusout', (e) => {
+    if (suppressClickAwaySave) {
+      return;
+    }
+    if (form.style.display !== 'flex') {
+      return;
+    }
+    if (e.relatedTarget && form.contains(e.relatedTarget)) {
+      return;
+    }
+    void commitTitleEdit();
+  });
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    await commitTitleEdit();
   });
 }
 
@@ -2720,7 +2928,18 @@ function setupEventListeners() {
   }));
 
   if (typeof window.electronAPI.onAppQuitProgress === 'function') {
-    registerCleanup(window.electronAPI.onAppQuitProgress((payload) => {
+  registerCleanup(window.electronAPI.onAppQuitProgress((payload) => {
+    // Quit cancellation reopens recording admission; the cancelled payload
+    // carries no log message by design.
+    if (payload && payload.code === 'QUIT_CANCELLED') {
+      rendererQuitCommitted = false;
+      updateButtonUI();
+      updateControlsState();
+      return;
+    }
+    rendererQuitCommitted = true;
+      updateButtonUI();
+      updateControlsState();
       const message = typeof payload === 'string' ? payload : payload && payload.message;
       if (!message) {
         return;
@@ -2907,9 +3126,15 @@ function setupEventListeners() {
 function handleRecordButtonClick() {
   switch (getRecordButtonAction(recordingState)) {
     case 'start':
+      if (!isRecordingCommandAdmitted('start')) {
+        return;
+      }
       startRecording('mic-and-desktop');
       break;
     case 'stop':
+      if (!isRecordingCommandAdmitted('stop')) {
+        return;
+      }
       stopRecording();
       break;
     default:
@@ -3243,6 +3468,11 @@ async function handleDeferRecordingRecoveryAction() {
 }
 
 function setupRecordingRecoveryUi() {
+  if (setupRecordingRecoveryUi._bound) {
+    return;
+  }
+  setupRecordingRecoveryUi._bound = true;
+
   recoveryBannerPrimary?.addEventListener('click', () => {
     void handleRecoverRecordingAction();
   });
@@ -3374,6 +3604,9 @@ function updateButtonUI() {
   }
 
   updateDiscardRecordingButtonVisibility();
+  if (!recordingHydrated || rendererQuitCommitted) {
+    button.disabled = true;
+  }
 }
 
 function getRecordModeMenuItems() {
@@ -3411,14 +3644,15 @@ function closeRecordModeMenu({ restoreFocus = false } = {}) {
 // Update other controls based on state
 function updateControlsState() {
   const isBusy = recordingState !== 'idle' && recordingState !== 'initializing';
+  const lifecycleBlocked = !recordingHydrated || rendererQuitCommitted;
 
-  micSelect.disabled = isBusy || isInitializing;
-  desktopSelect.disabled = isBusy || isInitializing;
-  languageSelect.disabled = isBusy || isInitializing;
-  modelSelect.disabled = isBusy || isInitializing;
-  refreshBtn.disabled = isBusy || isInitializing;
+  micSelect.disabled = isBusy || isInitializing || lifecycleBlocked;
+  desktopSelect.disabled = isBusy || isInitializing || lifecycleBlocked;
+  languageSelect.disabled = isBusy || isInitializing || lifecycleBlocked;
+  modelSelect.disabled = isBusy || isInitializing || lifecycleBlocked;
+  refreshBtn.disabled = isBusy || isInitializing || lifecycleBlocked;
   if (recordModeToggle) {
-    recordModeToggle.disabled = isBusy || isInitializing;
+    recordModeToggle.disabled = isBusy || isInitializing || lifecycleBlocked;
     if (recordModeToggle.disabled) {
       // Never leave an actionable menu open once the lifecycle leaves idle.
       closeRecordModeMenu({ restoreFocus: false });
@@ -4591,9 +4825,54 @@ function stopRecordingPresencePoll() {
   }
 }
 
+// Runs the shipped init hydration composition: one-shot guard, capture probe,
+// recovery discovery (never gating), admission flag, and control refresh.
+async function ensureRecordingHydration() {
+  if (hydratedCaptureState) {
+    return;
+  }
+  hydratedCaptureState = true;
+  try {
+    if (!audioVisualizer) {
+      audioVisualizer = new AudioVisualizer();
+    }
+    setupEventListeners();
+    setupRecordingRecoveryUi();
+    const captureHydrated = await hydrateRecordingStateFromMain();
+    try {
+      await queryRecordingRecoveryState();
+    } catch (recoveryError) {
+      // Recovery discovery must never gate capture: recording controls stay
+      // driven by the authoritative capture probe alone. Recovery retries
+      // through its banner/refresh path.
+      console.error('Failed to query recording recovery state:', recoveryError);
+      addLog(`Could not check for interrupted recordings: ${recoveryError.message}`, 'warning');
+    }
+    if (!captureHydrated) {
+      hydratedCaptureState = false;
+      recordingHydrationFailed = true;
+      addLog('Could not confirm whether a recording is in progress. Recording stays unavailable until the state can be confirmed.', 'error');
+      if (typeof statusText !== 'undefined' && statusText) {
+        statusText.textContent = 'Could not confirm recording state. Reload to retry.';
+      }
+      return;
+    }
+    recordingHydrated = true;
+    if (recordingHydrationFailed) {
+      recordingHydrationFailed = false;
+      addLog('Recording state confirmed. Ready to record!');
+    }
+    updateButtonUI();
+    updateControlsState();
+  } catch (hydrateError) {
+    console.error('Failed to hydrate recording state:', hydrateError);
+    hydratedCaptureState = false;
+  }
+}
+
 async function hydrateRecordingStateFromMain() {
   if (!window.electronAPI?.getRecordingState) {
-    return;
+    return false;
   }
 
   let mainState;
@@ -4601,11 +4880,11 @@ async function hydrateRecordingStateFromMain() {
     mainState = await window.electronAPI.getRecordingState();
   } catch (error) {
     console.error('Failed to hydrate recording state from main:', error);
-    return;
+    return false;
   }
 
   if (!mainState || mainState.state === 'idle') {
-    return;
+    return true;
   }
 
   if (mainState.state === 'recording' && canHydratedRendererStopRecording(mainState)) {
@@ -4620,7 +4899,7 @@ async function hydrateRecordingStateFromMain() {
       audioVisualizer.start(activeCaptureMode);
     }
     addLog('Resumed an in-progress recording after window reload.');
-    return;
+    return true;
   }
 
   if (mainState.state === 'starting' || mainState.state === 'stopping' || mainState.state === 'cancelling') {
@@ -4635,7 +4914,10 @@ async function hydrateRecordingStateFromMain() {
     activeCaptureMode = normalizeCaptureMode(mainState.captureMode);
     setRecordingState(mainState.state);
     startRecordingPresencePoll();
+    return true;
   }
+
+  return true;
 }
 
 function startRecordingPresencePoll() {
@@ -4986,7 +5268,7 @@ function setAiAddonControlsDisabled(disabled) {
   });
 }
 
-function applyAiAddonButtonState({ setupButton, validateButton, removeButton, controlState, setupLabel }) {
+function applyAiAddonButtonState({ setupButton, validateButton, removeButton, controlState, setupLabel, validateLabel, removeLabel }) {
   const state = controlState || { canConfigure: false, canValidate: false, canRemove: false };
   if (setupButton) {
     setupButton.disabled = !state.canConfigure;
@@ -4996,9 +5278,15 @@ function applyAiAddonButtonState({ setupButton, validateButton, removeButton, co
   }
   if (validateButton) {
     validateButton.disabled = !state.canValidate;
+    if (validateLabel) {
+      validateButton.textContent = validateLabel;
+    }
   }
   if (removeButton) {
     removeButton.disabled = !state.canRemove;
+    if (removeLabel) {
+      removeButton.textContent = removeLabel;
+    }
   }
 }
 
@@ -5024,11 +5312,17 @@ function appendAiAddonLog(text) {
     return;
   }
 
+  const now = new Date();
+  const timestamp = `${now.toLocaleDateString()} ${now.toLocaleTimeString()}`;
+  const stamped = String(text ?? '').split('\n').map((line) => `[${timestamp}] ${line}`).join('\n');
   logDiv.style.display = 'block';
-  logOutput.textContent += `${text}\n`;
-  const lines = logOutput.textContent.split('\n');
-  if (lines.length > MAX_PROGRESS_LOG_ENTRIES) {
-    logOutput.textContent = lines.slice(-MAX_PROGRESS_LOG_ENTRIES).join('\n');
+  logOutput.textContent += `${stamped}\n`;
+  const rawLines = logOutput.textContent.split('\n');
+  if (rawLines.length > 0 && rawLines[rawLines.length - 1] === '') {
+    rawLines.pop();
+  }
+  if (rawLines.length > MAX_PROGRESS_LOG_ENTRIES) {
+    logOutput.textContent = `${rawLines.slice(-MAX_PROGRESS_LOG_ENTRIES).join('\n')}\n`;
   }
   logOutput.scrollTop = logOutput.scrollHeight;
 }
@@ -5134,11 +5428,15 @@ function updateAiAddonSettings(status) {
       removeButton: document.getElementById('remove-diarization-btn'),
       controlState: diarizationControlState,
       setupLabel: getActiveDiarizationSetupLabel(diarization, selectedEngine),
+      validateLabel: getAiAddonValidateButtonLabel(),
+      removeLabel: getAiAddonRemoveButtonLabel(),
     });
     applyAiAddonButtonState({
       setupButton: document.getElementById('home-setup-diarization-btn'),
       controlState: diarizationControlState,
       setupLabel: getActiveDiarizationSetupLabel(diarization, selectedEngine),
+      validateLabel: getAiAddonValidateButtonLabel(),
+      removeLabel: getAiAddonRemoveButtonLabel(),
     });
 
     const statusText = document.getElementById('diarization-status-text');
@@ -5170,6 +5468,9 @@ function updateAiAddonSettings(status) {
       validateButton: document.getElementById('validate-summary-btn'),
       removeButton: document.getElementById('remove-summary-btn'),
       controlState: summaryControlState,
+      setupLabel: getSummarySetupButtonLabel(),
+      validateLabel: getAiAddonValidateButtonLabel(),
+      removeLabel: getAiAddonRemoveButtonLabel(),
     });
 
     const statusText = document.getElementById('summary-status-text');
@@ -5200,11 +5501,19 @@ async function refreshAiAddonSettings() {
       aiAddonStatusSnapshot = status;
       updateAiAddonSettings(status);
       updateHomeAiAddonCTA(status);
+      const retryRow = document.getElementById('ai-addon-retry-row');
+      if (retryRow) {
+        retryRow.hidden = true;
+      }
       return status;
     } catch (error) {
       addLog(`Failed to check AI add-ons: ${error.message}`, 'error');
       setStatusBadge(document.getElementById('ai-addons-status-badge'), 'error');
       updateHomeAiAddonCTA(null);
+      const retryRow = document.getElementById('ai-addon-retry-row');
+      if (retryRow) {
+        retryRow.hidden = false;
+      }
       return null;
     } finally {
       aiAddonStatusRefreshPromise = null;
@@ -5303,6 +5612,12 @@ function setupAiAddonSettingsListeners() {
     return;
   }
   aiAddonSettingsListenersBound = true;
+  const retryAiAddonStatusBtn = document.getElementById('retry-ai-addon-status-btn');
+  if (retryAiAddonStatusBtn) {
+    retryAiAddonStatusBtn.addEventListener('click', () => {
+      void refreshAiAddonSettings();
+    });
+  }
   const setupDiarizationBtn = document.getElementById('setup-diarization-btn');
   const homeSetupDiarizationBtn = document.getElementById('home-setup-diarization-btn');
   const cancelDiarizationBtn = document.getElementById('cancel-diarization-btn');
@@ -5514,7 +5829,7 @@ function setupAiAddonSettingsListeners() {
       if (!canRunControlAction('summary', 'remove')) {
         return;
       }
-      if (!confirm('Remove the local summary model from this device?')) {
+      if (!confirm('Disable and remove the local summary model from this device?')) {
         return;
       }
       withAiAddonAction(removeSummaryBtn, 'Removing...', async () => {
@@ -6688,6 +7003,7 @@ function setupCustomAudioPlayer() {
 // Start the app
 init();
 setupTabs();
+setupKeyboardShortcuts();
 setupDevConsole();
 setupCustomAudioPlayer();
 setupTitleEditors();

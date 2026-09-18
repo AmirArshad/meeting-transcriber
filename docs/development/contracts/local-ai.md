@@ -44,6 +44,8 @@ If the outer wall clock still rejects during metadata (hung `update-ai`), clear 
 
 **Gotcha:** the armed `before-quit` pass re-checks **recording only**. Remaining AI/GPU work deliberately falls through to force-kill — re-draining there previously looped forever. Decision helper: `resolveBeforeQuitAction` in `src/main-process/quit-lifecycle-helpers.js`.
 
+The recording-quit path also notifies the renderer on the same `app-quit-progress` channel: `code: 'QUIT_RECORDING'` closes renderer recording admission for the async stop/dialog flow, and `code: 'QUIT_CANCELLED'` (no log message) reopens it when the user keeps the app open. Emission lives in `handleQuitDuringRecording` (`src/main/recorder-service.js`) so the behavioral quit harness executes it.
+
 ### Transcription model cache and offline runtime
 
 Whisper caches are **separate** from the diarization HF cache under `userData/ai-addons/models/diarization`. Guided transcription must not let diarization's `HF_HUB_CACHE` mask the Whisper cache — it passes `AVANEVIS_TRANSCRIPTION_HF_CACHE_DIR` for Whisper only.

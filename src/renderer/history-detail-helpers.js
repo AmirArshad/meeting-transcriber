@@ -147,12 +147,12 @@
     if (/\b(?:token|model terms|unauthorized|forbidden|gated|authenticated|authentication|permission)\b/.test(text)
       || /\b(?:model|repository) access\b/.test(text)
       || /\baccess (?:denied|token|to (?:the )?(?:model|repository))\b/.test(text)) {
-      return 'Check your Hugging Face token and accepted pyannote model terms, then validate again.';
+      return 'Check your Hugging Face token and accepted pyannote model terms, then check setup again.';
     }
     if (/dependency|runtime|pyannote\.audio|torch|torchvision|torchaudio|module|import|installed/.test(text)) {
-      return 'Remove and reinstall speaker identification setup, then validate again.';
+      return 'Disable and remove speaker identification setup, then enable it again and check setup.';
     }
-    return 'Validate again or remove and reinstall speaker identification setup.';
+    return 'Check setup again or disable and remove speaker identification setup, then enable it again.';
   }
 
   function getDiarizationSetupMessage(feature) {
@@ -182,7 +182,7 @@
 
   function getSummarySetupMessage(feature) {
     if (!feature) {
-      return 'Summary setup status is unavailable. Open Settings to validate the local summary model.';
+      return 'Summary setup status is unavailable. Open Settings to check setup for the local summary model.';
     }
 
     const status = feature && feature.status;
@@ -200,12 +200,12 @@
       return reason || 'The local summary model is being validated. Try again after validation finishes.';
     }
     if (status === 'error') {
-      return `${reason || 'Summary model setup failed.'} Try Install Model again, Validate, or Remove and reinstall the local model.`;
+      return `${reason || 'Summary model setup failed.'} Try Enable summaries again, Check setup, or Disable and remove then enable the local model again.`;
     }
     if (status === 'ready') {
-      return reason || 'Summary setup is incomplete. Validate the local model and llama.cpp runtime in Settings.';
+      return reason || 'Summary setup is incomplete. Check setup for the local model and llama.cpp runtime in Settings.';
     }
-    return reason || 'Install the local summary model in Settings before generating summaries.';
+    return reason || 'Enable the local summary model in Settings before generating summaries.';
   }
 
   function hasPositiveSize(value) {

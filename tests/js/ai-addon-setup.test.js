@@ -3119,7 +3119,8 @@ test('remove speakrs setup leaves engine as the last choice', async () => {
   const catalog = createSpeakrsTestCatalog();
   const cliPath = writeSpeakrsCli(fsModule, userDataDir);
   const tokenPath = getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace);
-  fsModule.writeFileSync(tokenPath, Buffer.from('encrypted:hf_validtoken123'));
+  const tokenBytes = Buffer.from('encrypted:hf_validtoken123');
+  fsModule.writeFileSync(tokenPath, tokenBytes);
 
   await setupDiarizationAddon({
     userDataDir,
@@ -3147,7 +3148,138 @@ test('remove speakrs setup leaves engine as the last choice', async () => {
   assert.equal(status.features.diarization.status, 'notConfigured');
   assert.equal(status.features.diarization.engine, 'speakrs');
   assert.equal(status.features.diarization.setupComplete, false);
+  assert.deepEqual(fsModule.readFileSync(tokenPath), tokenBytes);
+});
+
+test('remove speakrs setup with no saved token succeeds without creating one', async () => {
+  const fsModule = createMemoryFs();
+  const userDataDir = '/tmp/AvaNevis';
+  const catalog = createSpeakrsTestCatalog();
+  const cliPath = writeSpeakrsCli(fsModule, userDataDir);
+  const tokenPath = getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace);
+
+  await setupDiarizationAddon({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    engine: 'speakrs',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog,
+    env: { SPEAKRS_CLI_PATH: cliPath },
+    downloader: async ({ destinationPath }) => fsModule.writeFileSync(destinationPath, SPEAKRS_TEST_BYTES),
+    extractor: createSpeakrsTestExtractor(fsModule),
+  });
+
   assert.equal(fsModule.existsSync(tokenPath), false);
+
+  const status = await removeDiarizationSetup({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog,
+    env: { SPEAKRS_CLI_PATH: cliPath },
+  });
+
+  assert.equal(status.features.diarization.status, 'notConfigured');
+  assert.equal(fsModule.existsSync(tokenPath), false);
+});
+
+test('repeated speakrs removal preserves the saved token', async () => {
+  const fsModule = createMemoryFs();
+  const userDataDir = '/tmp/AvaNevis';
+  const catalog = createSpeakrsTestCatalog();
+  const cliPath = writeSpeakrsCli(fsModule, userDataDir);
+  const tokenPath = getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace);
+  const tokenBytes = Buffer.from('encrypted:hf_validtoken123');
+  fsModule.writeFileSync(tokenPath, tokenBytes);
+
+  await setupDiarizationAddon({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    engine: 'speakrs',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog,
+    env: { SPEAKRS_CLI_PATH: cliPath },
+    downloader: async ({ destinationPath }) => fsModule.writeFileSync(destinationPath, SPEAKRS_TEST_BYTES),
+    extractor: createSpeakrsTestExtractor(fsModule),
+  });
+
+  await removeDiarizationSetup({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog,
+    env: { SPEAKRS_CLI_PATH: cliPath },
+  });
+  const status = await removeDiarizationSetup({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog,
+    env: { SPEAKRS_CLI_PATH: cliPath },
+  });
+
+  assert.equal(status.features.diarization.status, 'notConfigured');
+  assert.deepEqual(fsModule.readFileSync(tokenPath), tokenBytes);
+});
+
+test('pyannote to speakrs switch then speakrs removal preserves credentials', async () => {
+  const fsModule = createMemoryFs();
+  const userDataDir = '/tmp/AvaNevis';
+  const catalog = createSpeakrsTestCatalog();
+  const cliPath = writeSpeakrsCli(fsModule, userDataDir);
+  const tokenPath = getTokenPath(userDataDir, TOKEN_KEYS.diarizationHuggingFace);
+
+  await setupDiarizationAddon({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    engine: 'pyannote',
+    token: 'hf_validtoken123',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog,
+    dependencyInstaller: stubDiarizationDependencyInstaller,
+  });
+  assert.equal(fsModule.existsSync(tokenPath), true);
+  const tokenBytes = fsModule.readFileSync(tokenPath);
+
+  await setupDiarizationAddon({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    engine: 'speakrs',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog,
+    env: { SPEAKRS_CLI_PATH: cliPath },
+    downloader: async ({ destinationPath }) => fsModule.writeFileSync(destinationPath, SPEAKRS_TEST_BYTES),
+    extractor: createSpeakrsTestExtractor(fsModule),
+  });
+  assert.deepEqual(fsModule.readFileSync(tokenPath), tokenBytes);
+
+  const status = await removeDiarizationSetup({
+    userDataDir,
+    platform: 'win32',
+    arch: 'x64',
+    safeStorage: createSafeStorage(),
+    fsModule,
+    catalog,
+    env: { SPEAKRS_CLI_PATH: cliPath },
+  });
+
+  assert.equal(status.features.diarization.status, 'notConfigured');
+  assert.equal(status.features.diarization.engine, 'speakrs');
+  assert.deepEqual(fsModule.readFileSync(tokenPath), tokenBytes);
 });
 
 test('packaged Speakrs setup rejects a missing bundled CLI before download', async () => {

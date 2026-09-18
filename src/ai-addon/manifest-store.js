@@ -901,7 +901,7 @@ function checkDiarizationDependencyCache({
     validationStatus: validationError ? 'error' : installed ? 'ready' : 'notConfigured',
     reason: validationError
       || (installed ? null : staleInstall
-        ? 'Speaker identification dependencies are out of date. Remove and reinstall speaker identification setup.'
+        ? 'Speaker identification dependencies are out of date. Disable and remove speaker identification setup, then enable it again.'
         : 'Speaker identification dependencies are not installed.'),
     artifact,
     artifactId: artifact && artifact.id,

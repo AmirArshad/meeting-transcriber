@@ -1729,7 +1729,6 @@ async function removeDiarizationSetup({
 
   if (engine === 'speakrs') {
     await uninstallSpeakrsLocalState({ userDataDir, fsModule });
-    deleteAiAddonToken({ userDataDir, tokenKey: TOKEN_KEYS.diarizationHuggingFace, fsModule });
   } else {
     await uninstallPyannoteLocalState({ userDataDir, modelId, fsModule });
   }
