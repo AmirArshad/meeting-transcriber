@@ -84,7 +84,7 @@ test('renderer init finally hydrates recording state after partial init failure'
 
   assert.match(
     appSource,
-    /const ensureRecordingHydration = async \(\) => \{[\s\S]*?await hydrateRecordingStateFromMain\(\);/,
+    /async function ensureRecordingHydration\(\) \{[\s\S]*?await hydrateRecordingStateFromMain\(\);/,
   );
   assert.match(
     appSource,

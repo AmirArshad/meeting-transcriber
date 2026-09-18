@@ -1492,6 +1492,13 @@ function createRecorderService(deps) {
     setIsQuitting(false);
 
     setQuitWorkflowPromise((async () => {
+      // Close renderer recording admission for the whole async recording-quit
+      // path: this flow otherwise emits only recording-progress, never
+      // app-quit-progress, leaving shortcuts/mouse Start admitted.
+      sendToRenderer('app-quit-progress', {
+        message: quitState.progressMessage || 'Stopping the recorder before quitting...',
+        code: 'QUIT_RECORDING',
+      });
       if (quitState.progressMessage) {
         sendToRenderer('recording-progress', quitState.progressMessage);
       }
@@ -1539,10 +1546,12 @@ function createRecorderService(deps) {
         if (stopWasAttempted) {
           await recoverRecordingAfterQuitCanceled(outstandingStopPromise);
           clearQuitCommitted();
+          sendToRenderer('app-quit-progress', { code: 'QUIT_CANCELLED', message: '' });
           return;
         }
 
         clearQuitCommitted();
+        sendToRenderer('app-quit-progress', { code: 'QUIT_CANCELLED', message: '' });
         const canceledMessage = quitState.state === 'stopping'
           ? 'Quit canceled. Saving continues.'
           : 'Quit canceled. Recording continues.';

@@ -72,22 +72,13 @@
     <div class="container">
       <!-- Vertical icon rail -->
       <nav class="icon-rail" aria-label="Primary">
-        <div class="rail-logo" aria-hidden="true" title="AvaNevis">
-          <span class="rail-logo-mark">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
-              <path d="M5 11a7 7 0 0 0 14 0"/>
-              <line x1="12" y1="18" x2="12" y2="22"/>
-            </svg>
-          </span>
-        </div>
-
-        <button type="button" class="rail-btn active" data-tab="record" aria-label="Record" aria-current="page">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="6" fill="currentColor" stroke="none" opacity="0.85"/>
-            <circle cx="12" cy="12" r="9"/>
+        <button type="button" class="rail-btn active" data-tab="record" aria-label="Record page" aria-current="page">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
+            <path d="M5 11a7 7 0 0 0 14 0"/>
+            <line x1="12" y1="18" x2="12" y2="22"/>
           </svg>
-          <span class="rail-tooltip">Record</span>
+          <span class="rail-tooltip">Record page</span>
         </button>
 
         <button type="button" class="rail-btn" data-tab="history" aria-label="History">
@@ -322,6 +313,7 @@
                   <span class="diarization-engine-card-sub" data-engine-sub="pyannote">Needs a Hugging Face account.</span>
                 </label>
               </div>
+              <p class="diarization-engine-static" data-speakrs-static hidden>Engine: Speakrs</p>
               <div class="ai-addon-field" id="home-diarization-token-field" hidden>
                 <label for="home-diarization-token-input">Hugging Face token</label>
                 <input
@@ -334,7 +326,7 @@
                 />
               </div>
               <div class="ai-addon-actions">
-                <button id="home-setup-diarization-btn" class="btn btn-primary btn-small" disabled>Set Up</button>
+                <button id="home-setup-diarization-btn" class="btn btn-primary btn-small" disabled>Enable speaker identification</button>
               </div>
             </section>
 
@@ -777,10 +769,19 @@
           <div class="tab-pane" id="settings-tab">
             <section class="card settings-section">
               <h2>Settings</h2>
+              <nav class="settings-subnav" aria-label="Settings sections">
+                <a href="#gpu-settings">GPU Acceleration</a>
+                <span aria-hidden="true">·</span>
+                <a href="#ai-addons-settings">AI Add-ons</a>
+                <span aria-hidden="true">·</span>
+                <a href="#keyboard-shortcuts-settings">Keyboard Shortcuts</a>
+                <span aria-hidden="true">·</span>
+                <a href="#about-settings">About</a>
+              </nav>
 
               <div class="settings-content">
                 <!-- GPU Acceleration -->
-                <div class="settings-group">
+                <div class="settings-group" id="gpu-settings">
                   <div class="setting-header">
                     <h3>GPU Acceleration</h3>
                     <span class="setting-badge" id="gpu-status-badge"
@@ -864,8 +865,11 @@
                   </div>
 
                   <p class="setting-description">
-                    Optional local-only features for speaker labels and meeting summaries. Models and tokens stay on this device.
+                    Optional local-only features for speaker labels and meeting summaries. Enabling downloads local files to this device; disabling removes them. Models and tokens stay on this device. Enabling summaries does not generate a summary.
                   </p>
+                  <div class="ai-addon-actions" id="ai-addon-retry-row" hidden>
+                    <button id="retry-ai-addon-status-btn" class="btn btn-small" type="button">Retry</button>
+                  </div>
 
                   <div class="ai-addon-list">
                     <div class="ai-addon-card" id="diarization-addon-card">
@@ -894,6 +898,7 @@
                           <span class="diarization-engine-card-sub" id="diarization-engine-pyannote-sub">Needs a Hugging Face account.</span>
                         </label>
                       </div>
+                      <p class="diarization-engine-static" data-speakrs-static hidden>Engine: Speakrs</p>
 
                       <div class="ai-addon-field" id="diarization-token-field" hidden>
                         <label for="diarization-token-input">Hugging Face token</label>
@@ -934,10 +939,10 @@
                         <p class="progress-text" id="diarization-progress-text">Starting&hellip;</p>
                       </div>
                       <div class="ai-addon-actions">
-                        <button id="setup-diarization-btn" class="btn btn-primary btn-small" disabled>Set Up</button>
+                        <button id="setup-diarization-btn" class="btn btn-primary btn-small" disabled>Enable speaker identification</button>
                         <button id="cancel-diarization-btn" class="btn btn-secondary btn-small cancel-download-btn">Cancel Download</button>
-                        <button id="validate-diarization-btn" class="btn btn-small" disabled>Validate</button>
-                        <button id="remove-diarization-btn" class="btn btn-danger btn-small" disabled>Remove</button>
+                        <button id="validate-diarization-btn" class="btn btn-small" disabled>Check setup</button>
+                        <button id="remove-diarization-btn" class="btn btn-danger btn-small" disabled>Disable and remove…</button>
                       </div>
                     </div>
 
@@ -969,10 +974,10 @@
                         <p class="progress-text" id="summary-progress-text">Starting&hellip;</p>
                       </div>
                       <div class="ai-addon-actions">
-                        <button id="setup-summary-btn" class="btn btn-primary btn-small" disabled>Install Model</button>
+                        <button id="setup-summary-btn" class="btn btn-primary btn-small" disabled>Enable summaries</button>
                         <button id="cancel-summary-btn" class="btn btn-secondary btn-small cancel-download-btn">Cancel Download</button>
-                        <button id="validate-summary-btn" class="btn btn-small" disabled>Validate</button>
-                        <button id="remove-summary-btn" class="btn btn-danger btn-small" disabled>Remove</button>
+                        <button id="validate-summary-btn" class="btn btn-small" disabled>Check setup</button>
+                        <button id="remove-summary-btn" class="btn btn-danger btn-small" disabled>Disable and remove…</button>
                       </div>
                     </div>
                   </div>
@@ -985,8 +990,38 @@
                   <p class="ai-addon-warning" id="ai-addon-footprint-warning" style="display: none"></p>
                 </div>
 
+                <!-- Keyboard Shortcuts -->
+                <div class="settings-group" id="keyboard-shortcuts-settings">
+                  <div class="setting-header">
+                    <h3>Keyboard Shortcuts</h3>
+                  </div>
+                  <p class="setting-description" id="keyboard-shortcuts-note">Works while AvaNevis is focused. Start uses Mic + Desktop; use the recording menu for other modes.</p>
+                  <div class="gpu-info keyboard-shortcuts-table" role="table" aria-label="Keyboard shortcuts">
+                    <div class="info-row" role="row">
+                      <span class="info-label" role="cell">Record page</span>
+                      <span class="info-value" role="cell" data-shortcut-display="goto-record">Ctrl+Shift+1</span>
+                    </div>
+                    <div class="info-row" role="row">
+                      <span class="info-label" role="cell">History</span>
+                      <span class="info-value" role="cell" data-shortcut-display="goto-history">Ctrl+Shift+2</span>
+                    </div>
+                    <div class="info-row" role="row">
+                      <span class="info-label" role="cell">Settings</span>
+                      <span class="info-value" role="cell" data-shortcut-display="goto-settings">Ctrl+Shift+3</span>
+                    </div>
+                    <div class="info-row" role="row">
+                      <span class="info-label" role="cell">Start recording</span>
+                      <span class="info-value" role="cell" data-shortcut-display="start-recording">Ctrl+Shift+R</span>
+                    </div>
+                    <div class="info-row" role="row">
+                      <span class="info-label" role="cell">Stop and save recording</span>
+                      <span class="info-value" role="cell" data-shortcut-display="stop-recording">Ctrl+Shift+S</span>
+                    </div>
+                  </div>
+                </div>
+
                 <!-- App Info -->
-                <div class="settings-group">
+                <div class="settings-group" id="about-settings">
                   <h3>About</h3>
                   <div class="gpu-info" style="margin-top: 12px; margin-bottom: 0">
                     <div class="info-row">
@@ -1080,6 +1115,7 @@
     <script src="gpu-settings-helpers.js"></script>
     <script src="platform-selection-helpers.js"></script>
     <script src="canvas-helpers.js"></script>
+    <script src="keyboard-shortcut-helpers.js"></script>
     <script src="../transcription-policy.js"></script>
     <script src="app.js"></script>
   </body>

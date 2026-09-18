@@ -50,9 +50,14 @@
     return engine === 'pyannote' ? 'pyannote' : 'speakrs';
   }
 
+  function shouldUseStaticSpeakrsEngineText({ platform } = {}) {
+    return platform !== 'win32' && platform !== 'darwin';
+  }
+
   function applyDiarizationEngineCardDomState(cardStates, { selectedEngine, platform, arch } = {}) {
     const catalog = buildDiarizationEngineCards({ platform, arch });
     const selected = coerceDiarizationEngineForPlatform(selectedEngine, platform);
+    const singleEngine = catalog.length < 2;
     return (Array.isArray(cardStates) ? cardStates : []).map((card) => {
       const engine = card && card.engine;
       const entry = catalog.find((item) => item.engine === engine);
@@ -60,7 +65,7 @@
         engine,
         hidden: !entry,
         selected: Boolean(entry) && engine === selected,
-        radioDisabled: !entry,
+        radioDisabled: !entry || singleEngine,
       };
     });
   }
@@ -139,11 +144,32 @@
     installedEngine,
     hasOtherEngineLocalState,
   } = {}) {
-    return shouldConfirmDiarizationEngineSwitch({
+    if (shouldConfirmDiarizationEngineSwitch({
       selectedEngine,
       installedEngine,
       hasOtherEngineLocalState,
-    }) ? 'Switch model' : 'Set Up';
+    })) {
+      if (selectedEngine === 'speakrs') {
+        return 'Switch to Speakrs';
+      }
+      if (selectedEngine === 'pyannote') {
+        return 'Switch to Pyannote';
+      }
+      return 'Switch engine';
+    }
+    return 'Enable speaker identification';
+  }
+
+  function getSummarySetupButtonLabel() {
+    return 'Enable summaries';
+  }
+
+  function getAiAddonValidateButtonLabel() {
+    return 'Check setup';
+  }
+
+  function getAiAddonRemoveButtonLabel() {
+    return 'Disable and remove…';
   }
 
   function getDiarizationSwitchConfirmMessage({ targetEngine, platform } = {}) {
@@ -159,12 +185,12 @@
 
   function getDiarizationRemoveConfirmMessage({ engine } = {}) {
     if (engine === 'pyannote') {
-      return 'Remove Pyannote speaker identification and the saved Hugging Face token?';
+      return 'Disable and remove Pyannote speaker identification and the saved Hugging Face token?';
     }
     if (engine === 'speakrs') {
-      return 'Remove Speakrs speaker identification and any saved Hugging Face token?';
+      return 'Disable and remove Speakrs speaker identification from this device?';
     }
-    return 'Remove speaker identification setup and stored token?';
+    return 'Disable and remove speaker identification setup from this device?';
   }
 
   function getDiarizationTokenInputPlaceholder() {
@@ -202,11 +228,14 @@
     applyDiarizationEngineCardDomState,
     buildDiarizationEngineCards,
     coerceDiarizationEngineForPlatform,
+    getAiAddonRemoveButtonLabel,
+    getAiAddonValidateButtonLabel,
     getDiarizationEngineCard,
     getDiarizationRemoveConfirmMessage,
     getDiarizationSetupButtonLabel,
     getDiarizationSwitchConfirmMessage,
     getDiarizationTokenInputPlaceholder,
+    getSummarySetupButtonLabel,
     isAiAddonProgressPhase,
     isAiAddonSetupLockingControls,
     isAiAddonTerminalStatus,
@@ -220,5 +249,6 @@
     shouldOfferDiarizationSetupFields,
     shouldShowDiarizationSpeakerCount,
     shouldShowDiarizationTokenUi,
+    shouldUseStaticSpeakrsEngineText,
   };
 }));

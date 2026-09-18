@@ -10,11 +10,14 @@ const {
   applyDiarizationEngineCardDomState,
   buildDiarizationEngineCards,
   coerceDiarizationEngineForPlatform,
+  getAiAddonRemoveButtonLabel,
+  getAiAddonValidateButtonLabel,
   getDiarizationEngineCard,
   getDiarizationRemoveConfirmMessage,
   getDiarizationSetupButtonLabel,
   getDiarizationSwitchConfirmMessage,
   getDiarizationTokenInputPlaceholder,
+  getSummarySetupButtonLabel,
   isAiAddonProgressPhase,
   isAiAddonSetupLockingControls,
   isAiAddonTerminalStatus,
@@ -27,6 +30,7 @@ const {
   shouldShowDiarizationSpeakerCount,
   shouldShowDiarizationTokenUi,
   shouldOfferDiarizationSetupFields,
+  shouldUseStaticSpeakrsEngineText,
 } = require('../../src/renderer/ai-addon-ui-helpers');
 
 test('unsupported Linux add-on fields hide token and speaker-count UI', () => {
@@ -157,7 +161,7 @@ test('Linux renderer state hides Pyannote cards and keeps token UI off', () => {
   );
 
   assert.deepEqual(homeAndSettings, [
-    { engine: 'speakrs', hidden: false, selected: true, radioDisabled: false },
+    { engine: 'speakrs', hidden: false, selected: true, radioDisabled: true },
     { engine: 'pyannote', hidden: true, selected: false, radioDisabled: true },
   ]);
   assert.equal(
@@ -201,7 +205,9 @@ test('switch confirm copy matches the exclusive selector table', () => {
     'Switch to Pyannote? This removes Speakrs (about 800 MB). Pyannote needs a Hugging Face account and a larger download.',
   );
   assert.match(getDiarizationRemoveConfirmMessage({ engine: 'pyannote' }), /Pyannote.*token/i);
-  assert.match(getDiarizationRemoveConfirmMessage({ engine: 'speakrs' }), /Speakrs.*token/i);
+  assert.match(getDiarizationRemoveConfirmMessage({ engine: 'speakrs' }), /Disable and remove Speakrs/i);
+  assert.doesNotMatch(getDiarizationRemoveConfirmMessage({ engine: 'speakrs' }), /token|hugging face/i);
+  assert.doesNotMatch(getDiarizationRemoveConfirmMessage({}), /token/i);
   assert.equal(
     getDiarizationTokenInputPlaceholder(),
     'Leave blank to reuse a saved token, or paste a new one',
@@ -281,22 +287,25 @@ test('setup button reads Switch model only when the other engine is installed', 
     selectedEngine: 'pyannote',
     installedEngine: 'speakrs',
     hasOtherEngineLocalState: true,
-  }), 'Switch model');
+  }), 'Switch to Pyannote');
   assert.equal(getDiarizationSetupButtonLabel({
     selectedEngine: 'speakrs',
     installedEngine: 'pyannote',
     hasOtherEngineLocalState: true,
-  }), 'Switch model');
+  }), 'Switch to Speakrs');
   assert.equal(getDiarizationSetupButtonLabel({
     selectedEngine: 'speakrs',
     installedEngine: 'speakrs',
     hasOtherEngineLocalState: true,
-  }), 'Set Up');
+  }), 'Enable speaker identification');
   assert.equal(getDiarizationSetupButtonLabel({
     selectedEngine: 'pyannote',
     installedEngine: 'speakrs',
     hasOtherEngineLocalState: false,
-  }), 'Set Up');
+  }), 'Enable speaker identification');
+  assert.equal(getSummarySetupButtonLabel(), 'Enable summaries');
+  assert.equal(getAiAddonValidateButtonLabel(), 'Check setup');
+  assert.equal(getAiAddonRemoveButtonLabel(), 'Disable and remove…');
 });
 
 test('hidden AI add-on fields beat display:flex so Speakrs hides token and speaker-count', () => {
@@ -319,13 +328,44 @@ test('renderer applies Linux Speakrs-only card state instead of leaving static P
   assert.match(appJs, /is-single-engine/);
 });
 
-test('Settings and Home apply Switch model and restore engine radios from control state', () => {
+test('Settings and Home apply Switch engine and restore engine radios from control state', () => {
   const appJs = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'renderer', 'app.js'), 'utf8');
   assert.match(appJs, /getDiarizationSetupButtonLabel/);
+  assert.match(appJs, /getSummarySetupButtonLabel/);
+  assert.match(appJs, /getAiAddonValidateButtonLabel/);
+  assert.match(appJs, /getAiAddonRemoveButtonLabel/);
   assert.match(appJs, /canSelectEngine/);
   assert.match(appJs, /radio\.disabled\s*=\s*!.*canSelectEngine/);
   assert.match(appJs, /isAiAddonSetupLockingControls/);
   assert.match(appJs, /setupActive:\s*diarizationSetupLocking/);
   assert.doesNotMatch(appJs, /setupActive:\s*aiAddonDownloadState\.diarization\.active/);
   assert.match(appJs, /getDiarizationTokenInputPlaceholder/);
+});
+
+test('single-engine platforms use static Speakrs text with no radio tab stop', () => {
+  assert.equal(shouldUseStaticSpeakrsEngineText({ platform: 'linux' }), true);
+  assert.equal(shouldUseStaticSpeakrsEngineText({ platform: null }), true);
+  assert.equal(shouldUseStaticSpeakrsEngineText({}), true);
+  assert.equal(shouldUseStaticSpeakrsEngineText({ platform: 'win32' }), false);
+  assert.equal(shouldUseStaticSpeakrsEngineText({ platform: 'darwin' }), false);
+
+  const winCards = applyDiarizationEngineCardDomState(
+    [{ engine: 'speakrs' }, { engine: 'pyannote' }],
+    { selectedEngine: 'speakrs', platform: 'win32', arch: 'x64' },
+  );
+  assert.equal(winCards[0].radioDisabled, false);
+  assert.equal(winCards[1].radioDisabled, false);
+});
+
+test('Settings and Home include static Speakrs text for single-engine platforms', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'renderer', 'index.html'), 'utf8');
+  const statics = [...html.matchAll(/data-speakrs-static[^>]*>/gi)];
+  assert.ok(statics.length >= 2);
+  for (const [openingTag] of statics) {
+    assert.match(openingTag, /\shidden(?:\s|>|=)/i);
+  }
+  assert.match(html, /Engine:\s*Speakrs/);
+  const appJs = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'renderer', 'app.js'), 'utf8');
+  assert.match(appJs, /shouldUseStaticSpeakrsEngineText/);
+  assert.match(appJs, /data-speakrs-static/);
 });

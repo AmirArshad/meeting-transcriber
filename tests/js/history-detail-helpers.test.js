@@ -107,7 +107,7 @@ test('setup messages explain graceful degradation paths', () => {
       status: 'error',
       runtimeCache: { reason: 'llama.cpp runtime is not installed.' },
     }),
-    /llama\.cpp runtime is not installed.*install model.*validate.*remove/i,
+    /llama\.cpp runtime is not installed.*enable summaries.*check setup.*disable and remove/i,
   );
   assert.doesNotMatch(
     getSummarySetupMessage({ status: 'error' }),
@@ -115,7 +115,7 @@ test('setup messages explain graceful degradation paths', () => {
   );
   assert.match(
     getSummarySetupMessage({ status: 'notConfigured' }),
-    /Install the local summary model/i,
+    /Enable the local summary model/i,
   );
   assert.match(
     getDiarizationSetupMessage({ status: 'notConfigured' }),
@@ -125,13 +125,13 @@ test('setup messages explain graceful degradation paths', () => {
     status: 'error',
     error: "partially initialized module 'torchvision' has no attribute 'extension'",
   });
-  assert.match(runtimeFailure, /remove and reinstall speaker identification setup/i);
+  assert.match(runtimeFailure, /disable and remove speaker identification setup/i);
   assert.doesNotMatch(runtimeFailure, /token.*model terms/i);
   const localCacheFailure = getDiarizationSetupMessage({
     status: 'error',
     error: 'Could not access local cache directory.',
   });
-  assert.match(localCacheFailure, /validate again or remove and reinstall/i);
+  assert.match(localCacheFailure, /check setup again or disable and remove/i);
   assert.doesNotMatch(localCacheFailure, /token.*model terms/i);
 });
 
@@ -224,7 +224,7 @@ test('AI add-on controls fail closed until setup status is known', () => {
   assert.equal(unknownSummary.canSelectEngine, false);
   assert.deepEqual(getSummaryActionControlState(null, { platformSupportsSummaries: false }), {
     enabled: false,
-    title: 'Summary setup status is unavailable. Open Settings to validate the local summary model.',
+    title: 'Summary setup status is unavailable. Open Settings to check setup for the local summary model.',
   });
 });
 

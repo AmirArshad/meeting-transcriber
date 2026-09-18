@@ -467,6 +467,15 @@ test('F1: quit cancel after stop was sent awaits stop and persists instead of cl
     liveCtx.rendererMessages.some((entry) => entry.channel === 'recording-saved-during-quit'),
     'expected recording-saved-during-quit notification',
   );
+  const quitLifecycle = liveCtx.rendererMessages.filter(
+    (entry) => entry.channel === 'app-quit-progress',
+  );
+  assert.ok(
+    quitLifecycle.length >= 2
+      && quitLifecycle[0].payload?.code === 'QUIT_RECORDING'
+      && quitLifecycle[quitLifecycle.length - 1].payload?.code === 'QUIT_CANCELLED',
+    `expected QUIT_RECORDING admission close followed by QUIT_CANCELLED reopen, got ${JSON.stringify(quitLifecycle.map((entry) => entry.payload?.code))}`,
+  );
 });
 
 test('F7: recorder finishing while forced-quit dialog is open still persists (no UX lie)', async () => {
@@ -532,6 +541,15 @@ test('F7: recorder finishing while forced-quit dialog is open still persists (no
   assert.ok(liveCtx.historyAdds.length >= 1, 'expected in-session history persist for F7');
   assert.ok(
     liveCtx.rendererMessages.some((entry) => entry.channel === 'recording-saved-during-quit'),
+  );
+  const quitLifecycle = liveCtx.rendererMessages.filter(
+    (entry) => entry.channel === 'app-quit-progress',
+  );
+  assert.ok(
+    quitLifecycle.length >= 2
+      && quitLifecycle[0].payload?.code === 'QUIT_RECORDING'
+      && quitLifecycle[quitLifecycle.length - 1].payload?.code === 'QUIT_CANCELLED',
+    `expected QUIT_RECORDING admission close followed by QUIT_CANCELLED reopen, got ${JSON.stringify(quitLifecycle.map((entry) => entry.payload?.code))}`,
   );
 });
 
