@@ -381,7 +381,15 @@ test('AI Add-on Log prefixes receipt timestamps and enforces the bounded cap', (
 
 test('Record navigation uses the microphone treatment and Record page naming', () => {
   const html = readUtf8(INDEX_HTML);
-  assert.doesNotMatch(html, /class="rail-logo"/);
+  assert.match(html, /class="rail-logo"[^>]*aria-hidden="true"/);
+  assert.match(html, /class="rail-logo-mark"[^>]*src="logo\.png"/);
+  assert.match(html, /srcset="logo\.png 2x"/);
+  assert.doesNotMatch(html, /<button[^>]+class="rail-logo/);
+  const logoPath = path.join(ROOT, 'src', 'renderer', 'logo.png');
+  const logoBytes = require('node:fs').readFileSync(logoPath);
+  assert.equal(logoBytes[0], 0x89);
+  assert.equal(logoBytes[1], 0x50);
+  assert.ok(logoBytes.readUInt32BE(16) >= 256, 'rail logo should be at least 256px so 36 CSS px stays sharp');
   const railButtons = [...html.matchAll(/<button[^>]+class="rail-btn[^"]*"[^>]*data-tab="([^"]+)"[^>]*aria-label="([^"]+)"[^>]*>([\s\S]*?)<\/button>/g)];
   assert.ok(railButtons.length >= 3);
   assert.equal(railButtons[0][1], 'record');
