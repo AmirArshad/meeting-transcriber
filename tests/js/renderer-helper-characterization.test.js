@@ -38,6 +38,9 @@ const { roundedBar } = require('../../src/renderer/canvas-helpers');
 
 const APP_JS = path.join(ROOT, 'src', 'renderer', 'app.js');
 const INDEX_HTML = path.join(ROOT, 'src', 'renderer', 'index.html');
+// Windows checkouts use CRLF, which breaks the LF slice markers below.
+// Normalize once at the read site so character offsets stay platform-stable.
+const readAppSource = () => readUtf8(APP_JS).replace(/\r\n/g, '\n');
 const STYLES_CSS = path.join(ROOT, 'src', 'renderer', 'styles.css');
 
 const EXPECTED_RENDERER_GLOBALS = [
@@ -159,7 +162,7 @@ test('extracted pure helpers characterize summary/AI gating without DOM access',
 });
 
 test('app.js no longer defines extracted pure helpers inline', () => {
-  const appSource = readUtf8(APP_JS);
+  const appSource = readAppSource();
   for (const name of EXTRACTED_PURE_HELPER_NAMES) {
     assert.equal(
       appSource.includes(`function ${name}`),
@@ -230,7 +233,7 @@ test('index.html loads renderer helpers before app.js with unique globals', () =
 });
 
 test('Phase 0.3 does not mislabel DOM helpers as pure', () => {
-  const appSource = readUtf8(APP_JS);
+  const appSource = readAppSource();
   const expectations = {
     setStatusBadge: (snippet) => /\b(?:textContent|className|classList)\b/.test(snippet),
     populateSelect: (snippet) => /\bdocument\./.test(snippet),
@@ -300,7 +303,7 @@ test('responsive recording controls stay grouped when the visualizer stacks', ()
 });
 
 test('activateTab synchronizes active navigation styling and accessibility state', () => {
-  const appSource = readUtf8(APP_JS);
+  const appSource = readAppSource();
   const start = appSource.indexOf('function activateTab(targetTab)');
   const end = appSource.indexOf('\nfunction getPreferredScrollBehavior()', start);
   assert.notEqual(start, -1);
@@ -351,7 +354,7 @@ test('activateTab synchronizes active navigation styling and accessibility state
 });
 
 test('Settings navigation disables explicit smooth scrolling for reduced motion', () => {
-  const appSource = readUtf8(APP_JS);
+  const appSource = readAppSource();
   const start = appSource.indexOf('function getPreferredScrollBehavior()');
   const end = appSource.indexOf('\nfunction openSettingsAtAiAddons()', start);
   assert.notEqual(start, -1);
@@ -369,7 +372,7 @@ test('Settings navigation disables explicit smooth scrolling for reduced motion'
 });
 
 test('AI Add-on Log prefixes receipt timestamps and enforces the bounded cap', () => {
-  const appSource = readUtf8(APP_JS);
+  const appSource = readAppSource();
   assert.match(appSource, /function appendAiAddonLog\(text\)/);
   assert.match(appSource, /toLocaleDateString\(\).*toLocaleTimeString\(\)|toLocaleTimeString\(\).*toLocaleDateString\(\)/);
   assert.match(appSource, /split\('\\n'\)\.map\(.*\[.*timestamp.*\]/);
@@ -389,7 +392,7 @@ test('Record navigation uses the microphone treatment and Record page naming', (
 });
 
 test('keyboard shortcuts dispatch through guarded actions without new IPC', () => {
-  const appSource = readUtf8(APP_JS);
+  const appSource = readAppSource();
   assert.match(appSource, /function handleKeyboardShortcut\(event\)/);
   assert.match(appSource, /resolveKeyboardShortcutAction\(event/);
   assert.match(appSource, /shouldSuppressKeyboardShortcut\(event/);
@@ -417,14 +420,14 @@ test('Settings exposes Keyboard Shortcuts discovery and section links', () => {
   assert.match(html, /data-shortcut-display="stop-recording"/);
   assert.match(html, /id="keyboard-shortcuts-note"/);
   assert.match(html, /Works while AvaNevis is focused/);
-  const appSource = readUtf8(APP_JS);
+  const appSource = readAppSource();
   assert.match(appSource, /\.settings-subnav a\[href\^="#"\]/);
   const css = readUtf8(STYLES_CSS);
   assert.match(css, /\.settings-subnav/);
 });
 
 test('meeting rename saves on click-away without changing the submit path', () => {
-  const appSource = readUtf8(APP_JS);
+  const appSource = readAppSource();
   assert.match(appSource, /function wireInlineTitleEditor\(/);
   assert.match(appSource, /form\.addEventListener\('focusout'/);
   assert.match(appSource, /form\.contains\(e\.relatedTarget\)/);
@@ -435,7 +438,7 @@ test('meeting rename saves on click-away without changing the submit path', () =
 });
 
 test('recording commands share one hydration/quit admission guard', () => {
-  const appSource = readUtf8(APP_JS);
+  const appSource = readAppSource();
   assert.match(appSource, /let recordingHydrated = false/);
   assert.match(appSource, /let rendererQuitCommitted = false/);
   assert.match(appSource, /function isRecordingCommandAdmitted\(action\)/);
@@ -445,7 +448,7 @@ test('recording commands share one hydration/quit admission guard', () => {
 });
 
 test('recording shortcut dispatcher admits only hydrated idle/record states and never after quit', () => {
-  const appSource = readUtf8(APP_JS);
+  const appSource = readAppSource();
   const {
     resolveKeyboardShortcutAction,
     shouldSuppressKeyboardShortcut,
@@ -578,7 +581,7 @@ const {
 } = require('../../src/renderer/transcription-activity-helpers');
 
 function createHydrationCompositionContext({ mainProbe, recoveryProbe } = {}) {
-  const appSource = readUtf8(APP_JS);
+  const appSource = readAppSource();
   const context = {
     console,
     hydratedCaptureState: false,
@@ -770,7 +773,7 @@ test('real quit-progress wiring closes and reopens admission with UI transitions
 });
 
 test('AI status failure renders a single-flight inline retry', async () => {
-  const appSource = readUtf8(APP_JS);
+  const appSource = readAppSource();
   assert.match(appSource, /ai-addon-retry-row/);
   assert.match(appSource, /retry-ai-addon-status-btn/);
   assert.match(appSource, /retryAiAddonStatusBtn\.addEventListener\('click'/);
@@ -844,7 +847,7 @@ test('AI status failure renders a single-flight inline retry', async () => {
 });
 
 test('settings listener setup binds the status retry button exactly once across repeated opens', () => {
-  const appSource = readUtf8(APP_JS);
+  const appSource = readAppSource();
   const listenersById = new Map();
   const context = {
     aiAddonSettingsListenersBound: false,
@@ -881,7 +884,7 @@ test('settings listener setup binds the status retry button exactly once across 
 });
 
 test('AI Add-on Log keeps exactly 250 entries across single and multiline appends', () => {
-  const appSource = readUtf8(APP_JS);
+  const appSource = readAppSource();
   const start = appSource.indexOf('function appendAiAddonLog(text) {');
   assert.notEqual(start, -1);
   const end = appSource.indexOf('\n}\n\nfunction shouldLogAiAddonProgress(', start);
@@ -933,7 +936,7 @@ test('AI Add-on Log keeps exactly 250 entries across single and multiline append
 });
 
 test('removal confirmations and surfaced reasons use disable/enable wording', () => {
-  const appSource = readUtf8(APP_JS);
+  const appSource = readAppSource();
   assert.match(appSource, /Disable and remove the local summary model from this device\?/);
   assert.doesNotMatch(appSource, /confirm\('Remove the local summary model/);
   const manifestSource = readUtf8(path.join(ROOT, 'src', 'ai-addon', 'manifest-store.js'));
