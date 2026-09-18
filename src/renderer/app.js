@@ -1147,6 +1147,13 @@ async function retryActivityTranscription(meetingId) {
   activityActionBusyMeetingId = id;
   renderActivityList();
   addLog(`Retrying transcription for ${id}...`);
+  const activitySelection = validateNewTranscriptionSelection(languageSelect.value, modelSelect.value);
+  if (!activitySelection.ok) {
+    reportUnsupportedTranscriptionSelection(activitySelection);
+    activityActionBusyMeetingId = null;
+    renderActivityList();
+    return;
+  }
   try {
     // Fire-and-forget from Home: do not block Start. Retry IPC still awaits in main;
     // we intentionally do not await here beyond enqueue acknowledgment if available.
@@ -1185,6 +1192,13 @@ async function resumePendingTranscriptionsFromBanner() {
     addLog(count
       ? `Resumed ${count} pending transcription${count === 1 ? '' : 's'}.`
       : 'No pending transcriptions to resume.');
+    const skipped = result && Array.isArray(result.skipped) ? result.skipped : [];
+    for (const entry of skipped) {
+      addLog(
+        `Skipped pending meeting ${entry.meetingId || '?'}: ${entry.error || entry.code || 'unsupported saved options'}.`,
+        'warning',
+      );
+    }
     await loadMeetingHistory();
   } catch (error) {
     addLog(`Resume failed: ${error.message}`, 'error');
@@ -1709,9 +1723,54 @@ function saveSettings(settings) {
   }
 }
 
+// v2.10 Slice A transcription policy (curated Small/Medium + 11 languages).
+// Loaded from src/transcription-policy.js via script tag; falls back to the
+// same curated defaults when the global is unavailable (e.g. syntax checks).
+function resolveTranscriptionPolicy() {
+  if (typeof window !== 'undefined' && window.transcriptionPolicy) {
+    return window.transcriptionPolicy;
+  }
+  return null;
+}
+
+function ensureLanguageChoiceOption() {
+  if (!languageSelect || languageSelect.querySelector('option[value=""]')) {
+    return;
+  }
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = 'Choose language…';
+  languageSelect.prepend(placeholder);
+}
+
+function validateNewTranscriptionSelection(language, modelSize) {
+  const policy = resolveTranscriptionPolicy();
+  if (!policy || typeof policy.validateNewSelection !== 'function') {
+    return { ok: true, language, modelSize };
+  }
+  return policy.validateNewSelection({ language, modelSize });
+}
+
+function reportUnsupportedTranscriptionSelection(validation) {
+  const message = (validation && validation.message)
+    || 'Choose a supported transcription language and Whisper model.';
+  addLog(`Error: ${message}`, 'error');
+  setTranscriptMessage(message, true);
+}
+
 // Apply saved settings to UI controls
 function applySavedSettings(devices = {}, hostFamily = 'unknown') {
   const settings = loadSettings();
+  const policy = resolveTranscriptionPolicy();
+  const normalized = policy && typeof policy.normalizePreferences === 'function'
+    ? policy.normalizePreferences({ language: settings.language, modelSize: settings.modelSize })
+    : {
+      language: settings.language || 'en',
+      modelSize: settings.modelSize || 'small',
+      migrated: false,
+      requiresChoice: false,
+      normalizedLarge: false,
+    };
 
   micSelect.value = resolveInitialDeviceSelection({
     savedId: settings.micId,
@@ -1724,12 +1783,30 @@ function applySavedSettings(devices = {}, hostFamily = 'unknown') {
     devices: decorateDesktopDevices(devices.loopbacks, hostFamily),
   });
 
-  if (settings.language) {
-    languageSelect.value = settings.language;
+  if (normalized.requiresChoice || !normalized.language) {
+    // Removed/unknown language (e.g. saved Persian) must not silently fall
+    // back to English: force an explicit choice for new work.
+    ensureLanguageChoiceOption();
+    languageSelect.value = '';
+    addLog('Saved transcription language is no longer offered; choose a supported language.', 'warning');
+    setTranscriptMessage('Saved transcription language is no longer offered; choose a supported language.', false);
+  } else {
+    languageSelect.value = normalized.language;
   }
 
-  if (settings.modelSize) {
-    modelSelect.value = settings.modelSize;
+  if (normalized.normalizedLarge) {
+    // Saved Large normalizes to canonical large-v3, still gated in Slice A:
+    // park new work on Small and explain instead of leaving no selection.
+    modelSelect.value = (policy && policy.DEFAULT_MODEL_SIZE) || 'small';
+    saveSettings({ modelSize: modelSelect.value });
+    addLog('Large Whisper model is unavailable in this release; using Small for new transcriptions.', 'warning');
+  } else {
+    modelSelect.value = normalized.modelSize || 'small';
+    if (normalized.migrated) {
+      // Tiny/Base retire once to Small with a visible explanation.
+      saveSettings({ modelSize: 'small' });
+      addLog('Tiny/Base Whisper models retired; migrated saved preference to Small.', 'warning');
+    }
   }
 
   const summaryProfileSelect = document.getElementById('summary-profile-select');
@@ -1787,7 +1864,14 @@ async function init() {
     // Step 1: Check if model is downloaded
     updateLoading('Checking system setup...');
     const settings = loadSettings();
-    const modelSize = settings.modelSize || 'small';
+    const startupPolicy = resolveTranscriptionPolicy();
+    const startupNormalized = startupPolicy && typeof startupPolicy.normalizePreferences === 'function'
+      ? startupPolicy.normalizePreferences({ language: settings.language, modelSize: settings.modelSize })
+      : { language: settings.language || 'en', modelSize: settings.modelSize || 'small', normalizedLarge: false };
+    // Slice A offers Small/Medium only; never auto-download a retired/gated model.
+    const modelSize = startupNormalized.normalizedLarge
+      ? (startupPolicy.DEFAULT_MODEL_SIZE || 'small')
+      : (startupNormalized.modelSize || 'small');
 
     addLog('Checking system setup...');
     const modelCheck = await window.electronAPI.checkModelDownloaded(modelSize);
@@ -4080,6 +4164,13 @@ async function transcribeAudio(options = {}) {
   const modelSize = modelSelect.value;
   const stopErrorNote = typeof options.stopErrorNote === 'string' ? options.stopErrorNote : '';
 
+  const selection = validateNewTranscriptionSelection(language, modelSize);
+  if (!selection.ok) {
+    reportUnsupportedTranscriptionSelection(selection);
+    setRecordingState('idle');
+    return;
+  }
+
   if (!currentAudioFile) {
     addLog('Error: No audio file to transcribe', 'error');
     setTranscriptMessage('No audio file available for transcription.', true);
@@ -4134,6 +4225,20 @@ async function transcribeAudio(options = {}) {
     });
   } catch (error) {
     console.error('Failed to enqueue transcription:', error);
+
+    if (error && (error.code === 'UNSUPPORTED_LANGUAGE' || error.code === 'UNSUPPORTED_MODEL')) {
+      // Stale/policy-skewed selection rejected by main: show the supported-
+      // selection explanation instead of a generic enqueue failure.
+      reportUnsupportedTranscriptionSelection({ message: error.message });
+      try {
+        await loadMeetingHistory();
+      } catch (historyError) {
+        console.warn('Could not refresh history after enqueue failure:', historyError);
+      }
+      setRecordingState('idle');
+      return;
+    }
+
     addLog(`Error: ${error.message}`, 'error');
 
     if (error && error.code === 'PENDING_MEETING_PERSIST_FAILED') {
@@ -4178,6 +4283,16 @@ async function retryMeetingTranscription() {
     retryBtn.textContent = 'Retrying...';
   }
   addLog(`Retrying transcription for ${meeting.title}...`);
+
+  const detailSelection = validateNewTranscriptionSelection(languageSelect.value, modelSelect.value);
+  if (!detailSelection.ok) {
+    reportUnsupportedTranscriptionSelection(detailSelection);
+    if (retryBtn) {
+      retryBtn.disabled = false;
+      retryBtn.textContent = 'Retry Transcription';
+    }
+    return;
+  }
 
   try {
     const result = await window.electronAPI.retryTranscription({

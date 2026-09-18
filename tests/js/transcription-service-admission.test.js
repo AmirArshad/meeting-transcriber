@@ -744,3 +744,285 @@ test('delete-meeting still clears tombstone when meeting_manager delete fails', 
   await assert.rejects(deletePromise, /Failed to delete meeting/);
   assert.equal(afterCalls, 1);
 });
+
+// --- v2.10 Slice A policy wiring -------------------------------------------
+// New work (finalize, transcribe-audio*, explicit retry) accepts curated
+// Small/Medium + 11-language lists only; resume keeps legacy compat.
+
+const SLICE_A_REJECTIONS = [
+  [{ language: 'fa', modelSize: 'small' }, 'UNSUPPORTED_LANGUAGE'],
+  [{ language: 'en', modelSize: 'tiny' }, 'UNSUPPORTED_MODEL'],
+  [{ language: 'en', modelSize: 'base' }, 'UNSUPPORTED_MODEL'],
+  [{ language: 'en', modelSize: 'large' }, 'UNSUPPORTED_MODEL'],
+  [{ language: 'en', modelSize: 'large-v3' }, 'UNSUPPORTED_MODEL'],
+  [{ language: '', modelSize: 'small' }, 'UNSUPPORTED_LANGUAGE'],
+  [{ language: 'en', modelSize: '' }, 'UNSUPPORTED_MODEL'],
+  [{ language: 'xx', modelSize: 'small' }, 'UNSUPPORTED_LANGUAGE'],
+];
+
+function createCountingFs(counts) {
+  return {
+    promises: {
+      readFile: async () => '',
+      writeFile: async () => { counts.writes += 1; },
+      rm: async () => {},
+      mkdtemp: async (prefix) => `${prefix}test`,
+    },
+    existsSync: () => true,
+  };
+}
+
+function registerHandlers(harness) {
+  const handlers = {};
+  harness.service.registerIpc({ handle(channel, handler) { handlers[channel] = handler; } });
+  return handlers;
+}
+
+test('Slice A: finalize rejects unsupported new selections before persistence', async () => {
+  for (const [input, code] of SLICE_A_REJECTIONS) {
+    const counts = { writes: 0, persists: 0 };
+    const harness = createServiceHarness({
+      fs: createCountingFs(counts),
+      addMeetingToHistory: async (meeting) => {
+        counts.persists += 1;
+        return { id: 'm1', audioPath: '/tmp/avanevis-test/recordings/a.opus', ...meeting };
+      },
+    });
+    await assert.rejects(
+      harness.service.finalizeRecordingTranscription({
+        audioPath: '/tmp/avanevis-test/recordings/a.opus',
+        ...input,
+      }),
+      (error) => error && error.code === code,
+      `finalize must reject ${JSON.stringify(input)} with ${code}`,
+    );
+    assert.equal(counts.writes, 0, 'rejection must precede placeholder write');
+    assert.equal(counts.persists, 0, 'rejection must precede meeting persist');
+    assert.equal(harness.getQueueState().jobs.length, 0, 'rejection must not queue');
+  }
+});
+
+test('Slice A: finalize persists and enqueues a curated selection', async () => {
+  const counts = { writes: 0, persists: 0 };
+  let persisted = null;
+  const harness = createServiceHarness({
+    fs: createCountingFs(counts),
+    addMeetingToHistory: async (meeting) => {
+      counts.persists += 1;
+      persisted = meeting;
+      return { id: 'm1', audioPath: '/tmp/avanevis-test/recordings/a.opus', title: 'T', ...meeting };
+    },
+  });
+  const result = await harness.service.finalizeRecordingTranscription({
+    audioPath: '/tmp/avanevis-test/recordings/a.opus',
+    language: 'en',
+    modelSize: 'medium',
+  });
+  assert.equal(result.success, true);
+  assert.equal(counts.writes, 1);
+  assert.equal(counts.persists, 1);
+  assert.equal(persisted.language, 'en');
+  assert.equal(persisted.model, 'medium');
+  assert.equal(harness.getQueueState().jobs.length, 1);
+  harness.computeQueue.rejectAll(new Error('test teardown'));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+});
+
+test('Slice A: transcribe-audio validates raw selection before queueing', async () => {
+  for (const [input, code] of SLICE_A_REJECTIONS) {
+    const harness = createServiceHarness();
+    const handlers = registerHandlers(harness);
+    await assert.rejects(
+      handlers['transcribe-audio']({}, { audioFile: '/tmp/a.opus', ...input }),
+      (error) => error && error.code === code,
+      `transcribe-audio must reject ${JSON.stringify(input)} with ${code}`,
+    );
+    assert.equal(harness.computeQueue.pendingCount, 0, 'rejection must not queue');
+  }
+
+  // Genuinely omitted fields still take safe defaults; present-but-empty rejects.
+  const defaults = createServiceHarness();
+  const defaultHandlers = registerHandlers(defaults);
+  const queued = defaultHandlers['transcribe-audio']({}, { audioFile: '/tmp/a.opus' });
+  assert.equal(defaults.computeQueue.pendingCount, 1);
+  defaults.computeQueue.rejectAll(new Error('test teardown'));
+  await assert.rejects(queued);
+
+  const queuedMedium = createServiceHarness();
+  const mediumHandlers = registerHandlers(queuedMedium);
+  const mediumPromise = mediumHandlers['transcribe-audio'](
+    {}, { audioFile: '/tmp/a.opus', language: 'es', modelSize: 'medium' },
+  );
+  assert.equal(queuedMedium.computeQueue.pendingCount, 1);
+  queuedMedium.computeQueue.rejectAll(new Error('test teardown'));
+  await assert.rejects(mediumPromise);
+});
+
+test('Slice A: transcribe-audio-with-speakers rejects before any setup work', async () => {
+  for (const [input, code] of SLICE_A_REJECTIONS) {
+    const harness = createServiceHarness();
+    const handlers = registerHandlers(harness);
+    await assert.rejects(
+      handlers['transcribe-audio-with-speakers']({}, { audioFile: '/tmp/a.opus', ...input }),
+      (error) => error && error.code === code,
+      `transcribe-audio-with-speakers must reject ${JSON.stringify(input)} with ${code}`,
+    );
+    assert.equal(harness.computeQueue.pendingCount, 0, 'rejection must not queue');
+  }
+});
+
+const SLICE_A_LEGACY_MEETING = {
+  id: 'legacy_retry',
+  audioPath: '/tmp/avanevis-test/recordings/r.opus',
+  transcriptPath: '/tmp/avanevis-test/recordings/r.md',
+  language: 'fa',
+  model: 'tiny',
+  title: 'Legacy',
+};
+
+function createRetryHarness() {
+  return createServiceHarness({
+    runWallClockComputeAction: async ({ label, action }) => {
+      if (String(label).startsWith('Meeting lookup')) {
+        return { ...SLICE_A_LEGACY_MEETING };
+      }
+      throw new Error(`test: unexpected compute ${label}`);
+    },
+  });
+}
+
+async function settleAdmitted(harness, promise) {
+  // The retry handler awaits meeting lookup before admission, so the queue
+  // row appears a tick after the call. Settle the parked job afterwards.
+  let outcome = null;
+  promise.then(
+    () => { outcome = 'resolved'; },
+    () => { outcome = 'rejected'; },
+  );
+  const deadline = Date.now() + 2000;
+  while (harness.getQueueState().jobs.length < 1 && outcome === null && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(outcome, null, 'admission must not reject before queueing');
+  assert.equal(harness.getQueueState().jobs.length, 1);
+  harness.computeQueue.rejectAll(new Error('test teardown'));
+  await assert.rejects(promise);
+}
+
+test('Slice A: retry uses field presence, not truthiness, for explicit selection', async () => {
+  // Present-but-empty must fail validation, never fall back to saved legacy.
+  {
+    const harness = createRetryHarness();
+    const handlers = registerHandlers(harness);
+    await assert.rejects(
+      handlers['retry-transcription']({}, { meetingId: 'legacy_retry', language: '', modelSize: '' }),
+      (error) => error && error.code === 'UNSUPPORTED_LANGUAGE',
+    );
+    assert.equal(harness.getQueueState().jobs.length, 0);
+  }
+
+  // Explicit legacy values are new-work selections: rejected.
+  {
+    const harness = createRetryHarness();
+    const handlers = registerHandlers(harness);
+    await assert.rejects(
+      handlers['retry-transcription']({}, { meetingId: 'legacy_retry', language: 'fa', modelSize: 'tiny' }),
+      (error) => error && (error.code === 'UNSUPPORTED_LANGUAGE' || error.code === 'UNSUPPORTED_MODEL'),
+    );
+    assert.equal(harness.getQueueState().jobs.length, 0);
+  }
+
+  // Partial explicit selection still validates the resolved pair strictly.
+  {
+    const harness = createRetryHarness();
+    const handlers = registerHandlers(harness);
+    await assert.rejects(
+      handlers['retry-transcription']({}, { meetingId: 'legacy_retry', language: 'en' }),
+      (error) => error && error.code === 'UNSUPPORTED_MODEL',
+    );
+    assert.equal(harness.getQueueState().jobs.length, 0);
+  }
+
+  // Curated explicit selection admits.
+  {
+    const harness = createRetryHarness();
+    const handlers = registerHandlers(harness);
+    const promise = handlers['retry-transcription'](
+      {}, { meetingId: 'legacy_retry', language: 'en', modelSize: 'small' },
+    );
+    await settleAdmitted(harness, promise);
+  }
+
+  // Both keys absent: legacy fallback admits the saved fa/tiny pair.
+  {
+    const harness = createRetryHarness();
+    const handlers = registerHandlers(harness);
+    const promise = handlers['retry-transcription']({}, { meetingId: 'legacy_retry' });
+    await settleAdmitted(harness, promise);
+  }
+});
+
+test('Slice A: resume keeps legacy rows, canonicalizes, and reports skipped', async () => {
+  const meetings = [
+    { id: 'legacy-fa-tiny', transcriptionStatus: 'pending', language: 'fa', model: 'tiny', title: 'A' },
+    { id: 'legacy-padded', transcriptionStatus: 'pending', language: ' FA ', model: ' TINY ', title: 'B' },
+    { id: 'legacy-large', transcriptionStatus: 'pending', language: 'en', model: 'large', title: 'C' },
+    { id: 'legacy-large-v3', transcriptionStatus: 'pending', language: 'en', model: 'large-v3', title: 'D' },
+    { id: 'unknown-row', transcriptionStatus: 'pending', language: 'xx', model: 'xx', title: 'E' },
+    { id: 'done', transcriptionStatus: 'completed', language: 'en', model: 'small', title: 'F' },
+  ];
+  const harness = createServiceHarness({ listMeetings: async () => meetings });
+  const result = await harness.service.resumePendingTranscriptions();
+  assert.deepEqual([...result.meetingIds].sort(), [
+    'legacy-fa-tiny',
+    'legacy-large',
+    'legacy-large-v3',
+    'legacy-padded',
+  ]);
+  assert.equal(result.enqueuedCount, 4);
+  assert.equal(result.skipped.length, 1);
+  assert.equal(result.skipped[0].meetingId, 'unknown-row');
+  assert.ok(result.skipped[0].code === 'UNSUPPORTED_LANGUAGE' || result.skipped[0].code === 'UNSUPPORTED_MODEL');
+  harness.computeQueue.rejectAll(new Error('test teardown'));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+});
+
+test('Slice A: legacy resolver returns canonical normalized values', () => {
+  const harness = createServiceHarness();
+  assert.deepEqual(
+    harness.service.resolveLegacyCompatibleSelection({ language: ' FA ', modelSize: ' TINY ' }),
+    { language: 'fa', modelSize: 'tiny' },
+  );
+  assert.deepEqual(
+    harness.service.resolveLegacyCompatibleSelection({ language: 'EN', modelSize: 'LARGE' }),
+    { language: 'en', modelSize: 'large' },
+  );
+  assert.throws(
+    () => harness.service.resolveLegacyCompatibleSelection({ language: 'xx', modelSize: 'small' }),
+    (error) => error && error.code === 'UNSUPPORTED_LANGUAGE',
+  );
+  assert.throws(
+    () => harness.service.resolveLegacyCompatibleSelection({ language: 'en', modelSize: 'xx' }),
+    (error) => error && error.code === 'UNSUPPORTED_MODEL',
+  );
+});
+
+test('Slice A: model setup IPC serves Small/Medium only', async () => {
+  const harness = createServiceHarness();
+  const handlers = registerHandlers(harness);
+  for (const size of ['tiny', 'base', 'large', 'large-v3']) {
+    await assert.rejects(
+      handlers['check-model-downloaded']({}, size),
+      (error) => error && error.code === 'UNSUPPORTED_MODEL',
+      `check-model-downloaded must reject ${size}`,
+    );
+    await assert.rejects(
+      handlers['download-model']({}, size),
+      (error) => error && error.code === 'UNSUPPORTED_MODEL',
+      `download-model must reject ${size}`,
+    );
+  }
+  const check = await handlers['check-model-downloaded']({}, 'small');
+  assert.equal(check.modelSize, 'small');
+  assert.equal(typeof check.downloaded, 'boolean');
+});
