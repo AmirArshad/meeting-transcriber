@@ -74,8 +74,10 @@ const {
 const {
   buildParakeetBootstrapArgs,
   launchParakeetBootstrap,
+  parakeetInterpreterCacheRoot,
   parseDeviceProbeStdout,
   resolveEmbeddedPythonPth,
+  resolveParakeetPythonExecutable,
 } = require('./parakeet-runtime');
 const { downloadFile } = require('../ai-addon/download-helpers');
 const {
@@ -2391,10 +2393,16 @@ function createTranscriptionService(deps) {
     }
 
     function parakeetBootstrapArgs(runtimeDir, commandArgs) {
+      const launchExe = resolveParakeetPythonExecutable({
+        pythonExe: pythonConfig.pythonExe,
+        backendPath: pythonConfig.backendPath,
+        runtimeDir,
+        cacheRoot: parakeetInterpreterCacheRoot(app.getPath('userData'), path),
+      });
       return getBackendModuleArgs('transcription.parakeet_bootstrap', buildParakeetBootstrapArgs({
         backendPath: pythonConfig.backendPath,
         runtimeDir,
-        pthFile: resolveEmbeddedPythonPth(pythonConfig.pythonExe, fs),
+        pthFile: resolveEmbeddedPythonPth(launchExe, fs),
         ambientPythonPath: process.env.PYTHONPATH || '',
         commandArgs,
       }));

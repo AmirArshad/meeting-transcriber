@@ -7,9 +7,12 @@ const path = require('path');
 
 const LIBRARY_NAME = /\.(?:dll|pyd|dylib|so)(?:\.\d+)*$/i;
 const RUNTIME_METADATA = new Set(['install.json', 'device.json']);
-// -S skips site import, so sitecustomize and interpreter/venv site-packages
-// cannot run before the child replaces sys.path. -P omits the process cwd.
-// PYTHONNOUSERSITE does not do either of those.
+// -S skips site import for a normal interpreter, and -P omits the process cwd.
+// Neither flag wins when a ._pth file contains "import site": CPython applies
+// that line while building the path and command-line options cannot override it.
+// The Windows embeddable DLL is searched before the executable, so Whisper's
+// shared python311._pth still starts sitecustomize. Parakeet then uses a private
+// interpreter directory whose own ._pth files do not contain that line.
 const STARTUP_ISOLATION_FLAGS = ['-S', '-P'];
 
 function fail(code, message) {
@@ -184,12 +187,263 @@ function buildParakeetChildEnv({
   return env;
 }
 
-function resolveEmbeddedPythonPth(pythonExe, fsModule = fs, pathModule = path) {
-  if (process.platform !== 'win32' || !pythonExe) {
+function pthLineEnablesSite(line) {
+  const stripped = String(line || '').split('#')[0].trim();
+  return stripped === 'import site';
+}
+
+function fileEnablesSiteImport(filePath, fsModule) {
+  try {
+    return fsModule.readFileSync(filePath, 'utf8').split(/\r?\n/).some(pthLineEnablesSite);
+  } catch (error) {
+    return false;
+  }
+}
+
+function interpreterDirs(pythonExe, fsModule, pathModule) {
+  if (!pythonExe || !pathModule.isAbsolute(pythonExe)) {
+    return [];
+  }
+  const dirs = [pathModule.dirname(pythonExe)];
+  try {
+    if (fsModule.existsSync(pythonExe)) {
+      dirs.push(pathModule.dirname(fsModule.realpathSync(pythonExe)));
+    }
+  } catch (error) {
+    // The spawn path is enough when the binary cannot be resolved.
+  }
+  return [...new Set(dirs)];
+}
+
+function sharedPthEnablesSite(pythonExe, fsModule, pathModule) {
+  for (const dir of interpreterDirs(pythonExe, fsModule, pathModule)) {
+    let names = [];
+    try {
+      names = fsModule.readdirSync(dir);
+    } catch (error) {
+      continue;
+    }
+    for (const name of names) {
+      if (!String(name).toLowerCase().endsWith('._pth')) {
+        continue;
+      }
+      if (fileEnablesSiteImport(pathModule.join(dir, name), fsModule)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function addExistingStdlib(entries, seen, candidate, fsModule, pathModule) {
+  if (!candidate || seen.has(candidate) || !fsModule.existsSync(candidate)) {
+    return;
+  }
+  const isZip = candidate.toLowerCase().endsWith('.zip');
+  if (!isZip && !fsModule.existsSync(pathModule.join(candidate, 'encodings'))) {
+    return;
+  }
+  seen.add(candidate);
+  entries.push(candidate);
+  if (!isZip) {
+    const dynload = pathModule.join(candidate, 'lib-dynload');
+    if (!seen.has(dynload) && fsModule.existsSync(dynload)) {
+      seen.add(dynload);
+      entries.push(dynload);
+    }
+  }
+}
+
+function stdlibCandidatesFromPyvenv(cfgPath, fsModule, pathModule) {
+  let text = '';
+  try {
+    text = fsModule.readFileSync(cfgPath, 'utf8');
+  } catch (error) {
+    return [];
+  }
+  const homeMatch = /^home\s*=\s*(.+)$/m.exec(text);
+  const versionMatch = /^version\s*=\s*(\d+\.\d+)/m.exec(text);
+  if (!homeMatch) {
+    return [];
+  }
+  const homeDir = homeMatch[1].trim();
+  const version = versionMatch ? versionMatch[1] : '3.11';
+  const parent = pathModule.dirname(homeDir);
+  return [
+    pathModule.join(homeDir, 'Lib'),
+    pathModule.join(homeDir, 'lib', `python${version}`),
+    pathModule.join(parent, 'lib', `python${version}`),
+    pathModule.join(parent, 'Lib'),
+  ];
+}
+
+function discoverStdlibEntries(realExe, spawnExe, fsModule, pathModule) {
+  const entries = [];
+  const seen = new Set();
+  const exeDirs = new Set([
+    pathModule.dirname(realExe),
+    pathModule.dirname(spawnExe),
+  ]);
+  for (const exeDir of exeDirs) {
+    const prefix = pathModule.dirname(exeDir);
+    addExistingStdlib(entries, seen, pathModule.join(prefix, 'lib', 'python3.11'), fsModule, pathModule);
+    addExistingStdlib(entries, seen, pathModule.join(prefix, 'Lib'), fsModule, pathModule);
+    addExistingStdlib(entries, seen, pathModule.join(exeDir, 'Lib'), fsModule, pathModule);
+    addExistingStdlib(entries, seen, pathModule.join(exeDir, 'python311.zip'), fsModule, pathModule);
+    addExistingStdlib(entries, seen, pathModule.join(exeDir, 'python3.11.zip'), fsModule, pathModule);
+    for (const cfg of [
+      pathModule.join(exeDir, 'pyvenv.cfg'),
+      pathModule.join(prefix, 'pyvenv.cfg'),
+    ]) {
+      for (const candidate of stdlibCandidatesFromPyvenv(cfg, fsModule, pathModule)) {
+        addExistingStdlib(entries, seen, candidate, fsModule, pathModule);
+      }
+    }
+  }
+  return entries;
+}
+
+function isolatedPthNames(executableName, siblingNames) {
+  const names = new Set(['python3.11._pth', 'python311._pth', 'python._pth']);
+  const stem = String(executableName || '').toLowerCase().endsWith('.exe')
+    ? executableName.slice(0, -4)
+    : executableName;
+  if (stem) {
+    names.add(`${stem}._pth`);
+  }
+  for (const sibling of siblingNames) {
+    const lower = String(sibling).toLowerCase();
+    if (lower.endsWith('.dll') || lower.endsWith('.exe')) {
+      names.add(`${sibling.slice(0, -4)}._pth`);
+    }
+  }
+  return [...names];
+}
+
+function isNativeLoaderName(name) {
+  const lower = String(name || '').toLowerCase();
+  return lower.endsWith('.dll') || lower.endsWith('.so') || lower.endsWith('.dylib');
+}
+
+function linkOrCopy(source, destination, fsModule) {
+  if (fsModule.existsSync(destination)) {
+    return;
+  }
+  try {
+    fsModule.linkSync(source, destination);
+  } catch (error) {
+    fsModule.copyFileSync(source, destination);
+  }
+}
+
+function resolveParakeetPythonExecutable({
+  pythonExe,
+  backendPath,
+  runtimeDir = '',
+  cacheRoot,
+  fsModule = fs,
+  pathModule = path,
+} = {}) {
+  if (!pythonExe || !sharedPthEnablesSite(pythonExe, fsModule, pathModule)) {
+    return pythonExe;
+  }
+  let realExe = pythonExe;
+  try {
+    realExe = fsModule.realpathSync(pythonExe);
+  } catch (error) {
+    throw fail('PARAKEET_RUNTIME_INVALID', 'Parakeet could not resolve its Python interpreter.');
+  }
+  const stdlibEntries = discoverStdlibEntries(realExe, pythonExe, fsModule, pathModule);
+  if (stdlibEntries.length === 0) {
+    throw fail(
+      'PARAKEET_RUNTIME_INVALID',
+      'Parakeet could not find the standard library for an isolated interpreter.',
+    );
+  }
+  const exeDir = pathModule.dirname(realExe);
+  let siblingNames = [];
+  try {
+    siblingNames = fsModule.readdirSync(exeDir);
+  } catch (error) {
+    siblingNames = [];
+  }
+  const launchName = pathModule.basename(realExe);
+  const pthBody = [...stdlibEntries, backendPath, runtimeDir]
+    .filter((entry) => entry && !pthLineEnablesSite(entry))
+    .join('\n')
+    .concat('\n');
+  let exeStamp = { size: 0, mtimeMs: 0 };
+  try {
+    const stat = fsModule.statSync(realExe);
+    exeStamp = { size: stat.size, mtimeMs: stat.mtimeMs };
+  } catch (error) {
+    exeStamp = { size: 0, mtimeMs: 0 };
+  }
+  const fingerprint = crypto.createHash('sha256').update(JSON.stringify({
+    realExe,
+    launchName,
+    exeStamp,
+    pthBody,
+  })).digest('hex').slice(0, 24);
+  const root = cacheRoot || pathModule.join(os.tmpdir(), 'avanevis-parakeet-python');
+  const home = pathModule.join(root, fingerprint);
+  fsModule.mkdirSync(home, { recursive: true });
+  linkOrCopy(realExe, pathModule.join(home, launchName), fsModule);
+  for (const name of siblingNames) {
+    if (!isNativeLoaderName(name)) {
+      continue;
+    }
+    const source = pathModule.join(exeDir, name);
+    try {
+      if (!fsModule.statSync(source).isFile()) {
+        continue;
+      }
+    } catch (error) {
+      continue;
+    }
+    linkOrCopy(source, pathModule.join(home, name), fsModule);
+  }
+  for (const name of isolatedPthNames(launchName, siblingNames)) {
+    const pthFile = pathModule.join(home, name);
+    let current = null;
+    try {
+      current = fsModule.readFileSync(pthFile, 'utf8');
+    } catch (error) {
+      current = null;
+    }
+    if (current !== pthBody) {
+      fsModule.writeFileSync(pthFile, pthBody);
+    }
+  }
+  return pathModule.join(home, launchName);
+}
+
+function parakeetInterpreterCacheRoot(userDataDir, pathModule = path) {
+  if (!userDataDir) {
     return null;
   }
-  const candidate = pathModule.join(pathModule.dirname(pythonExe), 'python311._pth');
-  return fsModule.existsSync(candidate) ? candidate : null;
+  return pathModule.join(userDataDir, 'ai-addons', 'runtimes', 'parakeet-python');
+}
+
+function resolveEmbeddedPythonPth(pythonExe, fsModule = fs, pathModule = path) {
+  if (!pythonExe || !pathModule.isAbsolute(pythonExe)) {
+    return null;
+  }
+  const dir = pathModule.dirname(pythonExe);
+  const base = pathModule.basename(pythonExe);
+  const stem = base.toLowerCase().endsWith('.exe') ? base.slice(0, -4) : base;
+  const names = ['python311._pth'];
+  if (stem && stem !== 'python311') {
+    names.push(`${stem}._pth`);
+  }
+  for (const name of names) {
+    const candidate = pathModule.join(dir, name);
+    if (!fsModule.existsSync(candidate) || fileEnablesSiteImport(candidate, fsModule)) {
+      continue;
+    }
+    return candidate;
+  }
+  return null;
 }
 
 function parakeetCudaLibraryDirs(runtimeDir, fsModule = fs) {
@@ -341,7 +595,9 @@ module.exports = {
   launchParakeetBootstrap,
   parakeetCudaLibraryDirs,
   parseDeviceProbeStdout,
+  parakeetInterpreterCacheRoot,
   resolveEmbeddedPythonPth,
+  resolveParakeetPythonExecutable,
   terminateLateRuntimeChild,
   verifyRuntimeHashes,
   verifyRuntimeTree,

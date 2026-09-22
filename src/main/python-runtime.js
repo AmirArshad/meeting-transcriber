@@ -14,6 +14,8 @@ const {
   STARTUP_ISOLATION_FLAGS,
   buildParakeetChildEnv,
   parakeetCudaLibraryDirs,
+  parakeetInterpreterCacheRoot,
+  resolveParakeetPythonExecutable,
 } = require('./parakeet-runtime');
 
 /**
@@ -216,8 +218,10 @@ function createPythonRuntime({ app, spawn, path, fs, dirname }) {
   function spawnTrackedPython(args, options = {}) {
     const usePosixProcessGroup = process.platform !== 'win32' && options.detached !== false;
     const isolatedPythonPath = options.isolatedPythonPath === true;
+    const executable = options.pythonExe || pythonConfig.pythonExe;
     const spawnOptions = { ...options };
     delete spawnOptions.isolatedPythonPath;
+    delete spawnOptions.pythonExe;
     // Merge our environment with any options.env provided by caller.
     // Packaged POSIX Python honors PYTHONPATH; buildPythonEnv strips ambient
     // import paths. Windows embedded Python also uses python311._pth.
@@ -229,7 +233,7 @@ function createPythonRuntime({ app, spawn, path, fs, dirname }) {
       env: isolatedPythonPath ? isolatedPythonEnv(options.env || {}) : buildPythonEnv(options.env || {}),
     };
 
-    const proc = spawn(pythonConfig.pythonExe, buildPythonProcessArgs(args), mergedOptions);
+    const proc = spawn(executable, buildPythonProcessArgs(args), mergedOptions);
     proc.avanevisProcessGroup = usePosixProcessGroup;
     activeProcesses.push(proc);
 
@@ -261,8 +265,26 @@ function createPythonRuntime({ app, spawn, path, fs, dirname }) {
         : parakeetCudaLibraryDirs(runtimeDir, fs),
       baseEnv: process.env,
     });
+    let cacheRoot = null;
+    try {
+      if (app && typeof app.getPath === 'function') {
+        cacheRoot = parakeetInterpreterCacheRoot(app.getPath('userData'), path);
+      }
+    } catch (error) {
+      cacheRoot = null;
+    }
+    const pythonExe = resolveParakeetPythonExecutable({
+      pythonExe: spawnOptions.pythonExe || pythonConfig.pythonExe,
+      backendPath: pythonConfig.backendPath,
+      runtimeDir,
+      cacheRoot,
+      fsModule: fs,
+      pathModule: path,
+    });
+    delete spawnOptions.pythonExe;
     return spawnTrackedPython([...STARTUP_ISOLATION_FLAGS, ...(args || [])], {
       ...spawnOptions,
+      pythonExe,
       cwd: cwd || pythonConfig.backendPath,
       env,
       isolatedPythonPath: true,
