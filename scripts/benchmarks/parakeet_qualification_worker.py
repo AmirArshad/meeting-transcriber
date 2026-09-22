@@ -101,7 +101,7 @@ def _run_whisper(args: argparse.Namespace) -> dict[str, Any]:
     except Exception:
         return _failure("managed_whisper", "whisper_import_failed")
     try:
-        transcriber = TranscriberService(model_size="small", language="en", device=args.device, compute_type=args.compute_type)
+        transcriber = TranscriberService(model_size=args.model_size, language="en", device=args.device, compute_type=args.compute_type)
         load_start = time.perf_counter()
         transcriber.load_model()
         load_ms = (time.perf_counter() - load_start) * 1000.0
@@ -225,6 +225,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--fixture", type=Path)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--compute-type", default="float16")
+    parser.add_argument("--model-size", default="small", choices=("small", "medium"))
     parser.add_argument("--candidate-model", type=Path)
     parser.add_argument("--candidate-vad", type=Path)
     args = parser.parse_args(argv)

@@ -242,4 +242,29 @@ The runnable command shape is below. All `/private/...` values are placeholders 
 
 Because the fairness gate was blocked, the run has **zero valid cold or measured trials** for both engines. There is no median, range, RTF, RSS, VRAM, WER, or boundary-quality result to interpret. The screening decision is therefore **Inconclusive**, not a pass, tradeoff, or rejection of the candidate. Required evidence remains the uncontended five-trial complete-meeting batch for both engines, with comparable per-process VRAM and reference quality.
 
-The single best next action is to clear the pre-existing GPU compute workload, rerun the exact harness command above with the same hashes and `--trials 5`, and stop immediately if the host, managed Whisper, or candidate CUDA admission changes. No setup download or dependency installation is needed for that rerun.
+The single best next action at that point was to clear the pre-existing GPU compute workload and rerun the same five-trial command. That rerun is recorded below.
+
+## 2026-09-22 uncontended CachyOS meeting screen
+
+After the competing compute process exited, two five-trial batches ran on the same host with no compute apps reported by `nvidia-smi --query-compute-apps`. Host driver, managed Whisper CUDA 12, and candidate provider/VAD admission were ready in both batches. The candidate VAD session listed both `CPUExecutionProvider` and `CUDAExecutionProvider`; admission required CUDA to be selected, and the loaded libraries included `libcublas.so.12`, `libcudnn.so.9`, `libcudart.so.12`, and driver `libcuda.so.615.71.09`. No production code, lockfile, driver, or system CUDA change was made. Raw reports, audio, and transcripts stayed outside git.
+
+The harness gained `--baseline-model-size` for the second batch. `small` remains the default. `medium` selects the already cached `Systran/faster-whisper-medium` snapshot `08e178d48790749d25932bbc082711ddcfdfbc4f`, `model.bin` 1,527,906,378 bytes, SHA-256 `9b45e1009dcc4ab601eff815b61d80e60ce3fd8c74c1a14f4a282258286b51ae`. Both batches launched with git HEAD `62b2758d315c3bbeabe29a1e933f9c3664f74981`. The Medium batch used the then-uncommitted baseline-size change included with this evidence.
+
+The measured WAV is 16 kHz mono, 13,421,333 frames, 838.8333125 seconds, SHA-256 `6eb5a0ede0d9e72794f976ce7bea5b78133eae969f99b4c5418b43c2468d25b1`. The human reference digest is unchanged: `c58441648e5eab5732fd5d617ca0fed8568d0f37fb04c97bb49480acb78f036d`. An earlier paragraph in this document wrote duration 838.833313 seconds and audio digest `6eb5a0ede9d0e72794f976ce7bea5b78133eae969f99b4c5418b43c2468d25b1`. The digest above is the file both uncontended batches hashed.
+
+Whisper remained faster-whisper 1.2.1 / CTranslate2, CUDA, float16. Parakeet remained the community fp32 ONNX candidate. These are deployable configurations, not a precision-matched pair. Cold runs are first-process cached-model evidence and are excluded from the decision. Every measured trial succeeded, and each engine's WER and boundary counts were identical across its five trials. Summary fields in the harness sum those per-trial counts.
+
+| Baseline | Engine | Median wall | Wall range | Median RTF | Median RSS | Median VRAM | WER |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Small | Whisper Small | 9.206 s | 9.069–9.293 s | 0.0110 | 989 MiB | 1004 MiB | 0.2789 |
+| Small | Parakeet | 11.762 s | 11.709–11.773 s | 0.0140 | 1201 MiB | 3666 MiB | 0.2660 |
+| Medium | Whisper Medium | 18.266 s | 18.019–18.901 s | 0.0218 | 1637 MiB | 2412 MiB | 0.2670 |
+| Medium | Parakeet | 12.982 s | 12.475–13.436 s | 0.0155 | 1201 MiB | 3668 MiB | 0.2660 |
+
+Per trial, Small missed 11 chunk-boundary words and omitted 22 opening and 19 closing reference words, with no duplicated boundary words. Parakeet missed 17, duplicated 3, and omitted 7 opening and 7 closing words. Medium missed 10, duplicated none, and omitted 30 opening and 27 closing words. No trial was empty or had an invalid or out-of-order timestamp. Both engines failed the opening and closing presence checks in every trial.
+
+Against Small, Parakeet's median wall time was 27.8% higher, RSS about 21% higher, and VRAM 3666 MiB versus 1004 MiB. WER was 1.29 percentage points lower. The ranges did not overlap. The harness classification is **defer this candidate**.
+
+Against Medium, the model used in normal Settings, Parakeet's median wall time was 28.9% lower and the ranges did not overlap. WER differed by 0.10 percentage points. RSS was lower. VRAM was 3668 MiB versus 2412 MiB. The harness classification is **tradeoff** because the speed gain met the 20% rule while measured VRAM rose by more than the 5% allowance. Opening and closing omissions also block the promising rule.
+
+This does not qualify a 60-minute meeting, silence, noise, accents, overlap, guided execution, lifecycle failures, Windows, macOS, Linux CPU, or a packaged build. It does authorize a technical design for an optional English Parakeet engine on qualified CachyOS managed CUDA 12, with Whisper remaining the default and every other platform staying unavailable. Production integration is still not implemented.

@@ -8,7 +8,7 @@
 
 **Tech Stack:** Existing Electron 44, plain HTML/CSS/JS, Python 3.11, and local audio preparation. Parakeet runtime, model revision, and dependency pins require qualification before selection.
 
-**Status (2026-09-22):** Linux CPU and CUDA 12 ONNX feasibility were measured on CachyOS, and the bounded representative-meeting screening harness was implemented. The screening run was **Inconclusive** because pre-existing GPU compute contention blocked fair model loading; no production implementation or hardware acceptance completed. See [qualification evidence](../../development/PARAKEET_COMPATIBILITY.md). Other hosts and further CPU benchmarking are deferred. Tasks 2–6 below remain gated.
+**Status (2026-09-22):** CachyOS managed CUDA 12 meeting screening is complete. Parakeet is deferred against Whisper Small and a speed-versus-VRAM tradeoff against Whisper Medium, with WER effectively tied to Medium. See [qualification evidence](../../development/PARAKEET_COMPATIBILITY.md). The product choice is to design an optional English engine for that qualified CachyOS row, with Whisper remaining the default. Tasks 2–6 below are not implemented. Windows, macOS, Linux CPU, guided execution, and packaged acceptance remain unavailable.
 
 ## Global constraints
 

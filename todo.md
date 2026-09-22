@@ -25,14 +25,14 @@ have shipped; hardware-gated model work has not.
 - Apple Silicon inference qualification (2026-09-14) retained current Opus
   encoding, Whisper defaults, and 32k summary context. No production change;
   Windows/Linux inference-default changes remain unqualified.
-- Linux Parakeet feasibility ran on CachyOS (2026-09-21): pinned CPU and CUDA
-  12 ONNX candidates executed, but short synthetic audio did not establish a
-  product benefit. The 2026-09-22 managed CUDA recheck passed. Next is the
-  [CachyOS-only GPU screening plan](docs/superpowers/plans/2026-09-22-cachyos-parakeet-qualification.md);
-  its developer harness and public-fixture setup are now complete, but the
-  screening decision is **Inconclusive** because a pre-existing GPU workload
-  blocked fair candidate model loading. Production integration and other-host
-  investigation remain deferred; rerun only after host GPU contention is clear.
+- Linux Parakeet CachyOS CUDA 12 meeting screening is complete
+  (2026-09-22). The first attempt was inconclusive under GPU contention. The
+  uncontended batches defer Parakeet against Whisper Small and record a
+  speed-versus-VRAM tradeoff against Whisper Medium, with WER effectively
+  tied. Evidence is in
+  [PARAKEET_COMPATIBILITY.md](docs/development/PARAKEET_COMPATIBILITY.md).
+  Next is a technical design for an optional English engine on that qualified
+  row. Production integration and other-host investigation remain deferred.
 - Remaining committed work: Parakeet, Whisper Large, extra language removals,
   summarisation language/model qualification, inference-performance slices,
   and the Linux microphone-volume investigation.
@@ -46,9 +46,9 @@ inference default changes still do.
 
 1. **Shipped without hardware qualification:** Settings presentation, keyboard
    shortcuts, click-away rename, and the curated Whisper choice list (Slice A).
-2. **Active next task: CachyOS Parakeet GPU screening**, using the linked
-   execution plan. Keep the CPU evidence; do not repeat CPU or investigate
-   Windows/macOS/Omarchy in this pass. Other independent investigations remain
+2. **Active next task: technical design for optional CachyOS Parakeet**, after
+   the completed meeting screen. Keep the CPU evidence; do not repeat CPU or
+   investigate Windows/macOS/Omarchy in this pass. Other independent investigations remain
    on their matching release machines:
    Whisper Large, other listed languages, Qwen summary languages, a local
    output-language check, alternative summary models, Linux mic volume, and

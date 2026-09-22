@@ -47,8 +47,20 @@ CANDIDATE_MODEL_FILES: dict[str, tuple[int, str]] = {
 CANDIDATE_VAD_FILES: dict[str, tuple[int, str]] = {
     "silero_vad.onnx": (2327524, "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3"),
 }
-WHISPER_MODEL_SHA256 = "3e305921506d8872816023e4c273e75d2419fb89b24da97b4fe7bce14170d671"
-WHISPER_MODEL_REVISION = "536b0662742c02347bc0e980a01041f333bce120"
+WHISPER_BASELINES: dict[str, dict[str, str]] = {
+    "small": {
+        "folder": "models--Systran--faster-whisper-small",
+        "revision": "536b0662742c02347bc0e980a01041f333bce120",
+        "model_bin_sha256": "3e305921506d8872816023e4c273e75d2419fb89b24da97b4fe7bce14170d671",
+    },
+    "medium": {
+        "folder": "models--Systran--faster-whisper-medium",
+        "revision": "08e178d48790749d25932bbc082711ddcfdfbc4f",
+        "model_bin_sha256": "9b45e1009dcc4ab601eff815b61d80e60ce3fd8c74c1a14f4a282258286b51ae",
+    },
+}
+WHISPER_MODEL_SHA256 = WHISPER_BASELINES["small"]["model_bin_sha256"]
+WHISPER_MODEL_REVISION = WHISPER_BASELINES["small"]["revision"]
 
 
 @dataclass(frozen=True)
@@ -75,6 +87,7 @@ class QualificationArgs:
     candidate_model_revision: str
     vad_revision: str
     preflight_only: bool = False
+    baseline_model_size: str = "small"
 
 
 def sha256_file(path: Path) -> str:
@@ -597,9 +610,10 @@ def run_preflight(args: QualificationArgs, *, run_hardware: bool = True) -> dict
     if not args.baseline_model_dir.is_dir():
         failures.append({"layer": "managed_whisper", "code": "baseline_model_cache_missing"})
     else:
-        snapshot = args.baseline_model_dir / "models--Systran--faster-whisper-small" / "snapshots" / WHISPER_MODEL_REVISION
+        baseline = _whisper_baseline(args.baseline_model_size)
+        snapshot = args.baseline_model_dir / baseline["folder"] / "snapshots" / baseline["revision"]
         model_bin = snapshot / "model.bin"
-        if not model_bin.is_file() or sha256_file(model_bin) != WHISPER_MODEL_SHA256:
+        if not model_bin.is_file() or sha256_file(model_bin) != baseline["model_bin_sha256"]:
             failures.append({"layer": "managed_whisper", "code": "baseline_model_hash_mismatch"})
     failures.extend({"layer": "candidate_runtime", **item} for item in _verify_pins(args.candidate_model_dir, CANDIDATE_MODEL_FILES))
     failures.extend({"layer": "candidate_runtime", **item} for item in _verify_pins(args.candidate_vad_dir, CANDIDATE_VAD_FILES))
@@ -669,7 +683,10 @@ def _run_trial(args: QualificationArgs, engine: str, phase: str, number: int, fi
     if engine == "whisper":
         python = args.baseline_python
         env = _baseline_worker_env(args)
-        worker_args = ["--engine", "whisper", "--fixture", str(fixture), "--device", "cuda", "--compute-type", "float16"]
+        worker_args = [
+            "--engine", "whisper", "--fixture", str(fixture), "--device", "cuda", "--compute-type", "float16",
+            "--model-size", args.baseline_model_size,
+        ]
     else:
         python = args.candidate_python
         env = _candidate_worker_env(args)
@@ -777,7 +794,7 @@ def run_benchmark(args: QualificationArgs) -> dict[str, Any]:
         "artifacts": {
             "candidate_model": {"revision": args.candidate_model_revision, "files": {name: {"size_bytes": size, "sha256": digest} for name, (size, digest) in CANDIDATE_MODEL_FILES.items()}},
             "candidate_vad": {"revision": args.vad_revision, "files": {name: {"size_bytes": size, "sha256": digest} for name, (size, digest) in CANDIDATE_VAD_FILES.items()}, "license": "MIT"},
-            "whisper_model": {"revision": WHISPER_MODEL_REVISION, "model_bin_sha256": WHISPER_MODEL_SHA256},
+            "whisper_model": {"size": args.baseline_model_size, **_whisper_baseline(args.baseline_model_size)},
         },
         "environment": {"os": "CachyOS", "architecture": platform.machine(), "kernel": platform.release(), "app_revision": _app_revision()},
         "preflight": preflight,
@@ -851,6 +868,7 @@ def _parse_args(argv: list[str] | None = None) -> QualificationArgs:
     parser.add_argument("--fixture-revision", default="unspecified")
     parser.add_argument("--candidate-model-revision", default="0bbb45a3365852604aef28b538a8f066f4ccaa85")
     parser.add_argument("--vad-revision", default="b3e3ee3cce4c11ceb63b1a0b229d916069c1ddf6")
+    parser.add_argument("--baseline-model-size", default="small", choices=tuple(WHISPER_BASELINES), help="Whisper baseline size. Defaults to small; medium is the alternate pinned cache.")
     parser.add_argument("--preflight-only", action="store_true", help="Validate host, managed Whisper, candidate, and fixture inputs without inference.")
     args = parser.parse_args(argv)
     if args.timeout_seconds <= 0 or args.sample_interval_ms <= 0:
@@ -863,7 +881,15 @@ def _parse_args(argv: list[str] | None = None) -> QualificationArgs:
         trials=args.trials, timeout_seconds=args.timeout_seconds, sample_interval_ms=args.sample_interval_ms, ffmpeg=args.ffmpeg,
         fixture_source=args.fixture_source, fixture_license=args.fixture_license, fixture_revision=args.fixture_revision,
         candidate_model_revision=args.candidate_model_revision, vad_revision=args.vad_revision, preflight_only=args.preflight_only,
+        baseline_model_size=args.baseline_model_size,
     )
+
+
+def _whisper_baseline(model_size: str) -> dict[str, str]:
+    try:
+        return WHISPER_BASELINES[model_size]
+    except KeyError as exc:
+        raise ValueError(f"unsupported_whisper_baseline:{model_size}") from exc
 
 
 def main(argv: list[str] | None = None) -> int:
