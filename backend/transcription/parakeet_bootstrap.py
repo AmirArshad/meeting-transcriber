@@ -304,6 +304,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--expect-device", default="")
     parser.add_argument("--actual-device", default="")
     parser.add_argument("--probe-device", default="")
+    parser.add_argument("--run-module", default="")
+    parser.add_argument("--module-args", nargs=argparse.REMAINDER, default=[])
     parser.add_argument("--extract-wheel", default="")
     parser.add_argument("--extract-dest", default="")
     args = parser.parse_args(argv)
@@ -322,6 +324,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.probe_device:
         sys.stdout.write(json.dumps(probe_device(args.probe_device, args.runtime)) + "\n")
         return 0
+    if args.run_module:
+        if args.run_module != "transcription.parakeet_transcriber":
+            raise SystemExit("INVALID_PARAKEET_MODULE")
+        from transcription.parakeet_transcriber import main as transcribe_main
+        return transcribe_main(args.module_args)
     if args.expect_device:
         assert_device(args.actual_device, args.expect_device)
     sys.stdout.write("\n".join(paths) + "\n")

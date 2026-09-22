@@ -64,6 +64,8 @@ const {
 } = require('../main-process-helpers');
 const { checkAiAddonSetupStatus: defaultCheckAiAddonSetupStatus } = require('../ai-addon-setup');
 const crypto = require('crypto');
+const { modelDir: parakeetModelDir, runtimeDir: parakeetRuntimeDir, vadDir: parakeetVadDir } = require('./parakeet-setup');
+const { getAdapterSpec } = require('./transcription-engine-catalog');
 const { isLinuxCudaStatusReadyForAdmission } = require('../main-process/linux-cuda-runtime-helpers');
 const {
   getStatus: getParakeetStatus,
@@ -234,7 +236,12 @@ function createTranscriptionService(deps) {
     addMeetingToHistory = null,
     stageTranscriptionRequest = null,
     excludeIncompleteTranscription = null,
+    commitTranscriptionAttempt = null,
+    failTranscriptionAttempt = null,
     spawnParakeetPython = null,
+    getParakeetStatusForJob = getParakeetStatus,
+    probeParakeetRuntime = null,
+    runParakeetProcessForJob = null,
     consumeCapturedTranscriptionRequest = null,
     updateMeetingAiMetadata = null,
     listMeetings = async () => [],
@@ -848,7 +855,9 @@ function createTranscriptionService(deps) {
     publishTranscriptionQueueState();
 
     const epoch = getJobEpoch(meetingId);
-    const promise = runMeetingTranscriptionJob({ ...options, meetingId, epoch })
+    const promise = (options.request?.engine === 'parakeet'
+      ? runParakeetMeetingJob({ ...options, meetingId, epoch })
+      : runMeetingTranscriptionJob({ ...options, meetingId, epoch }))
       .finally(() => {
         if (inFlightJobsByMeetingId.get(meetingId) === promise) {
           inFlightJobsByMeetingId.delete(meetingId);
@@ -1408,6 +1417,199 @@ function createTranscriptionService(deps) {
         device: 'cpu',
         registerProcess,
       });
+    }
+  }
+
+  async function probeParakeetAtRuntime(runtimePath, registerProcess) {
+    const executable = resolveParakeetPythonExecutable({
+      pythonExe: pythonConfig.pythonExe, backendPath: pythonConfig.backendPath,
+      runtimeDir: runtimePath,
+      cacheRoot: parakeetInterpreterCacheRoot(app.getPath('userData'), path),
+    });
+    const args = getBackendModuleArgs('transcription.parakeet_bootstrap',
+      buildParakeetBootstrapArgs({ backendPath: pythonConfig.backendPath,
+        runtimeDir: runtimePath, pthFile: resolveEmbeddedPythonPth(executable, fs),
+        commandArgs: ['--probe-device', 'metal'] }));
+    const stdout = await launchParakeetBootstrap({ spawnParakeetPython, args,
+      runtimeDir: runtimePath, cwd: pythonConfig.backendPath, registerProcess });
+    return parseDeviceProbeStdout(stdout);
+  }
+
+  function runParakeetProcess({ audioFile, candidatePath, request, runtimePath, modelPath,
+    vadPath, registerProcess }) {
+    return new Promise((resolve, reject) => {
+      const commandArgs = [
+        '--run-module', 'transcription.parakeet_transcriber', '--module-args',
+        '--file', audioFile, '--output', candidatePath,
+        '--model-dir', modelPath, '--adapter-id', request.adapterId,
+        '--artifact-revision', request.artifactRevision,
+        '--runtime-lock-id', request.runtimeLockId,
+        '--ffmpeg', pythonConfig.ffmpegPath,
+      ];
+      if (vadPath) commandArgs.push('--vad-dir', vadPath);
+      const child = spawnParakeetPython(
+        getBackendModuleArgs('transcription.parakeet_bootstrap',
+          buildParakeetBootstrapArgs({ backendPath: pythonConfig.backendPath,
+            runtimeDir: runtimePath, commandArgs })),
+        { runtimeDir: runtimePath, cwd: pythonConfig.backendPath },
+      );
+      if (typeof registerProcess === 'function') registerProcess(child);
+      const output = collectPythonProcessOutput(child, { jsonResult: true });
+      let settled = false;
+      child.on('error', (error) => {
+        if (!settled) { settled = true; reject(error); }
+      });
+      child.on('close', (code) => {
+        if (settled) return;
+        settled = true;
+        try {
+          output.assertStdoutWithinLimit();
+          if (code !== 0) {
+            const error = new Error(sanitizeTranscriptionError(output.getStderr()) || 'Parakeet failed.');
+            error.code = /out of memory/i.test(error.message) ? 'PARAKEET_OUT_OF_MEMORY' : 'PARAKEET_RUNTIME_INVALID';
+            throw error;
+          }
+          const result = JSON.parse(output.getStdout());
+          if (!result || result.engine !== 'parakeet' || result.device !== 'metal'
+              || result.computeType !== 'float32' || result.language !== 'en'
+              || result.modelId !== request.modelId
+              || result.boundaryPolicy !== request.boundaryPolicy
+              || result.adapterId !== request.adapterId
+              || result.artifactRevision !== request.artifactRevision
+              || result.runtimeLockId !== request.runtimeLockId
+              || result.output_file !== candidatePath
+              || !Array.isArray(result.segments) || !Number.isFinite(result.duration)
+              || result.duration < 0 || typeof result.text !== 'string') {
+            const error = new Error('Parakeet returned invalid or mismatched output.');
+            error.code = 'PARAKEET_INVALID_OUTPUT';
+            throw error;
+          }
+          let previousStart = -Infinity;
+          for (const segment of result.segments) {
+            if (!segment || !Number.isFinite(segment.start) || !Number.isFinite(segment.end)
+                || segment.start < 0 || segment.start < previousStart
+                || segment.end < segment.start
+                || segment.end > result.duration + .08 || typeof segment.text !== 'string') {
+              const error = new Error('Parakeet returned invalid timestamps.');
+              error.code = 'PARAKEET_INVALID_OUTPUT';
+              throw error;
+            }
+            previousStart = segment.start;
+          }
+          resolve(result);
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+  }
+
+  async function runParakeetMeetingJob({ meetingId, request, epoch = getJobEpoch(meetingId) }) {
+    let candidatePath = null;
+    let completed = false;
+    try {
+      const result = await enqueueAiComputeAction(async () => {
+        throwIfJobBlocked(meetingId, epoch);
+        setActiveQueueMeeting(transcriptionQueueState, meetingId);
+        upsertQueueJob(transcriptionQueueState, {
+          meetingId, status: QUEUE_JOB_STATUSES.active, phase: QUEUE_JOB_PHASES.waiting_resource,
+        });
+        publishTranscriptionQueueState();
+        const meeting = await lookupMeetingById(meetingId);
+        throwIfJobBlocked(meetingId, epoch);
+        const stored = validateStoredRequest(meeting?.transcriptionRequest, transcriptionTargetOptions());
+        if (!stored.ok || stored.request.attemptId !== request.attemptId) {
+          const error = new Error('Saved Parakeet selection is unavailable.');
+          error.code = 'PARAKEET_SELECTION_UNAVAILABLE';
+          throw error;
+        }
+        const audioFile = assertSafeExistingRecordingAudioPath(meeting.audioPath);
+        const spec = getAdapterSpec(request.adapterId);
+        const userDataDir = app.getPath('userData');
+        const status = getParakeetStatusForJob({ ...transcriptionTargetOptions(), userDataDir });
+        if (status.status !== 'ready' || status.runtimeLockId !== request.runtimeLockId
+            || status.artifactRevision !== request.artifactRevision) {
+          const error = new Error('Pinned Parakeet model or runtime is unavailable.');
+          error.code = status.code || 'PARAKEET_SELECTION_UNAVAILABLE';
+          throw error;
+        }
+        const runtimePath = parakeetRuntimeDir(userDataDir, request.adapterId, request.runtimeLockId);
+        const probe = await runWallClockComputeAction({
+          timeoutMs: AI_COMPUTE_TIMEOUT_MS.meetingPreflight,
+          label: 'Transcription admission', meetingId,
+          terminateProcess: terminateProcessBestEffort,
+          action: (registerProcess) => (probeParakeetRuntime
+            ? probeParakeetRuntime(runtimePath) : probeParakeetAtRuntime(runtimePath, registerProcess)),
+        });
+        throwIfJobBlocked(meetingId, epoch);
+        if (!probe || !probe.deviceAvailable || probe.device !== 'metal') {
+          const error = new Error('Metal is unavailable for Parakeet.');
+          error.code = 'PARAKEET_GPU_UNAVAILABLE';
+          throw error;
+        }
+        const parsed = path.parse(audioFile);
+        candidatePath = path.join(parsed.dir, `${parsed.name}.transcript-${request.attemptId}.md`);
+        if (!isSafeRecordingsMarkdownPath({ filePath: candidatePath, recordingsDir: getRecordingsDir() })) {
+          const error = new Error('Invalid candidate transcript path.');
+          error.code = 'PARAKEET_INVALID_OUTPUT';
+          throw error;
+        }
+        upsertQueueJob(transcriptionQueueState, { meetingId, phase: QUEUE_JOB_PHASES.transcribing });
+        publishTranscriptionQueueState();
+        const modelPath = parakeetModelDir(userDataDir, request.artifactRevision);
+        const vadPath = spec.lock.vad ? parakeetVadDir(userDataDir, spec.lock.vad.revision) : null;
+        const childResult = await runWallClockComputeAction({
+          timeoutMs: 60 * 60 * 1000, label: 'Transcription', meetingId,
+          terminateProcess: terminateProcessBestEffort,
+          action: (registerProcess) => (runParakeetProcessForJob || runParakeetProcess)({ audioFile,
+            candidatePath, request, runtimePath, modelPath, vadPath, registerProcess }),
+        });
+        throwIfJobBlocked(meetingId, epoch);
+        const markdown = await fs.promises.readFile(candidatePath, 'utf8');
+        if (!markdown.trim() || !markdown.includes('## Transcript')) {
+          const error = new Error('Parakeet candidate transcript is invalid.');
+          error.code = 'PARAKEET_INVALID_OUTPUT';
+          throw error;
+        }
+        throwIfJobBlocked(meetingId, epoch);
+        upsertQueueJob(transcriptionQueueState, { meetingId, phase: QUEUE_JOB_PHASES.persisting });
+        publishTranscriptionQueueState();
+        const committed = await runWallClockComputeAction({
+          timeoutMs: AI_COMPUTE_TIMEOUT_MS.meetingPreflight,
+          label: 'Meeting status update', meetingId,
+          terminateProcess: terminateProcessBestEffort,
+          action: (registerProcess) => commitTranscriptionAttempt(meetingId, {
+            attemptId: request.attemptId, candidatePath,
+            result: { ...request, device: 'mps', computeType: 'float32' },
+            cancelGeneration: getTranscriptionCancelGuardGeneration(transcriptionQueueState, meetingId),
+            deleteGeneration: getTranscriptionDeleteGuardGeneration(transcriptionQueueState, meetingId),
+          }, registerProcess),
+        });
+        completed = true;
+        return { ...childResult, output_file: candidatePath, meeting: committed };
+      });
+      setActiveQueueMeeting(transcriptionQueueState, null);
+      upsertQueueJob(transcriptionQueueState, { meetingId, status: QUEUE_JOB_STATUSES.ready,
+        phase: QUEUE_JOB_PHASES.completed });
+      publishTranscriptionQueueState();
+      return result;
+    } catch (error) {
+      setActiveQueueMeeting(transcriptionQueueState, null);
+      if (!completed && !isQuitCommitted() && !isTranscriptionJobDeleted(transcriptionQueueState, meetingId)
+          && error?.code !== 'TRANSCRIPTION_QUIT_SKIPPED' && typeof failTranscriptionAttempt === 'function') {
+        try { await failTranscriptionAttempt(meetingId, request.attemptId,
+          sanitizeTranscriptionError(error.code || error.message)); } catch (_) { /* Stale/deleted attempt. */ }
+      }
+      if (error?.code === 'TRANSCRIPTION_DELETED') {
+        removeQueueJob(transcriptionQueueState, meetingId, { clearCancelFlag: false });
+      } else if (!isQuitCommitted()) {
+        upsertQueueJob(transcriptionQueueState, { meetingId, status: QUEUE_JOB_STATUSES.failed,
+          phase: QUEUE_JOB_PHASES.failed });
+      } else {
+        removeQueueJob(transcriptionQueueState, meetingId);
+      }
+      publishTranscriptionQueueState();
+      throw error;
     }
   }
 
@@ -2211,15 +2413,6 @@ function createTranscriptionService(deps) {
       }
     }
 
-    if (request.engine === 'parakeet') {
-      return {
-        success: true,
-        enqueued: false,
-        meeting: savedMeeting,
-        pendingMeeting: savedMeeting,
-      };
-    }
-
     // PR2: return as soon as pending persist succeeds so Start unlocks.
     // Admission upserts the Activity row synchronously before returning the job promise.
     try {
@@ -2230,6 +2423,7 @@ function createTranscriptionService(deps) {
         title: savedMeeting.title || '',
         durationSeconds: resolveMeetingDurationSeconds(savedMeeting, duration),
         jobLabel: 'Transcription',
+        request,
       });
       void jobPromise.catch((jobError) => {
         if (jobError && (
@@ -2314,12 +2508,23 @@ function createTranscriptionService(deps) {
       try {
         // Legacy compat: resume uses each meeting's persisted language/model
         // (Tiny/Base/Large + Persian keep working) — never validateNewSelection.
-        const legacy = resolveLegacyCompatibleSelection({
-          language: meeting.language || 'en',
-          modelSize: meeting.model || 'small',
-        });
-        const normalizedModel = legacy.modelSize;
-        const normalizedLanguage = legacy.language;
+        const stored = meeting.transcriptionRequest
+          ? validateStoredRequest(meeting.transcriptionRequest, transcriptionTargetOptions())
+          : null;
+        if (stored && !stored.ok) {
+          const error = new Error(stored.message);
+          error.code = stored.code;
+          throw error;
+        }
+        const legacy = stored?.request?.engine === 'parakeet'
+          ? null
+          : resolveLegacyCompatibleSelection({
+            language: meeting.language || 'en', modelSize: meeting.model || 'small',
+          });
+        const normalizedModel = stored?.request?.engine === 'parakeet'
+          ? stored.request.modelId : legacy.modelSize;
+        const normalizedLanguage = stored?.request?.engine === 'parakeet'
+          ? 'en' : legacy.language;
         const jobPromise = admitMeetingTranscriptionJob({
           meetingId,
           language: normalizedLanguage,
@@ -2327,6 +2532,7 @@ function createTranscriptionService(deps) {
           title: meeting.title || '',
           durationSeconds: resolveMeetingDurationSeconds(meeting),
           jobLabel: 'Transcription',
+          request: stored?.request || null,
         });
         enqueued.push(meetingId);
         void jobPromise.catch((jobError) => {
@@ -3199,6 +3405,29 @@ function createTranscriptionService(deps) {
         const error = new Error('A transcription job is already in progress for this meeting.');
         error.code = 'TRANSCRIPTION_ALREADY_IN_FLIGHT';
         throw error;
+      }
+
+      const storedRetry = meeting.transcriptionRequest
+        ? validateStoredRequest(meeting.transcriptionRequest, transcriptionTargetOptions())
+        : null;
+      if (storedRetry && !storedRetry.ok) {
+        const error = new Error(storedRetry.message);
+        error.code = storedRetry.code;
+        throw error;
+      }
+      if (storedRetry?.request?.engine === 'parakeet') {
+        const nextRequest = { ...storedRetry.request, attemptId: crypto.randomUUID() };
+        const staged = await stageTranscriptionRequest(meetingId, nextRequest, {
+          cancelGeneration: getTranscriptionCancelGuardGeneration(transcriptionQueueState, meetingId),
+          deleteGeneration: getTranscriptionDeleteGuardGeneration(transcriptionQueueState, meetingId),
+        });
+        if (!staged?.transcriptionRequest || staged.transcriptionRequest.attemptId !== nextRequest.attemptId) {
+          throw new Error('Failed to save Parakeet retry request.');
+        }
+        return admitMeetingTranscriptionJob({ meetingId, language: 'en',
+          modelSize: nextRequest.modelId, request: nextRequest,
+          title: meeting.title || '', durationSeconds: resolveMeetingDurationSeconds(meeting),
+          jobLabel: 'Transcription retry' });
       }
 
       // Retry carries explicit new dropdown selections when the renderer sends

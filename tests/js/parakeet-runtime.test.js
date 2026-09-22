@@ -38,6 +38,7 @@ test('Linux child env keeps only the verified CUDA library path', () => {
   assert.equal(env.PYTHONPATH, '/app/runtime:/app/backend');
   assert.equal(env.HF_TOKEN, '');
   assert.equal(env.HF_TOKEN_PATH, os.devNull);
+  assert.equal(env.NUMBA_CACHE_DIR, '/app/runtime-numba-cache');
 });
 
 test('an extra native library fails runtime verification', () => {
@@ -207,8 +208,14 @@ test('a site-enabled ._pth is replaced by a private interpreter that does not im
     );
     fs.writeFileSync(path.join(bin, 'python311.dll'), '');
     const shared = spawnSync(sharedExe, ['-S', '-P', '-c', 'print("alive")'], { encoding: 'utf8' });
-    assert.notEqual(shared.status, 0);
-    assert.match(`${shared.stderr || ''}${shared.stdout || ''}`, /site-hook/);
+    if (process.platform === 'win32') {
+      assert.notEqual(shared.status, 0);
+      assert.match(`${shared.stderr || ''}${shared.stdout || ''}`, /site-hook/);
+    } else {
+      // Unix Python ignores Windows ._pth files; the resolver still needs to
+      // replace an interpreter when it finds a site-enabled file beside it.
+      assert.equal(shared.status, 0, shared.stderr);
+    }
 
     const cacheRoot = path.join(root, 'cache');
     const isolated = resolveParakeetPythonExecutable({

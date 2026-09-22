@@ -186,25 +186,26 @@ def test_safe_wheel_extracts_inside_destination(tmp_path: Path):
     assert (destination / "pkg" / "model.bin").read_bytes() == b"data"
 
 
-def test_startup_flags_skip_venv_sitecustomize(tmp_path: Path):
+def test_startup_flags_skip_ambient_sitecustomize(tmp_path: Path):
     import os
     import subprocess
 
     venv = tmp_path / "venv"
     subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(venv)], check=True)
-    posix_sites = list((venv / "lib").glob("python*/site-packages")) if (venv / "lib").is_dir() else []
-    windows_site = venv / "Lib" / "site-packages"
-    site_packages = posix_sites[0] if posix_sites else windows_site
-    (site_packages / "sitecustomize.py").write_text(
+    ambient = tmp_path / "ambient"
+    ambient.mkdir()
+    (ambient / "sitecustomize.py").write_text(
         "raise SystemExit('venv-sitecustomize')\n",
         encoding="utf-8",
     )
+    env = {**os.environ, "PYTHONPATH": str(ambient)}
     python = venv / "bin" / ("python.exe" if os.name == "nt" else "python")
-    plain = subprocess.run([str(python), "-c", "print('ran')"], capture_output=True, text=True)
+    plain = subprocess.run([str(python), "-c", "print('ran')"], capture_output=True, text=True, env=env)
     isolated = subprocess.run(
         [str(python), "-S", "-P", "-c", "import sys; print('sitecustomize' in sys.modules)"],
         capture_output=True,
         text=True,
+        env=env,
     )
     assert plain.returncode != 0
     assert "venv-sitecustomize" in f"{plain.stdout}\n{plain.stderr}"

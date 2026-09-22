@@ -43,6 +43,7 @@ const DOWNLOAD_REDIRECT_HOSTS = new Set([
   'github-releases.githubusercontent.com',
   'files.pythonhosted.org',
   'cdn-lfs.hf.co',
+  'us.aws.cdn.hf.co',
   'cdn-lfs-us-1.hf.co',
   'cdn-lfs-eu-1.hf.co',
   'cdn-lfs.huggingface.co',

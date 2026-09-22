@@ -589,13 +589,14 @@ function createMeetingManagerClient(deps) {
     return boundedRecord(value, TRANSCRIPTION_RESULT_KEYS);
   }
 
-  function runMeetingManagerCommand(args) {
+  function runMeetingManagerCommand(args, registerProcess = null) {
     const recordingsDir = path.join(app.getPath('userData'), 'recordings');
     return new Promise((resolve, reject) => {
-      const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
+      let python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
         '--recordings-dir', recordingsDir,
         ...args,
       ]), { cwd: pythonConfig.backendPath });
+      if (typeof registerProcess === 'function') python = registerProcess(python);
       const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
       python.on('close', (code) => {
         try {
@@ -642,7 +643,18 @@ function createMeetingManagerClient(deps) {
     ]);
   }
 
-  function commitTranscriptionAttempt(meetingId, payload = {}) {
+  function failTranscriptionAttempt(meetingId, attemptId, errorMessage, registerProcess = null) {
+    if (!meetingId || !attemptId) {
+      return Promise.reject(new Error('fail-transcription-attempt requires a meeting and attempt'));
+    }
+    return runMeetingManagerCommand([
+      'fail-transcription-attempt', String(meetingId),
+      '--attempt-id', String(attemptId),
+      '--error', String(errorMessage || 'Transcription failed.').slice(0, 500),
+    ], registerProcess);
+  }
+
+  function commitTranscriptionAttempt(meetingId, payload = {}, registerProcess = null) {
     const bounded = boundedTranscriptionResult(payload.result);
     if (!meetingId || !payload.attemptId || !payload.candidatePath || !bounded) {
       return Promise.reject(new Error('commit-transcription-attempt requires a candidate and bounded result'));
@@ -655,7 +667,7 @@ function createMeetingManagerClient(deps) {
       '--result-json', JSON.stringify(bounded),
       '--cancel-generation', String(payload.cancelGeneration || 0),
       '--delete-generation', String(payload.deleteGeneration || 0),
-    ]);
+    ], registerProcess);
   }
 
   return {
@@ -664,6 +676,7 @@ function createMeetingManagerClient(deps) {
     stageTranscriptionRequest,
     excludeIncompleteTranscription,
     commitTranscriptionAttempt,
+    failTranscriptionAttempt,
     boundedTranscriptionRecord,
     boundedTranscriptionResult,
     isRecordingsScanInProgress,

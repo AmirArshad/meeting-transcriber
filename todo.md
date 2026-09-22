@@ -11,7 +11,8 @@ implementation or acceptance evidence.
 ## Status
 
 v2.10 is partly implemented. No-hardware UX and Whisper choice policy Slice A
-have shipped; hardware-gated model work has not.
+have shipped. Parakeet implementation is in progress on
+`codex/parakeet-three-platform-gpu`; it has not shipped.
 
 - Designs exist for inference performance, optional Parakeet, Whisper
   language/model policy, summarisation languages/models, and Settings /
@@ -26,13 +27,19 @@ have shipped; hardware-gated model work has not.
   encoding, Whisper defaults, and 32k summary context. No production change;
   Windows/Linux inference-default changes remain unqualified.
 - Linux Parakeet CachyOS CUDA 12 meeting screening is complete
-  (2026-09-22). The first attempt was inconclusive under GPU contention. The
-  uncontended batches defer Parakeet against Whisper Small and record a
-  speed-versus-VRAM tradeoff against Whisper Medium, with WER effectively
-  tied. Evidence is in
+  (2026-09-22). The uncontended batches defer Parakeet against Whisper Small
+  and record a speed-versus-VRAM tradeoff against Whisper Medium, with WER
+  effectively tied. Evidence is in
   [PARAKEET_COMPATIBILITY.md](docs/development/PARAKEET_COMPATIBILITY.md).
-  Next is a technical design for an optional English engine on that qualified
-  row. Production integration and other-host investigation remain deferred.
+- The approved [three-platform Parakeet plan](docs/superpowers/plans/2026-09-22-parakeet-three-platform-gpu.md)
+  supersedes the prior qualification prerequisite. On 2026-09-22, a pinned
+  isolated install on an Apple M4 Pro passed live Metal admission and offline
+  inference on a 14.22-second local English fixture. The app's compute queue
+  and guarded meeting commit saved a timestamped transcript with `mps` /
+  `float32` provenance and retained source audio. A retry with the runtime
+  unavailable failed closed and kept the prior transcript/audio. This was a
+  service-level smoke, not a renderer or packaged-app test. Windows and Linux
+  hardware have not been validated for the new integration.
 - Remaining committed work: Parakeet, Whisper Large, extra language removals,
   summarisation language/model qualification, inference-performance slices,
   and the Linux microphone-volume investigation.
@@ -40,23 +47,26 @@ have shipped; hardware-gated model work has not.
 ## How to sequence the work
 
 Settings, click-away rename, and the transcription **policy** change (Persian /
-Tiny / Base off new choices) did not wait on hardware investigations. New
-engines, Whisper Large, extra language removals, summary-language claims, and
-inference default changes still do.
+Tiny / Base off new choices) did not wait on hardware investigations. Whisper
+Large, extra language removals, summary-language claims, and inference default
+changes still do. The approved Parakeet plan allows implementation before the
+remaining host checks while retaining live GPU admission.
 
 1. **Shipped without hardware qualification:** Settings presentation, keyboard
    shortcuts, click-away rename, and the curated Whisper choice list (Slice A).
-2. **Active next task: technical design for optional CachyOS Parakeet**, after
-   the completed meeting screen. Keep the CPU evidence; do not repeat CPU or
-   investigate Windows/macOS/Omarchy in this pass. Other independent investigations remain
-   on their matching release machines:
+2. **Active Parakeet implementation:** Complete guided transcription, engine
+   activation and recovery UI, packaging/legal/contracts, and the remaining
+   lifecycle checks in the approved three-platform plan. Validate Windows
+   CUDA and Linux managed CUDA on matching hardware; repeat the Mac test in a
+   packaged app. Other independent investigations remain on their matching
+   release machines:
    Whisper Large, other listed languages, Qwen summary languages, a local
    output-language check, alternative summary models, Linux mic volume, and
    Windows/Linux inference only if a speed change is still in play. Details
    and hosts are in the [plan index](docs/superpowers/plans/2026-09-06-v2.10.md).
-3. **Implement after those results:** Parakeet, Large, summary-language
-   gating, any extra language removals, any replacement summary model, and any
-   inference default change.
+3. **Implement after their own results:** Large, summary-language gating, any
+   extra language removals, any replacement summary model, and any inference
+   default change.
 
 Keep recordings, transcripts, tokens, scratch reports, and user paths out of
 git. Public qualification notes should identify hardware class, OS, app
@@ -74,7 +84,7 @@ removals. Slice B (Large) and slice C (other languages) need qualification first
 - [ ] Explore whether any other currently listed languages also have poor performance and should be removed.
 - [ ] Add Whisper Large as a transcription model option.
 - [x] Remove Tiny and Base model options; Small becomes the smallest available Whisper model.
-- [ ] Add optional English-only Parakeet transcription in Settings, targeting Windows, Apple Silicon macOS, and Linux with independent validation gates. Prioritize faster transcription and lower resource use; improved accuracy is optional. Design: [Parakeet integration](docs/superpowers/plans/2026-09-06-parakeet-integration.md). Qualify a runtime per platform before implementation.
+- [ ] Add optional English-only Parakeet transcription in Settings for Windows CUDA, Apple Silicon Metal, and Linux managed CUDA. The approved [three-platform plan](docs/superpowers/plans/2026-09-22-parakeet-three-platform-gpu.md) governs implementation. The Mac service-level smoke passed; guided work, Settings activation, packaging, and remaining platform checks are open. Do not claim a speed, memory, or accuracy win from this smoke.
 
 ### Summarisation
 

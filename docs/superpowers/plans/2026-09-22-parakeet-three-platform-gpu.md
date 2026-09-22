@@ -8,6 +8,32 @@
 
 **Tech Stack:** Electron 44, plain HTML/CSS/JavaScript, Python 3.11, onnx-asr 0.12.0 / ONNX Runtime GPU 1.23.2 / isolated CUDA 12, parakeet-mlx 0.5.2 / MLX 0.32.2 Metal, existing ffmpeg and recording/persistence infrastructure.
 
+## Execution status — 2026-09-22
+
+Implementation is in progress on `codex/parakeet-three-platform-gpu`. Catalog,
+locks, durable selection, capture snapshot/recovery, and pinned setup code are
+present. Bounded adapters and ordinary Mac Parakeet queue/commit code have been
+exercised. Guided Parakeet work, Settings activation/recovery UI, packaging and
+legal/contract updates, and the remaining lifecycle checks are still open.
+
+On an Apple M4 Pro (macOS 26.7), explicit setup installed the pinned model and
+47-wheel isolated runtime under Electron userData. A live Metal probe and
+offline inference on a 14.22-second local English fixture succeeded. The app's
+compute/resource queue modules ran an ordinary transcription and guarded
+meeting-result commit: six timestamped segments, persisted `mps` / `float32`
+provenance, and retained playable audio. Making the runtime unavailable for a
+new attempt failed with `PARAKEET_ARTIFACT_INVALID` without CPU or Whisper
+substitution; the prior transcript and audio survived. The runtime was restored
+and passive status returned to `ready`. This was a service-level test, not a
+renderer UI or packaged-app test. It establishes no performance comparison.
+
+The smoke exposed two corrected setup issues: the pinned weight URL redirected
+to an explicit Hugging Face CDN host missing from the allowlist, and Librosa's
+Numba cache created directories inside the immutable runtime. Focused
+regression coverage was added. `npm run test:all` passed (1,023 JS passed,
+3 skipped; 715 Python passed, 9 skipped; Python syntax passed). Windows and
+Linux hardware validation has not been run for this integration.
+
 ## Global constraints and authority
 
 - Design baseline: branch `qualification/linux-parakeet-v2.10`, commit `ee1674cadbedf3d3dc03cc671df0de3edbb81222`.
@@ -497,7 +523,9 @@ Run on Windows CUDA, Linux managed CUDA 12, and macOS Metal:
 7. Cancel, quit during inference, queued deletion, interrupted recording recovery.
 8. Repeat setup/offline inference in packaged app; installed resources survive update.
 
-Record results separately per platform. These checks have not been run for the new integration. Mocked GPU tests prove contracts/routing, not hardware execution.
+Record results separately per platform. The partial Mac service-level smoke
+is recorded above; the remaining checks have not been run for the new
+integration. Mocked GPU tests prove contracts/routing, not hardware execution.
 
 ## Out of scope
 

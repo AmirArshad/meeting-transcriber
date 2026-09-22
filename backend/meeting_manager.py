@@ -774,6 +774,8 @@ class MeetingManager:
             guard = meeting.get('transcriptionAttemptGuard') or {}
             if request.get('attemptId') != attempt_id or guard.get('attemptId') != attempt_id:
                 raise meeting_norm.TranscriptionMetadataError('STALE_TRANSCRIPTION_ATTEMPT')
+            if meeting.get('transcriptionStatus') != 'pending':
+                raise meeting_norm.TranscriptionMetadataError('TRANSCRIPTION_ATTEMPT_SUPERSEDED')
             if (
                 int(guard.get('cancelGeneration', -1)) != _nonnegative_generation(cancel_generation)
                 or int(guard.get('deleteGeneration', -1)) != _nonnegative_generation(delete_generation)

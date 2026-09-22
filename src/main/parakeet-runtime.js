@@ -168,6 +168,11 @@ function buildParakeetChildEnv({
     HUGGINGFACE_HUB_TOKEN: '',
     HUGGING_FACE_HUB_TOKEN: '',
     HF_TOKEN_PATH: os.devNull,
+    HF_HUB_OFFLINE: '1',
+    TRANSFORMERS_OFFLINE: '1',
+    // Librosa uses Numba's on-disk JIT cache. Keep it beside the immutable
+    // pinned runtime so inference never makes the install fail its tree check.
+    NUMBA_CACHE_DIR: runtimeDir ? `${runtimeDir}-numba-cache` : '',
   };
   delete env.PYTHONHOME;
   delete env.PYTHONUSERBASE;
@@ -526,6 +531,7 @@ function launchParakeetBootstrap({
   args,
   runtimeDir,
   cwd,
+  registerProcess,
 } = {}) {
   return new Promise((resolve, reject) => {
     if (typeof spawnParakeetPython !== 'function') {
@@ -535,6 +541,7 @@ function launchParakeetBootstrap({
     let child;
     try {
       child = spawnParakeetPython(args, { runtimeDir, cwd });
+      if (typeof registerProcess === 'function') registerProcess(child);
     } catch (error) {
       reject(error);
       return;

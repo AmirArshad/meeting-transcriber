@@ -310,3 +310,19 @@ def test_result_validator_keeps_device_compute_type_and_transcript_hash():
         normalize_transcription_result({key: value for key, value in _result().items() if key != "device"})
     with pytest.raises(TranscriptionMetadataError):
         normalize_transcription_result({**_result(), "schemaVersion": "broken"})
+
+
+def test_cancelled_attempt_cannot_commit_candidate(tmp_path):
+    manager, meeting = _seed_meeting(tmp_path)
+    manager.stage_transcription_request(meeting['id'], _request('parakeet'))
+    candidate = _write_candidate(meeting, ATTEMPT_ID, '# Transcript\n\nlate output')
+    manager.update_transcription(meeting['id'], status='failed', error='TRANSCRIPTION_CANCELLED')
+    with pytest.raises(TranscriptionMetadataError) as exc:
+        manager.commit_transcription_attempt(
+            meeting['id'], attempt_id=ATTEMPT_ID, candidate_path=str(candidate),
+            result=_result('parakeet'), cancel_generation=0, delete_generation=0,
+        )
+    assert exc.value.code == 'TRANSCRIPTION_ATTEMPT_SUPERSEDED'
+    saved = manager.get_meeting(meeting['id'])
+    assert saved['transcriptionStatus'] == 'failed'
+    assert Path(saved['transcriptPath']).read_text(encoding='utf-8') == '# Transcript\n\nhello'
