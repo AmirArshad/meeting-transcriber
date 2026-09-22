@@ -65,4 +65,26 @@ test('new-selection validation rejects legacy and unknown values', () => {
   assert.equal(policy.validateNewSelection({ language: 'en', modelSize: 'tiny' }).ok, false);
   assert.equal(policy.validateNewSelection({ language: 'en', modelSize: 'large-v3' }).ok, false);
   assert.equal(policy.validateNewSelection({ language: 'xx', modelSize: 'small' }).ok, false);
+  assert.equal(policy.isSelectableModelSize('parakeet'), false);
+  assert.equal(policy.validateNewSelection({ language: 'en', modelSize: 'parakeet' }).ok, false);
+});
+
+test('legacy preferences migrate to Whisper and do not activate Parakeet', () => {
+  const migrated = policy.migrateEnginePreferences({ language: 'es', modelSize: 'medium' });
+  assert.equal(migrated.schemaVersion, 1);
+  assert.equal(migrated.activeEngine, 'whisper');
+  assert.deepEqual(migrated.whisper, { language: 'es', modelSize: 'medium' });
+  assert.equal(migrated.migrated, true);
+  assert.equal(policy.migrateEnginePreferences({ language: 'en', modelSize: 'small' }).activeEngine, 'whisper');
+});
+
+test('versioned Parakeet activation is preserved separately from Whisper settings', () => {
+  const preserved = policy.migrateEnginePreferences({
+    schemaVersion: 1,
+    activeEngine: 'parakeet',
+    whisper: { language: 'de', modelSize: 'small' },
+  });
+  assert.equal(preserved.activeEngine, 'parakeet');
+  assert.equal(preserved.migrated, false);
+  assert.deepEqual(preserved.whisper, { language: 'de', modelSize: 'small' });
 });

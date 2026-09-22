@@ -10,6 +10,11 @@
  * relocatable.
  */
 
+const {
+  buildParakeetChildEnv,
+  parakeetCudaLibraryDirs,
+} = require('./parakeet-runtime');
+
 /**
  * Infer a virtualenv root from a resolved interpreter path (…/bin/python3 or
  * …/Scripts/python.exe) when pyvenv.cfg is present.
@@ -195,15 +200,32 @@ function createPythonRuntime({ app, spawn, path, fs, dirname }) {
    * PYTHONPATH/HOME/USERBASE, disables user site and bytecode writes. Windows embedded
    * Python also reads backend from python311._pth.
    */
+  function isolatedPythonEnv(env) {
+    const isolated = { ...(env || {}) };
+    if (app.isPackaged) {
+      isolated.AVANEVIS_PACKAGED = '1';
+      isolated.PYTHONNOUSERSITE = '1';
+      isolated.PYTHONDONTWRITEBYTECODE = '1';
+      delete isolated.PYTHONHOME;
+      delete isolated.PYTHONUSERBASE;
+    }
+    return isolated;
+  }
+
   function spawnTrackedPython(args, options = {}) {
     const usePosixProcessGroup = process.platform !== 'win32' && options.detached !== false;
+    const isolatedPythonPath = options.isolatedPythonPath === true;
+    const spawnOptions = { ...options };
+    delete spawnOptions.isolatedPythonPath;
     // Merge our environment with any options.env provided by caller.
     // Packaged POSIX Python honors PYTHONPATH; buildPythonEnv strips ambient
     // import paths. Windows embedded Python also uses python311._pth.
+    // isolatedPythonPath keeps a caller-built PYTHONPATH exactly, so a Parakeet
+    // child cannot inherit developer, Whisper, or Speakrs import roots.
     const mergedOptions = {
-      ...options,
+      ...spawnOptions,
       detached: usePosixProcessGroup,
-      env: buildPythonEnv(options.env || {})
+      env: isolatedPythonPath ? isolatedPythonEnv(options.env || {}) : buildPythonEnv(options.env || {}),
     };
 
     const proc = spawn(pythonConfig.pythonExe, buildPythonProcessArgs(args), mergedOptions);
@@ -219,6 +241,31 @@ function createPythonRuntime({ app, spawn, path, fs, dirname }) {
     });
 
     return proc;
+  }
+
+  function spawnParakeetPython(args, options = {}) {
+    const {
+      runtimeDir,
+      cudaLibraryDirs,
+      cwd,
+      ...spawnOptions
+    } = options || {};
+    const env = buildParakeetChildEnv({
+      backendPath: pythonConfig.backendPath,
+      runtimeDir,
+      platform: process.platform,
+      packaged: Boolean(app.isPackaged),
+      cudaLibraryDirs: Array.isArray(cudaLibraryDirs)
+        ? cudaLibraryDirs
+        : parakeetCudaLibraryDirs(runtimeDir, fs),
+      baseEnv: process.env,
+    });
+    return spawnTrackedPython(args, {
+      ...spawnOptions,
+      cwd: cwd || pythonConfig.backendPath,
+      env,
+      isolatedPythonPath: true,
+    });
   }
 
   // Return the same array reference so callers (e.g. before-quit cleanup) can
@@ -239,7 +286,9 @@ function createPythonRuntime({ app, spawn, path, fs, dirname }) {
     pythonConfig,
     buildPythonProcessArgs,
     buildPythonEnv,
+    buildParakeetChildEnv,
     spawnTrackedPython,
+    spawnParakeetPython,
     getActiveProcesses,
     drainActiveProcesses,
   };

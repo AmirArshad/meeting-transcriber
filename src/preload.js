@@ -71,7 +71,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   runRecordingPreflight: (options) => ipcRenderer.invoke('run-recording-preflight', options),
 
   // Recording controls
-  startRecording: (options) => ipcRenderer.invoke('start-recording', options),
+  startRecording: (options = {}) => ipcRenderer.invoke('start-recording', {
+    ...options,
+    transcriptionSelection: options.transcriptionSelection || null,
+  }),
   stopRecording: () => ipcRenderer.invoke('stop-recording'),
   cancelRecording: (options = {}) => ipcRenderer.invoke('cancel-recording', options),
   getRecordingState: () => ipcRenderer.invoke('get-recording-state'),
@@ -82,7 +85,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Transcription
   transcribeAudio: (options) => ipcRenderer.invoke('transcribe-audio', options),
   retryTranscription: (options) => ipcRenderer.invoke('retry-transcription', options),
-  finalizeRecordingTranscription: (options) => ipcRenderer.invoke('finalize-recording-transcription', options),
+  finalizeRecordingTranscription: (options = {}) => ipcRenderer.invoke('finalize-recording-transcription', {
+    ...options,
+    transcriptionSelection: options.transcriptionSelection || null,
+  }),
+  getTranscriptionEngineStatus: (options) => ipcRenderer.invoke('get-transcription-engine-status', options),
+  setupTranscriptionEngine: (options) => ipcRenderer.invoke('setup-transcription-engine', options),
+  cancelTranscriptionEngineSetup: (options) => ipcRenderer.invoke('cancel-transcription-engine-setup', options),
+  validateTranscriptionEngine: (options) => ipcRenderer.invoke('validate-transcription-engine', options),
+  removeTranscriptionEngine: (options) => ipcRenderer.invoke('remove-transcription-engine', options),
   cancelPendingTranscription: (options) => ipcRenderer.invoke('cancel-pending-transcription', options),
   resumePendingTranscriptions: (options) => ipcRenderer.invoke('resume-pending-transcriptions', options),
   getTranscriptionQueueState: () => ipcRenderer.invoke('get-transcription-queue-state'),
@@ -142,6 +153,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onRecordingInitProgress: (callback) => addListener('recording-init-progress', callback),
   onRecordingSavedDuringQuit: (callback) => addListener('recording-saved-during-quit', callback),
   onAppQuitProgress: (callback) => addListener('app-quit-progress', callback),
+  onTranscriptionEngineSetupProgress: (callback) => addListener('transcription-engine-setup-progress', callback),
   onTranscriptionProgress: (callback) => addListener('transcription-progress', callback),
   onTranscriptionQueueState: (callback) => addListener('transcription-queue-state', callback),
   onGPUInstallProgress: (callback) => addListener('gpu-install-progress', callback),

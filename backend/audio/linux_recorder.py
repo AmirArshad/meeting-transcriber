@@ -28,7 +28,9 @@ from .capture_manifest import (
     MANIFEST_FILENAME,
     discard_capture_session,
     mark_capture_discarded_and_cleanup,
+    parse_transcription_selection_argument,
 )
+from .capture_spool_runtime import with_transcription_selection
 from .compressor import verify_recording_integrity
 from .constants import (
     DEFAULT_CHANNELS,
@@ -185,6 +187,7 @@ class LinuxAudioRecorder:
         desktop_volume: float = 1.0,
         preroll_seconds: Optional[float] = None,
         capture_mode: str = "mic-and-desktop",
+        transcription_selection=None,
         *,
         soundcard_module: Any = None,
         pulse_factory: Optional[Callable[[], Any]] = None,
@@ -200,6 +203,7 @@ class LinuxAudioRecorder:
         self.desktop_volume = float(desktop_volume)
         self.preroll_seconds = 1.5 if preroll_seconds is None else float(preroll_seconds)
         self.capture_mode = capture_mode
+        self.transcription_selection = transcription_selection
         self.include_mic, self.include_desktop = resolve_capture_mode(capture_mode)
 
         self._soundcard = soundcard_module
@@ -602,6 +606,7 @@ class LinuxAudioRecorder:
             self.output_path,
             started_at_ns=started_ns,
             started_at_iso=started_iso,
+            transcription_selection=getattr(self, "transcription_selection", None),
         )
         self._capture_manifest.set_processing_profile(LINUX_PROCESSING_PROFILE)
         self._capture_manifest.set_mix_params(
@@ -1249,6 +1254,7 @@ def main() -> None:
         help="Requested capture sources",
     )
     parser.add_argument("--output", required=True, help="Output file path")
+    parser.add_argument("--transcription-selection", default="", help="Capture-time transcription selection JSON")
     parser.add_argument("--duration", type=int, default=0, help="Duration in seconds (0 for manual stop)")
     args = parser.parse_args()
 
@@ -1265,6 +1271,7 @@ def main() -> None:
             output_path=str(output_path),
             preroll_seconds=0,
             capture_mode=args.capture_mode,
+            transcription_selection=parse_transcription_selection_argument(args.transcription_selection),
         )
         if not recorder.start_recording():
             sys.exit(1)
@@ -1315,11 +1322,11 @@ def main() -> None:
             _send_json_message(result)
             sys.exit(1 if exit_code == 0 else exit_code)
 
-        result = {
+        result = with_transcription_selection({
             "success": True,
             "outputPath": recovered_path or args.output,
             "duration": recorder.recording_duration,
-        }
+        }, getattr(recorder, "transcription_selection", None))
         _send_json_message(result)
         sys.exit(exit_code)
 

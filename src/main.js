@@ -223,6 +223,7 @@ const {
   pythonConfig,
   buildPythonProcessArgs,
   spawnTrackedPython,
+  spawnParakeetPython,
 } = pythonRuntime;
 
 // ============================================================================
@@ -645,6 +646,8 @@ const meetingManagerClient = registerMeetingManagerClient(ipcMain, {
 const {
   addMeetingToHistory,
   updateMeetingAiMetadata,
+  stageTranscriptionRequest,
+  excludeIncompleteTranscription,
   isRecordingsScanInProgress,
   scanRecordings,
   listMeetings,
@@ -764,6 +767,12 @@ const {
 // ============================================================================
 // Phase 3c: transcription + summary + recorder lifecycle (Pattern C)
 // ============================================================================
+const capturedTranscriptionBridge = {
+  consume() {
+    return null;
+  },
+};
+
 transcriptionService = createTranscriptionService({
   app,
   path,
@@ -771,6 +780,8 @@ transcriptionService = createTranscriptionService({
   os,
   pythonConfig,
   spawnTrackedPython,
+  spawnParakeetPython,
+  consumeCapturedTranscriptionRequest: (audioPath) => capturedTranscriptionBridge.consume(audioPath),
   getBackendModuleArgs,
   enqueueAiComputeAction: enqueueGpuExclusiveComputeAction,
   waitForAiComputeQueueIdle,
@@ -802,6 +813,8 @@ transcriptionService = createTranscriptionService({
   formatDurationForTranscript,
   addMeetingToHistory,
   updateMeetingAiMetadata,
+  stageTranscriptionRequest,
+  excludeIncompleteTranscription,
   listMeetings,
   isQuitCommitted,
   resolveSpeakrsCliPath: resolveAppSpeakrsCliPath,
@@ -861,6 +874,9 @@ recorderService = createRecorderService({
   checkAudioOutputSupport,
   getMacOSPermissionStatus,
   addMeetingToHistory,
+  stageTranscriptionRequest,
+  excludeIncompleteTranscription,
+  listMeetings,
   formatDurationForTranscript,
   getRecordingsDir,
   signalProcessTree,
@@ -880,6 +896,7 @@ recorderService = createRecorderService({
     }
   },
 });
+capturedTranscriptionBridge.consume = (audioPath) => recorderService.consumeCapturedTranscriptionRequest(audioPath);
 recorderService.registerIpc(ipcMain);
 
 // Presence may be constructed before ready; tray/Dock/taskbar mutations wait for createTray().

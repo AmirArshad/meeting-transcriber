@@ -63,7 +63,25 @@ const {
   shouldTerminateComputeJobsForMeeting,
 } = require('../main-process-helpers');
 const { checkAiAddonSetupStatus: defaultCheckAiAddonSetupStatus } = require('../ai-addon-setup');
+const crypto = require('crypto');
 const { isLinuxCudaStatusReadyForAdmission } = require('../main-process/linux-cuda-runtime-helpers');
+const {
+  getStatus: getParakeetStatus,
+  removeParakeet,
+  setupParakeet,
+  validateParakeet,
+} = require('./parakeet-setup');
+const {
+  buildParakeetBootstrapArgs,
+  launchParakeetBootstrap,
+  parseDeviceProbeStdout,
+  resolveEmbeddedPythonPth,
+} = require('./parakeet-runtime');
+const { downloadFile } = require('../ai-addon/download-helpers');
+const {
+  resolveTranscriptionRequest,
+  validateStoredRequest,
+} = require('./transcription-engine-resolver');
 const {
   getDiarizationAvailability,
   getDiarizationModelRef,
@@ -212,6 +230,10 @@ function createTranscriptionService(deps) {
     buildTranscriptionPlaceholderMarkdown,
     formatDurationForTranscript,
     addMeetingToHistory = null,
+    stageTranscriptionRequest = null,
+    excludeIncompleteTranscription = null,
+    spawnParakeetPython = null,
+    consumeCapturedTranscriptionRequest = null,
     updateMeetingAiMetadata = null,
     listMeetings = async () => [],
     isQuitCommitted = () => false,
@@ -2009,6 +2031,79 @@ function createTranscriptionService(deps) {
     }
   }
 
+  function transcriptionTargetOptions() {
+    return {
+      platform: process.platform,
+      arch: process.arch,
+      osRelease: typeof os.release === 'function' ? os.release() : '',
+    };
+  }
+
+  function requestModelLabel(request) {
+    if (request && request.engine === 'parakeet') {
+      return request.modelId;
+    }
+    return request && request.modelSize;
+  }
+
+  function choiceSelection(selection) {
+    if (!selection || typeof selection !== 'object' || Array.isArray(selection)) {
+      return null;
+    }
+    const choices = {};
+    for (const key of ['engine', 'language', 'modelSize', 'model']) {
+      if (selection[key] != null && String(selection[key]).trim() !== '') {
+        choices[key] = selection[key];
+      }
+    }
+    return Object.keys(choices).length ? choices : null;
+  }
+
+  function resolveFinalizeTranscriptionRequest({
+    audioPath,
+    language,
+    modelSize,
+    transcriptionSelection,
+  }) {
+    if (typeof consumeCapturedTranscriptionRequest === 'function') {
+      const captured = consumeCapturedTranscriptionRequest(audioPath);
+      if (captured) {
+        const stored = validateStoredRequest(captured, transcriptionTargetOptions());
+        if (!stored.ok) {
+          const error = new Error(stored.message);
+          error.code = stored.code;
+          throw error;
+        }
+        return stored.request;
+      }
+    }
+    const supplied = choiceSelection(transcriptionSelection);
+    if (supplied && supplied.engine) {
+      const resolved = resolveTranscriptionRequest(supplied, transcriptionTargetOptions());
+      if (!resolved.ok) {
+        const error = new Error(resolved.message);
+        error.code = resolved.code;
+        throw error;
+      }
+      return resolved.request;
+    }
+    const validated = rejectUnsupportedNewSelection({
+      language: supplied?.language || language,
+      modelSize: supplied?.modelSize || modelSize,
+    });
+    const resolved = resolveTranscriptionRequest({
+      engine: 'whisper',
+      language: validated.language,
+      modelSize: validated.modelSize,
+    }, transcriptionTargetOptions());
+    if (!resolved.ok) {
+      const error = new Error(resolved.message);
+      error.code = resolved.code;
+      throw error;
+    }
+    return resolved.request;
+  }
+
   async function finalizeRecordingTranscription({
     audioPath,
     duration = 0,
@@ -2016,14 +2111,20 @@ function createTranscriptionService(deps) {
     modelSize = 'small',
     transcriptionErrorNote = '',
     title = '',
+    transcriptionSelection = null,
   } = {}) {
     if (typeof addMeetingToHistory !== 'function') {
       throw new Error('finalize-recording-transcription requires addMeetingToHistory');
     }
 
-    const validated = rejectUnsupportedNewSelection({ language, modelSize });
-    const normalizedModel = validated.modelSize;
-    const normalizedLanguage = validated.language;
+    const request = resolveFinalizeTranscriptionRequest({
+      audioPath,
+      language,
+      modelSize,
+      transcriptionSelection,
+    });
+    const normalizedModel = requestModelLabel(request);
+    const normalizedLanguage = request.language;
     const resolvedAudioPath = assertSafeExistingRecordingAudioPath(audioPath);
     const transcriptPath = resolvedAudioPath.replace(/\.[^/.]+$/, '.md');
     if (!isSafeRecordingsMarkdownPath({ filePath: transcriptPath, recordingsDir: getRecordingsDir() })) {
@@ -2049,6 +2150,7 @@ function createTranscriptionService(deps) {
         title: title || undefined,
         transcriptionStatus: 'pending',
         transcriptionError: transcriptionErrorNote || undefined,
+        transcriptionRequest: request,
       });
     } catch (persistError) {
       return {
@@ -2063,6 +2165,56 @@ function createTranscriptionService(deps) {
         success: false,
         code: 'PENDING_MEETING_PERSIST_FAILED',
         error: 'Pending meeting save returned an incomplete meeting record.',
+      };
+    }
+
+    const requestSaved = savedMeeting.transcriptionRequest
+      && savedMeeting.transcriptionRequest.attemptId === request.attemptId;
+    if (!requestSaved) {
+      let staged = false;
+      if (typeof stageTranscriptionRequest === 'function') {
+        try {
+          const stagedMeeting = await stageTranscriptionRequest(savedMeeting.id, request, {
+            cancelGeneration: getTranscriptionCancelGuardGeneration(transcriptionQueueState, savedMeeting.id),
+            deleteGeneration: getTranscriptionDeleteGuardGeneration(transcriptionQueueState, savedMeeting.id),
+          });
+          if (stagedMeeting && stagedMeeting.id) {
+            savedMeeting = stagedMeeting;
+          }
+          staged = Boolean(savedMeeting.transcriptionRequest
+            && savedMeeting.transcriptionRequest.attemptId === request.attemptId);
+        } catch (stageError) {
+          staged = false;
+        }
+      }
+      if (!staged) {
+        if (typeof excludeIncompleteTranscription === 'function') {
+          try {
+            const excluded = await excludeIncompleteTranscription(savedMeeting.id);
+            if (excluded && excluded.id) {
+              savedMeeting = excluded;
+            }
+          } catch (excludeError) {
+            // The pending row could not be blocked. Resume also ignores
+            // transcriptionResumeExcluded when that flag is already stored.
+          }
+        }
+        return {
+          success: false,
+          code: 'PENDING_MEETING_PERSIST_FAILED',
+          error: 'Failed to save the transcription request.',
+          meeting: savedMeeting,
+          pendingMeeting: savedMeeting,
+        };
+      }
+    }
+
+    if (request.engine === 'parakeet') {
+      return {
+        success: true,
+        enqueued: false,
+        meeting: savedMeeting,
+        pendingMeeting: savedMeeting,
       };
     }
 
@@ -2143,6 +2295,14 @@ function createTranscriptionService(deps) {
         || isTranscriptionJobCancelled(transcriptionQueueState, meetingId)) {
         continue;
       }
+      if (meeting.transcriptionResumeExcluded === true) {
+        skipped.push({
+          meetingId,
+          code: 'PENDING_MEETING_PERSIST_FAILED',
+          error: 'Transcription request was not saved.',
+        });
+        continue;
+      }
       const existing = transcriptionQueueState.jobsByMeetingId.get(meetingId);
       if (existing && (existing.status === QUEUE_JOB_STATUSES.queued
         || existing.status === QUEUE_JOB_STATUSES.active)) {
@@ -2219,6 +2379,147 @@ function createTranscriptionService(deps) {
   }
 
   function registerIpc(ipcMain) {
+    const parakeetSetupControllers = new Map();
+
+    function parakeetTargetOptions() {
+      return {
+        userDataDir: app.getPath('userData'),
+        platform: process.platform,
+        arch: process.arch,
+        osRelease: typeof os.release === 'function' ? os.release() : '',
+      };
+    }
+
+    function parakeetBootstrapArgs(runtimeDir, commandArgs) {
+      return getBackendModuleArgs('transcription.parakeet_bootstrap', buildParakeetBootstrapArgs({
+        backendPath: pythonConfig.backendPath,
+        runtimeDir,
+        pthFile: resolveEmbeddedPythonPth(pythonConfig.pythonExe, fs),
+        ambientPythonPath: process.env.PYTHONPATH || '',
+        commandArgs,
+      }));
+    }
+
+    function launchParakeet(commandArgs, runtimeDir) {
+      return launchParakeetBootstrap({
+        spawnParakeetPython,
+        args: parakeetBootstrapArgs(runtimeDir, commandArgs),
+        runtimeDir,
+        cwd: pythonConfig.backendPath,
+      });
+    }
+
+    async function probeParakeetDevice({ runtimeDir, expectedDevice }) {
+      try {
+        const stdout = await launchParakeet(['--probe-device', expectedDevice], runtimeDir);
+        return parseDeviceProbeStdout(stdout);
+      } catch (error) {
+        return { device: 'cpu', deviceAvailable: false };
+      }
+    }
+
+    async function materializeParakeetRuntime({ stagingRoot, runtimeDir, lock }) {
+      const wheels = lock.wheels || [];
+      for (const wheel of wheels) {
+        const wheelPath = path.join(stagingRoot, 'wheels', wheel.fileName);
+        await launchParakeet([
+          '--extract-wheel', wheelPath,
+          '--extract-dest', runtimeDir,
+        ], runtimeDir);
+      }
+    }
+
+    function requireParakeetEngine(options) {
+      if (!options || options.engine !== 'parakeet') {
+        return { ok: false, code: 'UNKNOWN_ENGINE', message: 'Unknown transcription engine.' };
+      }
+      return null;
+    }
+
+    ipcMain.handle('get-transcription-engine-status', async (event, options = {}) => {
+      assertTrustedRendererSender(event);
+      return requireParakeetEngine(options) || getParakeetStatus(parakeetTargetOptions());
+    });
+
+    ipcMain.handle('setup-transcription-engine', async (event, options = {}) => {
+      assertTrustedRendererSender(event);
+      const rejected = requireParakeetEngine(options);
+      if (rejected) {
+        return rejected;
+      }
+      const operationId = crypto.randomUUID();
+      const controller = new AbortController();
+      parakeetSetupControllers.set(operationId, controller);
+      try {
+        const status = await setupParakeet({
+          ...parakeetTargetOptions(),
+          operationId,
+          operation: options.operation === 'repair' ? 'repair' : 'install',
+          cancelSignal: controller.signal,
+          downloader: downloadFile,
+          emitProgress: (progress) => sendToRenderer('transcription-engine-setup-progress', {
+            operationId,
+            phase: progress.phase,
+            downloadedBytes: progress.downloadedBytes || 0,
+            totalBytes: progress.totalBytes || 0,
+          }),
+          materializeRuntime: materializeParakeetRuntime,
+          probeDevice: probeParakeetDevice,
+        });
+        return { ...status, operationId };
+      } catch (error) {
+        return {
+          ok: false,
+          operationId,
+          code: error.code || 'PARAKEET_ARTIFACT_INVALID',
+          message: error.message,
+        };
+      } finally {
+        parakeetSetupControllers.delete(operationId);
+      }
+    });
+
+    ipcMain.handle('cancel-transcription-engine-setup', async (event, options = {}) => {
+      assertTrustedRendererSender(event);
+      const controller = parakeetSetupControllers.get(options.operationId);
+      if (controller) {
+        controller.abort();
+      }
+      return { ok: true, operationId: options.operationId || null };
+    });
+
+    ipcMain.handle('validate-transcription-engine', async (event, options = {}) => {
+      assertTrustedRendererSender(event);
+      const rejected = requireParakeetEngine(options);
+      if (rejected) {
+        return rejected;
+      }
+      try {
+        return await validateParakeet({
+          ...parakeetTargetOptions(),
+          probeDevice: probeParakeetDevice,
+        });
+      } catch (error) {
+        return { ok: false, code: error.code || 'PARAKEET_ARTIFACT_INVALID', message: error.message };
+      }
+    });
+
+    ipcMain.handle('remove-transcription-engine', async (event, options = {}) => {
+      assertTrustedRendererSender(event);
+      const rejected = requireParakeetEngine(options);
+      if (rejected) {
+        return rejected;
+      }
+      try {
+        return await removeParakeet({
+          ...parakeetTargetOptions(),
+          hasPendingWork: () => hasPendingAiComputeWork() || parakeetSetupControllers.size > 0,
+        });
+      } catch (error) {
+        return { ok: false, code: error.code || 'PARAKEET_SETUP_BUSY', message: error.message };
+      }
+    });
+
     /**
      * Check if Whisper model is downloaded
      */

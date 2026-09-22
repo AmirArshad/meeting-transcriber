@@ -168,6 +168,31 @@ function findRecorderResultPayload(stdoutData) {
   return null;
 }
 
+function capturedTranscriptionSelection(recordingInfo) {
+  const selection = recordingInfo && recordingInfo.transcriptionSelection;
+  if (!selection || typeof selection !== 'object' || Array.isArray(selection)) {
+    return null;
+  }
+  return selection;
+}
+
+function withCapturedTranscriptionSelection(payload, recordingInfo) {
+  if (!payload || payload.cancelled || !payload.audioPath) {
+    return payload;
+  }
+  if (payload.success !== true && payload.success !== false) {
+    return payload;
+  }
+  const selection = capturedTranscriptionSelection(recordingInfo);
+  if (!selection) {
+    return payload;
+  }
+  return {
+    ...payload,
+    transcriptionSelection: selection,
+  };
+}
+
 function normalizeRecordingStopPayload(recordingInfo, { existsSync = () => false } = {}) {
   if (!recordingInfo || typeof recordingInfo !== 'object') {
     return null;
@@ -176,7 +201,7 @@ function normalizeRecordingStopPayload(recordingInfo, { existsSync = () => false
   if (recordingInfo.success === false) {
     const failedPath = getRecorderResultAudioPath(recordingInfo);
     const recoveredPath = failedPath && existsSync(failedPath) ? failedPath : null;
-    return {
+    const failedPayload = {
       success: false,
       code: recordingInfo.code || 'RECORDING_FAILED',
       message: recordingInfo.message || 'Recording failed.',
@@ -186,6 +211,10 @@ function normalizeRecordingStopPayload(recordingInfo, { existsSync = () => false
       // so quit/stop can save the recording when the file exists on disk.
       ...(recoveredPath ? { audioPath: recoveredPath } : {}),
     };
+    if (!recoveredPath) {
+      return failedPayload;
+    }
+    return withCapturedTranscriptionSelection(failedPayload, recordingInfo);
   }
 
   if (recordingInfo.success === true && recordingInfo.cancelled === true) {
@@ -197,12 +226,12 @@ function normalizeRecordingStopPayload(recordingInfo, { existsSync = () => false
 
   const filePath = getRecorderResultAudioPath(recordingInfo);
   if (filePath && existsSync(filePath)) {
-    return {
+    return withCapturedTranscriptionSelection({
       success: true,
       audioPath: filePath,
       duration: recordingInfo.duration,
       desktopDiagnostics: recordingInfo.desktopDiagnostics,
-    };
+    }, recordingInfo);
   }
 
   if (filePath) {

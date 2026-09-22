@@ -29,6 +29,16 @@ from meetings import store as meeting_store
 
 _UNSET = object()
 _MAX_AI_METADATA_STRING_LENGTH = meeting_norm.MAX_AI_METADATA_STRING_LENGTH
+
+
+def _nonnegative_generation(value: object) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        raise meeting_norm.TranscriptionMetadataError('INVALID_TRANSCRIPTION_REQUEST')
+    if number < 0 or number > 1_000_000_000:
+        raise meeting_norm.TranscriptionMetadataError('INVALID_TRANSCRIPTION_REQUEST')
+    return number
 _VALID_TRANSCRIPTION_STATUSES = meeting_norm.VALID_TRANSCRIPTION_STATUSES
 _TRANSCRIPTION_DEVICE_CLI_CHOICES = meeting_norm.TRANSCRIPTION_DEVICE_CLI_CHOICES
 
@@ -159,6 +169,7 @@ class MeetingManager:
         transcription_error: Optional[str] = None,
         transcription_device: Optional[str] = None,
         transcription_compute_type: Optional[str] = None,
+        transcription_request: Optional[Dict] = None,
     ) -> Dict:
         """
         Add a new meeting to the history.
@@ -179,6 +190,13 @@ class MeetingManager:
         Returns:
             Meeting object with metadata
         """
+        normalized_request = None
+        if transcription_request is not None:
+            normalized_request = meeting_norm.normalize_transcription_request(
+                transcription_request,
+                require_explicit=True,
+            )
+
         now = datetime.now()
         base_id = now.strftime("%Y%m%d_%H%M%S")
 
@@ -264,6 +282,14 @@ class MeetingManager:
                     meeting["transcriptionDevice"] = normalized_device
                 if normalized_compute_type:
                     meeting["transcriptionComputeType"] = normalized_compute_type
+                if normalized_request is not None:
+                    meeting["transcriptionRequest"] = normalized_request
+                    meeting["transcriptionAttemptGuard"] = {
+                        "attemptId": normalized_request["attemptId"],
+                        "cancelGeneration": 0,
+                        "deleteGeneration": 0,
+                    }
+                    meeting["transcriptionStatus"] = "pending"
 
                 # Add to beginning of existing meetings (most recent first)
                 meetings.insert(0, meeting)
@@ -313,6 +339,7 @@ class MeetingManager:
         title: str,
         transcription_status: str = "completed",
         transcription_error: Optional[str] = None,
+        transcription_result: Optional[Dict] = None,
     ) -> Optional[Dict]:
         """
         Add a meeting directly without copying files (used by scan).
@@ -361,6 +388,8 @@ class MeetingManager:
                 'transcriptionStatus': self._normalize_transcription_status(transcription_status),
                 'transcriptionError': self._normalize_transcription_error(transcription_error),
             }
+            if transcription_result is not None:
+                meeting['transcriptionResult'] = meeting_norm.normalize_transcription_result(transcription_result)
 
             # Add to beginning of existing meetings (most recent first)
             meetings.insert(0, meeting)
@@ -379,7 +408,10 @@ class MeetingManager:
             List of meeting objects
         """
         with self._metadata_guard():
-            return [self._strip_inline_transcript(meeting) for meeting in self._list_meetings_locked()]
+            return [
+                self._strip_inline_transcript(meeting_norm.public_transcription_provenance(meeting))
+                for meeting in self._list_meetings_locked()
+            ]
 
     def scan_and_sync_recordings(self) -> Dict[str, int]:
         """
@@ -431,8 +463,8 @@ class MeetingManager:
                 skipped += 1
                 continue
 
-            # Look for corresponding transcript
-            transcript_file = audio_file.with_suffix('.md')
+            # Look for the canonical transcript. Attempt sidecars are not imported.
+            transcript_file = meeting_scan.transcript_candidate_for_audio(audio_file)
             placeholder_created = False
             if transcript_file.is_symlink():
                 print(f"Warning: Skipping symlink transcript during scan: {transcript_file.name}", file=sys.stderr)
@@ -483,6 +515,10 @@ class MeetingManager:
                     model="unknown",
                     title=title,
                     transcription_status="pending" if placeholder_created else "completed",
+                    transcription_result=None if placeholder_created else {
+                        "schemaVersion": 1,
+                        "engine": "unknown",
+                    },
                 )
                 if meeting is not None:
                     existing_meetings.append(meeting)
@@ -516,7 +552,7 @@ class MeetingManager:
             meetings = self._list_meetings_locked()
             for meeting in meetings:
                 if meeting['id'] == meeting_id:
-                    hydrated = dict(meeting)
+                    hydrated = meeting_norm.public_transcription_provenance(meeting)
                     safe_transcript_path = self._resolve_accessible_recordings_file(
                         Path(meeting['transcriptPath']),
                         allowed_suffixes=('.md',),
@@ -656,6 +692,154 @@ class MeetingManager:
             if changed:
                 self._save_meetings_unlocked(meetings)
             return meeting
+
+    def stage_transcription_request(
+        self,
+        meeting_id: str,
+        request: Dict,
+        *,
+        cancel_generation: int = 0,
+        delete_generation: int = 0,
+    ) -> Optional[Dict]:
+        """Persist a new attempt without changing completed transcript provenance."""
+        normalized = meeting_norm.normalize_transcription_request(request, require_explicit=True)
+        guard = {
+            "attemptId": normalized["attemptId"],
+            "cancelGeneration": _nonnegative_generation(cancel_generation),
+            "deleteGeneration": _nonnegative_generation(delete_generation),
+        }
+        with self._metadata_guard():
+            meetings = self._list_meetings_locked()
+            meeting = next((item for item in meetings if item['id'] == meeting_id), None)
+            if not meeting:
+                return None
+            meeting['transcriptionRequest'] = normalized
+            meeting['transcriptionAttemptGuard'] = guard
+            meeting['transcriptionStatus'] = 'pending'
+            meeting['transcriptionError'] = None
+            self._save_meetings_unlocked(meetings)
+            return meeting_norm.public_transcription_provenance(meeting)
+
+    def exclude_incomplete_transcription(self, meeting_id: str) -> Optional[Dict]:
+        """Stop resume for a pending meeting whose request was never stored."""
+        with self._metadata_guard():
+            meetings = self._list_meetings_locked()
+            meeting = next((item for item in meetings if item['id'] == meeting_id), None)
+            if not meeting:
+                return None
+            if meeting.get('transcriptionRequest'):
+                return meeting_norm.public_transcription_provenance(meeting)
+            meeting['transcriptionStatus'] = 'failed'
+            meeting['transcriptionResumeExcluded'] = True
+            meeting['transcriptionError'] = self._normalize_transcription_error(
+                'Transcription request was not saved.'
+            ) or 'Transcription request was not saved.'
+            self._save_meetings_unlocked(meetings)
+            return meeting_norm.public_transcription_provenance(meeting)
+
+    def fail_transcription_attempt(self, meeting_id: str, attempt_id: str, error: str) -> Optional[Dict]:
+        """Record a failed attempt while retaining completed output and audio."""
+        with self._metadata_guard():
+            meetings = self._list_meetings_locked()
+            meeting = next((item for item in meetings if item['id'] == meeting_id), None)
+            if not meeting:
+                return None
+            request = meeting.get('transcriptionRequest') or {}
+            guard = meeting.get('transcriptionAttemptGuard') or {}
+            if request.get('attemptId') != attempt_id or guard.get('attemptId') != attempt_id:
+                raise meeting_norm.TranscriptionMetadataError('STALE_TRANSCRIPTION_ATTEMPT')
+            meeting['transcriptionStatus'] = 'failed'
+            meeting['transcriptionError'] = self._normalize_transcription_error(error) or 'Transcription failed.'
+            meeting.pop('transcriptionAttemptGuard', None)
+            self._save_meetings_unlocked(meetings)
+            return meeting_norm.public_transcription_provenance(meeting)
+
+    def commit_transcription_attempt(
+        self,
+        meeting_id: str,
+        *,
+        attempt_id: str,
+        candidate_path: str,
+        result: Dict,
+        cancel_generation: int,
+        delete_generation: int,
+    ) -> Optional[Dict]:
+        """Point metadata at a candidate transcript only after the attempt is still current."""
+        with self._metadata_guard():
+            meetings = self._list_meetings_locked()
+            meeting = next((item for item in meetings if item['id'] == meeting_id), None)
+            if not meeting:
+                return None
+            request = meeting.get('transcriptionRequest') or {}
+            guard = meeting.get('transcriptionAttemptGuard') or {}
+            if request.get('attemptId') != attempt_id or guard.get('attemptId') != attempt_id:
+                raise meeting_norm.TranscriptionMetadataError('STALE_TRANSCRIPTION_ATTEMPT')
+            if (
+                int(guard.get('cancelGeneration', -1)) != _nonnegative_generation(cancel_generation)
+                or int(guard.get('deleteGeneration', -1)) != _nonnegative_generation(delete_generation)
+            ):
+                raise meeting_norm.TranscriptionMetadataError('TRANSCRIPTION_ATTEMPT_SUPERSEDED')
+
+            expected_name = meeting_norm.expected_attempt_transcript_name(meeting.get('audioPath'), attempt_id)
+            candidate = self._resolve_accessible_recordings_file(
+                Path(candidate_path),
+                allowed_suffixes=('.md',),
+                must_exist=True,
+                label='candidate transcript',
+            )
+            if candidate is None or candidate.name != expected_name:
+                raise meeting_norm.TranscriptionMetadataError('INVALID_TRANSCRIPTION_RESULT')
+            try:
+                candidate_text = candidate.read_text(encoding='utf-8')
+            except (OSError, UnicodeError):
+                raise meeting_norm.TranscriptionMetadataError('INVALID_TRANSCRIPTION_RESULT')
+            if not candidate_text.strip():
+                raise meeting_norm.TranscriptionMetadataError('INVALID_TRANSCRIPTION_RESULT')
+
+            normalized_result = meeting_norm.normalize_transcription_result(result, attempt_id=attempt_id)
+            transcript_hash = self._hash_text(candidate_text)
+            if normalized_result.get('transcriptHash') not in (None, transcript_hash):
+                raise meeting_norm.TranscriptionMetadataError('INVALID_TRANSCRIPTION_RESULT')
+            normalized_result['transcriptHash'] = transcript_hash
+            if normalized_result.get('engine') != request.get('engine'):
+                raise meeting_norm.TranscriptionMetadataError('INVALID_TRANSCRIPTION_RESULT')
+
+            previous_transcript = meeting.get('transcriptPath')
+            meeting['transcriptPath'] = str(candidate.resolve(strict=False))
+            meeting['transcriptionResult'] = normalized_result
+            meeting['transcriptionStatus'] = 'completed'
+            meeting['transcriptionError'] = None
+            meeting['language'] = normalized_result.get('language') or meeting.get('language')
+            if normalized_result.get('engine') == 'parakeet':
+                meeting['model'] = normalized_result.get('modelId')
+            else:
+                meeting['model'] = normalized_result.get('modelSize') or meeting.get('model')
+            meeting['transcriptionDevice'] = normalized_result.get('device')
+            meeting['transcriptionComputeType'] = normalized_result.get('computeType')
+            meeting.pop('transcriptionAttemptGuard', None)
+            self._save_meetings_unlocked(meetings)
+
+        self._remove_obsolete_transcript(previous_transcript, meeting['transcriptPath'])
+        return meeting_norm.public_transcription_provenance(meeting)
+
+    def _remove_obsolete_transcript(self, previous_path: Optional[str], committed_path: str) -> None:
+        if not previous_path or str(previous_path) == str(committed_path):
+            return
+        try:
+            obsolete = self._resolve_accessible_recordings_file(
+                Path(previous_path),
+                allowed_suffixes=('.md',),
+                must_exist=True,
+                label='previous transcript',
+            )
+        except Exception:
+            return
+        if obsolete is None:
+            return
+        try:
+            obsolete.unlink()
+        except OSError as exc:
+            print(f"Warning: Could not remove obsolete transcript: {exc}", file=sys.stderr)
 
     def update_meeting_ai(
         self,
@@ -827,6 +1011,31 @@ def main():
     update_ai_parser.add_argument('--clear-diarization', action='store_true', help='Remove diarization metadata')
     update_ai_parser.add_argument('--clear-summary', action='store_true', help='Remove summary metadata')
 
+    exclude_parser = subparsers.add_parser(
+        'exclude-incomplete-transcription',
+        help='Mark a pending meeting failed when its transcription request was not stored',
+    )
+    exclude_parser.add_argument('id', help='Meeting ID')
+
+    stage_parser = subparsers.add_parser('stage-transcription-request', help='Persist a transcription attempt without changing completed output')
+    stage_parser.add_argument('id', help='Meeting ID')
+    stage_parser.add_argument('--request-json', required=True, help='Bounded transcription request JSON')
+    stage_parser.add_argument('--cancel-generation', type=int, default=0)
+    stage_parser.add_argument('--delete-generation', type=int, default=0)
+
+    fail_parser = subparsers.add_parser('fail-transcription-attempt', help='Record a failed attempt and keep completed output')
+    fail_parser.add_argument('id', help='Meeting ID')
+    fail_parser.add_argument('--attempt-id', required=True)
+    fail_parser.add_argument('--error', required=True)
+
+    commit_parser = subparsers.add_parser('commit-transcription-attempt', help='Commit a candidate transcript after the attempt is still current')
+    commit_parser.add_argument('id', help='Meeting ID')
+    commit_parser.add_argument('--attempt-id', required=True)
+    commit_parser.add_argument('--candidate', required=True)
+    commit_parser.add_argument('--result-json', required=True)
+    commit_parser.add_argument('--cancel-generation', type=int, required=True)
+    commit_parser.add_argument('--delete-generation', type=int, required=True)
+
     # Add meeting (for testing)
     add_parser = subparsers.add_parser('add', help='Add meeting')
     add_parser.add_argument('--audio', required=True, help='Audio file path')
@@ -843,6 +1052,7 @@ def main():
         help='Resolved transcription device (metal accepted as mps alias)',
     )
     add_parser.add_argument('--transcription-compute-type', help='Resolved transcription compute type')
+    add_parser.add_argument('--request-json', help='Bounded transcription request stored with the new meeting')
 
     args = parser.parse_args()
 
@@ -873,6 +1083,64 @@ def main():
 
     elif args.command == 'update':
         meeting = manager.update_meeting(args.id, title=args.title)
+        if meeting:
+            print(json.dumps(meeting, indent=2))
+        else:
+            print(f"Meeting not found: {args.id}", file=sys.stderr)
+            sys.exit(1)
+
+    elif args.command == 'exclude-incomplete-transcription':
+        meeting = manager.exclude_incomplete_transcription(args.id)
+        if meeting:
+            print(json.dumps(meeting, indent=2))
+        else:
+            print(f"Meeting not found: {args.id}", file=sys.stderr)
+            sys.exit(1)
+
+    elif args.command == 'stage-transcription-request':
+        try:
+            request = json.loads(args.request_json)
+            meeting = manager.stage_transcription_request(
+                args.id,
+                request,
+                cancel_generation=args.cancel_generation,
+                delete_generation=args.delete_generation,
+            )
+        except (json.JSONDecodeError, meeting_norm.TranscriptionMetadataError) as exc:
+            print(getattr(exc, 'code', 'INVALID_TRANSCRIPTION_REQUEST'), file=sys.stderr)
+            sys.exit(1)
+        if meeting:
+            print(json.dumps(meeting, indent=2))
+        else:
+            print(f"Meeting not found: {args.id}", file=sys.stderr)
+            sys.exit(1)
+
+    elif args.command == 'fail-transcription-attempt':
+        try:
+            meeting = manager.fail_transcription_attempt(args.id, args.attempt_id, args.error)
+        except meeting_norm.TranscriptionMetadataError as exc:
+            print(exc.code, file=sys.stderr)
+            sys.exit(1)
+        if meeting:
+            print(json.dumps(meeting, indent=2))
+        else:
+            print(f"Meeting not found: {args.id}", file=sys.stderr)
+            sys.exit(1)
+
+    elif args.command == 'commit-transcription-attempt':
+        try:
+            result = json.loads(args.result_json)
+            meeting = manager.commit_transcription_attempt(
+                args.id,
+                attempt_id=args.attempt_id,
+                candidate_path=args.candidate,
+                result=result,
+                cancel_generation=args.cancel_generation,
+                delete_generation=args.delete_generation,
+            )
+        except (json.JSONDecodeError, meeting_norm.TranscriptionMetadataError) as exc:
+            print(getattr(exc, 'code', 'INVALID_TRANSCRIPTION_RESULT'), file=sys.stderr)
+            sys.exit(1)
         if meeting:
             print(json.dumps(meeting, indent=2))
         else:
@@ -920,18 +1188,30 @@ def main():
             sys.exit(1)
 
     elif args.command == 'add':
-        meeting = manager.add_meeting(
-            audio_path=args.audio,
-            transcript_path=args.transcript,
-            duration=args.duration,
-            language=args.language,
-            model=args.model,
-            title=args.title,
-            transcription_status=args.transcription_status,
-            transcription_error=args.transcription_error,
-            transcription_device=args.transcription_device,
-            transcription_compute_type=args.transcription_compute_type,
-        )
+        request = None
+        if getattr(args, 'request_json', None):
+            try:
+                request = json.loads(args.request_json)
+            except json.JSONDecodeError:
+                print('INVALID_TRANSCRIPTION_REQUEST', file=sys.stderr)
+                sys.exit(1)
+        try:
+            meeting = manager.add_meeting(
+                audio_path=args.audio,
+                transcript_path=args.transcript,
+                duration=args.duration,
+                language=args.language,
+                model=args.model,
+                title=args.title,
+                transcription_status=args.transcription_status,
+                transcription_error=args.transcription_error,
+                transcription_device=args.transcription_device,
+                transcription_compute_type=args.transcription_compute_type,
+                transcription_request=request,
+            )
+        except meeting_norm.TranscriptionMetadataError as exc:
+            print(exc.code, file=sys.stderr)
+            sys.exit(1)
         print(json.dumps(meeting, indent=2))
 
     else:

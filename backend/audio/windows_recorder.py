@@ -89,7 +89,9 @@ from .capture_manifest import (
     MANIFEST_FILENAME,
     discard_capture_session,
     mark_capture_discarded_and_cleanup,
+    parse_transcription_selection_argument,
 )
+from .capture_spool_runtime import with_transcription_selection
 from .track_spool import (
     DEFAULT_MAX_QUEUE_BYTES,
     DEFAULT_STALL_TIMEOUT_S,
@@ -133,6 +135,7 @@ class AudioRecorder:
         desktop_volume: float = 1.0,
         preroll_seconds: float = None,  # None = use default, 0 = no preroll (for production with countdown)
         capture_mode: str = "mic-and-desktop",
+        transcription_selection=None,
     ):
         """
         Initialize the Windows audio recorder.
@@ -166,6 +169,7 @@ class AudioRecorder:
         self.mic_volume = mic_volume
         self.desktop_volume = desktop_volume
         self.capture_mode = capture_mode
+        self.transcription_selection = transcription_selection
         self.include_mic, self.include_desktop = resolve_capture_mode(capture_mode)
 
         self.pa = pyaudio.PyAudio()
@@ -625,6 +629,7 @@ class AudioRecorder:
             self.output_path,
             started_at_ns=started_ns,
             started_at_iso=started_iso,
+            transcription_selection=getattr(self, "transcription_selection", None),
         )
         self._capture_manifest.set_processing_profile("windows-v1")
         self._capture_manifest.set_mix_params(
@@ -1210,6 +1215,7 @@ def main():
         help="Requested capture sources",
     )
     parser.add_argument("--output", required=True, help="Output file path")
+    parser.add_argument("--transcription-selection", default="", help="Capture-time transcription selection JSON")
     parser.add_argument("--duration", type=int, default=0, help="Duration in seconds (0 for manual stop)")
     
     args = parser.parse_args()
@@ -1269,6 +1275,7 @@ def main():
             sample_rate=48000,
             preroll_seconds=0,  # Production mode: no preroll, countdown in Electron app handles device warm-up
             capture_mode=args.capture_mode,
+            transcription_selection=parse_transcription_selection_argument(args.transcription_selection),
         )
         recorder.start_recording()
         
@@ -1408,11 +1415,11 @@ def main():
                 "cancelled": True,
             })
         elif _final_output_path:
-            recording_info = {
+            recording_info = with_transcription_selection({
                 "success": True,
                 "audioPath": str(_final_output_path),
                 "duration": _recording_duration,
-            }
+            }, getattr(recorder, "transcription_selection", None))
             _send_json_message(recording_info)
             _final_output_path = None
 

@@ -17,6 +17,8 @@ from typing import Any, Dict, List, Optional, Union
 
 from filelock import FileLock, Timeout
 
+from meetings.normalization import TranscriptionMetadataError, normalize_transcription_request
+
 PathLike = Union[str, Path]
 
 MANIFEST_SCHEMA_VERSION = 1
@@ -185,6 +187,26 @@ def _validate_track_dict(name: str, track: Any) -> Dict[str, Any]:
     return track
 
 
+def coerce_transcription_selection(value: Any) -> Optional[Dict[str, Any]]:
+    """Bounded capture-time selection. Absent means a legacy manifest."""
+    if value is None:
+        return None
+    try:
+        return normalize_transcription_request(value, require_explicit=True)
+    except TranscriptionMetadataError as exc:
+        raise CaptureManifestError(exc.code) from exc
+
+
+def parse_transcription_selection_argument(raw: Optional[str]) -> Optional[Dict[str, Any]]:
+    if raw is None or str(raw).strip() == "":
+        return None
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise CaptureManifestError("INVALID_TRANSCRIPTION_REQUEST") from exc
+    return coerce_transcription_selection(parsed)
+
+
 def validate_manifest_data(data: Any) -> Dict[str, Any]:
     """Validate a loaded manifest payload (used by open/reload and Task 10 discovery)."""
     if not isinstance(data, dict):
@@ -261,6 +283,10 @@ def validate_manifest_data(data: Any) -> Dict[str, Any]:
     if "includeDesktop" in data and data["includeDesktop"] is not None:
         if not isinstance(data["includeDesktop"], bool):
             raise CaptureManifestError("includeDesktop must be a bool")
+    if "transcriptionSelection" in data:
+        data["transcriptionSelection"] = coerce_transcription_selection(data.get("transcriptionSelection"))
+        if data["transcriptionSelection"] is None:
+            data.pop("transcriptionSelection", None)
     return data
 
 
@@ -307,6 +333,7 @@ class CaptureManifestCoordinator:
         output_path: PathLike,
         started_at_ns: int,
         started_at_iso: str,
+        transcription_selection: Optional[Dict[str, Any]] = None,
     ) -> "CaptureManifestCoordinator":
         output = Path(output_path)
         session_dir = capture_session_dir_for_output(output)
@@ -327,6 +354,9 @@ class CaptureManifestCoordinator:
                 "startedAtIso": iso,
                 "tracks": {},
             }
+            selection = coerce_transcription_selection(transcription_selection)
+            if selection is not None:
+                data["transcriptionSelection"] = selection
             lock = FileLock(str(session_dir / SESSION_LOCK_FILENAME))
             lock.acquire()
             coordinator = cls(session_dir, data, file_lock=lock)

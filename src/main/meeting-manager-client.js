@@ -108,6 +108,14 @@ function createMeetingManagerClient(deps) {
       if (transcriptionComputeType) {
         args.push('--transcription-compute-type', String(transcriptionComputeType));
       }
+      if (meetingData.transcriptionRequest) {
+        const boundedRequest = boundedTranscriptionRecord(meetingData.transcriptionRequest);
+        if (!boundedRequest) {
+          reject(new Error('add-meeting transcription request is empty'));
+          return;
+        }
+        args.push('--request-json', JSON.stringify(boundedRequest));
+      }
 
       const python = spawnTrackedPython(args, { cwd: pythonConfig.backendPath });
 
@@ -215,7 +223,7 @@ function createMeetingManagerClient(deps) {
 
         const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
 
-        python.on('close', (code) => {
+        python.on('close', async (code) => {
           try {
             processOutput.assertStdoutWithinLimit();
           } catch (error) {
@@ -226,6 +234,9 @@ function createMeetingManagerClient(deps) {
           if (code === 0) {
             try {
               const result = JSON.parse(processOutput.getStdout());
+              if (typeof options.beforeAutoResume === 'function') {
+                await options.beforeAutoResume(result);
+              }
               try {
                 onScanSucceeded();
               } catch (_) {
@@ -537,9 +548,124 @@ function createMeetingManagerClient(deps) {
     });
   }
 
+  const TRANSCRIPTION_REQUEST_KEYS = [
+    'schemaVersion',
+    'attemptId',
+    'engine',
+    'modelId',
+    'artifactRevision',
+    'adapterId',
+    'runtimeLockId',
+    'language',
+    'boundaryPolicy',
+    'modelSize',
+  ];
+
+  const TRANSCRIPTION_RESULT_KEYS = [
+    ...TRANSCRIPTION_REQUEST_KEYS,
+    'device',
+    'computeType',
+    'transcriptHash',
+  ];
+
+  function boundedRecord(value, keys) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return null;
+    }
+    const bounded = {};
+    for (const key of keys) {
+      if (value[key] != null && value[key] !== '') {
+        bounded[key] = value[key];
+      }
+    }
+    return Object.keys(bounded).length ? bounded : null;
+  }
+
+  function boundedTranscriptionRecord(value) {
+    return boundedRecord(value, TRANSCRIPTION_REQUEST_KEYS);
+  }
+
+  function boundedTranscriptionResult(value) {
+    return boundedRecord(value, TRANSCRIPTION_RESULT_KEYS);
+  }
+
+  function runMeetingManagerCommand(args) {
+    const recordingsDir = path.join(app.getPath('userData'), 'recordings');
+    return new Promise((resolve, reject) => {
+      const python = spawnTrackedPython(getBackendModuleArgs('meeting_manager', [
+        '--recordings-dir', recordingsDir,
+        ...args,
+      ]), { cwd: pythonConfig.backendPath });
+      const processOutput = collectPythonProcessOutput(python, { jsonResult: true });
+      python.on('close', (code) => {
+        try {
+          processOutput.assertStdoutWithinLimit();
+        } catch (error) {
+          reject(error);
+          return;
+        }
+        if (code !== 0) {
+          reject(new Error(processOutput.getStderr().trim() || 'Meeting manager command failed'));
+          return;
+        }
+        try {
+          resolve(JSON.parse(processOutput.getStdout()));
+        } catch (error) {
+          reject(new Error(`Failed to parse meeting manager result: ${error.message}`));
+        }
+      });
+      python.on('error', reject);
+    });
+  }
+
+  function stageTranscriptionRequest(meetingId, request, guards = {}) {
+    const bounded = boundedTranscriptionRecord(request);
+    if (!meetingId || !bounded) {
+      return Promise.reject(new Error('stage-transcription-request requires a meeting and bounded request'));
+    }
+    return runMeetingManagerCommand([
+      'stage-transcription-request',
+      String(meetingId),
+      '--request-json', JSON.stringify(bounded),
+      '--cancel-generation', String(guards.cancelGeneration || 0),
+      '--delete-generation', String(guards.deleteGeneration || 0),
+    ]);
+  }
+
+  function excludeIncompleteTranscription(meetingId) {
+    if (!meetingId) {
+      return Promise.reject(new Error('exclude-incomplete-transcription requires a meeting'));
+    }
+    return runMeetingManagerCommand([
+      'exclude-incomplete-transcription',
+      String(meetingId),
+    ]);
+  }
+
+  function commitTranscriptionAttempt(meetingId, payload = {}) {
+    const bounded = boundedTranscriptionResult(payload.result);
+    if (!meetingId || !payload.attemptId || !payload.candidatePath || !bounded) {
+      return Promise.reject(new Error('commit-transcription-attempt requires a candidate and bounded result'));
+    }
+    return runMeetingManagerCommand([
+      'commit-transcription-attempt',
+      String(meetingId),
+      '--attempt-id', String(payload.attemptId),
+      '--candidate', String(payload.candidatePath),
+      '--result-json', JSON.stringify(bounded),
+      '--cancel-generation', String(payload.cancelGeneration || 0),
+      '--delete-generation', String(payload.deleteGeneration || 0),
+    ]);
+  }
+
   return {
     addMeetingToHistory,
     updateMeetingAiMetadata,
+    stageTranscriptionRequest,
+    excludeIncompleteTranscription,
+    commitTranscriptionAttempt,
+    boundedTranscriptionRecord,
+    boundedTranscriptionResult,
     isRecordingsScanInProgress,
     scanRecordings,
     listMeetings,

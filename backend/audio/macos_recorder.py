@@ -24,7 +24,9 @@ from .capture_manifest import (
     MANIFEST_FILENAME,
     discard_capture_session,
     mark_capture_discarded_and_cleanup,
+    parse_transcription_selection_argument,
 )
+from .capture_spool_runtime import with_transcription_selection
 from .track_spool import TrackSpool
 from .streaming_post_processor import FinalizationError, finalize_capture
 from .capture_alignment import compute_capture_alignment_frames
@@ -165,6 +167,7 @@ class MacOSAudioRecorder:
         desktop_volume: float = 1.0,
         preroll_seconds: Optional[float] = None,  # None = use default 1.5s, 0 = no preroll (for production with countdown)
         capture_mode: str = "mic-and-desktop",
+        transcription_selection=None,
     ):
         """Initialize the macOS recorder."""
         _send_configuring_devices_event()
@@ -177,6 +180,7 @@ class MacOSAudioRecorder:
         self.mic_volume = mic_volume
         self.desktop_volume = desktop_volume
         self.capture_mode = capture_mode
+        self.transcription_selection = transcription_selection
         self.include_mic, self.include_desktop = resolve_capture_mode(capture_mode)
 
         # Recording state
@@ -511,6 +515,7 @@ class MacOSAudioRecorder:
             self.output_path,
             started_at_ns=started_ns,
             started_at_iso=started_iso,
+            transcription_selection=getattr(self, "transcription_selection", None),
         )
         self._capture_manifest.set_processing_profile("macos-v1")
         self._capture_manifest.set_mix_params(
@@ -1248,6 +1253,7 @@ def main():
         help="Requested capture sources",
     )
     parser.add_argument("--output", required=True, help="Output file path")
+    parser.add_argument("--transcription-selection", default="", help="Capture-time transcription selection JSON")
     parser.add_argument("--duration", type=int, default=0, help="Duration in seconds (0 for manual stop)")
 
     args = parser.parse_args()
@@ -1301,6 +1307,7 @@ def main():
             output_path=args.output,
             preroll_seconds=0,  # Production mode: no preroll, countdown in Electron app handles device warm-up
             capture_mode=args.capture_mode,
+            transcription_selection=parse_transcription_selection_argument(args.transcription_selection),
         )
 
         # Start recording
@@ -1358,12 +1365,12 @@ def main():
             _send_json_message(result)
             sys.exit(1 if exit_code == 0 else exit_code)
 
-        result = {
+        result = with_transcription_selection({
             'success': True,
             'outputPath': recovered_path or args.output,
             'duration': recorder.recording_duration,
             'desktopDiagnostics': recorder.desktop_diagnostics,
-        }
+        }, getattr(recorder, 'transcription_selection', None))
         _send_json_message(result)
         sys.exit(exit_code)
 

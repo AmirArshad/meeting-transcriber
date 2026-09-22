@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import unittest
@@ -190,6 +191,26 @@ class ScanImportTempRecoveryTests(unittest.TestCase):
             other.write_bytes(b"ok")
             selected = select_scannable_audio_files(recordings_dir)
             self.assertEqual([path.name for path in selected], [other.name])
+
+    def test_select_scannable_imports_final_beside_discarded_selection(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            recordings_dir = Path(temp_dir)
+            stem = "meeting_discarded_selection"
+            capture_dir = recordings_dir / f"{stem}.capture"
+            capture_dir.mkdir()
+            (capture_dir / "manifest.json").write_text(json.dumps({
+                "schemaVersion": 1,
+                "state": "discarded",
+                "transcriptionSelection": {
+                    "engine": "parakeet",
+                    "language": "en",
+                },
+            }), encoding="utf-8")
+            (capture_dir / "inside.wav").write_bytes(b"RIFF")
+            final = recordings_dir / f"{stem}.opus"
+            final.write_bytes(b"opus")
+            selected = select_scannable_audio_files(recordings_dir)
+            self.assertEqual([path.name for path in selected], [final.name])
 
     def test_select_scannable_skips_linux_v1_capture_session(self):
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -179,6 +179,8 @@ let activityRenameOriginal = '';
 let countdownValue = 3;
 let recordingStartTime = null;
 let activeRecordingSessionId = null;
+/** Capture-time engine/language/model. Stop and finalize use this, not live Settings. */
+let activeRecordingTranscriptionSelection = null;
 let activeCountdownCancel = null;
 /** Bumped to invalidate an in-flight startRecording() when Discard wins during starting/countdown. */
 let startRecordingEpoch = 0;
@@ -1941,6 +1943,14 @@ function ensureLanguageChoiceOption() {
   placeholder.value = '';
   placeholder.textContent = 'Choose language…';
   languageSelect.prepend(placeholder);
+}
+
+function snapshotTranscriptionSelection() {
+  return {
+    engine: 'whisper',
+    language: languageSelect.value,
+    modelSize: modelSelect.value,
+  };
 }
 
 function validateNewTranscriptionSelection(language, modelSize) {
@@ -3752,6 +3762,17 @@ async function startRecording(requestedCaptureMode = 'mic-and-desktop') {
     return;
   }
 
+  activeRecordingTranscriptionSelection = snapshotTranscriptionSelection();
+  const selectionCheck = validateNewTranscriptionSelection(
+    activeRecordingTranscriptionSelection.language,
+    activeRecordingTranscriptionSelection.modelSize,
+  );
+  if (!selectionCheck.ok) {
+    reportUnsupportedTranscriptionSelection(selectionCheck);
+    setIdleIfCurrentStart();
+    return;
+  }
+
   // Try up to 2 times with exponential backoff
   const maxAttempts = 2;
   let attempt = 0;
@@ -3786,7 +3807,8 @@ async function startRecording(requestedCaptureMode = 'mic-and-desktop') {
         micId: toOpaqueDeviceId(micId),
         loopbackId: toOpaqueDeviceId(desktopId),
         captureMode,
-        isFirstRecording: isFirstRecording && attempt === 1 // Only use first-recording timeout on first attempt
+        isFirstRecording: isFirstRecording && attempt === 1, // Only use first-recording timeout on first attempt
+        transcriptionSelection: activeRecordingTranscriptionSelection,
       });
 
       const recordingResult = await recordingPromise;
@@ -4039,6 +4061,9 @@ async function stopRecording() {
     audioVisualizer.stop();
 
     const result = await window.electronAPI.stopRecording();
+    if (result?.transcriptionSelection) {
+      activeRecordingTranscriptionSelection = result.transcriptionSelection;
+    }
 
     // Quit-cancel recovery already persisted this recording into History.
     // Do not run the normal transcribe-and-save path on the same stop result.
@@ -4063,6 +4088,7 @@ async function stopRecording() {
         addLog('Starting transcription for recovered recording...');
         await transcribeAudio({
           stopErrorNote: result.message || result.code || 'Recording saved with processing errors.',
+          transcriptionSelection: activeRecordingTranscriptionSelection,
         });
         return;
       }
@@ -4091,7 +4117,9 @@ async function stopRecording() {
 
       // Auto-transcribe
       addLog('Starting transcription...');
-      await transcribeAudio();
+      await transcribeAudio({
+        transcriptionSelection: activeRecordingTranscriptionSelection,
+      });
     } else {
       addLog('Warning: Recording stopped but no audio file path returned', 'warning');
       setTranscriptMessage('Recording completed but file not found. The recording may have failed.', true);
@@ -4143,6 +4171,7 @@ async function discardRecording() {
       setTranscriptMessage('Recording cancelled. Nothing was saved.', false);
       currentAudioFile = null;
       currentRecordingDurationSeconds = 0;
+      activeRecordingTranscriptionSelection = null;
       setRecordingState('idle');
       return;
     }
@@ -4394,13 +4423,17 @@ async function generateSummaryForMeeting(meetingId) {
 // Enqueue transcription after stop. PR2: unlock Start as soon as pending persist
 // succeeds; main owns the composite job and Activity is driven by queue-state.
 async function transcribeAudio(options = {}) {
-  const language = languageSelect.value;
-  const modelSize = modelSelect.value;
+  const capturedSelection = options.transcriptionSelection || activeRecordingTranscriptionSelection;
+  const language = capturedSelection?.language || languageSelect.value;
+  const modelSize = capturedSelection?.modelSize || capturedSelection?.model || modelSelect.value;
   const stopErrorNote = typeof options.stopErrorNote === 'string' ? options.stopErrorNote : '';
 
-  const selection = validateNewTranscriptionSelection(language, modelSize);
+  const selection = capturedSelection?.engine === 'parakeet'
+    ? { ok: true }
+    : validateNewTranscriptionSelection(language, modelSize);
   if (!selection.ok) {
     reportUnsupportedTranscriptionSelection(selection);
+    activeRecordingTranscriptionSelection = null;
     setRecordingState('idle');
     return;
   }
@@ -4408,6 +4441,7 @@ async function transcribeAudio(options = {}) {
   if (!currentAudioFile) {
     addLog('Error: No audio file to transcribe', 'error');
     setTranscriptMessage('No audio file available for transcription.', true);
+    activeRecordingTranscriptionSelection = null;
     setRecordingState('idle');
     return;
   }
@@ -4422,6 +4456,7 @@ async function transcribeAudio(options = {}) {
       language,
       modelSize,
       transcriptionErrorNote: stopErrorNote,
+      transcriptionSelection: capturedSelection || null,
     });
 
     if (result && result.success === false) {
@@ -4497,6 +4532,8 @@ async function transcribeAudio(options = {}) {
       console.warn('Could not refresh history after enqueue failure:', historyError);
     }
     setRecordingState('idle');
+  } finally {
+    activeRecordingTranscriptionSelection = null;
   }
 }
 

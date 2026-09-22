@@ -201,7 +201,7 @@ def _candidate_from_manifest(
     session_dir: Path,
     data: Dict[str, Any],
 ) -> Dict[str, Any]:
-    return {
+    candidate = {
         "captureDir": str(session_dir),
         "outputStem": data.get("outputStem") if isinstance(data.get("outputStem"), str) else None,
         "startedAtIso": validate_started_at_iso(data.get("startedAtIso")),
@@ -209,6 +209,10 @@ def _candidate_from_manifest(
         "approxBytes": _approx_bytes(session_dir, data),
         "state": data.get("state") if isinstance(data.get("state"), str) else None,
     }
+    selection = data.get("transcriptionSelection")
+    if isinstance(selection, dict):
+        candidate["transcriptionSelection"] = selection
+    return candidate
 
 
 def _try_read_manifest_readonly(session_dir: Path) -> Optional[Dict[str, Any]]:
@@ -374,11 +378,15 @@ def recover_capture(
                     coordinator.close()
                 except Exception:
                     pass
-        return {
+        result = {
             "captureDir": str(session_dir),
             "audioPath": str(preexisting_final),
             "duration": duration,
         }
+        selection = peek.get("transcriptionSelection")
+        if isinstance(selection, dict):
+            result["transcriptionSelection"] = selection
+        return result
 
     # Stage to a non-meeting name so a failed compress cannot delete a sibling
     # final. Promote atomically inside finalize_capture before complete/cleanup.
@@ -411,11 +419,15 @@ def recover_capture(
         raise
 
     _unlink_recovery_staging(root, stem)
-    return {
+    recovered = {
         "captureDir": str(session_dir),
         "audioPath": result.final_path,
         "duration": float(result.duration),
     }
+    selection = peek.get("transcriptionSelection")
+    if isinstance(selection, dict):
+        recovered["transcriptionSelection"] = selection
+    return recovered
 
 
 def recover_captures(
