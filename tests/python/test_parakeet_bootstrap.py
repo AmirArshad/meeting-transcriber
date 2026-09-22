@@ -184,3 +184,75 @@ def test_safe_wheel_extracts_inside_destination(tmp_path: Path):
     destination = tmp_path / "dest"
     safe_extract_wheel(wheel, destination)
     assert (destination / "pkg" / "model.bin").read_bytes() == b"data"
+
+
+def test_startup_flags_skip_venv_sitecustomize(tmp_path: Path):
+    import os
+    import subprocess
+
+    venv = tmp_path / "venv"
+    subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(venv)], check=True)
+    posix_sites = list((venv / "lib").glob("python*/site-packages")) if (venv / "lib").is_dir() else []
+    windows_site = venv / "Lib" / "site-packages"
+    site_packages = posix_sites[0] if posix_sites else windows_site
+    (site_packages / "sitecustomize.py").write_text(
+        "raise SystemExit('venv-sitecustomize')\n",
+        encoding="utf-8",
+    )
+    python = venv / "bin" / ("python.exe" if os.name == "nt" else "python")
+    plain = subprocess.run([str(python), "-c", "print('ran')"], capture_output=True, text=True)
+    isolated = subprocess.run(
+        [str(python), "-S", "-P", "-c", "import sys; print('sitecustomize' in sys.modules)"],
+        capture_output=True,
+        text=True,
+    )
+    assert plain.returncode != 0
+    assert "venv-sitecustomize" in f"{plain.stdout}\n{plain.stderr}"
+    assert isolated.returncode == 0
+    assert isolated.stdout.strip() == "False"
+
+
+def test_main_drops_modules_imported_before_isolation(tmp_path: Path):
+    import os
+    import subprocess
+
+    runtime = tmp_path / "runtime"
+    backend = tmp_path / "backend"
+    ambient = tmp_path / "site-packages"
+    runtime.mkdir()
+    backend.mkdir()
+    ambient.mkdir()
+    (ambient / "evilmod.py").write_text("VALUE = 1\n", encoding="utf-8")
+    script = tmp_path / "check_isolation.py"
+    script.write_text(
+        "\n".join([
+            "import sys, types",
+            "from pathlib import Path",
+            "ambient = Path(sys.argv[1])",
+            "module = types.ModuleType('evilmod')",
+            "module.__file__ = str(ambient / 'evilmod.py')",
+            "sys.modules['evilmod'] = module",
+            "from transcription.parakeet_bootstrap import main",
+            "code = main(['--runtime', sys.argv[2], '--backend', sys.argv[3]])",
+            "if code != 0:",
+            "    raise SystemExit(code)",
+            "if 'evilmod' in sys.modules:",
+            "    raise SystemExit('ambient module survived')",
+            "try:",
+            "    import evilmod",
+            "except ModuleNotFoundError:",
+            "    raise SystemExit(0)",
+            "raise SystemExit('ambient module imported after isolation')",
+        ]),
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(ROOT / "backend")
+    completed = subprocess.run(
+        [sys.executable, "-S", "-P", str(script), str(ambient), str(runtime), str(backend)],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr + completed.stdout

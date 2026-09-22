@@ -132,6 +132,56 @@ def _ambient_entries(ambient_pythonpath: str) -> set[str]:
     return {entry for entry in ambient_pythonpath.split(os.pathsep) if entry}
 
 
+def _module_locations(module: object) -> List[str]:
+    locations: List[str] = []
+    file_name = getattr(module, "__file__", None)
+    if isinstance(file_name, str) and file_name:
+        locations.append(file_name)
+    module_path = getattr(module, "__path__", None)
+    if module_path:
+        for entry in list(module_path):
+            if isinstance(entry, str) and entry:
+                locations.append(entry)
+    return locations
+
+
+def _location_is_allowed(location: str, allowed_roots: Sequence[str]) -> bool:
+    if _is_disallowed_import_root(location):
+        return False
+    try:
+        resolved = str(Path(location).resolve())
+    except OSError:
+        return False
+    if _is_disallowed_import_root(resolved):
+        return False
+    for root in allowed_roots:
+        if not root:
+            continue
+        prefix = root if root.endswith(".zip") else root + os.sep
+        if resolved == root or resolved.startswith(prefix):
+            return True
+    return False
+
+
+def discard_ambient_modules(allowed_roots: Sequence[str]) -> None:
+    """Drop modules imported before isolation, so later imports cannot reuse them.
+
+    Builtins and frozen modules have no file and stay. Everything else must live
+    under an allowed root and must not be a site-packages or dist-packages path.
+    """
+    allowed = [str(Path(root).resolve()) if root and not str(root).endswith(".zip") else str(root)
+               for root in allowed_roots if root]
+    for name in list(sys.modules):
+        module = sys.modules.get(name)
+        if module is None:
+            continue
+        locations = _module_locations(module)
+        if not locations:
+            continue
+        if any(not _location_is_allowed(location, allowed) for location in locations):
+            sys.modules.pop(name, None)
+
+
 def apply_isolated_path(paths: Iterable[str]) -> None:
     sys.path[:] = list(paths)
 
@@ -264,6 +314,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         pth_file=args.pth or None,
         ambient_pythonpath=args.ambient_pythonpath,
     )
+    discard_ambient_modules(paths)
     apply_isolated_path(paths)
     if args.extract_wheel:
         safe_extract_wheel(Path(args.extract_wheel), Path(args.extract_dest or args.runtime))

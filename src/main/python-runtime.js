@@ -11,6 +11,7 @@
  */
 
 const {
+  STARTUP_ISOLATION_FLAGS,
   buildParakeetChildEnv,
   parakeetCudaLibraryDirs,
 } = require('./parakeet-runtime');
@@ -260,7 +261,7 @@ function createPythonRuntime({ app, spawn, path, fs, dirname }) {
         : parakeetCudaLibraryDirs(runtimeDir, fs),
       baseEnv: process.env,
     });
-    return spawnTrackedPython(args, {
+    return spawnTrackedPython([...STARTUP_ISOLATION_FLAGS, ...(args || [])], {
       ...spawnOptions,
       cwd: cwd || pythonConfig.backendPath,
       env,

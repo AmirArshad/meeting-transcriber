@@ -120,6 +120,12 @@ test('bootstrap args honor an embedded pth file and an isolated spawn drops ambi
       process.env.PYTHONPATH = previous;
     }
   }
+  assert.deepEqual(calls[0].args.slice(0, 4), [
+    '-S',
+    '-P',
+    '-m',
+    'transcription.parakeet_bootstrap',
+  ]);
   const pythonPath = calls[0].options.env.PYTHONPATH;
   assert.equal(pythonPath.includes('ambient-modules'), false);
   assert.equal(pythonPath.includes('dist-packages'), false);
@@ -157,7 +163,7 @@ test('Windows pth lines name the runtime and backend, and a finished child is no
   assert.deepEqual(windowsPthLines({
     runtimeDir: 'C:\\runtime',
     backendDir: 'C:\\backend',
-  }), ['python311.zip', '.', 'C:\\runtime', 'C:\\backend', 'import site']);
+  }), ['python311.zip', '.', 'C:\\runtime', 'C:\\backend']);
   assert.equal(
     terminateLateRuntimeChild({ exitCode: 0 }, { timedOut: true, terminate() { throw new Error('late'); } }).terminated,
     false,

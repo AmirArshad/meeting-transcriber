@@ -534,6 +534,129 @@ test('structured unsuccessful discovery response surfaces as error', async () =>
   assert.match(state.failed[0].message, /Cannot list recordings directory/);
 });
 
+function recoveredSelection() {
+  return {
+    schemaVersion: 1,
+    attemptId: '11111111-1111-4111-8111-111111111111',
+    engine: 'whisper',
+    language: 'fr',
+    modelSize: 'small',
+  };
+}
+
+test('meeting lookup failure blocks auto-resume and retries the captured request', async () => {
+  const selection = recoveredSelection();
+  const audioPath = '/tmp/recovered-a.wav';
+  let listCalls = 0;
+  let stageCalls = 0;
+  let autoResumeCalls = 0;
+  const { service } = createRecoveryService({
+    spawnTrackedPython: (args) => {
+      if (args.includes('--list')) {
+        return createProc({ success: true, candidates: [sampleCandidate] });
+      }
+      return createProc({
+        success: true,
+        recovered: [{
+          captureDir: sampleCandidate.captureDir,
+          audioPath,
+          duration: 1,
+          transcriptionSelection: selection,
+        }],
+        failed: [],
+      });
+    },
+    listMeetings: async () => {
+      listCalls += 1;
+      if (listCalls === 1) {
+        throw new Error('metadata store unavailable');
+      }
+      return [{ id: 'meeting-1', audioPath }];
+    },
+    stageTranscriptionRequest: async (meetingId, request) => {
+      stageCalls += 1;
+      return { id: meetingId, transcriptionRequest: request };
+    },
+    scanRecordings: async (options = {}) => {
+      if (typeof options.beforeAutoResume === 'function') {
+        await options.beforeAutoResume();
+      }
+      autoResumeCalls += 1;
+      return { scanned: 1, added: 1, skipped: 0 };
+    },
+  });
+
+  await service.discoverInterruptedCaptures();
+  const first = await service.recoverInterruptedCaptures();
+  assert.equal(first.success, false);
+  assert.equal(stageCalls, 0);
+  assert.equal(autoResumeCalls, 0);
+  assert.equal(service.getRecordingRecoveryState().scanImportPending, true);
+
+  const second = await service.recoverInterruptedCaptures();
+  assert.equal(second.success, true);
+  assert.equal(stageCalls, 1);
+  assert.equal(autoResumeCalls, 1);
+  assert.equal(service.getRecordingRecoveryState().status, 'idle');
+});
+
+test('unstaged recovered selections stay pending until a later write succeeds', async () => {
+  const selection = recoveredSelection();
+  const audioPath = '/tmp/recovered-b.wav';
+  let stageCalls = 0;
+  let excludeCalls = 0;
+  let autoResumeCalls = 0;
+  const { service } = createRecoveryService({
+    spawnTrackedPython: (args) => {
+      if (args.includes('--list')) {
+        return createProc({ success: true, candidates: [sampleCandidate] });
+      }
+      return createProc({
+        success: true,
+        recovered: [{
+          captureDir: sampleCandidate.captureDir,
+          audioPath,
+          duration: 1,
+          transcriptionSelection: selection,
+        }],
+        failed: [],
+      });
+    },
+    listMeetings: async () => [{ id: 'meeting-1', audioPath }],
+    stageTranscriptionRequest: async (meetingId, request) => {
+      stageCalls += 1;
+      if (stageCalls === 1) {
+        throw new Error('stage failed');
+      }
+      return { id: meetingId, transcriptionRequest: request };
+    },
+    excludeIncompleteTranscription: async () => {
+      excludeCalls += 1;
+      throw new Error('exclude failed');
+    },
+    scanRecordings: async (options = {}) => {
+      if (typeof options.beforeAutoResume === 'function') {
+        await options.beforeAutoResume();
+      }
+      autoResumeCalls += 1;
+      return { scanned: 1, added: 1, skipped: 0 };
+    },
+  });
+
+  await service.discoverInterruptedCaptures();
+  const first = await service.recoverInterruptedCaptures();
+  assert.equal(first.success, false);
+  assert.equal(stageCalls, 1);
+  assert.equal(excludeCalls, 1);
+  assert.equal(autoResumeCalls, 0);
+
+  const second = await service.recoverInterruptedCaptures();
+  assert.equal(second.success, true);
+  assert.equal(stageCalls, 2);
+  assert.equal(excludeCalls, 1);
+  assert.equal(autoResumeCalls, 1);
+});
+
 test('recovery timeout remains classified when terminator waits for child close', async () => {
   const { EventEmitter: EE } = require('node:events');
   const hung = new EE();

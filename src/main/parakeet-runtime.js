@@ -7,6 +7,10 @@ const path = require('path');
 
 const LIBRARY_NAME = /\.(?:dll|pyd|dylib|so)(?:\.\d+)*$/i;
 const RUNTIME_METADATA = new Set(['install.json', 'device.json']);
+// -S skips site import, so sitecustomize and interpreter/venv site-packages
+// cannot run before the child replaces sys.path. -P omits the process cwd.
+// PYTHONNOUSERSITE does not do either of those.
+const STARTUP_ISOLATION_FLAGS = ['-S', '-P'];
 
 function fail(code, message) {
   const error = new Error(message);
@@ -310,7 +314,6 @@ function windowsPthLines({ runtimeDir, backendDir } = {}) {
     '.',
     String(runtimeDir || ''),
     String(backendDir || ''),
-    'import site',
   ];
 }
 
@@ -329,6 +332,7 @@ function terminateLateRuntimeChild(child, { timedOut = false, terminate } = {}) 
 }
 
 module.exports = {
+  STARTUP_ISOLATION_FLAGS,
   buildParakeetBootstrapArgs,
   buildParakeetChildEnv,
   expectedRuntimeFiles,

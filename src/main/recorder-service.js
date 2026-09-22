@@ -215,6 +215,8 @@ function createRecorderService(deps) {
   let recoveryActionPromise = null;
   let recoveryProcess = null;
   let recoveryScanImportPending = false;
+  /** Recovered audio whose capture-time request is not staged or excluded yet. */
+  let pendingRecoveredSelections = [];
   let recoveryProgressMessage = null;
   let recoveryLastBatchSize = 0;
   let recoveryLastSuccessCount = 0;
@@ -564,12 +566,15 @@ function createRecorderService(deps) {
             : null,
           approxBytes: Number.isFinite(item.approxBytes) ? item.approxBytes : null,
           state: item.state ?? null,
+          ...(item.transcriptionSelection && typeof item.transcriptionSelection === 'object'
+            ? { transcriptionSelection: item.transcriptionSelection }
+            : {}),
         }));
       recoveryFailed = [];
       recoveryActiveCandidateIndex = null;
       recoveryProgressMessage = null;
-      recoveryScanImportPending = false;
-      if (recoveryInternalCandidates.length > 0) {
+      recoveryScanImportPending = pendingRecoveredSelections.length > 0;
+      if (recoveryInternalCandidates.length > 0 || pendingRecoveredSelections.length > 0) {
         setRecoveryStatus('available');
       } else {
         setRecoveryStatus('idle');
@@ -717,7 +722,7 @@ function createRecorderService(deps) {
     }
 
     const batch = recoveryInternalCandidates.slice();
-    if (batch.length === 0 && !recoveryScanImportPending) {
+    if (batch.length === 0 && !recoveryScanImportPending && pendingRecoveredSelections.length === 0) {
       recordingsMaintenanceGate.release('recovery');
       setRecoveryStatus('idle');
       return { success: true, recovered: 0, failed: 0 };
@@ -755,7 +760,10 @@ function createRecorderService(deps) {
           // eslint-disable-next-line no-await-in-loop
           const outcome = await recoverOneCapture(candidate);
           if (outcome.ok && outcome.recovered) {
-            recoveredItems.push(outcome.recovered);
+            const selection = outcome.recovered.transcriptionSelection || candidate.transcriptionSelection;
+            recoveredItems.push(selection
+              ? { ...outcome.recovered, transcriptionSelection: selection }
+              : outcome.recovered);
           }
           if (!outcome.ok) {
             const failure = {
@@ -788,8 +796,10 @@ function createRecorderService(deps) {
       }
 
       const anySucceeded = unresolved.length < batch.length;
+      const selectionsForScan = mergeRecoveredSelections(pendingRecoveredSelections, recoveredItems);
       let scanOk = true;
-      if ((anySucceeded || recoveryScanImportPending) && typeof scanRecordings === 'function') {
+      let selectionHookRan = false;
+      if ((anySucceeded || recoveryScanImportPending || selectionsForScan.length > 0) && typeof scanRecordings === 'function') {
         // Hand off recovery → scan without releasing to idle (blocks start).
         if (heldOwner === 'recovery' && recordingsMaintenanceGate.transfer('recovery', 'scan')) {
           heldOwner = 'scan';
@@ -811,18 +821,29 @@ function createRecorderService(deps) {
           try {
             await scanRecordings({
               alreadyHoldingScan: true,
-              beforeAutoResume: () => stageRecoveredTranscriptionRequests(recoveredItems),
+              beforeAutoResume: async () => {
+                selectionHookRan = true;
+                await stageRecoveredTranscriptionRequests(selectionsForScan);
+              },
             });
+            pendingRecoveredSelections = [];
             recoveryScanImportPending = false;
           } catch (error) {
             scanOk = false;
             recoveryScanImportPending = true;
           }
         }
+      } else if (selectionsForScan.length > 0) {
+        scanOk = false;
+        recoveryScanImportPending = true;
+      }
+      if (!scanOk && !selectionHookRan) {
+        pendingRecoveredSelections = selectionsForScan;
       }
 
       if (unresolved.length === 0 && scanOk) {
         recoveryInternalCandidates = [];
+        pendingRecoveredSelections = [];
         recoveryFailed = [];
         recoveryActiveCandidateIndex = null;
         recoveryProgressMessage = null;
@@ -1692,27 +1713,72 @@ function createRecorderService(deps) {
     }
   }
 
+  function recoveredSelectionKey(item) {
+    const attemptId = item?.transcriptionSelection?.attemptId;
+    if (attemptId) {
+      return `attempt:${attemptId}`;
+    }
+    return `audio:${path.resolve(String(item.audioPath))}`;
+  }
+
+  function mergeRecoveredSelections(existing, incoming) {
+    const merged = new Map();
+    for (const item of [...(existing || []), ...(incoming || [])]) {
+      if (!item?.audioPath || !item.transcriptionSelection || typeof item.transcriptionSelection !== 'object') {
+        continue;
+      }
+      merged.set(recoveredSelectionKey(item), item);
+    }
+    return [...merged.values()];
+  }
+
+  function recoveredSelectionPersistError(message) {
+    const error = new Error(message || 'Recovered transcription requests were not saved.');
+    error.code = 'PENDING_MEETING_PERSIST_FAILED';
+    return error;
+  }
+
+  async function recoveredSelectionIsDurable(meeting, selection) {
+    let stagedMeeting = null;
+    try {
+      stagedMeeting = await stageTranscriptionRequest(meeting.id, selection);
+    } catch (error) {
+      stagedMeeting = null;
+    }
+    if (stagedMeeting?.transcriptionRequest?.attemptId === selection.attemptId) {
+      return true;
+    }
+    if (typeof excludeIncompleteTranscription !== 'function') {
+      return false;
+    }
+    try {
+      const excluded = await excludeIncompleteTranscription(meeting.id);
+      if (excluded?.transcriptionRequest?.attemptId === selection.attemptId) {
+        return true;
+      }
+      return excluded?.transcriptionResumeExcluded === true;
+    } catch (error) {
+      return false;
+    }
+  }
+
   async function stageRecoveredTranscriptionRequests(recoveredItems) {
-    const selected = (Array.isArray(recoveredItems) ? recoveredItems : []).filter((item) => (
-      item && item.audioPath && item.transcriptionSelection
-    ));
-    if (
-      selected.length === 0
-      || typeof listMeetings !== 'function'
-      || typeof stageTranscriptionRequest !== 'function'
-    ) {
+    const selected = mergeRecoveredSelections([], recoveredItems);
+    pendingRecoveredSelections = selected.slice();
+    if (selected.length === 0) {
       return;
+    }
+    if (typeof listMeetings !== 'function' || typeof stageTranscriptionRequest !== 'function') {
+      throw recoveredSelectionPersistError('Recovered transcription requests could not be saved.');
     }
 
     let meetings = [];
     try {
       meetings = await listMeetings();
     } catch (error) {
-      console.warn(
-        'Could not list meetings for recovered transcription requests. Audio was kept and transcription was not queued:',
-        error?.message || error,
+      throw recoveredSelectionPersistError(
+        error?.message || 'Could not list meetings for recovered transcription requests.',
       );
-      return;
     }
 
     const meetingsByAudioName = new Map();
@@ -1722,23 +1788,19 @@ function createRecorderService(deps) {
       }
     }
 
+    const stillPending = [];
     for (const item of selected) {
       const meeting = meetingsByAudioName.get(path.basename(item.audioPath));
-      if (!meeting) {
-        console.warn(
-          'Recovered audio has no meeting for its transcription selection. Audio was kept and transcription was not queued.',
-        );
-        continue;
+      const saved = meeting
+        ? await recoveredSelectionIsDurable(meeting, item.transcriptionSelection)
+        : false;
+      if (!saved) {
+        stillPending.push(item);
       }
-      try {
-        await stageTranscriptionRequest(meeting.id, item.transcriptionSelection);
-      } catch (error) {
-        if (typeof excludeIncompleteTranscription === 'function') {
-          await excludeIncompleteTranscription(meeting.id);
-          continue;
-        }
-        throw error;
-      }
+    }
+    pendingRecoveredSelections = stillPending;
+    if (stillPending.length > 0) {
+      throw recoveredSelectionPersistError('Recovered transcription requests were not saved.');
     }
   }
 
