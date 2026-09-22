@@ -8,6 +8,8 @@
 
 **Tech Stack:** CachyOS x86_64, Ryzen 5 7600 / RTX 4070 host, Python 3.11, existing faster-whisper 1.2.1 / CTranslate2 4.8.1 baseline, onnx-asr 0.12.0 / ONNX Runtime GPU 1.23.2 candidate.
 
+**Execution status (2026-09-22):** The developer harness, isolated candidate/VAD setup, preflight gates, process cleanup, privacy tests, and sanitized evidence update are complete. Host driver, managed Whisper CUDA 12, and candidate provider/VAD admission passed in the corrected final preflight. The fairness gate then stopped the representative run before inference because pre-existing compute processes remained (8,633 MiB across three processes in the initial diagnostic; 447 MiB across two processes in the corrected final preflight). The candidate encoder also failed an ORT CUDA allocation attempt under the initial contention. The bounded decision is **Inconclusive**. Production integration remains gated.
+
 ## Global constraints
 
 - Current work is CachyOS only. Windows, macOS, Omarchy acceptance, and further CPU benchmarking are deferred. Keep historical CPU evidence; never use CPU fallback to rescue a failed CUDA trial.
@@ -73,4 +75,4 @@ These thresholds are conservative triage choices, not statistical significance c
 
 ## Completion and handoff
 
-Deliver reproducible scripts, exact private-path command templates, sanitized evidence, and one screening decision with its limitations. If input is missing, deliver completed independent work and a precise request for that input. Do not claim the experiment ran. Do not stage, commit, push, or publish unless the execution prompt separately authorizes it.
+Deliver reproducible scripts, exact private-path command templates, sanitized evidence, and one screening decision with its limitations. This execution prompt separately authorizes the commit and push of the completed harness/evidence changes; do not proceed into production Parakeet integration. The next smallest action is to clear host GPU contention and rerun the unchanged five-trial batch.

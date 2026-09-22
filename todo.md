@@ -29,7 +29,10 @@ have shipped; hardware-gated model work has not.
   12 ONNX candidates executed, but short synthetic audio did not establish a
   product benefit. The 2026-09-22 managed CUDA recheck passed. Next is the
   [CachyOS-only GPU screening plan](docs/superpowers/plans/2026-09-22-cachyos-parakeet-qualification.md);
-  production integration and other-host investigation remain deferred.
+  its developer harness and public-fixture setup are now complete, but the
+  screening decision is **Inconclusive** because a pre-existing GPU workload
+  blocked fair candidate model loading. Production integration and other-host
+  investigation remain deferred; rerun only after host GPU contention is clear.
 - Remaining committed work: Parakeet, Whisper Large, extra language removals,
   summarisation language/model qualification, inference-performance slices,
   and the Linux microphone-volume investigation.

@@ -1,9 +1,11 @@
 # Linux Parakeet compatibility qualification — v2.10
 
-**Measurements:** 2026-09-21; assessment and managed CUDA recheck: 2026-09-22
+**Measurements:** 2026-09-21; assessment, managed CUDA recheck, and bounded screening harness: 2026-09-22
 **Decision scope:** Linux x86_64 only; CPU and managed CUDA 12 are independent rows. This is qualification evidence, not an implementation or support claim.
 
 Two passes ran on the same host and app revision. Pass 1 recorded a Whisper Small CPU baseline and rejected the default NeMo 2.5.3 resolver (CUDA 13). Pass 2 re-checked live CUDA admission, identified hash-pinned CPU and CUDA 12 closures, and measured one short fixture. Neither row should proceed to implementation.
+
+The bounded CachyOS screening harness was implemented and its setup preflight completed. The screening remained inconclusive because pre-existing GPU compute processes violated the no-contention fairness gate: an initial diagnostic observed 8,633 MiB across three processes and the corrected final preflight observed two processes using 447 MiB. Under the initial contention, the pinned fp32 encoder also failed closed on a 16 MiB ONNX Runtime CUDA allocation. No fair measured trial was counted, no CPU fallback was attempted, and no production Parakeet integration was started.
 
 ## Environment and method
 
@@ -187,3 +189,57 @@ Two interpretation corrections guide the next experiment:
   requires VAD for audio beyond typical 20–30 second model limits. The existing
   short-clip trial did not exercise that meeting path. Its VAD artifacts,
   chunk completeness, timestamps, quality, and total cost must be measured.
+
+## 2026-09-22 bounded CachyOS screening
+
+### Harness and setup
+
+The developer-only harness is now committed in [`scripts/benchmarks/parakeet_qualification.py`](../../scripts/benchmarks/parakeet_qualification.py) and [`scripts/benchmarks/parakeet_qualification_worker.py`](../../scripts/benchmarks/parakeet_qualification_worker.py), with focused coverage in [`tests/python/test_parakeet_qualification.py`](../../tests/python/test_parakeet_qualification.py). The parent process imports no candidate packages. Each engine runs in a fresh process group with a finite timeout, identical derived mono 16 kHz audio, sampled process-tree RSS, per-process GPU telemetry when observable, offline environment variables, and sanitized aggregate output. The worker records first-run timing separately from five alternating measured trials; this run did not reach a valid measured batch. The final report recorded app revision `07f47bf`.
+
+The explicitly authorized public setup used the AMI Meeting Corpus mirror's `IS1009a.Mix-Headset.wav` at 838.833313 seconds, fixed mirror revision `722d8891643e1e4dc62cfd0d198fa05a1646c3cc`, SHA-256 `6eb5a0ede9d0e72794f976ce7bea5b78133eae969f99b4c5418b43c2468d25b1`, and the manual annotation archive at revision `44f723e10ded7d3c7a91d7f24d9c4543622b5fe2`, SHA-256 `56e29112cd89cfba76fbf8f10215eb245cc89b0d3d27355ba14b406a7ea7776c`. The audio and annotations are distributed under CC BY 4.0 by the AMI Consortium / University of Edinburgh; the local reference was derived only from the archive's human word annotations, never from ASR output. The generated reference JSON remained in scratch and has SHA-256 `c58441648e5eab5732fd5d617ca0fed8568d0f37fb04c97bb49480acb78f036d`.
+
+
+The candidate remained pinned to community ONNX revision `0bbb45a3365852604aef28b538a8f066f4ccaa85`, the six fp32 model file hashes in the table above, `onnx-asr==0.12.0` (wheel SHA-256 `5e7ceca454609819ea7833f61e2302e0c8f6ece4f8a78b66c5daba53cb51de4a`), and ORT GPU `1.23.2` with the already recorded CUDA 12 wheel closure. The long-form VAD addition was `istupakov/silero-vad-onnx` revision `b3e3ee3cce4c11ceb63b1a0b229d916069c1ddf6`, `silero_vad.onnx`, 2,327,524 bytes, SHA-256 `1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3`, MIT license. Candidate cuDNN `9.26.0.51` stayed in its isolated scratch environment; Whisper's managed cuDNN `9.22.0.52` was not shared.
+
+The runnable command shape is below. All `/private/...` values are placeholders for scratch paths and must remain outside the repository.
+
+```text
+.venv/bin/python scripts/benchmarks/parakeet_qualification.py \
+  --fixture /private/ami/IS1009a.Mix-Headset.wav \
+  --reference /private/ami/reference.json \
+  --baseline-python /private/repo/.venv/bin/python \
+  --candidate-python /private/parakeet-venv/bin/python \
+  --baseline-model-dir /private/whisper-hub-cache \
+  --candidate-model-dir /private/parakeet-model \
+  --candidate-vad-dir /private/silero-vad \
+  --baseline-library-dir /private/managed-cuda/nvidia/cublas/lib \
+  --baseline-library-dir /private/managed-cuda/nvidia/cudnn/lib \
+  --candidate-library-dir /private/parakeet-venv/lib/python3.11/site-packages/nvidia/cublas/lib \
+  --candidate-library-dir /private/parakeet-venv/lib/python3.11/site-packages/nvidia/cuda_nvrtc/lib \
+  --candidate-library-dir /private/parakeet-venv/lib/python3.11/site-packages/nvidia/cuda_runtime/lib \
+  --candidate-library-dir /private/parakeet-venv/lib/python3.11/site-packages/nvidia/cudnn/lib \
+  --candidate-library-dir /private/parakeet-venv/lib/python3.11/site-packages/nvidia/cufft/lib \
+  --candidate-library-dir /private/parakeet-venv/lib/python3.11/site-packages/nvidia/curand/lib \
+  --candidate-library-dir /private/parakeet-venv/lib/python3.11/site-packages/nvidia/nvjitlink/lib \
+  --output-dir /private/parakeet-run --trials 5 --timeout-seconds 900 \
+  --fixture-source https://huggingface.co/datasets/FluidInference/ami-corpus-mirror \
+  --fixture-license CC-BY-4.0 \
+  --fixture-revision 722d8891643e1e4dc62cfd0d198fa05a1646c3cc \
+  --candidate-model-revision 0bbb45a3365852604aef28b538a8f066f4ccaa85 \
+  --vad-revision b3e3ee3cce4c11ceb63b1a0b229d916069c1ddf6
+```
+
+### Layered result
+
+| Layer | Evidence | Status |
+| --- | --- | --- |
+| Host driver | CachyOS x86_64; RTX 4070; driver 615.71.09; compute capability 8.9; `nvidia-smi` working | **Ready** |
+| Managed Whisper CUDA 12 | Project `cuda_probe`, `--device-check nvidia-smi`, managed cuBLAS/cuDNN paths, and CTranslate2 validation returned `statusCode=ready`, `matchedProfile=cuda12` | **Ready** |
+| Candidate runtime admission | Isolated ORT `1.23.2` reported `CUDAExecutionProvider`; VAD session selected CUDA; `/proc/<pid>/maps` showed candidate cuBLAS 12, cuDNN 9, cuDART 12, and driver `libcuda` | **Ready for provider/VAD preflight** |
+| Benchmark environment | `nvidia-smi` reported pre-existing compute processes: 8,633 MiB across three processes during the initial diagnostic, then 447 MiB across two processes during the corrected final preflight. Any competing compute process blocks the fairness gate. | **Blocked by host contention** |
+| Candidate model load | An initial diagnostic attempt reached the ONNX encoder session and failed closed with ORT `BFCArena ... Failed to allocate` for a 16 MiB request under that contention; no retry or fallback followed | **Unqualified; candidate-runtime failure under contention** |
+| Whisper worker | Initial diagnostic exposed a harness-only `backend`/`common` import path omission; the environment was corrected and the import was independently verified. No fair Whisper timing was counted | **Harness corrected; measurement absent** |
+
+Because the fairness gate was blocked, the run has **zero valid cold or measured trials** for both engines. There is no median, range, RTF, RSS, VRAM, WER, or boundary-quality result to interpret. The screening decision is therefore **Inconclusive**, not a pass, tradeoff, or rejection of the candidate. Required evidence remains the uncontended five-trial complete-meeting batch for both engines, with comparable per-process VRAM and reference quality.
+
+The single best next action is to clear the pre-existing GPU compute workload, rerun the exact harness command above with the same hashes and `--trials 5`, and stop immediately if the host, managed Whisper, or candidate CUDA admission changes. No setup download or dependency installation is needed for that rerun.

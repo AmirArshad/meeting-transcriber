@@ -8,7 +8,7 @@
 
 **Tech Stack:** Existing Electron 44, plain HTML/CSS/JS, Python 3.11, and local audio preparation. Parakeet runtime, model revision, and dependency pins require qualification before selection.
 
-**Status (2026-09-22):** Linux CPU and CUDA 12 ONNX feasibility measured on CachyOS; no production implementation or hardware acceptance completed. The active next step is [CachyOS-only GPU qualification](2026-09-22-cachyos-parakeet-qualification.md), a bounded representative-meeting screening experiment. Other hosts and further CPU benchmarking are deferred. Tasks 2–6 below remain gated; a promising screen is not full qualification.
+**Status (2026-09-22):** Linux CPU and CUDA 12 ONNX feasibility were measured on CachyOS, and the bounded representative-meeting screening harness was implemented. The screening run was **Inconclusive** because pre-existing GPU compute contention blocked fair model loading; no production implementation or hardware acceptance completed. See [qualification evidence](../../development/PARAKEET_COMPATIBILITY.md). Other hosts and further CPU benchmarking are deferred. Tasks 2–6 below remain gated.
 
 ## Global constraints
 
