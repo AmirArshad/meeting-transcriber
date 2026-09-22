@@ -1,6 +1,6 @@
 # Linux Parakeet compatibility qualification — v2.10
 
-**Date:** 2026-09-21
+**Measurements:** 2026-09-21; assessment and managed CUDA recheck: 2026-09-22
 **Decision scope:** Linux x86_64 only; CPU and managed CUDA 12 are independent rows. This is qualification evidence, not an implementation or support claim.
 
 Two passes ran on the same host and app revision. Pass 1 recorded a Whisper Small CPU baseline and rejected the default NeMo 2.5.3 resolver (CUDA 13). Pass 2 re-checked live CUDA admission, identified hash-pinned CPU and CUDA 12 closures, and measured one short fixture. Neither row should proceed to implementation.
@@ -133,7 +133,7 @@ onnx-asr documents a 20–30 s maximum without VAD. This fixture is 14.2 s, so l
 | Runtime/device row | What ran | Requested metrics status | Decision |
 | --- | --- | --- | --- |
 | Linux x86_64 CPU | Default NeMo 2.5.3 resolver still **rejected** (CUDA 13). Pinning `torch==2.8.0+cpu` removes CUDA packages but leaves a 185-package tree with source builds; not a desktop closure. `onnx-asr[cpu]==0.12.0` is a 6-wheel CUDA-free closure; the community ONNX model ran on the short fixture. | Short-clip time/RAM/RTF/timestamps measured. Long meeting, silence/noise, accent, overlap, guided, cancel, timeout, malformed-output: **not measured**. | **Needs more evidence; current short-clip result misses the feature goal.** Slower than Whisper Small CPU (2.202 s vs 1.931 s) and ~4.2× RAM (2,648,176 vs 623,240 KiB). Do not implement. |
-| Linux x86_64 managed CUDA 12 | Live admission is `ready`. Unpinned ORT GPU 1.30 is CUDA 13 and remains rejected. Pinned ORT GPU 1.23.2 + CUDA 12 extras ran in an isolated venv. NeMo + `torch==2.8.0+cu126` is a hash-pinnable CUDA 12.6 alternative but was not installed (200 packages, sdists, different cuBLAS/cuDNN than the app catalog). | Short-clip Parakeet vs Whisper Small CUDA measured. Isolated VRAM, long-form, guided, cancel, timeout: **not measured**. | **Needs more evidence; current short-clip result is not a speed or RAM win.** Repeat 1.012 s vs Whisper CUDA 0.981 s; RAM 1,117,556 vs 946,156 KiB. Cannot share the Whisper managed cuDNN `9.22.0.52` tree. Do not implement. |
+| Linux x86_64 managed CUDA 12 | Live admission is `ready`. Unpinned ORT GPU 1.30 is CUDA 13 and remains rejected. Pinned ORT GPU 1.23.2 + CUDA 12 extras ran in an isolated venv. NeMo + `torch==2.8.0+cu126` is a hash-pinnable CUDA 12.6 alternative but was not installed (200 packages, sdists, different cuBLAS/cuDNN than the app catalog). | Short-clip Parakeet vs Whisper Small CUDA measured. Isolated VRAM, long-form, guided, cancel, timeout: **not measured**. | **Needs more evidence; current short-clip result is not a speed or RAM win.** Repeat 1.012 s vs Whisper CUDA 0.981 s; RAM 1,117,556 vs 946,156 KiB. Sharing the Whisper managed cuDNN `9.22.0.52` tree is unqualified; preserve the isolated tested closure. Do not implement. |
 
 ## Failure behavior and limitations
 
@@ -145,7 +145,9 @@ onnx-asr documents a 20–30 s maximum without VAD. This fixture is 14.2 s, so l
 
 ## Conclusion and next step
 
-Neither Linux row should proceed to implementation. CUDA 13 closures remain rejected. A CUDA-free CPU resolver and a loader-isolated CUDA 12 resolver now exist, but the only measured audio is a 14.2 s synthetic clip, and on that clip Parakeet did not beat Whisper Small on speed or RAM.
+Neither Linux row should proceed to implementation. CUDA 13 closures remain rejected. CUDA-free CPU and isolated CUDA 12 candidates executed, but the only measured audio is a 14.2 s synthetic clip. CPU results are unfavorable; the GPU repeat medians differ by only about 3%, while the first recorded GPU run favored Parakeet. Three short repeats establish no meaningful GPU winner. RAM measurements used different methods, and isolated VRAM and reference-based quality were not measured. This supports further bounded screening, not a general rejection or acceptance of Parakeet.
+
+**Active next step:** [CachyOS-only GPU screening](../superpowers/plans/2026-09-22-cachyos-parakeet-qualification.md). Freeze the current candidate and compare complete meeting processing with Whisper Small using a common measurement harness. CPU repeats and Windows/macOS/Omarchy work are deferred. The full coverage listed below remains necessary for eventual qualification, but is not the next task’s scope.
 
 1. **CPU:** keep `onnx-asr[cpu]==0.12.0` as the only packaging-sized CUDA-free candidate. Do not treat NeMo 2.5.3 + CPU torch as installable until the sdist/`bitsandbytes` tree is replaced by a fully pinned wheel set. Re-run only after long-form audio exists.
 2. **Managed CUDA 12:** keep the ORT 1.23.2 + CUDA 12 extra pins as the current GPU candidate, in a **separate** managed tree from Whisper (cuDNN 9.26 vs 9.22). Do not use ORT GPU 1.30. Re-run only with isolated VRAM sampling and long-form audio. NeMo `torch==2.8.0+cu126` remains a larger official-API backup, not a measured candidate.
@@ -156,5 +158,32 @@ Neither Linux row should proceed to implementation. CUDA 13 closures remain reje
 - CachyOS x86_64; Python 3.11; the repo's pinned Python environment; `ffmpeg`; and a complete local Whisper Small cache for the baseline.
 - Reject `nemo_toolkit[asr]==2.5.3` if a dry run selects CUDA 13. A CPU torch pin (`torch==2.8.0+cpu`) is CUDA-free in the resolver output but is not a complete packaged closure.
 - For the measured CPU candidate, install only the six `onnx-asr[cpu]==0.12.0` wheels above in a disposable venv; hash-verify the six ONNX model files; run offline with ambient `LD_LIBRARY_PATH` unset.
-- For CUDA, require project `transcription.cuda_probe` `ready` first. Install the ORT 1.23.2 CUDA 12 extra pins in a disposable venv; set `LD_LIBRARY_PATH` to that venv's `nvidia/*/lib` directories only; confirm `/proc/<pid>/maps` contains `libcublas.so.12` and not `libcublas.so.13`. Do not point a child process at host CUDA 13 toolkit directories. Do not reuse Whisper's managed cuDNN `9.22.0.52` tree for this ORT 1.23.2 candidate.
+- For CUDA, require project `transcription.cuda_probe` `ready` first. Install the ORT 1.23.2 CUDA 12 extra pins in a disposable venv; set `LD_LIBRARY_PATH` to that venv's `nvidia/*/lib` directories only; confirm `/proc/<pid>/maps` contains `libcublas.so.12` and not `libcublas.so.13`. Do not point a child process at host CUDA 13 toolkit directories. Do not substitute Whisper's managed cuDNN `9.22.0.52` tree for the tested candidate closure without separate qualification. The pin difference alone is not evidence of ABI incompatibility.
 - Run candidate and Whisper in fresh processes on identical immutable fixture copies, force offline mode after explicit setup, and retain only sanitized aggregates and hashes.
+
+## 2026-09-22 assessment and live recheck
+
+At app revision `42ae13f9d7579d840328bd6265ad67996a31033b`, the existing
+RTX 4070 / driver 615.71.09 was visible to `nvidia-smi`. Full managed-library
+integrity verification returned `ok=true`; the project Python CUDA probe with
+validated managed loader directories, `--device-check nvidia-smi`, and
+`--validate-ctranslate2-cuda` exited 0 with `statusCode=ready`,
+`deviceAvailable=true`, `runtimeLoadable=true`, `matchedProfile=cuda12`, and
+empty missing-library/unsupported-profile lists. The driver-directory helper
+rejected `/usr/lib64` as a symlink; the probe succeeded with no extra driver
+directories. This recheck did not run candidate inference or packaged acceptance,
+and does not establish the cause of the first pass's driver failure.
+
+The focused Linux CUDA/runtime and transcription-admission JS suites passed
+41 tests. These tests verify software behavior, not Parakeet performance.
+
+Two interpretation corrections guide the next experiment:
+
+- Different cuDNN 9.x pins justify preserving separately qualified environments;
+  they do not alone prove incompatibility. [ORT's compatibility documentation](https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html#requirements)
+  distinguishes CUDA/cuDNN major requirements and confirms default GPU packages
+  moved to CUDA 13 from ORT 1.27. No shared-tree change is proposed.
+- [onnx-asr's long-form guidance](https://github.com/istupakov/onnx-asr#quick-start)
+  requires VAD for audio beyond typical 20–30 second model limits. The existing
+  short-clip trial did not exercise that meeting path. Its VAD artifacts,
+  chunk completeness, timestamps, quality, and total cost must be measured.

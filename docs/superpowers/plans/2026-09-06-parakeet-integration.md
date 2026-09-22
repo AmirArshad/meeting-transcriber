@@ -8,7 +8,7 @@
 
 **Tech Stack:** Existing Electron 44, plain HTML/CSS/JS, Python 3.11, and local audio preparation. Parakeet runtime, model revision, and dependency pins require qualification before selection.
 
-**Status:** Planned for v2.10; design captured 2026-09-06. No implementation or hardware acceptance completed.
+**Status (2026-09-22):** Linux CPU and CUDA 12 ONNX feasibility measured on CachyOS; no production implementation or hardware acceptance completed. The active next step is [CachyOS-only GPU qualification](2026-09-22-cachyos-parakeet-qualification.md), a bounded representative-meeting screening experiment. Other hosts and further CPU benchmarking are deferred. Tasks 2–6 below remain gated; a promising screen is not full qualification.
 
 ## Global constraints
 
@@ -58,7 +58,8 @@ Missing/corrupt resources or runtime failure retain the recording and produce a 
 ## Task 1: Qualify a model/runtime on each platform
 
 **Files:**
-- Evidence to create: `docs/development/PARAKEET_COMPATIBILITY.md`.
+- Evidence to extend: `docs/development/PARAKEET_COMPATIBILITY.md`.
+- Active execution plan: `docs/superpowers/plans/2026-09-22-cachyos-parakeet-qualification.md`; complete its bounded screening decision before expanding the full validation below.
 - Inspect: `src/main/python-runtime.js`, `backend/transcription/base_transcriber.py`, and the platform resource preparation paths reached from `build/prepare-resources.js`.
 - Reference: `docs/initiatives/LOCAL_INFERENCE_PERFORMANCE.md` for shared measurement conventions only; warm workers and unrelated tuning are separate work.
 

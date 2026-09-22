@@ -22,9 +22,14 @@ have shipped; hardware-gated model work has not.
   remain blocked on hardware qualification.
 - Settings, navigation, keyboard shortcuts, and click-away meeting rename
   shipped in PR #103. The AvaNevis rail logo shipped in PR #104.
-- The only executed qualification is local inference performance on Apple
-  Silicon (2026-09-14): keep current Opus encoding, Whisper defaults, and 32k
-  summary context. No production change. Windows and Linux are unqualified.
+- Apple Silicon inference qualification (2026-09-14) retained current Opus
+  encoding, Whisper defaults, and 32k summary context. No production change;
+  Windows/Linux inference-default changes remain unqualified.
+- Linux Parakeet feasibility ran on CachyOS (2026-09-21): pinned CPU and CUDA
+  12 ONNX candidates executed, but short synthetic audio did not establish a
+  product benefit. The 2026-09-22 managed CUDA recheck passed. Next is the
+  [CachyOS-only GPU screening plan](docs/superpowers/plans/2026-09-22-cachyos-parakeet-qualification.md);
+  production integration and other-host investigation remain deferred.
 - Remaining committed work: Parakeet, Whisper Large, extra language removals,
   summarisation language/model qualification, inference-performance slices,
   and the Linux microphone-volume investigation.
@@ -38,7 +43,10 @@ inference default changes still do.
 
 1. **Shipped without hardware qualification:** Settings presentation, keyboard
    shortcuts, click-away rename, and the curated Whisper choice list (Slice A).
-2. **Investigate next, on the matching release machines:** Parakeet,
+2. **Active next task: CachyOS Parakeet GPU screening**, using the linked
+   execution plan. Keep the CPU evidence; do not repeat CPU or investigate
+   Windows/macOS/Omarchy in this pass. Other independent investigations remain
+   on their matching release machines:
    Whisper Large, other listed languages, Qwen summary languages, a local
    output-language check, alternative summary models, Linux mic volume, and
    Windows/Linux inference only if a speed change is still in play. Details
