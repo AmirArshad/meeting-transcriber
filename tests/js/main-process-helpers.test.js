@@ -1330,6 +1330,29 @@ test('buildTranscriptionCliArgs includes --device for faster-whisper platforms',
   );
 });
 
+test('buildTranscriptionCliArgs directs attempt transcripts to the candidate path', () => {
+  assert.deepEqual(
+    buildTranscriptionCliArgs({
+      platform: 'win32',
+      arch: 'x64',
+      audioFile: 'demo.opus',
+      outputPath: 'demo.transcript-attempt.md',
+      language: 'en',
+      modelSize: 'small',
+      device: 'cpu',
+    }),
+    [
+      '-m', 'transcription.faster_whisper_transcriber',
+      '--file', 'demo.opus',
+      '--language', 'en',
+      '--model', 'small',
+      '--output', 'demo.transcript-attempt.md',
+      '--device', 'cpu',
+      '--json',
+    ],
+  );
+});
+
 test('buildTranscriptionCliArgs forces CPU on Linux even when auto is requested', () => {
   assert.equal(resolveFasterWhisperCliDevice('linux', 'auto'), 'cpu');
   assert.equal(resolveFasterWhisperCliDevice('linux', 'cuda'), 'cpu');

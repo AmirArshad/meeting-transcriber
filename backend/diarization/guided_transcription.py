@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import platform
 import re
@@ -249,26 +250,72 @@ def extract_window_text_for_turn(result: Dict[str, Any], window: Dict[str, Any])
     turn = {"start": _to_float(window.get("start")), "end": _to_float(window.get("end"))}
     audio_start = _to_float(window.get("audioStart"))
     selected_text: List[str] = []
-    fallback_text: List[str] = []
-    all_text: List[str] = []
     for segment in segments:
         if not isinstance(segment, dict):
             continue
         text = normalize_whitespace(segment.get("text"))
         if not text:
             continue
-        all_text.append(text)
         absolute = {
             "start": audio_start + _to_float(segment.get("start")),
             "end": audio_start + _to_float(segment.get("end")),
         }
         if absolute["end"] <= absolute["start"]:
-            fallback_text.append(text)
             continue
         if temporal_overlap(absolute, turn) > 0:
             selected_text.append(text)
 
-    return normalize_whitespace(" ".join(selected_text or fallback_text or all_text))
+    return normalize_whitespace(" ".join(selected_text))
+
+
+def assign_words_to_speaker_turns(
+    words: Iterable[Dict[str, Any]],
+    speaker_segments: Iterable[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Keep words inside turns and resolve overlapping labels deterministically."""
+    turns = normalize_speaker_turns(speaker_segments)
+    assigned: List[Dict[str, Any]] = []
+
+    def word_key(value: Any) -> str:
+        return re.sub(r"[^\w]+", "", normalize_whitespace(value).casefold())
+
+    def rank(item: Dict[str, Any]) -> tuple:
+        return (-item["_turnOverlap"], item["_turnStart"], item["speaker"])
+
+    for word in words:
+        if not isinstance(word, dict) or not isinstance(word.get("text"), str):
+            continue
+        start = _to_float(word.get("start"), math.nan)
+        end = _to_float(word.get("end"), math.nan)
+        if not math.isfinite(start) or not math.isfinite(end) or end <= start:
+            continue
+        choices = []
+        for turn in turns:
+            overlap = temporal_overlap(word, turn)
+            if overlap > 0:
+                choices.append({
+                    **word,
+                    "speaker": turn["speaker"],
+                    "_turnOverlap": overlap,
+                    "_turnStart": turn["start"],
+                })
+        if not choices:
+            continue
+        candidate = min(choices, key=rank)
+        key = word_key(candidate.get("text"))
+        duplicate_index = next((index for index, existing in enumerate(assigned)
+                                if key and word_key(existing.get("text")) == key
+                                and temporal_overlap(candidate, existing) > 0), None)
+        if duplicate_index is None:
+            assigned.append(candidate)
+        elif rank(candidate) < rank(assigned[duplicate_index]):
+            assigned[duplicate_index] = candidate
+
+    assigned.sort(key=lambda item: (item["start"], item["end"], item["speaker"]))
+    return [
+        {key: value for key, value in item.items() if not key.startswith("_")}
+        for item in assigned
+    ]
 
 
 def transcribe_speaker_windows(
@@ -477,6 +524,64 @@ def transcribe_with_diarization_guidance(
     return result
 
 
+def diarize_for_guided_transcription(
+    *,
+    audio_path: str,
+    model_ref: str = DEFAULT_MODEL_REF,
+    speaker_count: Optional[int] = None,
+    ffmpeg_path: str = "ffmpeg",
+    hf_token: Optional[str] = None,
+    required_device: Optional[str] = None,
+    engine: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Run the speaker stage alone for a separately isolated ASR child."""
+    source_audio = Path(audio_path)
+    if not source_audio.exists():
+        raise FileNotFoundError(f"Audio file not found: {source_audio}")
+
+    resolved_engine = normalize_engine(engine)
+    effective_model_ref = resolve_diarization_model_ref(resolved_engine, model_ref)
+    with tempfile.TemporaryDirectory(prefix="avanevis-guided-diarization-") as work_dir_name:
+        emit_progress("preparing-audio", "Preparing audio for speaker-guided transcription.", percent=8)
+        prepared_audio = prepare_diarization_audio(str(source_audio), work_dir_name, ffmpeg_path=ffmpeg_path)
+        audio_duration = get_audio_duration_seconds(prepared_audio)
+        if resolved_engine == "speakrs":
+            from .speakrs_runner import run_speakrs_diarization
+
+            speaker_segments, annotation_source, device = run_speakrs_diarization(
+                prepared_audio,
+                required_device=required_device,
+                model_ref=effective_model_ref,
+            )
+        else:
+            token = hf_token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN") or ""
+            speaker_segments, annotation_source, device = run_pyannote_diarization(
+                prepared_audio,
+                model_ref=effective_model_ref,
+                hf_token=token,
+                speaker_count=speaker_count,
+                required_device=required_device,
+            )
+
+    normalized_segments = normalize_speaker_turns(speaker_segments)
+    usable_windows = build_diarization_guided_windows(
+        normalized_segments,
+        audio_duration=audio_duration,
+    )
+    emit_progress("completed", "Speaker identification completed.", percent=100)
+    return {
+        "audioPath": str(source_audio),
+        "duration": audio_duration,
+        "speakerSegments": normalized_segments,
+        "annotationSource": annotation_source,
+        "device": device,
+        "modelRef": effective_model_ref,
+        "diarizationEngine": resolved_engine,
+        "speakerCount": len({item["speaker"] for item in normalized_segments}),
+        "hasUsableWindows": bool(usable_windows),
+    }
+
+
 def main() -> None:
     from common.process_priority import lower_process_priority
     lower_process_priority()
@@ -497,23 +602,38 @@ def main() -> None:
         default="pyannote",
         help="Diarization engine (default: pyannote)",
     )
+    parser.add_argument(
+        "--diarization-only",
+        action="store_true",
+        help="Run only speaker identification and return validated speaker turns.",
+    )
     parser.add_argument("--ffmpeg", default="ffmpeg", help="ffmpeg executable path")
     args = parser.parse_args()
 
     try:
-        result = transcribe_with_diarization_guidance(
-            audio_path=args.audio,
-            output_transcript=args.output_transcript,
-            output_json=args.output_json,
-            language=args.language,
-            model_size=args.model,
-            transcriber_backend=args.transcriber_backend,
-            model_ref=args.model_ref,
-            speaker_count=normalize_speaker_count(args.speaker_count),
-            ffmpeg_path=args.ffmpeg,
-            required_device=args.require_device,
-            engine=args.engine,
-        )
+        if args.diarization_only:
+            result = diarize_for_guided_transcription(
+                audio_path=args.audio,
+                model_ref=args.model_ref,
+                speaker_count=normalize_speaker_count(args.speaker_count),
+                ffmpeg_path=args.ffmpeg,
+                required_device=args.require_device,
+                engine=args.engine,
+            )
+        else:
+            result = transcribe_with_diarization_guidance(
+                audio_path=args.audio,
+                output_transcript=args.output_transcript,
+                output_json=args.output_json,
+                language=args.language,
+                model_size=args.model,
+                transcriber_backend=args.transcriber_backend,
+                model_ref=args.model_ref,
+                speaker_count=normalize_speaker_count(args.speaker_count),
+                ffmpeg_path=args.ffmpeg,
+                required_device=args.require_device,
+                engine=args.engine,
+            )
         print(json.dumps(result, ensure_ascii=True))
     except Exception as exc:
         emit_progress("error", "Speaker-guided transcription failed.")

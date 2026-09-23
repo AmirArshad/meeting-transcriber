@@ -70,6 +70,40 @@ def test_empty_result_has_explicit_markdown(tmp_path):
     assert 'No speech transcribed.' in output.read_text()
 
 
+def test_guided_turns_retain_speakers_in_the_candidate(tmp_path):
+    transcriber = ParakeetTranscriber(model_dir='unused', adapter_id='parakeet-mlx-metal-v1', ffmpeg='ffmpeg')
+    transcriber.adapter = FakeAdapter()
+    transcriber._duration = lambda _: 5.0
+    transcriber._decode = lambda *args: b'\0' * 32000
+    output = tmp_path / 'guided-candidate.md'
+
+    result = transcriber.transcribe_file(
+        'audio.opus', str(output), guided_turns={
+            'speakerSegments': [{'start': 1.0, 'end': 3.0, 'speaker': 'SPEAKER_00'}],
+            'speakerCount': 1,
+            'modelRef': 'speakrs-community1-vbx',
+            'annotationSource': 'exclusive_speaker_diarization',
+            'device': 'cuda',
+        },
+    )
+
+    assert result['segments'] == [{'start': 1.15, 'end': 1.35, 'text': 'hello', 'speaker': 'Speaker 1'}]
+    assert result['diarization']['speakerSegments'][0]['speaker'] == 'SPEAKER_00'
+    assert '**Speaker 1:**' in output.read_text()
+    assert '\nhello\n' in output.read_text()
+
+
+def test_guided_turns_without_usable_windows_do_not_load_parakeet(monkeypatch):
+    transcriber = ParakeetTranscriber(model_dir='unused', adapter_id='parakeet-mlx-metal-v1', ffmpeg='ffmpeg')
+    transcriber._duration = lambda _: 5.0
+    monkeypatch.setattr(transcriber, 'load_model', lambda: pytest.fail('must not load for empty guidance'))
+
+    with pytest.raises(RuntimeError, match='PARAKEET_GUIDED_NO_WINDOWS'):
+        transcriber.transcribe_file('audio.opus', guided_turns={
+            'speakerSegments': [{'start': 1.0, 'end': 1.2, 'speaker': 'SPEAKER_00'}],
+        })
+
+
 def test_onnx_token_count_mismatch_fails_closed():
     from backend.transcription.parakeet_onnx import CudaParakeet
     adapter = CudaParakeet('unused')

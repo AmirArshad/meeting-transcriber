@@ -4,6 +4,10 @@ const AI_COMPUTE_TIMEOUT_MS = Object.freeze({
   diarization: 30 * 60 * 1000,
   // Floor / documentation default; live guided jobs use getGuidedTranscriptionComputeTimeoutMs.
   guidedTranscription: 120 * 60 * 1000,
+  // Parakeet uses its own conservative budget; guided diarization + ASR + one
+  // same-engine fallback share this single wall clock.
+  parakeetTranscription: 60 * 60 * 1000,
+  guidedParakeetTranscription: 90 * 60 * 1000,
   summary: 90 * 60 * 1000,
   meetingPreflight: 60 * 1000,
   // Max time download-model may block waiting for GPU compute to go idle.

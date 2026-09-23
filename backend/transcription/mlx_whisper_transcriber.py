@@ -762,6 +762,7 @@ def main():
     parser = argparse.ArgumentParser(description="AvaNevis CLI (MLX/Apple Silicon)")
     parser.add_argument("audio_file", nargs="?", help="Path to audio file")
     parser.add_argument("--file", dest="file_arg", help="Path to audio file (alternative)")
+    parser.add_argument("--output", help="Optional Markdown destination")
     parser.add_argument("--language", default="en", help="Language code (default: en)")
     parser.add_argument("--model", default="base", help="Model size (default: base)")
     parser.add_argument("--json", action="store_true", help="Output results as JSON")
@@ -805,7 +806,7 @@ def main():
         transcriber.load_model()
 
         # Transcribe
-        results = transcriber.transcribe_file(audio_file)
+        results = transcriber.transcribe_file(audio_file, output_path=args.output)
 
         if args.json:
             # Output JSON to stdout for integration

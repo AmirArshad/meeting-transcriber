@@ -60,6 +60,7 @@ function buildTranscriptionCliArgs({
   platform,
   arch,
   audioFile,
+  outputPath = null,
   language = 'en',
   modelSize,
   device = 'auto',
@@ -70,6 +71,9 @@ function buildTranscriptionCliArgs({
     '--language', language,
     '--model', modelSize,
   ];
+  if (outputPath) {
+    extraArgs.push('--output', outputPath);
+  }
   appendFasterWhisperDeviceArgs(extraArgs, { platform, arch, device, linuxCudaEnabled });
   extraArgs.push('--json');
   return buildTranscriberArgs({ platform, arch, extraArgs });
@@ -134,6 +138,94 @@ function buildDiarizationOutputPath({ audioPath } = {}) {
   const sourcePath = String(audioPath || '');
   const parsedPath = path.parse(sourcePath);
   return path.join(parsedPath.dir || '.', `${parsedPath.name || 'meeting'}.speakers.json`);
+}
+
+/**
+ * Run the isolated speaker stage and resolve only after the process has
+ * closed. Parakeet's ASR child is spawned only after this promise settles.
+ */
+function runDiarizationOnlyProcess({
+  spawnProcess,
+  args,
+  cwd,
+  env,
+  registerProcess,
+  summarizeError,
+  onProgressLine,
+} = {}) {
+  if (typeof spawnProcess !== 'function') {
+    return Promise.reject(new Error('Guided diarization requires a process spawner.'));
+  }
+
+  return new Promise((resolve, reject) => {
+    let child;
+    try {
+      child = spawnProcess(args, { cwd, env });
+      if (typeof registerProcess === 'function') registerProcess(child);
+    } catch (error) {
+      reject(error);
+      return;
+    }
+
+    let output = '';
+    let errorOutput = '';
+    let stdoutOverflowed = false;
+    let spawnError = null;
+    let settled = false;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      callback(value);
+    };
+
+    child.stdout.on('data', (data) => {
+      const result = appendSpawnJsonResultBuffer(output, data, SPAWN_JSON_RESULT_BUFFER_MAX_CHARS);
+      output = result.buffer;
+      stdoutOverflowed = stdoutOverflowed || result.overflowed;
+    });
+    child.stderr.on('data', (data) => {
+      const chunk = data.toString();
+      errorOutput = appendCappedSpawnLogBuffer(errorOutput, chunk);
+      if (typeof onProgressLine === 'function') {
+        for (const line of chunk.split(/\r?\n/)) {
+          if (line.trim()) onProgressLine(line);
+        }
+      }
+    });
+    child.on('error', (error) => { spawnError = error; });
+    child.on('close', (code) => {
+      if (spawnError) {
+        finish(reject, spawnError);
+        return;
+      }
+      if (stdoutOverflowed) {
+        finish(reject, new Error('Speaker-guided diarization output exceeded the maximum allowed size.'));
+        return;
+      }
+      if (code !== 0) {
+        const reason = typeof summarizeError === 'function' ? summarizeError(errorOutput) : '';
+        finish(reject, new Error(reason || 'Speaker-guided diarization failed.'));
+        return;
+      }
+      try {
+        const result = JSON.parse(output);
+        if (!result || !Array.isArray(result.speakerSegments)
+            || !Number.isFinite(result.duration) || result.duration < 0
+            || typeof result.hasUsableWindows !== 'boolean') {
+          throw new Error('Speaker-guided diarization returned invalid turns.');
+        }
+        for (const turn of result.speakerSegments) {
+          if (!turn || !Number.isFinite(turn.start) || !Number.isFinite(turn.end)
+              || turn.start < 0 || turn.end < turn.start || typeof turn.speaker !== 'string') {
+            throw new Error('Speaker-guided diarization returned invalid turns.');
+          }
+        }
+        finish(resolve, result);
+      } catch (error) {
+        finish(reject, error);
+      }
+    });
+  });
 }
 
 function buildGuidedTranscriptTempPath({ finalTranscriptPath, now = Date.now() } = {}) {
@@ -260,6 +352,7 @@ module.exports = {
   buildWhisperPreloadArgs,
   buildTranscriberArgs,
   buildGuidedTranscriptTempPath,
+  runDiarizationOnlyProcess,
   runGuidedTranscriptionProcess,
   buildHuggingFaceOfflineEnv,
   buildClearedHuggingFaceTokenEnv,

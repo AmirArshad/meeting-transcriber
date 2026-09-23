@@ -98,6 +98,7 @@ const {
   assertLinuxSpeakrsOnlyEngine,
 } = require('../ai-addon/manifest-store');
 const transcriptionPolicy = require('../transcription-policy');
+const { runDiarizationOnlyProcess } = require('../main-process/transcription-runtime-helpers');
 
 /**
  * v2.10 Slice A: curated Small/Medium + 11-language lists for NEW work.
@@ -239,7 +240,9 @@ function createTranscriptionService(deps) {
     commitTranscriptionAttempt = null,
     failTranscriptionAttempt = null,
     spawnParakeetPython = null,
+    runParakeetDiarizationProcessForJob = null,
     getParakeetStatusForJob = getParakeetStatus,
+    getGuidedDiarizationStatusForJob = null,
     probeParakeetRuntime = null,
     runParakeetProcessForJob = null,
     consumeCapturedTranscriptionRequest = null,
@@ -432,20 +435,28 @@ function createTranscriptionService(deps) {
     return 'faster';
   }
 
-  function buildManagedDiarizationGuidedTranscriptionArgs({ audioPath, outputTranscript, outputJson, language, modelSize, modelRef, speakerCount, requiredDevice, engine }) {
-    const args = [
-      '--audio', audioPath,
-      '--output-transcript', outputTranscript,
-      '--language', language || 'en',
-      '--model', modelSize || 'small',
-      '--transcriber-backend', getTranscriberBackendName(),
+  function buildManagedDiarizationGuidedTranscriptionArgs({ audioPath, outputTranscript, outputJson, language, modelSize, modelRef, speakerCount, requiredDevice, engine, diarizationOnly = false }) {
+    const args = ['--audio', audioPath];
+    if (!diarizationOnly) {
+      args.push(
+        '--output-transcript', outputTranscript,
+        '--language', language || 'en',
+        '--model', modelSize || 'small',
+        '--transcriber-backend', getTranscriberBackendName(),
+      );
+    }
+    args.push(
       '--model-ref', modelRef || 'pyannote/speaker-diarization-community-1',
       '--speaker-count', speakerCount === undefined || speakerCount === null ? 'auto' : String(speakerCount),
       '--ffmpeg', pythonConfig.ffmpegPath,
-    ];
+    );
 
     if (outputJson) {
       args.push('--output-json', outputJson);
+    }
+
+    if (diarizationOnly) {
+      args.push('--diarization-only');
     }
 
     if (requiredDevice) {
@@ -459,6 +470,7 @@ function createTranscriptionService(deps) {
 
   function runTranscriptionProcess({
     audioFile,
+    outputPath = null,
     language,
     modelSize,
     device = 'auto',
@@ -470,6 +482,7 @@ function createTranscriptionService(deps) {
         platform: process.platform,
         arch: process.arch,
         audioFile,
+        outputPath,
         language: language || 'en',
         modelSize,
         device,
@@ -824,7 +837,17 @@ function createTranscriptionService(deps) {
    * Queue row mutation happens only after admission checks pass.
    */
   function admitMeetingTranscriptionJob(options = {}) {
-    const meetingId = String(options.meetingId || '').trim();
+    const request = snapshotTranscriptionRequest(options.request);
+    const jobOptions = request
+      ? {
+        ...options,
+        request,
+        ...(request.engine === 'whisper'
+          ? { language: request.language, modelSize: request.modelSize }
+          : {}),
+      }
+      : { ...options };
+    const meetingId = String(jobOptions.meetingId || '').trim();
     if (!meetingId) {
       throw new Error('Transcription job requires meetingId');
     }
@@ -848,16 +871,16 @@ function createTranscriptionService(deps) {
       meetingId,
       status: QUEUE_JOB_STATUSES.queued,
       phase: QUEUE_JOB_PHASES.queued,
-      title: options.title || '',
-      durationSeconds: Number(options.durationSeconds) || 0,
+      title: jobOptions.title || '',
+      durationSeconds: Number(jobOptions.durationSeconds) || 0,
       percent: null,
     });
     publishTranscriptionQueueState();
 
     const epoch = getJobEpoch(meetingId);
-    const promise = (options.request?.engine === 'parakeet'
-      ? runParakeetMeetingJob({ ...options, meetingId, epoch })
-      : runMeetingTranscriptionJob({ ...options, meetingId, epoch }))
+    const promise = (request?.engine === 'parakeet'
+      ? runParakeetMeetingJob({ ...jobOptions, meetingId, epoch })
+      : runMeetingTranscriptionJob({ ...jobOptions, meetingId, epoch }))
       .finally(() => {
         if (inFlightJobsByMeetingId.get(meetingId) === promise) {
           inFlightJobsByMeetingId.delete(meetingId);
@@ -1345,6 +1368,7 @@ function createTranscriptionService(deps) {
 
   async function runNormalTranscriptionWithCudaFallback({
     audioFile,
+    outputPath = null,
     language,
     modelSize,
     registerProcess,
@@ -1356,7 +1380,7 @@ function createTranscriptionService(deps) {
     if (process.platform === 'linux') {
       if (process.arch !== 'x64') {
         if (typeof beforeSpawn === 'function') beforeSpawn();
-        return runTranscriptionProcess({ audioFile, language, modelSize, device: 'cpu', registerProcess });
+        return runTranscriptionProcess({ audioFile, outputPath, language, modelSize, device: 'cpu', registerProcess });
       }
       const status = typeof resolveCudaStatusForTranscription === 'function'
         ? await resolveCudaStatusForTranscription({ registerProcess })
@@ -1370,6 +1394,7 @@ function createTranscriptionService(deps) {
         if (typeof beforeSpawn === 'function') beforeSpawn();
         return runTranscriptionProcess({
           audioFile,
+          outputPath,
           language,
           modelSize,
           device: 'cuda',
@@ -1379,7 +1404,7 @@ function createTranscriptionService(deps) {
       }
       // Core Beta remains CPU-only until the user installs a managed CUDA runtime.
       if (typeof beforeSpawn === 'function') beforeSpawn();
-      return runTranscriptionProcess({ audioFile, language, modelSize, device: 'cpu', registerProcess });
+      return runTranscriptionProcess({ audioFile, outputPath, language, modelSize, device: 'cpu', registerProcess });
     }
     const shouldPreemptiveCpuRetry = await shouldPreemptiveCpuAtJobStart(registerProcess);
     if (shouldPreemptiveCpuRetry) {
@@ -1394,6 +1419,7 @@ function createTranscriptionService(deps) {
     try {
       return await runTranscriptionProcess({
         audioFile,
+        outputPath,
         language,
         modelSize,
         device: shouldPreemptiveCpuRetry ? 'cpu' : 'auto',
@@ -1412,6 +1438,7 @@ function createTranscriptionService(deps) {
       }
       return runTranscriptionProcess({
         audioFile,
+        outputPath,
         language,
         modelSize,
         device: 'cpu',
@@ -1420,7 +1447,7 @@ function createTranscriptionService(deps) {
     }
   }
 
-  async function probeParakeetAtRuntime(runtimePath, registerProcess) {
+  async function probeParakeetAtRuntime(runtimePath, expectedDevice, registerProcess) {
     const executable = resolveParakeetPythonExecutable({
       pythonExe: pythonConfig.pythonExe, backendPath: pythonConfig.backendPath,
       runtimeDir: runtimePath,
@@ -1429,14 +1456,14 @@ function createTranscriptionService(deps) {
     const args = getBackendModuleArgs('transcription.parakeet_bootstrap',
       buildParakeetBootstrapArgs({ backendPath: pythonConfig.backendPath,
         runtimeDir: runtimePath, pthFile: resolveEmbeddedPythonPth(executable, fs),
-        commandArgs: ['--probe-device', 'metal'] }));
+        commandArgs: ['--probe-device', expectedDevice] }));
     const stdout = await launchParakeetBootstrap({ spawnParakeetPython, args,
       runtimeDir: runtimePath, cwd: pythonConfig.backendPath, registerProcess });
     return parseDeviceProbeStdout(stdout);
   }
 
   function runParakeetProcess({ audioFile, candidatePath, request, runtimePath, modelPath,
-    vadPath, registerProcess }) {
+    vadPath, speakerTurnsPath = null, registerProcess }) {
     return new Promise((resolve, reject) => {
       const commandArgs = [
         '--run-module', 'transcription.parakeet_transcriber', '--module-args',
@@ -1447,6 +1474,7 @@ function createTranscriptionService(deps) {
         '--ffmpeg', pythonConfig.ffmpegPath,
       ];
       if (vadPath) commandArgs.push('--vad-dir', vadPath);
+      if (speakerTurnsPath) commandArgs.push('--speaker-turns-json', speakerTurnsPath);
       const child = spawnParakeetPython(
         getBackendModuleArgs('transcription.parakeet_bootstrap',
           buildParakeetBootstrapArgs({ backendPath: pythonConfig.backendPath,
@@ -1456,21 +1484,25 @@ function createTranscriptionService(deps) {
       if (typeof registerProcess === 'function') registerProcess(child);
       const output = collectPythonProcessOutput(child, { jsonResult: true });
       let settled = false;
-      child.on('error', (error) => {
-        if (!settled) { settled = true; reject(error); }
-      });
+      let spawnError = null;
+      child.on('error', (error) => { spawnError = error; });
       child.on('close', (code) => {
         if (settled) return;
         settled = true;
         try {
           output.assertStdoutWithinLimit();
+          if (spawnError) throw spawnError;
           if (code !== 0) {
-            const error = new Error(sanitizeTranscriptionError(output.getStderr()) || 'Parakeet failed.');
-            error.code = /out of memory/i.test(error.message) ? 'PARAKEET_OUT_OF_MEMORY' : 'PARAKEET_RUNTIME_INVALID';
+            const message = sanitizeTranscriptionError(output.getStderr()) || 'Parakeet failed.';
+            const error = new Error(message);
+            const reportedCode = String(message).match(/\b(PARAKEET_[A-Z0-9_]+)\b/);
+            error.code = reportedCode ? reportedCode[1]
+              : (/out of memory/i.test(message) ? 'PARAKEET_OUT_OF_MEMORY' : 'PARAKEET_RUNTIME_INVALID');
             throw error;
           }
           const result = JSON.parse(output.getStdout());
-          if (!result || result.engine !== 'parakeet' || result.device !== 'metal'
+          const expectedDevice = getAdapterSpec(request.adapterId).device;
+          if (!result || result.engine !== 'parakeet' || result.device !== expectedDevice
               || result.computeType !== 'float32' || result.language !== 'en'
               || result.modelId !== request.modelId
               || result.boundaryPolicy !== request.boundaryPolicy
@@ -1504,9 +1536,83 @@ function createTranscriptionService(deps) {
     });
   }
 
+  function createParakeetError(message, code) {
+    const error = new Error(message);
+    error.code = code;
+    return error;
+  }
+
+  async function admitParakeetForAttempt(request, registerProcess) {
+    const spec = getAdapterSpec(request.adapterId);
+    const userDataDir = app.getPath('userData');
+    const runtimePath = parakeetRuntimeDir(userDataDir, request.adapterId, request.runtimeLockId);
+    const status = await getParakeetStatusForJob({
+      ...transcriptionTargetOptions(),
+      userDataDir,
+      adapterId: request.adapterId,
+    });
+    if (status.status !== 'ready' || status.runtimeLockId !== request.runtimeLockId
+        || status.artifactRevision !== request.artifactRevision) {
+      throw createParakeetError(
+        'The exact saved Parakeet runtime or model is unavailable.',
+        status.code || 'PARAKEET_SELECTION_UNAVAILABLE',
+      );
+    }
+
+    const probe = await (probeParakeetRuntime
+      ? probeParakeetRuntime(runtimePath, { expectedDevice: spec.device, registerProcess })
+      : probeParakeetAtRuntime(runtimePath, spec.device, registerProcess));
+    if (!probe || probe.deviceAvailable !== true || probe.device !== spec.device) {
+      throw createParakeetError(
+        'The Parakeet GPU is unavailable for this attempt.',
+        'PARAKEET_GPU_UNAVAILABLE',
+      );
+    }
+
+    return {
+      spec,
+      status,
+      runtimePath,
+      modelPath: parakeetModelDir(userDataDir, request.artifactRevision),
+      vadPath: spec.lock.vad ? parakeetVadDir(userDataDir, spec.lock.vad.revision) : null,
+    };
+  }
+
+  function runParakeetDiarizationOnlyProcess({ audioFile, diarizationStatus, registerProcess }) {
+    const args = buildManagedDiarizationGuidedTranscriptionArgs({
+      audioPath: audioFile,
+      diarizationOnly: true,
+      modelRef: diarizationStatus.modelRef,
+      speakerCount: diarizationStatus.speakerCount || 'auto',
+      requiredDevice: diarizationStatus.requiredDevice,
+      engine: diarizationStatus.engine,
+    });
+    return runDiarizationOnlyProcess({
+      spawnProcess: spawnTrackedPython,
+      args,
+      cwd: pythonConfig.backendPath,
+      env: buildDiarizationChildEnv({
+        engine: diarizationStatus.engine,
+        requiredDevice: diarizationStatus.requiredDevice,
+      }),
+      registerProcess,
+      summarizeError: summarizeDiarizationError,
+      onProgressLine: (line) => {
+        const progressEvent = parseAiBackendProgressLine(line, 'diarization');
+        if (progressEvent) sendToRenderer('diarization-progress', progressEvent);
+        else if (line.trim()) sendToRenderer('transcription-progress', `${redactSensitiveText(line)}\n`);
+      },
+    });
+  }
+
   async function runParakeetMeetingJob({ meetingId, request, epoch = getJobEpoch(meetingId) }) {
+    const jobRequest = Object.freeze({ ...request });
     let candidatePath = null;
     let completed = false;
+    let guidedDiarizationStatus = null;
+    let guidedDiarizationResult = null;
+    let guidanceError = null;
+    let updatedMeeting = null;
     try {
       const result = await enqueueAiComputeAction(async () => {
         throwIfJobBlocked(meetingId, epoch);
@@ -1518,59 +1624,155 @@ function createTranscriptionService(deps) {
         const meeting = await lookupMeetingById(meetingId);
         throwIfJobBlocked(meetingId, epoch);
         const stored = validateStoredRequest(meeting?.transcriptionRequest, transcriptionTargetOptions());
-        if (!stored.ok || stored.request.attemptId !== request.attemptId) {
-          const error = new Error('Saved Parakeet selection is unavailable.');
-          error.code = 'PARAKEET_SELECTION_UNAVAILABLE';
-          throw error;
-        }
+        const exactRequest = stored.ok
+          && Object.keys(jobRequest).every((key) => stored.request[key] === jobRequest[key])
+          && Object.keys(stored.request).every((key) => jobRequest[key] === stored.request[key]);
+        if (!exactRequest) throw createParakeetError('Saved Parakeet selection is unavailable.', 'PARAKEET_SELECTION_UNAVAILABLE');
         const audioFile = assertSafeExistingRecordingAudioPath(meeting.audioPath);
-        const spec = getAdapterSpec(request.adapterId);
-        const userDataDir = app.getPath('userData');
-        const status = getParakeetStatusForJob({ ...transcriptionTargetOptions(), userDataDir });
-        if (status.status !== 'ready' || status.runtimeLockId !== request.runtimeLockId
-            || status.artifactRevision !== request.artifactRevision) {
-          const error = new Error('Pinned Parakeet model or runtime is unavailable.');
-          error.code = status.code || 'PARAKEET_SELECTION_UNAVAILABLE';
-          throw error;
-        }
-        const runtimePath = parakeetRuntimeDir(userDataDir, request.adapterId, request.runtimeLockId);
-        const probe = await runWallClockComputeAction({
-          timeoutMs: AI_COMPUTE_TIMEOUT_MS.meetingPreflight,
-          label: 'Transcription admission', meetingId,
-          terminateProcess: terminateProcessBestEffort,
-          action: (registerProcess) => (probeParakeetRuntime
-            ? probeParakeetRuntime(runtimePath) : probeParakeetAtRuntime(runtimePath, registerProcess)),
-        });
-        throwIfJobBlocked(meetingId, epoch);
-        if (!probe || !probe.deviceAvailable || probe.device !== 'metal') {
-          const error = new Error('Metal is unavailable for Parakeet.');
-          error.code = 'PARAKEET_GPU_UNAVAILABLE';
-          throw error;
-        }
         const parsed = path.parse(audioFile);
-        candidatePath = path.join(parsed.dir, `${parsed.name}.transcript-${request.attemptId}.md`);
+        candidatePath = path.join(parsed.dir, `${parsed.name}.transcript-${jobRequest.attemptId}.md`);
         if (!isSafeRecordingsMarkdownPath({ filePath: candidatePath, recordingsDir: getRecordingsDir() })) {
-          const error = new Error('Invalid candidate transcript path.');
-          error.code = 'PARAKEET_INVALID_OUTPUT';
-          throw error;
+          throw createParakeetError('Invalid candidate transcript path.', 'PARAKEET_INVALID_OUTPUT');
         }
-        upsertQueueJob(transcriptionQueueState, { meetingId, phase: QUEUE_JOB_PHASES.transcribing });
+
+        try {
+          guidedDiarizationStatus = await runWallClockComputeAction({
+            timeoutMs: AI_COMPUTE_TIMEOUT_MS.meetingPreflight,
+            label: 'Speaker identification admission', meetingId,
+            terminateProcess: terminateProcessBestEffort,
+            action: (registerProcess) => (getGuidedDiarizationStatusForJob
+              ? getGuidedDiarizationStatusForJob({ registerProcess })
+              : resolveGuidedDiarizationStatus({ registerProcess })),
+          });
+          throwIfJobBlocked(meetingId, epoch);
+          if (guidedDiarizationStatus && guidedDiarizationStatus.error) {
+            guidanceError = new Error(guidedDiarizationStatus.error);
+          }
+        } catch (error) {
+          throwIfJobBlocked(meetingId, epoch);
+          guidanceError = error;
+        }
+
+        const canRunGuided = Boolean(guidedDiarizationStatus && !guidedDiarizationStatus.error);
+        if (canRunGuided) {
+          upsertQueueJob(transcriptionQueueState, { meetingId, phase: QUEUE_JOB_PHASES.identifying_speakers });
+        } else {
+          upsertQueueJob(transcriptionQueueState, { meetingId, phase: QUEUE_JOB_PHASES.transcribing });
+        }
         publishTranscriptionQueueState();
-        const modelPath = parakeetModelDir(userDataDir, request.artifactRevision);
-        const vadPath = spec.lock.vad ? parakeetVadDir(userDataDir, spec.lock.vad.revision) : null;
+
         const childResult = await runWallClockComputeAction({
-          timeoutMs: 60 * 60 * 1000, label: 'Transcription', meetingId,
+          timeoutMs: canRunGuided
+            ? AI_COMPUTE_TIMEOUT_MS.guidedParakeetTranscription
+            : AI_COMPUTE_TIMEOUT_MS.parakeetTranscription,
+          label: canRunGuided ? 'Speaker-guided transcription' : 'Transcription',
+          meetingId,
           terminateProcess: terminateProcessBestEffort,
-          action: (registerProcess) => (runParakeetProcessForJob || runParakeetProcess)({ audioFile,
-            candidatePath, request, runtimePath, modelPath, vadPath, registerProcess }),
+          action: async (registerProcess, { signal } = {}) => {
+            const throwIfInterrupted = () => {
+              throwIfJobBlocked(meetingId, epoch);
+              if (signal && signal.aborted) {
+                throw signal.reason || new Error('Parakeet transcription deadline expired.');
+              }
+            };
+
+            const runAttempt = async (speakerTurns = null) => {
+              throwIfInterrupted();
+              let admitted;
+              try {
+                admitted = await admitParakeetForAttempt(jobRequest, registerProcess);
+              } catch (error) {
+                error.parakeetStage = 'admission';
+                throw error;
+              }
+              throwIfInterrupted();
+
+              let turnsDirectory = null;
+              let speakerTurnsPath = null;
+              try {
+                if (speakerTurns) {
+                  turnsDirectory = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'avanevis-parakeet-turns-'));
+                  speakerTurnsPath = path.join(turnsDirectory, 'speaker-turns.json');
+                  await fs.promises.writeFile(speakerTurnsPath, `${JSON.stringify(speakerTurns)}\n`, 'utf8');
+                }
+                throwIfInterrupted();
+                try {
+                  const runProcess = runParakeetProcessForJob || runParakeetProcess;
+                  const child = await runProcess({
+                    audioFile,
+                    candidatePath,
+                    request: jobRequest,
+                    runtimePath: admitted.runtimePath,
+                    modelPath: admitted.modelPath,
+                    vadPath: admitted.vadPath,
+                    speakerTurnsPath,
+                    registerProcess,
+                  });
+                  const markdown = await fs.promises.readFile(candidatePath, 'utf8');
+                  if (!markdown.trim() || !markdown.includes('## Transcript')) {
+                    throw createParakeetError('Parakeet candidate transcript is invalid.', 'PARAKEET_INVALID_OUTPUT');
+                  }
+                  throwIfInterrupted();
+                  return { ...child, transcriptContent: markdown };
+                } catch (error) {
+                  error.parakeetStage = error.parakeetStage || 'child';
+                  throw error;
+                }
+              } finally {
+                if (turnsDirectory) {
+                  await fs.promises.rm(turnsDirectory, { recursive: true, force: true }).catch(() => {});
+                }
+              }
+            };
+
+            if (!canRunGuided) return runAttempt();
+
+            try {
+              throwIfInterrupted();
+              const diarization = await (runParakeetDiarizationProcessForJob
+                ? runParakeetDiarizationProcessForJob({
+                  audioFile, diarizationStatus: guidedDiarizationStatus, registerProcess,
+                })
+                : runParakeetDiarizationOnlyProcess({
+                  audioFile, diarizationStatus: guidedDiarizationStatus, registerProcess,
+                }));
+              throwIfInterrupted();
+              if (!diarization || diarization.hasUsableWindows !== true
+                  || !Array.isArray(diarization.speakerSegments)) {
+                throw createParakeetError(
+                  'Speaker identification produced no usable transcription windows.',
+                  'PARAKEET_GUIDED_NO_WINDOWS',
+                );
+              }
+
+              try {
+                const guidedResult = await runAttempt(diarization);
+                guidedDiarizationResult = guidedResult.diarization || null;
+                return guidedResult;
+              } catch (error) {
+                if (signal?.aborted || error.parakeetStage === 'admission') throw error;
+                throwIfJobBlocked(meetingId, epoch);
+                guidanceError = error;
+              }
+            } catch (error) {
+              if (signal?.aborted || error.parakeetStage === 'admission') throw error;
+              throwIfJobBlocked(meetingId, epoch);
+              guidanceError = error;
+            }
+
+            const safeReason = summarizeDiarizationError(guidanceError && guidanceError.message)
+              || sanitizeTranscriptionError(guidanceError && guidanceError.message)
+              || 'Speaker-guided transcription failed.';
+            sendToRenderer(
+              'transcription-progress',
+              `Speaker-guided transcription failed; retrying with Parakeet on the full recording. ${safeReason}\n`,
+            );
+            upsertQueueJob(transcriptionQueueState, { meetingId, phase: QUEUE_JOB_PHASES.transcribing, percent: null });
+            publishTranscriptionQueueState();
+            return runAttempt();
+          },
         });
-        throwIfJobBlocked(meetingId, epoch);
-        const markdown = await fs.promises.readFile(candidatePath, 'utf8');
-        if (!markdown.trim() || !markdown.includes('## Transcript')) {
-          const error = new Error('Parakeet candidate transcript is invalid.');
-          error.code = 'PARAKEET_INVALID_OUTPUT';
-          throw error;
-        }
+
         throwIfJobBlocked(meetingId, epoch);
         upsertQueueJob(transcriptionQueueState, { meetingId, phase: QUEUE_JOB_PHASES.persisting });
         publishTranscriptionQueueState();
@@ -1579,14 +1781,60 @@ function createTranscriptionService(deps) {
           label: 'Meeting status update', meetingId,
           terminateProcess: terminateProcessBestEffort,
           action: (registerProcess) => commitTranscriptionAttempt(meetingId, {
-            attemptId: request.attemptId, candidatePath,
-            result: { ...request, device: 'mps', computeType: 'float32' },
+            attemptId: jobRequest.attemptId, candidatePath,
+            result: {
+              ...jobRequest,
+              device: childResult.device === 'metal' ? 'mps' : childResult.device,
+              computeType: childResult.computeType,
+            },
             cancelGeneration: getTranscriptionCancelGuardGeneration(transcriptionQueueState, meetingId),
             deleteGeneration: getTranscriptionDeleteGuardGeneration(transcriptionQueueState, meetingId),
           }, registerProcess),
         });
         completed = true;
-        return { ...childResult, output_file: candidatePath, meeting: committed };
+
+        let diarizationError = null;
+        if (guidedDiarizationResult) {
+          try {
+            throwIfJobBlocked(meetingId, epoch);
+            const persisted = await persistGuidedDiarizationArtifacts(
+              committed,
+              guidedDiarizationStatus,
+              guidedDiarizationResult,
+            );
+            updatedMeeting = persisted && persisted.meeting || committed;
+          } catch (error) {
+            if (error?.code === 'TRANSCRIPTION_DELETED') throw error;
+            diarizationError = summarizeDiarizationError(error.message)
+              || sanitizeTranscriptionError(error.message);
+          }
+        } else if (guidanceError) {
+          diarizationError = summarizeDiarizationError(guidanceError.message)
+            || sanitizeTranscriptionError(guidanceError.message);
+          try {
+            throwIfJobBlocked(meetingId, epoch);
+            updatedMeeting = await persistDiarizationFailureArtifacts(
+              meetingId,
+              guidedDiarizationStatus,
+              diarizationError,
+            ) || committed;
+          } catch (error) {
+            if (error?.code === 'TRANSCRIPTION_DELETED') throw error;
+            diarizationError = summarizeDiarizationError(error.message)
+              || sanitizeTranscriptionError(error.message);
+          }
+        }
+        // Sidecar persistence can outlive cancellation or deletion even though
+        // the transcript commit succeeded. Recheck before publishing Ready.
+        throwIfJobBlocked(meetingId, epoch);
+        return {
+          ...childResult,
+          output_file: candidatePath,
+          meeting: updatedMeeting || committed,
+          diarization: guidedDiarizationResult,
+          diarizationStatus: guidedDiarizationStatus,
+          diarizationError,
+        };
       });
       setActiveQueueMeeting(transcriptionQueueState, null);
       upsertQueueJob(transcriptionQueueState, { meetingId, status: QUEUE_JOB_STATUSES.ready,
@@ -1597,11 +1845,18 @@ function createTranscriptionService(deps) {
       setActiveQueueMeeting(transcriptionQueueState, null);
       if (!completed && !isQuitCommitted() && !isTranscriptionJobDeleted(transcriptionQueueState, meetingId)
           && error?.code !== 'TRANSCRIPTION_QUIT_SKIPPED' && typeof failTranscriptionAttempt === 'function') {
-        try { await failTranscriptionAttempt(meetingId, request.attemptId,
+        try { await failTranscriptionAttempt(meetingId, jobRequest.attemptId,
           sanitizeTranscriptionError(error.code || error.message)); } catch (_) { /* Stale/deleted attempt. */ }
       }
       if (error?.code === 'TRANSCRIPTION_DELETED') {
         removeQueueJob(transcriptionQueueState, meetingId, { clearCancelFlag: false });
+      } else if (completed) {
+        if (!isQuitCommitted()) {
+          upsertQueueJob(transcriptionQueueState, { meetingId, status: QUEUE_JOB_STATUSES.ready,
+            phase: QUEUE_JOB_PHASES.completed });
+        } else {
+          removeQueueJob(transcriptionQueueState, meetingId);
+        }
       } else if (!isQuitCommitted()) {
         upsertQueueJob(transcriptionQueueState, { meetingId, status: QUEUE_JOB_STATUSES.failed,
           phase: QUEUE_JOB_PHASES.failed });
@@ -1619,6 +1874,7 @@ function createTranscriptionService(deps) {
    */
   async function runMeetingTranscriptionJob({
     meetingId,
+    request = null,
     language,
     modelSize,
     speakerCount = '',
@@ -1626,6 +1882,11 @@ function createTranscriptionService(deps) {
     jobLabel = 'Transcription',
     epoch = getJobEpoch(meetingId),
   }) {
+    const jobRequest = snapshotTranscriptionRequest(request);
+    if (jobRequest && jobRequest.engine === 'whisper') {
+      language = jobRequest.language;
+      modelSize = jobRequest.modelSize;
+    }
     const preferredSpeakerCount = String(speakerCount || '').trim();
     let guidedDiarizationStatus = null;
     let guidedDiarizationResult = null;
@@ -1639,6 +1900,8 @@ function createTranscriptionService(deps) {
     let postPassDiarizationResult = null;
     let result = null;
     let updatedMeeting = null;
+    let attemptCandidatePath = null;
+    let outputTranscriptPath = null;
     // Once durable `completed` is written, the job must never downgrade the
     // meeting to `failed` — the transcript on disk is already good.
     let completedPersisted = false;
@@ -1698,12 +1961,42 @@ function createTranscriptionService(deps) {
         // current. Bounded: a hung meeting_manager child must not wedge the queue.
         const meeting = await lookupMeetingById(meetingId);
         throwIfJobBlocked(meetingId, epoch);
+        if (jobRequest) {
+          const savedRequest = canonicalStoredRequest(meeting);
+          if (!requestsHaveSameIdentity(savedRequest, jobRequest)) {
+            const stale = new Error('Saved transcription request changed before the queued job started.');
+            stale.code = 'TRANSCRIPTION_REQUEST_STALE';
+            throw stale;
+          }
+        }
         if (!meeting || !meeting.audioPath || !meeting.transcriptPath) {
           throw new Error('Meeting is missing audio or transcript path.');
         }
 
         const audioFile = assertSafeExistingRecordingAudioPath(meeting.audioPath);
         const transcriptPath = assertSafeExistingTranscriptPath(meeting.transcriptPath);
+        outputTranscriptPath = transcriptPath;
+        if (jobRequest) {
+          if (jobRequest.engine !== 'whisper' || !jobRequest.attemptId) {
+            const invalid = new Error('Saved transcription attempt is unavailable.');
+            invalid.code = 'TRANSCRIPTION_REQUEST_STALE';
+            throw invalid;
+          }
+          const parsed = path.parse(audioFile);
+          attemptCandidatePath = path.join(
+            parsed.dir,
+            `${parsed.name}.transcript-${jobRequest.attemptId}.md`,
+          );
+          if (!isSafeRecordingsMarkdownPath({
+            filePath: attemptCandidatePath,
+            recordingsDir: getRecordingsDir(),
+          })) {
+            const invalid = new Error('Invalid candidate transcript path.');
+            invalid.code = 'TRANSCRIPTION_INVALID_OUTPUT';
+            throw invalid;
+          }
+          outputTranscriptPath = attemptCandidatePath;
+        }
         upsertQueueJob(transcriptionQueueState, {
           meetingId,
           title: meeting.title || '',
@@ -1751,7 +2044,7 @@ function createTranscriptionService(deps) {
 
             if (canRunGuidedTranscription) {
               try {
-                const tempTranscriptPath = buildGuidedTranscriptTempPath({ finalTranscriptPath: transcriptPath });
+                const tempTranscriptPath = buildGuidedTranscriptTempPath({ finalTranscriptPath: outputTranscriptPath });
                 guidedDiarizationResult = await runGuidedTranscriptionProcess({
                   spawnProcess: spawnTrackedPython,
                   args: buildManagedDiarizationGuidedTranscriptionArgs({
@@ -1771,7 +2064,7 @@ function createTranscriptionService(deps) {
                     requiredDevice: guidedDiarizationStatus.requiredDevice,
                     includeTranscriptionRuntime: true,
                   }),
-                  finalTranscriptPath: transcriptPath,
+                  finalTranscriptPath: outputTranscriptPath,
                   tempTranscriptPath,
                   modelSize,
                   fsPromises: fs.promises,
@@ -1831,6 +2124,7 @@ function createTranscriptionService(deps) {
             throwIfJobBlocked(meetingId, epoch);
             const innerResult = guidedDiarizationResult || await runNormalTranscriptionWithCudaFallback({
               audioFile,
+              outputPath: jobRequest ? outputTranscriptPath : null,
               language,
               modelSize,
               registerProcess,
@@ -1839,12 +2133,17 @@ function createTranscriptionService(deps) {
             throwIfJobBlocked(meetingId, epoch);
 
             const transcribedPath = assertSafeExistingTranscriptPath(
-              innerResult.output_file || transcriptPath,
+              innerResult.output_file || outputTranscriptPath,
             );
-            if (path.resolve(transcribedPath) !== path.resolve(transcriptPath)) {
+            if (jobRequest && path.resolve(transcribedPath) !== path.resolve(outputTranscriptPath)) {
+              const invalid = new Error('Transcription did not write its attempt candidate.');
+              invalid.code = 'TRANSCRIPTION_INVALID_OUTPUT';
+              throw invalid;
+            }
+            if (path.resolve(transcribedPath) !== path.resolve(outputTranscriptPath)) {
               const transcriptContent = await fs.promises.readFile(transcribedPath, 'utf8');
               throwIfJobBlocked(meetingId, epoch);
-              await fs.promises.writeFile(transcriptPath, transcriptContent, 'utf8');
+              await fs.promises.writeFile(outputTranscriptPath, transcriptContent, 'utf8');
             }
 
             return innerResult;
@@ -1853,25 +2152,53 @@ function createTranscriptionService(deps) {
 
         throwIfJobBlocked(meetingId, epoch);
 
-        // Persist durable `completed` BEFORE the optional post-pass: the
-        // transcript on disk is final here, and a failed or timed-out speaker
-        // pass must never convert a finished transcript into durable `failed`.
+        if (jobRequest) {
+          const candidate = await fs.promises.readFile(outputTranscriptPath, 'utf8');
+          if (!candidate.trim() || !candidate.includes('## Transcript')) {
+            const invalid = new Error('Transcription candidate Markdown is invalid.');
+            invalid.code = 'TRANSCRIPTION_INVALID_OUTPUT';
+            throw invalid;
+          }
+          if (!Array.isArray(transcriptionResult.segments)
+            || typeof transcriptionResult.text !== 'string'
+            || !Number.isFinite(Number(transcriptionResult.duration))
+            || Number(transcriptionResult.duration) < 0) {
+            const invalid = new Error('Transcription returned incomplete output.');
+            invalid.code = 'TRANSCRIPTION_INVALID_OUTPUT';
+            throw invalid;
+          }
+          transcriptionResult = {
+            ...transcriptionResult,
+            output_file: outputTranscriptPath,
+            transcriptContent: candidate,
+          };
+        }
+
+        // Legacy direct jobs persist before the optional post-pass. Attempted
+        // jobs defer their atomic commit until the candidate is final, keeping
+        // prior output and provenance visible if the retry fails.
         upsertQueueJob(transcriptionQueueState, {
           meetingId,
           phase: QUEUE_JOB_PHASES.persisting,
           percent: null,
         });
         publishTranscriptionQueueState();
-        updatedMeeting = await updateMeetingTranscriptionStatusBounded(meetingId, {
-          status: 'completed',
-          language,
-          model: modelSize,
-          duration: transcriptionResult.duration || 0,
-          transcriptionDevice: transcriptionResult.transcriptionDevice || transcriptionResult.device,
-          transcriptionComputeType: transcriptionResult.transcriptionComputeType || transcriptionResult.computeType,
-          clearError: true,
-        });
-        completedPersisted = true;
+        if (jobRequest) {
+          // Keep the previous transcript and provenance visible until the
+          // attempt candidate has passed any optional transcript post-pass.
+          updatedMeeting = meeting;
+        } else {
+          updatedMeeting = await updateMeetingTranscriptionStatusBounded(meetingId, {
+            status: 'completed',
+            language,
+            model: modelSize,
+            duration: transcriptionResult.duration || 0,
+            transcriptionDevice: transcriptionResult.transcriptionDevice || transcriptionResult.device,
+            transcriptionComputeType: transcriptionResult.transcriptionComputeType || transcriptionResult.computeType,
+            clearError: true,
+          });
+          completedPersisted = true;
+        }
 
         // Optional post-pass speaker labels: guided failed at head, or
         // diarization became ready while the job was queued. Runs on its own
@@ -1935,7 +2262,7 @@ function createTranscriptionService(deps) {
                   transcriptionResult,
                   diarizationResult: postPassDiarizationResult,
                 });
-                await fs.promises.writeFile(transcriptPath, updatedMarkdown, 'utf8');
+                await fs.promises.writeFile(outputTranscriptPath, updatedMarkdown, 'utf8');
                 transcriptionResult = {
                   ...transcriptionResult,
                   segments: postPassDiarizationResult.segments,
@@ -1963,6 +2290,36 @@ function createTranscriptionService(deps) {
             guidedDiarizationStatus = postPassStatus;
             admissionDiarizationError = admissionDiarizationError || new Error(postPassStatus.error);
           }
+        }
+
+        if (jobRequest) {
+          throwIfJobBlocked(meetingId, epoch);
+          const committed = await runWallClockComputeAction({
+            timeoutMs: AI_COMPUTE_TIMEOUT_MS.meetingPreflight,
+            label: 'Meeting status update',
+            meetingId,
+            terminateProcess: terminateProcessBestEffort,
+            action: (registerProcess) => commitTranscriptionAttempt(meetingId, {
+              attemptId: jobRequest.attemptId,
+              candidatePath: attemptCandidatePath,
+              result: {
+                ...jobRequest,
+                device: (transcriptionResult.transcriptionDevice || transcriptionResult.device) === 'metal'
+                  ? 'mps' : (transcriptionResult.transcriptionDevice || transcriptionResult.device),
+                computeType: transcriptionResult.transcriptionComputeType || transcriptionResult.computeType,
+              },
+              cancelGeneration: getTranscriptionCancelGuardGeneration(transcriptionQueueState, meetingId),
+              deleteGeneration: getTranscriptionDeleteGuardGeneration(transcriptionQueueState, meetingId),
+            }, registerProcess),
+          });
+          if (!committed) {
+            const stale = new Error('Transcription attempt could not be committed.');
+            stale.code = 'TRANSCRIPTION_ATTEMPT_SUPERSEDED';
+            throw stale;
+          }
+          updatedMeeting = committed;
+          completedPersisted = true;
+          throwIfJobBlocked(meetingId, epoch);
         }
 
         // Sidecar / AI-metadata persistence. Contained: the transcript is
@@ -2053,8 +2410,8 @@ function createTranscriptionService(deps) {
         throwIfJobBlocked(meetingId, epoch);
         return {
           ...transcriptionResult,
-          output_file: transcriptPath,
-          transcriptPath,
+          output_file: outputTranscriptPath,
+          transcriptPath: outputTranscriptPath,
           meeting: updatedMeeting,
           audioPath: audioFile,
         };
@@ -2115,12 +2472,20 @@ function createTranscriptionService(deps) {
           || (error && error.code === 'TRANSCRIPTION_CANCELLED');
         if (userCancelled && !completedPersisted) {
           try {
-            await updateMeetingTranscriptionStatus(meetingId, {
-              status: 'failed',
-              language,
-              model: modelSize,
-              transcriptionError: USER_CANCELLED_TRANSCRIPTION_ERROR,
-            });
+            if (jobRequest && typeof failTranscriptionAttempt === 'function') {
+              updatedMeeting = await failTranscriptionAttempt(
+                meetingId,
+                jobRequest.attemptId,
+                USER_CANCELLED_TRANSCRIPTION_ERROR,
+              );
+            } else {
+              await updateMeetingTranscriptionStatus(meetingId, {
+                status: 'failed',
+                language,
+                model: modelSize,
+                transcriptionError: USER_CANCELLED_TRANSCRIPTION_ERROR,
+              });
+            }
           } catch (statusError) {
             sendToRenderer(
               'transcription-progress',
@@ -2160,12 +2525,20 @@ function createTranscriptionService(deps) {
           };
         }
         try {
-          updatedMeeting = await updateMeetingTranscriptionStatus(meetingId, {
-            status: 'failed',
-            language,
-            model: modelSize,
-            transcriptionError: USER_CANCELLED_TRANSCRIPTION_ERROR,
-          });
+          if (jobRequest && typeof failTranscriptionAttempt === 'function') {
+            updatedMeeting = await failTranscriptionAttempt(
+              meetingId,
+              jobRequest.attemptId,
+              USER_CANCELLED_TRANSCRIPTION_ERROR,
+            );
+          } else {
+            updatedMeeting = await updateMeetingTranscriptionStatus(meetingId, {
+              status: 'failed',
+              language,
+              model: modelSize,
+              transcriptionError: USER_CANCELLED_TRANSCRIPTION_ERROR,
+            });
+          }
         } catch (statusError) {
           sendToRenderer(
             'transcription-progress',
@@ -2209,12 +2582,20 @@ function createTranscriptionService(deps) {
       }
 
       try {
-        updatedMeeting = await updateMeetingTranscriptionStatus(meetingId, {
-          status: 'failed',
-          language,
-          model: modelSize,
-          transcriptionError: (error && error.message) || 'Transcription failed.',
-        });
+        if (jobRequest && typeof failTranscriptionAttempt === 'function') {
+          updatedMeeting = await failTranscriptionAttempt(
+            meetingId,
+            jobRequest.attemptId,
+            sanitizeTranscriptionError(error.code || error.message) || 'Transcription failed.',
+          );
+        } else {
+          updatedMeeting = await updateMeetingTranscriptionStatus(meetingId, {
+            status: 'failed',
+            language,
+            model: modelSize,
+            transcriptionError: (error && error.message) || 'Transcription failed.',
+          });
+        }
       } catch (statusError) {
         sendToRenderer(
           'transcription-progress',
@@ -2248,6 +2629,64 @@ function createTranscriptionService(deps) {
       return request.modelId;
     }
     return request && request.modelSize;
+  }
+
+  function snapshotTranscriptionRequest(request) {
+    if (!request || typeof request !== 'object' || Array.isArray(request)) return null;
+    // Requests are flat, allowlisted scalar records. Copy synchronously at the
+    // admission boundary so renderer/caller mutation cannot change queued work.
+    return Object.freeze({ ...request });
+  }
+
+  function requestsHaveSameIdentity(left, right) {
+    if (!left || !right || typeof left !== 'object' || typeof right !== 'object') return false;
+    const leftKeys = Object.keys(left).sort();
+    const rightKeys = Object.keys(right).sort();
+    return leftKeys.length === rightKeys.length
+      && leftKeys.every((key, index) => key === rightKeys[index] && left[key] === right[key]);
+  }
+
+  function canonicalStoredRequest(meeting) {
+    if (!meeting || !meeting.transcriptionRequest) return null;
+    const stored = validateStoredRequest(meeting.transcriptionRequest, transcriptionTargetOptions());
+    if (!stored.ok) {
+      const error = new Error(stored.message);
+      error.code = stored.code;
+      throw error;
+    }
+    return stored.request;
+  }
+
+  async function stageTranscriptionRequestForAttempt(meetingId, request) {
+    if (typeof stageTranscriptionRequest !== 'function') {
+      const error = new Error('Transcription request was not saved.');
+      error.code = 'PENDING_MEETING_PERSIST_FAILED';
+      throw error;
+    }
+    let staged;
+    try {
+      staged = await stageTranscriptionRequest(meetingId, request, {
+        cancelGeneration: getTranscriptionCancelGuardGeneration(transcriptionQueueState, meetingId),
+        deleteGeneration: getTranscriptionDeleteGuardGeneration(transcriptionQueueState, meetingId),
+      });
+    } catch (stageError) {
+      if (stageError && (
+        stageError.code === 'TRANSCRIPTION_DELETED'
+        || stageError.code === 'TRANSCRIPTION_CANCELLED'
+      )) {
+        throw stageError;
+      }
+      const error = new Error('Transcription request was not saved.');
+      error.code = 'PENDING_MEETING_PERSIST_FAILED';
+      throw error;
+    }
+    const canonical = canonicalStoredRequest(staged);
+    if (!staged || staged.id !== meetingId || !requestsHaveSameIdentity(canonical, request)) {
+      const error = new Error('Transcription request was not saved.');
+      error.code = 'PENDING_MEETING_PERSIST_FAILED';
+      throw error;
+    }
+    return staged;
   }
 
   function choiceSelection(selection) {
@@ -2506,34 +2945,63 @@ function createTranscriptionService(deps) {
       }
 
       try {
-        // Legacy compat: resume uses each meeting's persisted language/model
-        // (Tiny/Base/Large + Persian keep working) — never validateNewSelection.
-        const stored = meeting.transcriptionRequest
-          ? validateStoredRequest(meeting.transcriptionRequest, transcriptionTargetOptions())
-          : null;
-        if (stored && !stored.ok) {
-          const error = new Error(stored.message);
-          error.code = stored.code;
-          throw error;
-        }
-        const legacy = stored?.request?.engine === 'parakeet'
-          ? null
-          : resolveLegacyCompatibleSelection({
-            language: meeting.language || 'en', modelSize: meeting.model || 'small',
+        const admission = await enqueueMeetingControl(meetingId, async () => {
+          if (isQuitCommitted()
+            || isTranscriptionJobDeleted(transcriptionQueueState, meetingId)
+            || isTranscriptionJobCancelled(transcriptionQueueState, meetingId)
+            || inFlightJobsByMeetingId.has(meetingId)) {
+            return null;
+          }
+          const current = transcriptionQueueState.jobsByMeetingId.get(meetingId);
+          if (current && (current.status === QUEUE_JOB_STATUSES.queued
+            || current.status === QUEUE_JOB_STATUSES.active)) {
+            return null;
+          }
+
+          // Resume uses the persisted request exactly. Older rows get a durable
+          // legacy-compatible Whisper snapshot before they can enter the queue.
+          const storedRequest = canonicalStoredRequest(meeting);
+          let request = storedRequest ? { ...storedRequest } : null;
+          let needsStage = !storedRequest;
+          if (!request) {
+            const legacy = resolveLegacyCompatibleSelection({
+              language: meeting.language || 'en', modelSize: meeting.model || 'small',
+            });
+            request = {
+              schemaVersion: 1,
+              engine: 'whisper',
+              language: legacy.language,
+              modelSize: legacy.modelSize,
+              artifactRevision: null,
+            };
+          }
+          if (!request.attemptId) {
+            request.attemptId = crypto.randomUUID();
+            needsStage = true;
+          }
+          request = snapshotTranscriptionRequest(request);
+          if (needsStage) {
+            await stageTranscriptionRequestForAttempt(meetingId, request);
+          }
+          if (isQuitCommitted()
+            || isTranscriptionJobDeleted(transcriptionQueueState, meetingId)
+            || isTranscriptionJobCancelled(transcriptionQueueState, meetingId)
+            || inFlightJobsByMeetingId.has(meetingId)) {
+            return null;
+          }
+          const jobPromise = admitMeetingTranscriptionJob({
+            meetingId,
+            language: request.language,
+            modelSize: request.engine === 'parakeet' ? request.modelId : request.modelSize,
+            title: meeting.title || '',
+            durationSeconds: resolveMeetingDurationSeconds(meeting),
+            jobLabel: 'Transcription',
+            request,
           });
-        const normalizedModel = stored?.request?.engine === 'parakeet'
-          ? stored.request.modelId : legacy.modelSize;
-        const normalizedLanguage = stored?.request?.engine === 'parakeet'
-          ? 'en' : legacy.language;
-        const jobPromise = admitMeetingTranscriptionJob({
-          meetingId,
-          language: normalizedLanguage,
-          modelSize: normalizedModel,
-          title: meeting.title || '',
-          durationSeconds: resolveMeetingDurationSeconds(meeting),
-          jobLabel: 'Transcription',
-          request: stored?.request || null,
+          return { jobPromise };
         });
+        if (!admission) continue;
+        const jobPromise = admission.jobPromise;
         enqueued.push(meetingId);
         void jobPromise.catch((jobError) => {
           if (jobError && (
@@ -2560,6 +3028,7 @@ function createTranscriptionService(deps) {
         if (admitError && (
           admitError.code === 'UNSUPPORTED_LANGUAGE'
           || admitError.code === 'UNSUPPORTED_MODEL'
+          || admitError.code === 'PARAKEET_SELECTION_UNAVAILABLE'
         )) {
           // Persisted values outside even legacy compat: surface the reason
           // instead of silently retrying the row on every startup.
@@ -2567,6 +3036,14 @@ function createTranscriptionService(deps) {
             meetingId,
             code: admitError.code,
             error: admitError.message,
+          });
+          continue;
+        }
+        if (admitError && admitError.code === 'PENDING_MEETING_PERSIST_FAILED') {
+          skipped.push({
+            meetingId,
+            code: 'PENDING_MEETING_PERSIST_FAILED',
+            error: 'Transcription request was not saved.',
           });
           continue;
         }
@@ -3379,96 +3856,82 @@ function createTranscriptionService(deps) {
         throw new Error('retry-transcription requires a meetingId');
       }
 
-      if (isTranscriptionJobDeleted(transcriptionQueueState, meetingId)) {
-        const error = new Error('Meeting was deleted before transcription finished.');
-        error.code = 'TRANSCRIPTION_DELETED';
-        throw error;
-      }
-      if (inFlightJobsByMeetingId.has(meetingId)) {
-        const error = new Error('A transcription job is already in progress for this meeting.');
-        error.code = 'TRANSCRIPTION_ALREADY_IN_FLIGHT';
-        throw error;
-      }
-
-      const meeting = await lookupMeetingById(meetingId);
-      if (!meeting || !meeting.audioPath || !meeting.transcriptPath) {
-        throw new Error('Meeting is missing audio or transcript path.');
-      }
-
-      // Recheck after lookup await — concurrent Retry/Resume/delete may have raced.
-      if (isTranscriptionJobDeleted(transcriptionQueueState, meetingId)) {
-        const error = new Error('Meeting was deleted before transcription finished.');
-        error.code = 'TRANSCRIPTION_DELETED';
-        throw error;
-      }
-      if (inFlightJobsByMeetingId.has(meetingId)) {
-        const error = new Error('A transcription job is already in progress for this meeting.');
-        error.code = 'TRANSCRIPTION_ALREADY_IN_FLIGHT';
-        throw error;
-      }
-
-      const storedRetry = meeting.transcriptionRequest
-        ? validateStoredRequest(meeting.transcriptionRequest, transcriptionTargetOptions())
-        : null;
-      if (storedRetry && !storedRetry.ok) {
-        const error = new Error(storedRetry.message);
-        error.code = storedRetry.code;
-        throw error;
-      }
-      if (storedRetry?.request?.engine === 'parakeet') {
-        const nextRequest = { ...storedRetry.request, attemptId: crypto.randomUUID() };
-        const staged = await stageTranscriptionRequest(meetingId, nextRequest, {
-          cancelGeneration: getTranscriptionCancelGuardGeneration(transcriptionQueueState, meetingId),
-          deleteGeneration: getTranscriptionDeleteGuardGeneration(transcriptionQueueState, meetingId),
-        });
-        if (!staged?.transcriptionRequest || staged.transcriptionRequest.attemptId !== nextRequest.attemptId) {
-          throw new Error('Failed to save Parakeet retry request.');
+      const admission = await enqueueMeetingControl(meetingId, async () => {
+        if (isTranscriptionJobDeleted(transcriptionQueueState, meetingId)) {
+          const error = new Error('Meeting was deleted before transcription finished.');
+          error.code = 'TRANSCRIPTION_DELETED';
+          throw error;
         }
-        return admitMeetingTranscriptionJob({ meetingId, language: 'en',
-          modelSize: nextRequest.modelId, request: nextRequest,
-          title: meeting.title || '', durationSeconds: resolveMeetingDurationSeconds(meeting),
-          jobLabel: 'Transcription retry' });
-      }
+        if (inFlightJobsByMeetingId.has(meetingId)) {
+          const error = new Error('A transcription job is already in progress for this meeting.');
+          error.code = 'TRANSCRIPTION_ALREADY_IN_FLIGHT';
+          throw error;
+        }
 
-      // Retry carries explicit new dropdown selections when the renderer sends
-      // them (strict curated validation); falling back to the meeting's saved
-      // values keeps legacy pending-job compat (Tiny/Base/Large + Persian).
-      // Field presence (not truthiness) decides: present-but-empty values
-      // must fail validation, never fall back to the meeting's saved values.
-      let normalizedModel;
-      let normalizedLanguage;
-      const retryRequest = options || {};
-      const hasExplicitLanguage = Object.hasOwn(retryRequest, 'language');
-      const hasExplicitModel = Object.hasOwn(retryRequest, 'modelSize');
-      if (hasExplicitLanguage || hasExplicitModel) {
-        const validated = rejectUnsupportedNewSelection({
-          language: hasExplicitLanguage ? retryRequest.language : (meeting.language || 'en'),
-          modelSize: hasExplicitModel ? retryRequest.modelSize : (meeting.model || 'small'),
-        });
-        normalizedModel = validated.modelSize;
-        normalizedLanguage = validated.language;
-      } else {
-        const legacy = resolveLegacyCompatibleSelection({
-          language: meeting.language || 'en',
-          modelSize: meeting.model || 'small',
-        });
-        normalizedModel = legacy.modelSize;
-        normalizedLanguage = legacy.language;
-      }
-      assertSafeExistingRecordingAudioPath(meeting.audioPath);
-      assertSafeExistingTranscriptPath(meeting.transcriptPath);
+        const meeting = await lookupMeetingById(meetingId);
+        if (!meeting || !meeting.audioPath || !meeting.transcriptPath) {
+          throw new Error('Meeting is missing audio or transcript path.');
+        }
+        if (isTranscriptionJobDeleted(transcriptionQueueState, meetingId)) {
+          const error = new Error('Meeting was deleted before transcription finished.');
+          error.code = 'TRANSCRIPTION_DELETED';
+          throw error;
+        }
+        if (inFlightJobsByMeetingId.has(meetingId)) {
+          const error = new Error('A transcription job is already in progress for this meeting.');
+          error.code = 'TRANSCRIPTION_ALREADY_IN_FLIGHT';
+          throw error;
+        }
 
-      // Queue mutation happens only inside successful admission.
-      return admitMeetingTranscriptionJob({
-        meetingId,
-        language: normalizedLanguage,
-        modelSize: normalizedModel,
-        title: meeting.title || '',
-        durationSeconds: resolveMeetingDurationSeconds(meeting),
-        speakerCount: options.speakerCount,
-        clearPriorDiarization: true,
-        jobLabel: 'Transcription retry',
+        const savedRequest = canonicalStoredRequest(meeting);
+        let nextRequest = savedRequest ? { ...savedRequest } : null;
+        if (!nextRequest) {
+          const legacy = resolveLegacyCompatibleSelection({
+            language: meeting.language || 'en', modelSize: meeting.model || 'small',
+          });
+          nextRequest = {
+            schemaVersion: 1,
+            engine: 'whisper',
+            language: legacy.language,
+            modelSize: legacy.modelSize,
+            artifactRevision: null,
+          };
+        }
+        nextRequest.attemptId = crypto.randomUUID();
+        nextRequest = snapshotTranscriptionRequest(nextRequest);
+        await stageTranscriptionRequestForAttempt(meetingId, nextRequest);
+
+        if (isTranscriptionJobDeleted(transcriptionQueueState, meetingId)) {
+          const error = new Error('Meeting was deleted before transcription finished.');
+          error.code = 'TRANSCRIPTION_DELETED';
+          throw error;
+        }
+        if (isTranscriptionJobCancelled(transcriptionQueueState, meetingId)) {
+          const error = new Error(USER_CANCELLED_TRANSCRIPTION_ERROR);
+          error.code = 'TRANSCRIPTION_CANCELLED';
+          throw error;
+        }
+        if (inFlightJobsByMeetingId.has(meetingId)) {
+          const error = new Error('A transcription job is already in progress for this meeting.');
+          error.code = 'TRANSCRIPTION_ALREADY_IN_FLIGHT';
+          throw error;
+        }
+
+        assertSafeExistingRecordingAudioPath(meeting.audioPath);
+        assertSafeExistingTranscriptPath(meeting.transcriptPath);
+        const jobPromise = admitMeetingTranscriptionJob({
+          meetingId,
+          language: nextRequest.language,
+          modelSize: nextRequest.engine === 'parakeet' ? nextRequest.modelId : nextRequest.modelSize,
+          request: nextRequest,
+          title: meeting.title || '',
+          durationSeconds: resolveMeetingDurationSeconds(meeting),
+          clearPriorDiarization: nextRequest.engine === 'whisper',
+          jobLabel: 'Transcription retry',
+        });
+        return { jobPromise };
       });
+      return admission.jobPromise;
     });
   }
 

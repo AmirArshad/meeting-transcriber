@@ -126,11 +126,16 @@ def assemble(words: list[dict], duration: float) -> list[dict]:
         text = word.get('text')
         if not isinstance(text, str) or not text.strip():
             raise InvalidParakeetOutput('Empty aligned word.')
-        if current and (start - current['end'] >= 1 or end - current['start'] > 20):
+        speaker = word.get('speaker')
+        if current and (current.get('speaker') != speaker
+                        or start - current['end'] >= 1
+                        or end - current['start'] > 20):
             result.append(current)
             current = None
         if current is None:
             current = {'start': start, 'end': end, 'text': text.strip()}
+            if speaker:
+                current['speaker'] = speaker
         else:
             current['end'] = max(current['end'], end)
             current['text'] += ' ' + text.strip()

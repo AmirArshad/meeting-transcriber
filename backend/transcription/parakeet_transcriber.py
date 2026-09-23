@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .base_transcriber import BaseTranscriber
@@ -76,29 +77,89 @@ class ParakeetTranscriber(BaseTranscriber):
         return pcm
 
     def transcribe_file(self, audio_path: str, output_path: str | None = None,
-                        save_markdown: bool = True):
-        if self.adapter is None:
-            self.load_model()
+                        save_markdown: bool = True, guided_turns: dict | None = None):
         duration = self._duration(audio_path)
         retained = []
-        for window in windows(duration):
-            pcm = self._decode(audio_path, window.input_start, window.input_end)
-            words = self.adapter.transcribe_window(pcm, input_start=window.input_start,
-                                                   input_end=window.input_end)
-            owned = retain_owned(words, window)
-            if retained:
-                owned = repair_seam(retained, owned, window.ownership_start)
-            retained.extend(owned)
+        diarization = None
+        guided_windows = None
+        speaker_segments = None
+        if guided_turns is not None:
+            from diarization.guided_transcription import build_diarization_guided_windows
+
+            if not isinstance(guided_turns, dict) or not isinstance(guided_turns.get('speakerSegments'), list):
+                raise InvalidParakeetOutput('Guided speaker turns are invalid.')
+            speaker_segments = guided_turns['speakerSegments']
+            guided_windows = build_diarization_guided_windows(
+                speaker_segments,
+                audio_duration=duration,
+                padding_seconds=.35,
+                max_window_seconds=18.0,
+                merge_gap_seconds=.6,
+                min_turn_seconds=.5,
+            )
+            if not guided_windows:
+                raise RuntimeError('PARAKEET_GUIDED_NO_WINDOWS')
+
+        if self.adapter is None:
+            self.load_model()
+
+        if guided_turns is None:
+            for window in windows(duration):
+                pcm = self._decode(audio_path, window.input_start, window.input_end)
+                words = self.adapter.transcribe_window(pcm, input_start=window.input_start,
+                                                       input_end=window.input_end)
+                owned = retain_owned(words, window)
+                if retained:
+                    owned = repair_seam(retained, owned, window.ownership_start)
+                retained.extend(owned)
+        else:
+            from diarization.guided_transcription import (
+                assign_words_to_speaker_turns,
+            )
+
+            words = []
+            for window in guided_windows:
+                pcm = self._decode(audio_path, window['audioStart'], window['audioEnd'])
+                words.extend(self.adapter.transcribe_window(
+                    pcm,
+                    input_start=window['audioStart'],
+                    input_end=window['audioEnd'],
+                ))
+            retained = assign_words_to_speaker_turns(words, speaker_segments)
+            diarization = {
+                'status': 'completed',
+                'model': str(guided_turns.get('modelRef') or ''),
+                'completedAt': datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+                'audioPath': audio_path,
+                'speakerCount': int(guided_turns.get('speakerCount') or len({
+                    str(turn.get('speaker') or '') for turn in speaker_segments
+                    if isinstance(turn, dict)
+                })),
+                'annotationSource': str(guided_turns.get('annotationSource') or ''),
+                'device': str(guided_turns.get('device') or ''),
+                'speakerSegments': speaker_segments,
+            }
         segments = assemble(retained, duration)
+        if diarization is not None:
+            raw_speakers = sorted({
+                str(segment.get('speaker') or '') for segment in segments
+                if segment.get('speaker')
+            })
+            names = {speaker: f'Speaker {index + 1}' for index, speaker in enumerate(raw_speakers)}
+            for segment in segments:
+                if segment.get('speaker') in names:
+                    segment['speaker'] = names[segment['speaker']]
+            diarization['segments'] = segments
         text = ' '.join(segment['text'] for segment in segments)
         if save_markdown and output_path:
             markdown = build_transcript_markdown(audio_path=audio_path, language_label='English',
                                                  duration=duration, segments=segments,
-                                                 engine_label='Parakeet v2')
+                                                 engine_label='Parakeet v2',
+                                                 include_speakers=diarization is not None)
             if not segments:
                 markdown += '\nNo speech transcribed.\n'
             Path(output_path).write_text(markdown, encoding='utf-8')
-        return {
+        result = {
             'text': text, 'segments': segments, 'language': 'en', 'duration': duration,
             'output_file': output_path if save_markdown else None,
             'device': self.adapter.device, 'computeType': 'float32',
@@ -107,6 +168,9 @@ class ParakeetTranscriber(BaseTranscriber):
             'runtimeLockId': self.runtime_lock_id,
             'boundaryPolicy': 'parakeet-boundaries-v1',
         }
+        if diarization is not None:
+            result['diarization'] = diarization
+        return result
 
     def get_model_info(self):
         return {'engine': 'parakeet', 'modelId': 'parakeet-tdt-0.6b-v2',
@@ -125,12 +189,17 @@ def main(argv=None):
     parser.add_argument('--runtime-lock-id', required=True)
     parser.add_argument('--ffmpeg', required=True)
     parser.add_argument('--ffprobe', default='')
+    parser.add_argument('--speaker-turns-json', default='')
     args = parser.parse_args(argv)
+    guided_turns = None
+    if args.speaker_turns_json:
+        with Path(args.speaker_turns_json).open(encoding='utf-8') as source:
+            guided_turns = json.load(source)
     transcriber = ParakeetTranscriber(model_dir=args.model_dir, adapter_id=args.adapter_id,
                                      ffmpeg=args.ffmpeg, ffprobe=args.ffprobe,
                                      runtime_lock_id=args.runtime_lock_id,
                                      artifact_revision=args.artifact_revision, vad_dir=args.vad_dir)
-    result = transcriber.transcribe_file(args.file, args.output)
+    result = transcriber.transcribe_file(args.file, args.output, guided_turns=guided_turns)
     sys.stdout.write(json.dumps(result, allow_nan=False) + '\n')
     return 0
 
