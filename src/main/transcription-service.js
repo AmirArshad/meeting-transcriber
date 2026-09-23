@@ -190,6 +190,7 @@ function requireSelectableModelSize(modelSize) {
  * @param {Function} deps.buildTranscriptionPlaceholderMarkdown
  * @param {Function} deps.formatDurationForTranscript
  * @param {Function} [deps.enqueueGpuResourceAction]
+ * @param {Function} [deps.createAbortableComputeAction]
  * @param {Function} [deps.addMeetingToHistory]
  * @param {Function} [deps.updateMeetingAiMetadata]
  * @param {Function} [deps.listMeetings]
@@ -207,6 +208,7 @@ function createTranscriptionService(deps) {
     spawnTrackedPython,
     getBackendModuleArgs,
     enqueueAiComputeAction,
+    createAbortableComputeAction = ({ action }) => enqueueAiComputeAction(action),
     waitForAiComputeQueueIdle = async () => {},
     enqueueGpuResourceAction = (action) => action(),
     hasPendingAiComputeWork = () => false,
@@ -249,6 +251,8 @@ function createTranscriptionService(deps) {
     updateMeetingAiMetadata = null,
     listMeetings = async () => [],
     isQuitCommitted = () => false,
+    setupParakeetImplementation = setupParakeet,
+    validateParakeetImplementation = validateParakeet,
     getActiveWallClockComputeJobs: getActiveWallClockJobs = getActiveWallClockComputeJobs,
     runWallClockComputeAction = defaultRunWallClockComputeAction,
     resolveSpeakrsCliPath = null,
@@ -3075,6 +3079,28 @@ function createTranscriptionService(deps) {
       };
     }
 
+    function assertParakeetOperationAllowed(cancelSignal, operation) {
+      if (cancelSignal && cancelSignal.aborted) {
+        const error = new Error(`Parakeet ${operation} was canceled.`);
+        error.code = 'AI_ADDON_SETUP_CANCELLED';
+        throw error;
+      }
+      if (isQuitCommitted()) {
+        const error = new Error(`Parakeet ${operation} was skipped because the app is quitting.`);
+        error.code = 'QUIT_IN_PROGRESS';
+        throw error;
+      }
+    }
+
+    function sendParakeetProgress(operationId, phase) {
+      sendToRenderer('transcription-engine-setup-progress', {
+        operationId,
+        phase,
+        downloadedBytes: 0,
+        totalBytes: 0,
+      });
+    }
+
     function parakeetBootstrapArgs(runtimeDir, commandArgs) {
       const launchExe = resolveParakeetPythonExecutable({
         pythonExe: pythonConfig.pythonExe,
@@ -3091,32 +3117,35 @@ function createTranscriptionService(deps) {
       }));
     }
 
-    function launchParakeet(commandArgs, runtimeDir) {
+    function launchParakeet(commandArgs, runtimeDir, cancelSignal = null) {
       return launchParakeetBootstrap({
         spawnParakeetPython,
         args: parakeetBootstrapArgs(runtimeDir, commandArgs),
         runtimeDir,
         cwd: pythonConfig.backendPath,
+        cancelSignal,
       });
     }
 
-    async function probeParakeetDevice({ runtimeDir, expectedDevice }) {
+    async function probeParakeetDevice({ runtimeDir, expectedDevice, cancelSignal = null }) {
       try {
-        const stdout = await launchParakeet(['--probe-device', expectedDevice], runtimeDir);
+        const stdout = await launchParakeet(['--probe-device', expectedDevice], runtimeDir, cancelSignal);
         return parseDeviceProbeStdout(stdout);
       } catch (error) {
+        if (cancelSignal && cancelSignal.aborted) throw error;
+        if (error && error.code === 'AI_ADDON_SETUP_CANCELLED') throw error;
         return { device: 'cpu', deviceAvailable: false };
       }
     }
 
-    async function materializeParakeetRuntime({ stagingRoot, runtimeDir, lock }) {
+    async function materializeParakeetRuntime({ stagingRoot, runtimeDir, lock, cancelSignal = null }) {
       const wheels = lock.wheels || [];
       for (const wheel of wheels) {
         const wheelPath = path.join(stagingRoot, 'wheels', wheel.fileName);
         await launchParakeet([
           '--extract-wheel', wheelPath,
           '--extract-dest', runtimeDir,
-        ], runtimeDir);
+        ], runtimeDir, cancelSignal);
       }
     }
 
@@ -3138,11 +3167,18 @@ function createTranscriptionService(deps) {
       if (rejected) {
         return rejected;
       }
+      if (isQuitCommitted()) {
+        return {
+          ok: false,
+          code: 'QUIT_IN_PROGRESS',
+          message: 'Parakeet setup was skipped because the app is quitting.',
+        };
+      }
       const operationId = crypto.randomUUID();
       const controller = new AbortController();
       parakeetSetupControllers.set(operationId, controller);
       try {
-        const status = await setupParakeet({
+        const status = await setupParakeetImplementation({
           ...parakeetTargetOptions(),
           operationId,
           operation: options.operation === 'repair' ? 'repair' : 'install',
@@ -3156,6 +3192,20 @@ function createTranscriptionService(deps) {
           }),
           materializeRuntime: materializeParakeetRuntime,
           probeDevice: probeParakeetDevice,
+          isQuitCommitted,
+          runValidationAndPromotion: ({ cancelSignal, onWaiting, action }) => (
+            createAbortableComputeAction({
+              cancelSignal,
+              cancelMessage: 'Parakeet setup was canceled.',
+              onWaiting: () => {
+                if (typeof onWaiting === 'function') onWaiting();
+              },
+              action: async () => {
+                assertParakeetOperationAllowed(cancelSignal, 'setup');
+                return action();
+              },
+            })
+          ),
         });
         return { ...status, operationId };
       } catch (error) {
@@ -3185,13 +3235,43 @@ function createTranscriptionService(deps) {
       if (rejected) {
         return rejected;
       }
+      if (isQuitCommitted()) {
+        return {
+          ok: false,
+          code: 'QUIT_IN_PROGRESS',
+          message: 'Parakeet validation was skipped because the app is quitting.',
+        };
+      }
+      const operationId = crypto.randomUUID();
+      const controller = new AbortController();
+      parakeetSetupControllers.set(operationId, controller);
+      sendParakeetProgress(operationId, 'waiting-for-validation');
       try {
-        return await validateParakeet({
-          ...parakeetTargetOptions(),
-          probeDevice: probeParakeetDevice,
+        const status = await createAbortableComputeAction({
+          cancelSignal: controller.signal,
+          cancelMessage: 'Parakeet validation was canceled.',
+          onWaiting: () => sendParakeetProgress(operationId, 'waiting-for-validation'),
+          action: async () => {
+            assertParakeetOperationAllowed(controller.signal, 'validation');
+            sendParakeetProgress(operationId, 'validating');
+            return validateParakeetImplementation({
+              ...parakeetTargetOptions(),
+              probeDevice: probeParakeetDevice,
+              cancelSignal: controller.signal,
+              isQuitCommitted,
+            });
+          },
         });
+        return { ...status, operationId };
       } catch (error) {
-        return { ok: false, code: error.code || 'PARAKEET_ARTIFACT_INVALID', message: error.message };
+        return {
+          ok: false,
+          operationId,
+          code: error.code || 'PARAKEET_ARTIFACT_INVALID',
+          message: error.message,
+        };
+      } finally {
+        parakeetSetupControllers.delete(operationId);
       }
     });
 
@@ -3883,19 +3963,36 @@ function createTranscriptionService(deps) {
           throw error;
         }
 
-        const savedRequest = canonicalStoredRequest(meeting);
-        let nextRequest = savedRequest ? { ...savedRequest } : null;
-        if (!nextRequest) {
-          const legacy = resolveLegacyCompatibleSelection({
-            language: meeting.language || 'en', modelSize: meeting.model || 'small',
-          });
-          nextRequest = {
-            schemaVersion: 1,
-            engine: 'whisper',
-            language: legacy.language,
-            modelSize: legacy.modelSize,
-            artifactRevision: null,
-          };
+        const explicitSelection = choiceSelection(options.transcriptionSelection);
+        let nextRequest;
+        if (explicitSelection) {
+          if (explicitSelection.engine !== 'whisper') {
+            const error = new Error('Explicit retries can select Whisper only.');
+            error.code = 'INVALID_RETRY_SELECTION';
+            throw error;
+          }
+          const resolved = resolveTranscriptionRequest(explicitSelection, transcriptionTargetOptions());
+          if (!resolved.ok) {
+            const error = new Error(resolved.message);
+            error.code = resolved.code;
+            throw error;
+          }
+          nextRequest = { ...resolved.request };
+        } else {
+          const savedRequest = canonicalStoredRequest(meeting);
+          nextRequest = savedRequest ? { ...savedRequest } : null;
+          if (!nextRequest) {
+            const legacy = resolveLegacyCompatibleSelection({
+              language: meeting.language || 'en', modelSize: meeting.model || 'small',
+            });
+            nextRequest = {
+              schemaVersion: 1,
+              engine: 'whisper',
+              language: legacy.language,
+              modelSize: legacy.modelSize,
+              artifactRevision: null,
+            };
+          }
         }
         nextRequest.attemptId = crypto.randomUUID();
         nextRequest = snapshotTranscriptionRequest(nextRequest);

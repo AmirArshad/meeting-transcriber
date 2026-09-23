@@ -246,8 +246,8 @@ const gpuResourceActionQueue = createAsyncActionQueue();
 const enqueueGpuExclusiveComputeAction = (action) => (
   enqueueAiComputeAction(() => gpuResourceActionQueue.enqueue(action))
 );
-const createGpuExclusiveAbortableComputeAction = ({ cancelSignal, cancelMessage, action }) => (
-  waitForAiComputeQueueIdle({ cancelSignal, cancelMessage })
+const createGpuExclusiveAbortableComputeAction = ({ cancelSignal, cancelMessage, onWaiting, action }) => (
+  waitForAiComputeQueueIdle({ cancelSignal, cancelMessage, onWaiting })
     .then(() => {
       if (cancelSignal && cancelSignal.aborted) {
         throw createAiAddonCancelErrorStandalone(cancelMessage);
@@ -786,6 +786,7 @@ transcriptionService = createTranscriptionService({
   consumeCapturedTranscriptionRequest: (audioPath) => capturedTranscriptionBridge.consume(audioPath),
   getBackendModuleArgs,
   enqueueAiComputeAction: enqueueGpuExclusiveComputeAction,
+  createAbortableComputeAction: createGpuExclusiveAbortableComputeAction,
   waitForAiComputeQueueIdle,
   enqueueGpuResourceAction: gpuResourceActionQueue.enqueue,
   hasPendingAiComputeWork: () => aiComputeActionQueue.hasPendingWork(),

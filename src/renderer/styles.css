@@ -2622,6 +2622,190 @@ footer {
   margin-bottom: 12px;
 }
 
+.transcription-engine-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
+  gap: 10px;
+}
+
+.transcription-engine-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  padding: 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-xs);
+  transition: border-color 0.15s var(--ease-out), box-shadow 0.15s var(--ease-out);
+}
+
+.transcription-engine-card.is-active {
+  border-color: rgba(var(--accent-rgb), 0.58);
+  box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.18);
+}
+
+.transcription-engine-card-header {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.transcription-engine-card h4 {
+  margin: 1px 0 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.transcription-engine-card-copy,
+.transcription-engine-status,
+.transcription-engine-evidence,
+.transcription-engine-download,
+.transcription-engine-active-warning,
+.transcription-engine-operation-error {
+  margin: 0 0 9px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.transcription-engine-preferences {
+  margin: 1px 0 12px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.transcription-engine-active-warning {
+  width: 100%;
+  padding: 8px 10px;
+  color: var(--amber);
+  background: var(--amber-soft);
+  border: 1px solid rgba(210, 168, 92, 0.28);
+  border-radius: var(--r-xs);
+}
+
+.transcription-engine-operation-error {
+  width: 100%;
+  color: var(--crimson);
+}
+
+.transcription-engine-download {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.transcription-engine-evidence {
+  margin: auto 0 0;
+  padding-top: 10px;
+  color: var(--text-quaternary);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.transcription-engine-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+}
+
+.transcription-engine-actions [hidden] {
+  display: none !important;
+}
+
+.transcription-engine-progress {
+  width: 100%;
+  margin: 1px 0 11px;
+}
+
+.transcription-engine-progress[hidden],
+.transcription-engine-download[hidden],
+.transcription-engine-active-warning[hidden],
+.transcription-engine-operation-error[hidden],
+.transcription-whisper-control[hidden],
+.transcription-engine-static[hidden] {
+  display: none !important;
+}
+
+.transcription-engine-progress .progress-bar-container {
+  margin: 0;
+}
+
+.transcription-engine-progress .progress-bar.is-indeterminate {
+  width: 28%;
+  animation: transcription-progress-indeterminate 1.25s var(--ease-in-out) infinite;
+}
+
+@keyframes transcription-progress-indeterminate {
+  from { transform: translateX(-110%); }
+  to { transform: translateX(390%); }
+}
+
+.transcription-engine-progress .progress-text {
+  margin: 7px 0 0;
+}
+
+.transcription-engine-static {
+  min-width: 140px;
+  justify-content: center;
+  gap: 3px;
+}
+
+.transcription-static-label {
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.transcription-engine-static strong {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.transcription-engine-static span:last-child {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.whisper-retry-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 0.65fr);
+  gap: 12px;
+}
+
+.whisper-retry-modal-content .modal-actions {
+  justify-content: flex-end;
+}
+
+.whisper-retry-error {
+  margin: 10px 0 0;
+  color: var(--crimson);
+  font-size: 12px;
+}
+
+@media (max-width: 640px) {
+  .transcription-engine-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .whisper-retry-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .ai-addon-card h4 {
   font-size: 13px;
   margin: 0 0 3px;

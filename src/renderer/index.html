@@ -69,6 +69,51 @@
       </div>
     </div>
 
+    <!-- Explicit one-off Whisper retry; it never changes the active engine. -->
+    <div id="whisper-retry-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="whisper-retry-title" aria-describedby="whisper-retry-description">
+      <div class="modal-content whisper-retry-modal-content">
+        <div class="modal-header">
+          <h2 id="whisper-retry-title">Retry with Whisper</h2>
+        </div>
+        <form id="whisper-retry-form" class="modal-body">
+          <p id="whisper-retry-description" class="setting-description">
+            This starts a new Whisper attempt with these preferences. It does not change your active transcription engine.
+          </p>
+          <div class="whisper-retry-fields">
+            <div class="ai-addon-field compact">
+              <label for="whisper-retry-language">Language</label>
+              <select id="whisper-retry-language" class="device-select">
+                <option value="">Choose language…</option>
+                <option value="en">English</option>
+                <option value="es">Spanish</option>
+                <option value="fr">French</option>
+                <option value="de">German</option>
+                <option value="zh">Chinese (Mandarin/Cantonese)</option>
+                <option value="ja">Japanese</option>
+                <option value="it">Italian</option>
+                <option value="pa">Panjabi</option>
+                <option value="hi">Hindi</option>
+                <option value="ko">Korean</option>
+                <option value="pt">Portuguese</option>
+              </select>
+            </div>
+            <div class="ai-addon-field compact">
+              <label for="whisper-retry-model">Model</label>
+              <select id="whisper-retry-model" class="device-select">
+                <option value="small">Small</option>
+                <option value="medium">Medium</option>
+              </select>
+            </div>
+          </div>
+          <p id="whisper-retry-error" class="whisper-retry-error" role="alert" hidden></p>
+          <div class="modal-actions whisper-retry-actions">
+            <button type="button" id="whisper-retry-cancel-btn" class="btn btn-secondary">Cancel</button>
+            <button type="submit" id="whisper-retry-submit-btn" class="btn btn-primary">Retry with Whisper</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
     <div class="container">
       <!-- Vertical icon rail -->
       <nav class="icon-rail" aria-label="Primary">
@@ -193,7 +238,7 @@
               </select>
             </div>
 
-            <div class="setup-item small-select">
+            <div class="setup-item small-select transcription-whisper-control" id="whisper-language-setup">
               <label for="language-select">Language</label>
               <select id="language-select" class="device-select">
                 <option value="en">English</option>
@@ -210,12 +255,18 @@
               </select>
             </div>
 
-            <div class="setup-item small-select">
+            <div class="setup-item small-select transcription-whisper-control" id="whisper-model-setup">
               <label for="model-select">Model</label>
               <select id="model-select" class="device-select">
                 <option value="small" selected>Small</option>
                 <option value="medium">Medium</option>
               </select>
+            </div>
+
+            <div class="setup-item transcription-engine-static" id="transcription-engine-static" hidden role="status" aria-live="polite">
+              <span class="transcription-static-label">Transcription</span>
+              <strong id="transcription-static-model">Parakeet v2</strong>
+              <span id="transcription-static-language">English only</span>
             </div>
 
             <button
@@ -725,6 +776,9 @@
                           <button id="retry-transcription-btn" class="btn btn-small" style="display: none;">
                             Retry Transcription
                           </button>
+                          <button id="retry-whisper-transcription-btn" class="btn btn-small" type="button" hidden>
+                            Retry with Whisper…
+                          </button>
                           <button id="generate-summary-btn" class="btn btn-small" disabled>
                             Generate Summary
                           </button>
@@ -781,6 +835,8 @@
             <section class="card settings-section">
               <h2>Settings</h2>
               <nav class="settings-subnav" aria-label="Settings sections">
+                <a href="#transcription-settings">Transcription</a>
+                <span aria-hidden="true">·</span>
                 <a href="#gpu-settings">GPU Acceleration</a>
                 <span aria-hidden="true">·</span>
                 <a href="#ai-addons-settings">AI Add-ons</a>
@@ -791,6 +847,65 @@
               </nav>
 
               <div class="settings-content">
+                <!-- Transcription engine selection is independent of Whisper preferences. -->
+                <div class="settings-group" id="transcription-settings">
+                  <div class="setting-header">
+                    <h3>Transcription engine</h3>
+                    <span class="setting-badge enabled" id="transcription-active-engine-badge">Whisper active</span>
+                  </div>
+                  <p class="setting-description">
+                    Choose the engine for future recordings. Each recording keeps the engine and preferences selected when it starts.
+                  </p>
+
+                  <div class="transcription-engine-grid">
+                    <article class="transcription-engine-card" id="whisper-engine-card">
+                      <div class="transcription-engine-card-header">
+                        <h4>Whisper</h4>
+                        <span class="setting-badge enabled" id="whisper-engine-badge">In use</span>
+                      </div>
+                      <p class="transcription-engine-card-copy">Local transcription for multiple languages.</p>
+                      <p class="transcription-engine-preferences" id="whisper-preferences-summary">English · Small</p>
+                      <div class="transcription-engine-actions">
+                        <button type="button" id="use-whisper-engine-btn" class="btn btn-secondary btn-small" hidden>Use Whisper</button>
+                      </div>
+                    </article>
+
+                    <article class="transcription-engine-card" id="parakeet-engine-card">
+                      <div class="transcription-engine-card-header">
+                        <h4>Parakeet — English</h4>
+                        <span class="setting-badge" id="parakeet-status-badge">Checking…</span>
+                      </div>
+                      <p class="transcription-engine-card-copy">
+                        Optional local English transcription. English only; use Whisper for other languages.
+                      </p>
+                      <p class="transcription-engine-status" id="parakeet-status-text" role="status" aria-live="polite">Checking Parakeet…</p>
+                      <p class="transcription-engine-active-warning" id="parakeet-active-warning" role="status" hidden>
+                        Parakeet is still selected but unavailable. Use Whisper to switch engines; saved recordings remain available in History.
+                      </p>
+                      <p class="transcription-engine-operation-error" id="parakeet-operation-error" role="alert" hidden></p>
+                      <div class="transcription-engine-progress" id="parakeet-progress" hidden>
+                        <div class="progress-bar-container" id="parakeet-progress-track" role="progressbar" aria-label="Parakeet setup progress" aria-valuemin="0" aria-valuemax="100">
+                          <div class="progress-bar" id="parakeet-progress-bar"></div>
+                        </div>
+                        <p class="progress-text" id="parakeet-progress-text">Starting…</p>
+                      </div>
+                      <p class="transcription-engine-download" id="parakeet-download-size" hidden></p>
+                      <div class="transcription-engine-actions">
+                        <button type="button" id="use-parakeet-engine-btn" class="btn btn-primary btn-small" hidden>Use Parakeet</button>
+                        <button type="button" id="parakeet-setup-btn" class="btn btn-primary btn-small" hidden>Set up Parakeet</button>
+                        <button type="button" id="parakeet-cancel-btn" class="btn btn-secondary btn-small" hidden>Cancel</button>
+                        <button type="button" id="parakeet-recheck-btn" class="btn btn-secondary btn-small" hidden>Recheck</button>
+                        <button type="button" id="parakeet-validate-btn" class="btn btn-secondary btn-small" hidden>Validate</button>
+                        <button type="button" id="parakeet-repair-btn" class="btn btn-secondary btn-small" hidden>Repair</button>
+                        <button type="button" id="parakeet-remove-btn" class="btn btn-danger btn-small" hidden>Remove</button>
+                      </div>
+                      <p class="transcription-engine-evidence">
+                        On one CachyOS RTX 4070 test, Parakeet was faster than Whisper Medium but used more GPU memory, with similar measured WER. Windows and Mac performance has not been measured.
+                      </p>
+                    </article>
+                  </div>
+                </div>
+
                 <!-- GPU Acceleration -->
                 <div class="settings-group" id="gpu-settings">
                   <div class="setting-header">
@@ -1127,6 +1242,7 @@
     <script src="platform-selection-helpers.js"></script>
     <script src="canvas-helpers.js"></script>
     <script src="keyboard-shortcut-helpers.js"></script>
+    <script src="transcription-engine-helpers.js"></script>
     <script src="../transcription-policy.js"></script>
     <script src="app.js"></script>
   </body>

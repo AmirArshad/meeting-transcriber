@@ -347,6 +347,57 @@ test('AI_ADDON_PROGRESS_CHANNEL and AI_ADDON_CANCEL_CODE keep their pinned strin
   assert.ok(sendChannels.includes(AI_ADDON_PROGRESS_CHANNEL));
 });
 
+test('renderer retry entry points keep saved requests separate from explicit Whisper retries', () => {
+  const appSource = readUtf8(path.join(ROOT, 'src', 'renderer', 'app.js'));
+  const preloadSource = readUtf8(PRELOAD_PATH);
+  const indexSource = readUtf8(path.join(ROOT, 'src', 'renderer', 'index.html'));
+  const functionSource = (declaration) => {
+    const start = appSource.indexOf(declaration);
+    assert.notEqual(start, -1, `missing ${declaration}`);
+    const end = appSource.indexOf('\n}', start);
+    assert.notEqual(end, -1, `could not read ${declaration}`);
+    return appSource.slice(start, end + 2);
+  };
+
+  const activityRetry = functionSource('async function retryActivityTranscription');
+  const historyRetry = functionSource('async function retryMeetingTranscription');
+  const whisperRetry = functionSource('async function retryMeetingTranscriptionWithWhisper');
+  const install = functionSource('async function setupParakeetEngine');
+  const validate = functionSource('async function validateParakeetEngine');
+  const cancelSetup = functionSource('async function cancelParakeetSetup');
+  const sendSetupCancellation = functionSource('async function sendParakeetSetupCancellation');
+  const remove = functionSource('async function removeParakeetEngine');
+  const activate = functionSource('function activateTranscriptionEngine');
+  const setupProgress = functionSource('function handleParakeetSetupProgress');
+  const resume = functionSource('async function resumePendingTranscriptionsFromBanner');
+  const recovery = functionSource('async function handleRecoverRecordingAction');
+
+  assert.match(activityRetry, /buildOrdinaryRetryOptions\(id\)/);
+  assert.match(historyRetry, /buildOrdinaryRetryOptions\(currentMeetingId\)/);
+  assert.doesNotMatch(activityRetry, /languageSelect|modelSelect/);
+  assert.doesNotMatch(historyRetry, /languageSelect|modelSelect/);
+  assert.match(whisperRetry, /buildWhisperRetryOptions\(/);
+  assert.doesNotMatch(whisperRetry, /activeEngine/);
+  assert.doesNotMatch(install, /persistTranscriptionEnginePreferences|activateTranscriptionEngine/);
+  assert.doesNotMatch(remove, /persistTranscriptionEnginePreferences|activateTranscriptionEngine/);
+  assert.match(activate, /persistTranscriptionEnginePreferences/);
+  assert.match(validate, /validateTranscriptionEngine/);
+  assert.match(cancelSetup, /'install', 'repair', 'validate'/);
+  assert.match(sendSetupCancellation, /buildSetupCancellationOptions/);
+  assert.match(setupProgress, /'install', 'repair', 'validate'/);
+  assert.match(resume, /resumePendingTranscriptions\(\)/);
+  assert.doesNotMatch(resume, /snapshotTranscriptionSelection|languageSelect|modelSelect/);
+  assert.match(recovery, /recoverRecording\(\)/);
+  assert.doesNotMatch(recovery, /transcriptionEngineStatus|activeTranscriptionEngine/);
+
+  assert.match(indexSource, /id="retry-whisper-transcription-btn"/);
+  assert.match(indexSource, /id="whisper-retry-modal"/);
+  assert.match(indexSource, /id="transcription-settings"/);
+  assert.match(indexSource, /transcription-engine-helpers\.js/);
+  assert.ok(indexSource.indexOf('transcription-engine-helpers.js') < indexSource.indexOf('app.js'));
+  assert.match(preloadSource, /retryTranscription:[\s\S]*?transcriptionSelection/);
+});
+
 test('Phase 0.1 scan roots include main.js and survive a future src/main/ tree', () => {
   const mainEntry = path.join(ROOT, 'src', 'main.js');
   assert.equal(fs.existsSync(mainEntry), true);

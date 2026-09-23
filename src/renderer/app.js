@@ -37,6 +37,15 @@ const {
   resolveActivityRenameCommit,
 } = window.transcriptionActivityHelpers;
 const {
+  normalizeTranscriptionEnginePreferences,
+  updateTranscriptionEnginePreferences,
+  snapshotTranscriptionSelection: snapshotEngineSelection,
+  buildOrdinaryRetryOptions,
+  buildWhisperRetryOptions,
+  buildSetupCancellationOptions,
+  buildParakeetSettingsView,
+} = window.transcriptionEngineHelpers;
+const {
   getRecoveryPromptView,
   getRecoveryBannerView,
   mergeClaimedPromptIntoState,
@@ -124,6 +133,9 @@ const micSelect = document.getElementById('mic-select');
 const desktopSelect = document.getElementById('desktop-select');
 const languageSelect = document.getElementById('language-select');
 const modelSelect = document.getElementById('model-select');
+const whisperLanguageSetup = document.getElementById('whisper-language-setup');
+const whisperModelSetup = document.getElementById('whisper-model-setup');
+const transcriptionEngineStatic = document.getElementById('transcription-engine-static');
 const refreshBtn = document.getElementById('refresh-devices');
 const recordBtn = document.getElementById('record-btn');
 const recordModeToggle = document.getElementById('record-mode-toggle');
@@ -181,6 +193,22 @@ let recordingStartTime = null;
 let activeRecordingSessionId = null;
 /** Capture-time engine/language/model. Stop and finalize use this, not live Settings. */
 let activeRecordingTranscriptionSelection = null;
+let transcriptionEnginePreferences = {
+  schemaVersion: 1,
+  activeEngine: 'whisper',
+  whisper: { language: 'en', modelSize: 'small' },
+};
+let parakeetEngineStatus = null;
+let parakeetEngineOperation = null;
+let parakeetSetupProgress = null;
+let parakeetSetupOperationId = null;
+let parakeetSetupCancelRequested = false;
+let parakeetSetupCancelSent = false;
+let parakeetEngineOperationError = '';
+let parakeetEngineSettingsBusy = false;
+let transcriptionEngineSettingsListenersBound = false;
+let whisperRetryMeetingId = null;
+let whisperRetryBusy = false;
 let activeCountdownCancel = null;
 /** Bumped to invalidate an in-flight startRecording() when Discard wins during starting/countdown. */
 let startRecordingEpoch = 0;
@@ -1169,21 +1197,10 @@ async function retryActivityTranscription(meetingId) {
   activityActionBusyMeetingId = id;
   renderActivityList();
   addLog(`Retrying transcription for ${id}...`);
-  const activitySelection = validateNewTranscriptionSelection(languageSelect.value, modelSelect.value);
-  if (!activitySelection.ok) {
-    reportUnsupportedTranscriptionSelection(activitySelection);
-    activityActionBusyMeetingId = null;
-    renderActivityList();
-    return;
-  }
   try {
     // Fire-and-forget from Home: do not block Start. Retry IPC still awaits in main;
     // we intentionally do not await here beyond enqueue acknowledgment if available.
-    const resultPromise = window.electronAPI.retryTranscription({
-      meetingId: id,
-      language: languageSelect.value,
-      modelSize: modelSelect.value,
-    });
+    const resultPromise = window.electronAPI.retryTranscription(buildOrdinaryRetryOptions(id));
     // Mark busy briefly then clear so Start stays usable; queue-state drives chips.
     activityActionBusyMeetingId = null;
     renderActivityList();
@@ -1925,6 +1942,11 @@ function saveSettings(settings) {
   }
 }
 
+function saveTranscriptionEnginePreferences(preferences) {
+  // Remove the retired flat fields as part of the one-time settings migration.
+  saveSettings({ ...preferences, language: undefined, modelSize: undefined });
+}
+
 // v2.10 Slice A transcription policy (curated Small/Medium + 11 languages).
 // Loaded from src/transcription-policy.js via script tag; falls back to the
 // same curated defaults when the global is unavailable (e.g. syntax checks).
@@ -1946,11 +1968,7 @@ function ensureLanguageChoiceOption() {
 }
 
 function snapshotTranscriptionSelection() {
-  return {
-    engine: 'whisper',
-    language: languageSelect.value,
-    modelSize: modelSelect.value,
-  };
+  return snapshotEngineSelection(transcriptionEnginePreferences);
 }
 
 function validateNewTranscriptionSelection(language, modelSize) {
@@ -1968,15 +1986,50 @@ function reportUnsupportedTranscriptionSelection(validation) {
   setTranscriptMessage(message, true);
 }
 
+function persistTranscriptionEnginePreferences(updates = {}) {
+  transcriptionEnginePreferences = updateTranscriptionEnginePreferences(
+    transcriptionEnginePreferences,
+    updates,
+  );
+  saveTranscriptionEnginePreferences(transcriptionEnginePreferences);
+  syncWhisperPreferencesToControls();
+  renderRecordingEngineControls();
+  renderTranscriptionEngineSettings();
+  return transcriptionEnginePreferences;
+}
+
+function syncWhisperPreferencesToControls() {
+  const preferences = transcriptionEnginePreferences.whisper || {};
+  if (!preferences.language) {
+    ensureLanguageChoiceOption();
+    languageSelect.value = '';
+  } else {
+    languageSelect.value = preferences.language;
+  }
+  modelSelect.value = preferences.modelSize || 'small';
+}
+
+function renderRecordingEngineControls() {
+  const parakeetActive = transcriptionEnginePreferences.activeEngine === 'parakeet';
+  if (whisperLanguageSetup) whisperLanguageSetup.hidden = parakeetActive;
+  if (whisperModelSetup) whisperModelSetup.hidden = parakeetActive;
+  if (transcriptionEngineStatic) transcriptionEngineStatic.hidden = !parakeetActive;
+}
+
 // Apply saved settings to UI controls
 function applySavedSettings(devices = {}, hostFamily = 'unknown') {
   const settings = loadSettings();
   const policy = resolveTranscriptionPolicy();
+  const enginePreferences = normalizeTranscriptionEnginePreferences(settings, policy);
+  transcriptionEnginePreferences = enginePreferences.preferences;
+  if (enginePreferences.shouldPersist) {
+    saveTranscriptionEnginePreferences(transcriptionEnginePreferences);
+  }
   const normalized = policy && typeof policy.normalizePreferences === 'function'
-    ? policy.normalizePreferences({ language: settings.language, modelSize: settings.modelSize })
+    ? policy.normalizePreferences(transcriptionEnginePreferences.whisper)
     : {
-      language: settings.language || 'en',
-      modelSize: settings.modelSize || 'small',
+      language: transcriptionEnginePreferences.whisper.language || 'en',
+      modelSize: transcriptionEnginePreferences.whisper.modelSize || 'small',
       migrated: false,
       requiresChoice: false,
       normalizedLarge: false,
@@ -2008,16 +2061,34 @@ function applySavedSettings(devices = {}, hostFamily = 'unknown') {
     // Saved Large normalizes to canonical large-v3, still gated in Slice A:
     // park new work on Small and explain instead of leaving no selection.
     modelSelect.value = (policy && policy.DEFAULT_MODEL_SIZE) || 'small';
-    saveSettings({ modelSize: modelSelect.value });
+    persistTranscriptionEnginePreferences({ whisper: {
+      language: transcriptionEnginePreferences.whisper.language,
+      modelSize: modelSelect.value,
+    } });
     addLog('Large Whisper model is unavailable in this release; using Small for new transcriptions.', 'warning');
   } else {
     modelSelect.value = normalized.modelSize || 'small';
     if (normalized.migrated) {
       // Tiny/Base retire once to Small with a visible explanation.
-      saveSettings({ modelSize: 'small' });
+      persistTranscriptionEnginePreferences({ whisper: {
+        language: transcriptionEnginePreferences.whisper.language,
+        modelSize: 'small',
+      } });
       addLog('Tiny/Base Whisper models retired; migrated saved preference to Small.', 'warning');
     }
   }
+
+  // A retired language remains an explicit choice for Whisper even while
+  // Parakeet is active; do not silently replace that saved preference.
+  if (!normalized.requiresChoice && normalized.language
+      && normalized.language !== transcriptionEnginePreferences.whisper.language) {
+    transcriptionEnginePreferences = updateTranscriptionEnginePreferences(transcriptionEnginePreferences, {
+      whisper: { language: normalized.language },
+    });
+    saveTranscriptionEnginePreferences(transcriptionEnginePreferences);
+  }
+  renderRecordingEngineControls();
+  renderTranscriptionEngineSettings();
 
   const summaryProfileSelect = document.getElementById('summary-profile-select');
   if (summaryProfileSelect && settings.summaryProfile) {
@@ -2055,26 +2126,38 @@ async function init() {
     updateLoading('Checking system setup...');
     const settings = loadSettings();
     const startupPolicy = resolveTranscriptionPolicy();
-    const startupNormalized = startupPolicy && typeof startupPolicy.normalizePreferences === 'function'
-      ? startupPolicy.normalizePreferences({ language: settings.language, modelSize: settings.modelSize })
-      : { language: settings.language || 'en', modelSize: settings.modelSize || 'small', normalizedLarge: false };
-    // Slice A offers Small/Medium only; never auto-download a retired/gated model.
-    const modelSize = startupNormalized.normalizedLarge
-      ? (startupPolicy.DEFAULT_MODEL_SIZE || 'small')
-      : (startupNormalized.modelSize || 'small');
+    const startupEnginePreferences = normalizeTranscriptionEnginePreferences(settings, startupPolicy);
+    if (startupEnginePreferences.shouldPersist) {
+      saveTranscriptionEnginePreferences(startupEnginePreferences.preferences);
+    }
+    if (startupEnginePreferences.preferences.activeEngine === 'whisper') {
+      const startupNormalized = startupPolicy && typeof startupPolicy.normalizePreferences === 'function'
+        ? startupPolicy.normalizePreferences(startupEnginePreferences.preferences.whisper)
+        : {
+          language: startupEnginePreferences.preferences.whisper.language,
+          modelSize: startupEnginePreferences.preferences.whisper.modelSize,
+          normalizedLarge: false,
+        };
+      // Slice A offers Small/Medium only; never auto-download a retired/gated model.
+      const modelSize = startupNormalized.normalizedLarge
+        ? (startupPolicy.DEFAULT_MODEL_SIZE || 'small')
+        : (startupNormalized.modelSize || 'small');
 
-    addLog('Checking system setup...');
-    const modelCheck = await window.electronAPI.checkModelDownloaded(modelSize);
+      addLog('Checking system setup...');
+      const modelCheck = await window.electronAPI.checkModelDownloaded(modelSize);
 
-    if (!modelCheck.downloaded) {
-      // Hide loading screen before showing first-time setup
-      if (loadingScreen) {
-        loadingScreen.classList.add('hidden');
-        setTimeout(() => loadingScreen.remove(), 300);
+      if (!modelCheck.downloaded) {
+        // Hide loading screen before showing first-time setup
+        if (loadingScreen) {
+          loadingScreen.classList.add('hidden');
+          setTimeout(() => loadingScreen.remove(), 300);
+        }
+
+        // First-time setup: Download the selected Whisper model.
+        await showFirstTimeSetup(modelSize);
       }
-
-      // First-time setup: Download model
-      await showFirstTimeSetup(modelSize);
+    } else {
+      addLog('Parakeet is selected. Its readiness is checked in Settings; setup never starts automatically.');
     }
 
     // Hide loading screen immediately to show UI
@@ -2515,6 +2598,7 @@ async function selectMeeting(meetingId) {
 
   const transcriptEl = document.getElementById('meeting-transcript');
   const retryBtn = document.getElementById('retry-transcription-btn');
+  const retryWhisperBtn = document.getElementById('retry-whisper-transcription-btn');
   transcriptEl.classList.remove('markdown-body');
   delete transcriptEl.dataset.markdown;
   clearElement(transcriptEl);
@@ -2523,6 +2607,10 @@ async function selectMeeting(meetingId) {
     retryBtn.style.display = isMeetingTranscriptionRetryable(meeting) ? 'inline-flex' : 'none';
     retryBtn.disabled = false;
     retryBtn.textContent = 'Retry Transcription';
+  }
+  if (retryWhisperBtn) {
+    retryWhisperBtn.hidden = !isMeetingTranscriptionRetryable(meeting);
+    retryWhisperBtn.disabled = false;
   }
   activateHistoryDetailTab(activeHistoryDetailTab);
   const loading = document.createElement('p');
@@ -2855,6 +2943,7 @@ function setupEventListeners() {
   if (retryTranscriptionBtn) {
     retryTranscriptionBtn.addEventListener('click', retryMeetingTranscription);
   }
+  setupWhisperRetryDialog();
 
   const generateSummaryBtn = document.getElementById('generate-summary-btn');
   if (generateSummaryBtn) {
@@ -2910,11 +2999,11 @@ function setupEventListeners() {
   });
 
   languageSelect.addEventListener('change', () => {
-    saveSettings({ language: languageSelect.value });
+    persistTranscriptionEnginePreferences({ whisper: { language: languageSelect.value } });
   });
 
   modelSelect.addEventListener('change', () => {
-    saveSettings({ modelSize: modelSelect.value });
+    persistTranscriptionEnginePreferences({ whisper: { modelSize: modelSelect.value } });
   });
 
   // Listen for progress updates
@@ -3763,10 +3852,12 @@ async function startRecording(requestedCaptureMode = 'mic-and-desktop') {
   }
 
   activeRecordingTranscriptionSelection = snapshotTranscriptionSelection();
-  const selectionCheck = validateNewTranscriptionSelection(
-    activeRecordingTranscriptionSelection.language,
-    activeRecordingTranscriptionSelection.modelSize,
-  );
+  const selectionCheck = activeRecordingTranscriptionSelection.engine === 'parakeet'
+    ? { ok: true }
+    : validateNewTranscriptionSelection(
+      activeRecordingTranscriptionSelection.language,
+      activeRecordingTranscriptionSelection.modelSize,
+    );
   if (!selectionCheck.ok) {
     reportUnsupportedTranscriptionSelection(selectionCheck);
     setIdleIfCurrentStart();
@@ -4424,8 +4515,12 @@ async function generateSummaryForMeeting(meetingId) {
 // succeeds; main owns the composite job and Activity is driven by queue-state.
 async function transcribeAudio(options = {}) {
   const capturedSelection = options.transcriptionSelection || activeRecordingTranscriptionSelection;
-  const language = capturedSelection?.language || languageSelect.value;
-  const modelSize = capturedSelection?.modelSize || capturedSelection?.model || modelSelect.value;
+  const language = capturedSelection?.engine === 'parakeet'
+    ? 'en'
+    : (capturedSelection?.language || languageSelect.value);
+  const modelSize = capturedSelection?.engine === 'parakeet'
+    ? 'Parakeet v2'
+    : (capturedSelection?.modelSize || capturedSelection?.model || modelSelect.value);
   const stopErrorNote = typeof options.stopErrorNote === 'string' ? options.stopErrorNote : '';
 
   const selection = capturedSelection?.engine === 'parakeet'
@@ -4555,22 +4650,10 @@ async function retryMeetingTranscription() {
   }
   addLog(`Retrying transcription for ${meeting.title}...`);
 
-  const detailSelection = validateNewTranscriptionSelection(languageSelect.value, modelSelect.value);
-  if (!detailSelection.ok) {
-    reportUnsupportedTranscriptionSelection(detailSelection);
-    if (retryBtn) {
-      retryBtn.disabled = false;
-      retryBtn.textContent = 'Retry Transcription';
-    }
-    return;
-  }
-
   try {
-    const result = await window.electronAPI.retryTranscription({
-      meetingId: currentMeetingId,
-      language: languageSelect.value,
-      modelSize: modelSelect.value,
-    });
+    const result = await window.electronAPI.retryTranscription(
+      buildOrdinaryRetryOptions(currentMeetingId),
+    );
     addLog('Transcription retry completed.');
     if (result && result.diarization) {
       addLog('Speaker-guided transcript saved!');
@@ -4590,6 +4673,170 @@ async function retryMeetingTranscription() {
       retryBtn.textContent = 'Retry Transcription';
     }
   }
+}
+
+function openWhisperRetryDialog(meetingId = currentMeetingId) {
+  const id = String(meetingId || '').trim();
+  const meeting = findMeetingById(id);
+  const modal = document.getElementById('whisper-retry-modal');
+  if (!modal || !meeting || !isMeetingTranscriptionRetryable(meeting)) {
+    return;
+  }
+  whisperRetryMeetingId = id;
+  const language = document.getElementById('whisper-retry-language');
+  const model = document.getElementById('whisper-retry-model');
+  const error = document.getElementById('whisper-retry-error');
+  language.value = transcriptionEnginePreferences.whisper.language || '';
+  model.value = transcriptionEnginePreferences.whisper.modelSize || 'small';
+  error.textContent = '';
+  error.hidden = true;
+  modal.classList.remove('hidden');
+  language.focus();
+}
+
+function closeWhisperRetryDialog({ restoreFocus = true } = {}) {
+  const modal = document.getElementById('whisper-retry-modal');
+  if (!modal) return;
+  modal.classList.add('hidden');
+  whisperRetryMeetingId = null;
+  if (restoreFocus) {
+    const retryButton = document.getElementById('retry-whisper-transcription-btn');
+    if (retryButton && !retryButton.hidden) retryButton.focus();
+  }
+}
+
+async function completeWhisperRetry(meetingId, meetingTitle, retryPromise) {
+  let result;
+  try {
+    result = await retryPromise;
+  } catch (error) {
+    const canceled = error && (
+      error.code === 'TRANSCRIPTION_CANCELLED'
+      || error.code === 'USER_CANCELLED_TRANSCRIPTION'
+      || error.name === 'AbortError'
+    );
+    addLog(canceled
+      ? 'Whisper retry was canceled from Activity.'
+      : `Whisper retry failed: ${error && error.message ? error.message : error}`, canceled ? 'warning' : 'error');
+    await loadMeetingHistory().catch(() => {});
+    return;
+  }
+
+  if (result && result.diarization) {
+    addLog('Speaker-guided transcript saved!');
+  } else if (result && result.diarizationError) {
+    addLog(`Speaker identification noted an error; transcript was saved. ${result.diarizationError}`, 'warning');
+  }
+  if (result && result.meeting) syncMeetingInList(result.meeting);
+  try {
+    await loadMeetingHistory();
+  } catch (error) {
+    addLog(`Whisper retry completed, but History could not refresh: ${error.message}`, 'warning');
+  }
+  const historyTab = document.getElementById('history-tab');
+  if (historyTab && historyTab.classList.contains('active')
+      && String(currentMeetingId || '') === String(meetingId)) {
+    try {
+      await selectMeeting(meetingId);
+    } catch (error) {
+      addLog(`Whisper retry completed, but its transcript could not be displayed: ${error.message}`, 'warning');
+    }
+  }
+  addLog(`Whisper retry completed for ${meetingTitle}. The active engine was not changed.`);
+}
+
+async function retryMeetingTranscriptionWithWhisper(meetingId = whisperRetryMeetingId) {
+  const id = String(meetingId || '').trim();
+  const meeting = findMeetingById(id);
+  if (!id || !meeting || !isMeetingTranscriptionRetryable(meeting) || whisperRetryBusy) {
+    return;
+  }
+
+  const language = document.getElementById('whisper-retry-language').value;
+  const modelSize = document.getElementById('whisper-retry-model').value;
+  const validation = validateNewTranscriptionSelection(language, modelSize);
+  const errorMessage = document.getElementById('whisper-retry-error');
+  if (!validation.ok) {
+    errorMessage.textContent = validation.message || 'Choose a supported Whisper language and model.';
+    errorMessage.hidden = false;
+    return;
+  }
+
+  persistTranscriptionEnginePreferences({
+    whisper: { language: validation.language, modelSize: validation.modelSize },
+  });
+  const submitButton = document.getElementById('whisper-retry-submit-btn');
+  const cancelButton = document.getElementById('whisper-retry-cancel-btn');
+  whisperRetryBusy = true;
+  submitButton.disabled = true;
+  submitButton.textContent = 'Submitting…';
+  cancelButton.disabled = true;
+  errorMessage.hidden = true;
+  addLog(`Retrying ${meeting.title} with Whisper…`);
+
+  let retryPromise;
+  try {
+    retryPromise = window.electronAPI.retryTranscription(buildWhisperRetryOptions(id, {
+      language: validation.language,
+      modelSize: validation.modelSize,
+    }));
+  } catch (error) {
+    whisperRetryBusy = false;
+    submitButton.disabled = false;
+    submitButton.textContent = 'Retry with Whisper';
+    cancelButton.disabled = false;
+    errorMessage.textContent = error.message || 'Whisper retry failed.';
+    errorMessage.hidden = false;
+    return;
+  }
+
+  // The retry IPC Promise covers the queued and running transcription. Close
+  // Settings now so the user can keep using AvaNevis and track/cancel the job
+  // from Activity while the background operation continues.
+  closeWhisperRetryDialog({ restoreFocus: true });
+  whisperRetryBusy = false;
+  submitButton.disabled = false;
+  submitButton.textContent = 'Retry with Whisper';
+  cancelButton.disabled = false;
+  addLog('Whisper retry submitted. Track progress and cancel it in Activity.');
+  return completeWhisperRetry(id, meeting.title, retryPromise);
+}
+
+function setupWhisperRetryDialog() {
+  const modal = document.getElementById('whisper-retry-modal');
+  const form = document.getElementById('whisper-retry-form');
+  const cancelButton = document.getElementById('whisper-retry-cancel-btn');
+  const openButton = document.getElementById('retry-whisper-transcription-btn');
+  if (!modal || !form || modal.dataset.bound === 'true') return;
+  modal.dataset.bound = 'true';
+  openButton?.addEventListener('click', () => openWhisperRetryDialog());
+  cancelButton?.addEventListener('click', () => closeWhisperRetryDialog());
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    void retryMeetingTranscriptionWithWhisper();
+  });
+  modal.addEventListener('click', (event) => {
+    if (event.target === modal) closeWhisperRetryDialog({ restoreFocus: false });
+  });
+  modal.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      closeWhisperRetryDialog();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const focusables = [...modal.querySelectorAll('select:not(:disabled), button:not(:disabled)')]
+      .filter((element) => !element.hidden);
+    if (focusables.length === 0) return;
+    const activeIndex = focusables.indexOf(document.activeElement);
+    if (event.shiftKey && activeIndex <= 0) {
+      event.preventDefault();
+      focusables[focusables.length - 1].focus();
+    } else if (!event.shiftKey && activeIndex === focusables.length - 1) {
+      event.preventDefault();
+      focusables[0].focus();
+    }
+  });
 }
 
 // Copy transcript to clipboard (legacy Home panel removed)
@@ -5895,6 +6142,332 @@ function setupAiAddonSettingsListeners() {
 }
 
 // ============================================================================
+// Transcription engine settings
+// ============================================================================
+
+function renderTranscriptionEngineSettings() {
+  const whisperCard = document.getElementById('whisper-engine-card');
+  const parakeetCard = document.getElementById('parakeet-engine-card');
+  const whisperBadge = document.getElementById('whisper-engine-badge');
+  const parakeetBadge = document.getElementById('parakeet-status-badge');
+  const activeBadge = document.getElementById('transcription-active-engine-badge');
+  const whisperSummary = document.getElementById('whisper-preferences-summary');
+  const parakeetStatusText = document.getElementById('parakeet-status-text');
+  const parakeetActiveWarning = document.getElementById('parakeet-active-warning');
+  const operationError = document.getElementById('parakeet-operation-error');
+  const progress = document.getElementById('parakeet-progress');
+  const progressTrack = document.getElementById('parakeet-progress-track');
+  const progressBar = document.getElementById('parakeet-progress-bar');
+  const progressText = document.getElementById('parakeet-progress-text');
+  const downloadSize = document.getElementById('parakeet-download-size');
+  if (!whisperCard || !parakeetCard || !parakeetStatusText) return;
+
+  const preferences = transcriptionEnginePreferences;
+  const whisper = preferences.whisper || {};
+  const activeEngine = preferences.activeEngine;
+  const view = buildParakeetSettingsView({
+    status: parakeetEngineStatus,
+    activeEngine,
+    operation: parakeetEngineOperation,
+    progress: parakeetSetupProgress,
+    error: parakeetEngineOperationError,
+    formatBytes,
+  });
+
+  whisperCard.classList.toggle('is-active', activeEngine === 'whisper');
+  parakeetCard.classList.toggle('is-active', activeEngine === 'parakeet');
+  if (activeBadge) {
+    activeBadge.textContent = view.activeUnavailable
+      ? `${activeEngine === 'parakeet' ? 'Parakeet' : 'Whisper'} selected · unavailable`
+      : `${activeEngine === 'parakeet' ? 'Parakeet' : 'Whisper'} active`;
+    activeBadge.classList.toggle('enabled', !view.activeUnavailable);
+    activeBadge.classList.toggle('disabled', view.activeUnavailable);
+  }
+  if (whisperBadge) {
+    whisperBadge.textContent = activeEngine === 'whisper' ? 'In use' : 'Available';
+    whisperBadge.classList.toggle('enabled', activeEngine === 'whisper');
+    whisperBadge.classList.toggle('disabled', activeEngine !== 'whisper');
+  }
+  if (whisperSummary) {
+    const storedLanguageName = [...languageSelect.options]
+      .find((option) => option.value === whisper.language)?.textContent || 'Choose language';
+    const storedModelName = [...modelSelect.options]
+      .find((option) => option.value === whisper.modelSize)?.textContent || 'Small';
+    whisperSummary.textContent = `${storedLanguageName} · ${storedModelName}`;
+  }
+
+  if (parakeetBadge) {
+    const isBusy = ACTIVE_PARAKEET_UI_STATES.has(view.state);
+    parakeetBadge.textContent = activeEngine === 'parakeet' && view.activeUnavailable
+      ? 'Selected · unavailable'
+      : (activeEngine === 'parakeet' && view.state === 'ready' ? 'In use' : view.statusLabel);
+    parakeetBadge.classList.remove('enabled', 'disabled', 'installing');
+    parakeetBadge.classList.add(isBusy ? 'installing' : (view.state === 'ready' ? 'enabled' : 'disabled'));
+  }
+
+  parakeetStatusText.textContent = view.statusText;
+  if (parakeetActiveWarning) parakeetActiveWarning.hidden = !view.activeUnavailable;
+  if (operationError) {
+    operationError.textContent = parakeetEngineOperationError;
+    operationError.hidden = !parakeetEngineOperationError;
+  }
+
+  const showProgress = ACTIVE_PARAKEET_UI_STATES.has(view.state) || view.state === 'removing';
+  if (progress) progress.hidden = !showProgress;
+  if (progressBar) {
+    progressBar.classList.toggle('is-indeterminate', view.progressPercent == null);
+    progressBar.style.width = view.progressPercent == null ? '28%' : `${view.progressPercent}%`;
+  }
+  if (progressTrack) {
+    if (view.progressPercent == null) {
+      progressTrack.removeAttribute('aria-valuenow');
+    } else {
+      progressTrack.setAttribute('aria-valuenow', String(view.progressPercent));
+    }
+  }
+  if (progressText) progressText.textContent = view.progressText;
+
+  if (downloadSize) {
+    downloadSize.hidden = view.state !== 'not-installed' || view.downloadBytes == null;
+    downloadSize.textContent = view.downloadBytes == null
+      ? ''
+      : `Model and runtime download: ${formatBytes(view.downloadBytes)} total.`;
+  }
+
+  const actions = new Set(view.actions);
+  const setActionVisible = (id, key) => {
+    const button = document.getElementById(id);
+    if (!button) return;
+    button.hidden = !actions.has(key);
+    button.disabled = key === 'cancel'
+      ? parakeetSetupCancelRequested
+      : parakeetEngineSettingsBusy;
+  };
+  setActionVisible('use-parakeet-engine-btn', 'use-parakeet');
+  setActionVisible('parakeet-setup-btn', 'setup');
+  setActionVisible('parakeet-cancel-btn', 'cancel');
+  setActionVisible('parakeet-recheck-btn', 'recheck');
+  setActionVisible('parakeet-validate-btn', 'validate');
+  setActionVisible('parakeet-repair-btn', 'repair');
+  setActionVisible('parakeet-remove-btn', 'remove');
+  setActionVisible('use-whisper-engine-btn', 'use-whisper');
+  const cancelButton = document.getElementById('parakeet-cancel-btn');
+  if (cancelButton) {
+    cancelButton.textContent = parakeetSetupCancelRequested ? 'Cancelling…' : 'Cancel';
+  }
+  const repairButton = document.getElementById('parakeet-repair-btn');
+  if (repairButton) repairButton.textContent = 'Repair Parakeet';
+  const useWhisperButton = document.getElementById('use-whisper-engine-btn');
+  if (useWhisperButton) useWhisperButton.disabled = parakeetEngineSettingsBusy;
+}
+
+const ACTIVE_PARAKEET_UI_STATES = new Set([
+  'downloading', 'verifying', 'waiting-for-validation', 'validating',
+]);
+
+async function refreshTranscriptionEngineStatus() {
+  if (parakeetEngineSettingsBusy) return parakeetEngineStatus;
+  parakeetEngineStatus = null;
+  parakeetEngineOperationError = '';
+  renderTranscriptionEngineSettings();
+  try {
+    if (typeof window.electronAPI.getTranscriptionEngineStatus !== 'function') {
+      throw new Error('Parakeet status is unavailable in this version.');
+    }
+    parakeetEngineStatus = await window.electronAPI.getTranscriptionEngineStatus({ engine: 'parakeet' });
+  } catch (error) {
+    parakeetEngineStatus = { status: 'unknown' };
+    parakeetEngineOperationError = error.message || 'Could not check Parakeet status.';
+  }
+  renderTranscriptionEngineSettings();
+  return parakeetEngineStatus;
+}
+
+async function sendParakeetSetupCancellation() {
+  if (!parakeetSetupOperationId || parakeetSetupCancelSent) return;
+  parakeetSetupCancelSent = true;
+  try {
+    await window.electronAPI.cancelTranscriptionEngineSetup(
+      buildSetupCancellationOptions(parakeetSetupOperationId),
+    );
+  } catch (error) {
+    parakeetEngineOperationError = error.message || 'Could not cancel Parakeet setup.';
+    renderTranscriptionEngineSettings();
+  }
+}
+
+function handleParakeetSetupProgress(event) {
+  if (!event || !parakeetEngineSettingsBusy
+      || !['install', 'repair', 'validate'].includes(parakeetEngineOperation)) {
+    return;
+  }
+  const operationId = String(event.operationId || '');
+  if (parakeetSetupOperationId && operationId && operationId !== parakeetSetupOperationId) return;
+  if (operationId) parakeetSetupOperationId = operationId;
+  parakeetSetupProgress = {
+    phase: event.phase,
+    downloadedBytes: event.downloadedBytes,
+    totalBytes: event.totalBytes,
+  };
+  if (parakeetSetupCancelRequested) void sendParakeetSetupCancellation();
+  renderTranscriptionEngineSettings();
+}
+
+async function setupParakeetEngine(operation = 'install') {
+  if (parakeetEngineSettingsBusy) return;
+  parakeetEngineSettingsBusy = true;
+  parakeetEngineOperation = operation === 'repair' ? 'repair' : 'install';
+  parakeetSetupProgress = null;
+  parakeetSetupOperationId = null;
+  parakeetSetupCancelRequested = false;
+  parakeetSetupCancelSent = false;
+  parakeetEngineOperationError = '';
+  renderTranscriptionEngineSettings();
+  let setupResult = null;
+  try {
+    setupResult = await window.electronAPI.setupTranscriptionEngine({
+      engine: 'parakeet',
+      operation: parakeetEngineOperation,
+    });
+    if (setupResult && setupResult.status) parakeetEngineStatus = setupResult;
+    if (setupResult && setupResult.ok === false
+        && setupResult.code !== 'PARAKEET_SETUP_CANCELLED'
+        && setupResult.code !== 'AI_ADDON_SETUP_CANCELLED') {
+      parakeetEngineOperationError = setupResult.message || 'Parakeet setup did not finish.';
+    } else if (setupResult && setupResult.status === 'ready' && !parakeetSetupCancelRequested) {
+      addLog('Parakeet is ready. Choose Use Parakeet when you want to activate it.');
+    }
+  } catch (error) {
+    parakeetEngineOperationError = error.message || 'Parakeet setup failed.';
+  } finally {
+    parakeetEngineSettingsBusy = false;
+    parakeetEngineOperation = null;
+    parakeetSetupProgress = null;
+    parakeetSetupOperationId = null;
+    parakeetSetupCancelRequested = false;
+    parakeetSetupCancelSent = false;
+    const operationError = parakeetEngineOperationError;
+    await refreshTranscriptionEngineStatus();
+    parakeetEngineOperationError = operationError;
+    renderTranscriptionEngineSettings();
+  }
+}
+
+async function cancelParakeetSetup() {
+  if (!parakeetEngineSettingsBusy
+      || !['install', 'repair', 'validate'].includes(parakeetEngineOperation)) {
+    return;
+  }
+  parakeetSetupCancelRequested = true;
+  renderTranscriptionEngineSettings();
+  await sendParakeetSetupCancellation();
+}
+
+async function validateParakeetEngine() {
+  if (parakeetEngineSettingsBusy) return;
+  parakeetEngineSettingsBusy = true;
+  parakeetEngineOperation = 'validate';
+  parakeetSetupProgress = null;
+  parakeetSetupOperationId = null;
+  parakeetSetupCancelRequested = false;
+  parakeetSetupCancelSent = false;
+  parakeetEngineOperationError = '';
+  renderTranscriptionEngineSettings();
+  try {
+    const result = await window.electronAPI.validateTranscriptionEngine({ engine: 'parakeet' });
+    if (result && result.status) parakeetEngineStatus = result;
+    if (result && result.ok === false
+        && result.code !== 'AI_ADDON_SETUP_CANCELLED'
+        && result.code !== 'PARAKEET_SETUP_CANCELLED') {
+      parakeetEngineOperationError = result.message || 'Parakeet validation failed.';
+    }
+  } catch (error) {
+    parakeetEngineOperationError = error.message || 'Parakeet validation failed.';
+  } finally {
+    parakeetEngineSettingsBusy = false;
+    parakeetEngineOperation = null;
+    parakeetSetupProgress = null;
+    parakeetSetupOperationId = null;
+    parakeetSetupCancelRequested = false;
+    parakeetSetupCancelSent = false;
+    const operationError = parakeetEngineOperationError;
+    await refreshTranscriptionEngineStatus();
+    parakeetEngineOperationError = operationError;
+    renderTranscriptionEngineSettings();
+  }
+}
+
+async function removeParakeetEngine() {
+  if (parakeetEngineSettingsBusy) return;
+  const confirmed = confirm(
+    'Remove the Parakeet model and GPU runtime from this device? Existing recordings and Whisper models will be kept. If Parakeet is active, it stays selected until you choose Use Whisper.',
+  );
+  if (!confirmed) return;
+
+  parakeetEngineSettingsBusy = true;
+  parakeetEngineOperation = 'remove';
+  parakeetEngineOperationError = '';
+  renderTranscriptionEngineSettings();
+  try {
+    const result = await window.electronAPI.removeTranscriptionEngine({ engine: 'parakeet' });
+    if (result && result.status) parakeetEngineStatus = result;
+    if (result && result.ok === false) {
+      parakeetEngineOperationError = result.message || 'Parakeet could not be removed.';
+    } else {
+      addLog('Parakeet was removed. The active engine preference was left unchanged.');
+    }
+  } catch (error) {
+    parakeetEngineOperationError = error.message || 'Parakeet could not be removed.';
+  } finally {
+    parakeetEngineSettingsBusy = false;
+    parakeetEngineOperation = null;
+    const operationError = parakeetEngineOperationError;
+    await refreshTranscriptionEngineStatus();
+    parakeetEngineOperationError = operationError;
+    renderTranscriptionEngineSettings();
+  }
+}
+
+function activateTranscriptionEngine(engine) {
+  if (engine === 'parakeet' && parakeetEngineStatus?.status !== 'ready') return;
+  if (engine !== 'whisper' && engine !== 'parakeet') return;
+  persistTranscriptionEnginePreferences({ activeEngine: engine });
+  addLog(`${engine === 'parakeet' ? 'Parakeet' : 'Whisper'} selected for future recordings.`);
+}
+
+function setupTranscriptionEngineSettings() {
+  if (transcriptionEngineSettingsListenersBound) return;
+  transcriptionEngineSettingsListenersBound = true;
+  document.getElementById('use-whisper-engine-btn')?.addEventListener('click', () => {
+    activateTranscriptionEngine('whisper');
+  });
+  document.getElementById('use-parakeet-engine-btn')?.addEventListener('click', () => {
+    activateTranscriptionEngine('parakeet');
+  });
+  document.getElementById('parakeet-setup-btn')?.addEventListener('click', () => {
+    void setupParakeetEngine('install');
+  });
+  document.getElementById('parakeet-repair-btn')?.addEventListener('click', () => {
+    void setupParakeetEngine('repair');
+  });
+  document.getElementById('parakeet-cancel-btn')?.addEventListener('click', () => {
+    void cancelParakeetSetup();
+  });
+  document.getElementById('parakeet-recheck-btn')?.addEventListener('click', () => {
+    void refreshTranscriptionEngineStatus();
+  });
+  document.getElementById('parakeet-validate-btn')?.addEventListener('click', () => {
+    void validateParakeetEngine();
+  });
+  document.getElementById('parakeet-remove-btn')?.addEventListener('click', () => {
+    void removeParakeetEngine();
+  });
+  if (typeof window.electronAPI.onTranscriptionEngineSetupProgress === 'function') {
+    registerCleanup(window.electronAPI.onTranscriptionEngineSetupProgress(handleParakeetSetupProgress));
+  }
+}
+
+// ============================================================================
 // Settings Tab - GPU Acceleration
 // ============================================================================
 
@@ -5933,6 +6506,9 @@ async function initSettingsTabOnce() {
   registerCleanup(window.electronAPI.onGPUInstallProgress((data) => {
     appendGPULog(data);
   }));
+
+  setupTranscriptionEngineSettings();
+  await refreshTranscriptionEngineStatus();
 
   setupAiAddonSettingsListeners();
   await refreshAiAddonSettings();

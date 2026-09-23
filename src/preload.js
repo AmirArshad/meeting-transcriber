@@ -84,7 +84,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Transcription
   transcribeAudio: (options) => ipcRenderer.invoke('transcribe-audio', options),
-  retryTranscription: (options) => ipcRenderer.invoke('retry-transcription', options),
+  retryTranscription: (options = {}) => ipcRenderer.invoke('retry-transcription', {
+    meetingId: options.meetingId,
+    ...(options.transcriptionSelection
+      ? { transcriptionSelection: options.transcriptionSelection }
+      : {}),
+  }),
   finalizeRecordingTranscription: (options = {}) => ipcRenderer.invoke('finalize-recording-transcription', {
     ...options,
     transcriptionSelection: options.transcriptionSelection || null,

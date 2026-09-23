@@ -3,9 +3,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('crypto');
+const { EventEmitter } = require('node:events');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { createAsyncActionQueue } = require('../../src/main/ai-compute-queue');
 
 const {
   getStatus,
@@ -16,6 +18,7 @@ const {
 } = require('../../src/main/parakeet-setup');
 const {
   buildParakeetChildEnv,
+  launchParakeetBootstrap,
   terminateLateRuntimeChild,
   windowsPthLines,
 } = require('../../src/main/parakeet-runtime');
@@ -207,6 +210,205 @@ test('cancel before promotion removes staging and leaves the previous generation
   assert.equal(fs.existsSync(stagingDir(root, 'op-2')), false);
 });
 
+test('cancel during staged device validation preserves the previous Parakeet generation', async () => {
+  const root = userData();
+  const lock = fixtureLock();
+  await setupParakeet(setupOptions(root, lock));
+  const runtime = path.join(root, 'ai-addons', 'runtimes', 'parakeet', 'parakeet-onnx-linux-cuda-v1', lock.lockDigest);
+  const deviceRecordPath = path.join(runtime, 'device.json');
+  const previousDeviceRecord = fs.readFileSync(deviceRecordPath);
+  const controller = new AbortController();
+
+  await assert.rejects(
+    setupParakeet(setupOptions(root, lock, {
+      operation: 'repair',
+      operationId: 'op-cancel-validation',
+      cancelSignal: controller.signal,
+      probeDevice: async ({ cancelSignal }) => {
+        assert.equal(cancelSignal, controller.signal);
+        controller.abort();
+        return { deviceAvailable: true, device: 'cuda' };
+      },
+    })),
+    (error) => error.code === 'AI_ADDON_SETUP_CANCELLED',
+  );
+
+  assert.deepEqual(fs.readFileSync(deviceRecordPath), previousDeviceRecord);
+  assert.equal(getStatus({ userDataDir: root, lock, adapterId: 'parakeet-onnx-linux-cuda-v1' }).status, 'ready');
+  assert.equal(fs.existsSync(stagingDir(root, 'op-cancel-validation')), false);
+});
+
+test('repair waits for the active transcription resource slot before probing or promoting', async () => {
+  const root = userData();
+  const lock = fixtureLock();
+  await setupParakeet(setupOptions(root, lock));
+
+  const resourceQueue = createAsyncActionQueue();
+  let transcriptionActive = false;
+  let releaseTranscription;
+  let markTranscriptionStarted;
+  const transcriptionStarted = new Promise((resolve) => { markTranscriptionStarted = resolve; });
+  const transcriptionHold = new Promise((resolve) => { releaseTranscription = resolve; });
+  const activeTranscription = resourceQueue.enqueue(async () => {
+    transcriptionActive = true;
+    markTranscriptionStarted();
+    await transcriptionHold;
+    transcriptionActive = false;
+  });
+  await transcriptionStarted;
+
+  let markAdmissionReached;
+  const admissionReached = new Promise((resolve) => { markAdmissionReached = resolve; });
+  let probeCalls = 0;
+  const repair = setupParakeet(setupOptions(root, lock, {
+    operation: 'repair',
+    operationId: 'op-resource-admission',
+    runValidationAndPromotion: ({ action }) => {
+      markAdmissionReached();
+      return resourceQueue.enqueue(action);
+    },
+    probeDevice: async () => {
+      probeCalls += 1;
+      assert.equal(transcriptionActive, false, 'the Parakeet GPU probe must wait for transcription');
+      return { deviceAvailable: true, device: 'cuda' };
+    },
+  }));
+
+  let admissionWasRequested = false;
+  await Promise.race([
+    admissionReached.then(() => { admissionWasRequested = true; }),
+    new Promise((resolve) => setTimeout(resolve, 50)),
+  ]);
+  const probesWhileTranscribing = probeCalls;
+  const remainedReadyWhileWaiting = getStatus({
+    userDataDir: root,
+    lock,
+    adapterId: 'parakeet-onnx-linux-cuda-v1',
+    device: 'cuda',
+  }).status === 'ready';
+
+  releaseTranscription();
+  await activeTranscription;
+  const result = await repair;
+
+  assert.equal(admissionWasRequested, true, 'repair must enter the shared resource admission');
+  assert.equal(probesWhileTranscribing, 0);
+  assert.equal(remainedReadyWhileWaiting, true);
+  assert.equal(result.status, 'ready');
+  assert.equal(probeCalls, 1);
+});
+
+test('failed staged GPU probe rejects repair and preserves the previous ready generation', async () => {
+  const root = userData();
+  const lock = fixtureLock();
+  await setupParakeet(setupOptions(root, lock));
+  const runtime = path.join(root, 'ai-addons', 'runtimes', 'parakeet', 'parakeet-onnx-linux-cuda-v1', lock.lockDigest);
+  const deviceRecordPath = path.join(runtime, 'device.json');
+  const previousDeviceRecord = fs.readFileSync(deviceRecordPath);
+
+  await assert.rejects(
+    setupParakeet(setupOptions(root, lock, {
+      operation: 'repair',
+      operationId: 'op-failed-probe',
+      probeDevice: async () => ({ deviceAvailable: false, device: 'cpu' }),
+    })),
+    (error) => error.code === 'PARAKEET_GPU_UNAVAILABLE',
+  );
+
+  assert.deepEqual(fs.readFileSync(deviceRecordPath), previousDeviceRecord);
+  assert.equal(getStatus({
+    userDataDir: root,
+    lock,
+    adapterId: 'parakeet-onnx-linux-cuda-v1',
+    device: 'cuda',
+  }).status, 'ready');
+  assert.equal(fs.existsSync(stagingDir(root, 'op-failed-probe')), false);
+});
+
+test('setup rechecks quit authority after probing and before promoting a generation', async () => {
+  const root = userData();
+  const lock = fixtureLock();
+  await setupParakeet(setupOptions(root, lock));
+  const runtime = path.join(root, 'ai-addons', 'runtimes', 'parakeet', 'parakeet-onnx-linux-cuda-v1', lock.lockDigest);
+  const deviceRecordPath = path.join(runtime, 'device.json');
+  const previousDeviceRecord = fs.readFileSync(deviceRecordPath);
+  let quitting = false;
+
+  await assert.rejects(
+    setupParakeet(setupOptions(root, lock, {
+      operation: 'repair',
+      operationId: 'op-quit-before-promotion',
+      isQuitCommitted: () => quitting,
+      probeDevice: async () => {
+        quitting = true;
+        return { deviceAvailable: true, device: 'cuda' };
+      },
+    })),
+    (error) => error.code === 'QUIT_IN_PROGRESS',
+  );
+
+  assert.deepEqual(fs.readFileSync(deviceRecordPath), previousDeviceRecord);
+  assert.equal(getStatus({
+    userDataDir: root,
+    lock,
+    adapterId: 'parakeet-onnx-linux-cuda-v1',
+    device: 'cuda',
+  }).status, 'ready');
+  assert.equal(fs.existsSync(stagingDir(root, 'op-quit-before-promotion')), false);
+});
+
+test('setup keeps staging and operation pending until a canceled bootstrap child closes', async () => {
+  const root = userData();
+  const lock = fixtureLock();
+  const controller = new AbortController();
+  let child;
+  let settleChildReady;
+  const childReady = new Promise((resolve) => { settleChildReady = resolve; });
+  let setupSettled = false;
+  const setup = setupParakeet(setupOptions(root, lock, {
+    operationId: 'op-cancel-child-settle',
+    cancelSignal: controller.signal,
+    materializeRuntime: async ({ cancelSignal }) => {
+      child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.signals = [];
+      child.kill = (signal) => {
+        child.signals.push(signal);
+        return true;
+      };
+      settleChildReady();
+      await launchParakeetBootstrap({
+        spawnParakeetPython: () => child,
+        args: ['--extract-wheel'],
+        runtimeDir: '/tmp/parakeet-stage',
+        cwd: '/tmp/backend',
+        cancelSignal,
+        cancelGraceMs: 10,
+      });
+    },
+  }));
+  const observedSetup = setup.then(
+    () => { setupSettled = true; return null; },
+    (error) => { setupSettled = true; return error; },
+  );
+  await childReady;
+  controller.abort();
+  await new Promise((resolve) => setTimeout(resolve, 25));
+
+  const remainedPendingUntilClose = !setupSettled;
+  const stageRemainedOwned = fs.existsSync(stagingDir(root, 'op-cancel-child-settle'));
+  const terminationSignals = [...child.signals];
+  child.emit('close', null, 'SIGKILL');
+  const error = await observedSetup;
+
+  assert.equal(remainedPendingUntilClose, true);
+  assert.equal(stageRemainedOwned, true);
+  assert.deepEqual(terminationSignals, ['SIGTERM', 'SIGKILL']);
+  assert.equal(error.code, 'AI_ADDON_SETUP_CANCELLED');
+  assert.equal(fs.existsSync(stagingDir(root, 'op-cancel-child-settle')), false);
+});
+
 test('a restarted setup discards a stale staging directory', async () => {
   const root = userData();
   const lock = fixtureLock();
@@ -282,6 +484,38 @@ test('validate uses the lock hash and a device mismatch does not delete artifact
     lock,
     adapterId: 'parakeet-onnx-linux-cuda-v1',
   }).status, 'device-unavailable');
+});
+
+test('validation cancellation stops before probing and preserves installed artifacts', async () => {
+  const root = userData();
+  const lock = fixtureLock();
+  await setupParakeet(setupOptions(root, lock));
+  const controller = new AbortController();
+  controller.abort();
+  let probed = false;
+
+  await assert.rejects(
+    validateParakeet({
+      userDataDir: root,
+      lock,
+      adapterId: 'parakeet-onnx-linux-cuda-v1',
+      device: 'cuda',
+      cancelSignal: controller.signal,
+      probeDevice: async () => {
+        probed = true;
+        return { deviceAvailable: true, device: 'cuda' };
+      },
+    }),
+    (error) => error.code === 'AI_ADDON_SETUP_CANCELLED',
+  );
+
+  assert.equal(probed, false);
+  assert.equal(getStatus({
+    userDataDir: root,
+    lock,
+    adapterId: 'parakeet-onnx-linux-cuda-v1',
+    device: 'cuda',
+  }).status, 'ready');
 });
 
 test('removal waits for pending work and does not delete recordings', async () => {

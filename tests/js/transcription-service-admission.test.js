@@ -7,6 +7,7 @@ const os = require('node:os');
 const { EventEmitter } = require('node:events');
 
 const { createTranscriptionService } = require('../../src/main/transcription-service');
+const { createAsyncActionQueue } = require('../../src/main/ai-compute-queue');
 const { runDiarizationOnlyProcess } = require('../../src/main-process/transcription-runtime-helpers');
 const { createMeetingManagerClient } = require('../../src/main/meeting-manager-client');
 const {
@@ -800,6 +801,109 @@ function registerHandlers(harness) {
   return handlers;
 }
 
+test('standalone Parakeet validation waits for the transcription resource slot', async () => {
+  const resourceQueue = createAsyncActionQueue();
+  let transcriptionActive = false;
+  let releaseTranscription;
+  let markTranscriptionStarted;
+  const transcriptionStarted = new Promise((resolve) => { markTranscriptionStarted = resolve; });
+  const transcriptionHold = new Promise((resolve) => { releaseTranscription = resolve; });
+  const activeTranscription = resourceQueue.enqueue(async () => {
+    transcriptionActive = true;
+    markTranscriptionStarted();
+    await transcriptionHold;
+    transcriptionActive = false;
+  });
+  await transcriptionStarted;
+
+  let validationCalls = 0;
+  const harness = createServiceHarness({
+    createAbortableComputeAction: ({ cancelSignal, action }) => resourceQueue.enqueue(async () => {
+      if (cancelSignal && cancelSignal.aborted) {
+        throw Object.assign(new Error('Canceled'), { code: 'AI_ADDON_SETUP_CANCELLED' });
+      }
+      return action();
+    }),
+    validateParakeetImplementation: async () => {
+      assert.equal(transcriptionActive, false, 'the Parakeet probe must wait for transcription');
+      validationCalls += 1;
+      return { ok: true, engine: 'parakeet', status: 'ready' };
+    },
+  });
+  const handlers = registerHandlers(harness);
+  const validation = handlers['validate-transcription-engine']({}, { engine: 'parakeet' });
+  let validationSettledWhileTranscribing = false;
+  validation.then(() => { validationSettledWhileTranscribing = true; });
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  const callsWhileTranscribing = validationCalls;
+  const settledWhileTranscribing = validationSettledWhileTranscribing;
+
+  releaseTranscription();
+  await activeTranscription;
+  const result = await validation;
+
+  assert.equal(callsWhileTranscribing, 0);
+  assert.equal(settledWhileTranscribing, false);
+  assert.equal(validationCalls, 1);
+  assert.equal(result.status, 'ready');
+});
+
+test('Parakeet repair admission holds promotion until an active transcription releases the resource slot', async () => {
+  const resourceQueue = createAsyncActionQueue();
+  let transcriptionActive = false;
+  let releaseTranscription;
+  let markTranscriptionStarted;
+  const transcriptionStarted = new Promise((resolve) => { markTranscriptionStarted = resolve; });
+  const transcriptionHold = new Promise((resolve) => { releaseTranscription = resolve; });
+  const activeTranscription = resourceQueue.enqueue(async () => {
+    transcriptionActive = true;
+    markTranscriptionStarted();
+    await transcriptionHold;
+    transcriptionActive = false;
+  });
+  await transcriptionStarted;
+
+  let staged = false;
+  let promoted = false;
+  const harness = createServiceHarness({
+    createAbortableComputeAction: ({ cancelSignal, action }) => resourceQueue.enqueue(async () => {
+      if (cancelSignal && cancelSignal.aborted) {
+        throw Object.assign(new Error('Canceled'), { code: 'AI_ADDON_SETUP_CANCELLED' });
+      }
+      return action();
+    }),
+    setupParakeetImplementation: async ({ runValidationAndPromotion }) => {
+      staged = true;
+      return runValidationAndPromotion({
+        action: async () => {
+          assert.equal(transcriptionActive, false, 'staged GPU validation must wait for transcription');
+          promoted = true;
+          return { ok: true, engine: 'parakeet', status: 'ready' };
+        },
+      });
+    },
+  });
+  const handlers = registerHandlers(harness);
+  const setup = handlers['setup-transcription-engine']({}, {
+    engine: 'parakeet', operation: 'repair',
+  });
+  let setupSettledWhileTranscribing = false;
+  setup.then(() => { setupSettledWhileTranscribing = true; });
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  const promotedWhileTranscribing = promoted;
+  const settledWhileTranscribing = setupSettledWhileTranscribing;
+
+  releaseTranscription();
+  await activeTranscription;
+  const result = await setup;
+
+  assert.equal(staged, true);
+  assert.equal(promotedWhileTranscribing, false);
+  assert.equal(settledWhileTranscribing, false);
+  assert.equal(promoted, true);
+  assert.equal(result.status, 'ready');
+});
+
 test('Slice A: finalize rejects unsupported new selections before persistence', async () => {
   for (const [input, code] of SLICE_A_REJECTIONS) {
     const counts = { writes: 0, persists: 0 };
@@ -978,6 +1082,35 @@ test('ordinary retry ignores caller settings and stages a new attempt with the s
   assert.equal(parakeetHarness.stagedRequests[0].adapterId, savedParakeetRequest.adapterId);
   assert.equal(parakeetHarness.stagedRequests[0].artifactRevision, savedParakeetRequest.artifactRevision);
   assert.notEqual(parakeetHarness.stagedRequests[0].attemptId, savedParakeetRequest.attemptId);
+});
+
+test('explicit Whisper retry stages the requested Whisper selection without changing the saved engine preference', async () => {
+  const { resolveTranscriptionRequest } = require('../../src/main/transcription-engine-resolver');
+  const resolvedParakeet = resolveTranscriptionRequest({ engine: 'parakeet', language: 'en' }, {
+    platform: process.platform, arch: process.arch, osRelease: '24.0.0',
+  });
+  assert.equal(resolvedParakeet.ok, true);
+  const savedParakeetRequest = {
+    ...resolvedParakeet.request,
+    attemptId: '00000000-0000-4000-8000-000000000003',
+  };
+  const meeting = { ...SLICE_A_LEGACY_MEETING, transcriptionRequest: savedParakeetRequest };
+  const harness = createRetryHarness(meeting);
+  const handlers = registerHandlers(harness);
+
+  const retry = handlers['retry-transcription']({}, {
+    meetingId: meeting.id,
+    transcriptionSelection: { engine: 'whisper', language: 'fr', modelSize: 'medium' },
+  });
+  await settleAdmitted(harness, retry);
+
+  assert.equal(harness.stagedRequests.length, 1);
+  assert.equal(harness.stagedRequests[0].engine, 'whisper');
+  assert.equal(harness.stagedRequests[0].language, 'fr');
+  assert.equal(harness.stagedRequests[0].modelSize, 'medium');
+  assert.notEqual(harness.stagedRequests[0].attemptId, savedParakeetRequest.attemptId);
+  assert.equal(meeting.transcriptionRequest.engine, 'parakeet');
+  assert.equal(meeting.transcriptionRequest.attemptId, savedParakeetRequest.attemptId);
 });
 
 test('queued Parakeet request is snapshotted before waiting for the compute queue', async () => {

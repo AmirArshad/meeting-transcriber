@@ -30,6 +30,12 @@ function throwIfCanceled(cancelSignal) {
   }
 }
 
+function throwIfQuitCommitted(isQuitCommitted, operation) {
+  if (typeof isQuitCommitted === 'function' && isQuitCommitted()) {
+    throw fail('QUIT_IN_PROGRESS', `Parakeet ${operation} was skipped because the app is quitting.`);
+  }
+}
+
 function modelDir(userDataDir, revision) {
   return path.join(userDataDir, 'ai-addons', 'models', 'transcription', 'parakeet', revision);
 }
@@ -320,7 +326,7 @@ async function receiveDownload({
   if (stat.size !== Number(file.sizeBytes)) {
     throw fail('PARAKEET_ARTIFACT_INVALID', 'Parakeet download was truncated.', 'truncated');
   }
-  const actual = await hashFileSha256(partial, fsModule);
+  const actual = await hashFileSha256(partial, fsModule, cancelSignal);
   if (actual !== file.sha256) {
     throw fail('PARAKEET_ARTIFACT_INVALID', 'Parakeet download checksum does not match the pinned lock.', 'checksum');
   }
@@ -373,15 +379,22 @@ async function recordDeviceEvidence({
   expectedDevice,
   probeDevice,
   fsModule,
+  cancelSignal = null,
+  isQuitCommitted = () => false,
+  operation = 'setup',
 }) {
+  throwIfCanceled(cancelSignal);
+  throwIfQuitCommitted(isQuitCommitted, operation);
   let probed = null;
   if (typeof probeDevice === 'function') {
     try {
-      probed = await probeDevice({ runtimeDir: runtimeDestination, expectedDevice });
+      probed = await probeDevice({ runtimeDir: runtimeDestination, expectedDevice, cancelSignal });
     } catch (error) {
       probed = null;
     }
   }
+  throwIfCanceled(cancelSignal);
+  throwIfQuitCommitted(isQuitCommitted, operation);
   const reported = probed && typeof probed.device === 'string' ? probed.device : 'cpu';
   const available = Boolean(
     probed
@@ -411,6 +424,8 @@ async function setupParakeet({
   lock = null,
   adapterId = null,
   device = null,
+  isQuitCommitted = () => false,
+  runValidationAndPromotion = ({ action }) => action(),
 } = {}) {
   if (operation !== 'install' && operation !== 'repair') {
     throw fail('PARAKEET_SELECTION_UNAVAILABLE', 'Parakeet setup operation must be install or repair.');
@@ -425,19 +440,26 @@ async function setupParakeet({
     throw fail(target.code || 'PARAKEET_SELECTION_UNAVAILABLE', target.message);
   }
   const stage = stagingDir(userDataDir, operationId);
-  removeTree(stage, fsModule);
-  fsModule.mkdirSync(stage, { recursive: true });
   const records = componentRecords(target.lock);
   const modelDestination = modelDir(userDataDir, target.artifactRevision);
   const runtimeDestination = runtimeDir(userDataDir, target.adapterId, target.lock.lockDigest);
   const vadDestination = records.vad.length ? vadDir(userDataDir, target.lock.vad.revision) : null;
   const expectedDevice = target.device === 'metal' ? 'metal' : 'cuda';
+  const assertSetupMayProceed = () => {
+    throwIfCanceled(cancelSignal);
+    if (isQuitCommitted()) {
+      throw fail('QUIT_IN_PROGRESS', 'Parakeet setup was skipped because the app is quitting.');
+    }
+  };
+  assertSetupMayProceed();
   try {
+    removeTree(stage, fsModule);
+    fsModule.mkdirSync(stage, { recursive: true });
     const plan = downloadPlan(target.lock);
     let completed = 0;
     const total = downloadTotalBytes(target.lock);
     for (const file of plan) {
-      throwIfCanceled(cancelSignal);
+      assertSetupMayProceed();
       emitProgress({
         operationId,
         phase: 'downloading',
@@ -451,9 +473,10 @@ async function setupParakeet({
         cancelSignal,
         fsModule,
       });
+      assertSetupMayProceed();
       completed += Number(file.sizeBytes) || 0;
     }
-    throwIfCanceled(cancelSignal);
+    assertSetupMayProceed();
     emitProgress({
       operationId,
       phase: 'verifying',
@@ -471,10 +494,10 @@ async function setupParakeet({
         cancelSignal,
       });
     }
-    throwIfCanceled(cancelSignal);
+    assertSetupMayProceed();
     verifyRuntimeTree(runtimeStage, target.lock, fsModule);
-    await verifyRuntimeHashes(runtimeStage, target.lock, fsModule);
-    throwIfCanceled(cancelSignal);
+    await verifyRuntimeHashes(runtimeStage, target.lock, fsModule, cancelSignal);
+    assertSetupMayProceed();
     const modelStage = path.join(stage, 'model');
     const vadStage = path.join(stage, 'vad');
     writeInstallRecord(modelStage, records.model.map((file) => file.path), fsModule);
@@ -482,34 +505,68 @@ async function setupParakeet({
       writeInstallRecord(vadStage, records.vad.map((file) => file.path), fsModule);
     }
     writeInstallRecord(runtimeStage, records.runtime.map((file) => file.path), fsModule);
-    throwIfCanceled(cancelSignal);
-    const promoted = [];
-    try {
-      promoted.push(stagePromotion(modelStage, modelDestination, fsModule));
-      if (vadDestination) {
-        promoted.push(stagePromotion(vadStage, vadDestination, fsModule));
-      }
-      promoted.push(stagePromotion(runtimeStage, runtimeDestination, fsModule));
-    } catch (error) {
-      rollbackPromotions(promoted, fsModule);
-      throw error;
-    }
-    commitPromotions(promoted, fsModule);
-    await recordDeviceEvidence({
-      runtimeDir: runtimeDestination,
-      expectedDevice,
-      probeDevice,
-      fsModule,
-    });
-    return getStatus({
-      userDataDir,
-      platform,
-      arch,
-      osRelease,
-      fsModule,
-      lock: target.lock,
-      adapterId: target.adapterId,
-      device: target.device,
+    assertSetupMayProceed();
+
+    return await runValidationAndPromotion({
+      cancelSignal,
+      onWaiting: () => emitProgress({
+        operationId,
+        phase: 'waiting-for-validation',
+        downloadedBytes: total,
+        totalBytes: total,
+      }),
+      action: async () => {
+        assertSetupMayProceed();
+        if (typeof probeDevice !== 'function') {
+          throw fail('PARAKEET_GPU_UNAVAILABLE', 'Parakeet requires its GPU runtime. CPU and Whisper are not substituted.', 'device');
+        }
+        emitProgress({
+          operationId,
+          phase: 'validating',
+          downloadedBytes: total,
+          totalBytes: total,
+        });
+        await recordDeviceEvidence({
+          runtimeDir: runtimeStage,
+          expectedDevice,
+          probeDevice,
+          fsModule,
+          cancelSignal,
+          isQuitCommitted,
+          operation: 'setup',
+        });
+        assertSetupMayProceed();
+        const deviceEvidence = readJson(path.join(runtimeStage, DEVICE_RECORD), fsModule);
+        if (!hasPositiveDeviceEvidence(deviceEvidence, expectedDevice)) {
+          throw fail('PARAKEET_GPU_UNAVAILABLE', 'Parakeet requires its GPU runtime. CPU and Whisper are not substituted.', 'device');
+        }
+
+        // Keep this check adjacent to the synchronous renames: cancellation or
+        // quit can wait during probing, but may not promote a stale operation.
+        assertSetupMayProceed();
+        const promoted = [];
+        try {
+          promoted.push(stagePromotion(modelStage, modelDestination, fsModule));
+          if (vadDestination) {
+            promoted.push(stagePromotion(vadStage, vadDestination, fsModule));
+          }
+          promoted.push(stagePromotion(runtimeStage, runtimeDestination, fsModule));
+        } catch (error) {
+          rollbackPromotions(promoted, fsModule);
+          throw error;
+        }
+        commitPromotions(promoted, fsModule);
+        return getStatus({
+          userDataDir,
+          platform,
+          arch,
+          osRelease,
+          fsModule,
+          lock: target.lock,
+          adapterId: target.adapterId,
+          device: target.device,
+        });
+      },
     });
   } catch (error) {
     removeTree(stage, fsModule);
@@ -529,7 +586,14 @@ async function validateParakeet({
   lock = null,
   adapterId = null,
   device = null,
+  cancelSignal = null,
+  isQuitCommitted = () => false,
 } = {}) {
+  const assertValidationMayProceed = () => {
+    throwIfCanceled(cancelSignal);
+    throwIfQuitCommitted(isQuitCommitted, 'validation');
+  };
+  assertValidationMayProceed();
   const target = resolveTarget({
     platform, arch, osRelease, lock, adapterId, device,
   });
@@ -540,15 +604,19 @@ async function validateParakeet({
   const modelPath = modelDir(userDataDir, target.artifactRevision);
   const runtimePath = runtimeDir(userDataDir, target.adapterId, target.lock.lockDigest);
   const vadPath = records.vad.length ? vadDir(userDataDir, target.lock.vad.revision) : null;
-  await verifyRuntimeHashes(runtimePath, target.lock, fsModule);
+  assertValidationMayProceed();
+  await verifyRuntimeHashes(runtimePath, target.lock, fsModule, cancelSignal);
+  assertValidationMayProceed();
   for (const group of [
     [modelPath, target.lock.model && target.lock.model.files],
     [vadPath, target.lock.vad && target.lock.vad.files],
   ]) {
     const [root, files] = group;
     for (const file of files || []) {
+      assertValidationMayProceed();
       const filePath = path.join(root, ...String(file.path).split('/'));
-      const actual = await hashFileSha256(filePath, fsModule);
+      const actual = await hashFileSha256(filePath, fsModule, cancelSignal);
+      assertValidationMayProceed();
       if (actual !== file.sha256) {
         throw fail('PARAKEET_ARTIFACT_INVALID', 'Parakeet model file hash does not match the pinned lock.', 'checksum');
       }
@@ -558,12 +626,17 @@ async function validateParakeet({
   if (typeof probeDevice !== 'function') {
     throw fail('PARAKEET_GPU_UNAVAILABLE', 'Parakeet requires its GPU runtime. CPU and Whisper are not substituted.', 'device');
   }
+  assertValidationMayProceed();
   await recordDeviceEvidence({
     runtimeDir: runtimePath,
     expectedDevice,
     probeDevice,
     fsModule,
+    cancelSignal,
+    isQuitCommitted,
+    operation: 'validation',
   });
+  assertValidationMayProceed();
   const deviceRecord = readJson(path.join(runtimePath, DEVICE_RECORD), fsModule);
   if (!hasPositiveDeviceEvidence(deviceRecord, expectedDevice)) {
     throw fail('PARAKEET_GPU_UNAVAILABLE', 'Parakeet requires its GPU runtime. CPU and Whisper are not substituted.', 'device');

@@ -7,6 +7,7 @@ const path = require('path');
 
 const LIBRARY_NAME = /\.(?:dll|pyd|dylib|so)(?:\.\d+)*$/i;
 const RUNTIME_METADATA = new Set(['install.json', 'device.json']);
+const DEFAULT_CHILD_CANCEL_GRACE_MS = 1500;
 // -S skips site import for a normal interpreter, and -P omits the process cwd.
 // Neither flag wins when a ._pth file contains "import site": CPython applies
 // that line while building the path and command-line options cannot override it.
@@ -29,15 +30,47 @@ function isLibraryName(fileName) {
   return LIBRARY_NAME.test(String(fileName || ''));
 }
 
-async function hashFileSha256(filePath, fsModule = fs) {
+async function hashFileSha256(filePath, fsModule = fs, cancelSignal = null) {
+  if (cancelSignal && cancelSignal.aborted) {
+    throw fail('AI_ADDON_SETUP_CANCELLED', 'Parakeet setup was canceled.');
+  }
   const readStream = fsModule.createReadStream
     ? fsModule.createReadStream(filePath)
     : fs.createReadStream(filePath);
   return new Promise((resolve, reject) => {
     const hash = crypto.createHash('sha256');
-    readStream.on('data', (chunk) => hash.update(chunk));
-    readStream.on('error', reject);
-    readStream.on('end', () => resolve(hash.digest('hex')));
+    let settled = false;
+    const cleanupAbortListener = () => {
+      if (cancelSignal && typeof cancelSignal.removeEventListener === 'function') {
+        cancelSignal.removeEventListener('abort', onAbort);
+      }
+    };
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      cleanupAbortListener();
+      callback(value);
+    };
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      cleanupAbortListener();
+      try {
+        readStream.destroy();
+      } catch (error) {
+        // The operation is canceled even if the stream has already closed.
+      }
+      reject(fail('AI_ADDON_SETUP_CANCELLED', 'Parakeet setup was canceled.'));
+    };
+    readStream.on('data', (chunk) => {
+      if (!settled) hash.update(chunk);
+    });
+    readStream.on('error', (error) => finish(reject, error));
+    readStream.on('end', () => finish(resolve, hash.digest('hex')));
+    if (cancelSignal && typeof cancelSignal.addEventListener === 'function') {
+      cancelSignal.addEventListener('abort', onAbort, { once: true });
+      if (cancelSignal.aborted) onAbort();
+    }
   });
 }
 
@@ -138,11 +171,14 @@ function verifyRuntimeTree(runtimeDir, lock, fsModule = fs) {
   return expected;
 }
 
-async function verifyRuntimeHashes(runtimeDir, lock, fsModule = fs) {
+async function verifyRuntimeHashes(runtimeDir, lock, fsModule = fs, cancelSignal = null) {
+  if (cancelSignal && cancelSignal.aborted) {
+    throw fail('AI_ADDON_SETUP_CANCELLED', 'Parakeet setup was canceled.');
+  }
   const expected = verifyRuntimeTree(runtimeDir, lock, fsModule);
   for (const record of expected) {
     const filePath = path.join(runtimeDir, ...record.relativePath.split('/'));
-    const actual = await hashFileSha256(filePath, fsModule);
+    const actual = await hashFileSha256(filePath, fsModule, cancelSignal);
     if (actual !== record.sha256) {
       throw fail('PARAKEET_RUNTIME_INVALID', 'Parakeet runtime file hash does not match the pinned lock.');
     }
@@ -532,8 +568,14 @@ function launchParakeetBootstrap({
   runtimeDir,
   cwd,
   registerProcess,
+  cancelSignal = null,
+  cancelGraceMs = DEFAULT_CHILD_CANCEL_GRACE_MS,
 } = {}) {
   return new Promise((resolve, reject) => {
+    if (cancelSignal && cancelSignal.aborted) {
+      reject(fail('AI_ADDON_SETUP_CANCELLED', 'Parakeet setup was canceled.'));
+      return;
+    }
     if (typeof spawnParakeetPython !== 'function') {
       reject(fail('PARAKEET_RUNTIME_INVALID', 'Parakeet requires an isolated Python launch.'));
       return;
@@ -548,6 +590,50 @@ function launchParakeetBootstrap({
     }
     let stdout = '';
     let stderr = '';
+    let settled = false;
+    let cancellationError = null;
+    let childError = null;
+    let escalationTimer = null;
+    const cleanupAbortListener = () => {
+      if (cancelSignal && typeof cancelSignal.removeEventListener === 'function') {
+        cancelSignal.removeEventListener('abort', onAbort);
+      }
+    };
+    const clearEscalationTimer = () => {
+      if (escalationTimer) {
+        clearTimeout(escalationTimer);
+        escalationTimer = null;
+      }
+    };
+    const killChild = (signal) => {
+      if (child.exitCode != null || child.signalCode) return;
+      try {
+        child.kill(signal);
+      } catch (error) {
+        // The child may have exited between the state check and kill().
+      }
+    };
+    const onAbort = () => {
+      if (settled || cancellationError) return;
+      cancellationError = fail('AI_ADDON_SETUP_CANCELLED', 'Parakeet setup was canceled.');
+      cleanupAbortListener();
+      killChild('SIGTERM');
+      if (settled) return;
+      const gracePeriod = Number.isFinite(cancelGraceMs)
+        ? Math.max(0, cancelGraceMs)
+        : DEFAULT_CHILD_CANCEL_GRACE_MS;
+      escalationTimer = setTimeout(() => {
+        escalationTimer = null;
+        if (!settled) killChild('SIGKILL');
+      }, gracePeriod);
+    };
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      cleanupAbortListener();
+      clearEscalationTimer();
+      callback(value);
+    };
     if (child.stdout) {
       child.stdout.on('data', (chunk) => {
         stdout += chunk.toString();
@@ -558,14 +644,31 @@ function launchParakeetBootstrap({
         stderr += chunk.toString();
       });
     }
-    child.on('error', reject);
+    child.on('error', (error) => {
+      // Node emits close after an asynchronous spawn error. Wait for that
+      // settlement boundary before allowing setup to remove its staging tree.
+      childError = error;
+    });
     child.on('close', (code) => {
-      if (code !== 0) {
-        reject(fail('PARAKEET_RUNTIME_INVALID', String(stderr || '').trim() || 'Parakeet bootstrap failed.'));
+      if (settled) return;
+      if (cancellationError) {
+        finish(reject, cancellationError);
         return;
       }
-      resolve(stdout);
+      if (childError) {
+        finish(reject, childError);
+        return;
+      }
+      if (code !== 0) {
+        finish(reject, fail('PARAKEET_RUNTIME_INVALID', String(stderr || '').trim() || 'Parakeet bootstrap failed.'));
+        return;
+      }
+      finish(resolve, stdout);
     });
+    if (cancelSignal && typeof cancelSignal.addEventListener === 'function') {
+      cancelSignal.addEventListener('abort', onAbort, { once: true });
+      if (cancelSignal.aborted) onAbort();
+    }
   });
 }
 

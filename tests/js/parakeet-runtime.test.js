@@ -6,12 +6,14 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('node:child_process');
+const { PassThrough } = require('node:stream');
 
 const { EventEmitter } = require('node:events');
 
 const {
   buildParakeetBootstrapArgs,
   buildParakeetChildEnv,
+  hashFileSha256,
   launchParakeetBootstrap,
   parseDeviceProbeStdout,
   terminateLateRuntimeChild,
@@ -161,6 +163,56 @@ test('production Parakeet setup probes through the isolated launcher', () => {
   assert.equal(source.includes('probeDevice: probeParakeetDevice'), true);
   assert.equal(source.includes('materializeRuntime: materializeParakeetRuntime'), true);
   assert.equal(source.includes("launchParakeet(['--probe-device', expectedDevice]"), true);
+});
+
+test('canceling an isolated setup child escalates termination and waits for close', async () => {
+  const controller = new AbortController();
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.signals = [];
+  child.kill = (signal) => {
+    child.signals.push(signal);
+    return true;
+  };
+
+  const pending = launchParakeetBootstrap({
+    spawnParakeetPython: () => child,
+    args: ['--probe-device', 'cuda'],
+    runtimeDir: '/opt/parakeet-runtime',
+    cwd: '/app/backend',
+    cancelSignal: controller.signal,
+    cancelGraceMs: 10,
+  });
+  let settled = false;
+  const outcome = pending.then(
+    () => { settled = true; return null; },
+    (error) => { settled = true; return error; },
+  );
+  controller.abort();
+  await new Promise((resolve) => setTimeout(resolve, 25));
+
+  assert.deepEqual(child.signals, ['SIGTERM', 'SIGKILL']);
+  assert.equal(settled, false, 'cancellation must wait for the child close event');
+  child.emit('close', null, 'SIGKILL');
+  const error = await outcome;
+  assert.equal(error.code, 'AI_ADDON_SETUP_CANCELLED');
+});
+
+test('canceling an artifact hash closes its stream promptly', async () => {
+  const controller = new AbortController();
+  let stream = null;
+  const pending = hashFileSha256('large-model.safetensors', {
+    createReadStream() {
+      stream = new PassThrough();
+      return stream;
+    },
+  }, controller.signal);
+
+  controller.abort();
+
+  await assert.rejects(pending, (error) => error.code === 'AI_ADDON_SETUP_CANCELLED');
+  assert.equal(stream.destroyed, true);
 });
 
 test('Windows pth lines name the runtime and backend, and a finished child is not killed again', () => {
