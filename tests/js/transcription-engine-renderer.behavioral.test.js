@@ -70,8 +70,10 @@ function createNode({ hidden = false, value = '' } = {}) {
 
 test('renderTranscriptionEngineSettings reads and displays saved Whisper preferences', () => {
   const nodes = new Map([
-    ['whisper-engine-card', createNode()],
-    ['parakeet-engine-card', createNode()],
+    ['parakeet-engine-row', createNode()],
+    ['use-parakeet-engine-toggle', createNode()],
+    ['parakeet-status-badge', createNode()],
+    ['transcription-active-engine-badge', createNode()],
     ['whisper-preferences-summary', createNode()],
     ['parakeet-status-text', createNode()],
   ]);
@@ -114,6 +116,67 @@ test('renderTranscriptionEngineSettings reads and displays saved Whisper prefere
   assert.equal(nodes.get('whisper-preferences-summary').textContent, 'French · Medium');
 });
 
+test('renderTranscriptionEngineSettings gates and reflects the Parakeet switch', () => {
+  const cases = [
+    { name: 'Whisper with Parakeet not installed', activeEngine: 'whisper', state: 'not-installed', actions: ['setup'], checked: false, disabled: true },
+    { name: 'Whisper while status is checking', activeEngine: 'whisper', state: 'checking', actions: [], checked: false, disabled: true },
+    { name: 'Whisper with Parakeet ready', activeEngine: 'whisper', state: 'ready', actions: ['use-parakeet'], checked: false, disabled: false },
+    { name: 'Parakeet selected while checking', activeEngine: 'parakeet', state: 'checking', actions: ['use-whisper'], checked: true, disabled: false },
+    { name: 'Parakeet selected but GPU unavailable', activeEngine: 'parakeet', state: 'device-unavailable', actions: ['recheck', 'use-whisper'], checked: true, disabled: false },
+    { name: 'Parakeet selected and repair is required', activeEngine: 'parakeet', state: 'repair-required', actions: ['repair', 'remove', 'use-whisper'], checked: true, disabled: false },
+    { name: 'Parakeet selected with unknown status', activeEngine: 'parakeet', state: 'unknown', actions: ['recheck', 'use-whisper'], checked: true, disabled: false },
+    { name: 'Parakeet removal is in progress', activeEngine: 'parakeet', state: 'removing', actions: [], busy: true, checked: true, disabled: true },
+    { name: 'Parakeet settings are busy while ready', activeEngine: 'parakeet', state: 'ready', actions: ['use-whisper'], busy: true, checked: true, disabled: true },
+  ];
+  const rendererSource = extractBalancedSource(
+    appSource,
+    'function renderTranscriptionEngineSettings() {',
+  );
+
+  for (const scenario of cases) {
+    const nodes = new Map([
+      ['parakeet-engine-row', createNode()],
+      ['use-parakeet-engine-toggle', createNode()],
+      ['parakeet-status-text', createNode()],
+    ]);
+    const context = {
+      document: { getElementById: (id) => nodes.get(id) || null },
+      transcriptionEnginePreferences: {
+        schemaVersion: 1,
+        activeEngine: scenario.activeEngine,
+        whisper: { language: 'en', modelSize: 'small' },
+      },
+      parakeetEngineStatus: { status: scenario.state },
+      parakeetEngineOperation: scenario.state === 'removing' ? 'remove' : null,
+      parakeetSetupProgress: null,
+      parakeetEngineOperationError: '',
+      parakeetEngineSettingsBusy: Boolean(scenario.busy),
+      parakeetSetupCancelRequested: false,
+      formatBytes: (bytes) => String(bytes),
+      ACTIVE_PARAKEET_UI_STATES: new Set(['downloading', 'verifying', 'waiting-for-validation', 'validating']),
+      buildParakeetSettingsView: ({ activeEngine }) => ({
+        state: scenario.state,
+        activeUnavailable: activeEngine === 'parakeet'
+          && !['ready', 'checking'].includes(scenario.state),
+        activeEngine,
+        statusLabel: scenario.state,
+        statusText: `Parakeet ${scenario.state}`,
+        progressText: '',
+        progressPercent: null,
+        downloadBytes: null,
+        actions: scenario.actions,
+      }),
+    };
+    vm.createContext(context);
+    vm.runInContext(rendererSource, context);
+    context.renderTranscriptionEngineSettings();
+
+    const toggle = nodes.get('use-parakeet-engine-toggle');
+    assert.equal(toggle.checked, scenario.checked, scenario.name);
+    assert.equal(toggle.disabled, scenario.disabled, scenario.name);
+  }
+});
+
 test('Whisper retry dismisses its dialog while the job continues and does not steal navigation', async () => {
   const deferred = {};
   const pendingRetry = new Promise((resolve) => { deferred.resolve = resolve; });
@@ -126,10 +189,6 @@ test('Whisper retry dismisses its dialog while the job continues and does not st
     'whisper-retry-cancel-btn',
     'retry-whisper-transcription-btn',
     'history-tab',
-    'whisper-engine-card',
-    'parakeet-engine-card',
-    'whisper-preferences-summary',
-    'parakeet-status-text',
   ];
   const nodes = new Map(ids.map((id) => [id, createNode({
     hidden: id === 'whisper-retry-error',

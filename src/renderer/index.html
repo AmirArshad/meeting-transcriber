@@ -265,8 +265,11 @@
 
             <div class="setup-item transcription-engine-static" id="transcription-engine-static" hidden role="status" aria-live="polite">
               <span class="transcription-static-label">Transcription</span>
-              <strong id="transcription-static-model">Parakeet v2</strong>
-              <span id="transcription-static-language">English only</span>
+              <span class="transcription-static-value">
+                <strong id="transcription-static-model">Parakeet v2</strong>
+                <span class="transcription-static-divider" aria-hidden="true">·</span>
+                <span id="transcription-static-language">English only</span>
+              </span>
             </div>
 
             <button
@@ -356,39 +359,41 @@
             >
               <div class="diarization-setup-prompt-copy">
                 <h3 id="diarization-setup-prompt-title">Add speaker labels to future transcripts</h3>
-                <p id="diarization-setup-prompt-message">Set up local speaker identification. Once ready, it will run automatically after transcription.</p>
+                <p id="diarization-setup-prompt-message">Set up once. Speaker labels will be added automatically after transcription.</p>
               </div>
-              <div class="diarization-engine-selector" role="radiogroup" aria-label="Speaker engine">
-                <label class="diarization-engine-card" data-engine="speakrs" data-prompt-engine="speakrs" id="home-diarization-engine-speakrs">
-                  <input type="radio" name="home-diarization-engine" value="speakrs" class="diarization-engine-radio" disabled />
-                  <span class="diarization-engine-card-title">
-                    <span>Speakrs</span>
-                    <span class="setting-badge diarization-engine-recommended" data-speakrs-recommended hidden>Recommended</span>
-                  </span>
-                  <span class="diarization-engine-card-sub" data-engine-sub="speakrs">No Hugging Face account.</span>
-                </label>
-                <label class="diarization-engine-card" data-engine="pyannote" data-prompt-engine="pyannote" id="home-diarization-engine-pyannote" hidden>
-                  <input type="radio" name="home-diarization-engine" value="pyannote" class="diarization-engine-radio" disabled />
-                  <span class="diarization-engine-card-title">
-                    <span>Pyannote</span>
-                  </span>
-                  <span class="diarization-engine-card-sub" data-engine-sub="pyannote">Needs a Hugging Face account.</span>
-                </label>
-              </div>
-              <p class="diarization-engine-static" data-speakrs-static hidden>Engine: Speakrs</p>
-              <div class="ai-addon-field" id="home-diarization-token-field" hidden>
-                <label for="home-diarization-token-input">Hugging Face token</label>
-                <input
-                  type="password"
-                  id="home-diarization-token-input"
-                  class="settings-input"
-                  placeholder="Leave blank to reuse a saved token, or paste a new one"
-                  autocomplete="off"
-                  disabled
-                />
-              </div>
-              <div class="ai-addon-actions">
-                <button id="home-setup-diarization-btn" class="btn btn-primary btn-small" disabled>Enable speaker identification</button>
+              <div class="diarization-setup-prompt-controls">
+                <div class="diarization-engine-selector" role="radiogroup" aria-label="Speaker engine">
+                  <label class="diarization-engine-card" data-engine="speakrs" data-prompt-engine="speakrs" id="home-diarization-engine-speakrs">
+                    <input type="radio" name="home-diarization-engine" value="speakrs" class="diarization-engine-radio" disabled />
+                    <span class="diarization-engine-card-title">
+                      <span>Speakrs</span>
+                      <span class="setting-badge diarization-engine-recommended" data-speakrs-recommended hidden>Recommended</span>
+                    </span>
+                    <span class="diarization-engine-card-sub" data-engine-sub="speakrs">No Hugging Face account.</span>
+                  </label>
+                  <label class="diarization-engine-card" data-engine="pyannote" data-prompt-engine="pyannote" id="home-diarization-engine-pyannote" hidden>
+                    <input type="radio" name="home-diarization-engine" value="pyannote" class="diarization-engine-radio" disabled />
+                    <span class="diarization-engine-card-title">
+                      <span>Pyannote</span>
+                    </span>
+                    <span class="diarization-engine-card-sub" data-engine-sub="pyannote">Needs a Hugging Face account.</span>
+                  </label>
+                </div>
+                <p class="diarization-engine-static" data-speakrs-static hidden><span class="diarization-engine-static-label">Engine:</span> Speakrs</p>
+                <div class="ai-addon-field" id="home-diarization-token-field" hidden>
+                  <label for="home-diarization-token-input">Hugging Face token</label>
+                  <input
+                    type="password"
+                    id="home-diarization-token-input"
+                    class="settings-input"
+                    placeholder="Leave blank to reuse a saved token, or paste a new one"
+                    autocomplete="off"
+                    disabled
+                  />
+                </div>
+                <div class="ai-addon-actions">
+                  <button id="home-setup-diarization-btn" class="btn btn-primary btn-small" disabled>Enable speaker identification</button>
+                </div>
               </div>
             </section>
 
@@ -854,55 +859,52 @@
                     <span class="setting-badge enabled" id="transcription-active-engine-badge">Whisper active</span>
                   </div>
                   <p class="setting-description">
-                    Choose the engine for future recordings. Each recording keeps the engine and preferences selected when it starts.
+                    Use Whisper for multiple languages, or Parakeet for English. Each recording saves its engine.
                   </p>
 
-                  <div class="transcription-engine-grid">
-                    <article class="transcription-engine-card" id="whisper-engine-card">
-                      <div class="transcription-engine-card-header">
-                        <h4>Whisper</h4>
-                        <span class="setting-badge enabled" id="whisper-engine-badge">In use</span>
-                      </div>
-                      <p class="transcription-engine-card-copy">Local transcription for multiple languages.</p>
-                      <p class="transcription-engine-preferences" id="whisper-preferences-summary">English · Small</p>
-                      <div class="transcription-engine-actions">
-                        <button type="button" id="use-whisper-engine-btn" class="btn btn-secondary btn-small" hidden>Use Whisper</button>
-                      </div>
-                    </article>
-
-                    <article class="transcription-engine-card" id="parakeet-engine-card">
-                      <div class="transcription-engine-card-header">
-                        <h4>Parakeet — English</h4>
-                        <span class="setting-badge" id="parakeet-status-badge">Checking…</span>
-                      </div>
-                      <p class="transcription-engine-card-copy">
-                        Optional local English transcription. English only; use Whisper for other languages.
-                      </p>
-                      <p class="transcription-engine-status" id="parakeet-status-text" role="status" aria-live="polite">Checking Parakeet…</p>
-                      <p class="transcription-engine-active-warning" id="parakeet-active-warning" role="status" hidden>
-                        Parakeet is still selected but unavailable. Use Whisper to switch engines; saved recordings remain available in History.
-                      </p>
-                      <p class="transcription-engine-operation-error" id="parakeet-operation-error" role="alert" hidden></p>
-                      <div class="transcription-engine-progress" id="parakeet-progress" hidden>
-                        <div class="progress-bar-container" id="parakeet-progress-track" role="progressbar" aria-label="Parakeet setup progress" aria-valuemin="0" aria-valuemax="100">
-                          <div class="progress-bar" id="parakeet-progress-bar"></div>
+                  <div class="transcription-engine-settings">
+                    <div class="transcription-engine-row" id="parakeet-engine-row">
+                      <div class="transcription-engine-row-copy">
+                        <div class="transcription-engine-row-heading">
+                          <h4>Parakeet</h4>
+                          <span class="setting-badge" id="parakeet-status-badge">Checking…</span>
                         </div>
-                        <p class="progress-text" id="parakeet-progress-text">Starting…</p>
+                        <p class="transcription-engine-description" id="parakeet-engine-description">Optional local English transcription. English only.</p>
                       </div>
-                      <p class="transcription-engine-download" id="parakeet-download-size" hidden></p>
-                      <div class="transcription-engine-actions">
-                        <button type="button" id="use-parakeet-engine-btn" class="btn btn-primary btn-small" hidden>Use Parakeet</button>
-                        <button type="button" id="parakeet-setup-btn" class="btn btn-primary btn-small" hidden>Set up Parakeet</button>
-                        <button type="button" id="parakeet-cancel-btn" class="btn btn-secondary btn-small" hidden>Cancel</button>
-                        <button type="button" id="parakeet-recheck-btn" class="btn btn-secondary btn-small" hidden>Recheck</button>
-                        <button type="button" id="parakeet-validate-btn" class="btn btn-secondary btn-small" hidden>Validate</button>
-                        <button type="button" id="parakeet-repair-btn" class="btn btn-secondary btn-small" hidden>Repair</button>
-                        <button type="button" id="parakeet-remove-btn" class="btn btn-danger btn-small" hidden>Remove</button>
+                      <label class="transcription-engine-toggle" for="use-parakeet-engine-toggle">
+                        <span>Use Parakeet</span>
+                        <input type="checkbox" id="use-parakeet-engine-toggle" role="switch" aria-label="Use Parakeet for future recordings" aria-describedby="parakeet-engine-description parakeet-status-text" disabled />
+                        <span class="transcription-engine-toggle-track" aria-hidden="true"><span></span></span>
+                      </label>
+                    </div>
+                    <p class="transcription-engine-status" id="parakeet-status-text" role="status" aria-live="polite">Checking Parakeet…</p>
+                    <p class="transcription-engine-active-warning" id="parakeet-active-warning" role="status" hidden>
+                      Parakeet is selected but unavailable. Turn it off to use Whisper; saved recordings remain available in History.
+                    </p>
+                    <p class="transcription-engine-operation-error" id="parakeet-operation-error" role="alert" hidden></p>
+                    <div class="transcription-engine-progress" id="parakeet-progress" hidden>
+                      <div class="progress-bar-container" id="parakeet-progress-track" role="progressbar" aria-label="Parakeet setup progress" aria-valuemin="0" aria-valuemax="100">
+                        <div class="progress-bar" id="parakeet-progress-bar"></div>
                       </div>
-                      <p class="transcription-engine-evidence">
-                        On one CachyOS RTX 4070 test, Parakeet was faster than Whisper Medium but used more GPU memory, with similar measured WER. Windows and Mac performance has not been measured.
-                      </p>
-                    </article>
+                      <p class="progress-text" id="parakeet-progress-text">Starting…</p>
+                    </div>
+                    <p class="transcription-engine-download" id="parakeet-download-size" hidden></p>
+                    <div class="transcription-engine-actions">
+                      <button type="button" id="parakeet-setup-btn" class="btn btn-primary btn-small" hidden>Set up Parakeet</button>
+                      <button type="button" id="parakeet-cancel-btn" class="btn btn-secondary btn-small" hidden>Cancel</button>
+                      <button type="button" id="parakeet-recheck-btn" class="btn btn-secondary btn-small" hidden>Recheck</button>
+                      <button type="button" id="parakeet-validate-btn" class="btn btn-secondary btn-small" hidden>Validate</button>
+                      <button type="button" id="parakeet-repair-btn" class="btn btn-secondary btn-small" hidden>Repair</button>
+                      <button type="button" id="parakeet-remove-btn" class="btn btn-danger btn-small" hidden>Remove</button>
+                    </div>
+                    <details class="transcription-engine-evidence">
+                      <summary>Performance notes</summary>
+                      <p>On one CachyOS RTX 4070 test, Parakeet was faster than Whisper Medium but used more GPU memory, with similar measured WER. Windows and Mac performance has not been measured.</p>
+                    </details>
+                    <div class="transcription-whisper-summary">
+                      <span>Whisper when off</span>
+                      <span class="transcription-engine-preferences" id="whisper-preferences-summary">English · Small</span>
+                    </div>
                   </div>
                 </div>
 

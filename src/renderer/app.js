@@ -6146,9 +6146,8 @@ function setupAiAddonSettingsListeners() {
 // ============================================================================
 
 function renderTranscriptionEngineSettings() {
-  const whisperCard = document.getElementById('whisper-engine-card');
-  const parakeetCard = document.getElementById('parakeet-engine-card');
-  const whisperBadge = document.getElementById('whisper-engine-badge');
+  const parakeetRow = document.getElementById('parakeet-engine-row');
+  const parakeetToggle = document.getElementById('use-parakeet-engine-toggle');
   const parakeetBadge = document.getElementById('parakeet-status-badge');
   const activeBadge = document.getElementById('transcription-active-engine-badge');
   const whisperSummary = document.getElementById('whisper-preferences-summary');
@@ -6160,7 +6159,7 @@ function renderTranscriptionEngineSettings() {
   const progressBar = document.getElementById('parakeet-progress-bar');
   const progressText = document.getElementById('parakeet-progress-text');
   const downloadSize = document.getElementById('parakeet-download-size');
-  if (!whisperCard || !parakeetCard || !parakeetStatusText) return;
+  if (!parakeetRow || !parakeetToggle || !parakeetStatusText) return;
 
   const preferences = transcriptionEnginePreferences;
   const whisper = preferences.whisper || {};
@@ -6174,19 +6173,19 @@ function renderTranscriptionEngineSettings() {
     formatBytes,
   });
 
-  whisperCard.classList.toggle('is-active', activeEngine === 'whisper');
-  parakeetCard.classList.toggle('is-active', activeEngine === 'parakeet');
+  parakeetRow.classList.toggle('is-active', activeEngine === 'parakeet');
+  parakeetToggle.checked = activeEngine === 'parakeet';
+  const canSwitchAway = activeEngine === 'parakeet' && view.actions.includes('use-whisper');
+  const canSwitchToParakeet = view.state === 'ready';
+  parakeetToggle.disabled = parakeetEngineSettingsBusy
+    || view.state === 'removing'
+    || (activeEngine === 'parakeet' ? !canSwitchAway : !canSwitchToParakeet);
   if (activeBadge) {
     activeBadge.textContent = view.activeUnavailable
       ? `${activeEngine === 'parakeet' ? 'Parakeet' : 'Whisper'} selected · unavailable`
       : `${activeEngine === 'parakeet' ? 'Parakeet' : 'Whisper'} active`;
     activeBadge.classList.toggle('enabled', !view.activeUnavailable);
     activeBadge.classList.toggle('disabled', view.activeUnavailable);
-  }
-  if (whisperBadge) {
-    whisperBadge.textContent = activeEngine === 'whisper' ? 'In use' : 'Available';
-    whisperBadge.classList.toggle('enabled', activeEngine === 'whisper');
-    whisperBadge.classList.toggle('disabled', activeEngine !== 'whisper');
   }
   if (whisperSummary) {
     const storedLanguageName = [...languageSelect.options]
@@ -6243,22 +6242,18 @@ function renderTranscriptionEngineSettings() {
       ? parakeetSetupCancelRequested
       : parakeetEngineSettingsBusy;
   };
-  setActionVisible('use-parakeet-engine-btn', 'use-parakeet');
   setActionVisible('parakeet-setup-btn', 'setup');
   setActionVisible('parakeet-cancel-btn', 'cancel');
   setActionVisible('parakeet-recheck-btn', 'recheck');
   setActionVisible('parakeet-validate-btn', 'validate');
   setActionVisible('parakeet-repair-btn', 'repair');
   setActionVisible('parakeet-remove-btn', 'remove');
-  setActionVisible('use-whisper-engine-btn', 'use-whisper');
   const cancelButton = document.getElementById('parakeet-cancel-btn');
   if (cancelButton) {
     cancelButton.textContent = parakeetSetupCancelRequested ? 'Cancelling…' : 'Cancel';
   }
   const repairButton = document.getElementById('parakeet-repair-btn');
   if (repairButton) repairButton.textContent = 'Repair Parakeet';
-  const useWhisperButton = document.getElementById('use-whisper-engine-btn');
-  if (useWhisperButton) useWhisperButton.disabled = parakeetEngineSettingsBusy;
 }
 
 const ACTIVE_PARAKEET_UI_STATES = new Set([
@@ -6335,7 +6330,7 @@ async function setupParakeetEngine(operation = 'install') {
         && setupResult.code !== 'AI_ADDON_SETUP_CANCELLED') {
       parakeetEngineOperationError = setupResult.message || 'Parakeet setup did not finish.';
     } else if (setupResult && setupResult.status === 'ready' && !parakeetSetupCancelRequested) {
-      addLog('Parakeet is ready. Choose Use Parakeet when you want to activate it.');
+      addLog('Parakeet is ready. Turn on its switch to use it for future recordings.');
     }
   } catch (error) {
     parakeetEngineOperationError = error.message || 'Parakeet setup failed.';
@@ -6400,7 +6395,7 @@ async function validateParakeetEngine() {
 async function removeParakeetEngine() {
   if (parakeetEngineSettingsBusy) return;
   const confirmed = confirm(
-    'Remove the Parakeet model and GPU runtime from this device? Existing recordings and Whisper models will be kept. If Parakeet is active, it stays selected until you choose Use Whisper.',
+    'Remove the Parakeet model and GPU runtime from this device? Existing recordings and Whisper models will be kept. If Parakeet is active, it stays selected until you turn off Use Parakeet.',
   );
   if (!confirmed) return;
 
@@ -6438,11 +6433,13 @@ function activateTranscriptionEngine(engine) {
 function setupTranscriptionEngineSettings() {
   if (transcriptionEngineSettingsListenersBound) return;
   transcriptionEngineSettingsListenersBound = true;
-  document.getElementById('use-whisper-engine-btn')?.addEventListener('click', () => {
-    activateTranscriptionEngine('whisper');
-  });
-  document.getElementById('use-parakeet-engine-btn')?.addEventListener('click', () => {
-    activateTranscriptionEngine('parakeet');
+  document.getElementById('use-parakeet-engine-toggle')?.addEventListener('change', (event) => {
+    const requestedEngine = event.currentTarget.checked ? 'parakeet' : 'whisper';
+    if (requestedEngine === 'parakeet' && parakeetEngineStatus?.status !== 'ready') {
+      renderTranscriptionEngineSettings();
+      return;
+    }
+    activateTranscriptionEngine(requestedEngine);
   });
   document.getElementById('parakeet-setup-btn')?.addEventListener('click', () => {
     void setupParakeetEngine('install');
