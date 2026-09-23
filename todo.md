@@ -11,7 +11,7 @@ implementation or acceptance evidence.
 ## Status
 
 v2.10 is partly implemented. No-hardware UX and Whisper choice policy Slice A
-have shipped. Parakeet implementation is in progress on
+have shipped. Parakeet implementation and manual acceptance are in progress on
 `codex/parakeet-three-platform-gpu`; it has not shipped.
 
 - Designs exist for inference performance, optional Parakeet, Whisper
@@ -38,8 +38,15 @@ have shipped. Parakeet implementation is in progress on
   and guarded meeting commit saved a timestamped transcript with `mps` /
   `float32` provenance and retained source audio. A retry with the runtime
   unavailable failed closed and kept the prior transcript/audio. This was a
-  service-level smoke, not a renderer or packaged-app test. Windows and Linux
-  hardware have not been validated for the new integration.
+  service-level smoke, not a renderer or packaged-app test. On 2026-09-23, a
+  packaged CachyOS RTX 4070 smoke installed and validated managed CUDA 12,
+  activated Parakeet, survived app restart with Whisper's English Small
+  preference intact, and completed a 14.22-second local English fixture with
+  `cuda` / `float32` provenance and retained playable source audio. Linux
+  packaged build verification passed for AppImage, pacman, and deb; this is a
+  bounded short-clip smoke, not completion of the remaining lifecycle checks.
+  Windows hardware validation remains open. Details and outstanding Linux
+  checks are recorded in the plan.
 - Remaining committed work: Parakeet, Whisper Large, extra language removals,
   summarisation language/model qualification, inference-performance slices,
   and the Linux microphone-volume investigation.

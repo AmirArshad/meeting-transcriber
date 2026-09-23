@@ -22,7 +22,8 @@ class CudaParakeet:
             return [value]
         sessions = []
         for name in ('asr', 'vad', 'encoder', 'decoder', 'encoder_session',
-                     'decoder_session', 'session', 'model'):
+                     'decoder_session', 'session', 'model', '_model', '_encoder',
+                     '_decoder_joint'):
             child = getattr(value, name, None)
             if child is not None:
                 sessions.extend(CudaParakeet._sessions(child, seen))
@@ -34,9 +35,9 @@ class CudaParakeet:
         if 'CUDAExecutionProvider' not in ort.get_available_providers():
             raise RuntimeError('PARAKEET_GPU_UNAVAILABLE')
         vad = onnx_asr.load_vad('silero', path=self.vad_dir,
-                                providers=['CUDAExecutionProvider'], offline=True)
+                                providers=['CUDAExecutionProvider'])
         model = onnx_asr.load_model('nemo-parakeet-tdt-0.6b-v2', path=self.model_dir,
-                                    providers=['CUDAExecutionProvider'], offline=True)
+                                    providers=['CUDAExecutionProvider'])
         model = model.with_vad(vad, batch_size=1, threshold=.5, neg_threshold=.35,
                                min_speech_duration_ms=250, min_silence_duration_ms=500,
                                max_speech_duration_s=20, speech_pad_ms=30).with_timestamps()

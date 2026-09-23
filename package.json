@@ -225,6 +225,7 @@
     ],
     "files": [
       "src/**/*",
+      "build/parakeet/*.lock.json",
       "THIRD_PARTY_NOTICES.md",
       "legal/**/*",
       "package.json",

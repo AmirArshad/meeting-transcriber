@@ -114,6 +114,79 @@ def test_onnx_token_count_mismatch_fails_closed():
         adapter.transcribe_window(b'\0' * 32000, input_start=0, input_end=1)
 
 
+def test_cuda_loader_uses_the_pinned_onnx_asr_api(monkeypatch, tmp_path):
+    import sys
+    from types import ModuleType
+
+    from backend.transcription.parakeet_onnx import CudaParakeet
+
+    calls = []
+
+    class Session:
+        def get_providers(self):
+            return ['CUDAExecutionProvider']
+
+        def run(self, *_args, **_kwargs):
+            return []
+
+        def disable_fallback(self):
+            calls.append(('disable_fallback',))
+
+    class Model:
+        def __init__(self):
+            self.asr = SimpleNamespace(_encoder=Session(), _decoder_joint=Session())
+
+        def with_vad(self, vad, **kwargs):
+            self.vad = SimpleNamespace(_model=vad)
+            calls.append(('with_vad', kwargs))
+            return self
+
+        def with_timestamps(self):
+            calls.append(('with_timestamps',))
+            return self
+
+    vad = Session()
+    model = Model()
+    onnx_asr = ModuleType('onnx_asr')
+
+    def load_vad(model_name='silero', path=None, *, quantization=None,
+                 sess_options=None, providers=None, provider_options=None):
+        calls.append(('load_vad', model_name, path, providers))
+        return vad
+
+    def load_model(model_name, path=None, *, quantization=None, sess_options=None,
+                   providers=None, provider_options=None, cpu_preprocessing=None,
+                   asr_config=None, preprocessor_config=None, resampler_config=None):
+        calls.append(('load_model', model_name, path, providers))
+        return model
+
+    onnx_asr.load_vad = load_vad
+    onnx_asr.load_model = load_model
+    onnxruntime = ModuleType('onnxruntime')
+    onnxruntime.get_available_providers = lambda: ['CUDAExecutionProvider']
+    monkeypatch.setitem(sys.modules, 'onnx_asr', onnx_asr)
+    monkeypatch.setitem(sys.modules, 'onnxruntime', onnxruntime)
+
+    adapter = CudaParakeet(str(tmp_path / 'model'), str(tmp_path / 'vad'))
+    adapter.load_model()
+
+    assert calls[:3] == [
+        ('load_vad', 'silero', str(tmp_path / 'vad'), ['CUDAExecutionProvider']),
+        ('load_model', 'nemo-parakeet-tdt-0.6b-v2', str(tmp_path / 'model'), ['CUDAExecutionProvider']),
+        ('with_vad', {
+            'batch_size': 1,
+            'threshold': .5,
+            'neg_threshold': .35,
+            'min_speech_duration_ms': 250,
+            'min_silence_duration_ms': 500,
+            'max_speech_duration_s': 20,
+            'speech_pad_ms': 30,
+        }),
+    ]
+    assert adapter.model is model
+    assert calls.count(('disable_fallback',)) == 3
+
+
 def test_duration_uses_bundled_ffmpeg_when_ffprobe_is_absent(monkeypatch):
     from backend.transcription import parakeet_transcriber as module
     calls = []

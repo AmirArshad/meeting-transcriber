@@ -360,7 +360,7 @@ test('failed request persistence does not enqueue, delete audio, or leave a resu
   assert.equal(rows[0].transcriptionStatus, 'failed');
 });
 
-test('a staged Parakeet request is not admitted as Whisper', {
+test('a staged Parakeet request queues with its Linux adapter instead of Whisper', {
   skip: process.platform !== 'linux' || process.arch !== 'x64',
 }, async () => {
   const spec = catalog.getAdapterSpec(catalog.ADAPTERS.LINUX_CUDA);
@@ -427,8 +427,8 @@ test('a staged Parakeet request is not admitted as Whisper', {
     },
   });
   assert.equal(result.success, true);
-  assert.equal(result.enqueued, false);
-  assert.equal(enqueued, 0);
+  assert.equal(result.enqueued, true);
+  assert.equal(enqueued, 1);
   assert.equal(savedRequest.engine, 'parakeet');
   assert.equal(savedRequest.adapterId, spec.adapterId);
   assert.equal(savedRequest.runtimeLockId, spec.runtimeLockId);

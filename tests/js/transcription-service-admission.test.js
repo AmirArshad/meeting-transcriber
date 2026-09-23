@@ -1308,11 +1308,13 @@ test('Slice A: model setup IPC serves Small/Medium only', async () => {
 
 test('Parakeet finalization queues its saved request and commits a candidate through the compute queue', async () => {
   const { resolveTranscriptionRequest } = require('../../src/main/transcription-engine-resolver');
+  const { getAdapterSpec } = require('../../src/main/transcription-engine-catalog');
   const requested = resolveTranscriptionRequest({ engine: 'parakeet', language: 'en' }, {
-    platform: 'darwin', arch: 'arm64', osRelease: '24.0.0',
+    platform: process.platform, arch: process.arch, osRelease: os.release(),
   });
   assert.equal(requested.ok, true);
   const request = requested.request;
+  const adapter = getAdapterSpec(request.adapterId);
   const audioPath = '/tmp/avanevis-test/recordings/a.opus';
   let committed = null;
   let pending = null;
@@ -1340,10 +1342,10 @@ test('Parakeet finalization queues its saved request and commits a candidate thr
     },
     getParakeetStatusForJob: () => ({ status: 'ready',
       artifactRevision: pending.transcriptionRequest.artifactRevision, runtimeLockId: pending.transcriptionRequest.runtimeLockId }),
-    probeParakeetRuntime: async () => ({ deviceAvailable: true, device: 'metal' }),
+    probeParakeetRuntime: async () => ({ deviceAvailable: true, device: adapter.device }),
     runParakeetProcessForJob: async ({ candidatePath }) => ({
       text: 'hello', segments: [{ start: 0, end: 1, text: 'hello' }], duration: 1,
-      engine: 'parakeet', device: 'metal', computeType: 'float32',
+      engine: 'parakeet', device: adapter.device, computeType: 'float32',
       language: 'en', modelId: pending.transcriptionRequest.modelId,
       boundaryPolicy: pending.transcriptionRequest.boundaryPolicy,
       adapterId: pending.transcriptionRequest.adapterId, artifactRevision: pending.transcriptionRequest.artifactRevision,
@@ -1361,14 +1363,14 @@ test('Parakeet finalization queues its saved request and commits a candidate thr
   assert.equal(pending.transcriptionRequest.engine, 'parakeet');
   await harness.computeQueue.flush();
   assert.equal(committed.result.engine, 'parakeet');
-  assert.equal(committed.result.device, 'mps');
+  assert.equal(committed.result.device, adapter.device === 'metal' ? 'mps' : adapter.device);
   assert.equal(harness.getQueueState().jobs[0].status, 'ready');
 });
 
 test('missing Parakeet runtime fails the saved attempt before any CPU or Whisper child', async () => {
   const { resolveTranscriptionRequest } = require('../../src/main/transcription-engine-resolver');
   const request = resolveTranscriptionRequest({ engine: 'parakeet', language: 'en' }, {
-    platform: 'darwin', arch: 'arm64', osRelease: '24.0.0',
+    platform: process.platform, arch: process.arch, osRelease: os.release(),
   }).request;
   const spawns = [];
   const failures = [];

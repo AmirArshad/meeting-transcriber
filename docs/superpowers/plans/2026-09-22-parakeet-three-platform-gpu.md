@@ -11,10 +11,11 @@
 ## Execution status — 2026-09-22
 
 Implementation is in progress on `codex/parakeet-three-platform-gpu`. Catalog,
-locks, durable selection, capture snapshot/recovery, and pinned setup code are
-present. Bounded adapters and ordinary Mac Parakeet queue/commit code have been
-exercised. Guided Parakeet work, Settings activation/recovery UI, packaging and
-legal/contract updates, and the remaining lifecycle checks are still open.
+locks, durable selection, capture snapshot/recovery, pinned setup, guided
+transcription, Settings activation/recovery UI, and packaging/legal/contracts
+are in place. Automated regression coverage and the Mac service smoke have
+been run. Manual acceptance continues below; Windows hardware validation and
+the remaining platform lifecycle checks are open.
 
 On an Apple M4 Pro (macOS 26.7), explicit setup installed the pinned model and
 47-wheel isolated runtime under Electron userData. A live Metal probe and
@@ -27,12 +28,46 @@ substitution; the prior transcript and audio survived. The runtime was restored
 and passive status returned to `ready`. This was a service-level test, not a
 renderer UI or packaged-app test. It establishes no performance comparison.
 
-The smoke exposed two corrected setup issues: the pinned weight URL redirected
-to an explicit Hugging Face CDN host missing from the allowlist, and Librosa's
-Numba cache created directories inside the immutable runtime. Focused
-regression coverage was added. `npm run test:all` passed (1,023 JS passed,
-3 skipped; 715 Python passed, 9 skipped; Python syntax passed). Windows and
-Linux hardware validation has not been run for this integration.
+The Mac smoke exposed two corrected setup issues: the pinned weight URL
+redirected to an explicit Hugging Face CDN host missing from the allowlist,
+and Librosa's Numba cache created directories inside the immutable runtime.
+Focused regression coverage was added. `npm run test:all` passed (1,023 JS passed,
+3 skipped; 715 Python passed, 9 skipped; Python syntax passed). At that time,
+Windows and Linux hardware validation had not yet been run for this
+integration. Windows hardware validation remains open; the bounded Linux
+result follows.
+
+### CachyOS packaged smoke — 2026-09-23
+
+Host: CachyOS x86_64, Hyprland/Wayland, NVIDIA RTX 4070, driver 615.71.09.
+The packaged app installed managed CUDA 12 and the pinned Parakeet runtime and
+model, passed its CUDA runtime probe and Parakeet validation, and activated
+Parakeet. After app restart, Parakeet remained selected and the separate
+Whisper preference remained English Small.
+
+The AppImage, pacman, and deb packages built on CachyOS. Unpacked Linux
+packaging verification passed, and all three platform lock JSON files were
+present in `app.asar`. Retrying the saved Parakeet request in the packaged app
+transcribed the 14.2245-second English fixture successfully. The committed
+result reports `cuda` / `float32` and the pinned Linux adapter, model revision,
+and runtime lock. Its transcript sidecar is nonempty. The retained WAV is
+455,230 bytes, decodes with the packaged FFmpeg, and matches the fixture's
+SHA-256 `1eed9687badcdd0d554638c8229fdb48d5c80e21ed1393c3bb5621f0c83bd998`.
+
+Two Linux runtime defects found during packaged inference were fixed with
+regression coverage: onnx-asr 0.12.0 rejects the unsupported `offline=True`
+loader keyword, and its CUDA sessions are stored under `_encoder`,
+`_decoder_joint`, and VAD `_model` attributes. Runtime offline behavior remains
+enforced by the isolated child environment and local artifact paths. The
+session check now finds those three sessions and disables provider fallback.
+`npm run test:all` passed after the fixes (1,059 JS passed, 1 skipped; 723
+Python passed, 7 skipped; Python syntax passed).
+
+This is a bounded packaged short-clip smoke. The itemized lifecycle and
+long-form checks in Section 12 remain open; this run did not disconnect the
+network, exercise setup cancel/repair/remove, inspect long-meeting seams,
+exercise guided work, or test cancellation, memory pressure, quit, deletion,
+runtime loss, or update survival.
 
 ## Global constraints and authority
 
@@ -524,8 +559,12 @@ Run on Windows CUDA, Linux managed CUDA 12, and macOS Metal:
 8. Repeat setup/offline inference in packaged app; installed resources survive update.
 
 Record results separately per platform. The partial Mac service-level smoke
-is recorded above; the remaining checks have not been run for the new
-integration. Mocked GPU tests prove contracts/routing, not hardware execution.
+and bounded CachyOS packaged smoke are recorded above. On CachyOS, setup,
+validation, activation, restart persistence, package contents, and one short
+packaged transcription were exercised; the full cases in items 1–8 remain
+incomplete as detailed above. Windows hardware validation and the remaining
+Mac and Linux lifecycle checks are still open. Mocked GPU tests prove
+contracts/routing, not hardware execution.
 
 ## Out of scope
 

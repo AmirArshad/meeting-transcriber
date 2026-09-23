@@ -260,13 +260,14 @@ test('a site-enabled ._pth is replaced by a private interpreter that does not im
     );
     fs.writeFileSync(path.join(bin, 'python311.dll'), '');
     const shared = spawnSync(sharedExe, ['-S', '-P', '-c', 'print("alive")'], { encoding: 'utf8' });
-    if (process.platform === 'win32') {
-      assert.notEqual(shared.status, 0);
-      assert.match(`${shared.stderr || ''}${shared.stdout || ''}`, /site-hook/);
+    // Python builds differ in whether they honor ._pth beside a Unix
+    // executable. If honored, import site runs despite -S; if ignored, the
+    // command runs normally. In either case the resolver must isolate an
+    // interpreter when it finds a site-enabled file beside it.
+    if (shared.status === 0) {
+      assert.equal(shared.stdout.trim(), 'alive', shared.stderr);
     } else {
-      // Unix Python ignores Windows ._pth files; the resolver still needs to
-      // replace an interpreter when it finds a site-enabled file beside it.
-      assert.equal(shared.status, 0, shared.stderr);
+      assert.match(`${shared.stderr || ''}${shared.stdout || ''}`, /site-hook/);
     }
 
     const cacheRoot = path.join(root, 'cache');

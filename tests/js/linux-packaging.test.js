@@ -100,6 +100,10 @@ test('Electron is the v2.9 stable 44.x candidate, not a 45 prerelease', () => {
   assert.equal(packageJson.devDependencies.electron.includes('45'), false);
 });
 
+test('Electron packages the Parakeet adapter lock files used by the runtime catalog', () => {
+  assert.ok(packageJson.build.files.includes('build/parakeet/*.lock.json'));
+});
+
 test('Linux package targets are x86_64 AppImage, pacman, and one experimental deb', () => {
   const linuxTargets = packageJson.build.linux.target;
   assert.ok(Array.isArray(linuxTargets));
