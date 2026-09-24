@@ -63,11 +63,18 @@ session check now finds those three sessions and disables provider fallback.
 `npm run test:all` passed after the fixes (1,059 JS passed, 1 skipped; 723
 Python passed, 7 skipped; Python syntax passed).
 
-This is a bounded packaged short-clip smoke. The itemized lifecycle and
-long-form checks in Section 12 remain open; this run did not disconnect the
+This is a bounded packaged short-clip smoke. It did not disconnect the
 network, exercise setup cancel/repair/remove, inspect long-meeting seams,
 exercise guided work, or test cancellation, memory pressure, quit, deletion,
 runtime loss, or update survival.
+
+### CachyOS dev-electron lifecycle — 2026-09-24
+
+Isolated userData on the same CachyOS x86_64 / RTX 4070 / driver 615.71.09 host, using dev Electron from `codex/parakeet-three-platform-gpu`. The network stayed connected. This is not a packaged-app or update-survival run; the only AppImage on disk is 2.8.0.
+
+Passed: cancel at the start of download (0 bytes transferred) left Parakeet not installed and kept Whisper English Small across restart; repair and validate reached `ready`; a pending Parakeet job survived quit and resumed to `cuda` / `float32`; a second quit while `.venv` Python held the GPU also resumed to `cuda` / `float32` with playable audio; changing Settings to Whisper Medium did not rewrite the queued Parakeet request; an 85-second fixture made by repeating the 14.2245-second clip six times produced 36 timestamped segments from `00:00` through `01:25`, with the opening and closing words present and the same segment text repeated six times; cancel returned `cancelled: true` and the meeting stayed failed; deleting a queued meeting left the running Parakeet job to finish `cuda` / `float32`; hiding the runtime failed the retry with `PARAKEET_ARTIFACT_INVALID` and kept the prior `cuda` / `float32` transcript; an explicit Whisper Small retry then completed `cuda` / `float16`; restoring the runtime validated `ready`; guided Speakrs completed with speaker labels; removing the Speakrs ResNet file still completed Parakeet `cuda` / `float32` with diarization error `Speakrs model pack is not installed.`; relaunch stayed `ready` with Whisper English Small; remove returned `not-installed` and left those Whisper preferences.
+
+The stored cancel error text is `Meeting lookup was terminated because the app is quitting.` Cancel calls the compute job's quit terminator, which always uses that sentence. Memory pressure, a live interrupted recording, a disconnected network, and packaged update survival were not run.
 
 ## Global constraints and authority
 
@@ -559,11 +566,11 @@ Run on Windows CUDA, Linux managed CUDA 12, and macOS Metal:
 8. Repeat setup/offline inference in packaged app; installed resources survive update.
 
 Record results separately per platform. The partial Mac service-level smoke
-and bounded CachyOS packaged smoke are recorded above. On CachyOS, setup,
-validation, activation, restart persistence, package contents, and one short
-packaged transcription were exercised; the full cases in items 1–8 remain
-incomplete as detailed above. Windows hardware validation and the remaining
-Mac and Linux lifecycle checks are still open. Mocked GPU tests prove
+and bounded CachyOS packaged smoke are recorded above. The 2026-09-24
+dev-electron lifecycle on this CachyOS host covered the Section 12 behaviors
+listed in that note, except network disconnect, memory pressure, live
+recording recovery, and packaged update survival. Windows hardware validation
+and the remaining packaged Mac checks are still open. Mocked GPU tests prove
 contracts/routing, not hardware execution.
 
 ## Out of scope

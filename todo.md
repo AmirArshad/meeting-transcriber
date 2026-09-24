@@ -45,8 +45,12 @@ have shipped. Parakeet implementation and manual acceptance are in progress on
   `cuda` / `float32` provenance and retained playable source audio. Linux
   packaged build verification passed for AppImage, pacman, and deb; this is a
   bounded short-clip smoke, not completion of the remaining lifecycle checks.
-  Windows hardware validation remains open. Details and outstanding Linux
-  checks are recorded in the plan.
+  Windows hardware validation remains open. On 2026-09-24 a dev-electron
+  lifecycle on the same CachyOS host covered setup cancel/repair/validate/remove,
+  quit/resume, seams on a repeated short clip, guided Speakrs and guidance
+  fallback, runtime-loss fail-closed, and an explicit Whisper retry. Network
+  disconnect, memory pressure, live recording recovery, and packaged update
+  survival were not run. Details are in the plan.
 - Remaining committed work: Parakeet, Whisper Large, extra language removals,
   summarisation language/model qualification, inference-performance slices,
   and the Linux microphone-volume investigation.
